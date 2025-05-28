@@ -1,0 +1,32 @@
+unit Goccia.Utils;
+
+{$I Goccia.inc}
+
+interface
+
+uses
+  Goccia.Values.Base, Goccia.Values.Undefined, Goccia.Values.Null, Goccia.Values.BooleanValue,
+  Goccia.Values.Number, Goccia.Values.StringValue, Goccia.Values.ObjectValue;
+
+// TODO: Do we want to implement this on the class level as class operators or functions?
+function IsEqual(Left, Right: TGocciaValue): Boolean;
+
+implementation
+
+function IsEqual(Left, Right: TGocciaValue): Boolean;
+begin
+  if (Left is TGocciaUndefinedValue) and (Right is TGocciaUndefinedValue) then
+    Result := True
+  else if (Left is TGocciaNullValue) and (Right is TGocciaNullValue) then
+    Result := True
+  else if (Left is TGocciaBooleanValue) and (Right is TGocciaBooleanValue) then
+    Result := TGocciaBooleanValue(Left).Value = TGocciaBooleanValue(Right).Value
+  else if (Left is TGocciaNumberValue) and (Right is TGocciaNumberValue) then
+    Result := TGocciaNumberValue(Left).Value = TGocciaNumberValue(Right).Value
+  else if (Left is TGocciaStringValue) and (Right is TGocciaStringValue) then
+    Result := TGocciaStringValue(Left).Value = TGocciaStringValue(Right).Value
+  else
+    Result := Left = Right; // Reference equality for objects
+end;
+
+end.
