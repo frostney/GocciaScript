@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+The command for compile and run is `fpc @config.cfg -g main.dpr && ./build/main ./example.js`
