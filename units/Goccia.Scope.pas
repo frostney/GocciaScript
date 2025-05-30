@@ -5,7 +5,7 @@ unit Goccia.Scope;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Values.Undefined, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Error, Goccia.Interfaces, SysUtils;
+  Goccia.Values.Base, Goccia.Values.Undefined, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Error, Goccia.Interfaces, SysUtils, Goccia.Logger;
 
 type
   // TODO: Add a way to access thisArg
@@ -27,6 +27,7 @@ type
     property Interpreter: IGocciaInterpreter read FInterpreter;
     procedure SetValue(const AName: string; AValue: TGocciaValue);
     property ThisValue: TGocciaValue read FThisValue write FThisValue;
+    function GetThisProperty(const AName: string): TGocciaValue;
   end;
 
 
@@ -34,9 +35,8 @@ implementation
 
 constructor TGocciaScope.Create(AInterpreter: IGocciaInterpreter; AParent: TGocciaScope = nil);
 begin
-  WriteLn('Scope.Create: Creating new scope');
-  WriteLn('Scope.Create: Parent scope address: ', PtrUInt(AParent));
-  System.Flush(Output);
+  TGocciaLogger.Debug('Scope.Create: Creating new scope');
+  TGocciaLogger.Debug('  Parent scope address: %d', [PtrUInt(AParent)]);
 
   FThisValue := TGocciaUndefinedValue.Create;
   FInterpreter := AInterpreter;
@@ -46,10 +46,9 @@ end;
 
 destructor TGocciaScope.Destroy;
 begin
-  WriteLn('Scope.Destroy: Destroying scope');
-  WriteLn('Scope.Destroy: Self address: ', PtrUInt(Self));
-  WriteLn('Scope.Destroy: Values dictionary address: ', PtrUInt(FValues));
-  System.Flush(Output);
+  TGocciaLogger.Debug('Scope.Destroy: Destroying scope');
+  TGocciaLogger.Debug('  Self address: %d', [PtrUInt(Self)]);
+  TGocciaLogger.Debug('  Values dictionary address: %d', [PtrUInt(FValues)]);
 
   if Assigned(FValues) then
   begin
@@ -69,42 +68,39 @@ function TGocciaScope.GetValue(const AName: string): TGocciaValue;
 var
   Value: TGocciaValue;
 begin
-  WriteLn('Scope.GetValue: Attempting to get value for name: ', AName);
-  WriteLn('Scope.GetValue: Self address: ', PtrUInt(Self));
-  WriteLn('Scope.GetValue: Values dictionary address: ', PtrUInt(FValues));
-  WriteLn('Scope.GetValue: ThisValue: ', ThisValue.ToString);
-  System.Flush(Output);
-
-  // Check if this value is an object and check there first
-  if (ThisValue is TGocciaObjectValue) then
-  begin
-    Result := TGocciaObjectValue(ThisValue).GetProperty(AName);
-    Exit;
-  end;
+  TGocciaLogger.Debug('Scope.GetValue: Attempting to get value for name: %s', [AName]);
+  TGocciaLogger.Debug('  Self address: %d', [PtrUInt(Self)]);
+  TGocciaLogger.Debug('  Values dictionary address: %d', [PtrUInt(FValues)]);
+  TGocciaLogger.Debug('  ThisValue: %s', [ThisValue.ToString]);
 
   if FValues.TryGetValue(AName, Value) then
   begin
-    WriteLn('Scope.GetValue: Found value of type: ', Value.ClassName);
-    System.Flush(Output);
+    TGocciaLogger.Debug('  Found value of type: %s', [Value.ClassName]);
     Result := Value;
   end
   else if Assigned(FParent) then
   begin
-    WriteLn('Scope.GetValue: Value not found, checking enclosing scope');
-    System.Flush(Output);
+    TGocciaLogger.Debug('  Value not found, checking enclosing scope');
     Result := FParent.GetValue(AName);
   end
   else
   begin
-    WriteLn('Scope.Get: Value not found and no enclosing scope');
-    System.Flush(Output);
+    TGocciaLogger.Debug('  Value not found and no enclosing scope');
     Result := TGocciaUndefinedValue.Create;
   end;
 end;
 
+function TGocciaScope.GetThisProperty(const AName: string): TGocciaValue;
+begin
+  if (ThisValue is TGocciaObjectValue) then
+    Result := TGocciaObjectValue(ThisValue).GetProperty(AName)
+  else
+    Result := TGocciaUndefinedValue.Create;
+end;
+
 procedure TGocciaScope.Assign(const AName: string; AValue: TGocciaValue);
 begin
-  // TODO: Do we nned this?
+  // TODO: Do we need this?
   if FValues.ContainsKey(AName) then
     FValues.AddOrSetValue(AName, AValue)
   else if Assigned(FParent) then
@@ -122,11 +118,10 @@ end;
 
 procedure TGocciaScope.SetValue(const AName: string; AValue: TGocciaValue);
 begin
-  WriteLn('Scope.SetValue: Setting value for name: ', AName);
-  WriteLn('Scope.SetValue: Value type: ', AValue.ClassName);
-  WriteLn('Scope.SetValue: Self address: ', PtrUInt(Self));
-  WriteLn('Scope.SetValue: Values dictionary address: ', PtrUInt(FValues));
-  System.Flush(Output);
+  TGocciaLogger.Debug('Scope.SetValue: Setting value for name: %s', [AName]);
+  TGocciaLogger.Debug('  Value type: %s', [AValue.ClassName]);
+  TGocciaLogger.Debug('  Self address: %d', [PtrUInt(Self)]);
+  TGocciaLogger.Debug('  Values dictionary address: %d', [PtrUInt(FValues)]);
 
   FValues.AddOrSetValue(AName, AValue);
 end;

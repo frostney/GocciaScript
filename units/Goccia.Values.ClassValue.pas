@@ -6,7 +6,7 @@ interface
 
 uses
   Goccia.Values.Base, Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Interfaces,
-  Goccia.Error, Generics.Collections, SysUtils, Math;
+  Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math;
 
 type
   // Forward declaration
@@ -101,30 +101,32 @@ var
 begin
   // Create the instance with this class as its class value
   Instance := TGocciaInstanceValue.Create(Self);
-  WriteLn('Instance created: ', Instance.ToString);
+  TGocciaLogger.Debug('Instance created: %s', [Instance.ToString]);
 
   // Set up the prototype chain
   // The instance's prototype should be the class's prototype
   Instance.Prototype := FPrototype;
-  WriteLn('Prototype set for instance');
+  TGocciaLogger.Debug('Prototype set for instance');
 
   // Call constructor if it exists
   Method := GetMethod('constructor');
-  WriteLn('Constructor method found: ', Assigned(Method));
+  TGocciaLogger.Debug('Constructor method found: %s', [Assigned(Method)]);
 
   if Assigned(Method) then
   begin
-    WriteLn('Calling constructor');
-    WriteLn('Arguments: ', Arguments.Count);
-    WriteLn('Arguments: ', Arguments[0].ToString);
-    WriteLn('Instance: ', Instance.ToString);
+    TGocciaLogger.Debug('Calling constructor');
+    TGocciaLogger.Debug('Arguments: %d', [Arguments.Count]);
+    if Arguments.Count > 0 then
+      TGocciaLogger.Debug('Arguments: %s', [Arguments[0].ToString]);
+    TGocciaLogger.Debug('Instance: %s', [Instance.ToString]);
 
+    // Call the constructor with the instance as this value
     ConstructorResult := Method.Call(Arguments, Instance, Interpreter);
-    WriteLn('Constructor call completed, result: ', ConstructorResult.ToString);
+    TGocciaLogger.Debug('Constructor call completed, result: %s', [ConstructorResult.ToString]);
   end;
 
   Result := Instance;
-  WriteLn('Returning instance: ', Result.ToString);
+  TGocciaLogger.Debug('Returning instance: %s', [Result.ToString]);
 end;
 
 constructor TGocciaInstanceValue.Create(AClass: TGocciaClassValue);

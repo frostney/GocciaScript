@@ -9,7 +9,7 @@ uses
   Goccia.Values.Undefined, Goccia.Values.BooleanValue, Goccia.Values.Number, Goccia.Values.ObjectValue,
   Goccia.Values.StringValue, Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
   Goccia.Values.Null, Goccia.Values.NativeFunction, Goccia.Token, Generics.Collections,
-  Classes, SysUtils, Math, Goccia.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Scope, Goccia.Interfaces;
+  Classes, SysUtils, Math, Goccia.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Scope, Goccia.Interfaces, Goccia.Logger;
 
 type
   TGocciaReturnValue = class(Exception)
@@ -290,30 +290,28 @@ end;
 
 function TGocciaInterpreter.Evaluate(Node: TGocciaASTNode): TGocciaValue;
 begin
-  WriteLn('Evaluate: Node class is ', Node.ClassName);
-  WriteLn('Evaluate: Node line: ', Node.Line);
-  WriteLn('Evaluate: Node column: ', Node.Column);
-  System.Flush(Output);
+  TGocciaLogger.Debug('Evaluate: Node class is %s', [Node.ClassName]);
+  TGocciaLogger.Debug('Evaluate: Node line: %d', [Node.Line]);
+  TGocciaLogger.Debug('Evaluate: Node column: %d', [Node.Column]);
 
   if Node is TGocciaExpression then
   begin
-    WriteLn('Evaluate: Processing as Expression');
+    TGocciaLogger.Debug('Evaluate: Processing as Expression');
     Result := EvaluateExpression(TGocciaExpression(Node));
-    WriteLn('Evaluate: Expression result type: ', Result.ClassName);
+    TGocciaLogger.Debug('Evaluate: Expression result type: %s', [Result.ClassName]);
   end
   else if Node is TGocciaStatement then
   begin
-    WriteLn('Evaluate: Processing as Statement');
+    TGocciaLogger.Debug('Evaluate: Processing as Statement');
     Result := EvaluateStatement(TGocciaStatement(Node));
-    WriteLn('Evaluate: Statement result type: ', Result.ClassName);
+    TGocciaLogger.Debug('Evaluate: Statement result type: %s', [Result.ClassName]);
   end
   else
   begin
-    WriteLn('Evaluate: Unknown node type, returning undefined');
+    TGocciaLogger.Debug('Evaluate: Unknown node type, returning undefined');
     Result := TGocciaUndefinedValue.Create;
   end;
-  WriteLn('Evaluate: Final result type: ', Result.ClassName);
-  System.Flush(Output);
+  TGocciaLogger.Debug('Evaluate: Final result type: %s', [Result.ClassName]);
 end;
 
 function TGocciaInterpreter.EvaluateExpression(Expr: TGocciaExpression): TGocciaValue;
@@ -351,7 +349,13 @@ begin
     Obj := EvaluateExpression(TGocciaPropertyAssignmentExpression(Expr).ObjectExpr);
     Value := EvaluateExpression(TGocciaPropertyAssignmentExpression(Expr).Value);
 
-    if Obj is TGocciaObjectValue then
+    // Special handling for 'this' property assignment
+    if (Obj is TGocciaInstanceValue) then
+    begin
+      TGocciaInstanceValue(Obj).SetProperty(TGocciaPropertyAssignmentExpression(Expr).PropertyName, Value);
+      Result := Value;
+    end
+    else if (Obj is TGocciaObjectValue) then
     begin
       TGocciaObjectValue(Obj).SetProperty(TGocciaPropertyAssignmentExpression(Expr).PropertyName, Value);
       Result := Value;
@@ -361,12 +365,10 @@ begin
   end
   else if Expr is TGocciaCallExpression then
   begin
-    WriteLn('EvaluateExpression: TGocciaCallExpression - before EvaluateCall');
-    System.Flush(Output);
+    TGocciaLogger.Debug('EvaluateExpression: TGocciaCallExpression - before EvaluateCall');
     Result := EvaluateCall(TGocciaCallExpression(Expr));
-    WriteLn('EvaluateExpression: TGocciaCallExpression - after EvaluateCall, result type: ', Result.ClassName);
-    WriteLn('EvaluateExpression: TGocciaCallExpression - result ToString: ', Result.ToString);
-    System.Flush(Output);
+    TGocciaLogger.Debug('EvaluateExpression: TGocciaCallExpression - after EvaluateCall, result type: %s', [Result.ClassName]);
+    TGocciaLogger.Debug('EvaluateExpression: TGocciaCallExpression - result ToString: %s', [Result.ToString]);
   end
   else if Expr is TGocciaMemberExpression then
     Result := EvaluateMember(TGocciaMemberExpression(Expr))
@@ -406,13 +408,24 @@ begin
   else if Expr is TGocciaThisExpression then
   begin
     // Handle this expression
-    Result := TGocciaUndefinedValue.Create; // Placeholder
+    Result := FGlobalScope.ThisValue;
+  end
+  else if Expr is TGocciaMemberExpression then
+  begin
+    if TGocciaMemberExpression(Expr).ObjectExpr is TGocciaThisExpression then
+    begin
+      // When accessing a property through this, use the current scope's this value
+      Result := FGlobalScope.GetThisProperty(TGocciaMemberExpression(Expr).PropertyName);
+    end
+    else
+    begin
+      // For normal member access, evaluate the object first
+      Result := EvaluateMember(TGocciaMemberExpression(Expr));
+    end;
   end
   else
     Result := TGocciaUndefinedValue.Create;
-  WriteLn('EvaluateExpression: Returning result type: ', Result.ClassName);
-  WriteLn('EvaluateExpression: Result ToString: ', Result.ToString);
-  System.Flush(Output);
+  TGocciaLogger.Debug('EvaluateExpression: Returning result type: %s .ToString: %s', [Result.ClassName, Result.ToString]);
 end;
 
 function TGocciaInterpreter.EvaluateStatement(Stmt: TGocciaStatement): TGocciaValue;
@@ -423,105 +436,102 @@ var
   ImportPair: TPair<string, string>;
   Value: TGocciaValue;
 begin
-  WriteLn('EvaluateStatement: Statement class is ', Stmt.ClassName);
-  WriteLn('EvaluateStatement: Statement line: ', Stmt.Line);
-  WriteLn('EvaluateStatement: Statement column: ', Stmt.Column);
-  System.Flush(Output);
+  TGocciaLogger.Debug('EvaluateStatement: Statement class is %s', [Stmt.ClassName]);
+  TGocciaLogger.Debug('EvaluateStatement: Statement line: %d', [Stmt.Line]);
+  TGocciaLogger.Debug('EvaluateStatement: Statement column: %d', [Stmt.Column]);
 
   Result := TGocciaUndefinedValue.Create;
 
   if Stmt is TGocciaExpressionStatement then
   begin
-    WriteLn('EvaluateStatement: Processing ExpressionStatement');
+    TGocciaLogger.Debug('EvaluateStatement: Processing ExpressionStatement');
     Result := EvaluateExpression(TGocciaExpressionStatement(Stmt).Expression);
-    WriteLn('EvaluateStatement: ExpressionStatement result type: ', Result.ClassName);
+    TGocciaLogger.Debug('EvaluateStatement: ExpressionStatement result type: %s', [Result.ClassName]);
   end
   else if Stmt is TGocciaVariableDeclaration then
   begin
-    WriteLn('EvaluateStatement: Processing VariableDeclaration');
+    TGocciaLogger.Debug('EvaluateStatement: Processing VariableDeclaration');
     Decl := TGocciaVariableDeclaration(Stmt);
-    WriteLn('EvaluateStatement: Variable name: ', Decl.Name);
+    TGocciaLogger.Debug('EvaluateStatement: Variable name: %s', [Decl.Name]);
     Value := EvaluateExpression(Decl.Initializer);
-    WriteLn('EvaluateStatement: Initializer result type: ', Value.ClassName);
+    TGocciaLogger.Debug('EvaluateStatement: Initializer result type: %s', [Value.ClassName]);
     FGlobalScope.SetValue(Decl.Name, Value);
-    WriteLn('EvaluateStatement: Variable defined in scope');
+    TGocciaLogger.Debug('EvaluateStatement: Variable defined in scope');
   end
   else if Stmt is TGocciaBlockStatement then
   begin
-    WriteLn('EvaluateStatement: Processing BlockStatement');
+    TGocciaLogger.Debug('EvaluateStatement: Processing BlockStatement');
     Result := EvaluateBlock(TGocciaBlockStatement(Stmt));
-    WriteLn('EvaluateStatement: BlockStatement result type: ', Result.ClassName);
+    TGocciaLogger.Debug('EvaluateStatement: BlockStatement result type: %s', [Result.ClassName]);
   end
   else if Stmt is TGocciaIfStatement then
   begin
-    WriteLn('EvaluateStatement: Processing IfStatement');
+    TGocciaLogger.Debug('EvaluateStatement: Processing IfStatement');
     Result := EvaluateIf(TGocciaIfStatement(Stmt));
-    WriteLn('EvaluateStatement: IfStatement result type: ', Result.ClassName);
+    TGocciaLogger.Debug('EvaluateStatement: IfStatement result type: %s', [Result.ClassName]);
   end
   else if Stmt is TGocciaReturnStatement then
   begin
-    WriteLn('EvaluateStatement: Handling TGocciaReturnStatement');
+    TGocciaLogger.Debug('EvaluateStatement: Handling TGocciaReturnStatement');
     if Assigned(TGocciaReturnStatement(Stmt).Value) then
     begin
-      WriteLn('EvaluateStatement: Evaluating return value');
+      TGocciaLogger.Debug('EvaluateStatement: Evaluating return value');
       Value := EvaluateExpression(TGocciaReturnStatement(Stmt).Value);
-      WriteLn('EvaluateStatement: Return value type: ', Value.ClassName);
-      WriteLn('EvaluateStatement: Return value ToString: ', Value.ToString);
+      TGocciaLogger.Debug('EvaluateStatement: Return value type: %s', [Value.ClassName]);
+      TGocciaLogger.Debug('EvaluateStatement: Return value ToString: %s', [Value.ToString]);
     end
     else
     begin
-      WriteLn('EvaluateStatement: No return value, using undefined');
+      TGocciaLogger.Debug('EvaluateStatement: No return value, using undefined');
       Value := TGocciaUndefinedValue.Create;
     end;
-    WriteLn('EvaluateStatement: Raising TGocciaReturnValue with value type: ', Value.ClassName);
-    System.Flush(Output);
+    TGocciaLogger.Debug('EvaluateStatement: Raising TGocciaReturnValue with value type: %s', [Value.ClassName]);
     raise TGocciaReturnValue.Create(Value);
   end
   else if Stmt is TGocciaThrowStatement then
   begin
-    WriteLn('EvaluateStatement: Processing ThrowStatement');
+    TGocciaLogger.Debug('EvaluateStatement: Processing ThrowStatement');
     Value := EvaluateExpression(TGocciaThrowStatement(Stmt).Value);
-    WriteLn('EvaluateStatement: Throw value type: ', Value.ClassName);
-    WriteLn('EvaluateStatement: Throw value ToString: ', Value.ToString);
+    TGocciaLogger.Debug('EvaluateStatement: Throw value type: %s', [Value.ClassName]);
+    TGocciaLogger.Debug('EvaluateStatement: Throw value ToString: %s', [Value.ToString]);
     raise TGocciaThrowValue.Create(Value);
   end
   else if Stmt is TGocciaTryStatement then
   begin
-    WriteLn('EvaluateStatement: Processing TryStatement');
+    TGocciaLogger.Debug('EvaluateStatement: Processing TryStatement');
     Result := TGocciaUndefinedValue.Create; // Placeholder
   end
   else if Stmt is TGocciaClassDeclaration then
   begin
-    WriteLn('EvaluateStatement: Processing ClassDeclaration');
+    TGocciaLogger.Debug('EvaluateStatement: Processing ClassDeclaration');
     Result := EvaluateClass(TGocciaClassDeclaration(Stmt));
-    WriteLn('EvaluateStatement: ClassDeclaration result type: ', Result.ClassName);
+    TGocciaLogger.Debug('EvaluateStatement: ClassDeclaration result type: %s', [Result.ClassName]);
   end
   else if Stmt is TGocciaImportDeclaration then
   begin
-    WriteLn('EvaluateStatement: Processing ImportDeclaration');
+    TGocciaLogger.Debug('EvaluateStatement: Processing ImportDeclaration');
     ImportDecl := TGocciaImportDeclaration(Stmt);
-    WriteLn('EvaluateStatement: Importing module: ', ImportDecl.ModulePath);
+    TGocciaLogger.Debug('EvaluateStatement: Importing module: %s', [ImportDecl.ModulePath]);
     Module := LoadModule(ImportDecl.ModulePath);
 
     for ImportPair in ImportDecl.Imports do
     begin
-      WriteLn('EvaluateStatement: Importing ', ImportPair.Key, ' as ', ImportPair.Value);
+      TGocciaLogger.Debug('EvaluateStatement: Importing %s as %s', [ImportPair.Key, ImportPair.Value]);
       if Module.ExportsTable.TryGetValue(ImportPair.Value, Value) then
       begin
-        WriteLn('EvaluateStatement: Found export, type: ', Value.ClassName);
+        TGocciaLogger.Debug('EvaluateStatement: Found export, type: %s', [Value.ClassName]);
         FGlobalScope.SetValue(ImportPair.Key, Value);
       end
       else
       begin
-        WriteLn('EvaluateStatement: Export not found');
+        TGocciaLogger.Debug('EvaluateStatement: Export not found');
         ThrowError(Format('Module "%s" has no export named "%s"',
           [ImportDecl.ModulePath, ImportPair.Value]), Stmt.Line, Stmt.Column);
       end;
     end;
   end;
 
-  WriteLn('EvaluateStatement: Final result type: ', Result.ClassName);
-  System.Flush(Output);
+  TGocciaLogger.Debug('EvaluateStatement: Final result type: %s', [Result.ClassName]);
 end;
 
 function TGocciaInterpreter.EvaluateBinary(Expr: TGocciaBinaryExpression): TGocciaValue;
@@ -611,9 +621,9 @@ var
   FunctionValue: TGocciaFunctionValue;
   ThisValue: TGocciaValue;
 begin
-  WriteLn('EvaluateCall: Start');
+  TGocciaLogger.Debug('EvaluateCall: Start');
   Callee := EvaluateExpression(Expr.Callee);
-  WriteLn('EvaluateCall: Callee type: ', Callee.ClassName);
+  TGocciaLogger.Debug('EvaluateCall: Callee type: %s', [Callee.ClassName]);
   Arguments := TObjectList<TGocciaValue>.Create(True);
   try
     for I := 0 to Expr.Arguments.Count - 1 do
@@ -626,12 +636,10 @@ begin
         ThisValue := EvaluateExpression(TGocciaMemberExpression(Expr.Callee).ObjectExpr)
       else
         ThisValue := TGocciaUndefinedValue.Create;
-      WriteLn('EvaluateCall: About to call CallFunction');
-      System.Flush(Output);
+      TGocciaLogger.Debug('EvaluateCall: About to call CallFunction');
       Result := CallFunction(FunctionValue, Arguments, ThisValue);
-      WriteLn('EvaluateCall: CallFunction returned, result type: ', Result.ClassName);
-      WriteLn('EvaluateCall: Result ToString: ', Result.ToString);
-      System.Flush(Output);
+      TGocciaLogger.Debug('EvaluateCall: CallFunction returned, result type: %s', [Result.ClassName]);
+      TGocciaLogger.Debug('EvaluateCall: Result ToString: %s', [Result.ToString]);
     end
     else if Callee is TGocciaNativeFunctionValue then
     begin
@@ -640,18 +648,16 @@ begin
       else
         ThisValue := TGocciaUndefinedValue.Create;
       Result := TGocciaNativeFunctionValue(Callee).NativeFunction(Arguments, ThisValue);
-      WriteLn('EvaluateCall: NativeFunction returned, result type: ', Result.ClassName);
-      WriteLn('EvaluateCall: Result ToString: ', Result.ToString);
-      System.Flush(Output);
+      TGocciaLogger.Debug('EvaluateCall: NativeFunction returned, result type: %s', [Result.ClassName]);
+      TGocciaLogger.Debug('EvaluateCall: Result ToString: %s', [Result.ToString]);
     end
     else
       ThrowError(Format('Can only call functions, not %s', [Callee.TypeName]), Expr.Line, Expr.Column);
   finally
     Arguments.Free;
   end;
-  WriteLn('EvaluateCall: Returning result type: ', Result.ClassName);
-  WriteLn('EvaluateCall: Result ToString: ', Result.ToString);
-  System.Flush(Output);
+  TGocciaLogger.Debug('EvaluateCall: Returning result type: %s', [Result.ClassName]);
+  TGocciaLogger.Debug('EvaluateCall: Result ToString: %s', [Result.ToString]);
 end;
 
 function TGocciaInterpreter.EvaluateMember(Expr: TGocciaMemberExpression): TGocciaValue;
@@ -705,6 +711,7 @@ end;
 
 function TGocciaInterpreter.EvaluateArrowFunction(Expr: TGocciaArrowFunctionExpression): TGocciaValue;
 begin
+  // Always create a unique child scope for the closure
   Result := TGocciaFunctionValue.Create(Expr.Parameters, Expr.Body, FGlobalScope.CreateChild);
 end;
 
@@ -734,6 +741,7 @@ end;
 
 function TGocciaInterpreter.EvaluateClassMethod(MethodValue: TGocciaClassMethod): TGocciaValue;
 begin
+  // Always create a unique child scope for the closure
   Result := TGocciaMethodValue.Create(MethodValue.Parameters, MethodValue.Body, FGlobalScope.CreateChild, MethodValue.Name);
 end;
 
@@ -872,27 +880,25 @@ end;
 
 function TGocciaInterpreter.ArrayMap(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  Arr: TGocciaArrayValue;
+  ResultArray: TGocciaArrayValue;
   Callback: TGocciaValue;
-  NewArr: TGocciaArrayValue;
-  CallArgs: TObjectList<TGocciaValue>;
-  I, J: Integer;
-  OldScope: TGocciaScope;
-  NewScope: TGocciaScope;
 begin
+  TGocciaLogger.Debug('ArrayMap: Entered');
+  TGocciaLogger.Debug('  ThisValue type: %s', [ThisValue.ClassName]);
+  TGocciaLogger.Debug('  Args.Count: %d', [Args.Count]);
+
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.map called on non-array', 0, 0);
 
   if Args.Count < 1 then
     ThrowError('Array.map expects callback function', 0, 0);
 
-  Arr := TGocciaArrayValue(ThisValue);
   Callback := Args[0];
 
   if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
     ThrowError('Callback must be a function', 0, 0);
 
-  NewArr := TGocciaArrayValue.Create;
+  ResultArray := TGocciaArrayValue.Create;
 
   if Callback is TGocciaFunctionValue then
   begin
@@ -906,8 +912,9 @@ begin
     Exit;
   end;
 
-
-  Result := NewArr;
+  TGocciaLogger.Debug('ArrayMap: Returning result type: %s', [ResultArray.ClassName]);
+  TGocciaLogger.Debug('ArrayMap: Result ToString: %s', [ResultArray.ToString]);
+  Result := ResultArray;
 end;
 
 function TGocciaInterpreter.ArrayFilter(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -1199,30 +1206,28 @@ end;
 
 function TGocciaInterpreter.CallFunction(FunctionValue: TGocciaFunctionValue; Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  WriteLn('CallFunction: FunctionValue type is ', FunctionValue.ClassName, ' (TypeName: ', FunctionValue.TypeName, ')');
-  WriteLn('CallFunction: Body class is ', FunctionValue.Body.ClassName);
-  WriteLn('CallFunction: Closure class is ', FunctionValue.Closure.ClassName);
-  WriteLn('CallFunction: Number of parameters: ', FunctionValue.Parameters.Count);
-  WriteLn('CallFunction: Number of arguments: ', Arguments.Count);
-  WriteLn('CallFunction: ThisValue type: ', ThisValue.ClassName);
-  System.Flush(Output);
+  TGocciaLogger.Debug('CallFunction: FunctionValue type is %s (TypeName: %s)', [FunctionValue.ClassName, FunctionValue.TypeName]);
+  TGocciaLogger.Debug('CallFunction: Body class is %s', [FunctionValue.Body.ClassName]);
+  TGocciaLogger.Debug('CallFunction: Closure class is %s', [FunctionValue.Closure.ClassName]);
+  TGocciaLogger.Debug('CallFunction: Number of parameters: %d', [FunctionValue.Parameters.Count]);
+  TGocciaLogger.Debug('CallFunction: Number of arguments: %d', [Arguments.Count]);
+  TGocciaLogger.Debug('CallFunction: ThisValue type: %s', [ThisValue.ClassName]);
 
   try
     Result := FunctionValue.Call(Arguments, ThisValue, Self);
-    WriteLn('CallFunction: Function call completed, result type: ', Result.ClassName);
-    WriteLn('CallFunction: Result ToString: ', Result.ToString);
+    TGocciaLogger.Debug('CallFunction: Function call completed, result type: %s', [Result.ClassName]);
+    TGocciaLogger.Debug('CallFunction: Result ToString: %s', [Result.ToString]);
   except
     on E: TGocciaReturnValue do
     begin
-      WriteLn('CallFunction: Caught TGocciaReturnValue with value type: ', E.Value.ClassName);
-      WriteLn('CallFunction: Return value ToString: ', E.Value.ToString);
+      TGocciaLogger.Debug('CallFunction: Caught TGocciaReturnValue with value type: %s', [E.Value.ClassName]);
+      TGocciaLogger.Debug('CallFunction: Return value ToString: %s', [E.Value.ToString]);
       Result := E.Value;
     end;
   end;
 
-  WriteLn('CallFunction: Returning with Result type: ', Result.ClassName);
-  WriteLn('CallFunction: Result ToString: ', Result.ToString);
-  System.Flush(Output);
+  TGocciaLogger.Debug('CallFunction: Returning with Result type: %s', [Result.ClassName]);
+  TGocciaLogger.Debug('CallFunction: Result ToString: %s', [Result.ToString]);
 end;
 
 end.
