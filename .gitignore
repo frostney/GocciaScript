@@ -1,2 +1,5 @@
 *.o
 *.ppu
+
+build/main
+.DS_Store
