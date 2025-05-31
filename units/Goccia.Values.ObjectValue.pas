@@ -21,6 +21,7 @@ type
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
     function GetProperty(const AName: string): TGocciaValue;
     function HasProperty(const AName: string): Boolean;
+    function HasOwnProperty(const AName: string): Boolean;
     property Properties: TDictionary<string, TGocciaValue> read FProperties;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
   end;
@@ -85,10 +86,15 @@ end;
 
 function TGocciaObjectValue.HasProperty(const AName: string): Boolean;
 begin
-  Result := FProperties.ContainsKey(AName);
+  Result := HasOwnProperty(AName);
 
   if not Result and Assigned(FPrototype) then
     Result := FPrototype.HasProperty(AName);
+end;
+
+function TGocciaObjectValue.HasOwnProperty(const AName: string): Boolean;
+begin
+  Result := FProperties.ContainsKey(AName);
 end;
 
 end.
