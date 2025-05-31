@@ -6,8 +6,9 @@ unit Goccia.Values.FunctionValue;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.AST.Node, Goccia.Scope, Generics.Collections, Classes, SysUtils, Math,
-  Goccia.Values.Undefined, Goccia.Interfaces, Goccia.Logger;
+  Goccia.Values.Base, Goccia.AST.Node, Goccia.AST.Statements, Goccia.Scope,
+  Goccia.Error, Goccia.Logger, Goccia.Values.Undefined, Goccia.Values.Error,
+  Generics.Collections, Classes, Math, SysUtils;
 
 type
   TGocciaFunctionValue = class(TGocciaValue)
@@ -15,57 +16,60 @@ type
     FName: string;
   protected
     FParameters: TStringList;
-    FBody: TGocciaASTNode;
+    FBody: TGocciaBlockStatement;
     FClosure: TGocciaScope;
   public
-    constructor Create(AParameters: TStringList; ABody: TGocciaASTNode;
-      AClosure: TGocciaScope; const AName: string = '');
+    constructor Create(AParameters: TStringList; ABody: TGocciaBlockStatement; AClosure: TGocciaScope; const AName: string = '');
+    destructor Destroy; override;
     function ToString: string; override;
     function ToNumber: Double; override;
     function TypeName: string; override;
-    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue; Interpreter: IGocciaInterpreter): TGocciaValue; virtual;
+    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; virtual;
     property Parameters: TStringList read FParameters;
-    property Body: TGocciaASTNode read FBody;
+    property Body: TGocciaBlockStatement read FBody;
     property Closure: TGocciaScope read FClosure;
     property Name: string read FName;
   end;
 
   TGocciaMethodValue = class(TGocciaFunctionValue)
+  private
+    FMethodName: string;
   public
-    constructor Create(AParameters: TStringList; ABody: TGocciaASTNode;
-      AClosure: TGocciaScope; const AName: string = '');
+    constructor Create(AParameters: TStringList; ABody: TGocciaBlockStatement; AClosure: TGocciaScope; const AMethodName: string);
     function ToString: string; override;
-    function TypeName: string; override;
-    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue; Interpreter: IGocciaInterpreter): TGocciaValue; override;
+    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; override;
+    property MethodName: string read FMethodName;
   end;
 
   TGocciaFunctionInvocation = class
   private
-    FParameters: TStringList;
-    FInterpreter: IGocciaInterpreter;
+    FFunction: TGocciaFunctionValue;
+    FArguments: TObjectList<TGocciaValue>;
+    FThisValue: TGocciaValue;
     FCallScope: TGocciaScope;
-    FBody: TGocciaASTNode;
   public
-    constructor Create(AInterpreter: IGocciaInterpreter; ACallScope: TGocciaScope; AParameters: TStringList; ABody: TGocciaASTNode);
-    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-
-    property Parameters: TStringList read FParameters;
-    property Body: TGocciaASTNode read FBody;
-    property CallScope: TGocciaScope read FCallScope;
+    constructor Create(AFunction: TGocciaFunctionValue; AArguments: TObjectList<TGocciaValue>; AThisValue: TGocciaValue);
+    destructor Destroy; override;
+    function Execute: TGocciaValue;
   end;
 
 implementation
 
-uses
-  Goccia.Interpreter;
+{ TGocciaFunctionValue }
 
-constructor TGocciaFunctionValue.Create(AParameters: TStringList;
-  ABody: TGocciaASTNode; AClosure: TGocciaScope; const AName: string);
+constructor TGocciaFunctionValue.Create(AParameters: TStringList; ABody: TGocciaBlockStatement; AClosure: TGocciaScope; const AName: string = '');
 begin
   FParameters := AParameters;
   FBody := ABody;
   FClosure := AClosure;
   FName := AName;
+end;
+
+destructor TGocciaFunctionValue.Destroy;
+begin
+  FParameters.Free;
+  FBody.Free;
+  inherited;
 end;
 
 function TGocciaFunctionValue.ToString: string;
@@ -86,17 +90,24 @@ begin
   Result := 'function';
 end;
 
-function TGocciaFunctionValue.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue; Interpreter: IGocciaInterpreter): TGocciaValue;
+function TGocciaFunctionValue.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Invocation: TGocciaFunctionInvocation;
 begin
-  Result := TGocciaFunctionInvocation.Create(Interpreter, FClosure, Parameters, Body).Call(Arguments, ThisValue);
+  Invocation := TGocciaFunctionInvocation.Create(Self, Arguments, ThisValue);
+  try
+    Result := Invocation.Execute;
+  finally
+    Invocation.Free;
+  end;
 end;
 
 { TGocciaMethodValue }
 
-constructor TGocciaMethodValue.Create(AParameters: TStringList;
-  ABody: TGocciaASTNode; AClosure: TGocciaScope; const AName: string);
+constructor TGocciaMethodValue.Create(AParameters: TStringList; ABody: TGocciaBlockStatement; AClosure: TGocciaScope; const AMethodName: string);
 begin
-  inherited Create(AParameters, ABody, AClosure, AName);
+  inherited Create(AParameters, ABody, AClosure, AMethodName);
+  FMethodName := AMethodName;
 end;
 
 function TGocciaMethodValue.ToString: string;
@@ -107,74 +118,68 @@ begin
     Result := '[Method]';
 end;
 
-function TGocciaMethodValue.TypeName: string;
+function TGocciaMethodValue.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Invocation: TGocciaFunctionInvocation;
 begin
-  Result := 'method';
+  Invocation := TGocciaFunctionInvocation.Create(Self, Arguments, ThisValue);
+  try
+    Result := Invocation.Execute;
+  finally
+    Invocation.Free;
+  end;
 end;
 
-function TGocciaMethodValue.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue; Interpreter: IGocciaInterpreter): TGocciaValue;
+{ TGocciaFunctionInvocation }
+
+constructor TGocciaFunctionInvocation.Create(AFunction: TGocciaFunctionValue; AArguments: TObjectList<TGocciaValue>; AThisValue: TGocciaValue);
 begin
-  TGocciaLogger.Debug('TGocciaMethodValue.Call: Entered');
-  TGocciaLogger.Debug('  ThisValue: %s', [ThisValue.ToString]);
-  TGocciaLogger.Debug('  Arguments.Count: %d', [Arguments.Count]);
-  TGocciaLogger.Debug('  Closure address: %d', [NativeInt(FClosure)]);
-  TGocciaLogger.Debug('  Parameters: %s', [Parameters.Text]);
-  TGocciaLogger.Debug('  Body: %s', [Body.ToString]);
-  TGocciaLogger.Debug('  CallScope address: %d', [NativeInt(FClosure.CreateChild)]);
-  Result := TGocciaFunctionInvocation.Create(Interpreter, FClosure, Parameters, Body).Call(Arguments, ThisValue);
-  TGocciaLogger.Debug('TGocciaMethodValue.Call: Exiting');
-  TGocciaLogger.Debug('  Result: %s', [Result.ToString]);
+  FFunction := AFunction;
+  FArguments := AArguments;
+  FThisValue := AThisValue;
+  FCallScope := FFunction.Closure.CreateChild;
 end;
 
-constructor TGocciaFunctionInvocation.Create(AInterpreter: IGocciaInterpreter; ACallScope: TGocciaScope; AParameters: TStringList; ABody: TGocciaASTNode);
+destructor TGocciaFunctionInvocation.Destroy;
 begin
-  FInterpreter := AInterpreter;
-  FCallScope := ACallScope;
-  FParameters := AParameters;
-  FBody := ABody;
+  FCallScope.Free;
+  inherited;
 end;
 
-function TGocciaFunctionInvocation.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaFunctionInvocation.Execute: TGocciaValue;
 var
   I: Integer;
-  ReturnValue: TGocciaValue;
 begin
-  TGocciaLogger.Debug('TGocciaFunctionInvocation.Call: Entered');
-  TGocciaLogger.Debug('  ThisValue: %s', [ThisValue.ToString]);
-  TGocciaLogger.Debug('  Arguments.Count: %d', [Arguments.Count]);
-  TGocciaLogger.Debug('  Parameters: %s', [FParameters.Text]);
-  TGocciaLogger.Debug('  Body: %s', [FBody.ClassName]);
-  TGocciaLogger.Debug('  CallScope address: %d', [NativeUInt(FCallScope)]);
+  TGocciaLogger.Debug('FunctionInvocation.Execute: Entering');
+  TGocciaLogger.Debug('  Function type: %s', [FFunction.ClassName]);
+  TGocciaLogger.Debug('  Arguments.Count: %d', [FArguments.Count]);
+  TGocciaLogger.Debug('  ThisValue type: %s', [FThisValue.ClassName]);
 
-  try
-    // Set the this value in the call scope
-    FCallScope.ThisValue := ThisValue;
+  // Set up the call scope
+  FCallScope.ThisValue := FThisValue;
 
-    // Bind parameters to the call scope
-    for I := 0 to FParameters.Count - 1 do
-    begin
-      if I < Arguments.Count then
-        FCallScope.SetValue(FParameters[I], Arguments[I])
-      else
-        FCallScope.SetValue(FParameters[I], TGocciaUndefinedValue.Create);
-    end;
-
-    // Execute the function body
-    try
-      ReturnValue := FInterpreter.Evaluate(FBody);
-      Result := ReturnValue;
-    except
-      on E: TGocciaReturnValue do
-      begin
-        Result := E.Value;
-      end;
-    end;
-  finally
-    CallScope.Free;
+  // Bind parameters
+  for I := 0 to FFunction.Parameters.Count - 1 do
+  begin
+    if I < FArguments.Count then
+      FCallScope.SetValue(FFunction.Parameters[I], FArguments[I])
+    else
+      FCallScope.SetValue(FFunction.Parameters[I], TGocciaUndefinedValue.Create);
   end;
 
-  TGocciaLogger.Debug('TGocciaFunctionInvocation.Call: Exiting');
-  TGocciaLogger.Debug('  Result: %s', [Result.ToString]);
+  // Execute function body
+  try
+    Result := TGocciaUndefinedValue.Create;
+    for I := 0 to FFunction.Body.Statements.Count - 1 do
+      Result := FFunction.Body.Statements[I].Execute(FCallScope);
+  except
+    on E: TGocciaReturnValue do
+      Result := E.Value;
+  end;
+
+  TGocciaLogger.Debug('FunctionInvocation.Execute: Exiting');
+  TGocciaLogger.Debug('  Result type: %s', [Result.ClassName]);
+  TGocciaLogger.Debug('  Result ToString: %s', [Result.ToString]);
 end;
 
 end.

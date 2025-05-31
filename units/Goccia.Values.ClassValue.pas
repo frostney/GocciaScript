@@ -18,6 +18,7 @@ type
     FSuperClass: TGocciaClassValue;
     FMethods: TDictionary<string, TGocciaMethodValue>;
     FPrototype: TGocciaObjectValue;
+    FConstructorMethod: TGocciaMethodValue;
   public
     constructor Create(const AName: string; ASuperClass: TGocciaClassValue);
     destructor Destroy; override;
@@ -26,20 +27,24 @@ type
     function TypeName: string; override;
     procedure AddMethod(const AName: string; AMethod: TGocciaMethodValue);
     function GetMethod(const AName: string): TGocciaMethodValue;
-    function Instantiate(Arguments: TObjectList<TGocciaValue>; Interpreter: IGocciaInterpreter): TGocciaInstanceValue;
+    function Instantiate(Arguments: TObjectList<TGocciaValue>): TGocciaValue;
     property Name: string read FName;
     property SuperClass: TGocciaClassValue read FSuperClass;
     property Prototype: TGocciaObjectValue read FPrototype;
+    property ConstructorMethod: TGocciaMethodValue read FConstructorMethod;
   end;
 
   TGocciaInstanceValue = class(TGocciaObjectValue)
   private
     FClass: TGocciaClassValue;
+    FPrototype: TGocciaObjectValue;
   public
     constructor Create(AClass: TGocciaClassValue);
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue;
+    procedure SetProperty(const AName: string; AValue: TGocciaValue);
     property ClassValue: TGocciaClassValue read FClass;
+    property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
   end;
 
 implementation
@@ -50,6 +55,7 @@ begin
   FSuperClass := ASuperClass;
   FMethods := TDictionary<string, TGocciaMethodValue>.Create;
   FPrototype := TGocciaObjectValue.Create;
+  FConstructorMethod := nil;
   if Assigned(FSuperClass) then
     FPrototype.Prototype := FSuperClass.Prototype;
 end;
@@ -78,6 +84,13 @@ end;
 
 procedure TGocciaClassValue.AddMethod(const AName: string; AMethod: TGocciaMethodValue);
 begin
+  // If this is the constructor, store it separately
+  if AName = 'constructor' then
+  begin
+    FConstructorMethod := AMethod;
+    Exit;
+  end;
+
   FMethods.AddOrSetValue(AName, AMethod);
   FPrototype.SetProperty(AName, AMethod);
 end;
@@ -93,46 +106,37 @@ begin
   end;
 end;
 
-function TGocciaClassValue.Instantiate(Arguments: TObjectList<TGocciaValue>; Interpreter: IGocciaInterpreter): TGocciaInstanceValue;
+function TGocciaClassValue.Instantiate(Arguments: TObjectList<TGocciaValue>): TGocciaValue;
 var
   Instance: TGocciaInstanceValue;
-  Method: TGocciaMethodValue;
-  ConstructorResult: TGocciaValue;
 begin
-  // Create the instance with this class as its class value
+  // Create the instance
   Instance := TGocciaInstanceValue.Create(Self);
   TGocciaLogger.Debug('Instance created: %s', [Instance.ToString]);
-
   // Set up the prototype chain
-  // The instance's prototype should be the class's prototype
   Instance.Prototype := FPrototype;
   TGocciaLogger.Debug('Prototype set for instance');
 
   // Call constructor if it exists
-  Method := GetMethod('constructor');
-  TGocciaLogger.Debug('Constructor method found: %s', [Assigned(Method)]);
-
-  if Assigned(Method) then
+  if Assigned(FConstructorMethod) then
   begin
     TGocciaLogger.Debug('Calling constructor');
-    TGocciaLogger.Debug('Arguments: %d', [Arguments.Count]);
+    TGocciaLogger.Debug('  Arguments.Count: %d', [Arguments.Count]);
     if Arguments.Count > 0 then
-      TGocciaLogger.Debug('Arguments: %s', [Arguments[0].ToString]);
-    TGocciaLogger.Debug('Instance: %s', [Instance.ToString]);
+      TGocciaLogger.Debug('  First argument: %s', [Arguments[0].ToString]);
 
-    // Call the constructor with the instance as this value
-    ConstructorResult := Method.Call(Arguments, Instance, Interpreter);
-    TGocciaLogger.Debug('Constructor call completed, result: %s', [ConstructorResult.ToString]);
+    // Call the constructor with the instance as this
+    FConstructorMethod.Call(Arguments, Instance);
   end;
 
   Result := Instance;
-  TGocciaLogger.Debug('Returning instance: %s', [Result.ToString]);
 end;
 
 constructor TGocciaInstanceValue.Create(AClass: TGocciaClassValue);
 begin
   inherited Create;
   FClass := AClass;
+  FPrototype := nil;
 end;
 
 function TGocciaInstanceValue.TypeName: string;
@@ -148,11 +152,24 @@ begin
   Result := inherited GetProperty(AName);
   if Result = nil then
   begin
-    // If not found in instance, check if it's a method
-    Method := FClass.GetMethod(AName);
-    if Assigned(Method) then
-      Result := Method;
+    // If not found in instance, check prototype chain
+    if Assigned(FPrototype) then
+      Result := FPrototype.GetProperty(AName);
+
+    // If still not found, check if it's a method
+    if Result = nil then
+    begin
+      Method := FClass.GetMethod(AName);
+      if Assigned(Method) then
+        Result := Method;
+    end;
   end;
+end;
+
+procedure TGocciaInstanceValue.SetProperty(const AName: string; AValue: TGocciaValue);
+begin
+  // Always set properties on the instance, not the prototype
+  inherited SetProperty(AName, AValue);
 end;
 
 end.

@@ -38,6 +38,8 @@ type
   TGocciaTypeError = class(TGocciaRuntimeError);
   TGocciaReferenceError = class(TGocciaRuntimeError);
 
+  TGocciaThrowError = procedure(const Message: string; Line, Column: Integer) of object;
+
 implementation
 
 constructor TGocciaError.Create(const AMessage: string; ALine, AColumn: Integer;

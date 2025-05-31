@@ -9,24 +9,9 @@ uses
   Goccia.Values.Undefined, Goccia.Values.BooleanValue, Goccia.Values.Number, Goccia.Values.ObjectValue,
   Goccia.Values.StringValue, Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
   Goccia.Values.Null, Goccia.Values.NativeFunction, Goccia.Token, Generics.Collections,
-  Classes, SysUtils, Math, Goccia.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Scope, Goccia.Interfaces, Goccia.Logger;
+  Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Scope, Goccia.Builtins.Console, Goccia.Builtins.GlobalObject, Goccia.Builtins.Math, Goccia.Interfaces, Goccia.Logger;
 
 type
-  TGocciaReturnValue = class(Exception)
-  private
-    FValue: TGocciaValue;
-  public
-    constructor Create(AValue: TGocciaValue);
-    property Value: TGocciaValue read FValue;
-  end;
-
-  TGocciaThrowValue = class(Exception)
-  private
-    FValue: TGocciaValue;
-  public
-    constructor Create(AValue: TGocciaValue);
-    property Value: TGocciaValue read FValue;
-  end;
 
   TGocciaInterpreter = class(TInterfacedObject, IGocciaInterpreter)
   private
@@ -62,23 +47,10 @@ type
     function EvaluateClass(Stmt: TGocciaClassDeclaration): TGocciaValue;
 
     // ============= Built-in Function Implementations =============
-    function ConsoleLog(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function MathAbs(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function MathFloor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function MathCeil(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function MathRound(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function MathMax(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function MathMin(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function MathPow(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function MathSqrt(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayMap(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayFilter(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayReduce(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayForEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectKeys(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectValues(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectEntries(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-
 
     // Helper methods
     procedure ThrowError(const Message: string; Line, Column: Integer);
@@ -96,21 +68,7 @@ type
 
 implementation
 
-{ TGocciaReturnValue }
 
-constructor TGocciaReturnValue.Create(AValue: TGocciaValue);
-begin
-  inherited Create('');
-  FValue := AValue;
-end;
-
-{ TGocciaThrowValue }
-
-constructor TGocciaThrowValue.Create(AValue: TGocciaValue);
-begin
-  inherited Create('');
-  FValue := AValue;
-end;
 
 { TGocciaInterpreter }
 
@@ -143,30 +101,13 @@ begin
 end;
 
 procedure TGocciaInterpreter.RegisterConsole;
-var
-  Console: TGocciaObjectValue;
 begin
-  Console := TGocciaObjectValue.Create;
-  Console.SetProperty('log', TGocciaNativeFunctionValue.Create(ConsoleLog, 'log', -1));
-  FGlobalScope.SetValue('console', Console);
+  TGocciaConsole.Create('console', FGlobalScope);
 end;
 
 procedure TGocciaInterpreter.RegisterMath;
-var
-  MathObj: TGocciaObjectValue;
 begin
-  MathObj := TGocciaObjectValue.Create;
-  MathObj.SetProperty('PI', TGocciaNumberValue.Create(Pi));
-  MathObj.SetProperty('E', TGocciaNumberValue.Create(Exp(1)));
-  MathObj.SetProperty('abs', TGocciaNativeFunctionValue.Create(MathAbs, 'abs', 1));
-  MathObj.SetProperty('floor', TGocciaNativeFunctionValue.Create(MathFloor, 'floor', 1));
-  MathObj.SetProperty('ceil', TGocciaNativeFunctionValue.Create(MathCeil, 'ceil', 1));
-  MathObj.SetProperty('round', TGocciaNativeFunctionValue.Create(MathRound, 'round', 1));
-  MathObj.SetProperty('max', TGocciaNativeFunctionValue.Create(MathMax, 'max', -1));
-  MathObj.SetProperty('min', TGocciaNativeFunctionValue.Create(MathMin, 'min', -1));
-  MathObj.SetProperty('pow', TGocciaNativeFunctionValue.Create(MathPow, 'pow', 2));
-  MathObj.SetProperty('sqrt', TGocciaNativeFunctionValue.Create(MathSqrt, 'sqrt', 1));
-  FGlobalScope.SetValue('Math', MathObj);
+  TGocciaMath.Create('Math', FGlobalScope, ThrowError);
 end;
 
 procedure TGocciaInterpreter.RegisterPromise;
@@ -177,6 +118,7 @@ end;
 
 procedure TGocciaInterpreter.RegisterArrayMethods;
 begin
+  // TODO: We are hacking the Array prototype here, we should add this into the ArrayValue class
   FArrayPrototype := TGocciaObjectValue.Create;
   // Register array methods as instance methods
   FArrayPrototype.SetProperty('map', TGocciaNativeFunctionValue.Create(ArrayMap, 'map', 1));
@@ -186,14 +128,8 @@ begin
 end;
 
 procedure TGocciaInterpreter.RegisterObjectMethods;
-var
-  ObjectClass: TGocciaObjectValue;
 begin
-  ObjectClass := TGocciaObjectValue.Create;
-  ObjectClass.SetProperty('keys', TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1));
-  ObjectClass.SetProperty('values', TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1));
-  ObjectClass.SetProperty('entries', TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1));
-  FGlobalScope.SetValue('Object', ObjectClass);
+  TGocciaGlobalObject.Create('Object', FGlobalScope, ThrowError);
 end;
 
 function TGocciaInterpreter.Execute(AProgram: TGocciaProgram): TGocciaValue;
@@ -779,104 +715,9 @@ end;
 
 // Built-in function implementations
 
-function TGocciaInterpreter.ConsoleLog(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-var
-  I: Integer;
-  Output: string;
-begin
-  Output := '';
-  for I := 0 to Args.Count - 1 do
-  begin
-    if I > 0 then
-      Output := Output + ' ';
-    Output := Output + Args[I].ToString;
-  end;
-  WriteLn(Output);
-  Result := TGocciaUndefinedValue.Create;
-end;
 
-function TGocciaInterpreter.MathAbs(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-begin
-  if Args.Count <> 1 then
-    ThrowError('Math.abs expects exactly 1 argument', 0, 0);
-  Result := TGocciaNumberValue.Create(Abs(Args[0].ToNumber));
-end;
 
-function TGocciaInterpreter.MathFloor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-begin
-  if Args.Count <> 1 then
-    ThrowError('Math.floor expects exactly 1 argument', 0, 0);
-  Result := TGocciaNumberValue.Create(Floor(Args[0].ToNumber));
-end;
 
-function TGocciaInterpreter.MathCeil(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-begin
-  if Args.Count <> 1 then
-    ThrowError('Math.ceil expects exactly 1 argument', 0, 0);
-  Result := TGocciaNumberValue.Create(Ceil(Args[0].ToNumber));
-end;
-
-function TGocciaInterpreter.MathRound(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-begin
-  if Args.Count <> 1 then
-    ThrowError('Math.round expects exactly 1 argument', 0, 0);
-  Result := TGocciaNumberValue.Create(Round(Args[0].ToNumber));
-end;
-
-function TGocciaInterpreter.MathMax(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-var
-  I: Integer;
-  Max, Current: Double;
-begin
-  if Args.Count = 0 then
-    Result := TGocciaNumberValue.Create(-Infinity)
-  else
-  begin
-    Max := Args[0].ToNumber;
-    for I := 1 to Args.Count - 1 do
-    begin
-      Current := Args[I].ToNumber;
-      if Current > Max then
-        Max := Current;
-    end;
-    Result := TGocciaNumberValue.Create(Max);
-  end;
-end;
-
-function TGocciaInterpreter.MathMin(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-var
-  I: Integer;
-  Min, Current: Double;
-begin
-  if Args.Count = 0 then
-    Result := TGocciaNumberValue.Create(Infinity)
-  else
-  begin
-    Min := Args[0].ToNumber;
-    for I := 1 to Args.Count - 1 do
-    begin
-      Current := Args[I].ToNumber;
-      if Current < Min then
-        Min := Current;
-    end;
-    Result := TGocciaNumberValue.Create(Min);
-  end;
-end;
-
-function TGocciaInterpreter.MathPow(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-begin
-  if Args.Count <> 2 then
-    ThrowError('Math.pow expects exactly 2 arguments', 0, 0);
-  Result := TGocciaNumberValue.Create(
-    Power(Args[0].ToNumber, Args[1].ToNumber));
-end;
-
-function TGocciaInterpreter.MathSqrt(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-begin
-  if Args.Count <> 1 then
-    ThrowError('Math.sqrt expects exactly 1 argument', 0, 0);
-  Result := TGocciaNumberValue.Create(Sqrt(Args[0].ToNumber));
-end;
 
 function TGocciaInterpreter.ArrayMap(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
@@ -1135,74 +976,7 @@ begin
   Result := TGocciaUndefinedValue.Create;
 end;
 
-function TGocciaInterpreter.ObjectKeys(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-var
-  Obj: TGocciaObjectValue;
-  Keys: TGocciaArrayValue;
-  Key: string;
-begin
-  if Args.Count <> 1 then
-    ThrowError('Object.keys expects exactly 1 argument', 0, 0);
 
-  if not (Args[0] is TGocciaObjectValue) then
-    ThrowError('Object.keys called on non-object', 0, 0);
-
-  Obj := TGocciaObjectValue(Args[0]);
-  Keys := TGocciaArrayValue.Create;
-
-  for Key in Obj.Properties.Keys do
-    Keys.Elements.Add(TGocciaStringValue.Create(Key));
-
-  Result := Keys;
-end;
-
-function TGocciaInterpreter.ObjectValues(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-var
-  Obj: TGocciaObjectValue;
-  Values: TGocciaArrayValue;
-  Value: TGocciaValue;
-begin
-  if Args.Count <> 1 then
-    ThrowError('Object.values expects exactly 1 argument', 0, 0);
-
-  if not (Args[0] is TGocciaObjectValue) then
-    ThrowError('Object.values called on non-object', 0, 0);
-
-  Obj := TGocciaObjectValue(Args[0]);
-  Values := TGocciaArrayValue.Create;
-
-  for Value in Obj.Properties.Values do
-    Values.Elements.Add(Value);
-
-  Result := Values;
-end;
-
-function TGocciaInterpreter.ObjectEntries(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-var
-  Obj: TGocciaObjectValue;
-  Entries: TGocciaArrayValue;
-  Entry: TGocciaArrayValue;
-  Pair: TPair<string, TGocciaValue>;
-begin
-  if Args.Count <> 1 then
-    ThrowError('Object.entries expects exactly 1 argument', 0, 0);
-
-  if not (Args[0] is TGocciaObjectValue) then
-    ThrowError('Object.entries called on non-object', 0, 0);
-
-  Obj := TGocciaObjectValue(Args[0]);
-  Entries := TGocciaArrayValue.Create;
-
-  for Pair in Obj.Properties do
-  begin
-    Entry := TGocciaArrayValue.Create;
-    Entry.Elements.Add(TGocciaStringValue.Create(Pair.Key));
-    Entry.Elements.Add(Pair.Value);
-    Entries.Elements.Add(Entry);
-  end;
-
-  Result := Entries;
-end;
 
 function TGocciaInterpreter.CallFunction(FunctionValue: TGocciaFunctionValue; Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 begin
@@ -1228,6 +1002,31 @@ begin
 
   TGocciaLogger.Debug('CallFunction: Returning with Result type: %s', [Result.ClassName]);
   TGocciaLogger.Debug('CallFunction: Result ToString: %s', [Result.ToString]);
+end;
+
+function TGocciaInterpreter.EvaluateNewExpression(Node: TGocciaNewExpression): TGocciaValue;
+var
+  Callee: TGocciaValue;
+  Arguments: TObjectList<TGocciaValue>;
+  I: Integer;
+begin
+  // Evaluate the callee (class)
+  Callee := EvaluateExpression(Node.Callee);
+
+  // Evaluate arguments
+  Arguments := TObjectList<TGocciaValue>.Create(True);
+  try
+    for I := 0 to Node.Arguments.Count - 1 do
+      Arguments.Add(EvaluateExpression(Node.Arguments[I]));
+
+    // Create new instance
+    if Callee is TGocciaClassValue then
+      Result := TGocciaClassValue(Callee).Instantiate(Arguments)
+    else
+      raise TGocciaError.Create('Cannot instantiate non-class value');
+  finally
+    Arguments.Free;
+  end;
 end;
 
 end.
