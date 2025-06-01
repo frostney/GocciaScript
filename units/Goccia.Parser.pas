@@ -618,18 +618,18 @@ end;
 
 function TGocciaParser.BlockStatement: TGocciaBlockStatement;
 var
-  Statements: TObjectList<TGocciaStatement>;
+  Nodes: TObjectList<TGocciaASTNode>;
   Line, Column: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
-  Statements := TObjectList<TGocciaStatement>.Create(True);
+  Nodes := TObjectList<TGocciaASTNode>.Create(True);
 
   while not Check(gttRightBrace) and not IsAtEnd do
-    Statements.Add(Statement);
+    Nodes.Add(Statement);
 
   Consume(gttRightBrace, 'Expected "}" after block');
-  Result := TGocciaBlockStatement.Create(Statements, Line, Column);
+  Result := TGocciaBlockStatement.Create(Nodes, Line, Column);
 end;
 
 function TGocciaParser.IfStatement: TGocciaStatement;
@@ -768,7 +768,7 @@ begin
       end;
 
       Consume(gttRightBrace, 'Expected "}" after method body');
-      Body := TGocciaBlockStatement.Create(Statements, Line, Column);
+      Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
       Result := TGocciaClassMethod.Create(Name, Parameters, Body, Line, Column);
     except
       Statements.Free;

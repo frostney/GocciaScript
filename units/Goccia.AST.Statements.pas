@@ -31,11 +31,11 @@ type
 
   TGocciaBlockStatement = class(TGocciaStatement)
   private
-    FStatements: TObjectList<TGocciaStatement>;
+    FNodes: TObjectList<TGocciaASTNode>;
   public
-    constructor Create(AStatements: TObjectList<TGocciaStatement>;
+    constructor Create(ANodes: TObjectList<TGocciaASTNode>;
       ALine, AColumn: Integer);
-    property Statements: TObjectList<TGocciaStatement> read FStatements;
+    property Nodes: TObjectList<TGocciaASTNode> read FNodes;
   end;
 
   TGocciaIfStatement = class(TGocciaStatement)
@@ -155,11 +155,11 @@ implementation
 
   { TGocciaBlockStatement }
 
-  constructor TGocciaBlockStatement.Create(AStatements: TObjectList<TGocciaStatement>;
+  constructor TGocciaBlockStatement.Create(ANodes: TObjectList<TGocciaASTNode>;
     ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
-    FStatements := AStatements;
+    FNodes := ANodes;
   end;
 
   { TGocciaIfStatement }

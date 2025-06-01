@@ -11,22 +11,34 @@ uses
   Generics.Collections, Classes, Math, SysUtils;
 
 type
+  TGocciaBlockValue = class
+  private
+    FStatements: TObjectList<TGocciaASTNode>;
+    FScope: TGocciaScope;
+  public
+    constructor Create(AStatements: TObjectList<TGocciaASTNode>; AScope: TGocciaScope);
+    destructor Destroy; override;
+    function Execute: TGocciaValue;
+    property Statements: TObjectList<TGocciaASTNode> read FStatements;
+    property Scope: TGocciaScope read FScope;
+  end;
+
   TGocciaFunctionValue = class(TGocciaValue)
   private
     FName: string;
   protected
     FParameters: TStringList;
-    FBody: TGocciaBlockStatement;
+    FBody: TGocciaBlockValue;
     FClosure: TGocciaScope;
   public
-    constructor Create(AParameters: TStringList; ABody: TGocciaBlockStatement; AClosure: TGocciaScope; const AName: string = '');
+    constructor Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string = '');
     destructor Destroy; override;
     function ToString: string; override;
     function ToNumber: Double; override;
     function TypeName: string; override;
     function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; virtual;
     property Parameters: TStringList read FParameters;
-    property Body: TGocciaBlockStatement read FBody;
+    property Body: TGocciaBlockValue read FBody;
     property Closure: TGocciaScope read FClosure;
     property Name: string read FName;
   end;
@@ -35,7 +47,7 @@ type
   private
     FMethodName: string;
   public
-    constructor Create(AParameters: TStringList; ABody: TGocciaBlockStatement; AClosure: TGocciaScope; const AMethodName: string);
+    constructor Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AMethodName: string);
     function ToString: string; override;
     function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; override;
     property MethodName: string read FMethodName;
@@ -55,9 +67,47 @@ type
 
 implementation
 
+uses
+  Goccia.Evaluator;
+
+{ TGocciaBlockValue }
+
+constructor TGocciaBlockValue.Create(AStatements: TObjectList<TGocciaASTNode>; AScope: TGocciaScope);
+begin
+  FStatements := AStatements;
+  FScope := AScope;
+end;
+
+destructor TGocciaBlockValue.Destroy;
+begin
+  FStatements.Free;
+  inherited;
+end;
+
+function TGocciaBlockValue.Execute: TGocciaValue;
+var
+  I: Integer;
+  Context: TGocciaEvaluationContext;
+begin
+  Context.Scope := FScope;
+
+  Result := TGocciaUndefinedValue.Create;
+  for I := 0 to FStatements.Count - 1 do
+  begin
+    try
+      Result := Evaluate(FStatements[I], Context);
+    except
+      on E: TGocciaReturnValue do
+        raise;
+      on E: Exception do
+        raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
+    end;
+  end;
+end;
+
 { TGocciaFunctionValue }
 
-constructor TGocciaFunctionValue.Create(AParameters: TStringList; ABody: TGocciaBlockStatement; AClosure: TGocciaScope; const AName: string = '');
+constructor TGocciaFunctionValue.Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string = '');
 begin
   FParameters := AParameters;
   FBody := ABody;
@@ -104,7 +154,7 @@ end;
 
 { TGocciaMethodValue }
 
-constructor TGocciaMethodValue.Create(AParameters: TStringList; ABody: TGocciaBlockStatement; AClosure: TGocciaScope; const AMethodName: string);
+constructor TGocciaMethodValue.Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AMethodName: string);
 begin
   inherited Create(AParameters, ABody, AClosure, AMethodName);
   FMethodName := AMethodName;
@@ -137,7 +187,7 @@ begin
   FFunction := AFunction;
   FArguments := AArguments;
   FThisValue := AThisValue;
-  FCallScope := FFunction.Closure.CreateChild;
+  FCallScope := FFunction.Closure.CreateChild(skFunction, Format('Type: FunctionInvocation, Name: %s', [AFunction.Name]));
 end;
 
 destructor TGocciaFunctionInvocation.Destroy;
@@ -169,9 +219,7 @@ begin
 
   // Execute function body
   try
-    Result := TGocciaUndefinedValue.Create;
-    for I := 0 to FFunction.Body.Statements.Count - 1 do
-      Result := FFunction.Body.Statements[I].Execute(FCallScope);
+    Result := FFunction.Body.Execute;
   except
     on E: TGocciaReturnValue do
       Result := E.Value;

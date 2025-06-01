@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Functions from `Goccia.Evaluator` are pure functions. They cannot have any side effects and needs to have the same input based on the same output.

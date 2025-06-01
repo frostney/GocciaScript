@@ -5,7 +5,7 @@ unit Goccia.Builtins.GlobalObject;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Scope, Goccia.Values.NativeFunction, Goccia.Values.Undefined, Goccia.Values.ObjectValue, Generics.Collections;
+  Goccia.Values.Base, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.Undefined, Goccia.Values.ObjectValue, Generics.Collections;
 
 type
   TGocciaGlobalObject = class
@@ -28,7 +28,10 @@ type
 
 implementation
 
-constructor TGocciaGlobalObject.Create(const AName: string; AScope: TGocciaScope);
+uses
+  Goccia.Values.ArrayValue, Goccia.Values.StringValue;
+
+constructor TGocciaGlobalObject.Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
 begin
   FName := AName;
   FGlobalObject := TGocciaObjectValue.Create;

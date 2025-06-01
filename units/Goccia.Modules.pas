@@ -21,6 +21,8 @@ type
     property LastModified: TDateTime read FLastModified write FLastModified;
   end;
 
+  TLoadModuleCallback = function(const APath: string): TGocciaModule of object;
+
 implementation
 
 constructor TGocciaModule.Create(const APath: string);

@@ -9,9 +9,14 @@ uses
   Goccia.AST.Node;
 
 type
-  IGocciaInterpreter = interface
+  // IGocciaInterpreter = interface
+  //   ['{52c77df2-cfb9-4cc6-afc5-cd3c7c7b007f}']
+  //   function Evaluate(Node: TGocciaASTNode): TGocciaValue;
+  // end;
+
+  ITest = interface
     ['{52c77df2-cfb9-4cc6-afc5-cd3c7c7b007f}']
-    function Evaluate(Node: TGocciaASTNode): TGocciaValue;
+    function Test: string;
   end;
 
 implementation
