@@ -1,5 +1,13 @@
+# Output files
 *.o
 *.ppu
 
+# Build files
+build/*.exe
 build/main
+build/REPL
+build/ScriptLoader
+build/*.Test
+
+# Mac OS files
 .DS_Store

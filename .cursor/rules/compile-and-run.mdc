@@ -3,4 +3,4 @@ description:
 globs: 
 alwaysApply: true
 ---
-The command for compile and run is `fpc @config.cfg -g main.dpr && ./build/main ./example.js`
+The command for compile and run is `./build.pas loader && ./build/ScriptLoader ./example.js`

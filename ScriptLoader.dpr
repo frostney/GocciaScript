@@ -1,7 +1,6 @@
-{$mode delphi}
-{$H+}
+program ScriptLoader;
 
-program GocciaScriptMain;
+{$I units/Goccia.inc}
 
 uses
   Classes, SysUtils, Generics.Collections, Goccia.Lexer, Goccia.Parser, Goccia.Interpreter, Goccia.Error, Goccia.Token, Goccia.AST.Node;
