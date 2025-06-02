@@ -25,6 +25,7 @@ type
     constructor Create;
     destructor Destroy; override;
     function ToString: string; override;
+    function ToBoolean: Boolean; override;
     function ToNumber: Double; override;
     function TypeName: string; override;
     property Elements: TObjectList<TGocciaValue> read FElements;
@@ -262,6 +263,11 @@ begin
     Result := Result + FElements[I].ToString;
   end;
   Result := Result + ']';
+end;
+
+function TGocciaArrayValue.ToBoolean: Boolean;
+begin
+  Result := True;
 end;
 
 function TGocciaArrayValue.ToNumber: Double;

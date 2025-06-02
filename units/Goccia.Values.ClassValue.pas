@@ -23,6 +23,7 @@ type
     constructor Create(const AName: string; ASuperClass: TGocciaClassValue);
     destructor Destroy; override;
     function ToString: string; override;
+    function ToBoolean: Boolean; override;
     function ToNumber: Double; override;
     function TypeName: string; override;
     procedure AddMethod(const AName: string; AMethod: TGocciaMethodValue);
@@ -70,6 +71,11 @@ end;
 function TGocciaClassValue.ToString: string;
 begin
   Result := Format('[Class: %s]', [FName]);
+end;
+
+function TGocciaClassValue.ToBoolean: Boolean;
+begin
+  Result := True;
 end;
 
 function TGocciaClassValue.ToNumber: Double;

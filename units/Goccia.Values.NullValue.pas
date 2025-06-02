@@ -1,4 +1,4 @@
-unit Goccia.Values.Undefined;
+unit Goccia.Values.NullValue;
 
 {$I Goccia.inc}
 
@@ -8,7 +8,7 @@ uses
   Goccia.Values.Base, Math;
 
 type
-  TGocciaUndefinedValue = class(TGocciaValue)
+  TGocciaNullValue = class(TGocciaValue)
   public
     function ToString: string; override;
     function ToBoolean: Boolean; override;
@@ -18,24 +18,24 @@ type
 
 implementation
 
-function TGocciaUndefinedValue.ToString: string;
+function TGocciaNullValue.ToString: string;
 begin
-  Result := 'undefined';
+  Result := 'null';
 end;
 
-function TGocciaUndefinedValue.ToBoolean: Boolean;
+function TGocciaNullValue.ToBoolean: Boolean;
 begin
   Result := False;
 end;
 
-function TGocciaUndefinedValue.ToNumber: Double;
+function TGocciaNullValue.ToNumber: Double;
 begin
   Result := NaN;
 end;
 
-function TGocciaUndefinedValue.TypeName: string;
+function TGocciaNullValue.TypeName: string;
 begin
-  Result := 'undefined';
+  Result := 'object';
 end;
 
 end.

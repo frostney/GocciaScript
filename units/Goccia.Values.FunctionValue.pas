@@ -6,8 +6,8 @@ unit Goccia.Values.FunctionValue;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.AST.Node, Goccia.AST.Statements, Goccia.Scope,
-  Goccia.Error, Goccia.Logger, Goccia.Values.Undefined, Goccia.Values.Error,
+  Goccia.Interfaces, Goccia.Values.Base, Goccia.AST.Node, Goccia.AST.Statements, Goccia.Scope,
+  Goccia.Error, Goccia.Logger, Goccia.Values.Undefined, Goccia.Values.Error, Goccia.Values.ObjectValue,
   Generics.Collections, Classes, Math, SysUtils;
 
 type
@@ -23,7 +23,7 @@ type
     property Scope: TGocciaScope read FScope;
   end;
 
-  TGocciaFunctionValue = class(TGocciaValue)
+  TGocciaFunctionValue = class(TGocciaObjectValue, IGocciaCallable)
   private
     FName: string;
   protected
@@ -34,9 +34,10 @@ type
     constructor Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string = '');
     destructor Destroy; override;
     function ToString: string; override;
+    function ToBoolean: Boolean; override;
     function ToNumber: Double; override;
     function TypeName: string; override;
-    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; virtual;
+    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     property Parameters: TStringList read FParameters;
     property Body: TGocciaBlockValue read FBody;
     property Closure: TGocciaScope read FClosure;
@@ -49,7 +50,7 @@ type
   public
     constructor Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AMethodName: string);
     function ToString: string; override;
-    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; override;
+    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     property MethodName: string read FMethodName;
   end;
 
@@ -113,6 +114,8 @@ begin
   FBody := ABody;
   FClosure := AClosure;
   FName := AName;
+
+  inherited Create;
 end;
 
 destructor TGocciaFunctionValue.Destroy;
@@ -128,6 +131,11 @@ begin
     Result := Format('[Function: %s]', [FName])
   else
     Result := '[Function]';
+end;
+
+function TGocciaFunctionValue.ToBoolean: Boolean;
+begin
+  Result := True;
 end;
 
 function TGocciaFunctionValue.ToNumber: Double;

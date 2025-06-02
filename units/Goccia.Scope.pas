@@ -10,8 +10,6 @@ uses
 type
   TGocciaScopeKind = (skUnknown, skGlobal, skFunction, skBlock, skCustom);
 
-  // TODO: Add a way to access thisArg
-  // TODO: Do we want to differentiate between global, local and function scopes?
   TGocciaScope = class
   private
     FValues: TDictionary<string, TGocciaValue>;
@@ -76,26 +74,7 @@ begin
         TGocciaLogger.Debug('    %s: <not found>', [Key]);
     end;
 
-    // Only free values in child/local scopes
-    if FScopeKind <> skGlobal then
-    begin
-      TGocciaLogger.Debug('  Freeing values in non-global scope');
-      for Value in FValues.Values do
-      begin
-        if Assigned(Value) then
-        begin
-          TGocciaLogger.Debug('    Freeing value of type: %s', [Value.ClassName]);
-          Value.Free;
-        end;
-      end;
-    end
-    else
-    begin
-      TGocciaLogger.Debug('  Skipping value freeing in global scope');
-    end;
-
     FValues.Free;
-    FValues := nil;
   end;
 
   if Assigned(FThisValue) then
@@ -127,7 +106,6 @@ begin
 
   if FValues.TryGetValue(AName, Value) then
   begin
-    TGocciaLogger.Debug('  Found value of type: %s', [Value.ClassName]);
     Result := Value;
   end
   else if Assigned(FParent) then
@@ -140,6 +118,9 @@ begin
     TGocciaLogger.Debug('  Value not found and no enclosing scope');
     Result := TGocciaUndefinedValue.Create;
   end;
+
+  TGocciaLogger.Debug('  Returning value of type: %s', [Result.ClassName]);
+  TGocciaLogger.Debug('  Result ToString: %s', [Result.ToString]);
 end;
 
 function TGocciaScope.GetThisProperty(const AName: string): TGocciaValue;

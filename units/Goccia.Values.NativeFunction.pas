@@ -5,14 +5,12 @@ unit Goccia.Values.NativeFunction;
 interface
 
 uses
-  Goccia.Values.Base, Generics.Collections, SysUtils, Math;
+  Goccia.Interfaces, Goccia.Values.Base, Goccia.Values.ObjectValue, Generics.Collections, SysUtils, Math;
 
 type
-  // TODO: Add reference to thisArg
   TGocciaNativeFunction = function(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue of object;
 
-  // TODO: Make this a subclass of TGocciaFunctionValue
-  TGocciaNativeFunctionValue = class(TGocciaValue)
+  TGocciaNativeFunctionValue = class(TGocciaObjectValue, IGocciaCallable)
   private
     FFunction: TGocciaNativeFunction;
     FName: string;
@@ -20,6 +18,7 @@ type
   public
     constructor Create(AFunction: TGocciaNativeFunction; const AName: string;
       AArity: Integer);
+    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToString: string; override;
     function ToNumber: Double; override;
     function TypeName: string; override;
@@ -37,6 +36,13 @@ begin
   FFunction := AFunction;
   FName := AName;
   FArity := AArity;
+
+  inherited Create;
+end;
+
+function TGocciaNativeFunctionValue.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := FFunction(Arguments, ThisValue);
 end;
 
 function TGocciaNativeFunctionValue.ToString: string;

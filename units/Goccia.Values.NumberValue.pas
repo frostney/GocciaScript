@@ -1,4 +1,4 @@
-unit Goccia.Values.Number;
+unit Goccia.Values.NumberValue;
 
 {$I Goccia.inc}
 

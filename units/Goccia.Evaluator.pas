@@ -5,7 +5,7 @@ unit Goccia.Evaluator;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.Undefined, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.BooleanValue, Goccia.Values.Number, Goccia.Values.StringValue, Goccia.Values.Error, Goccia.Values.Null, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Generics.Collections, SysUtils, Math;
+  Goccia.Interfaces, Goccia.Values.Base, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.Undefined, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.BooleanValue, Goccia.Values.Number, Goccia.Values.StringValue, Goccia.Values.Error, Goccia.Values.Null, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Generics.Collections, SysUtils, Math;
 
 type
   TGocciaEvaluationContext = record
@@ -374,30 +374,22 @@ begin
     for I := 0 to CallExpression.Arguments.Count - 1 do
       Arguments.Add(EvaluateExpression(CallExpression.Arguments[I], Context));
 
-    if Callee is TGocciaFunctionValue then
-    begin
-      FunctionValue := TGocciaFunctionValue(Callee);
-      if CallExpression.Callee is TGocciaMemberExpression then
-        ThisValue := EvaluateExpression(TGocciaMemberExpression(CallExpression.Callee).ObjectExpr, Context)
-      else
-        ThisValue := TGocciaUndefinedValue.Create;
-      TGocciaLogger.Debug('EvaluateCall: About to call CallFunction');
-      Result := FunctionValue.Call(Arguments, ThisValue);
-      TGocciaLogger.Debug('EvaluateCall: CallFunction returned, result type: %s', [Result.ClassName]);
-      TGocciaLogger.Debug('EvaluateCall: Result ToString: %s', [Result.ToString]);
-    end
-    else if Callee is TGocciaNativeFunctionValue then
+    if Callee is IGocciaCallable then
     begin
       if CallExpression.Callee is TGocciaMemberExpression then
         ThisValue := EvaluateExpression(TGocciaMemberExpression(CallExpression.Callee).ObjectExpr, Context)
       else
         ThisValue := TGocciaUndefinedValue.Create;
-      Result := TGocciaNativeFunctionValue(Callee).NativeFunction(Arguments, ThisValue);
-      TGocciaLogger.Debug('EvaluateCall: NativeFunction returned, result type: %s', [Result.ClassName]);
+
+      TGocciaLogger.Debug('EvaluateCall: About to call Callable');
+      Result := (Callee as IGocciaCallable).Call(Arguments, ThisValue);
+      TGocciaLogger.Debug('EvaluateCall: Callable returned, result type: %s', [Result.ClassName]);
       TGocciaLogger.Debug('EvaluateCall: Result ToString: %s', [Result.ToString]);
-    end
-    else
-      Context.OnError(Format('Can only call functions, not %s', [Callee.TypeName]), CallExpression.Line, CallExpression.Column);
+    end else
+    begin
+      TGocciaLogger.Debug('EvaluateCall: Callee is not IGocciaCallable');
+      Result := TGocciaUndefinedValue.Create;
+    end;
   finally
     Arguments.Free;
   end;
@@ -408,7 +400,6 @@ end;
 function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Obj: TGocciaValue;
-  ProtoFunction: TGocciaNativeFunctionValue;
 begin
   TGocciaLogger.Debug('EvaluateMember: Start');
   TGocciaLogger.Debug('  MemberExpression.ObjectExpr: %s', [MemberExpression.ObjectExpr.ToString]);

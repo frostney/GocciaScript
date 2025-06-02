@@ -36,6 +36,7 @@ type
     constructor Create;
     destructor Destroy; override;
     function ToString: string; override;
+    function ToBoolean: Boolean; override;
     function ToNumber: Double; override;
     function TypeName: string; override;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
@@ -82,6 +83,11 @@ begin
   Result := Result + '}';
 end;
 
+function TGocciaObjectValue.ToBoolean: Boolean;
+begin
+  Result := True;
+end;
+
 function TGocciaObjectValue.ToNumber: Double;
 begin
   Result := NaN;
@@ -111,19 +117,33 @@ begin
   TGocciaLogger.Debug('  Name: %s', [AName]);
   TGocciaLogger.Debug('  FComputedProperties.ContainsKey(AName): %s', [BoolToStr(FComputedProperties.ContainsKey(AName))]);
   TGocciaLogger.Debug('  FProperties.ContainsKey(AName): %s', [BoolToStr(FProperties.ContainsKey(AName))]);
+  if Assigned(FPrototype) then
+    TGocciaLogger.Debug('  FPrototype: %s', [FPrototype.ToString])
+  else
+    TGocciaLogger.Debug('  FPrototype: not assigned');
 
   if FComputedProperties.ContainsKey(AName) then
   begin
     TGocciaLogger.Debug('TGocciaObjectValue.GetProperty: FComputedProperties.ContainsKey(AName)');
-    Result := FComputedProperties[AName]()
+    Result := FComputedProperties[AName]();
+    Exit;
   end
   else
   begin
     TGocciaLogger.Debug('TGocciaObjectValue.GetProperty: FProperties.ContainsKey(AName)');
     if FProperties.ContainsKey(AName) then
-      Result := FProperties[AName]
-    else
     begin
+      Result := FProperties[AName];
+      Exit;
+    end else
+    begin
+      if Assigned(FPrototype) then
+      begin
+        TGocciaLogger.Debug('TGocciaObjectValue.GetProperty: FPrototype is assigned');
+        Result := FPrototype.GetProperty(AName);
+        Exit;
+      end;
+
       TGocciaLogger.Debug('TGocciaObjectValue.GetProperty: FProperties.ContainsKey(AName) is false');
       Result := TGocciaUndefinedValue.Create;
     end;

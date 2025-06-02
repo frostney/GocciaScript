@@ -8,11 +8,10 @@ uses
   Classes;
 
 type
-  // TODO: Do we want to refactor this as an interface?
-  TGocciaValue = class
+  TGocciaValue = class(TInterfacedObject)
   public
     function ToString: string; virtual; abstract;
-    function ToBoolean: Boolean; virtual;
+    function ToBoolean: Boolean; virtual; abstract;
     function ToNumber: Double; virtual; abstract;
     function TypeName: string; virtual; abstract;
   end;
@@ -38,11 +37,6 @@ implementation
 
 uses
   Goccia.Values.Undefined;
-
-function TGocciaValue.ToBoolean: Boolean;
-begin
-  Result := True;
-end;
 
 constructor TGocciaOptionalValue<T>.Create(AValue: T);
 begin

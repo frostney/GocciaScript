@@ -6,17 +6,12 @@ interface
 
 uses
   Goccia.Values.Base,
-  Goccia.AST.Node;
+  Generics.Collections;
 
 type
-  // IGocciaInterpreter = interface
-  //   ['{52c77df2-cfb9-4cc6-afc5-cd3c7c7b007f}']
-  //   function Evaluate(Node: TGocciaASTNode): TGocciaValue;
-  // end;
-
-  ITest = interface
+  IGocciaCallable = interface
     ['{52c77df2-cfb9-4cc6-afc5-cd3c7c7b007f}']
-    function Test: string;
+    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
