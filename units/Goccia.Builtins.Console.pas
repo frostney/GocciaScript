@@ -5,7 +5,7 @@ unit Goccia.Builtins.Console;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Scope, Goccia.Values.NativeFunction, Goccia.Values.Undefined, Goccia.Values.ObjectValue, Generics.Collections;
+  Goccia.Values.Base, Goccia.Scope, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections;
 
 type
   TGocciaConsole = class

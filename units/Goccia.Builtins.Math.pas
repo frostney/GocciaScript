@@ -5,7 +5,7 @@ unit Goccia.Builtins.Math;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.Undefined, Goccia.Values.ObjectValue, Generics.Collections, Math;
+  Goccia.Values.Base, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections, Math;
 
 type
   TGocciaMath = class
@@ -34,7 +34,7 @@ type
 implementation
 
 uses
-  Goccia.Values.Number;
+  Goccia.Values.NumberValue;
 
 constructor TGocciaMath.Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
 begin

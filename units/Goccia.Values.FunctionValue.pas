@@ -7,7 +7,7 @@ interface
 
 uses
   Goccia.Interfaces, Goccia.Values.Base, Goccia.AST.Node, Goccia.AST.Statements, Goccia.Scope,
-  Goccia.Error, Goccia.Logger, Goccia.Values.Undefined, Goccia.Values.Error, Goccia.Values.ObjectValue,
+  Goccia.Error, Goccia.Logger, Goccia.Values.UndefinedValue, Goccia.Values.Error, Goccia.Values.ObjectValue,
   Generics.Collections, Classes, Math, SysUtils;
 
 type

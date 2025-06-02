@@ -42,6 +42,7 @@ begin
   WriteLn('Building Tests...');
   TestFiles := TStringList.Create;
   TestFiles.Add('units/Goccia.Values.Primitives.Test.pas');
+  TestFiles.Add('units/Goccia.Values.ObjectValue.Test.pas');
 
   for I := 0 to TestFiles.Count - 1 do
   begin
@@ -63,6 +64,10 @@ begin
 end;
 
 begin
+  // Create build directory
+  if not DirectoryExists('build') then
+    CreateDir('build');
+
   BuildTriggers := TStringList.Create;
 
   if ParamCount = 0 then

@@ -5,7 +5,7 @@ unit Goccia.Scope;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Values.Undefined, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Error, Goccia.Interfaces, SysUtils, TypInfo, Goccia.Logger;
+  Goccia.Values.Base, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Error, Goccia.Interfaces, SysUtils, TypInfo, Goccia.Logger;
 
 type
   TGocciaScopeKind = (skUnknown, skGlobal, skFunction, skBlock, skCustom);

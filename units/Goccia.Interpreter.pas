@@ -6,9 +6,9 @@ interface
 
 uses
   Goccia.Values.Base, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Modules,
-  Goccia.Values.Undefined, Goccia.Values.BooleanValue, Goccia.Values.Number, Goccia.Values.ObjectValue,
+  Goccia.Values.UndefinedValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.ObjectValue,
   Goccia.Values.StringValue, Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
-  Goccia.Values.Null, Goccia.Values.NativeFunction, Goccia.Token, Generics.Collections,
+  Goccia.Values.NullValue, Goccia.Values.NativeFunction, Goccia.Token, Generics.Collections,
   Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Evaluator, Goccia.Scope, Goccia.Builtins.Console, Goccia.Builtins.GlobalObject, Goccia.Builtins.Math, Goccia.Interfaces, Goccia.Logger;
 
 type

@@ -5,7 +5,7 @@ unit Goccia.Values.ObjectValue;
 interface
 
 uses
-  Goccia.Values.Base, Generics.Collections, Goccia.Values.Undefined, Math, Goccia.Logger, SysUtils;
+  Goccia.Values.Base, Generics.Collections, Goccia.Values.UndefinedValue, Math, Goccia.Logger, SysUtils;
 
 type
   // TGocciaProperty = class
@@ -25,7 +25,9 @@ type
   //   property Configurable: Boolean read FConfigurable;
   // end;
 
-  TComputedPropertyFunction = function(): TGocciaValue of object;
+  TGocciaObjectValue = class;
+
+  TComputedPropertyFunction = function(const AObject: TGocciaObjectValue): TGocciaValue of object;
 
   TGocciaObjectValue = class(TGocciaValue)
   protected
@@ -35,6 +37,7 @@ type
   public
     constructor Create;
     destructor Destroy; override;
+    function ToDebugString: string;
     function ToString: string; override;
     function ToBoolean: Boolean; override;
     function ToNumber: Double; override;
@@ -44,6 +47,7 @@ type
     function GetProperty(const AName: string): TGocciaValue;
     function HasProperty(const AName: string): Boolean;
     function HasOwnProperty(const AName: string): Boolean;
+    procedure DeleteProperty(const AName: string);
 
     property Properties: TDictionary<string, TGocciaValue> read FProperties;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
@@ -52,10 +56,14 @@ type
 
 implementation
 
+// TODO: Should we allow the prototype to be set in the constructor?
 constructor TGocciaObjectValue.Create;
 begin
   FProperties := TDictionary<string, TGocciaValue>.Create;
   FComputedProperties := TDictionary<string, TComputedPropertyFunction>.Create;
+
+  // TODO: Should this be TGocciaNullValue?
+  // TODO: Should we set a default prototype?
   FPrototype := nil;
 end;
 
@@ -66,7 +74,7 @@ begin
   inherited;
 end;
 
-function TGocciaObjectValue.ToString: string;
+function TGocciaObjectValue.ToDebugString: string;
 var
   Pair: TPair<string, TGocciaValue>;
   First: Boolean;
@@ -77,10 +85,30 @@ begin
   begin
     if not First then
       Result := Result + ', ';
-    Result := Result + Pair.Key + ': ' + Pair.Value.ToString;
+
+    if Pair.Value is TGocciaObjectValue then
+      Result := Result + Pair.Key + ': ' + TGocciaObjectValue(Pair.Value).ToDebugString
+    else
+      Result := Result + Pair.Key + ': ' + Pair.Value.ToString;
+
     First := False;
   end;
+
+  if Assigned(FPrototype) then
+  begin
+    if not First then
+      Result := Result + ', ';
+
+    Result := Result + '[[Prototype]]: ' + FPrototype.ToDebugString;
+    First := False;
+  end;
+
   Result := Result + '}';
+end;
+
+function TGocciaObjectValue.ToString: string;
+begin
+  Result := '[Object object]';
 end;
 
 function TGocciaObjectValue.ToBoolean: Boolean;
@@ -125,7 +153,7 @@ begin
   if FComputedProperties.ContainsKey(AName) then
   begin
     TGocciaLogger.Debug('TGocciaObjectValue.GetProperty: FComputedProperties.ContainsKey(AName)');
-    Result := FComputedProperties[AName]();
+    Result := FComputedProperties[AName](Self);
     Exit;
   end
   else
@@ -161,6 +189,15 @@ end;
 function TGocciaObjectValue.HasOwnProperty(const AName: string): Boolean;
 begin
   Result := FProperties.ContainsKey(AName);
+end;
+
+procedure TGocciaObjectValue.DeleteProperty(const AName: string);
+begin
+  if FProperties.ContainsKey(AName) then
+    FProperties.Remove(AName);
+
+  if FComputedProperties.ContainsKey(AName) then
+    FComputedProperties.Remove(AName);
 end;
 
 end.

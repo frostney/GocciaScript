@@ -34,7 +34,7 @@ type
 implementation
 
 uses
-  Goccia.Logger, Goccia.Values.Number, Goccia.Values.BooleanValue, Goccia.Values.Undefined, Goccia.Evaluator;
+  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Evaluator;
 
 constructor TGocciaArrayValue.Create;
 begin

@@ -5,8 +5,8 @@ unit Goccia.Utils;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Values.Undefined, Goccia.Values.Null, Goccia.Values.BooleanValue,
-  Goccia.Values.Number, Goccia.Values.StringValue, Goccia.Values.ObjectValue;
+  Goccia.Values.Base, Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.Values.BooleanValue,
+  Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.ObjectValue;
 
 // TODO: Do we want to implement this on the class level as class operators or functions?
 function IsEqual(Left, Right: TGocciaValue): Boolean;

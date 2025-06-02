@@ -255,12 +255,10 @@ end;
 procedure TExpect<T>.ToBeGreaterThan(const Value: T);
 var
   TypeInfo: PTypeInfo;
-  TypeData: PTypeData;
   IsGreater: Boolean;
   ActualStr, ValueStr: string;
 begin
   TypeInfo := System.TypeInfo(T);
-  TypeData := GetTypeData(TypeInfo);
 
   case TypeInfo^.Kind of
     tkInteger:
@@ -291,12 +289,10 @@ end;
 procedure TExpect<T>.ToBeLessThan(const Value: T);
 var
   TypeInfo: PTypeInfo;
-  TypeData: PTypeData;
   IsLess: Boolean;
   ActualStr, ValueStr: string;
 begin
   TypeInfo := System.TypeInfo(T);
-  TypeData := GetTypeData(TypeInfo);
 
   case TypeInfo^.Kind of
     tkInteger:

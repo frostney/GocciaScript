@@ -36,7 +36,7 @@ type
 implementation
 
 uses
-  Goccia.Values.Undefined;
+  Goccia.Values.UndefinedValue;
 
 constructor TGocciaOptionalValue<T>.Create(AValue: T);
 begin

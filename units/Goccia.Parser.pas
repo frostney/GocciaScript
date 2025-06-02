@@ -5,9 +5,9 @@ unit Goccia.Parser;
 interface
 
 uses
-  Goccia.AST.Node, Goccia.Token, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.Values.Undefined,
-  Goccia.Values.BooleanValue, Goccia.Values.Number, Goccia.Values.ObjectValue, Goccia.Values.StringValue,
-  Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.Null,
+  Goccia.AST.Node, Goccia.Token, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.Values.UndefinedValue,
+  Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.ObjectValue, Goccia.Values.StringValue,
+  Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.NullValue,
   Generics.Collections, Classes, SysUtils;
 
 type

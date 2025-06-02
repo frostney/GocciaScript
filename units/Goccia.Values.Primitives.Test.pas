@@ -3,7 +3,7 @@ program Goccia.Values.Primitives.Test;
 {$I Goccia.inc}
 
 uses
-  Classes, SysUtils, Goccia.Values.Undefined, Goccia.Values.StringValue, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.NullValue,
+  Classes, SysUtils, Goccia.Values.UndefinedValue, Goccia.Values.StringValue, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.NullValue,
   TestRunner, Math;
 
 type
