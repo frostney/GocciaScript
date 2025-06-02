@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
+      - name: Install FPC
+        run: sudo apt-get install -y fpc
       - name: Build
         run: ./build.pas
       - name: Run Tests
