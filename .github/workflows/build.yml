@@ -12,7 +12,11 @@ jobs:
       - uses: actions/checkout@v2
       - name: Install FPC
         run: sudo apt-get install -y fpc
-      - name: Build
-        run: ./build.pas
+      - name: Create build directory
+        run: mkdir -p build
+      - name: Build Tests
+        run: ./build.pas test
       - name: Run Tests
         run: ./build/Goccia.Values.Primitives.Test
+      - name: Build ScriptLoader and REPL
+        run: ./build.pas loader repl
