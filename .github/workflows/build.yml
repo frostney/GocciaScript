@@ -1,0 +1,16 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Build
+        run: ./build.pas
+      - name: Run Tests
+        run: ./build/Goccia.Values.Primitives.Test

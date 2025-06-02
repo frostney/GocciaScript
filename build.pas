@@ -35,10 +35,20 @@ begin
 end;
 
 procedure BuildTests;
+var
+  TestFiles: TStringList;
+  Output: string;
 begin
   WriteLn('Building Tests...');
-  // RunCommand('fpc @config.cfg GocciaTest.dpr', Output);
-  // WriteLn(Output);
+  TestFiles := TStringList.Create;
+  TestFiles.Add('units/Goccia.Values.Primitives.Test.pas');
+
+  for I := 0 to TestFiles.Count - 1 do
+  begin
+    RunCommand('fpc', ['@config.cfg', TestFiles[I]], Output);
+    WriteLn(Output);
+  end;
+
   WriteLn('Tests built successfully');
 end;
 
@@ -57,9 +67,9 @@ begin
 
   if ParamCount = 0 then
   begin
-    BuildTriggers.Add('repl');
-    BuildTriggers.Add('loader');
     BuildTriggers.Add('test');
+    BuildTriggers.Add('loader');
+    BuildTriggers.Add('repl');
   end else
   begin
     for I := 1 to ParamCount do
