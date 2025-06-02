@@ -17,8 +17,8 @@ jobs:
       - name: Run Test Values Primitives
         run: ./build/Goccia.Values.Primitives.Test
       - name: Run Test Values Function
-        run: ./build/Goccia.Values.Function.Test
+        run: ./build/Goccia.Values.FunctionValue.Test
       - name: Run Test Values Object
-        run: ./build/Goccia.Values.Object.Test
+        run: ./build/Goccia.Values.ObjectValue.Test
       - name: Build ScriptLoader and REPL
         run: ./build.pas loader repl
