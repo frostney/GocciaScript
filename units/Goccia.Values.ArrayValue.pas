@@ -10,7 +10,7 @@ uses
 type
   TGocciaArrayValue = class(TGocciaObjectValue)
   private
-    function GetLength: TGocciaValue;
+    function GetLength(const AObject: TGocciaObjectValue): TGocciaValue;
 
     function ArrayMap(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayFilter(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -66,7 +66,7 @@ begin
   ThrowError(Message, []);
 end;
 
-function TGocciaArrayValue.GetLength: TGocciaValue;
+function TGocciaArrayValue.GetLength(const AObject: TGocciaObjectValue): TGocciaValue;
 begin
   Result := TGocciaNumberValue.Create(FElements.Count);
 end;

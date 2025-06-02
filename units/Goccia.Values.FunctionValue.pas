@@ -93,6 +93,7 @@ begin
   Context.Scope := FScope;
 
   Result := TGocciaUndefinedValue.Create;
+
   for I := 0 to FStatements.Count - 1 do
   begin
     try

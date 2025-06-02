@@ -43,6 +43,7 @@ begin
   TestFiles := TStringList.Create;
   TestFiles.Add('units/Goccia.Values.Primitives.Test.pas');
   TestFiles.Add('units/Goccia.Values.ObjectValue.Test.pas');
+  TestFiles.Add('units/Goccia.Values.FunctionValue.Test.pas');
 
   for I := 0 to TestFiles.Count - 1 do
   begin

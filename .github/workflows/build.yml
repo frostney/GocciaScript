@@ -14,7 +14,11 @@ jobs:
         run: sudo apt-get install -y fpc
       - name: Build Tests
         run: ./build.pas test
-      - name: Run Tests
+      - name: Run Test Values Primitives
         run: ./build/Goccia.Values.Primitives.Test
+      - name: Run Test Values Function
+        run: ./build/Goccia.Values.Function.Test
+      - name: Run Test Values Object
+        run: ./build/Goccia.Values.Object.Test
       - name: Build ScriptLoader and REPL
         run: ./build.pas loader repl
