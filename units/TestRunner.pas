@@ -117,6 +117,7 @@ var
 
 // Helper function to create expectations
 function Expect<T>(const Value: T): TExpect<T>;
+procedure ExitCodeCheck(ExitCode: Integer);
 
 implementation
 
@@ -157,7 +158,13 @@ begin
   TypeData := GetTypeData(TypeInfo);
 
   case TypeInfo^.Kind of
-    tkInteger, tkInt64:
+    tkInteger:
+      begin
+        IsEqual := PInteger(@FActual)^ = PInteger(@Expected)^;
+        ActualStr := IntToStr(PInteger(@FActual)^);
+        ExpectedStr := IntToStr(PInteger(@Expected)^);
+      end;
+    tkInt64:
       begin
         IsEqual := PInt64(@FActual)^ = PInt64(@Expected)^;
         ActualStr := IntToStr(PInt64(@FActual)^);
