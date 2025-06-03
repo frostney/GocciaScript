@@ -124,6 +124,27 @@ implementation
 var
   CurrentDescribeSuite: TTestSuite;
 
+procedure ExitCodeCheck(ExitCode: Integer);
+var
+  TestResult: TTestResult;
+begin
+  // Exit with appropriate code for CI/CD
+  ExitCode := 0;
+  for TestResult in TestRunnerProgram.Results do
+  begin
+    if TestResult.Status = tsFail then
+    begin
+      ExitCode := 1;
+      Break;
+    end;
+  end;
+
+  if ExitCode = 0 then
+    WriteLn(#10'Success! All tests passed.')
+  else
+    WriteLn(#10'Failure! Some tests failed.');
+end;
+
 { TExpect<T> }
 
 constructor TExpect<T>.Create(const Value: T);
