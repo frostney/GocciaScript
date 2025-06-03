@@ -7,8 +7,12 @@ interface
 
 uses
   Goccia.Interfaces, Goccia.Values.Base, Goccia.AST.Node, Goccia.AST.Statements, Goccia.Scope,
-  Goccia.Error, Goccia.Logger, Goccia.Values.UndefinedValue, Goccia.Values.Error, Goccia.Values.ObjectValue,
-  Generics.Collections, Classes, Math, SysUtils;
+  Goccia.Error, Goccia.Logger, Goccia.Values.Error, Goccia.Values.ObjectValue,
+  Generics.Collections, Classes, Math, SysUtils,
+  Goccia.Values.NumberValue,
+  Goccia.Values.StringValue,
+  Goccia.Values.BooleanValue,
+  Goccia.Values.UndefinedValue;
 
 type
   TGocciaBlockValue = class
@@ -18,7 +22,7 @@ type
   public
     constructor Create(AStatements: TObjectList<TGocciaASTNode>; AScope: TGocciaScope);
     destructor Destroy; override;
-    function Execute: TGocciaValue;
+    function Execute(ACallScope: TGocciaScope): TGocciaValue;
     property Statements: TObjectList<TGocciaASTNode> read FStatements;
     property Scope: TGocciaScope read FScope;
   end;
@@ -85,26 +89,38 @@ begin
   inherited;
 end;
 
-function TGocciaBlockValue.Execute: TGocciaValue;
+function TGocciaBlockValue.Execute(ACallScope: TGocciaScope): TGocciaValue;
 var
   I: Integer;
   Context: TGocciaEvaluationContext;
+  LastValue: TGocciaValue;
 begin
-  Context.Scope := FScope;
-
-  Result := TGocciaUndefinedValue.Create;
+  Context.Scope := ACallScope;
+  LastValue := TGocciaUndefinedValue.Create;
 
   for I := 0 to FStatements.Count - 1 do
   begin
     try
-      Result := Evaluate(FStatements[I], Context);
+      LastValue := Evaluate(FStatements[I], Context);
     except
       on E: TGocciaReturnValue do
+      begin
+        if LastValue <> nil then
+          LastValue.Free;
         raise;
+      end;
       on E: Exception do
+      begin
+        if LastValue <> nil then
+          LastValue.Free;
         raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
+      end;
     end;
   end;
+
+  if LastValue = nil then
+    LastValue := TGocciaUndefinedValue.Create;
+  Result := LastValue;
 end;
 
 { TGocciaFunctionValue }
@@ -115,6 +131,8 @@ begin
   FBody := ABody;
   FClosure := AClosure;
   FName := AName;
+
+  WriteLn('Parameters in FunctionValue: ' + IntToStr(FParameters.Count));
 
   inherited Create;
 end;
@@ -196,7 +214,7 @@ begin
   FFunction := AFunction;
   FArguments := AArguments;
   FThisValue := AThisValue;
-  FCallScope := FFunction.Closure.CreateChild(skFunction, Format('Type: FunctionInvocation, Name: %s', [AFunction.Name]));
+  FCallScope := TGocciaScope.Create(FFunction.Closure, skFunction, Format('Type: FunctionInvocation, Name: %s', [AFunction.Name]));
 end;
 
 destructor TGocciaFunctionInvocation.Destroy;
@@ -208,6 +226,7 @@ end;
 function TGocciaFunctionInvocation.Execute: TGocciaValue;
 var
   I: Integer;
+  ReturnValue: TGocciaValue;
 begin
   TGocciaLogger.Debug('FunctionInvocation.Execute: Entering');
   TGocciaLogger.Debug('  Function type: %s', [FFunction.ClassName]);
@@ -220,18 +239,57 @@ begin
   // Bind parameters
   for I := 0 to FFunction.Parameters.Count - 1 do
   begin
+    TGocciaLogger.Debug('Binding parameter %d: %s', [I, FFunction.Parameters[I]]);
     if I < FArguments.Count then
+    begin
+      TGocciaLogger.Debug('  Argument value type: %s, ToString: %s', [FArguments[I].ClassName, FArguments[I].ToString]);
       FCallScope.SetValue(FFunction.Parameters[I], FArguments[I])
+    end
     else
+    begin
+      TGocciaLogger.Debug('  No argument provided, setting to undefined');
       FCallScope.SetValue(FFunction.Parameters[I], TGocciaUndefinedValue.Create);
+    end;
   end;
 
   // Execute function body
   try
-    Result := FFunction.Body.Execute;
+    ReturnValue := FFunction.Body.Execute(FCallScope);
+    if ReturnValue = nil then
+      ReturnValue := TGocciaUndefinedValue.Create;
+    Result := ReturnValue;
   except
     on E: TGocciaReturnValue do
-      Result := E.Value;
+    begin
+      TGocciaLogger.Debug('FunctionInvocation.Execute: Caught TGocciaReturnValue');
+      if E.Value = nil then
+      begin
+        TGocciaLogger.Debug('FunctionInvocation.Execute: E.Value is nil, creating undefined value');
+        Result := TGocciaUndefinedValue.Create;
+      end
+      else
+      begin
+        TGocciaLogger.Debug('FunctionInvocation.Execute: E.Value type: %s', [E.Value.ClassName]);
+        // Create a new instance of the same type
+        if E.Value is TGocciaNumberValue then
+          Result := TGocciaNumberValue.Create(TGocciaNumberValue(E.Value).Value)
+        else if E.Value is TGocciaStringValue then
+          Result := TGocciaStringValue.Create(TGocciaStringValue(E.Value).Value)
+        else if E.Value is TGocciaBooleanValue then
+          Result := TGocciaBooleanValue.Create(TGocciaBooleanValue(E.Value).Value)
+        else if E.Value is TGocciaUndefinedValue then
+          Result := TGocciaUndefinedValue.Create
+        else if E.Value is TGocciaObjectValue then
+          Result := E.Value
+        else
+          Result := E.Value;
+      end;
+    end;
+    on E: Exception do
+    begin
+      TGocciaLogger.Debug('FunctionInvocation.Execute: Caught unexpected exception: %s', [E.Message]);
+      raise;
+    end;
   end;
 
   TGocciaLogger.Debug('FunctionInvocation.Execute: Exiting');

@@ -5,7 +5,7 @@ unit Goccia.AST.Statements;
 interface
 
 uses
-  Goccia.AST.Node, Goccia.AST.Expressions, Generics.Collections, Classes;
+  Goccia.AST.Node, Goccia.AST.Expressions, Generics.Collections, Classes, Goccia.Values.UndefinedValue;
 
 type
   TGocciaExpressionStatement = class(TGocciaStatement)
@@ -179,7 +179,10 @@ implementation
     ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
-    FValue := AValue;
+    if AValue = nil then
+      FValue := TGocciaLiteralExpression.Create(TGocciaUndefinedValue.Create, ALine, AColumn)
+    else
+      FValue := AValue;
   end;
 
   { TGocciaThrowStatement }

@@ -48,7 +48,7 @@ type
     Statements.Add(TGocciaLiteralExpression.Create(TGocciaNumberValue.Create(1), 0, 0));
 
     BlockValue := TGocciaBlockValue.Create(Statements, Scope);
-    Expect<Double>(BlockValue.Execute.ToNumber).ToBe(1);
+    Expect<Double>(BlockValue.Execute(Scope).ToNumber).ToBe(1);
 
     BlockValue.Free;
     Scope.Free;
@@ -66,7 +66,7 @@ type
     Statements.Add(TGocciaBinaryExpression.Create(TGocciaLiteralExpression.Create(TGocciaNumberValue.Create(1), 0, 0), gttPlus, TGocciaLiteralExpression.Create(TGocciaNumberValue.Create(2), 0, 0), 0, 0));
 
     BlockValue := TGocciaBlockValue.Create(Statements, Scope);
-    Expect<Double>(BlockValue.Execute.ToNumber).ToBe(3);
+    Expect<Double>(BlockValue.Execute(Scope).ToNumber).ToBe(3);
 
     BlockValue.Free;
     Scope.Free;
@@ -100,21 +100,33 @@ type
   begin
     Scope := TGocciaScope.Create(nil, skGlobal);
     Parameters := TStringList.Create;
+
+    WriteLn('Parameters: ' + IntToStr(Parameters.Count));
+
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedValue.Create, 0, 0));
-
     Body := TGocciaBlockValue.Create(Statements, Scope);
     FunctionValue := TGocciaFunctionValue.Create(Parameters, Body, Scope, 'test');
 
-    Expect<Boolean>(FunctionValue.ToBoolean).ToBe(True);
+    WriteLn('Parameters from FunctionValue: ' + IntToStr(FunctionValue.Parameters.Count));
+
+    // Test basic function properties
+    Expect<Boolean>(FunctionValue.ToBoolean).ToBeTrue;
     Expect<String>(FunctionValue.ToString).ToBe('[Function: test]');
-    Expect<Boolean>(IsNaN(FunctionValue.ToNumber)).ToBe(True);
+    Expect<Boolean>(IsNaN(FunctionValue.ToNumber)).ToBeTrue;
     Expect<String>(FunctionValue.TypeName).ToBe('function');
 
+    // Test function metadata
+    Expect<String>(FunctionValue.Name).ToBe('test');
+    Expect<Integer>(FunctionValue.Parameters.Count).ToBe(0);
+    Expect<Boolean>(FunctionValue.Body = Body).ToBeTrue;
+    Expect<Boolean>(FunctionValue.Closure = Scope).ToBeTrue;
+
+    // Test function execution
     ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
-    Expect<Boolean>(ReturnValue.ToBoolean).ToBe(False);
+    Expect<Boolean>(ReturnValue.ToBoolean).ToBeFalse;
     Expect<String>(ReturnValue.ToString).ToBe('undefined');
-    Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBe(True);
+    Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBeTrue;
     Expect<String>(ReturnValue.TypeName).ToBe('undefined');
 
     FunctionValue.Free;
@@ -129,26 +141,54 @@ type
     Body: TGocciaBlockValue;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
+    Arguments: TObjectList<TGocciaValue>;
   begin
     Scope := TGocciaScope.Create(nil, skGlobal);
     Parameters := TStringList.Create;
     Parameters.Add('a');
     Parameters.Add('b');
+
+    // Create a function body that uses the parameters
     Statements := TObjectList<TGocciaASTNode>.Create;
-    Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedValue.Create, 0, 0));
+    Statements.Add(TGocciaBinaryExpression.Create(
+      TGocciaIdentifierExpression.Create('a', 0, 0),
+      gttPlus,
+      TGocciaIdentifierExpression.Create('b', 0, 0),
+      0, 0
+    ));
     Body := TGocciaBlockValue.Create(Statements, Scope);
     FunctionValue := TGocciaFunctionValue.Create(Parameters, Body, Scope, 'test');
 
-    Expect<Boolean>(FunctionValue.ToBoolean).ToBe(True);
-    Expect<String>(FunctionValue.ToString).ToBe('[Function: test]');
-    Expect<Boolean>(IsNaN(FunctionValue.ToNumber)).ToBe(True);
-    Expect<String>(FunctionValue.TypeName).ToBe('function');
+    // Test function properties
+    Expect<String>(FunctionValue.Name).ToBe('test');
+    Expect<Integer>(FunctionValue.Parameters.Count).ToBe(2);
+    Expect<String>(FunctionValue.Parameters[0]).ToBe('a');
+    Expect<String>(FunctionValue.Parameters[1]).ToBe('b');
 
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
-    Expect<Boolean>(ReturnValue.ToBoolean).ToBe(False);
-    Expect<String>(ReturnValue.ToString).ToBe('undefined');
-    Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBe(True);
-    Expect<String>(ReturnValue.TypeName).ToBe('undefined');
+    // Test function execution with arguments
+    Arguments := TObjectList<TGocciaValue>.Create;
+    Arguments.Add(TGocciaNumberValue.Create(1));
+    Arguments.Add(TGocciaNumberValue.Create(2));
+    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedValue.Create);
+    Expect<Double>(ReturnValue.ToNumber).ToBe(3);
+    Arguments.Free;
+
+    // Test function execution with too few arguments
+    Arguments := TObjectList<TGocciaValue>.Create;
+    Arguments.Add(TGocciaNumberValue.Create(1));
+    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedValue.Create);
+    Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBeTrue;
+    Expect<String>(ReturnValue.TypeName).ToBe('number');
+    Arguments.Free;
+
+    // Test function execution with too many arguments
+    Arguments := TObjectList<TGocciaValue>.Create;
+    Arguments.Add(TGocciaNumberValue.Create(1));
+    Arguments.Add(TGocciaNumberValue.Create(2));
+    Arguments.Add(TGocciaNumberValue.Create(3));
+    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedValue.Create);
+    Expect<Double>(ReturnValue.ToNumber).ToBe(3);
+    Arguments.Free;
 
     FunctionValue.Free;
     Scope.Free;
@@ -168,39 +208,245 @@ type
     Parameters.Add('a');
     Parameters.Add('b');
 
+    // Test returning a number
     Statements := TObjectList<TGocciaASTNode>.Create;
-    Statements.Add(TGocciaReturnStatement.Create(TGocciaLiteralExpression.Create(TGocciaNumberValue.Create(1), 0, 0), 0, 0));
+    Statements.Add(TGocciaReturnStatement.Create(
+      TGocciaLiteralExpression.Create(TGocciaNumberValue.Create(1), 0, 0),
+      0, 0
+    ));
+    Body := TGocciaBlockValue.Create(Statements, Scope);
+    FunctionValue := TGocciaFunctionValue.Create(Parameters, Body, Scope, 'test');
+
+    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
+    Expect<Double>(ReturnValue.ToNumber).ToBe(1);
+    Expect<String>(ReturnValue.ToString).ToBe('1');
+    Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
+    Expect<String>(ReturnValue.TypeName).ToBe('number');
+    FunctionValue.Free;
+
+    // Test returning a string
+    Statements := TObjectList<TGocciaASTNode>.Create;
+    Statements.Add(TGocciaReturnStatement.Create(
+      TGocciaLiteralExpression.Create(TGocciaStringValue.Create('hello'), 0, 0),
+      0, 0
+    ));
+    Body := TGocciaBlockValue.Create(Statements, Scope);
+    FunctionValue := TGocciaFunctionValue.Create(Parameters, Body, Scope, 'test');
+
+    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
+    Expect<String>(ReturnValue.ToString).ToBe('hello');
+    Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
+    Expect<Double>(ReturnValue.ToNumber).ToBe(0);
+    Expect<String>(ReturnValue.TypeName).ToBe('string');
+    FunctionValue.Free;
+
+    // Test returning a boolean
+    Statements := TObjectList<TGocciaASTNode>.Create;
+    Statements.Add(TGocciaReturnStatement.Create(
+      TGocciaLiteralExpression.Create(TGocciaBooleanValue.Create(True), 0, 0),
+      0, 0
+    ));
     Body := TGocciaBlockValue.Create(Statements, Scope);
     FunctionValue := TGocciaFunctionValue.Create(Parameters, Body, Scope, 'test');
 
     ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
     Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
-    Expect<String>(ReturnValue.ToString).ToBe('1');
+    Expect<String>(ReturnValue.ToString).ToBe('true');
     Expect<Double>(ReturnValue.ToNumber).ToBe(1);
+    Expect<String>(ReturnValue.TypeName).ToBe('boolean');
+    FunctionValue.Free;
+
+    // Test returning undefined
+    Statements := TObjectList<TGocciaASTNode>.Create;
+    Statements.Add(TGocciaReturnStatement.Create(
+      TGocciaLiteralExpression.Create(TGocciaUndefinedValue.Create, 0, 0),
+      0, 0
+    ));
+    Body := TGocciaBlockValue.Create(Statements, Scope);
+    FunctionValue := TGocciaFunctionValue.Create(Parameters, Body, Scope, 'test');
+
+    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
+    Expect<Boolean>(ReturnValue.ToBoolean).ToBe(False);
+    Expect<String>(ReturnValue.ToString).ToBe('undefined');
+    Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBe(True);
+    Expect<String>(ReturnValue.TypeName).ToBe('undefined');
+    FunctionValue.Free;
+
+    Scope.Free;
+  end;
+
+  procedure TTestFunctionValue.TestFunctionWithScope;
+  var
+    FunctionValue: TGocciaFunctionValue;
+    Scope: TGocciaScope;
+    Parameters: TStringList;
+    Body: TGocciaBlockValue;
+    ReturnValue: TGocciaValue;
+    Statements: TObjectList<TGocciaASTNode>;
+  begin
+    // Create a global scope with a variable
+    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope.SetValue('x', TGocciaNumberValue.Create(42));
+    Parameters := TStringList.Create;
+
+    // Create a function body that uses the scope variable
+    Statements := TObjectList<TGocciaASTNode>.Create;
+    Statements.Add(TGocciaReturnStatement.Create(
+      TGocciaIdentifierExpression.Create('x', 0, 0),
+      0, 0
+    ));
+    Body := TGocciaBlockValue.Create(Statements, Scope);
+    FunctionValue := TGocciaFunctionValue.Create(Parameters, Body, Scope, 'test');
+
+    // Test function execution
+    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
+    Expect<Double>(ReturnValue.ToNumber).ToBe(42);
+    Expect<String>(ReturnValue.ToString).ToBe('42');
+    Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
     Expect<String>(ReturnValue.TypeName).ToBe('number');
 
     FunctionValue.Free;
     Scope.Free;
   end;
 
-  procedure TTestFunctionValue.TestFunctionWithScope;
-  begin
-
-  end;
-
   procedure TTestFunctionValue.TestFunctionWithScopeAndParameters;
+  var
+    FunctionValue: TGocciaFunctionValue;
+    Scope: TGocciaScope;
+    Parameters: TStringList;
+    Body: TGocciaBlockValue;
+    ReturnValue: TGocciaValue;
+    Statements: TObjectList<TGocciaASTNode>;
+    Arguments: TObjectList<TGocciaValue>;
   begin
+    // Create a global scope with a variable
+    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope.SetValue('x', TGocciaNumberValue.Create(42));
+    Parameters := TStringList.Create;
+    Parameters.Add('x'); // Parameter shadows global variable
 
+    // Create a function body that uses both parameter and scope variable
+    Statements := TObjectList<TGocciaASTNode>.Create;
+    Statements.Add(TGocciaReturnStatement.Create(
+      TGocciaBinaryExpression.Create(
+        TGocciaIdentifierExpression.Create('x', 0, 0), // Parameter x
+        gttPlus,
+        TGocciaIdentifierExpression.Create('x', 0, 0), // Global x
+        0, 0
+      ),
+      0, 0
+    ));
+    Body := TGocciaBlockValue.Create(Statements, Scope);
+    FunctionValue := TGocciaFunctionValue.Create(Parameters, Body, Scope, 'test');
+
+    // Test function execution
+    Arguments := TObjectList<TGocciaValue>.Create;
+    Arguments.Add(TGocciaNumberValue.Create(10));
+    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedValue.Create);
+    Expect<Double>(ReturnValue.ToNumber).ToBe(20); // 10 + 10
+    Arguments.Free;
+
+    FunctionValue.Free;
+    Scope.Free;
   end;
 
   procedure TTestFunctionValue.TestFunctionWithScopeAndReturn;
+  var
+    FunctionValue: TGocciaFunctionValue;
+    Scope: TGocciaScope;
+    Parameters: TStringList;
+    Body: TGocciaBlockValue;
+    ReturnValue: TGocciaValue;
+    Statements: TObjectList<TGocciaASTNode>;
   begin
+    // Create a global scope with variables
+    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope.SetValue('x', TGocciaNumberValue.Create(42));
+    Scope.SetValue('y', TGocciaStringValue.Create('hello'));
+    Parameters := TStringList.Create;
 
+    // Create a function body that returns a complex expression using scope variables
+    Statements := TObjectList<TGocciaASTNode>.Create;
+    Statements.Add(TGocciaReturnStatement.Create(
+      TGocciaBinaryExpression.Create(
+        TGocciaBinaryExpression.Create(
+          TGocciaIdentifierExpression.Create('x', 0, 0),
+          gttPlus,
+          TGocciaLiteralExpression.Create(TGocciaNumberValue.Create(1), 0, 0),
+          0, 0
+        ),
+        gttPlus,
+        TGocciaIdentifierExpression.Create('y', 0, 0),
+        0, 0
+      ),
+      0, 0
+    ));
+    Body := TGocciaBlockValue.Create(Statements, Scope);
+    FunctionValue := TGocciaFunctionValue.Create(Parameters, Body, Scope, 'test');
+
+    // Test function execution
+    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
+    Expect<String>(ReturnValue.ToString).ToBe('43hello');
+    Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
+    Expect<Double>(ReturnValue.ToNumber).ToBe(43);
+    Expect<String>(ReturnValue.TypeName).ToBe('string');
+
+    FunctionValue.Free;
+    Scope.Free;
   end;
 
   procedure TTestFunctionValue.TestFunctionWithScopeAndParametersAndReturn;
+  var
+    FunctionValue: TGocciaFunctionValue;
+    Scope: TGocciaScope;
+    Parameters: TStringList;
+    Body: TGocciaBlockValue;
+    ReturnValue: TGocciaValue;
+    Statements: TObjectList<TGocciaASTNode>;
+    Arguments: TObjectList<TGocciaValue>;
   begin
+    // Create a global scope with variables
+    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope.SetValue('x', TGocciaNumberValue.Create(42));
+    Scope.SetValue('y', TGocciaStringValue.Create('hello'));
+    Parameters := TStringList.Create;
+    Parameters.Add('a');
+    Parameters.Add('b');
 
+    // Create a function body that uses parameters, scope variables, and returns a complex expression
+    Statements := TObjectList<TGocciaASTNode>.Create;
+    Statements.Add(TGocciaReturnStatement.Create(
+      TGocciaBinaryExpression.Create(
+        TGocciaBinaryExpression.Create(
+          TGocciaBinaryExpression.Create(
+            TGocciaIdentifierExpression.Create('a', 0, 0),
+            gttPlus,
+            TGocciaIdentifierExpression.Create('b', 0, 0),
+            0, 0
+          ),
+          gttPlus,
+          TGocciaIdentifierExpression.Create('x', 0, 0),
+          0, 0
+        ),
+        gttPlus,
+        TGocciaIdentifierExpression.Create('y', 0, 0),
+        0, 0
+      ),
+      0, 0
+    ));
+    Body := TGocciaBlockValue.Create(Statements, Scope);
+    FunctionValue := TGocciaFunctionValue.Create(Parameters, Body, Scope, 'test');
+
+    // Test function execution
+    Arguments := TObjectList<TGocciaValue>.Create;
+    Arguments.Add(TGocciaNumberValue.Create(10));
+    Arguments.Add(TGocciaNumberValue.Create(20));
+    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedValue.Create);
+    Expect<String>(ReturnValue.ToString).ToBe('72hello'); // (10 + 20 + 42) + 'hello'
+    Arguments.Free;
+
+    FunctionValue.Free;
+    Scope.Free;
   end;
 
   procedure TTestMethodValue.SetupTests;
@@ -219,4 +465,6 @@ begin
   TestRunnerProgram.AddSuite(TTestMethodValue.Create('Method Value'));
   TestRunnerProgram.AddSuite(TTestFunctionInvocation.Create('Function Invocation'));
   TestRunnerProgram.Run;
+
+  ExitCodeCheck(ExitCode);
 end.

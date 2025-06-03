@@ -223,6 +223,12 @@ begin
       Value := EvaluateExpression(TGocciaReturnStatement(Statement).Value, Context);
       TGocciaLogger.Debug('EvaluateStatement: Return value type: %s', [Value.ClassName]);
       TGocciaLogger.Debug('EvaluateStatement: Return value ToString: %s', [Value.ToString]);
+      TGocciaLogger.Debug('EvaluateStatement: Return value address: %p', [Pointer(Value)]);
+      if Value = nil then
+      begin
+        TGocciaLogger.Debug('EvaluateStatement: Return value is nil, creating TGocciaUndefinedValue');
+        Value := TGocciaUndefinedValue.Create;
+      end;
     end
     else
     begin
@@ -289,13 +295,15 @@ begin
   case BinaryExpression.Operator of
     gttPlus:
       begin
-        if (Left is TGocciaNumberValue) and (Right is TGocciaNumberValue) then
+        if (Left is TGocciaStringValue) or (Right is TGocciaStringValue) then
+          Result := TGocciaStringValue.Create(Left.ToString + Right.ToString)
+        else if (Left is TGocciaNumberValue) and (Right is TGocciaNumberValue) then
           Result := TGocciaNumberValue.Create(
             TGocciaNumberValue(Left).Value + TGocciaNumberValue(Right).Value)
-        else if (Left is TGocciaStringValue) or (Right is TGocciaStringValue) then
-          Result := TGocciaStringValue.Create(Left.ToString + Right.ToString)
+        else if (Left is TGocciaNumberValue) or (Right is TGocciaNumberValue) then
+          Result := TGocciaNumberValue.Create(Left.ToNumber + Right.ToNumber)
         else
-          Result := TGocciaNumberValue.Create(Left.ToNumber + Right.ToNumber);
+          Result := TGocciaStringValue.Create(Left.ToString + Right.ToString);
       end;
     gttMinus:
       Result := TGocciaNumberValue.Create(Left.ToNumber - Right.ToNumber);
@@ -469,7 +477,7 @@ begin
 
     BlockValue := TGocciaBlockValue.Create(BlockStatement.Nodes, Context.Scope.CreateChild);
 
-    Result := BlockValue.Execute;
+    Result := BlockValue.Execute(Context.Scope);
   finally
     BlockValue.Free;
   end;
