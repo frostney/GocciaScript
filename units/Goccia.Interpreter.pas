@@ -40,9 +40,64 @@ type
     function Execute(AProgram: TGocciaProgram): TGocciaValue;
     function LoadModule(const APath: string): TGocciaModule;
     procedure CheckForModuleReload(Module: TGocciaModule);
+
+    property GlobalScope: TGocciaScope read FGlobalScope;
   end;
 
+  TInterpreterResult = record
+    Value: TGocciaValue;
+    Interpreter: TGocciaInterpreter;
+  end;
+
+  function RunGocciaScriptFromStringList(const Source: TStringList; const FileName: string): TInterpreterResult;
+
 implementation
+
+function RunGocciaScriptFromStringList(const Source: TStringList; const FileName: string): TInterpreterResult;
+var
+  Lexer: TGocciaLexer;
+  Parser: TGocciaParser;
+  Interpreter: TGocciaInterpreter;
+  ProgramNode: TGocciaProgram;
+  Tokens: TObjectList<TGocciaToken>;
+begin
+  Lexer := TGocciaLexer.Create(Source.Text, FileName);
+  try
+    Tokens := Lexer.ScanTokens;
+    try
+    Parser := TGocciaParser.Create(Tokens, FileName, Lexer.SourceLines);
+        try
+        ProgramNode := Parser.Parse;
+        try
+            Interpreter := TGocciaInterpreter.Create(FileName, Lexer.SourceLines);
+            try
+            Result.Value := Interpreter.Execute(ProgramNode);
+            Result.Interpreter := Interpreter;
+            finally
+            Interpreter.Free;
+            end;
+        finally
+            ProgramNode.Free;
+        end;
+        finally
+        Parser.Free;
+        end;
+    except
+        on E: TGocciaError do
+        begin
+        WriteLn(E.GetDetailedMessage);
+        ExitCode := 1;
+        end;
+        on E: Exception do
+        begin
+        WriteLn('Error: ', E.Message);
+        ExitCode := 1;
+        end;
+    end;
+    finally
+      Lexer.Free;
+    end;
+end;
 
 
 { TGocciaInterpreter }
