@@ -28,9 +28,8 @@ type
   end;
 
   TGocciaFunctionValue = class(TGocciaObjectValue, IGocciaCallable)
-  private
-    FName: string;
   protected
+    FName: string;
     FParameters: TStringList;
     FBody: TGocciaBlockValue;
     FClosure: TGocciaScope;
@@ -49,13 +48,9 @@ type
   end;
 
   TGocciaMethodValue = class(TGocciaFunctionValue)
-  private
-    FMethodName: string;
   public
-    constructor Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AMethodName: string);
+    constructor Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string);
     function ToString: string; override;
-    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    property MethodName: string read FMethodName;
   end;
 
   TGocciaFunctionInvocation = class
@@ -181,30 +176,17 @@ end;
 
 { TGocciaMethodValue }
 
-constructor TGocciaMethodValue.Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AMethodName: string);
+constructor TGocciaMethodValue.Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string);
 begin
-  inherited Create(AParameters, ABody, AClosure, AMethodName);
-  FMethodName := AMethodName;
+  inherited Create(AParameters, ABody, AClosure, AName);
 end;
 
 function TGocciaMethodValue.ToString: string;
 begin
-  if Name <> '' then
-    Result := Format('[Method: %s]', [Name])
+  if FName <> '' then
+    Result := Format('[Method: %s]', [FName])
   else
     Result := '[Method]';
-end;
-
-function TGocciaMethodValue.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-var
-  Invocation: TGocciaFunctionInvocation;
-begin
-  Invocation := TGocciaFunctionInvocation.Create(Self, Arguments, ThisValue);
-  try
-    Result := Invocation.Execute;
-  finally
-    Invocation.Free;
-  end;
 end;
 
 { TGocciaFunctionInvocation }
