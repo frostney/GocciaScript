@@ -11,6 +11,8 @@ uses
 // TODO: Do we want to implement this on the class level as class operators or functions?
 function IsEqual(Left, Right: TGocciaValue): Boolean;
 
+function ValueOrUndefined(Value: TGocciaValue): TGocciaValue;
+
 implementation
 
 function IsEqual(Left, Right: TGocciaValue): Boolean;
@@ -27,6 +29,14 @@ begin
     Result := TGocciaStringValue(Left).Value = TGocciaStringValue(Right).Value
   else
     Result := Left = Right; // Reference equality for objects
+end;
+
+function ValueOrUndefined(Value: TGocciaValue): TGocciaValue;
+begin
+  if Value = nil then
+    Result := TGocciaUndefinedValue.Create
+  else
+    Result := Value;
 end;
 
 end.
