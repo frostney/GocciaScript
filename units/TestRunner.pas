@@ -64,6 +64,7 @@ type
     FRunner: TTestRunner;
     FCurrentTestName: string;
     FTests: TList<TTestRegistration>;
+    FHasAssertions: Boolean;
   protected
     // Lifecycle hooks
     procedure BeforeAll; virtual;
@@ -75,9 +76,6 @@ type
     procedure Test(const Name: string; Method: TTestMethod);
     procedure Skip(const Name: string; Method: TTestMethod; const Reason: string = '');
 
-    // Assertion helpers
-    function Expect<T>(const Value: T): TExpect<T>;
-    procedure Fail(const Message: string);
 
     // Override this to register your tests
     procedure SetupTests; virtual; abstract;
@@ -86,6 +84,10 @@ type
     destructor Destroy; override;
     property Name: string read FName;
     property Tests: TList<TTestRegistration> read FTests;
+
+    // Assertion helpers
+    function Expect<T>(const Value: T): TExpect<T>;
+    procedure Fail(const Message: string);
   end;
 
   TTestSuiteClass = class of TTestSuite;
@@ -115,8 +117,6 @@ type
 var
   TestRunnerProgram: TTestRunner;
 
-// Helper function to create expectations
-function Expect<T>(const Value: T): TExpect<T>;
 procedure ExitCodeCheck(ExitCode: Integer);
 
 implementation
@@ -382,6 +382,7 @@ begin
   inherited Create;
   FName := AName;
   FTests := TList<TTestRegistration>.Create;
+  FHasAssertions := False;
 end;
 
 destructor TTestSuite.Destroy;
@@ -432,16 +433,16 @@ begin
   FTests.Add(Registration);
 end;
 
-function TTestSuite.Expect<T>(const Value: T): TExpect<T>;
-begin
-  Result := TExpect<T>.Create(Value);
-end;
-
 procedure TTestSuite.Fail(const Message: string);
 begin
   raise ETestAssertionError.Create(Message);
 end;
 
+function TTestSuite.Expect<T>(const Value: T): TExpect<T>;
+begin
+  FHasAssertions := True;
+  Result := TExpect<T>.Create(Value);
+end;
 
 { TTestRunner }
 
@@ -482,41 +483,49 @@ end;
 
 procedure TTestRunner.RunTest(Suite: TTestSuite; const Test: TTestRegistration);
 var
-  Result: TTestResult;
   StartTime: TDateTime;
+  Result: TTestResult;
 begin
-  Result.Name := Test.Name;
-  Result.SuiteName := Suite.Name;
-  Result.Status := tsPass;
-  Result.ErrorMessage := '';
-
   if Test.Skip then
   begin
+    Result.Name := Test.Name;
+    Result.SuiteName := Suite.Name;
     Result.Status := tsSkip;
     Result.ErrorMessage := Test.SkipReason;
-  end
-  else
-  begin
-    StartTime := Now;
-    try
-      Suite.BeforeEach;
-      try
-        Test.Method();
-        Suite.AfterEach;
-      except
-        Suite.AfterEach;
-        raise;
-      end;
-    except
-      on E: Exception do
-      begin
-        Result.Status := tsFail;
-        Result.ErrorMessage := E.Message;
-      end;
-    end;
-    Result.Duration := MilliSecondsBetween(Now, StartTime);
+    Result.Duration := 0;
+    FResults.Add(Result);
+    Exit;
   end;
 
+  Suite.FCurrentTestName := Test.Name;
+  Suite.FHasAssertions := False;
+
+  StartTime := Now;
+  try
+    Suite.BeforeEach;
+    Test.Method;
+    Suite.AfterEach;
+
+    if not Suite.FHasAssertions then
+      raise ETestAssertionError.Create('Test has no assertions');
+
+    Result.Status := tsPass;
+  except
+    on E: ETestAssertionError do
+    begin
+      Result.Status := tsFail;
+      Result.ErrorMessage := E.Message;
+    end;
+    on E: Exception do
+    begin
+      Result.Status := tsFail;
+      Result.ErrorMessage := E.Message;
+    end;
+  end;
+
+  Result.Name := Test.Name;
+  Result.SuiteName := Suite.Name;
+  Result.Duration := MilliSecondsBetween(Now, StartTime);
   FResults.Add(Result);
 end;
 
@@ -644,13 +653,6 @@ begin
     WriteLn(#27'[31mTESTS FAILED'#27'[0m')
   else
     WriteLn(#27'[32mALL TESTS PASSED'#27'[0m');
-end;
-
-{ Global functions }
-
-function Expect<T>(const Value: T): TExpect<T>;
-begin
-  Result := TExpect<T>.Create(Value);
 end;
 
 initialization
