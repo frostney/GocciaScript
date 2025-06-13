@@ -77,10 +77,11 @@ var
   Callback: TGocciaValue;
   CallArgs: TObjectList<TGocciaValue>;
   I: Integer;
+  ElementCount: Integer;
+  LocalElements: TObjectList<TGocciaValue>;
+  LocalThisValue: TGocciaValue;
 begin
-  TGocciaLogger.Debug('ArrayMap: Entered');
-  TGocciaLogger.Debug('  ThisValue type: %s', [ThisValue.ClassName]);
-  TGocciaLogger.Debug('  Args.Count: %d', [Args.Count]);
+  TGocciaLogger.Debug('ArrayMap: Starting with ThisValue type: %s, pointer: %p', [ThisValue.ClassName, Pointer(ThisValue)]);
 
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.map called on non-array');
@@ -95,21 +96,41 @@ begin
 
   ResultArray := TGocciaArrayValue.Create;
 
-  for I := 0 to FElements.Count - 1 do
-  begin
-    CallArgs := TObjectList<TGocciaValue>.Create(False);
-    CallArgs.Add(FElements[I]);
-    CallArgs.Add(TGocciaNumberValue.Create(I));
+  ElementCount := FElements.Count;
 
-    if Callback is TGocciaNativeFunctionValue then
-      ResultArray.Elements.Add(TGocciaNativeFunctionValue(Callback).NativeFunction(CallArgs, ThisValue))
-    else if Callback is TGocciaFunctionValue then
-      ResultArray.Elements.Add(TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue));
+  LocalThisValue := ThisValue;
+
+  LocalElements := TObjectList<TGocciaValue>.Create(False);
+  try
+    for I := 0 to ElementCount - 1 do
+      LocalElements.Add(FElements[I]);
+
+    for I := 0 to ElementCount - 1 do
+    begin
+      TGocciaLogger.Debug('ArrayMap: Iteration %d, about to call with ThisValue type: %s, pointer: %p', [I, LocalThisValue.ClassName, Pointer(LocalThisValue)]);
+
+      CallArgs := TObjectList<TGocciaValue>.Create(False);
+      try
+        CallArgs.Add(LocalElements[I]);
+        CallArgs.Add(TGocciaNumberValue.Create(I));
+
+        if Callback is TGocciaNativeFunctionValue then
+          ResultArray.Elements.Add(TGocciaNativeFunctionValue(Callback).Call(CallArgs, LocalThisValue))
+        else if Callback is TGocciaFunctionValue then
+          ResultArray.Elements.Add(TGocciaFunctionValue(Callback).Call(CallArgs, LocalThisValue))
+        else
+          ThrowError('Callback must be a function');
+
+        TGocciaLogger.Debug('ArrayMap: After iteration %d, LocalThisValue type: %s, pointer: %p', [I, LocalThisValue.ClassName, Pointer(LocalThisValue)]);
+      finally
+        CallArgs.Free;
+      end;
+    end;
+
+    Result := ResultArray;
+  finally
+    LocalElements.Free;
   end;
-
-  TGocciaLogger.Debug('ArrayMap: Returning result type: %s', [ResultArray.ClassName]);
-  TGocciaLogger.Debug('ArrayMap: Result ToString: %s', [ResultArray.ToString]);
-  Result := ResultArray;
 end;
 
 function TGocciaArrayValue.ArrayFilter(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
