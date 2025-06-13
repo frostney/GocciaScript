@@ -100,14 +100,10 @@ begin
     except
       on E: TGocciaReturnValue do
       begin
-        if LastValue <> nil then
-          LastValue.Free;
         raise;
       end;
       on E: Exception do
       begin
-        if LastValue <> nil then
-          LastValue.Free;
         raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
       end;
     end;

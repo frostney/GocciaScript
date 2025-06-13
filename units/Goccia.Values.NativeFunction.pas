@@ -5,7 +5,7 @@ unit Goccia.Values.NativeFunction;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Base, Goccia.Values.ObjectValue, Generics.Collections, SysUtils, Math;
+  Goccia.Interfaces, Goccia.Values.Base, Goccia.Values.ObjectValue, Generics.Collections, SysUtils, Math, Goccia.Logger;
 
 type
   TGocciaNativeFunction = function(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue of object;

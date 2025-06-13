@@ -69,6 +69,8 @@ end;
 
 destructor TGocciaObjectValue.Destroy;
 begin
+  // Don't free the values - they might be referenced elsewhere
+  // The scope or other owners should handle their cleanup
   FProperties.Free;
   FComputedProperties.Free;
   inherited;

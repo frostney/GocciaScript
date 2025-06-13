@@ -1,1 +1,1 @@
-{$mode delphi} {H+}
+{$mode delphi} {H+} {$overflowchecks on} {$rangechecks on}
