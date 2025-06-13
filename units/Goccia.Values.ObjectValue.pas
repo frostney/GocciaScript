@@ -143,24 +143,24 @@ begin
   // Technically, computed properties should be saved like regular properties. This is a worksaround unless
   // we implement getter and setter properties.
 
-  TGocciaLogger.Debug('TGocciaObjectValue.GetProperty: Start');
-  TGocciaLogger.Debug('  Name: %s', [AName]);
-  TGocciaLogger.Debug('  FComputedProperties.ContainsKey(AName): %s', [BoolToStr(FComputedProperties.ContainsKey(AName))]);
-  TGocciaLogger.Debug('  FProperties.ContainsKey(AName): %s', [BoolToStr(FProperties.ContainsKey(AName))]);
+  Logger.Debug('TGocciaObjectValue.GetProperty: Start');
+  Logger.Debug('  Name: %s', [AName]);
+  Logger.Debug('  FComputedProperties.ContainsKey(AName): %s', [BoolToStr(FComputedProperties.ContainsKey(AName))]);
+  Logger.Debug('  FProperties.ContainsKey(AName): %s', [BoolToStr(FProperties.ContainsKey(AName))]);
   if Assigned(FPrototype) then
-    TGocciaLogger.Debug('  FPrototype: %s', [FPrototype.ToString])
+    Logger.Debug('  FPrototype: %s', [FPrototype.ToString])
   else
-    TGocciaLogger.Debug('  FPrototype: not assigned');
+    Logger.Debug('  FPrototype: not assigned');
 
   if FComputedProperties.ContainsKey(AName) then
   begin
-    TGocciaLogger.Debug('TGocciaObjectValue.GetProperty: FComputedProperties.ContainsKey(AName)');
+    Logger.Debug('TGocciaObjectValue.GetProperty: FComputedProperties.ContainsKey(AName)');
     Result := FComputedProperties[AName](Self);
     Exit;
   end
   else
   begin
-    TGocciaLogger.Debug('TGocciaObjectValue.GetProperty: FProperties.ContainsKey(AName)');
+    Logger.Debug('TGocciaObjectValue.GetProperty: FProperties.ContainsKey(AName)');
     if FProperties.ContainsKey(AName) then
     begin
       Result := FProperties[AName];
@@ -169,12 +169,12 @@ begin
     begin
       if Assigned(FPrototype) then
       begin
-        TGocciaLogger.Debug('TGocciaObjectValue.GetProperty: FPrototype is assigned');
+        Logger.Debug('TGocciaObjectValue.GetProperty: FPrototype is assigned');
         Result := FPrototype.GetProperty(AName);
         Exit;
       end;
 
-      TGocciaLogger.Debug('TGocciaObjectValue.GetProperty: FProperties.ContainsKey(AName) is false');
+      Logger.Debug('TGocciaObjectValue.GetProperty: FProperties.ContainsKey(AName) is false');
       Result := TGocciaUndefinedValue.Create;
     end;
   end;

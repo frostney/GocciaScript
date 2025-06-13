@@ -39,11 +39,11 @@ constructor TGocciaScope.Create(AParent: TGocciaScope = nil; AScopeKind: TGoccia
 begin
   FScopeKind := AScopeKind;
   FCustomLabel := ACustomLabel;
-  TGocciaLogger.Debug('Scope.Create: Creating new scope');
-  TGocciaLogger.Debug('  Kind: %s', [GetEnumName(TypeInfo(TGocciaScopeKind), Ord(FScopeKind))]);
+  Logger.Debug('Scope.Create: Creating new scope');
+  Logger.Debug('  Kind: %s', [GetEnumName(TypeInfo(TGocciaScopeKind), Ord(FScopeKind))]);
   if FCustomLabel <> '' then
-    TGocciaLogger.Debug('  CustomLabel: %s', [FCustomLabel]);
-  TGocciaLogger.Debug('  Parent scope address: %d', [PtrUInt(AParent)]);
+    Logger.Debug('  CustomLabel: %s', [FCustomLabel]);
+  Logger.Debug('  Parent scope address: %d', [PtrUInt(AParent)]);
 
   FThisValue := TGocciaUndefinedValue.Create;
   FParent := AParent;
@@ -55,23 +55,23 @@ var
   Value: TGocciaValue;
   Key: string;
 begin
-  TGocciaLogger.Debug('Scope.Destroy: Destroying scope');
-  TGocciaLogger.Debug('  Kind: %s', [GetEnumName(TypeInfo(TGocciaScopeKind), Ord(FScopeKind))]);
+  Logger.Debug('Scope.Destroy: Destroying scope');
+  Logger.Debug('  Kind: %s', [GetEnumName(TypeInfo(TGocciaScopeKind), Ord(FScopeKind))]);
   if FCustomLabel <> '' then
-    TGocciaLogger.Debug('  CustomLabel: %s', [FCustomLabel]);
-  TGocciaLogger.Debug('  Self address: %d', [PtrUInt(Self)]);
-  TGocciaLogger.Debug('  Values dictionary address: %d', [PtrUInt(FValues)]);
+    Logger.Debug('  CustomLabel: %s', [FCustomLabel]);
+  Logger.Debug('  Self address: %d', [PtrUInt(Self)]);
+  Logger.Debug('  Values dictionary address: %d', [PtrUInt(FValues)]);
 
   if Assigned(FValues) then
   begin
     // Log all values in the scope before destruction
-    TGocciaLogger.Debug('  Values in scope:');
+    Logger.Debug('  Values in scope:');
     for Key in FValues.Keys do
     begin
       if FValues.TryGetValue(Key, Value) then
-        TGocciaLogger.Debug('    %s: %s', [Key, Value.ToString])
+        Logger.Debug('    %s: %s', [Key, Value.ToString])
       else
-        TGocciaLogger.Debug('    %s: <not found>', [Key]);
+        Logger.Debug('    %s: <not found>', [Key]);
     end;
 
     FValues.Free;
@@ -81,7 +81,7 @@ begin
   // The actual owner should handle freeing it
   if Assigned(FThisValue) then
   begin
-    TGocciaLogger.Debug('  Not freeing ThisValue (scope doesn''t own it): %s', [FThisValue.ClassName]);
+    Logger.Debug('  Not freeing ThisValue (scope doesn''t own it): %s', [FThisValue.ClassName]);
     FThisValue := nil;
   end;
 
@@ -132,13 +132,13 @@ end;
 
 procedure TGocciaScope.SetValue(const AName: string; AValue: TGocciaValue);
 begin
-  TGocciaLogger.Debug('Scope.SetValue: Setting value for name: %s', [AName]);
-  TGocciaLogger.Debug('  Kind: %s', [GetEnumName(TypeInfo(TGocciaScopeKind), Ord(FScopeKind))]);
+  Logger.Debug('Scope.SetValue: Setting value for name: %s', [AName]);
+  Logger.Debug('  Kind: %s', [GetEnumName(TypeInfo(TGocciaScopeKind), Ord(FScopeKind))]);
   if FCustomLabel <> '' then
-    TGocciaLogger.Debug('  CustomLabel: %s', [FCustomLabel]);
-  TGocciaLogger.Debug('  Value type: %s', [AValue.ClassName]);
-  TGocciaLogger.Debug('  Self address: %d', [PtrUInt(Self)]);
-  TGocciaLogger.Debug('  Values dictionary address: %d', [PtrUInt(FValues)]);
+    Logger.Debug('  CustomLabel: %s', [FCustomLabel]);
+  Logger.Debug('  Value type: %s', [AValue.ClassName]);
+  Logger.Debug('  Self address: %d', [PtrUInt(Self)]);
+  Logger.Debug('  Values dictionary address: %d', [PtrUInt(FValues)]);
 
   FValues.AddOrSetValue(AName, AValue);
 end;

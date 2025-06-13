@@ -206,10 +206,10 @@ var
   I: Integer;
   ReturnValue: TGocciaValue;
 begin
-  TGocciaLogger.Debug('FunctionInvocation.Execute: Entering');
-  TGocciaLogger.Debug('  Function type: %s', [FFunction.ClassName]);
-  TGocciaLogger.Debug('  Arguments.Count: %d', [FArguments.Count]);
-  TGocciaLogger.Debug('  ThisValue type: %s', [FThisValue.ClassName]);
+  Logger.Debug('FunctionInvocation.Execute: Entering');
+  Logger.Debug('  Function type: %s', [FFunction.ClassName]);
+  Logger.Debug('  Arguments.Count: %d', [FArguments.Count]);
+  Logger.Debug('  ThisValue type: %s', [FThisValue.ClassName]);
 
   // Set up the call scope
   FCallScope.ThisValue := FThisValue;
@@ -217,15 +217,15 @@ begin
   // Bind parameters
   for I := 0 to FFunction.Parameters.Count - 1 do
   begin
-    TGocciaLogger.Debug('Binding parameter %d: %s', [I, FFunction.Parameters[I]]);
+    Logger.Debug('Binding parameter %d: %s', [I, FFunction.Parameters[I]]);
     if I < FArguments.Count then
     begin
-      TGocciaLogger.Debug('  Argument value type: %s, ToString: %s', [FArguments[I].ClassName, FArguments[I].ToString]);
+      Logger.Debug('  Argument value type: %s, ToString: %s', [FArguments[I].ClassName, FArguments[I].ToString]);
       FCallScope.SetValue(FFunction.Parameters[I], FArguments[I])
     end
     else
     begin
-      TGocciaLogger.Debug('  No argument provided, setting to undefined');
+      Logger.Debug('  No argument provided, setting to undefined');
       FCallScope.SetValue(FFunction.Parameters[I], TGocciaUndefinedValue.Create);
     end;
   end;
@@ -239,15 +239,15 @@ begin
   except
     on E: TGocciaReturnValue do
     begin
-      TGocciaLogger.Debug('FunctionInvocation.Execute: Caught TGocciaReturnValue');
+      Logger.Debug('FunctionInvocation.Execute: Caught TGocciaReturnValue');
       if E.Value = nil then
       begin
-        TGocciaLogger.Debug('FunctionInvocation.Execute: E.Value is nil, creating undefined value');
+        Logger.Debug('FunctionInvocation.Execute: E.Value is nil, creating undefined value');
         Result := TGocciaUndefinedValue.Create;
       end
       else
       begin
-        TGocciaLogger.Debug('FunctionInvocation.Execute: E.Value type: %s', [E.Value.ClassName]);
+        Logger.Debug('FunctionInvocation.Execute: E.Value type: %s', [E.Value.ClassName]);
         // Create a new instance of the same type
         if E.Value is TGocciaNumberValue then
           Result := TGocciaNumberValue.Create(TGocciaNumberValue(E.Value).Value)
@@ -265,14 +265,14 @@ begin
     end;
     on E: Exception do
     begin
-      TGocciaLogger.Debug('FunctionInvocation.Execute: Caught unexpected exception: %s', [E.Message]);
+      Logger.Error('FunctionInvocation.Execute: Caught unexpected exception: %s', [E.Message]);
       raise;
     end;
   end;
 
-  TGocciaLogger.Debug('FunctionInvocation.Execute: Exiting');
-  TGocciaLogger.Debug('  Result type: %s', [Result.ClassName]);
-  TGocciaLogger.Debug('  Result ToString: %s', [Result.ToString]);
+  Logger.Debug('FunctionInvocation.Execute: Exiting');
+  Logger.Debug('  Result type: %s', [Result.ClassName]);
+  Logger.Debug('  Result ToString: %s', [Result.ToString]);
 end;
 
 end.

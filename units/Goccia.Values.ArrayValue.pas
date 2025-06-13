@@ -81,7 +81,7 @@ var
   LocalElements: TObjectList<TGocciaValue>;
   LocalThisValue: TGocciaValue;
 begin
-  TGocciaLogger.Debug('ArrayMap: Starting with ThisValue type: %s, pointer: %p', [ThisValue.ClassName, Pointer(ThisValue)]);
+  Logger.Debug('ArrayMap: Starting with ThisValue type: %s, pointer: %p', [ThisValue.ClassName, Pointer(ThisValue)]);
 
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.map called on non-array');
@@ -107,7 +107,7 @@ begin
 
     for I := 0 to ElementCount - 1 do
     begin
-      TGocciaLogger.Debug('ArrayMap: Iteration %d, about to call with ThisValue type: %s, pointer: %p', [I, LocalThisValue.ClassName, Pointer(LocalThisValue)]);
+      Logger.Debug('ArrayMap: Iteration %d, about to call with ThisValue type: %s, pointer: %p', [I, LocalThisValue.ClassName, Pointer(LocalThisValue)]);
 
       CallArgs := TObjectList<TGocciaValue>.Create(False);
       try
@@ -121,7 +121,7 @@ begin
         else
           ThrowError('Callback must be a function');
 
-        TGocciaLogger.Debug('ArrayMap: After iteration %d, LocalThisValue type: %s, pointer: %p', [I, LocalThisValue.ClassName, Pointer(LocalThisValue)]);
+        Logger.Debug('ArrayMap: After iteration %d, LocalThisValue type: %s, pointer: %p', [I, LocalThisValue.ClassName, Pointer(LocalThisValue)]);
       finally
         CallArgs.Free;
       end;
