@@ -6,7 +6,7 @@ interface
 
 uses
   Goccia.Values.Base, Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Interfaces,
-  Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math;
+  Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math, Goccia.Values.UndefinedValue;
 
 type
   // Forward declaration
@@ -39,13 +39,14 @@ type
   private
     FClass: TGocciaClassValue;
     FPrototype: TGocciaObjectValue;
+    procedure SetPrototype(APrototype: TGocciaObjectValue);
   public
     constructor Create(AClass: TGocciaClassValue);
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
     property ClassValue: TGocciaClassValue read FClass;
-    property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
+    property Prototype: TGocciaObjectValue read FPrototype write SetPrototype;
   end;
 
 implementation
@@ -115,6 +116,7 @@ end;
 function TGocciaClassValue.Instantiate(Arguments: TObjectList<TGocciaValue>): TGocciaValue;
 var
   Instance: TGocciaInstanceValue;
+  ConstructorToCall: TGocciaMethodValue;
 begin
   // Create the instance
   Instance := TGocciaInstanceValue.Create(Self);
@@ -123,8 +125,16 @@ begin
   Instance.Prototype := FPrototype;
   TGocciaLogger.Debug('Prototype set for instance');
 
-  // Call constructor if it exists
-  if Assigned(FConstructorMethod) then
+  // Find constructor - either this class's or inherited from parent
+  ConstructorToCall := FConstructorMethod;
+  if not Assigned(ConstructorToCall) and Assigned(FSuperClass) then
+  begin
+    ConstructorToCall := FSuperClass.ConstructorMethod;
+    TGocciaLogger.Debug('Using inherited constructor from: %s', [FSuperClass.Name]);
+  end;
+
+  // Call constructor if one exists
+  if Assigned(ConstructorToCall) then
   begin
     TGocciaLogger.Debug('Calling constructor');
     TGocciaLogger.Debug('  Arguments.Count: %d', [Arguments.Count]);
@@ -132,7 +142,7 @@ begin
       TGocciaLogger.Debug('  First argument: %s', [Arguments[0].ToString]);
 
     // Call the constructor with the instance as this
-    FConstructorMethod.Call(Arguments, Instance);
+    ConstructorToCall.Call(Arguments, Instance);
   end;
 
   Result := Instance;
@@ -156,19 +166,14 @@ var
 begin
   // First check if the property exists in the instance
   Result := inherited GetProperty(AName);
-  if Result = nil then
-  begin
-    // If not found in instance, check prototype chain
-    if Assigned(FPrototype) then
-      Result := FPrototype.GetProperty(AName);
 
-    // If still not found, check if it's a method
-    if Result = nil then
-    begin
-      Method := FClass.GetMethod(AName);
-      if Assigned(Method) then
-        Result := Method;
-    end;
+  // If not found in instance (inherited GetProperty returns TGocciaUndefinedValue), check class methods
+  if Result is TGocciaUndefinedValue then
+  begin
+    // Check if it's a method from the class
+    Method := FClass.GetMethod(AName);
+    if Assigned(Method) then
+      Result := Method;
   end;
 end;
 
@@ -176,6 +181,28 @@ procedure TGocciaInstanceValue.SetProperty(const AName: string; AValue: TGocciaV
 begin
   // Always set properties on the instance, not the prototype
   inherited SetProperty(AName, AValue);
+end;
+
+procedure TGocciaInstanceValue.SetPrototype(APrototype: TGocciaObjectValue);
+begin
+  TGocciaLogger.Debug('TGocciaInstanceValue.SetPrototype: Called');
+  if Assigned(APrototype) then
+    TGocciaLogger.Debug('  APrototype is assigned: %s', [APrototype.ToString])
+  else
+    TGocciaLogger.Debug('  APrototype is nil');
+
+  FPrototype := APrototype;
+  TGocciaLogger.Debug('  Set instance FPrototype');
+
+  // Also set the inherited prototype field so that inherited GetProperty works correctly
+  inherited Prototype := APrototype;
+  TGocciaLogger.Debug('  Set inherited Prototype');
+
+  // Debug: Check what the inherited prototype actually is now
+  if Assigned(inherited Prototype) then
+    TGocciaLogger.Debug('  Inherited Prototype is now: %s', [inherited Prototype.ToString])
+  else
+    TGocciaLogger.Debug('  Inherited Prototype is still nil');
 end;
 
 end.
