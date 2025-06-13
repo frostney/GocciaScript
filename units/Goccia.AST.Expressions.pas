@@ -85,12 +85,16 @@ type
   private
     FObject: TGocciaExpression;
     FProperty: string;
+    FPropertyExpression: TGocciaExpression;
     FComputed: Boolean;
   public
     constructor Create(AObject: TGocciaExpression; const AProperty: string;
-      AComputed: Boolean; ALine, AColumn: Integer);
+      AComputed: Boolean; ALine, AColumn: Integer); overload;
+    constructor Create(AObject: TGocciaExpression; APropertyExpression: TGocciaExpression;
+      ALine, AColumn: Integer); overload;
     property ObjectExpr: TGocciaExpression read FObject;
     property PropertyName: string read FProperty;
+    property PropertyExpression: TGocciaExpression read FPropertyExpression;
     property Computed: Boolean read FComputed;
   end;
 
@@ -227,7 +231,18 @@ begin
   inherited Create(ALine, AColumn);
   FObject := AObject;
   FProperty := AProperty;
+  FPropertyExpression := nil;
   FComputed := AComputed;
+end;
+
+constructor TGocciaMemberExpression.Create(AObject: TGocciaExpression;
+  APropertyExpression: TGocciaExpression; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FObject := AObject;
+  FProperty := '';
+  FPropertyExpression := APropertyExpression;
+  FComputed := True;
 end;
 
 { TGocciaArrayExpression }

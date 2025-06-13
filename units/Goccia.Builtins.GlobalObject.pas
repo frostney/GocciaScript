@@ -5,25 +5,19 @@ unit Goccia.Builtins.GlobalObject;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections;
+  Goccia.Values.Base, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Builtins.Base;
 
 type
-  TGocciaGlobalObject = class
-  private
-    FName: string;
-    FGlobalObject: TGocciaObjectValue;
-    FThrowError: TGocciaThrowError;
-  public
-    constructor Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
-    destructor Destroy; override;
-
+  TGocciaGlobalObject = class(TGocciaBuiltin)
+  protected
     // Native methods
     function ObjectKeys(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectValues(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectEntries(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-
-    property Name: string read FName;
-    property ThrowError: TGocciaThrowError read FThrowError;
+    function ObjectAssign(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectCreate(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+  public
+    constructor Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
   end;
 
 implementation
@@ -33,20 +27,15 @@ uses
 
 constructor TGocciaGlobalObject.Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
 begin
-  FName := AName;
-  FGlobalObject := TGocciaObjectValue.Create;
+  inherited Create(AName, AScope, AThrowError);
 
-  FGlobalObject.SetProperty('keys', TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1));
-  FGlobalObject.SetProperty('values', TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1));
-  FGlobalObject.SetProperty('entries', TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1));
+  FBuiltinObject.SetProperty('keys', TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1));
+  FBuiltinObject.SetProperty('values', TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1));
+  FBuiltinObject.SetProperty('entries', TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1));
+  FBuiltinObject.SetProperty('assign', TGocciaNativeFunctionValue.Create(ObjectAssign, 'assign', -1));
+  FBuiltinObject.SetProperty('create', TGocciaNativeFunctionValue.Create(ObjectCreate, 'create', 1));
 
-  AScope.SetValue(AName, FGlobalObject);
-end;
-
-destructor TGocciaGlobalObject.Destroy;
-begin
-  FGlobalObject.Free;
-  inherited;
+  AScope.SetValue(AName, FBuiltinObject);
 end;
 
 function TGocciaGlobalObject.ObjectKeys(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -118,5 +107,51 @@ begin
   Result := Entries;
 end;
 
+function TGocciaGlobalObject.ObjectAssign(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  InitialObj: TGocciaObjectValue;
+  Source: TGocciaObjectValue;
+  Pair: TPair<string, TGocciaValue>;
+  I: Integer;
+begin
+  if Args.Count < 2 then
+    ThrowError('Object.assign expects at least 2 arguments', 0, 0);
+
+  // TODO: Should check for the first object or filter out non-objects
+  if not (Args[0] is TGocciaObjectValue) then
+    ThrowError('Object.assign called on non-object', 0, 0);
+
+  InitialObj := TGocciaObjectValue(Args[0]);
+
+  for I := 1 to Args.Count - 1 do
+  begin
+    if (Args[I] is TGocciaObjectValue) then
+    begin
+      Source := TGocciaObjectValue(Args[I]);
+
+      // Use pair iteration and SetProperty to safely copy properties
+      for Pair in Source.Properties do
+        InitialObj.SetProperty(Pair.Key, Pair.Value);
+    end;
+  end;
+
+  Result := InitialObj;
+end;
+
+function TGocciaGlobalObject.ObjectCreate(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Obj: TGocciaObjectValue;
+  Key: string;
+begin
+  if Args.Count < 1 then
+    ThrowError('Object.create expects at least 1 argument', 0, 0);
+
+  if not (Args[0] is TGocciaObjectValue) then
+    ThrowError('Object.create called on non-object', 0, 0);
+
+  Obj := TGocciaObjectValue(Args[0]);
+
+  Result := Obj;
+end;
 
 end.

@@ -403,23 +403,39 @@ end;
 function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Obj: TGocciaValue;
+  PropertyName: string;
+  PropertyValue: TGocciaValue;
 begin
   Logger.Debug('EvaluateMember: Start');
   Logger.Debug('  MemberExpression.ObjectExpr: %s', [MemberExpression.ObjectExpr.ToString]);
-  Logger.Debug('  MemberExpression.PropertyName: %s', [MemberExpression.PropertyName]);
   Obj := EvaluateExpression(MemberExpression.ObjectExpr, Context);
   Logger.Debug('EvaluateMember: Obj: %s', [Obj.ToString]);
 
-  if Obj is TGocciaObjectValue then
+  // Determine the property name
+  if MemberExpression.Computed and Assigned(MemberExpression.PropertyExpression) then
   begin
-    Logger.Debug('EvaluateMember: Obj is TGocciaObjectValue');
-    Result := TGocciaObjectValue(Obj).GetProperty(MemberExpression.PropertyName);
-    Logger.Debug('EvaluateMember: Result: %s', [Result.ToString]);
+    // Computed access: evaluate the property expression to get the property name
+    PropertyValue := EvaluateExpression(MemberExpression.PropertyExpression, Context);
+    PropertyName := PropertyValue.ToString;
+    Logger.Debug('EvaluateMember: Computed property name: %s', [PropertyName]);
   end
-  else if Obj is TGocciaArrayValue then
+  else
+  begin
+    // Static access: use the property name directly
+    PropertyName := MemberExpression.PropertyName;
+    Logger.Debug('EvaluateMember: Static property name: %s', [PropertyName]);
+  end;
+
+  if Obj is TGocciaArrayValue then
   begin
     Logger.Debug('EvaluateMember: Obj is TGocciaArrayValue');
-    Result := TGocciaArrayValue(Obj).GetProperty(MemberExpression.PropertyName);
+    Result := TGocciaArrayValue(Obj).GetProperty(PropertyName);
+    Logger.Debug('EvaluateMember: Result: %s', [Result.ToString]);
+  end
+  else if Obj is TGocciaObjectValue then
+  begin
+    Logger.Debug('EvaluateMember: Obj is TGocciaObjectValue');
+    Result := TGocciaObjectValue(Obj).GetProperty(PropertyName);
     Logger.Debug('EvaluateMember: Result: %s', [Result.ToString]);
   end
   else

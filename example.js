@@ -52,6 +52,34 @@ console.log(animal.speak());
 const dog = new Dog("Rex");
 console.log(dog.speak());
 
+const printObject = (obj) => {
+  return Object.keys(obj)
+    .map((key) => key + ": " + obj[key])
+    .join(", ");
+};
+
 // Math operations
 console.log("Math.sqrt(16) =", Math.sqrt(16));
 console.log("Math.max(5, 3, 9, 1) =", Math.max(5, 3, 9, 1));
+
+// Global constants and functions
+console.log("NaN =", NaN);
+console.log("Infinity =", Infinity);
+console.log("isNaN(NaN) =", isNaN(NaN));
+console.log("isFinite(Infinity) =", isFinite(Infinity));
+console.log("isFinite(10) =", isFinite(10));
+console.log("parseFloat('3.14') =", parseFloat("3.14"));
+console.log("parseInt('10') =", parseInt("10"));
+
+// Global objects
+console.log("Array.isArray([1, 2, 3]) =", Array.isArray([1, 2, 3]));
+console.log("Array.isArray(1) =", Array.isArray(1));
+
+console.log("Object.keys({a: 1, b: 2}) =", Object.keys({ a: 1, b: 2 }));
+console.log("Object.values({a: 1, b: 2}) =", Object.values({ a: 1, b: 2 }));
+console.log("Object.entries({a: 1, b: 2}) =", Object.entries({ a: 1, b: 2 }));
+console.log(
+  "Object.assign({a: 1}, {b: 2}) =",
+  printObject(Object.assign({ a: 1 }, { b: 2 }))
+);
+console.log("Object.create({a: 1}) =", printObject(Object.create({ a: 1 })));

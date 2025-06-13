@@ -324,14 +324,8 @@ begin
       Column := Previous.Column;
       Arg := Expression;
       Consume(gttRightBracket, 'Expected "]" after computed member expression');
-      // For computed access, we'll store the expression as a string representation
-      // This is a simplification; in a real implementation, we'd handle this differently
-      if Arg is TGocciaLiteralExpression then
-        PropertyName := TGocciaLiteralExpression(Arg).Value.ToString
-      else
-        PropertyName := '[computed]';
-      Result := TGocciaMemberExpression.Create(Result, PropertyName, True,
-        Line, Column);
+      // For computed access, store the expression directly to be evaluated at runtime
+      Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column);
     end
     else
       Break;

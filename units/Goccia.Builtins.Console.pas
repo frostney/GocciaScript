@@ -5,41 +5,27 @@ unit Goccia.Builtins.Console;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Scope, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections;
+  Goccia.Values.Base, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Builtins.Base;
 
 type
-  TGocciaConsole = class
-  private
-    FName: string;
-    FConsole: TGocciaObjectValue;
-  public
-    constructor Create(const AName: string; AScope: TGocciaScope);
-    destructor Destroy; override;
-
+  TGocciaConsole = class(TGocciaBuiltin)
+  protected
     // Native methods
     function ConsoleLog(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-
-    property Name: string read FName;
+  public
+    constructor Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
   end;
 
 implementation
 
-constructor TGocciaConsole.Create(const AName: string; AScope: TGocciaScope);
+constructor TGocciaConsole.Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
 begin
-  FName := AName;
-  FConsole := TGocciaObjectValue.Create;
+  inherited Create(AName, AScope, AThrowError);
 
-  FConsole.SetProperty('log', TGocciaNativeFunctionValue.Create(ConsoleLog, 'log', -1));
+  FBuiltinObject.SetProperty('log', TGocciaNativeFunctionValue.Create(ConsoleLog, 'log', -1));
 
-  AScope.SetValue(AName, FConsole);
+  AScope.SetValue(AName, FBuiltinObject);
 end;
-
-destructor TGocciaConsole.Destroy;
-begin
-  FConsole.Free;
-  inherited;
-end;
-
 
 function TGocciaConsole.ConsoleLog(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var

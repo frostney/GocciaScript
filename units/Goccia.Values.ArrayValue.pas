@@ -16,6 +16,7 @@ type
     function ArrayFilter(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayReduce(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayForEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayJoin(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
     procedure ThrowError(const Message: string; const Args: array of const); overload;
     procedure ThrowError(const Message: string); overload;
@@ -28,13 +29,14 @@ type
     function ToBoolean: Boolean; override;
     function ToNumber: Double; override;
     function TypeName: string; override;
+    function GetProperty(const AName: string): TGocciaValue;
     property Elements: TObjectList<TGocciaValue> read FElements;
   end;
 
 implementation
 
 uses
-  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Evaluator;
+  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Evaluator, Goccia.Values.StringValue;
 
 constructor TGocciaArrayValue.Create;
 begin
@@ -48,6 +50,7 @@ begin
   FPrototype.SetProperty('filter', TGocciaNativeFunctionValue.Create(ArrayFilter, 'filter', 1));
   FPrototype.SetProperty('reduce', TGocciaNativeFunctionValue.Create(ArrayReduce, 'reduce', 1));
   FPrototype.SetProperty('forEach', TGocciaNativeFunctionValue.Create(ArrayForEach, 'forEach', 1));
+  FPrototype.SetProperty('join', TGocciaNativeFunctionValue.Create(ArrayJoin, 'join', 1));
 end;
 
 destructor TGocciaArrayValue.Destroy;
@@ -272,6 +275,34 @@ begin
   Result := TGocciaUndefinedValue.Create;
 end;
 
+function TGocciaArrayValue.ArrayJoin(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  Separator: string;
+  I: Integer;
+  ResultString: string;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.join called on non-array');
+
+  Arr := TGocciaArrayValue(ThisValue);
+
+  if Args.Count < 1 then
+    Separator := ','
+  else
+    Separator := Args[0].ToString;
+
+  ResultString := '';
+  for I := 0 to Arr.Elements.Count - 1 do
+  begin
+    if I > 0 then
+      ResultString := ResultString + Separator;
+    ResultString := ResultString + Arr.Elements[I].ToString;
+  end;
+
+  Result := TGocciaStringValue.Create(ResultString);
+end;
+
 function TGocciaArrayValue.ToString: string;
 var
   I: Integer;
@@ -302,6 +333,25 @@ end;
 function TGocciaArrayValue.TypeName: string;
 begin
   Result := 'object';
+end;
+
+function TGocciaArrayValue.GetProperty(const AName: string): TGocciaValue;
+var
+  Index: Integer;
+begin
+  // Check if property name is a numeric index
+  if TryStrToInt(AName, Index) then
+  begin
+    if (Index >= 0) and (Index < FElements.Count) then
+      Result := FElements[Index]
+    else
+      Result := TGocciaUndefinedValue.Create;
+  end
+  else
+  begin
+    // Fall back to regular object property lookup
+    Result := inherited GetProperty(AName);
+  end;
 end;
 
 end.

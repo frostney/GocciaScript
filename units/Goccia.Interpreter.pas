@@ -9,7 +9,7 @@ uses
   Goccia.Values.UndefinedValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.ObjectValue,
   Goccia.Values.StringValue, Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
   Goccia.Values.NullValue, Goccia.Values.NativeFunction, Goccia.Token, Generics.Collections,
-  Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Evaluator, Goccia.Scope, Goccia.Builtins.Console, Goccia.Builtins.GlobalObject, Goccia.Builtins.Math, Goccia.Interfaces, Goccia.Logger;
+  Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Evaluator, Goccia.Scope, Goccia.Builtins.Console, Goccia.Builtins.GlobalObject, Goccia.Builtins.Math, Goccia.Interfaces, Goccia.Logger, Goccia.Builtins.GlobalArray, Goccia.Builtins.Globals;
 
 type
   TGocciaInterpreter = class
@@ -17,6 +17,8 @@ type
     FBuiltinConsole: TGocciaConsole;
     FBuiltinMath: TGocciaMath;
     FBuiltinGlobalObject: TGocciaGlobalObject;
+    FBuiltinGlobalArray: TGocciaGlobalArray;
+    FBuiltinGlobals: TGocciaGlobals;
 
     FGlobalScope: TGocciaScope;
     FModules: TDictionary<string, TGocciaModule>;
@@ -29,7 +31,9 @@ type
     procedure RegisterConsole;
     procedure RegisterMath;
     procedure RegisterPromise;
+    procedure RegisterGlobalArray;
     procedure RegisterObjectMethods;
+    procedure RegisterGlobals;
 
     // Helper methods
     procedure ThrowError(const Message: string; Line, Column: Integer);
@@ -129,11 +133,13 @@ begin
   RegisterMath;
   RegisterPromise;
   RegisterObjectMethods;
+  RegisterGlobalArray;
+  RegisterGlobals;
 end;
 
 procedure TGocciaInterpreter.RegisterConsole;
 begin
-  FBuiltinConsole := TGocciaConsole.Create('console', FGlobalScope);
+  FBuiltinConsole := TGocciaConsole.Create('console', FGlobalScope, ThrowError);
 end;
 
 procedure TGocciaInterpreter.RegisterMath;
@@ -151,6 +157,17 @@ procedure TGocciaInterpreter.RegisterObjectMethods;
 begin
   FBuiltinGlobalObject := TGocciaGlobalObject.Create('Object', FGlobalScope, ThrowError);
 end;
+
+procedure TGocciaInterpreter.RegisterGlobalArray;
+begin
+  FBuiltinGlobalArray := TGocciaGlobalArray.Create('Array', FGlobalScope, ThrowError);
+end;
+
+procedure TGocciaInterpreter.RegisterGlobals;
+begin
+  FBuiltinGlobals := TGocciaGlobals.Create('Globals', FGlobalScope, ThrowError);
+end;
+
 
 function TGocciaInterpreter.CreateEvaluationContext: TGocciaEvaluationContext;
 begin

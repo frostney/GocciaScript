@@ -5,18 +5,11 @@ unit Goccia.Builtins.Math;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections, Math;
+  Goccia.Values.Base, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections, Math, Goccia.Builtins.Base;
 
 type
-  TGocciaMath = class
-  private
-    FName: string;
-    FMath: TGocciaObjectValue;
-    FThrowError: TGocciaThrowError;
-  public
-    constructor Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
-    destructor Destroy; override;
-
+  TGocciaMath = class(TGocciaBuiltin)
+  protected
     // Native methods
     function MathAbs(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function MathFloor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -26,9 +19,8 @@ type
     function MathMin(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function MathPow(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function MathSqrt(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-
-    property Name: string read FName;
-    property ThrowError: TGocciaThrowError read FThrowError;
+  public
+    constructor Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
   end;
 
 implementation
@@ -38,28 +30,20 @@ uses
 
 constructor TGocciaMath.Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
 begin
-  FName := AName;
-  FMath := TGocciaObjectValue.Create;
-  FThrowError := AThrowError;
+  inherited Create(AName, AScope, AThrowError);
 
-  FMath.SetProperty('PI', TGocciaNumberValue.Create(Pi));
-  FMath.SetProperty('E', TGocciaNumberValue.Create(Exp(1)));
-  FMath.SetProperty('abs', TGocciaNativeFunctionValue.Create(MathAbs, 'abs', 1));
-  FMath.SetProperty('floor', TGocciaNativeFunctionValue.Create(MathFloor, 'floor', 1));
-  FMath.SetProperty('ceil', TGocciaNativeFunctionValue.Create(MathCeil, 'ceil', 1));
-  FMath.SetProperty('round', TGocciaNativeFunctionValue.Create(MathRound, 'round', 1));
-  FMath.SetProperty('max', TGocciaNativeFunctionValue.Create(MathMax, 'max', -1));
-  FMath.SetProperty('min', TGocciaNativeFunctionValue.Create(MathMin, 'min', -1));
-  FMath.SetProperty('pow', TGocciaNativeFunctionValue.Create(MathPow, 'pow', 2));
-  FMath.SetProperty('sqrt', TGocciaNativeFunctionValue.Create(MathSqrt, 'sqrt', 1));
+  FBuiltinObject.SetProperty('PI', TGocciaNumberValue.Create(Pi));
+  FBuiltinObject.SetProperty('E', TGocciaNumberValue.Create(Exp(1)));
+  FBuiltinObject.SetProperty('abs', TGocciaNativeFunctionValue.Create(MathAbs, 'abs', 1));
+  FBuiltinObject.SetProperty('floor', TGocciaNativeFunctionValue.Create(MathFloor, 'floor', 1));
+  FBuiltinObject.SetProperty('ceil', TGocciaNativeFunctionValue.Create(MathCeil, 'ceil', 1));
+  FBuiltinObject.SetProperty('round', TGocciaNativeFunctionValue.Create(MathRound, 'round', 1));
+  FBuiltinObject.SetProperty('max', TGocciaNativeFunctionValue.Create(MathMax, 'max', -1));
+  FBuiltinObject.SetProperty('min', TGocciaNativeFunctionValue.Create(MathMin, 'min', -1));
+  FBuiltinObject.SetProperty('pow', TGocciaNativeFunctionValue.Create(MathPow, 'pow', 2));
+  FBuiltinObject.SetProperty('sqrt', TGocciaNativeFunctionValue.Create(MathSqrt, 'sqrt', 1));
 
-  AScope.SetValue(AName, FMath);
-end;
-
-destructor TGocciaMath.Destroy;
-begin
-  FMath.Free;
-  inherited;
+  AScope.SetValue(AName, FBuiltinObject);
 end;
 
 function TGocciaMath.MathAbs(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
