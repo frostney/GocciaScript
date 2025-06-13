@@ -123,8 +123,6 @@ begin
   FClosure := AClosure;
   FName := AName;
 
-  WriteLn('Parameters in FunctionValue: ' + IntToStr(FParameters.Count));
-
   inherited Create;
 end;
 

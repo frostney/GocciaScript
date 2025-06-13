@@ -5,7 +5,7 @@ unit Goccia.Logger;
 interface
 
 uses
-  SysUtils;
+  SysUtils, TypInfo;
 
 type
   TGocciaLogLevel = (llTrace, llDebug, llInfo, llWarn, llError);
@@ -15,9 +15,9 @@ type
   TGocciaLogger = class
   private
     FLevels: TGocciaLogLevels;
-    FFormat: TGocciaLogFormat;
+    FLogFormat: TGocciaLogFormat;
   public
-    constructor Create(const ALevels: TGocciaLogLevels = [llInfo, llWarn, llError]; const AFormat: TGocciaLogFormat = lfConsole);
+    constructor Create(const ALevels: TGocciaLogLevels = [llInfo, llWarn, llError]; const ALogFormat: TGocciaLogFormat = lfConsole);
     procedure Trace(const Message: string); overload;
     procedure Trace(const Message: string; const Args: array of Const); overload;
     procedure Debug(const Message: string); overload;
@@ -29,7 +29,7 @@ type
     procedure Error(const Message: string); overload;
     procedure Error(const Message: string; const Args: array of Const); overload;
     property Levels: TGocciaLogLevels read FLevels write FLevels;
-    property Format: TGocciaLogFormat read FFormat write FFormat;
+    property LogFormat: TGocciaLogFormat read FLogFormat write FLogFormat;
   end;
 
 var
@@ -37,12 +37,19 @@ var
 
 implementation
 
-constructor TGocciaLogger.Create(const ALevels: TGocciaLogLevels; const AFormat: TGocciaLogFormat);
+constructor TGocciaLogger.Create(const ALevels: TGocciaLogLevels; const ALogFormat: TGocciaLogFormat);
+var
+  Levels: String;
+  Level: TGocciaLogLevel;
 begin
   FLevels := ALevels;
-  FFormat := AFormat;
+  FLogFormat := ALogFormat;
 
-  WriteLn(Format('[LOGGER] Logger created with levels: %s and format: %s', [GetEnumName(TypeInfo(TGocciaLogLevels), Ord(FLevels)), GetEnumName(TypeInfo(TGocciaLogFormat), Ord(FFormat))]));
+  Levels := '';
+  for Level in ALevels do
+    Levels := Levels + GetEnumName(TypeInfo(TGocciaLogLevel), Ord(Level)) + ', ';
+
+  WriteLn(Format('[LOGGER] Logger created with levels: %s and format: %s', [Levels, GetEnumName(TypeInfo(TGocciaLogFormat), Ord(FLogFormat))]));
 end;
 
 procedure TGocciaLogger.Trace(const Message: string);
