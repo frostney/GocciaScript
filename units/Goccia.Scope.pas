@@ -5,7 +5,7 @@ unit Goccia.Scope;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Error, Goccia.Interfaces, SysUtils, TypInfo, Goccia.Logger;
+  Goccia.Values.Base, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, TypInfo, Goccia.Interfaces;
 
 type
   TGocciaScopeKind = (skUnknown, skGlobal, skFunction, skBlock, skCustom);
@@ -77,10 +77,11 @@ begin
     FValues.Free;
   end;
 
+  // Don't free FThisValue - the scope doesn't own it, it's just a reference
+  // The actual owner should handle freeing it
   if Assigned(FThisValue) then
   begin
-    TGocciaLogger.Debug('  Freeing ThisValue of type: %s', [FThisValue.ClassName]);
-    FThisValue.Free;
+    TGocciaLogger.Debug('  Not freeing ThisValue (scope doesn''t own it): %s', [FThisValue.ClassName]);
     FThisValue := nil;
   end;
 
@@ -96,31 +97,12 @@ function TGocciaScope.GetValue(const AName: string): TGocciaValue;
 var
   Value: TGocciaValue;
 begin
-  TGocciaLogger.Debug('Scope.GetValue: Attempting to get value for name: %s', [AName]);
-  TGocciaLogger.Debug('  Kind: %s', [GetEnumName(TypeInfo(TGocciaScopeKind), Ord(FScopeKind))]);
-  if FCustomLabel <> '' then
-    TGocciaLogger.Debug('  CustomLabel: %s', [FCustomLabel]);
-  TGocciaLogger.Debug('  Self address: %d', [PtrUInt(Self)]);
-  TGocciaLogger.Debug('  Values dictionary address: %d', [PtrUInt(FValues)]);
-  TGocciaLogger.Debug('  ThisValue: %s', [ThisValue.ToString]);
-
   if FValues.TryGetValue(AName, Value) then
-  begin
-    Result := Value;
-  end
+    Result := Value
   else if Assigned(FParent) then
-  begin
-    TGocciaLogger.Debug('  Value not found, checking enclosing scope');
-    Result := FParent.GetValue(AName);
-  end
+    Result := FParent.GetValue(AName)
   else
-  begin
-    TGocciaLogger.Debug('  Value not found and no enclosing scope');
     Result := TGocciaUndefinedValue.Create;
-  end;
-
-  TGocciaLogger.Debug('  Returning value of type: %s', [Result.ClassName]);
-  TGocciaLogger.Debug('  Result ToString: %s', [Result.ToString]);
 end;
 
 function TGocciaScope.GetThisProperty(const AName: string): TGocciaValue;
@@ -133,7 +115,6 @@ end;
 
 procedure TGocciaScope.Assign(const AName: string; AValue: TGocciaValue);
 begin
-  // TODO: Do we need this?
   if FValues.ContainsKey(AName) then
     FValues.AddOrSetValue(AName, AValue)
   else if Assigned(FParent) then

@@ -70,12 +70,11 @@ begin
         ProgramNode := Parser.Parse;
         try
             Interpreter := TGocciaInterpreter.Create(FileName, Lexer.SourceLines);
-            try
+
             Result.Value := Interpreter.Execute(ProgramNode);
             Result.Interpreter := Interpreter;
-            finally
-            Interpreter.Free;
-            end;
+            // Note: Don't free Interpreter here - ownership is transferred to the caller
+
         finally
             ProgramNode.Free;
         end;
@@ -90,7 +89,7 @@ begin
         end;
         on E: Exception do
         begin
-        WriteLn('Error: ', E.Message);
+        WriteLn('Lexer Error: ', E.Message);
         ExitCode := 1;
         end;
     end;
@@ -114,10 +113,11 @@ end;
 
 destructor TGocciaInterpreter.Destroy;
 begin
+  // Free scope first to avoid accessing freed method pointers in builtin objects
+  FGlobalScope.Free;
   FBuiltinConsole.Free;
   FBuiltinMath.Free;
   FBuiltinGlobalObject.Free;
-  FGlobalScope.Free;
   FModules.Free;
   FSourceLines.Free;
   inherited;
