@@ -133,7 +133,7 @@ begin
   begin
     // Handle new expression - create instance
     Callee := EvaluateExpression(TGocciaNewExpression(Expression).Callee, Context);
-    Arguments := TObjectList<TGocciaValue>.Create(True);
+    Arguments := TObjectList<TGocciaValue>.Create(False);
     try
       for I := 0 to TGocciaNewExpression(Expression).Arguments.Count - 1 do
         Arguments.Add(EvaluateExpression(TGocciaNewExpression(Expression).Arguments[I], Context));
@@ -369,40 +369,35 @@ function EvaluateCall(CallExpression: TGocciaCallExpression; Context: TGocciaEva
 var
   Callee: TGocciaValue;
   Arguments: TObjectList<TGocciaValue>;
-  I: Integer;
-  FunctionValue: TGocciaFunctionValue;
   ThisValue: TGocciaValue;
+  ArgumentExpr: TGocciaExpression;
 begin
   TGocciaLogger.Debug('EvaluateCall: Start');
   TGocciaLogger.Debug('  CallExpression.Callee: %s', [CallExpression.Callee.ToString]);
   Callee := EvaluateExpression(CallExpression.Callee, Context);
-  TGocciaLogger.Debug(' EvaluateCall: Callee: %s', [Callee.ToString]);
-  Arguments := TObjectList<TGocciaValue>.Create(True);
+
+  if CallExpression.Callee is TGocciaMemberExpression then
+    ThisValue := EvaluateExpression(TGocciaMemberExpression(CallExpression.Callee).ObjectExpr, Context)
+  else
+    ThisValue := TGocciaUndefinedValue.Create;
+
+  Arguments := TObjectList<TGocciaValue>.Create(False);
   try
-    for I := 0 to CallExpression.Arguments.Count - 1 do
-      Arguments.Add(EvaluateExpression(CallExpression.Arguments[I], Context));
+    for ArgumentExpr in CallExpression.Arguments do
+      Arguments.Add(EvaluateExpression(ArgumentExpr, Context));
 
-    if Callee is IGocciaCallable then
-    begin
-      if CallExpression.Callee is TGocciaMemberExpression then
-        ThisValue := EvaluateExpression(TGocciaMemberExpression(CallExpression.Callee).ObjectExpr, Context)
-      else
-        ThisValue := TGocciaUndefinedValue.Create;
-
-      TGocciaLogger.Debug('EvaluateCall: About to call Callable');
-      Result := (Callee as IGocciaCallable).Call(Arguments, ThisValue);
-      TGocciaLogger.Debug('EvaluateCall: Callable returned, result type: %s', [Result.ClassName]);
-      TGocciaLogger.Debug('EvaluateCall: Result ToString: %s', [Result.ToString]);
-    end else
-    begin
-      TGocciaLogger.Debug('EvaluateCall: Callee is not IGocciaCallable');
+    if Callee is TGocciaNativeFunctionValue then
+      Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, ThisValue)
+    else if Callee is TGocciaFunctionValue then
+      Result := TGocciaFunctionValue(Callee).Call(Arguments, ThisValue)
+    else if Callee is IGocciaCallable then
+      Result := (Callee as IGocciaCallable).Call(Arguments, ThisValue)
+    else
       Result := TGocciaUndefinedValue.Create;
-    end;
+
   finally
     Arguments.Free;
   end;
-  TGocciaLogger.Debug('EvaluateCall: Returning result type: %s', [Result.ClassName]);
-  TGocciaLogger.Debug('EvaluateCall: Result ToString: %s', [Result.ToString]);
 end;
 
 function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -461,9 +456,24 @@ end;
 function EvaluateArrowFunction(ArrowFunctionExpression: TGocciaArrowFunctionExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   BlockValue: TGocciaBlockValue;
+  Statements: TObjectList<TGocciaASTNode>;
 begin
-  BlockValue := TGocciaBlockValue.Create(TGocciaBlockStatement(ArrowFunctionExpression.Body).Nodes, Context.Scope.CreateChild);
-  // Always create a unique child scope for the closure
+  // Arrow function body can be either a block statement or a single expression
+  if ArrowFunctionExpression.Body is TGocciaBlockStatement then
+  begin
+    // Body is a block statement: (n) => { return n * 2; }
+    BlockValue := TGocciaBlockValue.Create(TGocciaBlockStatement(ArrowFunctionExpression.Body).Nodes, Context.Scope.CreateChild);
+  end
+  else
+  begin
+    // Body is a single expression: (n) => n * 2
+    // Wrap the expression in a statement list
+    Statements := TObjectList<TGocciaASTNode>.Create(True);
+    Statements.Add(ArrowFunctionExpression.Body); // Add the expression directly
+    BlockValue := TGocciaBlockValue.Create(Statements, Context.Scope.CreateChild);
+  end;
+
+  // Create function with closure scope
   Result := TGocciaFunctionValue.Create(ArrowFunctionExpression.Parameters, BlockValue, Context.Scope.CreateChild);
 end;
 
@@ -539,7 +549,7 @@ begin
   Callee := EvaluateExpression(NewExpression.Callee, Context);
 
   // Evaluate arguments
-  Arguments := TObjectList<TGocciaValue>.Create(True);
+  Arguments := TObjectList<TGocciaValue>.Create(False);
   try
     for I := 0 to NewExpression.Arguments.Count - 1 do
       Arguments.Add(EvaluateExpression(NewExpression.Arguments[I], Context));
