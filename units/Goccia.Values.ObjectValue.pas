@@ -110,7 +110,7 @@ end;
 
 function TGocciaObjectValue.ToString: string;
 begin
-  Result := '[Object object]';
+  Result := '[object Object]';
 end;
 
 function TGocciaObjectValue.ToBoolean: Boolean;

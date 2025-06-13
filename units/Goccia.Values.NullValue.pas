@@ -30,7 +30,7 @@ end;
 
 function TGocciaNullValue.ToNumber: Double;
 begin
-  Result := NaN;
+  Result := 0;
 end;
 
 function TGocciaNullValue.TypeName: string;
