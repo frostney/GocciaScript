@@ -96,6 +96,18 @@ type
     property Value: TGocciaExpression read FValue;
   end;
 
+  TGocciaIncrementExpression = class(TGocciaExpression)
+  private
+    FOperand: TGocciaExpression;
+    FOperator: TGocciaTokenType; // gttIncrement or gttDecrement
+    FIsPrefix: Boolean;
+  public
+    constructor Create(AOperand: TGocciaExpression; AOperator: TGocciaTokenType; AIsPrefix: Boolean; ALine, AColumn: Integer);
+    property Operand: TGocciaExpression read FOperand;
+    property Operator: TGocciaTokenType read FOperator;
+    property IsPrefix: Boolean read FIsPrefix;
+  end;
+
   TGocciaCallExpression = class(TGocciaExpression)
   private
     FCallee: TGocciaExpression;
@@ -260,6 +272,16 @@ begin
   FPropertyName := APropertyName;
   FOperator := AOperator;
   FValue := AValue;
+end;
+
+{ TGocciaIncrementExpression }
+
+constructor TGocciaIncrementExpression.Create(AOperand: TGocciaExpression; AOperator: TGocciaTokenType; AIsPrefix: Boolean; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FOperand := AOperand;
+  FOperator := AOperator;
+  FIsPrefix := AIsPrefix;
 end;
 
 { TGocciaCallExpression }

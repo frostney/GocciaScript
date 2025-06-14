@@ -269,11 +269,15 @@ begin
     '+':
       if Match('=') then
         AddToken(gttPlusAssign)
+      else if Match('+') then
+        AddToken(gttIncrement)
       else
         AddToken(gttPlus);
     '-':
       if Match('=') then
         AddToken(gttMinusAssign)
+      else if Match('-') then
+        AddToken(gttDecrement)
       else
         AddToken(gttMinus);
     '*':

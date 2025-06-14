@@ -278,6 +278,20 @@ begin
     Result := TGocciaUnaryExpression.Create(Operator.TokenType, Right,
       Operator.Line, Operator.Column);
   end
+  else if Match([gttIncrement, gttDecrement]) then
+  begin
+    // Prefix increment/decrement (++x, --x)
+    Operator := Previous;
+    Right := Unary;
+
+    // Only allow on identifiers and member expressions
+    if not ((Right is TGocciaIdentifierExpression) or (Right is TGocciaMemberExpression)) then
+      raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
+        Operator.Line, Operator.Column, FFileName, FSourceLines);
+
+    Result := TGocciaIncrementExpression.Create(Right, Operator.TokenType, True,
+      Operator.Line, Operator.Column);
+  end
   else
     Result := Call;
 end;
@@ -326,6 +340,20 @@ begin
       Consume(gttRightBracket, 'Expected "]" after computed member expression');
       // For computed access, store the expression directly to be evaluated at runtime
       Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column);
+    end
+    else if Match([gttIncrement, gttDecrement]) then
+    begin
+      // Postfix increment/decrement (x++, x--)
+      Line := Previous.Line;
+      Column := Previous.Column;
+
+      // Only allow on identifiers and member expressions
+      if not ((Result is TGocciaIdentifierExpression) or (Result is TGocciaMemberExpression)) then
+        raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
+          Line, Column, FFileName, FSourceLines);
+
+      Result := TGocciaIncrementExpression.Create(Result, Previous.TokenType, False,
+        Line, Column);
     end
     else
       Break;

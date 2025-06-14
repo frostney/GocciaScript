@@ -180,6 +180,76 @@ begin
     else if (Obj is TGocciaClassValue) then
       TGocciaClassValue(Obj).SetProperty(PropName, Result);
   end
+  else if Expression is TGocciaIncrementExpression then
+  begin
+    // Increment/decrement expressions (++x, --x, x++, x--)
+    if TGocciaIncrementExpression(Expression).Operand is TGocciaIdentifierExpression then
+    begin
+            // Variable increment/decrement
+      PropName := TGocciaIdentifierExpression(TGocciaIncrementExpression(Expression).Operand).Name;
+      Result := Context.Scope.GetValue(PropName);
+
+      // Calculate new value
+      if TGocciaIncrementExpression(Expression).Operator = gttIncrement then
+        Value := TGocciaNumberValue.Create(Result.ToNumber + 1)
+      else
+        Value := TGocciaNumberValue.Create(Result.ToNumber - 1);
+
+      // Set the new value
+      Context.Scope.SetValue(PropName, Value);
+
+      // Return value depends on prefix/postfix
+      if TGocciaIncrementExpression(Expression).IsPrefix then
+        Result := Value  // Prefix: return new value (++x)
+      else
+        Result := Result;  // Postfix: return old value (x++)
+    end
+    else if TGocciaIncrementExpression(Expression).Operand is TGocciaMemberExpression then
+    begin
+      // Property increment/decrement
+      Obj := EvaluateExpression(TGocciaMemberExpression(TGocciaIncrementExpression(Expression).Operand).ObjectExpr, Context);
+      PropName := TGocciaMemberExpression(TGocciaIncrementExpression(Expression).Operand).PropertyName;
+
+      // Get current property value
+      if (Obj is TGocciaInstanceValue) then
+        Result := TGocciaInstanceValue(Obj).GetProperty(PropName)
+      else if (Obj is TGocciaObjectValue) then
+        Result := TGocciaObjectValue(Obj).GetProperty(PropName)
+      else if (Obj is TGocciaClassValue) then
+        Result := TGocciaClassValue(Obj).GetProperty(PropName)
+      else
+      begin
+        Context.OnError('Cannot access property on non-object', Expression.Line, Expression.Column);
+        Result := TGocciaUndefinedValue.Create;
+        Exit;
+      end;
+
+      // Calculate new value
+      if TGocciaIncrementExpression(Expression).Operator = gttIncrement then
+        Value := TGocciaNumberValue.Create(Result.ToNumber + 1)
+      else
+        Value := TGocciaNumberValue.Create(Result.ToNumber - 1);
+
+      // Set the new value
+      if (Obj is TGocciaInstanceValue) then
+        TGocciaInstanceValue(Obj).SetProperty(PropName, Value)
+      else if (Obj is TGocciaObjectValue) then
+        TGocciaObjectValue(Obj).SetProperty(PropName, Value)
+      else if (Obj is TGocciaClassValue) then
+        TGocciaClassValue(Obj).SetProperty(PropName, Value);
+
+      // Return value depends on prefix/postfix
+      if TGocciaIncrementExpression(Expression).IsPrefix then
+        Result := Value  // Prefix: return new value (++obj.prop)
+      else
+        Result := Result;  // Postfix: return old value (obj.prop++)
+    end
+    else
+    begin
+      Context.OnError('Invalid target for increment/decrement', Expression.Line, Expression.Column);
+      Result := TGocciaUndefinedValue.Create;
+    end;
+  end
   else if Expression is TGocciaCallExpression then
   begin
     Logger.Debug('EvaluateExpression: TGocciaCallExpression - before EvaluateCall');

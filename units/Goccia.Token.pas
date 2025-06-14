@@ -21,6 +21,7 @@ type
     gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
     gttEqual, gttNotEqual, gttLess, gttGreater, gttLessEqual, gttGreaterEqual,
     gttAnd, gttOr, gttNot, gttTypeof, gttInstanceof, gttAssign, gttPlusAssign, gttMinusAssign,
+    gttIncrement, gttDecrement,
     gttQuestion, gttColon,
     // Punctuation
     gttLeftParen, gttRightParen, gttLeftBrace, gttRightBrace,
