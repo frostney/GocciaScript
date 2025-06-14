@@ -317,6 +317,33 @@ var
   Left, Right: TGocciaValue;
   LeftNum, RightNum: Double;
 begin
+  // Handle short-circuiting logical operators first
+  if BinaryExpression.Operator = gttAnd then
+  begin
+    Left := EvaluateExpression(BinaryExpression.Left, Context);
+    if not Left.ToBoolean then
+      Result := Left  // Short-circuit: return left operand if falsy
+    else
+    begin
+      Right := EvaluateExpression(BinaryExpression.Right, Context);
+      Result := Right;  // Return right operand
+    end;
+    Exit;
+  end
+  else if BinaryExpression.Operator = gttOr then
+  begin
+    Left := EvaluateExpression(BinaryExpression.Left, Context);
+    if Left.ToBoolean then
+      Result := Left  // Short-circuit: return left operand if truthy
+    else
+    begin
+      Right := EvaluateExpression(BinaryExpression.Right, Context);
+      Result := Right;  // Return right operand
+    end;
+    Exit;
+  end;
+
+  // For all other operators, evaluate both operands
   Left := EvaluateExpression(BinaryExpression.Left, Context);
   Right := EvaluateExpression(BinaryExpression.Right, Context);
 
@@ -386,16 +413,6 @@ begin
             Result := TGocciaBooleanValue.Create(False);
         end;
       end;
-    gttAnd:
-      if not Left.ToBoolean then
-        Result := Left
-      else
-        Result := Right;
-    gttOr:
-      if Left.ToBoolean then
-        Result := Left
-      else
-        Result := Right;
   else
     Result := TGocciaUndefinedValue.Create;
   end;
