@@ -14,7 +14,7 @@ type
     // Identifiers
     gttIdentifier,
     // Keywords
-    gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper,
+    gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
     gttReturn, gttIf, gttElse, gttThrow, gttTry, gttCatch, gttFinally,
     gttImport, gttExport, gttFrom, gttAs, gttDefault,
     // Operators

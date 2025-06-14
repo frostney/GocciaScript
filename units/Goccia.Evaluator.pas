@@ -681,7 +681,17 @@ begin
   begin
     // Pass superclass directly to method creation - much cleaner!
     Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, Context, SuperClass));
-    ClassValue.AddMethod(MethodPair.Key, Method);
+
+    if MethodPair.Value.IsStatic then
+    begin
+      // Static methods are added as properties on the class constructor itself
+      ClassValue.SetProperty(MethodPair.Key, Method);
+    end
+    else
+    begin
+      // Instance methods are added to the class prototype
+      ClassValue.AddMethod(MethodPair.Key, Method);
+    end;
   end;
 
   Context.Scope.SetValue(ClassDeclaration.Name, ClassValue);

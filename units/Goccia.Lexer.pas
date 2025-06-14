@@ -226,6 +226,7 @@ begin
   else if Text = 'new' then AddToken(gttNew, Text)
   else if Text = 'this' then AddToken(gttThis, Text)
   else if Text = 'super' then AddToken(gttSuper, Text)
+    else if Text = 'static' then AddToken(gttStatic, Text)
   else if Text = 'return' then AddToken(gttReturn, Text)
   else if Text = 'if' then AddToken(gttIf, Text)
   else if Text = 'else' then AddToken(gttElse, Text)

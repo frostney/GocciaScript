@@ -54,7 +54,7 @@ type
     function ReturnStatement: TGocciaStatement;
     function ThrowStatement: TGocciaStatement;
     function TryStatement: TGocciaStatement;
-    function ClassMethod: TGocciaClassMethod;
+    function ClassMethod(IsStatic: Boolean = False): TGocciaClassMethod;
     function ClassDeclaration: TGocciaStatement;
     function ImportDeclaration: TGocciaStatement;
     function ExportDeclaration: TGocciaStatement;
@@ -718,7 +718,7 @@ begin
     FinallyBlock, Line, Column);
 end;
 
-function TGocciaParser.ClassMethod: TGocciaClassMethod;
+function TGocciaParser.ClassMethod(IsStatic: Boolean = False): TGocciaClassMethod;
 var
   Parameters: TStringList;
   Body: TGocciaASTNode;
@@ -768,7 +768,7 @@ begin
 
       Consume(gttRightBrace, 'Expected "}" after method body');
       Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
-      Result := TGocciaClassMethod.Create(Name, Parameters, Body, Line, Column);
+      Result := TGocciaClassMethod.Create(Name, Parameters, Body, IsStatic, Line, Column);
     except
       Statements.Free;
       raise;
@@ -785,6 +785,7 @@ var
   Methods: TDictionary<string, TGocciaClassMethod>;
   MethodName: string;
   Method: TGocciaClassMethod;
+  IsStatic: Boolean;
   Line, Column: Integer;
 begin
   Line := Previous.Line;
@@ -803,8 +804,9 @@ begin
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
+    IsStatic := Match([gttStatic]);
     MethodName := Consume(gttIdentifier, 'Expected method name').Lexeme;
-    Method := ClassMethod;
+    Method := ClassMethod(IsStatic);
     Method.Name := MethodName; // Set the method name
     Methods.Add(MethodName, Method);
   end;

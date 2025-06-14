@@ -88,12 +88,14 @@ type
     FName: string;
     FParameters: TStringList;
     FBody: TGocciaASTNode;
+    FIsStatic: Boolean;
   public
     constructor Create(const AName: string; AParameters: TStringList;
-      ABody: TGocciaASTNode; ALine, AColumn: Integer);
+      ABody: TGocciaASTNode; AIsStatic: Boolean; ALine, AColumn: Integer);
     property Name: string read FName write FName;
     property Parameters: TStringList read FParameters;
     property Body: TGocciaASTNode read FBody;
+    property IsStatic: Boolean read FIsStatic;
   end;
 
   TGocciaClassDeclaration = class(TGocciaStatement)
@@ -210,12 +212,13 @@ implementation
   { TGocciaClassMethod }
 
   constructor TGocciaClassMethod.Create(const AName: string; AParameters: TStringList;
-    ABody: TGocciaASTNode; ALine, AColumn: Integer);
+    ABody: TGocciaASTNode; AIsStatic: Boolean; ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
     FName := AName;
     FParameters := AParameters;
     FBody := ABody;
+    FIsStatic := AIsStatic;
   end;
 
   { TGocciaClassDeclaration }
