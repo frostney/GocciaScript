@@ -42,6 +42,8 @@ begin
   FBuiltinObject.SetProperty('min', TGocciaNativeFunctionValue.Create(MathMin, 'min', -1));
   FBuiltinObject.SetProperty('pow', TGocciaNativeFunctionValue.Create(MathPow, 'pow', 2));
   FBuiltinObject.SetProperty('sqrt', TGocciaNativeFunctionValue.Create(MathSqrt, 'sqrt', 1));
+  FBuiltinObject.SetProperty('random', TGocciaNativeFunctionValue.Create(MathRandom, 'random', 0));
+  FBuiltinObject.SetProperty('clamp', TGocciaNativeFunctionValue.Create(MathClamp, 'clamp', 3));
 
   AScope.SetValue(AName, FBuiltinObject);
 end;
@@ -127,6 +129,18 @@ begin
   if Args.Count <> 1 then
     ThrowError('Math.sqrt expects exactly 1 argument', 0, 0);
   Result := TGocciaNumberValue.Create(Sqrt(Args[0].ToNumber));
+end;
+
+function TGocciaMath.MathRandom(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaNumberValue.Create(Random);
+end;
+
+function TGocciaMath.MathClamp(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+begin
+  if Args.Count <> 3 then
+    ThrowError('Math.clamp expects exactly 3 arguments', 0, 0);
+  Result := TGocciaNumberValue.Create(Clamp(Args[0].ToNumber, Args[1].ToNumber, Args[2].ToNumber));
 end;
 
 end.
