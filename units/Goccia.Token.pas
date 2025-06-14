@@ -20,7 +20,7 @@ type
     // Operators
     gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
     gttEqual, gttNotEqual, gttLess, gttGreater, gttLessEqual, gttGreaterEqual,
-    gttAnd, gttOr, gttNot, gttAssign, gttPlusAssign, gttMinusAssign,
+    gttAnd, gttOr, gttNot, gttTypeof, gttAssign, gttPlusAssign, gttMinusAssign,
     gttQuestion, gttColon,
     // Punctuation
     gttLeftParen, gttRightParen, gttLeftBrace, gttRightBrace,
