@@ -16,7 +16,13 @@ type
     function ArrayFilter(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayReduce(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayForEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ArraySome(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayEvery(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayJoin(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayIncludes(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+
+    function ArrayToReversed(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayToSorted(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
     procedure ThrowError(const Message: string; const Args: array of const); overload;
     procedure ThrowError(const Message: string); overload;
@@ -33,10 +39,47 @@ type
     property Elements: TObjectList<TGocciaValue> read FElements;
   end;
 
+  function DefaultCompare(constref A, B: TGocciaValue): Integer;
+
 implementation
 
 uses
-  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Evaluator, Goccia.Values.StringValue;
+  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Evaluator, Goccia.Values.StringValue, Generics.Defaults;
+
+function DefaultCompare(constref A, B: TGocciaValue): Integer;
+var
+  NumA, NumB: Double;
+  StrA, StrB: string;
+begin
+  if A is TGocciaNumberValue then
+  begin
+    NumA := A.ToNumber;
+    NumB := B.ToNumber;
+    if NumA < NumB then
+      Result := -1
+    else if NumA > NumB then
+      Result := 1
+    else
+      Result := 0;
+  end
+  else if A is TGocciaStringValue then
+  begin
+    StrA := A.ToString;
+    StrB := B.ToString;
+    Result := CompareStr(StrA, StrB);
+  end
+  else if A is TGocciaBooleanValue then
+  begin
+    if A.ToBoolean = B.ToBoolean then
+      Result := 0
+    else if A.ToBoolean and not B.ToBoolean then
+      Result := 1
+    else
+      Result := -1;
+  end
+  else
+    Result := 0;
+end;
 
 constructor TGocciaArrayValue.Create;
 begin
@@ -50,7 +93,12 @@ begin
   FPrototype.SetProperty('filter', TGocciaNativeFunctionValue.Create(ArrayFilter, 'filter', 1));
   FPrototype.SetProperty('reduce', TGocciaNativeFunctionValue.Create(ArrayReduce, 'reduce', 1));
   FPrototype.SetProperty('forEach', TGocciaNativeFunctionValue.Create(ArrayForEach, 'forEach', 1));
+  FPrototype.SetProperty('some', TGocciaNativeFunctionValue.Create(ArraySome, 'some', 1));
+  FPrototype.SetProperty('every', TGocciaNativeFunctionValue.Create(ArrayEvery, 'every', 1));
   FPrototype.SetProperty('join', TGocciaNativeFunctionValue.Create(ArrayJoin, 'join', 1));
+  FPrototype.SetProperty('includes', TGocciaNativeFunctionValue.Create(ArrayIncludes, 'includes', 1));
+  FPrototype.SetProperty('toReversed', TGocciaNativeFunctionValue.Create(ArrayToReversed, 'toReversed', 0));
+  FPrototype.SetProperty('toSorted', TGocciaNativeFunctionValue.Create(ArrayToSorted, 'toSorted', 0));
 end;
 
 destructor TGocciaArrayValue.Destroy;
@@ -302,6 +350,153 @@ begin
 
   Result := TGocciaStringValue.Create(ResultString);
 end;
+
+function TGocciaArrayValue.ArrayIncludes(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  SearchValue: TGocciaValue;
+  I: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.includes called on non-array');
+
+  Arr := TGocciaArrayValue(ThisValue);
+
+  if Args.Count < 1 then
+    ThrowError('Array.includes expects search value');
+
+  SearchValue := Args[0];
+
+  for I := 0 to Arr.Elements.Count - 1 do
+  begin
+    if Arr.Elements[I].Equals(SearchValue) then
+    begin
+      Result := TGocciaBooleanValue.Create(True);
+      Exit;
+    end;
+  end;
+
+  Result := TGocciaBooleanValue.Create(False);
+end;
+
+function TGocciaArrayValue.ArraySome(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+
+var
+  Arr: TGocciaArrayValue;
+  Callback: TGocciaValue;
+  CallArgs: TObjectList<TGocciaValue>;
+  I: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.some called on non-array');
+
+  if Args.Count < 1 then
+    ThrowError('Array.some expects callback function');
+
+  Arr := TGocciaArrayValue(ThisValue);
+  Callback := Args[0];
+
+  if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
+    ThrowError('Callback must be a function');
+
+  CallArgs := TObjectList<TGocciaValue>.Create(False);
+  for I := 0 to Arr.Elements.Count - 1 do
+  begin
+    CallArgs.Add(Arr.Elements[I]);
+    CallArgs.Add(TGocciaNumberValue.Create(I));
+
+    if Callback is TGocciaNativeFunctionValue then
+      if TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue).ToBoolean then
+      begin
+        Result := TGocciaBooleanValue.Create(True);
+        Exit;
+      end;
+
+    if Callback is TGocciaFunctionValue then
+      if TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue).ToBoolean then
+      begin
+        Result := TGocciaBooleanValue.Create(True);
+        Exit;
+      end;
+  end;
+
+  Result := TGocciaBooleanValue.Create(False);
+end;
+
+function TGocciaArrayValue.ArrayEvery(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  Callback: TGocciaValue;
+  CallArgs: TObjectList<TGocciaValue>;
+  I: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.every called on non-array');
+
+  if Args.Count < 1 then
+    ThrowError('Array.every expects callback function');
+
+  Arr := TGocciaArrayValue(ThisValue);
+  Callback := Args[0];
+
+  if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
+    ThrowError('Callback must be a function');
+
+  CallArgs := TObjectList<TGocciaValue>.Create(False);
+  for I := 0 to Arr.Elements.Count - 1 do
+  begin
+    CallArgs.Add(Arr.Elements[I]);
+    CallArgs.Add(TGocciaNumberValue.Create(I));
+  end;
+
+  if Callback is TGocciaNativeFunctionValue then
+    Result := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue)
+  else if Callback is TGocciaFunctionValue then
+    Result := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
+
+  Result := TGocciaBooleanValue.Create(Result.ToBoolean);
+end;
+
+function TGocciaArrayValue.ArrayToReversed(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  ResultArray: TGocciaArrayValue;
+  I: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.toReversed called on non-array');
+
+  Arr := TGocciaArrayValue(ThisValue);
+
+  ResultArray := TGocciaArrayValue.Create;
+
+  for I := Arr.Elements.Count - 1 downto 0 do
+    ResultArray.Elements.Add(Arr.Elements[I]);
+
+  Result := ResultArray;
+end;
+
+function TGocciaArrayValue.ArrayToSorted(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  ResultArray: TGocciaArrayValue;
+  I: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.toSorted called on non-array');
+
+  Arr := TGocciaArrayValue(ThisValue);
+
+  ResultArray := TGocciaArrayValue.Create;
+
+  for I := 0 to Arr.Elements.Count - 1 do
+    ResultArray.Elements.Add(Arr.Elements[I]);
+
+  ResultArray.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+
+  Result := ResultArray;
+end;
+
 
 function TGocciaArrayValue.ToString: string;
 var
