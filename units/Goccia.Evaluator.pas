@@ -26,7 +26,7 @@ function EvaluateObject(ObjectExpression: TGocciaObjectExpression; Context: TGoc
 function EvaluateArrowFunction(ArrowFunctionExpression: TGocciaArrowFunctionExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateBlock(BlockStatement: TGocciaBlockStatement; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateIf(IfStatement: TGocciaIfStatement; Context: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateClassMethod(ClassMethod: TGocciaClassMethod; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateClassMethod(ClassMethod: TGocciaClassMethod; Context: TGocciaEvaluationContext; SuperClass: TGocciaValue = nil): TGocciaValue;
 function EvaluateClass(ClassDeclaration: TGocciaClassDeclaration; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 
@@ -153,6 +153,16 @@ begin
   begin
     // Handle this expression
     Result := Context.Scope.ThisValue;
+  end
+  else if Expression is TGocciaSuperExpression then
+  begin
+    // Handle super expression by looking up the special __super__ binding
+    Result := Context.Scope.GetValue('__super__');
+    if Result is TGocciaUndefinedValue then
+    begin
+      Context.OnError('super can only be used within a method with a superclass',
+        Expression.Line, Expression.Column);
+    end;
   end
   else if Expression is TGocciaMemberExpression then
   begin
@@ -400,13 +410,58 @@ var
   Arguments: TObjectList<TGocciaValue>;
   ThisValue: TGocciaValue;
   ArgumentExpr: TGocciaExpression;
+  SuperClass: TGocciaClassValue;
+  MemberExpr: TGocciaMemberExpression;
 begin
   Logger.Debug('EvaluateCall: Start');
   Logger.Debug('  CallExpression.Callee: %s', [CallExpression.Callee.ToString]);
+
+        // Handle super() calls specially
+  if CallExpression.Callee is TGocciaSuperExpression then
+  begin
+    Logger.Debug('EvaluateCall: Calling super constructor');
+    SuperClass := TGocciaClassValue(EvaluateExpression(CallExpression.Callee, Context));
+    if not (SuperClass is TGocciaClassValue) then
+    begin
+      Context.OnError('super() can only be called within a method with a superclass',
+        CallExpression.Line, CallExpression.Column);
+      Result := TGocciaUndefinedValue.Create;
+      Exit;
+    end;
+
+    Arguments := TObjectList<TGocciaValue>.Create(False);
+    try
+      for ArgumentExpr in CallExpression.Arguments do
+        Arguments.Add(EvaluateExpression(ArgumentExpr, Context));
+
+      // Call the superclass constructor with the current instance as 'this'
+      if Assigned(SuperClass.ConstructorMethod) then
+      begin
+        Logger.Debug('EvaluateCall: Calling superclass constructor method');
+        Result := SuperClass.ConstructorMethod.Call(Arguments, Context.Scope.ThisValue);
+      end
+      else
+      begin
+        Logger.Debug('EvaluateCall: No explicit constructor in superclass');
+        Result := TGocciaUndefinedValue.Create;
+      end;
+    finally
+      Arguments.Free;
+    end;
+    Exit;
+  end;
+
   Callee := EvaluateExpression(CallExpression.Callee, Context);
 
   if CallExpression.Callee is TGocciaMemberExpression then
-    ThisValue := EvaluateExpression(TGocciaMemberExpression(CallExpression.Callee).ObjectExpr, Context)
+  begin
+    MemberExpr := TGocciaMemberExpression(CallExpression.Callee);
+    // Special handling for super.method() calls
+    if MemberExpr.ObjectExpr is TGocciaSuperExpression then
+      ThisValue := Context.Scope.ThisValue  // Use current instance's 'this'
+    else
+      ThisValue := EvaluateExpression(MemberExpr.ObjectExpr, Context);
+  end
   else
     ThisValue := TGocciaUndefinedValue.Create;
 
@@ -434,9 +489,51 @@ var
   Obj: TGocciaValue;
   PropertyName: string;
   PropertyValue: TGocciaValue;
+  SuperClass: TGocciaClassValue;
 begin
   Logger.Debug('EvaluateMember: Start');
   Logger.Debug('  MemberExpression.ObjectExpr: %s', [MemberExpression.ObjectExpr.ToString]);
+
+        // Handle super.method() specially
+  if MemberExpression.ObjectExpr is TGocciaSuperExpression then
+  begin
+    Logger.Debug('EvaluateMember: Accessing super property');
+    SuperClass := TGocciaClassValue(EvaluateExpression(MemberExpression.ObjectExpr, Context));
+    if not (SuperClass is TGocciaClassValue) then
+    begin
+      Context.OnError('super can only be used within a method with a superclass',
+        MemberExpression.Line, MemberExpression.Column);
+      Result := TGocciaUndefinedValue.Create;
+      Exit;
+    end;
+
+    // Get the property name
+    if MemberExpression.Computed and Assigned(MemberExpression.PropertyExpression) then
+    begin
+      PropertyValue := EvaluateExpression(MemberExpression.PropertyExpression, Context);
+      PropertyName := PropertyValue.ToString;
+    end
+    else
+    begin
+      PropertyName := MemberExpression.PropertyName;
+    end;
+
+    Logger.Debug('EvaluateMember: Looking for super method: %s', [PropertyName]);
+
+    // Get the method from the superclass
+    Result := SuperClass.GetMethod(PropertyName);
+    if not Assigned(Result) then
+      Result := TGocciaUndefinedValue.Create
+    else
+    begin
+      // For super.method() calls, we need to create a bound method that uses the current 'this'
+      // This is handled in the call evaluation where we have access to the current 'this'
+      Logger.Debug('EvaluateMember: Super method found: %s', [Result.ToString]);
+    end;
+
+    Exit;
+  end;
+
   Obj := EvaluateExpression(MemberExpression.ObjectExpr, Context);
   Logger.Debug('EvaluateMember: Obj: %s', [Obj.ToString]);
 
@@ -554,13 +651,13 @@ begin
     Result := TGocciaUndefinedValue.Create;
 end;
 
-function EvaluateClassMethod(ClassMethod: TGocciaClassMethod; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateClassMethod(ClassMethod: TGocciaClassMethod; Context: TGocciaEvaluationContext; SuperClass: TGocciaValue = nil): TGocciaValue;
 var
   BlockValue: TGocciaBlockValue;
 begin
   BlockValue := TGocciaBlockValue.Create(TGocciaBlockStatement(ClassMethod.Body).Nodes, Context.Scope.CreateChild);
   // Always create a unique child scope for the closure
-  Result := TGocciaMethodValue.Create(ClassMethod.Parameters, BlockValue, Context.Scope.CreateChild, ClassMethod.Name);
+  Result := TGocciaMethodValue.Create(ClassMethod.Parameters, BlockValue, Context.Scope.CreateChild, ClassMethod.Name, SuperClass);
 end;
 
 function EvaluateClass(ClassDeclaration: TGocciaClassDeclaration; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -582,7 +679,8 @@ begin
 
   for MethodPair in ClassDeclaration.Methods do
   begin
-    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, Context));
+    // Pass superclass directly to method creation - much cleaner!
+    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, Context, SuperClass));
     ClassValue.AddMethod(MethodPair.Key, Method);
   end;
 

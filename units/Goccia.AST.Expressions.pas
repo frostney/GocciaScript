@@ -153,6 +153,8 @@ type
 
   TGocciaThisExpression = class(TGocciaExpression);
 
+  TGocciaSuperExpression = class(TGocciaExpression);
+
 implementation
 
 { TGocciaLiteralExpression }

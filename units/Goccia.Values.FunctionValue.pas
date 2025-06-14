@@ -48,9 +48,12 @@ type
   end;
 
   TGocciaMethodValue = class(TGocciaFunctionValue)
+  private
+    FSuperClass: TGocciaValue;
   public
-    constructor Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string);
+    constructor Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
     function ToString: string; override;
+    property SuperClass: TGocciaValue read FSuperClass write FSuperClass;
   end;
 
   TGocciaFunctionInvocation = class
@@ -170,9 +173,10 @@ end;
 
 { TGocciaMethodValue }
 
-constructor TGocciaMethodValue.Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string);
+constructor TGocciaMethodValue.Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
 begin
   inherited Create(AParameters, ABody, AClosure, AName);
+  FSuperClass := ASuperClass;
 end;
 
 function TGocciaMethodValue.ToString: string;
@@ -203,6 +207,7 @@ function TGocciaFunctionInvocation.Execute: TGocciaValue;
 var
   I: Integer;
   ReturnValue: TGocciaValue;
+  Method: TGocciaMethodValue;
 begin
   Logger.Debug('FunctionInvocation.Execute: Entering');
   Logger.Debug('  Function type: %s', [FFunction.ClassName]);
@@ -211,6 +216,18 @@ begin
 
   // Set up the call scope
   FCallScope.ThisValue := FThisValue;
+
+  // If this is a method with a superclass, set up super handling
+  if FFunction is TGocciaMethodValue then
+  begin
+    Method := TGocciaMethodValue(FFunction);
+    if Assigned(Method.SuperClass) and not (Method.SuperClass is TGocciaUndefinedValue) then
+    begin
+      Logger.Debug('FunctionInvocation.Execute: Method has superclass: %s', [Method.SuperClass.ToString]);
+      // Set up special 'super' binding in the method scope
+      FCallScope.SetValue('__super__', Method.SuperClass);
+    end;
+  end;
 
   // Bind parameters
   for I := 0 to FFunction.Parameters.Count - 1 do

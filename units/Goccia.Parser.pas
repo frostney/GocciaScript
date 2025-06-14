@@ -380,6 +380,11 @@ begin
     Token := Previous;
     Result := TGocciaThisExpression.Create(Token.Line, Token.Column);
   end
+  else if Match([gttSuper]) then
+  begin
+    Token := Previous;
+    Result := TGocciaSuperExpression.Create(Token.Line, Token.Column);
+  end
   else if Match([gttNew]) then
   begin
     Token := Previous;
