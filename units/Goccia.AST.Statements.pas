@@ -98,24 +98,43 @@ type
     property IsStatic: Boolean read FIsStatic;
   end;
 
-  TGocciaClassDeclaration = class(TGocciaStatement)
-  private
+  // Shared class definition structure
+  TGocciaClassDefinition = class
+  public
     FName: string;
     FSuperClass: string;
     FMethods: TDictionary<string, TGocciaClassMethod>;
     FStaticProperties: TDictionary<string, TGocciaExpression>;
     FInstanceProperties: TDictionary<string, TGocciaExpression>;
-  public
+
     constructor Create(const AName, ASuperClass: string;
       AMethods: TDictionary<string, TGocciaClassMethod>;
       AStaticProperties: TDictionary<string, TGocciaExpression>;
-      AInstanceProperties: TDictionary<string, TGocciaExpression>;
-      ALine, AColumn: Integer);
+      AInstanceProperties: TDictionary<string, TGocciaExpression>);
+    destructor Destroy; override;
     property Name: string read FName;
     property SuperClass: string read FSuperClass;
     property Methods: TDictionary<string, TGocciaClassMethod> read FMethods;
     property StaticProperties: TDictionary<string, TGocciaExpression> read FStaticProperties;
     property InstanceProperties: TDictionary<string, TGocciaExpression> read FInstanceProperties;
+  end;
+
+  TGocciaClassDeclaration = class(TGocciaStatement)
+  private
+    FClassDefinition: TGocciaClassDefinition;
+  public
+    constructor Create(AClassDefinition: TGocciaClassDefinition; ALine, AColumn: Integer);
+    destructor Destroy; override;
+    property ClassDefinition: TGocciaClassDefinition read FClassDefinition;
+  end;
+
+  TGocciaClassExpression = class(TGocciaExpression)
+  private
+    FClassDefinition: TGocciaClassDefinition;
+  public
+    constructor Create(AClassDefinition: TGocciaClassDefinition; ALine, AColumn: Integer);
+    destructor Destroy; override;
+    property ClassDefinition: TGocciaClassDefinition read FClassDefinition;
   end;
 
   // Modules
@@ -168,6 +187,28 @@ implementation
   begin
     inherited Create(ALine, AColumn);
     FNodes := ANodes;
+  end;
+
+  { TGocciaClassDefinition }
+
+  constructor TGocciaClassDefinition.Create(const AName, ASuperClass: string;
+    AMethods: TDictionary<string, TGocciaClassMethod>;
+    AStaticProperties: TDictionary<string, TGocciaExpression>;
+    AInstanceProperties: TDictionary<string, TGocciaExpression>);
+  begin
+    FName := AName;
+    FSuperClass := ASuperClass;
+    FMethods := AMethods;
+    FStaticProperties := AStaticProperties;
+    FInstanceProperties := AInstanceProperties;
+  end;
+
+  destructor TGocciaClassDefinition.Destroy;
+  begin
+    FMethods.Free;
+    FStaticProperties.Free;
+    FInstanceProperties.Free;
+    inherited;
   end;
 
   { TGocciaIfStatement }
@@ -229,18 +270,30 @@ implementation
 
   { TGocciaClassDeclaration }
 
-  constructor TGocciaClassDeclaration.Create(const AName, ASuperClass: string;
-    AMethods: TDictionary<string, TGocciaClassMethod>;
-    AStaticProperties: TDictionary<string, TGocciaExpression>;
-    AInstanceProperties: TDictionary<string, TGocciaExpression>;
-    ALine, AColumn: Integer);
+  constructor TGocciaClassDeclaration.Create(AClassDefinition: TGocciaClassDefinition; ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
-    FName := AName;
-    FSuperClass := ASuperClass;
-    FMethods := AMethods;
-    FStaticProperties := AStaticProperties;
-    FInstanceProperties := AInstanceProperties;
+    FClassDefinition := AClassDefinition;
+  end;
+
+  destructor TGocciaClassDeclaration.Destroy;
+  begin
+    FClassDefinition.Free;
+    inherited;
+  end;
+
+  { TGocciaClassExpression }
+
+  constructor TGocciaClassExpression.Create(AClassDefinition: TGocciaClassDefinition; ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FClassDefinition := AClassDefinition;
+  end;
+
+  destructor TGocciaClassExpression.Destroy;
+  begin
+    FClassDefinition.Free;
+    inherited;
   end;
 
   { TGocciaImportDeclaration }

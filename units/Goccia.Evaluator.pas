@@ -28,6 +28,8 @@ function EvaluateBlock(BlockStatement: TGocciaBlockStatement; Context: TGocciaEv
 function EvaluateIf(IfStatement: TGocciaIfStatement; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateClassMethod(ClassMethod: TGocciaClassMethod; Context: TGocciaEvaluationContext; SuperClass: TGocciaValue = nil): TGocciaValue;
 function EvaluateClass(ClassDeclaration: TGocciaClassDeclaration; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateClassExpression(ClassExpression: TGocciaClassExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateClassDefinition(ClassDef: TGocciaClassDefinition; Context: TGocciaEvaluationContext; Line, Column: Integer): TGocciaClassValue;
 function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 
@@ -333,8 +335,13 @@ begin
   end
   else if Expression is TGocciaThisExpression then
   begin
-    // Handle this expression
+    Logger.Debug('EvaluateExpression: Handling TGocciaThisExpression');
     Result := Context.Scope.ThisValue;
+  end
+  else if Expression is TGocciaClassExpression then
+  begin
+    Logger.Debug('EvaluateExpression: Handling TGocciaClassExpression');
+    Result := EvaluateClassExpression(TGocciaClassExpression(Expression), Context);
   end
   else if Expression is TGocciaSuperExpression then
   begin
@@ -861,57 +868,13 @@ end;
 
 function EvaluateClass(ClassDeclaration: TGocciaClassDeclaration; Context: TGocciaEvaluationContext): TGocciaValue;
 var
-  SuperClass: TGocciaClassValue;
-  ClassValue: TGocciaClassValue;
-  MethodPair: TPair<string, TGocciaClassMethod>;
-  PropertyPair: TPair<string, TGocciaExpression>;
-  Method: TGocciaMethodValue;
-  PropertyValue: TGocciaValue;
+  ClassDef: TGocciaClassDefinition;
 begin
-  SuperClass := nil;
-  if ClassDeclaration.SuperClass <> '' then
-  begin
-    SuperClass := TGocciaClassValue(Context.Scope.GetValue(ClassDeclaration.SuperClass));
-    if SuperClass = nil then
-      Context.OnError(Format('Superclass "%s" not found', [ClassDeclaration.SuperClass]), ClassDeclaration.Line, ClassDeclaration.Column);
-  end;
+  ClassDef := ClassDeclaration.ClassDefinition;
+  Result := EvaluateClassDefinition(ClassDef, Context, ClassDeclaration.Line, ClassDeclaration.Column);
 
-  ClassValue := TGocciaClassValue.Create(ClassDeclaration.Name, SuperClass);
-
-  // Handle methods
-  for MethodPair in ClassDeclaration.Methods do
-  begin
-    // Pass superclass directly to method creation - much cleaner!
-    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, Context, SuperClass));
-
-    if MethodPair.Value.IsStatic then
-    begin
-      // Static methods are added as properties on the class constructor itself
-      ClassValue.SetProperty(MethodPair.Key, Method);
-    end
-    else
-    begin
-      // Instance methods are added to the class prototype
-      ClassValue.AddMethod(MethodPair.Key, Method);
-    end;
-  end;
-
-  // Handle static properties
-  for PropertyPair in ClassDeclaration.StaticProperties do
-  begin
-    // Evaluate the property value and set it on the class constructor
-    PropertyValue := EvaluateExpression(PropertyPair.Value, Context);
-    ClassValue.SetProperty(PropertyPair.Key, PropertyValue);
-  end;
-
-  // Store instance property definitions on the class (they will be evaluated during instantiation)
-  for PropertyPair in ClassDeclaration.InstanceProperties do
-  begin
-    ClassValue.AddInstanceProperty(PropertyPair.Key, PropertyPair.Value);
-  end;
-
-  Context.Scope.SetValue(ClassDeclaration.Name, ClassValue);
-  Result := ClassValue;
+  // For class declarations, bind the class name to the scope
+  Context.Scope.SetValue(ClassDef.Name, Result);
 end;
 
 procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
@@ -988,6 +951,80 @@ begin
   finally
     Arguments.Free;
   end;
+end;
+
+function EvaluateClassExpression(ClassExpression: TGocciaClassExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  ClassDef: TGocciaClassDefinition;
+begin
+  ClassDef := ClassExpression.ClassDefinition;
+  Result := EvaluateClassDefinition(ClassDef, Context, ClassExpression.Line, ClassExpression.Column);
+
+  // For class expressions, don't automatically bind to scope - just return the class value
+  // If it's a named class expression, the name is only visible inside the class methods
+end;
+
+function EvaluateClassDefinition(ClassDef: TGocciaClassDefinition; Context: TGocciaEvaluationContext; Line, Column: Integer): TGocciaClassValue;
+var
+  SuperClass: TGocciaClassValue;
+  ClassValue: TGocciaClassValue;
+  MethodPair: TPair<string, TGocciaClassMethod>;
+  PropertyPair: TPair<string, TGocciaExpression>;
+  Method: TGocciaMethodValue;
+  PropertyValue: TGocciaValue;
+  ClassName: string;
+begin
+  SuperClass := nil;
+  if ClassDef.SuperClass <> '' then
+  begin
+    SuperClass := TGocciaClassValue(Context.Scope.GetValue(ClassDef.SuperClass));
+    if SuperClass = nil then
+      Context.OnError(Format('Superclass "%s" not found', [ClassDef.SuperClass]), Line, Column);
+  end;
+
+  // Use the class name if provided, otherwise create an anonymous class
+  if ClassDef.Name <> '' then
+    ClassName := ClassDef.Name
+  else
+    ClassName := '<anonymous>';
+
+  ClassValue := TGocciaClassValue.Create(ClassName, SuperClass);
+
+  // Handle methods
+  for MethodPair in ClassDef.Methods do
+  begin
+    // Pass superclass directly to method creation
+    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, Context, SuperClass));
+
+    if MethodPair.Value.IsStatic then
+    begin
+      // Static methods are added as properties on the class constructor itself
+      ClassValue.SetProperty(MethodPair.Key, Method);
+    end
+    else
+    begin
+      // Instance methods are added to the class prototype
+      ClassValue.AddMethod(MethodPair.Key, Method);
+    end;
+  end;
+
+  // Handle static properties
+  for PropertyPair in ClassDef.StaticProperties do
+  begin
+    // Evaluate the property value and set it on the class constructor
+    PropertyValue := EvaluateExpression(PropertyPair.Value, Context);
+    ClassValue.SetProperty(PropertyPair.Key, PropertyValue);
+  end;
+
+  // Store instance property definitions on the class (they will be evaluated during instantiation)
+  for PropertyPair in ClassDef.InstanceProperties do
+  begin
+    ClassValue.AddInstanceProperty(PropertyPair.Key, PropertyPair.Value);
+  end;
+
+  // For class expressions, don't automatically bind to scope - just return the class value
+  // If it's a named class expression, the name is only visible inside the class methods
+  Result := ClassValue;
 end;
 
 end.

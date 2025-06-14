@@ -43,6 +43,7 @@ type
     function ObjectLiteral: TGocciaExpression;
     function ArrowFunction: TGocciaExpression;
     function Assignment: TGocciaExpression;
+    function ClassExpression: TGocciaExpression;
 
     // Statement parsing
     // TODO: Make these types more strict
@@ -58,6 +59,7 @@ type
     function ClassDeclaration: TGocciaStatement;
     function ImportDeclaration: TGocciaStatement;
     function ExportDeclaration: TGocciaStatement;
+    function ParseClassBody(const ClassName: string): TGocciaClassDefinition;
   public
     constructor Create(ATokens: TObjectList<TGocciaToken>;
       const AFileName: string; ASourceLines: TStringList);
@@ -413,6 +415,11 @@ begin
     Token := Previous;
     Result := TGocciaSuperExpression.Create(Token.Line, Token.Column);
   end
+  else if Match([gttClass]) then
+  begin
+    Token := Previous;
+    Result := ClassExpression;
+  end
   else if Match([gttNew]) then
   begin
     Token := Previous;
@@ -586,6 +593,25 @@ begin
   end
   else
     Result := Left;
+end;
+
+function TGocciaParser.ClassExpression: TGocciaExpression;
+var
+  Name: string;
+  ClassDef: TGocciaClassDefinition;
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  // Class name is optional in class expressions
+  if Check(gttIdentifier) then
+    Name := Advance.Lexeme
+  else
+    Name := ''; // Anonymous class
+
+  ClassDef := ParseClassBody(Name);
+  Result := TGocciaClassExpression.Create(ClassDef, Line, Column);
 end;
 
 function TGocciaParser.Statement: TGocciaStatement;
@@ -824,63 +850,16 @@ end;
 
 function TGocciaParser.ClassDeclaration: TGocciaStatement;
 var
-  Name, SuperClass: string;
-  Methods: TDictionary<string, TGocciaClassMethod>;
-  StaticProperties: TDictionary<string, TGocciaExpression>;
-  InstanceProperties: TDictionary<string, TGocciaExpression>;
-  MemberName: string;
-  Method: TGocciaClassMethod;
-  PropertyValue: TGocciaExpression;
-  IsStatic: Boolean;
+  Name: string;
+  ClassDef: TGocciaClassDefinition;
   Line, Column: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
   Name := Consume(gttIdentifier, 'Expected class name').Lexeme;
-
-  if Match([gttExtends]) then
-    SuperClass := Consume(gttIdentifier, 'Expected superclass name').Lexeme
-  else
-    SuperClass := '';
-
-  Consume(gttLeftBrace, 'Expected "{" before class body');
-
-  Methods := TDictionary<string, TGocciaClassMethod>.Create;
-  StaticProperties := TDictionary<string, TGocciaExpression>.Create;
-  InstanceProperties := TDictionary<string, TGocciaExpression>.Create;
-
-  while not Check(gttRightBrace) and not IsAtEnd do
-  begin
-    IsStatic := Match([gttStatic]);
-    MemberName := Consume(gttIdentifier, 'Expected method or property name').Lexeme;
-
-    if Check(gttAssign) then
-    begin
-      // Property: [static] name = value
-      Consume(gttAssign, 'Expected "=" in property');
-      PropertyValue := Expression;
-      Consume(gttSemicolon, 'Expected ";" after property');
-
-      if IsStatic then
-        StaticProperties.Add(MemberName, PropertyValue)
-      else
-        InstanceProperties.Add(MemberName, PropertyValue);
-    end
-    else if Check(gttLeftParen) then
-    begin
-      // Method: [static] name() { ... }
-      Method := ClassMethod(IsStatic);
-      Method.Name := MemberName; // Set the method name
-      Methods.Add(MemberName, Method);
-    end
-    else
-      raise TGocciaSyntaxError.Create('Expected "(" for method or "=" for property',
-        Peek.Line, Peek.Column, FFileName, FSourceLines);
-  end;
-
-  Consume(gttRightBrace, 'Expected "}" after class body');
-  Result := TGocciaClassDeclaration.Create(Name, SuperClass, Methods, StaticProperties, InstanceProperties, Line, Column);
+  ClassDef := ParseClassBody(Name);
+  Result := TGocciaClassDeclaration.Create(ClassDef, Line, Column);
 end;
 
 function TGocciaParser.ImportDeclaration: TGocciaStatement;
@@ -951,6 +930,61 @@ begin
   Consume(gttSemicolon, 'Expected ";" after export declaration');
 
   Result := TGocciaExportDeclaration.Create(ExportsTable, Line, Column);
+end;
+
+function TGocciaParser.ParseClassBody(const ClassName: string): TGocciaClassDefinition;
+var
+  SuperClass: string;
+  Methods: TDictionary<string, TGocciaClassMethod>;
+  StaticProperties: TDictionary<string, TGocciaExpression>;
+  InstanceProperties: TDictionary<string, TGocciaExpression>;
+  MemberName: string;
+  Method: TGocciaClassMethod;
+  PropertyValue: TGocciaExpression;
+  IsStatic: Boolean;
+begin
+  if Match([gttExtends]) then
+    SuperClass := Consume(gttIdentifier, 'Expected superclass name').Lexeme
+  else
+    SuperClass := '';
+
+  Consume(gttLeftBrace, 'Expected "{" before class body');
+
+  Methods := TDictionary<string, TGocciaClassMethod>.Create;
+  StaticProperties := TDictionary<string, TGocciaExpression>.Create;
+  InstanceProperties := TDictionary<string, TGocciaExpression>.Create;
+
+  while not Check(gttRightBrace) and not IsAtEnd do
+  begin
+    IsStatic := Match([gttStatic]);
+    MemberName := Consume(gttIdentifier, 'Expected method or property name').Lexeme;
+
+    if Check(gttAssign) then
+    begin
+      // Property: [static] name = value
+      Consume(gttAssign, 'Expected "=" in property');
+      PropertyValue := Expression;
+      Consume(gttSemicolon, 'Expected ";" after property');
+
+      if IsStatic then
+        StaticProperties.Add(MemberName, PropertyValue)
+      else
+        InstanceProperties.Add(MemberName, PropertyValue);
+    end
+    else if Check(gttLeftParen) then
+    begin
+      // Method: [static] name() { ... }
+      Method := ClassMethod(IsStatic);
+      Method.Name := MemberName; // Set the method name
+      Methods.Add(MemberName, Method);
+    end
+    else
+      raise TGocciaSyntaxError.Create('Expected "(" for method or "=" for property',
+        Peek.Line, Peek.Column, FFileName, FSourceLines);
+  end;
+
+  Consume(gttRightBrace, 'Expected "}" after class body');
+  Result := TGocciaClassDefinition.Create(ClassName, SuperClass, Methods, StaticProperties, InstanceProperties);
 end;
 
 function TGocciaParser.Parse: TGocciaProgram;
