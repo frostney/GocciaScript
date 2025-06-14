@@ -19,6 +19,8 @@ type
     function MathMin(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function MathPow(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function MathSqrt(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function MathRandom(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function MathClamp(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
   end;
@@ -140,7 +142,7 @@ function TGocciaMath.MathClamp(Args: TObjectList<TGocciaValue>; ThisValue: TGocc
 begin
   if Args.Count <> 3 then
     ThrowError('Math.clamp expects exactly 3 arguments', 0, 0);
-  Result := TGocciaNumberValue.Create(Clamp(Args[0].ToNumber, Args[1].ToNumber, Args[2].ToNumber));
+  Result := TGocciaNumberValue.Create(Min(Max(Args[0].ToNumber, Args[1].ToNumber), Args[2].ToNumber));
 end;
 
 end.
