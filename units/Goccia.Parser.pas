@@ -546,7 +546,7 @@ var
   Operator: TGocciaTokenType;
 begin
   Left := Conditional;
-  if Match([gttAssign, gttPlusAssign, gttMinusAssign]) then
+  if Match([gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign]) then
   begin
     Operator := Previous.TokenType;
     Line := Previous.Line;

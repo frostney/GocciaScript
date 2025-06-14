@@ -282,11 +282,26 @@ begin
         AddToken(gttMinus);
     '*':
       if Match('*') then
-        AddToken(gttPower)
+      begin
+        if Match('=') then
+          AddToken(gttPowerAssign)
+        else
+          AddToken(gttPower);
+      end
+      else if Match('=') then
+        AddToken(gttStarAssign)
       else
         AddToken(gttStar);
-    '/': AddToken(gttSlash);
-    '%': AddToken(gttPercent);
+    '/':
+      if Match('=') then
+        AddToken(gttSlashAssign)
+      else
+        AddToken(gttSlash);
+    '%':
+      if Match('=') then
+        AddToken(gttPercentAssign)
+      else
+        AddToken(gttPercent);
     '!':
       if Match('=') then
       begin

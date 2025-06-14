@@ -134,6 +134,20 @@ begin
         end;
       gttMinusAssign:
         Result := TGocciaNumberValue.Create(Result.ToNumber - Value.ToNumber);
+      gttStarAssign:
+        Result := TGocciaNumberValue.Create(Result.ToNumber * Value.ToNumber);
+      gttSlashAssign:
+        begin
+          if Value.ToNumber = 0 then
+            Result := TGocciaNumberValue.Create(Infinity)
+          else
+            Result := TGocciaNumberValue.Create(Result.ToNumber / Value.ToNumber);
+        end;
+      gttPercentAssign:
+        Result := TGocciaNumberValue.Create(
+          Trunc(Result.ToNumber) mod Trunc(Value.ToNumber));
+      gttPowerAssign:
+        Result := TGocciaNumberValue.Create(Power(Result.ToNumber, Value.ToNumber));
     end;
 
     Context.Scope.Assign(TGocciaCompoundAssignmentExpression(Expression).Name, Result);
@@ -170,6 +184,20 @@ begin
         end;
       gttMinusAssign:
         Result := TGocciaNumberValue.Create(Result.ToNumber - Value.ToNumber);
+      gttStarAssign:
+        Result := TGocciaNumberValue.Create(Result.ToNumber * Value.ToNumber);
+      gttSlashAssign:
+        begin
+          if Value.ToNumber = 0 then
+            Result := TGocciaNumberValue.Create(Infinity)
+          else
+            Result := TGocciaNumberValue.Create(Result.ToNumber / Value.ToNumber);
+        end;
+      gttPercentAssign:
+        Result := TGocciaNumberValue.Create(
+          Trunc(Result.ToNumber) mod Trunc(Value.ToNumber));
+      gttPowerAssign:
+        Result := TGocciaNumberValue.Create(Power(Result.ToNumber, Value.ToNumber));
     end;
 
     // Set the new value
