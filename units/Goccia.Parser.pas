@@ -515,28 +515,43 @@ function TGocciaParser.Assignment: TGocciaExpression;
 var
   Left, Right: TGocciaExpression;
   Line, Column: Integer;
+  Operator: TGocciaTokenType;
 begin
   Left := Conditional;
-  if Match([gttAssign]) then
+  if Match([gttAssign, gttPlusAssign, gttMinusAssign]) then
   begin
+    Operator := Previous.TokenType;
     Line := Previous.Line;
     Column := Previous.Column;
+    Right := Assignment;
+
     // Only allow assignment to identifier or member expression
     if Left is TGocciaIdentifierExpression then
     begin
-      Right := Assignment;
-      Result := TGocciaAssignmentExpression.Create(TGocciaIdentifierExpression(Left).Name, Right, Line, Column);
+      if Operator = gttAssign then
+        Result := TGocciaAssignmentExpression.Create(TGocciaIdentifierExpression(Left).Name, Right, Line, Column)
+      else
+        Result := TGocciaCompoundAssignmentExpression.Create(TGocciaIdentifierExpression(Left).Name, Operator, Right, Line, Column);
     end
     else if Left is TGocciaMemberExpression then
     begin
-      Right := Assignment;
-      Result := TGocciaPropertyAssignmentExpression.Create(
-        TGocciaMemberExpression(Left).ObjectExpr,
-        TGocciaMemberExpression(Left).PropertyName,
-        Right,
-        Line,
-        Column
-      );
+      if Operator = gttAssign then
+        Result := TGocciaPropertyAssignmentExpression.Create(
+          TGocciaMemberExpression(Left).ObjectExpr,
+          TGocciaMemberExpression(Left).PropertyName,
+          Right,
+          Line,
+          Column
+        )
+      else
+        Result := TGocciaPropertyCompoundAssignmentExpression.Create(
+          TGocciaMemberExpression(Left).ObjectExpr,
+          TGocciaMemberExpression(Left).PropertyName,
+          Operator,
+          Right,
+          Line,
+          Column
+        );
     end
     else
       raise TGocciaSyntaxError.Create('Invalid assignment target', Left.Line, Left.Column, FFileName, FSourceLines);

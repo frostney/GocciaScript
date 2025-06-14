@@ -70,6 +70,32 @@ type
     property Value: TGocciaExpression read FValue;
   end;
 
+  TGocciaCompoundAssignmentExpression = class(TGocciaExpression)
+  private
+    FName: string;
+    FOperator: TGocciaTokenType;
+    FValue: TGocciaExpression;
+  public
+    constructor Create(const AName: string; AOperator: TGocciaTokenType; AValue: TGocciaExpression; ALine, AColumn: Integer);
+    property Name: string read FName;
+    property Operator: TGocciaTokenType read FOperator;
+    property Value: TGocciaExpression read FValue;
+  end;
+
+  TGocciaPropertyCompoundAssignmentExpression = class(TGocciaExpression)
+  private
+    FObject: TGocciaExpression;
+    FPropertyName: string;
+    FOperator: TGocciaTokenType;
+    FValue: TGocciaExpression;
+  public
+    constructor Create(AObject: TGocciaExpression; const APropertyName: string; AOperator: TGocciaTokenType; AValue: TGocciaExpression; ALine, AColumn: Integer);
+    property ObjectExpr: TGocciaExpression read FObject;
+    property PropertyName: string read FPropertyName;
+    property Operator: TGocciaTokenType read FOperator;
+    property Value: TGocciaExpression read FValue;
+  end;
+
   TGocciaCallExpression = class(TGocciaExpression)
   private
     FCallee: TGocciaExpression;
@@ -212,6 +238,27 @@ begin
   inherited Create(ALine, AColumn);
   FObject := AObject;
   FPropertyName := APropertyName;
+  FValue := AValue;
+end;
+
+{ TGocciaCompoundAssignmentExpression }
+
+constructor TGocciaCompoundAssignmentExpression.Create(const AName: string; AOperator: TGocciaTokenType; AValue: TGocciaExpression; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FName := AName;
+  FOperator := AOperator;
+  FValue := AValue;
+end;
+
+{ TGocciaPropertyCompoundAssignmentExpression }
+
+constructor TGocciaPropertyCompoundAssignmentExpression.Create(AObject: TGocciaExpression; const APropertyName: string; AOperator: TGocciaTokenType; AValue: TGocciaExpression; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FObject := AObject;
+  FPropertyName := APropertyName;
+  FOperator := AOperator;
   FValue := AValue;
 end;
 

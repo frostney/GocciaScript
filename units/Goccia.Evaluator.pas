@@ -114,6 +114,72 @@ begin
     else
       Context.OnError('Cannot set property on non-object', Expression.Line, Expression.Column);
   end
+  else if Expression is TGocciaCompoundAssignmentExpression then
+  begin
+    // Variable compound assignment (e.g., count += 5)
+    Result := Context.Scope.GetValue(TGocciaCompoundAssignmentExpression(Expression).Name);
+    if Result = nil then
+      Context.OnError(Format('Undefined variable: %s',
+        [TGocciaCompoundAssignmentExpression(Expression).Name]), Expression.Line, Expression.Column);
+
+    Value := EvaluateExpression(TGocciaCompoundAssignmentExpression(Expression).Value, Context);
+
+    case TGocciaCompoundAssignmentExpression(Expression).Operator of
+      gttPlusAssign:
+        begin
+          if (Result is TGocciaStringValue) or (Value is TGocciaStringValue) then
+            Result := TGocciaStringValue.Create(Result.ToString + Value.ToString)
+          else
+            Result := TGocciaNumberValue.Create(Result.ToNumber + Value.ToNumber);
+        end;
+      gttMinusAssign:
+        Result := TGocciaNumberValue.Create(Result.ToNumber - Value.ToNumber);
+    end;
+
+    Context.Scope.Assign(TGocciaCompoundAssignmentExpression(Expression).Name, Result);
+  end
+  else if Expression is TGocciaPropertyCompoundAssignmentExpression then
+  begin
+    // Property compound assignment (e.g., obj.count += 5)
+    Obj := EvaluateExpression(TGocciaPropertyCompoundAssignmentExpression(Expression).ObjectExpr, Context);
+    Value := EvaluateExpression(TGocciaPropertyCompoundAssignmentExpression(Expression).Value, Context);
+    PropName := TGocciaPropertyCompoundAssignmentExpression(Expression).PropertyName;
+
+    // Get current property value
+    if (Obj is TGocciaInstanceValue) then
+      Result := TGocciaInstanceValue(Obj).GetProperty(PropName)
+    else if (Obj is TGocciaObjectValue) then
+      Result := TGocciaObjectValue(Obj).GetProperty(PropName)
+    else if (Obj is TGocciaClassValue) then
+      Result := TGocciaClassValue(Obj).GetProperty(PropName)
+    else
+    begin
+      Context.OnError('Cannot access property on non-object', Expression.Line, Expression.Column);
+      Result := TGocciaUndefinedValue.Create;
+      Exit;
+    end;
+
+    // Perform compound operation
+    case TGocciaPropertyCompoundAssignmentExpression(Expression).Operator of
+      gttPlusAssign:
+        begin
+          if (Result is TGocciaStringValue) or (Value is TGocciaStringValue) then
+            Result := TGocciaStringValue.Create(Result.ToString + Value.ToString)
+          else
+            Result := TGocciaNumberValue.Create(Result.ToNumber + Value.ToNumber);
+        end;
+      gttMinusAssign:
+        Result := TGocciaNumberValue.Create(Result.ToNumber - Value.ToNumber);
+    end;
+
+    // Set the new value
+    if (Obj is TGocciaInstanceValue) then
+      TGocciaInstanceValue(Obj).SetProperty(PropName, Result)
+    else if (Obj is TGocciaObjectValue) then
+      TGocciaObjectValue(Obj).SetProperty(PropName, Result)
+    else if (Obj is TGocciaClassValue) then
+      TGocciaClassValue(Obj).SetProperty(PropName, Result);
+  end
   else if Expression is TGocciaCallExpression then
   begin
     Logger.Debug('EvaluateExpression: TGocciaCallExpression - before EvaluateCall');
