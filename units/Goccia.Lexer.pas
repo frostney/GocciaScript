@@ -238,6 +238,7 @@ begin
   else if Text = 'from' then AddToken(gttFrom, Text)
   else if Text = 'as' then AddToken(gttAs, Text)
   else if Text = 'typeof' then AddToken(gttTypeof, Text)
+  else if Text = 'instanceof' then AddToken(gttInstanceof, Text)
   else if Text = 'true' then AddToken(gttTrue, Text)
   else if Text = 'false' then AddToken(gttFalse, Text)
   else if Text = 'null' then AddToken(gttNull, Text)

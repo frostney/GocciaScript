@@ -52,11 +52,16 @@ console.log(animal.speak());
 const dog = new Dog("Rex");
 console.log(dog.speak());
 
-const printObject = (obj) => {
-  return Object.keys(obj)
+const isDog = dog instanceof Dog;
+console.log("dog instanceof Dog =", isDog);
+
+const isAnimal = dog instanceof Animal;
+console.log("dog instanceof Animal =", isAnimal);
+
+const printObject = (obj) =>
+  Object.keys(obj)
     .map((key) => key + ": " + obj[key])
     .join(", ");
-};
 
 // Math operations
 console.log("Math.sqrt(16) =", Math.sqrt(16));

@@ -34,6 +34,7 @@ type
     procedure RegisterGlobalArray;
     procedure RegisterObjectMethods;
     procedure RegisterGlobals;
+    procedure RegisterBuiltinConstructors;
 
     // Helper methods
     procedure ThrowError(const Message: string; Line, Column: Integer);
@@ -135,6 +136,7 @@ begin
   RegisterObjectMethods;
   RegisterGlobalArray;
   RegisterGlobals;
+  RegisterBuiltinConstructors;
 end;
 
 procedure TGocciaInterpreter.RegisterConsole;
@@ -168,6 +170,49 @@ begin
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', FGlobalScope, ThrowError);
 end;
 
+procedure TGocciaInterpreter.RegisterBuiltinConstructors;
+var
+  ArrayConstructor, ObjectConstructor, StringConstructor, NumberConstructor, BooleanConstructor: TGocciaClassValue;
+  ExistingArray, ExistingObject: TGocciaValue;
+  ArrayObj, ObjectObj: TGocciaObjectValue;
+  Key: string;
+begin
+  // Get existing built-in objects that have static methods
+  ExistingArray := FGlobalScope.GetValue('Array');
+  ExistingObject := FGlobalScope.GetValue('Object');
+
+    // Create Array constructor and copy static methods
+  ArrayConstructor := TGocciaClassValue.Create('Array', nil);
+  if (ExistingArray is TGocciaObjectValue) then
+  begin
+    ArrayObj := TGocciaObjectValue(ExistingArray);
+    // Copy all static methods from existing Array object
+    for Key in ArrayObj.Properties.Keys do
+      ArrayConstructor.SetProperty(Key, ArrayObj.Properties[Key]);
+  end;
+  FGlobalScope.SetValue('Array', ArrayConstructor);
+
+  // Create Object constructor and copy static methods
+  ObjectConstructor := TGocciaClassValue.Create('Object', nil);
+  if (ExistingObject is TGocciaObjectValue) then
+  begin
+    ObjectObj := TGocciaObjectValue(ExistingObject);
+    // Copy all static methods from existing Object
+    for Key in ObjectObj.Properties.Keys do
+      ObjectConstructor.SetProperty(Key, ObjectObj.Properties[Key]);
+  end;
+  FGlobalScope.SetValue('Object', ObjectConstructor);
+
+  // Create other constructors
+  StringConstructor := TGocciaClassValue.Create('String', nil);
+  FGlobalScope.SetValue('String', StringConstructor);
+
+  NumberConstructor := TGocciaClassValue.Create('Number', nil);
+  FGlobalScope.SetValue('Number', NumberConstructor);
+
+  BooleanConstructor := TGocciaClassValue.Create('Boolean', nil);
+  FGlobalScope.SetValue('Boolean', BooleanConstructor);
+end;
 
 function TGocciaInterpreter.CreateEvaluationContext: TGocciaEvaluationContext;
 begin

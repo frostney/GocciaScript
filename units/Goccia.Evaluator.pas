@@ -334,6 +334,30 @@ begin
       Result := TGocciaBooleanValue.Create(Left.ToNumber <= Right.ToNumber);
     gttGreaterEqual:
       Result := TGocciaBooleanValue.Create(Left.ToNumber >= Right.ToNumber);
+    gttInstanceof:
+      begin
+        // Implement instanceof operator according to JavaScript specification
+        Logger.Debug('EvaluateBinary: instanceof operator called with Left: %s, Right: %s', [Left.ToString, Right.ToString]);
+
+        // Right operand must be a constructor/class
+        if not (Right is TGocciaClassValue) then
+        begin
+          // For built-in types, we need special handling
+          Result := TGocciaBooleanValue.Create(False); // Default to false for now
+        end
+        else
+        begin
+          // Check if Left is an instance of the Right class
+          if Left is TGocciaInstanceValue then
+            Result := TGocciaBooleanValue.Create(TGocciaInstanceValue(Left).IsInstanceOf(TGocciaClassValue(Right)))
+          else if (Left is TGocciaArrayValue) and (TGocciaClassValue(Right).Name = 'Array') then
+            Result := TGocciaBooleanValue.Create(True)
+          else if (Left is TGocciaObjectValue) and (TGocciaClassValue(Right).Name = 'Object') then
+            Result := TGocciaBooleanValue.Create(True)
+          else
+            Result := TGocciaBooleanValue.Create(False);
+        end;
+      end;
     gttAnd:
       if not Left.ToBoolean then
         Result := Left
@@ -437,6 +461,12 @@ begin
     Result := TGocciaArrayValue(Obj).GetProperty(PropertyName);
     Logger.Debug('EvaluateMember: Result: %s', [Result.ToString]);
   end
+  else if Obj is TGocciaClassValue then
+  begin
+    Logger.Debug('EvaluateMember: Obj is TGocciaClassValue');
+    Result := TGocciaClassValue(Obj).GetProperty(PropertyName);
+    Logger.Debug('EvaluateMember: Result: %s', [Result.ToString]);
+  end
   else if Obj is TGocciaObjectValue then
   begin
     Logger.Debug('EvaluateMember: Obj is TGocciaObjectValue');
@@ -445,7 +475,7 @@ begin
   end
   else
   begin
-    Logger.Debug('EvaluateMember: Obj is not TGocciaObjectValue or TGocciaArrayValue');
+    Logger.Debug('EvaluateMember: Obj is not a supported object type');
     Result := TGocciaUndefinedValue.Create;
   end;
   Logger.Debug('EvaluateMember: Returning result type: %s', [Result.ClassName]);

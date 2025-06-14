@@ -209,7 +209,7 @@ var
 begin
   Result := Addition;
 
-  while Match([gttGreater, gttGreaterEqual, gttLess, gttLessEqual]) do
+  while Match([gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof]) do
   begin
     Operator := Previous;
     Right := Addition;

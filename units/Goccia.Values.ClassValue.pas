@@ -19,6 +19,7 @@ type
     FMethods: TDictionary<string, TGocciaMethodValue>;
     FPrototype: TGocciaObjectValue;
     FConstructorMethod: TGocciaMethodValue;
+    FStaticMethods: TDictionary<string, TGocciaValue>; // For static methods like Array.isArray
   public
     constructor Create(const AName: string; ASuperClass: TGocciaClassValue);
     destructor Destroy; override;
@@ -29,6 +30,8 @@ type
     procedure AddMethod(const AName: string; AMethod: TGocciaMethodValue);
     function GetMethod(const AName: string): TGocciaMethodValue;
     function Instantiate(Arguments: TObjectList<TGocciaValue>): TGocciaValue;
+    function GetProperty(const AName: string): TGocciaValue;
+    procedure SetProperty(const AName: string; AValue: TGocciaValue);
     property Name: string read FName;
     property SuperClass: TGocciaClassValue read FSuperClass;
     property Prototype: TGocciaObjectValue read FPrototype;
@@ -45,6 +48,7 @@ type
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
+    function IsInstanceOf(AClass: TGocciaClassValue): Boolean;
     property ClassValue: TGocciaClassValue read FClass;
     property Prototype: TGocciaObjectValue read FPrototype write SetPrototype;
   end;
@@ -56,6 +60,7 @@ begin
   FName := AName;
   FSuperClass := ASuperClass;
   FMethods := TDictionary<string, TGocciaMethodValue>.Create;
+  FStaticMethods := TDictionary<string, TGocciaValue>.Create;
   FPrototype := TGocciaObjectValue.Create;
   FConstructorMethod := nil;
   if Assigned(FSuperClass) then
@@ -65,6 +70,7 @@ end;
 destructor TGocciaClassValue.Destroy;
 begin
   FMethods.Free;
+  FStaticMethods.Free;
   FPrototype.Free;
   inherited;
 end;
@@ -148,6 +154,23 @@ begin
   Result := Instance;
 end;
 
+function TGocciaClassValue.GetProperty(const AName: string): TGocciaValue;
+begin
+  if FStaticMethods.TryGetValue(AName, Result) then
+    Exit;
+
+  // Check inherited static methods
+  if Assigned(FSuperClass) then
+    Result := FSuperClass.GetProperty(AName)
+  else
+    Result := TGocciaUndefinedValue.Create;
+end;
+
+procedure TGocciaClassValue.SetProperty(const AName: string; AValue: TGocciaValue);
+begin
+  FStaticMethods.AddOrSetValue(AName, AValue);
+end;
+
 constructor TGocciaInstanceValue.Create(AClass: TGocciaClassValue);
 begin
   inherited Create;
@@ -203,6 +226,30 @@ begin
     Logger.Debug('  Inherited Prototype is now: %s', [inherited Prototype.ToString])
   else
     Logger.Debug('  Inherited Prototype is still nil');
+end;
+
+function TGocciaInstanceValue.IsInstanceOf(AClass: TGocciaClassValue): Boolean;
+var
+  CurrentClass: TGocciaClassValue;
+begin
+  Logger.Debug('TGocciaInstanceValue.IsInstanceOf: Checking if instance of %s is instance of %s', [FClass.Name, AClass.Name]);
+
+  // Walk up the inheritance chain
+  CurrentClass := FClass;
+  while Assigned(CurrentClass) do
+  begin
+    Logger.Debug('TGocciaInstanceValue.IsInstanceOf: Checking class %s', [CurrentClass.Name]);
+    if CurrentClass = AClass then
+    begin
+      Logger.Debug('TGocciaInstanceValue.IsInstanceOf: Match found!');
+      Result := True;
+      Exit;
+    end;
+    CurrentClass := CurrentClass.SuperClass;
+  end;
+
+  Logger.Debug('TGocciaInstanceValue.IsInstanceOf: No match found');
+  Result := False;
 end;
 
 end.
