@@ -6,7 +6,8 @@ interface
 
 uses
   Goccia.Values.Base, Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Interfaces,
-  Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math, Goccia.Values.UndefinedValue;
+  Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math, Goccia.Values.UndefinedValue,
+  Goccia.AST.Node;
 
 type
   // Forward declaration
@@ -20,6 +21,7 @@ type
     FPrototype: TGocciaObjectValue;
     FConstructorMethod: TGocciaMethodValue;
     FStaticMethods: TDictionary<string, TGocciaValue>; // For static methods like Array.isArray
+    FInstancePropertyDefs: TDictionary<string, TGocciaExpression>; // Instance property definitions
   public
     constructor Create(const AName: string; ASuperClass: TGocciaClassValue);
     destructor Destroy; override;
@@ -29,6 +31,7 @@ type
     function TypeName: string; override;
     procedure AddMethod(const AName: string; AMethod: TGocciaMethodValue);
     function GetMethod(const AName: string): TGocciaMethodValue;
+    procedure AddInstanceProperty(const AName: string; AExpression: TGocciaExpression);
     function Instantiate(Arguments: TObjectList<TGocciaValue>): TGocciaValue;
     function GetProperty(const AName: string): TGocciaValue;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
@@ -36,6 +39,7 @@ type
     property SuperClass: TGocciaClassValue read FSuperClass;
     property Prototype: TGocciaObjectValue read FPrototype;
     property ConstructorMethod: TGocciaMethodValue read FConstructorMethod;
+    property InstancePropertyDefs: TDictionary<string, TGocciaExpression> read FInstancePropertyDefs;
   end;
 
   TGocciaInstanceValue = class(TGocciaObjectValue)
@@ -61,6 +65,7 @@ begin
   FSuperClass := ASuperClass;
   FMethods := TDictionary<string, TGocciaMethodValue>.Create;
   FStaticMethods := TDictionary<string, TGocciaValue>.Create;
+  FInstancePropertyDefs := TDictionary<string, TGocciaExpression>.Create;
   FPrototype := TGocciaObjectValue.Create;
   FConstructorMethod := nil;
   if Assigned(FSuperClass) then
@@ -71,6 +76,7 @@ destructor TGocciaClassValue.Destroy;
 begin
   FMethods.Free;
   FStaticMethods.Free;
+  FInstancePropertyDefs.Free;
   FPrototype.Free;
   inherited;
 end;
@@ -119,6 +125,11 @@ begin
   end;
 end;
 
+procedure TGocciaClassValue.AddInstanceProperty(const AName: string; AExpression: TGocciaExpression);
+begin
+  FInstancePropertyDefs.AddOrSetValue(AName, AExpression);
+end;
+
 function TGocciaClassValue.Instantiate(Arguments: TObjectList<TGocciaValue>): TGocciaValue;
 var
   Instance: TGocciaInstanceValue;
@@ -130,6 +141,9 @@ begin
   // Set up the prototype chain
   Instance.Prototype := FPrototype;
   Logger.Debug('Prototype set for instance');
+
+  // NOTE: Instance properties will be initialized by the evaluator
+  // after instantiation but before returning to ensure proper order
 
   // Find constructor - either this class's or inherited from parent
   ConstructorToCall := FConstructorMethod;

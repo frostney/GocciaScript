@@ -784,6 +784,7 @@ var
   Name, SuperClass: string;
   Methods: TDictionary<string, TGocciaClassMethod>;
   StaticProperties: TDictionary<string, TGocciaExpression>;
+  InstanceProperties: TDictionary<string, TGocciaExpression>;
   MemberName: string;
   Method: TGocciaClassMethod;
   PropertyValue: TGocciaExpression;
@@ -804,6 +805,7 @@ begin
 
   Methods := TDictionary<string, TGocciaClassMethod>.Create;
   StaticProperties := TDictionary<string, TGocciaExpression>.Create;
+  InstanceProperties := TDictionary<string, TGocciaExpression>.Create;
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
@@ -812,15 +814,15 @@ begin
 
     if Check(gttAssign) then
     begin
-      // Static property: static name = value
-      if not IsStatic then
-        raise TGocciaSyntaxError.Create('Instance properties not yet supported',
-          Peek.Line, Peek.Column, FFileName, FSourceLines);
-
-      Consume(gttAssign, 'Expected "=" in static property');
+      // Property: [static] name = value
+      Consume(gttAssign, 'Expected "=" in property');
       PropertyValue := Expression;
-      Consume(gttSemicolon, 'Expected ";" after static property');
-      StaticProperties.Add(MemberName, PropertyValue);
+      Consume(gttSemicolon, 'Expected ";" after property');
+
+      if IsStatic then
+        StaticProperties.Add(MemberName, PropertyValue)
+      else
+        InstanceProperties.Add(MemberName, PropertyValue);
     end
     else if Check(gttLeftParen) then
     begin
@@ -835,7 +837,7 @@ begin
   end;
 
   Consume(gttRightBrace, 'Expected "}" after class body');
-  Result := TGocciaClassDeclaration.Create(Name, SuperClass, Methods, StaticProperties, Line, Column);
+  Result := TGocciaClassDeclaration.Create(Name, SuperClass, Methods, StaticProperties, InstanceProperties, Line, Column);
 end;
 
 function TGocciaParser.ImportDeclaration: TGocciaStatement;

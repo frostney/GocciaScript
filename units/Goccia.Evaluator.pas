@@ -29,6 +29,7 @@ function EvaluateIf(IfStatement: TGocciaIfStatement; Context: TGocciaEvaluationC
 function EvaluateClassMethod(ClassMethod: TGocciaClassMethod; Context: TGocciaEvaluationContext; SuperClass: TGocciaValue = nil): TGocciaValue;
 function EvaluateClass(ClassDeclaration: TGocciaClassDeclaration; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 
 implementation
 
@@ -144,9 +145,20 @@ begin
       for I := 0 to TGocciaNewExpression(Expression).Arguments.Count - 1 do
         Arguments.Add(EvaluateExpression(TGocciaNewExpression(Expression).Arguments[I], Context));
 
-      if Callee is TGocciaClassValue then
+            if Callee is TGocciaClassValue then
       begin
-        Result := TGocciaClassValue(Callee).Instantiate(Arguments);
+        // Create instance first
+        Result := TGocciaInstanceValue.Create(TGocciaClassValue(Callee));
+        TGocciaInstanceValue(Result).Prototype := TGocciaClassValue(Callee).Prototype;
+
+        // Initialize instance properties BEFORE calling constructor
+        InitializeInstanceProperties(TGocciaInstanceValue(Result), TGocciaClassValue(Callee), Context);
+
+        // Now call constructor with the instance that has properties initialized
+        if Assigned(TGocciaClassValue(Callee).ConstructorMethod) then
+          TGocciaClassValue(Callee).ConstructorMethod.Call(Arguments, Result)
+        else if Assigned(TGocciaClassValue(Callee).SuperClass) and Assigned(TGocciaClassValue(Callee).SuperClass.ConstructorMethod) then
+          TGocciaClassValue(Callee).SuperClass.ConstructorMethod.Call(Arguments, Result);
       end
       else
         Context.OnError(Format('Can only instantiate classes, not %s', [Callee.TypeName]),
@@ -711,8 +723,52 @@ begin
     ClassValue.SetProperty(PropertyPair.Key, PropertyValue);
   end;
 
+  // Store instance property definitions on the class (they will be evaluated during instantiation)
+  for PropertyPair in ClassDeclaration.InstanceProperties do
+  begin
+    ClassValue.AddInstanceProperty(PropertyPair.Key, PropertyPair.Value);
+  end;
+
   Context.Scope.SetValue(ClassDeclaration.Name, ClassValue);
   Result := ClassValue;
+end;
+
+procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
+var
+  PropertyPair: TPair<string, TGocciaExpression>;
+  PropertyValue: TGocciaValue;
+  CurrentClass: TGocciaClassValue;
+  ClassChain: TList<TGocciaClassValue>;
+  I: Integer;
+begin
+  // Initialize instance properties (including inherited ones)
+  // Walk up the inheritance chain to collect all classes, then process from parent to child
+  // This ensures child properties can shadow parent properties
+  ClassChain := TList<TGocciaClassValue>.Create;
+  try
+    // Collect the inheritance chain
+    CurrentClass := ClassValue;
+    while Assigned(CurrentClass) do
+    begin
+      ClassChain.Add(CurrentClass);
+      CurrentClass := CurrentClass.SuperClass;
+    end;
+
+    // Process from parent to child (reverse order)
+    for I := ClassChain.Count - 1 downto 0 do
+    begin
+      CurrentClass := ClassChain[I];
+      for PropertyPair in CurrentClass.InstancePropertyDefs do
+      begin
+        Logger.Debug('Initializing instance property: %s from class: %s', [PropertyPair.Key, CurrentClass.Name]);
+        // Evaluate the property expression in the current context
+        PropertyValue := EvaluateExpression(PropertyPair.Value, Context);
+        Instance.SetProperty(PropertyPair.Key, PropertyValue);
+      end;
+    end;
+  finally
+    ClassChain.Free;
+  end;
 end;
 
 function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -730,9 +786,22 @@ begin
     for I := 0 to NewExpression.Arguments.Count - 1 do
       Arguments.Add(EvaluateExpression(NewExpression.Arguments[I], Context));
 
-    // Create new instance
+        // Create new instance
     if Callee is TGocciaClassValue then
-      Result := TGocciaClassValue(Callee).Instantiate(Arguments)
+    begin
+      // Create instance first
+      Result := TGocciaInstanceValue.Create(TGocciaClassValue(Callee));
+      TGocciaInstanceValue(Result).Prototype := TGocciaClassValue(Callee).Prototype;
+
+      // Initialize instance properties BEFORE calling constructor
+      InitializeInstanceProperties(TGocciaInstanceValue(Result), TGocciaClassValue(Callee), Context);
+
+      // Now call constructor with the instance that has properties initialized
+      if Assigned(TGocciaClassValue(Callee).ConstructorMethod) then
+        TGocciaClassValue(Callee).ConstructorMethod.Call(Arguments, Result)
+      else if Assigned(TGocciaClassValue(Callee).SuperClass) and Assigned(TGocciaClassValue(Callee).SuperClass.ConstructorMethod) then
+        TGocciaClassValue(Callee).SuperClass.ConstructorMethod.Call(Arguments, Result);
+    end
     else
       Context.OnError(Format('Cannot instantiate non-class value: %s', [Callee.TypeName]), NewExpression.Line, NewExpression.Column);
   finally
