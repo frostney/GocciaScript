@@ -783,8 +783,10 @@ function TGocciaParser.ClassDeclaration: TGocciaStatement;
 var
   Name, SuperClass: string;
   Methods: TDictionary<string, TGocciaClassMethod>;
-  MethodName: string;
+  StaticProperties: TDictionary<string, TGocciaExpression>;
+  MemberName: string;
   Method: TGocciaClassMethod;
+  PropertyValue: TGocciaExpression;
   IsStatic: Boolean;
   Line, Column: Integer;
 begin
@@ -801,18 +803,39 @@ begin
   Consume(gttLeftBrace, 'Expected "{" before class body');
 
   Methods := TDictionary<string, TGocciaClassMethod>.Create;
+  StaticProperties := TDictionary<string, TGocciaExpression>.Create;
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
     IsStatic := Match([gttStatic]);
-    MethodName := Consume(gttIdentifier, 'Expected method name').Lexeme;
-    Method := ClassMethod(IsStatic);
-    Method.Name := MethodName; // Set the method name
-    Methods.Add(MethodName, Method);
+    MemberName := Consume(gttIdentifier, 'Expected method or property name').Lexeme;
+
+    if Check(gttAssign) then
+    begin
+      // Static property: static name = value
+      if not IsStatic then
+        raise TGocciaSyntaxError.Create('Instance properties not yet supported',
+          Peek.Line, Peek.Column, FFileName, FSourceLines);
+
+      Consume(gttAssign, 'Expected "=" in static property');
+      PropertyValue := Expression;
+      Consume(gttSemicolon, 'Expected ";" after static property');
+      StaticProperties.Add(MemberName, PropertyValue);
+    end
+    else if Check(gttLeftParen) then
+    begin
+      // Method: [static] name() { ... }
+      Method := ClassMethod(IsStatic);
+      Method.Name := MemberName; // Set the method name
+      Methods.Add(MemberName, Method);
+    end
+    else
+      raise TGocciaSyntaxError.Create('Expected "(" for method or "=" for property',
+        Peek.Line, Peek.Column, FFileName, FSourceLines);
   end;
 
   Consume(gttRightBrace, 'Expected "}" after class body');
-  Result := TGocciaClassDeclaration.Create(Name, SuperClass, Methods, Line, Column);
+  Result := TGocciaClassDeclaration.Create(Name, SuperClass, Methods, StaticProperties, Line, Column);
 end;
 
 function TGocciaParser.ImportDeclaration: TGocciaStatement;

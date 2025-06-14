@@ -93,7 +93,7 @@ begin
     Obj := EvaluateExpression(TGocciaPropertyAssignmentExpression(Expression).ObjectExpr, Context);
     Value := EvaluateExpression(TGocciaPropertyAssignmentExpression(Expression).Value, Context);
 
-    // Special handling for 'this' property assignment
+    // Handle different object types for property assignment
     if (Obj is TGocciaInstanceValue) then
     begin
       TGocciaInstanceValue(Obj).SetProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName, Value);
@@ -102,6 +102,12 @@ begin
     else if (Obj is TGocciaObjectValue) then
     begin
       TGocciaObjectValue(Obj).SetProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName, Value);
+      Result := Value;
+    end
+    else if (Obj is TGocciaClassValue) then
+    begin
+      // Handle static property assignment
+      TGocciaClassValue(Obj).SetProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName, Value);
       Result := Value;
     end
     else
@@ -665,7 +671,9 @@ var
   SuperClass: TGocciaClassValue;
   ClassValue: TGocciaClassValue;
   MethodPair: TPair<string, TGocciaClassMethod>;
+  PropertyPair: TPair<string, TGocciaExpression>;
   Method: TGocciaMethodValue;
+  PropertyValue: TGocciaValue;
 begin
   SuperClass := nil;
   if ClassDeclaration.SuperClass <> '' then
@@ -677,6 +685,7 @@ begin
 
   ClassValue := TGocciaClassValue.Create(ClassDeclaration.Name, SuperClass);
 
+  // Handle methods
   for MethodPair in ClassDeclaration.Methods do
   begin
     // Pass superclass directly to method creation - much cleaner!
@@ -692,6 +701,14 @@ begin
       // Instance methods are added to the class prototype
       ClassValue.AddMethod(MethodPair.Key, Method);
     end;
+  end;
+
+  // Handle static properties
+  for PropertyPair in ClassDeclaration.StaticProperties do
+  begin
+    // Evaluate the property value and set it on the class constructor
+    PropertyValue := EvaluateExpression(PropertyPair.Value, Context);
+    ClassValue.SetProperty(PropertyPair.Key, PropertyValue);
   end;
 
   Context.Scope.SetValue(ClassDeclaration.Name, ClassValue);

@@ -103,13 +103,16 @@ type
     FName: string;
     FSuperClass: string;
     FMethods: TDictionary<string, TGocciaClassMethod>;
+    FStaticProperties: TDictionary<string, TGocciaExpression>;
   public
     constructor Create(const AName, ASuperClass: string;
       AMethods: TDictionary<string, TGocciaClassMethod>;
+      AStaticProperties: TDictionary<string, TGocciaExpression>;
       ALine, AColumn: Integer);
     property Name: string read FName;
     property SuperClass: string read FSuperClass;
     property Methods: TDictionary<string, TGocciaClassMethod> read FMethods;
+    property StaticProperties: TDictionary<string, TGocciaExpression> read FStaticProperties;
   end;
 
   // Modules
@@ -225,12 +228,14 @@ implementation
 
   constructor TGocciaClassDeclaration.Create(const AName, ASuperClass: string;
     AMethods: TDictionary<string, TGocciaClassMethod>;
+    AStaticProperties: TDictionary<string, TGocciaExpression>;
     ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
     FName := AName;
     FSuperClass := ASuperClass;
     FMethods := AMethods;
+    FStaticProperties := AStaticProperties;
   end;
 
   { TGocciaImportDeclaration }
