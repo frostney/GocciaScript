@@ -33,6 +33,7 @@ type
     procedure ScanIdentifier;
     procedure SkipWhitespace;
     procedure SkipComment;
+    procedure SkipBlockComment;
   public
     constructor Create(const ASource, AFileName: string);
     destructor Destroy; override;
@@ -126,6 +127,8 @@ begin
       '/':
         if PeekNext = '/' then
           SkipComment
+        else if PeekNext = '*' then
+          SkipBlockComment
         else
           Break;
     else
@@ -142,6 +145,38 @@ begin
 
   while (Peek <> #10) and not IsAtEnd do
     Advance;
+end;
+
+procedure TGocciaLexer.SkipBlockComment;
+begin
+  // Skip '/*'
+  Advance;
+  Advance;
+
+  while not IsAtEnd do
+  begin
+    if Peek = '*' then
+    begin
+      Advance;
+      if Peek = '/' then
+      begin
+        Advance; // Skip the closing '/'
+        Exit;
+      end;
+    end
+    else if Peek = #10 then
+    begin
+      Inc(FLine);
+      FColumn := 0;
+      Advance;
+    end
+    else
+      Advance;
+  end;
+
+  // If we reach here, we hit end of file without finding closing */
+  raise TGocciaLexerError.Create('Unterminated block comment', FLine, FColumn,
+    FFileName, FSourceLines);
 end;
 
 procedure TGocciaLexer.ScanString;
