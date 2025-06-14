@@ -330,9 +330,27 @@ begin
     begin
       Line := Previous.Line;
       Column := Previous.Column;
-      PropertyName := Consume(gttIdentifier, 'Expected property name after "."').Lexeme;
-      Result := TGocciaMemberExpression.Create(Result, PropertyName, False,
-        Line, Column);
+
+      // Check if this is a private field access (this.#field)
+      if Check(gttHash) then
+      begin
+        Advance; // consume the #
+        PropertyName := Consume(gttIdentifier, 'Expected private field name after "#"').Lexeme;
+        Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
+      end
+      else
+      begin
+        PropertyName := Consume(gttIdentifier, 'Expected property name after "."').Lexeme;
+        Result := TGocciaMemberExpression.Create(Result, PropertyName, False,
+          Line, Column);
+      end;
+    end
+    else if Match([gttHash]) then
+    begin
+      Line := Previous.Line;
+      Column := Previous.Column;
+      PropertyName := Consume(gttIdentifier, 'Expected private field name after "#"').Lexeme;
+      Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
     end
     else if Match([gttLeftBracket]) then
     begin
@@ -442,6 +460,15 @@ begin
     Token := Previous;
     Name := Token.Lexeme;
     Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
+  end
+  else if Match([gttHash]) then
+  begin
+    Token := Previous;
+    Name := Consume(gttIdentifier, 'Expected private field name after "#"').Lexeme;
+    // Private field access is equivalent to this.#fieldName
+    Result := TGocciaPrivateMemberExpression.Create(
+      TGocciaThisExpression.Create(Token.Line, Token.Column),
+      Name, Token.Line, Token.Column);
   end
   else if Match([gttLeftParen]) then
   begin
@@ -587,6 +614,20 @@ begin
           Line,
           Column
         );
+    end
+    else if Left is TGocciaPrivateMemberExpression then
+    begin
+      if Operator = gttAssign then
+        Result := TGocciaPrivatePropertyAssignmentExpression.Create(
+          TGocciaPrivateMemberExpression(Left).ObjectExpr,
+          TGocciaPrivateMemberExpression(Left).PrivateName,
+          Right,
+          Line,
+          Column
+        )
+      else
+        raise TGocciaSyntaxError.Create('Compound assignment to private fields is not yet supported',
+          Left.Line, Left.Column, FFileName, FSourceLines);
     end
     else
       raise TGocciaSyntaxError.Create('Invalid assignment target', Left.Line, Left.Column, FFileName, FSourceLines);
@@ -938,10 +979,13 @@ var
   Methods: TDictionary<string, TGocciaClassMethod>;
   StaticProperties: TDictionary<string, TGocciaExpression>;
   InstanceProperties: TDictionary<string, TGocciaExpression>;
+  PrivateInstanceProperties: TDictionary<string, TGocciaExpression>;
+  PrivateMethods: TDictionary<string, TGocciaClassMethod>;
   MemberName: string;
   Method: TGocciaClassMethod;
   PropertyValue: TGocciaExpression;
   IsStatic: Boolean;
+  IsPrivate: Boolean;
 begin
   if Match([gttExtends]) then
     SuperClass := Consume(gttIdentifier, 'Expected superclass name').Lexeme
@@ -953,30 +997,44 @@ begin
   Methods := TDictionary<string, TGocciaClassMethod>.Create;
   StaticProperties := TDictionary<string, TGocciaExpression>.Create;
   InstanceProperties := TDictionary<string, TGocciaExpression>.Create;
+  PrivateInstanceProperties := TDictionary<string, TGocciaExpression>.Create;
+  PrivateMethods := TDictionary<string, TGocciaClassMethod>.Create;
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
     IsStatic := Match([gttStatic]);
+    IsPrivate := Match([gttHash]);
+
+    if IsPrivate and IsStatic then
+      raise TGocciaSyntaxError.Create('Private static members are not supported',
+        Peek.Line, Peek.Column, FFileName, FSourceLines);
+
     MemberName := Consume(gttIdentifier, 'Expected method or property name').Lexeme;
 
     if Check(gttAssign) then
     begin
-      // Property: [static] name = value
+      // Property: [static] [#]name = value
       Consume(gttAssign, 'Expected "=" in property');
       PropertyValue := Expression;
       Consume(gttSemicolon, 'Expected ";" after property');
 
-      if IsStatic then
+      if IsPrivate then
+        PrivateInstanceProperties.Add(MemberName, PropertyValue)
+      else if IsStatic then
         StaticProperties.Add(MemberName, PropertyValue)
       else
         InstanceProperties.Add(MemberName, PropertyValue);
     end
     else if Check(gttLeftParen) then
     begin
-      // Method: [static] name() { ... }
+      // Method: [static] [#]name() { ... }
       Method := ClassMethod(IsStatic);
       Method.Name := MemberName; // Set the method name
-      Methods.Add(MemberName, Method);
+
+      if IsPrivate then
+        PrivateMethods.Add(MemberName, Method)
+      else
+        Methods.Add(MemberName, Method);
     end
     else
       raise TGocciaSyntaxError.Create('Expected "(" for method or "=" for property',
@@ -984,7 +1042,7 @@ begin
   end;
 
   Consume(gttRightBrace, 'Expected "}" after class body');
-  Result := TGocciaClassDefinition.Create(ClassName, SuperClass, Methods, StaticProperties, InstanceProperties);
+  Result := TGocciaClassDefinition.Create(ClassName, SuperClass, Methods, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods);
 end;
 
 function TGocciaParser.Parse: TGocciaProgram;

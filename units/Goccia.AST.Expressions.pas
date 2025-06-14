@@ -193,6 +193,28 @@ type
 
   TGocciaSuperExpression = class(TGocciaExpression);
 
+  TGocciaPrivateMemberExpression = class(TGocciaExpression)
+  private
+    FObject: TGocciaExpression;
+    FPrivateName: string;
+  public
+    constructor Create(AObject: TGocciaExpression; const APrivateName: string; ALine, AColumn: Integer);
+    property ObjectExpr: TGocciaExpression read FObject;
+    property PrivateName: string read FPrivateName;
+  end;
+
+  TGocciaPrivatePropertyAssignmentExpression = class(TGocciaExpression)
+  private
+    FObject: TGocciaExpression;
+    FPrivateName: string;
+    FValue: TGocciaExpression;
+  public
+    constructor Create(AObject: TGocciaExpression; const APrivateName: string; AValue: TGocciaExpression; ALine, AColumn: Integer);
+    property ObjectExpr: TGocciaExpression read FObject;
+    property PrivateName: string read FPrivateName;
+    property Value: TGocciaExpression read FValue;
+  end;
+
 implementation
 
 { TGocciaLiteralExpression }
@@ -363,6 +385,25 @@ begin
   inherited Create(ALine, AColumn);
   FCallee := ACallee;
   FArguments := AArguments;
+end;
+
+{ TGocciaPrivateMemberExpression }
+
+constructor TGocciaPrivateMemberExpression.Create(AObject: TGocciaExpression; const APrivateName: string; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FObject := AObject;
+  FPrivateName := APrivateName;
+end;
+
+{ TGocciaPrivatePropertyAssignmentExpression }
+
+constructor TGocciaPrivatePropertyAssignmentExpression.Create(AObject: TGocciaExpression; const APrivateName: string; AValue: TGocciaExpression; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FObject := AObject;
+  FPrivateName := APrivateName;
+  FValue := AValue;
 end;
 
 end.

@@ -106,17 +106,23 @@ type
     FMethods: TDictionary<string, TGocciaClassMethod>;
     FStaticProperties: TDictionary<string, TGocciaExpression>;
     FInstanceProperties: TDictionary<string, TGocciaExpression>;
+    FPrivateInstanceProperties: TDictionary<string, TGocciaExpression>;
+    FPrivateMethods: TDictionary<string, TGocciaClassMethod>;
 
     constructor Create(const AName, ASuperClass: string;
       AMethods: TDictionary<string, TGocciaClassMethod>;
       AStaticProperties: TDictionary<string, TGocciaExpression>;
-      AInstanceProperties: TDictionary<string, TGocciaExpression>);
+      AInstanceProperties: TDictionary<string, TGocciaExpression>;
+      APrivateInstanceProperties: TDictionary<string, TGocciaExpression> = nil;
+      APrivateMethods: TDictionary<string, TGocciaClassMethod> = nil);
     destructor Destroy; override;
     property Name: string read FName;
     property SuperClass: string read FSuperClass;
     property Methods: TDictionary<string, TGocciaClassMethod> read FMethods;
     property StaticProperties: TDictionary<string, TGocciaExpression> read FStaticProperties;
     property InstanceProperties: TDictionary<string, TGocciaExpression> read FInstanceProperties;
+    property PrivateInstanceProperties: TDictionary<string, TGocciaExpression> read FPrivateInstanceProperties;
+    property PrivateMethods: TDictionary<string, TGocciaClassMethod> read FPrivateMethods;
   end;
 
   TGocciaClassDeclaration = class(TGocciaStatement)
@@ -194,13 +200,25 @@ implementation
   constructor TGocciaClassDefinition.Create(const AName, ASuperClass: string;
     AMethods: TDictionary<string, TGocciaClassMethod>;
     AStaticProperties: TDictionary<string, TGocciaExpression>;
-    AInstanceProperties: TDictionary<string, TGocciaExpression>);
+    AInstanceProperties: TDictionary<string, TGocciaExpression>;
+    APrivateInstanceProperties: TDictionary<string, TGocciaExpression> = nil;
+    APrivateMethods: TDictionary<string, TGocciaClassMethod> = nil);
   begin
     FName := AName;
     FSuperClass := ASuperClass;
     FMethods := AMethods;
     FStaticProperties := AStaticProperties;
     FInstanceProperties := AInstanceProperties;
+
+    if Assigned(APrivateInstanceProperties) then
+      FPrivateInstanceProperties := APrivateInstanceProperties
+    else
+      FPrivateInstanceProperties := TDictionary<string, TGocciaExpression>.Create;
+
+    if Assigned(APrivateMethods) then
+      FPrivateMethods := APrivateMethods
+    else
+      FPrivateMethods := TDictionary<string, TGocciaClassMethod>.Create;
   end;
 
   destructor TGocciaClassDefinition.Destroy;
@@ -208,6 +226,10 @@ implementation
     FMethods.Free;
     FStaticProperties.Free;
     FInstanceProperties.Free;
+    if Assigned(FPrivateInstanceProperties) then
+      FPrivateInstanceProperties.Free;
+    if Assigned(FPrivateMethods) then
+      FPrivateMethods.Free;
     inherited;
   end;
 

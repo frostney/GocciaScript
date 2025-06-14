@@ -31,7 +31,10 @@ function EvaluateClass(ClassDeclaration: TGocciaClassDeclaration; Context: TGocc
 function EvaluateClassExpression(ClassExpression: TGocciaClassExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateClassDefinition(ClassDef: TGocciaClassDefinition; Context: TGocciaEvaluationContext; Line, Column: Integer): TGocciaClassValue;
 function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluatePrivatePropertyAssignment(PrivatePropertyAssignmentExpression: TGocciaPrivatePropertyAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
+procedure InitializePrivateInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 
 implementation
 
@@ -345,13 +348,27 @@ begin
   end
   else if Expression is TGocciaSuperExpression then
   begin
-    // Handle super expression by looking up the special __super__ binding
-    Result := Context.Scope.GetValue('__super__');
-    if Result is TGocciaUndefinedValue then
+    Logger.Debug('EvaluateExpression: Handling TGocciaSuperExpression');
+    // Return the superclass - context should provide access to it
+    if Context.Scope.ThisValue is TGocciaInstanceValue then
     begin
-      Context.OnError('super can only be used within a method with a superclass',
-        Expression.Line, Expression.Column);
-    end;
+      if Assigned(TGocciaInstanceValue(Context.Scope.ThisValue).ClassValue.SuperClass) then
+        Result := TGocciaInstanceValue(Context.Scope.ThisValue).ClassValue.SuperClass
+      else
+        Context.OnError('No superclass found', Expression.Line, Expression.Column);
+    end
+    else
+      Context.OnError('super can only be used in a class method', Expression.Line, Expression.Column);
+  end
+  else if Expression is TGocciaPrivateMemberExpression then
+  begin
+    Logger.Debug('EvaluateExpression: Handling TGocciaPrivateMemberExpression');
+    Result := EvaluatePrivateMember(TGocciaPrivateMemberExpression(Expression), Context);
+  end
+  else if Expression is TGocciaPrivatePropertyAssignmentExpression then
+  begin
+    Logger.Debug('EvaluateExpression: Handling TGocciaPrivatePropertyAssignmentExpression');
+    Result := EvaluatePrivatePropertyAssignment(TGocciaPrivatePropertyAssignmentExpression(Expression), Context);
   end
   else if Expression is TGocciaMemberExpression then
   begin
@@ -940,6 +957,9 @@ begin
       // Initialize instance properties BEFORE calling constructor
       InitializeInstanceProperties(TGocciaInstanceValue(Result), TGocciaClassValue(Callee), Context);
 
+      // Initialize private instance properties
+      InitializePrivateInstanceProperties(TGocciaInstanceValue(Result), TGocciaClassValue(Callee), Context);
+
       // Now call constructor with the instance that has properties initialized
       if Assigned(TGocciaClassValue(Callee).ConstructorMethod) then
         TGocciaClassValue(Callee).ConstructorMethod.Call(Arguments, Result)
@@ -1022,9 +1042,106 @@ begin
     ClassValue.AddInstanceProperty(PropertyPair.Key, PropertyPair.Value);
   end;
 
+  // Store private instance property definitions on the class
+  for PropertyPair in ClassDef.PrivateInstanceProperties do
+  begin
+    ClassValue.AddPrivateInstanceProperty(PropertyPair.Key, PropertyPair.Value);
+  end;
+
+  // Store private methods on the class
+  for MethodPair in ClassDef.PrivateMethods do
+  begin
+    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, Context, SuperClass));
+    ClassValue.AddPrivateMethod(MethodPair.Key, Method);
+  end;
+
   // For class expressions, don't automatically bind to scope - just return the class value
   // If it's a named class expression, the name is only visible inside the class methods
   Result := ClassValue;
+end;
+
+function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  ObjectValue: TGocciaValue;
+  Instance: TGocciaInstanceValue;
+  AccessClass: TGocciaClassValue;
+begin
+  // Evaluate the object expression
+  ObjectValue := EvaluateExpression(PrivateMemberExpression.ObjectExpr, Context);
+
+  if not (ObjectValue is TGocciaInstanceValue) then
+  begin
+    Context.OnError(Format('Private fields can only be accessed on class instances, not %s', [ObjectValue.TypeName]),
+      PrivateMemberExpression.Line, PrivateMemberExpression.Column);
+    Result := TGocciaUndefinedValue.Create;
+    Exit;
+  end;
+
+  Instance := TGocciaInstanceValue(ObjectValue);
+
+  // Determine the access class - the class that is trying to access the private field
+  // This should be the class containing the current method
+  AccessClass := Instance.ClassValue; // For now, assume access from the same class
+
+  // Check if this is a private method call
+  if Instance.ClassValue.PrivateMethods.ContainsKey(PrivateMemberExpression.PrivateName) then
+  begin
+    Result := Instance.ClassValue.GetPrivateMethod(PrivateMemberExpression.PrivateName);
+    if Result = nil then
+      Result := TGocciaUndefinedValue.Create;
+  end
+  else
+  begin
+    // It's a private property access
+    Result := Instance.GetPrivateProperty(PrivateMemberExpression.PrivateName, AccessClass);
+  end;
+end;
+
+function EvaluatePrivatePropertyAssignment(PrivatePropertyAssignmentExpression: TGocciaPrivatePropertyAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  ObjectValue: TGocciaValue;
+  Instance: TGocciaInstanceValue;
+  AccessClass: TGocciaClassValue;
+  Value: TGocciaValue;
+begin
+  // Evaluate the object expression
+  ObjectValue := EvaluateExpression(PrivatePropertyAssignmentExpression.ObjectExpr, Context);
+
+  if not (ObjectValue is TGocciaInstanceValue) then
+  begin
+    Context.OnError(Format('Private fields can only be assigned on class instances, not %s', [ObjectValue.TypeName]),
+      PrivatePropertyAssignmentExpression.Line, PrivatePropertyAssignmentExpression.Column);
+    Result := TGocciaUndefinedValue.Create;
+    Exit;
+  end;
+
+  Instance := TGocciaInstanceValue(ObjectValue);
+
+  // Determine the access class - the class that is trying to access the private field
+  AccessClass := Instance.ClassValue; // For now, assume access from the same class
+
+  // Evaluate the value to assign
+  Value := EvaluateExpression(PrivatePropertyAssignmentExpression.Value, Context);
+
+  // Set the private property
+  Instance.SetPrivateProperty(PrivatePropertyAssignmentExpression.PrivateName, Value, AccessClass);
+
+  Result := Value;
+end;
+
+procedure InitializePrivateInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
+var
+  PropertyPair: TPair<string, TGocciaExpression>;
+  PropertyValue: TGocciaValue;
+begin
+  // Initialize private instance properties (only from the exact class, not inherited)
+  for PropertyPair in ClassValue.PrivateInstancePropertyDefs do
+  begin
+    Logger.Debug('Initializing private instance property: %s from class: %s', [PropertyPair.Key, ClassValue.Name]);
+    // Evaluate the property expression in the current context
+    PropertyValue := EvaluateExpression(PropertyPair.Value, Context);
+    Instance.SetPrivateProperty(PropertyPair.Key, PropertyValue, ClassValue);
+  end;
 end;
 
 end.

@@ -248,7 +248,7 @@ procedure TGocciaLexer.ScanIdentifier;
 var
   Text: string;
 begin
-  while CharInSet(Peek, ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
+  while CharInSet(Peek, ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) do
     Advance;
 
   Text := Copy(FSource, FStart, FCurrent - FStart);
@@ -394,6 +394,7 @@ begin
       end
       else
         AddToken(gttDot);
+    '#': AddToken(gttHash);
     '''', '"':
       ScanString;
   else
@@ -403,7 +404,7 @@ begin
       Dec(FColumn);
       ScanNumber;
     end
-    else if CharInSet(C, ['a'..'z', 'A'..'Z', '_']) then
+    else if CharInSet(C, ['a'..'z', 'A'..'Z', '_', '$']) then
     begin
       Dec(FCurrent);
       Dec(FColumn);

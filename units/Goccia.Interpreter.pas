@@ -9,7 +9,7 @@ uses
   Goccia.Values.UndefinedValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.ObjectValue,
   Goccia.Values.StringValue, Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
   Goccia.Values.NullValue, Goccia.Values.NativeFunction, Goccia.Token, Generics.Collections,
-  Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Evaluator, Goccia.Scope, Goccia.Builtins.Console, Goccia.Builtins.GlobalObject, Goccia.Builtins.Math, Goccia.Interfaces, Goccia.Logger, Goccia.Builtins.GlobalArray, Goccia.Builtins.Globals;
+  Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Evaluator, Goccia.Scope, Goccia.Builtins.Console, Goccia.Builtins.GlobalObject, Goccia.Builtins.Math, Goccia.Interfaces, Goccia.Logger, Goccia.Builtins.GlobalArray, Goccia.Builtins.Globals, Goccia.Builtins.JSON;
 
 type
   TGocciaInterpreter = class
@@ -19,6 +19,7 @@ type
     FBuiltinGlobalObject: TGocciaGlobalObject;
     FBuiltinGlobalArray: TGocciaGlobalArray;
     FBuiltinGlobals: TGocciaGlobals;
+    FBuiltinJSON: TGocciaJSON;
 
     FGlobalScope: TGocciaScope;
     FModules: TDictionary<string, TGocciaModule>;
@@ -30,6 +31,7 @@ type
     procedure RegisterBuiltIns;
     procedure RegisterConsole;
     procedure RegisterMath;
+    procedure RegisterJSON;
     procedure RegisterPromise;
     procedure RegisterGlobalArray;
     procedure RegisterObjectMethods;
@@ -122,6 +124,7 @@ begin
   FGlobalScope.Free;
   FBuiltinConsole.Free;
   FBuiltinMath.Free;
+  FBuiltinJSON.Free;
   FBuiltinGlobalObject.Free;
   FModules.Free;
   FSourceLines.Free;
@@ -132,6 +135,7 @@ procedure TGocciaInterpreter.RegisterBuiltIns;
 begin
   RegisterConsole;
   RegisterMath;
+  RegisterJSON;
   RegisterPromise;
   RegisterObjectMethods;
   RegisterGlobalArray;
@@ -147,6 +151,11 @@ end;
 procedure TGocciaInterpreter.RegisterMath;
 begin
   FBuiltinMath := TGocciaMath.Create('Math', FGlobalScope, ThrowError);
+end;
+
+procedure TGocciaInterpreter.RegisterJSON;
+begin
+  FBuiltinJSON := TGocciaJSON.Create('JSON', FGlobalScope, ThrowError);
 end;
 
 procedure TGocciaInterpreter.RegisterPromise;
@@ -212,6 +221,7 @@ begin
 
   BooleanConstructor := TGocciaClassValue.Create('Boolean', nil);
   FGlobalScope.SetValue('Boolean', BooleanConstructor);
+
 end;
 
 function TGocciaInterpreter.CreateEvaluationContext: TGocciaEvaluationContext;

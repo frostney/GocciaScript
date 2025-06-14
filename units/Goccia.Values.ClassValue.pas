@@ -22,6 +22,8 @@ type
     FConstructorMethod: TGocciaMethodValue;
     FStaticMethods: TDictionary<string, TGocciaValue>; // For static methods like Array.isArray
     FInstancePropertyDefs: TDictionary<string, TGocciaExpression>; // Instance property definitions
+    FPrivateInstancePropertyDefs: TDictionary<string, TGocciaExpression>; // Private instance property definitions
+    FPrivateMethods: TDictionary<string, TGocciaMethodValue>; // Private methods
   public
     constructor Create(const AName: string; ASuperClass: TGocciaClassValue);
     destructor Destroy; override;
@@ -32,6 +34,9 @@ type
     procedure AddMethod(const AName: string; AMethod: TGocciaMethodValue);
     function GetMethod(const AName: string): TGocciaMethodValue;
     procedure AddInstanceProperty(const AName: string; AExpression: TGocciaExpression);
+    procedure AddPrivateInstanceProperty(const AName: string; AExpression: TGocciaExpression);
+    procedure AddPrivateMethod(const AName: string; AMethod: TGocciaMethodValue);
+    function GetPrivateMethod(const AName: string): TGocciaMethodValue;
     function Instantiate(Arguments: TObjectList<TGocciaValue>): TGocciaValue;
     function GetProperty(const AName: string): TGocciaValue;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
@@ -40,21 +45,29 @@ type
     property Prototype: TGocciaObjectValue read FPrototype;
     property ConstructorMethod: TGocciaMethodValue read FConstructorMethod;
     property InstancePropertyDefs: TDictionary<string, TGocciaExpression> read FInstancePropertyDefs;
+    property PrivateInstancePropertyDefs: TDictionary<string, TGocciaExpression> read FPrivateInstancePropertyDefs;
+    property PrivateMethods: TDictionary<string, TGocciaMethodValue> read FPrivateMethods;
   end;
 
   TGocciaInstanceValue = class(TGocciaObjectValue)
   private
     FClass: TGocciaClassValue;
     FPrototype: TGocciaObjectValue;
+    FPrivateProperties: TDictionary<string, TGocciaValue>; // Private field values
     procedure SetPrototype(APrototype: TGocciaObjectValue);
   public
     constructor Create(AClass: TGocciaClassValue);
+    destructor Destroy; override;
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
+    function GetPrivateProperty(const AName: string; AAccessClass: TGocciaClassValue): TGocciaValue;
+    procedure SetPrivateProperty(const AName: string; AValue: TGocciaValue; AAccessClass: TGocciaClassValue);
+    function HasPrivateProperty(const AName: string): Boolean;
     function IsInstanceOf(AClass: TGocciaClassValue): Boolean;
     property ClassValue: TGocciaClassValue read FClass;
     property Prototype: TGocciaObjectValue read FPrototype write SetPrototype;
+    property PrivateProperties: TDictionary<string, TGocciaValue> read FPrivateProperties;
   end;
 
 implementation
@@ -66,6 +79,8 @@ begin
   FMethods := TDictionary<string, TGocciaMethodValue>.Create;
   FStaticMethods := TDictionary<string, TGocciaValue>.Create;
   FInstancePropertyDefs := TDictionary<string, TGocciaExpression>.Create;
+  FPrivateInstancePropertyDefs := TDictionary<string, TGocciaExpression>.Create;
+  FPrivateMethods := TDictionary<string, TGocciaMethodValue>.Create;
   FPrototype := TGocciaObjectValue.Create;
   FConstructorMethod := nil;
   if Assigned(FSuperClass) then
@@ -77,6 +92,8 @@ begin
   FMethods.Free;
   FStaticMethods.Free;
   FInstancePropertyDefs.Free;
+  FPrivateInstancePropertyDefs.Free;
+  FPrivateMethods.Free;
   FPrototype.Free;
   inherited;
 end;
@@ -128,6 +145,22 @@ end;
 procedure TGocciaClassValue.AddInstanceProperty(const AName: string; AExpression: TGocciaExpression);
 begin
   FInstancePropertyDefs.AddOrSetValue(AName, AExpression);
+end;
+
+procedure TGocciaClassValue.AddPrivateInstanceProperty(const AName: string; AExpression: TGocciaExpression);
+begin
+  FPrivateInstancePropertyDefs.AddOrSetValue(AName, AExpression);
+end;
+
+procedure TGocciaClassValue.AddPrivateMethod(const AName: string; AMethod: TGocciaMethodValue);
+begin
+  FPrivateMethods.AddOrSetValue(AName, AMethod);
+end;
+
+function TGocciaClassValue.GetPrivateMethod(const AName: string): TGocciaMethodValue;
+begin
+  if not FPrivateMethods.TryGetValue(AName, Result) then
+    Result := nil;
 end;
 
 function TGocciaClassValue.Instantiate(Arguments: TObjectList<TGocciaValue>): TGocciaValue;
@@ -190,6 +223,7 @@ begin
   inherited Create;
   FClass := AClass;
   FPrototype := nil;
+  FPrivateProperties := TDictionary<string, TGocciaValue>.Create;
 end;
 
 function TGocciaInstanceValue.TypeName: string;
@@ -264,6 +298,39 @@ begin
 
   Logger.Debug('TGocciaInstanceValue.IsInstanceOf: No match found');
   Result := False;
+end;
+
+function TGocciaInstanceValue.GetPrivateProperty(const AName: string; AAccessClass: TGocciaClassValue): TGocciaValue;
+begin
+  // Private fields can only be accessed by the class that declares them
+  // (not by subclasses unless they redeclare the same private field)
+  if AAccessClass <> FClass then
+    raise TGocciaError.Create(Format('Private field "%s" is not accessible', [AName]), 0, 0, '', nil);
+
+  if FPrivateProperties.TryGetValue(AName, Result) then
+    Exit
+  else
+    Result := TGocciaUndefinedValue.Create;
+end;
+
+procedure TGocciaInstanceValue.SetPrivateProperty(const AName: string; AValue: TGocciaValue; AAccessClass: TGocciaClassValue);
+begin
+  // Private fields can only be accessed by the class that declares them
+  if AAccessClass <> FClass then
+    raise TGocciaError.Create(Format('Private field "%s" is not accessible', [AName]), 0, 0, '', nil);
+
+  FPrivateProperties.AddOrSetValue(AName, AValue);
+end;
+
+function TGocciaInstanceValue.HasPrivateProperty(const AName: string): Boolean;
+begin
+  Result := FPrivateProperties.ContainsKey(AName);
+end;
+
+destructor TGocciaInstanceValue.Destroy;
+begin
+  FPrivateProperties.Free;
+  inherited;
 end;
 
 end.
