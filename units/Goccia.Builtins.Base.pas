@@ -11,10 +11,11 @@ type
   TGocciaBuiltin = class
   protected
     FName: string;
+    FScope: TGocciaScope;
     FBuiltinObject: TGocciaObjectValue;
     FThrowError: TGocciaThrowError;
   public
-    constructor Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
+    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
     destructor Destroy; override;
 
     property Name: string read FName;
@@ -24,9 +25,10 @@ type
 
 implementation
 
-constructor TGocciaBuiltin.Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
+constructor TGocciaBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
   FName := AName;
+  FScope := AScope;
   FBuiltinObject := TGocciaObjectValue.Create;
   FThrowError := AThrowError;
 end;

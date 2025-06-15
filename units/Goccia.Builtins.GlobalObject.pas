@@ -17,7 +17,7 @@ type
     function ObjectAssign(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectCreate(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
+    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
   end;
 
 implementation
@@ -25,7 +25,7 @@ implementation
 uses
   Goccia.Values.ArrayValue, Goccia.Values.StringValue;
 
-constructor TGocciaGlobalObject.Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
+constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
   inherited Create(AName, AScope, AThrowError);
 

@@ -22,7 +22,7 @@ type
     function MathRandom(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function MathClamp(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
+    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
   end;
 
 implementation
@@ -30,7 +30,7 @@ implementation
 uses
   Goccia.Values.NumberValue;
 
-constructor TGocciaMath.Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
+constructor TGocciaMath.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
   inherited Create(AName, AScope, AThrowError);
 

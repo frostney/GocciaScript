@@ -15,12 +15,12 @@ type
     function IsNaN(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function IsFinite(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
+    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
   end;
 
 implementation
 
-constructor TGocciaGlobals.Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
+constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
   inherited Create(AName, AScope, AThrowError);
 

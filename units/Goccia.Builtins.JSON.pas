@@ -53,7 +53,7 @@ type
     function JSONParse(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function JSONStringify(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
+    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
   end;
 
 implementation
@@ -63,7 +63,7 @@ uses
   Goccia.Values.NullValue,
   Classes;
 
-constructor TGocciaJSON.Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
+constructor TGocciaJSON.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
   inherited Create(AName, AScope, AThrowError);
 
