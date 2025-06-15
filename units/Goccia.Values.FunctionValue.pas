@@ -41,6 +41,7 @@ type
     function ToNumber: Double; override;
     function TypeName: string; override;
     function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
     property Parameters: TStringList read FParameters;
     property Body: TGocciaBlockValue read FBody;
     property Closure: TGocciaScope read FClosure;
@@ -169,6 +170,11 @@ begin
   finally
     Invocation.Free;
   end;
+end;
+
+function TGocciaFunctionValue.CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
+begin
+  Result := TGocciaFunctionValue.Create(FParameters, FBody, NewScope, FName);
 end;
 
 { TGocciaMethodValue }

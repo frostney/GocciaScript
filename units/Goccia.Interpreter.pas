@@ -9,7 +9,7 @@ uses
   Goccia.Values.UndefinedValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.ObjectValue,
   Goccia.Values.StringValue, Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
   Goccia.Values.NullValue, Goccia.Values.NativeFunction, Goccia.Token, Generics.Collections,
-  Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Evaluator, Goccia.Scope, Goccia.Builtins.Console, Goccia.Builtins.GlobalObject, Goccia.Builtins.Math, Goccia.Interfaces, Goccia.Logger, Goccia.Builtins.GlobalArray, Goccia.Builtins.Globals, Goccia.Builtins.JSON;
+  Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Evaluator, Goccia.Scope, Goccia.Builtins.Console, Goccia.Builtins.GlobalObject, Goccia.Builtins.Math, Goccia.Interfaces, Goccia.Logger, Goccia.Builtins.GlobalArray, Goccia.Builtins.Globals, Goccia.Builtins.JSON, Goccia.Builtins.TestAssertions;
 
 type
   TGocciaInterpreter = class
@@ -20,6 +20,7 @@ type
     FBuiltinGlobalArray: TGocciaGlobalArray;
     FBuiltinGlobals: TGocciaGlobals;
     FBuiltinJSON: TGocciaJSON;
+    FBuiltinTestAssertions: TGocciaTestAssertions;
 
     FGlobalScope: TGocciaScope;
     FModules: TDictionary<string, TGocciaModule>;
@@ -32,6 +33,7 @@ type
     procedure RegisterConsole;
     procedure RegisterMath;
     procedure RegisterJSON;
+    procedure RegisterTestAssertions;
     procedure RegisterPromise;
     procedure RegisterGlobalArray;
     procedure RegisterObjectMethods;
@@ -125,6 +127,7 @@ begin
   FBuiltinConsole.Free;
   FBuiltinMath.Free;
   FBuiltinJSON.Free;
+  FBuiltinTestAssertions.Free;
   FBuiltinGlobalObject.Free;
   FModules.Free;
   FSourceLines.Free;
@@ -136,6 +139,7 @@ begin
   RegisterConsole;
   RegisterMath;
   RegisterJSON;
+  RegisterTestAssertions;
   RegisterPromise;
   RegisterObjectMethods;
   RegisterGlobalArray;
@@ -156,6 +160,14 @@ end;
 procedure TGocciaInterpreter.RegisterJSON;
 begin
   FBuiltinJSON := TGocciaJSON.Create('JSON', FGlobalScope, ThrowError);
+end;
+
+procedure TGocciaInterpreter.RegisterTestAssertions;
+begin
+  FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions', FGlobalScope, ThrowError);
+
+  // The TestAssertions builtin should register itself and its functions globally
+  // No additional registration needed here since it's handled in the constructor
 end;
 
 procedure TGocciaInterpreter.RegisterPromise;

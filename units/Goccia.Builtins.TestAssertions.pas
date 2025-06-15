@@ -24,6 +24,23 @@ uses
 type
   TGocciaTestAssertions = class;
 
+  // Class to hold registered test suites (instead of record)
+  TTestSuite = class
+  public
+    Name: string;
+    SuiteFunction: TGocciaFunctionValue;
+    constructor Create(const AName: string; ASuiteFunction: TGocciaFunctionValue);
+  end;
+
+  // Class to hold registered tests (instead of record)
+  TTestCase = class
+  public
+    Name: string;
+    TestFunction: TGocciaFunctionValue;
+    SuiteName: string;
+    constructor Create(const AName: string; ATestFunction: TGocciaFunctionValue; const ASuiteName: string);
+  end;
+
   // Expectation object that provides matchers
   TGocciaExpectationValue = class(TGocciaObjectValue)
   private
@@ -43,6 +60,8 @@ type
     function ToBeGreaterThan(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToBeLessThan(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToContain(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ToBeInstanceOf(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ToThrow(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
     // Negation support
     function GetNot(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -56,22 +75,31 @@ type
       PassedTests: Integer;
       FailedTests: Integer;
       CurrentSuiteName: string;
+      CurrentTestName: string;
+      CurrentTestHasFailures: Boolean;
+      CurrentTestAssertionCount: Integer;  // Assertions in current test
+      TotalAssertionCount: Integer;        // Total assertions across all tests
     end;
 
+    FRegisteredSuites: TObjectList<TTestSuite>;
+    FRegisteredTests: TObjectList<TTestCase>;
     FBeforeEachCallbacks: TObjectList<TGocciaValue>;
     FAfterEachCallbacks: TObjectList<TGocciaValue>;
 
     procedure RunCallbacks(Callbacks: TObjectList<TGocciaValue>);
     procedure AssertionPassed(const TestName: string);
     procedure AssertionFailed(const TestName, Message: string);
+    procedure StartTest(const TestName: string);
+    procedure EndTest;
+    procedure ResetTestStats;
   public
-    constructor Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
+    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
     destructor Destroy; override;
 
     // Main expect function
     function Expect(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
-    // Test suite functions
+    // Test registration functions (don't execute immediately)
     function Describe(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function Test(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function It(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -80,15 +108,37 @@ type
     function BeforeEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function AfterEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
-    // Results
-    function GetTestResults(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    // Test execution
+    function RunTests(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
 
+uses
+  SysUtils, Goccia.Values.ClassValue;
+
+{ TTestSuite }
+
+constructor TTestSuite.Create(const AName: string; ASuiteFunction: TGocciaFunctionValue);
+begin
+  inherited Create;
+  Name := AName;
+  SuiteFunction := ASuiteFunction;
+end;
+
+{ TTestCase }
+
+constructor TTestCase.Create(const AName: string; ATestFunction: TGocciaFunctionValue; const ASuiteName: string);
+begin
+  inherited Create;
+  Name := AName;
+  TestFunction := ATestFunction;
+  SuiteName := ASuiteName;
+end;
+
 { TGocciaExpectationValue }
 
-constructor TGocciaExpectationValue.Create(ActualValue: TGocciaValue; TestAssertions: TObject; IsNegated: Boolean);
+constructor TGocciaExpectationValue.Create(ActualValue: TGocciaValue; TestAssertions: TGocciaTestAssertions; IsNegated: Boolean);
 begin
   inherited Create;
   FActualValue := ActualValue;
@@ -105,6 +155,8 @@ begin
   SetProperty('toBeGreaterThan', TGocciaNativeFunctionValue.Create(ToBeGreaterThan, 'toBeGreaterThan', 1));
   SetProperty('toBeLessThan', TGocciaNativeFunctionValue.Create(ToBeLessThan, 'toBeLessThan', 1));
   SetProperty('toContain', TGocciaNativeFunctionValue.Create(ToContain, 'toContain', 1));
+  SetProperty('toBeInstanceOf', TGocciaNativeFunctionValue.Create(ToBeInstanceOf, 'toBeInstanceOf', 1));
+  SetProperty('toThrow', TGocciaNativeFunctionValue.Create(ToThrow, 'toThrow', 1));
 
   // Negation property
   SetProperty('not', TGocciaNativeFunctionValue.Create(GetNot, 'not', 0));
@@ -116,7 +168,10 @@ var
   IsEqual: Boolean;
 begin
   if Args.Count <> 1 then
-    raise TGocciaRuntimeError.Create('toBe expects exactly 1 argument');
+  begin
+    FTestAssertions.ThrowError('toBe expects exactly 1 argument', 0, 0);
+    Exit;
+  end;
 
   Expected := Args[0];
   IsEqual := (FActualValue.TypeName = Expected.TypeName) and
@@ -128,6 +183,7 @@ begin
   if IsEqual then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBe');
+    Result := TGocciaUndefinedValue.Create;
   end
   else
   begin
@@ -137,9 +193,8 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBe',
         'Expected ' + FActualValue.ToString + ' to be ' + Expected.ToString);
+    Result := TGocciaUndefinedValue.Create;
   end;
-
-  Result := TGocciaUndefinedValue.Create;
 end;
 
 function TGocciaExpectationValue.ToEqual(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -161,6 +216,7 @@ begin
   if IsNull then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeNull');
+    Result := TGocciaUndefinedValue.Create;
   end
   else
   begin
@@ -170,9 +226,8 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeNull',
         'Expected ' + FActualValue.ToString + ' to be null');
+    Result := TGocciaUndefinedValue.Create;
   end;
-
-  Result := TGocciaUndefinedValue.Create;
 end;
 
 function TGocciaExpectationValue.ToBeUndefined(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -187,6 +242,7 @@ begin
   if IsUndefined then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeUndefined');
+    Result := TGocciaUndefinedValue.Create;
   end
   else
   begin
@@ -196,9 +252,8 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeUndefined',
         'Expected ' + FActualValue.ToString + ' to be undefined');
+    Result := TGocciaUndefinedValue.Create;
   end;
-
-  Result := TGocciaUndefinedValue.Create;
 end;
 
 function TGocciaExpectationValue.ToBeTruthy(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -213,6 +268,7 @@ begin
   if IsTruthy then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeTruthy');
+    Result := TGocciaUndefinedValue.Create;
   end
   else
   begin
@@ -222,9 +278,8 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeTruthy',
         'Expected ' + FActualValue.ToString + ' to be truthy');
+    Result := TGocciaUndefinedValue.Create;
   end;
-
-  Result := TGocciaUndefinedValue.Create;
 end;
 
 function TGocciaExpectationValue.ToBeFalsy(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -239,6 +294,7 @@ begin
   if IsFalsy then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeFalsy');
+    Result := TGocciaUndefinedValue.Create;
   end
   else
   begin
@@ -248,9 +304,8 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeFalsy',
         'Expected ' + FActualValue.ToString + ' to be falsy');
+    Result := TGocciaUndefinedValue.Create;
   end;
-
-  Result := TGocciaUndefinedValue.Create;
 end;
 
 function TGocciaExpectationValue.ToBeGreaterThan(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -259,7 +314,10 @@ var
   IsGreater: Boolean;
 begin
   if Args.Count <> 1 then
-    raise TGocciaRuntimeError.Create('toBeGreaterThan expects exactly 1 argument');
+  begin
+    FTestAssertions.ThrowError('toBeGreaterThan expects exactly 1 argument', 0, 0);
+    Exit;
+  end;
 
   Expected := Args[0];
   IsGreater := FActualValue.ToNumber > Expected.ToNumber;
@@ -270,6 +328,7 @@ begin
   if IsGreater then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeGreaterThan');
+    Result := TGocciaUndefinedValue.Create;
   end
   else
   begin
@@ -279,9 +338,8 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeGreaterThan',
         'Expected ' + FActualValue.ToString + ' to be greater than ' + Expected.ToString);
+    Result := TGocciaUndefinedValue.Create;
   end;
-
-  Result := TGocciaUndefinedValue.Create;
 end;
 
 function TGocciaExpectationValue.ToBeLessThan(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -290,7 +348,10 @@ var
   IsLess: Boolean;
 begin
   if Args.Count <> 1 then
-    raise TGocciaRuntimeError.Create('toBeLessThan expects exactly 1 argument');
+  begin
+    FTestAssertions.ThrowError('toBeLessThan expects exactly 1 argument', 0, 0);
+    Exit;
+  end;
 
   Expected := Args[0];
   IsLess := FActualValue.ToNumber < Expected.ToNumber;
@@ -301,6 +362,7 @@ begin
   if IsLess then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeLessThan');
+    Result := TGocciaUndefinedValue.Create;
   end
   else
   begin
@@ -310,9 +372,8 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeLessThan',
         'Expected ' + FActualValue.ToString + ' to be less than ' + Expected.ToString);
+    Result := TGocciaUndefinedValue.Create;
   end;
-
-  Result := TGocciaUndefinedValue.Create;
 end;
 
 function TGocciaExpectationValue.ToContain(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -322,7 +383,10 @@ var
   ActualStr, ExpectedStr: string;
 begin
   if Args.Count <> 1 then
-    raise TGocciaRuntimeError.Create('toContain expects exactly 1 argument');
+  begin
+    FTestAssertions.ThrowError('toContain expects exactly 1 argument', 0, 0);
+    Exit;
+  end;
 
   Expected := Args[0];
 
@@ -345,6 +409,7 @@ begin
   if Contains then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toContain');
+    Result := TGocciaUndefinedValue.Create;
   end
   else
   begin
@@ -354,10 +419,69 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toContain',
         'Expected ' + FActualValue.ToString + ' to contain ' + Expected.ToString);
+    Result := TGocciaUndefinedValue.Create;
+  end;
+end;
+
+function TGocciaExpectationValue.ToBeInstanceOf(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  ActualInstanceClass: TGocciaInstanceValue;
+begin
+  Result := TGocciaUndefinedValue.Create;
+
+  if Args.Count <> 1 then
+  begin
+    FTestAssertions.ThrowError('toBeInstanceOf expects exactly 1 argument', 0, 0);
+    Exit;
   end;
 
+  // Check if the actual value is an instance of the expected class (userland only, native functions don't work)
+  ActualInstanceClass := FActualValue as TGocciaInstanceValue;
+
+  if ActualInstanceClass.ClassType = Args[0].ClassType then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeInstanceOf');
+    Result := TGocciaUndefinedValue.Create;
+  end
+  else
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeInstanceOf',
+      'Expected ' + FActualValue.ToString + ' to be an instance of ' + Args[0].ToString);
+    Result := TGocciaUndefinedValue.Create;
+  end;
+end;
+
+function TGocciaExpectationValue.ToThrow(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedValue.Create;
+
+  if (Args.Count > 0) then
+  begin
+    FTestAssertions.ThrowError('toThrow does not expect any arguments', 0, 0);
+    Exit;
+  end;
+
+  if not (FActualValue is TGocciaFunctionValue) then
+  begin
+    FTestAssertions.ThrowError('toThrow expects actual value to be a function', 0, 0);
+    Exit;
+  end;
+
+  try
+    TGocciaFunctionValue(FActualValue).Call(Args, TGocciaUndefinedValue.Create);
+  except
+    on E: Exception do
+    begin
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+      Result := TGocciaUndefinedValue.Create;
+    end;
+  end;
+
+  TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
+    'Expected ' + FActualValue.ToString + ' to throw an exception');
   Result := TGocciaUndefinedValue.Create;
 end;
+
 
 function TGocciaExpectationValue.GetNot(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 begin
@@ -367,62 +491,121 @@ end;
 
 { TGocciaTestAssertions }
 
-constructor TGocciaTestAssertions.Create(const AName: string; AScope: TGocciaScope; AThrowError: TGocciaThrowError);
+constructor TGocciaTestAssertions.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
   inherited Create(AName, AScope, AThrowError);
 
+  FRegisteredSuites := TObjectList<TTestSuite>.Create;
+  FRegisteredTests := TObjectList<TTestCase>.Create;
   FBeforeEachCallbacks := TObjectList<TGocciaValue>.Create(False);
   FAfterEachCallbacks := TObjectList<TGocciaValue>.Create(False);
 
-  // Initialize test stats
-  FTestStats.TotalTests := 0;
-  FTestStats.PassedTests := 0;
-  FTestStats.FailedTests := 0;
-  FTestStats.CurrentSuiteName := '';
+  ResetTestStats;
 
-  // Core testing functions
+  // Register testing functions globally for easy access
+  AScope.SetValue('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1));
+  AScope.SetValue('describe', TGocciaNativeFunctionValue.Create(Describe, 'describe', 2));
+  AScope.SetValue('test', TGocciaNativeFunctionValue.Create(Test, 'test', 2));
+  AScope.SetValue('it', TGocciaNativeFunctionValue.Create(It, 'it', 2));
+  AScope.SetValue('beforeEach', TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1));
+  AScope.SetValue('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1));
+  AScope.SetValue('runTests', TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0));
+
+  // Also set them in the builtin object for completeness
   FBuiltinObject.SetProperty('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1));
   FBuiltinObject.SetProperty('describe', TGocciaNativeFunctionValue.Create(Describe, 'describe', 2));
   FBuiltinObject.SetProperty('test', TGocciaNativeFunctionValue.Create(Test, 'test', 2));
   FBuiltinObject.SetProperty('it', TGocciaNativeFunctionValue.Create(It, 'it', 2));
   FBuiltinObject.SetProperty('beforeEach', TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1));
   FBuiltinObject.SetProperty('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1));
-  FBuiltinObject.SetProperty('getTestResults', TGocciaNativeFunctionValue.Create(GetTestResults, 'getTestResults', 0));
+  FBuiltinObject.SetProperty('runTests', TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0));
 end;
 
 destructor TGocciaTestAssertions.Destroy;
 begin
+  FRegisteredSuites.Free;
+  FRegisteredTests.Free;
   FBeforeEachCallbacks.Free;
   FAfterEachCallbacks.Free;
   inherited;
+end;
+
+procedure TGocciaTestAssertions.ResetTestStats;
+begin
+  FTestStats.TotalTests := 0;
+  FTestStats.PassedTests := 0;
+  FTestStats.FailedTests := 0;
+  FTestStats.CurrentSuiteName := '';
+  FTestStats.CurrentTestName := '';
+  FTestStats.CurrentTestHasFailures := False;
+  FTestStats.CurrentTestAssertionCount := 0;
+  FTestStats.TotalAssertionCount := 0;
 end;
 
 procedure TGocciaTestAssertions.RunCallbacks(Callbacks: TObjectList<TGocciaValue>);
 var
   I: Integer;
   Callback: TGocciaValue;
+  EmptyArgs: TObjectList<TGocciaValue>;
 begin
-  for I := 0 to Callbacks.Count - 1 do
-  begin
-    Callback := Callbacks[I];
-    if Callback is TGocciaFunctionValue then
+  EmptyArgs := TObjectList<TGocciaValue>.Create(False);
+  try
+    for I := 0 to Callbacks.Count - 1 do
     begin
-      // Execute the callback function
-      // Note: In a full implementation, this would need proper function invocation
+      Callback := Callbacks[I];
+      if Callback is TGocciaFunctionValue then
+      begin
+        try
+          // Don't use CloneWithNewScope - just call the function directly
+          // This avoids circular scope references that cause infinite loops
+          TGocciaFunctionValue(Callback).Call(EmptyArgs, TGocciaUndefinedValue.Create);
+        except
+          on E: Exception do
+          begin
+            // Log callback error but don't crash the test
+            WriteLn('Warning: Error in callback: ', E.Message);
+          end;
+        end;
+      end;
     end;
+  finally
+    EmptyArgs.Free;
   end;
+end;
+
+procedure TGocciaTestAssertions.StartTest(const TestName: string);
+begin
+  FTestStats.CurrentTestName := TestName;
+  FTestStats.CurrentTestHasFailures := False;
+  FTestStats.CurrentTestAssertionCount := 0;
+end;
+
+procedure TGocciaTestAssertions.EndTest;
+begin
+  if FTestStats.CurrentTestHasFailures then
+    Inc(FTestStats.FailedTests)
+  else
+    Inc(FTestStats.PassedTests);
 end;
 
 procedure TGocciaTestAssertions.AssertionPassed(const TestName: string);
 begin
-  Inc(FTestStats.PassedTests);
-  // Could log success here
+  Inc(FTestStats.CurrentTestAssertionCount);
+  Inc(FTestStats.TotalAssertionCount);
 end;
 
 procedure TGocciaTestAssertions.AssertionFailed(const TestName, Message: string);
 begin
-  Inc(FTestStats.FailedTests);
-  ThrowError('Test failed: ' + Message, 0, 0);
+  Inc(FTestStats.CurrentTestAssertionCount);
+  Inc(FTestStats.TotalAssertionCount);
+  FTestStats.CurrentTestHasFailures := True;
+
+  // Track the failure details for reporting
+  // This is called during test execution, so we know the current test context
+  if FTestStats.CurrentSuiteName <> '' then
+    WriteLn('    ❌ ', FTestStats.CurrentTestName, ' in ', FTestStats.CurrentSuiteName, ': ', Message)
+  else
+    WriteLn('    ❌ ', FTestStats.CurrentTestName, ': ', Message);
 end;
 
 function TGocciaTestAssertions.Expect(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -434,6 +617,10 @@ begin
 end;
 
 function TGocciaTestAssertions.Describe(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  SuiteName: string;
+  SuiteFunction: TGocciaFunctionValue;
+  Suite: TTestSuite;
 begin
   if Args.Count <> 2 then
     ThrowError('describe expects exactly 2 arguments', 0, 0);
@@ -444,14 +631,21 @@ begin
   if not (Args[1] is TGocciaFunctionValue) then
     ThrowError('describe expects second argument to be a function', 0, 0);
 
-  FTestStats.CurrentSuiteName := Args[0].ToString;
+  SuiteName := Args[0].ToString;
+  SuiteFunction := Args[1] as TGocciaFunctionValue;
 
-  // In a full implementation, this would execute the function with proper scope
-  // For now, we'll return undefined
+  // Just register the test suite - do NOT execute it until runTests() is called
+  Suite := TTestSuite.Create(SuiteName, SuiteFunction);
+  FRegisteredSuites.Add(Suite);
+
   Result := TGocciaUndefinedValue.Create;
 end;
 
 function TGocciaTestAssertions.Test(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  TestName: string;
+  TestFunction: TGocciaFunctionValue;
+  TestCase: TTestCase;
 begin
   if Args.Count <> 2 then
     ThrowError('test expects exactly 2 arguments', 0, 0);
@@ -462,16 +656,12 @@ begin
   if not (Args[1] is TGocciaFunctionValue) then
     ThrowError('test expects second argument to be a function', 0, 0);
 
-  Inc(FTestStats.TotalTests);
+  TestName := Args[0].ToString;
+  TestFunction := Args[1] as TGocciaFunctionValue;
 
-  // Run beforeEach callbacks
-  RunCallbacks(FBeforeEachCallbacks);
-
-  // In a full implementation, this would execute the test function
-  // and catch any assertion failures
-
-  // Run afterEach callbacks
-  RunCallbacks(FAfterEachCallbacks);
+  // Register the test with the current suite name
+  TestCase := TTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName);
+  FRegisteredTests.Add(TestCase);
 
   Result := TGocciaUndefinedValue.Create;
 end;
@@ -508,16 +698,171 @@ begin
   Result := TGocciaUndefinedValue.Create;
 end;
 
-function TGocciaTestAssertions.GetTestResults(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTestAssertions.RunTests(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
+  I: Integer;
+  Suite: TTestSuite;
+  TestCase: TTestCase;
+  EmptyArgs: TObjectList<TGocciaValue>;
   ResultObj: TGocciaObjectValue;
+  ExitOnFirstFailure: Boolean;
+  Summary: string;
+  PreviousSuiteName: string;
+  FailedTestDetails: TStringList;
+  ClonedFunction: TGocciaFunctionValue;
 begin
+  // Reset test statistics and clear any previously registered tests from describe blocks
+  ResetTestStats;
+
+  // Clear tests that were registered from previous describe executions
+  // Keep standalone tests that were registered during script execution
+  for I := FRegisteredTests.Count - 1 downto 0 do
+  begin
+    if FRegisteredTests[I].SuiteName <> '' then
+      FRegisteredTests.Delete(I);
+  end;
+
+  if Args.Count > 0 then
+  begin
+    if Args[0] is TGocciaBooleanValue then
+      ExitOnFirstFailure := Args[0].ToBoolean
+    else
+      ExitOnFirstFailure := False;
+  end
+  else ExitOnFirstFailure := False;
+
+  FailedTestDetails := TStringList.Create;
+  EmptyArgs := TObjectList<TGocciaValue>.Create(False);
+  try
+    // First, execute all describe blocks to register their tests
+    for I := 0 to FRegisteredSuites.Count - 1 do
+    begin
+      Suite := FRegisteredSuites[I];
+
+      // Set current suite name so test() calls know which suite they belong to
+      PreviousSuiteName := FTestStats.CurrentSuiteName;
+      FTestStats.CurrentSuiteName := Suite.Name;
+
+      try
+        // Execute the describe function - this will call test() functions inside
+        Suite.SuiteFunction.Call(EmptyArgs, TGocciaUndefinedValue.Create);
+      except
+        on E: Exception do
+        begin
+          WriteLn('Error in describe block "', Suite.Name, '": ', E.Message);
+          FailedTestDetails.Add('Describe "' + Suite.Name + '": ' + E.Message);
+        end;
+      end;
+
+      // Restore previous suite name
+      FTestStats.CurrentSuiteName := PreviousSuiteName;
+    end;
+
+    // Now execute all registered tests
+    for I := 0 to FRegisteredTests.Count - 1 do
+    begin
+      TestCase := FRegisteredTests[I];
+      FTestStats.CurrentSuiteName := TestCase.SuiteName;
+
+      Inc(FTestStats.TotalTests);
+
+      // Start tracking this test
+      StartTest(TestCase.Name);
+
+      // Run beforeEach callbacks
+      RunCallbacks(FBeforeEachCallbacks);
+
+      try
+        // Execute the test function
+        // For tests from describe blocks, clone with global scope to fix context issues
+        if TestCase.SuiteName <> '' then
+        begin
+          // Test is from a describe block - clone function with global scope
+          ClonedFunction := TestCase.TestFunction.CloneWithNewScope(FScope);
+          ClonedFunction.Call(EmptyArgs, TGocciaUndefinedValue.Create);
+        end
+        else
+        begin
+          // Standalone test - call directly
+          TestCase.TestFunction.Call(EmptyArgs, TGocciaUndefinedValue.Create);
+        end;
+      except
+        on E: Exception do
+        begin
+          // Mark test as failed if there's an exception during execution
+          FTestStats.CurrentTestHasFailures := True;
+          if TestCase.SuiteName <> '' then
+            FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": ' + E.Message)
+          else
+            FailedTestDetails.Add('Test "' + TestCase.Name + '": ' + E.Message);
+          if ExitOnFirstFailure then
+            Break;
+        end;
+      end;
+
+      // Run afterEach callbacks
+      RunCallbacks(FAfterEachCallbacks);
+
+      // End tracking this test
+      EndTest;
+
+      // Exit on first failure if requested
+      if FTestStats.CurrentTestHasFailures and ExitOnFirstFailure then
+        Break;
+    end;
+
+  finally
+    EmptyArgs.Free;
+  end;
+
+  // Create result object
   ResultObj := TGocciaObjectValue.Create;
-  ResultObj.SetProperty('total', TGocciaNumberValue.Create(FTestStats.TotalTests));
+  ResultObj.SetProperty('totalTests', TGocciaNumberValue.Create(FRegisteredTests.Count));
+  ResultObj.SetProperty('totalRunTests', TGocciaNumberValue.Create(FTestStats.TotalTests));
   ResultObj.SetProperty('passed', TGocciaNumberValue.Create(FTestStats.PassedTests));
   ResultObj.SetProperty('failed', TGocciaNumberValue.Create(FTestStats.FailedTests));
-  ResultObj.SetProperty('suiteName', TGocciaStringValue.Create(FTestStats.CurrentSuiteName));
+  ResultObj.SetProperty('assertions', TGocciaNumberValue.Create(FTestStats.TotalAssertionCount));
 
+  // Create a summary message
+  Summary := Format('Tests: %d total, %d passed, %d failed',
+    [FTestStats.TotalTests, FTestStats.PassedTests, FTestStats.FailedTests]);
+
+  if FRegisteredSuites.Count > 0 then
+  begin
+    Summary := Summary + ' (Suites: ';
+    for I := 0 to FRegisteredSuites.Count - 1 do
+    begin
+      if I > 0 then Summary := Summary + ', ';
+      Summary := Summary + FRegisteredSuites[I].Name;
+    end;
+    Summary := Summary + ')';
+  end;
+
+  ResultObj.SetProperty('summary', TGocciaStringValue.Create(Summary));
+
+  // Print the summary to console for visibility
+  WriteLn('');
+  WriteLn('=== Test Results ===');
+  WriteLn(Summary);
+  WriteLn('Total Assertions: ', FTestStats.TotalAssertionCount);
+
+  // Show failed test details
+  if FailedTestDetails.Count > 0 then
+  begin
+    WriteLn('');
+    WriteLn('Failed Tests:');
+    for I := 0 to FailedTestDetails.Count - 1 do
+      WriteLn('  • ', FailedTestDetails[I]);
+  end;
+
+  if FTestStats.FailedTests = 0 then
+    WriteLn('✅ All tests passed!')
+  else
+    WriteLn('❌ Some tests failed!');
+
+  WriteLn('==================');
+
+  FailedTestDetails.Free;
   Result := ResultObj;
 end;
 
