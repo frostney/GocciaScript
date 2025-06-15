@@ -9,6 +9,7 @@ uses
 
 type
   TGocciaLexer = class
+  const ValidIdentifierChars: set of Char = ['a'..'z', 'A'..'Z', '0'..'9', '_', '$'];
   private
     FSource: string;
     FTokens: TObjectList<TGocciaToken>;
@@ -248,7 +249,7 @@ procedure TGocciaLexer.ScanIdentifier;
 var
   Text: string;
 begin
-  while CharInSet(Peek, ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) do
+  while CharInSet(Peek, ValidIdentifierChars) do
     Advance;
 
   Text := Copy(FSource, FStart, FCurrent - FStart);
@@ -404,7 +405,7 @@ begin
       Dec(FColumn);
       ScanNumber;
     end
-    else if CharInSet(C, ['a'..'z', 'A'..'Z', '_', '$']) then
+    else if CharInSet(C, ValidIdentifierChars) then
     begin
       Dec(FCurrent);
       Dec(FColumn);
