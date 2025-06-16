@@ -502,6 +502,8 @@ begin
 
   ResetTestStats;
 
+  // TODO: Remove duplication
+
   // Register testing functions globally for easy access
   AScope.SetValue('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1));
   AScope.SetValue('describe', TGocciaNativeFunctionValue.Create(Describe, 'describe', 2));
@@ -556,8 +558,6 @@ begin
       if Callback is TGocciaFunctionValue then
       begin
         try
-          // Don't use CloneWithNewScope - just call the function directly
-          // This avoids circular scope references that cause infinite loops
           TGocciaFunctionValue(Callback).Call(EmptyArgs, TGocciaUndefinedValue.Create);
         except
           on E: Exception do
@@ -705,11 +705,13 @@ var
   TestCase: TTestCase;
   EmptyArgs: TObjectList<TGocciaValue>;
   ResultObj: TGocciaObjectValue;
-  ExitOnFirstFailure: Boolean;
+  ExitOnFirstFailure: Boolean = False;
+  ShowTestResults: Boolean = True;
   Summary: string;
   PreviousSuiteName: string;
   FailedTestDetails: TStringList;
   ClonedFunction: TGocciaFunctionValue;
+  TestParams: TGocciaObjectValue;
 begin
   // Reset test statistics and clear any previously registered tests from describe blocks
   ResetTestStats;
@@ -724,12 +726,24 @@ begin
 
   if Args.Count > 0 then
   begin
-    if Args[0] is TGocciaBooleanValue then
-      ExitOnFirstFailure := Args[0].ToBoolean
+    if Args[0] is TGocciaObjectValue then
+    begin
+      TestParams := Args[0] as TGocciaObjectValue;
+      if TestParams.HasProperty('exitOnFirstFailure') then
+        ExitOnFirstFailure := TestParams.GetProperty('exitOnFirstFailure').ToBoolean
+      else
+        ExitOnFirstFailure := False;
+      if TestParams.HasProperty('showTestResults') then
+        ShowTestResults := TestParams.GetProperty('showTestResults').ToBoolean
+      else
+        ShowTestResults := True;
+    end
     else
+    begin
       ExitOnFirstFailure := False;
-  end
-  else ExitOnFirstFailure := False;
+      ShowTestResults := True;
+    end;
+  end;
 
   FailedTestDetails := TStringList.Create;
   EmptyArgs := TObjectList<TGocciaValue>.Create(False);
@@ -841,26 +855,29 @@ begin
   ResultObj.SetProperty('summary', TGocciaStringValue.Create(Summary));
 
   // Print the summary to console for visibility
-  WriteLn('');
-  WriteLn('=== Test Results ===');
-  WriteLn(Summary);
-  WriteLn('Total Assertions: ', FTestStats.TotalAssertionCount);
-
-  // Show failed test details
-  if FailedTestDetails.Count > 0 then
+  if ShowTestResults then
   begin
     WriteLn('');
-    WriteLn('Failed Tests:');
-    for I := 0 to FailedTestDetails.Count - 1 do
-      WriteLn('  • ', FailedTestDetails[I]);
+    WriteLn('=== Test Results ===');
+    WriteLn(Summary);
+    WriteLn('Total Assertions: ', FTestStats.TotalAssertionCount);
+
+    // Show failed test details
+    if FailedTestDetails.Count > 0 then
+    begin
+      WriteLn('');
+      WriteLn('Failed Tests:');
+      for I := 0 to FailedTestDetails.Count - 1 do
+        WriteLn('  • ', FailedTestDetails[I]);
+    end;
+
+    if FTestStats.FailedTests = 0 then
+      WriteLn('✅ All tests passed!')
+      else
+        WriteLn('❌ Some tests failed!');
+
+      WriteLn('==================');
   end;
-
-  if FTestStats.FailedTests = 0 then
-    WriteLn('✅ All tests passed!')
-  else
-    WriteLn('❌ Some tests failed!');
-
-  WriteLn('==================');
 
   FailedTestDetails.Free;
   Result := ResultObj;
