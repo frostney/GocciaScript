@@ -13,7 +13,7 @@ jobs:
       - name: Install FPC
         run: sudo apt-get install -y fpc
       - name: Build Tests
-        run: ./build.pas test
+        run: ./build.pas tests
       - name: Run Test Values Primitives
         run: ./build/Goccia.Values.Primitives.Test
       - name: Run Test Values Function
