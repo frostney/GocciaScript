@@ -51,6 +51,13 @@ type
     procedure CheckForModuleReload(Module: TGocciaModule);
 
     property GlobalScope: TGocciaScope read FGlobalScope;
+    property BuiltinTestAssertions: TGocciaTestAssertions read FBuiltinTestAssertions;
+    property BuiltinConsole: TGocciaConsole read FBuiltinConsole;
+    property BuiltinMath: TGocciaMath read FBuiltinMath;
+    property BuiltinGlobalObject: TGocciaGlobalObject read FBuiltinGlobalObject;
+    property BuiltinGlobalArray: TGocciaGlobalArray read FBuiltinGlobalArray;
+    property BuiltinGlobals: TGocciaGlobals read FBuiltinGlobals;
+    property BuiltinJSON: TGocciaJSON read FBuiltinJSON;
   end;
 
   TInterpreterResult = record
