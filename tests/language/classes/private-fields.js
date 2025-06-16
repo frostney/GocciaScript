@@ -80,3 +80,76 @@ test("private methods", () => {
   // Private method is not accessible
   expect(calc.validate).toBeUndefined();
 });
+
+test("comprehensive private fields with inheritance", () => {
+  class Counter {
+    #count = 0;
+    #maxValue = 100;
+
+    constructor(initialValue) {
+      if (initialValue !== undefined) {
+        this.#count = initialValue;
+      }
+    }
+
+    increment() {
+      if (this.#count < this.#maxValue) {
+        this.#count = this.#count + 1;
+      }
+      return this;
+    }
+
+    getCount() {
+      return this.#count;
+    }
+
+    #validateCount(value) {
+      return value >= 0 && value <= this.#maxValue;
+    }
+
+    setCount(value) {
+      if (this.#validateCount(value)) {
+        this.#count = value;
+      }
+      return this;
+    }
+  }
+
+  // Test basic functionality
+  const counter = new Counter();
+  expect(counter.getCount()).toBe(0);
+
+  counter.increment().increment().increment();
+  expect(counter.getCount()).toBe(3);
+
+  counter.setCount(10);
+  expect(counter.getCount()).toBe(10);
+
+  // Test private field initialization with constructor
+  const counter2 = new Counter(5);
+  expect(counter2.getCount()).toBe(5);
+
+  // Test inheritance - private fields are not inherited
+  class AdvancedCounter extends Counter {
+    #multiplier = 2;
+
+    doubleIncrement() {
+      // This should access the parent's public methods
+      super.increment();
+      super.increment();
+      return this;
+    }
+
+    getMultiplier() {
+      return this.#multiplier;
+    }
+  }
+
+  const advCounter = new AdvancedCounter(1);
+  expect(advCounter.getCount()).toBe(1);
+
+  advCounter.doubleIncrement();
+  expect(advCounter.getCount()).toBe(3);
+
+  expect(advCounter.getMultiplier()).toBe(2);
+});
