@@ -701,20 +701,25 @@ end;
 function TGocciaTestAssertions.RunTests(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
+  StartTime: Int64;
   Suite: TTestSuite;
   TestCase: TTestCase;
   EmptyArgs: TObjectList<TGocciaValue>;
   ResultObj: TGocciaObjectValue;
   ExitOnFirstFailure: Boolean = False;
   ShowTestResults: Boolean = True;
+  Silent: Boolean = False;
   Summary: string;
   PreviousSuiteName: string;
   FailedTestDetails: TStringList;
+  FailedTestDetailsArray: TGocciaArrayValue;
   ClonedFunction: TGocciaFunctionValue;
   TestParams: TGocciaObjectValue;
 begin
   // Reset test statistics and clear any previously registered tests from describe blocks
   ResetTestStats;
+
+  StartTime := GetTickCount64;
 
   // Clear tests that were registered from previous describe executions
   // Keep standalone tests that were registered during script execution
@@ -737,11 +742,16 @@ begin
         ShowTestResults := TestParams.GetProperty('showTestResults').ToBoolean
       else
         ShowTestResults := True;
+      if TestParams.HasProperty('silent') then
+        Silent := TestParams.GetProperty('silent').ToBoolean
+      else
+        Silent := False;
     end
     else
     begin
       ExitOnFirstFailure := False;
       ShowTestResults := True;
+      Silent := False;
     end;
   end;
 
@@ -763,7 +773,8 @@ begin
       except
         on E: Exception do
         begin
-          WriteLn('Error in describe block "', Suite.Name, '": ', E.Message);
+          if not Silent then
+            WriteLn('Error in describe block "', Suite.Name, '": ', E.Message);
           FailedTestDetails.Add('Describe "' + Suite.Name + '": ' + E.Message);
         end;
       end;
@@ -829,13 +840,7 @@ begin
     EmptyArgs.Free;
   end;
 
-  // Create result object
-  ResultObj := TGocciaObjectValue.Create;
-  ResultObj.SetProperty('totalTests', TGocciaNumberValue.Create(FRegisteredTests.Count));
-  ResultObj.SetProperty('totalRunTests', TGocciaNumberValue.Create(FTestStats.TotalTests));
-  ResultObj.SetProperty('passed', TGocciaNumberValue.Create(FTestStats.PassedTests));
-  ResultObj.SetProperty('failed', TGocciaNumberValue.Create(FTestStats.FailedTests));
-  ResultObj.SetProperty('assertions', TGocciaNumberValue.Create(FTestStats.TotalAssertionCount));
+
 
   // Create a summary message
   Summary := Format('Tests: %d total, %d passed, %d failed',
@@ -852,6 +857,22 @@ begin
     Summary := Summary + ')';
   end;
 
+  FailedTestDetailsArray := TGocciaArrayValue.Create;
+  if FailedTestDetails.Count > 0 then
+  begin
+    for I := 0 to FailedTestDetails.Count - 1 do
+      FailedTestDetailsArray.Properties.Add(TPair<string, TGocciaValue>.Create(IntToStr(I), TGocciaStringValue.Create(FailedTestDetails[I])));
+  end;
+
+   // Create result object
+  ResultObj := TGocciaObjectValue.Create;
+  ResultObj.SetProperty('totalTests', TGocciaNumberValue.Create(FRegisteredTests.Count));
+  ResultObj.SetProperty('totalRunTests', TGocciaNumberValue.Create(FTestStats.TotalTests));
+  ResultObj.SetProperty('passed', TGocciaNumberValue.Create(FTestStats.PassedTests));
+  ResultObj.SetProperty('failed', TGocciaNumberValue.Create(FTestStats.FailedTests));
+  ResultObj.SetProperty('assertions', TGocciaNumberValue.Create(FTestStats.TotalAssertionCount));
+  ResultObj.SetProperty('duration', TGocciaNumberValue.Create(GetTickCount64 - StartTime));
+  ResultObj.SetProperty('failedTests', FailedTestDetailsArray);
   ResultObj.SetProperty('summary', TGocciaStringValue.Create(Summary));
 
   // Print the summary to console for visibility

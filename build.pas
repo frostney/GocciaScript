@@ -6,7 +6,7 @@
 {$H+}
 
 uses
-  SysUtils, Classes, Process;
+  SysUtils, Classes, Process, FileUtils in 'units/FileUtils.pas';
 
 var
   I: Integer;
@@ -36,14 +36,21 @@ end;
 
 procedure BuildTests;
 var
+  AllUnitFiles: TStringList;
   TestFiles: TStringList;
   Output: string;
 begin
   WriteLn('Building Tests...');
+  AllUnitFiles := TStringList.Create;
   TestFiles := TStringList.Create;
-  TestFiles.Add('units/Goccia.Values.Primitives.Test.pas');
-  TestFiles.Add('units/Goccia.Values.ObjectValue.Test.pas');
-  TestFiles.Add('units/Goccia.Values.FunctionValue.Test.pas');
+
+  AllUnitFiles.AddStrings(FindAllFiles('units', '.pas'));
+
+  for I := 0 to AllUnitFiles.Count - 1 do
+  begin
+    if Pos('.Test.pas', AllUnitFiles[I]) > 0 then
+      TestFiles.Add(AllUnitFiles[I]);
+  end;
 
   for I := 0 to TestFiles.Count - 1 do
   begin
@@ -54,14 +61,26 @@ begin
   WriteLn('Tests built successfully');
 end;
 
+procedure BuildTestRunner;
+var
+  Output: string;
+begin
+  WriteLn('Building TestRunner...');
+  RunCommand('fpc', ['@config.cfg', 'TestRunner.dpr'], Output);
+  WriteLn(Output);
+  WriteLn('TestRunner built successfully');
+end;
+
 procedure Build(const Trigger: string);
 begin
   if Trigger = 'repl' then
     BuildREPL
   else if Trigger = 'loader' then
     BuildScriptLoader
-  else if Trigger = 'test' then
-    BuildTests;
+  else if Trigger = 'tests' then
+    BuildTests
+  else if Trigger = 'testrunner' then
+    BuildTestRunner;
 end;
 
 begin
@@ -73,8 +92,9 @@ begin
 
   if ParamCount = 0 then
   begin
-    BuildTriggers.Add('test');
+    BuildTriggers.Add('tests');
     BuildTriggers.Add('loader');
+    BuildTriggers.Add('testrunner');
     BuildTriggers.Add('repl');
   end else
   begin
