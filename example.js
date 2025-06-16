@@ -20,6 +20,11 @@ const numbers = [1, 2, 3, 4, 5];
 const doubled = numbers.map((n) => n * 2);
 console.log("Doubled:", doubled);
 
+const unsortedArray = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
+const sortedArray = unsortedArray.toSorted();
+console.log("Unsorted:", unsortedArray);
+console.log("Sorted:", sortedArray);
+
 // Objects
 const person = {
   name: "Alice",
@@ -66,6 +71,7 @@ const printObject = (obj) =>
 // Math operations
 console.log("Math.sqrt(16) =", Math.sqrt(16));
 console.log("Math.max(5, 3, 9, 1) =", Math.max(5, 3, 9, 1));
+console.log("Math.random() =", Math.random());
 
 // Global constants and functions
 console.log("NaN =", NaN);
@@ -88,6 +94,13 @@ console.log(
   printObject(Object.assign({ a: 1 }, { b: 2 }))
 );
 console.log("Object.create({a: 1}) =", printObject(Object.create({ a: 1 })));
+
+// JSON
+console.log("JSON.stringify({a: 1, b: 2}) =", JSON.stringify({ a: 1, b: 2 }));
+console.log(
+  'JSON.parse(\'{"a":1,"b":2}\') =',
+  printObject(JSON.parse('{"a":1,"b":2}'))
+);
 
 // Typeof checks
 console.log("typeof 1 =", typeof 1);
