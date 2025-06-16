@@ -4,11 +4,9 @@ features: [higher-order-functions]
 ---*/
 
 test("function returning function", () => {
-  function createMultiplier(factor) {
-    return function (value) {
-      return value * factor;
-    };
-  }
+  const createMultiplier = (factor) => {
+    return (value) => value * factor;
+  };
 
   const double = createMultiplier(2);
   const triple = createMultiplier(3);
@@ -18,27 +16,17 @@ test("function returning function", () => {
 });
 
 test("function accepting function as parameter", () => {
-  function applyOperation(a, b, operation) {
-    return operation(a, b);
-  }
+  const applyOperation = (a, b, operation) => operation(a, b);
 
-  function add(x, y) {
-    return x + y;
-  }
-  function multiply(x, y) {
-    return x * y;
-  }
+  const add = (x, y) => x + y;
+  const multiply = (x, y) => x * y;
 
   expect(applyOperation(3, 4, add)).toBe(7);
   expect(applyOperation(3, 4, multiply)).toBe(12);
 });
 
 test("function composition", () => {
-  function compose(f, g) {
-    return function (x) {
-      return f(g(x));
-    };
-  }
+  const compose = (f, g) => (x) => f(g(x));
 
   const addOne = (x) => x + 1;
   const double = (x) => x * 2;

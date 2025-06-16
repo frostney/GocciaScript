@@ -4,29 +4,24 @@ features: [closures, function-scope]
 ---*/
 
 test("local variable scope", () => {
-  function testScope() {
+  const testScope = () => {
     let localVar = "local";
     return localVar;
-  }
+  };
   expect(testScope()).toBe("local");
 });
 
 test("function can access outer scope", () => {
   let outerVar = "outer";
-  function inner() {
-    return outerVar;
-  }
+  const inner = () => outerVar;
   expect(inner()).toBe("outer");
 });
 
 test("basic closure", () => {
-  function createCounter() {
+  const createCounter = () => {
     let count = 0;
-    return function () {
-      count++;
-      return count;
-    };
-  }
+    return () => ++count;
+  };
 
   const counter = createCounter();
   expect(counter()).toBe(1);
@@ -35,11 +30,7 @@ test("basic closure", () => {
 });
 
 test("closure with parameters", () => {
-  function createAdder(x) {
-    return function (y) {
-      return x + y;
-    };
-  }
+  const createAdder = (x) => (y) => x + y;
 
   const addFive = createAdder(5);
   expect(addFive(3)).toBe(8);
@@ -47,17 +38,13 @@ test("closure with parameters", () => {
 });
 
 test("multiple closures share same scope", () => {
-  function createCounterPair() {
+  const createCounterPair = () => {
     let count = 0;
     return {
-      increment: function () {
-        return ++count;
-      },
-      decrement: function () {
-        return --count;
-      },
+      increment: () => ++count,
+      decrement: () => --count,
     };
-  }
+  };
 
   const counters = createCounterPair();
   expect(counters.increment()).toBe(1);

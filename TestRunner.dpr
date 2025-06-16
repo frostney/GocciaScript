@@ -22,10 +22,13 @@ begin
     begin
       WriteLn('Fatal error: ', E.Message);
       DefaultScriptResult := TGocciaObjectValue.Create;
+      DefaultScriptResult.SetProperty('totalTests', TGocciaNumberValue.Create(0));
+      DefaultScriptResult.SetProperty('totalRunTests', TGocciaNumberValue.Create(0));
       DefaultScriptResult.SetProperty('passed', TGocciaNumberValue.Create(0));
-      DefaultScriptResult.SetProperty('failed', TGocciaNumberValue.Create(1));
-      DefaultScriptResult.SetProperty('total', TGocciaNumberValue.Create(1));
+      DefaultScriptResult.SetProperty('failed', TGocciaNumberValue.Create(0));
+      DefaultScriptResult.SetProperty('assertions', TGocciaNumberValue.Create(0));
       DefaultScriptResult.SetProperty('duration', TGocciaNumberValue.Create(0));
+      DefaultScriptResult.SetProperty('failedTests', TGocciaArrayValue.Create);
       Result := DefaultScriptResult;
     end;
   end;
@@ -86,17 +89,27 @@ end;
 procedure PrintTestResults(const TestResult: TGocciaValue);
 var
   TestResultObject: TGocciaObjectValue;
-  
+  TotalRunTests: String;
+  TotalPassed: String;
+  TotalFailed: String;
+  TotalAssertions: String;
+  TotalDuration: String;
 begin
   TestResultObject := TestResult as TGocciaObjectValue;
 
+  TotalRunTests := TestResultObject.GetProperty('totalRunTests').ToString;
+  TotalPassed := TestResultObject.GetProperty('passed').ToString;
+  TotalFailed := TestResultObject.GetProperty('failed').ToString;
+  TotalAssertions := TestResultObject.GetProperty('assertions').ToString;
+  TotalDuration := TestResultObject.GetProperty('duration').ToString;
+
   Writeln('Test Results Total Tests: ', TestResultObject.GetProperty('totalTests').ToString);
-  Writeln('Test Results Run Tests: ', TestResultObject.GetProperty('totalRunTests').ToString);
-  Writeln('Test Results Passed: ', TestResultObject.GetProperty('passed').ToString);
-  Writeln('Test Results Failed: ', TestResultObject.GetProperty('failed').ToString);
-  Writeln('Test Results Assertions: ', TestResultObject.GetProperty('assertions').ToString);
-  Writeln('Test Results Duration: ', TestResultObject.GetProperty('duration').ToString, 'ms');
-  Writeln('Test Results Failed Tests: ', TestResultObject.GetProperty('failedTests').ToString);
+  Writeln(Format('Test Results Run Tests: %s', [TotalRunTests]));
+  Writeln(Format('Test Results Passed: %s (%2.2f%%)', [TotalPassed, (StrToFloat(TotalPassed) / StrToFloat(TotalRunTests) * 100)]));
+  Writeln(Format('Test Results Failed: %s (%2.2f%%)', [TotalFailed, (StrToFloat(TotalFailed) / StrToFloat(TotalRunTests) * 100)]));
+  Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
+  Writeln(Format('Test Results Duration: %sms (%2.2fms/test)', [TotalDuration, (StrToFloat(TotalDuration) / StrToFloat(TotalRunTests))]));
+  Writeln(Format('Test Results Failed Tests: %s', [TestResultObject.GetProperty('failedTests').ToString]));
 end;
 
 var
