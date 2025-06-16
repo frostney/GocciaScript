@@ -32,5 +32,3 @@ test("nested for loops", () => {
   }
   expect(count).toBe(9);
 });
-
-runTests();

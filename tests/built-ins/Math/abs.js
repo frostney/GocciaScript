@@ -15,5 +15,3 @@ test("Math.abs", () => {
   expect(Math.abs(Infinity)).toBeInfinity();
   expect(Math.abs(-Infinity)).toBeInfinity();
 });
-
-runTests();

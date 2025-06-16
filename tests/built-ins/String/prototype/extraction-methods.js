@@ -11,5 +11,3 @@ test("string extraction methods", () => {
   expect(str.slice(-5)).toBe("world");
   expect(str.substr(0, 5)).toBe("hello");
 });
-
-runTests();

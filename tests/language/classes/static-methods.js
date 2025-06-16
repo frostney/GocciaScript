@@ -71,5 +71,3 @@ test("static factory methods", () => {
   expect(person2.name).toBe("Bob");
   expect(person2.age).toBe(18);
 });
-
-runTests();

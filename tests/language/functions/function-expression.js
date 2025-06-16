@@ -25,5 +25,3 @@ test("immediately invoked function expression (IIFE)", () => {
   })(5);
   expect(result).toBe(10);
 });
-
-runTests();

@@ -11,5 +11,3 @@ test("string length and character access", () => {
   expect(str.charAt(1)).toBe("e");
   expect(str.charCodeAt(0)).toBe(104); // 'h'
 });
-
-runTests();

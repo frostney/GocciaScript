@@ -48,5 +48,3 @@ test("default parameter values", () => {
   expect(greet()).toBe("Hello, World!");
   expect(greet("Alice")).toBe("Hello, Alice!");
 });
-
-runTests();

@@ -13,5 +13,3 @@ test("Math.random", () => {
   expect(random2).toBeLessThan(1);
   expect(random1).not.toBe(random2); // Very unlikely to be equal
 });
-
-runTests();

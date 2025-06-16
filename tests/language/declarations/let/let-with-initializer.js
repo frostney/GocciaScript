@@ -7,5 +7,3 @@ test("let declaration with initializer", () => {
   let x = 42;
   expect(x).toBe(42);
 });
-
-runTests();

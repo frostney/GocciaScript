@@ -13,5 +13,3 @@ test("basic while loop", () => {
   expect(sum).toBe(10); // 0+1+2+3+4
   expect(i).toBe(5);
 });
-
-runTests();

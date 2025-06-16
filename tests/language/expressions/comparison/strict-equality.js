@@ -9,5 +9,3 @@ test("strict equality operator (===)", () => {
   expect(true === 1).toBeFalsy();
   expect(null === undefined).toBeFalsy();
 });
-
-runTests();

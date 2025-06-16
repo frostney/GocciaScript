@@ -10,5 +10,3 @@ test("Math constants", () => {
   expect(Math.LN10).toBeCloseTo(2.30258, 4);
   expect(Math.SQRT2).toBeCloseTo(1.41421, 4);
 });
-
-runTests();

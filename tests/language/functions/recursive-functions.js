@@ -34,5 +34,3 @@ test("tail recursion", () => {
 
   expect(sum(5)).toBe(15); // 1+2+3+4+5
 });
-
-runTests();

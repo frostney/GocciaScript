@@ -9,5 +9,3 @@ test("logical AND (&&)", () => {
   expect(false && true).toBeFalsy();
   expect(false && false).toBeFalsy();
 });
-
-runTests();

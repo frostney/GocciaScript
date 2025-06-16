@@ -9,5 +9,3 @@ test("logical OR (||)", () => {
   expect(false || true).toBeTruthy();
   expect(false || false).toBeFalsy();
 });
-
-runTests();

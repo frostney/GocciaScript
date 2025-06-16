@@ -31,5 +31,3 @@ test("do-while executes at least once", () => {
 
   expect(executed).toBeTruthy();
 });
-
-runTests();

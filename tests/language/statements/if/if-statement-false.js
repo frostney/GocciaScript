@@ -10,5 +10,3 @@ test("if statement with false condition", () => {
   }
   expect(executed).toBeFalsy();
 });
-
-runTests();

@@ -13,5 +13,3 @@ test("typeof operator", () => {
   expect(typeof []).toBe("object");
   expect(typeof (() => {})).toBe("function");
 });
-
-runTests();

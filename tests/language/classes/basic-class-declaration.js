@@ -14,5 +14,3 @@ test("simple class creation", () => {
   expect(person.name).toBe("Alice");
   expect(person instanceof Person).toBeTruthy();
 });
-
-runTests();

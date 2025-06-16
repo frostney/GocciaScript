@@ -10,5 +10,3 @@ test("basic array creation and access", () => {
   expect(arr[4]).toBe(5);
   expect(arr[10]).toBeUndefined();
 });
-
-runTests();

@@ -18,5 +18,3 @@ test("string repeat method", () => {
   expect("x".repeat(0)).toBe("");
   expect("test".repeat(1)).toBe("test");
 });
-
-runTests();

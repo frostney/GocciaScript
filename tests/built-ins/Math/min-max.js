@@ -26,5 +26,3 @@ test("Math.min and Math.max", () => {
   expect(Math.max(Infinity, -Infinity)).toBeInfinity();
   expect(Math.min(-Infinity, Infinity)).toBe(-Infinity);
 });
-
-runTests();

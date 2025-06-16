@@ -10,5 +10,3 @@ test("basic for loop", () => {
   }
   expect(sum).toBe(15); // 1+2+3+4+5
 });
-
-runTests();

@@ -12,5 +12,3 @@ test("string search methods", () => {
   expect(str.includes("world")).toBeTruthy();
   expect(str.includes("xyz")).toBeFalsy();
 });
-
-runTests();

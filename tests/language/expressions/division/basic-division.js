@@ -9,5 +9,3 @@ test("division operator", () => {
   expect(-10 / 2).toBe(-5);
   expect(0 / 5).toBe(0);
 });
-
-runTests();

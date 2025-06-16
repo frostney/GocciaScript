@@ -8,5 +8,3 @@ test("String.prototype.toUpperCase converts to uppercase", () => {
   expect("World".toUpperCase()).toBe("WORLD");
   expect("".toUpperCase()).toBe("");
 });
-
-runTests();

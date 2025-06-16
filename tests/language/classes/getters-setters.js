@@ -73,5 +73,3 @@ test("computed property getters", () => {
   expect(circle.circumference).toBeCloseTo(18.85, 2);
   expect(circle.area).toBeCloseTo(28.27, 2);
 });
-
-runTests();

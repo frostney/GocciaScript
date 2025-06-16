@@ -7,5 +7,3 @@ test("let declaration without initializer", () => {
   let a;
   expect(a).toBeUndefined();
 });
-
-runTests();

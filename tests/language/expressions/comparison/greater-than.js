@@ -8,5 +8,3 @@ test("greater than operator", () => {
   expect(0 > 1).toBe(false);
   expect(1 > 1).toBe(false);
 });
-
-runTests();

@@ -26,5 +26,3 @@ test("post-decrement", () => {
   expect(a--).toBe(5);
   expect(a).toBe(4);
 });
-
-runTests();

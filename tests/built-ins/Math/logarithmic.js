@@ -25,5 +25,3 @@ test("Math logarithmic functions", () => {
   expect(Math.log10(Infinity)).toBeInfinity();
   expect(Math.log10(-Infinity)).toBeNaN();
 });
-
-runTests();

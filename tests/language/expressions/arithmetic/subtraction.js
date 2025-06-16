@@ -9,5 +9,3 @@ test("subtraction operator", () => {
   expect(0 - 5).toBe(-5);
   expect(10 - 10).toBe(0);
 });
-
-runTests();

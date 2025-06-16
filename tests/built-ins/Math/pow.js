@@ -14,5 +14,3 @@ test("Math.pow and Math.sqrt", () => {
   expect(Math.sqrt(0)).toBe(0);
   expect(Math.sqrt(2)).toBeCloseTo(1.414, 3);
 });
-
-runTests();

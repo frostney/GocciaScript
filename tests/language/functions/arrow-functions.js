@@ -17,5 +17,3 @@ test("arrow function with multiple parameters", () => {
   const add = (a, b) => a + b;
   expect(add(3, 7)).toBe(10);
 });
-
-runTests();

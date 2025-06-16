@@ -46,5 +46,3 @@ test("function composition", () => {
 
   expect(addOneThenDouble(3)).toBe(8); // (3 + 1) * 2 = 8
 });
-
-runTests();

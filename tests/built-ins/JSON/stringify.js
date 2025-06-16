@@ -23,5 +23,3 @@ test("JSON.stringify arrays", () => {
   const json = JSON.stringify(arr);
   expect(json).toBe('[1,"hello",true,null]');
 });
-
-runTests();

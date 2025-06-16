@@ -64,5 +64,3 @@ test("multiple closures share same scope", () => {
   expect(counters.increment()).toBe(2);
   expect(counters.decrement()).toBe(1);
 });
-
-runTests();

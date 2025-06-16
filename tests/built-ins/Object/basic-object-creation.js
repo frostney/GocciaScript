@@ -10,5 +10,3 @@ test("basic object creation and property access", () => {
   expect(obj.active).toBeTruthy();
   expect(obj.nonExistent).toBeUndefined();
 });
-
-runTests();

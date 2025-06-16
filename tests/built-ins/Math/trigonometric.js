@@ -11,5 +11,3 @@ test("Math trigonometric functions", () => {
   expect(Math.tan(0)).toBeCloseTo(0, 10);
   expect(Math.tan(Math.PI / 4)).toBeCloseTo(1, 10);
 });
-
-runTests();

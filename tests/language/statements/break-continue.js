@@ -44,5 +44,3 @@ test("continue in while loop", () => {
   }
   expect(values).toEqual([1, 2, 4, 5]);
 });
-
-runTests();

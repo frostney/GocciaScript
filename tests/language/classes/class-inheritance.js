@@ -83,5 +83,3 @@ test("super method calls", () => {
   expect(circle.describe()).toBe("This is a circle with radius 5");
   expect(circle.area()).toBeCloseTo(78.54, 2);
 });
-
-runTests();

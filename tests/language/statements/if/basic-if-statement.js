@@ -10,5 +10,3 @@ test("basic if statement", () => {
   }
   expect(result).toBe("executed");
 });
-
-runTests();

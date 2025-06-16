@@ -28,5 +28,3 @@ test("JSON.parse arrays", () => {
   expect(arr[2]).toBeTruthy();
   expect(arr[3]).toBeNull();
 });
-
-runTests();

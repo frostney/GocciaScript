@@ -66,5 +66,3 @@ test("nested if statements", () => {
   expect(nestedTest(1, -1)).toBe("a positive, b non-positive");
   expect(nestedTest(-1, 1)).toBe("a non-positive");
 });
-
-runTests();

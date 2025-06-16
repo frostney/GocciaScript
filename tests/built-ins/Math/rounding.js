@@ -19,5 +19,3 @@ test("Math.round, Math.floor, Math.ceil", () => {
   expect(Math.ceil(-4.3)).toBe(-4);
   expect(Math.ceil(-4.7)).toBe(-4);
 });
-
-runTests();

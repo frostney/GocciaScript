@@ -71,5 +71,3 @@ test("switch with different types", () => {
   expect(checkType(true)).toBe("logical");
   expect(checkType(null)).toBe("other type");
 });
-
-runTests();

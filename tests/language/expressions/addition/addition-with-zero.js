@@ -8,5 +8,3 @@ test("addition with zero", () => {
   expect(0 + 7).toBe(7);
   expect(0 + 0).toBe(0);
 });
-
-runTests();

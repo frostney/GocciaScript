@@ -11,5 +11,3 @@ test("relational operators", () => {
   expect(3 >= 5).toBeFalsy();
   expect(7 <= 5).toBeFalsy();
 });
-
-runTests();

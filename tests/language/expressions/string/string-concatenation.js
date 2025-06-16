@@ -9,5 +9,3 @@ test("string concatenation", () => {
   expect("" + true).toBe("true");
   expect("Value: " + null).toBe("Value: null");
 });
-
-runTests();

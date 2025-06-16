@@ -80,5 +80,3 @@ test("private methods", () => {
   // Private method is not accessible
   expect(calc.validate).toBeUndefined();
 });
-
-runTests();

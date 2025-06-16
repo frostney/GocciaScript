@@ -10,5 +10,3 @@ test("Array.prototype.push adds element", () => {
   expect(arr.length).toBe(3);
   expect(arr[2]).toBe(3);
 });
-
-runTests();

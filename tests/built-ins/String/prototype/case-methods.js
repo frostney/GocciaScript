@@ -9,5 +9,3 @@ test("string case methods", () => {
   expect(str.toUpperCase()).toBe("HELLO WORLD");
   expect(str).toBe("Hello World"); // Original unchanged
 });
-
-runTests();

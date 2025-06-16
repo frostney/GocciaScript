@@ -10,5 +10,3 @@ test("basic function declaration", () => {
   expect(add(2, 3)).toBe(5);
   expect(typeof add).toBe("function");
 });
-
-runTests();

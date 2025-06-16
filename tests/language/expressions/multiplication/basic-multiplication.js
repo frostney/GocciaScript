@@ -9,5 +9,3 @@ test("multiplication operator", () => {
   expect(-3 * 7).toBe(-21);
   expect(0 * 100).toBe(0);
 });
-
-runTests();

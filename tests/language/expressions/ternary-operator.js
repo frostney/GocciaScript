@@ -36,5 +36,3 @@ test("ternary with side effects", () => {
   expect(result).toBe(1);
   expect(count).toBe(1);
 });
-
-runTests();
