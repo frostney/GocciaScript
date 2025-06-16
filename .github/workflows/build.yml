@@ -20,5 +20,9 @@ jobs:
         run: ./build/Goccia.Values.FunctionValue.Test
       - name: Run Test Values Object
         run: ./build/Goccia.Values.ObjectValue.Test
+      - name: Build TestRunner
+        run: ./build.pas testrunner
+      - name: Run all JavaScript tests
+        run: ./build/TestRunner tests
       - name: Build ScriptLoader and REPL
         run: ./build.pas loader repl
