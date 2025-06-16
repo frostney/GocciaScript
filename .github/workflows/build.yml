@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Install FPC
-        run: sudo apt-get install -y fpc
+        run: sudo apt-get install fpc -qq > /dev/null
       - name: Build Tests
         run: ./build.pas tests
       - name: Run Test Values Primitives
