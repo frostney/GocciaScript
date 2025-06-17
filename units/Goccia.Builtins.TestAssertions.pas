@@ -243,14 +243,14 @@ end;
 
 function TGocciaExpectationValue.ToBeNaN(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  IsNaN: Boolean;
+  IsNaNValue: Boolean;
 begin
-  IsNaN := FActualValue.ToNumber = NaN;
+  IsNaNValue := Math.IsNaN(FActualValue.ToNumber);
 
   if FIsNegated then
-    IsNaN := not IsNaN;
+    IsNaNValue := not IsNaNValue;
 
-  if IsNaN then
+  if IsNaNValue then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeNaN');
     Result := TGocciaUndefinedValue.Create;
