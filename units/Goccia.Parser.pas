@@ -431,6 +431,11 @@ begin
     Result := TGocciaLiteralExpression.Create(
       TGocciaStringValue.Create(Token.Lexeme), Token.Line, Token.Column);
   end
+  else if Match([gttTemplate]) then
+  begin
+    Token := Previous;
+    Result := TGocciaTemplateLiteralExpression.Create(Token.Lexeme, Token.Line, Token.Column);
+  end
   else if Match([gttThis]) then
   begin
     Token := Previous;

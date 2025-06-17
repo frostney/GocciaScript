@@ -10,7 +10,8 @@ uses
 type
   TGocciaTokenType = (
     // Literals
-    gttNumber, gttString, gttTrue, gttFalse, gttNull, gttUndefined,
+    gttNumber, gttString, gttTemplate, gttTemplateStart, gttTemplateMiddle, gttTemplateEnd,
+    gttTrue, gttFalse, gttNull, gttUndefined,
     // Identifiers
     gttIdentifier,
     // Keywords

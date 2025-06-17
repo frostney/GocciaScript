@@ -31,6 +31,7 @@ type
     procedure AddToken(TokenType: TGocciaTokenType; const Literal: string); overload;
     procedure ScanToken;
     procedure ScanString;
+    procedure ScanTemplate;
     procedure ScanNumber;
     procedure ScanIdentifier;
     procedure SkipWhitespace;
@@ -235,6 +236,50 @@ begin
   AddToken(gttString, Value);
 end;
 
+procedure TGocciaLexer.ScanTemplate;
+var
+  Value: string;
+begin
+  Value := '';
+
+  while (Peek <> '`') and not IsAtEnd do
+  begin
+    if Peek = #10 then
+    begin
+      Inc(FLine);
+      FColumn := 0;
+      Value := Value + Advance; // Template literals preserve newlines
+    end
+    else if Peek = '\' then
+    begin
+      Advance;
+      if not IsAtEnd then
+      begin
+        case Peek of
+          'n': Value := Value + #10;
+          'r': Value := Value + #13;
+          't': Value := Value + #9;
+          '\': Value := Value + '\';
+          '`': Value := Value + '`';
+          '$': Value := Value + '$';
+        else
+          Value := Value + Peek;
+        end;
+        Advance;
+      end;
+    end
+    else
+      Value := Value + Advance;
+  end;
+
+  if IsAtEnd then
+    raise TGocciaLexerError.Create('Unterminated template literal', FLine, FColumn,
+      FFileName, FSourceLines);
+
+  Advance; // Closing backtick
+  AddToken(gttTemplate, Value);
+end;
+
 procedure TGocciaLexer.ScanNumber;
 var
   Value: string;
@@ -410,6 +455,8 @@ begin
       else
         AddToken(gttDot);
     '#': AddToken(gttHash);
+    '`':
+      ScanTemplate;
     '''', '"':
       ScanString;
   else

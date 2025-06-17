@@ -16,6 +16,22 @@ type
     property Value: TGocciaValue read FValue;
   end;
 
+  TGocciaTemplateLiteralExpression = class(TGocciaExpression)
+  private
+    FValue: string;
+  public
+    constructor Create(const AValue: string; ALine, AColumn: Integer);
+    property Value: string read FValue;
+  end;
+
+  TGocciaTemplateWithInterpolationExpression = class(TGocciaExpression)
+  private
+    FParts: TObjectList<TGocciaExpression>; // Mix of string literals and expressions
+  public
+    constructor Create(AParts: TObjectList<TGocciaExpression>; ALine, AColumn: Integer);
+    property Parts: TObjectList<TGocciaExpression> read FParts;
+  end;
+
   TGocciaIdentifierExpression = class(TGocciaExpression)
   private
     FName: string;
@@ -238,6 +254,24 @@ constructor TGocciaLiteralExpression.Create(AValue: TGocciaValue;
 begin
   inherited Create(ALine, AColumn);
   FValue := AValue;
+end;
+
+{ TGocciaTemplateLiteralExpression }
+
+constructor TGocciaTemplateLiteralExpression.Create(const AValue: string;
+  ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FValue := AValue;
+end;
+
+{ TGocciaTemplateWithInterpolationExpression }
+
+constructor TGocciaTemplateWithInterpolationExpression.Create(AParts: TObjectList<TGocciaExpression>;
+  ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FParts := AParts;
 end;
 
 { TGocciaIdentifierExpression }

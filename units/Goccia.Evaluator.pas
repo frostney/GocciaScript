@@ -5,7 +5,7 @@ unit Goccia.Evaluator;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Base, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.Error, Goccia.Values.NullValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Generics.Collections, SysUtils, Math;
+  Goccia.Interfaces, Goccia.Values.Base, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.Error, Goccia.Values.NullValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser, Generics.Collections, SysUtils, Math;
 
 type
   TGocciaEvaluationContext = record
@@ -34,6 +34,7 @@ function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGo
 function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluatePrivatePropertyAssignment(PrivatePropertyAssignmentExpression: TGocciaPrivatePropertyAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluatePrivatePropertyCompoundAssignment(PrivatePropertyCompoundAssignmentExpression: TGocciaPrivatePropertyCompoundAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateTemplateLiteral(TemplateLiteralExpression: TGocciaTemplateLiteralExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 procedure InitializePrivateInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 
@@ -77,6 +78,8 @@ var
 begin
   if Expression is TGocciaLiteralExpression then
     Result := TGocciaLiteralExpression(Expression).Value
+  else if Expression is TGocciaTemplateLiteralExpression then
+    Result := EvaluateTemplateLiteral(TGocciaTemplateLiteralExpression(Expression), Context)
   else if Expression is TGocciaIdentifierExpression then
   begin
     Result := Context.Scope.GetValue(TGocciaIdentifierExpression(Expression).Name);
@@ -1213,6 +1216,83 @@ begin
     PropertyValue := EvaluateExpression(PropertyPair.Value, Context);
     Instance.SetPrivateProperty(PropertyPair.Key, PropertyValue, ClassValue);
   end;
+end;
+
+function EvaluateTemplateLiteral(TemplateLiteralExpression: TGocciaTemplateLiteralExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  Template: string;
+  ResultStr: string;
+  I, Start: Integer;
+  ExpressionText: string;
+  ExpressionValue: TGocciaValue;
+  VariableName: string;
+  J: Integer;
+  IsSimpleVariable: Boolean;
+begin
+  Template := TemplateLiteralExpression.Value;
+  ResultStr := '';
+  I := 1;
+
+  while I <= Length(Template) do
+  begin
+    if (I < Length(Template)) and (Template[I] = '$') and (Template[I + 1] = '{') then
+    begin
+      // Found interpolation start
+      I := I + 2; // Skip ${
+      Start := I;
+
+      // Find the matching }
+      while (I <= Length(Template)) and (Template[I] <> '}') do
+        Inc(I);
+
+      if I > Length(Template) then
+      begin
+        Context.OnError('Unterminated template expression', TemplateLiteralExpression.Line, TemplateLiteralExpression.Column);
+        Result := TGocciaStringValue.Create(Template);
+        Exit;
+      end;
+
+      // Extract the expression text
+      ExpressionText := Trim(Copy(Template, Start, I - Start));
+
+      // For now, support simple variable names and basic expressions
+      IsSimpleVariable := True;
+      for J := 1 to Length(ExpressionText) do
+      begin
+        if not (CharInSet(ExpressionText[J], ['a'..'z', 'A'..'Z', '0'..'9', '_', '$'])) then
+        begin
+          IsSimpleVariable := False;
+          Break;
+        end;
+      end;
+
+      if IsSimpleVariable then
+      begin
+        // Simple variable lookup
+        ExpressionValue := Context.Scope.GetValue(ExpressionText);
+        if ExpressionValue <> nil then
+          ResultStr := ResultStr + ExpressionValue.ToString
+        else
+          ResultStr := ResultStr + 'undefined';
+      end
+      else
+      begin
+        // For complex expressions, just return as literal for now
+        // TODO: Implement full expression parsing later
+        ResultStr := ResultStr + '${' + ExpressionText + '}';
+      end;
+
+      Inc(I); // Skip the closing }
+    end
+    else
+    begin
+      // Regular character
+      ResultStr := ResultStr + Template[I];
+      Inc(I);
+    end;
+  end;
+
+  Result := TGocciaStringValue.Create(ResultStr);
 end;
 
 end.
