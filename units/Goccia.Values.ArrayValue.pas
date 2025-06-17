@@ -380,7 +380,6 @@ begin
 end;
 
 function TGocciaArrayValue.ArraySome(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-
 var
   Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
@@ -496,7 +495,6 @@ begin
 
   Result := ResultArray;
 end;
-
 
 function TGocciaArrayValue.ToString: string;
 var

@@ -63,8 +63,8 @@ type
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
     function GetPrivateProperty(const AName: string; AAccessClass: TGocciaClassValue): TGocciaValue;
     procedure SetPrivateProperty(const AName: string; AValue: TGocciaValue; AAccessClass: TGocciaClassValue);
-    function HasPrivateProperty(const AName: string): Boolean;
-    function IsInstanceOf(AClass: TGocciaClassValue): Boolean;
+    function HasPrivateProperty(const AName: string): Boolean; inline;
+    function IsInstanceOf(AClass: TGocciaClassValue): Boolean; inline;
     property ClassValue: TGocciaClassValue read FClass;
     property Prototype: TGocciaObjectValue read FPrototype write SetPrototype;
     property PrivateProperties: TDictionary<string, TGocciaValue> read FPrivateProperties;
@@ -276,28 +276,27 @@ begin
     Logger.Debug('  Inherited Prototype is still nil');
 end;
 
-function TGocciaInstanceValue.IsInstanceOf(AClass: TGocciaClassValue): Boolean;
+function TGocciaInstanceValue.HasPrivateProperty(const AName: string): Boolean; inline;
+begin
+  Result := FPrivateProperties.ContainsKey(AName);
+end;
+
+function TGocciaInstanceValue.IsInstanceOf(AClass: TGocciaClassValue): Boolean; inline;
 var
   CurrentClass: TGocciaClassValue;
 begin
-  Logger.Debug('TGocciaInstanceValue.IsInstanceOf: Checking if instance of %s is instance of %s', [FClass.Name, AClass.Name]);
-
-  // Walk up the inheritance chain
+  Result := False;
   CurrentClass := FClass;
+
   while Assigned(CurrentClass) do
   begin
-    Logger.Debug('TGocciaInstanceValue.IsInstanceOf: Checking class %s', [CurrentClass.Name]);
     if CurrentClass = AClass then
     begin
-      Logger.Debug('TGocciaInstanceValue.IsInstanceOf: Match found!');
       Result := True;
       Exit;
     end;
     CurrentClass := CurrentClass.SuperClass;
   end;
-
-  Logger.Debug('TGocciaInstanceValue.IsInstanceOf: No match found');
-  Result := False;
 end;
 
 function TGocciaInstanceValue.GetPrivateProperty(const AName: string; AAccessClass: TGocciaClassValue): TGocciaValue;
@@ -320,11 +319,6 @@ begin
     raise TGocciaError.Create(Format('Private field "%s" is not accessible', [AName]), 0, 0, '', nil);
 
   FPrivateProperties.AddOrSetValue(AName, AValue);
-end;
-
-function TGocciaInstanceValue.HasPrivateProperty(const AName: string): Boolean;
-begin
-  Result := FPrivateProperties.ContainsKey(AName);
 end;
 
 destructor TGocciaInstanceValue.Destroy;

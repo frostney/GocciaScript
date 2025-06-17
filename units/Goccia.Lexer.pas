@@ -25,7 +25,7 @@ type
     function Advance: Char;
     function Peek: Char; inline;
     function PeekNext: Char; inline;
-    function Match(Expected: Char): Boolean;
+    function Match(Expected: Char): Boolean; inline;
     procedure AddToken(TokenType: TGocciaTokenType); overload;
     procedure AddToken(TokenType: TGocciaTokenType; const Literal: string); overload;
     procedure ScanToken;
@@ -91,12 +91,20 @@ begin
     Result := FSource[FCurrent + 1];
 end;
 
-function TGocciaLexer.Match(Expected: Char): Boolean;
+function TGocciaLexer.Match(Expected: Char): Boolean; inline;
 begin
   if IsAtEnd then
-    Exit(False);
+  begin
+    Result := False;
+    Exit;
+  end;
+
   if FSource[FCurrent] <> Expected then
-    Exit(False);
+  begin
+    Result := False;
+    Exit;
+  end;
+
   Inc(FCurrent);
   Inc(FColumn);
   Result := True;

@@ -39,8 +39,8 @@ type
     procedure SkipWhitespace;
     function PeekChar: Char;
     function ReadChar: Char;
-    function ExpectChar(Expected: Char): Boolean;
-    function IsAtEnd: Boolean;
+    function ExpectChar(Expected: Char): Boolean; inline;
+    function IsAtEnd: Boolean; inline;
     procedure RaiseParseError(const Message: string);
 
     // Stringifier methods
@@ -381,18 +381,19 @@ begin
   Inc(FPosition);
 end;
 
-function TGocciaJSON.ExpectChar(Expected: Char): Boolean;
+function TGocciaJSON.ExpectChar(Expected: Char): Boolean; inline;
 begin
-  if PeekChar = Expected then
+  SkipWhitespace;
+  if IsAtEnd or (PeekChar <> Expected) then
   begin
-    ReadChar;
-    Result := True;
-  end
-  else
     Result := False;
+    Exit;
+  end;
+  ReadChar; // consume the expected character
+  Result := True;
 end;
 
-function TGocciaJSON.IsAtEnd: Boolean;
+function TGocciaJSON.IsAtEnd: Boolean; inline;
 begin
   Result := FPosition > FLength;
 end;

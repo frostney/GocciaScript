@@ -15,6 +15,7 @@ function FindAllFiles(const Directory: string; const FileExtension: string): TSt
 var
   SearchRec: TSearchRec;
   Files: TStringList;
+  SubdirFiles: TStringList;
 begin
   Files := TStringList.Create;
 
@@ -26,7 +27,12 @@ begin
       begin
         if (SearchRec.Name <> '.') and (SearchRec.Name <> '..') then
         begin
-          Files.AddStrings(FindAllFiles(Directory + '/' + SearchRec.Name, FileExtension));
+          SubdirFiles := FindAllFiles(Directory + '/' + SearchRec.Name, FileExtension);
+          try
+            Files.AddStrings(SubdirFiles);
+          finally
+            SubdirFiles.Free; // Free the recursive result to prevent memory leak
+          end;
         end;
       end;
 

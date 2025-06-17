@@ -11,30 +11,34 @@ var
   DefaultScriptResult: TGocciaObjectValue;
 begin
   Source := TStringList.Create;
-  Source.LoadFromFile(FileName);
-  // It's easiest to inject the runTests call
-  Source.Add('runTests({ exitOnFirstFailure: false, showTestResults: false, silent: true });');
+  try  
+    Source.LoadFromFile(FileName);
+    // It's easiest to inject the runTests call
+    Source.Add('runTests({ exitOnFirstFailure: false, showTestResults: false, silent: true });');
 
-  try
-    Result := RunGocciaScriptFromStringList(Source, FileName).Value;
-  except
-    on E: Exception do
-    begin
-      WriteLn('Fatal error: ', E.Message);
-      DefaultScriptResult := TGocciaObjectValue.Create;
-      DefaultScriptResult.SetProperty('totalTests', TGocciaNumberValue.Create(0));
-      DefaultScriptResult.SetProperty('totalRunTests', TGocciaNumberValue.Create(0));
-      DefaultScriptResult.SetProperty('passed', TGocciaNumberValue.Create(0));
-      DefaultScriptResult.SetProperty('failed', TGocciaNumberValue.Create(0));
-      DefaultScriptResult.SetProperty('assertions', TGocciaNumberValue.Create(0));
-      DefaultScriptResult.SetProperty('duration', TGocciaNumberValue.Create(0));
-      DefaultScriptResult.SetProperty('failedTests', TGocciaArrayValue.Create);
-      Result := DefaultScriptResult;
+    try
+      Result := RunGocciaScriptFromStringList(Source, FileName).Value;
+    except
+      on E: Exception do
+      begin
+        WriteLn('Fatal error: ', E.Message);
+        DefaultScriptResult := TGocciaObjectValue.Create;
+        DefaultScriptResult.SetProperty('totalTests', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.SetProperty('totalRunTests', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.SetProperty('passed', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.SetProperty('failed', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.SetProperty('assertions', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.SetProperty('duration', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.SetProperty('failedTests', TGocciaArrayValue.Create);
+        Result := DefaultScriptResult;
+      end;
     end;
-  end;
 
-  if Result = nil then
-    Result := DefaultScriptResult;
+    if Result = nil then
+      Result := DefaultScriptResult;
+  finally
+    Source.Free; 
+  end;
 end;
 
 function RunScriptFromFile(const FileName: string): TGocciaValue;
@@ -60,6 +64,7 @@ var
   I: Integer;
   AllTestResults: TGocciaObjectValue;
   ScriptResult: TGocciaObjectValue;
+  PassedCount, FailedCount, TotalRunCount, TotalAssertions, TotalDuration: Double;
 begin
   AllTestResults := TGocciaObjectValue.Create;
 
@@ -71,17 +76,31 @@ begin
   AllTestResults.SetProperty('duration', TGocciaNumberValue.Create(0));
   AllTestResults.SetProperty('failedTests', TGocciaArrayValue.Create);
 
+  // Initialize counters to avoid repeated object creation
+  PassedCount := 0;
+  FailedCount := 0;
+  TotalRunCount := 0;
+  TotalAssertions := 0;
+  TotalDuration := 0;
+
   for I := 0 to Files.Count - 1 do
   begin
     ScriptResult := RunScriptFromFile(Files[I]) as TGocciaObjectValue;
     AllTestResults.SetProperty(Files[I], ScriptResult);
-    AllTestResults.SetProperty('passed', TGocciaNumberValue.Create(AllTestResults.GetProperty('passed').ToNumber + ScriptResult.GetProperty('passed').ToNumber));
-    AllTestResults.SetProperty('failed', TGocciaNumberValue.Create(AllTestResults.GetProperty('failed').ToNumber + ScriptResult.GetProperty('failed').ToNumber));
-    AllTestResults.SetProperty('totalRunTests', TGocciaNumberValue.Create(AllTestResults.GetProperty('totalRunTests').ToNumber + ScriptResult.GetProperty('totalRunTests').ToNumber));
-    AllTestResults.SetProperty('duration', TGocciaNumberValue.Create(AllTestResults.GetProperty('duration').ToNumber + ScriptResult.GetProperty('duration').ToNumber));
-    AllTestResults.SetProperty('assertions', TGocciaNumberValue.Create(AllTestResults.GetProperty('assertions').ToNumber + ScriptResult.GetProperty('assertions').ToNumber));
-    // AllTestResults.SetProperty('failedTests', TGocciaArrayValue.Create(AllTestResults.GetProperty('failedTests').ToObject.GetProperty('failedTests').ToObject.Add(ScriptResult.GetProperty('failedTests').ToObject)));
+    
+    PassedCount := PassedCount + ScriptResult.GetProperty('passed').ToNumber;
+    FailedCount := FailedCount + ScriptResult.GetProperty('failed').ToNumber;
+    TotalRunCount := TotalRunCount + ScriptResult.GetProperty('totalRunTests').ToNumber;
+    TotalDuration := TotalDuration + ScriptResult.GetProperty('duration').ToNumber;
+    TotalAssertions := TotalAssertions + ScriptResult.GetProperty('assertions').ToNumber;
   end;
+  
+  // Set final totals - create objects only once at the end
+  AllTestResults.SetProperty('passed', TGocciaNumberValue.Create(PassedCount));
+  AllTestResults.SetProperty('failed', TGocciaNumberValue.Create(FailedCount));
+  AllTestResults.SetProperty('totalRunTests', TGocciaNumberValue.Create(TotalRunCount));
+  AllTestResults.SetProperty('duration', TGocciaNumberValue.Create(TotalDuration));
+  AllTestResults.SetProperty('assertions', TGocciaNumberValue.Create(TotalAssertions));
   
   Result := AllTestResults;
 end;
@@ -128,7 +147,11 @@ begin
     if DirectoryExists(ParamStr(1)) then
     begin
       Files := FindAllFiles(ParamStr(1), '.js');
-      PrintTestResults(RunScriptsFromFiles(Files));
+      try 
+        PrintTestResults(RunScriptsFromFiles(Files));
+      finally
+        Files.Free;
+      end;
     end
     else
     begin

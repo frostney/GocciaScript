@@ -122,7 +122,8 @@ constructor TGocciaInterpreter.Create(const AFileName: string;
 begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
-  FGlobalScope := TGocciaScope.Create(nil, skGlobal);
+  FGlobalScope := TGocciaScope.Create(nil, skGlobal, 'GlobalScope');
+  FGlobalScope.ThisValue := TGocciaUndefinedValue.Create;
   FModules := TDictionary<string, TGocciaModule>.Create;
   RegisterBuiltIns;
 end;
@@ -138,6 +139,7 @@ begin
   FBuiltinGlobalObject.Free;
   FModules.Free;
   FSourceLines.Free;
+
   inherited;
 end;
 

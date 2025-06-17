@@ -21,9 +21,9 @@ type
     constructor Create(AParent: TGocciaScope = nil; AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = '');
     destructor Destroy; override;
     function CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''): TGocciaScope;
-    function GetValue(const AName: string): TGocciaValue;
+    function GetValue(const AName: string): TGocciaValue; inline;
     procedure Assign(const AName: string; AValue: TGocciaValue);
-    function Contains(const AName: string): Boolean;
+    function Contains(const AName: string): Boolean; inline;
     property Parent: TGocciaScope read FParent;
     procedure SetValue(const AName: string; AValue: TGocciaValue);
     property ThisValue: TGocciaValue read FThisValue write FThisValue;
@@ -93,7 +93,7 @@ begin
   Result := TGocciaScope.Create(Self, AScopeKind, ACustomLabel);
 end;
 
-function TGocciaScope.GetValue(const AName: string): TGocciaValue;
+function TGocciaScope.GetValue(const AName: string): TGocciaValue; inline;
 var
   Value: TGocciaValue;
 begin
@@ -124,7 +124,7 @@ begin
       0, 0, '', nil);
 end;
 
-function TGocciaScope.Contains(const AName: string): Boolean;
+function TGocciaScope.Contains(const AName: string): Boolean; inline;
 begin
   Result := FValues.ContainsKey(AName) or
     (Assigned(FParent) and FParent.Contains(AName));
