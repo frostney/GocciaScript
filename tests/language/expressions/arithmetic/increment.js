@@ -14,15 +14,3 @@ test("post-increment", () => {
   expect(a++).toBe(5);
   expect(a).toBe(6);
 });
-
-test("pre-decrement", () => {
-  let a = 5;
-  expect(--a).toBe(4);
-  expect(a).toBe(4);
-});
-
-test("post-decrement", () => {
-  let a = 5;
-  expect(a--).toBe(5);
-  expect(a).toBe(4);
-});

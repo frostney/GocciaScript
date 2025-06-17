@@ -9,3 +9,9 @@ test("logical AND (&&)", () => {
   expect(false && true).toBeFalsy();
   expect(false && false).toBeFalsy();
 });
+
+test("logical AND (&&) with short-circuit evaluation", () => {
+  let a = 0;
+  expect(true && (a = 1)).toBeTruthy();
+  expect(a).toBe(1);
+});

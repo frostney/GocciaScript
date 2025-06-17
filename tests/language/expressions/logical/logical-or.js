@@ -9,3 +9,9 @@ test("logical OR (||)", () => {
   expect(false || true).toBeTruthy();
   expect(false || false).toBeFalsy();
 });
+
+test("logical OR (||) with short-circuit evaluation", () => {
+  let a = 0;
+  expect(false || (a = 1)).toBeTruthy();
+  expect(a).toBe(1);
+});
