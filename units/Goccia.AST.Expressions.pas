@@ -215,6 +215,20 @@ type
     property Value: TGocciaExpression read FValue;
   end;
 
+  TGocciaPrivatePropertyCompoundAssignmentExpression = class(TGocciaExpression)
+  private
+    FObject: TGocciaExpression;
+    FPrivateName: string;
+    FOperator: TGocciaTokenType;
+    FValue: TGocciaExpression;
+  public
+    constructor Create(AObject: TGocciaExpression; const APrivateName: string; AOperator: TGocciaTokenType; AValue: TGocciaExpression; ALine, AColumn: Integer);
+    property ObjectExpr: TGocciaExpression read FObject;
+    property PrivateName: string read FPrivateName;
+    property Operator: TGocciaTokenType read FOperator;
+    property Value: TGocciaExpression read FValue;
+  end;
+
 implementation
 
 { TGocciaLiteralExpression }
@@ -403,6 +417,17 @@ begin
   inherited Create(ALine, AColumn);
   FObject := AObject;
   FPrivateName := APrivateName;
+  FValue := AValue;
+end;
+
+{ TGocciaPrivatePropertyCompoundAssignmentExpression }
+
+constructor TGocciaPrivatePropertyCompoundAssignmentExpression.Create(AObject: TGocciaExpression; const APrivateName: string; AOperator: TGocciaTokenType; AValue: TGocciaExpression; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FObject := AObject;
+  FPrivateName := APrivateName;
+  FOperator := AOperator;
   FValue := AValue;
 end;
 

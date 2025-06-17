@@ -626,8 +626,14 @@ begin
           Column
         )
       else
-        raise TGocciaSyntaxError.Create('Compound assignment to private fields is not yet supported',
-          Left.Line, Left.Column, FFileName, FSourceLines);
+        Result := TGocciaPrivatePropertyCompoundAssignmentExpression.Create(
+          TGocciaPrivateMemberExpression(Left).ObjectExpr,
+          TGocciaPrivateMemberExpression(Left).PrivateName,
+          Operator,
+          Right,
+          Line,
+          Column
+        );
     end
     else
       raise TGocciaSyntaxError.Create('Invalid assignment target', Left.Line, Left.Column, FFileName, FSourceLines);

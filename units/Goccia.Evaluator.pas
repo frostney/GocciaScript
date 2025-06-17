@@ -33,6 +33,7 @@ function EvaluateClassDefinition(ClassDef: TGocciaClassDefinition; Context: TGoc
 function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluatePrivatePropertyAssignment(PrivatePropertyAssignmentExpression: TGocciaPrivatePropertyAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluatePrivatePropertyCompoundAssignment(PrivatePropertyCompoundAssignmentExpression: TGocciaPrivatePropertyCompoundAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 procedure InitializePrivateInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 
@@ -369,6 +370,11 @@ begin
   begin
     Logger.Debug('EvaluateExpression: Handling TGocciaPrivatePropertyAssignmentExpression');
     Result := EvaluatePrivatePropertyAssignment(TGocciaPrivatePropertyAssignmentExpression(Expression), Context);
+  end
+  else if Expression is TGocciaPrivatePropertyCompoundAssignmentExpression then
+  begin
+    Logger.Debug('EvaluateExpression: Handling TGocciaPrivatePropertyCompoundAssignmentExpression');
+    Result := EvaluatePrivatePropertyCompoundAssignment(TGocciaPrivatePropertyCompoundAssignmentExpression(Expression), Context);
   end
   else if Expression is TGocciaMemberExpression then
   begin
@@ -1127,6 +1133,69 @@ begin
   Instance.SetPrivateProperty(PrivatePropertyAssignmentExpression.PrivateName, Value, AccessClass);
 
   Result := Value;
+end;
+
+function EvaluatePrivatePropertyCompoundAssignment(PrivatePropertyCompoundAssignmentExpression: TGocciaPrivatePropertyCompoundAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  ObjectValue: TGocciaValue;
+  Instance: TGocciaInstanceValue;
+  AccessClass: TGocciaClassValue;
+  Value: TGocciaValue;
+  CurrentValue: TGocciaValue;
+begin
+  // Evaluate the object expression
+  ObjectValue := EvaluateExpression(PrivatePropertyCompoundAssignmentExpression.ObjectExpr, Context);
+
+  if not (ObjectValue is TGocciaInstanceValue) then
+  begin
+    Context.OnError(Format('Private fields can only be accessed on class instances, not %s', [ObjectValue.TypeName]),
+      PrivatePropertyCompoundAssignmentExpression.Line, PrivatePropertyCompoundAssignmentExpression.Column);
+    Result := TGocciaUndefinedValue.Create;
+    Exit;
+  end;
+
+  Instance := TGocciaInstanceValue(ObjectValue);
+
+  // Determine the access class - the class that is trying to access the private field
+  AccessClass := Instance.ClassValue; // For now, assume access from the same class
+
+  // Get the current value of the private property
+  CurrentValue := Instance.GetPrivateProperty(PrivatePropertyCompoundAssignmentExpression.PrivateName, AccessClass);
+
+  // Evaluate the value to operate with
+  Value := EvaluateExpression(PrivatePropertyCompoundAssignmentExpression.Value, Context);
+
+  // Perform the compound operation
+  case PrivatePropertyCompoundAssignmentExpression.Operator of
+    gttPlusAssign:
+      begin
+        if (CurrentValue is TGocciaStringValue) or (Value is TGocciaStringValue) then
+          Result := TGocciaStringValue.Create(CurrentValue.ToString + Value.ToString)
+        else
+          Result := TGocciaNumberValue.Create(CurrentValue.ToNumber + Value.ToNumber);
+      end;
+    gttMinusAssign:
+      Result := TGocciaNumberValue.Create(CurrentValue.ToNumber - Value.ToNumber);
+    gttStarAssign:
+      Result := TGocciaNumberValue.Create(CurrentValue.ToNumber * Value.ToNumber);
+    gttSlashAssign:
+      begin
+        if Value.ToNumber = 0 then
+          Result := TGocciaNumberValue.Create(Infinity)
+        else
+          Result := TGocciaNumberValue.Create(CurrentValue.ToNumber / Value.ToNumber);
+      end;
+    gttPercentAssign:
+      Result := TGocciaNumberValue.Create(
+        Trunc(CurrentValue.ToNumber) mod Trunc(Value.ToNumber));
+    gttPowerAssign:
+      Result := TGocciaNumberValue.Create(Power(CurrentValue.ToNumber, Value.ToNumber));
+  else
+    Result := TGocciaUndefinedValue.Create;
+  end;
+
+  // Set the new value
+  Instance.SetPrivateProperty(PrivatePropertyCompoundAssignmentExpression.PrivateName, Result, AccessClass);
 end;
 
 procedure InitializePrivateInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
