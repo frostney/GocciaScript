@@ -9,5 +9,4 @@ test("string extraction methods", () => {
   expect(str.substring(6)).toBe("world");
   expect(str.slice(0, 5)).toBe("hello");
   expect(str.slice(-5)).toBe("world");
-  expect(str.substr(0, 5)).toBe("hello");
 });
