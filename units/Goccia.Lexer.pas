@@ -26,6 +26,7 @@ type
     function Peek: Char; inline;
     function PeekNext: Char; inline;
     function Match(Expected: Char): Boolean; inline;
+    function IsValidIdentifierChar(C: Char): Boolean;
     procedure AddToken(TokenType: TGocciaTokenType); overload;
     procedure AddToken(TokenType: TGocciaTokenType; const Literal: string); overload;
     procedure ScanToken;
@@ -253,11 +254,16 @@ begin
   AddToken(gttNumber, Value);
 end;
 
+function TGocciaLexer.IsValidIdentifierChar(C: Char): Boolean;
+begin
+  Result := CharInSet(C, ValidIdentifierChars) or (Ord(C) > 127); // Allow Unicode characters
+end;
+
 procedure TGocciaLexer.ScanIdentifier;
 var
   Text: string;
 begin
-  while CharInSet(Peek, ValidIdentifierChars) do
+  while not IsAtEnd and IsValidIdentifierChar(Peek) do
     Advance;
 
   Text := Copy(FSource, FStart, FCurrent - FStart);
@@ -413,7 +419,7 @@ begin
       Dec(FColumn);
       ScanNumber;
     end
-    else if CharInSet(C, ValidIdentifierChars) then
+    else if IsValidIdentifierChar(C) then
     begin
       Dec(FCurrent);
       Dec(FColumn);
