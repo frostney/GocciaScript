@@ -51,10 +51,20 @@ begin
 end;
 
 function TGocciaMath.MathAbs(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Value: Double;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.abs expects exactly 1 argument', 0, 0);
-  Result := TGocciaNumberValue.Create(Abs(Args[0].ToNumber));
+
+  Value := Args[0].ToNumber;
+
+  if IsNaN(Value) then
+    Result := TGocciaNumberValue.Create(NaN)
+  else if IsInfinite(Value) then
+    Result := TGocciaNumberValue.Create(Infinity)
+  else
+    Result := TGocciaNumberValue.Create(Abs(Value));
 end;
 
 function TGocciaMath.MathFloor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
