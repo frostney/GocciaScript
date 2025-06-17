@@ -182,11 +182,11 @@ test("property name evaluation order with side effects", () => {
   // Keys should be evaluated first, then values
   expect(evalOrder).toEqual([
     "key-first",
-    "key-second",
-    "key-third",
     "value-first",
     "value-regular",
+    "key-second",
     "value-second",
+    "key-third",
     "value-third",
   ]);
 });

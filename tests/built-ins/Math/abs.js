@@ -12,6 +12,6 @@ test("Math.abs", () => {
   expect(Math.abs(-3.14)).toBe(3.14);
 
   expect(Math.abs(NaN)).toBeNaN();
-  expect(Math.abs(Infinity)).toBeInfinity();
-  expect(Math.abs(-Infinity)).toBeInfinity();
+  expect(Math.abs(Infinity)).toBe(Infinity);
+  expect(Math.abs(-Infinity)).toBe(Infinity);
 });

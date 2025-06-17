@@ -24,7 +24,7 @@ test("compound assignment operators with number", () => {
 test("compound assignment operators with boolean", () => {
   let a = true;
   a &= false;
-  expect(a).toBe(false);
+  expect(a).toBe(0);
 });
 
 test("compound assignment operators with null", () => {
@@ -36,7 +36,7 @@ test("compound assignment operators with null", () => {
 test("compound assignment operators with undefined", () => {
   let a = undefined;
   a += 3;
-  expect(a).toBe(3);
+  expect(a).toBe(NaN);
 });
 
 test("compound assignment operators with object", () => {

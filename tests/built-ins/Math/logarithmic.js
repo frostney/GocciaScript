@@ -13,15 +13,15 @@ test("Math logarithmic functions", () => {
 
   expect(Math.exp(NaN)).toBeNaN();
   expect(Math.exp(-Infinity)).toBe(0);
-  expect(Math.exp(Infinity)).toBeInfinity();
+  expect(Math.exp(Infinity)).toBe(Infinity);
   expect(Math.log(NaN)).toBeNaN();
   expect(Math.log(-1)).toBeNaN();
-  expect(Math.log(0)).toBeNegativeInfinity();
-  expect(Math.log(Infinity)).toBeInfinity();
+  expect(Math.log(0)).toBe(-Infinity);
+  expect(Math.log(Infinity)).toBe(Infinity);
   expect(Math.log(-Infinity)).toBeNaN();
   expect(Math.log10(NaN)).toBeNaN();
   expect(Math.log10(-1)).toBeNaN();
-  expect(Math.log10(0)).toBeNegativeInfinity();
-  expect(Math.log10(Infinity)).toBeInfinity();
+  expect(Math.log10(0)).toBe(-Infinity);
+  expect(Math.log10(Infinity)).toBe(Infinity);
   expect(Math.log10(-Infinity)).toBeNaN();
 });

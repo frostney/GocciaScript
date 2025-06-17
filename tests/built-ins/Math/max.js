@@ -15,7 +15,7 @@ test("Math.max", () => {
   expect(Math.max(NaN, 1, 2)).toBeNaN();
   expect(Math.max(1, 2, NaN)).toBeNaN();
   expect(Math.max(NaN, NaN)).toBeNaN();
-  expect(Math.max(Infinity, 1, 2)).toBe(2);
+  expect(Math.max(Infinity, 1, 2)).toBe(Infinity);
   expect(Math.max(-Infinity, 1, 2)).toBe(2);
-  expect(Math.max(Infinity, -Infinity)).toBeInfinity();
+  expect(Math.max(Infinity, -Infinity)).toBe(Infinity);
 });

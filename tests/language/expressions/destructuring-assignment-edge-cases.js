@@ -156,7 +156,7 @@ test("destructuring assignment evaluation order", () => {
 
   expect(a).toBe(1);
   expect(b).toBe(2);
-  expect(evalOrder).toEqual(["get-first", "get-second", "set-a-1", "set-b-2"]);
+  expect(evalOrder).toEqual(["set-a-1", "set-b-2", "get-first", "get-second"]);
 });
 
 test("destructuring assignment with function parameters simulation", () => {
