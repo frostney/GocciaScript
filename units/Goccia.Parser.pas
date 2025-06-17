@@ -340,7 +340,15 @@ begin
       end
       else
       begin
-        PropertyName := Consume(gttIdentifier, 'Expected property name after "."').Lexeme;
+        if Check(gttIdentifier) then
+          PropertyName := Advance.Lexeme
+        else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
+                       gttReturn, gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
+                       gttTrue, gttFalse, gttNull, gttUndefined, gttTypeof, gttInstanceof]) then
+          PropertyName := Previous.Lexeme  // Reserved words are allowed as property names
+        else
+          raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines);
+
         Result := TGocciaMemberExpression.Create(Result, PropertyName, False,
           Line, Column);
       end;
@@ -528,8 +536,16 @@ begin
   begin
     if Check(gttString) then
       Key := Advance.Lexeme
+    else if Check(gttIdentifier) then
+      Key := Advance.Lexeme
+    else if Check(gttNumber) then
+      Key := Advance.Lexeme  // Numeric literals are allowed as property names
+    else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
+                   gttReturn, gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
+                   gttTrue, gttFalse, gttNull, gttUndefined, gttTypeof, gttInstanceof]) then
+      Key := Previous.Lexeme  // Reserved words are allowed as property names
     else
-      Key := Consume(gttIdentifier, 'Expected property name').Lexeme;
+      raise TGocciaSyntaxError.Create('Expected property name', Peek.Line, Peek.Column, FFileName, FSourceLines);
 
     Consume(gttColon, 'Expected ":" after property key');
     Value := Expression;

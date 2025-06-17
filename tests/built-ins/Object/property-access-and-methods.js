@@ -8,18 +8,18 @@ test("object method calls with parameters", () => {
     method: (x) => {
       return "Method called with: " + x;
     },
-    complexMethod: function (a, b, c) {
+    complexMethod: (a, b, c) => {
       return {
         params: [a, b, c],
         total: a + b + c,
         type: typeof a,
       };
     },
-    chainableMethod: function (value) {
+    chainableMethod: (value) => {
       this.lastValue = value;
       return this;
     },
-    getValue: function () {
+    getValue: () => {
       return this.lastValue;
     },
   };
@@ -66,19 +66,19 @@ test("dynamic property access and computed properties", () => {
 test("object methods with context and binding", () => {
   const counter = {
     count: 0,
-    increment: function () {
+    increment: () => {
       this.count = this.count + 1;
       return this.count;
     },
-    decrement: function () {
+    decrement: () => {
       this.count = this.count - 1;
       return this.count;
     },
-    reset: function () {
+    reset: () => {
       this.count = 0;
       return this;
     },
-    getInfo: function () {
+    getInfo: () => {
       return {
         current: this.count,
         isPositive: this.count > 0,
@@ -113,19 +113,19 @@ test("object methods with nested calls and state", () => {
     result: 0,
     history: [],
 
-    add: function (value) {
+    add: (value) => {
       this.result = this.result + value;
       this.history.push({ op: "add", value: value, result: this.result });
       return this;
     },
 
-    multiply: function (value) {
+    multiply: (value) => {
       this.result = this.result * value;
       this.history.push({ op: "multiply", value: value, result: this.result });
       return this;
     },
 
-    divide: function (value) {
+    divide: (value) => {
       if (value !== 0) {
         this.result = this.result / value;
         this.history.push({ op: "divide", value: value, result: this.result });
@@ -133,15 +133,15 @@ test("object methods with nested calls and state", () => {
       return this;
     },
 
-    getResult: function () {
+    getResult: () => {
       return this.result;
     },
 
-    getHistory: function () {
+    getHistory: () => {
       return this.history.slice(); // Return copy
     },
 
-    clear: function () {
+    clear: () => {
       this.result = 0;
       this.history = [];
       return this;

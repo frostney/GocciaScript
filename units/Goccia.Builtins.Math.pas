@@ -271,8 +271,19 @@ begin
 
   if IsNaN(Value) then
     Result := TGocciaNumberValue.Create(NaN)
+  else if IsInfinite(Value) then
+  begin
+    if Value > 0 then
+      Result := TGocciaNumberValue.Create(Infinity)
+    else
+      Result := TGocciaNumberValue.Create(NaN); // log(-Infinity) = NaN
+  end
+  else if Value = 0 then
+    Result := TGocciaNumberValue.Create(-Infinity) // log(0) = -Infinity
+  else if Value < 0 then
+    Result := TGocciaNumberValue.Create(NaN) // log of negative number = NaN
   else
-    Result := TGocciaNumberValue.Create(Log2(Value)); // TODO: This might not be correct?
+    Result := TGocciaNumberValue.Create(Ln(Value)); // Natural logarithm (base e)
 end;
 
 function TGocciaMath.MathLog10(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -286,6 +297,17 @@ begin
 
   if IsNaN(Value) then
     Result := TGocciaNumberValue.Create(NaN)
+  else if IsInfinite(Value) then
+  begin
+    if Value > 0 then
+      Result := TGocciaNumberValue.Create(Infinity)
+    else
+      Result := TGocciaNumberValue.Create(NaN); // log10(-Infinity) = NaN
+  end
+  else if Value = 0 then
+    Result := TGocciaNumberValue.Create(-Infinity) // log10(0) = -Infinity
+  else if Value < 0 then
+    Result := TGocciaNumberValue.Create(NaN) // log10 of negative number = NaN
   else
     Result := TGocciaNumberValue.Create(Log10(Value));
 end;
