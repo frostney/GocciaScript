@@ -273,7 +273,7 @@ var
   Operator: TGocciaToken;
   Right: TGocciaExpression;
 begin
-  if Match([gttNot, gttMinus, gttTypeof]) then
+  if Match([gttNot, gttMinus, gttPlus, gttTypeof]) then
   begin
     Operator := Previous;
     Right := Unary;

@@ -623,6 +623,8 @@ begin
       Result := TGocciaBooleanValue.Create(not Operand.ToBoolean);
     gttMinus:
       Result := TGocciaNumberValue.Create(-Operand.ToNumber);
+    gttPlus:
+      Result := TGocciaNumberValue.Create(Operand.ToNumber);
     gttTypeof:
       begin
         Logger.Debug('EvaluateUnary: typeof operator called with operand: %s', [Operand.ToString]);
