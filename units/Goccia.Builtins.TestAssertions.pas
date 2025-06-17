@@ -19,6 +19,7 @@ uses
   Goccia.Scope,
   Goccia.Error,
   Generics.Collections,
+  Math,
   Classes;
 
 type
@@ -54,13 +55,18 @@ type
     function ToBe(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToEqual(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToBeNull(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ToBeNaN(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToBeUndefined(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToBeTruthy(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToBeFalsy(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToBeGreaterThan(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ToBeGreaterThanOrEqual(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToBeLessThan(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ToBeLessThanOrEqual(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToContain(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToBeInstanceOf(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveLength(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveProperty(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToThrow(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
     // Negation support
@@ -149,13 +155,18 @@ begin
   SetProperty('toBe', TGocciaNativeFunctionValue.Create(ToBe, 'toBe', 1));
   SetProperty('toEqual', TGocciaNativeFunctionValue.Create(ToEqual, 'toEqual', 1));
   SetProperty('toBeNull', TGocciaNativeFunctionValue.Create(ToBeNull, 'toBeNull', 0));
+  SetProperty('toBeNaN', TGocciaNativeFunctionValue.Create(ToBeNaN, 'toBeNaN', 0));
   SetProperty('toBeUndefined', TGocciaNativeFunctionValue.Create(ToBeUndefined, 'toBeUndefined', 0));
   SetProperty('toBeTruthy', TGocciaNativeFunctionValue.Create(ToBeTruthy, 'toBeTruthy', 0));
   SetProperty('toBeFalsy', TGocciaNativeFunctionValue.Create(ToBeFalsy, 'toBeFalsy', 0));
   SetProperty('toBeGreaterThan', TGocciaNativeFunctionValue.Create(ToBeGreaterThan, 'toBeGreaterThan', 1));
+  SetProperty('toBeGreaterThanOrEqual', TGocciaNativeFunctionValue.Create(ToBeGreaterThanOrEqual, 'toBeGreaterThanOrEqual', 1));
   SetProperty('toBeLessThan', TGocciaNativeFunctionValue.Create(ToBeLessThan, 'toBeLessThan', 1));
+  SetProperty('toBeLessThanOrEqual', TGocciaNativeFunctionValue.Create(ToBeLessThanOrEqual, 'toBeLessThanOrEqual', 1));
   SetProperty('toContain', TGocciaNativeFunctionValue.Create(ToContain, 'toContain', 1));
   SetProperty('toBeInstanceOf', TGocciaNativeFunctionValue.Create(ToBeInstanceOf, 'toBeInstanceOf', 1));
+  SetProperty('toHaveLength', TGocciaNativeFunctionValue.Create(ToHaveLength, 'toHaveLength', 1));
+  SetProperty('toHaveProperty', TGocciaNativeFunctionValue.Create(ToHaveProperty, 'toHaveProperty', 2));
   SetProperty('toThrow', TGocciaNativeFunctionValue.Create(ToThrow, 'toThrow', 1));
 
   // Negation property
@@ -226,6 +237,32 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeNull',
         'Expected ' + FActualValue.ToString + ' to be null');
+    Result := TGocciaUndefinedValue.Create;
+  end;
+end;
+
+function TGocciaExpectationValue.ToBeNaN(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  IsNaN: Boolean;
+begin
+  IsNaN := FActualValue.ToNumber = NaN;
+
+  if FIsNegated then
+    IsNaN := not IsNaN;
+
+  if IsNaN then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeNaN');
+    Result := TGocciaUndefinedValue.Create;
+  end
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeNaN',
+        'Expected ' + FActualValue.ToString + ' not to be NaN')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeNaN',
+        'Expected ' + FActualValue.ToString + ' to be NaN');
     Result := TGocciaUndefinedValue.Create;
   end;
 end;
@@ -342,6 +379,40 @@ begin
   end;
 end;
 
+function TGocciaExpectationValue.ToBeGreaterThanOrEqual(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Expected: TGocciaValue;
+  IsGreaterOrEqual: Boolean;
+begin
+  if Args.Count <> 1 then
+  begin
+    FTestAssertions.ThrowError('toBeGreaterThanOrEqual expects exactly 1 argument', 0, 0);
+    Exit;
+  end;
+
+  Expected := Args[0];
+  IsGreaterOrEqual := FActualValue.ToNumber >= Expected.ToNumber;
+
+  if FIsNegated then
+    IsGreaterOrEqual := not IsGreaterOrEqual;
+
+  if IsGreaterOrEqual then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeGreaterThanOrEqual');
+    Result := TGocciaUndefinedValue.Create;
+  end
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeGreaterThanOrEqual',
+        'Expected ' + FActualValue.ToString + ' not to be greater than or equal to ' + Expected.ToString)
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeGreaterThanOrEqual',
+        'Expected ' + FActualValue.ToString + ' to be greater than or equal to ' + Expected.ToString);
+    Result := TGocciaUndefinedValue.Create;
+  end;
+end;
+
 function TGocciaExpectationValue.ToBeLessThan(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   Expected: TGocciaValue;
@@ -372,6 +443,40 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeLessThan',
         'Expected ' + FActualValue.ToString + ' to be less than ' + Expected.ToString);
+    Result := TGocciaUndefinedValue.Create;
+  end;
+end;
+
+function TGocciaExpectationValue.ToBeLessThanOrEqual(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Expected: TGocciaValue;
+  IsLessOrEqual: Boolean;
+begin
+  if Args.Count <> 1 then
+  begin
+    FTestAssertions.ThrowError('toBeLessThanOrEqual expects exactly 1 argument', 0, 0);
+    Exit;
+  end;
+
+  Expected := Args[0];
+  IsLessOrEqual := FActualValue.ToNumber <= Expected.ToNumber;
+
+  if FIsNegated then
+    IsLessOrEqual := not IsLessOrEqual;
+
+  if IsLessOrEqual then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeLessThanOrEqual');
+    Result := TGocciaUndefinedValue.Create;
+  end
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeLessThanOrEqual',
+        'Expected ' + FActualValue.ToString + ' not to be less than or equal to ' + Expected.ToString)
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeLessThanOrEqual',
+        'Expected ' + FActualValue.ToString + ' to be less than or equal to ' + Expected.ToString);
     Result := TGocciaUndefinedValue.Create;
   end;
 end;
@@ -447,6 +552,80 @@ begin
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeInstanceOf',
       'Expected ' + FActualValue.ToString + ' to be an instance of ' + Args[0].ToString);
+    Result := TGocciaUndefinedValue.Create;
+  end;
+end;
+
+function TGocciaExpectationValue.ToHaveLength(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Expected: TGocciaValue;
+  HasLength: Boolean;
+begin
+  if Args.Count <> 1 then
+  begin
+    FTestAssertions.ThrowError('toHaveLength expects exactly 1 argument', 0, 0);
+    Exit;
+  end;
+
+  Expected := Args[0];
+  HasLength := FActualValue.ToNumber = Expected.ToNumber;
+
+  if FIsNegated then
+    HasLength := not HasLength;
+
+  if HasLength then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveLength');
+    Result := TGocciaUndefinedValue.Create;
+  end
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveLength',
+        'Expected ' + FActualValue.ToString + ' not to have length ' + Expected.ToString)
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveLength',
+        'Expected ' + FActualValue.ToString + ' to have length ' + Expected.ToString);
+    Result := TGocciaUndefinedValue.Create;
+  end;
+end;
+
+function TGocciaExpectationValue.ToHaveProperty(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Expected: TGocciaObjectValue;
+  HasProperty: Boolean;
+begin
+  if Args.Count <> 2 then
+  begin
+    FTestAssertions.ThrowError('toHaveProperty expects exactly 2 arguments', 0, 0);
+    Exit;
+  end;
+
+  Expected := Args[0] as TGocciaObjectValue;
+  HasProperty := Expected.HasProperty(Args[1].ToString);
+
+  if FIsNegated then
+    HasProperty := not HasProperty;
+
+  if HasProperty then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveProperty');
+    Result := TGocciaUndefinedValue.Create;
+  end;
+
+  if HasProperty then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveProperty');
+    Result := TGocciaUndefinedValue.Create;
+  end
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
+        'Expected ' + FActualValue.ToString + ' not to have property ' + Expected.ToString)
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
+        'Expected ' + FActualValue.ToString + ' to have property ' + Expected.ToString);
     Result := TGocciaUndefinedValue.Create;
   end;
 end;
