@@ -30,8 +30,12 @@ type
     function Conditional: TGocciaExpression;
     function LogicalOr: TGocciaExpression;
     function LogicalAnd: TGocciaExpression;
+    function BitwiseOr: TGocciaExpression;
+    function BitwiseXor: TGocciaExpression;
+    function BitwiseAnd: TGocciaExpression;
     function Equality: TGocciaExpression;
     function Comparison: TGocciaExpression;
+    function Shift: TGocciaExpression;
     function Addition: TGocciaExpression;
     function Multiplication: TGocciaExpression;
     function Exponentiation: TGocciaExpression;
@@ -177,12 +181,12 @@ var
   Operator: TGocciaToken;
   Right: TGocciaExpression;
 begin
-  Result := Equality;
+  Result := BitwiseOr;
 
   while Match([gttAnd]) do
   begin
     Operator := Previous;
-    Right := Equality;
+    Right := BitwiseOr;
     Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
       Right, Operator.Line, Operator.Column);
   end;
@@ -209,12 +213,12 @@ var
   Operator: TGocciaToken;
   Right: TGocciaExpression;
 begin
-  Result := Addition;
+  Result := Shift;
 
   while Match([gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof]) do
   begin
     Operator := Previous;
-    Right := Addition;
+    Right := Shift;
     Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
       Right, Operator.Line, Operator.Column);
   end;
@@ -273,7 +277,7 @@ var
   Operator: TGocciaToken;
   Right: TGocciaExpression;
 begin
-  if Match([gttNot, gttMinus, gttPlus, gttTypeof]) then
+  if Match([gttNot, gttMinus, gttPlus, gttTypeof, gttBitwiseNot]) then
   begin
     Operator := Previous;
     Right := Unary;
@@ -601,7 +605,8 @@ var
   Operator: TGocciaTokenType;
 begin
   Left := Conditional;
-  if Match([gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign]) then
+  if Match([gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign,
+             gttBitwiseAndAssign, gttBitwiseOrAssign, gttBitwiseXorAssign, gttLeftShiftAssign, gttRightShiftAssign, gttUnsignedRightShiftAssign]) then
   begin
     Operator := Previous.TokenType;
     Line := Previous.Line;
@@ -1110,6 +1115,70 @@ begin
     Statements.Add(Statement);
 
   Result := TGocciaProgram.Create(Statements);
+end;
+
+function TGocciaParser.BitwiseOr: TGocciaExpression;
+var
+  Operator: TGocciaToken;
+  Right: TGocciaExpression;
+begin
+  Result := BitwiseXor;
+
+  while Match([gttBitwiseOr]) do
+  begin
+    Operator := Previous;
+    Right := BitwiseXor;
+    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
+      Right, Operator.Line, Operator.Column);
+  end;
+end;
+
+function TGocciaParser.BitwiseXor: TGocciaExpression;
+var
+  Operator: TGocciaToken;
+  Right: TGocciaExpression;
+begin
+  Result := BitwiseAnd;
+
+  while Match([gttBitwiseXor]) do
+  begin
+    Operator := Previous;
+    Right := BitwiseAnd;
+    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
+      Right, Operator.Line, Operator.Column);
+  end;
+end;
+
+function TGocciaParser.BitwiseAnd: TGocciaExpression;
+var
+  Operator: TGocciaToken;
+  Right: TGocciaExpression;
+begin
+  Result := Equality;
+
+  while Match([gttBitwiseAnd]) do
+  begin
+    Operator := Previous;
+    Right := Equality;
+    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
+      Right, Operator.Line, Operator.Column);
+  end;
+end;
+
+function TGocciaParser.Shift: TGocciaExpression;
+var
+  Operator: TGocciaToken;
+  Right: TGocciaExpression;
+begin
+  Result := Addition;
+
+  while Match([gttLeftShift, gttRightShift, gttUnsignedRightShift]) do
+  begin
+    Operator := Previous;
+    Right := Addition;
+    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
+      Right, Operator.Line, Operator.Column);
+  end;
 end;
 
 end.

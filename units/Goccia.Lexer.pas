@@ -422,27 +422,57 @@ begin
       else
         AddToken(gttAssign);
     '<':
-      if Match('=') then
+      if Match('<') then
+      begin
+        if Match('=') then
+          AddToken(gttLeftShiftAssign)
+        else
+          AddToken(gttLeftShift);
+      end
+      else if Match('=') then
         AddToken(gttLessEqual)
       else
         AddToken(gttLess);
     '>':
-      if Match('=') then
+      if Match('>') then
+      begin
+        if Match('>') then
+        begin
+          if Match('=') then
+            AddToken(gttUnsignedRightShiftAssign)
+          else
+            AddToken(gttUnsignedRightShift);
+        end
+        else if Match('=') then
+          AddToken(gttRightShiftAssign)
+        else
+          AddToken(gttRightShift);
+      end
+      else if Match('=') then
         AddToken(gttGreaterEqual)
       else
         AddToken(gttGreater);
     '&':
       if Match('&') then
         AddToken(gttAnd)
+      else if Match('=') then
+        AddToken(gttBitwiseAndAssign)
       else
-        raise TGocciaLexerError.Create('Use && for logical AND',
-          FLine, FStartColumn, FFileName, FSourceLines);
+        AddToken(gttBitwiseAnd);
     '|':
       if Match('|') then
         AddToken(gttOr)
+      else if Match('=') then
+        AddToken(gttBitwiseOrAssign)
       else
-        raise TGocciaLexerError.Create('Use || for logical OR',
-          FLine, FStartColumn, FFileName, FSourceLines);
+        AddToken(gttBitwiseOr);
+    '^':
+      if Match('=') then
+        AddToken(gttBitwiseXorAssign)
+      else
+        AddToken(gttBitwiseXor);
+    '~':
+      AddToken(gttBitwiseNot);
     '.':
       if Match('.') then
       begin

@@ -25,6 +25,11 @@ type
     gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign,
     gttIncrement, gttDecrement,
     gttQuestion, gttColon,
+    // Bitwise operators
+    gttBitwiseAnd, gttBitwiseOr, gttBitwiseXor, gttBitwiseNot,
+    gttLeftShift, gttRightShift, gttUnsignedRightShift,
+    gttBitwiseAndAssign, gttBitwiseOrAssign, gttBitwiseXorAssign,
+    gttLeftShiftAssign, gttRightShiftAssign, gttUnsignedRightShiftAssign,
     // Punctuation
     gttLeftParen, gttRightParen, gttLeftBrace, gttRightBrace,
     gttLeftBracket, gttRightBracket, gttComma, gttDot, gttSemicolon,

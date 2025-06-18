@@ -158,6 +158,18 @@ begin
           Trunc(Result.ToNumber) mod Trunc(Value.ToNumber));
       gttPowerAssign:
         Result := TGocciaNumberValue.Create(Power(Result.ToNumber, Value.ToNumber));
+      gttBitwiseAndAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) and Trunc(Value.ToNumber));
+      gttBitwiseOrAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) or Trunc(Value.ToNumber));
+      gttBitwiseXorAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) xor Trunc(Value.ToNumber));
+      gttLeftShiftAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) shl (Trunc(Value.ToNumber) and 31));
+      gttRightShiftAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) shr (Trunc(Value.ToNumber) and 31));
+      gttUnsignedRightShiftAssign:
+        Result := TGocciaNumberValue.Create(Cardinal(Trunc(Result.ToNumber)) shr (Trunc(Value.ToNumber) and 31));
     end;
 
     Context.Scope.Assign(TGocciaCompoundAssignmentExpression(Expression).Name, Result);
@@ -208,6 +220,18 @@ begin
           Trunc(Result.ToNumber) mod Trunc(Value.ToNumber));
       gttPowerAssign:
         Result := TGocciaNumberValue.Create(Power(Result.ToNumber, Value.ToNumber));
+      gttBitwiseAndAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) and Trunc(Value.ToNumber));
+      gttBitwiseOrAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) or Trunc(Value.ToNumber));
+      gttBitwiseXorAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) xor Trunc(Value.ToNumber));
+      gttLeftShiftAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) shl (Trunc(Value.ToNumber) and 31));
+      gttRightShiftAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) shr (Trunc(Value.ToNumber) and 31));
+      gttUnsignedRightShiftAssign:
+        Result := TGocciaNumberValue.Create(Cardinal(Trunc(Result.ToNumber)) shr (Trunc(Value.ToNumber) and 31));
     end;
 
     // Set the new value
@@ -618,6 +642,19 @@ begin
             Result := TGocciaBooleanValue.Create(False);
         end;
       end;
+    // Bitwise operators
+    gttBitwiseAnd:
+      Result := TGocciaNumberValue.Create(Trunc(Left.ToNumber) and Trunc(Right.ToNumber));
+    gttBitwiseOr:
+      Result := TGocciaNumberValue.Create(Trunc(Left.ToNumber) or Trunc(Right.ToNumber));
+    gttBitwiseXor:
+      Result := TGocciaNumberValue.Create(Trunc(Left.ToNumber) xor Trunc(Right.ToNumber));
+    gttLeftShift:
+      Result := TGocciaNumberValue.Create(Trunc(Left.ToNumber) shl (Trunc(Right.ToNumber) and 31));
+    gttRightShift:
+      Result := TGocciaNumberValue.Create(Trunc(Left.ToNumber) shr (Trunc(Right.ToNumber) and 31));
+    gttUnsignedRightShift:
+      Result := TGocciaNumberValue.Create(Cardinal(Trunc(Left.ToNumber)) shr (Trunc(Right.ToNumber) and 31));
   else
     Result := TGocciaUndefinedValue.Create;
   end;
@@ -641,6 +678,8 @@ begin
         Logger.Debug('EvaluateUnary: typeof operator called with operand: %s', [Operand.ToString]);
         Result := TGocciaStringValue.Create(Operand.TypeName);
       end;
+    gttBitwiseNot:
+      Result := TGocciaNumberValue.Create(not Trunc(Operand.ToNumber));
   else
     Result := TGocciaUndefinedValue.Create;
   end;
@@ -1246,6 +1285,18 @@ begin
         Trunc(CurrentValue.ToNumber) mod Trunc(Value.ToNumber));
     gttPowerAssign:
       Result := TGocciaNumberValue.Create(Power(CurrentValue.ToNumber, Value.ToNumber));
+    gttBitwiseAndAssign:
+      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) and Trunc(Value.ToNumber));
+    gttBitwiseOrAssign:
+      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) or Trunc(Value.ToNumber));
+    gttBitwiseXorAssign:
+      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) xor Trunc(Value.ToNumber));
+    gttLeftShiftAssign:
+      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) shl (Trunc(Value.ToNumber) and 31));
+    gttRightShiftAssign:
+      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) shr (Trunc(Value.ToNumber) and 31));
+    gttUnsignedRightShiftAssign:
+      Result := TGocciaNumberValue.Create(Cardinal(Trunc(CurrentValue.ToNumber)) shr (Trunc(Value.ToNumber) and 31));
   else
     Result := TGocciaUndefinedValue.Create;
   end;
