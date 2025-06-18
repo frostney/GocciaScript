@@ -27,16 +27,8 @@ type
   public
     constructor Create(const AVariables: TArray<TGocciaVariableInfo>;
       AIsConst: Boolean; ALine, AColumn: Integer);
-    // Backward compatibility methods
-    constructor CreateSingle(const AName: string; AInitializer: TGocciaExpression;
-      AIsConst: Boolean; ALine, AColumn: Integer);
     property Variables: TArray<TGocciaVariableInfo> read FVariables;
     property IsConst: Boolean read FIsConst;
-    // Backward compatibility properties
-    function GetName: string;
-    function GetInitializer: TGocciaExpression;
-    property Name: string read GetName;
-    property Initializer: TGocciaExpression read GetInitializer;
   end;
 
   TGocciaBlockStatement = class(TGocciaStatement)
@@ -196,33 +188,6 @@ implementation
     inherited Create(ALine, AColumn);
     FVariables := AVariables;
     FIsConst := AIsConst;
-  end;
-
-  constructor TGocciaVariableDeclaration.CreateSingle(const AName: string;
-    AInitializer: TGocciaExpression; AIsConst: Boolean; ALine, AColumn: Integer);
-  var
-    Variables: TArray<TGocciaVariableInfo>;
-  begin
-    SetLength(Variables, 1);
-    Variables[0].Name := AName;
-    Variables[0].Initializer := AInitializer;
-    Create(Variables, AIsConst, ALine, AColumn);
-  end;
-
-  function TGocciaVariableDeclaration.GetName: string;
-  begin
-    if Length(FVariables) > 0 then
-      Result := FVariables[0].Name
-    else
-      Result := '';
-  end;
-
-  function TGocciaVariableDeclaration.GetInitializer: TGocciaExpression;
-  begin
-    if Length(FVariables) > 0 then
-      Result := FVariables[0].Initializer
-    else
-      Result := nil;
   end;
 
   { TGocciaBlockStatement }
