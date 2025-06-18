@@ -1055,6 +1055,14 @@ begin
     ClassValue.SetProperty(PropertyPair.Key, PropertyValue);
   end;
 
+  // Handle private static properties
+  for PropertyPair in ClassDef.PrivateStaticProperties do
+  begin
+    // Evaluate the property value and set it on the class as private static property
+    PropertyValue := EvaluateExpression(PropertyPair.Value, Context);
+    ClassValue.AddPrivateStaticProperty(PropertyPair.Key, PropertyValue);
+  end;
+
   // Store instance property definitions on the class (they will be evaluated during instantiation)
   for PropertyPair in ClassDef.InstanceProperties do
   begin
@@ -1083,36 +1091,47 @@ function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpr
 var
   ObjectValue: TGocciaValue;
   Instance: TGocciaInstanceValue;
+  ClassValue: TGocciaClassValue;
   AccessClass: TGocciaClassValue;
 begin
   // Evaluate the object expression
   ObjectValue := EvaluateExpression(PrivateMemberExpression.ObjectExpr, Context);
 
-  if not (ObjectValue is TGocciaInstanceValue) then
+  if ObjectValue is TGocciaInstanceValue then
   begin
-    Context.OnError(Format('Private fields can only be accessed on class instances, not %s', [ObjectValue.TypeName]),
-      PrivateMemberExpression.Line, PrivateMemberExpression.Column);
-    Result := TGocciaUndefinedValue.Create;
-    Exit;
-  end;
+    // Private field access on instance
+    Instance := TGocciaInstanceValue(ObjectValue);
 
-  Instance := TGocciaInstanceValue(ObjectValue);
+    // Determine the access class - the class that is trying to access the private field
+    // This should be the class containing the current method
+    AccessClass := Instance.ClassValue; // For now, assume access from the same class
 
-  // Determine the access class - the class that is trying to access the private field
-  // This should be the class containing the current method
-  AccessClass := Instance.ClassValue; // For now, assume access from the same class
-
-  // Check if this is a private method call
-  if Instance.ClassValue.PrivateMethods.ContainsKey(PrivateMemberExpression.PrivateName) then
+    // Check if this is a private method call
+    if Instance.ClassValue.PrivateMethods.ContainsKey(PrivateMemberExpression.PrivateName) then
+    begin
+      Result := Instance.ClassValue.GetPrivateMethod(PrivateMemberExpression.PrivateName);
+      if Result = nil then
+        Result := TGocciaUndefinedValue.Create;
+    end
+    else
+    begin
+      // It's a private property access
+      Result := Instance.GetPrivateProperty(PrivateMemberExpression.PrivateName, AccessClass);
+    end;
+  end
+  else if ObjectValue is TGocciaClassValue then
   begin
-    Result := Instance.ClassValue.GetPrivateMethod(PrivateMemberExpression.PrivateName);
-    if Result = nil then
-      Result := TGocciaUndefinedValue.Create;
+    // Private static field access on class
+    ClassValue := TGocciaClassValue(ObjectValue);
+
+    // Access private static property
+    Result := ClassValue.GetPrivateStaticProperty(PrivateMemberExpression.PrivateName);
   end
   else
   begin
-    // It's a private property access
-    Result := Instance.GetPrivateProperty(PrivateMemberExpression.PrivateName, AccessClass);
+    Context.OnError(Format('Private fields can only be accessed on class instances or classes, not %s', [ObjectValue.TypeName]),
+      PrivateMemberExpression.Line, PrivateMemberExpression.Column);
+    Result := TGocciaUndefinedValue.Create;
   end;
 end;
 
@@ -1120,30 +1139,42 @@ function EvaluatePrivatePropertyAssignment(PrivatePropertyAssignmentExpression: 
 var
   ObjectValue: TGocciaValue;
   Instance: TGocciaInstanceValue;
+  ClassValue: TGocciaClassValue;
   AccessClass: TGocciaClassValue;
   Value: TGocciaValue;
 begin
   // Evaluate the object expression
   ObjectValue := EvaluateExpression(PrivatePropertyAssignmentExpression.ObjectExpr, Context);
 
-  if not (ObjectValue is TGocciaInstanceValue) then
+  // Evaluate the value to assign
+  Value := EvaluateExpression(PrivatePropertyAssignmentExpression.Value, Context);
+
+  if ObjectValue is TGocciaInstanceValue then
   begin
-    Context.OnError(Format('Private fields can only be assigned on class instances, not %s', [ObjectValue.TypeName]),
+    // Private field assignment on instance
+    Instance := TGocciaInstanceValue(ObjectValue);
+
+    // Determine the access class - the class that is trying to access the private field
+    AccessClass := Instance.ClassValue; // For now, assume access from the same class
+
+    // Set the private property
+    Instance.SetPrivateProperty(PrivatePropertyAssignmentExpression.PrivateName, Value, AccessClass);
+  end
+  else if ObjectValue is TGocciaClassValue then
+  begin
+    // Private static field assignment on class
+    ClassValue := TGocciaClassValue(ObjectValue);
+
+    // Set the private static property
+    ClassValue.AddPrivateStaticProperty(PrivatePropertyAssignmentExpression.PrivateName, Value);
+  end
+  else
+  begin
+    Context.OnError(Format('Private fields can only be assigned on class instances or classes, not %s', [ObjectValue.TypeName]),
       PrivatePropertyAssignmentExpression.Line, PrivatePropertyAssignmentExpression.Column);
     Result := TGocciaUndefinedValue.Create;
     Exit;
   end;
-
-  Instance := TGocciaInstanceValue(ObjectValue);
-
-  // Determine the access class - the class that is trying to access the private field
-  AccessClass := Instance.ClassValue; // For now, assume access from the same class
-
-  // Evaluate the value to assign
-  Value := EvaluateExpression(PrivatePropertyAssignmentExpression.Value, Context);
-
-  // Set the private property
-  Instance.SetPrivateProperty(PrivatePropertyAssignmentExpression.PrivateName, Value, AccessClass);
 
   Result := Value;
 end;
@@ -1152,6 +1183,7 @@ function EvaluatePrivatePropertyCompoundAssignment(PrivatePropertyCompoundAssign
 var
   ObjectValue: TGocciaValue;
   Instance: TGocciaInstanceValue;
+  ClassValue: TGocciaClassValue;
   AccessClass: TGocciaClassValue;
   Value: TGocciaValue;
   CurrentValue: TGocciaValue;
@@ -1159,24 +1191,35 @@ begin
   // Evaluate the object expression
   ObjectValue := EvaluateExpression(PrivatePropertyCompoundAssignmentExpression.ObjectExpr, Context);
 
-  if not (ObjectValue is TGocciaInstanceValue) then
+  // Evaluate the value to operate with
+  Value := EvaluateExpression(PrivatePropertyCompoundAssignmentExpression.Value, Context);
+
+  if ObjectValue is TGocciaInstanceValue then
   begin
-    Context.OnError(Format('Private fields can only be accessed on class instances, not %s', [ObjectValue.TypeName]),
+    // Private field compound assignment on instance
+    Instance := TGocciaInstanceValue(ObjectValue);
+
+    // Determine the access class - the class that is trying to access the private field
+    AccessClass := Instance.ClassValue; // For now, assume access from the same class
+
+    // Get the current value of the private property
+    CurrentValue := Instance.GetPrivateProperty(PrivatePropertyCompoundAssignmentExpression.PrivateName, AccessClass);
+  end
+  else if ObjectValue is TGocciaClassValue then
+  begin
+    // Private static field compound assignment on class
+    ClassValue := TGocciaClassValue(ObjectValue);
+
+    // Get the current value of the private static property
+    CurrentValue := ClassValue.GetPrivateStaticProperty(PrivatePropertyCompoundAssignmentExpression.PrivateName);
+  end
+  else
+  begin
+    Context.OnError(Format('Private fields can only be accessed on class instances or classes, not %s', [ObjectValue.TypeName]),
       PrivatePropertyCompoundAssignmentExpression.Line, PrivatePropertyCompoundAssignmentExpression.Column);
     Result := TGocciaUndefinedValue.Create;
     Exit;
   end;
-
-  Instance := TGocciaInstanceValue(ObjectValue);
-
-  // Determine the access class - the class that is trying to access the private field
-  AccessClass := Instance.ClassValue; // For now, assume access from the same class
-
-  // Get the current value of the private property
-  CurrentValue := Instance.GetPrivateProperty(PrivatePropertyCompoundAssignmentExpression.PrivateName, AccessClass);
-
-  // Evaluate the value to operate with
-  Value := EvaluateExpression(PrivatePropertyCompoundAssignmentExpression.Value, Context);
 
   // Perform the compound operation
   case PrivatePropertyCompoundAssignmentExpression.Operator of
@@ -1208,7 +1251,10 @@ begin
   end;
 
   // Set the new value
-  Instance.SetPrivateProperty(PrivatePropertyCompoundAssignmentExpression.PrivateName, Result, AccessClass);
+  if ObjectValue is TGocciaInstanceValue then
+    Instance.SetPrivateProperty(PrivatePropertyCompoundAssignmentExpression.PrivateName, Result, AccessClass)
+  else if ObjectValue is TGocciaClassValue then
+    ClassValue.AddPrivateStaticProperty(PrivatePropertyCompoundAssignmentExpression.PrivateName, Result);
 end;
 
 procedure InitializePrivateInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);

@@ -1018,6 +1018,7 @@ var
   StaticProperties: TDictionary<string, TGocciaExpression>;
   InstanceProperties: TDictionary<string, TGocciaExpression>;
   PrivateInstanceProperties: TDictionary<string, TGocciaExpression>;
+  PrivateStaticProperties: TDictionary<string, TGocciaExpression>;
   PrivateMethods: TDictionary<string, TGocciaClassMethod>;
   MemberName: string;
   Method: TGocciaClassMethod;
@@ -1036,6 +1037,7 @@ begin
   StaticProperties := TDictionary<string, TGocciaExpression>.Create;
   InstanceProperties := TDictionary<string, TGocciaExpression>.Create;
   PrivateInstanceProperties := TDictionary<string, TGocciaExpression>.Create;
+  PrivateStaticProperties := TDictionary<string, TGocciaExpression>.Create;
   PrivateMethods := TDictionary<string, TGocciaClassMethod>.Create;
 
   while not Check(gttRightBrace) and not IsAtEnd do
@@ -1043,9 +1045,7 @@ begin
     IsStatic := Match([gttStatic]);
     IsPrivate := Match([gttHash]);
 
-    if IsPrivate and IsStatic then
-      raise TGocciaSyntaxError.Create('Private static members are not supported',
-        Peek.Line, Peek.Column, FFileName, FSourceLines);
+
 
     MemberName := Consume(gttIdentifier, 'Expected method or property name').Lexeme;
 
@@ -1056,7 +1056,24 @@ begin
       PropertyValue := Expression;
       Consume(gttSemicolon, 'Expected ";" after property');
 
-      if IsPrivate then
+      if IsPrivate and IsStatic then
+        PrivateStaticProperties.Add(MemberName, PropertyValue)
+      else if IsPrivate then
+        PrivateInstanceProperties.Add(MemberName, PropertyValue)
+      else if IsStatic then
+        StaticProperties.Add(MemberName, PropertyValue)
+      else
+        InstanceProperties.Add(MemberName, PropertyValue);
+    end
+    else if Check(gttSemicolon) then
+    begin
+      // Property declaration without initializer: [static] [#]name;
+      Consume(gttSemicolon, 'Expected ";" after property declaration');
+      PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedValue.Create, Peek.Line, Peek.Column);
+
+      if IsPrivate and IsStatic then
+        PrivateStaticProperties.Add(MemberName, PropertyValue)
+      else if IsPrivate then
         PrivateInstanceProperties.Add(MemberName, PropertyValue)
       else if IsStatic then
         StaticProperties.Add(MemberName, PropertyValue)
@@ -1075,12 +1092,12 @@ begin
         Methods.Add(MemberName, Method);
     end
     else
-      raise TGocciaSyntaxError.Create('Expected "(" for method or "=" for property',
+      raise TGocciaSyntaxError.Create('Expected "(" for method, "=" for property assignment, or ";" for property declaration',
         Peek.Line, Peek.Column, FFileName, FSourceLines);
   end;
 
   Consume(gttRightBrace, 'Expected "}" after class body');
-  Result := TGocciaClassDefinition.Create(ClassName, SuperClass, Methods, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods);
+  Result := TGocciaClassDefinition.Create(ClassName, SuperClass, Methods, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
 end;
 
 function TGocciaParser.Parse: TGocciaProgram;

@@ -58,11 +58,11 @@ test("const with complex objects and arrays", () => {
     numbers: [1, 2, 3],
     nested: {
       prop: "value",
-      func: function () {
+      func: () => {
         return this.prop;
       },
     },
-    calculate: function (x, y) {
+    calculate: (x, y) => {
       return x + y;
     },
   };
@@ -95,25 +95,25 @@ test("const with complex objects and arrays", () => {
 });
 
 test("const with functions and closures", () => {
-  const createCounter = function (initial) {
+  const createCounter = (initial) => {
     const startValue = initial || 0;
     let count = startValue;
 
-    const increment = function () {
+    const increment = () => {
       count = count + 1;
       return count;
     };
 
-    const decrement = function () {
+    const decrement = () => {
       count = count - 1;
       return count;
     };
 
-    const get = function () {
+    const get = () => {
       return count;
     };
 
-    const reset = function () {
+    const reset = () => {
       count = startValue;
       return count;
     };
