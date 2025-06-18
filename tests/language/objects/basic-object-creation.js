@@ -20,7 +20,7 @@ test("object creation with various property types", () => {
     undefined: undefined,
     array: [1, 2, 3],
     nested: { inner: "value" },
-    method: function () {
+    method() {
       return "method result";
     },
     arrow: () => "arrow result",
@@ -60,16 +60,16 @@ test("object property enumeration and inspection", () => {
 });
 
 test("object creation with constructors and prototypes", () => {
-  function Person(name, age) {
+  const Person = (name, age) => {
     this.name = name;
     this.age = age;
-  }
+  };
 
-  Person.prototype.greet = function () {
+  Person.prototype.greet = () => {
     return `Hello, I'm ${this.name}`;
   };
 
-  Person.prototype.getAge = function () {
+  Person.prototype.getAge = () => {
     return this.age;
   };
 

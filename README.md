@@ -32,9 +32,9 @@ A drop of JavaScript - A subset of ECMAScript 2020 implemented in FreePascal
 
 ## Roadmap
 
-[ ] Template strings
-[ ] Module system
-[ ] HMR
+- [ ] Template strings
+- [ ] Module system
+- [ ] HMR
 
 ### Ideas to evaluate
 
