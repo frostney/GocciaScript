@@ -8,6 +8,12 @@ uses
   Goccia.AST.Node, Goccia.Token, Goccia.Values.Base, Generics.Collections, Classes, SysUtils;
 
 type
+  TGocciaParameter = record
+    Name: string;
+    DefaultValue: TGocciaExpression; // nil if no default value
+  end;
+  TGocciaParameterArray = array of TGocciaParameter;
+
   TGocciaLiteralExpression = class(TGocciaExpression)
   private
     FValue: TGocciaValue;
@@ -172,12 +178,12 @@ type
 
   TGocciaArrowFunctionExpression = class(TGocciaExpression)
   private
-    FParameters: TStringList;
+    FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
   public
-    constructor Create(AParameters: TStringList; ABody: TGocciaASTNode;
+    constructor Create(AParameters: TGocciaParameterArray; ABody: TGocciaASTNode;
       ALine, AColumn: Integer);
-    property Parameters: TStringList read FParameters;
+    property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
   end;
 
@@ -406,13 +412,15 @@ end;
 
 { TGocciaArrowFunctionExpression }
 
-constructor TGocciaArrowFunctionExpression.Create(AParameters: TStringList;
+constructor TGocciaArrowFunctionExpression.Create(AParameters: TGocciaParameterArray;
   ABody: TGocciaASTNode; ALine, AColumn: Integer);
 begin
   inherited Create(ALine, AColumn);
   FParameters := AParameters;
   FBody := ABody;
 end;
+
+
 
 { TGocciaConditionalExpression }
 

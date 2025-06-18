@@ -6,7 +6,7 @@ unit Goccia.Values.FunctionValue;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Base, Goccia.AST.Node, Goccia.AST.Statements, Goccia.Scope,
+  Goccia.Interfaces, Goccia.Values.Base, Goccia.AST.Node, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope,
   Goccia.Error, Goccia.Logger, Goccia.Values.Error, Goccia.Values.ObjectValue,
   Generics.Collections, Classes, Math, SysUtils,
   Goccia.Values.NumberValue,
@@ -30,11 +30,11 @@ type
   TGocciaFunctionValue = class(TGocciaObjectValue, IGocciaCallable)
   protected
     FName: string;
-    FParameters: TStringList;
+    FParameters: TGocciaParameterArray;
     FBody: TGocciaBlockValue;
     FClosure: TGocciaScope;
   public
-    constructor Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string = '');
+    constructor Create(AParameters: TGocciaParameterArray; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string = '');
     destructor Destroy; override;
     function ToString: string; override;
     function ToBoolean: Boolean; override;
@@ -42,7 +42,7 @@ type
     function TypeName: string; override;
     function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
-    property Parameters: TStringList read FParameters;
+    property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaBlockValue read FBody;
     property Closure: TGocciaScope read FClosure;
     property Name: string read FName;
@@ -52,7 +52,7 @@ type
   private
     FSuperClass: TGocciaValue;
   public
-    constructor Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
+    constructor Create(AParameters: TGocciaParameterArray; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
     function ToString: string; override;
     property SuperClass: TGocciaValue read FSuperClass write FSuperClass;
   end;
@@ -120,7 +120,7 @@ end;
 
 { TGocciaFunctionValue }
 
-constructor TGocciaFunctionValue.Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string = '');
+constructor TGocciaFunctionValue.Create(AParameters: TGocciaParameterArray; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string = '');
 begin
   FParameters := AParameters;
   FBody := ABody;
@@ -130,9 +130,10 @@ begin
   inherited Create;
 end;
 
+
+
 destructor TGocciaFunctionValue.Destroy;
 begin
-  FParameters.Free;
   FBody.Free;
   inherited;
 end;
@@ -179,11 +180,13 @@ end;
 
 { TGocciaMethodValue }
 
-constructor TGocciaMethodValue.Create(AParameters: TStringList; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
+constructor TGocciaMethodValue.Create(AParameters: TGocciaParameterArray; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
 begin
   inherited Create(AParameters, ABody, AClosure, AName);
   FSuperClass := ASuperClass;
 end;
+
+
 
 function TGocciaMethodValue.ToString: string;
 begin
@@ -214,11 +217,17 @@ var
   I: Integer;
   ReturnValue: TGocciaValue;
   Method: TGocciaMethodValue;
+  Context: TGocciaEvaluationContext;
 begin
   Logger.Debug('FunctionInvocation.Execute: Entering');
   Logger.Debug('  Function type: %s', [FFunction.ClassName]);
   Logger.Debug('  Arguments.Count: %d', [FArguments.Count]);
   Logger.Debug('  ThisValue type: %s', [FThisValue.ClassName]);
+
+  // Set up evaluation context for default parameter evaluation
+  Context.Scope := FFunction.Closure;
+  Context.OnError := nil; // TODO: Pass proper error handler
+  Context.LoadModule := nil; // TODO: Pass proper module loader
 
   // Set up the call scope
   FCallScope.ThisValue := FThisValue;
@@ -236,18 +245,29 @@ begin
   end;
 
   // Bind parameters
-  for I := 0 to FFunction.Parameters.Count - 1 do
+  for I := 0 to Length(FFunction.Parameters) - 1 do
   begin
-    Logger.Debug('Binding parameter %d: %s', [I, FFunction.Parameters[I]]);
+    Logger.Debug('Binding parameter %d: %s', [I, FFunction.Parameters[I].Name]);
     if I < FArguments.Count then
     begin
       Logger.Debug('  Argument value type: %s, ToString: %s', [FArguments[I].ClassName, FArguments[I].ToString]);
-      FCallScope.SetValue(FFunction.Parameters[I], FArguments[I])
+      FCallScope.SetValue(FFunction.Parameters[I].Name, FArguments[I])
     end
     else
     begin
-      Logger.Debug('  No argument provided, setting to undefined');
-      FCallScope.SetValue(FFunction.Parameters[I], TGocciaUndefinedValue.Create);
+      // Check if there's a default value
+      if Assigned(FFunction.Parameters[I].DefaultValue) then
+      begin
+        Logger.Debug('  No argument provided, using default value');
+        // Evaluate the default value in the function's closure scope
+        ReturnValue := EvaluateExpression(FFunction.Parameters[I].DefaultValue, Context);
+        FCallScope.SetValue(FFunction.Parameters[I].Name, ReturnValue);
+      end
+      else
+      begin
+        Logger.Debug('  No argument provided, setting to undefined');
+        FCallScope.SetValue(FFunction.Parameters[I].Name, TGocciaUndefinedValue.Create);
+      end;
     end;
   end;
 

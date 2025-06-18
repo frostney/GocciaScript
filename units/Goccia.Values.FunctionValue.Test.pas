@@ -57,12 +57,22 @@ type
   var
     Body: TGocciaBlockValue;
     Statements: TObjectList<TGocciaASTNode>;
+    ParamArray: TGocciaParameterArray;
+    I: Integer;
   begin
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedValue.Create, 0, 0));
     Body := TGocciaBlockValue.Create(Statements, AScope);
 
-    Result := T.Create(AParameters, Body, AScope, AName);
+    // Convert TStringList to TGocciaParameterArray
+    SetLength(ParamArray, AParameters.Count);
+    for I := 0 to AParameters.Count - 1 do
+    begin
+      ParamArray[I].Name := AParameters[I];
+      ParamArray[I].DefaultValue := nil;
+    end;
+
+    Result := T.Create(ParamArray, Body, AScope, AName);
   end;
 
   procedure TestSimpleFunctionFromTemplate<T>(TestSuite: TTestSuite; const ATypeDisplayName: String);
@@ -80,7 +90,7 @@ type
 
     FunctionValue := CreateSimpleFunction<T>('test', Parameters, Scope);
 
-    WriteLn('Parameters from FunctionValue: ' + IntToStr(FunctionValue.Parameters.Count));
+    WriteLn('Parameters from FunctionValue: ' + IntToStr(Length(FunctionValue.Parameters)));
 
     // Test basic function properties
     TestSuite.Expect<Boolean>(FunctionValue.ToBoolean).ToBeTrue;
@@ -90,7 +100,7 @@ type
 
     // Test function metadata
     TestSuite.Expect<String>(FunctionValue.Name).ToBe('test');
-    TestSuite.Expect<Integer>(FunctionValue.Parameters.Count).ToBe(0);
+    TestSuite.Expect<Integer>(Length(FunctionValue.Parameters)).ToBe(0);
     TestSuite.Expect<Boolean>(FunctionValue.Closure = Scope).ToBeTrue;
 
     // Test function execution
@@ -113,6 +123,8 @@ type
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
     Arguments: TObjectList<TGocciaValue>;
+    ParamArray: TGocciaParameterArray;
+    I: Integer;
   begin
     Scope := TGocciaScope.Create(nil, skGlobal);
     Parameters := TStringList.Create;
@@ -128,13 +140,22 @@ type
       0, 0
     ));
     Body := TGocciaBlockValue.Create(Statements, Scope);
-    FunctionValue := T.Create(Parameters, Body, Scope, 'test');
+
+    // Convert TStringList to TGocciaParameterArray
+    SetLength(ParamArray, Parameters.Count);
+    for I := 0 to Parameters.Count - 1 do
+    begin
+      ParamArray[I].Name := Parameters[I];
+      ParamArray[I].DefaultValue := nil;
+    end;
+
+    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
 
     // Test function properties
     TestSuite.Expect<String>(FunctionValue.Name).ToBe('test');
-    TestSuite.Expect<Integer>(FunctionValue.Parameters.Count).ToBe(2);
-    TestSuite.Expect<String>(FunctionValue.Parameters[0]).ToBe('a');
-    TestSuite.Expect<String>(FunctionValue.Parameters[1]).ToBe('b');
+    TestSuite.Expect<Integer>(Length(FunctionValue.Parameters)).ToBe(2);
+    TestSuite.Expect<String>(FunctionValue.Parameters[0].Name).ToBe('a');
+    TestSuite.Expect<String>(FunctionValue.Parameters[1].Name).ToBe('b');
 
     // Test function execution with arguments
     Arguments := TObjectList<TGocciaValue>.Create;
@@ -173,6 +194,8 @@ type
     Body: TGocciaBlockValue;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
+    ParamArray: TGocciaParameterArray;
+    I: Integer;
   begin
     Scope := TGocciaScope.Create(nil, skGlobal);
     Parameters := TStringList.Create;
@@ -186,7 +209,16 @@ type
       0, 0
     ));
     Body := TGocciaBlockValue.Create(Statements, Scope);
-    FunctionValue := T.Create(Parameters, Body, Scope, 'test');
+
+    // Convert TStringList to TGocciaParameterArray
+    SetLength(ParamArray, Parameters.Count);
+    for I := 0 to Parameters.Count - 1 do
+    begin
+      ParamArray[I].Name := Parameters[I];
+      ParamArray[I].DefaultValue := nil;
+    end;
+
+    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
 
     ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
     TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(1);
@@ -201,7 +233,7 @@ type
       0, 0
     ));
     Body := TGocciaBlockValue.Create(Statements, Scope);
-    FunctionValue := T.Create(Parameters, Body, Scope, 'test');
+    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
 
     ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
     TestSuite.Expect<String>(ReturnValue.ToString).ToBe('hello');
@@ -216,7 +248,7 @@ type
       0, 0
     ));
     Body := TGocciaBlockValue.Create(Statements, Scope);
-    FunctionValue := T.Create(Parameters, Body, Scope, 'test');
+    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
 
     ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
     TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
@@ -231,7 +263,7 @@ type
       0, 0
     ));
     Body := TGocciaBlockValue.Create(Statements, Scope);
-    FunctionValue := T.Create(Parameters, Body, Scope, 'test');
+    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
 
     ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
     TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBeFalse;
@@ -251,6 +283,8 @@ type
     Body: TGocciaBlockValue;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
+    ParamArray: TGocciaParameterArray;
+    I: Integer;
   begin
     // Create a global scope with a variable
     Scope := TGocciaScope.Create(nil, skGlobal);
@@ -264,7 +298,16 @@ type
       0, 0
     ));
     Body := TGocciaBlockValue.Create(Statements, Scope);
-    FunctionValue := T.Create(Parameters, Body, Scope, 'test');
+
+    // Convert TStringList to TGocciaParameterArray
+    SetLength(ParamArray, Parameters.Count);
+    for I := 0 to Parameters.Count - 1 do
+    begin
+      ParamArray[I].Name := Parameters[I];
+      ParamArray[I].DefaultValue := nil;
+    end;
+
+    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
 
     // Test function execution
     ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
@@ -286,6 +329,8 @@ type
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
     Arguments: TObjectList<TGocciaValue>;
+    ParamArray: TGocciaParameterArray;
+    I: Integer;
   begin
     // Create a global scope with a variable
     Scope := TGocciaScope.Create(nil, skGlobal);
@@ -305,7 +350,16 @@ type
       0, 0
     ));
     Body := TGocciaBlockValue.Create(Statements, Scope);
-    FunctionValue := T.Create(Parameters, Body, Scope, 'test');
+
+    // Convert TStringList to TGocciaParameterArray
+    SetLength(ParamArray, Parameters.Count);
+    for I := 0 to Parameters.Count - 1 do
+    begin
+      ParamArray[I].Name := Parameters[I];
+      ParamArray[I].DefaultValue := nil;
+    end;
+
+    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
 
     // Test function execution
     Arguments := TObjectList<TGocciaValue>.Create;
@@ -327,6 +381,8 @@ type
     ReturnValue: TGocciaValue;
     Arguments: TObjectList<TGocciaValue>;
     Statements: TObjectList<TGocciaASTNode>;
+    ParamArray: TGocciaParameterArray;
+    I: Integer;
   begin
     // Create a global scope with variables
     Scope := TGocciaScope.Create(nil, skGlobal);
@@ -351,7 +407,16 @@ type
       0, 0
     ));
     Body := TGocciaBlockValue.Create(Statements, Scope);
-    FunctionValue := T.Create(Parameters, Body, Scope, 'test');
+
+    // Convert TStringList to TGocciaParameterArray
+    SetLength(ParamArray, Parameters.Count);
+    for I := 0 to Parameters.Count - 1 do
+    begin
+      ParamArray[I].Name := Parameters[I];
+      ParamArray[I].DefaultValue := nil;
+    end;
+
+    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
 
     // Test function execution
     Arguments := TObjectList<TGocciaValue>.Create;
@@ -375,6 +440,8 @@ type
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
     Arguments: TObjectList<TGocciaValue>;
+    ParamArray: TGocciaParameterArray;
+    I: Integer;
   begin
     // Create a global scope with variables
     Scope := TGocciaScope.Create(nil, skGlobal);
@@ -406,7 +473,16 @@ type
       0, 0
     ));
     Body := TGocciaBlockValue.Create(Statements, Scope);
-    FunctionValue := T.Create(Parameters, Body, Scope, 'test');
+
+    // Convert TStringList to TGocciaParameterArray
+    SetLength(ParamArray, Parameters.Count);
+    for I := 0 to Parameters.Count - 1 do
+    begin
+      ParamArray[I].Name := Parameters[I];
+      ParamArray[I].DefaultValue := nil;
+    end;
+
+    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
 
     // Test function execution
     Arguments := TObjectList<TGocciaValue>.Create;

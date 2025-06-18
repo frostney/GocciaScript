@@ -902,7 +902,7 @@ begin
     BlockValue := TGocciaBlockValue.Create(Statements, Context.Scope.CreateChild);
   end;
 
-  // Create function with closure scope
+  // Create function with closure scope using new parameter structure
   Result := TGocciaFunctionValue.Create(ArrowFunctionExpression.Parameters, BlockValue, Context.Scope.CreateChild);
 end;
 
@@ -937,7 +937,7 @@ var
   BlockValue: TGocciaBlockValue;
 begin
   BlockValue := TGocciaBlockValue.Create(TGocciaBlockStatement(ClassMethod.Body).Nodes, Context.Scope.CreateChild);
-  // Always create a unique child scope for the closure
+  // Always create a unique child scope for the closure - now with default parameter support
   Result := TGocciaMethodValue.Create(ClassMethod.Parameters, BlockValue, Context.Scope.CreateChild, ClassMethod.Name, SuperClass);
 end;
 

@@ -25,6 +25,7 @@ type
     function Check(TokenType: TGocciaTokenType): Boolean; inline;
     function Match(TokenTypes: array of TGocciaTokenType): Boolean;
     function Consume(TokenType: TGocciaTokenType; const Message: string): TGocciaToken;
+    function IsArrowFunction: Boolean;
 
     // Expression parsing (private)
     function Conditional: TGocciaExpression;
@@ -491,8 +492,8 @@ begin
   begin
     Token := Previous;
 
-    // Check for arrow function
-    if Check(gttRightParen) or Check(gttIdentifier) then
+    // Check for arrow function by looking for pattern: () => or (id) => or (id, id) =>
+    if IsArrowFunction() then
       Result := ArrowFunction
     else
     begin
@@ -570,19 +571,37 @@ end;
 
 function TGocciaParser.ArrowFunction: TGocciaExpression;
 var
-  Parameters: TStringList;
+  Parameters: TGocciaParameterArray;
+  ParamCount: Integer;
+  ParamName: string;
+  DefaultValue: TGocciaExpression;
   Body: TGocciaASTNode;
   Line, Column: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
-  Parameters := TStringList.Create;
+  ParamCount := 0;
 
   // Parse parameters
   if not Check(gttRightParen) then
   begin
     repeat
-      Parameters.Add(Consume(gttIdentifier, 'Expected parameter name').Lexeme);
+      // Increase array size
+      SetLength(Parameters, ParamCount + 1);
+
+      ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
+      Parameters[ParamCount].Name := ParamName;
+
+      // Check for default value
+      if Match([gttAssign]) then
+      begin
+        DefaultValue := Assignment;
+        Parameters[ParamCount].DefaultValue := DefaultValue;
+      end
+      else
+        Parameters[ParamCount].DefaultValue := nil;
+
+      Inc(ParamCount);
     until not Match([gttComma]);
   end;
 
@@ -873,61 +892,74 @@ end;
 
 function TGocciaParser.ClassMethod(IsStatic: Boolean = False): TGocciaClassMethod;
 var
-  Parameters: TStringList;
+  Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
   Name: string;
   Line, Column: Integer;
   Statements: TObjectList<TGocciaStatement>;
   Stmt: TGocciaStatement;
+  ParamCount: Integer;
+  ParamName: string;
+  DefaultValue: TGocciaExpression;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Parameters := TStringList.Create;
+  SetLength(Parameters, 0);
+  ParamCount := 0;
+
+  // Parse parameters with default value support
+  Consume(gttLeftParen, 'Expected "(" after method name');
+  if not Check(gttRightParen) then
+  begin
+    repeat
+      ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
+
+      // Check for default value
+      if Match([gttAssign]) then
+        DefaultValue := Assignment
+      else
+        DefaultValue := nil;
+
+      // Add parameter to array
+      Inc(ParamCount);
+      SetLength(Parameters, ParamCount);
+      Parameters[ParamCount - 1].Name := ParamName;
+      Parameters[ParamCount - 1].DefaultValue := DefaultValue;
+
+    until not Match([gttComma]);
+  end;
+  Consume(gttRightParen, 'Expected ")" after parameters');
+
+  // Parse method body
+  Consume(gttLeftBrace, 'Expected "{" before method body');
+
+  // Create a block statement for the method body
+  Statements := TObjectList<TGocciaStatement>.Create(True);
   try
-    // Parse parameters
-    Consume(gttLeftParen, 'Expected "(" after method name');
-    if not Check(gttRightParen) then
+    while not Check(gttRightBrace) and not IsAtEnd do
     begin
-      repeat
-        Parameters.Add(Consume(gttIdentifier, 'Expected parameter name').Lexeme);
-      until not Match([gttComma]);
-    end;
-    Consume(gttRightParen, 'Expected ")" after parameters');
-
-    // Parse method body
-    Consume(gttLeftBrace, 'Expected "{" before method body');
-
-    // Create a block statement for the method body
-    Statements := TObjectList<TGocciaStatement>.Create(True);
-    try
-      while not Check(gttRightBrace) and not IsAtEnd do
+      Stmt := Statement;
+      if Stmt is TGocciaExpressionStatement then
       begin
-        Stmt := Statement;
-        if Stmt is TGocciaExpressionStatement then
-        begin
-          // For expression statements in class methods, don't require semicolons
-          if not Check(gttSemicolon) then
-            Statements.Add(Stmt)
-          else
-          begin
-            Advance; // Consume the semicolon
-            Statements.Add(Stmt);
-          end;
-        end
+        // For expression statements in class methods, don't require semicolons
+        if not Check(gttSemicolon) then
+          Statements.Add(Stmt)
         else
+        begin
+          Advance; // Consume the semicolon
           Statements.Add(Stmt);
-      end;
-
-      Consume(gttRightBrace, 'Expected "}" after method body');
-      Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
-      Result := TGocciaClassMethod.Create(Name, Parameters, Body, IsStatic, Line, Column);
-    except
-      Statements.Free;
-      raise;
+        end;
+      end
+      else
+        Statements.Add(Stmt);
     end;
+
+    Consume(gttRightBrace, 'Expected "}" after method body');
+    Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
+    Result := TGocciaClassMethod.Create(Name, Parameters, Body, IsStatic, Line, Column);
   except
-    Parameters.Free;
+    Statements.Free;
     raise;
   end;
 end;
@@ -1115,6 +1147,73 @@ begin
     Statements.Add(Statement);
 
   Result := TGocciaProgram.Create(Statements);
+end;
+
+function TGocciaParser.IsArrowFunction: Boolean;
+var
+  SavedCurrent: Integer;
+  ParenCount: Integer;
+begin
+  // Save current position for rollback
+  SavedCurrent := FCurrent;
+  Result := False;
+
+  try
+    // Look for pattern: () => or (id) => or (id, id) => or (id = default) =>
+    // We're already past the opening (
+    ParenCount := 1;
+
+    // Special case: empty parameter list ()
+    if Check(gttRightParen) then
+    begin
+      Advance; // consume )
+      Result := Check(gttArrow);
+      Exit;
+    end;
+
+    // Look for parameter list patterns
+    while not IsAtEnd and (ParenCount > 0) do
+    begin
+      case Peek.TokenType of
+        gttLeftParen:
+          begin
+            Inc(ParenCount);
+            Advance;
+          end;
+        gttRightParen:
+          begin
+            Dec(ParenCount);
+            Advance;
+          end;
+        gttIdentifier:
+          begin
+            Advance;
+            // Skip optional default value assignment
+            if Check(gttAssign) then
+            begin
+              Advance; // consume =
+              // Skip the default value expression (simplified)
+              while not IsAtEnd and not Check(gttComma) and not Check(gttRightParen) do
+                Advance;
+            end;
+            // Skip optional comma
+            if Check(gttComma) then
+              Advance;
+          end;
+        gttComma:
+          Advance;
+      else
+        // If we hit anything else, it's probably not an arrow function
+        Exit;
+      end;
+    end;
+
+    // Check if we have => after the parameters
+    Result := Check(gttArrow);
+  finally
+    // Restore position
+    FCurrent := SavedCurrent;
+  end;
 end;
 
 function TGocciaParser.BitwiseOr: TGocciaExpression;

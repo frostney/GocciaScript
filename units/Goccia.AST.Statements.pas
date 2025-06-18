@@ -96,14 +96,14 @@ type
   TGocciaClassMethod = class(TGocciaExpression)
   private
     FName: string;
-    FParameters: TStringList;
+    FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
     FIsStatic: Boolean;
   public
-    constructor Create(const AName: string; AParameters: TStringList;
+    constructor Create(const AName: string; AParameters: TGocciaParameterArray;
       ABody: TGocciaASTNode; AIsStatic: Boolean; ALine, AColumn: Integer);
     property Name: string read FName write FName;
-    property Parameters: TStringList read FParameters;
+    property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
     property IsStatic: Boolean read FIsStatic;
   end;
@@ -327,7 +327,7 @@ implementation
 
   { TGocciaClassMethod }
 
-  constructor TGocciaClassMethod.Create(const AName: string; AParameters: TStringList;
+    constructor TGocciaClassMethod.Create(const AName: string; AParameters: TGocciaParameterArray;
     ABody: TGocciaASTNode; AIsStatic: Boolean; ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
