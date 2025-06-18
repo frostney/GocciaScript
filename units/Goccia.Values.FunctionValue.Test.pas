@@ -3,7 +3,7 @@ program Goccia.Values.FunctionValue.Test;
 {$I Goccia.inc}
 
 uses
-  Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Values.StringValue, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, StrUtils, Math, TestRunner, Goccia.AST.Node, Generics.Collections, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope, Goccia.Values.Base, Goccia.Token, SysUtils, Classes, Goccia.Values.UndefinedValue;
+  Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Values.StringValue, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, StrUtils, Math, TestRunner, Goccia.AST.Node, Generics.Collections, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope, Goccia.Values.Base, Goccia.Token, SysUtils, Classes, Goccia.Values.UndefinedValue, Goccia.Values.NullValue;
 
 type
   TTestBlockValue = class(TTestSuite)
@@ -38,20 +38,6 @@ type
     procedure TestMethodWithScopeAndReturn;
     procedure TestMethodWithScopeAndParametersAndReturn;
   end;
-
-  TTestFunctionInvocation = class(TTestSuite)
-  public
-    procedure SetupTests; override;
-
-    procedure TestSimpleFunctionInvocation;
-    procedure TestFunctionInvocationWithParameters;
-    procedure TestFunctionInvocationWithReturn;
-    procedure TestFunctionInvocationWithScope;
-    procedure TestFunctionInvocationWithScopeAndParameters;
-    procedure TestFunctionInvocationWithScopeAndReturn;
-    procedure TestFunctionInvocationWithScopeAndParametersAndReturn;
-  end;
-
 
   function CreateSimpleFunction<T>(const AName: String; const AParameters: TStringList; const AScope: TGocciaScope): T;
   var
@@ -630,103 +616,12 @@ type
     TestFunctionWithScopeAndParametersAndReturnFromTemplate<TGocciaMethodValue>(Self);
   end;
 
-  procedure TTestFunctionInvocation.SetupTests;
-  begin
-    Test('Simple Function Invocation', TestSimpleFunctionInvocation);
-    Test('Function Invocation With Parameters', TestFunctionInvocationWithParameters);
-    Test('Function Invocation With Return', TestFunctionInvocationWithReturn);
-    Test('Function Invocation With Scope', TestFunctionInvocationWithScope);
-    Test('Function Invocation With Scope And Parameters', TestFunctionInvocationWithScopeAndParameters);
-    Test('Function Invocation With Scope And Return', TestFunctionInvocationWithScopeAndReturn);
-    Test('Function Invocation With Scope And Parameters And Return', TestFunctionInvocationWithScopeAndParametersAndReturn);
-  end;
 
-  procedure TTestFunctionInvocation.TestSimpleFunctionInvocation;
-  var
-    FunctionValue: TGocciaFunctionValue;
-    Scope: TGocciaScope;
-    Parameters: TStringList;
-    ReturnValue: TGocciaValue;
-    FunctionInvocation: TGocciaFunctionInvocation;
-    Arguments: TObjectList<TGocciaValue>;
-  begin
-    Scope := TGocciaScope.Create(nil, skGlobal);
-    Parameters := TStringList.Create;
-    Arguments := TObjectList<TGocciaValue>.Create;
-
-    FunctionValue := CreateSimpleFunction<TGocciaFunctionValue>('test', Parameters, Scope);
-
-    FunctionInvocation := TGocciaFunctionInvocation.Create(FunctionValue, Arguments, TGocciaUndefinedValue.Create);
-    ReturnValue := FunctionInvocation.Execute;
-    Expect<Double>(ReturnValue.ToNumber).ToBe(1);
-
-    FunctionInvocation.Free;
-    FunctionValue.Free;
-    Scope.Free;
-    Parameters.Free;
-    Arguments.Free;
-  end;
-
-  procedure TTestFunctionInvocation.TestFunctionInvocationWithParameters;
-  var
-    FunctionValue: TGocciaFunctionValue;
-    Scope: TGocciaScope;
-    Parameters: TStringList;
-    ReturnValue: TGocciaValue;
-    FunctionInvocation: TGocciaFunctionInvocation;
-    Arguments: TObjectList<TGocciaValue>;
-  begin
-    Scope := TGocciaScope.Create(nil, skGlobal);
-    Parameters := TStringList.Create;
-    Arguments := TObjectList<TGocciaValue>.Create;
-    Parameters.Add('a');
-    Parameters.Add('b');
-
-    FunctionValue := CreateSimpleFunction<TGocciaFunctionValue>('test', Parameters, Scope);
-
-    Arguments.Add(TGocciaNumberValue.Create(1));
-    Arguments.Add(TGocciaNumberValue.Create(2));
-    FunctionInvocation := TGocciaFunctionInvocation.Create(FunctionValue, Arguments, TGocciaUndefinedValue.Create);
-    ReturnValue := FunctionInvocation.Execute;
-    Expect<Double>(ReturnValue.ToNumber).ToBe(1);
-
-    FunctionInvocation.Free;
-    FunctionValue.Free;
-    Scope.Free;
-    Parameters.Free;
-    Arguments.Free;
-  end;
-
-  procedure TTestFunctionInvocation.TestFunctionInvocationWithReturn;
-  begin
-
-  end;
-
-  procedure TTestFunctionInvocation.TestFunctionInvocationWithScope;
-  begin
-
-  end;
-
-  procedure TTestFunctionInvocation.TestFunctionInvocationWithScopeAndParameters;
-  begin
-
-  end;
-
-  procedure TTestFunctionInvocation.TestFunctionInvocationWithScopeAndReturn;
-  begin
-
-  end;
-
-  procedure TTestFunctionInvocation.TestFunctionInvocationWithScopeAndParametersAndReturn;
-  begin
-
-  end;
 
 begin
   TestRunnerProgram.AddSuite(TTestBlockValue.Create('Block Value'));
   TestRunnerProgram.AddSuite(TTestFunctionValue.Create('Function Value'));
   TestRunnerProgram.AddSuite(TTestMethodValue.Create('Method Value'));
-  TestRunnerProgram.AddSuite(TTestFunctionInvocation.Create('Function Invocation'));
   TestRunnerProgram.Run;
 
   ExitCodeCheck(ExitCode);

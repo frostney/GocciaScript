@@ -57,18 +57,6 @@ type
     property SuperClass: TGocciaValue read FSuperClass write FSuperClass;
   end;
 
-  TGocciaFunctionInvocation = class
-  private
-    FFunction: TGocciaFunctionValue;
-    FArguments: TObjectList<TGocciaValue>;
-    FThisValue: TGocciaValue;
-    FCallScope: TGocciaScope;
-  public
-    constructor Create(AFunction: TGocciaFunctionValue; AArguments: TObjectList<TGocciaValue>; AThisValue: TGocciaValue);
-    destructor Destroy; override;
-    function Execute: TGocciaValue;
-  end;
-
 implementation
 
 uses
@@ -130,8 +118,6 @@ begin
   inherited Create;
 end;
 
-
-
 destructor TGocciaFunctionValue.Destroy;
 begin
   FBody.Free;
@@ -163,13 +149,112 @@ end;
 
 function TGocciaFunctionValue.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  Invocation: TGocciaFunctionInvocation;
+  I: Integer;
+  ReturnValue: TGocciaValue;
+  Method: TGocciaMethodValue;
+  Context: TGocciaEvaluationContext;
+  CallScope: TGocciaScope;
 begin
-  Invocation := TGocciaFunctionInvocation.Create(Self, Arguments, ThisValue);
+  Logger.Debug('FunctionValue.Call: Entering');
+  Logger.Debug('  Function type: %s', [Self.ClassName]);
+  Logger.Debug('  Arguments.Count: %d', [Arguments.Count]);
+  Logger.Debug('  ThisValue type: %s', [ThisValue.ClassName]);
+
+  // Create call scope
+  CallScope := TGocciaScope.Create(FClosure, skFunction, Format('Type: FunctionCall, Name: %s', [FName]));
   try
-    Result := Invocation.Execute;
+    // Set up evaluation context for default parameter evaluation
+    Context.Scope := FClosure;
+    Context.OnError := nil; // TODO: Pass proper error handler
+    Context.LoadModule := nil; // TODO: Pass proper module loader
+
+    // Set up the call scope
+    CallScope.ThisValue := ThisValue;
+
+    // If this is a method with a superclass, set up super handling
+    if Self is TGocciaMethodValue then
+    begin
+      Method := TGocciaMethodValue(Self);
+      if Assigned(Method.SuperClass) and not (Method.SuperClass is TGocciaUndefinedValue) then
+      begin
+        Logger.Debug('FunctionValue.Call: Method has superclass: %s', [Method.SuperClass.ToString]);
+        // Set up special 'super' binding in the method scope
+        CallScope.SetValue('__super__', Method.SuperClass);
+      end;
+    end;
+
+    // Bind parameters
+    for I := 0 to Length(FParameters) - 1 do
+    begin
+      Logger.Debug('Binding parameter %d: %s', [I, FParameters[I].Name]);
+      if I < Arguments.Count then
+      begin
+        Logger.Debug('  Argument value type: %s, toString: %s', [Arguments[I].ClassName, Arguments[I].ToString]);
+        CallScope.SetValue(FParameters[I].Name, Arguments[I])
+      end
+      else
+      begin
+        // Check if there's a default value
+        if Assigned(FParameters[I].DefaultValue) then
+        begin
+          Logger.Debug('  No argument provided, using default value');
+          // Evaluate the default value in the function's closure scope
+          ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
+          CallScope.SetValue(FParameters[I].Name, ReturnValue);
+        end
+        else
+        begin
+          Logger.Debug('  No argument provided, setting to undefined');
+          CallScope.SetValue(FParameters[I].Name, TGocciaUndefinedValue.Create);
+        end;
+      end;
+    end;
+
+    // Execute function body
+    try
+      ReturnValue := FBody.Execute(CallScope);
+      if ReturnValue = nil then
+        ReturnValue := TGocciaUndefinedValue.Create;
+      Result := ReturnValue;
+    except
+      on E: TGocciaReturnValue do
+      begin
+        Logger.Debug('FunctionValue.Call: Caught TGocciaReturnValue');
+        if E.Value = nil then
+        begin
+          Logger.Debug('FunctionValue.Call: E.Value is nil, creating undefined value');
+          Result := TGocciaUndefinedValue.Create;
+        end
+        else
+        begin
+          Logger.Debug('FunctionValue.Call: E.Value type: %s', [E.Value.ClassName]);
+          // Create a new instance of the same type
+          if E.Value is TGocciaNumberValue then
+            Result := TGocciaNumberValue.Create(TGocciaNumberValue(E.Value).Value)
+          else if E.Value is TGocciaStringValue then
+            Result := TGocciaStringValue.Create(TGocciaStringValue(E.Value).Value)
+          else if E.Value is TGocciaBooleanValue then
+            Result := TGocciaBooleanValue.Create(TGocciaBooleanValue(E.Value).Value)
+          else if E.Value is TGocciaUndefinedValue then
+            Result := TGocciaUndefinedValue.Create
+          else if E.Value is TGocciaObjectValue then
+            Result := E.Value
+          else
+            Result := E.Value;
+        end;
+      end;
+      on E: Exception do
+      begin
+        Logger.Error('FunctionValue.Call: Caught unexpected exception: %s', [E.Message]);
+        raise;
+      end;
+    end;
+
+    Logger.Debug('FunctionValue.Call: Exiting');
+    Logger.Debug('  Result type: %s', [Result.ClassName]);
+    Logger.Debug('  Result toString: %s', [Result.ToString]);
   finally
-    Invocation.Free;
+    CallScope.Free;
   end;
 end;
 
@@ -186,134 +271,12 @@ begin
   FSuperClass := ASuperClass;
 end;
 
-
-
 function TGocciaMethodValue.ToString: string;
 begin
   if FName <> '' then
     Result := Format('[Method: %s]', [FName])
   else
     Result := '[Method]';
-end;
-
-{ TGocciaFunctionInvocation }
-
-constructor TGocciaFunctionInvocation.Create(AFunction: TGocciaFunctionValue; AArguments: TObjectList<TGocciaValue>; AThisValue: TGocciaValue);
-begin
-  FFunction := AFunction;
-  FArguments := AArguments;
-  FThisValue := AThisValue;
-  FCallScope := TGocciaScope.Create(FFunction.Closure, skFunction, Format('Type: FunctionInvocation, Name: %s', [AFunction.Name]));
-end;
-
-destructor TGocciaFunctionInvocation.Destroy;
-begin
-  FCallScope.Free;
-  inherited;
-end;
-
-function TGocciaFunctionInvocation.Execute: TGocciaValue;
-var
-  I: Integer;
-  ReturnValue: TGocciaValue;
-  Method: TGocciaMethodValue;
-  Context: TGocciaEvaluationContext;
-begin
-  Logger.Debug('FunctionInvocation.Execute: Entering');
-  Logger.Debug('  Function type: %s', [FFunction.ClassName]);
-  Logger.Debug('  Arguments.Count: %d', [FArguments.Count]);
-  Logger.Debug('  ThisValue type: %s', [FThisValue.ClassName]);
-
-  // Set up evaluation context for default parameter evaluation
-  Context.Scope := FFunction.Closure;
-  Context.OnError := nil; // TODO: Pass proper error handler
-  Context.LoadModule := nil; // TODO: Pass proper module loader
-
-  // Set up the call scope
-  FCallScope.ThisValue := FThisValue;
-
-  // If this is a method with a superclass, set up super handling
-  if FFunction is TGocciaMethodValue then
-  begin
-    Method := TGocciaMethodValue(FFunction);
-    if Assigned(Method.SuperClass) and not (Method.SuperClass is TGocciaUndefinedValue) then
-    begin
-      Logger.Debug('FunctionInvocation.Execute: Method has superclass: %s', [Method.SuperClass.ToString]);
-      // Set up special 'super' binding in the method scope
-      FCallScope.SetValue('__super__', Method.SuperClass);
-    end;
-  end;
-
-  // Bind parameters
-  for I := 0 to Length(FFunction.Parameters) - 1 do
-  begin
-    Logger.Debug('Binding parameter %d: %s', [I, FFunction.Parameters[I].Name]);
-    if I < FArguments.Count then
-    begin
-      Logger.Debug('  Argument value type: %s, ToString: %s', [FArguments[I].ClassName, FArguments[I].ToString]);
-      FCallScope.SetValue(FFunction.Parameters[I].Name, FArguments[I])
-    end
-    else
-    begin
-      // Check if there's a default value
-      if Assigned(FFunction.Parameters[I].DefaultValue) then
-      begin
-        Logger.Debug('  No argument provided, using default value');
-        // Evaluate the default value in the function's closure scope
-        ReturnValue := EvaluateExpression(FFunction.Parameters[I].DefaultValue, Context);
-        FCallScope.SetValue(FFunction.Parameters[I].Name, ReturnValue);
-      end
-      else
-      begin
-        Logger.Debug('  No argument provided, setting to undefined');
-        FCallScope.SetValue(FFunction.Parameters[I].Name, TGocciaUndefinedValue.Create);
-      end;
-    end;
-  end;
-
-  // Execute function body
-  try
-    ReturnValue := FFunction.Body.Execute(FCallScope);
-    if ReturnValue = nil then
-      ReturnValue := TGocciaUndefinedValue.Create;
-    Result := ReturnValue;
-  except
-    on E: TGocciaReturnValue do
-    begin
-      Logger.Debug('FunctionInvocation.Execute: Caught TGocciaReturnValue');
-      if E.Value = nil then
-      begin
-        Logger.Debug('FunctionInvocation.Execute: E.Value is nil, creating undefined value');
-        Result := TGocciaUndefinedValue.Create;
-      end
-      else
-      begin
-        Logger.Debug('FunctionInvocation.Execute: E.Value type: %s', [E.Value.ClassName]);
-        // Create a new instance of the same type
-        if E.Value is TGocciaNumberValue then
-          Result := TGocciaNumberValue.Create(TGocciaNumberValue(E.Value).Value)
-        else if E.Value is TGocciaStringValue then
-          Result := TGocciaStringValue.Create(TGocciaStringValue(E.Value).Value)
-        else if E.Value is TGocciaBooleanValue then
-          Result := TGocciaBooleanValue.Create(TGocciaBooleanValue(E.Value).Value)
-        else if E.Value is TGocciaUndefinedValue then
-          Result := TGocciaUndefinedValue.Create
-        else if E.Value is TGocciaObjectValue then
-          Result := E.Value
-        else
-          Result := E.Value;
-      end;
-    end;
-    on E: Exception do
-    begin
-      Logger.Error('FunctionInvocation.Execute: Caught unexpected exception: %s', [E.Message]);
-      raise;
-    end;
-  end;
-
-  Logger.Debug('FunctionInvocation.Execute: Exiting');
-  Logger.Debug('  Result type: %s', [Result.ClassName]);
-  Logger.Debug('  Result ToString: %s', [Result.ToString]);
 end;
 
 end.
