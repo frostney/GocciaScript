@@ -26,8 +26,7 @@ type
     function Match(TokenTypes: array of TGocciaTokenType): Boolean;
     function Consume(TokenType: TGocciaTokenType; const Message: string): TGocciaToken;
 
-    // Expression parsing
-    function Expression: TGocciaExpression;
+    // Expression parsing (private)
     function Conditional: TGocciaExpression;
     function LogicalOr: TGocciaExpression;
     function LogicalAnd: TGocciaExpression;
@@ -64,6 +63,7 @@ type
     constructor Create(ATokens: TObjectList<TGocciaToken>;
       const AFileName: string; ASourceLines: TStringList);
     function Parse: TGocciaProgram;
+    function Expression: TGocciaExpression;
   end;
 
 implementation

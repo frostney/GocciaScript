@@ -5,7 +5,7 @@ unit Goccia.Evaluator;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Base, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.Error, Goccia.Values.NullValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser, Generics.Collections, SysUtils, Math;
+  Goccia.Interfaces, Goccia.Values.Base, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.Error, Goccia.Values.NullValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser, Generics.Collections, SysUtils, Math, Classes;
 
 type
   TGocciaEvaluationContext = record
@@ -35,6 +35,7 @@ function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpr
 function EvaluatePrivatePropertyAssignment(PrivatePropertyAssignmentExpression: TGocciaPrivatePropertyAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluatePrivatePropertyCompoundAssignment(PrivatePropertyCompoundAssignmentExpression: TGocciaPrivatePropertyCompoundAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateLiteral(TemplateLiteralExpression: TGocciaTemplateLiteralExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateTemplateExpression(const ExpressionText: string; Context: TGocciaEvaluationContext; Line, Column: Integer): TGocciaValue;
 procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 procedure InitializePrivateInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 
@@ -1223,11 +1224,9 @@ var
   Template: string;
   ResultStr: string;
   I, Start: Integer;
+  BraceCount: Integer;
   ExpressionText: string;
   ExpressionValue: TGocciaValue;
-  VariableName: string;
-  J: Integer;
-  IsSimpleVariable: Boolean;
 begin
   Template := TemplateLiteralExpression.Value;
   ResultStr := '';
@@ -1241,11 +1240,20 @@ begin
       I := I + 2; // Skip ${
       Start := I;
 
-      // Find the matching }
-      while (I <= Length(Template)) and (Template[I] <> '}') do
-        Inc(I);
+      // Find the matching } (handle nested braces properly)
+      BraceCount := 1;
+      while (I <= Length(Template)) and (BraceCount > 0) do
+      begin
+        if Template[I] = '{' then
+          Inc(BraceCount)
+        else if Template[I] = '}' then
+          Dec(BraceCount);
 
-      if I > Length(Template) then
+        if BraceCount > 0 then
+          Inc(I);
+      end;
+
+      if BraceCount > 0 then
       begin
         Context.OnError('Unterminated template expression', TemplateLiteralExpression.Line, TemplateLiteralExpression.Column);
         Result := TGocciaStringValue.Create(Template);
@@ -1255,31 +1263,19 @@ begin
       // Extract the expression text
       ExpressionText := Trim(Copy(Template, Start, I - Start));
 
-      // For now, support simple variable names and basic expressions
-      IsSimpleVariable := True;
-      for J := 1 to Length(ExpressionText) do
+      if ExpressionText = '' then
       begin
-        if not (CharInSet(ExpressionText[J], ['a'..'z', 'A'..'Z', '0'..'9', '_', '$'])) then
-        begin
-          IsSimpleVariable := False;
-          Break;
-        end;
-      end;
-
-      if IsSimpleVariable then
+        // Empty expression
+        ResultStr := ResultStr + '';
+      end
+      else
       begin
-        // Simple variable lookup
-        ExpressionValue := Context.Scope.GetValue(ExpressionText);
+        // Evaluate the full expression using a safe parsing approach
+        ExpressionValue := EvaluateTemplateExpression(ExpressionText, Context, TemplateLiteralExpression.Line, TemplateLiteralExpression.Column);
         if ExpressionValue <> nil then
           ResultStr := ResultStr + ExpressionValue.ToString
         else
           ResultStr := ResultStr + 'undefined';
-      end
-      else
-      begin
-        // For complex expressions, just return as literal for now
-        // TODO: Implement full expression parsing later
-        ResultStr := ResultStr + '${' + ExpressionText + '}';
       end;
 
       Inc(I); // Skip the closing }
@@ -1293,6 +1289,68 @@ begin
   end;
 
   Result := TGocciaStringValue.Create(ResultStr);
+end;
+
+// This looks a bit overkill to create a new lexer and parser for each expression
+function EvaluateTemplateExpression(const ExpressionText: string; Context: TGocciaEvaluationContext; Line, Column: Integer): TGocciaValue;
+var
+  Lexer: TGocciaLexer;
+  Parser: TGocciaParser;
+  Expression: TGocciaExpression;
+  Tokens: TObjectList<TGocciaToken>;
+  SourceLines: TStringList;
+begin
+  Result := nil;
+  Lexer := nil;
+  Parser := nil;
+  Tokens := nil;
+  SourceLines := nil;
+  Expression := nil;
+
+  try
+    // Create a temporary source lines for error reporting
+    SourceLines := TStringList.Create;
+    SourceLines.Add(ExpressionText);
+
+    // Create lexer
+    Lexer := TGocciaLexer.Create(ExpressionText, 'template-expression');
+
+    // Tokenize the expression
+    Tokens := Lexer.ScanTokens;
+    if Tokens = nil then
+      Exit;
+
+    // Create parser - it takes ownership of Tokens
+    Parser := TGocciaParser.Create(Tokens, 'template-expression', SourceLines);
+    Tokens := nil; // Parser now owns it
+
+    // Parse the expression
+    Expression := Parser.Expression;
+    if Expression = nil then
+      Exit;
+
+    // Evaluate the expression in the current context
+    Result := EvaluateExpression(Expression, Context);
+
+  except
+    on E: Exception do
+    begin
+      // Fallback to undefined on any error
+      Result := TGocciaUndefinedValue.Create;
+    end;
+  end;
+
+  // Cleanup in reverse order
+  if Assigned(Expression) then
+    Expression.Free;
+  if Assigned(Parser) then
+    Parser.Free;
+  if Assigned(Tokens) then
+    Tokens.Free;
+  if Assigned(Lexer) then
+    Lexer.Free;
+  if Assigned(SourceLines) then
+    SourceLines.Free;
 end;
 
 end.
