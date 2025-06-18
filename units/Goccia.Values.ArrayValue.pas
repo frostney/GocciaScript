@@ -21,6 +21,9 @@ type
     function ArrayJoin(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayIncludes(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
+    function ArrayPush(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayPop(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+
     function ArrayToReversed(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayToSorted(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
@@ -44,7 +47,7 @@ type
 implementation
 
 uses
-  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Evaluator, Goccia.Values.StringValue, Generics.Defaults;
+  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.Evaluator, Goccia.Values.StringValue, Generics.Defaults;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var
@@ -97,6 +100,8 @@ begin
   FPrototype.SetProperty('every', TGocciaNativeFunctionValue.Create(ArrayEvery, 'every', 1));
   FPrototype.SetProperty('join', TGocciaNativeFunctionValue.Create(ArrayJoin, 'join', 1));
   FPrototype.SetProperty('includes', TGocciaNativeFunctionValue.Create(ArrayIncludes, 'includes', 1));
+  FPrototype.SetProperty('push', TGocciaNativeFunctionValue.Create(ArrayPush, 'push', 1));
+  FPrototype.SetProperty('pop', TGocciaNativeFunctionValue.Create(ArrayPop, 'pop', 0));
   FPrototype.SetProperty('toReversed', TGocciaNativeFunctionValue.Create(ArrayToReversed, 'toReversed', 0));
   FPrototype.SetProperty('toSorted', TGocciaNativeFunctionValue.Create(ArrayToSorted, 'toSorted', 0));
 end;
@@ -367,6 +372,24 @@ begin
 
   SearchValue := Args[0];
 
+  if SearchValue is TGocciaUndefinedValue then
+  begin
+    Result := TGocciaBooleanValue.Create(False);
+    Exit;
+  end;
+
+  if SearchValue is TGocciaNullValue then
+  begin
+    Result := TGocciaBooleanValue.Create(False);
+    Exit;
+  end;
+
+  if SearchValue.ToNumber > Arr.Elements.Count then
+  begin
+    Result := TGocciaBooleanValue.Create(False);
+    Exit;
+  end;
+
   for I := 0 to Arr.Elements.Count - 1 do
   begin
     if Arr.Elements[I].Equals(SearchValue) then
@@ -454,6 +477,38 @@ begin
     Result := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
 
   Result := TGocciaBooleanValue.Create(Result.ToBoolean);
+end;
+
+function TGocciaArrayValue.ArrayPush(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  I: Integer;
+begin
+  Arr := TGocciaArrayValue(ThisValue);
+
+  if Args.Count < 1 then
+    ThrowError('Array.push expects at least one argument');
+
+  for I := 0 to Args.Count - 1 do
+    Arr.Elements.Add(Args[I]);
+
+  Result := TGocciaNumberValue.Create(Arr.Elements.Count);
+end;
+
+function TGocciaArrayValue.ArrayPop(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  I: Integer;
+begin
+  Arr := TGocciaArrayValue(ThisValue);
+
+  if Arr.Elements.Count = 0 then
+    ThrowError('Array.pop called on empty array');
+
+  Result := Arr.Elements[Arr.Elements.Count - 1];
+  Arr.Elements.Delete(Arr.Elements.Count - 1);
+
+  Result := TGocciaNumberValue.Create(Arr.Elements.Count);
 end;
 
 function TGocciaArrayValue.ArrayToReversed(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;

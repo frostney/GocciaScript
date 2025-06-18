@@ -1,0 +1,45 @@
+/*---
+description: Array.prototype.reduce reduces an array to a single value
+features: [Array.prototype.reduce]
+---*/
+
+test("Array.prototype.reduce reduces an array to a single value", () => {
+  const arr = [1, 2, 3];
+  const reduced = arr.reduce((acc, x) => acc + x, 0);
+  expect(reduced).toBe(6);
+});
+
+test("Array.prototype.reduce with index and array parameters", () => {
+  const arr = [1, 2, 3];
+  const reduced = arr.reduce((acc, x, index, array) => {
+    expect(array).toBe(arr);
+
+    if (index === 0) {
+      expect(acc).toBe(0);
+      expect(x).toBe(1);
+      expect(index).toBe(0);
+    }
+
+    if (index === 1) {
+      expect(acc).toBe(1);
+      expect(x).toBe(2);
+      expect(index).toBe(1);
+    }
+
+    if (index === 2) {
+      expect(acc).toBe(3);
+      expect(x).toBe(3);
+      expect(index).toBe(2);
+    }
+
+    return acc + x;
+  }, 0);
+
+  expect(reduced).toBe(6);
+});
+
+test("Array.prototype.reduce with empty array", () => {
+  const arr = [];
+  const reduced = arr.reduce((acc, x) => acc + x, 0);
+  expect(reduced).toBe(0);
+});
