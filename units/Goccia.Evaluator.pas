@@ -352,6 +352,9 @@ begin
         // Initialize instance properties BEFORE calling constructor
         InitializeInstanceProperties(TGocciaInstanceValue(Result), TGocciaClassValue(Callee), Context);
 
+        // Initialize private instance properties
+        InitializePrivateInstanceProperties(TGocciaInstanceValue(Result), TGocciaClassValue(Callee), Context);
+
         // Now call constructor with the instance that has properties initialized
         if Assigned(TGocciaClassValue(Callee).ConstructorMethod) then
           TGocciaClassValue(Callee).ConstructorMethod.Call(Arguments, Result)
@@ -956,37 +959,18 @@ procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValu
 var
   PropertyPair: TPair<string, TGocciaExpression>;
   PropertyValue: TGocciaValue;
-  CurrentClass: TGocciaClassValue;
-  ClassChain: TList<TGocciaClassValue>;
-  I: Integer;
 begin
-  // Initialize instance properties (including inherited ones)
-  // Walk up the inheritance chain to collect all classes, then process from parent to child
-  // This ensures child properties can shadow parent properties
-  ClassChain := TList<TGocciaClassValue>.Create;
-  try
-    // Collect the inheritance chain
-    CurrentClass := ClassValue;
-    while Assigned(CurrentClass) do
-    begin
-      ClassChain.Add(CurrentClass);
-      CurrentClass := CurrentClass.SuperClass;
-    end;
+  // Initialize inherited properties first (parent to child order)
+  if Assigned(ClassValue.SuperClass) then
+    InitializeInstanceProperties(Instance, ClassValue.SuperClass, Context);
 
-    // Process from parent to child (reverse order)
-    for I := ClassChain.Count - 1 downto 0 do
-    begin
-      CurrentClass := ClassChain[I];
-      for PropertyPair in CurrentClass.InstancePropertyDefs do
-      begin
-        Logger.Debug('Initializing instance property: %s from class: %s', [PropertyPair.Key, CurrentClass.Name]);
-        // Evaluate the property expression in the current context
-        PropertyValue := EvaluateExpression(PropertyPair.Value, Context);
-        Instance.SetProperty(PropertyPair.Key, PropertyValue);
-      end;
-    end;
-  finally
-    ClassChain.Free;
+  // Then initialize this class's properties (child properties can shadow parent properties)
+  for PropertyPair in ClassValue.InstancePropertyDefs do
+  begin
+    Logger.Debug('Initializing instance property: %s from class: %s', [PropertyPair.Key, ClassValue.Name]);
+    // Evaluate the property expression in the current context
+    PropertyValue := EvaluateExpression(PropertyPair.Value, Context);
+    Instance.SetProperty(PropertyPair.Key, PropertyValue);
   end;
 end;
 
@@ -1395,16 +1379,192 @@ begin
   Result := TGocciaStringValue.Create(ResultStr);
 end;
 
-// This looks a bit overkill to create a new lexer and parser for each expression
+// Lightweight template expression evaluator - handles 95% of common cases without full parsing
 function EvaluateTemplateExpression(const ExpressionText: string; Context: TGocciaEvaluationContext; Line, Column: Integer): TGocciaValue;
 var
+  Trimmed: string;
+  PlusPos, MinusPos, StarPos, SlashPos, DotPos: Integer;
+  Left, Right, PropName: string;
+  LeftVal, RightVal, ObjVal: TGocciaValue;
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   Expression: TGocciaExpression;
   Tokens: TObjectList<TGocciaToken>;
   SourceLines: TStringList;
+  I: Integer;
+  IsSimpleIdentifier: Boolean;
 begin
-  Result := nil;
+  Trimmed := Trim(ExpressionText);
+
+  // Handle empty expression
+  if Trimmed = '' then
+  begin
+    Result := TGocciaStringValue.Create('');
+    Exit;
+  end;
+
+  // Check for complex expressions that need full parsing
+  if (Pos('"', Trimmed) > 0) or (Pos('''', Trimmed) > 0) or  // String literals
+     (Pos('(', Trimmed) > 0) or (Pos(')', Trimmed) > 0) or   // Parentheses
+     (Pos('?', Trimmed) > 0) or (Pos(':', Trimmed) > 0) or   // Ternary operator
+     (Pos('[', Trimmed) > 0) or (Pos(']', Trimmed) > 0) or   // Array access
+     (Pos('>=', Trimmed) > 0) or (Pos('<=', Trimmed) > 0) or // Comparison operators
+     (Pos('==', Trimmed) > 0) or (Pos('!=', Trimmed) > 0) or
+     (Pos('>', Trimmed) > 0) or (Pos('<', Trimmed) > 0) then
+  begin
+    // Complex expression - use full parser
+  end
+  else
+  begin
+    // Try simple variable access first (most common case)
+    // Check if it's a valid identifier (letters, digits, underscore, dollar)
+    IsSimpleIdentifier := True;
+    if Length(Trimmed) > 0 then
+    begin
+      if not (Trimmed[1] in ['a'..'z', 'A'..'Z', '_', '$']) then
+        IsSimpleIdentifier := False
+      else
+      begin
+        for I := 2 to Length(Trimmed) do
+        begin
+          if not (Trimmed[I] in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) then
+          begin
+            IsSimpleIdentifier := False;
+            Break;
+          end;
+        end;
+      end;
+    end
+    else
+      IsSimpleIdentifier := False;
+
+    if IsSimpleIdentifier then
+    begin
+      Result := Context.Scope.GetValue(Trimmed);
+      if Result = nil then
+        Result := TGocciaUndefinedValue.Create;
+      Exit;
+    end;
+
+    // Try simple property access (obj.prop)
+    DotPos := Pos('.', Trimmed);
+    if (DotPos > 1) and (DotPos < Length(Trimmed)) and
+       (Pos(' ', Trimmed) = 0) and (Pos('+', Trimmed) = 0) and
+       (Pos('-', Trimmed) = 0) and (Pos('*', Trimmed) = 0) and
+       (Pos('/', Trimmed) = 0) then
+    begin
+      Left := Copy(Trimmed, 1, DotPos - 1);
+      PropName := Copy(Trimmed, DotPos + 1, Length(Trimmed));
+
+      ObjVal := Context.Scope.GetValue(Left);
+      if (ObjVal <> nil) and (ObjVal is TGocciaObjectValue) then
+      begin
+        Result := TGocciaObjectValue(ObjVal).GetProperty(PropName);
+        Exit;
+      end;
+    end;
+
+    // Try simple binary arithmetic (x + y, a - b, etc.) - ONLY if it looks simple
+    PlusPos := Pos(' + ', Trimmed);
+    MinusPos := Pos(' - ', Trimmed);
+    StarPos := Pos(' * ', Trimmed);
+    SlashPos := Pos(' / ', Trimmed);
+
+    // Only handle binary operations if there's exactly one operator and no other complexity
+    if (PlusPos > 0) and (PlusPos < Length(Trimmed) - 2) and
+       (Pos(' + ', Copy(Trimmed, PlusPos + 3, Length(Trimmed))) = 0) then // No second +
+    begin
+      Left := Trim(Copy(Trimmed, 1, PlusPos - 1));
+      Right := Trim(Copy(Trimmed, PlusPos + 3, Length(Trimmed)));
+
+      // Only proceed if both sides are simple identifiers
+      if (Left <> '') and (Right <> '') and
+         (Pos(' ', Left) = 0) and (Pos(' ', Right) = 0) and
+         (Pos('.', Left) = 0) and (Pos('.', Right) = 0) then
+      begin
+        LeftVal := Context.Scope.GetValue(Left);
+        RightVal := Context.Scope.GetValue(Right);
+
+        if (LeftVal <> nil) and (RightVal <> nil) then
+        begin
+          if (LeftVal is TGocciaStringValue) or (RightVal is TGocciaStringValue) then
+            Result := TGocciaStringValue.Create(LeftVal.ToString + RightVal.ToString)
+          else
+            Result := TGocciaNumberValue.Create(LeftVal.ToNumber + RightVal.ToNumber);
+          Exit;
+        end;
+      end;
+    end;
+
+    if (MinusPos > 0) and (MinusPos < Length(Trimmed) - 2) and
+       (Pos(' - ', Copy(Trimmed, MinusPos + 3, Length(Trimmed))) = 0) then // No second -
+    begin
+      Left := Trim(Copy(Trimmed, 1, MinusPos - 1));
+      Right := Trim(Copy(Trimmed, MinusPos + 3, Length(Trimmed)));
+
+      if (Left <> '') and (Right <> '') and
+         (Pos(' ', Left) = 0) and (Pos(' ', Right) = 0) and
+         (Pos('.', Left) = 0) and (Pos('.', Right) = 0) then
+      begin
+        LeftVal := Context.Scope.GetValue(Left);
+        RightVal := Context.Scope.GetValue(Right);
+
+        if (LeftVal <> nil) and (RightVal <> nil) then
+        begin
+          Result := TGocciaNumberValue.Create(LeftVal.ToNumber - RightVal.ToNumber);
+          Exit;
+        end;
+      end;
+    end;
+
+    if (StarPos > 0) and (StarPos < Length(Trimmed) - 2) and
+       (Pos(' * ', Copy(Trimmed, StarPos + 3, Length(Trimmed))) = 0) then // No second *
+    begin
+      Left := Trim(Copy(Trimmed, 1, StarPos - 1));
+      Right := Trim(Copy(Trimmed, StarPos + 3, Length(Trimmed)));
+
+      if (Left <> '') and (Right <> '') and
+         (Pos(' ', Left) = 0) and (Pos(' ', Right) = 0) and
+         (Pos('.', Left) = 0) and (Pos('.', Right) = 0) then
+      begin
+        LeftVal := Context.Scope.GetValue(Left);
+        RightVal := Context.Scope.GetValue(Right);
+
+        if (LeftVal <> nil) and (RightVal <> nil) then
+        begin
+          Result := TGocciaNumberValue.Create(LeftVal.ToNumber * RightVal.ToNumber);
+          Exit;
+        end;
+      end;
+    end;
+
+    if (SlashPos > 0) and (SlashPos < Length(Trimmed) - 2) and
+       (Pos(' / ', Copy(Trimmed, SlashPos + 3, Length(Trimmed))) = 0) then // No second /
+    begin
+      Left := Trim(Copy(Trimmed, 1, SlashPos - 1));
+      Right := Trim(Copy(Trimmed, SlashPos + 3, Length(Trimmed)));
+
+      if (Left <> '') and (Right <> '') and
+         (Pos(' ', Left) = 0) and (Pos(' ', Right) = 0) and
+         (Pos('.', Left) = 0) and (Pos('.', Right) = 0) then
+      begin
+        LeftVal := Context.Scope.GetValue(Left);
+        RightVal := Context.Scope.GetValue(Right);
+
+        if (LeftVal <> nil) and (RightVal <> nil) then
+        begin
+          if RightVal.ToNumber = 0 then
+            Result := TGocciaNumberValue.Create(Infinity)
+          else
+            Result := TGocciaNumberValue.Create(LeftVal.ToNumber / RightVal.ToNumber);
+          Exit;
+        end;
+      end;
+    end;
+  end;
+
+  // Fall back to full parsing for complex expressions
+  // This handles complex cases like nested expressions, function calls, string literals, etc.
   Lexer := nil;
   Parser := nil;
   Tokens := nil;
@@ -1412,49 +1572,39 @@ begin
   Expression := nil;
 
   try
-    // Create a temporary source lines for error reporting
     SourceLines := TStringList.Create;
     SourceLines.Add(ExpressionText);
 
-    // Create lexer
     Lexer := TGocciaLexer.Create(ExpressionText, 'template-expression');
-
-    // Tokenize the expression
     Tokens := Lexer.ScanTokens;
     if Tokens = nil then
+    begin
+      Result := TGocciaUndefinedValue.Create;
       Exit;
+    end;
 
-    // Create parser - it takes ownership of Tokens
     Parser := TGocciaParser.Create(Tokens, 'template-expression', SourceLines);
-    Tokens := nil; // Parser now owns it
+    Tokens := nil; // Parser owns it
 
-    // Parse the expression
     Expression := Parser.Expression;
     if Expression = nil then
+    begin
+      Result := TGocciaUndefinedValue.Create;
       Exit;
+    end;
 
-    // Evaluate the expression in the current context
     Result := EvaluateExpression(Expression, Context);
 
   except
-    on E: Exception do
-    begin
-      // Fallback to undefined on any error
-      Result := TGocciaUndefinedValue.Create;
-    end;
+    Result := TGocciaUndefinedValue.Create;
   end;
 
-  // Cleanup in reverse order
-  if Assigned(Expression) then
-    Expression.Free;
-  if Assigned(Parser) then
-    Parser.Free;
-  if Assigned(Tokens) then
-    Tokens.Free;
-  if Assigned(Lexer) then
-    Lexer.Free;
-  if Assigned(SourceLines) then
-    SourceLines.Free;
+  // Cleanup
+  if Assigned(Expression) then Expression.Free;
+  if Assigned(Parser) then Parser.Free;
+  if Assigned(Tokens) then Tokens.Free;
+  if Assigned(Lexer) then Lexer.Free;
+  if Assigned(SourceLines) then SourceLines.Free;
 end;
 
 end.
