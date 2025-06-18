@@ -405,6 +405,7 @@ var
   Module: TGocciaModule;
   ImportPair: TPair<string, string>;
   Value: TGocciaValue;
+  I: Integer;
 begin
   Logger.Debug('EvaluateStatement: Statement class is %s', [Statement.ClassName]);
   Logger.Debug('EvaluateStatement: Statement line: %d', [Statement.Line]);
@@ -418,15 +419,21 @@ begin
     Result := EvaluateExpression(TGocciaExpressionStatement(Statement).Expression, Context);
     Logger.Debug('EvaluateStatement: ExpressionStatement result type: %s', [Result.ClassName]);
   end
-  else if Statement is TGocciaVariableDeclaration then
+      else if Statement is TGocciaVariableDeclaration then
   begin
     Logger.Debug('EvaluateStatement: Processing VariableDeclaration');
     Decl := TGocciaVariableDeclaration(Statement);
-    Logger.Debug('EvaluateStatement: Variable name: %s', [Decl.Name]);
-    Value := EvaluateExpression(Decl.Initializer, Context);
-    Logger.Debug('EvaluateStatement: Initializer result type: %s', [Value.ClassName]);
-    Context.Scope.SetValue(Decl.Name, Value);
-    Logger.Debug('EvaluateStatement: Variable defined in scope');
+    Logger.Debug('EvaluateStatement: Processing %d variable(s)', [Length(Decl.Variables)]);
+
+    // Process each variable in the declaration
+    for I := 0 to Length(Decl.Variables) - 1 do
+    begin
+      Logger.Debug('EvaluateStatement: Variable name: %s', [Decl.Variables[I].Name]);
+      Value := EvaluateExpression(Decl.Variables[I].Initializer, Context);
+      Logger.Debug('EvaluateStatement: Initializer result type: %s', [Value.ClassName]);
+      Context.Scope.SetValue(Decl.Variables[I].Name, Value);
+      Logger.Debug('EvaluateStatement: Variable %s defined in scope', [Decl.Variables[I].Name]);
+    end;
   end
   else if Statement is TGocciaBlockStatement then
   begin

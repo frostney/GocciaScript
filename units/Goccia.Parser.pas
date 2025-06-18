@@ -712,25 +712,36 @@ var
   Name: string;
   Initializer: TGocciaExpression;
   Line, Column: Integer;
+  Variables: TArray<TGocciaVariableInfo>;
+  VariableCount: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
   IsConst := Previous.TokenType = gttConst;
+  VariableCount := 0;
 
-  Name := Consume(gttIdentifier, 'Expected variable name').Lexeme;
+  // Parse variable declarations separated by commas
+  repeat
+    // Increase array size
+    SetLength(Variables, VariableCount + 1);
 
-  if Match([gttAssign]) then
-    Initializer := Expression
-  else if IsConst then
-    raise TGocciaSyntaxError.Create('const declarations must have an initializer',
-      Line, Column, FFileName, FSourceLines)
-  else
-    Initializer := TGocciaLiteralExpression.Create(
-      TGocciaUndefinedValue.Create, Line, Column);
+    Name := Consume(gttIdentifier, 'Expected variable name').Lexeme;
+    Variables[VariableCount].Name := Name;
+
+    if Match([gttAssign]) then
+      Variables[VariableCount].Initializer := Expression
+    else if IsConst then
+      raise TGocciaSyntaxError.Create('const declarations must have an initializer',
+        Line, Column, FFileName, FSourceLines)
+    else
+      Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
+        TGocciaUndefinedValue.Create, Line, Column);
+
+    Inc(VariableCount);
+  until not Match([gttComma]);
 
   Consume(gttSemicolon, 'Expected ";" after variable declaration');
-  Result := TGocciaVariableDeclaration.Create(Name, Initializer, IsConst,
-    Line, Column);
+  Result := TGocciaVariableDeclaration.Create(Variables, IsConst, Line, Column);
 end;
 
 function TGocciaParser.ExpressionStatement: TGocciaStatement;
