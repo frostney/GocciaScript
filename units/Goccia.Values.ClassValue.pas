@@ -10,7 +10,7 @@ uses
   Goccia.AST.Node;
 
 type
-  // Forward declaration
+  // Forward declarations
   TGocciaInstanceValue = class;
 
   TGocciaClassValue = class(TGocciaValue)
@@ -185,17 +185,17 @@ var
   Instance: TGocciaInstanceValue;
   ConstructorToCall: TGocciaMethodValue;
 begin
-  // Create the instance
+  Logger.Debug('Creating basic instance of class: %s', [FName]);
+
+  // Step 1: Create the basic instance
   Instance := TGocciaInstanceValue.Create(Self);
   Logger.Debug('Instance created: %s', [Instance.ToString]);
-  // Set up the prototype chain
+
+  // Step 2: Set up the prototype chain
   Instance.Prototype := FPrototype;
   Logger.Debug('Prototype set for instance');
 
-  // NOTE: Instance properties will be initialized by the evaluator
-  // after instantiation but before returning to ensure proper order
-
-  // Find constructor - either this class's or inherited from parent
+  // Step 3: Find and call constructor (NOTE: No property initialization in basic path)
   ConstructorToCall := FConstructorMethod;
   if not Assigned(ConstructorToCall) and Assigned(FSuperClass) then
   begin
@@ -203,11 +203,9 @@ begin
     Logger.Debug('Using inherited constructor from: %s', [FSuperClass.Name]);
   end;
 
-  // Call constructor if one exists
   if Assigned(ConstructorToCall) then
   begin
-    Logger.Debug('Calling constructor');
-    Logger.Debug('  Arguments.Count: %d', [Arguments.Count]);
+    Logger.Debug('Calling constructor with %d arguments', [Arguments.Count]);
     if Arguments.Count > 0 then
       Logger.Debug('  First argument: %s', [Arguments[0].ToString]);
 

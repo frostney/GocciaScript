@@ -337,36 +337,7 @@ begin
   else if Expression is TGocciaNewExpression then
   begin
     // Handle new expression - create instance
-    Callee := EvaluateExpression(TGocciaNewExpression(Expression).Callee, Context);
-    Arguments := TObjectList<TGocciaValue>.Create(False);
-    try
-      for I := 0 to TGocciaNewExpression(Expression).Arguments.Count - 1 do
-        Arguments.Add(EvaluateExpression(TGocciaNewExpression(Expression).Arguments[I], Context));
-
-            if Callee is TGocciaClassValue then
-      begin
-        // Create instance first
-        Result := TGocciaInstanceValue.Create(TGocciaClassValue(Callee));
-        TGocciaInstanceValue(Result).Prototype := TGocciaClassValue(Callee).Prototype;
-
-        // Initialize instance properties BEFORE calling constructor
-        InitializeInstanceProperties(TGocciaInstanceValue(Result), TGocciaClassValue(Callee), Context);
-
-        // Initialize private instance properties
-        InitializePrivateInstanceProperties(TGocciaInstanceValue(Result), TGocciaClassValue(Callee), Context);
-
-        // Now call constructor with the instance that has properties initialized
-        if Assigned(TGocciaClassValue(Callee).ConstructorMethod) then
-          TGocciaClassValue(Callee).ConstructorMethod.Call(Arguments, Result)
-        else if Assigned(TGocciaClassValue(Callee).SuperClass) and Assigned(TGocciaClassValue(Callee).SuperClass.ConstructorMethod) then
-          TGocciaClassValue(Callee).SuperClass.ConstructorMethod.Call(Arguments, Result);
-      end
-      else
-        Context.OnError(Format('Can only instantiate classes, not %s', [Callee.TypeName]),
-          Expression.Line, Expression.Column);
-    finally
-      Arguments.Free;
-    end;
+    Result := EvaluateNewExpression(TGocciaNewExpression(Expression), Context);
   end
   else if Expression is TGocciaThisExpression then
   begin
@@ -979,6 +950,8 @@ var
   Callee: TGocciaValue;
   Arguments: TObjectList<TGocciaValue>;
   I: Integer;
+  Instance: TGocciaInstanceValue;
+  ClassValue: TGocciaClassValue;
 begin
   // Evaluate the callee (class)
   Callee := EvaluateExpression(NewExpression.Callee, Context);
@@ -989,24 +962,26 @@ begin
     for I := 0 to NewExpression.Arguments.Count - 1 do
       Arguments.Add(EvaluateExpression(NewExpression.Arguments[I], Context));
 
-        // Create new instance
+    // Create new instance with proper timing
     if Callee is TGocciaClassValue then
     begin
-      // Create instance first
-      Result := TGocciaInstanceValue.Create(TGocciaClassValue(Callee));
-      TGocciaInstanceValue(Result).Prototype := TGocciaClassValue(Callee).Prototype;
+      ClassValue := TGocciaClassValue(Callee);
 
-      // Initialize instance properties BEFORE calling constructor
-      InitializeInstanceProperties(TGocciaInstanceValue(Result), TGocciaClassValue(Callee), Context);
+      // Step 1: Create basic instance and set prototype
+      Instance := TGocciaInstanceValue.Create(ClassValue);
+      Instance.Prototype := ClassValue.Prototype;
 
-      // Initialize private instance properties
-      InitializePrivateInstanceProperties(TGocciaInstanceValue(Result), TGocciaClassValue(Callee), Context);
+      // Step 2: Initialize properties BEFORE calling constructor
+      InitializeInstanceProperties(Instance, ClassValue, Context);
+      InitializePrivateInstanceProperties(Instance, ClassValue, Context);
 
-      // Now call constructor with the instance that has properties initialized
-      if Assigned(TGocciaClassValue(Callee).ConstructorMethod) then
-        TGocciaClassValue(Callee).ConstructorMethod.Call(Arguments, Result)
-      else if Assigned(TGocciaClassValue(Callee).SuperClass) and Assigned(TGocciaClassValue(Callee).SuperClass.ConstructorMethod) then
-        TGocciaClassValue(Callee).SuperClass.ConstructorMethod.Call(Arguments, Result);
+      // Step 3: Call constructor (properties are now available)
+      if Assigned(ClassValue.ConstructorMethod) then
+        ClassValue.ConstructorMethod.Call(Arguments, Instance)
+      else if Assigned(ClassValue.SuperClass) and Assigned(ClassValue.SuperClass.ConstructorMethod) then
+        ClassValue.SuperClass.ConstructorMethod.Call(Arguments, Instance);
+
+      Result := Instance;
     end
     else
       Context.OnError(Format('Cannot instantiate non-class value: %s', [Callee.TypeName]), NewExpression.Line, NewExpression.Column);
