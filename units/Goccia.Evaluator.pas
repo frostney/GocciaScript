@@ -20,7 +20,8 @@ function EvaluateStatement(Statement: TGocciaStatement; Context: TGocciaEvaluati
 function EvaluateBinary(BinaryExpression: TGocciaBinaryExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateUnary(UnaryExpression: TGocciaUnaryExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateCall(CallExpression: TGocciaCallExpression; Context: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue; overload;
+function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext; out ObjectValue: TGocciaValue): TGocciaValue; overload;
 function EvaluateArray(ArrayExpression: TGocciaArrayExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateObject(ObjectExpression: TGocciaObjectExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateArrowFunction(ArrowFunctionExpression: TGocciaArrowFunctionExpression; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -76,6 +77,7 @@ var
   I: Integer;
   Callee: TGocciaValue;
   Arguments: TObjectList<TGocciaValue>;
+  OldValue: TGocciaValue; // For increment/decrement operations
 begin
   if Expression is TGocciaLiteralExpression then
     Result := TGocciaLiteralExpression(Expression).Value
@@ -249,13 +251,13 @@ begin
     begin
             // Variable increment/decrement
       PropName := TGocciaIdentifierExpression(TGocciaIncrementExpression(Expression).Operand).Name;
-      Result := Context.Scope.GetValue(PropName);
+      OldValue := Context.Scope.GetValue(PropName);
 
       // Calculate new value
       if TGocciaIncrementExpression(Expression).Operator = gttIncrement then
-        Value := TGocciaNumberValue.Create(Result.ToNumber + 1)
+        Value := TGocciaNumberValue.Create(OldValue.ToNumber + 1)
       else
-        Value := TGocciaNumberValue.Create(Result.ToNumber - 1);
+        Value := TGocciaNumberValue.Create(OldValue.ToNumber - 1);
 
       // Set the new value
       Context.Scope.SetValue(PropName, Value);
@@ -264,7 +266,7 @@ begin
       if TGocciaIncrementExpression(Expression).IsPrefix then
         Result := Value  // Prefix: return new value (++x)
       else
-        Result := Result;  // Postfix: return old value (x++)
+        Result := OldValue;  // Postfix: return old value (x++)
     end
     else if TGocciaIncrementExpression(Expression).Operand is TGocciaMemberExpression then
     begin
@@ -274,11 +276,11 @@ begin
 
       // Get current property value
       if (Obj is TGocciaInstanceValue) then
-        Result := TGocciaInstanceValue(Obj).GetProperty(PropName)
+        OldValue := TGocciaInstanceValue(Obj).GetProperty(PropName)
       else if (Obj is TGocciaObjectValue) then
-        Result := TGocciaObjectValue(Obj).GetProperty(PropName)
+        OldValue := TGocciaObjectValue(Obj).GetProperty(PropName)
       else if (Obj is TGocciaClassValue) then
-        Result := TGocciaClassValue(Obj).GetProperty(PropName)
+        OldValue := TGocciaClassValue(Obj).GetProperty(PropName)
       else
       begin
         Context.OnError('Cannot access property on non-object', Expression.Line, Expression.Column);
@@ -288,9 +290,9 @@ begin
 
       // Calculate new value
       if TGocciaIncrementExpression(Expression).Operator = gttIncrement then
-        Value := TGocciaNumberValue.Create(Result.ToNumber + 1)
+        Value := TGocciaNumberValue.Create(OldValue.ToNumber + 1)
       else
-        Value := TGocciaNumberValue.Create(Result.ToNumber - 1);
+        Value := TGocciaNumberValue.Create(OldValue.ToNumber - 1);
 
       // Set the new value
       if (Obj is TGocciaInstanceValue) then
@@ -304,7 +306,7 @@ begin
       if TGocciaIncrementExpression(Expression).IsPrefix then
         Result := Value  // Prefix: return new value (++obj.prop)
       else
-        Result := Result;  // Postfix: return old value (obj.prop++)
+        Result := OldValue;  // Postfix: return old value (obj.prop++)
     end
     else
     begin
@@ -676,6 +678,7 @@ begin
   Logger.Debug('EvaluateCall: Start');
   Logger.Debug('  CallExpression.Callee: %s', [CallExpression.Callee.ToString]);
 
+
         // Handle super() calls specially
   if CallExpression.Callee is TGocciaSuperExpression then
   begin
@@ -711,19 +714,28 @@ begin
     Exit;
   end;
 
-  Callee := EvaluateExpression(CallExpression.Callee, Context);
-
+  // Handle method calls vs regular function calls
   if CallExpression.Callee is TGocciaMemberExpression then
   begin
     MemberExpr := TGocciaMemberExpression(CallExpression.Callee);
-    // Special handling for super.method() calls
     if MemberExpr.ObjectExpr is TGocciaSuperExpression then
-      ThisValue := Context.Scope.ThisValue  // Use current instance's 'this'
+    begin
+      // Super method calls: evaluate normally
+      Callee := EvaluateExpression(CallExpression.Callee, Context);
+      ThisValue := Context.Scope.ThisValue;  // Use current instance's 'this'
+    end
     else
-      ThisValue := EvaluateExpression(MemberExpr.ObjectExpr, Context);
+    begin
+      // Regular method calls: use overloaded function to get both method and object
+      Callee := EvaluateMember(MemberExpr, Context, ThisValue);
+    end;
   end
   else
+  begin
+    // Regular function calls
+    Callee := EvaluateExpression(CallExpression.Callee, Context);
     ThisValue := TGocciaUndefinedValue.Create;
+  end;
 
   Arguments := TObjectList<TGocciaValue>.Create(False);
   try
@@ -753,6 +765,7 @@ var
 begin
   Logger.Debug('EvaluateMember: Start');
   Logger.Debug('  MemberExpression.ObjectExpr: %s', [MemberExpression.ObjectExpr.ToString]);
+
 
         // Handle super.method() specially
   if MemberExpression.ObjectExpr is TGocciaSuperExpression then
@@ -828,6 +841,102 @@ begin
   begin
     Logger.Debug('EvaluateMember: Obj is TGocciaObjectValue');
     Result := TGocciaObjectValue(Obj).GetProperty(PropertyName);
+    Logger.Debug('EvaluateMember: Result: %s', [Result.ToString]);
+  end
+  else
+  begin
+    Logger.Debug('EvaluateMember: Obj is not a supported object type');
+    Result := TGocciaUndefinedValue.Create;
+  end;
+  Logger.Debug('EvaluateMember: Returning result type: %s', [Result.ClassName]);
+  Logger.Debug('EvaluateMember: Result ToString: %s', [Result.ToString]);
+end;
+
+function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext; out ObjectValue: TGocciaValue): TGocciaValue;
+var
+  PropertyName: string;
+  PropertyValue: TGocciaValue;
+  SuperClass: TGocciaClassValue;
+begin
+  Logger.Debug('EvaluateMember: Start (with ObjectValue output)');
+  Logger.Debug('  MemberExpression.ObjectExpr: %s', [MemberExpression.ObjectExpr.ToString]);
+
+  // Handle super.method() specially
+  if MemberExpression.ObjectExpr is TGocciaSuperExpression then
+  begin
+    Logger.Debug('EvaluateMember: Accessing super property');
+    SuperClass := TGocciaClassValue(EvaluateExpression(MemberExpression.ObjectExpr, Context));
+    if not (SuperClass is TGocciaClassValue) then
+    begin
+      Context.OnError('super can only be used within a method with a superclass',
+        MemberExpression.Line, MemberExpression.Column);
+      Result := TGocciaUndefinedValue.Create;
+      ObjectValue := TGocciaUndefinedValue.Create;
+      Exit;
+    end;
+
+    ObjectValue := SuperClass; // For super calls, the object is the superclass
+
+    // Get the property name
+    if MemberExpression.Computed and Assigned(MemberExpression.PropertyExpression) then
+    begin
+      PropertyValue := EvaluateExpression(MemberExpression.PropertyExpression, Context);
+      PropertyName := PropertyValue.ToString;
+    end
+    else
+    begin
+      PropertyName := MemberExpression.PropertyName;
+    end;
+
+    Logger.Debug('EvaluateMember: Looking for super method: %s', [PropertyName]);
+
+    // Get the method from the superclass
+    Result := SuperClass.GetMethod(PropertyName);
+    if not Assigned(Result) then
+      Result := TGocciaUndefinedValue.Create
+    else
+    begin
+      Logger.Debug('EvaluateMember: Super method found: %s', [Result.ToString]);
+    end;
+
+    Exit;
+  end;
+
+  // Evaluate object expression once and store it
+  ObjectValue := EvaluateExpression(MemberExpression.ObjectExpr, Context);
+  Logger.Debug('EvaluateMember: Obj: %s', [ObjectValue.ToString]);
+
+  // Determine the property name
+  if MemberExpression.Computed and Assigned(MemberExpression.PropertyExpression) then
+  begin
+    // Computed access: evaluate the property expression to get the property name
+    PropertyValue := EvaluateExpression(MemberExpression.PropertyExpression, Context);
+    PropertyName := PropertyValue.ToString;
+    Logger.Debug('EvaluateMember: Computed property name: %s', [PropertyName]);
+  end
+  else
+  begin
+    // Static access: use the property name directly
+    PropertyName := MemberExpression.PropertyName;
+    Logger.Debug('EvaluateMember: Static property name: %s', [PropertyName]);
+  end;
+
+  if ObjectValue is TGocciaArrayValue then
+  begin
+    Logger.Debug('EvaluateMember: Obj is TGocciaArrayValue');
+    Result := TGocciaArrayValue(ObjectValue).GetProperty(PropertyName);
+    Logger.Debug('EvaluateMember: Result: %s', [Result.ToString]);
+  end
+  else if ObjectValue is TGocciaClassValue then
+  begin
+    Logger.Debug('EvaluateMember: Obj is TGocciaClassValue');
+    Result := TGocciaClassValue(ObjectValue).GetProperty(PropertyName);
+    Logger.Debug('EvaluateMember: Result: %s', [Result.ToString]);
+  end
+  else if ObjectValue is TGocciaObjectValue then
+  begin
+    Logger.Debug('EvaluateMember: Obj is TGocciaObjectValue');
+    Result := TGocciaObjectValue(ObjectValue).GetProperty(PropertyName);
     Logger.Debug('EvaluateMember: Result: %s', [Result.ToString]);
   end
   else
