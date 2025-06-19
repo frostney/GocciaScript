@@ -241,60 +241,58 @@ end;
 
 function TGocciaArrayValue.ArrayReduce(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
   Accumulator: TGocciaValue;
   CallArgs: TObjectList<TGocciaValue>;
   I, StartIndex: Integer;
 begin
-  if Args.Count < 1 then
-    ThrowError('Array.reduce expects array as this value');
-
-  if not (Args[0] is TGocciaArrayValue) then
+  if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.reduce called on non-array');
 
-  if Args.Count < 2 then
+  if Args.Count < 1 then
     ThrowError('Array.reduce expects callback function');
 
-  Arr := TGocciaArrayValue(Args[0]);
-  Callback := Args[1];
+  Callback := Args[0];
 
   if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
     ThrowError('Callback must be a function');
 
-  if Args.Count >= 3 then
+  if Args.Count >= 2 then
   begin
-    Accumulator := Args[2];
+    Accumulator := Args[1];
     StartIndex := 0;
   end
   else
   begin
-    if Arr.Elements.Count = 0 then
+    if Elements.Count = 0 then
       ThrowError('Reduce of empty array with no initial value');
-    Accumulator := Arr.Elements[0];
+    Accumulator := Elements[0];
     StartIndex := 1;
   end;
 
-  CallArgs := TObjectList<TGocciaValue>.Create(False);
   for I := StartIndex to Elements.Count - 1 do
   begin
-    CallArgs.Add(Accumulator);
-    CallArgs.Add(Elements[I]);
-    CallArgs.Add(TGocciaNumberValue.Create(I));
+    CallArgs := TObjectList<TGocciaValue>.Create(False);
+    try
+      CallArgs.Add(Accumulator);
+      CallArgs.Add(Elements[I]);
+      CallArgs.Add(TGocciaNumberValue.Create(I));
+      CallArgs.Add(ThisValue);
+
+      if Callback is TGocciaNativeFunctionValue then
+        Accumulator := TGocciaNativeFunctionValue(Callback).NativeFunction(CallArgs, ThisValue)
+      else if Callback is TGocciaFunctionValue then
+        Accumulator := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
+    finally
+      CallArgs.Free;
+    end;
   end;
 
-  if Callback is TGocciaNativeFunctionValue then
-    Result := TGocciaNativeFunctionValue(Callback).NativeFunction(CallArgs, ThisValue)
-  else if Callback is TGocciaFunctionValue then
-  begin
-    Result := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
-    Exit;
-  end;
+  Result := Accumulator;
 end;
 
 function TGocciaArrayValue.ArrayForEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
   CallArgs: TObjectList<TGocciaValue>;
   I: Integer;
@@ -305,23 +303,26 @@ begin
   if Args.Count < 1 then
     ThrowError('Array.forEach expects callback function');
 
-  Arr := TGocciaArrayValue(ThisValue);
   Callback := Args[0];
 
   if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
     ThrowError('Callback must be a function');
 
-  CallArgs := TObjectList<TGocciaValue>.Create(False);
   for I := 0 to Elements.Count - 1 do
   begin
-    CallArgs.Add(Elements[I]);
-    CallArgs.Add(TGocciaNumberValue.Create(I));
-    CallArgs.Add(ThisValue);
+    CallArgs := TObjectList<TGocciaValue>.Create(False);
+    try
+      CallArgs.Add(Elements[I]);
+      CallArgs.Add(TGocciaNumberValue.Create(I));
+      CallArgs.Add(ThisValue);
 
-    if Callback is TGocciaNativeFunctionValue then
-      TGocciaNativeFunctionValue(Callback).NativeFunction(CallArgs, ThisValue)
-    else if Callback is TGocciaFunctionValue then
-      TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
+      if Callback is TGocciaNativeFunctionValue then
+        TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue)
+      else if Callback is TGocciaFunctionValue then
+        TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
+    finally
+      CallArgs.Free;
+    end;
   end;
 
   Result := TGocciaUndefinedValue.Create;
@@ -423,32 +424,34 @@ begin
   if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
     ThrowError('Callback must be a function');
 
-  CallArgs := TObjectList<TGocciaValue>.Create(False);
   for I := 0 to Elements.Count - 1 do
   begin
-    CallArgs.Add(Elements[I]);
-    CallArgs.Add(TGocciaNumberValue.Create(I));
-    CallArgs.Add(ThisValue);
+    CallArgs := TObjectList<TGocciaValue>.Create(False);
+    try
+      CallArgs.Add(Elements[I]);
+      CallArgs.Add(TGocciaNumberValue.Create(I));
+      CallArgs.Add(ThisValue);
 
-    if Callback is TGocciaNativeFunctionValue then
-    begin
-      SomeResult := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue);
-      if SomeResult.ToBoolean then
+      if Callback is TGocciaNativeFunctionValue then
       begin
-        Result := TGocciaBooleanValue.Create(True);
-        Exit;
-      end;
-    end;
-
-    if Callback is TGocciaFunctionValue then
-    begin
-      SomeResult := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
-      WriteLn('SomeResult: ', SomeResult.ToString);
-      if SomeResult.ToBoolean then
+        SomeResult := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue);
+        if SomeResult.ToBoolean then
+        begin
+          Result := TGocciaBooleanValue.Create(True);
+          Exit;
+        end;
+      end
+      else if Callback is TGocciaFunctionValue then
       begin
-        Result := TGocciaBooleanValue.Create(True);
-        Exit;
+        SomeResult := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
+        if SomeResult.ToBoolean then
+        begin
+          Result := TGocciaBooleanValue.Create(True);
+          Exit;
+        end;
       end;
+    finally
+      CallArgs.Free;
     end;
   end;
 
@@ -460,6 +463,7 @@ var
   Callback: TGocciaValue;
   CallArgs: TObjectList<TGocciaValue>;
   I: Integer;
+  EveryResult: TGocciaValue;
 begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.every called on non-array');
@@ -472,31 +476,34 @@ begin
   if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
     ThrowError('Callback must be a function');
 
-  CallArgs := TObjectList<TGocciaValue>.Create(False);
   for I := 0 to Elements.Count - 1 do
   begin
-    CallArgs.Add(Elements[I]);
-    CallArgs.Add(TGocciaNumberValue.Create(I));
-    CallArgs.Add(ThisValue);
+    CallArgs := TObjectList<TGocciaValue>.Create(False);
+    try
+      CallArgs.Add(Elements[I]);
+      CallArgs.Add(TGocciaNumberValue.Create(I));
+      CallArgs.Add(ThisValue);
 
-    if Callback is TGocciaNativeFunctionValue then
-    begin
-      Result := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue);
-      if not Result.ToBoolean then
+      if Callback is TGocciaNativeFunctionValue then
       begin
-        Result := TGocciaBooleanValue.Create(False);
-        Exit;
-      end;
-    end;
-
-    if Callback is TGocciaFunctionValue then
-    begin
-      Result := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
-      if not Result.ToBoolean then
+        EveryResult := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue);
+        if not EveryResult.ToBoolean then
+        begin
+          Result := TGocciaBooleanValue.Create(False);
+          Exit;
+        end;
+      end
+      else if Callback is TGocciaFunctionValue then
       begin
-        Result := TGocciaBooleanValue.Create(False);
-        Exit;
+        EveryResult := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
+        if not EveryResult.ToBoolean then
+        begin
+          Result := TGocciaBooleanValue.Create(False);
+          Exit;
+        end;
       end;
+    finally
+      CallArgs.Free;
     end;
   end;
 

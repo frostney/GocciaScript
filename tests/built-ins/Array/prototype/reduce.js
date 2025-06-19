@@ -38,6 +38,19 @@ test("Array.prototype.reduce with index and array parameters", () => {
   expect(reduced).toBe(6);
 });
 
+test("Array.protoype.reduce to create object out of array", () => {
+  const arr = [
+    { name: "John", age: 20 },
+    { name: "Jane", age: 21 },
+    { name: "Jim", age: 22 },
+  ];
+  const reduced = arr.reduce((acc, x) => {
+    acc[x.name] = x.age;
+    return acc;
+  }, {});
+  expect(reduced).toEqual({ John: 20, Jane: 21, Jim: 22 });
+});
+
 test("Array.prototype.reduce with empty array", () => {
   const arr = [];
   const reduced = arr.reduce((acc, x) => acc + x, 0);
