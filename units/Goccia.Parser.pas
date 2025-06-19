@@ -26,6 +26,7 @@ type
     function Match(TokenTypes: array of TGocciaTokenType): Boolean;
     function Consume(TokenType: TGocciaTokenType; const Message: string): TGocciaToken;
     function IsArrowFunction: Boolean;
+    function ConvertNumberLiteral(const Lexeme: string): Double;
 
     // Expression parsing (private)
     function Conditional: TGocciaExpression;
@@ -428,7 +429,7 @@ begin
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
-      TGocciaNumberValue.Create(StrToFloat(Token.Lexeme)), Token.Line, Token.Column);
+      TGocciaNumberValue.Create(ConvertNumberLiteral(Token.Lexeme)), Token.Line, Token.Column);
   end
   else if Match([gttString]) then
   begin
@@ -545,22 +546,40 @@ end;
 function TGocciaParser.ObjectLiteral: TGocciaExpression;
 var
   Properties: TDictionary<string, TGocciaExpression>;
+  ComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
   Key: string;
+  KeyExpression: TGocciaExpression;
   Value: TGocciaExpression;
   Line, Column: Integer;
+  NumericValue: Double;
+  IsComputed: Boolean;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
   Properties := TDictionary<string, TGocciaExpression>.Create;
+  ComputedProperties := TDictionary<TGocciaExpression, TGocciaExpression>.Create;
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
-    if Check(gttString) then
+    IsComputed := False;
+
+    if Match([gttLeftBracket]) then
+    begin
+      // Computed property name: [expr]: value
+      IsComputed := True;
+      KeyExpression := Expression;
+      Consume(gttRightBracket, 'Expected "]" after computed property name');
+    end
+    else if Check(gttString) then
       Key := Advance.Lexeme
     else if Check(gttIdentifier) then
       Key := Advance.Lexeme
     else if Check(gttNumber) then
-      Key := Advance.Lexeme  // Numeric literals are allowed as property names
+    begin
+      // Convert numeric literals to their decimal string representation
+      NumericValue := ConvertNumberLiteral(Advance.Lexeme);
+      Key := FloatToStr(NumericValue);
+    end
     else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                    gttReturn, gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
                    gttTrue, gttFalse, gttNull, gttUndefined, gttTypeof, gttInstanceof]) then
@@ -570,14 +589,27 @@ begin
 
     Consume(gttColon, 'Expected ":" after property key');
     Value := Expression;
-    Properties.Add(Key, Value);
+
+    if IsComputed then
+    begin
+      // Store computed properties separately - they'll be evaluated at runtime
+      ComputedProperties.Add(KeyExpression, Value);
+    end
+    else
+    begin
+      // JavaScript allows duplicate keys - last one wins
+      if Properties.ContainsKey(Key) then
+        Properties[Key] := Value
+      else
+        Properties.Add(Key, Value);
+    end;
 
     if not Match([gttComma]) then
       Break;
   end;
 
   Consume(gttRightBrace, 'Expected "}" after object properties');
-  Result := TGocciaObjectExpression.Create(Properties, Line, Column);
+  Result := TGocciaObjectExpression.Create(Properties, ComputedProperties, Line, Column);
 end;
 
 function TGocciaParser.ArrowFunction: TGocciaExpression;
@@ -1118,8 +1150,6 @@ begin
     IsStatic := Match([gttStatic]);
     IsPrivate := Match([gttHash]);
 
-
-
     MemberName := Consume(gttIdentifier, 'Expected method or property name').Lexeme;
 
     if Check(gttAssign) then
@@ -1195,7 +1225,7 @@ begin
   Result := False;
 
   try
-    // Look for pattern: () => or (id) => or (id, id) => or (id = default) =>
+    // Look for pattern: () => or (id) => or (id, id) =>
     // We're already past the opening (
     ParenCount := 1;
 
@@ -1314,6 +1344,69 @@ begin
     Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
       Right, Operator.Line, Operator.Column);
   end;
+end;
+
+function TGocciaParser.ConvertNumberLiteral(const Lexeme: string): Double;
+var
+  Value: Double;
+  IntValue: Int64;
+  HexStr, BinStr, OctStr: string;
+  I: Integer;
+begin
+  // Handle special number formats
+  if Length(Lexeme) >= 3 then
+  begin
+    // Hexadecimal: 0x10, 0X10
+    if (Lexeme[1] = '0') and ((Lexeme[2] = 'x') or (Lexeme[2] = 'X')) then
+    begin
+      HexStr := Copy(Lexeme, 3, Length(Lexeme) - 2);
+      IntValue := 0;
+      for I := 1 to Length(HexStr) do
+      begin
+        IntValue := IntValue * 16;
+        case HexStr[I] of
+          '0'..'9': IntValue := IntValue + Ord(HexStr[I]) - Ord('0');
+          'a'..'f': IntValue := IntValue + Ord(HexStr[I]) - Ord('a') + 10;
+          'A'..'F': IntValue := IntValue + Ord(HexStr[I]) - Ord('A') + 10;
+        end;
+      end;
+      Exit(IntValue);
+    end
+
+    // Binary: 0b1010, 0B1010
+    else if (Lexeme[1] = '0') and ((Lexeme[2] = 'b') or (Lexeme[2] = 'B')) then
+    begin
+      BinStr := Copy(Lexeme, 3, Length(Lexeme) - 2);
+      IntValue := 0;
+      for I := 1 to Length(BinStr) do
+      begin
+        IntValue := IntValue * 2;
+        if BinStr[I] = '1' then
+          IntValue := IntValue + 1;
+      end;
+      Exit(IntValue);
+    end
+
+    // Octal: 0o12, 0O12
+    else if (Lexeme[1] = '0') and ((Lexeme[2] = 'o') or (Lexeme[2] = 'O')) then
+    begin
+      OctStr := Copy(Lexeme, 3, Length(Lexeme) - 2);
+      IntValue := 0;
+      for I := 1 to Length(OctStr) do
+      begin
+        IntValue := IntValue * 8;
+        IntValue := IntValue + Ord(OctStr[I]) - Ord('0');
+      end;
+      Exit(IntValue);
+    end;
+  end;
+
+  // Regular decimal numbers (including scientific notation)
+  if TryStrToFloat(Lexeme, Value) then
+    Exit(Value);
+
+  raise TGocciaSyntaxError.Create('Invalid number format: ' + Lexeme, Peek.Line, Peek.Column,
+    FFileName, FSourceLines);
 end;
 
 end.

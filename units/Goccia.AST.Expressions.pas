@@ -196,10 +196,15 @@ type
   TGocciaObjectExpression = class(TGocciaExpression)
   private
     FProperties: TDictionary<string, TGocciaExpression>;
+    FComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
   public
     constructor Create(AProperties: TDictionary<string, TGocciaExpression>;
-      ALine, AColumn: Integer);
+      ALine, AColumn: Integer); overload;
+    constructor Create(AProperties: TDictionary<string, TGocciaExpression>;
+      AComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
+      ALine, AColumn: Integer); overload;
     property Properties: TDictionary<string, TGocciaExpression> read FProperties;
+    property ComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression> read FComputedProperties;
   end;
 
   TGocciaArrowFunctionExpression = class(TGocciaExpression)
@@ -460,6 +465,16 @@ constructor TGocciaObjectExpression.Create(AProperties: TDictionary<string, TGoc
 begin
   inherited Create(ALine, AColumn);
   FProperties := AProperties;
+  FComputedProperties := nil; // No computed properties in this constructor
+end;
+
+constructor TGocciaObjectExpression.Create(AProperties: TDictionary<string, TGocciaExpression>;
+  AComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
+  ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FProperties := AProperties;
+  FComputedProperties := AComputedProperties;
 end;
 
 { TGocciaArrowFunctionExpression }
@@ -471,8 +486,6 @@ begin
   FParameters := AParameters;
   FBody := ABody;
 end;
-
-
 
 { TGocciaConditionalExpression }
 

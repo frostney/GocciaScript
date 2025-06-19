@@ -283,17 +283,104 @@ end;
 procedure TGocciaLexer.ScanNumber;
 var
   Value: string;
+  Ch: Char;
 begin
   Value := '';
+  Ch := Peek;
 
-  while CharInSet(Peek, ['0'..'9']) do
-    Value := Value + Advance;
-
-  if (Peek = '.') and CharInSet(PeekNext, ['0'..'9']) then
+  // Handle different number formats
+  if Ch = '0' then
   begin
-    Value := Value + Advance; // Consume '.'
+    Value := Value + Advance; // consume '0'
+    Ch := Peek;
+
+    if (Ch = 'x') or (Ch = 'X') then
+    begin
+      // Hexadecimal: 0x10, 0X10
+      Value := Value + Advance; // consume 'x' or 'X'
+      if not CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) then
+        raise TGocciaLexerError.Create('Invalid hexadecimal number', FLine, FColumn, FFileName, FSourceLines);
+
+      while CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) do
+        Value := Value + Advance;
+    end
+    else if (Ch = 'b') or (Ch = 'B') then
+    begin
+      // Binary: 0b1010, 0B1010
+      Value := Value + Advance; // consume 'b' or 'B'
+      if not CharInSet(Peek, ['0', '1']) then
+        raise TGocciaLexerError.Create('Invalid binary number', FLine, FColumn, FFileName, FSourceLines);
+
+      while CharInSet(Peek, ['0', '1']) do
+        Value := Value + Advance;
+    end
+    else if (Ch = 'o') or (Ch = 'O') then
+    begin
+      // Octal: 0o12, 0O12
+      Value := Value + Advance; // consume 'o' or 'O'
+      if not CharInSet(Peek, ['0'..'7']) then
+        raise TGocciaLexerError.Create('Invalid octal number', FLine, FColumn, FFileName, FSourceLines);
+
+      while CharInSet(Peek, ['0'..'7']) do
+        Value := Value + Advance;
+    end
+    else if CharInSet(Ch, ['0'..'9']) then
+    begin
+      // Regular number starting with 0
+      while CharInSet(Peek, ['0'..'9']) do
+        Value := Value + Advance;
+
+      // Handle decimal part
+      if (Peek = '.') and CharInSet(PeekNext, ['0'..'9']) then
+      begin
+        Value := Value + Advance; // Consume '.'
+        while CharInSet(Peek, ['0'..'9']) do
+          Value := Value + Advance;
+      end;
+
+      // Handle scientific notation
+      if CharInSet(Peek, ['e', 'E']) then
+      begin
+        Value := Value + Advance; // Consume 'e' or 'E'
+        if CharInSet(Peek, ['+', '-']) then
+          Value := Value + Advance; // Consume optional '+' or '-'
+
+        if not CharInSet(Peek, ['0'..'9']) then
+          raise TGocciaLexerError.Create('Invalid scientific notation', FLine, FColumn, FFileName, FSourceLines);
+
+        while CharInSet(Peek, ['0'..'9']) do
+          Value := Value + Advance;
+      end;
+    end;
+    // else: just "0" by itself
+  end
+  else
+  begin
+    // Regular decimal number (not starting with 0)
     while CharInSet(Peek, ['0'..'9']) do
       Value := Value + Advance;
+
+    // Handle decimal part
+    if (Peek = '.') and CharInSet(PeekNext, ['0'..'9']) then
+    begin
+      Value := Value + Advance; // Consume '.'
+      while CharInSet(Peek, ['0'..'9']) do
+        Value := Value + Advance;
+    end;
+
+    // Handle scientific notation (e.g., 1e3, 2.5E-10)
+    if CharInSet(Peek, ['e', 'E']) then
+    begin
+      Value := Value + Advance; // Consume 'e' or 'E'
+      if CharInSet(Peek, ['+', '-']) then
+        Value := Value + Advance; // Consume optional '+' or '-'
+
+      if not CharInSet(Peek, ['0'..'9']) then
+        raise TGocciaLexerError.Create('Invalid scientific notation', FLine, FColumn, FFileName, FSourceLines);
+
+      while CharInSet(Peek, ['0'..'9']) do
+        Value := Value + Advance;
+    end;
   end;
 
   AddToken(gttNumber, Value);

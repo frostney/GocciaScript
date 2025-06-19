@@ -1078,10 +1078,27 @@ function EvaluateObject(ObjectExpression: TGocciaObjectExpression; Context: TGoc
 var
   Obj: TGocciaObjectValue;
   Pair: TPair<string, TGocciaExpression>;
+  ComputedPair: TPair<TGocciaExpression, TGocciaExpression>;
+  ComputedKey: string;
 begin
   Obj := TGocciaObjectValue.Create;
+
+  // Handle static properties: {key: value, "key2": value2}
   for Pair in ObjectExpression.Properties do
     Obj.SetProperty(Pair.Key, EvaluateExpression(Pair.Value, Context));
+
+  // Handle computed properties: {[expr]: value}
+  if Assigned(ObjectExpression.ComputedProperties) then
+  begin
+    for ComputedPair in ObjectExpression.ComputedProperties do
+    begin
+      // Evaluate the key expression to get the property name
+      ComputedKey := EvaluateExpression(ComputedPair.Key, Context).ToString;
+      // Set the property (computed properties can overwrite static ones)
+      Obj.SetProperty(ComputedKey, EvaluateExpression(ComputedPair.Value, Context));
+    end;
+  end;
+
   Result := Obj;
 end;
 
