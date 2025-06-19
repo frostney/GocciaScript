@@ -39,6 +39,7 @@ type
     function ToNumber: Double; override;
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue;
+    function Includes(const AValue: TGocciaValue; FromIndex: Integer = 0): Boolean;
     property Elements: TObjectList<TGocciaValue> read FElements;
   end;
 
@@ -390,24 +391,9 @@ begin
       ThrowError('Array.includes expects second argument to be a number');
 
     FromIndex := Trunc(Args[1].ToNumber);
-
-    if FromIndex < 0 then
-      FromIndex := Elements.Count + FromIndex;
-
-    if FromIndex < 0 then
-      FromIndex := 0;
   end;
 
-  for I := FromIndex to Elements.Count - 1 do
-  begin
-    if IsEqual(Elements[I], SearchValue) then
-    begin
-      Result := TGocciaBooleanValue.Create(True);
-      Exit;
-    end;
-  end;
-
-  Result := TGocciaBooleanValue.Create(False);
+  Result := TGocciaBooleanValue.Create(Includes(SearchValue, FromIndex));
 end;
 
 function TGocciaArrayValue.ArraySome(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -706,6 +692,31 @@ end;
 function TGocciaArrayValue.TypeName: string;
 begin
   Result := 'object';
+end;
+
+function TGocciaArrayValue.Includes(const AValue: TGocciaValue; FromIndex: Integer = 0): Boolean;
+var
+  I: Integer;
+begin
+  if FromIndex < 0 then
+    FromIndex := FElements.Count + FromIndex;
+
+  if FromIndex < 0 then
+    FromIndex := 0;
+
+  for I := FromIndex to FElements.Count - 1 do
+  begin
+    if FElements[I] = nil then
+      Continue;
+
+    if IsEqual(FElements[I], AValue) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+
+  Result := False;
 end;
 
 function TGocciaArrayValue.GetProperty(const AName: string): TGocciaValue;

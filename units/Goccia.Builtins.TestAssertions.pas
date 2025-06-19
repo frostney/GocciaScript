@@ -504,8 +504,17 @@ begin
   end
   else
   begin
-    // For other types, just check equality for now
-    Contains := FActualValue.ToString = Expected.ToString;
+    if FActualValue is TGocciaArrayValue then
+    begin
+      Contains := TGocciaArrayValue(FActualValue).Includes(Expected);
+    end
+    else if FActualValue is TGocciaObjectValue then
+    begin
+      Contains := TGocciaObjectValue(FActualValue).HasOwnProperty(Expected.ToString);
+    end else
+    begin
+      Contains := FActualValue.ToString = Expected.ToString;
+    end;
   end;
 
   if FIsNegated then
