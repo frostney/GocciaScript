@@ -26,6 +26,7 @@ type
 
     function ArrayToReversed(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayToSorted(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayToSpliced(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
     procedure ThrowError(const Message: string; const Args: array of const); overload;
     procedure ThrowError(const Message: string); overload;
@@ -105,6 +106,7 @@ begin
   FPrototype.SetProperty('pop', TGocciaNativeFunctionValue.Create(ArrayPop, 'pop', 0));
   FPrototype.SetProperty('toReversed', TGocciaNativeFunctionValue.Create(ArrayToReversed, 'toReversed', 0));
   FPrototype.SetProperty('toSorted', TGocciaNativeFunctionValue.Create(ArrayToSorted, 'toSorted', 0));
+  FPrototype.SetProperty('toSpliced', TGocciaNativeFunctionValue.Create(ArrayToSpliced, 'toSpliced', 1));
 end;
 
 destructor TGocciaArrayValue.Destroy;
@@ -652,6 +654,73 @@ begin
   end else
   begin
     ResultArray.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+  end;
+
+  Result := ResultArray;
+end;
+
+function TGocciaArrayValue.ArrayToSpliced(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  ResultArray: TGocciaArrayValue;
+  StartIndex, DeleteCount: Integer;
+  I: Integer;
+  ActualStartIndex: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.toSpliced called on non-array');
+
+  // Handle start index
+  if Args.Count < 1 then
+    StartIndex := 0
+  else
+    StartIndex := Trunc(Args[0].ToNumber);
+
+  // Handle negative start index
+  if StartIndex < 0 then
+    ActualStartIndex := Elements.Count + StartIndex
+  else
+    ActualStartIndex := StartIndex;
+
+  // Clamp start index to valid range
+  if ActualStartIndex < 0 then
+    ActualStartIndex := 0
+  else if ActualStartIndex > Elements.Count then
+    ActualStartIndex := Elements.Count;
+
+  // Handle delete count
+  if Args.Count < 2 then
+    DeleteCount := Elements.Count - ActualStartIndex
+  else
+    DeleteCount := Trunc(Args[1].ToNumber);
+
+  // Clamp delete count to valid range
+  if DeleteCount < 0 then
+    DeleteCount := 0
+  else if ActualStartIndex + DeleteCount > Elements.Count then
+    DeleteCount := Elements.Count - ActualStartIndex;
+
+  ResultArray := TGocciaArrayValue.Create;
+
+  // Copy elements before the splice point
+  for I := 0 to ActualStartIndex - 1 do
+  begin
+    if Elements[I] = nil then
+      ResultArray.Elements.Add(TGocciaUndefinedValue.Create)
+    else
+      ResultArray.Elements.Add(Elements[I]);
+  end;
+
+  // Add new elements (if any)
+  for I := 2 to Args.Count - 1 do
+    ResultArray.Elements.Add(Args[I]);
+
+  // Copy elements after the deleted section
+  for I := ActualStartIndex + DeleteCount to Elements.Count - 1 do
+  begin
+    if Elements[I] = nil then
+      ResultArray.Elements.Add(TGocciaUndefinedValue.Create)
+    else
+      ResultArray.Elements.Add(Elements[I]);
   end;
 
   Result := ResultArray;
