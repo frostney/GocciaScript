@@ -10,7 +10,14 @@ uses
 type
   TGocciaArrayValue = class(TGocciaObjectValue)
   private
-    function GetLength(const AObject: TGocciaObjectValue): TGocciaValue;
+    function GetLength(const AObject: TGocciaObjectValue): TGocciaValue; inline;
+
+    // Helper methods for reducing duplication
+    function ValidateArrayMethodCall(const MethodName: string; Args: TObjectList<TGocciaValue>;
+      ThisValue: TGocciaValue; RequiresCallback: Boolean = True): TGocciaValue;
+    function ExecuteArrayCallback(Callback: TGocciaValue; Element: TGocciaValue;
+      Index: Integer; ThisArray: TGocciaValue): TGocciaValue;
+    function IsArrayHole(Element: TGocciaValue): Boolean; inline;
 
     function ArrayMap(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayFilter(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -31,8 +38,8 @@ type
     function ArrayToSorted(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayToSpliced(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
-    procedure ThrowError(const Message: string; const Args: array of const); overload;
-    procedure ThrowError(const Message: string); overload;
+    procedure ThrowError(const Message: string; const Args: array of const); overload; inline;
+    procedure ThrowError(const Message: string); overload; inline;
   protected
     FElements: TObjectList<TGocciaValue>;
   public
@@ -135,116 +142,109 @@ begin
   Result := TGocciaNumberValue.Create(FElements.Count);
 end;
 
+function TGocciaArrayValue.ValidateArrayMethodCall(const MethodName: string; Args: TObjectList<TGocciaValue>;
+  ThisValue: TGocciaValue; RequiresCallback: Boolean = True): TGocciaValue;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.%s called on non-array', [MethodName]);
+
+  if Args.Count < 1 then
+    ThrowError('Array.%s expects callback function', [MethodName]);
+
+  Result := Args[0];
+
+  if RequiresCallback then
+  begin
+    if not ((Result is TGocciaFunctionValue) or (Result is TGocciaNativeFunctionValue)) then
+      ThrowError('Callback must be a function');
+  end
+  else
+  begin
+    if Result is TGocciaUndefinedValue then
+      ThrowError('Callback must not be undefined');
+  end;
+end;
+
+function TGocciaArrayValue.ExecuteArrayCallback(Callback: TGocciaValue; Element: TGocciaValue;
+  Index: Integer; ThisArray: TGocciaValue): TGocciaValue;
+var
+  CallArgs: TObjectList<TGocciaValue>;
+begin
+  CallArgs := TObjectList<TGocciaValue>.Create(False);
+  try
+    CallArgs.Add(Element);
+    CallArgs.Add(TGocciaNumberValue.Create(Index));
+    CallArgs.Add(ThisArray);
+
+    if Callback is TGocciaNativeFunctionValue then
+      Result := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisArray)
+    else if Callback is TGocciaFunctionValue then
+      Result := TGocciaFunctionValue(Callback).Call(CallArgs, ThisArray)
+    else
+      ThrowError('Callback must be a function');
+  finally
+    CallArgs.Free;
+  end;
+end;
+
+function TGocciaArrayValue.IsArrayHole(Element: TGocciaValue): Boolean;
+begin
+  Result := Element = nil;
+end;
+
 function TGocciaArrayValue.ArrayMap(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   ResultArray: TGocciaArrayValue;
   Callback: TGocciaValue;
-  CallArgs: TObjectList<TGocciaValue>;
   I: Integer;
-  ElementCount: Integer;
-  LocalElements: TObjectList<TGocciaValue>;
 begin
   Logger.Debug('ArrayMap: Starting with ThisValue type: %s, pointer: %p', [ThisValue.ClassName, Pointer(ThisValue)]);
 
-  if not (ThisValue is TGocciaArrayValue) then
-    ThrowError('Array.map called on non-array');
-
-  if Args.Count < 1 then
-    ThrowError('Array.map expects callback function');
-
-  Callback := Args[0];
-
-  if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
-    ThrowError('Callback must be a function');
-
+  Callback := ValidateArrayMethodCall('map', Args, ThisValue, True);
   ResultArray := TGocciaArrayValue.Create;
 
-  ElementCount := FElements.Count;
-
-  LocalElements := TObjectList<TGocciaValue>.Create(False);
-  try
-    for I := 0 to ElementCount - 1 do
-      LocalElements.Add(FElements[I]);
-
-    for I := 0 to ElementCount - 1 do
+  for I := 0 to FElements.Count - 1 do
+  begin
+    // Skip holes in sparse arrays (represented as nil)
+    if IsArrayHole(FElements[I]) then
     begin
-      Logger.Debug('ArrayMap: Iteration %d, about to call with ThisValue type: %s, pointer: %p', [I, ThisValue.ClassName, Pointer(ThisValue)]);
-
-      CallArgs := TObjectList<TGocciaValue>.Create(False);
-      try
-        CallArgs.Add(LocalElements[I]);
-        CallArgs.Add(TGocciaNumberValue.Create(I));
-        CallArgs.Add(ThisValue);
-
-        if Callback is TGocciaNativeFunctionValue then
-          ResultArray.Elements.Add(TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue))
-        else if Callback is TGocciaFunctionValue then
-          ResultArray.Elements.Add(TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue))
-        else
-          ThrowError('Callback must be a function');
-
-        Logger.Debug('ArrayMap: After iteration %d, ThisValue type: %s, pointer: %p', [I, ThisValue.ClassName, Pointer(ThisValue)]);
-      finally
-        CallArgs.Free;
-      end;
+      ResultArray.Elements.Add(nil); // Preserve holes in map result
+      Continue;
     end;
 
-    Result := ResultArray;
-  finally
-    LocalElements.Free;
+    Logger.Debug('ArrayMap: Iteration %d, about to call with ThisValue type: %s, pointer: %p', [I, ThisValue.ClassName, Pointer(ThisValue)]);
+    ResultArray.Elements.Add(ExecuteArrayCallback(Callback, FElements[I], I, ThisValue));
+    Logger.Debug('ArrayMap: After iteration %d, ThisValue type: %s, pointer: %p', [I, ThisValue.ClassName, Pointer(ThisValue)]);
   end;
+
+  Result := ResultArray;
 end;
 
 function TGocciaArrayValue.ArrayFilter(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   Callback: TGocciaValue;
   ResultArray: TGocciaArrayValue;
-  CallArgs: TObjectList<TGocciaValue>;
   PredicateResult: TGocciaValue;
   I: Integer;
 begin
-  if not (ThisValue is TGocciaArrayValue) then
-    ThrowError('Array.filter called on non-array');
-
-  if Args.Count < 1 then
-    ThrowError('Array.filter expects callback function');
-
-  Callback := Args[0];
-
-  if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
-    ThrowError('Callback must be a function');
-
+  Callback := ValidateArrayMethodCall('filter', Args, ThisValue, True);
   ResultArray := TGocciaArrayValue.Create;
 
   for I := 0 to Elements.Count - 1 do
   begin
     // Skip holes in sparse arrays (represented as nil)
-    if Elements[I] = nil then
+    if IsArrayHole(Elements[I]) then
       Continue;
 
-    CallArgs := TObjectList<TGocciaValue>.Create(False);
-    try
-      CallArgs.Add(Elements[I]);
-      CallArgs.Add(TGocciaNumberValue.Create(I));
-      CallArgs.Add(ThisValue);
+    PredicateResult := ExecuteArrayCallback(Callback, Elements[I], I, ThisValue);
 
-      if Callback is TGocciaNativeFunctionValue then
-        PredicateResult := TGocciaNativeFunctionValue(Callback).NativeFunction(CallArgs, ThisValue)
-      else if Callback is TGocciaFunctionValue then
-      begin
-        PredicateResult := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
-      end;
-
-      if PredicateResult is TGocciaBooleanValue then
-      begin
-        if TGocciaBooleanValue(PredicateResult).Value then
-          ResultArray.Elements.Add(Elements[I]);
-      end
-      else
-        ThrowError('Filter callback must return boolean');
-    finally
-      CallArgs.Free;
-    end;
+    if PredicateResult is TGocciaBooleanValue then
+    begin
+      if TGocciaBooleanValue(PredicateResult).Value then
+        ResultArray.Elements.Add(Elements[I]);
+    end
+    else
+      ThrowError('Filter callback must return boolean');
   end;
 
   Result := ResultArray;
@@ -257,16 +257,7 @@ var
   CallArgs: TObjectList<TGocciaValue>;
   I, StartIndex: Integer;
 begin
-  if not (ThisValue is TGocciaArrayValue) then
-    ThrowError('Array.reduce called on non-array');
-
-  if Args.Count < 1 then
-    ThrowError('Array.reduce expects callback function');
-
-  Callback := Args[0];
-
-  if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
-    ThrowError('Callback must be a function');
+  Callback := ValidateArrayMethodCall('reduce', Args, ThisValue, True);
 
   if Args.Count >= 2 then
   begin
@@ -284,7 +275,7 @@ begin
   for I := StartIndex to Elements.Count - 1 do
   begin
     // Skip holes in sparse arrays (represented as nil)
-    if Elements[I] = nil then
+    if IsArrayHole(Elements[I]) then
       Continue;
 
     CallArgs := TObjectList<TGocciaValue>.Create(False);
@@ -309,39 +300,17 @@ end;
 function TGocciaArrayValue.ArrayForEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   Callback: TGocciaValue;
-  CallArgs: TObjectList<TGocciaValue>;
   I: Integer;
 begin
-  if not (ThisValue is TGocciaArrayValue) then
-    ThrowError('Array.forEach called on non-array');
-
-  if Args.Count < 1 then
-    ThrowError('Array.forEach expects callback function');
-
-  Callback := Args[0];
-
-  if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
-    ThrowError('Callback must be a function');
+  Callback := ValidateArrayMethodCall('forEach', Args, ThisValue, True);
 
   for I := 0 to Elements.Count - 1 do
   begin
     // Skip holes in sparse arrays (represented as nil)
-    if Elements[I] = nil then
+    if IsArrayHole(Elements[I]) then
       Continue;
 
-    CallArgs := TObjectList<TGocciaValue>.Create(False);
-    try
-      CallArgs.Add(Elements[I]);
-      CallArgs.Add(TGocciaNumberValue.Create(I));
-      CallArgs.Add(ThisValue);
-
-      if Callback is TGocciaNativeFunctionValue then
-        TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue)
-      else if Callback is TGocciaFunctionValue then
-        TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
-    finally
-      CallArgs.Free;
-    end;
+    ExecuteArrayCallback(Callback, Elements[I], I, ThisValue);
   end;
 
   Result := TGocciaUndefinedValue.Create;
@@ -413,53 +382,22 @@ end;
 function TGocciaArrayValue.ArraySome(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   Callback: TGocciaValue;
-  CallArgs: TObjectList<TGocciaValue>;
   I: Integer;
   SomeResult: TGocciaValue;
 begin
-  if not (ThisValue is TGocciaArrayValue) then
-    ThrowError('Array.some called on non-array');
-
-  if Args.Count < 1 then
-    ThrowError('Array.some expects callback function');
-
-  Callback := Args[0];
-
-  if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
-    ThrowError('Callback must be a function');
+  Callback := ValidateArrayMethodCall('some', Args, ThisValue, True);
 
   for I := 0 to Elements.Count - 1 do
   begin
     // Skip holes in sparse arrays (represented as nil)
-    if Elements[I] = nil then
+    if IsArrayHole(Elements[I]) then
       Continue;
 
-    CallArgs := TObjectList<TGocciaValue>.Create(False);
-    try
-      CallArgs.Add(Elements[I]);
-      CallArgs.Add(TGocciaNumberValue.Create(I));
-      CallArgs.Add(ThisValue);
-
-      if Callback is TGocciaNativeFunctionValue then
-      begin
-        SomeResult := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue);
-        if SomeResult.ToBoolean then
-        begin
-          Result := TGocciaBooleanValue.Create(True);
-          Exit;
-        end;
-      end
-      else if Callback is TGocciaFunctionValue then
-      begin
-        SomeResult := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
-        if SomeResult.ToBoolean then
-        begin
-          Result := TGocciaBooleanValue.Create(True);
-          Exit;
-        end;
-      end;
-    finally
-      CallArgs.Free;
+    SomeResult := ExecuteArrayCallback(Callback, Elements[I], I, ThisValue);
+    if SomeResult.ToBoolean then
+    begin
+      Result := TGocciaBooleanValue.Create(True);
+      Exit;
     end;
   end;
 
@@ -469,53 +407,22 @@ end;
 function TGocciaArrayValue.ArrayEvery(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   Callback: TGocciaValue;
-  CallArgs: TObjectList<TGocciaValue>;
   I: Integer;
   EveryResult: TGocciaValue;
 begin
-  if not (ThisValue is TGocciaArrayValue) then
-    ThrowError('Array.every called on non-array');
-
-  if Args.Count < 1 then
-    ThrowError('Array.every expects callback function');
-
-  Callback := Args[0];
-
-  if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
-    ThrowError('Callback must be a function');
+  Callback := ValidateArrayMethodCall('every', Args, ThisValue, True);
 
   for I := 0 to Elements.Count - 1 do
   begin
     // Skip holes in sparse arrays (represented as nil)
-    if Elements[I] = nil then
+    if IsArrayHole(Elements[I]) then
       Continue;
 
-    CallArgs := TObjectList<TGocciaValue>.Create(False);
-    try
-      CallArgs.Add(Elements[I]);
-      CallArgs.Add(TGocciaNumberValue.Create(I));
-      CallArgs.Add(ThisValue);
-
-      if Callback is TGocciaNativeFunctionValue then
-      begin
-        EveryResult := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue);
-        if not EveryResult.ToBoolean then
-        begin
-          Result := TGocciaBooleanValue.Create(False);
-          Exit;
-        end;
-      end
-      else if Callback is TGocciaFunctionValue then
-      begin
-        EveryResult := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
-        if not EveryResult.ToBoolean then
-        begin
-          Result := TGocciaBooleanValue.Create(False);
-          Exit;
-        end;
-      end;
-    finally
-      CallArgs.Free;
+    EveryResult := ExecuteArrayCallback(Callback, Elements[I], I, ThisValue);
+    if not EveryResult.ToBoolean then
+    begin
+      Result := TGocciaBooleanValue.Create(False);
+      Exit;
     end;
   end;
 
@@ -552,7 +459,7 @@ begin
   for I := 0 to Elements.Count - 1 do
   begin
     // Skip holes in sparse arrays (represented as nil)
-    if Elements[I] = nil then
+    if IsArrayHole(Elements[I]) then
       Continue;
 
     if (Elements[I] is TGocciaArrayValue) and (Depth > 0) then
@@ -586,59 +493,36 @@ function TGocciaArrayValue.ArrayFlatMap(Args: TObjectList<TGocciaValue>; ThisVal
 var
   ResultArray: TGocciaArrayValue;
   Callback: TGocciaValue;
-  CallArgs: TObjectList<TGocciaValue>;
   I, J: Integer;
   MappedValue: TGocciaValue;
 begin
-  if not (ThisValue is TGocciaArrayValue) then
-    ThrowError('Array.flatMap called on non-array');
-
-  if Args.Count < 1 then
-    ThrowError('Array.flatMap expects callback function');
-
-  Callback := Args[0];
-
-  if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
-    ThrowError('Callback must be a function');
-
+  Callback := ValidateArrayMethodCall('flatMap', Args, ThisValue, True);
   ResultArray := TGocciaArrayValue.Create;
 
   for I := 0 to Elements.Count - 1 do
   begin
     // Skip holes in sparse arrays (represented as nil)
-    if Elements[I] = nil then
+    if IsArrayHole(Elements[I]) then
       Continue;
 
-    CallArgs := TObjectList<TGocciaValue>.Create(False);
-    try
-      CallArgs.Add(Elements[I]);
-      CallArgs.Add(TGocciaNumberValue.Create(I));
-      CallArgs.Add(ThisValue);
+    MappedValue := ExecuteArrayCallback(Callback, Elements[I], I, ThisValue);
 
-      if Callback is TGocciaNativeFunctionValue then
-        MappedValue := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue)
-      else if Callback is TGocciaFunctionValue then
-        MappedValue := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
-
-      // flatMap only flattens one level - if the mapped value is an array,
-      // add each of its elements to the result array
-      if MappedValue is TGocciaArrayValue then
+    // flatMap only flattens one level - if the mapped value is an array,
+    // add each of its elements to the result array
+    if MappedValue is TGocciaArrayValue then
+    begin
+      // Add each element from the mapped array (flatten one level)
+      // Skip holes (nil elements) during flattening
+      for J := 0 to TGocciaArrayValue(MappedValue).Elements.Count - 1 do
       begin
-        // Add each element from the mapped array (flatten one level)
-        // Skip holes (nil elements) during flattening
-        for J := 0 to TGocciaArrayValue(MappedValue).Elements.Count - 1 do
-        begin
-          if TGocciaArrayValue(MappedValue).Elements[J] <> nil then
-            ResultArray.Elements.Add(TGocciaArrayValue(MappedValue).Elements[J]);
-        end;
-      end
-      else
-      begin
-        // If not an array, add the value as-is
-        ResultArray.Elements.Add(MappedValue);
+        if TGocciaArrayValue(MappedValue).Elements[J] <> nil then
+          ResultArray.Elements.Add(TGocciaArrayValue(MappedValue).Elements[J]);
       end;
-    finally
-      CallArgs.Free;
+    end
+    else
+    begin
+      // If not an array, add the value as-is
+      ResultArray.Elements.Add(MappedValue);
     end;
   end;
 
@@ -744,6 +628,8 @@ begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.toSpliced called on non-array');
 
+  ResultArray := TGocciaArrayValue.Create;
+
   // Handle start index
   if Args.Count < 1 then
     StartIndex := 0
@@ -773,8 +659,6 @@ begin
     DeleteCount := 0
   else if ActualStartIndex + DeleteCount > Elements.Count then
     DeleteCount := Elements.Count - ActualStartIndex;
-
-  ResultArray := TGocciaArrayValue.Create;
 
   // Copy elements before the splice point
   for I := 0 to ActualStartIndex - 1 do
