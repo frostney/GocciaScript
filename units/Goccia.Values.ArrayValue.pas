@@ -532,7 +532,10 @@ function TGocciaArrayValue.ArrayToSorted(Args: TObjectList<TGocciaValue>; ThisVa
 var
   Arr: TGocciaArrayValue;
   ResultArray: TGocciaArrayValue;
-  I: Integer;
+  CustomSortFunction: TGocciaValue;
+  I, J: Integer;
+  ShouldSwap: Boolean;
+  CallArgs: TObjectList<TGocciaValue>;
 begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.toSorted called on non-array');
@@ -544,7 +547,35 @@ begin
   for I := 0 to Arr.Elements.Count - 1 do
     ResultArray.Elements.Add(Arr.Elements[I]);
 
-  ResultArray.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+  if Args.Count > 0 then
+  begin
+    CustomSortFunction := Args[0];
+
+    if not ((CustomSortFunction is TGocciaFunctionValue) or (CustomSortFunction is TGocciaNativeFunctionValue)) then
+      ThrowError('Custom sort function must be a function');
+
+    // Use bubble sort with custom comparison function
+    for I := 0 to ResultArray.Elements.Count - 2 do
+    begin
+      for J := 0 to ResultArray.Elements.Count - 2 - I do
+      begin
+        CallArgs := TObjectList<TGocciaValue>.Create(False);
+        CallArgs.Add(ResultArray.Elements[J]);
+        CallArgs.Add(ResultArray.Elements[J + 1]);
+
+        if CustomSortFunction is TGocciaNativeFunctionValue then
+          ShouldSwap := TGocciaNativeFunctionValue(CustomSortFunction).Call(CallArgs, ThisValue).ToNumber > 0
+        else
+          ShouldSwap := TGocciaFunctionValue(CustomSortFunction).Call(CallArgs, ThisValue).ToNumber > 0;
+
+        if ShouldSwap then
+          ResultArray.Elements.Exchange(J, J + 1);
+      end;
+    end;
+  end else
+  begin
+    ResultArray.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+  end;
 
   Result := ResultArray;
 end;

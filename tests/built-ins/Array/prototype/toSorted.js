@@ -19,4 +19,8 @@ test("Array.prototype.toSorted with custom sort function", () => {
   const arr = [3, 1, 2, 4, 5];
   const sorted = arr.toSorted((a, b) => b - a);
   expect(sorted).toEqual([5, 4, 3, 2, 1]);
+
+  const arr2 = [3, 1, 2, 4, 5];
+  const sorted2 = arr2.toSorted((a, b) => a - b);
+  expect(sorted2).toEqual([1, 2, 3, 4, 5]);
 });
