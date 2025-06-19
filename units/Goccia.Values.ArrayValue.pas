@@ -47,7 +47,7 @@ type
 implementation
 
 uses
-  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.Evaluator, Goccia.Values.StringValue, Generics.Defaults;
+  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.Evaluator, Goccia.Values.StringValue, Generics.Defaults, Goccia.Utils;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var
@@ -392,7 +392,7 @@ begin
 
   for I := 0 to Arr.Elements.Count - 1 do
   begin
-    if Arr.Elements[I].Equals(SearchValue) then
+    if IsEqual(Arr.Elements[I], SearchValue) then
     begin
       Result := TGocciaBooleanValue.Create(True);
       Exit;

@@ -15,6 +15,7 @@ function ValueOrUndefined(Value: TGocciaValue): TGocciaValue;
 
 implementation
 
+// TODO: Might be worth to rename to StrictEquals and integrate into Goccia.Evaluator
 function IsEqual(Left, Right: TGocciaValue): Boolean;
 begin
   if (Left is TGocciaUndefinedValue) and (Right is TGocciaUndefinedValue) then
