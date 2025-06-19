@@ -23,11 +23,11 @@ begin
   else if (Left is TGocciaNullValue) and (Right is TGocciaNullValue) then
     Result := True
   else if (Left is TGocciaBooleanValue) and (Right is TGocciaBooleanValue) then
-    Result := TGocciaBooleanValue(Left).Value = TGocciaBooleanValue(Right).Value
+    Result := TGocciaBooleanValue(Left).ToBoolean = TGocciaBooleanValue(Right).ToBoolean
   else if (Left is TGocciaNumberValue) and (Right is TGocciaNumberValue) then
-    Result := TGocciaNumberValue(Left).Value = TGocciaNumberValue(Right).Value
+    Result := TGocciaNumberValue(Left).ToNumber = TGocciaNumberValue(Right).ToNumber
   else if (Left is TGocciaStringValue) and (Right is TGocciaStringValue) then
-    Result := TGocciaStringValue(Left).Value = TGocciaStringValue(Right).Value
+    Result := TGocciaStringValue(Left).ToString = TGocciaStringValue(Right).ToString
   else
     Result := Left = Right; // Reference equality for objects
 end;

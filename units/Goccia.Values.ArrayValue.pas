@@ -355,7 +355,7 @@ end;
 function TGocciaArrayValue.ArrayIncludes(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   SearchValue: TGocciaValue;
-  I: Integer;
+  I, FromIndex: Integer;
 begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.includes called on non-array');
@@ -377,13 +377,23 @@ begin
     Exit;
   end;
 
-  if SearchValue.ToNumber > Elements.Count then
+  FromIndex := 0;
+
+  if Args.Count > 1 then
   begin
-    Result := TGocciaBooleanValue.Create(False);
-    Exit;
+    if not (Args[1] is TGocciaNumberValue) then
+      ThrowError('Array.includes expects second argument to be a number');
+
+    FromIndex := Trunc(Args[1].ToNumber);
+
+    if FromIndex < 0 then
+      FromIndex := Elements.Count + FromIndex;
+
+    if FromIndex < 0 then
+      FromIndex := 0;
   end;
 
-  for I := 0 to Elements.Count - 1 do
+  for I := FromIndex to Elements.Count - 1 do
   begin
     if IsEqual(Elements[I], SearchValue) then
     begin
@@ -467,14 +477,30 @@ begin
   begin
     CallArgs.Add(Elements[I]);
     CallArgs.Add(TGocciaNumberValue.Create(I));
+    CallArgs.Add(ThisValue);
+
+    if Callback is TGocciaNativeFunctionValue then
+    begin
+      Result := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue);
+      if not Result.ToBoolean then
+      begin
+        Result := TGocciaBooleanValue.Create(False);
+        Exit;
+      end;
+    end;
+
+    if Callback is TGocciaFunctionValue then
+    begin
+      Result := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
+      if not Result.ToBoolean then
+      begin
+        Result := TGocciaBooleanValue.Create(False);
+        Exit;
+      end;
+    end;
   end;
 
-  if Callback is TGocciaNativeFunctionValue then
-    Result := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue)
-  else if Callback is TGocciaFunctionValue then
-    Result := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
-
-  Result := TGocciaBooleanValue.Create(Result.ToBoolean);
+  Result := TGocciaBooleanValue.Create(True);
 end;
 
 function TGocciaArrayValue.ArrayPush(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
