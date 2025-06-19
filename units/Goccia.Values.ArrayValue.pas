@@ -18,6 +18,9 @@ type
     function ArrayForEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArraySome(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayEvery(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayFlat(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayFlatMap(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+
     function ArrayJoin(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayIncludes(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
@@ -100,6 +103,8 @@ begin
   FPrototype.SetProperty('forEach', TGocciaNativeFunctionValue.Create(ArrayForEach, 'forEach', 1));
   FPrototype.SetProperty('some', TGocciaNativeFunctionValue.Create(ArraySome, 'some', 1));
   FPrototype.SetProperty('every', TGocciaNativeFunctionValue.Create(ArrayEvery, 'every', 1));
+  FPrototype.SetProperty('flat', TGocciaNativeFunctionValue.Create(ArrayFlat, 'flat', 1));
+  FPrototype.SetProperty('flatMap', TGocciaNativeFunctionValue.Create(ArrayFlatMap, 'flatMap', 1));
   FPrototype.SetProperty('join', TGocciaNativeFunctionValue.Create(ArrayJoin, 'join', 1));
   FPrototype.SetProperty('includes', TGocciaNativeFunctionValue.Create(ArrayIncludes, 'includes', 1));
   FPrototype.SetProperty('push', TGocciaNativeFunctionValue.Create(ArrayPush, 'push', 1));
@@ -213,12 +218,15 @@ begin
 
   for I := 0 to Elements.Count - 1 do
   begin
+    // Skip holes in sparse arrays (represented as nil)
+    if Elements[I] = nil then
+      Continue;
+
     CallArgs := TObjectList<TGocciaValue>.Create(False);
     try
-      // Add the current element as first argument
       CallArgs.Add(Elements[I]);
-      // Add the index as second argument
       CallArgs.Add(TGocciaNumberValue.Create(I));
+      CallArgs.Add(ThisValue);
 
       if Callback is TGocciaNativeFunctionValue then
         PredicateResult := TGocciaNativeFunctionValue(Callback).NativeFunction(CallArgs, ThisValue)
@@ -275,6 +283,10 @@ begin
 
   for I := StartIndex to Elements.Count - 1 do
   begin
+    // Skip holes in sparse arrays (represented as nil)
+    if Elements[I] = nil then
+      Continue;
+
     CallArgs := TObjectList<TGocciaValue>.Create(False);
     try
       CallArgs.Add(Accumulator);
@@ -283,7 +295,7 @@ begin
       CallArgs.Add(ThisValue);
 
       if Callback is TGocciaNativeFunctionValue then
-        Accumulator := TGocciaNativeFunctionValue(Callback).NativeFunction(CallArgs, ThisValue)
+        Accumulator := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue)
       else if Callback is TGocciaFunctionValue then
         Accumulator := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
     finally
@@ -564,6 +576,69 @@ begin
     begin
       // Add the element as-is (either not an array or depth is 0)
       ResultArray.Elements.Add(Elements[I]);
+    end;
+  end;
+
+  Result := ResultArray;
+end;
+
+function TGocciaArrayValue.ArrayFlatMap(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  ResultArray: TGocciaArrayValue;
+  Callback: TGocciaValue;
+  CallArgs: TObjectList<TGocciaValue>;
+  I, J: Integer;
+  MappedValue: TGocciaValue;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.flatMap called on non-array');
+
+  if Args.Count < 1 then
+    ThrowError('Array.flatMap expects callback function');
+
+  Callback := Args[0];
+
+  if not ((Callback is TGocciaFunctionValue) or (Callback is TGocciaNativeFunctionValue)) then
+    ThrowError('Callback must be a function');
+
+  ResultArray := TGocciaArrayValue.Create;
+
+  for I := 0 to Elements.Count - 1 do
+  begin
+    // Skip holes in sparse arrays (represented as nil)
+    if Elements[I] = nil then
+      Continue;
+
+    CallArgs := TObjectList<TGocciaValue>.Create(False);
+    try
+      CallArgs.Add(Elements[I]);
+      CallArgs.Add(TGocciaNumberValue.Create(I));
+      CallArgs.Add(ThisValue);
+
+      if Callback is TGocciaNativeFunctionValue then
+        MappedValue := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue)
+      else if Callback is TGocciaFunctionValue then
+        MappedValue := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
+
+      // flatMap only flattens one level - if the mapped value is an array,
+      // add each of its elements to the result array
+      if MappedValue is TGocciaArrayValue then
+      begin
+        // Add each element from the mapped array (flatten one level)
+        // Skip holes (nil elements) during flattening
+        for J := 0 to TGocciaArrayValue(MappedValue).Elements.Count - 1 do
+        begin
+          if TGocciaArrayValue(MappedValue).Elements[J] <> nil then
+            ResultArray.Elements.Add(TGocciaArrayValue(MappedValue).Elements[J]);
+        end;
+      end
+      else
+      begin
+        // If not an array, add the value as-is
+        ResultArray.Elements.Add(MappedValue);
+      end;
+    finally
+      CallArgs.Free;
     end;
   end;
 
