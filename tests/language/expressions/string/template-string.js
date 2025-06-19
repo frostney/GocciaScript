@@ -10,7 +10,7 @@ test("basic template literals", () => {
   const multiline = `line 1
   line 2
   line 3`;
-  expect(multiline).toBe("line 1\nline 2\nline 3");
+  expect(multiline).toBe("line 1\n  line 2\n  line 3");
 
   const withBackticks = `This has \`backticks\` in it`;
   expect(withBackticks).toBe("This has `backticks` in it");
