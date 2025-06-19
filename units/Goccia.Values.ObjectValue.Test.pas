@@ -72,7 +72,7 @@ begin
   Expect<Boolean>(ContainsText(DebugString, 'city: Anytown')).ToBe(True);
   Expect<Boolean>(ContainsText(DebugString, 'state: CA')).ToBe(True);
   Expect<Boolean>(ContainsText(DebugString, 'zip: 12345')).ToBe(True);
-  Expect<string>(ObjectValue.ToString).ToBe('[Object object]');
+  Expect<string>(ObjectValue.ToString).ToBe('[object Object]');
   Expect<Boolean>(ObjectValue.ToBoolean).ToBe(True);
   Expect<Boolean>(IsNaN(ObjectValue.ToNumber)).ToBe(True);
   Expect<string>(ObjectValue.TypeName).ToBe('object');
