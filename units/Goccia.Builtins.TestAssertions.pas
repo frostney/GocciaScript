@@ -640,13 +640,17 @@ begin
 end;
 
 function TGocciaExpectationValue.ToThrow(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  ExpectedErrorType: string;
+  EmptyArgs: TObjectList<TGocciaValue>;
 begin
   Result := TGocciaUndefinedValue.Create;
 
-  if (Args.Count > 0) then
+  ExpectedErrorType := '';
+  if Args.Count > 0 then
   begin
-    FTestAssertions.ThrowError('toThrow does not expect any arguments', 0, 0);
-    Exit;
+    // If args are provided, expect a specific error type
+    ExpectedErrorType := Args[0].ToString;
   end;
 
   if not (FActualValue is TGocciaFunctionValue) then
@@ -655,19 +659,41 @@ begin
     Exit;
   end;
 
+  EmptyArgs := TObjectList<TGocciaValue>.Create(False);
   try
-    TGocciaFunctionValue(FActualValue).Call(Args, TGocciaUndefinedValue.Create);
-  except
-    on E: Exception do
-    begin
-      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-      Result := TGocciaUndefinedValue.Create;
+    try
+      TGocciaFunctionValue(FActualValue).Call(EmptyArgs, TGocciaUndefinedValue.Create);
+    except
+      on E: Exception do
+      begin
+        // If no specific error type expected, any exception is fine
+        if ExpectedErrorType = '' then
+        begin
+          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+          Exit;
+        end;
+
+        // Check if the exception message contains the expected error type
+        // Look for the error type name in the message (case insensitive)
+        if (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
+        begin
+          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+          Exit;
+        end
+        else
+        begin
+          TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
+            'Expected ' + FActualValue.ToString + ' to throw ' + ExpectedErrorType + ' but threw: ' + E.Message);
+          Exit;
+        end;
+      end;
     end;
+  finally
+    EmptyArgs.Free;
   end;
 
   TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
     'Expected ' + FActualValue.ToString + ' to throw an exception');
-  Result := TGocciaUndefinedValue.Create;
 end;
 
 

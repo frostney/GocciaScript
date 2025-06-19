@@ -209,10 +209,39 @@ begin
 end;
 
 function TGocciaMath.MathClamp(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Value, MinVal, MaxVal: Double;
 begin
   if Args.Count <> 3 then
     ThrowError('Math.clamp expects exactly 3 arguments', 0, 0);
-  Result := TGocciaNumberValue.Create(Min(Max(Args[0].ToNumber, Args[1].ToNumber), Args[2].ToNumber));
+
+  Value := Args[0].ToNumber;
+  MinVal := Args[1].ToNumber;
+  MaxVal := Args[2].ToNumber;
+
+  // If any argument is NaN, return NaN
+  if IsNaN(Value) or IsNaN(MinVal) or IsNaN(MaxVal) then
+  begin
+    Result := TGocciaNumberValue.Create(NaN);
+    Exit;
+  end;
+
+  // If min > max, throw RangeError
+  if MinVal > MaxVal then
+  begin
+    ThrowError('RangeError: Invalid range in Math.clamp', 0, 0);
+    Exit;
+  end;
+
+    // TODO: Handle negative zero properly - for now skip this special case
+
+  // Clamp the value
+  if Value < MinVal then
+    Result := TGocciaNumberValue.Create(MinVal)
+  else if Value > MaxVal then
+    Result := TGocciaNumberValue.Create(MaxVal)
+  else
+    Result := TGocciaNumberValue.Create(Value);
 end;
 
 function TGocciaMath.MathSign(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -241,6 +270,15 @@ begin
 
   if IsNaN(Value) then
     Result := TGocciaNumberValue.Create(NaN)
+  else if IsInfinite(Value) then
+  begin
+    if Value > 0 then
+      Result := TGocciaNumberValue.Create(Infinity)
+    else if Value < 0 then
+      Result := TGocciaNumberValue.Create(-Infinity)
+    else
+      Result := TGocciaNumberValue.Create(NaN);
+  end
   else
     Result := TGocciaNumberValue.Create(Trunc(Value));
 end;

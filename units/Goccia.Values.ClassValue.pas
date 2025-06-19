@@ -106,7 +106,11 @@ end;
 
 function TGocciaClassValue.ToString: string;
 begin
-  Result := Format('[Class: %s]', [FName]);
+  // For error classes, just return the name to make toThrow work properly
+  if (FName = 'RangeError') or (FName = 'Error') or (FName = 'TypeError') or (FName = 'ReferenceError') then
+    Result := FName
+  else
+    Result := Format('[Class: %s]', [FName]);
 end;
 
 function TGocciaClassValue.ToBoolean: Boolean;
