@@ -3,14 +3,7 @@ program Goccia.Values.FunctionValue.Test;
 {$I Goccia.inc}
 
 uses
-  Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Values.StringValue, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, StrUtils, Math, TestRunner, Goccia.AST.Node, Generics.Collections, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope, Goccia.Values.Base, Goccia.Token, SysUtils, Classes, Goccia.Values.UndefinedValue, Goccia.Values.NullValue;
-
-implementation
-
-uses
-  Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.BooleanValue,
-  Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.AST.Expressions,
-  Goccia.AST.Statements, Goccia.Scope, Goccia.Token, Goccia.Evaluator;
+  Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Values.StringValue, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, StrUtils, Math, TestRunner, Goccia.AST.Node, Generics.Collections, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope, Goccia.Values.Base, Goccia.Token, SysUtils, Classes, Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.Evaluator;
 
 type
   TTestBlockValue = class(TTestSuite)
@@ -53,7 +46,7 @@ type
     I: Integer;
   begin
     Statements := TObjectList<TGocciaASTNode>.Create;
-    Statements.Add(TGocciaUndefinedValue.Create(0, 0));
+    Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedValue.Create, 0, 0));
 
     // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, AParameters.Count);
