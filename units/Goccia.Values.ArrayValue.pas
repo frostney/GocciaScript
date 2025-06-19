@@ -507,8 +507,6 @@ begin
 
   Result := Arr.Elements[Arr.Elements.Count - 1];
   Arr.Elements.Delete(Arr.Elements.Count - 1);
-
-  Result := TGocciaNumberValue.Create(Arr.Elements.Count);
 end;
 
 function TGocciaArrayValue.ArrayToReversed(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
