@@ -522,6 +522,66 @@ begin
   Result := TGocciaBooleanValue.Create(True);
 end;
 
+function TGocciaArrayValue.ArrayFlat(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  ResultArray: TGocciaArrayValue;
+  I, J: Integer;
+  Depth: Integer;
+  CallArgs: TObjectList<TGocciaValue>;
+  FlattenedSubArray: TGocciaArrayValue;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.flat called on non-array');
+
+  ResultArray := TGocciaArrayValue.Create;
+
+  // Default depth is 1
+  Depth := 1;
+
+  if Args.Count > 0 then
+  begin
+    if not (Args[0] is TGocciaNumberValue) then
+      ThrowError('Array.flat expects depth argument to be a number');
+
+    Depth := Trunc(Args[0].ToNumber);
+
+    if Depth < 0 then
+      Depth := 0;
+  end;
+
+  for I := 0 to Elements.Count - 1 do
+  begin
+    // Skip holes in sparse arrays (represented as nil)
+    if Elements[I] = nil then
+      Continue;
+
+    if (Elements[I] is TGocciaArrayValue) and (Depth > 0) then
+    begin
+      // Recursively flatten the nested array
+      CallArgs := TObjectList<TGocciaValue>.Create(False);
+      try
+        CallArgs.Add(TGocciaNumberValue.Create(Depth - 1));
+        FlattenedSubArray := TGocciaArrayValue(TGocciaArrayValue(Elements[I]).ArrayFlat(CallArgs, Elements[I]));
+
+        // Add all elements from the flattened subarray
+        for J := 0 to FlattenedSubArray.Elements.Count - 1 do
+        begin
+          ResultArray.Elements.Add(FlattenedSubArray.Elements[J]);
+        end;
+      finally
+        CallArgs.Free;
+      end;
+    end
+    else
+    begin
+      // Add the element as-is (either not an array or depth is 0)
+      ResultArray.Elements.Add(Elements[I]);
+    end;
+  end;
+
+  Result := ResultArray;
+end;
+
 function TGocciaArrayValue.ArrayPush(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
