@@ -11,6 +11,15 @@ test("basic array creation and access", () => {
   expect(arr[10]).toBeUndefined();
 });
 
+test("array with object elements", () => {
+  const arr = [{ a: 1 }, { b: 2 }, { c: 3 }];
+  expect(arr.length).toBe(3);
+  expect(arr[0].a).toBe(1);
+  expect(arr[1].b).toBe(2);
+  expect(arr[2].c).toBe(3);
+  expect(arr[3]).toBeUndefined();
+});
+
 test("empty array", () => {
   const arr = [];
   expect(arr.length).toBe(0);

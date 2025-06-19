@@ -215,6 +215,11 @@ type
 
   TGocciaSuperExpression = class(TGocciaExpression);
 
+  TGocciaHoleExpression = class(TGocciaExpression)
+  public
+    constructor Create(ALine, AColumn: Integer);
+  end;
+
   TGocciaPrivateMemberExpression = class(TGocciaExpression)
   private
     FObject: TGocciaExpression;
@@ -471,6 +476,13 @@ begin
   FPrivateName := APrivateName;
   FOperator := AOperator;
   FValue := AValue;
+end;
+
+{ TGocciaHoleExpression }
+
+constructor TGocciaHoleExpression.Create(ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
 end;
 
 end.

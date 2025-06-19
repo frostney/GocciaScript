@@ -310,6 +310,10 @@ begin
 
   for I := 0 to Elements.Count - 1 do
   begin
+    // Skip holes in sparse arrays (represented as nil)
+    if Elements[I] = nil then
+      Continue;
+
     CallArgs := TObjectList<TGocciaValue>.Create(False);
     try
       CallArgs.Add(Elements[I]);
@@ -426,6 +430,10 @@ begin
 
   for I := 0 to Elements.Count - 1 do
   begin
+    // Skip holes in sparse arrays (represented as nil)
+    if Elements[I] = nil then
+      Continue;
+
     CallArgs := TObjectList<TGocciaValue>.Create(False);
     try
       CallArgs.Add(Elements[I]);
@@ -478,6 +486,10 @@ begin
 
   for I := 0 to Elements.Count - 1 do
   begin
+    // Skip holes in sparse arrays (represented as nil)
+    if Elements[I] = nil then
+      Continue;
+
     CallArgs := TObjectList<TGocciaValue>.Create(False);
     try
       CallArgs.Add(Elements[I]);
@@ -608,7 +620,12 @@ begin
   begin
     if I > 0 then
       Result := Result + ', ';
-    Result := Result + FElements[I].ToString;
+
+    // For holes (nil), show as empty
+    if FElements[I] = nil then
+      Result := Result + ''
+    else
+      Result := Result + FElements[I].ToString;
   end;
   Result := Result + ']';
 end;
@@ -639,7 +656,13 @@ begin
   if TryStrToInt(AName, Index) then
   begin
     if (Index >= 0) and (Index < FElements.Count) then
-      Result := FElements[Index]
+    begin
+      // If the element is nil (hole), return undefined
+      if FElements[Index] = nil then
+        Result := TGocciaUndefinedValue.Create
+      else
+        Result := FElements[Index];
+    end
     else
       Result := TGocciaUndefinedValue.Create;
   end

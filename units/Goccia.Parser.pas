@@ -522,7 +522,18 @@ begin
 
   while not Check(gttRightBracket) and not IsAtEnd do
   begin
-    Elements.Add(Expression);
+    // Check for holes (consecutive commas or leading comma)
+    if Check(gttComma) then
+    begin
+      // This is a hole in the array
+      Elements.Add(TGocciaHoleExpression.Create(Peek.Line, Peek.Column));
+    end
+    else
+    begin
+      // Regular expression
+      Elements.Add(Expression);
+    end;
+
     if not Match([gttComma]) then
       Break;
   end;

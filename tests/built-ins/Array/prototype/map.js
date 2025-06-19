@@ -6,6 +6,7 @@ features: [Array.prototype.map]
 test("Array.prototype.map with arrow function expression", () => {
   const arr = [1, 2, 3];
   const mapped = arr.map((x) => x * 2);
+  expect(arr).toEqual([1, 2, 3]);
   expect(mapped).toEqual([2, 4, 6]);
 });
 
@@ -14,6 +15,7 @@ test("Array.prototype.map with arrow function block", () => {
   const mapped = arr.map((x) => {
     return x * 2;
   });
+  expect(arr).toEqual([1, 2, 3]);
   expect(mapped).toEqual([2, 4, 6]);
 });
 
@@ -37,8 +39,9 @@ test("Array.prototype.map with index and array parameters", () => {
       expect(index).toBe(2);
     }
 
-    return x;
+    return x * 2;
   });
+  expect(arr).toEqual([1, 2, 3]);
   expect(mapped).toEqual([2, 4, 6]);
 });
 

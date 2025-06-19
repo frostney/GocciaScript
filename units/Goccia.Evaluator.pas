@@ -391,6 +391,11 @@ begin
       Result := EvaluateMember(TGocciaMemberExpression(Expression), Context);
     end;
   end
+  else if Expression is TGocciaHoleExpression then
+  begin
+    // Return nil for holes - special case for sparse arrays
+    Result := nil;
+  end
   else
     Result := TGocciaUndefinedValue.Create;
   Logger.Debug('EvaluateExpression: Returning result type: %s .ToString: %s', [Result.ClassName, Result.ToString]);
@@ -838,10 +843,22 @@ function EvaluateArray(ArrayExpression: TGocciaArrayExpression; Context: TGoccia
 var
   Arr: TGocciaArrayValue;
   I: Integer;
+  ElementValue: TGocciaValue;
 begin
   Arr := TGocciaArrayValue.Create;
   for I := 0 to ArrayExpression.Elements.Count - 1 do
-    Arr.Elements.Add(EvaluateExpression(ArrayExpression.Elements[I], Context));
+  begin
+    if ArrayExpression.Elements[I] is TGocciaHoleExpression then
+    begin
+      // For holes, add nil to represent the hole
+      Arr.Elements.Add(nil);
+    end
+    else
+    begin
+      ElementValue := EvaluateExpression(ArrayExpression.Elements[I], Context);
+      Arr.Elements.Add(ElementValue);
+    end;
+  end;
   Result := Arr;
 end;
 
