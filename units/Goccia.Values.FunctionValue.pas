@@ -15,26 +15,14 @@ uses
   Goccia.Values.UndefinedValue;
 
 type
-  TGocciaBlockValue = class
-  private
-    FStatements: TObjectList<TGocciaASTNode>;
-    FScope: TGocciaScope;
-  public
-    constructor Create(AStatements: TObjectList<TGocciaASTNode>; AScope: TGocciaScope);
-    destructor Destroy; override;
-    function Execute(ACallScope: TGocciaScope): TGocciaValue;
-    property Statements: TObjectList<TGocciaASTNode> read FStatements;
-    property Scope: TGocciaScope read FScope;
-  end;
-
   TGocciaFunctionValue = class(TGocciaObjectValue, IGocciaCallable)
   protected
     FName: string;
     FParameters: TGocciaParameterArray;
-    FBody: TGocciaBlockValue;
+    FBodyStatements: TObjectList<TGocciaASTNode>;
     FClosure: TGocciaScope;
   public
-    constructor Create(AParameters: TGocciaParameterArray; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string = '');
+    constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string = '');
     destructor Destroy; override;
     function ToString: string; override;
     function ToBoolean: Boolean; override;
@@ -43,7 +31,7 @@ type
     function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
     property Parameters: TGocciaParameterArray read FParameters;
-    property Body: TGocciaBlockValue read FBody;
+    property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
     property Closure: TGocciaScope read FClosure;
     property Name: string read FName;
   end;
@@ -52,7 +40,7 @@ type
   private
     FSuperClass: TGocciaValue;
   public
-    constructor Create(AParameters: TGocciaParameterArray; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
+    constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
     function ToString: string; override;
     property SuperClass: TGocciaValue read FSuperClass write FSuperClass;
   end;
@@ -62,56 +50,12 @@ implementation
 uses
   Goccia.Evaluator;
 
-{ TGocciaBlockValue }
-
-constructor TGocciaBlockValue.Create(AStatements: TObjectList<TGocciaASTNode>; AScope: TGocciaScope);
-begin
-  FStatements := AStatements;
-  FScope := AScope;
-end;
-
-destructor TGocciaBlockValue.Destroy;
-begin
-  FStatements.Free;
-  inherited;
-end;
-
-function TGocciaBlockValue.Execute(ACallScope: TGocciaScope): TGocciaValue;
-var
-  I: Integer;
-  Context: TGocciaEvaluationContext;
-  LastValue: TGocciaValue;
-begin
-  Context.Scope := ACallScope;
-  LastValue := TGocciaUndefinedValue.Create;
-
-  for I := 0 to FStatements.Count - 1 do
-  begin
-    try
-      LastValue := Evaluate(FStatements[I], Context);
-    except
-      on E: TGocciaReturnValue do
-      begin
-        raise;
-      end;
-      on E: Exception do
-      begin
-        raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-      end;
-    end;
-  end;
-
-  if LastValue = nil then
-    LastValue := TGocciaUndefinedValue.Create;
-  Result := LastValue;
-end;
-
 { TGocciaFunctionValue }
 
-constructor TGocciaFunctionValue.Create(AParameters: TGocciaParameterArray; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string = '');
+constructor TGocciaFunctionValue.Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string = '');
 begin
   FParameters := AParameters;
-  FBody := ABody;
+  FBodyStatements := ABodyStatements;
   FClosure := AClosure;
   FName := AName;
 
@@ -120,7 +64,7 @@ end;
 
 destructor TGocciaFunctionValue.Destroy;
 begin
-  FBody.Free;
+  FBodyStatements.Free;
   inherited;
 end;
 
@@ -210,9 +154,27 @@ begin
       end;
     end;
 
-    // Execute function body
+    // Execute function body statements directly
     try
-      ReturnValue := FBody.Execute(CallScope);
+      Context.Scope := CallScope;
+      ReturnValue := TGocciaUndefinedValue.Create;
+
+      for I := 0 to FBodyStatements.Count - 1 do
+      begin
+        try
+          ReturnValue := Evaluate(FBodyStatements[I], Context);
+        except
+          on E: TGocciaReturnValue do
+          begin
+            raise;
+          end;
+          on E: Exception do
+          begin
+            raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
+          end;
+        end;
+      end;
+
       if ReturnValue = nil then
         ReturnValue := TGocciaUndefinedValue.Create;
       Result := ReturnValue;
@@ -259,15 +221,24 @@ begin
 end;
 
 function TGocciaFunctionValue.CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
+var
+  ClonedStatements: TObjectList<TGocciaASTNode>;
+  I: Integer;
 begin
-  Result := TGocciaFunctionValue.Create(FParameters, FBody, NewScope, FName);
+  // Create a copy of the statements - we can't share the same reference
+  // since both functions would try to free the same object
+  ClonedStatements := TObjectList<TGocciaASTNode>.Create(False); // Don't own the objects
+  for I := 0 to FBodyStatements.Count - 1 do
+    ClonedStatements.Add(FBodyStatements[I]);
+
+  Result := TGocciaFunctionValue.Create(FParameters, ClonedStatements, NewScope, FName);
 end;
 
 { TGocciaMethodValue }
 
-constructor TGocciaMethodValue.Create(AParameters: TGocciaParameterArray; ABody: TGocciaBlockValue; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
+constructor TGocciaMethodValue.Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
 begin
-  inherited Create(AParameters, ABody, AClosure, AName);
+  inherited Create(AParameters, ABodyStatements, AClosure, AName);
   FSuperClass := ASuperClass;
 end;
 

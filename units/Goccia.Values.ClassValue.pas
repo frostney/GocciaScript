@@ -10,7 +10,7 @@ uses
   Goccia.AST.Node;
 
 type
-  // Forward declarations
+  // Forward declaration
   TGocciaInstanceValue = class;
 
   TGocciaClassValue = class(TGocciaValue)

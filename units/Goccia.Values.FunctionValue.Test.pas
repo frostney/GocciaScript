@@ -5,6 +5,13 @@ program Goccia.Values.FunctionValue.Test;
 uses
   Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Values.StringValue, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, StrUtils, Math, TestRunner, Goccia.AST.Node, Generics.Collections, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope, Goccia.Values.Base, Goccia.Token, SysUtils, Classes, Goccia.Values.UndefinedValue, Goccia.Values.NullValue;
 
+implementation
+
+uses
+  Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.BooleanValue,
+  Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.AST.Expressions,
+  Goccia.AST.Statements, Goccia.Scope, Goccia.Token, Goccia.Evaluator;
+
 type
   TTestBlockValue = class(TTestSuite)
   public
@@ -41,14 +48,12 @@ type
 
   function CreateSimpleFunction<T>(const AName: String; const AParameters: TStringList; const AScope: TGocciaScope): T;
   var
-    Body: TGocciaBlockValue;
     Statements: TObjectList<TGocciaASTNode>;
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
     Statements := TObjectList<TGocciaASTNode>.Create;
-    Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedValue.Create, 0, 0));
-    Body := TGocciaBlockValue.Create(Statements, AScope);
+    Statements.Add(TGocciaUndefinedValue.Create(0, 0));
 
     // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, AParameters.Count);
@@ -58,7 +63,7 @@ type
       ParamArray[I].DefaultValue := nil;
     end;
 
-    Result := T.Create(ParamArray, Body, AScope, AName);
+    Result := T.Create(ParamArray, Statements, AScope, AName);
   end;
 
   procedure TestSimpleFunctionFromTemplate<T>(TestSuite: TTestSuite; const ATypeDisplayName: String);
@@ -105,7 +110,6 @@ type
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
-    Body: TGocciaBlockValue;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
     Arguments: TObjectList<TGocciaValue>;
@@ -125,7 +129,6 @@ type
       TGocciaIdentifierExpression.Create('b', 0, 0),
       0, 0
     ));
-    Body := TGocciaBlockValue.Create(Statements, Scope);
 
     // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, Parameters.Count);
@@ -135,7 +138,7 @@ type
       ParamArray[I].DefaultValue := nil;
     end;
 
-    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
+    FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
     // Test function properties
     TestSuite.Expect<String>(FunctionValue.Name).ToBe('test');
@@ -177,7 +180,6 @@ type
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
-    Body: TGocciaBlockValue;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
     ParamArray: TGocciaParameterArray;
@@ -194,7 +196,6 @@ type
       TGocciaLiteralExpression.Create(TGocciaNumberValue.Create(1), 0, 0),
       0, 0
     ));
-    Body := TGocciaBlockValue.Create(Statements, Scope);
 
     // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, Parameters.Count);
@@ -204,7 +205,7 @@ type
       ParamArray[I].DefaultValue := nil;
     end;
 
-    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
+    FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
     ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
     TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(1);
@@ -218,8 +219,7 @@ type
       TGocciaLiteralExpression.Create(TGocciaStringValue.Create('hello'), 0, 0),
       0, 0
     ));
-    Body := TGocciaBlockValue.Create(Statements, Scope);
-    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
+    FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
     ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
     TestSuite.Expect<String>(ReturnValue.ToString).ToBe('hello');
@@ -233,8 +233,7 @@ type
       TGocciaLiteralExpression.Create(TGocciaBooleanValue.Create(True), 0, 0),
       0, 0
     ));
-    Body := TGocciaBlockValue.Create(Statements, Scope);
-    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
+    FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
     ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
     TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
@@ -248,8 +247,7 @@ type
       TGocciaLiteralExpression.Create(TGocciaUndefinedValue.Create, 0, 0),
       0, 0
     ));
-    Body := TGocciaBlockValue.Create(Statements, Scope);
-    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
+    FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
     ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
     TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBeFalse;
@@ -266,7 +264,6 @@ type
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
-    Body: TGocciaBlockValue;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
     ParamArray: TGocciaParameterArray;
@@ -283,7 +280,6 @@ type
       TGocciaIdentifierExpression.Create('x', 0, 0),
       0, 0
     ));
-    Body := TGocciaBlockValue.Create(Statements, Scope);
 
     // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, Parameters.Count);
@@ -293,7 +289,7 @@ type
       ParamArray[I].DefaultValue := nil;
     end;
 
-    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
+    FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
     // Test function execution
     ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedValue.Create);
@@ -311,7 +307,6 @@ type
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
-    Body: TGocciaBlockValue;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
     Arguments: TObjectList<TGocciaValue>;
@@ -335,7 +330,6 @@ type
       ),
       0, 0
     ));
-    Body := TGocciaBlockValue.Create(Statements, Scope);
 
     // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, Parameters.Count);
@@ -345,7 +339,7 @@ type
       ParamArray[I].DefaultValue := nil;
     end;
 
-    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
+    FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
     // Test function execution
     Arguments := TObjectList<TGocciaValue>.Create;
@@ -363,7 +357,6 @@ type
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
-    Body: TGocciaBlockValue;
     ReturnValue: TGocciaValue;
     Arguments: TObjectList<TGocciaValue>;
     Statements: TObjectList<TGocciaASTNode>;
@@ -392,7 +385,6 @@ type
       ),
       0, 0
     ));
-    Body := TGocciaBlockValue.Create(Statements, Scope);
 
     // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, Parameters.Count);
@@ -402,7 +394,7 @@ type
       ParamArray[I].DefaultValue := nil;
     end;
 
-    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
+    FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
     // Test function execution
     Arguments := TObjectList<TGocciaValue>.Create;
@@ -422,7 +414,6 @@ type
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
-    Body: TGocciaBlockValue;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
     Arguments: TObjectList<TGocciaValue>;
@@ -458,7 +449,6 @@ type
       ),
       0, 0
     ));
-    Body := TGocciaBlockValue.Create(Statements, Scope);
 
     // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, Parameters.Count);
@@ -468,7 +458,7 @@ type
       ParamArray[I].DefaultValue := nil;
     end;
 
-    FunctionValue := T.Create(ParamArray, Body, Scope, 'test');
+    FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
     // Test function execution
     Arguments := TObjectList<TGocciaValue>.Create;
@@ -484,37 +474,57 @@ type
 
   procedure TTestBlockValue.TestSimpleBlock;
   var
-    BlockValue: TGocciaBlockValue;
     Statements: TObjectList<TGocciaASTNode>;
     Scope: TGocciaScope;
+    Context: TGocciaEvaluationContext;
+    I: Integer;
+    LastValue: TGocciaValue;
   begin
     Statements := TObjectList<TGocciaASTNode>.Create;
     Scope := TGocciaScope.Create(nil, skGlobal);
 
     Statements.Add(TGocciaLiteralExpression.Create(TGocciaNumberValue.Create(1), 0, 0));
 
-    BlockValue := TGocciaBlockValue.Create(Statements, Scope);
-    Expect<Double>(BlockValue.Execute(Scope).ToNumber).ToBe(1);
+    // Execute statements directly
+    Context.Scope := Scope;
+    LastValue := TGocciaUndefinedValue.Create;
 
-    BlockValue.Free;
+    for I := 0 to Statements.Count - 1 do
+    begin
+      LastValue := Evaluate(Statements[I], Context);
+    end;
+
+    Expect<Double>(LastValue.ToNumber).ToBe(1);
+
+    Statements.Free;
     Scope.Free;
   end;
 
   procedure TTestBlockValue.TestArithmeticBlock;
   var
-    BlockValue: TGocciaBlockValue;
     Statements: TObjectList<TGocciaASTNode>;
     Scope: TGocciaScope;
+    Context: TGocciaEvaluationContext;
+    I: Integer;
+    LastValue: TGocciaValue;
   begin
     Statements := TObjectList<TGocciaASTNode>.Create;
     Scope := TGocciaScope.Create(nil, skGlobal);
 
     Statements.Add(TGocciaBinaryExpression.Create(TGocciaLiteralExpression.Create(TGocciaNumberValue.Create(1), 0, 0), gttPlus, TGocciaLiteralExpression.Create(TGocciaNumberValue.Create(2), 0, 0), 0, 0));
 
-    BlockValue := TGocciaBlockValue.Create(Statements, Scope);
-    Expect<Double>(BlockValue.Execute(Scope).ToNumber).ToBe(3);
+    // Execute statements directly
+    Context.Scope := Scope;
+    LastValue := TGocciaUndefinedValue.Create;
 
-    BlockValue.Free;
+    for I := 0 to Statements.Count - 1 do
+    begin
+      LastValue := Evaluate(Statements[I], Context);
+    end;
+
+    Expect<Double>(LastValue.ToNumber).ToBe(3);
+
+    Statements.Free;
     Scope.Free;
   end;
 
@@ -615,8 +625,6 @@ type
   begin
     TestFunctionWithScopeAndParametersAndReturnFromTemplate<TGocciaMethodValue>(Self);
   end;
-
-
 
 begin
   TestRunnerProgram.AddSuite(TTestBlockValue.Create('Block Value'));

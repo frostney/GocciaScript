@@ -858,41 +858,65 @@ end;
 
 function EvaluateArrowFunction(ArrowFunctionExpression: TGocciaArrowFunctionExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
-  BlockValue: TGocciaBlockValue;
   Statements: TObjectList<TGocciaASTNode>;
+  I: Integer;
+  OriginalNodes: TObjectList<TGocciaASTNode>;
 begin
   // Arrow function body can be either a block statement or a single expression
   if ArrowFunctionExpression.Body is TGocciaBlockStatement then
   begin
     // Body is a block statement: (n) => { return n * 2; }
-    BlockValue := TGocciaBlockValue.Create(TGocciaBlockStatement(ArrowFunctionExpression.Body).Nodes, Context.Scope.CreateChild);
+    // Create a copy of the statements to avoid ownership issues
+    OriginalNodes := TGocciaBlockStatement(ArrowFunctionExpression.Body).Nodes;
+    Statements := TObjectList<TGocciaASTNode>.Create(False); // Don't own the objects
+    for I := 0 to OriginalNodes.Count - 1 do
+      Statements.Add(OriginalNodes[I]);
   end
   else
   begin
     // Body is a single expression: (n) => n * 2
     // Wrap the expression in a statement list
-    Statements := TObjectList<TGocciaASTNode>.Create(True);
+    Statements := TObjectList<TGocciaASTNode>.Create(False); // Don't own the objects
     Statements.Add(ArrowFunctionExpression.Body); // Add the expression directly
-    BlockValue := TGocciaBlockValue.Create(Statements, Context.Scope.CreateChild);
   end;
 
   // Create function with closure scope using new parameter structure
-  Result := TGocciaFunctionValue.Create(ArrowFunctionExpression.Parameters, BlockValue, Context.Scope.CreateChild);
+  Result := TGocciaFunctionValue.Create(ArrowFunctionExpression.Parameters, Statements, Context.Scope.CreateChild);
 end;
 
 function EvaluateBlock(BlockStatement: TGocciaBlockStatement; Context: TGocciaEvaluationContext): TGocciaValue;
 var
-  BlockValue: TGocciaBlockValue;
+  I: Integer;
+  LastValue: TGocciaValue;
+  BlockContext: TGocciaEvaluationContext;
 begin
   // Block does have a lexical scope, not a function scope so we don't need to push a new scope
+  BlockContext := Context;
+  BlockContext.Scope := Context.Scope.CreateChild;
   try
-    Result := TGocciaUndefinedValue.Create;
+    LastValue := TGocciaUndefinedValue.Create;
 
-    BlockValue := TGocciaBlockValue.Create(BlockStatement.Nodes, Context.Scope.CreateChild);
+    for I := 0 to BlockStatement.Nodes.Count - 1 do
+    begin
+      try
+        LastValue := Evaluate(BlockStatement.Nodes[I], BlockContext);
+      except
+        on E: TGocciaReturnValue do
+        begin
+          raise;
+        end;
+        on E: Exception do
+        begin
+          raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
+        end;
+      end;
+    end;
 
-    Result := BlockValue.Execute(Context.Scope);
+    if LastValue = nil then
+      LastValue := TGocciaUndefinedValue.Create;
+    Result := LastValue;
   finally
-    BlockValue.Free;
+    BlockContext.Scope.Free;
   end;
 end;
 
@@ -908,11 +932,18 @@ end;
 
 function EvaluateClassMethod(ClassMethod: TGocciaClassMethod; Context: TGocciaEvaluationContext; SuperClass: TGocciaValue = nil): TGocciaValue;
 var
-  BlockValue: TGocciaBlockValue;
+  Statements: TObjectList<TGocciaASTNode>;
+  I: Integer;
+  OriginalNodes: TObjectList<TGocciaASTNode>;
 begin
-  BlockValue := TGocciaBlockValue.Create(TGocciaBlockStatement(ClassMethod.Body).Nodes, Context.Scope.CreateChild);
+  // Create a copy of the statements to avoid ownership issues
+  OriginalNodes := TGocciaBlockStatement(ClassMethod.Body).Nodes;
+  Statements := TObjectList<TGocciaASTNode>.Create(False); // Don't own the objects
+  for I := 0 to OriginalNodes.Count - 1 do
+    Statements.Add(OriginalNodes[I]);
+
   // Always create a unique child scope for the closure - now with default parameter support
-  Result := TGocciaMethodValue.Create(ClassMethod.Parameters, BlockValue, Context.Scope.CreateChild, ClassMethod.Name, SuperClass);
+  Result := TGocciaMethodValue.Create(ClassMethod.Parameters, Statements, Context.Scope.CreateChild, ClassMethod.Name, SuperClass);
 end;
 
 function EvaluateClass(ClassDeclaration: TGocciaClassDeclaration; Context: TGocciaEvaluationContext): TGocciaValue;
