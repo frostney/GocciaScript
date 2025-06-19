@@ -126,6 +126,37 @@ begin
     else
       Context.OnError('Cannot set property on non-object', Expression.Line, Expression.Column);
   end
+  else if Expression is TGocciaComputedPropertyAssignmentExpression then
+  begin
+    // Computed property assignment (e.g., obj[expr] = value)
+    Obj := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(Expression).ObjectExpr, Context);
+    PropName := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(Expression).PropertyExpression, Context).ToString;
+    Value := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(Expression).Value, Context);
+
+    // Handle different object types for computed property assignment
+    if (Obj is TGocciaInstanceValue) then
+    begin
+      TGocciaInstanceValue(Obj).SetProperty(PropName, Value);
+      Result := Value;
+    end
+    else if (Obj is TGocciaObjectValue) then
+    begin
+      TGocciaObjectValue(Obj).SetProperty(PropName, Value);
+      Result := Value;
+    end
+    else if (Obj is TGocciaClassValue) then
+    begin
+      TGocciaClassValue(Obj).SetProperty(PropName, Value);
+      Result := Value;
+    end
+    else if (Obj is TGocciaArrayValue) then
+    begin
+      TGocciaArrayValue(Obj).SetProperty(PropName, Value);
+      Result := Value;
+    end
+    else
+      Context.OnError('Cannot set property on non-object', Expression.Line, Expression.Column);
+  end
   else if Expression is TGocciaCompoundAssignmentExpression then
   begin
     // Variable compound assignment (e.g., count += 5)
@@ -243,6 +274,78 @@ begin
       TGocciaObjectValue(Obj).SetProperty(PropName, Result)
     else if (Obj is TGocciaClassValue) then
       TGocciaClassValue(Obj).SetProperty(PropName, Result);
+  end
+  else if Expression is TGocciaComputedPropertyCompoundAssignmentExpression then
+  begin
+    // Computed property compound assignment (e.g., obj[expr] += value)
+    Obj := EvaluateExpression(TGocciaComputedPropertyCompoundAssignmentExpression(Expression).ObjectExpr, Context);
+    PropName := EvaluateExpression(TGocciaComputedPropertyCompoundAssignmentExpression(Expression).PropertyExpression, Context).ToString;
+    Value := EvaluateExpression(TGocciaComputedPropertyCompoundAssignmentExpression(Expression).Value, Context);
+
+    // Get current property value
+    if (Obj is TGocciaInstanceValue) then
+      Result := TGocciaInstanceValue(Obj).GetProperty(PropName)
+    else if (Obj is TGocciaObjectValue) then
+      Result := TGocciaObjectValue(Obj).GetProperty(PropName)
+    else if (Obj is TGocciaClassValue) then
+      Result := TGocciaClassValue(Obj).GetProperty(PropName)
+    else if (Obj is TGocciaArrayValue) then
+      Result := TGocciaArrayValue(Obj).GetProperty(PropName)
+    else
+    begin
+      Context.OnError('Cannot access property on non-object', Expression.Line, Expression.Column);
+      Result := TGocciaUndefinedValue.Create;
+      Exit;
+    end;
+
+    // Perform compound operation
+    case TGocciaComputedPropertyCompoundAssignmentExpression(Expression).Operator of
+      gttPlusAssign:
+        begin
+          if (Result is TGocciaStringValue) or (Value is TGocciaStringValue) then
+            Result := TGocciaStringValue.Create(Result.ToString + Value.ToString)
+          else
+            Result := TGocciaNumberValue.Create(Result.ToNumber + Value.ToNumber);
+        end;
+      gttMinusAssign:
+        Result := TGocciaNumberValue.Create(Result.ToNumber - Value.ToNumber);
+      gttStarAssign:
+        Result := TGocciaNumberValue.Create(Result.ToNumber * Value.ToNumber);
+      gttSlashAssign:
+        begin
+          if Value.ToNumber = 0 then
+            Result := TGocciaNumberValue.Create(Infinity)
+          else
+            Result := TGocciaNumberValue.Create(Result.ToNumber / Value.ToNumber);
+        end;
+      gttPercentAssign:
+        Result := TGocciaNumberValue.Create(
+          Trunc(Result.ToNumber) mod Trunc(Value.ToNumber));
+      gttPowerAssign:
+        Result := TGocciaNumberValue.Create(Power(Result.ToNumber, Value.ToNumber));
+      gttBitwiseAndAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) and Trunc(Value.ToNumber));
+      gttBitwiseOrAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) or Trunc(Value.ToNumber));
+      gttBitwiseXorAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) xor Trunc(Value.ToNumber));
+      gttLeftShiftAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) shl (Trunc(Value.ToNumber) and 31));
+      gttRightShiftAssign:
+        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) shr (Trunc(Value.ToNumber) and 31));
+      gttUnsignedRightShiftAssign:
+        Result := TGocciaNumberValue.Create(Cardinal(Trunc(Result.ToNumber)) shr (Trunc(Value.ToNumber) and 31));
+    end;
+
+    // Set the new value
+    if (Obj is TGocciaInstanceValue) then
+      TGocciaInstanceValue(Obj).SetProperty(PropName, Result)
+    else if (Obj is TGocciaObjectValue) then
+      TGocciaObjectValue(Obj).SetProperty(PropName, Result)
+    else if (Obj is TGocciaClassValue) then
+      TGocciaClassValue(Obj).SetProperty(PropName, Result)
+    else if (Obj is TGocciaArrayValue) then
+      TGocciaArrayValue(Obj).SetProperty(PropName, Result);
   end
   else if Expression is TGocciaIncrementExpression then
   begin

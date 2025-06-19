@@ -653,23 +653,48 @@ begin
     end
     else if Left is TGocciaMemberExpression then
     begin
-      if Operator = gttAssign then
-        Result := TGocciaPropertyAssignmentExpression.Create(
-          TGocciaMemberExpression(Left).ObjectExpr,
-          TGocciaMemberExpression(Left).PropertyName,
-          Right,
-          Line,
-          Column
-        )
+      if TGocciaMemberExpression(Left).Computed then
+      begin
+        // Handle computed property assignment: obj[expr] = value
+        if Operator = gttAssign then
+          Result := TGocciaComputedPropertyAssignmentExpression.Create(
+            TGocciaMemberExpression(Left).ObjectExpr,
+            TGocciaMemberExpression(Left).PropertyExpression,
+            Right,
+            Line,
+            Column
+          )
+        else
+          Result := TGocciaComputedPropertyCompoundAssignmentExpression.Create(
+            TGocciaMemberExpression(Left).ObjectExpr,
+            TGocciaMemberExpression(Left).PropertyExpression,
+            Operator,
+            Right,
+            Line,
+            Column
+          );
+      end
       else
-        Result := TGocciaPropertyCompoundAssignmentExpression.Create(
-          TGocciaMemberExpression(Left).ObjectExpr,
-          TGocciaMemberExpression(Left).PropertyName,
-          Operator,
-          Right,
-          Line,
-          Column
-        );
+      begin
+        // Handle static property assignment: obj.prop = value
+        if Operator = gttAssign then
+          Result := TGocciaPropertyAssignmentExpression.Create(
+            TGocciaMemberExpression(Left).ObjectExpr,
+            TGocciaMemberExpression(Left).PropertyName,
+            Right,
+            Line,
+            Column
+          )
+        else
+          Result := TGocciaPropertyCompoundAssignmentExpression.Create(
+            TGocciaMemberExpression(Left).ObjectExpr,
+            TGocciaMemberExpression(Left).PropertyName,
+            Operator,
+            Right,
+            Line,
+            Column
+          );
+      end;
     end
     else if Left is TGocciaPrivateMemberExpression then
     begin
