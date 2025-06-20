@@ -501,6 +501,13 @@ begin
     // Return nil for holes - special case for sparse arrays
     Result := nil;
   end
+  else if Expression is TGocciaSpreadExpression then
+  begin
+    // Evaluate the spread expression - this should not be called directly
+    // Spread expressions are handled specially in array/object/call contexts
+    Context.OnError('Unexpected spread syntax', Expression.Line, Expression.Column);
+    Result := TGocciaUndefinedValue.Create;
+  end
   else
     Result := TGocciaUndefinedValue.Create;
   Logger.Debug('EvaluateExpression: Returning result type: %s .ToString: %s', [Result.ClassName, Result.ToString]);
@@ -790,6 +797,9 @@ var
   ArgumentExpr: TGocciaExpression;
   SuperClass: TGocciaClassValue;
   MemberExpr: TGocciaMemberExpression;
+  SpreadValue: TGocciaValue;
+  SpreadArray: TGocciaArrayValue;
+  I: Integer;
 begin
   Logger.Debug('EvaluateCall: Start');
   Logger.Debug('  CallExpression.Callee: %s', [CallExpression.Callee.ToString]);
@@ -856,7 +866,42 @@ begin
   Arguments := TObjectList<TGocciaValue>.Create(False);
   try
     for ArgumentExpr in CallExpression.Arguments do
-      Arguments.Add(EvaluateExpression(ArgumentExpr, Context));
+    begin
+      if ArgumentExpr is TGocciaSpreadExpression then
+      begin
+        // Spread expression: expand arguments
+        SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ArgumentExpr).Argument, Context);
+
+        if SpreadValue is TGocciaArrayValue then
+        begin
+          // Spread array elements as arguments
+          SpreadArray := TGocciaArrayValue(SpreadValue);
+          for I := 0 to SpreadArray.Elements.Count - 1 do
+          begin
+            // Convert holes (nil) to undefined when spreading
+            if SpreadArray.Elements[I] = nil then
+              Arguments.Add(TGocciaUndefinedValue.Create)
+            else
+              Arguments.Add(SpreadArray.Elements[I]);
+          end;
+        end
+        else if SpreadValue is TGocciaStringValue then
+        begin
+          // Spread string characters as arguments
+          for I := 1 to Length(SpreadValue.ToString) do
+            Arguments.Add(TGocciaStringValue.Create(SpreadValue.ToString[I]));
+        end
+        else if not ((SpreadValue is TGocciaNullValue) or (SpreadValue is TGocciaUndefinedValue)) then
+        begin
+          Context.OnError('Spread syntax requires an iterable', ArgumentExpr.Line, ArgumentExpr.Column);
+        end;
+        // null and undefined are ignored in spread context
+      end
+      else
+      begin
+        Arguments.Add(EvaluateExpression(ArgumentExpr, Context));
+      end;
+    end;
 
     if Callee is TGocciaNativeFunctionValue then
       Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, ThisValue)
@@ -1067,8 +1112,12 @@ end;
 function EvaluateArray(ArrayExpression: TGocciaArrayExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Arr: TGocciaArrayValue;
-  I: Integer;
+  I, J: Integer;
   ElementValue: TGocciaValue;
+  SpreadValue: TGocciaValue;
+  SpreadArray: TGocciaArrayValue;
+  SpreadObj: TGocciaObjectValue;
+  PropName: string;
 begin
   Arr := TGocciaArrayValue.Create;
   for I := 0 to ArrayExpression.Elements.Count - 1 do
@@ -1077,6 +1126,41 @@ begin
     begin
       // For holes, add nil to represent the hole
       Arr.Elements.Add(nil);
+    end
+    else if ArrayExpression.Elements[I] is TGocciaSpreadExpression then
+    begin
+      // Spread expression: expand the array/iterable
+      SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ArrayExpression.Elements[I]).Argument, Context);
+
+      if SpreadValue is TGocciaArrayValue then
+      begin
+        // Spread array elements
+        SpreadArray := TGocciaArrayValue(SpreadValue);
+        for J := 0 to SpreadArray.Elements.Count - 1 do
+        begin
+          // Convert holes (nil) to undefined when spreading
+          if SpreadArray.Elements[J] = nil then
+            Arr.Elements.Add(TGocciaUndefinedValue.Create)
+          else
+            Arr.Elements.Add(SpreadArray.Elements[J]);
+        end;
+      end
+      else if SpreadValue is TGocciaStringValue then
+      begin
+        // Spread string characters
+        for J := 1 to Length(SpreadValue.ToString) do
+          Arr.Elements.Add(TGocciaStringValue.Create(SpreadValue.ToString[J]));
+      end
+      else if (SpreadValue is TGocciaObjectValue) then
+      begin
+        // For objects, we would need iterator support - for now just ignore
+        // This is complex and would need proper iterator protocol implementation
+      end
+      else if not ((SpreadValue is TGocciaNullValue) or (SpreadValue is TGocciaUndefinedValue)) then
+      begin
+        Context.OnError('Spread syntax requires an iterable', ArrayExpression.Elements[I].Line, ArrayExpression.Elements[I].Column);
+      end;
+      // null and undefined are ignored in spread context
     end
     else
     begin
@@ -1093,6 +1177,11 @@ var
   Pair: TPair<string, TGocciaExpression>;
   ComputedPair: TPair<TGocciaExpression, TGocciaExpression>;
   ComputedKey: string;
+  SpreadValue: TGocciaValue;
+  SpreadObj: TGocciaObjectValue;
+  SpreadArray: TGocciaArrayValue;
+  SpreadPair: TPair<string, TGocciaValue>;
+  I: Integer;
 begin
   Obj := TGocciaObjectValue.Create;
 
@@ -1100,15 +1189,53 @@ begin
   for Pair in ObjectExpression.Properties do
     Obj.SetProperty(Pair.Key, EvaluateExpression(Pair.Value, Context));
 
-  // Handle computed properties: {[expr]: value}
+  // Handle computed properties and spread expressions: {[expr]: value, ...obj}
   if Assigned(ObjectExpression.ComputedProperties) then
   begin
     for ComputedPair in ObjectExpression.ComputedProperties do
     begin
-      // Evaluate the key expression to get the property name
-      ComputedKey := EvaluateExpression(ComputedPair.Key, Context).ToString;
-      // Set the property (computed properties can overwrite static ones)
-      Obj.SetProperty(ComputedKey, EvaluateExpression(ComputedPair.Value, Context));
+      if ComputedPair.Key is TGocciaSpreadExpression then
+      begin
+        // Spread expression: copy all enumerable properties
+        SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ComputedPair.Key).Argument, Context);
+
+        if SpreadValue is TGocciaObjectValue then
+        begin
+          // Spread object properties
+          SpreadObj := TGocciaObjectValue(SpreadValue);
+          for SpreadPair in SpreadObj.Properties do
+            Obj.SetProperty(SpreadPair.Key, SpreadPair.Value);
+        end
+        else if SpreadValue is TGocciaArrayValue then
+        begin
+          // Spread array as indexed properties
+          SpreadArray := TGocciaArrayValue(SpreadValue);
+          for I := 0 to SpreadArray.Elements.Count - 1 do
+          begin
+            if SpreadArray.Elements[I] <> nil then
+              Obj.SetProperty(IntToStr(I), SpreadArray.Elements[I]);
+          end;
+        end
+        else if SpreadValue is TGocciaStringValue then
+        begin
+          // Spread string as indexed properties
+          for I := 1 to Length(SpreadValue.ToString) do
+            Obj.SetProperty(IntToStr(I - 1), TGocciaStringValue.Create(SpreadValue.ToString[I]));
+        end
+        else if not ((SpreadValue is TGocciaNullValue) or (SpreadValue is TGocciaUndefinedValue)) then
+        begin
+          // Other primitives (numbers, booleans) don't have enumerable properties
+          // So they result in empty object spread, which is valid
+        end;
+        // null and undefined are ignored in spread context
+      end
+      else
+      begin
+        // Regular computed property: {[expr]: value}
+        ComputedKey := EvaluateExpression(ComputedPair.Key, Context).ToString;
+        // Set the property (computed properties can overwrite static ones)
+        Obj.SetProperty(ComputedKey, EvaluateExpression(ComputedPair.Value, Context));
+      end;
     end;
   end;
 

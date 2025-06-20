@@ -341,7 +341,10 @@ begin
       if not Check(gttRightParen) then
       begin
         repeat
-          Arg := Expression;
+          if Match([gttSpread]) then
+            Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
+          else
+            Arg := Expression;
           Arguments.Add(Arg);
         until not Match([gttComma]);
       end;
@@ -544,6 +547,11 @@ begin
       // This is a hole in the array
       Elements.Add(TGocciaHoleExpression.Create(Peek.Line, Peek.Column));
     end
+    else if Match([gttSpread]) then
+    begin
+      // Spread expression: ...array
+      Elements.Add(TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column));
+    end
     else
     begin
       // Regular expression
@@ -586,7 +594,21 @@ begin
   begin
     IsComputed := False;
 
-    if Match([gttLeftBracket]) then
+    // Handle spread syntax: ...obj
+    if Match([gttSpread]) then
+    begin
+      // Create a spread expression
+      Line := Previous.Line;
+      Column := Previous.Column;
+      KeyExpression := TGocciaSpreadExpression.Create(Expression, Line, Column);
+      ComputedProperties.Add(KeyExpression, nil); // nil value for spread
+
+      // For spread expressions, no further processing is needed
+      if not Match([gttComma]) then
+        Break;
+      Continue;
+    end
+    else if Match([gttLeftBracket]) then
     begin
       // Computed property name: [expr]: value
       IsComputed := True;

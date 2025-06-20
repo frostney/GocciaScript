@@ -251,6 +251,14 @@ type
     constructor Create(ALine, AColumn: Integer);
   end;
 
+  TGocciaSpreadExpression = class(TGocciaExpression)
+  private
+    FArgument: TGocciaExpression;
+  public
+    constructor Create(AArgument: TGocciaExpression; ALine, AColumn: Integer);
+    property Argument: TGocciaExpression read FArgument;
+  end;
+
   TGocciaPrivateMemberExpression = class(TGocciaExpression)
   private
     FObject: TGocciaExpression;
@@ -543,6 +551,14 @@ end;
 constructor TGocciaHoleExpression.Create(ALine, AColumn: Integer);
 begin
   inherited Create(ALine, AColumn);
+end;
+
+{ TGocciaSpreadExpression }
+
+constructor TGocciaSpreadExpression.Create(AArgument: TGocciaExpression; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FArgument := AArgument;
 end;
 
 end.
