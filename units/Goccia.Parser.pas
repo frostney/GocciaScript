@@ -1256,6 +1256,7 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
+  Consume(gttLeftBrace, 'Expected "{" after "try"');
   Block := BlockStatement;
   CatchParam := '';
   CatchBlock := nil;
@@ -1263,14 +1264,28 @@ begin
 
   if Match([gttCatch]) then
   begin
-    Consume(gttLeftParen, 'Expected "(" after "catch"');
-    CatchParam := Consume(gttIdentifier, 'Expected catch parameter').Lexeme;
-    Consume(gttRightParen, 'Expected ")" after catch parameter');
+    // Check if catch has a parameter: catch (e) vs catch
+    if Check(gttLeftParen) then
+    begin
+      Consume(gttLeftParen, 'Expected "(" after "catch"');
+      CatchParam := Consume(gttIdentifier, 'Expected catch parameter').Lexeme;
+      Consume(gttRightParen, 'Expected ")" after catch parameter');
+    end
+    else
+    begin
+      // No parameter - empty catch parameter
+      CatchParam := '';
+    end;
+
+    Consume(gttLeftBrace, 'Expected "{" after catch clause');
     CatchBlock := BlockStatement;
   end;
 
   if Match([gttFinally]) then
+  begin
+    Consume(gttLeftBrace, 'Expected "{" after "finally"');
     FinallyBlock := BlockStatement;
+  end;
 
   if (CatchBlock = nil) and (FinallyBlock = nil) then
     raise TGocciaSyntaxError.Create('Missing catch or finally after try',

@@ -168,6 +168,11 @@ begin
           begin
             raise;
           end;
+          on E: TGocciaThrowValue do
+          begin
+            // Let thrown values bubble up for try-catch handling
+            raise;
+          end;
           on E: Exception do
           begin
             raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
