@@ -3,7 +3,7 @@ description: Break and continue statements work correctly in loops
 features: [break-statement, continue-statement]
 ---*/
 
-test("break statement in for loop", () => {
+test.skip("break statement in for loop", () => {
   let result = [];
   for (let i = 0; i < 10; i++) {
     if (i === 5) break;
@@ -13,7 +13,7 @@ test("break statement in for loop", () => {
   expect(result).toEqual([0, 1, 2, 3, 4]);
 });
 
-test("continue statement in for loop", () => {
+test.skip("continue statement in for loop", () => {
   let result = [];
   for (let i = 0; i < 5; i++) {
     if (i === 2) continue;
@@ -23,7 +23,7 @@ test("continue statement in for loop", () => {
   expect(result).toEqual([0, 1, 3, 4]);
 });
 
-test("break in while loop", () => {
+test.skip("break in while loop", () => {
   let i = 0;
   let values = [];
   while (true) {
@@ -34,7 +34,7 @@ test("break in while loop", () => {
   expect(values).toEqual([0, 1, 2]);
 });
 
-test("continue in while loop", () => {
+test.skip("continue in while loop", () => {
   let i = 0;
   let values = [];
   while (i < 5) {

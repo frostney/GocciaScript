@@ -118,6 +118,8 @@ type
     FName: string;
     FSuperClass: string;
     FMethods: TDictionary<string, TGocciaClassMethod>;
+    FGetters: TDictionary<string, TGocciaGetterExpression>;
+    FSetters: TDictionary<string, TGocciaSetterExpression>;
     FStaticProperties: TDictionary<string, TGocciaExpression>;
     FInstanceProperties: TDictionary<string, TGocciaExpression>;
     FPrivateInstanceProperties: TDictionary<string, TGocciaExpression>;
@@ -126,6 +128,8 @@ type
 
     constructor Create(const AName, ASuperClass: string;
       AMethods: TDictionary<string, TGocciaClassMethod>;
+      AGetters: TDictionary<string, TGocciaGetterExpression>;
+      ASetters: TDictionary<string, TGocciaSetterExpression>;
       AStaticProperties: TDictionary<string, TGocciaExpression>;
       AInstanceProperties: TDictionary<string, TGocciaExpression>;
       APrivateInstanceProperties: TDictionary<string, TGocciaExpression> = nil;
@@ -135,6 +139,8 @@ type
     property Name: string read FName;
     property SuperClass: string read FSuperClass;
     property Methods: TDictionary<string, TGocciaClassMethod> read FMethods;
+    property Getters: TDictionary<string, TGocciaGetterExpression> read FGetters;
+    property Setters: TDictionary<string, TGocciaSetterExpression> read FSetters;
     property StaticProperties: TDictionary<string, TGocciaExpression> read FStaticProperties;
     property InstanceProperties: TDictionary<string, TGocciaExpression> read FInstanceProperties;
     property PrivateInstanceProperties: TDictionary<string, TGocciaExpression> read FPrivateInstanceProperties;
@@ -225,6 +231,8 @@ implementation
 
   constructor TGocciaClassDefinition.Create(const AName, ASuperClass: string;
     AMethods: TDictionary<string, TGocciaClassMethod>;
+    AGetters: TDictionary<string, TGocciaGetterExpression>;
+    ASetters: TDictionary<string, TGocciaSetterExpression>;
     AStaticProperties: TDictionary<string, TGocciaExpression>;
     AInstanceProperties: TDictionary<string, TGocciaExpression>;
     APrivateInstanceProperties: TDictionary<string, TGocciaExpression> = nil;
@@ -234,6 +242,8 @@ implementation
     FName := AName;
     FSuperClass := ASuperClass;
     FMethods := AMethods;
+    FGetters := AGetters;
+    FSetters := ASetters;
     FStaticProperties := AStaticProperties;
     FInstanceProperties := AInstanceProperties;
 
@@ -256,6 +266,8 @@ implementation
   destructor TGocciaClassDefinition.Destroy;
   begin
     FMethods.Free;
+    FGetters.Free;
+    FSetters.Free;
     FStaticProperties.Free;
     FInstanceProperties.Free;
     if Assigned(FPrivateInstanceProperties) then

@@ -24,6 +24,8 @@ function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGoc
 function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext; out ObjectValue: TGocciaValue): TGocciaValue; overload;
 function EvaluateArray(ArrayExpression: TGocciaArrayExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateObject(ObjectExpression: TGocciaObjectExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateGetter(GetterExpression: TGocciaGetterExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateSetter(SetterExpression: TGocciaSetterExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateArrowFunction(ArrowFunctionExpression: TGocciaArrowFunctionExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateBlock(BlockStatement: TGocciaBlockStatement; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateIf(IfStatement: TGocciaIfStatement; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -1038,7 +1040,7 @@ var
   PropertyValue: TGocciaValue;
   SuperClass: TGocciaClassValue;
 begin
-  Logger.Debug('EvaluateMember: Start (with ObjectValue output)');
+  Logger.Debug('EvaluateMember: Start (dual overload)');
   Logger.Debug('  MemberExpression.ObjectExpr: %s', [MemberExpression.ObjectExpr.ToString]);
 
   // Handle super.method() specially
@@ -1111,6 +1113,12 @@ begin
   begin
     Logger.Debug('EvaluateMember: Obj is TGocciaClassValue');
     Result := TGocciaClassValue(ObjectValue).GetProperty(PropertyName);
+    Logger.Debug('EvaluateMember: Result: %s', [Result.ToString]);
+  end
+  else if ObjectValue is TGocciaInstanceValue then
+  begin
+    Logger.Debug('EvaluateMember: Obj is TGocciaInstanceValue');
+    Result := TGocciaInstanceValue(ObjectValue).GetProperty(PropertyName);
     Logger.Debug('EvaluateMember: Result: %s', [Result.ToString]);
   end
   else if ObjectValue is TGocciaObjectValue then
@@ -1201,12 +1209,36 @@ var
   SpreadArray: TGocciaArrayValue;
   SpreadPair: TPair<string, TGocciaValue>;
   I: Integer;
+  GetterPair: TPair<string, TGocciaGetterExpression>;
+  SetterPair: TPair<string, TGocciaSetterExpression>;
+  GetterFunction: TGocciaValue;
+  SetterFunction: TGocciaValue;
 begin
   Obj := TGocciaObjectValue.Create;
 
   // Handle static properties: {key: value, "key2": value2}
   for Pair in ObjectExpression.Properties do
     Obj.SetProperty(Pair.Key, EvaluateExpression(Pair.Value, Context));
+
+  // Handle getters: {get propertyName() { ... }}
+  if Assigned(ObjectExpression.Getters) then
+  begin
+    for GetterPair in ObjectExpression.Getters do
+    begin
+      GetterFunction := EvaluateGetter(GetterPair.Value, Context);
+      Obj.SetGetter(GetterPair.Key, GetterFunction);
+    end;
+  end;
+
+  // Handle setters: {set propertyName(value) { ... }}
+  if Assigned(ObjectExpression.Setters) then
+  begin
+    for SetterPair in ObjectExpression.Setters do
+    begin
+      SetterFunction := EvaluateSetter(SetterPair.Value, Context);
+      Obj.SetSetter(SetterPair.Key, SetterFunction);
+    end;
+  end;
 
   // Handle computed properties and spread expressions: {[expr]: value, ...obj}
   if Assigned(ObjectExpression.ComputedProperties) then
@@ -1259,6 +1291,48 @@ begin
   end;
 
   Result := Obj;
+end;
+
+function EvaluateGetter(GetterExpression: TGocciaGetterExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  Statements: TObjectList<TGocciaASTNode>;
+  I: Integer;
+  OriginalNodes: TObjectList<TGocciaASTNode>;
+  EmptyParameters: TGocciaParameterArray;
+begin
+  // Getter has no parameters
+  SetLength(EmptyParameters, 0);
+
+  // Create a copy of the statements to avoid ownership issues
+  OriginalNodes := TGocciaBlockStatement(GetterExpression.Body).Nodes;
+  Statements := TObjectList<TGocciaASTNode>.Create(False); // Don't own the objects
+  for I := 0 to OriginalNodes.Count - 1 do
+    Statements.Add(OriginalNodes[I]);
+
+  // Create function with closure scope
+  Result := TGocciaFunctionValue.Create(EmptyParameters, Statements, Context.Scope.CreateChild);
+end;
+
+function EvaluateSetter(SetterExpression: TGocciaSetterExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  Statements: TObjectList<TGocciaASTNode>;
+  I: Integer;
+  OriginalNodes: TObjectList<TGocciaASTNode>;
+  Parameters: TGocciaParameterArray;
+begin
+  // Setter has one parameter
+  SetLength(Parameters, 1);
+  Parameters[0].Name := SetterExpression.Parameter;
+  Parameters[0].DefaultValue := nil; // No default value for setter parameter
+
+  // Create a copy of the statements to avoid ownership issues
+  OriginalNodes := TGocciaBlockStatement(SetterExpression.Body).Nodes;
+  Statements := TObjectList<TGocciaASTNode>.Create(False); // Don't own the objects
+  for I := 0 to OriginalNodes.Count - 1 do
+    Statements.Add(OriginalNodes[I]);
+
+  // Create function with closure scope
+  Result := TGocciaFunctionValue.Create(Parameters, Statements, Context.Scope.CreateChild);
 end;
 
 function EvaluateArrowFunction(ArrowFunctionExpression: TGocciaArrowFunctionExpression; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -1443,8 +1517,11 @@ var
   ClassValue: TGocciaClassValue;
   MethodPair: TPair<string, TGocciaClassMethod>;
   PropertyPair: TPair<string, TGocciaExpression>;
+  GetterPair: TPair<string, TGocciaGetterExpression>;
+  SetterPair: TPair<string, TGocciaSetterExpression>;
   Method: TGocciaMethodValue;
   PropertyValue: TGocciaValue;
+  GetterFunction, SetterFunction: TGocciaFunctionValue;
   ClassName: string;
 begin
   SuperClass := nil;
@@ -1514,6 +1591,20 @@ begin
   begin
     Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, Context, SuperClass));
     ClassValue.AddPrivateMethod(MethodPair.Key, Method);
+  end;
+
+  // Handle getters and setters
+
+  for GetterPair in ClassDef.Getters do
+  begin
+    GetterFunction := TGocciaFunctionValue(EvaluateGetter(GetterPair.Value, Context));
+    ClassValue.AddGetter(GetterPair.Key, GetterFunction);
+  end;
+
+  for SetterPair in ClassDef.Setters do
+  begin
+    SetterFunction := TGocciaFunctionValue(EvaluateSetter(SetterPair.Value, Context));
+    ClassValue.AddSetter(SetterPair.Key, SetterFunction);
   end;
 
   // For class expressions, don't automatically bind to scope - just return the class value

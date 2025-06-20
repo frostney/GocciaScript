@@ -193,18 +193,31 @@ type
     property Elements: TObjectList<TGocciaExpression> read FElements;
   end;
 
+  // Forward declarations for getter/setter expressions
+  TGocciaGetterExpression = class;
+  TGocciaSetterExpression = class;
+
   TGocciaObjectExpression = class(TGocciaExpression)
   private
     FProperties: TDictionary<string, TGocciaExpression>;
     FComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
+    FGetters: TDictionary<string, TGocciaGetterExpression>;
+    FSetters: TDictionary<string, TGocciaSetterExpression>;
   public
     constructor Create(AProperties: TDictionary<string, TGocciaExpression>;
       ALine, AColumn: Integer); overload;
     constructor Create(AProperties: TDictionary<string, TGocciaExpression>;
       AComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
       ALine, AColumn: Integer); overload;
+    constructor Create(AProperties: TDictionary<string, TGocciaExpression>;
+      AComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
+      AGetters: TDictionary<string, TGocciaGetterExpression>;
+      ASetters: TDictionary<string, TGocciaSetterExpression>;
+      ALine, AColumn: Integer); overload;
     property Properties: TDictionary<string, TGocciaExpression> read FProperties;
     property ComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression> read FComputedProperties;
+    property Getters: TDictionary<string, TGocciaGetterExpression> read FGetters;
+    property Setters: TDictionary<string, TGocciaSetterExpression> read FSetters;
   end;
 
   TGocciaArrowFunctionExpression = class(TGocciaExpression)
@@ -257,6 +270,26 @@ type
   public
     constructor Create(AArgument: TGocciaExpression; ALine, AColumn: Integer);
     property Argument: TGocciaExpression read FArgument;
+  end;
+
+  // Getter method: get propertyName() { ... }
+  TGocciaGetterExpression = class(TGocciaExpression)
+  private
+    FBody: TGocciaASTNode;
+  public
+    constructor Create(ABody: TGocciaASTNode; ALine, AColumn: Integer);
+    property Body: TGocciaASTNode read FBody;
+  end;
+
+  // Setter method: set propertyName(value) { ... }
+  TGocciaSetterExpression = class(TGocciaExpression)
+  private
+    FParameter: string;
+    FBody: TGocciaASTNode;
+  public
+    constructor Create(const AParameter: string; ABody: TGocciaASTNode; ALine, AColumn: Integer);
+    property Parameter: string read FParameter;
+    property Body: TGocciaASTNode read FBody;
   end;
 
   // Destructuring pattern base class
@@ -551,6 +584,8 @@ begin
   inherited Create(ALine, AColumn);
   FProperties := AProperties;
   FComputedProperties := nil; // No computed properties in this constructor
+  FGetters := nil; // No getters in this constructor
+  FSetters := nil; // No setters in this constructor
 end;
 
 constructor TGocciaObjectExpression.Create(AProperties: TDictionary<string, TGocciaExpression>;
@@ -560,6 +595,21 @@ begin
   inherited Create(ALine, AColumn);
   FProperties := AProperties;
   FComputedProperties := AComputedProperties;
+  FGetters := nil; // No getters in this constructor
+  FSetters := nil; // No setters in this constructor
+end;
+
+constructor TGocciaObjectExpression.Create(AProperties: TDictionary<string, TGocciaExpression>;
+  AComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
+  AGetters: TDictionary<string, TGocciaGetterExpression>;
+  ASetters: TDictionary<string, TGocciaSetterExpression>;
+  ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FProperties := AProperties;
+  FComputedProperties := AComputedProperties;
+  FGetters := AGetters;
+  FSetters := ASetters;
 end;
 
 { TGocciaArrowFunctionExpression }
@@ -636,6 +686,23 @@ constructor TGocciaSpreadExpression.Create(AArgument: TGocciaExpression; ALine, 
 begin
   inherited Create(ALine, AColumn);
   FArgument := AArgument;
+end;
+
+{ TGocciaGetterExpression }
+
+constructor TGocciaGetterExpression.Create(ABody: TGocciaASTNode; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FBody := ABody;
+end;
+
+{ TGocciaSetterExpression }
+
+constructor TGocciaSetterExpression.Create(const AParameter: string; ABody: TGocciaASTNode; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FParameter := AParameter;
+  FBody := ABody;
 end;
 
 { TGocciaDestructuringProperty }

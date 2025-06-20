@@ -18,6 +18,8 @@ type
     FName: string;
     FSuperClass: TGocciaClassValue;
     FMethods: TDictionary<string, TGocciaMethodValue>;
+    FGetters: TDictionary<string, TGocciaFunctionValue>;
+    FSetters: TDictionary<string, TGocciaFunctionValue>;
     FPrototype: TGocciaObjectValue;
     FConstructorMethod: TGocciaMethodValue;
     FStaticMethods: TDictionary<string, TGocciaValue>; // For static methods like Array.isArray
@@ -34,6 +36,8 @@ type
     function TypeName: string; override;
     procedure AddMethod(const AName: string; AMethod: TGocciaMethodValue);
     function GetMethod(const AName: string): TGocciaMethodValue;
+    procedure AddGetter(const AName: string; AGetter: TGocciaFunctionValue);
+    procedure AddSetter(const AName: string; ASetter: TGocciaFunctionValue);
     procedure AddInstanceProperty(const AName: string; AExpression: TGocciaExpression);
     procedure AddPrivateInstanceProperty(const AName: string; AExpression: TGocciaExpression);
     procedure AddPrivateStaticProperty(const AName: string; AValue: TGocciaValue);
@@ -81,6 +85,8 @@ begin
   FName := AName;
   FSuperClass := ASuperClass;
   FMethods := TDictionary<string, TGocciaMethodValue>.Create;
+  FGetters := TDictionary<string, TGocciaFunctionValue>.Create;
+  FSetters := TDictionary<string, TGocciaFunctionValue>.Create;
   FStaticMethods := TDictionary<string, TGocciaValue>.Create;
   FInstancePropertyDefs := TDictionary<string, TGocciaExpression>.Create;
   FPrivateInstancePropertyDefs := TDictionary<string, TGocciaExpression>.Create;
@@ -95,6 +101,8 @@ end;
 destructor TGocciaClassValue.Destroy;
 begin
   FMethods.Free;
+  FGetters.Free;
+  FSetters.Free;
   FStaticMethods.Free;
   FInstancePropertyDefs.Free;
   FPrivateInstancePropertyDefs.Free;
@@ -150,6 +158,20 @@ begin
     else
       Result := nil;
   end;
+end;
+
+procedure TGocciaClassValue.AddGetter(const AName: string; AGetter: TGocciaFunctionValue);
+begin
+  FGetters.AddOrSetValue(AName, AGetter);
+  // Also add to prototype with property descriptor
+  FPrototype.SetGetter(AName, AGetter);
+end;
+
+procedure TGocciaClassValue.AddSetter(const AName: string; ASetter: TGocciaFunctionValue);
+begin
+  FSetters.AddOrSetValue(AName, ASetter);
+  // Also add to prototype with property descriptor
+  FPrototype.SetSetter(AName, ASetter);
 end;
 
 procedure TGocciaClassValue.AddInstanceProperty(const AName: string; AExpression: TGocciaExpression);
@@ -253,18 +275,40 @@ end;
 function TGocciaInstanceValue.GetProperty(const AName: string): TGocciaValue;
 var
   Method: TGocciaFunctionValue;
+  Descriptor: TGocciaPropertyDescriptor;
+  GetterFunction: TGocciaFunctionValue;
+  Args: TObjectList<TGocciaValue>;
 begin
-  // First check if the property exists in the instance
-  Result := inherited GetProperty(AName);
+  Logger.Debug('TGocciaInstanceValue.GetProperty called for: %s', [AName]);
 
-  // If not found in instance (inherited GetProperty returns TGocciaUndefinedValue), check class methods
-  if Result is TGocciaUndefinedValue then
+  // First check instance properties directly
+  if FProperties.ContainsKey(AName) then
   begin
-    // Check if it's a method from the class
-    Method := FClass.GetMethod(AName);
-    if Assigned(Method) then
-      Result := Method;
+    Logger.Debug('TGocciaInstanceValue.GetProperty: Found in instance properties');
+    Result := FProperties[AName];
+    Exit;
   end;
+
+  // Check for getters/setters on the prototype with this instance as context
+  if Assigned(FPrototype) then
+  begin
+    Logger.Debug('TGocciaInstanceValue.GetProperty: Checking prototype for property: %s', [AName]);
+    Logger.Debug('TGocciaInstanceValue.GetProperty: Instance type: %s', [Self.TypeName]);
+    Result := FPrototype.GetPropertyWithContext(AName, Self);
+    Logger.Debug('TGocciaInstanceValue.GetProperty: GetPropertyWithContext returned: %s', [Result.ToString]);
+    if not (Result is TGocciaUndefinedValue) then
+      Exit;
+  end;
+
+  // Check for class methods
+  Method := FClass.GetMethod(AName);
+  if Assigned(Method) then
+  begin
+    Result := Method;
+    Exit;
+  end;
+
+  Result := TGocciaUndefinedValue.Create;
 end;
 
 procedure TGocciaInstanceValue.SetProperty(const AName: string; AValue: TGocciaValue);

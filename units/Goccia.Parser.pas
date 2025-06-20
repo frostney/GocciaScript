@@ -23,6 +23,7 @@ type
     function Previous: TGocciaToken; inline;
     function Advance: TGocciaToken;
     function Check(TokenType: TGocciaTokenType): Boolean; inline;
+    function CheckNext(TokenType: TGocciaTokenType): Boolean; inline;
     function Match(TokenTypes: array of TGocciaTokenType): Boolean;
     function Consume(TokenType: TGocciaTokenType; const Message: string): TGocciaToken;
     function IsArrowFunction: Boolean;
@@ -118,6 +119,13 @@ begin
   if IsAtEnd then
     Exit(False);
   Result := Peek.TokenType = TokenType;
+end;
+
+function TGocciaParser.CheckNext(TokenType: TGocciaTokenType): Boolean;
+begin
+  if FCurrent + 1 >= FTokens.Count then
+    Exit(False);
+  Result := FTokens[FCurrent + 1].TokenType = TokenType;
 end;
 
 function TGocciaParser.Match(TokenTypes: array of TGocciaTokenType): Boolean;
@@ -577,12 +585,15 @@ function TGocciaParser.ObjectLiteral: TGocciaExpression;
 var
   Properties: TDictionary<string, TGocciaExpression>;
   ComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
+  Getters: TDictionary<string, TGocciaGetterExpression>;
+  Setters: TDictionary<string, TGocciaSetterExpression>;
   Key: string;
   KeyExpression: TGocciaExpression;
   Value: TGocciaExpression;
   Line, Column: Integer;
   NumericValue: Double;
   IsComputed: Boolean;
+  IsGetter, IsSetter: Boolean;
   // Method shorthand variables
   Parameters: TGocciaParameterArray;
   ParamCount: Integer;
@@ -596,13 +607,30 @@ begin
   Column := Previous.Column;
   Properties := TDictionary<string, TGocciaExpression>.Create;
   ComputedProperties := TDictionary<TGocciaExpression, TGocciaExpression>.Create;
+  Getters := TDictionary<string, TGocciaGetterExpression>.Create;
+  Setters := TDictionary<string, TGocciaSetterExpression>.Create;
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
     IsComputed := False;
+    IsGetter := False;
+    IsSetter := False;
+
+    // Check for getter/setter syntax (contextual keywords)
+    // Only treat as getter/setter if followed by identifier (not colon, parenthesis, comma, or right brace)
+    if Check(gttIdentifier) and (Peek.Lexeme = 'get') and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
+    begin
+      Advance; // consume 'get'
+      IsGetter := True;
+    end
+    else if Check(gttIdentifier) and (Peek.Lexeme = 'set') and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
+    begin
+      Advance; // consume 'set'
+      IsSetter := True;
+    end;
 
     // Handle spread syntax: ...obj
-    if Match([gttSpread]) then
+    if not IsGetter and not IsSetter and Match([gttSpread]) then
     begin
       // Create a spread expression
       Line := Previous.Line;
@@ -639,8 +667,60 @@ begin
     else
       raise TGocciaSyntaxError.Create('Expected property name', Peek.Line, Peek.Column, FFileName, FSourceLines);
 
+    // Handle getter/setter syntax
+    if IsGetter then
+    begin
+      // Getter: get propertyName() { ... }
+      Consume(gttLeftParen, 'Expected "(" after getter name');
+      Consume(gttRightParen, 'Getters cannot have parameters');
+
+      // Parse getter body
+      Consume(gttLeftBrace, 'Expected "{" before getter body');
+      Statements := TObjectList<TGocciaStatement>.Create(True);
+      try
+        while not Check(gttRightBrace) and not IsAtEnd do
+        begin
+          Stmt := Statement;
+          Statements.Add(Stmt);
+        end;
+        Consume(gttRightBrace, 'Expected "}" after getter body');
+        Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
+
+        // Add getter to dictionary
+        Getters.Add(Key, TGocciaGetterExpression.Create(Body, Line, Column));
+      except
+        Statements.Free;
+        raise;
+      end;
+    end
+    else if IsSetter then
+    begin
+      // Setter: set propertyName(value) { ... }
+      Consume(gttLeftParen, 'Expected "(" after setter name');
+      ParamName := Consume(gttIdentifier, 'Expected parameter name in setter').Lexeme;
+      Consume(gttRightParen, 'Expected ")" after setter parameter');
+
+      // Parse setter body
+      Consume(gttLeftBrace, 'Expected "{" before setter body');
+      Statements := TObjectList<TGocciaStatement>.Create(True);
+      try
+        while not Check(gttRightBrace) and not IsAtEnd do
+        begin
+          Stmt := Statement;
+          Statements.Add(Stmt);
+        end;
+        Consume(gttRightBrace, 'Expected "}" after setter body');
+        Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
+
+        // Add setter to dictionary
+        Setters.Add(Key, TGocciaSetterExpression.Create(ParamName, Body, Line, Column));
+      except
+        Statements.Free;
+        raise;
+      end;
+    end
     // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
-    if Check(gttLeftParen) then
+    else if Check(gttLeftParen) then
     begin
       // Method shorthand syntax (works for both computed and non-computed)
       Line := Peek.Line;
@@ -721,18 +801,21 @@ begin
       end;
     end;
 
-    if IsComputed then
+    if not IsGetter and not IsSetter then
     begin
-      // Store computed properties separately - they'll be evaluated at runtime
-      ComputedProperties.Add(KeyExpression, Value);
-    end
-    else
-    begin
-      // JavaScript allows duplicate keys - last one wins
-      if Properties.ContainsKey(Key) then
-        Properties[Key] := Value
+      if IsComputed then
+      begin
+        // Store computed properties separately - they'll be evaluated at runtime
+        ComputedProperties.Add(KeyExpression, Value);
+      end
       else
-        Properties.Add(Key, Value);
+      begin
+        // JavaScript allows duplicate keys - last one wins
+        if Properties.ContainsKey(Key) then
+          Properties[Key] := Value
+        else
+          Properties.Add(Key, Value);
+      end;
     end;
 
     if not Match([gttComma]) then
@@ -740,7 +823,7 @@ begin
   end;
 
   Consume(gttRightBrace, 'Expected "}" after object properties');
-  Result := TGocciaObjectExpression.Create(Properties, ComputedProperties, Line, Column);
+  Result := TGocciaObjectExpression.Create(Properties, ComputedProperties, Getters, Setters, Line, Column);
 end;
 
 function TGocciaParser.ArrowFunction: TGocciaExpression;
@@ -1273,6 +1356,8 @@ function TGocciaParser.ParseClassBody(const ClassName: string): TGocciaClassDefi
 var
   SuperClass: string;
   Methods: TDictionary<string, TGocciaClassMethod>;
+  Getters: TDictionary<string, TGocciaGetterExpression>;
+  Setters: TDictionary<string, TGocciaSetterExpression>;
   StaticProperties: TDictionary<string, TGocciaExpression>;
   InstanceProperties: TDictionary<string, TGocciaExpression>;
   PrivateInstanceProperties: TDictionary<string, TGocciaExpression>;
@@ -1280,9 +1365,14 @@ var
   PrivateMethods: TDictionary<string, TGocciaClassMethod>;
   MemberName: string;
   Method: TGocciaClassMethod;
+  Getter: TGocciaGetterExpression;
+  Setter: TGocciaSetterExpression;
   PropertyValue: TGocciaExpression;
+  ParamName: string;
   IsStatic: Boolean;
   IsPrivate: Boolean;
+  IsGetter: Boolean;
+  IsSetter: Boolean;
 begin
   if Match([gttExtends]) then
     SuperClass := Consume(gttIdentifier, 'Expected superclass name').Lexeme
@@ -1292,6 +1382,8 @@ begin
   Consume(gttLeftBrace, 'Expected "{" before class body');
 
   Methods := TDictionary<string, TGocciaClassMethod>.Create;
+  Getters := TDictionary<string, TGocciaGetterExpression>.Create;
+  Setters := TDictionary<string, TGocciaSetterExpression>.Create;
   StaticProperties := TDictionary<string, TGocciaExpression>.Create;
   InstanceProperties := TDictionary<string, TGocciaExpression>.Create;
   PrivateInstanceProperties := TDictionary<string, TGocciaExpression>.Create;
@@ -1302,8 +1394,48 @@ begin
   begin
     IsStatic := Match([gttStatic]);
     IsPrivate := Match([gttHash]);
+    IsGetter := False;
+    IsSetter := False;
 
-    MemberName := Consume(gttIdentifier, 'Expected method or property name').Lexeme;
+    // Check for getter/setter syntax (contextual keywords)
+    if Check(gttIdentifier) and (Peek.Lexeme = 'get') and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
+    begin
+      Advance; // consume 'get'
+      IsGetter := True;
+
+      // Handle private property names: get #propName() or get propName()
+      if Check(gttHash) then
+      begin
+        Advance; // consume '#'
+        IsPrivate := True; // Mark as private
+        MemberName := Consume(gttIdentifier, 'Expected property name after "#"').Lexeme;
+      end
+      else
+      begin
+        MemberName := Consume(gttIdentifier, 'Expected property name after "get"').Lexeme;
+      end;
+    end
+    else if Check(gttIdentifier) and (Peek.Lexeme = 'set') and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
+    begin
+      Advance; // consume 'set'
+      IsSetter := True;
+
+      // Handle private property names: set #propName(value) or set propName(value)
+      if Check(gttHash) then
+      begin
+        Advance; // consume '#'
+        IsPrivate := True; // Mark as private
+        MemberName := Consume(gttIdentifier, 'Expected property name after "#"').Lexeme;
+      end
+      else
+      begin
+        MemberName := Consume(gttIdentifier, 'Expected property name after "set"').Lexeme;
+      end;
+    end
+    else
+    begin
+      MemberName := Consume(gttIdentifier, 'Expected method or property name').Lexeme;
+    end;
 
     if Check(gttAssign) then
     begin
@@ -1336,6 +1468,36 @@ begin
       else
         InstanceProperties.Add(MemberName, PropertyValue);
     end
+    else if IsGetter then
+    begin
+      // Getter: [static] get name() { ... } or get #name() { ... }
+      if IsStatic then
+        raise TGocciaSyntaxError.Create('Static getters not supported yet', Peek.Line, Peek.Column, FFileName, FSourceLines);
+
+            Consume(gttLeftParen, 'Expected "(" after getter name');
+      Consume(gttRightParen, 'Expected ")" after getter parameters - getters cannot have parameters');
+
+      Consume(gttLeftBrace, 'Expected "{" before getter body');
+      Getter := TGocciaGetterExpression.Create(BlockStatement, Previous.Line, Previous.Column);
+      Getters.Add(MemberName, Getter);
+    end
+    else if IsSetter then
+    begin
+      // Setter: [static] set name(value) { ... } or set #name(value) { ... }
+      if IsStatic then
+        raise TGocciaSyntaxError.Create('Static setters not supported yet', Peek.Line, Peek.Column, FFileName, FSourceLines);
+
+            Consume(gttLeftParen, 'Expected "(" after setter name');
+      if Check(gttRightParen) then
+        raise TGocciaSyntaxError.Create('Setter must have exactly one parameter', Peek.Line, Peek.Column, FFileName, FSourceLines);
+
+            ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
+      Consume(gttRightParen, 'Expected ")" after setter parameter');
+      Consume(gttLeftBrace, 'Expected "{" before setter body');
+
+      Setter := TGocciaSetterExpression.Create(ParamName, BlockStatement, Previous.Line, Previous.Column);
+      Setters.Add(MemberName, Setter);
+    end
     else if Check(gttLeftParen) then
     begin
       // Method: [static] [#]name() { ... }
@@ -1353,7 +1515,7 @@ begin
   end;
 
   Consume(gttRightBrace, 'Expected "}" after class body');
-  Result := TGocciaClassDefinition.Create(ClassName, SuperClass, Methods, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
+  Result := TGocciaClassDefinition.Create(ClassName, SuperClass, Methods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
 end;
 
 function TGocciaParser.Parse: TGocciaProgram;
