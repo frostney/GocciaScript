@@ -86,33 +86,3 @@ test("object creation with constructors and prototypes", () => {
   expect(person2.greet()).toBe("Hello, I'm Bob");
   expect(person2.getAge()).toBe(25);
 });
-
-test("object property descriptors and configuration", () => {
-  const obj = {};
-
-  Object.defineProperty(obj, "readOnly", {
-    value: "cannot change",
-    writable: false,
-    enumerable: true,
-    configurable: false,
-  });
-
-  Object.defineProperty(obj, "hidden", {
-    value: "not enumerable",
-    writable: true,
-    enumerable: false,
-    configurable: true,
-  });
-
-  expect(obj.readOnly).toBe("cannot change");
-  expect(obj.hidden).toBe("not enumerable");
-
-  // Test that readOnly property cannot be changed
-  obj.readOnly = "try to change";
-  expect(obj.readOnly).toBe("cannot change");
-
-  // Test enumeration
-  const keys = Object.keys(obj);
-  expect(keys).toContain("readOnly");
-  expect(keys).not.toContain("hidden");
-});

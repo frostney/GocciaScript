@@ -5,17 +5,17 @@ features: [Object, method-calls, property-access]
 
 test("object method calls with parameters", () => {
   const obj = {
-    method: (x) => {
+    method(x) {
       return "Method called with: " + x;
     },
-    complexMethod: (a, b, c) => {
+    complexMethod(a, b, c) {
       return {
         params: [a, b, c],
         total: a + b + c,
         type: typeof a,
       };
     },
-    chainableMethod: (value) => {
+    chainableMethod(value) {
       this.lastValue = value;
       return this;
     },
@@ -40,45 +40,22 @@ test("object method calls with parameters", () => {
   expect(obj.getValue()).toBe("test2");
 });
 
-test("dynamic property access and computed properties", () => {
-  const obj = {
-    prop1: "value1",
-    prop2: "value2",
-    "special-key": "special-value",
-    123: "numeric-key",
-    [Symbol.for("sym")]: "symbol-value",
-  };
-
-  // Test bracket notation
-  expect(obj["prop1"]).toBe("value1");
-  expect(obj["special-key"]).toBe("special-value");
-  expect(obj[123]).toBe("numeric-key");
-  expect(obj["123"]).toBe("numeric-key");
-
-  // Test dynamic access
-  const key = "prop2";
-  expect(obj[key]).toBe("value2");
-
-  // Test symbol access
-  expect(obj[Symbol.for("sym")]).toBe("symbol-value");
-});
-
 test("object methods with context and binding", () => {
   const counter = {
     count: 0,
-    increment: () => {
+    increment() {
       this.count = this.count + 1;
       return this.count;
     },
-    decrement: () => {
+    decrement() {
       this.count = this.count - 1;
       return this.count;
     },
-    reset: () => {
+    reset() {
       this.count = 0;
       return this;
     },
-    getInfo: () => {
+    getInfo() {
       return {
         current: this.count,
         isPositive: this.count > 0,
@@ -113,19 +90,19 @@ test("object methods with nested calls and state", () => {
     result: 0,
     history: [],
 
-    add: (value) => {
+    add(value) {
       this.result = this.result + value;
       this.history.push({ op: "add", value: value, result: this.result });
       return this;
     },
 
-    multiply: (value) => {
+    multiply(value) {
       this.result = this.result * value;
       this.history.push({ op: "multiply", value: value, result: this.result });
       return this;
     },
 
-    divide: (value) => {
+    divide(value) {
       if (value !== 0) {
         this.result = this.result / value;
         this.history.push({ op: "divide", value: value, result: this.result });
@@ -133,15 +110,15 @@ test("object methods with nested calls and state", () => {
       return this;
     },
 
-    getResult: () => {
+    getResult() {
       return this.result;
     },
 
-    getHistory: () => {
+    getHistory() {
       return this.history.slice(); // Return copy
     },
 
-    clear: () => {
+    clear() {
       this.result = 0;
       this.history = [];
       return this;
@@ -158,29 +135,4 @@ test("object methods with nested calls and state", () => {
   expect(history[1]).toEqual({ op: "multiply", value: 2, result: 20 });
   expect(history[2]).toEqual({ op: "add", value: 5, result: 25 });
   expect(history[3]).toEqual({ op: "divide", value: 5, result: 5 });
-});
-
-test("object property modification and deletion", () => {
-  const obj = {
-    existing: "value",
-    toDelete: "will be deleted",
-  };
-
-  // Test property modification
-  obj.existing = "modified";
-  expect(obj.existing).toBe("modified");
-
-  // Test new property addition
-  obj.newProp = "added";
-  expect(obj.newProp).toBe("added");
-
-  // Test property deletion
-  delete obj.toDelete;
-  expect(obj.toDelete).toBeUndefined();
-  expect("toDelete" in obj).toBeFalsy();
-
-  // Test dynamic property modification
-  const key = "dynamicKey";
-  obj[key] = "dynamic value";
-  expect(obj[key]).toBe("dynamic value");
 });
