@@ -67,6 +67,8 @@ type
     function BlockStatement: TGocciaBlockStatement;
     function IfStatement: TGocciaStatement;
     function ForStatement: TGocciaStatement;
+    function WhileStatement: TGocciaStatement;
+    function DoWhileStatement: TGocciaStatement;
     function ReturnStatement: TGocciaStatement;
     function ThrowStatement: TGocciaStatement;
     function TryStatement: TGocciaStatement;
@@ -1010,6 +1012,10 @@ begin
     Result := IfStatement
   else if Match([gttFor]) then
     Result := ForStatement
+  else if Match([gttWhile]) then
+    Result := WhileStatement
+  else if Match([gttDo]) then
+    Result := DoWhileStatement
   else if Match([gttReturn]) then
     Result := ReturnStatement
   else if Match([gttThrow]) then
@@ -1157,6 +1163,50 @@ begin
   end
   else
     Result := Statement;
+end;
+
+function TGocciaParser.WhileStatement: TGocciaStatement;
+var
+  Condition: TGocciaExpression;
+  Body: TGocciaStatement;
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  Consume(gttLeftParen, 'Expected "(" after "while"');
+  Condition := Expression;
+  Consume(gttRightParen, 'Expected ")" after while condition');
+
+  Body := Statement;
+
+  Result := TGocciaWhileStatement.Create(Condition, Body, Line, Column);
+end;
+
+function TGocciaParser.DoWhileStatement: TGocciaStatement;
+var
+  Body: TGocciaStatement;
+  Condition: TGocciaExpression;
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  // Parse body first
+  Body := Statement;
+
+  // Expect 'while' keyword
+  Consume(gttWhile, 'Expected "while" after do body');
+
+  // Parse condition
+  Consume(gttLeftParen, 'Expected "(" after "while"');
+  Condition := Expression;
+  Consume(gttRightParen, 'Expected ")" after do-while condition');
+
+  // Expect semicolon
+  Consume(gttSemicolon, 'Expected ";" after do-while statement');
+
+  Result := TGocciaDoWhileStatement.Create(Body, Condition, Line, Column);
 end;
 
 function TGocciaParser.ReturnStatement: TGocciaStatement;

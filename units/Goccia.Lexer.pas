@@ -391,6 +391,8 @@ begin
   else if Text = 'if' then AddToken(gttIf, Text)
   else if Text = 'else' then AddToken(gttElse, Text)
   else if Text = 'for' then AddToken(gttFor, Text)
+  else if Text = 'while' then AddToken(gttWhile, Text)
+  else if Text = 'do' then AddToken(gttDo, Text)
   else if Text = 'throw' then AddToken(gttThrow, Text)
   else if Text = 'try' then AddToken(gttTry, Text)
   else if Text = 'catch' then AddToken(gttCatch, Text)

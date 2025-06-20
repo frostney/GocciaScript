@@ -80,6 +80,26 @@ type
     property Body: TGocciaStatement read FBody;
   end;
 
+  TGocciaWhileStatement = class(TGocciaStatement)
+  private
+    FCondition: TGocciaExpression;  // Loop condition
+    FBody: TGocciaStatement;        // Loop body
+  public
+    constructor Create(ACondition: TGocciaExpression; ABody: TGocciaStatement; ALine, AColumn: Integer);
+    property Condition: TGocciaExpression read FCondition;
+    property Body: TGocciaStatement read FBody;
+  end;
+
+  TGocciaDoWhileStatement = class(TGocciaStatement)
+  private
+    FBody: TGocciaStatement;        // Loop body (executed first)
+    FCondition: TGocciaExpression;  // Loop condition (checked after body)
+  public
+    constructor Create(ABody: TGocciaStatement; ACondition: TGocciaExpression; ALine, AColumn: Integer);
+    property Body: TGocciaStatement read FBody;
+    property Condition: TGocciaExpression read FCondition;
+  end;
+
   TGocciaReturnStatement = class(TGocciaStatement)
   private
     FValue: TGocciaExpression;
@@ -408,6 +428,24 @@ implementation
   begin
     inherited Create(ALine, AColumn);
     FExportsTable := AExportsTable;
+  end;
+
+  { TGocciaWhileStatement }
+
+  constructor TGocciaWhileStatement.Create(ACondition: TGocciaExpression; ABody: TGocciaStatement; ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FCondition := ACondition;
+    FBody := ABody;
+  end;
+
+  { TGocciaDoWhileStatement }
+
+  constructor TGocciaDoWhileStatement.Create(ABody: TGocciaStatement; ACondition: TGocciaExpression; ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FBody := ABody;
+    FCondition := ACondition;
   end;
 
 end.
