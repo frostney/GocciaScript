@@ -66,6 +66,7 @@ type
     function ExpressionStatement: TGocciaStatement;
     function BlockStatement: TGocciaBlockStatement;
     function IfStatement: TGocciaStatement;
+    function ForStatement: TGocciaStatement;
     function ReturnStatement: TGocciaStatement;
     function ThrowStatement: TGocciaStatement;
     function TryStatement: TGocciaStatement;
@@ -852,8 +853,7 @@ begin
       // Check for default value
       if Match([gttAssign]) then
       begin
-        DefaultValue := Assignment;
-        Parameters[ParamCount].DefaultValue := DefaultValue;
+        DefaultValue := Assignment
       end
       else
         Parameters[ParamCount].DefaultValue := nil;
@@ -1008,6 +1008,8 @@ begin
     Result := ExportDeclaration
   else if Match([gttIf]) then
     Result := IfStatement
+  else if Match([gttFor]) then
+    Result := ForStatement
   else if Match([gttReturn]) then
     Result := ReturnStatement
   else if Match([gttThrow]) then
@@ -1129,6 +1131,32 @@ begin
 
   Result := TGocciaIfStatement.Create(Condition, Consequent, Alternate,
     Line, Column);
+end;
+
+function TGocciaParser.ForStatement: TGocciaStatement;
+var
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  // For now, just consume the basic for loop structure and return a simple statement
+  Consume(gttLeftParen, 'Expected "(" after "for"');
+
+  // Skip everything until the closing parenthesis
+  while not Check(gttRightParen) and not IsAtEnd do
+    Advance;
+
+  Consume(gttRightParen, 'Expected ")" after for clauses');
+
+  // Parse body - can be a block or single statement
+  if Check(gttLeftBrace) then
+  begin
+    Advance; // consume the '{'
+    Result := BlockStatement;
+  end
+  else
+    Result := Statement;
 end;
 
 function TGocciaParser.ReturnStatement: TGocciaStatement;

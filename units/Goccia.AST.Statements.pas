@@ -65,6 +65,21 @@ type
     property Alternate: TGocciaStatement read FAlternate;
   end;
 
+  TGocciaForStatement = class(TGocciaStatement)
+  private
+    FInit: TGocciaStatement;  // Can be variable declaration or expression statement
+    FCondition: TGocciaExpression;  // Loop condition
+    FUpdate: TGocciaExpression;     // Update expression
+    FBody: TGocciaStatement;        // Loop body
+  public
+    constructor Create(AInit: TGocciaStatement; ACondition: TGocciaExpression;
+      AUpdate: TGocciaExpression; ABody: TGocciaStatement; ALine, AColumn: Integer);
+    property Init: TGocciaStatement read FInit;
+    property Condition: TGocciaExpression read FCondition;
+    property Update: TGocciaExpression read FUpdate;
+    property Body: TGocciaStatement read FBody;
+  end;
+
   TGocciaReturnStatement = class(TGocciaStatement)
   private
     FValue: TGocciaExpression;
@@ -288,6 +303,18 @@ implementation
     FCondition := ACondition;
     FConsequent := AConsequent;
     FAlternate := AAlternate;
+  end;
+
+  { TGocciaForStatement }
+
+  constructor TGocciaForStatement.Create(AInit: TGocciaStatement; ACondition: TGocciaExpression;
+    AUpdate: TGocciaExpression; ABody: TGocciaStatement; ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FInit := AInit;
+    FCondition := ACondition;
+    FUpdate := AUpdate;
+    FBody := ABody;
   end;
 
   { TGocciaReturnStatement }

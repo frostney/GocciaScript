@@ -585,6 +585,13 @@ begin
     Result := EvaluateIf(TGocciaIfStatement(Statement), Context);
     Logger.Debug('EvaluateStatement: IfStatement result type: %s', [Result.ClassName]);
   end
+  else if Statement is TGocciaForStatement then
+  begin
+    Logger.Debug('EvaluateStatement: Processing ForStatement (parsing only - no execution)');
+    // For now, just return undefined since we only want parsing support
+    Result := TGocciaUndefinedValue.Create;
+    Logger.Debug('EvaluateStatement: ForStatement result type: %s', [Result.ClassName]);
+  end
   else if Statement is TGocciaReturnStatement then
   begin
     Logger.Debug('EvaluateStatement: Handling TGocciaReturnStatement');
