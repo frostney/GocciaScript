@@ -259,6 +259,83 @@ type
     property Argument: TGocciaExpression read FArgument;
   end;
 
+  // Destructuring pattern base class
+  TGocciaDestructuringPattern = class(TGocciaExpression)
+  end;
+
+  // Property in object destructuring: key: pattern or key (shorthand)
+  TGocciaDestructuringProperty = class
+  private
+    FKey: string;
+    FPattern: TGocciaDestructuringPattern;
+    FComputed: Boolean;
+    FKeyExpression: TGocciaExpression;
+  public
+    constructor Create(const AKey: string; APattern: TGocciaDestructuringPattern; AComputed: Boolean = False; AKeyExpression: TGocciaExpression = nil);
+    property Key: string read FKey;
+    property Pattern: TGocciaDestructuringPattern read FPattern;
+    property Computed: Boolean read FComputed;
+    property KeyExpression: TGocciaExpression read FKeyExpression;
+  end;
+
+  // Array destructuring pattern: [a, b, c] = array
+  TGocciaArrayDestructuringPattern = class(TGocciaDestructuringPattern)
+  private
+    FElements: TObjectList<TGocciaDestructuringPattern>;
+  public
+    constructor Create(AElements: TObjectList<TGocciaDestructuringPattern>; ALine, AColumn: Integer);
+    property Elements: TObjectList<TGocciaDestructuringPattern> read FElements;
+  end;
+
+  // Object destructuring pattern: {name, age} = object
+  TGocciaObjectDestructuringPattern = class(TGocciaDestructuringPattern)
+  private
+    FProperties: TObjectList<TGocciaDestructuringProperty>;
+  public
+    constructor Create(AProperties: TObjectList<TGocciaDestructuringProperty>; ALine, AColumn: Integer);
+    property Properties: TObjectList<TGocciaDestructuringProperty> read FProperties;
+  end;
+
+  // Rest pattern: ...rest
+  TGocciaRestDestructuringPattern = class(TGocciaDestructuringPattern)
+  private
+    FArgument: TGocciaDestructuringPattern;
+  public
+    constructor Create(AArgument: TGocciaDestructuringPattern; ALine, AColumn: Integer);
+    property Argument: TGocciaDestructuringPattern read FArgument;
+  end;
+
+  // Assignment pattern with default value: a = defaultValue
+  TGocciaAssignmentDestructuringPattern = class(TGocciaDestructuringPattern)
+  private
+    FLeft: TGocciaDestructuringPattern;
+    FRight: TGocciaExpression;
+  public
+    constructor Create(ALeft: TGocciaDestructuringPattern; ARight: TGocciaExpression; ALine, AColumn: Integer);
+    property Left: TGocciaDestructuringPattern read FLeft;
+    property Right: TGocciaExpression read FRight;
+  end;
+
+  // Identifier pattern: just a variable name
+  TGocciaIdentifierDestructuringPattern = class(TGocciaDestructuringPattern)
+  private
+    FName: string;
+  public
+    constructor Create(const AName: string; ALine, AColumn: Integer);
+    property Name: string read FName;
+  end;
+
+  // Destructuring assignment expression
+  TGocciaDestructuringAssignmentExpression = class(TGocciaExpression)
+  private
+    FLeft: TGocciaDestructuringPattern;
+    FRight: TGocciaExpression;
+  public
+    constructor Create(ALeft: TGocciaDestructuringPattern; ARight: TGocciaExpression; ALine, AColumn: Integer);
+    property Left: TGocciaDestructuringPattern read FLeft;
+    property Right: TGocciaExpression read FRight;
+  end;
+
   TGocciaPrivateMemberExpression = class(TGocciaExpression)
   private
     FObject: TGocciaExpression;
@@ -559,6 +636,66 @@ constructor TGocciaSpreadExpression.Create(AArgument: TGocciaExpression; ALine, 
 begin
   inherited Create(ALine, AColumn);
   FArgument := AArgument;
+end;
+
+{ TGocciaDestructuringProperty }
+
+constructor TGocciaDestructuringProperty.Create(const AKey: string; APattern: TGocciaDestructuringPattern; AComputed: Boolean; AKeyExpression: TGocciaExpression);
+begin
+  FKey := AKey;
+  FPattern := APattern;
+  FComputed := AComputed;
+  FKeyExpression := AKeyExpression;
+end;
+
+{ TGocciaArrayPattern }
+
+constructor TGocciaArrayDestructuringPattern.Create(AElements: TObjectList<TGocciaDestructuringPattern>; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FElements := AElements;
+end;
+
+{ TGocciaObjectPattern }
+
+constructor TGocciaObjectDestructuringPattern.Create(AProperties: TObjectList<TGocciaDestructuringProperty>; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FProperties := AProperties;
+end;
+
+{ TGocciaRestPattern }
+
+constructor TGocciaRestDestructuringPattern.Create(AArgument: TGocciaDestructuringPattern; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FArgument := AArgument;
+end;
+
+{ TGocciaAssignmentPattern }
+
+constructor TGocciaAssignmentDestructuringPattern.Create(ALeft: TGocciaDestructuringPattern; ARight: TGocciaExpression; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FLeft := ALeft;
+  FRight := ARight;
+end;
+
+{ TGocciaIdentifierPattern }
+
+constructor TGocciaIdentifierDestructuringPattern.Create(const AName: string; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FName := AName;
+end;
+
+{ TGocciaDestructuringAssignmentExpression }
+
+constructor TGocciaDestructuringAssignmentExpression.Create(ALeft: TGocciaDestructuringPattern; ARight: TGocciaExpression; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FLeft := ALeft;
+  FRight := ARight;
 end;
 
 end.

@@ -35,8 +35,18 @@ function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGo
 function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluatePrivatePropertyAssignment(PrivatePropertyAssignmentExpression: TGocciaPrivatePropertyAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluatePrivatePropertyCompoundAssignment(PrivatePropertyCompoundAssignmentExpression: TGocciaPrivatePropertyCompoundAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateDestructuringAssignment(DestructuringAssignmentExpression: TGocciaDestructuringAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateDestructuringDeclaration(DestructuringDeclaration: TGocciaDestructuringDeclaration; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateLiteral(TemplateLiteralExpression: TGocciaTemplateLiteralExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateExpression(const ExpressionText: string; Context: TGocciaEvaluationContext; Line, Column: Integer): TGocciaValue;
+
+// Destructuring pattern assignment procedures
+procedure AssignPattern(Pattern: TGocciaDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
+procedure AssignIdentifierPattern(Pattern: TGocciaIdentifierDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
+procedure AssignArrayPattern(Pattern: TGocciaArrayDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
+procedure AssignObjectPattern(Pattern: TGocciaObjectDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
+procedure AssignAssignmentPattern(Pattern: TGocciaAssignmentDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
+procedure AssignRestPattern(Pattern: TGocciaRestDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
 procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 procedure InitializePrivateInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 
@@ -508,6 +518,10 @@ begin
     Context.OnError('Unexpected spread syntax', Expression.Line, Expression.Column);
     Result := TGocciaUndefinedValue.Create;
   end
+  else if Expression is TGocciaDestructuringAssignmentExpression then
+  begin
+    Result := EvaluateDestructuringAssignment(TGocciaDestructuringAssignmentExpression(Expression), Context);
+  end
   else
     Result := TGocciaUndefinedValue.Create;
   Logger.Debug('EvaluateExpression: Returning result type: %s .ToString: %s', [Result.ClassName, Result.ToString]);
@@ -549,6 +563,11 @@ begin
       Context.Scope.SetValue(Decl.Variables[I].Name, Value);
       Logger.Debug('EvaluateStatement: Variable %s defined in scope', [Decl.Variables[I].Name]);
     end;
+  end
+  else if Statement is TGocciaDestructuringDeclaration then
+  begin
+    Logger.Debug('EvaluateStatement: Processing DestructuringDeclaration');
+    Result := EvaluateDestructuringDeclaration(TGocciaDestructuringDeclaration(Statement), Context);
   end
   else if Statement is TGocciaBlockStatement then
   begin
@@ -1997,6 +2016,217 @@ begin
   if Assigned(Tokens) then Tokens.Free;
   if Assigned(Lexer) then Lexer.Free;
   if Assigned(SourceLines) then SourceLines.Free;
+end;
+
+function EvaluateDestructuringAssignment(DestructuringAssignmentExpression: TGocciaDestructuringAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  Value: TGocciaValue;
+begin
+  // Evaluate the right-hand side
+  Value := EvaluateExpression(DestructuringAssignmentExpression.Right, Context);
+
+  // Apply the destructuring pattern
+  AssignPattern(DestructuringAssignmentExpression.Left, Value, Context);
+
+  Result := Value;
+end;
+
+function EvaluateDestructuringDeclaration(DestructuringDeclaration: TGocciaDestructuringDeclaration; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  Value: TGocciaValue;
+begin
+  // Evaluate the initializer
+  Value := EvaluateExpression(DestructuringDeclaration.Initializer, Context);
+
+  // Apply the destructuring pattern to declare variables
+  AssignPattern(DestructuringDeclaration.Pattern, Value, Context);
+
+  Result := Value;
+end;
+
+procedure AssignPattern(Pattern: TGocciaDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
+begin
+  if Pattern is TGocciaIdentifierDestructuringPattern then
+    AssignIdentifierPattern(TGocciaIdentifierDestructuringPattern(Pattern), Value, Context)
+  else if Pattern is TGocciaArrayDestructuringPattern then
+    AssignArrayPattern(TGocciaArrayDestructuringPattern(Pattern), Value, Context)
+  else if Pattern is TGocciaObjectDestructuringPattern then
+    AssignObjectPattern(TGocciaObjectDestructuringPattern(Pattern), Value, Context)
+  else if Pattern is TGocciaAssignmentDestructuringPattern then
+    AssignAssignmentPattern(TGocciaAssignmentDestructuringPattern(Pattern), Value, Context)
+  else if Pattern is TGocciaRestDestructuringPattern then
+    AssignRestPattern(TGocciaRestDestructuringPattern(Pattern), Value, Context);
+end;
+
+procedure AssignIdentifierPattern(Pattern: TGocciaIdentifierDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
+begin
+  Context.Scope.SetValue(Pattern.Name, Value);
+end;
+
+procedure AssignArrayPattern(Pattern: TGocciaArrayDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
+var
+  ArrayValue: TGocciaArrayValue;
+  I: Integer;
+  ElementValue: TGocciaValue;
+  RestElements: TGocciaArrayValue;
+  J: Integer;
+begin
+  // Check if value is iterable (array or string)
+  if Value is TGocciaArrayValue then
+  begin
+    ArrayValue := TGocciaArrayValue(Value);
+
+    for I := 0 to Pattern.Elements.Count - 1 do
+    begin
+      if Pattern.Elements[I] = nil then
+        Continue; // Skip holes
+
+      if Pattern.Elements[I] is TGocciaRestDestructuringPattern then
+      begin
+        // Rest pattern: collect remaining elements
+        RestElements := TGocciaArrayValue.Create;
+        for J := I to ArrayValue.Elements.Count - 1 do
+        begin
+          if ArrayValue.Elements[J] <> nil then
+            RestElements.Elements.Add(ArrayValue.Elements[J])
+          else
+            RestElements.Elements.Add(TGocciaUndefinedValue.Create);
+        end;
+        AssignPattern(TGocciaRestDestructuringPattern(Pattern.Elements[I]).Argument, RestElements, Context);
+        Break;
+      end
+      else
+      begin
+        // Regular element
+        if (I < ArrayValue.Elements.Count) and (ArrayValue.Elements[I] <> nil) then
+          ElementValue := ArrayValue.Elements[I]
+        else
+          ElementValue := TGocciaUndefinedValue.Create;
+
+        AssignPattern(Pattern.Elements[I], ElementValue, Context);
+      end;
+    end;
+  end
+  else if Value is TGocciaStringValue then
+  begin
+    // String destructuring
+    for I := 0 to Pattern.Elements.Count - 1 do
+    begin
+      if Pattern.Elements[I] = nil then
+        Continue; // Skip holes
+
+      if Pattern.Elements[I] is TGocciaRestDestructuringPattern then
+      begin
+        // Rest pattern: collect remaining characters
+        RestElements := TGocciaArrayValue.Create;
+        for J := I + 1 to Length(Value.ToString) do
+          RestElements.Elements.Add(TGocciaStringValue.Create(Value.ToString[J]));
+        AssignPattern(TGocciaRestDestructuringPattern(Pattern.Elements[I]).Argument, RestElements, Context);
+        Break;
+      end
+      else
+      begin
+        // Regular character
+        if I + 1 <= Length(Value.ToString) then
+          ElementValue := TGocciaStringValue.Create(Value.ToString[I + 1])
+        else
+          ElementValue := TGocciaUndefinedValue.Create;
+
+        AssignPattern(Pattern.Elements[I], ElementValue, Context);
+      end;
+    end;
+  end
+  else if (Value is TGocciaNullValue) or (Value is TGocciaUndefinedValue) then
+  begin
+    // Throw TypeError for null/undefined destructuring
+    raise TGocciaError.Create('TypeError: Cannot destructure null or undefined', 0, 0, '', nil);
+  end
+  else
+  begin
+    // Throw TypeError for non-iterable values
+    raise TGocciaError.Create('TypeError: Value is not iterable', 0, 0, '', nil);
+  end;
+end;
+
+procedure AssignObjectPattern(Pattern: TGocciaObjectDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
+var
+  ObjectValue: TGocciaObjectValue;
+  Prop: TGocciaDestructuringProperty;
+  PropValue: TGocciaValue;
+  Key: string;
+  RestObject: TGocciaObjectValue;
+  UsedKeys: TStringList;
+  ObjectPair: TPair<string, TGocciaValue>;
+begin
+  // Check if value is an object
+  if not (Value is TGocciaObjectValue) then
+  begin
+    if (Value is TGocciaNullValue) or (Value is TGocciaUndefinedValue) then
+      raise TGocciaError.Create('TypeError: Cannot destructure null or undefined', 0, 0, '', nil)
+    else
+      raise TGocciaError.Create('TypeError: Cannot destructure non-object value', 0, 0, '', nil);
+  end;
+
+  ObjectValue := TGocciaObjectValue(Value);
+  UsedKeys := TStringList.Create;
+
+  try
+    for Prop in Pattern.Properties do
+    begin
+      if Prop.Pattern is TGocciaRestDestructuringPattern then
+      begin
+        // Rest pattern: collect remaining properties
+        RestObject := TGocciaObjectValue.Create;
+        for ObjectPair in ObjectValue.Properties do
+        begin
+          if UsedKeys.IndexOf(ObjectPair.Key) = -1 then
+            RestObject.SetProperty(ObjectPair.Key, ObjectPair.Value);
+        end;
+        AssignPattern(TGocciaRestDestructuringPattern(Prop.Pattern).Argument, RestObject, Context);
+      end
+      else
+      begin
+        // Regular property
+        if Prop.Computed then
+        begin
+          // Computed property key
+          Key := EvaluateExpression(Prop.KeyExpression, Context).ToString;
+        end
+        else
+        begin
+          Key := Prop.Key;
+        end;
+
+        UsedKeys.Add(Key);
+        PropValue := ObjectValue.GetProperty(Key);
+        AssignPattern(Prop.Pattern, PropValue, Context);
+      end;
+    end;
+  finally
+    UsedKeys.Free;
+  end;
+end;
+
+procedure AssignAssignmentPattern(Pattern: TGocciaAssignmentDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
+var
+  DefaultValue: TGocciaValue;
+begin
+  // Use default value if the value is undefined
+  if Value is TGocciaUndefinedValue then
+  begin
+    DefaultValue := EvaluateExpression(Pattern.Right, Context);
+    AssignPattern(Pattern.Left, DefaultValue, Context);
+  end
+  else
+  begin
+    AssignPattern(Pattern.Left, Value, Context);
+  end;
+end;
+
+procedure AssignRestPattern(Pattern: TGocciaRestDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
+begin
+  // Rest patterns are handled by their containing array/object patterns
+  AssignPattern(Pattern.Argument, Value, Context);
 end;
 
 end.

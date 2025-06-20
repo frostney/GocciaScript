@@ -31,6 +31,18 @@ type
     property IsConst: Boolean read FIsConst;
   end;
 
+  TGocciaDestructuringDeclaration = class(TGocciaStatement)
+  private
+    FPattern: TGocciaDestructuringPattern;
+    FInitializer: TGocciaExpression;
+    FIsConst: Boolean;
+  public
+    constructor Create(APattern: TGocciaDestructuringPattern; AInitializer: TGocciaExpression; AIsConst: Boolean; ALine, AColumn: Integer);
+    property Pattern: TGocciaDestructuringPattern read FPattern;
+    property Initializer: TGocciaExpression read FInitializer;
+    property IsConst: Boolean read FIsConst;
+  end;
+
   TGocciaBlockStatement = class(TGocciaStatement)
   private
     FNodes: TObjectList<TGocciaASTNode>;
@@ -187,6 +199,16 @@ implementation
   begin
     inherited Create(ALine, AColumn);
     FVariables := AVariables;
+    FIsConst := AIsConst;
+  end;
+
+  { TGocciaDestructuringDeclaration }
+
+  constructor TGocciaDestructuringDeclaration.Create(APattern: TGocciaDestructuringPattern; AInitializer: TGocciaExpression; AIsConst: Boolean; ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FPattern := APattern;
+    FInitializer := AInitializer;
     FIsConst := AIsConst;
   end;
 

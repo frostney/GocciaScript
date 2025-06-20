@@ -33,6 +33,13 @@ type
     function LogicalOr: TGocciaExpression;
     function NullishCoalescing: TGocciaExpression;
     function LogicalAnd: TGocciaExpression;
+
+    // Destructuring pattern parsing
+    function ParsePattern: TGocciaDestructuringPattern;
+    function ParseArrayPattern: TGocciaArrayDestructuringPattern;
+    function ParseObjectPattern: TGocciaObjectDestructuringPattern;
+    function IsAssignmentPattern(Expr: TGocciaExpression): Boolean;
+    function ConvertToPattern(Expr: TGocciaExpression): TGocciaDestructuringPattern;
     function BitwiseOr: TGocciaExpression;
     function BitwiseXor: TGocciaExpression;
     function BitwiseAnd: TGocciaExpression;
@@ -689,9 +696,29 @@ begin
     end
     else
     begin
-      // Regular property: key: value
-      Consume(gttColon, 'Expected ":" after property key');
-      Value := Expression;
+      // Check for shorthand property syntax: { name } means { name: name }
+      if Check(gttColon) then
+      begin
+        // Regular property: key: value
+        Consume(gttColon, 'Expected ":" after property key');
+        Value := Expression;
+      end
+            else
+      begin
+        // Shorthand property: { name } means { name: name }
+        // Also handle default values in shorthand: { name = defaultValue }
+        if IsComputed then
+          raise TGocciaSyntaxError.Create('Computed property names require a value', Peek.Line, Peek.Column, FFileName, FSourceLines);
+
+        Value := TGocciaIdentifierExpression.Create(Key, Previous.Line, Previous.Column);
+
+        // Check for default value in shorthand property
+        if Match([gttAssign]) then
+        begin
+          // This creates an assignment expression for use in destructuring patterns
+          Value := TGocciaAssignmentExpression.Create(Key, Expression, Previous.Line, Previous.Column);
+        end;
+      end;
     end;
 
     if IsComputed then
@@ -769,6 +796,7 @@ var
   Left, Right: TGocciaExpression;
   Line, Column: Integer;
   Operator: TGocciaTokenType;
+  Pattern: TGocciaDestructuringPattern;
 begin
   Left := Conditional;
   if Match([gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign,
@@ -779,8 +807,15 @@ begin
     Column := Previous.Column;
     Right := Assignment;
 
+    // Check for destructuring assignment
+    if (Operator = gttAssign) and IsAssignmentPattern(Left) then
+    begin
+      // Convert expression to pattern for destructuring
+      Pattern := ConvertToPattern(Left);
+      Result := TGocciaDestructuringAssignmentExpression.Create(Pattern, Right, Line, Column);
+    end
     // Only allow assignment to identifier or member expression
-    if Left is TGocciaIdentifierExpression then
+    else if Left is TGocciaIdentifierExpression then
     begin
       if Operator = gttAssign then
         Result := TGocciaAssignmentExpression.Create(TGocciaIdentifierExpression(Left).Name, Right, Line, Column)
@@ -910,34 +945,48 @@ var
   Line, Column: Integer;
   Variables: TArray<TGocciaVariableInfo>;
   VariableCount: Integer;
+  Pattern: TGocciaDestructuringPattern;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
   IsConst := Previous.TokenType = gttConst;
   VariableCount := 0;
 
-  // Parse variable declarations separated by commas
-  repeat
-    // Increase array size
-    SetLength(Variables, VariableCount + 1);
+  // Check for destructuring pattern
+  if Check(gttLeftBracket) or Check(gttLeftBrace) then
+  begin
+    // Destructuring declaration
+    Pattern := ParsePattern;
+    Consume(gttAssign, 'Destructuring declarations must have an initializer');
+    Initializer := Expression;
+    Consume(gttSemicolon, 'Expected ";" after destructuring declaration');
+    Result := TGocciaDestructuringDeclaration.Create(Pattern, Initializer, IsConst, Line, Column);
+  end
+  else
+  begin
+    // Regular variable declarations separated by commas
+    repeat
+      // Increase array size
+      SetLength(Variables, VariableCount + 1);
 
-    Name := Consume(gttIdentifier, 'Expected variable name').Lexeme;
-    Variables[VariableCount].Name := Name;
+      Name := Consume(gttIdentifier, 'Expected variable name').Lexeme;
+      Variables[VariableCount].Name := Name;
 
-    if Match([gttAssign]) then
-      Variables[VariableCount].Initializer := Expression
-    else if IsConst then
-      raise TGocciaSyntaxError.Create('const declarations must have an initializer',
-        Line, Column, FFileName, FSourceLines)
-    else
-      Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
-        TGocciaUndefinedValue.Create, Line, Column);
+      if Match([gttAssign]) then
+        Variables[VariableCount].Initializer := Expression
+      else if IsConst then
+        raise TGocciaSyntaxError.Create('const declarations must have an initializer',
+          Line, Column, FFileName, FSourceLines)
+      else
+        Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
+          TGocciaUndefinedValue.Create, Line, Column);
 
-    Inc(VariableCount);
-  until not Match([gttComma]);
+      Inc(VariableCount);
+    until not Match([gttComma]);
 
-  Consume(gttSemicolon, 'Expected ";" after variable declaration');
-  Result := TGocciaVariableDeclaration.Create(Variables, IsConst, Line, Column);
+    Consume(gttSemicolon, 'Expected ";" after variable declaration');
+    Result := TGocciaVariableDeclaration.Create(Variables, IsConst, Line, Column);
+  end;
 end;
 
 function TGocciaParser.ExpressionStatement: TGocciaStatement;
@@ -1511,6 +1560,248 @@ begin
 
   raise TGocciaSyntaxError.Create('Invalid number format: ' + Lexeme, Peek.Line, Peek.Column,
     FFileName, FSourceLines);
+end;
+
+function TGocciaParser.IsAssignmentPattern(Expr: TGocciaExpression): Boolean;
+begin
+  // Check if an expression could be a destructuring pattern
+  Result := (Expr is TGocciaArrayExpression) or (Expr is TGocciaObjectExpression) or (Expr is TGocciaIdentifierExpression);
+end;
+
+function TGocciaParser.ParsePattern: TGocciaDestructuringPattern;
+begin
+  if Check(gttLeftBracket) then
+  begin
+    Advance; // consume '['
+    Result := ParseArrayPattern;
+  end
+  else if Check(gttLeftBrace) then
+  begin
+    Advance; // consume '{'
+    Result := ParseObjectPattern;
+  end
+  else if Check(gttIdentifier) then
+  begin
+    Result := TGocciaIdentifierDestructuringPattern.Create(Advance.Lexeme, Previous.Line, Previous.Column);
+  end
+  else
+    raise TGocciaSyntaxError.Create('Expected destructuring pattern', Peek.Line, Peek.Column, FFileName, FSourceLines);
+end;
+
+function TGocciaParser.ParseArrayPattern: TGocciaArrayDestructuringPattern;
+var
+  Elements: TObjectList<TGocciaDestructuringPattern>;
+  Pattern: TGocciaDestructuringPattern;
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+  Elements := TObjectList<TGocciaDestructuringPattern>.Create(True);
+
+  while not Check(gttRightBracket) and not IsAtEnd do
+  begin
+    if Check(gttComma) then
+    begin
+      // Hole in array pattern
+      Elements.Add(nil);
+    end
+    else if Match([gttSpread]) then
+    begin
+      // Rest pattern: ...rest
+      Pattern := ParsePattern;
+      Elements.Add(TGocciaRestDestructuringPattern.Create(Pattern, Previous.Line, Previous.Column));
+    end
+    else
+    begin
+      Pattern := ParsePattern;
+
+      // Check for default value
+      if Match([gttAssign]) then
+      begin
+        Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Expression, Pattern.Line, Pattern.Column);
+      end;
+
+      Elements.Add(Pattern);
+    end;
+
+    if not Match([gttComma]) then
+      Break;
+  end;
+
+  Consume(gttRightBracket, 'Expected "]" after array pattern');
+  Result := TGocciaArrayDestructuringPattern.Create(Elements, Line, Column);
+end;
+
+function TGocciaParser.ParseObjectPattern: TGocciaObjectDestructuringPattern;
+var
+  Properties: TObjectList<TGocciaDestructuringProperty>;
+  Key: string;
+  Pattern: TGocciaDestructuringPattern;
+  Prop: TGocciaDestructuringProperty;
+  Line, Column: Integer;
+  IsComputed: Boolean;
+  KeyExpression: TGocciaExpression;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+  Properties := TObjectList<TGocciaDestructuringProperty>.Create(True);
+
+  while not Check(gttRightBrace) and not IsAtEnd do
+  begin
+    IsComputed := False;
+    KeyExpression := nil;
+
+    if Match([gttSpread]) then
+    begin
+      // Rest pattern in object: ...rest
+      Pattern := ParsePattern;
+      Prop := TGocciaDestructuringProperty.Create('', TGocciaRestDestructuringPattern.Create(Pattern, Previous.Line, Previous.Column));
+      Properties.Add(Prop);
+    end
+    else
+    begin
+      // Parse property key
+      if Match([gttLeftBracket]) then
+      begin
+        // Computed property: [expr]: pattern
+        IsComputed := True;
+        KeyExpression := Expression;
+        Key := ''; // Will be computed at runtime
+        Consume(gttRightBracket, 'Expected "]" after computed property key');
+      end
+      else if Check(gttIdentifier) then
+      begin
+        Key := Advance.Lexeme;
+      end
+      else if Check(gttString) then
+      begin
+        Key := Advance.Lexeme;
+      end
+      else
+        raise TGocciaSyntaxError.Create('Expected property name in object pattern', Peek.Line, Peek.Column, FFileName, FSourceLines);
+
+      // Check for shorthand or full syntax
+      if Match([gttColon]) then
+      begin
+        // Full syntax: key: pattern
+        Pattern := ParsePattern;
+
+        // Check for default value
+        if Match([gttAssign]) then
+        begin
+          Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Expression, Pattern.Line, Pattern.Column);
+        end;
+      end
+      else
+      begin
+        // Shorthand syntax: {name} means {name: name}
+        Pattern := TGocciaIdentifierDestructuringPattern.Create(Key, Previous.Line, Previous.Column);
+
+        // Check for default value in shorthand
+        if Match([gttAssign]) then
+        begin
+          Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Expression, Pattern.Line, Pattern.Column);
+        end;
+      end;
+
+      Prop := TGocciaDestructuringProperty.Create(Key, Pattern, IsComputed, KeyExpression);
+      Properties.Add(Prop);
+    end;
+
+    if not Match([gttComma]) then
+      Break;
+  end;
+
+  Consume(gttRightBrace, 'Expected "}" after object pattern');
+  Result := TGocciaObjectDestructuringPattern.Create(Properties, Line, Column);
+end;
+
+function TGocciaParser.ConvertToPattern(Expr: TGocciaExpression): TGocciaDestructuringPattern;
+var
+  ArrayExpr: TGocciaArrayExpression;
+  ObjectExpr: TGocciaObjectExpression;
+  IdentifierExpr: TGocciaIdentifierExpression;
+  AssignmentExpr: TGocciaAssignmentExpression;
+  Elements: TObjectList<TGocciaDestructuringPattern>;
+  Properties: TObjectList<TGocciaDestructuringProperty>;
+  I: Integer;
+  Pair: TPair<string, TGocciaExpression>;
+  ComputedPair: TPair<TGocciaExpression, TGocciaExpression>;
+  Prop: TGocciaDestructuringProperty;
+begin
+  if Expr is TGocciaIdentifierExpression then
+  begin
+    IdentifierExpr := TGocciaIdentifierExpression(Expr);
+    Result := TGocciaIdentifierDestructuringPattern.Create(IdentifierExpr.Name, Expr.Line, Expr.Column);
+  end
+  else if Expr is TGocciaAssignmentExpression then
+  begin
+    // Handle assignment expressions (for default values)
+    AssignmentExpr := TGocciaAssignmentExpression(Expr);
+    Result := TGocciaAssignmentDestructuringPattern.Create(
+      TGocciaIdentifierDestructuringPattern.Create(AssignmentExpr.Name, Expr.Line, Expr.Column),
+      AssignmentExpr.Value,
+      Expr.Line,
+      Expr.Column
+    );
+  end
+  else if Expr is TGocciaArrayExpression then
+  begin
+    ArrayExpr := TGocciaArrayExpression(Expr);
+    Elements := TObjectList<TGocciaDestructuringPattern>.Create(True);
+
+    for I := 0 to ArrayExpr.Elements.Count - 1 do
+    begin
+      if ArrayExpr.Elements[I] = nil then
+        Elements.Add(nil)  // Hole
+      else if ArrayExpr.Elements[I] is TGocciaSpreadExpression then
+        Elements.Add(TGocciaRestDestructuringPattern.Create(
+          ConvertToPattern(TGocciaSpreadExpression(ArrayExpr.Elements[I]).Argument),
+          ArrayExpr.Elements[I].Line, ArrayExpr.Elements[I].Column))
+      else
+        Elements.Add(ConvertToPattern(ArrayExpr.Elements[I]));
+    end;
+
+    Result := TGocciaArrayDestructuringPattern.Create(Elements, Expr.Line, Expr.Column);
+  end
+  else if Expr is TGocciaObjectExpression then
+  begin
+    ObjectExpr := TGocciaObjectExpression(Expr);
+    Properties := TObjectList<TGocciaDestructuringProperty>.Create(True);
+
+    // Handle static properties
+    for Pair in ObjectExpr.Properties do
+    begin
+      Prop := TGocciaDestructuringProperty.Create(Pair.Key, ConvertToPattern(Pair.Value));
+      Properties.Add(Prop);
+    end;
+
+    // Handle computed properties (including spread)
+    if Assigned(ObjectExpr.ComputedProperties) then
+    begin
+      for ComputedPair in ObjectExpr.ComputedProperties do
+      begin
+        if ComputedPair.Key is TGocciaSpreadExpression then
+        begin
+          // Rest pattern
+          Prop := TGocciaDestructuringProperty.Create('', TGocciaRestDestructuringPattern.Create(
+            ConvertToPattern(TGocciaSpreadExpression(ComputedPair.Key).Argument),
+            ComputedPair.Key.Line, ComputedPair.Key.Column));
+          Properties.Add(Prop);
+        end
+        else
+        begin
+          // Regular computed property
+          Prop := TGocciaDestructuringProperty.Create('', ConvertToPattern(ComputedPair.Value), True, ComputedPair.Key);
+          Properties.Add(Prop);
+        end;
+      end;
+    end;
+
+    Result := TGocciaObjectDestructuringPattern.Create(Properties, Expr.Line, Expr.Column);
+  end
+  else
+    raise TGocciaSyntaxError.Create('Invalid destructuring target', Expr.Line, Expr.Column, FFileName, FSourceLines);
 end;
 
 end.
