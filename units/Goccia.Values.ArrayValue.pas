@@ -50,6 +50,7 @@ type
     function ToNumber: Double; override;
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue;
+    procedure SetProperty(const AName: string; AValue: TGocciaValue);
     function Includes(const AValue: TGocciaValue; FromIndex: Integer = 0): Boolean;
     property Elements: TObjectList<TGocciaValue> read FElements;
   end;
@@ -769,6 +770,31 @@ begin
   begin
     // Fall back to regular object property lookup
     Result := inherited GetProperty(AName);
+  end;
+end;
+
+procedure TGocciaArrayValue.SetProperty(const AName: string; AValue: TGocciaValue);
+var
+  Index: Integer;
+begin
+  // Check if property name is a numeric index
+  if TryStrToInt(AName, Index) then
+  begin
+    if Index >= 0 then
+    begin
+      // Expand array if necessary
+      while FElements.Count <= Index do
+        FElements.Add(nil); // Add holes for missing indices
+
+      // Set the element
+      FElements[Index] := AValue;
+    end;
+    // Negative indices are ignored for array assignment
+  end
+  else
+  begin
+    // Fall back to regular object property assignment
+    inherited SetProperty(AName, AValue);
   end;
 end;
 

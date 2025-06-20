@@ -134,7 +134,12 @@ begin
     Value := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(Expression).Value, Context);
 
     // Handle different object types for computed property assignment
-    if (Obj is TGocciaInstanceValue) then
+    if (Obj is TGocciaArrayValue) then
+    begin
+      TGocciaArrayValue(Obj).SetProperty(PropName, Value);
+      Result := Value;
+    end
+    else if (Obj is TGocciaInstanceValue) then
     begin
       TGocciaInstanceValue(Obj).SetProperty(PropName, Value);
       Result := Value;
@@ -147,11 +152,6 @@ begin
     else if (Obj is TGocciaClassValue) then
     begin
       TGocciaClassValue(Obj).SetProperty(PropName, Value);
-      Result := Value;
-    end
-    else if (Obj is TGocciaArrayValue) then
-    begin
-      TGocciaArrayValue(Obj).SetProperty(PropName, Value);
       Result := Value;
     end
     else
@@ -283,14 +283,14 @@ begin
     Value := EvaluateExpression(TGocciaComputedPropertyCompoundAssignmentExpression(Expression).Value, Context);
 
     // Get current property value
-    if (Obj is TGocciaInstanceValue) then
+    if (Obj is TGocciaArrayValue) then
+      Result := TGocciaArrayValue(Obj).GetProperty(PropName)
+    else if (Obj is TGocciaInstanceValue) then
       Result := TGocciaInstanceValue(Obj).GetProperty(PropName)
     else if (Obj is TGocciaObjectValue) then
       Result := TGocciaObjectValue(Obj).GetProperty(PropName)
     else if (Obj is TGocciaClassValue) then
       Result := TGocciaClassValue(Obj).GetProperty(PropName)
-    else if (Obj is TGocciaArrayValue) then
-      Result := TGocciaArrayValue(Obj).GetProperty(PropName)
     else
     begin
       Context.OnError('Cannot access property on non-object', Expression.Line, Expression.Column);
@@ -338,14 +338,14 @@ begin
     end;
 
     // Set the new value
-    if (Obj is TGocciaInstanceValue) then
+    if (Obj is TGocciaArrayValue) then
+      TGocciaArrayValue(Obj).SetProperty(PropName, Result)
+    else if (Obj is TGocciaInstanceValue) then
       TGocciaInstanceValue(Obj).SetProperty(PropName, Result)
     else if (Obj is TGocciaObjectValue) then
       TGocciaObjectValue(Obj).SetProperty(PropName, Result)
     else if (Obj is TGocciaClassValue) then
-      TGocciaClassValue(Obj).SetProperty(PropName, Result)
-    else if (Obj is TGocciaArrayValue) then
-      TGocciaArrayValue(Obj).SetProperty(PropName, Result);
+      TGocciaClassValue(Obj).SetProperty(PropName, Result);
   end
   else if Expression is TGocciaIncrementExpression then
   begin
