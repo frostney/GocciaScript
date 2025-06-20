@@ -52,6 +52,8 @@ procedure AssignRestPattern(Pattern: TGocciaRestDestructuringPattern; Value: TGo
 procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 procedure InitializePrivateInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 
+function IsObjectInstanceOfClass(Obj: TGocciaObjectValue; ClassValue: TGocciaClassValue): Boolean;
+
 implementation
 
 function Evaluate(Node: TGocciaASTNode; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -760,11 +762,58 @@ begin
         begin
           // Check if Left is an instance of the Right class
           if Left is TGocciaInstanceValue then
-            Result := TGocciaBooleanValue.Create(TGocciaInstanceValue(Left).IsInstanceOf(TGocciaClassValue(Right)))
+          begin
+            // For class instances, check inheritance chain
+            if TGocciaClassValue(Right).Name = 'Object' then
+            begin
+              // All class instances are instances of Object
+              Result := TGocciaBooleanValue.Create(True);
+            end
+            else
+            begin
+              Result := TGocciaBooleanValue.Create(TGocciaInstanceValue(Left).IsInstanceOf(TGocciaClassValue(Right)));
+            end;
+          end
+          else if (Left is TGocciaFunctionValue) and (TGocciaClassValue(Right).Name = 'Function') then
+          begin
+            // Functions are instances of Function
+            Result := TGocciaBooleanValue.Create(True);
+          end
+          else if (Left is TGocciaNativeFunctionValue) and (TGocciaClassValue(Right).Name = 'Function') then
+          begin
+            // Native functions are also instances of Function
+            Result := TGocciaBooleanValue.Create(True);
+          end
+          else if (Left is TGocciaClassValue) and (TGocciaClassValue(Right).Name = 'Function') then
+          begin
+            // Classes are also instances of Function (since classes are constructor functions)
+            Result := TGocciaBooleanValue.Create(True);
+          end
           else if (Left is TGocciaArrayValue) and (TGocciaClassValue(Right).Name = 'Array') then
-            Result := TGocciaBooleanValue.Create(True)
+          begin
+            // Arrays are instances of Array
+            Result := TGocciaBooleanValue.Create(True);
+          end
+          else if (Left is TGocciaArrayValue) and (TGocciaClassValue(Right).Name = 'Object') then
+          begin
+            // Arrays are also instances of Object (inheritance)
+            Result := TGocciaBooleanValue.Create(True);
+          end
           else if (Left is TGocciaObjectValue) and (TGocciaClassValue(Right).Name = 'Object') then
-            Result := TGocciaBooleanValue.Create(True)
+          begin
+            // Objects are instances of Object
+            Result := TGocciaBooleanValue.Create(True);
+          end
+          else if (Left is TGocciaObjectValue) and (TGocciaClassValue(Right).Name = 'Object') then
+          begin
+            // Objects are instances of Object
+            Result := TGocciaBooleanValue.Create(True);
+          end
+          else if Left is TGocciaObjectValue then
+          begin
+            // General object instanceof check - walk the prototype chain
+            Result := TGocciaBooleanValue.Create(IsObjectInstanceOfClass(TGocciaObjectValue(Left), TGocciaClassValue(Right)));
+          end
           else
             Result := TGocciaBooleanValue.Create(False);
         end;
@@ -2381,6 +2430,34 @@ procedure AssignRestPattern(Pattern: TGocciaRestDestructuringPattern; Value: TGo
 begin
   // Rest patterns are handled by their containing array/object patterns
   AssignPattern(Pattern.Argument, Value, Context);
+end;
+
+function IsObjectInstanceOfClass(Obj: TGocciaObjectValue; ClassValue: TGocciaClassValue): Boolean;
+var
+  CurrentPrototype: TGocciaObjectValue;
+  TargetPrototype: TGocciaObjectValue;
+begin
+  Result := False;
+
+  // Get the target prototype we're looking for
+  TargetPrototype := ClassValue.Prototype;
+  if not Assigned(TargetPrototype) then
+    Exit;
+
+  // Walk up the prototype chain of the object
+  CurrentPrototype := Obj.Prototype;
+  while Assigned(CurrentPrototype) do
+  begin
+    // Check if the current prototype is the target prototype
+    if CurrentPrototype = TargetPrototype then
+    begin
+      Result := True;
+      Exit;
+    end;
+
+    // Move up the prototype chain
+    CurrentPrototype := CurrentPrototype.Prototype;
+  end;
 end;
 
 end.

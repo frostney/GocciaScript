@@ -202,7 +202,7 @@ end;
 
 procedure TGocciaInterpreter.RegisterBuiltinConstructors;
 var
-  ArrayConstructor, ObjectConstructor, StringConstructor, NumberConstructor, BooleanConstructor, RangeErrorConstructor: TGocciaClassValue;
+  ArrayConstructor, ObjectConstructor, StringConstructor, NumberConstructor, BooleanConstructor, FunctionConstructor, RangeErrorConstructor: TGocciaClassValue;
   ExistingArray, ExistingObject: TGocciaValue;
   ArrayObj, ObjectObj: TGocciaObjectValue;
   Key: string;
@@ -242,6 +242,10 @@ begin
 
   BooleanConstructor := TGocciaClassValue.Create('Boolean', nil);
   FGlobalScope.SetValue('Boolean', BooleanConstructor);
+
+  // Create Function constructor
+  FunctionConstructor := TGocciaClassValue.Create('Function', nil);
+  FGlobalScope.SetValue('Function', FunctionConstructor);
 
   // Create Error constructors
   RangeErrorConstructor := TGocciaClassValue.Create('RangeError', nil);

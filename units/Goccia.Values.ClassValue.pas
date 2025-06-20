@@ -244,6 +244,13 @@ end;
 
 function TGocciaClassValue.GetProperty(const AName: string): TGocciaValue;
 begin
+  // Special case for 'prototype' property
+  if AName = 'prototype' then
+  begin
+    Result := FPrototype;
+    Exit;
+  end;
+
   if FStaticMethods.TryGetValue(AName, Result) then
     Exit;
 
