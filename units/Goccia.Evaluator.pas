@@ -606,6 +606,20 @@ begin
     Result := TGocciaUndefinedValue.Create;
     Logger.Debug('EvaluateStatement: DoWhileStatement result type: %s', [Result.ClassName]);
   end
+  else if Statement is TGocciaSwitchStatement then
+  begin
+    Logger.Debug('EvaluateStatement: Processing SwitchStatement (parsing only - no execution)');
+    // For now, just return undefined since we only want parsing support
+    Result := TGocciaUndefinedValue.Create;
+    Logger.Debug('EvaluateStatement: SwitchStatement result type: %s', [Result.ClassName]);
+  end
+  else if Statement is TGocciaBreakStatement then
+  begin
+    Logger.Debug('EvaluateStatement: Processing BreakStatement (parsing only - no execution)');
+    // For now, just return undefined since we only want parsing support
+    Result := TGocciaUndefinedValue.Create;
+    Logger.Debug('EvaluateStatement: BreakStatement result type: %s', [Result.ClassName]);
+  end
   else if Statement is TGocciaReturnStatement then
   begin
     Logger.Debug('EvaluateStatement: Handling TGocciaReturnStatement');

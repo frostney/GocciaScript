@@ -77,6 +77,8 @@ type
     function ImportDeclaration: TGocciaStatement;
     function ExportDeclaration: TGocciaStatement;
     function ParseClassBody(const ClassName: string): TGocciaClassDefinition;
+    function SwitchStatement: TGocciaStatement;
+    function BreakStatement: TGocciaStatement;
   public
     constructor Create(ATokens: TObjectList<TGocciaToken>;
       const AFileName: string; ASourceLines: TStringList);
@@ -387,7 +389,8 @@ begin
         if Check(gttIdentifier) then
           PropertyName := Advance.Lexeme
         else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                       gttReturn, gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
+                       gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
+                       gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
                        gttTrue, gttFalse, gttNull, gttUndefined, gttTypeof, gttInstanceof]) then
           PropertyName := Previous.Lexeme  // Reserved words are allowed as property names
         else
@@ -664,7 +667,8 @@ begin
       Key := FloatToStr(NumericValue);
     end
     else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-                   gttReturn, gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
+                   gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
+                   gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
                    gttTrue, gttFalse, gttNull, gttUndefined, gttTypeof, gttInstanceof]) then
       Key := Previous.Lexeme  // Reserved words are allowed as property names
     else
@@ -1016,6 +1020,10 @@ begin
     Result := WhileStatement
   else if Match([gttDo]) then
     Result := DoWhileStatement
+  else if Match([gttSwitch]) then
+    Result := SwitchStatement
+  else if Match([gttBreak]) then
+    Result := BreakStatement
   else if Match([gttReturn]) then
     Result := ReturnStatement
   else if Match([gttThrow]) then
@@ -2042,6 +2050,74 @@ begin
   end
   else
     raise TGocciaSyntaxError.Create('Invalid destructuring target', Expr.Line, Expr.Column, FFileName, FSourceLines);
+end;
+
+function TGocciaParser.SwitchStatement: TGocciaStatement;
+var
+  Discriminant: TGocciaExpression;
+  Cases: TObjectList<TGocciaCaseClause>;
+  CaseClause: TGocciaCaseClause;
+  TestExpression: TGocciaExpression;
+  Statements: TObjectList<TGocciaStatement>;
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  // Parse discriminant: switch (expression)
+  Consume(gttLeftParen, 'Expected "(" after "switch"');
+  Discriminant := Expression;
+  Consume(gttRightParen, 'Expected ")" after switch discriminant');
+
+  // Parse switch body
+  Consume(gttLeftBrace, 'Expected "{" before switch body');
+
+  Cases := TObjectList<TGocciaCaseClause>.Create(True);
+
+  while not Check(gttRightBrace) and not IsAtEnd do
+  begin
+    if Match([gttCase]) then
+    begin
+      // Parse case value
+      TestExpression := Expression;
+      Consume(gttColon, 'Expected ":" after case value');
+    end
+    else if Match([gttDefault]) then
+    begin
+      // Default case
+      TestExpression := nil;
+      Consume(gttColon, 'Expected ":" after default');
+    end
+    else
+    begin
+      raise TGocciaSyntaxError.Create('Expected "case" or "default" in switch body',
+        Peek.Line, Peek.Column, FFileName, FSourceLines);
+    end;
+
+    // Parse statements until next case/default or end of switch
+    Statements := TObjectList<TGocciaStatement>.Create(True);
+    while not Check(gttCase) and not Check(gttDefault) and not Check(gttRightBrace) and not IsAtEnd do
+    begin
+      Statements.Add(Statement);
+    end;
+
+    CaseClause := TGocciaCaseClause.Create(TestExpression, Statements, Line, Column);
+    Cases.Add(CaseClause);
+  end;
+
+  Consume(gttRightBrace, 'Expected "}" after switch body');
+  Result := TGocciaSwitchStatement.Create(Discriminant, Cases, Line, Column);
+end;
+
+function TGocciaParser.BreakStatement: TGocciaStatement;
+var
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  Consume(gttSemicolon, 'Expected ";" after break statement');
+  Result := TGocciaBreakStatement.Create(Line, Column);
 end;
 
 end.

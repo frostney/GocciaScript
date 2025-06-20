@@ -16,8 +16,9 @@ type
     gttIdentifier,
     // Keywords
     gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
-    gttReturn, gttIf, gttElse, gttFor, gttWhile, gttDo, gttThrow, gttTry, gttCatch, gttFinally,
-    gttImport, gttExport, gttFrom, gttAs, gttDefault, gttGet, gttSet,
+    gttReturn, gttIf, gttElse, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
+    gttThrow, gttTry, gttCatch, gttFinally,
+    gttImport, gttExport, gttFrom, gttAs, gttGet, gttSet,
     // Operators
     gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
     gttEqual, gttNotEqual, gttLess, gttGreater, gttLessEqual, gttGreaterEqual,

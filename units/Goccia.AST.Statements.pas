@@ -222,6 +222,33 @@ type
     property ExportsTable: TDictionary<string, string> read FExportsTable;
   end;
 
+  TGocciaCaseClause = class(TGocciaASTNode)
+  private
+    FTest: TGocciaExpression;  // Case value expression (nil for default case)
+    FConsequent: TObjectList<TGocciaStatement>;  // Statements to execute
+  public
+    constructor Create(ATest: TGocciaExpression; AConsequent: TObjectList<TGocciaStatement>; ALine, AColumn: Integer);
+    destructor Destroy; override;
+    property Test: TGocciaExpression read FTest;
+    property Consequent: TObjectList<TGocciaStatement> read FConsequent;
+  end;
+
+  TGocciaSwitchStatement = class(TGocciaStatement)
+  private
+    FDiscriminant: TGocciaExpression;  // Expression to switch on
+    FCases: TObjectList<TGocciaCaseClause>;  // List of case clauses
+  public
+    constructor Create(ADiscriminant: TGocciaExpression; ACases: TObjectList<TGocciaCaseClause>; ALine, AColumn: Integer);
+    destructor Destroy; override;
+    property Discriminant: TGocciaExpression read FDiscriminant;
+    property Cases: TObjectList<TGocciaCaseClause> read FCases;
+  end;
+
+  TGocciaBreakStatement = class(TGocciaStatement)
+  public
+    constructor Create(ALine, AColumn: Integer);
+  end;
+
 implementation
 
 { TGocciaExpressionStatement }
@@ -446,6 +473,45 @@ implementation
     inherited Create(ALine, AColumn);
     FBody := ABody;
     FCondition := ACondition;
+  end;
+
+  { TGocciaCaseClause }
+
+  constructor TGocciaCaseClause.Create(ATest: TGocciaExpression; AConsequent: TObjectList<TGocciaStatement>; ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FTest := ATest;
+    FConsequent := AConsequent;
+  end;
+
+  destructor TGocciaCaseClause.Destroy;
+  begin
+    FTest.Free;
+    FConsequent.Free;
+    inherited;
+  end;
+
+  { TGocciaSwitchStatement }
+
+  constructor TGocciaSwitchStatement.Create(ADiscriminant: TGocciaExpression; ACases: TObjectList<TGocciaCaseClause>; ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FDiscriminant := ADiscriminant;
+    FCases := ACases;
+  end;
+
+  destructor TGocciaSwitchStatement.Destroy;
+  begin
+    FDiscriminant.Free;
+    FCases.Free;
+    inherited;
+  end;
+
+  { TGocciaBreakStatement }
+
+  constructor TGocciaBreakStatement.Create(ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
   end;
 
 end.
