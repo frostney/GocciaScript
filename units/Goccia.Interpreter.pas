@@ -9,7 +9,7 @@ uses
   Goccia.Values.UndefinedValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.ObjectValue,
   Goccia.Values.StringValue, Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
   Goccia.Values.NullValue, Goccia.Values.NativeFunction, Goccia.Token, Generics.Collections,
-  Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Evaluator, Goccia.Scope, Goccia.Builtins.Console, Goccia.Builtins.GlobalObject, Goccia.Builtins.Math, Goccia.Interfaces, Goccia.Logger, Goccia.Builtins.GlobalArray, Goccia.Builtins.Globals, Goccia.Builtins.JSON, Goccia.Builtins.TestAssertions;
+  Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Evaluator, Goccia.Scope, Goccia.Builtins.Console, Goccia.Builtins.GlobalObject, Goccia.Builtins.Math, Goccia.Interfaces, Goccia.Logger, Goccia.Builtins.GlobalArray, Goccia.Builtins.Globals, Goccia.Builtins.JSON, Goccia.Builtins.GlobalNumber, Goccia.Builtins.TestAssertions;
 
 type
   TGocciaInterpreter = class
@@ -18,6 +18,7 @@ type
     FBuiltinMath: TGocciaMath;
     FBuiltinGlobalObject: TGocciaGlobalObject;
     FBuiltinGlobalArray: TGocciaGlobalArray;
+    FBuiltinGlobalNumber: TGocciaGlobalNumber;
     FBuiltinGlobals: TGocciaGlobals;
     FBuiltinJSON: TGocciaJSON;
     FBuiltinTestAssertions: TGocciaTestAssertions;
@@ -37,6 +38,7 @@ type
     procedure RegisterPromise;
     procedure RegisterGlobalArray;
     procedure RegisterObjectMethods;
+    procedure RegisterGlobalNumber;
     procedure RegisterGlobals;
     procedure RegisterBuiltinConstructors;
 
@@ -56,6 +58,7 @@ type
     property BuiltinMath: TGocciaMath read FBuiltinMath;
     property BuiltinGlobalObject: TGocciaGlobalObject read FBuiltinGlobalObject;
     property BuiltinGlobalArray: TGocciaGlobalArray read FBuiltinGlobalArray;
+    property BuiltinGlobalNumber: TGocciaGlobalNumber read FBuiltinGlobalNumber;
     property BuiltinGlobals: TGocciaGlobals read FBuiltinGlobals;
     property BuiltinJSON: TGocciaJSON read FBuiltinJSON;
   end;
@@ -136,7 +139,9 @@ begin
   FBuiltinMath.Free;
   FBuiltinJSON.Free;
   FBuiltinTestAssertions.Free;
+  FBuiltinGlobalArray.Free;
   FBuiltinGlobalObject.Free;
+  FBuiltinGlobalNumber.Free;
   FModules.Free;
   FSourceLines.Free;
 
@@ -152,7 +157,9 @@ begin
   RegisterPromise;
   RegisterObjectMethods;
   RegisterGlobalArray;
+  RegisterGlobalNumber;
   RegisterGlobals;
+
   RegisterBuiltinConstructors;
 end;
 
@@ -195,6 +202,11 @@ begin
   FBuiltinGlobalArray := TGocciaGlobalArray.Create('Array', FGlobalScope, ThrowError);
 end;
 
+procedure TGocciaInterpreter.RegisterGlobalNumber;
+begin
+  FBuiltinGlobalNumber := TGocciaGlobalNumber.Create('Number', FGlobalScope, ThrowError);
+end;
+
 procedure TGocciaInterpreter.RegisterGlobals;
 begin
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', FGlobalScope, ThrowError);
@@ -203,13 +215,14 @@ end;
 procedure TGocciaInterpreter.RegisterBuiltinConstructors;
 var
   ArrayConstructor, ObjectConstructor, StringConstructor, NumberConstructor, BooleanConstructor, FunctionConstructor, RangeErrorConstructor: TGocciaClassValue;
-  ExistingArray, ExistingObject: TGocciaValue;
-  ArrayObj, ObjectObj: TGocciaObjectValue;
+  ExistingArray, ExistingObject, ExistingNumber: TGocciaValue;
+  ArrayObj, ObjectObj, NumberObj: TGocciaObjectValue;
   Key: string;
 begin
   // Get existing built-in objects that have static methods
   ExistingArray := FGlobalScope.GetValue('Array');
   ExistingObject := FGlobalScope.GetValue('Object');
+  ExistingNumber := FGlobalScope.GetValue('Number');
 
     // Create Array constructor and copy static methods
   ArrayConstructor := TGocciaClassValue.Create('Array', nil);
@@ -238,6 +251,13 @@ begin
   FGlobalScope.SetValue('String', StringConstructor);
 
   NumberConstructor := TGocciaClassValue.Create('Number', nil);
+  if (ExistingNumber is TGocciaObjectValue) then
+  begin
+    NumberObj := TGocciaObjectValue(ExistingNumber);
+    // Copy all static methods from existing Number object
+    for Key in NumberObj.Properties.Keys do
+      NumberConstructor.SetProperty(Key, NumberObj.Properties[Key]);
+  end;
   FGlobalScope.SetValue('Number', NumberConstructor);
 
   BooleanConstructor := TGocciaClassValue.Create('Boolean', nil);
