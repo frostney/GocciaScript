@@ -491,8 +491,6 @@ begin
   end
   else if Match([gttLeftParen]) then
   begin
-    Token := Previous;
-
     // Check for arrow function by looking for pattern: () => or (id) => or (id, id) =>
     if IsArrowFunction() then
       Result := ArrowFunction
@@ -553,6 +551,14 @@ var
   Line, Column: Integer;
   NumericValue: Double;
   IsComputed: Boolean;
+  // Method shorthand variables
+  Parameters: TGocciaParameterArray;
+  ParamCount: Integer;
+  ParamName: string;
+  DefaultValue: TGocciaExpression;
+  Body: TGocciaASTNode;
+  Statements: TObjectList<TGocciaStatement>;
+  Stmt: TGocciaStatement;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -587,8 +593,67 @@ begin
     else
       raise TGocciaSyntaxError.Create('Expected property name', Peek.Line, Peek.Column, FFileName, FSourceLines);
 
-    Consume(gttColon, 'Expected ":" after property key');
-    Value := Expression;
+    // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
+    if Check(gttLeftParen) then
+    begin
+      // Method shorthand syntax (works for both computed and non-computed)
+      Line := Peek.Line;
+      Column := Peek.Column;
+
+      SetLength(Parameters, 0);
+      ParamCount := 0;
+
+      // Parse parameters
+      Consume(gttLeftParen, 'Expected "(" after method name');
+      if not Check(gttRightParen) then
+      begin
+        repeat
+          ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
+
+          // Check for default value
+          if Match([gttAssign]) then
+            DefaultValue := Assignment
+          else
+            DefaultValue := nil;
+
+          // Add parameter to array
+          Inc(ParamCount);
+          SetLength(Parameters, ParamCount);
+          Parameters[ParamCount - 1].Name := ParamName;
+          Parameters[ParamCount - 1].DefaultValue := DefaultValue;
+
+        until not Match([gttComma]);
+      end;
+      Consume(gttRightParen, 'Expected ")" after parameters');
+
+      // Parse method body
+      Consume(gttLeftBrace, 'Expected "{" before method body');
+
+      // Create a block statement for the method body
+      Statements := TObjectList<TGocciaStatement>.Create(True);
+      try
+        while not Check(gttRightBrace) and not IsAtEnd do
+        begin
+          Stmt := Statement;
+          Statements.Add(Stmt);
+        end;
+
+        Consume(gttRightBrace, 'Expected "}" after method body');
+        Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
+
+        // Create function expression for the method
+        Value := TGocciaArrowFunctionExpression.Create(Parameters, Body, Line, Column);
+      except
+        Statements.Free;
+        raise;
+      end;
+    end
+    else
+    begin
+      // Regular property: key: value
+      Consume(gttColon, 'Expected ":" after property key');
+      Value := Expression;
+    end;
 
     if IsComputed then
     begin
