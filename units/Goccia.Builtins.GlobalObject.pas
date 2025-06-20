@@ -16,6 +16,7 @@ type
     function ObjectEntries(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectAssign(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectCreate(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectHasOwn(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
   end;
@@ -23,7 +24,7 @@ type
 implementation
 
 uses
-  Goccia.Values.ArrayValue, Goccia.Values.StringValue;
+  Goccia.Values.ArrayValue, Goccia.Values.StringValue, Goccia.Values.NullValue, Goccia.Values.BooleanValue;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
@@ -34,6 +35,7 @@ begin
   FBuiltinObject.SetProperty('entries', TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1));
   FBuiltinObject.SetProperty('assign', TGocciaNativeFunctionValue.Create(ObjectAssign, 'assign', -1));
   FBuiltinObject.SetProperty('create', TGocciaNativeFunctionValue.Create(ObjectCreate, 'create', 1));
+  FBuiltinObject.SetProperty('hasOwn', TGocciaNativeFunctionValue.Create(ObjectHasOwn, 'hasOwn', 1));
 
   AScope.SetValue(AName, FBuiltinObject);
 end;
@@ -146,12 +148,29 @@ begin
   if Args.Count < 1 then
     ThrowError('Object.create expects at least 1 argument', 0, 0);
 
-  if not (Args[0] is TGocciaObjectValue) then
+  if not (Args[0] is TGocciaObjectValue or Args[0] is TGocciaNullValue) then
     ThrowError('Object.create called on non-object', 0, 0);
 
   Obj := TGocciaObjectValue(Args[0]);
 
   Result := Obj;
+end;
+
+function TGocciaGlobalObject.ObjectHasOwn(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Obj: TGocciaObjectValue;
+  PropertyName: string;
+begin
+  if Args.Count <> 2 then
+    ThrowError('Object.hasOwn expects exactly 2 arguments', 0, 0);
+
+  if not (Args[0] is TGocciaObjectValue) then
+    ThrowError('Object.hasOwn called on non-object', 0, 0);
+
+  Obj := TGocciaObjectValue(Args[0]);
+  PropertyName := Args[1].ToString;
+
+  Result := TGocciaBooleanValue.Create(Obj.HasOwnProperty(PropertyName));
 end;
 
 end.
