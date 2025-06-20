@@ -22,14 +22,24 @@ type
     destructor Destroy; override;
     function CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''): TGocciaScope;
     function GetValue(const AName: string): TGocciaValue; inline;
-    procedure Assign(const AName: string; AValue: TGocciaValue);
+    procedure Assign(const AName: string; AValue: TGocciaValue); virtual;
     function Contains(const AName: string): Boolean; inline;
     property Parent: TGocciaScope read FParent;
-    procedure SetValue(const AName: string; AValue: TGocciaValue);
+    procedure SetValue(const AName: string; AValue: TGocciaValue); virtual;
     property ThisValue: TGocciaValue read FThisValue write FThisValue;
     function GetThisProperty(const AName: string): TGocciaValue;
     property ScopeKind: TGocciaScopeKind read FScopeKind;
     property CustomLabel: string read FCustomLabel;
+  end;
+
+  // Specialized scope for try-catch blocks with proper assignment propagation
+  TGocciaCatchScope = class(TGocciaScope)
+  private
+    FCatchParameter: string;  // Track the catch parameter name for proper shadowing
+  public
+    constructor Create(AParent: TGocciaScope; const ACatchParameter: string);
+    procedure Assign(const AName: string; AValue: TGocciaValue); override;
+    procedure SetValue(const AName: string; AValue: TGocciaValue); override;
   end;
 
 
@@ -141,6 +151,49 @@ begin
   Logger.Debug('  Values dictionary address: %d', [PtrUInt(FValues)]);
 
   FValues.AddOrSetValue(AName, AValue);
+end;
+
+// TGocciaCatchScope implementation
+
+constructor TGocciaCatchScope.Create(AParent: TGocciaScope; const ACatchParameter: string);
+begin
+  inherited Create(AParent, skBlock, 'CatchBlock');
+  FCatchParameter := ACatchParameter;
+end;
+
+procedure TGocciaCatchScope.Assign(const AName: string; AValue: TGocciaValue);
+begin
+  // Surgical fix for catch parameter scopes: assignments to non-parameter variables
+  // should propagate to parent scope, but catch parameters should stay for proper shadowing
+  if (AName <> FCatchParameter) and (not FValues.ContainsKey(AName)) and Assigned(FParent) then
+  begin
+    // This is a catch parameter scope and the variable isn't the catch parameter.
+    // Delegate directly to parent to ensure assignment propagation
+    FParent.Assign(AName, AValue);
+  end
+  else
+  begin
+    // Either it's the catch parameter or it exists in current scope - use base behavior
+    inherited Assign(AName, AValue);
+  end;
+end;
+
+procedure TGocciaCatchScope.SetValue(const AName: string; AValue: TGocciaValue);
+begin
+  // Surgical fix: Also apply to SetValue for catch parameter scopes
+  // Delegate to parent for non-parameter variables, but keep catch parameters for shadowing
+  if (AName <> FCatchParameter) and (not FValues.ContainsKey(AName)) and Assigned(FParent) then
+  begin
+    // Check if the variable exists in parent scope - if so, assign there
+    if FParent.Contains(AName) then
+    begin
+      FParent.Assign(AName, AValue);
+      Exit;
+    end;
+  end;
+
+  // Use base implementation
+  inherited SetValue(AName, AValue);
 end;
 
 end.

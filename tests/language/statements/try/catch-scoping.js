@@ -81,6 +81,8 @@ test("mixed parameter and no-parameter catches in nested structure", () => {
   expect(no_param_executed).toBe(true);
 });
 
+let global_test = "global";
+
 test("catch parameter with same name as global variable", () => {
   global_test = "global_value";
   let caught_global = null;

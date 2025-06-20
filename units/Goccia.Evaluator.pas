@@ -111,8 +111,10 @@ begin
     Result := EvaluateUnary(TGocciaUnaryExpression(Expression), Context)
   else if Expression is TGocciaAssignmentExpression then
   begin
-    // Variable assignment
+    // Variable assignment with surgical fix for catch parameter scope propagation
     Result := EvaluateExpression(TGocciaAssignmentExpression(Expression).Value, Context);
+
+                // Use standard assignment - fix is now at the scope level
     Context.Scope.Assign(TGocciaAssignmentExpression(Expression).Name, Result);
   end
   else if Expression is TGocciaPropertyAssignmentExpression then
@@ -220,7 +222,7 @@ begin
         Result := TGocciaNumberValue.Create(Cardinal(Trunc(Result.ToNumber)) shr (Trunc(Value.ToNumber) and 31));
     end;
 
-    Context.Scope.Assign(TGocciaCompoundAssignmentExpression(Expression).Name, Result);
+        Context.Scope.Assign(TGocciaCompoundAssignmentExpression(Expression).Name, Result);
   end
   else if Expression is TGocciaPropertyCompoundAssignmentExpression then
   begin
@@ -1519,10 +1521,26 @@ var
   I: Integer;
   LastValue: TGocciaValue;
   BlockContext: TGocciaEvaluationContext;
+  NeedsChildScope: Boolean;
 begin
-  // Block does have a lexical scope, not a function scope so we don't need to push a new scope
+  // Check if we need a child scope (only if there are variable declarations)
+  NeedsChildScope := False;
+  for I := 0 to BlockStatement.Nodes.Count - 1 do
+  begin
+    if (BlockStatement.Nodes[I] is TGocciaVariableDeclaration) or
+       (BlockStatement.Nodes[I] is TGocciaDestructuringDeclaration) then
+    begin
+      NeedsChildScope := True;
+      Break;
+    end;
+  end;
+
   BlockContext := Context;
-  BlockContext.Scope := Context.Scope.CreateChild;
+  if NeedsChildScope then
+    BlockContext.Scope := Context.Scope.CreateChild(skBlock, 'BlockScope')
+  else
+    BlockContext.Scope := Context.Scope; // Use same scope - no isolation needed
+
   try
     LastValue := TGocciaUndefinedValue.Create;
 
@@ -1551,7 +1569,9 @@ begin
       LastValue := TGocciaUndefinedValue.Create;
     Result := LastValue;
   finally
-    BlockContext.Scope.Free;
+    // Only free the scope if we created a child scope
+    if NeedsChildScope then
+      BlockContext.Scope.Free;
   end;
 end;
 
@@ -1568,52 +1588,39 @@ end;
 function EvaluateTry(TryStatement: TGocciaTryStatement; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   TryResult: TGocciaValue;
-  StatementScope, TryScope, CatchScope, FinallyScope: TGocciaScope;
-  StatementContext, TryContext, CatchContext, FinallyContext: TGocciaEvaluationContext;
+  CatchScope: TGocciaScope;
+  CatchContext: TGocciaEvaluationContext;
   I: Integer;
 begin
   Logger.Debug('EvaluateTry: Starting try-catch-finally evaluation');
   Result := TGocciaUndefinedValue.Create;
 
-  // Create a scope for the entire try-catch-finally statement
-  StatementScope := Context.Scope.CreateChild(skBlock, 'TryCatchFinallyStatement');
-  try
-    StatementContext := Context;
-    StatementContext.Scope := StatementScope;
-
     try
-      // Execute the try block in its own child scope
+                                          // Execute the try block using original context (no scope isolation)
       Logger.Debug('EvaluateTry: Executing try block');
-      TryScope := StatementScope.CreateChild(skBlock, 'TryBlock');
-      try
-        TryContext := StatementContext;
-        TryContext.Scope := TryScope;
 
-        // Execute try block statements directly to maintain scope control
-        TryResult := TGocciaUndefinedValue.Create;
-        for I := 0 to TryStatement.Block.Nodes.Count - 1 do
-        begin
-          try
-            TryResult := Evaluate(TryStatement.Block.Nodes[I], TryContext);
-          except
-            on E: TGocciaReturnValue do
-            begin
-              raise;
-            end;
-            on E: TGocciaThrowValue do
-            begin
-              raise;
-            end;
-            on E: Exception do
-            begin
-              raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-            end;
+      // Execute try block statements directly in original context
+      TryResult := TGocciaUndefinedValue.Create;
+      for I := 0 to TryStatement.Block.Nodes.Count - 1 do
+      begin
+        try
+          TryResult := Evaluate(TryStatement.Block.Nodes[I], Context);
+        except
+          on E: TGocciaReturnValue do
+          begin
+            raise;
+          end;
+          on E: TGocciaThrowValue do
+          begin
+            raise;
+          end;
+          on E: Exception do
+          begin
+            raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
           end;
         end;
-        Result := TryResult;
-      finally
-        TryScope.Free;
       end;
+      Result := TryResult;
       Logger.Debug('EvaluateTry: Try block completed successfully');
     except
       on E: TGocciaThrowValue do
@@ -1625,23 +1632,51 @@ begin
         begin
           Logger.Debug('EvaluateTry: Executing catch block with parameter: %s', [TryStatement.CatchParam]);
 
-          // Create catch scope as child of statement scope
-          CatchScope := StatementScope.CreateChild(skBlock, 'CatchBlock');
-          try
-            // Bind the thrown value to the catch parameter (if parameter exists)
-            if TryStatement.CatchParam <> '' then
+                                                                                // Create child scope for catch parameter if needed (proper shadowing)
+          if TryStatement.CatchParam <> '' then
+          begin
+            CatchScope := TGocciaCatchScope.Create(Context.Scope, TryStatement.CatchParam);
+            try
+              // Bind the thrown value to the catch parameter (shadows outer variables)
               CatchScope.SetValue(TryStatement.CatchParam, E.Value);
 
-            // Set up context for catch block execution
-            CatchContext := StatementContext;
-            CatchContext.Scope := CatchScope;
+              // Set up context for catch block with child scope
+              CatchContext := Context;
+              CatchContext.Scope := CatchScope;
 
-            // Execute catch block statements directly
+              // Execute catch block statements with proper scoping
+              Result := TGocciaUndefinedValue.Create;
+              for I := 0 to TryStatement.CatchBlock.Nodes.Count - 1 do
+              begin
+                try
+                  Result := Evaluate(TryStatement.CatchBlock.Nodes[I], CatchContext);
+                except
+                  on E: TGocciaReturnValue do
+                  begin
+                    raise;
+                  end;
+                  on E: TGocciaThrowValue do
+                  begin
+                    raise;
+                  end;
+                  on E: Exception do
+                  begin
+                    raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
+                  end;
+                end;
+              end;
+            finally
+              CatchScope.Free;
+            end;
+          end
+          else
+          begin
+            // No catch parameter - use original context directly
             Result := TGocciaUndefinedValue.Create;
             for I := 0 to TryStatement.CatchBlock.Nodes.Count - 1 do
             begin
               try
-                Result := Evaluate(TryStatement.CatchBlock.Nodes[I], CatchContext);
+                Result := Evaluate(TryStatement.CatchBlock.Nodes[I], Context);
               except
                 on E: TGocciaReturnValue do
                 begin
@@ -1657,10 +1692,8 @@ begin
                 end;
               end;
             end;
-            Logger.Debug('EvaluateTry: Catch block completed');
-          finally
-            CatchScope.Free;
           end;
+          Logger.Debug('EvaluateTry: Catch block completed');
         end
         else
         begin
@@ -1684,23 +1717,51 @@ begin
         begin
           Logger.Debug('EvaluateTry: Converting Pascal exception to JavaScript Error');
 
-          // Create catch scope as child of statement scope
-          CatchScope := StatementScope.CreateChild(skBlock, 'CatchBlock');
-          try
-            // Create a JavaScript Error object for the Pascal exception (if parameter exists)
-            if TryStatement.CatchParam <> '' then
+                              // Create child scope for catch parameter if needed (proper shadowing)
+          if TryStatement.CatchParam <> '' then
+          begin
+            CatchScope := TGocciaCatchScope.Create(Context.Scope, TryStatement.CatchParam);
+            try
+              // Create a JavaScript Error object for the Pascal exception
               CatchScope.SetValue(TryStatement.CatchParam, TGocciaStringValue.Create(E.Message));
 
-            // Set up context for catch block execution
-            CatchContext := StatementContext;
-            CatchContext.Scope := CatchScope;
+              // Set up context for catch block with child scope of statement scope
+              CatchContext := Context;
+              CatchContext.Scope := CatchScope;
 
-            // Execute catch block statements directly
+              // Execute catch block statements with proper scoping
+              Result := TGocciaUndefinedValue.Create;
+              for I := 0 to TryStatement.CatchBlock.Nodes.Count - 1 do
+              begin
+                try
+                  Result := Evaluate(TryStatement.CatchBlock.Nodes[I], CatchContext);
+                except
+                  on E: TGocciaReturnValue do
+                  begin
+                    raise;
+                  end;
+                  on E: TGocciaThrowValue do
+                  begin
+                    raise;
+                  end;
+                  on E: Exception do
+                  begin
+                    raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
+                  end;
+                end;
+              end;
+            finally
+              CatchScope.Free;
+            end;
+          end
+                    else
+          begin
+            // No catch parameter - use original context directly
             Result := TGocciaUndefinedValue.Create;
             for I := 0 to TryStatement.CatchBlock.Nodes.Count - 1 do
             begin
               try
-                Result := Evaluate(TryStatement.CatchBlock.Nodes[I], CatchContext);
+                Result := Evaluate(TryStatement.CatchBlock.Nodes[I], Context);
               except
                 on E: TGocciaReturnValue do
                 begin
@@ -1716,10 +1777,8 @@ begin
                 end;
               end;
             end;
-            Logger.Debug('EvaluateTry: Catch block completed for Pascal exception');
-          finally
-            CatchScope.Free;
           end;
+          Logger.Debug('EvaluateTry: Catch block completed for Pascal exception');
         end
         else
         begin
@@ -1735,35 +1794,28 @@ begin
     begin
       Logger.Debug('EvaluateTry: Executing finally block');
       try
-        // Create finally scope as child of statement scope
-        FinallyScope := StatementScope.CreateChild(skBlock, 'FinallyBlock');
-        try
-          FinallyContext := StatementContext;
-          FinallyContext.Scope := FinallyScope;
+                    // Execute finally block using original context (no scope isolation)
 
-          // Execute finally block statements directly
-          for I := 0 to TryStatement.FinallyBlock.Nodes.Count - 1 do
+      // Execute finally block statements directly in original context
+      for I := 0 to TryStatement.FinallyBlock.Nodes.Count - 1 do
+      begin
+        try
+          Evaluate(TryStatement.FinallyBlock.Nodes[I], Context);
+        except
+          on E: TGocciaReturnValue do
           begin
-            try
-              Evaluate(TryStatement.FinallyBlock.Nodes[I], FinallyContext);
-            except
-              on E: TGocciaReturnValue do
-              begin
-                raise;
-              end;
-              on E: TGocciaThrowValue do
-              begin
-                raise;
-              end;
-              on E: Exception do
-              begin
-                raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-              end;
-            end;
+            raise;
           end;
-        finally
-          FinallyScope.Free;
+          on E: TGocciaThrowValue do
+          begin
+            raise;
+          end;
+          on E: Exception do
+          begin
+            raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
+          end;
         end;
+      end;
         Logger.Debug('EvaluateTry: Finally block completed');
       except
         on E: TGocciaReturnValue do
@@ -1786,10 +1838,6 @@ begin
         end;
       end;
     end;
-
-  finally
-    StatementScope.Free;
-  end;
 
   Logger.Debug('EvaluateTry: Try-catch-finally evaluation completed');
 end;
