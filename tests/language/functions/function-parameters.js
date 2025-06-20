@@ -100,6 +100,14 @@ test("default paramaters with object", () => {
   );
 });
 
+test("default parameters with function definition", () => {
+  const greet = (nameFn = () => "World") => {
+    return "Hello, " + nameFn() + "!";
+  };
+  expect(greet()).toBe("Hello, World!");
+  expect(greet(() => "Alice")).toBe("Hello, Alice!");
+});
+
 test("call time evaluation with arrays", () => {
   const append = (value, array = []) => {
     array.push(value);

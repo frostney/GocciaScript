@@ -41,6 +41,8 @@ type
     function ParseObjectPattern: TGocciaObjectDestructuringPattern;
     function IsAssignmentPattern(Expr: TGocciaExpression): Boolean;
     function ConvertToPattern(Expr: TGocciaExpression): TGocciaDestructuringPattern;
+    procedure SkipDestructuringPattern;
+    procedure SkipExpression;
     function BitwiseOr: TGocciaExpression;
     function BitwiseXor: TGocciaExpression;
     function BitwiseAnd: TGocciaExpression;
@@ -839,6 +841,7 @@ var
   ParamCount: Integer;
   ParamName: string;
   DefaultValue: TGocciaExpression;
+  Pattern: TGocciaDestructuringPattern;
   Body: TGocciaASTNode;
   Line, Column: Integer;
 begin
@@ -853,16 +856,35 @@ begin
       // Increase array size
       SetLength(Parameters, ParamCount + 1);
 
-      ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
-      Parameters[ParamCount].Name := ParamName;
-
-      // Check for default value
-      if Match([gttAssign]) then
+      // Check if this is a destructuring pattern or simple identifier
+      if Check(gttLeftBracket) or Check(gttLeftBrace) then
       begin
-        DefaultValue := Assignment
+        // Parse destructuring pattern parameter
+        Pattern := ParsePattern;
+        Parameters[ParamCount].Pattern := Pattern;
+        Parameters[ParamCount].IsPattern := True;
+        Parameters[ParamCount].Name := ''; // Not used for patterns
+
+        // Check for default value for the whole pattern
+        if Match([gttAssign]) then
+          Parameters[ParamCount].DefaultValue := Assignment
+        else
+          Parameters[ParamCount].DefaultValue := nil;
       end
       else
-        Parameters[ParamCount].DefaultValue := nil;
+      begin
+        // Parse simple identifier parameter
+        ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
+        Parameters[ParamCount].Name := ParamName;
+        Parameters[ParamCount].IsPattern := False;
+        Parameters[ParamCount].Pattern := nil;
+
+        // Check for default value
+        if Match([gttAssign]) then
+          Parameters[ParamCount].DefaultValue := Assignment
+        else
+          Parameters[ParamCount].DefaultValue := nil;
+      end;
 
       Inc(ParamCount);
     until not Match([gttComma]);
@@ -1306,6 +1328,7 @@ var
   ParamCount: Integer;
   ParamName: string;
   DefaultValue: TGocciaExpression;
+  Pattern: TGocciaDestructuringPattern;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -1313,24 +1336,50 @@ begin
   SetLength(Parameters, 0);
   ParamCount := 0;
 
-  // Parse parameters with default value support
+  // Parse parameters with default value support including destructuring
   Consume(gttLeftParen, 'Expected "(" after method name');
   if not Check(gttRightParen) then
   begin
     repeat
-      ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
+      // Check if this is a destructuring pattern or simple identifier
+      if Check(gttLeftBracket) or Check(gttLeftBrace) then
+      begin
+        // Parse destructuring pattern parameter
+        Pattern := ParsePattern;
 
-      // Check for default value
-      if Match([gttAssign]) then
-        DefaultValue := Assignment
+        // Check for default value for the whole pattern
+        if Match([gttAssign]) then
+          DefaultValue := Assignment
+        else
+          DefaultValue := nil;
+
+        // Add parameter to array
+        Inc(ParamCount);
+        SetLength(Parameters, ParamCount);
+        Parameters[ParamCount - 1].Pattern := Pattern;
+        Parameters[ParamCount - 1].IsPattern := True;
+        Parameters[ParamCount - 1].Name := ''; // Not used for patterns
+        Parameters[ParamCount - 1].DefaultValue := DefaultValue;
+      end
       else
-        DefaultValue := nil;
+      begin
+        // Parse simple identifier parameter
+        ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
 
-      // Add parameter to array
-      Inc(ParamCount);
-      SetLength(Parameters, ParamCount);
-      Parameters[ParamCount - 1].Name := ParamName;
-      Parameters[ParamCount - 1].DefaultValue := DefaultValue;
+        // Check for default value
+        if Match([gttAssign]) then
+          DefaultValue := Assignment
+        else
+          DefaultValue := nil;
+
+        // Add parameter to array
+        Inc(ParamCount);
+        SetLength(Parameters, ParamCount);
+        Parameters[ParamCount - 1].Name := ParamName;
+        Parameters[ParamCount - 1].IsPattern := False;
+        Parameters[ParamCount - 1].Pattern := nil;
+        Parameters[ParamCount - 1].DefaultValue := DefaultValue;
+      end;
 
     until not Match([gttComma]);
   end;
@@ -1667,6 +1716,23 @@ begin
             Dec(ParenCount);
             Advance;
           end;
+        gttLeftBracket, gttLeftBrace:
+          begin
+            // Handle destructuring patterns in parameters
+            Advance; // consume [ or {
+            // Skip the destructuring pattern content (simplified)
+            SkipDestructuringPattern;
+                         // Skip optional default value assignment for the whole pattern
+             if Check(gttAssign) then
+             begin
+               Advance; // consume =
+               // Skip the default value expression (handle nested parentheses)
+               SkipExpression;
+             end;
+            // Skip optional comma
+            if Check(gttComma) then
+              Advance;
+          end;
         gttIdentifier:
           begin
             Advance;
@@ -1674,9 +1740,8 @@ begin
             if Check(gttAssign) then
             begin
               Advance; // consume =
-              // Skip the default value expression (simplified)
-              while not IsAtEnd and not Check(gttComma) and not Check(gttRightParen) do
-                Advance;
+              // Skip the default value expression (handle nested parentheses)
+              SkipExpression;
             end;
             // Skip optional comma
             if Check(gttComma) then
@@ -2133,6 +2198,102 @@ begin
 
   Consume(gttSemicolon, 'Expected ";" after break statement');
   Result := TGocciaBreakStatement.Create(Line, Column);
+end;
+
+procedure TGocciaParser.SkipDestructuringPattern;
+var
+  BracketCount, BraceCount: Integer;
+begin
+  BracketCount := 0;
+  BraceCount := 0;
+
+  // The opening bracket/brace was already consumed by the caller, count it
+  if Previous.TokenType = gttLeftBracket then
+    BracketCount := 1
+  else if Previous.TokenType = gttLeftBrace then
+    BraceCount := 1;
+
+  // Skip tokens until we've closed all brackets/braces
+  while not IsAtEnd and ((BracketCount > 0) or (BraceCount > 0)) do
+  begin
+    case Peek.TokenType of
+      gttLeftBracket:
+        begin
+          Inc(BracketCount);
+          Advance;
+        end;
+      gttRightBracket:
+        begin
+          Dec(BracketCount);
+          Advance;
+        end;
+      gttLeftBrace:
+        begin
+          Inc(BraceCount);
+          Advance;
+        end;
+      gttRightBrace:
+        begin
+          Dec(BraceCount);
+          Advance;
+        end;
+    else
+      Advance;
+    end;
+  end;
+end;
+
+procedure TGocciaParser.SkipExpression;
+var
+  ParenCount, BracketCount, BraceCount: Integer;
+begin
+  ParenCount := 0;
+  BracketCount := 0;
+  BraceCount := 0;
+
+  // Skip tokens until we reach a comma or right parenthesis at the same nesting level
+  while not IsAtEnd do
+  begin
+    // Check if we've reached the end of the parameter at the top level
+    if (ParenCount = 0) and (BracketCount = 0) and (BraceCount = 0) and
+       (Check(gttComma) or Check(gttRightParen)) then
+      Break;
+
+    case Peek.TokenType of
+      gttLeftParen:
+        begin
+          Inc(ParenCount);
+          Advance;
+        end;
+      gttRightParen:
+        begin
+          Dec(ParenCount);
+          Advance;
+        end;
+      gttLeftBracket:
+        begin
+          Inc(BracketCount);
+          Advance;
+        end;
+      gttRightBracket:
+        begin
+          Dec(BracketCount);
+          Advance;
+        end;
+      gttLeftBrace:
+        begin
+          Inc(BraceCount);
+          Advance;
+        end;
+      gttRightBrace:
+        begin
+          Dec(BraceCount);
+          Advance;
+        end;
+    else
+      Advance;
+    end;
+  end;
 end;
 
 end.

@@ -130,26 +130,53 @@ begin
     // Bind parameters
     for I := 0 to Length(FParameters) - 1 do
     begin
-      Logger.Debug('Binding parameter %d: %s', [I, FParameters[I].Name]);
-      if I < Arguments.Count then
+      if FParameters[I].IsPattern then
       begin
-        Logger.Debug('  Argument value type: %s, toString: %s', [Arguments[I].ClassName, Arguments[I].ToString]);
-        CallScope.SetValue(FParameters[I].Name, Arguments[I])
-      end
-      else
-      begin
-        // Check if there's a default value
-        if Assigned(FParameters[I].DefaultValue) then
+        // Handle destructuring parameter
+        Logger.Debug('Binding destructuring parameter %d', [I]);
+
+        // Get the argument value or default
+        if I < Arguments.Count then
+          ReturnValue := Arguments[I]
+        else if Assigned(FParameters[I].DefaultValue) then
         begin
-          Logger.Debug('  No argument provided, using default value');
-          // Evaluate the default value in the function's closure scope
+          Logger.Debug('  No argument provided, using default value for destructuring');
           ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
-          CallScope.SetValue(FParameters[I].Name, ReturnValue);
         end
         else
         begin
-          Logger.Debug('  No argument provided, setting to undefined');
-          CallScope.SetValue(FParameters[I].Name, TGocciaUndefinedValue.Create);
+          Logger.Debug('  No argument provided, using undefined for destructuring');
+          ReturnValue := TGocciaUndefinedValue.Create;
+        end;
+
+        // Bind the destructuring pattern using existing pattern assignment logic
+        Context.Scope := CallScope;
+        AssignPattern(FParameters[I].Pattern, ReturnValue, Context);
+      end
+      else
+      begin
+        // Handle simple named parameter
+        Logger.Debug('Binding parameter %d: %s', [I, FParameters[I].Name]);
+        if I < Arguments.Count then
+        begin
+          Logger.Debug('  Argument value type: %s, toString: %s', [Arguments[I].ClassName, Arguments[I].ToString]);
+          CallScope.SetValue(FParameters[I].Name, Arguments[I])
+        end
+        else
+        begin
+          // Check if there's a default value
+          if Assigned(FParameters[I].DefaultValue) then
+          begin
+            Logger.Debug('  No argument provided, using default value');
+            // Evaluate the default value in the function's closure scope
+            ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
+            CallScope.SetValue(FParameters[I].Name, ReturnValue);
+          end
+          else
+          begin
+            Logger.Debug('  No argument provided, setting to undefined');
+            CallScope.SetValue(FParameters[I].Name, TGocciaUndefinedValue.Create);
+          end;
         end;
       end;
     end;

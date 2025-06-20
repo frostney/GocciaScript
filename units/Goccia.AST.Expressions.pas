@@ -8,9 +8,14 @@ uses
   Goccia.AST.Node, Goccia.Token, Goccia.Values.Base, Generics.Collections, Classes, SysUtils;
 
 type
+  // Forward declaration
+  TGocciaDestructuringPattern = class;
+
   TGocciaParameter = record
-    Name: string;
-    DefaultValue: TGocciaExpression; // nil if no default value
+    Name: string;                                 // For simple parameters
+    Pattern: TGocciaDestructuringPattern;         // For destructuring parameters
+    DefaultValue: TGocciaExpression;              // nil if no default value
+    IsPattern: Boolean;                           // True if this is a destructuring pattern
   end;
   TGocciaParameterArray = array of TGocciaParameter;
 
@@ -292,7 +297,7 @@ type
     property Body: TGocciaASTNode read FBody;
   end;
 
-  // Destructuring pattern base class
+  // Destructuring pattern base class - complete definition
   TGocciaDestructuringPattern = class(TGocciaExpression)
   end;
 

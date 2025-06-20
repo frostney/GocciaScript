@@ -111,10 +111,8 @@ begin
     Result := EvaluateUnary(TGocciaUnaryExpression(Expression), Context)
   else if Expression is TGocciaAssignmentExpression then
   begin
-    // Variable assignment with surgical fix for catch parameter scope propagation
+    // Variable assignment
     Result := EvaluateExpression(TGocciaAssignmentExpression(Expression).Value, Context);
-
-                // Use standard assignment - fix is now at the scope level
     Context.Scope.Assign(TGocciaAssignmentExpression(Expression).Name, Result);
   end
   else if Expression is TGocciaPropertyAssignmentExpression then
