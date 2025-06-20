@@ -31,6 +31,7 @@ type
     // Expression parsing (private)
     function Conditional: TGocciaExpression;
     function LogicalOr: TGocciaExpression;
+    function NullishCoalescing: TGocciaExpression;
     function LogicalAnd: TGocciaExpression;
     function BitwiseOr: TGocciaExpression;
     function BitwiseXor: TGocciaExpression;
@@ -167,9 +168,25 @@ var
   Operator: TGocciaToken;
   Right: TGocciaExpression;
 begin
-  Result := LogicalAnd;
+  Result := NullishCoalescing;
 
   while Match([gttOr]) do
+  begin
+    Operator := Previous;
+    Right := NullishCoalescing;
+    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
+      Right, Operator.Line, Operator.Column);
+  end;
+end;
+
+function TGocciaParser.NullishCoalescing: TGocciaExpression;
+var
+  Operator: TGocciaToken;
+  Right: TGocciaExpression;
+begin
+  Result := LogicalAnd;
+
+  while Match([gttNullishCoalescing]) do
   begin
     Operator := Previous;
     Right := LogicalAnd;

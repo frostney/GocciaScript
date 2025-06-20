@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+Tests are being run with `./build.pas testrunner && ./build/TestRunner [scriptname]` or `./build.pas testrunner &&& ./build/TestRunner tests` to run all tests.

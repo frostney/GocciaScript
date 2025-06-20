@@ -654,6 +654,19 @@ begin
       Result := Right;  // Return right operand
     end;
     Exit;
+  end
+  else if BinaryExpression.Operator = gttNullishCoalescing then
+  begin
+    Left := EvaluateExpression(BinaryExpression.Left, Context);
+    // Return right operand only if left is null or undefined
+    if (Left is TGocciaNullValue) or (Left is TGocciaUndefinedValue) then
+    begin
+      Right := EvaluateExpression(BinaryExpression.Right, Context);
+      Result := Right;
+    end
+    else
+      Result := Left;  // Return left operand for all other values (including falsy ones)
+    Exit;
   end;
 
   // For all other operators, evaluate both operands

@@ -424,7 +424,11 @@ begin
     ']': AddToken(gttRightBracket);
     ',': AddToken(gttComma);
     ';': AddToken(gttSemicolon);
-    '?': AddToken(gttQuestion);
+    '?':
+      if Match('?') then
+        AddToken(gttNullishCoalescing)
+      else
+        AddToken(gttQuestion);
     ':': AddToken(gttColon);
     '+':
       if Match('=') then
