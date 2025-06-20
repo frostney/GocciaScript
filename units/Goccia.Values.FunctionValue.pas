@@ -216,7 +216,9 @@ begin
     Logger.Debug('  Result type: %s', [Result.ClassName]);
     Logger.Debug('  Result toString: %s', [Result.ToString]);
   finally
-    CallScope.Free;
+    // Don't free CallScope if it might be referenced by closures
+    // TODO: Implement proper reference counting for scopes
+    // CallScope.Free;
   end;
 end;
 

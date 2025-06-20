@@ -1506,7 +1506,9 @@ begin
     Statements.Add(ArrowFunctionExpression.Body); // Add the expression directly
   end;
 
-  // Create function with closure scope using new parameter structure
+  // Create function with closure scope - we need to avoid dangling references to temporary call scopes
+  // But we also need to preserve access to the current scope's variables
+  // The simplest approach: create a child scope that will be persistent
   Result := TGocciaFunctionValue.Create(ArrowFunctionExpression.Parameters, Statements, Context.Scope.CreateChild);
 end;
 
