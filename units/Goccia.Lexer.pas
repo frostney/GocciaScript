@@ -324,63 +324,41 @@ begin
       while CharInSet(Peek, ['0'..'7']) do
         Value := Value + Advance;
     end
-    else if CharInSet(Ch, ['0'..'9']) then
+    else
     begin
-      // Regular number starting with 0
+      // Handle regular numbers starting with 0 (including 0.xxx)
+      // Continue consuming digits if present (for cases like 000123)
       while CharInSet(Peek, ['0'..'9']) do
         Value := Value + Advance;
-
-      // Handle decimal part
-      if (Peek = '.') and CharInSet(PeekNext, ['0'..'9']) then
-      begin
-        Value := Value + Advance; // Consume '.'
-        while CharInSet(Peek, ['0'..'9']) do
-          Value := Value + Advance;
-      end;
-
-      // Handle scientific notation
-      if CharInSet(Peek, ['e', 'E']) then
-      begin
-        Value := Value + Advance; // Consume 'e' or 'E'
-        if CharInSet(Peek, ['+', '-']) then
-          Value := Value + Advance; // Consume optional '+' or '-'
-
-        if not CharInSet(Peek, ['0'..'9']) then
-          raise TGocciaLexerError.Create('Invalid scientific notation', FLine, FColumn, FFileName, FSourceLines);
-
-        while CharInSet(Peek, ['0'..'9']) do
-          Value := Value + Advance;
-      end;
     end;
-    // else: just "0" by itself
   end
   else
   begin
     // Regular decimal number (not starting with 0)
     while CharInSet(Peek, ['0'..'9']) do
       Value := Value + Advance;
+  end;
 
-    // Handle decimal part
-    if (Peek = '.') and CharInSet(PeekNext, ['0'..'9']) then
-    begin
-      Value := Value + Advance; // Consume '.'
-      while CharInSet(Peek, ['0'..'9']) do
-        Value := Value + Advance;
-    end;
+  // Handle decimal part (e.g., 0.69314, 1.5)
+  if (Peek = '.') and CharInSet(PeekNext, ['0'..'9']) then
+  begin
+    Value := Value + Advance; // Consume '.'
+    while CharInSet(Peek, ['0'..'9']) do
+      Value := Value + Advance;
+  end;
 
-    // Handle scientific notation (e.g., 1e3, 2.5E-10)
-    if CharInSet(Peek, ['e', 'E']) then
-    begin
-      Value := Value + Advance; // Consume 'e' or 'E'
-      if CharInSet(Peek, ['+', '-']) then
-        Value := Value + Advance; // Consume optional '+' or '-'
+  // Handle scientific notation (e.g., 1e3, 2.5E-10, 0.69314e2)
+  if CharInSet(Peek, ['e', 'E']) then
+  begin
+    Value := Value + Advance; // Consume 'e' or 'E'
+    if CharInSet(Peek, ['+', '-']) then
+      Value := Value + Advance; // Consume optional '+' or '-'
 
-      if not CharInSet(Peek, ['0'..'9']) then
-        raise TGocciaLexerError.Create('Invalid scientific notation', FLine, FColumn, FFileName, FSourceLines);
+    if not CharInSet(Peek, ['0'..'9']) then
+      raise TGocciaLexerError.Create('Invalid scientific notation', FLine, FColumn, FFileName, FSourceLines);
 
-      while CharInSet(Peek, ['0'..'9']) do
-        Value := Value + Advance;
-    end;
+    while CharInSet(Peek, ['0'..'9']) do
+      Value := Value + Advance;
   end;
 
   AddToken(gttNumber, Value);
