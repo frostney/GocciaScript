@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+When implementing a new feature, we want to add tests for it within the structure of the `tests` folder. Make sure to keep tests isolated and grouped by filename.

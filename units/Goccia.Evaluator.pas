@@ -657,6 +657,8 @@ function EvaluateBinary(BinaryExpression: TGocciaBinaryExpression; Context: TGoc
 var
   Left, Right: TGocciaValue;
   LeftNum, RightNum: Double;
+  PropertyName: string;
+  Index: Integer;
 begin
   // Handle short-circuiting logical operators first
   if BinaryExpression.Operator = gttAnd then
@@ -765,6 +767,67 @@ begin
             Result := TGocciaBooleanValue.Create(True)
           else
             Result := TGocciaBooleanValue.Create(False);
+        end;
+      end;
+    gttIn:
+      begin
+        // Implement the 'in' operator: property/index in object/array/string
+        Logger.Debug('EvaluateBinary: in operator called with Left: %s, Right: %s', [Left.ToString, Right.ToString]);
+
+        PropertyName := Left.ToString; // Left operand is the property name
+
+        if Right is TGocciaArrayValue then
+        begin
+          // For arrays, first try to parse as integer index
+          try
+            Index := StrToInt(PropertyName);
+            // Check if index is valid (in bounds and not a hole)
+            if (Index >= 0) and (Index < TGocciaArrayValue(Right).Elements.Count) then
+            begin
+              // For sparse arrays, also check that the element is not nil (not a hole)
+              if TGocciaArrayValue(Right).Elements[Index] <> nil then
+                Result := TGocciaBooleanValue.Create(True)
+              else
+                Result := TGocciaBooleanValue.Create(False);
+            end
+            else
+              Result := TGocciaBooleanValue.Create(False);
+          except
+            // If not a valid integer, check if it's a property in the prototype chain
+            // This includes 'length', array methods like 'push', 'pop', etc.
+            Result := TGocciaBooleanValue.Create(TGocciaArrayValue(Right).HasProperty(PropertyName));
+          end;
+        end
+        else if Right is TGocciaStringValue then
+        begin
+          // Check if index exists in string
+          if PropertyName = 'length' then
+            Result := TGocciaBooleanValue.Create(True)
+          else
+          begin
+            try
+              Index := StrToInt(PropertyName);
+              Result := TGocciaBooleanValue.Create((Index >= 0) and (Index < Length(Right.ToString)));
+            except
+              // If not a valid integer, always false for strings
+              Result := TGocciaBooleanValue.Create(False);
+            end;
+          end;
+        end
+        else if Right is TGocciaInstanceValue then
+        begin
+          // Check if property exists in class instance
+          Result := TGocciaBooleanValue.Create(TGocciaInstanceValue(Right).HasProperty(PropertyName));
+        end
+        else if Right is TGocciaObjectValue then
+        begin
+          // Check if property exists in object (check after arrays and instances)
+          Result := TGocciaBooleanValue.Create(TGocciaObjectValue(Right).HasProperty(PropertyName));
+        end
+        else
+        begin
+          // For other types, return false
+          Result := TGocciaBooleanValue.Create(False);
         end;
       end;
     // Bitwise operators

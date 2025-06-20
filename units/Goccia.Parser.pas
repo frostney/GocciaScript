@@ -249,7 +249,7 @@ var
 begin
   Result := Shift;
 
-  while Match([gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof]) do
+  while Match([gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof, gttIn]) do
   begin
     Operator := Previous;
     Right := Shift;

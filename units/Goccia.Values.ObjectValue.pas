@@ -378,7 +378,9 @@ end;
 
 function TGocciaObjectValue.HasOwnProperty(const AName: string): Boolean;
 begin
-  Result := FProperties.ContainsKey(AName);
+  Result := FProperties.ContainsKey(AName) or
+            FComputedProperties.ContainsKey(AName) or
+            FPropertyDescriptors.ContainsKey(AName);
 end;
 
 procedure TGocciaObjectValue.DeleteProperty(const AName: string);
