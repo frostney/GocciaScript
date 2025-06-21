@@ -5,7 +5,8 @@ unit Goccia.Builtins.Console;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Builtins.Base;
+  Goccia.Values.Base, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue,
+  Goccia.Values.ObjectValue, Goccia.Values.ObjectPropertyDescriptor, Generics.Collections, Goccia.Builtins.Base;
 
 type
   TGocciaConsole = class(TGocciaBuiltin)
@@ -22,7 +23,8 @@ constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScop
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FBuiltinObject.SetProperty('log', TGocciaNativeFunctionValue.Create(ConsoleLog, 'log', -1));
+  FBuiltinObject.DefineProperty('log', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ConsoleLog, 'log', -1), [pfConfigurable, pfWritable]));
 
   AScope.SetValue(AName, FBuiltinObject);
 end;

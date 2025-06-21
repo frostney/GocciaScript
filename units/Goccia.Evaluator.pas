@@ -199,12 +199,12 @@ begin
     // Handle different object types for property assignment
     if (Obj is TGocciaInstanceValue) then
     begin
-      TGocciaInstanceValue(Obj).SetProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName, Value);
+      TGocciaInstanceValue(Obj).AssignProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName, Value);
       Result := Value;
     end
     else if (Obj is TGocciaObjectValue) then
     begin
-      TGocciaObjectValue(Obj).SetProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName, Value);
+      TGocciaObjectValue(Obj).AssignProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName, Value);
       Result := Value;
     end
     else if (Obj is TGocciaClassValue) then
@@ -231,12 +231,12 @@ begin
     end
     else if (Obj is TGocciaInstanceValue) then
     begin
-      TGocciaInstanceValue(Obj).SetProperty(PropName, Value);
+      TGocciaInstanceValue(Obj).AssignProperty(PropName, Value);
       Result := Value;
     end
     else if (Obj is TGocciaObjectValue) then
     begin
-      TGocciaObjectValue(Obj).SetProperty(PropName, Value);
+      TGocciaObjectValue(Obj).AssignProperty(PropName, Value);
       Result := Value;
     end
     else if (Obj is TGocciaClassValue) then
@@ -288,9 +288,9 @@ begin
 
     // Set the new value
     if (Obj is TGocciaInstanceValue) then
-      TGocciaInstanceValue(Obj).SetProperty(PropName, Result)
+      TGocciaInstanceValue(Obj).AssignProperty(PropName, Result)
     else if (Obj is TGocciaObjectValue) then
-      TGocciaObjectValue(Obj).SetProperty(PropName, Result)
+      TGocciaObjectValue(Obj).AssignProperty(PropName, Result)
     else if (Obj is TGocciaClassValue) then
       TGocciaClassValue(Obj).SetProperty(PropName, Result);
   end
@@ -324,9 +324,9 @@ begin
     if (Obj is TGocciaArrayValue) then
       TGocciaArrayValue(Obj).SetProperty(PropName, Result)
     else if (Obj is TGocciaInstanceValue) then
-      TGocciaInstanceValue(Obj).SetProperty(PropName, Result)
+      TGocciaInstanceValue(Obj).AssignProperty(PropName, Result)
     else if (Obj is TGocciaObjectValue) then
-      TGocciaObjectValue(Obj).SetProperty(PropName, Result)
+      TGocciaObjectValue(Obj).AssignProperty(PropName, Result)
     else if (Obj is TGocciaClassValue) then
       TGocciaClassValue(Obj).SetProperty(PropName, Result);
   end
@@ -382,9 +382,9 @@ begin
 
       // Set the new value
       if (Obj is TGocciaInstanceValue) then
-        TGocciaInstanceValue(Obj).SetProperty(PropName, Value)
+        TGocciaInstanceValue(Obj).AssignProperty(PropName, Value)
       else if (Obj is TGocciaObjectValue) then
-        TGocciaObjectValue(Obj).SetProperty(PropName, Value)
+        TGocciaObjectValue(Obj).AssignProperty(PropName, Value)
       else if (Obj is TGocciaClassValue) then
         TGocciaClassValue(Obj).SetProperty(PropName, Value);
 
@@ -1376,12 +1376,21 @@ var
   SetterPair: TPair<string, TGocciaSetterExpression>;
   GetterFunction: TGocciaValue;
   SetterFunction: TGocciaValue;
+  PropertyName: string;
+  PropertyExpression: TGocciaExpression;
 begin
   Obj := TGocciaObjectValue.Create;
 
-  // Handle static properties: {key: value, "key2": value2}
-  for Pair in ObjectExpression.Properties do
-    Obj.DefineProperty(Pair.Key, TGocciaPropertyDescriptorData.Create(EvaluateExpression(Pair.Value, Context), [pfEnumerable, pfConfigurable, pfWritable]));
+  // Handle static properties in insertion order: {key: value, "key2": value2}
+  if Assigned(ObjectExpression.Properties) and Assigned(ObjectExpression.PropertyInsertionOrder) then
+  begin
+    for I := 0 to ObjectExpression.PropertyInsertionOrder.Count - 1 do
+    begin
+      PropertyName := ObjectExpression.PropertyInsertionOrder[I];
+      if ObjectExpression.Properties.TryGetValue(PropertyName, PropertyExpression) then
+        Obj.DefineProperty(PropertyName, TGocciaPropertyDescriptorData.Create(EvaluateExpression(PropertyExpression, Context), [pfEnumerable, pfConfigurable, pfWritable]));
+    end;
+  end;
 
   // TODO: We shouldn't treat getters and setters separately, but as a single property descriptor
 
@@ -1420,7 +1429,7 @@ begin
           // Spread object properties
           SpreadObj := TGocciaObjectValue(SpreadValue);
           for Key in SpreadObj.GetEnumerablePropertyNames do
-            Obj.SetProperty(Key, SpreadObj.GetProperty(Key));
+            Obj.AssignProperty(Key, SpreadObj.GetProperty(Key));
         end
         else if SpreadValue is TGocciaArrayValue then
         begin
@@ -1429,14 +1438,14 @@ begin
           for I := 0 to SpreadArray.Elements.Count - 1 do
           begin
             if SpreadArray.Elements[I] <> nil then
-              Obj.SetProperty(IntToStr(I), SpreadArray.Elements[I]);
+              Obj.AssignProperty(IntToStr(I), SpreadArray.Elements[I]);
           end;
         end
         else if SpreadValue is TGocciaStringValue then
         begin
           // Spread string as indexed properties
           for I := 1 to Length(SpreadValue.ToString) do
-            Obj.SetProperty(IntToStr(I - 1), TGocciaStringValue.Create(SpreadValue.ToString[I]));
+            Obj.AssignProperty(IntToStr(I - 1), TGocciaStringValue.Create(SpreadValue.ToString[I]));
         end
         else if not ((SpreadValue is TGocciaNullValue) or (SpreadValue is TGocciaUndefinedValue)) then
         begin
@@ -1450,7 +1459,7 @@ begin
         // Regular computed property: {[expr]: value}
         ComputedKey := EvaluateExpression(ComputedPair.Key, Context).ToString;
         // Set the property (computed properties can overwrite static ones)
-        Obj.SetProperty(ComputedKey, EvaluateExpression(ComputedPair.Value, Context));
+        Obj.AssignProperty(ComputedKey, EvaluateExpression(ComputedPair.Value, Context));
       end;
     end;
   end;
@@ -1898,7 +1907,7 @@ begin
     Logger.Debug('Initializing instance property: %s from class: %s', [PropertyPair.Key, ClassValue.Name]);
     // Evaluate the property expression in the current context
     PropertyValue := EvaluateExpression(PropertyPair.Value, Context);
-    Instance.SetProperty(PropertyPair.Key, PropertyValue);
+    Instance.AssignProperty(PropertyPair.Key, PropertyValue);
   end;
 end;
 
@@ -2680,7 +2689,7 @@ begin
         for Key in ObjectValue.GetEnumerablePropertyNames do
         begin
           if UsedKeys.IndexOf(Key) = -1 then
-            RestObject.SetProperty(Key, ObjectValue.GetProperty(Key));
+            RestObject.AssignProperty(Key, ObjectValue.GetProperty(Key));
         end;
         AssignPattern(TGocciaRestDestructuringPattern(Prop.Pattern).Argument, RestObject, Context);
       end

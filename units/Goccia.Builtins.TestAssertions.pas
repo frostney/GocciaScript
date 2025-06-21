@@ -126,7 +126,7 @@ type
 implementation
 
 uses
-  SysUtils, Goccia.Values.ClassValue, Goccia.Evaluator;
+  SysUtils, Goccia.Values.ClassValue, Goccia.Evaluator, Goccia.Values.ObjectPropertyDescriptor;
 
 { TTestSuite }
 
@@ -158,25 +158,42 @@ begin
   FIsNegated := IsNegated;
 
   // Add matcher methods
-  SetProperty('toBe', TGocciaNativeFunctionValue.Create(ToBe, 'toBe', 1));
-  SetProperty('toEqual', TGocciaNativeFunctionValue.Create(ToEqual, 'toEqual', 1));
-  SetProperty('toBeNull', TGocciaNativeFunctionValue.Create(ToBeNull, 'toBeNull', 0));
-  SetProperty('toBeNaN', TGocciaNativeFunctionValue.Create(ToBeNaN, 'toBeNaN', 0));
-  SetProperty('toBeUndefined', TGocciaNativeFunctionValue.Create(ToBeUndefined, 'toBeUndefined', 0));
-  SetProperty('toBeTruthy', TGocciaNativeFunctionValue.Create(ToBeTruthy, 'toBeTruthy', 0));
-  SetProperty('toBeFalsy', TGocciaNativeFunctionValue.Create(ToBeFalsy, 'toBeFalsy', 0));
-  SetProperty('toBeGreaterThan', TGocciaNativeFunctionValue.Create(ToBeGreaterThan, 'toBeGreaterThan', 1));
-  SetProperty('toBeGreaterThanOrEqual', TGocciaNativeFunctionValue.Create(ToBeGreaterThanOrEqual, 'toBeGreaterThanOrEqual', 1));
-  SetProperty('toBeLessThan', TGocciaNativeFunctionValue.Create(ToBeLessThan, 'toBeLessThan', 1));
-  SetProperty('toBeLessThanOrEqual', TGocciaNativeFunctionValue.Create(ToBeLessThanOrEqual, 'toBeLessThanOrEqual', 1));
-  SetProperty('toContain', TGocciaNativeFunctionValue.Create(ToContain, 'toContain', 1));
-  SetProperty('toBeInstanceOf', TGocciaNativeFunctionValue.Create(ToBeInstanceOf, 'toBeInstanceOf', 1));
-  SetProperty('toHaveLength', TGocciaNativeFunctionValue.Create(ToHaveLength, 'toHaveLength', 1));
-  SetProperty('toHaveProperty', TGocciaNativeFunctionValue.Create(ToHaveProperty, 'toHaveProperty', 2));
-  SetProperty('toThrow', TGocciaNativeFunctionValue.Create(ToThrow, 'toThrow', 1));
+  DefineProperty('toBe', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBe, 'toBe', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toEqual', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToEqual, 'toEqual', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toBeNull', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBeNull, 'toBeNull', 0), [pfConfigurable, pfWritable]));
+  DefineProperty('toBeNaN', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBeNaN, 'toBeNaN', 0), [pfConfigurable, pfWritable]));
+  DefineProperty('toBeUndefined', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBeUndefined, 'toBeUndefined', 0), [pfConfigurable, pfWritable]));
+  DefineProperty('toBeTruthy', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBeTruthy, 'toBeTruthy', 0), [pfConfigurable, pfWritable]));
+  DefineProperty('toBeFalsy', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBeFalsy, 'toBeFalsy', 0), [pfConfigurable, pfWritable]));
+  DefineProperty('toBeGreaterThan', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBeGreaterThan, 'toBeGreaterThan', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toBeGreaterThanOrEqual', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBeGreaterThanOrEqual, 'toBeGreaterThanOrEqual', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toBeLessThan', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBeLessThan, 'toBeLessThan', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toBeLessThanOrEqual', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBeLessThanOrEqual, 'toBeLessThanOrEqual', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toContain', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToContain, 'toContain', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toBeInstanceOf', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBeInstanceOf, 'toBeInstanceOf', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveLength', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveLength, 'toHaveLength', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveProperty', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveProperty, 'toHaveProperty', 2), [pfConfigurable, pfWritable]));
+  DefineProperty('toThrow', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToThrow, 'toThrow', 1), [pfConfigurable, pfWritable]));
 
   // Negation property
-  SetProperty('not', TGocciaNativeFunctionValue.Create(GetNot, 'not', 0));
+  DefineProperty('not', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(GetNot, 'not', 0), [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaExpectationValue.ToBe(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -754,7 +771,8 @@ begin
 
   // Create test function with skip property
   TestFunction := TGocciaNativeFunctionValue.Create(Test, 'test', 2);
-  TestFunction.SetProperty('skip', TGocciaNativeFunctionValue.Create(Skip, 'skip', 2));
+  TestFunction.DefineProperty('skip', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(Skip, 'skip', 2), [pfConfigurable, pfWritable]));
   AScope.SetValue('test', TestFunction);
 
   AScope.SetValue('it', TGocciaNativeFunctionValue.Create(It, 'it', 2));
@@ -763,13 +781,20 @@ begin
   AScope.SetValue('runTests', TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0));
 
   // Also set them in the builtin object for completeness
-  FBuiltinObject.SetProperty('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1));
-  FBuiltinObject.SetProperty('describe', TGocciaNativeFunctionValue.Create(Describe, 'describe', 2));
-  FBuiltinObject.SetProperty('test', TestFunction);  // Use the same test function with skip property
-  FBuiltinObject.SetProperty('it', TGocciaNativeFunctionValue.Create(It, 'it', 2));
-  FBuiltinObject.SetProperty('beforeEach', TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1));
-  FBuiltinObject.SetProperty('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1));
-  FBuiltinObject.SetProperty('runTests', TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0));
+  FBuiltinObject.DefineProperty('expect', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(Expect, 'expect', 1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.DefineProperty('describe', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(Describe, 'describe', 2), [pfConfigurable, pfWritable]));
+  FBuiltinObject.DefineProperty('test', TGocciaPropertyDescriptorData.Create(
+    TestFunction, [pfConfigurable, pfWritable]));  // Use the same test function with skip property
+  FBuiltinObject.DefineProperty('it', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(It, 'it', 2), [pfConfigurable, pfWritable]));
+  FBuiltinObject.DefineProperty('beforeEach', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.DefineProperty('afterEach', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.DefineProperty('runTests', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0), [pfConfigurable, pfWritable]));
 end;
 
 destructor TGocciaTestAssertions.Destroy;
@@ -1163,15 +1188,15 @@ begin
 
    // Create result object
   ResultObj := TGocciaObjectValue.Create;
-  ResultObj.SetProperty('totalTests', TGocciaNumberValue.Create(FRegisteredTests.Count));
-  ResultObj.SetProperty('totalRunTests', TGocciaNumberValue.Create(FTestStats.TotalTests));
-  ResultObj.SetProperty('passed', TGocciaNumberValue.Create(FTestStats.PassedTests));
-  ResultObj.SetProperty('failed', TGocciaNumberValue.Create(FTestStats.FailedTests));
-  ResultObj.SetProperty('skipped', TGocciaNumberValue.Create(FTestStats.SkippedTests));
-  ResultObj.SetProperty('assertions', TGocciaNumberValue.Create(FTestStats.TotalAssertionCount));
-  ResultObj.SetProperty('duration', TGocciaNumberValue.Create(GetTickCount64 - StartTime));
-  ResultObj.SetProperty('failedTests', FailedTestDetailsArray);
-  ResultObj.SetProperty('summary', TGocciaStringValue.Create(Summary));
+  ResultObj.AssignProperty('totalTests', TGocciaNumberValue.Create(FRegisteredTests.Count));
+  ResultObj.AssignProperty('totalRunTests', TGocciaNumberValue.Create(FTestStats.TotalTests));
+  ResultObj.AssignProperty('passed', TGocciaNumberValue.Create(FTestStats.PassedTests));
+  ResultObj.AssignProperty('failed', TGocciaNumberValue.Create(FTestStats.FailedTests));
+  ResultObj.AssignProperty('skipped', TGocciaNumberValue.Create(FTestStats.SkippedTests));
+  ResultObj.AssignProperty('assertions', TGocciaNumberValue.Create(FTestStats.TotalAssertionCount));
+  ResultObj.AssignProperty('duration', TGocciaNumberValue.Create(GetTickCount64 - StartTime));
+  ResultObj.AssignProperty('failedTests', FailedTestDetailsArray);
+  ResultObj.AssignProperty('summary', TGocciaStringValue.Create(Summary));
 
   // Print the summary to console for visibility
   if ShowTestResults then

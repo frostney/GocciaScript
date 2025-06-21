@@ -5,7 +5,9 @@ unit Goccia.Builtins.GlobalArray;
 interface
 
 uses
-  Goccia.Values.ArrayValue, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Builtins.Base, Generics.Collections, Goccia.Values.BooleanValue, Goccia.Values.Base, Goccia.Scope, Goccia.Error;
+  Goccia.Values.ArrayValue, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue,
+  Goccia.Builtins.Base, Generics.Collections, Goccia.Values.BooleanValue, Goccia.Values.Base, Goccia.Scope,
+  Goccia.Error, Goccia.Values.ObjectPropertyDescriptor;
 
 type
   TGocciaGlobalArray = class(TGocciaBuiltin)
@@ -21,7 +23,8 @@ constructor TGocciaGlobalArray.Create(const AName: string; const AScope: TGoccia
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FBuiltinObject.SetProperty('isArray', TGocciaNativeFunctionValue.Create(IsArray, 'isArray', 1));
+  FBuiltinObject.DefineProperty('isArray', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(IsArray, 'isArray', 1), [pfConfigurable, pfWritable]));
 
   AScope.SetValue(AName, FBuiltinObject);
 end;

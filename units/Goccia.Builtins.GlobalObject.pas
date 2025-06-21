@@ -31,12 +31,18 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   // Global Object methods: writable, non-enumerable, configurable
-  FBuiltinObject.SetProperty('keys', TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1));
-  FBuiltinObject.SetProperty('values', TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1));
-  FBuiltinObject.SetProperty('entries', TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1));
-  FBuiltinObject.SetProperty('assign', TGocciaNativeFunctionValue.Create(ObjectAssign, 'assign', -1));
-  FBuiltinObject.SetProperty('create', TGocciaNativeFunctionValue.Create(ObjectCreate, 'create', 1));
-  FBuiltinObject.SetProperty('hasOwn', TGocciaNativeFunctionValue.Create(ObjectHasOwn, 'hasOwn', 1));
+  FBuiltinObject.DefineProperty('keys', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.DefineProperty('values', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.DefineProperty('entries', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.DefineProperty('assign', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ObjectAssign, 'assign', -1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.DefineProperty('create', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ObjectCreate, 'create', 1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.DefineProperty('hasOwn', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ObjectHasOwn, 'hasOwn', 1), [pfConfigurable, pfWritable]));
 
   AScope.SetValue(AName, FBuiltinObject);
 end;
@@ -141,7 +147,7 @@ begin
       // Use enumerable property entries to safely copy properties
       PropertyEntries := Source.GetEnumerablePropertyEntries;
       for J := 0 to High(PropertyEntries) do
-        InitialObj.SetProperty(PropertyEntries[J].Key, PropertyEntries[J].Value);
+        InitialObj.AssignProperty(PropertyEntries[J].Key, PropertyEntries[J].Value);
     end;
   end;
 

@@ -795,7 +795,7 @@ begin
   else
   begin
     // Fall back to regular object property assignment
-    inherited SetProperty(AName, AValue);
+    inherited AssignProperty(AName, AValue);
   end;
 end;
 

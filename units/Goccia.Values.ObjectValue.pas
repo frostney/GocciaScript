@@ -5,12 +5,13 @@ unit Goccia.Values.ObjectValue;
 interface
 
 uses
-  Goccia.Values.Base, Generics.Collections, Goccia.Values.UndefinedValue, Goccia.Values.ObjectPropertyDescriptor, Math, Goccia.Logger, SysUtils;
+  Goccia.Values.Base, Generics.Collections, Goccia.Values.UndefinedValue, Goccia.Values.ObjectPropertyDescriptor, Math, Goccia.Logger, SysUtils, Classes;
 
 type
   TGocciaObjectValue = class(TGocciaValue)
   protected
     FPropertyDescriptors: TDictionary<string, TGocciaPropertyDescriptor>;
+    FPropertyInsertionOrder: TStringList; // Track insertion order for property enumeration
     FPrototype: TGocciaObjectValue;
   public
     constructor Create;
@@ -24,7 +25,7 @@ type
     procedure DefineProperty(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
     procedure DefineProperties(const AProperties: TDictionary<string, TGocciaPropertyDescriptor>);
 
-    procedure SetProperty(const AName: string; AValue: TGocciaValue);
+    procedure AssignProperty(const AName: string; AValue: TGocciaValue);
 
     // Convenience methods for built-in objects
     procedure RegisterMethod(AMethod: TGocciaValue);
@@ -56,6 +57,8 @@ uses Goccia.Values.FunctionValue, Goccia.Values.NativeFunction;
 constructor TGocciaObjectValue.Create;
 begin
   FPropertyDescriptors := TDictionary<string, TGocciaPropertyDescriptor>.Create;
+  FPropertyInsertionOrder := TStringList.Create;
+  FPropertyInsertionOrder.Duplicates := dupIgnore; // Prevent duplicates
 
   // TODO: Should this be TGocciaNullValue?
   // TODO: Should we set a default prototype?
@@ -69,6 +72,7 @@ begin
 
   // Property descriptors are now records - no manual cleanup needed
   FPropertyDescriptors.Free;
+  FPropertyInsertionOrder.Free;
 
   inherited;
 end;
@@ -141,7 +145,7 @@ begin
   Result := 'object';
 end;
 
-procedure TGocciaObjectValue.SetProperty(const AName: string; AValue: TGocciaValue);
+procedure TGocciaObjectValue.AssignProperty(const AName: string; AValue: TGocciaValue);
 var
   Descriptor: TGocciaPropertyDescriptor;
   SetterFunction: TGocciaFunctionValue;
@@ -201,8 +205,8 @@ begin
   end;
 
   // Create new property with proper descriptor (JavaScript default attributes)
-  Descriptor := TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]);
-  FPropertyDescriptors.AddOrSetValue(AName, Descriptor);
+  // Use DefineProperty to track insertion order
+  DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
 procedure TGocciaObjectValue.DefineProperty(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
@@ -212,14 +216,19 @@ begin
     if FPropertyDescriptors[AName].Configurable then
     begin
       FPropertyDescriptors[AName] := ADescriptor;
-      Exit;
+      Exit; // Don't change insertion order for existing properties
     end;
 
     if FPropertyDescriptors[AName].Writable then
     begin
       FPropertyDescriptors[AName] := ADescriptor;
-      Exit;
+      Exit; // Don't change insertion order for existing properties
     end;
+  end
+  else
+  begin
+    // New property - track insertion order
+    FPropertyInsertionOrder.Add(AName);
   end;
 
   FPropertyDescriptors.AddOrSetValue(AName, ADescriptor);
@@ -404,25 +413,37 @@ begin
 end;
 
 procedure TGocciaObjectValue.DeleteProperty(const AName: string);
+var
+  Index: Integer;
 begin
   if FPropertyDescriptors.ContainsKey(AName) then
+  begin
     FPropertyDescriptors.Remove(AName);
+    // Also remove from insertion order
+    Index := FPropertyInsertionOrder.IndexOf(AName);
+    if Index >= 0 then
+      FPropertyInsertionOrder.Delete(Index);
+  end;
 end;
 
 function TGocciaObjectValue.GetEnumerablePropertyNames: TArray<string>;
 var
   Names: TArray<string>;
   Count: Integer;
-  Pair: TPair<string, TGocciaPropertyDescriptor>;
+  I: Integer;
+  PropertyName: string;
+  Descriptor: TGocciaPropertyDescriptor;
 begin
-  SetLength(Names, FPropertyDescriptors.Count);
+  SetLength(Names, FPropertyInsertionOrder.Count);
   Count := 0;
 
-  for Pair in FPropertyDescriptors do
+  // Iterate in insertion order
+  for I := 0 to FPropertyInsertionOrder.Count - 1 do
   begin
-    if Pair.Value.Enumerable then
+    PropertyName := FPropertyInsertionOrder[I];
+    if FPropertyDescriptors.TryGetValue(PropertyName, Descriptor) and Descriptor.Enumerable then
     begin
-      Names[Count] := Pair.Key;
+      Names[Count] := PropertyName;
       Inc(Count);
     end;
   end;
@@ -435,16 +456,21 @@ function TGocciaObjectValue.GetEnumerablePropertyValues: TArray<TGocciaValue>;
 var
   Values: TArray<TGocciaValue>;
   Count: Integer;
-  Pair: TPair<string, TGocciaPropertyDescriptor>;
+  I: Integer;
+  PropertyName: string;
+  Descriptor: TGocciaPropertyDescriptor;
 begin
-  SetLength(Values, FPropertyDescriptors.Count);
+  SetLength(Values, FPropertyInsertionOrder.Count);
   Count := 0;
 
-  for Pair in FPropertyDescriptors do
+  // Iterate in insertion order
+  for I := 0 to FPropertyInsertionOrder.Count - 1 do
   begin
-    if Pair.Value.Enumerable and (Pair.Value is TGocciaPropertyDescriptorData) then
+    PropertyName := FPropertyInsertionOrder[I];
+    if FPropertyDescriptors.TryGetValue(PropertyName, Descriptor) and
+       Descriptor.Enumerable and (Descriptor is TGocciaPropertyDescriptorData) then
     begin
-      Values[Count] := TGocciaPropertyDescriptorData(Pair.Value).Value;
+      Values[Count] := TGocciaPropertyDescriptorData(Descriptor).Value;
       Inc(Count);
     end;
   end;
@@ -457,18 +483,23 @@ function TGocciaObjectValue.GetEnumerablePropertyEntries: TArray<TPair<string, T
 var
   Entries: TArray<TPair<string, TGocciaValue>>;
   Count: Integer;
-  Pair: TPair<string, TGocciaPropertyDescriptor>;
+  I: Integer;
+  PropertyName: string;
+  Descriptor: TGocciaPropertyDescriptor;
   Entry: TPair<string, TGocciaValue>;
 begin
-  SetLength(Entries, FPropertyDescriptors.Count);
+  SetLength(Entries, FPropertyInsertionOrder.Count);
   Count := 0;
 
-  for Pair in FPropertyDescriptors do
+  // Iterate in insertion order
+  for I := 0 to FPropertyInsertionOrder.Count - 1 do
   begin
-    if Pair.Value.Enumerable and (Pair.Value is TGocciaPropertyDescriptorData) then
+    PropertyName := FPropertyInsertionOrder[I];
+    if FPropertyDescriptors.TryGetValue(PropertyName, Descriptor) and
+       Descriptor.Enumerable and (Descriptor is TGocciaPropertyDescriptorData) then
     begin
-      Entry.Key := Pair.Key;
-      Entry.Value := TGocciaPropertyDescriptorData(Pair.Value).Value;
+      Entry.Key := PropertyName;
+      Entry.Value := TGocciaPropertyDescriptorData(Descriptor).Value;
       Entries[Count] := Entry;
       Inc(Count);
     end;
@@ -482,15 +513,21 @@ function TGocciaObjectValue.GetAllPropertyNames: TArray<string>;
 var
   Names: TArray<string>;
   Count: Integer;
-  Pair: TPair<string, TGocciaPropertyDescriptor>;
+  I: Integer;
+  PropertyName: string;
 begin
-  SetLength(Names, FPropertyDescriptors.Count);
+  SetLength(Names, FPropertyInsertionOrder.Count);
   Count := 0;
 
-  for Pair in FPropertyDescriptors do
+  // Iterate in insertion order
+  for I := 0 to FPropertyInsertionOrder.Count - 1 do
   begin
-    Names[Count] := Pair.Key;
-    Inc(Count);
+    PropertyName := FPropertyInsertionOrder[I];
+    if FPropertyDescriptors.ContainsKey(PropertyName) then
+    begin
+      Names[Count] := PropertyName;
+      Inc(Count);
+    end;
   end;
 
   SetLength(Names, Count);

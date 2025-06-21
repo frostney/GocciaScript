@@ -592,6 +592,7 @@ end;
 function TGocciaParser.ObjectLiteral: TGocciaExpression;
 var
   Properties: TDictionary<string, TGocciaExpression>;
+  PropertyOrder: TStringList;
   ComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
   Getters: TDictionary<string, TGocciaGetterExpression>;
   Setters: TDictionary<string, TGocciaSetterExpression>;
@@ -614,6 +615,8 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
   Properties := TDictionary<string, TGocciaExpression>.Create;
+  PropertyOrder := TStringList.Create;
+  PropertyOrder.Duplicates := dupIgnore;
   ComputedProperties := TDictionary<TGocciaExpression, TGocciaExpression>.Create;
   Getters := TDictionary<string, TGocciaGetterExpression>.Create;
   Setters := TDictionary<string, TGocciaSetterExpression>.Create;
@@ -823,7 +826,10 @@ begin
         if Properties.ContainsKey(Key) then
           Properties[Key] := Value
         else
+        begin
           Properties.Add(Key, Value);
+          PropertyOrder.Add(Key); // Track insertion order
+        end;
       end;
     end;
 
@@ -832,7 +838,7 @@ begin
   end;
 
   Consume(gttRightBrace, 'Expected "}" after object properties');
-  Result := TGocciaObjectExpression.Create(Properties, ComputedProperties, Getters, Setters, Line, Column);
+  Result := TGocciaObjectExpression.Create(Properties, PropertyOrder, ComputedProperties, Getters, Setters, Line, Column);
 end;
 
 function TGocciaParser.ArrowFunction: TGocciaExpression;

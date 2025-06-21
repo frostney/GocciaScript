@@ -24,7 +24,8 @@ type
 implementation
 
 uses
-  Goccia.Values.NativeFunction;
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor;
 
 constructor TGocciaGlobalNumber.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
@@ -32,11 +33,16 @@ begin
 
   FBuiltinNumber := TGocciaObjectValue.Create;
 
-  FBuiltinNumber.SetProperty('parseInt', TGocciaNativeFunctionValue.Create(NumberParseInt, 'parseInt', 1));
-  FBuiltinNumber.SetProperty('parseFloat', TGocciaNativeFunctionValue.Create(NumberParseFloat, 'parseFloat', 1));
-  FBuiltinNumber.SetProperty('isFinite', TGocciaNativeFunctionValue.Create(NumberIsFinite, 'isFinite', 0));
-  FBuiltinNumber.SetProperty('isNaN', TGocciaNativeFunctionValue.Create(NumberIsNaN, 'isNaN', 0));
-  FBuiltinNumber.SetProperty('isInteger', TGocciaNativeFunctionValue.Create(NumberIsInteger, 'isInteger', 0));
+  FBuiltinNumber.DefineProperty('parseInt', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(NumberParseInt, 'parseInt', 1), [pfConfigurable, pfWritable]));
+  FBuiltinNumber.DefineProperty('parseFloat', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(NumberParseFloat, 'parseFloat', 1), [pfConfigurable, pfWritable]));
+  FBuiltinNumber.DefineProperty('isFinite', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(NumberIsFinite, 'isFinite', 0), [pfConfigurable, pfWritable]));
+  FBuiltinNumber.DefineProperty('isNaN', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(NumberIsNaN, 'isNaN', 0), [pfConfigurable, pfWritable]));
+  FBuiltinNumber.DefineProperty('isInteger', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(NumberIsInteger, 'isInteger', 0), [pfConfigurable, pfWritable]));
 
   AScope.SetValue(AName, FBuiltinNumber);
 end;

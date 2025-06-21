@@ -3,7 +3,9 @@ program TestRunner;
 {$I Goccia.inc}
 
 uses
-  Classes, SysUtils, Generics.Collections, Goccia.Values.Base, Goccia.Lexer, Goccia.Parser, Goccia.Values.ObjectValue, Goccia.Values.NumberValue, Goccia.Values.ArrayValue, Goccia.Interpreter, Goccia.Error, Goccia.Token, Goccia.AST.Node, FileUtils in 'units/FileUtils.pas';
+  Classes, SysUtils, Generics.Collections, Goccia.Values.Base, Goccia.Lexer, Goccia.Parser, Goccia.Values.ObjectValue, 
+  Goccia.Values.NumberValue, Goccia.Values.ArrayValue, Goccia.Interpreter, Goccia.Error, Goccia.Token, Goccia.AST.Node, 
+  Goccia.Values.ObjectPropertyDescriptor, FileUtils in 'units/FileUtils.pas';
 
 function RunGocciaScript(const FileName: string): TGocciaValue;
 var
@@ -26,14 +28,14 @@ begin
       begin
         WriteLn('Fatal error: ', E.Message);
         DefaultScriptResult := TGocciaObjectValue.Create;
-        DefaultScriptResult.SetProperty('totalTests', TGocciaNumberValue.Create(0));
-        DefaultScriptResult.SetProperty('totalRunTests', TGocciaNumberValue.Create(0));
-        DefaultScriptResult.SetProperty('passed', TGocciaNumberValue.Create(0));
-        DefaultScriptResult.SetProperty('failed', TGocciaNumberValue.Create(0));
-        DefaultScriptResult.SetProperty('skipped', TGocciaNumberValue.Create(0));
-        DefaultScriptResult.SetProperty('assertions', TGocciaNumberValue.Create(0));
-        DefaultScriptResult.SetProperty('duration', TGocciaNumberValue.Create(0));
-        DefaultScriptResult.SetProperty('failedTests', TGocciaArrayValue.Create);
+        DefaultScriptResult.AssignProperty('totalTests', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.AssignProperty('totalRunTests', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.AssignProperty('passed', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.AssignProperty('failed', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.AssignProperty('skipped', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.AssignProperty('assertions', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.AssignProperty('duration', TGocciaNumberValue.Create(0));
+        DefaultScriptResult.AssignProperty('failedTests', TGocciaArrayValue.Create);
         Result := DefaultScriptResult;
       end;
     end;
@@ -72,14 +74,14 @@ var
 begin
   AllTestResults := TGocciaObjectValue.Create;
 
-  AllTestResults.SetProperty('totalTests', TGocciaNumberValue.Create(0));
-  AllTestResults.SetProperty('totalRunTests', TGocciaNumberValue.Create(0));
-  AllTestResults.SetProperty('passed', TGocciaNumberValue.Create(0));
-  AllTestResults.SetProperty('failed', TGocciaNumberValue.Create(0));
-  AllTestResults.SetProperty('skipped', TGocciaNumberValue.Create(0));
-  AllTestResults.SetProperty('assertions', TGocciaNumberValue.Create(0));
-  AllTestResults.SetProperty('duration', TGocciaNumberValue.Create(0));
-  AllTestResults.SetProperty('failedTests', TGocciaArrayValue.Create);
+  AllTestResults.AssignProperty('totalTests', TGocciaNumberValue.Create(0));
+  AllTestResults.AssignProperty('totalRunTests', TGocciaNumberValue.Create(0));
+  AllTestResults.AssignProperty('passed', TGocciaNumberValue.Create(0));
+  AllTestResults.AssignProperty('failed', TGocciaNumberValue.Create(0));
+  AllTestResults.AssignProperty('skipped', TGocciaNumberValue.Create(0));
+  AllTestResults.AssignProperty('assertions', TGocciaNumberValue.Create(0));
+  AllTestResults.AssignProperty('duration', TGocciaNumberValue.Create(0));
+  AllTestResults.AssignProperty('failedTests', TGocciaArrayValue.Create);
 
   // Initialize counters to avoid repeated object creation
   PassedCount := 0;
@@ -92,7 +94,7 @@ begin
   for I := 0 to Files.Count - 1 do
   begin
     ScriptResult := RunScriptFromFile(Files[I]) as TGocciaObjectValue;
-    AllTestResults.SetProperty(Files[I], ScriptResult);
+    AllTestResults.AssignProperty(Files[I], ScriptResult);
     
     PassedCount := PassedCount + ScriptResult.GetProperty('passed').ToNumber;
     FailedCount := FailedCount + ScriptResult.GetProperty('failed').ToNumber;
@@ -103,12 +105,12 @@ begin
   end;
   
   // Set final totals - create objects only once at the end
-  AllTestResults.SetProperty('passed', TGocciaNumberValue.Create(PassedCount));
-  AllTestResults.SetProperty('failed', TGocciaNumberValue.Create(FailedCount));
-  AllTestResults.SetProperty('skipped', TGocciaNumberValue.Create(SkippedCount));
-  AllTestResults.SetProperty('totalRunTests', TGocciaNumberValue.Create(TotalRunCount));
-  AllTestResults.SetProperty('duration', TGocciaNumberValue.Create(TotalDuration));
-  AllTestResults.SetProperty('assertions', TGocciaNumberValue.Create(TotalAssertions));
+  AllTestResults.AssignProperty('passed', TGocciaNumberValue.Create(PassedCount));
+  AllTestResults.AssignProperty('failed', TGocciaNumberValue.Create(FailedCount));
+  AllTestResults.AssignProperty('skipped', TGocciaNumberValue.Create(SkippedCount));
+  AllTestResults.AssignProperty('totalRunTests', TGocciaNumberValue.Create(TotalRunCount));
+  AllTestResults.AssignProperty('duration', TGocciaNumberValue.Create(TotalDuration));
+  AllTestResults.AssignProperty('assertions', TGocciaNumberValue.Create(TotalAssertions));
   
   Result := AllTestResults;
 end;

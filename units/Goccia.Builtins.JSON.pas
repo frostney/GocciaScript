@@ -61,14 +61,17 @@ implementation
 uses
   Goccia.Values.BooleanValue,
   Goccia.Values.NullValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Classes;
 
 constructor TGocciaJSON.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FBuiltinObject.SetProperty('parse', TGocciaNativeFunctionValue.Create(JSONParse, 'parse', 1));
-  FBuiltinObject.SetProperty('stringify', TGocciaNativeFunctionValue.Create(JSONStringify, 'stringify', 1));
+  FBuiltinObject.DefineProperty('parse', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(JSONParse, 'parse', 1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.DefineProperty('stringify', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(JSONStringify, 'stringify', 1), [pfConfigurable, pfWritable]));
 
   AScope.SetValue(AName, FBuiltinObject);
 end;
@@ -162,7 +165,7 @@ begin
 
     // Parse value
     Value := ParseValue;
-    Result.SetProperty(Key, Value);
+    Result.AssignProperty(Key, Value);
 
     SkipWhitespace;
     if PeekChar = '}' then

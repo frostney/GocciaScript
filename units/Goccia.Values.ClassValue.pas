@@ -146,7 +146,7 @@ begin
   end;
 
   FMethods.AddOrSetValue(AName, AMethod);
-  FPrototype.SetProperty(AName, AMethod);
+  FPrototype.AssignProperty(AName, AMethod);
 end;
 
 function TGocciaClassValue.GetMethod(const AName: string): TGocciaMethodValue;
@@ -322,7 +322,7 @@ end;
 procedure TGocciaInstanceValue.SetProperty(const AName: string; AValue: TGocciaValue);
 begin
   // Always set properties on the instance, not the prototype
-  inherited SetProperty(AName, AValue);
+  inherited AssignProperty(AName, AValue);
 end;
 
 procedure TGocciaInstanceValue.SetPrototype(APrototype: TGocciaObjectValue);
