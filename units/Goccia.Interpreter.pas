@@ -254,9 +254,9 @@ begin
   if (ExistingArray is TGocciaObjectValue) then
   begin
     ArrayObj := TGocciaObjectValue(ExistingArray);
-    // Copy all static methods from existing Array object
-    for Key in ArrayObj.Properties.Keys do
-      ArrayConstructor.SetProperty(Key, ArrayObj.Properties[Key]);
+    // Copy all static methods from existing Array object using property descriptors
+    for Key in ArrayObj.GetAllPropertyNames do
+      ArrayConstructor.SetProperty(Key, ArrayObj.GetProperty(Key));
   end;
   FGlobalScope.SetValue('Array', ArrayConstructor);
 
@@ -265,9 +265,9 @@ begin
   if (ExistingObject is TGocciaObjectValue) then
   begin
     ObjectObj := TGocciaObjectValue(ExistingObject);
-    // Copy all static methods from existing Object
-    for Key in ObjectObj.Properties.Keys do
-      ObjectConstructor.SetProperty(Key, ObjectObj.Properties[Key]);
+    // Copy all static methods from existing Object using property descriptors
+    for Key in ObjectObj.GetAllPropertyNames do
+      ObjectConstructor.SetProperty(Key, ObjectObj.GetProperty(Key));
   end;
   FGlobalScope.SetValue('Object', ObjectConstructor);
 
@@ -279,9 +279,9 @@ begin
   if (ExistingNumber is TGocciaObjectValue) then
   begin
     NumberObj := TGocciaObjectValue(ExistingNumber);
-    // Copy all static methods from existing Number object
-    for Key in NumberObj.Properties.Keys do
-      NumberConstructor.SetProperty(Key, NumberObj.Properties[Key]);
+    // Copy all static methods from existing Number object using property descriptors
+    for Key in NumberObj.GetAllPropertyNames do
+      NumberConstructor.SetProperty(Key, NumberObj.GetProperty(Key));
   end;
   FGlobalScope.SetValue('Number', NumberConstructor);
 

@@ -1158,7 +1158,7 @@ begin
   if FailedTestDetails.Count > 0 then
   begin
     for I := 0 to FailedTestDetails.Count - 1 do
-      FailedTestDetailsArray.Properties.Add(TPair<string, TGocciaValue>.Create(IntToStr(I), TGocciaStringValue.Create(FailedTestDetails[I])));
+      FailedTestDetailsArray.Elements.Add(TGocciaStringValue.Create(FailedTestDetails[I]));
   end;
 
    // Create result object

@@ -467,9 +467,9 @@ begin
   Parts := '';
   HasProperties := False;
 
-  for Key in Obj.Properties.Keys do
+  for Key in Obj.GetEnumerablePropertyNames do
   begin
-    Value := Obj.Properties[Key];
+    Value := Obj.GetProperty(Key);
     // Skip undefined properties and functions
     if not (Value is TGocciaUndefinedValue) and
        (Pos('Function', Value.ClassName) = 0) then

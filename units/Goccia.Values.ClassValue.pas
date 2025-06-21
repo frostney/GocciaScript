@@ -289,11 +289,11 @@ var
 begin
   Logger.Debug('TGocciaInstanceValue.GetProperty called for: %s', [AName]);
 
-  // First check instance properties directly
-  if FProperties.ContainsKey(AName) then
+  // First check instance properties directly using property descriptors
+  if FPropertyDescriptors.ContainsKey(AName) then
   begin
     Logger.Debug('TGocciaInstanceValue.GetProperty: Found in instance properties');
-    Result := FProperties[AName];
+    Result := inherited GetProperty(AName);
     Exit;
   end;
 

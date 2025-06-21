@@ -1370,7 +1370,7 @@ var
   SpreadValue: TGocciaValue;
   SpreadObj: TGocciaObjectValue;
   SpreadArray: TGocciaArrayValue;
-  SpreadPair: TPair<string, TGocciaValue>;
+  Key: string;
   I: Integer;
   GetterPair: TPair<string, TGocciaGetterExpression>;
   SetterPair: TPair<string, TGocciaSetterExpression>;
@@ -1419,8 +1419,8 @@ begin
         begin
           // Spread object properties
           SpreadObj := TGocciaObjectValue(SpreadValue);
-          for SpreadPair in SpreadObj.Properties do
-            Obj.SetProperty(SpreadPair.Key, SpreadPair.Value);
+          for Key in SpreadObj.GetEnumerablePropertyNames do
+            Obj.SetProperty(Key, SpreadObj.GetProperty(Key));
         end
         else if SpreadValue is TGocciaArrayValue then
         begin
@@ -2677,10 +2677,10 @@ begin
       begin
         // Rest pattern: collect remaining properties
         RestObject := TGocciaObjectValue.Create;
-        for ObjectPair in ObjectValue.Properties do
+        for Key in ObjectValue.GetEnumerablePropertyNames do
         begin
-          if UsedKeys.IndexOf(ObjectPair.Key) = -1 then
-            RestObject.SetProperty(ObjectPair.Key, ObjectPair.Value);
+          if UsedKeys.IndexOf(Key) = -1 then
+            RestObject.SetProperty(Key, ObjectValue.GetProperty(Key));
         end;
         AssignPattern(TGocciaRestDestructuringPattern(Prop.Pattern).Argument, RestObject, Context);
       end

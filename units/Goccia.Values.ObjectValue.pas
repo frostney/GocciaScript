@@ -10,7 +10,6 @@ uses
 type
   TGocciaObjectValue = class(TGocciaValue)
   protected
-    FProperties: TDictionary<string, TGocciaValue>;
     FPropertyDescriptors: TDictionary<string, TGocciaPropertyDescriptor>;
     FPrototype: TGocciaObjectValue;
   public
@@ -37,7 +36,12 @@ type
     function HasOwnProperty(const AName: string): Boolean;
     procedure DeleteProperty(const AName: string);
 
-    property Properties: TDictionary<string, TGocciaValue> read FProperties;
+    // Property enumeration methods
+    function GetEnumerablePropertyNames: TArray<string>;
+    function GetEnumerablePropertyValues: TArray<TGocciaValue>;
+    function GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>;
+    function GetAllPropertyNames: TArray<string>;
+
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
   end;
 
@@ -51,7 +55,6 @@ uses Goccia.Values.FunctionValue, Goccia.Values.NativeFunction;
 // TODO: Should we allow the prototype to be set in the constructor?
 constructor TGocciaObjectValue.Create;
 begin
-  FProperties := TDictionary<string, TGocciaValue>.Create;
   FPropertyDescriptors := TDictionary<string, TGocciaPropertyDescriptor>.Create;
 
   // TODO: Should this be TGocciaNullValue?
@@ -63,7 +66,6 @@ destructor TGocciaObjectValue.Destroy;
 begin
   // Don't free the values - they might be referenced elsewhere
   // The scope or other owners should handle their cleanup
-  FProperties.Free;
 
   // Property descriptors are now records - no manual cleanup needed
   FPropertyDescriptors.Free;
@@ -73,20 +75,36 @@ end;
 
 function TGocciaObjectValue.ToDebugString: string;
 var
-  Pair: TPair<string, TGocciaValue>;
+  Pair: TPair<string, TGocciaPropertyDescriptor>;
   First: Boolean;
+  Value: TGocciaValue;
 begin
   Result := '{';
   First := True;
-  for Pair in FProperties do
+
+  // Iterate through property descriptors
+  for Pair in FPropertyDescriptors do
   begin
     if not First then
       Result := Result + ', ';
 
-    if Pair.Value is TGocciaObjectValue then
-      Result := Result + Pair.Key + ': ' + TGocciaObjectValue(Pair.Value).ToDebugString
+    // Get the value from the descriptor
+    if Pair.Value is TGocciaPropertyDescriptorData then
+      Value := TGocciaPropertyDescriptorData(Pair.Value).Value
+    else if Pair.Value is TGocciaPropertyDescriptorAccessor then
+      Value := nil // Accessor descriptors don't have direct values
     else
-      Result := Result + Pair.Key + ': ' + Pair.Value.ToString;
+      Value := nil;
+
+    if Assigned(Value) then
+    begin
+      if Value is TGocciaObjectValue then
+        Result := Result + Pair.Key + ': ' + TGocciaObjectValue(Value).ToDebugString
+      else
+        Result := Result + Pair.Key + ': ' + Value.ToString;
+    end
+    else
+      Result := Result + Pair.Key + ': [accessor]';
 
     First := False;
   end;
@@ -222,7 +240,8 @@ begin
   if not (AMethod is TGocciaFunctionValue) and not (AMethod is TGocciaNativeFunctionValue) then
     raise Exception.Create('Method must be a function or native function');
 
-  Descriptor := TGocciaPropertyDescriptorData.Create(AMethod, [pfEnumerable, pfConfigurable, pfWritable]);
+  // Built-in methods: { writable: true, enumerable: false, configurable: true }
+  Descriptor := TGocciaPropertyDescriptorData.Create(AMethod, [pfConfigurable, pfWritable]);
 
   if AMethod is TGocciaFunctionValue then
   begin
@@ -239,7 +258,7 @@ var
   Descriptor: TGocciaPropertyDescriptor;
 begin
   // Built-in constants: { writable: false, enumerable: false, configurable: false }
-  Descriptor := TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]);
+  Descriptor := TGocciaPropertyDescriptorData.Create(AValue, []);
   FPropertyDescriptors.AddOrSetValue(AName, Descriptor);
 end;
 
@@ -388,6 +407,94 @@ procedure TGocciaObjectValue.DeleteProperty(const AName: string);
 begin
   if FPropertyDescriptors.ContainsKey(AName) then
     FPropertyDescriptors.Remove(AName);
+end;
+
+function TGocciaObjectValue.GetEnumerablePropertyNames: TArray<string>;
+var
+  Names: TArray<string>;
+  Count: Integer;
+  Pair: TPair<string, TGocciaPropertyDescriptor>;
+begin
+  SetLength(Names, FPropertyDescriptors.Count);
+  Count := 0;
+
+  for Pair in FPropertyDescriptors do
+  begin
+    if Pair.Value.Enumerable then
+    begin
+      Names[Count] := Pair.Key;
+      Inc(Count);
+    end;
+  end;
+
+  SetLength(Names, Count);
+  Result := Names;
+end;
+
+function TGocciaObjectValue.GetEnumerablePropertyValues: TArray<TGocciaValue>;
+var
+  Values: TArray<TGocciaValue>;
+  Count: Integer;
+  Pair: TPair<string, TGocciaPropertyDescriptor>;
+begin
+  SetLength(Values, FPropertyDescriptors.Count);
+  Count := 0;
+
+  for Pair in FPropertyDescriptors do
+  begin
+    if Pair.Value.Enumerable and (Pair.Value is TGocciaPropertyDescriptorData) then
+    begin
+      Values[Count] := TGocciaPropertyDescriptorData(Pair.Value).Value;
+      Inc(Count);
+    end;
+  end;
+
+  SetLength(Values, Count);
+  Result := Values;
+end;
+
+function TGocciaObjectValue.GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>;
+var
+  Entries: TArray<TPair<string, TGocciaValue>>;
+  Count: Integer;
+  Pair: TPair<string, TGocciaPropertyDescriptor>;
+  Entry: TPair<string, TGocciaValue>;
+begin
+  SetLength(Entries, FPropertyDescriptors.Count);
+  Count := 0;
+
+  for Pair in FPropertyDescriptors do
+  begin
+    if Pair.Value.Enumerable and (Pair.Value is TGocciaPropertyDescriptorData) then
+    begin
+      Entry.Key := Pair.Key;
+      Entry.Value := TGocciaPropertyDescriptorData(Pair.Value).Value;
+      Entries[Count] := Entry;
+      Inc(Count);
+    end;
+  end;
+
+  SetLength(Entries, Count);
+  Result := Entries;
+end;
+
+function TGocciaObjectValue.GetAllPropertyNames: TArray<string>;
+var
+  Names: TArray<string>;
+  Count: Integer;
+  Pair: TPair<string, TGocciaPropertyDescriptor>;
+begin
+  SetLength(Names, FPropertyDescriptors.Count);
+  Count := 0;
+
+  for Pair in FPropertyDescriptors do
+  begin
+    Names[Count] := Pair.Key;
+    Inc(Count);
+  end;
+
+  SetLength(Names, Count);
+  Result := Names;
 end;
 
 end.

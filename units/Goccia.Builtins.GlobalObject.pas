@@ -24,19 +24,19 @@ type
 implementation
 
 uses
-  Goccia.Values.ArrayValue, Goccia.Values.StringValue, Goccia.Values.NullValue, Goccia.Values.BooleanValue;
+  Goccia.Values.ArrayValue, Goccia.Values.StringValue, Goccia.Values.NullValue, Goccia.Values.BooleanValue, Goccia.Values.ObjectPropertyDescriptor;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
   inherited Create(AName, AScope, AThrowError);
 
   // Global Object methods: writable, non-enumerable, configurable
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(ObjectAssign, 'assign', -1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(ObjectCreate, 'create', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(ObjectHasOwn, 'hasOwn', 1));
+  FBuiltinObject.SetProperty('keys', TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1));
+  FBuiltinObject.SetProperty('values', TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1));
+  FBuiltinObject.SetProperty('entries', TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1));
+  FBuiltinObject.SetProperty('assign', TGocciaNativeFunctionValue.Create(ObjectAssign, 'assign', -1));
+  FBuiltinObject.SetProperty('create', TGocciaNativeFunctionValue.Create(ObjectCreate, 'create', 1));
+  FBuiltinObject.SetProperty('hasOwn', TGocciaNativeFunctionValue.Create(ObjectHasOwn, 'hasOwn', 1));
 
   AScope.SetValue(AName, FBuiltinObject);
 end;
@@ -45,7 +45,8 @@ function TGocciaGlobalObject.ObjectKeys(Args: TObjectList<TGocciaValue>; ThisVal
 var
   Obj: TGocciaObjectValue;
   Keys: TGocciaArrayValue;
-  Key: string;
+  Names: TArray<string>;
+  I: Integer;
 begin
   if Args.Count <> 1 then
     ThrowError('Object.keys expects exactly 1 argument', 0, 0);
@@ -56,8 +57,9 @@ begin
   Obj := TGocciaObjectValue(Args[0]);
   Keys := TGocciaArrayValue.Create;
 
-  for Key in Obj.Properties.Keys do
-    Keys.Elements.Add(TGocciaStringValue.Create(Key));
+  Names := Obj.GetEnumerablePropertyNames;
+  for I := 0 to High(Names) do
+    Keys.Elements.Add(TGocciaStringValue.Create(Names[I]));
 
   Result := Keys;
 end;
@@ -66,7 +68,8 @@ function TGocciaGlobalObject.ObjectValues(Args: TObjectList<TGocciaValue>; ThisV
 var
   Obj: TGocciaObjectValue;
   Values: TGocciaArrayValue;
-  Value: TGocciaValue;
+  PropertyValues: TArray<TGocciaValue>;
+  I: Integer;
 begin
   if Args.Count <> 1 then
     ThrowError('Object.values expects exactly 1 argument', 0, 0);
@@ -77,8 +80,9 @@ begin
   Obj := TGocciaObjectValue(Args[0]);
   Values := TGocciaArrayValue.Create;
 
-  for Value in Obj.Properties.Values do
-    Values.Elements.Add(Value);
+  PropertyValues := Obj.GetEnumerablePropertyValues;
+  for I := 0 to High(PropertyValues) do
+    Values.Elements.Add(PropertyValues[I]);
 
   Result := Values;
 end;
@@ -88,7 +92,8 @@ var
   Obj: TGocciaObjectValue;
   Entries: TGocciaArrayValue;
   Entry: TGocciaArrayValue;
-  Pair: TPair<string, TGocciaValue>;
+  PropertyEntries: TArray<TPair<string, TGocciaValue>>;
+  I: Integer;
 begin
   if Args.Count <> 1 then
     ThrowError('Object.entries expects exactly 1 argument', 0, 0);
@@ -99,11 +104,12 @@ begin
   Obj := TGocciaObjectValue(Args[0]);
   Entries := TGocciaArrayValue.Create;
 
-  for Pair in Obj.Properties do
+  PropertyEntries := Obj.GetEnumerablePropertyEntries;
+  for I := 0 to High(PropertyEntries) do
   begin
     Entry := TGocciaArrayValue.Create;
-    Entry.Elements.Add(TGocciaStringValue.Create(Pair.Key));
-    Entry.Elements.Add(Pair.Value);
+    Entry.Elements.Add(TGocciaStringValue.Create(PropertyEntries[I].Key));
+    Entry.Elements.Add(PropertyEntries[I].Value);
     Entries.Elements.Add(Entry);
   end;
 
@@ -114,8 +120,8 @@ function TGocciaGlobalObject.ObjectAssign(Args: TObjectList<TGocciaValue>; ThisV
 var
   InitialObj: TGocciaObjectValue;
   Source: TGocciaObjectValue;
-  Pair: TPair<string, TGocciaValue>;
-  I: Integer;
+  PropertyEntries: TArray<TPair<string, TGocciaValue>>;
+  I, J: Integer;
 begin
   if Args.Count < 2 then
     ThrowError('Object.assign expects at least 2 arguments', 0, 0);
@@ -132,9 +138,10 @@ begin
     begin
       Source := TGocciaObjectValue(Args[I]);
 
-      // Use pair iteration and SetProperty to safely copy properties
-      for Pair in Source.Properties do
-        InitialObj.SetProperty(Pair.Key, Pair.Value);
+      // Use enumerable property entries to safely copy properties
+      PropertyEntries := Source.GetEnumerablePropertyEntries;
+      for J := 0 to High(PropertyEntries) do
+        InitialObj.SetProperty(PropertyEntries[J].Key, PropertyEntries[J].Value);
     end;
   end;
 

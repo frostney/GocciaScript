@@ -32,12 +32,11 @@ type
   TGocciaPropertyDescriptorData = class(TGocciaPropertyDescriptor)
   private
     FValue: TGocciaValue;
-    FWritable: Boolean;
   public
     constructor Create(AValue: TGocciaValue; AFlags: TPropertyFlags);
 
     property Value: TGocciaValue read FValue;
-    property Writable: Boolean read FWritable;
+    // Writable property inherited from base class
   end;
 
   TGocciaPropertyDescriptorAccessor = class(TGocciaPropertyDescriptor)
