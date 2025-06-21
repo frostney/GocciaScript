@@ -117,32 +117,23 @@ type
 var
   TestRunnerProgram: TTestRunner;
 
-procedure ExitCodeCheck(ExitCode: Integer);
+function TestResultToExitCode: Integer;
 
 implementation
 
 var
   CurrentDescribeSuite: TTestSuite;
 
-procedure ExitCodeCheck(ExitCode: Integer);
+function TestResultToExitCode: Integer;
 var
   TestResult: TTestResult;
 begin
-  // Exit with appropriate code for CI/CD
-  ExitCode := 0;
+  Result := 0;
   for TestResult in TestRunnerProgram.Results do
   begin
     if TestResult.Status = tsFail then
-    begin
-      ExitCode := 1;
-      Break;
-    end;
+      Result := 1;
   end;
-
-  if ExitCode = 0 then
-    WriteLn(#10'Success! All tests passed.')
-  else
-    WriteLn(#10'Failure! Some tests failed.');
 end;
 
 { TExpect<T> }
@@ -174,6 +165,44 @@ var
   TypeData: PTypeData;
   IsEqual: Boolean;
   ActualStr, ExpectedStr: string;
+
+  function TryToString(const Value: T): string;
+  var
+    ValueTypeInfo: PTypeInfo;
+  begin
+    ValueTypeInfo := System.TypeInfo(T);
+
+    // Try to get a string representation for unknown types
+    try
+      case ValueTypeInfo^.Kind of
+        tkVariant:
+          Result := string(PVariant(@Value)^);
+        tkRecord:
+          Result := Format('record of %s', [ValueTypeInfo^.Name]);
+        tkArray:
+          Result := Format('array of %s', [ValueTypeInfo^.Name]);
+        tkPointer:
+          if PPointer(@Value)^ = nil then
+            Result := 'nil'
+          else
+            Result := Format('pointer($%p)', [PPointer(@Value)^]);
+        else
+          // Fallback: show type name and try to interpret as string if possible
+          if SizeOf(T) = SizeOf(string) then
+            try
+              Result := '"' + PString(@Value)^ + '"';
+            except
+              Result := Format('<%s>', [ValueTypeInfo^.Name]);
+            end
+          else
+            Result := Format('<%s>', [ValueTypeInfo^.Name]);
+      end;
+    except
+      // Ultimate fallback
+      Result := Format('<%s value>', [ValueTypeInfo^.Name]);
+    end;
+  end;
+
 begin
   TypeInfo := System.TypeInfo(T);
   TypeData := GetTypeData(TypeInfo);
@@ -222,17 +251,18 @@ begin
         if PPointer(@FActual)^ = nil then
           ActualStr := 'nil'
         else
-          ActualStr := 'object';
+          ActualStr := Format('object(%s)', [TObject(PPointer(@FActual)^).ClassName]);
         if PPointer(@Expected)^ = nil then
           ExpectedStr := 'nil'
         else
-          ExpectedStr := 'object';
+          ExpectedStr := Format('object(%s)', [TObject(PPointer(@Expected)^).ClassName]);
       end;
     else
       begin
         IsEqual := CompareMem(@FActual, @Expected, SizeOf(T));
-        ActualStr := 'value';
-        ExpectedStr := 'value';
+        // Improved error messages for unknown types
+        ActualStr := TryToString(FActual);
+        ExpectedStr := TryToString(Expected);
       end;
   end;
 

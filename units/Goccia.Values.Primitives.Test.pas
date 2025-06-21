@@ -124,7 +124,7 @@ begin
   NullValue := TGocciaNullValue.Create;
   Expect<string>(NullValue.ToString).ToBe('null');
   Expect<Boolean>(NullValue.ToBoolean).ToBe(False);
-  Expect<Boolean>(IsNaN(NullValue.ToNumber)).ToBe(True);
+  Expect<Double>(NullValue.ToNumber).ToBe(0);
   Expect<string>(NullValue.TypeName).ToBe('object');
   NullValue.Free;
 end;
@@ -136,5 +136,5 @@ begin
   TestRunnerProgram.AddSuite(TTestPrimitives.Create('Primitives'));
   TestRunnerProgram.Run;
 
-  ExitCodeCheck(ExitCode);
+  ExitCode := TestResultToExitCode;
 end.

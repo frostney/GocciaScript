@@ -226,5 +226,5 @@ begin
   TestRunnerProgram.AddSuite(TTestObjectValue.Create('Object Value'));
   TestRunnerProgram.Run;
 
-  ExitCodeCheck(ExitCode);
+  ExitCode := TestResultToExitCode;
 end.

@@ -625,5 +625,5 @@ begin
   TestRunnerProgram.AddSuite(TTestMethodValue.Create('Method Value'));
   TestRunnerProgram.Run;
 
-  ExitCodeCheck(ExitCode);
+  ExitCode := TestResultToExitCode;
 end.
