@@ -36,7 +36,6 @@ type
     constructor Create(AValue: TGocciaValue; AFlags: TPropertyFlags);
 
     property Value: TGocciaValue read FValue;
-    // Writable property inherited from base class
   end;
 
   TGocciaPropertyDescriptorAccessor = class(TGocciaPropertyDescriptor)

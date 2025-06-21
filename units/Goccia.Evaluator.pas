@@ -5,7 +5,9 @@ unit Goccia.Evaluator;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Base, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.StringObjectValue, Goccia.Values.Error, Goccia.Values.NullValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser, Generics.Collections, SysUtils, Math, Classes;
+  Goccia.Interfaces, Goccia.Values.Base, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.StringObjectValue, Goccia.Values.Error, Goccia.Values.NullValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser,
+  Goccia.Evaluator.Arithmetic, Goccia.Evaluator.Bitwise, Goccia.Evaluator.Comparison, Goccia.Evaluator.TypeOperations, Goccia.Evaluator.Assignment,
+  Generics.Collections, SysUtils, Math, Classes;
 
 type
   TGocciaEvaluationContext = record
@@ -58,9 +60,6 @@ function IsObjectInstanceOfClass(Obj: TGocciaObjectValue; ClassValue: TGocciaCla
 // Helper function to safely call OnError with proper error handling
 procedure SafeOnError(Context: TGocciaEvaluationContext; const Message: string; Line, Column: Integer);
 
-// Shared function to perform compound assignment operations
-function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator: TGocciaTokenType): TGocciaValue;
-
 var
   // Global evaluation context for error handling inheritance
   GlobalEvaluationContext: TGocciaEvaluationContext;
@@ -77,49 +76,7 @@ begin
     Context.OnError(Message, Line, Column);
 end;
 
-// Shared function to perform compound assignment operations
-function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator: TGocciaTokenType): TGocciaValue;
-begin
-  case Operator of
-    gttPlusAssign:
-      begin
-        if (CurrentValue is TGocciaStringValue) or (NewValue is TGocciaStringValue) then
-          Result := TGocciaStringValue.Create(CurrentValue.ToString + NewValue.ToString)
-        else
-          Result := TGocciaNumberValue.Create(CurrentValue.ToNumber + NewValue.ToNumber);
-      end;
-    gttMinusAssign:
-      Result := TGocciaNumberValue.Create(CurrentValue.ToNumber - NewValue.ToNumber);
-    gttStarAssign:
-      Result := TGocciaNumberValue.Create(CurrentValue.ToNumber * NewValue.ToNumber);
-    gttSlashAssign:
-      begin
-        if NewValue.ToNumber = 0 then
-          Result := TGocciaNumberValue.Create(Infinity)
-        else
-          Result := TGocciaNumberValue.Create(CurrentValue.ToNumber / NewValue.ToNumber);
-      end;
-    gttPercentAssign:
-      Result := TGocciaNumberValue.Create(
-        Trunc(CurrentValue.ToNumber) mod Trunc(NewValue.ToNumber));
-    gttPowerAssign:
-      Result := TGocciaNumberValue.Create(Power(CurrentValue.ToNumber, NewValue.ToNumber));
-    gttBitwiseAndAssign:
-      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) and Trunc(NewValue.ToNumber));
-    gttBitwiseOrAssign:
-      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) or Trunc(NewValue.ToNumber));
-    gttBitwiseXorAssign:
-      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) xor Trunc(NewValue.ToNumber));
-    gttLeftShiftAssign:
-      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) shl (Trunc(NewValue.ToNumber) and 31));
-    gttRightShiftAssign:
-      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) shr (Trunc(NewValue.ToNumber) and 31));
-    gttUnsignedRightShiftAssign:
-      Result := TGocciaNumberValue.Create(Cardinal(Trunc(CurrentValue.ToNumber)) shr (Trunc(NewValue.ToNumber) and 31));
-  else
-    Result := TGocciaUndefinedValue.Create;
-  end;
-end;
+
 
 function Evaluate(Node: TGocciaASTNode; Context: TGocciaEvaluationContext): TGocciaValue;
 begin
@@ -195,29 +152,8 @@ begin
     // Property assignment
     Obj := EvaluateExpression(TGocciaPropertyAssignmentExpression(Expression).ObjectExpr, Context);
     Value := EvaluateExpression(TGocciaPropertyAssignmentExpression(Expression).Value, Context);
-
-    // Handle different object types for property assignment
-    // Direct property assignment (obj.prop = value) should create the property if it doesn't exist
-    if (Obj is TGocciaInstanceValue) then
-    begin
-      TGocciaInstanceValue(Obj).DefineProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName,
-        TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]));
-      Result := Value;
-    end
-    else if (Obj is TGocciaObjectValue) then
-    begin
-      TGocciaObjectValue(Obj).DefineProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName,
-        TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]));
-      Result := Value;
-    end
-    else if (Obj is TGocciaClassValue) then
-    begin
-      // Handle static property assignment
-      TGocciaClassValue(Obj).SetProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName, Value);
-      Result := Value;
-    end
-    else
-      Context.OnError('Cannot set property on non-object', Expression.Line, Expression.Column);
+    AssignProperty(Obj, TGocciaPropertyAssignmentExpression(Expression).PropertyName, Value, Context.OnError, Expression.Line, Expression.Column);
+    Result := Value;
   end
   else if Expression is TGocciaComputedPropertyAssignmentExpression then
   begin
@@ -225,32 +161,8 @@ begin
     Obj := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(Expression).ObjectExpr, Context);
     PropName := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(Expression).PropertyExpression, Context).ToString;
     Value := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(Expression).Value, Context);
-
-    // Handle different object types for computed property assignment
-    if (Obj is TGocciaArrayValue) then
-    begin
-      TGocciaArrayValue(Obj).SetProperty(PropName, Value);
-      Result := Value;
-    end
-    else if (Obj is TGocciaInstanceValue) then
-    begin
-      TGocciaInstanceValue(Obj).DefineProperty(PropName,
-        TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]));
-      Result := Value;
-    end
-    else if (Obj is TGocciaObjectValue) then
-    begin
-      TGocciaObjectValue(Obj).DefineProperty(PropName,
-        TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]));
-      Result := Value;
-    end
-    else if (Obj is TGocciaClassValue) then
-    begin
-      TGocciaClassValue(Obj).SetProperty(PropName, Value);
-      Result := Value;
-    end
-    else
-      Context.OnError('Cannot set property on non-object', Expression.Line, Expression.Column);
+    AssignComputedProperty(Obj, PropName, Value, Context.OnError, Expression.Line, Expression.Column);
+    Result := Value;
   end
   else if Expression is TGocciaCompoundAssignmentExpression then
   begin
@@ -273,33 +185,19 @@ begin
     Obj := EvaluateExpression(TGocciaPropertyCompoundAssignmentExpression(Expression).ObjectExpr, Context);
     Value := EvaluateExpression(TGocciaPropertyCompoundAssignmentExpression(Expression).Value, Context);
     PropName := TGocciaPropertyCompoundAssignmentExpression(Expression).PropertyName;
+    PerformPropertyCompoundAssignment(Obj, PropName, Value, TGocciaPropertyCompoundAssignmentExpression(Expression).Operator, Context.OnError, Expression.Line, Expression.Column);
 
-    // Get current property value
+    // Get the final result
     if (Obj is TGocciaInstanceValue) then
       Result := TGocciaInstanceValue(Obj).GetProperty(PropName)
     else if (Obj is TGocciaObjectValue) then
       Result := TGocciaObjectValue(Obj).GetProperty(PropName)
     else if (Obj is TGocciaClassValue) then
       Result := TGocciaClassValue(Obj).GetProperty(PropName)
+    else if (Obj is TGocciaArrayValue) then
+      Result := TGocciaArrayValue(Obj).GetProperty(PropName)
     else
-    begin
-      Context.OnError('Cannot access property on non-object', Expression.Line, Expression.Column);
       Result := TGocciaUndefinedValue.Create;
-      Exit;
-    end;
-
-    // Use shared compound operation function
-    Result := PerformCompoundOperation(Result, Value, TGocciaPropertyCompoundAssignmentExpression(Expression).Operator);
-
-    // Set the new value (create property if it doesn't exist, like JavaScript)
-    if (Obj is TGocciaInstanceValue) then
-      TGocciaInstanceValue(Obj).DefineProperty(PropName,
-        TGocciaPropertyDescriptorData.Create(Result, [pfEnumerable, pfConfigurable, pfWritable]))
-    else if (Obj is TGocciaObjectValue) then
-      TGocciaObjectValue(Obj).DefineProperty(PropName,
-        TGocciaPropertyDescriptorData.Create(Result, [pfEnumerable, pfConfigurable, pfWritable]))
-    else if (Obj is TGocciaClassValue) then
-      TGocciaClassValue(Obj).SetProperty(PropName, Result);
   end
   else if Expression is TGocciaComputedPropertyCompoundAssignmentExpression then
   begin
@@ -307,8 +205,9 @@ begin
     Obj := EvaluateExpression(TGocciaComputedPropertyCompoundAssignmentExpression(Expression).ObjectExpr, Context);
     PropName := EvaluateExpression(TGocciaComputedPropertyCompoundAssignmentExpression(Expression).PropertyExpression, Context).ToString;
     Value := EvaluateExpression(TGocciaComputedPropertyCompoundAssignmentExpression(Expression).Value, Context);
+    PerformPropertyCompoundAssignment(Obj, PropName, Value, TGocciaComputedPropertyCompoundAssignmentExpression(Expression).Operator, Context.OnError, Expression.Line, Expression.Column);
 
-    // Get current property value
+    // Get the final result
     if (Obj is TGocciaArrayValue) then
       Result := TGocciaArrayValue(Obj).GetProperty(PropName)
     else if (Obj is TGocciaInstanceValue) then
@@ -318,26 +217,7 @@ begin
     else if (Obj is TGocciaClassValue) then
       Result := TGocciaClassValue(Obj).GetProperty(PropName)
     else
-    begin
-      Context.OnError('Cannot access property on non-object', Expression.Line, Expression.Column);
       Result := TGocciaUndefinedValue.Create;
-      Exit;
-    end;
-
-    // Use shared compound operation function
-    Result := PerformCompoundOperation(Result, Value, TGocciaComputedPropertyCompoundAssignmentExpression(Expression).Operator);
-
-    // Set the new value
-    if (Obj is TGocciaArrayValue) then
-      TGocciaArrayValue(Obj).SetProperty(PropName, Result)
-    else if (Obj is TGocciaInstanceValue) then
-      TGocciaInstanceValue(Obj).DefineProperty(PropName,
-        TGocciaPropertyDescriptorData.Create(Result, [pfEnumerable, pfConfigurable, pfWritable]))
-    else if (Obj is TGocciaObjectValue) then
-      TGocciaObjectValue(Obj).DefineProperty(PropName,
-        TGocciaPropertyDescriptorData.Create(Result, [pfEnumerable, pfConfigurable, pfWritable]))
-    else if (Obj is TGocciaClassValue) then
-      TGocciaClassValue(Obj).SetProperty(PropName, Result);
   end
   else if Expression is TGocciaIncrementExpression then
   begin
@@ -349,10 +229,7 @@ begin
       OldValue := Context.Scope.GetValue(PropName);
 
       // Calculate new value
-      if TGocciaIncrementExpression(Expression).Operator = gttIncrement then
-        Value := TGocciaNumberValue.Create(OldValue.ToNumber + 1)
-      else
-        Value := TGocciaNumberValue.Create(OldValue.ToNumber - 1);
+      Value := PerformIncrement(OldValue, TGocciaIncrementExpression(Expression).Operator = gttIncrement);
 
       // Set the new value
       Context.Scope.SetValue(PropName, Value);
@@ -384,10 +261,7 @@ begin
       end;
 
       // Calculate new value
-      if TGocciaIncrementExpression(Expression).Operator = gttIncrement then
-        Value := TGocciaNumberValue.Create(OldValue.ToNumber + 1)
-      else
-        Value := TGocciaNumberValue.Create(OldValue.ToNumber - 1);
+      Value := PerformIncrement(OldValue, TGocciaIncrementExpression(Expression).Operator = gttIncrement);
 
       // Set the new value (create property if it doesn't exist, like JavaScript)
       if (Obj is TGocciaInstanceValue) then
@@ -674,9 +548,6 @@ end;
 function EvaluateBinary(BinaryExpression: TGocciaBinaryExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Left, Right: TGocciaValue;
-  LeftNum, RightNum: Double;
-  PropertyName: string;
-  Index: Integer;
 begin
   // Handle short-circuiting logical operators first
   if BinaryExpression.Operator = gttAnd then
@@ -723,191 +594,46 @@ begin
 
   case BinaryExpression.Operator of
     gttPlus:
-      begin
-        if (Left is TGocciaStringValue) or (Right is TGocciaStringValue) then
-          Result := TGocciaStringValue.Create(Left.ToString + Right.ToString)
-        else if (Left is TGocciaNumberValue) and (Right is TGocciaNumberValue) then
-          Result := TGocciaNumberValue.Create(
-            TGocciaNumberValue(Left).Value + TGocciaNumberValue(Right).Value)
-        else if (Left is TGocciaNumberValue) or (Right is TGocciaNumberValue) then
-          Result := TGocciaNumberValue.Create(Left.ToNumber + Right.ToNumber)
-        else
-          Result := TGocciaStringValue.Create(Left.ToString + Right.ToString);
-      end;
+      Result := EvaluateAddition(Left, Right);
     gttMinus:
-      Result := TGocciaNumberValue.Create(Left.ToNumber - Right.ToNumber);
+      Result := EvaluateSubtraction(Left, Right);
     gttStar:
-      Result := TGocciaNumberValue.Create(Left.ToNumber * Right.ToNumber);
+      Result := EvaluateMultiplication(Left, Right);
     gttSlash:
-      begin
-        RightNum := Right.ToNumber;
-        if RightNum = 0 then
-          Result := TGocciaNumberValue.Create(Infinity)
-        else
-          Result := TGocciaNumberValue.Create(Left.ToNumber / RightNum);
-      end;
+      Result := EvaluateDivision(Left, Right);
     gttPercent:
-      Result := TGocciaNumberValue.Create(
-        Trunc(Left.ToNumber) mod Trunc(Right.ToNumber));
+      Result := EvaluateModulo(Left, Right);
     gttPower:
-      Result := TGocciaNumberValue.Create(Power(Left.ToNumber, Right.ToNumber));
+      Result := EvaluateExponentiation(Left, Right);
     gttEqual:
-      Result := TGocciaBooleanValue.Create(IsEqual(Left, Right));
+      Result := TGocciaBooleanValue.Create(IsStrictEqual(Left, Right));
     gttNotEqual:
-      Result := TGocciaBooleanValue.Create(not IsEqual(Left, Right));
+      Result := TGocciaBooleanValue.Create(IsNotStrictEqual(Left, Right));
     gttLess:
-      Result := TGocciaBooleanValue.Create(Left.ToNumber < Right.ToNumber);
+      Result := TGocciaBooleanValue.Create(LessThan(Left, Right));
     gttGreater:
-      Result := TGocciaBooleanValue.Create(Left.ToNumber > Right.ToNumber);
+      Result := TGocciaBooleanValue.Create(GreaterThan(Left, Right));
     gttLessEqual:
-      Result := TGocciaBooleanValue.Create(Left.ToNumber <= Right.ToNumber);
+      Result := TGocciaBooleanValue.Create(LessThanOrEqual(Left, Right));
     gttGreaterEqual:
-      Result := TGocciaBooleanValue.Create(Left.ToNumber >= Right.ToNumber);
+      Result := TGocciaBooleanValue.Create(GreaterThanOrEqual(Left, Right));
     gttInstanceof:
-      begin
-        // Implement instanceof operator according to JavaScript specification
-        Logger.Debug('EvaluateBinary: instanceof operator called with Left: %s, Right: %s', [Left.ToString, Right.ToString]);
-
-        // Right operand must be a constructor/class
-        if not (Right is TGocciaClassValue) then
-        begin
-          // For built-in types, we need special handling
-          Result := TGocciaBooleanValue.Create(False); // Default to false for now
-        end
-        else
-        begin
-          // Check if Left is an instance of the Right class
-          if Left is TGocciaInstanceValue then
-          begin
-            // For class instances, check inheritance chain
-            if TGocciaClassValue(Right).Name = 'Object' then
-            begin
-              // All class instances are instances of Object
-              Result := TGocciaBooleanValue.Create(True);
-            end
-            else
-            begin
-              Result := TGocciaBooleanValue.Create(TGocciaInstanceValue(Left).IsInstanceOf(TGocciaClassValue(Right)));
-            end;
-          end
-          else if (Left is TGocciaFunctionValue) and (TGocciaClassValue(Right).Name = 'Function') then
-          begin
-            // Functions are instances of Function
-            Result := TGocciaBooleanValue.Create(True);
-          end
-          else if (Left is TGocciaNativeFunctionValue) and (TGocciaClassValue(Right).Name = 'Function') then
-          begin
-            // Native functions are also instances of Function
-            Result := TGocciaBooleanValue.Create(True);
-          end
-          else if (Left is TGocciaClassValue) and (TGocciaClassValue(Right).Name = 'Function') then
-          begin
-            // Classes are also instances of Function (since classes are constructor functions)
-            Result := TGocciaBooleanValue.Create(True);
-          end
-          else if (Left is TGocciaArrayValue) and (TGocciaClassValue(Right).Name = 'Array') then
-          begin
-            // Arrays are instances of Array
-            Result := TGocciaBooleanValue.Create(True);
-          end
-          else if (Left is TGocciaArrayValue) and (TGocciaClassValue(Right).Name = 'Object') then
-          begin
-            // Arrays are also instances of Object (inheritance)
-            Result := TGocciaBooleanValue.Create(True);
-          end
-          else if (Left is TGocciaObjectValue) and (TGocciaClassValue(Right).Name = 'Object') then
-          begin
-            // Objects are instances of Object
-            Result := TGocciaBooleanValue.Create(True);
-          end
-          else if (Left is TGocciaObjectValue) and (TGocciaClassValue(Right).Name = 'Object') then
-          begin
-            // Objects are instances of Object
-            Result := TGocciaBooleanValue.Create(True);
-          end
-          else if Left is TGocciaObjectValue then
-          begin
-            // General object instanceof check - walk the prototype chain
-            Result := TGocciaBooleanValue.Create(IsObjectInstanceOfClass(TGocciaObjectValue(Left), TGocciaClassValue(Right)));
-          end
-          else
-            Result := TGocciaBooleanValue.Create(False);
-        end;
-      end;
+      Result := EvaluateInstanceof(Left, Right, IsObjectInstanceOfClass);
     gttIn:
-      begin
-        // Implement the 'in' operator: property/index in object/array/string
-        Logger.Debug('EvaluateBinary: in operator called with Left: %s, Right: %s', [Left.ToString, Right.ToString]);
-
-        PropertyName := Left.ToString; // Left operand is the property name
-
-        if Right is TGocciaArrayValue then
-        begin
-          // For arrays, first try to parse as integer index
-          try
-            Index := StrToInt(PropertyName);
-            // Check if index is valid (in bounds and not a hole)
-            if (Index >= 0) and (Index < TGocciaArrayValue(Right).Elements.Count) then
-            begin
-              // For sparse arrays, also check that the element is not nil (not a hole)
-              if TGocciaArrayValue(Right).Elements[Index] <> nil then
-                Result := TGocciaBooleanValue.Create(True)
-              else
-                Result := TGocciaBooleanValue.Create(False);
-            end
-            else
-              Result := TGocciaBooleanValue.Create(False);
-          except
-            // If not a valid integer, check if it's a property in the prototype chain
-            // This includes 'length', array methods like 'push', 'pop', etc.
-            Result := TGocciaBooleanValue.Create(TGocciaArrayValue(Right).HasProperty(PropertyName));
-          end;
-        end
-        else if Right is TGocciaStringValue then
-        begin
-          // Check if index exists in string
-          if PropertyName = 'length' then
-            Result := TGocciaBooleanValue.Create(True)
-          else
-          begin
-            try
-              Index := StrToInt(PropertyName);
-              Result := TGocciaBooleanValue.Create((Index >= 0) and (Index < Length(Right.ToString)));
-            except
-              // If not a valid integer, always false for strings
-              Result := TGocciaBooleanValue.Create(False);
-            end;
-          end;
-        end
-        else if Right is TGocciaInstanceValue then
-        begin
-          // Check if property exists in class instance
-          Result := TGocciaBooleanValue.Create(TGocciaInstanceValue(Right).HasProperty(PropertyName));
-        end
-        else if Right is TGocciaObjectValue then
-        begin
-          // Check if property exists in object (check after arrays and instances)
-          Result := TGocciaBooleanValue.Create(TGocciaObjectValue(Right).HasProperty(PropertyName));
-        end
-        else
-        begin
-          // For other types, return false
-          Result := TGocciaBooleanValue.Create(False);
-        end;
-      end;
+      Result := EvaluateInOperator(Left, Right);
     // Bitwise operators
     gttBitwiseAnd:
-      Result := TGocciaNumberValue.Create(Trunc(Left.ToNumber) and Trunc(Right.ToNumber));
+      Result := EvaluateBitwiseAnd(Left, Right);
     gttBitwiseOr:
-      Result := TGocciaNumberValue.Create(Trunc(Left.ToNumber) or Trunc(Right.ToNumber));
+      Result := EvaluateBitwiseOr(Left, Right);
     gttBitwiseXor:
-      Result := TGocciaNumberValue.Create(Trunc(Left.ToNumber) xor Trunc(Right.ToNumber));
+      Result := EvaluateBitwiseXor(Left, Right);
     gttLeftShift:
-      Result := TGocciaNumberValue.Create(Trunc(Left.ToNumber) shl (Trunc(Right.ToNumber) and 31));
+      Result := EvaluateLeftShift(Left, Right);
     gttRightShift:
-      Result := TGocciaNumberValue.Create(Trunc(Left.ToNumber) shr (Trunc(Right.ToNumber) and 31));
+      Result := EvaluateRightShift(Left, Right);
     gttUnsignedRightShift:
-      Result := TGocciaNumberValue.Create(Cardinal(Trunc(Left.ToNumber)) shr (Trunc(Right.ToNumber) and 31));
+      Result := EvaluateUnsignedRightShift(Left, Right);
   else
     Result := TGocciaUndefinedValue.Create;
   end;
@@ -927,12 +653,9 @@ begin
     gttPlus:
       Result := TGocciaNumberValue.Create(Operand.ToNumber);
     gttTypeof:
-      begin
-        Logger.Debug('EvaluateUnary: typeof operator called with operand: %s', [Operand.ToString]);
-        Result := TGocciaStringValue.Create(Operand.TypeName);
-      end;
+      Result := EvaluateTypeof(Operand);
     gttBitwiseNot:
-      Result := TGocciaNumberValue.Create(not Trunc(Operand.ToNumber));
+      Result := EvaluateBitwiseNot(Operand);
   else
     Result := TGocciaUndefinedValue.Create;
   end;

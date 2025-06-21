@@ -60,7 +60,7 @@ type
 implementation
 
 uses
-  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.Evaluator, Goccia.Values.StringValue, Goccia.Values.ObjectPropertyDescriptor, Generics.Defaults, Goccia.Utils;
+  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.Evaluator, Goccia.Values.StringValue, Goccia.Values.ObjectPropertyDescriptor, Generics.Defaults, Goccia.Utils, Goccia.Evaluator.Comparison;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var
@@ -739,7 +739,7 @@ begin
     if FElements[I] = nil then
       Continue;
 
-    if IsEqual(FElements[I], AValue) then
+    if IsStrictEqual(FElements[I], AValue) then
     begin
       Result := True;
       Exit;
