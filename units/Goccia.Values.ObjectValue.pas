@@ -25,7 +25,7 @@ type
     procedure DefineProperty(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
     procedure DefineProperties(const AProperties: TDictionary<string, TGocciaPropertyDescriptor>);
 
-    procedure AssignProperty(const AName: string; AValue: TGocciaValue);
+    procedure AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
 
     // Convenience methods for built-in objects
     procedure RegisterMethod(AMethod: TGocciaValue);
@@ -49,7 +49,8 @@ type
 
 implementation
 
-uses Goccia.Values.FunctionValue, Goccia.Values.NativeFunction;
+uses Goccia.Values.FunctionValue, Goccia.Values.NativeFunction,
+     Goccia.Values.StringValue, Goccia.Values.Error;
 
 { TGocciaObjectValue }
 
@@ -145,12 +146,13 @@ begin
   Result := 'object';
 end;
 
-procedure TGocciaObjectValue.AssignProperty(const AName: string; AValue: TGocciaValue);
+procedure TGocciaObjectValue.AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
   SetterFunction: TGocciaFunctionValue;
   NativeSetterFunction: TGocciaNativeFunctionValue;
   Args: TObjectList<TGocciaValue>;
+  ErrorValue: TGocciaValue;
 begin
   // First check for existing property descriptors
   if FPropertyDescriptors.ContainsKey(AName) then
@@ -187,6 +189,7 @@ begin
         end;
       end;
       // Accessor descriptor without setter - property is not writable
+      // In strict mode, this would throw TypeError; in non-strict mode, silently fail
       Exit;
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
@@ -199,9 +202,17 @@ begin
         FPropertyDescriptors[AName] := Descriptor;
         Exit;
       end;
-      // Property is not writable - silently ignore in non-strict mode
-      Exit;
+      // Property is not writable - throw TypeError
+      ErrorValue := TGocciaStringValue.Create('Cannot assign to read only property ''' + AName + '''');
+      raise TGocciaThrowValue.Create(ErrorValue);
     end;
+  end;
+
+  // Property doesn't exist - check if we can create it
+  if not ACanCreate then
+  begin
+    ErrorValue := TGocciaStringValue.Create('Cannot assign to non-existent property ''' + AName + '''');
+    raise TGocciaThrowValue.Create(ErrorValue);
   end;
 
   // Create new property with proper descriptor (JavaScript default attributes)
@@ -210,20 +221,25 @@ begin
 end;
 
 procedure TGocciaObjectValue.DefineProperty(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
+var
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+  ErrorValue: TGocciaValue;
 begin
   if FPropertyDescriptors.ContainsKey(AName) then
   begin
-    if FPropertyDescriptors[AName].Configurable then
+    ExistingDescriptor := FPropertyDescriptors[AName];
+
+    // Check if the existing property is configurable
+    if not ExistingDescriptor.Configurable then
     begin
-      FPropertyDescriptors[AName] := ADescriptor;
-      Exit; // Don't change insertion order for existing properties
+      // Non-configurable properties cannot be redefined
+      ErrorValue := TGocciaStringValue.Create('Cannot redefine non-configurable property ''' + AName + '''');
+      raise TGocciaThrowValue.Create(ErrorValue);
     end;
 
-    if FPropertyDescriptors[AName].Writable then
-    begin
-      FPropertyDescriptors[AName] := ADescriptor;
-      Exit; // Don't change insertion order for existing properties
-    end;
+    // Property is configurable - allow redefinition
+    FPropertyDescriptors[AName] := ADescriptor;
+    Exit; // Don't change insertion order for existing properties
   end
   else
   begin

@@ -197,14 +197,17 @@ begin
     Value := EvaluateExpression(TGocciaPropertyAssignmentExpression(Expression).Value, Context);
 
     // Handle different object types for property assignment
+    // Direct property assignment (obj.prop = value) should create the property if it doesn't exist
     if (Obj is TGocciaInstanceValue) then
     begin
-      TGocciaInstanceValue(Obj).AssignProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName, Value);
+      TGocciaInstanceValue(Obj).DefineProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName,
+        TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]));
       Result := Value;
     end
     else if (Obj is TGocciaObjectValue) then
     begin
-      TGocciaObjectValue(Obj).AssignProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName, Value);
+      TGocciaObjectValue(Obj).DefineProperty(TGocciaPropertyAssignmentExpression(Expression).PropertyName,
+        TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]));
       Result := Value;
     end
     else if (Obj is TGocciaClassValue) then
@@ -231,12 +234,14 @@ begin
     end
     else if (Obj is TGocciaInstanceValue) then
     begin
-      TGocciaInstanceValue(Obj).AssignProperty(PropName, Value);
+      TGocciaInstanceValue(Obj).DefineProperty(PropName,
+        TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]));
       Result := Value;
     end
     else if (Obj is TGocciaObjectValue) then
     begin
-      TGocciaObjectValue(Obj).AssignProperty(PropName, Value);
+      TGocciaObjectValue(Obj).DefineProperty(PropName,
+        TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]));
       Result := Value;
     end
     else if (Obj is TGocciaClassValue) then
@@ -286,11 +291,13 @@ begin
     // Use shared compound operation function
     Result := PerformCompoundOperation(Result, Value, TGocciaPropertyCompoundAssignmentExpression(Expression).Operator);
 
-    // Set the new value
+    // Set the new value (create property if it doesn't exist, like JavaScript)
     if (Obj is TGocciaInstanceValue) then
-      TGocciaInstanceValue(Obj).AssignProperty(PropName, Result)
+      TGocciaInstanceValue(Obj).DefineProperty(PropName,
+        TGocciaPropertyDescriptorData.Create(Result, [pfEnumerable, pfConfigurable, pfWritable]))
     else if (Obj is TGocciaObjectValue) then
-      TGocciaObjectValue(Obj).AssignProperty(PropName, Result)
+      TGocciaObjectValue(Obj).DefineProperty(PropName,
+        TGocciaPropertyDescriptorData.Create(Result, [pfEnumerable, pfConfigurable, pfWritable]))
     else if (Obj is TGocciaClassValue) then
       TGocciaClassValue(Obj).SetProperty(PropName, Result);
   end
@@ -324,9 +331,11 @@ begin
     if (Obj is TGocciaArrayValue) then
       TGocciaArrayValue(Obj).SetProperty(PropName, Result)
     else if (Obj is TGocciaInstanceValue) then
-      TGocciaInstanceValue(Obj).AssignProperty(PropName, Result)
+      TGocciaInstanceValue(Obj).DefineProperty(PropName,
+        TGocciaPropertyDescriptorData.Create(Result, [pfEnumerable, pfConfigurable, pfWritable]))
     else if (Obj is TGocciaObjectValue) then
-      TGocciaObjectValue(Obj).AssignProperty(PropName, Result)
+      TGocciaObjectValue(Obj).DefineProperty(PropName,
+        TGocciaPropertyDescriptorData.Create(Result, [pfEnumerable, pfConfigurable, pfWritable]))
     else if (Obj is TGocciaClassValue) then
       TGocciaClassValue(Obj).SetProperty(PropName, Result);
   end
@@ -380,11 +389,13 @@ begin
       else
         Value := TGocciaNumberValue.Create(OldValue.ToNumber - 1);
 
-      // Set the new value
+      // Set the new value (create property if it doesn't exist, like JavaScript)
       if (Obj is TGocciaInstanceValue) then
-        TGocciaInstanceValue(Obj).AssignProperty(PropName, Value)
+        TGocciaInstanceValue(Obj).DefineProperty(PropName,
+          TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]))
       else if (Obj is TGocciaObjectValue) then
-        TGocciaObjectValue(Obj).AssignProperty(PropName, Value)
+        TGocciaObjectValue(Obj).DefineProperty(PropName,
+          TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]))
       else if (Obj is TGocciaClassValue) then
         TGocciaClassValue(Obj).SetProperty(PropName, Value);
 
