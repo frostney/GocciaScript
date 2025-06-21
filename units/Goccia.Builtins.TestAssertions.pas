@@ -39,7 +39,8 @@ type
     Name: string;
     TestFunction: TGocciaFunctionValue;
     SuiteName: string;
-    constructor Create(const AName: string; ATestFunction: TGocciaFunctionValue; const ASuiteName: string);
+    IsSkipped: Boolean;
+    constructor Create(const AName: string; ATestFunction: TGocciaFunctionValue; const ASuiteName: string; AIsSkipped: Boolean = False);
   end;
 
   // Expectation object that provides matchers
@@ -80,9 +81,11 @@ type
       TotalTests: Integer;
       PassedTests: Integer;
       FailedTests: Integer;
+      SkippedTests: Integer;
       CurrentSuiteName: string;
       CurrentTestName: string;
       CurrentTestHasFailures: Boolean;
+      CurrentTestIsSkipped: Boolean;
       CurrentTestAssertionCount: Integer;  // Assertions in current test
       TotalAssertionCount: Integer;        // Total assertions across all tests
     end;
@@ -109,6 +112,7 @@ type
     function Describe(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function Test(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function It(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function Skip(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
 
     // Setup/teardown
@@ -135,12 +139,13 @@ end;
 
 { TTestCase }
 
-constructor TTestCase.Create(const AName: string; ATestFunction: TGocciaFunctionValue; const ASuiteName: string);
+constructor TTestCase.Create(const AName: string; ATestFunction: TGocciaFunctionValue; const ASuiteName: string; AIsSkipped: Boolean = False);
 begin
   inherited Create;
   Name := AName;
   TestFunction := ATestFunction;
   SuiteName := ASuiteName;
+  IsSkipped := AIsSkipped;
 end;
 
 { TGocciaExpectationValue }
@@ -729,6 +734,8 @@ end;
 { TGocciaTestAssertions }
 
 constructor TGocciaTestAssertions.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
+var
+  TestFunction: TGocciaNativeFunctionValue;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -744,7 +751,12 @@ begin
   // Register testing functions globally for easy access
   AScope.SetValue('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1));
   AScope.SetValue('describe', TGocciaNativeFunctionValue.Create(Describe, 'describe', 2));
-  AScope.SetValue('test', TGocciaNativeFunctionValue.Create(Test, 'test', 2));
+
+  // Create test function with skip property
+  TestFunction := TGocciaNativeFunctionValue.Create(Test, 'test', 2);
+  TestFunction.SetProperty('skip', TGocciaNativeFunctionValue.Create(Skip, 'skip', 2));
+  AScope.SetValue('test', TestFunction);
+
   AScope.SetValue('it', TGocciaNativeFunctionValue.Create(It, 'it', 2));
   AScope.SetValue('beforeEach', TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1));
   AScope.SetValue('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1));
@@ -753,7 +765,7 @@ begin
   // Also set them in the builtin object for completeness
   FBuiltinObject.SetProperty('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1));
   FBuiltinObject.SetProperty('describe', TGocciaNativeFunctionValue.Create(Describe, 'describe', 2));
-  FBuiltinObject.SetProperty('test', TGocciaNativeFunctionValue.Create(Test, 'test', 2));
+  FBuiltinObject.SetProperty('test', TestFunction);  // Use the same test function with skip property
   FBuiltinObject.SetProperty('it', TGocciaNativeFunctionValue.Create(It, 'it', 2));
   FBuiltinObject.SetProperty('beforeEach', TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1));
   FBuiltinObject.SetProperty('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1));
@@ -774,9 +786,11 @@ begin
   FTestStats.TotalTests := 0;
   FTestStats.PassedTests := 0;
   FTestStats.FailedTests := 0;
+  FTestStats.SkippedTests := 0;
   FTestStats.CurrentSuiteName := '';
   FTestStats.CurrentTestName := '';
   FTestStats.CurrentTestHasFailures := False;
+  FTestStats.CurrentTestIsSkipped := False;
   FTestStats.CurrentTestAssertionCount := 0;
   FTestStats.TotalAssertionCount := 0;
 end;
@@ -816,12 +830,15 @@ procedure TGocciaTestAssertions.StartTest(const TestName: string);
 begin
   FTestStats.CurrentTestName := TestName;
   FTestStats.CurrentTestHasFailures := False;
+  FTestStats.CurrentTestIsSkipped := False;
   FTestStats.CurrentTestAssertionCount := 0;
 end;
 
 procedure TGocciaTestAssertions.EndTest;
 begin
-  if FTestStats.CurrentTestHasFailures then
+  if FTestStats.CurrentTestIsSkipped then
+    Inc(FTestStats.SkippedTests)
+  else if FTestStats.CurrentTestHasFailures then
     Inc(FTestStats.FailedTests)
   else
     Inc(FTestStats.PassedTests);
@@ -909,6 +926,31 @@ function TGocciaTestAssertions.It(Args: TObjectList<TGocciaValue>; ThisValue: TG
 begin
   // 'it' is an alias for 'test'
   Result := Test(Args, ThisValue);
+end;
+
+function TGocciaTestAssertions.Skip(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  TestName: string;
+  TestFunction: TGocciaFunctionValue;
+  TestCase: TTestCase;
+begin
+  if Args.Count <> 2 then
+    ThrowError('test.skip expects exactly 2 arguments', 0, 0);
+
+  if not (Args[0] is TGocciaStringValue) then
+    ThrowError('test.skip expects first argument to be a string', 0, 0);
+
+  if not (Args[1] is TGocciaFunctionValue) then
+    ThrowError('test.skip expects second argument to be a function', 0, 0);
+
+  TestName := Args[0].ToString;
+  TestFunction := Args[1] as TGocciaFunctionValue;
+
+  // Register the test as skipped with the current suite name
+  TestCase := TTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName, True);
+  FRegisteredTests.Add(TestCase);
+
+  Result := TGocciaUndefinedValue.Create;
 end;
 
 function TGocciaTestAssertions.BeforeEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -1033,44 +1075,60 @@ begin
       // Start tracking this test
       StartTest(TestCase.Name);
 
-      // Run beforeEach callbacks
-      RunCallbacks(FBeforeEachCallbacks);
-
-      try
-        // Execute the test function
-        // For tests from describe blocks, clone with global scope to fix context issues
-        if TestCase.SuiteName <> '' then
+      // Check if test is skipped
+      if TestCase.IsSkipped then
+      begin
+        // Mark test as skipped and don't execute it
+        FTestStats.CurrentTestIsSkipped := True;
+        if not Silent then
         begin
-          // Test is from a describe block - clone function with global scope
-          ClonedFunction := TestCase.TestFunction.CloneWithNewScope(FScope);
-          ClonedFunction.Call(EmptyArgs, TGocciaUndefinedValue.Create);
-        end
-        else
-        begin
-          // Standalone test - call directly
-          TestCase.TestFunction.Call(EmptyArgs, TGocciaUndefinedValue.Create);
-        end;
-      except
-        on E: Exception do
-        begin
-          // Route exception through proper assertion failure mechanism
-          AssertionFailed('test execution', 'Test threw an exception: ' + E.Message);
           if TestCase.SuiteName <> '' then
-            FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": ' + E.Message)
+            WriteLn('    ⏸️ ', TestCase.Name, ' in ', TestCase.SuiteName, ': SKIPPED')
           else
-            FailedTestDetails.Add('Test "' + TestCase.Name + '": ' + E.Message);
-          if ExitOnFirstFailure then
-            Break;
+            WriteLn('    ⏸️ ', TestCase.Name, ': SKIPPED');
         end;
-      end;
+      end
+      else
+      begin
+        // Run beforeEach callbacks
+        RunCallbacks(FBeforeEachCallbacks);
 
-      // Run afterEach callbacks
-      RunCallbacks(FAfterEachCallbacks);
+        try
+          // Execute the test function
+          // For tests from describe blocks, clone with global scope to fix context issues
+          if TestCase.SuiteName <> '' then
+          begin
+            // Test is from a describe block - clone function with global scope
+            ClonedFunction := TestCase.TestFunction.CloneWithNewScope(FScope);
+            ClonedFunction.Call(EmptyArgs, TGocciaUndefinedValue.Create);
+          end
+          else
+          begin
+            // Standalone test - call directly
+            TestCase.TestFunction.Call(EmptyArgs, TGocciaUndefinedValue.Create);
+          end;
+        except
+          on E: Exception do
+          begin
+            // Route exception through proper assertion failure mechanism
+            AssertionFailed('test execution', 'Test threw an exception: ' + E.Message);
+            if TestCase.SuiteName <> '' then
+              FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": ' + E.Message)
+            else
+              FailedTestDetails.Add('Test "' + TestCase.Name + '": ' + E.Message);
+            if ExitOnFirstFailure then
+              Break;
+          end;
+        end;
+
+        // Run afterEach callbacks
+        RunCallbacks(FAfterEachCallbacks);
+      end;
 
       // End tracking this test
       EndTest;
 
-      // Exit on first failure if requested
+      // Exit on first failure if requested (but not for skipped tests)
       if FTestStats.CurrentTestHasFailures and ExitOnFirstFailure then
         Break;
     end;
@@ -1082,8 +1140,8 @@ begin
 
 
   // Create a summary message
-  Summary := Format('Tests: %d total, %d passed, %d failed',
-    [FTestStats.TotalTests, FTestStats.PassedTests, FTestStats.FailedTests]);
+  Summary := Format('Tests: %d total, %d passed, %d failed, %d skipped',
+    [FTestStats.TotalTests, FTestStats.PassedTests, FTestStats.FailedTests, FTestStats.SkippedTests]);
 
   if FRegisteredSuites.Count > 0 then
   begin
@@ -1109,6 +1167,7 @@ begin
   ResultObj.SetProperty('totalRunTests', TGocciaNumberValue.Create(FTestStats.TotalTests));
   ResultObj.SetProperty('passed', TGocciaNumberValue.Create(FTestStats.PassedTests));
   ResultObj.SetProperty('failed', TGocciaNumberValue.Create(FTestStats.FailedTests));
+  ResultObj.SetProperty('skipped', TGocciaNumberValue.Create(FTestStats.SkippedTests));
   ResultObj.SetProperty('assertions', TGocciaNumberValue.Create(FTestStats.TotalAssertionCount));
   ResultObj.SetProperty('duration', TGocciaNumberValue.Create(GetTickCount64 - StartTime));
   ResultObj.SetProperty('failedTests', FailedTestDetailsArray);
@@ -1132,9 +1191,14 @@ begin
     end;
 
     if FTestStats.FailedTests = 0 then
-      WriteLn('✅ All tests passed!')
+    begin
+      if FTestStats.SkippedTests > 0 then
+        WriteLn(Format('✅ All tests passed! (%d skipped)', [FTestStats.SkippedTests]))
       else
-        WriteLn('❌ Some tests failed!');
+        WriteLn('✅ All tests passed!');
+    end
+    else
+      WriteLn('❌ Some tests failed!');
 
       WriteLn('==================');
   end;

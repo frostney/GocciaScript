@@ -26,7 +26,7 @@ test("recursion with multiple base cases", () => {
   expect(fibonacci(6)).toBe(8); // 0,1,1,2,3,5,8
 });
 
-test.skip("tail recursion", () => {
+test("tail recursion", () => {
   const sum = (n, acc = 0) => {
     if (n <= 0) return acc;
     return sum(n - 1, acc + n);
