@@ -21,7 +21,7 @@ type
     constructor Create(AParent: TGocciaScope = nil; AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = '');
     destructor Destroy; override;
     function CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''): TGocciaScope;
-    function GetValue(const AName: string): TGocciaValue; inline;
+    function GetValue(const AName: string): TGocciaValue; virtual;
     procedure Assign(const AName: string; AValue: TGocciaValue); virtual;
     function Contains(const AName: string): Boolean; inline;
     property Parent: TGocciaScope read FParent;
@@ -40,6 +40,13 @@ type
     constructor Create(AParent: TGocciaScope; const ACatchParameter: string);
     procedure Assign(const AName: string; AValue: TGocciaValue); override;
     procedure SetValue(const AName: string; AValue: TGocciaValue); override;
+  end;
+
+  // Specialized scope for strict mode that returns nil for undefined variables
+  TGocciaStrictScope = class(TGocciaScope)
+  public
+    constructor Create(AParent: TGocciaScope; const ACustomLabel: string);
+    function GetValue(const AName: string): TGocciaValue; override;
   end;
 
 
@@ -103,7 +110,7 @@ begin
   Result := TGocciaScope.Create(Self, AScopeKind, ACustomLabel);
 end;
 
-function TGocciaScope.GetValue(const AName: string): TGocciaValue; inline;
+function TGocciaScope.GetValue(const AName: string): TGocciaValue;
 var
   Value: TGocciaValue;
 begin
@@ -194,6 +201,30 @@ begin
 
   // Use base implementation
   inherited SetValue(AName, AValue);
+end;
+
+// TGocciaStrictScope implementation
+
+constructor TGocciaStrictScope.Create(AParent: TGocciaScope; const ACustomLabel: string);
+begin
+  inherited Create(AParent, skFunction, ACustomLabel);
+end;
+
+function TGocciaStrictScope.GetValue(const AName: string): TGocciaValue;
+var
+  Value: TGocciaValue;
+begin
+  if FValues.TryGetValue(AName, Value) then
+    Result := Value
+  else if Assigned(FParent) then
+  begin
+    Result := FParent.GetValue(AName);
+    // Convert undefined to nil in strict mode to trigger error handling
+    if Result is TGocciaUndefinedValue then
+      Result := nil;
+  end
+  else
+    Result := nil; // Return nil for undefined variables in strict mode
 end;
 
 end.

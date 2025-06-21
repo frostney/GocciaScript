@@ -114,6 +114,8 @@ var
   TotalAssertions: String;
   TotalDuration: String;
 begin
+  ExitCode := 0;
+
   TestResultObject := TestResult as TGocciaObjectValue;
 
   TotalRunTests := TestResultObject.GetProperty('totalRunTests').ToString;
@@ -129,6 +131,9 @@ begin
   Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
   Writeln(Format('Test Results Duration: %sms (%2.2fms/test)', [TotalDuration, (StrToFloat(TotalDuration) / StrToFloat(TotalRunTests))]));
   Writeln(Format('Test Results Failed Tests: %s', [TestResultObject.GetProperty('failedTests').ToString]));
+
+  if StrToFloat(TotalFailed) > 0 then
+    ExitCode := 1;
 end;
 
 var

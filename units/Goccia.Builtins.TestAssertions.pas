@@ -110,6 +110,7 @@ type
     function Test(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function It(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
+
     // Setup/teardown
     function BeforeEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function AfterEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -121,7 +122,7 @@ type
 implementation
 
 uses
-  SysUtils, Goccia.Values.ClassValue;
+  SysUtils, Goccia.Values.ClassValue, Goccia.Evaluator;
 
 { TTestSuite }
 
@@ -643,6 +644,10 @@ function TGocciaExpectationValue.ToThrow(Args: TObjectList<TGocciaValue>; ThisVa
 var
   ExpectedErrorType: string;
   EmptyArgs: TObjectList<TGocciaValue>;
+  TestContext: TGocciaEvaluationContext;
+  TestFunc: TGocciaFunctionValue;
+  TestScope: TGocciaScope;
+  I: Integer;
 begin
   Result := TGocciaUndefinedValue.Create;
 
@@ -659,10 +664,27 @@ begin
     Exit;
   end;
 
+    TestFunc := TGocciaFunctionValue(FActualValue);
   EmptyArgs := TObjectList<TGocciaValue>.Create(False);
+
+  // Create a strict test scope that throws for undefined variables
+  TestScope := TGocciaStrictScope.Create(TestFunc.Closure, 'ToThrow Test');
   try
+    // Set up evaluation context with an OnError handler that throws exceptions
+    TestContext.Scope := TestScope;
+    TestContext.OnError := FTestAssertions.ThrowError;  // Use the test framework's ThrowError
+    TestContext.LoadModule := nil;
+
+    // Set the global context so nested function calls inherit proper error handling
+    GlobalEvaluationContext.OnError := TestContext.OnError;
+    GlobalEvaluationContext.LoadModule := TestContext.LoadModule;
+
     try
-      TGocciaFunctionValue(FActualValue).Call(EmptyArgs, TGocciaUndefinedValue.Create);
+      // Execute all function body statements with proper context
+      for I := 0 to TestFunc.BodyStatements.Count - 1 do
+      begin
+        Evaluate(TestFunc.BodyStatements[I], TestContext);
+      end;
     except
       on E: Exception do
       begin
@@ -690,6 +712,7 @@ begin
     end;
   finally
     EmptyArgs.Free;
+    // Don't free TestScope here as it might be referenced
   end;
 
   TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
@@ -776,7 +799,9 @@ begin
         except
           on E: Exception do
           begin
-            // Log callback error but don't crash the test
+            // Route callback exceptions through proper assertion failure mechanism
+            AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
+            // Also log for debugging
             WriteLn('Warning: Error in callback: ', E.Message);
           end;
         end;
@@ -1028,8 +1053,8 @@ begin
       except
         on E: Exception do
         begin
-          // Mark test as failed if there's an exception during execution
-          FTestStats.CurrentTestHasFailures := True;
+          // Route exception through proper assertion failure mechanism
+          AssertionFailed('test execution', 'Test threw an exception: ' + E.Message);
           if TestCase.SuiteName <> '' then
             FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": ' + E.Message)
           else

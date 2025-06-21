@@ -109,8 +109,17 @@ begin
   try
     // Set up evaluation context for default parameter evaluation
     Context.Scope := FClosure;
-    Context.OnError := nil; // TODO: Pass proper error handler
-    Context.LoadModule := nil; // TODO: Pass proper module loader
+    // Use global context as fallback for OnError when not explicitly provided
+    if Assigned(GlobalEvaluationContext.OnError) then
+    begin
+      Context.OnError := GlobalEvaluationContext.OnError;
+      Context.LoadModule := GlobalEvaluationContext.LoadModule;
+    end
+    else
+    begin
+      Context.OnError := nil;
+      Context.LoadModule := nil;
+    end;
 
     // Set up the call scope
     CallScope.ThisValue := ThisValue;

@@ -55,10 +55,31 @@ procedure InitializePrivateInstanceProperties(Instance: TGocciaInstanceValue; Cl
 
 function IsObjectInstanceOfClass(Obj: TGocciaObjectValue; ClassValue: TGocciaClassValue): Boolean;
 
+// Helper function to safely call OnError with proper error handling
+procedure SafeOnError(Context: TGocciaEvaluationContext; const Message: string; Line, Column: Integer);
+
+var
+  // Global evaluation context for error handling inheritance
+  GlobalEvaluationContext: TGocciaEvaluationContext;
+
 implementation
+
+// Helper function to safely call OnError with proper error handling
+procedure SafeOnError(Context: TGocciaEvaluationContext; const Message: string; Line, Column: Integer);
+begin
+  if Assigned(Context.OnError) then
+    Context.OnError(Message, Line, Column);
+end;
 
 function Evaluate(Node: TGocciaASTNode; Context: TGocciaEvaluationContext): TGocciaValue;
 begin
+  // Set global context for function calls to inherit error handling
+  if Assigned(Context.OnError) then
+  begin
+    GlobalEvaluationContext.OnError := Context.OnError;
+    GlobalEvaluationContext.LoadModule := Context.LoadModule;
+  end;
+
   Logger.Debug('Evaluate: Node class is %s', [Node.ClassName]);
   Logger.Debug('Evaluate: Node line: %d', [Node.Line]);
   Logger.Debug('Evaluate: Node column: %d', [Node.Column]);
@@ -102,8 +123,12 @@ begin
   begin
     Result := Context.Scope.GetValue(TGocciaIdentifierExpression(Expression).Name);
     if Result = nil then
-      Context.OnError(Format('Undefined variable: %s',
+    begin
+      SafeOnError(Context, Format('Undefined variable: %s',
         [TGocciaIdentifierExpression(Expression).Name]), Expression.Line, Expression.Column);
+      // If OnError doesn't throw, return undefined
+      Result := TGocciaUndefinedValue.Create;
+    end;
   end
   else if Expression is TGocciaBinaryExpression then
     Result := EvaluateBinary(TGocciaBinaryExpression(Expression), Context)
@@ -1064,6 +1089,7 @@ begin
         else if not ((SpreadValue is TGocciaNullValue) or (SpreadValue is TGocciaUndefinedValue)) then
         begin
           Context.OnError('Spread syntax requires an iterable', ArgumentExpr.Line, ArgumentExpr.Column);
+          // If OnError doesn't throw, continue execution (but the spread will be ignored)
         end;
         // null and undefined are ignored in spread context
       end
@@ -1080,7 +1106,11 @@ begin
     else if Callee is IGocciaCallable then
       Result := (Callee as IGocciaCallable).Call(Arguments, ThisValue)
     else
+    begin
+      SafeOnError(Context, Format('%s is not a function', [Callee.TypeName]), CallExpression.Line, CallExpression.Column);
+      // If OnError doesn't throw, return undefined
       Result := TGocciaUndefinedValue.Create;
+    end;
 
   finally
     Arguments.Free;
