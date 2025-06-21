@@ -10,8 +10,12 @@ var
   Source: TStringList;
 begin
   Source := TStringList.Create;
-  Source.LoadFromFile(FileName);
-  Result := RunGocciaScriptFromStringList(Source, FileName).Value;
+  try
+    Source.LoadFromFile(FileName);
+    Result := RunGocciaScriptFromStringList(Source, FileName, TGocciaInterpreter.DefaultGlobals).Value;
+  finally
+    Source.Free;
+  end;
 end;
 
 procedure RunScriptFromFile(const FileName: string);

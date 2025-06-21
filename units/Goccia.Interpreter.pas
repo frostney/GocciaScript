@@ -12,7 +12,21 @@ uses
   Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Evaluator, Goccia.Scope, Goccia.Builtins.Console, Goccia.Builtins.GlobalObject, Goccia.Builtins.Math, Goccia.Interfaces, Goccia.Logger, Goccia.Builtins.GlobalArray, Goccia.Builtins.Globals, Goccia.Builtins.JSON, Goccia.Builtins.GlobalNumber, Goccia.Builtins.TestAssertions;
 
 type
+  TGocciaGlobalBuiltin = (
+    ggConsole,
+    ggMath,
+    ggGlobalObject,
+    ggGlobalArray,
+    ggGlobalNumber,
+    ggPromise,
+    ggJSON,
+    ggTestAssertions
+  );
+
+  TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
+
   TGocciaInterpreter = class
+  const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON];
   private
     FBuiltinConsole: TGocciaConsole;
     FBuiltinMath: TGocciaMath;
@@ -30,7 +44,7 @@ type
     FSourceLines: TStringList;
 
     // Built-in functions
-    procedure RegisterBuiltIns;
+    procedure RegisterBuiltIns(const AGlobals: TGocciaGlobalBuiltins);
     procedure RegisterConsole;
     procedure RegisterMath;
     procedure RegisterJSON;
@@ -46,7 +60,8 @@ type
     procedure ThrowError(const Message: string; Line, Column: Integer);
     function CreateEvaluationContext: TGocciaEvaluationContext;
   public
-    constructor Create(const AFileName: string; ASourceLines: TStringList);
+    // TODO: We need Filename and SourceLines for error context - We should find a better way to pass this
+    constructor Create(const AFileName: string; ASourceLines: TStringList; AGlobals: TGocciaGlobalBuiltins);
     destructor Destroy; override;
     function Execute(AProgram: TGocciaProgram): TGocciaValue;
     function LoadModule(const APath: string): TGocciaModule;
@@ -68,11 +83,11 @@ type
     Interpreter: TGocciaInterpreter;
   end;
 
-  function RunGocciaScriptFromStringList(const Source: TStringList; const FileName: string): TInterpreterResult;
+  function RunGocciaScriptFromStringList(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TInterpreterResult;
 
 implementation
 
-function RunGocciaScriptFromStringList(const Source: TStringList; const FileName: string): TInterpreterResult;
+function RunGocciaScriptFromStringList(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TInterpreterResult;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -88,7 +103,7 @@ begin
         try
         ProgramNode := Parser.Parse;
         try
-            Interpreter := TGocciaInterpreter.Create(FileName, Lexer.SourceLines);
+            Interpreter := TGocciaInterpreter.Create(FileName, Lexer.SourceLines, AGlobals);
 
             Result.Value := Interpreter.Execute(ProgramNode);
             Result.Interpreter := Interpreter;
@@ -121,14 +136,14 @@ end;
 { TGocciaInterpreter }
 
 constructor TGocciaInterpreter.Create(const AFileName: string;
-  ASourceLines: TStringList);
+  ASourceLines: TStringList; AGlobals: TGocciaGlobalBuiltins);
 begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FGlobalScope := TGocciaScope.Create(nil, skGlobal, 'GlobalScope');
   FGlobalScope.ThisValue := TGocciaUndefinedValue.Create;
   FModules := TDictionary<string, TGocciaModule>.Create;
-  RegisterBuiltIns;
+  RegisterBuiltIns(AGlobals);
 end;
 
 destructor TGocciaInterpreter.Destroy;
@@ -148,16 +163,26 @@ begin
   inherited;
 end;
 
-procedure TGocciaInterpreter.RegisterBuiltIns;
+procedure TGocciaInterpreter.RegisterBuiltIns(const AGlobals: TGocciaGlobalBuiltins);
 begin
-  RegisterConsole;
-  RegisterMath;
-  RegisterJSON;
-  RegisterTestAssertions;
-  RegisterPromise;
-  RegisterObjectMethods;
-  RegisterGlobalArray;
-  RegisterGlobalNumber;
+  if ggConsole in AGlobals then
+    RegisterConsole;
+  if ggMath in AGlobals then
+    RegisterMath;
+  if ggJSON in AGlobals then
+    RegisterJSON;
+  if ggTestAssertions in AGlobals then
+    RegisterTestAssertions;
+  if ggPromise in AGlobals then
+    RegisterPromise;
+  if ggGlobalObject in AGlobals then
+    RegisterObjectMethods;
+  if ggGlobalArray in AGlobals then
+    RegisterGlobalArray;
+  if ggGlobalNumber in AGlobals then
+    RegisterGlobalNumber;
+
+  // TODO: We need to split this out - For example `globalThis` should always be there, `parseInt` should be optional
   RegisterGlobals;
 
   RegisterBuiltinConstructors;

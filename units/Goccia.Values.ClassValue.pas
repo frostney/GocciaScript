@@ -7,7 +7,7 @@ interface
 uses
   Goccia.Values.Base, Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Interfaces,
   Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math, Goccia.Values.UndefinedValue,
-  Goccia.AST.Node;
+  Goccia.AST.Node, Goccia.Values.ObjectPropertyDescriptor;
 
 type
   // Forward declaration
@@ -160,18 +160,19 @@ begin
   end;
 end;
 
+// TODO: Do we even need this?
 procedure TGocciaClassValue.AddGetter(const AName: string; AGetter: TGocciaFunctionValue);
 begin
   FGetters.AddOrSetValue(AName, AGetter);
   // Also add to prototype with property descriptor
-  FPrototype.SetGetter(AName, AGetter);
+  FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, nil, [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
 procedure TGocciaClassValue.AddSetter(const AName: string; ASetter: TGocciaFunctionValue);
 begin
   FSetters.AddOrSetValue(AName, ASetter);
   // Also add to prototype with property descriptor
-  FPrototype.SetSetter(AName, ASetter);
+  FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(nil, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
 procedure TGocciaClassValue.AddInstanceProperty(const AName: string; AExpression: TGocciaExpression);

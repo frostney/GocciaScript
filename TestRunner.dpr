@@ -9,7 +9,10 @@ function RunGocciaScript(const FileName: string): TGocciaValue;
 var
   Source: TStringList;
   DefaultScriptResult: TGocciaObjectValue;
+  TestGlobals: TGocciaGlobalBuiltins;
 begin
+  TestGlobals := TGocciaInterpreter.DefaultGlobals + [ggTestAssertions];
+
   Source := TStringList.Create;
   try  
     Source.LoadFromFile(FileName);
@@ -17,7 +20,7 @@ begin
     Source.Add('runTests({ exitOnFirstFailure: false, showTestResults: false, silent: true });');
 
     try
-      Result := RunGocciaScriptFromStringList(Source, FileName).Value;
+      Result := RunGocciaScriptFromStringList(Source, FileName, TestGlobals).Value;
     except
       on E: Exception do
       begin

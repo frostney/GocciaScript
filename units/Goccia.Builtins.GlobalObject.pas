@@ -30,12 +30,13 @@ constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocci
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FBuiltinObject.SetProperty('keys', TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1));
-  FBuiltinObject.SetProperty('values', TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1));
-  FBuiltinObject.SetProperty('entries', TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1));
-  FBuiltinObject.SetProperty('assign', TGocciaNativeFunctionValue.Create(ObjectAssign, 'assign', -1));
-  FBuiltinObject.SetProperty('create', TGocciaNativeFunctionValue.Create(ObjectCreate, 'create', 1));
-  FBuiltinObject.SetProperty('hasOwn', TGocciaNativeFunctionValue.Create(ObjectHasOwn, 'hasOwn', 1));
+  // Global Object methods: writable, non-enumerable, configurable
+  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1));
+  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1));
+  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1));
+  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(ObjectAssign, 'assign', -1));
+  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(ObjectCreate, 'create', 1));
+  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(ObjectHasOwn, 'hasOwn', 1));
 
   AScope.SetValue(AName, FBuiltinObject);
 end;

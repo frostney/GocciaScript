@@ -10,7 +10,7 @@ uses
 type
   TGocciaArrayValue = class(TGocciaObjectValue)
   private
-    function GetLength(const AObject: TGocciaObjectValue): TGocciaValue; inline;
+    function GetLength(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; inline;
 
     // Helper methods for reducing duplication
     function ValidateArrayMethodCall(const MethodName: string; Args: TObjectList<TGocciaValue>;
@@ -60,7 +60,7 @@ type
 implementation
 
 uses
-  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.Evaluator, Goccia.Values.StringValue, Generics.Defaults, Goccia.Utils;
+  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.Evaluator, Goccia.Values.StringValue, Goccia.Values.ObjectPropertyDescriptor, Generics.Defaults, Goccia.Utils;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var
@@ -104,22 +104,23 @@ begin
   FElements := TObjectList<TGocciaValue>.Create(False);
   FPrototype := TGocciaObjectValue.Create;
 
-  FPrototype.SetComputedProperty('length', GetLength);
-  FPrototype.SetProperty('map', TGocciaNativeFunctionValue.Create(ArrayMap, 'map', 1));
-  FPrototype.SetProperty('filter', TGocciaNativeFunctionValue.Create(ArrayFilter, 'filter', 1));
-  FPrototype.SetProperty('reduce', TGocciaNativeFunctionValue.Create(ArrayReduce, 'reduce', 1));
-  FPrototype.SetProperty('forEach', TGocciaNativeFunctionValue.Create(ArrayForEach, 'forEach', 1));
-  FPrototype.SetProperty('some', TGocciaNativeFunctionValue.Create(ArraySome, 'some', 1));
-  FPrototype.SetProperty('every', TGocciaNativeFunctionValue.Create(ArrayEvery, 'every', 1));
-  FPrototype.SetProperty('flat', TGocciaNativeFunctionValue.Create(ArrayFlat, 'flat', 1));
-  FPrototype.SetProperty('flatMap', TGocciaNativeFunctionValue.Create(ArrayFlatMap, 'flatMap', 1));
-  FPrototype.SetProperty('join', TGocciaNativeFunctionValue.Create(ArrayJoin, 'join', 1));
-  FPrototype.SetProperty('includes', TGocciaNativeFunctionValue.Create(ArrayIncludes, 'includes', 1));
-  FPrototype.SetProperty('push', TGocciaNativeFunctionValue.Create(ArrayPush, 'push', 1));
-  FPrototype.SetProperty('pop', TGocciaNativeFunctionValue.Create(ArrayPop, 'pop', 0));
-  FPrototype.SetProperty('toReversed', TGocciaNativeFunctionValue.Create(ArrayToReversed, 'toReversed', 0));
-  FPrototype.SetProperty('toSorted', TGocciaNativeFunctionValue.Create(ArrayToSorted, 'toSorted', 0));
-  FPrototype.SetProperty('toSpliced', TGocciaNativeFunctionValue.Create(ArrayToSpliced, 'toSpliced', 1));
+  FPrototype.DefineProperty('length', TGocciaPropertyDescriptorAccessor.Create(TGocciaNativeFunctionValue.Create(GetLength, 'length', 0), nil, [pfEnumerable, pfConfigurable]));
+  // Array prototype methods: writable, non-enumerable, configurable
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayMap, 'map', 1));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayFilter, 'filter', 1));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayReduce, 'reduce', 1));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayForEach, 'forEach', 1));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArraySome, 'some', 1));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayEvery, 'every', 1));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayFlat, 'flat', 1));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayFlatMap, 'flatMap', 1));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayJoin, 'join', 1));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayIncludes, 'includes', 1));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayPush, 'push', 1));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayPop, 'pop', 0));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayToReversed, 'toReversed', 0));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayToSorted, 'toSorted', 0));
+  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayToSpliced, 'toSpliced', 1));
 end;
 
 destructor TGocciaArrayValue.Destroy;
@@ -138,7 +139,7 @@ begin
   ThrowError(Message, []);
 end;
 
-function TGocciaArrayValue.GetLength(const AObject: TGocciaObjectValue): TGocciaValue;
+function TGocciaArrayValue.GetLength(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaNumberValue.Create(FElements.Count);
 end;

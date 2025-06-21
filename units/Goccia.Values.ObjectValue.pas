@@ -5,57 +5,12 @@ unit Goccia.Values.ObjectValue;
 interface
 
 uses
-  Goccia.Values.Base, Generics.Collections, Goccia.Values.UndefinedValue, Math, Goccia.Logger, SysUtils;
+  Goccia.Values.Base, Generics.Collections, Goccia.Values.UndefinedValue, Goccia.Values.ObjectPropertyDescriptor, Math, Goccia.Logger, SysUtils;
 
 type
-  // TGocciaProperty = class
-  // private
-  //   FName: string;
-  //   FValue: TGocciaValue;
-  //   FWritable: Boolean;
-  //   FEnumerable: Boolean;
-  //   FConfigurable: Boolean;
-  // public
-  //   constructor Create(const AName: string; AValue: TGocciaValue; AWritable: Boolean = True; AEnumerable: Boolean = True; AConfigurable: Boolean = True);
-
-  //   property Name: string read FName;
-  //   property Value: TGocciaValue read FValue;
-  //   property Writable: Boolean read FWritable;
-  //   property Enumerable: Boolean read FEnumerable;
-  //   property Configurable: Boolean read FConfigurable;
-  // end;
-
-  TGocciaObjectValue = class;
-
-  TComputedPropertyFunction = function(const AObject: TGocciaObjectValue): TGocciaValue of object;
-
-  // Property descriptor for getter/setter support
-  TGocciaPropertyDescriptor = class
-  private
-    FHasValue: Boolean;
-    FValue: TGocciaValue;
-    FHasGetter: Boolean;
-    FGetter: TGocciaValue; // Function value
-    FHasSetter: Boolean;
-    FSetter: TGocciaValue; // Function value
-    FEnumerable: Boolean;
-    FConfigurable: Boolean;
-  public
-    constructor Create;
-    property HasValue: Boolean read FHasValue write FHasValue;
-    property Value: TGocciaValue read FValue write FValue;
-    property HasGetter: Boolean read FHasGetter write FHasGetter;
-    property Getter: TGocciaValue read FGetter write FGetter;
-    property HasSetter: Boolean read FHasSetter write FHasSetter;
-    property Setter: TGocciaValue read FSetter write FSetter;
-    property Enumerable: Boolean read FEnumerable write FEnumerable;
-    property Configurable: Boolean read FConfigurable write FConfigurable;
-  end;
-
   TGocciaObjectValue = class(TGocciaValue)
   protected
     FProperties: TDictionary<string, TGocciaValue>;
-    FComputedProperties: TDictionary<string, TComputedPropertyFunction>;
     FPropertyDescriptors: TDictionary<string, TGocciaPropertyDescriptor>;
     FPrototype: TGocciaObjectValue;
   public
@@ -66,11 +21,16 @@ type
     function ToBoolean: Boolean; override;
     function ToNumber: Double; override;
     function TypeName: string; override;
+
+    procedure DefineProperty(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
+    procedure DefineProperties(const AProperties: TDictionary<string, TGocciaPropertyDescriptor>);
+
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
-    procedure SetComputedProperty(const AName: string; AValue: TComputedPropertyFunction);
-    procedure SetPropertyDescriptor(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
-    procedure SetGetter(const AName: string; AGetterFunction: TGocciaValue);
-    procedure SetSetter(const AName: string; ASetterFunction: TGocciaValue);
+
+    // Convenience methods for built-in objects
+    procedure RegisterMethod(AMethod: TGocciaValue);
+    procedure RegisterConstant(const AName: string; const AValue: TGocciaValue);
+
     function GetProperty(const AName: string): TGocciaValue;
     function GetPropertyWithContext(const AName: string; AThisContext: TGocciaValue): TGocciaValue;
     function HasProperty(const AName: string): Boolean;
@@ -84,21 +44,7 @@ type
 
 implementation
 
-uses Goccia.Values.FunctionValue;
-
-{ TGocciaPropertyDescriptor }
-
-constructor TGocciaPropertyDescriptor.Create;
-begin
-  FHasValue := False;
-  FValue := nil;
-  FHasGetter := False;
-  FGetter := nil;
-  FHasSetter := False;
-  FSetter := nil;
-  FEnumerable := True;
-  FConfigurable := True;
-end;
+uses Goccia.Values.FunctionValue, Goccia.Values.NativeFunction;
 
 { TGocciaObjectValue }
 
@@ -106,7 +52,6 @@ end;
 constructor TGocciaObjectValue.Create;
 begin
   FProperties := TDictionary<string, TGocciaValue>.Create;
-  FComputedProperties := TDictionary<string, TComputedPropertyFunction>.Create;
   FPropertyDescriptors := TDictionary<string, TGocciaPropertyDescriptor>.Create;
 
   // TODO: Should this be TGocciaNullValue?
@@ -115,17 +60,12 @@ begin
 end;
 
 destructor TGocciaObjectValue.Destroy;
-var
-  Descriptor: TGocciaPropertyDescriptor;
 begin
   // Don't free the values - they might be referenced elsewhere
   // The scope or other owners should handle their cleanup
   FProperties.Free;
-  FComputedProperties.Free;
 
-  // Free property descriptors
-  for Descriptor in FPropertyDescriptors.Values do
-    Descriptor.Free;
+  // Property descriptors are now records - no manual cleanup needed
   FPropertyDescriptors.Free;
 
   inherited;
@@ -187,130 +127,173 @@ procedure TGocciaObjectValue.SetProperty(const AName: string; AValue: TGocciaVal
 var
   Descriptor: TGocciaPropertyDescriptor;
   SetterFunction: TGocciaFunctionValue;
+  NativeSetterFunction: TGocciaNativeFunctionValue;
   Args: TObjectList<TGocciaValue>;
 begin
-  // First check for property descriptors (getters/setters)
+  // First check for existing property descriptors
   if FPropertyDescriptors.ContainsKey(AName) then
   begin
     Descriptor := FPropertyDescriptors[AName];
-    if Descriptor.HasSetter then
+    if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      // Call the setter function
-      if Descriptor.Setter is TGocciaFunctionValue then
+      // Call the setter function if it exists
+      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
       begin
-        SetterFunction := TGocciaFunctionValue(Descriptor.Setter);
-        Args := TObjectList<TGocciaValue>.Create(False);
-        try
-          Args.Add(AValue);
-          SetterFunction.Call(Args, Self);
-        finally
-          Args.Free;
+        if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionValue then
+        begin
+          SetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
+          Args := TObjectList<TGocciaValue>.Create(False);
+          try
+            Args.Add(AValue);
+            SetterFunction.Call(Args, Self);
+          finally
+            Args.Free;
+          end;
+          Exit;
+        end
+        else if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaNativeFunctionValue then
+        begin
+          NativeSetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
+          Args := TObjectList<TGocciaValue>.Create(False);
+          try
+            Args.Add(AValue);
+            NativeSetterFunction.Call(Args, Self);
+          finally
+            Args.Free;
+          end;
+          Exit;
         end;
+      end;
+      // Accessor descriptor without setter - property is not writable
+      Exit;
+    end
+    else if Descriptor is TGocciaPropertyDescriptorData then
+    begin
+      // Check if property is writable
+      if TGocciaPropertyDescriptorData(Descriptor).Writable then
+      begin
+        // Property has a data descriptor, update it
+        Descriptor := TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]);
+        FPropertyDescriptors[AName] := Descriptor;
         Exit;
       end;
-    end
-    else if Descriptor.HasValue then
-    begin
-      // Property has a value descriptor, update it
-      Descriptor.Value := AValue;
+      // Property is not writable - silently ignore in non-strict mode
       Exit;
     end;
   end;
 
-  // Default behavior: set as regular property
-  FProperties.AddOrSetValue(AName, AValue);
+  // Create new property with proper descriptor (JavaScript default attributes)
+  Descriptor := TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]);
+  FPropertyDescriptors.AddOrSetValue(AName, Descriptor);
 end;
 
-procedure TGocciaObjectValue.SetComputedProperty(const AName: string; AValue: TComputedPropertyFunction);
+procedure TGocciaObjectValue.DefineProperty(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
 begin
-  FComputedProperties.AddOrSetValue(AName, AValue);
-end;
+  if FPropertyDescriptors.ContainsKey(AName) then
+  begin
+    if FPropertyDescriptors[AName].Configurable then
+    begin
+      FPropertyDescriptors[AName] := ADescriptor;
+      Exit;
+    end;
 
-procedure TGocciaObjectValue.SetPropertyDescriptor(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
-begin
+    if FPropertyDescriptors[AName].Writable then
+    begin
+      FPropertyDescriptors[AName] := ADescriptor;
+      Exit;
+    end;
+  end;
+
   FPropertyDescriptors.AddOrSetValue(AName, ADescriptor);
 end;
 
-procedure TGocciaObjectValue.SetGetter(const AName: string; AGetterFunction: TGocciaValue);
+procedure TGocciaObjectValue.DefineProperties(const AProperties: TDictionary<string, TGocciaPropertyDescriptor>);
 var
-  Descriptor: TGocciaPropertyDescriptor;
+  Pair: TPair<string, TGocciaPropertyDescriptor>;
 begin
-  if FPropertyDescriptors.ContainsKey(AName) then
-    Descriptor := FPropertyDescriptors[AName]
-  else
-  begin
-    Descriptor := TGocciaPropertyDescriptor.Create;
-    FPropertyDescriptors.Add(AName, Descriptor);
-  end;
-
-  Descriptor.HasGetter := True;
-  Descriptor.Getter := AGetterFunction;
+  for Pair in AProperties do
+    DefineProperty(Pair.Key, Pair.Value);
 end;
 
-procedure TGocciaObjectValue.SetSetter(const AName: string; ASetterFunction: TGocciaValue);
+procedure TGocciaObjectValue.RegisterMethod(AMethod: TGocciaValue);
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
-  if FPropertyDescriptors.ContainsKey(AName) then
-    Descriptor := FPropertyDescriptors[AName]
-  else
-  begin
-    Descriptor := TGocciaPropertyDescriptor.Create;
-    FPropertyDescriptors.Add(AName, Descriptor);
-  end;
+  if not (AMethod is TGocciaFunctionValue) and not (AMethod is TGocciaNativeFunctionValue) then
+    raise Exception.Create('Method must be a function or native function');
 
-  Descriptor.HasSetter := True;
-  Descriptor.Setter := ASetterFunction;
+  Descriptor := TGocciaPropertyDescriptorData.Create(AMethod, [pfEnumerable, pfConfigurable, pfWritable]);
+
+  if AMethod is TGocciaFunctionValue then
+  begin
+    FPropertyDescriptors.AddOrSetValue(TGocciaFunctionValue(AMethod).Name, Descriptor);
+  end
+  else if AMethod is TGocciaNativeFunctionValue then
+  begin
+    FPropertyDescriptors.AddOrSetValue(TGocciaNativeFunctionValue(AMethod).Name, Descriptor);
+  end;
+end;
+
+procedure TGocciaObjectValue.RegisterConstant(const AName: string; const AValue: TGocciaValue);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  // Built-in constants: { writable: false, enumerable: false, configurable: false }
+  Descriptor := TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]);
+  FPropertyDescriptors.AddOrSetValue(AName, Descriptor);
 end;
 
 function TGocciaObjectValue.GetProperty(const AName: string): TGocciaValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
   GetterFunction: TGocciaFunctionValue;
+  NativeGetterFunction: TGocciaNativeFunctionValue;
   Args: TObjectList<TGocciaValue>;
 begin
   Logger.Debug('TGocciaObjectValue.GetProperty: Start');
   Logger.Debug('  Name: %s', [AName]);
 
-  // First check for property descriptors (getters/setters)
+  // First priority: property descriptors (modern system)
   if FPropertyDescriptors.ContainsKey(AName) then
   begin
     Descriptor := FPropertyDescriptors[AName];
-    if Descriptor.HasGetter then
+    if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      // Call the getter function
-      if Descriptor.Getter is TGocciaFunctionValue then
+      // Call the getter function if it exists
+      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
       begin
-        GetterFunction := TGocciaFunctionValue(Descriptor.Getter);
-        Args := TObjectList<TGocciaValue>.Create(False);
-        try
-          Result := GetterFunction.Call(Args, Self);
-        finally
-          Args.Free;
+        if TGocciaPropertyDescriptorAccessor(Descriptor).Getter is TGocciaFunctionValue then
+        begin
+          GetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
+          Args := TObjectList<TGocciaValue>.Create(False);
+          try
+            Result := GetterFunction.Call(Args, Self);
+          finally
+            Args.Free;
+          end;
+          Exit;
+        end
+        else if TGocciaPropertyDescriptorAccessor(Descriptor).Getter is TGocciaNativeFunctionValue then
+        begin
+          NativeGetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
+          Args := TObjectList<TGocciaValue>.Create(False);
+          try
+            Result := NativeGetterFunction.Call(Args, Self);
+          finally
+            Args.Free;
+          end;
+          Exit;
         end;
-        Exit;
       end;
+      // No getter - return undefined
+      Result := TGocciaUndefinedValue.Create;
+      Exit;
     end
-    else if Descriptor.HasValue then
+    else if Descriptor is TGocciaPropertyDescriptorData then
     begin
-      Result := Descriptor.Value;
+      Result := TGocciaPropertyDescriptorData(Descriptor).Value;
       Exit;
     end;
-  end;
-
-  // Then check computed properties (legacy)
-  if FComputedProperties.ContainsKey(AName) then
-  begin
-    Logger.Debug('TGocciaObjectValue.GetProperty: FComputedProperties.ContainsKey(AName)');
-    Result := FComputedProperties[AName](Self);
-    Exit;
-  end;
-
-  // Then check regular properties
-  if FProperties.ContainsKey(AName) then
-  begin
-    Result := FProperties[AName];
-    Exit;
   end;
 
   // Finally check prototype chain
@@ -329,6 +312,7 @@ function TGocciaObjectValue.GetPropertyWithContext(const AName: string; AThisCon
 var
   Descriptor: TGocciaPropertyDescriptor;
   GetterFunction: TGocciaFunctionValue;
+  NativeGetterFunction: TGocciaNativeFunctionValue;
   Args: TObjectList<TGocciaValue>;
 begin
       Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Property=%s, ThisContext=%s', [AName, AThisContext.TypeName]);
@@ -338,27 +322,46 @@ begin
   begin
     Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Found property descriptor for %s', [AName]);
     Descriptor := FPropertyDescriptors[AName];
-    if Descriptor.HasGetter then
+    if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Property has getter');
-      // Call the getter function with the provided this context
-      if Descriptor.Getter is TGocciaFunctionValue then
+      Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Property has accessor descriptor');
+      // Call the getter function with the provided this context if it exists
+      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
       begin
-        Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Calling getter with context %s', [AThisContext.TypeName]);
-        GetterFunction := TGocciaFunctionValue(Descriptor.Getter);
-        Args := TObjectList<TGocciaValue>.Create(False);
-        try
-          Result := GetterFunction.Call(Args, AThisContext); // Use provided context
-          Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Getter returned %s', [Result.ToString]);
-        finally
-          Args.Free;
+        if TGocciaPropertyDescriptorAccessor(Descriptor).Getter is TGocciaFunctionValue then
+        begin
+          Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Calling getter with context %s', [AThisContext.TypeName]);
+          GetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
+          Args := TObjectList<TGocciaValue>.Create(False);
+          try
+            Result := GetterFunction.Call(Args, AThisContext); // Use provided context
+            Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Getter returned %s', [Result.ToString]);
+          finally
+            Args.Free;
+          end;
+          Exit;
+        end
+        else if TGocciaPropertyDescriptorAccessor(Descriptor).Getter is TGocciaNativeFunctionValue then
+        begin
+          Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Calling native getter with context %s', [AThisContext.TypeName]);
+          NativeGetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
+          Args := TObjectList<TGocciaValue>.Create(False);
+          try
+            Result := NativeGetterFunction.Call(Args, AThisContext); // Use provided context
+            Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Native getter returned %s', [Result.ToString]);
+          finally
+            Args.Free;
+          end;
+          Exit;
         end;
-        Exit;
       end;
+      // No getter - return undefined
+      Result := TGocciaUndefinedValue.Create;
+      Exit;
     end
-    else if Descriptor.HasValue then
+    else if Descriptor is TGocciaPropertyDescriptorData then
     begin
-      Result := Descriptor.Value;
+      Result := TGocciaPropertyDescriptorData(Descriptor).Value;
       Exit;
     end;
   end;
@@ -378,18 +381,13 @@ end;
 
 function TGocciaObjectValue.HasOwnProperty(const AName: string): Boolean;
 begin
-  Result := FProperties.ContainsKey(AName) or
-            FComputedProperties.ContainsKey(AName) or
-            FPropertyDescriptors.ContainsKey(AName);
+  Result := FPropertyDescriptors.ContainsKey(AName);
 end;
 
 procedure TGocciaObjectValue.DeleteProperty(const AName: string);
 begin
-  if FProperties.ContainsKey(AName) then
-    FProperties.Remove(AName);
-
-  if FComputedProperties.ContainsKey(AName) then
-    FComputedProperties.Remove(AName);
+  if FPropertyDescriptors.ContainsKey(AName) then
+    FPropertyDescriptors.Remove(AName);
 end;
 
 end.

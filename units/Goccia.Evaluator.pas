@@ -5,7 +5,7 @@ unit Goccia.Evaluator;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Base, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.Error, Goccia.Values.NullValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser, Generics.Collections, SysUtils, Math, Classes;
+  Goccia.Interfaces, Goccia.Values.Base, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.StringObjectValue, Goccia.Values.Error, Goccia.Values.NullValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser, Generics.Collections, SysUtils, Math, Classes;
 
 type
   TGocciaEvaluationContext = record
@@ -66,6 +66,9 @@ var
   GlobalEvaluationContext: TGocciaEvaluationContext;
 
 implementation
+
+uses
+  Goccia.Values.ObjectPropertyDescriptor;
 
 // Helper function to safely call OnError with proper error handling
 procedure SafeOnError(Context: TGocciaEvaluationContext; const Message: string; Line, Column: Integer);
@@ -1063,12 +1066,13 @@ var
   PropertyName: string;
   PropertyValue: TGocciaValue;
   SuperClass: TGocciaClassValue;
+  BoxedValue: TGocciaObjectValue;
 begin
   Logger.Debug('EvaluateMember: Start');
   Logger.Debug('  MemberExpression.ObjectExpr: %s', [MemberExpression.ObjectExpr.ToString]);
 
 
-        // Handle super.method() specially
+  // Handle super.method() specially
   if MemberExpression.ObjectExpr is TGocciaSuperExpression then
   begin
     Logger.Debug('EvaluateMember: Accessing super property');
@@ -1146,8 +1150,27 @@ begin
   end
   else
   begin
-    Logger.Debug('EvaluateMember: Obj is not a supported object type');
-    Result := TGocciaUndefinedValue.Create;
+    // Handle primitive boxing for property access
+    Logger.Debug('EvaluateMember: Attempting primitive boxing for: %s', [Obj.ClassName]);
+    BoxedValue := BoxPrimitive(Obj);
+    if Assigned(BoxedValue) then
+    begin
+      Logger.Debug('EvaluateMember: Primitive boxed successfully');
+      Result := BoxedValue.GetProperty(PropertyName);
+      Logger.Debug('EvaluateMember: Boxed result: %s', [Result.ToString]);
+    end
+    else if (Obj is TGocciaNullValue) or (Obj is TGocciaUndefinedValue) then
+    begin
+      // null/undefined property access should throw
+      Context.OnError('Cannot read property ''' + PropertyName + ''' of ' + Obj.ToString,
+        MemberExpression.Line, MemberExpression.Column);
+      Result := TGocciaUndefinedValue.Create;
+    end
+    else
+    begin
+      Logger.Debug('EvaluateMember: Obj is not a supported object type');
+      Result := TGocciaUndefinedValue.Create;
+    end;
   end;
   Logger.Debug('EvaluateMember: Returning result type: %s', [Result.ClassName]);
   Logger.Debug('EvaluateMember: Result ToString: %s', [Result.ToString]);
@@ -1158,6 +1181,7 @@ var
   PropertyName: string;
   PropertyValue: TGocciaValue;
   SuperClass: TGocciaClassValue;
+  BoxedValue: TGocciaObjectValue;
 begin
   Logger.Debug('EvaluateMember: Start (dual overload)');
   Logger.Debug('  MemberExpression.ObjectExpr: %s', [MemberExpression.ObjectExpr.ToString]);
@@ -1248,8 +1272,28 @@ begin
   end
   else
   begin
-    Logger.Debug('EvaluateMember: Obj is not a supported object type');
-    Result := TGocciaUndefinedValue.Create;
+    // Handle primitive boxing for property access
+    Logger.Debug('EvaluateMember: Attempting primitive boxing for: %s', [ObjectValue.ClassName]);
+    BoxedValue := BoxPrimitive(ObjectValue);
+    if Assigned(BoxedValue) then
+    begin
+      Logger.Debug('EvaluateMember: Primitive boxed successfully');
+      Result := BoxedValue.GetProperty(PropertyName);
+      Logger.Debug('EvaluateMember: Boxed result: %s', [Result.ToString]);
+      // Note: ObjectValue remains the original primitive for 'this' binding
+    end
+    else if (ObjectValue is TGocciaNullValue) or (ObjectValue is TGocciaUndefinedValue) then
+    begin
+      // null/undefined property access should throw
+      Context.OnError('Cannot read property ''' + PropertyName + ''' of ' + ObjectValue.ToString,
+        MemberExpression.Line, MemberExpression.Column);
+      Result := TGocciaUndefinedValue.Create;
+    end
+    else
+    begin
+      Logger.Debug('EvaluateMember: Obj is not a supported object type');
+      Result := TGocciaUndefinedValue.Create;
+    end;
   end;
   Logger.Debug('EvaluateMember: Returning result type: %s', [Result.ClassName]);
   Logger.Debug('EvaluateMember: Result ToString: %s', [Result.ToString]);
@@ -1337,7 +1381,9 @@ begin
 
   // Handle static properties: {key: value, "key2": value2}
   for Pair in ObjectExpression.Properties do
-    Obj.SetProperty(Pair.Key, EvaluateExpression(Pair.Value, Context));
+    Obj.DefineProperty(Pair.Key, TGocciaPropertyDescriptorData.Create(EvaluateExpression(Pair.Value, Context), [pfEnumerable, pfConfigurable, pfWritable]));
+
+  // TODO: We shouldn't treat getters and setters separately, but as a single property descriptor
 
   // Handle getters: {get propertyName() { ... }}
   if Assigned(ObjectExpression.Getters) then
@@ -1345,7 +1391,7 @@ begin
     for GetterPair in ObjectExpression.Getters do
     begin
       GetterFunction := EvaluateGetter(GetterPair.Value, Context);
-      Obj.SetGetter(GetterPair.Key, GetterFunction);
+      Obj.DefineProperty(GetterPair.Key, TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfEnumerable, pfConfigurable, pfWritable]));
     end;
   end;
 
@@ -1355,7 +1401,7 @@ begin
     for SetterPair in ObjectExpression.Setters do
     begin
       SetterFunction := EvaluateSetter(SetterPair.Value, Context);
-      Obj.SetSetter(SetterPair.Key, SetterFunction);
+      Obj.DefineProperty(SetterPair.Key, TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfEnumerable, pfConfigurable, pfWritable]));
     end;
   end;
 
