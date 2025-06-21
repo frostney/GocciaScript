@@ -58,6 +58,9 @@ function IsObjectInstanceOfClass(Obj: TGocciaObjectValue; ClassValue: TGocciaCla
 // Helper function to safely call OnError with proper error handling
 procedure SafeOnError(Context: TGocciaEvaluationContext; const Message: string; Line, Column: Integer);
 
+// Shared function to perform compound assignment operations
+function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator: TGocciaTokenType): TGocciaValue;
+
 var
   // Global evaluation context for error handling inheritance
   GlobalEvaluationContext: TGocciaEvaluationContext;
@@ -69,6 +72,50 @@ procedure SafeOnError(Context: TGocciaEvaluationContext; const Message: string; 
 begin
   if Assigned(Context.OnError) then
     Context.OnError(Message, Line, Column);
+end;
+
+// Shared function to perform compound assignment operations
+function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator: TGocciaTokenType): TGocciaValue;
+begin
+  case Operator of
+    gttPlusAssign:
+      begin
+        if (CurrentValue is TGocciaStringValue) or (NewValue is TGocciaStringValue) then
+          Result := TGocciaStringValue.Create(CurrentValue.ToString + NewValue.ToString)
+        else
+          Result := TGocciaNumberValue.Create(CurrentValue.ToNumber + NewValue.ToNumber);
+      end;
+    gttMinusAssign:
+      Result := TGocciaNumberValue.Create(CurrentValue.ToNumber - NewValue.ToNumber);
+    gttStarAssign:
+      Result := TGocciaNumberValue.Create(CurrentValue.ToNumber * NewValue.ToNumber);
+    gttSlashAssign:
+      begin
+        if NewValue.ToNumber = 0 then
+          Result := TGocciaNumberValue.Create(Infinity)
+        else
+          Result := TGocciaNumberValue.Create(CurrentValue.ToNumber / NewValue.ToNumber);
+      end;
+    gttPercentAssign:
+      Result := TGocciaNumberValue.Create(
+        Trunc(CurrentValue.ToNumber) mod Trunc(NewValue.ToNumber));
+    gttPowerAssign:
+      Result := TGocciaNumberValue.Create(Power(CurrentValue.ToNumber, NewValue.ToNumber));
+    gttBitwiseAndAssign:
+      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) and Trunc(NewValue.ToNumber));
+    gttBitwiseOrAssign:
+      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) or Trunc(NewValue.ToNumber));
+    gttBitwiseXorAssign:
+      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) xor Trunc(NewValue.ToNumber));
+    gttLeftShiftAssign:
+      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) shl (Trunc(NewValue.ToNumber) and 31));
+    gttRightShiftAssign:
+      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) shr (Trunc(NewValue.ToNumber) and 31));
+    gttUnsignedRightShiftAssign:
+      Result := TGocciaNumberValue.Create(Cardinal(Trunc(CurrentValue.ToNumber)) shr (Trunc(NewValue.ToNumber) and 31));
+  else
+    Result := TGocciaUndefinedValue.Create;
+  end;
 end;
 
 function Evaluate(Node: TGocciaASTNode; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -207,45 +254,10 @@ begin
 
     Value := EvaluateExpression(TGocciaCompoundAssignmentExpression(Expression).Value, Context);
 
-    case TGocciaCompoundAssignmentExpression(Expression).Operator of
-      gttPlusAssign:
-        begin
-          if (Result is TGocciaStringValue) or (Value is TGocciaStringValue) then
-            Result := TGocciaStringValue.Create(Result.ToString + Value.ToString)
-          else
-            Result := TGocciaNumberValue.Create(Result.ToNumber + Value.ToNumber);
-        end;
-      gttMinusAssign:
-        Result := TGocciaNumberValue.Create(Result.ToNumber - Value.ToNumber);
-      gttStarAssign:
-        Result := TGocciaNumberValue.Create(Result.ToNumber * Value.ToNumber);
-      gttSlashAssign:
-        begin
-          if Value.ToNumber = 0 then
-            Result := TGocciaNumberValue.Create(Infinity)
-          else
-            Result := TGocciaNumberValue.Create(Result.ToNumber / Value.ToNumber);
-        end;
-      gttPercentAssign:
-        Result := TGocciaNumberValue.Create(
-          Trunc(Result.ToNumber) mod Trunc(Value.ToNumber));
-      gttPowerAssign:
-        Result := TGocciaNumberValue.Create(Power(Result.ToNumber, Value.ToNumber));
-      gttBitwiseAndAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) and Trunc(Value.ToNumber));
-      gttBitwiseOrAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) or Trunc(Value.ToNumber));
-      gttBitwiseXorAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) xor Trunc(Value.ToNumber));
-      gttLeftShiftAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) shl (Trunc(Value.ToNumber) and 31));
-      gttRightShiftAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) shr (Trunc(Value.ToNumber) and 31));
-      gttUnsignedRightShiftAssign:
-        Result := TGocciaNumberValue.Create(Cardinal(Trunc(Result.ToNumber)) shr (Trunc(Value.ToNumber) and 31));
-    end;
+    // Use shared compound operation function
+    Result := PerformCompoundOperation(Result, Value, TGocciaCompoundAssignmentExpression(Expression).Operator);
 
-        Context.Scope.Assign(TGocciaCompoundAssignmentExpression(Expression).Name, Result);
+    Context.Scope.Assign(TGocciaCompoundAssignmentExpression(Expression).Name, Result);
   end
   else if Expression is TGocciaPropertyCompoundAssignmentExpression then
   begin
@@ -268,44 +280,8 @@ begin
       Exit;
     end;
 
-    // Perform compound operation
-    case TGocciaPropertyCompoundAssignmentExpression(Expression).Operator of
-      gttPlusAssign:
-        begin
-          if (Result is TGocciaStringValue) or (Value is TGocciaStringValue) then
-            Result := TGocciaStringValue.Create(Result.ToString + Value.ToString)
-          else
-            Result := TGocciaNumberValue.Create(Result.ToNumber + Value.ToNumber);
-        end;
-      gttMinusAssign:
-        Result := TGocciaNumberValue.Create(Result.ToNumber - Value.ToNumber);
-      gttStarAssign:
-        Result := TGocciaNumberValue.Create(Result.ToNumber * Value.ToNumber);
-      gttSlashAssign:
-        begin
-          if Value.ToNumber = 0 then
-            Result := TGocciaNumberValue.Create(Infinity)
-          else
-            Result := TGocciaNumberValue.Create(Result.ToNumber / Value.ToNumber);
-        end;
-      gttPercentAssign:
-        Result := TGocciaNumberValue.Create(
-          Trunc(Result.ToNumber) mod Trunc(Value.ToNumber));
-      gttPowerAssign:
-        Result := TGocciaNumberValue.Create(Power(Result.ToNumber, Value.ToNumber));
-      gttBitwiseAndAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) and Trunc(Value.ToNumber));
-      gttBitwiseOrAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) or Trunc(Value.ToNumber));
-      gttBitwiseXorAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) xor Trunc(Value.ToNumber));
-      gttLeftShiftAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) shl (Trunc(Value.ToNumber) and 31));
-      gttRightShiftAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) shr (Trunc(Value.ToNumber) and 31));
-      gttUnsignedRightShiftAssign:
-        Result := TGocciaNumberValue.Create(Cardinal(Trunc(Result.ToNumber)) shr (Trunc(Value.ToNumber) and 31));
-    end;
+    // Use shared compound operation function
+    Result := PerformCompoundOperation(Result, Value, TGocciaPropertyCompoundAssignmentExpression(Expression).Operator);
 
     // Set the new value
     if (Obj is TGocciaInstanceValue) then
@@ -338,44 +314,8 @@ begin
       Exit;
     end;
 
-    // Perform compound operation
-    case TGocciaComputedPropertyCompoundAssignmentExpression(Expression).Operator of
-      gttPlusAssign:
-        begin
-          if (Result is TGocciaStringValue) or (Value is TGocciaStringValue) then
-            Result := TGocciaStringValue.Create(Result.ToString + Value.ToString)
-          else
-            Result := TGocciaNumberValue.Create(Result.ToNumber + Value.ToNumber);
-        end;
-      gttMinusAssign:
-        Result := TGocciaNumberValue.Create(Result.ToNumber - Value.ToNumber);
-      gttStarAssign:
-        Result := TGocciaNumberValue.Create(Result.ToNumber * Value.ToNumber);
-      gttSlashAssign:
-        begin
-          if Value.ToNumber = 0 then
-            Result := TGocciaNumberValue.Create(Infinity)
-          else
-            Result := TGocciaNumberValue.Create(Result.ToNumber / Value.ToNumber);
-        end;
-      gttPercentAssign:
-        Result := TGocciaNumberValue.Create(
-          Trunc(Result.ToNumber) mod Trunc(Value.ToNumber));
-      gttPowerAssign:
-        Result := TGocciaNumberValue.Create(Power(Result.ToNumber, Value.ToNumber));
-      gttBitwiseAndAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) and Trunc(Value.ToNumber));
-      gttBitwiseOrAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) or Trunc(Value.ToNumber));
-      gttBitwiseXorAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) xor Trunc(Value.ToNumber));
-      gttLeftShiftAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) shl (Trunc(Value.ToNumber) and 31));
-      gttRightShiftAssign:
-        Result := TGocciaNumberValue.Create(Trunc(Result.ToNumber) shr (Trunc(Value.ToNumber) and 31));
-      gttUnsignedRightShiftAssign:
-        Result := TGocciaNumberValue.Create(Cardinal(Trunc(Result.ToNumber)) shr (Trunc(Value.ToNumber) and 31));
-    end;
+    // Use shared compound operation function
+    Result := PerformCompoundOperation(Result, Value, TGocciaComputedPropertyCompoundAssignmentExpression(Expression).Operator);
 
     // Set the new value
     if (Obj is TGocciaArrayValue) then
@@ -2207,46 +2147,8 @@ begin
     Exit;
   end;
 
-  // Perform the compound operation
-  case PrivatePropertyCompoundAssignmentExpression.Operator of
-    gttPlusAssign:
-      begin
-        if (CurrentValue is TGocciaStringValue) or (Value is TGocciaStringValue) then
-          Result := TGocciaStringValue.Create(CurrentValue.ToString + Value.ToString)
-        else
-          Result := TGocciaNumberValue.Create(CurrentValue.ToNumber + Value.ToNumber);
-      end;
-    gttMinusAssign:
-      Result := TGocciaNumberValue.Create(CurrentValue.ToNumber - Value.ToNumber);
-    gttStarAssign:
-      Result := TGocciaNumberValue.Create(CurrentValue.ToNumber * Value.ToNumber);
-    gttSlashAssign:
-      begin
-        if Value.ToNumber = 0 then
-          Result := TGocciaNumberValue.Create(Infinity)
-        else
-          Result := TGocciaNumberValue.Create(CurrentValue.ToNumber / Value.ToNumber);
-      end;
-    gttPercentAssign:
-      Result := TGocciaNumberValue.Create(
-        Trunc(CurrentValue.ToNumber) mod Trunc(Value.ToNumber));
-    gttPowerAssign:
-      Result := TGocciaNumberValue.Create(Power(CurrentValue.ToNumber, Value.ToNumber));
-    gttBitwiseAndAssign:
-      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) and Trunc(Value.ToNumber));
-    gttBitwiseOrAssign:
-      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) or Trunc(Value.ToNumber));
-    gttBitwiseXorAssign:
-      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) xor Trunc(Value.ToNumber));
-    gttLeftShiftAssign:
-      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) shl (Trunc(Value.ToNumber) and 31));
-    gttRightShiftAssign:
-      Result := TGocciaNumberValue.Create(Trunc(CurrentValue.ToNumber) shr (Trunc(Value.ToNumber) and 31));
-    gttUnsignedRightShiftAssign:
-      Result := TGocciaNumberValue.Create(Cardinal(Trunc(CurrentValue.ToNumber)) shr (Trunc(Value.ToNumber) and 31));
-  else
-    Result := TGocciaUndefinedValue.Create;
-  end;
+  // Use shared compound operation function
+  Result := PerformCompoundOperation(CurrentValue, Value, PrivatePropertyCompoundAssignmentExpression.Operator);
 
   // Set the new value
   if ObjectValue is TGocciaInstanceValue then
