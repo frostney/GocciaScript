@@ -156,18 +156,28 @@ end;
 
 function TGocciaGlobalObject.ObjectCreate(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  Obj: TGocciaObjectValue;
-  Key: string;
+  NewObj: TGocciaObjectValue;
+  ProtoArg: TGocciaValue;
 begin
   if Args.Count < 1 then
     ThrowError('Object.create expects at least 1 argument', 0, 0);
 
-  if not (Args[0] is TGocciaObjectValue or Args[0] is TGocciaNullValue) then
+  ProtoArg := Args[0];
+
+  // Validate the prototype argument - must be an object or null
+  if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullValue) then
     ThrowError('Object.create called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args[0]);
+  // Create a new object
+  NewObj := TGocciaObjectValue.Create;
 
-  Result := Obj;
+  // Set the prototype based on the argument
+  if ProtoArg is TGocciaObjectValue then
+    NewObj.Prototype := TGocciaObjectValue(ProtoArg)
+  else if ProtoArg is TGocciaNullValue then
+    NewObj.Prototype := nil; // null prototype
+
+  Result := NewObj;
 end;
 
 function TGocciaGlobalObject.ObjectHasOwn(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
