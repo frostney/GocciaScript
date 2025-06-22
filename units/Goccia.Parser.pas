@@ -1953,7 +1953,9 @@ end;
 function TGocciaParser.IsAssignmentPattern(Expr: TGocciaExpression): Boolean;
 begin
   // Check if an expression could be a destructuring pattern
-  Result := (Expr is TGocciaArrayExpression) or (Expr is TGocciaObjectExpression) or (Expr is TGocciaIdentifierExpression);
+  // Only arrays and objects are destructuring patterns for assignments
+  // Simple identifiers should be regular assignments, not destructuring
+  Result := (Expr is TGocciaArrayExpression) or (Expr is TGocciaObjectExpression);
 end;
 
 function TGocciaParser.ParsePattern: TGocciaDestructuringPattern;
@@ -2164,11 +2166,12 @@ begin
       Properties.Add(Prop);
     end;
 
-    // Handle computed properties (including spread)
-    if Assigned(ObjectExpr.ComputedProperties) then
+    // Handle computed properties (including spread) in source order
+    if Assigned(ObjectExpr.ComputedPropertiesInOrder) then
     begin
-      for ComputedPair in ObjectExpr.ComputedProperties do
+      for I := 0 to Length(ObjectExpr.ComputedPropertiesInOrder) - 1 do
       begin
+        ComputedPair := ObjectExpr.ComputedPropertiesInOrder[I];
         if ComputedPair.Key is TGocciaSpreadExpression then
         begin
           // Rest pattern
