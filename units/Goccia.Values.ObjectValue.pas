@@ -263,6 +263,7 @@ end;
 procedure TGocciaObjectValue.RegisterNativeMethod(AMethod: TGocciaValue);
 var
   Descriptor: TGocciaPropertyDescriptor;
+  MethodName: string;
 begin
   if not (AMethod is TGocciaNativeFunctionValue) then
     raise Exception.Create('Method must be a native function');
@@ -270,13 +271,13 @@ begin
   // Built-in methods: { writable: true, enumerable: false, configurable: true }
   Descriptor := TGocciaPropertyDescriptorData.Create(AMethod, [pfConfigurable, pfWritable]);
 
-  if AMethod is TGocciaFunctionValue then
+  if AMethod is TGocciaNativeFunctionValue then
   begin
-    FPropertyDescriptors.AddOrSetValue(TGocciaFunctionValue(AMethod).Name, Descriptor);
-  end
-  else if AMethod is TGocciaNativeFunctionValue then
-  begin
-    FPropertyDescriptors.AddOrSetValue(TGocciaNativeFunctionValue(AMethod).Name, Descriptor);
+    MethodName := TGocciaNativeFunctionValue(AMethod).Name;
+    FPropertyDescriptors.AddOrSetValue(MethodName, Descriptor);
+    // Track insertion order for GetAllPropertyNames
+    if FPropertyInsertionOrder.IndexOf(MethodName) = -1 then
+      FPropertyInsertionOrder.Add(MethodName);
   end;
 end;
 
@@ -287,6 +288,9 @@ begin
   // Built-in constants: { writable: false, enumerable: false, configurable: false }
   Descriptor := TGocciaPropertyDescriptorData.Create(AValue, []);
   FPropertyDescriptors.AddOrSetValue(AName, Descriptor);
+  // Track insertion order for GetAllPropertyNames
+  if FPropertyInsertionOrder.IndexOf(AName) = -1 then
+    FPropertyInsertionOrder.Add(AName);
 end;
 
 function TGocciaObjectValue.GetProperty(const AName: string): TGocciaValue;
