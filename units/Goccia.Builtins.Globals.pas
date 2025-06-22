@@ -9,11 +9,6 @@ uses
 
 type
   TGocciaGlobals = class(TGocciaBuiltin)
-  protected
-    function ParseFloat(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ParseInt(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function IsNaN(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function IsFinite(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
   end;
@@ -21,6 +16,12 @@ type
 implementation
 
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
+var
+  NumberObject: TGocciaObjectValue;
+  NumberParseInt: TGocciaValue;
+  NumberParseFloat: TGocciaValue;
+  NumberIsNaN: TGocciaValue;
+  NumberIsFinite: TGocciaValue;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -28,87 +29,28 @@ begin
   AScope.DefineBuiltin('NaN', TGocciaNumberValue.Create(Math.NaN));
   AScope.DefineBuiltin('Infinity', TGocciaNumberValue.Create(Math.Infinity));
 
-  // Global functions
-  AScope.DefineBuiltin('parseFloat', TGocciaNativeFunctionValue.Create(ParseFloat, 'parseFloat', 1));
-  AScope.DefineBuiltin('parseInt', TGocciaNativeFunctionValue.Create(ParseInt, 'parseInt', 1));
-  AScope.DefineBuiltin('isNaN', TGocciaNativeFunctionValue.Create(IsNaN, 'isNaN', 1));
-  AScope.DefineBuiltin('isFinite', TGocciaNativeFunctionValue.Create(IsFinite, 'isFinite', 1));
+  // Get Number object and its methods to make global aliases
+  NumberObject := TGocciaObjectValue(AScope.GetValue('Number'));
+  if Assigned(NumberObject) and (NumberObject is TGocciaObjectValue) then
+  begin
+    NumberParseInt := NumberObject.GetProperty('parseInt');
+    NumberParseFloat := NumberObject.GetProperty('parseFloat');
+    NumberIsNaN := NumberObject.GetProperty('isNaN');
+    NumberIsFinite := NumberObject.GetProperty('isFinite');
+
+    // Global functions as aliases to Number static methods
+    if Assigned(NumberParseFloat) then
+      AScope.DefineBuiltin('parseFloat', NumberParseFloat);
+    if Assigned(NumberParseInt) then
+      AScope.DefineBuiltin('parseInt', NumberParseInt);
+    if Assigned(NumberIsNaN) then
+      AScope.DefineBuiltin('isNaN', NumberIsNaN);
+    if Assigned(NumberIsFinite) then
+      AScope.DefineBuiltin('isFinite', NumberIsFinite);
+  end;
+  // Do we care if Number is not available?
+  // Should we bind them direct from source?
 end;
 
-function TGocciaGlobals.ParseFloat(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-var
-  Value: Double;
-begin
-  if Args.Count = 0 then
-  begin
-    Result := TGocciaNumberValue.Create(NaN);
-    Exit;
-  end;
-
-  if Args[0] is TGocciaNumberValue then
-  begin
-    Result := Args[0];
-    Exit;
-  end;
-
-  if (Args[0].ToString = 'NaN') or (Args[0].ToString = 'Infinity') then
-  begin
-    Result := TGocciaNumberValue.Create(NaN);
-    Exit;
-  end;
-
-  if not TryStrToFloat(Args[0].ToString, Value) then
-  begin
-    Result := TGocciaNumberValue.Create(NaN);
-  end;
-
-  Result := TGocciaNumberValue.Create(Value);
-end;
-
-function TGocciaGlobals.ParseInt(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-var
-  Value: Integer;
-begin
-  if Args.Count = 0 then
-  begin
-    Result := TGocciaNumberValue.Create(NaN);
-    Exit;
-  end;
-
-  if Args[0] is TGocciaNumberValue then
-  begin
-    Result := Args[0];
-    Exit;
-  end;
-
-  if Args[0].ToString = 'NaN' then
-  begin
-    Result := TGocciaNumberValue.Create(NaN);
-    Exit;
-  end;
-
-  if Args[0].ToString = 'Infinity' then
-  begin
-    Result := TGocciaNumberValue.Create(Infinity);
-    Exit;
-  end;
-
-  if not TryStrToInt(Args[0].ToString, Value) then
-  begin
-    Result := TGocciaNumberValue.Create(NaN);
-  end;
-
-  Result := TGocciaNumberValue.Create(Value);
-end;
-
-function TGocciaGlobals.IsNaN(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-begin
-  Result := TGocciaBooleanValue.Create(Math.IsNaN(StrToFloat(Args[0].ToString)));
-end;
-
-function TGocciaGlobals.IsFinite(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-begin
-  Result := TGocciaBooleanValue.Create(not IsInfinite(StrToFloat(Args[0].ToString)));
-end;
 
 end.
