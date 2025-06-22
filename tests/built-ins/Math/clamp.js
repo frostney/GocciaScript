@@ -18,9 +18,9 @@ test("Math.clamp to support Infinities", () => {
 });
 
 test("Math.clamp to support NaN", () => {
-  expect(Math.clamp(NaN, 0, 10)).toBe(NaN);
-  expect(Math.clamp(5, NaN, 10)).toBe(NaN);
-  expect(Math.clamp(5, 0, NaN)).toBe(NaN);
+  expect(Math.clamp(NaN, 0, 10)).toBeNaN();
+  expect(Math.clamp(5, NaN, 10)).toBeNaN();
+  expect(Math.clamp(5, 0, NaN)).toBeNaN();
 });
 
 test("Math.clamp to support negative zero", () => {

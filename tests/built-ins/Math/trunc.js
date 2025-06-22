@@ -10,8 +10,8 @@ test("Math.trunc", () => {
   expect(Math.trunc(2.8)).toBe(2);
   expect(Math.trunc(-2.8)).toBe(-2);
   expect(Math.trunc(42.4452232115)).toBe(42);
-  expect(Math.trunc(NaN)).toBe(NaN);
+  expect(Math.trunc(NaN)).toBeNaN();
   expect(Math.trunc(Infinity)).toBe(Infinity);
   expect(Math.trunc(-Infinity)).toBe(-Infinity);
-  expect(Math.trunc(NaN)).toBe(NaN);
+  expect(Math.trunc(NaN)).toBeNaN();
 });

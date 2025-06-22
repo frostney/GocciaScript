@@ -49,6 +49,9 @@ type
     FActualValue: TGocciaValue;
     FIsNegated: Boolean;
     FTestAssertions: TGocciaTestAssertions; // Reference to parent
+
+    // Helper function for deep equality checking
+    function IsDeepEqual(const Actual, Expected: TGocciaValue): Boolean;
   public
     constructor Create(ActualValue: TGocciaValue; TestAssertions: TGocciaTestAssertions; IsNegated: Boolean = False);
 
@@ -126,7 +129,7 @@ type
 implementation
 
 uses
-  SysUtils, Goccia.Values.ClassValue, Goccia.Evaluator, Goccia.Values.ObjectPropertyDescriptor;
+  SysUtils, Goccia.Values.ClassValue, Goccia.Evaluator, Goccia.Evaluator.Comparison, Goccia.Values.ObjectPropertyDescriptor;
 
 { TTestSuite }
 
@@ -208,8 +211,7 @@ begin
   end;
 
   Expected := Args[0];
-  IsEqual := (FActualValue.TypeName = Expected.TypeName) and
-             (FActualValue.ToString = Expected.ToString);
+  IsEqual := IsStrictEqual(FActualValue, Expected);
 
   if FIsNegated then
     IsEqual := not IsEqual;
@@ -232,10 +234,132 @@ begin
 end;
 
 function TGocciaExpectationValue.ToEqual(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Expected: TGocciaValue;
+  IsEqual: Boolean;
 begin
-  // For now, toEqual works the same as toBe
-  // In a full implementation, this would do deep equality checking
-  Result := ToBe(Args, ThisValue);
+  if Args.Count <> 1 then
+  begin
+    FTestAssertions.ThrowError('toEqual expects exactly 1 argument', 0, 0);
+    Exit;
+  end;
+
+  Expected := Args[0];
+  IsEqual := IsDeepEqual(FActualValue, Expected);
+
+  if FIsNegated then
+    IsEqual := not IsEqual;
+
+  if IsEqual then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toEqual');
+    Result := TGocciaUndefinedValue.Create;
+  end
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toEqual',
+        'Expected ' + FActualValue.ToString + ' not to equal ' + Expected.ToString)
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toEqual',
+        'Expected ' + FActualValue.ToString + ' to equal ' + Expected.ToString);
+    Result := TGocciaUndefinedValue.Create;
+  end;
+end;
+
+function TGocciaExpectationValue.IsDeepEqual(const Actual, Expected: TGocciaValue): Boolean;
+var
+  ActualObj, ExpectedObj: TGocciaObjectValue;
+  ActualArr, ExpectedArr: TGocciaArrayValue;
+  ActualKeys, ExpectedKeys: TArray<string>;
+  I: Integer;
+  Key: string;
+begin
+  // Base case: strict equality (handles primitives and same object references)
+  if IsStrictEqual(Actual, Expected) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  // Type mismatch
+  if Actual.TypeName <> Expected.TypeName then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  // Handle arrays
+  if (Actual is TGocciaArrayValue) and (Expected is TGocciaArrayValue) then
+  begin
+    ActualArr := TGocciaArrayValue(Actual);
+    ExpectedArr := TGocciaArrayValue(Expected);
+
+    // Check lengths
+    if ActualArr.Elements.Count <> ExpectedArr.Elements.Count then
+    begin
+      Result := False;
+      Exit;
+    end;
+
+    // Recursively compare elements
+    for I := 0 to ActualArr.Elements.Count - 1 do
+    begin
+      if not IsDeepEqual(ActualArr.Elements[I], ExpectedArr.Elements[I]) then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
+
+    Result := True;
+    Exit;
+  end;
+
+  // Handle objects (but not arrays which inherit from TGocciaObjectValue)
+  if (Actual is TGocciaObjectValue) and (Expected is TGocciaObjectValue) and
+     not (Actual is TGocciaArrayValue) and not (Expected is TGocciaArrayValue) then
+  begin
+    ActualObj := TGocciaObjectValue(Actual);
+    ExpectedObj := TGocciaObjectValue(Expected);
+
+    // Get enumerable property names from both objects
+    ActualKeys := ActualObj.GetEnumerablePropertyNames;
+    ExpectedKeys := ExpectedObj.GetEnumerablePropertyNames;
+
+    // Check if they have the same number of properties
+    if Length(ActualKeys) <> Length(ExpectedKeys) then
+    begin
+      Result := False;
+      Exit;
+    end;
+
+    // Check if all keys exist in both objects and values are deeply equal
+    for I := 0 to High(ActualKeys) do
+    begin
+      Key := ActualKeys[I];
+
+      // Check if expected object has this key
+      if not ExpectedObj.HasOwnProperty(Key) then
+      begin
+        Result := False;
+        Exit;
+      end;
+
+      // Recursively compare property values
+      if not IsDeepEqual(ActualObj.GetProperty(Key), ExpectedObj.GetProperty(Key)) then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
+
+    Result := True;
+    Exit;
+  end;
+
+  // For other types (functions, etc.), fall back to strict equality
+  Result := False;
 end;
 
 function TGocciaExpectationValue.ToBeNull(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;

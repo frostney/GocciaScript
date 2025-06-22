@@ -5,7 +5,7 @@ unit Goccia.Evaluator.Comparison;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Values.UndefinedValue, Goccia.Values.NullValue,
+  Math, Goccia.Values.Base, Goccia.Values.UndefinedValue, Goccia.Values.NullValue,
   Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.StringValue;
 
 function IsStrictEqual(Left, Right: TGocciaValue): Boolean;
@@ -27,8 +27,28 @@ begin
   else if (Left is TGocciaBooleanValue) and (Right is TGocciaBooleanValue) then
     Result := TGocciaBooleanValue(Left).ToBoolean = TGocciaBooleanValue(Right).ToBoolean
   else if (Left is TGocciaNumberValue) and (Right is TGocciaNumberValue) then
-    Result := TGocciaNumberValue(Left).ToNumber = TGocciaNumberValue(Right).ToNumber
-  else if (Left is TGocciaStringValue) and (Right is TGocciaStringValue) then
+  begin
+    if IsNaN(TGocciaNumberValue(Left).ToNumber) or IsNaN(TGocciaNumberValue(Right).ToNumber) then
+    begin
+      Result := False;
+      Exit;
+    end;
+
+    if IsInfinite(TGocciaNumberValue(Left).ToNumber) and IsInfinite(TGocciaNumberValue(Right).ToNumber) then
+    begin
+      Result := Sign(TGocciaNumberValue(Left).ToNumber) = Sign(TGocciaNumberValue(Right).ToNumber);
+      Exit;
+    end;
+
+    if IsInfinite(TGocciaNumberValue(Left).ToNumber) or IsInfinite(TGocciaNumberValue(Right).ToNumber) then
+    begin
+      Result := False;
+      Exit;
+    end;
+
+    Result := TGocciaNumberValue(Left).ToNumber = TGocciaNumberValue(Right).ToNumber;
+    Exit;
+  end else if (Left is TGocciaStringValue) and (Right is TGocciaStringValue) then
     Result := TGocciaStringValue(Left).ToString = TGocciaStringValue(Right).ToString
   else
     Result := Left = Right; // Reference equality for objects

@@ -218,7 +218,7 @@ begin
     Result := TGocciaUndefinedValue.Create;
   end else begin
     DescriptorObj := TGocciaObjectValue.Create;
-    DescriptorObj.AssignProperty('enumarable', TGocciaBooleanValue.Create(Descriptor.Enumerable));
+    DescriptorObj.AssignProperty('enumerable', TGocciaBooleanValue.Create(Descriptor.Enumerable));
     DescriptorObj.AssignProperty('configurable', TGocciaBooleanValue.Create(Descriptor.Configurable));
     DescriptorObj.AssignProperty('writable', TGocciaBooleanValue.Create(Descriptor.Writable));
     if Descriptor is TGocciaPropertyDescriptorData then
@@ -255,13 +255,28 @@ begin
   if not (Args[0] is TGocciaObjectValue) then
     ThrowError('Object.defineProperty called on non-object', 0, 0);
 
+  if not (Args[2] is TGocciaObjectValue) then
+    ThrowError('Object.defineProperty: descriptor must be an object', 0, 0);
+
   Obj := TGocciaObjectValue(Args[0]);
   PropertyName := Args[1].ToString;
-
   DescriptorObject := TGocciaObjectValue(Args[2]);
-  Enumerable := DescriptorObject.GetProperty('enumarable').ToBoolean;
-  Configurable := DescriptorObject.GetProperty('configurable').ToBoolean;
-  Writable := DescriptorObject.GetProperty('writable').ToBoolean;
+
+  // Initialize all variables
+  Enumerable := False;
+  Configurable := False;
+  Writable := False;
+  Value := nil;
+  Getter := nil;
+  Setter := nil;
+
+  // Get descriptor properties (defaults to false for missing properties)
+  if DescriptorObject.HasProperty('enumerable') then
+    Enumerable := DescriptorObject.GetProperty('enumerable').ToBoolean;
+  if DescriptorObject.HasProperty('configurable') then
+    Configurable := DescriptorObject.GetProperty('configurable').ToBoolean;
+  if DescriptorObject.HasProperty('writable') then
+    Writable := DescriptorObject.GetProperty('writable').ToBoolean;
   if DescriptorObject.HasProperty('value') then
     Value := DescriptorObject.GetProperty('value');
   if DescriptorObject.HasProperty('get') then
@@ -277,11 +292,14 @@ begin
   if Writable then
     Include(PropertyFlags, pfWritable);
 
+  // Create appropriate descriptor type
   if DescriptorObject.HasProperty('value') then
   begin
+    // Data descriptor
     Descriptor := TGocciaPropertyDescriptorData.Create(Value, PropertyFlags);
   end else
   begin
+    // Accessor descriptor
     Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter, PropertyFlags);
   end;
 
