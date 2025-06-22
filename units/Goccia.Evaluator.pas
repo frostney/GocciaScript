@@ -124,7 +124,12 @@ var
   OldValue: TGocciaValue; // For increment/decrement operations
 begin
   if Expression is TGocciaLiteralExpression then
-    Result := TGocciaLiteralExpression(Expression).Value
+  begin
+    Logger.Debug('EvaluateExpression: TGocciaLiteralExpression');
+    Logger.Debug('  Literal value type: %s', [TGocciaLiteralExpression(Expression).Value.ClassName]);
+    Logger.Debug('  Literal value toString: %s', [TGocciaLiteralExpression(Expression).Value.ToString]);
+    Result := TGocciaLiteralExpression(Expression).Value;
+  end
   else if Expression is TGocciaTemplateLiteralExpression then
     Result := EvaluateTemplateLiteral(TGocciaTemplateLiteralExpression(Expression), Context)
   else if Expression is TGocciaIdentifierExpression then
@@ -406,9 +411,13 @@ begin
     // Process each variable in the declaration
     for I := 0 to Length(Decl.Variables) - 1 do
     begin
-      Logger.Debug('EvaluateStatement: Variable name: %s', [Decl.Variables[I].Name]);
+            Logger.Debug('EvaluateStatement: Variable name: %s', [Decl.Variables[I].Name]);
+
       Value := EvaluateExpression(Decl.Variables[I].Initializer, Context);
+
       Logger.Debug('EvaluateStatement: Initializer result type: %s', [Value.ClassName]);
+      Logger.Debug('EvaluateStatement: Initializer result value: %s', [Value.ToString]);
+      Logger.Debug('EvaluateStatement: Is const: %s', [BoolToStr(Decl.IsConst, True)]);
 
       // Use the new Define/Assign pattern
       if Decl.IsConst then

@@ -189,9 +189,9 @@ begin
     dtConst:
       begin
         // const: non-writable, enumerable, configurable, must be initialized
+        // Note: Parser already validates that const declarations have initializers
+        // This includes cases like 'const x = undefined;' which are valid
         LexicalBinding.Initialized := True;
-        if AValue is TGocciaUndefinedValue then
-          raise TGocciaSyntaxError.Create('Missing initializer in const declaration', 0, 0, '', nil);
       end;
     dtLet:
       begin
