@@ -28,11 +28,13 @@ type
     procedure AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
 
     // Convenience methods for built-in objects
-    procedure RegisterMethod(AMethod: TGocciaValue);
+    procedure RegisterNativeMethod(AMethod: TGocciaValue);
     procedure RegisterConstant(const AName: string; const AValue: TGocciaValue);
 
+    // Property accessors
     function GetProperty(const AName: string): TGocciaValue;
     function GetPropertyWithContext(const AName: string; AThisContext: TGocciaValue): TGocciaValue;
+    function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
     function HasProperty(const AName: string): Boolean;
     function HasOwnProperty(const AName: string): Boolean;
     procedure DeleteProperty(const AName: string);
@@ -258,12 +260,12 @@ begin
     DefineProperty(Pair.Key, Pair.Value);
 end;
 
-procedure TGocciaObjectValue.RegisterMethod(AMethod: TGocciaValue);
+procedure TGocciaObjectValue.RegisterNativeMethod(AMethod: TGocciaValue);
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
-  if not (AMethod is TGocciaFunctionValue) and not (AMethod is TGocciaNativeFunctionValue) then
-    raise Exception.Create('Method must be a function or native function');
+  if not (AMethod is TGocciaNativeFunctionValue) then
+    raise Exception.Create('Method must be a native function');
 
   // Built-in methods: { writable: true, enumerable: false, configurable: true }
   Descriptor := TGocciaPropertyDescriptorData.Create(AMethod, [pfConfigurable, pfWritable]);
@@ -413,6 +415,14 @@ begin
   // Fall back to regular GetProperty for other cases
   Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: No descriptor found, falling back to GetProperty');
   Result := GetProperty(AName);
+end;
+
+function TGocciaObjectValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
+begin
+  if FPropertyDescriptors.ContainsKey(AName) then
+    Result := FPropertyDescriptors[AName]
+  else
+    Result := nil;
 end;
 
 function TGocciaObjectValue.HasProperty(const AName: string): Boolean;

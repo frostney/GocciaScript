@@ -8,10 +8,6 @@ uses
   Goccia.Values.Base, Goccia.Values.UndefinedValue;
 
 type
-  // Property descriptor type (mutually exclusive)
-  TPropertyDescriptorType = (pdData, pdAccessor);
-
-  // Property descriptor flags (common to both types)
   TPropertyFlag = (pfEnumerable, pfConfigurable, pfWritable);
   TPropertyFlags = set of TPropertyFlag;
 

@@ -791,35 +791,27 @@ begin
   // TODO: Remove duplication
 
   // Register testing functions globally for easy access
-  AScope.DefineVariable('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1), dtConst);
-  AScope.DefineVariable('describe', TGocciaNativeFunctionValue.Create(Describe, 'describe', 2), dtConst);
+  AScope.DefineLexicalBinding('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1), dtConst);
+  AScope.DefineLexicalBinding('describe', TGocciaNativeFunctionValue.Create(Describe, 'describe', 2), dtConst);
 
   // Create test function with skip property
   TestFunction := TGocciaNativeFunctionValue.Create(Test, 'test', 2);
-  TestFunction.DefineProperty('skip', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(Skip, 'skip', 2), [pfConfigurable, pfWritable]));
-  AScope.DefineVariable('test', TestFunction, dtConst);
+  TestFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(Skip, 'skip', 2));
+  AScope.DefineLexicalBinding('test', TestFunction, dtConst);
 
-  AScope.DefineVariable('it', TGocciaNativeFunctionValue.Create(It, 'it', 2), dtConst);
-  AScope.DefineVariable('beforeEach', TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1), dtConst);
-  AScope.DefineVariable('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1), dtConst);
-  AScope.DefineVariable('runTests', TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0), dtConst);
+  AScope.DefineLexicalBinding('it', TGocciaNativeFunctionValue.Create(It, 'it', 2), dtConst);
+  AScope.DefineLexicalBinding('beforeEach', TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1), dtConst);
+  AScope.DefineLexicalBinding('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1), dtConst);
+  AScope.DefineLexicalBinding('runTests', TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0), dtConst);
 
   // Also set them in the builtin object for completeness
-  FBuiltinObject.DefineProperty('expect', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(Expect, 'expect', 1), [pfConfigurable, pfWritable]));
-  FBuiltinObject.DefineProperty('describe', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(Describe, 'describe', 2), [pfConfigurable, pfWritable]));
-  FBuiltinObject.DefineProperty('test', TGocciaPropertyDescriptorData.Create(
-    TestFunction, [pfConfigurable, pfWritable]));  // Use the same test function with skip property
-  FBuiltinObject.DefineProperty('it', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(It, 'it', 2), [pfConfigurable, pfWritable]));
-  FBuiltinObject.DefineProperty('beforeEach', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1), [pfConfigurable, pfWritable]));
-  FBuiltinObject.DefineProperty('afterEach', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1), [pfConfigurable, pfWritable]));
-  FBuiltinObject.DefineProperty('runTests', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0), [pfConfigurable, pfWritable]));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(Expect, 'expect', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(Describe, 'describe', 2));
+  FBuiltinObject.RegisterNativeMethod(TestFunction);  // Use the same test function with skip property
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(It, 'it', 2));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0));
 end;
 
 destructor TGocciaTestAssertions.Destroy;

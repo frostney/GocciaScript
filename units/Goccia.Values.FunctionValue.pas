@@ -131,7 +131,7 @@ begin
       if Assigned(Method.SuperClass) and not (Method.SuperClass is TGocciaUndefinedValue) then
       begin
         Logger.Debug('FunctionValue.Call: Method has superclass: %s', [Method.SuperClass.ToString]);
-        // Set up special 'super' binding in the method scope
+        // Set up special 'super' binding in the method scope - TODO: This should be a specialised scope
         CallScope.DefineBuiltin('__super__', Method.SuperClass);
       end;
     end;

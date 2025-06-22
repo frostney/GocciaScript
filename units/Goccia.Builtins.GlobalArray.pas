@@ -23,8 +23,7 @@ constructor TGocciaGlobalArray.Create(const AName: string; const AScope: TGoccia
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FBuiltinObject.DefineProperty('isArray', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(IsArray, 'isArray', 1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(IsArray, 'isArray', 1));
 
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;

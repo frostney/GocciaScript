@@ -139,7 +139,7 @@ begin
   begin
     // Variable assignment
     Result := EvaluateExpression(TGocciaAssignmentExpression(Expression).Value, Context);
-    Context.Scope.AssignVariable(TGocciaAssignmentExpression(Expression).Name, Result);
+    Context.Scope.AssignLexicalBinding(TGocciaAssignmentExpression(Expression).Name, Result);
   end
   else if Expression is TGocciaPropertyAssignmentExpression then
   begin
@@ -167,7 +167,7 @@ begin
     // Use shared compound operation function
     Result := PerformCompoundOperation(Result, Value, TGocciaCompoundAssignmentExpression(Expression).Operator);
 
-    Context.Scope.AssignVariable(TGocciaCompoundAssignmentExpression(Expression).Name, Result);
+    Context.Scope.AssignLexicalBinding(TGocciaCompoundAssignmentExpression(Expression).Name, Result);
   end
   else if Expression is TGocciaPropertyCompoundAssignmentExpression then
   begin
@@ -222,7 +222,7 @@ begin
       Value := PerformIncrement(OldValue, TGocciaIncrementExpression(Expression).Operator = gttIncrement);
 
       // Set the new value
-      Context.Scope.AssignVariable(PropName, Value);
+      Context.Scope.AssignLexicalBinding(PropName, Value);
 
       // Return value depends on prefix/postfix
       if TGocciaIncrementExpression(Expression).IsPrefix then
@@ -527,7 +527,7 @@ begin
       if Module.ExportsTable.TryGetValue(ImportPair.Value, Value) then
       begin
         Logger.Debug('EvaluateStatement: Found export, type: %s', [Value.ClassName]);
-        Context.Scope.DefineVariable(ImportPair.Key, Value, dtLet);
+        Context.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtLet);
       end
       else
       begin
@@ -1619,7 +1619,7 @@ begin
   Result := EvaluateClassDefinition(ClassDef, Context, ClassDeclaration.Line, ClassDeclaration.Column);
 
   // For class declarations, bind the class name to the scope
-  Context.Scope.DefineVariable(ClassDef.Name, Result, dtLet);
+  Context.Scope.DefineLexicalBinding(ClassDef.Name, Result, dtLet);
 end;
 
 procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
@@ -2299,7 +2299,7 @@ end;
 
 procedure AssignIdentifierPattern(Pattern: TGocciaIdentifierDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
 begin
-  Context.Scope.DefineVariable(Pattern.Name, Value, dtLet);
+  Context.Scope.DefineLexicalBinding(Pattern.Name, Value, dtLet);
 end;
 
 procedure AssignArrayPattern(Pattern: TGocciaArrayDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);

@@ -45,21 +45,21 @@ begin
   FBuiltinObject.RegisterConstant('E', TGocciaNumberValue.Create(Exp(1)));
 
   // Methods: writable, non-enumerable, configurable
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathAbs, 'abs', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathFloor, 'floor', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathCeil, 'ceil', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathRound, 'round', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathMax, 'max', -1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathMin, 'min', -1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathPow, 'pow', 2));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathSqrt, 'sqrt', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathRandom, 'random', 0));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathClamp, 'clamp', 3));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathSign, 'sign', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathTrunc, 'trunc', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathExp, 'exp', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathLog, 'log', 1));
-  FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathLog10, 'log10', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathAbs, 'abs', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathFloor, 'floor', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathCeil, 'ceil', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathRound, 'round', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathMax, 'max', -1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathMin, 'min', -1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathPow, 'pow', 2));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathSqrt, 'sqrt', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathRandom, 'random', 0));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathClamp, 'clamp', 3));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathSign, 'sign', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathTrunc, 'trunc', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathExp, 'exp', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathLog, 'log', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathLog10, 'log10', 1));
 
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;

@@ -23,8 +23,7 @@ constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScop
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FBuiltinObject.DefineProperty('log', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(ConsoleLog, 'log', -1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleLog, 'log', -1));
 
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;

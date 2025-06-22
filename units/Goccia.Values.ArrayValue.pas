@@ -106,21 +106,21 @@ begin
 
   FPrototype.DefineProperty('length', TGocciaPropertyDescriptorAccessor.Create(TGocciaNativeFunctionValue.Create(GetLength, 'length', 0), nil, [pfEnumerable, pfConfigurable]));
   // Array prototype methods: writable, non-enumerable, configurable
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayMap, 'map', 1));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayFilter, 'filter', 1));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayReduce, 'reduce', 1));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayForEach, 'forEach', 1));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArraySome, 'some', 1));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayEvery, 'every', 1));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayFlat, 'flat', 1));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayFlatMap, 'flatMap', 1));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayJoin, 'join', 1));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayIncludes, 'includes', 1));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayPush, 'push', 1));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayPop, 'pop', 0));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayToReversed, 'toReversed', 0));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayToSorted, 'toSorted', 0));
-  FPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(ArrayToSpliced, 'toSpliced', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayMap, 'map', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFilter, 'filter', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayReduce, 'reduce', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayForEach, 'forEach', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySome, 'some', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayEvery, 'every', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFlat, 'flat', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFlatMap, 'flatMap', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayJoin, 'join', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayIncludes, 'includes', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayPush, 'push', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayPop, 'pop', 0));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToReversed, 'toReversed', 0));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToSorted, 'toSorted', 0));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToSpliced, 'toSpliced', 1));
 end;
 
 destructor TGocciaArrayValue.Destroy;

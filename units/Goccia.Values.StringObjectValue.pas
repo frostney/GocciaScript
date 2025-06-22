@@ -134,22 +134,22 @@ begin
     FStringPrototype.DefineProperty('length', TGocciaPropertyDescriptorAccessor.Create(TGocciaNativeFunctionValue.Create(StringLength, 'length', 0), nil, [pfEnumerable, pfConfigurable]));
 
     // String prototype methods: writable, non-enumerable, configurable
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringCharAt, 'charAt', 1));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringToUpperCase, 'toUpperCase', 0));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringToLowerCase, 'toLowerCase', 0));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringSlice, 'slice', 2));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringSubstring, 'substring', 2));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringIndexOf, 'indexOf', 1));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringLastIndexOf, 'lastIndexOf', 1));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringIncludes, 'includes', 1));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringStartsWith, 'startsWith', 1));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringEndsWith, 'endsWith', 1));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringTrim, 'trim', 0));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringTrimStart, 'trimStart', 0));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringTrimEnd, 'trimEnd', 0));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringReplaceMethod, 'replace', 2));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringSplit, 'split', 1));
-    FStringPrototype.RegisterMethod(TGocciaNativeFunctionValue.Create(StringRepeat, 'repeat', 1));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringCharAt, 'charAt', 1));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToUpperCase, 'toUpperCase', 0));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToLowerCase, 'toLowerCase', 0));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringSlice, 'slice', 2));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringSubstring, 'substring', 2));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringIndexOf, 'indexOf', 1));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringLastIndexOf, 'lastIndexOf', 1));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringIncludes, 'includes', 1));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringStartsWith, 'startsWith', 1));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringEndsWith, 'endsWith', 1));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringTrim, 'trim', 0));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringTrimStart, 'trimStart', 0));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringTrimEnd, 'trimEnd', 0));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringReplaceMethod, 'replace', 2));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringSplit, 'split', 1));
+    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringRepeat, 'repeat', 1));
   end;
 end;
 

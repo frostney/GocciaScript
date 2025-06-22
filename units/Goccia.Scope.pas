@@ -8,26 +8,26 @@ uses
   Goccia.Values.Base, Goccia.Values.UndefinedValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ObjectValue, Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, TypInfo, Goccia.Interfaces, Goccia.Token;
 
 type
-  TVariableFlags = set of (vfWritable, vfEnumerable, vfConfigurable, vfInitialized);
+  TGocciaDeclarationType = (dtUnknown, dtLet, dtConst, dtParameter);
 
-  TGocciaDeclarationType = (dtUnknown, dtLet, dtConst);
-
-  TVariableDescriptor = record
+  TLexicalBinding = record
+  private
+    function IsWritable: Boolean; // computed from DeclarationType
+    function CanAccess: Boolean; // computed from DeclarationType and Initialized
+  public
     Value: TGocciaValue;
-    Flags: TVariableFlags;
-    DeclarationType: TGocciaDeclarationType; // dtLet, dtConst, dtImplicit
+    DeclarationType: TGocciaDeclarationType;
+    Initialized: Boolean;
 
-    function GetWritable: Boolean;
-    function GetEnumerable: Boolean;
-    function GetConfigurable: Boolean;
-    function GetInitialized: Boolean;
+    property Writable: Boolean read IsWritable;
+    property IsAccessible: Boolean read CanAccess;
   end;
 
   TGocciaScopeKind = (skUnknown, skGlobal, skFunction, skBlock, skCustom, skClass);
 
   TGocciaScope = class
   private
-    FVariables: TDictionary<string, TVariableDescriptor>;
+    FLexicalBindings: TDictionary<string, TLexicalBinding>;
     FParent: TGocciaScope;
     FThisValue: TGocciaValue;
     FScopeKind: TGocciaScopeKind;
@@ -38,15 +38,20 @@ type
     function CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''): TGocciaScope;
 
     // New Define/Assign pattern
-    procedure DefineVariable(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType);
-    procedure AssignVariable(const AName: string; AValue: TGocciaValue); virtual;
+    procedure DefineLexicalBinding(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType);
+    procedure AssignLexicalBinding(const AName: string; AValue: TGocciaValue); virtual;
 
     // Helper methods for token-based declarations
     procedure DefineFromToken(const AName: string; AValue: TGocciaValue; ATokenType: TGocciaTokenType);
 
     // Core methods
-    function GetValue(const AName: string): TGocciaValue; virtual;
+    function GetLexicalBinding(const AName: string): TLexicalBinding;
+    function GetValue(const AName: string): TGocciaValue;
+
+    function ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
     function Contains(const AName: string): Boolean; inline;
+
+    // TODO: DefineBuiltin is a legacy method, should be removed and replaced with DefineLexicalBinding
     procedure DefineBuiltin(const AName: string; AValue: TGocciaValue); virtual;
 
     property Parent: TGocciaScope read FParent;
@@ -62,7 +67,7 @@ type
     FCatchParameter: string;  // Track the catch parameter name for proper shadowing
   public
     constructor Create(AParent: TGocciaScope; const ACatchParameter: string);
-    procedure AssignVariable(const AName: string; AValue: TGocciaValue); override;
+    procedure AssignLexicalBinding(const AName: string; AValue: TGocciaValue); override;
     procedure DefineBuiltin(const AName: string; AValue: TGocciaValue); override;
   end;
 
@@ -86,26 +91,16 @@ type
 
 implementation
 
-{ TVariableDescriptor }
+{ TLexicalBinding }
 
-function TVariableDescriptor.GetWritable: Boolean;
+function TLexicalBinding.IsWritable: Boolean;
 begin
-  Result := vfWritable in Flags;
+  Result := DeclarationType in [dtLet, dtParameter];
 end;
 
-function TVariableDescriptor.GetEnumerable: Boolean;
+function TLexicalBinding.CanAccess: Boolean;
 begin
-  Result := vfEnumerable in Flags;
-end;
-
-function TVariableDescriptor.GetConfigurable: Boolean;
-begin
-  Result := vfConfigurable in Flags;
-end;
-
-function TVariableDescriptor.GetInitialized: Boolean;
-begin
-  Result := vfInitialized in Flags;
+  Result := Initialized or (DeclarationType = dtParameter); // Parameters have no TDZ
 end;
 
 { TGocciaScope }
@@ -122,12 +117,12 @@ begin
 
   FThisValue := TGocciaUndefinedValue.Create;
   FParent := AParent;
-  FVariables := TDictionary<string, TVariableDescriptor>.Create;
+  FLexicalBindings := TDictionary<string, TLexicalBinding>.Create;
 end;
 
 destructor TGocciaScope.Destroy;
 var
-  VarDescriptor: TVariableDescriptor;
+  LexicalBinding: TLexicalBinding;
   Key: string;
 begin
   Logger.Debug('Scope.Destroy: Destroying scope');
@@ -135,21 +130,21 @@ begin
   if FCustomLabel <> '' then
     Logger.Debug('  CustomLabel: %s', [FCustomLabel]);
   Logger.Debug('  Self address: %d', [PtrUInt(Self)]);
-  Logger.Debug('  Variables dictionary address: %d', [PtrUInt(FVariables)]);
+  Logger.Debug('  Variables dictionary address: %d', [PtrUInt(FLexicalBindings)]);
 
-  if Assigned(FVariables) then
+  if Assigned(FLexicalBindings) then
   begin
     // Log all variables in the scope before destruction
     Logger.Debug('  Variables in scope:');
-    for Key in FVariables.Keys do
+    for Key in FLexicalBindings.Keys do
     begin
-      if FVariables.TryGetValue(Key, VarDescriptor) then
-        Logger.Debug('    %s: %s', [Key, VarDescriptor.Value.ToString])
+      if FLexicalBindings.TryGetValue(Key, LexicalBinding) then
+        Logger.Debug('    %s: %s', [Key, LexicalBinding.Value.ToString])
       else
         Logger.Debug('    %s: <not found>', [Key]);
     end;
 
-    FVariables.Free;
+    FLexicalBindings.Free;
   end;
 
   // Don't free FThisValue - the scope doesn't own it, it's just a reference
@@ -168,13 +163,13 @@ begin
   Result := TGocciaScope.Create(Self, AScopeKind, ACustomLabel);
 end;
 
-procedure TGocciaScope.DefineVariable(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType);
+procedure TGocciaScope.DefineLexicalBinding(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType);
 var
-  Descriptor: TVariableDescriptor;
-  ExistingDescriptor: TVariableDescriptor;
+  LexicalBinding: TLexicalBinding;
+  ExistingLexicalBinding: TLexicalBinding;
 begin
   // Check for redeclaration errors
-  if FVariables.TryGetValue(AName, ExistingDescriptor) then
+  if FLexicalBindings.TryGetValue(AName, ExistingLexicalBinding) then
   begin
     // Check redeclaration rules - let/const cannot be redeclared
     case ADeclarationType of
@@ -187,14 +182,14 @@ begin
   end;
 
   // Set up descriptor based on declaration type
-  Descriptor.Value := AValue;
-  Descriptor.DeclarationType := ADeclarationType;
+  LexicalBinding.Value := AValue;
+  LexicalBinding.DeclarationType := ADeclarationType;
 
   case ADeclarationType of
     dtConst:
       begin
         // const: non-writable, enumerable, configurable, must be initialized
-        Descriptor.Flags := [vfEnumerable, vfConfigurable, vfInitialized];
+        LexicalBinding.Initialized := True;
         if AValue is TGocciaUndefinedValue then
           raise TGocciaSyntaxError.Create('Missing initializer in const declaration', 0, 0, '', nil);
       end;
@@ -202,16 +197,16 @@ begin
       begin
         // let: writable, enumerable, configurable
         if AValue is TGocciaUndefinedValue then
-          Descriptor.Flags := [vfWritable, vfEnumerable, vfConfigurable]
+          LexicalBinding.Initialized := False
         else
-          Descriptor.Flags := [vfWritable, vfEnumerable, vfConfigurable, vfInitialized];
+          LexicalBinding.Initialized := True;
       end;
   else
     // Default for unknown types (treat as let)
-    Descriptor.Flags := [vfWritable, vfEnumerable, vfConfigurable, vfInitialized];
+    LexicalBinding.Initialized := False;
   end;
 
-  FVariables.AddOrSetValue(AName, Descriptor);
+  FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
 end;
 
 procedure TGocciaScope.DefineFromToken(const AName: string; AValue: TGocciaValue; ATokenType: TGocciaTokenType);
@@ -225,35 +220,35 @@ begin
     DeclarationType := dtLet; // Default to let in strict mode
   end;
 
-  DefineVariable(AName, AValue, DeclarationType);
+  DefineLexicalBinding(AName, AValue, DeclarationType);
 end;
 
-procedure TGocciaScope.AssignVariable(const AName: string; AValue: TGocciaValue);
+procedure TGocciaScope.AssignLexicalBinding(const AName: string; AValue: TGocciaValue);
 var
-  Descriptor: TVariableDescriptor;
+  LexicalBinding: TLexicalBinding;
 begin
   // Try to find variable in current scope first
-  if FVariables.TryGetValue(AName, Descriptor) then
+  if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
   begin
     // Check if variable is initialized (temporal dead zone for let/const)
-    if not Descriptor.GetInitialized and (Descriptor.DeclarationType in [dtLet, dtConst]) then
+    if not LexicalBinding.IsAccessible then
       raise TGocciaReferenceError.Create(Format('Cannot access ''%s'' before initialization', [AName]), 0, 0, '', nil);
 
     // Check if variable is writable
-    if not Descriptor.GetWritable then
+    if not LexicalBinding.Writable then
       raise TGocciaTypeError.Create(Format('Assignment to constant variable ''%s''', [AName]), 0, 0, '', nil);
 
     // Update the value and mark as initialized
-    Descriptor.Value := AValue;
-    Descriptor.Flags := Descriptor.Flags + [vfInitialized];
-    FVariables.AddOrSetValue(AName, Descriptor);
+    LexicalBinding.Value := AValue;
+    LexicalBinding.Initialized := True;
+    FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
     Exit;
   end;
 
   // Variable not found in current scope, try parent scope
   if Assigned(FParent) then
   begin
-    FParent.AssignVariable(AName, AValue);
+    FParent.AssignLexicalBinding(AName, AValue);
     Exit;
   end;
 
@@ -261,24 +256,29 @@ begin
   raise TGocciaReferenceError.Create(Format('Undefined variable: %s', [AName]), 0, 0, '', nil);
 end;
 
-function TGocciaScope.GetValue(const AName: string): TGocciaValue;
+function TGocciaScope.GetLexicalBinding(const AName: string): TLexicalBinding;
 var
-  Descriptor: TVariableDescriptor;
+  LexicalBinding: TLexicalBinding;
 begin
-  if FVariables.TryGetValue(AName, Descriptor) then
+  if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
   begin
     // Check temporal dead zone for let/const
-    if not Descriptor.GetInitialized and (Descriptor.DeclarationType in [dtLet, dtConst]) then
+    if not LexicalBinding.IsAccessible then
       raise TGocciaReferenceError.Create(Format('Cannot access ''%s'' before initialization', [AName]), 0, 0, '', nil);
-    Result := Descriptor.Value;
+    Result := LexicalBinding;
   end
   else if Assigned(FParent) then
-    Result := FParent.GetValue(AName)
+    Result := FParent.GetLexicalBinding(AName)
   else
   begin
     // Strict mode: undefined variables throw ReferenceError
     raise TGocciaReferenceError.Create(Format('Undefined variable: %s', [AName]), 0, 0, '', nil);
   end;
+end;
+
+function TGocciaScope.GetValue(const AName: string): TGocciaValue;
+begin
+  Result := GetLexicalBinding(AName).Value;
 end;
 
 function TGocciaScope.GetThisProperty(const AName: string): TGocciaValue;
@@ -289,17 +289,20 @@ begin
     Result := TGocciaUndefinedValue.Create;
 end;
 
-
+function TGocciaScope.ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
+begin
+  Result := FLexicalBindings.ContainsKey(AName);
+end;
 
 function TGocciaScope.Contains(const AName: string): Boolean; inline;
 begin
-  Result := FVariables.ContainsKey(AName) or
+  Result := ContainsOwnLexicalBinding(AName) or
     (Assigned(FParent) and FParent.Contains(AName));
 end;
 
 procedure TGocciaScope.DefineBuiltin(const AName: string; AValue: TGocciaValue);
 var
-  Descriptor: TVariableDescriptor;
+  LexicalBinding: TLexicalBinding;
 begin
   Logger.Debug('Scope.DefineBuiltin: Defining builtin for name: %s', [AName]);
   Logger.Debug('  Kind: %s', [GetEnumName(TypeInfo(TGocciaScopeKind), Ord(FScopeKind))]);
@@ -307,13 +310,13 @@ begin
     Logger.Debug('  CustomLabel: %s', [FCustomLabel]);
   Logger.Debug('  Value type: %s', [AValue.ClassName]);
   Logger.Debug('  Self address: %d', [PtrUInt(Self)]);
-  Logger.Debug('  Variables dictionary address: %d', [PtrUInt(FVariables)]);
+  Logger.Debug('  Variables dictionary address: %d', [PtrUInt(FLexicalBindings)]);
 
   // DefineBuiltin allows redefinition - used for built-ins and global initialization
-  Descriptor.Value := AValue;
-  Descriptor.DeclarationType := dtLet;
-  Descriptor.Flags := [vfWritable, vfEnumerable, vfConfigurable, vfInitialized];
-  FVariables.AddOrSetValue(AName, Descriptor);
+  LexicalBinding.Value := AValue;
+  LexicalBinding.DeclarationType := dtLet;
+  LexicalBinding.Initialized := True;
+  FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
 end;
 
 // TGocciaCatchScope implementation
@@ -324,20 +327,20 @@ begin
   FCatchParameter := ACatchParameter;
 end;
 
-procedure TGocciaCatchScope.AssignVariable(const AName: string; AValue: TGocciaValue);
+procedure TGocciaCatchScope.AssignLexicalBinding(const AName: string; AValue: TGocciaValue);
 begin
   // Surgical fix for catch parameter scopes: assignments to non-parameter variables
   // should propagate to parent scope, but catch parameters should stay for proper shadowing
-  if (AName <> FCatchParameter) and (not FVariables.ContainsKey(AName)) and Assigned(FParent) then
+  if (AName <> FCatchParameter) and (not FLexicalBindings.ContainsKey(AName)) and Assigned(FParent) then
   begin
     // This is a catch parameter scope and the variable isn't the catch parameter.
     // Delegate directly to parent to ensure assignment propagation
-    FParent.AssignVariable(AName, AValue);
+    FParent.AssignLexicalBinding(AName, AValue);
   end
   else
   begin
     // Either it's the catch parameter or it exists in current scope - use base behavior
-    inherited AssignVariable(AName, AValue);
+    inherited AssignLexicalBinding(AName, AValue);
   end;
 end;
 
@@ -345,12 +348,12 @@ procedure TGocciaCatchScope.DefineBuiltin(const AName: string; AValue: TGocciaVa
 begin
   // Surgical fix: Also apply to DefineBuiltin for catch parameter scopes
   // Delegate to parent for non-parameter variables, but keep catch parameters for shadowing
-  if (AName <> FCatchParameter) and (not FVariables.ContainsKey(AName)) and Assigned(FParent) then
+  if (AName <> FCatchParameter) and (not FLexicalBindings.ContainsKey(AName)) and Assigned(FParent) then
   begin
     // Check if the variable exists in parent scope - if so, assign there
     if FParent.Contains(AName) then
     begin
-      FParent.AssignVariable(AName, AValue);
+      FParent.AssignLexicalBinding(AName, AValue);
       Exit;
     end;
   end;

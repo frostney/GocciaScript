@@ -68,10 +68,8 @@ constructor TGocciaJSON.Create(const AName: string; const AScope: TGocciaScope; 
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FBuiltinObject.DefineProperty('parse', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(JSONParse, 'parse', 1), [pfConfigurable, pfWritable]));
-  FBuiltinObject.DefineProperty('stringify', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(JSONStringify, 'stringify', 1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(JSONParse, 'parse', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(JSONStringify, 'stringify', 1));
 
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;

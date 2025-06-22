@@ -33,16 +33,11 @@ begin
 
   FBuiltinNumber := TGocciaObjectValue.Create;
 
-  FBuiltinNumber.DefineProperty('parseInt', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(NumberParseInt, 'parseInt', 1), [pfConfigurable, pfWritable]));
-  FBuiltinNumber.DefineProperty('parseFloat', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(NumberParseFloat, 'parseFloat', 1), [pfConfigurable, pfWritable]));
-  FBuiltinNumber.DefineProperty('isFinite', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(NumberIsFinite, 'isFinite', 0), [pfConfigurable, pfWritable]));
-  FBuiltinNumber.DefineProperty('isNaN', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(NumberIsNaN, 'isNaN', 0), [pfConfigurable, pfWritable]));
-  FBuiltinNumber.DefineProperty('isInteger', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(NumberIsInteger, 'isInteger', 0), [pfConfigurable, pfWritable]));
+  FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseInt, 'parseInt', 1));
+  FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseFloat, 'parseFloat', 1));
+  FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsFinite, 'isFinite', 0));
+  FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsNaN, 'isNaN', 0));
+  FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsInteger, 'isInteger', 0));
 
   AScope.DefineBuiltin(AName, FBuiltinNumber);
 end;
