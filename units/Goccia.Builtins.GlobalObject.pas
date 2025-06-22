@@ -44,7 +44,7 @@ begin
   FBuiltinObject.DefineProperty('hasOwn', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ObjectHasOwn, 'hasOwn', 1), [pfConfigurable, pfWritable]));
 
-  AScope.SetValue(AName, FBuiltinObject);
+  AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
 function TGocciaGlobalObject.ObjectKeys(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;

@@ -26,7 +26,7 @@ begin
   FBuiltinObject.DefineProperty('log', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ConsoleLog, 'log', -1), [pfConfigurable, pfWritable]));
 
-  AScope.SetValue(AName, FBuiltinObject);
+  AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
 function TGocciaConsole.ConsoleLog(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;

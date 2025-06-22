@@ -61,7 +61,7 @@ begin
   FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathLog, 'log', 1));
   FBuiltinObject.RegisterMethod(TGocciaNativeFunctionValue.Create(MathLog10, 'log10', 1));
 
-  AScope.SetValue(AName, FBuiltinObject);
+  AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
 function TGocciaMath.MathAbs(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;

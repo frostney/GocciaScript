@@ -26,7 +26,7 @@ begin
   FBuiltinObject.DefineProperty('isArray', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(IsArray, 'isArray', 1), [pfConfigurable, pfWritable]));
 
-  AScope.SetValue(AName, FBuiltinObject);
+  AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
 function TGocciaGlobalArray.IsArray(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;

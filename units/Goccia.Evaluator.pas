@@ -128,14 +128,8 @@ begin
     Result := EvaluateTemplateLiteral(TGocciaTemplateLiteralExpression(Expression), Context)
   else if Expression is TGocciaIdentifierExpression then
   begin
+    // In strict mode, GetValue throws ReferenceError for undefined variables
     Result := Context.Scope.GetValue(TGocciaIdentifierExpression(Expression).Name);
-    if Result = nil then
-    begin
-      SafeOnError(Context, Format('Undefined variable: %s',
-        [TGocciaIdentifierExpression(Expression).Name]), Expression.Line, Expression.Column);
-      // If OnError doesn't throw, return undefined
-      Result := TGocciaUndefinedValue.Create;
-    end;
   end
   else if Expression is TGocciaBinaryExpression then
     Result := EvaluateBinary(TGocciaBinaryExpression(Expression), Context)
@@ -145,7 +139,7 @@ begin
   begin
     // Variable assignment
     Result := EvaluateExpression(TGocciaAssignmentExpression(Expression).Value, Context);
-    Context.Scope.Assign(TGocciaAssignmentExpression(Expression).Name, Result);
+    Context.Scope.AssignVariable(TGocciaAssignmentExpression(Expression).Name, Result);
   end
   else if Expression is TGocciaPropertyAssignmentExpression then
   begin
@@ -168,16 +162,12 @@ begin
   begin
     // Variable compound assignment (e.g., count += 5)
     Result := Context.Scope.GetValue(TGocciaCompoundAssignmentExpression(Expression).Name);
-    if Result = nil then
-      Context.OnError(Format('Undefined variable: %s',
-        [TGocciaCompoundAssignmentExpression(Expression).Name]), Expression.Line, Expression.Column);
-
     Value := EvaluateExpression(TGocciaCompoundAssignmentExpression(Expression).Value, Context);
 
     // Use shared compound operation function
     Result := PerformCompoundOperation(Result, Value, TGocciaCompoundAssignmentExpression(Expression).Operator);
 
-    Context.Scope.Assign(TGocciaCompoundAssignmentExpression(Expression).Name, Result);
+    Context.Scope.AssignVariable(TGocciaCompoundAssignmentExpression(Expression).Name, Result);
   end
   else if Expression is TGocciaPropertyCompoundAssignmentExpression then
   begin
@@ -232,7 +222,7 @@ begin
       Value := PerformIncrement(OldValue, TGocciaIncrementExpression(Expression).Operator = gttIncrement);
 
       // Set the new value
-      Context.Scope.SetValue(PropName, Value);
+      Context.Scope.AssignVariable(PropName, Value);
 
       // Return value depends on prefix/postfix
       if TGocciaIncrementExpression(Expression).IsPrefix then
@@ -418,7 +408,13 @@ begin
       Logger.Debug('EvaluateStatement: Variable name: %s', [Decl.Variables[I].Name]);
       Value := EvaluateExpression(Decl.Variables[I].Initializer, Context);
       Logger.Debug('EvaluateStatement: Initializer result type: %s', [Value.ClassName]);
-      Context.Scope.SetValue(Decl.Variables[I].Name, Value);
+
+      // Use the new Define/Assign pattern
+      if Decl.IsConst then
+        Context.Scope.DefineFromToken(Decl.Variables[I].Name, Value, gttConst)
+      else
+        Context.Scope.DefineFromToken(Decl.Variables[I].Name, Value, gttLet);
+
       Logger.Debug('EvaluateStatement: Variable %s defined in scope', [Decl.Variables[I].Name]);
     end;
   end
@@ -531,7 +527,7 @@ begin
       if Module.ExportsTable.TryGetValue(ImportPair.Value, Value) then
       begin
         Logger.Debug('EvaluateStatement: Found export, type: %s', [Value.ClassName]);
-        Context.Scope.SetValue(ImportPair.Key, Value);
+        Context.Scope.DefineVariable(ImportPair.Key, Value, dtLet);
       end
       else
       begin
@@ -1395,7 +1391,7 @@ begin
             CatchScope := TGocciaCatchScope.Create(Context.Scope, TryStatement.CatchParam);
             try
               // Bind the thrown value to the catch parameter (shadows outer variables)
-              CatchScope.SetValue(TryStatement.CatchParam, E.Value);
+              CatchScope.DefineBuiltin(TryStatement.CatchParam, E.Value);
 
               // Set up context for catch block with child scope
               CatchContext := Context;
@@ -1480,7 +1476,7 @@ begin
             CatchScope := TGocciaCatchScope.Create(Context.Scope, TryStatement.CatchParam);
             try
               // Create a JavaScript Error object for the Pascal exception
-              CatchScope.SetValue(TryStatement.CatchParam, TGocciaStringValue.Create(E.Message));
+              CatchScope.DefineBuiltin(TryStatement.CatchParam, TGocciaStringValue.Create(E.Message));
 
               // Set up context for catch block with child scope of statement scope
               CatchContext := Context;
@@ -1623,7 +1619,7 @@ begin
   Result := EvaluateClassDefinition(ClassDef, Context, ClassDeclaration.Line, ClassDeclaration.Column);
 
   // For class declarations, bind the class name to the scope
-  Context.Scope.SetValue(ClassDef.Name, Result);
+  Context.Scope.DefineVariable(ClassDef.Name, Result, dtLet);
 end;
 
 procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
@@ -2303,7 +2299,7 @@ end;
 
 procedure AssignIdentifierPattern(Pattern: TGocciaIdentifierDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);
 begin
-  Context.Scope.SetValue(Pattern.Name, Value);
+  Context.Scope.DefineVariable(Pattern.Name, Value, dtLet);
 end;
 
 procedure AssignArrayPattern(Pattern: TGocciaArrayDestructuringPattern; Value: TGocciaValue; Context: TGocciaEvaluationContext);

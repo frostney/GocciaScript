@@ -264,7 +264,7 @@ type
   begin
     // Create a global scope with a variable
     Scope := TGocciaScope.Create(nil, skGlobal);
-    Scope.SetValue('x', TGocciaNumberValue.Create(42));
+    Scope.DefineVariable('x', TGocciaNumberValue.Create(42), dtLet);
     Parameters := TStringList.Create;
 
     // Create a function body that uses the scope variable
@@ -308,7 +308,7 @@ type
   begin
     // Create a global scope with a variable
     Scope := TGocciaScope.Create(nil, skGlobal);
-    Scope.SetValue('x', TGocciaNumberValue.Create(42));
+    Scope.DefineVariable('x', TGocciaNumberValue.Create(42), dtLet);
     Parameters := TStringList.Create;
     Parameters.Add('x'); // Parameter shadows global variable
 
@@ -358,8 +358,8 @@ type
   begin
     // Create a global scope with variables
     Scope := TGocciaScope.Create(nil, skGlobal);
-    Scope.SetValue('x', TGocciaNumberValue.Create(42));
-    Scope.SetValue('y', TGocciaStringValue.Create('hello'));
+    Scope.DefineVariable('x', TGocciaNumberValue.Create(42), dtLet);
+    Scope.DefineVariable('y', TGocciaStringValue.Create('hello'), dtLet);
     Parameters := TStringList.Create;
 
     // Create a function body that returns a complex expression using scope variables
@@ -415,8 +415,8 @@ type
   begin
     // Create a global scope with variables
     Scope := TGocciaScope.Create(nil, skGlobal);
-    Scope.SetValue('x', TGocciaNumberValue.Create(42));
-    Scope.SetValue('y', TGocciaStringValue.Create('hello'));
+    Scope.DefineVariable('x', TGocciaNumberValue.Create(42), dtLet);
+    Scope.DefineVariable('y', TGocciaStringValue.Create('hello'), dtLet);
     Parameters := TStringList.Create;
     Parameters.Add('a');
     Parameters.Add('b');

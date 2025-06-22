@@ -258,7 +258,7 @@ begin
     for Key in ArrayObj.GetAllPropertyNames do
       ArrayConstructor.SetProperty(Key, ArrayObj.GetProperty(Key));
   end;
-  FGlobalScope.SetValue('Array', ArrayConstructor);
+  FGlobalScope.DefineBuiltin('Array', ArrayConstructor);
 
   // Create Object constructor and copy static methods
   ObjectConstructor := TGocciaClassValue.Create('Object', nil);
@@ -269,11 +269,11 @@ begin
     for Key in ObjectObj.GetAllPropertyNames do
       ObjectConstructor.SetProperty(Key, ObjectObj.GetProperty(Key));
   end;
-  FGlobalScope.SetValue('Object', ObjectConstructor);
+  FGlobalScope.DefineBuiltin('Object', ObjectConstructor);
 
   // Create other constructors
   StringConstructor := TGocciaClassValue.Create('String', nil);
-  FGlobalScope.SetValue('String', StringConstructor);
+  FGlobalScope.DefineBuiltin('String', StringConstructor);
 
   NumberConstructor := TGocciaClassValue.Create('Number', nil);
   if (ExistingNumber is TGocciaObjectValue) then
@@ -283,18 +283,18 @@ begin
     for Key in NumberObj.GetAllPropertyNames do
       NumberConstructor.SetProperty(Key, NumberObj.GetProperty(Key));
   end;
-  FGlobalScope.SetValue('Number', NumberConstructor);
+  FGlobalScope.DefineBuiltin('Number', NumberConstructor);
 
   BooleanConstructor := TGocciaClassValue.Create('Boolean', nil);
-  FGlobalScope.SetValue('Boolean', BooleanConstructor);
+  FGlobalScope.DefineBuiltin('Boolean', BooleanConstructor);
 
   // Create Function constructor
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
-  FGlobalScope.SetValue('Function', FunctionConstructor);
+  FGlobalScope.DefineBuiltin('Function', FunctionConstructor);
 
   // Create Error constructors
   RangeErrorConstructor := TGocciaClassValue.Create('RangeError', nil);
-  FGlobalScope.SetValue('RangeError', RangeErrorConstructor);
+  FGlobalScope.DefineBuiltin('RangeError', RangeErrorConstructor);
 
 end;
 

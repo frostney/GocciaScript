@@ -132,7 +132,7 @@ begin
       begin
         Logger.Debug('FunctionValue.Call: Method has superclass: %s', [Method.SuperClass.ToString]);
         // Set up special 'super' binding in the method scope
-        CallScope.SetValue('__super__', Method.SuperClass);
+        CallScope.DefineBuiltin('__super__', Method.SuperClass);
       end;
     end;
 
@@ -169,7 +169,7 @@ begin
         if I < Arguments.Count then
         begin
           Logger.Debug('  Argument value type: %s, toString: %s', [Arguments[I].ClassName, Arguments[I].ToString]);
-          CallScope.SetValue(FParameters[I].Name, Arguments[I])
+          CallScope.DefineBuiltin(FParameters[I].Name, Arguments[I])
         end
         else
         begin
@@ -179,12 +179,12 @@ begin
             Logger.Debug('  No argument provided, using default value');
             // Evaluate the default value in the function's closure scope
             ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
-            CallScope.SetValue(FParameters[I].Name, ReturnValue);
+            CallScope.DefineBuiltin(FParameters[I].Name, ReturnValue);
           end
           else
           begin
             Logger.Debug('  No argument provided, setting to undefined');
-            CallScope.SetValue(FParameters[I].Name, TGocciaUndefinedValue.Create);
+            CallScope.DefineBuiltin(FParameters[I].Name, TGocciaUndefinedValue.Create);
           end;
         end;
       end;

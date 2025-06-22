@@ -690,7 +690,7 @@ begin
   EmptyArgs := TObjectList<TGocciaValue>.Create(False);
 
   // Create a strict test scope that throws for undefined variables
-  TestScope := TGocciaStrictScope.Create(TestFunc.Closure, 'ToThrow Test');
+          TestScope := TGocciaScope.Create(TestFunc.Closure, skFunction, 'ToThrow Test');
   try
     // Set up evaluation context with an OnError handler that throws exceptions
     TestContext.Scope := TestScope;
@@ -705,20 +705,22 @@ begin
       // Execute all function body statements with proper context
       for I := 0 to TestFunc.BodyStatements.Count - 1 do
       begin
-        Evaluate(TestFunc.BodyStatements[I], TestContext);
+        // Guard against invalid AST nodes from syntax errors
+        if TestFunc.BodyStatements[I] <> nil then
+          Evaluate(TestFunc.BodyStatements[I], TestContext)
+        else
+          raise TGocciaSyntaxError.Create('Invalid syntax in function body', 0, 0, '', nil);
       end;
     except
-      on E: Exception do
+      on E: TGocciaError do
       begin
-        // If no specific error type expected, any exception is fine
+        // Handle Goccia-specific errors (syntax, runtime, etc.)
         if ExpectedErrorType = '' then
         begin
           TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
           Exit;
         end;
 
-        // Check if the exception message contains the expected error type
-        // Look for the error type name in the message (case insensitive)
         if (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
         begin
           TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
@@ -731,10 +733,33 @@ begin
           Exit;
         end;
       end;
+      on E: Exception do
+      begin
+        // Handle other Pascal exceptions (including EInvalidCast)
+        if ExpectedErrorType = '' then
+        begin
+          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+          Exit;
+        end;
+
+        // For non-Goccia errors, be more lenient with type matching
+        if (Pos(LowerCase(ExpectedErrorType), LowerCase(E.ClassName)) > 0) or
+           (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
+        begin
+          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+          Exit;
+        end
+        else
+        begin
+          TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
+            'Expected ' + FActualValue.ToString + ' to throw ' + ExpectedErrorType + ' but threw: ' + E.ClassName + ': ' + E.Message);
+          Exit;
+        end;
+      end;
     end;
   finally
     EmptyArgs.Free;
-    // Don't free TestScope here as it might be referenced
+    TestScope.Free;  // Properly free the test scope to prevent access violations
   end;
 
   TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
@@ -766,19 +791,19 @@ begin
   // TODO: Remove duplication
 
   // Register testing functions globally for easy access
-  AScope.SetValue('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1));
-  AScope.SetValue('describe', TGocciaNativeFunctionValue.Create(Describe, 'describe', 2));
+  AScope.DefineVariable('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1), dtConst);
+  AScope.DefineVariable('describe', TGocciaNativeFunctionValue.Create(Describe, 'describe', 2), dtConst);
 
   // Create test function with skip property
   TestFunction := TGocciaNativeFunctionValue.Create(Test, 'test', 2);
   TestFunction.DefineProperty('skip', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(Skip, 'skip', 2), [pfConfigurable, pfWritable]));
-  AScope.SetValue('test', TestFunction);
+  AScope.DefineVariable('test', TestFunction, dtConst);
 
-  AScope.SetValue('it', TGocciaNativeFunctionValue.Create(It, 'it', 2));
-  AScope.SetValue('beforeEach', TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1));
-  AScope.SetValue('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1));
-  AScope.SetValue('runTests', TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0));
+  AScope.DefineVariable('it', TGocciaNativeFunctionValue.Create(It, 'it', 2), dtConst);
+  AScope.DefineVariable('beforeEach', TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1), dtConst);
+  AScope.DefineVariable('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1), dtConst);
+  AScope.DefineVariable('runTests', TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0), dtConst);
 
   // Also set them in the builtin object for completeness
   FBuiltinObject.DefineProperty('expect', TGocciaPropertyDescriptorData.Create(

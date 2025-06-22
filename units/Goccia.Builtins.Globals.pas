@@ -25,14 +25,14 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   // Global constants
-  AScope.SetValue('NaN', TGocciaNumberValue.Create(Math.NaN));
-  AScope.SetValue('Infinity', TGocciaNumberValue.Create(Math.Infinity));
+  AScope.DefineBuiltin('NaN', TGocciaNumberValue.Create(Math.NaN));
+  AScope.DefineBuiltin('Infinity', TGocciaNumberValue.Create(Math.Infinity));
 
   // Global functions
-  AScope.SetValue('parseFloat', TGocciaNativeFunctionValue.Create(ParseFloat, 'parseFloat', 1));
-  AScope.SetValue('parseInt', TGocciaNativeFunctionValue.Create(ParseInt, 'parseInt', 1));
-  AScope.SetValue('isNaN', TGocciaNativeFunctionValue.Create(IsNaN, 'isNaN', 1));
-  AScope.SetValue('isFinite', TGocciaNativeFunctionValue.Create(IsFinite, 'isFinite', 1));
+  AScope.DefineBuiltin('parseFloat', TGocciaNativeFunctionValue.Create(ParseFloat, 'parseFloat', 1));
+  AScope.DefineBuiltin('parseInt', TGocciaNativeFunctionValue.Create(ParseInt, 'parseInt', 1));
+  AScope.DefineBuiltin('isNaN', TGocciaNativeFunctionValue.Create(IsNaN, 'isNaN', 1));
+  AScope.DefineBuiltin('isFinite', TGocciaNativeFunctionValue.Create(IsFinite, 'isFinite', 1));
 end;
 
 function TGocciaGlobals.ParseFloat(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;

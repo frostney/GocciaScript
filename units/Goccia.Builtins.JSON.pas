@@ -73,7 +73,7 @@ begin
   FBuiltinObject.DefineProperty('stringify', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(JSONStringify, 'stringify', 1), [pfConfigurable, pfWritable]));
 
-  AScope.SetValue(AName, FBuiltinObject);
+  AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
 function TGocciaJSON.JSONParse(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;

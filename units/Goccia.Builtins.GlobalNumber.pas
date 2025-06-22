@@ -44,7 +44,7 @@ begin
   FBuiltinNumber.DefineProperty('isInteger', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(NumberIsInteger, 'isInteger', 0), [pfConfigurable, pfWritable]));
 
-  AScope.SetValue(AName, FBuiltinNumber);
+  AScope.DefineBuiltin(AName, FBuiltinNumber);
 end;
 
 function TGocciaGlobalNumber.NumberParseInt(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
