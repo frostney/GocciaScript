@@ -191,9 +191,9 @@ begin
   DefineProperty('toThrow', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToThrow, 'toThrow', 1), [pfConfigurable, pfWritable]));
 
-  // Negation property
-  DefineProperty('not', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(GetNot, 'not', 0), [pfConfigurable, pfWritable]));
+  // Negation property - use accessor to make it a getter
+  DefineProperty('not', TGocciaPropertyDescriptorAccessor.Create(
+    TGocciaNativeFunctionValue.Create(GetNot, 'not', 0), nil, [pfConfigurable]));
 end;
 
 function TGocciaExpectationValue.ToBe(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -643,12 +643,6 @@ begin
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveProperty');
     Result := TGocciaUndefinedValue.Create;
-  end;
-
-  if HasProperty then
-  begin
-    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveProperty');
-    Result := TGocciaUndefinedValue.Create;
   end
   else
   begin
@@ -765,7 +759,6 @@ begin
   TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
     'Expected ' + FActualValue.ToString + ' to throw an exception');
 end;
-
 
 function TGocciaExpectationValue.GetNot(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 begin
