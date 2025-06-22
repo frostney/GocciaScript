@@ -594,6 +594,8 @@ var
   Properties: TDictionary<string, TGocciaExpression>;
   PropertyOrder: TStringList;
   ComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
+  ComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>>;
+  PropertySourceOrder: TArray<TGocciaPropertySourceOrder>;
   Getters: TDictionary<string, TGocciaGetterExpression>;
   Setters: TDictionary<string, TGocciaSetterExpression>;
   Key: string;
@@ -603,6 +605,7 @@ var
   NumericValue: Double;
   IsComputed: Boolean;
   IsGetter, IsSetter: Boolean;
+  ComputedCount, SourceOrderCount: Integer;
   // Method shorthand variables
   Parameters: TGocciaParameterArray;
   ParamCount: Integer;
@@ -620,6 +623,12 @@ begin
   ComputedProperties := TDictionary<TGocciaExpression, TGocciaExpression>.Create;
   Getters := TDictionary<string, TGocciaGetterExpression>.Create;
   Setters := TDictionary<string, TGocciaSetterExpression>.Create;
+
+  // Initialize source order tracking
+  ComputedCount := 0;
+  SourceOrderCount := 0;
+  SetLength(ComputedPropertiesInOrder, 0);
+  SetLength(PropertySourceOrder, 0);
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
@@ -640,7 +649,7 @@ begin
       IsSetter := True;
     end;
 
-    // Handle spread syntax: ...obj
+        // Handle spread syntax: ...obj
     if not IsGetter and not IsSetter and Match([gttSpread]) then
     begin
       // Create a spread expression
@@ -648,6 +657,18 @@ begin
       Column := Previous.Column;
       KeyExpression := TGocciaSpreadExpression.Create(Expression, Line, Column);
       ComputedProperties.Add(KeyExpression, nil); // nil value for spread
+
+      // Track in source order
+      Inc(ComputedCount);
+      SetLength(ComputedPropertiesInOrder, ComputedCount);
+      ComputedPropertiesInOrder[ComputedCount - 1].Key := KeyExpression;
+      ComputedPropertiesInOrder[ComputedCount - 1].Value := nil;
+
+      Inc(SourceOrderCount);
+      SetLength(PropertySourceOrder, SourceOrderCount);
+      PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstComputed;
+      PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
+      PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
 
       // For spread expressions, no further processing is needed
       if not Match([gttComma]) then
@@ -698,8 +719,15 @@ begin
         Consume(gttRightBrace, 'Expected "}" after getter body');
         Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
 
-        // Add getter to dictionary
+                // Add getter to dictionary
         Getters.Add(Key, TGocciaGetterExpression.Create(Body, Line, Column));
+
+        // Track in source order
+        Inc(SourceOrderCount);
+        SetLength(PropertySourceOrder, SourceOrderCount);
+        PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstGetter;
+        PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
+        PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
       except
         Statements.Free;
         raise;
@@ -724,8 +752,15 @@ begin
         Consume(gttRightBrace, 'Expected "}" after setter body');
         Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
 
-        // Add setter to dictionary
+                // Add setter to dictionary
         Setters.Add(Key, TGocciaSetterExpression.Create(ParamName, Body, Line, Column));
+
+        // Track in source order
+        Inc(SourceOrderCount);
+        SetLength(PropertySourceOrder, SourceOrderCount);
+        PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstSetter;
+        PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
+        PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
       except
         Statements.Free;
         raise;
@@ -813,12 +848,24 @@ begin
       end;
     end;
 
-    if not IsGetter and not IsSetter then
+        if not IsGetter and not IsSetter then
     begin
       if IsComputed then
       begin
         // Store computed properties separately - they'll be evaluated at runtime
         ComputedProperties.Add(KeyExpression, Value);
+
+        // Track in source order
+        Inc(ComputedCount);
+        SetLength(ComputedPropertiesInOrder, ComputedCount);
+        ComputedPropertiesInOrder[ComputedCount - 1].Key := KeyExpression;
+        ComputedPropertiesInOrder[ComputedCount - 1].Value := Value;
+
+        Inc(SourceOrderCount);
+        SetLength(PropertySourceOrder, SourceOrderCount);
+        PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstComputed;
+        PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
+        PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
       end
       else
       begin
@@ -830,6 +877,13 @@ begin
           Properties.Add(Key, Value);
           PropertyOrder.Add(Key); // Track insertion order
         end;
+
+        // Track in source order
+        Inc(SourceOrderCount);
+        SetLength(PropertySourceOrder, SourceOrderCount);
+        PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstStatic;
+        PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
+        PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
       end;
     end;
 
@@ -838,7 +892,7 @@ begin
   end;
 
   Consume(gttRightBrace, 'Expected "}" after object properties');
-  Result := TGocciaObjectExpression.Create(Properties, PropertyOrder, ComputedProperties, Getters, Setters, Line, Column);
+  Result := TGocciaObjectExpression.Create(Properties, PropertyOrder, ComputedProperties, ComputedPropertiesInOrder, Getters, Setters, PropertySourceOrder, Line, Column);
 end;
 
 function TGocciaParser.ArrowFunction: TGocciaExpression;

@@ -198,9 +198,23 @@ type
     property Elements: TObjectList<TGocciaExpression> read FElements;
   end;
 
-  // Forward declarations for getter/setter expressions
+    // Forward declarations for getter/setter expressions
   TGocciaGetterExpression = class;
   TGocciaSetterExpression = class;
+
+  // Property source order tracking
+  TGocciaPropertySourceType = (
+    pstStatic,    // Regular property: {key: value}
+    pstComputed,  // Computed property: {[expr]: value}
+    pstGetter,    // Getter: {get prop() {}}
+    pstSetter     // Setter: {set prop(val) {}}
+  );
+
+  TGocciaPropertySourceOrder = record
+    PropertyType: TGocciaPropertySourceType;
+    StaticKey: string;           // For static properties, getters, setters
+    ComputedIndex: Integer;      // Index into ComputedProperties list
+  end;
 
   TGocciaObjectExpression = class(TGocciaExpression)
   private
@@ -209,6 +223,10 @@ type
     FComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
     FGetters: TDictionary<string, TGocciaGetterExpression>;
     FSetters: TDictionary<string, TGocciaSetterExpression>;
+
+    // New: tracks source order of ALL property types
+    FPropertySourceOrder: TArray<TGocciaPropertySourceOrder>;
+    FComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>>;
   public
     constructor Create(AProperties: TDictionary<string, TGocciaExpression>;
       APropertyOrder: TStringList;
@@ -223,13 +241,25 @@ type
       AGetters: TDictionary<string, TGocciaGetterExpression>;
       ASetters: TDictionary<string, TGocciaSetterExpression>;
       ALine, AColumn: Integer); overload;
+    // New constructor with source order tracking
+    constructor Create(AProperties: TDictionary<string, TGocciaExpression>;
+      APropertyOrder: TStringList;
+      AComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
+      AComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>>;
+      AGetters: TDictionary<string, TGocciaGetterExpression>;
+      ASetters: TDictionary<string, TGocciaSetterExpression>;
+      APropertySourceOrder: TArray<TGocciaPropertySourceOrder>;
+      ALine, AColumn: Integer); overload;
     destructor Destroy; override;
-    function GetPropertyNamesInOrder: TStringList;
+
     property Properties: TDictionary<string, TGocciaExpression> read FProperties;
     property PropertyInsertionOrder: TStringList read FPropertyInsertionOrder;
     property ComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression> read FComputedProperties;
+    property ComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>> read FComputedPropertiesInOrder;
     property Getters: TDictionary<string, TGocciaGetterExpression> read FGetters;
     property Setters: TDictionary<string, TGocciaSetterExpression> read FSetters;
+    property PropertySourceOrder: TArray<TGocciaPropertySourceOrder> read FPropertySourceOrder;
+    function GetPropertyNamesInOrder: TStringList;
   end;
 
   TGocciaArrowFunctionExpression = class(TGocciaExpression)
@@ -655,6 +685,34 @@ begin
   FComputedProperties := AComputedProperties;
   FGetters := AGetters;
   FSetters := ASetters;
+end;
+
+constructor TGocciaObjectExpression.Create(AProperties: TDictionary<string, TGocciaExpression>;
+  APropertyOrder: TStringList;
+  AComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
+  AComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>>;
+  AGetters: TDictionary<string, TGocciaGetterExpression>;
+  ASetters: TDictionary<string, TGocciaSetterExpression>;
+  APropertySourceOrder: TArray<TGocciaPropertySourceOrder>;
+  ALine, AColumn: Integer);
+var
+  I: Integer;
+begin
+  inherited Create(ALine, AColumn);
+  FProperties := AProperties;
+  FPropertyInsertionOrder := TStringList.Create;
+  FPropertyInsertionOrder.Duplicates := dupIgnore;
+
+  // Use the provided insertion order
+  if Assigned(APropertyOrder) then
+    for I := 0 to APropertyOrder.Count - 1 do
+      FPropertyInsertionOrder.Add(APropertyOrder[I]);
+
+  FComputedProperties := AComputedProperties;
+  FComputedPropertiesInOrder := AComputedPropertiesInOrder;
+  FGetters := AGetters;
+  FSetters := ASetters;
+  FPropertySourceOrder := APropertySourceOrder;
 end;
 
 destructor TGocciaObjectExpression.Destroy;

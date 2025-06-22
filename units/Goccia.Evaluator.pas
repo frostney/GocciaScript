@@ -1101,7 +1101,7 @@ var
   SpreadObj: TGocciaObjectValue;
   SpreadArray: TGocciaArrayValue;
   Key: string;
-  I: Integer;
+  I, J: Integer;
   GetterPair: TPair<string, TGocciaGetterExpression>;
   SetterPair: TPair<string, TGocciaSetterExpression>;
   GetterFunction: TGocciaValue;
@@ -1111,85 +1111,163 @@ var
 begin
   Obj := TGocciaObjectValue.Create;
 
-  // Handle static properties in insertion order: {key: value, "key2": value2}
-  if Assigned(ObjectExpression.Properties) and Assigned(ObjectExpression.PropertyInsertionOrder) then
+  // Check if we have source order tracking (new approach)
+  if Length(ObjectExpression.PropertySourceOrder) > 0 then
   begin
-    for I := 0 to ObjectExpression.PropertyInsertionOrder.Count - 1 do
+    // New approach: process all properties in source order
+    for I := 0 to High(ObjectExpression.PropertySourceOrder) do
     begin
-      PropertyName := ObjectExpression.PropertyInsertionOrder[I];
-      if ObjectExpression.Properties.TryGetValue(PropertyName, PropertyExpression) then
-        Obj.DefineProperty(PropertyName, TGocciaPropertyDescriptorData.Create(EvaluateExpression(PropertyExpression, Context), [pfEnumerable, pfConfigurable, pfWritable]));
+      case ObjectExpression.PropertySourceOrder[I].PropertyType of
+        pstStatic:
+          begin
+            // Static property: {key: value}
+            PropertyName := ObjectExpression.PropertySourceOrder[I].StaticKey;
+            if ObjectExpression.Properties.TryGetValue(PropertyName, PropertyExpression) then
+              Obj.DefineProperty(PropertyName, TGocciaPropertyDescriptorData.Create(EvaluateExpression(PropertyExpression, Context), [pfEnumerable, pfConfigurable, pfWritable]));
+          end;
+
+        pstComputed:
+          begin
+            // Computed property or spread: {[expr]: value} or {...obj}
+            ComputedPair := ObjectExpression.ComputedPropertiesInOrder[ObjectExpression.PropertySourceOrder[I].ComputedIndex];
+
+            if ComputedPair.Key is TGocciaSpreadExpression then
+            begin
+              // Spread expression: copy all enumerable properties
+              SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ComputedPair.Key).Argument, Context);
+
+              if SpreadValue is TGocciaObjectValue then
+              begin
+                // Spread object properties
+                SpreadObj := TGocciaObjectValue(SpreadValue);
+                for Key in SpreadObj.GetEnumerablePropertyNames do
+                  Obj.DefineProperty(Key, TGocciaPropertyDescriptorData.Create(SpreadObj.GetProperty(Key), [pfEnumerable, pfConfigurable, pfWritable]));
+              end
+                             else if SpreadValue is TGocciaArrayValue then
+               begin
+                 // Spread array as indexed properties
+                 SpreadArray := TGocciaArrayValue(SpreadValue);
+                 for J := 0 to SpreadArray.Elements.Count - 1 do
+                 begin
+                   if SpreadArray.Elements[J] <> nil then
+                     Obj.DefineProperty(IntToStr(J), TGocciaPropertyDescriptorData.Create(SpreadArray.Elements[J], [pfEnumerable, pfConfigurable, pfWritable]));
+                 end;
+               end
+               else if SpreadValue is TGocciaStringValue then
+               begin
+                 // Spread string as indexed properties
+                 for J := 1 to Length(SpreadValue.ToString) do
+                   Obj.DefineProperty(IntToStr(J - 1), TGocciaPropertyDescriptorData.Create(TGocciaStringValue.Create(SpreadValue.ToString[J]), [pfEnumerable, pfConfigurable, pfWritable]));
+               end;
+              // null/undefined/other primitives are ignored in spread context
+            end
+            else
+            begin
+              // Regular computed property: {[expr]: value}
+              ComputedKey := EvaluateExpression(ComputedPair.Key, Context).ToString;
+              Obj.DefineProperty(ComputedKey, TGocciaPropertyDescriptorData.Create(EvaluateExpression(ComputedPair.Value, Context), [pfEnumerable, pfConfigurable, pfWritable]));
+            end;
+          end;
+
+        pstGetter:
+          begin
+            // Getter: {get prop() {...}}
+            GetterFunction := EvaluateGetter(ObjectExpression.Getters[ObjectExpression.PropertySourceOrder[I].StaticKey], Context);
+            Obj.DefineProperty(ObjectExpression.PropertySourceOrder[I].StaticKey, TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfEnumerable, pfConfigurable]));
+          end;
+
+        pstSetter:
+          begin
+            // Setter: {set prop(val) {...}}
+            SetterFunction := EvaluateSetter(ObjectExpression.Setters[ObjectExpression.PropertySourceOrder[I].StaticKey], Context);
+            Obj.DefineProperty(ObjectExpression.PropertySourceOrder[I].StaticKey, TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfEnumerable, pfConfigurable]));
+          end;
+      end;
     end;
-  end;
+  end
+  else
+  begin
+    // Legacy approach: fallback for backward compatibility
+    // Handle static properties in insertion order: {key: value, "key2": value2}
+    if Assigned(ObjectExpression.Properties) and Assigned(ObjectExpression.PropertyInsertionOrder) then
+    begin
+      for I := 0 to ObjectExpression.PropertyInsertionOrder.Count - 1 do
+      begin
+        PropertyName := ObjectExpression.PropertyInsertionOrder[I];
+        if ObjectExpression.Properties.TryGetValue(PropertyName, PropertyExpression) then
+          Obj.DefineProperty(PropertyName, TGocciaPropertyDescriptorData.Create(EvaluateExpression(PropertyExpression, Context), [pfEnumerable, pfConfigurable, pfWritable]));
+      end;
+    end;
 
   // TODO: We shouldn't treat getters and setters separately, but as a single property descriptor
 
   // Handle getters: {get propertyName() { ... }}
   if Assigned(ObjectExpression.Getters) then
-  begin
-    for GetterPair in ObjectExpression.Getters do
     begin
-      GetterFunction := EvaluateGetter(GetterPair.Value, Context);
-      Obj.DefineProperty(GetterPair.Key, TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfEnumerable, pfConfigurable, pfWritable]));
-    end;
-  end;
-
-  // Handle setters: {set propertyName(value) { ... }}
-  if Assigned(ObjectExpression.Setters) then
-  begin
-    for SetterPair in ObjectExpression.Setters do
-    begin
-      SetterFunction := EvaluateSetter(SetterPair.Value, Context);
-      Obj.DefineProperty(SetterPair.Key, TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfEnumerable, pfConfigurable, pfWritable]));
-    end;
-  end;
-
-  // Handle computed properties and spread expressions: {[expr]: value, ...obj}
-  if Assigned(ObjectExpression.ComputedProperties) then
-  begin
-    for ComputedPair in ObjectExpression.ComputedProperties do
-    begin
-      if ComputedPair.Key is TGocciaSpreadExpression then
+      for GetterPair in ObjectExpression.Getters do
       begin
-        // Spread expression: copy all enumerable properties
-        SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ComputedPair.Key).Argument, Context);
+        GetterFunction := EvaluateGetter(GetterPair.Value, Context);
+        Obj.DefineProperty(GetterPair.Key, TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfEnumerable, pfConfigurable, pfWritable]));
+      end;
+    end;
 
-        if SpreadValue is TGocciaObjectValue then
+    // Handle setters: {set propertyName(value) { ... }}
+    if Assigned(ObjectExpression.Setters) then
+    begin
+      for SetterPair in ObjectExpression.Setters do
+      begin
+        SetterFunction := EvaluateSetter(SetterPair.Value, Context);
+        Obj.DefineProperty(SetterPair.Key, TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfEnumerable, pfConfigurable, pfWritable]));
+      end;
+    end;
+
+    // Handle computed properties and spread expressions: {[expr]: value, ...obj}
+    if Assigned(ObjectExpression.ComputedProperties) then
+    begin
+      for ComputedPair in ObjectExpression.ComputedProperties do
+      begin
+        if ComputedPair.Key is TGocciaSpreadExpression then
         begin
-          // Spread object properties
-          SpreadObj := TGocciaObjectValue(SpreadValue);
-          for Key in SpreadObj.GetEnumerablePropertyNames do
-            Obj.AssignProperty(Key, SpreadObj.GetProperty(Key));
-        end
-        else if SpreadValue is TGocciaArrayValue then
-        begin
-          // Spread array as indexed properties
-          SpreadArray := TGocciaArrayValue(SpreadValue);
-          for I := 0 to SpreadArray.Elements.Count - 1 do
+          // Spread expression: copy all enumerable properties
+          SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ComputedPair.Key).Argument, Context);
+
+          if SpreadValue is TGocciaObjectValue then
           begin
-            if SpreadArray.Elements[I] <> nil then
-              Obj.AssignProperty(IntToStr(I), SpreadArray.Elements[I]);
+            // Spread object properties
+            SpreadObj := TGocciaObjectValue(SpreadValue);
+            for Key in SpreadObj.GetEnumerablePropertyNames do
+              Obj.AssignProperty(Key, SpreadObj.GetProperty(Key));
+          end
+          else if SpreadValue is TGocciaArrayValue then
+          begin
+            // Spread array as indexed properties
+            SpreadArray := TGocciaArrayValue(SpreadValue);
+            for I := 0 to SpreadArray.Elements.Count - 1 do
+            begin
+              if SpreadArray.Elements[I] <> nil then
+                Obj.AssignProperty(IntToStr(I), SpreadArray.Elements[I]);
+            end;
+          end
+          else if SpreadValue is TGocciaStringValue then
+          begin
+            // Spread string as indexed properties
+            for I := 1 to Length(SpreadValue.ToString) do
+              Obj.AssignProperty(IntToStr(I - 1), TGocciaStringValue.Create(SpreadValue.ToString[I]));
+          end
+          else if not ((SpreadValue is TGocciaNullValue) or (SpreadValue is TGocciaUndefinedValue)) then
+          begin
+            // Other primitives (numbers, booleans) don't have enumerable properties
+            // So they result in empty object spread, which is valid
           end;
+          // null and undefined are ignored in spread context
         end
-        else if SpreadValue is TGocciaStringValue then
+        else
         begin
-          // Spread string as indexed properties
-          for I := 1 to Length(SpreadValue.ToString) do
-            Obj.AssignProperty(IntToStr(I - 1), TGocciaStringValue.Create(SpreadValue.ToString[I]));
-        end
-        else if not ((SpreadValue is TGocciaNullValue) or (SpreadValue is TGocciaUndefinedValue)) then
-        begin
-          // Other primitives (numbers, booleans) don't have enumerable properties
-          // So they result in empty object spread, which is valid
+          // Regular computed property: {[expr]: value}
+          ComputedKey := EvaluateExpression(ComputedPair.Key, Context).ToString;
+          // Set the property (computed properties can overwrite static ones)
+          Obj.AssignProperty(ComputedKey, EvaluateExpression(ComputedPair.Value, Context));
         end;
-        // null and undefined are ignored in spread context
-      end
-      else
-      begin
-        // Regular computed property: {[expr]: value}
-        ComputedKey := EvaluateExpression(ComputedPair.Key, Context).ToString;
-        // Set the property (computed properties can overwrite static ones)
-        Obj.AssignProperty(ComputedKey, EvaluateExpression(ComputedPair.Value, Context));
       end;
     end;
   end;
