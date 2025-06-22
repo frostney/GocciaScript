@@ -292,6 +292,7 @@ end;
 function TGocciaGlobalObject.ObjectDefineProperties(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
+  PropertiesDescriptor: TGocciaObjectValue;
   PropertyEntries: TArray<TPair<string, TGocciaValue>>;
   CallArgs: TObjectList<TGocciaValue>;
   I: Integer;
@@ -302,15 +303,24 @@ begin
   if not (Args[0] is TGocciaObjectValue) then
     ThrowError('Object.defineProperties called on non-object', 0, 0);
 
+  if not (Args[1] is TGocciaObjectValue) then
+    ThrowError('Object.defineProperties: properties must be an object', 0, 0);
+
   Obj := TGocciaObjectValue(Args[0]);
-  PropertyEntries := Obj.GetEnumerablePropertyEntries;
+  PropertiesDescriptor := TGocciaObjectValue(Args[1]);
+  PropertyEntries := PropertiesDescriptor.GetEnumerablePropertyEntries;
 
   for I := 0 to High(PropertyEntries) do
   begin
-    CallArgs := TObjectList<TGocciaValue>.Create;
-    CallArgs.Add(TGocciaStringValue.Create(PropertyEntries[I].Key));
-    CallArgs.Add(PropertyEntries[I].Value);
-    ObjectDefineProperty(CallArgs, Obj);
+    CallArgs := TObjectList<TGocciaValue>.Create(False);
+    try
+      CallArgs.Add(Obj);
+      CallArgs.Add(TGocciaStringValue.Create(PropertyEntries[I].Key));
+      CallArgs.Add(PropertyEntries[I].Value);
+      ObjectDefineProperty(CallArgs, ThisValue);
+    finally
+      CallArgs.Free;
+    end;
   end;
 
   Result := Obj;
