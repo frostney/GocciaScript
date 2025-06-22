@@ -62,6 +62,7 @@ uses
   Goccia.Values.BooleanValue,
   Goccia.Values.NullValue,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.FunctionValue,
   Classes;
 
 constructor TGocciaJSON.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
@@ -416,6 +417,12 @@ begin
 
   Value := Args[0];
 
+  if Value is TGocciaUndefinedValue then
+  begin
+    Result := TGocciaUndefinedValue.Create;
+    Exit;
+  end;
+
   try
     JsonString := StringifyValue(Value);
     Result := TGocciaStringValue.Create(JsonString);
@@ -471,9 +478,10 @@ begin
   for Key in Obj.GetEnumerablePropertyNames do
   begin
     Value := Obj.GetProperty(Key);
+
     // Skip undefined properties and functions
     if not (Value is TGocciaUndefinedValue) and
-       (Pos('Function', Value.ClassName) = 0) then
+       (not (Value is TGocciaFunctionValue) or (Pos('Function', Value.ClassName) = 0)) then
     begin
       if HasProperties then
         Parts := Parts + ',';
