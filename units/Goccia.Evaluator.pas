@@ -21,6 +21,7 @@ function EvaluateExpression(Expression: TGocciaExpression; Context: TGocciaEvalu
 function EvaluateStatement(Statement: TGocciaStatement; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateBinary(BinaryExpression: TGocciaBinaryExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateUnary(UnaryExpression: TGocciaUnaryExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateDelete(Operand: TGocciaExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateCall(CallExpression: TGocciaCallExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue; overload;
 function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext; out ObjectValue: TGocciaValue): TGocciaValue; overload;
@@ -639,6 +640,13 @@ function EvaluateUnary(UnaryExpression: TGocciaUnaryExpression; Context: TGoccia
 var
   Operand: TGocciaValue;
 begin
+  // Special handling for delete operator
+  if UnaryExpression.Operator = gttDelete then
+  begin
+    Result := EvaluateDelete(UnaryExpression.Operand, Context);
+    Exit;
+  end;
+
   Operand := EvaluateExpression(UnaryExpression.Operand, Context);
 
   case UnaryExpression.Operator of
@@ -2571,6 +2579,82 @@ begin
 
     // Move up the prototype chain
     CurrentPrototype := CurrentPrototype.Prototype;
+  end;
+end;
+
+function EvaluateDelete(Operand: TGocciaExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  MemberExpr: TGocciaMemberExpression;
+  ObjValue: TGocciaValue;
+  PropertyName: string;
+  Value: TGocciaValue;
+  ArrayValue: TGocciaArrayValue;
+  ObjectValue: TGocciaObjectValue;
+  Index: Integer;
+begin
+  // Handle member expressions (property deletion)
+  if Operand is TGocciaMemberExpression then
+  begin
+    MemberExpr := TGocciaMemberExpression(Operand);
+    ObjValue := EvaluateExpression(MemberExpr.ObjectExpr, Context);
+
+    // Get property name
+    if MemberExpr.Computed and Assigned(MemberExpr.PropertyExpression) then
+    begin
+      Value := EvaluateExpression(MemberExpr.PropertyExpression, Context);
+      PropertyName := Value.ToString;
+    end
+    else
+    begin
+      PropertyName := MemberExpr.PropertyName;
+    end;
+
+    // Handle array element deletion
+    if ObjValue is TGocciaArrayValue then
+    begin
+      ArrayValue := TGocciaArrayValue(ObjValue);
+      if TryStrToInt(PropertyName, Index) and (Index >= 0) and (Index < ArrayValue.Elements.Count) then
+      begin
+        // Set array element to nil (creates a hole/sparse array)
+        ArrayValue.Elements[Index] := nil;
+        Result := TGocciaBooleanValue.Create(True);
+      end
+      else
+      begin
+        // Try to delete as a regular property on the array object
+        ArrayValue.DeleteProperty(PropertyName);
+        Result := TGocciaBooleanValue.Create(True);
+      end;
+    end
+    // Handle object property deletion
+    else if ObjValue is TGocciaObjectValue then
+    begin
+      ObjectValue := TGocciaObjectValue(ObjValue);
+      ObjectValue.DeleteProperty(PropertyName);
+      Result := TGocciaBooleanValue.Create(True);
+    end
+    else
+    begin
+      // Cannot delete properties from primitives, null, or undefined
+      Result := TGocciaBooleanValue.Create(True);
+    end;
+  end
+  else
+  begin
+    // Handle other expressions according to strict mode semantics
+    if Operand is TGocciaIdentifierExpression then
+    begin
+      // In strict mode, attempting to delete variables/identifiers throws TypeError
+      Context.OnError('Delete of an unqualified identifier in strict mode',
+        Operand.Line, Operand.Column);
+      Result := TGocciaBooleanValue.Create(True); // Fallback if OnError doesn't throw
+    end
+    else
+    begin
+      // For literals and other non-reference expressions, return true
+      // (e.g., delete 5, delete "string", delete (1+2), etc.)
+      Result := TGocciaBooleanValue.Create(True);
+    end;
   end;
 end;
 

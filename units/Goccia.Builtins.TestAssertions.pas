@@ -1137,18 +1137,9 @@ begin
 
         try
           // Execute the test function
-          // For tests from describe blocks, clone with global scope to fix context issues
-          if TestCase.SuiteName <> '' then
-          begin
-            // Test is from a describe block - clone function with global scope
-            ClonedFunction := TestCase.TestFunction.CloneWithNewScope(FScope);
-            ClonedFunction.Call(EmptyArgs, TGocciaUndefinedValue.Create);
-          end
-          else
-          begin
-            // Standalone test - call directly
-            TestCase.TestFunction.Call(EmptyArgs, TGocciaUndefinedValue.Create);
-          end;
+          // Create a fresh child scope for each test to ensure isolation
+          ClonedFunction := TestCase.TestFunction.CloneWithNewScope(FScope.CreateChild(skFunction, 'TestFunction'));
+          ClonedFunction.Call(EmptyArgs, TGocciaUndefinedValue.Create);
         except
           on E: Exception do
           begin

@@ -34,18 +34,15 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   // Global Object methods: writable, non-enumerable, configurable
-  FBuiltinObject.DefineProperty('keys', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1), [pfConfigurable, pfWritable]));
-  FBuiltinObject.DefineProperty('values', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1), [pfConfigurable, pfWritable]));
-  FBuiltinObject.DefineProperty('entries', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1), [pfConfigurable, pfWritable]));
-  FBuiltinObject.DefineProperty('assign', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(ObjectAssign, 'assign', -1), [pfConfigurable, pfWritable]));
-  FBuiltinObject.DefineProperty('create', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(ObjectCreate, 'create', 1), [pfConfigurable, pfWritable]));
-  FBuiltinObject.DefineProperty('hasOwn', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(ObjectHasOwn, 'hasOwn', 1), [pfConfigurable, pfWritable]));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectAssign, 'assign', -1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectCreate, 'create', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectHasOwn, 'hasOwn', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetOwnPropertyDescriptor, 'getOwnPropertyDescriptor', 2));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectDefineProperty, 'defineProperty', 3));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectDefineProperties, 'defineProperties', 2));
 
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;

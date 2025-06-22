@@ -318,7 +318,7 @@ var
   Operator: TGocciaToken;
   Right: TGocciaExpression;
 begin
-  if Match([gttNot, gttMinus, gttPlus, gttTypeof, gttBitwiseNot]) then
+  if Match([gttNot, gttMinus, gttPlus, gttTypeof, gttBitwiseNot, gttDelete]) then
   begin
     Operator := Previous;
     Right := Unary;

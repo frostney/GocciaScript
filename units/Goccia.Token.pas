@@ -22,7 +22,7 @@ type
     // Operators
     gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
     gttEqual, gttNotEqual, gttLess, gttGreater, gttLessEqual, gttGreaterEqual,
-    gttAnd, gttOr, gttNullishCoalescing, gttNot, gttTypeof, gttInstanceof, gttIn, gttAssign, gttPlusAssign, gttMinusAssign,
+    gttAnd, gttOr, gttNullishCoalescing, gttNot, gttTypeof, gttInstanceof, gttIn, gttDelete, gttAssign, gttPlusAssign, gttMinusAssign,
     gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign,
     gttIncrement, gttDecrement,
     gttQuestion, gttColon,
