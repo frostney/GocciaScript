@@ -12,14 +12,17 @@ type
   private
     FValue: Double;
     FIsNaN: Boolean;
+    FIsNegativeZero: Boolean;
   public
     constructor Create(AValue: Double);
     class function CreateNaN: TGocciaNumberValue;
+    class function CreateNegativeZero: TGocciaNumberValue;
     function ToString: string; override;
     function ToBoolean: Boolean; override;
     function ToNumber: Double; override;
     function TypeName: string; override;
     function IsNaN: Boolean;
+    function IsNegativeZero: Boolean;
     property Value: Double read FValue;
   end;
 
@@ -31,11 +34,13 @@ begin
   if Math.IsNaN(AValue) then
   begin
     FIsNaN := True;
+    FIsNegativeZero := False;
     FValue := 0.0; // Store a safe value instead of NaN
   end
   else
   begin
     FIsNaN := False;
+    FIsNegativeZero := False;
     FValue := AValue;
   end;
 end;
@@ -46,12 +51,23 @@ begin
   Result.FIsNaN := True;
 end;
 
+class function TGocciaNumberValue.CreateNegativeZero: TGocciaNumberValue;
+begin
+  Result := TGocciaNumberValue.Create(0.0);
+  Result.FIsNegativeZero := True;
+end;
+
 function TGocciaNumberValue.ToString: string;
 begin
   if FIsNaN then
     Result := 'NaN'
   else if (FValue = 0.0) then
-    Result := '0'
+  begin
+    if FIsNegativeZero then
+      Result := '-0'
+    else
+      Result := '0';
+  end
   else if IsInfinite(FValue) then
   begin
     if FValue > 0 then
@@ -82,6 +98,11 @@ end;
 function TGocciaNumberValue.IsNaN: Boolean;
 begin
   Result := FIsNaN;
+end;
+
+function TGocciaNumberValue.IsNegativeZero: Boolean;
+begin
+  Result := FIsNegativeZero;
 end;
 
 function TGocciaNumberValue.TypeName: string;

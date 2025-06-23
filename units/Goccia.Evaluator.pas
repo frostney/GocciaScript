@@ -663,7 +663,18 @@ begin
     gttNot:
       Result := TGocciaBooleanValue.Create(not Operand.ToBoolean);
     gttMinus:
-      Result := TGocciaNumberValue.Create(-Operand.ToNumber);
+      begin
+        // Handle signed zero: -0 should create negative zero, -(negative zero) should create positive zero
+        if (Operand is TGocciaNumberValue) and (TGocciaNumberValue(Operand).Value = 0) then
+        begin
+          if TGocciaNumberValue(Operand).IsNegativeZero then
+            Result := TGocciaNumberValue.Create(0.0)  // -(-0) = +0
+          else
+            Result := TGocciaNumberValue.CreateNegativeZero;  // -0 = -0
+        end
+        else
+          Result := TGocciaNumberValue.Create(-Operand.ToNumber);
+      end;
     gttPlus:
       Result := TGocciaNumberValue.Create(Operand.ToNumber);
     gttTypeof:

@@ -33,6 +33,9 @@ begin
 
   FBuiltinNumber := TGocciaObjectValue.Create;
 
+  // Number constants
+  FBuiltinNumber.DefineProperty('NaN', TGocciaPropertyDescriptorData.Create(TGocciaNumberValue.CreateNaN, [pfEnumerable]));
+
   FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseInt, 'parseInt', 1));
   FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseFloat, 'parseFloat', 1));
   FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsFinite, 'isFinite', 0));

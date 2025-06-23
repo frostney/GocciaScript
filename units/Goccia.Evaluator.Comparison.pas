@@ -25,20 +25,10 @@ implementation
 
 uses Goccia.Values.ArrayValue, Goccia.Values.ObjectValue;
 
-// Helper function to check if a float is negative zero
-function IsNegativeZero(Value: Double): Boolean;
-type
-  TDoubleRec = record
-    case Integer of
-      0: (Float: Double);
-      1: (Hi, Lo: Cardinal);
-  end;
-var
-  DoubleRec: TDoubleRec;
+// Helper function to check if a GocciaNumberValue is negative zero
+function IsNegativeZero(Value: TGocciaNumberValue): Boolean;
 begin
-  DoubleRec.Float := Value;
-  // Check if value is zero and sign bit is set (bit 63 in IEEE 754)
-  Result := (Value = 0.0) and ((DoubleRec.Hi and $80000000) <> 0);
+  Result := Value.IsNegativeZero;
 end;
 
 function IsStrictEqual(Left, Right: TGocciaValue): Boolean;
@@ -126,22 +116,29 @@ begin
   if (Left is TGocciaNumberValue) and (Right is TGocciaNumberValue) then
   begin
     // Both NaN values are considered equal
-    if IsNaN(TGocciaNumberValue(Left).ToNumber) and IsNaN(TGocciaNumberValue(Right).ToNumber) then
+    if TGocciaNumberValue(Left).IsNaN and TGocciaNumberValue(Right).IsNaN then
     begin
       Result := True;
       Exit;
     end;
 
-    // Handle +0 and -0 (they are different in Object.is)
-    if (TGocciaNumberValue(Left).ToNumber = 0) and (TGocciaNumberValue(Right).ToNumber = 0) then
+    // If one is NaN and the other isn't, they're different
+    if TGocciaNumberValue(Left).IsNaN or TGocciaNumberValue(Right).IsNaN then
     begin
-      // Use proper IEEE 754 signed zero detection
-      Result := IsNegativeZero(TGocciaNumberValue(Left).ToNumber) = IsNegativeZero(TGocciaNumberValue(Right).ToNumber);
+      Result := False;
+      Exit;
+    end;
+
+    // Handle +0 and -0 (they are different in Object.is)
+    if (TGocciaNumberValue(Left).Value = 0) and (TGocciaNumberValue(Right).Value = 0) then
+    begin
+      // Use our safe signed zero detection
+      Result := IsNegativeZero(TGocciaNumberValue(Left)) = IsNegativeZero(TGocciaNumberValue(Right));
       Exit;
     end;
 
     // Regular number comparison
-    Result := TGocciaNumberValue(Left).ToNumber = TGocciaNumberValue(Right).ToNumber;
+    Result := TGocciaNumberValue(Left).Value = TGocciaNumberValue(Right).Value;
     Exit;
   end;
 

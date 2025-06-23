@@ -43,13 +43,22 @@ end;
 
 function EvaluateDivision(Left, Right: TGocciaValue): TGocciaValue;
 var
-  RightNum: Double;
+  LeftNum, RightNum: Double;
 begin
+  LeftNum := Left.ToNumber;
   RightNum := Right.ToNumber;
+
   if RightNum = 0 then
-    Result := TGocciaNumberValue.Create(Infinity)
+  begin
+    if LeftNum = 0 then
+      Result := TGocciaNumberValue.CreateNaN    // 0 / 0 = NaN
+    else if LeftNum > 0 then
+      Result := TGocciaNumberValue.Create(Infinity)   // positive / 0 = +Infinity
+    else
+      Result := TGocciaNumberValue.Create(-Infinity); // negative / 0 = -Infinity
+  end
   else
-    Result := TGocciaNumberValue.Create(Left.ToNumber / RightNum);
+    Result := TGocciaNumberValue.Create(LeftNum / RightNum);
 end;
 
 function EvaluateModulo(Left, Right: TGocciaValue): TGocciaValue;
@@ -80,7 +89,14 @@ begin
     gttSlashAssign:
       begin
         if NewValue.ToNumber = 0 then
-          Result := TGocciaNumberValue.Create(Infinity)
+        begin
+          if CurrentValue.ToNumber = 0 then
+            Result := TGocciaNumberValue.CreateNaN    // 0 /= 0 = NaN
+          else if CurrentValue.ToNumber > 0 then
+            Result := TGocciaNumberValue.Create(Infinity)   // positive /= 0 = +Infinity
+          else
+            Result := TGocciaNumberValue.Create(-Infinity); // negative /= 0 = -Infinity
+        end
         else
           Result := TGocciaNumberValue.Create(CurrentValue.ToNumber / NewValue.ToNumber);
       end;
