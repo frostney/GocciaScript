@@ -38,7 +38,8 @@ function EvaluateClass(ClassDeclaration: TGocciaClassDeclaration; Context: TGocc
 function EvaluateClassExpression(ClassExpression: TGocciaClassExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateClassDefinition(ClassDef: TGocciaClassDefinition; Context: TGocciaEvaluationContext; Line, Column: Integer): TGocciaClassValue;
 function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGocciaEvaluationContext): TGocciaValue;
-function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue; overload;
+function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpression; Context: TGocciaEvaluationContext; out ObjectValue: TGocciaValue): TGocciaValue; overload;
 function EvaluatePrivatePropertyAssignment(PrivatePropertyAssignmentExpression: TGocciaPrivatePropertyAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluatePrivatePropertyCompoundAssignment(PrivatePropertyCompoundAssignmentExpression: TGocciaPrivatePropertyCompoundAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateDestructuringAssignment(DestructuringAssignmentExpression: TGocciaDestructuringAssignmentExpression; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -324,8 +325,17 @@ begin
     // Return the superclass - context should provide access to it
     if Context.Scope.ThisValue is TGocciaInstanceValue then
     begin
+      // Instance method: super refers to parent prototype/class
       if Assigned(TGocciaInstanceValue(Context.Scope.ThisValue).ClassValue.SuperClass) then
         Result := TGocciaInstanceValue(Context.Scope.ThisValue).ClassValue.SuperClass
+      else
+        Context.OnError('No superclass found', Expression.Line, Expression.Column);
+    end
+    else if Context.Scope.ThisValue is TGocciaClassValue then
+    begin
+      // Static method: super refers to parent class constructor
+      if Assigned(TGocciaClassValue(Context.Scope.ThisValue).SuperClass) then
+        Result := TGocciaClassValue(Context.Scope.ThisValue).SuperClass
       else
         Context.OnError('No superclass found', Expression.Line, Expression.Column);
     end
@@ -763,6 +773,11 @@ begin
       Callee := EvaluateMember(MemberExpr, Context, ThisValue);
     end;
   end
+  else if CallExpression.Callee is TGocciaPrivateMemberExpression then
+  begin
+    // Private method calls: use overloaded function to get both method and object
+    Callee := EvaluatePrivateMember(TGocciaPrivateMemberExpression(CallExpression.Callee), Context, ThisValue);
+  end
   else
   begin
     // Regular function calls
@@ -867,15 +882,31 @@ begin
 
     Logger.Debug('EvaluateMember: Looking for super method: %s', [PropertyName]);
 
-    // Get the method from the superclass
-    Result := SuperClass.GetMethod(PropertyName);
-    if not Assigned(Result) then
-      Result := TGocciaUndefinedValue.Create
+    // Check if we're in a static method context or instance method context
+    if Context.Scope.ThisValue is TGocciaClassValue then
+    begin
+      // Static method context: look for static methods using GetProperty
+      Logger.Debug('EvaluateMember: Static method context, looking for static method');
+      Result := SuperClass.GetProperty(PropertyName);
+    end
     else
+    begin
+      // Instance method context: look for instance methods using GetMethod
+      Logger.Debug('EvaluateMember: Instance method context, looking for instance method');
+      Result := SuperClass.GetMethod(PropertyName);
+      if not Assigned(Result) then
+        Result := TGocciaUndefinedValue.Create;
+    end;
+
+    if not (Result is TGocciaUndefinedValue) then
     begin
       // For super.method() calls, we need to create a bound method that uses the current 'this'
       // This is handled in the call evaluation where we have access to the current 'this'
       Logger.Debug('EvaluateMember: Super method found: %s', [Result.ToString]);
+    end
+    else
+    begin
+      Logger.Debug('EvaluateMember: Super method not found');
     end;
 
     Exit;
@@ -984,13 +1015,29 @@ begin
 
     Logger.Debug('EvaluateMember: Looking for super method: %s', [PropertyName]);
 
-    // Get the method from the superclass
-    Result := SuperClass.GetMethod(PropertyName);
-    if not Assigned(Result) then
-      Result := TGocciaUndefinedValue.Create
+    // Check if we're in a static method context or instance method context
+    if Context.Scope.ThisValue is TGocciaClassValue then
+    begin
+      // Static method context: look for static methods using GetProperty
+      Logger.Debug('EvaluateMember: Static method context, looking for static method');
+      Result := SuperClass.GetProperty(PropertyName);
+    end
     else
     begin
+      // Instance method context: look for instance methods using GetMethod
+      Logger.Debug('EvaluateMember: Instance method context, looking for instance method');
+      Result := SuperClass.GetMethod(PropertyName);
+      if not Assigned(Result) then
+        Result := TGocciaUndefinedValue.Create;
+    end;
+
+    if not (Result is TGocciaUndefinedValue) then
+    begin
       Logger.Debug('EvaluateMember: Super method found: %s', [Result.ToString]);
+    end
+    else
+    begin
+      Logger.Debug('EvaluateMember: Super method not found');
     end;
 
     Exit;
@@ -1784,8 +1831,19 @@ begin
       Instance := TGocciaInstanceValue.Create(ClassValue);
       Instance.Prototype := ClassValue.Prototype;
 
-      // Step 2: Initialize properties BEFORE calling constructor
+                              // Step 2: Initialize properties BEFORE calling constructor
       InitializeInstanceProperties(Instance, ClassValue, Context);
+
+      // Step 2.5: Initialize private properties from inheritance chain (simple iteration)
+      // Start from the topmost superclass and work down
+      if Assigned(ClassValue.SuperClass) then
+      begin
+        // For now, handle just one level of inheritance (most common case)
+        Logger.Debug('EvaluateNewExpression: Initializing private properties from superclass %s', [ClassValue.SuperClass.Name]);
+        InitializePrivateInstanceProperties(Instance, ClassValue.SuperClass, Context);
+      end;
+
+      // Step 2.6: Initialize private properties from current class
       InitializePrivateInstanceProperties(Instance, ClassValue, Context);
 
       // Step 3: Call constructor (properties are now available)
@@ -1817,6 +1875,7 @@ end;
 function EvaluateClassDefinition(ClassDef: TGocciaClassDefinition; Context: TGocciaEvaluationContext; Line, Column: Integer): TGocciaClassValue;
 var
   SuperClass: TGocciaClassValue;
+  SuperClassValue: TGocciaValue;
   ClassValue: TGocciaClassValue;
   MethodPair: TPair<string, TGocciaClassMethod>;
   PropertyPair: TPair<string, TGocciaExpression>;
@@ -1830,9 +1889,13 @@ begin
   SuperClass := nil;
   if ClassDef.SuperClass <> '' then
   begin
-    SuperClass := TGocciaClassValue(Context.Scope.GetValue(ClassDef.SuperClass));
-    if SuperClass = nil then
-      Context.OnError(Format('Superclass "%s" not found', [ClassDef.SuperClass]), Line, Column);
+    SuperClassValue := Context.Scope.GetValue(ClassDef.SuperClass);
+    if SuperClassValue = nil then
+      Context.OnError(Format('Superclass "%s" not found', [ClassDef.SuperClass]), Line, Column)
+    else if not (SuperClassValue is TGocciaClassValue) then
+      Context.OnError(Format('Superclass "%s" is not a class (found %s)', [ClassDef.SuperClass, SuperClassValue.TypeName]), Line, Column)
+    else
+      SuperClass := TGocciaClassValue(SuperClassValue);
   end;
 
   // Use the class name if provided, otherwise create an anonymous class
@@ -1923,6 +1986,53 @@ var
   AccessClass: TGocciaClassValue;
 begin
   // Evaluate the object expression
+  ObjectValue := EvaluateExpression(PrivateMemberExpression.ObjectExpr, Context);
+
+  if ObjectValue is TGocciaInstanceValue then
+  begin
+    // Private field access on instance
+    Instance := TGocciaInstanceValue(ObjectValue);
+
+    // Determine the access class - the class that is trying to access the private field
+    // This should be the class containing the current method
+    AccessClass := Instance.ClassValue; // For now, assume access from the same class
+
+    // Check if this is a private method call
+    if Instance.ClassValue.PrivateMethods.ContainsKey(PrivateMemberExpression.PrivateName) then
+    begin
+      Result := Instance.ClassValue.GetPrivateMethod(PrivateMemberExpression.PrivateName);
+      if Result = nil then
+        Result := TGocciaUndefinedValue.Create;
+    end
+    else
+    begin
+      // It's a private property access
+      Result := Instance.GetPrivateProperty(PrivateMemberExpression.PrivateName, AccessClass);
+    end;
+  end
+  else if ObjectValue is TGocciaClassValue then
+  begin
+    // Private static field access on class
+    ClassValue := TGocciaClassValue(ObjectValue);
+
+    // Access private static property
+    Result := ClassValue.GetPrivateStaticProperty(PrivateMemberExpression.PrivateName);
+  end
+  else
+  begin
+    Context.OnError(Format('Private fields can only be accessed on class instances or classes, not %s', [ObjectValue.TypeName]),
+      PrivateMemberExpression.Line, PrivateMemberExpression.Column);
+    Result := TGocciaUndefinedValue.Create;
+  end;
+end;
+
+function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpression; Context: TGocciaEvaluationContext; out ObjectValue: TGocciaValue): TGocciaValue;
+var
+  Instance: TGocciaInstanceValue;
+  ClassValue: TGocciaClassValue;
+  AccessClass: TGocciaClassValue;
+begin
+  // Evaluate the object expression and store it for this binding
   ObjectValue := EvaluateExpression(PrivateMemberExpression.ObjectExpr, Context);
 
   if ObjectValue is TGocciaInstanceValue then

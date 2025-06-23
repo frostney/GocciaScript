@@ -7,7 +7,7 @@ interface
 uses
   Goccia.Values.Base, Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Interfaces,
   Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math, Goccia.Values.UndefinedValue,
-  Goccia.AST.Node, Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.AST.Node, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.NativeFunction;
 
 type
   // Forward declaration
@@ -68,6 +68,7 @@ type
     destructor Destroy; override;
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
+    procedure AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
     function GetPrivateProperty(const AName: string; AAccessClass: TGocciaClassValue): TGocciaValue;
     procedure SetPrivateProperty(const AName: string; AValue: TGocciaValue; AAccessClass: TGocciaClassValue);
@@ -160,19 +161,50 @@ begin
   end;
 end;
 
-// TODO: Do we even need this?
 procedure TGocciaClassValue.AddGetter(const AName: string; AGetter: TGocciaFunctionValue);
+var
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+  ExistingSetter: TGocciaValue;
 begin
   FGetters.AddOrSetValue(AName, AGetter);
-  // Also add to prototype with property descriptor
-  FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, nil, [pfEnumerable, pfConfigurable, pfWritable]));
+
+  // Check if there's already a setter for this property
+  ExistingDescriptor := FPrototype.GetOwnPropertyDescriptor(AName);
+  if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+     Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
+  begin
+    // Merge with existing setter
+    ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+    FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, ExistingSetter, [pfEnumerable, pfConfigurable, pfWritable]));
+  end
+  else
+  begin
+    // No existing setter, create getter-only descriptor
+    FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, nil, [pfEnumerable, pfConfigurable, pfWritable]));
+  end;
 end;
 
 procedure TGocciaClassValue.AddSetter(const AName: string; ASetter: TGocciaFunctionValue);
+var
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+  ExistingGetter: TGocciaValue;
 begin
   FSetters.AddOrSetValue(AName, ASetter);
-  // Also add to prototype with property descriptor
-  FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(nil, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
+
+  // Check if there's already a getter for this property
+  ExistingDescriptor := FPrototype.GetOwnPropertyDescriptor(AName);
+  if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+     Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
+  begin
+    // Merge with existing getter
+    ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+    FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(ExistingGetter, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
+  end
+  else
+  begin
+    // No existing getter, create setter-only descriptor
+    FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(nil, ASetter, [pfEnumerable, pfConfigurable, pfWritable]));
+  end;
 end;
 
 procedure TGocciaClassValue.AddInstanceProperty(const AName: string; AExpression: TGocciaExpression);
@@ -319,10 +351,63 @@ begin
   Result := TGocciaUndefinedValue.Create;
 end;
 
+procedure TGocciaInstanceValue.AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  SetterFunction: TGocciaFunctionValue;
+  NativeSetterFunction: TGocciaNativeFunctionValue;
+  Args: TObjectList<TGocciaValue>;
+begin
+  Logger.Debug('TGocciaInstanceValue.AssignProperty called for: %s', [AName]);
+
+  // First check for setters on the prototype
+  if Assigned(FPrototype) then
+  begin
+    Descriptor := FPrototype.GetOwnPropertyDescriptor(AName);
+    if (Descriptor is TGocciaPropertyDescriptorAccessor) and
+       Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
+    begin
+      Logger.Debug('TGocciaInstanceValue.AssignProperty: Found setter on prototype for %s', [AName]);
+
+      // Call the setter with this instance as context
+      if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionValue then
+      begin
+        SetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
+        Args := TObjectList<TGocciaValue>.Create(False);
+        try
+          Args.Add(AValue);
+          SetterFunction.Call(Args, Self); // Use this instance as context
+          Logger.Debug('TGocciaInstanceValue.AssignProperty: Setter called successfully');
+        finally
+          Args.Free;
+        end;
+        Exit;
+      end
+      else if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaNativeFunctionValue then
+      begin
+        NativeSetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
+        Args := TObjectList<TGocciaValue>.Create(False);
+        try
+          Args.Add(AValue);
+          NativeSetterFunction.Call(Args, Self); // Use this instance as context
+          Logger.Debug('TGocciaInstanceValue.AssignProperty: Native setter called successfully');
+        finally
+          Args.Free;
+        end;
+        Exit;
+      end;
+    end;
+  end;
+
+  // No setter found, create instance property (inherited behavior)
+  Logger.Debug('TGocciaInstanceValue.AssignProperty: No setter found, creating instance property');
+  inherited AssignProperty(AName, AValue, ACanCreate);
+end;
+
 procedure TGocciaInstanceValue.SetProperty(const AName: string; AValue: TGocciaValue);
 begin
-  // Always set properties on the instance, not the prototype
-  inherited AssignProperty(AName, AValue);
+  // Delegate to AssignProperty which has the setter logic
+  AssignProperty(AName, AValue);
 end;
 
 procedure TGocciaInstanceValue.SetPrototype(APrototype: TGocciaObjectValue);
@@ -371,10 +456,37 @@ begin
 end;
 
 function TGocciaInstanceValue.GetPrivateProperty(const AName: string; AAccessClass: TGocciaClassValue): TGocciaValue;
+var
+  CurrentClass: TGocciaClassValue;
+  CanAccess: Boolean;
 begin
-  // Private fields can only be accessed by the class that declares them
-  // (not by subclasses unless they redeclare the same private field)
-  if AAccessClass <> FClass then
+  // Check if the accessing class can access this private field
+  // Rule: A class can access private fields if:
+  // 1. It's accessing its own private field (AAccessClass = the class that owns the field)
+  // 2. It's a subclass of the class that owns the field
+  CanAccess := False;
+
+  // Check if AAccessClass is the same as FClass (derived class accessing derived class field)
+  if AAccessClass = FClass then
+  begin
+    CanAccess := True;
+  end
+  else
+  begin
+    // Check if AAccessClass is in the inheritance chain of FClass (superclass accessing its own field)
+    CurrentClass := FClass;
+    while Assigned(CurrentClass) do
+    begin
+      if CurrentClass = AAccessClass then
+      begin
+        CanAccess := True;
+        Break;
+      end;
+      CurrentClass := CurrentClass.SuperClass;
+    end;
+  end;
+
+  if not CanAccess then
     raise TGocciaError.Create(Format('Private field "%s" is not accessible', [AName]), 0, 0, '', nil);
 
   if FPrivateProperties.TryGetValue(AName, Result) then
@@ -384,9 +496,37 @@ begin
 end;
 
 procedure TGocciaInstanceValue.SetPrivateProperty(const AName: string; AValue: TGocciaValue; AAccessClass: TGocciaClassValue);
+var
+  CurrentClass: TGocciaClassValue;
+  CanAccess: Boolean;
 begin
-  // Private fields can only be accessed by the class that declares them
-  if AAccessClass <> FClass then
+  // Check if the accessing class can access this private field
+  // Rule: A class can access private fields if:
+  // 1. It's accessing its own private field (AAccessClass = the class that owns the field)
+  // 2. It's a subclass of the class that owns the field
+  CanAccess := False;
+
+  // Check if AAccessClass is the same as FClass (derived class accessing derived class field)
+  if AAccessClass = FClass then
+  begin
+    CanAccess := True;
+  end
+  else
+  begin
+    // Check if AAccessClass is in the inheritance chain of FClass (superclass accessing its own field)
+    CurrentClass := FClass;
+    while Assigned(CurrentClass) do
+    begin
+      if CurrentClass = AAccessClass then
+      begin
+        CanAccess := True;
+        Break;
+      end;
+      CurrentClass := CurrentClass.SuperClass;
+    end;
+  end;
+
+  if not CanAccess then
     raise TGocciaError.Create(Format('Private field "%s" is not accessible', [AName]), 0, 0, '', nil);
 
   FPrivateProperties.AddOrSetValue(AName, AValue);
