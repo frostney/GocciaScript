@@ -85,7 +85,7 @@ test("object methods with context and binding", () => {
   });
 });
 
-test("object methods with nested calls and state", () => {
+test("object methods with chaining, nested calls and state", () => {
   const calculator = {
     result: 0,
     history: [],

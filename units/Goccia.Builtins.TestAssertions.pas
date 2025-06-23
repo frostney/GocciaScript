@@ -635,7 +635,23 @@ begin
   end;
 
   Expected := Args[0];
-  HasLength := FActualValue.ToNumber = Expected.ToNumber;
+
+  if FActualValue is TGocciaArrayValue then
+  begin
+    HasLength := TGocciaArrayValue(FActualValue).Elements.Count = Expected.ToNumber;
+  end
+  else if FActualValue is TGocciaObjectValue then
+  begin
+    HasLength := Length(TGocciaObjectValue(FActualValue).GetAllPropertyNames) = Expected.ToNumber;
+  end
+  else if FActualValue is TGocciaStringValue then
+  begin
+    HasLength := Length(FActualValue.ToString) = Expected.ToNumber;
+  end
+  else
+  begin
+    HasLength := FActualValue.ToNumber = Expected.ToNumber;
+  end;
 
   if FIsNegated then
     HasLength := not HasLength;
