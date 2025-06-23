@@ -33,6 +33,7 @@ type
 
     function ArrayPush(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayPop(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ArraySlice(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
     function ArrayToReversed(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayToSorted(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -118,6 +119,7 @@ begin
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayIncludes, 'includes', 1));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayPush, 'push', 1));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayPop, 'pop', 0));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySlice, 'slice', 2));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToReversed, 'toReversed', 0));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToSorted, 'toSorted', 0));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToSpliced, 'toSpliced', 1));
@@ -553,6 +555,65 @@ begin
 
   Result := Elements[Elements.Count - 1];
   Elements.Delete(Elements.Count - 1);
+end;
+
+function TGocciaArrayValue.ArraySlice(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  ResultArray: TGocciaArrayValue;
+  StartIndex, EndIndex: Integer;
+  I: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.slice called on non-array');
+
+  ResultArray := TGocciaArrayValue.Create;
+
+  // Handle start index (default to 0)
+  if Args.Count >= 1 then
+    StartIndex := Trunc(Args[0].ToNumber)
+  else
+    StartIndex := 0;
+
+  // Handle negative start index
+  if StartIndex < 0 then
+    StartIndex := Elements.Count + StartIndex;
+
+  // Clamp start index to valid range
+  if StartIndex < 0 then
+    StartIndex := 0
+  else if StartIndex > Elements.Count then
+    StartIndex := Elements.Count;
+
+  // Handle end index (default to array length)
+  if Args.Count >= 2 then
+    EndIndex := Trunc(Args[1].ToNumber)
+  else
+    EndIndex := Elements.Count;
+
+  // Handle negative end index
+  if EndIndex < 0 then
+    EndIndex := Elements.Count + EndIndex;
+
+  // Clamp end index to valid range
+  if EndIndex < 0 then
+    EndIndex := 0
+  else if EndIndex > Elements.Count then
+    EndIndex := Elements.Count;
+
+  // Copy elements from start to end (exclusive)
+  for I := StartIndex to EndIndex - 1 do
+  begin
+    if (I >= 0) and (I < Elements.Count) then
+    begin
+      // Preserve holes (nil) when slicing
+      if Elements[I] = nil then
+        ResultArray.Elements.Add(nil)
+      else
+        ResultArray.Elements.Add(Elements[I]);
+    end;
+  end;
+
+  Result := ResultArray;
 end;
 
 function TGocciaArrayValue.ArrayToReversed(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
