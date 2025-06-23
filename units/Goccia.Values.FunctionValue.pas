@@ -124,6 +124,9 @@ begin
     // Set up the call scope
     CallScope.ThisValue := ThisValue;
 
+    // Also define 'this' as a lexical binding to fix "Undefined variable: this" errors
+    CallScope.DefineBuiltin('this', ThisValue);
+
     // If this is a method with a superclass, set up super handling
     if Self is TGocciaMethodValue then
     begin
