@@ -16,46 +16,47 @@ test("Object.getOwnPropertyDescriptor with value", () => {
 
 test("Object.getOwnPropertyDescriptor with getter and setter", () => {
   const obj = {};
+  let value = 42;
+  const getter = () => value;
+  const setter = (newValue) => {
+    value = newValue;
+  };
   Object.defineProperty(obj, "foo", {
-    get: () => 42,
-    set: (value) => {
-      obj.foo = value;
-    },
+    get: getter,
+    set: setter,
   });
-  expect(Object.getOwnPropertyDescriptor(obj, "foo")).toEqual({
-    get: () => 42,
-    set: (value) => {
-      obj.foo = value;
-    },
-    enumerable: true,
-    configurable: true,
-  });
+  const desc = Object.getOwnPropertyDescriptor(obj, "foo");
+  expect(desc.get).toBe(getter);
+  expect(desc.set).toBe(setter);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(false);
 });
 
 test("Object.getOwnPropertyDescriptor with getter only", () => {
   const obj = {};
+  const getter = () => 42;
   Object.defineProperty(obj, "foo", {
-    get: () => 42,
+    get: getter,
   });
-  expect(Object.getOwnPropertyDescriptor(obj, "foo")).toEqual({
-    get: () => 42,
-    enumerable: true,
-    configurable: true,
-  });
+  const desc = Object.getOwnPropertyDescriptor(obj, "foo");
+  expect(desc.get).toBe(getter);
+  expect(desc.set).toBeUndefined();
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(false);
 });
 
 test("Object.getOwnPropertyDescriptor with setter only", () => {
   const obj = {};
+  let value = 42;
+  const setter = (newValue) => {
+    value = newValue;
+  };
   Object.defineProperty(obj, "foo", {
-    set: (value) => {
-      obj.foo = value;
-    },
+    set: setter,
   });
-  expect(Object.getOwnPropertyDescriptor(obj, "foo")).toEqual({
-    set: (value) => {
-      obj.foo = value;
-    },
-    enumerable: true,
-    configurable: true,
-  });
+  const desc = Object.getOwnPropertyDescriptor(obj, "foo");
+  expect(desc.get).toBeUndefined();
+  expect(desc.set).toBe(setter);
+  expect(desc.enumerable).toBe(false);
+  expect(desc.configurable).toBe(false);
 });

@@ -1,11 +1,12 @@
 test("Object.defineProperties with single property", () => {
   const obj = {};
+  let barValue = 42;
   Object.defineProperties(obj, {
     foo: { value: 42, writable: true, enumerable: true, configurable: true },
     bar: {
-      get: () => 42,
+      get: () => barValue,
       set: (value) => {
-        obj.bar = value;
+        barValue = value;
       },
       enumerable: true,
       configurable: true,
@@ -18,12 +19,13 @@ test("Object.defineProperties with single property", () => {
 
 test("Object.defineProperties with multiple properties", () => {
   const obj = {};
+  let barValue = 42;
   Object.defineProperties(obj, {
     foo: { value: 42, writable: true, enumerable: true, configurable: true },
     bar: {
-      get: () => 42,
+      get: () => barValue,
       set: (value) => {
-        obj.bar = value;
+        barValue = value;
       },
       enumerable: true,
       configurable: true,

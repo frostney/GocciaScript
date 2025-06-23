@@ -28,7 +28,7 @@ type
 implementation
 
 uses
-  Goccia.Values.ArrayValue, Goccia.Values.StringValue, Goccia.Values.NullValue, Goccia.Values.BooleanValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Evaluator.Comparison;
+  Goccia.Values.ArrayValue, Goccia.Values.StringValue, Goccia.Values.NullValue, Goccia.Values.BooleanValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
@@ -236,15 +236,25 @@ begin
     DescriptorObj := TGocciaObjectValue.Create;
     DescriptorObj.AssignProperty('enumerable', TGocciaBooleanValue.Create(Descriptor.Enumerable));
     DescriptorObj.AssignProperty('configurable', TGocciaBooleanValue.Create(Descriptor.Configurable));
-    DescriptorObj.AssignProperty('writable', TGocciaBooleanValue.Create(Descriptor.Writable));
+
     if Descriptor is TGocciaPropertyDescriptorData then
     begin
+      // Data descriptor: has value and writable properties
       DescriptorObj.AssignProperty('value', TGocciaPropertyDescriptorData(Descriptor).Value);
-    end;
-    if Descriptor is TGocciaPropertyDescriptorAccessor then
+      DescriptorObj.AssignProperty('writable', TGocciaBooleanValue.Create(Descriptor.Writable));
+    end
+    else if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      DescriptorObj.AssignProperty('get', TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
-      DescriptorObj.AssignProperty('set', TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
+      // Accessor descriptor: has get and set properties
+      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
+        DescriptorObj.AssignProperty('get', TGocciaPropertyDescriptorAccessor(Descriptor).Getter)
+      else
+        DescriptorObj.AssignProperty('get', TGocciaUndefinedValue.Create);
+
+      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
+        DescriptorObj.AssignProperty('set', TGocciaPropertyDescriptorAccessor(Descriptor).Setter)
+      else
+        DescriptorObj.AssignProperty('set', TGocciaUndefinedValue.Create);
     end;
 
     Result := DescriptorObj;
@@ -296,9 +306,25 @@ begin
   if DescriptorObject.HasProperty('value') then
     Value := DescriptorObject.GetProperty('value');
   if DescriptorObject.HasProperty('get') then
+  begin
     Getter := DescriptorObject.GetProperty('get');
+    // Validate getter: must be a function or undefined
+    if not (Getter is TGocciaUndefinedValue) and not (Getter is TGocciaFunctionValue) and not (Getter is TGocciaNativeFunctionValue) then
+      ThrowError('Object.defineProperty: getter must be a function or undefined', 0, 0);
+    // Treat undefined as nil
+    if Getter is TGocciaUndefinedValue then
+      Getter := nil;
+  end;
   if DescriptorObject.HasProperty('set') then
+  begin
     Setter := DescriptorObject.GetProperty('set');
+    // Validate setter: must be a function or undefined
+    if not (Setter is TGocciaUndefinedValue) and not (Setter is TGocciaFunctionValue) and not (Setter is TGocciaNativeFunctionValue) then
+      ThrowError('Object.defineProperty: setter must be a function or undefined', 0, 0);
+    // Treat undefined as nil
+    if Setter is TGocciaUndefinedValue then
+      Setter := nil;
+  end;
 
   PropertyFlags := [];
   if Enumerable then

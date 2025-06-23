@@ -191,8 +191,9 @@ begin
         end;
       end;
       // Accessor descriptor without setter - property is not writable
-      // In strict mode, this would throw TypeError; in non-strict mode, silently fail
-      Exit;
+      // In strict mode (which GocciaScript always is), throw TypeError
+      ErrorValue := TGocciaStringValue.Create('Cannot set property ''' + AName + ''' which has only a getter');
+      raise TGocciaThrowValue.Create(ErrorValue);
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
     begin
