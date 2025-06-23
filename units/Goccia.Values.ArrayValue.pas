@@ -714,7 +714,7 @@ end;
 function TGocciaArrayValue.ToNumber: Double;
 begin
   if FElements.Count = 0 then
-    Result := NaN
+    Result := 0.0/0.0  // Safe calculated NaN
   else
     Result := FElements[0].ToNumber;
 end;
@@ -739,7 +739,7 @@ begin
     if FElements[I] = nil then
       Continue;
 
-    if IsStrictEqual(FElements[I], AValue) then
+    if IsSameValue(FElements[I], AValue) then
     begin
       Result := True;
       Exit;

@@ -20,7 +20,8 @@ uses
   Goccia.Error,
   Generics.Collections,
   Math,
-  Classes;
+  Classes,
+  SysUtils;
 
 type
   TGocciaTestAssertions = class;
@@ -49,9 +50,6 @@ type
     FActualValue: TGocciaValue;
     FIsNegated: Boolean;
     FTestAssertions: TGocciaTestAssertions; // Reference to parent
-
-    // Helper function for deep equality checking
-    function IsDeepEqual(const Actual, Expected: TGocciaValue): Boolean;
   public
     constructor Create(ActualValue: TGocciaValue; TestAssertions: TGocciaTestAssertions; IsNegated: Boolean = False);
 
@@ -72,6 +70,7 @@ type
     function ToHaveLength(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToHaveProperty(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ToThrow(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ToBeCloseTo(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 
     // Negation support
     function GetNot(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -129,7 +128,8 @@ type
 implementation
 
 uses
-  SysUtils, Goccia.Values.ClassValue, Goccia.Evaluator, Goccia.Evaluator.Comparison, Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.ClassValue, Goccia.Evaluator, Goccia.Evaluator.Comparison,
+  Goccia.Values.ObjectPropertyDescriptor;
 
 { TTestSuite }
 
@@ -193,6 +193,8 @@ begin
     TGocciaNativeFunctionValue.Create(ToHaveProperty, 'toHaveProperty', 2), [pfConfigurable, pfWritable]));
   DefineProperty('toThrow', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToThrow, 'toThrow', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toBeCloseTo', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBeCloseTo, 'toBeCloseTo', 2), [pfConfigurable, pfWritable]));
 
   // Negation property - use accessor to make it a getter
   DefineProperty('not', TGocciaPropertyDescriptorAccessor.Create(
@@ -211,7 +213,7 @@ begin
   end;
 
   Expected := Args[0];
-  IsEqual := IsStrictEqual(FActualValue, Expected);
+  IsEqual := IsSameValue(FActualValue, Expected);
 
   if FIsNegated then
     IsEqual := not IsEqual;
@@ -267,101 +269,6 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.IsDeepEqual(const Actual, Expected: TGocciaValue): Boolean;
-var
-  ActualObj, ExpectedObj: TGocciaObjectValue;
-  ActualArr, ExpectedArr: TGocciaArrayValue;
-  ActualKeys, ExpectedKeys: TArray<string>;
-  I: Integer;
-  Key: string;
-begin
-  // Base case: strict equality (handles primitives and same object references)
-  if IsStrictEqual(Actual, Expected) then
-  begin
-    Result := True;
-    Exit;
-  end;
-
-  // Type mismatch
-  if Actual.TypeName <> Expected.TypeName then
-  begin
-    Result := False;
-    Exit;
-  end;
-
-  // Handle arrays
-  if (Actual is TGocciaArrayValue) and (Expected is TGocciaArrayValue) then
-  begin
-    ActualArr := TGocciaArrayValue(Actual);
-    ExpectedArr := TGocciaArrayValue(Expected);
-
-    // Check lengths
-    if ActualArr.Elements.Count <> ExpectedArr.Elements.Count then
-    begin
-      Result := False;
-      Exit;
-    end;
-
-    // Recursively compare elements
-    for I := 0 to ActualArr.Elements.Count - 1 do
-    begin
-      if not IsDeepEqual(ActualArr.Elements[I], ExpectedArr.Elements[I]) then
-      begin
-        Result := False;
-        Exit;
-      end;
-    end;
-
-    Result := True;
-    Exit;
-  end;
-
-  // Handle objects (but not arrays which inherit from TGocciaObjectValue)
-  if (Actual is TGocciaObjectValue) and (Expected is TGocciaObjectValue) and
-     not (Actual is TGocciaArrayValue) and not (Expected is TGocciaArrayValue) then
-  begin
-    ActualObj := TGocciaObjectValue(Actual);
-    ExpectedObj := TGocciaObjectValue(Expected);
-
-    // Get enumerable property names from both objects
-    ActualKeys := ActualObj.GetEnumerablePropertyNames;
-    ExpectedKeys := ExpectedObj.GetEnumerablePropertyNames;
-
-    // Check if they have the same number of properties
-    if Length(ActualKeys) <> Length(ExpectedKeys) then
-    begin
-      Result := False;
-      Exit;
-    end;
-
-    // Check if all keys exist in both objects and values are deeply equal
-    for I := 0 to High(ActualKeys) do
-    begin
-      Key := ActualKeys[I];
-
-      // Check if expected object has this key
-      if not ExpectedObj.HasOwnProperty(Key) then
-      begin
-        Result := False;
-        Exit;
-      end;
-
-      // Recursively compare property values
-      if not IsDeepEqual(ActualObj.GetProperty(Key), ExpectedObj.GetProperty(Key)) then
-      begin
-        Result := False;
-        Exit;
-      end;
-    end;
-
-    Result := True;
-    Exit;
-  end;
-
-  // For other types (functions, etc.), fall back to strict equality
-  Result := False;
-end;
-
 function TGocciaExpectationValue.ToBeNull(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   IsNull: Boolean;
@@ -392,7 +299,11 @@ function TGocciaExpectationValue.ToBeNaN(Args: TObjectList<TGocciaValue>; ThisVa
 var
   IsNaNValue: Boolean;
 begin
-  IsNaNValue := Math.IsNaN(FActualValue.ToNumber);
+  // Use our safe NumberValue.IsNaN method instead of Math.IsNaN on ToNumber
+  if FActualValue is TGocciaNumberValue then
+    IsNaNValue := TGocciaNumberValue(FActualValue).IsNaN
+  else
+    IsNaNValue := Math.IsNaN(FActualValue.ToNumber);
 
   if FIsNegated then
     IsNaNValue := not IsNaNValue;
@@ -882,6 +793,79 @@ begin
 
   TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
     'Expected ' + FActualValue.ToString + ' to throw an exception');
+end;
+
+function TGocciaExpectationValue.ToBeCloseTo(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Expected: TGocciaValue;
+  Precision: Integer;
+  ActualNum, ExpectedNum, Diff, Tolerance: Double;
+  IsClose, ActualIsNaN, ExpectedIsNaN: Boolean;
+begin
+  if Args.Count < 1 then
+  begin
+    FTestAssertions.ThrowError('toBeCloseTo expects at least 1 argument', 0, 0);
+    Exit;
+  end;
+
+  Expected := Args[0];
+
+  // Default precision to 2 decimal places if not specified
+  if Args.Count >= 2 then
+    Precision := Trunc(Args[1].ToNumber)
+  else
+    Precision := 2;
+
+  // Handle special cases for NaN, Infinity using safe NaN checking
+  // Check for NaN safely
+  ActualIsNaN := (FActualValue is TGocciaNumberValue) and TGocciaNumberValue(FActualValue).IsNaN;
+  ExpectedIsNaN := (Expected is TGocciaNumberValue) and TGocciaNumberValue(Expected).IsNaN;
+
+  if ActualIsNaN and ExpectedIsNaN then
+    IsClose := True  // Both NaN should be considered close
+  else if ActualIsNaN or ExpectedIsNaN then
+    IsClose := False  // One is NaN, other is not
+  else
+  begin
+    ActualNum := FActualValue.ToNumber;
+    ExpectedNum := Expected.ToNumber;
+
+    // Both Infinity with same sign should be considered close
+    if Math.IsInfinite(ActualNum) and Math.IsInfinite(ExpectedNum) and
+            (Math.Sign(ActualNum) = Math.Sign(ExpectedNum)) then
+      IsClose := True
+    // One is infinity, other is not
+    else if Math.IsInfinite(ActualNum) or Math.IsInfinite(ExpectedNum) then
+      IsClose := False
+    else
+    begin
+      // Calculate tolerance based on precision (0.5 * 10^(-precision))
+      Tolerance := 0.5 * Power(10, -Precision);
+      Diff := Abs(ActualNum - ExpectedNum);
+      IsClose := Diff < Tolerance;
+    end;
+  end;
+
+  if FIsNegated then
+    IsClose := not IsClose;
+
+  if IsClose then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeCloseTo');
+    Result := TGocciaUndefinedValue.Create;
+  end
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeCloseTo',
+        Format('Expected %s not to be close to %s (precision: %d)',
+               [FActualValue.ToString, Expected.ToString, Precision]))
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeCloseTo',
+        Format('Expected %s to be close to %s (precision: %d)',
+               [FActualValue.ToString, Expected.ToString, Precision]));
+    Result := TGocciaUndefinedValue.Create;
+  end;
 end;
 
 function TGocciaExpectationValue.GetNot(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;

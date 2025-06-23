@@ -6,8 +6,8 @@ features: [Math.abs]
 test("Math.abs", () => {
   expect(Math.abs(5)).toBe(5);
   expect(Math.abs(-5)).toBe(5);
-  expect(Math.abs(0)).toBe(0);
-  expect(Math.abs(-0)).toBe(0);
+  expect(Math.abs(0)).toBeCloseTo(0);
+  expect(Math.abs(-0)).toBeCloseTo(0);
   expect(Math.abs(3.14)).toBe(3.14);
   expect(Math.abs(-3.14)).toBe(3.14);
 

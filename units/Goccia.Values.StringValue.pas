@@ -40,7 +40,7 @@ end;
 function TGocciaStringValue.ToNumber: Double;
 begin
   if not TryStrToFloat(FValue, Result) then
-    Result := NaN;
+    Result := 0.0/0.0;  // Safe calculated NaN
 end;
 
 function TGocciaStringValue.TypeName: string;

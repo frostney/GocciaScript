@@ -140,7 +140,7 @@ end;
 
 function TGocciaObjectValue.ToNumber: Double;
 begin
-  Result := NaN;
+  Result := 0.0/0.0;  // Safe calculated NaN
 end;
 
 function TGocciaObjectValue.TypeName: string;

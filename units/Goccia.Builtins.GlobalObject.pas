@@ -11,6 +11,7 @@ type
   TGocciaGlobalObject = class(TGocciaBuiltin)
   protected
     // Native methods
+    function ObjectIs(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectKeys(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectValues(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectEntries(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -27,13 +28,14 @@ type
 implementation
 
 uses
-  Goccia.Values.ArrayValue, Goccia.Values.StringValue, Goccia.Values.NullValue, Goccia.Values.BooleanValue, Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.ArrayValue, Goccia.Values.StringValue, Goccia.Values.NullValue, Goccia.Values.BooleanValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Evaluator.Comparison;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
   inherited Create(AName, AScope, AThrowError);
 
   // Global Object methods: writable, non-enumerable, configurable
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectIs, 'is', 2));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1));
@@ -46,6 +48,20 @@ begin
 
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
+
+function TGocciaGlobalObject.ObjectIs(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Left, Right: TGocciaValue;
+begin
+  if Args.Count <> 2 then
+    ThrowError('Object.is expects exactly 2 arguments', 0, 0);
+
+  Left := Args[0];
+  Right := Args[1];
+
+  Result := TGocciaBooleanValue.Create(IsSameValue(Left, Right));
+end;
+
 
 function TGocciaGlobalObject.ObjectKeys(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var

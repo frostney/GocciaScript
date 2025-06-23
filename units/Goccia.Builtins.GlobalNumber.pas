@@ -54,14 +54,14 @@ var
 begin
   if Args.Count = 0 then
   begin
-    Result := TGocciaNumberValue.Create(NaN);
+    Result := TGocciaNumberValue.CreateNaN;
     Exit;
   end;
 
   InputStr := Trim(Args[0].ToString);
   if InputStr = '' then
   begin
-    Result := TGocciaNumberValue.Create(NaN);
+    Result := TGocciaNumberValue.CreateNaN;
     Exit;
   end;
 
@@ -107,7 +107,7 @@ begin
   // Check for invalid radix
   if (Radix < 2) or (Radix > 36) then
   begin
-    Result := TGocciaNumberValue.Create(NaN);
+    Result := TGocciaNumberValue.CreateNaN;
     Exit;
   end;
 
@@ -133,7 +133,7 @@ begin
   // If no digits were parsed, return NaN
   if I = StartPos then // No digits parsed
   begin
-    Result := TGocciaNumberValue.Create(NaN);
+    Result := TGocciaNumberValue.CreateNaN;
     Exit;
   end;
 
@@ -152,14 +152,14 @@ var
 begin
   if Args.Count = 0 then
   begin
-    Result := TGocciaNumberValue.Create(NaN);
+    Result := TGocciaNumberValue.CreateNaN;
     Exit;
   end;
 
   InputStr := Trim(Args[0].ToString);
   if InputStr = '' then
   begin
-    Result := TGocciaNumberValue.Create(NaN);
+    Result := TGocciaNumberValue.CreateNaN;
     Exit;
   end;
 
@@ -221,7 +221,7 @@ begin
   // If no digits were parsed, return NaN
   if not HasDigits then
   begin
-    Result := TGocciaNumberValue.Create(NaN);
+    Result := TGocciaNumberValue.CreateNaN;
     Exit;
   end;
 

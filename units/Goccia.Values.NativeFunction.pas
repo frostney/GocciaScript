@@ -52,7 +52,7 @@ end;
 
 function TGocciaNativeFunctionValue.ToNumber: Double;
 begin
-  Result := NaN;
+  Result := 0.0/0.0;  // Safe calculated NaN
 end;
 
 function TGocciaNativeFunctionValue.TypeName: string;

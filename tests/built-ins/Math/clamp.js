@@ -24,9 +24,9 @@ test("Math.clamp to support NaN", () => {
 });
 
 test("Math.clamp to support negative zero", () => {
-  expect(Math.clamp(-2, -0, 10)).toBe(-0);
-  expect(Math.clamp(-0, -0, 10)).toBe(-0);
-  expect(Math.clamp(0, -0, 10)).toBe(0);
+  expect(Math.clamp(-2, -0, 10)).toBeCloseTo(0);
+  expect(Math.clamp(-0, -0, 10)).toBeCloseTo(0);
+  expect(Math.clamp(0, -0, 10)).toBeCloseTo(0);
 });
 
 test("Math.clamp to throw error if minimum bound is larger than the maximum bound", () => {

@@ -11,6 +11,11 @@ uses
 function IsStrictEqual(Left, Right: TGocciaValue): Boolean;
 function IsNotStrictEqual(Left, Right: TGocciaValue): Boolean; inline;
 
+function IsSameValue(Left, Right: TGocciaValue): Boolean;
+function IsSameValueZero(Left, Right: TGocciaValue): Boolean;
+
+function IsDeepEqual(const Actual, Expected: TGocciaValue): Boolean;
+
 function GreaterThan(Left, Right: TGocciaValue): Boolean;
 function GreaterThanOrEqual(Left, Right: TGocciaValue): Boolean; inline;
 function LessThan(Left, Right: TGocciaValue): Boolean;
@@ -18,15 +23,45 @@ function LessThanOrEqual(Left, Right: TGocciaValue): Boolean; inline;
 
 implementation
 
+uses Goccia.Values.ArrayValue, Goccia.Values.ObjectValue;
+
+// Helper function to check if a float is negative zero
+function IsNegativeZero(Value: Double): Boolean;
+type
+  TDoubleRec = record
+    case Integer of
+      0: (Float: Double);
+      1: (Hi, Lo: Cardinal);
+  end;
+var
+  DoubleRec: TDoubleRec;
+begin
+  DoubleRec.Float := Value;
+  // Check if value is zero and sign bit is set (bit 63 in IEEE 754)
+  Result := (Value = 0.0) and ((DoubleRec.Hi and $80000000) <> 0);
+end;
+
 function IsStrictEqual(Left, Right: TGocciaValue): Boolean;
 begin
   if (Left is TGocciaUndefinedValue) and (Right is TGocciaUndefinedValue) then
-    Result := True
-  else if (Left is TGocciaNullValue) and (Right is TGocciaNullValue) then
-    Result := True
-  else if (Left is TGocciaBooleanValue) and (Right is TGocciaBooleanValue) then
-    Result := TGocciaBooleanValue(Left).ToBoolean = TGocciaBooleanValue(Right).ToBoolean
-  else if (Left is TGocciaNumberValue) and (Right is TGocciaNumberValue) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if (Left is TGocciaNullValue) and (Right is TGocciaNullValue) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if (Left is TGocciaBooleanValue) and (Right is TGocciaBooleanValue) then
+  begin
+    Result := TGocciaBooleanValue(Left).ToBoolean = TGocciaBooleanValue(Right).ToBoolean;
+    Exit;
+  end;
+
+  if (Left is TGocciaNumberValue) and (Right is TGocciaNumberValue) then
   begin
     if IsNaN(TGocciaNumberValue(Left).ToNumber) or IsNaN(TGocciaNumberValue(Right).ToNumber) then
     begin
@@ -48,15 +83,200 @@ begin
 
     Result := TGocciaNumberValue(Left).ToNumber = TGocciaNumberValue(Right).ToNumber;
     Exit;
-  end else if (Left is TGocciaStringValue) and (Right is TGocciaStringValue) then
-    Result := TGocciaStringValue(Left).ToString = TGocciaStringValue(Right).ToString
-  else
-    Result := Left = Right; // Reference equality for objects
+  end;
+
+  if (Left is TGocciaStringValue) and (Right is TGocciaStringValue) then
+  begin
+    Result := TGocciaStringValue(Left).ToString = TGocciaStringValue(Right).ToString;
+    Exit;
+  end;
+
+  Result := Left = Right; // Reference equality for objects
 end;
 
 function IsNotStrictEqual(Left, Right: TGocciaValue): Boolean;
 begin
   Result := not IsStrictEqual(Left, Right);
+end;
+
+function IsSameValue(Left, Right: TGocciaValue): Boolean;
+begin
+  // Handle undefined values
+  if (Left is TGocciaUndefinedValue) and (Right is TGocciaUndefinedValue) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  // Handle null values
+  if (Left is TGocciaNullValue) and (Right is TGocciaNullValue) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  // Handle boolean values
+  if (Left is TGocciaBooleanValue) and (Right is TGocciaBooleanValue) then
+  begin
+    Result := TGocciaBooleanValue(Left).ToBoolean = TGocciaBooleanValue(Right).ToBoolean;
+    Exit;
+  end;
+
+  // Handle number values
+  if (Left is TGocciaNumberValue) and (Right is TGocciaNumberValue) then
+  begin
+    // Both NaN values are considered equal
+    if IsNaN(TGocciaNumberValue(Left).ToNumber) and IsNaN(TGocciaNumberValue(Right).ToNumber) then
+    begin
+      Result := True;
+      Exit;
+    end;
+
+    // Handle +0 and -0 (they are different in Object.is)
+    if (TGocciaNumberValue(Left).ToNumber = 0) and (TGocciaNumberValue(Right).ToNumber = 0) then
+    begin
+      // Use proper IEEE 754 signed zero detection
+      Result := IsNegativeZero(TGocciaNumberValue(Left).ToNumber) = IsNegativeZero(TGocciaNumberValue(Right).ToNumber);
+      Exit;
+    end;
+
+    // Regular number comparison
+    Result := TGocciaNumberValue(Left).ToNumber = TGocciaNumberValue(Right).ToNumber;
+    Exit;
+  end;
+
+  // Handle string values
+  if (Left is TGocciaStringValue) and (Right is TGocciaStringValue) then
+  begin
+    Result := TGocciaStringValue(Left).ToString = TGocciaStringValue(Right).ToString;
+    Exit;
+  end;
+
+  // For all other types, use reference equality
+  Result := Left = Right;
+end;
+
+function IsSameValueZero(Left, Right: TGocciaValue): Boolean;
+var
+  LeftNum, RightNum: Double;
+begin
+  // Use SameValue for most cases
+  if IsSameValue(Left, Right) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  // Handle +0 and -0 specifically
+  if (Left is TGocciaNumberValue) and (Right is TGocciaNumberValue) then
+  begin
+    LeftNum := TGocciaNumberValue(Left).ToNumber;
+    RightNum := TGocciaNumberValue(Right).ToNumber;
+
+    // Both are zero (either +0 or -0)
+    if (LeftNum = 0) and (RightNum = 0) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+
+  Result := False;
+end;
+
+function IsDeepEqual(const Actual, Expected: TGocciaValue): Boolean;
+var
+  ActualObj, ExpectedObj: TGocciaObjectValue;
+  ActualArr, ExpectedArr: TGocciaArrayValue;
+  ActualKeys, ExpectedKeys: TArray<string>;
+  I: Integer;
+  Key: string;
+begin
+  // Base case: strict equality (handles primitives and same object references)
+  if IsStrictEqual(Actual, Expected) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  // Type mismatch
+  if Actual.TypeName <> Expected.TypeName then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  // Handle arrays
+  if (Actual is TGocciaArrayValue) and (Expected is TGocciaArrayValue) then
+  begin
+    ActualArr := TGocciaArrayValue(Actual);
+    ExpectedArr := TGocciaArrayValue(Expected);
+
+    // Check lengths
+    if ActualArr.Elements.Count <> ExpectedArr.Elements.Count then
+    begin
+      Result := False;
+      Exit;
+    end;
+
+    // Recursively compare elements
+    for I := 0 to ActualArr.Elements.Count - 1 do
+    begin
+      if not IsDeepEqual(ActualArr.Elements[I], ExpectedArr.Elements[I]) then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
+
+    Result := True;
+    Exit;
+  end;
+
+  // Handle objects (but not arrays which inherit from TGocciaObjectValue)
+  if (Actual is TGocciaObjectValue) and (Expected is TGocciaObjectValue) and
+     not (Actual is TGocciaArrayValue) and not (Expected is TGocciaArrayValue) then
+  begin
+    ActualObj := TGocciaObjectValue(Actual);
+    ExpectedObj := TGocciaObjectValue(Expected);
+
+    // Get enumerable property names from both objects
+    ActualKeys := ActualObj.GetEnumerablePropertyNames;
+    ExpectedKeys := ExpectedObj.GetEnumerablePropertyNames;
+
+    // Check if they have the same number of properties
+    if Length(ActualKeys) <> Length(ExpectedKeys) then
+    begin
+      Result := False;
+      Exit;
+    end;
+
+    // Check if all keys exist in both objects and values are deeply equal
+    for I := 0 to High(ActualKeys) do
+    begin
+      Key := ActualKeys[I];
+
+      // Check if expected object has this key
+      if not ExpectedObj.HasOwnProperty(Key) then
+      begin
+        Result := False;
+        Exit;
+      end;
+
+      // Recursively compare property values
+      if not IsDeepEqual(ActualObj.GetProperty(Key), ExpectedObj.GetProperty(Key)) then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
+
+    Result := True;
+    Exit;
+  end;
+
+  // For other types (functions, etc.), fall back to strict equality
+  Result := False;
 end;
 
 function GreaterThan(Left, Right: TGocciaValue): Boolean;
