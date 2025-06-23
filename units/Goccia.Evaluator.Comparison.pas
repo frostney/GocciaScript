@@ -59,13 +59,17 @@ begin
       Exit;
     end;
 
-    if IsInfinite(TGocciaNumberValue(Left).ToNumber) and IsInfinite(TGocciaNumberValue(Right).ToNumber) then
+    if (TGocciaNumberValue(Left).IsInfinity or TGocciaNumberValue(Left).IsNegativeInfinity) and
+       (TGocciaNumberValue(Right).IsInfinity or TGocciaNumberValue(Right).IsNegativeInfinity) then
     begin
-      Result := Sign(TGocciaNumberValue(Left).ToNumber) = Sign(TGocciaNumberValue(Right).ToNumber);
+      // Both are infinity: check if same sign
+      Result := (TGocciaNumberValue(Left).IsInfinity and TGocciaNumberValue(Right).IsInfinity) or
+                (TGocciaNumberValue(Left).IsNegativeInfinity and TGocciaNumberValue(Right).IsNegativeInfinity);
       Exit;
     end;
 
-    if IsInfinite(TGocciaNumberValue(Left).ToNumber) or IsInfinite(TGocciaNumberValue(Right).ToNumber) then
+    if (TGocciaNumberValue(Left).IsInfinity or TGocciaNumberValue(Left).IsNegativeInfinity) or
+       (TGocciaNumberValue(Right).IsInfinity or TGocciaNumberValue(Right).IsNegativeInfinity) then
     begin
       Result := False;
       Exit;
@@ -219,6 +223,16 @@ begin
     // Recursively compare elements
     for I := 0 to ActualArr.Elements.Count - 1 do
     begin
+      // Handle nil elements (holes in arrays)
+      if (ActualArr.Elements[I] = nil) and (ExpectedArr.Elements[I] = nil) then
+        Continue; // Both are holes, they're equal
+
+      if (ActualArr.Elements[I] = nil) or (ExpectedArr.Elements[I] = nil) then
+      begin
+        Result := False; // One is hole, other isn't
+        Exit;
+      end;
+
       if not IsDeepEqual(ActualArr.Elements[I], ExpectedArr.Elements[I]) then
       begin
         Result := False;

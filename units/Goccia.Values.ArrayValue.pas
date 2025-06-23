@@ -49,7 +49,7 @@ type
     function ToBoolean: Boolean; override;
     function ToNumber: Double; override;
     function TypeName: string; override;
-    function GetProperty(const AName: string): TGocciaValue;
+    function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
     function Includes(const AValue: TGocciaValue; FromIndex: Integer = 0): Boolean;
     property Elements: TObjectList<TGocciaValue> read FElements;
@@ -691,19 +691,19 @@ function TGocciaArrayValue.ToString: string;
 var
   I: Integer;
 begin
-  Result := '[';
+  // ECMAScript compliant: Array.toString() behaves like Array.join() with comma separator
+  Result := '';
   for I := 0 to FElements.Count - 1 do
   begin
     if I > 0 then
-      Result := Result + ', ';
+      Result := Result + ',';
 
-    // For holes (nil), show as empty
+    // For holes (nil), show as empty (consistent with join behavior)
     if FElements[I] = nil then
       Result := Result + ''
     else
       Result := Result + FElements[I].ToString;
   end;
-  Result := Result + ']';
 end;
 
 function TGocciaArrayValue.ToBoolean: Boolean;

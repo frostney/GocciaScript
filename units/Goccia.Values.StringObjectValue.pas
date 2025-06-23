@@ -30,7 +30,7 @@ type
     destructor Destroy; override;
     function ToString: string; override;
     function TypeName: string; override;
-    function GetProperty(const AName: string): TGocciaValue;
+    function GetProperty(const AName: string): TGocciaValue; override;
 
     procedure InitializePrototype;
     property StringPrototype: TGocciaObjectValue read FStringPrototype write FStringPrototype;
@@ -219,6 +219,8 @@ function TGocciaStringObjectValue.StringCharAt(Args: TObjectList<TGocciaValue>; 
 var
   StringValue: string;
   Index: Integer;
+  NumberValue: Double;
+  TempNumberValue: TGocciaNumberValue;
 begin
   // Get the string value
   if ThisValue is TGocciaStringValue then
@@ -231,9 +233,33 @@ begin
     StringValue := Self.PrimitiveValue.ToString;
   end;
 
-  // Get the index argument
+  // Get the index argument with safe conversion
   if Args.Count > 0 then
-    Index := Trunc(Args[0].ToNumber)
+  begin
+    try
+      // Handle special values according to ECMAScript spec:
+      // - NaN converts to 0
+      // - Infinity/-Infinity are treated as out-of-bounds (use very large number)
+      if (Args[0] is TGocciaNumberValue) and TGocciaNumberValue(Args[0]).IsNaN then
+        Index := 0
+      else
+      begin
+        NumberValue := Args[0].ToNumber;
+        // Check for infinity using TGocciaNumberValue properties
+        TempNumberValue := TGocciaNumberValue.Create(NumberValue);
+        try
+          if TempNumberValue.IsInfinity or TempNumberValue.IsNegativeInfinity then
+            Index := MaxInt // Force out-of-bounds
+          else
+            Index := Trunc(NumberValue);
+        finally
+          TempNumberValue.Free;
+        end;
+      end;
+    except
+      Index := 0; // Default to 0 if conversion fails
+    end;
+  end
   else
     Index := 0;
 
@@ -248,6 +274,8 @@ function TGocciaStringObjectValue.StringCharCodeAt(Args: TObjectList<TGocciaValu
 var
   StringValue: string;
   Index: Integer;
+  NumberValue: Double;
+  TempNumberValue: TGocciaNumberValue;
 begin
   // Get the string value
   if ThisValue is TGocciaStringValue then
@@ -260,9 +288,33 @@ begin
     StringValue := Self.PrimitiveValue.ToString;
   end;
 
-  // Get the index argument
+  // Get the index argument with safe conversion
   if Args.Count > 0 then
-    Index := Trunc(Args[0].ToNumber)
+  begin
+    try
+      // Handle special values according to ECMAScript spec:
+      // - NaN converts to 0
+      // - Infinity/-Infinity are treated as out-of-bounds (use very large number)
+      if (Args[0] is TGocciaNumberValue) and TGocciaNumberValue(Args[0]).IsNaN then
+        Index := 0
+      else
+      begin
+        NumberValue := Args[0].ToNumber;
+        // Check for infinity using TGocciaNumberValue properties
+        TempNumberValue := TGocciaNumberValue.Create(NumberValue);
+        try
+          if TempNumberValue.IsInfinity or TempNumberValue.IsNegativeInfinity then
+            Index := MaxInt // Force out-of-bounds
+          else
+            Index := Trunc(NumberValue);
+        finally
+          TempNumberValue.Free;
+        end;
+      end;
+    except
+      Index := 0; // Default to 0 if conversion fails
+    end;
+  end
   else
     Index := 0;
 
@@ -668,10 +720,13 @@ end;
 function TGocciaStringObjectValue.StringSplit(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, Separator: string;
-  SplitArray: TObjectList<TGocciaValue>;
   ResultArray: TGocciaArrayValue;
-  SplitSegments: array of string;
   I: Integer;
+  RemainingString: string;
+  SeparatorPos: Integer;
+  Segment: string;
+  Limit: Integer;
+  HasLimit: Boolean;
 begin
   // Get the string value
   if ThisValue is TGocciaStringValue then
@@ -687,28 +742,90 @@ begin
   else
     Separator := 'undefined';
 
+  // Get limit parameter (ECMAScript requirement)
+  HasLimit := Args.Count > 1;
+  if HasLimit then
+  begin
+    Limit := Trunc(Args[1].ToNumber);
+    // If limit is 0, return empty array
+    if Limit = 0 then
+    begin
+      Result := TGocciaArrayValue.Create;
+      Exit;
+    end;
+    // Negative limits are treated as no limit
+    if Limit < 0 then
+      HasLimit := False;
+  end;
+
+  ResultArray := TGocciaArrayValue.Create;
+
   if StringValue = '' then
   begin
-    ResultArray := TGocciaArrayValue.Create;
-    ResultArray.SetProperty(IntToStr(0), TGocciaStringValue.Create(StringValue));
-    Result := ResultArray;
-    Exit;
+    if Separator = '' then
+    begin
+      // "".split("") should return []
+      Result := ResultArray;
+      Exit;
+    end
+    else
+    begin
+      // "".split("anything") should return [""]
+      ResultArray.Elements.Add(TGocciaStringValue.Create(''));
+      Result := ResultArray;
+      Exit;
+    end;
   end;
 
   if Separator = '' then
   begin
-    ResultArray := TGocciaArrayValue.Create;
+    // Split into individual characters
     for I := 1 to Length(StringValue) do
-      ResultArray.SetProperty(IntToStr(I - 1), TGocciaStringValue.Create(StringValue[I]));
+    begin
+      ResultArray.Elements.Add(TGocciaStringValue.Create(StringValue[I]));
+      // Check limit
+      if HasLimit and (ResultArray.Elements.Count >= Limit) then
+        Break;
+    end;
     Result := ResultArray;
     Exit;
   end;
 
-  // Split the string
-  SplitSegments := SplitString(StringValue, Separator);
-  ResultArray := TGocciaArrayValue.Create;
-  for I := 0 to High(SplitSegments) do
-    ResultArray.SetProperty(IntToStr(I), TGocciaStringValue.Create(SplitSegments[I]));
+  // Split the string using simple string replacement approach
+  if Pos(Separator, StringValue) = 0 then
+  begin
+    // Separator not found, return array with the original string
+    ResultArray.Elements.Add(TGocciaStringValue.Create(StringValue));
+  end
+  else
+  begin
+    // Manual split implementation using standard Pascal functions
+    RemainingString := StringValue;
+    while True do
+    begin
+      SeparatorPos := Pos(Separator, RemainingString);
+      if SeparatorPos = 0 then
+      begin
+        // No more separators, add the remaining string
+        ResultArray.Elements.Add(TGocciaStringValue.Create(RemainingString));
+        Break;
+      end
+      else
+      begin
+        // Found separator, add segment before it
+        Segment := Copy(RemainingString, 1, SeparatorPos - 1);
+        ResultArray.Elements.Add(TGocciaStringValue.Create(Segment));
+
+        // Check limit before continuing
+        if HasLimit and (ResultArray.Elements.Count >= Limit) then
+          Break;
+
+        // Remove processed part including separator
+        RemainingString := Copy(RemainingString, SeparatorPos + Length(Separator), Length(RemainingString));
+      end;
+    end;
+  end;
+
   Result := ResultArray;
 end;
 

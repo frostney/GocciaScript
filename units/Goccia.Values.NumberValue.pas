@@ -13,17 +13,24 @@ type
     FValue: Double;
     FIsNaN: Boolean;
     FIsNegativeZero: Boolean;
+    FIsInfinity: Boolean;
+    FIsNegativeInfinity: Boolean;
   public
     constructor Create(AValue: Double);
     class function CreateNaN: TGocciaNumberValue;
     class function CreateNegativeZero: TGocciaNumberValue;
+    class function CreateInfinity: TGocciaNumberValue;
+    class function CreateNegativeInfinity: TGocciaNumberValue;
     function ToString: string; override;
     function ToBoolean: Boolean; override;
     function ToNumber: Double; override;
     function TypeName: string; override;
-    function IsNaN: Boolean;
-    function IsNegativeZero: Boolean;
+
     property Value: Double read FValue;
+    property IsNegativeZero: Boolean read FIsNegativeZero;
+    property IsNaN: Boolean read FIsNaN;
+    property IsInfinity: Boolean read FIsInfinity;
+    property IsNegativeInfinity: Boolean read FIsNegativeInfinity;
   end;
 
 implementation
@@ -35,12 +42,24 @@ begin
   begin
     FIsNaN := True;
     FIsNegativeZero := False;
+    FIsInfinity := False;
+    FIsNegativeInfinity := False;
     FValue := 0.0; // Store a safe value instead of NaN
+  end
+  else if IsInfinite(AValue) then
+  begin
+    FIsNaN := False;
+    FIsNegativeZero := False;
+    FIsInfinity := AValue > 0;
+    FIsNegativeInfinity := AValue < 0;
+    FValue := 0.0; // Store a safe value instead of infinity
   end
   else
   begin
     FIsNaN := False;
     FIsNegativeZero := False;
+    FIsInfinity := False;
+    FIsNegativeInfinity := False;
     FValue := AValue;
   end;
 end;
@@ -57,10 +76,26 @@ begin
   Result.FIsNegativeZero := True;
 end;
 
+class function TGocciaNumberValue.CreateInfinity: TGocciaNumberValue;
+begin
+  Result := TGocciaNumberValue.Create(0.0);
+  Result.FIsInfinity := True;
+end;
+
+class function TGocciaNumberValue.CreateNegativeInfinity: TGocciaNumberValue;
+begin
+  Result := TGocciaNumberValue.Create(0.0);
+  Result.FIsNegativeInfinity := True;
+end;
+
 function TGocciaNumberValue.ToString: string;
 begin
   if FIsNaN then
     Result := 'NaN'
+  else if FIsInfinity then
+    Result := 'Infinity'
+  else if FIsNegativeInfinity then
+    Result := '-Infinity'
   else if (FValue = 0.0) then
   begin
     if FIsNegativeZero then
@@ -91,18 +126,12 @@ function TGocciaNumberValue.ToNumber: Double;
 begin
   if FIsNaN then
     Result := 0.0/0.0  // Return a calculated NaN, not stored one
+  else if FIsInfinity then
+    Result := 1.0/0.0  // Return positive infinity
+  else if FIsNegativeInfinity then
+    Result := -1.0/0.0  // Return negative infinity
   else
     Result := FValue;
-end;
-
-function TGocciaNumberValue.IsNaN: Boolean;
-begin
-  Result := FIsNaN;
-end;
-
-function TGocciaNumberValue.IsNegativeZero: Boolean;
-begin
-  Result := FIsNegativeZero;
 end;
 
 function TGocciaNumberValue.TypeName: string;

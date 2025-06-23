@@ -67,7 +67,7 @@ type
     constructor Create(AClass: TGocciaClassValue);
     destructor Destroy; override;
     function TypeName: string; override;
-    function GetProperty(const AName: string): TGocciaValue;
+    function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
     function GetPrivateProperty(const AName: string; AAccessClass: TGocciaClassValue): TGocciaValue;
     procedure SetPrivateProperty(const AName: string; AValue: TGocciaValue; AAccessClass: TGocciaClassValue);

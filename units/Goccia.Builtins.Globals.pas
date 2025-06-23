@@ -26,8 +26,9 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   // Global constants
+  AScope.DefineBuiltin('undefined', TGocciaUndefinedValue.Create);
   AScope.DefineBuiltin('NaN', TGocciaNumberValue.CreateNaN);
-  AScope.DefineBuiltin('Infinity', TGocciaNumberValue.Create(Math.Infinity));
+  AScope.DefineBuiltin('Infinity', TGocciaNumberValue.CreateInfinity);
 
   // Get Number object and its methods to make global aliases
   NumberObject := TGocciaObjectValue(AScope.GetValue('Number'));

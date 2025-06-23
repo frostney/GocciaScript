@@ -234,7 +234,6 @@ end;
 function TGocciaGlobalNumber.NumberIsFinite(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberValue;
-  Value: Double;
 begin
   if Args.Count = 0 then
   begin
@@ -250,9 +249,7 @@ begin
     Exit;
   end;
 
-  Value := NumberArg.Value;
-
-  if NumberArg.IsNaN or IsInfinite(Value) then
+  if NumberArg.IsNaN or NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
   begin
     Result := TGocciaBooleanValue.Create(False);
     Exit;
@@ -305,7 +302,7 @@ begin
 
   Value := NumberArg.Value;
 
-  if NumberArg.IsNaN or IsInfinite(Value) then
+  if NumberArg.IsNaN or NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
   begin
     Result := TGocciaBooleanValue.Create(False);
     Exit;

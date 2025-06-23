@@ -800,7 +800,8 @@ var
   Expected: TGocciaValue;
   Precision: Integer;
   ActualNum, ExpectedNum, Diff, Tolerance: Double;
-  IsClose, ActualIsNaN, ExpectedIsNaN: Boolean;
+  IsClose: Boolean;
+  ActualTempNum, ExpectedTempNum: TGocciaNumberValue;
 begin
   if Args.Count < 1 then
   begin
@@ -816,26 +817,27 @@ begin
   else
     Precision := 2;
 
-  // Handle special cases for NaN, Infinity using safe NaN checking
-  // Check for NaN safely
-  ActualIsNaN := (FActualValue is TGocciaNumberValue) and TGocciaNumberValue(FActualValue).IsNaN;
-  ExpectedIsNaN := (Expected is TGocciaNumberValue) and TGocciaNumberValue(Expected).IsNaN;
+  ActualNum := FActualValue.ToNumber;
+  ExpectedNum := Expected.ToNumber;
 
-  if ActualIsNaN and ExpectedIsNaN then
-    IsClose := True  // Both NaN should be considered close
-  else if ActualIsNaN or ExpectedIsNaN then
-    IsClose := False  // One is NaN, other is not
-  else
-  begin
-    ActualNum := FActualValue.ToNumber;
-    ExpectedNum := Expected.ToNumber;
-
+  // Check infinity using TGocciaNumberValue properties
+  ActualTempNum := TGocciaNumberValue.Create(ActualNum);
+  ExpectedTempNum := TGocciaNumberValue.Create(ExpectedNum);
+  try
+    // Handle special cases for NaN first
+    if ActualTempNum.IsNaN and ExpectedTempNum.IsNaN then
+      IsClose := True  // Both NaN should be considered close
+    else if ActualTempNum.IsNaN or ExpectedTempNum.IsNaN then
+      IsClose := False  // One is NaN, other is not
     // Both Infinity with same sign should be considered close
-    if Math.IsInfinite(ActualNum) and Math.IsInfinite(ExpectedNum) and
-            (Math.Sign(ActualNum) = Math.Sign(ExpectedNum)) then
+    else if (ActualTempNum.IsInfinity or ActualTempNum.IsNegativeInfinity) and
+       (ExpectedTempNum.IsInfinity or ExpectedTempNum.IsNegativeInfinity) and
+       ((ActualTempNum.IsInfinity and ExpectedTempNum.IsInfinity) or
+        (ActualTempNum.IsNegativeInfinity and ExpectedTempNum.IsNegativeInfinity)) then
       IsClose := True
     // One is infinity, other is not
-    else if Math.IsInfinite(ActualNum) or Math.IsInfinite(ExpectedNum) then
+    else if (ActualTempNum.IsInfinity or ActualTempNum.IsNegativeInfinity) or
+            (ExpectedTempNum.IsInfinity or ExpectedTempNum.IsNegativeInfinity) then
       IsClose := False
     else
     begin
@@ -844,6 +846,9 @@ begin
       Diff := Abs(ActualNum - ExpectedNum);
       IsClose := Diff < Tolerance;
     end;
+  finally
+    ActualTempNum.Free;
+    ExpectedTempNum.Free;
   end;
 
   if FIsNegated then

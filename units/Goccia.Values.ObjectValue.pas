@@ -32,7 +32,7 @@ type
     procedure RegisterConstant(const AName: string; const AValue: TGocciaValue);
 
     // Property accessors
-    function GetProperty(const AName: string): TGocciaValue;
+    function GetProperty(const AName: string): TGocciaValue; virtual;
     function GetPropertyWithContext(const AName: string; AThisContext: TGocciaValue): TGocciaValue;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
     function HasProperty(const AName: string): Boolean;

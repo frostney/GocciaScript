@@ -447,10 +447,10 @@ begin
   end
   else if Value is TGocciaNumberValue then
   begin
-    // Handle special number values
-    if IsInfinite(Value.ToNumber) then
+    // Handle special number values using TGocciaNumberValue properties
+    if TGocciaNumberValue(Value).IsInfinity or TGocciaNumberValue(Value).IsNegativeInfinity then
       Result := 'null'
-    else if IsNaN(Value.ToNumber) then
+    else if TGocciaNumberValue(Value).IsNaN then
       Result := 'null'
     else
       Result := FloatToStr(Value.ToNumber);

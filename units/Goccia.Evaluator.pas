@@ -664,13 +664,23 @@ begin
       Result := TGocciaBooleanValue.Create(not Operand.ToBoolean);
     gttMinus:
       begin
-        // Handle signed zero: -0 should create negative zero, -(negative zero) should create positive zero
-        if (Operand is TGocciaNumberValue) and (TGocciaNumberValue(Operand).Value = 0) then
+        // Handle infinity cases first
+        if (Operand is TGocciaNumberValue) then
         begin
-          if TGocciaNumberValue(Operand).IsNegativeZero then
-            Result := TGocciaNumberValue.Create(0.0)  // -(-0) = +0
+          if TGocciaNumberValue(Operand).IsInfinity then
+            Result := TGocciaNumberValue.CreateNegativeInfinity  // -Infinity = -Infinity
+          else if TGocciaNumberValue(Operand).IsNegativeInfinity then
+            Result := TGocciaNumberValue.CreateInfinity  // -(-Infinity) = Infinity
+          // Handle signed zero: -0 should create negative zero, -(negative zero) should create positive zero
+          else if TGocciaNumberValue(Operand).Value = 0 then
+          begin
+            if TGocciaNumberValue(Operand).IsNegativeZero then
+              Result := TGocciaNumberValue.Create(0.0)  // -(-0) = +0
+            else
+              Result := TGocciaNumberValue.CreateNegativeZero;  // -0 = -0
+          end
           else
-            Result := TGocciaNumberValue.CreateNegativeZero;  // -0 = -0
+            Result := TGocciaNumberValue.Create(-Operand.ToNumber);
         end
         else
           Result := TGocciaNumberValue.Create(-Operand.ToNumber);

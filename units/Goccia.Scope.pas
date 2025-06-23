@@ -196,10 +196,8 @@ begin
     dtLet:
       begin
         // let: writable, enumerable, configurable
-        if AValue is TGocciaUndefinedValue then
-          LexicalBinding.Initialized := False
-        else
-          LexicalBinding.Initialized := True;
+        // Once a let declaration is processed, it's immediately initialized (no TDZ after declaration)
+        LexicalBinding.Initialized := True;
       end;
   else
     // Default for unknown types (treat as let)
