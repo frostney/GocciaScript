@@ -11,7 +11,7 @@ test("basic ternary operator", () => {
 });
 
 test("nested ternary operators", () => {
-  function categorize(score) {
+  const categorize = (score) => {
     return score >= 90
       ? "A"
       : score >= 80
@@ -21,7 +21,7 @@ test("nested ternary operators", () => {
       : score >= 60
       ? "D"
       : "F";
-  }
+  };
 
   expect(categorize(95)).toBe("A");
   expect(categorize(85)).toBe("B");

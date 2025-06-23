@@ -31,7 +31,7 @@ test("if-else statement", () => {
 });
 
 test("if-else-if chain", () => {
-  function checkValue(x) {
+  const checkValue = (x) => {
     if (x > 10) {
       return "greater than 10";
     } else if (x > 5) {
@@ -41,7 +41,7 @@ test("if-else-if chain", () => {
     } else {
       return "zero or negative";
     }
-  }
+  };
 
   expect(checkValue(15)).toBe("greater than 10");
   expect(checkValue(8)).toBe("greater than 5");
@@ -50,7 +50,7 @@ test("if-else-if chain", () => {
 });
 
 test("nested if statements", () => {
-  function nestedTest(a, b) {
+  const nestedTest = (a, b) => {
     if (a > 0) {
       if (b > 0) {
         return "both positive";
@@ -60,7 +60,7 @@ test("nested if statements", () => {
     } else {
       return "a non-positive";
     }
-  }
+  };
 
   expect(nestedTest(1, 1)).toBe("both positive");
   expect(nestedTest(1, -1)).toBe("a positive, b non-positive");
