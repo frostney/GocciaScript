@@ -33,8 +33,8 @@ test("getter and setter", () => {
 
     // Property with side effects
     set reset(ignored) {
+      this._operations = this._operations + 1;
       this._value = 0;
-      this._operations = 0;
     },
 
     // Regular methods that use getters/setters
