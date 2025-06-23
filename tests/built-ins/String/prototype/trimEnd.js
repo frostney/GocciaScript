@@ -10,5 +10,5 @@ test("String.prototype.trimEnd removes whitespace", () => {
   expect(" ".trimEnd()).toBe("");
   expect("  ".trimEnd()).toBe("");
   expect("  hello world".trimEnd()).toBe("  hello world");
-  expect("hello world  ".trimEnd()).toBe("hello world  ");
+  expect("hello world  ".trimEnd()).toBe("hello world");
 });
