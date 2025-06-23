@@ -1194,6 +1194,9 @@ var
   SetterFunction: TGocciaValue;
   PropertyName: string;
   PropertyExpression: TGocciaExpression;
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+  ExistingSetter: TGocciaValue;
+  ExistingGetter: TGocciaValue;
 begin
   Obj := TGocciaObjectValue.Create;
 
@@ -1259,14 +1262,40 @@ begin
           begin
             // Getter: {get prop() {...}}
             GetterFunction := EvaluateGetter(ObjectExpression.Getters[ObjectExpression.PropertySourceOrder[I].StaticKey], Context);
-            Obj.DefineProperty(ObjectExpression.PropertySourceOrder[I].StaticKey, TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfEnumerable, pfConfigurable]));
+            // Check if there's already a setter for this property
+            ExistingDescriptor := Obj.GetOwnPropertyDescriptor(ObjectExpression.PropertySourceOrder[I].StaticKey);
+            if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+               Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
+            begin
+              // Merge with existing setter
+              ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+              Obj.DefineProperty(ObjectExpression.PropertySourceOrder[I].StaticKey, TGocciaPropertyDescriptorAccessor.Create(GetterFunction, ExistingSetter, [pfEnumerable, pfConfigurable]));
+            end
+            else
+            begin
+              // No existing setter, create getter-only descriptor
+              Obj.DefineProperty(ObjectExpression.PropertySourceOrder[I].StaticKey, TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfEnumerable, pfConfigurable]));
+            end;
           end;
 
         pstSetter:
           begin
             // Setter: {set prop(val) {...}}
             SetterFunction := EvaluateSetter(ObjectExpression.Setters[ObjectExpression.PropertySourceOrder[I].StaticKey], Context);
-            Obj.DefineProperty(ObjectExpression.PropertySourceOrder[I].StaticKey, TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfEnumerable, pfConfigurable]));
+            // Check if there's already a getter for this property
+            ExistingDescriptor := Obj.GetOwnPropertyDescriptor(ObjectExpression.PropertySourceOrder[I].StaticKey);
+            if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+               Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
+            begin
+              // Merge with existing getter
+              ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+              Obj.DefineProperty(ObjectExpression.PropertySourceOrder[I].StaticKey, TGocciaPropertyDescriptorAccessor.Create(ExistingGetter, SetterFunction, [pfEnumerable, pfConfigurable]));
+            end
+            else
+            begin
+              // No existing getter, create setter-only descriptor
+              Obj.DefineProperty(ObjectExpression.PropertySourceOrder[I].StaticKey, TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfEnumerable, pfConfigurable]));
+            end;
           end;
       end;
     end;
@@ -1285,7 +1314,7 @@ begin
       end;
     end;
 
-  // TODO: We shouldn't treat getters and setters separately, but as a single property descriptor
+  // Handle getters and setters properly by merging them into single descriptors
 
   // Handle getters: {get propertyName() { ... }}
   if Assigned(ObjectExpression.Getters) then
@@ -1293,7 +1322,20 @@ begin
       for GetterPair in ObjectExpression.Getters do
       begin
         GetterFunction := EvaluateGetter(GetterPair.Value, Context);
-        Obj.DefineProperty(GetterPair.Key, TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfEnumerable, pfConfigurable, pfWritable]));
+        // Check if there's already a setter for this property
+        ExistingDescriptor := Obj.GetOwnPropertyDescriptor(GetterPair.Key);
+        if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+           Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
+        begin
+          // Merge with existing setter
+          ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+          Obj.DefineProperty(GetterPair.Key, TGocciaPropertyDescriptorAccessor.Create(GetterFunction, ExistingSetter, [pfEnumerable, pfConfigurable]));
+        end
+        else
+        begin
+          // No existing setter, create getter-only descriptor
+          Obj.DefineProperty(GetterPair.Key, TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfEnumerable, pfConfigurable]));
+        end;
       end;
     end;
 
@@ -1303,7 +1345,20 @@ begin
       for SetterPair in ObjectExpression.Setters do
       begin
         SetterFunction := EvaluateSetter(SetterPair.Value, Context);
-        Obj.DefineProperty(SetterPair.Key, TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfEnumerable, pfConfigurable, pfWritable]));
+        // Check if there's already a getter for this property
+        ExistingDescriptor := Obj.GetOwnPropertyDescriptor(SetterPair.Key);
+        if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+           Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
+        begin
+          // Merge with existing getter
+          ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+          Obj.DefineProperty(SetterPair.Key, TGocciaPropertyDescriptorAccessor.Create(ExistingGetter, SetterFunction, [pfEnumerable, pfConfigurable]));
+        end
+        else
+        begin
+          // No existing getter, create setter-only descriptor
+          Obj.DefineProperty(SetterPair.Key, TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfEnumerable, pfConfigurable]));
+        end;
       end;
     end;
 
