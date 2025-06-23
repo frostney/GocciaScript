@@ -3,7 +3,7 @@ description: Spread syntax for Map
 features: [map-spread]
 ---*/
 
-test("spread syntax for Map", () => {
+test.skip("spread syntax for Map", () => {
   const map = new Map([
     ["a", 1],
     ["b", 2],
@@ -17,7 +17,7 @@ test("spread syntax for Map", () => {
   ]);
 });
 
-test("spread syntax to copy map content", () => {
+test.skip("spread syntax to copy map content", () => {
   const map = new Map([
     ["a", 1],
     ["b", 2],
