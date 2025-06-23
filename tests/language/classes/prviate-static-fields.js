@@ -35,7 +35,7 @@ test("private static fields", () => {
   expect(TestClass.getStaticPrivate()).toBe("new static value");
 
   TestClass.incrementStaticPrivate();
-  expect(TestClass.getStaticPrivate()).toBe("static value modified");
+  expect(TestClass.getStaticPrivate()).toBe("new static value modified");
 
   let instance = new TestClass();
   expect(instance.getInstancePrivate()).toBe("instance value");
