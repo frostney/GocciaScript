@@ -249,7 +249,7 @@ begin
 
   Value := NumberArg.Value;
 
-  if IsNaN(Value) or IsInfinite(Value) then
+  if NumberArg.IsNaN or IsInfinite(Value) then
   begin
     Result := TGocciaBooleanValue.Create(False);
     Exit;
@@ -259,6 +259,8 @@ begin
 end;
 
 function TGocciaGlobalNumber.NumberIsNaN(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  NumberArg: TGocciaNumberValue;
 begin
   if Args.Count = 0 then
   begin
@@ -266,13 +268,17 @@ begin
     Exit;
   end;
 
-  if not (Args[0] is TGocciaNumberValue) then
+  // Number.isNaN only returns true for actual NaN numbers, not for other types
+  if Args[0] is TGocciaNumberValue then
   begin
+    NumberArg := TGocciaNumberValue(Args[0]);
+    Result := TGocciaBooleanValue.Create(NumberArg.IsNaN);
+  end
+  else
+  begin
+    // If argument is not a NumberValue, Number.isNaN should return false
     Result := TGocciaBooleanValue.Create(False);
-    Exit;
   end;
-
-  Result := TGocciaBooleanValue.Create(IsNaN(Args[0].ToNumber));
 end;
 
 function TGocciaGlobalNumber.NumberIsInteger(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -296,7 +302,7 @@ begin
 
   Value := NumberArg.Value;
 
-  if IsNaN(Value) or IsInfinite(Value) then
+  if NumberArg.IsNaN or IsInfinite(Value) then
   begin
     Result := TGocciaBooleanValue.Create(False);
     Exit;
