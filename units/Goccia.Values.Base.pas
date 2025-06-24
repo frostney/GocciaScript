@@ -8,6 +8,13 @@ uses
   Classes;
 
 type
+  // Forward declaration
+  TGocciaValue = class;
+
+  IGocciaValueOf = interface
+    function ValueOf: TGocciaValue;
+  end;
+
   TGocciaValue = class(TInterfacedObject)
   public
     function ToString: string; virtual; abstract;

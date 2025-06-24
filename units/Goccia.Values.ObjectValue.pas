@@ -14,7 +14,7 @@ type
     FPropertyInsertionOrder: TStringList; // Track insertion order for property enumeration
     FPrototype: TGocciaObjectValue;
   public
-    constructor Create;
+    constructor Create(APrototype: TGocciaObjectValue = nil);
     destructor Destroy; override;
     function ToDebugString: string;
     function ToString: string; override;
@@ -56,16 +56,13 @@ uses Goccia.Values.FunctionValue, Goccia.Values.NativeFunction,
 
 { TGocciaObjectValue }
 
-// TODO: Should we allow the prototype to be set in the constructor?
-constructor TGocciaObjectValue.Create;
+constructor TGocciaObjectValue.Create(APrototype: TGocciaObjectValue = nil);
 begin
   FPropertyDescriptors := TDictionary<string, TGocciaPropertyDescriptor>.Create;
   FPropertyInsertionOrder := TStringList.Create;
   FPropertyInsertionOrder.Duplicates := dupIgnore; // Prevent duplicates
 
-  // TODO: Should this be TGocciaNullValue?
-  // TODO: Should we set a default prototype?
-  FPrototype := nil;
+  FPrototype := APrototype;
 end;
 
 destructor TGocciaObjectValue.Destroy;
@@ -192,7 +189,10 @@ begin
       end;
       // Accessor descriptor without setter - property is not writable
       // In strict mode (which GocciaScript always is), throw TypeError
-      ErrorValue := TGocciaStringValue.Create('Cannot set property ''' + AName + ''' which has only a getter');
+      // Create a TypeError instance instead of just a string
+      ErrorValue := TGocciaObjectValue.Create;
+      TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringValue.Create('TypeError'));
+      TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringValue.Create('Cannot set property ''' + AName + ''' which has only a getter'));
       raise TGocciaThrowValue.Create(ErrorValue);
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
@@ -205,8 +205,11 @@ begin
         FPropertyDescriptors[AName] := Descriptor;
         Exit;
       end;
-      // Property is not writable - throw TypeError
-      ErrorValue := TGocciaStringValue.Create('Cannot assign to read only property ''' + AName + '''');
+      // Property is not writable - throw TypeError (strict mode behavior)
+      // Create a TypeError instance instead of just a string
+      ErrorValue := TGocciaObjectValue.Create;
+      TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringValue.Create('TypeError'));
+      TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringValue.Create('Cannot assign to read only property ''' + AName + ''''));
       raise TGocciaThrowValue.Create(ErrorValue);
     end;
   end;
@@ -236,7 +239,10 @@ begin
     if not ExistingDescriptor.Configurable then
     begin
       // Non-configurable properties cannot be redefined
-      ErrorValue := TGocciaStringValue.Create('Cannot redefine non-configurable property ''' + AName + '''');
+      // Create a TypeError instance instead of just a string
+      ErrorValue := TGocciaObjectValue.Create;
+      TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringValue.Create('TypeError'));
+      TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringValue.Create('Cannot redefine non-configurable property ''' + AName + ''''));
       raise TGocciaThrowValue.Create(ErrorValue);
     end;
 
@@ -446,9 +452,22 @@ end;
 procedure TGocciaObjectValue.DeleteProperty(const AName: string);
 var
   Index: Integer;
+  Descriptor: TGocciaPropertyDescriptor;
+  ErrorValue: TGocciaValue;
 begin
   if FPropertyDescriptors.ContainsKey(AName) then
   begin
+    Descriptor := FPropertyDescriptors[AName];
+
+    // Check if property is configurable
+    if not Descriptor.Configurable then
+    begin
+      // Non-configurable properties cannot be deleted
+      // In strict mode, this should throw TypeError, but for delete operator
+      // we silently fail (return false in EvaluateDelete)
+      Exit;
+    end;
+
     FPropertyDescriptors.Remove(AName);
     // Also remove from insertion order
     Index := FPropertyInsertionOrder.IndexOf(AName);

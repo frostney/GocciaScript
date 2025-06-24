@@ -129,7 +129,7 @@ implementation
 
 uses
   Goccia.Values.ClassValue, Goccia.Evaluator, Goccia.Evaluator.Comparison,
-  Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.Error;
 
 { TTestSuite }
 
@@ -597,7 +597,9 @@ end;
 
 function TGocciaExpectationValue.ToBeInstanceOf(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  ActualInstanceClass: TGocciaInstanceValue;
+  ExpectedConstructor: TGocciaValue;
+  IsInstance: Boolean;
+  ConstructorName: string;
 begin
   Result := TGocciaUndefinedValue.Create;
 
@@ -607,18 +609,79 @@ begin
     Exit;
   end;
 
-  // Check if the actual value is an instance of the expected class (userland only, native functions don't work)
-  ActualInstanceClass := FActualValue as TGocciaInstanceValue;
+  ExpectedConstructor := Args[0];
+  IsInstance := False;
 
-  if ActualInstanceClass.ClassType = Args[0].ClassType then
+    // Check for built-in types
+  if ExpectedConstructor is TGocciaNativeFunctionValue then
+  begin
+    ConstructorName := TGocciaNativeFunctionValue(ExpectedConstructor).Name;
+    if ConstructorName = 'Function' then
+    begin
+      // Check if actual value is any kind of function
+      IsInstance := (FActualValue is TGocciaFunctionValue) or
+                   (FActualValue is TGocciaNativeFunctionValue) or
+                   (FActualValue.ClassName = 'TGocciaFunctionPrototypeMethod') or
+                   (FActualValue.ClassName = 'TGocciaBoundFunctionValue');
+    end
+    else if ConstructorName = 'Array' then
+    begin
+      IsInstance := FActualValue is TGocciaArrayValue;
+    end
+    else if ConstructorName = 'Object' then
+    begin
+      IsInstance := FActualValue is TGocciaObjectValue;
+    end
+    else if ConstructorName = 'String' then
+    begin
+      IsInstance := FActualValue is TGocciaStringValue;
+    end
+    else if ConstructorName = 'Number' then
+    begin
+      IsInstance := FActualValue is TGocciaNumberValue;
+    end
+    else if ConstructorName = 'Boolean' then
+    begin
+      IsInstance := FActualValue is TGocciaBooleanValue;
+    end;
+  end
+    else if ExpectedConstructor is TGocciaClassValue then
+  begin
+    ConstructorName := TGocciaClassValue(ExpectedConstructor).Name;
+    if ConstructorName = 'Function' then
+    begin
+      // Check if actual value is any kind of function
+      IsInstance := (FActualValue is TGocciaFunctionValue) or
+                   (FActualValue is TGocciaNativeFunctionValue) or
+                   (FActualValue.ClassName = 'TGocciaFunctionPrototypeMethod') or
+                   (FActualValue.ClassName = 'TGocciaBoundFunctionValue');
+    end
+    else
+    begin
+      // Check if the actual value is an instance of the class
+      if FActualValue is TGocciaInstanceValue then
+      begin
+        IsInstance := IsObjectInstanceOfClass(TGocciaInstanceValue(FActualValue), TGocciaClassValue(ExpectedConstructor));
+      end;
+    end;
+  end;
+
+  if FIsNegated then
+    IsInstance := not IsInstance;
+
+  if IsInstance then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeInstanceOf');
     Result := TGocciaUndefinedValue.Create;
   end
   else
   begin
-    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeInstanceOf',
-      'Expected ' + FActualValue.ToString + ' to be an instance of ' + Args[0].ToString);
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeInstanceOf',
+        'Expected ' + FActualValue.ToString + ' not to be an instance of ' + ExpectedConstructor.ToString)
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeInstanceOf',
+        'Expected ' + FActualValue.ToString + ' to be an instance of ' + ExpectedConstructor.ToString);
     Result := TGocciaUndefinedValue.Create;
   end;
 end;
@@ -715,6 +778,10 @@ var
   TestFunc: TGocciaFunctionValue;
   TestScope: TGocciaScope;
   I: Integer;
+  ThrownObj: TGocciaObjectValue;
+  ErrorConstructor: TGocciaValue;
+  ConstructorName: string;
+  ErrorName: string;
 begin
   Result := TGocciaUndefinedValue.Create;
 
@@ -757,6 +824,68 @@ begin
           raise TGocciaSyntaxError.Create('Invalid syntax in function body', 0, 0, '', nil);
       end;
     except
+      on E: TGocciaThrowValue do
+      begin
+        // Handle thrown JavaScript values (e.g., throw new TypeError())
+        if ExpectedErrorType = '' then
+        begin
+          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+          Exit;
+        end;
+
+        // Check if thrown value matches expected error type
+        if E.Value is TGocciaObjectValue then
+        begin
+          ThrownObj := TGocciaObjectValue(E.Value);
+
+          // Check if the error object has a name property that matches
+          if ThrownObj.HasProperty('name') then
+          begin
+            ErrorName := ThrownObj.GetProperty('name').ToString;
+            // Match "TypeError" in "[NativeFunction: TypeError]"
+            if (Pos(ErrorName, ExpectedErrorType) > 0) or
+               (Pos(LowerCase(ErrorName), LowerCase(ExpectedErrorType)) > 0) then
+            begin
+              TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+              Exit;
+            end;
+          end;
+
+          // Fallback: check constructor property
+          if ThrownObj.HasProperty('constructor') then
+          begin
+            ErrorConstructor := ThrownObj.GetProperty('constructor');
+            if ErrorConstructor.ToString = ExpectedErrorType then
+            begin
+              TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+              Exit;
+            end;
+            if ErrorConstructor is TGocciaNativeFunctionValue then
+            begin
+              ConstructorName := TGocciaNativeFunctionValue(ErrorConstructor).Name;
+              if (Pos(ConstructorName, ExpectedErrorType) > 0) or
+                 (Pos(LowerCase(ConstructorName), LowerCase(ExpectedErrorType)) > 0) then
+              begin
+                TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+                Exit;
+              end;
+            end;
+          end;
+        end;
+
+        // Fallback to string matching in the thrown value
+        if (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Value.ToString)) > 0) then
+        begin
+          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+          Exit;
+        end
+        else
+        begin
+          TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
+            'Expected ' + FActualValue.ToString + ' to throw ' + ExpectedErrorType + ' but threw: ' + E.Value.ToString);
+          Exit;
+        end;
+      end;
       on E: TGocciaError do
       begin
         // Handle Goccia-specific errors (syntax, runtime, etc.)

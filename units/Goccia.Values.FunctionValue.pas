@@ -7,7 +7,7 @@ interface
 
 uses
   Goccia.Interfaces, Goccia.Values.Base, Goccia.AST.Node, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope,
-  Goccia.Error, Goccia.Logger, Goccia.Values.Error, Goccia.Values.ObjectValue,
+  Goccia.Error, Goccia.Logger, Goccia.Values.Error, Goccia.Values.ObjectValue, Goccia.Values.FunctionBase,
   Generics.Collections, Classes, Math, SysUtils,
   Goccia.Values.NumberValue,
   Goccia.Values.StringValue,
@@ -15,7 +15,7 @@ uses
   Goccia.Values.UndefinedValue;
 
 type
-  TGocciaFunctionValue = class(TGocciaObjectValue, IGocciaCallable)
+  TGocciaFunctionValue = class(TGocciaFunctionBase)
   protected
     FName: string;
     FParameters: TGocciaParameterArray;
@@ -27,8 +27,8 @@ type
     function ToString: string; override;
     function ToBoolean: Boolean; override;
     function ToNumber: Double; override;
-    function TypeName: string; override;
-    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+
+    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; override;
     function CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
     property Parameters: TGocciaParameterArray read FParameters;
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
@@ -86,10 +86,7 @@ begin
   Result := 0.0/0.0;  // Safe calculated NaN
 end;
 
-function TGocciaFunctionValue.TypeName: string;
-begin
-  Result := 'function';
-end;
+
 
 function TGocciaFunctionValue.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var

@@ -5,7 +5,7 @@ unit Goccia.Evaluator;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Base, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.StringObjectValue, Goccia.Values.Error, Goccia.Values.NullValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser,
+  Goccia.Interfaces, Goccia.Values.Base, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.FunctionBase, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.StringObjectValue, Goccia.Values.Error, Goccia.Values.NullValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser,
   Goccia.Evaluator.Arithmetic, Goccia.Evaluator.Bitwise, Goccia.Evaluator.Comparison, Goccia.Evaluator.TypeOperations, Goccia.Evaluator.Assignment,
   Generics.Collections, SysUtils, Math, Classes;
 
@@ -826,10 +826,15 @@ begin
       end;
     end;
 
+    // TODO: There must be a better way to do this
     if Callee is TGocciaNativeFunctionValue then
       Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, ThisValue)
     else if Callee is TGocciaFunctionValue then
       Result := TGocciaFunctionValue(Callee).Call(Arguments, ThisValue)
+    else if Callee.ClassName = 'TGocciaFunctionPrototypeMethod' then
+      Result := TGocciaFunctionPrototypeMethod(Callee).Call(Arguments, ThisValue)
+    else if Callee.ClassName = 'TGocciaBoundFunctionValue' then
+      Result := TGocciaBoundFunctionValue(Callee).Call(Arguments, ThisValue)
     else if Callee is IGocciaCallable then
       Result := (Callee as IGocciaCallable).Call(Arguments, ThisValue)
     else
@@ -2793,6 +2798,7 @@ var
   ArrayValue: TGocciaArrayValue;
   ObjectValue: TGocciaObjectValue;
   Index: Integer;
+  Descriptor: TGocciaPropertyDescriptor;
 begin
   // Handle member expressions (property deletion)
   if Operand is TGocciaMemberExpression then
@@ -2832,8 +2838,27 @@ begin
     else if ObjValue is TGocciaObjectValue then
     begin
       ObjectValue := TGocciaObjectValue(ObjValue);
-      ObjectValue.DeleteProperty(PropertyName);
-      Result := TGocciaBooleanValue.Create(True);
+      // TODO: We are checking for configurable twice - Once here, and once in `DeleteProperty`
+              // Check if property exists and is configurable before deletion
+        if ObjectValue.HasOwnProperty(PropertyName) then
+        begin
+          Descriptor := ObjectValue.GetOwnPropertyDescriptor(PropertyName);
+          if Assigned(Descriptor) and not Descriptor.Configurable then
+          begin
+            // Non-configurable property cannot be deleted
+            Result := TGocciaBooleanValue.Create(False);
+          end
+          else
+          begin
+            ObjectValue.DeleteProperty(PropertyName);
+            Result := TGocciaBooleanValue.Create(True);
+          end;
+        end
+      else
+      begin
+        // Property doesn't exist - deletion succeeds
+        Result := TGocciaBooleanValue.Create(True);
+      end;
     end
     else
     begin

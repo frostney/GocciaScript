@@ -5,12 +5,12 @@ unit Goccia.Values.NativeFunction;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Base, Goccia.Values.ObjectValue, Generics.Collections, SysUtils, Math, Goccia.Logger;
+  Goccia.Interfaces, Goccia.Values.Base, Goccia.Values.ObjectValue, Goccia.Values.FunctionBase, Generics.Collections, SysUtils, Math, Goccia.Logger;
 
 type
   TGocciaNativeFunction = function(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue of object;
 
-  TGocciaNativeFunctionValue = class(TGocciaObjectValue, IGocciaCallable)
+  TGocciaNativeFunctionValue = class(TGocciaFunctionBase)
   private
     FFunction: TGocciaNativeFunction;
     FName: string;
@@ -18,10 +18,11 @@ type
   public
     constructor Create(AFunction: TGocciaNativeFunction; const AName: string;
       AArity: Integer);
-    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    constructor CreateWithoutPrototype(AFunction: TGocciaNativeFunction; const AName: string;
+      AArity: Integer);
+    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; override;
     function ToString: string; override;
     function ToNumber: Double; override;
-    function TypeName: string; override;
     property NativeFunction: TGocciaNativeFunction read FFunction;
     property Name: string read FName;
     property Arity: Integer read FArity;
@@ -40,6 +41,16 @@ begin
   inherited Create;
 end;
 
+constructor TGocciaNativeFunctionValue.CreateWithoutPrototype(AFunction: TGocciaNativeFunction;
+  const AName: string; AArity: Integer);
+begin
+  FFunction := AFunction;
+  FName := AName;
+  FArity := AArity;
+
+  inherited Create; // No prototype for methods that are part of the prototype
+end;
+
 function TGocciaNativeFunctionValue.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := FFunction(Arguments, ThisValue);
@@ -55,9 +66,6 @@ begin
   Result := 0.0/0.0;  // Safe calculated NaN
 end;
 
-function TGocciaNativeFunctionValue.TypeName: string;
-begin
-  Result := 'function';
-end;
+
 
 end.

@@ -18,6 +18,7 @@ type
     function ObjectAssign(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectCreate(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectHasOwn(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectGetOwnPropertyNames(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectGetOwnPropertyDescriptor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectDefineProperty(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectDefineProperties(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -42,6 +43,7 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectAssign, 'assign', -1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectCreate, 'create', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectHasOwn, 'hasOwn', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetOwnPropertyNames, 'getOwnPropertyNames', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetOwnPropertyDescriptor, 'getOwnPropertyDescriptor', 2));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectDefineProperty, 'defineProperty', 3));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectDefineProperties, 'defineProperties', 2));
@@ -184,16 +186,13 @@ begin
   if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullValue) then
     ThrowError('Object.create called on non-object', 0, 0);
 
-  // Create a new object
-  NewObj := TGocciaObjectValue.Create;
-
-  // Set the prototype based on the argument
+  // Create a new object with the specified prototype
   if ProtoArg is TGocciaObjectValue then
-    NewObj.Prototype := TGocciaObjectValue(ProtoArg)
+    Result := TGocciaObjectValue.Create(TGocciaObjectValue(ProtoArg))
   else if ProtoArg is TGocciaNullValue then
-    NewObj.Prototype := nil; // null prototype
-
-  Result := NewObj;
+    Result := TGocciaObjectValue.Create(nil)
+  else
+    ThrowError('Object.create called on non-object', 0, 0);
 end;
 
 function TGocciaGlobalObject.ObjectHasOwn(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -211,6 +210,30 @@ begin
   PropertyName := Args[1].ToString;
 
   Result := TGocciaBooleanValue.Create(Obj.HasOwnProperty(PropertyName));
+end;
+
+function TGocciaGlobalObject.ObjectGetOwnPropertyNames(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Obj: TGocciaObjectValue;
+  Names: TGocciaArrayValue;
+  PropertyNames: TArray<string>;
+  I: Integer;
+begin
+  if Args.Count <> 1 then
+    ThrowError('Object.getOwnPropertyNames expects exactly 1 argument', 0, 0);
+
+  if not (Args[0] is TGocciaObjectValue) then
+    ThrowError('Object.getOwnPropertyNames called on non-object', 0, 0);
+
+  Obj := TGocciaObjectValue(Args[0]);
+  Names := TGocciaArrayValue.Create;
+
+  // Get all property names (both enumerable and non-enumerable)
+  PropertyNames := Obj.GetAllPropertyNames;
+  for I := 0 to High(PropertyNames) do
+    Names.Elements.Add(TGocciaStringValue.Create(PropertyNames[I]));
+
+  Result := Names;
 end;
 
 function TGocciaGlobalObject.ObjectGetOwnPropertyDescriptor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -310,7 +333,7 @@ begin
     Getter := DescriptorObject.GetProperty('get');
     // Validate getter: must be a function or undefined
     if not (Getter is TGocciaUndefinedValue) and not (Getter is TGocciaFunctionValue) and not (Getter is TGocciaNativeFunctionValue) then
-      ThrowError('Object.defineProperty: getter must be a function or undefined', 0, 0);
+      ThrowError('TypeError: Object.defineProperty: getter must be a function or undefined', 0, 0);
     // Treat undefined as nil
     if Getter is TGocciaUndefinedValue then
       Getter := nil;
@@ -320,7 +343,7 @@ begin
     Setter := DescriptorObject.GetProperty('set');
     // Validate setter: must be a function or undefined
     if not (Setter is TGocciaUndefinedValue) and not (Setter is TGocciaFunctionValue) and not (Setter is TGocciaNativeFunctionValue) then
-      ThrowError('Object.defineProperty: setter must be a function or undefined', 0, 0);
+      ThrowError('TypeError: Object.defineProperty: setter must be a function or undefined', 0, 0);
     // Treat undefined as nil
     if Setter is TGocciaUndefinedValue then
       Setter := nil;

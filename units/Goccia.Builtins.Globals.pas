@@ -5,10 +5,16 @@ unit Goccia.Builtins.Globals;
 interface
 
 uses
-  SysUtils, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.FunctionValue, Goccia.Values.UndefinedValue, Generics.Collections, Math, Goccia.Builtins.Base, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.Base, Goccia.Scope, Goccia.Error;
+  SysUtils, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.FunctionValue, Goccia.Values.UndefinedValue, Generics.Collections, Math, Goccia.Builtins.Base, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.Base, Goccia.Scope, Goccia.Error, Goccia.Values.StringValue;
 
 type
   TGocciaGlobals = class(TGocciaBuiltin)
+  protected
+    // Error constructors
+    function ErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function TypeErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ReferenceErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function RangeErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
   end;
@@ -22,6 +28,10 @@ var
   NumberParseFloat: TGocciaValue;
   NumberIsNaN: TGocciaValue;
   NumberIsFinite: TGocciaValue;
+  ErrorConstructorFunc: TGocciaNativeFunctionValue;
+  TypeErrorConstructorFunc: TGocciaNativeFunctionValue;
+  ReferenceErrorConstructorFunc: TGocciaNativeFunctionValue;
+  RangeErrorConstructorFunc: TGocciaNativeFunctionValue;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -29,6 +39,17 @@ begin
   AScope.DefineBuiltin('undefined', TGocciaUndefinedValue.Create);
   AScope.DefineBuiltin('NaN', TGocciaNumberValue.CreateNaN);
   AScope.DefineBuiltin('Infinity', TGocciaNumberValue.CreateInfinity);
+
+  // Error constructors - store references so we can use them in the constructor functions
+  ErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ErrorConstructor, 'Error', 1);
+  TypeErrorConstructorFunc := TGocciaNativeFunctionValue.Create(TypeErrorConstructor, 'TypeError', 1);
+  ReferenceErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ReferenceErrorConstructor, 'ReferenceError', 1);
+  RangeErrorConstructorFunc := TGocciaNativeFunctionValue.Create(RangeErrorConstructor, 'RangeError', 1);
+
+  AScope.DefineBuiltin('Error', ErrorConstructorFunc);
+  AScope.DefineBuiltin('TypeError', TypeErrorConstructorFunc);
+  AScope.DefineBuiltin('ReferenceError', ReferenceErrorConstructorFunc);
+  AScope.DefineBuiltin('RangeError', RangeErrorConstructorFunc);
 
   // Get Number object and its methods to make global aliases
   NumberObject := TGocciaObjectValue(AScope.GetValue('Number'));
@@ -53,5 +74,88 @@ begin
   // Should we bind them direct from source?
 end;
 
+function TGocciaGlobals.ErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  ErrorObj: TGocciaObjectValue;
+  Message: string;
+begin
+  // Create a basic error object
+  ErrorObj := TGocciaObjectValue.Create;
+
+  // Set name property
+  ErrorObj.AssignProperty('name', TGocciaStringValue.Create('Error'));
+
+  // Set message property
+  if Args.Count > 0 then
+    Message := Args[0].ToString
+  else
+    Message := '';
+  ErrorObj.AssignProperty('message', TGocciaStringValue.Create(Message));
+
+  Result := ErrorObj;
+end;
+
+function TGocciaGlobals.TypeErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  ErrorObj: TGocciaObjectValue;
+  Message: string;
+begin
+  // Create a basic error object
+  ErrorObj := TGocciaObjectValue.Create;
+
+  // Set name property
+  ErrorObj.AssignProperty('name', TGocciaStringValue.Create('TypeError'));
+
+  // Set message property
+  if Args.Count > 0 then
+    Message := Args[0].ToString
+  else
+    Message := '';
+  ErrorObj.AssignProperty('message', TGocciaStringValue.Create(Message));
+
+  Result := ErrorObj;
+end;
+
+function TGocciaGlobals.ReferenceErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  ErrorObj: TGocciaObjectValue;
+  Message: string;
+begin
+  // Create a basic error object
+  ErrorObj := TGocciaObjectValue.Create;
+
+  // Set name property
+  ErrorObj.AssignProperty('name', TGocciaStringValue.Create('ReferenceError'));
+
+  // Set message property
+  if Args.Count > 0 then
+    Message := Args[0].ToString
+  else
+    Message := '';
+  ErrorObj.AssignProperty('message', TGocciaStringValue.Create(Message));
+
+  Result := ErrorObj;
+end;
+
+function TGocciaGlobals.RangeErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+var
+  ErrorObj: TGocciaObjectValue;
+  Message: string;
+begin
+  // Create a basic error object
+  ErrorObj := TGocciaObjectValue.Create;
+
+  // Set name property
+  ErrorObj.AssignProperty('name', TGocciaStringValue.Create('RangeError'));
+
+  // Set message property
+  if Args.Count > 0 then
+    Message := Args[0].ToString
+  else
+    Message := '';
+  ErrorObj.AssignProperty('message', TGocciaStringValue.Create(Message));
+
+  Result := ErrorObj;
+end;
 
 end.
