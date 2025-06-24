@@ -16,14 +16,12 @@ test("private fields are not enumerable properties", () => {
   const instance = new TestClass();
 
   // Private fields should not appear in property enumerations
-  expect(Object.hasOwnProperty.call(TestClass.prototype, "#privateField")).toBe(
-    false
-  );
-  expect(Object.hasOwnProperty.call(TestClass, "#privateField")).toBe(false);
-  expect(Object.hasOwnProperty.call(instance, "#privateField")).toBe(false);
+  expect(Object.hasOwn(TestClass.prototype, "#privateField")).toBe(false);
+  expect(Object.hasOwn(TestClass, "#privateField")).toBe(false);
+  expect(Object.hasOwn(instance, "#privateField")).toBe(false);
 
   // Public fields should be enumerable
-  expect(Object.hasOwnProperty.call(instance, "publicField")).toBe(true);
+  expect(Object.hasOwn(instance, "publicField")).toBe(true);
 
   // Private field should be accessible through methods
   expect(instance.getPrivate()).toBe("private");
@@ -114,7 +112,7 @@ test("static private fields", () => {
   expect(instance.getInstancePrivate()).toBe("instance value");
 
   // Static private fields are not enumerable on class
-  expect(Object.hasOwnProperty.call(TestClass, "#staticPrivate")).toBe(false);
+  expect(Object.hasOwn(TestClass, "#staticPrivate")).toBe(false);
   expect(TestClass.tryAccessInstance()).toBe("cannot access");
 });
 

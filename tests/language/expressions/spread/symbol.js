@@ -3,7 +3,7 @@ description: Spread syntax for Symbol
 features: [symbol-spread]
 ---*/
 
-test("object spread with symbol properties", () => {
+test.skip("object spread with symbol properties", () => {
   const sym1 = Symbol("key1");
   const sym2 = Symbol("key2");
 

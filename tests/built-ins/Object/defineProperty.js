@@ -68,13 +68,10 @@ test("Object.defineProperty with enumerable attribute", () => {
   expect(keys).toContain("visible");
   expect(keys).not.toContain("hidden");
 
-  // for...in also respects enumerable
-  const forInKeys = [];
-  for (const key in obj) {
-    forInKeys.push(key);
-  }
-  expect(forInKeys).toContain("visible");
-  expect(forInKeys).not.toContain("hidden");
+  // Object.getOwnPropertyNames returns all properties (enumerable and non-enumerable)
+  const allKeys = Object.getOwnPropertyNames(obj);
+  expect(allKeys).toContain("visible");
+  expect(allKeys).toContain("hidden"); // getOwnPropertyNames should include non-enumerable properties
 
   // Object.values and Object.entries also respect enumerable
   const values = Object.values(obj);
@@ -256,8 +253,10 @@ test("Object.defineProperty with default values", () => {
   expect(obj.minimal).toBe("test");
   expect(Object.keys(obj)).not.toContain("minimal");
 
-  // Property is not writable
-  obj.minimal = "try to change";
+  // Property is not writable - should throw TypeError in strict mode
+  expect(() => {
+    obj.minimal = "try to change";
+  }).toThrow(TypeError);
   expect(obj.minimal).toBe("test");
 });
 

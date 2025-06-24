@@ -55,8 +55,8 @@ test("object property enumeration and inspection", () => {
     ["c", 3],
   ]);
 
-  expect(Object.hasOwnProperty.call(obj, "a")).toBe(true);
-  expect(Object.hasOwnProperty.call(obj, "d")).toBe(false);
+  expect(Object.hasOwn(obj, "a")).toBe(true);
+  expect(Object.hasOwn(obj, "d")).toBe(false);
 });
 
 test("object creation with constructors and prototypes", () => {
