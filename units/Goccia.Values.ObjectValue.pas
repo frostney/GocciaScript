@@ -5,10 +5,10 @@ unit Goccia.Values.ObjectValue;
 interface
 
 uses
-  Goccia.Values.Base, Generics.Collections, Goccia.Values.UndefinedValue, Goccia.Values.ObjectPropertyDescriptor, Math, Goccia.Logger, SysUtils, Classes;
+  Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Values.Interfaces, Generics.Collections, Goccia.Values.UndefinedValue, Goccia.Values.ObjectPropertyDescriptor, Math, Goccia.Logger, SysUtils, Classes;
 
 type
-  TGocciaObjectValue = class(TGocciaValue)
+  TGocciaObjectValue = class(TGocciaValue, IPropertyMethods, IValueOf, IStringTag)
   protected
     FPropertyDescriptors: TDictionary<string, TGocciaPropertyDescriptor>;
     FPropertyInsertionOrder: TStringList; // Track insertion order for property enumeration
@@ -17,10 +17,10 @@ type
     constructor Create(APrototype: TGocciaObjectValue = nil);
     destructor Destroy; override;
     function ToDebugString: string;
-    function ToString: string; override;
-    function ToBoolean: Boolean; override;
-    function ToNumber: Double; override;
     function TypeName: string; override;
+    function TypeOf: string; override;
+    function ValueOf: TGocciaValue;
+    function ToStringTag: string;
 
     procedure DefineProperty(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
     procedure DefineProperties(const AProperties: TDictionary<string, TGocciaPropertyDescriptor>);
@@ -37,7 +37,7 @@ type
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
     function HasProperty(const AName: string): Boolean;
     function HasOwnProperty(const AName: string): Boolean;
-    procedure DeleteProperty(const AName: string);
+    function DeleteProperty(const AName: string): Boolean;
 
     // Property enumeration methods
     function GetEnumerablePropertyNames: TArray<string>;
@@ -125,24 +125,24 @@ begin
   Result := Result + '}';
 end;
 
-function TGocciaObjectValue.ToString: string;
-begin
-  Result := '[object Object]';
-end;
-
-function TGocciaObjectValue.ToBoolean: Boolean;
-begin
-  Result := True;
-end;
-
-function TGocciaObjectValue.ToNumber: Double;
-begin
-  Result := 0.0/0.0;  // Safe calculated NaN
-end;
-
 function TGocciaObjectValue.TypeName: string;
 begin
   Result := 'object';
+end;
+
+function TGocciaObjectValue.TypeOf: string;
+begin
+  Result := 'object';
+end;
+
+function TGocciaObjectValue.ValueOf: TGocciaValue;
+begin
+  Result := Self;
+end;
+
+function TGocciaObjectValue.ToStringTag: string;
+begin
+  Result := 'Object';
 end;
 
 procedure TGocciaObjectValue.AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
@@ -266,6 +266,37 @@ begin
   for Pair in AProperties do
     DefineProperty(Pair.Key, Pair.Value);
 end;
+
+function TGocciaObjectValue.GetOwnPropertyNames: TStringList;
+begin
+  Result := FPropertyInsertionOrder;
+end;
+
+function TGocciaObjectValue.GetOwnPropertyKeys: TStringList;
+begin
+  Result := FPropertyInsertionOrder;
+end;
+
+function TGocciaObjectValue.GetOwnPropertySymbols: TStringList;
+begin
+  Result := FPropertyInsertionOrder; // TODO: Implement
+end;
+
+function TGocciaObjectValue.GetOwnPropertyEnumerable: TStringList;
+begin
+  Result := FPropertyInsertionOrder; // TODO: Implement
+end;
+
+function TGocciaObjectValue.GetOwnPropertyWritable: TStringList;
+begin
+  Result := FPropertyInsertionOrder; // TODO: Implement
+end;
+
+function TGocciaObjectValue.GetOwnPropertyConfigurable: TStringList;
+begin
+  Result := FPropertyInsertionOrder; // TODO: Implement
+end;
+
 
 procedure TGocciaObjectValue.RegisterNativeMethod(AMethod: TGocciaValue);
 var
@@ -449,7 +480,7 @@ begin
   Result := FPropertyDescriptors.ContainsKey(AName);
 end;
 
-procedure TGocciaObjectValue.DeleteProperty(const AName: string);
+function TGocciaObjectValue.DeleteProperty(const AName: string): Boolean;
 var
   Index: Integer;
   Descriptor: TGocciaPropertyDescriptor;
@@ -465,6 +496,7 @@ begin
       // Non-configurable properties cannot be deleted
       // In strict mode, this should throw TypeError, but for delete operator
       // we silently fail (return false in EvaluateDelete)
+      Result := False;
       Exit;
     end;
 
@@ -473,6 +505,8 @@ begin
     Index := FPropertyInsertionOrder.IndexOf(AName);
     if Index >= 0 then
       FPropertyInsertionOrder.Delete(Index);
+
+    Result := True;
   end;
 end;
 

@@ -5,7 +5,7 @@ unit Goccia.Values.ObjectPropertyDescriptor;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Values.UndefinedValue;
+  Goccia.Values.Core;
 
 type
   TPropertyFlag = (pfEnumerable, pfConfigurable, pfWritable);

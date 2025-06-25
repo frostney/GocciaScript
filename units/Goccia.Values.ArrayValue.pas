@@ -5,10 +5,15 @@ unit Goccia.Values.ArrayValue;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.NativeFunction, Goccia.Error, Generics.Collections, Math, SysUtils;
+  Goccia.Values.Core, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.NativeFunction, Goccia.Error, Generics.Collections, Math, SysUtils, Goccia.Values.Interfaces;
 
 type
-  TGocciaArrayValue = class(TGocciaObjectValue)
+  TGocciaArrayPrototype = class(TGocciaObjectValue)
+  public
+    constructor Create;
+  end;
+
+  TGocciaArrayValue = class(TGocciaObjectValue, IIndexMethods)
   private
     function GetLength(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; inline;
 

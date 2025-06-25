@@ -5,22 +5,16 @@ unit Goccia.Values.StringObjectValue;
 interface
 
 uses
-  Goccia.Values.Base,
+  Goccia.Values.Core,
   Goccia.Values.ObjectValue,
-  Goccia.Values.StringValue,
-  Goccia.Values.NumberValue,
-  Goccia.Values.UndefinedValue,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
-  Goccia.Interfaces,
   SysUtils,
   StrUtils,
   Math,
   Generics.Collections;
 
 type
-  // Forward declaration
-  // Object wrapper for boxed string primitive
   TGocciaStringObjectValue = class(TGocciaObjectValue)
   private
     FPrimitiveValue: TGocciaStringValue;
@@ -181,13 +175,6 @@ begin
   // TODO: Add other primitive object types when implemented
   else
     Result := Value;
-end;
-
-function IsPrimitive(Value: TGocciaValue): Boolean;
-begin
-  Result := (Value is TGocciaStringValue) or
-            (Value is TGocciaNumberValue) or
-            (Value is TGocciaBooleanValue);
 end;
 
 { TGocciaStringObjectValue }
