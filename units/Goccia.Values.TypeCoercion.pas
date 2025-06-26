@@ -5,7 +5,7 @@ unit Goccia.Values.TypeCoercion;
 interface
 
 uses
-  SysUtils, Classes, Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Values.StringObjectValue, Goccia.Values.Interfaces, Goccia.Values.Constants;
+  SysUtils, Classes, Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.BooleanObjectValue, Goccia.Values.NumberObjectValue, Goccia.Values.StringObjectValue, Goccia.Values.Interfaces, Goccia.Values.Constants;
 
 type
 
@@ -16,12 +16,8 @@ type
     function ToStringLiteral: TGocciaStringLiteralValue;
 
     function ToStringObject: TGocciaStringObjectValue;
-
-    // function ToBooleanObject: TGocciaBooleanObjectValue;
-
-    // function ToNumberObject: TGocciaNumberObjectValue;
-
-    // function ToStringObject: TGocciaStringObjectValue;
+    function ToBooleanObject: TGocciaBooleanObjectValue;
+    function ToNumberObject: TGocciaNumberObjectValue;
   end;
 
 
@@ -124,19 +120,22 @@ implementation
     begin
       if Self is TGocciaStringObjectValue then
       begin
-        Result := TGocciaNumberLiteralValue.Create(StrToFloat((Self as TGocciaStringObjectValue).PrimitiveValue.Value));
+        Result := TGocciaNumberLiteralValue.Create(StrToFloat((Self as TGocciaStringObjectValue).Primitive.Value));
         Exit;
       end;
 
       if Self is TGocciaBooleanObjectValue then
       begin
-        Result := TGocciaNumberLiteralValue.Create(IfThen((Self as TGocciaBooleanObjectValue).PrimitiveValue.Value, ONE_VALUE, ZERO_VALUE));
+        if (Self as TGocciaBooleanObjectValue).Primitive.Value then
+          Result := TGocciaNumberLiteralValue.OneValue
+        else
+          Result := TGocciaNumberLiteralValue.ZeroValue;
         Exit;
       end;
 
       if Self is TGocciaNumberObjectValue then
       begin
-        Result := (Self as TGocciaNumberObjectValue).PrimitiveValue;
+        Result := (Self as TGocciaNumberObjectValue).Primitive;
         Exit;
       end;
 
@@ -196,7 +195,7 @@ implementation
     begin
       if Self is TGocciaStringObjectValue then
       begin
-        Result := TGocciaStringLiteralValue.Create((Self as TGocciaStringObjectValue).PrimitiveValue.Value);
+        Result := TGocciaStringLiteralValue.Create((Self as TGocciaStringObjectValue).Primitive.Value);
         Exit;
       end;
 
@@ -208,7 +207,7 @@ implementation
 
       if Self is TGocciaNumberObjectValue then
       begin
-        Result := TGocciaStringLiteralValue.Create(FloatToStr((Self as TGocciaNumberObjectValue).PrimitiveValue.Value));
+        Result := TGocciaStringLiteralValue.Create(FloatToStr((Self as TGocciaNumberObjectValue).Primitive.Value));
         Exit;
       end;
 
@@ -219,23 +218,19 @@ implementation
     Result := TGocciaStringLiteralValue.Create(EMPTY_STRING);
   end;
 
-  // function TGocciaValue.ToNumberObject: TGocciaNumberObjectValue;
-  // begin
-  //   Result := TGocciaNumberObjectValue.Create(Self.ToNumber);
-  // end;
+  function TGocciaTypeCoercion.ToNumberObject: TGocciaNumberObjectValue;
+  begin
+    Result := TGocciaNumberObjectValue.Create(Self.ToNumberLiteral);
+  end;
 
-  function TGocciaValue.ToStringObject: TGocciaStringObjectValue;
+  function TGocciaTypeCoercion.ToStringObject: TGocciaStringObjectValue;
   begin
     Result := TGocciaStringObjectValue.Create(Self.ToStringLiteral);
   end;
 
-  // function TGocciaValue.ToBooleanObject: TGocciaBooleanObjectValue;
-  // begin
-  //   Result := TGocciaBooleanObjectValue.Create(Self.ToBoolean);
-  // end;
+  function TGocciaTypeCoercion.ToBooleanObject: TGocciaBooleanObjectValue;
+  begin
+    Result := TGocciaBooleanObjectValue.Create(Self.ToBooleanLiteral);
+  end;
 
-  // function TGocciaValue.ToNumberObject: TGocciaNumberObjectValue;
-  // begin
-  //   Result := TGocciaNumberObjectValue.Create(Self.ToNumber);
-  // end;
 end.

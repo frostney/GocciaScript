@@ -3,7 +3,7 @@ program ScriptLoader;
 {$I Goccia.inc}
 
 uses
-  Classes, SysUtils, Generics.Collections, Goccia.Values.Base, Goccia.Lexer, Goccia.Parser, Goccia.Interpreter, Goccia.Error, Goccia.Token, Goccia.AST.Node, FileUtils in 'units/FileUtils.pas';
+  Classes, SysUtils, Generics.Collections, Goccia.Values.Core, Goccia.Lexer, Goccia.Parser, Goccia.Interpreter, Goccia.Error, Goccia.Token, Goccia.AST.Node, FileUtils in 'units/FileUtils.pas';
 
 function RunGocciaScript(const FileName: string): TGocciaValue;
 var

@@ -5,7 +5,7 @@ unit Goccia.Builtins.GlobalNumber;
 interface
 
 uses
-  Goccia.Builtins.Base, Goccia.Scope, Goccia.Error, Goccia.Values.Base, Goccia.Values.Error, Goccia.Values.ObjectValue, Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.NullValue, Goccia.Values.BooleanValue, SysUtils, Math, Generics.Collections;
+  Goccia.Builtins.Base, Goccia.Scope, Goccia.Error, Goccia.Values.Core, Goccia.Values.Error, Goccia.Values.ObjectValue, Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.NullValue, Goccia.Values.BooleanValue, SysUtils, Math, Generics.Collections;
 
 type
   TGocciaGlobalNumber = class(TGocciaBuiltin)
@@ -34,7 +34,7 @@ begin
   FBuiltinNumber := TGocciaObjectValue.Create;
 
   // Number constants
-  FBuiltinNumber.DefineProperty('NaN', TGocciaPropertyDescriptorData.Create(TGocciaNumberValue.CreateNaN, [pfEnumerable]));
+  FBuiltinNumber.DefineProperty('NaN', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteral.CreateNaN, [pfEnumerable]));
 
   FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseInt, 'parseInt', 1));
   FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseFloat, 'parseFloat', 1));
@@ -57,14 +57,14 @@ var
 begin
   if Args.Count = 0 then
   begin
-    Result := TGocciaNumberValue.CreateNaN;
+    Result := TGocciaNumberLiteral.CreateNaN;
     Exit;
   end;
 
   InputStr := Trim(Args[0].ToString);
   if InputStr = '' then
   begin
-    Result := TGocciaNumberValue.CreateNaN;
+    Result := TGocciaNumberLiteral.CreateNaN;
     Exit;
   end;
 
@@ -110,7 +110,7 @@ begin
   // Check for invalid radix
   if (Radix < 2) or (Radix > 36) then
   begin
-    Result := TGocciaNumberValue.CreateNaN;
+    Result := TGocciaNumberLiteral.CreateNaN;
     Exit;
   end;
 
@@ -136,11 +136,11 @@ begin
   // If no digits were parsed, return NaN
   if I = StartPos then // No digits parsed
   begin
-    Result := TGocciaNumberValue.CreateNaN;
+    Result := TGocciaNumberLiteral.CreateNaN;
     Exit;
   end;
 
-  Result := TGocciaNumberValue.Create(Sign * ResultValue);
+  Result := TGocciaNumberLiteral.Create(Sign * ResultValue);
 end;
 
 function TGocciaGlobalNumber.NumberParseFloat(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -155,14 +155,14 @@ var
 begin
   if Args.Count = 0 then
   begin
-    Result := TGocciaNumberValue.CreateNaN;
+    Result := TGocciaNumberLiteral.CreateNaN;
     Exit;
   end;
 
   InputStr := Trim(Args[0].ToString);
   if InputStr = '' then
   begin
-    Result := TGocciaNumberValue.CreateNaN;
+    Result := TGocciaNumberLiteral.CreateNaN;
     Exit;
   end;
 
@@ -224,16 +224,16 @@ begin
   // If no digits were parsed, return NaN
   if not HasDigits then
   begin
-    Result := TGocciaNumberValue.CreateNaN;
+    Result := TGocciaNumberLiteral.CreateNaN;
     Exit;
   end;
 
-  Result := TGocciaNumberValue.Create(Sign * (IntegerPart + (FractionalPart / FractionDivisor)));
+  Result := TGocciaNumberLiteral.Create(Sign * (IntegerPart + (FractionalPart / FractionDivisor)));
 end;
 
 function TGocciaGlobalNumber.NumberIsFinite(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  NumberArg: TGocciaNumberValue;
+  NumberArg: TGocciaNumberLiteral;
 begin
   if Args.Count = 0 then
   begin
@@ -241,9 +241,9 @@ begin
     Exit;
   end;
 
-  NumberArg := TGocciaNumberValue(Args[0]);
+  NumberArg := TGocciaNumberLiteral(Args[0]);
 
-  if not (NumberArg is TGocciaNumberValue) then
+  if not (NumberArg is TGocciaNumberLiteral) then
   begin
     Result := TGocciaBooleanValue.Create(False);
     Exit;
@@ -260,7 +260,7 @@ end;
 
 function TGocciaGlobalNumber.NumberIsNaN(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  NumberArg: TGocciaNumberValue;
+  NumberArg: TGocciaNumberLiteral;
 begin
   if Args.Count = 0 then
   begin
@@ -269,9 +269,9 @@ begin
   end;
 
   // Number.isNaN only returns true for actual NaN numbers, not for other types
-  if Args[0] is TGocciaNumberValue then
+  if Args[0] is TGocciaNumberLiteral then
   begin
-    NumberArg := TGocciaNumberValue(Args[0]);
+    NumberArg := TGocciaNumberLiteral(Args[0]);
     Result := TGocciaBooleanValue.Create(NumberArg.IsNaN);
   end
   else
@@ -283,7 +283,7 @@ end;
 
 function TGocciaGlobalNumber.NumberIsInteger(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  NumberArg: TGocciaNumberValue;
+  NumberArg: TGocciaNumberLiteral;
   Value: Double;
 begin
   if Args.Count = 0 then
@@ -292,9 +292,9 @@ begin
     Exit;
   end;
 
-  NumberArg := TGocciaNumberValue(Args[0]);
+  NumberArg := TGocciaNumberLiteral(Args[0]);
 
-  if not (NumberArg is TGocciaNumberValue) then
+  if not (NumberArg is TGocciaNumberLiteral) then
   begin
     Result := TGocciaBooleanValue.Create(False);
     Exit;

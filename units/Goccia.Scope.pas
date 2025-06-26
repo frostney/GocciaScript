@@ -5,7 +5,7 @@ unit Goccia.Scope;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Values.UndefinedValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ObjectValue, Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, TypInfo, Goccia.Interfaces, Goccia.Token;
+  Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ObjectValue, Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, TypInfo, Goccia.Interfaces, Goccia.Token;
 
 type
   TGocciaDeclarationType = (dtUnknown, dtLet, dtConst, dtParameter);
@@ -115,7 +115,7 @@ begin
     Logger.Debug('  CustomLabel: %s', [FCustomLabel]);
   Logger.Debug('  Parent scope address: %d', [PtrUInt(AParent)]);
 
-  FThisValue := TGocciaUndefinedValue.Create;
+  FThisValue := TGocciaUndefinedLiteralValue.Create;
   FParent := AParent;
   FLexicalBindings := TDictionary<string, TLexicalBinding>.Create;
 end;
@@ -284,7 +284,7 @@ begin
   if (ThisValue is TGocciaObjectValue) then
     Result := TGocciaObjectValue(ThisValue).GetProperty(AName)
   else
-    Result := TGocciaUndefinedValue.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
 end;
 
 function TGocciaScope.ContainsOwnLexicalBinding(const AName: string): Boolean; inline;

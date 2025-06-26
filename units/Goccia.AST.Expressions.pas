@@ -5,7 +5,7 @@ unit Goccia.AST.Expressions;
 interface
 
 uses
-  Goccia.AST.Node, Goccia.Token, Goccia.Values.Base, Generics.Collections, Classes, SysUtils;
+  Goccia.AST.Node, Goccia.Token, Goccia.Values.Core, Generics.Collections, Classes, SysUtils;
 
 type
   // Forward declaration

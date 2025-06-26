@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Values.Core,
+  Goccia.Values.Primitives,
   Goccia.Values.ObjectValue,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
@@ -17,10 +18,10 @@ uses
 type
   TGocciaStringObjectValue = class(TGocciaObjectValue)
   private
-    FPrimitiveValue: TGocciaStringValue;
+    FPrimitive: TGocciaStringLiteralValue;
     FStringPrototype: TGocciaObjectValue;
   public
-    constructor Create(APrimitiveValue: TGocciaStringValue);
+    constructor Create(APrimitive: TGocciaStringLiteralValue);
     destructor Destroy; override;
     function ToString: string; override;
     function TypeName: string; override;
@@ -28,7 +29,7 @@ type
 
     procedure InitializePrototype;
     property StringPrototype: TGocciaObjectValue read FStringPrototype write FStringPrototype;
-    property PrimitiveValue: TGocciaStringValue read FPrimitiveValue;
+    property Primitive: TGocciaStringLiteralValue read FPrimitive;
 
     // String prototype methods
     function StringLength(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -52,28 +53,19 @@ type
   end;
 
 
-
-
-
-// Boxing/unboxing utility functions
-function BoxPrimitive(Value: TGocciaValue): TGocciaObjectValue;
-function UnboxIfPrimitive(Value: TGocciaValue): TGocciaValue;
-function IsPrimitive(Value: TGocciaValue): Boolean;
-
 implementation
 
 uses
-  Goccia.Values.BooleanValue,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.NullValue,
+  Goccia.Values.TypeCoercion,
+    Goccia.Values.ArrayValue,
   Goccia.Values.ObjectPropertyDescriptor;
 
 { TGocciaStringObjectValue }
 
-constructor TGocciaStringObjectValue.Create(APrimitiveValue: TGocciaStringValue);
+constructor TGocciaStringObjectValue.Create(APrimitive: TGocciaStringLiteralValue);
 begin
   inherited Create;
-  FPrimitiveValue := APrimitiveValue;
+  FPrimitive := APrimitive;
 
 // TODO: We are not using a shared prototype but re-creating this for every instance
   InitializePrototype;
@@ -91,7 +83,7 @@ end;
 
 function TGocciaStringObjectValue.ToString: string;
 begin
-  Result := FPrimitiveValue.ToString;
+  Result := FPrimitive.ToString;
 end;
 
 function TGocciaStringObjectValue.TypeName: string;
@@ -104,15 +96,15 @@ var
   Index: Integer;
   StringValue: string;
 begin
-  StringValue := FPrimitiveValue.ToString;
+  StringValue := FPrimitive.ToString;
 
   // Handle numeric index access: str[0], str[1], etc.
   if TryStrToInt(AName, Index) then
   begin
     if (Index >= 0) and (Index < Length(StringValue)) then
-      Result := TGocciaStringValue.Create(StringValue[Index + 1]) // Pascal is 1-indexed
+      Result := TGocciaStringLiteralValue.Create(StringValue[Index + 1]) // Pascal is 1-indexed
     else
-      Result := TGocciaUndefinedValue.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
     Exit;
   end;
 
@@ -149,34 +141,6 @@ begin
   end;
 end;
 
-
-
-{ Utility Functions }
-
-function BoxPrimitive(Value: TGocciaValue): TGocciaObjectValue;
-begin
-  if Value is TGocciaStringValue then
-    Result := TGocciaStringObjectValue.Create(Value as TGocciaStringValue)
-  // TODO: Add other primitive types when implemented
-  // else if Value is TGocciaNumberValue then
-  //   Result := TGocciaNumberObjectValue.Create(Value as TGocciaNumberValue)
-  // else if Value is TGocciaBooleanValue then
-  //   Result := TGocciaBooleanObjectValue.Create(Value as TGocciaBooleanValue)
-  else if Value is TGocciaObjectValue then
-    Result := Value as TGocciaObjectValue
-  else
-    Result := nil; // null/undefined can't be boxed
-end;
-
-function UnboxIfPrimitive(Value: TGocciaValue): TGocciaValue;
-begin
-  if Value is TGocciaStringObjectValue then
-    Result := TGocciaStringObjectValue(Value).PrimitiveValue
-  // TODO: Add other primitive object types when implemented
-  else
-    Result := Value;
-end;
-
 { TGocciaStringObjectValue }
 
 function TGocciaStringObjectValue.StringLength(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -184,22 +148,22 @@ var
   StringValue: string;
 begin
   // Get the string value - handle both primitives and boxed objects
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
   begin
     StringValue := ThisValue.ToString;
   end
   else if ThisValue is TGocciaStringObjectValue then
   begin
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString;
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString;
   end
   else
   begin
     // For any other case that might be a boxing context, try to extract the primitive
     // This handles cases where ThisValue is the boxing object itself
-    StringValue := Self.PrimitiveValue.ToString;
+    StringValue := Self.Primitive.ToString;
   end;
 
-  Result := TGocciaNumberValue.Create(Length(StringValue));
+  Result := TGocciaNumberLiteralValue.Create(Length(StringValue));
 end;
 
 function TGocciaStringObjectValue.StringCharAt(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -207,17 +171,17 @@ var
   StringValue: string;
   Index: Integer;
   NumberValue: Double;
-  TempNumberValue: TGocciaNumberValue;
+  TempNumberValue: TGocciaNumberLiteralValue;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
   begin
     // For any other case that might be a boxing context, try to extract the primitive
-    StringValue := Self.PrimitiveValue.ToString;
+    StringValue := Self.Primitive.ToString;
   end;
 
   // Get the index argument with safe conversion
@@ -227,13 +191,13 @@ begin
       // Handle special values according to ECMAScript spec:
       // - NaN converts to 0
       // - Infinity/-Infinity are treated as out-of-bounds (use very large number)
-      if (Args[0] is TGocciaNumberValue) and TGocciaNumberValue(Args[0]).IsNaN then
+      if (Args[0] is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(Args[0]).IsNaN then
         Index := 0
       else
       begin
-        NumberValue := Args[0].ToNumber;
-        // Check for infinity using TGocciaNumberValue properties
-        TempNumberValue := TGocciaNumberValue.Create(NumberValue);
+        NumberValue := Args[0].ToNumberLiteral.Value;
+        // Check for infinity using TGocciaNumberLiteral properties
+        TempNumberValue := TGocciaNumberLiteralValue.Create(NumberValue);
         try
           if TempNumberValue.IsInfinity or TempNumberValue.IsNegativeInfinity then
             Index := MaxInt // Force out-of-bounds
@@ -252,9 +216,9 @@ begin
 
   // Return character at index or empty string
   if (Index >= 0) and (Index < Length(StringValue)) then
-    Result := TGocciaStringValue.Create(StringValue[Index + 1]) // Pascal is 1-indexed
+    Result := TGocciaStringLiteralValue.Create(StringValue[Index + 1]) // Pascal is 1-indexed
   else
-    Result := TGocciaStringValue.Create('');
+    Result := TGocciaStringLiteralValue.Create('');
 end;
 
 function TGocciaStringObjectValue.StringCharCodeAt(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -262,17 +226,17 @@ var
   StringValue: string;
   Index: Integer;
   NumberValue: Double;
-  TempNumberValue: TGocciaNumberValue;
+  TempNumberValue: TGocciaNumberLiteralValue;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
   begin
     // For any other case that might be a boxing context, try to extract the primitive
-    StringValue := Self.PrimitiveValue.ToString;
+    StringValue := Self.Primitive.ToString;
   end;
 
   // Get the index argument with safe conversion
@@ -282,13 +246,13 @@ begin
       // Handle special values according to ECMAScript spec:
       // - NaN converts to 0
       // - Infinity/-Infinity are treated as out-of-bounds (use very large number)
-      if (Args[0] is TGocciaNumberValue) and TGocciaNumberValue(Args[0]).IsNaN then
+      if (Args[0] is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(Args[0]).IsNaN then
         Index := 0
       else
       begin
-        NumberValue := Args[0].ToNumber;
-        // Check for infinity using TGocciaNumberValue properties
-        TempNumberValue := TGocciaNumberValue.Create(NumberValue);
+        NumberValue := Args[0].ToNumberLiteral.Value;
+        // Check for infinity using TGocciaNumberLiteral properties
+        TempNumberValue := TGocciaNumberLiteralValue.Create(NumberValue);
         try
           if TempNumberValue.IsInfinity or TempNumberValue.IsNegativeInfinity then
             Index := MaxInt // Force out-of-bounds
@@ -307,9 +271,9 @@ begin
 
   // Return character code at index or NaN
   if (Index >= 0) and (Index < Length(StringValue)) then
-    Result := TGocciaNumberValue.Create(Ord(StringValue[Index + 1])) // Pascal is 1-indexed
+    Result := TGocciaNumberLiteralValue.Create(Ord(StringValue[Index + 1])) // Pascal is 1-indexed
   else
-    Result := TGocciaNumberValue.CreateNaN;
+    Result := TGocciaNumberLiteralValue.NaNValue;
 end;
 
 function TGocciaStringObjectValue.StringToUpperCase(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -317,14 +281,14 @@ var
   StringValue: string;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.Value
   else
-    StringValue := Self.PrimitiveValue.ToString;
+    StringValue := Self.Primitive.Value;
 
-  Result := TGocciaStringValue.Create(UpperCase(StringValue));
+  Result := TGocciaStringLiteralValue.Create(UpperCase(StringValue));
 end;
 
 function TGocciaStringObjectValue.StringToLowerCase(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -332,14 +296,14 @@ var
   StringValue: string;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
-  Result := TGocciaStringValue.Create(LowerCase(StringValue));
+  Result := TGocciaStringLiteralValue.Create(LowerCase(StringValue));
 end;
 
 function TGocciaStringObjectValue.StringSlice(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -349,10 +313,10 @@ var
   Len: Integer;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
@@ -360,7 +324,7 @@ begin
 
   // Get start index
   if Args.Count > 0 then
-    StartIndex := Trunc(Args[0].ToNumber)
+    StartIndex := Trunc(Args[0].ToNumberLiteral.Value)
   else
     StartIndex := 0;
 
@@ -370,7 +334,7 @@ begin
 
   // Get end index
   if Args.Count > 1 then
-    EndIndex := Trunc(Args[1].ToNumber)
+    EndIndex := Trunc(Args[1].ToNumberLiteral.Value)
   else
     EndIndex := Len;
 
@@ -384,9 +348,9 @@ begin
 
   // Extract substring (Pascal is 1-indexed)
   if (StartIndex >= 0) and (StartIndex < Len) and (EndIndex > StartIndex) then
-    Result := TGocciaStringValue.Create(Copy(StringValue, StartIndex + 1, EndIndex - StartIndex))
+    Result := TGocciaStringLiteralValue.Create(Copy(StringValue, StartIndex + 1, EndIndex - StartIndex))
   else
-    Result := TGocciaStringValue.Create('');
+    Result := TGocciaStringLiteralValue.Create('');
 end;
 
 function TGocciaStringObjectValue.StringSubstring(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -397,10 +361,10 @@ var
   Temp: Integer;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
@@ -408,13 +372,13 @@ begin
 
   // Get start index
   if Args.Count > 0 then
-    StartIndex := Trunc(Args[0].ToNumber)
+    StartIndex := Trunc(Args[0].ToNumberLiteral.Value)
   else
     StartIndex := 0;
 
   // Get end index
   if Args.Count > 1 then
-    EndIndex := Trunc(Args[1].ToNumber)
+    EndIndex := Trunc(Args[1].ToNumberLiteral.Value)
   else
     EndIndex := Len;
 
@@ -432,9 +396,9 @@ begin
 
   // Extract substring (Pascal is 1-indexed)
   if EndIndex > StartIndex then
-    Result := TGocciaStringValue.Create(Copy(StringValue, StartIndex + 1, EndIndex - StartIndex))
+    Result := TGocciaStringLiteralValue.Create(Copy(StringValue, StartIndex + 1, EndIndex - StartIndex))
   else
-    Result := TGocciaStringValue.Create('');
+    Result := TGocciaStringLiteralValue.Create('');
 end;
 
 function TGocciaStringObjectValue.StringIndexOf(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -444,10 +408,10 @@ var
   FoundIndex: Integer;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
@@ -459,7 +423,7 @@ begin
 
   // Get start position
   if Args.Count > 1 then
-    StartPosition := Trunc(Args[1].ToNumber)
+    StartPosition := Trunc(Args[1].ToNumberLiteral.Value)
   else
     StartPosition := 0;
 
@@ -471,12 +435,12 @@ begin
   begin
     FoundIndex := Pos(SearchValue, Copy(StringValue, StartPosition + 1, Length(StringValue)));
     if FoundIndex > 0 then
-      Result := TGocciaNumberValue.Create(FoundIndex + StartPosition - 1) // Convert back to 0-indexed
+      Result := TGocciaNumberLiteralValue.Create(FoundIndex + StartPosition - 1) // Convert back to 0-indexed
     else
-      Result := TGocciaNumberValue.Create(-1);
+      Result := TGocciaNumberLiteralValue.Create(-1);
   end
   else
-    Result := TGocciaNumberValue.Create(-1);
+    Result := TGocciaNumberLiteralValue.Create(-1);
 end;
 
 function TGocciaStringObjectValue.StringLastIndexOf(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -487,10 +451,10 @@ var
   I: Integer;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
@@ -502,7 +466,7 @@ begin
 
   // Get start position
   if Args.Count > 1 then
-    StartPosition := Trunc(Args[1].ToNumber)
+    StartPosition := Trunc(Args[1].ToNumberLiteral.Value)
   else
     StartPosition := Length(StringValue) - 1; // 0-indexed
 
@@ -529,7 +493,7 @@ begin
     FoundIndex := Min(StartPosition, Length(StringValue));
   end;
 
-  Result := TGocciaNumberValue.Create(FoundIndex);
+  Result := TGocciaNumberLiteralValue.Create(FoundIndex);
 end;
 
 function TGocciaStringObjectValue.StringIncludes(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -539,12 +503,12 @@ var
   FoundIndex: Integer;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
-    StringValue := Self.PrimitiveValue.ToString;
+    StringValue := Self.Primitive.ToString;
 
   // Get search string
   if Args.Count > 0 then
@@ -554,7 +518,7 @@ begin
 
   // Get start position
   if Args.Count > 1 then
-    StartPosition := Trunc(Args[1].ToNumber)
+    StartPosition := Trunc(Args[1].ToNumberLiteral.Value)
   else
     StartPosition := 0;
 
@@ -565,13 +529,13 @@ begin
   if StartPosition >= Length(StringValue) then
   begin
     // If start position is beyond string length, only empty string can be found
-    Result := TGocciaBooleanValue.Create(SearchValue = '');
+    Result := TGocciaBooleanLiteralValue.Create(SearchValue = '');
     Exit;
   end;
 
   // Search for the substring (Pascal is 1-indexed)
   FoundIndex := Pos(SearchValue, Copy(StringValue, StartPosition + 1, Length(StringValue)));
-  Result := TGocciaBooleanValue.Create(FoundIndex > 0);
+  Result := TGocciaBooleanLiteralValue.Create(FoundIndex > 0);
 end;
 
 function TGocciaStringObjectValue.StringStartsWith(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -581,10 +545,10 @@ var
   FoundIndex: Integer;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
@@ -596,9 +560,9 @@ begin
 
   // Check if the string starts with the search string
   if Length(StringValue) >= Length(SearchValue) then
-    Result := TGocciaBooleanValue.Create(Copy(StringValue, 1, Length(SearchValue)) = SearchValue)
+    Result := TGocciaBooleanLiteralValue.Create(Copy(StringValue, 1, Length(SearchValue)) = SearchValue)
   else
-    Result := TGocciaBooleanValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.Create(False);
 end;
 
 function TGocciaStringObjectValue.StringEndsWith(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -608,10 +572,10 @@ var
   FoundIndex: Integer;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
@@ -623,9 +587,9 @@ begin
 
   // Check if the string ends with the search string
   if Length(StringValue) >= Length(SearchValue) then
-    Result := TGocciaBooleanValue.Create(Copy(StringValue, Length(StringValue) - Length(SearchValue) + 1, Length(SearchValue)) = SearchValue)
+    Result := TGocciaBooleanLiteralValue.Create(Copy(StringValue, Length(StringValue) - Length(SearchValue) + 1, Length(SearchValue)) = SearchValue)
   else
-    Result := TGocciaBooleanValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.Create(False);
 end;
 
 function TGocciaStringObjectValue.StringTrim(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -633,15 +597,15 @@ var
   StringValue: string;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
   // Trim the string
-  Result := TGocciaStringValue.Create(Trim(StringValue));
+  Result := TGocciaStringLiteralValue.Create(Trim(StringValue));
 end;
 
 function TGocciaStringObjectValue.StringTrimStart(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -649,15 +613,15 @@ var
   StringValue: string;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
   // Trim the string
-  Result := TGocciaStringValue.Create(TrimLeft(StringValue));
+  Result := TGocciaStringLiteralValue.Create(TrimLeft(StringValue));
 end;
 
 function TGocciaStringObjectValue.StringTrimEnd(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -665,15 +629,15 @@ var
   StringValue: string;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
   // Trim the string
-  Result := TGocciaStringValue.Create(TrimRight(StringValue));
+  Result := TGocciaStringLiteralValue.Create(TrimRight(StringValue));
 end;
 
 function TGocciaStringObjectValue.StringReplaceMethod(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -681,10 +645,10 @@ var
   StringValue, SearchValue, ReplaceValue: string;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
@@ -701,7 +665,7 @@ begin
     ReplaceValue := 'undefined';
 
   // Replace the string
-  Result := TGocciaStringValue.Create(StringReplace(StringValue, SearchValue, ReplaceValue, [rfReplaceAll, rfIgnoreCase]));
+  Result := TGocciaStringLiteralValue.Create(StringReplace(StringValue, SearchValue, ReplaceValue, [rfReplaceAll, rfIgnoreCase]));
 end;
 
 function TGocciaStringObjectValue.StringSplit(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -716,10 +680,10 @@ var
   HasLimit: Boolean;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
@@ -733,7 +697,7 @@ begin
   HasLimit := Args.Count > 1;
   if HasLimit then
   begin
-    Limit := Trunc(Args[1].ToNumber);
+    Limit := Trunc(Args[1].ToNumberLiteral.Value);
     // If limit is 0, return empty array
     if Limit = 0 then
     begin
@@ -758,7 +722,7 @@ begin
     else
     begin
       // "".split("anything") should return [""]
-      ResultArray.Elements.Add(TGocciaStringValue.Create(''));
+      ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(''));
       Result := ResultArray;
       Exit;
     end;
@@ -769,7 +733,7 @@ begin
     // Split into individual characters
     for I := 1 to Length(StringValue) do
     begin
-      ResultArray.Elements.Add(TGocciaStringValue.Create(StringValue[I]));
+      ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(StringValue[I]));
       // Check limit
       if HasLimit and (ResultArray.Elements.Count >= Limit) then
         Break;
@@ -782,7 +746,7 @@ begin
   if Pos(Separator, StringValue) = 0 then
   begin
     // Separator not found, return array with the original string
-    ResultArray.Elements.Add(TGocciaStringValue.Create(StringValue));
+    ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(StringValue));
   end
   else
   begin
@@ -794,14 +758,14 @@ begin
       if SeparatorPos = 0 then
       begin
         // No more separators, add the remaining string
-        ResultArray.Elements.Add(TGocciaStringValue.Create(RemainingString));
+        ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(RemainingString));
         Break;
       end
       else
       begin
         // Found separator, add segment before it
         Segment := Copy(RemainingString, 1, SeparatorPos - 1);
-        ResultArray.Elements.Add(TGocciaStringValue.Create(Segment));
+        ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(Segment));
 
         // Check limit before continuing
         if HasLimit and (ResultArray.Elements.Count >= Limit) then
@@ -822,21 +786,21 @@ var
   Count: Integer;
 begin
   // Get the string value
-  if ThisValue is TGocciaStringValue then
+  if ThisValue is TGocciaStringLiteralValue then
     StringValue := ThisValue.ToString
   else if ThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(ThisValue).PrimitiveValue.ToString
+    StringValue := TGocciaStringObjectValue(ThisValue).Primitive.ToString
   else
     StringValue := ThisValue.ToString;
 
   // Get count
   if Args.Count > 0 then
-    Count := Trunc(Args[0].ToNumber)
+    Count := Trunc(Args[0].ToNumberLiteral.Value)
   else
     Count := 1;
 
   // Repeat the string
-  Result := TGocciaStringValue.Create(DupeString(StringValue, Count));
+  Result := TGocciaStringLiteralValue.Create(DupeString(StringValue, Count));
 end;
 
 end.

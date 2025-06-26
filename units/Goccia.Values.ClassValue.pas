@@ -5,8 +5,8 @@ unit Goccia.Values.ClassValue;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Interfaces,
-  Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math, Goccia.Values.UndefinedValue,
+  Goccia.Values.Core, Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Interfaces,
+  Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math, Goccia.Values.Primitives,
   Goccia.AST.Node, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.NativeFunction;
 
 type
@@ -31,8 +31,6 @@ type
     constructor Create(const AName: string; ASuperClass: TGocciaClassValue);
     destructor Destroy; override;
     function ToString: string; override;
-    function ToBoolean: Boolean; override;
-    function ToNumber: Double; override;
     function TypeName: string; override;
     procedure AddMethod(const AName: string; AMethod: TGocciaMethodValue);
     function GetMethod(const AName: string): TGocciaMethodValue;
@@ -67,7 +65,7 @@ type
     constructor Create(AClass: TGocciaClassValue);
     destructor Destroy; override;
     function TypeName: string; override;
-    function GetProperty(const AName: string): TGocciaValue; override;
+    function GetProperty(const AName: string): TGocciaValue;
     procedure AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
     function GetPrivateProperty(const AName: string; AAccessClass: TGocciaClassValue): TGocciaValue;
@@ -120,16 +118,6 @@ begin
     Result := FName
   else
     Result := Format('[Class: %s]', [FName]);
-end;
-
-function TGocciaClassValue.ToBoolean: Boolean;
-begin
-  Result := True;
-end;
-
-function TGocciaClassValue.ToNumber: Double;
-begin
-  Result := 0.0/0.0;  // Safe calculated NaN
 end;
 
 function TGocciaClassValue.TypeName: string;
@@ -225,7 +213,7 @@ end;
 function TGocciaClassValue.GetPrivateStaticProperty(const AName: string): TGocciaValue;
 begin
   if not FPrivateStaticProperties.TryGetValue(AName, Result) then
-    Result := TGocciaUndefinedValue.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
 end;
 
 procedure TGocciaClassValue.AddPrivateMethod(const AName: string; AMethod: TGocciaMethodValue);
@@ -277,13 +265,6 @@ end;
 
 function TGocciaClassValue.GetProperty(const AName: string): TGocciaValue;
 begin
-  // Special case for 'prototype' property
-  if AName = 'prototype' then
-  begin
-    Result := FPrototype;
-    Exit;
-  end;
-
   if FStaticMethods.TryGetValue(AName, Result) then
     Exit;
 
@@ -291,7 +272,7 @@ begin
   if Assigned(FSuperClass) then
     Result := FSuperClass.GetProperty(AName)
   else
-    Result := TGocciaUndefinedValue.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
 end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; AValue: TGocciaValue);
@@ -336,7 +317,7 @@ begin
     Logger.Debug('TGocciaInstanceValue.GetProperty: Instance type: %s', [Self.TypeName]);
     Result := FPrototype.GetPropertyWithContext(AName, Self);
     Logger.Debug('TGocciaInstanceValue.GetProperty: GetPropertyWithContext returned: %s', [Result.ToString]);
-    if not (Result is TGocciaUndefinedValue) then
+    if not (Result is TGocciaUndefinedLiteralValue) then
       Exit;
   end;
 
@@ -348,7 +329,7 @@ begin
     Exit;
   end;
 
-  Result := TGocciaUndefinedValue.Create;
+  Result := TGocciaUndefinedLiteralValue.Create;
 end;
 
 procedure TGocciaInstanceValue.AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
@@ -492,7 +473,7 @@ begin
   if FPrivateProperties.TryGetValue(AName, Result) then
     Exit
   else
-    Result := TGocciaUndefinedValue.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
 end;
 
 procedure TGocciaInstanceValue.SetPrivateProperty(const AName: string; AValue: TGocciaValue; AAccessClass: TGocciaClassValue);

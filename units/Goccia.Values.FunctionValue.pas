@@ -6,13 +6,10 @@ unit Goccia.Values.FunctionValue;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Base, Goccia.AST.Node, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope,
+  Goccia.Interfaces, Goccia.Values.Core, Goccia.AST.Node, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope,
   Goccia.Error, Goccia.Logger, Goccia.Values.Error, Goccia.Values.ObjectValue, Goccia.Values.FunctionBase,
   Generics.Collections, Classes, Math, SysUtils,
-  Goccia.Values.NumberValue,
-  Goccia.Values.StringValue,
-  Goccia.Values.BooleanValue,
-  Goccia.Values.UndefinedValue;
+  Goccia.Values.Primitives;
 
 type
   TGocciaFunctionValue = class(TGocciaFunctionBase)
@@ -25,10 +22,8 @@ type
     constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string = '');
     destructor Destroy; override;
     function ToString: string; override;
-    function ToBoolean: Boolean; override;
-    function ToNumber: Double; override;
 
-    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; override;
+    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     function CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
     property Parameters: TGocciaParameterArray read FParameters;
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
@@ -128,7 +123,7 @@ begin
     if Self is TGocciaMethodValue then
     begin
       Method := TGocciaMethodValue(Self);
-      if Assigned(Method.SuperClass) and not (Method.SuperClass is TGocciaUndefinedValue) then
+      if Assigned(Method.SuperClass) and not (Method.SuperClass is TGocciaUndefinedLiteral) then
       begin
         Logger.Debug('FunctionValue.Call: Method has superclass: %s', [Method.SuperClass.ToString]);
         // Set up special 'super' binding in the method scope - TODO: This should be a specialised scope
@@ -155,7 +150,7 @@ begin
         else
         begin
           Logger.Debug('  No argument provided, using undefined for destructuring');
-          ReturnValue := TGocciaUndefinedValue.Create;
+          ReturnValue := TGocciaUndefinedLiteral.Create;
         end;
 
         // Bind the destructuring pattern using existing pattern assignment logic
@@ -184,7 +179,7 @@ begin
           else
           begin
             Logger.Debug('  No argument provided, setting to undefined');
-            CallScope.DefineBuiltin(FParameters[I].Name, TGocciaUndefinedValue.Create);
+            CallScope.DefineBuiltin(FParameters[I].Name, TGocciaUndefinedLiteral.Create);
           end;
         end;
       end;
@@ -193,7 +188,7 @@ begin
     // Execute function body statements directly
     try
       Context.Scope := CallScope;
-      ReturnValue := TGocciaUndefinedValue.Create;
+      ReturnValue := TGocciaUndefinedLiteral.Create;
 
       for I := 0 to FBodyStatements.Count - 1 do
       begin
@@ -217,7 +212,7 @@ begin
       end;
 
       if ReturnValue = nil then
-        ReturnValue := TGocciaUndefinedValue.Create;
+        ReturnValue := TGocciaUndefinedLiteral.Create;
       Result := ReturnValue;
     except
       on E: TGocciaReturnValue do
@@ -226,20 +221,20 @@ begin
         if E.Value = nil then
         begin
           Logger.Debug('FunctionValue.Call: E.Value is nil, creating undefined value');
-          Result := TGocciaUndefinedValue.Create;
+          Result := TGocciaUndefinedLiteral.Create;
         end
         else
         begin
           Logger.Debug('FunctionValue.Call: E.Value type: %s', [E.Value.ClassName]);
           // Create a new instance of the same type
-          if E.Value is TGocciaNumberValue then
-            Result := TGocciaNumberValue.Create(TGocciaNumberValue(E.Value).Value)
-          else if E.Value is TGocciaStringValue then
-            Result := TGocciaStringValue.Create(TGocciaStringValue(E.Value).Value)
+          if E.Value is TGocciaNumberLiteral then
+            Result := TGocciaNumberLiteral.Create(TGocciaNumberLiteral(E.Value).Value)
+          else if E.Value is TGocciaStringLiteral then
+            Result := TGocciaStringLiteral.Create(TGocciaStringLiteral(E.Value).Value)
           else if E.Value is TGocciaBooleanValue then
             Result := TGocciaBooleanValue.Create(TGocciaBooleanValue(E.Value).Value)
-          else if E.Value is TGocciaUndefinedValue then
-            Result := TGocciaUndefinedValue.Create
+          else if E.Value is TGocciaUndefinedLiteral then
+            Result := TGocciaUndefinedLiteral.Create
           else if E.Value is TGocciaObjectValue then
             Result := E.Value
           else

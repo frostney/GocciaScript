@@ -5,7 +5,7 @@ unit Goccia.Evaluator.TypeOperations;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Values.BooleanValue, Goccia.Values.StringValue,
+  Goccia.Values.Core, Goccia.Values.BooleanValue, Goccia.Values.StringValue,
   Goccia.Values.NumberValue, Goccia.Values.ArrayValue, Goccia.Values.ObjectValue,
   Goccia.Values.ClassValue, Goccia.Values.FunctionValue, Goccia.Values.NativeFunction,
   Goccia.Logger, SysUtils;
@@ -22,7 +22,7 @@ implementation
 function EvaluateTypeof(Operand: TGocciaValue): TGocciaValue;
 begin
   Logger.Debug('EvaluateTypeof: typeof operator called with operand: %s', [Operand.ToString]);
-  Result := TGocciaStringValue.Create(Operand.TypeName);
+  Result := TGocciaStringLiteral.Create(Operand.TypeName);
 end;
 
 function EvaluateInstanceof(Left, Right: TGocciaValue; IsObjectInstanceOfClass: TIsObjectInstanceOfClassFunction): TGocciaValue;
@@ -124,7 +124,7 @@ begin
       Result := TGocciaBooleanValue.Create(TGocciaArrayValue(Right).HasProperty(PropertyName));
     end;
   end
-  else if Right is TGocciaStringValue then
+  else if Right is TGocciaStringLiteral then
   begin
     // Check if index exists in string
     if PropertyName = 'length' then

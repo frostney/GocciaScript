@@ -15,7 +15,7 @@ type
 
   TGocciaArrayValue = class(TGocciaObjectValue, IIndexMethods)
   private
-    function GetLength(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; inline;
+    function GetLengthProperty(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; inline;
 
     // Helper methods for reducing duplication
     function ValidateArrayMethodCall(const MethodName: string; Args: TObjectList<TGocciaValue>;
@@ -52,8 +52,13 @@ type
     constructor Create;
     destructor Destroy; override;
     function ToString: string; override;
-    function ToBoolean: Boolean; override;
-    function ToNumber: Double; override;
+    function ToBoolean: Boolean;
+    function ToNumber: Double;
+
+    // IIndexMethods interface implementation
+    function GetLength: Integer;
+    function GetElement(const AIndex: Integer): TGocciaValue;
+    function SetElement(const AIndex: Integer; AValue: TGocciaValue): Boolean;
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
@@ -66,14 +71,14 @@ type
 implementation
 
 uses
-  Goccia.Logger, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.Evaluator, Goccia.Values.StringValue, Goccia.Values.ObjectPropertyDescriptor, Generics.Defaults, Goccia.Utils, Goccia.Evaluator.Comparison;
+  Goccia.Logger, Goccia.Values.Primitives, Goccia.Evaluator, Goccia.Values.ObjectPropertyDescriptor, Generics.Defaults, Goccia.Utils, Goccia.Evaluator.Comparison;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var
   NumA, NumB: Double;
   StrA, StrB: string;
 begin
-  if A is TGocciaNumberValue then
+  if A is TGocciaNumberLiteral then
   begin
     NumA := A.ToNumber;
     NumB := B.ToNumber;
@@ -84,7 +89,7 @@ begin
     else
       Result := 0;
   end
-  else if A is TGocciaStringValue then
+  else if A is TGocciaStringLiteral then
   begin
     StrA := A.ToString;
     StrB := B.ToString;
@@ -110,7 +115,7 @@ begin
   FElements := TObjectList<TGocciaValue>.Create(False);
   FPrototype := TGocciaObjectValue.Create;
 
-  FPrototype.DefineProperty('length', TGocciaPropertyDescriptorAccessor.Create(TGocciaNativeFunctionValue.Create(GetLength, 'length', 0), nil, [pfEnumerable, pfConfigurable]));
+  FPrototype.DefineProperty('length', TGocciaPropertyDescriptorAccessor.Create(TGocciaNativeFunctionValue.Create(GetLengthProperty, 'length', 0), nil, [pfEnumerable, pfConfigurable]));
   // Array prototype methods: writable, non-enumerable, configurable
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayMap, 'map', 1));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFilter, 'filter', 1));
@@ -146,9 +151,39 @@ begin
   ThrowError(Message, []);
 end;
 
-function TGocciaArrayValue.GetLength(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaArrayValue.GetLengthProperty(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberValue.Create(FElements.Count);
+  Result := TGocciaNumberLiteral.Create(FElements.Count);
+end;
+
+// IIndexMethods interface implementations
+function TGocciaArrayValue.GetLength: Integer;
+begin
+  Result := FElements.Count;
+end;
+
+function TGocciaArrayValue.GetElement(const AIndex: Integer): TGocciaValue;
+begin
+  if (AIndex >= 0) and (AIndex < FElements.Count) then
+    Result := FElements[AIndex]
+  else
+    Result := TGocciaUndefinedLiteral.Create;
+end;
+
+function TGocciaArrayValue.SetElement(const AIndex: Integer; AValue: TGocciaValue): Boolean;
+begin
+  if AIndex < 0 then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  // Extend array if necessary
+  while FElements.Count <= AIndex do
+    FElements.Add(nil); // Add holes for sparse arrays
+
+  FElements[AIndex] := AValue;
+  Result := True;
 end;
 
 function TGocciaArrayValue.ValidateArrayMethodCall(const MethodName: string; Args: TObjectList<TGocciaValue>;
@@ -169,7 +204,7 @@ begin
   end
   else
   begin
-    if Result is TGocciaUndefinedValue then
+    if Result is TGocciaUndefinedLiteral then
       ThrowError('Callback must not be undefined');
   end;
 end;
@@ -182,7 +217,7 @@ begin
   CallArgs := TObjectList<TGocciaValue>.Create(False);
   try
     CallArgs.Add(Element);
-    CallArgs.Add(TGocciaNumberValue.Create(Index));
+    CallArgs.Add(TGocciaNumberLiteral.Create(Index));
     CallArgs.Add(ThisArray);
 
     if Callback is TGocciaNativeFunctionValue then
@@ -291,7 +326,7 @@ begin
     try
       CallArgs.Add(Accumulator);
       CallArgs.Add(Elements[I]);
-      CallArgs.Add(TGocciaNumberValue.Create(I));
+      CallArgs.Add(TGocciaNumberLiteral.Create(I));
       CallArgs.Add(ThisValue);
 
       if Callback is TGocciaNativeFunctionValue then
@@ -322,7 +357,7 @@ begin
     ExecuteArrayCallback(Callback, Elements[I], I, ThisValue);
   end;
 
-  Result := TGocciaUndefinedValue.Create;
+  Result := TGocciaUndefinedLiteral.Create;
 end;
 
 function TGocciaArrayValue.ArrayJoin(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -347,7 +382,7 @@ begin
     ResultString := ResultString + Elements[I].ToString;
   end;
 
-  Result := TGocciaStringValue.Create(ResultString);
+  Result := TGocciaStringLiteral.Create(ResultString);
 end;
 
 function TGocciaArrayValue.ArrayIncludes(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -363,13 +398,13 @@ begin
 
   SearchValue := Args[0];
 
-  if SearchValue is TGocciaUndefinedValue then
+  if SearchValue is TGocciaUndefinedLiteral then
   begin
     Result := TGocciaBooleanValue.Create(False);
     Exit;
   end;
 
-  if SearchValue is TGocciaNullValue then
+  if SearchValue is TGocciaNullLiteral then
   begin
     Result := TGocciaBooleanValue.Create(False);
     Exit;
@@ -379,7 +414,7 @@ begin
 
   if Args.Count > 1 then
   begin
-    if not (Args[1] is TGocciaNumberValue) then
+    if not (Args[1] is TGocciaNumberLiteral) then
       ThrowError('Array.includes expects second argument to be a number');
 
     FromIndex := Trunc(Args[1].ToNumber);
@@ -456,7 +491,7 @@ begin
 
   if Args.Count > 0 then
   begin
-    if not (Args[0] is TGocciaNumberValue) then
+    if not (Args[0] is TGocciaNumberLiteral) then
       ThrowError('Array.flat expects depth argument to be a number');
 
     Depth := Trunc(Args[0].ToNumber);
@@ -476,7 +511,7 @@ begin
       // Recursively flatten the nested array
       CallArgs := TObjectList<TGocciaValue>.Create(False);
       try
-        CallArgs.Add(TGocciaNumberValue.Create(Depth - 1));
+        CallArgs.Add(TGocciaNumberLiteral.Create(Depth - 1));
         FlattenedSubArray := TGocciaArrayValue(TGocciaArrayValue(Elements[I]).ArrayFlat(CallArgs, Elements[I]));
 
         // Add all elements from the flattened subarray
@@ -548,7 +583,7 @@ begin
   for I := 0 to Args.Count - 1 do
     Elements.Add(Args[I]);
 
-  Result := TGocciaNumberValue.Create(Elements.Count);
+  Result := TGocciaNumberLiteral.Create(Elements.Count);
 end;
 
 function TGocciaArrayValue.ArrayPop(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -732,7 +767,7 @@ begin
   for I := 0 to ActualStartIndex - 1 do
   begin
     if Elements[I] = nil then
-      ResultArray.Elements.Add(TGocciaUndefinedValue.Create)
+      ResultArray.Elements.Add(TGocciaUndefinedLiteral.Create)
     else
       ResultArray.Elements.Add(Elements[I]);
   end;
@@ -745,7 +780,7 @@ begin
   for I := ActualStartIndex + DeleteCount to Elements.Count - 1 do
   begin
     if Elements[I] = nil then
-      ResultArray.Elements.Add(TGocciaUndefinedValue.Create)
+      ResultArray.Elements.Add(TGocciaUndefinedLiteral.Create)
     else
       ResultArray.Elements.Add(Elements[I]);
   end;
@@ -826,12 +861,12 @@ begin
     begin
       // If the element is nil (hole), return undefined
       if FElements[Index] = nil then
-        Result := TGocciaUndefinedValue.Create
+        Result := TGocciaUndefinedLiteral.Create
       else
         Result := FElements[Index];
     end
     else
-      Result := TGocciaUndefinedValue.Create;
+      Result := TGocciaUndefinedLiteral.Create;
   end
   else
   begin

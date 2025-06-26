@@ -5,9 +5,8 @@ unit Goccia.Parser;
 interface
 
 uses
-  Goccia.AST.Node, Goccia.Token, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.Values.UndefinedValue,
-  Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.ObjectValue, Goccia.Values.StringValue,
-  Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.NullValue,
+  Goccia.AST.Node, Goccia.Token, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.Values.Core, Goccia.Values.Primitives,
+  Goccia.Values.ObjectValue, Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
   Generics.Collections, Classes, SysUtils;
 
 type
@@ -448,37 +447,37 @@ begin
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
-      TGocciaBooleanValue.Create(True), Token.Line, Token.Column);
+      TGocciaBooleanLiteralValue.Create(True), Token.Line, Token.Column);
   end
   else if Match([gttFalse]) then
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
-      TGocciaBooleanValue.Create(False), Token.Line, Token.Column);
+      TGocciaBooleanLiteralValue.Create(False), Token.Line, Token.Column);
   end
   else if Match([gttNull]) then
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
-      TGocciaNullValue.Create, Token.Line, Token.Column);
+      TGocciaNullLiteralValue.Create, Token.Line, Token.Column);
   end
   else if Match([gttUndefined]) then
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
-      TGocciaUndefinedValue.Create, Token.Line, Token.Column);
+      TGocciaUndefinedLiteralValue.Create, Token.Line, Token.Column);
   end
   else if Match([gttNumber]) then
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
-      TGocciaNumberValue.Create(ConvertNumberLiteral(Token.Lexeme)), Token.Line, Token.Column);
+      TGocciaNumberLiteralValue.Create(ConvertNumberLiteral(Token.Lexeme)), Token.Line, Token.Column);
   end
   else if Match([gttString]) then
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
-      TGocciaStringValue.Create(Token.Lexeme), Token.Line, Token.Column);
+      TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Line, Token.Column);
   end
   else if Match([gttTemplate]) then
   begin
@@ -1160,7 +1159,7 @@ begin
           Line, Column, FFileName, FSourceLines)
       else
         Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
-          TGocciaUndefinedValue.Create, Line, Column);
+          TGocciaUndefinedLiteralValue.Create, Line, Column);
 
       Inc(VariableCount);
     until not Match([gttComma]);
@@ -1667,7 +1666,7 @@ begin
     begin
       // Property declaration without initializer: [static] [#]name;
       Consume(gttSemicolon, 'Expected ";" after property declaration');
-      PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedValue.Create, Peek.Line, Peek.Column);
+      PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.Create, Peek.Line, Peek.Column);
 
       if IsPrivate and IsStatic then
         PrivateStaticProperties.Add(MemberName, PropertyValue)

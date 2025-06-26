@@ -6,7 +6,7 @@ interface
 
 uses
   Goccia.Values.ArrayValue, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue,
-  Goccia.Builtins.Base, Generics.Collections, Goccia.Values.BooleanValue, Goccia.Values.Base, Goccia.Scope,
+  Goccia.Builtins.Base, Generics.Collections, Goccia.Values.BooleanValue, Goccia.Values.Core, Goccia.Scope,
   Goccia.Error, Goccia.Values.ObjectPropertyDescriptor;
 
 type

@@ -5,7 +5,7 @@ unit Goccia.Evaluator.Assignment;
 interface
 
 uses
-  Goccia.Values.Base, Goccia.Values.ObjectValue, Goccia.Values.ClassValue,
+  Goccia.Values.Core, Goccia.Values.ObjectValue, Goccia.Values.ClassValue,
   Goccia.Values.ArrayValue, Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.UndefinedValue,
   Goccia.Token, Goccia.Interfaces, Goccia.Error, SysUtils, Math, Goccia.Evaluator.Arithmetic;
@@ -104,9 +104,9 @@ end;
 function PerformIncrement(OldValue: TGocciaValue; IsIncrement: Boolean): TGocciaValue;
 begin
   if IsIncrement then
-    Result := TGocciaNumberValue.Create(OldValue.ToNumber + 1)
+    Result := TGocciaNumberLiteral.Create(OldValue.ToNumber + 1)
   else
-    Result := TGocciaNumberValue.Create(OldValue.ToNumber - 1);
+    Result := TGocciaNumberLiteral.Create(OldValue.ToNumber - 1);
 end;
 
 end.

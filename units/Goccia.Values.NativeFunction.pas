@@ -5,7 +5,7 @@ unit Goccia.Values.NativeFunction;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Base, Goccia.Values.ObjectValue, Goccia.Values.FunctionBase, Generics.Collections, SysUtils, Math, Goccia.Logger;
+  Goccia.Interfaces, Goccia.Values.Core, Goccia.Values.ObjectValue, Goccia.Values.FunctionBase, Generics.Collections, SysUtils, Math, Goccia.Logger;
 
 type
   TGocciaNativeFunction = function(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue of object;
@@ -20,9 +20,7 @@ type
       AArity: Integer);
     constructor CreateWithoutPrototype(AFunction: TGocciaNativeFunction; const AName: string;
       AArity: Integer);
-    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; override;
-    function ToString: string; override;
-    function ToNumber: Double; override;
+    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
     property NativeFunction: TGocciaNativeFunction read FFunction;
     property Name: string read FName;
     property Arity: Integer read FArity;
@@ -55,17 +53,6 @@ function TGocciaNativeFunctionValue.Call(Arguments: TObjectList<TGocciaValue>; T
 begin
   Result := FFunction(Arguments, ThisValue);
 end;
-
-function TGocciaNativeFunctionValue.ToString: string;
-begin
-  Result := Format('[NativeFunction: %s]', [FName]);
-end;
-
-function TGocciaNativeFunctionValue.ToNumber: Double;
-begin
-  Result := 0.0/0.0;  // Safe calculated NaN
-end;
-
 
 
 end.
