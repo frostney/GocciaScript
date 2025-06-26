@@ -6,9 +6,9 @@ interface
 
 uses
   Goccia.Values.Core, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Modules,
-  Goccia.Values.UndefinedValue, Goccia.Values.BooleanValue, Goccia.Values.NumberValue, Goccia.Values.ObjectValue,
-  Goccia.Values.StringValue, Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
-  Goccia.Values.NullValue, Goccia.Values.NativeFunction, Goccia.Token, Generics.Collections,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
+  Goccia.Values.NativeFunction, Goccia.Token, Generics.Collections,
   Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, Goccia.Parser, Goccia.Lexer, Goccia.Evaluator, Goccia.Scope, Goccia.Builtins.Console, Goccia.Builtins.GlobalObject, Goccia.Builtins.Math, Goccia.Interfaces, Goccia.Logger, Goccia.Builtins.GlobalArray, Goccia.Builtins.Globals, Goccia.Builtins.JSON, Goccia.Builtins.GlobalNumber, Goccia.Builtins.TestAssertions;
 
 type
@@ -87,6 +87,8 @@ type
 
 implementation
 
+uses Goccia.Values.Primitives;
+
 function RunGocciaScriptFromStringList(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TInterpreterResult;
 var
   Lexer: TGocciaLexer;
@@ -141,7 +143,7 @@ begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FGlobalScope := TGocciaScope.Create(nil, skGlobal, 'GlobalScope');
-  FGlobalScope.ThisValue := TGocciaUndefinedLiteral.Create;
+  FGlobalScope.ThisValue := TGocciaUndefinedLiteralValue.Create;
   FModules := TDictionary<string, TGocciaModule>.Create;
   RegisterBuiltIns(AGlobals);
 end;
@@ -310,7 +312,7 @@ var
   I: Integer;
   Context: TGocciaEvaluationContext;
 begin
-  Result := TGocciaUndefinedLiteral.Create;
+  Result := TGocciaUndefinedLiteralValue.Create;
   Context := CreateEvaluationContext;
 
   for I := 0 to AProgram.Body.Count - 1 do

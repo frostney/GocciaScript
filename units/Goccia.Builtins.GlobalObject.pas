@@ -5,7 +5,7 @@ unit Goccia.Builtins.GlobalObject;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Builtins.Base;
+  Goccia.Values.Core, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Builtins.Base;
 
 type
   TGocciaGlobalObject = class(TGocciaBuiltin)
@@ -29,7 +29,7 @@ type
 implementation
 
 uses
-  Goccia.Values.ArrayValue, Goccia.Values.StringValue, Goccia.Values.NullValue, Goccia.Values.BooleanValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue;
+  Goccia.Values.ArrayValue, Goccia.Values.Primitives, Goccia.Values.ObjectPropertyDescriptor, Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue, Goccia.Values.ClassHelper;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
@@ -61,7 +61,7 @@ begin
   Left := Args[0];
   Right := Args[1];
 
-  Result := TGocciaBooleanValue.Create(IsSameValue(Left, Right));
+  Result := TGocciaBooleanLiteralValue.Create(IsSameValue(Left, Right));
 end;
 
 
@@ -83,7 +83,7 @@ begin
 
   Names := Obj.GetEnumerablePropertyNames;
   for I := 0 to High(Names) do
-    Keys.Elements.Add(TGocciaStringLiteral.Create(Names[I]));
+    Keys.Elements.Add(TGocciaStringLiteralValue.Create(Names[I]));
 
   Result := Keys;
 end;
@@ -132,7 +132,7 @@ begin
   for I := 0 to High(PropertyEntries) do
   begin
     Entry := TGocciaArrayValue.Create;
-    Entry.Elements.Add(TGocciaStringLiteral.Create(PropertyEntries[I].Key));
+    Entry.Elements.Add(TGocciaStringLiteralValue.Create(PropertyEntries[I].Key));
     Entry.Elements.Add(PropertyEntries[I].Value);
     Entries.Elements.Add(Entry);
   end;
@@ -183,13 +183,13 @@ begin
   ProtoArg := Args[0];
 
   // Validate the prototype argument - must be an object or null
-  if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullLiteral) then
+  if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullLiteralValue) then
     ThrowError('Object.create called on non-object', 0, 0);
 
   // Create a new object with the specified prototype
   if ProtoArg is TGocciaObjectValue then
     Result := TGocciaObjectValue.Create(TGocciaObjectValue(ProtoArg))
-  else if ProtoArg is TGocciaNullLiteral then
+  else if ProtoArg is TGocciaNullLiteralValue then
     Result := TGocciaObjectValue.Create(nil)
   else
     ThrowError('Object.create called on non-object', 0, 0);
@@ -209,7 +209,7 @@ begin
   Obj := TGocciaObjectValue(Args[0]);
   PropertyName := Args[1].ToString;
 
-  Result := TGocciaBooleanValue.Create(Obj.HasOwnProperty(PropertyName));
+  Result := TGocciaBooleanLiteralValue.Create(Obj.HasOwnProperty(PropertyName));
 end;
 
 function TGocciaGlobalObject.ObjectGetOwnPropertyNames(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -231,7 +231,7 @@ begin
   // Get all property names (both enumerable and non-enumerable)
   PropertyNames := Obj.GetAllPropertyNames;
   for I := 0 to High(PropertyNames) do
-    Names.Elements.Add(TGocciaStringLiteral.Create(PropertyNames[I]));
+    Names.Elements.Add(TGocciaStringLiteralValue.Create(PropertyNames[I]));
 
   Result := Names;
 end;
@@ -254,17 +254,17 @@ begin
   Descriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   if Descriptor = nil then
   begin
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
   end else begin
     DescriptorObj := TGocciaObjectValue.Create;
-    DescriptorObj.AssignProperty('enumerable', TGocciaBooleanValue.Create(Descriptor.Enumerable));
-    DescriptorObj.AssignProperty('configurable', TGocciaBooleanValue.Create(Descriptor.Configurable));
+    DescriptorObj.AssignProperty('enumerable', TGocciaBooleanLiteralValue.Create(Descriptor.Enumerable));
+    DescriptorObj.AssignProperty('configurable', TGocciaBooleanLiteralValue.Create(Descriptor.Configurable));
 
     if Descriptor is TGocciaPropertyDescriptorData then
     begin
       // Data descriptor: has value and writable properties
       DescriptorObj.AssignProperty('value', TGocciaPropertyDescriptorData(Descriptor).Value);
-      DescriptorObj.AssignProperty('writable', TGocciaBooleanValue.Create(Descriptor.Writable));
+      DescriptorObj.AssignProperty('writable', TGocciaBooleanLiteralValue.Create(Descriptor.Writable));
     end
     else if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
@@ -272,12 +272,12 @@ begin
       if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
         DescriptorObj.AssignProperty('get', TGocciaPropertyDescriptorAccessor(Descriptor).Getter)
       else
-        DescriptorObj.AssignProperty('get', TGocciaUndefinedLiteral.Create);
+        DescriptorObj.AssignProperty('get', TGocciaUndefinedLiteralValue.Create);
 
       if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
         DescriptorObj.AssignProperty('set', TGocciaPropertyDescriptorAccessor(Descriptor).Setter)
       else
-        DescriptorObj.AssignProperty('set', TGocciaUndefinedLiteral.Create);
+        DescriptorObj.AssignProperty('set', TGocciaUndefinedLiteralValue.Create);
     end;
 
     Result := DescriptorObj;
@@ -321,31 +321,31 @@ begin
 
   // Get descriptor properties (defaults to false for missing properties)
   if DescriptorObject.HasProperty('enumerable') then
-    Enumerable := DescriptorObject.GetProperty('enumerable').ToBoolean;
+    Enumerable := DescriptorObject.GetProperty('enumerable').ToBooleanLiteral.Value;
   if DescriptorObject.HasProperty('configurable') then
-    Configurable := DescriptorObject.GetProperty('configurable').ToBoolean;
+    Configurable := DescriptorObject.GetProperty('configurable').ToBooleanLiteral.Value;
   if DescriptorObject.HasProperty('writable') then
-    Writable := DescriptorObject.GetProperty('writable').ToBoolean;
+    Writable := DescriptorObject.GetProperty('writable').ToBooleanLiteral.Value;
   if DescriptorObject.HasProperty('value') then
     Value := DescriptorObject.GetProperty('value');
   if DescriptorObject.HasProperty('get') then
   begin
     Getter := DescriptorObject.GetProperty('get');
     // Validate getter: must be a function or undefined
-    if not (Getter is TGocciaUndefinedLiteral) and not (Getter is TGocciaFunctionValue) and not (Getter is TGocciaNativeFunctionValue) then
+    if not (Getter is TGocciaUndefinedLiteralValue) and not (Getter is TGocciaFunctionValue) and not (Getter is TGocciaNativeFunctionValue) then
       ThrowError('TypeError: Object.defineProperty: getter must be a function or undefined', 0, 0);
     // Treat undefined as nil
-    if Getter is TGocciaUndefinedLiteral then
+    if Getter is TGocciaUndefinedLiteralValue then
       Getter := nil;
   end;
   if DescriptorObject.HasProperty('set') then
   begin
     Setter := DescriptorObject.GetProperty('set');
     // Validate setter: must be a function or undefined
-    if not (Setter is TGocciaUndefinedLiteral) and not (Setter is TGocciaFunctionValue) and not (Setter is TGocciaNativeFunctionValue) then
+    if not (Setter is TGocciaUndefinedLiteralValue) and not (Setter is TGocciaFunctionValue) and not (Setter is TGocciaNativeFunctionValue) then
       ThrowError('TypeError: Object.defineProperty: setter must be a function or undefined', 0, 0);
     // Treat undefined as nil
-    if Setter is TGocciaUndefinedLiteral then
+    if Setter is TGocciaUndefinedLiteralValue then
       Setter := nil;
   end;
 
@@ -398,7 +398,7 @@ begin
     CallArgs := TObjectList<TGocciaValue>.Create(False);
     try
       CallArgs.Add(Obj);
-      CallArgs.Add(TGocciaStringLiteral.Create(PropertyEntries[I].Key));
+      CallArgs.Add(TGocciaStringLiteralValue.Create(PropertyEntries[I].Key));
       CallArgs.Add(PropertyEntries[I].Value);
       ObjectDefineProperty(CallArgs, ThisValue);
     finally

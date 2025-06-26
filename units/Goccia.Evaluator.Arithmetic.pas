@@ -17,58 +17,60 @@ function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator
 
 implementation
 
+uses Goccia.Values.ClassHelper;
+
 function EvaluateAddition(Left, Right: TGocciaValue): TGocciaValue;
 begin
-  if (Left is TGocciaStringLiteral) or (Right is TGocciaStringLiteral) then
-    Result := TGocciaStringLiteral.Create(Left.ToString + Right.ToString)
-  else if (Left is TGocciaNumberLiteral) and (Right is TGocciaNumberLiteral) then
-    Result := TGocciaNumberLiteral.Create(
-      TGocciaNumberLiteral(Left).Value + TGocciaNumberLiteral(Right).Value)
-  else if (Left is TGocciaNumberLiteral) or (Right is TGocciaNumberLiteral) then
-    Result := TGocciaNumberLiteral.Create(Left.ToNumber + Right.ToNumber)
+  if (Left is TGocciaStringLiteralValue) or (Right is TGocciaStringLiteralValue) then
+    Result := TGocciaStringLiteralValue.Create(Left.ToStringLiteral.Value + Right.ToStringLiteral.Value)
+  else if (Left is TGocciaNumberLiteralValue) and (Right is TGocciaNumberLiteralValue) then
+    Result := TGocciaNumberLiteralValue.Create(
+      TGocciaNumberLiteralValue(Left).Value + TGocciaNumberLiteralValue(Right).Value)
+  else if (Left is TGocciaNumberLiteralValue) or (Right is TGocciaNumberLiteralValue) then
+    Result := TGocciaNumberLiteralValue.Create(Left.ToNumberLiteral.Value + Right.ToNumberLiteral.Value)
   else
-    Result := TGocciaStringLiteral.Create(Left.ToString + Right.ToString);
+    Result := TGocciaStringLiteralValue.Create(Left.ToStringLiteral.Value + Right.ToStringLiteral.Value);
 end;
 
 function EvaluateSubtraction(Left, Right: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteral.Create(Left.ToNumber - Right.ToNumber);
+  Result := TGocciaNumberLiteralValue.Create(Left.ToNumberLiteral.Value - Right.ToNumberLiteral.Value);
 end;
 
 function EvaluateMultiplication(Left, Right: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteral.Create(Left.ToNumber * Right.ToNumber);
+  Result := TGocciaNumberLiteralValue.Create(Left.ToNumberLiteral.Value * Right.ToNumberLiteral.Value);
 end;
 
 function EvaluateDivision(Left, Right: TGocciaValue): TGocciaValue;
 var
   LeftNum, RightNum: Double;
 begin
-  LeftNum := Left.ToNumber;
-  RightNum := Right.ToNumber;
+  LeftNum := Left.ToNumberLiteral.Value;
+  RightNum := Right.ToNumberLiteral.Value;
 
   if RightNum = 0 then
   begin
     if LeftNum = 0 then
-      Result := TGocciaNumberLiteral.CreateNaN    // 0 / 0 = NaN
+      Result := TGocciaNumberLiteralValue.NaNValue    // 0 / 0 = NaN
     else if LeftNum > 0 then
-      Result := TGocciaNumberLiteral.Create(Infinity)   // positive / 0 = +Infinity
+      Result := TGocciaNumberLiteralValue.InfinityValue   // positive / 0 = +Infinity
     else
-      Result := TGocciaNumberLiteral.Create(-Infinity); // negative / 0 = -Infinity
+      Result := TGocciaNumberLiteralValue.NegativeInfinityValue; // negative / 0 = -Infinity
   end
   else
-    Result := TGocciaNumberLiteral.Create(LeftNum / RightNum);
+    Result := TGocciaNumberLiteralValue.Create(LeftNum / RightNum);
 end;
 
 function EvaluateModulo(Left, Right: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteral.Create(
-    Trunc(Left.ToNumber) mod Trunc(Right.ToNumber));
+  Result := TGocciaNumberLiteralValue.Create(
+    Trunc(Left.ToNumberLiteral.Value) mod Trunc(Right.ToNumberLiteral.Value));
 end;
 
 function EvaluateExponentiation(Left, Right: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteral.Create(Power(Left.ToNumber, Right.ToNumber));
+  Result := TGocciaNumberLiteralValue.Create(Power(Left.ToNumberLiteral.Value, Right.ToNumberLiteral.Value));
 end;
 
 function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator: TGocciaTokenType): TGocciaValue;
@@ -76,48 +78,48 @@ begin
   case Operator of
     gttPlusAssign:
       begin
-        if (CurrentValue is TGocciaStringLiteral) or (NewValue is TGocciaStringLiteral) then
-          Result := TGocciaStringLiteral.Create(CurrentValue.ToString + NewValue.ToString)
+        if (CurrentValue is TGocciaStringLiteralValue) or (NewValue is TGocciaStringLiteralValue) then
+          Result := TGocciaStringLiteralValue.Create(CurrentValue.ToString + NewValue.ToString)
         else
-          Result := TGocciaNumberLiteral.Create(CurrentValue.ToNumber + NewValue.ToNumber);
+          Result := TGocciaNumberLiteralValue.Create(CurrentValue.ToNumberLiteral.Value + NewValue.ToNumberLiteral.Value);
       end;
     gttMinusAssign:
-      Result := TGocciaNumberLiteral.Create(CurrentValue.ToNumber - NewValue.ToNumber);
+      Result := TGocciaNumberLiteralValue.Create(CurrentValue.ToNumberLiteral.Value - NewValue.ToNumberLiteral.Value);
     gttStarAssign:
-      Result := TGocciaNumberLiteral.Create(CurrentValue.ToNumber * NewValue.ToNumber);
+      Result := TGocciaNumberLiteralValue.Create(CurrentValue.ToNumberLiteral.Value * NewValue.ToNumberLiteral.Value);
     gttSlashAssign:
       begin
-        if NewValue.ToNumber = 0 then
+        if NewValue.ToNumberLiteral.Value = 0 then
         begin
-          if CurrentValue.ToNumber = 0 then
-            Result := TGocciaNumberLiteral.CreateNaN    // 0 /= 0 = NaN
-          else if CurrentValue.ToNumber > 0 then
-            Result := TGocciaNumberLiteral.Create(Infinity)   // positive /= 0 = +Infinity
+          if CurrentValue.ToNumberLiteral.Value = 0 then
+            Result := TGocciaNumberLiteralValue.NaNValue    // 0 /= 0 = NaN
+          else if CurrentValue.ToNumberLiteral.Value > 0 then
+            Result := TGocciaNumberLiteralValue.InfinityValue   // positive /= 0 = +Infinity
           else
-            Result := TGocciaNumberLiteral.Create(-Infinity); // negative /= 0 = -Infinity
+            Result := TGocciaNumberLiteralValue.NegativeInfinityValue; // negative /= 0 = -Infinity
         end
         else
-          Result := TGocciaNumberLiteral.Create(CurrentValue.ToNumber / NewValue.ToNumber);
+          Result := TGocciaNumberLiteralValue.Create(CurrentValue.ToNumberLiteral.Value / NewValue.ToNumberLiteral.Value);
       end;
     gttPercentAssign:
-      Result := TGocciaNumberLiteral.Create(
-        Trunc(CurrentValue.ToNumber) mod Trunc(NewValue.ToNumber));
+      Result := TGocciaNumberLiteralValue.Create(
+        Trunc(CurrentValue.ToNumberLiteral.Value) mod Trunc(NewValue.ToNumberLiteral.Value));
     gttPowerAssign:
-      Result := TGocciaNumberLiteral.Create(Power(CurrentValue.ToNumber, NewValue.ToNumber));
+      Result := TGocciaNumberLiteralValue.Create(Power(CurrentValue.ToNumberLiteral.Value, NewValue.ToNumberLiteral.Value));
     gttBitwiseAndAssign:
-      Result := TGocciaNumberLiteral.Create(Trunc(CurrentValue.ToNumber) and Trunc(NewValue.ToNumber));
+      Result := TGocciaNumberLiteralValue.Create(Trunc(CurrentValue.ToNumberLiteral.Value) and Trunc(NewValue.ToNumberLiteral.Value));
     gttBitwiseOrAssign:
-      Result := TGocciaNumberLiteral.Create(Trunc(CurrentValue.ToNumber) or Trunc(NewValue.ToNumber));
+      Result := TGocciaNumberLiteralValue.Create(Trunc(CurrentValue.ToNumberLiteral.Value) or Trunc(NewValue.ToNumberLiteral.Value));
     gttBitwiseXorAssign:
-      Result := TGocciaNumberLiteral.Create(Trunc(CurrentValue.ToNumber) xor Trunc(NewValue.ToNumber));
+      Result := TGocciaNumberLiteralValue.Create(Trunc(CurrentValue.ToNumberLiteral.Value) xor Trunc(NewValue.ToNumberLiteral.Value));
     gttLeftShiftAssign:
-      Result := TGocciaNumberLiteral.Create(Trunc(CurrentValue.ToNumber) shl (Trunc(NewValue.ToNumber) and 31));
+      Result := TGocciaNumberLiteralValue.Create(Trunc(CurrentValue.ToNumberLiteral.Value) shl (Trunc(NewValue.ToNumberLiteral.Value) and 31));
     gttRightShiftAssign:
-      Result := TGocciaNumberLiteral.Create(Trunc(CurrentValue.ToNumber) shr (Trunc(NewValue.ToNumber) and 31));
+      Result := TGocciaNumberLiteralValue.Create(Trunc(CurrentValue.ToNumberLiteral.Value) shr (Trunc(NewValue.ToNumberLiteral.Value) and 31));
     gttUnsignedRightShiftAssign:
-      Result := TGocciaNumberLiteral.Create(Cardinal(Trunc(CurrentValue.ToNumber)) shr (Trunc(NewValue.ToNumber) and 31));
+      Result := TGocciaNumberLiteralValue.Create(Cardinal(Trunc(CurrentValue.ToNumberLiteral.Value)) shr (Trunc(NewValue.ToNumberLiteral.Value) and 31));
   else
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
   end;
 end;
 

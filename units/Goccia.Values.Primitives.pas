@@ -95,7 +95,7 @@ type
 implementation
 
 uses
-  Goccia.Values.Constants, Math;
+  Goccia.Values.Constants, Goccia.Values.ClassHelper, Math;
 
 { Utility functions }
 

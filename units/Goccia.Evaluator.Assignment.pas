@@ -7,7 +7,7 @@ interface
 uses
   Goccia.Values.Core, Goccia.Values.ObjectValue, Goccia.Values.ClassValue,
   Goccia.Values.ArrayValue, Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.NumberValue, Goccia.Values.StringValue, Goccia.Values.UndefinedValue,
+  Goccia.Values.Primitives,
   Goccia.Token, Goccia.Interfaces, Goccia.Error, SysUtils, Math, Goccia.Evaluator.Arithmetic;
 
 // Property assignment operations
@@ -21,6 +21,8 @@ procedure PerformPropertyCompoundAssignment(Obj: TGocciaValue; const PropertyNam
 function PerformIncrement(OldValue: TGocciaValue; IsIncrement: Boolean): TGocciaValue; inline;
 
 implementation
+
+uses Goccia.Values.ClassHelper;
 
 procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowError; Line, Column: Integer);
 begin
@@ -104,9 +106,9 @@ end;
 function PerformIncrement(OldValue: TGocciaValue; IsIncrement: Boolean): TGocciaValue;
 begin
   if IsIncrement then
-    Result := TGocciaNumberLiteral.Create(OldValue.ToNumber + 1)
+    Result := TGocciaNumberLiteralValue.Create(OldValue.ToNumberLiteral.Value + 1)
   else
-    Result := TGocciaNumberLiteral.Create(OldValue.ToNumber - 1);
+    Result := TGocciaNumberLiteralValue.Create(OldValue.ToNumberLiteral.Value - 1);
 end;
 
 end.

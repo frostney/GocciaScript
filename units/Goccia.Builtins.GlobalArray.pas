@@ -5,9 +5,9 @@ unit Goccia.Builtins.GlobalArray;
 interface
 
 uses
-  Goccia.Values.ArrayValue, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue,
-  Goccia.Builtins.Base, Generics.Collections, Goccia.Values.BooleanValue, Goccia.Values.Core, Goccia.Scope,
-  Goccia.Error, Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.ArrayValue, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.Primitives,
+  Goccia.Builtins.Base, Generics.Collections, Goccia.Values.Core, Goccia.Scope,
+  Goccia.Error, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ClassHelper;
 
 type
   TGocciaGlobalArray = class(TGocciaBuiltin)
@@ -30,7 +30,7 @@ end;
 
 function TGocciaGlobalArray.IsArray(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaBooleanValue.Create(Args[0] is TGocciaArrayValue);
+  Result := TGocciaBooleanLiteralValue.Create(Args[0] is TGocciaArrayValue);
 end;
 
 end.

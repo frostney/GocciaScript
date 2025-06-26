@@ -56,8 +56,8 @@ type
 implementation
 
 uses
-  Goccia.Values.TypeCoercion,
-    Goccia.Values.ArrayValue,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ObjectPropertyDescriptor;
 
 { TGocciaStringObjectValue }
@@ -196,7 +196,7 @@ begin
       else
       begin
         NumberValue := Args[0].ToNumberLiteral.Value;
-        // Check for infinity using TGocciaNumberLiteral properties
+        // Check for infinity using TGocciaNumberLiteralValue properties
         TempNumberValue := TGocciaNumberLiteralValue.Create(NumberValue);
         try
           if TempNumberValue.IsInfinity or TempNumberValue.IsNegativeInfinity then
@@ -251,7 +251,7 @@ begin
       else
       begin
         NumberValue := Args[0].ToNumberLiteral.Value;
-        // Check for infinity using TGocciaNumberLiteral properties
+        // Check for infinity using TGocciaNumberLiteralValue properties
         TempNumberValue := TGocciaNumberLiteralValue.Create(NumberValue);
         try
           if TempNumberValue.IsInfinity or TempNumberValue.IsNegativeInfinity then

@@ -5,7 +5,7 @@ unit Goccia.Builtins.Globals;
 interface
 
 uses
-  SysUtils, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.FunctionValue, Goccia.Values.UndefinedValue, Generics.Collections, Math, Goccia.Builtins.Base, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.Core, Goccia.Scope, Goccia.Error, Goccia.Values.StringValue;
+  SysUtils, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.FunctionValue, Goccia.Values.Primitives, Generics.Collections, Math, Goccia.Builtins.Base, Goccia.Values.Core, Goccia.Scope, Goccia.Error;
 
 type
   TGocciaGlobals = class(TGocciaBuiltin)
@@ -36,9 +36,9 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   // Global constants
-  AScope.DefineBuiltin('undefined', TGocciaUndefinedLiteral.Create);
-  AScope.DefineBuiltin('NaN', TGocciaNumberLiteral.CreateNaN);
-  AScope.DefineBuiltin('Infinity', TGocciaNumberLiteral.CreateInfinity);
+  AScope.DefineBuiltin('undefined', TGocciaUndefinedLiteralValue.Create);
+  AScope.DefineBuiltin('NaN', TGocciaNumberLiteralValue.NaNValue);
+  AScope.DefineBuiltin('Infinity', TGocciaNumberLiteralValue.InfinityValue);
 
   // Error constructors - store references so we can use them in the constructor functions
   ErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ErrorConstructor, 'Error', 1);
@@ -83,14 +83,14 @@ begin
   ErrorObj := TGocciaObjectValue.Create;
 
   // Set name property
-  ErrorObj.AssignProperty('name', TGocciaStringLiteral.Create('Error'));
+  ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('Error'));
 
   // Set message property
   if Args.Count > 0 then
     Message := Args[0].ToString
   else
     Message := '';
-  ErrorObj.AssignProperty('message', TGocciaStringLiteral.Create(Message));
+  ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
 
   Result := ErrorObj;
 end;
@@ -104,14 +104,14 @@ begin
   ErrorObj := TGocciaObjectValue.Create;
 
   // Set name property
-  ErrorObj.AssignProperty('name', TGocciaStringLiteral.Create('TypeError'));
+  ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
 
   // Set message property
   if Args.Count > 0 then
     Message := Args[0].ToString
   else
     Message := '';
-  ErrorObj.AssignProperty('message', TGocciaStringLiteral.Create(Message));
+  ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
 
   Result := ErrorObj;
 end;
@@ -125,14 +125,14 @@ begin
   ErrorObj := TGocciaObjectValue.Create;
 
   // Set name property
-  ErrorObj.AssignProperty('name', TGocciaStringLiteral.Create('ReferenceError'));
+  ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('ReferenceError'));
 
   // Set message property
   if Args.Count > 0 then
     Message := Args[0].ToString
   else
     Message := '';
-  ErrorObj.AssignProperty('message', TGocciaStringLiteral.Create(Message));
+  ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
 
   Result := ErrorObj;
 end;
@@ -146,14 +146,14 @@ begin
   ErrorObj := TGocciaObjectValue.Create;
 
   // Set name property
-  ErrorObj.AssignProperty('name', TGocciaStringLiteral.Create('RangeError'));
+  ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('RangeError'));
 
   // Set message property
   if Args.Count > 0 then
     Message := Args[0].ToString
   else
     Message := '';
-  ErrorObj.AssignProperty('message', TGocciaStringLiteral.Create(Message));
+  ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
 
   Result := ErrorObj;
 end;

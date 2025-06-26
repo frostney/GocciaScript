@@ -58,7 +58,7 @@ type
 implementation
 
 uses Goccia.Values.FunctionValue, Goccia.Values.NativeFunction,
-     Goccia.Values.StringValue, Goccia.Values.Error;
+    Goccia.Values.Error, Goccia.Values.ClassHelper;
 
 { TGocciaObjectValue }
 
@@ -197,8 +197,8 @@ begin
       // In strict mode (which GocciaScript always is), throw TypeError
       // Create a TypeError instance instead of just a string
       ErrorValue := TGocciaObjectValue.Create;
-      TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringLiteral.Create('TypeError'));
-      TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringLiteral.Create('Cannot set property ''' + AName + ''' which has only a getter'));
+      TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
+      TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringLiteralValue.Create('Cannot set property ''' + AName + ''' which has only a getter'));
       raise TGocciaThrowValue.Create(ErrorValue);
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
@@ -214,8 +214,8 @@ begin
       // Property is not writable - throw TypeError (strict mode behavior)
       // Create a TypeError instance instead of just a string
       ErrorValue := TGocciaObjectValue.Create;
-      TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringLiteral.Create('TypeError'));
-      TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringLiteral.Create('Cannot assign to read only property ''' + AName + ''''));
+      TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
+      TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringLiteralValue.Create('Cannot assign to read only property ''' + AName + ''''));
       raise TGocciaThrowValue.Create(ErrorValue);
     end;
   end;
@@ -223,7 +223,7 @@ begin
   // Property doesn't exist - check if we can create it
   if not ACanCreate then
   begin
-    ErrorValue := TGocciaStringLiteral.Create('Cannot assign to non-existent property ''' + AName + '''');
+    ErrorValue := TGocciaStringLiteralValue.Create('Cannot assign to non-existent property ''' + AName + '''');
     raise TGocciaThrowValue.Create(ErrorValue);
   end;
 
@@ -247,8 +247,8 @@ begin
       // Non-configurable properties cannot be redefined
       // Create a TypeError instance instead of just a string
       ErrorValue := TGocciaObjectValue.Create;
-      TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringLiteral.Create('TypeError'));
-      TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringLiteral.Create('Cannot redefine non-configurable property ''' + AName + ''''));
+      TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
+      TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringLiteralValue.Create('Cannot redefine non-configurable property ''' + AName + ''''));
       raise TGocciaThrowValue.Create(ErrorValue);
     end;
 
@@ -380,7 +380,7 @@ begin
         end;
       end;
       // No getter - return undefined
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
       Exit;
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
@@ -399,7 +399,7 @@ begin
   end;
 
   Logger.Debug('TGocciaObjectValue.GetProperty: Property not found');
-  Result := TGocciaUndefinedLiteral.Create;
+  Result := TGocciaUndefinedLiteralValue.Create;
 end;
 
 function TGocciaObjectValue.GetPropertyWithContext(const AName: string; AThisContext: TGocciaValue): TGocciaValue;
@@ -450,7 +450,7 @@ begin
         end;
       end;
       // No getter - return undefined
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
       Exit;
     end
     else if Descriptor is TGocciaPropertyDescriptorData then

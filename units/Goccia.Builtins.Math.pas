@@ -5,7 +5,7 @@ unit Goccia.Builtins.Math;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.UndefinedValue, Goccia.Values.ObjectValue, Generics.Collections, Math, Goccia.Builtins.Base;
+  Goccia.Values.Core, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Generics.Collections, Math, Goccia.Builtins.Base;
 
 type
   TGocciaMath = class(TGocciaBuiltin)
@@ -36,19 +36,18 @@ type
 
 implementation
 
-uses
-  Goccia.Values.NumberValue;
+uses Goccia.Values.ClassHelper;
 
 constructor TGocciaMath.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
   inherited Create(AName, AScope, AThrowError);
 
   // Constants: non-writable, non-enumerable, non-configurable
-  FBuiltinObject.RegisterConstant('PI', TGocciaNumberLiteral.Create(Pi));
-  FBuiltinObject.RegisterConstant('E', TGocciaNumberLiteral.Create(Exp(1)));
-  FBuiltinObject.RegisterConstant('LN2', TGocciaNumberLiteral.Create(Ln(2)));
-  FBuiltinObject.RegisterConstant('LN10', TGocciaNumberLiteral.Create(Ln(10)));
-  FBuiltinObject.RegisterConstant('SQRT2', TGocciaNumberLiteral.Create(Sqrt(2)));
+  FBuiltinObject.RegisterConstant('PI', TGocciaNumberLiteralValue.Create(Pi));
+  FBuiltinObject.RegisterConstant('E', TGocciaNumberLiteralValue.Create(Exp(1)));
+  FBuiltinObject.RegisterConstant('LN2', TGocciaNumberLiteralValue.Create(Ln(2)));
+  FBuiltinObject.RegisterConstant('LN10', TGocciaNumberLiteralValue.Create(Ln(10)));
+  FBuiltinObject.RegisterConstant('SQRT2', TGocciaNumberLiteralValue.Create(Sqrt(2)));
 
   // Methods: writable, non-enumerable, configurable
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathAbs, 'abs', 1));
@@ -75,19 +74,19 @@ end;
 
 function TGocciaMath.MathAbs(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  NumberArg: TGocciaNumberLiteral;
+  NumberArg: TGocciaNumberLiteralValue;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.abs expects exactly 1 argument', 0, 0);
 
-  NumberArg := TGocciaNumberLiteral.Create(Args[0].ToNumber);
+  NumberArg := TGocciaNumberLiteralValue.Create(Args[0].ToNumberLiteral.Value);
   try
     if NumberArg.IsNaN then
-      Result := TGocciaNumberLiteral.CreateNaN
+      Result := TGocciaNumberLiteralValue.NaNValue
     else if NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
-      Result := TGocciaNumberLiteral.CreateInfinity
+      Result := TGocciaNumberLiteralValue.InfinityValue
     else
-      Result := TGocciaNumberLiteral.Create(Abs(NumberArg.Value));
+      Result := TGocciaNumberLiteralValue.Create(Abs(NumberArg.Value));
   finally
     NumberArg.Free;
   end;
@@ -97,21 +96,21 @@ function TGocciaMath.MathFloor(Args: TObjectList<TGocciaValue>; ThisValue: TGocc
 begin
   if Args.Count <> 1 then
     ThrowError('Math.floor expects exactly 1 argument', 0, 0);
-  Result := TGocciaNumberLiteral.Create(Floor(Args[0].ToNumber));
+  Result := TGocciaNumberLiteralValue.Create(Floor(Args[0].ToNumberLiteral.Value));
 end;
 
 function TGocciaMath.MathCeil(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.ceil expects exactly 1 argument', 0, 0);
-  Result := TGocciaNumberLiteral.Create(Ceil(Args[0].ToNumber));
+  Result := TGocciaNumberLiteralValue.Create(Ceil(Args[0].ToNumberLiteral.Value));
 end;
 
 function TGocciaMath.MathRound(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.round expects exactly 1 argument', 0, 0);
-  Result := TGocciaNumberLiteral.Create(Round(Args[0].ToNumber));
+  Result := TGocciaNumberLiteralValue.Create(Round(Args[0].ToNumberLiteral.Value));
 end;
 
 function TGocciaMath.MathMax(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -120,33 +119,33 @@ var
   Max, Current: Double;
 begin
   if Args.Count = 0 then
-    Result := TGocciaNumberLiteral.Create(-Infinity)
+    Result := TGocciaNumberLiteralValue.NegativeInfinityValue
   else
   begin
-    Max := Args[0].ToNumber;
+    Max := Args[0].ToNumberLiteral.Value;
 
     // If any argument is NaN, return NaN
     if IsNaN(Max) then
     begin
-      Result := TGocciaNumberLiteral.CreateNaN;
+      Result := TGocciaNumberLiteralValue.NaNValue;
       Exit;
     end;
 
     for I := 1 to Args.Count - 1 do
     begin
-      Current := Args[I].ToNumber;
+      Current := Args[I].ToNumberLiteral.Value;
 
       // If any argument is NaN, return NaN
       if IsNaN(Current) then
       begin
-        Result := TGocciaNumberLiteral.CreateNaN;
+        Result := TGocciaNumberLiteralValue.NaNValue;
         Exit;
       end;
 
       if Current > Max then
         Max := Current;
     end;
-    Result := TGocciaNumberLiteral.Create(Max);
+    Result := TGocciaNumberLiteralValue.Create(Max);
   end;
 end;
 
@@ -156,33 +155,33 @@ var
   Min, Current: Double;
 begin
   if Args.Count = 0 then
-    Result := TGocciaNumberLiteral.Create(Infinity)
+    Result := TGocciaNumberLiteralValue.Create(Infinity)
   else
   begin
-    Min := Args[0].ToNumber;
+    Min := Args[0].ToNumberLiteral.Value;
 
     // If any argument is NaN, return NaN
     if IsNaN(Min) then
     begin
-      Result := TGocciaNumberLiteral.CreateNaN;
+      Result := TGocciaNumberLiteralValue.NaNValue;
       Exit;
     end;
 
     for I := 1 to Args.Count - 1 do
     begin
-      Current := Args[I].ToNumber;
+      Current := Args[I].ToNumberLiteral.Value;
 
       // If any argument is NaN, return NaN
       if IsNaN(Current) then
       begin
-        Result := TGocciaNumberLiteral.CreateNaN;
+        Result := TGocciaNumberLiteralValue.NaNValue;
         Exit;
       end;
 
       if Current < Min then
         Min := Current;
     end;
-    Result := TGocciaNumberLiteral.Create(Min);
+    Result := TGocciaNumberLiteralValue.Create(Min);
   end;
 end;
 
@@ -190,29 +189,29 @@ function TGocciaMath.MathPow(Args: TObjectList<TGocciaValue>; ThisValue: TGoccia
 begin
   if Args.Count <> 2 then
     ThrowError('Math.pow expects exactly 2 arguments', 0, 0);
-  Result := TGocciaNumberLiteral.Create(
-    Power(Args[0].ToNumber, Args[1].ToNumber));
+  Result := TGocciaNumberLiteralValue.Create(
+    Power(Args[0].ToNumberLiteral.Value, Args[1].ToNumberLiteral.Value));
 end;
 
 function TGocciaMath.MathSqrt(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  NumberArg: TGocciaNumberLiteral;
+  NumberArg: TGocciaNumberLiteralValue;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.sqrt expects exactly 1 argument', 0, 0);
 
-  NumberArg := TGocciaNumberLiteral.Create(Args[0].ToNumber);
+  NumberArg := TGocciaNumberLiteralValue.Create(Args[0].ToNumberLiteral.Value);
   try
     if NumberArg.IsNaN then
-      Result := TGocciaNumberLiteral.CreateNaN
+      Result := TGocciaNumberLiteralValue.NaNValue
     else if NumberArg.IsInfinity then
-      Result := TGocciaNumberLiteral.CreateInfinity
+      Result := TGocciaNumberLiteralValue.InfinityValue
     else if NumberArg.IsNegativeInfinity then
-      Result := TGocciaNumberLiteral.CreateNaN // sqrt(-Infinity) = NaN
+      Result := TGocciaNumberLiteralValue.NaNValue // sqrt(-Infinity) = NaN
     else if NumberArg.Value < 0 then
-      Result := TGocciaNumberLiteral.CreateNaN // sqrt of negative number = NaN
+      Result := TGocciaNumberLiteralValue.NaNValue // sqrt of negative number = NaN
     else
-      Result := TGocciaNumberLiteral.Create(Sqrt(NumberArg.Value));
+      Result := TGocciaNumberLiteralValue.Create(Sqrt(NumberArg.Value));
   finally
     NumberArg.Free;
   end;
@@ -220,29 +219,29 @@ end;
 
 function TGocciaMath.MathRandom(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteral.Create(Random);
+  Result := TGocciaNumberLiteralValue.Create(Random);
 end;
 
 function TGocciaMath.MathClamp(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  Value, MinVal, MaxVal: Double;
+  Value, MinVal, MaxVal: TGocciaNumberLiteralValue;
 begin
   if Args.Count <> 3 then
     ThrowError('Math.clamp expects exactly 3 arguments', 0, 0);
 
-  Value := Args[0].ToNumber;
-  MinVal := Args[1].ToNumber;
-  MaxVal := Args[2].ToNumber;
+  Value := Args[0].ToNumberLiteral;
+  MinVal := Args[1].ToNumberLiteral;
+  MaxVal := Args[2].ToNumberLiteral;
 
   // If any argument is NaN, return NaN
-  if IsNaN(Value) or IsNaN(MinVal) or IsNaN(MaxVal) then
+  if Value.IsNaN or MinVal.IsNaN or MaxVal.IsNaN then
   begin
-    Result := TGocciaNumberLiteral.CreateNaN;
+    Result := TGocciaNumberLiteralValue.NaNValue;
     Exit;
   end;
 
   // If min > max, throw RangeError
-  if MinVal > MaxVal then
+  if MinVal.IsGreaterThan(MaxVal).Value then
   begin
     ThrowError('RangeError: Invalid range in Math.clamp', 0, 0);
     Exit;
@@ -251,46 +250,46 @@ begin
     // TODO: Handle negative zero properly - for now skip this special case
 
   // Clamp the value
-  if Value < MinVal then
-    Result := TGocciaNumberLiteral.Create(MinVal)
-  else if Value > MaxVal then
-    Result := TGocciaNumberLiteral.Create(MaxVal)
+  if Value.IsLessThan(MinVal).Value then
+    Result := TGocciaNumberLiteralValue.Create(MinVal.Value)
+  else if Value.IsGreaterThan(MaxVal).Value then
+    Result := TGocciaNumberLiteralValue.Create(MaxVal.Value)
   else
-    Result := TGocciaNumberLiteral.Create(Value);
+    Result := TGocciaNumberLiteralValue.Create(Value.Value);
 end;
 
 function TGocciaMath.MathSign(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  Value: Double;
+  NumberLiteral: TGocciaNumberLiteralValue;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.sign expects exactly 1 argument', 0, 0);
 
-  Value := Args[0].ToNumber;
+  NumberLiteral := Args[0].ToNumberLiteral;
 
-  if IsNaN(Value) then
-    Result := TGocciaNumberLiteral.CreateNaN
+  if NumberLiteral.IsNaN then
+    Result := TGocciaNumberLiteralValue.NaNValue
   else
-    Result := TGocciaNumberLiteral.Create(Sign(Value));
+    Result := TGocciaNumberLiteralValue.Create(Sign(NumberLiteral.Value));
 end;
 
 function TGocciaMath.MathTrunc(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  NumberArg: TGocciaNumberLiteral;
+  NumberArg: TGocciaNumberLiteralValue;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.trunc expects exactly 1 argument', 0, 0);
 
-  NumberArg := TGocciaNumberLiteral.Create(Args[0].ToNumber);
+  NumberArg := TGocciaNumberLiteralValue.Create(Args[0].ToNumberLiteral.Value);
   try
     if NumberArg.IsNaN then
-      Result := TGocciaNumberLiteral.CreateNaN
+      Result := TGocciaNumberLiteralValue.NaNValue
     else if NumberArg.IsInfinity then
-      Result := TGocciaNumberLiteral.CreateInfinity
+      Result := TGocciaNumberLiteralValue.InfinityValue
     else if NumberArg.IsNegativeInfinity then
-      Result := TGocciaNumberLiteral.CreateNegativeInfinity
+      Result := TGocciaNumberLiteralValue.NegativeInfinityValue
     else
-      Result := TGocciaNumberLiteral.Create(Trunc(NumberArg.Value));
+      Result := TGocciaNumberLiteralValue.Create(Trunc(NumberArg.Value));
   finally
     NumberArg.Free;
   end;
@@ -298,40 +297,40 @@ end;
 
 function TGocciaMath.MathExp(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  Value: Double;
+  NumberLiteral: TGocciaNumberLiteralValue;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.exp expects exactly 1 argument', 0, 0);
 
-  Value := Args[0].ToNumber;
+  NumberLiteral := Args[0].ToNumberLiteral;
 
-  if IsNaN(Value) then
-    Result := TGocciaNumberLiteral.CreateNaN
+  if NumberLiteral.IsNaN then
+    Result := TGocciaNumberLiteralValue.NaNValue
   else
-    Result := TGocciaNumberLiteral.Create(Exp(Value));
+    Result := TGocciaNumberLiteralValue.Create(Exp(NumberLiteral.Value));
 end;
 
 function TGocciaMath.MathLog(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  NumberArg: TGocciaNumberLiteral;
+  NumberArg: TGocciaNumberLiteralValue;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.log expects exactly 1 argument', 0, 0);
 
-  NumberArg := TGocciaNumberLiteral.Create(Args[0].ToNumber);
+  NumberArg := Args[0].ToNumberLiteral;
   try
     if NumberArg.IsNaN then
-      Result := TGocciaNumberLiteral.CreateNaN
+      Result := TGocciaNumberLiteralValue.NaNValue
     else if NumberArg.IsInfinity then
-      Result := TGocciaNumberLiteral.CreateInfinity
+      Result := TGocciaNumberLiteralValue.InfinityValue
     else if NumberArg.IsNegativeInfinity then
-      Result := TGocciaNumberLiteral.CreateNaN // log(-Infinity) = NaN
+      Result := TGocciaNumberLiteralValue.NaNValue // log(-Infinity) = NaN
     else if NumberArg.Value = 0 then
-      Result := TGocciaNumberLiteral.CreateNegativeInfinity // log(0) = -Infinity
+      Result := TGocciaNumberLiteralValue.NegativeInfinityValue // log(0) = -Infinity
     else if NumberArg.Value < 0 then
-      Result := TGocciaNumberLiteral.CreateNaN // log of negative number = NaN
+      Result := TGocciaNumberLiteralValue.NaNValue // log of negative number = NaN
     else
-      Result := TGocciaNumberLiteral.Create(Ln(NumberArg.Value)); // Natural logarithm (base e)
+      Result := TGocciaNumberLiteralValue.Create(Ln(NumberArg.Value)); // Natural logarithm (base e)
   finally
     NumberArg.Free;
   end;
@@ -339,25 +338,25 @@ end;
 
 function TGocciaMath.MathLog10(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  NumberArg: TGocciaNumberLiteral;
+  NumberArg: TGocciaNumberLiteralValue;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.log10 expects exactly 1 argument', 0, 0);
 
-  NumberArg := TGocciaNumberLiteral.Create(Args[0].ToNumber);
+  NumberArg := Args[0].ToNumberLiteral;
   try
     if NumberArg.IsNaN then
-      Result := TGocciaNumberLiteral.CreateNaN
+      Result := TGocciaNumberLiteralValue.NaNValue
     else if NumberArg.IsInfinity then
-      Result := TGocciaNumberLiteral.CreateInfinity
+      Result := TGocciaNumberLiteralValue.InfinityValue
     else if NumberArg.IsNegativeInfinity then
-      Result := TGocciaNumberLiteral.CreateNaN // log10(-Infinity) = NaN
+      Result := TGocciaNumberLiteralValue.NaNValue // log10(-Infinity) = NaN
     else if NumberArg.Value = 0 then
-      Result := TGocciaNumberLiteral.CreateNegativeInfinity // log10(0) = -Infinity
+      Result := TGocciaNumberLiteralValue.NegativeInfinityValue // log10(0) = -Infinity
     else if NumberArg.Value < 0 then
-      Result := TGocciaNumberLiteral.CreateNaN // log10 of negative number = NaN
+      Result := TGocciaNumberLiteralValue.NaNValue // log10 of negative number = NaN
     else
-      Result := TGocciaNumberLiteral.Create(Log10(NumberArg.Value));
+      Result := TGocciaNumberLiteralValue.Create(Log10(NumberArg.Value));
   finally
     NumberArg.Free;
   end;
@@ -365,19 +364,19 @@ end;
 
 function TGocciaMath.MathSin(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  NumberArg: TGocciaNumberLiteral;
+  NumberArg: TGocciaNumberLiteralValue;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.sin expects exactly 1 argument', 0, 0);
 
-  NumberArg := TGocciaNumberLiteral.Create(Args[0].ToNumber);
+  NumberArg := Args[0].ToNumberLiteral;
   try
     if NumberArg.IsNaN then
-      Result := TGocciaNumberLiteral.CreateNaN
+      Result := TGocciaNumberLiteralValue.NaNValue
     else if NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
-      Result := TGocciaNumberLiteral.CreateNaN  // sin(±Infinity) = NaN
+      Result := TGocciaNumberLiteralValue.NaNValue  // sin(±Infinity) = NaN
     else
-      Result := TGocciaNumberLiteral.Create(Sin(NumberArg.Value));
+      Result := TGocciaNumberLiteralValue.Create(Sin(NumberArg.Value));
   finally
     NumberArg.Free;
   end;
@@ -385,19 +384,19 @@ end;
 
 function TGocciaMath.MathCos(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  NumberArg: TGocciaNumberLiteral;
+  NumberArg: TGocciaNumberLiteralValue;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.cos expects exactly 1 argument', 0, 0);
 
-  NumberArg := TGocciaNumberLiteral.Create(Args[0].ToNumber);
+  NumberArg := Args[0].ToNumberLiteral;
   try
     if NumberArg.IsNaN then
-      Result := TGocciaNumberLiteral.CreateNaN
+      Result := TGocciaNumberLiteralValue.NaNValue
     else if NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
-      Result := TGocciaNumberLiteral.CreateNaN  // cos(±Infinity) = NaN
+      Result := TGocciaNumberLiteralValue.NaNValue  // cos(±Infinity) = NaN
     else
-      Result := TGocciaNumberLiteral.Create(Cos(NumberArg.Value));
+      Result := TGocciaNumberLiteralValue.Create(Cos(NumberArg.Value));
   finally
     NumberArg.Free;
   end;
@@ -405,19 +404,19 @@ end;
 
 function TGocciaMath.MathTan(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 var
-  NumberArg: TGocciaNumberLiteral;
+  NumberArg: TGocciaNumberLiteralValue;
 begin
   if Args.Count <> 1 then
     ThrowError('Math.tan expects exactly 1 argument', 0, 0);
 
-  NumberArg := TGocciaNumberLiteral.Create(Args[0].ToNumber);
+  NumberArg := Args[0].ToNumberLiteral;
   try
     if NumberArg.IsNaN then
-      Result := TGocciaNumberLiteral.CreateNaN
+      Result := TGocciaNumberLiteralValue.NaNValue
     else if NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
-      Result := TGocciaNumberLiteral.CreateNaN  // tan(±Infinity) = NaN
+      Result := TGocciaNumberLiteralValue.NaNValue  // tan(±Infinity) = NaN
     else
-      Result := TGocciaNumberLiteral.Create(Tan(NumberArg.Value));
+      Result := TGocciaNumberLiteralValue.Create(Tan(NumberArg.Value));
   finally
     NumberArg.Free;
   end;

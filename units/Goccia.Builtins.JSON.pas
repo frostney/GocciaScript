@@ -9,10 +9,8 @@ uses
   Goccia.Scope,
   Goccia.Error,
   Goccia.Values.NativeFunction,
-  Goccia.Values.UndefinedValue,
+  Goccia.Values.Primitives,
   Goccia.Values.ObjectValue,
-  Goccia.Values.StringValue,
-  Goccia.Values.NumberValue,
   Goccia.Values.ArrayValue,
   Generics.Collections,
   Goccia.Builtins.Base,
@@ -31,8 +29,8 @@ type
     function ParseValue: TGocciaValue;
     function ParseObject: TGocciaObjectValue;
     function ParseArray: TGocciaArrayValue;
-    function ParseString: TGocciaStringLiteral;
-    function ParseNumber: TGocciaNumberLiteral;
+    function ParseString: TGocciaStringLiteralValue;
+    function ParseNumber: TGocciaNumberLiteralValue;
     function ParseLiteral: TGocciaValue; // true, false, null
 
     // Parser utilities
@@ -59,11 +57,9 @@ type
 implementation
 
 uses
-  Goccia.Values.BooleanValue,
-  Goccia.Values.NullValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.FunctionValue,
-  Classes;
+  Goccia.Values.ClassHelper;
 
 constructor TGocciaJSON.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
@@ -80,7 +76,7 @@ begin
   if Args.Count <> 1 then
     ThrowError('JSON.parse expects exactly 1 argument', 0, 0);
 
-  if not (Args[0] is TGocciaStringLiteral) then
+  if not (Args[0] is TGocciaStringLiteralValue) then
     ThrowError('JSON.parse expects a string argument', 0, 0);
 
   FJsonText := Args[0].ToString;
@@ -215,7 +211,7 @@ begin
   end;
 end;
 
-function TGocciaJSON.ParseString: TGocciaStringLiteral;
+function TGocciaJSON.ParseString: TGocciaStringLiteralValue;
 var
   Str: string;
   Ch: Char;
@@ -229,7 +225,7 @@ begin
 
     if Ch = '"' then
     begin
-      Result := TGocciaStringLiteral.Create(Str);
+      Result := TGocciaStringLiteralValue.Create(Str);
       Exit;
     end;
 
@@ -264,7 +260,7 @@ begin
   RaiseParseError('Unterminated string');
 end;
 
-function TGocciaJSON.ParseNumber: TGocciaNumberLiteral;
+function TGocciaJSON.ParseNumber: TGocciaNumberLiteralValue;
 var
   NumStr: string;
   Ch: Char;
@@ -316,7 +312,7 @@ begin
 
   try
     Value := StrToFloat(NumStr);
-    Result := TGocciaNumberLiteral.Create(Value);
+    Result := TGocciaNumberLiteralValue.Create(Value);
   except
     on E: Exception do
       RaiseParseError('Invalid number format: ' + NumStr);
@@ -331,7 +327,7 @@ begin
          (Copy(FJsonText, FPosition, 4) = 'true') then
       begin
         Inc(FPosition, 4);
-        Result := TGocciaBooleanValue.Create(True);
+        Result := TGocciaBooleanLiteralValue.Create(True);
       end
       else
         RaiseParseError('Invalid literal starting with t');
@@ -341,7 +337,7 @@ begin
          (Copy(FJsonText, FPosition, 5) = 'false') then
       begin
         Inc(FPosition, 5);
-        Result := TGocciaBooleanValue.Create(False);
+        Result := TGocciaBooleanLiteralValue.Create(False);
       end
       else
         RaiseParseError('Invalid literal starting with f');
@@ -351,7 +347,7 @@ begin
          (Copy(FJsonText, FPosition, 4) = 'null') then
       begin
         Inc(FPosition, 4);
-        Result := TGocciaNullLiteral.Create;
+        Result := TGocciaNullLiteralValue.Create;
       end
       else
         RaiseParseError('Invalid literal starting with n');
@@ -417,15 +413,15 @@ begin
 
   Value := Args[0];
 
-  if Value is TGocciaUndefinedLiteral then
+  if Value is TGocciaUndefinedLiteralValue then
   begin
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
     Exit;
   end;
 
   try
     JsonString := StringifyValue(Value);
-    Result := TGocciaStringLiteral.Create(JsonString);
+    Result := TGocciaStringLiteralValue.Create(JsonString);
   except
     on E: Exception do
       ThrowError('JSON.stringify error: ' + E.Message, 0, 0);
@@ -434,28 +430,28 @@ end;
 
 function TGocciaJSON.StringifyValue(Value: TGocciaValue; Indent: Integer): string;
 begin
-  if Value is TGocciaNullLiteral then
+  if Value is TGocciaNullLiteralValue then
     Result := 'null'
-  else if Value is TGocciaUndefinedLiteral then
+  else if Value is TGocciaUndefinedLiteralValue then
     Result := 'null' // JSON doesn't have undefined
-  else if Value is TGocciaBooleanValue then
+  else if Value is TGocciaBooleanLiteralValue then
   begin
-    if Value.ToBoolean then
+    if Value.ToBooleanLiteral.Value then
       Result := 'true'
     else
       Result := 'false';
   end
-  else if Value is TGocciaNumberLiteral then
+  else if Value is TGocciaNumberLiteralValue then
   begin
-    // Handle special number values using TGocciaNumberLiteral properties
-    if TGocciaNumberLiteral(Value).IsInfinity or TGocciaNumberLiteral(Value).IsNegativeInfinity then
+    // Handle special number values using TGocciaNumberLiteralValue properties
+    if TGocciaNumberLiteralValue(Value).IsInfinity or TGocciaNumberLiteralValue(Value).IsNegativeInfinity then
       Result := 'null'
-    else if TGocciaNumberLiteral(Value).IsNaN then
+    else if TGocciaNumberLiteralValue(Value).IsNaN then
       Result := 'null'
     else
-      Result := FloatToStr(Value.ToNumber);
+      Result := FloatToStr(Value.ToNumberLiteral.Value);
   end
-  else if Value is TGocciaStringLiteral then
+  else if Value is TGocciaStringLiteralValue then
     Result := '"' + EscapeJsonString(Value.ToString) + '"'
   else if Value is TGocciaArrayValue then
     Result := StringifyArray(TGocciaArrayValue(Value), Indent)
@@ -480,7 +476,7 @@ begin
     Value := Obj.GetProperty(Key);
 
     // Skip undefined properties and functions
-    if not (Value is TGocciaUndefinedLiteral) and
+    if not (Value is TGocciaUndefinedLiteralValue) and
        (not (Value is TGocciaFunctionValue) or (Pos('Function', Value.ClassName) = 0)) then
     begin
       if HasProperties then

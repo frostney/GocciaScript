@@ -5,7 +5,7 @@ unit Goccia.Evaluator;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Core, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.FunctionBase, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.Error, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser,
+  Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Interfaces, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.FunctionBase, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.Error, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser,
   Goccia.Evaluator.Arithmetic, Goccia.Evaluator.Bitwise, Goccia.Evaluator.Comparison, Goccia.Evaluator.TypeOperations, Goccia.Evaluator.Assignment,
   Generics.Collections, SysUtils, Math, Classes;
 
@@ -69,7 +69,9 @@ var
 implementation
 
   uses
-    Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ArithmeticOperations;
+    Goccia.Values.ObjectPropertyDescriptor,
+    Goccia.Values.ClassHelper,
+    Goccia.Values.Constants;
 
 // Helper function to safely call OnError with proper error handling
 procedure SafeOnError(Context: TGocciaEvaluationContext; const Message: string; Line, Column: Integer);
@@ -108,7 +110,7 @@ begin
   else
   begin
     Logger.Debug('Evaluate: Unknown node type, returning undefined');
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
   end;
   Logger.Debug('Evaluate: Final result type: %s', [Result.ClassName]);
 end;
@@ -194,7 +196,7 @@ begin
     else if (Obj is TGocciaArrayValue) then
       Result := TGocciaArrayValue(Obj).GetProperty(PropName)
     else
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
   end
   else if Expression is TGocciaComputedPropertyCompoundAssignmentExpression then
   begin
@@ -214,7 +216,7 @@ begin
     else if (Obj is TGocciaClassValue) then
       Result := TGocciaClassValue(Obj).GetProperty(PropName)
     else
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
   end
   else if Expression is TGocciaIncrementExpression then
   begin
@@ -253,7 +255,7 @@ begin
       else
       begin
         Context.OnError('Cannot access property on non-object', Expression.Line, Expression.Column);
-        Result := TGocciaUndefinedLiteral.Create;
+        Result := TGocciaUndefinedLiteralValue.Create;
         Exit;
       end;
 
@@ -279,7 +281,7 @@ begin
     else
     begin
       Context.OnError('Invalid target for increment/decrement', Expression.Line, Expression.Column);
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
     end;
   end
   else if Expression is TGocciaCallExpression then
@@ -380,14 +382,14 @@ begin
     // Evaluate the spread expression - this should not be called directly
     // Spread expressions are handled specially in array/object/call contexts
     Context.OnError('Unexpected spread syntax', Expression.Line, Expression.Column);
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
   end
   else if Expression is TGocciaDestructuringAssignmentExpression then
   begin
     Result := EvaluateDestructuringAssignment(TGocciaDestructuringAssignmentExpression(Expression), Context);
   end
   else
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
   Logger.Debug('EvaluateExpression: Returning result type: %s .ToString: %s', [Result.ClassName, Result.ToString]);
 end;
 
@@ -404,7 +406,7 @@ begin
   Logger.Debug('EvaluateStatement: Statement line: %d', [Statement.Line]);
   Logger.Debug('EvaluateStatement: Statement column: %d', [Statement.Column]);
 
-  Result := TGocciaUndefinedLiteral.Create;
+  Result := TGocciaUndefinedLiteralValue.Create;
 
   if Statement is TGocciaExpressionStatement then
   begin
@@ -460,35 +462,35 @@ begin
   begin
     Logger.Debug('EvaluateStatement: Processing ForStatement (parsing only - no execution)');
     // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
     Logger.Debug('EvaluateStatement: ForStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaWhileStatement then
   begin
     Logger.Debug('EvaluateStatement: Processing WhileStatement (parsing only - no execution)');
     // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
     Logger.Debug('EvaluateStatement: WhileStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaDoWhileStatement then
   begin
     Logger.Debug('EvaluateStatement: Processing DoWhileStatement (parsing only - no execution)');
     // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
     Logger.Debug('EvaluateStatement: DoWhileStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaSwitchStatement then
   begin
     Logger.Debug('EvaluateStatement: Processing SwitchStatement (parsing only - no execution)');
     // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
     Logger.Debug('EvaluateStatement: SwitchStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaBreakStatement then
   begin
     Logger.Debug('EvaluateStatement: Processing BreakStatement (parsing only - no execution)');
     // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
     Logger.Debug('EvaluateStatement: BreakStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaReturnStatement then
@@ -503,14 +505,14 @@ begin
       Logger.Debug('EvaluateStatement: Return value address: %p', [Pointer(Value)]);
       if Value = nil then
       begin
-        Logger.Debug('EvaluateStatement: Return value is nil, creating TGocciaUndefinedLiteral');
-        Value := TGocciaUndefinedLiteral.Create;
+        Logger.Debug('EvaluateStatement: Return value is nil, creating TGocciaUndefinedLiteralValue');
+        Value := TGocciaUndefinedLiteralValue.Create;
       end;
     end
     else
     begin
       Logger.Debug('EvaluateStatement: No return value, using undefined');
-      Value := TGocciaUndefinedLiteral.Create;
+      Value := TGocciaUndefinedLiteralValue.Create;
     end;
     Logger.Debug('EvaluateStatement: Raising TGocciaReturnValue with value type: %s', [Value.ClassName]);
     raise TGocciaReturnValue.Create(Value);
@@ -623,17 +625,17 @@ begin
     gttPower:
       Result := EvaluateExponentiation(Left, Right);
     gttEqual:
-      Result := TGocciaBooleanValue.Create(IsStrictEqual(Left, Right));
+      Result := TGocciaBooleanLiteralValue.Create(IsStrictEqual(Left, Right));
     gttNotEqual:
-      Result := TGocciaBooleanValue.Create(IsNotStrictEqual(Left, Right));
+      Result := TGocciaBooleanLiteralValue.Create(IsNotStrictEqual(Left, Right));
     gttLess:
-      Result := TGocciaBooleanValue.Create(LessThan(Left, Right));
+      Result := TGocciaBooleanLiteralValue.Create(LessThan(Left, Right));
     gttGreater:
-      Result := TGocciaBooleanValue.Create(GreaterThan(Left, Right));
+      Result := TGocciaBooleanLiteralValue.Create(GreaterThan(Left, Right));
     gttLessEqual:
-      Result := TGocciaBooleanValue.Create(LessThanOrEqual(Left, Right));
+      Result := TGocciaBooleanLiteralValue.Create(LessThanOrEqual(Left, Right));
     gttGreaterEqual:
-      Result := TGocciaBooleanValue.Create(GreaterThanOrEqual(Left, Right));
+      Result := TGocciaBooleanLiteralValue.Create(GreaterThanOrEqual(Left, Right));
     gttInstanceof:
       Result := EvaluateInstanceof(Left, Right, IsObjectInstanceOfClass);
     gttIn:
@@ -652,7 +654,7 @@ begin
     gttUnsignedRightShift:
       Result := EvaluateUnsignedRightShift(Left, Right);
   else
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
   end;
 end;
 
@@ -671,38 +673,38 @@ begin
 
   case UnaryExpression.Operator of
     gttNot:
-      Result := TGocciaBooleanValue.Create(not Operand.ToBoolean);
+      Result := TGocciaBooleanLiteralValue.Create(not Operand.ToBooleanLiteral.Value);
     gttMinus:
       begin
         // Handle infinity cases first
-        if (Operand is TGocciaNumberLiteral) then
+        if (Operand is TGocciaNumberLiteralValue) then
         begin
-          if TGocciaNumberLiteral(Operand).IsInfinity then
-            Result := TGocciaNumberLiteral.CreateNegativeInfinity  // -Infinity = -Infinity
-          else if TGocciaNumberLiteral(Operand).IsNegativeInfinity then
-            Result := TGocciaNumberLiteral.CreateInfinity  // -(-Infinity) = Infinity
+          if TGocciaNumberLiteralValue(Operand).IsInfinity then
+            Result := TGocciaNumberLiteralValue.NegativeInfinityValue  // -Infinity = -Infinity
+          else if TGocciaNumberLiteralValue(Operand).IsNegativeInfinity then
+            Result := TGocciaNumberLiteralValue.InfinityValue  // -(-Infinity) = Infinity
           // Handle signed zero: -0 should create negative zero, -(negative zero) should create positive zero
-          else if TGocciaNumberLiteral(Operand).Value = 0 then
+          else if TGocciaNumberLiteralValue(Operand).Value = 0 then
           begin
-            if TGocciaNumberLiteral(Operand).IsNegativeZero then
-              Result := TGocciaNumberLiteral.Create(0.0)  // -(-0) = +0
+            if TGocciaNumberLiteralValue(Operand).IsNegativeZero then
+              Result := TGocciaNumberLiteralValue.Create(0.0)  // -(-0) = +0
             else
-              Result := TGocciaNumberLiteral.CreateNegativeZero;  // -0 = -0
+              Result := TGocciaNumberLiteralValue.NegativeZeroValue;  // -0 = -0
           end
           else
-            Result := TGocciaNumberLiteral.Create(-Operand.ToNumber);
+            Result := TGocciaNumberLiteralValue.Create(-Operand.ToNumberLiteral.Value);
         end
         else
-          Result := TGocciaNumberLiteral.Create(-Operand.ToNumber);
+          Result := TGocciaNumberLiteralValue.Create(-Operand.ToNumberLiteral.Value);
       end;
     gttPlus:
-      Result := TGocciaNumberLiteral.Create(Operand.ToNumber);
+      Result := TGocciaNumberLiteralValue.Create(Operand.ToNumberLiteral.Value);
     gttTypeof:
       Result := EvaluateTypeof(Operand);
     gttBitwiseNot:
       Result := EvaluateBitwiseNot(Operand);
   else
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
   end;
 end;
 
@@ -731,7 +733,7 @@ begin
     begin
       Context.OnError('super() can only be called within a method with a superclass',
         CallExpression.Line, CallExpression.Column);
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
       Exit;
     end;
 
@@ -749,7 +751,7 @@ begin
       else
       begin
         Logger.Debug('EvaluateCall: No explicit constructor in superclass');
-        Result := TGocciaUndefinedLiteral.Create;
+        Result := TGocciaUndefinedLiteralValue.Create;
       end;
     finally
       Arguments.Free;
@@ -782,7 +784,7 @@ begin
   begin
     // Regular function calls
     Callee := EvaluateExpression(CallExpression.Callee, Context);
-    ThisValue := TGocciaUndefinedLiteral.Create;
+    ThisValue := TGocciaUndefinedLiteralValue.Create;
   end;
 
   Arguments := TObjectList<TGocciaValue>.Create(False);
@@ -802,18 +804,18 @@ begin
           begin
             // Convert holes (nil) to undefined when spreading
             if SpreadArray.Elements[I] = nil then
-              Arguments.Add(TGocciaUndefinedLiteral.Create)
+              Arguments.Add(TGocciaUndefinedLiteralValue.Create)
             else
               Arguments.Add(SpreadArray.Elements[I]);
           end;
         end
-        else if SpreadValue is TGocciaStringLiteral then
+        else if SpreadValue is TGocciaStringLiteralValue then
         begin
           // Spread string characters as arguments
           for I := 1 to Length(SpreadValue.ToString) do
-            Arguments.Add(TGocciaStringLiteral.Create(SpreadValue.ToString[I]));
+            Arguments.Add(TGocciaStringLiteralValue.Create(SpreadValue.ToString[I]));
         end
-        else if not ((SpreadValue is TGocciaNullLiteral) or (SpreadValue is TGocciaUndefinedLiteral)) then
+        else if not ((SpreadValue is TGocciaNullLiteralValue) or (SpreadValue is TGocciaUndefinedLiteralValue)) then
         begin
           Context.OnError('Spread syntax requires an iterable', ArgumentExpr.Line, ArgumentExpr.Column);
           // If OnError doesn't throw, continue execution (but the spread will be ignored)
@@ -831,9 +833,11 @@ begin
       Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, ThisValue)
     else if Callee is TGocciaFunctionValue then
       Result := TGocciaFunctionValue(Callee).Call(Arguments, ThisValue)
-    else if Callee.ClassName = 'TGocciaFunctionPrototypeMethod' then
-      Result := TGocciaFunctionPrototypeMethod(Callee).Call(Arguments, ThisValue)
-    else if Callee.ClassName = 'TGocciaBoundFunctionValue' then
+    else
+    // if Callee is TGocciaFunctionPrototypeMethod then
+    //   Result := TGocciaFunctionPrototypeMethod(Callee).Call(Arguments, ThisValue)
+    // else
+    if Callee is TGocciaBoundFunctionValue then
       Result := TGocciaBoundFunctionValue(Callee).Call(Arguments, ThisValue)
     else if Callee is IGocciaCallable then
       Result := (Callee as IGocciaCallable).Call(Arguments, ThisValue)
@@ -841,7 +845,7 @@ begin
     begin
       SafeOnError(Context, Format('%s is not a function', [Callee.TypeName]), CallExpression.Line, CallExpression.Column);
       // If OnError doesn't throw, return undefined
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
     end;
 
   finally
@@ -870,7 +874,7 @@ begin
     begin
       Context.OnError('super can only be used within a method with a superclass',
         MemberExpression.Line, MemberExpression.Column);
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
       Exit;
     end;
 
@@ -900,10 +904,10 @@ begin
       Logger.Debug('EvaluateMember: Instance method context, looking for instance method');
       Result := SuperClass.GetMethod(PropertyName);
       if not Assigned(Result) then
-        Result := TGocciaUndefinedLiteral.Create;
+        Result := TGocciaUndefinedLiteralValue.Create;
     end;
 
-    if not (Result is TGocciaUndefinedLiteral) then
+    if not (Result is TGocciaUndefinedLiteralValue) then
     begin
       // For super.method() calls, we need to create a bound method that uses the current 'this'
       // This is handled in the call evaluation where we have access to the current 'this'
@@ -957,24 +961,24 @@ begin
   begin
     // Handle primitive boxing for property access
     Logger.Debug('EvaluateMember: Attempting primitive boxing for: %s', [Obj.ClassName]);
-    BoxedValue := BoxPrimitive(Obj);
+    BoxedValue := Obj.Box;
     if Assigned(BoxedValue) then
     begin
       Logger.Debug('EvaluateMember: Primitive boxed successfully');
       Result := BoxedValue.GetProperty(PropertyName);
       Logger.Debug('EvaluateMember: Boxed result: %s', [Result.ToString]);
     end
-    else if (Obj is TGocciaNullLiteral) or (Obj is TGocciaUndefinedLiteral) then
+    else if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
     begin
       // null/undefined property access should throw
       Context.OnError('Cannot read property ''' + PropertyName + ''' of ' + Obj.ToString,
         MemberExpression.Line, MemberExpression.Column);
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
     end
     else
     begin
       Logger.Debug('EvaluateMember: Obj is not a supported object type');
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
     end;
   end;
   Logger.Debug('EvaluateMember: Returning result type: %s', [Result.ClassName]);
@@ -1000,8 +1004,8 @@ begin
     begin
       Context.OnError('super can only be used within a method with a superclass',
         MemberExpression.Line, MemberExpression.Column);
-      Result := TGocciaUndefinedLiteral.Create;
-      ObjectValue := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
+      ObjectValue := TGocciaUndefinedLiteralValue.Create;
       Exit;
     end;
 
@@ -1033,10 +1037,10 @@ begin
       Logger.Debug('EvaluateMember: Instance method context, looking for instance method');
       Result := SuperClass.GetMethod(PropertyName);
       if not Assigned(Result) then
-        Result := TGocciaUndefinedLiteral.Create;
+        Result := TGocciaUndefinedLiteralValue.Create;
     end;
 
-    if not (Result is TGocciaUndefinedLiteral) then
+    if not (Result is TGocciaUndefinedLiteralValue) then
     begin
       Logger.Debug('EvaluateMember: Super method found: %s', [Result.ToString]);
     end
@@ -1095,7 +1099,7 @@ begin
   begin
     // Handle primitive boxing for property access
     Logger.Debug('EvaluateMember: Attempting primitive boxing for: %s', [ObjectValue.ClassName]);
-    BoxedValue := BoxPrimitive(ObjectValue);
+    BoxedValue := ObjectValue.Box;
     if Assigned(BoxedValue) then
     begin
       Logger.Debug('EvaluateMember: Primitive boxed successfully');
@@ -1103,17 +1107,17 @@ begin
       Logger.Debug('EvaluateMember: Boxed result: %s', [Result.ToString]);
       // Note: ObjectValue remains the original primitive for 'this' binding
     end
-    else if (ObjectValue is TGocciaNullLiteral) or (ObjectValue is TGocciaUndefinedLiteral) then
+    else if (ObjectValue is TGocciaNullLiteralValue) or (ObjectValue is TGocciaUndefinedLiteralValue) then
     begin
       // null/undefined property access should throw
       Context.OnError('Cannot read property ''' + PropertyName + ''' of ' + ObjectValue.ToString,
         MemberExpression.Line, MemberExpression.Column);
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
     end
     else
     begin
       Logger.Debug('EvaluateMember: Obj is not a supported object type');
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
     end;
   end;
   Logger.Debug('EvaluateMember: Returning result type: %s', [Result.ClassName]);
@@ -1151,23 +1155,23 @@ begin
         begin
           // Convert holes (nil) to undefined when spreading
           if SpreadArray.Elements[J] = nil then
-            Arr.Elements.Add(TGocciaUndefinedLiteral.Create)
+            Arr.Elements.Add(TGocciaUndefinedLiteralValue.Create)
           else
             Arr.Elements.Add(SpreadArray.Elements[J]);
         end;
       end
-      else if SpreadValue is TGocciaStringLiteral then
+      else if SpreadValue is TGocciaStringLiteralValue then
       begin
         // Spread string characters
         for J := 1 to Length(SpreadValue.ToString) do
-          Arr.Elements.Add(TGocciaStringLiteral.Create(SpreadValue.ToString[J]));
+          Arr.Elements.Add(TGocciaStringLiteralValue.Create(SpreadValue.ToString[J]));
       end
       else if (SpreadValue is TGocciaObjectValue) then
       begin
         // For objects, we would need iterator support - for now just ignore
         // This is complex and would need proper iterator protocol implementation
       end
-      else if not ((SpreadValue is TGocciaNullLiteral) or (SpreadValue is TGocciaUndefinedLiteral)) then
+      else if not ((SpreadValue is TGocciaNullLiteralValue) or (SpreadValue is TGocciaUndefinedLiteralValue)) then
       begin
         Context.OnError('Spread syntax requires an iterable', ArrayExpression.Elements[I].Line, ArrayExpression.Elements[I].Column);
       end;
@@ -1247,11 +1251,11 @@ begin
                      Obj.DefineProperty(IntToStr(J), TGocciaPropertyDescriptorData.Create(SpreadArray.Elements[J], [pfEnumerable, pfConfigurable, pfWritable]));
                  end;
                end
-               else if SpreadValue is TGocciaStringLiteral then
+               else if SpreadValue is TGocciaStringLiteralValue then
                begin
                  // Spread string as indexed properties
                  for J := 1 to Length(SpreadValue.ToString) do
-                   Obj.DefineProperty(IntToStr(J - 1), TGocciaPropertyDescriptorData.Create(TGocciaStringLiteral.Create(SpreadValue.ToString[J]), [pfEnumerable, pfConfigurable, pfWritable]));
+                   Obj.DefineProperty(IntToStr(J - 1), TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(SpreadValue.ToString[J]), [pfEnumerable, pfConfigurable, pfWritable]));
                end;
               // null/undefined/other primitives are ignored in spread context
             end
@@ -1394,13 +1398,13 @@ begin
                 Obj.AssignProperty(IntToStr(I), SpreadArray.Elements[I]);
             end;
           end
-          else if SpreadValue is TGocciaStringLiteral then
+          else if SpreadValue is TGocciaStringLiteralValue then
           begin
             // Spread string as indexed properties
             for I := 1 to Length(SpreadValue.ToString) do
-              Obj.AssignProperty(IntToStr(I - 1), TGocciaStringLiteral.Create(SpreadValue.ToString[I]));
+              Obj.AssignProperty(IntToStr(I - 1), TGocciaStringLiteralValue.Create(SpreadValue.ToString[I]));
           end
-          else if not ((SpreadValue is TGocciaNullLiteral) or (SpreadValue is TGocciaUndefinedLiteral)) then
+          else if not ((SpreadValue is TGocciaNullLiteralValue) or (SpreadValue is TGocciaUndefinedLiteralValue)) then
           begin
             // Other primitives (numbers, booleans) don't have enumerable properties
             // So they result in empty object spread, which is valid
@@ -1519,7 +1523,7 @@ begin
     BlockContext.Scope := Context.Scope; // Use same scope - no isolation needed
 
   try
-    LastValue := TGocciaUndefinedLiteral.Create;
+    LastValue := TGocciaUndefinedLiteralValue.Create;
 
     for I := 0 to BlockStatement.Nodes.Count - 1 do
     begin
@@ -1543,7 +1547,7 @@ begin
     end;
 
     if LastValue = nil then
-      LastValue := TGocciaUndefinedLiteral.Create;
+      LastValue := TGocciaUndefinedLiteralValue.Create;
     Result := LastValue;
   finally
     // Only free the scope if we created a child scope
@@ -1559,7 +1563,7 @@ begin
   else if Assigned(IfStatement.Alternate) then
     Result := EvaluateStatement(IfStatement.Alternate, Context)
   else
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
 end;
 
 function EvaluateTry(TryStatement: TGocciaTryStatement; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -1570,14 +1574,14 @@ var
   I: Integer;
 begin
   Logger.Debug('EvaluateTry: Starting try-catch-finally evaluation');
-  Result := TGocciaUndefinedLiteral.Create;
+  Result := TGocciaUndefinedLiteralValue.Create;
 
     try
                                           // Execute the try block using original context (no scope isolation)
       Logger.Debug('EvaluateTry: Executing try block');
 
       // Execute try block statements directly in original context
-      TryResult := TGocciaUndefinedLiteral.Create;
+      TryResult := TGocciaUndefinedLiteralValue.Create;
       for I := 0 to TryStatement.Block.Nodes.Count - 1 do
       begin
         try
@@ -1622,7 +1626,7 @@ begin
               CatchContext.Scope := CatchScope;
 
               // Execute catch block statements with proper scoping
-              Result := TGocciaUndefinedLiteral.Create;
+              Result := TGocciaUndefinedLiteralValue.Create;
               for I := 0 to TryStatement.CatchBlock.Nodes.Count - 1 do
               begin
                 try
@@ -1649,7 +1653,7 @@ begin
           else
           begin
             // No catch parameter - use original context directly
-            Result := TGocciaUndefinedLiteral.Create;
+            Result := TGocciaUndefinedLiteralValue.Create;
             for I := 0 to TryStatement.CatchBlock.Nodes.Count - 1 do
             begin
               try
@@ -1700,14 +1704,14 @@ begin
             CatchScope := TGocciaCatchScope.Create(Context.Scope, TryStatement.CatchParam);
             try
               // Create a JavaScript Error object for the Pascal exception
-              CatchScope.DefineBuiltin(TryStatement.CatchParam, TGocciaStringLiteral.Create(E.Message));
+              CatchScope.DefineBuiltin(TryStatement.CatchParam, TGocciaStringLiteralValue.Create(E.Message));
 
               // Set up context for catch block with child scope of statement scope
               CatchContext := Context;
               CatchContext.Scope := CatchScope;
 
               // Execute catch block statements with proper scoping
-              Result := TGocciaUndefinedLiteral.Create;
+              Result := TGocciaUndefinedLiteralValue.Create;
               for I := 0 to TryStatement.CatchBlock.Nodes.Count - 1 do
               begin
                 try
@@ -1734,7 +1738,7 @@ begin
                     else
           begin
             // No catch parameter - use original context directly
-            Result := TGocciaUndefinedLiteral.Create;
+            Result := TGocciaUndefinedLiteralValue.Create;
             for I := 0 to TryStatement.CatchBlock.Nodes.Count - 1 do
             begin
               try
@@ -1761,7 +1765,7 @@ begin
         begin
           // No catch block, re-throw as JavaScript error
           Logger.Debug('EvaluateTry: No catch block, re-throwing as TGocciaThrowValue');
-          raise TGocciaThrowValue.Create(TGocciaStringLiteral.Create(E.Message));
+          raise TGocciaThrowValue.Create(TGocciaStringLiteralValue.Create(E.Message));
         end;
       end;
     end;
@@ -1811,7 +1815,7 @@ begin
         begin
           // Convert Pascal exceptions in finally block
           Logger.Debug('EvaluateTry: Pascal exception in finally block');
-          raise TGocciaThrowValue.Create(TGocciaStringLiteral.Create(E.Message));
+          raise TGocciaThrowValue.Create(TGocciaStringLiteralValue.Create(E.Message));
         end;
       end;
     end;
@@ -2062,7 +2066,7 @@ begin
     begin
       Result := Instance.ClassValue.GetPrivateMethod(PrivateMemberExpression.PrivateName);
       if Result = nil then
-        Result := TGocciaUndefinedLiteral.Create;
+        Result := TGocciaUndefinedLiteralValue.Create;
     end
     else
     begin
@@ -2082,7 +2086,7 @@ begin
   begin
     Context.OnError(Format('Private fields can only be accessed on class instances or classes, not %s', [ObjectValue.TypeName]),
       PrivateMemberExpression.Line, PrivateMemberExpression.Column);
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
   end;
 end;
 
@@ -2109,7 +2113,7 @@ begin
     begin
       Result := Instance.ClassValue.GetPrivateMethod(PrivateMemberExpression.PrivateName);
       if Result = nil then
-        Result := TGocciaUndefinedLiteral.Create;
+        Result := TGocciaUndefinedLiteralValue.Create;
     end
     else
     begin
@@ -2129,7 +2133,7 @@ begin
   begin
     Context.OnError(Format('Private fields can only be accessed on class instances or classes, not %s', [ObjectValue.TypeName]),
       PrivateMemberExpression.Line, PrivateMemberExpression.Column);
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
   end;
 end;
 
@@ -2170,7 +2174,7 @@ begin
   begin
     Context.OnError(Format('Private fields can only be assigned on class instances or classes, not %s', [ObjectValue.TypeName]),
       PrivatePropertyAssignmentExpression.Line, PrivatePropertyAssignmentExpression.Column);
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
     Exit;
   end;
 
@@ -2215,7 +2219,7 @@ begin
   begin
     Context.OnError(Format('Private fields can only be accessed on class instances or classes, not %s', [ObjectValue.TypeName]),
       PrivatePropertyCompoundAssignmentExpression.Line, PrivatePropertyCompoundAssignmentExpression.Column);
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
     Exit;
   end;
 
@@ -2281,7 +2285,7 @@ begin
       if BraceCount > 0 then
       begin
         Context.OnError('Unterminated template expression', TemplateLiteralExpression.Line, TemplateLiteralExpression.Column);
-        Result := TGocciaStringLiteral.Create(Template);
+        Result := TGocciaStringLiteralValue.Create(Template);
         Exit;
       end;
 
@@ -2313,7 +2317,7 @@ begin
     end;
   end;
 
-  Result := TGocciaStringLiteral.Create(ResultStr);
+  Result := TGocciaStringLiteralValue.Create(ResultStr);
 end;
 
 // Lightweight template expression evaluator - handles 95% of common cases without full parsing
@@ -2336,7 +2340,7 @@ begin
   // Handle empty expression
   if Trimmed = '' then
   begin
-    Result := TGocciaStringLiteral.Create('');
+    Result := TGocciaStringLiteralValue.Create('');
     Exit;
   end;
 
@@ -2379,7 +2383,7 @@ begin
     begin
       Result := Context.Scope.GetValue(Trimmed);
       if Result = nil then
-        Result := TGocciaUndefinedLiteral.Create;
+        Result := TGocciaUndefinedLiteralValue.Create;
       Exit;
     end;
 
@@ -2424,10 +2428,10 @@ begin
 
         if (LeftVal <> nil) and (RightVal <> nil) then
         begin
-          if (LeftVal is TGocciaStringLiteral) or (RightVal is TGocciaStringLiteral) then
-            Result := TGocciaStringLiteral.Create(LeftVal.ToString + RightVal.ToString)
+          if (LeftVal is TGocciaStringLiteralValue) or (RightVal is TGocciaStringLiteralValue) then
+            Result := TGocciaStringLiteralValue.Create(LeftVal.ToStringLiteral.Value + RightVal.ToStringLiteral.Value)
           else
-            Result := TGocciaNumberLiteral.Create(LeftVal.ToNumber + RightVal.ToNumber);
+            Result := TGocciaNumberLiteralValue.Create(LeftVal.ToNumberLiteral.Value + RightVal.ToNumberLiteral.Value);
           Exit;
         end;
       end;
@@ -2448,7 +2452,7 @@ begin
 
         if (LeftVal <> nil) and (RightVal <> nil) then
         begin
-          Result := TGocciaNumberLiteral.Create(LeftVal.ToNumber - RightVal.ToNumber);
+          Result := TGocciaNumberLiteralValue.Create(LeftVal.ToNumberLiteral.Value - RightVal.ToNumberLiteral.Value);
           Exit;
         end;
       end;
@@ -2469,7 +2473,7 @@ begin
 
         if (LeftVal <> nil) and (RightVal <> nil) then
         begin
-          Result := TGocciaNumberLiteral.Create(LeftVal.ToNumber * RightVal.ToNumber);
+          Result := TGocciaNumberLiteralValue.Create(LeftVal.ToNumberLiteral.Value * RightVal.ToNumberLiteral.Value);
           Exit;
         end;
       end;
@@ -2490,10 +2494,10 @@ begin
 
         if (LeftVal <> nil) and (RightVal <> nil) then
         begin
-          if RightVal.ToNumber = 0 then
-            Result := TGocciaNumberLiteral.Create(Infinity)
+          if RightVal.ToNumberLiteral.Value = 0 then
+            Result := TGocciaNumberLiteralValue.InfinityValue
           else
-            Result := TGocciaNumberLiteral.Create(LeftVal.ToNumber / RightVal.ToNumber);
+            Result := TGocciaNumberLiteralValue.Create(LeftVal.ToNumberLiteral.Value / RightVal.ToNumberLiteral.Value);
           Exit;
         end;
       end;
@@ -2516,7 +2520,7 @@ begin
     Tokens := Lexer.ScanTokens;
     if Tokens = nil then
     begin
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
       Exit;
     end;
 
@@ -2526,14 +2530,14 @@ begin
     Expression := Parser.Expression;
     if Expression = nil then
     begin
-      Result := TGocciaUndefinedLiteral.Create;
+      Result := TGocciaUndefinedLiteralValue.Create;
       Exit;
     end;
 
     Result := EvaluateExpression(Expression, Context);
 
   except
-    Result := TGocciaUndefinedLiteral.Create;
+    Result := TGocciaUndefinedLiteralValue.Create;
   end;
 
   // Cleanup
@@ -2619,7 +2623,7 @@ begin
           if ArrayValue.Elements[J] <> nil then
             RestElements.Elements.Add(ArrayValue.Elements[J])
           else
-            RestElements.Elements.Add(TGocciaUndefinedLiteral.Create);
+            RestElements.Elements.Add(TGocciaUndefinedLiteralValue.Create);
         end;
         AssignPattern(TGocciaRestDestructuringPattern(Pattern.Elements[I]).Argument, RestElements, Context, IsDeclaration);
         Break;
@@ -2630,13 +2634,13 @@ begin
         if (I < ArrayValue.Elements.Count) and (ArrayValue.Elements[I] <> nil) then
           ElementValue := ArrayValue.Elements[I]
         else
-          ElementValue := TGocciaUndefinedLiteral.Create;
+          ElementValue := TGocciaUndefinedLiteralValue.Create;
 
         AssignPattern(Pattern.Elements[I], ElementValue, Context, IsDeclaration);
       end;
     end;
   end
-  else if Value is TGocciaStringLiteral then
+  else if Value is TGocciaStringLiteralValue then
   begin
     // String destructuring
     for I := 0 to Pattern.Elements.Count - 1 do
@@ -2649,7 +2653,7 @@ begin
         // Rest pattern: collect remaining characters
         RestElements := TGocciaArrayValue.Create;
         for J := I + 1 to Length(Value.ToString) do
-          RestElements.Elements.Add(TGocciaStringLiteral.Create(Value.ToString[J]));
+          RestElements.Elements.Add(TGocciaStringLiteralValue.Create(Value.ToString[J]));
         AssignPattern(TGocciaRestDestructuringPattern(Pattern.Elements[I]).Argument, RestElements, Context, IsDeclaration);
         Break;
       end
@@ -2657,15 +2661,15 @@ begin
       begin
         // Regular character
         if I + 1 <= Length(Value.ToString) then
-          ElementValue := TGocciaStringLiteral.Create(Value.ToString[I + 1])
+          ElementValue := TGocciaStringLiteralValue.Create(Value.ToString[I + 1])
         else
-          ElementValue := TGocciaUndefinedLiteral.Create;
+          ElementValue := TGocciaUndefinedLiteralValue.Create;
 
         AssignPattern(Pattern.Elements[I], ElementValue, Context, IsDeclaration);
       end;
     end;
   end
-  else if (Value is TGocciaNullLiteral) or (Value is TGocciaUndefinedLiteral) then
+  else if (Value is TGocciaNullLiteralValue) or (Value is TGocciaUndefinedLiteralValue) then
   begin
     // Throw TypeError for null/undefined destructuring
     raise TGocciaError.Create('TypeError: Cannot destructure null or undefined', 0, 0, '', nil);
@@ -2691,7 +2695,7 @@ begin
   // Check if value is an object
   if not (Value is TGocciaObjectValue) then
   begin
-    if (Value is TGocciaNullLiteral) or (Value is TGocciaUndefinedLiteral) then
+    if (Value is TGocciaNullLiteralValue) or (Value is TGocciaUndefinedLiteralValue) then
       raise TGocciaError.Create('TypeError: Cannot destructure null or undefined', 0, 0, '', nil)
     else
       raise TGocciaError.Create('TypeError: Cannot destructure non-object value', 0, 0, '', nil);
@@ -2744,7 +2748,7 @@ var
   DefaultValue: TGocciaValue;
 begin
   // Use default value if the value is undefined
-  if Value is TGocciaUndefinedLiteral then
+  if Value is TGocciaUndefinedLiteralValue then
   begin
     DefaultValue := EvaluateExpression(Pattern.Right, Context);
     AssignPattern(Pattern.Left, DefaultValue, Context, IsDeclaration);
@@ -2825,13 +2829,13 @@ begin
       begin
         // Set array element to nil (creates a hole/sparse array)
         ArrayValue.Elements[Index] := nil;
-        Result := TGocciaBooleanValue.Create(True);
+        Result := TGocciaBooleanLiteralValue.Create(True);
       end
       else
       begin
         // Try to delete as a regular property on the array object
         ArrayValue.DeleteProperty(PropertyName);
-        Result := TGocciaBooleanValue.Create(True);
+        Result := TGocciaBooleanLiteralValue.Create(True);
       end;
     end
     // Handle object property deletion
@@ -2846,24 +2850,24 @@ begin
           if Assigned(Descriptor) and not Descriptor.Configurable then
           begin
             // Non-configurable property cannot be deleted
-            Result := TGocciaBooleanValue.Create(False);
+            Result := TGocciaBooleanLiteralValue.Create(False);
           end
           else
           begin
             ObjectValue.DeleteProperty(PropertyName);
-            Result := TGocciaBooleanValue.Create(True);
+            Result := TGocciaBooleanLiteralValue.Create(True);
           end;
         end
       else
       begin
         // Property doesn't exist - deletion succeeds
-        Result := TGocciaBooleanValue.Create(True);
+        Result := TGocciaBooleanLiteralValue.Create(True);
       end;
     end
     else
     begin
       // Cannot delete properties from primitives, null, or undefined
-      Result := TGocciaBooleanValue.Create(True);
+      Result := TGocciaBooleanLiteralValue.Create(True);
     end;
   end
   else
@@ -2874,13 +2878,13 @@ begin
       // In strict mode, attempting to delete variables/identifiers throws TypeError
       Context.OnError('Delete of an unqualified identifier in strict mode',
         Operand.Line, Operand.Column);
-      Result := TGocciaBooleanValue.Create(True); // Fallback if OnError doesn't throw
+      Result := TGocciaBooleanLiteralValue.Create(True); // Fallback if OnError doesn't throw
     end
     else
     begin
       // For literals and other non-reference expressions, return true
       // (e.g., delete 5, delete "string", delete (1+2), etc.)
-      Result := TGocciaBooleanValue.Create(True);
+      Result := TGocciaBooleanLiteralValue.Create(True);
     end;
   end;
 end;
