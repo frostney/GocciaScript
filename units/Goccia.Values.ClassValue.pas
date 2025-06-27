@@ -30,7 +30,7 @@ type
   public
     constructor Create(const AName: string; ASuperClass: TGocciaClassValue);
     destructor Destroy; override;
-    function ToString: string; override;
+    function ToStringLiteral: TGocciaStringLiteralValue;
     function TypeName: string; override;
     procedure AddMethod(const AName: string; AMethod: TGocciaMethodValue);
     function GetMethod(const AName: string): TGocciaMethodValue;
@@ -65,6 +65,7 @@ type
     constructor Create(AClass: TGocciaClassValue);
     destructor Destroy; override;
     function TypeName: string; override;
+    function ToStringLiteral: TGocciaStringLiteralValue;
     function GetProperty(const AName: string): TGocciaValue;
     procedure AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
@@ -78,6 +79,8 @@ type
   end;
 
 implementation
+
+uses Goccia.Values.ClassHelper;
 
 constructor TGocciaClassValue.Create(const AName: string; ASuperClass: TGocciaClassValue);
 begin
@@ -111,13 +114,13 @@ begin
   inherited;
 end;
 
-function TGocciaClassValue.ToString: string;
+function TGocciaClassValue.ToStringLiteral: TGocciaStringLiteralValue;
 begin
   // For error classes, just return the name to make toThrow work properly
   if (FName = 'RangeError') or (FName = 'Error') or (FName = 'TypeError') or (FName = 'ReferenceError') then
-    Result := FName
+    Result := TGocciaStringLiteralValue.Create(FName)
   else
-    Result := Format('[Class: %s]', [FName]);
+    Result := TGocciaStringLiteralValue.Create(Format('[Class: %s]', [FName]));
 end;
 
 function TGocciaClassValue.TypeName: string;
@@ -236,7 +239,7 @@ begin
 
   // Step 1: Create the basic instance
   Instance := TGocciaInstanceValue.Create(Self);
-  Logger.Debug('Instance created: %s', [Instance.ToString]);
+  Logger.Debug('Instance created: %s', [Instance.ToStringLiteral.Value]);
 
   // Step 2: Set up the prototype chain
   Instance.Prototype := FPrototype;
@@ -254,7 +257,7 @@ begin
   begin
     Logger.Debug('Calling constructor with %d arguments', [Arguments.Count]);
     if Arguments.Count > 0 then
-      Logger.Debug('  First argument: %s', [Arguments[0].ToString]);
+      Logger.Debug('  First argument: %s', [Arguments[0].ToStringLiteral.Value]);
 
     // Call the constructor with the instance as this
     ConstructorToCall.Call(Arguments, Instance);
@@ -293,6 +296,11 @@ begin
   Result := FClass.Name;
 end;
 
+function TGocciaInstanceValue.ToStringLiteral: TGocciaStringLiteralValue;
+begin
+  Result := TGocciaStringLiteralValue.Create(Format('[Instance of %s]', [FClass.Name]));
+end;
+
 function TGocciaInstanceValue.GetProperty(const AName: string): TGocciaValue;
 var
   Method: TGocciaFunctionValue;
@@ -316,7 +324,7 @@ begin
     Logger.Debug('TGocciaInstanceValue.GetProperty: Checking prototype for property: %s', [AName]);
     Logger.Debug('TGocciaInstanceValue.GetProperty: Instance type: %s', [Self.TypeName]);
     Result := FPrototype.GetPropertyWithContext(AName, Self);
-    Logger.Debug('TGocciaInstanceValue.GetProperty: GetPropertyWithContext returned: %s', [Result.ToString]);
+    Logger.Debug('TGocciaInstanceValue.GetProperty: GetPropertyWithContext returned: %s', [Result.ToStringLiteral.Value]);
     if not (Result is TGocciaUndefinedLiteralValue) then
       Exit;
   end;
@@ -395,7 +403,7 @@ procedure TGocciaInstanceValue.SetPrototype(APrototype: TGocciaObjectValue);
 begin
   Logger.Debug('TGocciaInstanceValue.SetPrototype: Called');
   if Assigned(APrototype) then
-    Logger.Debug('  APrototype is assigned: %s', [APrototype.ToString])
+    Logger.Debug('  APrototype is assigned: %s', [APrototype.ToStringLiteral.Value])
   else
     Logger.Debug('  APrototype is nil');
 
@@ -408,7 +416,7 @@ begin
 
   // Debug: Check what the inherited prototype actually is now
   if Assigned(inherited Prototype) then
-    Logger.Debug('  Inherited Prototype is now: %s', [inherited Prototype.ToString])
+    Logger.Debug('  Inherited Prototype is now: %s', [inherited Prototype.ToStringLiteral.Value])
   else
     Logger.Debug('  Inherited Prototype is still nil');
 end;

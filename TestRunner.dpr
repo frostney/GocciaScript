@@ -36,21 +36,21 @@ begin
       
       if FileResult <> nil then
       begin
-        if FileResult.GetProperty('totalTests').ToString <> 'undefined' then
+        if FileResult.GetProperty('totalTests').ToStringLiteral.Value <> 'undefined' then
           ScriptResult.AssignProperty('totalTests', FileResult.GetProperty('totalTests'));
-        if FileResult.GetProperty('totalRunTests').ToString <> 'undefined' then
+        if FileResult.GetProperty('totalRunTests').ToStringLiteral.Value <> 'undefined' then
           ScriptResult.AssignProperty('totalRunTests', FileResult.GetProperty('totalRunTests'));
-        if FileResult.GetProperty('passed').ToString <> 'undefined' then
+        if FileResult.GetProperty('passed').ToStringLiteral.Value <> 'undefined' then
           ScriptResult.AssignProperty('passed', FileResult.GetProperty('passed'));
-        if FileResult.GetProperty('failed').ToString <> 'undefined' then
+        if FileResult.GetProperty('failed').ToStringLiteral.Value <> 'undefined' then
           ScriptResult.AssignProperty('failed', FileResult.GetProperty('failed'));
-        if FileResult.GetProperty('skipped').ToString <> 'undefined' then
+        if FileResult.GetProperty('skipped').ToStringLiteral.Value <> 'undefined' then
           ScriptResult.AssignProperty('skipped', FileResult.GetProperty('skipped'));
-        if FileResult.GetProperty('assertions').ToString <> 'undefined' then
+        if FileResult.GetProperty('assertions').ToStringLiteral.Value <> 'undefined' then
           ScriptResult.AssignProperty('assertions', FileResult.GetProperty('assertions'));
-        if FileResult.GetProperty('duration').ToString <> 'undefined' then
+        if FileResult.GetProperty('duration').ToStringLiteral.Value <> 'undefined' then
           ScriptResult.AssignProperty('duration', FileResult.GetProperty('duration'));
-        if FileResult.GetProperty('failedTests').ToString <> 'undefined' then
+        if FileResult.GetProperty('failedTests').ToStringLiteral.Value <> 'undefined' then
           ScriptResult.AssignProperty('failedTests', FileResult.GetProperty('failedTests'));
       end else
       begin
@@ -150,14 +150,14 @@ var
 begin
   ExitCode := 0;
 
-  TotalRunTests := TestResult.GetProperty('totalRunTests').ToString;
-  TotalPassed := TestResult.GetProperty('passed').ToString;
-  TotalFailed := TestResult.GetProperty('failed').ToString;
-  TotalSkipped := TestResult.GetProperty('skipped').ToString;
-  TotalAssertions := TestResult.GetProperty('assertions').ToString;
-  TotalDuration := TestResult.GetProperty('duration').ToString;
+  TotalRunTests := TestResult.GetProperty('totalRunTests').ToStringLiteral.Value;
+  TotalPassed := TestResult.GetProperty('passed').ToStringLiteral.Value;
+  TotalFailed := TestResult.GetProperty('failed').ToStringLiteral.Value;
+  TotalSkipped := TestResult.GetProperty('skipped').ToStringLiteral.Value;
+  TotalAssertions := TestResult.GetProperty('assertions').ToStringLiteral.Value;
+  TotalDuration := TestResult.GetProperty('duration').ToStringLiteral.Value;
 
-  Writeln('Test Results Total Tests: ', TestResult.GetProperty('totalTests').ToString);
+  Writeln('Test Results Total Tests: ', TestResult.GetProperty('totalTests').ToStringLiteral.Value);
   Writeln(Format('Test Results Run Tests: %s', [TotalRunTests]));
 
   if StrToFloat(TotalRunTests) > 0 then
@@ -167,7 +167,7 @@ begin
     Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / StrToFloat(TotalRunTests) * 100)]));
     Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
     Writeln(Format('Test Results Duration: %sms (%2.2fms/test)', [TotalDuration, (StrToFloat(TotalDuration) / StrToFloat(TotalRunTests))]));
-    Writeln(Format('Test Results Failed Tests: %s', [TestResult.GetProperty('failedTests').ToString]));
+    Writeln(Format('Test Results Failed Tests: %s', [TestResult.GetProperty('failedTests').ToStringLiteral.Value]));
   end;
 
 

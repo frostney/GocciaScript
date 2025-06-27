@@ -207,7 +207,7 @@ begin
     ThrowError('Object.hasOwn called on non-object', 0, 0);
 
   Obj := TGocciaObjectValue(Args[0]);
-  PropertyName := Args[1].ToString;
+  PropertyName := Args[1].ToStringLiteral.Value;
 
   Result := TGocciaBooleanLiteralValue.Create(Obj.HasOwnProperty(PropertyName));
 end;
@@ -249,7 +249,7 @@ begin
     ThrowError('Object.getOwnPropertyDescriptor called on non-object', 0, 0);
 
   Obj := TGocciaObjectValue(Args[0]);
-  PropertyName := Args[1].ToString;
+  PropertyName := Args[1].ToStringLiteral.Value;
 
   Descriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   if Descriptor = nil then
@@ -308,7 +308,7 @@ begin
     ThrowError('Object.defineProperty: descriptor must be an object', 0, 0);
 
   Obj := TGocciaObjectValue(Args[0]);
-  PropertyName := Args[1].ToString;
+  PropertyName := Args[1].ToStringLiteral.Value;
   DescriptorObject := TGocciaObjectValue(Args[2]);
 
   // Initialize all variables

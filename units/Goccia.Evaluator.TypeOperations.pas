@@ -18,16 +18,18 @@ function EvaluateInOperator(Left, Right: TGocciaValue): TGocciaValue;
 
 implementation
 
+uses Goccia.Values.ClassHelper;
+
 function EvaluateTypeof(Operand: TGocciaValue): TGocciaValue;
 begin
-  Logger.Debug('EvaluateTypeof: typeof operator called with operand: %s', [Operand.ToString]);
+  Logger.Debug('EvaluateTypeof: typeof operator called with operand: %s', [Operand.ToStringLiteral.Value]);
   Result := TGocciaStringLiteralValue.Create(Operand.TypeName);
 end;
 
 function EvaluateInstanceof(Left, Right: TGocciaValue; IsObjectInstanceOfClass: TIsObjectInstanceOfClassFunction): TGocciaValue;
 begin
   // Implement instanceof operator according to JavaScript specification
-  Logger.Debug('EvaluateInstanceof: instanceof operator called with Left: %s, Right: %s', [Left.ToString, Right.ToString]);
+  Logger.Debug('EvaluateInstanceof: instanceof operator called with Left: %s, Right: %s', [Left.ToStringLiteral.Value, Right.ToStringLiteral.Value]);
 
   // Right operand must be a constructor/class
   if not (Right is TGocciaClassValue) then
@@ -97,9 +99,9 @@ var
   Index: Integer;
 begin
   // Implement the 'in' operator: property/index in object/array/string
-  Logger.Debug('EvaluateInOperator: in operator called with Left: %s, Right: %s', [Left.ToString, Right.ToString]);
+  Logger.Debug('EvaluateInOperator: in operator called with Left: %s, Right: %s', [Left.ToStringLiteral.Value, Right.ToStringLiteral.Value]);
 
-  PropertyName := Left.ToString; // Left operand is the property name
+  PropertyName := Left.ToStringLiteral.Value; // Left operand is the property name
 
   if Right is TGocciaArrayValue then
   begin
@@ -132,7 +134,7 @@ begin
     begin
       try
         Index := StrToInt(PropertyName);
-        Result := TGocciaBooleanLiteralValue.Create((Index >= 0) and (Index < Length(Right.ToString)));
+        Result := TGocciaBooleanLiteralValue.Create((Index >= 0) and (Index < Length(Right.ToStringLiteral.Value)));
       except
         // If not a valid integer, always false for strings
         Result := TGocciaBooleanLiteralValue.Create(False);

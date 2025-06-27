@@ -62,7 +62,7 @@ begin
     Exit;
   end;
 
-  InputStr := Trim(Args[0].ToString);
+  InputStr := Trim(Args[0].ToStringLiteral.Value);
   if InputStr = '' then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
@@ -160,7 +160,7 @@ begin
     Exit;
   end;
 
-  InputStr := Trim(Args[0].ToString);
+  InputStr := Trim(Args[0].ToStringLiteral.Value);
   if InputStr = '' then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;

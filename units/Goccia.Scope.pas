@@ -91,6 +91,8 @@ type
 
 implementation
 
+uses Goccia.Values.ClassHelper;
+
 { TLexicalBinding }
 
 function TLexicalBinding.IsWritable: Boolean;
@@ -139,7 +141,7 @@ begin
     for Key in FLexicalBindings.Keys do
     begin
       if FLexicalBindings.TryGetValue(Key, LexicalBinding) then
-        Logger.Debug('    %s: %s', [Key, LexicalBinding.Value.ToString])
+        Logger.Debug('    %s: %s', [Key, LexicalBinding.Value.ToStringLiteral.Value])
       else
         Logger.Debug('    %s: <not found>', [Key]);
     end;

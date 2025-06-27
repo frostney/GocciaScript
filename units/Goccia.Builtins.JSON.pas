@@ -79,7 +79,7 @@ begin
   if not (Args[0] is TGocciaStringLiteralValue) then
     ThrowError('JSON.parse expects a string argument', 0, 0);
 
-  FJsonText := Args[0].ToString;
+  FJsonText := Args[0].ToStringLiteral.Value;
   FPosition := 1;
   FLength := Length(FJsonText);
 
@@ -152,7 +152,7 @@ begin
     // Parse key
     if PeekChar <> '"' then
       RaiseParseError('Expected string key in object');
-    Key := ParseString.ToString;
+    Key := ParseString.ToStringLiteral.Value;
 
     SkipWhitespace;
     if not ExpectChar(':') then
@@ -452,7 +452,7 @@ begin
       Result := FloatToStr(Value.ToNumberLiteral.Value);
   end
   else if Value is TGocciaStringLiteralValue then
-    Result := '"' + EscapeJsonString(Value.ToString) + '"'
+    Result := '"' + EscapeJsonString(Value.ToStringLiteral.Value) + '"'
   else if Value is TGocciaArrayValue then
     Result := StringifyArray(TGocciaArrayValue(Value), Indent)
   else if Value is TGocciaObjectValue then

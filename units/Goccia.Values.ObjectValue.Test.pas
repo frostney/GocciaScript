@@ -42,7 +42,7 @@ end;
 
 function TTestObjectValue.FullName(const AObject: TGocciaObjectValue): TGocciaValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(AObject.GetProperty('name').ToString + ' ' + AObject.GetProperty('lastName').ToString);
+  Result := TGocciaStringLiteralValue.Create(AObject.GetProperty('name').ToStringLiteral.Value + ' ' + AObject.GetProperty('lastName').ToStringLiteral.Value);
 end;
 
 procedure TTestObjectValue.SetupTests;
@@ -72,7 +72,7 @@ begin
   Expect<Boolean>(ContainsText(DebugString, 'city: Anytown')).ToBe(True);
   Expect<Boolean>(ContainsText(DebugString, 'state: CA')).ToBe(True);
   Expect<Boolean>(ContainsText(DebugString, 'zip: 12345')).ToBe(True);
-  Expect<string>(ObjectValue.ToString).ToBe('[object Object]');
+  Expect<string>(ObjectValue.ToStringLiteral.Value).ToBe('[object Object]');
   Expect<Boolean>(ObjectValue.ToBoolean).ToBe(True);
   Expect<Boolean>(IsNaN(ObjectValue.ToNumber)).ToBe(True);
   Expect<string>(ObjectValue.TypeName).ToBe('object');
@@ -85,13 +85,13 @@ var
 begin
   ObjectValue := SimpleObject;
 
-  Expect<string>(ObjectValue.GetProperty('name').ToString).ToBe('John');
+  Expect<string>(ObjectValue.GetProperty('name').ToStringLiteral.Value).ToBe('John');
   Expect<Double>(ObjectValue.GetProperty('age').ToNumber).ToBe(30);
   Expect<Boolean>(ObjectValue.GetProperty('isStudent').ToBoolean).ToBe(True);
-  Expect<string>(ObjectValue.GetProperty('address').ToString).ToBe('123 Main St');
-  Expect<string>(ObjectValue.GetProperty('city').ToString).ToBe('Anytown');
-  Expect<string>(ObjectValue.GetProperty('state').ToString).ToBe('CA');
-  Expect<string>(ObjectValue.GetProperty('zip').ToString).ToBe('12345');
+  Expect<string>(ObjectValue.GetProperty('address').ToStringLiteral.Value).ToBe('123 Main St');
+  Expect<string>(ObjectValue.GetProperty('city').ToStringLiteral.Value).ToBe('Anytown');
+  Expect<string>(ObjectValue.GetProperty('state').ToStringLiteral.Value).ToBe('CA');
+  Expect<string>(ObjectValue.GetProperty('zip').ToStringLiteral.Value).ToBe('12345');
 
   ObjectValue.Free;
 end;
@@ -115,7 +115,7 @@ begin
   ObjectValue := SimpleObject;
 
   ObjectValue.SetProperty('name', TGocciaStringLiteralValue.Create('Jane'));
-  Expect<string>(ObjectValue.GetProperty('name').ToString).ToBe('Jane');
+  Expect<string>(ObjectValue.GetProperty('name').ToStringLiteral.Value).ToBe('Jane');
 
   ObjectValue.Free;
 end;
@@ -147,7 +147,7 @@ begin
   Prototype.SetProperty('name', TGocciaStringLiteralValue.Create('Jane'));
 
   // Instance property > Prototype property
-  Expect<string>(ObjectValue.GetProperty('name').ToString).ToBe('John');
+  Expect<string>(ObjectValue.GetProperty('name').ToStringLiteral.Value).ToBe('John');
 
   DebugString := ObjectValue.ToDebugString;
   Expect<Boolean>(ContainsText(DebugString, 'name: John')).ToBe(True);
@@ -155,7 +155,7 @@ begin
 
   ObjectValue.DeleteProperty('name');
 
-  Expect<string>(ObjectValue.GetProperty('name').ToString).ToBe('Jane');
+  Expect<string>(ObjectValue.GetProperty('name').ToStringLiteral.Value).ToBe('Jane');
   Expect<Boolean>(ObjectValue.GetProperty('name') = ObjectValue.Prototype.GetProperty('name')).ToBe(True);
 
   ObjectValue.Free;
@@ -184,20 +184,20 @@ begin
   ObjectValue.Prototype.Prototype.SetProperty('name', TGocciaStringLiteralValue.Create('Joseph'));
 
   // Instance property > Prototype property > Other Prototype property
-  Expect<string>(ObjectValue.GetProperty('name').ToString).ToBe('Jane');
+  Expect<string>(ObjectValue.GetProperty('name').ToStringLiteral.Value).ToBe('Jane');
 
   WriteLn(ObjectValue.ToDebugString);
 
   ObjectValue.DeleteProperty('name');
 
-  Expect<string>(ObjectValue.GetProperty('name').ToString).ToBe('John');
+  Expect<string>(ObjectValue.GetProperty('name').ToStringLiteral.Value).ToBe('John');
 
   ObjectValue.Prototype.DeleteProperty('name');
 
-  Expect<string>(ObjectValue.GetProperty('name').ToString).ToBe('Joseph');
+  Expect<string>(ObjectValue.GetProperty('name').ToStringLiteral.Value).ToBe('Joseph');
 
   ObjectValue.SetProperty('name', TGocciaStringLiteralValue.Create('Jane'));
-  Expect<string>(ObjectValue.GetProperty('name').ToString).ToBe('Jane');
+  Expect<string>(ObjectValue.GetProperty('name').ToStringLiteral.Value).ToBe('Jane');
 
   ObjectValue.Free;
   Prototype.Free;
@@ -211,13 +211,13 @@ begin
   ObjectValue := SimpleObject;
 
   ObjectValue.SetComputedProperty('fullName', FullName);
-  Expect<string>(ObjectValue.GetProperty('fullName').ToString).ToBe('John undefined');
+  Expect<string>(ObjectValue.GetProperty('fullName').ToStringLiteral.Value).ToBe('John undefined');
 
   ObjectValue.SetProperty('lastName', TGocciaStringLiteralValue.Create('Doe'));
-  Expect<string>(ObjectValue.GetProperty('fullName').ToString).ToBe('John Doe');
+  Expect<string>(ObjectValue.GetProperty('fullName').ToStringLiteral.Value).ToBe('John Doe');
 
   ObjectValue.DeleteProperty('lastName');
-  Expect<string>(ObjectValue.GetProperty('fullName').ToString).ToBe('John undefined');
+  Expect<string>(ObjectValue.GetProperty('fullName').ToStringLiteral.Value).ToBe('John undefined');
 
   ObjectValue.Free;
 end;

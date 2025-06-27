@@ -50,7 +50,6 @@ type
     constructor Create(AOriginalFunction: TGocciaValue; ABoundThis: TGocciaValue; ABoundArgs: TObjectList<TGocciaValue>);
     destructor Destroy; override;
     function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue; override;
-    function ToString: string; override;
   end;
 
 implementation
@@ -254,11 +253,6 @@ begin
   finally
     CombinedArgs.Free;
   end;
-end;
-
-function TGocciaBoundFunctionValue.ToString: string;
-begin
-  Result := '[BoundFunction]';
 end;
 
 end.

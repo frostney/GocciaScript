@@ -22,6 +22,10 @@ type
     function ValueOf: TGocciaValue;
     function ToStringTag: string;
 
+    function ToStringLiteral: TGocciaStringLiteralValue;
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue;
+    function ToNumberLiteral: TGocciaNumberLiteralValue;
+
     procedure DefineProperty(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
     procedure DefineProperties(const AProperties: TDictionary<string, TGocciaPropertyDescriptor>);
 
@@ -111,7 +115,7 @@ begin
       if Value is TGocciaObjectValue then
         Result := Result + Pair.Key + ': ' + TGocciaObjectValue(Value).ToDebugString
       else
-        Result := Result + Pair.Key + ': ' + Value.ToString;
+        Result := Result + Pair.Key + ': ' + Value.ToStringLiteral.Value;
     end
     else
       Result := Result + Pair.Key + ': [accessor]';
@@ -149,6 +153,21 @@ end;
 function TGocciaObjectValue.ToStringTag: string;
 begin
   Result := 'Object';
+end;
+
+function TGocciaObjectValue.ToStringLiteral: TGocciaStringLiteralValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('[' + TypeName + ' ' + ToStringTag + ']');
+end;
+
+function TGocciaObjectValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
+begin
+  Result := TGocciaBooleanLiteralValue.Create(True);
+end;
+
+function TGocciaObjectValue.ToNumberLiteral: TGocciaNumberLiteralValue;
+begin
+  Result := TGocciaNumberLiteralValue.NaNValue;
 end;
 
 procedure TGocciaObjectValue.AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
@@ -429,7 +448,7 @@ begin
           Args := TObjectList<TGocciaValue>.Create(False);
           try
             Result := GetterFunction.Call(Args, AThisContext); // Use provided context
-            Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Getter returned %s', [Result.ToString]);
+            Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Getter returned %s', [Result.ToStringLiteral.Value]);
           finally
             Args.Free;
           end;
@@ -442,7 +461,7 @@ begin
           Args := TObjectList<TGocciaValue>.Create(False);
           try
             Result := NativeGetterFunction.Call(Args, AThisContext); // Use provided context
-            Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Native getter returned %s', [Result.ToString]);
+            Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Native getter returned %s', [Result.ToStringLiteral.Value]);
           finally
             Args.Free;
           end;

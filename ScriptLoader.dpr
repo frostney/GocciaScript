@@ -25,7 +25,7 @@ begin
   try
     WriteLn('Running script: ', FileName);
     ScriptResult := RunGocciaScript(FileName);
-    Writeln('Result: ', ScriptResult.ToString);
+    Writeln('Result: ', ScriptResult.ToStringLiteral.Value);
   except
     on E: Exception do
     begin

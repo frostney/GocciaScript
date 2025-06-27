@@ -79,7 +79,7 @@ begin
     gttPlusAssign:
       begin
         if (CurrentValue is TGocciaStringLiteralValue) or (NewValue is TGocciaStringLiteralValue) then
-          Result := TGocciaStringLiteralValue.Create(CurrentValue.ToString + NewValue.ToString)
+          Result := TGocciaStringLiteralValue.Create(CurrentValue.ToStringLiteral.Value + NewValue.ToStringLiteral.Value)
         else
           Result := TGocciaNumberLiteralValue.Create(CurrentValue.ToNumberLiteral.Value + NewValue.ToNumberLiteral.Value);
       end;

@@ -119,6 +119,8 @@ begin
   Result := OBJECT_TYPE_NAME;
 end;
 
+
+
 { TGocciaUndefinedLiteralValue }
 
 function TGocciaUndefinedLiteralValue.TypeName: string;
@@ -130,6 +132,8 @@ function TGocciaUndefinedLiteralValue.TypeOf: string;
 begin
   Result := UNDEFINED_TYPE_NAME;
 end;
+
+
 
 { TGocciaBooleanLiteralValue }
 
@@ -161,6 +165,8 @@ function TGocciaBooleanLiteralValue.TypeOf: string;
 begin
   Result := BOOLEAN_TYPE_NAME;
 end;
+
+
 
 { TGocciaNumberLiteralValue }
 
@@ -276,6 +282,8 @@ function TGocciaNumberLiteralValue.TypeOf: string;
 begin
   Result := NUMBER_TYPE_NAME;
 end;
+
+
 
 { TGocciaStringLiteralValue }
 

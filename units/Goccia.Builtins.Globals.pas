@@ -21,6 +21,8 @@ type
 
 implementation
 
+uses Goccia.Values.ClassHelper;
+
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 var
   NumberObject: TGocciaObjectValue;
@@ -87,7 +89,7 @@ begin
 
   // Set message property
   if Args.Count > 0 then
-    Message := Args[0].ToString
+    Message := Args[0].ToStringLiteral.Value
   else
     Message := '';
   ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
@@ -108,7 +110,7 @@ begin
 
   // Set message property
   if Args.Count > 0 then
-    Message := Args[0].ToString
+    Message := Args[0].ToStringLiteral.Value
   else
     Message := '';
   ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
@@ -129,7 +131,7 @@ begin
 
   // Set message property
   if Args.Count > 0 then
-    Message := Args[0].ToString
+    Message := Args[0].ToStringLiteral.Value
   else
     Message := '';
   ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
@@ -150,7 +152,7 @@ begin
 
   // Set message property
   if Args.Count > 0 then
-    Message := Args[0].ToString
+    Message := Args[0].ToStringLiteral.Value
   else
     Message := '';
   ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));

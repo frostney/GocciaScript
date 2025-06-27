@@ -41,7 +41,7 @@ type
 implementation
 
 uses
-  Goccia.Evaluator;
+  Goccia.Evaluator, Goccia.Values.ClassHelper;
 
 { TGocciaFunctionValue }
 
@@ -104,7 +104,7 @@ begin
       Method := TGocciaMethodValue(Self);
       if Assigned(Method.SuperClass) and not (Method.SuperClass is TGocciaUndefinedLiteralValue) then
       begin
-        Logger.Debug('FunctionValue.Call: Method has superclass: %s', [Method.SuperClass.ToString]);
+        Logger.Debug('FunctionValue.Call: Method has superclass: %s', [Method.SuperClass.ToStringLiteral.Value]);
         // Set up special 'super' binding in the method scope - TODO: This should be a specialised scope
         CallScope.DefineBuiltin('__super__', Method.SuperClass);
       end;
@@ -142,7 +142,7 @@ begin
         Logger.Debug('Binding parameter %d: %s', [I, FParameters[I].Name]);
         if I < Arguments.Count then
         begin
-          Logger.Debug('  Argument value type: %s, toString: %s', [Arguments[I].ClassName, Arguments[I].ToString]);
+          Logger.Debug('  Argument value type: %s, toStringLiteral: %s', [Arguments[I].ClassName, Arguments[I].ToStringLiteral.Value]);
           CallScope.DefineBuiltin(FParameters[I].Name, Arguments[I])
         end
         else
@@ -229,7 +229,7 @@ begin
 
     Logger.Debug('FunctionValue.Call: Exiting');
     Logger.Debug('  Result type: %s', [Result.ClassName]);
-    Logger.Debug('  Result toString: %s', [Result.ToString]);
+    Logger.Debug('  Result toStringLiteral: %s', [Result.ToStringLiteral.Value]);
   finally
     // Don't free CallScope if it might be referenced by closures
     // TODO: Implement proper reference counting for scopes

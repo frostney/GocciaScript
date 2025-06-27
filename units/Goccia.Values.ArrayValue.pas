@@ -5,7 +5,7 @@ unit Goccia.Values.ArrayValue;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.NativeFunction, Goccia.Error, Generics.Collections, Math, SysUtils, Goccia.Values.Interfaces;
+  Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.NativeFunction, Goccia.Error, Generics.Collections, Math, SysUtils, Goccia.Values.Interfaces;
 
 type
   TGocciaArrayValue = class(TGocciaObjectValue, IIndexMethods)
@@ -46,9 +46,8 @@ type
   public
     constructor Create;
     destructor Destroy; override;
-    function ToString: string; override;
-    function ToBoolean: Boolean;
-    function ToNumber: Double;
+    function ToStringLiteral: TGocciaStringLiteralValue;
+    function ToNumberLiteral: TGocciaNumberLiteralValue;
 
     // IIndexMethods interface implementation
     function GetLength: Integer;
@@ -66,7 +65,7 @@ type
 implementation
 
 uses
-  Goccia.Logger, Goccia.Values.Primitives, Goccia.Evaluator, Goccia.Values.ObjectPropertyDescriptor, Generics.Defaults, Goccia.Utils, Goccia.Evaluator.Comparison, Goccia.Values.ClassHelper;
+  Goccia.Logger, Goccia.Evaluator, Goccia.Values.ObjectPropertyDescriptor, Generics.Defaults, Goccia.Utils, Goccia.Evaluator.Comparison, Goccia.Values.ClassHelper;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var
@@ -86,8 +85,8 @@ begin
   end
   else if A is TGocciaStringLiteralValue then
   begin
-    StrA := A.ToString;
-    StrB := B.ToString;
+    StrA := A.ToStringLiteral.Value;
+    StrB := B.ToStringLiteral.Value;
     Result := CompareStr(StrA, StrB);
   end
   else if A is TGocciaBooleanLiteralValue then
@@ -367,14 +366,14 @@ begin
   if Args.Count < 1 then
     Separator := ','
   else
-    Separator := Args[0].ToString;
+    Separator := Args[0].ToStringLiteral.Value;
 
   ResultString := '';
   for I := 0 to Elements.Count - 1 do
   begin
     if I > 0 then
       ResultString := ResultString + Separator;
-    ResultString := ResultString + Elements[I].ToString;
+    ResultString := ResultString + Elements[I].ToStringLiteral.Value;
   end;
 
   Result := TGocciaStringLiteralValue.Create(ResultString);
@@ -783,36 +782,34 @@ begin
   Result := ResultArray;
 end;
 
-function TGocciaArrayValue.ToString: string;
+function TGocciaArrayValue.ToStringLiteral: TGocciaStringLiteralValue;
 var
   I: Integer;
+  S: string;
 begin
   // ECMAScript compliant: Array.toString() behaves like Array.join() with comma separator
-  Result := '';
+  S := '';
   for I := 0 to FElements.Count - 1 do
   begin
     if I > 0 then
-      Result := Result + ',';
+      S := S + ',';
 
     // For holes (nil), show as empty (consistent with join behavior)
     if FElements[I] = nil then
-      Result := Result + ''
+      S := S + ''
     else
-      Result := Result + FElements[I].ToString;
+      S := S + FElements[I].ToStringLiteral.Value;
   end;
+
+  Result := TGocciaStringLiteralValue.Create(S);
 end;
 
-function TGocciaArrayValue.ToBoolean: Boolean;
-begin
-  Result := True;
-end;
-
-function TGocciaArrayValue.ToNumber: Double;
+function TGocciaArrayValue.ToNumberLiteral: TGocciaNumberLiteralValue;
 begin
   if FElements.Count = 0 then
-    Result := 0.0/0.0  // Safe calculated NaN
+    Result := TGocciaNumberLiteralValue.NaNValue
   else
-    Result := FElements[0].ToNumberLiteral.Value;
+    Result := TGocciaNumberLiteralValue.Create(FElements[0].ToNumberLiteral.Value);
 end;
 
 function TGocciaArrayValue.TypeName: string;

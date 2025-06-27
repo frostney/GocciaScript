@@ -19,6 +19,8 @@ type
 
 implementation
 
+uses Goccia.Values.ClassHelper;
+
 constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
   inherited Create(AName, AScope, AThrowError);
@@ -38,7 +40,7 @@ begin
   begin
     if I > 0 then
       Output := Output + ' ';
-    Output := Output + Args[I].ToString;
+    Output := Output + Args[I].ToStringLiteral.Value;
   end;
   WriteLn(Output);
   Result := TGocciaUndefinedLiteralValue.Create;
