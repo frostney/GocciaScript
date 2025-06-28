@@ -5,7 +5,7 @@ unit Goccia.Values.BooleanObjectValue;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Values.ObjectValue;
+  Goccia.Values.Primitives, Goccia.Values.ObjectValue;
 
 type
   TGocciaBooleanObjectValue = class(TGocciaObjectValue)

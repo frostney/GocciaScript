@@ -46,7 +46,7 @@ type
     I: Integer;
   begin
     Statements := TObjectList<TGocciaASTNode>.Create;
-    Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.Create, 0, 0));
+    Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, 0, 0));
 
     // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, AParameters.Count);
@@ -88,7 +88,7 @@ type
     TestSuite.Expect<Boolean>(FunctionValue.Closure = Scope).ToBeTrue;
 
     // Test function execution
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.Create);
+    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.UndefinedValue);
     TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBeFalse;
     TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('undefined');
     TestSuite.Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBeTrue;
@@ -143,14 +143,14 @@ type
     Arguments := TObjectList<TGocciaValue>.Create;
     Arguments.Add(TGocciaNumberLiteralValue.Create(1));
     Arguments.Add(TGocciaNumberLiteralValue.Create(2));
-    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.Create);
+    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
     TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(3);
     Arguments.Free;
 
     // Test function execution with too few arguments
     Arguments := TObjectList<TGocciaValue>.Create;
     Arguments.Add(TGocciaNumberLiteralValue.Create(1));
-    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.Create);
+    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
     TestSuite.Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBeTrue;
     TestSuite.Expect<String>(ReturnValue.TypeName).ToBe('number');
     Arguments.Free;
@@ -160,7 +160,7 @@ type
     Arguments.Add(TGocciaNumberLiteralValue.Create(1));
     Arguments.Add(TGocciaNumberLiteralValue.Create(2));
     Arguments.Add(TGocciaNumberLiteralValue.Create(3));
-    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.Create);
+    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
     TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(3);
     Arguments.Free;
 
@@ -200,7 +200,7 @@ type
 
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.Create);
+    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.UndefinedValue);
     TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(1);
     TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('1');
     TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBeTrue;
@@ -214,7 +214,7 @@ type
     ));
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.Create);
+    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.UndefinedValue);
     TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('hello');
     TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBeTrue;
     TestSuite.Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBeTrue;
@@ -228,7 +228,7 @@ type
     ));
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.Create);
+    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.UndefinedValue);
     TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
     TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('true');
     TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(1);
@@ -237,12 +237,12 @@ type
     // Test returning undefined
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaReturnStatement.Create(
-      TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.Create, 0, 0),
+      TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, 0, 0),
       0, 0
     ));
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.Create);
+    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.UndefinedValue);
     TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBeFalse;
     TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('undefined');
     TestSuite.Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBeTrue;
@@ -285,7 +285,7 @@ type
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
     // Test function execution
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.Create);
+    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.UndefinedValue);
     TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(42);
     TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('42');
     TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
@@ -337,7 +337,7 @@ type
     // Test function execution
     Arguments := TObjectList<TGocciaValue>.Create;
     Arguments.Add(TGocciaNumberLiteralValue.Create(10));
-    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.Create);
+    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
     TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(20); // 10 + 10
     Arguments.Free;
 
@@ -391,7 +391,7 @@ type
 
     // Test function execution
     Arguments := TObjectList<TGocciaValue>.Create;
-    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.Create);
+    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
     TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('43hello');
     TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
     TestSuite.Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBeTrue;
@@ -457,7 +457,7 @@ type
     Arguments := TObjectList<TGocciaValue>.Create;
     Arguments.Add(TGocciaNumberLiteralValue.Create(10));
     Arguments.Add(TGocciaNumberLiteralValue.Create(20));
-    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.Create);
+    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
     TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('72hello'); // (10 + 20 + 42) + 'hello'
     Arguments.Free;
 
@@ -480,7 +480,7 @@ type
 
     // Execute statements directly
     Context.Scope := Scope;
-    LastValue := TGocciaUndefinedLiteralValue.Create;
+    LastValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
     for I := 0 to Statements.Count - 1 do
     begin
@@ -508,7 +508,7 @@ type
 
     // Execute statements directly
     Context.Scope := Scope;
-    LastValue := TGocciaUndefinedLiteralValue.Create;
+    LastValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
     for I := 0 to Statements.Count - 1 do
     begin

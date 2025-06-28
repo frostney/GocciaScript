@@ -5,7 +5,7 @@ unit Goccia.Evaluator.Comparison;
 interface
 
 uses
-  Math, Goccia.Values.Core, Goccia.Values.Primitives;
+  Math, Goccia.Values.Primitives;
 
 function IsStrictEqual(Left, Right: TGocciaValue): Boolean;
 function IsNotStrictEqual(Left, Right: TGocciaValue): Boolean; inline;

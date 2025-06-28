@@ -5,7 +5,7 @@ unit Goccia.Values.NumberObjectValue;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Values.ObjectValue;
+  Goccia.Values.Primitives, Goccia.Values.ObjectValue;
 
 type
   TGocciaNumberObjectValue = class(TGocciaObjectValue)

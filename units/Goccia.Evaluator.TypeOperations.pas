@@ -5,7 +5,7 @@ unit Goccia.Evaluator.TypeOperations;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Values.ArrayValue, Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives, Goccia.Values.ArrayValue, Goccia.Values.ObjectValue,
   Goccia.Values.ClassValue, Goccia.Values.FunctionValue, Goccia.Values.NativeFunction,
   Goccia.Logger, SysUtils;
 

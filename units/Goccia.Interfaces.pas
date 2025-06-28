@@ -5,7 +5,7 @@ interface
 {$I Goccia.inc}
 
 uses
-  Goccia.Values.Core,
+  Goccia.Values.Primitives,
   Generics.Collections;
 
 type

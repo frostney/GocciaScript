@@ -37,7 +37,7 @@ procedure TTestPrimitives.TestUndefinedValue;
 var
   UndefinedValue: TGocciaUndefinedLiteralValue;
 begin
-  UndefinedValue := TGocciaUndefinedLiteralValue.Create;
+  UndefinedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   Expect<string>(UndefinedValue.ToStringLiteral.Value).ToBe('undefined');
   Expect<Boolean>(UndefinedValue.ToBooleanLiteral.Value).ToBe(False);
   Expect<Boolean>(IsNaN(UndefinedValue.ToNumberLiteral.Value)).ToBe(True);

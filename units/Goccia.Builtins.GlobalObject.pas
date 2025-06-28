@@ -5,7 +5,7 @@ unit Goccia.Builtins.GlobalObject;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Builtins.Base;
+  Goccia.Scope, Goccia.Values.Primitives, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Builtins.Base;
 
 type
   TGocciaGlobalObject = class(TGocciaBuiltin)
@@ -29,7 +29,7 @@ type
 implementation
 
 uses
-  Goccia.Values.ArrayValue, Goccia.Values.Primitives, Goccia.Values.ObjectPropertyDescriptor, Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue, Goccia.Values.ClassHelper;
+  Goccia.Values.ArrayValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue, Goccia.Values.ClassHelper;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
 begin
@@ -254,7 +254,7 @@ begin
   Descriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   if Descriptor = nil then
   begin
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end else begin
     DescriptorObj := TGocciaObjectValue.Create;
     DescriptorObj.AssignProperty('enumerable', TGocciaBooleanLiteralValue.Create(Descriptor.Enumerable));
@@ -272,12 +272,12 @@ begin
       if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
         DescriptorObj.AssignProperty('get', TGocciaPropertyDescriptorAccessor(Descriptor).Getter)
       else
-        DescriptorObj.AssignProperty('get', TGocciaUndefinedLiteralValue.Create);
+        DescriptorObj.AssignProperty('get', TGocciaUndefinedLiteralValue.UndefinedValue);
 
       if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
         DescriptorObj.AssignProperty('set', TGocciaPropertyDescriptorAccessor(Descriptor).Setter)
       else
-        DescriptorObj.AssignProperty('set', TGocciaUndefinedLiteralValue.Create);
+        DescriptorObj.AssignProperty('set', TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
 
     Result := DescriptorObj;

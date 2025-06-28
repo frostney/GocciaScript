@@ -5,7 +5,7 @@ unit Goccia.Evaluator.Assignment;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Values.ObjectValue, Goccia.Values.ClassValue,
+  Goccia.Values.ObjectValue, Goccia.Values.ClassValue,
   Goccia.Values.ArrayValue, Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives,
   Goccia.Token, Goccia.Interfaces, Goccia.Error, SysUtils, Math, Goccia.Evaluator.Arithmetic;

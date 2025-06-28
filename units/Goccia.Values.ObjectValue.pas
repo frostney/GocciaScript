@@ -5,7 +5,7 @@ unit Goccia.Values.ObjectValue;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Values.Interfaces, Generics.Collections, Goccia.Values.ObjectPropertyDescriptor, Math, Goccia.Logger, SysUtils, Classes;
+  Goccia.Values.Primitives, Goccia.Values.Interfaces, Generics.Collections, Goccia.Values.ObjectPropertyDescriptor, Math, Goccia.Logger, SysUtils, Classes;
 
 type
   TGocciaObjectValue = class(TGocciaValue, IPropertyMethods, IValueOf, IStringTag)
@@ -20,11 +20,11 @@ type
     function TypeName: string; override;
     function TypeOf: string; override;
     function ValueOf: TGocciaValue;
-    function ToStringTag: string;
+    function ToStringTag: string; virtual;
 
-    function ToStringLiteral: TGocciaStringLiteralValue;
-    function ToBooleanLiteral: TGocciaBooleanLiteralValue;
-    function ToNumberLiteral: TGocciaNumberLiteralValue;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
 
     procedure DefineProperty(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
     procedure DefineProperties(const AProperties: TDictionary<string, TGocciaPropertyDescriptor>);
@@ -157,7 +157,7 @@ end;
 
 function TGocciaObjectValue.ToStringLiteral: TGocciaStringLiteralValue;
 begin
-  Result := TGocciaStringLiteralValue.Create('[' + TypeName + ' ' + ToStringTag + ']');
+  Result := TGocciaStringLiteralValue.Create(Format('[%s %s]', [TypeName, ToStringTag]));
 end;
 
 function TGocciaObjectValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
@@ -399,7 +399,7 @@ begin
         end;
       end;
       // No getter - return undefined
-      Result := TGocciaUndefinedLiteralValue.Create;
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
@@ -418,7 +418,7 @@ begin
   end;
 
   Logger.Debug('TGocciaObjectValue.GetProperty: Property not found');
-  Result := TGocciaUndefinedLiteralValue.Create;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaObjectValue.GetPropertyWithContext(const AName: string; AThisContext: TGocciaValue): TGocciaValue;
@@ -469,7 +469,7 @@ begin
         end;
       end;
       // No getter - return undefined
-      Result := TGocciaUndefinedLiteralValue.Create;
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
     end
     else if Descriptor is TGocciaPropertyDescriptorData then

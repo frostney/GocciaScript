@@ -5,7 +5,7 @@ unit Goccia.Values.ClassValue;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Interfaces,
+  Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Interfaces,
   Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math, Goccia.Values.Primitives,
   Goccia.AST.Node, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.NativeFunction;
 
@@ -30,8 +30,11 @@ type
   public
     constructor Create(const AName: string; ASuperClass: TGocciaClassValue);
     destructor Destroy; override;
-    function ToStringLiteral: TGocciaStringLiteralValue;
     function TypeName: string; override;
+    function TypeOf: string; override;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
     procedure AddMethod(const AName: string; AMethod: TGocciaMethodValue);
     function GetMethod(const AName: string): TGocciaMethodValue;
     procedure AddGetter(const AName: string; AGetter: TGocciaFunctionValue);
@@ -65,7 +68,7 @@ type
     constructor Create(AClass: TGocciaClassValue);
     destructor Destroy; override;
     function TypeName: string; override;
-    function ToStringLiteral: TGocciaStringLiteralValue;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
     function GetProperty(const AName: string): TGocciaValue;
     procedure AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
@@ -114,6 +117,16 @@ begin
   inherited;
 end;
 
+function TGocciaClassValue.TypeName: string;
+begin
+  Result := 'function';
+end;
+
+function TGocciaClassValue.TypeOf: string;
+begin
+  Result := 'function';
+end;
+
 function TGocciaClassValue.ToStringLiteral: TGocciaStringLiteralValue;
 begin
   // For error classes, just return the name to make toThrow work properly
@@ -123,9 +136,14 @@ begin
     Result := TGocciaStringLiteralValue.Create(Format('[Class: %s]', [FName]));
 end;
 
-function TGocciaClassValue.TypeName: string;
+function TGocciaClassValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
 begin
-  Result := 'function';
+  Result := TGocciaBooleanLiteralValue.TrueValue;
+end;
+
+function TGocciaClassValue.ToNumberLiteral: TGocciaNumberLiteralValue;
+begin
+  Result := TGocciaNumberLiteralValue.NaNValue;
 end;
 
 procedure TGocciaClassValue.AddMethod(const AName: string; AMethod: TGocciaMethodValue);
@@ -216,7 +234,7 @@ end;
 function TGocciaClassValue.GetPrivateStaticProperty(const AName: string): TGocciaValue;
 begin
   if not FPrivateStaticProperties.TryGetValue(AName, Result) then
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 procedure TGocciaClassValue.AddPrivateMethod(const AName: string; AMethod: TGocciaMethodValue);
@@ -275,7 +293,7 @@ begin
   if Assigned(FSuperClass) then
     Result := FSuperClass.GetProperty(AName)
   else
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; AValue: TGocciaValue);
@@ -337,7 +355,7 @@ begin
     Exit;
   end;
 
-  Result := TGocciaUndefinedLiteralValue.Create;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 procedure TGocciaInstanceValue.AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
@@ -481,7 +499,7 @@ begin
   if FPrivateProperties.TryGetValue(AName, Result) then
     Exit
   else
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 procedure TGocciaInstanceValue.SetPrivateProperty(const AName: string; AValue: TGocciaValue; AAccessClass: TGocciaClassValue);

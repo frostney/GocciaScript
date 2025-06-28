@@ -5,7 +5,7 @@ unit Goccia.Builtins.Math;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Generics.Collections, Math, Goccia.Builtins.Base;
+  Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Generics.Collections, Math, Goccia.Builtins.Base;
 
 type
   TGocciaMath = class(TGocciaBuiltin)

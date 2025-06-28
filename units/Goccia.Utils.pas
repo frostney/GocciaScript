@@ -5,7 +5,7 @@ unit Goccia.Utils;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Values.Primitives;
+  Goccia.Values.Primitives;
 
 function ValueOrUndefined(Value: TGocciaValue): TGocciaValue;
 
@@ -14,7 +14,7 @@ implementation
 function ValueOrUndefined(Value: TGocciaValue): TGocciaValue;
 begin
   if Value = nil then
-    Result := TGocciaUndefinedLiteralValue.Create
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue
   else
     Result := Value;
 end;

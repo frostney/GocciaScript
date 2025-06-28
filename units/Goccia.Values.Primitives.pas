@@ -5,19 +5,45 @@ unit Goccia.Values.Primitives;
 interface
 
 uses
-  Goccia.Values.Core;
+  SysUtils;
 
 type
+  TGocciaBooleanLiteralValue = class;
+  TGocciaNumberLiteralValue = class;
+  TGocciaStringLiteralValue = class;
+
+  TGocciaValue = class(TInterfacedObject)
+  public
+    function TypeName: string; virtual; abstract;
+    function TypeOf: string; virtual; abstract;
+
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; virtual; abstract;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; virtual; abstract;
+    function ToStringLiteral: TGocciaStringLiteralValue; virtual; abstract;
+  end;
+
   TGocciaNullLiteralValue = class(TGocciaValue)
   public
     function TypeName: string; override;
     function TypeOf: string; override;
+
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
   end;
 
   TGocciaUndefinedLiteralValue = class(TGocciaValue)
+  private
+    class var FUndefinedValue: TGocciaUndefinedLiteralValue;
   public
+    class function UndefinedValue: TGocciaUndefinedLiteralValue;
+
     function TypeName: string; override;
     function TypeOf: string; override;
+
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
   end;
 
   TGocciaBooleanLiteralValue = class(TGocciaValue)
@@ -34,6 +60,10 @@ type
 
     function TypeName: string; override;
     function TypeOf: string; override;
+
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
 
     property Value: Boolean read FValue;
   end;
@@ -70,6 +100,10 @@ type
     function TypeName: string; override;
     function TypeOf: string; override;
 
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
+
     property Value: Double read FValue;
 
     property IsNegativeZero: Boolean read GetIsNegativeZero;
@@ -86,6 +120,10 @@ type
 
     function TypeName: string; override;
     function TypeOf: string; override;
+
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
 
     property Value: string read FValue;
   end;
@@ -119,9 +157,30 @@ begin
   Result := OBJECT_TYPE_NAME;
 end;
 
+function TGocciaNullLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
+begin
+  Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+function TGocciaNullLiteralValue.ToNumberLiteral: TGocciaNumberLiteralValue;
+begin
+  Result := TGocciaNumberLiteralValue.ZeroValue;
+end;
+
+function TGocciaNullLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('null');
+end;
 
 
 { TGocciaUndefinedLiteralValue }
+
+class function TGocciaUndefinedLiteralValue.UndefinedValue: TGocciaUndefinedLiteralValue;
+begin
+  if not Assigned(FUndefinedValue) then
+    FUndefinedValue := TGocciaUndefinedLiteralValue.Create;
+  Result := FUndefinedValue;
+end;
 
 function TGocciaUndefinedLiteralValue.TypeName: string;
 begin
@@ -131,6 +190,21 @@ end;
 function TGocciaUndefinedLiteralValue.TypeOf: string;
 begin
   Result := UNDEFINED_TYPE_NAME;
+end;
+
+function TGocciaUndefinedLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
+begin
+  Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+function TGocciaUndefinedLiteralValue.ToNumberLiteral: TGocciaNumberLiteralValue;
+begin
+  Result := TGocciaNumberLiteralValue.NaNValue;
+end;
+
+function TGocciaUndefinedLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('undefined');
 end;
 
 
@@ -166,7 +240,20 @@ begin
   Result := BOOLEAN_TYPE_NAME;
 end;
 
+function TGocciaBooleanLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
+begin
+  Result := Self;
+end;
 
+function TGocciaBooleanLiteralValue.ToNumberLiteral: TGocciaNumberLiteralValue;
+begin
+  Result := TGocciaNumberLiteralValue.Create(Ord(FValue));
+end;
+
+function TGocciaBooleanLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
+begin
+  Result := TGocciaStringLiteralValue.Create(BoolToStr(FValue, True));
+end;
 
 { TGocciaNumberLiteralValue }
 
@@ -283,6 +370,20 @@ begin
   Result := NUMBER_TYPE_NAME;
 end;
 
+function TGocciaNumberLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
+begin
+  Result := TGocciaBooleanLiteralValue.Create(FValue <> ZERO_VALUE);
+end;
+
+function TGocciaNumberLiteralValue.ToNumberLiteral: TGocciaNumberLiteralValue;
+begin
+  Result := Self;
+end;
+
+function TGocciaNumberLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
+begin
+  Result := TGocciaStringLiteralValue.Create(FloatToStr(FValue));
+end;
 
 
 { TGocciaStringLiteralValue }
@@ -300,6 +401,24 @@ end;
 function TGocciaStringLiteralValue.TypeOf: string;
 begin
   Result := STRING_TYPE_NAME;
+end;
+
+function TGocciaStringLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
+begin
+  Result := TGocciaBooleanLiteralValue.Create(FValue <> EMPTY_STRING);
+end;
+
+function TGocciaStringLiteralValue.ToNumberLiteral: TGocciaNumberLiteralValue;
+begin
+  if TryStrToFloat(FValue, Result.FValue) then
+    Result := TGocciaNumberLiteralValue.Create(Result.FValue)
+  else
+    Result := TGocciaNumberLiteralValue.NaNValue;
+end;
+
+function TGocciaStringLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
+begin
+  Result := Self;
 end;
 
 end.

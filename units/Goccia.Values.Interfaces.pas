@@ -5,7 +5,7 @@ unit Goccia.Values.Interfaces;
 interface
 
 uses
-  SysUtils, Classes, Generics.Collections, Goccia.Values.Core, Goccia.Values.ObjectPropertyDescriptor;
+  SysUtils, Classes, Generics.Collections, Goccia.Values.Primitives, Goccia.Values.ObjectPropertyDescriptor;
 
 type
   IValueOf = interface

@@ -6,7 +6,7 @@ unit Goccia.Values.FunctionValue;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Core, Goccia.AST.Node, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope,
+  Goccia.Interfaces, Goccia.AST.Node, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope,
   Goccia.Error, Goccia.Logger, Goccia.Values.Error, Goccia.Values.ObjectValue, Goccia.Values.FunctionBase,
   Generics.Collections, Classes, Math, SysUtils,
   Goccia.Values.Primitives;
@@ -126,11 +126,11 @@ begin
           Logger.Debug('  No argument provided, using default value for destructuring');
           ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
         end
-        else
-        begin
-          Logger.Debug('  No argument provided, using undefined for destructuring');
-          ReturnValue := TGocciaUndefinedLiteralValue.Create;
-        end;
+                  else
+          begin
+            Logger.Debug('  No argument provided, using undefined for destructuring');
+            ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          end;
 
         // Bind the destructuring pattern using existing pattern assignment logic
         Context.Scope := CallScope;
@@ -158,7 +158,7 @@ begin
           else
           begin
             Logger.Debug('  No argument provided, setting to undefined');
-            CallScope.DefineBuiltin(FParameters[I].Name, TGocciaUndefinedLiteralValue.Create);
+            CallScope.DefineBuiltin(FParameters[I].Name, TGocciaUndefinedLiteralValue.UndefinedValue);
           end;
         end;
       end;
@@ -167,7 +167,7 @@ begin
     // Execute function body statements directly
     try
       Context.Scope := CallScope;
-      ReturnValue := TGocciaUndefinedLiteralValue.Create;
+      ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
       for I := 0 to FBodyStatements.Count - 1 do
       begin
@@ -191,7 +191,7 @@ begin
       end;
 
       if ReturnValue = nil then
-        ReturnValue := TGocciaUndefinedLiteralValue.Create;
+        ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
       Result := ReturnValue;
     except
       on E: TGocciaReturnValue do
@@ -200,7 +200,7 @@ begin
         if E.Value = nil then
         begin
           Logger.Debug('FunctionValue.Call: E.Value is nil, creating undefined value');
-          Result := TGocciaUndefinedLiteralValue.Create;
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         end
         else
         begin
@@ -213,7 +213,7 @@ begin
           else if E.Value is TGocciaBooleanLiteralValue then
             Result := TGocciaBooleanLiteralValue.Create(TGocciaBooleanLiteralValue(E.Value).Value)
           else if E.Value is TGocciaUndefinedLiteralValue then
-            Result := TGocciaUndefinedLiteralValue.Create
+            Result := TGocciaUndefinedLiteralValue.UndefinedValue
           else if E.Value is TGocciaObjectValue then
             Result := E.Value
           else

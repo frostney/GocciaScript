@@ -5,7 +5,7 @@ unit Goccia.Values.ArrayValue;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.NativeFunction, Goccia.Error, Generics.Collections, Math, SysUtils, Goccia.Values.Interfaces;
+  Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.NativeFunction, Goccia.Error, Generics.Collections, Math, SysUtils, Goccia.Values.Interfaces;
 
 type
   TGocciaArrayValue = class(TGocciaObjectValue, IIndexMethods)
@@ -46,8 +46,12 @@ type
   public
     constructor Create;
     destructor Destroy; override;
+
+    function ToStringTag: string; override;
+
     function ToStringLiteral: TGocciaStringLiteralValue;
     function ToNumberLiteral: TGocciaNumberLiteralValue;
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue;
 
     // IIndexMethods interface implementation
     function GetLength: Integer;
@@ -135,6 +139,11 @@ begin
   inherited;
 end;
 
+function TGocciaArrayValue.ToStringTag: string;
+begin
+  Result := 'Array';
+end;
+
 procedure TGocciaArrayValue.ThrowError(const Message: string; const Args: array of const);
 begin
   raise TGocciaError.Create(Format(Message, Args), 0, 0, '', nil);
@@ -161,7 +170,7 @@ begin
   if (AIndex >= 0) and (AIndex < FElements.Count) then
     Result := FElements[AIndex]
   else
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaArrayValue.SetElement(const AIndex: Integer; AValue: TGocciaValue): Boolean;
@@ -351,7 +360,7 @@ begin
     ExecuteArrayCallback(Callback, Elements[I], I, ThisValue);
   end;
 
-  Result := TGocciaUndefinedLiteralValue.Create;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaArrayValue.ArrayJoin(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -761,7 +770,7 @@ begin
   for I := 0 to ActualStartIndex - 1 do
   begin
     if Elements[I] = nil then
-      ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.Create)
+      ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
     else
       ResultArray.Elements.Add(Elements[I]);
   end;
@@ -774,7 +783,7 @@ begin
   for I := ActualStartIndex + DeleteCount to Elements.Count - 1 do
   begin
     if Elements[I] = nil then
-      ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.Create)
+      ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
     else
       ResultArray.Elements.Add(Elements[I]);
   end;
@@ -810,6 +819,11 @@ begin
     Result := TGocciaNumberLiteralValue.NaNValue
   else
     Result := TGocciaNumberLiteralValue.Create(FElements[0].ToNumberLiteral.Value);
+end;
+
+function TGocciaArrayValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
+begin
+  Result := TGocciaBooleanLiteralValue.Create(True);
 end;
 
 function TGocciaArrayValue.TypeName: string;
@@ -853,12 +867,12 @@ begin
     begin
       // If the element is nil (hole), return undefined
       if FElements[Index] = nil then
-        Result := TGocciaUndefinedLiteralValue.Create
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue
       else
         Result := FElements[Index];
     end
     else
-      Result := TGocciaUndefinedLiteralValue.Create;
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin

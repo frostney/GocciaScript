@@ -5,7 +5,7 @@ unit Goccia.Values.Error;
 interface
 
 uses
-  Goccia.Values.Core, SysUtils;
+  Goccia.Values.Primitives, SysUtils;
 
 type
   // TODO: Is it worth to merge this with Goccia.Error?

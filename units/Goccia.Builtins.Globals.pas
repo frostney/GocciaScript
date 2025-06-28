@@ -5,7 +5,7 @@ unit Goccia.Builtins.Globals;
 interface
 
 uses
-  SysUtils, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.FunctionValue, Goccia.Values.Primitives, Generics.Collections, Math, Goccia.Builtins.Base, Goccia.Values.Core, Goccia.Scope, Goccia.Error;
+  SysUtils, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.FunctionValue, Goccia.Values.Primitives, Generics.Collections, Math, Goccia.Builtins.Base, Goccia.Scope, Goccia.Error;
 
 type
   TGocciaGlobals = class(TGocciaBuiltin)
@@ -38,7 +38,7 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   // Global constants
-  AScope.DefineBuiltin('undefined', TGocciaUndefinedLiteralValue.Create);
+  AScope.DefineBuiltin('undefined', TGocciaUndefinedLiteralValue.UndefinedValue);
   AScope.DefineBuiltin('NaN', TGocciaNumberLiteralValue.NaNValue);
   AScope.DefineBuiltin('Infinity', TGocciaNumberLiteralValue.InfinityValue);
 

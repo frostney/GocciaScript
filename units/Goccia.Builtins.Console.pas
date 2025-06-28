@@ -5,7 +5,7 @@ unit Goccia.Builtins.Console;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.Primitives,
+  Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.Primitives,
   Goccia.Values.ObjectValue, Goccia.Values.ObjectPropertyDescriptor, Generics.Collections, Goccia.Builtins.Base;
 
 type
@@ -43,7 +43,7 @@ begin
     Output := Output + Args[I].ToStringLiteral.Value;
   end;
   WriteLn(Output);
-  Result := TGocciaUndefinedLiteralValue.Create;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 

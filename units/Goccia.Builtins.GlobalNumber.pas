@@ -5,7 +5,7 @@ unit Goccia.Builtins.GlobalNumber;
 interface
 
 uses
-  Goccia.Builtins.Base, Goccia.Scope, Goccia.Error, Goccia.Values.Core, Goccia.Values.Error, Goccia.Values.ObjectValue, Goccia.Values.Primitives, SysUtils, Math, Generics.Collections;
+  Goccia.Builtins.Base, Goccia.Scope, Goccia.Error, Goccia.Values.Error, Goccia.Values.ObjectValue, Goccia.Values.Primitives, SysUtils, Math, Generics.Collections;
 
 type
   TGocciaGlobalNumber = class(TGocciaBuiltin)

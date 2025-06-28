@@ -5,7 +5,6 @@ unit Goccia.Builtins.JSON;
 interface
 
 uses
-  Goccia.Values.Core,
   Goccia.Scope,
   Goccia.Error,
   Goccia.Values.NativeFunction,
@@ -415,7 +414,7 @@ begin
 
   if Value is TGocciaUndefinedLiteralValue then
   begin
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 

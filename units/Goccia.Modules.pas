@@ -5,7 +5,7 @@ unit Goccia.Modules;
 interface
 
 uses
-  Goccia.Values.Core, Generics.Collections, SysUtils;
+  Goccia.Values.Primitives, Generics.Collections, SysUtils;
 
 type
   TGocciaModule = class

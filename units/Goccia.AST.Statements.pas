@@ -371,7 +371,7 @@ implementation
   begin
     inherited Create(ALine, AColumn);
     if AValue = nil then
-      FValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.Create, ALine, AColumn)
+      FValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, ALine, AColumn)
     else
       FValue := AValue;
   end;

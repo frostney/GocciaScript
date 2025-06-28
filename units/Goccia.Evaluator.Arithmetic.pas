@@ -5,7 +5,7 @@ unit Goccia.Evaluator.Arithmetic;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Token, Math, SysUtils;
+  Goccia.Values.Primitives, Goccia.Token, Math, SysUtils;
 
 function EvaluateAddition(Left, Right: TGocciaValue): TGocciaValue;
 function EvaluateSubtraction(Left, Right: TGocciaValue): TGocciaValue; inline;
@@ -119,7 +119,7 @@ begin
     gttUnsignedRightShiftAssign:
       Result := TGocciaNumberLiteralValue.Create(Cardinal(Trunc(CurrentValue.ToNumberLiteral.Value)) shr (Trunc(NewValue.ToNumberLiteral.Value) and 31));
   else
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 

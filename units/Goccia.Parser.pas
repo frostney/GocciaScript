@@ -5,7 +5,7 @@ unit Goccia.Parser;
 interface
 
 uses
-  Goccia.AST.Node, Goccia.Token, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.Values.Core, Goccia.Values.Primitives,
+  Goccia.AST.Node, Goccia.Token, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.Values.Primitives,
   Goccia.Values.ObjectValue, Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
   Generics.Collections, Classes, SysUtils;
 
@@ -465,7 +465,7 @@ begin
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
-      TGocciaUndefinedLiteralValue.Create, Token.Line, Token.Column);
+      TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
   end
   else if Match([gttNumber]) then
   begin
@@ -1159,7 +1159,7 @@ begin
           Line, Column, FFileName, FSourceLines)
       else
         Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
-          TGocciaUndefinedLiteralValue.Create, Line, Column);
+          TGocciaUndefinedLiteralValue.UndefinedValue, Line, Column);
 
       Inc(VariableCount);
     until not Match([gttComma]);
@@ -1666,7 +1666,7 @@ begin
     begin
       // Property declaration without initializer: [static] [#]name;
       Consume(gttSemicolon, 'Expected ";" after property declaration');
-      PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.Create, Peek.Line, Peek.Column);
+      PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, Peek.Line, Peek.Column);
 
       if IsPrivate and IsStatic then
         PrivateStaticProperties.Add(MemberName, PropertyValue)

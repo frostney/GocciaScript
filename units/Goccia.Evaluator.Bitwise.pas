@@ -5,7 +5,7 @@ unit Goccia.Evaluator.Bitwise;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Values.Primitives;
+  Goccia.Values.Primitives;
 
 function EvaluateBitwiseAnd(Left, Right: TGocciaValue): TGocciaValue; inline;
 function EvaluateBitwiseOr(Left, Right: TGocciaValue): TGocciaValue; inline;

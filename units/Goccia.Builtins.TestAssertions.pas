@@ -6,7 +6,6 @@ interface
 
 uses
   Goccia.Builtins.Base,
-  Goccia.Values.Core,
   Goccia.Values.ObjectValue,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
@@ -217,7 +216,7 @@ begin
   if IsEqual then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBe');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -227,7 +226,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBe',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to be ' + Expected.ToStringLiteral.Value);
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -251,7 +250,7 @@ begin
   if IsEqual then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toEqual');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -261,7 +260,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toEqual',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to equal ' + Expected.ToStringLiteral.Value);
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -277,7 +276,7 @@ begin
   if IsNull then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeNull');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -287,7 +286,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeNull',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to be null');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -307,7 +306,7 @@ begin
   if IsNaNValue then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeNaN');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -317,7 +316,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeNaN',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to be NaN');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -333,7 +332,7 @@ begin
   if IsUndefined then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeUndefined');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -343,7 +342,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeUndefined',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to be undefined');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -359,7 +358,7 @@ begin
   if IsTruthy then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeTruthy');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -369,7 +368,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeTruthy',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to be truthy');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -385,7 +384,7 @@ begin
   if IsFalsy then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeFalsy');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -395,7 +394,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeFalsy',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to be falsy');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -419,7 +418,7 @@ begin
   if IsGreater then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeGreaterThan');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -429,7 +428,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeGreaterThan',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to be greater than ' + Expected.ToStringLiteral.Value);
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -453,7 +452,7 @@ begin
   if IsGreaterOrEqual then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeGreaterThanOrEqual');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -463,7 +462,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeGreaterThanOrEqual',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to be greater than or equal to ' + Expected.ToStringLiteral.Value);
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -487,7 +486,7 @@ begin
   if IsLess then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeLessThan');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -497,7 +496,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeLessThan',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to be less than ' + Expected.ToStringLiteral.Value);
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -521,7 +520,7 @@ begin
   if IsLessOrEqual then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeLessThanOrEqual');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -531,7 +530,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeLessThanOrEqual',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to be less than or equal to ' + Expected.ToStringLiteral.Value);
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -577,7 +576,7 @@ begin
   if Contains then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toContain');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -587,7 +586,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toContain',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to contain ' + Expected.ToStringLiteral.Value);
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -597,7 +596,7 @@ var
   IsInstance: Boolean;
   ConstructorName: string;
 begin
-  Result := TGocciaUndefinedLiteralValue.Create;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   if Args.Count <> 1 then
   begin
@@ -668,7 +667,7 @@ begin
   if IsInstance then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeInstanceOf');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -678,7 +677,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeInstanceOf',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to be an instance of ' + ExpectedConstructor.ToStringLiteral.Value);
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -718,7 +717,7 @@ begin
   if HasLength then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveLength');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -728,7 +727,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveLength',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to have length ' + Expected.ToStringLiteral.Value);
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -752,7 +751,7 @@ begin
   if HasProperty then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveProperty');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -762,7 +761,7 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to have property ' + Expected.ToStringLiteral.Value);
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -779,7 +778,7 @@ var
   ConstructorName: string;
   ErrorName: string;
 begin
-  Result := TGocciaUndefinedLiteralValue.Create;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   ExpectedErrorType := '';
   if Args.Count > 0 then
@@ -998,7 +997,7 @@ begin
   if IsClose then
   begin
     TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeCloseTo');
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
@@ -1010,7 +1009,7 @@ begin
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeCloseTo',
         Format('Expected %s to be close to %s (precision: %d)',
                [FActualValue.ToStringLiteral.Value, Expected.ToStringLiteral.Value, Precision]));
-    Result := TGocciaUndefinedLiteralValue.Create;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
@@ -1098,7 +1097,7 @@ begin
       if Callback is TGocciaFunctionValue then
       begin
         try
-          TGocciaFunctionValue(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.Create);
+          TGocciaFunctionValue(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         except
           on E: Exception do
           begin
@@ -1183,7 +1182,7 @@ begin
   Suite := TTestSuite.Create(SuiteName, SuiteFunction);
   FRegisteredSuites.Add(Suite);
 
-  Result := TGocciaUndefinedLiteralValue.Create;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaTestAssertions.Test(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -1208,7 +1207,7 @@ begin
   TestCase := TTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName);
   FRegisteredTests.Add(TestCase);
 
-  Result := TGocciaUndefinedLiteralValue.Create;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaTestAssertions.It(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -1239,7 +1238,7 @@ begin
   TestCase := TTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName, True);
   FRegisteredTests.Add(TestCase);
 
-  Result := TGocciaUndefinedLiteralValue.Create;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaTestAssertions.BeforeEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -1252,7 +1251,7 @@ begin
 
   FBeforeEachCallbacks.Add(Args[0]);
 
-  Result := TGocciaUndefinedLiteralValue.Create;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaTestAssertions.AfterEach(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -1265,7 +1264,7 @@ begin
 
   FAfterEachCallbacks.Add(Args[0]);
 
-  Result := TGocciaUndefinedLiteralValue.Create;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaTestAssertions.RunTests(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
@@ -1339,7 +1338,7 @@ begin
 
       try
         // Execute the describe function - this will call test() functions inside
-        Suite.SuiteFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.Create);
+        Suite.SuiteFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       except
         on E: Exception do
         begin
@@ -1386,7 +1385,7 @@ begin
           // Execute the test function
           // Create a fresh child scope for each test to ensure isolation
           ClonedFunction := TestCase.TestFunction.CloneWithNewScope(FScope.CreateChild(skFunction, 'TestFunction'));
-          ClonedFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.Create);
+          ClonedFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         except
           on E: Exception do
           begin

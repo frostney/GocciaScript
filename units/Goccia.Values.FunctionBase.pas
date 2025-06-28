@@ -5,7 +5,7 @@ unit Goccia.Values.FunctionBase;
 interface
 
 uses
-  Goccia.Values.Core, Goccia.Values.ObjectValue, Goccia.Interfaces,
+  Goccia.Values.ObjectValue, Goccia.Interfaces,
   Generics.Collections, Goccia.Values.Primitives,
   Goccia.Error, SysUtils;
 
@@ -87,7 +87,7 @@ end;
 
 function TGocciaFunctionBase.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaUndefinedLiteralValue.Create;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 constructor TGocciaFunctionSharedPrototype.Create;
@@ -111,7 +111,7 @@ begin
   if Args.Count > 0 then
     NewThisValue := Args[0]
   else
-    NewThisValue := TGocciaUndefinedLiteralValue.Create;
+    NewThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   // Remaining arguments are passed to the function
   CallArgs := TObjectList<TGocciaValue>.Create(False);
@@ -145,7 +145,7 @@ begin
   if Args.Count > 0 then
     NewThisValue := Args[0]
   else
-    NewThisValue := TGocciaUndefinedLiteralValue.Create;
+    NewThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   CallArgs := TObjectList<TGocciaValue>.Create(False);
   try
@@ -196,7 +196,7 @@ begin
   if Args.Count > 0 then
     BoundThis := Args[0]
   else
-    BoundThis := TGocciaUndefinedLiteralValue.Create;
+    BoundThis := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   // Remaining arguments are pre-filled arguments
   BoundArgs := TObjectList<TGocciaValue>.Create(False);

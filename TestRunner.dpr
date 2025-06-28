@@ -3,7 +3,7 @@ program TestRunner;
 {$I Goccia.inc}
 
 uses
-  Classes, SysUtils, Generics.Collections, Goccia.Values.Core, Goccia.Values.Primitives, Goccia.Lexer, Goccia.Parser, Goccia.Values.ObjectValue, 
+  Classes, SysUtils, Generics.Collections, Goccia.Values.Primitives, Goccia.Lexer, Goccia.Parser, Goccia.Values.ObjectValue, 
   Goccia.Values.ArrayValue, Goccia.Interpreter, Goccia.Error, Goccia.Token, Goccia.AST.Node, 
   Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ClassHelper, FileUtils in 'units/FileUtils.pas';
 
