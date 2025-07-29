@@ -3,8 +3,8 @@ program TestRunner;
 {$I Goccia.inc}
 
 uses
-  Classes, SysUtils, Generics.Collections, Goccia.Values.Primitives, Goccia.Lexer, Goccia.Parser, Goccia.Values.ObjectValue, 
-  Goccia.Values.ArrayValue, Goccia.Interpreter, Goccia.Error, Goccia.Token, Goccia.AST.Node, 
+  Classes, SysUtils, Generics.Collections, Goccia.Values.Primitives, Goccia.Values.ObjectValue, 
+  Goccia.Values.ArrayValue, Goccia.Engine, Goccia.Error, 
   Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ClassHelper, FileUtils in 'units/FileUtils.pas';
 
 function RunGocciaScript(const FileName: string): TGocciaObjectValue;
@@ -13,7 +13,7 @@ var
   ScriptResult, FileResult: TGocciaObjectValue;
   TestGlobals: TGocciaGlobalBuiltins;
 begin
-  TestGlobals := TGocciaInterpreter.DefaultGlobals + [ggTestAssertions];
+  TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
 
   ScriptResult := TGocciaObjectValue.Create;
   ScriptResult.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(0));
@@ -32,7 +32,7 @@ begin
     Source.Add('runTests({ exitOnFirstFailure: false, showTestResults: false, silent: true });');
 
     try
-      FileResult := RunGocciaScriptFromStringList(Source, FileName, TestGlobals).Value as TGocciaObjectValue;
+      FileResult := TGocciaEngine.RunScriptFromStringList(Source, FileName, TestGlobals) as TGocciaObjectValue;
       
       if FileResult <> nil then
       begin

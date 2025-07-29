@@ -3,7 +3,7 @@ program ScriptLoader;
 {$I Goccia.inc}
 
 uses
-  Classes, SysUtils, Generics.Collections, Goccia.Values.Core, Goccia.Lexer, Goccia.Parser, Goccia.Interpreter, Goccia.Error, Goccia.Token, Goccia.AST.Node, FileUtils in 'units/FileUtils.pas';
+  Classes, SysUtils, Generics.Collections, Goccia.Values.Primitives, Goccia.Engine, Goccia.Error, FileUtils in 'units/FileUtils.pas';
 
 function RunGocciaScript(const FileName: string): TGocciaValue;
 var
@@ -12,7 +12,7 @@ begin
   Source := TStringList.Create;
   try
     Source.LoadFromFile(FileName);
-    Result := RunGocciaScriptFromStringList(Source, FileName, TGocciaInterpreter.DefaultGlobals).Value;
+    Result := TGocciaEngine.RunScriptFromStringList(Source, FileName, TGocciaEngine.DefaultGlobals);
   finally
     Source.Free;
   end;
