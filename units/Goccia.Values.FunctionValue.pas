@@ -8,7 +8,7 @@ interface
 uses
   Goccia.Interfaces, Goccia.AST.Node, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope,
   Goccia.Error, Goccia.Logger, Goccia.Values.Error, Goccia.Values.ObjectValue, Goccia.Values.FunctionBase,
-  Generics.Collections, Classes, Math, SysUtils,
+  Goccia.Arguments, Generics.Collections, Classes, Math, SysUtils,
   Goccia.Values.Primitives;
 
 type
@@ -22,7 +22,7 @@ type
     constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string = '');
     destructor Destroy; override;
 
-    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function Call(Arguments: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
     function CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
     property Parameters: TGocciaParameterArray read FParameters;
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
@@ -62,7 +62,7 @@ begin
 end;
 
 
-function TGocciaFunctionValue.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaFunctionValue.Call(Arguments: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
   ReturnValue: TGocciaValue;

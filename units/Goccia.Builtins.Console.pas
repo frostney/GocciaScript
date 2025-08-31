@@ -6,13 +6,14 @@ interface
 
 uses
   Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.Primitives,
-  Goccia.Values.ObjectValue, Goccia.Values.ObjectPropertyDescriptor, Generics.Collections, Goccia.Builtins.Base;
+  Goccia.Values.ObjectValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Arguments, 
+  Generics.Collections, Goccia.Builtins.Base;
 
 type
   TGocciaConsole = class(TGocciaBuiltin)
   protected
     // Native methods
-    function ConsoleLog(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ConsoleLog(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
   end;
@@ -30,7 +31,7 @@ begin
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
-function TGocciaConsole.ConsoleLog(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaConsole.ConsoleLog(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
   Output: string;
@@ -40,7 +41,7 @@ begin
   begin
     if I > 0 then
       Output := Output + ' ';
-    Output := Output + Args[I].ToStringLiteral.Value;
+    Output := Output + Args.Get(I].ToStringLiteral.Value;
   end;
   WriteLn(Output);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;

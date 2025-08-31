@@ -6,13 +6,13 @@ interface
 
 uses
   Goccia.Values.ArrayValue, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.Primitives,
-  Goccia.Builtins.Base, Generics.Collections, Goccia.Scope,
+  Goccia.Builtins.Base, Goccia.Arguments, Generics.Collections, Goccia.Scope,
   Goccia.Error, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ClassHelper;
 
 type
   TGocciaGlobalArray = class(TGocciaBuiltin)
   protected
-    function IsArray(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function IsArray(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
   end;
@@ -28,9 +28,9 @@ begin
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
-function TGocciaGlobalArray.IsArray(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalArray.IsArray(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaBooleanLiteralValue.Create(Args[0] is TGocciaArrayValue);
+  Result := TGocciaBooleanLiteralValue.Create(Args.Get(0] is TGocciaArrayValue);
 end;
 
 end.

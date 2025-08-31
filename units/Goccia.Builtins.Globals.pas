@@ -5,16 +5,17 @@ unit Goccia.Builtins.Globals;
 interface
 
 uses
-  SysUtils, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.FunctionValue, Goccia.Values.Primitives, Generics.Collections, Math, Goccia.Builtins.Base, Goccia.Scope, Goccia.Error;
+  SysUtils, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.FunctionValue, 
+  Goccia.Values.Primitives, Goccia.Arguments, Generics.Collections, Math, Goccia.Builtins.Base, Goccia.Scope, Goccia.Error;
 
 type
   TGocciaGlobals = class(TGocciaBuiltin)
   protected
     // Error constructors
-    function ErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function TypeErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ReferenceErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function RangeErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ErrorConstructor(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function TypeErrorConstructor(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function ReferenceErrorConstructor(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function RangeErrorConstructor(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
   end;
@@ -76,7 +77,7 @@ begin
   // Should we bind them direct from source?
 end;
 
-function TGocciaGlobals.ErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobals.ErrorConstructor(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   ErrorObj: TGocciaObjectValue;
   Message: string;
@@ -89,7 +90,7 @@ begin
 
   // Set message property
   if Args.Count > 0 then
-    Message := Args[0].ToStringLiteral.Value
+    Message := Args.Get(0].ToStringLiteral.Value
   else
     Message := '';
   ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
@@ -97,7 +98,7 @@ begin
   Result := ErrorObj;
 end;
 
-function TGocciaGlobals.TypeErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobals.TypeErrorConstructor(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   ErrorObj: TGocciaObjectValue;
   Message: string;
@@ -110,7 +111,7 @@ begin
 
   // Set message property
   if Args.Count > 0 then
-    Message := Args[0].ToStringLiteral.Value
+    Message := Args.Get(0].ToStringLiteral.Value
   else
     Message := '';
   ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
@@ -118,7 +119,7 @@ begin
   Result := ErrorObj;
 end;
 
-function TGocciaGlobals.ReferenceErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobals.ReferenceErrorConstructor(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   ErrorObj: TGocciaObjectValue;
   Message: string;
@@ -131,7 +132,7 @@ begin
 
   // Set message property
   if Args.Count > 0 then
-    Message := Args[0].ToStringLiteral.Value
+    Message := Args.Get(0].ToStringLiteral.Value
   else
     Message := '';
   ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
@@ -139,7 +140,7 @@ begin
   Result := ErrorObj;
 end;
 
-function TGocciaGlobals.RangeErrorConstructor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobals.RangeErrorConstructor(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   ErrorObj: TGocciaObjectValue;
   Message: string;
@@ -152,7 +153,7 @@ begin
 
   // Set message property
   if Args.Count > 0 then
-    Message := Args[0].ToStringLiteral.Value
+    Message := Args.Get(0].ToStringLiteral.Value
   else
     Message := '';
   ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));

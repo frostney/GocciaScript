@@ -5,23 +5,24 @@ unit Goccia.Builtins.GlobalObject;
 interface
 
 uses
-  Goccia.Scope, Goccia.Values.Primitives, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.ObjectValue, Generics.Collections, Goccia.Builtins.Base;
+  Goccia.Scope, Goccia.Values.Primitives, Goccia.Error, Goccia.Values.NativeFunction, 
+  Goccia.Values.ObjectValue, Goccia.Arguments, Generics.Collections, Goccia.Builtins.Base;
 
 type
   TGocciaGlobalObject = class(TGocciaBuiltin)
   protected
     // Native methods
-    function ObjectIs(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectKeys(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectValues(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectEntries(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectAssign(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectCreate(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectHasOwn(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectGetOwnPropertyNames(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectGetOwnPropertyDescriptor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectDefineProperty(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectDefineProperties(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectIs(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectKeys(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectValues(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectEntries(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectAssign(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectCreate(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectHasOwn(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectGetOwnPropertyNames(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectGetOwnPropertyDescriptor(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectDefineProperty(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectDefineProperties(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
   end;
@@ -51,21 +52,21 @@ begin
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
-function TGocciaGlobalObject.ObjectIs(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectIs(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   Left, Right: TGocciaValue;
 begin
   if Args.Count <> 2 then
     ThrowError('Object.is expects exactly 2 arguments', 0, 0);
 
-  Left := Args[0];
-  Right := Args[1];
+  Left := Args.Get(0];
+  Right := Args.Get(1];
 
   Result := TGocciaBooleanLiteralValue.Create(IsSameValue(Left, Right));
 end;
 
 
-function TGocciaGlobalObject.ObjectKeys(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectKeys(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   Keys: TGocciaArrayValue;
@@ -75,10 +76,10 @@ begin
   if Args.Count <> 1 then
     ThrowError('Object.keys expects exactly 1 argument', 0, 0);
 
-  if not (Args[0] is TGocciaObjectValue) then
+  if not (Args.Get(0] is TGocciaObjectValue) then
     ThrowError('Object.keys called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args[0]);
+  Obj := TGocciaObjectValue(Args.Get(0]);
   Keys := TGocciaArrayValue.Create;
 
   Names := Obj.GetEnumerablePropertyNames;
@@ -88,7 +89,7 @@ begin
   Result := Keys;
 end;
 
-function TGocciaGlobalObject.ObjectValues(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectValues(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   Values: TGocciaArrayValue;
@@ -98,10 +99,10 @@ begin
   if Args.Count <> 1 then
     ThrowError('Object.values expects exactly 1 argument', 0, 0);
 
-  if not (Args[0] is TGocciaObjectValue) then
+  if not (Args.Get(0] is TGocciaObjectValue) then
     ThrowError('Object.values called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args[0]);
+  Obj := TGocciaObjectValue(Args.Get(0]);
   Values := TGocciaArrayValue.Create;
 
   PropertyValues := Obj.GetEnumerablePropertyValues;
@@ -111,7 +112,7 @@ begin
   Result := Values;
 end;
 
-function TGocciaGlobalObject.ObjectEntries(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectEntries(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   Entries: TGocciaArrayValue;
@@ -122,10 +123,10 @@ begin
   if Args.Count <> 1 then
     ThrowError('Object.entries expects exactly 1 argument', 0, 0);
 
-  if not (Args[0] is TGocciaObjectValue) then
+  if not (Args.Get(0] is TGocciaObjectValue) then
     ThrowError('Object.entries called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args[0]);
+  Obj := TGocciaObjectValue(Args.Get(0]);
   Entries := TGocciaArrayValue.Create;
 
   PropertyEntries := Obj.GetEnumerablePropertyEntries;
@@ -140,7 +141,7 @@ begin
   Result := Entries;
 end;
 
-function TGocciaGlobalObject.ObjectAssign(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectAssign(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   InitialObj: TGocciaObjectValue;
   Source: TGocciaObjectValue;
@@ -151,16 +152,16 @@ begin
     ThrowError('Object.assign expects at least 2 arguments', 0, 0);
 
   // TODO: Should check for the first object or filter out non-objects
-  if not (Args[0] is TGocciaObjectValue) then
+  if not (Args.Get(0] is TGocciaObjectValue) then
     ThrowError('Object.assign called on non-object', 0, 0);
 
-  InitialObj := TGocciaObjectValue(Args[0]);
+  InitialObj := TGocciaObjectValue(Args.Get(0]);
 
   for I := 1 to Args.Count - 1 do
   begin
-    if (Args[I] is TGocciaObjectValue) then
+    if (Args.Get(I] is TGocciaObjectValue) then
     begin
-      Source := TGocciaObjectValue(Args[I]);
+      Source := TGocciaObjectValue(Args.Get(I]);
 
       // Use enumerable property entries to safely copy properties
       PropertyEntries := Source.GetEnumerablePropertyEntries;
@@ -172,7 +173,7 @@ begin
   Result := InitialObj;
 end;
 
-function TGocciaGlobalObject.ObjectCreate(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectCreate(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   NewObj: TGocciaObjectValue;
   ProtoArg: TGocciaValue;
@@ -180,7 +181,7 @@ begin
   if Args.Count < 1 then
     ThrowError('Object.create expects at least 1 argument', 0, 0);
 
-  ProtoArg := Args[0];
+  ProtoArg := Args.Get(0];
 
   // Validate the prototype argument - must be an object or null
   if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullLiteralValue) then
@@ -195,7 +196,7 @@ begin
     ThrowError('Object.create called on non-object', 0, 0);
 end;
 
-function TGocciaGlobalObject.ObjectHasOwn(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectHasOwn(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   PropertyName: string;
@@ -203,16 +204,16 @@ begin
   if Args.Count <> 2 then
     ThrowError('Object.hasOwn expects exactly 2 arguments', 0, 0);
 
-  if not (Args[0] is TGocciaObjectValue) then
+  if not (Args.Get(0] is TGocciaObjectValue) then
     ThrowError('Object.hasOwn called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args[0]);
-  PropertyName := Args[1].ToStringLiteral.Value;
+  Obj := TGocciaObjectValue(Args.Get(0]);
+  PropertyName := Args.Get(1].ToStringLiteral.Value;
 
   Result := TGocciaBooleanLiteralValue.Create(Obj.HasOwnProperty(PropertyName));
 end;
 
-function TGocciaGlobalObject.ObjectGetOwnPropertyNames(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectGetOwnPropertyNames(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   Names: TGocciaArrayValue;
@@ -222,10 +223,10 @@ begin
   if Args.Count <> 1 then
     ThrowError('Object.getOwnPropertyNames expects exactly 1 argument', 0, 0);
 
-  if not (Args[0] is TGocciaObjectValue) then
+  if not (Args.Get(0] is TGocciaObjectValue) then
     ThrowError('Object.getOwnPropertyNames called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args[0]);
+  Obj := TGocciaObjectValue(Args.Get(0]);
   Names := TGocciaArrayValue.Create;
 
   // Get all property names (both enumerable and non-enumerable)
@@ -236,7 +237,7 @@ begin
   Result := Names;
 end;
 
-function TGocciaGlobalObject.ObjectGetOwnPropertyDescriptor(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectGetOwnPropertyDescriptor(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   Obj, DescriptorObj: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
@@ -245,11 +246,11 @@ begin
   if Args.Count <> 2 then
     ThrowError('Object.getOwnPropertyDescriptor expects exactly 2 arguments', 0, 0);
 
-  if not (Args[0] is TGocciaObjectValue) then
+  if not (Args.Get(0] is TGocciaObjectValue) then
     ThrowError('Object.getOwnPropertyDescriptor called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args[0]);
-  PropertyName := Args[1].ToStringLiteral.Value;
+  Obj := TGocciaObjectValue(Args.Get(0]);
+  PropertyName := Args.Get(1].ToStringLiteral.Value;
 
   Descriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   if Descriptor = nil then
@@ -284,7 +285,7 @@ begin
   end;
 end;
 
-function TGocciaGlobalObject.ObjectDefineProperty(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectDefineProperty(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   PropertyName: string;
@@ -301,15 +302,15 @@ begin
   if Args.Count <> 3 then
     ThrowError('Object.defineProperty expects exactly 3 arguments', 0, 0);
 
-  if not (Args[0] is TGocciaObjectValue) then
+  if not (Args.Get(0] is TGocciaObjectValue) then
     ThrowError('Object.defineProperty called on non-object', 0, 0);
 
-  if not (Args[2] is TGocciaObjectValue) then
+  if not (Args.Get(2] is TGocciaObjectValue) then
     ThrowError('Object.defineProperty: descriptor must be an object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args[0]);
-  PropertyName := Args[1].ToStringLiteral.Value;
-  DescriptorObject := TGocciaObjectValue(Args[2]);
+  Obj := TGocciaObjectValue(Args.Get(0]);
+  PropertyName := Args.Get(1].ToStringLiteral.Value;
+  DescriptorObject := TGocciaObjectValue(Args.Get(2]);
 
   // Initialize all variables
   Enumerable := False;
@@ -372,7 +373,7 @@ begin
   Result := Obj;
 end;
 
-function TGocciaGlobalObject.ObjectDefineProperties(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectDefineProperties(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   PropertiesDescriptor: TGocciaObjectValue;
@@ -383,14 +384,14 @@ begin
   if Args.Count <> 2 then
     ThrowError('Object.defineProperties expects exactly 2 arguments', 0, 0);
 
-  if not (Args[0] is TGocciaObjectValue) then
+  if not (Args.Get(0] is TGocciaObjectValue) then
     ThrowError('Object.defineProperties called on non-object', 0, 0);
 
-  if not (Args[1] is TGocciaObjectValue) then
+  if not (Args.Get(1] is TGocciaObjectValue) then
     ThrowError('Object.defineProperties: properties must be an object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args[0]);
-  PropertiesDescriptor := TGocciaObjectValue(Args[1]);
+  Obj := TGocciaObjectValue(Args.Get(0]);
+  PropertiesDescriptor := TGocciaObjectValue(Args.Get(1]);
   PropertyEntries := PropertiesDescriptor.GetEnumerablePropertyEntries;
 
   for I := 0 to High(PropertyEntries) do

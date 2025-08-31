@@ -12,3 +12,6 @@ build/*.Test
 
 # Mac OS files
 .DS_Store
+
+# Node modules
+node_modules/

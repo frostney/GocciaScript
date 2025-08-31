@@ -5,10 +5,11 @@ unit Goccia.Values.NativeFunction;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.FunctionBase, Generics.Collections, SysUtils, Math, Goccia.Logger;
+  Goccia.Interfaces, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.FunctionBase, 
+  Goccia.Arguments, Generics.Collections, SysUtils, Math, Goccia.Logger;
 
 type
-  TGocciaNativeFunction = function(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue of object;
+  TGocciaNativeFunction = function(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue of object;
 
   TGocciaNativeFunctionValue = class(TGocciaFunctionBase)
   private
@@ -20,7 +21,7 @@ type
       AArity: Integer);
     constructor CreateWithoutPrototype(AFunction: TGocciaNativeFunction; const AName: string;
       AArity: Integer);
-    function Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function Call(Arguments: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
     property NativeFunction: TGocciaNativeFunction read FFunction;
     property Name: string read FName;
     property Arity: Integer read FArity;
@@ -49,7 +50,7 @@ begin
   inherited Create; // No prototype for methods that are part of the prototype
 end;
 
-function TGocciaNativeFunctionValue.Call(Arguments: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaNativeFunctionValue.Call(Arguments: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := FFunction(Arguments, ThisValue);
 end;

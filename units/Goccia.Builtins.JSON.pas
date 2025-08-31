@@ -11,6 +11,7 @@ uses
   Goccia.Values.Primitives,
   Goccia.Values.ObjectValue,
   Goccia.Values.ArrayValue,
+  Goccia.Arguments,
   Generics.Collections,
   Goccia.Builtins.Base,
   SysUtils,
@@ -47,8 +48,8 @@ type
     function EscapeJsonString(const Str: string): string;
     function GetIndentString(Level: Integer): string;
   protected
-    function JSONParse(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
-    function JSONStringify(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+    function JSONParse(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function JSONStringify(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
   end;
@@ -70,15 +71,15 @@ begin
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
-function TGocciaJSON.JSONParse(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaJSON.JSONParse(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 begin
   if Args.Count <> 1 then
     ThrowError('JSON.parse expects exactly 1 argument', 0, 0);
 
-  if not (Args[0] is TGocciaStringLiteralValue) then
+  if not (Args.Get(0] is TGocciaStringLiteralValue) then
     ThrowError('JSON.parse expects a string argument', 0, 0);
 
-  FJsonText := Args[0].ToStringLiteral.Value;
+  FJsonText := Args.Get(0].ToStringLiteral.Value;
   FPosition := 1;
   FLength := Length(FJsonText);
 
@@ -402,7 +403,7 @@ end;
 
 { Stringifier Implementation }
 
-function TGocciaJSON.JSONStringify(Args: TObjectList<TGocciaValue>; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaJSON.JSONStringify(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
 var
   Value: TGocciaValue;
   JsonString: string;
@@ -410,7 +411,7 @@ begin
   if Args.Count < 1 then
     ThrowError('JSON.stringify expects at least 1 argument', 0, 0);
 
-  Value := Args[0];
+  Value := Args.Get(0];
 
   if Value is TGocciaUndefinedLiteralValue then
   begin
