@@ -5,9 +5,9 @@ unit Goccia.Values.ClassValue;
 interface
 
 uses
-  Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Interfaces,
-  Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math, Goccia.Values.Primitives,
-  Goccia.AST.Node, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.NativeFunction;
+  Goccia.Values.ObjectValue,
+  Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math, Goccia.Values.Primitives, Goccia.Values.FunctionValue,
+  Goccia.AST.Node, Goccia.Values.ObjectPropertyDescriptor, Goccia.Arguments.Collection;
 
 type
   // Forward declaration
@@ -45,7 +45,7 @@ type
     function GetPrivateStaticProperty(const AName: string): TGocciaValue;
     procedure AddPrivateMethod(const AName: string; AMethod: TGocciaMethodValue);
     function GetPrivateMethod(const AName: string): TGocciaMethodValue;
-    function Instantiate(Arguments: TObjectList<TGocciaValue>): TGocciaValue;
+    function Instantiate(Arguments: TGocciaArgumentsCollection): TGocciaValue;
     function GetProperty(const AName: string): TGocciaValue;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
     property Name: string read FName;
@@ -83,7 +83,7 @@ type
 
 implementation
 
-uses Goccia.Values.ClassHelper;
+uses Goccia.Values.ClassHelper, Goccia.Values.NativeFunction;
 
 constructor TGocciaClassValue.Create(const AName: string; ASuperClass: TGocciaClassValue);
 begin
@@ -248,7 +248,7 @@ begin
     Result := nil;
 end;
 
-function TGocciaClassValue.Instantiate(Arguments: TObjectList<TGocciaValue>): TGocciaValue;
+function TGocciaClassValue.Instantiate(Arguments: TGocciaArgumentsCollection): TGocciaValue;
 var
   Instance: TGocciaInstanceValue;
   ConstructorToCall: TGocciaMethodValue;
@@ -273,9 +273,9 @@ begin
 
   if Assigned(ConstructorToCall) then
   begin
-    Logger.Debug('Calling constructor with %d arguments', [Arguments.Count]);
-    if Arguments.Count > 0 then
-      Logger.Debug('  First argument: %s', [Arguments[0].ToStringLiteral.Value]);
+    Logger.Debug('Calling constructor with %d arguments', [Arguments.Length]);
+    if Arguments.Length > 0 then
+      Logger.Debug('  First argument: %s', [Arguments.GetElement(0).ToStringLiteral.Value]);
 
     // Call the constructor with the instance as this
     ConstructorToCall.Call(Arguments, Instance);
@@ -324,7 +324,7 @@ var
   Method: TGocciaFunctionValue;
   Descriptor: TGocciaPropertyDescriptor;
   GetterFunction: TGocciaFunctionValue;
-  Args: TObjectList<TGocciaValue>;
+  Args: TGocciaArgumentsCollection;
 begin
   Logger.Debug('TGocciaInstanceValue.GetProperty called for: %s', [AName]);
 
@@ -363,7 +363,7 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   SetterFunction: TGocciaFunctionValue;
   NativeSetterFunction: TGocciaNativeFunctionValue;
-  Args: TObjectList<TGocciaValue>;
+  Args: TGocciaArgumentsCollection;
 begin
   Logger.Debug('TGocciaInstanceValue.AssignProperty called for: %s', [AName]);
 
@@ -380,7 +380,7 @@ begin
       if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionValue then
       begin
         SetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
-        Args := TObjectList<TGocciaValue>.Create(False);
+        Args := TGocciaArgumentsCollection.Create;
         try
           Args.Add(AValue);
           SetterFunction.Call(Args, Self); // Use this instance as context
@@ -393,7 +393,7 @@ begin
       else if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaNativeFunctionValue then
       begin
         NativeSetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
-        Args := TObjectList<TGocciaValue>.Create(False);
+        Args := TGocciaArgumentsCollection.Create;
         try
           Args.Add(AValue);
           NativeSetterFunction.Call(Args, Self); // Use this instance as context

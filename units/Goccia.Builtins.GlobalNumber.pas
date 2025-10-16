@@ -5,21 +5,21 @@ unit Goccia.Builtins.GlobalNumber;
 interface
 
 uses
-  Goccia.Builtins.Base, Goccia.Scope, Goccia.Error, Goccia.Values.Error, Goccia.Values.ObjectValue, 
-  Goccia.Values.Primitives, Goccia.Arguments, SysUtils, Math, Generics.Collections;
+  Goccia.Builtins.Base, Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Values.Error, Goccia.Values.ObjectValue, 
+  Goccia.Values.Primitives, Goccia.Arguments.Collection, SysUtils, Math, Generics.Collections;
 
 type
   TGocciaGlobalNumber = class(TGocciaBuiltin)
   private
     FBuiltinNumber: TGocciaObjectValue;
   public
-    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
+    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 
-    function NumberParseInt(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function NumberParseFloat(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function NumberIsFinite(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function NumberIsNaN(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function NumberIsInteger(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function NumberParseInt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function NumberParseFloat(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function NumberIsFinite(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function NumberIsNaN(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function NumberIsInteger(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -29,7 +29,7 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ClassHelper;
 
-constructor TGocciaGlobalNumber.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
+constructor TGocciaGlobalNumber.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -47,7 +47,7 @@ begin
   AScope.DefineBuiltin(AName, FBuiltinNumber);
 end;
 
-function TGocciaGlobalNumber.NumberParseInt(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalNumber.NumberParseInt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   InputStr: string;
   Radix: Integer;
@@ -57,13 +57,13 @@ var
   ResultValue: Int64;
   ValidChars: string;
 begin
-  if Args.Count = 0 then
+  if Args.Length = 0 then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
     Exit;
   end;
 
-  InputStr := Trim(Args.Get(0].ToStringLiteral.Value);
+  InputStr := Trim(Args.GetElement(0).ToStringLiteral.Value);
   if InputStr = '' then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
@@ -71,8 +71,8 @@ begin
   end;
 
   // Get radix
-  if Args.Count > 1 then
-    Radix := Trunc(Args.Get(1].ToNumberLiteral.Value)
+  if Args.Length > 1 then
+    Radix := Trunc(Args.GetElement(1).ToNumberLiteral.Value)
   else
     Radix := 0; // 0 means auto-detect
 
@@ -145,7 +145,7 @@ begin
   Result := TGocciaNumberLiteralValue.Create(Sign * ResultValue);
 end;
 
-function TGocciaGlobalNumber.NumberParseFloat(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalNumber.NumberParseFloat(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   InputStr: string;
   I: Integer;
@@ -155,13 +155,13 @@ var
   FractionDivisor: Double;
   HasDigits: Boolean;
 begin
-  if Args.Count = 0 then
+  if Args.Length = 0 then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
     Exit;
   end;
 
-  InputStr := Trim(Args.Get(0].ToStringLiteral.Value);
+  InputStr := Trim(Args.GetElement(0).ToStringLiteral.Value);
   if InputStr = '' then
   begin
     Result := TGocciaNumberLiteralValue.NaNValue;
@@ -233,17 +233,17 @@ begin
   Result := TGocciaNumberLiteralValue.Create(Sign * (IntegerPart + (FractionalPart / FractionDivisor)));
 end;
 
-function TGocciaGlobalNumber.NumberIsFinite(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalNumber.NumberIsFinite(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  if Args.Count = 0 then
+  if Args.Length = 0 then
   begin
     Result := TGocciaBooleanLiteralValue.Create(False);
     Exit;
   end;
 
-  NumberArg := TGocciaNumberLiteralValue(Args.Get(0]);
+  NumberArg := TGocciaNumberLiteralValue(Args.GetElement(0));
 
   if not (NumberArg is TGocciaNumberLiteralValue) then
   begin
@@ -260,20 +260,20 @@ begin
   Result := TGocciaBooleanLiteralValue.Create(True);
 end;
 
-function TGocciaGlobalNumber.NumberIsNaN(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalNumber.NumberIsNaN(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  if Args.Count = 0 then
+  if Args.Length = 0 then
   begin
     Result := TGocciaBooleanLiteralValue.Create(False);
     Exit;
   end;
 
   // Number.isNaN only returns true for actual NaN numbers, not for other types
-  if Args.Get(0] is TGocciaNumberLiteralValue then
+  if Args.GetElement(0) is TGocciaNumberLiteralValue then
   begin
-    NumberArg := TGocciaNumberLiteralValue(Args.Get(0]);
+    NumberArg := TGocciaNumberLiteralValue(Args.GetElement(0));
     Result := TGocciaBooleanLiteralValue.Create(NumberArg.IsNaN);
   end
   else
@@ -283,18 +283,18 @@ begin
   end;
 end;
 
-function TGocciaGlobalNumber.NumberIsInteger(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalNumber.NumberIsInteger(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
   Value: Double;
 begin
-  if Args.Count = 0 then
+  if Args.Length = 0 then
   begin
     Result := TGocciaBooleanLiteralValue.Create(False);
     Exit;
   end;
 
-  NumberArg := TGocciaNumberLiteralValue(Args.Get(0]);
+  NumberArg := TGocciaNumberLiteralValue(Args.GetElement(0));
 
   if not (NumberArg is TGocciaNumberLiteralValue) then
   begin

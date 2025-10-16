@@ -6,7 +6,7 @@ interface
 
 uses
   Goccia.Values.ObjectValue, Goccia.Interfaces,
-  Goccia.Arguments, Generics.Collections, Goccia.Values.Primitives,
+  Goccia.Arguments.Collection, Generics.Collections, Goccia.Values.Primitives,
   Goccia.Error, SysUtils;
 
 type
@@ -18,9 +18,9 @@ type
     constructor Create;
 
     // Function prototype methods that are available on all functions
-    function FunctionCall(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function FunctionApply(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function FunctionBind(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function FunctionCall(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function FunctionApply(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function FunctionBind(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   end;
 
   // Base class for all callable functions
@@ -34,7 +34,7 @@ type
     function GetProperty(const AName: string): TGocciaValue;
 
     // Abstract method that subclasses must implement
-    function Call(Arguments: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue; virtual;
+    function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; virtual;
 
     // Override TypeName for all functions
     function TypeName: string; override;
@@ -49,7 +49,7 @@ type
   public
     constructor Create(AOriginalFunction: TGocciaValue; ABoundThis: TGocciaValue; ABoundArgs: TObjectList<TGocciaValue>);
     destructor Destroy; override;
-    function Call(Arguments: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue; override;
+    function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; override;
   end;
 
 implementation
@@ -85,7 +85,7 @@ begin
   Result := 'function';
 end;
 
-function TGocciaFunctionBase.Call(Arguments: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaFunctionBase.Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -95,11 +95,12 @@ begin
   inherited Create;
 end;
 
-function TGocciaFunctionSharedPrototype.FunctionCall(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaFunctionSharedPrototype.FunctionCall(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   CallArgs: TObjectList<TGocciaValue>;
   NewThisValue: TGocciaValue;
   I: Integer;
+  SlicedArgs: TGocciaArgumentsCollection;
 begin
   // Function.prototype.call(thisArg, ...args)
   // ThisValue is the function being called
@@ -108,27 +109,24 @@ begin
     raise TGocciaError.Create('Function.prototype.call called on non-function', 0, 0, '', nil);
 
   // First argument is the 'this' value for the call
-  if Args.Count > 0 then
-    NewThisValue := Args.Get(0)
+  if Args.Length > 0 then
+    NewThisValue := Args.GetElement(0)
   else
     NewThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  // Remaining arguments are passed to the function
-  CallArgs := TObjectList<TGocciaValue>.Create(False);
+  // Remaining arguments are passed to the function (skip the first one which is thisArg)
+  SlicedArgs := Args.Slice(1);
   try
-    for I := 1 to Args.Count - 1 do
-      CallArgs.Add(Args.Get(I));
-
     // Call the function directly since we know it's a TGocciaFunctionBase
-    Result := TGocciaFunctionBase(ThisValue).Call(TGocciaArguments.Create(CallArgs, 'call', nil), NewThisValue);
+    Result := TGocciaFunctionBase(ThisValue).Call(SlicedArgs, NewThisValue);
   finally
-    CallArgs.Free;
+    SlicedArgs.Free;
   end;
 end;
 
-function TGocciaFunctionSharedPrototype.FunctionApply(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaFunctionSharedPrototype.FunctionApply(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
-  CallArgs: TObjectList<TGocciaValue>;
+  CallArgs: TGocciaArgumentsCollection;
   NewThisValue: TGocciaValue;
   I: Integer;
   ArrayObj: TGocciaObjectValue;
@@ -142,20 +140,20 @@ begin
     raise TGocciaError.Create('Function.prototype.apply called on non-function', 0, 0, '', nil);
 
   // First argument is the 'this' value for the call
-  if Args.Count > 0 then
-    NewThisValue := Args.Get(0)
+  if Args.Length > 0 then
+    NewThisValue := Args.GetElement(0)
   else
     NewThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  CallArgs := TObjectList<TGocciaValue>.Create(False);
+  CallArgs := TGocciaArgumentsCollection.Create;
   try
     // Second argument should be an array of arguments
-    if Args.Count > 1 then
+    if Args.Length > 1 then
     begin
       // Check if it's array-like (has length property and numeric indices)
-      if Args.Get(1) is TGocciaObjectValue then
+      if Args.GetElement(1) is TGocciaObjectValue then
       begin
-        ArrayObj := TGocciaObjectValue(Args.Get(1));
+        ArrayObj := TGocciaObjectValue(Args.GetElement(1));
         LengthProp := ArrayObj.GetProperty('length');
         if not (LengthProp is TGocciaUndefinedLiteralValue) then
         begin
@@ -166,7 +164,7 @@ begin
           end;
         end;
       end
-      else if not (Args.Get(1) is TGocciaUndefinedLiteralValue) and not (Args.Get(1) is TGocciaNullLiteralValue) then
+      else if not (Args.GetElement(1) is TGocciaUndefinedLiteralValue) and not (Args.GetElement(1) is TGocciaNullLiteralValue) then
       begin
         raise TGocciaError.Create('Function.prototype.apply: second argument must be an array', 0, 0, '', nil);
       end;
@@ -174,13 +172,13 @@ begin
     end;
 
     // Call the function directly since we know it's a TGocciaFunctionBase
-    Result := TGocciaFunctionBase(ThisValue).Call(TGocciaArguments.Create(CallArgs, 'apply', nil), NewThisValue);
+    Result := TGocciaFunctionBase(ThisValue).Call(CallArgs, NewThisValue);
   finally
     CallArgs.Free;
   end;
 end;
 
-function TGocciaFunctionSharedPrototype.FunctionBind(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaFunctionSharedPrototype.FunctionBind(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   BoundThis: TGocciaValue;
   BoundArgs: TObjectList<TGocciaValue>;
@@ -193,15 +191,15 @@ begin
     raise TGocciaError.Create('Function.prototype.bind called on non-function', 0, 0, '', nil);
 
   // First argument is the 'this' value to bind
-  if Args.Count > 0 then
-    BoundThis := Args.Get(0)
+  if Args.Length > 0 then
+    BoundThis := Args.GetElement(0)
   else
     BoundThis := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   // Remaining arguments are pre-filled arguments
   BoundArgs := TObjectList<TGocciaValue>.Create(False);
-  for I := 1 to Args.Count - 1 do
-    BoundArgs.Add(Args.Get(I));
+  for I := 1 to Args.Length - 1 do
+    BoundArgs.Add(Args.GetElement(I));
 
   // Create and return a bound function
   Result := TGocciaBoundFunctionValue.Create(ThisValue, BoundThis, BoundArgs);
@@ -220,7 +218,7 @@ begin
 
   // Copy the bound arguments
   for I := 0 to ABoundArgs.Count - 1 do
-    FBoundArgs.Add(ABoundArgs.Get(I]);
+    FBoundArgs.Add(ABoundArgs[I]);
 end;
 
 destructor TGocciaBoundFunctionValue.Destroy;
@@ -229,25 +227,25 @@ begin
   inherited;
 end;
 
-function TGocciaBoundFunctionValue.Call(Arguments: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaBoundFunctionValue.Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
-  CombinedArgs: TObjectList<TGocciaValue>;
+  CombinedArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
   // Combine bound arguments with call arguments
-  CombinedArgs := TObjectList<TGocciaValue>.Create(False);
+  CombinedArgs := TGocciaArgumentsCollection.Create;
   try
     // Add bound arguments first
     for I := 0 to FBoundArgs.Count - 1 do
       CombinedArgs.Add(FBoundArgs[I]);
 
     // Add call arguments
-    for I := 0 to Arguments.Count - 1 do
-      CombinedArgs.Add(Arguments.Get(I));
+    for I := 0 to Arguments.Length - 1 do
+      CombinedArgs.Add(Arguments.GetElement(I));
 
     // Call the original function with the bound 'this' and combined arguments
     if FOriginalFunction is TGocciaFunctionBase then
-      Result := TGocciaFunctionBase(FOriginalFunction).Call(TGocciaArguments.Create(CombinedArgs, 'bound function', nil), FBoundThis)
+      Result := TGocciaFunctionBase(FOriginalFunction).Call(CombinedArgs, FBoundThis)
     else
       raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
   finally

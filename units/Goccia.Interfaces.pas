@@ -6,13 +6,13 @@ interface
 
 uses
   Goccia.Values.Primitives,
-  Goccia.Arguments,
+  Goccia.Arguments.Collection,
   Generics.Collections;
 
 type
   IGocciaCallable = interface
     ['{52c77df2-cfb9-4cc6-afc5-cd3c7c7b007f}']
-    function Call(Arguments: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation

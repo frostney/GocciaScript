@@ -9,7 +9,7 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
-  Goccia.Arguments,
+  Goccia.Arguments.Collection,
   SysUtils,
   StrUtils,
   Math,
@@ -33,24 +33,24 @@ type
     property Primitive: TGocciaStringLiteralValue read FPrimitive;
 
     // String prototype methods
-    function StringLength(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringCharAt(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringCharCodeAt(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringToUpperCase(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringToLowerCase(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringSlice(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringSubstring(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringIndexOf(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringLastIndexOf(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringIncludes(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringStartsWith(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringEndsWith(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringTrim(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringTrimStart(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringTrimEnd(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringReplaceMethod(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringSplit(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function StringRepeat(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function StringLength(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringCharAt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringCharCodeAt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringToUpperCase(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringToLowerCase(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringSlice(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringSubstring(Args: TGocciaArgumentsCollection ; ThisValue: TGocciaValue): TGocciaValue;
+    function StringIndexOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringLastIndexOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringIncludes(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringStartsWith(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringEndsWith(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringTrim(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringTrimStart(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringTrimEnd(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringReplaceMethod(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringSplit(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function StringRepeat(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   end;
 
 
@@ -149,7 +149,7 @@ end;
 
 { TGocciaStringObjectValue }
 
-function TGocciaStringObjectValue.StringLength(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringLength(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
 begin
@@ -158,7 +158,7 @@ begin
   Result := TGocciaNumberLiteralValue.Create(Length(StringValue));
 end;
 
-function TGocciaStringObjectValue.StringCharAt(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringCharAt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
   Index: Integer;
@@ -169,17 +169,17 @@ begin
   StringValue := ExtractStringValue(ThisValue);
 
   // Get the index argument with safe conversion
-  if Args.Count > 0 then
+  if Args.Length > 0 then
   begin
     try
       // Handle special values according to ECMAScript spec:
       // - NaN converts to 0
       // - Infinity/-Infinity are treated as out-of-bounds (use very large number)
-      if (Args.Get(0] is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(Args.Get(0]).IsNaN then
+      if (Args.GetElement(0) is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(Args.GetElement(0)).IsNaN then
         Index := 0
       else
       begin
-        NumberValue := Args.Get(0].ToNumberLiteral.Value;
+        NumberValue := Args.GetElement(0).ToNumberLiteral.Value;
         // Check for infinity using TGocciaNumberLiteralValue properties
         TempNumberValue := TGocciaNumberLiteralValue.Create(NumberValue);
         try
@@ -205,7 +205,7 @@ begin
     Result := TGocciaStringLiteralValue.Create('');
 end;
 
-function TGocciaStringObjectValue.StringCharCodeAt(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringCharCodeAt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
   Index: Integer;
@@ -216,17 +216,17 @@ begin
   StringValue := ExtractStringValue(ThisValue);
 
   // Get the index argument with safe conversion
-  if Args.Count > 0 then
+  if Args.Length > 0 then
   begin
     try
       // Handle special values according to ECMAScript spec:
       // - NaN converts to 0
       // - Infinity/-Infinity are treated as out-of-bounds (use very large number)
-      if (Args.Get(0] is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(Args.Get(0]).IsNaN then
+      if (Args.GetElement(0) is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(Args.GetElement(0)).IsNaN then
         Index := 0
       else
       begin
-        NumberValue := Args.Get(0].ToNumberLiteral.Value;
+        NumberValue := Args.GetElement(0).ToNumberLiteral.Value;
         // Check for infinity using TGocciaNumberLiteralValue properties
         TempNumberValue := TGocciaNumberLiteralValue.Create(NumberValue);
         try
@@ -252,7 +252,7 @@ begin
     Result := TGocciaNumberLiteralValue.NaNValue;
 end;
 
-function TGocciaStringObjectValue.StringToUpperCase(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringToUpperCase(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
 begin
@@ -262,7 +262,7 @@ begin
   Result := TGocciaStringLiteralValue.Create(UpperCase(StringValue));
 end;
 
-function TGocciaStringObjectValue.StringToLowerCase(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringToLowerCase(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
 begin
@@ -272,7 +272,7 @@ begin
   Result := TGocciaStringLiteralValue.Create(LowerCase(StringValue));
 end;
 
-function TGocciaStringObjectValue.StringSlice(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringSlice(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
   StartIndex, EndIndex: Integer;
@@ -284,8 +284,8 @@ begin
   Len := Length(StringValue);
 
   // Get start index
-  if Args.Count > 0 then
-    StartIndex := Trunc(Args.Get(0].ToNumberLiteral.Value)
+  if Args.Length > 0 then
+    StartIndex := Trunc(Args.GetElement(0).ToNumberLiteral.Value)
   else
     StartIndex := 0;
 
@@ -294,8 +294,8 @@ begin
     StartIndex := Max(0, Len + StartIndex);
 
   // Get end index
-  if Args.Count > 1 then
-    EndIndex := Trunc(Args.Get(1].ToNumberLiteral.Value)
+  if Args.Length > 1 then
+    EndIndex := Trunc(Args.GetElement(1).ToNumberLiteral.Value)
   else
     EndIndex := Len;
 
@@ -314,7 +314,7 @@ begin
     Result := TGocciaStringLiteralValue.Create('');
 end;
 
-function TGocciaStringObjectValue.StringSubstring(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringSubstring(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
   StartIndex, EndIndex: Integer;
@@ -327,14 +327,14 @@ begin
   Len := Length(StringValue);
 
   // Get start index
-  if Args.Count > 0 then
-    StartIndex := Trunc(Args.Get(0].ToNumberLiteral.Value)
+  if Args.Length > 0 then
+    StartIndex := Trunc(Args.GetElement(0).ToNumberLiteral.Value)
   else
     StartIndex := 0;
 
   // Get end index
-  if Args.Count > 1 then
-    EndIndex := Trunc(Args.Get(1].ToNumberLiteral.Value)
+  if Args.Length > 1 then
+    EndIndex := Trunc(Args.GetElement(1).ToNumberLiteral.Value)
   else
     EndIndex := Len;
 
@@ -357,7 +357,7 @@ begin
     Result := TGocciaStringLiteralValue.Create('');
 end;
 
-function TGocciaStringObjectValue.StringIndexOf(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringIndexOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, SearchValue: string;
   StartPosition: Integer;
@@ -367,14 +367,14 @@ begin
   StringValue := ExtractStringValue(ThisValue);
 
   // Get search string
-  if Args.Count > 0 then
-    SearchValue := Args.Get(0].ToStringLiteral.Value
+  if Args.Length > 0 then
+    SearchValue := Args.GetElement(0).ToStringLiteral.Value
   else
     SearchValue := 'undefined';
 
   // Get start position
-  if Args.Count > 1 then
-    StartPosition := Trunc(Args.Get(1].ToNumberLiteral.Value)
+  if Args.Length > 1 then
+    StartPosition := Trunc(Args.GetElement(1).ToNumberLiteral.Value)
   else
     StartPosition := 0;
 
@@ -394,7 +394,7 @@ begin
     Result := TGocciaNumberLiteralValue.Create(-1);
 end;
 
-function TGocciaStringObjectValue.StringLastIndexOf(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringLastIndexOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, SearchValue: string;
   StartPosition: Integer;
@@ -405,14 +405,14 @@ begin
   StringValue := ExtractStringValue(ThisValue);
 
   // Get search string
-  if Args.Count > 0 then
-    SearchValue := Args.Get(0].ToStringLiteral.Value
+  if Args.Length > 0 then
+    SearchValue := Args.GetElement(0).ToStringLiteral.Value
   else
     SearchValue := 'undefined';
 
   // Get start position
-  if Args.Count > 1 then
-    StartPosition := Trunc(Args.Get(1].ToNumberLiteral.Value)
+  if Args.Length > 1 then
+    StartPosition := Trunc(Args.GetElement(1).ToNumberLiteral.Value)
   else
     StartPosition := Length(StringValue) - 1; // 0-indexed
 
@@ -442,7 +442,7 @@ begin
   Result := TGocciaNumberLiteralValue.Create(FoundIndex);
 end;
 
-function TGocciaStringObjectValue.StringIncludes(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringIncludes(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, SearchValue: string;
   StartPosition: Integer;
@@ -452,14 +452,14 @@ begin
   StringValue := ExtractStringValue(ThisValue);
 
   // Get search string
-  if Args.Count > 0 then
-    SearchValue := Args.Get(0].ToStringLiteral.Value
+  if Args.Length > 0 then
+    SearchValue := Args.GetElement(0).ToStringLiteral.Value
   else
     SearchValue := 'undefined';
 
   // Get start position
-  if Args.Count > 1 then
-    StartPosition := Trunc(Args.Get(1].ToNumberLiteral.Value)
+  if Args.Length > 1 then
+    StartPosition := Trunc(Args.GetElement(1).ToNumberLiteral.Value)
   else
     StartPosition := 0;
 
@@ -479,7 +479,7 @@ begin
   Result := TGocciaBooleanLiteralValue.Create(FoundIndex > 0);
 end;
 
-function TGocciaStringObjectValue.StringStartsWith(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringStartsWith(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, SearchValue: string;
   StartPosition: Integer;
@@ -489,8 +489,8 @@ begin
   StringValue := ExtractStringValue(ThisValue);
 
   // Get search string
-  if Args.Count > 0 then
-    SearchValue := Args.Get(0].ToStringLiteral.Value
+  if Args.Length > 0 then
+    SearchValue := Args.GetElement(0).ToStringLiteral.Value
   else
     SearchValue := 'undefined';
 
@@ -501,7 +501,7 @@ begin
     Result := TGocciaBooleanLiteralValue.Create(False);
 end;
 
-function TGocciaStringObjectValue.StringEndsWith(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringEndsWith(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, SearchValue: string;
   StartPosition: Integer;
@@ -511,8 +511,8 @@ begin
   StringValue := ExtractStringValue(ThisValue);
 
   // Get search string
-  if Args.Count > 0 then
-    SearchValue := Args.Get(0].ToStringLiteral.Value
+  if Args.Length > 0 then
+    SearchValue := Args.GetElement(0).ToStringLiteral.Value
   else
     SearchValue := 'undefined';
 
@@ -523,7 +523,7 @@ begin
     Result := TGocciaBooleanLiteralValue.Create(False);
 end;
 
-function TGocciaStringObjectValue.StringTrim(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringTrim(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
 begin
@@ -534,7 +534,7 @@ begin
   Result := TGocciaStringLiteralValue.Create(Trim(StringValue));
 end;
 
-function TGocciaStringObjectValue.StringTrimStart(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringTrimStart(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
 begin
@@ -545,7 +545,7 @@ begin
   Result := TGocciaStringLiteralValue.Create(TrimLeft(StringValue));
 end;
 
-function TGocciaStringObjectValue.StringTrimEnd(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringTrimEnd(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
 begin
@@ -556,7 +556,7 @@ begin
   Result := TGocciaStringLiteralValue.Create(TrimRight(StringValue));
 end;
 
-function TGocciaStringObjectValue.StringReplaceMethod(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringReplaceMethod(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, SearchValue, ReplaceValue: string;
 begin
@@ -564,14 +564,14 @@ begin
   StringValue := ExtractStringValue(ThisValue);
 
   // Get search string
-  if Args.Count > 0 then
-    SearchValue := Args.Get(0].ToStringLiteral.Value
+  if Args.Length > 0 then
+    SearchValue := Args.GetElement(0).ToStringLiteral.Value
   else
     SearchValue := 'undefined';
 
   // Get replace string
-  if Args.Count > 1 then
-    ReplaceValue := Args.Get(1].ToStringLiteral.Value
+  if Args.Length > 1 then
+    ReplaceValue := Args.GetElement(1).ToStringLiteral.Value
   else
     ReplaceValue := 'undefined';
 
@@ -579,7 +579,7 @@ begin
   Result := TGocciaStringLiteralValue.Create(StringReplace(StringValue, SearchValue, ReplaceValue, [rfReplaceAll, rfIgnoreCase]));
 end;
 
-function TGocciaStringObjectValue.StringSplit(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringSplit(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue, Separator: string;
   ResultArray: TGocciaArrayValue;
@@ -594,16 +594,16 @@ begin
   StringValue := ExtractStringValue(ThisValue);
 
   // Get separator
-  if Args.Count > 0 then
-    Separator := Args.Get(0].ToStringLiteral.Value
+  if Args.Length > 0 then
+    Separator := Args.GetElement(0).ToStringLiteral.Value
   else
     Separator := 'undefined';
 
   // Get limit parameter (ECMAScript requirement)
-  HasLimit := Args.Count > 1;
+  HasLimit := Args.Length > 1;
   if HasLimit then
   begin
-    Limit := Trunc(Args.Get(1].ToNumberLiteral.Value);
+    Limit := Trunc(Args.GetElement(1).ToNumberLiteral.Value);
     // If limit is 0, return empty array
     if Limit = 0 then
     begin
@@ -686,7 +686,7 @@ begin
   Result := ResultArray;
 end;
 
-function TGocciaStringObjectValue.StringRepeat(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaStringObjectValue.StringRepeat(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
   Count: Integer;
@@ -695,8 +695,8 @@ begin
   StringValue := ExtractStringValue(ThisValue);
 
   // Get count
-  if Args.Count > 0 then
-    Count := Trunc(Args.Get(0].ToNumberLiteral.Value)
+  if Args.Length > 0 then
+    Count := Trunc(Args.GetElement(0).ToNumberLiteral.Value)
   else
     Count := 1;
 

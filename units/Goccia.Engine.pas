@@ -29,7 +29,8 @@ type
   TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
 
   TGocciaEngine = class
-  const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON];
+  public
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON];
   private
     FInterpreter: TGocciaInterpreter;
     FFileName: string;
@@ -65,9 +66,12 @@ type
     function Execute: TGocciaValue;
     function ExecuteProgram(AProgram: TGocciaProgram): TGocciaValue;
 
-    class function RunScript(const Source: string; const FileName: string = 'inline.goccia'; AGlobals: TGocciaGlobalBuiltins = DefaultGlobals): TGocciaValue;
-    class function RunScriptFromFile(const FileName: string; AGlobals: TGocciaGlobalBuiltins = DefaultGlobals): TGocciaValue;
-    class function RunScriptFromStringList(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins = DefaultGlobals): TGocciaValue;
+    class function RunScript(const Source: string; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue; overload;
+    class function RunScript(const Source: string; const FileName: string = 'inline.goccia'): TGocciaValue; overload;
+    class function RunScriptFromFile(const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue; overload;
+    class function RunScriptFromFile(const FileName: string): TGocciaValue; overload;
+    class function RunScriptFromStringList(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue; overload;
+    class function RunScriptFromStringList(const Source: TStringList; const FileName: string): TGocciaValue; overload;
 
     property Interpreter: TGocciaInterpreter read FInterpreter;
     property BuiltinConsole: TGocciaConsole read FBuiltinConsole;
@@ -98,15 +102,27 @@ end;
 
 destructor TGocciaEngine.Destroy;
 begin
+  // Free builtin objects first, before freeing the interpreter
+  // The scope only holds references, the engine owns these objects
+  if Assigned(FBuiltinConsole) then
+    FBuiltinConsole.Free;
+  if Assigned(FBuiltinMath) then
+    FBuiltinMath.Free;
+  if Assigned(FBuiltinGlobalObject) then
+    FBuiltinGlobalObject.Free;
+  if Assigned(FBuiltinGlobalArray) then
+    FBuiltinGlobalArray.Free;
+  if Assigned(FBuiltinGlobalNumber) then
+    FBuiltinGlobalNumber.Free;
+  if Assigned(FBuiltinGlobals) then
+    FBuiltinGlobals.Free;
+  if Assigned(FBuiltinJSON) then
+    FBuiltinJSON.Free;
+  if Assigned(FBuiltinTestAssertions) then
+    FBuiltinTestAssertions.Free;
+
+  // Free interpreter after builtins
   FInterpreter.Free;
-  FBuiltinConsole.Free;
-  FBuiltinMath.Free;
-  FBuiltinGlobalObject.Free;
-  FBuiltinGlobalArray.Free;
-  FBuiltinGlobalNumber.Free;
-  FBuiltinGlobals.Free;
-  FBuiltinJSON.Free;
-  FBuiltinTestAssertions.Free;
   inherited;
 end;
 
@@ -142,7 +158,7 @@ end;
 
 procedure TGocciaEngine.RegisterTestAssertions;
 begin
-  FBuiltinTestAssertions := TGocciaTestAssertions.Create(FInterpreter, 'TestAssertions', FInterpreter.GlobalScope, ThrowError);
+  FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions', FInterpreter.GlobalScope, ThrowError);
 end;
 
 procedure TGocciaEngine.RegisterPromise;
@@ -178,10 +194,17 @@ var
   ArrayObj, ObjectObj, NumberObj: TGocciaObjectValue;
   Key: string;
 begin
-  // Get existing built-in objects that have static methods
-  ExistingArray := FInterpreter.GlobalScope.GetValue('Array');
-  ExistingObject := FInterpreter.GlobalScope.GetValue('Object');
-  ExistingNumber := FInterpreter.GlobalScope.GetValue('Number');
+  // Get existing built-in objects that have static methods (only if they exist)
+  ExistingArray := nil;
+  ExistingObject := nil;
+  ExistingNumber := nil;
+
+  if FInterpreter.GlobalScope.Contains('Array') then
+    ExistingArray := FInterpreter.GlobalScope.GetValue('Array');
+  if FInterpreter.GlobalScope.Contains('Object') then
+    ExistingObject := FInterpreter.GlobalScope.GetValue('Object');
+  if FInterpreter.GlobalScope.Contains('Number') then
+    ExistingNumber := FInterpreter.GlobalScope.GetValue('Number');
 
   // Create Array constructor and copy static methods
   ArrayConstructor := TGocciaClassValue.Create('Array', nil);
@@ -192,7 +215,7 @@ begin
     for Key in ArrayObj.GetAllPropertyNames do
       ArrayConstructor.SetProperty(Key, ArrayObj.GetProperty(Key));
   end;
-  FInterpreter.GlobalScope.DefineBuiltin('Array', ArrayConstructor);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Array', ArrayConstructor, dtUnknown);
 
   // Create Object constructor and copy static methods
   ObjectConstructor := TGocciaClassValue.Create('Object', nil);
@@ -203,11 +226,11 @@ begin
     for Key in ObjectObj.GetAllPropertyNames do
       ObjectConstructor.SetProperty(Key, ObjectObj.GetProperty(Key));
   end;
-  FInterpreter.GlobalScope.DefineBuiltin('Object', ObjectConstructor);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Object', ObjectConstructor, dtUnknown);
 
   // Create other constructors
   StringConstructor := TGocciaClassValue.Create('String', nil);
-  FInterpreter.GlobalScope.DefineBuiltin('String', StringConstructor);
+  FInterpreter.GlobalScope.DefineLexicalBinding('String', StringConstructor, dtUnknown);
 
   NumberConstructor := TGocciaClassValue.Create('Number', nil);
   if (ExistingNumber is TGocciaObjectValue) then
@@ -217,21 +240,21 @@ begin
     for Key in NumberObj.GetAllPropertyNames do
       NumberConstructor.SetProperty(Key, NumberObj.GetProperty(Key));
   end;
-  FInterpreter.GlobalScope.DefineBuiltin('Number', NumberConstructor);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Number', NumberConstructor, dtUnknown);
 
   BooleanConstructor := TGocciaClassValue.Create('Boolean', nil);
-  FInterpreter.GlobalScope.DefineBuiltin('Boolean', BooleanConstructor);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Boolean', BooleanConstructor, dtUnknown);
 
   // Create Function constructor
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
-  FInterpreter.GlobalScope.DefineBuiltin('Function', FunctionConstructor);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtUnknown);
 
   // Create Error constructors
   RangeErrorConstructor := TGocciaClassValue.Create('RangeError', nil);
-  FInterpreter.GlobalScope.DefineBuiltin('RangeError', RangeErrorConstructor);
+  FInterpreter.GlobalScope.DefineLexicalBinding('RangeError', RangeErrorConstructor, dtUnknown);
 
   // Register Symbol constructor and well-known symbols
-  FInterpreter.GlobalScope.Define('Symbol', TGocciaObjectValue.Create);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Symbol', TGocciaObjectValue.Create, dtUnknown);
 end;
 
 function TGocciaEngine.Execute: TGocciaValue;
@@ -244,20 +267,17 @@ begin
   Lexer := TGocciaLexer.Create(FSourceLines.Text, FFileName);
   try
     Tokens := Lexer.ScanTokens;
+    Parser := TGocciaParser.Create(Tokens, FFileName, Lexer.SourceLines);
     try
-      Parser := TGocciaParser.Create(Tokens, FFileName, Lexer.SourceLines);
+      ProgramNode := Parser.Parse;
       try
-        ProgramNode := Parser.Parse;
-        try
-          Result := FInterpreter.Execute(ProgramNode);
-        finally
-          ProgramNode.Free;
-        end;
+        Result := FInterpreter.Execute(ProgramNode);
       finally
-        Parser.Free;
+        ProgramNode.Free;
       end;
     finally
-      Tokens.Free;
+      Parser.Free;
+      // Don't free Tokens - the lexer owns them and will free them
     end;
   finally
     Lexer.Free;
@@ -282,6 +302,11 @@ begin
   end;
 end;
 
+class function TGocciaEngine.RunScript(const Source: string; const FileName: string): TGocciaValue;
+begin
+  Result := RunScript(Source, FileName, TGocciaEngine.DefaultGlobals);
+end;
+
 class function TGocciaEngine.RunScriptFromFile(const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue;
 var
   Source: TStringList;
@@ -295,6 +320,11 @@ begin
   end;
 end;
 
+class function TGocciaEngine.RunScriptFromFile(const FileName: string): TGocciaValue;
+begin
+  Result := RunScriptFromFile(FileName, TGocciaEngine.DefaultGlobals);
+end;
+
 class function TGocciaEngine.RunScriptFromStringList(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue;
 var
   Engine: TGocciaEngine;
@@ -305,6 +335,11 @@ begin
   finally
     Engine.Free;
   end;
+end;
+
+class function TGocciaEngine.RunScriptFromStringList(const Source: TStringList; const FileName: string): TGocciaValue;
+begin
+  Result := RunScriptFromStringList(Source, FileName, TGocciaEngine.DefaultGlobals);
 end;
 
 procedure TGocciaEngine.ThrowError(const Message: string; Line, Column: Integer);

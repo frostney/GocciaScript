@@ -5,7 +5,7 @@ unit Goccia.Error;
 interface
 
 uses
-  SysUtils, StrUtils, Classes;
+  SysUtils, StrUtils, Classes, Goccia.Error.ThrowErrorCallback;
 
 type
   TGocciaErrorSeverity = (gesError, gesWarning, gesHint);
@@ -37,8 +37,6 @@ type
   TGocciaRuntimeError = class(TGocciaError);
   TGocciaTypeError = class(TGocciaRuntimeError);
   TGocciaReferenceError = class(TGocciaRuntimeError);
-
-  TGocciaThrowError = procedure(const Message: string; Line, Column: Integer) of object;
 
 implementation
 

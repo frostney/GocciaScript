@@ -5,24 +5,24 @@ unit Goccia.Builtins.Console;
 interface
 
 uses
-  Goccia.Scope, Goccia.Error, Goccia.Values.NativeFunction, Goccia.Values.Primitives,
-  Goccia.Values.ObjectValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Arguments, 
+  Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Values.NativeFunction, Goccia.Values.Primitives,
+  Goccia.Values.ObjectValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Arguments.Collection,
   Generics.Collections, Goccia.Builtins.Base;
 
 type
   TGocciaConsole = class(TGocciaBuiltin)
   protected
     // Native methods
-    function ConsoleLog(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function ConsoleLog(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
+    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
 
 implementation
 
 uses Goccia.Values.ClassHelper;
 
-constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
+constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -31,17 +31,17 @@ begin
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
-function TGocciaConsole.ConsoleLog(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaConsole.ConsoleLog(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
   Output: string;
 begin
   Output := '';
-  for I := 0 to Args.Count - 1 do
+  for I := 0 to Args.Length - 1 do
   begin
     if I > 0 then
       Output := Output + ' ';
-    Output := Output + Args.Get(I].ToStringLiteral.Value;
+    Output := Output + Args.GetElement(I).ToStringLiteral.Value;
   end;
   WriteLn(Output);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;

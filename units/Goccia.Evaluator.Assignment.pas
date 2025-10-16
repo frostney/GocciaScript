@@ -8,14 +8,14 @@ uses
   Goccia.Values.ObjectValue, Goccia.Values.ClassValue,
   Goccia.Values.ArrayValue, Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives,
-  Goccia.Token, Goccia.Interfaces, Goccia.Error, SysUtils, Math, Goccia.Evaluator.Arithmetic;
+  Goccia.Token, Goccia.Interfaces, Goccia.Error.ThrowErrorCallback, SysUtils, Math, Goccia.Evaluator.Arithmetic;
 
 // Property assignment operations
-procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowError; Line, Column: Integer);
-procedure AssignComputedProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowError; Line, Column: Integer);
+procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
+procedure AssignComputedProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
 
 // Compound assignment operations
-procedure PerformPropertyCompoundAssignment(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; Operator: TGocciaTokenType; OnError: TGocciaThrowError; Line, Column: Integer);
+procedure PerformPropertyCompoundAssignment(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; Operator: TGocciaTokenType; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
 
 // Increment/Decrement operations
 function PerformIncrement(OldValue: TGocciaValue; IsIncrement: Boolean): TGocciaValue; inline;
@@ -24,7 +24,7 @@ implementation
 
 uses Goccia.Values.ClassHelper;
 
-procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowError; Line, Column: Integer);
+procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
 begin
   // Handle different object types for property assignment
   // Direct property assignment (obj.prop = value) should call the object's AssignProperty method
@@ -46,7 +46,7 @@ begin
     OnError('Cannot set property on non-object', Line, Column);
 end;
 
-procedure AssignComputedProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowError; Line, Column: Integer);
+procedure AssignComputedProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
 begin
   // Handle different object types for computed property assignment
   if (Obj is TGocciaArrayValue) then
@@ -69,7 +69,7 @@ begin
     OnError('Cannot set property on non-object', Line, Column);
 end;
 
-procedure PerformPropertyCompoundAssignment(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; Operator: TGocciaTokenType; OnError: TGocciaThrowError; Line, Column: Integer);
+procedure PerformPropertyCompoundAssignment(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; Operator: TGocciaTokenType; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
 var
   CurrentValue, NewValue: TGocciaValue;
 begin

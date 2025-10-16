@@ -5,7 +5,7 @@ unit Goccia.Values.ObjectValue;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.Interfaces, Generics.Collections, Goccia.Values.ObjectPropertyDescriptor, Math, Goccia.Logger, SysUtils, Classes;
+  Goccia.Values.Primitives, Goccia.Values.Interfaces, Generics.Collections, Goccia.Values.ObjectPropertyDescriptor, Math, Goccia.Logger, SysUtils, Classes, Goccia.Arguments.Collection;
 
 type
   TGocciaObjectValue = class(TGocciaValue, IPropertyMethods, IValueOf, IStringTag)
@@ -175,7 +175,7 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   SetterFunction: TGocciaFunctionValue;
   NativeSetterFunction: TGocciaNativeFunctionValue;
-  Args: TObjectList<TGocciaValue>;
+  Args: TGocciaArgumentsCollection;
   ErrorValue: TGocciaValue;
 begin
   // First check for existing property descriptors
@@ -190,7 +190,7 @@ begin
         if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionValue then
         begin
           SetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
-          Args := TObjectList<TGocciaValue>.Create(False);
+          Args := TGocciaArgumentsCollection.Create;
           try
             Args.Add(AValue);
             SetterFunction.Call(Args, Self);
@@ -202,7 +202,7 @@ begin
         else if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaNativeFunctionValue then
         begin
           NativeSetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
-          Args := TObjectList<TGocciaValue>.Create(False);
+          Args := TGocciaArgumentsCollection.Create;
           try
             Args.Add(AValue);
             NativeSetterFunction.Call(Args, Self);
@@ -361,7 +361,7 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   GetterFunction: TGocciaFunctionValue;
   NativeGetterFunction: TGocciaNativeFunctionValue;
-  Args: TObjectList<TGocciaValue>;
+  Args: TGocciaArgumentsCollection;
 begin
   Logger.Debug('TGocciaObjectValue.GetProperty: Start');
   Logger.Debug('  Name: %s', [AName]);
@@ -378,7 +378,7 @@ begin
         if TGocciaPropertyDescriptorAccessor(Descriptor).Getter is TGocciaFunctionValue then
         begin
           GetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
-          Args := TObjectList<TGocciaValue>.Create(False);
+          Args := TGocciaArgumentsCollection.Create;
           try
             Result := GetterFunction.Call(Args, Self);
           finally
@@ -389,7 +389,7 @@ begin
         else if TGocciaPropertyDescriptorAccessor(Descriptor).Getter is TGocciaNativeFunctionValue then
         begin
           NativeGetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
-          Args := TObjectList<TGocciaValue>.Create(False);
+          Args := TGocciaArgumentsCollection.Create;
           try
             Result := NativeGetterFunction.Call(Args, Self);
           finally
@@ -426,7 +426,7 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   GetterFunction: TGocciaFunctionValue;
   NativeGetterFunction: TGocciaNativeFunctionValue;
-  Args: TObjectList<TGocciaValue>;
+  Args: TGocciaArgumentsCollection;
 begin
       Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Property=%s, ThisContext=%s', [AName, AThisContext.TypeName]);
 
@@ -445,7 +445,7 @@ begin
         begin
           Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Calling getter with context %s', [AThisContext.TypeName]);
           GetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
-          Args := TObjectList<TGocciaValue>.Create(False);
+          Args := TGocciaArgumentsCollection.Create;
           try
             Result := GetterFunction.Call(Args, AThisContext); // Use provided context
             Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Getter returned %s', [Result.ToStringLiteral.Value]);
@@ -458,7 +458,7 @@ begin
         begin
           Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Calling native getter with context %s', [AThisContext.TypeName]);
           NativeGetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
-          Args := TObjectList<TGocciaValue>.Create(False);
+          Args := TGocciaArgumentsCollection.Create;
           try
             Result := NativeGetterFunction.Call(Args, AThisContext); // Use provided context
             Logger.Debug('TGocciaObjectValue.GetPropertyWithContext: Native getter returned %s', [Result.ToStringLiteral.Value]);

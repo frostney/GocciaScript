@@ -558,22 +558,31 @@ implementation
     else if (Self is TGocciaNullLiteralValue) and (Other is TGocciaNullLiteralValue) then
       Result := TGocciaBooleanLiteralValue.TrueValue
     else if (Self is TGocciaBooleanLiteralValue) and (Other is TGocciaBooleanLiteralValue) then
-      Result := TGocciaBooleanLiteralValue.Create(
-        TGocciaBooleanLiteralValue(Self).Value = TGocciaBooleanLiteralValue(Other).Value)
+      if TGocciaBooleanLiteralValue(Self).Value = TGocciaBooleanLiteralValue(Other).Value then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue
     else if (Self is TGocciaNumberLiteralValue) and (Other is TGocciaNumberLiteralValue) then
     begin
       // Handle NaN case
       if TGocciaNumberLiteralValue(Self).IsNaN or TGocciaNumberLiteralValue(Other).IsNaN then
         Result := TGocciaBooleanLiteralValue.FalseValue
       else
-        Result := TGocciaBooleanLiteralValue.Create(
-          TGocciaNumberLiteralValue(Self).Value = TGocciaNumberLiteralValue(Other).Value);
+        if TGocciaNumberLiteralValue(Self).Value = TGocciaNumberLiteralValue(Other).Value then
+          Result := TGocciaBooleanLiteralValue.TrueValue
+        else
+          Result := TGocciaBooleanLiteralValue.FalseValue;
     end
     else if (Self is TGocciaStringLiteralValue) and (Other is TGocciaStringLiteralValue) then
-      Result := TGocciaBooleanLiteralValue.Create(
-        TGocciaStringLiteralValue(Self).Value = TGocciaStringLiteralValue(Other).Value)
+      if TGocciaStringLiteralValue(Self).Value = TGocciaStringLiteralValue(Other).Value then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue
     else
-      Result := TGocciaBooleanLiteralValue.Create(Self = Other); // Reference equality
+      if Self = Other then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue; // Reference equality
   end;
 
   function TGocciaValueHelper.IsNotEqual(Other: TGocciaValue): TGocciaBooleanLiteralValue;

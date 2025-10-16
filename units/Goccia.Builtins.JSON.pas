@@ -6,12 +6,12 @@ interface
 
 uses
   Goccia.Scope,
-  Goccia.Error,
+  Goccia.Error, Goccia.Error.ThrowErrorCallback,
   Goccia.Values.NativeFunction,
   Goccia.Values.Primitives,
   Goccia.Values.ObjectValue,
   Goccia.Values.ArrayValue,
-  Goccia.Arguments,
+  Goccia.Arguments.Collection,
   Generics.Collections,
   Goccia.Builtins.Base,
   SysUtils,
@@ -48,10 +48,10 @@ type
     function EscapeJsonString(const Str: string): string;
     function GetIndentString(Level: Integer): string;
   protected
-    function JSONParse(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
-    function JSONStringify(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function JSONParse(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function JSONStringify(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
+    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
 
 implementation
@@ -61,7 +61,7 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.ClassHelper;
 
-constructor TGocciaJSON.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
+constructor TGocciaJSON.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -71,15 +71,15 @@ begin
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
-function TGocciaJSON.JSONParse(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaJSON.JSONParse(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  if Args.Count <> 1 then
+  if Args.Length <> 1 then
     ThrowError('JSON.parse expects exactly 1 argument', 0, 0);
 
-  if not (Args.Get(0] is TGocciaStringLiteralValue) then
+  if not (Args.GetElement(0) is TGocciaStringLiteralValue) then
     ThrowError('JSON.parse expects a string argument', 0, 0);
 
-  FJsonText := Args.Get(0].ToStringLiteral.Value;
+  FJsonText := Args.GetElement(0).ToStringLiteral.Value;
   FPosition := 1;
   FLength := Length(FJsonText);
 
@@ -403,15 +403,15 @@ end;
 
 { Stringifier Implementation }
 
-function TGocciaJSON.JSONStringify(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaJSON.JSONStringify(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   Value: TGocciaValue;
   JsonString: string;
 begin
-  if Args.Count < 1 then
+  if Args.Length < 1 then
     ThrowError('JSON.stringify expects at least 1 argument', 0, 0);
 
-  Value := Args.Get(0];
+  Value := Args.GetElement(0);
 
   if Value is TGocciaUndefinedLiteralValue then
   begin

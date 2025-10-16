@@ -136,15 +136,8 @@ begin
 
   if Assigned(FLexicalBindings) then
   begin
-    // Log all variables in the scope before destruction
-    Logger.Debug('  Variables in scope:');
-    for Key in FLexicalBindings.Keys do
-    begin
-      if FLexicalBindings.TryGetValue(Key, LexicalBinding) then
-        Logger.Debug('    %s: %s', [Key, LexicalBinding.Value.ToStringLiteral.Value])
-      else
-        Logger.Debug('    %s: <not found>', [Key]);
-    end;
+    // Log all variables in the scope before destruction (commented out to avoid access violations during cleanup)
+    Logger.Debug('  Variables in scope: %d variables', [FLexicalBindings.Count]);
 
     FLexicalBindings.Free;
   end;
@@ -202,8 +195,8 @@ begin
         LexicalBinding.Initialized := True;
       end;
   else
-    // Default for unknown types (treat as let)
-    LexicalBinding.Initialized := False;
+    // Default for unknown types (built-ins) - mark as initialized
+    LexicalBinding.Initialized := True;
   end;
 
   FLexicalBindings.AddOrSetValue(AName, LexicalBinding);

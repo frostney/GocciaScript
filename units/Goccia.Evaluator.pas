@@ -5,14 +5,14 @@ unit Goccia.Evaluator;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Interfaces, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.FunctionBase, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.Error, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser,
-  Goccia.Evaluator.Arithmetic, Goccia.Evaluator.Bitwise, Goccia.Evaluator.Comparison, Goccia.Evaluator.TypeOperations, Goccia.Evaluator.Assignment,
+  Goccia.Values.Primitives, Goccia.Interfaces, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.FunctionBase, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.Error, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser,
+  Goccia.Evaluator.Arithmetic, Goccia.Evaluator.Bitwise, Goccia.Evaluator.Comparison, Goccia.Evaluator.TypeOperations, Goccia.Evaluator.Assignment, Goccia.Arguments.Collection,
   Generics.Collections, SysUtils, Math, Classes;
 
 type
   TGocciaEvaluationContext = record
     Scope: TGocciaScope;
-    OnError: TGocciaThrowError;
+    OnError: TGocciaThrowErrorCallback;
     LoadModule: TLoadModuleCallback;
   end;
 
@@ -711,7 +711,7 @@ end;
 function EvaluateCall(CallExpression: TGocciaCallExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Callee: TGocciaValue;
-  Arguments: TObjectList<TGocciaValue>;
+  Arguments: TGocciaArgumentsCollection;
   ThisValue: TGocciaValue;
   ArgumentExpr: TGocciaExpression;
   SuperClass: TGocciaClassValue;
@@ -737,7 +737,8 @@ begin
       Exit;
     end;
 
-    Arguments := TObjectList<TGocciaValue>.Create(False);
+    Arguments := TGocciaArgumentsCollection.Create;
+
     try
       for ArgumentExpr in CallExpression.Arguments do
         Arguments.Add(EvaluateExpression(ArgumentExpr, Context));
@@ -787,7 +788,7 @@ begin
     ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 
-  Arguments := TObjectList<TGocciaValue>.Create(False);
+  Arguments := TGocciaArgumentsCollection.Create;
   try
     for ArgumentExpr in CallExpression.Arguments do
     begin
@@ -1872,7 +1873,7 @@ end;
 function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Callee: TGocciaValue;
-  Arguments: TObjectList<TGocciaValue>;
+  Arguments: TGocciaArgumentsCollection;
   I: Integer;
   Instance: TGocciaInstanceValue;
   ClassValue: TGocciaClassValue;
@@ -1881,7 +1882,7 @@ begin
   Callee := EvaluateExpression(NewExpression.Callee, Context);
 
   // Evaluate arguments
-  Arguments := TObjectList<TGocciaValue>.Create(False);
+  Arguments := TGocciaArgumentsCollection.Create;
   try
     for I := 0 to NewExpression.Arguments.Count - 1 do
       Arguments.Add(EvaluateExpression(NewExpression.Arguments[I], Context));

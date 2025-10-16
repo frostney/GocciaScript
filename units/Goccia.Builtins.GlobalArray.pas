@@ -6,20 +6,20 @@ interface
 
 uses
   Goccia.Values.ArrayValue, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.Primitives,
-  Goccia.Builtins.Base, Goccia.Arguments, Generics.Collections, Goccia.Scope,
-  Goccia.Error, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ClassHelper;
+  Goccia.Builtins.Base, Goccia.Arguments.Collection, Generics.Collections, Goccia.Scope,
+  Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ClassHelper;
 
 type
   TGocciaGlobalArray = class(TGocciaBuiltin)
   protected
-    function IsArray(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function IsArray(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
+    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
 
 implementation
 
-constructor TGocciaGlobalArray.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowError);
+constructor TGocciaGlobalArray.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -28,9 +28,9 @@ begin
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
-function TGocciaGlobalArray.IsArray(Args: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalArray.IsArray(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaBooleanLiteralValue.Create(Args.Get(0] is TGocciaArrayValue);
+  Result := TGocciaBooleanLiteralValue.Create(Args.GetElement(0) is TGocciaArrayValue);
 end;
 
 end.

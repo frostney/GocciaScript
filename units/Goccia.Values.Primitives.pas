@@ -267,13 +267,16 @@ begin
   end
   else if Math.IsInfinite(AValue) then
   begin
-    FSpecialValue := nsvInfinity;
+    if AValue > 0 then
+      FSpecialValue := nsvInfinity
+    else
+      FSpecialValue := nsvNegativeInfinity;
     FValue := ZERO_VALUE; // Store a safe value instead of infinity
   end
-  else if AValue = ZERO_VALUE then
+  else if (AValue = ZERO_VALUE) and (ASpecialValue = nsvNegativeZero) then
   begin
     FSpecialValue := nsvNegativeZero;
-    FValue := ZERO_VALUE; // Store a safe value instead of negative zero
+    FValue := ZERO_VALUE; // Store a safe value for negative zero
   end
   else
   begin
@@ -372,7 +375,11 @@ end;
 
 function TGocciaNumberLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
 begin
-  Result := TGocciaBooleanLiteralValue.Create(FValue <> ZERO_VALUE);
+  // JavaScript spec: NaN and 0 (including -0) convert to false
+  if (FSpecialValue = nsvNaN) or (FValue = ZERO_VALUE) then
+    Result := TGocciaBooleanLiteralValue.FalseValue
+  else
+    Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
 
 function TGocciaNumberLiteralValue.ToNumberLiteral: TGocciaNumberLiteralValue;
@@ -405,13 +412,18 @@ end;
 
 function TGocciaStringLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
 begin
-  Result := TGocciaBooleanLiteralValue.Create(FValue <> EMPTY_STRING);
+  if FValue <> EMPTY_STRING then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaStringLiteralValue.ToNumberLiteral: TGocciaNumberLiteralValue;
+var
+  TempValue: Double;
 begin
-  if TryStrToFloat(FValue, Result.FValue) then
-    Result := TGocciaNumberLiteralValue.Create(Result.FValue)
+  if TryStrToFloat(FValue, TempValue) then
+    Result := TGocciaNumberLiteralValue.Create(TempValue)
   else
     Result := TGocciaNumberLiteralValue.NaNValue;
 end;

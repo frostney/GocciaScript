@@ -8,8 +8,8 @@ interface
 uses
   Goccia.Interfaces, Goccia.AST.Node, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope,
   Goccia.Error, Goccia.Logger, Goccia.Values.Error, Goccia.Values.ObjectValue, Goccia.Values.FunctionBase,
-  Goccia.Arguments, Generics.Collections, Classes, Math, SysUtils,
-  Goccia.Values.Primitives;
+  Goccia.Arguments.Collection, Generics.Collections, Classes, Math, SysUtils,
+  Goccia.Values.Primitives, Goccia.Token;
 
 type
   TGocciaFunctionValue = class(TGocciaFunctionBase)
@@ -22,7 +22,7 @@ type
     constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string = '');
     destructor Destroy; override;
 
-    function Call(Arguments: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+    function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
     property Parameters: TGocciaParameterArray read FParameters;
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
@@ -62,7 +62,7 @@ begin
 end;
 
 
-function TGocciaFunctionValue.Call(Arguments: TGocciaArguments; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaFunctionValue.Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
   ReturnValue: TGocciaValue;
@@ -72,7 +72,7 @@ var
 begin
   Logger.Debug('FunctionValue.Call: Entering');
   Logger.Debug('  Function type: %s', [Self.ClassName]);
-  Logger.Debug('  Arguments.Count: %d', [Arguments.Count]);
+  Logger.Debug('  Arguments.Length: %d', [Arguments.Length]);
   Logger.Debug('  ThisValue type: %s', [ThisValue.ClassName]);
 
   // Create call scope
@@ -96,7 +96,7 @@ begin
     CallScope.ThisValue := ThisValue;
 
     // Also define 'this' as a lexical binding to fix "Undefined variable: this" errors
-    CallScope.DefineBuiltin('this', ThisValue);
+    CallScope.DefineLexicalBinding('this', ThisValue, dtUnknown);
 
     // If this is a method with a superclass, set up super handling
     if Self is TGocciaMethodValue then
@@ -106,7 +106,7 @@ begin
       begin
         Logger.Debug('FunctionValue.Call: Method has superclass: %s', [Method.SuperClass.ToStringLiteral.Value]);
         // Set up special 'super' binding in the method scope - TODO: This should be a specialised scope
-        CallScope.DefineBuiltin('__super__', Method.SuperClass);
+        CallScope.DefineLexicalBinding('__super__', Method.SuperClass, dtUnknown);
       end;
     end;
 
@@ -119,8 +119,8 @@ begin
         Logger.Debug('Binding destructuring parameter %d', [I]);
 
         // Get the argument value or default
-        if I < Arguments.Count then
-          ReturnValue := Arguments[I]
+        if I < Arguments.Length then
+          ReturnValue := Arguments.GetElement(I)
         else if Assigned(FParameters[I].DefaultValue) then
         begin
           Logger.Debug('  No argument provided, using default value for destructuring');
@@ -140,10 +140,10 @@ begin
       begin
         // Handle simple named parameter
         Logger.Debug('Binding parameter %d: %s', [I, FParameters[I].Name]);
-        if I < Arguments.Count then
+        if I < Arguments.Length then
         begin
-          Logger.Debug('  Argument value type: %s, toStringLiteral: %s', [Arguments[I].ClassName, Arguments[I].ToStringLiteral.Value]);
-          CallScope.DefineBuiltin(FParameters[I].Name, Arguments[I])
+          Logger.Debug('  Argument value type: %s, toStringLiteral: %s', [Arguments.GetElement(I).ClassName, Arguments.GetElement(I).ToStringLiteral.Value]);
+          CallScope.DefineLexicalBinding(FParameters[I].Name, Arguments.GetElement(I), dtParameter);
         end
         else
         begin
@@ -153,12 +153,12 @@ begin
             Logger.Debug('  No argument provided, using default value');
             // Evaluate the default value in the function's closure scope
             ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
-            CallScope.DefineBuiltin(FParameters[I].Name, ReturnValue);
+            CallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
           end
           else
           begin
             Logger.Debug('  No argument provided, setting to undefined');
-            CallScope.DefineBuiltin(FParameters[I].Name, TGocciaUndefinedLiteralValue.UndefinedValue);
+            CallScope.DefineLexicalBinding(FParameters[I].Name, TGocciaUndefinedLiteralValue.UndefinedValue, dtParameter);
           end;
         end;
       end;

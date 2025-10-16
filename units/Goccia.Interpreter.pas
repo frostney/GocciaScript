@@ -57,7 +57,7 @@ begin
   // Free scope first to avoid accessing freed method pointers in builtin objects
   FGlobalScope.Free;
   FModules.Free;
-  FSourceLines.Free;
+  // Don't free FSourceLines - we don't own it, it's owned by the caller
 
   inherited;
 end;

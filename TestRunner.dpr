@@ -16,13 +16,13 @@ begin
   TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
 
   ScriptResult := TGocciaObjectValue.Create;
-  ScriptResult.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(0));
-  ScriptResult.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(0));
-  ScriptResult.AssignProperty('passed', TGocciaNumberLiteralValue.Create(0));
-  ScriptResult.AssignProperty('failed', TGocciaNumberLiteralValue.Create(0));
-  ScriptResult.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(0));
-  ScriptResult.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(0));
-  ScriptResult.AssignProperty('duration', TGocciaNumberLiteralValue.Create(0));
+  ScriptResult.AssignProperty('totalTests', TGocciaNumberLiteralValue.ZeroValue);
+  ScriptResult.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.ZeroValue);
+  ScriptResult.AssignProperty('passed', TGocciaNumberLiteralValue.ZeroValue);
+  ScriptResult.AssignProperty('failed', TGocciaNumberLiteralValue.ZeroValue);
+  ScriptResult.AssignProperty('skipped', TGocciaNumberLiteralValue.ZeroValue);
+  ScriptResult.AssignProperty('assertions', TGocciaNumberLiteralValue.ZeroValue);
+  ScriptResult.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
   ScriptResult.AssignProperty('failedTests', TGocciaArrayValue.Create);
 
   Source := TStringList.Create;
@@ -98,13 +98,13 @@ var
 begin
   AllTestResults := TGocciaObjectValue.Create;
 
-  AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(0));
-  AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(0));
-  AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(0));
-  AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(0));
-  AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(0));
-  AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(0));
-  AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(0));
+  AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.ZeroValue);
+  AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.ZeroValue);
+  AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.ZeroValue);
+  AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.ZeroValue);
+  AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.ZeroValue);
+  AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.ZeroValue);
+  AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('failedTests', TGocciaArrayValue.Create);
 
   // Initialize counters to avoid repeated object creation
