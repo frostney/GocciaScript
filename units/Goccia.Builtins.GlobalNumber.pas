@@ -6,7 +6,7 @@ interface
 
 uses
   Goccia.Builtins.Base, Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Values.Error, Goccia.Values.ObjectValue, 
-  Goccia.Values.Primitives, Goccia.Arguments.Collection, SysUtils, Math, Generics.Collections;
+  Goccia.Values.Primitives, Goccia.Arguments.Collection, Goccia.Arguments.Validator, SysUtils, Math, Generics.Collections;
 
 type
   TGocciaGlobalNumber = class(TGocciaBuiltin)
@@ -57,11 +57,8 @@ var
   ResultValue: Int64;
   ValidChars: string;
 begin
-  if Args.Length = 0 then
-  begin
-    Result := TGocciaNumberLiteralValue.NaNValue;
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireAtLeast(Args, 1, 'Number.parseInt', ThrowError);
+  TGocciaArgumentValidator.RequireAtMost(Args, 2, 'Number.parseInt', ThrowError);
 
   InputStr := Trim(Args.GetElement(0).ToStringLiteral.Value);
   if InputStr = '' then

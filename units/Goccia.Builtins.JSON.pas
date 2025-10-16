@@ -12,6 +12,7 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.ArrayValue,
   Goccia.Arguments.Collection,
+  Goccia.Arguments.Validator,
   Generics.Collections,
   Goccia.Builtins.Base,
   SysUtils,
@@ -73,11 +74,10 @@ end;
 
 function TGocciaJSON.JSONParse(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('JSON.parse expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'JSON.parse', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('JSON.parse expects a string argument', 0, 0);
+    ThrowError('JSON.parse: argument must be a string', 0, 0);
 
   FJsonText := Args.GetElement(0).ToStringLiteral.Value;
   FPosition := 1;
@@ -408,8 +408,7 @@ var
   Value: TGocciaValue;
   JsonString: string;
 begin
-  if Args.Length < 1 then
-    ThrowError('JSON.stringify expects at least 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireAtLeast(Args, 1, 'JSON.stringify', ThrowError);
 
   Value := Args.GetElement(0);
 

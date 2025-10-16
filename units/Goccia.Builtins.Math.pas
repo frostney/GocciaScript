@@ -109,8 +109,7 @@ end;
 
 function TGocciaMath.MathRound(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Math.round expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.round', ThrowError);
   Result := TGocciaNumberLiteralValue.Create(Round(Args.GetElement(0).ToNumberLiteral.Value));
 end;
 
@@ -200,8 +199,7 @@ function TGocciaMath.MathSqrt(Args: TGocciaArgumentsCollection; ThisValue: TGocc
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Math.sqrt expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.sqrt', ThrowError);
 
   NumberArg := Args.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
@@ -218,6 +216,7 @@ end;
 
 function TGocciaMath.MathRandom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
+  TGocciaArgumentValidator.RequireNone(Args, 'Math.random', ThrowError);
   Result := TGocciaNumberLiteralValue.Create(Random);
 end;
 
@@ -225,8 +224,7 @@ function TGocciaMath.MathClamp(Args: TGocciaArgumentsCollection; ThisValue: TGoc
 var
   Value, MinVal, MaxVal: TGocciaNumberLiteralValue;
 begin
-  if Args.Length <> 3 then
-    ThrowError('Math.clamp expects exactly 3 arguments', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 3, 'Math.clamp', ThrowError);
 
   Value := Args.GetElement(0).ToNumberLiteral;
   MinVal := Args.GetElement(1).ToNumberLiteral;
@@ -261,8 +259,7 @@ function TGocciaMath.MathSign(Args: TGocciaArgumentsCollection; ThisValue: TGocc
 var
   NumberLiteral: TGocciaNumberLiteralValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Math.sign expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.sign', ThrowError);
 
   NumberLiteral := Args.GetElement(0).ToNumberLiteral;
 
@@ -276,8 +273,7 @@ function TGocciaMath.MathTrunc(Args: TGocciaArgumentsCollection; ThisValue: TGoc
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Math.trunc expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.trunc', ThrowError);
 
   NumberArg := Args.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
@@ -294,8 +290,7 @@ function TGocciaMath.MathExp(Args: TGocciaArgumentsCollection; ThisValue: TGocci
 var
   NumberLiteral: TGocciaNumberLiteralValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Math.exp expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.exp', ThrowError);
 
   NumberLiteral := Args.GetElement(0).ToNumberLiteral;
 
@@ -309,8 +304,7 @@ function TGocciaMath.MathLog(Args: TGocciaArgumentsCollection; ThisValue: TGocci
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Math.log expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.log', ThrowError);
 
   NumberArg := Args.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
@@ -331,8 +325,7 @@ function TGocciaMath.MathLog10(Args: TGocciaArgumentsCollection; ThisValue: TGoc
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Math.log10 expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.log10', ThrowError);
 
   NumberArg := Args.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
@@ -353,8 +346,7 @@ function TGocciaMath.MathSin(Args: TGocciaArgumentsCollection; ThisValue: TGocci
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Math.sin expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.sin', ThrowError);
 
   NumberArg := Args.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
@@ -369,8 +361,7 @@ function TGocciaMath.MathCos(Args: TGocciaArgumentsCollection; ThisValue: TGocci
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Math.cos expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.cos', ThrowError);
 
   NumberArg := Args.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
@@ -385,8 +376,7 @@ function TGocciaMath.MathTan(Args: TGocciaArgumentsCollection; ThisValue: TGocci
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Math.tan expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.tan', ThrowError);
 
   NumberArg := Args.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
