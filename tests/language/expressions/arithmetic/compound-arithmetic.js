@@ -48,7 +48,11 @@ test("compound assignment operators with object", () => {
 test("compound assignment operators with array", () => {
   let a = [1, 2, 3];
   a[0] += 3;
+  a[1] += 3;
+  a[2] += 3;
   expect(a[0]).toBe(4);
+  expect(a[1]).toBe(5);
+  expect(a[2]).toBe(6);
 });
 
 test("compound division", () => {
