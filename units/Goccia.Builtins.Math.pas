@@ -116,16 +116,16 @@ end;
 function TGocciaMath.MathMax(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
-  Max, Current: Double;
+  MaxVal, NumVal: TGocciaNumberLiteralValue;
 begin
   if Args.Length = 0 then
     Result := TGocciaNumberLiteralValue.NegativeInfinityValue
   else
   begin
-    Max := Args.GetElement(0).ToNumberLiteral.Value;
+    MaxVal := Args.GetElement(0).ToNumberLiteral;
 
     // If any argument is NaN, return NaN
-    if IsNaN(Max) then
+    if MaxVal.IsNaN then
     begin
       Result := TGocciaNumberLiteralValue.NaNValue;
       Exit;
@@ -133,35 +133,35 @@ begin
 
     for I := 1 to Args.Length - 1 do
     begin
-      Current := Args.GetElement(I).ToNumberLiteral.Value;
+      NumVal := Args.GetElement(I).ToNumberLiteral;
 
       // If any argument is NaN, return NaN
-      if IsNaN(Current) then
+      if NumVal.IsNaN then
       begin
         Result := TGocciaNumberLiteralValue.NaNValue;
         Exit;
       end;
 
-      if Current > Max then
-        Max := Current;
+      if NumVal.IsGreaterThan(MaxVal).Value then
+        MaxVal := NumVal;
     end;
-    Result := TGocciaNumberLiteralValue.Create(Max);
+    Result := MaxVal;
   end;
 end;
 
 function TGocciaMath.MathMin(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
-  Min, Current: Double;
+  MinVal, NumVal: TGocciaNumberLiteralValue;
 begin
   if Args.Length = 0 then
-    Result := TGocciaNumberLiteralValue.Create(Infinity)
+    Result := TGocciaNumberLiteralValue.InfinityValue
   else
   begin
-    Min := Args.GetElement(0).ToNumberLiteral.Value;
+    MinVal := Args.GetElement(0).ToNumberLiteral;
 
     // If any argument is NaN, return NaN
-    if IsNaN(Min) then
+    if MinVal.IsNaN then
     begin
       Result := TGocciaNumberLiteralValue.NaNValue;
       Exit;
@@ -169,19 +169,19 @@ begin
 
     for I := 1 to Args.Length - 1 do
     begin
-      Current := Args.GetElement(I).ToNumberLiteral.Value;
+      NumVal := Args.GetElement(I).ToNumberLiteral;
 
       // If any argument is NaN, return NaN
-      if IsNaN(Current) then
+      if NumVal.IsNaN then
       begin
         Result := TGocciaNumberLiteralValue.NaNValue;
         Exit;
       end;
 
-      if Current < Min then
-        Min := Current;
+      if NumVal.IsLessThan(MinVal).Value then
+        MinVal := NumVal;
     end;
-    Result := TGocciaNumberLiteralValue.Create(Min);
+    Result := MinVal;
   end;
 end;
 
@@ -244,15 +244,13 @@ begin
     Exit;
   end;
 
-    // TODO: Handle negative zero properly - for now skip this special case
-
-  // Clamp the value
+  // Clamp the value - return the appropriate number literal object
   if Value.IsLessThan(MinVal).Value then
-    Result := TGocciaNumberLiteralValue.Create(MinVal.Value)
+    Result := MinVal
   else if Value.IsGreaterThan(MaxVal).Value then
-    Result := TGocciaNumberLiteralValue.Create(MaxVal.Value)
+    Result := MaxVal
   else
-    Result := TGocciaNumberLiteralValue.Create(Value.Value);
+    Result := Value;
 end;
 
 function TGocciaMath.MathSign(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -265,6 +263,10 @@ begin
 
   if NumberLiteral.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
+  else if NumberLiteral.IsInfinity then
+    Result := TGocciaNumberLiteralValue.Create(1)  // +Infinity has sign 1
+  else if NumberLiteral.IsNegativeInfinity then
+    Result := TGocciaNumberLiteralValue.Create(-1)  // -Infinity has sign -1
   else
     Result := TGocciaNumberLiteralValue.Create(Sign(NumberLiteral.Value));
 end;
@@ -296,6 +298,10 @@ begin
 
   if NumberLiteral.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
+  else if NumberLiteral.IsNegativeInfinity then
+    Result := TGocciaNumberLiteralValue.Create(0)  // exp(-Infinity) = 0
+  else if NumberLiteral.IsInfinity then
+    Result := TGocciaNumberLiteralValue.InfinityValue  // exp(+Infinity) = +Infinity
   else
     Result := TGocciaNumberLiteralValue.Create(Exp(NumberLiteral.Value));
 end;
