@@ -76,12 +76,12 @@ begin
   // Get current property value
   if (Obj is TGocciaInstanceValue) then
     CurrentValue := TGocciaInstanceValue(Obj).GetProperty(PropertyName)
+  else if (Obj is TGocciaArrayValue) then
+    CurrentValue := TGocciaArrayValue(Obj).GetProperty(PropertyName)
   else if (Obj is TGocciaObjectValue) then
     CurrentValue := TGocciaObjectValue(Obj).GetProperty(PropertyName)
   else if (Obj is TGocciaClassValue) then
     CurrentValue := TGocciaClassValue(Obj).GetProperty(PropertyName)
-  else if (Obj is TGocciaArrayValue) then
-    CurrentValue := TGocciaArrayValue(Obj).GetProperty(PropertyName)
   else
   begin
     if Assigned(OnError) then
@@ -95,12 +95,12 @@ begin
   // Set the new value (use AssignProperty to handle setters correctly)
   if (Obj is TGocciaInstanceValue) then
     TGocciaInstanceValue(Obj).AssignProperty(PropertyName, NewValue)
+  else if (Obj is TGocciaArrayValue) then
+    TGocciaArrayValue(Obj).SetProperty(PropertyName, NewValue)
   else if (Obj is TGocciaObjectValue) then
     TGocciaObjectValue(Obj).AssignProperty(PropertyName, NewValue)
   else if (Obj is TGocciaClassValue) then
-    TGocciaClassValue(Obj).SetProperty(PropertyName, NewValue)
-  else if (Obj is TGocciaArrayValue) then
-    TGocciaArrayValue(Obj).SetProperty(PropertyName, NewValue);
+    TGocciaClassValue(Obj).SetProperty(PropertyName, NewValue);
 end;
 
 function PerformIncrement(OldValue: TGocciaValue; IsIncrement: Boolean): TGocciaValue;
