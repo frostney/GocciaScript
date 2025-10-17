@@ -252,7 +252,10 @@ end;
 
 function TGocciaBooleanLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(BoolToStr(FValue, True));
+  if FValue then
+    Result := TGocciaStringLiteralValue.Create('true')
+  else
+    Result := TGocciaStringLiteralValue.Create('false');
 end;
 
 { TGocciaNumberLiteralValue }
