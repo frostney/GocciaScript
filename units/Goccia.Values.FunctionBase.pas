@@ -36,8 +36,9 @@ type
     // Abstract method that subclasses must implement
     function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; virtual;
 
-    // Override TypeName for all functions
+    // Override TypeName and TypeOf for all functions
     function TypeName: string; override;
+    function TypeOf: string; override;
   end;
 
   // Helper class for bound functions
@@ -81,6 +82,11 @@ begin
 end;
 
 function TGocciaFunctionBase.TypeName: string;
+begin
+  Result := 'function';
+end;
+
+function TGocciaFunctionBase.TypeOf: string;
 begin
   Result := 'function';
 end;
