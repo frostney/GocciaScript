@@ -392,7 +392,18 @@ end;
 
 function TGocciaNumberLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(FloatToStr(FValue));
+  case FSpecialValue of
+    nsvNaN:
+      Result := TGocciaStringLiteralValue.Create('NaN');
+    nsvInfinity:
+      Result := TGocciaStringLiteralValue.Create('Infinity');
+    nsvNegativeInfinity:
+      Result := TGocciaStringLiteralValue.Create('-Infinity');
+    nsvNegativeZero:
+      Result := TGocciaStringLiteralValue.Create('0');  // Convert -0 to string as "0"
+  else
+    Result := TGocciaStringLiteralValue.Create(FloatToStr(FValue));
+  end;
 end;
 
 
