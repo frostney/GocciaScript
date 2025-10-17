@@ -30,7 +30,11 @@ end;
 
 function TGocciaGlobalArray.IsArray(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaBooleanLiteralValue.Create(Args.GetElement(0) is TGocciaArrayValue);
+  // Array.isArray accepts 0 or more arguments; returns false if no argument provided
+  if Args.Length < 1 then
+    Result := TGocciaBooleanLiteralValue.FalseValue
+  else
+    Result := TGocciaBooleanLiteralValue.Create(Args.GetElement(0) is TGocciaArrayValue);
 end;
 
 end.

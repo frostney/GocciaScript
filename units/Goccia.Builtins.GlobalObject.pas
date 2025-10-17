@@ -30,7 +30,7 @@ type
 implementation
 
 uses
-  Goccia.Values.ArrayValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue, Goccia.Values.ClassHelper;
+  Goccia.Values.ArrayValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue, Goccia.Values.ClassHelper, Goccia.Arguments.Validator;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
@@ -56,8 +56,7 @@ function TGocciaGlobalObject.ObjectIs(Args: TGocciaArgumentsCollection; ThisValu
 var
   Left, Right: TGocciaValue;
 begin
-  if Args.Length <> 2 then
-    ThrowError('Object.is expects exactly 2 arguments', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 2, 'Object.is', ThrowError);
 
   Left := Args.GetElement(0);
   Right := Args.GetElement(1);
@@ -76,8 +75,7 @@ var
   Names: TArray<string>;
   I: Integer;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Object.keys expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.keys', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.keys called on non-object', 0, 0);
@@ -99,8 +97,7 @@ var
   PropertyValues: TArray<TGocciaValue>;
   I: Integer;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Object.values expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.values', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.values called on non-object', 0, 0);
@@ -123,8 +120,7 @@ var
   PropertyEntries: TArray<TPair<string, TGocciaValue>>;
   I: Integer;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Object.entries expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.entries', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.entries called on non-object', 0, 0);
@@ -151,8 +147,7 @@ var
   PropertyEntries: TArray<TPair<string, TGocciaValue>>;
   I, J: Integer;
 begin
-  if Args.Length < 2 then
-    ThrowError('Object.assign expects at least 2 arguments', 0, 0);
+  TGocciaArgumentValidator.RequireAtLeast(Args, 2, 'Object.assign', ThrowError);
 
   // TODO: Should check for the first object or filter out non-objects
   if not (Args.GetElement(0) is TGocciaObjectValue) then
@@ -181,8 +176,7 @@ var
   NewObj: TGocciaObjectValue;
   ProtoArg: TGocciaValue;
 begin
-  if Args.Length < 1 then
-    ThrowError('Object.create expects at least 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireAtLeast(Args, 1, 'Object.create', ThrowError);
 
   ProtoArg := Args.GetElement(0);
 
@@ -204,8 +198,7 @@ var
   Obj: TGocciaObjectValue;
   PropertyName: string;
 begin
-  if Args.Length <> 2 then
-    ThrowError('Object.hasOwn expects exactly 2 arguments', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 2, 'Object.hasOwn', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.hasOwn called on non-object', 0, 0);
@@ -223,8 +216,7 @@ var
   PropertyNames: TArray<string>;
   I: Integer;
 begin
-  if Args.Length <> 1 then
-    ThrowError('Object.getOwnPropertyNames expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.getOwnPropertyNames', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.getOwnPropertyNames called on non-object', 0, 0);
@@ -246,8 +238,7 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   PropertyName: string;
 begin
-  if Args.Length <> 2 then
-    ThrowError('Object.getOwnPropertyDescriptor expects exactly 2 arguments', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 2, 'Object.getOwnPropertyDescriptor', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.getOwnPropertyDescriptor called on non-object', 0, 0);
@@ -302,8 +293,7 @@ var
   Setter: TGocciaValue;
   PropertyFlags: TPropertyFlags;
 begin
-  if Args.Length <> 3 then
-    ThrowError('Object.defineProperty expects exactly 3 arguments', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 3, 'Object.defineProperty', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.defineProperty called on non-object', 0, 0);
@@ -384,8 +374,7 @@ var
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
-  if Args.Length <> 2 then
-    ThrowError('Object.defineProperties expects exactly 2 arguments', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 2, 'Object.defineProperties', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.defineProperties called on non-object', 0, 0);
