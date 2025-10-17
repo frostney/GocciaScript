@@ -20,14 +20,31 @@ implementation
 uses Goccia.Values.ClassHelper;
 
 function EvaluateAddition(Left, Right: TGocciaValue): TGocciaValue;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
   if (Left is TGocciaStringLiteralValue) or (Right is TGocciaStringLiteralValue) then
     Result := TGocciaStringLiteralValue.Create(Left.ToStringLiteral.Value + Right.ToStringLiteral.Value)
   else if (Left is TGocciaNumberLiteralValue) and (Right is TGocciaNumberLiteralValue) then
-    Result := TGocciaNumberLiteralValue.Create(
-      TGocciaNumberLiteralValue(Left).Value + TGocciaNumberLiteralValue(Right).Value)
+  begin
+    LeftNum := TGocciaNumberLiteralValue(Left);
+    RightNum := TGocciaNumberLiteralValue(Right);
+    // Preserve NaN if either operand is NaN
+    if LeftNum.IsNaN or RightNum.IsNaN then
+      Result := TGocciaNumberLiteralValue.NaNValue
+    else
+      Result := TGocciaNumberLiteralValue.Create(LeftNum.Value + RightNum.Value);
+  end
   else if (Left is TGocciaNumberLiteralValue) or (Right is TGocciaNumberLiteralValue) then
-    Result := TGocciaNumberLiteralValue.Create(Left.ToNumberLiteral.Value + Right.ToNumberLiteral.Value)
+  begin
+    LeftNum := Left.ToNumberLiteral;
+    RightNum := Right.ToNumberLiteral;
+    // Preserve NaN if either operand is NaN
+    if LeftNum.IsNaN or RightNum.IsNaN then
+      Result := TGocciaNumberLiteralValue.NaNValue
+    else
+      Result := TGocciaNumberLiteralValue.Create(LeftNum.Value + RightNum.Value);
+  end
   else
     Result := TGocciaStringLiteralValue.Create(Left.ToStringLiteral.Value + Right.ToStringLiteral.Value);
 end;
@@ -77,12 +94,7 @@ function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator
 begin
   case Operator of
     gttPlusAssign:
-      begin
-        if (CurrentValue is TGocciaStringLiteralValue) or (NewValue is TGocciaStringLiteralValue) then
-          Result := TGocciaStringLiteralValue.Create(CurrentValue.ToStringLiteral.Value + NewValue.ToStringLiteral.Value)
-        else
-          Result := TGocciaNumberLiteralValue.Create(CurrentValue.ToNumberLiteral.Value + NewValue.ToNumberLiteral.Value);
-      end;
+      Result := EvaluateAddition(CurrentValue, NewValue);
     gttMinusAssign:
       Result := TGocciaNumberLiteralValue.Create(CurrentValue.ToNumberLiteral.Value - NewValue.ToNumberLiteral.Value);
     gttStarAssign:

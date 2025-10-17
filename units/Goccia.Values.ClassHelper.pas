@@ -658,7 +658,20 @@ implementation
   function TGocciaValueHelper.IsLessThanOrEqual(Other: TGocciaValue): TGocciaBooleanLiteralValue;
   var
     LessResult, EqualResult: TGocciaBooleanLiteralValue;
+    LeftNum, RightNum: TGocciaNumberLiteralValue;
   begin
+    // For numeric comparisons, check NaN first
+    if (Self is TGocciaNumberLiteralValue) and (Other is TGocciaNumberLiteralValue) then
+    begin
+      LeftNum := TGocciaNumberLiteralValue(Self);
+      RightNum := TGocciaNumberLiteralValue(Other);
+      if LeftNum.IsNaN or RightNum.IsNaN then
+      begin
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+        Exit;
+      end;
+    end;
+    
     LessResult := IsLessThan(Other);
     EqualResult := IsEqual(Other);
     Result := TGocciaBooleanLiteralValue.Create(LessResult.Value or EqualResult.Value);
@@ -667,7 +680,20 @@ implementation
   function TGocciaValueHelper.IsGreaterThanOrEqual(Other: TGocciaValue): TGocciaBooleanLiteralValue;
   var
     GreaterResult, EqualResult: TGocciaBooleanLiteralValue;
+    LeftNum, RightNum: TGocciaNumberLiteralValue;
   begin
+    // For numeric comparisons, check NaN first
+    if (Self is TGocciaNumberLiteralValue) and (Other is TGocciaNumberLiteralValue) then
+    begin
+      LeftNum := TGocciaNumberLiteralValue(Self);
+      RightNum := TGocciaNumberLiteralValue(Other);
+      if LeftNum.IsNaN or RightNum.IsNaN then
+      begin
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+        Exit;
+      end;
+    end;
+    
     GreaterResult := IsGreaterThan(Other);
     EqualResult := IsEqual(Other);
     Result := TGocciaBooleanLiteralValue.Create(GreaterResult.Value or EqualResult.Value);

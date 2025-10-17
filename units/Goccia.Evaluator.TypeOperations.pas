@@ -23,7 +23,7 @@ uses Goccia.Values.ClassHelper;
 function EvaluateTypeof(Operand: TGocciaValue): TGocciaValue;
 begin
   Logger.Debug('EvaluateTypeof: typeof operator called with operand: %s', [Operand.ToStringLiteral.Value]);
-  Result := TGocciaStringLiteralValue.Create(Operand.TypeName);
+  Result := TGocciaStringLiteralValue.Create(Operand.TypeOf);
 end;
 
 function EvaluateInstanceof(Left, Right: TGocciaValue; IsObjectInstanceOfClass: TIsObjectInstanceOfClassFunction): TGocciaValue;
