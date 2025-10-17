@@ -611,6 +611,14 @@ implementation
 
       if (LeftNum.IsNaN or RightNum.IsNaN) then
         Result := TGocciaBooleanLiteralValue.FalseValue
+      else if LeftNum.IsInfinity then
+        Result := TGocciaBooleanLiteralValue.FalseValue  // +Infinity is not less than anything
+      else if LeftNum.IsNegativeInfinity then
+        Result := TGocciaBooleanLiteralValue.Create(not (RightNum.IsNegativeInfinity))  // -Infinity < anything except -Infinity
+      else if RightNum.IsInfinity then
+        Result := TGocciaBooleanLiteralValue.TrueValue  // Anything < +Infinity
+      else if RightNum.IsNegativeInfinity then
+        Result := TGocciaBooleanLiteralValue.FalseValue  // Nothing < -Infinity
       else
         Result := TGocciaBooleanLiteralValue.Create(LeftNum.Value < RightNum.Value);
     end;
@@ -634,6 +642,14 @@ implementation
 
       if (LeftNum.IsNaN or RightNum.IsNaN) then
         Result := TGocciaBooleanLiteralValue.FalseValue
+      else if LeftNum.IsInfinity then
+        Result := TGocciaBooleanLiteralValue.Create(not (RightNum.IsInfinity))  // +Infinity > anything except +Infinity
+      else if LeftNum.IsNegativeInfinity then
+        Result := TGocciaBooleanLiteralValue.FalseValue  // -Infinity is not greater than anything
+      else if RightNum.IsInfinity then
+        Result := TGocciaBooleanLiteralValue.FalseValue  // Nothing > +Infinity
+      else if RightNum.IsNegativeInfinity then
+        Result := TGocciaBooleanLiteralValue.TrueValue  // Anything > -Infinity
       else
         Result := TGocciaBooleanLiteralValue.Create(LeftNum.Value > RightNum.Value);
     end;
