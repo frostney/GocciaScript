@@ -286,6 +286,13 @@ end;
 
 function TGocciaClassValue.GetProperty(const AName: string): TGocciaValue;
 begin
+  // TODO: This is a hack to get the prototype of the class - We need to introduce static properties
+  if AName = 'prototype' then
+  begin
+    Result := FPrototype;
+    Exit;
+  end;
+
   if FStaticMethods.TryGetValue(AName, Result) then
     Exit;
 
