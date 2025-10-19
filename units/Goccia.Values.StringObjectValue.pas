@@ -115,7 +115,11 @@ begin
   end;
 
   // Look up in prototype chain
-  Result := inherited GetProperty(AName);
+  // First check prototype's own properties with this object as context
+  if Assigned(FPrototype) then
+    Result := FPrototype.GetPropertyWithContext(AName, Self)
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 procedure TGocciaStringObjectValue.InitializePrototype;
