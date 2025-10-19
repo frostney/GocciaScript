@@ -206,18 +206,7 @@ begin
   if FInterpreter.GlobalScope.Contains('Number') then
     ExistingNumber := FInterpreter.GlobalScope.GetValue('Number');
 
-  // Create Array constructor and copy static methods
-  ArrayConstructor := TGocciaClassValue.Create('Array', nil);
-  if (ExistingArray is TGocciaObjectValue) then
-  begin
-    ArrayObj := TGocciaObjectValue(ExistingArray);
-    // Copy all static methods from existing Array object using property descriptors
-    for Key in ArrayObj.GetAllPropertyNames do
-      ArrayConstructor.SetProperty(Key, ArrayObj.GetProperty(Key));
-  end;
-  FInterpreter.GlobalScope.DefineLexicalBinding('Array', ArrayConstructor, dtUnknown);
-
-  // Create Object constructor and copy static methods
+  // Create Object constructor first (must be first since it's the root of the prototype chain)
   ObjectConstructor := TGocciaClassValue.Create('Object', nil);
   if (ExistingObject is TGocciaObjectValue) then
   begin
@@ -227,6 +216,19 @@ begin
       ObjectConstructor.SetProperty(Key, ObjectObj.GetProperty(Key));
   end;
   FInterpreter.GlobalScope.DefineLexicalBinding('Object', ObjectConstructor, dtUnknown);
+
+  // Create Array constructor and copy static methods
+  ArrayConstructor := TGocciaClassValue.Create('Array', nil);
+  // Connect Array.prototype.prototype to Object.prototype
+  ArrayConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+  if (ExistingArray is TGocciaObjectValue) then
+  begin
+    ArrayObj := TGocciaObjectValue(ExistingArray);
+    // Copy all static methods from existing Array object using property descriptors
+    for Key in ArrayObj.GetAllPropertyNames do
+      ArrayConstructor.SetProperty(Key, ArrayObj.GetProperty(Key));
+  end;
+  FInterpreter.GlobalScope.DefineLexicalBinding('Array', ArrayConstructor, dtUnknown);
 
   // Create other constructors
   StringConstructor := TGocciaClassValue.Create('String', nil);
