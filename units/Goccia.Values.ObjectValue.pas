@@ -214,7 +214,6 @@ begin
       end;
       // Accessor descriptor without setter - property is not writable
       // In strict mode (which GocciaScript always is), throw TypeError
-      // Create a TypeError instance instead of just a string
       ErrorValue := TGocciaObjectValue.Create;
       TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
       TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringLiteralValue.Create('Cannot set property ''' + AName + ''' which has only a getter'));
@@ -231,7 +230,6 @@ begin
         Exit;
       end;
       // Property is not writable - throw TypeError (strict mode behavior)
-      // Create a TypeError instance instead of just a string
       ErrorValue := TGocciaObjectValue.Create;
       TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
       TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringLiteralValue.Create('Cannot assign to read only property ''' + AName + ''''));
@@ -264,7 +262,6 @@ begin
     if not ExistingDescriptor.Configurable then
     begin
       // Non-configurable properties cannot be redefined
-      // Create a TypeError instance instead of just a string
       ErrorValue := TGocciaObjectValue.Create;
       TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
       TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringLiteralValue.Create('Cannot redefine non-configurable property ''' + AName + ''''));

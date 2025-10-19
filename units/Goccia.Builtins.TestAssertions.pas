@@ -778,6 +778,7 @@ var
   ErrorConstructor: TGocciaValue;
   ConstructorName: string;
   ErrorName: string;
+  ErrorClassArg: TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
@@ -785,7 +786,14 @@ begin
   if Args.Length > 0 then
   begin
     // If args are provided, expect a specific error type
-    ExpectedErrorType := Args.GetElement(0).ToStringLiteral.Value;
+    ErrorClassArg := Args.GetElement(0);
+    // If it's a class, get its name; otherwise use string representation
+    if ErrorClassArg is TGocciaClassValue then
+      ExpectedErrorType := TGocciaClassValue(ErrorClassArg).Name
+    else if ErrorClassArg is TGocciaNativeFunctionValue then
+      ExpectedErrorType := TGocciaNativeFunctionValue(ErrorClassArg).Name
+    else
+      ExpectedErrorType := ErrorClassArg.ToStringLiteral.Value;
   end;
 
   if not (FActualValue is TGocciaFunctionValue) then
@@ -838,9 +846,9 @@ begin
           if ThrownObj.HasProperty('name') then
           begin
             ErrorName := ThrownObj.GetProperty('name').ToStringLiteral.Value;
-            // Match "TypeError" in "[NativeFunction: TypeError]"
-            if (Pos(ErrorName, ExpectedErrorType) > 0) or
-               (Pos(LowerCase(ErrorName), LowerCase(ExpectedErrorType)) > 0) then
+            // Direct comparison: "TypeError" == "TypeError"
+            if (ErrorName = ExpectedErrorType) or
+               (LowerCase(ErrorName) = LowerCase(ExpectedErrorType)) then
             begin
               TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
               Exit;
