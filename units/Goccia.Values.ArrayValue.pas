@@ -50,7 +50,7 @@ type
 
     function ToStringTag: string; override;
 
-    function ToStringLiteral: TGocciaStringLiteralValue;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToNumberLiteral: TGocciaNumberLiteralValue;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue;
 
@@ -789,6 +789,13 @@ var
   S: string;
 begin
   // ECMAScript compliant: Array.toString() behaves like Array.join() with comma separator
+  // Empty array converts to empty string
+  if FElements.Count = 0 then
+  begin
+    Result := TGocciaStringLiteralValue.Create('');
+    Exit;
+  end;
+
   S := '';
   for I := 0 to FElements.Count - 1 do
   begin
