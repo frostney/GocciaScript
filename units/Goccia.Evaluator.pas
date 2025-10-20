@@ -1893,6 +1893,7 @@ function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGo
 var
   Callee: TGocciaValue;
   Arguments: TGocciaArgumentsCollection;
+  ErrorObj: TGocciaObjectValue;
   I: Integer;
   Instance: TGocciaInstanceValue;
   ClassValue: TGocciaClassValue;
@@ -1939,7 +1940,13 @@ begin
       Result := Instance;
     end
     else
-      Context.OnError(Format('Cannot instantiate non-class value: %s', [Callee.TypeName]), NewExpression.Line, NewExpression.Column);
+    begin
+      // Throw proper TypeError for non-constructors
+      ErrorObj := TGocciaObjectValue.Create;
+      ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
+      ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Callee.TypeName + ' is not a constructor'));
+      raise TGocciaThrowValue.Create(ErrorObj);
+    end;
   finally
     Arguments.Free;
   end;

@@ -22,9 +22,11 @@ function PerformIncrement(OldValue: TGocciaValue; IsIncrement: Boolean): TGoccia
 
 implementation
 
-uses Goccia.Values.ClassHelper;
+uses Goccia.Values.ClassHelper, Goccia.Values.Error;
 
 procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
+var
+  ErrorObj: TGocciaObjectValue;
 begin
   // Handle different object types for property assignment
   // Direct property assignment (obj.prop = value) should call the object's AssignProperty method
@@ -43,10 +45,18 @@ begin
     TGocciaClassValue(Obj).SetProperty(PropertyName, Value);
   end
   else if Assigned(OnError) then
-    OnError('Cannot set property on non-object', Line, Column);
+  begin
+    // Throw proper TypeError when trying to set property on non-object
+    ErrorObj := TGocciaObjectValue.Create;
+    ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
+    ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create('Cannot set property on non-object'));
+    raise TGocciaThrowValue.Create(ErrorObj);
+  end;
 end;
 
 procedure AssignComputedProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
+var
+  ErrorObj: TGocciaObjectValue;
 begin
   // Handle different object types for computed property assignment
   if (Obj is TGocciaArrayValue) then
@@ -66,7 +76,13 @@ begin
     TGocciaClassValue(Obj).SetProperty(PropertyName, Value);
   end
   else if Assigned(OnError) then
-    OnError('Cannot set property on non-object', Line, Column);
+  begin
+    // Throw proper TypeError when trying to set property on non-object
+    ErrorObj := TGocciaObjectValue.Create;
+    ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
+    ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create('Cannot set property on non-object'));
+    raise TGocciaThrowValue.Create(ErrorObj);
+  end;
 end;
 
 procedure PerformPropertyCompoundAssignment(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; Operator: TGocciaTokenType; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
