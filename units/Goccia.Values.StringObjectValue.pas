@@ -168,6 +168,7 @@ var
   Index: Integer;
   NumberValue: Double;
   TempNumberValue: TGocciaNumberLiteralValue;
+  Arg: TGocciaValue;
 begin
   // Get the string value
   StringValue := ExtractStringValue(ThisValue);
@@ -176,24 +177,27 @@ begin
   if Args.Length > 0 then
   begin
     try
+      Arg := Args.GetElement(0);
+      
       // Handle special values according to ECMAScript spec:
+      // - undefined/null convert to 0
       // - NaN converts to 0
       // - Infinity/-Infinity are treated as out-of-bounds (use very large number)
-      if (Args.GetElement(0) is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(Args.GetElement(0)).IsNaN then
+      if (Arg is TGocciaUndefinedLiteralValue) or (Arg is TGocciaNullLiteralValue) then
         Index := 0
+      else if (Arg is TGocciaNumberLiteralValue) then
+      begin
+        if TGocciaNumberLiteralValue(Arg).IsNaN then
+          Index := 0
+        else if TGocciaNumberLiteralValue(Arg).IsInfinity or TGocciaNumberLiteralValue(Arg).IsNegativeInfinity then
+          Index := MaxInt // Force out-of-bounds
+        else
+          Index := Trunc(TGocciaNumberLiteralValue(Arg).Value);
+      end
       else
       begin
-        NumberValue := Args.GetElement(0).ToNumberLiteral.Value;
-        // Check for infinity using TGocciaNumberLiteralValue properties
-        TempNumberValue := TGocciaNumberLiteralValue.Create(NumberValue);
-        try
-          if TempNumberValue.IsInfinity or TempNumberValue.IsNegativeInfinity then
-            Index := MaxInt // Force out-of-bounds
-          else
-            Index := Trunc(NumberValue);
-        finally
-          TempNumberValue.Free;
-        end;
+        NumberValue := Arg.ToNumberLiteral.Value;
+        Index := Trunc(NumberValue);
       end;
     except
       Index := 0; // Default to 0 if conversion fails
@@ -215,6 +219,7 @@ var
   Index: Integer;
   NumberValue: Double;
   TempNumberValue: TGocciaNumberLiteralValue;
+  Arg: TGocciaValue;
 begin
   // Get the string value
   StringValue := ExtractStringValue(ThisValue);
@@ -223,24 +228,27 @@ begin
   if Args.Length > 0 then
   begin
     try
+      Arg := Args.GetElement(0);
+      
       // Handle special values according to ECMAScript spec:
+      // - undefined/null convert to 0
       // - NaN converts to 0
       // - Infinity/-Infinity are treated as out-of-bounds (use very large number)
-      if (Args.GetElement(0) is TGocciaNumberLiteralValue) and TGocciaNumberLiteralValue(Args.GetElement(0)).IsNaN then
+      if (Arg is TGocciaUndefinedLiteralValue) or (Arg is TGocciaNullLiteralValue) then
         Index := 0
+      else if (Arg is TGocciaNumberLiteralValue) then
+      begin
+        if TGocciaNumberLiteralValue(Arg).IsNaN then
+          Index := 0
+        else if TGocciaNumberLiteralValue(Arg).IsInfinity or TGocciaNumberLiteralValue(Arg).IsNegativeInfinity then
+          Index := MaxInt // Force out-of-bounds
+        else
+          Index := Trunc(TGocciaNumberLiteralValue(Arg).Value);
+      end
       else
       begin
-        NumberValue := Args.GetElement(0).ToNumberLiteral.Value;
-        // Check for infinity using TGocciaNumberLiteralValue properties
-        TempNumberValue := TGocciaNumberLiteralValue.Create(NumberValue);
-        try
-          if TempNumberValue.IsInfinity or TempNumberValue.IsNegativeInfinity then
-            Index := MaxInt // Force out-of-bounds
-          else
-            Index := Trunc(NumberValue);
-        finally
-          TempNumberValue.Free;
-        end;
+        NumberValue := Arg.ToNumberLiteral.Value;
+        Index := Trunc(NumberValue);
       end;
     except
       Index := 0; // Default to 0 if conversion fails
