@@ -59,30 +59,23 @@ test("object property enumeration and inspection", () => {
   expect(Object.hasOwn(obj, "d")).toBe(false);
 });
 
-test("object creation with constructors and prototypes", () => {
-  const Person = (name, age) => {
-    this.name = name;
-    this.age = age;
-  };
+// TODO: We don't have a test to support creating objects with prototypes because we only support arrow functions.
+test("object creation with arrow function should throw a type error", () => {
+  expect(() => {
+    const Person = (name, age) => {
+      this.name = name;
+      this.age = age;
+    };
 
-  Person.prototype.greet = () => {
-    return `Hello, I'm ${this.name}`;
-  };
+    Person.prototype.greet = () => {
+      return `Hello, I'm ${this.name}`;
+    };
 
-  Person.prototype.getAge = () => {
-    return this.age;
-  };
+    Person.prototype.getAge = () => {
+      return this.age;
+    };
 
-  const person1 = new Person("Alice", 30);
-  const person2 = new Person("Bob", 25);
-
-  expect(person1.name).toBe("Alice");
-  expect(person1.age).toBe(30);
-  expect(person1.greet()).toBe("Hello, I'm Alice");
-  expect(person1.getAge()).toBe(30);
-
-  expect(person2.name).toBe("Bob");
-  expect(person2.age).toBe(25);
-  expect(person2.greet()).toBe("Hello, I'm Bob");
-  expect(person2.getAge()).toBe(25);
+    const person1 = new Person("Alice", 30);
+    const person2 = new Person("Bob", 25);
+  }).toThrow(TypeError);
 });
