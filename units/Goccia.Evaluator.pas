@@ -718,6 +718,7 @@ var
   MemberExpr: TGocciaMemberExpression;
   SpreadValue: TGocciaValue;
   SpreadArray: TGocciaArrayValue;
+  ErrorObj: TGocciaObjectValue;
   I: Integer;
 begin
   Logger.Debug('EvaluateCall: Start');
@@ -816,10 +817,13 @@ begin
           for I := 1 to Length(SpreadValue.ToStringLiteral.Value) do
             Arguments.Add(TGocciaStringLiteralValue.Create(SpreadValue.ToStringLiteral.Value[I]));
         end
-        else if not ((SpreadValue is TGocciaNullLiteralValue) or (SpreadValue is TGocciaUndefinedLiteralValue)) then
+        else
         begin
-          Context.OnError('Spread syntax requires an iterable', ArgumentExpr.Line, ArgumentExpr.Column);
-          // If OnError doesn't throw, continue execution (but the spread will be ignored)
+          // Throw TypeError for non-iterables (null, undefined, numbers, booleans, objects)
+          ErrorObj := TGocciaObjectValue.Create;
+          ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
+          ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create('Spread syntax requires an iterable'));
+          raise TGocciaThrowValue.Create(ErrorObj);
         end;
         // null and undefined are ignored in spread context
       end
@@ -1133,6 +1137,7 @@ var
   SpreadValue: TGocciaValue;
   SpreadArray: TGocciaArrayValue;
   SpreadObj: TGocciaObjectValue;
+  ErrorObj: TGocciaObjectValue;
   PropName: string;
 begin
   Arr := TGocciaArrayValue.Create;
@@ -1169,14 +1174,28 @@ begin
       end
       else if (SpreadValue is TGocciaObjectValue) then
       begin
-        // For objects, we would need iterator support - for now just ignore
-        // This is complex and would need proper iterator protocol implementation
+        // For objects, we would need iterator support - for now throw TypeError
+        ErrorObj := TGocciaObjectValue.Create;
+        ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
+        ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create('Spread syntax requires an iterable'));
+        raise TGocciaThrowValue.Create(ErrorObj);
       end
-      else if not ((SpreadValue is TGocciaNullLiteralValue) or (SpreadValue is TGocciaUndefinedLiteralValue)) then
+      else if (SpreadValue is TGocciaNullLiteralValue) or (SpreadValue is TGocciaUndefinedLiteralValue) then
       begin
-        Context.OnError('Spread syntax requires an iterable', ArrayExpression.Elements[I].Line, ArrayExpression.Elements[I].Column);
+        // Throw TypeError for null and undefined in array spread
+        ErrorObj := TGocciaObjectValue.Create;
+        ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
+        ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create('Spread syntax requires an iterable'));
+        raise TGocciaThrowValue.Create(ErrorObj);
+      end
+      else
+      begin
+        // Other primitives (numbers, booleans) also throw
+        ErrorObj := TGocciaObjectValue.Create;
+        ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
+        ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create('Spread syntax requires an iterable'));
+        raise TGocciaThrowValue.Create(ErrorObj);
       end;
-      // null and undefined are ignored in spread context
     end
     else
     begin
