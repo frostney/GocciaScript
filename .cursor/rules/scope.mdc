@@ -1,6 +1,0 @@
----
-description: 
-globs: 
-alwaysApply: true
----
-`TGocciaScope` should not be instantiated directly and maaged manually. Use `CreateChild` instead.

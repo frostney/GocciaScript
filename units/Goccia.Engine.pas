@@ -230,11 +230,11 @@ begin
   end;
   FInterpreter.GlobalScope.DefineLexicalBinding('Array', ArrayConstructor, dtUnknown);
 
-  // Create other constructors
-  StringConstructor := TGocciaClassValue.Create('String', nil);
+  // Create other constructors - use specialized subclasses for primitives
+  StringConstructor := TGocciaStringClassValue.Create('String', nil);
   FInterpreter.GlobalScope.DefineLexicalBinding('String', StringConstructor, dtUnknown);
 
-  NumberConstructor := TGocciaClassValue.Create('Number', nil);
+  NumberConstructor := TGocciaNumberClassValue.Create('Number', nil);
   if (ExistingNumber is TGocciaObjectValue) then
   begin
     NumberObj := TGocciaObjectValue(ExistingNumber);
@@ -244,7 +244,7 @@ begin
   end;
   FInterpreter.GlobalScope.DefineLexicalBinding('Number', NumberConstructor, dtUnknown);
 
-  BooleanConstructor := TGocciaClassValue.Create('Boolean', nil);
+  BooleanConstructor := TGocciaBooleanClassValue.Create('Boolean', nil);
   FInterpreter.GlobalScope.DefineLexicalBinding('Boolean', BooleanConstructor, dtUnknown);
 
   // Create Function constructor

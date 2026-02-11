@@ -719,6 +719,7 @@ var
   SpreadValue: TGocciaValue;
   SpreadArray: TGocciaArrayValue;
   ErrorObj: TGocciaObjectValue;
+  CallableIntf: IGocciaCallable;
   I: Integer;
 begin
   Logger.Debug('EvaluateCall: Start');
@@ -844,8 +845,8 @@ begin
     // else
     if Callee is TGocciaBoundFunctionValue then
       Result := TGocciaBoundFunctionValue(Callee).Call(Arguments, ThisValue)
-    else if Callee is IGocciaCallable then
-      Result := (Callee as IGocciaCallable).Call(Arguments, ThisValue)
+    else if Supports(Callee, IGocciaCallable, CallableIntf) then
+      Result := CallableIntf.Call(Arguments, ThisValue)
     else
     begin
       SafeOnError(Context, Format('%s is not a function', [Callee.TypeName]), CallExpression.Line, CallExpression.Column);

@@ -6,14 +6,15 @@ interface
 
 uses
   Goccia.Builtins.Base, Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Values.Error, Goccia.Values.ObjectValue, 
-  Goccia.Values.Primitives, Goccia.Arguments.Collection, Goccia.Arguments.Validator, SysUtils, Math, Generics.Collections;
+  Goccia.Values.Primitives, Goccia.Arguments.Collection, Goccia.Arguments.Validator, Goccia.Values.ClassValue, SysUtils, Math, Generics.Collections;
 
 type
   TGocciaGlobalNumber = class(TGocciaBuiltin)
   private
-    FBuiltinNumber: TGocciaObjectValue;
+    FBuiltinNumber: TGocciaNumberClassValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+    destructor Destroy; override;
 
     function NumberParseInt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function NumberParseFloat(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -33,7 +34,7 @@ constructor TGocciaGlobalNumber.Create(const AName: string; const AScope: TGocci
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FBuiltinNumber := TGocciaObjectValue.Create;
+  FBuiltinNumber := TGocciaNumberClassValue.Create('Number', nil);
 
   // Number constants
   FBuiltinNumber.DefineProperty('NaN', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.NaNValue, [pfEnumerable]));
@@ -45,6 +46,12 @@ begin
   FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsInteger, 'isInteger', 0));
 
   AScope.DefineBuiltin(AName, FBuiltinNumber);
+end;
+
+destructor TGocciaGlobalNumber.Destroy;
+begin
+  FBuiltinNumber.Free;
+  inherited;
 end;
 
 function TGocciaGlobalNumber.NumberParseInt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

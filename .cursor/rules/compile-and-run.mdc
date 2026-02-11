@@ -1,6 +1,0 @@
----
-description: 
-globs: 
-alwaysApply: true
----
-The command for compile and run is `./build.pas loader && ./build/ScriptLoader ./example.js`. The command to compile the TestRunner to run tests is `./build.pas testrunner && ./build/TestRunner [scriptname]`

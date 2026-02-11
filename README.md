@@ -1,6 +1,8 @@
 # GocciaScript
 
-A drop of JavaScript - A subset of ECMAScript 2020 implemented in FreePascal
+A drop of JavaScript — A subset of ECMAScript 2020 implemented in FreePascal.
+
+GocciaScript includes the parts of JavaScript that lead to clear, predictable, and secure code. Features that are error-prone, redundant, or security risks are intentionally excluded. See [Language Restrictions](docs/language-restrictions.md) for the full rationale.
 
 ## Features
 
@@ -8,21 +10,35 @@ A drop of JavaScript - A subset of ECMAScript 2020 implemented in FreePascal
 
 - **Variables**: `let` and `const` declarations (no `var`)
 - **Functions**: Arrow functions only (no `function` keyword)
-- **Loops**: No traditional loops - use array methods instead
-- **Equality**: Triple equals (`===`) only
-- **Strict Mode**: Implicit (no need to declare)
-- **No `eval`**: For security
-- **No `arguments`**: Simplified argument handling due to not having an ES3-like `function`
+- **Classes**: Full class support with private fields (`#field`), static methods, getters/setters, and inheritance
+- **Equality**: Strict equality only (`===` / `!==`)
+- **Strict Mode**: Implicit — all code runs in strict mode
+- **Template Literals**: String interpolation with `${expression}`
+- **Destructuring**: Array and object destructuring patterns
+- **Spread/Rest**: `...` operator for arrays, objects, and function parameters
+- **Modules**: ES6-style `import`/`export`
+- **No `eval`**: Excluded for security
+- **No `arguments`**: Use rest parameters (`...args`) instead
 
-### ES6+ specific features
+### ES6+ Features
 
-- Template strings
-- Object shorthands
+- Template strings with interpolation
+- Object shorthand properties and methods
+- Computed property names
+- Nullish coalescing (`??`)
+- Arrow function expressions
 
-### ECMAScript 2020+ native implementations
+### ECMAScript 2020+ Implementations
 
-- `Math.clamp`
+- `Math.clamp` (TC39 proposal)
 - Private fields and methods in classes
+- `Object.hasOwn`
+
+### Built-in Objects
+
+`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`).
+
+See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 
 ## Example
 
@@ -53,24 +69,100 @@ console.log(`Welcome to ${shop.name}!`);
 console.log(`Your order total: $${total.toFixed(2)}`);
 ```
 
-## How To Use
+## Getting Started
 
-### Pre-compiled binaries
+### Prerequisites
 
-### Integrate into host environment
+- [FreePascal](https://www.freepascal.org/) compiler (`fpc`)
+  - macOS: `brew install fpc`
+  - Ubuntu/Debian: `sudo apt-get install fpc`
+  - Windows: `choco install freepascal`
+
+### Build
+
+```bash
+# Build everything
+./build.pas
+
+# Build specific components
+./build.pas loader        # Script executor
+./build.pas repl          # Interactive REPL
+./build.pas testrunner    # Test runner
+```
+
+### Run a Script
+
+```bash
+./build.pas loader && ./build/ScriptLoader example.js
+```
+
+### Start the REPL
+
+```bash
+./build.pas repl && ./build/REPL
+```
+
+### Run Tests
+
+```bash
+# Run all tests
+./build.pas testrunner && ./build/TestRunner tests
+
+# Run a specific test
+./build.pas testrunner && ./build/TestRunner tests/language/expressions/addition/basic-addition.js
+```
+
+## Architecture
+
+GocciaScript follows a classic interpreter pipeline:
+
+```
+Source Code → Lexer → Parser → Interpreter → Evaluator → Result
+```
+
+| Component | File | Role |
+|-----------|------|------|
+| Engine | `Goccia.Engine.pas` | Top-level orchestration, built-in registration |
+| Lexer | `Goccia.Lexer.pas` | Tokenization |
+| Parser | `Goccia.Parser.pas` | Recursive descent AST construction |
+| Interpreter | `Goccia.Interpreter.pas` | Execution orchestration, module loading |
+| Evaluator | `Goccia.Evaluator.pas` | Pure-function AST evaluation |
+
+See [Architecture](docs/architecture.md) for the full deep-dive.
+
+## Design Principles
+
+- **Explicitness**: Modules, classes, methods, and properties use explicit, descriptive names even at the cost of verbosity. Shortcuts are avoided.
+- **OOP over everything**: Rely on type safety of specialized classes rather than generic data structures.
+- **Define vs Assign**: `Define` creates a new variable binding; `Assign` changes an existing one. These are distinct operations throughout the codebase.
+- **Pure evaluation**: The evaluator is composed of pure functions with no side effects.
+- **Interface segregation**: Value capabilities are expressed through focused interfaces (`IPropertyMethods`, `IIndexMethods`, `IFunctionMethods`).
+
+See [Design Decisions](docs/design-decisions.md) for the complete rationale.
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Architecture](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
+| [Design Decisions](docs/design-decisions.md) | Rationale behind key technical choices |
+| [Code Style](docs/code-style.md) | Naming conventions, patterns, file organization |
+| [Value System](docs/value-system.md) | Type hierarchy, interfaces, primitives, objects |
+| [Built-in Objects](docs/built-ins.md) | Available built-ins, API reference, adding new ones |
+| [Testing](docs/testing.md) | Test organization, writing tests, running tests |
+| [Build System](docs/build-system.md) | Build commands, compiler configuration, CI/CD |
+| [Language Restrictions](docs/language-restrictions.md) | Supported and excluded features with rationale |
+| [AGENTS.md](AGENTS.md) | Instructions for AI coding assistants |
 
 ## Roadmap
 
-- [ ] Module system
-- [ ] HMR
+- [ ] Async/await and Promises
+- [ ] Regular expressions
+- [ ] Generators and iterators
+- [ ] Performance benchmarks
+- [ ] Pre-compiled binary releases
+- [ ] Host environment embedding API
 
-### Ideas to evaluate
+## License
 
-- Performance tests
--
-
-## Concepts
-
-- Explicitness: Modules, classes, methods and properties are exlicit even at the cost long names. Shortcuts are typically avoided.
-- OOP over everything: Rely on type safety of specialised classes
-- `Define` vs `Assign`: Explicitly defines a variable, assign re-assigns the value
+See [LICENSE](LICENSE) for details.

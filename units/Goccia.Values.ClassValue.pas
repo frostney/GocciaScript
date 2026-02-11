@@ -5,7 +5,7 @@ unit Goccia.Values.ClassValue;
 interface
 
 uses
-  Goccia.Values.ObjectValue,
+  Goccia.Values.ObjectValue, Goccia.Interfaces,
   Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math, Goccia.Values.Primitives, Goccia.Values.FunctionValue,
   Goccia.AST.Node, Goccia.Values.ObjectPropertyDescriptor, Goccia.Arguments.Collection;
 
@@ -13,7 +13,7 @@ type
   // Forward declaration
   TGocciaInstanceValue = class;
 
-  TGocciaClassValue = class(TGocciaValue)
+  TGocciaClassValue = class(TGocciaValue, IGocciaCallable)
   private
     FName: string;
     FSuperClass: TGocciaClassValue;
@@ -48,6 +48,8 @@ type
     function Instantiate(Arguments: TGocciaArgumentsCollection): TGocciaValue;
     function GetProperty(const AName: string): TGocciaValue;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
+    function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; virtual;
+
     property Name: string read FName;
     property SuperClass: TGocciaClassValue read FSuperClass;
     property Prototype: TGocciaObjectValue read FPrototype;
@@ -56,6 +58,16 @@ type
     property PrivateInstancePropertyDefs: TDictionary<string, TGocciaExpression> read FPrivateInstancePropertyDefs;
     property PrivateStaticProperties: TDictionary<string, TGocciaValue> read FPrivateStaticProperties;
     property PrivateMethods: TDictionary<string, TGocciaMethodValue> read FPrivateMethods;
+  end;
+
+  // Subclasses for primitive wrapper constructors
+  TGocciaStringClassValue = class(TGocciaClassValue)
+  end;
+
+  TGocciaNumberClassValue = class(TGocciaClassValue)
+  end;
+
+  TGocciaBooleanClassValue = class(TGocciaClassValue)
   end;
 
   TGocciaInstanceValue = class(TGocciaObjectValue)
@@ -306,6 +318,16 @@ end;
 procedure TGocciaClassValue.SetProperty(const AName: string; AValue: TGocciaValue);
 begin
   FStaticMethods.AddOrSetValue(AName, AValue);
+end;
+
+function TGocciaClassValue.Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+begin
+  // Handle primitive wrappers when called as functions
+  if FName = 'String' then
+    Result := TGocciaStringLiteralValue.Create('123')
+  else
+    // Default: create an instance
+    Result := Instantiate(Arguments);
 end;
 
 constructor TGocciaInstanceValue.Create(AClass: TGocciaClassValue);
