@@ -6,15 +6,12 @@ interface
 
 uses
   Goccia.Builtins.Base, Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Values.Error, Goccia.Values.ObjectValue, 
-  Goccia.Values.Primitives, Goccia.Arguments.Collection, Goccia.Arguments.Validator, Goccia.Values.ClassValue, SysUtils, Math, Generics.Collections;
+  Goccia.Values.Primitives, Goccia.Arguments.Collection, Goccia.Arguments.Validator, SysUtils, Math, Generics.Collections;
 
 type
   TGocciaGlobalNumber = class(TGocciaBuiltin)
-  private
-    FBuiltinNumber: TGocciaNumberClassValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
-    destructor Destroy; override;
 
     function NumberParseInt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function NumberParseFloat(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -34,24 +31,16 @@ constructor TGocciaGlobalNumber.Create(const AName: string; const AScope: TGocci
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FBuiltinNumber := TGocciaNumberClassValue.Create('Number', nil);
-
   // Number constants
-  FBuiltinNumber.DefineProperty('NaN', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.NaNValue, [pfEnumerable]));
+  FBuiltinObject.DefineProperty('NaN', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.NaNValue, [pfEnumerable]));
 
-  FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseInt, 'parseInt', 1));
-  FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseFloat, 'parseFloat', 1));
-  FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsFinite, 'isFinite', 0));
-  FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsNaN, 'isNaN', 0));
-  FBuiltinNumber.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsInteger, 'isInteger', 0));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseInt, 'parseInt', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseFloat, 'parseFloat', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsFinite, 'isFinite', 0));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsNaN, 'isNaN', 0));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsInteger, 'isInteger', 0));
 
-  AScope.DefineBuiltin(AName, FBuiltinNumber);
-end;
-
-destructor TGocciaGlobalNumber.Destroy;
-begin
-  FBuiltinNumber.Free;
-  inherited;
+  AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
 
 function TGocciaGlobalNumber.NumberParseInt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
