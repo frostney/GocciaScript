@@ -18,6 +18,7 @@ type
     FSymbolDescriptors: TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
     FSymbolInsertionOrder: TList<TGocciaSymbolValue>;
     FPrototype: TGocciaObjectValue;
+    FFrozen: Boolean;
   public
     constructor Create(APrototype: TGocciaObjectValue = nil);
     destructor Destroy; override;
@@ -68,7 +69,12 @@ type
     function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
     function GetOwnSymbols: TArray<TGocciaSymbolValue>;
 
+    // Freeze support
+    procedure Freeze;
+    function IsFrozen: Boolean;
+
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
+    property Frozen: Boolean read FFrozen;
   end;
 
 
@@ -89,6 +95,7 @@ begin
   FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
 
   FPrototype := APrototype;
+  FFrozen := False;
 end;
 
 destructor TGocciaObjectValue.Destroy;
@@ -197,6 +204,15 @@ var
   Args: TGocciaArgumentsCollection;
   ErrorValue: TGocciaValue;
 begin
+  // Frozen objects cannot be modified
+  if FFrozen then
+  begin
+    ErrorValue := TGocciaObjectValue.Create;
+    TGocciaObjectValue(ErrorValue).AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
+    TGocciaObjectValue(ErrorValue).AssignProperty('message', TGocciaStringLiteralValue.Create('Cannot assign to read only property ''' + AName + ''' of frozen object'));
+    raise TGocciaThrowValue.Create(ErrorValue);
+  end;
+
   // First check for existing property descriptors
   if FPropertyDescriptors.ContainsKey(AName) then
   begin
@@ -740,6 +756,52 @@ begin
   for I := 0 to FSymbolInsertionOrder.Count - 1 do
     Symbols[I] := FSymbolInsertionOrder[I];
   Result := Symbols;
+end;
+
+procedure TGocciaObjectValue.Freeze;
+var
+  Key: string;
+  Descriptor: TGocciaPropertyDescriptor;
+  NewDescriptor: TGocciaPropertyDescriptor;
+begin
+  // Make all existing properties non-writable and non-configurable
+  for Key in FPropertyInsertionOrder do
+  begin
+    if FPropertyDescriptors.ContainsKey(Key) then
+    begin
+      Descriptor := FPropertyDescriptors[Key];
+      if Descriptor is TGocciaPropertyDescriptorData then
+      begin
+        // Recreate with only enumerable flag (no writable, no configurable)
+        if Descriptor.Enumerable then
+          NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, [pfEnumerable])
+        else
+          NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, []);
+        FPropertyDescriptors[Key] := NewDescriptor;
+      end
+      else if Descriptor is TGocciaPropertyDescriptorAccessor then
+      begin
+        // Accessor descriptors become non-configurable
+        if Descriptor.Enumerable then
+          NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
+            TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+            TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+            [pfEnumerable])
+        else
+          NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
+            TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+            TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+            []);
+        FPropertyDescriptors[Key] := NewDescriptor;
+      end;
+    end;
+  end;
+  FFrozen := True;
+end;
+
+function TGocciaObjectValue.IsFrozen: Boolean;
+begin
+  Result := FFrozen;
 end;
 
 end.

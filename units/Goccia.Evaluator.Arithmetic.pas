@@ -17,36 +17,32 @@ function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator
 
 implementation
 
-uses Goccia.Values.ClassHelper;
+uses Goccia.Values.ClassHelper, Goccia.Values.ToPrimitive;
 
 function EvaluateAddition(Left, Right: TGocciaValue): TGocciaValue;
 var
+  PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  if (Left is TGocciaStringLiteralValue) or (Right is TGocciaStringLiteralValue) then
-    Result := TGocciaStringLiteralValue.Create(Left.ToStringLiteral.Value + Right.ToStringLiteral.Value)
-  else if (Left is TGocciaNumberLiteralValue) and (Right is TGocciaNumberLiteralValue) then
+  // Step 1: Convert both operands to primitives (ECMAScript ToPrimitive)
+  PrimLeft := ToPrimitive(Left);
+  PrimRight := ToPrimitive(Right);
+
+  // Step 2: If either primitive is a string, concatenate
+  if (PrimLeft is TGocciaStringLiteralValue) or (PrimRight is TGocciaStringLiteralValue) then
   begin
-    LeftNum := TGocciaNumberLiteralValue(Left);
-    RightNum := TGocciaNumberLiteralValue(Right);
-    // Preserve NaN if either operand is NaN
-    if LeftNum.IsNaN or RightNum.IsNaN then
-      Result := TGocciaNumberLiteralValue.NaNValue
-    else
-      Result := TGocciaNumberLiteralValue.Create(LeftNum.Value + RightNum.Value);
-  end
-  else if (Left is TGocciaNumberLiteralValue) or (Right is TGocciaNumberLiteralValue) then
-  begin
-    LeftNum := Left.ToNumberLiteral;
-    RightNum := Right.ToNumberLiteral;
-    // Preserve NaN if either operand is NaN
-    if LeftNum.IsNaN or RightNum.IsNaN then
-      Result := TGocciaNumberLiteralValue.NaNValue
-    else
-      Result := TGocciaNumberLiteralValue.Create(LeftNum.Value + RightNum.Value);
-  end
+    Result := TGocciaStringLiteralValue.Create(PrimLeft.ToStringLiteral.Value + PrimRight.ToStringLiteral.Value);
+    Exit;
+  end;
+
+  // Step 3: Otherwise, convert both to numbers and add
+  LeftNum := PrimLeft.ToNumberLiteral;
+  RightNum := PrimRight.ToNumberLiteral;
+
+  if LeftNum.IsNaN or RightNum.IsNaN then
+    Result := TGocciaNumberLiteralValue.NaNValue
   else
-    Result := TGocciaStringLiteralValue.Create(Left.ToStringLiteral.Value + Right.ToStringLiteral.Value);
+    Result := TGocciaNumberLiteralValue.Create(LeftNum.Value + RightNum.Value);
 end;
 
 function EvaluateSubtraction(Left, Right: TGocciaValue): TGocciaValue;
@@ -80,9 +76,43 @@ begin
 end;
 
 function EvaluateModulo(Left, Right: TGocciaValue): TGocciaValue;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
+  LeftNum := Left.ToNumberLiteral;
+  RightNum := Right.ToNumberLiteral;
+
+  // NaN propagation
+  if LeftNum.IsNaN or RightNum.IsNaN then
+  begin
+    Result := TGocciaNumberLiteralValue.NaNValue;
+    Exit;
+  end;
+
+  // Division by zero produces NaN
+  if RightNum.Value = 0 then
+  begin
+    Result := TGocciaNumberLiteralValue.NaNValue;
+    Exit;
+  end;
+
+  // Infinity % anything = NaN
+  if LeftNum.IsInfinity or LeftNum.IsNegativeInfinity then
+  begin
+    Result := TGocciaNumberLiteralValue.NaNValue;
+    Exit;
+  end;
+
+  // anything % Infinity = anything
+  if RightNum.IsInfinity or RightNum.IsNegativeInfinity then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(LeftNum.Value);
+    Exit;
+  end;
+
+  // ECMAScript uses floating-point modulo (not integer)
   Result := TGocciaNumberLiteralValue.Create(
-    Trunc(Left.ToNumberLiteral.Value) mod Trunc(Right.ToNumberLiteral.Value));
+    LeftNum.Value - RightNum.Value * Trunc(LeftNum.Value / RightNum.Value));
 end;
 
 function EvaluateExponentiation(Left, Right: TGocciaValue): TGocciaValue;
@@ -114,8 +144,7 @@ begin
           Result := TGocciaNumberLiteralValue.Create(CurrentValue.ToNumberLiteral.Value / NewValue.ToNumberLiteral.Value);
       end;
     gttPercentAssign:
-      Result := TGocciaNumberLiteralValue.Create(
-        Trunc(CurrentValue.ToNumberLiteral.Value) mod Trunc(NewValue.ToNumberLiteral.Value));
+      Result := EvaluateModulo(CurrentValue, NewValue);
     gttPowerAssign:
       Result := TGocciaNumberLiteralValue.Create(Power(CurrentValue.ToNumberLiteral.Value, NewValue.ToNumberLiteral.Value));
     gttBitwiseAndAssign:

@@ -436,6 +436,10 @@ begin
 
       Value := EvaluateExpression(Decl.Variables[I].Initializer, Context);
 
+      // Name inference for anonymous functions: const add = (a, b) => a + b; => add.name === "add"
+      if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
+        TGocciaFunctionValue(Value).Name := Decl.Variables[I].Name;
+
       Logger.Debug('EvaluateStatement: Initializer result type: %s', [Value.ClassName]);
       Logger.Debug('EvaluateStatement: Initializer result value: %s', [Value.ToStringLiteral.Value]);
       Logger.Debug('EvaluateStatement: Is const: %s', [BoolToStr(Decl.IsConst, True)]);

@@ -27,11 +27,15 @@ type
   TGocciaFunctionBase = class(TGocciaObjectValue)
   private
     class var FSharedPrototype: TGocciaFunctionSharedPrototype;
+  protected
+    // Subclasses should override these to provide name/length
+    function GetFunctionLength: Integer; virtual;
+    function GetFunctionName: string; virtual;
   public
     constructor Create;
 
-    // Override GetProperty to provide call, apply, bind methods
-    function GetProperty(const AName: string): TGocciaValue;
+    // Override GetProperty to provide call, apply, bind methods and length/name
+    function GetProperty(const AName: string): TGocciaValue; override;
 
     // Abstract method that subclasses must implement
     function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; virtual;
@@ -47,6 +51,9 @@ type
     FOriginalFunction: TGocciaValue; // The function being bound
     FBoundThis: TGocciaValue; // The bound 'this' value
     FBoundArgs: TObjectList<TGocciaValue>; // Pre-filled arguments
+  protected
+    function GetFunctionLength: Integer; override;
+    function GetFunctionName: string; override;
   public
     constructor Create(AOriginalFunction: TGocciaValue; ABoundThis: TGocciaValue; ABoundArgs: TObjectList<TGocciaValue>);
     destructor Destroy; override;
@@ -72,7 +79,28 @@ end;
 
 function TGocciaFunctionBase.GetProperty(const AName: string): TGocciaValue;
 begin
+  // ECMAScript: Function.length and Function.name
+  if AName = 'length' then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(GetFunctionLength);
+    Exit;
+  end;
+  if AName = 'name' then
+  begin
+    Result := TGocciaStringLiteralValue.Create(GetFunctionName);
+    Exit;
+  end;
   Result := inherited GetProperty(AName);
+end;
+
+function TGocciaFunctionBase.GetFunctionLength: Integer;
+begin
+  Result := 0;
+end;
+
+function TGocciaFunctionBase.GetFunctionName: string;
+begin
+  Result := '';
 end;
 
 function TGocciaFunctionBase.TypeName: string;
@@ -260,6 +288,29 @@ begin
   finally
     CombinedArgs.Free;
   end;
+end;
+
+function TGocciaBoundFunctionValue.GetFunctionLength: Integer;
+var
+  OrigLength: Integer;
+begin
+  // ECMAScript: bound function length = max(0, originalLength - boundArgs.length)
+  if FOriginalFunction is TGocciaFunctionBase then
+    OrigLength := TGocciaFunctionBase(FOriginalFunction).GetFunctionLength
+  else
+    OrigLength := 0;
+  Result := OrigLength - FBoundArgs.Count;
+  if Result < 0 then
+    Result := 0;
+end;
+
+function TGocciaBoundFunctionValue.GetFunctionName: string;
+begin
+  // ECMAScript: bound function name = "bound " + originalName
+  if FOriginalFunction is TGocciaFunctionBase then
+    Result := 'bound ' + TGocciaFunctionBase(FOriginalFunction).GetFunctionName
+  else
+    Result := 'bound ';
 end;
 
 end.

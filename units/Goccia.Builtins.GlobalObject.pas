@@ -24,6 +24,10 @@ type
     function ObjectDefineProperty(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectDefineProperties(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectGetOwnPropertySymbols(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectFreeze(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectIsFrozen(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectGetPrototypeOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectFromEntries(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -50,6 +54,10 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectDefineProperty, 'defineProperty', 3));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectDefineProperties, 'defineProperties', 2));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetOwnPropertySymbols, 'getOwnPropertySymbols', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectFreeze, 'freeze', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectIsFrozen, 'isFrozen', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetPrototypeOf, 'getPrototypeOf', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectFromEntries, 'fromEntries', 1));
 
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
@@ -446,6 +454,82 @@ begin
     Arr.Elements.Add(OwnSymbols[I]);
 
   Result := Arr;
+end;
+
+function TGocciaGlobalObject.ObjectFreeze(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.freeze', ThrowError);
+
+  // Non-objects are returned as-is (ECMAScript spec)
+  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  begin
+    Result := Args.GetElement(0);
+    Exit;
+  end;
+
+  TGocciaObjectValue(Args.GetElement(0)).Freeze;
+  Result := Args.GetElement(0);
+end;
+
+function TGocciaGlobalObject.ObjectIsFrozen(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.isFrozen', ThrowError);
+
+  // Non-objects are always frozen (ECMAScript spec)
+  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  begin
+    Result := TGocciaBooleanLiteralValue.TrueValue;
+    Exit;
+  end;
+
+  Result := TGocciaBooleanLiteralValue.Create(TGocciaObjectValue(Args.GetElement(0)).IsFrozen);
+end;
+
+function TGocciaGlobalObject.ObjectGetPrototypeOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.getPrototypeOf', ThrowError);
+
+  if not (Args.GetElement(0) is TGocciaObjectValue) then
+    ThrowError('Object.getPrototypeOf called on non-object', 0, 0);
+
+  if Assigned(TGocciaObjectValue(Args.GetElement(0)).Prototype) then
+    Result := TGocciaObjectValue(Args.GetElement(0)).Prototype
+  else
+    Result := TGocciaNullLiteralValue.Create;
+end;
+
+function TGocciaGlobalObject.ObjectFromEntries(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Obj: TGocciaObjectValue;
+  Entries: TGocciaArrayValue;
+  Entry: TGocciaArrayValue;
+  I: Integer;
+  Key: string;
+  Value: TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.fromEntries', ThrowError);
+
+  if not (Args.GetElement(0) is TGocciaArrayValue) then
+    ThrowError('Object.fromEntries requires an iterable of key-value pairs', 0, 0);
+
+  Entries := TGocciaArrayValue(Args.GetElement(0));
+  Obj := TGocciaObjectValue.Create;
+
+  for I := 0 to Entries.Elements.Count - 1 do
+  begin
+    if not (Entries.Elements[I] is TGocciaArrayValue) then
+      ThrowError('Object.fromEntries requires an iterable of key-value pairs', 0, 0);
+
+    Entry := TGocciaArrayValue(Entries.Elements[I]);
+    if Entry.Elements.Count < 2 then
+      ThrowError('Object.fromEntries requires each entry to have at least 2 elements', 0, 0);
+
+    Key := Entry.Elements[0].ToStringLiteral.Value;
+    Value := Entry.Elements[1];
+    Obj.AssignProperty(Key, Value);
+  end;
+
+  Result := Obj;
 end;
 
 end.

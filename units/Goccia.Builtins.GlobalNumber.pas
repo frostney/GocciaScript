@@ -18,6 +18,7 @@ type
     function NumberIsFinite(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function NumberIsNaN(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function NumberIsInteger(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function NumberIsSafeInteger(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -31,14 +32,22 @@ constructor TGocciaGlobalNumber.Create(const AName: string; const AScope: TGocci
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  // Number constants
-  FBuiltinObject.DefineProperty('NaN', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.NaNValue, [pfEnumerable]));
+  // Number constants (non-writable, non-enumerable, non-configurable per ECMAScript spec)
+  FBuiltinObject.DefineProperty('NaN', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.NaNValue, []));
+  FBuiltinObject.DefineProperty('POSITIVE_INFINITY', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.InfinityValue, []));
+  FBuiltinObject.DefineProperty('NEGATIVE_INFINITY', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.NegativeInfinityValue, []));
+  FBuiltinObject.DefineProperty('MAX_SAFE_INTEGER', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(9007199254740991), []));
+  FBuiltinObject.DefineProperty('MIN_SAFE_INTEGER', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(-9007199254740991), []));
+  FBuiltinObject.DefineProperty('MAX_VALUE', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(1.7976931348623157e+308), []));
+  FBuiltinObject.DefineProperty('MIN_VALUE', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(5e-324), []));
+  FBuiltinObject.DefineProperty('EPSILON', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(2.2204460492503131e-16), []));
 
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseInt, 'parseInt', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseFloat, 'parseFloat', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsFinite, 'isFinite', 0));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsNaN, 'isNaN', 0));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsInteger, 'isInteger', 0));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsSafeInteger, 'isSafeInteger', 0));
 
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
@@ -306,5 +315,36 @@ begin
   Result := TGocciaBooleanLiteralValue.Create(Value = Trunc(Value));
 end;
 
+function TGocciaGlobalNumber.NumberIsSafeInteger(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  NumberArg: TGocciaNumberLiteralValue;
+  Value: Double;
+begin
+  if Args.Length = 0 then
+  begin
+    Result := TGocciaBooleanLiteralValue.Create(False);
+    Exit;
+  end;
+
+  if not (Args.GetElement(0) is TGocciaNumberLiteralValue) then
+  begin
+    Result := TGocciaBooleanLiteralValue.Create(False);
+    Exit;
+  end;
+
+  NumberArg := TGocciaNumberLiteralValue(Args.GetElement(0));
+
+  if NumberArg.IsNaN or NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
+  begin
+    Result := TGocciaBooleanLiteralValue.Create(False);
+    Exit;
+  end;
+
+  Value := NumberArg.Value;
+
+  // Must be an integer and within safe integer range
+  Result := TGocciaBooleanLiteralValue.Create(
+    (Value = Trunc(Value)) and (Abs(Value) <= 9007199254740991));
+end;
 
 end.

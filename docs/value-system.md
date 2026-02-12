@@ -214,6 +214,12 @@ Objects store symbol-keyed properties separately from string-keyed properties vi
 
 ## Type Conversion
 
+### ToPrimitive (`Goccia.Values.ToPrimitive.pas`)
+
+The ECMAScript abstract operation `ToPrimitive` converts any value to a primitive. For primitives, it's a no-op. For objects, it tries `valueOf()` first, then `toString()`, returning the first result that is a primitive. This operation is used by the `+` operator and is available as a standalone function for any module that needs spec-compliant type coercion.
+
+### Coercion Methods
+
 Every value implements three conversion methods, following JavaScript coercion rules:
 
 | Method | Returns | Example (`undefined`) |
@@ -272,13 +278,21 @@ Objects can have a prototype via `FPrototype: TGocciaObjectValue`. Property look
 2. If not found, check `FPrototype`.
 3. Repeat until `nil` prototype.
 
+### Object Freezing
+
+Objects support `Object.freeze()` via an `FFrozen` flag on `TGocciaObjectValue`:
+
+- **Freeze** — Makes all existing properties non-writable and non-configurable, then sets the `FFrozen` flag.
+- **Frozen check** — `AssignProperty` checks `FFrozen` before any modification and throws `TypeError` if the object is frozen.
+- **`Object.isFrozen(obj)`** — Returns the `FFrozen` flag value. Non-objects are always considered frozen per ECMAScript spec.
+
 ## Arrays
 
 `TGocciaArrayValue` extends `TGocciaObjectValue` and implements `IIndexMethods`.
 
 - **Sparse arrays** — Holes are represented as `nil` in the internal `FElements` list.
 - **Numeric property access** — `arr["0"]` and `arr[0]` both resolve to the first element.
-- **Prototype methods** — `map`, `filter`, `reduce`, `forEach`, `some`, `every`, `flat`, `flatMap`, `join`, `includes`, `push`, `pop`, `slice`, `toReversed`, `toSorted`, `toSpliced` — all implemented directly on the array value.
+- **Prototype methods** — `map`, `filter`, `reduce`, `forEach`, `some`, `every`, `flat`, `flatMap`, `find`, `findIndex`, `indexOf`, `lastIndexOf`, `join`, `includes`, `concat`, `push`, `pop`, `shift`, `unshift`, `sort`, `splice`, `reverse`, `fill`, `at`, `slice`, `toReversed`, `toSorted`, `toSpliced` — all implemented directly on the array value.
 
 ## Sets
 
@@ -305,11 +319,13 @@ Objects can have a prototype via `FPrototype: TGocciaObjectValue`. Property look
 
 Created from arrow function expressions in the AST:
 
-- **Parameters** — List of parameter nodes (supports destructuring and defaults).
+- **Parameters** — List of parameter nodes (supports destructuring, defaults, and rest parameters).
 - **Body** — List of AST statements.
 - **Closure** — Reference to the scope where the function was defined.
 - **`IsArrow` flag** — Marks functions created from arrow expressions. When an arrow function is called standalone (no explicit `this`), it inherits `this` from its closure scope chain. When called as a method (`obj.method()`), it receives the call-site `this` normally.
 - **`this` binding** — Captured from the enclosing scope for arrow functions; set by the call site for method calls.
+- **`length` property** — Returns the number of formal parameters before the first default/rest parameter (ECMAScript spec).
+- **`name` property** — Returns the function name. For anonymous arrow functions assigned to variables (`const add = () => {}`), the evaluator infers the name from the variable declaration.
 
 ### Methods (`TGocciaMethodValue`)
 
@@ -327,7 +343,7 @@ All functions share a prototype that provides `call`, `apply`, and `bind`:
 | `fn.apply(thisArg, argsArray)` | Call with explicit `this` and argument array |
 | `fn.bind(thisArg, ...args)` | Return a new function with bound `this` and pre-filled arguments |
 
-`bind` returns a `TGocciaBoundFunctionValue` that combines bound arguments with call-time arguments.
+`bind` returns a `TGocciaBoundFunctionValue` that combines bound arguments with call-time arguments. Bound functions compute `length` as `max(0, original.length - boundArgs.length)` and `name` as `"bound " + original.name` per ECMAScript spec.
 
 ### Native Functions (`TGocciaNativeFunction`)
 

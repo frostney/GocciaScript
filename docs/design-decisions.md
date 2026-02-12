@@ -12,6 +12,7 @@ The evaluator (`Goccia.Evaluator.pas`) is designed around pure functions — giv
 - **Reasoning** — No hidden state mutations make the evaluation logic easier to understand and debug.
 - **Parallelism potential** — Pure evaluation is inherently safe for concurrent execution.
 - **Composability** — Evaluator sub-modules (`Arithmetic`, `Bitwise`, `Comparison`, etc.) compose cleanly because they don't share mutable state.
+- **ECMAScript conformance** — `ToPrimitive` (`Goccia.Values.ToPrimitive.pas`) is a standalone abstract operation (trying `valueOf` then `toString` on objects) used by the `+` operator and available to any module. The arithmetic module uses floating-point modulo (not integer) with proper NaN/Infinity propagation. The comparison module implements the Abstract Relational Comparison algorithm with type coercion.
 
 State changes (variable bindings, object mutations) happen through the scope and value objects passed in the `TGocciaEvaluationContext`, not through evaluator-internal state.
 

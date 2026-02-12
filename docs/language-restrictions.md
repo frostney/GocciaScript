@@ -22,14 +22,18 @@ const name = "Goccia";
 
 - Arrow functions only (no `function` keyword).
 - Default parameters (including in destructured parameters).
-- Rest parameters.
+- Rest parameters (`...args`).
 - Destructuring parameters (array and object patterns with defaults).
 - `fn.call()`, `fn.apply()`, `fn.bind()` for explicit `this` binding.
+- `fn.length` — Number of formal parameters (before defaults/rest).
+- `fn.name` — Function name (inferred from variable declarations for anonymous functions).
 
 ```javascript
 const add = (a, b) => a + b;
 const greet = (name = "world") => `Hello, ${name}!`;
 const first = ([head, ...rest]) => head;
+add.name;   // "add"
+add.length; // 2
 ```
 
 ### Classes
@@ -55,6 +59,7 @@ class Counter {
 - All comparison operators (`===`, `!==`, `<`, `>`, `<=`, `>=`).
 - Logical operators (`&&`, `||`, `!`).
 - Nullish coalescing (`??`).
+- Optional chaining (`?.` for property access, computed access, and method calls).
 - Bitwise operators (`&`, `|`, `^`, `<<`, `>>`, `>>>`).
 - Ternary operator (`? :`).
 - Template literals with interpolation.
@@ -85,6 +90,7 @@ class Counter {
 Standard escape sequences in string literals and template literals:
 
 - `\n`, `\r`, `\t`, `\\`, `\'`, `\"`, `\0`
+- `\xHH` — Hex byte escape (e.g., `"\x41"` → `"A"`)
 - `\uXXXX` — 4-digit Unicode escape (e.g., `"\u0041"` → `"A"`)
 - `\u{XXXXX}` — Variable-length Unicode escape (e.g., `"\u{1F4A9}"` → `"💩"`)
 

@@ -6,35 +6,51 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript and 
 
 ```
 tests/
-├── built-ins/          # Built-in object tests
-│   ├── Array/          # Array constructor and prototype methods
+├── built-ins/              # Built-in object tests
+│   ├── Array/              # Array constructor and prototype methods
 │   │   ├── array-creation.js
 │   │   ├── array-modification.js
+│   │   ├── from.js         # Array.from
+│   │   ├── of.js           # Array.of
 │   │   └── prototype/
-│   │       ├── map.js
-│   │       ├── filter.js
-│   │       ├── reduce.js
+│   │       ├── map.js, filter.js, reduce.js, forEach.js
+│   │       ├── find.js, findIndex.js, indexOf.js, lastIndexOf.js
+│   │       ├── sort.js, splice.js, shift-unshift.js, fill.js, at.js
+│   │       ├── includes.js, concat.js, reverse.js
 │   │       └── ...
 │   ├── Error/
 │   ├── JSON/
 │   ├── Map/
 │   ├── Math/
-│   ├── Number/
-│   ├── Object/
+│   ├── Number/             # Number methods and constants
+│   │   ├── parseInt.js, parseFloat.js, isNaN.js, isFinite.js, isInteger.js
+│   │   └── constants.js    # MAX_SAFE_INTEGER, EPSILON, isSafeInteger, etc.
+│   ├── Object/             # Object static methods
+│   │   ├── keys.js, values.js, entries.js, assign.js, create.js, is.js
+│   │   ├── defineProperty.js, defineProperties.js, getOwnPropertyDescriptor.js
+│   │   ├── freeze.js       # Object.freeze, Object.isFrozen
+│   │   ├── getPrototypeOf.js
+│   │   ├── fromEntries.js
+│   │   └── ...
 │   ├── Set/
 │   ├── String/
 │   │   └── prototype/
 │   └── Symbol/
 │
-└── language/           # Core language feature tests
-    ├── classes/        # Class declarations, inheritance, private fields/methods/getters/setters
-    ├── declarations/   # let, const
-    ├── expressions/    # Arithmetic, comparison, logical, destructuring, etc.
-    ├── functions/      # Arrow functions, closures, higher-order, recursion
-    ├── identifiers/    # Unicode support, reserved words
-    ├── modules/        # Import/export
-    ├── objects/        # Object literals, methods, computed properties
-    ├── statements/     # if/else, switch/case/break, try/catch/finally
+└── language/               # Core language feature tests
+    ├── classes/            # Class declarations, inheritance, private fields/methods/getters/setters
+    ├── declarations/       # let, const
+    ├── expressions/        # Arithmetic, comparison, logical, destructuring, etc.
+    │   ├── addition/       # Addition with ToPrimitive
+    │   ├── modulo/         # Floating-point modulo
+    │   ├── conditional/    # Ternary precedence
+    │   └── ...
+    ├── functions/          # Arrow functions, closures, higher-order, recursion
+    │   └── function-length-name.js  # Function.length and Function.name
+    ├── identifiers/        # Unicode support, reserved words
+    ├── modules/            # Import/export
+    ├── objects/            # Object literals, methods, computed properties
+    ├── statements/         # if/else, switch/case/break, try/catch/finally
     └── unary-operators.js
 ```
 

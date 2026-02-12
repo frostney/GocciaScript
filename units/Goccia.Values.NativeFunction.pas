@@ -14,6 +14,9 @@ type
     FFunction: TGocciaNativeFunctionCallback;
     FName: string;
     FArity: Integer;
+  protected
+    function GetFunctionLength: Integer; override;
+    function GetFunctionName: string; override;
   public
     constructor Create(AFunction: TGocciaNativeFunctionCallback; const AName: string;
       AArity: Integer);
@@ -53,5 +56,18 @@ begin
   Result := FFunction(Arguments, ThisValue);
 end;
 
+function TGocciaNativeFunctionValue.GetFunctionLength: Integer;
+begin
+  // -1 means variadic, report 0 for length per ECMAScript spec
+  if FArity < 0 then
+    Result := 0
+  else
+    Result := FArity;
+end;
+
+function TGocciaNativeFunctionValue.GetFunctionName: string;
+begin
+  Result := FName;
+end;
 
 end.

@@ -39,7 +39,7 @@ A single-pass tokenizer that converts source text into a flat list of `TGocciaTo
 - **Number formats** — Decimal, hexadecimal (`0x`), binary (`0b`), octal (`0o`), scientific notation.
 - **Template literals** — Special handling for backtick strings with `${...}` interpolation.
 - **Unicode identifiers** — Supports Unicode characters (including emoji) in identifier names.
-- **Unicode escape sequences** — `\uXXXX` (4-digit) and `\u{XXXXX}` (variable-length) escape sequences in strings and template literals, with full UTF-8 encoding for code points up to U+10FFFF.
+- **Unicode/hex escape sequences** — `\uXXXX` (4-digit), `\u{XXXXX}` (variable-length), and `\xHH` (hex byte) escape sequences in strings and template literals, with full UTF-8 encoding for code points up to U+10FFFF.
 - **Comments** — Skips single-line (`//`) and block (`/* */`) comments.
 - **Error reporting** — Produces `TGocciaLexerError` with line and column information.
 
@@ -48,7 +48,7 @@ A single-pass tokenizer that converts source text into a flat list of `TGocciaTo
 A recursive descent parser that builds an AST from the token stream. Implements:
 
 - **Operator precedence** via precedence climbing (assignment → conditional → logical → comparison → addition → multiplication → exponentiation → unary → call → primary).
-- **ES6+ syntax** — Arrow functions, template literals, destructuring patterns (array and object), spread/rest operators, computed property names, shorthand properties, classes with private fields, private/public getters/setters, and static members. Reserved words are accepted as property names in object literals and member expressions. The parser tracks instance property declaration order for correct initialization semantics.
+- **ES6+ syntax** — Arrow functions, template literals, destructuring patterns (array and object), spread/rest operators, rest parameters (`...args`), optional chaining (`?.`), computed property names, shorthand properties, classes with private fields, private/public getters/setters, and static members. Reserved words are accepted as property names in object literals and member expressions. The parser tracks instance property declaration order for correct initialization semantics.
 - **Error recovery** — Throws `TGocciaSyntaxError` with source location for diagnostics.
 - **Arrow function detection** — Uses lookahead (`IsArrowFunction`) to disambiguate parenthesized expressions from arrow function parameters.
 
@@ -75,8 +75,8 @@ The largest component. Implements the actual semantics of the language as **pure
 
 | Module | Responsibility |
 |--------|---------------|
-| `Goccia.Evaluator.pas` | Core dispatch, expressions, statements, classes |
-| `Goccia.Evaluator.Arithmetic.pas` | `+`, `-`, `*`, `/`, `%`, `**` |
+| `Goccia.Evaluator.pas` | Core dispatch, expressions, statements, classes, function name inference |
+| `Goccia.Evaluator.Arithmetic.pas` | `+` (uses `ToPrimitive`), `-`, `*`, `/`, `%` (float), `**` |
 | `Goccia.Evaluator.Bitwise.pas` | `&`, `\|`, `^`, `<<`, `>>`, `>>>` |
 | `Goccia.Evaluator.Comparison.pas` | `===`, `!==`, `<`, `>`, `<=`, `>=` |
 | `Goccia.Evaluator.Assignment.pas` | `=`, `+=`, `-=`, etc. |
@@ -97,8 +97,8 @@ flowchart TD
     Register --> Math["RegisterMath → Math.PI, Math.floor, etc."]
     Register --> JSON["RegisterJSON → JSON.parse, JSON.stringify"]
     Register --> Globals["RegisterGlobals → undefined, NaN, Infinity, Error, ..."]
-    Register --> GArray["RegisterGlobalArray → Array.isArray"]
-    Register --> GNumber["RegisterGlobalNumber → Number.parseInt, ..."]
+    Register --> GArray["RegisterGlobalArray → Array.isArray, Array.from, Array.of"]
+    Register --> GNumber["RegisterGlobalNumber → Number.parseInt, constants, ..."]
     Register --> GSymbol["RegisterSymbol → Symbol, Symbol.for, Symbol.iterator"]
     Register --> GSet["RegisterSet → Set constructor"]
     Register --> GMap["RegisterMap → Map constructor"]

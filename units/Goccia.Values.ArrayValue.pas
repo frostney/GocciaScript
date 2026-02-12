@@ -47,6 +47,13 @@ type
     function ArrayToSorted(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayToSpliced(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 
+    function ArraySort(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ArraySplice(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayShift(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayUnshift(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayFill(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayAt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+
     procedure ThrowError(const Message: string; const Args: array of const); overload; inline;
     procedure ThrowError(const Message: string); overload; inline;
   protected
@@ -145,6 +152,12 @@ begin
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToReversed, 'toReversed', 0));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToSorted, 'toSorted', 0));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToSpliced, 'toSpliced', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySort, 'sort', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySplice, 'splice', 2));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayShift, 'shift', 0));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayUnshift, 'unshift', -1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFill, 'fill', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayAt, 'at', 1));
 end;
 
 destructor TGocciaArrayValue.Destroy;
@@ -1100,6 +1113,220 @@ begin
     // Fall back to regular object property assignment
     inherited AssignProperty(AName, AValue);
   end;
+end;
+
+function TGocciaArrayValue.ArraySort(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  CustomSortFunction: TGocciaValue;
+  I, J: Integer;
+  ShouldSwap: Boolean;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.sort called on non-array');
+
+  Arr := TGocciaArrayValue(ThisValue);
+
+  if Args.Length > 0 then
+  begin
+    CustomSortFunction := Args.GetElement(0);
+
+    if not ((CustomSortFunction is TGocciaFunctionValue) or (CustomSortFunction is TGocciaNativeFunctionValue)) then
+      ThrowError('Custom sort function must be a function');
+
+    // Bubble sort with custom comparison function (mutates in-place)
+    for I := 0 to Arr.Elements.Count - 2 do
+    begin
+      for J := 0 to Arr.Elements.Count - 2 - I do
+      begin
+        CallArgs := TGocciaArgumentsCollection.Create([Arr.Elements[J], Arr.Elements[J + 1]]);
+        try
+          if CustomSortFunction is TGocciaNativeFunctionValue then
+            ShouldSwap := TGocciaNativeFunctionValue(CustomSortFunction).Call(CallArgs, ThisValue).ToNumberLiteral.Value > 0
+          else
+            ShouldSwap := TGocciaFunctionValue(CustomSortFunction).Call(CallArgs, ThisValue).ToNumberLiteral.Value > 0;
+
+          if ShouldSwap then
+            Arr.Elements.Exchange(J, J + 1);
+        finally
+          CallArgs.Free;
+        end;
+      end;
+    end;
+  end else
+  begin
+    Arr.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
+  end;
+
+  // sort() returns the same array (mutated in-place)
+  Result := Arr;
+end;
+
+function TGocciaArrayValue.ArraySplice(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  Removed: TGocciaArrayValue;
+  StartIndex, DeleteCount, ActualStart: Integer;
+  I: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.splice called on non-array');
+
+  Arr := TGocciaArrayValue(ThisValue);
+  Removed := TGocciaArrayValue.Create;
+
+  // Handle start index
+  if Args.Length < 1 then
+  begin
+    Result := Removed;
+    Exit;
+  end;
+
+  StartIndex := Trunc(Args.GetElement(0).ToNumberLiteral.Value);
+
+  // Handle negative start
+  if StartIndex < 0 then
+    ActualStart := Arr.Elements.Count + StartIndex
+  else
+    ActualStart := StartIndex;
+
+  // Clamp
+  if ActualStart < 0 then
+    ActualStart := 0
+  else if ActualStart > Arr.Elements.Count then
+    ActualStart := Arr.Elements.Count;
+
+  // Handle delete count
+  if Args.Length < 2 then
+    DeleteCount := Arr.Elements.Count - ActualStart
+  else
+    DeleteCount := Trunc(Args.GetElement(1).ToNumberLiteral.Value);
+
+  if DeleteCount < 0 then
+    DeleteCount := 0
+  else if ActualStart + DeleteCount > Arr.Elements.Count then
+    DeleteCount := Arr.Elements.Count - ActualStart;
+
+  // Remove elements and collect them in Removed array
+  for I := 0 to DeleteCount - 1 do
+  begin
+    Removed.Elements.Add(Arr.Elements[ActualStart]);
+    Arr.Elements.Delete(ActualStart);
+  end;
+
+  // Insert new elements at start position
+  for I := 2 to Args.Length - 1 do
+  begin
+    Arr.Elements.Insert(ActualStart + (I - 2), Args.GetElement(I));
+  end;
+
+  Result := Removed;
+end;
+
+function TGocciaArrayValue.ArrayShift(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.shift called on non-array');
+
+  Arr := TGocciaArrayValue(ThisValue);
+
+  if Arr.Elements.Count = 0 then
+  begin
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  Result := Arr.Elements[0];
+  Arr.Elements.Delete(0);
+end;
+
+function TGocciaArrayValue.ArrayUnshift(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  I: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.unshift called on non-array');
+
+  Arr := TGocciaArrayValue(ThisValue);
+
+  // Insert elements at the beginning in the correct order
+  for I := Args.Length - 1 downto 0 do
+    Arr.Elements.Insert(0, Args.GetElement(I));
+
+  // Return new length
+  Result := TGocciaNumberLiteralValue.Create(Arr.Elements.Count);
+end;
+
+function TGocciaArrayValue.ArrayFill(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  FillValue: TGocciaValue;
+  StartIdx, EndIdx, I: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.fill called on non-array');
+
+  Arr := TGocciaArrayValue(ThisValue);
+
+  if Args.Length < 1 then
+    FillValue := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+    FillValue := Args.GetElement(0);
+
+  if Args.Length > 1 then
+    StartIdx := Trunc(Args.GetElement(1).ToNumberLiteral.Value)
+  else
+    StartIdx := 0;
+
+  if Args.Length > 2 then
+    EndIdx := Trunc(Args.GetElement(2).ToNumberLiteral.Value)
+  else
+    EndIdx := Arr.Elements.Count;
+
+  // Handle negatives
+  if StartIdx < 0 then StartIdx := Arr.Elements.Count + StartIdx;
+  if EndIdx < 0 then EndIdx := Arr.Elements.Count + EndIdx;
+
+  // Clamp
+  if StartIdx < 0 then StartIdx := 0;
+  if EndIdx > Arr.Elements.Count then EndIdx := Arr.Elements.Count;
+
+  for I := StartIdx to EndIdx - 1 do
+    Arr.Elements[I] := FillValue;
+
+  Result := Arr;
+end;
+
+function TGocciaArrayValue.ArrayAt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  Index: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.at called on non-array');
+
+  Arr := TGocciaArrayValue(ThisValue);
+
+  if Args.Length < 1 then
+  begin
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  Index := Trunc(Args.GetElement(0).ToNumberLiteral.Value);
+
+  // Handle negative index
+  if Index < 0 then
+    Index := Arr.Elements.Count + Index;
+
+  if (Index < 0) or (Index >= Arr.Elements.Count) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+    Result := Arr.Elements[Index];
 end;
 
 end.

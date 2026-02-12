@@ -26,14 +26,19 @@ GocciaScript includes the parts of JavaScript that lead to clear, predictable, a
 - Object shorthand properties and methods
 - Computed property names
 - Nullish coalescing (`??`)
+- Optional chaining (`?.`)
 - Arrow function expressions
-- Unicode escape sequences (`\uXXXX`, `\u{XXXXX}`)
+- Rest parameters (`...args`)
+- Unicode escape sequences (`\uXXXX`, `\u{XXXXX}`, `\xHH`)
+- Function `length` and `name` properties
 
 ### ECMAScript 2020+ Implementations
 
 - `Math.clamp` (TC39 proposal)
 - Private fields, methods, getters, and setters in classes
-- `Object.hasOwn`
+- `Object.hasOwn`, `Object.freeze`, `Object.fromEntries`
+- `Array.from`, `Array.of`, plus `sort`, `splice`, `shift`, `unshift`, `fill`, `at`
+- `Number.MAX_SAFE_INTEGER`, `Number.EPSILON`, `Number.isSafeInteger`
 
 ### Built-in Objects
 

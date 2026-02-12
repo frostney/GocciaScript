@@ -129,18 +129,70 @@ The JSON parser is a recursive descent implementation. Special handling:
 | `Object.getOwnPropertyNames(obj)` | All own property names |
 | `Object.getOwnPropertyDescriptor(obj, prop)` | Get property descriptor |
 | `Object.getOwnPropertySymbols(obj)` | All own symbol-keyed properties |
+| `Object.freeze(obj)` | Freeze object (make all properties non-writable/non-configurable) |
+| `Object.isFrozen(obj)` | Check if object is frozen |
+| `Object.getPrototypeOf(obj)` | Get the prototype of an object |
+| `Object.fromEntries(entries)` | Create object from `[[key, value], ...]` array |
 
 ### Array (`Goccia.Builtins.GlobalArray.pas`)
+
+**Static methods:**
 
 | Method | Description |
 |--------|-------------|
 | `Array.isArray(value)` | Check if value is an array |
+| `Array.from(iterable, mapFn?)` | Create array from iterable (array or string) with optional map |
+| `Array.of(...items)` | Create array from arguments |
 
-Array prototype methods are implemented directly on `TGocciaArrayValue`:
+**Prototype methods** (implemented directly on `TGocciaArrayValue`):
 
-`map`, `filter`, `reduce`, `forEach`, `some`, `every`, `flat`, `flatMap`, `join`, `includes`, `push`, `pop`, `slice`, `toReversed`, `toSorted`, `toSpliced`
+| Method | Description |
+|--------|-------------|
+| `map(callback)` | Transform each element |
+| `filter(callback)` | Filter elements by predicate |
+| `reduce(callback, initial?)` | Reduce to single value |
+| `forEach(callback)` | Execute callback for each element |
+| `some(callback)` | Test if any element passes |
+| `every(callback)` | Test if all elements pass |
+| `flat(depth?)` | Flatten nested arrays |
+| `flatMap(callback)` | Map then flatten one level |
+| `find(callback)` | Find first matching element |
+| `findIndex(callback)` | Find index of first match |
+| `indexOf(value, fromIndex?)` | Find index of value |
+| `lastIndexOf(value, fromIndex?)` | Find last index of value |
+| `includes(value, fromIndex?)` | Check if array contains value |
+| `join(separator?)` | Join elements into string |
+| `concat(...arrays)` | Concatenate arrays |
+| `slice(start?, end?)` | Extract a section |
+| `push(...items)` | Add to end (mutating) |
+| `pop()` | Remove from end (mutating) |
+| `shift()` | Remove from start (mutating) |
+| `unshift(...items)` | Add to start (mutating) |
+| `sort(compareFn?)` | Sort in place (mutating) |
+| `splice(start, deleteCount?, ...items)` | Add/remove elements (mutating) |
+| `reverse()` | Reverse in place (mutating) |
+| `fill(value, start?, end?)` | Fill with value (mutating) |
+| `at(index)` | Access element (supports negative index) |
+| `toReversed()` | Non-mutating reverse |
+| `toSorted(compareFn?)` | Non-mutating sort |
+| `toSpliced(start, deleteCount?, ...items)` | Non-mutating splice |
 
 ### Number (`Goccia.Builtins.GlobalNumber.pas`)
+
+**Constants:**
+
+| Constant | Value |
+|----------|-------|
+| `Number.NaN` | Not-a-Number |
+| `Number.POSITIVE_INFINITY` | Positive infinity |
+| `Number.NEGATIVE_INFINITY` | Negative infinity |
+| `Number.MAX_SAFE_INTEGER` | 2^53 - 1 (9007199254740991) |
+| `Number.MIN_SAFE_INTEGER` | -(2^53 - 1) |
+| `Number.MAX_VALUE` | Largest representable number |
+| `Number.MIN_VALUE` | Smallest positive number |
+| `Number.EPSILON` | Smallest difference between 1 and next float |
+
+**Methods:**
 
 | Method | Description |
 |--------|-------------|
@@ -149,6 +201,7 @@ Array prototype methods are implemented directly on `TGocciaArrayValue`:
 | `Number.isFinite(value)` | Check if finite number |
 | `Number.isNaN(value)` | Check if NaN |
 | `Number.isInteger(value)` | Check if integer |
+| `Number.isSafeInteger(value)` | Check if safe integer (within ±2^53-1) |
 
 Also aliased as global `parseInt`, `parseFloat`, `isFinite`, `isNaN`.
 
@@ -158,7 +211,7 @@ String constructor available as `String()`.
 
 String prototype methods are implemented on string values:
 
-`charAt`, `charCodeAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `replace`, `split`
+`charAt`, `charCodeAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `replace`, `replaceAll`, `split`, `padStart`, `padEnd`, `concat`, `at`
 
 ### Global Constants and Error Constructors (`Goccia.Builtins.Globals.pas`)
 

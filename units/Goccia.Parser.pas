@@ -176,9 +176,9 @@ begin
     Line := Previous.Line;
     Column := Previous.Column;
     Condition := Result;
-    Consequent := Expression;
+    Consequent := Assignment;  // ECMAScript spec: AssignmentExpression, not Expression
     Consume(gttColon, 'Expected ":" in conditional expression');
-    Alternate := Conditional;
+    Alternate := Assignment;   // ECMAScript spec: AssignmentExpression
     Result := TGocciaConditionalExpression.Create(Condition, Consequent,
       Alternate, Line, Column);
   end;

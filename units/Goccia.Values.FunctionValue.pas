@@ -19,6 +19,8 @@ type
     FBodyStatements: TObjectList<TGocciaASTNode>;
     FClosure: TGocciaScope;
     FIsArrow: Boolean;
+    function GetFunctionLength: Integer; override;
+    function GetFunctionName: string; override;
   public
     constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string = '');
     destructor Destroy; override;
@@ -28,7 +30,7 @@ type
     property Parameters: TGocciaParameterArray read FParameters;
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
     property Closure: TGocciaScope read FClosure;
-    property Name: string read FName;
+    property Name: string read FName write FName;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
   end;
 
@@ -289,6 +291,26 @@ begin
     ClonedStatements.Add(FBodyStatements[I]);
 
   Result := TGocciaFunctionValue.Create(FParameters, ClonedStatements, NewScope, FName);
+end;
+
+function TGocciaFunctionValue.GetFunctionLength: Integer;
+var
+  I: Integer;
+begin
+  // ECMAScript: length is the number of formal parameters before the first
+  // one with a default value or rest parameter
+  Result := 0;
+  for I := 0 to Length(FParameters) - 1 do
+  begin
+    if FParameters[I].IsRest then Break;
+    if Assigned(FParameters[I].DefaultValue) then Break;
+    Inc(Result);
+  end;
+end;
+
+function TGocciaFunctionValue.GetFunctionName: string;
+begin
+  Result := FName;
 end;
 
 { TGocciaMethodValue }
