@@ -26,7 +26,7 @@ The **Engine** (`Goccia.Engine.pas`) sits above this pipeline and orchestrates t
 
 The top-level entry point. Provides static convenience methods (`RunScript`, `RunScriptFromFile`, `RunScriptFromStringList`) and manages:
 
-- **Built-in registration** — Selectively registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, error constructors) based on a `TGocciaGlobalBuiltins` flag set.
+- **Built-in registration** — Selectively registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, error constructors) based on a `TGocciaGlobalBuiltins` flag set.
 - **Interpreter lifecycle** — Creates and owns the `TGocciaInterpreter` instance.
 - **Prototype chain setup** — Calls `RegisterBuiltinConstructors` to wire up the `Object → Array → Number → String` prototype chain.
 
@@ -58,7 +58,7 @@ The Abstract Syntax Tree is structured into three layers:
 
 - **Node** — Base `TGocciaNode` with location tracking.
 - **Expressions** — Literals, binary/unary operations, member access, calls, arrow functions, template literals, class expressions, destructuring patterns, spread elements, etc.
-- **Statements** — Variable declarations, blocks, if/else, for/while/do-while, return, throw, try-catch-finally, switch, break/continue, import/export, class declarations.
+- **Statements** — Variable declarations, blocks, if/else, switch/case/break, return, throw, try-catch-finally, import/export, class declarations.
 
 ### Interpreter (`Goccia.Interpreter.pas`)
 
@@ -99,6 +99,9 @@ flowchart TD
     Register --> Globals["RegisterGlobals → undefined, NaN, Infinity, Error, ..."]
     Register --> GArray["RegisterGlobalArray → Array.isArray"]
     Register --> GNumber["RegisterGlobalNumber → Number.parseInt, ..."]
+    Register --> GSymbol["RegisterSymbol → Symbol, Symbol.for, Symbol.iterator"]
+    Register --> GSet["RegisterSet → Set constructor"]
+    Register --> GMap["RegisterMap → Map constructor"]
     Register --> Constructors["RegisterBuiltinConstructors → prototype chains"]
     Run --> Lex["TGocciaLexer.Create(Code).ScanTokens → Tokens"]
     Run --> Parse["TGocciaParser.Create(Tokens).Parse → AST"]

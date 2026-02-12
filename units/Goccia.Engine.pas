@@ -11,6 +11,7 @@ uses
   Goccia.Values.ObjectValue, Goccia.Builtins.Console, Goccia.Builtins.Math,
   Goccia.Builtins.GlobalObject, Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalNumber, Goccia.Builtins.Globals, Goccia.Builtins.JSON,
+  Goccia.Builtins.GlobalSymbol, Goccia.Builtins.GlobalSet, Goccia.Builtins.GlobalMap,
   Goccia.Builtins.TestAssertions, Goccia.Scope, Goccia.Modules,
   Goccia.Values.Interfaces, Goccia.Values.ClassValue, Goccia.Values.Error;
 
@@ -23,6 +24,9 @@ type
     ggGlobalNumber,
     ggPromise,
     ggJSON,
+    ggSymbol,
+    ggSet,
+    ggMap,
     ggTestAssertions
   );
 
@@ -30,7 +34,7 @@ type
 
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap];
   private
     FInterpreter: TGocciaInterpreter;
     FFileName: string;
@@ -45,6 +49,9 @@ type
     FBuiltinGlobalNumber: TGocciaGlobalNumber;
     FBuiltinGlobals: TGocciaGlobals;
     FBuiltinJSON: TGocciaJSON;
+    FBuiltinSymbol: TGocciaGlobalSymbol;
+    FBuiltinSet: TGocciaGlobalSet;
+    FBuiltinMap: TGocciaGlobalMap;
     FBuiltinTestAssertions: TGocciaTestAssertions;
 
     procedure RegisterBuiltIns;
@@ -57,6 +64,9 @@ type
     procedure RegisterObjectMethods;
     procedure RegisterGlobalNumber;
     procedure RegisterGlobals;
+    procedure RegisterSymbol;
+    procedure RegisterSet;
+    procedure RegisterMap;
     procedure RegisterBuiltinConstructors;
     procedure ThrowError(const Message: string; Line, Column: Integer);
   public
@@ -81,6 +91,9 @@ type
     property BuiltinGlobalNumber: TGocciaGlobalNumber read FBuiltinGlobalNumber;
     property BuiltinGlobals: TGocciaGlobals read FBuiltinGlobals;
     property BuiltinJSON: TGocciaJSON read FBuiltinJSON;
+    property BuiltinSymbol: TGocciaGlobalSymbol read FBuiltinSymbol;
+    property BuiltinSet: TGocciaGlobalSet read FBuiltinSet;
+    property BuiltinMap: TGocciaGlobalMap read FBuiltinMap;
     property BuiltinTestAssertions: TGocciaTestAssertions read FBuiltinTestAssertions;
   end;
 
@@ -118,6 +131,12 @@ begin
     FBuiltinGlobals.Free;
   if Assigned(FBuiltinJSON) then
     FBuiltinJSON.Free;
+  if Assigned(FBuiltinSymbol) then
+    FBuiltinSymbol.Free;
+  if Assigned(FBuiltinSet) then
+    FBuiltinSet.Free;
+  if Assigned(FBuiltinMap) then
+    FBuiltinMap.Free;
   if Assigned(FBuiltinTestAssertions) then
     FBuiltinTestAssertions.Free;
 
@@ -135,6 +154,9 @@ begin
   if ggGlobalNumber in FGlobals then RegisterGlobalNumber;
   if ggPromise in FGlobals then RegisterPromise;
   if ggJSON in FGlobals then RegisterJSON;
+  if ggSymbol in FGlobals then RegisterSymbol;
+  if ggSet in FGlobals then RegisterSet;
+  if ggMap in FGlobals then RegisterMap;
   if ggTestAssertions in FGlobals then RegisterTestAssertions;
 
   RegisterGlobals;
@@ -184,6 +206,21 @@ end;
 procedure TGocciaEngine.RegisterGlobals;
 begin
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', FInterpreter.GlobalScope, ThrowError);
+end;
+
+procedure TGocciaEngine.RegisterSymbol;
+begin
+  FBuiltinSymbol := TGocciaGlobalSymbol.Create('Symbol', FInterpreter.GlobalScope, ThrowError);
+end;
+
+procedure TGocciaEngine.RegisterSet;
+begin
+  FBuiltinSet := TGocciaGlobalSet.Create('Set', FInterpreter.GlobalScope, ThrowError);
+end;
+
+procedure TGocciaEngine.RegisterMap;
+begin
+  FBuiltinMap := TGocciaGlobalMap.Create('Map', FInterpreter.GlobalScope, ThrowError);
 end;
 
 procedure TGocciaEngine.RegisterBuiltinConstructors;
@@ -255,8 +292,7 @@ begin
   RangeErrorConstructor := TGocciaClassValue.Create('RangeError', nil);
   FInterpreter.GlobalScope.DefineLexicalBinding('RangeError', RangeErrorConstructor, dtUnknown);
 
-  // Register Symbol constructor and well-known symbols
-  FInterpreter.GlobalScope.DefineLexicalBinding('Symbol', TGocciaObjectValue.Create, dtUnknown);
+  // Symbol is now registered as a proper built-in via RegisterSymbol
 end;
 
 function TGocciaEngine.Execute: TGocciaValue;

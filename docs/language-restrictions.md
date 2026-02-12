@@ -67,13 +67,10 @@ class Counter {
 ### Statements
 
 - `if`/`else if`/`else`
-- `for` loops (traditional `for(;;)`)
-- `while` and `do...while` loops
-- `switch`/`case`/`default`
+- `switch`/`case`/`default`/`break`
 - `try`/`catch`/`finally`
 - `throw`
 - `return`
-- `break`/`continue`
 - Block statements
 - `import`/`export` (module system)
 
@@ -160,6 +157,22 @@ return
 ```
 
 GocciaScript requires explicit semicolons, preventing this class of bugs.
+
+### Traditional Loops (`for`, `while`, `do...while`)
+
+**Excluded.** Use array methods instead.
+
+Traditional loops encourage imperative, mutation-heavy code. GocciaScript favors functional iteration through array methods:
+
+```javascript
+// Instead of: for (let i = 0; i < items.length; i++) { ... }
+items.forEach((item) => { ... });
+items.map((item) => transform(item));
+items.filter((item) => item.isValid);
+items.reduce((acc, item) => acc + item, 0);
+```
+
+`break` and `continue` are only available inside `switch` statements.
 
 ### `with` Statement
 

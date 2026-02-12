@@ -18,7 +18,7 @@ test("destructuring assignment with computed property names", () => {
   expect(value3).toBe("computed value");
 });
 
-test.skip("destructuring assignment with computed property names with symbols", () => {
+test("destructuring assignment with computed property names with symbols", () => {
   const sym1 = Symbol("test1");
   const sym2 = Symbol("test2");
   let value1, value2;

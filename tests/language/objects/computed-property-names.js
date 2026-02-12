@@ -42,7 +42,7 @@ test("computed property names from string expressions", () => {
   expect(obj["123"]).toBe("string conversion");
 });
 
-test.skip("computed property names with symbols", () => {
+test("computed property names with symbols", () => {
   const sym1 = Symbol("key1");
   const sym2 = Symbol.for("key2");
   const sym3 = Symbol.iterator;

@@ -22,7 +22,8 @@ function LessThanOrEqual(Left, Right: TGocciaValue): Boolean; inline;
 
 implementation
 
-uses Goccia.Values.ArrayValue, Goccia.Values.ObjectValue, Goccia.Values.ClassHelper;
+uses Goccia.Values.ArrayValue, Goccia.Values.ObjectValue, Goccia.Values.ClassHelper,
+     Goccia.Values.SetValue, Goccia.Values.MapValue;
 
 // Helper function to check if a GocciaNumberValue is negative zero
 function IsNegativeZero(Value: TGocciaNumberLiteralValue): Boolean;
@@ -243,9 +244,56 @@ begin
     Exit;
   end;
 
-  // Handle objects (but not arrays which inherit from TGocciaObjectValue)
+  // Handle Sets
+  if (Actual is TGocciaSetValue) and (Expected is TGocciaSetValue) then
+  begin
+    if TGocciaSetValue(Actual).Items.Count <> TGocciaSetValue(Expected).Items.Count then
+    begin
+      Result := False;
+      Exit;
+    end;
+    for I := 0 to TGocciaSetValue(Actual).Items.Count - 1 do
+    begin
+      if not IsDeepEqual(TGocciaSetValue(Actual).Items[I], TGocciaSetValue(Expected).Items[I]) then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
+    Result := True;
+    Exit;
+  end;
+
+  // Handle Maps
+  if (Actual is TGocciaMapValue) and (Expected is TGocciaMapValue) then
+  begin
+    if TGocciaMapValue(Actual).Entries.Count <> TGocciaMapValue(Expected).Entries.Count then
+    begin
+      Result := False;
+      Exit;
+    end;
+    for I := 0 to TGocciaMapValue(Actual).Entries.Count - 1 do
+    begin
+      if not IsDeepEqual(TGocciaMapValue(Actual).Entries[I].Key, TGocciaMapValue(Expected).Entries[I].Key) then
+      begin
+        Result := False;
+        Exit;
+      end;
+      if not IsDeepEqual(TGocciaMapValue(Actual).Entries[I].Value, TGocciaMapValue(Expected).Entries[I].Value) then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
+    Result := True;
+    Exit;
+  end;
+
+  // Handle objects (but not arrays/sets/maps which inherit from TGocciaObjectValue)
   if (Actual is TGocciaObjectValue) and (Expected is TGocciaObjectValue) and
-     not (Actual is TGocciaArrayValue) and not (Expected is TGocciaArrayValue) then
+     not (Actual is TGocciaArrayValue) and not (Expected is TGocciaArrayValue) and
+     not (Actual is TGocciaSetValue) and not (Expected is TGocciaSetValue) and
+     not (Actual is TGocciaMapValue) and not (Expected is TGocciaMapValue) then
   begin
     ActualObj := TGocciaObjectValue(Actual);
     ExpectedObj := TGocciaObjectValue(Expected);

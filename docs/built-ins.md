@@ -15,6 +15,9 @@ TGocciaGlobalBuiltin = (
   ggGlobalNumber,     // Number.parseInt, Number.isNaN, etc.
   ggPromise,          // Promise (placeholder)
   ggJSON,             // JSON.parse, JSON.stringify
+  ggSymbol,           // Symbol, Symbol.for, Symbol.keyFor
+  ggSet,              // Set constructor and prototype
+  ggMap,              // Map constructor and prototype
   ggTestAssertions    // describe, test, expect (testing only)
 );
 ```
@@ -23,7 +26,7 @@ The default set used by `ScriptLoader` and `REPL`:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON];
+                  ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap];
 ```
 
 The `TestRunner` adds `ggTestAssertions` to inject the test framework.
@@ -125,6 +128,7 @@ The JSON parser is a recursive descent implementation. Special handling:
 | `Object.defineProperties(obj, props)` | Define multiple descriptors |
 | `Object.getOwnPropertyNames(obj)` | All own property names |
 | `Object.getOwnPropertyDescriptor(obj, prop)` | Get property descriptor |
+| `Object.getOwnPropertySymbols(obj)` | All own symbol-keyed properties |
 
 ### Array (`Goccia.Builtins.GlobalArray.pas`)
 
@@ -163,6 +167,64 @@ String prototype methods are implemented on string values:
 **Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`
 
 Each creates a `TGocciaError` with the appropriate `Name` and `Message`.
+
+### Symbol (`Goccia.Builtins.GlobalSymbol.pas`)
+
+Symbols are unique, immutable primitive values used as property keys.
+
+| Method/Property | Description |
+|--------|-------------|
+| `Symbol(description?)` | Create a new unique symbol |
+| `Symbol.for(key)` | Get/create a symbol in the global registry |
+| `Symbol.keyFor(symbol)` | Get the key for a global registry symbol |
+| `Symbol.iterator` | Well-known symbol constant |
+
+Symbols can be used as computed property keys:
+
+```javascript
+const sym = Symbol("myKey");
+const obj = { [sym]: "value" };
+obj[sym]; // "value"
+```
+
+`Object.defineProperty` and `Object.getOwnPropertySymbols` also support symbol keys.
+
+### Set (`Goccia.Builtins.GlobalSet.pas`)
+
+A collection of unique values with insertion-order iteration.
+
+| Method/Property | Description |
+|--------|-------------|
+| `new Set(iterable?)` | Create a new Set, optionally from an array |
+| `set.add(value)` | Add a value (returns the Set for chaining) |
+| `set.has(value)` | Check if value exists |
+| `set.delete(value)` | Remove a value (returns boolean) |
+| `set.clear()` | Remove all values |
+| `set.size` | Number of values |
+| `set.forEach(callback)` | Iterate over values |
+| `set.values()` | Get values as an array |
+
+Sets are spreadable: `[...mySet]` produces an array of the set's values.
+
+### Map (`Goccia.Builtins.GlobalMap.pas`)
+
+A collection of key-value pairs with insertion-order iteration. Any value (including objects) can be a key.
+
+| Method/Property | Description |
+|--------|-------------|
+| `new Map(entries?)` | Create a new Map, optionally from `[[key, value], ...]` |
+| `map.get(key)` | Get value for key |
+| `map.set(key, value)` | Set a key-value pair (returns the Map for chaining) |
+| `map.has(key)` | Check if key exists |
+| `map.delete(key)` | Remove a key (returns boolean) |
+| `map.clear()` | Remove all entries |
+| `map.size` | Number of entries |
+| `map.forEach(callback)` | Iterate over entries |
+| `map.keys()` | Get keys as an array |
+| `map.values()` | Get values as an array |
+| `map.entries()` | Get `[key, value]` pairs as an array |
+
+Maps are spreadable: `[...myMap]` produces an array of `[key, value]` pairs.
 
 ### Test Assertions (`Goccia.Builtins.TestAssertions.pas`)
 

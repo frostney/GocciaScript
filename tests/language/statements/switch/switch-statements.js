@@ -3,8 +3,8 @@ description: Switch statements work correctly including fall-through behavior
 features: [switch-statement]
 ---*/
 
-test.skip("basic switch statement", () => {
-  function getDayType(day) {
+test("basic switch statement", () => {
+  const getDayType = (day) => {
     switch (day) {
       case "Monday":
       case "Tuesday":
@@ -18,15 +18,15 @@ test.skip("basic switch statement", () => {
       default:
         return "unknown";
     }
-  }
+  };
 
   expect(getDayType("Monday")).toBe("weekday");
   expect(getDayType("Saturday")).toBe("weekend");
   expect(getDayType("InvalidDay")).toBe("unknown");
 });
 
-test.skip("switch with fall-through", () => {
-  function getCategory(value) {
+test("switch with fall-through", () => {
+  const getCategory = (value) => {
     let result = "";
     switch (value) {
       case 1:
@@ -43,7 +43,7 @@ test.skip("switch with fall-through", () => {
         result += "other";
     }
     return result;
-  }
+  };
 
   expect(getCategory(1)).toBe("one small number");
   expect(getCategory(2)).toBe("small number");
@@ -52,8 +52,8 @@ test.skip("switch with fall-through", () => {
   expect(getCategory(99)).toBe("other");
 });
 
-test.skip("switch with different types", () => {
-  function checkType(value) {
+test("switch with different types", () => {
+  const checkType = (value) => {
     switch (typeof value) {
       case "number":
         return "numeric";
@@ -64,7 +64,7 @@ test.skip("switch with different types", () => {
       default:
         return "other type";
     }
-  }
+  };
 
   expect(checkType(42)).toBe("numeric");
   expect(checkType("hello")).toBe("textual");

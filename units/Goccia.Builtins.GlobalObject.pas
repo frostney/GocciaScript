@@ -6,7 +6,7 @@ interface
 
 uses
   Goccia.Scope, Goccia.Values.Primitives, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Values.NativeFunction, 
-  Goccia.Values.ObjectValue, Goccia.Arguments.Collection, Generics.Collections, Goccia.Builtins.Base;
+  Goccia.Values.ObjectValue, Goccia.Values.SymbolValue, Goccia.Arguments.Collection, Generics.Collections, Goccia.Builtins.Base;
 
 type
   TGocciaGlobalObject = class(TGocciaBuiltin)
@@ -23,6 +23,7 @@ type
     function ObjectGetOwnPropertyDescriptor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectDefineProperty(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function ObjectDefineProperties(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectGetOwnPropertySymbols(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -48,6 +49,7 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetOwnPropertyDescriptor, 'getOwnPropertyDescriptor', 2));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectDefineProperty, 'defineProperty', 3));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectDefineProperties, 'defineProperties', 2));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetOwnPropertySymbols, 'getOwnPropertySymbols', 1));
 
   AScope.DefineBuiltin(AName, FBuiltinObject);
 end;
@@ -314,7 +316,6 @@ begin
     ThrowError('Object.defineProperty: descriptor must be an object', 0, 0);
 
   Obj := TGocciaObjectValue(Args.GetElement(0));
-  PropertyName := Args.GetElement(1).ToStringLiteral.Value;
   DescriptorObject := TGocciaObjectValue(Args.GetElement(2));
 
   // Initialize all variables
@@ -374,7 +375,14 @@ begin
     Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter, PropertyFlags);
   end;
 
-  Obj.DefineProperty(PropertyName, Descriptor);
+  // Handle symbol keys
+  if Args.GetElement(1) is TGocciaSymbolValue then
+    Obj.DefineSymbolProperty(TGocciaSymbolValue(Args.GetElement(1)), Descriptor)
+  else
+  begin
+    PropertyName := Args.GetElement(1).ToStringLiteral.Value;
+    Obj.DefineProperty(PropertyName, Descriptor);
+  end;
   Result := Obj;
 end;
 
@@ -412,6 +420,32 @@ begin
   end;
 
   Result := Obj;
+end;
+
+function TGocciaGlobalObject.ObjectGetOwnPropertySymbols(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Obj: TGocciaObjectValue;
+  Arr: TGocciaArrayValue;
+  OwnSymbols: TArray<TGocciaSymbolValue>;
+  I: Integer;
+begin
+  TGocciaArgumentValidator.RequireAtLeast(Args, 1, 'Object.getOwnPropertySymbols', ThrowError);
+
+  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  begin
+    Result := TGocciaArrayValue.Create;
+    Exit;
+  end;
+
+  Obj := TGocciaObjectValue(Args.GetElement(0));
+  Arr := TGocciaArrayValue.Create;
+
+  // Get all own symbol properties (both enumerable and non-enumerable)
+  OwnSymbols := Obj.GetOwnSymbols;
+  for I := 0 to High(OwnSymbols) do
+    Arr.Elements.Add(OwnSymbols[I]);
+
+  Result := Arr;
 end;
 
 end.

@@ -5,13 +5,18 @@ unit Goccia.Values.ObjectValue;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.Interfaces, Generics.Collections, Goccia.Values.ObjectPropertyDescriptor, Math, Goccia.Logger, SysUtils, Classes, Goccia.Arguments.Collection;
+  Goccia.Values.Primitives, Goccia.Values.Interfaces, Generics.Collections,
+  Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.SymbolValue,
+  Math, Goccia.Logger, SysUtils, Classes, Goccia.Arguments.Collection;
 
 type
+
   TGocciaObjectValue = class(TGocciaValue, IPropertyMethods, IValueOf, IStringTag)
   protected
     FPropertyDescriptors: TDictionary<string, TGocciaPropertyDescriptor>;
     FPropertyInsertionOrder: TStringList; // Track insertion order for property enumeration
+    FSymbolDescriptors: TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
+    FSymbolInsertionOrder: TList<TGocciaSymbolValue>;
     FPrototype: TGocciaObjectValue;
   public
     constructor Create(APrototype: TGocciaObjectValue = nil);
@@ -55,6 +60,14 @@ type
     function GetOwnPropertyWritable: TStringList;
     function GetOwnPropertyConfigurable: TStringList;
 
+    // Symbol property methods
+    procedure DefineSymbolProperty(ASymbol: TGocciaSymbolValue; ADescriptor: TGocciaPropertyDescriptor);
+    procedure AssignSymbolProperty(ASymbol: TGocciaSymbolValue; AValue: TGocciaValue);
+    function GetSymbolProperty(ASymbol: TGocciaSymbolValue): TGocciaValue;
+    function HasSymbolProperty(ASymbol: TGocciaSymbolValue): Boolean;
+    function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
+    function GetOwnSymbols: TArray<TGocciaSymbolValue>;
+
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
   end;
 
@@ -72,6 +85,9 @@ begin
   FPropertyInsertionOrder := TStringList.Create;
   FPropertyInsertionOrder.Duplicates := dupIgnore; // Prevent duplicates
 
+  FSymbolDescriptors := TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>.Create;
+  FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
+
   FPrototype := APrototype;
 end;
 
@@ -83,6 +99,9 @@ begin
   // Property descriptors are now records - no manual cleanup needed
   FPropertyDescriptors.Free;
   FPropertyInsertionOrder.Free;
+
+  FSymbolDescriptors.Free;
+  FSymbolInsertionOrder.Free;
 
   inherited;
 end;
@@ -638,6 +657,89 @@ begin
 
   SetLength(Names, Count);
   Result := Names;
+end;
+
+{ Symbol property methods }
+
+procedure TGocciaObjectValue.DefineSymbolProperty(ASymbol: TGocciaSymbolValue; ADescriptor: TGocciaPropertyDescriptor);
+begin
+  FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
+  if not FSymbolInsertionOrder.Contains(ASymbol) then
+    FSymbolInsertionOrder.Add(ASymbol);
+end;
+
+procedure TGocciaObjectValue.AssignSymbolProperty(ASymbol: TGocciaSymbolValue; AValue: TGocciaValue);
+begin
+  DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+function TGocciaObjectValue.GetSymbolProperty(ASymbol: TGocciaSymbolValue): TGocciaValue;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  if FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+  begin
+    if Descriptor is TGocciaPropertyDescriptorData then
+    begin
+      Result := TGocciaPropertyDescriptorData(Descriptor).Value;
+      Exit;
+    end;
+  end;
+
+  // Check prototype chain
+  if Assigned(FPrototype) then
+  begin
+    Result := FPrototype.GetSymbolProperty(ASymbol);
+    Exit;
+  end;
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaObjectValue.HasSymbolProperty(ASymbol: TGocciaSymbolValue): Boolean;
+begin
+  Result := FSymbolDescriptors.ContainsKey(ASymbol);
+end;
+
+function TGocciaObjectValue.GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
+var
+  Entries: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
+  Count, I: Integer;
+  Symbol: TGocciaSymbolValue;
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  SetLength(Entries, FSymbolInsertionOrder.Count);
+  Count := 0;
+
+  for I := 0 to FSymbolInsertionOrder.Count - 1 do
+  begin
+    Symbol := FSymbolInsertionOrder[I];
+    if FSymbolDescriptors.TryGetValue(Symbol, Descriptor) then
+    begin
+      if Descriptor.Enumerable then
+      begin
+        if Descriptor is TGocciaPropertyDescriptorData then
+        begin
+          Entries[Count] := TPair<TGocciaSymbolValue, TGocciaValue>.Create(Symbol, TGocciaPropertyDescriptorData(Descriptor).Value);
+          Inc(Count);
+        end;
+      end;
+    end;
+  end;
+
+  SetLength(Entries, Count);
+  Result := Entries;
+end;
+
+function TGocciaObjectValue.GetOwnSymbols: TArray<TGocciaSymbolValue>;
+var
+  Symbols: TArray<TGocciaSymbolValue>;
+  I: Integer;
+begin
+  SetLength(Symbols, FSymbolInsertionOrder.Count);
+  for I := 0 to FSymbolInsertionOrder.Count - 1 do
+    Symbols[I] := FSymbolInsertionOrder[I];
+  Result := Symbols;
 end;
 
 end.

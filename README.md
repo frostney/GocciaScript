@@ -37,7 +37,7 @@ GocciaScript includes the parts of JavaScript that lead to clear, predictable, a
 
 ### Built-in Objects
 
-`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`).
+`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`).
 
 See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 

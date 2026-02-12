@@ -5,7 +5,7 @@ unit Goccia.Evaluator;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Interfaces, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.FunctionBase, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.Error, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser,
+  Goccia.Values.Primitives, Goccia.Interfaces, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.FunctionBase, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.Error, Goccia.Values.SymbolValue, Goccia.Values.SetValue, Goccia.Values.MapValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser,
   Goccia.Evaluator.Arithmetic, Goccia.Evaluator.Bitwise, Goccia.Evaluator.Comparison, Goccia.Evaluator.TypeOperations, Goccia.Evaluator.Assignment, Goccia.Arguments.Collection,
   Generics.Collections, SysUtils, Math, Classes;
 
@@ -33,6 +33,7 @@ function EvaluateArrowFunction(ArrowFunctionExpression: TGocciaArrowFunctionExpr
 function EvaluateBlock(BlockStatement: TGocciaBlockStatement; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateIf(IfStatement: TGocciaIfStatement; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTry(TryStatement: TGocciaTryStatement; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateSwitch(SwitchStatement: TGocciaSwitchStatement; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateClassMethod(ClassMethod: TGocciaClassMethod; Context: TGocciaEvaluationContext; SuperClass: TGocciaValue = nil): TGocciaValue;
 function EvaluateClass(ClassDeclaration: TGocciaClassDeclaration; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateClassExpression(ClassExpression: TGocciaClassExpression; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -121,6 +122,7 @@ var
   Value: TGocciaValue;
   Obj: TGocciaValue;
   PropName: string;
+  PropertyValue: TGocciaValue;
   I: Integer;
   Callee: TGocciaValue;
   Arguments: TObjectList<TGocciaValue>;
@@ -162,9 +164,15 @@ begin
   begin
     // Computed property assignment (e.g., obj[expr] = value)
     Obj := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(Expression).ObjectExpr, Context);
-    PropName := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(Expression).PropertyExpression, Context).ToStringLiteral.Value;
+    PropertyValue := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(Expression).PropertyExpression, Context);
     Value := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(Expression).Value, Context);
-    AssignComputedProperty(Obj, PropName, Value, Context.OnError, Expression.Line, Expression.Column);
+    if (PropertyValue is TGocciaSymbolValue) and (Obj is TGocciaObjectValue) then
+      TGocciaObjectValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyValue), Value)
+    else
+    begin
+      PropName := PropertyValue.ToStringLiteral.Value;
+      AssignComputedProperty(Obj, PropName, Value, Context.OnError, Expression.Line, Expression.Column);
+    end;
     Result := Value;
   end
   else if Expression is TGocciaCompoundAssignmentExpression then
@@ -481,17 +489,14 @@ begin
   end
   else if Statement is TGocciaSwitchStatement then
   begin
-    Logger.Debug('EvaluateStatement: Processing SwitchStatement (parsing only - no execution)');
-    // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Logger.Debug('EvaluateStatement: Processing SwitchStatement');
+    Result := EvaluateSwitch(TGocciaSwitchStatement(Statement), Context);
     Logger.Debug('EvaluateStatement: SwitchStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaBreakStatement then
   begin
-    Logger.Debug('EvaluateStatement: Processing BreakStatement (parsing only - no execution)');
-    // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Logger.Debug('EvaluateStatement: BreakStatement result type: %s', [Result.ClassName]);
+    Logger.Debug('EvaluateStatement: Processing BreakStatement');
+    raise TGocciaBreakSignal.Create;
   end
   else if Statement is TGocciaReturnStatement then
   begin
@@ -935,6 +940,14 @@ begin
   begin
     // Computed access: evaluate the property expression to get the property name
     PropertyValue := EvaluateExpression(MemberExpression.PropertyExpression, Context);
+
+    // Symbol property access
+    if (PropertyValue is TGocciaSymbolValue) and (Obj is TGocciaObjectValue) then
+    begin
+      Result := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
+      Exit;
+    end;
+
     PropertyName := PropertyValue.ToStringLiteral.Value;
     Logger.Debug('EvaluateMember: Computed property name: %s', [PropertyName]);
   end
@@ -1067,6 +1080,14 @@ begin
   begin
     // Computed access: evaluate the property expression to get the property name
     PropertyValue := EvaluateExpression(MemberExpression.PropertyExpression, Context);
+
+    // Symbol property access
+    if (PropertyValue is TGocciaSymbolValue) and (ObjectValue is TGocciaObjectValue) then
+    begin
+      Result := TGocciaObjectValue(ObjectValue).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
+      Exit;
+    end;
+
     PropertyName := PropertyValue.ToStringLiteral.Value;
     Logger.Debug('EvaluateMember: Computed property name: %s', [PropertyName]);
   end
@@ -1173,6 +1194,20 @@ begin
         for J := 1 to Length(SpreadValue.ToStringLiteral.Value) do
           Arr.Elements.Add(TGocciaStringLiteralValue.Create(SpreadValue.ToStringLiteral.Value[J]));
       end
+      else if SpreadValue is TGocciaSetValue then
+      begin
+        // Spread Set values
+        SpreadArray := TGocciaSetValue(SpreadValue).ToArray;
+        for J := 0 to SpreadArray.Elements.Count - 1 do
+          Arr.Elements.Add(SpreadArray.Elements[J]);
+      end
+      else if SpreadValue is TGocciaMapValue then
+      begin
+        // Spread Map entries as [key, value] arrays
+        SpreadArray := TGocciaMapValue(SpreadValue).ToArray;
+        for J := 0 to SpreadArray.Elements.Count - 1 do
+          Arr.Elements.Add(SpreadArray.Elements[J]);
+      end
       else if (SpreadValue is TGocciaObjectValue) then
       begin
         // For objects, we would need iterator support - for now throw TypeError
@@ -1224,9 +1259,11 @@ var
   SetterFunction: TGocciaValue;
   PropertyName: string;
   PropertyExpression: TGocciaExpression;
+  PropertyValue: TGocciaValue;
   ExistingDescriptor: TGocciaPropertyDescriptor;
   ExistingSetter: TGocciaValue;
   ExistingGetter: TGocciaValue;
+  SymbolEntry: TPair<TGocciaSymbolValue, TGocciaValue>;
 begin
   Obj := TGocciaObjectValue.Create;
 
@@ -1257,10 +1294,13 @@ begin
 
               if SpreadValue is TGocciaObjectValue then
               begin
-                // Spread object properties
+                // Spread object string properties
                 SpreadObj := TGocciaObjectValue(SpreadValue);
                 for Key in SpreadObj.GetEnumerablePropertyNames do
                   Obj.DefineProperty(Key, TGocciaPropertyDescriptorData.Create(SpreadObj.GetProperty(Key), [pfEnumerable, pfConfigurable, pfWritable]));
+                // Also spread symbol properties
+                for SymbolEntry in SpreadObj.GetEnumerableSymbolProperties do
+                  Obj.AssignSymbolProperty(SymbolEntry.Key, SymbolEntry.Value);
               end
                              else if SpreadValue is TGocciaArrayValue then
                begin
@@ -1283,8 +1323,14 @@ begin
             else
             begin
               // Regular computed property: {[expr]: value}
-              ComputedKey := EvaluateExpression(ComputedPair.Key, Context).ToStringLiteral.Value;
-              Obj.DefineProperty(ComputedKey, TGocciaPropertyDescriptorData.Create(EvaluateExpression(ComputedPair.Value, Context), [pfEnumerable, pfConfigurable, pfWritable]));
+              PropertyValue := EvaluateExpression(ComputedPair.Key, Context);
+              if PropertyValue is TGocciaSymbolValue then
+                Obj.AssignSymbolProperty(TGocciaSymbolValue(PropertyValue), EvaluateExpression(ComputedPair.Value, Context))
+              else
+              begin
+                ComputedKey := PropertyValue.ToStringLiteral.Value;
+                Obj.DefineProperty(ComputedKey, TGocciaPropertyDescriptorData.Create(EvaluateExpression(ComputedPair.Value, Context), [pfEnumerable, pfConfigurable, pfWritable]));
+              end;
             end;
           end;
 
@@ -1408,6 +1454,9 @@ begin
             SpreadObj := TGocciaObjectValue(SpreadValue);
             for Key in SpreadObj.GetEnumerablePropertyNames do
               Obj.AssignProperty(Key, SpreadObj.GetProperty(Key));
+            // Also spread symbol properties
+            for SymbolEntry in SpreadObj.GetEnumerableSymbolProperties do
+              Obj.AssignSymbolProperty(SymbolEntry.Key, SymbolEntry.Value);
           end
           else if SpreadValue is TGocciaArrayValue then
           begin
@@ -1435,9 +1484,14 @@ begin
         else
         begin
           // Regular computed property: {[expr]: value}
-          ComputedKey := EvaluateExpression(ComputedPair.Key, Context).ToStringLiteral.Value;
-          // Set the property (computed properties can overwrite static ones)
-          Obj.AssignProperty(ComputedKey, EvaluateExpression(ComputedPair.Value, Context));
+          PropertyValue := EvaluateExpression(ComputedPair.Key, Context);
+          if PropertyValue is TGocciaSymbolValue then
+            Obj.AssignSymbolProperty(TGocciaSymbolValue(PropertyValue), EvaluateExpression(ComputedPair.Value, Context))
+          else
+          begin
+            ComputedKey := PropertyValue.ToStringLiteral.Value;
+            Obj.AssignProperty(ComputedKey, EvaluateExpression(ComputedPair.Value, Context));
+          end;
         end;
       end;
     end;
@@ -1878,6 +1932,73 @@ begin
   end;
 end;
 
+function EvaluateSwitch(SwitchStatement: TGocciaSwitchStatement; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  Discriminant: TGocciaValue;
+  CaseClause: TGocciaCaseClause;
+  CaseTest: TGocciaValue;
+  I, J: Integer;
+  Matched: Boolean;
+  DefaultIndex: Integer;
+begin
+  Logger.Debug('EvaluateSwitch: Starting switch evaluation');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  // Evaluate the discriminant expression
+  Discriminant := EvaluateExpression(SwitchStatement.Discriminant, Context);
+
+  Matched := False;
+  DefaultIndex := -1;
+
+  try
+    // First pass: find matching case or default
+    for I := 0 to SwitchStatement.Cases.Count - 1 do
+    begin
+      CaseClause := SwitchStatement.Cases[I];
+
+      if not Assigned(CaseClause.Test) then
+      begin
+        // Remember default case index for later
+        DefaultIndex := I;
+        Continue;
+      end;
+
+      if not Matched then
+      begin
+        CaseTest := EvaluateExpression(CaseClause.Test, Context);
+        if IsStrictEqual(Discriminant, CaseTest) then
+          Matched := True;
+      end;
+
+      // Once matched, execute this case's statements (fall-through)
+      if Matched then
+      begin
+        for J := 0 to CaseClause.Consequent.Count - 1 do
+          Result := Evaluate(CaseClause.Consequent[J], Context);
+      end;
+    end;
+
+    // If no case matched, execute from default and fall through
+    if not Matched and (DefaultIndex >= 0) then
+    begin
+      for I := DefaultIndex to SwitchStatement.Cases.Count - 1 do
+      begin
+        CaseClause := SwitchStatement.Cases[I];
+        for J := 0 to CaseClause.Consequent.Count - 1 do
+          Result := Evaluate(CaseClause.Consequent[J], Context);
+      end;
+    end;
+  except
+    on E: TGocciaBreakSignal do
+    begin
+      // Break exits the switch — swallow the signal
+      Logger.Debug('EvaluateSwitch: Break signal caught');
+    end;
+  end;
+
+  Logger.Debug('EvaluateSwitch: Switch evaluation completed');
+end;
+
 function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Callee: TGocciaValue;
@@ -1943,6 +2064,11 @@ begin
         ClassValue.SuperClass.ConstructorMethod.Call(Arguments, Instance);
 
       Result := Instance;
+    end
+    else if Callee is TGocciaNativeFunctionValue then
+    begin
+      // Native function constructors (e.g. Error, TypeError, etc.)
+      Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
     end
     else
     begin
@@ -2812,8 +2938,15 @@ begin
         // Regular property
         if Prop.Computed then
         begin
-          // Computed property key
-          Key := EvaluateExpression(Prop.KeyExpression, Context).ToStringLiteral.Value;
+          // Computed property key (may be a symbol)
+          PropValue := EvaluateExpression(Prop.KeyExpression, Context);
+          if PropValue is TGocciaSymbolValue then
+          begin
+            PropValue := ObjectValue.GetSymbolProperty(TGocciaSymbolValue(PropValue));
+            AssignPattern(Prop.Pattern, PropValue, Context, IsDeclaration);
+            Continue;
+          end;
+          Key := PropValue.ToStringLiteral.Value;
         end
         else
         begin

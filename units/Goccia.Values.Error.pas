@@ -25,6 +25,11 @@ type
     property Value: TGocciaValue read FValue;
   end;
 
+  TGocciaBreakSignal = class(Exception)
+  public
+    constructor Create;
+  end;
+
 implementation
 
 { TGocciaReturnValue }
@@ -41,6 +46,13 @@ constructor TGocciaThrowValue.Create(AValue: TGocciaValue);
 begin
   inherited Create('');
   FValue := AValue;
+end;
+
+{ TGocciaBreakSignal }
+
+constructor TGocciaBreakSignal.Create;
+begin
+  inherited Create('break');
 end;
 
 end.

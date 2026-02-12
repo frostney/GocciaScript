@@ -17,9 +17,11 @@ tests/
 │   │       └── ...
 │   ├── Error/
 │   ├── JSON/
+│   ├── Map/
 │   ├── Math/
 │   ├── Number/
 │   ├── Object/
+│   ├── Set/
 │   ├── String/
 │   │   └── prototype/
 │   └── Symbol/
@@ -32,7 +34,7 @@ tests/
     ├── identifiers/    # Unicode support, reserved words
     ├── modules/        # Import/export
     ├── objects/        # Object literals, methods, computed properties
-    ├── statements/     # if, for, while, switch, try/catch, break/continue
+    ├── statements/     # if/else, switch/case/break, try/catch/finally
     └── unary-operators.js
 ```
 

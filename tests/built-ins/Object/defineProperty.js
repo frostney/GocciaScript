@@ -201,7 +201,7 @@ test("Object.defineProperty with inheritance and shadowing", () => {
   expect(newChildDesc.enumerable).toBe(false);
 });
 
-test.skip("Object.defineProperty with symbol keys", () => {
+test("Object.defineProperty with symbol keys", () => {
   const obj = {};
   const sym1 = Symbol("test1");
   const sym2 = Symbol("test2");

@@ -113,8 +113,9 @@ GocciaScript uses a layered error approach:
 2. **Runtime errors** use a callback pattern (`OnError` in `TGocciaEvaluationContext`) — this keeps evaluator functions pure.
 3. **JavaScript-level errors** use `TGocciaThrowValue` for `throw` statements and `try/catch` — these flow through the evaluator's return path.
 4. **`try-finally` without `catch`** — The evaluator wraps the Pascal `try...except` in a Pascal `try...finally` to guarantee the JS `finally` block runs before exceptions propagate, even when no `catch` clause exists.
+5. **`break` in `switch`** — Uses `TGocciaBreakSignal` (a Pascal exception) to exit `switch` cases. The `EvaluateSwitch` function catches this signal to implement JavaScript's fall-through-until-break semantics.
 
-**Why not exceptions everywhere?** Pascal exceptions disrupt the pure-function model of the evaluator. The callback pattern allows the evaluator to signal errors without unwinding the call stack, making control flow explicit.
+**Why not exceptions everywhere?** Pascal exceptions disrupt the pure-function model of the evaluator. The callback pattern allows the evaluator to signal errors without unwinding the call stack, making control flow explicit. The exceptions to this rule (`TGocciaThrowValue`, `TGocciaReturnValue`, `TGocciaBreakSignal`) are used only for non-local exits where unwinding is the intended behavior.
 
 ## Configurable Built-ins
 
@@ -122,7 +123,8 @@ Built-ins are registered via a `TGocciaGlobalBuiltins` set of flags:
 
 ```pascal
 TGocciaGlobalBuiltin = (ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                         ggGlobalNumber, ggPromise, ggJSON, ggTestAssertions);
+                         ggGlobalNumber, ggPromise, ggJSON, ggSymbol,
+                         ggSet, ggMap, ggTestAssertions);
 ```
 
 **Why configurable?**

@@ -11,11 +11,14 @@ classDiagram
     TGocciaValue <|-- TGocciaBooleanLiteralValue
     TGocciaValue <|-- TGocciaNumberLiteralValue
     TGocciaValue <|-- TGocciaStringLiteralValue
+    TGocciaValue <|-- TGocciaSymbolValue
     TGocciaValue <|-- TGocciaObjectValue
     TGocciaValue <|-- TGocciaNativeFunction
     TGocciaValue <|-- TGocciaError
 
     TGocciaObjectValue <|-- TGocciaArrayValue
+    TGocciaObjectValue <|-- TGocciaSetValue
+    TGocciaObjectValue <|-- TGocciaMapValue
     TGocciaObjectValue <|-- TGocciaFunctionValue
     TGocciaObjectValue <|-- TGocciaClassValue
     TGocciaObjectValue <|-- TGocciaInstanceValue
@@ -188,6 +191,27 @@ end;
 
 String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system.
 
+### Symbols
+
+Unique, immutable primitive values used as property keys (`Goccia.Values.SymbolValue.pas`):
+
+```pascal
+TGocciaSymbolValue = class(TGocciaValue)
+  FDescription: string;
+  FId: Integer;           // Auto-incrementing unique ID
+end;
+```
+
+Each symbol has a globally unique `Id` assigned at creation. Type coercion:
+
+| Conversion | Result |
+|------------|--------|
+| `ToBoolean` | `true` |
+| `ToNumber` | `NaN` |
+| `ToString` | `"Symbol(description)"` |
+
+Objects store symbol-keyed properties separately from string-keyed properties via `TGocciaObjectValue.FSymbolDescriptors`.
+
 ## Type Conversion
 
 Every value implements three conversion methods, following JavaScript coercion rules:
@@ -255,6 +279,25 @@ Objects can have a prototype via `FPrototype: TGocciaObjectValue`. Property look
 - **Sparse arrays** — Holes are represented as `nil` in the internal `FElements` list.
 - **Numeric property access** — `arr["0"]` and `arr[0]` both resolve to the first element.
 - **Prototype methods** — `map`, `filter`, `reduce`, `forEach`, `some`, `every`, `flat`, `flatMap`, `join`, `includes`, `push`, `pop`, `slice`, `toReversed`, `toSorted`, `toSpliced` — all implemented directly on the array value.
+
+## Sets
+
+`TGocciaSetValue` extends `TGocciaObjectValue` (`Goccia.Values.SetValue.pas`). A collection of unique values with insertion-order iteration.
+
+- **Uniqueness** — Uses `IsSameValueZero` (same as `===` except `NaN === NaN` is true) to test for duplicates.
+- **Methods** — `add`, `has`, `delete`, `clear`, `forEach`, `values` — all registered as native methods on the instance.
+- **`size`** — Returned dynamically via `GetProperty` override.
+- **Spreadable** — `ToArray` converts to a `TGocciaArrayValue` for spread syntax support.
+
+## Maps
+
+`TGocciaMapValue` extends `TGocciaObjectValue` (`Goccia.Values.MapValue.pas`). A collection of key-value pairs with insertion-order iteration where any value can be a key.
+
+- **Key equality** — Uses `IsSameValueZero` for key lookup.
+- **Internal storage** — `FEntries: TList<TGocciaMapEntry>` where each entry is a `record` with `Key` and `Value` fields.
+- **Methods** — `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys`, `values`, `entries` — all registered as native methods on the instance.
+- **`size`** — Returned dynamically via `GetProperty` override.
+- **Spreadable** — `ToArray` converts to a `TGocciaArrayValue` of `[key, value]` pairs for spread syntax support.
 
 ## Functions
 
