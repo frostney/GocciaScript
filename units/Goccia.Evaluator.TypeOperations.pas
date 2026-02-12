@@ -7,7 +7,7 @@ interface
 uses
   Goccia.Values.Primitives, Goccia.Values.ArrayValue, Goccia.Values.ObjectValue,
   Goccia.Values.ClassValue, Goccia.Values.FunctionValue, Goccia.Values.NativeFunction,
-  Goccia.Logger, SysUtils;
+  SysUtils;
 
 type
   TIsObjectInstanceOfClassFunction = function(Obj: TGocciaObjectValue; ClassValue: TGocciaClassValue): Boolean;
@@ -22,15 +22,11 @@ uses Goccia.Values.ClassHelper;
 
 function EvaluateTypeof(Operand: TGocciaValue): TGocciaValue;
 begin
-  Logger.Debug('EvaluateTypeof: typeof operator called with operand: %s', [Operand.ToStringLiteral.Value]);
   Result := TGocciaStringLiteralValue.Create(Operand.TypeOf);
 end;
 
 function EvaluateInstanceof(Left, Right: TGocciaValue; IsObjectInstanceOfClass: TIsObjectInstanceOfClassFunction): TGocciaValue;
 begin
-  // Implement instanceof operator according to JavaScript specification
-  Logger.Debug('EvaluateInstanceof: instanceof operator called with Left: %s, Right: %s', [Left.ToStringLiteral.Value, Right.ToStringLiteral.Value]);
-
   // Right operand must be a constructor/class
   if not (Right is TGocciaClassValue) then
   begin
@@ -98,9 +94,6 @@ var
   PropertyName: string;
   Index: Integer;
 begin
-  // Implement the 'in' operator: property/index in object/array/string
-  Logger.Debug('EvaluateInOperator: in operator called with Left: %s, Right: %s', [Left.ToStringLiteral.Value, Right.ToStringLiteral.Value]);
-
   PropertyName := Left.ToStringLiteral.Value; // Left operand is the property name
 
   if Right is TGocciaArrayValue then

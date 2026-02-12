@@ -84,7 +84,7 @@ type
 implementation
 
 uses
-  Goccia.Logger, Goccia.Evaluator, Goccia.Values.ObjectPropertyDescriptor, Generics.Defaults, Goccia.Utils, Goccia.Evaluator.Comparison, Goccia.Values.ClassHelper, Goccia.Values.FunctionValue;
+  Goccia.Evaluator, Goccia.Values.ObjectPropertyDescriptor, Generics.Defaults, Goccia.Utils, Goccia.Evaluator.Comparison, Goccia.Values.ClassHelper, Goccia.Values.FunctionValue;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var
@@ -268,8 +268,6 @@ var
   Callback: TGocciaValue;
   I: Integer;
 begin
-  Logger.Debug('ArrayMap: Starting with ThisValue type: %s, pointer: %p', [ThisValue.ClassName, Pointer(ThisValue)]);
-
   Callback := ValidateArrayMethodCall('map', Args, ThisValue, True);
   ResultArray := TGocciaArrayValue.Create;
 
@@ -282,9 +280,7 @@ begin
       Continue;
     end;
 
-    Logger.Debug('ArrayMap: Iteration %d, about to call with ThisValue type: %s, pointer: %p', [I, ThisValue.ClassName, Pointer(ThisValue)]);
     ResultArray.Elements.Add(ExecuteArrayCallback(Callback, FElements[I], I, ThisValue));
-    Logger.Debug('ArrayMap: After iteration %d, ThisValue type: %s, pointer: %p', [I, ThisValue.ClassName, Pointer(ThisValue)]);
   end;
 
   Result := ResultArray;

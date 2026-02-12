@@ -5,7 +5,7 @@ unit Goccia.Scope;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ObjectValue, Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, TypInfo, Goccia.Interfaces, Goccia.Token;
+  Goccia.Values.Primitives, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ObjectValue, Goccia.Error, Generics.Collections, SysUtils, TypInfo, Goccia.Interfaces, Goccia.Token;
 
 type
   TGocciaDeclarationType = (dtUnknown, dtLet, dtConst, dtParameter);
@@ -111,12 +111,6 @@ constructor TGocciaScope.Create(AParent: TGocciaScope = nil; AScopeKind: TGoccia
 begin
   FScopeKind := AScopeKind;
   FCustomLabel := ACustomLabel;
-  Logger.Debug('Scope.Create: Creating new scope');
-  Logger.Debug('  Kind: %s', [GetEnumName(TypeInfo(TGocciaScopeKind), Ord(FScopeKind))]);
-  if FCustomLabel <> '' then
-    Logger.Debug('  CustomLabel: %s', [FCustomLabel]);
-  Logger.Debug('  Parent scope address: %d', [PtrUInt(AParent)]);
-
   FThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   FParent := AParent;
   FLexicalBindings := TDictionary<string, TLexicalBinding>.Create;
@@ -127,28 +121,13 @@ var
   LexicalBinding: TLexicalBinding;
   Key: string;
 begin
-  Logger.Debug('Scope.Destroy: Destroying scope');
-  Logger.Debug('  Kind: %s', [GetEnumName(TypeInfo(TGocciaScopeKind), Ord(FScopeKind))]);
-  if FCustomLabel <> '' then
-    Logger.Debug('  CustomLabel: %s', [FCustomLabel]);
-  Logger.Debug('  Self address: %d', [PtrUInt(Self)]);
-  Logger.Debug('  Variables dictionary address: %d', [PtrUInt(FLexicalBindings)]);
-
   if Assigned(FLexicalBindings) then
-  begin
-    // Log all variables in the scope before destruction (commented out to avoid access violations during cleanup)
-    Logger.Debug('  Variables in scope: %d variables', [FLexicalBindings.Count]);
-
     FLexicalBindings.Free;
-  end;
 
   // Don't free FThisValue - the scope doesn't own it, it's just a reference
   // The actual owner should handle freeing it
   if Assigned(FThisValue) then
-  begin
-    Logger.Debug('  Not freeing ThisValue (scope doesn''t own it): %s', [FThisValue.ClassName]);
     FThisValue := nil;
-  end;
 
   inherited;
 end;
@@ -297,14 +276,6 @@ procedure TGocciaScope.DefineBuiltin(const AName: string; AValue: TGocciaValue);
 var
   LexicalBinding: TLexicalBinding;
 begin
-  Logger.Debug('Scope.DefineBuiltin: Defining builtin for name: %s', [AName]);
-  Logger.Debug('  Kind: %s', [GetEnumName(TypeInfo(TGocciaScopeKind), Ord(FScopeKind))]);
-  if FCustomLabel <> '' then
-    Logger.Debug('  CustomLabel: %s', [FCustomLabel]);
-  Logger.Debug('  Value type: %s', [AValue.ClassName]);
-  Logger.Debug('  Self address: %d', [PtrUInt(Self)]);
-  Logger.Debug('  Variables dictionary address: %d', [PtrUInt(FLexicalBindings)]);
-
   // DefineBuiltin allows redefinition - used for built-ins and global initialization
   LexicalBinding.Value := AValue;
   LexicalBinding.DeclarationType := dtLet;

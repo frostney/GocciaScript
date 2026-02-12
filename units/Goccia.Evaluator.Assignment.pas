@@ -22,67 +22,36 @@ function PerformIncrement(OldValue: TGocciaValue; IsIncrement: Boolean): TGoccia
 
 implementation
 
-uses Goccia.Values.ClassHelper, Goccia.Values.Error;
+uses Goccia.Values.ClassHelper, Goccia.Values.ErrorHelper;
 
 procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
-var
-  ErrorObj: TGocciaObjectValue;
 begin
   // Handle different object types for property assignment
   // Direct property assignment (obj.prop = value) should call the object's AssignProperty method
   // which handles setters correctly
   if (Obj is TGocciaInstanceValue) then
-  begin
-    TGocciaInstanceValue(Obj).AssignProperty(PropertyName, Value);
-  end
+    TGocciaInstanceValue(Obj).AssignProperty(PropertyName, Value)
   else if (Obj is TGocciaObjectValue) then
-  begin
-    TGocciaObjectValue(Obj).AssignProperty(PropertyName, Value);
-  end
+    TGocciaObjectValue(Obj).AssignProperty(PropertyName, Value)
   else if (Obj is TGocciaClassValue) then
-  begin
-    // Handle static property assignment
-    TGocciaClassValue(Obj).SetProperty(PropertyName, Value);
-  end
+    TGocciaClassValue(Obj).SetProperty(PropertyName, Value)
   else if Assigned(OnError) then
-  begin
-    // Throw proper TypeError when trying to set property on non-object
-    ErrorObj := TGocciaObjectValue.Create;
-    ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
-    ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create('Cannot set property on non-object'));
-    raise TGocciaThrowValue.Create(ErrorObj);
-  end;
+    ThrowTypeError('Cannot set property on non-object');
 end;
 
 procedure AssignComputedProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
-var
-  ErrorObj: TGocciaObjectValue;
 begin
   // Handle different object types for computed property assignment
   if (Obj is TGocciaArrayValue) then
-  begin
-    TGocciaArrayValue(Obj).SetProperty(PropertyName, Value);
-  end
+    TGocciaArrayValue(Obj).SetProperty(PropertyName, Value)
   else if (Obj is TGocciaInstanceValue) then
-  begin
-    TGocciaInstanceValue(Obj).AssignProperty(PropertyName, Value);
-  end
+    TGocciaInstanceValue(Obj).AssignProperty(PropertyName, Value)
   else if (Obj is TGocciaObjectValue) then
-  begin
-    TGocciaObjectValue(Obj).AssignProperty(PropertyName, Value);
-  end
+    TGocciaObjectValue(Obj).AssignProperty(PropertyName, Value)
   else if (Obj is TGocciaClassValue) then
-  begin
-    TGocciaClassValue(Obj).SetProperty(PropertyName, Value);
-  end
+    TGocciaClassValue(Obj).SetProperty(PropertyName, Value)
   else if Assigned(OnError) then
-  begin
-    // Throw proper TypeError when trying to set property on non-object
-    ErrorObj := TGocciaObjectValue.Create;
-    ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
-    ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create('Cannot set property on non-object'));
-    raise TGocciaThrowValue.Create(ErrorObj);
-  end;
+    ThrowTypeError('Cannot set property on non-object');
 end;
 
 procedure PerformPropertyCompoundAssignment(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; Operator: TGocciaTokenType; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);

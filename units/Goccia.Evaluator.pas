@@ -5,8 +5,8 @@ unit Goccia.Evaluator;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Interfaces, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Logger, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.FunctionBase, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.Error, Goccia.Values.SymbolValue, Goccia.Values.SetValue, Goccia.Values.MapValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser,
-  Goccia.Evaluator.Arithmetic, Goccia.Evaluator.Bitwise, Goccia.Evaluator.Comparison, Goccia.Evaluator.TypeOperations, Goccia.Evaluator.Assignment, Goccia.Arguments.Collection,
+  Goccia.Values.Primitives, Goccia.Interfaces, Goccia.Token, Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Modules, Goccia.Values.NativeFunction, Goccia.Values.ObjectValue, Goccia.Values.FunctionValue, Goccia.Values.FunctionBase, Goccia.Values.ClassValue, Goccia.Values.ArrayValue, Goccia.Values.Error, Goccia.Values.SymbolValue, Goccia.Values.SetValue, Goccia.Values.MapValue, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Utils, Goccia.Lexer, Goccia.Parser,
+  Goccia.Evaluator.Arithmetic, Goccia.Evaluator.Bitwise, Goccia.Evaluator.Comparison, Goccia.Evaluator.TypeOperations, Goccia.Evaluator.Assignment, Goccia.Arguments.Collection, Goccia.Values.ErrorHelper,
   Generics.Collections, SysUtils, Math, Classes;
 
 type
@@ -81,8 +81,6 @@ begin
     Context.OnError(Message, Line, Column);
 end;
 
-
-
 function Evaluate(Node: TGocciaASTNode; Context: TGocciaEvaluationContext): TGocciaValue;
 begin
   // Set global context for function calls to inherit error handling
@@ -92,28 +90,18 @@ begin
     GlobalEvaluationContext.LoadModule := Context.LoadModule;
   end;
 
-  Logger.Debug('Evaluate: Node class is %s', [Node.ClassName]);
-  Logger.Debug('Evaluate: Node line: %d', [Node.Line]);
-  Logger.Debug('Evaluate: Node column: %d', [Node.Column]);
-
   if Node is TGocciaExpression then
   begin
-    Logger.Debug('Evaluate: Processing as Expression');
     Result := EvaluateExpression(TGocciaExpression(Node), Context);
-    Logger.Debug('Evaluate: Expression result type: %s', [Result.ClassName]);
   end
   else if Node is TGocciaStatement then
   begin
-    Logger.Debug('Evaluate: Processing as Statement');
     Result := EvaluateStatement(TGocciaStatement(Node), Context);
-    Logger.Debug('Evaluate: Statement result type: %s', [Result.ClassName]);
   end
   else
   begin
-    Logger.Debug('Evaluate: Unknown node type, returning undefined');
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
-  Logger.Debug('Evaluate: Final result type: %s', [Result.ClassName]);
 end;
 
 function EvaluateExpression(Expression: TGocciaExpression; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -130,9 +118,6 @@ var
 begin
   if Expression is TGocciaLiteralExpression then
   begin
-    Logger.Debug('EvaluateExpression: TGocciaLiteralExpression');
-    Logger.Debug('  Literal value type: %s', [TGocciaLiteralExpression(Expression).Value.ClassName]);
-    Logger.Debug('  Literal value toString: %s', [TGocciaLiteralExpression(Expression).Value.ToStringLiteral.Value]);
     Result := TGocciaLiteralExpression(Expression).Value;
   end
   else if Expression is TGocciaTemplateLiteralExpression then
@@ -294,10 +279,7 @@ begin
   end
   else if Expression is TGocciaCallExpression then
   begin
-    Logger.Debug('EvaluateExpression: TGocciaCallExpression - before EvaluateCall');
     Result := EvaluateCall(TGocciaCallExpression(Expression), Context);
-    Logger.Debug('EvaluateExpression: TGocciaCallExpression - after EvaluateCall, result type: %s', [Result.ClassName]);
-    Logger.Debug('EvaluateExpression: TGocciaCallExpression - result ToString: %s', [Result.ToStringLiteral.Value]);
   end
   else if Expression is TGocciaMemberExpression then
     Result := EvaluateMember(TGocciaMemberExpression(Expression), Context)
@@ -321,17 +303,14 @@ begin
   end
   else if Expression is TGocciaThisExpression then
   begin
-    Logger.Debug('EvaluateExpression: Handling TGocciaThisExpression');
     Result := Context.Scope.ThisValue;
   end
   else if Expression is TGocciaClassExpression then
   begin
-    Logger.Debug('EvaluateExpression: Handling TGocciaClassExpression');
     Result := EvaluateClassExpression(TGocciaClassExpression(Expression), Context);
   end
   else if Expression is TGocciaSuperExpression then
   begin
-    Logger.Debug('EvaluateExpression: Handling TGocciaSuperExpression');
     // Return the superclass - context should provide access to it
     if Context.Scope.ThisValue is TGocciaInstanceValue then
     begin
@@ -354,17 +333,14 @@ begin
   end
   else if Expression is TGocciaPrivateMemberExpression then
   begin
-    Logger.Debug('EvaluateExpression: Handling TGocciaPrivateMemberExpression');
     Result := EvaluatePrivateMember(TGocciaPrivateMemberExpression(Expression), Context);
   end
   else if Expression is TGocciaPrivatePropertyAssignmentExpression then
   begin
-    Logger.Debug('EvaluateExpression: Handling TGocciaPrivatePropertyAssignmentExpression');
     Result := EvaluatePrivatePropertyAssignment(TGocciaPrivatePropertyAssignmentExpression(Expression), Context);
   end
   else if Expression is TGocciaPrivatePropertyCompoundAssignmentExpression then
   begin
-    Logger.Debug('EvaluateExpression: Handling TGocciaPrivatePropertyCompoundAssignmentExpression');
     Result := EvaluatePrivatePropertyCompoundAssignment(TGocciaPrivatePropertyCompoundAssignmentExpression(Expression), Context);
   end
   else if Expression is TGocciaMemberExpression then
@@ -398,7 +374,6 @@ begin
   end
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  Logger.Debug('EvaluateExpression: Returning result type: %s .ToStringLiteral: %s', [Result.ClassName, Result.ToStringLiteral.Value]);
 end;
 
 function EvaluateStatement(Statement: TGocciaStatement; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -410,29 +385,20 @@ var
   Value: TGocciaValue;
   I: Integer;
 begin
-  Logger.Debug('EvaluateStatement: Statement class is %s', [Statement.ClassName]);
-  Logger.Debug('EvaluateStatement: Statement line: %d', [Statement.Line]);
-  Logger.Debug('EvaluateStatement: Statement column: %d', [Statement.Column]);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   if Statement is TGocciaExpressionStatement then
   begin
-    Logger.Debug('EvaluateStatement: Processing ExpressionStatement');
-    Logger.Debug('EvaluateStatement: Expression type in ExpressionStatement: %s', [TGocciaExpressionStatement(Statement).Expression.ClassName]);
     Result := EvaluateExpression(TGocciaExpressionStatement(Statement).Expression, Context);
-    Logger.Debug('EvaluateStatement: ExpressionStatement result type: %s', [Result.ClassName]);
   end
       else if Statement is TGocciaVariableDeclaration then
   begin
-    Logger.Debug('EvaluateStatement: Processing VariableDeclaration');
     Decl := TGocciaVariableDeclaration(Statement);
-    Logger.Debug('EvaluateStatement: Processing %d variable(s)', [Length(Decl.Variables)]);
 
     // Process each variable in the declaration
     for I := 0 to Length(Decl.Variables) - 1 do
     begin
-            Logger.Debug('EvaluateStatement: Variable name: %s', [Decl.Variables[I].Name]);
 
       Value := EvaluateExpression(Decl.Variables[I].Initializer, Context);
 
@@ -440,137 +406,97 @@ begin
       if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
         TGocciaFunctionValue(Value).Name := Decl.Variables[I].Name;
 
-      Logger.Debug('EvaluateStatement: Initializer result type: %s', [Value.ClassName]);
-      Logger.Debug('EvaluateStatement: Initializer result value: %s', [Value.ToStringLiteral.Value]);
-      Logger.Debug('EvaluateStatement: Is const: %s', [BoolToStr(Decl.IsConst, True)]);
-
       // Use the new Define/Assign pattern
       if Decl.IsConst then
         Context.Scope.DefineFromToken(Decl.Variables[I].Name, Value, gttConst)
       else
         Context.Scope.DefineFromToken(Decl.Variables[I].Name, Value, gttLet);
 
-      Logger.Debug('EvaluateStatement: Variable %s defined in scope', [Decl.Variables[I].Name]);
     end;
   end
   else if Statement is TGocciaDestructuringDeclaration then
   begin
-    Logger.Debug('EvaluateStatement: Processing DestructuringDeclaration');
     Result := EvaluateDestructuringDeclaration(TGocciaDestructuringDeclaration(Statement), Context);
   end
   else if Statement is TGocciaBlockStatement then
   begin
-    Logger.Debug('EvaluateStatement: Processing BlockStatement');
     Result := EvaluateBlock(TGocciaBlockStatement(Statement), Context);
-    Logger.Debug('EvaluateStatement: BlockStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaIfStatement then
   begin
-    Logger.Debug('EvaluateStatement: Processing IfStatement');
     Result := EvaluateIf(TGocciaIfStatement(Statement), Context);
-    Logger.Debug('EvaluateStatement: IfStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaForStatement then
   begin
-    Logger.Debug('EvaluateStatement: Processing ForStatement (parsing only - no execution)');
     // For now, just return undefined since we only want parsing support
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Logger.Debug('EvaluateStatement: ForStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaWhileStatement then
   begin
-    Logger.Debug('EvaluateStatement: Processing WhileStatement (parsing only - no execution)');
     // For now, just return undefined since we only want parsing support
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Logger.Debug('EvaluateStatement: WhileStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaDoWhileStatement then
   begin
-    Logger.Debug('EvaluateStatement: Processing DoWhileStatement (parsing only - no execution)');
     // For now, just return undefined since we only want parsing support
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Logger.Debug('EvaluateStatement: DoWhileStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaSwitchStatement then
   begin
-    Logger.Debug('EvaluateStatement: Processing SwitchStatement');
     Result := EvaluateSwitch(TGocciaSwitchStatement(Statement), Context);
-    Logger.Debug('EvaluateStatement: SwitchStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaBreakStatement then
   begin
-    Logger.Debug('EvaluateStatement: Processing BreakStatement');
     raise TGocciaBreakSignal.Create;
   end
   else if Statement is TGocciaReturnStatement then
   begin
-    Logger.Debug('EvaluateStatement: Handling TGocciaReturnStatement');
     if Assigned(TGocciaReturnStatement(Statement).Value) then
     begin
-      Logger.Debug('EvaluateStatement: Evaluating return value');
       Value := EvaluateExpression(TGocciaReturnStatement(Statement).Value, Context);
-      Logger.Debug('EvaluateStatement: Return value type: %s', [Value.ClassName]);
-      Logger.Debug('EvaluateStatement: Return value ToString: %s', [Value.ToStringLiteral.Value]);
-      Logger.Debug('EvaluateStatement: Return value address: %p', [Pointer(Value)]);
       if Value = nil then
       begin
-        Logger.Debug('EvaluateStatement: Return value is nil, creating TGocciaUndefinedLiteralValue');
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
       end;
     end
     else
     begin
-      Logger.Debug('EvaluateStatement: No return value, using undefined');
       Value := TGocciaUndefinedLiteralValue.UndefinedValue;
     end;
-    Logger.Debug('EvaluateStatement: Raising TGocciaReturnValue with value type: %s', [Value.ClassName]);
     raise TGocciaReturnValue.Create(Value);
   end
   else if Statement is TGocciaThrowStatement then
   begin
-    Logger.Debug('EvaluateStatement: Processing ThrowStatement');
     Value := EvaluateExpression(TGocciaThrowStatement(Statement).Value, Context);
-    Logger.Debug('EvaluateStatement: Throw value type: %s', [Value.ClassName]);
-    Logger.Debug('EvaluateStatement: Throw value ToString: %s', [Value.ToStringLiteral.Value]);
     raise TGocciaThrowValue.Create(Value);
   end
   else if Statement is TGocciaTryStatement then
   begin
-    Logger.Debug('EvaluateStatement: Processing TryStatement');
     Result := EvaluateTry(TGocciaTryStatement(Statement), Context);
-    Logger.Debug('EvaluateStatement: TryStatement result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaClassDeclaration then
   begin
-    Logger.Debug('EvaluateStatement: Processing ClassDeclaration');
     Result := EvaluateClass(TGocciaClassDeclaration(Statement), Context);
-    Logger.Debug('EvaluateStatement: ClassDeclaration result type: %s', [Result.ClassName]);
   end
   else if Statement is TGocciaImportDeclaration then
   begin
-    Logger.Debug('EvaluateStatement: Processing ImportDeclaration');
     ImportDecl := TGocciaImportDeclaration(Statement);
-    Logger.Debug('EvaluateStatement: Importing module: %s', [ImportDecl.ModulePath]);
     Module := Context.LoadModule(ImportDecl.ModulePath);
 
     for ImportPair in ImportDecl.Imports do
     begin
-      Logger.Debug('EvaluateStatement: Importing %s as %s', [ImportPair.Key, ImportPair.Value]);
       if Module.ExportsTable.TryGetValue(ImportPair.Value, Value) then
       begin
-        Logger.Debug('EvaluateStatement: Found export, type: %s', [Value.ClassName]);
         Context.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtLet);
       end
       else
       begin
-        Logger.Debug('EvaluateStatement: Export not found');
         Context.OnError(Format('Module "%s" has no export named "%s"',
           [ImportDecl.ModulePath, ImportPair.Value]), Statement.Line, Statement.Column);
       end;
     end;
   end;
 
-  Logger.Debug('EvaluateStatement: Final result type: %s', [Result.ClassName]);
 end;
 
 function EvaluateBinary(BinaryExpression: TGocciaBinaryExpression; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -727,18 +653,13 @@ var
   MemberExpr: TGocciaMemberExpression;
   SpreadValue: TGocciaValue;
   SpreadArray: TGocciaArrayValue;
-  ErrorObj: TGocciaObjectValue;
   CallableIntf: IGocciaCallable;
   I: Integer;
 begin
-  Logger.Debug('EvaluateCall: Start');
-  // Logger.Debug('  CallExpression.Callee: %s', [CallExpression.Callee.ToStringLiteral.Value]);
-
 
         // Handle super() calls specially
   if CallExpression.Callee is TGocciaSuperExpression then
   begin
-    Logger.Debug('EvaluateCall: Calling super constructor');
     SuperClass := TGocciaClassValue(EvaluateExpression(CallExpression.Callee, Context));
     if not (SuperClass is TGocciaClassValue) then
     begin
@@ -757,12 +678,10 @@ begin
       // Call the superclass constructor with the current instance as 'this'
       if Assigned(SuperClass.ConstructorMethod) then
       begin
-        Logger.Debug('EvaluateCall: Calling superclass constructor method');
         Result := SuperClass.ConstructorMethod.Call(Arguments, Context.Scope.ThisValue);
       end
       else
       begin
-        Logger.Debug('EvaluateCall: No explicit constructor in superclass');
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       end;
     finally
@@ -830,10 +749,7 @@ begin
         else
         begin
           // Throw TypeError for non-iterables (null, undefined, numbers, booleans, objects)
-          ErrorObj := TGocciaObjectValue.Create;
-          ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
-          ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create('Spread syntax requires an iterable'));
-          raise TGocciaThrowValue.Create(ErrorObj);
+          ThrowTypeError('Spread syntax requires an iterable');
         end;
         // null and undefined are ignored in spread context
       end
@@ -876,7 +792,6 @@ var
   SuperClass: TGocciaClassValue;
   BoxedValue: TGocciaObjectValue;
 begin
-  Logger.Debug('EvaluateMember: Start');
 
   // Handle optional chaining: obj?.prop returns undefined if obj is null/undefined
   if MemberExpression.Optional then
@@ -892,7 +807,6 @@ begin
   // Handle super.method() specially
   if MemberExpression.ObjectExpr is TGocciaSuperExpression then
   begin
-    Logger.Debug('EvaluateMember: Accessing super property');
     SuperClass := TGocciaClassValue(EvaluateExpression(MemberExpression.ObjectExpr, Context));
     if not (SuperClass is TGocciaClassValue) then
     begin
@@ -913,19 +827,15 @@ begin
       PropertyName := MemberExpression.PropertyName;
     end;
 
-    Logger.Debug('EvaluateMember: Looking for super method: %s', [PropertyName]);
-
     // Check if we're in a static method context or instance method context
     if Context.Scope.ThisValue is TGocciaClassValue then
     begin
       // Static method context: look for static methods using GetProperty
-      Logger.Debug('EvaluateMember: Static method context, looking for static method');
       Result := SuperClass.GetProperty(PropertyName);
     end
     else
     begin
       // Instance method context: look for instance methods using GetMethod
-      Logger.Debug('EvaluateMember: Instance method context, looking for instance method');
       Result := SuperClass.GetMethod(PropertyName);
       if not Assigned(Result) then
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -935,18 +845,15 @@ begin
     begin
       // For super.method() calls, we need to create a bound method that uses the current 'this'
       // This is handled in the call evaluation where we have access to the current 'this'
-      Logger.Debug('EvaluateMember: Super method found: %s', [Result.ToStringLiteral.Value]);
     end
     else
     begin
-      Logger.Debug('EvaluateMember: Super method not found');
     end;
 
     Exit;
   end;
 
   Obj := EvaluateExpression(MemberExpression.ObjectExpr, Context);
-  Logger.Debug('EvaluateMember: Obj: %s', [Obj.ToStringLiteral.Value]);
 
   // Determine the property name
   if MemberExpression.Computed and Assigned(MemberExpression.PropertyExpression) then
@@ -962,43 +869,32 @@ begin
     end;
 
     PropertyName := PropertyValue.ToStringLiteral.Value;
-    Logger.Debug('EvaluateMember: Computed property name: %s', [PropertyName]);
   end
   else
   begin
     // Static access: use the property name directly
     PropertyName := MemberExpression.PropertyName;
-    Logger.Debug('EvaluateMember: Static property name: %s', [PropertyName]);
   end;
 
   if Obj is TGocciaArrayValue then
   begin
-    Logger.Debug('EvaluateMember: Obj is TGocciaArrayValue');
     Result := TGocciaArrayValue(Obj).GetProperty(PropertyName);
-    Logger.Debug('EvaluateMember: Result: %s', [Result.ToStringLiteral.Value]);
   end
   else if Obj is TGocciaClassValue then
   begin
-    Logger.Debug('EvaluateMember: Obj is TGocciaClassValue');
     Result := TGocciaClassValue(Obj).GetProperty(PropertyName);
-    Logger.Debug('EvaluateMember: Result: %s', [Result.ToStringLiteral.Value]);
   end
   else if Obj is TGocciaObjectValue then
   begin
-    Logger.Debug('EvaluateMember: Obj is TGocciaObjectValue');
     Result := TGocciaObjectValue(Obj).GetProperty(PropertyName);
-    Logger.Debug('EvaluateMember: Result: %s', [Result.ToStringLiteral.Value]);
   end
   else
   begin
     // Handle primitive boxing for property access
-    Logger.Debug('EvaluateMember: Attempting primitive boxing for: %s', [Obj.ClassName]);
     BoxedValue := Obj.Box;
     if Assigned(BoxedValue) then
     begin
-      Logger.Debug('EvaluateMember: Primitive boxed successfully');
       Result := BoxedValue.GetProperty(PropertyName);
-      Logger.Debug('EvaluateMember: Boxed result: %s', [Result.ToStringLiteral.Value]);
     end
     else if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
     begin
@@ -1009,12 +905,9 @@ begin
     end
     else
     begin
-      Logger.Debug('EvaluateMember: Obj is not a supported object type');
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     end;
   end;
-  Logger.Debug('EvaluateMember: Returning result type: %s', [Result.ClassName]);
-  Logger.Debug('EvaluateMember: Result ToStringLiteral: %s', [Result.ToStringLiteral.Value]);
 end;
 
 function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext; out ObjectValue: TGocciaValue): TGocciaValue;
@@ -1024,7 +917,6 @@ var
   SuperClass: TGocciaClassValue;
   BoxedValue: TGocciaObjectValue;
 begin
-  Logger.Debug('EvaluateMember: Start (dual overload)');
 
   // Handle optional chaining: obj?.prop returns undefined if obj is null/undefined
   if MemberExpression.Optional then
@@ -1040,7 +932,6 @@ begin
   // Handle super.method() specially
   if MemberExpression.ObjectExpr is TGocciaSuperExpression then
   begin
-    Logger.Debug('EvaluateMember: Accessing super property');
     SuperClass := TGocciaClassValue(EvaluateExpression(MemberExpression.ObjectExpr, Context));
     if not (SuperClass is TGocciaClassValue) then
     begin
@@ -1064,19 +955,15 @@ begin
       PropertyName := MemberExpression.PropertyName;
     end;
 
-    Logger.Debug('EvaluateMember: Looking for super method: %s', [PropertyName]);
-
     // Check if we're in a static method context or instance method context
     if Context.Scope.ThisValue is TGocciaClassValue then
     begin
       // Static method context: look for static methods using GetProperty
-      Logger.Debug('EvaluateMember: Static method context, looking for static method');
       Result := SuperClass.GetProperty(PropertyName);
     end
     else
     begin
       // Instance method context: look for instance methods using GetMethod
-      Logger.Debug('EvaluateMember: Instance method context, looking for instance method');
       Result := SuperClass.GetMethod(PropertyName);
       if not Assigned(Result) then
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1084,11 +971,9 @@ begin
 
     if not (Result is TGocciaUndefinedLiteralValue) then
     begin
-      Logger.Debug('EvaluateMember: Super method found: %s', [Result.ToStringLiteral.Value]);
     end
     else
     begin
-      Logger.Debug('EvaluateMember: Super method not found');
     end;
 
     Exit;
@@ -1096,7 +981,6 @@ begin
 
   // Evaluate object expression once and store it
   ObjectValue := EvaluateExpression(MemberExpression.ObjectExpr, Context);
-  Logger.Debug('EvaluateMember: Obj: %s', [ObjectValue.ToStringLiteral.Value]);
 
   // Determine the property name
   if MemberExpression.Computed and Assigned(MemberExpression.PropertyExpression) then
@@ -1112,49 +996,36 @@ begin
     end;
 
     PropertyName := PropertyValue.ToStringLiteral.Value;
-    Logger.Debug('EvaluateMember: Computed property name: %s', [PropertyName]);
   end
   else
   begin
     // Static access: use the property name directly
     PropertyName := MemberExpression.PropertyName;
-    Logger.Debug('EvaluateMember: Static property name: %s', [PropertyName]);
   end;
 
   if ObjectValue is TGocciaArrayValue then
   begin
-    Logger.Debug('EvaluateMember: Obj is TGocciaArrayValue');
     Result := TGocciaArrayValue(ObjectValue).GetProperty(PropertyName);
-    Logger.Debug('EvaluateMember: Result: %s', [Result.ToStringLiteral.Value]);
   end
   else if ObjectValue is TGocciaClassValue then
   begin
-    Logger.Debug('EvaluateMember: Obj is TGocciaClassValue');
     Result := TGocciaClassValue(ObjectValue).GetProperty(PropertyName);
-    Logger.Debug('EvaluateMember: Result: %s', [Result.ToStringLiteral.Value]);
   end
   else if ObjectValue is TGocciaInstanceValue then
   begin
-    Logger.Debug('EvaluateMember: Obj is TGocciaInstanceValue');
     Result := TGocciaInstanceValue(ObjectValue).GetProperty(PropertyName);
-    Logger.Debug('EvaluateMember: Result: %s', [Result.ToStringLiteral.Value]);
   end
   else if ObjectValue is TGocciaObjectValue then
   begin
-    Logger.Debug('EvaluateMember: Obj is TGocciaObjectValue');
     Result := TGocciaObjectValue(ObjectValue).GetProperty(PropertyName);
-    Logger.Debug('EvaluateMember: Result: %s', [Result.ToStringLiteral.Value]);
   end
   else
   begin
     // Handle primitive boxing for property access
-    Logger.Debug('EvaluateMember: Attempting primitive boxing for: %s', [ObjectValue.ClassName]);
     BoxedValue := ObjectValue.Box;
     if Assigned(BoxedValue) then
     begin
-      Logger.Debug('EvaluateMember: Primitive boxed successfully');
       Result := BoxedValue.GetProperty(PropertyName);
-      Logger.Debug('EvaluateMember: Boxed result: %s', [Result.ToStringLiteral.Value]);
       // Note: ObjectValue remains the original primitive for 'this' binding
     end
     else if (ObjectValue is TGocciaNullLiteralValue) or (ObjectValue is TGocciaUndefinedLiteralValue) then
@@ -1166,12 +1037,9 @@ begin
     end
     else
     begin
-      Logger.Debug('EvaluateMember: Obj is not a supported object type');
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     end;
   end;
-  Logger.Debug('EvaluateMember: Returning result type: %s', [Result.ClassName]);
-  Logger.Debug('EvaluateMember: Result ToStringLiteral: %s', [Result.ToStringLiteral.Value]);
 end;
 
 function EvaluateArray(ArrayExpression: TGocciaArrayExpression; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -1182,7 +1050,6 @@ var
   SpreadValue: TGocciaValue;
   SpreadArray: TGocciaArrayValue;
   SpreadObj: TGocciaObjectValue;
-  ErrorObj: TGocciaObjectValue;
   PropName: string;
 begin
   Arr := TGocciaArrayValue.Create;
@@ -1234,26 +1101,17 @@ begin
       else if (SpreadValue is TGocciaObjectValue) then
       begin
         // For objects, we would need iterator support - for now throw TypeError
-        ErrorObj := TGocciaObjectValue.Create;
-        ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
-        ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create('Spread syntax requires an iterable'));
-        raise TGocciaThrowValue.Create(ErrorObj);
+        ThrowTypeError('Spread syntax requires an iterable');
       end
       else if (SpreadValue is TGocciaNullLiteralValue) or (SpreadValue is TGocciaUndefinedLiteralValue) then
       begin
         // Throw TypeError for null and undefined in array spread
-        ErrorObj := TGocciaObjectValue.Create;
-        ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
-        ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create('Spread syntax requires an iterable'));
-        raise TGocciaThrowValue.Create(ErrorObj);
+        ThrowTypeError('Spread syntax requires an iterable');
       end
       else
       begin
         // Other primitives (numbers, booleans) also throw
-        ErrorObj := TGocciaObjectValue.Create;
-        ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
-        ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create('Spread syntax requires an iterable'));
-        raise TGocciaThrowValue.Create(ErrorObj);
+        ThrowTypeError('Spread syntax requires an iterable');
       end;
     end
     else
@@ -1677,7 +1535,6 @@ var
   CatchContext: TGocciaEvaluationContext;
   I: Integer;
 begin
-  Logger.Debug('EvaluateTry: Starting try-catch-finally evaluation');
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
     // Outer try...finally ensures JS finally block always executes,
@@ -1685,7 +1542,6 @@ begin
     try
     try
                                           // Execute the try block using original context (no scope isolation)
-      Logger.Debug('EvaluateTry: Executing try block');
 
       // Execute try block statements directly in original context
       TryResult := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1713,16 +1569,13 @@ begin
         end;
       end;
       Result := TryResult;
-      Logger.Debug('EvaluateTry: Try block completed successfully');
     except
       on E: TGocciaThrowValue do
       begin
         // Handle JavaScript throw statements
-        Logger.Debug('EvaluateTry: Caught TGocciaThrowValue: %s', [E.Value.ToStringLiteral.Value]);
 
         if Assigned(TryStatement.CatchBlock) then
         begin
-          Logger.Debug('EvaluateTry: Executing catch block with parameter: %s', [TryStatement.CatchParam]);
 
                                                                                 // Create child scope for catch parameter if needed (proper shadowing)
           if TryStatement.CatchParam <> '' then
@@ -1793,19 +1646,16 @@ begin
               end;
             end;
           end;
-          Logger.Debug('EvaluateTry: Catch block completed');
         end
         else
         begin
           // No catch block, re-throw the exception
-          Logger.Debug('EvaluateTry: No catch block, re-throwing exception');
           raise;
         end;
       end;
       on E: TGocciaReturnValue do
       begin
         // Return statements should bubble up through try-catch
-        Logger.Debug('EvaluateTry: Return value bubbling up');
         raise;
       end;
       on E: TGocciaBreakSignal do
@@ -1816,11 +1666,9 @@ begin
       on E: Exception do
       begin
         // Handle other Pascal exceptions as runtime errors
-        Logger.Debug('EvaluateTry: Caught Pascal exception: %s', [E.Message]);
 
         if Assigned(TryStatement.CatchBlock) then
         begin
-          Logger.Debug('EvaluateTry: Converting Pascal exception to JavaScript Error');
 
                               // Create child scope for catch parameter if needed (proper shadowing)
           if TryStatement.CatchParam <> '' then
@@ -1891,12 +1739,10 @@ begin
               end;
             end;
           end;
-          Logger.Debug('EvaluateTry: Catch block completed for Pascal exception');
         end
         else
         begin
           // No catch block, re-throw as JavaScript error
-          Logger.Debug('EvaluateTry: No catch block, re-throwing as TGocciaThrowValue');
           raise TGocciaThrowValue.Create(TGocciaStringLiteralValue.Create(E.Message));
         end;
       end;
@@ -1905,7 +1751,6 @@ begin
       // Always execute finally block if present — runs even when exceptions are re-raised
       if Assigned(TryStatement.FinallyBlock) then
       begin
-        Logger.Debug('EvaluateTry: Executing finally block');
         // Execute finally block statements directly in original context
         for I := 0 to TryStatement.FinallyBlock.Nodes.Count - 1 do
         begin
@@ -1930,11 +1775,9 @@ begin
             end;
           end;
         end;
-        Logger.Debug('EvaluateTry: Finally block completed');
       end;
     end;
 
-  Logger.Debug('EvaluateTry: Try-catch-finally evaluation completed');
 end;
 
 function EvaluateClassMethod(ClassMethod: TGocciaClassMethod; Context: TGocciaEvaluationContext; SuperClass: TGocciaValue = nil): TGocciaValue;
@@ -1981,7 +1824,6 @@ begin
     PropName := ClassValue.InstancePropertyOrder[I];
     if ClassValue.InstancePropertyDefs.TryGetValue(PropName, PropertyExpr) then
     begin
-      Logger.Debug('Initializing instance property: %s from class: %s', [PropName, ClassValue.Name]);
       // Evaluate the property expression in the current context
       PropertyValue := EvaluateExpression(PropertyExpr, Context);
       Instance.AssignProperty(PropName, PropertyValue);
@@ -1998,7 +1840,6 @@ var
   Matched: Boolean;
   DefaultIndex: Integer;
 begin
-  Logger.Debug('EvaluateSwitch: Starting switch evaluation');
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   // Evaluate the discriminant expression
@@ -2049,18 +1890,15 @@ begin
     on E: TGocciaBreakSignal do
     begin
       // Break exits the switch — swallow the signal
-      Logger.Debug('EvaluateSwitch: Break signal caught');
     end;
   end;
 
-  Logger.Debug('EvaluateSwitch: Switch evaluation completed');
 end;
 
 function EvaluateNewExpression(NewExpression: TGocciaNewExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Callee: TGocciaValue;
   Arguments: TGocciaArgumentsCollection;
-  ErrorObj: TGocciaObjectValue;
   I: Integer;
   Instance: TGocciaInstanceValue;
   ClassValue: TGocciaClassValue;
@@ -2100,7 +1938,6 @@ begin
       // Start from the topmost superclass and work down
       if Assigned(ClassValue.SuperClass) then
       begin
-        Logger.Debug('EvaluateNewExpression: Initializing private properties from superclass %s', [ClassValue.SuperClass.Name]);
         // Create a context with the superclass as owning class for correct composite key resolution
         SuperInitContext := Context;
         SuperInitScope := Context.Scope.CreateChild(skBlock, 'SuperPrivateInit');
@@ -2130,10 +1967,7 @@ begin
     else
     begin
       // Throw proper TypeError for non-constructors
-      ErrorObj := TGocciaObjectValue.Create;
-      ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
-      ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Callee.TypeName + ' is not a constructor'));
-      raise TGocciaThrowValue.Create(ErrorObj);
+      ThrowTypeError(Callee.TypeName + ' is not a constructor');
     end;
   finally
     Arguments.Free;
@@ -2510,7 +2344,6 @@ begin
     PropName := ClassValue.PrivateInstancePropertyOrder[I];
     if ClassValue.PrivateInstancePropertyDefs.TryGetValue(PropName, PropertyExpr) then
     begin
-      Logger.Debug('Initializing private instance property: %s from class: %s', [PropName, ClassValue.Name]);
       // Evaluate the property expression in the current context
       PropertyValue := EvaluateExpression(PropertyExpr, Context);
       Instance.SetPrivateProperty(PropName, PropertyValue, ClassValue);

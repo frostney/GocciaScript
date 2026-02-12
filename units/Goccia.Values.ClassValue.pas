@@ -6,7 +6,7 @@ interface
 
 uses
   Goccia.Values.ObjectValue, Goccia.Interfaces,
-  Goccia.Error, Goccia.Logger, Generics.Collections, SysUtils, Math, Classes, Goccia.Values.Primitives, Goccia.Values.FunctionValue,
+  Goccia.Error, Generics.Collections, SysUtils, Math, Classes, Goccia.Values.Primitives, Goccia.Values.FunctionValue,
   Goccia.AST.Node, Goccia.Values.ObjectPropertyDescriptor, Goccia.Arguments.Collection;
 
 type
@@ -335,33 +335,20 @@ var
   Instance: TGocciaInstanceValue;
   ConstructorToCall: TGocciaMethodValue;
 begin
-  Logger.Debug('Creating basic instance of class: %s', [FName]);
-
   // Step 1: Create the basic instance
   Instance := TGocciaInstanceValue.Create(Self);
-  Logger.Debug('Instance created: %s', [Instance.ToStringLiteral.Value]);
 
   // Step 2: Set up the prototype chain
   Instance.Prototype := FPrototype;
-  Logger.Debug('Prototype set for instance');
 
   // Step 3: Find and call constructor (NOTE: No property initialization in basic path)
   ConstructorToCall := FConstructorMethod;
   if not Assigned(ConstructorToCall) and Assigned(FSuperClass) then
-  begin
     ConstructorToCall := FSuperClass.ConstructorMethod;
-    Logger.Debug('Using inherited constructor from: %s', [FSuperClass.Name]);
-  end;
 
   if Assigned(ConstructorToCall) then
-  begin
-    Logger.Debug('Calling constructor with %d arguments', [Arguments.Length]);
-    if Arguments.Length > 0 then
-      Logger.Debug('  First argument: %s', [Arguments.GetElement(0).ToStringLiteral.Value]);
-
     // Call the constructor with the instance as this
     ConstructorToCall.Call(Arguments, Instance);
-  end;
 
   Result := Instance;
 end;
@@ -425,12 +412,9 @@ var
   GetterFunction: TGocciaFunctionValue;
   Args: TGocciaArgumentsCollection;
 begin
-  Logger.Debug('TGocciaInstanceValue.GetProperty called for: %s', [AName]);
-
   // First check instance properties directly using property descriptors
   if FPropertyDescriptors.ContainsKey(AName) then
   begin
-    Logger.Debug('TGocciaInstanceValue.GetProperty: Found in instance properties');
     Result := inherited GetProperty(AName);
     Exit;
   end;
@@ -438,10 +422,7 @@ begin
   // Check for getters/setters on the prototype with this instance as context
   if Assigned(FPrototype) then
   begin
-    Logger.Debug('TGocciaInstanceValue.GetProperty: Checking prototype for property: %s', [AName]);
-    Logger.Debug('TGocciaInstanceValue.GetProperty: Instance type: %s', [Self.TypeName]);
     Result := FPrototype.GetPropertyWithContext(AName, Self);
-    Logger.Debug('TGocciaInstanceValue.GetProperty: GetPropertyWithContext returned: %s', [Result.ToStringLiteral.Value]);
     if not (Result is TGocciaUndefinedLiteralValue) then
       Exit;
   end;
@@ -464,8 +445,6 @@ var
   NativeSetterFunction: TGocciaNativeFunctionValue;
   Args: TGocciaArgumentsCollection;
 begin
-  Logger.Debug('TGocciaInstanceValue.AssignProperty called for: %s', [AName]);
-
   // First check for setters on the prototype
   if Assigned(FPrototype) then
   begin
@@ -473,8 +452,6 @@ begin
     if (Descriptor is TGocciaPropertyDescriptorAccessor) and
        Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
     begin
-      Logger.Debug('TGocciaInstanceValue.AssignProperty: Found setter on prototype for %s', [AName]);
-
       // Call the setter with this instance as context
       if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionValue then
       begin
@@ -483,7 +460,6 @@ begin
         try
           Args.Add(AValue);
           SetterFunction.Call(Args, Self); // Use this instance as context
-          Logger.Debug('TGocciaInstanceValue.AssignProperty: Setter called successfully');
         finally
           Args.Free;
         end;
@@ -496,7 +472,6 @@ begin
         try
           Args.Add(AValue);
           NativeSetterFunction.Call(Args, Self); // Use this instance as context
-          Logger.Debug('TGocciaInstanceValue.AssignProperty: Native setter called successfully');
         finally
           Args.Free;
         end;
@@ -506,7 +481,6 @@ begin
   end;
 
   // No setter found, create instance property (inherited behavior)
-  Logger.Debug('TGocciaInstanceValue.AssignProperty: No setter found, creating instance property');
   inherited AssignProperty(AName, AValue, ACanCreate);
 end;
 
@@ -518,24 +492,10 @@ end;
 
 procedure TGocciaInstanceValue.SetPrototype(APrototype: TGocciaObjectValue);
 begin
-  Logger.Debug('TGocciaInstanceValue.SetPrototype: Called');
-  if Assigned(APrototype) then
-    Logger.Debug('  APrototype is assigned: %s', [APrototype.ToStringLiteral.Value])
-  else
-    Logger.Debug('  APrototype is nil');
-
   FPrototype := APrototype;
-  Logger.Debug('  Set instance FPrototype');
 
   // Also set the inherited prototype field so that inherited GetProperty works correctly
   inherited Prototype := APrototype;
-  Logger.Debug('  Set inherited Prototype');
-
-  // Debug: Check what the inherited prototype actually is now
-  if Assigned(inherited Prototype) then
-    Logger.Debug('  Inherited Prototype is now: %s', [inherited Prototype.ToStringLiteral.Value])
-  else
-    Logger.Debug('  Inherited Prototype is still nil');
 end;
 
 function TGocciaInstanceValue.HasPrivateProperty(const AName: string): Boolean;

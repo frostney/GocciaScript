@@ -1,5 +1,0 @@
-[test]
-
-root = "tests"
-
-preload = ["./test-setup.ts"]

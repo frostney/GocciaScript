@@ -22,7 +22,7 @@ type
 
 implementation
 
-uses Goccia.Values.ClassHelper;
+uses Goccia.Values.ClassHelper, Goccia.Values.ErrorHelper;
 
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -85,86 +85,46 @@ end;
 
 function TGocciaGlobals.ErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
-  ErrorObj: TGocciaObjectValue;
   Message: string;
 begin
-  // Create a basic error object
-  ErrorObj := TGocciaObjectValue.Create;
-
-  // Set name property
-  ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('Error'));
-
-  // Set message property
   if Args.Length > 0 then
     Message := Args.GetElement(0).ToStringLiteral.Value
   else
     Message := '';
-  ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
-
-  Result := ErrorObj;
+  Result := CreateErrorObject('Error', Message);
 end;
 
 function TGocciaGlobals.TypeErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
-  ErrorObj: TGocciaObjectValue;
   Message: string;
 begin
-  // Create a basic error object
-  ErrorObj := TGocciaObjectValue.Create;
-
-  // Set name property
-  ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
-
-  // Set message property
   if Args.Length > 0 then
     Message := Args.GetElement(0).ToStringLiteral.Value
   else
     Message := '';
-  ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
-
-  Result := ErrorObj;
+  Result := CreateErrorObject('TypeError', Message);
 end;
 
 function TGocciaGlobals.ReferenceErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
-  ErrorObj: TGocciaObjectValue;
   Message: string;
 begin
-  // Create a basic error object
-  ErrorObj := TGocciaObjectValue.Create;
-
-  // Set name property
-  ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('ReferenceError'));
-
-  // Set message property
   if Args.Length > 0 then
     Message := Args.GetElement(0).ToStringLiteral.Value
   else
     Message := '';
-  ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
-
-  Result := ErrorObj;
+  Result := CreateErrorObject('ReferenceError', Message);
 end;
 
 function TGocciaGlobals.RangeErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
-  ErrorObj: TGocciaObjectValue;
   Message: string;
 begin
-  // Create a basic error object
-  ErrorObj := TGocciaObjectValue.Create;
-
-  // Set name property
-  ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('RangeError'));
-
-  // Set message property
   if Args.Length > 0 then
     Message := Args.GetElement(0).ToStringLiteral.Value
   else
     Message := '';
-  ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(Message));
-
-  Result := ErrorObj;
+  Result := CreateErrorObject('RangeError', Message);
 end;
 
 end.

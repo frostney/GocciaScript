@@ -67,7 +67,6 @@ begin
   inherited;
 end;
 
-
 function TGocciaFunctionValue.Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   I, J: Integer;
@@ -77,11 +76,6 @@ var
   CallScope: TGocciaScope;
   ClosureScope: TGocciaScope;
 begin
-  Logger.Debug('FunctionValue.Call: Entering');
-  Logger.Debug('  Function type: %s', [Self.ClassName]);
-  Logger.Debug('  Arguments.Length: %d', [Arguments.Length]);
-  Logger.Debug('  ThisValue type: %s', [ThisValue.ClassName]);
-
   // Create call scope
   CallScope := TGocciaScope.Create(FClosure, skFunction, Format('Type: FunctionCall, Name: %s', [FName]));
   try
@@ -130,7 +124,6 @@ begin
       Method := TGocciaMethodValue(Self);
       if Assigned(Method.SuperClass) and not (Method.SuperClass is TGocciaUndefinedLiteralValue) then
       begin
-        Logger.Debug('FunctionValue.Call: Method has superclass: %s', [Method.SuperClass.ToStringLiteral.Value]);
         // Set up special 'super' binding in the method scope - TODO: This should be a specialised scope
         CallScope.DefineLexicalBinding('__super__', Method.SuperClass, dtUnknown);
       end;
@@ -146,7 +139,6 @@ begin
       if FParameters[I].IsRest then
       begin
         // Rest parameter: collect remaining arguments into an array
-        Logger.Debug('Binding rest parameter %d: %s', [I, FParameters[I].Name]);
         ReturnValue := TGocciaArrayValue.Create;
         if I < Arguments.Length then
           for J := I to Arguments.Length - 1 do
@@ -157,21 +149,13 @@ begin
       else if FParameters[I].IsPattern then
       begin
         // Handle destructuring parameter
-        Logger.Debug('Binding destructuring parameter %d', [I]);
-
         // Get the argument value or default
         if I < Arguments.Length then
           ReturnValue := Arguments.GetElement(I)
         else if Assigned(FParameters[I].DefaultValue) then
-        begin
-          Logger.Debug('  No argument provided, using default value for destructuring');
-          ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
-        end
-                  else
-          begin
-            Logger.Debug('  No argument provided, using undefined for destructuring');
-            ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-          end;
+          ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context)
+        else
+          ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
         // Bind the destructuring pattern using existing pattern assignment logic
         // IsDeclaration=True so variables are defined (not just assigned) in the call scope
@@ -181,27 +165,19 @@ begin
       else
       begin
         // Handle simple named parameter
-        Logger.Debug('Binding parameter %d: %s', [I, FParameters[I].Name]);
         if I < Arguments.Length then
-        begin
-          Logger.Debug('  Argument value type: %s, toStringLiteral: %s', [Arguments.GetElement(I).ClassName, Arguments.GetElement(I).ToStringLiteral.Value]);
-          CallScope.DefineLexicalBinding(FParameters[I].Name, Arguments.GetElement(I), dtParameter);
-        end
+          CallScope.DefineLexicalBinding(FParameters[I].Name, Arguments.GetElement(I), dtParameter)
         else
         begin
           // Check if there's a default value
           if Assigned(FParameters[I].DefaultValue) then
           begin
-            Logger.Debug('  No argument provided, using default value');
             // Evaluate the default value in the function's closure scope
             ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
             CallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
           end
           else
-          begin
-            Logger.Debug('  No argument provided, setting to undefined');
             CallScope.DefineLexicalBinding(FParameters[I].Name, TGocciaUndefinedLiteralValue.UndefinedValue, dtParameter);
-          end;
         end;
       end;
     end;
@@ -238,15 +214,10 @@ begin
     except
       on E: TGocciaReturnValue do
       begin
-        Logger.Debug('FunctionValue.Call: Caught TGocciaReturnValue');
         if E.Value = nil then
-        begin
-          Logger.Debug('FunctionValue.Call: E.Value is nil, creating undefined value');
-          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-        end
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue
         else
         begin
-          Logger.Debug('FunctionValue.Call: E.Value type: %s', [E.Value.ClassName]);
           // Create a new instance of the same type
           if E.Value is TGocciaNumberLiteralValue then
             Result := TGocciaNumberLiteralValue.Create(TGocciaNumberLiteralValue(E.Value).Value)
@@ -269,9 +240,6 @@ begin
       end;
     end;
 
-    Logger.Debug('FunctionValue.Call: Exiting');
-    Logger.Debug('  Result type: %s', [Result.ClassName]);
-    Logger.Debug('  Result toStringLiteral: %s', [Result.ToStringLiteral.Value]);
   finally
     // Don't free CallScope if it might be referenced by closures
     // TODO: Implement proper reference counting for scopes
