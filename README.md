@@ -31,14 +31,15 @@ GocciaScript includes the parts of JavaScript that lead to clear, predictable, a
 - Rest parameters (`...args`)
 - Unicode escape sequences (`\uXXXX`, `\u{XXXXX}`, `\xHH`)
 - Function `length` and `name` properties
+- `Object.freeze`, `Object.isFrozen`
+- `Array.from`, `Array.of`, `Number.MAX_SAFE_INTEGER`, `Number.EPSILON`, `Number.isSafeInteger`
 
 ### ECMAScript 2020+ Implementations
 
 - `Math.clamp` (TC39 proposal)
 - Private fields, methods, getters, and setters in classes
-- `Object.hasOwn`, `Object.freeze`, `Object.fromEntries`
-- `Array.from`, `Array.of`, plus `sort`, `splice`, `shift`, `unshift`, `fill`, `at`
-- `Number.MAX_SAFE_INTEGER`, `Number.EPSILON`, `Number.isSafeInteger`
+- `Object.hasOwn`, `Object.fromEntries`
+- `Array.prototype.at`, `Array.prototype.sort`, `Array.prototype.splice`, `Array.prototype.fill`
 
 ### Built-in Objects
 
