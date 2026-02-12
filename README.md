@@ -27,6 +27,7 @@ GocciaScript includes the parts of JavaScript that lead to clear, predictable, a
 - Computed property names
 - Nullish coalescing (`??`)
 - Arrow function expressions
+- Unicode escape sequences (`\uXXXX`, `\u{XXXXX}`)
 
 ### ECMAScript 2020+ Implementations
 

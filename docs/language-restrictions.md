@@ -21,9 +21,10 @@ const name = "Goccia";
 ### Functions
 
 - Arrow functions only (no `function` keyword).
-- Default parameters.
+- Default parameters (including in destructured parameters).
 - Rest parameters.
-- Destructuring parameters.
+- Destructuring parameters (array and object patterns with defaults).
+- `fn.call()`, `fn.apply()`, `fn.bind()` for explicit `this` binding.
 
 ```javascript
 const add = (a, b) => a + b;
@@ -81,6 +82,14 @@ class Counter {
 - Objects (literal syntax, computed properties, shorthand methods).
 - Arrays (literals, sparse arrays, prototype methods).
 - Strings (template literals, prototype methods).
+
+### String Escape Sequences
+
+Standard escape sequences in string literals and template literals:
+
+- `\n`, `\r`, `\t`, `\\`, `\'`, `\"`, `\0`
+- `\uXXXX` — 4-digit Unicode escape (e.g., `"\u0041"` → `"A"`)
+- `\u{XXXXX}` — Variable-length Unicode escape (e.g., `"\u{1F4A9}"` → `"💩"`)
 
 ## Excluded Features
 

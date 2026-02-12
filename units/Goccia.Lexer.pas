@@ -34,6 +34,7 @@ type
     procedure ScanTemplate;
     procedure ScanNumber;
     procedure ScanIdentifier;
+    function ScanUnicodeEscape: string;
     procedure SkipWhitespace;
     procedure SkipComment;
     procedure SkipBlockComment;
@@ -190,6 +191,51 @@ begin
     FFileName, FSourceLines);
 end;
 
+function TGocciaLexer.ScanUnicodeEscape: string;
+var
+  CodePoint: Cardinal;
+  HexStr: string;
+  I: Integer;
+begin
+  // Called after consuming '\u', Peek is the next character
+  if Peek = '{' then
+  begin
+    // Variable-length: \u{XXXX} or \u{XXXXX}
+    Advance; // consume '{'
+    HexStr := '';
+    while (Peek <> '}') and not IsAtEnd do
+      HexStr := HexStr + Advance;
+    if IsAtEnd then
+      raise TGocciaLexerError.Create('Unterminated unicode escape', FLine, FColumn, FFileName, FSourceLines);
+    Advance; // consume '}'
+  end
+  else
+  begin
+    // Fixed 4-digit: \uXXXX
+    HexStr := '';
+    for I := 1 to 4 do
+    begin
+      if IsAtEnd then
+        raise TGocciaLexerError.Create('Invalid unicode escape', FLine, FColumn, FFileName, FSourceLines);
+      HexStr := HexStr + Advance;
+    end;
+  end;
+
+  CodePoint := StrToInt('$' + HexStr);
+
+  // Convert code point to UTF-8
+  if CodePoint <= $7F then
+    Result := Chr(CodePoint)
+  else if CodePoint <= $7FF then
+    Result := Chr($C0 or (CodePoint shr 6)) + Chr($80 or (CodePoint and $3F))
+  else if CodePoint <= $FFFF then
+    Result := Chr($E0 or (CodePoint shr 12)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F))
+  else if CodePoint <= $10FFFF then
+    Result := Chr($F0 or (CodePoint shr 18)) + Chr($80 or ((CodePoint shr 12) and $3F)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F))
+  else
+    raise TGocciaLexerError.Create('Invalid unicode code point', FLine, FColumn, FFileName, FSourceLines);
+end;
+
 procedure TGocciaLexer.ScanString;
 var
   Value: string;
@@ -212,16 +258,18 @@ begin
       if not IsAtEnd then
       begin
         case Peek of
-          'n': Value := Value + #10;
-          'r': Value := Value + #13;
-          't': Value := Value + #9;
-          '\': Value := Value + '\';
-          '''': Value := Value + '''';
-          '"': Value := Value + '"';
+          'n': begin Value := Value + #10; Advance; end;
+          'r': begin Value := Value + #13; Advance; end;
+          't': begin Value := Value + #9; Advance; end;
+          '\': begin Value := Value + '\'; Advance; end;
+          '''': begin Value := Value + ''''; Advance; end;
+          '"': begin Value := Value + '"'; Advance; end;
+          '0': begin Value := Value + #0; Advance; end;
+          'u': begin Advance; Value := Value + ScanUnicodeEscape; end;
         else
           Value := Value + Peek;
+          Advance;
         end;
-        Advance;
       end;
     end
     else
@@ -256,16 +304,18 @@ begin
       if not IsAtEnd then
       begin
         case Peek of
-          'n': Value := Value + #10;
-          'r': Value := Value + #13;
-          't': Value := Value + #9;
-          '\': Value := Value + '\';
-          '`': Value := Value + '`';
-          '$': Value := Value + '$';
+          'n': begin Value := Value + #10; Advance; end;
+          'r': begin Value := Value + #13; Advance; end;
+          't': begin Value := Value + #9; Advance; end;
+          '\': begin Value := Value + '\'; Advance; end;
+          '`': begin Value := Value + '`'; Advance; end;
+          '$': begin Value := Value + '$'; Advance; end;
+          '0': begin Value := Value + #0; Advance; end;
+          'u': begin Advance; Value := Value + ScanUnicodeEscape; end;
         else
           Value := Value + Peek;
+          Advance;
         end;
-        Advance;
       end;
     end
     else

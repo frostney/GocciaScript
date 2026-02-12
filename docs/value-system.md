@@ -274,6 +274,18 @@ Extends `TGocciaFunctionValue` with:
 - **`SuperClass`** — Reference for `super` calls.
 - **`OwningClass`** — The class that declared this method. Propagated as `__owning_class__` in the call scope, enabling correct private field resolution when inheritance is involved.
 
+### Function Prototype (`TGocciaFunctionSharedPrototype`)
+
+All functions share a prototype that provides `call`, `apply`, and `bind`:
+
+| Method | Description |
+|--------|-------------|
+| `fn.call(thisArg, ...args)` | Call with explicit `this` and individual arguments |
+| `fn.apply(thisArg, argsArray)` | Call with explicit `this` and argument array |
+| `fn.bind(thisArg, ...args)` | Return a new function with bound `this` and pre-filled arguments |
+
+`bind` returns a `TGocciaBoundFunctionValue` that combines bound arguments with call-time arguments.
+
 ### Native Functions (`TGocciaNativeFunction`)
 
 Wraps a Pascal callback for built-in operations:
