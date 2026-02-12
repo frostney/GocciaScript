@@ -226,7 +226,7 @@ end;
 procedure TGocciaEngine.RegisterBuiltinConstructors;
 var
   ArrayConstructor, ObjectConstructor, StringConstructor, NumberConstructor: TGocciaClassValue;
-  BooleanConstructor, FunctionConstructor, RangeErrorConstructor: TGocciaClassValue;
+  BooleanConstructor, FunctionConstructor: TGocciaClassValue;
   ExistingArray, ExistingObject, ExistingNumber: TGocciaValue;
   ArrayObj, ObjectObj, NumberObj: TGocciaObjectValue;
   Key: string;
@@ -288,9 +288,7 @@ begin
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtUnknown);
 
-  // Create Error constructors
-  RangeErrorConstructor := TGocciaClassValue.Create('RangeError', nil);
-  FInterpreter.GlobalScope.DefineLexicalBinding('RangeError', RangeErrorConstructor, dtUnknown);
+  // RangeError, Error, TypeError, ReferenceError are registered as native functions in RegisterGlobals
 
   // Symbol is now registered as a proper built-in via RegisterSymbol
 end;

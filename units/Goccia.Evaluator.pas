@@ -1615,6 +1615,11 @@ begin
           // Let thrown values bubble up for try-catch handling
           raise;
         end;
+        on E: TGocciaBreakSignal do
+        begin
+          // Let break signals bubble up for switch handling
+          raise;
+        end;
         on E: Exception do
         begin
           raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);

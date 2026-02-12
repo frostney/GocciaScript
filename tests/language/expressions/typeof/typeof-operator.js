@@ -13,3 +13,18 @@ test("typeof operator", () => {
   expect(typeof []).toBe("object");
   expect(typeof (() => {})).toBe("function");
 });
+
+test("typeof symbol", () => {
+  const sym = Symbol("test");
+  expect(typeof sym).toBe("symbol");
+  expect(typeof Symbol()).toBe("symbol");
+  expect(typeof Symbol.iterator).toBe("symbol");
+});
+
+test("typeof NaN is number", () => {
+  expect(typeof NaN).toBe("number");
+});
+
+test("typeof Infinity is number", () => {
+  expect(typeof Infinity).toBe("number");
+});
