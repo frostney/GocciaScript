@@ -30,7 +30,7 @@ test("set preserves insertion order", () => {
   map.set("c", 3);
   map.set("a", 1);
   map.set("b", 2);
-  const keys = map.keys();
+  const keys = [...map.keys()];
   expect(keys).toEqual(["c", "a", "b"]);
 });
 
