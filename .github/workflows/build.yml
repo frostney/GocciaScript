@@ -30,6 +30,10 @@ jobs:
         run: |
           choco install freepascal
           echo "C:\tools\freepascal\bin" >> $GITHUB_PATH
+      - name: Build TestRunner
+        run: ./build.pas testrunner
+      - name: Run all JavaScript tests
+        run: ./build/TestRunner${{ runner.os == 'Windows' && '.exe' || '' }} tests
       - name: Build Tests
         run: ./build.pas tests
       - name: Run Test Values Primitives
@@ -38,9 +42,5 @@ jobs:
         run: ./build/Goccia.Values.FunctionValue.Test${{ runner.os == 'Windows' && '.exe' || '' }}
       - name: Run Test Values Object
         run: ./build/Goccia.Values.ObjectValue.Test${{ runner.os == 'Windows' && '.exe' || '' }}
-      - name: Build TestRunner
-        run: ./build.pas testrunner
-      - name: Run all JavaScript tests
-        run: ./build/TestRunner${{ runner.os == 'Windows' && '.exe' || '' }} tests
       - name: Build ScriptLoader and REPL
         run: ./build.pas loader repl
