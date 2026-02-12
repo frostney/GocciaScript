@@ -15,6 +15,7 @@ GocciaScript is a subset of ECMAScript 2020 implemented in FreePascal. It provid
 ./build.pas loader           # Build ScriptLoader only
 ./build.pas repl             # Build REPL only
 ./build.pas testrunner       # Build TestRunner only
+./build.pas benchmarkrunner  # Build BenchmarkRunner only
 ./build.pas tests            # Build Pascal unit tests only
 ```
 
@@ -25,6 +26,8 @@ GocciaScript is a subset of ECMAScript 2020 implemented in FreePascal. It provid
 ./build/REPL                                      # Start interactive REPL
 ./build/TestRunner tests/                         # Run all JavaScript tests
 ./build/TestRunner tests/language/expressions/    # Run a test category
+./build/BenchmarkRunner benchmarks/              # Run all benchmarks
+./build/BenchmarkRunner benchmarks/fibonacci.js  # Run a specific benchmark
 ```
 
 ### Compile and Run (Common Workflows)
@@ -46,6 +49,7 @@ GocciaScript is a subset of ECMAScript 2020 implemented in FreePascal. It provid
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- REPL.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- ScriptLoader.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- TestRunner.dpr
+fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- BenchmarkRunner.dpr
 ```
 
 ## Architecture
@@ -157,6 +161,7 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 ```
 
 The TestRunner adds `ggTestAssertions` for the test framework (`describe`, `test`, `expect`).
+The BenchmarkRunner adds `ggBenchmark` for the benchmark framework (`suite`, `bench`, `runBenchmarks`).
 
 ## Testing
 

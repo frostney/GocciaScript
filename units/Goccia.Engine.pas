@@ -12,7 +12,7 @@ uses
   Goccia.Builtins.GlobalObject, Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalNumber, Goccia.Builtins.Globals, Goccia.Builtins.JSON,
   Goccia.Builtins.GlobalSymbol, Goccia.Builtins.GlobalSet, Goccia.Builtins.GlobalMap,
-  Goccia.Builtins.TestAssertions, Goccia.Scope, Goccia.Modules,
+  Goccia.Builtins.TestAssertions, Goccia.Builtins.Benchmark, Goccia.Scope, Goccia.Modules,
   Goccia.Values.Interfaces, Goccia.Values.ClassValue, Goccia.Values.Error;
 
 type
@@ -27,10 +27,19 @@ type
     ggSymbol,
     ggSet,
     ggMap,
-    ggTestAssertions
+    ggTestAssertions,
+    ggBenchmark
   );
 
   TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
+
+  TGocciaTimingResult = record
+    Result: TGocciaValue;
+    LexTimeMs: Int64;
+    ParseTimeMs: Int64;
+    ExecuteTimeMs: Int64;
+    TotalTimeMs: Int64;
+  end;
 
   TGocciaEngine = class
   public
@@ -53,6 +62,7 @@ type
     FBuiltinSet: TGocciaGlobalSet;
     FBuiltinMap: TGocciaGlobalMap;
     FBuiltinTestAssertions: TGocciaTestAssertions;
+    FBuiltinBenchmark: TGocciaBenchmark;
 
     procedure RegisterBuiltIns;
     procedure RegisterConsole;
@@ -67,6 +77,7 @@ type
     procedure RegisterSymbol;
     procedure RegisterSet;
     procedure RegisterMap;
+    procedure RegisterBenchmark;
     procedure RegisterBuiltinConstructors;
     procedure ThrowError(const Message: string; Line, Column: Integer);
   public
@@ -74,6 +85,7 @@ type
     destructor Destroy; override;
 
     function Execute: TGocciaValue;
+    function ExecuteWithTiming: TGocciaTimingResult;
     function ExecuteProgram(AProgram: TGocciaProgram): TGocciaValue;
 
     class function RunScript(const Source: string; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue; overload;
@@ -82,6 +94,7 @@ type
     class function RunScriptFromFile(const FileName: string): TGocciaValue; overload;
     class function RunScriptFromStringList(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue; overload;
     class function RunScriptFromStringList(const Source: TStringList; const FileName: string): TGocciaValue; overload;
+    class function RunScriptWithTiming(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaTimingResult;
 
     property Interpreter: TGocciaInterpreter read FInterpreter;
     property BuiltinConsole: TGocciaConsole read FBuiltinConsole;
@@ -95,6 +108,7 @@ type
     property BuiltinSet: TGocciaGlobalSet read FBuiltinSet;
     property BuiltinMap: TGocciaGlobalMap read FBuiltinMap;
     property BuiltinTestAssertions: TGocciaTestAssertions read FBuiltinTestAssertions;
+    property BuiltinBenchmark: TGocciaBenchmark read FBuiltinBenchmark;
   end;
 
 
@@ -139,6 +153,8 @@ begin
     FBuiltinMap.Free;
   if Assigned(FBuiltinTestAssertions) then
     FBuiltinTestAssertions.Free;
+  if Assigned(FBuiltinBenchmark) then
+    FBuiltinBenchmark.Free;
 
   // Free interpreter after builtins
   FInterpreter.Free;
@@ -158,6 +174,7 @@ begin
   if ggSet in FGlobals then RegisterSet;
   if ggMap in FGlobals then RegisterMap;
   if ggTestAssertions in FGlobals then RegisterTestAssertions;
+  if ggBenchmark in FGlobals then RegisterBenchmark;
 
   RegisterGlobals;
   RegisterBuiltinConstructors;
@@ -181,6 +198,11 @@ end;
 procedure TGocciaEngine.RegisterTestAssertions;
 begin
   FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions', FInterpreter.GlobalScope, ThrowError);
+end;
+
+procedure TGocciaEngine.RegisterBenchmark;
+begin
+  FBuiltinBenchmark := TGocciaBenchmark.Create('Benchmark', FInterpreter.GlobalScope, ThrowError);
 end;
 
 procedure TGocciaEngine.RegisterPromise;
@@ -320,6 +342,44 @@ begin
   end;
 end;
 
+function TGocciaEngine.ExecuteWithTiming: TGocciaTimingResult;
+var
+  Lexer: TGocciaLexer;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  Tokens: TObjectList<TGocciaToken>;
+  StartTime, LexEnd, ParseEnd, ExecEnd: Int64;
+begin
+  StartTime := GetTickCount64;
+
+  Lexer := TGocciaLexer.Create(FSourceLines.Text, FFileName);
+  try
+    Tokens := Lexer.ScanTokens;
+    LexEnd := GetTickCount64;
+    Result.LexTimeMs := LexEnd - StartTime;
+
+    Parser := TGocciaParser.Create(Tokens, FFileName, Lexer.SourceLines);
+    try
+      ProgramNode := Parser.Parse;
+      ParseEnd := GetTickCount64;
+      Result.ParseTimeMs := ParseEnd - LexEnd;
+
+      try
+        Result.Result := FInterpreter.Execute(ProgramNode);
+        ExecEnd := GetTickCount64;
+        Result.ExecuteTimeMs := ExecEnd - ParseEnd;
+        Result.TotalTimeMs := ExecEnd - StartTime;
+      finally
+        ProgramNode.Free;
+      end;
+    finally
+      Parser.Free;
+    end;
+  finally
+    Lexer.Free;
+  end;
+end;
+
 function TGocciaEngine.ExecuteProgram(AProgram: TGocciaProgram): TGocciaValue;
 begin
   Result := FInterpreter.Execute(AProgram);
@@ -376,6 +436,18 @@ end;
 class function TGocciaEngine.RunScriptFromStringList(const Source: TStringList; const FileName: string): TGocciaValue;
 begin
   Result := RunScriptFromStringList(Source, FileName, TGocciaEngine.DefaultGlobals);
+end;
+
+class function TGocciaEngine.RunScriptWithTiming(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaTimingResult;
+var
+  Engine: TGocciaEngine;
+begin
+  Engine := TGocciaEngine.Create(FileName, Source, AGlobals);
+  try
+    Result := Engine.ExecuteWithTiming;
+  finally
+    Engine.Free;
+  end;
 end;
 
 procedure TGocciaEngine.ThrowError(const Message: string; Line, Column: Integer);

@@ -91,6 +91,21 @@ begin
   WriteLn('TestRunner built successfully');
 end;
 
+procedure BuildBenchmarkRunner;
+var
+  Output: string;
+begin
+  WriteLn('Building BenchmarkRunner...');
+  if not RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', 'BenchmarkRunner.dpr'], Output) then
+  begin
+    WriteLn(Output);
+    WriteLn('BenchmarkRunner build failed');
+    Halt(1);
+  end;
+  WriteLn(Output);
+  WriteLn('BenchmarkRunner built successfully');
+end;
+
 procedure Build(const Trigger: string);
 begin
   if Trigger = 'repl' then
@@ -100,7 +115,9 @@ begin
   else if Trigger = 'tests' then
     BuildTests
   else if Trigger = 'testrunner' then
-    BuildTestRunner;
+    BuildTestRunner
+  else if Trigger = 'benchmarkrunner' then
+    BuildBenchmarkRunner;
 end;
 
 begin
@@ -115,6 +132,7 @@ begin
     BuildTriggers.Add('tests');
     BuildTriggers.Add('loader');
     BuildTriggers.Add('testrunner');
+    BuildTriggers.Add('benchmarkrunner');
     BuildTriggers.Add('repl');
   end else
   begin

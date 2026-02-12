@@ -92,9 +92,10 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 ./build.pas
 
 # Build specific components
-./build.pas loader        # Script executor
-./build.pas repl          # Interactive REPL
-./build.pas testrunner    # Test runner
+./build.pas loader           # Script executor
+./build.pas repl             # Interactive REPL
+./build.pas testrunner       # Test runner
+./build.pas benchmarkrunner  # Benchmark runner
 ```
 
 ### Run a Script
@@ -121,6 +122,18 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 # Run tests in standard JavaScript (Vitest) for cross-compatibility
 npx vitest run
 ```
+
+### Run Benchmarks
+
+```bash
+# Run all benchmarks
+./build.pas benchmarkrunner && ./build/BenchmarkRunner benchmarks
+
+# Run a specific benchmark
+./build/BenchmarkRunner benchmarks/fibonacci.js
+```
+
+The benchmark runner auto-calibrates iterations per benchmark (targeting ~1 second of execution), reports ops/sec with engine-level timing breakdown (lex/parse/execute), and covers fibonacci, arrays, objects, and strings.
 
 ## Architecture
 
@@ -160,7 +173,7 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 | [Code Style](docs/code-style.md) | Naming conventions, patterns, file organization |
 | [Value System](docs/value-system.md) | Type hierarchy, interfaces, primitives, objects |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins, API reference, adding new ones |
-| [Testing](docs/testing.md) | Test organization, writing tests, running tests |
+| [Testing](docs/testing.md) | Test organization, writing tests, running tests, benchmarks |
 | [Build System](docs/build-system.md) | Build commands, compiler configuration, CI/CD |
 | [Language Restrictions](docs/language-restrictions.md) | Supported and excluded features with rationale |
 | [AGENTS.md](AGENTS.md) | Instructions for AI coding assistants |
@@ -170,7 +183,7 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 - [ ] Async/await and Promises
 - [ ] Regular expressions
 - [ ] Generators and iterators
-- [ ] Performance benchmarks
+- [x] Performance benchmarks
 - [ ] Pre-compiled binary releases
 - [ ] Host environment embedding API
 

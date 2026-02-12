@@ -19,15 +19,16 @@ GocciaScript uses a self-hosted build script written in FreePascal, executed via
 ./build.pas
 ```
 
-Builds all components in order: tests, loader, testrunner, repl.
+Builds all components in order: tests, loader, testrunner, benchmarkrunner, repl.
 
 ### Build Specific Components
 
 ```bash
-./build.pas repl          # Interactive REPL
-./build.pas loader        # Script file executor
-./build.pas testrunner    # JavaScript test runner
-./build.pas tests         # Pascal unit tests
+./build.pas repl             # Interactive REPL
+./build.pas loader           # Script file executor
+./build.pas testrunner       # JavaScript test runner
+./build.pas benchmarkrunner  # Performance benchmark runner
+./build.pas tests            # Pascal unit tests
 ```
 
 Multiple components can be specified:
@@ -57,6 +58,7 @@ All compiled binaries go to the `build/` directory:
 | `build/REPL` | `REPL.dpr` | Interactive read-eval-print loop |
 | `build/ScriptLoader` | `ScriptLoader.dpr` | Execute `.js` files |
 | `build/TestRunner` | `TestRunner.dpr` | JavaScript test runner |
+| `build/BenchmarkRunner` | `BenchmarkRunner.dpr` | Performance benchmark runner |
 | `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
 
 Intermediate files (`.o`, `.ppu`) also go to `build/` to keep the source tree clean.
@@ -111,9 +113,10 @@ It:
 GocciaScript/
 ├── build.pas          # Build script (entry point)
 ├── config.cfg         # Shared FPC configuration
-├── REPL.dpr           # REPL program source
-├── ScriptLoader.dpr   # Script loader program source
-├── TestRunner.dpr     # Test runner program source
+├── REPL.dpr              # REPL program source
+├── ScriptLoader.dpr      # Script loader program source
+├── TestRunner.dpr        # Test runner program source
+├── BenchmarkRunner.dpr   # Benchmark runner program source
 ├── units/
 │   ├── Goccia.inc     # Shared compiler directives
 │   ├── *.pas          # All unit source files
@@ -126,9 +129,14 @@ GocciaScript/
 
 ## CI/CD
 
-GitHub Actions workflow (`.github/workflows/build.yml`) runs on every push to `main`:
+GitHub Actions CI is defined in `.github/workflows/ci.yml` with four jobs that form a pipeline:
 
-### Build Matrix
+```
+build → test       → artifacts
+      → benchmark  →
+```
+
+All jobs run across the full platform matrix:
 
 | OS | Architecture |
 |----|-------------|
@@ -136,13 +144,17 @@ GitHub Actions workflow (`.github/workflows/build.yml`) runs on every push to `m
 | macOS Latest | x64, ARM64 |
 | Windows Latest | x64 |
 
-### Pipeline Steps
+### Pipeline Jobs
 
-1. Checkout code.
-2. Install FreePascal (`apt`, `brew`, or `choco`).
-3. Build and run Pascal unit tests.
-4. Build TestRunner and run all JavaScript tests.
-5. Build ScriptLoader and REPL (compilation verification).
+**`build`** — Installs FPC, compiles all binaries, uploads them as intermediate artifacts.
+
+**`test`** (needs build) — Downloads binaries, runs JavaScript tests and Pascal unit tests.
+
+**`benchmark`** (needs build) — Downloads binaries, runs all benchmarks on all platforms to detect platform-specific regressions.
+
+**`artifacts`** (needs test + benchmark, push only) — Uploads release binaries after both test and benchmark pass.
+
+FPC is only installed once per platform in the `build` job. Test and benchmark jobs run in parallel, using pre-built binaries.
 
 ## Direct FPC Compilation
 
@@ -152,6 +164,7 @@ If you need to bypass the build script:
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- REPL.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- ScriptLoader.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- TestRunner.dpr
+fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- BenchmarkRunner.dpr
 ```
 
 The `-v` flags suppress verbose output to keep the build clean. Use `fpc @config.cfg REPL.dpr` for full verbose output during debugging.

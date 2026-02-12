@@ -1,0 +1,175 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        arch: [x64]
+        include:
+          - os: ubuntu-latest
+            arch: arm64
+          - os: macos-latest
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FPC (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+
+      - name: Install FPC (macOS)
+        if: runner.os == 'macOS'
+        run: brew install fpc
+
+      - name: Install FPC (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install freepascal -y --no-progress
+          echo 'C:\ProgramData\chocolatey\bin' >> "$GITHUB_PATH"
+          echo 'C:\tools\freepascal\bin\i386-win32' >> "$GITHUB_PATH"
+          echo '-FuC:/tools/freepascal/units/$fpctarget/*' >> 'C:/tools/freepascal/bin/i386-win32/fpc.cfg'
+
+      - name: Build all
+        run: ./build.pas
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          retention-days: 1
+          path: |
+            build/ScriptLoader
+            build/ScriptLoader.exe
+            build/TestRunner
+            build/TestRunner.exe
+            build/BenchmarkRunner
+            build/BenchmarkRunner.exe
+            build/REPL
+            build/REPL.exe
+            build/Goccia.Values.Primitives.Test
+            build/Goccia.Values.Primitives.Test.exe
+            build/Goccia.Values.FunctionValue.Test
+            build/Goccia.Values.FunctionValue.Test.exe
+            build/Goccia.Values.ObjectValue.Test
+            build/Goccia.Values.ObjectValue.Test.exe
+
+  test:
+    needs: build
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        arch: [x64]
+        include:
+          - os: ubuntu-latest
+            arch: arm64
+          - os: macos-latest
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          path: build/
+
+      - name: Make binaries executable
+        if: runner.os != 'Windows'
+        run: chmod +x build/*
+
+      - name: Run all JavaScript tests
+        run: ./build/TestRunner tests
+
+      - name: Run Pascal unit tests
+        run: |
+          ./build/Goccia.Values.Primitives.Test
+          ./build/Goccia.Values.FunctionValue.Test
+          ./build/Goccia.Values.ObjectValue.Test
+
+  benchmark:
+    needs: build
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        arch: [x64]
+        include:
+          - os: ubuntu-latest
+            arch: arm64
+          - os: macos-latest
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          path: build/
+
+      - name: Make binaries executable
+        if: runner.os != 'Windows'
+        run: chmod +x build/*
+
+      - name: Run benchmarks
+        run: ./build/BenchmarkRunner benchmarks
+
+  artifacts:
+    needs: [test, benchmark]
+    if: github.event_name == 'push'
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        arch: [x64]
+        include:
+          - os: ubuntu-latest
+            arch: arm64
+          - os: macos-latest
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          path: build/
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gocciascript-${{ matrix.os }}-${{ matrix.arch }}
+          if-no-files-found: ignore
+          path: |
+            build/ScriptLoader
+            build/ScriptLoader.exe
+            build/TestRunner
+            build/TestRunner.exe
+            build/BenchmarkRunner
+            build/BenchmarkRunner.exe
+            build/REPL
+            build/REPL.exe

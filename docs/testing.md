@@ -332,13 +332,105 @@ This is because GocciaScript represents NaN via a `FSpecialValue = nsvNaN` flag 
 - **JavaScript tests** (preferred) — For any behavior observable from script code. This is almost everything.
 - **Pascal unit tests** — Only for internal implementation details not reachable from script code.
 
+## Performance Benchmarks
+
+GocciaScript includes a benchmark runner for measuring execution performance. Benchmarks live in the `benchmarks/` directory and use a `suite`/`bench` API.
+
+### Running Benchmarks
+
+```bash
+# Build the BenchmarkRunner
+./build.pas benchmarkrunner
+
+# Run all benchmarks
+./build/BenchmarkRunner benchmarks
+
+# Run a specific benchmark
+./build/BenchmarkRunner benchmarks/fibonacci.js
+```
+
+### Writing Benchmarks
+
+```javascript
+suite("fibonacci", () => {
+  bench("recursive fib(20)", () => {
+    const fib = (n) => n <= 1 ? n : fib(n - 1) + fib(n - 2);
+    fib(20);
+  });
+
+  bench("iterative fib(20) via reduce", () => {
+    const fib = (n) => Array.from({ length: n }).reduce(
+      (acc) => [acc[1], acc[0] + acc[1]],
+      [0, 1]
+    )[0];
+    fib(20);
+  });
+});
+```
+
+### How the BenchmarkRunner Works
+
+The `BenchmarkRunner` program:
+
+1. Scans the provided path for `.js` files.
+2. For each file, creates a `TGocciaEngine` with `DefaultGlobals + [ggBenchmark]`.
+3. Loads the source and appends a `runBenchmarks()` call.
+4. Executes the script via `ExecuteWithTiming` — which measures lex, parse, and execute phases separately.
+5. `suite()` calls execute immediately, registering `bench()` entries.
+6. `runBenchmarks()` runs each registered benchmark:
+   - **Warmup:** 3 iterations to stabilize.
+   - **Calibrate:** Doubles batch size until it runs for at least 1 second.
+   - **Measure:** Runs the calibrated number of iterations and records total time.
+7. Reports ops/sec, mean ms/op, iteration count, and engine timing breakdown per file.
+
+### Benchmark Script API
+
+| Function | Description |
+|----------|-------------|
+| `suite(name, fn)` | Group benchmarks (like `describe` in tests). Executes `fn` immediately. |
+| `bench(name, fn)` | Register a benchmark. `fn` is called many times during measurement. |
+| `runBenchmarks()` | Execute all registered benchmarks and return results. Injected automatically by BenchmarkRunner. |
+
+### Available Benchmarks
+
+| File | Covers |
+|------|--------|
+| `benchmarks/fibonacci.js` | Recursive vs iterative computation |
+| `benchmarks/arrays.js` | Array.from, map, filter, reduce, forEach, find, sort, flat, flatMap |
+| `benchmarks/objects.js` | Object creation, property access, Object.keys/entries, spread |
+| `benchmarks/strings.js` | Concatenation, template literals, split/join, indexOf, trim, replace, pad |
+
+### Sample Output
+
+```
+Running benchmark: benchmarks/fibonacci.js
+  Lex: 0ms | Parse: 0ms | Execute: 9984ms
+
+  fibonacci
+    recursive fib(15)                        239 ops/sec      4.19 ms/op    (240 iterations)
+    recursive fib(20)                         15 ops/sec     64.75 ms/op    (20 iterations)
+    iterative fib(20) via reduce          10,341 ops/sec      0.10 ms/op    (18200 iterations)
+
+Benchmark Summary
+  Total benchmarks: 3
+  Total duration: 10.0s
+```
+
 ## CI Integration
 
-The GitHub Actions workflow (`.github/workflows/build.yml`) runs on every push to `main`:
+GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and on pull requests, with a four-job pipeline:
 
-1. Builds Pascal unit tests and runs them.
-2. Builds the TestRunner.
-3. Runs all JavaScript tests via `./build/TestRunner tests`.
-4. Builds ScriptLoader and REPL to verify compilation.
+```
+build → test       → artifacts
+      → benchmark  →
+```
 
-Tests run across Linux, macOS, and Windows (both x64 and ARM where applicable).
+**`build`** — Installs FPC once per platform, compiles all binaries, uploads them as intermediate artifacts.
+
+**`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests.
+
+**`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
+
+**`artifacts`** (needs test + benchmark, push only) — Uploads release binaries after both test and benchmark pass.
+
+The `test` and `benchmark` jobs run in parallel since they both depend only on `build`. FPC is installed once per platform, not repeated. Both run across Linux, macOS, and Windows (x64 + ARM where applicable), so platform-specific regressions are caught in both tests and benchmarks.
