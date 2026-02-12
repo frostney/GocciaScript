@@ -29,7 +29,8 @@ describe("ternary operator precedence", () => {
 
   test("ternary does not evaluate unused branch", () => {
     let sideEffect = 0;
-    const result = true ? 42 : (sideEffect = 1, 99);
+    const inc = () => { sideEffect = 1; return 99; };
+    const result = true ? 42 : inc();
     expect(result).toBe(42);
     expect(sideEffect).toBe(0);
   });

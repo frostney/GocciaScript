@@ -17,7 +17,12 @@ var
   Output: string;
 begin
   WriteLn('Building REPL...');
-  RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', 'REPL.dpr'], Output);
+  if not RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', 'REPL.dpr'], Output) then
+  begin
+    WriteLn(Output);
+    WriteLn('REPL build failed');
+    Halt(1);
+  end;
   WriteLn(Output);
   WriteLn('REPL built successfully');
 end;
@@ -28,7 +33,12 @@ var
 begin
   WriteLn('');
   WriteLn('Building ScriptLoader...');
-  RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', 'ScriptLoader.dpr'], Output);
+  if not RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', 'ScriptLoader.dpr'], Output) then
+  begin
+    WriteLn(Output);
+    WriteLn('ScriptLoader build failed');
+    Halt(1);
+  end;
   WriteLn(Output);
   WriteLn('ScriptLoader built successfully');
   WriteLn('');
@@ -54,7 +64,12 @@ begin
 
   for I := 0 to TestFiles.Count - 1 do
   begin
-    RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', TestFiles[I]], Output);
+    if not RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', TestFiles[I]], Output) then
+    begin
+      WriteLn(Output);
+      WriteLn('Test build failed: ', TestFiles[I]);
+      Halt(1);
+    end;
     WriteLn(Output);
   end;
 
@@ -66,7 +81,12 @@ var
   Output: string;
 begin
   WriteLn('Building TestRunner...');
-  RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', 'TestRunner.dpr'], Output);
+  if not RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', 'TestRunner.dpr'], Output) then
+  begin
+    WriteLn(Output);
+    WriteLn('TestRunner build failed');
+    Halt(1);
+  end;
   WriteLn(Output);
   WriteLn('TestRunner built successfully');
 end;

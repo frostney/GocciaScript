@@ -312,7 +312,17 @@ begin
 
   while (Peek <> '`') and not IsAtEnd do
   begin
-    if Peek = #10 then
+    if Peek = #13 then
+    begin
+      // ECMAScript spec: normalize CR and CRLF to LF in template literals
+      Advance; // consume CR
+      if Peek = #10 then
+        Advance; // consume LF if CRLF
+      Inc(FLine);
+      FColumn := 0;
+      Value := Value + #10;
+    end
+    else if Peek = #10 then
     begin
       Inc(FLine);
       FColumn := 0;
