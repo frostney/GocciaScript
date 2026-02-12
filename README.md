@@ -111,11 +111,14 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 ### Run Tests
 
 ```bash
-# Run all tests
+# Run all tests (GocciaScript TestRunner)
 ./build.pas testrunner && ./build/TestRunner tests
 
 # Run a specific test
 ./build.pas testrunner && ./build/TestRunner tests/language/expressions/addition/basic-addition.js
+
+# Run tests in standard JavaScript (Vitest) for cross-compatibility
+npx vitest run
 ```
 
 ## Architecture
@@ -143,7 +146,7 @@ See [Architecture](docs/architecture.md) for the full deep-dive.
 - **OOP over everything**: Rely on type safety of specialized classes rather than generic data structures.
 - **Define vs Assign**: `Define` creates a new variable binding; `Assign` changes an existing one. These are distinct operations throughout the codebase.
 - **Pure evaluation**: The evaluator is composed of pure functions with no side effects.
-- **Interface segregation**: Value capabilities are expressed through focused interfaces (`IPropertyMethods`, `IIndexMethods`, `IFunctionMethods`).
+- **Interface segregation**: Value capabilities are expressed through focused interfaces (`IPropertyMethods`, `IIndexMethods`).
 
 See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 

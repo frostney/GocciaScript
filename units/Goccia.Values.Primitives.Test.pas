@@ -3,8 +3,8 @@ program Goccia.Values.Primitives.Test;
 {$I Goccia.inc}
 
 uses
-  Classes, SysUtils, Goccia.Values.UndefinedValue, Goccia.Values.StringValue, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, Goccia.Values.NullValue,
-  TestRunner, Math;
+  Classes, SysUtils, Goccia.Values.Primitives,
+  TestRunner;
 
 type
   TTestPrimitives = class(TTestSuite)
@@ -35,102 +35,92 @@ end;
 
 procedure TTestPrimitives.TestUndefinedValue;
 var
-  UndefinedValue: TGocciaUndefinedLiteralValue;
+  Value: TGocciaUndefinedLiteralValue;
 begin
-  UndefinedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-  Expect<string>(UndefinedValue.ToStringLiteral.Value).ToBe('undefined');
-  Expect<Boolean>(UndefinedValue.ToBooleanLiteral.Value).ToBe(False);
-  Expect<Boolean>(IsNaN(UndefinedValue.ToNumberLiteral.Value)).ToBe(True);
-  Expect<string>(UndefinedValue.TypeName).ToBe('undefined');
-  UndefinedValue.Free;
+  Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('undefined');
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(False);
+  Expect<Boolean>(Value.ToNumberLiteral.IsNaN).ToBe(True);
+  Expect<string>(Value.TypeName).ToBe('undefined');
 end;
 
 procedure TTestPrimitives.TestStringValueContent;
 var
-  StringValue: TGocciaStringLiteralValue;
+  Value: TGocciaStringLiteralValue;
 begin
-  StringValue := TGocciaStringLiteralValue.Create('Hello, world!');
-  Expect<string>(StringValue.ToStringLiteral.Value).ToBe('Hello, world!');
-  Expect<Boolean>(StringValue.ToBooleanLiteral.Value).ToBe(True);
-  Expect<Boolean>(IsNaN(StringValue.ToNumberLiteral.Value)).ToBe(True);
-  Expect<string>(StringValue.TypeName).ToBe('string');
-  StringValue.Free;
+  Value := TGocciaStringLiteralValue.Create('Hello, world!');
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('Hello, world!');
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
+  Expect<Boolean>(Value.ToNumberLiteral.IsNaN).ToBe(True);
+  Expect<string>(Value.TypeName).ToBe('string');
 end;
 
 procedure TTestPrimitives.TestStringValueEmpty;
 var
-  StringValue: TGocciaStringLiteralValue;
+  Value: TGocciaStringLiteralValue;
 begin
-  StringValue := TGocciaStringLiteralValue.Create('');
-  Expect<string>(StringValue.ToStringLiteral.Value).ToBe('');
-  Expect<Boolean>(StringValue.ToBooleanLiteral.Value).ToBe(False);
-  Expect<Boolean>(IsNaN(StringValue.ToNumberLiteral.Value)).ToBe(True);
-  Expect<string>(StringValue.TypeName).ToBe('string');
-  StringValue.Free;
+  Value := TGocciaStringLiteralValue.Create('');
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('');
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(False);
+  Expect<Double>(Value.ToNumberLiteral.Value).ToBe(0);
+  Expect<string>(Value.TypeName).ToBe('string');
 end;
 
 procedure TTestPrimitives.TestStringValueNumber;
 var
-  StringValue: TGocciaStringLiteralValue;
+  Value: TGocciaStringLiteralValue;
 begin
-  StringValue := TGocciaStringLiteralValue.Create('123.456');
-  Expect<string>(StringValue.ToStringLiteral.Value).ToBe('123.456');
-  Expect<Boolean>(StringValue.ToBooleanLiteral.Value).ToBe(True);
-  Expect<Double>(StringValue.ToNumberLiteral.Value).ToBe(123.456);
-  Expect<string>(StringValue.TypeName).ToBe('string');
-  StringValue.Free;
+  Value := TGocciaStringLiteralValue.Create('123.456');
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('123.456');
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
+  Expect<Double>(Value.ToNumberLiteral.Value).ToBe(123.456);
+  Expect<string>(Value.TypeName).ToBe('string');
 end;
 
 procedure TTestPrimitives.TestNumberValue;
 var
-  NumberValue: TGocciaNumberLiteralValue;
+  Value: TGocciaNumberLiteralValue;
 begin
-  NumberValue := TGocciaNumberLiteralValue.Create(123.456);
-  Expect<string>(NumberValue.ToStringLiteral.Value).ToBe('123.456');
-  Expect<Boolean>(NumberValue.ToBooleanLiteral.Value).ToBe(True);
-  Expect<Double>(NumberValue.ToNumberLiteral.Value).ToBe(123.456);
-  Expect<string>(NumberValue.TypeName).ToBe('number');
-  NumberValue.Free;
+  Value := TGocciaNumberLiteralValue.Create(123.456);
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('123.456');
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
+  Expect<Double>(Value.ToNumberLiteral.Value).ToBe(123.456);
+  Expect<string>(Value.TypeName).ToBe('number');
 end;
 
 procedure TTestPrimitives.TestBooleanValueTrue;
 var
-  BooleanValue: TGocciaBooleanLiteralValue;
+  Value: TGocciaBooleanLiteralValue;
 begin
-  BooleanValue := TGocciaBooleanLiteralValue.Create(True);
-  Expect<string>(BooleanValue.ToStringLiteral.Value).ToBe('true');
-  Expect<Boolean>(BooleanValue.ToBooleanLiteral.Value).ToBe(True);
-  Expect<Double>(BooleanValue.ToNumberLiteral.Value).ToBe(1);
-  Expect<string>(BooleanValue.TypeName).ToBe('boolean');
-  BooleanValue.Free;
+  Value := TGocciaBooleanLiteralValue.Create(True);
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('true');
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
+  Expect<Double>(Value.ToNumberLiteral.Value).ToBe(1);
+  Expect<string>(Value.TypeName).ToBe('boolean');
 end;
 
 procedure TTestPrimitives.TestBooleanValueFalse;
 var
-  BooleanValue: TGocciaBooleanLiteralValue;
+  Value: TGocciaBooleanLiteralValue;
 begin
-  BooleanValue := TGocciaBooleanLiteralValue.Create(False);
-  Expect<string>(BooleanValue.ToStringLiteral.Value).ToBe('false');
-  Expect<Boolean>(BooleanValue.ToBooleanLiteral.Value).ToBe(False);
-  Expect<Double>(BooleanValue.ToNumberLiteral.Value).ToBe(0);
-  Expect<string>(BooleanValue.TypeName).ToBe('boolean');
-  BooleanValue.Free;
+  Value := TGocciaBooleanLiteralValue.Create(False);
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('false');
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(False);
+  Expect<Double>(Value.ToNumberLiteral.Value).ToBe(0);
+  Expect<string>(Value.TypeName).ToBe('boolean');
 end;
 
 procedure TTestPrimitives.TestNullValue;
 var
-  NullValue: TGocciaNullLiteralValue;
+  Value: TGocciaNullLiteralValue;
 begin
-  NullValue := TGocciaNullLiteralValue.Create;
-  Expect<string>(NullValue.ToStringLiteral.Value).ToBe('null');
-  Expect<Boolean>(NullValue.ToBooleanLiteral.Value).ToBe(False);
-  Expect<Double>(NullValue.ToNumberLiteral.Value).ToBe(0);
-  Expect<string>(NullValue.TypeName).ToBe('object');
-  NullValue.Free;
+  Value := TGocciaNullLiteralValue.Create;
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('null');
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(False);
+  Expect<Double>(Value.ToNumberLiteral.Value).ToBe(0);
+  Expect<string>(Value.TypeName).ToBe('null');
+  Expect<string>(Value.TypeOf).ToBe('object'); // JavaScript: typeof null === 'object'
 end;
-
-var
-  TestResult: TTestResult;
 
 begin
   TestRunnerProgram.AddSuite(TTestPrimitives.Create('Primitives'));

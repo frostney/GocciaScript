@@ -3,7 +3,11 @@ program Goccia.Values.FunctionValue.Test;
 {$I Goccia.inc}
 
 uses
-  Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Values.StringValue, Goccia.Values.NumberValue, Goccia.Values.BooleanValue, StrUtils, Math, TestRunner, Goccia.AST.Node, Generics.Collections, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope, Goccia.Values.Core, Goccia.Token, SysUtils, Classes, Goccia.Values.UndefinedValue, Goccia.Values.NullValue, Goccia.Evaluator;
+  Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Values.Primitives,
+  Goccia.Arguments.Collection,
+  TestRunner, Goccia.AST.Node, Generics.Collections,
+  Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope,
+  Goccia.Token, SysUtils, Classes, Goccia.Evaluator;
 
 type
   TTestBlockValue = class(TTestSuite)
@@ -48,7 +52,6 @@ type
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, 0, 0));
 
-    // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, AParameters.Count);
     for I := 0 to AParameters.Count - 1 do
     begin
@@ -59,53 +62,54 @@ type
     Result := T.Create(ParamArray, Statements, AScope, AName);
   end;
 
-  procedure TestSimpleFunctionFromTemplate<T>(TestSuite: TTestSuite; const ATypeDisplayName: String);
+  procedure TestSimpleFunctionFromTemplate<T>;
   var
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
     ReturnValue: TGocciaValue;
-    Statements: TObjectList<TGocciaASTNode>;
+    Args: TGocciaArgumentsCollection;
   begin
     Scope := TGocciaScope.Create(nil, skGlobal);
     Parameters := TStringList.Create;
 
-    WriteLn('Parameters: ' + IntToStr(Parameters.Count));
-
     FunctionValue := CreateSimpleFunction<T>('test', Parameters, Scope);
 
-    WriteLn('Parameters from FunctionValue: ' + IntToStr(Length(FunctionValue.Parameters)));
-
     // Test basic function properties
-    TestSuite.Expect<Boolean>(FunctionValue.ToBoolean).ToBeTrue;
-    TestSuite.Expect<String>(FunctionValue.ToStringLiteral.Value).ToBe('[' + ATypeDisplayName + ': test]');
-    TestSuite.Expect<Boolean>(IsNaN(FunctionValue.ToNumber)).ToBeTrue;
-    TestSuite.Expect<String>(FunctionValue.TypeName).ToBe('function');
+    Expect<Boolean>(FunctionValue.ToBooleanLiteral.Value).ToBe(True);
+    Expect<string>(FunctionValue.ToStringLiteral.Value).ToBe('[function Object]');
+    Expect<Boolean>(FunctionValue.ToNumberLiteral.IsNaN).ToBe(True);
+    Expect<string>(FunctionValue.TypeName).ToBe('function');
 
     // Test function metadata
-    TestSuite.Expect<String>(FunctionValue.Name).ToBe('test');
-    TestSuite.Expect<Integer>(Length(FunctionValue.Parameters)).ToBe(0);
-    TestSuite.Expect<Boolean>(FunctionValue.Closure = Scope).ToBeTrue;
+    Expect<string>(FunctionValue.Name).ToBe('test');
+    Expect<Integer>(Length(FunctionValue.Parameters)).ToBe(0);
+    Expect<Boolean>(FunctionValue.Closure = Scope).ToBe(True);
 
     // Test function execution
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.UndefinedValue);
-    TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBeFalse;
-    TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('undefined');
-    TestSuite.Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBeTrue;
-    TestSuite.Expect<String>(ReturnValue.TypeName).ToBe('undefined');
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      ReturnValue := FunctionValue.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Expect<Boolean>(ReturnValue.ToBooleanLiteral.Value).ToBe(False);
+      Expect<string>(ReturnValue.ToStringLiteral.Value).ToBe('undefined');
+      Expect<Boolean>(ReturnValue.ToNumberLiteral.IsNaN).ToBe(True);
+      Expect<string>(ReturnValue.TypeName).ToBe('undefined');
+    finally
+      Args.Free;
+    end;
 
-    FunctionValue.Free;
+    Parameters.Free;
     Scope.Free;
   end;
 
-  procedure TestFunctionWithParametersFromTemplate<T>(TestSuite: TTestSuite);
+  procedure TestFunctionWithParametersFromTemplate<T>;
   var
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
-    Arguments: TObjectList<TGocciaValue>;
+    Args: TGocciaArgumentsCollection;
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
@@ -114,7 +118,6 @@ type
     Parameters.Add('a');
     Parameters.Add('b');
 
-    // Create a function body that uses the parameters
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaBinaryExpression.Create(
       TGocciaIdentifierExpression.Create('a', 0, 0),
@@ -123,7 +126,6 @@ type
       0, 0
     ));
 
-    // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, Parameters.Count);
     for I := 0 to Parameters.Count - 1 do
     begin
@@ -134,47 +136,57 @@ type
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
     // Test function properties
-    TestSuite.Expect<String>(FunctionValue.Name).ToBe('test');
-    TestSuite.Expect<Integer>(Length(FunctionValue.Parameters)).ToBe(2);
-    TestSuite.Expect<String>(FunctionValue.Parameters[0].Name).ToBe('a');
-    TestSuite.Expect<String>(FunctionValue.Parameters[1].Name).ToBe('b');
+    Expect<string>(FunctionValue.Name).ToBe('test');
+    Expect<Integer>(Length(FunctionValue.Parameters)).ToBe(2);
+    Expect<string>(FunctionValue.Parameters[0].Name).ToBe('a');
+    Expect<string>(FunctionValue.Parameters[1].Name).ToBe('b');
 
     // Test function execution with arguments
-    Arguments := TObjectList<TGocciaValue>.Create;
-    Arguments.Add(TGocciaNumberLiteralValue.Create(1));
-    Arguments.Add(TGocciaNumberLiteralValue.Create(2));
-    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
-    TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(3);
-    Arguments.Free;
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(TGocciaNumberLiteralValue.Create(1));
+      Args.Add(TGocciaNumberLiteralValue.Create(2));
+      ReturnValue := FunctionValue.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Expect<Double>(ReturnValue.ToNumberLiteral.Value).ToBe(3);
+    finally
+      Args.Free;
+    end;
 
     // Test function execution with too few arguments
-    Arguments := TObjectList<TGocciaValue>.Create;
-    Arguments.Add(TGocciaNumberLiteralValue.Create(1));
-    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
-    TestSuite.Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBeTrue;
-    TestSuite.Expect<String>(ReturnValue.TypeName).ToBe('number');
-    Arguments.Free;
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(TGocciaNumberLiteralValue.Create(1));
+      ReturnValue := FunctionValue.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Expect<Boolean>(ReturnValue.ToNumberLiteral.IsNaN).ToBe(True);
+      Expect<string>(ReturnValue.TypeName).ToBe('number');
+    finally
+      Args.Free;
+    end;
 
     // Test function execution with too many arguments
-    Arguments := TObjectList<TGocciaValue>.Create;
-    Arguments.Add(TGocciaNumberLiteralValue.Create(1));
-    Arguments.Add(TGocciaNumberLiteralValue.Create(2));
-    Arguments.Add(TGocciaNumberLiteralValue.Create(3));
-    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
-    TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(3);
-    Arguments.Free;
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(TGocciaNumberLiteralValue.Create(1));
+      Args.Add(TGocciaNumberLiteralValue.Create(2));
+      Args.Add(TGocciaNumberLiteralValue.Create(3));
+      ReturnValue := FunctionValue.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Expect<Double>(ReturnValue.ToNumberLiteral.Value).ToBe(3);
+    finally
+      Args.Free;
+    end;
 
-    FunctionValue.Free;
+    Parameters.Free;
     Scope.Free;
   end;
 
-  procedure TestFunctionWithReturnFromTemplate<T>(TestSuite: TTestSuite);
+  procedure TestFunctionWithReturnFromTemplate<T>;
   var
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
+    Args: TGocciaArgumentsCollection;
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
@@ -183,14 +195,6 @@ type
     Parameters.Add('a');
     Parameters.Add('b');
 
-    // Test returning a number
-    Statements := TObjectList<TGocciaASTNode>.Create;
-    Statements.Add(TGocciaReturnStatement.Create(
-      TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), 0, 0),
-      0, 0
-    ));
-
-    // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, Parameters.Count);
     for I := 0 to Parameters.Count - 1 do
     begin
@@ -198,13 +202,24 @@ type
       ParamArray[I].DefaultValue := nil;
     end;
 
+    // Test returning a number
+    Statements := TObjectList<TGocciaASTNode>.Create;
+    Statements.Add(TGocciaReturnStatement.Create(
+      TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), 0, 0),
+      0, 0
+    ));
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.UndefinedValue);
-    TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(1);
-    TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('1');
-    TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBeTrue;
-    TestSuite.Expect<String>(ReturnValue.TypeName).ToBe('number');
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      ReturnValue := FunctionValue.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Expect<Double>(ReturnValue.ToNumberLiteral.Value).ToBe(1);
+      Expect<string>(ReturnValue.ToStringLiteral.Value).ToBe('1');
+      Expect<Boolean>(ReturnValue.ToBooleanLiteral.Value).ToBe(True);
+      Expect<string>(ReturnValue.TypeName).ToBe('number');
+    finally
+      Args.Free;
+    end;
 
     // Test returning a string
     Statements := TObjectList<TGocciaASTNode>.Create;
@@ -214,11 +229,16 @@ type
     ));
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.UndefinedValue);
-    TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('hello');
-    TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBeTrue;
-    TestSuite.Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBeTrue;
-    TestSuite.Expect<String>(ReturnValue.TypeName).ToBe('string');
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      ReturnValue := FunctionValue.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Expect<string>(ReturnValue.ToStringLiteral.Value).ToBe('hello');
+      Expect<Boolean>(ReturnValue.ToBooleanLiteral.Value).ToBe(True);
+      Expect<Boolean>(ReturnValue.ToNumberLiteral.IsNaN).ToBe(True);
+      Expect<string>(ReturnValue.TypeName).ToBe('string');
+    finally
+      Args.Free;
+    end;
 
     // Test returning a boolean
     Statements := TObjectList<TGocciaASTNode>.Create;
@@ -228,11 +248,16 @@ type
     ));
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.UndefinedValue);
-    TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
-    TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('true');
-    TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(1);
-    TestSuite.Expect<String>(ReturnValue.TypeName).ToBe('boolean');
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      ReturnValue := FunctionValue.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Expect<Boolean>(ReturnValue.ToBooleanLiteral.Value).ToBe(True);
+      Expect<string>(ReturnValue.ToStringLiteral.Value).ToBe('true');
+      Expect<Double>(ReturnValue.ToNumberLiteral.Value).ToBe(1);
+      Expect<string>(ReturnValue.TypeName).ToBe('boolean');
+    finally
+      Args.Free;
+    end;
 
     // Test returning undefined
     Statements := TObjectList<TGocciaASTNode>.Create;
@@ -242,39 +267,42 @@ type
     ));
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.UndefinedValue);
-    TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBeFalse;
-    TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('undefined');
-    TestSuite.Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBeTrue;
-    TestSuite.Expect<String>(ReturnValue.TypeName).ToBe('undefined');
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      ReturnValue := FunctionValue.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Expect<Boolean>(ReturnValue.ToBooleanLiteral.Value).ToBe(False);
+      Expect<string>(ReturnValue.ToStringLiteral.Value).ToBe('undefined');
+      Expect<Boolean>(ReturnValue.ToNumberLiteral.IsNaN).ToBe(True);
+      Expect<string>(ReturnValue.TypeName).ToBe('undefined');
+    finally
+      Args.Free;
+    end;
 
     Parameters.Free;
     Scope.Free;
   end;
 
-  procedure TestFunctionWithScopeFromTemplate<T>(TestSuite: TTestSuite);
+  procedure TestFunctionWithScopeFromTemplate<T>;
   var
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
+    Args: TGocciaArgumentsCollection;
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
-    // Create a global scope with a variable
     Scope := TGocciaScope.Create(nil, skGlobal);
-    Scope.DefineVariable('x', TGocciaNumberLiteralValue.Create(42), dtLet);
+    Scope.DefineLexicalBinding('x', TGocciaNumberLiteralValue.Create(42), dtLet);
     Parameters := TStringList.Create;
 
-    // Create a function body that uses the scope variable
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaReturnStatement.Create(
       TGocciaIdentifierExpression.Create('x', 0, 0),
       0, 0
     ));
 
-    // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, Parameters.Count);
     for I := 0 to Parameters.Count - 1 do
     begin
@@ -284,47 +312,48 @@ type
 
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
-    // Test function execution
-    ReturnValue := FunctionValue.Call(TObjectList<TGocciaValue>.Create, TGocciaUndefinedLiteralValue.UndefinedValue);
-    TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(42);
-    TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('42');
-    TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
-    TestSuite.Expect<String>(ReturnValue.TypeName).ToBe('number');
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      ReturnValue := FunctionValue.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Expect<Double>(ReturnValue.ToNumberLiteral.Value).ToBe(42);
+      Expect<string>(ReturnValue.ToStringLiteral.Value).ToBe('42');
+      Expect<Boolean>(ReturnValue.ToBooleanLiteral.Value).ToBe(True);
+      Expect<string>(ReturnValue.TypeName).ToBe('number');
+    finally
+      Args.Free;
+    end;
 
-    FunctionValue.Free;
+    Parameters.Free;
     Scope.Free;
   end;
 
-  procedure TestFunctionWithScopeAndParametersFromTemplate<T>(TestSuite: TTestSuite);
+  procedure TestFunctionWithScopeAndParametersFromTemplate<T>;
   var
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
-    Arguments: TObjectList<TGocciaValue>;
+    Args: TGocciaArgumentsCollection;
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
-    // Create a global scope with a variable
     Scope := TGocciaScope.Create(nil, skGlobal);
-    Scope.DefineVariable('x', TGocciaNumberLiteralValue.Create(42), dtLet);
+    Scope.DefineLexicalBinding('x', TGocciaNumberLiteralValue.Create(42), dtLet);
     Parameters := TStringList.Create;
     Parameters.Add('x'); // Parameter shadows global variable
 
-    // Create a function body that uses both parameter and scope variable
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaReturnStatement.Create(
       TGocciaBinaryExpression.Create(
-        TGocciaIdentifierExpression.Create('x', 0, 0), // Parameter x
+        TGocciaIdentifierExpression.Create('x', 0, 0),
         gttPlus,
-        TGocciaIdentifierExpression.Create('x', 0, 0), // Global x
+        TGocciaIdentifierExpression.Create('x', 0, 0),
         0, 0
       ),
       0, 0
     ));
 
-    // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, Parameters.Count);
     for I := 0 to Parameters.Count - 1 do
     begin
@@ -334,35 +363,35 @@ type
 
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
-    // Test function execution
-    Arguments := TObjectList<TGocciaValue>.Create;
-    Arguments.Add(TGocciaNumberLiteralValue.Create(10));
-    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
-    TestSuite.Expect<Double>(ReturnValue.ToNumber).ToBe(20); // 10 + 10
-    Arguments.Free;
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(TGocciaNumberLiteralValue.Create(10));
+      ReturnValue := FunctionValue.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Expect<Double>(ReturnValue.ToNumberLiteral.Value).ToBe(20); // 10 + 10
+    finally
+      Args.Free;
+    end;
 
-    FunctionValue.Free;
+    Parameters.Free;
     Scope.Free;
   end;
 
-  procedure TestFunctionWithScopeAndReturnFromTemplate<T>(TestSuite: TTestSuite);
+  procedure TestFunctionWithScopeAndReturnFromTemplate<T>;
   var
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
     ReturnValue: TGocciaValue;
-    Arguments: TObjectList<TGocciaValue>;
     Statements: TObjectList<TGocciaASTNode>;
+    Args: TGocciaArgumentsCollection;
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
-    // Create a global scope with variables
     Scope := TGocciaScope.Create(nil, skGlobal);
-    Scope.DefineVariable('x', TGocciaNumberLiteralValue.Create(42), dtLet);
-    Scope.DefineVariable('y', TGocciaStringLiteralValue.Create('hello'), dtLet);
+    Scope.DefineLexicalBinding('x', TGocciaNumberLiteralValue.Create(42), dtLet);
+    Scope.DefineLexicalBinding('y', TGocciaStringLiteralValue.Create('hello'), dtLet);
     Parameters := TStringList.Create;
 
-    // Create a function body that returns a complex expression using scope variables
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaReturnStatement.Create(
       TGocciaBinaryExpression.Create(
@@ -379,7 +408,6 @@ type
       0, 0
     ));
 
-    // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, Parameters.Count);
     for I := 0 to Parameters.Count - 1 do
     begin
@@ -389,39 +417,39 @@ type
 
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
-    // Test function execution
-    Arguments := TObjectList<TGocciaValue>.Create;
-    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
-    TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('43hello');
-    TestSuite.Expect<Boolean>(ReturnValue.ToBoolean).ToBe(True);
-    TestSuite.Expect<Boolean>(IsNaN(ReturnValue.ToNumber)).ToBeTrue;
-    TestSuite.Expect<String>(ReturnValue.TypeName).ToBe('string');
-    Arguments.Free;
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      ReturnValue := FunctionValue.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Expect<string>(ReturnValue.ToStringLiteral.Value).ToBe('43hello');
+      Expect<Boolean>(ReturnValue.ToBooleanLiteral.Value).ToBe(True);
+      Expect<Boolean>(ReturnValue.ToNumberLiteral.IsNaN).ToBe(True);
+      Expect<string>(ReturnValue.TypeName).ToBe('string');
+    finally
+      Args.Free;
+    end;
 
-    FunctionValue.Free;
+    Parameters.Free;
     Scope.Free;
   end;
 
-  procedure TestFunctionWithScopeAndParametersAndReturnFromTemplate<T>(TestSuite: TTestSuite);
+  procedure TestFunctionWithScopeAndParametersAndReturnFromTemplate<T>;
   var
     FunctionValue: T;
     Scope: TGocciaScope;
     Parameters: TStringList;
     ReturnValue: TGocciaValue;
     Statements: TObjectList<TGocciaASTNode>;
-    Arguments: TObjectList<TGocciaValue>;
+    Args: TGocciaArgumentsCollection;
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
-    // Create a global scope with variables
     Scope := TGocciaScope.Create(nil, skGlobal);
-    Scope.DefineVariable('x', TGocciaNumberLiteralValue.Create(42), dtLet);
-    Scope.DefineVariable('y', TGocciaStringLiteralValue.Create('hello'), dtLet);
+    Scope.DefineLexicalBinding('x', TGocciaNumberLiteralValue.Create(42), dtLet);
+    Scope.DefineLexicalBinding('y', TGocciaStringLiteralValue.Create('hello'), dtLet);
     Parameters := TStringList.Create;
     Parameters.Add('a');
     Parameters.Add('b');
 
-    // Create a function body that uses parameters, scope variables, and returns a complex expression
     Statements := TObjectList<TGocciaASTNode>.Create;
     Statements.Add(TGocciaReturnStatement.Create(
       TGocciaBinaryExpression.Create(
@@ -443,7 +471,6 @@ type
       0, 0
     ));
 
-    // Convert TStringList to TGocciaParameterArray
     SetLength(ParamArray, Parameters.Count);
     for I := 0 to Parameters.Count - 1 do
     begin
@@ -453,15 +480,17 @@ type
 
     FunctionValue := T.Create(ParamArray, Statements, Scope, 'test');
 
-    // Test function execution
-    Arguments := TObjectList<TGocciaValue>.Create;
-    Arguments.Add(TGocciaNumberLiteralValue.Create(10));
-    Arguments.Add(TGocciaNumberLiteralValue.Create(20));
-    ReturnValue := FunctionValue.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
-    TestSuite.Expect<String>(ReturnValue.ToStringLiteral.Value).ToBe('72hello'); // (10 + 20 + 42) + 'hello'
-    Arguments.Free;
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Args.Add(TGocciaNumberLiteralValue.Create(10));
+      Args.Add(TGocciaNumberLiteralValue.Create(20));
+      ReturnValue := FunctionValue.Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Expect<string>(ReturnValue.ToStringLiteral.Value).ToBe('72hello'); // (10 + 20 + 42) + 'hello'
+    finally
+      Args.Free;
+    end;
 
-    FunctionValue.Free;
+    Parameters.Free;
     Scope.Free;
   end;
 
@@ -478,16 +507,13 @@ type
 
     Statements.Add(TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), 0, 0));
 
-    // Execute statements directly
     Context.Scope := Scope;
     LastValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
     for I := 0 to Statements.Count - 1 do
-    begin
       LastValue := Evaluate(Statements[I], Context);
-    end;
 
-    Expect<Double>(LastValue.ToNumber).ToBe(1);
+    Expect<Double>(LastValue.ToNumberLiteral.Value).ToBe(1);
 
     Statements.Free;
     Scope.Free;
@@ -504,18 +530,20 @@ type
     Statements := TObjectList<TGocciaASTNode>.Create;
     Scope := TGocciaScope.Create(nil, skGlobal);
 
-    Statements.Add(TGocciaBinaryExpression.Create(TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), 0, 0), gttPlus, TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(2), 0, 0), 0, 0));
+    Statements.Add(TGocciaBinaryExpression.Create(
+      TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), 0, 0),
+      gttPlus,
+      TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(2), 0, 0),
+      0, 0
+    ));
 
-    // Execute statements directly
     Context.Scope := Scope;
     LastValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
     for I := 0 to Statements.Count - 1 do
-    begin
       LastValue := Evaluate(Statements[I], Context);
-    end;
 
-    Expect<Double>(LastValue.ToNumber).ToBe(3);
+    Expect<Double>(LastValue.ToNumberLiteral.Value).ToBe(3);
 
     Statements.Free;
     Scope.Free;
@@ -540,37 +568,37 @@ type
 
   procedure TTestFunctionValue.TestSimpleFunction;
   begin
-    TestSimpleFunctionFromTemplate<TGocciaFunctionValue>(Self, 'Function');
+    TestSimpleFunctionFromTemplate<TGocciaFunctionValue>;
   end;
 
   procedure TTestFunctionValue.TestFunctionWithParameters;
   begin
-    TestFunctionWithParametersFromTemplate<TGocciaFunctionValue>(Self);
+    TestFunctionWithParametersFromTemplate<TGocciaFunctionValue>;
   end;
 
   procedure TTestFunctionValue.TestFunctionWithReturn;
   begin
-    TestFunctionWithReturnFromTemplate<TGocciaFunctionValue>(Self);
+    TestFunctionWithReturnFromTemplate<TGocciaFunctionValue>;
   end;
 
   procedure TTestFunctionValue.TestFunctionWithScope;
   begin
-    TestFunctionWithScopeFromTemplate<TGocciaFunctionValue>(Self);
+    TestFunctionWithScopeFromTemplate<TGocciaFunctionValue>;
   end;
 
   procedure TTestFunctionValue.TestFunctionWithScopeAndParameters;
   begin
-    TestFunctionWithScopeAndParametersFromTemplate<TGocciaFunctionValue>(Self);
+    TestFunctionWithScopeAndParametersFromTemplate<TGocciaFunctionValue>;
   end;
 
   procedure TTestFunctionValue.TestFunctionWithScopeAndReturn;
   begin
-    TestFunctionWithScopeAndReturnFromTemplate<TGocciaFunctionValue>(Self);
+    TestFunctionWithScopeAndReturnFromTemplate<TGocciaFunctionValue>;
   end;
 
   procedure TTestFunctionValue.TestFunctionWithScopeAndParametersAndReturn;
   begin
-    TestFunctionWithScopeAndParametersAndReturnFromTemplate<TGocciaFunctionValue>(Self);
+    TestFunctionWithScopeAndParametersAndReturnFromTemplate<TGocciaFunctionValue>;
   end;
 
   procedure TTestMethodValue.SetupTests;
@@ -586,37 +614,37 @@ type
 
   procedure TTestMethodValue.TestSimpleMethod;
   begin
-    TestSimpleFunctionFromTemplate<TGocciaMethodValue>(Self, 'Method');
+    TestSimpleFunctionFromTemplate<TGocciaMethodValue>;
   end;
 
   procedure TTestMethodValue.TestMethodWithParameters;
   begin
-    TestFunctionWithParametersFromTemplate<TGocciaMethodValue>(Self);
+    TestFunctionWithParametersFromTemplate<TGocciaMethodValue>;
   end;
 
   procedure TTestMethodValue.TestMethodWithReturn;
   begin
-    TestFunctionWithReturnFromTemplate<TGocciaMethodValue>(Self);
+    TestFunctionWithReturnFromTemplate<TGocciaMethodValue>;
   end;
 
   procedure TTestMethodValue.TestMethodWithScope;
   begin
-    TestFunctionWithScopeFromTemplate<TGocciaMethodValue>(Self);
+    TestFunctionWithScopeFromTemplate<TGocciaMethodValue>;
   end;
 
   procedure TTestMethodValue.TestMethodWithScopeAndParameters;
   begin
-    TestFunctionWithScopeAndParametersFromTemplate<TGocciaMethodValue>(Self);
+    TestFunctionWithScopeAndParametersFromTemplate<TGocciaMethodValue>;
   end;
 
   procedure TTestMethodValue.TestMethodWithScopeAndReturn;
   begin
-    TestFunctionWithScopeAndReturnFromTemplate<TGocciaMethodValue>(Self);
+    TestFunctionWithScopeAndReturnFromTemplate<TGocciaMethodValue>;
   end;
 
   procedure TTestMethodValue.TestMethodWithScopeAndParametersAndReturn;
   begin
-    TestFunctionWithScopeAndParametersAndReturnFromTemplate<TGocciaMethodValue>(Self);
+    TestFunctionWithScopeAndParametersAndReturnFromTemplate<TGocciaMethodValue>;
   end;
 
 begin

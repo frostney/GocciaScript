@@ -103,30 +103,6 @@ IIndexMethods = interface
 end;
 ```
 
-### IFunctionMethods
-
-Implemented by callable values (functions, methods, native functions).
-
-```pascal
-IFunctionMethods = interface
-  function Call(Args: TGocciaValueArray; ThisValue: TGocciaValue): TGocciaValue;
-  function Apply(ThisValue: TGocciaValue; Args: TGocciaValueArray): TGocciaValue;
-  function Bind(ThisValue: TGocciaValue): TGocciaValue;
-end;
-```
-
-### IValueOf / IStringTag
-
-```pascal
-IValueOf = interface
-  function ValueOf: TGocciaValue;  // Primitive value extraction
-end;
-
-IStringTag = interface
-  function ToStringTag: string;    // Custom toString representation
-end;
-```
-
 ### Capability Checking
 
 The evaluator checks capabilities at runtime:
@@ -175,9 +151,11 @@ end;
 ```
 
 - Normal numbers: `FSpecialValue = nsvNone`, value in `FValue`.
-- Special values: `FSpecialValue` set, `FValue` ignored.
+- Special values: `FSpecialValue` set, `FValue` stored as `0` (not the actual special floating-point value).
 
 Special number singletons: `NaNValue`, `PositiveInfinityValue`, `NegativeInfinityValue`, `NegativeZeroValue`.
+
+**Checking for special values:** Always use the property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) rather than inspecting `FValue` directly. Since special values store `0.0` in `FValue`, standard floating-point checks like `Math.IsNaN(FValue)` will return incorrect results.
 
 ### Strings
 
@@ -274,9 +252,11 @@ Objects track insertion order via `FPropertyInsertionOrder` (a `TStringList`). T
 
 Objects can have a prototype via `FPrototype: TGocciaObjectValue`. Property lookup walks the chain:
 
-1. Check own properties.
+1. Check own property descriptors (invoking getters if present).
 2. If not found, check `FPrototype`.
 3. Repeat until `nil` prototype.
+
+`GetProperty(Name)` delegates to `GetPropertyWithContext(Name, Self)`. The `WithContext` variant carries a `this` reference through the prototype chain so that inherited getter functions execute with the correct receiver (the original object, not the prototype where the getter was found).
 
 ### Object Freezing
 
@@ -285,6 +265,19 @@ Objects support `Object.freeze()` via an `FFrozen` flag on `TGocciaObjectValue`:
 - **Freeze** — Makes all existing properties non-writable and non-configurable, then sets the `FFrozen` flag.
 - **Frozen check** — `AssignProperty` checks `FFrozen` before any modification and throws `TypeError` if the object is frozen.
 - **`Object.isFrozen(obj)`** — Returns the `FFrozen` flag value. Non-objects are always considered frozen per ECMAScript spec.
+
+### Error Helpers (`Goccia.Values.ErrorHelper.pas`)
+
+A utility unit that centralizes JavaScript error object construction. Instead of manually building error objects at every throw site, code uses:
+
+```pascal
+ThrowTypeError('Cannot set property on non-object');
+ThrowRangeError('Invalid range in Math.clamp');
+ThrowReferenceError('x is not defined');
+ThrowError('Something went wrong');
+```
+
+Each helper creates a `TGocciaObjectValue` with `name` and `message` properties and raises it as a `TGocciaThrowValue`. The `CreateErrorObject(Name, Message)` function is also available for cases where the error should be returned rather than thrown (e.g., error constructors).
 
 ## Arrays
 

@@ -184,6 +184,45 @@ test.skip("not yet implemented", () => {
 });
 ```
 
+## Cross-Runtime Compatibility (Vitest)
+
+Tests are designed to pass in both GocciaScript's TestRunner and standard JavaScript via [Vitest](https://vitest.dev/). This ensures tests serve as both GocciaScript validation and ECMAScript conformance checks.
+
+### Running with Vitest
+
+```bash
+npx vitest run                    # Run all tests
+npx vitest run tests/built-ins/   # Run a category
+npx vitest                        # Watch mode
+```
+
+The `vitest.config.js` at the project root configures Vitest to discover test files in `tests/`.
+
+### Writing Cross-Compatible Tests
+
+When writing tests that should pass in both environments, follow these patterns:
+
+**Iterators** — GocciaScript returns arrays from `Map.keys()`, `Map.values()`, `Map.entries()`, and `Set.values()`, while standard JS returns iterator objects. Wrap calls with spread to normalize:
+
+```javascript
+// Works in both GocciaScript and standard JS
+expect([...map.keys()]).toEqual(["a", "b", "c"]);
+expect([...set.values()]).toEqual([1, 2, 3]);
+```
+
+**GocciaScript-specific behaviors** — Some tests exercise GocciaScript extensions or intentional divergences from the spec (e.g., `Math.clamp`, `in` operator on strings/primitives, emoji identifiers, arrow function `this` binding in object methods). These will fail in Vitest since standard JS doesn't support them. This is expected.
+
+### Known Vitest Divergences
+
+| Category | GocciaScript | Standard JS |
+|----------|-------------|-------------|
+| `Math.clamp` | Supported (TC39 proposal) | Not available |
+| `"prop" in null` | Returns `false` | Throws `TypeError` |
+| `0 in "string"` | Returns `true`/`false` | Throws `TypeError` |
+| Emoji identifiers | Supported | Not supported by V8/Rollup |
+| `Symbol` in template literals | Converts to `"Symbol(desc)"` | Throws `TypeError` |
+| Arrow methods `this` | Binds to owning object | Inherits from enclosing scope |
+
 ## Test Principles
 
 1. **JavaScript tests are the source of truth** — The JavaScript test suite is the primary mechanism for verifying correctness and ECMAScript compatibility. If a behavior isn't covered by a JavaScript test, it isn't guaranteed.
@@ -216,16 +255,78 @@ Pascal unit tests are a secondary testing layer for low-level value system inter
 
 | Test File | Tests |
 |-----------|-------|
-| `Goccia.Values.Primitives.Test.pas` | Primitive value creation, type conversion, equality |
-| `Goccia.Values.FunctionValue.Test.pas` | Function creation, closure capture, parameter handling |
-| `Goccia.Values.ObjectValue.Test.pas` | Object property operations, prototype chain, descriptors |
+| `Goccia.Values.Primitives.Test.pas` | Primitive value creation, type conversion (`ToStringLiteral`, `ToBooleanLiteral`, `ToNumberLiteral`, `TypeName`, `TypeOf`) |
+| `Goccia.Values.FunctionValue.Test.pas` | Function/method creation, closure capture, parameter handling, scope resolution, AST evaluation |
+| `Goccia.Values.ObjectValue.Test.pas` | Object property operations (`AssignProperty`, `GetProperty`, `DeleteProperty`), prototype chain resolution |
 
 These compile as standalone executables and run directly:
 
 ```bash
 ./build.pas tests
 ./build/Goccia.Values.Primitives.Test
+./build/Goccia.Values.FunctionValue.Test
+./build/Goccia.Values.ObjectValue.Test
 ```
+
+### Pascal Test Framework
+
+Pascal tests use `TestRunner.pas` which provides a `TTestSuite` base class and a generic `Expect<T>` fluent assertion API:
+
+```pascal
+type
+  TMyTests = class(TTestSuite)
+    procedure TestSomething;
+    procedure SetupTests; override;
+  end;
+
+procedure TMyTests.SetupTests;
+begin
+  Test('should do something', TestSomething);
+end;
+
+procedure TMyTests.TestSomething;
+begin
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('hello');
+  Expect<Double>(Value.ToNumberLiteral.Value).ToBe(42);
+  Expect<Integer>(Length(Params)).ToBe(2);
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
+  Expect<Boolean>(Value.ToNumberLiteral.IsNaN).ToBe(False);
+end;
+```
+
+#### Generic Assertions
+
+The primary assertion API uses a standalone generic `Expect<T>` function that returns a `TExpect<T>` record:
+
+| Usage | Description |
+|-------|-------------|
+| `Expect<string>(actual).ToBe(expected)` | String equality |
+| `Expect<Double>(actual).ToBe(expected)` | Double equality (exact) |
+| `Expect<Integer>(actual).ToBe(expected)` | Integer equality |
+| `Expect<Boolean>(actual).ToBe(True)` | Assert value is `True` |
+| `Expect<Boolean>(actual).ToBe(False)` | Assert value is `False` |
+
+On failure, `ToBe` produces descriptive messages like `Expected "hello" to be "world"` or `Expected 3.14 to be 2.71`.
+
+`TTestSuite` also provides a `Fail(Message)` method to force a test failure with a custom message.
+
+#### FPC 3.2.2 AArch64 Compiler Bug
+
+`Expect<T>` is intentionally a **standalone generic function** (not a method on `TTestSuite`) and `TExpect<T>` is a **record** (not a class). This design works around a known FPC 3.2.2 AArch64 compiler crash: when a class with a generic method is inherited across compilation units, the compiler raises an internal `EAccessViolation`. The standalone function + record pattern avoids this entirely while preserving the fluent `Expect<T>(...).ToBe(...)` syntax.
+
+### NaN Checks in Pascal Tests
+
+When testing for NaN, use the `IsNaN` property on `TGocciaNumberLiteralValue` rather than `Math.IsNaN()`:
+
+```pascal
+// Correct — uses the internal special value flag
+Expect<Boolean>(Value.ToNumberLiteral.IsNaN).ToBe(True);
+
+// WRONG — NaN values store 0.0 internally, so Math.IsNaN returns False
+IsNaN(Value.ToNumberLiteral.Value)  // always False!
+```
+
+This is because GocciaScript represents NaN via a `FSpecialValue = nsvNaN` flag with `FValue` set to 0 (avoiding floating-point NaN propagation issues). The `IsNaN` property checks the flag; `Math.IsNaN` checks the stored double.
 
 **When to write Pascal unit tests vs JavaScript tests:**
 - **JavaScript tests** (preferred) — For any behavior observable from script code. This is almost everything.

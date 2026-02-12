@@ -131,7 +131,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`)
 - **Factory method** for scope creation (`CreateChild`)
 - **Context object** for evaluation state (`TGocciaEvaluationContext`)
-- **Interface segregation** for value capabilities (`IPropertyMethods`, `IIndexMethods`, `IFunctionMethods`)
+- **Interface segregation** for value capabilities (`IPropertyMethods`, `IIndexMethods`)
 - **Chain of responsibility** for scope lookup
 - **Recursive descent** for parsing
 
@@ -142,8 +142,8 @@ See [docs/value-system.md](docs/value-system.md) for the complete value system d
 All values inherit from `TGocciaValue`. Capabilities are expressed through interfaces:
 - `IPropertyMethods` — object-like property access
 - `IIndexMethods` — array-like indexed access
-- `IFunctionMethods` — callable values
-- `IValueOf` — primitive value extraction
+
+Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `CreateErrorObject`, etc.).
 
 ## Built-in Objects
 
@@ -164,7 +164,9 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 
 - **Primary:** JavaScript end-to-end tests in `tests/` directory — these are the source of truth for correctness
 - **Secondary:** Pascal unit tests in `units/*.Test.pas` — only for internal implementation details
-- Test framework: built-in `describe`/`test`/`expect` (enabled via `ggTestAssertions`)
+- **JS test framework:** built-in `describe`/`test`/`expect` (enabled via `ggTestAssertions`)
+- **Pascal test framework:** `TestRunner.pas` provides generic `Expect<T>(...).ToBe(...)` assertions. `Expect<T>` is a **standalone function** (not a method on `TTestSuite`) to avoid FPC 3.2.2 AArch64 compiler crash with cross-unit generic method inheritance.
+- **NaN checks:** In Pascal tests, use `Value.ToNumberLiteral.IsNaN` (not `Math.IsNaN`) — special values store `0.0` internally
 
 ## Build System
 

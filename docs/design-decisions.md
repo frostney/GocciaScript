@@ -40,17 +40,15 @@ Capabilities are expressed through interfaces:
 
 | Interface | Purpose |
 |-----------|---------|
-| `IPropertyMethods` | Object-like property access |
-| `IIndexMethods` | Array-like indexed access |
-| `IFunctionMethods` | Callable values (`call`, `apply`, `bind`) |
-| `IValueOf` | Primitive value extraction |
-| `IStringTag` | Custom `toString` representation |
+| `IPropertyMethods` | Object-like property access (`GetProperty`, `AssignProperty`, `DefineProperty`, etc.) |
+| `IIndexMethods` | Array-like indexed access (`GetLength`, `GetElement`, `SetElement`) |
 
 **Why interfaces over inheritance?**
 
-- **Interface segregation** — A value type only implements what it supports. Arrays implement `IIndexMethods`; functions implement `IFunctionMethods`. There's no god-class with unused virtual methods.
+- **Interface segregation** — A value type only implements what it supports. Arrays implement `IIndexMethods`; objects implement `IPropertyMethods`. There's no god-class with unused virtual methods.
 - **Capability checking** — The evaluator checks `if Value is IPropertyMethods` rather than maintaining a type enum, making it extensible without modifying existing code.
 - **FreePascal compatibility** — Interfaces provide reference counting, which helps with memory management.
+- **Lean surface** — Interfaces that were never queried at runtime (`IValueOf`, `IStringTag`, `IFunctionMethods`) have been removed. The methods they declared still exist on the class hierarchy but without the interface indirection overhead.
 
 ## Singleton Special Values
 
@@ -115,6 +113,8 @@ GocciaScript uses a layered error approach:
 3. **JavaScript-level errors** use `TGocciaThrowValue` for `throw` statements and `try/catch` — these flow through the evaluator's return path.
 4. **`try-finally` without `catch`** — The evaluator wraps the Pascal `try...except` in a Pascal `try...finally` to guarantee the JS `finally` block runs before exceptions propagate, even when no `catch` clause exists.
 5. **`break` in `switch`** — Uses `TGocciaBreakSignal` (a Pascal exception) to exit `switch` cases. The `EvaluateSwitch` function catches this signal to implement JavaScript's fall-through-until-break semantics.
+
+**Centralized error construction** — `Goccia.Values.ErrorHelper.pas` provides `ThrowTypeError`, `ThrowRangeError`, `ThrowReferenceError`, and `CreateErrorObject` helpers. All error throw sites across the codebase use these helpers instead of manually building error objects, reducing duplication and ensuring consistent error formatting.
 
 **Why not exceptions everywhere?** Pascal exceptions disrupt the pure-function model of the evaluator. The callback pattern allows the evaluator to signal errors without unwinding the call stack, making control flow explicit. The exceptions to this rule (`TGocciaThrowValue`, `TGocciaReturnValue`, `TGocciaBreakSignal`) are used only for non-local exits where unwinding is the intended behavior.
 

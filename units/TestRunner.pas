@@ -5,7 +5,7 @@ unit TestRunner;
 interface
 
 uses
-  SysUtils, Classes, Generics.Collections, TypInfo, DateUtils;
+  SysUtils, Classes, Generics.Collections, Generics.Defaults, DateUtils, TypInfo;
 
 type
   // Forward declarations
@@ -37,24 +37,16 @@ type
   // Exception for test assertions
   ETestAssertionError = class(Exception);
 
-  // Generic expectation class for fluent assertions
-  TExpect<T> = class
+  // Generic expect record for fluent assertions
+  // Using a record (not a class) so Expect<T>('hello').ToBe('hello') needs no Free.
+  // Defined as a standalone type (not a method on TTestSuite) to avoid
+  // FPC 3.2.2 AArch64 compiler crash with cross-unit generic method specialization.
+  TExpect<T> = record
   private
     FActual: T;
-    FNegated: Boolean;
-    procedure AssertTrue(Condition: Boolean; const Message: string);
+    class function FormatValue(const Value: T): string; static;
   public
-    constructor Create(const Value: T);
-    function Not_: TExpect<T>;
-    procedure ToBe(const Expected: T);
-    procedure ToEqual(const Expected: T);
-    procedure ToBeTrue;
-    procedure ToBeFalse;
-    procedure ToBeNil;
-    procedure ToBeGreaterThan(const Value: T);
-    procedure ToBeLessThan(const Value: T);
-    procedure ToContain(const Substring: string); // For string types
-    procedure ToHaveLength(const Length: Integer); // For arrays/strings
+    procedure ToBe(Expected: T);
   end;
 
   // Base test suite class
@@ -85,8 +77,7 @@ type
     property Name: string read FName;
     property Tests: TList<TTestRegistration> read FTests;
 
-    // Assertion helpers
-    function Expect<T>(const Value: T): TExpect<T>;
+    // Assertion helper
     procedure Fail(const Message: string);
   end;
 
@@ -113,9 +104,13 @@ type
     property Results: TList<TTestResult> read FResults;
   end;
 
+// Standalone generic function for fluent assertions: Expect<string>('hello').ToBe('hello')
+function Expect<T>(Value: T): TExpect<T>;
+
 // Global test runner instance
 var
   TestRunnerProgram: TTestRunner;
+  _ActiveTestSuite: TTestSuite;
 
 function TestResultToExitCode: Integer;
 
@@ -138,271 +133,45 @@ end;
 
 { TExpect<T> }
 
-constructor TExpect<T>.Create(const Value: T);
-begin
-  FActual := Value;
-  FNegated := False;
-end;
-
-function TExpect<T>.Not_: TExpect<T>;
-begin
-  FNegated := not FNegated;
-  Result := Self;
-end;
-
-procedure TExpect<T>.AssertTrue(Condition: Boolean; const Message: string);
-begin
-  if FNegated then
-    Condition := not Condition;
-
-  if not Condition then
-    raise ETestAssertionError.Create(Message);
-end;
-
-procedure TExpect<T>.ToBe(const Expected: T);
+class function TExpect<T>.FormatValue(const Value: T): string;
 var
-  TypeInfo: PTypeInfo;
-  TypeData: PTypeData;
-  IsEqual: Boolean;
-  ActualStr, ExpectedStr: string;
-
-  function TryToString(const Value: T): string;
-  var
-    ValueTypeInfo: PTypeInfo;
-  begin
-    ValueTypeInfo := System.TypeInfo(T);
-
-    // Try to get a string representation for unknown types
-    try
-      case ValueTypeInfo^.Kind of
-        tkVariant:
-          Result := string(PVariant(@Value)^);
-        tkRecord:
-          Result := Format('record of %s', [ValueTypeInfo^.Name]);
-        tkArray:
-          Result := Format('array of %s', [ValueTypeInfo^.Name]);
-        tkPointer:
-          if PPointer(@Value)^ = nil then
-            Result := 'nil'
-          else
-            Result := Format('pointer($%p)', [PPointer(@Value)^]);
-        else
-          // Fallback: show type name and try to interpret as string if possible
-          if SizeOf(T) = SizeOf(string) then
-            try
-              Result := '"' + PString(@Value)^ + '"';
-            except
-              Result := Format('<%s>', [ValueTypeInfo^.Name]);
-            end
-          else
-            Result := Format('<%s>', [ValueTypeInfo^.Name]);
-      end;
-    except
-      // Ultimate fallback
-      Result := Format('<%s value>', [ValueTypeInfo^.Name]);
-    end;
-  end;
-
+  P: Pointer;
 begin
-  TypeInfo := System.TypeInfo(T);
-  TypeData := GetTypeData(TypeInfo);
-
-  case TypeInfo^.Kind of
-    tkInteger:
-      begin
-        IsEqual := PInteger(@FActual)^ = PInteger(@Expected)^;
-        ActualStr := IntToStr(PInteger(@FActual)^);
-        ExpectedStr := IntToStr(PInteger(@Expected)^);
-      end;
-    tkInt64:
-      begin
-        IsEqual := PInt64(@FActual)^ = PInt64(@Expected)^;
-        ActualStr := IntToStr(PInt64(@FActual)^);
-        ExpectedStr := IntToStr(PInt64(@Expected)^);
-      end;
+  P := @Value;
+  case PTypeInfo(TypeInfo(T))^.Kind of
+    tkSString, tkLString, tkAString, tkUString, tkWString:
+      Result := '"' + PString(P)^ + '"';
     tkFloat:
-      begin
-        IsEqual := Abs(PDouble(@FActual)^ - PDouble(@Expected)^) < 1E-10;
-        ActualStr := FloatToStr(PDouble(@FActual)^);
-        ExpectedStr := FloatToStr(PDouble(@Expected)^);
-      end;
-    tkString, tkLString, tkUString, tkAString:
-      begin
-        IsEqual := PString(@FActual)^ = PString(@Expected)^;
-        ActualStr := '"' + PString(@FActual)^ + '"';
-        ExpectedStr := '"' + PString(@Expected)^ + '"';
-      end;
+      Result := FloatToStr(PDouble(P)^);
+    tkInteger:
+      Result := IntToStr(PInteger(P)^);
+    tkInt64:
+      Result := IntToStr(PInt64(P)^);
+    tkBool:
+      if PBoolean(P)^ then Result := 'True'
+      else Result := 'False';
     tkEnumeration:
-      if TypeData^.BaseType = System.TypeInfo(Boolean) then
-      begin
-        IsEqual := PBoolean(@FActual)^ = PBoolean(@Expected)^;
-        if PBoolean(@FActual)^ then ActualStr := 'True' else ActualStr := 'False';
-        if PBoolean(@Expected)^ then ExpectedStr := 'True' else ExpectedStr := 'False';
-      end
-      else
-      begin
-        IsEqual := PByte(@FActual)^ = PByte(@Expected)^;
-        ActualStr := IntToStr(PByte(@FActual)^);
-        ExpectedStr := IntToStr(PByte(@Expected)^);
-      end;
-    tkClass:
-      begin
-        IsEqual := PPointer(@FActual)^ = PPointer(@Expected)^;
-        if PPointer(@FActual)^ = nil then
-          ActualStr := 'nil'
-        else
-          ActualStr := Format('object(%s)', [TObject(PPointer(@FActual)^).ClassName]);
-        if PPointer(@Expected)^ = nil then
-          ExpectedStr := 'nil'
-        else
-          ExpectedStr := Format('object(%s)', [TObject(PPointer(@Expected)^).ClassName]);
-      end;
-    else
-      begin
-        IsEqual := CompareMem(@FActual, @Expected, SizeOf(T));
-        // Improved error messages for unknown types
-        ActualStr := TryToString(FActual);
-        ExpectedStr := TryToString(Expected);
-      end;
-  end;
-
-  if FNegated then
-    AssertTrue(IsEqual, Format('Expected %s not to be %s', [ActualStr, ExpectedStr]))
+      Result := IntToStr(PByte(P)^);
   else
-    AssertTrue(IsEqual, Format('Expected %s to be %s', [ActualStr, ExpectedStr]));
-end;
-
-procedure TExpect<T>.ToEqual(const Expected: T);
-begin
-  ToBe(Expected);
-end;
-
-procedure TExpect<T>.ToBeTrue;
-var
-  Val: Boolean;
-begin
-  if TypeInfo(T) <> TypeInfo(Boolean) then
-    raise ETestAssertionError.Create('ToBeTrue can only be used with Boolean values');
-
-  Val := PBoolean(@FActual)^;
-  AssertTrue(Val, 'Expected value to be True');
-end;
-
-procedure TExpect<T>.ToBeFalse;
-var
-  Val: Boolean;
-begin
-  if TypeInfo(T) <> TypeInfo(Boolean) then
-    raise ETestAssertionError.Create('ToBeFalse can only be used with Boolean values');
-
-  Val := PBoolean(@FActual)^;
-  AssertTrue(not Val, 'Expected value to be False');
-end;
-
-procedure TExpect<T>.ToBeNil;
-var
-  TypeInfo: PTypeInfo;
-begin
-  TypeInfo := System.TypeInfo(T);
-  if TypeInfo^.Kind <> tkClass then
-    raise ETestAssertionError.Create('ToBeNil can only be used with class types');
-
-  AssertTrue(PPointer(@FActual)^ = nil, 'Expected value to be nil');
-end;
-
-procedure TExpect<T>.ToBeGreaterThan(const Value: T);
-var
-  TypeInfo: PTypeInfo;
-  IsGreater: Boolean;
-  ActualStr, ValueStr: string;
-begin
-  TypeInfo := System.TypeInfo(T);
-
-  case TypeInfo^.Kind of
-    tkInteger:
-      begin
-        IsGreater := PInteger(@FActual)^ > PInteger(@Value)^;
-        ActualStr := IntToStr(PInteger(@FActual)^);
-        ValueStr := IntToStr(PInteger(@Value)^);
-      end;
-    tkInt64:
-      begin
-        IsGreater := PInt64(@FActual)^ > PInt64(@Value)^;
-        ActualStr := IntToStr(PInt64(@FActual)^);
-        ValueStr := IntToStr(PInt64(@Value)^);
-      end;
-    tkFloat:
-      begin
-        IsGreater := PDouble(@FActual)^ > PDouble(@Value)^;
-        ActualStr := FloatToStr(PDouble(@FActual)^);
-        ValueStr := FloatToStr(PDouble(@Value)^);
-      end;
-    else
-      raise ETestAssertionError.Create('ToBeGreaterThan can only be used with numeric types');
+    Result := '<value>';
   end;
-
-  AssertTrue(IsGreater, Format('Expected %s to be greater than %s', [ActualStr, ValueStr]));
 end;
 
-procedure TExpect<T>.ToBeLessThan(const Value: T);
+procedure TExpect<T>.ToBe(Expected: T);
 var
-  TypeInfo: PTypeInfo;
-  IsLess: Boolean;
-  ActualStr, ValueStr: string;
+  Comparer: IEqualityComparer<T>;
 begin
-  TypeInfo := System.TypeInfo(T);
-
-  case TypeInfo^.Kind of
-    tkInteger:
-      begin
-        IsLess := PInteger(@FActual)^ < PInteger(@Value)^;
-        ActualStr := IntToStr(PInteger(@FActual)^);
-        ValueStr := IntToStr(PInteger(@Value)^);
-      end;
-    tkInt64:
-      begin
-        IsLess := PInt64(@FActual)^ < PInt64(@Value)^;
-        ActualStr := IntToStr(PInt64(@FActual)^);
-        ValueStr := IntToStr(PInt64(@Value)^);
-      end;
-    tkFloat:
-      begin
-        IsLess := PDouble(@FActual)^ < PDouble(@Value)^;
-        ActualStr := FloatToStr(PDouble(@FActual)^);
-        ValueStr := FloatToStr(PDouble(@Value)^);
-      end;
-    else
-      raise ETestAssertionError.Create('ToBeLessThan can only be used with numeric types');
-  end;
-
-  AssertTrue(IsLess, Format('Expected %s to be less than %s', [ActualStr, ValueStr]));
+  if Assigned(_ActiveTestSuite) then
+    _ActiveTestSuite.FHasAssertions := True;
+  Comparer := TEqualityComparer<T>.Default;
+  if not Comparer.Equals(FActual, Expected) then
+    raise ETestAssertionError.CreateFmt('Expected %s to be %s',
+      [FormatValue(FActual), FormatValue(Expected)]);
 end;
 
-procedure TExpect<T>.ToContain(const Substring: string);
-var
-  Str: string;
+function Expect<T>(Value: T): TExpect<T>;
 begin
-  if TypeInfo(T) <> TypeInfo(string) then
-    raise ETestAssertionError.Create('ToContain can only be used with string types');
-
-  Str := PString(@FActual)^;
-  AssertTrue(Pos(Substring, Str) > 0, Format('Expected "%s" to contain "%s"', [Str, Substring]));
-end;
-
-procedure TExpect<T>.ToHaveLength(const Length: Integer);
-var
-  Str: string;
-  ActualLength: Integer;
-begin
-  if TypeInfo(T) = TypeInfo(string) then
-  begin
-    Str := PString(@FActual)^;
-    ActualLength := System.Length(Str);
-  end
-  else
-    raise ETestAssertionError.Create('ToHaveLength can only be used with string or array types');
-
-  AssertTrue(ActualLength = Length, Format('Expected length %d but got %d', [Length, ActualLength]));
+  Result.FActual := Value;
 end;
 
 { TTestSuite }
@@ -468,12 +237,6 @@ begin
   raise ETestAssertionError.Create(Message);
 end;
 
-function TTestSuite.Expect<T>(const Value: T): TExpect<T>;
-begin
-  FHasAssertions := True;
-  Result := TExpect<T>.Create(Value);
-end;
-
 { TTestRunner }
 
 constructor TTestRunner.Create;
@@ -529,6 +292,7 @@ begin
 
   Suite.FCurrentTestName := Test.Name;
   Suite.FHasAssertions := False;
+  _ActiveTestSuite := Suite;
 
   StartTime := Now;
   try
