@@ -302,8 +302,9 @@ Represent class constructors. Store:
 ### Instance Values (`TGocciaInstanceValue`)
 
 Created by `new ClassName()`. Extend `TGocciaObjectValue` with:
-- Private property storage using **composite keys** (`ClassName:FieldName`) — this enables proper inheritance shadowing where `Base.#x` and `Derived.#x` are distinct fields even when they share the same name.
-- Class reference for `instanceof` checks
+- **Virtual property dispatch** — `GetProperty` and `AssignProperty` override the base class methods to intercept property access and assignment. This enables getter/setter invocation: reads check the prototype for accessor descriptors and invoke getters with the instance as `this`; writes check for setters before falling back to direct property creation.
+- **Private property storage** using **composite keys** (`ClassName:FieldName`) — this enables proper inheritance shadowing where `Base.#x` and `Derived.#x` are distinct fields even when they share the same name.
+- **Class reference** for `instanceof` checks
 
 ### Instantiation Flow
 

@@ -95,8 +95,8 @@ type
     destructor Destroy; override;
     function TypeName: string; override;
     function ToStringLiteral: TGocciaStringLiteralValue; override;
-    function GetProperty(const AName: string): TGocciaValue;
-    procedure AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
+    function GetProperty(const AName: string): TGocciaValue; override;
+    procedure AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True); override;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
     function GetPrivateProperty(const AName: string; AAccessClass: TGocciaClassValue): TGocciaValue;
     procedure SetPrivateProperty(const AName: string; AValue: TGocciaValue; AAccessClass: TGocciaClassValue);

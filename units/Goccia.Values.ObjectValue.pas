@@ -29,7 +29,7 @@ type
     procedure DefineProperty(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
     procedure DefineProperties(const AProperties: TDictionary<string, TGocciaPropertyDescriptor>);
 
-    procedure AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
+    procedure AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True); virtual;
 
     // Convenience methods for built-in objects
     procedure RegisterNativeMethod(AMethod: TGocciaValue);
