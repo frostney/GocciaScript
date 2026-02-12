@@ -25,7 +25,7 @@ tests/
 │   └── Symbol/
 │
 └── language/           # Core language feature tests
-    ├── classes/        # Class declarations, inheritance, private fields
+    ├── classes/        # Class declarations, inheritance, private fields/methods/getters/setters
     ├── declarations/   # let, const
     ├── expressions/    # Arithmetic, comparison, logical, destructuring, etc.
     ├── functions/      # Arrow functions, closures, higher-order, recursion

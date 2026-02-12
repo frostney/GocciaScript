@@ -31,7 +31,7 @@ GocciaScript includes the parts of JavaScript that lead to clear, predictable, a
 ### ECMAScript 2020+ Implementations
 
 - `Math.clamp` (TC39 proposal)
-- Private fields and methods in classes
+- Private fields, methods, getters, and setters in classes
 - `Object.hasOwn`
 
 ### Built-in Objects
@@ -116,8 +116,9 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 
 GocciaScript follows a classic interpreter pipeline:
 
-```
-Source Code → Lexer → Parser → Interpreter → Evaluator → Result
+```mermaid
+flowchart LR
+    Source["Source Code"] --> Lexer --> Parser --> Interpreter --> Evaluator --> Result
 ```
 
 | Component | File | Role |

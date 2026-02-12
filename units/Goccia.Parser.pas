@@ -1572,6 +1572,8 @@ var
   PrivateInstanceProperties: TDictionary<string, TGocciaExpression>;
   PrivateStaticProperties: TDictionary<string, TGocciaExpression>;
   PrivateMethods: TDictionary<string, TGocciaClassMethod>;
+  InstancePropertyOrder: TStringList;
+  PrivateInstancePropertyOrder: TStringList;
   MemberName: string;
   Method: TGocciaClassMethod;
   Getter: TGocciaGetterExpression;
@@ -1598,6 +1600,8 @@ begin
   PrivateInstanceProperties := TDictionary<string, TGocciaExpression>.Create;
   PrivateStaticProperties := TDictionary<string, TGocciaExpression>.Create;
   PrivateMethods := TDictionary<string, TGocciaClassMethod>.Create;
+  InstancePropertyOrder := TStringList.Create;
+  PrivateInstancePropertyOrder := TStringList.Create;
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
@@ -1656,11 +1660,17 @@ begin
       if IsPrivate and IsStatic then
         PrivateStaticProperties.Add(MemberName, PropertyValue)
       else if IsPrivate then
-        PrivateInstanceProperties.Add(MemberName, PropertyValue)
+      begin
+        PrivateInstanceProperties.Add(MemberName, PropertyValue);
+        PrivateInstancePropertyOrder.Add(MemberName);
+      end
       else if IsStatic then
         StaticProperties.Add(MemberName, PropertyValue)
       else
+      begin
         InstanceProperties.Add(MemberName, PropertyValue);
+        InstancePropertyOrder.Add(MemberName);
+      end;
     end
     else if Check(gttSemicolon) then
     begin
@@ -1671,11 +1681,17 @@ begin
       if IsPrivate and IsStatic then
         PrivateStaticProperties.Add(MemberName, PropertyValue)
       else if IsPrivate then
-        PrivateInstanceProperties.Add(MemberName, PropertyValue)
+      begin
+        PrivateInstanceProperties.Add(MemberName, PropertyValue);
+        PrivateInstancePropertyOrder.Add(MemberName);
+      end
       else if IsStatic then
         StaticProperties.Add(MemberName, PropertyValue)
       else
+      begin
         InstanceProperties.Add(MemberName, PropertyValue);
+        InstancePropertyOrder.Add(MemberName);
+      end;
     end
     else if IsGetter then
     begin
@@ -1688,7 +1704,10 @@ begin
 
       Consume(gttLeftBrace, 'Expected "{" before getter body');
       Getter := TGocciaGetterExpression.Create(BlockStatement, Previous.Line, Previous.Column);
-      Getters.Add(MemberName, Getter);
+      if IsPrivate then
+        Getters.Add('#' + MemberName, Getter)
+      else
+        Getters.Add(MemberName, Getter);
     end
     else if IsSetter then
     begin
@@ -1705,7 +1724,10 @@ begin
       Consume(gttLeftBrace, 'Expected "{" before setter body');
 
       Setter := TGocciaSetterExpression.Create(ParamName, BlockStatement, Previous.Line, Previous.Column);
-      Setters.Add(MemberName, Setter);
+      if IsPrivate then
+        Setters.Add('#' + MemberName, Setter)
+      else
+        Setters.Add(MemberName, Setter);
     end
     else if Check(gttLeftParen) then
     begin
@@ -1725,6 +1747,11 @@ begin
 
   Consume(gttRightBrace, 'Expected "}" after class body');
   Result := TGocciaClassDefinition.Create(ClassName, SuperClass, Methods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
+  // Copy declaration-order lists (Result.Create already created empty lists, replace them)
+  Result.FInstancePropertyOrder.Assign(InstancePropertyOrder);
+  Result.FPrivateInstancePropertyOrder.Assign(PrivateInstancePropertyOrder);
+  InstancePropertyOrder.Free;
+  PrivateInstancePropertyOrder.Free;
 end;
 
 function TGocciaParser.Parse: TGocciaProgram;

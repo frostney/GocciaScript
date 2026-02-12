@@ -120,7 +120,7 @@ The JSON parser is a recursive descent implementation. Special handling:
 | `Object.assign(target, ...sources)` | Copy properties |
 | `Object.create(proto)` | Create with prototype |
 | `Object.is(a, b)` | Same-value equality (handles -0, NaN) |
-| `Object.hasOwn(obj, prop)` | Own property check |
+| `Object.hasOwn(obj, prop)` | Own property check (supports class values; checks static properties, not private fields) |
 | `Object.defineProperty(obj, prop, desc)` | Define property descriptor |
 | `Object.defineProperties(obj, props)` | Define multiple descriptors |
 | `Object.getOwnPropertyNames(obj)` | All own property names |

@@ -4,35 +4,18 @@ GocciaScript follows a classic interpreter pipeline: source code flows through l
 
 ## Pipeline Overview
 
-```
-Source Code (.js)
-       │
-       ▼
-┌─────────────┐
-│    Lexer     │  Goccia.Lexer.pas
-│  (Tokenizer) │  Single-pass character scanner
-└──────┬──────┘
-       │ TObjectList<TGocciaToken>
-       ▼
-┌─────────────┐
-│   Parser     │  Goccia.Parser.pas
-│  (AST Build) │  Recursive descent with precedence climbing
-└──────┬──────┘
-       │ TGocciaProgram (AST root)
-       ▼
-┌─────────────┐
-│ Interpreter  │  Goccia.Interpreter.pas
-│  (Executor)  │  Thin orchestration layer
-└──────┬──────┘
-       │ Delegates to Evaluator
-       ▼
-┌─────────────┐
-│  Evaluator   │  Goccia.Evaluator.pas + sub-modules
-│ (Pure Eval)  │  Side-effect-free AST evaluation
-└──────┬──────┘
-       │ TGocciaValue
-       ▼
-    Result
+```mermaid
+flowchart TD
+    Source["Source Code (.js)"]
+    Source -->|"TObjectList‹TGocciaToken›"| Lexer
+    Lexer["**Lexer**\nGoccia.Lexer.pas\nSingle-pass character scanner"]
+    Lexer -->|"TGocciaProgram (AST root)"| Parser
+    Parser["**Parser**\nGoccia.Parser.pas\nRecursive descent with precedence climbing"]
+    Parser -->|"Delegates to Evaluator"| Interpreter
+    Interpreter["**Interpreter**\nGoccia.Interpreter.pas\nThin orchestration layer"]
+    Interpreter -->|"TGocciaValue"| Evaluator
+    Evaluator["**Evaluator**\nGoccia.Evaluator.pas + sub-modules\nSide-effect-free AST evaluation"]
+    Evaluator --> Result
 ```
 
 The **Engine** (`Goccia.Engine.pas`) sits above this pipeline and orchestrates the entire process: it creates the interpreter, registers built-in globals, invokes the lexer/parser, and hands the AST to the interpreter for execution.
@@ -64,7 +47,7 @@ A single-pass tokenizer that converts source text into a flat list of `TGocciaTo
 A recursive descent parser that builds an AST from the token stream. Implements:
 
 - **Operator precedence** via precedence climbing (assignment → conditional → logical → comparison → addition → multiplication → exponentiation → unary → call → primary).
-- **ES6+ syntax** — Arrow functions, template literals, destructuring patterns (array and object), spread/rest operators, computed property names, shorthand properties, classes with private fields, getters/setters, and static members.
+- **ES6+ syntax** — Arrow functions, template literals, destructuring patterns (array and object), spread/rest operators, computed property names, shorthand properties, classes with private fields, private/public getters/setters, and static members. The parser tracks instance property declaration order for correct initialization semantics.
 - **Error recovery** — Throws `TGocciaSyntaxError` with source location for diagnostics.
 - **Arrow function detection** — Uses lookahead (`IsArrowFunction`) to disambiguate parenthesized expressions from arrow function parameters.
 
@@ -104,43 +87,44 @@ Evaluation state is threaded through a `TGocciaEvaluationContext` record that ca
 
 ### Script Execution
 
-```
-TGocciaEngine.RunScript(Code)
-  │
-  ├── Create TGocciaInterpreter
-  ├── RegisterBuiltIns(Interpreter.GlobalScope)
-  │     ├── RegisterConsole → console.log, etc.
-  │     ├── RegisterMath → Math.PI, Math.floor, etc.
-  │     ├── RegisterJSON → JSON.parse, JSON.stringify
-  │     ├── RegisterGlobals → undefined, NaN, Infinity, Error, ...
-  │     ├── RegisterGlobalArray → Array.isArray
-  │     ├── RegisterGlobalNumber → Number.parseInt, ...
-  │     └── RegisterBuiltinConstructors → prototype chains
-  │
-  ├── TGocciaLexer.Create(Code).ScanTokens → Tokens
-  ├── TGocciaParser.Create(Tokens).Parse → AST
-  └── TGocciaInterpreter.Execute(AST) → Result
-        └── Evaluate(AST.Body, Context) → TGocciaValue
+```mermaid
+flowchart TD
+    Run["TGocciaEngine.RunScript(Code)"]
+    Run --> Create["Create TGocciaInterpreter"]
+    Run --> Register["RegisterBuiltIns(GlobalScope)"]
+    Register --> Console["RegisterConsole → console.log, etc."]
+    Register --> Math["RegisterMath → Math.PI, Math.floor, etc."]
+    Register --> JSON["RegisterJSON → JSON.parse, JSON.stringify"]
+    Register --> Globals["RegisterGlobals → undefined, NaN, Infinity, Error, ..."]
+    Register --> GArray["RegisterGlobalArray → Array.isArray"]
+    Register --> GNumber["RegisterGlobalNumber → Number.parseInt, ..."]
+    Register --> Constructors["RegisterBuiltinConstructors → prototype chains"]
+    Run --> Lex["TGocciaLexer.Create(Code).ScanTokens → Tokens"]
+    Run --> Parse["TGocciaParser.Create(Tokens).Parse → AST"]
+    Run --> Exec["TGocciaInterpreter.Execute(AST) → Result"]
+    Exec --> Eval["Evaluate(AST.Body, Context) → TGocciaValue"]
 ```
 
 ### Variable Lookup
 
 Variable resolution follows the scope chain — a chain-of-responsibility pattern:
 
-```
-Current Scope
-  │ not found? ──→ Parent Scope
-                     │ not found? ──→ Parent Scope
-                                        │ not found? ──→ ... ──→ Global Scope
-                                                                    │ not found?
-                                                                    ▼
-                                                              ReferenceError
+```mermaid
+flowchart LR
+    Current["Current Scope"] -->|"not found?"| Parent1["Parent Scope"]
+    Parent1 -->|"not found?"| Parent2["Parent Scope"]
+    Parent2 -->|"not found?"| Global["Global Scope"]
+    Global -->|"not found?"| Error["ReferenceError"]
 ```
 
 Each scope maintains a dictionary of `TGocciaLexicalBinding` entries that track:
 - The value itself
 - Declaration type (`let`, `const`, or parameter)
 - Whether the binding has been initialized (for Temporal Dead Zone enforcement)
+
+Special scope bindings used internally:
+- **`__super__`** — Set in method call scopes when a superclass exists, enabling `super` calls.
+- **`__owning_class__`** — Set in method call scopes and instance initialization scopes, identifying which class declared the current method. Used to resolve private fields to the correct class when inheritance shadowing is involved.
 
 ## Module System
 

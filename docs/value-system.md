@@ -4,28 +4,69 @@ The value system is the foundation of GocciaScript's runtime. Every piece of dat
 
 ## Type Hierarchy
 
-```
-TGocciaValue (abstract base)
-  │
-  ├── TGocciaNullLiteralValue          null
-  ├── TGocciaUndefinedLiteralValue     undefined
-  ├── TGocciaBooleanLiteralValue       true / false
-  ├── TGocciaNumberLiteralValue        42, 3.14, NaN, Infinity
-  ├── TGocciaStringLiteralValue        "hello"
-  │
-  ├── TGocciaObjectValue               { key: value }
-  │     ├── TGocciaArrayValue          [1, 2, 3]
-  │     ├── TGocciaFunctionValue       (x) => x + 1
-  │     │     └── TGocciaMethodValue   class methods (with super)
-  │     ├── TGocciaClassValue          class Foo { }
-  │     ├── TGocciaInstanceValue       new Foo()
-  │     ├── TGocciaNumberObjectValue   new Number(42)
-  │     ├── TGocciaStringObjectValue   new String("hi")
-  │     └── TGocciaBooleanObjectValue  new Boolean(true)
-  │
-  ├── TGocciaNativeFunction            Built-in Pascal functions
-  │
-  └── TGocciaError                     Error objects
+```mermaid
+classDiagram
+    TGocciaValue <|-- TGocciaNullLiteralValue
+    TGocciaValue <|-- TGocciaUndefinedLiteralValue
+    TGocciaValue <|-- TGocciaBooleanLiteralValue
+    TGocciaValue <|-- TGocciaNumberLiteralValue
+    TGocciaValue <|-- TGocciaStringLiteralValue
+    TGocciaValue <|-- TGocciaObjectValue
+    TGocciaValue <|-- TGocciaNativeFunction
+    TGocciaValue <|-- TGocciaError
+
+    TGocciaObjectValue <|-- TGocciaArrayValue
+    TGocciaObjectValue <|-- TGocciaFunctionValue
+    TGocciaObjectValue <|-- TGocciaClassValue
+    TGocciaObjectValue <|-- TGocciaInstanceValue
+    TGocciaObjectValue <|-- TGocciaNumberObjectValue
+    TGocciaObjectValue <|-- TGocciaStringObjectValue
+    TGocciaObjectValue <|-- TGocciaBooleanObjectValue
+
+    TGocciaFunctionValue <|-- TGocciaMethodValue
+
+    class TGocciaValue {
+        <<abstract>>
+    }
+    class TGocciaNullLiteralValue {
+        null
+    }
+    class TGocciaUndefinedLiteralValue {
+        undefined
+    }
+    class TGocciaBooleanLiteralValue {
+        true / false
+    }
+    class TGocciaNumberLiteralValue {
+        42, 3.14, NaN, Infinity
+    }
+    class TGocciaStringLiteralValue {
+        "hello"
+    }
+    class TGocciaObjectValue {
+        key: value
+    }
+    class TGocciaArrayValue {
+        [1, 2, 3]
+    }
+    class TGocciaFunctionValue {
+        (x) => x + 1
+    }
+    class TGocciaMethodValue {
+        class methods (with super)
+    }
+    class TGocciaClassValue {
+        class Foo { }
+    }
+    class TGocciaInstanceValue {
+        new Foo()
+    }
+    class TGocciaNativeFunction {
+        Built-in Pascal functions
+    }
+    class TGocciaError {
+        Error objects
+    }
 ```
 
 ## Interfaces
@@ -224,11 +265,14 @@ Created from arrow function expressions in the AST:
 - **Parameters** — List of parameter nodes (supports destructuring and defaults).
 - **Body** — List of AST statements.
 - **Closure** — Reference to the scope where the function was defined.
-- **`this` binding** — Captured from the enclosing scope (arrow function semantics).
+- **`IsArrow` flag** — Marks functions created from arrow expressions. When an arrow function is called standalone (no explicit `this`), it inherits `this` from its closure scope chain. When called as a method (`obj.method()`), it receives the call-site `this` normally.
+- **`this` binding** — Captured from the enclosing scope for arrow functions; set by the call site for method calls.
 
 ### Methods (`TGocciaMethodValue`)
 
-Extends `TGocciaFunctionValue` with a `SuperClass` reference for `super` calls.
+Extends `TGocciaFunctionValue` with:
+- **`SuperClass`** — Reference for `super` calls.
+- **`OwningClass`** — The class that declared this method. Propagated as `__owning_class__` in the call scope, enabling correct private field resolution when inheritance is involved.
 
 ### Native Functions (`TGocciaNativeFunction`)
 
@@ -249,27 +293,34 @@ Represent class constructors. Store:
 - Constructor method
 - Instance methods (on prototype)
 - Static methods
-- Getters and setters
+- Public getters and setters (on prototype via accessor descriptors)
+- Private getters and setters (in `FPrivateGetters`/`FPrivateSetters`, separate from public ones)
 - Private instance and static fields/methods
+- Instance property declaration order (`InstancePropertyOrder`, `PrivateInstancePropertyOrder`)
 - Superclass reference for inheritance
 
 ### Instance Values (`TGocciaInstanceValue`)
 
 Created by `new ClassName()`. Extend `TGocciaObjectValue` with:
-- Private property storage (access-controlled by class)
+- Private property storage using **composite keys** (`ClassName:FieldName`) — this enables proper inheritance shadowing where `Base.#x` and `Derived.#x` are distinct fields even when they share the same name.
 - Class reference for `instanceof` checks
 
 ### Instantiation Flow
 
+```mermaid
+flowchart TD
+    New["new Foo(args)"]
+    New --> Create["Create TGocciaInstanceValue"]
+    Create --> Proto["Set prototype = Foo.prototype"]
+    Proto --> Init["Create InitScope\nthis = instance\n__owning_class__ = Foo"]
+    Init --> Public["Initialize public instance properties\n(in declaration order)"]
+    Public --> SuperPrivate["Initialize private instance properties\nfrom superclass (in declaration order)"]
+    SuperPrivate --> Private["Initialize private instance properties\nfrom current class (in declaration order)"]
+    Private --> Constructor["Call constructor with instance as this"]
+    Constructor --> Return["Return instance"]
 ```
-new Foo(args)
-  │
-  ├── Create TGocciaInstanceValue
-  ├── Set prototype = Foo.prototype
-  ├── Copy private field definitions
-  ├── Call constructor with instance as `this`
-  └── Return instance
-```
+
+Field initializers have access to `this` (the instance being constructed) and can reference previously-initialized private fields.
 
 ## Error Values
 

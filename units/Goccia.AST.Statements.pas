@@ -157,7 +157,9 @@ type
     FSetters: TDictionary<string, TGocciaSetterExpression>;
     FStaticProperties: TDictionary<string, TGocciaExpression>;
     FInstanceProperties: TDictionary<string, TGocciaExpression>;
+    FInstancePropertyOrder: TStringList; // Preserves declaration order
     FPrivateInstanceProperties: TDictionary<string, TGocciaExpression>;
+    FPrivateInstancePropertyOrder: TStringList; // Preserves declaration order
     FPrivateStaticProperties: TDictionary<string, TGocciaExpression>;
     FPrivateMethods: TDictionary<string, TGocciaClassMethod>;
 
@@ -178,7 +180,9 @@ type
     property Setters: TDictionary<string, TGocciaSetterExpression> read FSetters;
     property StaticProperties: TDictionary<string, TGocciaExpression> read FStaticProperties;
     property InstanceProperties: TDictionary<string, TGocciaExpression> read FInstanceProperties;
+    property InstancePropertyOrder: TStringList read FInstancePropertyOrder;
     property PrivateInstanceProperties: TDictionary<string, TGocciaExpression> read FPrivateInstanceProperties;
+    property PrivateInstancePropertyOrder: TStringList read FPrivateInstancePropertyOrder;
     property PrivateStaticProperties: TDictionary<string, TGocciaExpression> read FPrivateStaticProperties;
     property PrivateMethods: TDictionary<string, TGocciaClassMethod> read FPrivateMethods;
   end;
@@ -308,6 +312,8 @@ implementation
     FSetters := ASetters;
     FStaticProperties := AStaticProperties;
     FInstanceProperties := AInstanceProperties;
+    FInstancePropertyOrder := TStringList.Create;
+    FPrivateInstancePropertyOrder := TStringList.Create;
 
     if Assigned(APrivateInstanceProperties) then
       FPrivateInstanceProperties := APrivateInstanceProperties
@@ -332,6 +338,8 @@ implementation
     FSetters.Free;
     FStaticProperties.Free;
     FInstanceProperties.Free;
+    FInstancePropertyOrder.Free;
+    FPrivateInstancePropertyOrder.Free;
     if Assigned(FPrivateInstanceProperties) then
       FPrivateInstanceProperties.Free;
     if Assigned(FPrivateMethods) then

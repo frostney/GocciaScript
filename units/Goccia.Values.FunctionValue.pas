@@ -18,6 +18,7 @@ type
     FParameters: TGocciaParameterArray;
     FBodyStatements: TObjectList<TGocciaASTNode>;
     FClosure: TGocciaScope;
+    FIsArrow: Boolean;
   public
     constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string = '');
     destructor Destroy; override;
@@ -28,14 +29,17 @@ type
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
     property Closure: TGocciaScope read FClosure;
     property Name: string read FName;
+    property IsArrow: Boolean read FIsArrow write FIsArrow;
   end;
 
   TGocciaMethodValue = class(TGocciaFunctionValue)
   private
     FSuperClass: TGocciaValue;
+    FOwningClass: TGocciaValue; // TGocciaClassValue stored as TGocciaValue to avoid circular dependency
   public
     constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
     property SuperClass: TGocciaValue read FSuperClass write FSuperClass;
+    property OwningClass: TGocciaValue read FOwningClass write FOwningClass;
   end;
 
 implementation
@@ -69,6 +73,7 @@ var
   Method: TGocciaMethodValue;
   Context: TGocciaEvaluationContext;
   CallScope: TGocciaScope;
+  ClosureScope: TGocciaScope;
 begin
   Logger.Debug('FunctionValue.Call: Entering');
   Logger.Debug('  Function type: %s', [Self.ClassName]);
@@ -93,10 +98,29 @@ begin
     end;
 
     // Set up the call scope
-    CallScope.ThisValue := ThisValue;
-
-    // Also define 'this' as a lexical binding to fix "Undefined variable: this" errors
-    CallScope.DefineLexicalBinding('this', ThisValue, dtUnknown);
+    // Arrow functions: if called as a method (ThisValue is provided), use the call-site this.
+    // If called standalone (ThisValue is undefined), inherit 'this' from the closure scope.
+    if FIsArrow and (not Assigned(ThisValue) or (ThisValue is TGocciaUndefinedLiteralValue)) then
+    begin
+      // Standalone call of an arrow function: inherit 'this' from enclosing lexical scope
+      ClosureScope := FClosure;
+      while Assigned(ClosureScope) do
+      begin
+        if Assigned(ClosureScope.ThisValue) and not (ClosureScope.ThisValue is TGocciaUndefinedLiteralValue) then
+        begin
+          CallScope.ThisValue := ClosureScope.ThisValue;
+          CallScope.DefineLexicalBinding('this', ClosureScope.ThisValue, dtUnknown);
+          Break;
+        end;
+        ClosureScope := ClosureScope.Parent;
+      end;
+    end
+    else
+    begin
+      // Regular function call, or arrow function called as a method (obj.method())
+      CallScope.ThisValue := ThisValue;
+      CallScope.DefineLexicalBinding('this', ThisValue, dtUnknown);
+    end;
 
     // If this is a method with a superclass, set up super handling
     if Self is TGocciaMethodValue then
@@ -108,6 +132,10 @@ begin
         // Set up special 'super' binding in the method scope - TODO: This should be a specialised scope
         CallScope.DefineLexicalBinding('__super__', Method.SuperClass, dtUnknown);
       end;
+
+      // Bind the owning class so private field access resolves to the correct class
+      if Assigned(Method.OwningClass) then
+        CallScope.DefineLexicalBinding('__owning_class__', Method.OwningClass, dtUnknown);
     end;
 
     // Bind parameters

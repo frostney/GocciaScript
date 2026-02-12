@@ -19,19 +19,20 @@ State changes (variable bindings, object mutations) happen through the scope and
 
 Values use FreePascal interfaces rather than a flat class hierarchy with virtual methods:
 
-```
-TGocciaValue (base)
-  ├── TGocciaNullLiteralValue
-  ├── TGocciaUndefinedLiteralValue
-  ├── TGocciaBooleanLiteralValue
-  ├── TGocciaNumberLiteralValue
-  ├── TGocciaStringLiteralValue
-  ├── TGocciaObjectValue
-  │     ├── TGocciaArrayValue
-  │     ├── TGocciaFunctionValue
-  │     ├── TGocciaClassValue
-  │     └── TGocciaInstanceValue
-  └── TGocciaError
+```mermaid
+classDiagram
+    TGocciaValue <|-- TGocciaNullLiteralValue
+    TGocciaValue <|-- TGocciaUndefinedLiteralValue
+    TGocciaValue <|-- TGocciaBooleanLiteralValue
+    TGocciaValue <|-- TGocciaNumberLiteralValue
+    TGocciaValue <|-- TGocciaStringLiteralValue
+    TGocciaValue <|-- TGocciaObjectValue
+    TGocciaValue <|-- TGocciaError
+
+    TGocciaObjectValue <|-- TGocciaArrayValue
+    TGocciaObjectValue <|-- TGocciaFunctionValue
+    TGocciaObjectValue <|-- TGocciaClassValue
+    TGocciaObjectValue <|-- TGocciaInstanceValue
 ```
 
 Capabilities are expressed through interfaces:
@@ -92,6 +93,15 @@ Object properties follow ECMAScript's property descriptor model:
 - **Insertion order** — Properties maintain their creation order, matching JavaScript's `Object.keys()` ordering guarantee.
 
 This is more complex than a simple key-value map, but it's necessary for `Object.defineProperty`, getters/setters, and non-enumerable properties like prototype methods.
+
+## Private Field Storage
+
+Private fields use **composite keys** (`ClassName:FieldName`) in the instance's private property dictionary. This solves the inheritance shadowing problem where a base class and a derived class both declare a private field with the same name — in JavaScript, `Base.#x` and `Derived.#x` are completely separate slots.
+
+- **Storage** — Private fields are stored on `TGocciaInstanceValue.FPrivateProperties` using keys like `"Base:x"` and `"Derived:x"`.
+- **Access resolution** — When a method accesses `this.#x`, the evaluator resolves which class declared the method (via `__owning_class__` in the scope chain) and uses that class name to build the composite key.
+- **Private getters/setters** — Stored separately from public ones on `TGocciaClassValue` in `FPrivateGetters`/`FPrivateSetters`, because they don't participate in the prototype's property descriptor chain.
+- **Declaration order** — Instance property initializers run in source declaration order, enforced via `TStringList` order tracking from the parser through to the class value.
 
 ## Error Handling Strategy
 

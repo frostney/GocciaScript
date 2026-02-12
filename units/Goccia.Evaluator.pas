@@ -1516,6 +1516,7 @@ begin
   // But we also need to preserve access to the current scope's variables
   // The simplest approach: create a child scope that will be persistent
   Result := TGocciaFunctionValue.Create(ArrowFunctionExpression.Parameters, Statements, Context.Scope.CreateChild);
+  TGocciaFunctionValue(Result).IsArrow := True;
 end;
 
 function EvaluateBlock(BlockStatement: TGocciaBlockStatement; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -1873,20 +1874,26 @@ end;
 
 procedure InitializeInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 var
-  PropertyPair: TPair<string, TGocciaExpression>;
   PropertyValue: TGocciaValue;
+  PropertyExpr: TGocciaExpression;
+  I: Integer;
+  PropName: string;
 begin
   // Initialize inherited properties first (parent to child order)
   if Assigned(ClassValue.SuperClass) then
     InitializeInstanceProperties(Instance, ClassValue.SuperClass, Context);
 
-  // Then initialize this class's properties (child properties can shadow parent properties)
-  for PropertyPair in ClassValue.InstancePropertyDefs do
+  // Then initialize this class's properties in declaration order (child properties can shadow parent properties)
+  for I := 0 to ClassValue.InstancePropertyOrder.Count - 1 do
   begin
-    Logger.Debug('Initializing instance property: %s from class: %s', [PropertyPair.Key, ClassValue.Name]);
-    // Evaluate the property expression in the current context
-    PropertyValue := EvaluateExpression(PropertyPair.Value, Context);
-    Instance.AssignProperty(PropertyPair.Key, PropertyValue);
+    PropName := ClassValue.InstancePropertyOrder[I];
+    if ClassValue.InstancePropertyDefs.TryGetValue(PropName, PropertyExpr) then
+    begin
+      Logger.Debug('Initializing instance property: %s from class: %s', [PropName, ClassValue.Name]);
+      // Evaluate the property expression in the current context
+      PropertyValue := EvaluateExpression(PropertyExpr, Context);
+      Instance.AssignProperty(PropName, PropertyValue);
+    end;
   end;
 end;
 
@@ -1898,6 +1905,8 @@ var
   I: Integer;
   Instance: TGocciaInstanceValue;
   ClassValue: TGocciaClassValue;
+  InitContext, SuperInitContext: TGocciaEvaluationContext;
+  InitScope, SuperInitScope: TGocciaScope;
 begin
   // Evaluate the callee (class)
   Callee := EvaluateExpression(NewExpression.Callee, Context);
@@ -1917,20 +1926,34 @@ begin
       Instance := TGocciaInstanceValue.Create(ClassValue);
       Instance.Prototype := ClassValue.Prototype;
 
-                              // Step 2: Initialize properties BEFORE calling constructor
-      InitializeInstanceProperties(Instance, ClassValue, Context);
+      // Step 2: Initialize properties BEFORE calling constructor
+      // Create an initialization context with `this` bound to the new instance
+      InitContext := Context;
+      InitScope := Context.Scope.CreateChild(skBlock, 'InstanceInit');
+      InitScope.ThisValue := Instance;
+      InitScope.DefineLexicalBinding('this', Instance, dtUnknown);
+      InitScope.DefineLexicalBinding('__owning_class__', ClassValue, dtUnknown);
+      InitContext.Scope := InitScope;
+
+      InitializeInstanceProperties(Instance, ClassValue, InitContext);
 
       // Step 2.5: Initialize private properties from inheritance chain (simple iteration)
       // Start from the topmost superclass and work down
       if Assigned(ClassValue.SuperClass) then
       begin
-        // For now, handle just one level of inheritance (most common case)
         Logger.Debug('EvaluateNewExpression: Initializing private properties from superclass %s', [ClassValue.SuperClass.Name]);
-        InitializePrivateInstanceProperties(Instance, ClassValue.SuperClass, Context);
+        // Create a context with the superclass as owning class for correct composite key resolution
+        SuperInitContext := Context;
+        SuperInitScope := Context.Scope.CreateChild(skBlock, 'SuperPrivateInit');
+        SuperInitScope.ThisValue := Instance;
+        SuperInitScope.DefineLexicalBinding('this', Instance, dtUnknown);
+        SuperInitScope.DefineLexicalBinding('__owning_class__', ClassValue.SuperClass, dtUnknown);
+        SuperInitContext.Scope := SuperInitScope;
+        InitializePrivateInstanceProperties(Instance, ClassValue.SuperClass, SuperInitContext);
       end;
 
       // Step 2.6: Initialize private properties from current class
-      InitializePrivateInstanceProperties(Instance, ClassValue, Context);
+      InitializePrivateInstanceProperties(Instance, ClassValue, InitContext);
 
       // Step 3: Call constructor (properties are now available)
       if Assigned(ClassValue.ConstructorMethod) then
@@ -1975,8 +1998,10 @@ var
   SetterPair: TPair<string, TGocciaSetterExpression>;
   Method: TGocciaMethodValue;
   PropertyValue: TGocciaValue;
+  PropertyExpr: TGocciaExpression;
   GetterFunction, SetterFunction: TGocciaFunctionValue;
   ClassName: string;
+  I: Integer;
 begin
   SuperClass := nil;
   if ClassDef.SuperClass <> '' then
@@ -2003,6 +2028,7 @@ begin
   begin
     // Pass superclass directly to method creation
     Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, Context, SuperClass));
+    Method.OwningClass := ClassValue;
 
     if MethodPair.Value.IsStatic then
     begin
@@ -2032,22 +2058,25 @@ begin
     ClassValue.AddPrivateStaticProperty(PropertyPair.Key, PropertyValue);
   end;
 
-  // Store instance property definitions on the class (they will be evaluated during instantiation)
-  for PropertyPair in ClassDef.InstanceProperties do
+  // Store instance property definitions on the class in declaration order
+  for I := 0 to ClassDef.InstancePropertyOrder.Count - 1 do
   begin
-    ClassValue.AddInstanceProperty(PropertyPair.Key, PropertyPair.Value);
+    if ClassDef.InstanceProperties.TryGetValue(ClassDef.InstancePropertyOrder[I], PropertyExpr) then
+      ClassValue.AddInstanceProperty(ClassDef.InstancePropertyOrder[I], PropertyExpr);
   end;
 
-  // Store private instance property definitions on the class
-  for PropertyPair in ClassDef.PrivateInstanceProperties do
+  // Store private instance property definitions on the class in declaration order
+  for I := 0 to ClassDef.PrivateInstancePropertyOrder.Count - 1 do
   begin
-    ClassValue.AddPrivateInstanceProperty(PropertyPair.Key, PropertyPair.Value);
+    if ClassDef.PrivateInstanceProperties.TryGetValue(ClassDef.PrivateInstancePropertyOrder[I], PropertyExpr) then
+      ClassValue.AddPrivateInstanceProperty(ClassDef.PrivateInstancePropertyOrder[I], PropertyExpr);
   end;
 
   // Store private methods on the class
   for MethodPair in ClassDef.PrivateMethods do
   begin
     Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, Context, SuperClass));
+    Method.OwningClass := ClassValue;
     ClassValue.AddPrivateMethod(MethodPair.Key, Method);
   end;
 
@@ -2056,13 +2085,21 @@ begin
   for GetterPair in ClassDef.Getters do
   begin
     GetterFunction := TGocciaFunctionValue(EvaluateGetter(GetterPair.Value, Context));
-    ClassValue.AddGetter(GetterPair.Key, GetterFunction);
+    // Private getters are prefixed with '#' by the parser
+    if (Length(GetterPair.Key) > 0) and (GetterPair.Key[1] = '#') then
+      ClassValue.AddPrivateGetter(Copy(GetterPair.Key, 2, Length(GetterPair.Key) - 1), GetterFunction)
+    else
+      ClassValue.AddGetter(GetterPair.Key, GetterFunction);
   end;
 
   for SetterPair in ClassDef.Setters do
   begin
     SetterFunction := TGocciaFunctionValue(EvaluateSetter(SetterPair.Value, Context));
-    ClassValue.AddSetter(SetterPair.Key, SetterFunction);
+    // Private setters are prefixed with '#' by the parser
+    if (Length(SetterPair.Key) > 0) and (SetterPair.Key[1] = '#') then
+      ClassValue.AddPrivateSetter(Copy(SetterPair.Key, 2, Length(SetterPair.Key) - 1), SetterFunction)
+    else
+      ClassValue.AddSetter(SetterPair.Key, SetterFunction);
   end;
 
   // For class expressions, don't automatically bind to scope - just return the class value
@@ -2070,37 +2107,73 @@ begin
   Result := ClassValue;
 end;
 
+function ResolveOwningClass(Instance: TGocciaInstanceValue; Context: TGocciaEvaluationContext): TGocciaClassValue;
+var
+  OwningClassValue: TGocciaValue;
+begin
+  // Try to get the owning class from the scope (set when a method is called or during initialization)
+  if Context.Scope.Contains('__owning_class__') then
+  begin
+    OwningClassValue := Context.Scope.GetValue('__owning_class__');
+    if OwningClassValue is TGocciaClassValue then
+    begin
+      Result := TGocciaClassValue(OwningClassValue);
+      Exit;
+    end;
+  end;
+  // Fallback: use the instance's class
+  Result := Instance.ClassValue;
+end;
+
+function EvaluatePrivateMemberOnInstance(Instance: TGocciaInstanceValue; const PrivateName: string; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  AccessClass: TGocciaClassValue;
+  GetterFn: TGocciaFunctionValue;
+  EmptyArgs: TGocciaArgumentsCollection;
+begin
+  // Determine the access class from the owning class of the current method
+  AccessClass := ResolveOwningClass(Instance, Context);
+
+  // Check if this is a private getter
+  if AccessClass.HasPrivateGetter(PrivateName) then
+  begin
+    GetterFn := AccessClass.GetPrivateGetter(PrivateName);
+    EmptyArgs := TGocciaArgumentsCollection.Create;
+    try
+      Result := GetterFn.Call(EmptyArgs, Instance);
+    finally
+      EmptyArgs.Free;
+    end;
+    Exit;
+  end;
+
+  // Check if this is a private method call
+  if Instance.ClassValue.PrivateMethods.ContainsKey(PrivateName) then
+  begin
+    Result := Instance.ClassValue.GetPrivateMethod(PrivateName);
+    if Result = nil then
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end
+  else
+  begin
+    // It's a private property access
+    Result := Instance.GetPrivateProperty(PrivateName, AccessClass);
+  end;
+end;
+
 function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   ObjectValue: TGocciaValue;
   Instance: TGocciaInstanceValue;
   ClassValue: TGocciaClassValue;
-  AccessClass: TGocciaClassValue;
 begin
   // Evaluate the object expression
   ObjectValue := EvaluateExpression(PrivateMemberExpression.ObjectExpr, Context);
 
   if ObjectValue is TGocciaInstanceValue then
   begin
-    // Private field access on instance
     Instance := TGocciaInstanceValue(ObjectValue);
-
-    // Determine the access class - the class that is trying to access the private field
-    // This should be the class containing the current method
-    AccessClass := Instance.ClassValue; // For now, assume access from the same class
-
-    // Check if this is a private method call
-    if Instance.ClassValue.PrivateMethods.ContainsKey(PrivateMemberExpression.PrivateName) then
-    begin
-      Result := Instance.ClassValue.GetPrivateMethod(PrivateMemberExpression.PrivateName);
-      if Result = nil then
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end
-    else
-    begin
-      // It's a private property access
-      Result := Instance.GetPrivateProperty(PrivateMemberExpression.PrivateName, AccessClass);
-    end;
+    Result := EvaluatePrivateMemberOnInstance(Instance, PrivateMemberExpression.PrivateName, Context);
   end
   else if ObjectValue is TGocciaClassValue then
   begin
@@ -2122,32 +2195,14 @@ function EvaluatePrivateMember(PrivateMemberExpression: TGocciaPrivateMemberExpr
 var
   Instance: TGocciaInstanceValue;
   ClassValue: TGocciaClassValue;
-  AccessClass: TGocciaClassValue;
 begin
   // Evaluate the object expression and store it for this binding
   ObjectValue := EvaluateExpression(PrivateMemberExpression.ObjectExpr, Context);
 
   if ObjectValue is TGocciaInstanceValue then
   begin
-    // Private field access on instance
     Instance := TGocciaInstanceValue(ObjectValue);
-
-    // Determine the access class - the class that is trying to access the private field
-    // This should be the class containing the current method
-    AccessClass := Instance.ClassValue; // For now, assume access from the same class
-
-    // Check if this is a private method call
-    if Instance.ClassValue.PrivateMethods.ContainsKey(PrivateMemberExpression.PrivateName) then
-    begin
-      Result := Instance.ClassValue.GetPrivateMethod(PrivateMemberExpression.PrivateName);
-      if Result = nil then
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end
-    else
-    begin
-      // It's a private property access
-      Result := Instance.GetPrivateProperty(PrivateMemberExpression.PrivateName, AccessClass);
-    end;
+    Result := EvaluatePrivateMemberOnInstance(Instance, PrivateMemberExpression.PrivateName, Context);
   end
   else if ObjectValue is TGocciaClassValue then
   begin
@@ -2172,6 +2227,8 @@ var
   ClassValue: TGocciaClassValue;
   AccessClass: TGocciaClassValue;
   Value: TGocciaValue;
+  SetterFn: TGocciaFunctionValue;
+  SetterArgs: TGocciaArgumentsCollection;
 begin
   // Evaluate the object expression
   ObjectValue := EvaluateExpression(PrivatePropertyAssignmentExpression.ObjectExpr, Context);
@@ -2184,11 +2241,26 @@ begin
     // Private field assignment on instance
     Instance := TGocciaInstanceValue(ObjectValue);
 
-    // Determine the access class - the class that is trying to access the private field
-    AccessClass := Instance.ClassValue; // For now, assume access from the same class
+    // Determine the access class from the owning class of the current method
+    AccessClass := ResolveOwningClass(Instance, Context);
 
-    // Set the private property
-    Instance.SetPrivateProperty(PrivatePropertyAssignmentExpression.PrivateName, Value, AccessClass);
+    // Check if this is a private setter
+    if AccessClass.HasPrivateSetter(PrivatePropertyAssignmentExpression.PrivateName) then
+    begin
+      SetterFn := AccessClass.GetPrivateSetter(PrivatePropertyAssignmentExpression.PrivateName);
+      SetterArgs := TGocciaArgumentsCollection.Create;
+      try
+        SetterArgs.Add(Value);
+        SetterFn.Call(SetterArgs, Instance);
+      finally
+        SetterArgs.Free;
+      end;
+    end
+    else
+    begin
+      // Set the private property
+      Instance.SetPrivateProperty(PrivatePropertyAssignmentExpression.PrivateName, Value, AccessClass);
+    end;
   end
   else if ObjectValue is TGocciaClassValue then
   begin
@@ -2229,8 +2301,8 @@ begin
     // Private field compound assignment on instance
     Instance := TGocciaInstanceValue(ObjectValue);
 
-    // Determine the access class - the class that is trying to access the private field
-    AccessClass := Instance.ClassValue; // For now, assume access from the same class
+    // Determine the access class from the owning class of the current method
+    AccessClass := ResolveOwningClass(Instance, Context);
 
     // Get the current value of the private property
     CurrentValue := Instance.GetPrivateProperty(PrivatePropertyCompoundAssignmentExpression.PrivateName, AccessClass);
@@ -2263,16 +2335,22 @@ end;
 
 procedure InitializePrivateInstanceProperties(Instance: TGocciaInstanceValue; ClassValue: TGocciaClassValue; Context: TGocciaEvaluationContext);
 var
-  PropertyPair: TPair<string, TGocciaExpression>;
   PropertyValue: TGocciaValue;
+  PropertyExpr: TGocciaExpression;
+  I: Integer;
+  PropName: string;
 begin
-  // Initialize private instance properties (only from the exact class, not inherited)
-  for PropertyPair in ClassValue.PrivateInstancePropertyDefs do
+  // Initialize private instance properties in declaration order (only from the exact class, not inherited)
+  for I := 0 to ClassValue.PrivateInstancePropertyOrder.Count - 1 do
   begin
-    Logger.Debug('Initializing private instance property: %s from class: %s', [PropertyPair.Key, ClassValue.Name]);
-    // Evaluate the property expression in the current context
-    PropertyValue := EvaluateExpression(PropertyPair.Value, Context);
-    Instance.SetPrivateProperty(PropertyPair.Key, PropertyValue, ClassValue);
+    PropName := ClassValue.PrivateInstancePropertyOrder[I];
+    if ClassValue.PrivateInstancePropertyDefs.TryGetValue(PropName, PropertyExpr) then
+    begin
+      Logger.Debug('Initializing private instance property: %s from class: %s', [PropName, ClassValue.Name]);
+      // Evaluate the property expression in the current context
+      PropertyValue := EvaluateExpression(PropertyExpr, Context);
+      Instance.SetPrivateProperty(PropName, PropertyValue, ClassValue);
+    end;
   end;
 end;
 

@@ -30,7 +30,7 @@ type
 implementation
 
 uses
-  Goccia.Values.ArrayValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue, Goccia.Values.ClassHelper, Goccia.Arguments.Validator;
+  Goccia.Values.ArrayValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ClassHelper, Goccia.Arguments.Validator;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
@@ -197,8 +197,20 @@ function TGocciaGlobalObject.ObjectHasOwn(Args: TGocciaArgumentsCollection; This
 var
   Obj: TGocciaObjectValue;
   PropertyName: string;
+  ClassObj: TGocciaClassValue;
 begin
   TGocciaArgumentValidator.RequireExactly(Args, 2, 'Object.hasOwn', ThrowError);
+
+  // Handle class values (TGocciaClassValue does not extend TGocciaObjectValue)
+  if Args.GetElement(0) is TGocciaClassValue then
+  begin
+    ClassObj := TGocciaClassValue(Args.GetElement(0));
+    PropertyName := Args.GetElement(1).ToStringLiteral.Value;
+    // Check static properties on the class (private fields are never own properties)
+    Result := TGocciaBooleanLiteralValue.Create(
+      not (ClassObj.GetProperty(PropertyName) is TGocciaUndefinedLiteralValue));
+    Exit;
+  end;
 
   if not (Args.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.hasOwn called on non-object', 0, 0);
