@@ -1,7 +1,12 @@
-name: Build
+name: Build and test
 
 on:
   push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
     branches:
       - main
 
@@ -17,30 +22,57 @@ jobs:
           - os: macos-latest
             arch: arm64
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
-      - name: Install FPC (Ubuntu)
+
+      - name: Install FPC (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+
       - name: Install FPC (macOS)
         if: runner.os == 'macOS'
         run: brew install fpc
+
       - name: Install FPC (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install freepascal
-          echo "C:\tools\freepascal\bin" >> $GITHUB_PATH
+          choco install freepascal -y --no-progress
+          echo 'C:\tools\freepascal\bin\i386-win32' >> "$GITHUB_PATH"
+
       - name: Build TestRunner
         run: ./build.pas testrunner
+
       - name: Run all JavaScript tests
-        run: ./build/TestRunner${{ runner.os == 'Windows' && '.exe' || '' }} tests
+        run: ./build/TestRunner tests
+
       - name: Build Tests
         run: ./build.pas tests
+
       - name: Run Test Values Primitives
-        run: ./build/Goccia.Values.Primitives.Test${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: ./build/Goccia.Values.Primitives.Test
+
       - name: Run Test Values Function
-        run: ./build/Goccia.Values.FunctionValue.Test${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: ./build/Goccia.Values.FunctionValue.Test
+
       - name: Run Test Values Object
-        run: ./build/Goccia.Values.ObjectValue.Test${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: ./build/Goccia.Values.ObjectValue.Test
+
       - name: Build ScriptLoader and REPL
         run: ./build.pas loader repl
+
+      - name: Upload artifacts
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gocciascript-${{ matrix.os }}-${{ matrix.arch }}
+          if-no-files-found: ignore
+          path: |
+            build/ScriptLoader
+            build/ScriptLoader.exe
+            build/TestRunner
+            build/TestRunner.exe
+            build/REPL
+            build/REPL.exe
