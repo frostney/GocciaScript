@@ -55,12 +55,14 @@ type
 
 implementation
 
+uses
+  Goccia.Values.NativeFunction;
+
 { TGocciaFunctionBase }
 
 constructor TGocciaFunctionBase.Create;
 begin
   inherited Create;
-  // No need to register methods here - GetProperty handles it dynamically
 
   if not Assigned(FSharedPrototype) then
     FSharedPrototype := TGocciaFunctionSharedPrototype.Create;
@@ -70,15 +72,7 @@ end;
 
 function TGocciaFunctionBase.GetProperty(const AName: string): TGocciaValue;
 begin
-  // TODO: This feels too manual and too hacky
-  // if AName = 'call' then
-  //   Result := TGocciaFunctionBase.Create('call', Self)
-  // else if AName = 'apply' then
-  //   Result := TGocciaFunctionBase.Create('apply', Self)
-  // else if AName = 'bind' then
-  //   Result := TGocciaFunctionBase.Create('bind', Self)
-  // else
-    Result := inherited GetProperty(AName);
+  Result := inherited GetProperty(AName);
 end;
 
 function TGocciaFunctionBase.TypeName: string;
@@ -99,6 +93,15 @@ end;
 constructor TGocciaFunctionSharedPrototype.Create;
 begin
   inherited Create;
+
+  // Set the class var early to prevent infinite recursion when creating
+  // TGocciaNativeFunctionValue instances (which inherit from TGocciaFunctionBase)
+  TGocciaFunctionBase.FSharedPrototype := Self;
+
+  // Register call, apply, bind as native methods on the function prototype
+  RegisterNativeMethod(TGocciaNativeFunctionValue.Create(FunctionCall, 'call', 1));
+  RegisterNativeMethod(TGocciaNativeFunctionValue.Create(FunctionApply, 'apply', 2));
+  RegisterNativeMethod(TGocciaNativeFunctionValue.Create(FunctionBind, 'bind', 1));
 end;
 
 function TGocciaFunctionSharedPrototype.FunctionCall(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

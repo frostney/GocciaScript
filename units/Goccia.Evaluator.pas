@@ -1598,6 +1598,9 @@ begin
   Logger.Debug('EvaluateTry: Starting try-catch-finally evaluation');
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
+    // Outer try...finally ensures JS finally block always executes,
+    // even when the except handler re-raises (e.g. try-finally without catch)
+    try
     try
                                           // Execute the try block using original context (no scope isolation)
       Logger.Debug('EvaluateTry: Executing try block');
@@ -1791,54 +1794,32 @@ begin
         end;
       end;
     end;
-
-    // Always execute finally block if present
-    if Assigned(TryStatement.FinallyBlock) then
-    begin
-      Logger.Debug('EvaluateTry: Executing finally block');
-      try
-                    // Execute finally block using original context (no scope isolation)
-
-      // Execute finally block statements directly in original context
-      for I := 0 to TryStatement.FinallyBlock.Nodes.Count - 1 do
+    finally
+      // Always execute finally block if present — runs even when exceptions are re-raised
+      if Assigned(TryStatement.FinallyBlock) then
       begin
-        try
-          Evaluate(TryStatement.FinallyBlock.Nodes[I], Context);
-        except
-          on E: TGocciaReturnValue do
-          begin
-            raise;
-          end;
-          on E: TGocciaThrowValue do
-          begin
-            raise;
-          end;
-          on E: Exception do
-          begin
-            raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
+        Logger.Debug('EvaluateTry: Executing finally block');
+        // Execute finally block statements directly in original context
+        for I := 0 to TryStatement.FinallyBlock.Nodes.Count - 1 do
+        begin
+          try
+            Evaluate(TryStatement.FinallyBlock.Nodes[I], Context);
+          except
+            on E: TGocciaReturnValue do
+            begin
+              raise;
+            end;
+            on E: TGocciaThrowValue do
+            begin
+              raise;
+            end;
+            on E: Exception do
+            begin
+              raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
+            end;
           end;
         end;
-      end;
         Logger.Debug('EvaluateTry: Finally block completed');
-      except
-        on E: TGocciaReturnValue do
-        begin
-          // Return in finally block overrides any previous result
-          Logger.Debug('EvaluateTry: Return in finally block');
-          raise;
-        end;
-        on E: TGocciaThrowValue do
-        begin
-          // Exception in finally block overrides any previous result
-          Logger.Debug('EvaluateTry: Exception in finally block');
-          raise;
-        end;
-        on E: Exception do
-        begin
-          // Convert Pascal exceptions in finally block
-          Logger.Debug('EvaluateTry: Pascal exception in finally block');
-          raise TGocciaThrowValue.Create(TGocciaStringLiteralValue.Create(E.Message));
-        end;
       end;
     end;
 

@@ -23,7 +23,7 @@ type
     constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string = '');
     destructor Destroy; override;
 
-    function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; override;
     function CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
     property Parameters: TGocciaParameterArray read FParameters;
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
@@ -161,8 +161,9 @@ begin
           end;
 
         // Bind the destructuring pattern using existing pattern assignment logic
+        // IsDeclaration=True so variables are defined (not just assigned) in the call scope
         Context.Scope := CallScope;
-        AssignPattern(FParameters[I].Pattern, ReturnValue, Context);
+        AssignPattern(FParameters[I].Pattern, ReturnValue, Context, True);
       end
       else
       begin

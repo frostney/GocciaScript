@@ -19,7 +19,7 @@ type
       AArity: Integer);
     constructor CreateWithoutPrototype(AFunction: TGocciaNativeFunctionCallback; const AName: string;
       AArity: Integer);
-    function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; override;
     property NativeFunction: TGocciaNativeFunctionCallback read FFunction;
     property Name: string read FName;
     property Arity: Integer read FArity;
