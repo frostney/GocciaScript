@@ -33,7 +33,7 @@ type
     FScopeKind: TGocciaScopeKind;
     FCustomLabel: string;
   public
-    constructor Create(AParent: TGocciaScope = nil; AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = '');
+    constructor Create(AParent: TGocciaScope = nil; AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0);
     destructor Destroy; override;
     function CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''): TGocciaScope;
 
@@ -107,13 +107,16 @@ end;
 
 { TGocciaScope }
 
-constructor TGocciaScope.Create(AParent: TGocciaScope = nil; AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = '');
+constructor TGocciaScope.Create(AParent: TGocciaScope = nil; AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0);
 begin
   FScopeKind := AScopeKind;
   FCustomLabel := ACustomLabel;
   FThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   FParent := AParent;
-  FLexicalBindings := TDictionary<string, TLexicalBinding>.Create;
+  if ACapacity > 0 then
+    FLexicalBindings := TDictionary<string, TLexicalBinding>.Create(ACapacity)
+  else
+    FLexicalBindings := TDictionary<string, TLexicalBinding>.Create;
 end;
 
 destructor TGocciaScope.Destroy;

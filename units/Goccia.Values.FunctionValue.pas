@@ -19,6 +19,7 @@ type
     FBodyStatements: TObjectList<TGocciaASTNode>;
     FClosure: TGocciaScope;
     FIsArrow: Boolean;
+    FIsSimpleParams: Boolean;
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
   public
@@ -52,11 +53,24 @@ uses
 { TGocciaFunctionValue }
 
 constructor TGocciaFunctionValue.Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string = '');
+var
+  I: Integer;
 begin
   FParameters := AParameters;
   FBodyStatements := ABodyStatements;
   FClosure := AClosure;
   FName := AName;
+
+  // Pre-compute whether all parameters are simple named params (no rest, no destructuring, no defaults)
+  FIsSimpleParams := True;
+  for I := 0 to Length(FParameters) - 1 do
+  begin
+    if FParameters[I].IsRest or FParameters[I].IsPattern or Assigned(FParameters[I].DefaultValue) then
+    begin
+      FIsSimpleParams := False;
+      Break;
+    end;
+  end;
 
   inherited Create;
 end;
@@ -77,7 +91,7 @@ var
   ClosureScope: TGocciaScope;
 begin
   // Create call scope
-  CallScope := TGocciaScope.Create(FClosure, skFunction, Format('Type: FunctionCall, Name: %s', [FName]));
+  CallScope := TGocciaScope.Create(FClosure, skFunction, FName, Length(FParameters) + 2);
   try
     // Set up evaluation context for default parameter evaluation
     Context.Scope := FClosure;
@@ -133,51 +147,57 @@ begin
         CallScope.DefineLexicalBinding('__owning_class__', Method.OwningClass, dtUnknown);
     end;
 
-    // Bind parameters
-    for I := 0 to Length(FParameters) - 1 do
+    // Bind parameters - fast path for simple named params (no rest/destructuring/defaults)
+    if FIsSimpleParams then
     begin
-      if FParameters[I].IsRest then
+      for I := 0 to Length(FParameters) - 1 do
       begin
-        // Rest parameter: collect remaining arguments into an array
-        ReturnValue := TGocciaArrayValue.Create;
-        if I < Arguments.Length then
-          for J := I to Arguments.Length - 1 do
-            TGocciaArrayValue(ReturnValue).Elements.Add(Arguments.GetElement(J));
-        CallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
-        Break; // Rest is always last
-      end
-      else if FParameters[I].IsPattern then
-      begin
-        // Handle destructuring parameter
-        // Get the argument value or default
-        if I < Arguments.Length then
-          ReturnValue := Arguments.GetElement(I)
-        else if Assigned(FParameters[I].DefaultValue) then
-          ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context)
-        else
-          ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-
-        // Bind the destructuring pattern using existing pattern assignment logic
-        // IsDeclaration=True so variables are defined (not just assigned) in the call scope
-        Context.Scope := CallScope;
-        AssignPattern(FParameters[I].Pattern, ReturnValue, Context, True);
-      end
-      else
-      begin
-        // Handle simple named parameter
         if I < Arguments.Length then
           CallScope.DefineLexicalBinding(FParameters[I].Name, Arguments.GetElement(I), dtParameter)
         else
+          CallScope.DefineLexicalBinding(FParameters[I].Name, TGocciaUndefinedLiteralValue.UndefinedValue, dtParameter);
+      end;
+    end
+    else
+    begin
+      // Full parameter binding with rest, destructuring, and defaults
+      for I := 0 to Length(FParameters) - 1 do
+      begin
+        if FParameters[I].IsRest then
         begin
-          // Check if there's a default value
-          if Assigned(FParameters[I].DefaultValue) then
-          begin
-            // Evaluate the default value in the function's closure scope
-            ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
-            CallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
-          end
+          ReturnValue := TGocciaArrayValue.Create;
+          if I < Arguments.Length then
+            for J := I to Arguments.Length - 1 do
+              TGocciaArrayValue(ReturnValue).Elements.Add(Arguments.GetElement(J));
+          CallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
+          Break;
+        end
+        else if FParameters[I].IsPattern then
+        begin
+          if I < Arguments.Length then
+            ReturnValue := Arguments.GetElement(I)
+          else if Assigned(FParameters[I].DefaultValue) then
+            ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context)
           else
-            CallScope.DefineLexicalBinding(FParameters[I].Name, TGocciaUndefinedLiteralValue.UndefinedValue, dtParameter);
+            ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+          Context.Scope := CallScope;
+          AssignPattern(FParameters[I].Pattern, ReturnValue, Context, True);
+        end
+        else
+        begin
+          if I < Arguments.Length then
+            CallScope.DefineLexicalBinding(FParameters[I].Name, Arguments.GetElement(I), dtParameter)
+          else
+          begin
+            if Assigned(FParameters[I].DefaultValue) then
+            begin
+              ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
+              CallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
+            end
+            else
+              CallScope.DefineLexicalBinding(FParameters[I].Name, TGocciaUndefinedLiteralValue.UndefinedValue, dtParameter);
+          end;
         end;
       end;
     end;

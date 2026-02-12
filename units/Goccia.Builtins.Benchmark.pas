@@ -62,8 +62,9 @@ uses
 
 const
   WARMUP_ITERATIONS = 3;
-  MIN_CALIBRATION_MS = 1000; // Run for at least 1 second during calibration
-  CALIBRATION_BATCH = 10;    // Initial batch size for calibration
+  MIN_CALIBRATION_MS = 1000;   // Run for at least 1s during calibration
+  CALIBRATION_BATCH = 10;      // Initial batch size for calibration
+  MEASUREMENT_ROUNDS = 3;      // Number of measurement rounds (take median)
 
 { TBenchmarkCase }
 
@@ -151,12 +152,11 @@ end;
 function TGocciaBenchmark.CalibrateIterations(BenchCase: TBenchmarkCase): Int64;
 var
   EmptyArgs: TGocciaArgumentsCollection;
-  ClonedFunction: TGocciaFunctionValue;
   BatchSize: Int64;
   StartTime, Elapsed: Int64;
   I: Int64;
 begin
-  // Start with a small batch and double until we run for at least MIN_CALIBRATION_MS
+  // Start with a small batch and scale up until we run for at least MIN_CALIBRATION_MS
   BatchSize := CALIBRATION_BATCH;
 
   EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -165,30 +165,27 @@ begin
     begin
       StartTime := GetTickCount64;
       for I := 1 to BatchSize do
-      begin
-        ClonedFunction := BenchCase.BenchFunction.CloneWithNewScope(
-          FScope.CreateChild(skFunction, 'Benchmark'));
-        ClonedFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-      end;
+        BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       Elapsed := GetTickCount64 - StartTime;
 
       if Elapsed >= MIN_CALIBRATION_MS then
       begin
-        // We have enough data - return this batch size as the iteration count
-        Result := BatchSize;
+        // Round to a clean number for reproducibility
+        Result := (BatchSize div 10) * 10;
+        if Result < 10 then Result := 10;
         Exit;
       end;
 
-      // Double the batch size for next attempt
+      // Scale up based on how far we are from the target
       if Elapsed = 0 then
-        BatchSize := BatchSize * 10  // Very fast function, ramp up quickly
+        BatchSize := BatchSize * 10
       else
         BatchSize := BatchSize * (MIN_CALIBRATION_MS div Elapsed + 1);
 
       // Safety cap
       if BatchSize > 10000000 then
       begin
-        Result := BatchSize;
+        Result := (BatchSize div 10) * 10;
         Exit;
       end;
     end;
@@ -200,10 +197,13 @@ end;
 function TGocciaBenchmark.RunSingleBenchmark(BenchCase: TBenchmarkCase): TBenchmarkResult;
 var
   EmptyArgs: TGocciaArgumentsCollection;
-  ClonedFunction: TGocciaFunctionValue;
   Iterations: Int64;
-  StartTime, TotalMs: Int64;
+  StartTime, RoundMs: Int64;
   I: Int64;
+  Round, J: Integer;
+  OpsRounds: array[0..4] of Double;   // Max 5 rounds
+  MeanRounds: array[0..4] of Double;  // Max 5 rounds
+  TempDouble: Double;
 begin
   Result.Name := BenchCase.Name;
   Result.SuiteName := BenchCase.SuiteName;
@@ -212,37 +212,60 @@ begin
   try
     // Phase 1: Warmup
     for I := 1 to WARMUP_ITERATIONS do
-    begin
-      ClonedFunction := BenchCase.BenchFunction.CloneWithNewScope(
-        FScope.CreateChild(skFunction, 'Benchmark'));
-      ClonedFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-    end;
+      BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
-    // Phase 2: Calibrate to find iteration count
+    // Phase 2: Calibrate to find iteration count per round (~1s each)
     Iterations := CalibrateIterations(BenchCase);
 
-    // Phase 3: Measure
-    StartTime := GetTickCount64;
-    for I := 1 to Iterations do
+    // Phase 3: Multiple measurement rounds, each running the full iteration count
+    for Round := 0 to MEASUREMENT_ROUNDS - 1 do
     begin
-      ClonedFunction := BenchCase.BenchFunction.CloneWithNewScope(
-        FScope.CreateChild(skFunction, 'Benchmark'));
-      ClonedFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-    end;
-    TotalMs := GetTickCount64 - StartTime;
+      StartTime := GetTickCount64;
+      for I := 1 to Iterations do
+        BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      RoundMs := GetTickCount64 - StartTime;
 
-    Result.Iterations := Iterations;
-    Result.TotalMs := TotalMs;
-    if TotalMs > 0 then
-    begin
-      Result.OpsPerSec := (Iterations / TotalMs) * 1000;
-      Result.MeanMs := TotalMs / Iterations;
-    end
-    else
-    begin
-      Result.OpsPerSec := 0;
-      Result.MeanMs := 0;
+      if RoundMs > 0 then
+      begin
+        OpsRounds[Round] := (Iterations / RoundMs) * 1000;
+        MeanRounds[Round] := RoundMs / Iterations;
+      end
+      else
+      begin
+        OpsRounds[Round] := 0;
+        MeanRounds[Round] := 0;
+      end;
     end;
+
+    // Sort rounds to find median (insertion sort for small N)
+    for I := 1 to MEASUREMENT_ROUNDS - 1 do
+    begin
+      TempDouble := OpsRounds[I];
+      J := I - 1;
+      while (J >= 0) and (OpsRounds[J] > TempDouble) do
+      begin
+        OpsRounds[J + 1] := OpsRounds[J];
+        Dec(J);
+      end;
+      OpsRounds[J + 1] := TempDouble;
+    end;
+    for I := 1 to MEASUREMENT_ROUNDS - 1 do
+    begin
+      TempDouble := MeanRounds[I];
+      J := I - 1;
+      while (J >= 0) and (MeanRounds[J] > TempDouble) do
+      begin
+        MeanRounds[J + 1] := MeanRounds[J];
+        Dec(J);
+      end;
+      MeanRounds[J + 1] := TempDouble;
+    end;
+
+    // Report median values
+    Result.Iterations := Iterations;
+    Result.TotalMs := 0;
+    Result.OpsPerSec := OpsRounds[MEASUREMENT_ROUNDS div 2];
+    Result.MeanMs := MeanRounds[MEASUREMENT_ROUNDS div 2];
   finally
     EmptyArgs.Free;
   end;

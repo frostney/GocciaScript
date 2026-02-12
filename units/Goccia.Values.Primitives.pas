@@ -86,6 +86,8 @@ type
     class var FNegativeZeroValue: TGocciaNumberLiteralValue;
     class var FInfinityValue: TGocciaNumberLiteralValue;
     class var FNegativeInfinityValue: TGocciaNumberLiteralValue;
+    class var FSmallIntCache: array[0..255] of TGocciaNumberLiteralValue;
+    class var FSmallIntCacheInitialized: Boolean;
   public
     constructor Create(AValue: Double; ASpecialValue: TGocciaNumberSpecialValue = nsvNone);
 
@@ -96,6 +98,7 @@ type
 
     class function ZeroValue: TGocciaNumberLiteralValue;
     class function OneValue: TGocciaNumberLiteralValue;
+    class function SmallInt(AValue: Integer): TGocciaNumberLiteralValue;
 
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -364,6 +367,24 @@ begin
   if not Assigned(FOneValue) then
     FOneValue := TGocciaNumberLiteralValue.Create(ONE_VALUE);
   Result := FOneValue;
+end;
+
+class function TGocciaNumberLiteralValue.SmallInt(AValue: Integer): TGocciaNumberLiteralValue;
+var
+  I: Integer;
+begin
+  if (AValue >= 0) and (AValue <= 255) then
+  begin
+    if not FSmallIntCacheInitialized then
+    begin
+      for I := 0 to 255 do
+        FSmallIntCache[I] := TGocciaNumberLiteralValue.Create(I);
+      FSmallIntCacheInitialized := True;
+    end;
+    Result := FSmallIntCache[AValue];
+  end
+  else
+    Result := TGocciaNumberLiteralValue.Create(AValue);
 end;
 
 function TGocciaNumberLiteralValue.TypeName: string;

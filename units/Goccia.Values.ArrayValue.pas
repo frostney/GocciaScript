@@ -27,6 +27,7 @@ type
     function ArraySome(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayEvery(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayFlat(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    procedure FlattenInto(Target: TGocciaArrayValue; Depth: Integer);
     function ArrayFlatMap(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 
     function ArrayJoin(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -119,6 +120,59 @@ begin
   end
   else
     Result := 0;
+end;
+
+function CallCompareFunc(CompareFunc: TGocciaValue; CallArgs: TGocciaArgumentsCollection;
+  A, B: TGocciaValue; ThisValue: TGocciaValue): Double;
+begin
+  CallArgs.SetElement(0, A);
+  CallArgs.SetElement(1, B);
+  if CompareFunc is TGocciaNativeFunctionValue then
+    Result := TGocciaNativeFunctionValue(CompareFunc).Call(CallArgs, ThisValue).ToNumberLiteral.Value
+  else
+    Result := TGocciaFunctionValue(CompareFunc).Call(CallArgs, ThisValue).ToNumberLiteral.Value;
+end;
+
+procedure QuickSortElements(Elements: TObjectList<TGocciaValue>; CompareFunc: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection; ThisValue: TGocciaValue; Lo, Hi: Integer);
+var
+  I, J: Integer;
+  Pivot: TGocciaValue;
+begin
+  if Lo >= Hi then Exit;
+
+  Pivot := Elements[(Lo + Hi) div 2];
+  I := Lo;
+  J := Hi;
+
+  while I <= J do
+  begin
+    while CallCompareFunc(CompareFunc, CallArgs, Elements[I], Pivot, ThisValue) < 0 do
+      Inc(I);
+    while CallCompareFunc(CompareFunc, CallArgs, Elements[J], Pivot, ThisValue) > 0 do
+      Dec(J);
+
+    if I <= J then
+    begin
+      Elements.Exchange(I, J);
+      Inc(I);
+      Dec(J);
+    end;
+  end;
+
+  if Lo < J then
+    QuickSortElements(Elements, CompareFunc, CallArgs, ThisValue, Lo, J);
+  if I < Hi then
+    QuickSortElements(Elements, CompareFunc, CallArgs, ThisValue, I, Hi);
+end;
+
+function InvokeCallback(Callback: TGocciaValue; CallArgs: TGocciaArgumentsCollection;
+  ThisArray: TGocciaValue): TGocciaValue; inline;
+begin
+  if Callback is TGocciaNativeFunctionValue then
+    Result := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisArray)
+  else
+    Result := TGocciaFunctionValue(Callback).Call(CallArgs, ThisArray);
 end;
 
 constructor TGocciaArrayValue.Create;
@@ -266,21 +320,28 @@ function TGocciaArrayValue.ArrayMap(Args: TGocciaArgumentsCollection; ThisValue:
 var
   ResultArray: TGocciaArrayValue;
   Callback: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
   Callback := ValidateArrayMethodCall('map', Args, ThisValue, True);
   ResultArray := TGocciaArrayValue.Create;
 
-  for I := 0 to FElements.Count - 1 do
-  begin
-    // Skip holes in sparse arrays (represented as nil)
-    if IsArrayHole(FElements[I]) then
+  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
+  try
+    for I := 0 to FElements.Count - 1 do
     begin
-      ResultArray.Elements.Add(nil); // Preserve holes in map result
-      Continue;
-    end;
+      if IsArrayHole(FElements[I]) then
+      begin
+        ResultArray.Elements.Add(nil);
+        Continue;
+      end;
 
-    ResultArray.Elements.Add(ExecuteArrayCallback(Callback, FElements[I], I, ThisValue));
+      CallArgs.SetElement(0, FElements[I]);
+      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
+      ResultArray.Elements.Add(InvokeCallback(Callback, CallArgs, ThisValue));
+    end;
+  finally
+    CallArgs.Free;
   end;
 
   Result := ResultArray;
@@ -290,27 +351,34 @@ function TGocciaArrayValue.ArrayFilter(Args: TGocciaArgumentsCollection; ThisVal
 var
   Callback: TGocciaValue;
   ResultArray: TGocciaArrayValue;
+  CallArgs: TGocciaArgumentsCollection;
   PredicateResult: TGocciaValue;
   I: Integer;
 begin
   Callback := ValidateArrayMethodCall('filter', Args, ThisValue, True);
   ResultArray := TGocciaArrayValue.Create;
 
-  for I := 0 to Elements.Count - 1 do
-  begin
-    // Skip holes in sparse arrays (represented as nil)
-    if IsArrayHole(Elements[I]) then
-      Continue;
-
-    PredicateResult := ExecuteArrayCallback(Callback, Elements[I], I, ThisValue);
-
-    if PredicateResult is TGocciaBooleanLiteralValue then
+  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
+  try
+    for I := 0 to Elements.Count - 1 do
     begin
-      if TGocciaBooleanLiteralValue(PredicateResult).Value then
-        ResultArray.Elements.Add(Elements[I]);
-    end
-    else
-      ThrowError('Filter callback must return boolean');
+      if IsArrayHole(Elements[I]) then
+        Continue;
+
+      CallArgs.SetElement(0, Elements[I]);
+      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
+      PredicateResult := InvokeCallback(Callback, CallArgs, ThisValue);
+
+      if PredicateResult is TGocciaBooleanLiteralValue then
+      begin
+        if TGocciaBooleanLiteralValue(PredicateResult).Value then
+          ResultArray.Elements.Add(Elements[I]);
+      end
+      else
+        ThrowError('Filter callback must return boolean');
+    end;
+  finally
+    CallArgs.Free;
   end;
 
   Result := ResultArray;
@@ -338,21 +406,20 @@ begin
     StartIndex := 1;
   end;
 
-  for I := StartIndex to Elements.Count - 1 do
-  begin
-    // Skip holes in sparse arrays (represented as nil)
-    if IsArrayHole(Elements[I]) then
-      Continue;
+  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, nil, ThisValue]);
+  try
+    for I := StartIndex to Elements.Count - 1 do
+    begin
+      if IsArrayHole(Elements[I]) then
+        Continue;
 
-    CallArgs := TGocciaArgumentsCollection.Create([Accumulator, Elements[I], TGocciaNumberLiteralValue.Create(I), ThisValue]);
-    try
-      if Callback is TGocciaNativeFunctionValue then
-        Accumulator := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisValue)
-      else if Callback is TGocciaFunctionValue then
-        Accumulator := TGocciaFunctionValue(Callback).Call(CallArgs, ThisValue);
-    finally
-      CallArgs.Free;
+      CallArgs.SetElement(0, Accumulator);
+      CallArgs.SetElement(1, Elements[I]);
+      CallArgs.SetElement(2, TGocciaNumberLiteralValue.SmallInt(I));
+      Accumulator := InvokeCallback(Callback, CallArgs, ThisValue);
     end;
+  finally
+    CallArgs.Free;
   end;
 
   Result := Accumulator;
@@ -361,17 +428,24 @@ end;
 function TGocciaArrayValue.ArrayForEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   Callback: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
   Callback := ValidateArrayMethodCall('forEach', Args, ThisValue, True);
 
-  for I := 0 to Elements.Count - 1 do
-  begin
-    // Skip holes in sparse arrays (represented as nil)
-    if IsArrayHole(Elements[I]) then
-      Continue;
+  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
+  try
+    for I := 0 to Elements.Count - 1 do
+    begin
+      if IsArrayHole(Elements[I]) then
+        Continue;
 
-    ExecuteArrayCallback(Callback, Elements[I], I, ThisValue);
+      CallArgs.SetElement(0, Elements[I]);
+      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
+      InvokeCallback(Callback, CallArgs, ThisValue);
+    end;
+  finally
+    CallArgs.Free;
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -430,23 +504,30 @@ end;
 function TGocciaArrayValue.ArraySome(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   Callback: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
   I: Integer;
   SomeResult: TGocciaValue;
 begin
   Callback := ValidateArrayMethodCall('some', Args, ThisValue, True);
 
-  for I := 0 to Elements.Count - 1 do
-  begin
-    // Skip holes in sparse arrays (represented as nil)
-    if IsArrayHole(Elements[I]) then
-      Continue;
-
-    SomeResult := ExecuteArrayCallback(Callback, Elements[I], I, ThisValue);
-    if SomeResult.ToBooleanLiteral.Value then
+  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
+  try
+    for I := 0 to Elements.Count - 1 do
     begin
-      Result := TGocciaBooleanLiteralValue.Create(True);
-      Exit;
+      if IsArrayHole(Elements[I]) then
+        Continue;
+
+      CallArgs.SetElement(0, Elements[I]);
+      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
+      SomeResult := InvokeCallback(Callback, CallArgs, ThisValue);
+      if SomeResult.ToBooleanLiteral.Value then
+      begin
+        Result := TGocciaBooleanLiteralValue.Create(True);
+        Exit;
+      end;
     end;
+  finally
+    CallArgs.Free;
   end;
 
   Result := TGocciaBooleanLiteralValue.Create(False);
@@ -455,42 +536,59 @@ end;
 function TGocciaArrayValue.ArrayEvery(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   Callback: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
   I: Integer;
   EveryResult: TGocciaValue;
 begin
   Callback := ValidateArrayMethodCall('every', Args, ThisValue, True);
 
-  for I := 0 to Elements.Count - 1 do
-  begin
-    // Skip holes in sparse arrays (represented as nil)
-    if IsArrayHole(Elements[I]) then
-      Continue;
-
-    EveryResult := ExecuteArrayCallback(Callback, Elements[I], I, ThisValue);
-    if not EveryResult.ToBooleanLiteral.Value then
+  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
+  try
+    for I := 0 to Elements.Count - 1 do
     begin
-      Result := TGocciaBooleanLiteralValue.Create(False);
-      Exit;
+      if IsArrayHole(Elements[I]) then
+        Continue;
+
+      CallArgs.SetElement(0, Elements[I]);
+      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
+      EveryResult := InvokeCallback(Callback, CallArgs, ThisValue);
+      if not EveryResult.ToBooleanLiteral.Value then
+      begin
+        Result := TGocciaBooleanLiteralValue.Create(False);
+        Exit;
+      end;
     end;
+  finally
+    CallArgs.Free;
   end;
 
   Result := TGocciaBooleanLiteralValue.Create(True);
 end;
 
+procedure TGocciaArrayValue.FlattenInto(Target: TGocciaArrayValue; Depth: Integer);
+var
+  I: Integer;
+begin
+  for I := 0 to Elements.Count - 1 do
+  begin
+    if IsArrayHole(Elements[I]) then
+      Continue;
+
+    if (Elements[I] is TGocciaArrayValue) and (Depth > 0) then
+      TGocciaArrayValue(Elements[I]).FlattenInto(Target, Depth - 1)
+    else
+      Target.Elements.Add(Elements[I]);
+  end;
+end;
+
 function TGocciaArrayValue.ArrayFlat(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   ResultArray: TGocciaArrayValue;
-  I, J: Integer;
   Depth: Integer;
-  CallArgs: TGocciaArgumentsCollection;
-  FlattenedSubArray: TGocciaArrayValue;
 begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.flat called on non-array');
 
-  ResultArray := TGocciaArrayValue.Create;
-
-  // Default depth is 1
   Depth := 1;
 
   if Args.Length > 0 then
@@ -504,35 +602,8 @@ begin
       Depth := 0;
   end;
 
-  for I := 0 to Elements.Count - 1 do
-  begin
-    // Skip holes in sparse arrays (represented as nil)
-    if IsArrayHole(Elements[I]) then
-      Continue;
-
-    if (Elements[I] is TGocciaArrayValue) and (Depth > 0) then
-    begin
-      // Recursively flatten the nested array
-      CallArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(Depth - 1)]);
-      try
-        FlattenedSubArray := TGocciaArrayValue(TGocciaArrayValue(Elements[I]).ArrayFlat(CallArgs, Elements[I]));
-
-        // Add all elements from the flattened subarray
-        for J := 0 to FlattenedSubArray.Elements.Count - 1 do
-        begin
-          ResultArray.Elements.Add(FlattenedSubArray.Elements[J]);
-        end;
-      finally
-        CallArgs.Free;
-      end;
-    end
-    else
-    begin
-      // Add the element as-is (either not an array or depth is 0)
-      ResultArray.Elements.Add(Elements[I]);
-    end;
-  end;
-
+  ResultArray := TGocciaArrayValue.Create;
+  FlattenInto(ResultArray, Depth);
   Result := ResultArray;
 end;
 
@@ -540,37 +611,37 @@ function TGocciaArrayValue.ArrayFlatMap(Args: TGocciaArgumentsCollection; ThisVa
 var
   ResultArray: TGocciaArrayValue;
   Callback: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
   I, J: Integer;
   MappedValue: TGocciaValue;
 begin
   Callback := ValidateArrayMethodCall('flatMap', Args, ThisValue, True);
   ResultArray := TGocciaArrayValue.Create;
 
-  for I := 0 to Elements.Count - 1 do
-  begin
-    // Skip holes in sparse arrays (represented as nil)
-    if IsArrayHole(Elements[I]) then
-      Continue;
-
-    MappedValue := ExecuteArrayCallback(Callback, Elements[I], I, ThisValue);
-
-    // flatMap only flattens one level - if the mapped value is an array,
-    // add each of its elements to the result array
-    if MappedValue is TGocciaArrayValue then
+  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
+  try
+    for I := 0 to Elements.Count - 1 do
     begin
-      // Add each element from the mapped array (flatten one level)
-      // Skip holes (nil elements) during flattening
-      for J := 0 to TGocciaArrayValue(MappedValue).Elements.Count - 1 do
+      if IsArrayHole(Elements[I]) then
+        Continue;
+
+      CallArgs.SetElement(0, Elements[I]);
+      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
+      MappedValue := InvokeCallback(Callback, CallArgs, ThisValue);
+
+      if MappedValue is TGocciaArrayValue then
       begin
-        if TGocciaArrayValue(MappedValue).Elements[J] <> nil then
-          ResultArray.Elements.Add(TGocciaArrayValue(MappedValue).Elements[J]);
-      end;
-    end
-    else
-    begin
-      // If not an array, add the value as-is
-      ResultArray.Elements.Add(MappedValue);
+        for J := 0 to TGocciaArrayValue(MappedValue).Elements.Count - 1 do
+        begin
+          if TGocciaArrayValue(MappedValue).Elements[J] <> nil then
+            ResultArray.Elements.Add(TGocciaArrayValue(MappedValue).Elements[J]);
+        end;
+      end
+      else
+        ResultArray.Elements.Add(MappedValue);
     end;
+  finally
+    CallArgs.Free;
   end;
 
   Result := ResultArray;
@@ -662,23 +733,31 @@ end;
 function TGocciaArrayValue.ArrayFind(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   Callback: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
   I: Integer;
   Element, CallResult: TGocciaValue;
 begin
   Callback := ValidateArrayMethodCall('find', Args, ThisValue, True);
 
-  for I := 0 to Elements.Count - 1 do
-  begin
-    Element := Elements[I];
-    if IsArrayHole(Element) then
-      Element := TGocciaUndefinedLiteralValue.UndefinedValue;
-
-    CallResult := ExecuteArrayCallback(Callback, Element, I, ThisValue);
-    if CallResult.ToBooleanLiteral.Value then
+  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
+  try
+    for I := 0 to Elements.Count - 1 do
     begin
-      Result := Element;
-      Exit;
+      Element := Elements[I];
+      if IsArrayHole(Element) then
+        Element := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+      CallArgs.SetElement(0, Element);
+      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
+      CallResult := InvokeCallback(Callback, CallArgs, ThisValue);
+      if CallResult.ToBooleanLiteral.Value then
+      begin
+        Result := Element;
+        Exit;
+      end;
     end;
+  finally
+    CallArgs.Free;
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -687,23 +766,31 @@ end;
 function TGocciaArrayValue.ArrayFindIndex(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   Callback: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
   I: Integer;
   Element, CallResult: TGocciaValue;
 begin
   Callback := ValidateArrayMethodCall('findIndex', Args, ThisValue, True);
 
-  for I := 0 to Elements.Count - 1 do
-  begin
-    Element := Elements[I];
-    if IsArrayHole(Element) then
-      Element := TGocciaUndefinedLiteralValue.UndefinedValue;
-
-    CallResult := ExecuteArrayCallback(Callback, Element, I, ThisValue);
-    if CallResult.ToBooleanLiteral.Value then
+  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
+  try
+    for I := 0 to Elements.Count - 1 do
     begin
-      Result := TGocciaNumberLiteralValue.Create(I);
-      Exit;
+      Element := Elements[I];
+      if IsArrayHole(Element) then
+        Element := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+      CallArgs.SetElement(0, Element);
+      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
+      CallResult := InvokeCallback(Callback, CallArgs, ThisValue);
+      if CallResult.ToBooleanLiteral.Value then
+      begin
+        Result := TGocciaNumberLiteralValue.SmallInt(I);
+        Exit;
+      end;
     end;
+  finally
+    CallArgs.Free;
   end;
 
   Result := TGocciaNumberLiteralValue.Create(-1);
@@ -864,8 +951,7 @@ function TGocciaArrayValue.ArrayToSorted(Args: TGocciaArgumentsCollection; ThisV
 var
   ResultArray: TGocciaArrayValue;
   CustomSortFunction: TGocciaValue;
-  I, J: Integer;
-  ShouldSwap: Boolean;
+  I: Integer;
   CallArgs: TGocciaArgumentsCollection;
 begin
   if not (ThisValue is TGocciaArrayValue) then
@@ -883,24 +969,13 @@ begin
     if not ((CustomSortFunction is TGocciaFunctionValue) or (CustomSortFunction is TGocciaNativeFunctionValue)) then
       ThrowError('Custom sort function must be a function');
 
-    // Use bubble sort with custom comparison function
-    for I := 0 to ResultArray.Elements.Count - 2 do
-    begin
-      for J := 0 to ResultArray.Elements.Count - 2 - I do
-      begin
-        CallArgs := TGocciaArgumentsCollection.Create([ResultArray.Elements[J], ResultArray.Elements[J + 1]]);
-        try
-          if CustomSortFunction is TGocciaNativeFunctionValue then
-            ShouldSwap := TGocciaNativeFunctionValue(CustomSortFunction).Call(CallArgs, ThisValue).ToNumberLiteral.Value > 0
-          else
-            ShouldSwap := TGocciaFunctionValue(CustomSortFunction).Call(CallArgs, ThisValue).ToNumberLiteral.Value > 0;
-
-          if ShouldSwap then
-            ResultArray.Elements.Exchange(J, J + 1);
-        finally
-          CallArgs.Free;
-        end;
-      end;
+    // Quicksort with custom comparison function
+    // Reuse a single args collection across all comparisons
+    CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
+    try
+      QuickSortElements(ResultArray.Elements, CustomSortFunction, CallArgs, ThisValue, 0, ResultArray.Elements.Count - 1);
+    finally
+      CallArgs.Free;
     end;
   end else
   begin
@@ -1115,8 +1190,6 @@ function TGocciaArrayValue.ArraySort(Args: TGocciaArgumentsCollection; ThisValue
 var
   Arr: TGocciaArrayValue;
   CustomSortFunction: TGocciaValue;
-  I, J: Integer;
-  ShouldSwap: Boolean;
   CallArgs: TGocciaArgumentsCollection;
 begin
   if not (ThisValue is TGocciaArrayValue) then
@@ -1131,24 +1204,13 @@ begin
     if not ((CustomSortFunction is TGocciaFunctionValue) or (CustomSortFunction is TGocciaNativeFunctionValue)) then
       ThrowError('Custom sort function must be a function');
 
-    // Bubble sort with custom comparison function (mutates in-place)
-    for I := 0 to Arr.Elements.Count - 2 do
-    begin
-      for J := 0 to Arr.Elements.Count - 2 - I do
-      begin
-        CallArgs := TGocciaArgumentsCollection.Create([Arr.Elements[J], Arr.Elements[J + 1]]);
-        try
-          if CustomSortFunction is TGocciaNativeFunctionValue then
-            ShouldSwap := TGocciaNativeFunctionValue(CustomSortFunction).Call(CallArgs, ThisValue).ToNumberLiteral.Value > 0
-          else
-            ShouldSwap := TGocciaFunctionValue(CustomSortFunction).Call(CallArgs, ThisValue).ToNumberLiteral.Value > 0;
-
-          if ShouldSwap then
-            Arr.Elements.Exchange(J, J + 1);
-        finally
-          CallArgs.Free;
-        end;
-      end;
+    // Quicksort with custom comparison function (mutates in-place)
+    // Reuse a single args collection across all comparisons
+    CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
+    try
+      QuickSortElements(Arr.Elements, CustomSortFunction, CallArgs, ThisValue, 0, Arr.Elements.Count - 1);
+    finally
+      CallArgs.Free;
     end;
   end else
   begin
