@@ -36,6 +36,13 @@ type
     function ArrayPop(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function ArraySlice(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 
+    function ArrayFind(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayFindIndex(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayIndexOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayLastIndexOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayConcat(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ArrayReverse(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+
     function ArrayToReversed(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayToSorted(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function ArrayToSpliced(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -51,8 +58,8 @@ type
     function ToStringTag: string; override;
 
     function ToStringLiteral: TGocciaStringLiteralValue; override;
-    function ToNumberLiteral: TGocciaNumberLiteralValue;
-    function ToBooleanLiteral: TGocciaBooleanLiteralValue;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
 
     // IIndexMethods interface implementation
     function GetLength: Integer;
@@ -129,6 +136,12 @@ begin
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayPush, 'push', 1));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayPop, 'pop', 0));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySlice, 'slice', 2));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFind, 'find', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFindIndex, 'findIndex', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayIndexOf, 'indexOf', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayLastIndexOf, 'lastIndexOf', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayConcat, 'concat', 1));
+  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayReverse, 'reverse', 0));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToReversed, 'toReversed', 0));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToSorted, 'toSorted', 0));
   FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToSpliced, 'toSpliced', 1));
@@ -383,37 +396,24 @@ end;
 function TGocciaArrayValue.ArrayIncludes(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   SearchValue: TGocciaValue;
-  I, FromIndex: Integer;
+  FromIndex: Integer;
 begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.includes called on non-array');
 
   if Args.Length < 1 then
-    ThrowError('Array.includes expects search value');
+  begin
+    // No argument means searching for undefined
+    Result := TGocciaBooleanLiteralValue.Create(Includes(TGocciaUndefinedLiteralValue.UndefinedValue, 0));
+    Exit;
+  end;
 
   SearchValue := Args.GetElement(0);
-
-  if SearchValue is TGocciaUndefinedLiteralValue then
-  begin
-    Result := TGocciaBooleanLiteralValue.Create(False);
-    Exit;
-  end;
-
-  if SearchValue is TGocciaNullLiteralValue then
-  begin
-    Result := TGocciaBooleanLiteralValue.Create(False);
-    Exit;
-  end;
 
   FromIndex := 0;
 
   if Args.Length > 1 then
-  begin
-    if not (Args.GetElement(1) is TGocciaNumberLiteralValue) then
-      ThrowError('Array.includes expects second argument to be a number');
-
     FromIndex := Trunc(Args.GetElement(1).ToNumberLiteral.Value);
-  end;
 
   Result := TGocciaBooleanLiteralValue.Create(Includes(SearchValue, FromIndex));
 end;
@@ -650,6 +650,191 @@ begin
   Result := ResultArray;
 end;
 
+function TGocciaArrayValue.ArrayFind(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Callback: TGocciaValue;
+  I: Integer;
+  Element, CallResult: TGocciaValue;
+begin
+  Callback := ValidateArrayMethodCall('find', Args, ThisValue, True);
+
+  for I := 0 to Elements.Count - 1 do
+  begin
+    Element := Elements[I];
+    if IsArrayHole(Element) then
+      Element := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+    CallResult := ExecuteArrayCallback(Callback, Element, I, ThisValue);
+    if CallResult.ToBooleanLiteral.Value then
+    begin
+      Result := Element;
+      Exit;
+    end;
+  end;
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaArrayValue.ArrayFindIndex(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Callback: TGocciaValue;
+  I: Integer;
+  Element, CallResult: TGocciaValue;
+begin
+  Callback := ValidateArrayMethodCall('findIndex', Args, ThisValue, True);
+
+  for I := 0 to Elements.Count - 1 do
+  begin
+    Element := Elements[I];
+    if IsArrayHole(Element) then
+      Element := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+    CallResult := ExecuteArrayCallback(Callback, Element, I, ThisValue);
+    if CallResult.ToBooleanLiteral.Value then
+    begin
+      Result := TGocciaNumberLiteralValue.Create(I);
+      Exit;
+    end;
+  end;
+
+  Result := TGocciaNumberLiteralValue.Create(-1);
+end;
+
+function TGocciaArrayValue.ArrayIndexOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  SearchValue: TGocciaValue;
+  I, FromIndex: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.indexOf called on non-array');
+
+  if Args.Length < 1 then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(-1);
+    Exit;
+  end;
+
+  SearchValue := Args.GetElement(0);
+
+  FromIndex := 0;
+  if Args.Length > 1 then
+  begin
+    FromIndex := Trunc(Args.GetElement(1).ToNumberLiteral.Value);
+    if FromIndex < 0 then
+      FromIndex := Elements.Count + FromIndex;
+    if FromIndex < 0 then
+      FromIndex := 0;
+  end;
+
+  for I := FromIndex to Elements.Count - 1 do
+  begin
+    if IsArrayHole(Elements[I]) then
+      Continue;
+    if IsStrictEqual(Elements[I], SearchValue) then
+    begin
+      Result := TGocciaNumberLiteralValue.Create(I);
+      Exit;
+    end;
+  end;
+
+  Result := TGocciaNumberLiteralValue.Create(-1);
+end;
+
+function TGocciaArrayValue.ArrayLastIndexOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  SearchValue: TGocciaValue;
+  I, FromIndex: Integer;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.lastIndexOf called on non-array');
+
+  if Args.Length < 1 then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(-1);
+    Exit;
+  end;
+
+  SearchValue := Args.GetElement(0);
+
+  FromIndex := Elements.Count - 1;
+  if Args.Length > 1 then
+  begin
+    FromIndex := Trunc(Args.GetElement(1).ToNumberLiteral.Value);
+    if FromIndex < 0 then
+      FromIndex := Elements.Count + FromIndex;
+  end;
+
+  if FromIndex >= Elements.Count then
+    FromIndex := Elements.Count - 1;
+
+  for I := FromIndex downto 0 do
+  begin
+    if IsArrayHole(Elements[I]) then
+      Continue;
+    if IsStrictEqual(Elements[I], SearchValue) then
+    begin
+      Result := TGocciaNumberLiteralValue.Create(I);
+      Exit;
+    end;
+  end;
+
+  Result := TGocciaNumberLiteralValue.Create(-1);
+end;
+
+function TGocciaArrayValue.ArrayConcat(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  ResultArray: TGocciaArrayValue;
+  I, J: Integer;
+  Arg: TGocciaValue;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.concat called on non-array');
+
+  ResultArray := TGocciaArrayValue.Create;
+
+  // Copy elements from this array
+  for I := 0 to Elements.Count - 1 do
+    ResultArray.Elements.Add(Elements[I]);
+
+  // Append each argument
+  for I := 0 to Args.Length - 1 do
+  begin
+    Arg := Args.GetElement(I);
+    if Arg is TGocciaArrayValue then
+    begin
+      for J := 0 to TGocciaArrayValue(Arg).Elements.Count - 1 do
+        ResultArray.Elements.Add(TGocciaArrayValue(Arg).Elements[J]);
+    end
+    else
+      ResultArray.Elements.Add(Arg);
+  end;
+
+  Result := ResultArray;
+end;
+
+function TGocciaArrayValue.ArrayReverse(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  I, J: Integer;
+  Temp: TGocciaValue;
+begin
+  if not (ThisValue is TGocciaArrayValue) then
+    ThrowError('Array.reverse called on non-array');
+
+  // Reverse in place
+  I := 0;
+  J := Elements.Count - 1;
+  while I < J do
+  begin
+    Temp := Elements[I];
+    Elements[I] := Elements[J];
+    Elements[J] := Temp;
+    Inc(I);
+    Dec(J);
+  end;
+
+  Result := ThisValue;
+end;
+
 function TGocciaArrayValue.ArrayToReversed(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   ResultArray: TGocciaArrayValue;
@@ -814,10 +999,13 @@ end;
 
 function TGocciaArrayValue.ToNumberLiteral: TGocciaNumberLiteralValue;
 begin
+  // ECMAScript: [] -> "" -> 0, [n] -> n, [a, b] -> NaN
   if FElements.Count = 0 then
-    Result := TGocciaNumberLiteralValue.NaNValue
+    Result := TGocciaNumberLiteralValue.Create(0)
+  else if FElements.Count = 1 then
+    Result := FElements[0].ToNumberLiteral
   else
-    Result := TGocciaNumberLiteralValue.Create(FElements[0].ToNumberLiteral.Value);
+    Result := TGocciaNumberLiteralValue.NaNValue;
 end;
 
 function TGocciaArrayValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
@@ -842,10 +1030,19 @@ begin
 
   for I := FromIndex to FElements.Count - 1 do
   begin
+    // Array holes (nil) match undefined
     if FElements[I] = nil then
+    begin
+      if AValue is TGocciaUndefinedLiteralValue then
+      begin
+        Result := True;
+        Exit;
+      end;
       Continue;
+    end;
 
-    if IsSameValue(FElements[I], AValue) then
+    // ECMAScript specifies SameValueZero for includes
+    if IsSameValueZero(FElements[I], AValue) then
     begin
       Result := True;
       Exit;

@@ -337,78 +337,86 @@ begin
   Result := False;
 end;
 
+function CompareNumbers(LeftNum, RightNum: TGocciaNumberLiteralValue; IsGreater: Boolean): Boolean;
+begin
+  // Handle NaN - always false
+  if LeftNum.IsNaN or RightNum.IsNaN then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  if IsGreater then
+  begin
+    if LeftNum.IsInfinity then
+      Result := not RightNum.IsInfinity
+    else if LeftNum.IsNegativeInfinity then
+      Result := False
+    else if RightNum.IsInfinity then
+      Result := False
+    else if RightNum.IsNegativeInfinity then
+      Result := True
+    else
+      Result := LeftNum.Value > RightNum.Value;
+  end
+  else
+  begin
+    if LeftNum.IsInfinity then
+      Result := False
+    else if LeftNum.IsNegativeInfinity then
+      Result := not RightNum.IsNegativeInfinity
+    else if RightNum.IsInfinity then
+      Result := True
+    else if RightNum.IsNegativeInfinity then
+      Result := False
+    else
+      Result := LeftNum.Value < RightNum.Value;
+  end;
+end;
+
 function GreaterThan(Left, Right: TGocciaValue): Boolean;
 begin
+  // undefined compared to anything is always false
   if (Left is TGocciaUndefinedLiteralValue) or (Right is TGocciaUndefinedLiteralValue) then
   begin
     Result := False;
     Exit;
   end;
 
-  if (Left is TGocciaNullLiteralValue) or (Right is TGocciaNullLiteralValue) then
+  // null compared to null is false; null compared to other non-numbers handled via coercion
+  if (Left is TGocciaNullLiteralValue) and (Right is TGocciaNullLiteralValue) then
   begin
     Result := False;
     Exit;
   end;
 
-  if (Left is TGocciaBooleanLiteralValue) and (Right is TGocciaBooleanLiteralValue) then
-  begin
-    Result := TGocciaBooleanLiteralValue(Left).Value > TGocciaBooleanLiteralValue(Right).Value;
-    Exit;
-  end;
-
-  if (Left is TGocciaNumberLiteralValue) and (Right is TGocciaNumberLiteralValue) then
-  begin
-    // Handle NaN - always false
-    if TGocciaNumberLiteralValue(Left).IsNaN or TGocciaNumberLiteralValue(Right).IsNaN then
-    begin
-      Result := False;
-      Exit;
-    end;
-    
-    // Handle Infinity cases
-    if TGocciaNumberLiteralValue(Left).IsInfinity then
-      Result := not (TGocciaNumberLiteralValue(Right).IsInfinity)  // +Infinity > anything except +Infinity
-    else if TGocciaNumberLiteralValue(Left).IsNegativeInfinity then
-      Result := False  // -Infinity is never greater than anything
-    else if TGocciaNumberLiteralValue(Right).IsInfinity then
-      Result := False  // Nothing is greater than +Infinity
-    else if TGocciaNumberLiteralValue(Right).IsNegativeInfinity then
-      Result := True  // Everything is greater than -Infinity
-    else
-      Result := TGocciaNumberLiteralValue(Left).Value > TGocciaNumberLiteralValue(Right).Value;
-    Exit;
-  end;
-
+  // If both are strings, compare lexicographically
   if (Left is TGocciaStringLiteralValue) and (Right is TGocciaStringLiteralValue) then
   begin
     Result := TGocciaStringLiteralValue(Left).Value > TGocciaStringLiteralValue(Right).Value;
     Exit;
   end;
 
-  Result := False; // Default for non-comparable types
+  // Otherwise, coerce both to numbers and compare (ECMAScript Abstract Relational Comparison)
+  Result := CompareNumbers(Left.ToNumberLiteral, Right.ToNumberLiteral, True);
 end;
 
 function GreaterThanOrEqual(Left, Right: TGocciaValue): Boolean;
 begin
-  // Handle undefined and null - they return false for >= with each other or themselves
   if (Left is TGocciaUndefinedLiteralValue) or (Right is TGocciaUndefinedLiteralValue) then
   begin
     Result := False;
     Exit;
   end;
-  
-  // For numeric comparisons, check NaN first
-  if (Left is TGocciaNumberLiteralValue) and (Right is TGocciaNumberLiteralValue) then
+
+  // NaN check after coercion
+  if Left.ToNumberLiteral.IsNaN or Right.ToNumberLiteral.IsNaN then
   begin
-    if TGocciaNumberLiteralValue(Left).IsNaN or TGocciaNumberLiteralValue(Right).IsNaN then
-    begin
-      Result := False;
-      Exit;
-    end;
+    Result := False;
+    Exit;
   end;
-  
-  Result := GreaterThan(Left, Right) or IsStrictEqual(Left, Right);
+
+  Result := not LessThan(Left, Right);
 end;
 
 function LessThan(Left, Right: TGocciaValue): Boolean;
@@ -419,70 +427,39 @@ begin
     Exit;
   end;
 
-  if (Left is TGocciaNullLiteralValue) or (Right is TGocciaNullLiteralValue) then
+  if (Left is TGocciaNullLiteralValue) and (Right is TGocciaNullLiteralValue) then
   begin
     Result := False;
     Exit;
   end;
 
-  if (Left is TGocciaBooleanLiteralValue) and (Right is TGocciaBooleanLiteralValue) then
-  begin
-    Result := TGocciaBooleanLiteralValue(Left).Value < TGocciaBooleanLiteralValue(Right).Value;
-    Exit;
-  end;
-
-  if (Left is TGocciaNumberLiteralValue) and (Right is TGocciaNumberLiteralValue) then
-  begin
-    // Handle NaN - always false
-    if TGocciaNumberLiteralValue(Left).IsNaN or TGocciaNumberLiteralValue(Right).IsNaN then
-    begin
-      Result := False;
-      Exit;
-    end;
-    
-    // Handle Infinity cases
-    if TGocciaNumberLiteralValue(Left).IsInfinity then
-      Result := False  // +Infinity is never less than anything
-    else if TGocciaNumberLiteralValue(Left).IsNegativeInfinity then
-      Result := not (TGocciaNumberLiteralValue(Right).IsNegativeInfinity)  // -Infinity < anything except -Infinity
-    else if TGocciaNumberLiteralValue(Right).IsInfinity then
-      Result := True  // Everything is less than +Infinity
-    else if TGocciaNumberLiteralValue(Right).IsNegativeInfinity then
-      Result := False  // Nothing is less than -Infinity
-    else
-      Result := TGocciaNumberLiteralValue(Left).Value < TGocciaNumberLiteralValue(Right).Value;
-    Exit;
-  end;
-
+  // If both are strings, compare lexicographically
   if (Left is TGocciaStringLiteralValue) and (Right is TGocciaStringLiteralValue) then
   begin
-      Result := TGocciaStringLiteralValue(Left).Value < TGocciaStringLiteralValue(Right).Value;
+    Result := TGocciaStringLiteralValue(Left).Value < TGocciaStringLiteralValue(Right).Value;
     Exit;
   end;
 
-  Result := False; // Default for non-comparable types
+  // Otherwise, coerce both to numbers and compare (ECMAScript Abstract Relational Comparison)
+  Result := CompareNumbers(Left.ToNumberLiteral, Right.ToNumberLiteral, False);
 end;
 
 function LessThanOrEqual(Left, Right: TGocciaValue): Boolean;
 begin
-  // Handle undefined and null - they return false for <= with each other or themselves
   if (Left is TGocciaUndefinedLiteralValue) or (Right is TGocciaUndefinedLiteralValue) then
   begin
     Result := False;
     Exit;
   end;
-  
-  // For numeric comparisons, check NaN first
-  if (Left is TGocciaNumberLiteralValue) and (Right is TGocciaNumberLiteralValue) then
+
+  // NaN check after coercion
+  if Left.ToNumberLiteral.IsNaN or Right.ToNumberLiteral.IsNaN then
   begin
-    if TGocciaNumberLiteralValue(Left).IsNaN or TGocciaNumberLiteralValue(Right).IsNaN then
-    begin
-      Result := False;
-      Exit;
-    end;
+    Result := False;
+    Exit;
   end;
-  
-  Result := LessThan(Left, Right) or IsStrictEqual(Left, Right);
+
+  Result := not GreaterThan(Left, Right);
 end;
 
 end.

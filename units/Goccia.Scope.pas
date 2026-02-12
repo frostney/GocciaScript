@@ -38,14 +38,14 @@ type
     function CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''): TGocciaScope;
 
     // New Define/Assign pattern
-    procedure DefineLexicalBinding(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType);
-    procedure AssignLexicalBinding(const AName: string; AValue: TGocciaValue); virtual;
+    procedure DefineLexicalBinding(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType; ALine: Integer = 0; AColumn: Integer = 0);
+    procedure AssignLexicalBinding(const AName: string; AValue: TGocciaValue; ALine: Integer = 0; AColumn: Integer = 0); virtual;
 
     // Helper methods for token-based declarations
     procedure DefineFromToken(const AName: string; AValue: TGocciaValue; ATokenType: TGocciaTokenType);
 
     // Core methods
-    function GetLexicalBinding(const AName: string): TLexicalBinding;
+    function GetLexicalBinding(const AName: string; ALine: Integer = 0; AColumn: Integer = 0): TLexicalBinding;
     function GetValue(const AName: string): TGocciaValue;
 
     function ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
@@ -67,7 +67,7 @@ type
     FCatchParameter: string;  // Track the catch parameter name for proper shadowing
   public
     constructor Create(AParent: TGocciaScope; const ACatchParameter: string);
-    procedure AssignLexicalBinding(const AName: string; AValue: TGocciaValue); override;
+    procedure AssignLexicalBinding(const AName: string; AValue: TGocciaValue; ALine: Integer = 0; AColumn: Integer = 0); override;
     procedure DefineBuiltin(const AName: string; AValue: TGocciaValue); override;
   end;
 
@@ -158,7 +158,7 @@ begin
   Result := TGocciaScope.Create(Self, AScopeKind, ACustomLabel);
 end;
 
-procedure TGocciaScope.DefineLexicalBinding(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType);
+procedure TGocciaScope.DefineLexicalBinding(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType; ALine: Integer = 0; AColumn: Integer = 0);
 var
   LexicalBinding: TLexicalBinding;
   ExistingLexicalBinding: TLexicalBinding;
@@ -171,7 +171,7 @@ begin
       dtLet, dtConst:
         begin
           // let/const cannot be redeclared
-          raise TGocciaSyntaxError.Create(Format('Identifier ''%s'' has already been declared', [AName]), 0, 0, '', nil);
+          raise TGocciaSyntaxError.Create(Format('Identifier ''%s'' has already been declared', [AName]), ALine, AColumn, '', nil);
         end;
     end;
   end;
@@ -216,7 +216,7 @@ begin
   DefineLexicalBinding(AName, AValue, DeclarationType);
 end;
 
-procedure TGocciaScope.AssignLexicalBinding(const AName: string; AValue: TGocciaValue);
+procedure TGocciaScope.AssignLexicalBinding(const AName: string; AValue: TGocciaValue; ALine: Integer = 0; AColumn: Integer = 0);
 var
   LexicalBinding: TLexicalBinding;
 begin
@@ -225,11 +225,11 @@ begin
   begin
     // Check if variable is initialized (temporal dead zone for let/const)
     if not LexicalBinding.IsAccessible then
-      raise TGocciaReferenceError.Create(Format('Cannot access ''%s'' before initialization', [AName]), 0, 0, '', nil);
+      raise TGocciaReferenceError.Create(Format('Cannot access ''%s'' before initialization', [AName]), ALine, AColumn, '', nil);
 
     // Check if variable is writable
     if not LexicalBinding.Writable then
-      raise TGocciaTypeError.Create(Format('Assignment to constant variable ''%s''', [AName]), 0, 0, '', nil);
+      raise TGocciaTypeError.Create(Format('Assignment to constant variable ''%s''', [AName]), ALine, AColumn, '', nil);
 
     // Update the value and mark as initialized
     LexicalBinding.Value := AValue;
@@ -241,15 +241,15 @@ begin
   // Variable not found in current scope, try parent scope
   if Assigned(FParent) then
   begin
-    FParent.AssignLexicalBinding(AName, AValue);
+    FParent.AssignLexicalBinding(AName, AValue, ALine, AColumn);
     Exit;
   end;
 
   // Variable not found in any scope - strict mode always throws
-  raise TGocciaReferenceError.Create(Format('Undefined variable: %s', [AName]), 0, 0, '', nil);
+  raise TGocciaReferenceError.Create(Format('Undefined variable: %s', [AName]), ALine, AColumn, '', nil);
 end;
 
-function TGocciaScope.GetLexicalBinding(const AName: string): TLexicalBinding;
+function TGocciaScope.GetLexicalBinding(const AName: string; ALine: Integer = 0; AColumn: Integer = 0): TLexicalBinding;
 var
   LexicalBinding: TLexicalBinding;
 begin
@@ -257,15 +257,15 @@ begin
   begin
     // Check temporal dead zone for let/const
     if not LexicalBinding.IsAccessible then
-      raise TGocciaReferenceError.Create(Format('Cannot access ''%s'' before initialization', [AName]), 0, 0, '', nil);
+      raise TGocciaReferenceError.Create(Format('Cannot access ''%s'' before initialization', [AName]), ALine, AColumn, '', nil);
     Result := LexicalBinding;
   end
   else if Assigned(FParent) then
-    Result := FParent.GetLexicalBinding(AName)
+    Result := FParent.GetLexicalBinding(AName, ALine, AColumn)
   else
   begin
     // Strict mode: undefined variables throw ReferenceError
-    raise TGocciaReferenceError.Create(Format('Undefined variable: %s', [AName]), 0, 0, '', nil);
+    raise TGocciaReferenceError.Create(Format('Undefined variable: %s', [AName]), ALine, AColumn, '', nil);
   end;
 end;
 
@@ -320,7 +320,7 @@ begin
   FCatchParameter := ACatchParameter;
 end;
 
-procedure TGocciaCatchScope.AssignLexicalBinding(const AName: string; AValue: TGocciaValue);
+procedure TGocciaCatchScope.AssignLexicalBinding(const AName: string; AValue: TGocciaValue; ALine: Integer = 0; AColumn: Integer = 0);
 begin
   // Surgical fix for catch parameter scopes: assignments to non-parameter variables
   // should propagate to parent scope, but catch parameters should stay for proper shadowing
@@ -328,12 +328,12 @@ begin
   begin
     // This is a catch parameter scope and the variable isn't the catch parameter.
     // Delegate directly to parent to ensure assignment propagation
-    FParent.AssignLexicalBinding(AName, AValue);
+    FParent.AssignLexicalBinding(AName, AValue, ALine, AColumn);
   end
   else
   begin
     // Either it's the catch parameter or it exists in current scope - use base behavior
-    inherited AssignLexicalBinding(AName, AValue);
+    inherited AssignLexicalBinding(AName, AValue, ALine, AColumn);
   end;
 end;
 

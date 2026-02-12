@@ -348,6 +348,7 @@ var
   Arg: TGocciaExpression;
   PropertyName: string;
   Line, Column: Integer;
+  IsOptionalChain: Boolean;
 begin
   Result := Primary;
 
@@ -373,10 +374,11 @@ begin
       Consume(gttRightParen, 'Expected ")" after arguments');
       Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
     end
-    else if Match([gttDot]) then
+    else if Match([gttDot, gttOptionalChaining]) then
     begin
       Line := Previous.Line;
       Column := Previous.Column;
+      IsOptionalChain := (Previous.TokenType = gttOptionalChaining);
 
       // Check if this is a private field access (this.#field)
       if Check(gttHash) then
@@ -384,6 +386,39 @@ begin
         Advance; // consume the #
         PropertyName := Consume(gttIdentifier, 'Expected private field name after "#"').Lexeme;
         Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
+      end
+      else if Check(gttLeftBracket) and IsOptionalChain then
+      begin
+        // Optional chaining with computed property: obj?.[expr]
+        Advance; // consume [
+        Arg := Expression;
+        Consume(gttRightBracket, 'Expected "]" after computed member expression');
+        Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column, True);
+      end
+      else if Check(gttLeftParen) and IsOptionalChain then
+      begin
+        // Optional chaining with call: func?.()
+        Advance; // consume (
+        Arguments := TObjectList<TGocciaExpression>.Create(True);
+        try
+          if not Check(gttRightParen) then
+          begin
+            repeat
+              if Match([gttSpread]) then
+                Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
+              else
+                Arg := Expression;
+              Arguments.Add(Arg);
+            until not Match([gttComma]);
+          end;
+          Consume(gttRightParen, 'Expected ")" after arguments');
+          // Wrap call in optional chaining by wrapping the callee in an optional member
+          // For func?.(), we create a call on an optional member access
+          Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
+        except
+          Arguments.Free;
+          raise;
+        end;
       end
       else
       begin
@@ -398,7 +433,7 @@ begin
           raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines);
 
         Result := TGocciaMemberExpression.Create(Result, PropertyName, False,
-          Line, Column);
+          Line, Column, IsOptionalChain);
       end;
     end
     else if Match([gttHash]) then
@@ -780,6 +815,20 @@ begin
       if not Check(gttRightParen) then
       begin
         repeat
+          // Check for rest parameter
+          if Match([gttSpread]) then
+          begin
+            ParamName := Consume(gttIdentifier, 'Expected parameter name after "..."').Lexeme;
+            Inc(ParamCount);
+            SetLength(Parameters, ParamCount);
+            Parameters[ParamCount - 1].Name := ParamName;
+            Parameters[ParamCount - 1].IsPattern := False;
+            Parameters[ParamCount - 1].Pattern := nil;
+            Parameters[ParamCount - 1].DefaultValue := nil;
+            Parameters[ParamCount - 1].IsRest := True;
+            Break;
+          end;
+
           ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
 
           // Check for default value
@@ -793,6 +842,7 @@ begin
           SetLength(Parameters, ParamCount);
           Parameters[ParamCount - 1].Name := ParamName;
           Parameters[ParamCount - 1].DefaultValue := DefaultValue;
+          Parameters[ParamCount - 1].IsRest := False;
 
         until not Match([gttComma]);
       end;
@@ -914,9 +964,22 @@ begin
     repeat
       // Increase array size
       SetLength(Parameters, ParamCount + 1);
+      Parameters[ParamCount].IsRest := False;
 
+      // Check for rest parameter (...args)
+      if Match([gttSpread]) then
+      begin
+        ParamName := Consume(gttIdentifier, 'Expected parameter name after "..."').Lexeme;
+        Parameters[ParamCount].Name := ParamName;
+        Parameters[ParamCount].IsPattern := False;
+        Parameters[ParamCount].Pattern := nil;
+        Parameters[ParamCount].DefaultValue := nil;
+        Parameters[ParamCount].IsRest := True;
+        Inc(ParamCount);
+        Break; // Rest parameter must be last
+      end
       // Check if this is a destructuring pattern or simple identifier
-      if Check(gttLeftBracket) or Check(gttLeftBrace) then
+      else if Check(gttLeftBracket) or Check(gttLeftBrace) then
       begin
         // Parse destructuring pattern parameter
         Pattern := ParsePattern;
@@ -1400,8 +1463,21 @@ begin
   if not Check(gttRightParen) then
   begin
     repeat
+      // Check for rest parameter (...args)
+      if Match([gttSpread]) then
+      begin
+        ParamName := Consume(gttIdentifier, 'Expected parameter name after "..."').Lexeme;
+        Inc(ParamCount);
+        SetLength(Parameters, ParamCount);
+        Parameters[ParamCount - 1].Name := ParamName;
+        Parameters[ParamCount - 1].IsPattern := False;
+        Parameters[ParamCount - 1].Pattern := nil;
+        Parameters[ParamCount - 1].DefaultValue := nil;
+        Parameters[ParamCount - 1].IsRest := True;
+        Break; // Rest parameter must be last
+      end
       // Check if this is a destructuring pattern or simple identifier
-      if Check(gttLeftBracket) or Check(gttLeftBrace) then
+      else if Check(gttLeftBracket) or Check(gttLeftBrace) then
       begin
         // Parse destructuring pattern parameter
         Pattern := ParsePattern;
@@ -1419,6 +1495,7 @@ begin
         Parameters[ParamCount - 1].IsPattern := True;
         Parameters[ParamCount - 1].Name := ''; // Not used for patterns
         Parameters[ParamCount - 1].DefaultValue := DefaultValue;
+        Parameters[ParamCount - 1].IsRest := False;
       end
       else
       begin
@@ -1818,6 +1895,13 @@ begin
             // Skip optional comma
             if Check(gttComma) then
               Advance;
+          end;
+        gttSpread:
+          begin
+            Advance; // consume ...
+            if Check(gttIdentifier) then
+              Advance; // consume parameter name
+            // Rest must be last, so next should be )
           end;
         gttIdentifier:
           begin

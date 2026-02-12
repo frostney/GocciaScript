@@ -35,6 +35,7 @@ type
     procedure ScanNumber;
     procedure ScanIdentifier;
     function ScanUnicodeEscape: string;
+    function ScanHexEscape: string;
     procedure SkipWhitespace;
     procedure SkipComment;
     procedure SkipBlockComment;
@@ -236,6 +237,24 @@ begin
     raise TGocciaLexerError.Create('Invalid unicode code point', FLine, FColumn, FFileName, FSourceLines);
 end;
 
+function TGocciaLexer.ScanHexEscape: string;
+var
+  HexStr: string;
+  CodePoint: Cardinal;
+begin
+  // Called after consuming '\x', Peek is the first hex digit
+  HexStr := '';
+  if IsAtEnd then
+    raise TGocciaLexerError.Create('Invalid hex escape', FLine, FColumn, FFileName, FSourceLines);
+  HexStr := HexStr + Advance;
+  if IsAtEnd then
+    raise TGocciaLexerError.Create('Invalid hex escape', FLine, FColumn, FFileName, FSourceLines);
+  HexStr := HexStr + Advance;
+
+  CodePoint := StrToInt('$' + HexStr);
+  Result := Chr(CodePoint);
+end;
+
 procedure TGocciaLexer.ScanString;
 var
   Value: string;
@@ -266,6 +285,7 @@ begin
           '"': begin Value := Value + '"'; Advance; end;
           '0': begin Value := Value + #0; Advance; end;
           'u': begin Advance; Value := Value + ScanUnicodeEscape; end;
+          'x': begin Advance; Value := Value + ScanHexEscape; end;
         else
           Value := Value + Peek;
           Advance;
@@ -312,6 +332,7 @@ begin
           '$': begin Value := Value + '$'; Advance; end;
           '0': begin Value := Value + #0; Advance; end;
           'u': begin Advance; Value := Value + ScanUnicodeEscape; end;
+          'x': begin Advance; Value := Value + ScanHexEscape; end;
         else
           Value := Value + Peek;
           Advance;
@@ -486,6 +507,8 @@ begin
     '?':
       if Match('?') then
         AddToken(gttNullishCoalescing)
+      else if Match('.') then
+        AddToken(gttOptionalChaining)
       else
         AddToken(gttQuestion);
     ':': AddToken(gttColon);

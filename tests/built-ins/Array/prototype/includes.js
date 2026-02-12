@@ -50,3 +50,15 @@ test("Array.prototype.includes with empty array", () => {
   const includes = arr.includes(2);
   expect(includes).toBe(false);
 });
+
+test("Array.prototype.includes with null", () => {
+  expect([null].includes(null)).toBe(true);
+});
+
+test("Array.prototype.includes with undefined", () => {
+  expect([undefined].includes(undefined)).toBe(true);
+});
+
+test("Array.prototype.includes finds undefined in array", () => {
+  expect([1, undefined, 3].includes(undefined)).toBe(true);
+});

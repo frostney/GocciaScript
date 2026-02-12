@@ -16,6 +16,7 @@ type
     Pattern: TGocciaDestructuringPattern;         // For destructuring parameters
     DefaultValue: TGocciaExpression;              // nil if no default value
     IsPattern: Boolean;                           // True if this is a destructuring pattern
+    IsRest: Boolean;                              // True if this is a rest parameter (...args)
   end;
   TGocciaParameterArray = array of TGocciaParameter;
 
@@ -178,15 +179,17 @@ type
     FProperty: string;
     FPropertyExpression: TGocciaExpression;
     FComputed: Boolean;
+    FOptional: Boolean;
   public
     constructor Create(AObject: TGocciaExpression; const AProperty: string;
-      AComputed: Boolean; ALine, AColumn: Integer); overload;
+      AComputed: Boolean; ALine, AColumn: Integer; AOptional: Boolean = False); overload;
     constructor Create(AObject: TGocciaExpression; APropertyExpression: TGocciaExpression;
-      ALine, AColumn: Integer); overload;
+      ALine, AColumn: Integer; AOptional: Boolean = False); overload;
     property ObjectExpr: TGocciaExpression read FObject;
     property PropertyName: string read FProperty;
     property PropertyExpression: TGocciaExpression read FPropertyExpression;
     property Computed: Boolean read FComputed;
+    property Optional: Boolean read FOptional;
   end;
 
   TGocciaArrayExpression = class(TGocciaExpression)
@@ -590,23 +593,25 @@ end;
 { TGocciaMemberExpression }
 
 constructor TGocciaMemberExpression.Create(AObject: TGocciaExpression;
-  const AProperty: string; AComputed: Boolean; ALine, AColumn: Integer);
+  const AProperty: string; AComputed: Boolean; ALine, AColumn: Integer; AOptional: Boolean = False);
 begin
   inherited Create(ALine, AColumn);
   FObject := AObject;
   FProperty := AProperty;
   FPropertyExpression := nil;
   FComputed := AComputed;
+  FOptional := AOptional;
 end;
 
 constructor TGocciaMemberExpression.Create(AObject: TGocciaExpression;
-  APropertyExpression: TGocciaExpression; ALine, AColumn: Integer);
+  APropertyExpression: TGocciaExpression; ALine, AColumn: Integer; AOptional: Boolean = False);
 begin
   inherited Create(ALine, AColumn);
   FObject := AObject;
   FProperty := '';
   FPropertyExpression := APropertyExpression;
   FComputed := True;
+  FOptional := AOptional;
 end;
 
 { TGocciaArrayExpression }

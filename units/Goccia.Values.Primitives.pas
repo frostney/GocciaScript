@@ -435,8 +435,42 @@ end;
 function TGocciaStringLiteralValue.ToNumberLiteral: TGocciaNumberLiteralValue;
 var
   TempValue: Double;
+  Trimmed: string;
 begin
-  if TryStrToFloat(FValue, TempValue) then
+  Trimmed := Trim(FValue);
+
+  // Empty string (after trim) converts to 0
+  if Trimmed = '' then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(0);
+    Exit;
+  end;
+
+  // Handle Infinity / -Infinity
+  if Trimmed = 'Infinity' then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(Infinity);
+    Exit;
+  end;
+  if Trimmed = '-Infinity' then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(NegInfinity);
+    Exit;
+  end;
+
+  // Handle hex strings 0x / 0X
+  if (Length(Trimmed) > 2) and (Trimmed[1] = '0') and ((Trimmed[2] = 'x') or (Trimmed[2] = 'X')) then
+  begin
+    try
+      TempValue := StrToInt(Trimmed);
+      Result := TGocciaNumberLiteralValue.Create(TempValue);
+    except
+      Result := TGocciaNumberLiteralValue.NaNValue;
+    end;
+    Exit;
+  end;
+
+  if TryStrToFloat(Trimmed, TempValue) then
     Result := TGocciaNumberLiteralValue.Create(TempValue)
   else
     Result := TGocciaNumberLiteralValue.NaNValue;

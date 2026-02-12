@@ -703,7 +703,7 @@ begin
           Result := TGocciaNumberLiteralValue.Create(-Operand.ToNumberLiteral.Value);
       end;
     gttPlus:
-      Result := TGocciaNumberLiteralValue.Create(Operand.ToNumberLiteral.Value);
+      Result := Operand.ToNumberLiteral;
     gttTypeof:
       Result := EvaluateTypeof(Operand);
     gttBitwiseNot:
@@ -873,8 +873,17 @@ var
   BoxedValue: TGocciaObjectValue;
 begin
   Logger.Debug('EvaluateMember: Start');
-  // Logger.Debug('  MemberExpression.ObjectExpr: %s', [MemberExpression.ObjectExpr.ToStringLiteral.Value]);
 
+  // Handle optional chaining: obj?.prop returns undefined if obj is null/undefined
+  if MemberExpression.Optional then
+  begin
+    Obj := EvaluateExpression(MemberExpression.ObjectExpr, Context);
+    if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
+    begin
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
+    end;
+  end;
 
   // Handle super.method() specially
   if MemberExpression.ObjectExpr is TGocciaSuperExpression then
@@ -1012,7 +1021,17 @@ var
   BoxedValue: TGocciaObjectValue;
 begin
   Logger.Debug('EvaluateMember: Start (dual overload)');
-  // Logger.Debug('  MemberExpression.ObjectExpr: %s', [MemberExpression.ObjectExpr.ToStringLiteral.Value]);
+
+  // Handle optional chaining: obj?.prop returns undefined if obj is null/undefined
+  if MemberExpression.Optional then
+  begin
+    ObjectValue := EvaluateExpression(MemberExpression.ObjectExpr, Context);
+    if (ObjectValue is TGocciaNullLiteralValue) or (ObjectValue is TGocciaUndefinedLiteralValue) then
+    begin
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
+    end;
+  end;
 
   // Handle super.method() specially
   if MemberExpression.ObjectExpr is TGocciaSuperExpression then
@@ -1679,6 +1698,10 @@ begin
           begin
             raise;
           end;
+          on E: TGocciaBreakSignal do
+          begin
+            raise;
+          end;
           on E: Exception do
           begin
             raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
@@ -1724,6 +1747,10 @@ begin
                   begin
                     raise;
                   end;
+                  on E: TGocciaBreakSignal do
+                  begin
+                    raise;
+                  end;
                   on E: Exception do
                   begin
                     raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
@@ -1751,6 +1778,10 @@ begin
                 begin
                   raise;
                 end;
+                on E: TGocciaBreakSignal do
+                begin
+                  raise;
+                end;
                 on E: Exception do
                 begin
                   raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
@@ -1771,6 +1802,11 @@ begin
       begin
         // Return statements should bubble up through try-catch
         Logger.Debug('EvaluateTry: Return value bubbling up');
+        raise;
+      end;
+      on E: TGocciaBreakSignal do
+      begin
+        // Break signals should bubble up through try-catch
         raise;
       end;
       on E: Exception do
@@ -1809,6 +1845,10 @@ begin
                   begin
                     raise;
                   end;
+                  on E: TGocciaBreakSignal do
+                  begin
+                    raise;
+                  end;
                   on E: Exception do
                   begin
                     raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
@@ -1833,6 +1873,10 @@ begin
                   raise;
                 end;
                 on E: TGocciaThrowValue do
+                begin
+                  raise;
+                end;
+                on E: TGocciaBreakSignal do
                 begin
                   raise;
                 end;
@@ -1869,6 +1913,10 @@ begin
               raise;
             end;
             on E: TGocciaThrowValue do
+            begin
+              raise;
+            end;
+            on E: TGocciaBreakSignal do
             begin
               raise;
             end;

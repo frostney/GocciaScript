@@ -25,7 +25,7 @@ type
     gttAnd, gttOr, gttNullishCoalescing, gttNot, gttTypeof, gttInstanceof, gttIn, gttDelete, gttAssign, gttPlusAssign, gttMinusAssign,
     gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign,
     gttIncrement, gttDecrement,
-    gttQuestion, gttColon,
+    gttQuestion, gttColon, gttOptionalChaining,
     // Bitwise operators
     gttBitwiseAnd, gttBitwiseOr, gttBitwiseXor, gttBitwiseNot,
     gttLeftShift, gttRightShift, gttUnsignedRightShift,

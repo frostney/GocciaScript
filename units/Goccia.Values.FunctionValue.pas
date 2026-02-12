@@ -45,7 +45,7 @@ type
 implementation
 
 uses
-  Goccia.Evaluator, Goccia.Values.ClassHelper;
+  Goccia.Evaluator, Goccia.Values.ClassHelper, Goccia.Values.ArrayValue;
 
 { TGocciaFunctionValue }
 
@@ -68,7 +68,7 @@ end;
 
 function TGocciaFunctionValue.Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
-  I: Integer;
+  I, J: Integer;
   ReturnValue: TGocciaValue;
   Method: TGocciaMethodValue;
   Context: TGocciaEvaluationContext;
@@ -141,7 +141,18 @@ begin
     // Bind parameters
     for I := 0 to Length(FParameters) - 1 do
     begin
-      if FParameters[I].IsPattern then
+      if FParameters[I].IsRest then
+      begin
+        // Rest parameter: collect remaining arguments into an array
+        Logger.Debug('Binding rest parameter %d: %s', [I, FParameters[I].Name]);
+        ReturnValue := TGocciaArrayValue.Create;
+        if I < Arguments.Length then
+          for J := I to Arguments.Length - 1 do
+            TGocciaArrayValue(ReturnValue).Elements.Add(Arguments.GetElement(J));
+        CallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
+        Break; // Rest is always last
+      end
+      else if FParameters[I].IsPattern then
       begin
         // Handle destructuring parameter
         Logger.Debug('Binding destructuring parameter %d', [I]);
