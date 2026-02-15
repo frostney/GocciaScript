@@ -169,7 +169,7 @@ flowchart TD
         Traverse["Traverse from all roots\nSet GCMarked := True"]
     end
     subgraph Sweep["Sweep Phase"]
-        Free["Free unmarked values and scopes\nSkip GCPermanent values"]
+        Free["Free unmarked values and scopes"]
     end
     Roots --> Mark --> Sweep
 ```
@@ -178,7 +178,7 @@ flowchart TD
 
 | Category | Lifetime | Mechanism |
 |----------|----------|-----------|
-| **AST literals** | Permanent (script lifetime) | `GCPermanent := True` set in `TGocciaLiteralExpression.Create` |
+| **AST literals** | AST-owned (script lifetime) | Unregistered from GC; evaluator calls `RuntimeCopy` to produce GC-managed copies |
 | **Singletons** | Permanent (process lifetime) | Pinned via `TGocciaGC.Instance.PinValue` during engine init |
 | **Runtime values** | Dynamic (collected when unreachable) | Registered via `AfterConstruction`, freed during sweep |
 | **Pascal-held values** | Temporary (explicit protection) | `AddTempRoot` / `RemoveTempRoot` |

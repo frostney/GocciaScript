@@ -15,10 +15,10 @@ type
   TGocciaValue = class(TInterfacedObject)
   private
     FGCMarked: Boolean;
-    FGCPermanent: Boolean;
   public
     procedure AfterConstruction; override;
     procedure GCMarkReferences; virtual;
+    function RuntimeCopy: TGocciaValue; virtual;
 
     function TypeName: string; virtual; abstract;
     function TypeOf: string; virtual; abstract;
@@ -28,13 +28,13 @@ type
     function ToStringLiteral: TGocciaStringLiteralValue; virtual; abstract;
 
     property GCMarked: Boolean read FGCMarked write FGCMarked;
-    property GCPermanent: Boolean read FGCPermanent write FGCPermanent;
   end;
 
   TGocciaNullLiteralValue = class(TGocciaValue)
   public
     function TypeName: string; override;
     function TypeOf: string; override;
+    function RuntimeCopy: TGocciaValue; override;
 
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
@@ -69,6 +69,7 @@ type
 
     function TypeName: string; override;
     function TypeOf: string; override;
+    function RuntimeCopy: TGocciaValue; override;
 
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
@@ -111,6 +112,7 @@ type
 
     function TypeName: string; override;
     function TypeOf: string; override;
+    function RuntimeCopy: TGocciaValue; override;
 
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
@@ -132,6 +134,7 @@ type
 
     function TypeName: string; override;
     function TypeOf: string; override;
+    function RuntimeCopy: TGocciaValue; override;
 
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
@@ -159,6 +162,12 @@ end;
 procedure TGocciaValue.GCMarkReferences;
 begin
   FGCMarked := True;
+end;
+
+function TGocciaValue.RuntimeCopy: TGocciaValue;
+begin
+  // Default: return self (for singletons and complex values like objects/functions)
+  Result := Self;
 end;
 
 { Utility functions }
@@ -191,6 +200,11 @@ end;
 function TGocciaNullLiteralValue.ToNumberLiteral: TGocciaNumberLiteralValue;
 begin
   Result := TGocciaNumberLiteralValue.ZeroValue;
+end;
+
+function TGocciaNullLiteralValue.RuntimeCopy: TGocciaValue;
+begin
+  Result := TGocciaNullLiteralValue.Create;
 end;
 
 function TGocciaNullLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
@@ -264,6 +278,15 @@ end;
 function TGocciaBooleanLiteralValue.TypeOf: string;
 begin
   Result := BOOLEAN_TYPE_NAME;
+end;
+
+function TGocciaBooleanLiteralValue.RuntimeCopy: TGocciaValue;
+begin
+  // Return the shared singleton -- no allocation
+  if FValue then
+    Result := TrueValue
+  else
+    Result := FalseValue;
 end;
 
 function TGocciaBooleanLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
@@ -420,6 +443,16 @@ begin
   Result := NUMBER_TYPE_NAME;
 end;
 
+function TGocciaNumberLiteralValue.RuntimeCopy: TGocciaValue;
+begin
+  // Use SmallInt cache for common integer values (already GC-pinned, zero allocation)
+  if (FSpecialValue = nsvNone) and (FValue >= 0) and (FValue <= 255)
+     and (Frac(FValue) = 0) then
+    Result := SmallInt(Round(FValue))
+  else
+    Result := TGocciaNumberLiteralValue.Create(FValue, FSpecialValue);
+end;
+
 function TGocciaNumberLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
 begin
   // JavaScript spec: NaN and 0 (including -0) convert to false
@@ -466,6 +499,11 @@ end;
 function TGocciaStringLiteralValue.TypeOf: string;
 begin
   Result := STRING_TYPE_NAME;
+end;
+
+function TGocciaStringLiteralValue.RuntimeCopy: TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create(FValue);
 end;
 
 function TGocciaStringLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;

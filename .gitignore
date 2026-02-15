@@ -8,6 +8,7 @@ build/main
 build/REPL
 build/ScriptLoader
 build/TestRunner
+build/BenchmarkRunner
 build/*.Test
 
 # Mac OS files

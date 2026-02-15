@@ -482,13 +482,13 @@ begin
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
-      TGocciaBooleanLiteralValue.Create(True), Token.Line, Token.Column);
+      TGocciaBooleanLiteralValue.TrueValue, Token.Line, Token.Column);
   end
   else if Match([gttFalse]) then
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
-      TGocciaBooleanLiteralValue.Create(False), Token.Line, Token.Column);
+      TGocciaBooleanLiteralValue.FalseValue, Token.Line, Token.Column);
   end
   else if Match([gttNull]) then
   begin

@@ -118,7 +118,7 @@ var
 begin
   if Expression is TGocciaLiteralExpression then
   begin
-    Result := TGocciaLiteralExpression(Expression).Value;
+    Result := TGocciaLiteralExpression(Expression).Value.RuntimeCopy;
   end
   else if Expression is TGocciaTemplateLiteralExpression then
     Result := EvaluateTemplateLiteral(TGocciaTemplateLiteralExpression(Expression), Context)

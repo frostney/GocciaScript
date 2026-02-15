@@ -40,6 +40,7 @@ type
     destructor Destroy; override;
 
     procedure RegisterValue(Value: TGocciaValue);
+    procedure UnregisterValue(Value: TGocciaValue);
     procedure RegisterScope(Scope: TGocciaScope);
     procedure PinValue(Value: TGocciaValue);
     procedure AddRoot(Scope: TGocciaScope);
@@ -116,6 +117,11 @@ procedure TGocciaGC.RegisterValue(Value: TGocciaValue);
 begin
   FManagedValues.Add(Value);
   Inc(FAllocationsSinceLastGC);
+end;
+
+procedure TGocciaGC.UnregisterValue(Value: TGocciaValue);
+begin
+  FManagedValues.Remove(Value);
 end;
 
 procedure TGocciaGC.RegisterScope(Scope: TGocciaScope);
@@ -197,11 +203,11 @@ var
 begin
   Collected := 0;
 
-  // Sweep values: compact alive/permanent values to the front, free dead ones
+  // Sweep values: compact alive values to the front, free dead ones
   WriteIdx := 0;
   for I := 0 to FManagedValues.Count - 1 do
   begin
-    if FManagedValues[I].GCMarked or FManagedValues[I].GCPermanent then
+    if FManagedValues[I].GCMarked then
     begin
       FManagedValues[WriteIdx] := FManagedValues[I];
       Inc(WriteIdx);

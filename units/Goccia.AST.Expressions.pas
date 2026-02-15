@@ -5,7 +5,8 @@ unit Goccia.AST.Expressions;
 interface
 
 uses
-  Goccia.AST.Node, Goccia.Token, Goccia.Values.Primitives, Generics.Collections, Classes, SysUtils;
+  Goccia.AST.Node, Goccia.Token, Goccia.Values.Primitives, Goccia.GarbageCollector,
+  Generics.Collections, Classes, SysUtils;
 
 type
   // Forward declaration
@@ -25,6 +26,7 @@ type
     FValue: TGocciaValue;
   public
     constructor Create(AValue: TGocciaValue; ALine, AColumn: Integer);
+    destructor Destroy; override;
     property Value: TGocciaValue read FValue;
   end;
 
@@ -459,11 +461,22 @@ constructor TGocciaLiteralExpression.Create(AValue: TGocciaValue;
 begin
   inherited Create(ALine, AColumn);
   FValue := AValue;
-  // Mark AST-owned values as permanent so the GC never collects them.
-  // These values are referenced by the AST which is invisible to the GC's
-  // mark phase (it only traverses scopes and roots).
-  if Assigned(FValue) then
-    FValue.GCPermanent := True;
+  // Remove from GC -- the AST owns this value, not the garbage collector.
+  // Singletons (UndefinedValue, TrueValue, FalseValue) are pinned separately
+  // and safe to unregister (Remove is a no-op if not found).
+  if Assigned(FValue) and Assigned(TGocciaGC.Instance) then
+    TGocciaGC.Instance.UnregisterValue(FValue);
+end;
+
+destructor TGocciaLiteralExpression.Destroy;
+begin
+  // Free the owned value unless it's a singleton (singletons are process-lifetime)
+  if Assigned(FValue)
+     and (FValue <> TGocciaUndefinedLiteralValue.UndefinedValue)
+     and (FValue <> TGocciaBooleanLiteralValue.TrueValue)
+     and (FValue <> TGocciaBooleanLiteralValue.FalseValue) then
+    FValue.Free;
+  inherited;
 end;
 
 { TGocciaTemplateLiteralExpression }

@@ -79,15 +79,15 @@ Every `TGocciaValue` participates in the mark-and-sweep garbage collector:
 ```pascal
 TGocciaValue = class(TInterfacedObject)
   FGCMarked: Boolean;      // Set during mark phase if reachable
-  FGCPermanent: Boolean;   // If true, never collected (AST literals)
   procedure AfterConstruction; override;  // Auto-registers with GC
   procedure GCMarkReferences; virtual;    // Override to mark referenced values
+  function RuntimeCopy: TGocciaValue; virtual;  // Create a GC-managed copy
 end;
 ```
 
 - **`AfterConstruction`** — Every value auto-registers with `TGocciaGC.Instance` upon creation.
 - **`GCMarkReferences`** — Base implementation sets `GCMarked := True`. Subclasses override this to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements).
-- **`GCPermanent`** — Values embedded in the AST (created by the parser and stored in `TGocciaLiteralExpression`) are marked permanent. The GC skips them during sweep because the AST is not traversed during the mark phase.
+- **`RuntimeCopy`** — Creates a fresh GC-managed copy of the value. Used by the evaluator when evaluating literal expressions: AST-owned literal values are not tracked by the GC, so `RuntimeCopy` produces a runtime value that is. The default implementation returns `Self` (for singletons and complex values). Primitives override this: numbers use the `SmallInt` cache for 0-255, booleans return singletons, strings create new instances (cheap due to copy-on-write).
 
 ## Interfaces
 

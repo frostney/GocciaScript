@@ -18,7 +18,7 @@ State changes (variable bindings, object mutations) happen through the scope and
 
 ## Interface-Based Value System
 
-Values use FreePascal interfaces rather than a flat class hierarchy with virtual methods:
+Values follow a small class hierarchy rooted at `TGocciaValue`, with capabilities expressed through FreePascal interfaces:
 
 ```mermaid
 classDiagram
@@ -120,7 +120,7 @@ GocciaScript uses a layered error approach:
 
 ## Mark-and-Sweep Garbage Collector
 
-GocciaScript runs inside a FreePascal host with manual memory management. Despite this, the runtime uses a tracing garbage collector (`Goccia.GarbageCollector.pas`) rather than relying on manual `Free` calls or reference counting.
+GocciaScript runs inside a FreePascal host with manual memory management, but the interpreter itself has no built-in memory management for the values it creates. In long-running contexts — benchmarking, the REPL, or extended user sessions — the heap grows unboundedly without automatic reclamation. The runtime therefore uses a tracing garbage collector (`Goccia.GarbageCollector.pas`) to manage the lifecycle of interpreter-created values.
 
 **Why not manual memory management?**
 
@@ -138,11 +138,11 @@ GocciaScript runs inside a FreePascal host with manual memory management. Despit
 - **Handles cycles** — Circular references between objects, closures, and scopes are collected correctly.
 - **Measurable impact** — Running `GC.Collect` before benchmark measurement rounds reduced ops/sec variance from 20-30% to 1-3%.
 
-**AST literal values and `GCPermanent`:**
+**AST literal ownership:**
 
-The parser creates `TGocciaValue` instances (numbers, strings, booleans) and stores them inside `TGocciaLiteralExpression` AST nodes. These values auto-register with the GC but are invisible to the mark phase, which only traverses scopes and roots — not the AST. Without protection, the GC would free them and subsequent evaluations of the same AST node would access freed memory.
+The parser creates `TGocciaValue` instances (numbers, strings, booleans) and stores them inside `TGocciaLiteralExpression` AST nodes. These values are owned by the AST, not the GC. `TGocciaLiteralExpression.Create` calls `TGocciaGC.Instance.UnregisterValue` to remove the value from GC tracking, and `TGocciaLiteralExpression.Destroy` frees the value (unless it is a singleton like `UndefinedValue`, `TrueValue`, or `FalseValue`).
 
-The solution is the `GCPermanent` flag: `TGocciaLiteralExpression.Create` sets `GCPermanent := True` on its value. The sweep phase skips permanent values unconditionally. This is correct because AST nodes live for the entire script execution, so their values should never be collected. An alternative would be having the AST own its values (freeing them in destructors), but that would require the evaluator to create runtime copies of every literal — adding allocation overhead to the hot path.
+When the evaluator encounters a literal expression, it calls `Value.RuntimeCopy` to produce a fresh GC-managed runtime value. This cleanly separates compile-time constants (owned by the AST) from runtime values (managed by the GC). The overhead is minimal: integers 0-255 hit the `SmallInt` cache (zero allocation), booleans return singletons, and strings benefit from FreePascal's copy-on-write semantics.
 
 ## Configurable Built-ins
 
@@ -162,13 +162,7 @@ TGocciaGlobalBuiltin = (ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 
 ## Build System
 
-The build script (`build.pas`) is itself a FreePascal script executed via `instantfpc`:
-
-**Why a Pascal build script?**
-
-- **Dogfooding** — The project uses its own language ecosystem for tooling.
-- **No external dependencies** — No Make, CMake, npm, or other build tools required beyond FreePascal itself.
-- **Cross-platform** — The same build script works on all platforms.
+The build script (`build.pas`) is a FreePascal script executed via `instantfpc` — a cross-platform, out-of-the-box solution within the FreePascal ecosystem that requires no external build tools.
 
 ## Testing Strategy
 
