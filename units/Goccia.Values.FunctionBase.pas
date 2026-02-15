@@ -25,8 +25,8 @@ type
 
   // Base class for all callable functions
   TGocciaFunctionBase = class(TGocciaObjectValue)
-  private
-    class var FSharedPrototype: TGocciaFunctionSharedPrototype;
+  private class var
+    FSharedPrototype: TGocciaFunctionSharedPrototype;
   protected
     // Subclasses should override these to provide name/length
     function GetFunctionLength: Integer; virtual;
@@ -43,6 +43,7 @@ type
     // Override TypeName and TypeOf for all functions
     function TypeName: string; override;
     function TypeOf: string; override;
+
   end;
 
   // Helper class for bound functions
@@ -58,12 +59,13 @@ type
     constructor Create(AOriginalFunction: TGocciaValue; ABoundThis: TGocciaValue; ABoundArgs: TObjectList<TGocciaValue>);
     destructor Destroy; override;
     function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; override;
+    procedure GCMarkReferences; override;
   end;
 
 implementation
 
 uses
-  Goccia.Values.NativeFunction;
+  Goccia.Values.NativeFunction, Goccia.GC;
 
 { TGocciaFunctionBase }
 
@@ -72,7 +74,12 @@ begin
   inherited Create;
 
   if not Assigned(FSharedPrototype) then
+  begin
     FSharedPrototype := TGocciaFunctionSharedPrototype.Create;
+    // Pin the shared prototype so the GC never collects it
+    if Assigned(TGocciaGC.Instance) then
+      TGocciaGC.Instance.PinValue(FSharedPrototype);
+  end;
 
   Self.Prototype := FSharedPrototype;
 end;
@@ -311,6 +318,25 @@ begin
     Result := 'bound ' + TGocciaFunctionBase(FOriginalFunction).GetFunctionName
   else
     Result := 'bound ';
+end;
+
+procedure TGocciaBoundFunctionValue.GCMarkReferences;
+var
+  I: Integer;
+begin
+  if GCMarked then Exit;
+  inherited; // Marks self + object properties/prototype
+
+  // Mark the original function and bound this
+  if Assigned(FOriginalFunction) then
+    FOriginalFunction.GCMarkReferences;
+  if Assigned(FBoundThis) then
+    FBoundThis.GCMarkReferences;
+
+  // Mark bound arguments
+  for I := 0 to FBoundArgs.Count - 1 do
+    if Assigned(FBoundArgs[I]) then
+      FBoundArgs[I].GCMarkReferences;
 end;
 
 end.

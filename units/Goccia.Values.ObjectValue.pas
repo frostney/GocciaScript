@@ -70,6 +70,8 @@ type
     procedure Freeze;
     function IsFrozen: Boolean;
 
+    procedure GCMarkReferences; override;
+
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
     property Frozen: Boolean read FFrozen;
   end;
@@ -108,6 +110,57 @@ begin
   FSymbolInsertionOrder.Free;
 
   inherited;
+end;
+
+procedure TGocciaObjectValue.GCMarkReferences;
+var
+  Pair: TPair<string, TGocciaPropertyDescriptor>;
+  SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
+  Desc: TGocciaPropertyDescriptor;
+begin
+  if GCMarked then Exit;
+  inherited; // Sets FGCMarked := True
+
+  // Mark prototype
+  if Assigned(FPrototype) then
+    FPrototype.GCMarkReferences;
+
+  // Mark all property descriptor values
+  for Pair in FPropertyDescriptors do
+  begin
+    Desc := Pair.Value;
+    if Desc is TGocciaPropertyDescriptorData then
+    begin
+      if Assigned(TGocciaPropertyDescriptorData(Desc).Value) then
+        TGocciaPropertyDescriptorData(Desc).Value.GCMarkReferences;
+    end
+    else if Desc is TGocciaPropertyDescriptorAccessor then
+    begin
+      if Assigned(TGocciaPropertyDescriptorAccessor(Desc).Getter) then
+        TGocciaPropertyDescriptorAccessor(Desc).Getter.GCMarkReferences;
+      if Assigned(TGocciaPropertyDescriptorAccessor(Desc).Setter) then
+        TGocciaPropertyDescriptorAccessor(Desc).Setter.GCMarkReferences;
+    end;
+  end;
+
+  // Mark symbol descriptor keys and values
+  for SymPair in FSymbolDescriptors do
+  begin
+    SymPair.Key.GCMarkReferences;
+    Desc := SymPair.Value;
+    if Desc is TGocciaPropertyDescriptorData then
+    begin
+      if Assigned(TGocciaPropertyDescriptorData(Desc).Value) then
+        TGocciaPropertyDescriptorData(Desc).Value.GCMarkReferences;
+    end
+    else if Desc is TGocciaPropertyDescriptorAccessor then
+    begin
+      if Assigned(TGocciaPropertyDescriptorAccessor(Desc).Getter) then
+        TGocciaPropertyDescriptorAccessor(Desc).Getter.GCMarkReferences;
+      if Assigned(TGocciaPropertyDescriptorAccessor(Desc).Setter) then
+        TGocciaPropertyDescriptorAccessor(Desc).Setter.GCMarkReferences;
+    end;
+  end;
 end;
 
 function TGocciaObjectValue.ToDebugString: string;

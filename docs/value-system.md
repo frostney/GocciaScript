@@ -72,6 +72,23 @@ classDiagram
     }
 ```
 
+## GC Integration
+
+Every `TGocciaValue` participates in the mark-and-sweep garbage collector:
+
+```pascal
+TGocciaValue = class(TInterfacedObject)
+  FGCMarked: Boolean;      // Set during mark phase if reachable
+  FGCPermanent: Boolean;   // If true, never collected (AST literals)
+  procedure AfterConstruction; override;  // Auto-registers with GC
+  procedure GCMarkReferences; virtual;    // Override to mark referenced values
+end;
+```
+
+- **`AfterConstruction`** — Every value auto-registers with `TGocciaGC.Instance` upon creation.
+- **`GCMarkReferences`** — Base implementation sets `GCMarked := True`. Subclasses override this to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements).
+- **`GCPermanent`** — Values embedded in the AST (created by the parser and stored in `TGocciaLiteralExpression`) are marked permanent. The GC skips them during sweep because the AST is not traversed during the mark phase.
+
 ## Interfaces
 
 Values expose capabilities through interfaces, enabling the evaluator to work with any value that supports a given operation:

@@ -25,6 +25,8 @@ type
 
 implementation
 
+uses Goccia.GC;
+
 constructor TGocciaBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
   FName := AName;
@@ -35,7 +37,9 @@ end;
 
 destructor TGocciaBuiltin.Destroy;
 begin
-  FBuiltinObject.Free;
+  // FBuiltinObject is GC-managed when GC is active; only free manually otherwise
+  if not Assigned(TGocciaGC.Instance) then
+    FBuiltinObject.Free;
   inherited;
 end;
 

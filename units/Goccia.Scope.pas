@@ -32,10 +32,15 @@ type
     FThisValue: TGocciaValue;
     FScopeKind: TGocciaScopeKind;
     FCustomLabel: string;
+    FGCMarked: Boolean;
   public
     constructor Create(AParent: TGocciaScope = nil; AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0);
     destructor Destroy; override;
     function CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''): TGocciaScope;
+
+    // Garbage collection support
+    procedure GCMarkReferences;
+    property GCMarked: Boolean read FGCMarked write FGCMarked;
 
     // New Define/Assign pattern
     procedure DefineLexicalBinding(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType; ALine: Integer = 0; AColumn: Integer = 0);
@@ -91,7 +96,7 @@ type
 
 implementation
 
-uses Goccia.Values.ClassHelper;
+uses Goccia.Values.ClassHelper, Goccia.GC;
 
 { TLexicalBinding }
 
@@ -117,6 +122,9 @@ begin
     FLexicalBindings := TDictionary<string, TLexicalBinding>.Create(ACapacity)
   else
     FLexicalBindings := TDictionary<string, TLexicalBinding>.Create;
+
+  if Assigned(TGocciaGC.Instance) then
+    TGocciaGC.Instance.RegisterScope(Self);
 end;
 
 destructor TGocciaScope.Destroy;
@@ -284,6 +292,31 @@ begin
   LexicalBinding.DeclarationType := dtLet;
   LexicalBinding.Initialized := True;
   FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
+end;
+
+{ TGocciaScope - GC support }
+
+procedure TGocciaScope.GCMarkReferences;
+var
+  Binding: TLexicalBinding;
+begin
+  if FGCMarked then Exit;
+  FGCMarked := True;
+
+  // Mark parent scope
+  if Assigned(FParent) then
+    FParent.GCMarkReferences;
+
+  // Mark ThisValue
+  if Assigned(FThisValue) then
+    FThisValue.GCMarkReferences;
+
+  // Mark all values in bindings
+  for Binding in FLexicalBindings.Values do
+  begin
+    if Assigned(Binding.Value) then
+      Binding.Value.GCMarkReferences;
+  end;
 end;
 
 // TGocciaCatchScope implementation

@@ -18,7 +18,7 @@ flowchart TD
     Evaluator --> Result
 ```
 
-The **Engine** (`Goccia.Engine.pas`) sits above this pipeline and orchestrates the entire process: it creates the interpreter, registers built-in globals, invokes the lexer/parser, and hands the AST to the interpreter for execution.
+The **Engine** (`Goccia.Engine.pas`) sits above this pipeline and orchestrates the entire process: it creates the interpreter, registers built-in globals, initializes the garbage collector, invokes the lexer/parser, and hands the AST to the interpreter for execution.
 
 ## Component Responsibilities
 
@@ -26,6 +26,7 @@ The **Engine** (`Goccia.Engine.pas`) sits above this pipeline and orchestrates t
 
 The top-level entry point. Provides static convenience methods (`RunScript`, `RunScriptFromFile`, `RunScriptFromStringList`) and manages:
 
+- **Garbage collector initialization** — Calls `TGocciaGC.Initialize`, registers the global scope as a GC root, and pins singleton values (`UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache, etc.).
 - **Built-in registration** — Selectively registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, error constructors) based on a `TGocciaGlobalBuiltins` flag set.
 - **Interpreter lifecycle** — Creates and owns the `TGocciaInterpreter` instance.
 - **Prototype chain setup** — Calls `RegisterBuiltinConstructors` to wire up the `Object → Array → Number → String` prototype chain.
@@ -149,3 +150,43 @@ Errors are handled through three mechanisms:
 1. **Pascal exceptions** — `TGocciaLexerError`, `TGocciaSyntaxError` for compile-time errors.
 2. **Error callback pattern** — The evaluator uses an `OnError` callback (via `TGocciaEvaluationContext`) for runtime errors, keeping evaluator functions pure.
 3. **JavaScript-level errors** — `TGocciaError` values (`Error`, `TypeError`, `ReferenceError`, `RangeError`) implement the JavaScript error semantics, propagated via `TGocciaThrowValue`. Error construction is centralized in `Goccia.Values.ErrorHelper.pas` which provides `ThrowTypeError`, `ThrowRangeError`, `ThrowReferenceError`, and `CreateErrorObject` helpers used across the codebase.
+
+## Memory Management
+
+GocciaScript uses a **mark-and-sweep garbage collector** (`Goccia.GC.pas`) to manage the lifecycle of runtime values. FreePascal provides manual memory management, but GocciaScript values have complex ownership patterns (closures, shared prototypes, aliased references across scopes) that make manual `Free` calls impractical.
+
+### GC Architecture
+
+```mermaid
+flowchart TD
+    subgraph Roots
+        Global["Global Scope"]
+        Active["Active Scope Stack\n(currently executing functions)"]
+        Pinned["Pinned Values\n(singletons, shared prototypes)"]
+        Temp["Temp Roots\n(Pascal-held references)"]
+    end
+    subgraph Mark["Mark Phase"]
+        Traverse["Traverse from all roots\nSet GCMarked := True"]
+    end
+    subgraph Sweep["Sweep Phase"]
+        Free["Free unmarked values and scopes\nSkip GCPermanent values"]
+    end
+    Roots --> Mark --> Sweep
+```
+
+### Value Categories
+
+| Category | Lifetime | Mechanism |
+|----------|----------|-----------|
+| **AST literals** | Permanent (script lifetime) | `GCPermanent := True` set in `TGocciaLiteralExpression.Create` |
+| **Singletons** | Permanent (process lifetime) | Pinned via `TGocciaGC.Instance.PinValue` during engine init |
+| **Runtime values** | Dynamic (collected when unreachable) | Registered via `AfterConstruction`, freed during sweep |
+| **Pascal-held values** | Temporary (explicit protection) | `AddTempRoot` / `RemoveTempRoot` |
+
+### Registration
+
+All `TGocciaValue` instances auto-register with the GC in `AfterConstruction`. All `TGocciaScope` instances register in their constructor. The GC tracks both in separate managed lists.
+
+### Collection Trigger
+
+The GC exposes `Collect` (explicit) and `CollectIfNeeded` (threshold-based, triggered after a configurable number of allocations). The benchmark runner calls `Collect` before each measurement round to normalize heap state and reduce timing variance.

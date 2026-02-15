@@ -77,6 +77,9 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; AValue: TGocciaValue);
     function Includes(const AValue: TGocciaValue; FromIndex: Integer = 0): Boolean;
+
+    procedure GCMarkReferences; override;
+
     property Elements: TObjectList<TGocciaValue> read FElements;
   end;
 
@@ -218,6 +221,21 @@ destructor TGocciaArrayValue.Destroy;
 begin
   FElements.Free;
   inherited;
+end;
+
+procedure TGocciaArrayValue.GCMarkReferences;
+var
+  I: Integer;
+begin
+  if GCMarked then Exit;
+  inherited; // Marks self + object properties/prototype
+
+  // Mark all elements
+  for I := 0 to FElements.Count - 1 do
+  begin
+    if Assigned(FElements[I]) then
+      FElements[I].GCMarkReferences;
+  end;
 end;
 
 function TGocciaArrayValue.ToStringTag: string;

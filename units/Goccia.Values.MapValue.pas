@@ -40,6 +40,8 @@ type
     function ToArray: TGocciaArrayValue;
     function ToStringTag: string; override;
 
+    procedure GCMarkReferences; override;
+
     property Entries: TList<TGocciaMapEntry> read FEntries;
   end;
 
@@ -70,6 +72,23 @@ destructor TGocciaMapValue.Destroy;
 begin
   FEntries.Free;
   inherited;
+end;
+
+procedure TGocciaMapValue.GCMarkReferences;
+var
+  I: Integer;
+begin
+  if GCMarked then Exit;
+  inherited; // Marks self + object properties/prototype
+
+  // Mark all map entries (keys and values)
+  for I := 0 to FEntries.Count - 1 do
+  begin
+    if Assigned(FEntries[I].Key) then
+      FEntries[I].Key.GCMarkReferences;
+    if Assigned(FEntries[I].Value) then
+      FEntries[I].Value.GCMarkReferences;
+  end;
 end;
 
 function TGocciaMapValue.FindEntry(AKey: TGocciaValue): Integer;

@@ -68,6 +68,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Interpreter | `Goccia.Interpreter.pas` | AST execution, module loading, scope ownership |
 | Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules) |
 | Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ |
+| Garbage Collector | `Goccia.GC.pas` | Mark-and-sweep memory management for runtime values |
 
 ## Critical Rules
 
@@ -98,7 +99,17 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 - Each test file should focus on a single concern.
 - Always verify changes by running: `./build.pas testrunner && ./build/TestRunner tests`
 
-### 4. Language Restrictions
+### 4. Garbage Collector Awareness
+
+GocciaScript uses a mark-and-sweep garbage collector (`Goccia.GC.pas`). All `TGocciaValue` instances auto-register with the GC via `AfterConstruction`. Key rules:
+
+- **AST literal values** are marked `GCPermanent := True` by `TGocciaLiteralExpression.Create`. The GC never collects permanent values because the AST is invisible to the mark phase.
+- **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache) are pinned via `TGocciaGC.Instance.PinValue` during engine initialization.
+- **Values held only by Pascal code** (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot` for the duration they are needed. Example: benchmark functions held in a `TObjectList`.
+- **Scopes** register with the GC in their constructor. Active call scopes are tracked via `PushActiveScope`/`PopActiveScope` in `TGocciaFunctionValue.Call`.
+- Each value type must override `GCMarkReferences` to mark all `TGocciaValue` references it holds (prototype, closure, elements, property values, etc.).
+
+### 5. Language Restrictions
 
 GocciaScript intentionally excludes these JavaScript features — do **not** add support for them:
 - `var` declarations (use `let`/`const`)
@@ -138,6 +149,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Interface segregation** for value capabilities (`IPropertyMethods`, `IIndexMethods`)
 - **Chain of responsibility** for scope lookup
 - **Recursive descent** for parsing
+- **Mark-and-sweep** for garbage collection (`TGocciaGC`)
 
 ## Value System
 

@@ -58,7 +58,7 @@ type
 implementation
 
 uses
-  Goccia.Values.ClassHelper;
+  Goccia.Values.ClassHelper, Goccia.GC;
 
 const
   WARMUP_ITERATIONS = 3;
@@ -220,6 +220,10 @@ begin
     // Phase 3: Multiple measurement rounds, each running the full iteration count
     for Round := 0 to MEASUREMENT_ROUNDS - 1 do
     begin
+      // Run GC before each measurement round to start with a clean heap
+      if Assigned(TGocciaGC.Instance) then
+        TGocciaGC.Instance.Collect;
+
       StartTime := GetTickCount64;
       for I := 1 to Iterations do
         BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -283,45 +287,65 @@ var
 begin
   StartTime := GetTickCount64;
 
-  ResultsArray := TGocciaArrayValue.Create;
+  // Protect ALL benchmark functions from GC before running any benchmarks.
+  // These are held by Pascal TBenchmarkCase objects, not in GocciaScript scopes,
+  // so the GC wouldn't see them as roots otherwise.
+  if Assigned(TGocciaGC.Instance) then
+    for I := 0 to FRegisteredBenchmarks.Count - 1 do
+      TGocciaGC.Instance.AddTempRoot(FRegisteredBenchmarks[I].BenchFunction);
 
-  for I := 0 to FRegisteredBenchmarks.Count - 1 do
-  begin
-    BenchCase := FRegisteredBenchmarks[I];
+  try
+    ResultsArray := TGocciaArrayValue.Create;
+    // Protect the results array from GC - it's a local Pascal variable
+    if Assigned(TGocciaGC.Instance) then
+      TGocciaGC.Instance.AddTempRoot(ResultsArray);
 
-    try
-      BenchResult := RunSingleBenchmark(BenchCase);
+    for I := 0 to FRegisteredBenchmarks.Count - 1 do
+    begin
+      BenchCase := FRegisteredBenchmarks[I];
 
-      SingleResult := TGocciaObjectValue.Create;
-      SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchResult.Name));
-      SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchResult.SuiteName));
-      SingleResult.AssignProperty('opsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.OpsPerSec));
-      SingleResult.AssignProperty('meanMs', TGocciaNumberLiteralValue.Create(BenchResult.MeanMs));
-      SingleResult.AssignProperty('iterations', TGocciaNumberLiteralValue.Create(BenchResult.Iterations));
-      SingleResult.AssignProperty('totalMs', TGocciaNumberLiteralValue.Create(BenchResult.TotalMs));
+      try
+        BenchResult := RunSingleBenchmark(BenchCase);
 
-      ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
-    except
-      on E: Exception do
-      begin
         SingleResult := TGocciaObjectValue.Create;
-        SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchCase.Name));
-        SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchCase.SuiteName));
-        SingleResult.AssignProperty('error', TGocciaStringLiteralValue.Create(E.Message));
+        SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchResult.Name));
+        SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchResult.SuiteName));
+        SingleResult.AssignProperty('opsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.OpsPerSec));
+        SingleResult.AssignProperty('meanMs', TGocciaNumberLiteralValue.Create(BenchResult.MeanMs));
+        SingleResult.AssignProperty('iterations', TGocciaNumberLiteralValue.Create(BenchResult.Iterations));
+        SingleResult.AssignProperty('totalMs', TGocciaNumberLiteralValue.Create(BenchResult.TotalMs));
 
         ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+      except
+        on E: Exception do
+        begin
+          SingleResult := TGocciaObjectValue.Create;
+          SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchCase.Name));
+          SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchCase.SuiteName));
+          SingleResult.AssignProperty('error', TGocciaStringLiteralValue.Create(E.Message));
+
+          ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+        end;
       end;
     end;
+
+    TotalDuration := GetTickCount64 - StartTime;
+
+    ResultObj := TGocciaObjectValue.Create;
+    ResultObj.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.Create(FRegisteredBenchmarks.Count));
+    ResultObj.AssignProperty('results', ResultsArray);
+    ResultObj.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
+
+    Result := ResultObj;
+  finally
+    // Remove ALL benchmark functions and results array from temp roots
+    if Assigned(TGocciaGC.Instance) then
+    begin
+      for I := 0 to FRegisteredBenchmarks.Count - 1 do
+        TGocciaGC.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].BenchFunction);
+      TGocciaGC.Instance.RemoveTempRoot(ResultsArray);
+    end;
   end;
-
-  TotalDuration := GetTickCount64 - StartTime;
-
-  ResultObj := TGocciaObjectValue.Create;
-  ResultObj.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.Create(FRegisteredBenchmarks.Count));
-  ResultObj.AssignProperty('results', ResultsArray);
-  ResultObj.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
-
-  Result := ResultObj;
 end;
 
 end.

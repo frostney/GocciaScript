@@ -151,6 +151,7 @@ flowchart LR
 | Parser | `Goccia.Parser.pas` | Recursive descent AST construction |
 | Interpreter | `Goccia.Interpreter.pas` | Execution orchestration, module loading |
 | Evaluator | `Goccia.Evaluator.pas` | Pure-function AST evaluation |
+| GC | `Goccia.GC.pas` | Mark-and-sweep garbage collection |
 
 See [Architecture](docs/architecture.md) for the full deep-dive.
 

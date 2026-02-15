@@ -30,6 +30,7 @@ type
 
     procedure InitializePrototype;
     property StringPrototype: TGocciaObjectValue read FStringPrototype write FStringPrototype;
+    procedure GCMarkReferences; override;
     property Primitive: TGocciaStringLiteralValue read FPrimitive;
 
     // String prototype methods
@@ -93,8 +94,18 @@ end;
 
 destructor TGocciaStringObjectValue.Destroy;
 begin
-  // Don't free FPrimitiveValue - it might be referenced elsewhere
+  // Don't free FPrimitiveValue - it's GC-managed
   inherited Destroy;
+end;
+
+procedure TGocciaStringObjectValue.GCMarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FPrimitive) then
+    FPrimitive.GCMarkReferences;
+  if Assigned(FStringPrototype) then
+    FStringPrototype.GCMarkReferences;
 end;
 
 function TGocciaStringObjectValue.TypeName: string;

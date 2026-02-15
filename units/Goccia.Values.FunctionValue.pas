@@ -28,6 +28,8 @@ type
 
     function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; override;
     function CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
+    procedure GCMarkReferences; override;
+
     property Parameters: TGocciaParameterArray read FParameters;
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
     property Closure: TGocciaScope read FClosure;
@@ -41,6 +43,8 @@ type
     FOwningClass: TGocciaValue; // TGocciaClassValue stored as TGocciaValue to avoid circular dependency
   public
     constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
+    procedure GCMarkReferences; override;
+
     property SuperClass: TGocciaValue read FSuperClass write FSuperClass;
     property OwningClass: TGocciaValue read FOwningClass write FOwningClass;
   end;
@@ -48,7 +52,7 @@ type
 implementation
 
 uses
-  Goccia.Evaluator, Goccia.Values.ClassHelper, Goccia.Values.ArrayValue;
+  Goccia.Evaluator, Goccia.Values.ClassHelper, Goccia.Values.ArrayValue, Goccia.GC;
 
 { TGocciaFunctionValue }
 
@@ -81,6 +85,16 @@ begin
   inherited;
 end;
 
+procedure TGocciaFunctionValue.GCMarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited; // Marks self + object properties/prototype
+
+  // Mark the closure scope
+  if Assigned(FClosure) then
+    FClosure.GCMarkReferences;
+end;
+
 function TGocciaFunctionValue.Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   I, J: Integer;
@@ -92,6 +106,10 @@ var
 begin
   // Create call scope
   CallScope := TGocciaScope.Create(FClosure, skFunction, FName, Length(FParameters) + 2);
+
+  // Register with GC as an active scope (protects it from collection during execution)
+  if Assigned(TGocciaGC.Instance) then
+    TGocciaGC.Instance.PushActiveScope(CallScope);
   try
     // Set up evaluation context for default parameter evaluation
     Context.Scope := FClosure;
@@ -261,9 +279,10 @@ begin
     end;
 
   finally
-    // Don't free CallScope if it might be referenced by closures
-    // TODO: Implement proper reference counting for scopes
-    // CallScope.Free;
+    // Pop active scope from GC stack - the scope may still be alive
+    // if captured by closures; the GC will determine reachability
+    if Assigned(TGocciaGC.Instance) then
+      TGocciaGC.Instance.PopActiveScope;
   end;
 end;
 
@@ -307,6 +326,18 @@ constructor TGocciaMethodValue.Create(AParameters: TGocciaParameterArray; ABodyS
 begin
   inherited Create(AParameters, ABodyStatements, AClosure, AName);
   FSuperClass := ASuperClass;
+end;
+
+procedure TGocciaMethodValue.GCMarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited; // Marks self + object properties/prototype + closure
+
+  // Mark method-specific references
+  if Assigned(FSuperClass) then
+    FSuperClass.GCMarkReferences;
+  if Assigned(FOwningClass) then
+    FOwningClass.GCMarkReferences;
 end;
 
 end.

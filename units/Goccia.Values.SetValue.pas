@@ -32,6 +32,8 @@ type
     function ToArray: TGocciaArrayValue;
     function ToStringTag: string; override;
 
+    procedure GCMarkReferences; override;
+
     property Items: TList<TGocciaValue> read FItems;
   end;
 
@@ -59,6 +61,21 @@ destructor TGocciaSetValue.Destroy;
 begin
   FItems.Free;
   inherited;
+end;
+
+procedure TGocciaSetValue.GCMarkReferences;
+var
+  I: Integer;
+begin
+  if GCMarked then Exit;
+  inherited; // Marks self + object properties/prototype
+
+  // Mark all set items
+  for I := 0 to FItems.Count - 1 do
+  begin
+    if Assigned(FItems[I]) then
+      FItems[I].GCMarkReferences;
+  end;
 end;
 
 function TGocciaSetValue.ContainsValue(AValue: TGocciaValue): Boolean;

@@ -118,6 +118,32 @@ GocciaScript uses a layered error approach:
 
 **Why not exceptions everywhere?** Pascal exceptions disrupt the pure-function model of the evaluator. The callback pattern allows the evaluator to signal errors without unwinding the call stack, making control flow explicit. The exceptions to this rule (`TGocciaThrowValue`, `TGocciaReturnValue`, `TGocciaBreakSignal`) are used only for non-local exits where unwinding is the intended behavior.
 
+## Mark-and-Sweep Garbage Collector
+
+GocciaScript runs inside a FreePascal host with manual memory management. Despite this, the runtime uses a tracing garbage collector (`Goccia.GC.pas`) rather than relying on manual `Free` calls or reference counting.
+
+**Why not manual memory management?**
+
+- **Aliased references** — A value assigned to multiple variables, captured in a closure, and stored in an array has no single owner. Determining when to free it requires tracking all references.
+- **Shared prototypes** — Array methods, function prototypes, and class prototypes are shared across many instances. Manual lifetime tracking would be fragile.
+- **Closure captures** — Arrow functions capture their enclosing scope, creating non-obvious reference chains between scopes and values.
+
+**Why not reference counting (via `TInterfacedObject`)?**
+
+`TGocciaValue` inherits from `TInterfacedObject`, which provides automatic reference counting. However, values are stored as class references (`TGocciaValue`), not interface references. Switching to interface variables throughout the evaluator would require a large-scale refactor and introduce circular reference issues (objects referencing their prototypes and vice versa).
+
+**Why mark-and-sweep?**
+
+- **Simplicity** — Two phases (mark reachable, sweep unreachable) with straightforward implementation.
+- **Handles cycles** — Circular references between objects, closures, and scopes are collected correctly.
+- **Measurable impact** — Running `GC.Collect` before benchmark measurement rounds reduced ops/sec variance from 20-30% to 1-3%.
+
+**AST literal values and `GCPermanent`:**
+
+The parser creates `TGocciaValue` instances (numbers, strings, booleans) and stores them inside `TGocciaLiteralExpression` AST nodes. These values auto-register with the GC but are invisible to the mark phase, which only traverses scopes and roots — not the AST. Without protection, the GC would free them and subsequent evaluations of the same AST node would access freed memory.
+
+The solution is the `GCPermanent` flag: `TGocciaLiteralExpression.Create` sets `GCPermanent := True` on its value. The sweep phase skips permanent values unconditionally. This is correct because AST nodes live for the entire script execution, so their values should never be collected. An alternative would be having the AST own its values (freeing them in destructors), but that would require the evaluator to create runtime copies of every literal — adding allocation overhead to the hot path.
+
 ## Configurable Built-ins
 
 Built-ins are registered via a `TGocciaGlobalBuiltins` set of flags:

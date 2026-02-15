@@ -459,6 +459,11 @@ constructor TGocciaLiteralExpression.Create(AValue: TGocciaValue;
 begin
   inherited Create(ALine, AColumn);
   FValue := AValue;
+  // Mark AST-owned values as permanent so the GC never collects them.
+  // These values are referenced by the AST which is invisible to the GC's
+  // mark phase (it only traverses scopes and roots).
+  if Assigned(FValue) then
+    FValue.GCPermanent := True;
 end;
 
 { TGocciaTemplateLiteralExpression }

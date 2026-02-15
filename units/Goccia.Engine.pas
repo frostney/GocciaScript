@@ -13,7 +13,7 @@ uses
   Goccia.Builtins.GlobalNumber, Goccia.Builtins.Globals, Goccia.Builtins.JSON,
   Goccia.Builtins.GlobalSymbol, Goccia.Builtins.GlobalSet, Goccia.Builtins.GlobalMap,
   Goccia.Builtins.TestAssertions, Goccia.Builtins.Benchmark, Goccia.Scope, Goccia.Modules,
-  Goccia.Values.Interfaces, Goccia.Values.ClassValue, Goccia.Values.Error;
+  Goccia.Values.Interfaces, Goccia.Values.ClassValue, Goccia.Values.Error, Goccia.GC;
 
 type
   TGocciaGlobalBuiltin = (
@@ -115,13 +115,52 @@ type
 implementation
 
 constructor TGocciaEngine.Create(const AFileName: string; ASourceLines: TStringList; AGlobals: TGocciaGlobalBuiltins);
+var
+  I: Integer;
 begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FGlobals := AGlobals;
 
+  // Initialize the garbage collector (singleton - only creates if not yet initialized)
+  TGocciaGC.Initialize;
+
+  // Note: We don't collect between engines because class-level shared objects
+  // (like TGocciaFunctionBase.FSharedPrototype and its children) are only
+  // reachable via class vars, not via GC roots. The GC handles collection
+  // during execution (between function calls, in benchmarks, etc.)
+
   // Create interpreter without globals
   FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines);
+
+  // Register the global scope as a GC root
+  TGocciaGC.Instance.AddRoot(FInterpreter.GlobalScope);
+
+  // Pin singleton values so the GC never collects them
+  if Assigned(TGocciaUndefinedLiteralValue.UndefinedValue) then
+    TGocciaGC.Instance.PinValue(TGocciaUndefinedLiteralValue.UndefinedValue);
+  if Assigned(TGocciaBooleanLiteralValue.TrueValue) then
+    TGocciaGC.Instance.PinValue(TGocciaBooleanLiteralValue.TrueValue);
+  if Assigned(TGocciaBooleanLiteralValue.FalseValue) then
+    TGocciaGC.Instance.PinValue(TGocciaBooleanLiteralValue.FalseValue);
+  if Assigned(TGocciaNumberLiteralValue.NaNValue) then
+    TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.NaNValue);
+  if Assigned(TGocciaNumberLiteralValue.ZeroValue) then
+    TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.ZeroValue);
+  if Assigned(TGocciaNumberLiteralValue.OneValue) then
+    TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.OneValue);
+  if Assigned(TGocciaNumberLiteralValue.NegativeZeroValue) then
+    TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.NegativeZeroValue);
+  if Assigned(TGocciaNumberLiteralValue.InfinityValue) then
+    TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.InfinityValue);
+  if Assigned(TGocciaNumberLiteralValue.NegativeInfinityValue) then
+    TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.NegativeInfinityValue);
+  // Pin SmallInt cache values
+  for I := 0 to 255 do
+  begin
+    if Assigned(TGocciaNumberLiteralValue.SmallInt(I)) then
+      TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.SmallInt(I));
+  end;
 
   // Register built-ins based on the globals set
   RegisterBuiltIns;
@@ -129,8 +168,12 @@ end;
 
 destructor TGocciaEngine.Destroy;
 begin
-  // Free builtin objects first, before freeing the interpreter
-  // The scope only holds references, the engine owns these objects
+  // Remove global scope from GC roots before cleanup
+  if Assigned(TGocciaGC.Instance) and Assigned(FInterpreter) then
+    TGocciaGC.Instance.RemoveRoot(FInterpreter.GlobalScope);
+
+  // Free builtin wrapper objects (these are NOT GC-managed, but their
+  // FBuiltinObject fields ARE - the wrapper destructors skip freeing them)
   if Assigned(FBuiltinConsole) then
     FBuiltinConsole.Free;
   if Assigned(FBuiltinMath) then

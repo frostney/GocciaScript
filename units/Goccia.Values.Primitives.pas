@@ -13,13 +13,22 @@ type
   TGocciaStringLiteralValue = class;
 
   TGocciaValue = class(TInterfacedObject)
+  private
+    FGCMarked: Boolean;
+    FGCPermanent: Boolean;
   public
+    procedure AfterConstruction; override;
+    procedure GCMarkReferences; virtual;
+
     function TypeName: string; virtual; abstract;
     function TypeOf: string; virtual; abstract;
 
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; virtual; abstract;
     function ToNumberLiteral: TGocciaNumberLiteralValue; virtual; abstract;
     function ToStringLiteral: TGocciaStringLiteralValue; virtual; abstract;
+
+    property GCMarked: Boolean read FGCMarked write FGCMarked;
+    property GCPermanent: Boolean read FGCPermanent write FGCPermanent;
   end;
 
   TGocciaNullLiteralValue = class(TGocciaValue)
@@ -136,7 +145,21 @@ type
 implementation
 
 uses
-  Goccia.Values.Constants, Goccia.Values.ClassHelper, Math;
+  Goccia.Values.Constants, Goccia.Values.ClassHelper, Math, Goccia.GC;
+
+{ TGocciaValue }
+
+procedure TGocciaValue.AfterConstruction;
+begin
+  inherited;
+  if Assigned(TGocciaGC.Instance) then
+    TGocciaGC.Instance.RegisterValue(Self);
+end;
+
+procedure TGocciaValue.GCMarkReferences;
+begin
+  FGCMarked := True;
+end;
 
 { Utility functions }
 

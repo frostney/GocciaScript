@@ -13,6 +13,7 @@ type
     FPrimitive: TGocciaNumberLiteralValue;
   public
     constructor Create(APrimitive: TGocciaNumberLiteralValue);
+    procedure GCMarkReferences; override;
     property Primitive: TGocciaNumberLiteralValue read FPrimitive;
   end;
 
@@ -22,6 +23,14 @@ constructor TGocciaNumberObjectValue.Create(APrimitive: TGocciaNumberLiteralValu
 begin
   inherited Create;
   FPrimitive := APrimitive;
+end;
+
+procedure TGocciaNumberObjectValue.GCMarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FPrimitive) then
+    FPrimitive.GCMarkReferences;
 end;
 
 end.

@@ -39,6 +39,7 @@ type
 
 implementation
 
+uses Goccia.GC;
 
 { TGocciaInterpreter }
 
@@ -54,8 +55,9 @@ end;
 
 destructor TGocciaInterpreter.Destroy;
 begin
-  // Free scope first to avoid accessing freed method pointers in builtin objects
-  FGlobalScope.Free;
+  // FGlobalScope is GC-managed when GC is active; only free manually otherwise
+  if not Assigned(TGocciaGC.Instance) then
+    FGlobalScope.Free;
   FModules.Free;
   // Don't free FSourceLines - we don't own it, it's owned by the caller
 
