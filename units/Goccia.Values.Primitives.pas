@@ -145,7 +145,7 @@ type
 implementation
 
 uses
-  Goccia.Values.Constants, Goccia.Values.ClassHelper, Math, Goccia.GC;
+  Goccia.Values.Constants, Goccia.Values.ClassHelper, Math, Goccia.GarbageCollector;
 
 { TGocciaValue }
 

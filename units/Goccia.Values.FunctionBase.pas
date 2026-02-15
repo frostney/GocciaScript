@@ -65,7 +65,7 @@ type
 implementation
 
 uses
-  Goccia.Values.NativeFunction, Goccia.GC;
+  Goccia.Values.NativeFunction, Goccia.GarbageCollector;
 
 { TGocciaFunctionBase }
 

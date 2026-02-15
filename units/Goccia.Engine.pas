@@ -13,7 +13,7 @@ uses
   Goccia.Builtins.GlobalNumber, Goccia.Builtins.Globals, Goccia.Builtins.JSON,
   Goccia.Builtins.GlobalSymbol, Goccia.Builtins.GlobalSet, Goccia.Builtins.GlobalMap,
   Goccia.Builtins.TestAssertions, Goccia.Builtins.Benchmark, Goccia.Scope, Goccia.Modules,
-  Goccia.Values.Interfaces, Goccia.Values.ClassValue, Goccia.Values.Error, Goccia.GC;
+  Goccia.Values.Interfaces, Goccia.Values.ClassValue, Goccia.Values.Error, Goccia.GarbageCollector;
 
 type
   TGocciaGlobalBuiltin = (

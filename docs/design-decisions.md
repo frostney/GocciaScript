@@ -120,7 +120,7 @@ GocciaScript uses a layered error approach:
 
 ## Mark-and-Sweep Garbage Collector
 
-GocciaScript runs inside a FreePascal host with manual memory management. Despite this, the runtime uses a tracing garbage collector (`Goccia.GC.pas`) rather than relying on manual `Free` calls or reference counting.
+GocciaScript runs inside a FreePascal host with manual memory management. Despite this, the runtime uses a tracing garbage collector (`Goccia.GarbageCollector.pas`) rather than relying on manual `Free` calls or reference counting.
 
 **Why not manual memory management?**
 

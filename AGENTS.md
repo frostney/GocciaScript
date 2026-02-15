@@ -68,7 +68,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Interpreter | `Goccia.Interpreter.pas` | AST execution, module loading, scope ownership |
 | Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules) |
 | Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ |
-| Garbage Collector | `Goccia.GC.pas` | Mark-and-sweep memory management for runtime values |
+| Garbage Collector | `Goccia.GarbageCollector.pas` | Mark-and-sweep memory management for runtime values |
 
 ## Critical Rules
 
@@ -101,7 +101,7 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 
 ### 4. Garbage Collector Awareness
 
-GocciaScript uses a mark-and-sweep garbage collector (`Goccia.GC.pas`). All `TGocciaValue` instances auto-register with the GC via `AfterConstruction`. Key rules:
+GocciaScript uses a mark-and-sweep garbage collector (`Goccia.GarbageCollector.pas`). All `TGocciaValue` instances auto-register with the GC via `AfterConstruction`. Key rules:
 
 - **AST literal values** are marked `GCPermanent := True` by `TGocciaLiteralExpression.Create`. The GC never collects permanent values because the AST is invisible to the mark phase.
 - **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache) are pinned via `TGocciaGC.Instance.PinValue` during engine initialization.

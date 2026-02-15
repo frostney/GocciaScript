@@ -153,7 +153,7 @@ Errors are handled through three mechanisms:
 
 ## Memory Management
 
-GocciaScript uses a **mark-and-sweep garbage collector** (`Goccia.GC.pas`) to manage the lifecycle of runtime values. FreePascal provides manual memory management, but GocciaScript values have complex ownership patterns (closures, shared prototypes, aliased references across scopes) that make manual `Free` calls impractical.
+GocciaScript uses a **mark-and-sweep garbage collector** (`Goccia.GarbageCollector.pas`) to manage the lifecycle of runtime values. FreePascal provides manual memory management, but GocciaScript values have complex ownership patterns (closures, shared prototypes, aliased references across scopes) that make manual `Free` calls impractical.
 
 ### GC Architecture
 

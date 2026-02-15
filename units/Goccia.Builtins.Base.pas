@@ -25,7 +25,7 @@ type
 
 implementation
 
-uses Goccia.GC;
+uses Goccia.GarbageCollector;
 
 constructor TGocciaBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin

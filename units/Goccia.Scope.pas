@@ -96,7 +96,7 @@ type
 
 implementation
 
-uses Goccia.Values.ClassHelper, Goccia.GC;
+uses Goccia.Values.ClassHelper, Goccia.GarbageCollector;
 
 { TLexicalBinding }
 

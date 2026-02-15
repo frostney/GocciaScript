@@ -52,7 +52,7 @@ type
 implementation
 
 uses
-  Goccia.Evaluator, Goccia.Values.ClassHelper, Goccia.Values.ArrayValue, Goccia.GC;
+  Goccia.Evaluator, Goccia.Values.ClassHelper, Goccia.Values.ArrayValue, Goccia.GarbageCollector;
 
 { TGocciaFunctionValue }
 

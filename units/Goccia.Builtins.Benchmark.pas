@@ -58,7 +58,7 @@ type
 implementation
 
 uses
-  Goccia.Values.ClassHelper, Goccia.GC;
+  Goccia.Values.ClassHelper, Goccia.GarbageCollector;
 
 const
   WARMUP_ITERATIONS = 3;

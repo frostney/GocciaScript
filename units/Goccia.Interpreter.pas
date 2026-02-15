@@ -39,7 +39,7 @@ type
 
 implementation
 
-uses Goccia.GC;
+uses Goccia.GarbageCollector;
 
 { TGocciaInterpreter }
 

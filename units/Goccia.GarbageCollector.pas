@@ -1,4 +1,4 @@
-unit Goccia.GC;
+unit Goccia.GarbageCollector;
 
 {$I Goccia.inc}
 
