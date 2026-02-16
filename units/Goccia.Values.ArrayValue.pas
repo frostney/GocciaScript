@@ -11,6 +11,9 @@ uses
 type
   TGocciaArrayValue = class(TGocciaObjectValue)
   private
+    class var FSharedArrayPrototype: TGocciaObjectValue;
+    class var FPrototypeMethodHost: TGocciaArrayValue;
+
     function GetLengthProperty(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; inline;
 
     // Helper methods for reducing duplication
@@ -60,6 +63,7 @@ type
   public
     constructor Create;
     destructor Destroy; override;
+    procedure InitializePrototype;
 
     function ToStringTag: string; override;
 
@@ -86,7 +90,7 @@ type
 implementation
 
 uses
-  Goccia.Evaluator, Goccia.Values.ObjectPropertyDescriptor, Generics.Defaults, Goccia.Utils, Goccia.Evaluator.Comparison, Goccia.Values.ClassHelper, Goccia.Values.FunctionValue;
+  Goccia.Evaluator, Goccia.Values.ObjectPropertyDescriptor, Generics.Defaults, Goccia.Utils, Goccia.Evaluator.Comparison, Goccia.Values.ClassHelper, Goccia.Values.FunctionValue, Goccia.GarbageCollector;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var
@@ -184,40 +188,54 @@ end;
 constructor TGocciaArrayValue.Create;
 begin
   inherited Create;
-
   FElements := TObjectList<TGocciaValue>.Create(False);
-  FPrototype := TGocciaObjectValue.Create;
+  InitializePrototype;
+  if Assigned(FSharedArrayPrototype) then
+    FPrototype := FSharedArrayPrototype;
+end;
 
-  FPrototype.DefineProperty('length', TGocciaPropertyDescriptorAccessor.Create(TGocciaNativeFunctionValue.Create(GetLengthProperty, 'length', 0), nil, [pfEnumerable, pfConfigurable]));
-  // Array prototype methods: writable, non-enumerable, configurable
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayMap, 'map', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFilter, 'filter', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayReduce, 'reduce', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayForEach, 'forEach', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySome, 'some', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayEvery, 'every', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFlat, 'flat', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFlatMap, 'flatMap', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayJoin, 'join', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayIncludes, 'includes', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayPush, 'push', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayPop, 'pop', 0));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySlice, 'slice', 2));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFind, 'find', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFindIndex, 'findIndex', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayIndexOf, 'indexOf', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayLastIndexOf, 'lastIndexOf', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayConcat, 'concat', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayReverse, 'reverse', 0));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToReversed, 'toReversed', 0));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToSorted, 'toSorted', 0));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToSpliced, 'toSpliced', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySort, 'sort', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySplice, 'splice', 2));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayShift, 'shift', 0));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayUnshift, 'unshift', -1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFill, 'fill', 1));
-  FPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayAt, 'at', 1));
+procedure TGocciaArrayValue.InitializePrototype;
+begin
+  if Assigned(FSharedArrayPrototype) then Exit;
+
+  FSharedArrayPrototype := TGocciaObjectValue.Create;
+  FPrototypeMethodHost := Self;
+
+  FSharedArrayPrototype.DefineProperty('length', TGocciaPropertyDescriptorAccessor.Create(TGocciaNativeFunctionValue.Create(GetLengthProperty, 'length', 0), nil, [pfEnumerable, pfConfigurable]));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayMap, 'map', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFilter, 'filter', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayReduce, 'reduce', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayForEach, 'forEach', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySome, 'some', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayEvery, 'every', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFlat, 'flat', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFlatMap, 'flatMap', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayJoin, 'join', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayIncludes, 'includes', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayPush, 'push', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayPop, 'pop', 0));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySlice, 'slice', 2));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFind, 'find', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFindIndex, 'findIndex', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayIndexOf, 'indexOf', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayLastIndexOf, 'lastIndexOf', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayConcat, 'concat', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayReverse, 'reverse', 0));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToReversed, 'toReversed', 0));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToSorted, 'toSorted', 0));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToSpliced, 'toSpliced', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySort, 'sort', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArraySplice, 'splice', 2));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayShift, 'shift', 0));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayUnshift, 'unshift', -1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFill, 'fill', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayAt, 'at', 1));
+
+  if Assigned(TGocciaGC.Instance) then
+  begin
+    TGocciaGC.Instance.PinValue(FSharedArrayPrototype);
+    TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
+  end;
 end;
 
 destructor TGocciaArrayValue.Destroy;
@@ -258,7 +276,7 @@ end;
 
 function TGocciaArrayValue.GetLengthProperty(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(FElements.Count);
+  Result := TGocciaNumberLiteralValue.Create(TGocciaArrayValue(ThisValue).Elements.Count);
 end;
 
 // Index-based element access implementations
@@ -321,25 +339,27 @@ end;
 
 function TGocciaArrayValue.ArrayMap(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   ResultArray: TGocciaArrayValue;
   Callback: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
   Callback := ValidateArrayMethodCall('map', Args, ThisValue, True);
+  Arr := TGocciaArrayValue(ThisValue);
   ResultArray := TGocciaArrayValue.Create;
 
   CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
   try
-    for I := 0 to FElements.Count - 1 do
+    for I := 0 to Arr.Elements.Count - 1 do
     begin
-      if IsArrayHole(FElements[I]) then
+      if IsArrayHole(Arr.Elements[I]) then
       begin
         ResultArray.Elements.Add(nil);
         Continue;
       end;
 
-      CallArgs.SetElement(0, FElements[I]);
+      CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       ResultArray.Elements.Add(InvokeCallback(Callback, CallArgs, ThisValue));
     end;
@@ -352,6 +372,7 @@ end;
 
 function TGocciaArrayValue.ArrayFilter(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
   ResultArray: TGocciaArrayValue;
   CallArgs: TGocciaArgumentsCollection;
@@ -359,23 +380,24 @@ var
   I: Integer;
 begin
   Callback := ValidateArrayMethodCall('filter', Args, ThisValue, True);
+  Arr := TGocciaArrayValue(ThisValue);
   ResultArray := TGocciaArrayValue.Create;
 
   CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
   try
-    for I := 0 to Elements.Count - 1 do
+    for I := 0 to Arr.Elements.Count - 1 do
     begin
-      if IsArrayHole(Elements[I]) then
+      if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
-      CallArgs.SetElement(0, Elements[I]);
+      CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       PredicateResult := InvokeCallback(Callback, CallArgs, ThisValue);
 
       if PredicateResult is TGocciaBooleanLiteralValue then
       begin
         if TGocciaBooleanLiteralValue(PredicateResult).Value then
-          ResultArray.Elements.Add(Elements[I]);
+          ResultArray.Elements.Add(Arr.Elements[I]);
       end
       else
         ThrowError('Filter callback must return boolean');
@@ -389,12 +411,14 @@ end;
 
 function TGocciaArrayValue.ArrayReduce(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
   Accumulator: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   I, StartIndex: Integer;
 begin
   Callback := ValidateArrayMethodCall('reduce', Args, ThisValue, True);
+  Arr := TGocciaArrayValue(ThisValue);
 
   if Args.Length >= 2 then
   begin
@@ -403,21 +427,21 @@ begin
   end
   else
   begin
-    if Elements.Count = 0 then
+    if Arr.Elements.Count = 0 then
       ThrowError('Reduce of empty array with no initial value');
-    Accumulator := Elements[0];
+    Accumulator := Arr.Elements[0];
     StartIndex := 1;
   end;
 
   CallArgs := TGocciaArgumentsCollection.Create([nil, nil, nil, ThisValue]);
   try
-    for I := StartIndex to Elements.Count - 1 do
+    for I := StartIndex to Arr.Elements.Count - 1 do
     begin
-      if IsArrayHole(Elements[I]) then
+      if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
       CallArgs.SetElement(0, Accumulator);
-      CallArgs.SetElement(1, Elements[I]);
+      CallArgs.SetElement(1, Arr.Elements[I]);
       CallArgs.SetElement(2, TGocciaNumberLiteralValue.SmallInt(I));
       Accumulator := InvokeCallback(Callback, CallArgs, ThisValue);
     end;
@@ -430,20 +454,22 @@ end;
 
 function TGocciaArrayValue.ArrayForEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
   Callback := ValidateArrayMethodCall('forEach', Args, ThisValue, True);
+  Arr := TGocciaArrayValue(ThisValue);
 
   CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
   try
-    for I := 0 to Elements.Count - 1 do
+    for I := 0 to Arr.Elements.Count - 1 do
     begin
-      if IsArrayHole(Elements[I]) then
+      if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
-      CallArgs.SetElement(0, Elements[I]);
+      CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       InvokeCallback(Callback, CallArgs, ThisValue);
     end;
@@ -456,6 +482,7 @@ end;
 
 function TGocciaArrayValue.ArrayJoin(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   Separator: string;
   I: Integer;
   ResultString: string;
@@ -463,17 +490,19 @@ begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.join called on non-array');
 
+  Arr := TGocciaArrayValue(ThisValue);
+
   if Args.Length < 1 then
     Separator := ','
   else
     Separator := Args.GetElement(0).ToStringLiteral.Value;
 
   ResultString := '';
-  for I := 0 to Elements.Count - 1 do
+  for I := 0 to Arr.Elements.Count - 1 do
   begin
     if I > 0 then
       ResultString := ResultString + Separator;
-    ResultString := ResultString + Elements[I].ToStringLiteral.Value;
+    ResultString := ResultString + Arr.Elements[I].ToStringLiteral.Value;
   end;
 
   Result := TGocciaStringLiteralValue.Create(ResultString);
@@ -481,16 +510,18 @@ end;
 
 function TGocciaArrayValue.ArrayIncludes(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   SearchValue: TGocciaValue;
   FromIndex: Integer;
 begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.includes called on non-array');
 
+  Arr := TGocciaArrayValue(ThisValue);
+
   if Args.Length < 1 then
   begin
-    // No argument means searching for undefined
-    Result := TGocciaBooleanLiteralValue.Create(Includes(TGocciaUndefinedLiteralValue.UndefinedValue, 0));
+    Result := TGocciaBooleanLiteralValue.Create(Arr.Includes(TGocciaUndefinedLiteralValue.UndefinedValue, 0));
     Exit;
   end;
 
@@ -501,26 +532,28 @@ begin
   if Args.Length > 1 then
     FromIndex := Trunc(Args.GetElement(1).ToNumberLiteral.Value);
 
-  Result := TGocciaBooleanLiteralValue.Create(Includes(SearchValue, FromIndex));
+  Result := TGocciaBooleanLiteralValue.Create(Arr.Includes(SearchValue, FromIndex));
 end;
 
 function TGocciaArrayValue.ArraySome(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
   SomeResult: TGocciaValue;
 begin
   Callback := ValidateArrayMethodCall('some', Args, ThisValue, True);
+  Arr := TGocciaArrayValue(ThisValue);
 
   CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
   try
-    for I := 0 to Elements.Count - 1 do
+    for I := 0 to Arr.Elements.Count - 1 do
     begin
-      if IsArrayHole(Elements[I]) then
+      if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
-      CallArgs.SetElement(0, Elements[I]);
+      CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       SomeResult := InvokeCallback(Callback, CallArgs, ThisValue);
       if SomeResult.ToBooleanLiteral.Value then
@@ -538,21 +571,23 @@ end;
 
 function TGocciaArrayValue.ArrayEvery(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
   EveryResult: TGocciaValue;
 begin
   Callback := ValidateArrayMethodCall('every', Args, ThisValue, True);
+  Arr := TGocciaArrayValue(ThisValue);
 
   CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
   try
-    for I := 0 to Elements.Count - 1 do
+    for I := 0 to Arr.Elements.Count - 1 do
     begin
-      if IsArrayHole(Elements[I]) then
+      if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
-      CallArgs.SetElement(0, Elements[I]);
+      CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       EveryResult := InvokeCallback(Callback, CallArgs, ThisValue);
       if not EveryResult.ToBooleanLiteral.Value then
@@ -586,12 +621,14 @@ end;
 
 function TGocciaArrayValue.ArrayFlat(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   ResultArray: TGocciaArrayValue;
   Depth: Integer;
 begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.flat called on non-array');
 
+  Arr := TGocciaArrayValue(ThisValue);
   Depth := 1;
 
   if Args.Length > 0 then
@@ -606,12 +643,13 @@ begin
   end;
 
   ResultArray := TGocciaArrayValue.Create;
-  FlattenInto(ResultArray, Depth);
+  Arr.FlattenInto(ResultArray, Depth);
   Result := ResultArray;
 end;
 
 function TGocciaArrayValue.ArrayFlatMap(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   ResultArray: TGocciaArrayValue;
   Callback: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
@@ -619,16 +657,17 @@ var
   MappedValue: TGocciaValue;
 begin
   Callback := ValidateArrayMethodCall('flatMap', Args, ThisValue, True);
+  Arr := TGocciaArrayValue(ThisValue);
   ResultArray := TGocciaArrayValue.Create;
 
   CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
   try
-    for I := 0 to Elements.Count - 1 do
+    for I := 0 to Arr.Elements.Count - 1 do
     begin
-      if IsArrayHole(Elements[I]) then
+      if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
-      CallArgs.SetElement(0, Elements[I]);
+      CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       MappedValue := InvokeCallback(Callback, CallArgs, ThisValue);
 
@@ -652,30 +691,36 @@ end;
 
 function TGocciaArrayValue.ArrayPush(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   I: Integer;
 begin
   if Args.Length < 1 then
     ThrowError('Array.push expects at least one argument');
 
-  for I := 0 to Args.Length - 1 do
-    Elements.Add(Args.GetElement(I));
+  Arr := TGocciaArrayValue(ThisValue);
 
-  Result := TGocciaNumberLiteralValue.Create(Elements.Count);
+  for I := 0 to Args.Length - 1 do
+    Arr.Elements.Add(Args.GetElement(I));
+
+  Result := TGocciaNumberLiteralValue.Create(Arr.Elements.Count);
 end;
 
 function TGocciaArrayValue.ArrayPop(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
-  I: Integer;
+  Arr: TGocciaArrayValue;
 begin
-  if Elements.Count = 0 then
+  Arr := TGocciaArrayValue(ThisValue);
+
+  if Arr.Elements.Count = 0 then
     ThrowError('Array.pop called on empty array');
 
-  Result := Elements[Elements.Count - 1];
-  Elements.Delete(Elements.Count - 1);
+  Result := Arr.Elements[Arr.Elements.Count - 1];
+  Arr.Elements.Delete(Arr.Elements.Count - 1);
 end;
 
 function TGocciaArrayValue.ArraySlice(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   ResultArray: TGocciaArrayValue;
   StartIndex, EndIndex: Integer;
   I: Integer;
@@ -683,50 +728,43 @@ begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.slice called on non-array');
 
+  Arr := TGocciaArrayValue(ThisValue);
   ResultArray := TGocciaArrayValue.Create;
 
-  // Handle start index (default to 0)
   if Args.Length >= 1 then
     StartIndex := Trunc(Args.GetElement(0).ToNumberLiteral.Value)
   else
     StartIndex := 0;
 
-  // Handle negative start index
   if StartIndex < 0 then
-    StartIndex := Elements.Count + StartIndex;
+    StartIndex := Arr.Elements.Count + StartIndex;
 
-  // Clamp start index to valid range
   if StartIndex < 0 then
     StartIndex := 0
-  else if StartIndex > Elements.Count then
-    StartIndex := Elements.Count;
+  else if StartIndex > Arr.Elements.Count then
+    StartIndex := Arr.Elements.Count;
 
-  // Handle end index (default to array length)
   if Args.Length >= 2 then
     EndIndex := Trunc(Args.GetElement(1).ToNumberLiteral.Value)
   else
-    EndIndex := Elements.Count;
+    EndIndex := Arr.Elements.Count;
 
-  // Handle negative end index
   if EndIndex < 0 then
-    EndIndex := Elements.Count + EndIndex;
+    EndIndex := Arr.Elements.Count + EndIndex;
 
-  // Clamp end index to valid range
   if EndIndex < 0 then
     EndIndex := 0
-  else if EndIndex > Elements.Count then
-    EndIndex := Elements.Count;
+  else if EndIndex > Arr.Elements.Count then
+    EndIndex := Arr.Elements.Count;
 
-  // Copy elements from start to end (exclusive)
   for I := StartIndex to EndIndex - 1 do
   begin
-    if (I >= 0) and (I < Elements.Count) then
+    if (I >= 0) and (I < Arr.Elements.Count) then
     begin
-      // Preserve holes (nil) when slicing
-      if Elements[I] = nil then
+      if Arr.Elements[I] = nil then
         ResultArray.Elements.Add(nil)
       else
-        ResultArray.Elements.Add(Elements[I]);
+        ResultArray.Elements.Add(Arr.Elements[I]);
     end;
   end;
 
@@ -735,18 +773,20 @@ end;
 
 function TGocciaArrayValue.ArrayFind(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
   Element, CallResult: TGocciaValue;
 begin
   Callback := ValidateArrayMethodCall('find', Args, ThisValue, True);
+  Arr := TGocciaArrayValue(ThisValue);
 
   CallArgs := nil;
   try
-    for I := 0 to Elements.Count - 1 do
+    for I := 0 to Arr.Elements.Count - 1 do
     begin
-      Element := Elements[I];
+      Element := Arr.Elements[I];
       if IsArrayHole(Element) then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
 
@@ -768,18 +808,20 @@ end;
 
 function TGocciaArrayValue.ArrayFindIndex(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
   Element, CallResult: TGocciaValue;
 begin
   Callback := ValidateArrayMethodCall('findIndex', Args, ThisValue, True);
+  Arr := TGocciaArrayValue(ThisValue);
 
   CallArgs := nil;
   try
-    for I := 0 to Elements.Count - 1 do
+    for I := 0 to Arr.Elements.Count - 1 do
     begin
-      Element := Elements[I];
+      Element := Arr.Elements[I];
       if IsArrayHole(Element) then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
 
@@ -801,11 +843,14 @@ end;
 
 function TGocciaArrayValue.ArrayIndexOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   SearchValue: TGocciaValue;
   I, FromIndex: Integer;
 begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.indexOf called on non-array');
+
+  Arr := TGocciaArrayValue(ThisValue);
 
   if Args.Length < 1 then
   begin
@@ -820,16 +865,16 @@ begin
   begin
     FromIndex := Trunc(Args.GetElement(1).ToNumberLiteral.Value);
     if FromIndex < 0 then
-      FromIndex := Elements.Count + FromIndex;
+      FromIndex := Arr.Elements.Count + FromIndex;
     if FromIndex < 0 then
       FromIndex := 0;
   end;
 
-  for I := FromIndex to Elements.Count - 1 do
+  for I := FromIndex to Arr.Elements.Count - 1 do
   begin
-    if IsArrayHole(Elements[I]) then
+    if IsArrayHole(Arr.Elements[I]) then
       Continue;
-    if IsStrictEqual(Elements[I], SearchValue) then
+    if IsStrictEqual(Arr.Elements[I], SearchValue) then
     begin
       Result := TGocciaNumberLiteralValue.Create(I);
       Exit;
@@ -841,11 +886,14 @@ end;
 
 function TGocciaArrayValue.ArrayLastIndexOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   SearchValue: TGocciaValue;
   I, FromIndex: Integer;
 begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.lastIndexOf called on non-array');
+
+  Arr := TGocciaArrayValue(ThisValue);
 
   if Args.Length < 1 then
   begin
@@ -855,22 +903,22 @@ begin
 
   SearchValue := Args.GetElement(0);
 
-  FromIndex := Elements.Count - 1;
+  FromIndex := Arr.Elements.Count - 1;
   if Args.Length > 1 then
   begin
     FromIndex := Trunc(Args.GetElement(1).ToNumberLiteral.Value);
     if FromIndex < 0 then
-      FromIndex := Elements.Count + FromIndex;
+      FromIndex := Arr.Elements.Count + FromIndex;
   end;
 
-  if FromIndex >= Elements.Count then
-    FromIndex := Elements.Count - 1;
+  if FromIndex >= Arr.Elements.Count then
+    FromIndex := Arr.Elements.Count - 1;
 
   for I := FromIndex downto 0 do
   begin
-    if IsArrayHole(Elements[I]) then
+    if IsArrayHole(Arr.Elements[I]) then
       Continue;
-    if IsStrictEqual(Elements[I], SearchValue) then
+    if IsStrictEqual(Arr.Elements[I], SearchValue) then
     begin
       Result := TGocciaNumberLiteralValue.Create(I);
       Exit;
@@ -882,6 +930,7 @@ end;
 
 function TGocciaArrayValue.ArrayConcat(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   ResultArray: TGocciaArrayValue;
   I, J: Integer;
   Arg: TGocciaValue;
@@ -889,13 +938,12 @@ begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.concat called on non-array');
 
+  Arr := TGocciaArrayValue(ThisValue);
   ResultArray := TGocciaArrayValue.Create;
 
-  // Copy elements from this array
-  for I := 0 to Elements.Count - 1 do
-    ResultArray.Elements.Add(Elements[I]);
+  for I := 0 to Arr.Elements.Count - 1 do
+    ResultArray.Elements.Add(Arr.Elements[I]);
 
-  // Append each argument
   for I := 0 to Args.Length - 1 do
   begin
     Arg := Args.GetElement(I);
@@ -913,20 +961,21 @@ end;
 
 function TGocciaArrayValue.ArrayReverse(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   I, J: Integer;
   Temp: TGocciaValue;
 begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.reverse called on non-array');
 
-  // Reverse in place
+  Arr := TGocciaArrayValue(ThisValue);
   I := 0;
-  J := Elements.Count - 1;
+  J := Arr.Elements.Count - 1;
   while I < J do
   begin
-    Temp := Elements[I];
-    Elements[I] := Elements[J];
-    Elements[J] := Temp;
+    Temp := Arr.Elements[I];
+    Arr.Elements[I] := Arr.Elements[J];
+    Arr.Elements[J] := Temp;
     Inc(I);
     Dec(J);
   end;
@@ -936,22 +985,25 @@ end;
 
 function TGocciaArrayValue.ArrayToReversed(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   ResultArray: TGocciaArrayValue;
   I: Integer;
 begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.toReversed called on non-array');
 
+  Arr := TGocciaArrayValue(ThisValue);
   ResultArray := TGocciaArrayValue.Create;
 
-  for I := Elements.Count - 1 downto 0 do
-    ResultArray.Elements.Add(Elements[I]);
+  for I := Arr.Elements.Count - 1 downto 0 do
+    ResultArray.Elements.Add(Arr.Elements[I]);
 
   Result := ResultArray;
 end;
 
 function TGocciaArrayValue.ArrayToSorted(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   ResultArray: TGocciaArrayValue;
   CustomSortFunction: TGocciaValue;
   I: Integer;
@@ -960,10 +1012,11 @@ begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.toSorted called on non-array');
 
+  Arr := TGocciaArrayValue(ThisValue);
   ResultArray := TGocciaArrayValue.Create;
 
-  for I := 0 to Elements.Count - 1 do
-    ResultArray.Elements.Add(Elements[I]);
+  for I := 0 to Arr.Elements.Count - 1 do
+    ResultArray.Elements.Add(Arr.Elements[I]);
 
   if Args.Length > 0 then
   begin
@@ -972,8 +1025,6 @@ begin
     if not ((CustomSortFunction is TGocciaFunctionValue) or (CustomSortFunction is TGocciaNativeFunctionValue)) then
       ThrowError('Custom sort function must be a function');
 
-    // Quicksort with custom comparison function
-    // Reuse a single args collection across all comparisons
     CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
     try
       QuickSortElements(ResultArray.Elements, CustomSortFunction, CallArgs, ThisValue, 0, ResultArray.Elements.Count - 1);
@@ -990,6 +1041,7 @@ end;
 
 function TGocciaArrayValue.ArrayToSpliced(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  Arr: TGocciaArrayValue;
   ResultArray: TGocciaArrayValue;
   StartIndex, DeleteCount: Integer;
   I: Integer;
@@ -998,58 +1050,51 @@ begin
   if not (ThisValue is TGocciaArrayValue) then
     ThrowError('Array.toSpliced called on non-array');
 
+  Arr := TGocciaArrayValue(ThisValue);
   ResultArray := TGocciaArrayValue.Create;
 
-  // Handle start index
   if Args.Length < 1 then
     StartIndex := 0
   else
     StartIndex := Trunc(Args.GetElement(0).ToNumberLiteral.Value);
 
-  // Handle negative start index
   if StartIndex < 0 then
-    ActualStartIndex := Elements.Count + StartIndex
+    ActualStartIndex := Arr.Elements.Count + StartIndex
   else
     ActualStartIndex := StartIndex;
 
-  // Clamp start index to valid range
   if ActualStartIndex < 0 then
     ActualStartIndex := 0
-  else if ActualStartIndex > Elements.Count then
-    ActualStartIndex := Elements.Count;
+  else if ActualStartIndex > Arr.Elements.Count then
+    ActualStartIndex := Arr.Elements.Count;
 
-  // Handle delete count
   if Args.Length < 2 then
-    DeleteCount := Elements.Count - ActualStartIndex
+    DeleteCount := Arr.Elements.Count - ActualStartIndex
   else
     DeleteCount := Trunc(Args.GetElement(1).ToNumberLiteral.Value);
 
-  // Clamp delete count to valid range
   if DeleteCount < 0 then
     DeleteCount := 0
-  else if ActualStartIndex + DeleteCount > Elements.Count then
-    DeleteCount := Elements.Count - ActualStartIndex;
+  else if ActualStartIndex + DeleteCount > Arr.Elements.Count then
+    DeleteCount := Arr.Elements.Count - ActualStartIndex;
 
-  // Copy elements before the splice point
   for I := 0 to ActualStartIndex - 1 do
   begin
-    if Elements[I] = nil then
+    if Arr.Elements[I] = nil then
       ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
     else
-      ResultArray.Elements.Add(Elements[I]);
+      ResultArray.Elements.Add(Arr.Elements[I]);
   end;
 
-  // Add new elements (if any)
   for I := 2 to Args.Length - 1 do
     ResultArray.Elements.Add(Args.GetElement(I));
 
-  // Copy elements after the deleted section
-  for I := ActualStartIndex + DeleteCount to Elements.Count - 1 do
+  for I := ActualStartIndex + DeleteCount to Arr.Elements.Count - 1 do
   begin
-    if Elements[I] = nil then
+    if Arr.Elements[I] = nil then
       ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
     else
-      ResultArray.Elements.Add(Elements[I]);
+      ResultArray.Elements.Add(Arr.Elements[I]);
   end;
 
   Result := ResultArray;

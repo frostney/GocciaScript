@@ -176,6 +176,39 @@ begin
 end;
 ```
 
+### Shared Prototype Singleton Pattern
+
+Types that provide prototype methods (String, Array, Set, Map, Function) use a shared class-level singleton instead of creating a per-instance prototype:
+
+```pascal
+class var FSharedPrototype: TGocciaObjectValue;
+class var FPrototypeMethodHost: TMyValue;
+
+procedure TMyValue.InitializePrototype;
+begin
+  if Assigned(FSharedPrototype) then Exit;  // Guard: create once
+  FSharedPrototype := TGocciaObjectValue.Create;
+  FPrototypeMethodHost := Self;
+  FSharedPrototype.RegisterNativeMethod(...);
+  TGocciaGC.Instance.PinValue(FSharedPrototype);
+  TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
+end;
+```
+
+The constructor calls `InitializePrototype` and assigns `FPrototype := FSharedPrototype`. All method callbacks must use `ThisValue` (not `Self`) to access instance data:
+
+```pascal
+function TMyValue.MyMethod(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Inst: TMyValue;
+begin
+  Inst := TMyValue(ThisValue);  // Cast once at method entry
+  // Use Inst.FData, Inst.Items, etc. — NOT Self.FData
+end;
+```
+
+Methods that return `Self` for chaining (e.g., `Set.add`, `Map.set`) must return `ThisValue` instead.
+
 ### Evaluator Helper Patterns
 
 **`EvaluateStatementsSafe`** — Wraps statement list execution with standardized exception handling (re-raises GocciaScript signals, wraps unexpected exceptions). Used wherever a list of AST nodes is evaluated in sequence.

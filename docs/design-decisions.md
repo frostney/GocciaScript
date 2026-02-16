@@ -133,7 +133,7 @@ GocciaScript runs inside a FreePascal host with manual memory management, but th
 **Why not manual memory management?**
 
 - **Aliased references** — A value assigned to multiple variables, captured in a closure, and stored in an array has no single owner. Determining when to free it requires tracking all references.
-- **Shared prototypes** — Array methods, function prototypes, and class prototypes are shared across many instances. Manual lifetime tracking would be fragile.
+- **Shared prototype singletons** — String, Array, Set, Map, and Function prototype objects are class-level singletons shared across all instances of their type. Each type's `InitializePrototype` creates the singleton once (guarded by `if Assigned`) and pins it with `TGocciaGC.Instance.PinValue`. Manual lifetime tracking of these shared singletons would be fragile.
 - **Closure captures** — Arrow functions capture their enclosing scope, creating non-obvious reference chains between scopes and values.
 
 **Why not reference counting (via `TInterfacedObject`)?**

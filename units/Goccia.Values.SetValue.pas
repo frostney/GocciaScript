@@ -12,6 +12,9 @@ uses
 type
   TGocciaSetValue = class(TGocciaObjectValue)
   private
+    class var FSharedSetPrototype: TGocciaObjectValue;
+    class var FPrototypeMethodHost: TGocciaSetValue;
+  private
     FItems: TList<TGocciaValue>;
 
     function SetHas(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -25,6 +28,7 @@ type
   public
     constructor Create; overload;
     destructor Destroy; override;
+    procedure InitializePrototype;
 
     procedure AddItem(AValue: TGocciaValue);
 
@@ -41,20 +45,36 @@ implementation
 
 uses
   Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue,
-  Goccia.Values.FunctionBase;
+  Goccia.Values.FunctionBase, Goccia.GarbageCollector;
 
 constructor TGocciaSetValue.Create;
 begin
   inherited Create(nil);
   FItems := TList<TGocciaValue>.Create;
+  InitializePrototype;
+  if Assigned(FSharedSetPrototype) then
+    FPrototype := FSharedSetPrototype;
+end;
 
-  // Register instance methods
-  RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetHas, 'has', 1));
-  RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetAdd, 'add', 1));
-  RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetDelete, 'delete', 1));
-  RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetClear, 'clear', 0));
-  RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetForEach, 'forEach', 1));
-  RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetValues, 'values', 0));
+procedure TGocciaSetValue.InitializePrototype;
+begin
+  if Assigned(FSharedSetPrototype) then Exit;
+
+  FSharedSetPrototype := TGocciaObjectValue.Create;
+  FPrototypeMethodHost := Self;
+
+  FSharedSetPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetHas, 'has', 1));
+  FSharedSetPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetAdd, 'add', 1));
+  FSharedSetPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetDelete, 'delete', 1));
+  FSharedSetPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetClear, 'clear', 0));
+  FSharedSetPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetForEach, 'forEach', 1));
+  FSharedSetPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetValues, 'values', 0));
+
+  if Assigned(TGocciaGC.Instance) then
+  begin
+    TGocciaGC.Instance.PinValue(FSharedSetPrototype);
+    TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
+  end;
 end;
 
 destructor TGocciaSetValue.Destroy;
@@ -124,32 +144,40 @@ end;
 { Instance methods }
 
 function TGocciaSetValue.SetHas(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  S: TGocciaSetValue;
 begin
+  S := TGocciaSetValue(ThisValue);
   if Args.Length > 0 then
-    Result := TGocciaBooleanLiteralValue.Create(ContainsValue(Args.GetElement(0)))
+    Result := TGocciaBooleanLiteralValue.Create(S.ContainsValue(Args.GetElement(0)))
   else
     Result := TGocciaBooleanLiteralValue.Create(False);
 end;
 
 function TGocciaSetValue.SetAdd(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  S: TGocciaSetValue;
 begin
+  S := TGocciaSetValue(ThisValue);
   if Args.Length > 0 then
-    AddItem(Args.GetElement(0));
-  Result := Self; // Returns the Set itself for chaining
+    S.AddItem(Args.GetElement(0));
+  Result := ThisValue;
 end;
 
 function TGocciaSetValue.SetDelete(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  S: TGocciaSetValue;
   I: Integer;
 begin
+  S := TGocciaSetValue(ThisValue);
   Result := TGocciaBooleanLiteralValue.Create(False);
   if Args.Length > 0 then
   begin
-    for I := 0 to FItems.Count - 1 do
+    for I := 0 to S.FItems.Count - 1 do
     begin
-      if IsSameValueZero(FItems[I], Args.GetElement(0)) then
+      if IsSameValueZero(S.FItems[I], Args.GetElement(0)) then
       begin
-        FItems.Delete(I);
+        S.FItems.Delete(I);
         Result := TGocciaBooleanLiteralValue.Create(True);
         Exit;
       end;
@@ -159,12 +187,13 @@ end;
 
 function TGocciaSetValue.SetClear(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  FItems.Clear;
+  TGocciaSetValue(ThisValue).FItems.Clear;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaSetValue.SetForEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
+  S: TGocciaSetValue;
   Callback: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
@@ -172,12 +201,13 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if Args.Length = 0 then Exit;
 
+  S := TGocciaSetValue(ThisValue);
   Callback := Args.GetElement(0);
   if not (Callback is TGocciaFunctionBase) then Exit;
 
-  for I := 0 to FItems.Count - 1 do
+  for I := 0 to S.FItems.Count - 1 do
   begin
-    CallArgs := TGocciaArgumentsCollection.Create([FItems[I], FItems[I], Self]);
+    CallArgs := TGocciaArgumentsCollection.Create([S.FItems[I], S.FItems[I], ThisValue]);
     try
       TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
@@ -188,7 +218,7 @@ end;
 
 function TGocciaSetValue.SetValues(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := ToArray;
+  Result := TGocciaSetValue(ThisValue).ToArray;
 end;
 
 end.

@@ -192,6 +192,7 @@ flowchart TD
 |----------|----------|-----------|
 | **AST literals** | AST-owned (script lifetime) | Unregistered from GC; evaluator calls `RuntimeCopy` to produce GC-managed copies |
 | **Singletons** | Permanent (process lifetime) | Pinned via `TGocciaGC.Instance.PinValue` during engine init |
+| **Shared prototypes** | Permanent (process lifetime) | Class-level singletons (String, Array, Set, Map, Function); pinned via `PinValue` in each type's `InitializePrototype` |
 | **Runtime values** | Dynamic (collected when unreachable) | Registered via `AfterConstruction`, freed during sweep |
 | **Pascal-held values** | Temporary (explicit protection) | `AddTempRoot` / `RemoveTempRoot` |
 

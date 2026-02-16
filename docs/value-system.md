@@ -166,7 +166,7 @@ TGocciaStringLiteralValue = class(TGocciaValue)
 end;
 ```
 
-String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system. When strings are boxed into `TGocciaStringObjectValue` (e.g., via `new String()` or implicit boxing), all instances share a single class-level string prototype singleton — methods are registered once and reused across all string object instances.
+String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system. When strings are boxed into `TGocciaStringObjectValue` (e.g., via `new String()` or implicit boxing), all instances share a single class-level string prototype singleton — methods are registered once and reused across all string object instances. This shared prototype singleton pattern is used consistently across the codebase: `TGocciaStringObjectValue`, `TGocciaArrayValue`, `TGocciaSetValue`, `TGocciaMapValue`, and `TGocciaFunctionBase` all follow it.
 
 ### Symbols
 
@@ -284,14 +284,16 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 
 - **Sparse arrays** — Holes are represented as `nil` in the internal `FElements` list.
 - **Numeric property access** — `arr["0"]` and `arr[0]` both resolve to the first element.
-- **Prototype methods** — `map`, `filter`, `reduce`, `forEach`, `some`, `every`, `flat`, `flatMap`, `find`, `findIndex`, `indexOf`, `lastIndexOf`, `join`, `includes`, `concat`, `push`, `pop`, `shift`, `unshift`, `sort`, `splice`, `reverse`, `fill`, `at`, `slice`, `toReversed`, `toSorted`, `toSpliced` — all implemented directly on the array value.
+- **Shared prototype singleton** — All array instances share a single class-level prototype (`FSharedArrayPrototype`). Methods are registered once on this shared prototype during `InitializePrototype` (guarded by an `if Assigned` check) and pinned with the GC. The constructor assigns `FPrototype := FSharedArrayPrototype` instead of creating a per-instance prototype.
+- **Prototype methods** — `map`, `filter`, `reduce`, `forEach`, `some`, `every`, `flat`, `flatMap`, `find`, `findIndex`, `indexOf`, `lastIndexOf`, `join`, `includes`, `concat`, `push`, `pop`, `shift`, `unshift`, `sort`, `splice`, `reverse`, `fill`, `at`, `slice`, `toReversed`, `toSorted`, `toSpliced` — all operate through `ThisValue` (not `Self`) to access instance data, since the method pointers are bound to a single method host instance.
 
 ## Sets
 
 `TGocciaSetValue` extends `TGocciaObjectValue` (`Goccia.Values.SetValue.pas`). A collection of unique values with insertion-order iteration.
 
 - **Uniqueness** — Uses `IsSameValueZero` (same as `===` except `NaN === NaN` is true) to test for duplicates.
-- **Methods** — `add`, `has`, `delete`, `clear`, `forEach`, `values` — all registered as native methods on the instance.
+- **Shared prototype singleton** — All set instances share a single class-level prototype (`FSharedSetPrototype`). Methods are registered once during `InitializePrototype` and pinned with the GC. Each method operates through `ThisValue` to access instance data.
+- **Methods** — `add`, `has`, `delete`, `clear`, `forEach`, `values` — all registered on the shared prototype.
 - **`size`** — Returned dynamically via `GetProperty` override.
 - **Spreadable** — `ToArray` converts to a `TGocciaArrayValue` for spread syntax support.
 
@@ -301,7 +303,8 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 
 - **Key equality** — Uses `IsSameValueZero` for key lookup.
 - **Internal storage** — `FEntries: TList<TGocciaMapEntry>` where each entry is a `record` with `Key` and `Value` fields.
-- **Methods** — `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys`, `values`, `entries` — all registered as native methods on the instance.
+- **Shared prototype singleton** — All map instances share a single class-level prototype (`FSharedMapPrototype`). Methods are registered once during `InitializePrototype` and pinned with the GC. Each method operates through `ThisValue` to access instance data.
+- **Methods** — `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys`, `values`, `entries` — all registered on the shared prototype.
 - **`size`** — Returned dynamically via `GetProperty` override.
 - **Spreadable** — `ToArray` converts to a `TGocciaArrayValue` of `[key, value]` pairs for spread syntax support.
 
