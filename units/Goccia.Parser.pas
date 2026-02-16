@@ -34,6 +34,9 @@ type
     function NullishCoalescing: TGocciaExpression;
     function LogicalAnd: TGocciaExpression;
 
+    // Parameter list parsing (shared by arrow functions, class methods, object methods)
+    function ParseParameterList: TGocciaParameterArray;
+
     // Destructuring pattern parsing
     function ParsePattern: TGocciaDestructuringPattern;
     function ParseArrayPattern: TGocciaArrayDestructuringPattern;
@@ -659,11 +662,9 @@ var
   IsComputed: Boolean;
   IsGetter, IsSetter: Boolean;
   ComputedCount, SourceOrderCount: Integer;
-  // Method shorthand variables
+  // Method shorthand / getter / setter variables
   Parameters: TGocciaParameterArray;
-  ParamCount: Integer;
   ParamName: string;
-  DefaultValue: TGocciaExpression;
   Body: TGocciaASTNode;
   Statements: TObjectList<TGocciaStatement>;
   Stmt: TGocciaStatement;
@@ -826,45 +827,8 @@ begin
       Line := Peek.Line;
       Column := Peek.Column;
 
-      SetLength(Parameters, 0);
-      ParamCount := 0;
-
-      // Parse parameters
       Consume(gttLeftParen, 'Expected "(" after method name');
-      if not Check(gttRightParen) then
-      begin
-        repeat
-          // Check for rest parameter
-          if Match([gttSpread]) then
-          begin
-            ParamName := Consume(gttIdentifier, 'Expected parameter name after "..."').Lexeme;
-            Inc(ParamCount);
-            SetLength(Parameters, ParamCount);
-            Parameters[ParamCount - 1].Name := ParamName;
-            Parameters[ParamCount - 1].IsPattern := False;
-            Parameters[ParamCount - 1].Pattern := nil;
-            Parameters[ParamCount - 1].DefaultValue := nil;
-            Parameters[ParamCount - 1].IsRest := True;
-            Break;
-          end;
-
-          ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
-
-          // Check for default value
-          if Match([gttAssign]) then
-            DefaultValue := Assignment
-          else
-            DefaultValue := nil;
-
-          // Add parameter to array
-          Inc(ParamCount);
-          SetLength(Parameters, ParamCount);
-          Parameters[ParamCount - 1].Name := ParamName;
-          Parameters[ParamCount - 1].DefaultValue := DefaultValue;
-          Parameters[ParamCount - 1].IsRest := False;
-
-        until not Match([gttComma]);
-      end;
+      Parameters := ParseParameterList;
       Consume(gttRightParen, 'Expected ")" after parameters');
 
       // Parse method body
@@ -963,74 +927,77 @@ begin
   Result := TGocciaObjectExpression.Create(Properties, PropertyOrder, ComputedProperties, ComputedPropertiesInOrder, Getters, Setters, PropertySourceOrder, Line, Column);
 end;
 
-function TGocciaParser.ArrowFunction: TGocciaExpression;
+function TGocciaParser.ParseParameterList: TGocciaParameterArray;
 var
-  Parameters: TGocciaParameterArray;
   ParamCount: Integer;
   ParamName: string;
   DefaultValue: TGocciaExpression;
   Pattern: TGocciaDestructuringPattern;
-  Body: TGocciaASTNode;
-  Line, Column: Integer;
 begin
-  Line := Previous.Line;
-  Column := Previous.Column;
   ParamCount := 0;
 
-  // Parse parameters
   if not Check(gttRightParen) then
   begin
     repeat
-      // Increase array size
-      SetLength(Parameters, ParamCount + 1);
-      Parameters[ParamCount].IsRest := False;
+      SetLength(Result, ParamCount + 1);
+      Result[ParamCount].IsRest := False;
 
-      // Check for rest parameter (...args)
+      // Rest parameter (...args)
       if Match([gttSpread]) then
       begin
         ParamName := Consume(gttIdentifier, 'Expected parameter name after "..."').Lexeme;
-        Parameters[ParamCount].Name := ParamName;
-        Parameters[ParamCount].IsPattern := False;
-        Parameters[ParamCount].Pattern := nil;
-        Parameters[ParamCount].DefaultValue := nil;
-        Parameters[ParamCount].IsRest := True;
+        Result[ParamCount].Name := ParamName;
+        Result[ParamCount].IsPattern := False;
+        Result[ParamCount].Pattern := nil;
+        Result[ParamCount].DefaultValue := nil;
+        Result[ParamCount].IsRest := True;
         Inc(ParamCount);
-        Break; // Rest parameter must be last
+        Break;
       end
-      // Check if this is a destructuring pattern or simple identifier
+      // Destructuring pattern parameter
       else if Check(gttLeftBracket) or Check(gttLeftBrace) then
       begin
-        // Parse destructuring pattern parameter
         Pattern := ParsePattern;
-        Parameters[ParamCount].Pattern := Pattern;
-        Parameters[ParamCount].IsPattern := True;
-        Parameters[ParamCount].Name := ''; // Not used for patterns
+        Result[ParamCount].Pattern := Pattern;
+        Result[ParamCount].IsPattern := True;
+        Result[ParamCount].Name := '';
 
-        // Check for default value for the whole pattern
         if Match([gttAssign]) then
-          Parameters[ParamCount].DefaultValue := Assignment
+          Result[ParamCount].DefaultValue := Assignment
         else
-          Parameters[ParamCount].DefaultValue := nil;
+          Result[ParamCount].DefaultValue := nil;
       end
       else
       begin
-        // Parse simple identifier parameter
+        // Simple identifier parameter
         ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
-        Parameters[ParamCount].Name := ParamName;
-        Parameters[ParamCount].IsPattern := False;
-        Parameters[ParamCount].Pattern := nil;
+        Result[ParamCount].Name := ParamName;
+        Result[ParamCount].IsPattern := False;
+        Result[ParamCount].Pattern := nil;
 
-        // Check for default value
         if Match([gttAssign]) then
-          Parameters[ParamCount].DefaultValue := Assignment
+          Result[ParamCount].DefaultValue := Assignment
         else
-          Parameters[ParamCount].DefaultValue := nil;
+          Result[ParamCount].DefaultValue := nil;
       end;
 
       Inc(ParamCount);
     until not Match([gttComma]);
   end;
 
+  SetLength(Result, ParamCount);
+end;
+
+function TGocciaParser.ArrowFunction: TGocciaExpression;
+var
+  Parameters: TGocciaParameterArray;
+  Body: TGocciaASTNode;
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  Parameters := ParseParameterList;
   Consume(gttRightParen, 'Expected ")" after parameters');
   Consume(gttArrow, 'Expected "=>" in arrow function');
 
@@ -1466,78 +1433,12 @@ var
   Line, Column: Integer;
   Statements: TObjectList<TGocciaStatement>;
   Stmt: TGocciaStatement;
-  ParamCount: Integer;
-  ParamName: string;
-  DefaultValue: TGocciaExpression;
-  Pattern: TGocciaDestructuringPattern;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  SetLength(Parameters, 0);
-  ParamCount := 0;
-
-  // Parse parameters with default value support including destructuring
   Consume(gttLeftParen, 'Expected "(" after method name');
-  if not Check(gttRightParen) then
-  begin
-    repeat
-      // Check for rest parameter (...args)
-      if Match([gttSpread]) then
-      begin
-        ParamName := Consume(gttIdentifier, 'Expected parameter name after "..."').Lexeme;
-        Inc(ParamCount);
-        SetLength(Parameters, ParamCount);
-        Parameters[ParamCount - 1].Name := ParamName;
-        Parameters[ParamCount - 1].IsPattern := False;
-        Parameters[ParamCount - 1].Pattern := nil;
-        Parameters[ParamCount - 1].DefaultValue := nil;
-        Parameters[ParamCount - 1].IsRest := True;
-        Break; // Rest parameter must be last
-      end
-      // Check if this is a destructuring pattern or simple identifier
-      else if Check(gttLeftBracket) or Check(gttLeftBrace) then
-      begin
-        // Parse destructuring pattern parameter
-        Pattern := ParsePattern;
-
-        // Check for default value for the whole pattern
-        if Match([gttAssign]) then
-          DefaultValue := Assignment
-        else
-          DefaultValue := nil;
-
-        // Add parameter to array
-        Inc(ParamCount);
-        SetLength(Parameters, ParamCount);
-        Parameters[ParamCount - 1].Pattern := Pattern;
-        Parameters[ParamCount - 1].IsPattern := True;
-        Parameters[ParamCount - 1].Name := ''; // Not used for patterns
-        Parameters[ParamCount - 1].DefaultValue := DefaultValue;
-        Parameters[ParamCount - 1].IsRest := False;
-      end
-      else
-      begin
-        // Parse simple identifier parameter
-        ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
-
-        // Check for default value
-        if Match([gttAssign]) then
-          DefaultValue := Assignment
-        else
-          DefaultValue := nil;
-
-        // Add parameter to array
-        Inc(ParamCount);
-        SetLength(Parameters, ParamCount);
-        Parameters[ParamCount - 1].Name := ParamName;
-        Parameters[ParamCount - 1].IsPattern := False;
-        Parameters[ParamCount - 1].Pattern := nil;
-        Parameters[ParamCount - 1].DefaultValue := DefaultValue;
-      end;
-
-    until not Match([gttComma]);
-  end;
+  Parameters := ParseParameterList;
   Consume(gttRightParen, 'Expected ")" after parameters');
 
   // Parse method body
