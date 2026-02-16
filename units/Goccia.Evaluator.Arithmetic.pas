@@ -19,6 +19,37 @@ implementation
 
 uses Goccia.Values.ClassHelper, Goccia.Values.ToPrimitive, Goccia.Evaluator.Bitwise;
 
+type
+  TGocciaNumericBinaryOp = function(A, B: Double): Double;
+
+function DoSubtract(A, B: Double): Double;
+begin
+  Result := A - B;
+end;
+
+function DoMultiply(A, B: Double): Double;
+begin
+  Result := A * B;
+end;
+
+function DoPower(A, B: Double): Double;
+begin
+  Result := Power(A, B);
+end;
+
+function EvaluateSimpleNumericBinaryOp(Left, Right: TGocciaValue; AOp: TGocciaNumericBinaryOp): TGocciaValue;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
+begin
+  LeftNum := Left.ToNumberLiteral;
+  RightNum := Right.ToNumberLiteral;
+
+  if LeftNum.IsNaN or RightNum.IsNaN then
+    Result := TGocciaNumberLiteralValue.NaNValue
+  else
+    Result := TGocciaNumberLiteralValue.Create(AOp(LeftNum.Value, RightNum.Value));
+end;
+
 function EvaluateAddition(Left, Right: TGocciaValue): TGocciaValue;
 var
   PrimLeft, PrimRight: TGocciaValue;
@@ -46,29 +77,13 @@ begin
 end;
 
 function EvaluateSubtraction(Left, Right: TGocciaValue): TGocciaValue;
-var
-  LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  LeftNum := Left.ToNumberLiteral;
-  RightNum := Right.ToNumberLiteral;
-
-  if LeftNum.IsNaN or RightNum.IsNaN then
-    Result := TGocciaNumberLiteralValue.NaNValue
-  else
-    Result := TGocciaNumberLiteralValue.Create(LeftNum.Value - RightNum.Value);
+  Result := EvaluateSimpleNumericBinaryOp(Left, Right, @DoSubtract);
 end;
 
 function EvaluateMultiplication(Left, Right: TGocciaValue): TGocciaValue;
-var
-  LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  LeftNum := Left.ToNumberLiteral;
-  RightNum := Right.ToNumberLiteral;
-
-  if LeftNum.IsNaN or RightNum.IsNaN then
-    Result := TGocciaNumberLiteralValue.NaNValue
-  else
-    Result := TGocciaNumberLiteralValue.Create(LeftNum.Value * RightNum.Value);
+  Result := EvaluateSimpleNumericBinaryOp(Left, Right, @DoMultiply);
 end;
 
 function EvaluateDivision(Left, Right: TGocciaValue): TGocciaValue;
@@ -138,16 +153,8 @@ begin
 end;
 
 function EvaluateExponentiation(Left, Right: TGocciaValue): TGocciaValue;
-var
-  LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  LeftNum := Left.ToNumberLiteral;
-  RightNum := Right.ToNumberLiteral;
-
-  if LeftNum.IsNaN or RightNum.IsNaN then
-    Result := TGocciaNumberLiteralValue.NaNValue
-  else
-    Result := TGocciaNumberLiteralValue.Create(Power(LeftNum.Value, RightNum.Value));
+  Result := EvaluateSimpleNumericBinaryOp(Left, Right, @DoPower);
 end;
 
 function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator: TGocciaTokenType): TGocciaValue;
