@@ -77,6 +77,16 @@ begin
     Context.OnError(Message, Line, Column);
 end;
 
+// Helper: create a non-owning copy of a statement list (AST owns the nodes)
+function CopyStatementList(Source: TObjectList<TGocciaASTNode>): TObjectList<TGocciaASTNode>;
+var
+  I: Integer;
+begin
+  Result := TObjectList<TGocciaASTNode>.Create(False);
+  for I := 0 to Source.Count - 1 do
+    Result.Add(Source[I]);
+end;
+
 function Evaluate(Node: TGocciaASTNode; Context: TGocciaEvaluationContext): TGocciaValue;
 begin
   // Propagate OnError onto the scope so closures inherit it
@@ -1213,18 +1223,12 @@ end;
 function EvaluateGetter(GetterExpression: TGocciaGetterExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
-  I: Integer;
-  OriginalNodes: TObjectList<TGocciaASTNode>;
   EmptyParameters: TGocciaParameterArray;
 begin
   // Getter has no parameters
   SetLength(EmptyParameters, 0);
 
-  // Create a copy of the statements to avoid ownership issues
-  OriginalNodes := TGocciaBlockStatement(GetterExpression.Body).Nodes;
-  Statements := TObjectList<TGocciaASTNode>.Create(False); // Don't own the objects
-  for I := 0 to OriginalNodes.Count - 1 do
-    Statements.Add(OriginalNodes[I]);
+  Statements := CopyStatementList(TGocciaBlockStatement(GetterExpression.Body).Nodes);
 
   // Create function with closure scope
   Result := TGocciaFunctionValue.Create(EmptyParameters, Statements, Context.Scope.CreateChild);
@@ -1233,20 +1237,14 @@ end;
 function EvaluateSetter(SetterExpression: TGocciaSetterExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
-  I: Integer;
-  OriginalNodes: TObjectList<TGocciaASTNode>;
   Parameters: TGocciaParameterArray;
 begin
   // Setter has one parameter
   SetLength(Parameters, 1);
   Parameters[0].Name := SetterExpression.Parameter;
-  Parameters[0].DefaultValue := nil; // No default value for setter parameter
+  Parameters[0].DefaultValue := nil;
 
-  // Create a copy of the statements to avoid ownership issues
-  OriginalNodes := TGocciaBlockStatement(SetterExpression.Body).Nodes;
-  Statements := TObjectList<TGocciaASTNode>.Create(False); // Don't own the objects
-  for I := 0 to OriginalNodes.Count - 1 do
-    Statements.Add(OriginalNodes[I]);
+  Statements := CopyStatementList(TGocciaBlockStatement(SetterExpression.Body).Nodes);
 
   // Create function with closure scope
   Result := TGocciaFunctionValue.Create(Parameters, Statements, Context.Scope.CreateChild);
@@ -1255,25 +1253,14 @@ end;
 function EvaluateArrowFunction(ArrowFunctionExpression: TGocciaArrowFunctionExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
-  I: Integer;
-  OriginalNodes: TObjectList<TGocciaASTNode>;
 begin
-  // Arrow function body can be either a block statement or a single expression
   if ArrowFunctionExpression.Body is TGocciaBlockStatement then
-  begin
-    // Body is a block statement: (n) => { return n * 2; }
-    // Create a copy of the statements to avoid ownership issues
-    OriginalNodes := TGocciaBlockStatement(ArrowFunctionExpression.Body).Nodes;
-    Statements := TObjectList<TGocciaASTNode>.Create(False); // Don't own the objects
-    for I := 0 to OriginalNodes.Count - 1 do
-      Statements.Add(OriginalNodes[I]);
-  end
+    Statements := CopyStatementList(TGocciaBlockStatement(ArrowFunctionExpression.Body).Nodes)
   else
   begin
     // Body is a single expression: (n) => n * 2
-    // Wrap the expression in a statement list
-    Statements := TObjectList<TGocciaASTNode>.Create(False); // Don't own the objects
-    Statements.Add(ArrowFunctionExpression.Body); // Add the expression directly
+    Statements := TObjectList<TGocciaASTNode>.Create(False);
+    Statements.Add(ArrowFunctionExpression.Body);
   end;
 
   // Create function with closure scope - we need to avoid dangling references to temporary call scopes
@@ -1623,14 +1610,8 @@ end;
 function EvaluateClassMethod(ClassMethod: TGocciaClassMethod; Context: TGocciaEvaluationContext; SuperClass: TGocciaValue = nil): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
-  I: Integer;
-  OriginalNodes: TObjectList<TGocciaASTNode>;
 begin
-  // Create a copy of the statements to avoid ownership issues
-  OriginalNodes := TGocciaBlockStatement(ClassMethod.Body).Nodes;
-  Statements := TObjectList<TGocciaASTNode>.Create(False); // Don't own the objects
-  for I := 0 to OriginalNodes.Count - 1 do
-    Statements.Add(OriginalNodes[I]);
+  Statements := CopyStatementList(TGocciaBlockStatement(ClassMethod.Body).Nodes);
 
   // Always create a unique child scope for the closure - now with default parameter support
   Result := TGocciaMethodValue.Create(ClassMethod.Parameters, Statements, Context.Scope.CreateChild, ClassMethod.Name, SuperClass);
