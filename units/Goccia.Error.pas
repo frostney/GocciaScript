@@ -10,7 +10,9 @@ uses
 type
   TGocciaErrorSeverity = (gesError, gesWarning, gesHint);
 
-// TODO: Add native error class
+  // Future: Native error subclasses (TypeError, RangeError, etc.) could inherit from
+  // TGocciaError to unify Pascal-side and JS-side error handling. Currently, JS-visible
+  // error objects are created separately via Goccia.Values.ErrorHelper.
 
   TGocciaError = class(Exception)
   private

@@ -159,7 +159,8 @@ var
 begin
   TGocciaArgumentValidator.RequireAtLeast(Args, 2, 'Object.assign', ThrowError);
 
-  // TODO: Should check for the first object or filter out non-objects
+  // JS spec calls ToObject(target) which wraps primitives; we require an object directly.
+  // Non-object sources are silently skipped in the loop below, matching JS behavior.
   if not (Args.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.assign called on non-object', 0, 0);
 

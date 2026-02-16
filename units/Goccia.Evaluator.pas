@@ -2432,7 +2432,6 @@ var
   ArrayValue: TGocciaArrayValue;
   ObjectValue: TGocciaObjectValue;
   Index: Integer;
-  Descriptor: TGocciaPropertyDescriptor;
 begin
   // Handle member expressions (property deletion)
   if Operand is TGocciaMemberExpression then
@@ -2472,27 +2471,8 @@ begin
     else if ObjValue is TGocciaObjectValue then
     begin
       ObjectValue := TGocciaObjectValue(ObjValue);
-      // TODO: We are checking for configurable twice - Once here, and once in `DeleteProperty`
-              // Check if property exists and is configurable before deletion
-        if ObjectValue.HasOwnProperty(PropertyName) then
-        begin
-          Descriptor := ObjectValue.GetOwnPropertyDescriptor(PropertyName);
-          if Assigned(Descriptor) and not Descriptor.Configurable then
-          begin
-            // Non-configurable property cannot be deleted
-            Result := TGocciaBooleanLiteralValue.Create(False);
-          end
-          else
-          begin
-            ObjectValue.DeleteProperty(PropertyName);
-            Result := TGocciaBooleanLiteralValue.Create(True);
-          end;
-        end
-      else
-      begin
-        // Property doesn't exist - deletion succeeds
-        Result := TGocciaBooleanLiteralValue.Create(True);
-      end;
+      // DeleteProperty returns False for non-configurable properties, True otherwise
+      Result := TGocciaBooleanLiteralValue.Create(ObjectValue.DeleteProperty(PropertyName));
     end
     else
     begin

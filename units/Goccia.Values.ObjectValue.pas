@@ -57,7 +57,6 @@ type
     function GetAllPropertyNames: TArray<string>;
     function GetOwnPropertyNames: TStringList;
     function GetOwnPropertyKeys: TStringList;
-    function GetOwnPropertySymbols: TStringList;
 
     // Symbol property methods
     procedure DefineSymbolProperty(ASymbol: TGocciaSymbolValue; ADescriptor: TGocciaPropertyDescriptor);
@@ -346,11 +345,6 @@ end;
 function TGocciaObjectValue.GetOwnPropertyKeys: TStringList;
 begin
   Result := FPropertyInsertionOrder;
-end;
-
-function TGocciaObjectValue.GetOwnPropertySymbols: TStringList;
-begin
-  Result := FPropertyInsertionOrder; // TODO: Implement
 end;
 
 

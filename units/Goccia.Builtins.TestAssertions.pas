@@ -996,7 +996,8 @@ begin
 
   ResetTestStats;
 
-  // TODO: Remove duplication
+  // Functions are registered on both the scope (for direct access in test scripts)
+  // and the builtin object (for completeness). This dual registration is intentional.
 
   // Register testing functions globally for easy access
   AScope.DefineLexicalBinding('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1), dtConst);

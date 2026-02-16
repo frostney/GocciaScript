@@ -411,7 +411,9 @@ end;
 
 function TGocciaClassValue.GetProperty(const AName: string): TGocciaValue;
 begin
-  // TODO: This is a hack to get the prototype of the class - We need to introduce static properties
+  // Class.prototype access - required for prototype chain inspection.
+  // When static property support is added, this should be handled through
+  // the general static property mechanism instead of this special case.
   if AName = 'prototype' then
   begin
     Result := FPrototype;

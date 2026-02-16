@@ -202,7 +202,7 @@ end;
 
 function TGocciaNullLiteralValue.TypeOf: string;
 begin
-  // TODO: JavaScript compatibility: typeof null is object
+  // Per JavaScript spec, typeof null === 'object' (a historical quirk preserved for compatibility)
   Result := OBJECT_TYPE_NAME;
 end;
 

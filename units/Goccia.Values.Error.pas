@@ -8,7 +8,8 @@ uses
   Goccia.Values.Primitives, SysUtils;
 
 type
-  // TODO: Is it worth to merge this with Goccia.Error?
+  // These are flow-control exceptions (return/throw), distinct from the compilation
+  // and runtime errors in Goccia.Error. Kept separate intentionally.
   TGocciaReturnValue = class(Exception)
   private
     FValue: TGocciaValue;

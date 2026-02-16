@@ -1,4 +1,6 @@
-// TODO: Rename to Goccia.Values.UserFunction?
+// This unit defines TGocciaFunctionValue for user-defined (arrow) functions.
+// A rename to Goccia.Values.UserFunction would better distinguish it from
+// TGocciaNativeFunctionValue, but requires updating all import sites.
 unit Goccia.Values.FunctionValue;
 
 {$I Goccia.inc}

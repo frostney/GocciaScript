@@ -25,7 +25,9 @@ type
     procedure ThrowError(const Message: string; Line, Column: Integer);
     function CreateEvaluationContext: TGocciaEvaluationContext;
   public
-    // TODO: We need Filename and SourceLines for error context - We should find a better way to pass this
+    // Filename and SourceLines are required for error messages with source context.
+    // A future improvement could encapsulate these in a TGocciaSourceInfo record
+    // shared by the lexer, parser, and interpreter.
     constructor Create(const AFileName: string; ASourceLines: TStringList);
     destructor Destroy; override;
     function Execute(AProgram: TGocciaProgram): TGocciaValue;
