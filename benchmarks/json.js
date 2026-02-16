@@ -1,0 +1,71 @@
+/*---
+description: JSON parse and stringify benchmarks
+---*/
+
+suite("JSON.parse", () => {
+  bench("parse simple object", () => {
+    const obj = JSON.parse('{"name":"test","value":42,"active":true}');
+  });
+
+  bench("parse nested object", () => {
+    const obj = JSON.parse('{"user":{"name":"Alice","address":{"city":"NYC","zip":"10001"}},"score":95}');
+  });
+
+  bench("parse array of objects", () => {
+    const arr = JSON.parse('[{"id":1,"name":"a"},{"id":2,"name":"b"},{"id":3,"name":"c"},{"id":4,"name":"d"},{"id":5,"name":"e"}]');
+  });
+
+  bench("parse large flat object", () => {
+    const obj = JSON.parse('{"a":1,"b":2,"c":3,"d":4,"e":5,"f":6,"g":7,"h":8,"i":9,"j":10,"k":11,"l":12}');
+  });
+
+  bench("parse mixed types", () => {
+    const obj = JSON.parse('{"str":"hello","num":3.14,"bool":true,"nil":null,"arr":[1,2,3],"obj":{"x":1}}');
+  });
+});
+
+suite("JSON.stringify", () => {
+  bench("stringify simple object", () => {
+    const s = JSON.stringify({ name: "test", value: 42, active: true });
+  });
+
+  bench("stringify nested object", () => {
+    const s = JSON.stringify({
+      user: { name: "Alice", address: { city: "NYC", zip: "10001" } },
+      score: 95
+    });
+  });
+
+  bench("stringify array of objects", () => {
+    const items = Array.from({ length: 10 }, (_, i) => ({ id: i, name: "item" + i }));
+    const s = JSON.stringify(items);
+  });
+
+  bench("stringify mixed types", () => {
+    const s = JSON.stringify({
+      str: "hello",
+      num: 3.14,
+      bool: true,
+      nil: null,
+      arr: [1, 2, 3],
+      obj: { x: 1 }
+    });
+  });
+});
+
+suite("JSON roundtrip", () => {
+  bench("parse then stringify", () => {
+    const json = '{"users":[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}],"total":2}';
+    const obj = JSON.parse(json);
+    const back = JSON.stringify(obj);
+  });
+
+  bench("stringify then parse", () => {
+    const data = {
+      items: Array.from({ length: 5 }, (_, i) => ({ id: i, active: i % 2 === 0 })),
+      count: 5
+    };
+    const json = JSON.stringify(data);
+    const obj = JSON.parse(json);
+  });
+});

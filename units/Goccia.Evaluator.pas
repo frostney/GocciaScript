@@ -311,10 +311,15 @@ begin
   end
   else if Expression is TGocciaSuperExpression then
   begin
-    // Return the superclass - context should provide access to it
-    if Context.Scope.ThisValue is TGocciaInstanceValue then
+    // Use __super__ from the scope (set by TGocciaMethodValue.Call to the correct
+    // superclass for the currently executing method). This is essential for multi-level
+    // inheritance: when B extends A and C extends B, calling super() inside B's
+    // constructor must resolve to A, not to B (which would happen if we used the
+    // instance's class, since the instance is of type C).
+    if Context.Scope.Contains('__super__') then
+      Result := Context.Scope.GetValue('__super__')
+    else if Context.Scope.ThisValue is TGocciaInstanceValue then
     begin
-      // Instance method: super refers to parent prototype/class
       if Assigned(TGocciaInstanceValue(Context.Scope.ThisValue).ClassValue.SuperClass) then
         Result := TGocciaInstanceValue(Context.Scope.ThisValue).ClassValue.SuperClass
       else
@@ -322,7 +327,6 @@ begin
     end
     else if Context.Scope.ThisValue is TGocciaClassValue then
     begin
-      // Static method: super refers to parent class constructor
       if Assigned(TGocciaClassValue(Context.Scope.ThisValue).SuperClass) then
         Result := TGocciaClassValue(Context.Scope.ThisValue).SuperClass
       else

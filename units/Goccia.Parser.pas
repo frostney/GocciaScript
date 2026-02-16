@@ -537,13 +537,32 @@ begin
   else if Match([gttNew]) then
   begin
     Token := Previous;
-    Expr := Call;
-    if Expr is TGocciaCallExpression then
+    // Parse the callee: class name with optional member access (e.g. new a.B.C())
+    // but NOT call expressions — those belong to the outer Call loop.
+    Expr := Primary;
+    while Check(gttDot) do
     begin
-      Result := TGocciaNewExpression.Create(
-        TGocciaCallExpression(Expr).Callee,
-        TGocciaCallExpression(Expr).Arguments,
-        Token.Line, Token.Column);
+      Advance;
+      if Check(gttIdentifier) then
+        Expr := TGocciaMemberExpression.Create(Expr, Advance.Lexeme, False, Previous.Line, Previous.Column, False)
+      else
+        raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines);
+    end;
+    // Parse constructor arguments if present
+    if Match([gttLeftParen]) then
+    begin
+      Args := TObjectList<TGocciaExpression>.Create(True);
+      if not Check(gttRightParen) then
+      begin
+        repeat
+          if Match([gttSpread]) then
+            Args.Add(TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column))
+          else
+            Args.Add(Expression);
+        until not Match([gttComma]);
+      end;
+      Consume(gttRightParen, 'Expected ")" after constructor arguments');
+      Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
     end
     else
     begin

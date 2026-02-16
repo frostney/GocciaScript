@@ -400,6 +400,11 @@ The `BenchmarkRunner` program:
 | `benchmarks/arrays.js` | Array.from, map, filter, reduce, forEach, find, sort, flat, flatMap |
 | `benchmarks/objects.js` | Object creation, property access, Object.keys/entries, spread |
 | `benchmarks/strings.js` | Concatenation, template literals, split/join, indexOf, trim, replace, pad |
+| `benchmarks/classes.js` | Instantiation, method dispatch, single/multi-level inheritance, private fields, getters/setters |
+| `benchmarks/closures.js` | Closure capture, higher-order functions, call/apply/bind, recursion |
+| `benchmarks/collections.js` | Set add/has/delete/forEach, Map set/get/has/delete/forEach/keys/values |
+| `benchmarks/json.js` | JSON.parse, JSON.stringify, roundtrip with nested and mixed data |
+| `benchmarks/destructuring.js` | Array/object/parameter destructuring, rest, defaults, nesting |
 
 ### Sample Output
 
