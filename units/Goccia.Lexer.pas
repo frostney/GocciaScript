@@ -40,6 +40,7 @@ type
     procedure ScanIdentifier;
     function ScanUnicodeEscape: string;
     function ScanHexEscape: string;
+    procedure ProcessEscapeSequence(ASB: TStringBuilder);
     procedure SkipWhitespace;
     procedure SkipComment;
     procedure SkipBlockComment;
@@ -260,6 +261,22 @@ begin
   Result := Chr(CodePoint);
 end;
 
+procedure TGocciaLexer.ProcessEscapeSequence(ASB: TStringBuilder);
+begin
+  case Peek of
+    'n': begin ASB.Append(#10); Advance; end;
+    'r': begin ASB.Append(#13); Advance; end;
+    't': begin ASB.Append(#9); Advance; end;
+    '\': begin ASB.Append('\'); Advance; end;
+    '0': begin ASB.Append(#0); Advance; end;
+    'u': begin Advance; ASB.Append(ScanUnicodeEscape); end;
+    'x': begin Advance; ASB.Append(ScanHexEscape); end;
+  else
+    ASB.Append(Peek);
+    Advance;
+  end;
+end;
+
 procedure TGocciaLexer.ScanString;
 var
   SB: TStringBuilder;
@@ -282,18 +299,10 @@ begin
         if not IsAtEnd then
         begin
           case Peek of
-            'n': begin SB.Append(#10); Advance; end;
-            'r': begin SB.Append(#13); Advance; end;
-            't': begin SB.Append(#9); Advance; end;
-            '\': begin SB.Append('\'); Advance; end;
             '''': begin SB.Append(''''); Advance; end;
             '"': begin SB.Append('"'); Advance; end;
-            '0': begin SB.Append(#0); Advance; end;
-            'u': begin Advance; SB.Append(ScanUnicodeEscape); end;
-            'x': begin Advance; SB.Append(ScanHexEscape); end;
           else
-            SB.Append(Peek);
-            Advance;
+            ProcessEscapeSequence(SB);
           end;
         end;
       end
@@ -342,18 +351,10 @@ begin
         if not IsAtEnd then
         begin
           case Peek of
-            'n': begin SB.Append(#10); Advance; end;
-            'r': begin SB.Append(#13); Advance; end;
-            't': begin SB.Append(#9); Advance; end;
-            '\': begin SB.Append('\'); Advance; end;
             '`': begin SB.Append('`'); Advance; end;
             '$': begin SB.Append('$'); Advance; end;
-            '0': begin SB.Append(#0); Advance; end;
-            'u': begin Advance; SB.Append(ScanUnicodeEscape); end;
-            'x': begin Advance; SB.Append(ScanHexEscape); end;
           else
-            SB.Append(Peek);
-            Advance;
+            ProcessEscapeSequence(SB);
           end;
         end;
       end
