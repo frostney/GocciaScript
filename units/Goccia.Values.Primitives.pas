@@ -310,7 +310,10 @@ end;
 
 function TGocciaBooleanLiteralValue.ToNumberLiteral: TGocciaNumberLiteralValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(Ord(FValue));
+  if FValue then
+    Result := TGocciaNumberLiteralValue.OneValue
+  else
+    Result := TGocciaNumberLiteralValue.ZeroValue;
 end;
 
 function TGocciaBooleanLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
