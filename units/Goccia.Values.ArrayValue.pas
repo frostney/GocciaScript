@@ -176,6 +176,11 @@ begin
     Result := TGocciaFunctionValue(Callback).Call(CallArgs, ThisArray);
 end;
 
+function CreateArrayCallbackArgs(Element: TGocciaValue; Index: Integer; ThisArray: TGocciaValue): TGocciaArgumentsCollection;
+begin
+  Result := TGocciaArgumentsCollection.Create([Element, TGocciaNumberLiteralValue.SmallInt(Index), ThisArray]);
+end;
+
 constructor TGocciaArrayValue.Create;
 begin
   inherited Create;
@@ -737,7 +742,7 @@ var
 begin
   Callback := ValidateArrayMethodCall('find', Args, ThisValue, True);
 
-  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
+  CallArgs := nil;
   try
     for I := 0 to Elements.Count - 1 do
     begin
@@ -745,8 +750,8 @@ begin
       if IsArrayHole(Element) then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-      CallArgs.SetElement(0, Element);
-      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
+      CallArgs.Free;
+      CallArgs := CreateArrayCallbackArgs(Element, I, ThisValue);
       CallResult := InvokeCallback(Callback, CallArgs, ThisValue);
       if CallResult.ToBooleanLiteral.Value then
       begin
@@ -770,7 +775,7 @@ var
 begin
   Callback := ValidateArrayMethodCall('findIndex', Args, ThisValue, True);
 
-  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, ThisValue]);
+  CallArgs := nil;
   try
     for I := 0 to Elements.Count - 1 do
     begin
@@ -778,8 +783,8 @@ begin
       if IsArrayHole(Element) then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-      CallArgs.SetElement(0, Element);
-      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
+      CallArgs.Free;
+      CallArgs := CreateArrayCallbackArgs(Element, I, ThisValue);
       CallResult := InvokeCallback(Callback, CallArgs, ThisValue);
       if CallResult.ToBooleanLiteral.Value then
       begin
