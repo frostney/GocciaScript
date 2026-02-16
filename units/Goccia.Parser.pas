@@ -45,6 +45,9 @@ type
     function ParseGetterExpression: TGocciaGetterExpression;
     function ParseSetterExpression: TGocciaSetterExpression;
 
+    // Object method body parsing: (params) { stmts } -> arrow function expression
+    function ParseObjectMethodBody(ALine, AColumn: Integer): TGocciaExpression;
+
     // Destructuring pattern parsing
     function ParsePattern: TGocciaDestructuringPattern;
     function ParseArrayPattern: TGocciaArrayDestructuringPattern;
@@ -72,7 +75,8 @@ type
     function ClassExpression: TGocciaExpression;
 
     // Statement parsing
-    // TODO: Make these types more strict
+    // These return the base TGocciaStatement type; narrowing to specific subtypes
+    // (e.g., TGocciaIfStatement) would improve type safety but requires updating all callers.
     function Statement: TGocciaStatement;
     function DeclarationStatement: TGocciaStatement;
     function ExpressionStatement: TGocciaStatement;
@@ -605,11 +609,6 @@ var
   IsComputed: Boolean;
   IsGetter, IsSetter: Boolean;
   ComputedCount, SourceOrderCount: Integer;
-  // Method shorthand variables
-  Parameters: TGocciaParameterArray;
-  Body: TGocciaASTNode;
-  Statements: TObjectList<TGocciaStatement>;
-  Stmt: TGocciaStatement;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -721,37 +720,7 @@ begin
     end
     // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
     else if Check(gttLeftParen) then
-    begin
-      // Method shorthand syntax (works for both computed and non-computed)
-      Line := Peek.Line;
-      Column := Peek.Column;
-
-      Consume(gttLeftParen, 'Expected "(" after method name');
-      Parameters := ParseParameterList;
-      Consume(gttRightParen, 'Expected ")" after parameters');
-
-      // Parse method body
-      Consume(gttLeftBrace, 'Expected "{" before method body');
-
-      // Create a block statement for the method body
-      Statements := TObjectList<TGocciaStatement>.Create(True);
-      try
-        while not Check(gttRightBrace) and not IsAtEnd do
-        begin
-          Stmt := Statement;
-          Statements.Add(Stmt);
-        end;
-
-        Consume(gttRightBrace, 'Expected "}" after method body');
-        Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
-
-        // Create function expression for the method
-        Value := TGocciaArrowFunctionExpression.Create(Parameters, Body, Line, Column);
-      except
-        Statements.Free;
-        raise;
-      end;
-    end
+      Value := ParseObjectMethodBody(Peek.Line, Peek.Column)
     else
     begin
       // Check for shorthand property syntax: { name } means { name: name }
@@ -914,6 +883,36 @@ begin
   Consume(gttRightParen, 'Expected ")" after setter parameter');
   Consume(gttLeftBrace, 'Expected "{" before setter body');
   Result := TGocciaSetterExpression.Create(ParamName, BlockStatement, Line, Column);
+end;
+
+function TGocciaParser.ParseObjectMethodBody(ALine, AColumn: Integer): TGocciaExpression;
+var
+  Parameters: TGocciaParameterArray;
+  Body: TGocciaASTNode;
+  Statements: TObjectList<TGocciaStatement>;
+  Stmt: TGocciaStatement;
+begin
+  Consume(gttLeftParen, 'Expected "(" after method name');
+  Parameters := ParseParameterList;
+  Consume(gttRightParen, 'Expected ")" after parameters');
+
+  Consume(gttLeftBrace, 'Expected "{" before method body');
+
+  Statements := TObjectList<TGocciaStatement>.Create(True);
+  try
+    while not Check(gttRightBrace) and not IsAtEnd do
+    begin
+      Stmt := Statement;
+      Statements.Add(Stmt);
+    end;
+
+    Consume(gttRightBrace, 'Expected "}" after method body');
+    Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), ALine, AColumn);
+    Result := TGocciaArrowFunctionExpression.Create(Parameters, Body, ALine, AColumn);
+  except
+    Statements.Free;
+    raise;
+  end;
 end;
 
 function TGocciaParser.ArrowFunction: TGocciaExpression;
