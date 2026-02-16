@@ -42,11 +42,12 @@ jobs:
           choco install freepascal -y --no-progress
           echo 'C:\ProgramData\chocolatey\bin' >> "$GITHUB_PATH"
           echo 'C:\tools\freepascal\bin\i386-win32' >> "$GITHUB_PATH"
-          echo '-Px86_64' >> 'C:/tools/freepascal/bin/i386-win32/fpc.cfg'
           echo '-FuC:/tools/freepascal/units/$fpctarget/*' >> 'C:/tools/freepascal/bin/i386-win32/fpc.cfg'
 
       - name: Build all
         run: ./build.pas
+        env:
+          FPC_TARGET_CPU: ${{ runner.os == 'Windows' && 'x86_64' || '' }}
 
       - name: Upload build
         uses: actions/upload-artifact@v4

@@ -12,12 +12,23 @@ var
   I: Integer;
   BuildTriggers: TStringList;
 
+function FPCArgs(const Source: string): TStringArray;
+var
+  Arch: string;
+begin
+  Arch := GetEnvironmentVariable('FPC_TARGET_CPU');
+  if Arch <> '' then
+    Result := ['-P' + Arch, '@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', Source]
+  else
+    Result := ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', Source];
+end;
+
 procedure BuildREPL;
 var
   Output: string;
 begin
   WriteLn('Building REPL...');
-  if not RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', 'REPL.dpr'], Output) then
+  if not RunCommand('fpc', FPCArgs('REPL.dpr'), Output) then
   begin
     WriteLn(Output);
     WriteLn('REPL build failed');
@@ -33,7 +44,7 @@ var
 begin
   WriteLn('');
   WriteLn('Building ScriptLoader...');
-  if not RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', 'ScriptLoader.dpr'], Output) then
+  if not RunCommand('fpc', FPCArgs('ScriptLoader.dpr'), Output) then
   begin
     WriteLn(Output);
     WriteLn('ScriptLoader build failed');
@@ -64,7 +75,7 @@ begin
 
   for I := 0 to TestFiles.Count - 1 do
   begin
-    if not RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', TestFiles[I]], Output) then
+    if not RunCommand('fpc', FPCArgs(TestFiles[I]), Output) then
     begin
       WriteLn(Output);
       WriteLn('Test build failed: ', TestFiles[I]);
@@ -81,7 +92,7 @@ var
   Output: string;
 begin
   WriteLn('Building TestRunner...');
-  if not RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', 'TestRunner.dpr'], Output) then
+  if not RunCommand('fpc', FPCArgs('TestRunner.dpr'), Output) then
   begin
     WriteLn(Output);
     WriteLn('TestRunner build failed');
@@ -96,7 +107,7 @@ var
   Output: string;
 begin
   WriteLn('Building BenchmarkRunner...');
-  if not RunCommand('fpc', ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', 'BenchmarkRunner.dpr'], Output) then
+  if not RunCommand('fpc', FPCArgs('BenchmarkRunner.dpr'), Output) then
   begin
     WriteLn(Output);
     WriteLn('BenchmarkRunner build failed');
