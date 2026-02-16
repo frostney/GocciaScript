@@ -12,6 +12,9 @@ uses
 type
   TGocciaParser = class
   private
+    type
+      TParseFunction = function: TGocciaExpression of object;
+  private
     FTokens: TObjectList<TGocciaToken>;
     FCurrent: Integer;
     FFileName: string;
@@ -27,6 +30,7 @@ type
     function Consume(TokenType: TGocciaTokenType; const Message: string): TGocciaToken;
     function IsArrowFunction: Boolean;
     function ConvertNumberLiteral(const Lexeme: string): Double;
+    function ParseBinaryExpression(NextLevel: TParseFunction; const Operators: array of TGocciaTokenType): TGocciaExpression;
 
     // Expression parsing (private)
     function Conditional: TGocciaExpression;
@@ -187,116 +191,51 @@ begin
   end;
 end;
 
-function TGocciaParser.LogicalOr: TGocciaExpression;
+function TGocciaParser.ParseBinaryExpression(NextLevel: TParseFunction; const Operators: array of TGocciaTokenType): TGocciaExpression;
 var
-  Operator: TGocciaToken;
-  Right: TGocciaExpression;
+  Op: TGocciaToken;
 begin
-  Result := NullishCoalescing;
-
-  while Match([gttOr]) do
+  Result := NextLevel();
+  while Match(Operators) do
   begin
-    Operator := Previous;
-    Right := NullishCoalescing;
-    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
-      Right, Operator.Line, Operator.Column);
+    Op := Previous;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, NextLevel(), Op.Line, Op.Column);
   end;
+end;
+
+function TGocciaParser.LogicalOr: TGocciaExpression;
+begin
+  Result := ParseBinaryExpression(NullishCoalescing, [gttOr]);
 end;
 
 function TGocciaParser.NullishCoalescing: TGocciaExpression;
-var
-  Operator: TGocciaToken;
-  Right: TGocciaExpression;
 begin
-  Result := LogicalAnd;
-
-  while Match([gttNullishCoalescing]) do
-  begin
-    Operator := Previous;
-    Right := LogicalAnd;
-    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
-      Right, Operator.Line, Operator.Column);
-  end;
+  Result := ParseBinaryExpression(LogicalAnd, [gttNullishCoalescing]);
 end;
 
 function TGocciaParser.LogicalAnd: TGocciaExpression;
-var
-  Operator: TGocciaToken;
-  Right: TGocciaExpression;
 begin
-  Result := BitwiseOr;
-
-  while Match([gttAnd]) do
-  begin
-    Operator := Previous;
-    Right := BitwiseOr;
-    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
-      Right, Operator.Line, Operator.Column);
-  end;
+  Result := ParseBinaryExpression(BitwiseOr, [gttAnd]);
 end;
 
 function TGocciaParser.Equality: TGocciaExpression;
-var
-  Operator: TGocciaToken;
-  Right: TGocciaExpression;
 begin
-  Result := Comparison;
-
-  while Match([gttEqual, gttNotEqual]) do
-  begin
-    Operator := Previous;
-    Right := Comparison;
-    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
-      Right, Operator.Line, Operator.Column);
-  end;
+  Result := ParseBinaryExpression(Comparison, [gttEqual, gttNotEqual]);
 end;
 
 function TGocciaParser.Comparison: TGocciaExpression;
-var
-  Operator: TGocciaToken;
-  Right: TGocciaExpression;
 begin
-  Result := Shift;
-
-  while Match([gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof, gttIn]) do
-  begin
-    Operator := Previous;
-    Right := Shift;
-    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
-      Right, Operator.Line, Operator.Column);
-  end;
+  Result := ParseBinaryExpression(Shift, [gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof, gttIn]);
 end;
 
 function TGocciaParser.Addition: TGocciaExpression;
-var
-  Operator: TGocciaToken;
-  Right: TGocciaExpression;
 begin
-  Result := Multiplication;
-
-  while Match([gttPlus, gttMinus]) do
-  begin
-    Operator := Previous;
-    Right := Multiplication;
-    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
-      Right, Operator.Line, Operator.Column);
-  end;
+  Result := ParseBinaryExpression(Multiplication, [gttPlus, gttMinus]);
 end;
 
 function TGocciaParser.Multiplication: TGocciaExpression;
-var
-  Operator: TGocciaToken;
-  Right: TGocciaExpression;
 begin
-  Result := Exponentiation;
-
-  while Match([gttStar, gttSlash, gttPercent]) do
-  begin
-    Operator := Previous;
-    Right := Exponentiation;
-    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
-      Right, Operator.Line, Operator.Column);
-  end;
+  Result := ParseBinaryExpression(Exponentiation, [gttStar, gttSlash, gttPercent]);
 end;
 
 function TGocciaParser.Exponentiation: TGocciaExpression;
@@ -1854,67 +1793,23 @@ begin
 end;
 
 function TGocciaParser.BitwiseOr: TGocciaExpression;
-var
-  Operator: TGocciaToken;
-  Right: TGocciaExpression;
 begin
-  Result := BitwiseXor;
-
-  while Match([gttBitwiseOr]) do
-  begin
-    Operator := Previous;
-    Right := BitwiseXor;
-    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
-      Right, Operator.Line, Operator.Column);
-  end;
+  Result := ParseBinaryExpression(BitwiseXor, [gttBitwiseOr]);
 end;
 
 function TGocciaParser.BitwiseXor: TGocciaExpression;
-var
-  Operator: TGocciaToken;
-  Right: TGocciaExpression;
 begin
-  Result := BitwiseAnd;
-
-  while Match([gttBitwiseXor]) do
-  begin
-    Operator := Previous;
-    Right := BitwiseAnd;
-    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
-      Right, Operator.Line, Operator.Column);
-  end;
+  Result := ParseBinaryExpression(BitwiseAnd, [gttBitwiseXor]);
 end;
 
 function TGocciaParser.BitwiseAnd: TGocciaExpression;
-var
-  Operator: TGocciaToken;
-  Right: TGocciaExpression;
 begin
-  Result := Equality;
-
-  while Match([gttBitwiseAnd]) do
-  begin
-    Operator := Previous;
-    Right := Equality;
-    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
-      Right, Operator.Line, Operator.Column);
-  end;
+  Result := ParseBinaryExpression(Equality, [gttBitwiseAnd]);
 end;
 
 function TGocciaParser.Shift: TGocciaExpression;
-var
-  Operator: TGocciaToken;
-  Right: TGocciaExpression;
 begin
-  Result := Addition;
-
-  while Match([gttLeftShift, gttRightShift, gttUnsignedRightShift]) do
-  begin
-    Operator := Previous;
-    Right := Addition;
-    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
-      Right, Operator.Line, Operator.Column);
-  end;
+  Result := ParseBinaryExpression(Addition, [gttLeftShift, gttRightShift, gttUnsignedRightShift]);
 end;
 
 function TGocciaParser.ConvertNumberLiteral(const Lexeme: string): Double;
