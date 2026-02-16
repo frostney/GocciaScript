@@ -261,7 +261,12 @@ begin
           else if E.Value is TGocciaStringLiteralValue then
             Result := TGocciaStringLiteralValue.Create(TGocciaStringLiteralValue(E.Value).Value)
           else if E.Value is TGocciaBooleanLiteralValue then
-            Result := TGocciaBooleanLiteralValue.Create(TGocciaBooleanLiteralValue(E.Value).Value)
+          begin
+            if TGocciaBooleanLiteralValue(E.Value).Value then
+              Result := TGocciaBooleanLiteralValue.TrueValue
+            else
+              Result := TGocciaBooleanLiteralValue.FalseValue;
+          end
           else if E.Value is TGocciaUndefinedLiteralValue then
             Result := TGocciaUndefinedLiteralValue.UndefinedValue
           else if E.Value is TGocciaObjectValue then

@@ -241,7 +241,7 @@ var
 begin
   if Args.Length = 0 then
   begin
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
@@ -249,17 +249,17 @@ begin
 
   if not (NumberArg is TGocciaNumberLiteralValue) then
   begin
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
   if NumberArg.IsNaN or NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
   begin
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
-  Result := TGocciaBooleanLiteralValue.Create(True);
+  Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
 
 function TGocciaGlobalNumber.NumberIsNaN(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -268,7 +268,7 @@ var
 begin
   if Args.Length = 0 then
   begin
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
@@ -276,13 +276,13 @@ begin
   if Args.GetElement(0) is TGocciaNumberLiteralValue then
   begin
     NumberArg := TGocciaNumberLiteralValue(Args.GetElement(0));
-    Result := TGocciaBooleanLiteralValue.Create(NumberArg.IsNaN);
+    if NumberArg.IsNaN then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
   end
   else
-  begin
-    // If argument is not a NumberValue, Number.isNaN should return false
-    Result := TGocciaBooleanLiteralValue.Create(False);
-  end;
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaGlobalNumber.NumberIsInteger(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -292,7 +292,7 @@ var
 begin
   if Args.Length = 0 then
   begin
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
@@ -300,7 +300,7 @@ begin
 
   if not (NumberArg is TGocciaNumberLiteralValue) then
   begin
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
@@ -308,11 +308,14 @@ begin
 
   if NumberArg.IsNaN or NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
   begin
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
-  Result := TGocciaBooleanLiteralValue.Create(Value = Trunc(Value));
+  if Value = Trunc(Value) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaGlobalNumber.NumberIsSafeInteger(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -322,13 +325,13 @@ var
 begin
   if Args.Length = 0 then
   begin
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
   if not (Args.GetElement(0) is TGocciaNumberLiteralValue) then
   begin
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
@@ -336,15 +339,17 @@ begin
 
   if NumberArg.IsNaN or NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
   begin
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
   Value := NumberArg.Value;
 
   // Must be an integer and within safe integer range
-  Result := TGocciaBooleanLiteralValue.Create(
-    (Value = Trunc(Value)) and (Abs(Value) <= 9007199254740991));
+  if (Value = Trunc(Value)) and (Abs(Value) <= 9007199254740991) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 end.

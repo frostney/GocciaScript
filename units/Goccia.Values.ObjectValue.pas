@@ -230,7 +230,7 @@ end;
 
 function TGocciaObjectValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
 begin
-  Result := TGocciaBooleanLiteralValue.Create(True);
+  Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
 
 function TGocciaObjectValue.ToNumberLiteral: TGocciaNumberLiteralValue;

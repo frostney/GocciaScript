@@ -327,7 +327,7 @@ begin
          (Copy(FJsonText, FPosition, 4) = 'true') then
       begin
         Inc(FPosition, 4);
-        Result := TGocciaBooleanLiteralValue.Create(True);
+        Result := TGocciaBooleanLiteralValue.TrueValue;
       end
       else
         RaiseParseError('Invalid literal starting with t');
@@ -337,7 +337,7 @@ begin
          (Copy(FJsonText, FPosition, 5) = 'false') then
       begin
         Inc(FPosition, 5);
-        Result := TGocciaBooleanLiteralValue.Create(False);
+        Result := TGocciaBooleanLiteralValue.FalseValue;
       end
       else
         RaiseParseError('Invalid literal starting with f');

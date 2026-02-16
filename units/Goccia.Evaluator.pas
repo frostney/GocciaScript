@@ -628,17 +628,17 @@ begin
     gttPower:
       Result := EvaluateExponentiation(Left, Right);
     gttEqual:
-      Result := TGocciaBooleanLiteralValue.Create(IsStrictEqual(Left, Right));
+      if IsStrictEqual(Left, Right) then Result := TGocciaBooleanLiteralValue.TrueValue else Result := TGocciaBooleanLiteralValue.FalseValue;
     gttNotEqual:
-      Result := TGocciaBooleanLiteralValue.Create(IsNotStrictEqual(Left, Right));
+      if IsNotStrictEqual(Left, Right) then Result := TGocciaBooleanLiteralValue.TrueValue else Result := TGocciaBooleanLiteralValue.FalseValue;
     gttLess:
-      Result := TGocciaBooleanLiteralValue.Create(LessThan(Left, Right));
+      if LessThan(Left, Right) then Result := TGocciaBooleanLiteralValue.TrueValue else Result := TGocciaBooleanLiteralValue.FalseValue;
     gttGreater:
-      Result := TGocciaBooleanLiteralValue.Create(GreaterThan(Left, Right));
+      if GreaterThan(Left, Right) then Result := TGocciaBooleanLiteralValue.TrueValue else Result := TGocciaBooleanLiteralValue.FalseValue;
     gttLessEqual:
-      Result := TGocciaBooleanLiteralValue.Create(LessThanOrEqual(Left, Right));
+      if LessThanOrEqual(Left, Right) then Result := TGocciaBooleanLiteralValue.TrueValue else Result := TGocciaBooleanLiteralValue.FalseValue;
     gttGreaterEqual:
-      Result := TGocciaBooleanLiteralValue.Create(GreaterThanOrEqual(Left, Right));
+      if GreaterThanOrEqual(Left, Right) then Result := TGocciaBooleanLiteralValue.TrueValue else Result := TGocciaBooleanLiteralValue.FalseValue;
     gttInstanceof:
       Result := EvaluateInstanceof(Left, Right, IsObjectInstanceOfClass);
     gttIn:
@@ -693,7 +693,7 @@ begin
 
   case UnaryExpression.Operator of
     gttNot:
-      Result := TGocciaBooleanLiteralValue.Create(not Operand.ToBooleanLiteral.Value);
+      if Operand.ToBooleanLiteral.Value then Result := TGocciaBooleanLiteralValue.FalseValue else Result := TGocciaBooleanLiteralValue.TrueValue;
     gttMinus:
       begin
         // Handle infinity cases first
@@ -707,7 +707,7 @@ begin
           else if TGocciaNumberLiteralValue(Operand).Value = 0 then
           begin
             if TGocciaNumberLiteralValue(Operand).IsNegativeZero then
-              Result := TGocciaNumberLiteralValue.Create(0.0)  // -(-0) = +0
+              Result := TGocciaNumberLiteralValue.ZeroValue  // -(-0) = +0
             else
               Result := TGocciaNumberLiteralValue.NegativeZeroValue;  // -0 = -0
           end
@@ -2458,13 +2458,13 @@ begin
       begin
         // Set array element to nil (creates a hole/sparse array)
         ArrayValue.Elements[Index] := nil;
-        Result := TGocciaBooleanLiteralValue.Create(True);
+        Result := TGocciaBooleanLiteralValue.TrueValue;
       end
       else
       begin
         // Try to delete as a regular property on the array object
         ArrayValue.DeleteProperty(PropertyName);
-        Result := TGocciaBooleanLiteralValue.Create(True);
+        Result := TGocciaBooleanLiteralValue.TrueValue;
       end;
     end
     // Handle object property deletion
@@ -2472,12 +2472,15 @@ begin
     begin
       ObjectValue := TGocciaObjectValue(ObjValue);
       // DeleteProperty returns False for non-configurable properties, True otherwise
-      Result := TGocciaBooleanLiteralValue.Create(ObjectValue.DeleteProperty(PropertyName));
+      if ObjectValue.DeleteProperty(PropertyName) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
     end
     else
     begin
       // Cannot delete properties from primitives, null, or undefined
-      Result := TGocciaBooleanLiteralValue.Create(True);
+      Result := TGocciaBooleanLiteralValue.TrueValue;
     end;
   end
   else
@@ -2488,13 +2491,13 @@ begin
       // In strict mode, attempting to delete variables/identifiers throws TypeError
       Context.OnError('Delete of an unqualified identifier in strict mode',
         Operand.Line, Operand.Column);
-      Result := TGocciaBooleanLiteralValue.Create(True); // Fallback if OnError doesn't throw
+      Result := TGocciaBooleanLiteralValue.TrueValue; // Fallback if OnError doesn't throw
     end
     else
     begin
       // For literals and other non-reference expressions, return true
       // (e.g., delete 5, delete "string", delete (1+2), etc.)
-      Result := TGocciaBooleanLiteralValue.Create(True);
+      Result := TGocciaBooleanLiteralValue.TrueValue;
     end;
   end;
 end;

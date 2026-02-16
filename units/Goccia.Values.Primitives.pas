@@ -541,7 +541,7 @@ begin
   // Empty string (after trim) converts to 0
   if Trimmed = '' then
   begin
-    Result := TGocciaNumberLiteralValue.Create(0);
+    Result := TGocciaNumberLiteralValue.ZeroValue;
     Exit;
   end;
 

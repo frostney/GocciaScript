@@ -209,10 +209,10 @@ var
   M: TGocciaMapValue;
 begin
   M := TGocciaMapValue(ThisValue);
-  if Args.Length > 0 then
-    Result := TGocciaBooleanLiteralValue.Create(M.FindEntry(Args.GetElement(0)) >= 0)
+  if (Args.Length > 0) and (M.FindEntry(Args.GetElement(0)) >= 0) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
   else
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaMapValue.MapDelete(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -221,14 +221,14 @@ var
   Index: Integer;
 begin
   M := TGocciaMapValue(ThisValue);
-  Result := TGocciaBooleanLiteralValue.Create(False);
+  Result := TGocciaBooleanLiteralValue.FalseValue;
   if Args.Length > 0 then
   begin
     Index := M.FindEntry(Args.GetElement(0));
     if Index >= 0 then
     begin
       M.FEntries.Delete(Index);
-      Result := TGocciaBooleanLiteralValue.Create(True);
+      Result := TGocciaBooleanLiteralValue.TrueValue;
     end;
   end;
 end;

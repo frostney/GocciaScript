@@ -39,7 +39,10 @@ begin
   if Args.Length < 1 then
     Result := TGocciaBooleanLiteralValue.FalseValue
   else
-    Result := TGocciaBooleanLiteralValue.Create(Args.GetElement(0) is TGocciaArrayValue);
+    if Args.GetElement(0) is TGocciaArrayValue then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaGlobalArray.ArrayFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

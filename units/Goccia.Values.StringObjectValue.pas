@@ -284,7 +284,7 @@ begin
 
   // Return character code at index or NaN
   if (Index >= 0) and (Index < Length(StringValue)) then
-    Result := TGocciaNumberLiteralValue.Create(Ord(StringValue[Index + 1])) // Pascal is 1-indexed
+    Result := TGocciaNumberLiteralValue.SmallInt(Ord(StringValue[Index + 1])) // Pascal is 1-indexed
   else
     Result := TGocciaNumberLiteralValue.NaNValue;
 end;
@@ -507,13 +507,19 @@ begin
   if StartPosition >= Length(StringValue) then
   begin
     // If start position is beyond string length, only empty string can be found
-    Result := TGocciaBooleanLiteralValue.Create(SearchValue = '');
+    if SearchValue = '' then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
   // Search for the substring (Pascal is 1-indexed)
   FoundIndex := Pos(SearchValue, Copy(StringValue, StartPosition + 1, Length(StringValue)));
-  Result := TGocciaBooleanLiteralValue.Create(FoundIndex > 0);
+  if FoundIndex > 0 then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaStringObjectValue.StringStartsWith(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -532,10 +538,11 @@ begin
     SearchValue := 'undefined';
 
   // Check if the string starts with the search string
-  if Length(StringValue) >= Length(SearchValue) then
-    Result := TGocciaBooleanLiteralValue.Create(Copy(StringValue, 1, Length(SearchValue)) = SearchValue)
+  if (Length(StringValue) >= Length(SearchValue)) and
+     (Copy(StringValue, 1, Length(SearchValue)) = SearchValue) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
   else
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaStringObjectValue.StringEndsWith(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -554,10 +561,11 @@ begin
     SearchValue := 'undefined';
 
   // Check if the string ends with the search string
-  if Length(StringValue) >= Length(SearchValue) then
-    Result := TGocciaBooleanLiteralValue.Create(Copy(StringValue, Length(StringValue) - Length(SearchValue) + 1, Length(SearchValue)) = SearchValue)
+  if (Length(StringValue) >= Length(SearchValue)) and
+     (Copy(StringValue, Length(StringValue) - Length(SearchValue) + 1, Length(SearchValue)) = SearchValue) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
   else
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaStringObjectValue.StringTrim(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

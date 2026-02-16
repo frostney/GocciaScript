@@ -148,10 +148,10 @@ var
   S: TGocciaSetValue;
 begin
   S := TGocciaSetValue(ThisValue);
-  if Args.Length > 0 then
-    Result := TGocciaBooleanLiteralValue.Create(S.ContainsValue(Args.GetElement(0)))
+  if (Args.Length > 0) and S.ContainsValue(Args.GetElement(0)) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
   else
-    Result := TGocciaBooleanLiteralValue.Create(False);
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaSetValue.SetAdd(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -170,7 +170,7 @@ var
   I: Integer;
 begin
   S := TGocciaSetValue(ThisValue);
-  Result := TGocciaBooleanLiteralValue.Create(False);
+  Result := TGocciaBooleanLiteralValue.FalseValue;
   if Args.Length > 0 then
   begin
     for I := 0 to S.FItems.Count - 1 do
@@ -178,7 +178,7 @@ begin
       if IsSameValueZero(S.FItems[I], Args.GetElement(0)) then
       begin
         S.FItems.Delete(I);
-        Result := TGocciaBooleanLiteralValue.Create(True);
+        Result := TGocciaBooleanLiteralValue.TrueValue;
         Exit;
       end;
     end;

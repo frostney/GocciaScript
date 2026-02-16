@@ -521,7 +521,10 @@ begin
 
   if Args.Length < 1 then
   begin
-    Result := TGocciaBooleanLiteralValue.Create(Arr.Includes(TGocciaUndefinedLiteralValue.UndefinedValue, 0));
+    if Arr.Includes(TGocciaUndefinedLiteralValue.UndefinedValue, 0) then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
@@ -532,7 +535,10 @@ begin
   if Args.Length > 1 then
     FromIndex := Trunc(Args.GetElement(1).ToNumberLiteral.Value);
 
-  Result := TGocciaBooleanLiteralValue.Create(Arr.Includes(SearchValue, FromIndex));
+  if Arr.Includes(SearchValue, FromIndex) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaArrayValue.ArraySome(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -558,7 +564,7 @@ begin
       SomeResult := InvokeCallback(Callback, CallArgs, ThisValue);
       if SomeResult.ToBooleanLiteral.Value then
       begin
-        Result := TGocciaBooleanLiteralValue.Create(True);
+        Result := TGocciaBooleanLiteralValue.TrueValue;
         Exit;
       end;
     end;
@@ -566,7 +572,7 @@ begin
     CallArgs.Free;
   end;
 
-  Result := TGocciaBooleanLiteralValue.Create(False);
+  Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaArrayValue.ArrayEvery(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -592,7 +598,7 @@ begin
       EveryResult := InvokeCallback(Callback, CallArgs, ThisValue);
       if not EveryResult.ToBooleanLiteral.Value then
       begin
-        Result := TGocciaBooleanLiteralValue.Create(False);
+        Result := TGocciaBooleanLiteralValue.FalseValue;
         Exit;
       end;
     end;
@@ -600,7 +606,7 @@ begin
     CallArgs.Free;
   end;
 
-  Result := TGocciaBooleanLiteralValue.Create(True);
+  Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
 
 procedure TGocciaArrayValue.FlattenInto(Target: TGocciaArrayValue; Depth: Integer);
@@ -1130,7 +1136,7 @@ function TGocciaArrayValue.ToNumberLiteral: TGocciaNumberLiteralValue;
 begin
   // ECMAScript: [] -> "" -> 0, [n] -> n, [a, b] -> NaN
   if FElements.Count = 0 then
-    Result := TGocciaNumberLiteralValue.Create(0)
+    Result := TGocciaNumberLiteralValue.ZeroValue
   else if FElements.Count = 1 then
     Result := FElements[0].ToNumberLiteral
   else
@@ -1139,7 +1145,7 @@ end;
 
 function TGocciaArrayValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
 begin
-  Result := TGocciaBooleanLiteralValue.Create(True);
+  Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
 
 function TGocciaArrayValue.TypeName: string;

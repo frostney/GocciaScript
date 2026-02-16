@@ -590,7 +590,10 @@ implementation
     EqualResult: TGocciaBooleanLiteralValue;
   begin
     EqualResult := IsEqual(Other);
-    Result := TGocciaBooleanLiteralValue.Create(not EqualResult.Value);
+    if EqualResult.Value then
+      Result := TGocciaBooleanLiteralValue.FalseValue
+    else
+      Result := TGocciaBooleanLiteralValue.TrueValue;
   end;
 
   function TGocciaValueHelper.IsLessThan(Other: TGocciaValue): TGocciaBooleanLiteralValue;
@@ -602,7 +605,10 @@ implementation
     begin
       LeftStr := TGocciaStringLiteralValue(Self);
       RightStr := TGocciaStringLiteralValue(Other);
-      Result := TGocciaBooleanLiteralValue.Create(LeftStr.Value < RightStr.Value);
+      if LeftStr.Value < RightStr.Value then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
     end
     else
     begin
@@ -614,13 +620,20 @@ implementation
       else if LeftNum.IsInfinity then
         Result := TGocciaBooleanLiteralValue.FalseValue  // +Infinity is not less than anything
       else if LeftNum.IsNegativeInfinity then
-        Result := TGocciaBooleanLiteralValue.Create(not (RightNum.IsNegativeInfinity))  // -Infinity < anything except -Infinity
+      begin
+        if RightNum.IsNegativeInfinity then
+          Result := TGocciaBooleanLiteralValue.FalseValue
+        else
+          Result := TGocciaBooleanLiteralValue.TrueValue;  // -Infinity < anything except -Infinity
+      end
       else if RightNum.IsInfinity then
         Result := TGocciaBooleanLiteralValue.TrueValue  // Anything < +Infinity
       else if RightNum.IsNegativeInfinity then
         Result := TGocciaBooleanLiteralValue.FalseValue  // Nothing < -Infinity
+      else if LeftNum.Value < RightNum.Value then
+        Result := TGocciaBooleanLiteralValue.TrueValue
       else
-        Result := TGocciaBooleanLiteralValue.Create(LeftNum.Value < RightNum.Value);
+        Result := TGocciaBooleanLiteralValue.FalseValue;
     end;
   end;
 
@@ -633,7 +646,10 @@ implementation
     begin
       LeftStr := TGocciaStringLiteralValue(Self);
       RightStr := TGocciaStringLiteralValue(Other);
-      Result := TGocciaBooleanLiteralValue.Create(LeftStr.Value > RightStr.Value);
+      if LeftStr.Value > RightStr.Value then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
     end
     else
     begin
@@ -643,15 +659,22 @@ implementation
       if (LeftNum.IsNaN or RightNum.IsNaN) then
         Result := TGocciaBooleanLiteralValue.FalseValue
       else if LeftNum.IsInfinity then
-        Result := TGocciaBooleanLiteralValue.Create(not (RightNum.IsInfinity))  // +Infinity > anything except +Infinity
+      begin
+        if RightNum.IsInfinity then
+          Result := TGocciaBooleanLiteralValue.FalseValue
+        else
+          Result := TGocciaBooleanLiteralValue.TrueValue;  // +Infinity > anything except +Infinity
+      end
       else if LeftNum.IsNegativeInfinity then
         Result := TGocciaBooleanLiteralValue.FalseValue  // -Infinity is not greater than anything
       else if RightNum.IsInfinity then
         Result := TGocciaBooleanLiteralValue.FalseValue  // Nothing > +Infinity
       else if RightNum.IsNegativeInfinity then
         Result := TGocciaBooleanLiteralValue.TrueValue  // Anything > -Infinity
+      else if LeftNum.Value > RightNum.Value then
+        Result := TGocciaBooleanLiteralValue.TrueValue
       else
-        Result := TGocciaBooleanLiteralValue.Create(LeftNum.Value > RightNum.Value);
+        Result := TGocciaBooleanLiteralValue.FalseValue;
     end;
   end;
 
@@ -674,7 +697,10 @@ implementation
     
     LessResult := IsLessThan(Other);
     EqualResult := IsEqual(Other);
-    Result := TGocciaBooleanLiteralValue.Create(LessResult.Value or EqualResult.Value);
+    if LessResult.Value or EqualResult.Value then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
   end;
 
   function TGocciaValueHelper.IsGreaterThanOrEqual(Other: TGocciaValue): TGocciaBooleanLiteralValue;
@@ -696,7 +722,10 @@ implementation
     
     GreaterResult := IsGreaterThan(Other);
     EqualResult := IsEqual(Other);
-    Result := TGocciaBooleanLiteralValue.Create(GreaterResult.Value or EqualResult.Value);
+    if GreaterResult.Value or EqualResult.Value then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
   end;
 
 end.

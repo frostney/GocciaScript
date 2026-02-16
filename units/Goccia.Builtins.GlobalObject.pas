@@ -218,8 +218,10 @@ begin
     ClassObj := TGocciaClassValue(Args.GetElement(0));
     PropertyName := Args.GetElement(1).ToStringLiteral.Value;
     // Check static properties on the class (private fields are never own properties)
-    Result := TGocciaBooleanLiteralValue.Create(
-      not (ClassObj.GetProperty(PropertyName) is TGocciaUndefinedLiteralValue));
+    if not (ClassObj.GetProperty(PropertyName) is TGocciaUndefinedLiteralValue) then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
 
@@ -229,7 +231,10 @@ begin
   Obj := TGocciaObjectValue(Args.GetElement(0));
   PropertyName := Args.GetElement(1).ToStringLiteral.Value;
 
-  Result := TGocciaBooleanLiteralValue.Create(Obj.HasOwnProperty(PropertyName));
+  if Obj.HasOwnProperty(PropertyName) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaGlobalObject.ObjectGetOwnPropertyNames(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -275,14 +280,23 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end else begin
     DescriptorObj := TGocciaObjectValue.Create;
-    DescriptorObj.AssignProperty('enumerable', TGocciaBooleanLiteralValue.Create(Descriptor.Enumerable));
-    DescriptorObj.AssignProperty('configurable', TGocciaBooleanLiteralValue.Create(Descriptor.Configurable));
+    if Descriptor.Enumerable then
+      DescriptorObj.AssignProperty('enumerable', TGocciaBooleanLiteralValue.TrueValue)
+    else
+      DescriptorObj.AssignProperty('enumerable', TGocciaBooleanLiteralValue.FalseValue);
+    if Descriptor.Configurable then
+      DescriptorObj.AssignProperty('configurable', TGocciaBooleanLiteralValue.TrueValue)
+    else
+      DescriptorObj.AssignProperty('configurable', TGocciaBooleanLiteralValue.FalseValue);
 
     if Descriptor is TGocciaPropertyDescriptorData then
     begin
       // Data descriptor: has value and writable properties
       DescriptorObj.AssignProperty('value', TGocciaPropertyDescriptorData(Descriptor).Value);
-      DescriptorObj.AssignProperty('writable', TGocciaBooleanLiteralValue.Create(Descriptor.Writable));
+      if Descriptor.Writable then
+        DescriptorObj.AssignProperty('writable', TGocciaBooleanLiteralValue.TrueValue)
+      else
+        DescriptorObj.AssignProperty('writable', TGocciaBooleanLiteralValue.FalseValue);
     end
     else if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
@@ -483,7 +497,10 @@ begin
     Exit;
   end;
 
-  Result := TGocciaBooleanLiteralValue.Create(TGocciaObjectValue(Args.GetElement(0)).IsFrozen);
+  if TGocciaObjectValue(Args.GetElement(0)).IsFrozen then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 function TGocciaGlobalObject.ObjectGetPrototypeOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

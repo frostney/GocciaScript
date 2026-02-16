@@ -264,7 +264,7 @@ begin
   if NumberLiteral.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
   else if NumberLiteral.IsInfinity then
-    Result := TGocciaNumberLiteralValue.Create(1)  // +Infinity has sign 1
+    Result := TGocciaNumberLiteralValue.OneValue  // +Infinity has sign 1
   else if NumberLiteral.IsNegativeInfinity then
     Result := TGocciaNumberLiteralValue.Create(-1)  // -Infinity has sign -1
   else
@@ -299,7 +299,7 @@ begin
   if NumberLiteral.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
   else if NumberLiteral.IsNegativeInfinity then
-    Result := TGocciaNumberLiteralValue.Create(0)  // exp(-Infinity) = 0
+    Result := TGocciaNumberLiteralValue.ZeroValue  // exp(-Infinity) = 0
   else if NumberLiteral.IsInfinity then
     Result := TGocciaNumberLiteralValue.InfinityValue  // exp(+Infinity) = +Infinity
   else

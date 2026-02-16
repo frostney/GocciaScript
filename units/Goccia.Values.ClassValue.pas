@@ -448,7 +448,7 @@ begin
   else if FName = 'Number' then
   begin
     if Arguments.Length = 0 then
-      Result := TGocciaNumberLiteralValue.Create(0)
+      Result := TGocciaNumberLiteralValue.ZeroValue
     else
       Result := Arguments.GetElement(0).ToNumberLiteral;
   end
