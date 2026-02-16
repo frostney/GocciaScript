@@ -83,6 +83,22 @@ implementation
 uses Goccia.Values.FunctionValue, Goccia.Values.NativeFunction,
     Goccia.Values.ErrorHelper, Goccia.Values.ClassHelper;
 
+procedure MarkPropertyDescriptor(ADescriptor: TGocciaPropertyDescriptor);
+begin
+  if ADescriptor is TGocciaPropertyDescriptorData then
+  begin
+    if Assigned(TGocciaPropertyDescriptorData(ADescriptor).Value) then
+      TGocciaPropertyDescriptorData(ADescriptor).Value.GCMarkReferences;
+  end
+  else if ADescriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
+      TGocciaPropertyDescriptorAccessor(ADescriptor).Getter.GCMarkReferences;
+    if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
+      TGocciaPropertyDescriptorAccessor(ADescriptor).Setter.GCMarkReferences;
+  end;
+end;
+
 { TGocciaObjectValue }
 
 constructor TGocciaObjectValue.Create(APrototype: TGocciaObjectValue = nil);
@@ -117,50 +133,20 @@ procedure TGocciaObjectValue.GCMarkReferences;
 var
   Pair: TPair<string, TGocciaPropertyDescriptor>;
   SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
-  Desc: TGocciaPropertyDescriptor;
 begin
   if GCMarked then Exit;
   inherited; // Sets FGCMarked := True
 
-  // Mark prototype
   if Assigned(FPrototype) then
     FPrototype.GCMarkReferences;
 
-  // Mark all property descriptor values
   for Pair in FPropertyDescriptors do
-  begin
-    Desc := Pair.Value;
-    if Desc is TGocciaPropertyDescriptorData then
-    begin
-      if Assigned(TGocciaPropertyDescriptorData(Desc).Value) then
-        TGocciaPropertyDescriptorData(Desc).Value.GCMarkReferences;
-    end
-    else if Desc is TGocciaPropertyDescriptorAccessor then
-    begin
-      if Assigned(TGocciaPropertyDescriptorAccessor(Desc).Getter) then
-        TGocciaPropertyDescriptorAccessor(Desc).Getter.GCMarkReferences;
-      if Assigned(TGocciaPropertyDescriptorAccessor(Desc).Setter) then
-        TGocciaPropertyDescriptorAccessor(Desc).Setter.GCMarkReferences;
-    end;
-  end;
+    MarkPropertyDescriptor(Pair.Value);
 
-  // Mark symbol descriptor keys and values
   for SymPair in FSymbolDescriptors do
   begin
     SymPair.Key.GCMarkReferences;
-    Desc := SymPair.Value;
-    if Desc is TGocciaPropertyDescriptorData then
-    begin
-      if Assigned(TGocciaPropertyDescriptorData(Desc).Value) then
-        TGocciaPropertyDescriptorData(Desc).Value.GCMarkReferences;
-    end
-    else if Desc is TGocciaPropertyDescriptorAccessor then
-    begin
-      if Assigned(TGocciaPropertyDescriptorAccessor(Desc).Getter) then
-        TGocciaPropertyDescriptorAccessor(Desc).Getter.GCMarkReferences;
-      if Assigned(TGocciaPropertyDescriptorAccessor(Desc).Setter) then
-        TGocciaPropertyDescriptorAccessor(Desc).Setter.GCMarkReferences;
-    end;
+    MarkPropertyDescriptor(SymPair.Value);
   end;
 end;
 
