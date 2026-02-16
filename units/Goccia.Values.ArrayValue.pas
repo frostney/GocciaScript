@@ -1103,30 +1103,27 @@ end;
 function TGocciaArrayValue.ToStringLiteral: TGocciaStringLiteralValue;
 var
   I: Integer;
-  S: string;
+  SB: TStringBuilder;
 begin
-  // ECMAScript compliant: Array.toString() behaves like Array.join() with comma separator
-  // Empty array converts to empty string
   if FElements.Count = 0 then
   begin
     Result := TGocciaStringLiteralValue.Create('');
     Exit;
   end;
 
-  S := '';
-  for I := 0 to FElements.Count - 1 do
-  begin
-    if I > 0 then
-      S := S + ',';
-
-    // For holes (nil), show as empty (consistent with join behavior)
-    if FElements[I] = nil then
-      S := S + ''
-    else
-      S := S + FElements[I].ToStringLiteral.Value;
+  SB := TStringBuilder.Create;
+  try
+    for I := 0 to FElements.Count - 1 do
+    begin
+      if I > 0 then
+        SB.Append(',');
+      if FElements[I] <> nil then
+        SB.Append(FElements[I].ToStringLiteral.Value);
+    end;
+    Result := TGocciaStringLiteralValue.Create(SB.ToString);
+  finally
+    SB.Free;
   end;
-
-  Result := TGocciaStringLiteralValue.Create(S);
 end;
 
 function TGocciaArrayValue.ToNumberLiteral: TGocciaNumberLiteralValue;
