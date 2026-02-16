@@ -10,6 +10,8 @@ uses
   Generics.Collections, SysUtils, Math, Classes;
 
 type
+  PGocciaValue = ^TGocciaValue;
+
   TGocciaEvaluationContext = record
     Scope: TGocciaScope;
     OnError: TGocciaThrowErrorCallback;
@@ -802,7 +804,19 @@ begin
   end;
 end;
 
+function EvaluateMemberCore(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext; OutObjectValue: PGocciaValue): TGocciaValue; forward;
+
 function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := EvaluateMemberCore(MemberExpression, Context, nil);
+end;
+
+function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext; out ObjectValue: TGocciaValue): TGocciaValue;
+begin
+  Result := EvaluateMemberCore(MemberExpression, Context, @ObjectValue);
+end;
+
+function EvaluateMemberCore(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext; OutObjectValue: PGocciaValue): TGocciaValue;
 var
   Obj: TGocciaValue;
   PropertyName: string;
@@ -815,6 +829,8 @@ begin
   if MemberExpression.Optional then
   begin
     Obj := EvaluateExpression(MemberExpression.ObjectExpr, Context);
+    if Assigned(OutObjectValue) then
+      OutObjectValue^ := Obj;
     if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
     begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -831,8 +847,13 @@ begin
       Context.OnError('super can only be used within a method with a superclass',
         MemberExpression.Line, MemberExpression.Column);
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      if Assigned(OutObjectValue) then
+        OutObjectValue^ := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
     end;
+
+    if Assigned(OutObjectValue) then
+      OutObjectValue^ := SuperClass;
 
     // Get the property name
     if MemberExpression.Computed and Assigned(MemberExpression.PropertyExpression) then
@@ -859,19 +880,12 @@ begin
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     end;
 
-    if not (Result is TGocciaUndefinedLiteralValue) then
-    begin
-      // For super.method() calls, we need to create a bound method that uses the current 'this'
-      // This is handled in the call evaluation where we have access to the current 'this'
-    end
-    else
-    begin
-    end;
-
     Exit;
   end;
 
   Obj := EvaluateExpression(MemberExpression.ObjectExpr, Context);
+  if Assigned(OutObjectValue) then
+    OutObjectValue^ := Obj;
 
   // Determine the property name
   if MemberExpression.Computed and Assigned(MemberExpression.PropertyExpression) then
@@ -906,121 +920,6 @@ begin
     else if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
     begin
       Context.OnError('Cannot read property ''' + PropertyName + ''' of ' + Obj.ToStringLiteral.Value,
-        MemberExpression.Line, MemberExpression.Column);
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end
-    else
-    begin
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end;
-  end;
-end;
-
-function EvaluateMember(MemberExpression: TGocciaMemberExpression; Context: TGocciaEvaluationContext; out ObjectValue: TGocciaValue): TGocciaValue;
-var
-  PropertyName: string;
-  PropertyValue: TGocciaValue;
-  SuperClass: TGocciaClassValue;
-  BoxedValue: TGocciaObjectValue;
-begin
-
-  // Handle optional chaining: obj?.prop returns undefined if obj is null/undefined
-  if MemberExpression.Optional then
-  begin
-    ObjectValue := EvaluateExpression(MemberExpression.ObjectExpr, Context);
-    if (ObjectValue is TGocciaNullLiteralValue) or (ObjectValue is TGocciaUndefinedLiteralValue) then
-    begin
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-  end;
-
-  // Handle super.method() specially
-  if MemberExpression.ObjectExpr is TGocciaSuperExpression then
-  begin
-    SuperClass := TGocciaClassValue(EvaluateExpression(MemberExpression.ObjectExpr, Context));
-    if not (SuperClass is TGocciaClassValue) then
-    begin
-      Context.OnError('super can only be used within a method with a superclass',
-        MemberExpression.Line, MemberExpression.Column);
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      ObjectValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-
-    ObjectValue := SuperClass; // For super calls, the object is the superclass
-
-    // Get the property name
-    if MemberExpression.Computed and Assigned(MemberExpression.PropertyExpression) then
-    begin
-      PropertyValue := EvaluateExpression(MemberExpression.PropertyExpression, Context);
-      PropertyName := PropertyValue.ToStringLiteral.Value;
-    end
-    else
-    begin
-      PropertyName := MemberExpression.PropertyName;
-    end;
-
-    // Check if we're in a static method context or instance method context
-    if Context.Scope.ThisValue is TGocciaClassValue then
-    begin
-      // Static method context: look for static methods using GetProperty
-      Result := SuperClass.GetProperty(PropertyName);
-    end
-    else
-    begin
-      // Instance method context: look for instance methods using GetMethod
-      Result := SuperClass.GetMethod(PropertyName);
-      if not Assigned(Result) then
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end;
-
-    if not (Result is TGocciaUndefinedLiteralValue) then
-    begin
-    end
-    else
-    begin
-    end;
-
-    Exit;
-  end;
-
-  // Evaluate object expression once and store it
-  ObjectValue := EvaluateExpression(MemberExpression.ObjectExpr, Context);
-
-  // Determine the property name
-  if MemberExpression.Computed and Assigned(MemberExpression.PropertyExpression) then
-  begin
-    // Computed access: evaluate the property expression to get the property name
-    PropertyValue := EvaluateExpression(MemberExpression.PropertyExpression, Context);
-
-    // Symbol property access
-    if (PropertyValue is TGocciaSymbolValue) and (ObjectValue is TGocciaObjectValue) then
-    begin
-      Result := TGocciaObjectValue(ObjectValue).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
-      Exit;
-    end;
-
-    PropertyName := PropertyValue.ToStringLiteral.Value;
-  end
-  else
-  begin
-    // Static access: use the property name directly
-    PropertyName := MemberExpression.PropertyName;
-  end;
-
-  Result := ObjectValue.GetProperty(PropertyName);
-  if Result = nil then
-  begin
-    // Handle primitive boxing for property access
-    BoxedValue := ObjectValue.Box;
-    if Assigned(BoxedValue) then
-    begin
-      Result := BoxedValue.GetProperty(PropertyName);
-    end
-    else if (ObjectValue is TGocciaNullLiteralValue) or (ObjectValue is TGocciaUndefinedLiteralValue) then
-    begin
-      Context.OnError('Cannot read property ''' + PropertyName + ''' of ' + ObjectValue.ToStringLiteral.Value,
         MemberExpression.Line, MemberExpression.Column);
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     end
@@ -1971,73 +1870,64 @@ end;
 function EvaluateTemplateLiteral(TemplateLiteralExpression: TGocciaTemplateLiteralExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Template: string;
-  ResultStr: string;
+  SB: TStringBuilder;
   I, Start: Integer;
   BraceCount: Integer;
   ExpressionText: string;
   ExpressionValue: TGocciaValue;
 begin
   Template := TemplateLiteralExpression.Value;
-  ResultStr := '';
-  I := 1;
-
-  while I <= Length(Template) do
-  begin
-    if (I < Length(Template)) and (Template[I] = '$') and (Template[I + 1] = '{') then
+  SB := TStringBuilder.Create;
+  try
+    I := 1;
+    while I <= Length(Template) do
     begin
-      // Found interpolation start
-      I := I + 2; // Skip ${
-      Start := I;
-
-      // Find the matching } (handle nested braces properly)
-      BraceCount := 1;
-      while (I <= Length(Template)) and (BraceCount > 0) do
+      if (I < Length(Template)) and (Template[I] = '$') and (Template[I + 1] = '{') then
       begin
-        if Template[I] = '{' then
-          Inc(BraceCount)
-        else if Template[I] = '}' then
-          Dec(BraceCount);
+        I := I + 2;
+        Start := I;
+
+        BraceCount := 1;
+        while (I <= Length(Template)) and (BraceCount > 0) do
+        begin
+          if Template[I] = '{' then
+            Inc(BraceCount)
+          else if Template[I] = '}' then
+            Dec(BraceCount);
+          if BraceCount > 0 then
+            Inc(I);
+        end;
 
         if BraceCount > 0 then
-          Inc(I);
-      end;
+        begin
+          Context.OnError('Unterminated template expression', TemplateLiteralExpression.Line, TemplateLiteralExpression.Column);
+          Result := TGocciaStringLiteralValue.Create(Template);
+          Exit;
+        end;
 
-      if BraceCount > 0 then
-      begin
-        Context.OnError('Unterminated template expression', TemplateLiteralExpression.Line, TemplateLiteralExpression.Column);
-        Result := TGocciaStringLiteralValue.Create(Template);
-        Exit;
-      end;
+        ExpressionText := Trim(Copy(Template, Start, I - Start));
+        if ExpressionText <> '' then
+        begin
+          ExpressionValue := EvaluateTemplateExpression(ExpressionText, Context, TemplateLiteralExpression.Line, TemplateLiteralExpression.Column);
+          if ExpressionValue <> nil then
+            SB.Append(ExpressionValue.ToStringLiteral.Value)
+          else
+            SB.Append('undefined');
+        end;
 
-      // Extract the expression text
-      ExpressionText := Trim(Copy(Template, Start, I - Start));
-
-      if ExpressionText = '' then
-      begin
-        // Empty expression
-        ResultStr := ResultStr + '';
+        Inc(I);
       end
       else
       begin
-        // Evaluate the full expression using a safe parsing approach
-        ExpressionValue := EvaluateTemplateExpression(ExpressionText, Context, TemplateLiteralExpression.Line, TemplateLiteralExpression.Column);
-        if ExpressionValue <> nil then
-          ResultStr := ResultStr + ExpressionValue.ToStringLiteral.Value
-        else
-          ResultStr := ResultStr + 'undefined';
+        SB.Append(Template[I]);
+        Inc(I);
       end;
-
-      Inc(I); // Skip the closing }
-    end
-    else
-    begin
-      // Regular character
-      ResultStr := ResultStr + Template[I];
-      Inc(I);
     end;
-  end;
 
-  Result := TGocciaStringLiteralValue.Create(ResultStr);
+    Result := TGocciaStringLiteralValue.Create(SB.ToString);
+  finally
+    SB.Free;
+  end;
 end;
 
 // Lightweight template expression evaluator - handles 95% of common cases without full parsing
