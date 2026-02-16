@@ -89,47 +89,29 @@ end;
 - **`GCMarkReferences`** — Base implementation sets `GCMarked := True`. Subclasses override this to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements).
 - **`RuntimeCopy`** — Creates a fresh GC-managed copy of the value. Used by the evaluator when evaluating literal expressions: AST-owned literal values are not tracked by the GC, so `RuntimeCopy` produces a runtime value that is. The default implementation returns `Self` (for singletons and complex values). Primitives override this: numbers use the `SmallInt` cache for 0-255, booleans return singletons, strings create new instances (cheap due to copy-on-write).
 
-## Interfaces
+## Virtual Property Access
 
-Values expose capabilities through interfaces, enabling the evaluator to work with any value that supports a given operation:
-
-### IPropertyMethods
-
-Implemented by objects, arrays, functions, classes, and instances.
+Property access is unified through virtual methods on the `TGocciaValue` base class:
 
 ```pascal
-IPropertyMethods = interface
-  function GetProperty(const Name: string): TGocciaValue;
-  function HasProperty(const Name: string): Boolean;
-  procedure DefineProperty(const Name: string; Value: TGocciaValue; ...);
-  procedure AssignProperty(const Name: string; Value: TGocciaValue);
-  procedure DeleteProperty(const Name: string);
-  // ... additional methods
+TGocciaValue = class(TInterfacedObject)
+  function GetProperty(const Name: string): TGocciaValue; virtual;
+  procedure SetProperty(const Name: string; Value: TGocciaValue); virtual;
 end;
 ```
 
-### IIndexMethods
+The base `TGocciaValue` provides default implementations: `GetProperty` returns `nil` and `SetProperty` is a no-op. Subclasses override these to implement property semantics:
 
-Implemented by arrays and array-like objects.
+| Value Type | GetProperty | SetProperty |
+|-----------|-------------|-------------|
+| `TGocciaObjectValue` | Looks up own properties, walks prototype chain | Creates/updates property descriptor |
+| `TGocciaArrayValue` | Handles `length` and numeric indices, delegates to object | Handles numeric index and `length`, delegates to object |
+| `TGocciaClassValue` | Checks static properties | Sets static properties |
+| `TGocciaInstanceValue` | Checks instance, then prototype (invokes getters) | Checks for setters, then sets directly |
+| `TGocciaStringLiteralValue` | Provides `.length`, `.charAt()`, etc. via string prototype | No-op (strings are immutable) |
+| Primitives | Returns `nil` | No-op |
 
-```pascal
-IIndexMethods = interface
-  function GetLength: Integer;
-  function GetElement(Index: Integer): TGocciaValue;
-  procedure SetElement(Index: Integer; Value: TGocciaValue);
-end;
-```
-
-### Capability Checking
-
-The evaluator checks capabilities at runtime:
-
-```pascal
-if Supports(Value, IPropertyMethods, PropMethods) then
-  Result := PropMethods.GetProperty(Name);
-```
-
-This pattern means new value types can be added without modifying existing evaluator code — they just need to implement the right interfaces.
+The evaluator accesses properties uniformly via `Value.GetProperty(Name)` and `Value.SetProperty(Name, NewValue)` — no type checking or interface querying needed at the call site.
 
 ## Primitives
 
@@ -298,7 +280,7 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 
 ## Arrays
 
-`TGocciaArrayValue` extends `TGocciaObjectValue` and implements `IIndexMethods`.
+`TGocciaArrayValue` extends `TGocciaObjectValue`.
 
 - **Sparse arrays** — Holes are represented as `nil` in the internal `FElements` list.
 - **Numeric property access** — `arr["0"]` and `arr[0]` both resolve to the first element.

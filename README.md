@@ -163,7 +163,8 @@ See [Architecture](docs/architecture.md) for the full deep-dive.
 - **OOP over everything**: Rely on type safety of specialized classes rather than generic data structures.
 - **Define vs Assign**: `Define` creates a new variable binding; `Assign` changes an existing one. These are distinct operations throughout the codebase.
 - **Pure evaluation**: The evaluator is composed of pure functions with no side effects.
-- **Interface segregation**: Value capabilities are expressed through focused interfaces (`IPropertyMethods`, `IIndexMethods`).
+- **No global mutable state**: All runtime state flows through explicit parameters — the evaluation context, the scope chain, and value objects.
+- **Virtual dispatch**: Property access is unified through virtual `GetProperty`/`SetProperty` methods on the base value class, enabling polymorphic property access without interface queries.
 
 See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 
@@ -174,7 +175,7 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 | [Architecture](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
 | [Design Decisions](docs/design-decisions.md) | Rationale behind key technical choices |
 | [Code Style](docs/code-style.md) | Naming conventions, patterns, file organization |
-| [Value System](docs/value-system.md) | Type hierarchy, interfaces, primitives, objects |
+| [Value System](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins, API reference, adding new ones |
 | [Testing](docs/testing.md) | Test organization, writing tests, running tests, benchmarks |
 | [Build System](docs/build-system.md) | Build commands, compiler configuration, CI/CD |

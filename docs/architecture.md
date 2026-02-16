@@ -1,6 +1,6 @@
 # Architecture
 
-GocciaScript follows a classic interpreter pipeline: source code flows through lexing, parsing, and evaluation stages before producing a result. The system is implemented in FreePascal using object-oriented design with interface-based polymorphism.
+GocciaScript follows a classic interpreter pipeline: source code flows through lexing, parsing, and evaluation stages before producing a result. The system is implemented in FreePascal using object-oriented design with virtual method dispatch.
 
 ## Pipeline Overview
 
@@ -37,6 +37,8 @@ The configurable built-in system allows different execution contexts (e.g., the 
 
 A single-pass tokenizer that converts source text into a flat list of `TGocciaToken` objects. Key features:
 
+- **Keyword lookup** — Uses a shared `TDictionary<string, TGocciaTokenType>` (initialized once as a class variable) for O(1) keyword identification instead of a linear if-else chain.
+- **String scanning** — Uses `TStringBuilder` for O(n) string literal and template literal assembly, avoiding O(n^2) repeated string concatenation.
 - **Number formats** — Decimal, hexadecimal (`0x`), binary (`0b`), octal (`0o`), scientific notation.
 - **Template literals** — Special handling for backtick strings with `${...}` interpolation.
 - **Unicode identifiers** — Supports Unicode characters (including emoji) in identifier names.
@@ -50,6 +52,7 @@ A recursive descent parser that builds an AST from the token stream. Implements:
 
 - **Operator precedence** via precedence climbing (assignment → conditional → logical → comparison → addition → multiplication → exponentiation → unary → call → primary).
 - **ES6+ syntax** — Arrow functions, template literals, destructuring patterns (array and object), spread/rest operators, rest parameters (`...args`), optional chaining (`?.`), computed property names, shorthand properties, classes with private fields, private/public getters/setters, and static members. Reserved words are accepted as property names in object literals and member expressions. The parser tracks instance property declaration order for correct initialization semantics.
+- **Shared parameter parsing** — A single `ParseParameterList` method handles parameter parsing for arrow functions, class methods, and object method shorthand, supporting rest parameters, destructuring patterns, and default values uniformly.
 - **Error recovery** — Throws `TGocciaSyntaxError` with source location for diagnostics.
 - **Arrow function detection** — Uses lookahead (`IsArrowFunction`) to disambiguate parenthesized expressions from arrow function parameters.
 
@@ -67,7 +70,7 @@ A thin orchestration layer that:
 
 - Owns the **global scope** (`TGocciaScope`).
 - Delegates AST evaluation to the Evaluator.
-- Manages **module loading** and caching (ES6-style imports).
+- Manages **module loading** and caching (ES6-style imports). Each module executes in its own isolated child scope (`skModule`) of the global scope, preventing module-internal variables from leaking.
 - Supports **hot module reloading** for development (`CheckForModuleReload`).
 
 ### Evaluator (`Goccia.Evaluator.pas` + sub-modules)
@@ -80,12 +83,17 @@ The largest component. Implements the actual semantics of the language as **pure
 | `Goccia.Evaluator.Arithmetic.pas` | `+` (uses `ToPrimitive`), `-`, `*`, `/`, `%` (float), `**`, compound assignment dispatch |
 | `Goccia.Evaluator.Bitwise.pas` | `&`, `\|`, `^`, `<<`, `>>`, `>>>` |
 | `Goccia.Evaluator.Comparison.pas` | `===`, `!==`, `<`, `>`, `<=`, `>=` |
-| `Goccia.Evaluator.Assignment.pas` | `=`, `+=`, `-=`, property assignment, compound property assignment |
+| `Goccia.Evaluator.Assignment.pas` | `=`, `+=`, `-=`, property assignment, compound property assignment, `DefinePropertyOnValue` |
 | `Goccia.Evaluator.TypeOperations.pas` | `typeof`, `instanceof`, `in`, `delete` |
 | `Goccia.Values.ToPrimitive.pas` | ECMAScript `ToPrimitive` abstract operation |
 | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, etc. — centralized error construction |
 
-Evaluation state is threaded through a `TGocciaEvaluationContext` record that carries the current scope, error handler callback, and module loader reference.
+Shared helper functions reduce duplication across the evaluator:
+
+- **`CopyStatementList`** — Creates a non-owning copy of an AST statement list (used by getters, setters, arrow functions, and class methods to avoid ownership conflicts).
+- **`DefinePropertyOnValue`** — Defines a property with a full descriptor on objects, falling back to `SetProperty` for non-objects.
+
+Evaluation state is threaded through a `TGocciaEvaluationContext` record that carries the current scope, error handler callback, and module loader reference. The `OnError` callback is also propagated onto `TGocciaScope`, so closures inherit error handling from their defining scope without needing global mutable state.
 
 ## Data Flow
 
@@ -135,13 +143,21 @@ Special scope bindings used internally:
 
 ## Module System
 
-The interpreter supports ES6-style `import`/`export` with module caching:
+The interpreter supports ES6-style `import`/`export` with module caching and scope isolation:
 
 1. `import { x } from './module.js'` triggers `LoadModule`.
-2. The module is lexed, parsed, and evaluated in its own scope.
-3. Exported bindings are extracted and bound in the importing scope.
+2. The module is lexed, parsed, and executed in an isolated child scope (`skModule`) of the global scope. This prevents module-internal variables from leaking into the global scope or other modules.
+3. Exported bindings are extracted from the module scope (not the global scope) and bound in the importing scope.
 4. Modules are cached by resolved path to avoid re-evaluation.
 5. `CheckForModuleReload` supports development-time hot reloading.
+
+Scope hierarchy for a module import:
+
+```
+GlobalScope (built-ins, main script variables)
+├── ModuleScope:./lib.js (module-internal variables, isolated)
+└── (main script continues with imported bindings)
+```
 
 ## Error Handling
 

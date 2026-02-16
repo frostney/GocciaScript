@@ -16,9 +16,9 @@ The evaluator (`Goccia.Evaluator.pas`) is designed around pure functions — giv
 
 State changes (variable bindings, object mutations) happen through the scope and value objects passed in the `TGocciaEvaluationContext`, not through evaluator-internal state.
 
-## Interface-Based Value System
+## Virtual Dispatch Value System
 
-Values follow a small class hierarchy rooted at `TGocciaValue`, with capabilities expressed through FreePascal interfaces:
+Values follow a small class hierarchy rooted at `TGocciaValue`, with property access unified through virtual methods on the base class:
 
 ```mermaid
 classDiagram
@@ -36,19 +36,14 @@ classDiagram
     TGocciaObjectValue <|-- TGocciaInstanceValue
 ```
 
-Capabilities are expressed through interfaces:
+The base `TGocciaValue` declares virtual `GetProperty` and `SetProperty` methods with safe defaults (`nil` / no-op). Each value type overrides these to implement its property semantics — objects walk the prototype chain, arrays handle numeric indices, instances invoke getters/setters, etc.
 
-| Interface | Purpose |
-|-----------|---------|
-| `IPropertyMethods` | Object-like property access (`GetProperty`, `AssignProperty`, `DefineProperty`, etc.) |
-| `IIndexMethods` | Array-like indexed access (`GetLength`, `GetElement`, `SetElement`) |
+**Why virtual dispatch?**
 
-**Why interfaces over inheritance?**
-
-- **Interface segregation** — A value type only implements what it supports. Arrays implement `IIndexMethods`; objects implement `IPropertyMethods`. There's no god-class with unused virtual methods.
-- **Capability checking** — The evaluator checks `if Value is IPropertyMethods` rather than maintaining a type enum, making it extensible without modifying existing code.
-- **FreePascal compatibility** — Interfaces provide reference counting, which helps with memory management.
-- **Lean surface** — Interfaces that were never queried at runtime (`IValueOf`, `IStringTag`, `IFunctionMethods`) have been removed. The methods they declared still exist on the class hierarchy but without the interface indirection overhead.
+- **Single hierarchy** — Every type that supports property access is in the `TGocciaValue` hierarchy. Virtual methods leverage this directly without extra interface indirection.
+- **Simple call sites** — `Value.GetProperty(Name)` is a single virtual call. No capability queries, no casting.
+- **Safe defaults** — The base class returns `nil` for `GetProperty` and no-ops for `SetProperty`, so the evaluator can call these on any value without type-checking first. Primitives silently ignore property writes, matching JavaScript semantics.
+- **Extensible** — New value types added to the hierarchy automatically participate in property access by overriding the virtual methods.
 
 ## Singleton Special Values
 
@@ -75,12 +70,23 @@ Numbers use a dual representation — a `Double` for normal values and a `TGocci
 - **Negative zero** — `-0` and `+0` are equal in IEEE 754 but distinguishable in JavaScript (`Object.is(-0, +0)` is `false`). Explicit tracking prevents this from being lost.
 - **Display correctness** — `NaN.toString()` must return `"NaN"`, not some floating-point artifact.
 
+## No Global Mutable State
+
+The codebase enforces a strict rule: **no global mutable state**. All runtime state flows through explicit parameters — the `TGocciaEvaluationContext` record, the scope chain, and value objects.
+
+- **`OnError` propagation** — The error handler callback is stored on `TGocciaScope` (`FOnError` field) and propagated to child scopes via `CreateChild`. Functions retrieve it from their closure scope, which is always the scope where they were defined.
+- **`LoadModule` stays at the top level** — Module imports are only valid at the interpreter level, not inside closures. `TGocciaFunctionValue.Call` explicitly sets `Context.LoadModule := nil`.
+
+This keeps the evaluator fully reentrant — all dependencies are explicit, making the code safe for concurrent execution and trivial to reason about.
+
 ## Scope Chain Design
 
 Scopes form a tree with parent pointers, implementing lexical scoping:
 
-- **`CreateChild` factory method** — Scopes are never instantiated directly. `CreateChild` ensures proper parent linkage and scope kind propagation.
+- **`CreateChild` factory method** — Scopes are never instantiated directly. `CreateChild` ensures proper parent linkage, scope kind propagation, and `OnError` callback inheritance.
+- **`OnError` on scopes** — Each scope carries a reference to the error handler callback, inherited from its parent. This allows closures and callbacks to always find the correct error handler without global state.
 - **Temporal Dead Zone** — `let`/`const` bindings are registered before initialization, enforcing TDZ semantics (accessing before `=` throws `ReferenceError`).
+- **Module scope isolation** — Modules execute in `skModule` scopes (children of the global scope), preventing module-internal variables from leaking into the global scope.
 - **Specialized scopes** — `TGocciaCatchScope`, `TGocciaGlobalScope`, and `TGocciaClassScope` handle their unique semantics (catch parameter shadowing, global object, superclass tracking).
 
 ## Property Descriptor System
@@ -163,6 +169,21 @@ TGocciaGlobalBuiltin = (ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 ## Global Function Placement
 
 `parseInt`, `parseFloat`, `isNaN`, and `isFinite` are available **only** as `Number.*` static methods, not as global functions. In ECMAScript, these exist in both places — the global versions are legacy leftovers. `parseInt` and `parseFloat` behave identically to their `Number.*` counterparts, but global `isNaN` and `isFinite` coerce their argument to a number first, while `Number.isNaN` and `Number.isFinite` return `false` for any non-number. GocciaScript keeps these functions on the `Number` object where they belong, avoiding global namespace pollution. See [language-restrictions.md](language-restrictions.md) for the polyfill pattern.
+
+## Standardized Argument Validation
+
+Built-in functions use `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`) for consistent argument count and type checking:
+
+```pascal
+TGocciaArgumentValidator.RequireExactly(Args, 1, 'Array.isArray');
+TGocciaArgumentValidator.RequireAtLeast(Args, 1, 'Array.from');
+```
+
+Benefits:
+
+- **Consistent error messages** — All argument errors follow the same format: `"FunctionName expected N arguments, but got M"`.
+- **Single point of change** — Validation logic and error formatting live in one place.
+- **Reduced boilerplate** — Each call site is a single line instead of a multi-line if/then/throw pattern.
 
 ## Build System
 

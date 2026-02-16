@@ -31,7 +31,7 @@ Overflow and range checks are **enabled** — correctness is prioritized over ra
 |---------|-----------|---------|
 | Units | `Goccia.<Category>.<Name>.pas` | `Goccia.Values.Primitives.pas` |
 | Classes | `TGoccia<Name>` prefix | `TGocciaObjectValue` |
-| Interfaces | `I<Name>` prefix | `IPropertyMethods` |
+| Interfaces | `I<Name>` prefix | `IGocciaCallable` |
 | Private fields | `F` prefix | `FValue`, `FPrototype` |
 | Methods | PascalCase | `GetProperty`, `ToStringLiteral` |
 | Free functions | PascalCase | `Evaluate`, `EvaluateBinary` |
@@ -54,7 +54,7 @@ uses
   // Standard library units first
   SysUtils, Classes, Generics.Collections,
   // Project units
-  Goccia.Values.Interfaces, Goccia.Scope;
+  Goccia.Values.Primitives, Goccia.Scope;
 
 type
   // Type declarations (classes, interfaces, records, enums)
@@ -124,12 +124,12 @@ The evaluator threads state through a `TGocciaEvaluationContext` record rather t
 ```pascal
 TGocciaEvaluationContext = record
   Scope: TGocciaScope;
-  OnError: TThrowErrorCallback;
-  ModuleLoader: TGocciaModuleLoader;
+  OnError: TGocciaThrowErrorCallback;
+  LoadModule: TLoadModuleCallback;
 end;
 ```
 
-This keeps evaluator functions pure — all dependencies are explicit parameters.
+This keeps evaluator functions pure — all dependencies are explicit parameters. The `OnError` callback is also stored on `TGocciaScope` and propagated to child scopes, so closures always have access to the error handler without global mutable state.
 
 ### Builder Pattern (Built-in Registration)
 
@@ -159,7 +159,7 @@ The codebase uses specific terminology consistently:
 
 | Term | Meaning |
 |------|---------|
-| **Define** | Create a new variable binding in the current scope (`DefineLexicalBinding`) |
+| **Define** | Create a new variable binding in the current scope (`DefineLexicalBinding`). Also used for built-in registration. |
 | **Assign** | Re-assign the value of an existing binding (`AssignLexicalBinding`) |
 | **Binding** | A name-to-value association in a scope (not a raw variable) |
 | **Literal** | A value that appears directly in source code |
@@ -170,7 +170,7 @@ The codebase uses specific terminology consistently:
 
 This distinction is critical in the codebase:
 
-- `DefineLexicalBinding` — Creates a **new** variable in the current scope. Used for `let`/`const` declarations and function parameters.
+- `DefineLexicalBinding` — Creates a **new** variable in the current scope. Used for `let`/`const` declarations, function parameters, and built-in registration. Built-ins are registered using `DefineLexicalBinding(..., dtLet)` — there is no separate `DefineBuiltin` method.
 - `AssignLexicalBinding` — Changes the value of an **existing** variable, walking up the scope chain. Throws `ReferenceError` if not found, `TypeError` if `const`.
 
 ## Code Organization Principles

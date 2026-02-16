@@ -147,7 +147,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`)
 - **Factory method** for scope creation (`CreateChild`)
 - **Context object** for evaluation state (`TGocciaEvaluationContext`)
-- **Interface segregation** for value capabilities (`IPropertyMethods`, `IIndexMethods`)
+- **Virtual dispatch** for property access (`GetProperty`/`SetProperty` on `TGocciaValue`)
 - **Chain of responsibility** for scope lookup
 - **Recursive descent** for parsing
 - **Mark-and-sweep** for garbage collection (`TGocciaGC`)
@@ -156,11 +156,13 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 
 See [docs/value-system.md](docs/value-system.md) for the complete value system documentation.
 
-All values inherit from `TGocciaValue`. Capabilities are expressed through interfaces:
-- `IPropertyMethods` — object-like property access
-- `IIndexMethods` — array-like indexed access
+All values inherit from `TGocciaValue`. Property access is unified through virtual methods on the base class:
+- `GetProperty(Name)` — Returns `nil` by default; overridden by objects, arrays, classes, instances, and string values.
+- `SetProperty(Name, Value)` — No-op by default; overridden by objects, arrays, classes, and instances.
 
-Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `CreateErrorObject`, etc.).
+The evaluator calls these directly (`Value.GetProperty(Name)`) without type-checking or interface queries.
+
+Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `CreateErrorObject`, etc.). Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
 
 ## Built-in Objects
 
@@ -203,7 +205,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 | [docs/architecture.md](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
 | [docs/design-decisions.md](docs/design-decisions.md) | Rationale behind key technical choices |
 | [docs/code-style.md](docs/code-style.md) | Naming conventions, patterns, file organization |
-| [docs/value-system.md](docs/value-system.md) | Type hierarchy, interfaces, primitives, objects |
+| [docs/value-system.md](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
 | [docs/built-ins.md](docs/built-ins.md) | Available built-ins, registration system, adding new ones |
 | [docs/testing.md](docs/testing.md) | Test organization, writing tests, running tests |
 | [docs/build-system.md](docs/build-system.md) | Build commands, configuration, CI/CD |

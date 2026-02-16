@@ -105,7 +105,8 @@ It:
 1. Creates the `build/` directory if it doesn't exist.
 2. Parses command-line arguments to determine which components to build.
 3. Calls `fpc` with `@config.cfg` and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
-4. For the `tests` target, auto-discovers all `*.Test.pas` files in `units/`.
+4. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
+5. For the `tests` target, auto-discovers all `*.Test.pas` files in `units/`.
 
 ## Project Structure for Compilation
 
