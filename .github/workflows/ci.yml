@@ -42,6 +42,7 @@ jobs:
           choco install freepascal -y --no-progress
           echo 'C:\ProgramData\chocolatey\bin' >> "$GITHUB_PATH"
           echo 'C:\tools\freepascal\bin\i386-win32' >> "$GITHUB_PATH"
+          echo '-Px86_64' >> 'C:/tools/freepascal/bin/i386-win32/fpc.cfg'
           echo '-FuC:/tools/freepascal/units/$fpctarget/*' >> 'C:/tools/freepascal/bin/i386-win32/fpc.cfg'
 
       - name: Build all

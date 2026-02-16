@@ -164,8 +164,12 @@ begin
     while True do
     begin
       StartTime := GetTickCount64;
-      for I := 1 to BatchSize do
+      I := 0;
+      while I < BatchSize do
+      begin
         BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        Inc(I);
+      end;
       Elapsed := GetTickCount64 - StartTime;
 
       if Elapsed >= MIN_CALIBRATION_MS then
@@ -200,7 +204,7 @@ var
   Iterations: Int64;
   StartTime, RoundMs: Int64;
   I: Int64;
-  Round, J: Integer;
+  Round, J, K: Integer;
   OpsRounds: array[0..4] of Double;   // Max 5 rounds
   MeanRounds: array[0..4] of Double;  // Max 5 rounds
   TempDouble: Double;
@@ -211,7 +215,7 @@ begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
     // Phase 1: Warmup
-    for I := 1 to WARMUP_ITERATIONS do
+    for K := 1 to WARMUP_ITERATIONS do
       BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
     // Phase 2: Calibrate to find iteration count per round (~1s each)
@@ -225,8 +229,12 @@ begin
         TGocciaGC.Instance.Collect;
 
       StartTime := GetTickCount64;
-      for I := 1 to Iterations do
+      I := 0;
+      while I < Iterations do
+      begin
         BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        Inc(I);
+      end;
       RoundMs := GetTickCount64 - StartTime;
 
       if RoundMs > 0 then
@@ -242,10 +250,10 @@ begin
     end;
 
     // Sort rounds to find median (insertion sort for small N)
-    for I := 1 to MEASUREMENT_ROUNDS - 1 do
+    for K := 1 to MEASUREMENT_ROUNDS - 1 do
     begin
-      TempDouble := OpsRounds[I];
-      J := I - 1;
+      TempDouble := OpsRounds[K];
+      J := K - 1;
       while (J >= 0) and (OpsRounds[J] > TempDouble) do
       begin
         OpsRounds[J + 1] := OpsRounds[J];
@@ -253,10 +261,10 @@ begin
       end;
       OpsRounds[J + 1] := TempDouble;
     end;
-    for I := 1 to MEASUREMENT_ROUNDS - 1 do
+    for K := 1 to MEASUREMENT_ROUNDS - 1 do
     begin
-      TempDouble := MeanRounds[I];
-      J := I - 1;
+      TempDouble := MeanRounds[K];
+      J := K - 1;
       while (J >= 0) and (MeanRounds[J] > TempDouble) do
       begin
         MeanRounds[J + 1] := MeanRounds[J];
