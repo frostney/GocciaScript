@@ -5,11 +5,11 @@ unit Goccia.Arguments.Collection;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.Interfaces, Generics.Collections, SysUtils, Math;
+  Goccia.Values.Primitives, Generics.Collections, SysUtils, Math;
 
 type
   // Array-like collection for function arguments
-  TGocciaArgumentsCollection = class(TInterfacedObject, IIndexMethods)
+  TGocciaArgumentsCollection = class(TInterfacedObject)
   private
     FArgs: TObjectList<TGocciaValue>;
   public
@@ -17,7 +17,7 @@ type
     constructor Create(const Values: array of TGocciaValue); overload;
     destructor Destroy; override;
 
-    // IIndexMethods implementation
+    // Index-based element access
     function GetElement(const AIndex: Integer): TGocciaValue;
     function SetElement(const AIndex: Integer; AValue: TGocciaValue): Boolean;
 

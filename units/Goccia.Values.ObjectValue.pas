@@ -5,13 +5,13 @@ unit Goccia.Values.ObjectValue;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.Interfaces, Generics.Collections,
+  Goccia.Values.Primitives, Generics.Collections,
   Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.SymbolValue,
   Math, SysUtils, Classes, Goccia.Arguments.Collection;
 
 type
 
-  TGocciaObjectValue = class(TGocciaValue, IPropertyMethods)
+  TGocciaObjectValue = class(TGocciaValue)
   protected
     FPropertyDescriptors: TDictionary<string, TGocciaPropertyDescriptor>;
     FPropertyInsertionOrder: TStringList; // Track insertion order for property enumeration

@@ -6,10 +6,10 @@ interface
 
 uses
   Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction,
-  Goccia.Error, Goccia.Arguments.Collection, Generics.Collections, Math, SysUtils, Goccia.Values.Interfaces;
+  Goccia.Error, Goccia.Arguments.Collection, Generics.Collections, Math, SysUtils;
 
 type
-  TGocciaArrayValue = class(TGocciaObjectValue, IIndexMethods)
+  TGocciaArrayValue = class(TGocciaObjectValue)
   private
     function GetLengthProperty(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; inline;
 
@@ -69,7 +69,7 @@ type
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
 
-    // IIndexMethods interface implementation
+    // Index-based element access
     function GetLength: Integer;
     function GetElement(const AIndex: Integer): TGocciaValue;
     function SetElement(const AIndex: Integer; AValue: TGocciaValue): Boolean;
@@ -258,7 +258,7 @@ begin
   Result := TGocciaNumberLiteralValue.Create(FElements.Count);
 end;
 
-// IIndexMethods interface implementations
+// Index-based element access implementations
 function TGocciaArrayValue.GetLength: Integer;
 begin
   Result := FElements.Count;

@@ -5,7 +5,7 @@ unit Goccia.Values.ClassHelper;
 interface
 
 uses
-  SysUtils, Classes, Math, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.BooleanObjectValue, Goccia.Values.NumberObjectValue, Goccia.Values.StringObjectValue, Goccia.Values.Interfaces, Goccia.Values.Constants;
+  SysUtils, Classes, Math, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.BooleanObjectValue, Goccia.Values.NumberObjectValue, Goccia.Values.StringObjectValue, Goccia.Values.Constants;
 
 type
 
