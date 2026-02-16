@@ -41,6 +41,10 @@ type
     // Parameter list parsing (shared by arrow functions, class methods, object methods)
     function ParseParameterList: TGocciaParameterArray;
 
+    // Getter/setter expression parsing (shared by object literals and class bodies)
+    function ParseGetterExpression: TGocciaGetterExpression;
+    function ParseSetterExpression: TGocciaSetterExpression;
+
     // Destructuring pattern parsing
     function ParsePattern: TGocciaDestructuringPattern;
     function ParseArrayPattern: TGocciaArrayDestructuringPattern;
@@ -601,9 +605,8 @@ var
   IsComputed: Boolean;
   IsGetter, IsSetter: Boolean;
   ComputedCount, SourceOrderCount: Integer;
-  // Method shorthand / getter / setter variables
+  // Method shorthand variables
   Parameters: TGocciaParameterArray;
-  ParamName: string;
   Body: TGocciaASTNode;
   Statements: TObjectList<TGocciaStatement>;
   Stmt: TGocciaStatement;
@@ -696,68 +699,25 @@ begin
     // Handle getter/setter syntax
     if IsGetter then
     begin
-      // Getter: get propertyName() { ... }
-      Consume(gttLeftParen, 'Expected "(" after getter name');
-      Consume(gttRightParen, 'Getters cannot have parameters');
+      Getters.Add(Key, ParseGetterExpression);
 
-      // Parse getter body
-      Consume(gttLeftBrace, 'Expected "{" before getter body');
-      Statements := TObjectList<TGocciaStatement>.Create(True);
-      try
-        while not Check(gttRightBrace) and not IsAtEnd do
-        begin
-          Stmt := Statement;
-          Statements.Add(Stmt);
-        end;
-        Consume(gttRightBrace, 'Expected "}" after getter body');
-        Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
-
-                // Add getter to dictionary
-        Getters.Add(Key, TGocciaGetterExpression.Create(Body, Line, Column));
-
-        // Track in source order
-        Inc(SourceOrderCount);
-        SetLength(PropertySourceOrder, SourceOrderCount);
-        PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstGetter;
-        PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
-        PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
-      except
-        Statements.Free;
-        raise;
-      end;
+      // Track in source order
+      Inc(SourceOrderCount);
+      SetLength(PropertySourceOrder, SourceOrderCount);
+      PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstGetter;
+      PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
+      PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
     end
     else if IsSetter then
     begin
-      // Setter: set propertyName(value) { ... }
-      Consume(gttLeftParen, 'Expected "(" after setter name');
-      ParamName := Consume(gttIdentifier, 'Expected parameter name in setter').Lexeme;
-      Consume(gttRightParen, 'Expected ")" after setter parameter');
+      Setters.Add(Key, ParseSetterExpression);
 
-      // Parse setter body
-      Consume(gttLeftBrace, 'Expected "{" before setter body');
-      Statements := TObjectList<TGocciaStatement>.Create(True);
-      try
-        while not Check(gttRightBrace) and not IsAtEnd do
-        begin
-          Stmt := Statement;
-          Statements.Add(Stmt);
-        end;
-        Consume(gttRightBrace, 'Expected "}" after setter body');
-        Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
-
-                // Add setter to dictionary
-        Setters.Add(Key, TGocciaSetterExpression.Create(ParamName, Body, Line, Column));
-
-        // Track in source order
-        Inc(SourceOrderCount);
-        SetLength(PropertySourceOrder, SourceOrderCount);
-        PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstSetter;
-        PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
-        PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
-      except
-        Statements.Free;
-        raise;
-      end;
+      // Track in source order
+      Inc(SourceOrderCount);
+      SetLength(PropertySourceOrder, SourceOrderCount);
+      PropertySourceOrder[SourceOrderCount - 1].PropertyType := pstSetter;
+      PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
+      PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
     end
     // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
     else if Check(gttLeftParen) then
@@ -925,6 +885,35 @@ begin
   end;
 
   SetLength(Result, ParamCount);
+end;
+
+function TGocciaParser.ParseGetterExpression: TGocciaGetterExpression;
+var
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+  Consume(gttLeftParen, 'Expected "(" after getter name');
+  Consume(gttRightParen, 'Getters cannot have parameters');
+  Consume(gttLeftBrace, 'Expected "{" before getter body');
+  Result := TGocciaGetterExpression.Create(BlockStatement, Line, Column);
+end;
+
+function TGocciaParser.ParseSetterExpression: TGocciaSetterExpression;
+var
+  ParamName: string;
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+  Consume(gttLeftParen, 'Expected "(" after setter name');
+  if Check(gttRightParen) then
+    raise TGocciaSyntaxError.Create('Setter must have exactly one parameter',
+      Peek.Line, Peek.Column, FFileName, FSourceLines);
+  ParamName := Consume(gttIdentifier, 'Expected parameter name in setter').Lexeme;
+  Consume(gttRightParen, 'Expected ")" after setter parameter');
+  Consume(gttLeftBrace, 'Expected "{" before setter body');
+  Result := TGocciaSetterExpression.Create(ParamName, BlockStatement, Line, Column);
 end;
 
 function TGocciaParser.ArrowFunction: TGocciaExpression;
@@ -1515,7 +1504,6 @@ var
   Getter: TGocciaGetterExpression;
   Setter: TGocciaSetterExpression;
   PropertyValue: TGocciaExpression;
-  ParamName: string;
   IsStatic: Boolean;
   IsPrivate: Boolean;
   IsGetter: Boolean;
@@ -1631,15 +1619,10 @@ begin
     end
     else if IsGetter then
     begin
-      // Getter: [static] get name() { ... } or get #name() { ... }
       if IsStatic then
         raise TGocciaSyntaxError.Create('Static getters not supported yet', Peek.Line, Peek.Column, FFileName, FSourceLines);
 
-            Consume(gttLeftParen, 'Expected "(" after getter name');
-      Consume(gttRightParen, 'Expected ")" after getter parameters - getters cannot have parameters');
-
-      Consume(gttLeftBrace, 'Expected "{" before getter body');
-      Getter := TGocciaGetterExpression.Create(BlockStatement, Previous.Line, Previous.Column);
+      Getter := ParseGetterExpression;
       if IsPrivate then
         Getters.Add('#' + MemberName, Getter)
       else
@@ -1647,19 +1630,10 @@ begin
     end
     else if IsSetter then
     begin
-      // Setter: [static] set name(value) { ... } or set #name(value) { ... }
       if IsStatic then
         raise TGocciaSyntaxError.Create('Static setters not supported yet', Peek.Line, Peek.Column, FFileName, FSourceLines);
 
-            Consume(gttLeftParen, 'Expected "(" after setter name');
-      if Check(gttRightParen) then
-        raise TGocciaSyntaxError.Create('Setter must have exactly one parameter', Peek.Line, Peek.Column, FFileName, FSourceLines);
-
-            ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
-      Consume(gttRightParen, 'Expected ")" after setter parameter');
-      Consume(gttLeftBrace, 'Expected "{" before setter body');
-
-      Setter := TGocciaSetterExpression.Create(ParamName, BlockStatement, Previous.Line, Previous.Column);
+      Setter := ParseSetterExpression;
       if IsPrivate then
         Setters.Add('#' + MemberName, Setter)
       else
