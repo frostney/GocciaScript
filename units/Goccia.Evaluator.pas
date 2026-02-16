@@ -112,6 +112,68 @@ begin
   end;
 end;
 
+procedure SpreadIterableInto(SpreadValue: TGocciaValue; Target: TList<TGocciaValue>);
+var
+  SpreadArray: TGocciaArrayValue;
+  J: Integer;
+begin
+  if SpreadValue is TGocciaArrayValue then
+  begin
+    SpreadArray := TGocciaArrayValue(SpreadValue);
+    for J := 0 to SpreadArray.Elements.Count - 1 do
+    begin
+      if SpreadArray.Elements[J] = nil then
+        Target.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        Target.Add(SpreadArray.Elements[J]);
+    end;
+  end
+  else if SpreadValue is TGocciaStringLiteralValue then
+  begin
+    for J := 1 to Length(SpreadValue.ToStringLiteral.Value) do
+      Target.Add(TGocciaStringLiteralValue.Create(SpreadValue.ToStringLiteral.Value[J]));
+  end
+  else if SpreadValue is TGocciaSetValue then
+  begin
+    SpreadArray := TGocciaSetValue(SpreadValue).ToArray;
+    for J := 0 to SpreadArray.Elements.Count - 1 do
+      Target.Add(SpreadArray.Elements[J]);
+  end
+  else if SpreadValue is TGocciaMapValue then
+  begin
+    SpreadArray := TGocciaMapValue(SpreadValue).ToArray;
+    for J := 0 to SpreadArray.Elements.Count - 1 do
+      Target.Add(SpreadArray.Elements[J]);
+  end
+  else
+    ThrowTypeError('Spread syntax requires an iterable');
+end;
+
+procedure SpreadIterableIntoArgs(SpreadValue: TGocciaValue; Args: TGocciaArgumentsCollection);
+var
+  SpreadArray: TGocciaArrayValue;
+  J: Integer;
+begin
+  if SpreadValue is TGocciaArrayValue then
+  begin
+    SpreadArray := TGocciaArrayValue(SpreadValue);
+    for J := 0 to SpreadArray.Elements.Count - 1 do
+    begin
+      if SpreadArray.Elements[J] = nil then
+        Args.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        Args.Add(SpreadArray.Elements[J]);
+    end;
+  end
+  else if SpreadValue is TGocciaStringLiteralValue then
+  begin
+    for J := 1 to Length(SpreadValue.ToStringLiteral.Value) do
+      Args.Add(TGocciaStringLiteralValue.Create(SpreadValue.ToStringLiteral.Value[J]));
+  end
+  else
+    ThrowTypeError('Spread syntax requires an iterable');
+end;
+
 function Evaluate(Node: TGocciaASTNode; Context: TGocciaEvaluationContext): TGocciaValue;
 begin
   // Propagate OnError onto the scope so closures inherit it
@@ -675,7 +737,6 @@ var
   SuperClass: TGocciaClassValue;
   MemberExpr: TGocciaMemberExpression;
   SpreadValue: TGocciaValue;
-  SpreadArray: TGocciaArrayValue;
   CallableIntf: IGocciaCallable;
   I: Integer;
 begin
@@ -747,34 +808,8 @@ begin
     begin
       if ArgumentExpr is TGocciaSpreadExpression then
       begin
-        // Spread expression: expand arguments
         SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ArgumentExpr).Argument, Context);
-
-        if SpreadValue is TGocciaArrayValue then
-        begin
-          // Spread array elements as arguments
-          SpreadArray := TGocciaArrayValue(SpreadValue);
-          for I := 0 to SpreadArray.Elements.Count - 1 do
-          begin
-            // Convert holes (nil) to undefined when spreading
-            if SpreadArray.Elements[I] = nil then
-              Arguments.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
-            else
-              Arguments.Add(SpreadArray.Elements[I]);
-          end;
-        end
-        else if SpreadValue is TGocciaStringLiteralValue then
-        begin
-          // Spread string characters as arguments
-          for I := 1 to Length(SpreadValue.ToStringLiteral.Value) do
-            Arguments.Add(TGocciaStringLiteralValue.Create(SpreadValue.ToStringLiteral.Value[I]));
-        end
-        else
-        begin
-          // Throw TypeError for non-iterables (null, undefined, numbers, booleans, objects)
-          ThrowTypeError('Spread syntax requires an iterable');
-        end;
-        // null and undefined are ignored in spread context
+        SpreadIterableIntoArgs(SpreadValue, Arguments);
       end
       else
       begin
@@ -933,12 +968,9 @@ end;
 function EvaluateArray(ArrayExpression: TGocciaArrayExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 var
   Arr: TGocciaArrayValue;
-  I, J: Integer;
+  I: Integer;
   ElementValue: TGocciaValue;
   SpreadValue: TGocciaValue;
-  SpreadArray: TGocciaArrayValue;
-  SpreadObj: TGocciaObjectValue;
-  PropName: string;
 begin
   Arr := TGocciaArrayValue.Create;
   for I := 0 to ArrayExpression.Elements.Count - 1 do
@@ -950,57 +982,8 @@ begin
     end
     else if ArrayExpression.Elements[I] is TGocciaSpreadExpression then
     begin
-      // Spread expression: expand the array/iterable
       SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ArrayExpression.Elements[I]).Argument, Context);
-
-      if SpreadValue is TGocciaArrayValue then
-      begin
-        // Spread array elements
-        SpreadArray := TGocciaArrayValue(SpreadValue);
-        for J := 0 to SpreadArray.Elements.Count - 1 do
-        begin
-          // Convert holes (nil) to undefined when spreading
-          if SpreadArray.Elements[J] = nil then
-            Arr.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
-          else
-            Arr.Elements.Add(SpreadArray.Elements[J]);
-        end;
-      end
-      else if SpreadValue is TGocciaStringLiteralValue then
-      begin
-        // Spread string characters
-        for J := 1 to Length(SpreadValue.ToStringLiteral.Value) do
-          Arr.Elements.Add(TGocciaStringLiteralValue.Create(SpreadValue.ToStringLiteral.Value[J]));
-      end
-      else if SpreadValue is TGocciaSetValue then
-      begin
-        // Spread Set values
-        SpreadArray := TGocciaSetValue(SpreadValue).ToArray;
-        for J := 0 to SpreadArray.Elements.Count - 1 do
-          Arr.Elements.Add(SpreadArray.Elements[J]);
-      end
-      else if SpreadValue is TGocciaMapValue then
-      begin
-        // Spread Map entries as [key, value] arrays
-        SpreadArray := TGocciaMapValue(SpreadValue).ToArray;
-        for J := 0 to SpreadArray.Elements.Count - 1 do
-          Arr.Elements.Add(SpreadArray.Elements[J]);
-      end
-      else if (SpreadValue is TGocciaObjectValue) then
-      begin
-        // For objects, we would need iterator support - for now throw TypeError
-        ThrowTypeError('Spread syntax requires an iterable');
-      end
-      else if (SpreadValue is TGocciaNullLiteralValue) or (SpreadValue is TGocciaUndefinedLiteralValue) then
-      begin
-        // Throw TypeError for null and undefined in array spread
-        ThrowTypeError('Spread syntax requires an iterable');
-      end
-      else
-      begin
-        // Other primitives (numbers, booleans) also throw
-        ThrowTypeError('Spread syntax requires an iterable');
-      end;
+      SpreadIterableInto(SpreadValue, Arr.Elements);
     end
     else
     begin
