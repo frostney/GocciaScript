@@ -19,6 +19,7 @@ type
 function Evaluate(Node: TGocciaASTNode; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateExpression(Expression: TGocciaExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateStatement(Statement: TGocciaStatement; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateStatementsSafe(Nodes: TObjectList<TGocciaASTNode>; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateBinary(BinaryExpression: TGocciaBinaryExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateUnary(UnaryExpression: TGocciaUnaryExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateDelete(Operand: TGocciaExpression; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -85,6 +86,28 @@ begin
   Result := TObjectList<TGocciaASTNode>.Create(False);
   for I := 0 to Source.Count - 1 do
     Result.Add(Source[I]);
+end;
+
+function EvaluateStatementsSafe(Nodes: TObjectList<TGocciaASTNode>; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  I: Integer;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  for I := 0 to Nodes.Count - 1 do
+  begin
+    try
+      Result := Evaluate(Nodes[I], Context);
+    except
+      on E: TGocciaReturnValue do raise;
+      on E: TGocciaThrowValue do raise;
+      on E: TGocciaBreakSignal do raise;
+      on E: TGocciaTypeError do raise;
+      on E: TGocciaReferenceError do raise;
+      on E: TGocciaRuntimeError do raise;
+      on E: Exception do
+        raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
+    end;
+  end;
 end;
 
 function Evaluate(Node: TGocciaASTNode; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -1297,34 +1320,7 @@ begin
     BlockContext.Scope := Context.Scope; // Use same scope - no isolation needed
 
   try
-    LastValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-
-    for I := 0 to BlockStatement.Nodes.Count - 1 do
-    begin
-      try
-        LastValue := Evaluate(BlockStatement.Nodes[I], BlockContext);
-      except
-        on E: TGocciaReturnValue do
-        begin
-          raise;
-        end;
-        on E: TGocciaThrowValue do
-        begin
-          // Let thrown values bubble up for try-catch handling
-          raise;
-        end;
-        on E: TGocciaBreakSignal do
-        begin
-          // Let break signals bubble up for switch handling
-          raise;
-        end;
-        on E: Exception do
-        begin
-          raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-        end;
-      end;
-    end;
-
+    LastValue := EvaluateStatementsSafe(BlockStatement.Nodes, BlockContext);
     if LastValue = nil then
       LastValue := TGocciaUndefinedLiteralValue.UndefinedValue;
     Result := LastValue;
@@ -1345,266 +1341,66 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function EvaluateTry(TryStatement: TGocciaTryStatement; Context: TGocciaEvaluationContext): TGocciaValue;
+function ExecuteCatchBlock(TryStatement: TGocciaTryStatement; ErrorValue: TGocciaValue; Context: TGocciaEvaluationContext): TGocciaValue;
 var
-  TryResult: TGocciaValue;
   CatchScope: TGocciaScope;
   CatchContext: TGocciaEvaluationContext;
-  I: Integer;
+begin
+  if TryStatement.CatchParam <> '' then
+  begin
+    CatchScope := TGocciaCatchScope.Create(Context.Scope, TryStatement.CatchParam);
+    try
+      CatchScope.DefineLexicalBinding(TryStatement.CatchParam, ErrorValue, dtParameter);
+      CatchContext := Context;
+      CatchContext.Scope := CatchScope;
+      Result := EvaluateStatementsSafe(TryStatement.CatchBlock.Nodes, CatchContext);
+    finally
+      CatchScope.Free;
+    end;
+  end
+  else
+    Result := EvaluateStatementsSafe(TryStatement.CatchBlock.Nodes, Context);
+end;
+
+function PascalExceptionToErrorObject(E: Exception): TGocciaValue;
+begin
+  if E is TGocciaTypeError then
+    Result := CreateErrorObject('TypeError', E.Message)
+  else if E is TGocciaReferenceError then
+    Result := CreateErrorObject('ReferenceError', E.Message)
+  else
+    Result := CreateErrorObject('Error', E.Message);
+end;
+
+function EvaluateTry(TryStatement: TGocciaTryStatement; Context: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-    // Outer try...finally ensures JS finally block always executes,
-    // even when the except handler re-raises (e.g. try-finally without catch)
+  try
     try
-    try
-                                          // Execute the try block using original context (no scope isolation)
-
-      // Execute try block statements directly in original context
-      TryResult := TGocciaUndefinedLiteralValue.UndefinedValue;
-      for I := 0 to TryStatement.Block.Nodes.Count - 1 do
-      begin
-        try
-          TryResult := Evaluate(TryStatement.Block.Nodes[I], Context);
-        except
-          on E: TGocciaReturnValue do
-            raise;
-          on E: TGocciaThrowValue do
-            raise;
-          on E: TGocciaBreakSignal do
-            raise;
-          on E: TGocciaTypeError do
-            raise;
-          on E: TGocciaReferenceError do
-            raise;
-          on E: TGocciaRuntimeError do
-            raise;
-          on E: Exception do
-            raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-        end;
-      end;
-      Result := TryResult;
+      Result := EvaluateStatementsSafe(TryStatement.Block.Nodes, Context);
     except
       on E: TGocciaThrowValue do
       begin
-        // Handle JavaScript throw statements
-
         if Assigned(TryStatement.CatchBlock) then
-        begin
-
-                                                                                // Create child scope for catch parameter if needed (proper shadowing)
-          if TryStatement.CatchParam <> '' then
-          begin
-            CatchScope := TGocciaCatchScope.Create(Context.Scope, TryStatement.CatchParam);
-            try
-              // Bind the thrown value to the catch parameter (shadows outer variables)
-              CatchScope.DefineLexicalBinding(TryStatement.CatchParam, E.Value, dtParameter);
-
-              // Set up context for catch block with child scope
-              CatchContext := Context;
-              CatchContext.Scope := CatchScope;
-
-              // Execute catch block statements with proper scoping
-              Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-              for I := 0 to TryStatement.CatchBlock.Nodes.Count - 1 do
-              begin
-                try
-                  Result := Evaluate(TryStatement.CatchBlock.Nodes[I], CatchContext);
-                except
-                  on E: TGocciaReturnValue do
-                  begin
-                    raise;
-                  end;
-                  on E: TGocciaThrowValue do
-                  begin
-                    raise;
-                  end;
-                  on E: TGocciaBreakSignal do
-                  begin
-                    raise;
-                  end;
-                  on E: Exception do
-                  begin
-                    raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-                  end;
-                end;
-              end;
-            finally
-              CatchScope.Free;
-            end;
-          end
-          else
-          begin
-            // No catch parameter - use original context directly
-            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-            for I := 0 to TryStatement.CatchBlock.Nodes.Count - 1 do
-            begin
-              try
-                Result := Evaluate(TryStatement.CatchBlock.Nodes[I], Context);
-              except
-                on E: TGocciaReturnValue do
-                begin
-                  raise;
-                end;
-                on E: TGocciaThrowValue do
-                begin
-                  raise;
-                end;
-                on E: TGocciaBreakSignal do
-                begin
-                  raise;
-                end;
-                on E: Exception do
-                begin
-                  raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-                end;
-              end;
-            end;
-          end;
-        end
+          Result := ExecuteCatchBlock(TryStatement, E.Value, Context)
         else
-        begin
-          // No catch block, re-throw the exception
           raise;
-        end;
       end;
-      on E: TGocciaReturnValue do
-      begin
-        // Return statements should bubble up through try-catch
-        raise;
-      end;
-      on E: TGocciaBreakSignal do
-      begin
-        // Break signals should bubble up through try-catch
-        raise;
-      end;
+      on E: TGocciaReturnValue do raise;
+      on E: TGocciaBreakSignal do raise;
       on E: Exception do
       begin
-        // Handle other Pascal exceptions as runtime errors
-
         if Assigned(TryStatement.CatchBlock) then
-        begin
-
-                              // Create child scope for catch parameter if needed (proper shadowing)
-          if TryStatement.CatchParam <> '' then
-          begin
-            CatchScope := TGocciaCatchScope.Create(Context.Scope, TryStatement.CatchParam);
-            try
-              // Create a proper JavaScript Error object for the Pascal exception
-              if E is TGocciaTypeError then
-                CatchScope.DefineLexicalBinding(TryStatement.CatchParam, CreateErrorObject('TypeError', E.Message), dtParameter)
-              else if E is TGocciaReferenceError then
-                CatchScope.DefineLexicalBinding(TryStatement.CatchParam, CreateErrorObject('ReferenceError', E.Message), dtParameter)
-              else if E is TGocciaRuntimeError then
-                CatchScope.DefineLexicalBinding(TryStatement.CatchParam, CreateErrorObject('Error', E.Message), dtParameter)
-              else
-                CatchScope.DefineLexicalBinding(TryStatement.CatchParam, CreateErrorObject('Error', E.Message), dtParameter);
-
-              // Set up context for catch block with child scope of statement scope
-              CatchContext := Context;
-              CatchContext.Scope := CatchScope;
-
-              // Execute catch block statements with proper scoping
-              Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-              for I := 0 to TryStatement.CatchBlock.Nodes.Count - 1 do
-              begin
-                try
-                  Result := Evaluate(TryStatement.CatchBlock.Nodes[I], CatchContext);
-                except
-                  on E: TGocciaReturnValue do
-                  begin
-                    raise;
-                  end;
-                  on E: TGocciaThrowValue do
-                  begin
-                    raise;
-                  end;
-                  on E: TGocciaBreakSignal do
-                  begin
-                    raise;
-                  end;
-                  on E: Exception do
-                  begin
-                    raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-                  end;
-                end;
-              end;
-            finally
-              CatchScope.Free;
-            end;
-          end
-                    else
-          begin
-            // No catch parameter - use original context directly
-            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-            for I := 0 to TryStatement.CatchBlock.Nodes.Count - 1 do
-            begin
-              try
-                Result := Evaluate(TryStatement.CatchBlock.Nodes[I], Context);
-              except
-                on E: TGocciaReturnValue do
-                begin
-                  raise;
-                end;
-                on E: TGocciaThrowValue do
-                begin
-                  raise;
-                end;
-                on E: TGocciaBreakSignal do
-                begin
-                  raise;
-                end;
-                on E: Exception do
-                begin
-                  raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-                end;
-              end;
-            end;
-          end;
-        end
+          Result := ExecuteCatchBlock(TryStatement, PascalExceptionToErrorObject(E), Context)
         else
-        begin
-          // No catch block, re-throw as JavaScript error object
-          if E is TGocciaTypeError then
-            raise TGocciaThrowValue.Create(CreateErrorObject('TypeError', E.Message))
-          else if E is TGocciaReferenceError then
-            raise TGocciaThrowValue.Create(CreateErrorObject('ReferenceError', E.Message))
-          else
-            raise TGocciaThrowValue.Create(CreateErrorObject('Error', E.Message));
-        end;
+          raise TGocciaThrowValue.Create(PascalExceptionToErrorObject(E));
       end;
     end;
-    finally
-      // Always execute finally block if present — runs even when exceptions are re-raised
-      if Assigned(TryStatement.FinallyBlock) then
-      begin
-        // Execute finally block statements directly in original context
-        for I := 0 to TryStatement.FinallyBlock.Nodes.Count - 1 do
-        begin
-          try
-            Evaluate(TryStatement.FinallyBlock.Nodes[I], Context);
-          except
-            on E: TGocciaReturnValue do
-            begin
-              raise;
-            end;
-            on E: TGocciaThrowValue do
-            begin
-              raise;
-            end;
-            on E: TGocciaBreakSignal do
-            begin
-              raise;
-            end;
-            on E: Exception do
-            begin
-              raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-            end;
-          end;
-        end;
-      end;
-    end;
-
+  finally
+    if Assigned(TryStatement.FinallyBlock) then
+      EvaluateStatementsSafe(TryStatement.FinallyBlock.Nodes, Context);
+  end;
 end;
 
 function EvaluateClassMethod(ClassMethod: TGocciaClassMethod; Context: TGocciaEvaluationContext; SuperClass: TGocciaValue = nil): TGocciaValue;
