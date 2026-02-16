@@ -5,7 +5,7 @@ unit Goccia.Lexer;
 interface
 
 uses
-  Goccia.Token, Goccia.Error, Generics.Collections, Classes, SysUtils;
+  Goccia.Token, Goccia.Keywords, Goccia.Error, Generics.Collections, Classes, SysUtils;
 
 type
   TGocciaLexer = class
@@ -466,40 +466,40 @@ class procedure TGocciaLexer.InitKeywords;
 begin
   if Assigned(FKeywords) then Exit;
   FKeywords := TDictionary<string, TGocciaTokenType>.Create(40);
-  FKeywords.Add('const', gttConst);
-  FKeywords.Add('let', gttLet);
-  FKeywords.Add('class', gttClass);
-  FKeywords.Add('extends', gttExtends);
-  FKeywords.Add('new', gttNew);
-  FKeywords.Add('this', gttThis);
-  FKeywords.Add('super', gttSuper);
-  FKeywords.Add('static', gttStatic);
-  FKeywords.Add('return', gttReturn);
-  FKeywords.Add('if', gttIf);
-  FKeywords.Add('else', gttElse);
-  FKeywords.Add('for', gttFor);
-  FKeywords.Add('while', gttWhile);
-  FKeywords.Add('do', gttDo);
-  FKeywords.Add('switch', gttSwitch);
-  FKeywords.Add('case', gttCase);
-  FKeywords.Add('default', gttDefault);
-  FKeywords.Add('break', gttBreak);
-  FKeywords.Add('throw', gttThrow);
-  FKeywords.Add('try', gttTry);
-  FKeywords.Add('catch', gttCatch);
-  FKeywords.Add('finally', gttFinally);
-  FKeywords.Add('import', gttImport);
-  FKeywords.Add('export', gttExport);
-  FKeywords.Add('from', gttFrom);
-  FKeywords.Add('as', gttAs);
-  FKeywords.Add('typeof', gttTypeof);
-  FKeywords.Add('instanceof', gttInstanceof);
-  FKeywords.Add('in', gttIn);
-  FKeywords.Add('delete', gttDelete);
-  FKeywords.Add('true', gttTrue);
-  FKeywords.Add('false', gttFalse);
-  FKeywords.Add('null', gttNull);
-  FKeywords.Add('undefined', gttUndefined);
+  FKeywords.Add(KEYWORD_CONST, gttConst);
+  FKeywords.Add(KEYWORD_LET, gttLet);
+  FKeywords.Add(KEYWORD_CLASS, gttClass);
+  FKeywords.Add(KEYWORD_EXTENDS, gttExtends);
+  FKeywords.Add(KEYWORD_NEW, gttNew);
+  FKeywords.Add(KEYWORD_THIS, gttThis);
+  FKeywords.Add(KEYWORD_SUPER, gttSuper);
+  FKeywords.Add(KEYWORD_STATIC, gttStatic);
+  FKeywords.Add(KEYWORD_RETURN, gttReturn);
+  FKeywords.Add(KEYWORD_IF, gttIf);
+  FKeywords.Add(KEYWORD_ELSE, gttElse);
+  FKeywords.Add(KEYWORD_FOR, gttFor);
+  FKeywords.Add(KEYWORD_WHILE, gttWhile);
+  FKeywords.Add(KEYWORD_DO, gttDo);
+  FKeywords.Add(KEYWORD_SWITCH, gttSwitch);
+  FKeywords.Add(KEYWORD_CASE, gttCase);
+  FKeywords.Add(KEYWORD_DEFAULT, gttDefault);
+  FKeywords.Add(KEYWORD_BREAK, gttBreak);
+  FKeywords.Add(KEYWORD_THROW, gttThrow);
+  FKeywords.Add(KEYWORD_TRY, gttTry);
+  FKeywords.Add(KEYWORD_CATCH, gttCatch);
+  FKeywords.Add(KEYWORD_FINALLY, gttFinally);
+  FKeywords.Add(KEYWORD_IMPORT, gttImport);
+  FKeywords.Add(KEYWORD_EXPORT, gttExport);
+  FKeywords.Add(KEYWORD_FROM, gttFrom);
+  FKeywords.Add(KEYWORD_AS, gttAs);
+  FKeywords.Add(KEYWORD_TYPEOF, gttTypeof);
+  FKeywords.Add(KEYWORD_INSTANCEOF, gttInstanceof);
+  FKeywords.Add(KEYWORD_IN, gttIn);
+  FKeywords.Add(KEYWORD_DELETE, gttDelete);
+  FKeywords.Add(KEYWORD_TRUE, gttTrue);
+  FKeywords.Add(KEYWORD_FALSE, gttFalse);
+  FKeywords.Add(KEYWORD_NULL, gttNull);
+  FKeywords.Add(KEYWORD_UNDEFINED, gttUndefined);
 end;
 
 class destructor TGocciaLexer.DestroyClass;

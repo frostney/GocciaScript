@@ -133,9 +133,15 @@ Each scope maintains a dictionary of `TGocciaLexicalBinding` entries that track:
 - Declaration type (`let`, `const`, or parameter)
 - Whether the binding has been initialized (for Temporal Dead Zone enforcement)
 
-Special scope bindings used internally:
-- **`__super__`** — Set in method call scopes when a superclass exists, enabling `super` calls.
-- **`__owning_class__`** — Set in method call scopes and instance initialization scopes, identifying which class declared the current method. Used to resolve private fields to the correct class when inheritance shadowing is involved.
+### Scope Hierarchy
+
+The scope system uses a class hierarchy for specialised scope types:
+
+- **`TGocciaGlobalScope`** — Root scope with no parent, used by the interpreter/engine.
+- **`TGocciaCallScope`** — Marker class for function call scopes (`skFunction`).
+- **`TGocciaMethodCallScope`** — Extends `TGocciaCallScope` with typed `SuperClass` and `OwningClass` fields, enabling `super` resolution and private field access without string-keyed lookups. The evaluator finds these via `FindSuperClass` and `FindOwningClass`, which walk the parent chain using virtual dispatch.
+- **`TGocciaClassInitScope`** — Used during instance property initialization, carries a typed `OwningClass` field for private field resolution.
+- **`TGocciaCatchScope`** — Handles catch parameter scoping with proper assignment propagation.
 
 ## Module System
 

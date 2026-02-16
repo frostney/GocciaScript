@@ -70,7 +70,7 @@ type
     ReturnValue: TGocciaValue;
     Args: TGocciaArgumentsCollection;
   begin
-    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope := TGocciaGlobalScope.Create;
     Parameters := TStringList.Create;
 
     FunctionValue := CreateSimpleFunction<T>('test', Parameters, Scope);
@@ -113,7 +113,7 @@ type
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
-    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope := TGocciaGlobalScope.Create;
     Parameters := TStringList.Create;
     Parameters.Add('a');
     Parameters.Add('b');
@@ -190,7 +190,7 @@ type
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
-    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope := TGocciaGlobalScope.Create;
     Parameters := TStringList.Create;
     Parameters.Add('a');
     Parameters.Add('b');
@@ -293,7 +293,7 @@ type
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
-    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope := TGocciaGlobalScope.Create;
     Scope.DefineLexicalBinding('x', TGocciaNumberLiteralValue.Create(42), dtLet);
     Parameters := TStringList.Create;
 
@@ -338,7 +338,7 @@ type
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
-    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope := TGocciaGlobalScope.Create;
     Scope.DefineLexicalBinding('x', TGocciaNumberLiteralValue.Create(42), dtLet);
     Parameters := TStringList.Create;
     Parameters.Add('x'); // Parameter shadows global variable
@@ -387,7 +387,7 @@ type
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
-    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope := TGocciaGlobalScope.Create;
     Scope.DefineLexicalBinding('x', TGocciaNumberLiteralValue.Create(42), dtLet);
     Scope.DefineLexicalBinding('y', TGocciaStringLiteralValue.Create('hello'), dtLet);
     Parameters := TStringList.Create;
@@ -443,7 +443,7 @@ type
     ParamArray: TGocciaParameterArray;
     I: Integer;
   begin
-    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope := TGocciaGlobalScope.Create;
     Scope.DefineLexicalBinding('x', TGocciaNumberLiteralValue.Create(42), dtLet);
     Scope.DefineLexicalBinding('y', TGocciaStringLiteralValue.Create('hello'), dtLet);
     Parameters := TStringList.Create;
@@ -503,7 +503,7 @@ type
     LastValue: TGocciaValue;
   begin
     Statements := TObjectList<TGocciaASTNode>.Create;
-    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope := TGocciaGlobalScope.Create;
 
     Statements.Add(TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), 0, 0));
 
@@ -528,7 +528,7 @@ type
     LastValue: TGocciaValue;
   begin
     Statements := TObjectList<TGocciaASTNode>.Create;
-    Scope := TGocciaScope.Create(nil, skGlobal);
+    Scope := TGocciaGlobalScope.Create;
 
     Statements.Add(TGocciaBinaryExpression.Create(
       TGocciaLiteralExpression.Create(TGocciaNumberLiteralValue.Create(1), 0, 0),

@@ -365,7 +365,7 @@ When array prototype methods (`map`, `filter`, `reduce`, `forEach`, etc.) invoke
 
 Extends `TGocciaFunctionValue` with:
 - **`SuperClass`** — Reference for `super` calls.
-- **`OwningClass`** — The class that declared this method. Propagated as `__owning_class__` in the call scope, enabling correct private field resolution when inheritance is involved.
+- **`OwningClass`** — The class that declared this method. When called, `TGocciaMethodValue.CreateCallScope` creates a `TGocciaMethodCallScope` that carries both `SuperClass` and `OwningClass` as typed fields. The evaluator resolves these via `FindSuperClass` and `FindOwningClass` which walk the scope chain using virtual dispatch.
 
 ### Function Prototype (`TGocciaFunctionSharedPrototype`)
 
@@ -418,7 +418,7 @@ flowchart TD
     New["new Foo(args)"]
     New --> Create["Create TGocciaInstanceValue"]
     Create --> Proto["Set prototype = Foo.prototype"]
-    Proto --> Init["Create InitScope\nthis = instance\n__owning_class__ = Foo"]
+    Proto --> Init["Create TGocciaClassInitScope\nthis = instance\nowningClass = Foo"]
     Init --> Public["Initialize public instance properties\n(in declaration order)"]
     Public --> SuperPrivate["Initialize private instance properties\nfrom superclass (in declaration order)"]
     SuperPrivate --> Private["Initialize private instance properties\nfrom current class (in declaration order)"]

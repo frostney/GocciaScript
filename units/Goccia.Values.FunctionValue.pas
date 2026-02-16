@@ -25,6 +25,7 @@ type
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
     procedure BindThis(CallScope: TGocciaScope; ThisValue: TGocciaValue); virtual;
+    function CreateCallScope: TGocciaScope; virtual;
     function ExecuteBody(CallScope: TGocciaScope; Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string = '');
@@ -52,6 +53,8 @@ type
   private
     FSuperClass: TGocciaValue;
     FOwningClass: TGocciaValue; // TGocciaClassValue stored as TGocciaValue to avoid circular dependency
+  protected
+    function CreateCallScope: TGocciaScope; override;
   public
     constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
     procedure GCMarkReferences; override;
@@ -110,14 +113,17 @@ procedure TGocciaFunctionValue.BindThis(CallScope: TGocciaScope; ThisValue: TGoc
 begin
   // Non-arrow function: use call-site this (shorthand methods, class methods, getters/setters)
   CallScope.ThisValue := ThisValue;
-  CallScope.DefineLexicalBinding('this', ThisValue, dtUnknown);
+end;
+
+function TGocciaFunctionValue.CreateCallScope: TGocciaScope;
+begin
+  Result := TGocciaCallScope.Create(FClosure, FName, Length(FParameters) + 2);
 end;
 
 function TGocciaFunctionValue.ExecuteBody(CallScope: TGocciaScope; Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   I, J: Integer;
   ReturnValue: TGocciaValue;
-  Method: TGocciaMethodValue;
   Context: TGocciaEvaluationContext;
 begin
   // Set up evaluation context — inherit OnError from the closure scope
@@ -127,18 +133,6 @@ begin
 
   // Bind this via virtual dispatch (arrow vs non-arrow)
   BindThis(CallScope, ThisValue);
-
-  // If this is a method with a superclass, set up super handling
-  if Self is TGocciaMethodValue then
-  begin
-    Method := TGocciaMethodValue(Self);
-    if Assigned(Method.SuperClass) and not (Method.SuperClass is TGocciaUndefinedLiteralValue) then
-      CallScope.DefineLexicalBinding('__super__', Method.SuperClass, dtUnknown);
-
-    // Bind the owning class so private field access resolves to the correct class
-    if Assigned(Method.OwningClass) then
-      CallScope.DefineLexicalBinding('__owning_class__', Method.OwningClass, dtUnknown);
-  end;
 
   // Bind parameters - fast path for simple named params (no rest/destructuring/defaults)
   if FIsSimpleParams then
@@ -273,8 +267,8 @@ function TGocciaFunctionValue.Call(Arguments: TGocciaArgumentsCollection; ThisVa
 var
   CallScope: TGocciaScope;
 begin
-  // Create call scope
-  CallScope := FClosure.CreateChild(skFunction, FName, Length(FParameters) + 2);
+  // Create call scope via virtual dispatch (TGocciaMethodValue creates TGocciaMethodCallScope)
+  CallScope := CreateCallScope;
 
   // Register with GC as an active scope (protects it from collection during execution)
   if Assigned(TGocciaGC.Instance) then
@@ -337,7 +331,6 @@ begin
     if Assigned(ClosureScope.ThisValue) and not (ClosureScope.ThisValue is TGocciaUndefinedLiteralValue) then
     begin
       CallScope.ThisValue := ClosureScope.ThisValue;
-      CallScope.DefineLexicalBinding('this', ClosureScope.ThisValue, dtUnknown);
       Break;
     end;
     ClosureScope := ClosureScope.Parent;
@@ -362,6 +355,11 @@ constructor TGocciaMethodValue.Create(AParameters: TGocciaParameterArray; ABodyS
 begin
   inherited Create(AParameters, ABodyStatements, AClosure, AName);
   FSuperClass := ASuperClass;
+end;
+
+function TGocciaMethodValue.CreateCallScope: TGocciaScope;
+begin
+  Result := TGocciaMethodCallScope.Create(FClosure, FName, FSuperClass, FOwningClass, Length(FParameters) + 2);
 end;
 
 procedure TGocciaMethodValue.GCMarkReferences;

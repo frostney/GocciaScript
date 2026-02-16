@@ -40,9 +40,9 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   // Global constants
-  AScope.DefineLexicalBinding('undefined', TGocciaUndefinedLiteralValue.UndefinedValue, dtUnknown);
-  AScope.DefineLexicalBinding('NaN', TGocciaNumberLiteralValue.NaNValue, dtUnknown);
-  AScope.DefineLexicalBinding('Infinity', TGocciaNumberLiteralValue.InfinityValue, dtUnknown);
+  AScope.DefineLexicalBinding('undefined', TGocciaUndefinedLiteralValue.UndefinedValue, dtConst);
+  AScope.DefineLexicalBinding('NaN', TGocciaNumberLiteralValue.NaNValue, dtConst);
+  AScope.DefineLexicalBinding('Infinity', TGocciaNumberLiteralValue.InfinityValue, dtConst);
 
   // Set up Error prototype chain (ECMAScript spec):
   // TypeError.prototype -> Error.prototype -> Object.prototype
@@ -74,10 +74,10 @@ begin
   ReferenceErrorConstructorFunc.AssignProperty('prototype', FReferenceErrorProto);
   RangeErrorConstructorFunc.AssignProperty('prototype', FRangeErrorProto);
 
-  AScope.DefineLexicalBinding('Error', ErrorConstructorFunc, dtUnknown);
-  AScope.DefineLexicalBinding('TypeError', TypeErrorConstructorFunc, dtUnknown);
-  AScope.DefineLexicalBinding('ReferenceError', ReferenceErrorConstructorFunc, dtUnknown);
-  AScope.DefineLexicalBinding('RangeError', RangeErrorConstructorFunc, dtUnknown);
+  AScope.DefineLexicalBinding('Error', ErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding('TypeError', TypeErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding('ReferenceError', ReferenceErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding('RangeError', RangeErrorConstructorFunc, dtConst);
 
   // Note: parseInt, parseFloat, isNaN, isFinite are intentionally NOT registered as globals.
   // They are available only on the Number object (e.g. Number.parseInt, Number.isNaN).

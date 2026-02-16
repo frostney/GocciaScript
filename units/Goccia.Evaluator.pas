@@ -72,7 +72,8 @@ implementation
   uses
     Goccia.Values.ObjectPropertyDescriptor,
     Goccia.Values.ClassHelper,
-    Goccia.Values.Constants;
+    Goccia.Values.Constants,
+    Goccia.Keywords;
 
 // Helper function to safely call OnError with proper error handling
 procedure SafeOnError(Context: TGocciaEvaluationContext; const Message: string; Line, Column: Integer);
@@ -378,28 +379,11 @@ begin
   end
   else if Expression is TGocciaSuperExpression then
   begin
-    // Use __super__ from the scope (set by TGocciaMethodValue.Call to the correct
-    // superclass for the currently executing method). This is essential for multi-level
-    // inheritance: when B extends A and C extends B, calling super() inside B's
-    // constructor must resolve to A, not to B (which would happen if we used the
-    // instance's class, since the instance is of type C).
-    if Context.Scope.Contains('__super__') then
-      Result := Context.Scope.GetValue('__super__')
-    else if Context.Scope.ThisValue is TGocciaInstanceValue then
-    begin
-      if Assigned(TGocciaInstanceValue(Context.Scope.ThisValue).ClassValue.SuperClass) then
-        Result := TGocciaInstanceValue(Context.Scope.ThisValue).ClassValue.SuperClass
-      else
-        Context.OnError('No superclass found', Expression.Line, Expression.Column);
-    end
-    else if Context.Scope.ThisValue is TGocciaClassValue then
-    begin
-      if Assigned(TGocciaClassValue(Context.Scope.ThisValue).SuperClass) then
-        Result := TGocciaClassValue(Context.Scope.ThisValue).SuperClass
-      else
-        Context.OnError('No superclass found', Expression.Line, Expression.Column);
-    end
-    else
+    // Walk the scope chain via VMT dispatch to find the super class set by
+    // TGocciaMethodCallScope. All class methods go through TGocciaMethodValue.CreateCallScope
+    // which always creates a TGocciaMethodCallScope with the correct SuperClass.
+    Result := Context.Scope.FindSuperClass;
+    if not Assigned(Result) then
       Context.OnError('super can only be used in a class method', Expression.Line, Expression.Column);
   end
   else if Expression is TGocciaPrivateMemberExpression then
@@ -1441,10 +1425,8 @@ begin
       // Step 2: Initialize properties BEFORE calling constructor
       // Create an initialization context with `this` bound to the new instance
       InitContext := Context;
-      InitScope := Context.Scope.CreateChild(skBlock, 'InstanceInit');
+      InitScope := TGocciaClassInitScope.Create(Context.Scope, ClassValue);
       InitScope.ThisValue := Instance;
-      InitScope.DefineLexicalBinding('this', Instance, dtUnknown);
-      InitScope.DefineLexicalBinding('__owning_class__', ClassValue, dtUnknown);
       InitContext.Scope := InitScope;
 
       InitializeInstanceProperties(Instance, ClassValue, InitContext);
@@ -1455,10 +1437,8 @@ begin
       begin
         // Create a context with the superclass as owning class for correct composite key resolution
         SuperInitContext := Context;
-        SuperInitScope := Context.Scope.CreateChild(skBlock, 'SuperPrivateInit');
+        SuperInitScope := TGocciaClassInitScope.Create(Context.Scope, ClassValue.SuperClass);
         SuperInitScope.ThisValue := Instance;
-        SuperInitScope.DefineLexicalBinding('this', Instance, dtUnknown);
-        SuperInitScope.DefineLexicalBinding('__owning_class__', ClassValue.SuperClass, dtUnknown);
         SuperInitContext.Scope := SuperInitScope;
         InitializePrivateInstanceProperties(Instance, ClassValue.SuperClass, SuperInitContext);
       end;
@@ -1624,15 +1604,12 @@ function ResolveOwningClass(Instance: TGocciaInstanceValue; Context: TGocciaEval
 var
   OwningClassValue: TGocciaValue;
 begin
-  // Try to get the owning class from the scope (set when a method is called or during initialization)
-  if Context.Scope.Contains('__owning_class__') then
+  // Walk the scope chain to find the owning class (set on TGocciaMethodCallScope or TGocciaClassInitScope)
+  OwningClassValue := Context.Scope.FindOwningClass;
+  if (OwningClassValue is TGocciaClassValue) then
   begin
-    OwningClassValue := Context.Scope.GetValue('__owning_class__');
-    if OwningClassValue is TGocciaClassValue then
-    begin
-      Result := TGocciaClassValue(OwningClassValue);
-      Exit;
-    end;
+    Result := TGocciaClassValue(OwningClassValue);
+    Exit;
   end;
   // Fallback: use the instance's class
   Result := Instance.ClassValue;
@@ -1992,38 +1969,38 @@ begin
     if IsSimpleIdentifier then
     begin
       // Handle keyword literals before scope lookup
-      if Trimmed = 'true' then
+      if Trimmed = KEYWORD_TRUE then
       begin
         Result := TGocciaBooleanLiteralValue.TrueValue;
         Exit;
       end
-      else if Trimmed = 'false' then
+      else if Trimmed = KEYWORD_FALSE then
       begin
         Result := TGocciaBooleanLiteralValue.FalseValue;
         Exit;
       end
-      else if Trimmed = 'null' then
+      else if Trimmed = KEYWORD_NULL then
       begin
         Result := TGocciaNullLiteralValue.Create;
         Exit;
       end
-      else if Trimmed = 'undefined' then
+      else if Trimmed = KEYWORD_UNDEFINED then
       begin
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         Exit;
       end
-      else if Trimmed = 'NaN' then
+      else if Trimmed = NAN_LITERAL then
       begin
         Result := TGocciaNumberLiteralValue.NaNValue;
         Exit;
       end
-      else if Trimmed = 'Infinity' then
+      else if Trimmed = INFINITY_LITERAL then
       begin
         Result := TGocciaNumberLiteralValue.InfinityValue;
         Exit;
       end;
 
-      Result := Context.Scope.GetValue(Trimmed);
+      Result := Context.Scope.ResolveIdentifier(Trimmed);
       if Result = nil then
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
@@ -2039,7 +2016,7 @@ begin
       Left := Copy(Trimmed, 1, DotPos - 1);
       PropName := Copy(Trimmed, DotPos + 1, Length(Trimmed));
 
-      ObjVal := Context.Scope.GetValue(Left);
+      ObjVal := Context.Scope.ResolveIdentifier(Left);
       if (ObjVal <> nil) and (ObjVal is TGocciaObjectValue) then
       begin
         Result := TGocciaObjectValue(ObjVal).GetProperty(PropName);

@@ -220,70 +220,45 @@ procedure TGocciaEngine.RegisterBuiltinConstructors;
 var
   ArrayConstructor, ObjectConstructor, StringConstructor, NumberConstructor: TGocciaClassValue;
   BooleanConstructor, FunctionConstructor: TGocciaClassValue;
-  ExistingArray, ExistingObject, ExistingNumber: TGocciaValue;
-  ArrayObj, ObjectObj, NumberObj: TGocciaObjectValue;
   Key: string;
 begin
-  // Get existing built-in objects that have static methods (only if they exist)
-  ExistingArray := nil;
-  ExistingObject := nil;
-  ExistingNumber := nil;
-
-  if FInterpreter.GlobalScope.Contains('Array') then
-    ExistingArray := FInterpreter.GlobalScope.GetValue('Array');
-  if FInterpreter.GlobalScope.Contains('Object') then
-    ExistingObject := FInterpreter.GlobalScope.GetValue('Object');
-  if FInterpreter.GlobalScope.Contains('Number') then
-    ExistingNumber := FInterpreter.GlobalScope.GetValue('Number');
-
   // Create Object constructor first (must be first since it's the root of the prototype chain)
   ObjectConstructor := TGocciaClassValue.Create('Object', nil);
-  if (ExistingObject is TGocciaObjectValue) then
+  if Assigned(FBuiltinGlobalObject) then
   begin
-    ObjectObj := TGocciaObjectValue(ExistingObject);
-    // Copy all static methods from existing Object using property descriptors
-    for Key in ObjectObj.GetAllPropertyNames do
-      ObjectConstructor.SetProperty(Key, ObjectObj.GetProperty(Key));
+    for Key in FBuiltinGlobalObject.BuiltinObject.GetAllPropertyNames do
+      ObjectConstructor.SetProperty(Key, FBuiltinGlobalObject.BuiltinObject.GetProperty(Key));
   end;
-  FInterpreter.GlobalScope.DefineLexicalBinding('Object', ObjectConstructor, dtUnknown);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Object', ObjectConstructor, dtConst);
 
   // Create Array constructor and copy static methods
   ArrayConstructor := TGocciaClassValue.Create('Array', nil);
-  // Connect Array.prototype.prototype to Object.prototype
   ArrayConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  if (ExistingArray is TGocciaObjectValue) then
+  if Assigned(FBuiltinGlobalArray) then
   begin
-    ArrayObj := TGocciaObjectValue(ExistingArray);
-    // Copy all static methods from existing Array object using property descriptors
-    for Key in ArrayObj.GetAllPropertyNames do
-      ArrayConstructor.SetProperty(Key, ArrayObj.GetProperty(Key));
+    for Key in FBuiltinGlobalArray.BuiltinObject.GetAllPropertyNames do
+      ArrayConstructor.SetProperty(Key, FBuiltinGlobalArray.BuiltinObject.GetProperty(Key));
   end;
-  FInterpreter.GlobalScope.DefineLexicalBinding('Array', ArrayConstructor, dtUnknown);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Array', ArrayConstructor, dtConst);
 
   // Create other constructors - use specialized subclasses for primitives
   StringConstructor := TGocciaStringClassValue.Create('String', nil);
-  FInterpreter.GlobalScope.DefineLexicalBinding('String', StringConstructor, dtUnknown);
+  FInterpreter.GlobalScope.DefineLexicalBinding('String', StringConstructor, dtConst);
 
   NumberConstructor := TGocciaNumberClassValue.Create('Number', nil);
-  if (ExistingNumber is TGocciaObjectValue) then
+  if Assigned(FBuiltinGlobalNumber) then
   begin
-    NumberObj := TGocciaObjectValue(ExistingNumber);
-    // Copy all static methods from existing Number object using property descriptors
-    for Key in NumberObj.GetAllPropertyNames do
-      NumberConstructor.SetProperty(Key, NumberObj.GetProperty(Key));
+    for Key in FBuiltinGlobalNumber.BuiltinObject.GetAllPropertyNames do
+      NumberConstructor.SetProperty(Key, FBuiltinGlobalNumber.BuiltinObject.GetProperty(Key));
   end;
-  FInterpreter.GlobalScope.DefineLexicalBinding('Number', NumberConstructor, dtUnknown);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Number', NumberConstructor, dtConst);
 
   BooleanConstructor := TGocciaBooleanClassValue.Create('Boolean', nil);
-  FInterpreter.GlobalScope.DefineLexicalBinding('Boolean', BooleanConstructor, dtUnknown);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Boolean', BooleanConstructor, dtConst);
 
   // Create Function constructor
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
-  FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtUnknown);
-
-  // RangeError, Error, TypeError, ReferenceError are registered as native functions in RegisterGlobals
-
-  // Symbol is now registered as a proper built-in via RegisterSymbol
+  FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 end;
 
 function TGocciaEngine.Execute: TGocciaValue;

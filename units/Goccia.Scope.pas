@@ -5,10 +5,10 @@ unit Goccia.Scope;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ObjectValue, Goccia.Error, Goccia.Error.ThrowErrorCallback, Generics.Collections, SysUtils, TypInfo, Goccia.Interfaces, Goccia.Token;
+  Goccia.Values.Primitives, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ObjectValue, Goccia.Error, Goccia.Error.ThrowErrorCallback, Generics.Collections, SysUtils, TypInfo, Goccia.Interfaces, Goccia.Token, Goccia.Keywords;
 
 type
-  TGocciaDeclarationType = (dtUnknown, dtLet, dtConst, dtParameter);
+  TGocciaDeclarationType = (dtLet, dtConst, dtParameter);
 
   TLexicalBinding = record
   private
@@ -34,13 +34,17 @@ type
     FCustomLabel: string;
     FGCMarked: Boolean;
     FOnError: TGocciaThrowErrorCallback;
+  protected
+    function GetThisValue: TGocciaValue; virtual;
+    function GetOwningClass: TGocciaValue; virtual;
+    function GetSuperClass: TGocciaValue; virtual;
   public
     constructor Create(AParent: TGocciaScope = nil; AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0);
     destructor Destroy; override;
     function CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0): TGocciaScope;
 
     // Garbage collection support
-    procedure GCMarkReferences;
+    procedure GCMarkReferences; virtual;
     property GCMarked: Boolean read FGCMarked write FGCMarked;
 
     // New Define/Assign pattern
@@ -54,8 +58,14 @@ type
     function GetLexicalBinding(const AName: string; ALine: Integer = 0; AColumn: Integer = 0): TLexicalBinding;
     function GetValue(const AName: string): TGocciaValue;
 
+    function ResolveIdentifier(const AName: string): TGocciaValue;
     function ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
     function Contains(const AName: string): Boolean; inline;
+
+    // Walk the parent chain to find the nearest this / owning class / superclass
+    function FindThisValue: TGocciaValue;
+    function FindOwningClass: TGocciaValue;
+    function FindSuperClass: TGocciaValue;
 
     property Parent: TGocciaScope read FParent;
     property ThisValue: TGocciaValue read FThisValue write FThisValue;
@@ -63,6 +73,51 @@ type
     property ScopeKind: TGocciaScopeKind read FScopeKind;
     property CustomLabel: string read FCustomLabel;
     property OnError: TGocciaThrowErrorCallback read FOnError write FOnError;
+  end;
+
+  // Root scope with no parent -- used by the interpreter/engine
+  TGocciaGlobalScope = class(TGocciaScope)
+  protected
+    function GetThisValue: TGocciaValue; override;
+  public
+    constructor Create;
+  end;
+
+  // Marker class for function call scopes
+  TGocciaCallScope = class(TGocciaScope)
+  protected
+    function GetThisValue: TGocciaValue; override;
+  public
+    constructor Create(AParent: TGocciaScope; const AFunctionName: string; ACapacity: Integer = 0);
+  end;
+
+  // Function call scope for class methods -- carries super and owning class
+  TGocciaMethodCallScope = class(TGocciaCallScope)
+  private
+    FSuperClass: TGocciaValue;
+    FOwningClass: TGocciaValue;
+  protected
+    function GetOwningClass: TGocciaValue; override;
+    function GetSuperClass: TGocciaValue; override;
+  public
+    constructor Create(AParent: TGocciaScope; const AFunctionName: string;
+      ASuperClass, AOwningClass: TGocciaValue; ACapacity: Integer = 0);
+    procedure GCMarkReferences; override;
+    property SuperClass: TGocciaValue read FSuperClass;
+    property OwningClass: TGocciaValue read FOwningClass;
+  end;
+
+  // Scope for instance property initialization -- carries owning class
+  TGocciaClassInitScope = class(TGocciaScope)
+  private
+    FOwningClass: TGocciaValue;
+  protected
+    function GetThisValue: TGocciaValue; override;
+    function GetOwningClass: TGocciaValue; override;
+  public
+    constructor Create(AParent: TGocciaScope; AOwningClass: TGocciaValue);
+    procedure GCMarkReferences; override;
+    property OwningClass: TGocciaValue read FOwningClass;
   end;
 
   // Specialized scope for try-catch blocks with proper assignment propagation
@@ -133,6 +188,65 @@ end;
 function TGocciaScope.CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0): TGocciaScope;
 begin
   Result := TGocciaScope.Create(Self, AScopeKind, ACustomLabel, ACapacity);
+  // Inherit ThisValue so that block scopes can resolve `this` correctly
+  Result.FThisValue := FThisValue;
+end;
+
+function TGocciaScope.GetThisValue: TGocciaValue;
+begin
+  Result := nil;
+end;
+
+function TGocciaScope.GetOwningClass: TGocciaValue;
+begin
+  Result := nil;
+end;
+
+function TGocciaScope.GetSuperClass: TGocciaValue;
+begin
+  Result := nil;
+end;
+
+function TGocciaScope.FindThisValue: TGocciaValue;
+var
+  Current: TGocciaScope;
+begin
+  Current := Self;
+  while Assigned(Current) do
+  begin
+    Result := Current.GetThisValue;
+    if Assigned(Result) then Exit;
+    Current := Current.FParent;
+  end;
+  Result := nil;
+end;
+
+function TGocciaScope.FindOwningClass: TGocciaValue;
+var
+  Current: TGocciaScope;
+begin
+  Current := Self;
+  while Assigned(Current) do
+  begin
+    Result := Current.GetOwningClass;
+    if Assigned(Result) then Exit;
+    Current := Current.FParent;
+  end;
+  Result := nil;
+end;
+
+function TGocciaScope.FindSuperClass: TGocciaValue;
+var
+  Current: TGocciaScope;
+begin
+  Current := Self;
+  while Assigned(Current) do
+  begin
+    Result := Current.GetSuperClass;
+    if Assigned(Result) then Exit;
+    Current := Current.FParent;
+  end;
+  Result := nil;
 end;
 
 procedure TGocciaScope.DefineLexicalBinding(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType; ALine: Integer = 0; AColumn: Integer = 0);
@@ -157,24 +271,11 @@ begin
   LexicalBinding.Value := AValue;
   LexicalBinding.DeclarationType := ADeclarationType;
 
-  case ADeclarationType of
-    dtConst:
-      begin
-        // const: non-writable, enumerable, configurable, must be initialized
-        // Note: Parser already validates that const declarations have initializers
-        // This includes cases like 'const x = undefined;' which are valid
-        LexicalBinding.Initialized := True;
-      end;
-    dtLet:
-      begin
-        // let: writable, enumerable, configurable
-        // Once a let declaration is processed, it's immediately initialized (no TDZ after declaration)
-        LexicalBinding.Initialized := True;
-      end;
-  else
-    // Default for unknown types (built-ins) - mark as initialized
-    LexicalBinding.Initialized := True;
-  end;
+  // All declaration types are immediately initialized:
+  // - dtConst: parser validates initializers; 'const x = undefined;' is valid
+  // - dtLet: no TDZ after declaration statement is processed
+  // - dtParameter: parameters have no TDZ
+  LexicalBinding.Initialized := True;
 
   FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
 end;
@@ -251,6 +352,14 @@ begin
   Result := GetLexicalBinding(AName).Value;
 end;
 
+function TGocciaScope.ResolveIdentifier(const AName: string): TGocciaValue;
+begin
+  if AName = KEYWORD_THIS then
+    Result := FThisValue
+  else
+    Result := GetValue(AName);
+end;
+
 function TGocciaScope.GetThisProperty(const AName: string): TGocciaValue;
 begin
   if (ThisValue is TGocciaObjectValue) then
@@ -295,7 +404,86 @@ begin
   end;
 end;
 
-// TGocciaCatchScope implementation
+{ TGocciaGlobalScope }
+
+constructor TGocciaGlobalScope.Create;
+begin
+  inherited Create(nil, skGlobal, 'GlobalScope');
+  FThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaGlobalScope.GetThisValue: TGocciaValue;
+begin
+  Result := FThisValue;
+end;
+
+{ TGocciaCallScope }
+
+constructor TGocciaCallScope.Create(AParent: TGocciaScope; const AFunctionName: string; ACapacity: Integer = 0);
+begin
+  inherited Create(AParent, skFunction, AFunctionName, ACapacity);
+end;
+
+function TGocciaCallScope.GetThisValue: TGocciaValue;
+begin
+  Result := FThisValue;
+end;
+
+{ TGocciaMethodCallScope }
+
+constructor TGocciaMethodCallScope.Create(AParent: TGocciaScope; const AFunctionName: string;
+  ASuperClass, AOwningClass: TGocciaValue; ACapacity: Integer = 0);
+begin
+  inherited Create(AParent, AFunctionName, ACapacity);
+  FSuperClass := ASuperClass;
+  FOwningClass := AOwningClass;
+end;
+
+function TGocciaMethodCallScope.GetOwningClass: TGocciaValue;
+begin
+  Result := FOwningClass;
+end;
+
+function TGocciaMethodCallScope.GetSuperClass: TGocciaValue;
+begin
+  Result := FSuperClass;
+end;
+
+procedure TGocciaMethodCallScope.GCMarkReferences;
+begin
+  inherited;
+  if Assigned(FSuperClass) then
+    FSuperClass.GCMarkReferences;
+  if Assigned(FOwningClass) then
+    FOwningClass.GCMarkReferences;
+end;
+
+{ TGocciaClassInitScope }
+
+constructor TGocciaClassInitScope.Create(AParent: TGocciaScope; AOwningClass: TGocciaValue);
+begin
+  inherited Create(AParent, skBlock, 'ClassInit');
+  FOwningClass := AOwningClass;
+end;
+
+function TGocciaClassInitScope.GetThisValue: TGocciaValue;
+begin
+  Result := FThisValue;
+end;
+
+function TGocciaClassInitScope.GetOwningClass: TGocciaValue;
+begin
+  Result := FOwningClass;
+end;
+
+procedure TGocciaClassInitScope.GCMarkReferences;
+begin
+  inherited;
+  if Assigned(FOwningClass) then
+    FOwningClass.GCMarkReferences;
+end;
+
+{ TGocciaCatchScope }
 
 constructor TGocciaCatchScope.Create(AParent: TGocciaScope; const ACatchParameter: string);
 begin

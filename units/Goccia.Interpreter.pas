@@ -16,7 +16,7 @@ uses
 type
   TGocciaInterpreter = class
   private
-    FGlobalScope: TGocciaScope;
+    FGlobalScope: TGocciaGlobalScope;
     FModules: TDictionary<string, TGocciaModule>;
     FFileName: string;
     FSourceLines: TStringList;
@@ -34,7 +34,7 @@ type
     function LoadModule(const APath: string): TGocciaModule;
     procedure CheckForModuleReload(Module: TGocciaModule);
 
-    property GlobalScope: TGocciaScope read FGlobalScope;
+    property GlobalScope: TGocciaGlobalScope read FGlobalScope;
   end;
 
 
@@ -49,8 +49,7 @@ constructor TGocciaInterpreter.Create(const AFileName: string;
 begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
-  FGlobalScope := TGocciaScope.Create(nil, skGlobal, 'GlobalScope');
-  FGlobalScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  FGlobalScope := TGocciaGlobalScope.Create;
   FModules := TDictionary<string, TGocciaModule>.Create;
 end;
 
