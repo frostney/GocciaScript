@@ -262,108 +262,114 @@ end;
 
 procedure TGocciaLexer.ScanString;
 var
-  Value: string;
+  SB: TStringBuilder;
   Quote: Char;
 begin
   Quote := FSource[FStart];
-  Value := '';
-
-  while (Peek <> Quote) and not IsAtEnd do
-  begin
-    if Peek = #10 then
+  SB := TStringBuilder.Create;
+  try
+    while (Peek <> Quote) and not IsAtEnd do
     begin
-      Inc(FLine);
-      FColumn := 0;
+      if Peek = #10 then
+      begin
+        Inc(FLine);
+        FColumn := 0;
+      end;
+
+      if Peek = '\' then
+      begin
+        Advance;
+        if not IsAtEnd then
+        begin
+          case Peek of
+            'n': begin SB.Append(#10); Advance; end;
+            'r': begin SB.Append(#13); Advance; end;
+            't': begin SB.Append(#9); Advance; end;
+            '\': begin SB.Append('\'); Advance; end;
+            '''': begin SB.Append(''''); Advance; end;
+            '"': begin SB.Append('"'); Advance; end;
+            '0': begin SB.Append(#0); Advance; end;
+            'u': begin Advance; SB.Append(ScanUnicodeEscape); end;
+            'x': begin Advance; SB.Append(ScanHexEscape); end;
+          else
+            SB.Append(Peek);
+            Advance;
+          end;
+        end;
+      end
+      else
+        SB.Append(Advance);
     end;
 
-    if Peek = '\' then
-    begin
-      Advance;
-      if not IsAtEnd then
-      begin
-        case Peek of
-          'n': begin Value := Value + #10; Advance; end;
-          'r': begin Value := Value + #13; Advance; end;
-          't': begin Value := Value + #9; Advance; end;
-          '\': begin Value := Value + '\'; Advance; end;
-          '''': begin Value := Value + ''''; Advance; end;
-          '"': begin Value := Value + '"'; Advance; end;
-          '0': begin Value := Value + #0; Advance; end;
-          'u': begin Advance; Value := Value + ScanUnicodeEscape; end;
-          'x': begin Advance; Value := Value + ScanHexEscape; end;
-        else
-          Value := Value + Peek;
-          Advance;
-        end;
-      end;
-    end
-    else
-      Value := Value + Advance;
+    if IsAtEnd then
+      raise TGocciaLexerError.Create('Unterminated string', FLine, FColumn,
+        FFileName, FSourceLines);
+
+    Advance; // Closing quote
+    AddToken(gttString, SB.ToString);
+  finally
+    SB.Free;
   end;
-
-  if IsAtEnd then
-    raise TGocciaLexerError.Create('Unterminated string', FLine, FColumn,
-      FFileName, FSourceLines);
-
-  Advance; // Closing quote
-  AddToken(gttString, Value);
 end;
 
 procedure TGocciaLexer.ScanTemplate;
 var
-  Value: string;
+  SB: TStringBuilder;
 begin
-  Value := '';
-
-  while (Peek <> '`') and not IsAtEnd do
-  begin
-    if Peek = #13 then
+  SB := TStringBuilder.Create;
+  try
+    while (Peek <> '`') and not IsAtEnd do
     begin
-      // ECMAScript spec: normalize CR and CRLF to LF in template literals
-      Advance; // consume CR
-      if Peek = #10 then
-        Advance; // consume LF if CRLF
-      Inc(FLine);
-      FColumn := 0;
-      Value := Value + #10;
-    end
-    else if Peek = #10 then
-    begin
-      Inc(FLine);
-      FColumn := 0;
-      Value := Value + Advance; // Template literals preserve newlines
-    end
-    else if Peek = '\' then
-    begin
-      Advance;
-      if not IsAtEnd then
+      if Peek = #13 then
       begin
-        case Peek of
-          'n': begin Value := Value + #10; Advance; end;
-          'r': begin Value := Value + #13; Advance; end;
-          't': begin Value := Value + #9; Advance; end;
-          '\': begin Value := Value + '\'; Advance; end;
-          '`': begin Value := Value + '`'; Advance; end;
-          '$': begin Value := Value + '$'; Advance; end;
-          '0': begin Value := Value + #0; Advance; end;
-          'u': begin Advance; Value := Value + ScanUnicodeEscape; end;
-          'x': begin Advance; Value := Value + ScanHexEscape; end;
-        else
-          Value := Value + Peek;
+        // ECMAScript spec: normalize CR and CRLF to LF in template literals
+        Advance;
+        if Peek = #10 then
           Advance;
+        Inc(FLine);
+        FColumn := 0;
+        SB.Append(#10);
+      end
+      else if Peek = #10 then
+      begin
+        Inc(FLine);
+        FColumn := 0;
+        SB.Append(Advance);
+      end
+      else if Peek = '\' then
+      begin
+        Advance;
+        if not IsAtEnd then
+        begin
+          case Peek of
+            'n': begin SB.Append(#10); Advance; end;
+            'r': begin SB.Append(#13); Advance; end;
+            't': begin SB.Append(#9); Advance; end;
+            '\': begin SB.Append('\'); Advance; end;
+            '`': begin SB.Append('`'); Advance; end;
+            '$': begin SB.Append('$'); Advance; end;
+            '0': begin SB.Append(#0); Advance; end;
+            'u': begin Advance; SB.Append(ScanUnicodeEscape); end;
+            'x': begin Advance; SB.Append(ScanHexEscape); end;
+          else
+            SB.Append(Peek);
+            Advance;
+          end;
         end;
-      end;
-    end
-    else
-      Value := Value + Advance;
+      end
+      else
+        SB.Append(Advance);
+    end;
+
+    if IsAtEnd then
+      raise TGocciaLexerError.Create('Unterminated template literal', FLine, FColumn,
+        FFileName, FSourceLines);
+
+    Advance; // Closing backtick
+    AddToken(gttTemplate, SB.ToString);
+  finally
+    SB.Free;
   end;
-
-  if IsAtEnd then
-    raise TGocciaLexerError.Create('Unterminated template literal', FLine, FColumn,
-      FFileName, FSourceLines);
-
-  Advance; // Closing backtick
-  AddToken(gttTemplate, Value);
 end;
 
 procedure TGocciaLexer.ScanNumber;
