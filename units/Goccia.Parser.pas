@@ -45,7 +45,7 @@ type
     function ParseGetterExpression: TGocciaGetterExpression;
     function ParseSetterExpression: TGocciaSetterExpression;
 
-    // Object method body parsing: (params) { stmts } -> arrow function expression
+    // Object method body parsing: (params) { stmts } -> method expression
     function ParseObjectMethodBody(ALine, AColumn: Integer): TGocciaExpression;
 
     // Destructuring pattern parsing
@@ -908,7 +908,7 @@ begin
 
     Consume(gttRightBrace, 'Expected "}" after method body');
     Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), ALine, AColumn);
-    Result := TGocciaArrowFunctionExpression.Create(Parameters, Body, ALine, AColumn);
+    Result := TGocciaMethodExpression.Create(Parameters, Body, ALine, AColumn);
   except
     Statements.Free;
     raise;

@@ -105,7 +105,7 @@ GocciaScript uses a mark-and-sweep garbage collector (`Goccia.GarbageCollector.p
 
 - **AST literal values** are unregistered from the GC by `TGocciaLiteralExpression.Create` and owned by the AST node. The evaluator calls `Value.RuntimeCopy` to produce fresh GC-managed values when evaluating literals.
 - **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache) are pinned via `TGocciaGC.Instance.PinValue` during engine initialization (consolidated in `PinSingletons`).
-- **Shared prototype singletons** (String, Array, Set, Map, Function) are pinned inside each type's `InitializePrototype` method. All prototype method callbacks must use `ThisValue` (not `Self`) to access instance data, since `Self` refers to the method host singleton.
+- **Shared prototype singletons** (String, Number, Array, Set, Map, Function) are pinned inside each type's `InitializePrototype` method. All prototype method callbacks must use `ThisValue` (not `Self`) to access instance data, since `Self` refers to the method host singleton.
 - **Pinned values, temp roots, and root scopes** are stored in `TDictionary<T, Boolean>` for O(1) membership checks.
 - **Values held only by Pascal code** (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot` for the duration they are needed. Example: benchmark functions held in a `TObjectList`.
 - **Scopes** register with the GC in their constructor. Active call scopes are tracked via `PushActiveScope`/`PopActiveScope` in `TGocciaFunctionValue.Call`.
@@ -115,7 +115,7 @@ GocciaScript uses a mark-and-sweep garbage collector (`Goccia.GarbageCollector.p
 
 GocciaScript intentionally excludes these JavaScript features — do **not** add support for them:
 - `var` declarations (use `let`/`const`)
-- `function` keyword (use arrow functions)
+- `function` keyword (use arrow functions or shorthand methods)
 - `==` and `!=` loose equality (use `===`/`!==`)
 - `eval()` and `arguments` object
 - Automatic semicolon insertion (semicolons are required)
@@ -123,6 +123,17 @@ GocciaScript intentionally excludes these JavaScript features — do **not** add
 - Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` — use `Number.*` instead (intentional divergence; keeps these functions on the object they belong to)
 
 See [docs/language-restrictions.md](docs/language-restrictions.md) for the full list and rationale.
+
+### 6. `this` Binding Semantics
+
+GocciaScript follows ECMAScript strict mode `this` binding. Two function forms exist with separate AST nodes and runtime types:
+
+- **Arrow functions** (`(x) => x + 1`) — AST: `TGocciaArrowFunctionExpression`, Runtime: `TGocciaArrowFunctionValue`. Always inherit `this` from their lexical (closure) scope via `BindThis` override.
+- **Shorthand methods** (`method() { ... }`) — AST: `TGocciaMethodExpression`, Runtime: `TGocciaFunctionValue`. Receive call-site `this` from the receiver.
+
+`this` binding is resolved via virtual dispatch on `TGocciaFunctionValue.BindThis` — no boolean flags or runtime branches. Array prototype callbacks pass `undefined` as `ThisValue`, so arrow callbacks correctly inherit their enclosing scope's `this`.
+
+See [docs/design-decisions.md](docs/design-decisions.md) for the full design rationale.
 
 ## Code Style
 
@@ -146,7 +157,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 
 ### Design Patterns in Use
 
-- **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`) and shared prototype singletons (String, Array, Set, Map, Function — each type uses `class var` + `InitializePrototype` guarded by `if Assigned`)
+- **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`) and shared prototype singletons (String, Number, Array, Set, Map, Function — each type uses `class var` + `InitializePrototype` guarded by `if Assigned`)
 - **Factory method** for scope creation (`CreateChild`, with optional capacity hint)
 - **Context object** for evaluation state (`TGocciaEvaluationContext`)
 - **Virtual dispatch** for property access (`GetProperty`/`SetProperty` on `TGocciaValue`)

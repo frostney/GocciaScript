@@ -278,6 +278,17 @@ type
     property Body: TGocciaASTNode read FBody;
   end;
 
+  TGocciaMethodExpression = class(TGocciaExpression)
+  private
+    FParameters: TGocciaParameterArray;
+    FBody: TGocciaASTNode;
+  public
+    constructor Create(AParameters: TGocciaParameterArray; ABody: TGocciaASTNode;
+      ALine, AColumn: Integer);
+    property Parameters: TGocciaParameterArray read FParameters;
+    property Body: TGocciaASTNode read FBody;
+  end;
+
   TGocciaConditionalExpression = class(TGocciaExpression)
   private
     FCondition: TGocciaExpression;
@@ -752,6 +763,16 @@ end;
 { TGocciaArrowFunctionExpression }
 
 constructor TGocciaArrowFunctionExpression.Create(AParameters: TGocciaParameterArray;
+  ABody: TGocciaASTNode; ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FParameters := AParameters;
+  FBody := ABody;
+end;
+
+{ TGocciaMethodExpression }
+
+constructor TGocciaMethodExpression.Create(AParameters: TGocciaParameterArray;
   ABody: TGocciaASTNode; ALine, AColumn: Integer);
 begin
   inherited Create(ALine, AColumn);

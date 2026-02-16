@@ -114,14 +114,19 @@ With `let`/`const`, accessing before declaration is a `ReferenceError` (Temporal
 
 ### `function` Keyword
 
-**Excluded.** Use arrow functions instead.
+**Excluded.** Use arrow functions or shorthand methods instead.
 
 The `function` keyword creates several problems:
 - **`this` binding confusion** — Regular functions have their own `this` that changes based on how they're called.
 - **Hoisting** — Function declarations are hoisted, making code order misleading.
 - **`arguments` object** — Creates an implicit magic variable.
 
-Arrow functions have lexical `this`, no hoisting, and no `arguments` — they're predictable.
+GocciaScript provides two function definition styles that cover all use cases:
+
+- **Arrow functions** (`(x) => x + 1`) — Lexical `this`, no hoisting, no `arguments`. Use for standalone functions, callbacks, and closures.
+- **Shorthand methods** (`method() {}`) — Call-site `this`, like ECMAScript's regular functions. Use in object literals and class definitions where `this` binding is needed.
+
+This separation is clean and matches ECMAScript strict mode semantics exactly.
 
 ### Loose Equality (`==` and `!=`)
 
@@ -228,3 +233,37 @@ GocciaScript operates in an implicit strict mode:
 - Temporal Dead Zone is enforced for `let`/`const`.
 - `const` reassignment throws `TypeError`.
 - Accessing undeclared variables throws `ReferenceError`.
+- `this` is `undefined` in standalone function calls (no implicit global `this`).
+
+### `this` Binding (Strict Mode Semantics)
+
+GocciaScript follows ECMAScript strict mode `this` semantics:
+
+| Context | `this` value |
+|---------|-------------|
+| Module level | `undefined` |
+| Arrow function | Inherited from lexical (enclosing) scope |
+| Shorthand method (`method() {}`) | Call-site object (the receiver) |
+| Class method | Call-site object (the instance) |
+| Getter/setter | Call-site object |
+| Standalone function call | `undefined` |
+| `fn.call(thisArg)` / `fn.apply(thisArg)` | Explicit `thisArg` |
+| `fn.bind(thisArg)` | Bound `thisArg` |
+
+Arrow functions **never** receive their own `this` — they always inherit from their defining scope:
+
+```javascript
+const obj = {
+  value: 42,
+  arrow: () => typeof this,     // undefined — arrow inherits module-level this
+  method() { return this.value; } // 42 — shorthand method uses call-site this
+};
+
+const outer = {
+  value: 10,
+  nested() {
+    const fn = () => this.value;  // 10 — arrow inherits method's this
+    return fn();
+  }
+};
+```

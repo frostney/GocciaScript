@@ -205,6 +205,17 @@ The JSON parser is a recursive descent implementation. Special handling:
 
 These are **not** available as global functions — see [language-restrictions.md](language-restrictions.md#no-global-parseint-parsefloat-isnan-isfinite) for the rationale and polyfill pattern.
 
+**Prototype methods** (available on number values via auto-boxing):
+
+| Method | Description |
+|--------|-------------|
+| `num.toFixed(digits?)` | Format with fixed-point notation (0-100 digits, default 0) |
+| `num.toString(radix?)` | Convert to string (supports radix 10 and 16) |
+| `num.valueOf()` | Return the primitive number value |
+| `num.toPrecision(precision?)` | Format to specified significant digits |
+
+All prototype methods correctly handle special values — `NaN`, `Infinity`, `-Infinity`, and `-0` return their standard string representations rather than attempting numeric formatting.
+
 ### String (`Goccia.Builtins.GlobalString.pas`)
 
 String constructor available as `String()`.

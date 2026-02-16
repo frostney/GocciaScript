@@ -174,10 +174,13 @@ end;
 function InvokeCallback(Callback: TGocciaValue; CallArgs: TGocciaArgumentsCollection;
   ThisArray: TGocciaValue): TGocciaValue; inline;
 begin
+  // Pass undefined as ThisValue so arrow function callbacks inherit
+  // 'this' from their lexical scope rather than receiving the array.
+  // The array is already available as the third argument in CallArgs.
   if Callback is TGocciaNativeFunctionValue then
-    Result := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisArray)
+    Result := TGocciaNativeFunctionValue(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
   else
-    Result := TGocciaFunctionValue(Callback).Call(CallArgs, ThisArray);
+    Result := TGocciaFunctionValue(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
 
 function CreateArrayCallbackArgs(Element: TGocciaValue; Index: Integer; ThisArray: TGocciaValue): TGocciaArgumentsCollection;

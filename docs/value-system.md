@@ -158,6 +158,17 @@ Special number singletons: `NaNValue`, `PositiveInfinityValue`, `NegativeInfinit
 
 **Checking for special values:** Always use the property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) rather than inspecting `FValue` directly. Since special values store `0.0` in `FValue`, standard floating-point checks like `Math.IsNaN(FValue)` will return incorrect results.
 
+### Number Prototype (`TGocciaNumberObjectValue`)
+
+When methods are called on number primitives (e.g., `(42).toFixed(2)`), the evaluator auto-boxes the number into a `TGocciaNumberObjectValue`. All number object instances share a single class-level prototype singleton (`FSharedNumberPrototype`), following the same pattern as strings, arrays, sets, and maps.
+
+| Method | Description |
+|--------|-------------|
+| `toFixed(digits?)` | Format with fixed-point notation. Returns `"NaN"`, `"Infinity"`, `"-Infinity"` for special values. |
+| `toString(radix?)` | String representation. Supports radix 10 (default) and 16 (hex). Special values return their default string. |
+| `valueOf()` | Return the primitive number value. |
+| `toPrecision(precision?)` | Format to specified precision. Special values return their default string. |
+
 ### Strings
 
 Simple wrapper around a Pascal `string`:
@@ -315,15 +326,40 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 
 ### User Functions (`TGocciaFunctionValue`)
 
-Created from arrow function expressions in the AST:
+The base runtime type for user-defined functions. Uses call-site `this` binding (like ECMAScript's regular functions).
 
 - **Parameters** — List of parameter nodes (supports destructuring, defaults, and rest parameters).
 - **Body** — List of AST statements.
 - **Closure** — Reference to the scope where the function was defined.
-- **`IsArrow` flag** — Marks functions created from arrow expressions. When an arrow function is called standalone (no explicit `this`), it inherits `this` from its closure scope chain. When called as a method (`obj.method()`), it receives the call-site `this` normally.
-- **`this` binding** — Captured from the enclosing scope for arrow functions; set by the call site for method calls.
+- **`BindThis` (virtual)** — Determines how `this` is resolved during a call. The base implementation uses call-site `this`.
+- **`ExecuteBody` (protected)** — Shared call machinery: binds `this` via `BindThis`, binds parameters, executes body, handles return values. Called by `Call`.
 - **`length` property** — Returns the number of formal parameters before the first default/rest parameter (ECMAScript spec).
 - **`name` property** — Returns the function name. For anonymous arrow functions assigned to variables (`const add = () => {}`), the evaluator infers the name from the variable declaration.
+
+### Arrow Functions (`TGocciaArrowFunctionValue`)
+
+Extends `TGocciaFunctionValue`. Overrides `BindThis` to walk the closure scope chain for lexical `this`, per ECMAScript spec. Arrow functions never receive their own `this` — they always inherit from their defining scope, regardless of how they are called.
+
+Created from `TGocciaArrowFunctionExpression` AST nodes (arrow function syntax: `(x) => ...`).
+
+### `this` Binding
+
+`this` binding is determined by the runtime type via virtual dispatch on `BindThis`:
+
+| Runtime Type | `this` binding | Created from |
+|-------------|---------------|-------------|
+| `TGocciaFunctionValue` | Call-site (receiver) | `TGocciaMethodExpression` (shorthand methods) |
+| `TGocciaArrowFunctionValue` | Lexical (closure scope walk) | `TGocciaArrowFunctionExpression` (arrow syntax) |
+| `TGocciaMethodValue` | Call-site (inherited from base) | `TGocciaClassMethod` (class methods) |
+
+Standalone calls to any function type receive `undefined` as `this` (strict mode, no implicit global).
+
+### Array Method Callbacks
+
+When array prototype methods (`map`, `filter`, `reduce`, `forEach`, etc.) invoke user-provided callbacks, they pass `undefined` as `ThisValue`. This means:
+
+- Arrow function callbacks (`TGocciaArrowFunctionValue`) inherit `this` from their lexical scope (e.g., the enclosing class method), which is the correct ECMAScript behavior.
+- Shorthand method references passed as callbacks receive `undefined` as `this` (matching strict mode semantics for unbound method extraction).
 
 ### Methods (`TGocciaMethodValue`)
 

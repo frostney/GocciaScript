@@ -33,6 +33,7 @@ function EvaluateObject(ObjectExpression: TGocciaObjectExpression; Context: TGoc
 function EvaluateGetter(GetterExpression: TGocciaGetterExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateSetter(SetterExpression: TGocciaSetterExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateArrowFunction(ArrowFunctionExpression: TGocciaArrowFunctionExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateMethodExpression(MethodExpression: TGocciaMethodExpression; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateBlock(BlockStatement: TGocciaBlockStatement; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateIf(IfStatement: TGocciaIfStatement; Context: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTry(TryStatement: TGocciaTryStatement; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -351,6 +352,8 @@ begin
     Result := EvaluateArray(TGocciaArrayExpression(Expression), Context)
   else if Expression is TGocciaObjectExpression then
     Result := EvaluateObject(TGocciaObjectExpression(Expression), Context)
+  else if Expression is TGocciaMethodExpression then
+    Result := EvaluateMethodExpression(TGocciaMethodExpression(Expression), Context)
   else if Expression is TGocciaArrowFunctionExpression then
     Result := EvaluateArrowFunction(TGocciaArrowFunctionExpression(Expression), Context)
   else if Expression is TGocciaConditionalExpression then
@@ -1168,12 +1171,25 @@ begin
     Statements.Add(ArrowFunctionExpression.Body);
   end;
 
-  // Create function with closure scope - we need to avoid dangling references to temporary call scopes
-  // But we also need to preserve access to the current scope's variables
-  // The simplest approach: create a child scope that will be persistent
-  Result := TGocciaFunctionValue.Create(ArrowFunctionExpression.Parameters, Statements, Context.Scope.CreateChild);
-  TGocciaFunctionValue(Result).IsArrow := True;
+  // Arrow functions always use lexical this per ECMAScript spec
+  Result := TGocciaArrowFunctionValue.Create(ArrowFunctionExpression.Parameters, Statements, Context.Scope.CreateChild);
   TGocciaFunctionValue(Result).IsExpressionBody := not (ArrowFunctionExpression.Body is TGocciaBlockStatement);
+end;
+
+function EvaluateMethodExpression(MethodExpression: TGocciaMethodExpression; Context: TGocciaEvaluationContext): TGocciaValue;
+var
+  Statements: TObjectList<TGocciaASTNode>;
+begin
+  if MethodExpression.Body is TGocciaBlockStatement then
+    Statements := CopyStatementList(TGocciaBlockStatement(MethodExpression.Body).Nodes)
+  else
+  begin
+    Statements := TObjectList<TGocciaASTNode>.Create(False);
+    Statements.Add(MethodExpression.Body);
+  end;
+
+  // Shorthand methods use call-site this like regular functions
+  Result := TGocciaFunctionValue.Create(MethodExpression.Parameters, Statements, Context.Scope.CreateChild);
 end;
 
 function EvaluateBlock(BlockStatement: TGocciaBlockStatement; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -1942,6 +1958,7 @@ begin
      (Pos('(', Trimmed) > 0) or (Pos(')', Trimmed) > 0) or   // Parentheses
      (Pos('?', Trimmed) > 0) or (Pos(':', Trimmed) > 0) or   // Ternary operator
      (Pos('[', Trimmed) > 0) or (Pos(']', Trimmed) > 0) or   // Array access
+     (Pos('#', Trimmed) > 0) or                               // Private field access
      (Pos('>=', Trimmed) > 0) or (Pos('<=', Trimmed) > 0) or // Comparison operators
      (Pos('==', Trimmed) > 0) or (Pos('!=', Trimmed) > 0) or
      (Pos('>', Trimmed) > 0) or (Pos('<', Trimmed) > 0) then
