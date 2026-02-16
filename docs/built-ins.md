@@ -203,7 +203,7 @@ The JSON parser is a recursive descent implementation. Special handling:
 | `Number.isInteger(value)` | Check if integer |
 | `Number.isSafeInteger(value)` | Check if safe integer (within ±2^53-1) |
 
-Also aliased as global `parseInt`, `parseFloat`, `isFinite`, `isNaN`.
+These are **not** available as global functions — see [language-restrictions.md](language-restrictions.md#no-global-parseint-parsefloat-isnan-isfinite) for the rationale and polyfill pattern.
 
 ### String (`Goccia.Builtins.GlobalString.pas`)
 

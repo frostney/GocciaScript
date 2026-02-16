@@ -299,8 +299,8 @@ begin
       // Check if property is writable
       if TGocciaPropertyDescriptorData(Descriptor).Writable then
       begin
-        // Property has a data descriptor, update it
-        Descriptor := TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]);
+        // Property has a data descriptor, update its value while preserving flags
+        Descriptor := TGocciaPropertyDescriptorData.Create(AValue, Descriptor.Flags);
         FPropertyDescriptors[AName] := Descriptor;
         Exit;
       end;

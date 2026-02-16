@@ -435,9 +435,28 @@ end;
 
 function TGocciaClassValue.Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  // Handle primitive wrappers when called as functions
+  // Handle primitive wrappers when called as functions (type conversion)
   if FName = 'String' then
-    Result := TGocciaStringLiteralValue.Create('123')
+  begin
+    if Arguments.Length = 0 then
+      Result := TGocciaStringLiteralValue.Create('')
+    else
+      Result := Arguments.GetElement(0).ToStringLiteral;
+  end
+  else if FName = 'Number' then
+  begin
+    if Arguments.Length = 0 then
+      Result := TGocciaNumberLiteralValue.Create(0)
+    else
+      Result := Arguments.GetElement(0).ToNumberLiteral;
+  end
+  else if FName = 'Boolean' then
+  begin
+    if Arguments.Length = 0 then
+      Result := TGocciaBooleanLiteralValue.FalseValue
+    else
+      Result := Arguments.GetElement(0).ToBooleanLiteral;
+  end
   else
     // Default: create an instance
     Result := Instantiate(Arguments);

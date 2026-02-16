@@ -19,6 +19,7 @@ type
     FBodyStatements: TObjectList<TGocciaASTNode>;
     FClosure: TGocciaScope;
     FIsArrow: Boolean;
+    FIsExpressionBody: Boolean;
     FIsSimpleParams: Boolean;
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
@@ -35,6 +36,7 @@ type
     property Closure: TGocciaScope read FClosure;
     property Name: string read FName write FName;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
+    property IsExpressionBody: Boolean read FIsExpressionBody write FIsExpressionBody;
   end;
 
   TGocciaMethodValue = class(TGocciaFunctionValue)
@@ -225,6 +227,7 @@ begin
       Context.Scope := CallScope;
       ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
+      ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
       for I := 0 to FBodyStatements.Count - 1 do
       begin
         try
@@ -246,9 +249,12 @@ begin
         end;
       end;
 
-      if ReturnValue = nil then
-        ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Result := ReturnValue;
+      // Expression body (e.g. (x) => x * 2) implicitly returns the last expression value.
+      // Block body (e.g. (x) => { x * 2; }) without explicit return always returns undefined.
+      if FIsExpressionBody then
+        Result := ReturnValue
+      else
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     except
       on E: TGocciaReturnValue do
       begin

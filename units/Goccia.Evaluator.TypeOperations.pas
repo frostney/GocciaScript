@@ -7,7 +7,7 @@ interface
 uses
   Goccia.Values.Primitives, Goccia.Values.ArrayValue, Goccia.Values.ObjectValue,
   Goccia.Values.ClassValue, Goccia.Values.FunctionValue, Goccia.Values.NativeFunction,
-  SysUtils;
+  Goccia.Values.FunctionBase, SysUtils;
 
 type
   TIsObjectInstanceOfClassFunction = function(Obj: TGocciaObjectValue; ClassValue: TGocciaClassValue): Boolean;
@@ -25,13 +25,43 @@ begin
   Result := TGocciaStringLiteralValue.Create(Operand.TypeOf);
 end;
 
-function EvaluateInstanceof(Left, Right: TGocciaValue; IsObjectInstanceOfClass: TIsObjectInstanceOfClassFunction): TGocciaValue;
+function IsPrototypeInChain(Obj: TGocciaObjectValue; TargetProto: TGocciaObjectValue): Boolean;
+var
+  CurrentProto: TGocciaObjectValue;
 begin
-  // Right operand must be a constructor/class
+  Result := False;
+  CurrentProto := Obj.Prototype;
+  while Assigned(CurrentProto) do
+  begin
+    if CurrentProto = TargetProto then
+    begin
+      Result := True;
+      Exit;
+    end;
+    CurrentProto := CurrentProto.Prototype;
+  end;
+end;
+
+function EvaluateInstanceof(Left, Right: TGocciaValue; IsObjectInstanceOfClass: TIsObjectInstanceOfClassFunction): TGocciaValue;
+var
+  ConstructorProto: TGocciaValue;
+begin
+  // Right operand must be callable (a constructor)
   if not (Right is TGocciaClassValue) then
   begin
-    // For built-in types, we need special handling
-    Result := TGocciaBooleanLiteralValue.Create(False); // Default to false for now
+    // Check for native function constructors (e.g. Error, TypeError)
+    // ECMAScript: get Right.prototype and walk Left's prototype chain
+    if (Right is TGocciaFunctionBase) and (Left is TGocciaObjectValue) then
+    begin
+      ConstructorProto := TGocciaFunctionBase(Right).GetProperty('prototype');
+      if (ConstructorProto is TGocciaObjectValue) then
+      begin
+        Result := TGocciaBooleanLiteralValue.Create(
+          IsPrototypeInChain(TGocciaObjectValue(Left), TGocciaObjectValue(ConstructorProto)));
+        Exit;
+      end;
+    end;
+    Result := TGocciaBooleanLiteralValue.Create(False);
   end
   else
   begin

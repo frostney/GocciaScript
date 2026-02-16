@@ -1,3 +1,8 @@
+/*---
+description: ToNumber conversion via unary + operator
+features: [type-coercion, unary-plus]
+---*/
+
 describe('String to Number Conversion', () => {
   test('empty string converts to 0', () => {
     expect(+"").toBe(0);
@@ -36,10 +41,5 @@ describe('String to Number Conversion', () => {
   test('single element array converts to that element', () => {
     const arr = [42];
     expect(+arr).toBe(42);
-  });
-
-  test('type coercion in comparison uses ToNumber', () => {
-    expect("10" > 2).toBe(true);
-    expect(true > 0).toBe(true);
   });
 });

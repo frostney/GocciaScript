@@ -604,6 +604,23 @@ begin
     Exit;
   end;
 
+  // Special handling for typeof: must not throw for undeclared variables
+  if UnaryExpression.Operator = gttTypeof then
+  begin
+    try
+      Operand := EvaluateExpression(UnaryExpression.Operand, Context);
+    except
+      on E: TGocciaReferenceError do
+      begin
+        // typeof on undeclared variable returns "undefined" per ECMAScript spec
+        Result := TGocciaStringLiteralValue.Create('undefined');
+        Exit;
+      end;
+    end;
+    Result := EvaluateTypeof(Operand);
+    Exit;
+  end;
+
   Operand := EvaluateExpression(UnaryExpression.Operand, Context);
 
   case UnaryExpression.Operator of
@@ -759,17 +776,14 @@ begin
       end;
     end;
 
-    // TODO: There must be a better way to do this
     if Callee is TGocciaNativeFunctionValue then
       Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, ThisValue)
     else if Callee is TGocciaFunctionValue then
       Result := TGocciaFunctionValue(Callee).Call(Arguments, ThisValue)
-    else
-    // if Callee is TGocciaFunctionPrototypeMethod then
-    //   Result := TGocciaFunctionPrototypeMethod(Callee).Call(Arguments, ThisValue)
-    // else
-    if Callee is TGocciaBoundFunctionValue then
+    else if Callee is TGocciaBoundFunctionValue then
       Result := TGocciaBoundFunctionValue(Callee).Call(Arguments, ThisValue)
+    else if Callee is TGocciaClassValue then
+      Result := TGocciaClassValue(Callee).Call(Arguments, ThisValue)
     else if Supports(Callee, IGocciaCallable, CallableIntf) then
       Result := CallableIntf.Call(Arguments, ThisValue)
     else
@@ -1452,6 +1466,7 @@ begin
   // The simplest approach: create a child scope that will be persistent
   Result := TGocciaFunctionValue.Create(ArrowFunctionExpression.Parameters, Statements, Context.Scope.CreateChild);
   TGocciaFunctionValue(Result).IsArrow := True;
+  TGocciaFunctionValue(Result).IsExpressionBody := not (ArrowFunctionExpression.Body is TGocciaBlockStatement);
 end;
 
 function EvaluateBlock(BlockStatement: TGocciaBlockStatement; Context: TGocciaEvaluationContext): TGocciaValue;
@@ -1551,21 +1566,19 @@ begin
           TryResult := Evaluate(TryStatement.Block.Nodes[I], Context);
         except
           on E: TGocciaReturnValue do
-          begin
             raise;
-          end;
           on E: TGocciaThrowValue do
-          begin
             raise;
-          end;
           on E: TGocciaBreakSignal do
-          begin
             raise;
-          end;
+          on E: TGocciaTypeError do
+            raise;
+          on E: TGocciaReferenceError do
+            raise;
+          on E: TGocciaRuntimeError do
+            raise;
           on E: Exception do
-          begin
             raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-          end;
         end;
       end;
       Result := TryResult;
@@ -1675,8 +1688,15 @@ begin
           begin
             CatchScope := TGocciaCatchScope.Create(Context.Scope, TryStatement.CatchParam);
             try
-              // Create a JavaScript Error object for the Pascal exception
-              CatchScope.DefineBuiltin(TryStatement.CatchParam, TGocciaStringLiteralValue.Create(E.Message));
+              // Create a proper JavaScript Error object for the Pascal exception
+              if E is TGocciaTypeError then
+                CatchScope.DefineBuiltin(TryStatement.CatchParam, CreateErrorObject('TypeError', E.Message))
+              else if E is TGocciaReferenceError then
+                CatchScope.DefineBuiltin(TryStatement.CatchParam, CreateErrorObject('ReferenceError', E.Message))
+              else if E is TGocciaRuntimeError then
+                CatchScope.DefineBuiltin(TryStatement.CatchParam, CreateErrorObject('Error', E.Message))
+              else
+                CatchScope.DefineBuiltin(TryStatement.CatchParam, CreateErrorObject('Error', E.Message));
 
               // Set up context for catch block with child scope of statement scope
               CatchContext := Context;
@@ -1742,8 +1762,13 @@ begin
         end
         else
         begin
-          // No catch block, re-throw as JavaScript error
-          raise TGocciaThrowValue.Create(TGocciaStringLiteralValue.Create(E.Message));
+          // No catch block, re-throw as JavaScript error object
+          if E is TGocciaTypeError then
+            raise TGocciaThrowValue.Create(CreateErrorObject('TypeError', E.Message))
+          else if E is TGocciaReferenceError then
+            raise TGocciaThrowValue.Create(CreateErrorObject('ReferenceError', E.Message))
+          else
+            raise TGocciaThrowValue.Create(CreateErrorObject('Error', E.Message));
         end;
       end;
     end;
@@ -2484,6 +2509,38 @@ begin
 
     if IsSimpleIdentifier then
     begin
+      // Handle keyword literals before scope lookup
+      if Trimmed = 'true' then
+      begin
+        Result := TGocciaBooleanLiteralValue.TrueValue;
+        Exit;
+      end
+      else if Trimmed = 'false' then
+      begin
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+        Exit;
+      end
+      else if Trimmed = 'null' then
+      begin
+        Result := TGocciaNullLiteralValue.Create;
+        Exit;
+      end
+      else if Trimmed = 'undefined' then
+      begin
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Exit;
+      end
+      else if Trimmed = 'NaN' then
+      begin
+        Result := TGocciaNumberLiteralValue.NaNValue;
+        Exit;
+      end
+      else if Trimmed = 'Infinity' then
+      begin
+        Result := TGocciaNumberLiteralValue.InfinityValue;
+        Exit;
+      end;
+
       Result := Context.Scope.GetValue(Trimmed);
       if Result = nil then
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;

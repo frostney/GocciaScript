@@ -20,6 +20,7 @@ type
   public
     constructor Create(AFlags: TPropertyFlags);
 
+    property Flags: TPropertyFlags read FFlags;
     property Enumerable: Boolean read GetEnumerable;
     property Configurable: Boolean read GetConfigurable;
     property Writable: Boolean read GetWritable;

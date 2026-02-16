@@ -222,6 +222,7 @@ expect([...set.values()]).toEqual([1, 2, 3]);
 | Emoji identifiers | Supported | Not supported by V8/Rollup |
 | `Symbol` in template literals | Converts to `"Symbol(desc)"` | Throws `TypeError` |
 | Arrow methods `this` | Binds to owning object | Inherits from enclosing scope |
+| Global `parseInt`, `isNaN`, etc. | Not available (use `Number.*`) | Available as global functions |
 
 ## Test Principles
 

@@ -118,6 +118,7 @@ GocciaScript intentionally excludes these JavaScript features — do **not** add
 - `eval()` and `arguments` object
 - Automatic semicolon insertion (semicolons are required)
 - `with` statement
+- Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` — use `Number.*` instead (intentional divergence; keeps these functions on the object they belong to)
 
 See [docs/language-restrictions.md](docs/language-restrictions.md) for the full list and rationale.
 

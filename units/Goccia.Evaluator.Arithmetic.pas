@@ -8,11 +8,11 @@ uses
   Goccia.Values.Primitives, Goccia.Token, Math, SysUtils;
 
 function EvaluateAddition(Left, Right: TGocciaValue): TGocciaValue;
-function EvaluateSubtraction(Left, Right: TGocciaValue): TGocciaValue; inline;
-function EvaluateMultiplication(Left, Right: TGocciaValue): TGocciaValue; inline;
-function EvaluateDivision(Left, Right: TGocciaValue): TGocciaValue; inline;
-function EvaluateModulo(Left, Right: TGocciaValue): TGocciaValue; inline;
-function EvaluateExponentiation(Left, Right: TGocciaValue): TGocciaValue; inline;
+function EvaluateSubtraction(Left, Right: TGocciaValue): TGocciaValue;
+function EvaluateMultiplication(Left, Right: TGocciaValue): TGocciaValue;
+function EvaluateDivision(Left, Right: TGocciaValue): TGocciaValue;
+function EvaluateModulo(Left, Right: TGocciaValue): TGocciaValue;
+function EvaluateExponentiation(Left, Right: TGocciaValue): TGocciaValue;
 function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator: TGocciaTokenType): TGocciaValue;
 
 implementation
@@ -46,33 +46,55 @@ begin
 end;
 
 function EvaluateSubtraction(Left, Right: TGocciaValue): TGocciaValue;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(Left.ToNumberLiteral.Value - Right.ToNumberLiteral.Value);
+  LeftNum := Left.ToNumberLiteral;
+  RightNum := Right.ToNumberLiteral;
+
+  if LeftNum.IsNaN or RightNum.IsNaN then
+    Result := TGocciaNumberLiteralValue.NaNValue
+  else
+    Result := TGocciaNumberLiteralValue.Create(LeftNum.Value - RightNum.Value);
 end;
 
 function EvaluateMultiplication(Left, Right: TGocciaValue): TGocciaValue;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(Left.ToNumberLiteral.Value * Right.ToNumberLiteral.Value);
+  LeftNum := Left.ToNumberLiteral;
+  RightNum := Right.ToNumberLiteral;
+
+  if LeftNum.IsNaN or RightNum.IsNaN then
+    Result := TGocciaNumberLiteralValue.NaNValue
+  else
+    Result := TGocciaNumberLiteralValue.Create(LeftNum.Value * RightNum.Value);
 end;
 
 function EvaluateDivision(Left, Right: TGocciaValue): TGocciaValue;
 var
-  LeftNum, RightNum: Double;
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  LeftNum := Left.ToNumberLiteral.Value;
-  RightNum := Right.ToNumberLiteral.Value;
+  LeftNum := Left.ToNumberLiteral;
+  RightNum := Right.ToNumberLiteral;
 
-  if RightNum = 0 then
+  if LeftNum.IsNaN or RightNum.IsNaN then
   begin
-    if LeftNum = 0 then
+    Result := TGocciaNumberLiteralValue.NaNValue;
+    Exit;
+  end;
+
+  if RightNum.Value = 0 then
+  begin
+    if LeftNum.Value = 0 then
       Result := TGocciaNumberLiteralValue.NaNValue    // 0 / 0 = NaN
-    else if LeftNum > 0 then
+    else if LeftNum.Value > 0 then
       Result := TGocciaNumberLiteralValue.InfinityValue   // positive / 0 = +Infinity
     else
-      Result := TGocciaNumberLiteralValue.NegativeInfinityValue; // negative / 0 = -Infinity
+      Result := TGocciaNumberLiteralValue.NegativeInfinityValue // negative / 0 = -Infinity
   end
   else
-    Result := TGocciaNumberLiteralValue.Create(LeftNum / RightNum);
+    Result := TGocciaNumberLiteralValue.Create(LeftNum.Value / RightNum.Value);
 end;
 
 function EvaluateModulo(Left, Right: TGocciaValue): TGocciaValue;
@@ -116,8 +138,16 @@ begin
 end;
 
 function EvaluateExponentiation(Left, Right: TGocciaValue): TGocciaValue;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(Power(Left.ToNumberLiteral.Value, Right.ToNumberLiteral.Value));
+  LeftNum := Left.ToNumberLiteral;
+  RightNum := Right.ToNumberLiteral;
+
+  if LeftNum.IsNaN or RightNum.IsNaN then
+    Result := TGocciaNumberLiteralValue.NaNValue
+  else
+    Result := TGocciaNumberLiteralValue.Create(Power(LeftNum.Value, RightNum.Value));
 end;
 
 function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator: TGocciaTokenType): TGocciaValue;

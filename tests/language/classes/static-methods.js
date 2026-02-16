@@ -55,7 +55,7 @@ test("static factory methods", () => {
 
     static fromString(str) {
       const [name, age] = str.split(",");
-      return new Person(name, parseInt(age));
+      return new Person(name, Number.parseInt(age));
     }
 
     static adult(name) {

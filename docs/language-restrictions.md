@@ -198,6 +198,27 @@ items.reduce((acc, item) => acc + item, 0);
 
 **Not yet implemented.** String methods like `replace` work with string patterns.
 
+## Intentional Divergences from ECMAScript
+
+These are deliberate differences from standard ECMAScript behavior, not missing features.
+
+### No Global `parseInt`, `parseFloat`, `isNaN`, `isFinite`
+
+**Intentional.** Use `Number.parseInt`, `Number.parseFloat`, `Number.isNaN`, `Number.isFinite` instead.
+
+In ECMAScript, these exist as both global functions and as `Number` static methods. `parseInt` and `parseFloat` are identical to their `Number.*` counterparts. However, the global `isNaN` and `isFinite` have legacy coercion behavior (e.g., `isNaN("abc")` returns `true` because it coerces the string to a number first), while `Number.isNaN` and `Number.isFinite` are stricter — they return `false` for any non-number argument.
+
+GocciaScript only provides the `Number.*` versions, keeping these functions on the object they belong to rather than polluting the global scope. This avoids the confusing dual behavior of `isNaN`/`isFinite` and encourages explicit type handling.
+
+If needed, they can be polyfilled:
+
+```javascript
+const parseInt = Number.parseInt;
+const parseFloat = Number.parseFloat;
+const isNaN = Number.isNaN;
+const isFinite = Number.isFinite;
+```
+
 ## Strictness Guarantees
 
 GocciaScript operates in an implicit strict mode:

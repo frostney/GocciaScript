@@ -48,7 +48,7 @@ test("private methods", () => {
     #result = 0;
 
     #validate(value) {
-      return typeof value === "number" && !isNaN(value);
+      return typeof value === "number" && !Number.isNaN(value);
     }
 
     add(value) {
