@@ -59,7 +59,7 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetPrototypeOf, 'getPrototypeOf', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectFromEntries, 'fromEntries', 1));
 
-  AScope.DefineBuiltin(AName, FBuiltinObject);
+  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;
 
 function TGocciaGlobalObject.ObjectIs(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

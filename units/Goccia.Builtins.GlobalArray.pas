@@ -30,7 +30,7 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFrom, 'from', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayOf, 'of', -1));
 
-  AScope.DefineBuiltin(AName, FBuiltinObject);
+  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;
 
 function TGocciaGlobalArray.IsArray(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

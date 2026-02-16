@@ -69,7 +69,7 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(JSONParse, 'parse', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(JSONStringify, 'stringify', 1));
 
-  AScope.DefineBuiltin(AName, FBuiltinObject);
+  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;
 
 function TGocciaJSON.JSONParse(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

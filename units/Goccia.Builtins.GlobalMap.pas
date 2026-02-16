@@ -29,7 +29,7 @@ begin
 
   FMapConstructor := TGocciaNativeFunctionValue.Create(MapConstructorFn, 'Map', 0);
 
-  AScope.DefineBuiltin(AName, FMapConstructor);
+  AScope.DefineLexicalBinding(AName, FMapConstructor, dtLet);
 end;
 
 function TGocciaGlobalMap.MapConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

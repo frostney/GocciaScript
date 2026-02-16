@@ -71,7 +71,7 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathCos, 'cos', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathTan, 'tan', 1));
 
-  AScope.DefineBuiltin(AName, FBuiltinObject);
+  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;
 
 function TGocciaMath.MathAbs(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

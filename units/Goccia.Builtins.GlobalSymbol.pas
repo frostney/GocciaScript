@@ -55,7 +55,7 @@ begin
   FSymbolFunction.RegisterConstant('iterator', FIteratorSymbol);
 
   // Bind Symbol in scope
-  AScope.DefineBuiltin(AName, FSymbolFunction);
+  AScope.DefineLexicalBinding(AName, FSymbolFunction, dtLet);
 end;
 
 destructor TGocciaGlobalSymbol.Destroy;

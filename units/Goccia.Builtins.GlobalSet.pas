@@ -29,7 +29,7 @@ begin
 
   FSetConstructor := TGocciaNativeFunctionValue.Create(SetConstructorFn, 'Set', 0);
 
-  AScope.DefineBuiltin(AName, FSetConstructor);
+  AScope.DefineLexicalBinding(AName, FSetConstructor, dtLet);
 end;
 
 function TGocciaGlobalSet.SetConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

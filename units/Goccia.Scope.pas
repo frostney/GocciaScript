@@ -57,9 +57,6 @@ type
     function ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
     function Contains(const AName: string): Boolean; inline;
 
-    // TODO: DefineBuiltin is a legacy method, should be removed and replaced with DefineLexicalBinding
-    procedure DefineBuiltin(const AName: string; AValue: TGocciaValue); virtual;
-
     property Parent: TGocciaScope read FParent;
     property ThisValue: TGocciaValue read FThisValue write FThisValue;
     function GetThisProperty(const AName: string): TGocciaValue;
@@ -75,7 +72,6 @@ type
   public
     constructor Create(AParent: TGocciaScope; const ACatchParameter: string);
     procedure AssignLexicalBinding(const AName: string; AValue: TGocciaValue; ALine: Integer = 0; AColumn: Integer = 0); override;
-    procedure DefineBuiltin(const AName: string; AValue: TGocciaValue); override;
   end;
 
   TGocciaGlobalScope = class(TGocciaScope)
@@ -289,17 +285,6 @@ begin
     (Assigned(FParent) and FParent.Contains(AName));
 end;
 
-procedure TGocciaScope.DefineBuiltin(const AName: string; AValue: TGocciaValue);
-var
-  LexicalBinding: TLexicalBinding;
-begin
-  // DefineBuiltin allows redefinition - used for built-ins and global initialization
-  LexicalBinding.Value := AValue;
-  LexicalBinding.DeclarationType := dtLet;
-  LexicalBinding.Initialized := True;
-  FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
-end;
-
 { TGocciaScope - GC support }
 
 procedure TGocciaScope.GCMarkReferences;
@@ -348,24 +333,6 @@ begin
     // Either it's the catch parameter or it exists in current scope - use base behavior
     inherited AssignLexicalBinding(AName, AValue, ALine, AColumn);
   end;
-end;
-
-procedure TGocciaCatchScope.DefineBuiltin(const AName: string; AValue: TGocciaValue);
-begin
-  // Surgical fix: Also apply to DefineBuiltin for catch parameter scopes
-  // Delegate to parent for non-parameter variables, but keep catch parameters for shadowing
-  if (AName <> FCatchParameter) and (not FLexicalBindings.ContainsKey(AName)) and Assigned(FParent) then
-  begin
-    // Check if the variable exists in parent scope - if so, assign there
-    if FParent.Contains(AName) then
-    begin
-      FParent.AssignLexicalBinding(AName, AValue);
-      Exit;
-    end;
-  end;
-
-  // Use base implementation
-  inherited DefineBuiltin(AName, AValue);
 end;
 
 { TGocciaGlobalScope }

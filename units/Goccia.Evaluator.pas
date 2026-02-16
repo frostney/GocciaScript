@@ -1411,7 +1411,7 @@ begin
             CatchScope := TGocciaCatchScope.Create(Context.Scope, TryStatement.CatchParam);
             try
               // Bind the thrown value to the catch parameter (shadows outer variables)
-              CatchScope.DefineBuiltin(TryStatement.CatchParam, E.Value);
+              CatchScope.DefineLexicalBinding(TryStatement.CatchParam, E.Value, dtParameter);
 
               // Set up context for catch block with child scope
               CatchContext := Context;
@@ -1505,13 +1505,13 @@ begin
             try
               // Create a proper JavaScript Error object for the Pascal exception
               if E is TGocciaTypeError then
-                CatchScope.DefineBuiltin(TryStatement.CatchParam, CreateErrorObject('TypeError', E.Message))
+                CatchScope.DefineLexicalBinding(TryStatement.CatchParam, CreateErrorObject('TypeError', E.Message), dtParameter)
               else if E is TGocciaReferenceError then
-                CatchScope.DefineBuiltin(TryStatement.CatchParam, CreateErrorObject('ReferenceError', E.Message))
+                CatchScope.DefineLexicalBinding(TryStatement.CatchParam, CreateErrorObject('ReferenceError', E.Message), dtParameter)
               else if E is TGocciaRuntimeError then
-                CatchScope.DefineBuiltin(TryStatement.CatchParam, CreateErrorObject('Error', E.Message))
+                CatchScope.DefineLexicalBinding(TryStatement.CatchParam, CreateErrorObject('Error', E.Message), dtParameter)
               else
-                CatchScope.DefineBuiltin(TryStatement.CatchParam, CreateErrorObject('Error', E.Message));
+                CatchScope.DefineLexicalBinding(TryStatement.CatchParam, CreateErrorObject('Error', E.Message), dtParameter);
 
               // Set up context for catch block with child scope of statement scope
               CatchContext := Context;

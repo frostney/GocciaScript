@@ -49,7 +49,7 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsInteger, 'isInteger', 0));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsSafeInteger, 'isSafeInteger', 0));
 
-  AScope.DefineBuiltin(AName, FBuiltinObject);
+  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;
 
 function TGocciaGlobalNumber.NumberParseInt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

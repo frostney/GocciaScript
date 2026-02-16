@@ -30,7 +30,7 @@ begin
 
   // Create String constructor as a class value
   FStringConstructor := TGocciaStringClassValue.Create('String', nil);
-  AScope.DefineBuiltin(AName, FStringConstructor);
+  AScope.DefineLexicalBinding(AName, FStringConstructor, dtLet);
 end;
 
 destructor TGocciaGlobalString.Destroy;

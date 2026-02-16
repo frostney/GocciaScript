@@ -28,7 +28,7 @@ begin
 
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleLog, 'log', -1));
 
-  AScope.DefineBuiltin(AName, FBuiltinObject);
+  AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;
 
 function TGocciaConsole.ConsoleLog(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
