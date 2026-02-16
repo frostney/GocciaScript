@@ -15,7 +15,6 @@ procedure DefinePropertyOnValue(Obj: TGocciaValue; const PropName: string; Value
 
 // Property assignment with error handling for non-objects
 procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
-procedure AssignComputedProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
 
 // Compound assignment operations
 procedure PerformPropertyCompoundAssignment(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; Operator: TGocciaTokenType; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
@@ -37,15 +36,6 @@ begin
 end;
 
 procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
-begin
-  if (Obj is TGocciaInstanceValue) or (Obj is TGocciaObjectValue) or
-     (Obj is TGocciaClassValue) or (Obj is TGocciaArrayValue) then
-    Obj.SetProperty(PropertyName, Value)
-  else if Assigned(OnError) then
-    ThrowTypeError('Cannot set property on non-object');
-end;
-
-procedure AssignComputedProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
 begin
   if (Obj is TGocciaInstanceValue) or (Obj is TGocciaObjectValue) or
      (Obj is TGocciaClassValue) or (Obj is TGocciaArrayValue) then

@@ -159,7 +159,7 @@ begin
     else
     begin
       PropName := PropertyValue.ToStringLiteral.Value;
-      AssignComputedProperty(Obj, PropName, Value, Context.OnError, Expression.Line, Expression.Column);
+      AssignProperty(Obj, PropName, Value, Context.OnError, Expression.Line, Expression.Column);
     end;
     Result := Value;
   end
