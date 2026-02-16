@@ -66,19 +66,6 @@ type
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
-    procedure RegisterConsole;
-    procedure RegisterMath;
-    procedure RegisterJSON;
-    procedure RegisterTestAssertions;
-    procedure RegisterPromise;
-    procedure RegisterGlobalArray;
-    procedure RegisterObjectMethods;
-    procedure RegisterGlobalNumber;
-    procedure RegisterGlobals;
-    procedure RegisterSymbol;
-    procedure RegisterSet;
-    procedure RegisterMap;
-    procedure RegisterBenchmark;
     procedure RegisterBuiltinConstructors;
     procedure ThrowError(const Message: string; Line, Column: Integer);
   public
@@ -194,87 +181,39 @@ begin
 end;
 
 procedure TGocciaEngine.RegisterBuiltIns;
+var
+  Scope: TGocciaScope;
 begin
-  if ggConsole in FGlobals then RegisterConsole;
-  if ggMath in FGlobals then RegisterMath;
-  if ggGlobalObject in FGlobals then RegisterObjectMethods;
-  if ggGlobalArray in FGlobals then RegisterGlobalArray;
-  if ggGlobalNumber in FGlobals then RegisterGlobalNumber;
-  if ggPromise in FGlobals then RegisterPromise;
-  if ggJSON in FGlobals then RegisterJSON;
-  if ggSymbol in FGlobals then RegisterSymbol;
-  if ggSet in FGlobals then RegisterSet;
-  if ggMap in FGlobals then RegisterMap;
-  if ggTestAssertions in FGlobals then RegisterTestAssertions;
-  if ggBenchmark in FGlobals then RegisterBenchmark;
+  Scope := FInterpreter.GlobalScope;
 
-  RegisterGlobals;
+  // Flag-gated built-ins: each creates a wrapper that registers its
+  // native methods/properties into the global scope.
+  if ggConsole in FGlobals then
+    FBuiltinConsole := TGocciaConsole.Create('console', Scope, ThrowError);
+  if ggMath in FGlobals then
+    FBuiltinMath := TGocciaMath.Create('Math', Scope, ThrowError);
+  if ggGlobalObject in FGlobals then
+    FBuiltinGlobalObject := TGocciaGlobalObject.Create('Object', Scope, ThrowError);
+  if ggGlobalArray in FGlobals then
+    FBuiltinGlobalArray := TGocciaGlobalArray.Create('Array', Scope, ThrowError);
+  if ggGlobalNumber in FGlobals then
+    FBuiltinGlobalNumber := TGocciaGlobalNumber.Create('Number', Scope, ThrowError);
+  if ggJSON in FGlobals then
+    FBuiltinJSON := TGocciaJSON.Create('JSON', Scope, ThrowError);
+  if ggSymbol in FGlobals then
+    FBuiltinSymbol := TGocciaGlobalSymbol.Create('Symbol', Scope, ThrowError);
+  if ggSet in FGlobals then
+    FBuiltinSet := TGocciaGlobalSet.Create('Set', Scope, ThrowError);
+  if ggMap in FGlobals then
+    FBuiltinMap := TGocciaGlobalMap.Create('Map', Scope, ThrowError);
+  if ggTestAssertions in FGlobals then
+    FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions', Scope, ThrowError);
+  if ggBenchmark in FGlobals then
+    FBuiltinBenchmark := TGocciaBenchmark.Create('Benchmark', Scope, ThrowError);
+
+  // Always-registered built-ins
+  FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, ThrowError);
   RegisterBuiltinConstructors;
-end;
-
-procedure TGocciaEngine.RegisterConsole;
-begin
-  FBuiltinConsole := TGocciaConsole.Create('console', FInterpreter.GlobalScope, ThrowError);
-end;
-
-procedure TGocciaEngine.RegisterMath;
-begin
-  FBuiltinMath := TGocciaMath.Create('Math', FInterpreter.GlobalScope, ThrowError);
-end;
-
-procedure TGocciaEngine.RegisterJSON;
-begin
-  FBuiltinJSON := TGocciaJSON.Create('JSON', FInterpreter.GlobalScope, ThrowError);
-end;
-
-procedure TGocciaEngine.RegisterTestAssertions;
-begin
-  FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions', FInterpreter.GlobalScope, ThrowError);
-end;
-
-procedure TGocciaEngine.RegisterBenchmark;
-begin
-  FBuiltinBenchmark := TGocciaBenchmark.Create('Benchmark', FInterpreter.GlobalScope, ThrowError);
-end;
-
-procedure TGocciaEngine.RegisterPromise;
-begin
-  // TODO: Implement Promise support
-end;
-
-procedure TGocciaEngine.RegisterGlobalArray;
-begin
-  FBuiltinGlobalArray := TGocciaGlobalArray.Create('Array', FInterpreter.GlobalScope, ThrowError);
-end;
-
-procedure TGocciaEngine.RegisterObjectMethods;
-begin
-  FBuiltinGlobalObject := TGocciaGlobalObject.Create('Object', FInterpreter.GlobalScope, ThrowError);
-end;
-
-procedure TGocciaEngine.RegisterGlobalNumber;
-begin
-  FBuiltinGlobalNumber := TGocciaGlobalNumber.Create('Number', FInterpreter.GlobalScope, ThrowError);
-end;
-
-procedure TGocciaEngine.RegisterGlobals;
-begin
-  FBuiltinGlobals := TGocciaGlobals.Create('Globals', FInterpreter.GlobalScope, ThrowError);
-end;
-
-procedure TGocciaEngine.RegisterSymbol;
-begin
-  FBuiltinSymbol := TGocciaGlobalSymbol.Create('Symbol', FInterpreter.GlobalScope, ThrowError);
-end;
-
-procedure TGocciaEngine.RegisterSet;
-begin
-  FBuiltinSet := TGocciaGlobalSet.Create('Set', FInterpreter.GlobalScope, ThrowError);
-end;
-
-procedure TGocciaEngine.RegisterMap;
-begin
-  FBuiltinMap := TGocciaGlobalMap.Create('Map', FInterpreter.GlobalScope, ThrowError);
 end;
 
 procedure TGocciaEngine.RegisterBuiltinConstructors;
