@@ -183,7 +183,7 @@ begin
     PerformPropertyCompoundAssignment(Obj, PropName, Value, TGocciaPropertyCompoundAssignmentExpression(Expression).Operator, Context.OnError, Expression.Line, Expression.Column);
 
     // Get the final result
-    Result := GetPropertyFromValue(Obj, PropName);
+    Result := Obj.GetProperty(PropName);
     if Result = nil then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
@@ -196,7 +196,7 @@ begin
     PerformPropertyCompoundAssignment(Obj, PropName, Value, TGocciaComputedPropertyCompoundAssignmentExpression(Expression).Operator, Context.OnError, Expression.Line, Expression.Column);
 
     // Get the final result
-    Result := GetPropertyFromValue(Obj, PropName);
+    Result := Obj.GetProperty(PropName);
     if Result = nil then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
@@ -228,7 +228,7 @@ begin
       PropName := TGocciaMemberExpression(TGocciaIncrementExpression(Expression).Operand).PropertyName;
 
       // Get current property value
-      OldValue := GetPropertyFromValue(Obj, PropName);
+      OldValue := Obj.GetProperty(PropName);
       if OldValue = nil then
       begin
         Context.OnError('Cannot access property on non-object', Expression.Line, Expression.Column);
@@ -871,7 +871,7 @@ begin
     PropertyName := MemberExpression.PropertyName;
   end;
 
-  Result := GetPropertyFromValue(Obj, PropertyName);
+  Result := Obj.GetProperty(PropertyName);
   if Result = nil then
   begin
     // Handle primitive boxing for property access
@@ -986,7 +986,7 @@ begin
     PropertyName := MemberExpression.PropertyName;
   end;
 
-  Result := GetPropertyFromValue(ObjectValue, PropertyName);
+  Result := ObjectValue.GetProperty(PropertyName);
   if Result = nil then
   begin
     // Handle primitive boxing for property access
