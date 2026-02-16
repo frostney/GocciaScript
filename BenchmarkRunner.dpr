@@ -35,7 +35,7 @@ var
   ResultsArray: TGocciaArrayValue;
   SingleResult: TGocciaObjectValue;
   CurrentSuite, BenchName, ErrorMsg: string;
-  OpsPerSec, MeanMs: Double;
+  OpsPerSec, MeanMs, VariancePct: Double;
   Iterations: Int64;
   I: Integer;
 begin
@@ -87,9 +87,10 @@ begin
               OpsPerSec := SingleResult.GetProperty('opsPerSec').ToNumberLiteral.Value;
               MeanMs := SingleResult.GetProperty('meanMs').ToNumberLiteral.Value;
               Iterations := Round(SingleResult.GetProperty('iterations').ToNumberLiteral.Value);
+              VariancePct := SingleResult.GetProperty('variancePct').ToNumberLiteral.Value;
 
-              WriteLn(Format('    %-30s  %12s ops/sec  %10.4f ms/op  (%d iterations)',
-                [BenchName, FormatOpsPerSec(OpsPerSec), MeanMs, Iterations]));
+              WriteLn(Format('    %-30s  %12s ops/sec  ±%5.2f%%  %10.4f ms/op  (%d iterations)',
+                [BenchName, FormatOpsPerSec(OpsPerSec), VariancePct, MeanMs, Iterations]));
             end;
           end;
         end;
