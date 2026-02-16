@@ -5,24 +5,90 @@ unit Goccia.Values.NumberObjectValue;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectValue;
+  Goccia.Values.Primitives,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Arguments.Collection,
+  SysUtils,
+  Math;
 
 type
   TGocciaNumberObjectValue = class(TGocciaObjectValue)
   private
     FPrimitive: TGocciaNumberLiteralValue;
+
+    class var FSharedNumberPrototype: TGocciaObjectValue;
+    class var FPrototypeMethodHost: TGocciaNumberObjectValue;
+
+    function ExtractPrimitive(Value: TGocciaValue): TGocciaNumberLiteralValue;
   public
     constructor Create(APrimitive: TGocciaNumberLiteralValue);
+    function GetProperty(const AName: string): TGocciaValue; override;
+    procedure InitializePrototype;
     procedure GCMarkReferences; override;
     property Primitive: TGocciaNumberLiteralValue read FPrimitive;
+
+    // Number prototype methods
+    function NumberToFixed(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function NumberToString(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function NumberValueOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function NumberToPrecision(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
+
+uses
+  Goccia.GarbageCollector;
+
+function TGocciaNumberObjectValue.ExtractPrimitive(Value: TGocciaValue): TGocciaNumberLiteralValue;
+begin
+  if Value is TGocciaNumberLiteralValue then
+    Result := TGocciaNumberLiteralValue(Value)
+  else if Value is TGocciaNumberObjectValue then
+    Result := TGocciaNumberObjectValue(Value).Primitive
+  else
+    Result := Value.ToNumberLiteral;
+end;
 
 constructor TGocciaNumberObjectValue.Create(APrimitive: TGocciaNumberLiteralValue);
 begin
   inherited Create;
   FPrimitive := APrimitive;
+
+  InitializePrototype;
+
+  if Assigned(FSharedNumberPrototype) then
+    Self.Prototype := FSharedNumberPrototype;
+end;
+
+function TGocciaNumberObjectValue.GetProperty(const AName: string): TGocciaValue;
+begin
+  // Look up in shared prototype with this object as context
+  if Assigned(FSharedNumberPrototype) then
+    Result := FSharedNumberPrototype.GetPropertyWithContext(AName, Self)
+  else if Assigned(FPrototype) then
+    Result := FPrototype.GetPropertyWithContext(AName, Self)
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TGocciaNumberObjectValue.InitializePrototype;
+begin
+  if Assigned(FSharedNumberPrototype) then Exit;
+
+  FSharedNumberPrototype := TGocciaObjectValue.Create;
+  FPrototypeMethodHost := Self;
+
+  FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToFixed, 'toFixed', 1));
+  FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToString, 'toString', 1));
+  FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberValueOf, 'valueOf', 0));
+  FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToPrecision, 'toPrecision', 1));
+
+  if Assigned(TGocciaGC.Instance) then
+  begin
+    TGocciaGC.Instance.PinValue(FSharedNumberPrototype);
+    TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
+  end;
 end;
 
 procedure TGocciaNumberObjectValue.GCMarkReferences;
@@ -31,6 +97,111 @@ begin
   inherited;
   if Assigned(FPrimitive) then
     FPrimitive.GCMarkReferences;
+end;
+
+function TGocciaNumberObjectValue.NumberToFixed(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Prim: TGocciaNumberLiteralValue;
+  Digits: Integer;
+begin
+  Prim := ExtractPrimitive(ThisValue);
+
+  // Special values return their string representation
+  if Prim.IsNaN then
+  begin
+    Result := TGocciaStringLiteralValue.Create('NaN');
+    Exit;
+  end;
+  if Prim.IsInfinity then
+  begin
+    Result := TGocciaStringLiteralValue.Create('Infinity');
+    Exit;
+  end;
+  if Prim.IsNegativeInfinity then
+  begin
+    Result := TGocciaStringLiteralValue.Create('-Infinity');
+    Exit;
+  end;
+
+  if Args.Length > 0 then
+    Digits := Trunc(Args.GetElement(0).ToNumberLiteral.Value)
+  else
+    Digits := 0;
+
+  if (Digits < 0) or (Digits > 100) then
+  begin
+    Result := TGocciaStringLiteralValue.Create('');
+    Exit;
+  end;
+
+  Result := TGocciaStringLiteralValue.Create(FormatFloat('0.' + StringOfChar('0', Digits), Prim.Value));
+end;
+
+function TGocciaNumberObjectValue.NumberToString(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Prim: TGocciaNumberLiteralValue;
+  Radix: Integer;
+begin
+  Prim := ExtractPrimitive(ThisValue);
+
+  // Special values always return their default string
+  if Prim.IsNaN or Prim.IsInfinity or Prim.IsNegativeInfinity or Prim.IsNegativeZero then
+  begin
+    Result := Prim.ToStringLiteral;
+    Exit;
+  end;
+
+  if Args.Length > 0 then
+  begin
+    Radix := Trunc(Args.GetElement(0).ToNumberLiteral.Value);
+    if (Radix < 2) or (Radix > 36) then
+    begin
+      Result := TGocciaStringLiteralValue.Create('');
+      Exit;
+    end;
+    if Radix = 16 then
+      Result := TGocciaStringLiteralValue.Create(LowerCase(IntToHex(Trunc(Prim.Value), 1)))
+    else
+      Result := Prim.ToStringLiteral;
+  end
+  else
+    Result := Prim.ToStringLiteral;
+end;
+
+function TGocciaNumberObjectValue.NumberValueOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := ExtractPrimitive(ThisValue);
+end;
+
+function TGocciaNumberObjectValue.NumberToPrecision(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Prim: TGocciaNumberLiteralValue;
+  Precision: Integer;
+begin
+  Prim := ExtractPrimitive(ThisValue);
+
+  // Special values return their string representation
+  if Prim.IsNaN or Prim.IsInfinity or Prim.IsNegativeInfinity then
+  begin
+    Result := Prim.ToStringLiteral;
+    Exit;
+  end;
+
+  if Args.Length = 0 then
+  begin
+    Result := Prim.ToStringLiteral;
+    Exit;
+  end;
+
+  Precision := Trunc(Args.GetElement(0).ToNumberLiteral.Value);
+
+  if (Precision < 1) or (Precision > 100) then
+  begin
+    Result := TGocciaStringLiteralValue.Create('');
+    Exit;
+  end;
+
+  Result := TGocciaStringLiteralValue.Create(FloatToStrF(Prim.Value, ffGeneral, Precision, 0));
 end;
 
 end.
