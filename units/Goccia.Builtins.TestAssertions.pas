@@ -767,7 +767,7 @@ begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
 
   // Create a strict test scope that throws for undefined variables
-          TestScope := TGocciaScope.Create(TestFunc.Closure, skFunction, 'ToThrow Test');
+          TestScope := TestFunc.Closure.CreateChild(skFunction, 'ToThrow Test');
   try
     // Set up evaluation context with an OnError handler that throws exceptions
     TestContext.Scope := TestScope;

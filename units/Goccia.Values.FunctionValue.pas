@@ -107,7 +107,7 @@ var
   ClosureScope: TGocciaScope;
 begin
   // Create call scope
-  CallScope := TGocciaScope.Create(FClosure, skFunction, FName, Length(FParameters) + 2);
+  CallScope := FClosure.CreateChild(skFunction, FName, Length(FParameters) + 2);
 
   // Register with GC as an active scope (protects it from collection during execution)
   if Assigned(TGocciaGC.Instance) then

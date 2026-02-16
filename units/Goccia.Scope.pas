@@ -37,7 +37,7 @@ type
   public
     constructor Create(AParent: TGocciaScope = nil; AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0);
     destructor Destroy; override;
-    function CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''): TGocciaScope;
+    function CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0): TGocciaScope;
 
     // Garbage collection support
     procedure GCMarkReferences;
@@ -130,9 +130,9 @@ begin
   inherited;
 end;
 
-function TGocciaScope.CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''): TGocciaScope;
+function TGocciaScope.CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0): TGocciaScope;
 begin
-  Result := TGocciaScope.Create(Self, AScopeKind, ACustomLabel);
+  Result := TGocciaScope.Create(Self, AScopeKind, ACustomLabel, ACapacity);
 end;
 
 procedure TGocciaScope.DefineLexicalBinding(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType; ALine: Integer = 0; AColumn: Integer = 0);
