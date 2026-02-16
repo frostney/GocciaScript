@@ -42,8 +42,10 @@ tests/
     ├── declarations/       # let, const
     ├── expressions/        # Arithmetic, comparison, logical, destructuring, etc.
     │   ├── addition/       # Addition with ToPrimitive
+    │   ├── bitwise/        # Bitwise OR, AND, XOR, NOT, shifts
     │   ├── modulo/         # Floating-point modulo
     │   ├── conditional/    # Ternary precedence
+    │   ├── optional-chaining/  # Optional chaining (?.) edge cases
     │   └── ...
     ├── functions/          # Arrow functions, closures, higher-order, recursion
     │   └── function-length-name.js  # Function.length and Function.name
@@ -51,6 +53,7 @@ tests/
     ├── modules/            # Import/export
     ├── objects/            # Object literals, methods, computed properties
     ├── statements/         # if/else, switch/case/break, try/catch/finally
+    │   └── try-catch/      # Try-catch-finally edge cases
     └── unary-operators.js
 ```
 

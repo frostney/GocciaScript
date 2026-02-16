@@ -16,6 +16,8 @@ The evaluator (`Goccia.Evaluator.pas`) is designed around pure functions — giv
 
 State changes (variable bindings, object mutations) happen through the scope and value objects passed in the `TGocciaEvaluationContext`, not through evaluator-internal state.
 
+**Performance-aware evaluation:** Template literal evaluation uses `TStringBuilder` for O(n) string assembly. Numeric binary operations that share a common pattern (subtraction, multiplication, exponentiation) are consolidated through `EvaluateSimpleNumericBinaryOp` to avoid code duplication while maintaining clear semantics.
+
 ## Virtual Dispatch Value System
 
 Values follow a small class hierarchy rooted at `TGocciaValue`, with property access unified through virtual methods on the base class:
@@ -83,11 +85,11 @@ This keeps the evaluator fully reentrant — all dependencies are explicit, maki
 
 Scopes form a tree with parent pointers, implementing lexical scoping:
 
-- **`CreateChild` factory method** — Scopes are never instantiated directly. `CreateChild` ensures proper parent linkage, scope kind propagation, and `OnError` callback inheritance.
+- **`CreateChild` factory method** — Scopes are never instantiated directly. `CreateChild` ensures proper parent linkage, scope kind propagation, and `OnError` callback inheritance. An optional `ACapacity` parameter allows callers to pre-size the binding dictionary (used by function calls that know their parameter count).
 - **`OnError` on scopes** — Each scope carries a reference to the error handler callback, inherited from its parent. This allows closures and callbacks to always find the correct error handler without global state.
 - **Temporal Dead Zone** — `let`/`const` bindings are registered before initialization, enforcing TDZ semantics (accessing before `=` throws `ReferenceError`).
 - **Module scope isolation** — Modules execute in `skModule` scopes (children of the global scope), preventing module-internal variables from leaking into the global scope.
-- **Specialized scopes** — `TGocciaCatchScope` handles catch parameter shadowing with proper scope semantics.
+- **Specialized scopes** — `TGocciaCatchScope` handles catch parameter shadowing with proper scope semantics. This is the only specialized scope subclass; generic `TGocciaScope` handles global, block, function, module, and other scope kinds via the `TScopeKind` enum.
 
 ## Property Descriptor System
 
@@ -142,6 +144,7 @@ GocciaScript runs inside a FreePascal host with manual memory management, but th
 
 - **Simplicity** — Two phases (mark reachable, sweep unreachable) with straightforward implementation.
 - **Handles cycles** — Circular references between objects, closures, and scopes are collected correctly.
+- **O(1) membership checks** — Pinned values, temp roots, and root scopes are stored in `TDictionary<T, Boolean>` (used as hash sets) for O(1) `PinValue`, `AddRoot`, `AddTempRoot`, and `RemoveTempRoot` operations, avoiding O(n) linear scans on every allocation.
 - **Measurable impact** — Running `GC.Collect` before benchmark measurement rounds reduced ops/sec variance from 20-30% to 1-3%.
 
 **AST literal ownership:**

@@ -113,6 +113,9 @@ Scopes are created via `CreateChild`, never directly instantiated:
 // Correct
 ChildScope := ParentScope.CreateChild(skBlock);
 
+// Correct — with capacity hint for function call scopes
+CallScope := FClosure.CreateChild(skFunction, ParamCount + 4);
+
 // WRONG — never do this
 ChildScope := TGocciaScope.Create(ParentScope, skBlock);
 ```
@@ -152,6 +155,34 @@ else if Node is TGocciaCallExpression then
   Result := EvaluateCall(TGocciaCallExpression(Node), Context)
 // ...
 ```
+
+### Parser Combinator (Binary Expressions)
+
+All left-associative binary operator parsers delegate to a shared `ParseBinaryExpression` helper:
+
+```pascal
+function TGocciaParser.ParseBinaryExpression(
+  NextLevel: TParseFunction;
+  const Operators: array of TGocciaTokenType
+): TGocciaExpression;
+```
+
+Each precedence level is a one-liner:
+
+```pascal
+function TGocciaParser.Equality: TGocciaExpression;
+begin
+  Result := ParseBinaryExpression(Comparison, [gttStrictEqual, gttStrictNotEqual]);
+end;
+```
+
+### Evaluator Helper Patterns
+
+**`EvaluateStatementsSafe`** — Wraps statement list execution with standardized exception handling (re-raises GocciaScript signals, wraps unexpected exceptions). Used wherever a list of AST nodes is evaluated in sequence.
+
+**`SpreadIterableInto` / `SpreadIterableIntoArgs`** — Unified spread expansion for arrays, strings, sets, and maps. Used by `EvaluateCall`, `EvaluateArray`, and `EvaluateObject`.
+
+**`EvaluateSimpleNumericBinaryOp`** — Shared helper for subtraction, multiplication, and exponentiation, which all share the same pattern of numeric coercion, NaN propagation, and a single-operation callback.
 
 ## Terminology
 

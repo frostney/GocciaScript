@@ -104,7 +104,8 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 GocciaScript uses a mark-and-sweep garbage collector (`Goccia.GarbageCollector.pas`). All `TGocciaValue` instances auto-register with the GC via `AfterConstruction`. Key rules:
 
 - **AST literal values** are unregistered from the GC by `TGocciaLiteralExpression.Create` and owned by the AST node. The evaluator calls `Value.RuntimeCopy` to produce fresh GC-managed values when evaluating literals.
-- **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache) are pinned via `TGocciaGC.Instance.PinValue` during engine initialization.
+- **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache) are pinned via `TGocciaGC.Instance.PinValue` during engine initialization (consolidated in `PinSingletons`).
+- **Pinned values, temp roots, and root scopes** are stored in `TDictionary<T, Boolean>` for O(1) membership checks.
 - **Values held only by Pascal code** (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot` for the duration they are needed. Example: benchmark functions held in a `TObjectList`.
 - **Scopes** register with the GC in their constructor. Active call scopes are tracked via `PushActiveScope`/`PopActiveScope` in `TGocciaFunctionValue.Call`.
 - Each value type must override `GCMarkReferences` to mark all `TGocciaValue` references it holds (prototype, closure, elements, property values, etc.).
@@ -144,13 +145,15 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 
 ### Design Patterns in Use
 
-- **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`)
-- **Factory method** for scope creation (`CreateChild`)
+- **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`) and shared prototypes (e.g., string prototype)
+- **Factory method** for scope creation (`CreateChild`, with optional capacity hint)
 - **Context object** for evaluation state (`TGocciaEvaluationContext`)
 - **Virtual dispatch** for property access (`GetProperty`/`SetProperty` on `TGocciaValue`)
 - **Chain of responsibility** for scope lookup
+- **Parser combinator** for binary expressions (`ParseBinaryExpression` shared helper)
 - **Recursive descent** for parsing
 - **Mark-and-sweep** for garbage collection (`TGocciaGC`)
+- **Shared helpers** for evaluator deduplication (`EvaluateStatementsSafe`, `SpreadIterableInto`, `EvaluateSimpleNumericBinaryOp`)
 
 ## Value System
 

@@ -26,8 +26,8 @@ The **Engine** (`Goccia.Engine.pas`) sits above this pipeline and orchestrates t
 
 The top-level entry point. Provides static convenience methods (`RunScript`, `RunScriptFromFile`, `RunScriptFromStringList`) and manages:
 
-- **Garbage collector initialization** — Calls `TGocciaGC.Initialize`, registers the global scope as a GC root, and pins singleton values (`UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache, etc.).
-- **Built-in registration** — Selectively registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, error constructors) based on a `TGocciaGlobalBuiltins` flag set.
+- **Garbage collector initialization** — Calls `TGocciaGC.Initialize`, registers the global scope as a GC root, and pins singleton values via `PinSingletons` (`UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache, etc.).
+- **Built-in registration** — A single `RegisterBuiltIns` method selectively creates and registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, error constructors) based on a `TGocciaGlobalBuiltins` flag set. All built-in constructors share the same `(name, scope, ThrowError)` signature.
 - **Interpreter lifecycle** — Creates and owns the `TGocciaInterpreter` instance.
 - **Prototype chain setup** — Calls `RegisterBuiltinConstructors` to wire up the `Object → Array → Number → String` prototype chain.
 
@@ -39,10 +39,10 @@ A single-pass tokenizer that converts source text into a flat list of `TGocciaTo
 
 - **Keyword lookup** — Uses a shared `TDictionary<string, TGocciaTokenType>` (initialized once as a class variable) for O(1) keyword identification instead of a linear if-else chain.
 - **String scanning** — Uses `TStringBuilder` for O(n) string literal and template literal assembly, avoiding O(n^2) repeated string concatenation.
+- **Shared escape handling** — A `ProcessEscapeSequence` method handles common escape sequences (`\n`, `\t`, `\r`, `\\`, `\0`, `\uXXXX`, `\u{XXXXX}`, `\xHH`) shared between string and template literal scanning. String-specific (`\'`, `\"`) and template-specific (`` \` ``, `\$`) escapes remain in their respective scan methods.
 - **Number formats** — Decimal, hexadecimal (`0x`), binary (`0b`), octal (`0o`), scientific notation.
 - **Template literals** — Special handling for backtick strings with `${...}` interpolation.
 - **Unicode identifiers** — Supports Unicode characters (including emoji) in identifier names.
-- **Unicode/hex escape sequences** — `\uXXXX` (4-digit), `\u{XXXXX}` (variable-length), and `\xHH` (hex byte) escape sequences in strings and template literals, with full UTF-8 encoding for code points up to U+10FFFF.
 - **Comments** — Skips single-line (`//`) and block (`/* */`) comments.
 - **Error reporting** — Produces `TGocciaLexerError` with line and column information.
 
@@ -50,9 +50,9 @@ A single-pass tokenizer that converts source text into a flat list of `TGocciaTo
 
 A recursive descent parser that builds an AST from the token stream. Implements:
 
-- **Operator precedence** via precedence climbing (assignment → conditional → logical → comparison → addition → multiplication → exponentiation → unary → call → primary).
+- **Operator precedence** via precedence climbing (assignment → conditional → logical → comparison → addition → multiplication → exponentiation → unary → call → primary). A shared `ParseBinaryExpression(NextLevel, Operators)` helper eliminates duplication across all 11 left-associative binary operator parsers — each is a single-line delegation.
 - **ES6+ syntax** — Arrow functions, template literals, destructuring patterns (array and object), spread/rest operators, rest parameters (`...args`), optional chaining (`?.`), computed property names, shorthand properties, classes with private fields, private/public getters/setters, and static members. Reserved words are accepted as property names in object literals and member expressions. The parser tracks instance property declaration order for correct initialization semantics.
-- **Shared parameter parsing** — A single `ParseParameterList` method handles parameter parsing for arrow functions, class methods, and object method shorthand, supporting rest parameters, destructuring patterns, and default values uniformly.
+- **Shared parsing helpers** — `ParseParameterList` handles parameter parsing for arrow functions, class methods, and object method shorthand. `ParseGetterExpression` and `ParseSetterExpression` handle accessor parsing for both object literals and class bodies. `ParseObjectMethodBody` handles method shorthand in object literals.
 - **Error recovery** — Throws `TGocciaSyntaxError` with source location for diagnostics.
 - **Arrow function detection** — Uses lookahead (`IsArrowFunction`) to disambiguate parenthesized expressions from arrow function parameters.
 
@@ -79,8 +79,8 @@ The largest component. Implements the actual semantics of the language as **pure
 
 | Module | Responsibility |
 |--------|---------------|
-| `Goccia.Evaluator.pas` | Core dispatch, expressions, statements, classes, function name inference |
-| `Goccia.Evaluator.Arithmetic.pas` | `+` (uses `ToPrimitive`), `-`, `*`, `/`, `%` (float), `**`, compound assignment dispatch |
+| `Goccia.Evaluator.pas` | Core dispatch, expressions, statements, classes, function name inference, `EvaluateStatementsSafe`, spread helpers |
+| `Goccia.Evaluator.Arithmetic.pas` | `+` (uses `ToPrimitive`), `-`, `*`, `**` (via `EvaluateSimpleNumericBinaryOp` helper), `/`, `%` (float), compound assignment dispatch |
 | `Goccia.Evaluator.Bitwise.pas` | `&`, `\|`, `^`, `<<`, `>>`, `>>>` |
 | `Goccia.Evaluator.Comparison.pas` | `===`, `!==`, `<`, `>`, `<=`, `>=` |
 | `Goccia.Evaluator.Assignment.pas` | `=`, `+=`, `-=`, property assignment, compound property assignment, `DefinePropertyOnValue` |
@@ -90,8 +90,12 @@ The largest component. Implements the actual semantics of the language as **pure
 
 Shared helper functions reduce duplication across the evaluator:
 
+- **`EvaluateStatementsSafe`** — Executes a list of AST nodes with standardized exception handling: re-raises GocciaScript signals (`TGocciaReturnValue`, `TGocciaThrowValue`, `TGocciaBreakSignal`, type/reference/runtime errors) and wraps unexpected Pascal exceptions. Used by `EvaluateBlock`, `EvaluateTry` (try/catch/finally blocks), and other statement-list contexts.
+- **`SpreadIterableInto` / `SpreadIterableIntoArgs`** — Shared spread expansion logic for array, string, Set, and Map values. Used by `EvaluateCall`, `EvaluateArray`, and `EvaluateObject` to handle `...spread` expressions uniformly.
 - **`CopyStatementList`** — Creates a non-owning copy of an AST statement list (used by getters, setters, arrow functions, and class methods to avoid ownership conflicts).
 - **`DefinePropertyOnValue`** — Defines a property with a full descriptor on objects, falling back to `SetProperty` for non-objects.
+- **`ExecuteCatchBlock`** — Handles catch block execution with optional catch parameter scoping.
+- **`PascalExceptionToErrorObject`** — Converts Pascal exceptions (`TGocciaTypeError`, `TGocciaReferenceError`, etc.) into JavaScript error objects.
 
 Evaluation state is threaded through a `TGocciaEvaluationContext` record that carries the current scope, error handler callback, and module loader reference. The `OnError` callback is also propagated onto `TGocciaScope`, so closures inherit error handling from their defining scope without needing global mutable state.
 
@@ -104,15 +108,7 @@ flowchart TD
     Run["TGocciaEngine.RunScript(Code)"]
     Run --> Create["Create TGocciaInterpreter"]
     Run --> Register["RegisterBuiltIns(GlobalScope)"]
-    Register --> Console["RegisterConsole → console.log, etc."]
-    Register --> Math["RegisterMath → Math.PI, Math.floor, etc."]
-    Register --> JSON["RegisterJSON → JSON.parse, JSON.stringify"]
-    Register --> Globals["RegisterGlobals → undefined, NaN, Infinity, Error, ..."]
-    Register --> GArray["RegisterGlobalArray → Array.isArray, Array.from, Array.of"]
-    Register --> GNumber["RegisterGlobalNumber → Number.parseInt, constants, ..."]
-    Register --> GSymbol["RegisterSymbol → Symbol, Symbol.for, Symbol.iterator"]
-    Register --> GSet["RegisterSet → Set constructor"]
-    Register --> GMap["RegisterMap → Map constructor"]
+    Register --> Builtins["Create and register each enabled built-in:\nconsole, Math, JSON, Object, Array,\nNumber, String, Symbol, Set, Map,\nundefined, NaN, Infinity, Error constructors"]
     Register --> Constructors["RegisterBuiltinConstructors → prototype chains"]
     Run --> Lex["TGocciaLexer.Create(Code).ScanTokens → Tokens"]
     Run --> Parse["TGocciaParser.Create(Tokens).Parse → AST"]
@@ -202,6 +198,8 @@ flowchart TD
 ### Registration
 
 All `TGocciaValue` instances auto-register with the GC in `AfterConstruction`. All `TGocciaScope` instances register in their constructor. The GC tracks both in separate managed lists.
+
+Pinned values, temp roots, and root scopes are stored in `TDictionary<T, Boolean>` (used as hash sets) for O(1) `PinValue`, `AddRoot`, `AddTempRoot`, and `RemoveTempRoot` operations.
 
 ### Collection Trigger
 
