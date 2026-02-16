@@ -75,7 +75,7 @@ type
     function SetElement(const AIndex: Integer; AValue: TGocciaValue): Boolean;
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
-    procedure SetProperty(const AName: string; AValue: TGocciaValue);
+    procedure SetProperty(const AName: string; AValue: TGocciaValue); override;
     function Includes(const AValue: TGocciaValue; FromIndex: Integer = 0): Boolean;
 
     procedure GCMarkReferences; override;

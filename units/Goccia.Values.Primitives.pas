@@ -27,6 +27,10 @@ type
     function ToNumberLiteral: TGocciaNumberLiteralValue; virtual; abstract;
     function ToStringLiteral: TGocciaStringLiteralValue; virtual; abstract;
 
+    // Virtual property access — overridden by ObjectValue, ClassValue, etc.
+    function GetProperty(const AName: string): TGocciaValue; virtual;
+    procedure SetProperty(const AName: string; AValue: TGocciaValue); virtual;
+
     property GCMarked: Boolean read FGCMarked write FGCMarked;
   end;
 
@@ -168,6 +172,16 @@ function TGocciaValue.RuntimeCopy: TGocciaValue;
 begin
   // Default: return self (for singletons and complex values like objects/functions)
   Result := Self;
+end;
+
+function TGocciaValue.GetProperty(const AName: string): TGocciaValue;
+begin
+  Result := nil;
+end;
+
+procedure TGocciaValue.SetProperty(const AName: string; AValue: TGocciaValue);
+begin
+  // No-op for primitives
 end;
 
 { Utility functions }

@@ -56,8 +56,8 @@ type
     procedure AddPrivateMethod(const AName: string; AMethod: TGocciaMethodValue);
     function GetPrivateMethod(const AName: string): TGocciaMethodValue;
     function Instantiate(Arguments: TGocciaArgumentsCollection): TGocciaValue;
-    function GetProperty(const AName: string): TGocciaValue;
-    procedure SetProperty(const AName: string; AValue: TGocciaValue);
+    function GetProperty(const AName: string): TGocciaValue; override;
+    procedure SetProperty(const AName: string; AValue: TGocciaValue); override;
     function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; virtual;
 
     property Name: string read FName;
@@ -99,7 +99,7 @@ type
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True); override;
-    procedure SetProperty(const AName: string; AValue: TGocciaValue);
+    procedure SetProperty(const AName: string; AValue: TGocciaValue); override;
     function GetPrivateProperty(const AName: string; AAccessClass: TGocciaClassValue): TGocciaValue;
     procedure SetPrivateProperty(const AName: string; AValue: TGocciaValue; AAccessClass: TGocciaClassValue);
     function HasPrivateProperty(const AName: string): Boolean;

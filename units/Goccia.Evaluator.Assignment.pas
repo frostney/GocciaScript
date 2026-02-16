@@ -31,40 +31,21 @@ uses Goccia.Values.ClassHelper, Goccia.Values.ErrorHelper;
 
 function GetPropertyFromValue(Obj: TGocciaValue; const PropName: string): TGocciaValue;
 begin
-  if (Obj is TGocciaInstanceValue) then
-    Result := TGocciaInstanceValue(Obj).GetProperty(PropName)
-  else if (Obj is TGocciaArrayValue) then
-    Result := TGocciaArrayValue(Obj).GetProperty(PropName)
-  else if (Obj is TGocciaClassValue) then
-    Result := TGocciaClassValue(Obj).GetProperty(PropName)
-  else if (Obj is TGocciaObjectValue) then
-    Result := TGocciaObjectValue(Obj).GetProperty(PropName)
-  else
-    Result := nil;
+  Result := Obj.GetProperty(PropName);
 end;
 
 procedure SetPropertyOnValue(Obj: TGocciaValue; const PropName: string; Value: TGocciaValue);
 begin
-  if (Obj is TGocciaInstanceValue) then
-    TGocciaInstanceValue(Obj).AssignProperty(PropName, Value)
-  else if (Obj is TGocciaArrayValue) then
-    TGocciaArrayValue(Obj).SetProperty(PropName, Value)
-  else if (Obj is TGocciaObjectValue) then
-    TGocciaObjectValue(Obj).AssignProperty(PropName, Value)
-  else if (Obj is TGocciaClassValue) then
-    TGocciaClassValue(Obj).SetProperty(PropName, Value);
+  Obj.SetProperty(PropName, Value);
 end;
 
 procedure DefinePropertyOnValue(Obj: TGocciaValue; const PropName: string; Value: TGocciaValue);
 begin
-  if (Obj is TGocciaInstanceValue) then
-    TGocciaInstanceValue(Obj).DefineProperty(PropName,
-      TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]))
-  else if (Obj is TGocciaObjectValue) then
+  if (Obj is TGocciaObjectValue) then
     TGocciaObjectValue(Obj).DefineProperty(PropName,
       TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]))
-  else if (Obj is TGocciaClassValue) then
-    TGocciaClassValue(Obj).SetProperty(PropName, Value);
+  else
+    Obj.SetProperty(PropName, Value);
 end;
 
 procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);

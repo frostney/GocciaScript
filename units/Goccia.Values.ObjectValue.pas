@@ -42,7 +42,8 @@ type
     procedure RegisterConstant(const AName: string; const AValue: TGocciaValue);
 
     // Property accessors
-    function GetProperty(const AName: string): TGocciaValue; virtual;
+    function GetProperty(const AName: string): TGocciaValue; override;
+    procedure SetProperty(const AName: string; AValue: TGocciaValue); override;
     function GetPropertyWithContext(const AName: string; AThisContext: TGocciaValue): TGocciaValue;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
     function HasProperty(const AName: string): Boolean;
@@ -404,6 +405,11 @@ end;
 function TGocciaObjectValue.GetProperty(const AName: string): TGocciaValue;
 begin
   Result := GetPropertyWithContext(AName, Self);
+end;
+
+procedure TGocciaObjectValue.SetProperty(const AName: string; AValue: TGocciaValue);
+begin
+  AssignProperty(AName, AValue);
 end;
 
 function TGocciaObjectValue.GetPropertyWithContext(const AName: string; AThisContext: TGocciaValue): TGocciaValue;
