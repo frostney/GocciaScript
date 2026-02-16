@@ -10,6 +10,10 @@ uses
 type
   TGocciaLexer = class
   const ValidIdentifierChars: set of Char = ['a'..'z', 'A'..'Z', '0'..'9', '_', '$'];
+  private class var
+    FKeywords: TDictionary<string, TGocciaTokenType>;
+    class procedure InitKeywords;
+    class destructor DestroyClass;
   private
     FSource: string;
     FTokens: TObjectList<TGocciaToken>;
@@ -50,6 +54,7 @@ implementation
 
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
 begin
+  InitKeywords;
   FSource := ASource;
   FFileName := AFileName;
   FTokens := TObjectList<TGocciaToken>.Create(True);
@@ -450,51 +455,65 @@ begin
   Result := CharInSet(C, ValidIdentifierChars) or (Ord(C) > 127); // Allow Unicode characters
 end;
 
+class procedure TGocciaLexer.InitKeywords;
+begin
+  if Assigned(FKeywords) then Exit;
+  FKeywords := TDictionary<string, TGocciaTokenType>.Create(40);
+  FKeywords.Add('const', gttConst);
+  FKeywords.Add('let', gttLet);
+  FKeywords.Add('class', gttClass);
+  FKeywords.Add('extends', gttExtends);
+  FKeywords.Add('new', gttNew);
+  FKeywords.Add('this', gttThis);
+  FKeywords.Add('super', gttSuper);
+  FKeywords.Add('static', gttStatic);
+  FKeywords.Add('return', gttReturn);
+  FKeywords.Add('if', gttIf);
+  FKeywords.Add('else', gttElse);
+  FKeywords.Add('for', gttFor);
+  FKeywords.Add('while', gttWhile);
+  FKeywords.Add('do', gttDo);
+  FKeywords.Add('switch', gttSwitch);
+  FKeywords.Add('case', gttCase);
+  FKeywords.Add('default', gttDefault);
+  FKeywords.Add('break', gttBreak);
+  FKeywords.Add('throw', gttThrow);
+  FKeywords.Add('try', gttTry);
+  FKeywords.Add('catch', gttCatch);
+  FKeywords.Add('finally', gttFinally);
+  FKeywords.Add('import', gttImport);
+  FKeywords.Add('export', gttExport);
+  FKeywords.Add('from', gttFrom);
+  FKeywords.Add('as', gttAs);
+  FKeywords.Add('typeof', gttTypeof);
+  FKeywords.Add('instanceof', gttInstanceof);
+  FKeywords.Add('in', gttIn);
+  FKeywords.Add('delete', gttDelete);
+  FKeywords.Add('true', gttTrue);
+  FKeywords.Add('false', gttFalse);
+  FKeywords.Add('null', gttNull);
+  FKeywords.Add('undefined', gttUndefined);
+end;
+
+class destructor TGocciaLexer.DestroyClass;
+begin
+  FKeywords.Free;
+end;
+
 procedure TGocciaLexer.ScanIdentifier;
 var
   Text: string;
+  TokenType: TGocciaTokenType;
 begin
   while not IsAtEnd and IsValidIdentifierChar(Peek) do
     Advance;
 
   Text := Copy(FSource, FStart, FCurrent - FStart);
 
-  // Check for keywords
-  if Text = 'const' then AddToken(gttConst, Text)
-  else if Text = 'let' then AddToken(gttLet, Text)
-  else if Text = 'class' then AddToken(gttClass, Text)
-  else if Text = 'extends' then AddToken(gttExtends, Text)
-  else if Text = 'new' then AddToken(gttNew, Text)
-  else if Text = 'this' then AddToken(gttThis, Text)
-  else if Text = 'super' then AddToken(gttSuper, Text)
-    else if Text = 'static' then AddToken(gttStatic, Text)
-  else if Text = 'return' then AddToken(gttReturn, Text)
-  else if Text = 'if' then AddToken(gttIf, Text)
-  else if Text = 'else' then AddToken(gttElse, Text)
-  else if Text = 'for' then AddToken(gttFor, Text)
-  else if Text = 'while' then AddToken(gttWhile, Text)
-  else if Text = 'do' then AddToken(gttDo, Text)
-  else if Text = 'switch' then AddToken(gttSwitch, Text)
-  else if Text = 'case' then AddToken(gttCase, Text)
-  else if Text = 'default' then AddToken(gttDefault, Text)
-  else if Text = 'break' then AddToken(gttBreak, Text)
-  else if Text = 'throw' then AddToken(gttThrow, Text)
-  else if Text = 'try' then AddToken(gttTry, Text)
-  else if Text = 'catch' then AddToken(gttCatch, Text)
-  else if Text = 'finally' then AddToken(gttFinally, Text)
-  else if Text = 'import' then AddToken(gttImport, Text)
-  else if Text = 'export' then AddToken(gttExport, Text)
-  else if Text = 'from' then AddToken(gttFrom, Text)
-  else if Text = 'as' then AddToken(gttAs, Text)
-  else if Text = 'typeof' then AddToken(gttTypeof, Text)
-  else if Text = 'instanceof' then AddToken(gttInstanceof, Text)
-  else if Text = 'in' then AddToken(gttIn, Text)
-  else if Text = 'delete' then AddToken(gttDelete, Text)
-  else if Text = 'true' then AddToken(gttTrue, Text)
-  else if Text = 'false' then AddToken(gttFalse, Text)
-  else if Text = 'null' then AddToken(gttNull, Text)
-  else if Text = 'undefined' then AddToken(gttUndefined, Text)
-  else AddToken(gttIdentifier, Text);
+  if FKeywords.TryGetValue(Text, TokenType) then
+    AddToken(TokenType, Text)
+  else
+    AddToken(gttIdentifier, Text);
 end;
 
 procedure TGocciaLexer.ScanToken;
