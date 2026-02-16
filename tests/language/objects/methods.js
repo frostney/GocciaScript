@@ -19,7 +19,7 @@ test("object method calls with parameters", () => {
       this.lastValue = value;
       return this;
     },
-    getValue: () => {
+    getValue() {
       return this.lastValue;
     },
   };

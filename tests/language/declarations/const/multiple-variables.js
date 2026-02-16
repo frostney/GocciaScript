@@ -58,11 +58,11 @@ test("const with complex objects and arrays", () => {
     numbers: [1, 2, 3],
     nested: {
       prop: "value",
-      func: () => {
+      func() {
         return this.prop;
       },
     },
-    calculate: (x, y) => {
+    calculate(x, y) {
       return x + y;
     },
   };
