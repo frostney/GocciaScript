@@ -61,10 +61,40 @@ uses
   Goccia.Values.ClassHelper, Goccia.GarbageCollector;
 
 const
-  WARMUP_ITERATIONS = 3;
-  MIN_CALIBRATION_MS = 1000;   // Run for at least 1s during calibration
-  CALIBRATION_BATCH = 10;      // Initial batch size for calibration
-  MEASUREMENT_ROUNDS = 3;      // Number of measurement rounds (take median)
+  DEFAULT_WARMUP_ITERATIONS = 3;
+  DEFAULT_MIN_CALIBRATION_MS = 300;  // Run for at least 300ms during calibration
+  DEFAULT_CALIBRATION_BATCH = 10;    // Initial batch size for calibration
+  DEFAULT_MEASUREMENT_ROUNDS = 3;    // Number of measurement rounds (take median)
+
+var
+  WARMUP_ITERATIONS: Integer;
+  MIN_CALIBRATION_MS: Int64;
+  CALIBRATION_BATCH: Int64;
+  MEASUREMENT_ROUNDS: Integer;
+
+function GetEnvInt(const Name: string; Default: Integer): Integer;
+var
+  S: string;
+begin
+  S := GetEnvironmentVariable(Name);
+  if (S <> '') then
+  begin
+    if not TryStrToInt(S, Result) then
+      Result := Default;
+  end
+  else
+    Result := Default;
+end;
+
+procedure InitBenchmarkConfig;
+begin
+  WARMUP_ITERATIONS := GetEnvInt('GOCCIA_BENCH_WARMUP', DEFAULT_WARMUP_ITERATIONS);
+  MIN_CALIBRATION_MS := GetEnvInt('GOCCIA_BENCH_CALIBRATION_MS', DEFAULT_MIN_CALIBRATION_MS);
+  CALIBRATION_BATCH := GetEnvInt('GOCCIA_BENCH_CALIBRATION_BATCH', DEFAULT_CALIBRATION_BATCH);
+  MEASUREMENT_ROUNDS := GetEnvInt('GOCCIA_BENCH_ROUNDS', DEFAULT_MEASUREMENT_ROUNDS);
+  if MEASUREMENT_ROUNDS > 5 then MEASUREMENT_ROUNDS := 5;
+  if MEASUREMENT_ROUNDS < 1 then MEASUREMENT_ROUNDS := 1;
+end;
 
 { TBenchmarkCase }
 
@@ -355,5 +385,8 @@ begin
     end;
   end;
 end;
+
+initialization
+  InitBenchmarkConfig;
 
 end.
