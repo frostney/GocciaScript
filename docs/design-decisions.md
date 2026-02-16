@@ -87,7 +87,7 @@ Scopes form a tree with parent pointers, implementing lexical scoping:
 - **`OnError` on scopes** — Each scope carries a reference to the error handler callback, inherited from its parent. This allows closures and callbacks to always find the correct error handler without global state.
 - **Temporal Dead Zone** — `let`/`const` bindings are registered before initialization, enforcing TDZ semantics (accessing before `=` throws `ReferenceError`).
 - **Module scope isolation** — Modules execute in `skModule` scopes (children of the global scope), preventing module-internal variables from leaking into the global scope.
-- **Specialized scopes** — `TGocciaCatchScope`, `TGocciaGlobalScope`, and `TGocciaClassScope` handle their unique semantics (catch parameter shadowing, global object, superclass tracking).
+- **Specialized scopes** — `TGocciaCatchScope` handles catch parameter shadowing with proper scope semantics.
 
 ## Property Descriptor System
 

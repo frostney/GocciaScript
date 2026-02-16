@@ -16,8 +16,6 @@ type
     // Helper methods for reducing duplication
     function ValidateArrayMethodCall(const MethodName: string; Args: TGocciaArgumentsCollection;
       ThisValue: TGocciaValue; RequiresCallback: Boolean = True): TGocciaValue;
-    function ExecuteArrayCallback(Callback: TGocciaValue; Element: TGocciaValue;
-      Index: Integer; ThisArray: TGocciaValue): TGocciaValue;
     function IsArrayHole(Element: TGocciaValue): Boolean; inline;
 
     function ArrayMap(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -308,24 +306,6 @@ begin
   begin
     if Result is TGocciaUndefinedLiteralValue then
       ThrowError('Callback must not be undefined');
-  end;
-end;
-
-function TGocciaArrayValue.ExecuteArrayCallback(Callback: TGocciaValue; Element: TGocciaValue;
-  Index: Integer; ThisArray: TGocciaValue): TGocciaValue;
-var
-  CallArgs: TGocciaArgumentsCollection;
-begin
-  CallArgs := TGocciaArgumentsCollection.Create([Element, TGocciaNumberLiteralValue.Create(Index), ThisArray]);
-  try
-    if Callback is TGocciaNativeFunctionValue then
-      Result := TGocciaNativeFunctionValue(Callback).Call(CallArgs, ThisArray)
-    else if Callback is TGocciaFunctionValue then
-      Result := TGocciaFunctionValue(Callback).Call(CallArgs, ThisArray)
-    else
-      ThrowError('Callback must be a function');
-  finally
-    CallArgs.Free;
   end;
 end;
 

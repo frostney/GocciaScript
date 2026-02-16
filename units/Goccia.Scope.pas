@@ -74,21 +74,6 @@ type
     procedure AssignLexicalBinding(const AName: string; AValue: TGocciaValue; ALine: Integer = 0; AColumn: Integer = 0); override;
   end;
 
-  TGocciaGlobalScope = class(TGocciaScope)
-  private
-    FGlobalObject: TGocciaObjectValue;
-  public
-    constructor Create;
-    function GetValue(const AName: string): TGocciaValue;
-  end;
-
-  TGocciaClassScope = class(TGocciaScope)
-  private
-    FSuperClass: TGocciaObjectValue;
-  public
-    constructor Create(AParent: TGocciaScope; const AClassName: string);
-    function GetSuperClass(): TGocciaObjectValue;
-  end;
 
 
 
@@ -333,36 +318,6 @@ begin
     // Either it's the catch parameter or it exists in current scope - use base behavior
     inherited AssignLexicalBinding(AName, AValue, ALine, AColumn);
   end;
-end;
-
-{ TGocciaGlobalScope }
-
-constructor TGocciaGlobalScope.Create();
-begin
-  inherited Create(nil, skGlobal, 'GlobalScope');
-  FGlobalObject := TGocciaObjectValue.Create();
-  FGlobalObject.DefineProperty('globalThis', TGocciaPropertyDescriptorData.Create(FGlobalObject, []));
-end;
-
-function TGocciaGlobalScope.GetValue(const AName: string): TGocciaValue;
-begin
-  if FGlobalObject.HasProperty(AName) then
-    Result := FGlobalObject.GetProperty(AName)
-  else
-    Result := inherited GetValue(AName);
-end;
-
-{ TGocciaClassScope }
-
-constructor TGocciaClassScope.Create(AParent: TGocciaScope; const AClassName: string);
-begin
-  inherited Create(AParent, skClass, AClassName);
-  // FSuperClass := AParent.GetSuperClass();
-end;
-
-function TGocciaClassScope.GetSuperClass(): TGocciaObjectValue;
-begin
-  Result := FSuperClass;
 end;
 
 end.
