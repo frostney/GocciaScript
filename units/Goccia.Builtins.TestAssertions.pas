@@ -14,6 +14,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Scope,
   Goccia.Error, Goccia.Error.ThrowErrorCallback,
+  Goccia.Arguments.Validator,
   Generics.Collections,
   Math,
   Classes,
@@ -202,11 +203,7 @@ var
   Expected: TGocciaValue;
   IsEqual: Boolean;
 begin
-  if Args.Length <> 1 then
-  begin
-    FTestAssertions.ThrowError('toBe expects exactly 1 argument', 0, 0);
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toBe', FTestAssertions.ThrowError);
 
   Expected := Args.GetElement(0);
   IsEqual := IsSameValue(FActualValue, Expected);
@@ -236,11 +233,7 @@ var
   Expected: TGocciaValue;
   IsEqual: Boolean;
 begin
-  if Args.Length <> 1 then
-  begin
-    FTestAssertions.ThrowError('toEqual expects exactly 1 argument', 0, 0);
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toEqual', FTestAssertions.ThrowError);
 
   Expected := Args.GetElement(0);
   IsEqual := IsDeepEqual(FActualValue, Expected);
@@ -404,11 +397,7 @@ var
   Expected: TGocciaValue;
   IsGreater: Boolean;
 begin
-  if Args.Length <> 1 then
-  begin
-    FTestAssertions.ThrowError('toBeGreaterThan expects exactly 1 argument', 0, 0);
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toBeGreaterThan', FTestAssertions.ThrowError);
 
   Expected := Args.GetElement(0);
   IsGreater := FActualValue.IsGreaterThan(Expected).Value;
@@ -438,11 +427,7 @@ var
   Expected: TGocciaValue;
   IsGreaterOrEqual: Boolean;
 begin
-  if Args.Length <> 1 then
-  begin
-    FTestAssertions.ThrowError('toBeGreaterThanOrEqual expects exactly 1 argument', 0, 0);
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toBeGreaterThanOrEqual', FTestAssertions.ThrowError);
 
   Expected := Args.GetElement(0);
   IsGreaterOrEqual := FActualValue.IsGreaterThanOrEqual(Expected).Value;
@@ -472,11 +457,7 @@ var
   Expected: TGocciaValue;
   IsLess: Boolean;
 begin
-  if Args.Length <> 1 then
-  begin
-    FTestAssertions.ThrowError('toBeLessThan expects exactly 1 argument', 0, 0);
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toBeLessThan', FTestAssertions.ThrowError);
 
   Expected := Args.GetElement(0);
   IsLess := FActualValue.IsLessThan(Expected).Value;
@@ -506,11 +487,7 @@ var
   Expected: TGocciaValue;
   IsLessOrEqual: Boolean;
 begin
-  if Args.Length <> 1 then
-  begin
-    FTestAssertions.ThrowError('toBeLessThanOrEqual expects exactly 1 argument', 0, 0);
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toBeLessThanOrEqual', FTestAssertions.ThrowError);
 
   Expected := Args.GetElement(0);
   IsLessOrEqual := FActualValue.IsLessThanOrEqual(Expected).Value;
@@ -541,11 +518,7 @@ var
   Contains: Boolean;
   ActualStr, ExpectedStr: string;
 begin
-  if Args.Length <> 1 then
-  begin
-    FTestAssertions.ThrowError('toContain expects exactly 1 argument', 0, 0);
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toContain', FTestAssertions.ThrowError);
 
   Expected := Args.GetElement(0);
 
@@ -599,11 +572,7 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  if Args.Length <> 1 then
-  begin
-    FTestAssertions.ThrowError('toBeInstanceOf expects exactly 1 argument', 0, 0);
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toBeInstanceOf', FTestAssertions.ThrowError);
 
   ExpectedConstructor := Args.GetElement(0);
   IsInstance := False;
@@ -687,11 +656,7 @@ var
   Expected: TGocciaValue;
   HasLength: Boolean;
 begin
-  if Args.Length <> 1 then
-  begin
-    FTestAssertions.ThrowError('toHaveLength expects exactly 1 argument', 0, 0);
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toHaveLength', FTestAssertions.ThrowError);
 
   Expected := Args.GetElement(0);
 
@@ -737,11 +702,7 @@ var
   Expected: TGocciaObjectValue;
   HasProperty: Boolean;
 begin
-  if Args.Length <> 2 then
-  begin
-    FTestAssertions.ThrowError('toHaveProperty expects exactly 2 arguments', 0, 0);
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireExactly(Args, 2, 'toHaveProperty', FTestAssertions.ThrowError);
 
   Expected := Args.GetElement(0) as TGocciaObjectValue;
   HasProperty := Expected.HasProperty(Args.GetElement(1).ToStringLiteral.Value);
@@ -948,11 +909,7 @@ var
   IsClose: Boolean;
   ActualTempNum, ExpectedTempNum: TGocciaNumberLiteralValue;
 begin
-  if Args.Length < 1 then
-  begin
-    FTestAssertions.ThrowError('toBeCloseTo expects at least 1 argument', 0, 0);
-    Exit;
-  end;
+  TGocciaArgumentValidator.RequireAtLeast(Args, 1, 'toBeCloseTo', FTestAssertions.ThrowError);
 
   Expected := Args.GetElement(0);
 
@@ -1159,8 +1116,7 @@ end;
 
 function TGocciaTestAssertions.Expect(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('expect expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'expect', ThrowError);
 
   Result := TGocciaExpectationValue.Create(Args.GetElement(0), Self);
 end;
@@ -1171,8 +1127,7 @@ var
   SuiteFunction: TGocciaFunctionValue;
   Suite: TTestSuite;
 begin
-  if Args.Length <> 2 then
-    ThrowError('describe expects exactly 2 arguments', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 2, 'describe', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaStringLiteralValue) then
     ThrowError('describe expects first argument to be a string', 0, 0);
@@ -1196,8 +1151,7 @@ var
   TestFunction: TGocciaFunctionValue;
   TestCase: TTestCase;
 begin
-  if Args.Length <> 2 then
-    ThrowError('test expects exactly 2 arguments', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 2, 'test', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaStringLiteralValue) then
     ThrowError('test expects first argument to be a string', 0, 0);
@@ -1227,8 +1181,7 @@ var
   TestFunction: TGocciaFunctionValue;
   TestCase: TTestCase;
 begin
-  if Args.Length <> 2 then
-    ThrowError('test.skip expects exactly 2 arguments', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 2, 'test.skip', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaStringLiteralValue) then
     ThrowError('test.skip expects first argument to be a string', 0, 0);
@@ -1248,8 +1201,7 @@ end;
 
 function TGocciaTestAssertions.BeforeEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('beforeEach expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'beforeEach', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaFunctionValue) then
     ThrowError('beforeEach expects a function argument', 0, 0);
@@ -1261,8 +1213,7 @@ end;
 
 function TGocciaTestAssertions.AfterEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 begin
-  if Args.Length <> 1 then
-    ThrowError('afterEach expects exactly 1 argument', 0, 0);
+  TGocciaArgumentValidator.RequireExactly(Args, 1, 'afterEach', ThrowError);
 
   if not (Args.GetElement(0) is TGocciaFunctionValue) then
     ThrowError('afterEach expects a function argument', 0, 0);
