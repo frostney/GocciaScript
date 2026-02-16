@@ -186,9 +186,7 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 - [ ] Async/await and Promises
 - [ ] Regular expressions
 - [ ] Generators and iterators
-- [x] Performance benchmarks
 - [ ] Pre-compiled binary releases
-- [ ] Host environment embedding API
 
 ## License
 

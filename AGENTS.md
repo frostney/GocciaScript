@@ -208,3 +208,4 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 | [docs/testing.md](docs/testing.md) | Test organization, writing tests, running tests |
 | [docs/build-system.md](docs/build-system.md) | Build commands, configuration, CI/CD |
 | [docs/language-restrictions.md](docs/language-restrictions.md) | Supported/excluded features with rationale |
+| [docs/embedding.md](docs/embedding.md) | Embedding the engine in FreePascal applications |
