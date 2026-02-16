@@ -15,10 +15,10 @@ type
   private
     FManagedValues: TList<TGocciaValue>;
     FManagedScopes: TList<TGocciaScope>;
-    FRootScopes: TList<TGocciaScope>;
+    FRootScopes: TDictionary<TGocciaScope, Boolean>;
     FActiveScopeStack: TList<TGocciaScope>;
-    FPinnedValues: TList<TGocciaValue>;
-    FTempRoots: TList<TGocciaValue>;
+    FPinnedValues: TDictionary<TGocciaValue, Boolean>;
+    FTempRoots: TDictionary<TGocciaValue, Boolean>;
 
     FAllocationsSinceLastGC: Integer;
     FGCThreshold: Integer;
@@ -88,10 +88,10 @@ constructor TGocciaGC.Create;
 begin
   FManagedValues := TList<TGocciaValue>.Create;
   FManagedScopes := TList<TGocciaScope>.Create;
-  FRootScopes := TList<TGocciaScope>.Create;
+  FRootScopes := TDictionary<TGocciaScope, Boolean>.Create;
   FActiveScopeStack := TList<TGocciaScope>.Create;
-  FPinnedValues := TList<TGocciaValue>.Create;
-  FTempRoots := TList<TGocciaValue>.Create;
+  FPinnedValues := TDictionary<TGocciaValue, Boolean>.Create;
+  FTempRoots := TDictionary<TGocciaValue, Boolean>.Create;
   FAllocationsSinceLastGC := 0;
   FGCThreshold := DEFAULT_GC_THRESHOLD;
   FEnabled := True;
@@ -132,14 +132,14 @@ end;
 
 procedure TGocciaGC.PinValue(Value: TGocciaValue);
 begin
-  if not FPinnedValues.Contains(Value) then
-    FPinnedValues.Add(Value);
+  if not FPinnedValues.ContainsKey(Value) then
+    FPinnedValues.Add(Value, True);
 end;
 
 procedure TGocciaGC.AddRoot(Scope: TGocciaScope);
 begin
-  if not FRootScopes.Contains(Scope) then
-    FRootScopes.Add(Scope);
+  if not FRootScopes.ContainsKey(Scope) then
+    FRootScopes.Add(Scope, True);
 end;
 
 procedure TGocciaGC.RemoveRoot(Scope: TGocciaScope);
@@ -160,8 +160,8 @@ end;
 
 procedure TGocciaGC.AddTempRoot(Value: TGocciaValue);
 begin
-  if Assigned(Value) and (FTempRoots.IndexOf(Value) < 0) then
-    FTempRoots.Add(Value);
+  if Assigned(Value) and not FTempRoots.ContainsKey(Value) then
+    FTempRoots.Add(Value, True);
 end;
 
 procedure TGocciaGC.RemoveTempRoot(Value: TGocciaValue);
@@ -172,6 +172,8 @@ end;
 procedure TGocciaGC.MarkPhase;
 var
   I: Integer;
+  Value: TGocciaValue;
+  Scope: TGocciaScope;
 begin
   // Clear all marks
   for I := 0 to FManagedValues.Count - 1 do
@@ -180,20 +182,20 @@ begin
     FManagedScopes[I].GCMarked := False;
 
   // Mark pinned values (singletons - always reachable)
-  for I := 0 to FPinnedValues.Count - 1 do
-    FPinnedValues[I].GCMarkReferences;
+  for Value in FPinnedValues.Keys do
+    Value.GCMarkReferences;
 
   // Mark from root scopes (global scope etc.)
-  for I := 0 to FRootScopes.Count - 1 do
-    FRootScopes[I].GCMarkReferences;
+  for Scope in FRootScopes.Keys do
+    Scope.GCMarkReferences;
 
   // Mark from active scope stack (currently executing functions)
   for I := 0 to FActiveScopeStack.Count - 1 do
     FActiveScopeStack[I].GCMarkReferences;
 
   // Mark temporary roots (values held by Pascal code outside the scope chain)
-  for I := 0 to FTempRoots.Count - 1 do
-    FTempRoots[I].GCMarkReferences;
+  for Value in FTempRoots.Keys do
+    Value.GCMarkReferences;
 end;
 
 procedure TGocciaGC.SweepPhase;
