@@ -2296,13 +2296,11 @@ begin
   end
   else if (Value is TGocciaNullLiteralValue) or (Value is TGocciaUndefinedLiteralValue) then
   begin
-    // Throw TypeError for null/undefined destructuring
-    raise TGocciaError.Create('TypeError: Cannot destructure null or undefined', 0, 0, '', nil);
+    ThrowTypeError('Cannot destructure null or undefined');
   end
   else
   begin
-    // Throw TypeError for non-iterable values
-    raise TGocciaError.Create('TypeError: Value is not iterable', 0, 0, '', nil);
+    ThrowTypeError('Value is not iterable');
   end;
 end;
 
@@ -2321,9 +2319,9 @@ begin
   if not (Value is TGocciaObjectValue) then
   begin
     if (Value is TGocciaNullLiteralValue) or (Value is TGocciaUndefinedLiteralValue) then
-      raise TGocciaError.Create('TypeError: Cannot destructure null or undefined', 0, 0, '', nil)
+      ThrowTypeError('Cannot destructure null or undefined')
     else
-      raise TGocciaError.Create('TypeError: Cannot destructure non-object value', 0, 0, '', nil);
+      ThrowTypeError('Cannot destructure non-object value');
   end;
 
   ObjectValue := TGocciaObjectValue(Value);
