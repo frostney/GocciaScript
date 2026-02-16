@@ -270,6 +270,12 @@ begin
             Result := E.Value;
         end;
       end;
+      on E: TGocciaThrowValue do raise;
+      on E: TGocciaBreakSignal do raise;
+      on E: TGocciaTypeError do raise;
+      on E: TGocciaReferenceError do raise;
+      on E: TGocciaRuntimeError do raise;
+      on E: TGocciaError do raise;
       on E: Exception do
       begin
         Logger.Error('FunctionValue.Call: Caught unexpected exception: %s', [E.Message]);
