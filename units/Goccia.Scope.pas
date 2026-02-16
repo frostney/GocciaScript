@@ -23,7 +23,7 @@ type
     property IsAccessible: Boolean read CanAccess;
   end;
 
-  TGocciaScopeKind = (skUnknown, skGlobal, skFunction, skBlock, skCustom, skClass);
+  TGocciaScopeKind = (skUnknown, skGlobal, skFunction, skBlock, skCustom, skClass, skModule);
 
   TGocciaScope = class
   private

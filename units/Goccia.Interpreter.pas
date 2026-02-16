@@ -18,7 +18,6 @@ type
   private
     FGlobalScope: TGocciaScope;
     FModules: TDictionary<string, TGocciaModule>;
-    FCurrentModule: TGocciaModule;
     FFileName: string;
     FSourceLines: TStringList;
 
@@ -91,6 +90,7 @@ var
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
   Module: TGocciaModule;
+  ModuleScope: TGocciaScope;
   I: Integer;
   Stmt: TGocciaStatement;
   ExportDecl: TGocciaExportDeclaration;
@@ -118,12 +118,16 @@ begin
           Module.LastModified := FileDateToDateTime(FileAge(APath));
           FModules.Add(APath, Module);
 
-          // Execute module in its own scope
-          FCurrentModule := Module;
-          Context := CreateEvaluationContext;
-          Execute(ProgramNode);
+          // Execute module in its own isolated scope (child of global)
+          ModuleScope := FGlobalScope.CreateChild(skModule, 'Module:' + APath);
+          Context.Scope := ModuleScope;
+          Context.OnError := ThrowError;
+          Context.LoadModule := LoadModule;
 
-          // Process exports
+          for I := 0 to ProgramNode.Body.Count - 1 do
+            EvaluateStatement(ProgramNode.Body[I], Context);
+
+          // Process exports from the module scope (not global)
           for I := 0 to ProgramNode.Body.Count - 1 do
           begin
             Stmt := ProgramNode.Body[I];
@@ -132,14 +136,13 @@ begin
               ExportDecl := TGocciaExportDeclaration(Stmt);
               for ExportPair in ExportDecl.ExportsTable do
               begin
-                Value := FGlobalScope.GetValue(ExportPair.Value);
+                Value := ModuleScope.GetValue(ExportPair.Value);
                 if Assigned(Value) then
-                  Module.ExportsTable.Add(ExportPair.Key, Value);
+                  Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
               end;
             end;
           end;
 
-          FCurrentModule := nil;
           Result := Module;
         finally
           ProgramNode.Free;
