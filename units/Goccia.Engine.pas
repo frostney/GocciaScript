@@ -64,6 +64,7 @@ type
     FBuiltinTestAssertions: TGocciaTestAssertions;
     FBuiltinBenchmark: TGocciaBenchmark;
 
+    procedure PinSingletons;
     procedure RegisterBuiltIns;
     procedure RegisterConsole;
     procedure RegisterMath;
@@ -137,30 +138,7 @@ begin
   TGocciaGC.Instance.AddRoot(FInterpreter.GlobalScope);
 
   // Pin singleton values so the GC never collects them
-  if Assigned(TGocciaUndefinedLiteralValue.UndefinedValue) then
-    TGocciaGC.Instance.PinValue(TGocciaUndefinedLiteralValue.UndefinedValue);
-  if Assigned(TGocciaBooleanLiteralValue.TrueValue) then
-    TGocciaGC.Instance.PinValue(TGocciaBooleanLiteralValue.TrueValue);
-  if Assigned(TGocciaBooleanLiteralValue.FalseValue) then
-    TGocciaGC.Instance.PinValue(TGocciaBooleanLiteralValue.FalseValue);
-  if Assigned(TGocciaNumberLiteralValue.NaNValue) then
-    TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.NaNValue);
-  if Assigned(TGocciaNumberLiteralValue.ZeroValue) then
-    TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.ZeroValue);
-  if Assigned(TGocciaNumberLiteralValue.OneValue) then
-    TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.OneValue);
-  if Assigned(TGocciaNumberLiteralValue.NegativeZeroValue) then
-    TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.NegativeZeroValue);
-  if Assigned(TGocciaNumberLiteralValue.InfinityValue) then
-    TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.InfinityValue);
-  if Assigned(TGocciaNumberLiteralValue.NegativeInfinityValue) then
-    TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.NegativeInfinityValue);
-  // Pin SmallInt cache values
-  for I := 0 to 255 do
-  begin
-    if Assigned(TGocciaNumberLiteralValue.SmallInt(I)) then
-      TGocciaGC.Instance.PinValue(TGocciaNumberLiteralValue.SmallInt(I));
-  end;
+  PinSingletons;
 
   // Register built-ins based on the globals set
   RegisterBuiltIns;
@@ -174,34 +152,45 @@ begin
 
   // Free builtin wrapper objects (these are NOT GC-managed, but their
   // FBuiltinObject fields ARE - the wrapper destructors skip freeing them)
-  if Assigned(FBuiltinConsole) then
-    FBuiltinConsole.Free;
-  if Assigned(FBuiltinMath) then
-    FBuiltinMath.Free;
-  if Assigned(FBuiltinGlobalObject) then
-    FBuiltinGlobalObject.Free;
-  if Assigned(FBuiltinGlobalArray) then
-    FBuiltinGlobalArray.Free;
-  if Assigned(FBuiltinGlobalNumber) then
-    FBuiltinGlobalNumber.Free;
-  if Assigned(FBuiltinGlobals) then
-    FBuiltinGlobals.Free;
-  if Assigned(FBuiltinJSON) then
-    FBuiltinJSON.Free;
-  if Assigned(FBuiltinSymbol) then
-    FBuiltinSymbol.Free;
-  if Assigned(FBuiltinSet) then
-    FBuiltinSet.Free;
-  if Assigned(FBuiltinMap) then
-    FBuiltinMap.Free;
-  if Assigned(FBuiltinTestAssertions) then
-    FBuiltinTestAssertions.Free;
-  if Assigned(FBuiltinBenchmark) then
-    FBuiltinBenchmark.Free;
+  FBuiltinConsole.Free;
+  FBuiltinMath.Free;
+  FBuiltinGlobalObject.Free;
+  FBuiltinGlobalArray.Free;
+  FBuiltinGlobalNumber.Free;
+  FBuiltinGlobals.Free;
+  FBuiltinJSON.Free;
+  FBuiltinSymbol.Free;
+  FBuiltinSet.Free;
+  FBuiltinMap.Free;
+  FBuiltinTestAssertions.Free;
+  FBuiltinBenchmark.Free;
 
   // Free interpreter after builtins
   FInterpreter.Free;
   inherited;
+end;
+
+procedure PinIfAssigned(Value: TGocciaValue); inline;
+begin
+  if Assigned(Value) then
+    TGocciaGC.Instance.PinValue(Value);
+end;
+
+procedure TGocciaEngine.PinSingletons;
+var
+  I: Integer;
+begin
+  PinIfAssigned(TGocciaUndefinedLiteralValue.UndefinedValue);
+  PinIfAssigned(TGocciaBooleanLiteralValue.TrueValue);
+  PinIfAssigned(TGocciaBooleanLiteralValue.FalseValue);
+  PinIfAssigned(TGocciaNumberLiteralValue.NaNValue);
+  PinIfAssigned(TGocciaNumberLiteralValue.ZeroValue);
+  PinIfAssigned(TGocciaNumberLiteralValue.OneValue);
+  PinIfAssigned(TGocciaNumberLiteralValue.NegativeZeroValue);
+  PinIfAssigned(TGocciaNumberLiteralValue.InfinityValue);
+  PinIfAssigned(TGocciaNumberLiteralValue.NegativeInfinityValue);
+  for I := 0 to 255 do
+    PinIfAssigned(TGocciaNumberLiteralValue.SmallInt(I));
 end;
 
 procedure TGocciaEngine.RegisterBuiltIns;
