@@ -19,7 +19,9 @@ type
   TGocciaStringObjectValue = class(TGocciaObjectValue)
   private
     FPrimitive: TGocciaStringLiteralValue;
-    FStringPrototype: TGocciaObjectValue;
+
+    class var FSharedStringPrototype: TGocciaObjectValue;
+    class var FPrototypeMethodHost: TGocciaStringObjectValue;
 
     function ExtractStringValue(Value: TGocciaValue): string;
   public
@@ -29,7 +31,6 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
 
     procedure InitializePrototype;
-    property StringPrototype: TGocciaObjectValue read FStringPrototype write FStringPrototype;
     procedure GCMarkReferences; override;
     property Primitive: TGocciaStringLiteralValue read FPrimitive;
 
@@ -65,7 +66,8 @@ implementation
 uses
   Goccia.Values.ClassHelper,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.GarbageCollector;
 
 { TGocciaStringObjectValue }
 
@@ -84,12 +86,10 @@ begin
   inherited Create;
   FPrimitive := APrimitive;
 
-// TODO: We are not using a shared prototype but re-creating this for every instance
   InitializePrototype;
 
-  // Set prototype to shared String.prototype
-  if Assigned(FStringPrototype) then
-    Self.Prototype := FStringPrototype;
+  if Assigned(FSharedStringPrototype) then
+    Self.Prototype := FSharedStringPrototype;
 end;
 
 destructor TGocciaStringObjectValue.Destroy;
@@ -104,8 +104,6 @@ begin
   inherited;
   if Assigned(FPrimitive) then
     FPrimitive.GCMarkReferences;
-  if Assigned(FStringPrototype) then
-    FStringPrototype.GCMarkReferences;
 end;
 
 function TGocciaStringObjectValue.TypeName: string;
@@ -124,15 +122,16 @@ begin
   if TryStrToInt(AName, Index) then
   begin
     if (Index >= 0) and (Index < Length(StringValue)) then
-      Result := TGocciaStringLiteralValue.Create(StringValue[Index + 1]) // Pascal is 1-indexed
+      Result := TGocciaStringLiteralValue.Create(StringValue[Index + 1])
     else
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 
-  // Look up in prototype chain
-  // First check prototype's own properties with this object as context
-  if Assigned(FPrototype) then
+  // Look up in shared prototype with this object as context
+  if Assigned(FSharedStringPrototype) then
+    Result := FSharedStringPrototype.GetPropertyWithContext(AName, Self)
+  else if Assigned(FPrototype) then
     Result := FPrototype.GetPropertyWithContext(AName, Self)
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -140,35 +139,40 @@ end;
 
 procedure TGocciaStringObjectValue.InitializePrototype;
 begin
-  if not Assigned(FStringPrototype) then
+  if Assigned(FSharedStringPrototype) then Exit;
+
+  FSharedStringPrototype := TGocciaObjectValue.Create;
+  FPrototypeMethodHost := Self;
+
+  FSharedStringPrototype.DefineProperty('length', TGocciaPropertyDescriptorAccessor.Create(TGocciaNativeFunctionValue.Create(StringLength, 'length', 0), nil, []));
+
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringCharAt, 'charAt', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringCharCodeAt, 'charCodeAt', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToUpperCase, 'toUpperCase', 0));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToLowerCase, 'toLowerCase', 0));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringSlice, 'slice', 2));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringSubstring, 'substring', 2));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringIndexOf, 'indexOf', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringLastIndexOf, 'lastIndexOf', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringIncludes, 'includes', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringStartsWith, 'startsWith', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringEndsWith, 'endsWith', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringTrim, 'trim', 0));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringTrimStart, 'trimStart', 0));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringTrimEnd, 'trimEnd', 0));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringReplaceMethod, 'replace', 2));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringReplaceAllMethod, 'replaceAll', 2));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringSplit, 'split', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringRepeat, 'repeat', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringPadStart, 'padStart', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringPadEnd, 'padEnd', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringConcat, 'concat', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringAt, 'at', 1));
+
+  if Assigned(TGocciaGC.Instance) then
   begin
-    FStringPrototype := TGocciaObjectValue.Create;
-
-    FStringPrototype.DefineProperty('length', TGocciaPropertyDescriptorAccessor.Create(TGocciaNativeFunctionValue.Create(StringLength, 'length', 0), nil, []));
-
-    // String prototype methods: writable, non-enumerable, configurable
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringCharAt, 'charAt', 1));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringCharCodeAt, 'charCodeAt', 1));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToUpperCase, 'toUpperCase', 0));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToLowerCase, 'toLowerCase', 0));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringSlice, 'slice', 2));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringSubstring, 'substring', 2));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringIndexOf, 'indexOf', 1));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringLastIndexOf, 'lastIndexOf', 1));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringIncludes, 'includes', 1));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringStartsWith, 'startsWith', 1));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringEndsWith, 'endsWith', 1));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringTrim, 'trim', 0));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringTrimStart, 'trimStart', 0));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringTrimEnd, 'trimEnd', 0));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringReplaceMethod, 'replace', 2));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringReplaceAllMethod, 'replaceAll', 2));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringSplit, 'split', 1));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringRepeat, 'repeat', 1));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringPadStart, 'padStart', 1));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringPadEnd, 'padEnd', 1));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringConcat, 'concat', 1));
-    FStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringAt, 'at', 1));
+    TGocciaGC.Instance.PinValue(FSharedStringPrototype);
+    TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
   end;
 end;
 
