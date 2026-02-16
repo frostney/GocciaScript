@@ -35,32 +35,41 @@ begin
   end;
 end;
 
+procedure RunScripts(const Path: string);
 var
   Files: TStringList;
-  ScriptResult: TGocciaValue;
   I: Integer;
+begin
+  if DirectoryExists(Path) then
+  begin
+    Files := FindAllFiles(Path, '.js');
+    try
+      for I := 0 to Files.Count - 1 do
+      begin
+        if I > 0 then WriteLn;
+        RunScriptFromFile(Files[I]);
+      end;
+    finally
+      Files.Free;
+    end;
+  end
+  else if FileExists(Path) then
+    RunScriptFromFile(Path)
+  else
+  begin
+    WriteLn('Error: Path not found: ', Path);
+    ExitCode := 1;
+  end;
+end;
 
 begin
   if ParamCount < 1 then
   begin
-    WriteLn('Usage: GocciaScript <filename.js>');
+    WriteLn('Usage: ScriptLoader <filename.js>');
     WriteLn('or');
-    WriteLn('Usage: GocciaScript <directory>');
+    WriteLn('Usage: ScriptLoader <directory>');
     ExitCode := 1;
   end
   else
-  begin
-    if DirectoryExists(ParamStr(1)) then
-    begin
-      Files := FindAllFiles(ParamStr(1), '.js');
-      for I := 0 to Files.Count - 1 do
-      begin
-        RunScriptFromFile(Files[I]);
-      end;
-    end
-    else
-    begin
-      RunScriptFromFile(ParamStr(1));
-    end;
-  end;
+    RunScripts(ParamStr(1));
 end.
