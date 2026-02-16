@@ -10,6 +10,11 @@ uses
   Goccia.Values.Primitives,
   Goccia.Token, Goccia.Interfaces, Goccia.Error.ThrowErrorCallback, SysUtils, Math, Goccia.Evaluator.Arithmetic;
 
+// Unified property access helpers
+function GetPropertyFromValue(Obj: TGocciaValue; const PropName: string): TGocciaValue;
+procedure SetPropertyOnValue(Obj: TGocciaValue; const PropName: string; Value: TGocciaValue);
+procedure DefinePropertyOnValue(Obj: TGocciaValue; const PropName: string; Value: TGocciaValue);
+
 // Property assignment operations
 procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
 procedure AssignComputedProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
@@ -24,32 +29,58 @@ implementation
 
 uses Goccia.Values.ClassHelper, Goccia.Values.ErrorHelper;
 
+function GetPropertyFromValue(Obj: TGocciaValue; const PropName: string): TGocciaValue;
+begin
+  if (Obj is TGocciaInstanceValue) then
+    Result := TGocciaInstanceValue(Obj).GetProperty(PropName)
+  else if (Obj is TGocciaArrayValue) then
+    Result := TGocciaArrayValue(Obj).GetProperty(PropName)
+  else if (Obj is TGocciaClassValue) then
+    Result := TGocciaClassValue(Obj).GetProperty(PropName)
+  else if (Obj is TGocciaObjectValue) then
+    Result := TGocciaObjectValue(Obj).GetProperty(PropName)
+  else
+    Result := nil;
+end;
+
+procedure SetPropertyOnValue(Obj: TGocciaValue; const PropName: string; Value: TGocciaValue);
+begin
+  if (Obj is TGocciaInstanceValue) then
+    TGocciaInstanceValue(Obj).AssignProperty(PropName, Value)
+  else if (Obj is TGocciaArrayValue) then
+    TGocciaArrayValue(Obj).SetProperty(PropName, Value)
+  else if (Obj is TGocciaObjectValue) then
+    TGocciaObjectValue(Obj).AssignProperty(PropName, Value)
+  else if (Obj is TGocciaClassValue) then
+    TGocciaClassValue(Obj).SetProperty(PropName, Value);
+end;
+
+procedure DefinePropertyOnValue(Obj: TGocciaValue; const PropName: string; Value: TGocciaValue);
+begin
+  if (Obj is TGocciaInstanceValue) then
+    TGocciaInstanceValue(Obj).DefineProperty(PropName,
+      TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]))
+  else if (Obj is TGocciaObjectValue) then
+    TGocciaObjectValue(Obj).DefineProperty(PropName,
+      TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]))
+  else if (Obj is TGocciaClassValue) then
+    TGocciaClassValue(Obj).SetProperty(PropName, Value);
+end;
+
 procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
 begin
-  // Handle different object types for property assignment
-  // Direct property assignment (obj.prop = value) should call the object's AssignProperty method
-  // which handles setters correctly
-  if (Obj is TGocciaInstanceValue) then
-    TGocciaInstanceValue(Obj).AssignProperty(PropertyName, Value)
-  else if (Obj is TGocciaObjectValue) then
-    TGocciaObjectValue(Obj).AssignProperty(PropertyName, Value)
-  else if (Obj is TGocciaClassValue) then
-    TGocciaClassValue(Obj).SetProperty(PropertyName, Value)
+  if (Obj is TGocciaInstanceValue) or (Obj is TGocciaObjectValue) or
+     (Obj is TGocciaClassValue) or (Obj is TGocciaArrayValue) then
+    SetPropertyOnValue(Obj, PropertyName, Value)
   else if Assigned(OnError) then
     ThrowTypeError('Cannot set property on non-object');
 end;
 
 procedure AssignComputedProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
 begin
-  // Handle different object types for computed property assignment
-  if (Obj is TGocciaArrayValue) then
-    TGocciaArrayValue(Obj).SetProperty(PropertyName, Value)
-  else if (Obj is TGocciaInstanceValue) then
-    TGocciaInstanceValue(Obj).AssignProperty(PropertyName, Value)
-  else if (Obj is TGocciaObjectValue) then
-    TGocciaObjectValue(Obj).AssignProperty(PropertyName, Value)
-  else if (Obj is TGocciaClassValue) then
-    TGocciaClassValue(Obj).SetProperty(PropertyName, Value)
+  if (Obj is TGocciaInstanceValue) or (Obj is TGocciaObjectValue) or
+     (Obj is TGocciaClassValue) or (Obj is TGocciaArrayValue) then
+    SetPropertyOnValue(Obj, PropertyName, Value)
   else if Assigned(OnError) then
     ThrowTypeError('Cannot set property on non-object');
 end;
@@ -58,34 +89,16 @@ procedure PerformPropertyCompoundAssignment(Obj: TGocciaValue; const PropertyNam
 var
   CurrentValue, NewValue: TGocciaValue;
 begin
-  // Get current property value
-  if (Obj is TGocciaInstanceValue) then
-    CurrentValue := TGocciaInstanceValue(Obj).GetProperty(PropertyName)
-  else if (Obj is TGocciaArrayValue) then
-    CurrentValue := TGocciaArrayValue(Obj).GetProperty(PropertyName)
-  else if (Obj is TGocciaObjectValue) then
-    CurrentValue := TGocciaObjectValue(Obj).GetProperty(PropertyName)
-  else if (Obj is TGocciaClassValue) then
-    CurrentValue := TGocciaClassValue(Obj).GetProperty(PropertyName)
-  else
+  CurrentValue := GetPropertyFromValue(Obj, PropertyName);
+  if CurrentValue = nil then
   begin
     if Assigned(OnError) then
       OnError('Cannot access property on non-object', Line, Column);
     Exit;
   end;
 
-  // Perform compound operation
   NewValue := PerformCompoundOperation(CurrentValue, Value, Operator);
-
-  // Set the new value (use AssignProperty to handle setters correctly)
-  if (Obj is TGocciaInstanceValue) then
-    TGocciaInstanceValue(Obj).AssignProperty(PropertyName, NewValue)
-  else if (Obj is TGocciaArrayValue) then
-    TGocciaArrayValue(Obj).SetProperty(PropertyName, NewValue)
-  else if (Obj is TGocciaObjectValue) then
-    TGocciaObjectValue(Obj).AssignProperty(PropertyName, NewValue)
-  else if (Obj is TGocciaClassValue) then
-    TGocciaClassValue(Obj).SetProperty(PropertyName, NewValue);
+  SetPropertyOnValue(Obj, PropertyName, NewValue);
 end;
 
 function PerformIncrement(OldValue: TGocciaValue; IsIncrement: Boolean): TGocciaValue;

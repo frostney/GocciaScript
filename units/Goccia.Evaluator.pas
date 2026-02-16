@@ -180,15 +180,8 @@ begin
     PerformPropertyCompoundAssignment(Obj, PropName, Value, TGocciaPropertyCompoundAssignmentExpression(Expression).Operator, Context.OnError, Expression.Line, Expression.Column);
 
     // Get the final result
-    if (Obj is TGocciaInstanceValue) then
-      Result := TGocciaInstanceValue(Obj).GetProperty(PropName)
-    else if (Obj is TGocciaObjectValue) then
-      Result := TGocciaObjectValue(Obj).GetProperty(PropName)
-    else if (Obj is TGocciaClassValue) then
-      Result := TGocciaClassValue(Obj).GetProperty(PropName)
-    else if (Obj is TGocciaArrayValue) then
-      Result := TGocciaArrayValue(Obj).GetProperty(PropName)
-    else
+    Result := GetPropertyFromValue(Obj, PropName);
+    if Result = nil then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else if Expression is TGocciaComputedPropertyCompoundAssignmentExpression then
@@ -200,15 +193,8 @@ begin
     PerformPropertyCompoundAssignment(Obj, PropName, Value, TGocciaComputedPropertyCompoundAssignmentExpression(Expression).Operator, Context.OnError, Expression.Line, Expression.Column);
 
     // Get the final result
-    if (Obj is TGocciaArrayValue) then
-      Result := TGocciaArrayValue(Obj).GetProperty(PropName)
-    else if (Obj is TGocciaInstanceValue) then
-      Result := TGocciaInstanceValue(Obj).GetProperty(PropName)
-    else if (Obj is TGocciaObjectValue) then
-      Result := TGocciaObjectValue(Obj).GetProperty(PropName)
-    else if (Obj is TGocciaClassValue) then
-      Result := TGocciaClassValue(Obj).GetProperty(PropName)
-    else
+    Result := GetPropertyFromValue(Obj, PropName);
+    if Result = nil then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else if Expression is TGocciaIncrementExpression then
@@ -239,13 +225,8 @@ begin
       PropName := TGocciaMemberExpression(TGocciaIncrementExpression(Expression).Operand).PropertyName;
 
       // Get current property value
-      if (Obj is TGocciaInstanceValue) then
-        OldValue := TGocciaInstanceValue(Obj).GetProperty(PropName)
-      else if (Obj is TGocciaObjectValue) then
-        OldValue := TGocciaObjectValue(Obj).GetProperty(PropName)
-      else if (Obj is TGocciaClassValue) then
-        OldValue := TGocciaClassValue(Obj).GetProperty(PropName)
-      else
+      OldValue := GetPropertyFromValue(Obj, PropName);
+      if OldValue = nil then
       begin
         Context.OnError('Cannot access property on non-object', Expression.Line, Expression.Column);
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -256,14 +237,7 @@ begin
       Value := PerformIncrement(OldValue, TGocciaIncrementExpression(Expression).Operator = gttIncrement);
 
       // Set the new value (create property if it doesn't exist, like JavaScript)
-      if (Obj is TGocciaInstanceValue) then
-        TGocciaInstanceValue(Obj).DefineProperty(PropName,
-          TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]))
-      else if (Obj is TGocciaObjectValue) then
-        TGocciaObjectValue(Obj).DefineProperty(PropName,
-          TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]))
-      else if (Obj is TGocciaClassValue) then
-        TGocciaClassValue(Obj).SetProperty(PropName, Value);
+      DefinePropertyOnValue(Obj, PropName, Value);
 
       // Return value depends on prefix/postfix
       if TGocciaIncrementExpression(Expression).IsPrefix then
@@ -894,19 +868,8 @@ begin
     PropertyName := MemberExpression.PropertyName;
   end;
 
-  if Obj is TGocciaArrayValue then
-  begin
-    Result := TGocciaArrayValue(Obj).GetProperty(PropertyName);
-  end
-  else if Obj is TGocciaClassValue then
-  begin
-    Result := TGocciaClassValue(Obj).GetProperty(PropertyName);
-  end
-  else if Obj is TGocciaObjectValue then
-  begin
-    Result := TGocciaObjectValue(Obj).GetProperty(PropertyName);
-  end
-  else
+  Result := GetPropertyFromValue(Obj, PropertyName);
+  if Result = nil then
   begin
     // Handle primitive boxing for property access
     BoxedValue := Obj.Box;
@@ -916,7 +879,6 @@ begin
     end
     else if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
     begin
-      // null/undefined property access should throw
       Context.OnError('Cannot read property ''' + PropertyName + ''' of ' + Obj.ToStringLiteral.Value,
         MemberExpression.Line, MemberExpression.Column);
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1021,34 +983,17 @@ begin
     PropertyName := MemberExpression.PropertyName;
   end;
 
-  if ObjectValue is TGocciaArrayValue then
-  begin
-    Result := TGocciaArrayValue(ObjectValue).GetProperty(PropertyName);
-  end
-  else if ObjectValue is TGocciaClassValue then
-  begin
-    Result := TGocciaClassValue(ObjectValue).GetProperty(PropertyName);
-  end
-  else if ObjectValue is TGocciaInstanceValue then
-  begin
-    Result := TGocciaInstanceValue(ObjectValue).GetProperty(PropertyName);
-  end
-  else if ObjectValue is TGocciaObjectValue then
-  begin
-    Result := TGocciaObjectValue(ObjectValue).GetProperty(PropertyName);
-  end
-  else
+  Result := GetPropertyFromValue(ObjectValue, PropertyName);
+  if Result = nil then
   begin
     // Handle primitive boxing for property access
     BoxedValue := ObjectValue.Box;
     if Assigned(BoxedValue) then
     begin
       Result := BoxedValue.GetProperty(PropertyName);
-      // Note: ObjectValue remains the original primitive for 'this' binding
     end
     else if (ObjectValue is TGocciaNullLiteralValue) or (ObjectValue is TGocciaUndefinedLiteralValue) then
     begin
-      // null/undefined property access should throw
       Context.OnError('Cannot read property ''' + PropertyName + ''' of ' + ObjectValue.ToStringLiteral.Value,
         MemberExpression.Line, MemberExpression.Column);
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
