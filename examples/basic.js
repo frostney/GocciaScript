@@ -76,11 +76,11 @@ console.log("Math.random() =", Math.random());
 // Global constants and functions
 console.log("NaN =", NaN);
 console.log("Infinity =", Infinity);
-console.log("isNaN(NaN) =", isNaN(NaN));
-console.log("isFinite(Infinity) =", isFinite(Infinity));
-console.log("isFinite(10) =", isFinite(10));
-console.log("parseFloat('3.14') =", parseFloat("3.14"));
-console.log("parseInt('10') =", parseInt("10"));
+console.log("Number.isNaN(NaN) =", Number.isNaN(NaN));
+console.log("Number.isFinite(Infinity) =", Number.isFinite(Infinity));
+console.log("Number.isFinite(10) =", Number.isFinite(10));
+console.log("Number.parseFloat('3.14') =", Number.parseFloat("3.14"));
+console.log("Number.parseInt('10') =", Number.parseInt("10"));
 
 // Global objects
 console.log("Array.isArray([1, 2, 3]) =", Array.isArray([1, 2, 3]));
