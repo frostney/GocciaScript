@@ -65,7 +65,7 @@ type
 implementation
 
 uses
-  Goccia.Values.NativeFunction, Goccia.GarbageCollector;
+  Goccia.Values.NativeFunction, Goccia.GarbageCollector, Goccia.Values.ArrayValue;
 
 { TGocciaFunctionBase }
 
@@ -173,17 +173,14 @@ var
   CallArgs: TGocciaArgumentsCollection;
   NewThisValue: TGocciaValue;
   I: Integer;
+  ArrVal: TGocciaArrayValue;
   ArrayObj: TGocciaObjectValue;
   LengthProp: TGocciaValue;
   ArrayLength: Integer;
 begin
-  // Function.prototype.apply(thisArg, argsArray)
-  // ThisValue is the function being called
-
   if not (ThisValue is TGocciaFunctionBase) then
     raise TGocciaError.Create('Function.prototype.apply called on non-function', 0, 0, '', nil);
 
-  // First argument is the 'this' value for the call
   if Args.Length > 0 then
     NewThisValue := Args.GetElement(0)
   else
@@ -191,11 +188,17 @@ begin
 
   CallArgs := TGocciaArgumentsCollection.Create;
   try
-    // Second argument should be an array of arguments
     if Args.Length > 1 then
     begin
-      // Check if it's array-like (has length property and numeric indices)
-      if Args.GetElement(1) is TGocciaObjectValue then
+      // Fast path: direct element access for TGocciaArrayValue
+      if Args.GetElement(1) is TGocciaArrayValue then
+      begin
+        ArrVal := TGocciaArrayValue(Args.GetElement(1));
+        for I := 0 to ArrVal.Elements.Count - 1 do
+          CallArgs.Add(ArrVal.Elements[I]);
+      end
+      // Generic path: array-like objects with length + numeric indices
+      else if Args.GetElement(1) is TGocciaObjectValue then
       begin
         ArrayObj := TGocciaObjectValue(Args.GetElement(1));
         LengthProp := ArrayObj.GetProperty('length');
@@ -203,19 +206,15 @@ begin
         begin
           ArrayLength := Trunc((LengthProp as TGocciaNumberLiteralValue).Value);
           for I := 0 to ArrayLength - 1 do
-          begin
             CallArgs.Add(ArrayObj.GetProperty(IntToStr(I)));
-          end;
         end;
       end
       else if not (Args.GetElement(1) is TGocciaUndefinedLiteralValue) and not (Args.GetElement(1) is TGocciaNullLiteralValue) then
       begin
         raise TGocciaError.Create('Function.prototype.apply: second argument must be an array', 0, 0, '', nil);
       end;
-      // null and undefined are treated as no arguments
     end;
 
-    // Call the function directly since we know it's a TGocciaFunctionBase
     Result := TGocciaFunctionBase(ThisValue).Call(CallArgs, NewThisValue);
   finally
     CallArgs.Free;
