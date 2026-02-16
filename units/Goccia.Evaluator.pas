@@ -63,10 +63,6 @@ function IsObjectInstanceOfClass(Obj: TGocciaObjectValue; ClassValue: TGocciaCla
 // Helper function to safely call OnError with proper error handling
 procedure SafeOnError(Context: TGocciaEvaluationContext; const Message: string; Line, Column: Integer);
 
-var
-  // Global evaluation context for error handling inheritance
-  GlobalEvaluationContext: TGocciaEvaluationContext;
-
 implementation
 
   uses
@@ -83,12 +79,9 @@ end;
 
 function Evaluate(Node: TGocciaASTNode; Context: TGocciaEvaluationContext): TGocciaValue;
 begin
-  // Set global context for function calls to inherit error handling
-  if Assigned(Context.OnError) then
-  begin
-    GlobalEvaluationContext.OnError := Context.OnError;
-    GlobalEvaluationContext.LoadModule := Context.LoadModule;
-  end;
+  // Propagate OnError onto the scope so closures inherit it
+  if Assigned(Context.OnError) and not Assigned(Context.Scope.OnError) then
+    Context.Scope.OnError := Context.OnError;
 
   if Node is TGocciaExpression then
   begin

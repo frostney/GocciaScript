@@ -810,12 +810,8 @@ begin
   try
     // Set up evaluation context with an OnError handler that throws exceptions
     TestContext.Scope := TestScope;
-    TestContext.OnError := FTestAssertions.ThrowError;  // Use the test framework's ThrowError
+    TestContext.OnError := FTestAssertions.ThrowError;
     TestContext.LoadModule := nil;
-
-    // Set the global context so nested function calls inherit proper error handling
-    GlobalEvaluationContext.OnError := TestContext.OnError;
-    GlobalEvaluationContext.LoadModule := TestContext.LoadModule;
 
     try
       // Execute all function body statements with proper context

@@ -113,19 +113,10 @@ begin
   if Assigned(TGocciaGC.Instance) then
     TGocciaGC.Instance.PushActiveScope(CallScope);
   try
-    // Set up evaluation context for default parameter evaluation
+    // Set up evaluation context — inherit OnError from the closure scope
     Context.Scope := FClosure;
-    // Use global context as fallback for OnError when not explicitly provided
-    if Assigned(GlobalEvaluationContext.OnError) then
-    begin
-      Context.OnError := GlobalEvaluationContext.OnError;
-      Context.LoadModule := GlobalEvaluationContext.LoadModule;
-    end
-    else
-    begin
-      Context.OnError := nil;
-      Context.LoadModule := nil;
-    end;
+    Context.OnError := FClosure.OnError;
+    Context.LoadModule := nil;
 
     // Set up the call scope
     // Arrow functions: if called as a method (ThisValue is provided), use the call-site this.

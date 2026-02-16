@@ -5,7 +5,7 @@ unit Goccia.Scope;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ObjectValue, Goccia.Error, Generics.Collections, SysUtils, TypInfo, Goccia.Interfaces, Goccia.Token;
+  Goccia.Values.Primitives, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ObjectValue, Goccia.Error, Goccia.Error.ThrowErrorCallback, Generics.Collections, SysUtils, TypInfo, Goccia.Interfaces, Goccia.Token;
 
 type
   TGocciaDeclarationType = (dtUnknown, dtLet, dtConst, dtParameter);
@@ -33,6 +33,7 @@ type
     FScopeKind: TGocciaScopeKind;
     FCustomLabel: string;
     FGCMarked: Boolean;
+    FOnError: TGocciaThrowErrorCallback;
   public
     constructor Create(AParent: TGocciaScope = nil; AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0);
     destructor Destroy; override;
@@ -64,6 +65,7 @@ type
     function GetThisProperty(const AName: string): TGocciaValue;
     property ScopeKind: TGocciaScopeKind read FScopeKind;
     property CustomLabel: string read FCustomLabel;
+    property OnError: TGocciaThrowErrorCallback read FOnError write FOnError;
   end;
 
   // Specialized scope for try-catch blocks with proper assignment propagation
@@ -122,6 +124,10 @@ begin
     FLexicalBindings := TDictionary<string, TLexicalBinding>.Create(ACapacity)
   else
     FLexicalBindings := TDictionary<string, TLexicalBinding>.Create;
+
+  // Inherit interpreter context from parent scope
+  if Assigned(AParent) then
+    FOnError := AParent.FOnError;
 
   if Assigned(TGocciaGC.Instance) then
     TGocciaGC.Instance.RegisterScope(Self);
