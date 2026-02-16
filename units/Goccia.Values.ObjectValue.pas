@@ -151,50 +151,56 @@ end;
 
 function TGocciaObjectValue.ToDebugString: string;
 var
+  SB: TStringBuilder;
   Pair: TPair<string, TGocciaPropertyDescriptor>;
   First: Boolean;
   Value: TGocciaValue;
 begin
-  Result := '{';
-  First := True;
+  SB := TStringBuilder.Create;
+  try
+    SB.Append('{');
+    First := True;
 
-  // Iterate through property descriptors
-  for Pair in FPropertyDescriptors do
-  begin
-    if not First then
-      Result := Result + ', ';
-
-    // Get the value from the descriptor
-    if Pair.Value is TGocciaPropertyDescriptorData then
-      Value := TGocciaPropertyDescriptorData(Pair.Value).Value
-    else if Pair.Value is TGocciaPropertyDescriptorAccessor then
-      Value := nil // Accessor descriptors don't have direct values
-    else
-      Value := nil;
-
-    if Assigned(Value) then
+    // Iterate through property descriptors
+    for Pair in FPropertyDescriptors do
     begin
-      if Value is TGocciaObjectValue then
-        Result := Result + Pair.Key + ': ' + TGocciaObjectValue(Value).ToDebugString
+      if not First then
+        SB.Append(', ');
+
+      // Get the value from the descriptor
+      if Pair.Value is TGocciaPropertyDescriptorData then
+        Value := TGocciaPropertyDescriptorData(Pair.Value).Value
+      else if Pair.Value is TGocciaPropertyDescriptorAccessor then
+        Value := nil
       else
-        Result := Result + Pair.Key + ': ' + Value.ToStringLiteral.Value;
-    end
-    else
-      Result := Result + Pair.Key + ': [accessor]';
+        Value := nil;
 
-    First := False;
+      if Assigned(Value) then
+      begin
+        if Value is TGocciaObjectValue then
+          SB.Append(Pair.Key).Append(': ').Append(TGocciaObjectValue(Value).ToDebugString)
+        else
+          SB.Append(Pair.Key).Append(': ').Append(Value.ToStringLiteral.Value);
+      end
+      else
+        SB.Append(Pair.Key).Append(': [accessor]');
+
+      First := False;
+    end;
+
+    if Assigned(FPrototype) then
+    begin
+      if not First then
+        SB.Append(', ');
+
+      SB.Append('[[Prototype]]: ').Append(FPrototype.ToDebugString);
+    end;
+
+    SB.Append('}');
+    Result := SB.ToString;
+  finally
+    SB.Free;
   end;
-
-  if Assigned(FPrototype) then
-  begin
-    if not First then
-      Result := Result + ', ';
-
-    Result := Result + '[[Prototype]]: ' + FPrototype.ToDebugString;
-    First := False;
-  end;
-
-  Result := Result + '}';
 end;
 
 function TGocciaObjectValue.TypeName: string;

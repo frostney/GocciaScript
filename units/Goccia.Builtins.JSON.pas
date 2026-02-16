@@ -462,88 +462,100 @@ end;
 
 function TGocciaJSON.StringifyObject(Obj: TGocciaObjectValue; Indent: Integer): string;
 var
+  SB: TStringBuilder;
   Key: string;
   Value: TGocciaValue;
-  Parts: string;
   HasProperties: Boolean;
 begin
-  Parts := '';
-  HasProperties := False;
+  SB := TStringBuilder.Create;
+  try
+    HasProperties := False;
 
-  for Key in Obj.GetEnumerablePropertyNames do
-  begin
-    Value := Obj.GetProperty(Key);
-
-    // Skip undefined properties and functions
-    if not (Value is TGocciaUndefinedLiteralValue) and
-       (not (Value is TGocciaFunctionValue) or (Pos('Function', Value.ClassName) = 0)) then
+    for Key in Obj.GetEnumerablePropertyNames do
     begin
-      if HasProperties then
-        Parts := Parts + ',';
-      Parts := Parts + '"' + EscapeJsonString(Key) + '":' + StringifyValue(Value, Indent + 1);
-      HasProperties := True;
-    end;
-  end;
+      Value := Obj.GetProperty(Key);
 
-  if not HasProperties then
-    Result := '{}'
-  else
-    Result := '{' + Parts + '}';
+      // Skip undefined properties and functions
+      if not (Value is TGocciaUndefinedLiteralValue) and
+         (not (Value is TGocciaFunctionValue) or (Pos('Function', Value.ClassName) = 0)) then
+      begin
+        if HasProperties then
+          SB.Append(',');
+        SB.Append('"').Append(EscapeJsonString(Key)).Append('":').Append(StringifyValue(Value, Indent + 1));
+        HasProperties := True;
+      end;
+    end;
+
+    if not HasProperties then
+      Result := '{}'
+    else
+      Result := '{' + SB.ToString + '}';
+  finally
+    SB.Free;
+  end;
 end;
 
 function TGocciaJSON.StringifyArray(Arr: TGocciaArrayValue; Indent: Integer): string;
 var
+  SB: TStringBuilder;
   I: Integer;
-  Parts: string;
 begin
-  Parts := '';
-  for I := 0 to Arr.Elements.Count - 1 do
+  if Arr.Elements.Count = 0 then
   begin
-    if I > 0 then
-      Parts := Parts + ',';
-    Parts := Parts + StringifyValue(Arr.Elements[I], Indent + 1);
+    Result := '[]';
+    Exit;
   end;
 
-  if Parts = '' then
-    Result := '[]'
-  else
-    Result := '[' + Parts + ']';
+  SB := TStringBuilder.Create;
+  try
+    for I := 0 to Arr.Elements.Count - 1 do
+    begin
+      if I > 0 then
+        SB.Append(',');
+      SB.Append(StringifyValue(Arr.Elements[I], Indent + 1));
+    end;
+    Result := '[' + SB.ToString + ']';
+  finally
+    SB.Free;
+  end;
 end;
 
 function TGocciaJSON.EscapeJsonString(const Str: string): string;
 var
+  SB: TStringBuilder;
   I: Integer;
   Ch: Char;
 begin
-  Result := '';
-  for I := 1 to Length(Str) do
-  begin
-    Ch := Str[I];
-    case Ch of
-      '"': Result := Result + '\"';
-      '\': Result := Result + '\\';
-      '/': Result := Result + '\/';
-      #8: Result := Result + '\b';
-      #12: Result := Result + '\f';
-      #10: Result := Result + '\n';
-      #13: Result := Result + '\r';
-      #9: Result := Result + '\t';
-    else
-      if Ord(Ch) < 32 then
-        Result := Result + '\u' + IntToHex(Ord(Ch), 4)
+  SB := TStringBuilder.Create;
+  try
+    for I := 1 to Length(Str) do
+    begin
+      Ch := Str[I];
+      case Ch of
+        '"': SB.Append('\"');
+        '\': SB.Append('\\');
+        '/': SB.Append('\/');
+        #8: SB.Append('\b');
+        #12: SB.Append('\f');
+        #10: SB.Append('\n');
+        #13: SB.Append('\r');
+        #9: SB.Append('\t');
       else
-        Result := Result + Ch;
+        if Ord(Ch) < 32 then
+          SB.Append('\u').Append(IntToHex(Ord(Ch), 4))
+        else
+          SB.Append(Ch);
+      end;
     end;
+    Result := SB.ToString;
+  finally
+    SB.Free;
   end;
 end;
 
 function TGocciaJSON.GetIndentString(Level: Integer): string;
-var
-  I: Integer;
 begin
-  Result := '';
-  for I := 1 to Level * 2 do // 2 spaces per level
-    Result := Result + ' ';
+  Result := StringOfChar(' ', Level * 2);
 end;
 
 end.
