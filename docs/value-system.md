@@ -135,6 +135,8 @@ function BooleanValue(B: Boolean): TGocciaBooleanLiteralValue;
 // Returns TrueValue or FalseValue
 ```
 
+`ToNumberLiteral` returns `OneValue` or `ZeroValue` singletons rather than allocating a new `TGocciaNumberLiteralValue`, avoiding an allocation on every boolean-to-number coercion.
+
 ### Numbers
 
 Numbers use a dual representation to handle JavaScript's special numeric values correctly:
@@ -286,6 +288,7 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 - **Numeric property access** — `arr["0"]` and `arr[0]` both resolve to the first element.
 - **Shared prototype singleton** — All array instances share a single class-level prototype (`FSharedArrayPrototype`). Methods are registered once on this shared prototype during `InitializePrototype` (guarded by an `if Assigned` check) and pinned with the GC. The constructor assigns `FPrototype := FSharedArrayPrototype` instead of creating a per-instance prototype.
 - **Prototype methods** — `map`, `filter`, `reduce`, `forEach`, `some`, `every`, `flat`, `flatMap`, `find`, `findIndex`, `indexOf`, `lastIndexOf`, `join`, `includes`, `concat`, `push`, `pop`, `shift`, `unshift`, `sort`, `splice`, `reverse`, `fill`, `at`, `slice`, `toReversed`, `toSorted`, `toSpliced` — all operate through `ThisValue` (not `Self`) to access instance data, since the method pointers are bound to a single method host instance.
+- **`ToStringLiteral`** — Uses `TStringBuilder` for O(n) comma-separated element assembly, avoiding O(n^2) repeated string concatenation.
 
 ## Sets
 
@@ -335,7 +338,7 @@ All functions share a prototype that provides `call`, `apply`, and `bind`:
 | Method | Description |
 |--------|-------------|
 | `fn.call(thisArg, ...args)` | Call with explicit `this` and individual arguments |
-| `fn.apply(thisArg, argsArray)` | Call with explicit `this` and argument array |
+| `fn.apply(thisArg, argsArray)` | Call with explicit `this` and argument array. Fast path: when `argsArray` is a `TGocciaArrayValue`, elements are accessed directly via `Elements[I]` instead of `IntToStr(I)` + `GetProperty`, avoiding per-element string allocation and property lookup. Falls back to the generic array-like object path otherwise. |
 | `fn.bind(thisArg, ...args)` | Return a new function with bound `this` and pre-filled arguments |
 
 `bind` returns a `TGocciaBoundFunctionValue` that combines bound arguments with call-time arguments. Bound functions compute `length` as `max(0, original.length - boundArgs.length)` and `name` as `"bound " + original.name` per ECMAScript spec.

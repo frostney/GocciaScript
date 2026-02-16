@@ -16,7 +16,7 @@ The evaluator (`Goccia.Evaluator.pas`) is designed around pure functions — giv
 
 State changes (variable bindings, object mutations) happen through the scope and value objects passed in the `TGocciaEvaluationContext`, not through evaluator-internal state.
 
-**Performance-aware evaluation:** Template literal evaluation uses `TStringBuilder` for O(n) string assembly. Numeric binary operations that share a common pattern (subtraction, multiplication, exponentiation) are consolidated through `EvaluateSimpleNumericBinaryOp` to avoid code duplication while maintaining clear semantics.
+**Performance-aware evaluation:** Template literal evaluation and `Array.ToStringLiteral` use `TStringBuilder` for O(n) string assembly instead of O(n^2) repeated concatenation. `Boolean.ToNumberLiteral` returns the existing `ZeroValue`/`OneValue` singletons rather than allocating, avoiding an allocation on every boolean-to-number coercion. `Function.prototype.apply` uses a fast path for `TGocciaArrayValue` arguments (direct `Elements[I]` access) instead of per-element `IntToStr` + `GetProperty`. Numeric binary operations that share a common pattern (subtraction, multiplication, exponentiation) are consolidated through `EvaluateSimpleNumericBinaryOp` to avoid code duplication while maintaining clear semantics.
 
 ## Virtual Dispatch Value System
 
