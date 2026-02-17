@@ -13,7 +13,7 @@ uses
   Goccia.Builtins.GlobalNumber, Goccia.Builtins.Globals, Goccia.Builtins.JSON,
   Goccia.Builtins.GlobalSymbol, Goccia.Builtins.GlobalSet, Goccia.Builtins.GlobalMap,
   Goccia.Builtins.TestAssertions, Goccia.Builtins.Benchmark,
-  Goccia.Builtins.GlobalPromise, Goccia.Scope, Goccia.Modules,
+  Goccia.Builtins.GlobalPromise, Goccia.Builtins.Temporal, Goccia.Scope, Goccia.Modules,
   Goccia.Values.ClassValue, Goccia.Values.Error, Goccia.GarbageCollector,
   Goccia.MicrotaskQueue;
 
@@ -30,24 +30,25 @@ type
     ggSet,
     ggMap,
     ggTestAssertions,
-    ggBenchmark
+    ggBenchmark,
+    ggTemporal
   );
 
   TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
 
   TGocciaScriptResult = record
     Result: TGocciaValue;
-    LexTimeMicroseconds: Int64;
-    ParseTimeMicroseconds: Int64;
-    ExecuteTimeMicroseconds: Int64;
-    TotalTimeMicroseconds: Int64;
+    LexTimeNanoseconds: Int64;
+    ParseTimeNanoseconds: Int64;
+    ExecuteTimeNanoseconds: Int64;
+    TotalTimeNanoseconds: Int64;
     FileName: string;
   end;
 
 type
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal];
   private
     FInterpreter: TGocciaInterpreter;
     FFileName: string;
@@ -68,6 +69,7 @@ type
     FBuiltinPromise: TGocciaGlobalPromise;
     FBuiltinTestAssertions: TGocciaTestAssertions;
     FBuiltinBenchmark: TGocciaBenchmark;
+    FBuiltinTemporal: TGocciaTemporalBuiltin;
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
@@ -101,6 +103,7 @@ type
     property BuiltinPromise: TGocciaGlobalPromise read FBuiltinPromise;
     property BuiltinTestAssertions: TGocciaTestAssertions read FBuiltinTestAssertions;
     property BuiltinBenchmark: TGocciaBenchmark read FBuiltinBenchmark;
+    property BuiltinTemporal: TGocciaTemporalBuiltin read FBuiltinTemporal;
   end;
 
 
@@ -160,6 +163,7 @@ begin
   FBuiltinPromise.Free;
   FBuiltinTestAssertions.Free;
   FBuiltinBenchmark.Free;
+  FBuiltinTemporal.Free;
 
   // Free interpreter after builtins
   FInterpreter.Free;
@@ -221,6 +225,8 @@ begin
     FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions', Scope, ThrowError);
   if ggBenchmark in FGlobals then
     FBuiltinBenchmark := TGocciaBenchmark.Create('Benchmark', Scope, ThrowError);
+  if ggTemporal in FGlobals then
+    FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
 
   // Always-registered built-ins
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, ThrowError);
@@ -281,27 +287,27 @@ var
   StartTime, LexEnd, ParseEnd, ExecEnd: Int64;
 begin
   Result.FileName := FFileName;
-  StartTime := GetMicroseconds;
+  StartTime := GetNanoseconds;
 
   Lexer := TGocciaLexer.Create(FSourceLines.Text, FFileName);
   try
     Tokens := Lexer.ScanTokens;
-    LexEnd := GetMicroseconds;
-    Result.LexTimeMicroseconds := LexEnd - StartTime;
+    LexEnd := GetNanoseconds;
+    Result.LexTimeNanoseconds := LexEnd - StartTime;
 
     Parser := TGocciaParser.Create(Tokens, FFileName, Lexer.SourceLines);
     try
       ProgramNode := Parser.Parse;
-      ParseEnd := GetMicroseconds;
-      Result.ParseTimeMicroseconds := ParseEnd - LexEnd;
+      ParseEnd := GetNanoseconds;
+      Result.ParseTimeNanoseconds := ParseEnd - LexEnd;
 
       try
         Result.Result := FInterpreter.Execute(ProgramNode);
         if Assigned(TGocciaMicrotaskQueue.Instance) then
           TGocciaMicrotaskQueue.Instance.DrainQueue;
-        ExecEnd := GetMicroseconds;
-        Result.ExecuteTimeMicroseconds := ExecEnd - ParseEnd;
-        Result.TotalTimeMicroseconds := ExecEnd - StartTime;
+        ExecEnd := GetNanoseconds;
+        Result.ExecuteTimeNanoseconds := ExecEnd - ParseEnd;
+        Result.TotalTimeNanoseconds := ExecEnd - StartTime;
       finally
         if Assigned(TGocciaMicrotaskQueue.Instance) then
           TGocciaMicrotaskQueue.Instance.ClearQueue;

@@ -42,10 +42,10 @@ begin
         WriteLn('Error loading test file: ', E.Message);
         Result.TestResult := ScriptResult;
         Result.Timing.Result := nil;
-        Result.Timing.LexTimeMicroseconds := 0;
-        Result.Timing.ParseTimeMicroseconds := 0;
-        Result.Timing.ExecuteTimeMicroseconds := 0;
-        Result.Timing.TotalTimeMicroseconds := 0;
+        Result.Timing.LexTimeNanoseconds := 0;
+        Result.Timing.ParseTimeNanoseconds := 0;
+        Result.Timing.ExecuteTimeNanoseconds := 0;
+        Result.Timing.TotalTimeNanoseconds := 0;
         Result.Timing.FileName := '';
         Exit;
       end;
@@ -88,10 +88,10 @@ begin
         WriteLn('Fatal error: ', E.Message);
         Result.TestResult := ScriptResult;
         Result.Timing.Result := nil;
-        Result.Timing.LexTimeMicroseconds := 0;
-        Result.Timing.ParseTimeMicroseconds := 0;
-        Result.Timing.ExecuteTimeMicroseconds := 0;
-        Result.Timing.TotalTimeMicroseconds := 0;
+        Result.Timing.LexTimeNanoseconds := 0;
+        Result.Timing.ParseTimeNanoseconds := 0;
+        Result.Timing.ExecuteTimeNanoseconds := 0;
+        Result.Timing.TotalTimeNanoseconds := 0;
         Result.Timing.FileName := '';
       end;
     end;
@@ -103,25 +103,25 @@ end;
 type
   TAggregatedTestResult = record
     TestResult: TGocciaObjectValue;
-    TotalLexMicroseconds: Int64;
-    TotalParseMicroseconds: Int64;
-    TotalExecMicroseconds: Int64;
+    TotalLexNanoseconds: Int64;
+    TotalParseNanoseconds: Int64;
+    TotalExecNanoseconds: Int64;
   end;
 
 function RunScriptFromFile(const FileName: string): TAggregatedTestResult;
 var
   FileResult: TTestFileResult;
 begin
-  Result.TotalLexMicroseconds := 0;
-  Result.TotalParseMicroseconds := 0;
-  Result.TotalExecMicroseconds := 0;
+  Result.TotalLexNanoseconds := 0;
+  Result.TotalParseNanoseconds := 0;
+  Result.TotalExecNanoseconds := 0;
   try
     WriteLn('Running script: ', FileName);
     FileResult := RunGocciaScript(FileName);
     Result.TestResult := FileResult.TestResult;
-    Result.TotalLexMicroseconds := FileResult.Timing.LexTimeMicroseconds;
-    Result.TotalParseMicroseconds := FileResult.Timing.ParseTimeMicroseconds;
-    Result.TotalExecMicroseconds := FileResult.Timing.ExecuteTimeMicroseconds;
+    Result.TotalLexNanoseconds := FileResult.Timing.LexTimeNanoseconds;
+    Result.TotalParseNanoseconds := FileResult.Timing.ParseTimeNanoseconds;
+    Result.TotalExecNanoseconds := FileResult.Timing.ExecuteTimeNanoseconds;
   except
     on E: Exception do
     begin
@@ -155,18 +155,18 @@ begin
   TotalRunCount := 0;
   TotalAssertions := 0;
   TotalDuration := 0;
-  Result.TotalLexMicroseconds := 0;
-  Result.TotalParseMicroseconds := 0;
-  Result.TotalExecMicroseconds := 0;
+  Result.TotalLexNanoseconds := 0;
+  Result.TotalParseNanoseconds := 0;
+  Result.TotalExecNanoseconds := 0;
 
   for I := 0 to Files.Count - 1 do
   begin
     FileResult := RunScriptFromFile(Files[I]);
     AllTestResults.AssignProperty(Files[I], FileResult.TestResult);
 
-    Result.TotalLexMicroseconds := Result.TotalLexMicroseconds + FileResult.TotalLexMicroseconds;
-    Result.TotalParseMicroseconds := Result.TotalParseMicroseconds + FileResult.TotalParseMicroseconds;
-    Result.TotalExecMicroseconds := Result.TotalExecMicroseconds + FileResult.TotalExecMicroseconds;
+    Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + FileResult.TotalLexNanoseconds;
+    Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + FileResult.TotalParseNanoseconds;
+    Result.TotalExecNanoseconds := Result.TotalExecNanoseconds + FileResult.TotalExecNanoseconds;
 
     PassedCount := PassedCount + FileResult.TestResult.GetProperty('passed').ToNumberLiteral.Value;
     FailedCount := FailedCount + FileResult.TestResult.GetProperty('failed').ToNumberLiteral.Value;
@@ -194,9 +194,9 @@ var
   TotalFailed: String;
   TotalSkipped: String;
   TotalAssertions: String;
-  DurationMicroseconds: Int64;
+  DurationNanoseconds: Int64;
   RunCount: Double;
-  PerTestMicroseconds: Int64;
+  PerTestNanoseconds: Int64;
 begin
   ExitCode := 0;
   TestResult := AResult.TestResult;
@@ -206,7 +206,7 @@ begin
   TotalFailed := TestResult.GetProperty('failed').ToStringLiteral.Value;
   TotalSkipped := TestResult.GetProperty('skipped').ToStringLiteral.Value;
   TotalAssertions := TestResult.GetProperty('assertions').ToStringLiteral.Value;
-  DurationMicroseconds := Round(TestResult.GetProperty('duration').ToNumberLiteral.Value);
+  DurationNanoseconds := Round(TestResult.GetProperty('duration').ToNumberLiteral.Value);
   RunCount := StrToFloat(TotalRunTests);
 
   Writeln('Test Results Total Tests: ', TestResult.GetProperty('totalTests').ToStringLiteral.Value);
@@ -214,15 +214,15 @@ begin
 
   if RunCount > 0 then
   begin
-    PerTestMicroseconds := Round(DurationMicroseconds / RunCount);
+    PerTestNanoseconds := Round(DurationNanoseconds / RunCount);
     Writeln(Format('Test Results Passed: %s (%2.2f%%)', [TotalPassed, (StrToFloat(TotalPassed) / RunCount * 100)]));
     Writeln(Format('Test Results Failed: %s (%2.2f%%)', [TotalFailed, (StrToFloat(TotalFailed) / RunCount * 100)]));
     Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / RunCount * 100)]));
     Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
-    Writeln(Format('Test Results Test Execution: %s (%s/test)', [FormatDuration(DurationMicroseconds), FormatDuration(PerTestMicroseconds)]));
+    Writeln(Format('Test Results Test Execution: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
     Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
-      [FormatDuration(AResult.TotalLexMicroseconds), FormatDuration(AResult.TotalParseMicroseconds), FormatDuration(AResult.TotalExecMicroseconds),
-       FormatDuration(AResult.TotalLexMicroseconds + AResult.TotalParseMicroseconds + AResult.TotalExecMicroseconds)]));
+      [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
+       FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds)]));
     Writeln(Format('Test Results Failed Tests: %s', [TestResult.GetProperty('failedTests').ToStringLiteral.Value]));
   end;
 

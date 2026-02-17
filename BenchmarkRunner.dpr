@@ -58,16 +58,16 @@ begin
       end;
 
       FileResult.FileName := FileName;
-      FileResult.LexTimeMicroseconds := EngineResult.LexTimeMicroseconds;
-      FileResult.ParseTimeMicroseconds := EngineResult.ParseTimeMicroseconds;
-      FileResult.ExecuteTimeMicroseconds := EngineResult.ExecuteTimeMicroseconds;
+      FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
+      FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
+      FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds;
 
       if EngineResult.Result is TGocciaObjectValue then
       begin
         ScriptResult := TGocciaObjectValue(EngineResult.Result);
 
         FileResult.TotalBenchmarks := Round(ScriptResult.GetProperty('totalBenchmarks').ToNumberLiteral.Value);
-        FileResult.DurationMicroseconds := Round(ScriptResult.GetProperty('durationMicroseconds').ToNumberLiteral.Value);
+        FileResult.DurationNanoseconds := Round(ScriptResult.GetProperty('durationNanoseconds').ToNumberLiteral.Value);
 
         if ScriptResult.GetProperty('results') is TGocciaArrayValue then
         begin
@@ -110,7 +110,7 @@ begin
       else
       begin
         FileResult.TotalBenchmarks := 0;
-        FileResult.DurationMicroseconds := 0;
+        FileResult.DurationNanoseconds := 0;
         SetLength(FileResult.Entries, 0);
         Reporter.AddFileResult(FileResult);
 
@@ -122,11 +122,11 @@ begin
       on E: Exception do
       begin
         FileResult.FileName := FileName;
-        FileResult.LexTimeMicroseconds := 0;
-        FileResult.ParseTimeMicroseconds := 0;
-        FileResult.ExecuteTimeMicroseconds := 0;
+        FileResult.LexTimeNanoseconds := 0;
+        FileResult.ParseTimeNanoseconds := 0;
+        FileResult.ExecuteTimeNanoseconds := 0;
         FileResult.TotalBenchmarks := 0;
-        FileResult.DurationMicroseconds := 0;
+        FileResult.DurationNanoseconds := 0;
         SetLength(FileResult.Entries, 1);
         FileResult.Entries[0].Suite := '';
         FileResult.Entries[0].Name := '(fatal)';

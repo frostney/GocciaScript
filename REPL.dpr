@@ -42,8 +42,8 @@ begin
           WriteLn(ScriptResult.Result.ToStringLiteral.Value);
         if ShowTiming then
           WriteLn(SysUtils.Format('  [%s lex | %s parse | %s exec | %s total]',
-            [FormatDuration(ScriptResult.LexTimeMicroseconds), FormatDuration(ScriptResult.ParseTimeMicroseconds),
-             FormatDuration(ScriptResult.ExecuteTimeMicroseconds), FormatDuration(ScriptResult.TotalTimeMicroseconds)]));
+            [FormatDuration(ScriptResult.LexTimeNanoseconds), FormatDuration(ScriptResult.ParseTimeNanoseconds),
+             FormatDuration(ScriptResult.ExecuteTimeNanoseconds), FormatDuration(ScriptResult.TotalTimeNanoseconds)]));
       except
         on E: Exception do
           WriteLn('Error: ', E.Message);

@@ -85,12 +85,14 @@ This follows the ECMAScript specification's microtask ordering semantics. Thenab
 
 ### Timing Utilities (`TimingUtils.pas`)
 
-A cross-platform microsecond-precision timing unit providing two functions:
+A cross-platform timing unit providing monotonic clocks, a wall-clock epoch source, and duration formatting:
 
-- **`GetMicroseconds`** — Returns the current timestamp in microseconds. Uses `fpGetTimeOfDay` on Unix (native μs resolution) and `QueryPerformanceCounter`/`QueryPerformanceFrequency` on Windows (sub-μs hardware counter, converted to μs). Falls back to `GetTickCount64 * 1000` on other platforms.
-- **`FormatDuration(Microseconds)`** — Auto-formats a duration with two-decimal precision: values below 0.5ms display as `μs` (e.g., `287μs`), values up to 10s as `ms` (e.g., `1.39ms`), and larger values as `s` (e.g., `12.34s`).
+- **`GetNanoseconds`** — Monotonic timestamp in nanoseconds. Uses `clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS (native ns resolution, declared as external C function with platform-specific constant: 6 on Darwin, 1 on Linux) and `QueryPerformanceCounter`/`QueryPerformanceFrequency` on Windows (sub-μs hardware counter, converted to ns). Falls back to `GetTickCount64 * 1000000` on other platforms.
+- **`GetMilliseconds`** — Monotonic timestamp in milliseconds. Convenience wrapper: `GetNanoseconds div 1000000`.
+- **`GetEpochNanoseconds`** — Wall-clock epoch nanoseconds since Unix epoch (1970-01-01T00:00:00Z). Uses `clock_gettime(CLOCK_REALTIME)` on Unix/macOS, `GetSystemTimeAsFileTime` on Windows (100-ns FILETIME intervals converted to ns), and `DateTimeToUnix(Now)` as fallback. Used by `Temporal.Now.instant()` for nanosecond-precision epoch timestamps.
+- **`FormatDuration(Nanoseconds)`** — Auto-formats a duration: values below 0.5μs display as `ns` (e.g., `450ns`), values below 0.5ms as `μs` (e.g., `287.50μs`), values up to 10s as `ms` (e.g., `1.39ms`), and larger values as `s` (e.g., `12.34s`).
 
-Used by the engine (lex/parse/execute phase timing in `TGocciaScriptResult`), the test assertions framework (test execution duration), and the benchmark runner (calibration and measurement). Has no Goccia-specific dependencies, making it reusable outside the engine.
+Used by the engine (lex/parse/execute phase timing in `TGocciaScriptResult`), the test assertions framework (test execution duration), the benchmark runner (calibration and measurement), and `Temporal.Now` (wall-clock epoch time). Has no Goccia-specific dependencies, making it reusable outside the engine.
 
 ### AST (`Goccia.AST.Node.pas`, `Goccia.AST.Expressions.pas`, `Goccia.AST.Statements.pas`)
 
