@@ -30,10 +30,12 @@ end;
 {$ELSE}
 {$IFDEF WINDOWS}
 var
-  Counter: Int64;
+  Counter, Whole, Remainder: Int64;
 begin
   QueryPerformanceCounter(Counter);
-  Result := (Counter * 1000000) div QPCFrequency;
+  Whole := Counter div QPCFrequency;
+  Remainder := Counter mod QPCFrequency;
+  Result := Whole * 1000000 + (Remainder * 1000000) div QPCFrequency;
 end;
 {$ELSE}
 begin
