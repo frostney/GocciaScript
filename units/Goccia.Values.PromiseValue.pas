@@ -288,12 +288,25 @@ end;
 procedure TGocciaPromiseValue.SubscribeTo(APromise: TGocciaPromiseValue);
 var
   Reaction: TGocciaPromiseReaction;
+  Task: TGocciaMicrotask;
+  Queue: TGocciaMicrotaskQueue;
 begin
   case APromise.FState of
-    gpsFulfilled:
-      Resolve(APromise.FResult);
-    gpsRejected:
-      Reject(APromise.FResult);
+    gpsFulfilled, gpsRejected:
+    begin
+      Queue := TGocciaMicrotaskQueue.Instance;
+      if Assigned(Queue) then
+      begin
+        Task.Handler := nil;
+        Task.Value := APromise.FResult;
+        Task.ResultPromise := Self;
+        if APromise.FState = gpsFulfilled then
+          Task.ReactionType := prtFulfill
+        else
+          Task.ReactionType := prtReject;
+        Queue.Enqueue(Task);
+      end;
+    end;
     gpsPending:
     begin
       Reaction.OnFulfilled := nil;

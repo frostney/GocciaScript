@@ -365,7 +365,7 @@ This means:
 - All pending `.then()` callbacks fire after the script finishes.
 - Chained `.then()` handlers are processed in the same drain cycle.
 
-The execution ordering matches V8/Node.js exactly — the script is one macrotask, and microtasks drain after it completes.
+The execution ordering follows ECMAScript specification semantics — the script is one macrotask, and microtasks drain after it completes. Thenable adoption is deferred via a microtask per the spec's PromiseResolveThenableJob.
 
 ```pascal
 // Promises work automatically — no manual queue management needed

@@ -237,7 +237,7 @@ In the ECMAScript specification, the entire script is one macrotask. Microtasks 
 2. All `.then()` callbacks fire in FIFO order.
 3. New microtasks enqueued during draining (e.g., chained `.then()` handlers) are processed in the same drain cycle.
 
-This produces output **identical to V8/Node.js** for any script. The only scenario where timing would differ is with multiple macrotask sources (`setTimeout`, I/O callbacks, event handlers), which GocciaScript does not implement. If these are added in the future, they would require an event loop that repeatedly: (1) dequeues one macrotask, (2) drains the microtask queue, (3) repeats.
+This follows the ECMAScript specification's microtask ordering semantics. Thenable adoption (resolving a Promise with another Promise) is deferred via a microtask rather than resolved synchronously, matching the spec's PromiseResolveThenableJob — `SubscribeTo` enqueues a microtask for already-settled inner promises instead of calling `Resolve`/`Reject` synchronously. The only scenario where timing would differ from a full engine is with multiple macrotask sources (`setTimeout`, I/O callbacks, event handlers), which GocciaScript does not implement. If these are added in the future, they would require an event loop that repeatedly: (1) dequeues one macrotask, (2) drains the microtask queue, (3) repeats.
 
 **Integration points:**
 

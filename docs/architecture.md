@@ -81,7 +81,7 @@ Script execution (macrotask)     →  Microtask queue drains
 └── .then() handlers are enqueued    └── repeat until queue is empty
 ```
 
-This produces output identical to V8/Node.js for any script. The only scenario where interleaving would differ is with multiple macrotask sources (`setTimeout`, I/O callbacks), which GocciaScript does not implement. The test framework and benchmark runner also drain the microtask queue after each test callback / measurement round, respectively.
+This follows the ECMAScript specification's microtask ordering semantics. Thenable adoption (resolving a Promise with another Promise) is deferred via a microtask rather than resolved synchronously, matching the spec's PromiseResolveThenableJob. The only scenario where interleaving would differ from a full engine is with multiple macrotask sources (`setTimeout`, I/O callbacks), which GocciaScript does not implement. The test framework and benchmark runner also drain the microtask queue after each test callback / measurement round, respectively.
 
 ### Timing Utilities (`TimingUtils.pas`)
 
