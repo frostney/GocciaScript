@@ -38,7 +38,7 @@ type
     TotalMs: Int64;
     OpsPerSec: Double;
     MeanMs: Double;
-    VariancePct: Double;
+    VariancePercentage: Double;
   end;
 
   TGocciaBenchmark = class(TGocciaBuiltin)
@@ -304,9 +304,9 @@ begin
     OpsVariance := OpsVariance / MEASUREMENT_ROUNDS;
 
     if OpsMean > 0 then
-      Result.VariancePct := (Sqrt(OpsVariance) / OpsMean) * 100
+      Result.VariancePercentage := (Sqrt(OpsVariance) / OpsMean) * 100
     else
-      Result.VariancePct := 0;
+      Result.VariancePercentage := 0;
 
     // Sort rounds to find median (insertion sort for small N)
     for K := 1 to MEASUREMENT_ROUNDS - 1 do
@@ -381,7 +381,7 @@ begin
         SingleResult.AssignProperty('meanMs', TGocciaNumberLiteralValue.Create(BenchResult.MeanMs));
         SingleResult.AssignProperty('iterations', TGocciaNumberLiteralValue.Create(BenchResult.Iterations));
         SingleResult.AssignProperty('totalMs', TGocciaNumberLiteralValue.Create(BenchResult.TotalMs));
-        SingleResult.AssignProperty('variancePct', TGocciaNumberLiteralValue.Create(BenchResult.VariancePct));
+        SingleResult.AssignProperty('variancePercentage', TGocciaNumberLiteralValue.Create(BenchResult.VariancePercentage));
 
         ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
       except
