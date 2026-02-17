@@ -225,7 +225,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 - Shared path config: `config.cfg`
 - Shared directives: `units/Goccia.inc` (overflow/range checks conditional on `PRODUCTION` define)
 - Output directory: `build/`
-- CI: GitHub Actions on Linux, macOS, Windows (x64 + ARM) — uses `--prod`
+- CI: Two workflow files — `ci.yml` (main + tags, full matrix, all checks + release) and `pr.yml` (PRs, ubuntu-latest x64 only, JS tests + benchmark comparison comment)
 
 ## Documentation Index
 

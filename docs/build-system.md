@@ -159,14 +159,17 @@ GocciaScript/
 
 ## CI/CD
 
-GitHub Actions CI is defined in `.github/workflows/ci.yml` with four jobs that form a pipeline:
+GitHub Actions CI is split into two workflow files:
+
+### `ci.yml` — Push to main + tags
 
 ```
-build → test       → artifacts
-      → benchmark  →
+build → test (JS + native)  → artifacts (main only)
+      → benchmark           → release (tags only)
+      → examples            →
 ```
 
-All jobs run across the full platform matrix:
+Runs on the full platform matrix:
 
 | OS | Architecture |
 |----|-------------|
@@ -174,17 +177,34 @@ All jobs run across the full platform matrix:
 | macOS Latest | x64, ARM64 |
 | Windows Latest | x64 |
 
-### Pipeline Jobs
+**`build`** — Installs FPC, compiles all binaries with `--prod`, uploads them as intermediate artifacts.
 
-**`build`** — Installs FPC, compiles all binaries, uploads them as intermediate artifacts.
+**`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests on all platforms.
 
-**`test`** (needs build) — Downloads binaries, runs JavaScript tests and Pascal unit tests.
+**`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), saves benchmark results as JSON to `actions/cache` for PR comparison.
 
-**`benchmark`** (needs build) — Downloads binaries, runs all benchmarks on all platforms to detect platform-specific regressions.
+**`examples`** (needs build) — Runs all example scripts from the `examples/` folder on all platforms.
 
-**`artifacts`** (needs test + benchmark, push only) — Uploads release binaries after both test and benchmark pass.
+**`artifacts`** (needs test + benchmark + examples, main only) — Uploads production binaries after all checks pass.
 
-FPC is only installed once per platform in the `build` job. Test and benchmark jobs run in parallel, using pre-built binaries.
+**`release`** (needs test + benchmark + examples, tags only) — Downloads all platform build artifacts, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), and creates a GitHub release using `softprops/action-gh-release`.
+
+### `pr.yml` — Pull requests
+
+```
+build → test (JS only)
+      → benchmark → PR comment (comparison)
+```
+
+Runs on **ubuntu-latest x64 only** (single runner, no matrix).
+
+**`build`** — Installs FPC, compiles all binaries with `--prod`.
+
+**`test`** (needs build) — Runs all JavaScript tests. No native tests.
+
+**`benchmark`** (needs build) — Restores the cached benchmark baseline from main, runs all benchmarks with JSON output, and posts a comparison comment on the PR with per-benchmark percentage changes (green for improvements > 2%, red for regressions > 2%). If no baseline exists, shows results without percentages.
+
+FPC is only installed once per platform in the `build` job. Test, benchmark, and example jobs run in parallel, using pre-built binaries.
 
 ## Direct FPC Compilation
 
