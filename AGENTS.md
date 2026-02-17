@@ -76,6 +76,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules) |
 | Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ, VMT-based chain-walking |
 | Keywords | `Goccia.Keywords.pas` | Centralized JavaScript keyword string constants |
+| Timing Utilities | `TimingUtils.pas` | Cross-platform microsecond timing (`GetMicroseconds`) and duration formatting (`FormatDuration`) |
 | Garbage Collector | `Goccia.GarbageCollector.pas` | Mark-and-sweep memory management for runtime values |
 
 ## Development Workflow

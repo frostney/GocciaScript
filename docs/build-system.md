@@ -32,7 +32,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Builds all components in order: tests, loader, testrunner, benchmarkrunner, repl.
+Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/`), then builds all components in order: tests, loader, testrunner, benchmarkrunner, repl.
 
 ### Build Specific Components
 
@@ -49,6 +49,15 @@ Multiple components can be specified:
 ```bash
 ./build.pas loader repl
 ```
+
+### Clean Build Artifacts
+
+```bash
+./build.pas clean              # Remove stale .ppu, .o, .res from build/
+./build.pas clean loader       # Clean then build loader
+```
+
+A full build (no specific targets) automatically cleans first.
 
 ### Compile and Run
 
@@ -95,7 +104,7 @@ These path flags are shared by both build modes. Mode-specific flags are added b
 |------|----------------------|----------------------|
 | Optimization | `-O-` (disabled) | `-O4` (aggressive) |
 | Debug info | `-gw -godwarfsets` (DWARF) | — (none) |
-| Heap trace | `-gh -gl` (leak detection) | — |
+| Line info | `-gl` (debug line numbers) | — |
 | Stack checking | `-Ct` | — |
 | Range checking | `-Cr` | — |
 | Assertions | `-Sa` | — |
@@ -149,6 +158,7 @@ GocciaScript/
 ├── BenchmarkRunner.dpr   # Benchmark runner program source
 ├── units/
 │   ├── Goccia.inc     # Shared compiler directives
+│   ├── TimingUtils.pas # Cross-platform microsecond timing and duration formatting
 │   ├── *.pas          # All unit source files
 │   └── *.Test.pas     # Pascal unit test programs
 └── build/             # All output (gitignored)

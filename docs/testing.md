@@ -419,11 +419,11 @@ The `BenchmarkRunner` program:
 2. Scans the provided path for `.js` files.
 3. For each file, creates a `TGocciaEngine` with `DefaultGlobals + [ggBenchmark]`.
 4. Loads the source and appends a `runBenchmarks()` call.
-5. Executes the script via `ExecuteWithTiming` — which measures lex, parse, and execute phases separately.
+5. Executes the script — the engine measures lex, parse, and execute phases separately with microsecond precision via `TimingUtils.GetMicroseconds`.
 6. `suite()` calls execute immediately, registering `bench()` entries.
 7. `runBenchmarks()` runs each registered benchmark:
    - **Warmup:** Configurable iterations to stabilize (default 3).
-   - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 300ms). Uses microsecond-resolution timing (`fpGetTimeOfDay`) for precision.
+   - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 300ms). Uses microsecond-resolution timing via `TimingUtils` (`fpGetTimeOfDay` on Unix, `QueryPerformanceCounter` on Windows).
    - **Measure:** Runs multiple measurement rounds (default 3), computes the coefficient of variation (CV%) from the unsorted ops/sec data, then reports the median values.
 8. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
 
@@ -454,7 +454,7 @@ The `BenchmarkRunner` program:
 Console format (default):
 
 ```
-  Lex: 0ms | Parse: 0ms | Execute: 7207ms
+  Lex: 287μs | Parse: 0.58ms | Execute: 7207.31ms | Total: 7208.18ms
 
   fibonacci
     recursive fib(15)                        201 ops/sec  ± 0.42%      4.9843 ms/op  (60 iterations)
@@ -463,8 +463,10 @@ Console format (default):
 
 Benchmark Summary
   Total benchmarks: 3
-  Total duration: 7.2s
+  Total duration: 7.21s
 ```
+
+Durations are auto-formatted by `FormatDuration` from `TimingUtils`: values below 0.5ms display as `μs`, values up to 10s as `ms` with two decimal places, and larger values as `s`.
 
 The `±X.XX%` column shows the coefficient of variation across measurement rounds. It is omitted when variance is zero (e.g., with a single measurement round).
 
