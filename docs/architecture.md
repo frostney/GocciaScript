@@ -67,6 +67,7 @@ A singleton microtask queue used by Promises to defer `.then()` callbacks per th
 - **Singleton** — `TGocciaMicrotaskQueue.Initialize` / `TGocciaMicrotaskQueue.Instance`, mirroring the `TGocciaGC` pattern.
 - **Enqueue** — When a Promise settles and has pending reactions (or when `.then()` is called on an already-settled Promise), the reaction is enqueued as a microtask rather than executed immediately.
 - **DrainQueue** — Called by the engine after `Interpreter.Execute` completes. Processes microtasks in FIFO order, looping until the queue is empty. New microtasks enqueued during processing (e.g., chained `.then()` handlers) are processed in the same drain cycle.
+- **ClearQueue** — Discards all pending microtasks without executing them. Called in `finally` blocks by `Execute` and `ExecuteProgram` to prevent stale callbacks from leaking across executions if a script throws.
 - **GC safety** — Each microtask's handler, value, and result promise are temp-rooted during processing to prevent collection mid-callback.
 
 #### Execution Model

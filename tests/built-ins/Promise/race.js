@@ -41,3 +41,19 @@ test("Promise.race with mixed resolved and rejected", () => {
     expect(v).toBe("winner");
   });
 });
+
+test("Promise.race with empty array returns forever-pending promise", () => {
+  const p = Promise.race([]);
+  let settled = false;
+  p.then(() => { settled = true; });
+  p.catch(() => { settled = true; });
+  return Promise.resolve().then(() => {
+    expect(settled).toBe(false);
+  });
+});
+
+test("Promise.race with single rejected element", () => {
+  return Promise.race([Promise.reject("only")]).catch((e) => {
+    expect(e).toBe("only");
+  });
+});

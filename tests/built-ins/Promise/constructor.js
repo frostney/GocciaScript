@@ -106,7 +106,7 @@ test("reject after resolve with pending promise is ignored", () => {
     resolve(pending);
     reject("should be ignored");
   }).catch(() => {
-    throw "promise should not have been rejected";
+    throw new Error("promise should not have been rejected");
   });
 });
 
@@ -116,7 +116,7 @@ test("resolve after resolve with pending promise is ignored", () => {
     resolve(pending);
     resolve("should be ignored");
   }).catch(() => {
-    throw "promise should not have been rejected";
+    throw new Error("promise should not have been rejected");
   });
 });
 
@@ -126,5 +126,33 @@ test("resolve with settled promise then reject is ignored", () => {
     reject("should be ignored");
   }).then((v) => {
     expect(v).toBe("adopted");
+  });
+});
+
+test("resolving a promise with itself rejects with TypeError", () => {
+  let resolve;
+  const p = new Promise((r) => { resolve = r; });
+  resolve(p);
+  return p.catch((e) => {
+    expect(e.name).toBe("TypeError");
+    expect(e.message).toBe("Chaining cycle detected for promise");
+  });
+});
+
+test("exception after resolve in executor is ignored", () => {
+  return new Promise((resolve) => {
+    resolve(42);
+    throw "should be ignored";
+  }).then((v) => {
+    expect(v).toBe(42);
+  });
+});
+
+test("exception after reject in executor is ignored", () => {
+  return new Promise((resolve, reject) => {
+    reject("err");
+    throw "should be ignored";
+  }).catch((e) => {
+    expect(e).toBe("err");
   });
 });

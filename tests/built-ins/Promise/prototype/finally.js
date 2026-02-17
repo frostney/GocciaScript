@@ -59,7 +59,7 @@ test("finally returning rejected promise overrides fulfillment", () => {
   return Promise.resolve(42)
     .finally(() => Promise.reject("override"))
     .then(
-      (v) => { throw "should not fulfill"; },
+      (v) => { throw new Error("should not fulfill"); },
       (e) => { expect(e).toBe("override"); }
     );
 });

@@ -58,3 +58,19 @@ test("Promise.allSettled never rejects", () => {
     expect(results[1].status).toBe("rejected");
   });
 });
+
+test("Promise.allSettled with single fulfilled element", () => {
+  return Promise.allSettled([Promise.resolve(1)]).then((results) => {
+    expect(results.length).toBe(1);
+    expect(results[0].status).toBe("fulfilled");
+    expect(results[0].value).toBe(1);
+  });
+});
+
+test("Promise.allSettled with single rejected element", () => {
+  return Promise.allSettled([Promise.reject("err")]).then((results) => {
+    expect(results.length).toBe(1);
+    expect(results[0].status).toBe("rejected");
+    expect(results[0].reason).toBe("err");
+  });
+});

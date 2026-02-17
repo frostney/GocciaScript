@@ -373,7 +373,7 @@ Source.Text := 'Promise.resolve(42).then((v) => console.log(v));';
 Engine.Execute;  // prints "42" (microtasks drain after Execute)
 ```
 
-For long-lived engines (REPL-style), each `Execute` call drains its own microtasks. Promise callbacks from one execution will not leak into the next.
+For long-lived engines (REPL-style), each `Execute` call drains its own microtasks. Promise callbacks from one execution will not leak into the next — even if the script throws an exception, the engine clears any pending microtasks in a `finally` block.
 
 ## Garbage Collector
 

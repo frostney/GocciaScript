@@ -57,3 +57,20 @@ test("Promise.resolve with no argument resolves to undefined", () => {
     expect(v).toBeUndefined();
   });
 });
+
+test("Promise.resolve with nested resolved promise returns inner", () => {
+  const inner = Promise.resolve(42);
+  const outer = Promise.resolve(inner);
+  expect(outer).toBe(inner);
+  return outer.then((v) => {
+    expect(v).toBe(42);
+  });
+});
+
+test("Promise.resolve with array", () => {
+  const arr = [1, 2, 3];
+  return Promise.resolve(arr).then((v) => {
+    expect(v).toBe(arr);
+    expect(v).toEqual([1, 2, 3]);
+  });
+});

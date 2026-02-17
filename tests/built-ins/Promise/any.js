@@ -44,3 +44,20 @@ test("Promise.any with non-promise values", () => {
     expect(v).toBe(1);
   });
 });
+
+test("Promise.any with single rejected creates AggregateError", () => {
+  return Promise.any([Promise.reject("only")]).catch((e) => {
+    expect(e.name).toBe("AggregateError");
+    expect(e.errors).toEqual(["only"]);
+  });
+});
+
+test("Promise.any AggregateError preserves error order", () => {
+  return Promise.any([
+    Promise.reject("a"),
+    Promise.reject("b"),
+    Promise.reject("c")
+  ]).catch((e) => {
+    expect(e.errors).toEqual(["a", "b", "c"]);
+  });
+});

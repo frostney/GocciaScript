@@ -89,3 +89,44 @@ test("then on fulfilled promise skips rejection handler", () => {
     expect(log).toEqual(["fulfilled: ok"]);
   });
 });
+
+test("then handler returning rejected promise rejects the chain", () => {
+  return Promise.resolve(1)
+    .then((v) => Promise.reject("from handler"))
+    .catch((e) => {
+      expect(e).toBe("from handler");
+    });
+});
+
+test("then with non-function onFulfilled passes value through", () => {
+  return Promise.resolve(42)
+    .then(99)
+    .then((v) => {
+      expect(v).toBe(42);
+    });
+});
+
+test("then with non-function onRejected passes rejection through", () => {
+  return Promise.reject("err")
+    .then((v) => v, "not a function")
+    .catch((e) => {
+      expect(e).toBe("err");
+    });
+});
+
+test("then handler with no return fulfills with undefined", () => {
+  return Promise.resolve(42)
+    .then((v) => { /* no return */ })
+    .then((v) => {
+      expect(v).toBeUndefined();
+    });
+});
+
+test("onRejected returning a value fulfills the chain", () => {
+  return Promise.reject("err").then(
+    (v) => { throw new Error("should not run"); },
+    (e) => "recovered"
+  ).then((v) => {
+    expect(v).toBe("recovered");
+  });
+});

@@ -40,3 +40,12 @@ test("Promise.reject with no argument rejects with undefined", () => {
     expect(e).toBeUndefined();
   });
 });
+
+test("Promise.reject with Error object preserves it", () => {
+  const err = new TypeError("bad input");
+  return Promise.reject(err).catch((e) => {
+    expect(e).toBe(err);
+    expect(e.name).toBe("TypeError");
+    expect(e.message).toBe("bad input");
+  });
+});

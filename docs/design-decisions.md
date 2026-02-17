@@ -249,6 +249,8 @@ This produces output **identical to V8/Node.js** for any script. The only scenar
 | Test framework | After each test callback |
 | Benchmark runner | After warmup, calibration batches, and each measurement round |
 
+**Error safety:** Both `Execute` and `ExecuteProgram` wrap the drain in a `try..finally` that calls `ClearQueue`. If the interpreter throws, stale microtasks are discarded rather than leaking into subsequent executions. After a successful `DrainQueue` the queue is already empty, so `ClearQueue` is a no-op.
+
 **GC safety:** During `DrainQueue`, each microtask's handler, value, and result promise are temp-rooted to prevent collection mid-callback.
 
 ## Configurable Built-ins

@@ -46,3 +46,14 @@ test("catch with chained then", () => {
       expect(v).toBe(100);
     });
 });
+
+test("multiple catch handlers on same promise all fire in order", () => {
+  const log = [];
+  const p = Promise.reject("err");
+  p.catch((e) => log.push("first:" + e));
+  p.catch((e) => log.push("second:" + e));
+  const last = p.catch((e) => log.push("third:" + e));
+  return last.then(() => {
+    expect(log).toEqual(["first:err", "second:err", "third:err"]);
+  });
+});

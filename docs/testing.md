@@ -35,7 +35,7 @@ tests/
 │   ├── Promise/             # Promise constructor, static methods, microtask ordering
 │   │   ├── constructor.js, resolve.js, reject.js
 │   │   ├── all.js, all-settled.js, race.js, any.js
-│   │   ├── microtask-ordering.js
+│   │   ├── microtask-ordering.js, thenable-adoption.js, error-cases.js
 │   │   └── prototype/
 │   │       ├── then.js, catch.js, finally.js
 │   ├── Set/

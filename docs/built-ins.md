@@ -324,7 +324,7 @@ const p = new Promise((resolve, reject) => {
 | `Promise.race(iterable)` | Settle with first settled value |
 | `Promise.any(iterable)` | Resolve with first fulfillment; reject with AggregateError if all reject |
 
-**Microtask queue:** `.then()` callbacks are enqueued as microtasks and drained automatically after script execution completes — the script is one macrotask, and microtasks drain after it finishes, matching ECMAScript specification behavior (identical output to V8/Node.js). The test framework also drains microtasks after each test callback, so tests can return a Promise and place assertions inside `.then()` handlers. The benchmark runner drains after each measurement round.
+**Microtask queue:** `.then()` callbacks are enqueued as microtasks and drained automatically after script execution completes — the script is one macrotask, and microtasks drain after it finishes, matching ECMAScript specification behavior (identical output to V8/Node.js). If the script throws an exception, pending microtasks are discarded via `ClearQueue` in a `finally` block, preventing stale callbacks from leaking into subsequent executions. The test framework also drains microtasks after each test callback, so tests can return a Promise and place assertions inside `.then()` handlers. The benchmark runner drains after each measurement round.
 
 **Async test pattern:**
 
@@ -337,6 +337,10 @@ test("async test", () => {
 ```
 
 If a test returns a rejected Promise, the test framework automatically fails the test with the rejection reason.
+
+**Thenable adoption:** Resolving a Promise with another Promise causes it to adopt the inner Promise's state. Resolving a Promise with itself throws a `TypeError` ("Chaining cycle detected for promise"), matching ECMAScript spec behavior.
+
+**Error validation:** Static combinator methods (`Promise.all`, `Promise.allSettled`, `Promise.race`, `Promise.any`) throw a `TypeError` when called with a non-iterable argument (number, string, null, undefined, plain object).
 
 **Chaining and error recovery:**
 

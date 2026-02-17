@@ -54,3 +54,19 @@ test("Promise.all with mixed promises and values", () => {
     expect(v).toEqual([1, 2, 3]);
   });
 });
+
+test("Promise.all with single element", () => {
+  return Promise.all([Promise.resolve(42)]).then((v) => {
+    expect(v).toEqual([42]);
+  });
+});
+
+test("Promise.all with multiple rejections only catches first", () => {
+  return Promise.all([
+    Promise.reject("first"),
+    Promise.reject("second"),
+    Promise.reject("third")
+  ]).catch((e) => {
+    expect(e).toBe("first");
+  });
+});
