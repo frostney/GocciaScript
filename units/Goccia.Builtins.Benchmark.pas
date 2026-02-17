@@ -387,6 +387,9 @@ begin
       except
         on E: Exception do
         begin
+          if Assigned(TGocciaMicrotaskQueue.Instance) then
+            TGocciaMicrotaskQueue.Instance.ClearQueue;
+
           SingleResult := TGocciaObjectValue.Create;
           SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchCase.Name));
           SingleResult.AssignProperty('suite', TGocciaStringLiteralValue.Create(BenchCase.SuiteName));
