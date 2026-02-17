@@ -103,7 +103,7 @@ type
 implementation
 
 uses
-  TimingUtils, Math;
+  TimingUtils;
 
 constructor TGocciaEngine.Create(const AFileName: string; ASourceLines: TStringList; AGlobals: TGocciaGlobalBuiltins);
 var
