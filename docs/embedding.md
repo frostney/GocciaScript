@@ -69,7 +69,7 @@ The `TStringList` is passed by reference — update its contents and call `Execu
 
 ### Timing
 
-All `RunScript*` methods and the `Execute` method return a `TGocciaScriptResult` record that includes microsecond-precision timing for each pipeline phase:
+All `RunScript*` methods and the `Execute` method return a `TGocciaScriptResult` record that includes nanosecond-precision timing for each pipeline phase:
 
 ```pascal
 uses Goccia.Engine, TimingUtils;
