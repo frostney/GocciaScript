@@ -32,7 +32,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Builds all components in order: tests, loader, testrunner, benchmarkrunner, repl.
+Runs a clean (removes stale `.ppu`, `.o`, `.res` from `build/`), then builds all components in order: tests, loader, testrunner, benchmarkrunner, repl.
 
 ### Build Specific Components
 
@@ -49,6 +49,15 @@ Multiple components can be specified:
 ```bash
 ./build.pas loader repl
 ```
+
+### Clean Build Artifacts
+
+```bash
+./build.pas clean              # Remove stale .ppu, .o, .res from build/
+./build.pas clean loader       # Clean then build loader
+```
+
+A full build (no specific targets) automatically cleans first.
 
 ### Compile and Run
 
@@ -95,7 +104,7 @@ These path flags are shared by both build modes. Mode-specific flags are added b
 |------|----------------------|----------------------|
 | Optimization | `-O-` (disabled) | `-O4` (aggressive) |
 | Debug info | `-gw -godwarfsets` (DWARF) | — (none) |
-| Heap trace | `-gh -gl` (leak detection) | — |
+| Line info | `-gl` (debug line numbers) | — |
 | Stack checking | `-Ct` | — |
 | Range checking | `-Cr` | — |
 | Assertions | `-Sa` | — |
@@ -149,6 +158,7 @@ GocciaScript/
 ├── BenchmarkRunner.dpr   # Benchmark runner program source
 ├── units/
 │   ├── Goccia.inc     # Shared compiler directives
+│   ├── TimingUtils.pas # Cross-platform microsecond timing and duration formatting
 │   ├── *.pas          # All unit source files
 │   └── *.Test.pas     # Pascal unit test programs
 └── build/             # All output (gitignored)
@@ -202,7 +212,7 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 **`test`** (needs build) — Runs all JavaScript tests. No native tests.
 
-**`benchmark`** (needs build) — Restores the cached benchmark baseline from main, runs all benchmarks with JSON output, and posts a comparison comment on the PR with per-benchmark percentage changes (green for improvements > 2%, red for regressions > 2%). If no baseline exists, shows results without percentages.
+**`benchmark`** (needs build) — Restores the cached benchmark baseline from main, runs all benchmarks with JSON output, and posts a collapsible comparison comment on the PR grouped by file. Each file section shows per-benchmark ops/sec with percentage changes (🟢 for improvements > 7%, 🔴 for regressions > 7%), plus a per-file and overall average percentage. Files with significant changes are auto-expanded. If no baseline exists, shows results without comparison.
 
 FPC is only installed once per platform in the `build` job. Test, benchmark, and example jobs run in parallel, using pre-built binaries.
 

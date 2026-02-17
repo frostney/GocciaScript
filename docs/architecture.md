@@ -60,6 +60,15 @@ A recursive descent parser that builds an AST from the token stream. Implements:
 
 A dependency-free unit that centralizes all 32 JavaScript keyword string constants (`KEYWORD_THIS`, `KEYWORD_SUPER`, `KEYWORD_UNDEFINED`, etc.). Used by the evaluator, scope, and other units to avoid hardcoded string literals and ensure consistent keyword references. Has no `uses` clause dependencies, so it can be imported by any unit without introducing circular references.
 
+### Timing Utilities (`TimingUtils.pas`)
+
+A cross-platform microsecond-precision timing unit providing two functions:
+
+- **`GetMicroseconds`** — Returns the current timestamp in microseconds. Uses `fpGetTimeOfDay` on Unix (native μs resolution) and `QueryPerformanceCounter`/`QueryPerformanceFrequency` on Windows (sub-μs hardware counter, converted to μs). Falls back to `GetTickCount64 * 1000` on other platforms.
+- **`FormatDuration(Microseconds)`** — Auto-formats a duration with two-decimal precision: values below 0.5ms display as `μs` (e.g., `287μs`), values up to 10s as `ms` (e.g., `1.39ms`), and larger values as `s` (e.g., `12.34s`).
+
+Used by the engine (lex/parse/execute phase timing in `TGocciaScriptResult`), the test assertions framework (test execution duration), and the benchmark runner (calibration and measurement). Has no Goccia-specific dependencies, making it reusable outside the engine.
+
 ### AST (`Goccia.AST.Node.pas`, `Goccia.AST.Expressions.pas`, `Goccia.AST.Statements.pas`)
 
 The Abstract Syntax Tree is structured into three layers:
