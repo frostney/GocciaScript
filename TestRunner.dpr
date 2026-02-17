@@ -71,6 +71,12 @@ begin
       begin
         WriteLn('Fatal error: ', E.Message);
         Result.TestResult := ScriptResult;
+        Result.Timing.Result := nil;
+        Result.Timing.LexTimeMicroseconds := 0;
+        Result.Timing.ParseTimeMicroseconds := 0;
+        Result.Timing.ExecuteTimeMicroseconds := 0;
+        Result.Timing.TotalTimeMicroseconds := 0;
+        Result.Timing.FileName := '';
       end;
     end;
   finally
