@@ -32,6 +32,7 @@ type
 
     procedure Enqueue(const AMicrotask: TGocciaMicrotask);
     procedure DrainQueue;
+    procedure ClearQueue;
     function HasPending: Boolean;
   end;
 
@@ -141,6 +142,11 @@ begin
       end;
     end;
   end;
+end;
+
+procedure TGocciaMicrotaskQueue.ClearQueue;
+begin
+  FQueue.Clear;
 end;
 
 function TGocciaMicrotaskQueue.HasPending: Boolean;

@@ -303,6 +303,8 @@ begin
         Result.ExecuteTimeMicroseconds := ExecEnd - ParseEnd;
         Result.TotalTimeMicroseconds := ExecEnd - StartTime;
       finally
+        if Assigned(TGocciaMicrotaskQueue.Instance) then
+          TGocciaMicrotaskQueue.Instance.ClearQueue;
         ProgramNode.Free;
       end;
     finally
@@ -315,9 +317,14 @@ end;
 
 function TGocciaEngine.ExecuteProgram(AProgram: TGocciaProgram): TGocciaValue;
 begin
-  Result := FInterpreter.Execute(AProgram);
-  if Assigned(TGocciaMicrotaskQueue.Instance) then
-    TGocciaMicrotaskQueue.Instance.DrainQueue;
+  try
+    Result := FInterpreter.Execute(AProgram);
+    if Assigned(TGocciaMicrotaskQueue.Instance) then
+      TGocciaMicrotaskQueue.Instance.DrainQueue;
+  finally
+    if Assigned(TGocciaMicrotaskQueue.Instance) then
+      TGocciaMicrotaskQueue.Instance.ClearQueue;
+  end;
 end;
 
 class function TGocciaEngine.RunScript(const Source: string; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult;
