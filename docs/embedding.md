@@ -75,13 +75,13 @@ The `TStringList` is passed by reference — update its contents and call `Execu
 
 ```pascal
 var
-  Timing: TGocciaTimingResult;
+  ScriptResult: TGocciaScriptResult;
 begin
-  Timing := TGocciaEngine.RunScriptWithTiming(Source, 'bench.js', TGocciaEngine.DefaultGlobals);
-  WriteLn('Lex: ', Timing.LexTimeMs, 'ms');
-  WriteLn('Parse: ', Timing.ParseTimeMs, 'ms');
-  WriteLn('Execute: ', Timing.ExecuteTimeMs, 'ms');
-  WriteLn('Total: ', Timing.TotalTimeMs, 'ms');
+  ScriptResult := TGocciaEngine.RunScript(Source, 'bench.js', TGocciaEngine.DefaultGlobals);
+  WriteLn('Lex: ', FormatDuration(ScriptResult.LexTimeMicroseconds));
+  WriteLn('Parse: ', FormatDuration(ScriptResult.ParseTimeMicroseconds));
+  WriteLn('Execute: ', FormatDuration(ScriptResult.ExecuteTimeMicroseconds));
+  WriteLn('Total: ', FormatDuration(ScriptResult.TotalTimeMicroseconds));
 end;
 ```
 

@@ -91,7 +91,7 @@ jobs:
           fi
 
       - name: Run benchmarks
-        run: ./build/BenchmarkRunner benchmarks --format=json --output=benchmark-results.json
+        run: ./build/BenchmarkRunner benchmarks --no-progress --format=json --output=benchmark-results.json
 
       - name: Compare benchmarks and comment
         uses: actions/github-script@v7

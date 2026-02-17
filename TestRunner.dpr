@@ -4,13 +4,20 @@ program TestRunner;
 
 uses
   Classes, SysUtils, Generics.Collections, Goccia.Values.Primitives, Goccia.Values.ObjectValue, 
-  Goccia.Values.ArrayValue, Goccia.Engine, Goccia.Error, 
+  Goccia.Values.ArrayValue, Goccia.Engine, TimingUtils, Goccia.Error, 
   Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ClassHelper, FileUtils in 'units/FileUtils.pas';
 
-function RunGocciaScript(const FileName: string): TGocciaObjectValue;
+type
+  TTestFileResult = record
+    TestResult: TGocciaObjectValue;
+    Timing: TGocciaScriptResult;
+  end;
+
+function RunGocciaScript(const FileName: string): TTestFileResult;
 var
   Source: TStringList;
   ScriptResult, FileResult: TGocciaObjectValue;
+  EngineResult: TGocciaScriptResult;
   TestGlobals: TGocciaGlobalBuiltins;
 begin
   TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
@@ -28,11 +35,12 @@ begin
   Source := TStringList.Create;
   try  
     Source.LoadFromFile(FileName);
-    // It's easiest to inject the runTests call
     Source.Add('runTests({ exitOnFirstFailure: false, showTestResults: false, silent: true });');
 
     try
-      FileResult := TGocciaEngine.RunScriptFromStringList(Source, FileName, TestGlobals) as TGocciaObjectValue;
+      EngineResult := TGocciaEngine.RunScriptFromStringList(Source, FileName, TestGlobals);
+      Result.Timing := EngineResult;
+      FileResult := EngineResult.Result as TGocciaObjectValue;
       
       if FileResult <> nil then
       begin
@@ -57,13 +65,12 @@ begin
         ScriptResult := FileResult;
       end;
 
-      Result := ScriptResult;
+      Result.TestResult := ScriptResult;
     except
       on E: Exception do
       begin
         WriteLn('Fatal error: ', E.Message);
-        
-        Result := ScriptResult;
+        Result.TestResult := ScriptResult;
       end;
     end;
   finally
@@ -71,15 +78,28 @@ begin
   end;
 end;
 
-function RunScriptFromFile(const FileName: string): TGocciaObjectValue;
+type
+  TAggregatedTestResult = record
+    TestResult: TGocciaObjectValue;
+    TotalLexMicroseconds: Int64;
+    TotalParseMicroseconds: Int64;
+    TotalExecMicroseconds: Int64;
+  end;
+
+function RunScriptFromFile(const FileName: string): TAggregatedTestResult;
 var
-  ScriptResult: TGocciaObjectValue;
+  FileResult: TTestFileResult;
 begin
+  Result.TotalLexMicroseconds := 0;
+  Result.TotalParseMicroseconds := 0;
+  Result.TotalExecMicroseconds := 0;
   try
     WriteLn('Running script: ', FileName);
-    ScriptResult := RunGocciaScript(FileName);
-  
-    Result := ScriptResult;
+    FileResult := RunGocciaScript(FileName);
+    Result.TestResult := FileResult.TestResult;
+    Result.TotalLexMicroseconds := FileResult.Timing.LexTimeMicroseconds;
+    Result.TotalParseMicroseconds := FileResult.Timing.ParseTimeMicroseconds;
+    Result.TotalExecMicroseconds := FileResult.Timing.ExecuteTimeMicroseconds;
   except
     on E: Exception do
     begin
@@ -89,11 +109,11 @@ begin
   end;
 end;
 
-function RunScriptsFromFiles(const Files: TStringList): TGocciaObjectValue;
+function RunScriptsFromFiles(const Files: TStringList): TAggregatedTestResult;
 var
   I: Integer;
   AllTestResults: TGocciaObjectValue;
-  ScriptResult: TGocciaObjectValue;
+  FileResult: TAggregatedTestResult;
   PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions, TotalDuration: Double;
 begin
   AllTestResults := TGocciaObjectValue.Create;
@@ -107,28 +127,33 @@ begin
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('failedTests', TGocciaArrayValue.Create);
 
-  // Initialize counters to avoid repeated object creation
   PassedCount := 0;
   FailedCount := 0;
   SkippedCount := 0;
   TotalRunCount := 0;
   TotalAssertions := 0;
   TotalDuration := 0;
+  Result.TotalLexMicroseconds := 0;
+  Result.TotalParseMicroseconds := 0;
+  Result.TotalExecMicroseconds := 0;
 
   for I := 0 to Files.Count - 1 do
   begin
-    ScriptResult := RunScriptFromFile(Files[I]) as TGocciaObjectValue;
-    AllTestResults.AssignProperty(Files[I], ScriptResult);
-    
-    PassedCount := PassedCount + ScriptResult.GetProperty('passed').ToNumberLiteral.Value;
-    FailedCount := FailedCount + ScriptResult.GetProperty('failed').ToNumberLiteral.Value;
-    SkippedCount := SkippedCount + ScriptResult.GetProperty('skipped').ToNumberLiteral.Value;
-    TotalRunCount := TotalRunCount + ScriptResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
-    TotalDuration := TotalDuration + ScriptResult.GetProperty('duration').ToNumberLiteral.Value;
-    TotalAssertions := TotalAssertions + ScriptResult.GetProperty('assertions').ToNumberLiteral.Value;
+    FileResult := RunScriptFromFile(Files[I]);
+    AllTestResults.AssignProperty(Files[I], FileResult.TestResult);
+
+    Result.TotalLexMicroseconds := Result.TotalLexMicroseconds + FileResult.TotalLexMicroseconds;
+    Result.TotalParseMicroseconds := Result.TotalParseMicroseconds + FileResult.TotalParseMicroseconds;
+    Result.TotalExecMicroseconds := Result.TotalExecMicroseconds + FileResult.TotalExecMicroseconds;
+
+    PassedCount := PassedCount + FileResult.TestResult.GetProperty('passed').ToNumberLiteral.Value;
+    FailedCount := FailedCount + FileResult.TestResult.GetProperty('failed').ToNumberLiteral.Value;
+    SkippedCount := SkippedCount + FileResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value;
+    TotalRunCount := TotalRunCount + FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
+    TotalDuration := TotalDuration + FileResult.TestResult.GetProperty('duration').ToNumberLiteral.Value;
+    TotalAssertions := TotalAssertions + FileResult.TestResult.GetProperty('assertions').ToNumberLiteral.Value;
   end;
   
-  // Set final totals - create objects only once at the end
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(SkippedCount));
@@ -136,40 +161,48 @@ begin
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
   
-  Result := AllTestResults;
+  Result.TestResult := AllTestResults;
 end;
 
-procedure PrintTestResults(const TestResult: TGocciaObjectValue);
+procedure PrintTestResults(const AResult: TAggregatedTestResult);
 var
+  TestResult: TGocciaObjectValue;
   TotalRunTests: String;
   TotalPassed: String;
   TotalFailed: String;
   TotalSkipped: String;
   TotalAssertions: String;
-  TotalDuration: String;
+  DurationMicroseconds: Int64;
+  RunCount: Double;
+  PerTestMicroseconds: Int64;
 begin
   ExitCode := 0;
+  TestResult := AResult.TestResult;
 
   TotalRunTests := TestResult.GetProperty('totalRunTests').ToStringLiteral.Value;
   TotalPassed := TestResult.GetProperty('passed').ToStringLiteral.Value;
   TotalFailed := TestResult.GetProperty('failed').ToStringLiteral.Value;
   TotalSkipped := TestResult.GetProperty('skipped').ToStringLiteral.Value;
   TotalAssertions := TestResult.GetProperty('assertions').ToStringLiteral.Value;
-  TotalDuration := TestResult.GetProperty('duration').ToStringLiteral.Value;
+  DurationMicroseconds := Round(TestResult.GetProperty('duration').ToNumberLiteral.Value);
+  RunCount := StrToFloat(TotalRunTests);
 
   Writeln('Test Results Total Tests: ', TestResult.GetProperty('totalTests').ToStringLiteral.Value);
   Writeln(Format('Test Results Run Tests: %s', [TotalRunTests]));
 
-  if StrToFloat(TotalRunTests) > 0 then
+  if RunCount > 0 then
   begin
-    Writeln(Format('Test Results Passed: %s (%2.2f%%)', [TotalPassed, (StrToFloat(TotalPassed) / StrToFloat(TotalRunTests) * 100)]));
-    Writeln(Format('Test Results Failed: %s (%2.2f%%)', [TotalFailed, (StrToFloat(TotalFailed) / StrToFloat(TotalRunTests) * 100)]));
-    Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / StrToFloat(TotalRunTests) * 100)]));
+    PerTestMicroseconds := Round(DurationMicroseconds / RunCount);
+    Writeln(Format('Test Results Passed: %s (%2.2f%%)', [TotalPassed, (StrToFloat(TotalPassed) / RunCount * 100)]));
+    Writeln(Format('Test Results Failed: %s (%2.2f%%)', [TotalFailed, (StrToFloat(TotalFailed) / RunCount * 100)]));
+    Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / RunCount * 100)]));
     Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
-    Writeln(Format('Test Results Duration: %sms (%2.2fms/test)', [TotalDuration, (StrToFloat(TotalDuration) / StrToFloat(TotalRunTests))]));
+    Writeln(Format('Test Results Test Execution: %s (%s/test)', [FormatDuration(DurationMicroseconds), FormatDuration(PerTestMicroseconds)]));
+    Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
+      [FormatDuration(AResult.TotalLexMicroseconds), FormatDuration(AResult.TotalParseMicroseconds), FormatDuration(AResult.TotalExecMicroseconds),
+       FormatDuration(AResult.TotalLexMicroseconds + AResult.TotalParseMicroseconds + AResult.TotalExecMicroseconds)]));
     Writeln(Format('Test Results Failed Tests: %s', [TestResult.GetProperty('failedTests').ToStringLiteral.Value]));
   end;
-
 
   if StrToFloat(TotalFailed) > 0 then
     ExitCode := 1;

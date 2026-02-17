@@ -44,6 +44,7 @@ begin
     until FindNext(SearchRec) <> 0;
   end;
   FindClose(SearchRec);
+  Files.Sort;
   Result := Files;
 end;
 
