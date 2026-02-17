@@ -56,9 +56,9 @@ type
 
     // Core methods
     function GetLexicalBinding(const AName: string; ALine: Integer = 0; AColumn: Integer = 0): TLexicalBinding;
-    function GetValue(const AName: string): TGocciaValue;
+    function GetValue(const AName: string): TGocciaValue; inline;
 
-    function ResolveIdentifier(const AName: string): TGocciaValue;
+    function ResolveIdentifier(const AName: string): TGocciaValue; inline;
     function ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
     function Contains(const AName: string): Boolean; inline;
 

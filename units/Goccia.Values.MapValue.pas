@@ -251,7 +251,7 @@ begin
 
   M := TGocciaMapValue(ThisValue);
   Callback := Args.GetElement(0);
-  if not (Callback is TGocciaFunctionBase) then Exit;
+  if not Callback.IsCallable then Exit;
 
   for I := 0 to M.Entries.Count - 1 do
   begin

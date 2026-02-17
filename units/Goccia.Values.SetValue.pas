@@ -203,7 +203,7 @@ begin
 
   S := TGocciaSetValue(ThisValue);
   Callback := Args.GetElement(0);
-  if not (Callback is TGocciaFunctionBase) then Exit;
+  if not Callback.IsCallable then Exit;
 
   for I := 0 to S.FItems.Count - 1 do
   begin

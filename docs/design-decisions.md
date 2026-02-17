@@ -40,12 +40,54 @@ classDiagram
 
 The base `TGocciaValue` declares virtual `GetProperty` and `SetProperty` methods with safe defaults (`nil` / no-op). Each value type overrides these to implement its property semantics — objects walk the prototype chain, arrays handle numeric indices, instances invoke getters/setters, etc.
 
+Beyond property access, the base class provides two additional virtual methods for type discrimination:
+
+- **`IsPrimitive`** — Returns `False` by default; overridden to return `True` by all primitive types (`Null`, `Undefined`, `Boolean`, `Number`, `String`). Replaces 5-way `is` check chains at call sites like `ToPrimitive`.
+- **`IsCallable`** — Returns `False` by default; overridden to return `True` by `TGocciaFunctionBase` (all function types) and `TGocciaClassValue` (callable via `new`). Replaces 2-way `is` check chains at call sites like `Function.prototype.call/apply/bind` and array callback validation.
+
 **Why virtual dispatch?**
 
 - **Single hierarchy** — Every type that supports property access is in the `TGocciaValue` hierarchy. Virtual methods leverage this directly without extra interface indirection.
-- **Simple call sites** — `Value.GetProperty(Name)` is a single virtual call. No capability queries, no casting.
-- **Safe defaults** — The base class returns `nil` for `GetProperty` and no-ops for `SetProperty`, so the evaluator can call these on any value without type-checking first. Primitives silently ignore property writes, matching JavaScript semantics.
-- **Extensible** — New value types added to the hierarchy automatically participate in property access by overriding the virtual methods.
+- **Simple call sites** — `Value.GetProperty(Name)` is a single virtual call. `Value.IsPrimitive` and `Value.IsCallable` are likewise single VMT calls. No capability queries, no casting.
+- **Safe defaults** — The base class returns `nil` for `GetProperty`, no-ops for `SetProperty`, `False` for `IsPrimitive`, and `False` for `IsCallable`, so the evaluator can call these on any value without type-checking first.
+- **Extensible** — New value types added to the hierarchy automatically participate by overriding the virtual methods.
+- **Performance** — A single VMT call replaces multi-`is` type check chains. For `IsPrimitive`, this replaces five sequential `is` checks; for `IsCallable`, two. Benchmarks show 10-20% improvement in class-related operations where these checks are on the hot path.
+
+## Centralized Keyword Constants
+
+JavaScript keyword literals (`this`, `super`, `undefined`, `null`, `true`, `false`, etc.) are defined as named constants in `Goccia.Keywords.pas`:
+
+```pascal
+const
+  KEYWORD_THIS      = 'this';
+  KEYWORD_SUPER     = 'super';
+  KEYWORD_UNDEFINED = 'undefined';
+  // ... 32 keywords total
+```
+
+**Why a dedicated unit?**
+
+- **No magic strings** — The evaluator, scope, and other units reference `KEYWORD_THIS` instead of `'this'`, preventing typos and enabling compiler-checked usage.
+- **Minimal dependencies** — `Goccia.Keywords` has no `uses` clause dependencies, so any unit can import it without introducing circular references.
+- **Single source of truth** — All keyword strings are defined once. The lexer's token mapping and the evaluator's identifier handling both reference the same constants.
+
+## Inlining Hot-Path Methods
+
+Small, frequently-called non-virtual methods are marked `inline` to eliminate call overhead:
+
+| Method | Unit | Rationale |
+|--------|------|-----------|
+| `GetValue(Name)` | `Goccia.Scope` | Called on every identifier lookup |
+| `ResolveIdentifier(Name)` | `Goccia.Scope` | Unifies `this`/keyword checks with scope lookup |
+| `ContainsOwnLexicalBinding(Name)` | `Goccia.Scope` | Dictionary lookup wrapper |
+| `Contains(Name)` | `Goccia.Scope` | Scope chain containment check |
+| `IsNegativeZero(Value)` | `Goccia.Evaluator.Comparison` | Trivial enum comparison |
+
+**Why selective inlining?**
+
+- **Virtual methods cannot be inlined** — `GetProperty`, `IsPrimitive`, `IsCallable`, and scope chain walkers (`GetThisValue`, `GetOwningClass`, `GetSuperClass`) rely on VMT dispatch and are never candidates for inlining.
+- **Only non-virtual wrappers** — Inlined methods are thin wrappers (dictionary lookups, enum comparisons) where the call overhead is significant relative to the method body.
+- **Measurable on hot paths** — Scope lookups happen on every identifier reference. Eliminating function call overhead here compounds across deeply nested expressions.
 
 ## Singleton Special Values
 
@@ -89,7 +131,9 @@ Scopes form a tree with parent pointers, implementing lexical scoping:
 - **`OnError` on scopes** — Each scope carries a reference to the error handler callback, inherited from its parent. This allows closures and callbacks to always find the correct error handler without global state.
 - **Temporal Dead Zone** — `let`/`const` bindings are registered before initialization, enforcing TDZ semantics (accessing before `=` throws `ReferenceError`).
 - **Module scope isolation** — Modules execute in `skModule` scopes (children of the global scope), preventing module-internal variables from leaking into the global scope.
-- **Specialized scopes** — `TGocciaCatchScope` handles catch parameter shadowing with proper scope semantics. This is the only specialized scope subclass; generic `TGocciaScope` handles global, block, function, module, and other scope kinds via the `TScopeKind` enum.
+- **Specialized scope hierarchy** — `TGocciaGlobalScope` (root), `TGocciaCallScope` (function calls), `TGocciaMethodCallScope` (class method calls with `SuperClass`/`OwningClass`), `TGocciaClassInitScope` (instance property initialization), and `TGocciaCatchScope` (catch parameter scoping). Each specialized scope overrides virtual methods (`GetThisValue`, `GetOwningClass`, `GetSuperClass`) to participate in VMT-based chain-walking.
+- **VMT-based chain-walking** — `FindThisValue`, `FindOwningClass`, and `FindSuperClass` walk the parent chain calling the corresponding virtual `Get*` method on each scope, stopping at the first non-`nil` result. This eliminates `is` type checks in the evaluator and centralizes resolution logic in the scope hierarchy.
+- **Unified identifier resolution** — `ResolveIdentifier(Name)` on `TGocciaScope` handles `this` (via `FindThisValue`) and keyword constants (via `Goccia.Keywords`) before falling back to the standard scope chain walk, avoiding scattered special-case checks in the evaluator.
 
 ## `this` Binding: Arrow Functions vs Shorthand Methods
 

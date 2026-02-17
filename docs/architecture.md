@@ -56,6 +56,10 @@ A recursive descent parser that builds an AST from the token stream. Implements:
 - **Error recovery** — Throws `TGocciaSyntaxError` with source location for diagnostics.
 - **Arrow function detection** — Uses lookahead (`IsArrowFunction`) to disambiguate parenthesized expressions from arrow function parameters.
 
+### Keywords (`Goccia.Keywords.pas`)
+
+A dependency-free unit that centralizes all 32 JavaScript keyword string constants (`KEYWORD_THIS`, `KEYWORD_SUPER`, `KEYWORD_UNDEFINED`, etc.). Used by the evaluator, scope, and other units to avoid hardcoded string literals and ensure consistent keyword references. Has no `uses` clause dependencies, so it can be imported by any unit without introducing circular references.
+
 ### AST (`Goccia.AST.Node.pas`, `Goccia.AST.Expressions.pas`, `Goccia.AST.Statements.pas`)
 
 The Abstract Syntax Tree is structured into three layers:
@@ -138,10 +142,14 @@ Each scope maintains a dictionary of `TGocciaLexicalBinding` entries that track:
 The scope system uses a class hierarchy for specialised scope types:
 
 - **`TGocciaGlobalScope`** — Root scope with no parent, used by the interpreter/engine.
-- **`TGocciaCallScope`** — Marker class for function call scopes (`skFunction`).
-- **`TGocciaMethodCallScope`** — Extends `TGocciaCallScope` with typed `SuperClass` and `OwningClass` fields, enabling `super` resolution and private field access without string-keyed lookups. The evaluator finds these via `FindSuperClass` and `FindOwningClass`, which walk the parent chain using virtual dispatch.
-- **`TGocciaClassInitScope`** — Used during instance property initialization, carries a typed `OwningClass` field for private field resolution.
+- **`TGocciaCallScope`** — Marker class for function call scopes (`skFunction`). Overrides `GetThisValue` to return the scope's `ThisValue` directly, terminating the chain walk.
+- **`TGocciaMethodCallScope`** — Extends `TGocciaCallScope` with typed `SuperClass` and `OwningClass` fields, enabling `super` resolution and private field access without string-keyed lookups. Overrides `GetOwningClass` and `GetSuperClass`.
+- **`TGocciaClassInitScope`** — Used during instance property initialization, carries a typed `OwningClass` field for private field resolution. Overrides `GetThisValue` and `GetOwningClass`.
 - **`TGocciaCatchScope`** — Handles catch parameter scoping with proper assignment propagation.
+
+The evaluator resolves `this`, owning class, and super class via `FindThisValue`, `FindOwningClass`, and `FindSuperClass` on the scope. These walk the parent chain calling the corresponding virtual `Get*` method on each scope, stopping at the first non-`nil` result. This VMT-based chain-walking pattern eliminates `is` type checks and centralizes the resolution logic.
+
+Additionally, `ResolveIdentifier(Name)` on `TGocciaScope` provides a unified identifier lookup that handles `this` (via `FindThisValue`) and keyword constants (via `Goccia.Keywords`) before falling back to the standard scope chain walk. This avoids scattering special-case checks across the evaluator.
 
 ## Module System
 

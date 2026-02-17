@@ -325,7 +325,7 @@ begin
 
   if RequiresCallback then
   begin
-    if not ((Result is TGocciaFunctionValue) or (Result is TGocciaNativeFunctionValue)) then
+    if not Result.IsCallable then
       ThrowError('Callback must be a function');
   end
   else
@@ -1031,7 +1031,7 @@ begin
   begin
     CustomSortFunction := Args.GetElement(0);
 
-    if not ((CustomSortFunction is TGocciaFunctionValue) or (CustomSortFunction is TGocciaNativeFunctionValue)) then
+    if not CustomSortFunction.IsCallable then
       ThrowError('Custom sort function must be a function');
 
     CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
@@ -1255,7 +1255,7 @@ begin
   begin
     CustomSortFunction := Args.GetElement(0);
 
-    if not ((CustomSortFunction is TGocciaFunctionValue) or (CustomSortFunction is TGocciaNativeFunctionValue)) then
+    if not CustomSortFunction.IsCallable then
       ThrowError('Custom sort function must be a function');
 
     // Quicksort with custom comparison function (mutates in-place)

@@ -69,7 +69,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Parser | `Goccia.Parser.pas` | Tokens → AST |
 | Interpreter | `Goccia.Interpreter.pas` | AST execution, module loading, scope ownership |
 | Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules) |
-| Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ |
+| Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ, VMT-based chain-walking |
+| Keywords | `Goccia.Keywords.pas` | Centralized JavaScript keyword string constants |
 | Garbage Collector | `Goccia.GarbageCollector.pas` | Mark-and-sweep memory management for runtime values |
 
 ## Critical Rules
@@ -135,6 +136,13 @@ GocciaScript follows ECMAScript strict mode `this` binding. Two function forms e
 
 `this` binding is resolved via virtual dispatch on `TGocciaFunctionValue.BindThis` — no boolean flags or runtime branches. Array prototype callbacks pass `undefined` as `ThisValue`, so arrow callbacks correctly inherit their enclosing scope's `this`.
 
+At the scope level, `this`, owning class, and super class are resolved via VMT-based chain-walking:
+- `Scope.FindThisValue` — walks the parent chain calling `GetThisValue` (virtual) on each scope.
+- `Scope.FindOwningClass` / `Scope.FindSuperClass` — same pattern for class resolution.
+- `Scope.ResolveIdentifier(Name)` — unified identifier lookup that handles `this` (via `FindThisValue`) and keyword constants before falling back to the scope chain.
+
+Use `Goccia.Keywords` constants (`KEYWORD_THIS`, `KEYWORD_SUPER`, etc.) instead of hardcoded string literals when referencing JavaScript keywords.
+
 See [docs/design-decisions.md](docs/design-decisions.md) for the full design rationale.
 
 ## Code Style
@@ -162,7 +170,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`) and shared prototype singletons (String, Number, Array, Set, Map, Function — each type uses `class var` + `InitializePrototype` guarded by `if Assigned`)
 - **Factory method** for scope creation (`CreateChild`, with optional capacity hint)
 - **Context object** for evaluation state (`TGocciaEvaluationContext`)
-- **Virtual dispatch** for property access (`GetProperty`/`SetProperty` on `TGocciaValue`)
+- **Virtual dispatch** for property access (`GetProperty`/`SetProperty`), type discrimination (`IsPrimitive`/`IsCallable`), and scope chain resolution (`GetThisValue`/`GetOwningClass`/`GetSuperClass`) on the `TGocciaValue` and `TGocciaScope` hierarchies
 - **Chain of responsibility** for scope lookup
 - **Parser combinator** for binary expressions (`ParseBinaryExpression` shared helper)
 - **Recursive descent** for parsing
@@ -173,11 +181,12 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 
 See [docs/value-system.md](docs/value-system.md) for the complete value system documentation.
 
-All values inherit from `TGocciaValue`. Property access is unified through virtual methods on the base class:
-- `GetProperty(Name)` — Returns `nil` by default; overridden by objects, arrays, classes, instances, and string values.
-- `SetProperty(Name, Value)` — No-op by default; overridden by objects, arrays, classes, and instances.
+All values inherit from `TGocciaValue`. Virtual methods on the base class eliminate type-checking at call sites:
+- `GetProperty(Name)` / `SetProperty(Name, Value)` — Polymorphic property access. Returns `nil` / no-op by default.
+- `IsPrimitive` — Returns `True` for null, undefined, boolean, number, and string types. Use `Value.IsPrimitive` instead of multi-`is` check chains.
+- `IsCallable` — Returns `True` for functions and classes. Use `Value.IsCallable` instead of `(Value is TGocciaFunctionBase)` or `(Value is TGocciaFunctionValue) or (Value is TGocciaNativeFunctionValue)`.
 
-The evaluator calls these directly (`Value.GetProperty(Name)`) without type-checking or interface queries.
+The evaluator calls these directly (`Value.GetProperty(Name)`, `Value.IsPrimitive`, `Value.IsCallable`) without type-checking or interface queries. **Always prefer these VMT methods over `is` type checks.**
 
 Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `CreateErrorObject`, etc.). Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
 

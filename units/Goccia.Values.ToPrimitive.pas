@@ -32,12 +32,8 @@ var
   Method, CallResult: TGocciaValue;
   Args: TGocciaArgumentsCollection;
 begin
-  // Primitives return as-is
-  if (Value is TGocciaStringLiteralValue) or
-     (Value is TGocciaNumberLiteralValue) or
-     (Value is TGocciaBooleanLiteralValue) or
-     (Value is TGocciaNullLiteralValue) or
-     (Value is TGocciaUndefinedLiteralValue) then
+  // Primitives return as-is (single VMT call instead of 5 `is` checks)
+  if Value.IsPrimitive then
   begin
     Result := Value;
     Exit;
@@ -50,14 +46,13 @@ begin
 
     // Try valueOf()
     Method := Obj.GetProperty('valueOf');
-    if Assigned(Method) and not (Method is TGocciaUndefinedLiteralValue) and
-       (Method is TGocciaFunctionBase) then
+    if Assigned(Method) and Method.IsCallable then
     begin
       Args := TGocciaArgumentsCollection.Create;
       try
         CallResult := TGocciaFunctionBase(Method).Call(Args, Value);
         // If valueOf returned a primitive, use it
-        if not (CallResult is TGocciaObjectValue) then
+        if CallResult.IsPrimitive then
         begin
           Result := CallResult;
           Exit;
@@ -69,13 +64,12 @@ begin
 
     // Try toString()
     Method := Obj.GetProperty('toString');
-    if Assigned(Method) and not (Method is TGocciaUndefinedLiteralValue) and
-       (Method is TGocciaFunctionBase) then
+    if Assigned(Method) and Method.IsCallable then
     begin
       Args := TGocciaArgumentsCollection.Create;
       try
         CallResult := TGocciaFunctionBase(Method).Call(Args, Value);
-        if not (CallResult is TGocciaObjectValue) then
+        if CallResult.IsPrimitive then
         begin
           Result := CallResult;
           Exit;

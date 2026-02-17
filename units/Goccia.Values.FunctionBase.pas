@@ -40,6 +40,9 @@ type
     // Abstract method that subclasses must implement
     function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; virtual;
 
+    // VMT-based type discrimination
+    function IsCallable: Boolean; override;
+
     // Override TypeName and TypeOf for all functions
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -110,6 +113,11 @@ begin
   Result := '';
 end;
 
+function TGocciaFunctionBase.IsCallable: Boolean;
+begin
+  Result := True;
+end;
+
 function TGocciaFunctionBase.TypeName: string;
 begin
   Result := 'function';
@@ -149,7 +157,7 @@ begin
   // Function.prototype.call(thisArg, ...args)
   // ThisValue is the function being called
 
-  if not (ThisValue is TGocciaFunctionBase) then
+  if not ThisValue.IsCallable then
     raise TGocciaError.Create('Function.prototype.call called on non-function', 0, 0, '', nil);
 
   // First argument is the 'this' value for the call
@@ -178,7 +186,7 @@ var
   LengthProp: TGocciaValue;
   ArrayLength: Integer;
 begin
-  if not (ThisValue is TGocciaFunctionBase) then
+  if not ThisValue.IsCallable then
     raise TGocciaError.Create('Function.prototype.apply called on non-function', 0, 0, '', nil);
 
   if Args.Length > 0 then
@@ -230,7 +238,7 @@ begin
   // Function.prototype.bind(thisArg, ...args)
   // ThisValue is the function being bound
 
-  if not (ThisValue is TGocciaFunctionBase) then
+  if not ThisValue.IsCallable then
     raise TGocciaError.Create('Function.prototype.bind called on non-function', 0, 0, '', nil);
 
   // First argument is the 'this' value to bind

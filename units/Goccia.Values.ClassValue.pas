@@ -34,6 +34,7 @@ type
   public
     constructor Create(const AName: string; ASuperClass: TGocciaClassValue);
     destructor Destroy; override;
+    function IsCallable: Boolean; override;
     function TypeName: string; override;
     function TypeOf: string; override;
     function ToStringLiteral: TGocciaStringLiteralValue; override;
@@ -205,6 +206,11 @@ begin
     FuncPair.Value.GCMarkReferences;
   for FuncPair in FPrivateSetters do
     FuncPair.Value.GCMarkReferences;
+end;
+
+function TGocciaClassValue.IsCallable: Boolean;
+begin
+  Result := True;
 end;
 
 function TGocciaClassValue.TypeName: string;

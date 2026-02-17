@@ -25,8 +25,7 @@ implementation
 uses Goccia.Values.ArrayValue, Goccia.Values.ObjectValue, Goccia.Values.ClassHelper,
      Goccia.Values.SetValue, Goccia.Values.MapValue;
 
-// Helper function to check if a GocciaNumberValue is negative zero
-function IsNegativeZero(Value: TGocciaNumberLiteralValue): Boolean;
+function IsNegativeZero(Value: TGocciaNumberLiteralValue): Boolean; inline;
 begin
   Result := Value.IsNegativeZero;
 end;

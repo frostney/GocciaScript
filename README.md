@@ -168,7 +168,7 @@ See [Architecture](docs/architecture.md) for the full deep-dive.
 - **Define vs Assign**: `Define` creates a new variable binding; `Assign` changes an existing one. These are distinct operations throughout the codebase.
 - **Pure evaluation**: The evaluator is composed of pure functions with no side effects.
 - **No global mutable state**: All runtime state flows through explicit parameters — the evaluation context, the scope chain, and value objects.
-- **Virtual dispatch**: Property access is unified through virtual `GetProperty`/`SetProperty` methods on the base value class, enabling polymorphic property access without interface queries.
+- **Virtual dispatch**: Property access (`GetProperty`/`SetProperty`), type discrimination (`IsPrimitive`/`IsCallable`), and scope chain resolution (`GetThisValue`/`GetOwningClass`/`GetSuperClass`) all use virtual methods, replacing type checks with single VMT calls.
 
 See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 
