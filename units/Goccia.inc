@@ -1,2 +1,7 @@
-{$mode delphi} {H+} {$overflowchecks on} {$rangechecks on} {$modeswitch
-advancedrecords} {$modeswitch multihelpers}
+{$mode delphi} {H+}
+{$IFNDEF PRODUCTION}
+  {$overflowchecks on}
+  {$rangechecks on}
+{$ENDIF}
+{$modeswitch advancedrecords}
+{$modeswitch multihelpers}

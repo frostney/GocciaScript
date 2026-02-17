@@ -13,10 +13,23 @@ GocciaScript uses a self-hosted build script written in FreePascal, executed via
 
 ## Build Commands
 
+### Build Modes
+
+The build script supports two modes via `--dev` (default) and `--prod` flags:
+
+```bash
+./build.pas loader              # Dev build (default)
+./build.pas --dev loader        # Explicit dev build
+./build.pas --prod loader       # Production build
+./build.pas --prod              # Production build of all components
+./build.pas --prod loader repl  # Production build of specific components
+```
+
 ### Build Everything
 
 ```bash
-./build.pas
+./build.pas           # Dev build of all components
+./build.pas --prod    # Production build of all components
 ```
 
 Builds all components in order: tests, loader, testrunner, benchmarkrunner, repl.
@@ -65,17 +78,30 @@ Intermediate files (`.o`, `.ppu`) also go to `build/` to keep the source tree cl
 
 ## Compiler Configuration
 
-### `config.cfg`
+### `config.cfg` (Shared Flags)
 
 ```
 -Fu./units      # Unit search path
 -Fi./units      # Include file search path
 -FUbuild        # Unit output directory
 -FEbuild        # Executable output directory
--O3             # Optimization level 3
--gw             # Generate DWARF debug info
--godwarfsets    # DWARF set representation
 ```
+
+These path flags are shared by both build modes. Mode-specific flags are added by `build.pas`.
+
+### Build Mode Flags
+
+| Flag | Development (`--dev`) | Production (`--prod`) |
+|------|----------------------|----------------------|
+| Optimization | `-O-` (disabled) | `-O4` (aggressive) |
+| Debug info | `-gw -godwarfsets` (DWARF) | — (none) |
+| Heap trace | `-gh -gl` (leak detection) | — |
+| Stack checking | `-Ct` | — |
+| Range checking | `-Cr` | — |
+| Assertions | `-Sa` | — |
+| Strip symbols | — | `-Xs` |
+| Smart linking | — | `-CX -XX` |
+| Define | — | `-dPRODUCTION` |
 
 ### `Goccia.inc`
 
@@ -84,13 +110,15 @@ Shared compiler directives included by all units:
 ```pascal
 {$mode delphi}                    // Delphi-compatible syntax
 {H+}                              // Long strings (AnsiString) by default
-{$overflowchecks on}              // Runtime arithmetic overflow detection
-{$rangechecks on}                 // Runtime array bounds checking
+{$IFNDEF PRODUCTION}
+  {$overflowchecks on}            // Runtime arithmetic overflow detection
+  {$rangechecks on}               // Runtime array bounds checking
+{$ENDIF}
 {$modeswitch advancedrecords}     // Records with methods
 {$modeswitch multihelpers}        // Multiple class helpers for same type
 ```
 
-Overflow and range checks are enabled for safety. The `-O3` optimization flag in `config.cfg` ensures performance is still good despite the runtime checks.
+Overflow and range checks are enabled in development mode for safety. In production builds, the `-dPRODUCTION` define disables these checks for maximum performance.
 
 ## How `build.pas` Works
 
@@ -103,10 +131,11 @@ The build script is a FreePascal program that runs via the `instantfpc` shebang:
 It:
 
 1. Creates the `build/` directory if it doesn't exist.
-2. Parses command-line arguments to determine which components to build.
-3. Calls `fpc` with `@config.cfg` and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
-4. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
-5. For the `tests` target, auto-discovers all `*.Test.pas` files in `units/`.
+2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`).
+3. Parses remaining arguments to determine which components to build.
+4. Calls `fpc` with `@config.cfg`, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
+5. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
+6. For the `tests` target, auto-discovers all `*.Test.pas` files in `units/`.
 
 ## Project Structure for Compilation
 

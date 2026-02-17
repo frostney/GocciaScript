@@ -11,12 +11,14 @@ GocciaScript is a subset of ECMAScript 2020 implemented in FreePascal. It provid
 ### Build Commands
 
 ```bash
-./build.pas                  # Build everything
-./build.pas loader           # Build ScriptLoader only
-./build.pas repl             # Build REPL only
-./build.pas testrunner       # Build TestRunner only
-./build.pas benchmarkrunner  # Build BenchmarkRunner only
-./build.pas tests            # Build Pascal unit tests only
+./build.pas                       # Dev build of everything (default)
+./build.pas --dev loader          # Dev build of ScriptLoader
+./build.pas --prod                # Production build of everything
+./build.pas --prod loader repl    # Production build of specific components
+./build.pas loader                # Dev build (--dev is the default)
+./build.pas testrunner            # Dev build of TestRunner
+./build.pas benchmarkrunner       # Dev build of BenchmarkRunner
+./build.pas tests                 # Dev build of Pascal unit tests
 ```
 
 ### Run Commands
@@ -219,10 +221,11 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 See [docs/build-system.md](docs/build-system.md) for build system details.
 
 - Build script: `./build.pas` (FreePascal script via `instantfpc`)
-- Compiler config: `config.cfg`
-- Shared directives: `units/Goccia.inc`
+- Build modes: `--dev` (default, debug info, heap trace, checks) / `--prod` (O4, stripped, smart-linked)
+- Shared path config: `config.cfg`
+- Shared directives: `units/Goccia.inc` (overflow/range checks conditional on `PRODUCTION` define)
 - Output directory: `build/`
-- CI: GitHub Actions on Linux, macOS, Windows (x64 + ARM)
+- CI: GitHub Actions on Linux, macOS, Windows (x64 + ARM) — uses `--prod`
 
 ## Documentation Index
 

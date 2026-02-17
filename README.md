@@ -90,11 +90,15 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 ### Build
 
 ```bash
-# Build everything
+# Dev build of everything (default — debug info, heap trace, checks)
 ./build.pas
 
+# Production build (O4, stripped, smart-linked)
+./build.pas --prod
+
 # Build specific components
-./build.pas loader           # Script executor
+./build.pas loader           # Dev build of script executor
+./build.pas --prod loader    # Production build of script executor
 ./build.pas repl             # Interactive REPL
 ./build.pas testrunner       # Test runner
 ./build.pas benchmarkrunner  # Benchmark runner

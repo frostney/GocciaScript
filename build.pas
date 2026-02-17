@@ -1,26 +1,61 @@
 #!/usr/bin/env instantfpc
 
-// Add support for build-and-run and run-only
-
 {$mode delphi}
 {$H+}
 
 uses
   SysUtils, Classes, Process, FileUtils in 'units/FileUtils.pas';
 
+type
+  TBuildMode = (bmDev, bmProd);
+
 var
   I: Integer;
   BuildTriggers: TStringList;
+  BuildMode: TBuildMode = bmDev;
 
 function FPCArgs(const Source: string): TStringArray;
 var
   Arch: string;
+  Args: TStringList;
+  J: Integer;
 begin
-  Arch := GetEnvironmentVariable('FPC_TARGET_CPU');
-  if Arch <> '' then
-    Result := ['-P' + Arch, '@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', Source]
-  else
-    Result := ['@config.cfg', '-vw-n-h-i-l-d-u-t-p-c-x-', Source];
+  Args := TStringList.Create;
+  try
+    Arch := GetEnvironmentVariable('FPC_TARGET_CPU');
+    if Arch <> '' then
+      Args.Add('-P' + Arch);
+
+    Args.Add('@config.cfg');
+
+    if BuildMode = bmProd then
+    begin
+      Args.Add('-O4');
+      Args.Add('-dPRODUCTION');
+      Args.Add('-Xs');
+      Args.Add('-CX');
+      Args.Add('-XX');
+    end else
+    begin
+      Args.Add('-O-');
+      Args.Add('-gw');
+      Args.Add('-godwarfsets');
+      Args.Add('-gh');
+      Args.Add('-gl');
+      Args.Add('-Ct');
+      Args.Add('-Cr');
+      Args.Add('-Sa');
+    end;
+
+    Args.Add('-vw-n-h-i-l-d-u-t-p-c-x-');
+    Args.Add(Source);
+
+    SetLength(Result, Args.Count);
+    for J := 0 to Args.Count - 1 do
+      Result[J] := Args[J];
+  finally
+    Args.Free;
+  end;
 end;
 
 procedure BuildREPL;
@@ -132,25 +167,35 @@ begin
 end;
 
 begin
-  // Create build directory
   if not DirectoryExists('build') then
     CreateDir('build');
 
   BuildTriggers := TStringList.Create;
 
-  if ParamCount = 0 then
+  for I := 1 to ParamCount do
+  begin
+    if ParamStr(I) = '--dev' then
+      BuildMode := bmDev
+    else if ParamStr(I) = '--prod' then
+      BuildMode := bmProd
+    else
+      BuildTriggers.Add(LowerCase(ParamStr(I)));
+  end;
+
+  if BuildMode = bmProd then
+    WriteLn('Build mode: production')
+  else
+    WriteLn('Build mode: development');
+
+  WriteLn('');
+
+  if BuildTriggers.Count = 0 then
   begin
     BuildTriggers.Add('tests');
     BuildTriggers.Add('loader');
     BuildTriggers.Add('testrunner');
     BuildTriggers.Add('benchmarkrunner');
     BuildTriggers.Add('repl');
-  end else
-  begin
-    for I := 1 to ParamCount do
-    begin
-      BuildTriggers.Add(LowerCase(ParamStr(I)));
-    end;
   end;
 
   for I := 0 to BuildTriggers.Count - 1 do
