@@ -127,7 +127,7 @@ implementation
 uses
   Goccia.Values.ClassValue, Goccia.Evaluator, Goccia.Evaluator.Comparison,
   Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.Error, Goccia.Values.ClassHelper,
-  TimingUtils;
+  Goccia.Values.PromiseValue, Goccia.MicrotaskQueue, TimingUtils;
 
 { TTestSuite }
 
@@ -1242,6 +1242,8 @@ var
   FailedTestDetailsArray: TGocciaArrayValue;
   ClonedFunction: TGocciaFunctionValue;
   TestParams: TGocciaObjectValue;
+  TestResult: TGocciaValue;
+  RejectionReason: string;
 begin
   // Reset test statistics and clear any previously registered tests from describe blocks
   ResetTestStats;
@@ -1341,12 +1343,40 @@ begin
 
         try
           // Execute the test function
-          // Create a fresh child scope for each test to ensure isolation
           ClonedFunction := TestCase.TestFunction.CloneWithNewScope(FScope.CreateChild(skFunction, 'TestFunction'));
-          ClonedFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+          TestResult := ClonedFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+
+          // Drain microtask queue after each test to process Promise reactions
+          if Assigned(TGocciaMicrotaskQueue.Instance) then
+            TGocciaMicrotaskQueue.Instance.DrainQueue;
+
+          // If the test returned a Promise, check its final state
+          if (TestResult is TGocciaPromiseValue) then
+          begin
+            if TGocciaPromiseValue(TestResult).State = gpsRejected then
+            begin
+              RejectionReason := TGocciaPromiseValue(TestResult).PromiseResult.ToStringLiteral.Value;
+              AssertionFailed('async test', 'Returned Promise rejected: ' + RejectionReason);
+              if TestCase.SuiteName <> '' then
+                FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": Promise rejected: ' + RejectionReason)
+              else
+                FailedTestDetails.Add('Test "' + TestCase.Name + '": Promise rejected: ' + RejectionReason);
+            end
+            else if TGocciaPromiseValue(TestResult).State = gpsPending then
+            begin
+              AssertionFailed('async test', 'Returned Promise still pending after microtask drain');
+              if TestCase.SuiteName <> '' then
+                FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": Promise still pending after microtask drain')
+              else
+                FailedTestDetails.Add('Test "' + TestCase.Name + '": Promise still pending after microtask drain');
+            end;
+          end;
         except
           on E: Exception do
           begin
+            // Clear pending microtasks to prevent cross-test callback leakage
+            if Assigned(TGocciaMicrotaskQueue.Instance) then
+              TGocciaMicrotaskQueue.Instance.ClearQueue;
             // Route exception through proper assertion failure mechanism
             AssertionFailed('test execution', 'Test threw an exception: ' + E.Message);
             if TestCase.SuiteName <> '' then

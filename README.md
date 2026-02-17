@@ -45,7 +45,7 @@ GocciaScript includes the parts of JavaScript that lead to clear, predictable, a
 
 ### Built-in Objects
 
-`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`).
+`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, `Promise`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`).
 
 See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 
@@ -192,7 +192,8 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 
 ## Roadmap
 
-- [ ] Async/await and Promises
+- [x] Promises (constructor, `.then`/`.catch`/`.finally`, `Promise.all`/`allSettled`/`race`/`any`, microtask queue)
+- [ ] Async/await syntax
 - [ ] Regular expressions
 - [ ] Generators and iterators
 - [ ] Pre-compiled binary releases

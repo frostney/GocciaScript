@@ -113,7 +113,7 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 | `ggSymbol` | `Symbol`, `Symbol.for`, `Symbol.keyFor` | Unique property keys |
 | `ggSet` | `Set` constructor and methods | Unique value collections |
 | `ggMap` | `Map` constructor and methods | Key-value collections |
-| `ggPromise` | (placeholder) | Not yet implemented |
+| `ggPromise` | `Promise` | Async operations with microtask queue |
 | `ggTestAssertions` | `describe`, `test`, `expect` | Testing framework |
 | `ggBenchmark` | `suite`, `bench` | Benchmark framework |
 
@@ -355,6 +355,25 @@ end;
 | `TGocciaTypeError` | Type-specific runtime error |
 | `TGocciaReferenceError` | Undefined variable access |
 | `TGocciaRangeError` | Value out of range |
+
+## Microtask Queue (Promises)
+
+When `ggPromise` is included in the globals set, the engine initializes a singleton microtask queue (`TGocciaMicrotaskQueue`) alongside the GC. Promise `.then()` callbacks are enqueued as microtasks and **drained automatically** after each `Execute`, `ExecuteWithTiming`, or `ExecuteProgram` call. Embedders do not need to drain the queue manually.
+
+This means:
+- All synchronous code in the script runs to completion first.
+- All pending `.then()` callbacks fire after the script finishes.
+- Chained `.then()` handlers are processed in the same drain cycle.
+
+The execution ordering follows ECMAScript specification semantics — the script is one macrotask, and microtasks drain after it completes. Thenable adoption is deferred via a microtask per the spec's PromiseResolveThenableJob.
+
+```pascal
+// Promises work automatically — no manual queue management needed
+Source.Text := 'Promise.resolve(42).then((v) => console.log(v));';
+Engine.Execute;  // prints "42" (microtasks drain after Execute)
+```
+
+For long-lived engines (REPL-style), each `Execute` call drains its own microtasks. Promise callbacks from one execution will not leak into the next — even if the script throws an exception, the engine clears any pending microtasks in a `finally` block.
 
 ## Garbage Collector
 

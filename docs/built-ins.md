@@ -13,7 +13,7 @@ TGocciaGlobalBuiltin = (
   ggGlobalObject,     // Object.keys, Object.assign, etc.
   ggGlobalArray,      // Array.isArray
   ggGlobalNumber,     // Number.parseInt, Number.isNaN, etc.
-  ggPromise,          // Promise (placeholder)
+  ggPromise,          // Promise constructor, prototype, static methods, microtask queue
   ggJSON,             // JSON.parse, JSON.stringify
   ggSymbol,           // Symbol, Symbol.for, Symbol.keyFor
   ggSet,              // Set constructor and prototype
@@ -291,6 +291,66 @@ A collection of key-value pairs with insertion-order iteration. Any value (inclu
 | `map.entries()` | Get `[key, value]` pairs as an array |
 
 Maps are spreadable: `[...myMap]` produces an array of `[key, value]` pairs.
+
+### Promise (`Goccia.Builtins.GlobalPromise.pas`, `Goccia.Values.PromiseValue.pas`)
+
+An implementation of ECMAScript Promises with a synchronous microtask queue. `.then()` callbacks are always deferred (never synchronous), matching spec behavior.
+
+**Constructor:**
+
+```javascript
+const p = new Promise((resolve, reject) => {
+  // executor runs synchronously
+  resolve(42);
+});
+```
+
+**Prototype methods:**
+
+| Method | Description |
+|--------|-------------|
+| `promise.then(onFulfilled?, onRejected?)` | Attach fulfillment/rejection handlers. Returns a new Promise. |
+| `promise.catch(onRejected)` | Sugar for `.then(undefined, onRejected)` |
+| `promise.finally(onFinally)` | Runs callback regardless of outcome, preserves settlement value |
+
+**Static methods:**
+
+| Method | Description |
+|--------|-------------|
+| `Promise.resolve(value)` | Create a fulfilled Promise (returns `value` if already a Promise) |
+| `Promise.reject(reason)` | Create a rejected Promise |
+| `Promise.all(iterable)` | Resolve when all resolve; reject on first rejection |
+| `Promise.allSettled(iterable)` | Wait for all to settle; returns `{status, value/reason}` objects |
+| `Promise.race(iterable)` | Settle with first settled value |
+| `Promise.any(iterable)` | Resolve with first fulfillment; reject with AggregateError if all reject |
+
+**Microtask queue:** `.then()` callbacks are enqueued as microtasks and drained automatically after script execution completes — the script is one macrotask, and microtasks drain after it finishes, matching ECMAScript specification behavior. Thenable adoption (resolving a Promise with another Promise) is deferred via a microtask per the spec's PromiseResolveThenableJob, ensuring correct ordering relative to other microtasks. If the script throws an exception, pending microtasks are discarded via `ClearQueue` in a `finally` block, preventing stale callbacks from leaking into subsequent executions. The test framework also drains microtasks after each test callback, so tests can return a Promise and place assertions inside `.then()` handlers. The benchmark runner drains after each measurement round.
+
+**Async test pattern:**
+
+```javascript
+test("async test", () => {
+  return Promise.resolve(42).then((v) => {
+    expect(v).toBe(42);
+  });
+});
+```
+
+If a test returns a rejected Promise, the test framework automatically fails the test with the rejection reason.
+
+**Thenable adoption:** Resolving a Promise with another Promise causes it to adopt the inner Promise's state. Resolving a Promise with itself throws a `TypeError` ("Chaining cycle detected for promise"), matching ECMAScript spec behavior.
+
+**Error validation:** Static combinator methods (`Promise.all`, `Promise.allSettled`, `Promise.race`, `Promise.any`) throw a `TypeError` when called with a non-iterable argument (number, string, null, undefined, plain object).
+
+**Chaining and error recovery:**
+
+```javascript
+Promise.resolve(1)
+  .then((v) => v + 1)        // 2
+  .then((v) => { throw "err"; })
+  .catch((e) => "recovered") // "recovered"
+  .then((v) => v);           // "recovered"
+```
 
 ### Test Assertions (`Goccia.Builtins.TestAssertions.pas`)
 

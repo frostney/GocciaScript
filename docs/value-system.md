@@ -19,6 +19,7 @@ classDiagram
     TGocciaObjectValue <|-- TGocciaArrayValue
     TGocciaObjectValue <|-- TGocciaSetValue
     TGocciaObjectValue <|-- TGocciaMapValue
+    TGocciaObjectValue <|-- TGocciaPromiseValue
     TGocciaObjectValue <|-- TGocciaFunctionValue
     TGocciaObjectValue <|-- TGocciaClassValue
     TGocciaObjectValue <|-- TGocciaInstanceValue
@@ -51,6 +52,9 @@ classDiagram
     }
     class TGocciaArrayValue {
         [1, 2, 3]
+    }
+    class TGocciaPromiseValue {
+        Promise (pending/fulfilled/rejected)
     }
     class TGocciaFunctionValue {
         (x) => x + 1
@@ -363,6 +367,18 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 - **Methods** — `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys`, `values`, `entries` — all registered on the shared prototype.
 - **`size`** — Returned dynamically via `GetProperty` override.
 - **Spreadable** — `ToArray` converts to a `TGocciaArrayValue` of `[key, value]` pairs for spread syntax support.
+
+## Promises
+
+`TGocciaPromiseValue` extends `TGocciaObjectValue` (`Goccia.Values.PromiseValue.pas`). Represents an ECMAScript Promise with three possible states.
+
+- **State machine** — Each Promise has a `TGocciaPromiseState`: `gpsPending`, `gpsFulfilled`, or `gpsRejected`. Once settled, the state and result are immutable (double-resolve/reject is a no-op).
+- **Result** — `PromiseResult: TGocciaValue` holds the fulfillment value or rejection reason after settlement.
+- **Reactions** — `FReactions: TList<TGocciaPromiseReaction>` stores pending `.then()` reactions. When the Promise settles, all reactions are enqueued as microtasks. When `.then()` is called on an already-settled Promise, the reaction is enqueued immediately.
+- **Thenable adoption** — If a Promise is resolved with another Promise, `SubscribeTo` defers settlement via a microtask (per the spec's PromiseResolveThenableJob) rather than resolving synchronously. For already-settled inner Promises, the settlement is enqueued as a microtask; for pending inner Promises, a reaction is added to the inner's reaction list.
+- **Self-rejection** — Resolving a Promise with itself throws a `TypeError` per ECMAScript spec.
+- **Shared prototype singleton** — All Promise instances share a single class-level prototype (`FSharedPromisePrototype`). Methods (`then`, `catch`, `finally`) are registered once during `InitializePrototype` and pinned with the GC.
+- **GC integration** — `GCMarkReferences` marks the `PromiseResult`, all pending reaction callbacks, and reaction result Promises.
 
 ## Functions
 

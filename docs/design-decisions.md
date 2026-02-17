@@ -221,6 +221,38 @@ The parser creates `TGocciaValue` instances (numbers, strings, booleans) and sto
 
 When the evaluator encounters a literal expression, it calls `Value.RuntimeCopy` to produce a fresh GC-managed runtime value. This cleanly separates compile-time constants (owned by the AST) from runtime values (managed by the GC). The overhead is minimal: integers 0-255 hit the `SmallInt` cache (zero allocation), booleans return singletons, and strings benefit from FreePascal's copy-on-write semantics.
 
+## Synchronous Microtask Queue
+
+GocciaScript implements ECMAScript Promises with a synchronous microtask queue (`Goccia.MicrotaskQueue.pas`) that drains after each top-level script execution.
+
+**The problem:** Promise `.then()` callbacks must be deferred (never synchronous), but GocciaScript is a synchronous engine with no event loop.
+
+**The solution:** A singleton FIFO queue. When a Promise settles or `.then()` is called on an already-settled Promise, the reaction is enqueued rather than executed immediately. The engine drains the queue after `Interpreter.Execute` completes.
+
+**Why drain after script execution (not during)?**
+
+In the ECMAScript specification, the entire script is one macrotask. Microtasks drain after the current macrotask completes, not interleaved with synchronous code. This means:
+
+1. All synchronous code runs to completion first.
+2. All `.then()` callbacks fire in FIFO order.
+3. New microtasks enqueued during draining (e.g., chained `.then()` handlers) are processed in the same drain cycle.
+
+This follows the ECMAScript specification's microtask ordering semantics. Thenable adoption (resolving a Promise with another Promise) is deferred via a microtask rather than resolved synchronously, matching the spec's PromiseResolveThenableJob — `SubscribeTo` enqueues a microtask for already-settled inner promises instead of calling `Resolve`/`Reject` synchronously. The only scenario where timing would differ from a full engine is with multiple macrotask sources (`setTimeout`, I/O callbacks, event handlers), which GocciaScript does not implement. If these are added in the future, they would require an event loop that repeatedly: (1) dequeues one macrotask, (2) drains the microtask queue, (3) repeats.
+
+**Integration points:**
+
+| Context | When microtasks drain |
+|---------|----------------------|
+| `TGocciaEngine.Execute` | After `Interpreter.Execute` completes |
+| `TGocciaEngine.ExecuteWithTiming` | After interpreter execution, before timing snapshot |
+| `TGocciaEngine.ExecuteProgram` | After interpreter execution |
+| Test framework | After each test callback |
+| Benchmark runner | After warmup, calibration batches, and each measurement round |
+
+**Error safety:** Both `Execute` and `ExecuteProgram` wrap the drain in a `try..finally` that calls `ClearQueue`. If the interpreter throws, stale microtasks are discarded rather than leaking into subsequent executions. After a successful `DrainQueue` the queue is already empty, so `ClearQueue` is a no-op.
+
+**GC safety:** During `DrainQueue`, each microtask's handler, value, and result promise are temp-rooted to prevent collection mid-callback.
+
 ## Configurable Built-ins
 
 Built-ins are registered via a `TGocciaGlobalBuiltins` set of flags:

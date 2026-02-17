@@ -197,7 +197,7 @@ items.reduce((acc, item) => acc + item, 0);
 
 ### `async`/`await`
 
-**Not yet implemented.** The `ggPromise` flag exists as a placeholder.
+**Not yet implemented.** Promises are fully implemented (constructor, `.then`/`.catch`/`.finally`, `Promise.all`/`allSettled`/`race`/`any`, microtask queue), but `async`/`await` syntax sugar is not yet available. Use `.then()` chaining instead.
 
 ### Regular Expressions
 

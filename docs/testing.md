@@ -32,6 +32,12 @@ tests/
 │   │   ├── getPrototypeOf.js
 │   │   ├── fromEntries.js
 │   │   └── ...
+│   ├── Promise/             # Promise constructor, static methods, microtask ordering
+│   │   ├── constructor.js, resolve.js, reject.js
+│   │   ├── all.js, all-settled.js, race.js, any.js
+│   │   ├── microtask-ordering.js, thenable-adoption.js, error-cases.js
+│   │   └── prototype/
+│   │       ├── then.js, catch.js, finally.js
 │   ├── Set/
 │   ├── String/
 │   │   └── prototype/
@@ -175,6 +181,48 @@ describe("with setup", () => {
 
   test("uses instance", () => {
     expect(instance).toBeTruthy();
+  });
+});
+```
+
+### Async Tests (Promises)
+
+Tests can return a Promise. The test framework automatically drains the microtask queue after each test callback and checks the returned Promise's state. If the Promise is rejected, the test fails with the rejection reason.
+
+```javascript
+test("async value check", () => {
+  return Promise.resolve(42).then((v) => {
+    expect(v).toBe(42);
+  });
+});
+
+test("async error handling", () => {
+  return Promise.reject("err")
+    .catch((e) => "recovered")
+    .then((v) => {
+      expect(v).toBe("recovered");
+    });
+});
+```
+
+This pattern replaces the need for `done` callbacks or manual queue flushing. Place assertions inside `.then()` or `.catch()` handlers and return the Promise chain from the test.
+
+**Important:** If a test returns a Promise that is still pending after the microtask queue drains, the test **fails** with "Promise still pending after microtask drain". Since GocciaScript has no event loop, a pending Promise after drain will never settle — this catches tests with missing assertions or broken async chains. This mirrors how Jest/Vitest fail tests with a timeout when the returned Promise never resolves.
+
+**Testing intentionally-pending Promises:** When testing behavior around forever-pending Promises (e.g., verifying that `reject()` after `resolve(pendingPromise)` is ignored), never return the pending Promise. Instead, use a separate settled Promise chain to verify state after microtasks drain:
+
+```javascript
+test("reject after resolve with pending promise is ignored", () => {
+  const pending = new Promise(() => {});
+  let rejectHandlerCalled = false;
+  const p = new Promise((resolve, reject) => {
+    resolve(pending);
+    reject("should be ignored");
+  });
+  p.catch(() => { rejectHandlerCalled = true; });
+  // Return a separate settled chain — assertions run after microtask drain
+  return Promise.resolve().then(() => {
+    expect(rejectHandlerCalled).toBe(false);
   });
 });
 ```
@@ -448,6 +496,7 @@ The `BenchmarkRunner` program:
 | `benchmarks/collections.js` | Set add/has/delete/forEach, Map set/get/has/delete/forEach/keys/values |
 | `benchmarks/json.js` | JSON.parse, JSON.stringify, roundtrip with nested and mixed data |
 | `benchmarks/destructuring.js` | Array/object/parameter destructuring, rest, defaults, nesting |
+| `benchmarks/promises.js` | Promise.resolve/reject, then chains, catch/finally, all/race/allSettled/any |
 
 ### Sample Output
 

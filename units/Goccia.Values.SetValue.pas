@@ -7,13 +7,12 @@ interface
 uses
   Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.ArrayValue,
   Goccia.Values.NativeFunction, Goccia.Arguments.Collection,
-  Generics.Collections, SysUtils;
+  Goccia.SharedPrototype, Generics.Collections, SysUtils;
 
 type
   TGocciaSetValue = class(TGocciaObjectValue)
   private
-    class var FSharedSetPrototype: TGocciaObjectValue;
-    class var FPrototypeMethodHost: TGocciaSetValue;
+    class var FShared: TGocciaSharedPrototype;
   private
     FItems: TList<TGocciaValue>;
 
@@ -25,10 +24,10 @@ type
     function SetValues(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 
     function ContainsValue(AValue: TGocciaValue): Boolean;
+    procedure InitializePrototype;
   public
     constructor Create; overload;
     destructor Destroy; override;
-    procedure InitializePrototype;
 
     procedure AddItem(AValue: TGocciaValue);
 
@@ -37,6 +36,8 @@ type
     function ToStringTag: string; override;
 
     procedure GCMarkReferences; override;
+
+    class procedure ExposePrototype(AConstructor: TGocciaObjectValue);
 
     property Items: TList<TGocciaValue> read FItems;
   end;
@@ -52,29 +53,29 @@ begin
   inherited Create(nil);
   FItems := TList<TGocciaValue>.Create;
   InitializePrototype;
-  if Assigned(FSharedSetPrototype) then
-    FPrototype := FSharedSetPrototype;
+  if Assigned(FShared) then
+    FPrototype := FShared.Prototype;
 end;
 
 procedure TGocciaSetValue.InitializePrototype;
 begin
-  if Assigned(FSharedSetPrototype) then Exit;
+  if Assigned(FShared) then Exit;
 
-  FSharedSetPrototype := TGocciaObjectValue.Create;
-  FPrototypeMethodHost := Self;
+  FShared := TGocciaSharedPrototype.Create(Self);
 
-  FSharedSetPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetHas, 'has', 1));
-  FSharedSetPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetAdd, 'add', 1));
-  FSharedSetPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetDelete, 'delete', 1));
-  FSharedSetPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetClear, 'clear', 0));
-  FSharedSetPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetForEach, 'forEach', 1));
-  FSharedSetPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetValues, 'values', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetHas, 'has', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetAdd, 'add', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetDelete, 'delete', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetClear, 'clear', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetForEach, 'forEach', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetValues, 'values', 0));
+end;
 
-  if Assigned(TGocciaGC.Instance) then
-  begin
-    TGocciaGC.Instance.PinValue(FSharedSetPrototype);
-    TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
-  end;
+class procedure TGocciaSetValue.ExposePrototype(AConstructor: TGocciaObjectValue);
+begin
+  if not Assigned(FShared) then
+    TGocciaSetValue.Create;
+  FShared.ExposeOnConstructor(AConstructor);
 end;
 
 destructor TGocciaSetValue.Destroy;

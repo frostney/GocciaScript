@@ -77,6 +77,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ, VMT-based chain-walking |
 | Keywords | `Goccia.Keywords.pas` | Centralized JavaScript keyword string constants |
 | Timing Utilities | `TimingUtils.pas` | Cross-platform microsecond timing (`GetMicroseconds`) and duration formatting (`FormatDuration`) |
+| Microtask Queue | `Goccia.MicrotaskQueue.pas` | Singleton FIFO queue for deferred Promise reactions, drained after script execution, cleared on exception |
 | Garbage Collector | `Goccia.GarbageCollector.pas` | Mark-and-sweep memory management for runtime values |
 
 ## Development Workflow
