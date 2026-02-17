@@ -73,6 +73,43 @@ uses
   Goccia.Values.Error, Goccia.Values.ErrorHelper,
   Goccia.GarbageCollector;
 
+type
+  TGocciaFinallyPassthrough = class(TGocciaObjectValue)
+  private
+    FOriginalValue: TGocciaValue;
+    FIsFulfill: Boolean;
+  public
+    constructor Create(AOriginalValue: TGocciaValue; AIsFulfill: Boolean);
+    function Invoke(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    procedure GCMarkReferences; override;
+  end;
+
+{ TGocciaFinallyPassthrough }
+
+constructor TGocciaFinallyPassthrough.Create(AOriginalValue: TGocciaValue; AIsFulfill: Boolean);
+begin
+  inherited Create(nil);
+  FOriginalValue := AOriginalValue;
+  FIsFulfill := AIsFulfill;
+end;
+
+function TGocciaFinallyPassthrough.Invoke(Args: TGocciaArgumentsCollection;
+  ThisValue: TGocciaValue): TGocciaValue;
+begin
+  if FIsFulfill then
+    Result := FOriginalValue
+  else
+    raise TGocciaThrowValue.Create(FOriginalValue);
+end;
+
+procedure TGocciaFinallyPassthrough.GCMarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FOriginalValue) then
+    FOriginalValue.GCMarkReferences;
+end;
+
 { TGocciaPromiseFinallyWrapper }
 
 constructor TGocciaPromiseFinallyWrapper.Create(AOnFinally: TGocciaValue; AIsFulfill: Boolean);
@@ -85,22 +122,61 @@ end;
 function TGocciaPromiseFinallyWrapper.Invoke(Args: TGocciaArgumentsCollection;
   ThisValue: TGocciaValue): TGocciaValue;
 var
-  OriginalValue: TGocciaValue;
+  OriginalValue, CallbackResult: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  CallbackPromise, IntermediatePromise: TGocciaPromiseValue;
+  Passthrough: TGocciaFinallyPassthrough;
+  PassthroughFn: TGocciaNativeFunctionValue;
+  Reaction: TGocciaPromiseReaction;
 begin
   OriginalValue := Args.GetElement(0);
 
   CallArgs := TGocciaArgumentsCollection.Create;
   try
-    TGocciaFunctionBase(FOnFinally).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    CallbackResult := TGocciaFunctionBase(FOnFinally).Call(
+      CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     CallArgs.Free;
   end;
 
-  if FIsFulfill then
-    Result := OriginalValue
+  if CallbackResult is TGocciaPromiseValue then
+  begin
+    CallbackPromise := TGocciaPromiseValue(CallbackResult);
+
+    case CallbackPromise.State of
+      gpsFulfilled:
+      begin
+        if FIsFulfill then
+          Result := OriginalValue
+        else
+          raise TGocciaThrowValue.Create(OriginalValue);
+      end;
+      gpsRejected:
+        raise TGocciaThrowValue.Create(CallbackPromise.PromiseResult);
+      gpsPending:
+      begin
+        IntermediatePromise := TGocciaPromiseValue.Create;
+
+        Passthrough := TGocciaFinallyPassthrough.Create(OriginalValue, FIsFulfill);
+        PassthroughFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          Passthrough.Invoke, 'finally-passthrough', 1);
+
+        Reaction.OnFulfilled := PassthroughFn;
+        Reaction.OnRejected := nil;
+        Reaction.ResultPromise := IntermediatePromise;
+        CallbackPromise.FReactions.Add(Reaction);
+
+        Result := IntermediatePromise;
+      end;
+    end;
+  end
   else
-    raise TGocciaThrowValue.Create(OriginalValue);
+  begin
+    if FIsFulfill then
+      Result := OriginalValue
+    else
+      raise TGocciaThrowValue.Create(OriginalValue);
+  end;
 end;
 
 procedure TGocciaPromiseFinallyWrapper.GCMarkReferences;
