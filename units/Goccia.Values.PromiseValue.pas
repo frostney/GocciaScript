@@ -177,9 +177,7 @@ end;
 
 procedure TGocciaPromiseValue.Resolve(AValue: TGocciaValue);
 begin
-  if FAlreadyResolved then Exit;
   if FState <> gpsPending then Exit;
-  FAlreadyResolved := True;
 
   if AValue = Self then
   begin
@@ -203,9 +201,7 @@ end;
 
 procedure TGocciaPromiseValue.Reject(AReason: TGocciaValue);
 begin
-  if FAlreadyResolved then Exit;
   if FState <> gpsPending then Exit;
-  FAlreadyResolved := True;
 
   FState := gpsRejected;
   FResult := AReason;
@@ -218,18 +214,11 @@ var
 begin
   case APromise.FState of
     gpsFulfilled:
-    begin
-      FAlreadyResolved := False;
       Resolve(APromise.FResult);
-    end;
     gpsRejected:
-    begin
-      FAlreadyResolved := False;
       Reject(APromise.FResult);
-    end;
     gpsPending:
     begin
-      FAlreadyResolved := False;
       Reaction.OnFulfilled := nil;
       Reaction.OnRejected := nil;
       Reaction.ResultPromise := Self;
@@ -278,21 +267,27 @@ end;
 function TGocciaPromiseValue.DoResolve(Args: TGocciaArgumentsCollection;
   ThisValue: TGocciaValue): TGocciaValue;
 begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if FAlreadyResolved then Exit;
+  FAlreadyResolved := True;
+
   if Args.Length > 0 then
     Resolve(Args.GetElement(0))
   else
     Resolve(TGocciaUndefinedLiteralValue.UndefinedValue);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaPromiseValue.DoReject(Args: TGocciaArgumentsCollection;
   ThisValue: TGocciaValue): TGocciaValue;
 begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if FAlreadyResolved then Exit;
+  FAlreadyResolved := True;
+
   if Args.Length > 0 then
     Reject(Args.GetElement(0))
   else
     Reject(TGocciaUndefinedLiteralValue.UndefinedValue);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 { Prototype methods }

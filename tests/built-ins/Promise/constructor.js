@@ -99,3 +99,32 @@ test("Promise constructor with non-function throws TypeError", () => {
   }
   expect(caught).toBe(true);
 });
+
+test("reject after resolve with pending promise is ignored", () => {
+  const pending = new Promise(() => {});
+  return new Promise((resolve, reject) => {
+    resolve(pending);
+    reject("should be ignored");
+  }).catch(() => {
+    throw "promise should not have been rejected";
+  });
+});
+
+test("resolve after resolve with pending promise is ignored", () => {
+  const pending = new Promise(() => {});
+  return new Promise((resolve, reject) => {
+    resolve(pending);
+    resolve("should be ignored");
+  }).catch(() => {
+    throw "promise should not have been rejected";
+  });
+});
+
+test("resolve with settled promise then reject is ignored", () => {
+  return new Promise((resolve, reject) => {
+    resolve(Promise.resolve("adopted"));
+    reject("should be ignored");
+  }).then((v) => {
+    expect(v).toBe("adopted");
+  });
+});
