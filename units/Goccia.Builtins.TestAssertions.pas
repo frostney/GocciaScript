@@ -127,7 +127,7 @@ implementation
 uses
   Goccia.Values.ClassValue, Goccia.Evaluator, Goccia.Evaluator.Comparison,
   Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.Error, Goccia.Values.ClassHelper,
-  Goccia.Values.PromiseValue, Goccia.MicrotaskQueue;
+  Goccia.Values.PromiseValue, Goccia.MicrotaskQueue, TimingUtils;
 
 { TTestSuite }
 
@@ -1248,7 +1248,7 @@ begin
   // Reset test statistics and clear any previously registered tests from describe blocks
   ResetTestStats;
 
-  StartTime := GetTickCount64;
+  StartTime := GetMicroseconds;
 
   // Clear tests that were registered from previous describe executions
   // Keep standalone tests that were registered during script execution
@@ -1423,7 +1423,7 @@ begin
   ResultObj.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FTestStats.FailedTests));
   ResultObj.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(FTestStats.SkippedTests));
   ResultObj.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(FTestStats.TotalAssertionCount));
-  ResultObj.AssignProperty('duration', TGocciaNumberLiteralValue.Create(GetTickCount64 - StartTime));
+  ResultObj.AssignProperty('duration', TGocciaNumberLiteralValue.Create(GetMicroseconds - StartTime));
   ResultObj.AssignProperty('failedTests', FailedTestDetailsArray);
   ResultObj.AssignProperty('summary', TGocciaStringLiteralValue.Create(Summary));
 

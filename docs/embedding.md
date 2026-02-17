@@ -34,9 +34,7 @@ These are convenience methods that create an engine, execute, and clean up in a 
 | `RunScriptFromFile(FileName, Globals)` | Execute a file with custom globals |
 | `RunScriptFromStringList(Source, FileName)` | Execute from a `TStringList` with default globals |
 | `RunScriptFromStringList(Source, FileName, Globals)` | Execute from a `TStringList` with custom globals |
-| `RunScriptWithTiming(Source, FileName, Globals)` | Execute and return timing breakdown |
-
-All methods return `TGocciaValue` — the result of the last expression evaluated.
+All methods return `TGocciaScriptResult` — a record containing the result value, per-phase timing (in microseconds), and the filename.
 
 ### Instance Usage (Long-Lived Engine)
 
@@ -71,19 +69,25 @@ The `TStringList` is passed by reference — update its contents and call `Execu
 
 ### Timing
 
-`ExecuteWithTiming` and `RunScriptWithTiming` return a `TGocciaTimingResult` record with per-phase timing:
+All `RunScript*` methods and the `Execute` method return a `TGocciaScriptResult` record that includes microsecond-precision timing for each pipeline phase:
 
 ```pascal
+uses Goccia.Engine, TimingUtils;
+
 var
-  Timing: TGocciaTimingResult;
+  ScriptResult: TGocciaScriptResult;
 begin
-  Timing := TGocciaEngine.RunScriptWithTiming(Source, 'bench.js', TGocciaEngine.DefaultGlobals);
-  WriteLn('Lex: ', Timing.LexTimeMs, 'ms');
-  WriteLn('Parse: ', Timing.ParseTimeMs, 'ms');
-  WriteLn('Execute: ', Timing.ExecuteTimeMs, 'ms');
-  WriteLn('Total: ', Timing.TotalTimeMs, 'ms');
+  ScriptResult := TGocciaEngine.RunScript(Source, 'bench.js', TGocciaEngine.DefaultGlobals);
+  WriteLn('Lex: ', FormatDuration(ScriptResult.LexTimeMicroseconds));
+  WriteLn('Parse: ', FormatDuration(ScriptResult.ParseTimeMicroseconds));
+  WriteLn('Execute: ', FormatDuration(ScriptResult.ExecuteTimeMicroseconds));
+  WriteLn('Total: ', FormatDuration(ScriptResult.TotalTimeMicroseconds));
 end;
 ```
+
+`FormatDuration` (from `TimingUtils`) automatically selects the appropriate unit: `μs` for values below 0.5ms, `ms` with two decimal places for values up to 10s, and `s` above that.
+
+Timing uses `fpGetTimeOfDay` on Unix (native microsecond resolution) and `QueryPerformanceCounter` on Windows (sub-microsecond hardware counter).
 
 ## Controlling Built-ins
 

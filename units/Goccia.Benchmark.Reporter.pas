@@ -5,7 +5,7 @@ unit Goccia.Benchmark.Reporter;
 interface
 
 uses
-  Classes, SysUtils, Generics.Collections;
+  Classes, SysUtils, Generics.Collections, TimingUtils;
 
 type
   TBenchmarkEntry = record
@@ -20,12 +20,12 @@ type
 
   TBenchmarkFileResult = record
     FileName: string;
-    LexTimeMs: Int64;
-    ParseTimeMs: Int64;
-    ExecuteTimeMs: Int64;
+    LexTimeMicroseconds: Int64;
+    ParseTimeMicroseconds: Int64;
+    ExecuteTimeMicroseconds: Int64;
     Entries: array of TBenchmarkEntry;
     TotalBenchmarks: Integer;
-    DurationMs: Double;
+    DurationMicroseconds: Int64;
   end;
 
   TBenchmarkReportFormat = (brfConsole, brfText, brfCSV, brfJSON);
@@ -151,18 +151,19 @@ var
   Entry: TBenchmarkEntry;
   CurrentSuite: string;
   TotalBenchmarks: Integer;
-  TotalDuration: Double;
+  TotalDurationMicroseconds: Int64;
 begin
   TotalBenchmarks := 0;
-  TotalDuration := 0;
+  TotalDurationMicroseconds := 0;
 
   for F := 0 to FFileCount - 1 do
   begin
     if FFileCount > 1 then
       FOutput.Add('Running benchmark: ' + FFiles[F].FileName);
 
-    FOutput.Add(SysUtils.Format('  Lex: %dms | Parse: %dms | Execute: %dms',
-      [FFiles[F].LexTimeMs, FFiles[F].ParseTimeMs, FFiles[F].ExecuteTimeMs]));
+    FOutput.Add(SysUtils.Format('  Lex: %s | Parse: %s | Execute: %s | Total: %s',
+      [FormatDuration(FFiles[F].LexTimeMicroseconds), FormatDuration(FFiles[F].ParseTimeMicroseconds), FormatDuration(FFiles[F].ExecuteTimeMicroseconds),
+       FormatDuration(FFiles[F].LexTimeMicroseconds + FFiles[F].ParseTimeMicroseconds + FFiles[F].ExecuteTimeMicroseconds)]));
     FOutput.Add('');
 
     CurrentSuite := '';
@@ -188,7 +189,7 @@ begin
     end;
 
     TotalBenchmarks := TotalBenchmarks + FFiles[F].TotalBenchmarks;
-    TotalDuration := TotalDuration + FFiles[F].DurationMs;
+    TotalDurationMicroseconds := TotalDurationMicroseconds + FFiles[F].DurationMicroseconds;
 
     if F < FFileCount - 1 then
       FOutput.Add('');
@@ -197,10 +198,7 @@ begin
   FOutput.Add('');
   FOutput.Add('Benchmark Summary');
   FOutput.Add(SysUtils.Format('  Total benchmarks: %d', [TotalBenchmarks]));
-  if TotalDuration >= 1000 then
-    FOutput.Add(SysUtils.Format('  Total duration: %.1fs', [TotalDuration / 1000]))
-  else
-    FOutput.Add(SysUtils.Format('  Total duration: %.0fms', [TotalDuration]));
+  FOutput.Add(SysUtils.Format('  Total duration: %s', [FormatDuration(TotalDurationMicroseconds)]));
 end;
 
 procedure TBenchmarkReporter.RenderText;
@@ -208,10 +206,10 @@ var
   F, E: Integer;
   Entry: TBenchmarkEntry;
   TotalBenchmarks: Integer;
-  TotalDuration: Double;
+  TotalDurationMicroseconds: Int64;
 begin
   TotalBenchmarks := 0;
-  TotalDuration := 0;
+  TotalDurationMicroseconds := 0;
 
   for F := 0 to FFileCount - 1 do
   begin
@@ -234,16 +232,12 @@ begin
     end;
 
     TotalBenchmarks := TotalBenchmarks + FFiles[F].TotalBenchmarks;
-    TotalDuration := TotalDuration + FFiles[F].DurationMs;
+    TotalDurationMicroseconds := TotalDurationMicroseconds + FFiles[F].DurationMicroseconds;
   end;
 
   FOutput.Add('');
-  if TotalDuration >= 1000 then
-    FOutput.Add(SysUtils.Format('Total: %d benchmarks in %.1fs',
-      [TotalBenchmarks, TotalDuration / 1000]))
-  else
-    FOutput.Add(SysUtils.Format('Total: %d benchmarks in %.0fms',
-      [TotalBenchmarks, TotalDuration]));
+  FOutput.Add(SysUtils.Format('Total: %d benchmarks in %s',
+    [TotalBenchmarks, FormatDuration(TotalDurationMicroseconds)]));
 end;
 
 procedure TBenchmarkReporter.RenderCSV;
@@ -277,11 +271,11 @@ var
   F, E: Integer;
   Entry: TBenchmarkEntry;
   TotalBenchmarks: Integer;
-  TotalDuration: Double;
+  TotalDurationMicroseconds: Int64;
   First: Boolean;
 begin
   TotalBenchmarks := 0;
-  TotalDuration := 0;
+  TotalDurationMicroseconds := 0;
 
   FOutput.Add('{');
   FOutput.Add('  "files": [');
@@ -290,9 +284,9 @@ begin
   begin
     FOutput.Add('    {');
     FOutput.Add(SysUtils.Format('      "file": "%s",', [EscapeJSON(FFiles[F].FileName)]));
-    FOutput.Add(SysUtils.Format('      "lexTimeMs": %d,', [FFiles[F].LexTimeMs]));
-    FOutput.Add(SysUtils.Format('      "parseTimeMs": %d,', [FFiles[F].ParseTimeMs]));
-    FOutput.Add(SysUtils.Format('      "executeTimeMs": %d,', [FFiles[F].ExecuteTimeMs]));
+    FOutput.Add(SysUtils.Format('      "lexTimeMicroseconds": %d,', [FFiles[F].LexTimeMicroseconds]));
+    FOutput.Add(SysUtils.Format('      "parseTimeMicroseconds": %d,', [FFiles[F].ParseTimeMicroseconds]));
+    FOutput.Add(SysUtils.Format('      "executeTimeMicroseconds": %d,', [FFiles[F].ExecuteTimeMicroseconds]));
     FOutput.Add('      "benchmarks": [');
 
     First := True;
@@ -327,7 +321,7 @@ begin
     FOutput.Add('    }');
 
     TotalBenchmarks := TotalBenchmarks + FFiles[F].TotalBenchmarks;
-    TotalDuration := TotalDuration + FFiles[F].DurationMs;
+    TotalDurationMicroseconds := TotalDurationMicroseconds + FFiles[F].DurationMicroseconds;
 
     if F < FFileCount - 1 then
       FOutput[FOutput.Count - 1] := FOutput[FOutput.Count - 1] + ',';
@@ -335,7 +329,7 @@ begin
 
   FOutput.Add('  ],');
   FOutput.Add(SysUtils.Format('  "totalBenchmarks": %d,', [TotalBenchmarks]));
-  FOutput.Add(SysUtils.Format('  "totalDurationMs": %.1f', [TotalDuration]));
+  FOutput.Add(SysUtils.Format('  "totalDurationMicroseconds": %d', [TotalDurationMicroseconds]));
   FOutput.Add('}');
 end;
 

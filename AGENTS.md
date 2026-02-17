@@ -30,11 +30,11 @@ GocciaScript is a subset of ECMAScript 2020 implemented in FreePascal. It provid
 ./build/REPL                                      # Start interactive REPL
 ./build/TestRunner tests/                         # Run all JavaScript tests
 ./build/TestRunner tests/language/expressions/    # Run a test category
-./build/BenchmarkRunner benchmarks/                                # Run all benchmarks
-./build/BenchmarkRunner benchmarks/fibonacci.js                    # Run a specific benchmark
-./build/BenchmarkRunner benchmarks --format=json --output=out.json # Export as JSON
+./build/BenchmarkRunner benchmarks/                                               # Run all benchmarks
+./build/BenchmarkRunner benchmarks/fibonacci.js                                   # Run a specific benchmark
+./build/BenchmarkRunner benchmarks --format=json --output=out.json                # Export as JSON
 ./build/BenchmarkRunner benchmarks --format=console --format=json --output=out.json # Console + JSON
-./build/BenchmarkRunner benchmarks --no-progress                   # Suppress progress (CI)
+./build/BenchmarkRunner benchmarks --no-progress                                  # Suppress progress (CI)
 ```
 
 ### Compile and Run (Common Workflows)

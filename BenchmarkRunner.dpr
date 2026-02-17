@@ -5,15 +5,32 @@ program BenchmarkRunner;
 uses
   Classes, SysUtils, Generics.Collections, Goccia.Values.Primitives,
   Goccia.Values.ObjectValue, Goccia.Values.ArrayValue, Goccia.Engine,
-  Goccia.Error, Goccia.Benchmark.Reporter,
+  Goccia.Error, Goccia.Benchmark.Reporter, Goccia.Builtins.Benchmark,
   FileUtils in 'units/FileUtils.pas';
+
+type
+  TBenchmarkProgress = class
+    class procedure OnProgress(const SuiteName, BenchName: string; Index, Total: Integer);
+  end;
+
+class procedure TBenchmarkProgress.OnProgress(const SuiteName, BenchName: string; Index, Total: Integer);
+begin
+  if SuiteName <> '' then
+    WriteLn(SysUtils.Format('  [%d/%d] %s > %s', [Index, Total, SuiteName, BenchName]))
+  else
+    WriteLn(SysUtils.Format('  [%d/%d] %s', [Index, Total, BenchName]));
+end;
+
+var
+  GShowProgress: Boolean = True;
 
 function CollectBenchmarkFile(const FileName: string;
   Reporter: TBenchmarkReporter): TGocciaObjectValue;
 var
   Source: TStringList;
+  Engine: TGocciaEngine;
   BenchGlobals: TGocciaGlobalBuiltins;
-  TimingResult: TGocciaTimingResult;
+  EngineResult: TGocciaScriptResult;
   ScriptResult: TGocciaObjectValue;
   ResultsArray: TGocciaArrayValue;
   SingleResult: TGocciaObjectValue;
@@ -30,19 +47,27 @@ begin
     Source.Add('runBenchmarks();');
 
     try
-      TimingResult := TGocciaEngine.RunScriptWithTiming(Source, FileName, BenchGlobals);
+      Engine := TGocciaEngine.Create(FileName, Source, BenchGlobals);
+      try
+        if GShowProgress and Assigned(Engine.BuiltinBenchmark) then
+          Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+
+        EngineResult := Engine.Execute;
+      finally
+        Engine.Free;
+      end;
 
       FileResult.FileName := FileName;
-      FileResult.LexTimeMs := TimingResult.LexTimeMs;
-      FileResult.ParseTimeMs := TimingResult.ParseTimeMs;
-      FileResult.ExecuteTimeMs := TimingResult.ExecuteTimeMs;
+      FileResult.LexTimeMicroseconds := EngineResult.LexTimeMicroseconds;
+      FileResult.ParseTimeMicroseconds := EngineResult.ParseTimeMicroseconds;
+      FileResult.ExecuteTimeMicroseconds := EngineResult.ExecuteTimeMicroseconds;
 
-      if TimingResult.Result is TGocciaObjectValue then
+      if EngineResult.Result is TGocciaObjectValue then
       begin
-        ScriptResult := TGocciaObjectValue(TimingResult.Result);
+        ScriptResult := TGocciaObjectValue(EngineResult.Result);
 
         FileResult.TotalBenchmarks := Round(ScriptResult.GetProperty('totalBenchmarks').ToNumberLiteral.Value);
-        FileResult.DurationMs := ScriptResult.GetProperty('duration').ToNumberLiteral.Value;
+        FileResult.DurationMicroseconds := Round(ScriptResult.GetProperty('durationMicroseconds').ToNumberLiteral.Value);
 
         if ScriptResult.GetProperty('results') is TGocciaArrayValue then
         begin
@@ -85,7 +110,7 @@ begin
       else
       begin
         FileResult.TotalBenchmarks := 0;
-        FileResult.DurationMs := 0;
+        FileResult.DurationMicroseconds := 0;
         SetLength(FileResult.Entries, 0);
         Reporter.AddFileResult(FileResult);
 
@@ -97,11 +122,11 @@ begin
       on E: Exception do
       begin
         FileResult.FileName := FileName;
-        FileResult.LexTimeMs := 0;
-        FileResult.ParseTimeMs := 0;
-        FileResult.ExecuteTimeMs := 0;
+        FileResult.LexTimeMicroseconds := 0;
+        FileResult.ParseTimeMicroseconds := 0;
+        FileResult.ExecuteTimeMicroseconds := 0;
         FileResult.TotalBenchmarks := 0;
-        FileResult.DurationMs := 0;
+        FileResult.DurationMicroseconds := 0;
         SetLength(FileResult.Entries, 1);
         FileResult.Entries[0].Suite := '';
         FileResult.Entries[0].Name := '(fatal)';
@@ -118,11 +143,16 @@ begin
   end;
 end;
 
-procedure RunBenchmarks(const Path: string; Format: TBenchmarkReportFormat;
-  const OutputFile: string);
+type
+  TReportSpec = record
+    Format: TBenchmarkReportFormat;
+    OutputFile: string;
+  end;
+
+procedure RunBenchmarks(const Path: string; const Reports: array of TReportSpec);
 var
   Files: TStringList;
-  I: Integer;
+  I, J: Integer;
   Reporter: TBenchmarkReporter;
 begin
   Reporter := TBenchmarkReporter.Create;
@@ -132,13 +162,25 @@ begin
       Files := FindAllFiles(Path, '.js');
       try
         for I := 0 to Files.Count - 1 do
+        begin
+          if GShowProgress then
+            WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, Files.Count, ExtractFileName(Files[I])]));
           CollectBenchmarkFile(Files[I], Reporter);
+        end;
+        if GShowProgress and (Files.Count > 0) then
+          WriteLn;
       finally
         Files.Free;
       end;
     end
     else if FileExists(Path) then
-      CollectBenchmarkFile(Path, Reporter)
+    begin
+      if GShowProgress then
+        WriteLn('[1/1] ', ExtractFileName(Path));
+      CollectBenchmarkFile(Path, Reporter);
+      if GShowProgress then
+        WriteLn;
+    end
     else
     begin
       WriteLn('Error: Path not found: ', Path);
@@ -146,45 +188,72 @@ begin
       Exit;
     end;
 
-    Reporter.Render(Format);
-
-    if OutputFile <> '' then
-      Reporter.WriteToFile(OutputFile)
-    else
-      Reporter.WriteToStdOut;
+    for J := 0 to Length(Reports) - 1 do
+    begin
+      Reporter.Render(Reports[J].Format);
+      if Reports[J].OutputFile <> '' then
+        Reporter.WriteToFile(Reports[J].OutputFile)
+      else
+        Reporter.WriteToStdOut;
+    end;
   finally
     Reporter.Free;
   end;
 end;
 
 var
-  BenchPath, OutputFile, FormatStr: string;
-  Format: TBenchmarkReportFormat;
+  BenchPath: string;
+  Reports: array of TReportSpec;
+  ReportCount: Integer;
   I: Integer;
+  OutputStr: string;
 
 begin
   BenchPath := '';
-  OutputFile := '';
-  FormatStr := 'console';
+  ReportCount := 0;
+  GShowProgress := True;
+  SetLength(Reports, 0);
 
   for I := 1 to ParamCount do
   begin
     if Copy(ParamStr(I), 1, 9) = '--format=' then
-      FormatStr := Copy(ParamStr(I), 10, MaxInt)
+    begin
+      Inc(ReportCount);
+      SetLength(Reports, ReportCount);
+      Reports[ReportCount - 1].Format := ParseReportFormat(Copy(ParamStr(I), 10, MaxInt));
+      Reports[ReportCount - 1].OutputFile := '';
+    end
     else if Copy(ParamStr(I), 1, 9) = '--output=' then
-      OutputFile := Copy(ParamStr(I), 10, MaxInt)
+    begin
+      OutputStr := Copy(ParamStr(I), 10, MaxInt);
+      if ReportCount > 0 then
+        Reports[ReportCount - 1].OutputFile := OutputStr
+      else
+      begin
+        Inc(ReportCount);
+        SetLength(Reports, ReportCount);
+        Reports[ReportCount - 1].Format := brfConsole;
+        Reports[ReportCount - 1].OutputFile := OutputStr;
+      end;
+    end
+    else if ParamStr(I) = '--no-progress' then
+      GShowProgress := False
     else if Copy(ParamStr(I), 1, 2) <> '--' then
       BenchPath := ParamStr(I);
   end;
 
+  if ReportCount = 0 then
+  begin
+    SetLength(Reports, 1);
+    Reports[0].Format := brfConsole;
+    Reports[0].OutputFile := '';
+  end;
+
   if BenchPath = '' then
   begin
-    WriteLn('Usage: BenchmarkRunner <path> [--format=console|text|csv|json] [--output=file]');
+    WriteLn('Usage: BenchmarkRunner <path> [--format=console|text|csv|json [--output=file]] ... [--no-progress]');
     ExitCode := 1;
   end
   else
-  begin
-    Format := ParseReportFormat(FormatStr);
-    RunBenchmarks(BenchPath, Format, OutputFile);
-  end;
+    RunBenchmarks(BenchPath, Reports);
 end.

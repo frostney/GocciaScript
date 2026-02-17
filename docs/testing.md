@@ -447,11 +447,11 @@ The `BenchmarkRunner` program:
 2. Scans the provided path for `.js` files.
 3. For each file, creates a `TGocciaEngine` with `DefaultGlobals + [ggBenchmark]`.
 4. Loads the source and appends a `runBenchmarks()` call.
-5. Executes the script via `ExecuteWithTiming` — which measures lex, parse, and execute phases separately.
+5. Executes the script — the engine measures lex, parse, and execute phases separately with microsecond precision via `TimingUtils.GetMicroseconds`.
 6. `suite()` calls execute immediately, registering `bench()` entries.
 7. `runBenchmarks()` runs each registered benchmark:
    - **Warmup:** Configurable iterations to stabilize (default 3).
-   - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 300ms). Uses microsecond-resolution timing (`fpGetTimeOfDay`) for precision.
+   - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 300ms). Uses microsecond-resolution timing via `TimingUtils` (`fpGetTimeOfDay` on Unix, `QueryPerformanceCounter` on Windows).
    - **Measure:** Runs multiple measurement rounds (default 3), computes the coefficient of variation (CV%) from the unsorted ops/sec data, then reports the median values.
 8. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
 
@@ -483,7 +483,7 @@ The `BenchmarkRunner` program:
 Console format (default):
 
 ```
-  Lex: 0ms | Parse: 0ms | Execute: 7207ms
+  Lex: 287μs | Parse: 0.58ms | Execute: 7207.31ms | Total: 7208.18ms
 
   fibonacci
     recursive fib(15)                        201 ops/sec  ± 0.42%      4.9843 ms/op  (60 iterations)
@@ -492,8 +492,10 @@ Console format (default):
 
 Benchmark Summary
   Total benchmarks: 3
-  Total duration: 7.2s
+  Total duration: 7.21s
 ```
+
+Durations are auto-formatted by `FormatDuration` from `TimingUtils`: values below 0.5ms display as `μs`, values up to 10s as `ms` with two decimal places, and larger values as `s`.
 
 The `±X.XX%` column shows the coefficient of variation across measurement rounds. It is omitted when variance is zero (e.g., with a single measurement round).
 
@@ -515,3 +517,21 @@ build → test       → artifacts
 **`artifacts`** (needs test + benchmark, push only) — Uploads release binaries after both test and benchmark pass.
 
 The `test` and `benchmark` jobs run in parallel since they both depend only on `build`. FPC is installed once per platform, not repeated. Both run across Linux, macOS, and Windows (x64 + ARM where applicable), so platform-specific regressions are caught in both tests and benchmarks.
+
+### PR Workflow (`.github/workflows/pr.yml`)
+
+Runs on pull requests targeting `main`, on **ubuntu-latest x64 only** (single runner, no matrix):
+
+```
+build → test
+      → benchmark → PR comment
+```
+
+**`benchmark`** — Restores the cached benchmark baseline from main, runs all benchmarks with JSON output, and posts a collapsible comparison comment on the PR:
+
+- Results are **grouped by file**, each in a collapsible `<details>` section
+- Files with significant changes (improvements or regressions) are auto-expanded
+- Each file summary shows the count of improved/regressed/unchanged benchmarks and an **average percentage change**
+- The **overall PR summary** at the top shows totals across all files with an average percentage
+- Changes within **±7%** are considered insignificant (shown without color indicators) — this threshold accounts for CI environment noise during active development
+- 🟢 marks improvements > 7%, 🔴 marks regressions > 7%, 🆕 marks new benchmarks with no baseline

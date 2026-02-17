@@ -3,15 +3,24 @@ program REPL;
 {$I units/Goccia.inc}
 
 uses
-  Classes, SysUtils, Generics.Collections, Goccia.Engine, Goccia.Error, Goccia.Values.Primitives;
+  Classes, SysUtils, Generics.Collections, Goccia.Engine, TimingUtils, Goccia.Error, Goccia.Values.Primitives;
 
 var
   Line: string;
   Engine: TGocciaEngine;
   Source: TStringList;
-  Result: TGocciaValue;
+  ScriptResult: TGocciaScriptResult;
+  ShowTiming: Boolean;
+  I: Integer;
 
 begin
+  ShowTiming := False;
+  for I := 1 to ParamCount do
+  begin
+    if ParamStr(I) = '--timing' then
+      ShowTiming := True;
+  end;
+
   WriteLn('Goccia REPL');
   
   Source := TStringList.Create;
@@ -28,9 +37,13 @@ begin
       Source.Add(Line);
       
       try
-        Result := Engine.Execute;
-        if Result <> nil then
-          WriteLn(Result.ToStringLiteral.Value);
+        ScriptResult := Engine.Execute;
+        if ScriptResult.Result <> nil then
+          WriteLn(ScriptResult.Result.ToStringLiteral.Value);
+        if ShowTiming then
+          WriteLn(SysUtils.Format('  [%s lex | %s parse | %s exec | %s total]',
+            [FormatDuration(ScriptResult.LexTimeMicroseconds), FormatDuration(ScriptResult.ParseTimeMicroseconds),
+             FormatDuration(ScriptResult.ExecuteTimeMicroseconds), FormatDuration(ScriptResult.TotalTimeMicroseconds)]));
       except
         on E: Exception do
           WriteLn('Error: ', E.Message);

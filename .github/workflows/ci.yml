@@ -134,12 +134,12 @@ jobs:
         run: chmod +x build/*
 
       - name: Run benchmarks
-        run: ./build/BenchmarkRunner benchmarks
+        if: "!(github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64')"
+        run: ./build/BenchmarkRunner benchmarks --no-progress
 
-      - name: Save benchmark baseline
+      - name: Run benchmarks and save baseline
         if: github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
-        run: |
-          ./build/BenchmarkRunner benchmarks --format=json --output=benchmark-results.json
+        run: ./build/BenchmarkRunner benchmarks --no-progress --format=console --format=json --output=benchmark-results.json
 
       - name: Cache benchmark baseline
         if: github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'

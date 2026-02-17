@@ -82,6 +82,15 @@ Script execution (macrotask)     →  Microtask queue drains
 
 This produces output identical to V8/Node.js for any script. The only scenario where interleaving would differ is with multiple macrotask sources (`setTimeout`, I/O callbacks), which GocciaScript does not implement. The test framework and benchmark runner also drain the microtask queue after each test callback / measurement round, respectively.
 
+### Timing Utilities (`TimingUtils.pas`)
+
+A cross-platform microsecond-precision timing unit providing two functions:
+
+- **`GetMicroseconds`** — Returns the current timestamp in microseconds. Uses `fpGetTimeOfDay` on Unix (native μs resolution) and `QueryPerformanceCounter`/`QueryPerformanceFrequency` on Windows (sub-μs hardware counter, converted to μs). Falls back to `GetTickCount64 * 1000` on other platforms.
+- **`FormatDuration(Microseconds)`** — Auto-formats a duration with two-decimal precision: values below 0.5ms display as `μs` (e.g., `287μs`), values up to 10s as `ms` (e.g., `1.39ms`), and larger values as `s` (e.g., `12.34s`).
+
+Used by the engine (lex/parse/execute phase timing in `TGocciaScriptResult`), the test assertions framework (test execution duration), and the benchmark runner (calibration and measurement). Has no Goccia-specific dependencies, making it reusable outside the engine.
+
 ### AST (`Goccia.AST.Node.pas`, `Goccia.AST.Expressions.pas`, `Goccia.AST.Statements.pas`)
 
 The Abstract Syntax Tree is structured into three layers:

@@ -17,11 +17,13 @@ uses
   Generics.Collections,
   Classes,
   SysUtils,
-  {$IFDEF UNIX}Unix,{$ENDIF}
+  TimingUtils,
   Math;
 
 type
   TGocciaBenchmark = class;
+
+  TBenchmarkProgressEvent = procedure(const SuiteName, BenchName: string; Index, Total: Integer) of object;
 
   TBenchmarkCase = class
   public
@@ -46,6 +48,7 @@ type
     FRegisteredSuites: TStringList;
     FRegisteredBenchmarks: TObjectList<TBenchmarkCase>;
     FCurrentSuiteName: string;
+    FOnProgress: TBenchmarkProgressEvent;
 
     function RunSingleBenchmark(BenchCase: TBenchmarkCase): TBenchmarkResult;
     function CalibrateIterations(BenchCase: TBenchmarkCase): Int64;
@@ -56,6 +59,8 @@ type
     function Suite(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function Bench(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function RunBenchmarks(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+
+    property OnProgress: TBenchmarkProgressEvent read FOnProgress write FOnProgress;
   end;
 
 implementation
@@ -182,35 +187,21 @@ begin
   FRegisteredBenchmarks.Add(TBenchmarkCase.Create(BenchName, BenchFunction, FCurrentSuiteName));
 end;
 
-function GetMicroseconds: Int64;
-{$IFDEF UNIX}
-var
-  tv: TTimeVal;
-begin
-  fpGetTimeOfDay(@tv, nil);
-  Result := Int64(tv.tv_sec) * 1000000 + Int64(tv.tv_usec);
-end;
-{$ELSE}
-begin
-  Result := GetTickCount64 * 1000;
-end;
-{$ENDIF}
-
 function TGocciaBenchmark.CalibrateIterations(BenchCase: TBenchmarkCase): Int64;
 var
   EmptyArgs: TGocciaArgumentsCollection;
   BatchSize: Int64;
-  StartUs, ElapsedUs, TargetUs: Int64;
+  StartMicroseconds, ElapsedMicroseconds, TargetMicroseconds: Int64;
   I: Int64;
 begin
-  TargetUs := Int64(MIN_CALIBRATION_MS) * 1000;
+  TargetMicroseconds := Int64(MIN_CALIBRATION_MS) * 1000;
   BatchSize := CALIBRATION_BATCH;
 
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
     while True do
     begin
-      StartUs := GetMicroseconds;
+      StartMicroseconds := GetMicroseconds;
       I := 0;
       while I < BatchSize do
       begin
@@ -219,19 +210,19 @@ begin
       end;
       if Assigned(TGocciaMicrotaskQueue.Instance) then
         TGocciaMicrotaskQueue.Instance.DrainQueue;
-      ElapsedUs := GetMicroseconds - StartUs;
+      ElapsedMicroseconds := GetMicroseconds - StartMicroseconds;
 
-      if ElapsedUs >= TargetUs then
+      if ElapsedMicroseconds >= TargetMicroseconds then
       begin
         Result := (BatchSize div 10) * 10;
         if Result < 10 then Result := 10;
         Exit;
       end;
 
-      if ElapsedUs = 0 then
+      if ElapsedMicroseconds = 0 then
         BatchSize := BatchSize * 10
       else
-        BatchSize := BatchSize * (TargetUs div ElapsedUs + 1);
+        BatchSize := BatchSize * (TargetMicroseconds div ElapsedMicroseconds + 1);
 
       if BatchSize > 10000000 then
       begin
@@ -248,7 +239,7 @@ function TGocciaBenchmark.RunSingleBenchmark(BenchCase: TBenchmarkCase): TBenchm
 var
   EmptyArgs: TGocciaArgumentsCollection;
   Iterations: Int64;
-  StartUs, RoundUs: Int64;
+  StartMicroseconds, RoundMicroseconds: Int64;
   I: Int64;
   Round, J, K: Integer;
   OpsRounds: array[0..4] of Double;   // Max 5 rounds
@@ -275,7 +266,7 @@ begin
       if Assigned(TGocciaGC.Instance) then
         TGocciaGC.Instance.Collect;
 
-      StartUs := GetMicroseconds;
+      StartMicroseconds := GetMicroseconds;
       I := 0;
       while I < Iterations do
       begin
@@ -284,12 +275,12 @@ begin
       end;
       if Assigned(TGocciaMicrotaskQueue.Instance) then
         TGocciaMicrotaskQueue.Instance.DrainQueue;
-      RoundUs := GetMicroseconds - StartUs;
+      RoundMicroseconds := GetMicroseconds - StartMicroseconds;
 
-      if RoundUs > 0 then
+      if RoundMicroseconds > 0 then
       begin
-        OpsRounds[Round] := (Iterations / RoundUs) * 1000000;
-        MeanRounds[Round] := (RoundUs / 1000) / Iterations;
+        OpsRounds[Round] := (Iterations / RoundMicroseconds) * 1000000;
+        MeanRounds[Round] := (RoundMicroseconds / 1000) / Iterations;
       end
       else
       begin
@@ -356,9 +347,9 @@ var
   ResultObj: TGocciaObjectValue;
   ResultsArray: TGocciaArrayValue;
   SingleResult: TGocciaObjectValue;
-  StartUs, TotalDurationMs: Int64;
+  StartMicroseconds, TotalDurationMicroseconds: Int64;
 begin
-  StartUs := GetMicroseconds;
+  StartMicroseconds := GetMicroseconds;
 
   // Protect ALL benchmark functions from GC before running any benchmarks.
   // These are held by Pascal TBenchmarkCase objects, not in GocciaScript scopes,
@@ -376,6 +367,9 @@ begin
     for I := 0 to FRegisteredBenchmarks.Count - 1 do
     begin
       BenchCase := FRegisteredBenchmarks[I];
+
+      if Assigned(FOnProgress) then
+        FOnProgress(BenchCase.SuiteName, BenchCase.Name, I + 1, FRegisteredBenchmarks.Count);
 
       try
         BenchResult := RunSingleBenchmark(BenchCase);
@@ -403,12 +397,12 @@ begin
       end;
     end;
 
-    TotalDurationMs := (GetMicroseconds - StartUs) div 1000;
+    TotalDurationMicroseconds := GetMicroseconds - StartMicroseconds;
 
     ResultObj := TGocciaObjectValue.Create;
     ResultObj.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.Create(FRegisteredBenchmarks.Count));
     ResultObj.AssignProperty('results', ResultsArray);
-    ResultObj.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDurationMs));
+    ResultObj.AssignProperty('durationMicroseconds', TGocciaNumberLiteralValue.Create(TotalDurationMicroseconds));
 
     Result := ResultObj;
   finally

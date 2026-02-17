@@ -35,14 +35,16 @@ type
 
   TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
 
-  TGocciaTimingResult = record
+  TGocciaScriptResult = record
     Result: TGocciaValue;
-    LexTimeMs: Int64;
-    ParseTimeMs: Int64;
-    ExecuteTimeMs: Int64;
-    TotalTimeMs: Int64;
+    LexTimeMicroseconds: Int64;
+    ParseTimeMicroseconds: Int64;
+    ExecuteTimeMicroseconds: Int64;
+    TotalTimeMicroseconds: Int64;
+    FileName: string;
   end;
 
+type
   TGocciaEngine = class
   public
     const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap];
@@ -75,17 +77,15 @@ type
     constructor Create(const AFileName: string; ASourceLines: TStringList; AGlobals: TGocciaGlobalBuiltins);
     destructor Destroy; override;
 
-    function Execute: TGocciaValue;
-    function ExecuteWithTiming: TGocciaTimingResult;
+    function Execute: TGocciaScriptResult;
     function ExecuteProgram(AProgram: TGocciaProgram): TGocciaValue;
 
-    class function RunScript(const Source: string; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue; overload;
-    class function RunScript(const Source: string; const FileName: string = 'inline.goccia'): TGocciaValue; overload;
-    class function RunScriptFromFile(const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue; overload;
-    class function RunScriptFromFile(const FileName: string): TGocciaValue; overload;
-    class function RunScriptFromStringList(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue; overload;
-    class function RunScriptFromStringList(const Source: TStringList; const FileName: string): TGocciaValue; overload;
-    class function RunScriptWithTiming(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaTimingResult;
+    class function RunScript(const Source: string; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult; overload;
+    class function RunScript(const Source: string; const FileName: string = 'inline.goccia'): TGocciaScriptResult; overload;
+    class function RunScriptFromFile(const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult; overload;
+    class function RunScriptFromFile(const FileName: string): TGocciaScriptResult; overload;
+    class function RunScriptFromStringList(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult; overload;
+    class function RunScriptFromStringList(const Source: TStringList; const FileName: string): TGocciaScriptResult; overload;
 
     property Interpreter: TGocciaInterpreter read FInterpreter;
     property BuiltinConsole: TGocciaConsole read FBuiltinConsole;
@@ -105,6 +105,9 @@ type
 
 
 implementation
+
+uses
+  TimingUtils;
 
 constructor TGocciaEngine.Create(const AFileName: string; ASourceLines: TStringList; AGlobals: TGocciaGlobalBuiltins);
 var
@@ -269,36 +272,7 @@ begin
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 end;
 
-function TGocciaEngine.Execute: TGocciaValue;
-var
-  Lexer: TGocciaLexer;
-  Parser: TGocciaParser;
-  ProgramNode: TGocciaProgram;
-  Tokens: TObjectList<TGocciaToken>;
-begin
-  Lexer := TGocciaLexer.Create(FSourceLines.Text, FFileName);
-  try
-    Tokens := Lexer.ScanTokens;
-    Parser := TGocciaParser.Create(Tokens, FFileName, Lexer.SourceLines);
-    try
-      ProgramNode := Parser.Parse;
-      try
-        Result := FInterpreter.Execute(ProgramNode);
-      finally
-        ProgramNode.Free;
-      end;
-    finally
-      Parser.Free;
-    end;
-  finally
-    Lexer.Free;
-  end;
-
-  if Assigned(TGocciaMicrotaskQueue.Instance) then
-    TGocciaMicrotaskQueue.Instance.DrainQueue;
-end;
-
-function TGocciaEngine.ExecuteWithTiming: TGocciaTimingResult;
+function TGocciaEngine.Execute: TGocciaScriptResult;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -306,27 +280,28 @@ var
   Tokens: TObjectList<TGocciaToken>;
   StartTime, LexEnd, ParseEnd, ExecEnd: Int64;
 begin
-  StartTime := GetTickCount64;
+  Result.FileName := FFileName;
+  StartTime := GetMicroseconds;
 
   Lexer := TGocciaLexer.Create(FSourceLines.Text, FFileName);
   try
     Tokens := Lexer.ScanTokens;
-    LexEnd := GetTickCount64;
-    Result.LexTimeMs := LexEnd - StartTime;
+    LexEnd := GetMicroseconds;
+    Result.LexTimeMicroseconds := LexEnd - StartTime;
 
     Parser := TGocciaParser.Create(Tokens, FFileName, Lexer.SourceLines);
     try
       ProgramNode := Parser.Parse;
-      ParseEnd := GetTickCount64;
-      Result.ParseTimeMs := ParseEnd - LexEnd;
+      ParseEnd := GetMicroseconds;
+      Result.ParseTimeMicroseconds := ParseEnd - LexEnd;
 
       try
         Result.Result := FInterpreter.Execute(ProgramNode);
         if Assigned(TGocciaMicrotaskQueue.Instance) then
           TGocciaMicrotaskQueue.Instance.DrainQueue;
-        ExecEnd := GetTickCount64;
-        Result.ExecuteTimeMs := ExecEnd - ParseEnd;
-        Result.TotalTimeMs := ExecEnd - StartTime;
+        ExecEnd := GetMicroseconds;
+        Result.ExecuteTimeMicroseconds := ExecEnd - ParseEnd;
+        Result.TotalTimeMicroseconds := ExecEnd - StartTime;
       finally
         ProgramNode.Free;
       end;
@@ -345,7 +320,7 @@ begin
     TGocciaMicrotaskQueue.Instance.DrainQueue;
 end;
 
-class function TGocciaEngine.RunScript(const Source: string; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue;
+class function TGocciaEngine.RunScript(const Source: string; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult;
 var
   SourceList: TStringList;
 begin
@@ -358,12 +333,12 @@ begin
   end;
 end;
 
-class function TGocciaEngine.RunScript(const Source: string; const FileName: string): TGocciaValue;
+class function TGocciaEngine.RunScript(const Source: string; const FileName: string): TGocciaScriptResult;
 begin
   Result := RunScript(Source, FileName, TGocciaEngine.DefaultGlobals);
 end;
 
-class function TGocciaEngine.RunScriptFromFile(const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue;
+class function TGocciaEngine.RunScriptFromFile(const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult;
 var
   Source: TStringList;
 begin
@@ -376,12 +351,12 @@ begin
   end;
 end;
 
-class function TGocciaEngine.RunScriptFromFile(const FileName: string): TGocciaValue;
+class function TGocciaEngine.RunScriptFromFile(const FileName: string): TGocciaScriptResult;
 begin
   Result := RunScriptFromFile(FileName, TGocciaEngine.DefaultGlobals);
 end;
 
-class function TGocciaEngine.RunScriptFromStringList(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue;
+class function TGocciaEngine.RunScriptFromStringList(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult;
 var
   Engine: TGocciaEngine;
 begin
@@ -393,21 +368,9 @@ begin
   end;
 end;
 
-class function TGocciaEngine.RunScriptFromStringList(const Source: TStringList; const FileName: string): TGocciaValue;
+class function TGocciaEngine.RunScriptFromStringList(const Source: TStringList; const FileName: string): TGocciaScriptResult;
 begin
   Result := RunScriptFromStringList(Source, FileName, TGocciaEngine.DefaultGlobals);
-end;
-
-class function TGocciaEngine.RunScriptWithTiming(const Source: TStringList; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaTimingResult;
-var
-  Engine: TGocciaEngine;
-begin
-  Engine := TGocciaEngine.Create(FileName, Source, AGlobals);
-  try
-    Result := Engine.ExecuteWithTiming;
-  finally
-    Engine.Free;
-  end;
 end;
 
 procedure TGocciaEngine.ThrowError(const Message: string; Line, Column: Integer);

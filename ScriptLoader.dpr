@@ -3,29 +3,19 @@ program ScriptLoader;
 {$I Goccia.inc}
 
 uses
-  Classes, SysUtils, Generics.Collections, Goccia.Values.Primitives, Goccia.Engine, Goccia.Error, FileUtils in 'units/FileUtils.pas';
-
-function RunGocciaScript(const FileName: string): TGocciaValue;
-var
-  Source: TStringList;
-begin
-  Source := TStringList.Create;
-  try
-    Source.LoadFromFile(FileName);
-    Result := TGocciaEngine.RunScriptFromStringList(Source, FileName, TGocciaEngine.DefaultGlobals);
-  finally
-    Source.Free;
-  end;
-end;
+  Classes, SysUtils, Generics.Collections, Goccia.Values.Primitives, Goccia.Engine, TimingUtils, Goccia.Error, FileUtils in 'units/FileUtils.pas';
 
 procedure RunScriptFromFile(const FileName: string);
 var
-  ScriptResult: TGocciaValue;
+  ScriptResult: TGocciaScriptResult;
 begin
   try
     WriteLn('Running script: ', FileName);
-    ScriptResult := RunGocciaScript(FileName);
-    Writeln('Result: ', ScriptResult.ToStringLiteral.Value);
+    ScriptResult := TGocciaEngine.RunScriptFromFile(FileName, TGocciaEngine.DefaultGlobals);
+    WriteLn(SysUtils.Format('  Lex: %s | Parse: %s | Execute: %s | Total: %s',
+      [FormatDuration(ScriptResult.LexTimeMicroseconds), FormatDuration(ScriptResult.ParseTimeMicroseconds),
+       FormatDuration(ScriptResult.ExecuteTimeMicroseconds), FormatDuration(ScriptResult.TotalTimeMicroseconds)]));
+    Writeln('Result: ', ScriptResult.Result.ToStringLiteral.Value);
   except
     on E: Exception do
     begin
