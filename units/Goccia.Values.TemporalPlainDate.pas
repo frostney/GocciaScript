@@ -64,6 +64,17 @@ uses
   Goccia.Values.TemporalDuration, Goccia.Values.TemporalPlainTime,
   Goccia.Values.TemporalPlainDateTime;
 
+function GetDurFieldOr(AObj: TGocciaObjectValue; const AName: string; ADefault: Int64): Int64;
+var
+  V: TGocciaValue;
+begin
+  V := AObj.GetProperty(AName);
+  if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+    Result := ADefault
+  else
+    Result := Trunc(V.ToNumberLiteral.Value);
+end;
+
 function AsPlainDate(AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainDateValue;
 begin
   if not (AValue is TGocciaTemporalPlainDateValue) then
@@ -76,7 +87,7 @@ var
   DateRec: TTemporalDateRecord;
   TimeRec: TTemporalTimeRecord;
   Obj: TGocciaObjectValue;
-  V: TGocciaValue;
+  V, VMonth, VDay: TGocciaValue;
 begin
   if AValue is TGocciaTemporalPlainDateValue then
     Result := TGocciaTemporalPlainDateValue(AValue)
@@ -99,10 +110,16 @@ begin
     V := Obj.GetProperty('year');
     if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
       ThrowTypeError(AMethod + ' requires year, month, day properties');
+    VMonth := Obj.GetProperty('month');
+    if (VMonth = nil) or (VMonth is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError(AMethod + ' requires year, month, day properties');
+    VDay := Obj.GetProperty('day');
+    if (VDay = nil) or (VDay is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError(AMethod + ' requires year, month, day properties');
     Result := TGocciaTemporalPlainDateValue.Create(
-      Trunc(Obj.GetProperty('year').ToNumberLiteral.Value),
-      Trunc(Obj.GetProperty('month').ToNumberLiteral.Value),
-      Trunc(Obj.GetProperty('day').ToNumberLiteral.Value));
+      Trunc(V.ToNumberLiteral.Value),
+      Trunc(VMonth.ToNumberLiteral.Value),
+      Trunc(VDay.ToNumberLiteral.Value));
   end
   else
   begin
@@ -319,7 +336,6 @@ var
   Dur: TGocciaTemporalDurationValue;
   Arg: TGocciaValue;
   ObjArg: TGocciaObjectValue;
-  V: TGocciaValue;
   DurRec: TTemporalDurationRecord;
   NewYear, NewMonth, NewDay: Integer;
   DateRec: TTemporalDateRecord;
@@ -340,18 +356,12 @@ begin
   end
   else if Arg is TGocciaObjectValue then
   begin
-    Dur := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-    // Try to extract duration fields from object
     ObjArg := TGocciaObjectValue(Arg);
-    V := ObjArg.GetProperty('years');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      Dur := TGocciaTemporalDurationValue.Create(Trunc(V.ToNumberLiteral.Value), 0, 0, 0, 0, 0, 0, 0, 0, 0);
-    // Simplified - create properly from all fields
     Dur := TGocciaTemporalDurationValue.Create(
-      Trunc(ObjArg.GetProperty('years').ToNumberLiteral.Value),
-      Trunc(ObjArg.GetProperty('months').ToNumberLiteral.Value),
-      Trunc(ObjArg.GetProperty('weeks').ToNumberLiteral.Value),
-      Trunc(ObjArg.GetProperty('days').ToNumberLiteral.Value),
+      GetDurFieldOr(ObjArg, 'years', 0),
+      GetDurFieldOr(ObjArg, 'months', 0),
+      GetDurFieldOr(ObjArg, 'weeks', 0),
+      GetDurFieldOr(ObjArg, 'days', 0),
       0, 0, 0, 0, 0, 0);
   end
   else
@@ -415,10 +425,10 @@ begin
   begin
     ObjArg := TGocciaObjectValue(Arg);
     Dur := TGocciaTemporalDurationValue.Create(
-      Trunc(ObjArg.GetProperty('years').ToNumberLiteral.Value),
-      Trunc(ObjArg.GetProperty('months').ToNumberLiteral.Value),
-      Trunc(ObjArg.GetProperty('weeks').ToNumberLiteral.Value),
-      Trunc(ObjArg.GetProperty('days').ToNumberLiteral.Value),
+      GetDurFieldOr(ObjArg, 'years', 0),
+      GetDurFieldOr(ObjArg, 'months', 0),
+      GetDurFieldOr(ObjArg, 'weeks', 0),
+      GetDurFieldOr(ObjArg, 'days', 0),
       0, 0, 0, 0, 0, 0);
   end
   else

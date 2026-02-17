@@ -198,6 +198,10 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Indentation:** 2 spaces (see `.editorconfig`)
 - **Compiler directives:** All units include `{$I Goccia.inc}`
 
+### Platform Pitfall: `Double(Int64)` on AArch64
+
+On FPC 3.2.2 AArch64, `Double(Int64Var)` performs a bit reinterpretation, not a value conversion. Use implicit promotion instead: `Int64Var * 1.0` or `Int64Var * 1000000.0`. See [docs/code-style.md](docs/code-style.md) for details.
+
 ### Terminology
 
 - **Define** = create a new variable binding (`DefineLexicalBinding`)

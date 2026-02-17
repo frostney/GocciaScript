@@ -260,7 +260,8 @@ Built-ins are registered via a `TGocciaGlobalBuiltins` set of flags:
 ```pascal
 TGocciaGlobalBuiltin = (ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
                          ggGlobalNumber, ggPromise, ggJSON, ggSymbol,
-                         ggSet, ggMap, ggTestAssertions);
+                         ggSet, ggMap, ggTestAssertions, ggBenchmark,
+                         ggTemporal);
 ```
 
 **Why configurable?**

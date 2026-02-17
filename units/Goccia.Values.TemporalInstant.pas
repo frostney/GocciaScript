@@ -91,16 +91,21 @@ begin
   FEpochMilliseconds := AEpochMilliseconds;
   FSubMillisecondNanoseconds := ASubMillisecondNanoseconds;
 
-  // Normalize sub-ms nanoseconds
-  if FSubMillisecondNanoseconds >= 1000000 then
+  // Normalize sub-ms nanoseconds into 0..999999 range
+  if (FSubMillisecondNanoseconds >= 1000000) or (FSubMillisecondNanoseconds < 0) then
   begin
-    Inc(FEpochMilliseconds, FSubMillisecondNanoseconds div 1000000);
-    FSubMillisecondNanoseconds := FSubMillisecondNanoseconds mod 1000000;
-  end
-  else if FSubMillisecondNanoseconds < 0 then
-  begin
-    Dec(FEpochMilliseconds);
-    FSubMillisecondNanoseconds := FSubMillisecondNanoseconds + 1000000;
+    if FSubMillisecondNanoseconds >= 0 then
+    begin
+      Inc(FEpochMilliseconds, FSubMillisecondNanoseconds div 1000000);
+      FSubMillisecondNanoseconds := FSubMillisecondNanoseconds mod 1000000;
+    end
+    else
+    begin
+      // For negative values, borrow enough whole milliseconds
+      // (FSubMillisecondNanoseconds - 999999) div 1000000 gives the negative delta
+      Inc(FEpochMilliseconds, (FSubMillisecondNanoseconds - 999999) div 1000000);
+      FSubMillisecondNanoseconds := FSubMillisecondNanoseconds - ((FSubMillisecondNanoseconds - 999999) div 1000000) * 1000000;
+    end;
   end;
 
   InitializePrototype;
@@ -143,7 +148,7 @@ end;
 
 function TGocciaTemporalInstantValue.TotalNanoseconds: Double;
 begin
-  Result := Double(FEpochMilliseconds) * 1000000.0 + FSubMillisecondNanoseconds;
+  Result := FEpochMilliseconds * 1000000.0 + FSubMillisecondNanoseconds;
 end;
 
 { Getters }
@@ -339,9 +344,18 @@ begin
     Divisor := 1;
   end;
 
-  Rounded := ((TotalNs + (Divisor div 2)) div Divisor) * Divisor;
+  // HalfExpand rounding: round half-values away from zero
+  if TotalNs >= 0 then
+    Rounded := ((TotalNs + (Divisor div 2)) div Divisor) * Divisor
+  else
+    Rounded := -((((-TotalNs) + (Divisor div 2)) div Divisor) * Divisor);
   NewMs := Rounded div 1000000;
   NewSubMs := Integer(Rounded mod 1000000);
+  if NewSubMs < 0 then
+  begin
+    Dec(NewMs);
+    Inc(NewSubMs, 1000000);
+  end;
 
   Result := TGocciaTemporalInstantValue.Create(NewMs, NewSubMs);
 end;

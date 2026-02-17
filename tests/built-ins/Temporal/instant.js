@@ -93,4 +93,41 @@ describe("Temporal.Instant", () => {
     expect(rounded.epochMilliseconds).toBe(2000);
   });
 
+  test("fromEpochNanoseconds()", () => {
+    const instant = Temporal.Instant.fromEpochNanoseconds(1000000000);
+    expect(instant.epochMilliseconds).toBe(1000);
+    expect(instant.epochNanoseconds).toBe(1000000000);
+  });
+
+  test("epochNanoseconds getter", () => {
+    const instant = Temporal.Instant.fromEpochMilliseconds(5000);
+    expect(instant.epochNanoseconds).toBe(5000000000);
+  });
+
+  test("from() with ISO string", () => {
+    const instant = Temporal.Instant.from("2024-01-15T12:30:45Z");
+    expect(instant.epochMilliseconds).toBe(1705321845000);
+  });
+
+  test("add() throws on years", () => {
+    const instant = Temporal.Instant.fromEpochMilliseconds(0);
+    expect(() => {
+      instant.add(new Temporal.Duration(1));
+    }).toThrow();
+  });
+
+  test("add() throws on months", () => {
+    const instant = Temporal.Instant.fromEpochMilliseconds(0);
+    expect(() => {
+      instant.add(new Temporal.Duration(0, 1));
+    }).toThrow();
+  });
+
+  test("subtract() throws on weeks", () => {
+    const instant = Temporal.Instant.fromEpochMilliseconds(0);
+    expect(() => {
+      instant.subtract(new Temporal.Duration(0, 0, 1));
+    }).toThrow();
+  });
+
 });

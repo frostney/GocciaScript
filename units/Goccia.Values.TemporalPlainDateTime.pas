@@ -98,6 +98,26 @@ var
   DateRec: TTemporalDateRecord;
   TimeRec: TTemporalTimeRecord;
   Obj: TGocciaObjectValue;
+  V: TGocciaValue;
+  VYear, VMonth, VDay, VHour, VMinute, VSecond: Integer;
+
+  function GetRequiredField(const AName: string): Integer;
+  begin
+    V := Obj.GetProperty(AName);
+    if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError(AMethod + ' requires ' + AName + ' property');
+    Result := Trunc(V.ToNumberLiteral.Value);
+  end;
+
+  function GetOptionalField(const AName: string; ADefault: Integer): Integer;
+  begin
+    V := Obj.GetProperty(AName);
+    if (V = nil) or (V is TGocciaUndefinedLiteralValue) then
+      Result := ADefault
+    else
+      Result := Trunc(V.ToNumberLiteral.Value);
+  end;
+
 begin
   if AValue is TGocciaTemporalPlainDateTimeValue then
     Result := TGocciaTemporalPlainDateTimeValue(AValue)
@@ -113,14 +133,14 @@ begin
   else if AValue is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(AValue);
+    VYear := GetRequiredField('year');
+    VMonth := GetRequiredField('month');
+    VDay := GetRequiredField('day');
+    VHour := GetOptionalField('hour', 0);
+    VMinute := GetOptionalField('minute', 0);
+    VSecond := GetOptionalField('second', 0);
     Result := TGocciaTemporalPlainDateTimeValue.Create(
-      Trunc(Obj.GetProperty('year').ToNumberLiteral.Value),
-      Trunc(Obj.GetProperty('month').ToNumberLiteral.Value),
-      Trunc(Obj.GetProperty('day').ToNumberLiteral.Value),
-      Trunc(Obj.GetProperty('hour').ToNumberLiteral.Value),
-      Trunc(Obj.GetProperty('minute').ToNumberLiteral.Value),
-      Trunc(Obj.GetProperty('second').ToNumberLiteral.Value),
-      0, 0, 0);
+      VYear, VMonth, VDay, VHour, VMinute, VSecond, 0, 0, 0);
   end
   else
   begin
@@ -555,14 +575,12 @@ end;
 function TGocciaTemporalPlainDateTimeValue.DTUntil(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 var
   D, Other: TGocciaTemporalPlainDateTimeValue;
-  DiffDays, DiffNs: Int64;
-  T1Ns, T2Ns: Int64;
+  T1Ns, T2Ns, TotalNs, AbsNs, RemNs: Int64;
+  DiffDays: Int64;
+  Sgn: Int64;
 begin
   D := AsPlainDateTime(ThisValue, 'PlainDateTime.prototype.until');
   Other := CoercePlainDateTime(Args.GetElement(0), 'PlainDateTime.prototype.until');
-
-  DiffDays := DateToEpochDays(Other.FYear, Other.FMonth, Other.FDay) -
-              DateToEpochDays(D.FYear, D.FMonth, D.FDay);
 
   T1Ns := Int64(D.FNanosecond) + Int64(D.FMicrosecond) * 1000 + Int64(D.FMillisecond) * 1000000 +
            Int64(D.FSecond) * Int64(1000000000) + Int64(D.FMinute) * Int64(60000000000) +
@@ -571,20 +589,29 @@ begin
            Int64(Other.FSecond) * Int64(1000000000) + Int64(Other.FMinute) * Int64(60000000000) +
            Int64(Other.FHour) * Int64(3600000000000);
 
-  DiffNs := T2Ns - T1Ns;
-  if DiffNs < 0 then
-  begin
-    Dec(DiffDays);
-    Inc(DiffNs, Int64(86400000000000));
-  end;
+  // Compute total nanosecond difference to avoid mixed-sign components
+  TotalNs := (DateToEpochDays(Other.FYear, Other.FMonth, Other.FDay) -
+              DateToEpochDays(D.FYear, D.FMonth, D.FDay)) * Int64(86400000000000) +
+             (T2Ns - T1Ns);
 
-  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, DiffDays,
-    DiffNs div Int64(3600000000000),
-    (DiffNs div Int64(60000000000)) mod 60,
-    (DiffNs div Int64(1000000000)) mod 60,
-    (DiffNs div 1000000) mod 1000,
-    (DiffNs div 1000) mod 1000,
-    DiffNs mod 1000);
+  if TotalNs > 0 then
+    Sgn := 1
+  else if TotalNs < 0 then
+    Sgn := -1
+  else
+    Sgn := 0;
+
+  AbsNs := Abs(TotalNs);
+  DiffDays := AbsNs div Int64(86400000000000);
+  RemNs := AbsNs mod Int64(86400000000000);
+
+  Result := TGocciaTemporalDurationValue.Create(0, 0, 0, Sgn * DiffDays,
+    Sgn * (RemNs div Int64(3600000000000)),
+    Sgn * ((RemNs div Int64(60000000000)) mod 60),
+    Sgn * ((RemNs div Int64(1000000000)) mod 60),
+    Sgn * ((RemNs div 1000000) mod 1000),
+    Sgn * ((RemNs div 1000) mod 1000),
+    Sgn * (RemNs mod 1000));
 end;
 
 function TGocciaTemporalPlainDateTimeValue.DTSince(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;

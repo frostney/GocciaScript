@@ -266,7 +266,7 @@ begin
 
   EpochNs := Args.GetElement(0).ToNumberLiteral.Value;
   Ms := Trunc(EpochNs / 1000000);
-  SubMs := Trunc(EpochNs - Double(Ms) * 1000000);
+  SubMs := Trunc(EpochNs - Ms * 1000000.0);
 
   Result := TGocciaTemporalInstantValue.Create(Ms, SubMs);
 end;
@@ -322,7 +322,7 @@ begin
     ThrowTypeError('Temporal.Instant.fromEpochNanoseconds requires an argument');
   EpochNs := Args.GetElement(0).ToNumberLiteral.Value;
   Ms := Trunc(EpochNs / 1000000);
-  SubMs := Trunc(EpochNs - Double(Ms) * 1000000);
+  SubMs := Trunc(EpochNs - Ms * 1000000.0);
   Result := TGocciaTemporalInstantValue.Create(Ms, SubMs);
 end;
 
