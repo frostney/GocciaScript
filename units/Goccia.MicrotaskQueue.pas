@@ -77,15 +77,17 @@ end;
 
 procedure TGocciaMicrotaskQueue.DrainQueue;
 var
+  I: Integer;
   Task: TGocciaMicrotask;
   Promise: TGocciaPromiseValue;
   HandlerResult: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
-  while FQueue.Count > 0 do
+  I := 0;
+  while I < FQueue.Count do
   begin
-    Task := FQueue[0];
-    FQueue.Delete(0);
+    Task := FQueue[I];
+    Inc(I);
 
     Promise := TGocciaPromiseValue(Task.ResultPromise);
 
@@ -142,6 +144,8 @@ begin
       end;
     end;
   end;
+  if I > 0 then
+    FQueue.Clear;
 end;
 
 procedure TGocciaMicrotaskQueue.ClearQueue;
