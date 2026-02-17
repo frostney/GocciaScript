@@ -33,8 +33,24 @@ begin
   ScriptResult.AssignProperty('failedTests', TGocciaArrayValue.Create);
 
   Source := TStringList.Create;
-  try  
-    Source.LoadFromFile(FileName);
+  try
+    try
+      Source.LoadFromFile(FileName);
+    except
+      on E: EStreamError do
+      begin
+        WriteLn('Error loading test file: ', E.Message);
+        Result.TestResult := ScriptResult;
+        Result.Timing.Result := nil;
+        Result.Timing.LexTimeMicroseconds := 0;
+        Result.Timing.ParseTimeMicroseconds := 0;
+        Result.Timing.ExecuteTimeMicroseconds := 0;
+        Result.Timing.TotalTimeMicroseconds := 0;
+        Result.Timing.FileName := '';
+        Exit;
+      end;
+    end;
+
     Source.Add('runTests({ exitOnFirstFailure: false, showTestResults: false, silent: true });');
 
     try
@@ -80,7 +96,7 @@ begin
       end;
     end;
   finally
-    Source.Free; 
+    Source.Free;
   end;
 end;
 
