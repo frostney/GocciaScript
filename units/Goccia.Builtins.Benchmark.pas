@@ -61,7 +61,7 @@ type
 implementation
 
 uses
-  Goccia.Values.ClassHelper, Goccia.GarbageCollector;
+  Goccia.Values.ClassHelper, Goccia.GarbageCollector, Goccia.MicrotaskQueue;
 
 const
   DEFAULT_WARMUP_ITERATIONS = 3;
@@ -217,6 +217,8 @@ begin
         BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         Inc(I);
       end;
+      if Assigned(TGocciaMicrotaskQueue.Instance) then
+        TGocciaMicrotaskQueue.Instance.DrainQueue;
       ElapsedUs := GetMicroseconds - StartUs;
 
       if ElapsedUs >= TargetUs then
@@ -261,6 +263,8 @@ begin
     // Phase 1: Warmup
     for K := 1 to WARMUP_ITERATIONS do
       BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    if Assigned(TGocciaMicrotaskQueue.Instance) then
+      TGocciaMicrotaskQueue.Instance.DrainQueue;
 
     // Phase 2: Calibrate to find iteration count per round
     Iterations := CalibrateIterations(BenchCase);
@@ -278,6 +282,8 @@ begin
         BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         Inc(I);
       end;
+      if Assigned(TGocciaMicrotaskQueue.Instance) then
+        TGocciaMicrotaskQueue.Instance.DrainQueue;
       RoundUs := GetMicroseconds - StartUs;
 
       if RoundUs > 0 then

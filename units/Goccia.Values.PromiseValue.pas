@@ -1,0 +1,426 @@
+unit Goccia.Values.PromiseValue;
+
+{$I Goccia.inc}
+
+interface
+
+uses
+  Goccia.Values.Primitives, Goccia.Values.ObjectValue,
+  Goccia.Values.NativeFunction, Goccia.Arguments.Collection,
+  Generics.Collections, SysUtils;
+
+type
+  TGocciaPromiseState = (gpsPending, gpsFulfilled, gpsRejected);
+
+  TGocciaPromiseValue = class;
+
+  TGocciaPromiseReaction = record
+    OnFulfilled: TGocciaValue;
+    OnRejected: TGocciaValue;
+    ResultPromise: TGocciaPromiseValue;
+  end;
+
+  TGocciaPromiseFinallyWrapper = class(TGocciaObjectValue)
+  private
+    FOnFinally: TGocciaValue;
+    FIsFulfill: Boolean;
+  public
+    constructor Create(AOnFinally: TGocciaValue; AIsFulfill: Boolean);
+    function Invoke(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    procedure GCMarkReferences; override;
+  end;
+
+  TGocciaPromiseValue = class(TGocciaObjectValue)
+  private
+    class var FSharedPromisePrototype: TGocciaObjectValue;
+    class var FPrototypeMethodHost: TGocciaPromiseValue;
+  private
+    FState: TGocciaPromiseState;
+    FResult: TGocciaValue;
+    FReactions: TList<TGocciaPromiseReaction>;
+    FAlreadyResolved: Boolean;
+
+    function PromiseThen(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function PromiseCatch(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function PromiseFinally(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+
+    procedure TriggerReactions;
+    procedure SubscribeTo(APromise: TGocciaPromiseValue);
+  public
+    constructor Create; overload;
+    destructor Destroy; override;
+    procedure InitializePrototype;
+
+    procedure Resolve(AValue: TGocciaValue);
+    procedure Reject(AReason: TGocciaValue);
+
+    function DoResolve(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function DoReject(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+
+    function GetProperty(const AName: string): TGocciaValue; override;
+    function ToStringTag: string; override;
+
+    procedure GCMarkReferences; override;
+
+    property State: TGocciaPromiseState read FState;
+    property PromiseResult: TGocciaValue read FResult;
+  end;
+
+implementation
+
+uses
+  Goccia.MicrotaskQueue, Goccia.Values.FunctionBase,
+  Goccia.Values.Error, Goccia.Values.ErrorHelper,
+  Goccia.GarbageCollector;
+
+{ TGocciaPromiseFinallyWrapper }
+
+constructor TGocciaPromiseFinallyWrapper.Create(AOnFinally: TGocciaValue; AIsFulfill: Boolean);
+begin
+  inherited Create(nil);
+  FOnFinally := AOnFinally;
+  FIsFulfill := AIsFulfill;
+end;
+
+function TGocciaPromiseFinallyWrapper.Invoke(Args: TGocciaArgumentsCollection;
+  ThisValue: TGocciaValue): TGocciaValue;
+var
+  OriginalValue: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  OriginalValue := Args.GetElement(0);
+
+  CallArgs := TGocciaArgumentsCollection.Create;
+  try
+    TGocciaFunctionBase(FOnFinally).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    CallArgs.Free;
+  end;
+
+  if FIsFulfill then
+    Result := OriginalValue
+  else
+    raise TGocciaThrowValue.Create(OriginalValue);
+end;
+
+procedure TGocciaPromiseFinallyWrapper.GCMarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FOnFinally) then
+    FOnFinally.GCMarkReferences;
+end;
+
+{ TGocciaPromiseValue }
+
+constructor TGocciaPromiseValue.Create;
+begin
+  inherited Create(nil);
+  FState := gpsPending;
+  FResult := TGocciaUndefinedLiteralValue.UndefinedValue;
+  FReactions := TList<TGocciaPromiseReaction>.Create;
+  FAlreadyResolved := False;
+  InitializePrototype;
+  if Assigned(FSharedPromisePrototype) then
+    FPrototype := FSharedPromisePrototype;
+end;
+
+procedure TGocciaPromiseValue.InitializePrototype;
+begin
+  if Assigned(FSharedPromisePrototype) then Exit;
+
+  FSharedPromisePrototype := TGocciaObjectValue.Create;
+  FPrototypeMethodHost := Self;
+
+  FSharedPromisePrototype.RegisterNativeMethod(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseThen, 'then', 2));
+  FSharedPromisePrototype.RegisterNativeMethod(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseCatch, 'catch', 1));
+  FSharedPromisePrototype.RegisterNativeMethod(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseFinally, 'finally', 1));
+
+  if Assigned(TGocciaGC.Instance) then
+  begin
+    TGocciaGC.Instance.PinValue(FSharedPromisePrototype);
+    TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
+  end;
+end;
+
+destructor TGocciaPromiseValue.Destroy;
+begin
+  FReactions.Free;
+  inherited;
+end;
+
+procedure TGocciaPromiseValue.GCMarkReferences;
+var
+  I: Integer;
+  Reaction: TGocciaPromiseReaction;
+begin
+  if GCMarked then Exit;
+  inherited;
+
+  if Assigned(FResult) then
+    FResult.GCMarkReferences;
+
+  for I := 0 to FReactions.Count - 1 do
+  begin
+    Reaction := FReactions[I];
+    if Assigned(Reaction.OnFulfilled) then
+      Reaction.OnFulfilled.GCMarkReferences;
+    if Assigned(Reaction.OnRejected) then
+      Reaction.OnRejected.GCMarkReferences;
+    if Assigned(Reaction.ResultPromise) then
+      Reaction.ResultPromise.GCMarkReferences;
+  end;
+end;
+
+procedure TGocciaPromiseValue.Resolve(AValue: TGocciaValue);
+begin
+  if FAlreadyResolved then Exit;
+  if FState <> gpsPending then Exit;
+  FAlreadyResolved := True;
+
+  if AValue = Self then
+  begin
+    FState := gpsRejected;
+    FResult := Goccia.Values.ErrorHelper.CreateErrorObject('TypeError',
+      'Chaining cycle detected for promise');
+    TriggerReactions;
+    Exit;
+  end;
+
+  if AValue is TGocciaPromiseValue then
+  begin
+    SubscribeTo(TGocciaPromiseValue(AValue));
+    Exit;
+  end;
+
+  FState := gpsFulfilled;
+  FResult := AValue;
+  TriggerReactions;
+end;
+
+procedure TGocciaPromiseValue.Reject(AReason: TGocciaValue);
+begin
+  if FAlreadyResolved then Exit;
+  if FState <> gpsPending then Exit;
+  FAlreadyResolved := True;
+
+  FState := gpsRejected;
+  FResult := AReason;
+  TriggerReactions;
+end;
+
+procedure TGocciaPromiseValue.SubscribeTo(APromise: TGocciaPromiseValue);
+var
+  Reaction: TGocciaPromiseReaction;
+begin
+  case APromise.FState of
+    gpsFulfilled:
+    begin
+      FAlreadyResolved := False;
+      Resolve(APromise.FResult);
+    end;
+    gpsRejected:
+    begin
+      FAlreadyResolved := False;
+      Reject(APromise.FResult);
+    end;
+    gpsPending:
+    begin
+      FAlreadyResolved := False;
+      Reaction.OnFulfilled := nil;
+      Reaction.OnRejected := nil;
+      Reaction.ResultPromise := Self;
+      APromise.FReactions.Add(Reaction);
+    end;
+  end;
+end;
+
+procedure TGocciaPromiseValue.TriggerReactions;
+var
+  I: Integer;
+  Reaction: TGocciaPromiseReaction;
+  Task: TGocciaMicrotask;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if not Assigned(Queue) then Exit;
+
+  for I := 0 to FReactions.Count - 1 do
+  begin
+    Reaction := FReactions[I];
+
+    case FState of
+      gpsFulfilled:
+      begin
+        Task.Handler := Reaction.OnFulfilled;
+        Task.Value := FResult;
+        Task.ResultPromise := Reaction.ResultPromise;
+        Task.ReactionType := prtFulfill;
+        Queue.Enqueue(Task);
+      end;
+      gpsRejected:
+      begin
+        Task.Handler := Reaction.OnRejected;
+        Task.Value := FResult;
+        Task.ResultPromise := Reaction.ResultPromise;
+        Task.ReactionType := prtReject;
+        Queue.Enqueue(Task);
+      end;
+    end;
+  end;
+
+  FReactions.Clear;
+end;
+
+function TGocciaPromiseValue.DoResolve(Args: TGocciaArgumentsCollection;
+  ThisValue: TGocciaValue): TGocciaValue;
+begin
+  if Args.Length > 0 then
+    Resolve(Args.GetElement(0))
+  else
+    Resolve(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaPromiseValue.DoReject(Args: TGocciaArgumentsCollection;
+  ThisValue: TGocciaValue): TGocciaValue;
+begin
+  if Args.Length > 0 then
+    Reject(Args.GetElement(0))
+  else
+    Reject(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+{ Prototype methods }
+
+function TGocciaPromiseValue.PromiseThen(Args: TGocciaArgumentsCollection;
+  ThisValue: TGocciaValue): TGocciaValue;
+var
+  P: TGocciaPromiseValue;
+  OnFulfilled, OnRejected: TGocciaValue;
+  ChildPromise: TGocciaPromiseValue;
+  Reaction: TGocciaPromiseReaction;
+  Task: TGocciaMicrotask;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  if not (ThisValue is TGocciaPromiseValue) then
+    Goccia.Values.ErrorHelper.ThrowTypeError('Promise.prototype.then called on non-Promise');
+
+  P := TGocciaPromiseValue(ThisValue);
+
+  OnFulfilled := nil;
+  OnRejected := nil;
+  if (Args.Length > 0) and Args.GetElement(0).IsCallable then
+    OnFulfilled := Args.GetElement(0);
+  if (Args.Length > 1) and Args.GetElement(1).IsCallable then
+    OnRejected := Args.GetElement(1);
+
+  ChildPromise := TGocciaPromiseValue.Create;
+
+  Queue := TGocciaMicrotaskQueue.Instance;
+
+  case P.FState of
+    gpsPending:
+    begin
+      Reaction.OnFulfilled := OnFulfilled;
+      Reaction.OnRejected := OnRejected;
+      Reaction.ResultPromise := ChildPromise;
+      P.FReactions.Add(Reaction);
+    end;
+    gpsFulfilled:
+    begin
+      Task.Handler := OnFulfilled;
+      Task.Value := P.FResult;
+      Task.ResultPromise := ChildPromise;
+      Task.ReactionType := prtFulfill;
+      if Assigned(Queue) then
+        Queue.Enqueue(Task);
+    end;
+    gpsRejected:
+    begin
+      Task.Handler := OnRejected;
+      Task.Value := P.FResult;
+      Task.ResultPromise := ChildPromise;
+      Task.ReactionType := prtReject;
+      if Assigned(Queue) then
+        Queue.Enqueue(Task);
+    end;
+  end;
+
+  Result := ChildPromise;
+end;
+
+function TGocciaPromiseValue.PromiseCatch(Args: TGocciaArgumentsCollection;
+  ThisValue: TGocciaValue): TGocciaValue;
+var
+  ThenArgs: TGocciaArgumentsCollection;
+begin
+  ThenArgs := TGocciaArgumentsCollection.Create([
+    TGocciaUndefinedLiteralValue.UndefinedValue,
+    Args.GetElement(0)
+  ]);
+  try
+    Result := PromiseThen(ThenArgs, ThisValue);
+  finally
+    ThenArgs.Free;
+  end;
+end;
+
+function TGocciaPromiseValue.PromiseFinally(Args: TGocciaArgumentsCollection;
+  ThisValue: TGocciaValue): TGocciaValue;
+var
+  OnFinally: TGocciaValue;
+  ThenArgs: TGocciaArgumentsCollection;
+  WrapFulfilled, WrapRejected: TGocciaPromiseFinallyWrapper;
+  WrapFulfilledFn, WrapRejectedFn: TGocciaNativeFunctionValue;
+begin
+  if not (ThisValue is TGocciaPromiseValue) then
+    Goccia.Values.ErrorHelper.ThrowTypeError('Promise.prototype.finally called on non-Promise');
+
+  OnFinally := nil;
+  if (Args.Length > 0) and Args.GetElement(0).IsCallable then
+    OnFinally := Args.GetElement(0);
+
+  if not Assigned(OnFinally) then
+  begin
+    ThenArgs := TGocciaArgumentsCollection.Create([
+      TGocciaUndefinedLiteralValue.UndefinedValue,
+      TGocciaUndefinedLiteralValue.UndefinedValue
+    ]);
+    try
+      Result := PromiseThen(ThenArgs, ThisValue);
+    finally
+      ThenArgs.Free;
+    end;
+    Exit;
+  end;
+
+  WrapFulfilled := TGocciaPromiseFinallyWrapper.Create(OnFinally, True);
+  WrapRejected := TGocciaPromiseFinallyWrapper.Create(OnFinally, False);
+
+  WrapFulfilledFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(WrapFulfilled.Invoke, 'finally-fulfill', 1);
+  WrapRejectedFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(WrapRejected.Invoke, 'finally-reject', 1);
+
+  ThenArgs := TGocciaArgumentsCollection.Create([WrapFulfilledFn, WrapRejectedFn]);
+  try
+    Result := PromiseThen(ThenArgs, ThisValue);
+  finally
+    ThenArgs.Free;
+  end;
+end;
+
+function TGocciaPromiseValue.GetProperty(const AName: string): TGocciaValue;
+begin
+  Result := inherited GetProperty(AName);
+end;
+
+function TGocciaPromiseValue.ToStringTag: string;
+begin
+  Result := 'Promise';
+end;
+
+end.

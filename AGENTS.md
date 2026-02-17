@@ -33,7 +33,8 @@ GocciaScript is a subset of ECMAScript 2020 implemented in FreePascal. It provid
 ./build/BenchmarkRunner benchmarks/                                # Run all benchmarks
 ./build/BenchmarkRunner benchmarks/fibonacci.js                    # Run a specific benchmark
 ./build/BenchmarkRunner benchmarks --format=json --output=out.json # Export as JSON
-./build/BenchmarkRunner benchmarks --format=csv --output=out.csv   # Export as CSV
+./build/BenchmarkRunner benchmarks --format=console --format=json --output=out.json # Console + JSON
+./build/BenchmarkRunner benchmarks --no-progress                   # Suppress progress (CI)
 ```
 
 ### Compile and Run (Common Workflows)
@@ -75,6 +76,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules) |
 | Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ, VMT-based chain-walking |
 | Keywords | `Goccia.Keywords.pas` | Centralized JavaScript keyword string constants |
+| Timing Utilities | `TimingUtils.pas` | Cross-platform microsecond timing (`GetMicroseconds`) and duration formatting (`FormatDuration`) |
+| Microtask Queue | `Goccia.MicrotaskQueue.pas` | Singleton FIFO queue for deferred Promise reactions, drained after script execution |
 | Garbage Collector | `Goccia.GarbageCollector.pas` | Mark-and-sweep memory management for runtime values |
 
 ## Development Workflow
@@ -236,7 +239,7 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 ```
 
 The TestRunner adds `ggTestAssertions` for the test framework (`describe`, `test`, `expect`).
-The BenchmarkRunner adds `ggBenchmark` for the benchmark framework (`suite`, `bench`, `runBenchmarks`). It supports `--format=console|text|csv|json` and `--output=file` for exporting results. Benchmark calibration parameters are configurable via environment variables (`GOCCIA_BENCH_CALIBRATION_MS`, `GOCCIA_BENCH_ROUNDS`, etc.).
+The BenchmarkRunner adds `ggBenchmark` for the benchmark framework (`suite`, `bench`, `runBenchmarks`). It supports multiple `--format=console|text|csv|json` flags in a single command (each optionally followed by `--output=file`), `--no-progress` for CI builds, and benchmark calibration via environment variables (`GOCCIA_BENCH_CALIBRATION_MS`, `GOCCIA_BENCH_ROUNDS`, etc.).
 
 ## Testing
 

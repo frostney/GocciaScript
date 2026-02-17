@@ -12,8 +12,10 @@ uses
   Goccia.Builtins.GlobalObject, Goccia.Builtins.GlobalArray,
   Goccia.Builtins.GlobalNumber, Goccia.Builtins.Globals, Goccia.Builtins.JSON,
   Goccia.Builtins.GlobalSymbol, Goccia.Builtins.GlobalSet, Goccia.Builtins.GlobalMap,
-  Goccia.Builtins.TestAssertions, Goccia.Builtins.Benchmark, Goccia.Scope, Goccia.Modules,
-  Goccia.Values.ClassValue, Goccia.Values.Error, Goccia.GarbageCollector;
+  Goccia.Builtins.TestAssertions, Goccia.Builtins.Benchmark,
+  Goccia.Builtins.GlobalPromise, Goccia.Scope, Goccia.Modules,
+  Goccia.Values.ClassValue, Goccia.Values.Error, Goccia.GarbageCollector,
+  Goccia.MicrotaskQueue;
 
 type
   TGocciaGlobalBuiltin = (
@@ -61,6 +63,7 @@ type
     FBuiltinSymbol: TGocciaGlobalSymbol;
     FBuiltinSet: TGocciaGlobalSet;
     FBuiltinMap: TGocciaGlobalMap;
+    FBuiltinPromise: TGocciaGlobalPromise;
     FBuiltinTestAssertions: TGocciaTestAssertions;
     FBuiltinBenchmark: TGocciaBenchmark;
 
@@ -95,6 +98,7 @@ type
     property BuiltinSymbol: TGocciaGlobalSymbol read FBuiltinSymbol;
     property BuiltinSet: TGocciaGlobalSet read FBuiltinSet;
     property BuiltinMap: TGocciaGlobalMap read FBuiltinMap;
+    property BuiltinPromise: TGocciaGlobalPromise read FBuiltinPromise;
     property BuiltinTestAssertions: TGocciaTestAssertions read FBuiltinTestAssertions;
     property BuiltinBenchmark: TGocciaBenchmark read FBuiltinBenchmark;
   end;
@@ -110,8 +114,9 @@ begin
   FSourceLines := ASourceLines;
   FGlobals := AGlobals;
 
-  // Initialize the garbage collector (singleton - only creates if not yet initialized)
+  // Initialize singletons (only creates if not yet initialized)
   TGocciaGC.Initialize;
+  TGocciaMicrotaskQueue.Initialize;
 
   // Note: We don't collect between engines because class-level shared objects
   // (like TGocciaFunctionBase.FSharedPrototype and its children) are only
@@ -149,6 +154,7 @@ begin
   FBuiltinSymbol.Free;
   FBuiltinSet.Free;
   FBuiltinMap.Free;
+  FBuiltinPromise.Free;
   FBuiltinTestAssertions.Free;
   FBuiltinBenchmark.Free;
 
@@ -206,6 +212,8 @@ begin
     FBuiltinSet := TGocciaGlobalSet.Create('Set', Scope, ThrowError);
   if ggMap in FGlobals then
     FBuiltinMap := TGocciaGlobalMap.Create('Map', Scope, ThrowError);
+  if ggPromise in FGlobals then
+    FBuiltinPromise := TGocciaGlobalPromise.Create('Promise', Scope, ThrowError);
   if ggTestAssertions in FGlobals then
     FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions', Scope, ThrowError);
   if ggBenchmark in FGlobals then
@@ -281,11 +289,13 @@ begin
       end;
     finally
       Parser.Free;
-      // Don't free Tokens - the lexer owns them and will free them
     end;
   finally
     Lexer.Free;
   end;
+
+  if Assigned(TGocciaMicrotaskQueue.Instance) then
+    TGocciaMicrotaskQueue.Instance.DrainQueue;
 end;
 
 function TGocciaEngine.ExecuteWithTiming: TGocciaTimingResult;
@@ -312,6 +322,8 @@ begin
 
       try
         Result.Result := FInterpreter.Execute(ProgramNode);
+        if Assigned(TGocciaMicrotaskQueue.Instance) then
+          TGocciaMicrotaskQueue.Instance.DrainQueue;
         ExecEnd := GetTickCount64;
         Result.ExecuteTimeMs := ExecEnd - ParseEnd;
         Result.TotalTimeMs := ExecEnd - StartTime;
@@ -329,6 +341,8 @@ end;
 function TGocciaEngine.ExecuteProgram(AProgram: TGocciaProgram): TGocciaValue;
 begin
   Result := FInterpreter.Execute(AProgram);
+  if Assigned(TGocciaMicrotaskQueue.Instance) then
+    TGocciaMicrotaskQueue.Instance.DrainQueue;
 end;
 
 class function TGocciaEngine.RunScript(const Source: string; const FileName: string; AGlobals: TGocciaGlobalBuiltins): TGocciaValue;

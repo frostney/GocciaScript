@@ -32,6 +32,12 @@ tests/
 │   │   ├── getPrototypeOf.js
 │   │   ├── fromEntries.js
 │   │   └── ...
+│   ├── Promise/             # Promise constructor, static methods, microtask ordering
+│   │   ├── constructor.js, resolve.js, reject.js
+│   │   ├── all.js, all-settled.js, race.js, any.js
+│   │   ├── microtask-ordering.js
+│   │   └── prototype/
+│   │       ├── then.js, catch.js, finally.js
 │   ├── Set/
 │   ├── String/
 │   │   └── prototype/
@@ -178,6 +184,28 @@ describe("with setup", () => {
   });
 });
 ```
+
+### Async Tests (Promises)
+
+Tests can return a Promise. The test framework automatically drains the microtask queue after each test callback and checks the returned Promise's state. If the Promise is rejected, the test fails with the rejection reason.
+
+```javascript
+test("async value check", () => {
+  return Promise.resolve(42).then((v) => {
+    expect(v).toBe(42);
+  });
+});
+
+test("async error handling", () => {
+  return Promise.reject("err")
+    .catch((e) => "recovered")
+    .then((v) => {
+      expect(v).toBe("recovered");
+    });
+});
+```
+
+This pattern replaces the need for `done` callbacks or manual queue flushing. Place assertions inside `.then()` or `.catch()` handlers and return the Promise chain from the test.
 
 ### Skipping Tests
 
@@ -448,6 +476,7 @@ The `BenchmarkRunner` program:
 | `benchmarks/collections.js` | Set add/has/delete/forEach, Map set/get/has/delete/forEach/keys/values |
 | `benchmarks/json.js` | JSON.parse, JSON.stringify, roundtrip with nested and mixed data |
 | `benchmarks/destructuring.js` | Array/object/parameter destructuring, rest, defaults, nesting |
+| `benchmarks/promises.js` | Promise.resolve/reject, then chains, catch/finally, all/race/allSettled/any |
 
 ### Sample Output
 

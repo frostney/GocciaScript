@@ -126,7 +126,8 @@ implementation
 
 uses
   Goccia.Values.ClassValue, Goccia.Evaluator, Goccia.Evaluator.Comparison,
-  Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.Error, Goccia.Values.ClassHelper;
+  Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.Error, Goccia.Values.ClassHelper,
+  Goccia.Values.PromiseValue, Goccia.MicrotaskQueue;
 
 { TTestSuite }
 
@@ -1241,6 +1242,8 @@ var
   FailedTestDetailsArray: TGocciaArrayValue;
   ClonedFunction: TGocciaFunctionValue;
   TestParams: TGocciaObjectValue;
+  TestResult: TGocciaValue;
+  RejectionReason: string;
 begin
   // Reset test statistics and clear any previously registered tests from describe blocks
   ResetTestStats;
@@ -1340,9 +1343,24 @@ begin
 
         try
           // Execute the test function
-          // Create a fresh child scope for each test to ensure isolation
           ClonedFunction := TestCase.TestFunction.CloneWithNewScope(FScope.CreateChild(skFunction, 'TestFunction'));
-          ClonedFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+          TestResult := ClonedFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+
+          // Drain microtask queue after each test to process Promise reactions
+          if Assigned(TGocciaMicrotaskQueue.Instance) then
+            TGocciaMicrotaskQueue.Instance.DrainQueue;
+
+          // If the test returned a rejected Promise, fail the test
+          if (TestResult is TGocciaPromiseValue) and
+             (TGocciaPromiseValue(TestResult).State = gpsRejected) then
+          begin
+            RejectionReason := TGocciaPromiseValue(TestResult).PromiseResult.ToStringLiteral.Value;
+            AssertionFailed('async test', 'Returned Promise rejected: ' + RejectionReason);
+            if TestCase.SuiteName <> '' then
+              FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": Promise rejected: ' + RejectionReason)
+            else
+              FailedTestDetails.Add('Test "' + TestCase.Name + '": Promise rejected: ' + RejectionReason);
+          end;
         except
           on E: Exception do
           begin

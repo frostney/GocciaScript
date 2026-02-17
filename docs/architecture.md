@@ -60,6 +60,28 @@ A recursive descent parser that builds an AST from the token stream. Implements:
 
 A dependency-free unit that centralizes all 32 JavaScript keyword string constants (`KEYWORD_THIS`, `KEYWORD_SUPER`, `KEYWORD_UNDEFINED`, etc.). Used by the evaluator, scope, and other units to avoid hardcoded string literals and ensure consistent keyword references. Has no `uses` clause dependencies, so it can be imported by any unit without introducing circular references.
 
+### Microtask Queue (`Goccia.MicrotaskQueue.pas`)
+
+A singleton microtask queue used by Promises to defer `.then()` callbacks per the ECMAScript specification. Key design:
+
+- **Singleton** — `TGocciaMicrotaskQueue.Initialize` / `TGocciaMicrotaskQueue.Instance`, mirroring the `TGocciaGC` pattern.
+- **Enqueue** — When a Promise settles and has pending reactions (or when `.then()` is called on an already-settled Promise), the reaction is enqueued as a microtask rather than executed immediately.
+- **DrainQueue** — Called by the engine after `Interpreter.Execute` completes. Processes microtasks in FIFO order, looping until the queue is empty. New microtasks enqueued during processing (e.g., chained `.then()` handlers) are processed in the same drain cycle.
+- **GC safety** — Each microtask's handler, value, and result promise are temp-rooted during processing to prevent collection mid-callback.
+
+#### Execution Model
+
+GocciaScript uses a synchronous execution model. The entire script is one **macrotask**, and the microtask queue drains immediately after it completes. This matches the ECMAScript specification: in any JavaScript engine, microtasks (Promise callbacks) execute after the current macrotask finishes, not interleaved with synchronous code.
+
+```
+Script execution (macrotask)     →  Microtask queue drains
+├── sync code runs to completion     ├── .then() callbacks fire (FIFO)
+├── Promise executors run sync       ├── new microtasks from callbacks
+└── .then() handlers are enqueued    └── repeat until queue is empty
+```
+
+This produces output identical to V8/Node.js for any script. The only scenario where interleaving would differ is with multiple macrotask sources (`setTimeout`, I/O callbacks), which GocciaScript does not implement. The test framework and benchmark runner also drain the microtask queue after each test callback / measurement round, respectively.
+
 ### AST (`Goccia.AST.Node.pas`, `Goccia.AST.Expressions.pas`, `Goccia.AST.Statements.pas`)
 
 The Abstract Syntax Tree is structured into three layers:

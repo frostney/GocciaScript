@@ -19,6 +19,7 @@ classDiagram
     TGocciaObjectValue <|-- TGocciaArrayValue
     TGocciaObjectValue <|-- TGocciaSetValue
     TGocciaObjectValue <|-- TGocciaMapValue
+    TGocciaObjectValue <|-- TGocciaPromiseValue
     TGocciaObjectValue <|-- TGocciaFunctionValue
     TGocciaObjectValue <|-- TGocciaClassValue
     TGocciaObjectValue <|-- TGocciaInstanceValue
@@ -51,6 +52,9 @@ classDiagram
     }
     class TGocciaArrayValue {
         [1, 2, 3]
+    }
+    class TGocciaPromiseValue {
+        Promise (pending/fulfilled/rejected)
     }
     class TGocciaFunctionValue {
         (x) => x + 1
@@ -363,6 +367,18 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 - **Methods** — `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys`, `values`, `entries` — all registered on the shared prototype.
 - **`size`** — Returned dynamically via `GetProperty` override.
 - **Spreadable** — `ToArray` converts to a `TGocciaArrayValue` of `[key, value]` pairs for spread syntax support.
+
+## Promises
+
+`TGocciaPromiseValue` extends `TGocciaObjectValue` (`Goccia.Values.PromiseValue.pas`). Represents an ECMAScript Promise with three possible states.
+
+- **State machine** — Each Promise has a `TGocciaPromiseState`: `gpsPending`, `gpsFulfilled`, or `gpsRejected`. Once settled, the state and result are immutable (double-resolve/reject is a no-op).
+- **Result** — `PromiseResult: TGocciaValue` holds the fulfillment value or rejection reason after settlement.
+- **Handlers** — `FHandlers: TList<TGocciaPromiseHandler>` stores pending `.then()` reactions. When the Promise settles, all handlers are enqueued as microtasks. When `.then()` is called on an already-settled Promise, the reaction is enqueued immediately.
+- **Thenable adoption** — If a Promise is resolved with another Promise, it adopts the inner Promise's state (calling `.then()` on the inner to chain).
+- **Self-rejection** — Resolving a Promise with itself throws a `TypeError` per ECMAScript spec.
+- **Shared prototype singleton** — All Promise instances share a single class-level prototype (`FSharedPromisePrototype`). Methods (`then`, `catch`, `finally`) are registered once during `InitializePrototype` and pinned with the GC.
+- **GC integration** — `GCMarkReferences` marks the `PromiseResult`, all pending handler callbacks, and handler result Promises.
 
 ## Functions
 
