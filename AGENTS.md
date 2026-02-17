@@ -75,6 +75,25 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Keywords | `Goccia.Keywords.pas` | Centralized JavaScript keyword string constants |
 | Garbage Collector | `Goccia.GarbageCollector.pas` | Mark-and-sweep memory management for runtime values |
 
+## Development Workflow
+
+Every new feature or change **must** follow this workflow:
+
+1. **Create a branch** — Create a new branch from `main` with a descriptive name (e.g., `feature/string-prototype-repeat`, `fix/nan-comparison`, `refactor/scope-chain`).
+2. **Implement the feature** — Develop the feature on the branch. Follow the critical rules below (testing, evaluator purity, etc.).
+3. **Update documentation** — Update all relevant documentation (`AGENTS.md`, `docs/*.md`, `README.md`) to reflect the change. Documentation is not optional.
+4. **Commit** — Commit the implementation and documentation together with a clear, descriptive commit message.
+
+```bash
+# Example workflow
+git checkout -b feature/array-prototype-flat
+# ... implement the feature, add tests, update docs ...
+git add .
+git commit -m "Add Array.prototype.flat and flatMap"
+```
+
+Do **not** commit directly to `main`. All changes go through branches.
+
 ## Critical Rules
 
 These rules **must** be followed when modifying the codebase:
