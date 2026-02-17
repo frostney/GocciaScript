@@ -95,6 +95,7 @@ var
   AllUnitFiles: TStringList;
   TestFiles: TStringList;
   Output: string;
+  K: Integer;
 begin
   WriteLn('Building Tests...');
   AllUnitFiles := TStringList.Create;
@@ -102,18 +103,18 @@ begin
 
   AllUnitFiles.AddStrings(FindAllFiles('units', '.pas'));
 
-  for I := 0 to AllUnitFiles.Count - 1 do
+  for K := 0 to AllUnitFiles.Count - 1 do
   begin
-    if Pos('.Test.pas', AllUnitFiles[I]) > 0 then
-      TestFiles.Add(AllUnitFiles[I]);
+    if Pos('.Test.pas', AllUnitFiles[K]) > 0 then
+      TestFiles.Add(AllUnitFiles[K]);
   end;
 
-  for I := 0 to TestFiles.Count - 1 do
+  for K := 0 to TestFiles.Count - 1 do
   begin
-    if not RunCommand('fpc', FPCArgs(TestFiles[I]), Output) then
+    if not RunCommand('fpc', FPCArgs(TestFiles[K]), Output) then
     begin
       WriteLn(Output);
-      WriteLn('Test build failed: ', TestFiles[I]);
+      WriteLn('Test build failed: ', TestFiles[K]);
       Halt(1);
     end;
     WriteLn(Output);
