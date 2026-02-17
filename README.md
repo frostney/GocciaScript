@@ -133,9 +133,13 @@ npx vitest run
 
 # Run a specific benchmark
 ./build/BenchmarkRunner benchmarks/fibonacci.js
+
+# Export as JSON or CSV
+./build/BenchmarkRunner benchmarks --format=json --output=results.json
+./build/BenchmarkRunner benchmarks --format=csv --output=results.csv
 ```
 
-The benchmark runner auto-calibrates iterations per benchmark (targeting ~1 second of execution), reports ops/sec with engine-level timing breakdown (lex/parse/execute), and covers fibonacci, arrays, objects, and strings.
+The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`. Calibration and measurement parameters are configurable via environment variables — see [Testing](docs/testing.md#configuring-benchmark-parameters) for details.
 
 ## Architecture
 

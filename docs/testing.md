@@ -351,6 +351,45 @@ GocciaScript includes a benchmark runner for measuring execution performance. Be
 
 # Run a specific benchmark
 ./build/BenchmarkRunner benchmarks/fibonacci.js
+
+# Export results in different formats
+./build/BenchmarkRunner benchmarks --format=json --output=results.json
+./build/BenchmarkRunner benchmarks --format=csv --output=results.csv
+./build/BenchmarkRunner benchmarks --format=text
+```
+
+### Output Formats
+
+The BenchmarkRunner supports four output formats via the `--format` flag:
+
+| Format | Description |
+|--------|-------------|
+| `console` (default) | Pretty-printed columnar output with suite headers, variance, and summary |
+| `text` | Compact one-line-per-benchmark format, suitable for piping or logging |
+| `csv` | Standard CSV with header row (`file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,error`) |
+| `json` | Structured JSON with `files[]` array containing nested `benchmarks[]` |
+
+Use `--output=<file>` to write results to a file instead of stdout.
+
+### Configuring Benchmark Parameters
+
+Benchmark calibration and measurement parameters can be configured via environment variables:
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `GOCCIA_BENCH_WARMUP` | 3 | Number of warmup iterations before calibration |
+| `GOCCIA_BENCH_CALIBRATION_MS` | 300 | Target calibration time in milliseconds |
+| `GOCCIA_BENCH_CALIBRATION_BATCH` | 10 | Initial batch size for calibration |
+| `GOCCIA_BENCH_ROUNDS` | 3 | Number of measurement rounds (1–5; median is reported) |
+
+Example:
+
+```bash
+# Fast run with shorter calibration and fewer rounds
+GOCCIA_BENCH_CALIBRATION_MS=100 GOCCIA_BENCH_ROUNDS=1 ./build/BenchmarkRunner benchmarks
+
+# Thorough run with longer calibration and more rounds
+GOCCIA_BENCH_CALIBRATION_MS=1000 GOCCIA_BENCH_ROUNDS=5 ./build/BenchmarkRunner benchmarks
 ```
 
 ### Writing Benchmarks
@@ -376,16 +415,17 @@ suite("fibonacci", () => {
 
 The `BenchmarkRunner` program:
 
-1. Scans the provided path for `.js` files.
-2. For each file, creates a `TGocciaEngine` with `DefaultGlobals + [ggBenchmark]`.
-3. Loads the source and appends a `runBenchmarks()` call.
-4. Executes the script via `ExecuteWithTiming` — which measures lex, parse, and execute phases separately.
-5. `suite()` calls execute immediately, registering `bench()` entries.
-6. `runBenchmarks()` runs each registered benchmark:
-   - **Warmup:** 3 iterations to stabilize.
-   - **Calibrate:** Doubles batch size until it runs for at least 1 second.
-   - **Measure:** Runs the calibrated number of iterations and records total time.
-7. Reports ops/sec, mean ms/op, iteration count, and engine timing breakdown per file.
+1. Parses CLI arguments (`--format`, `--output`, and the benchmark path).
+2. Scans the provided path for `.js` files.
+3. For each file, creates a `TGocciaEngine` with `DefaultGlobals + [ggBenchmark]`.
+4. Loads the source and appends a `runBenchmarks()` call.
+5. Executes the script via `ExecuteWithTiming` — which measures lex, parse, and execute phases separately.
+6. `suite()` calls execute immediately, registering `bench()` entries.
+7. `runBenchmarks()` runs each registered benchmark:
+   - **Warmup:** Configurable iterations to stabilize (default 3).
+   - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 300ms). Uses microsecond-resolution timing (`fpGetTimeOfDay`) for precision.
+   - **Measure:** Runs multiple measurement rounds (default 3), computes the coefficient of variation (CV%) from the unsorted ops/sec data, then reports the median values.
+8. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
 
 ### Benchmark Script API
 
@@ -411,19 +451,22 @@ The `BenchmarkRunner` program:
 
 ### Sample Output
 
+Console format (default):
+
 ```
-Running benchmark: benchmarks/fibonacci.js
-  Lex: 0ms | Parse: 0ms | Execute: 9984ms
+  Lex: 0ms | Parse: 0ms | Execute: 7207ms
 
   fibonacci
-    recursive fib(15)                        239 ops/sec      4.19 ms/op    (240 iterations)
-    recursive fib(20)                         15 ops/sec     64.75 ms/op    (20 iterations)
-    iterative fib(20) via reduce          10,341 ops/sec      0.10 ms/op    (18200 iterations)
+    recursive fib(15)                        201 ops/sec  ± 0.42%      4.9843 ms/op  (60 iterations)
+    recursive fib(20)                         18 ops/sec  ± 2.40%     55.6868 ms/op  (10 iterations)
+    iterative fib(20) via reduce         111,301 ops/sec  ± 0.43%      0.0090 ms/op  (40960 iterations)
 
 Benchmark Summary
   Total benchmarks: 3
-  Total duration: 10.0s
+  Total duration: 7.2s
 ```
+
+The `±X.XX%` column shows the coefficient of variation across measurement rounds. It is omitted when variance is zero (e.g., with a single measurement round).
 
 ## CI Integration
 

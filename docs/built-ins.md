@@ -18,7 +18,8 @@ TGocciaGlobalBuiltin = (
   ggSymbol,           // Symbol, Symbol.for, Symbol.keyFor
   ggSet,              // Set constructor and prototype
   ggMap,              // Map constructor and prototype
-  ggTestAssertions    // describe, test, expect (testing only)
+  ggTestAssertions,   // describe, test, expect (testing only)
+  ggBenchmark         // suite, bench, runBenchmarks (benchmarking only)
 );
 ```
 
@@ -30,6 +31,7 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 ```
 
 The `TestRunner` adds `ggTestAssertions` to inject the test framework.
+The `BenchmarkRunner` adds `ggBenchmark` to inject the benchmark framework.
 
 ## Adding a New Built-in
 
@@ -327,3 +329,30 @@ describe("group name", () => {
 | `.toBeCloseTo(n, digits?)` | Approximate equality |
 
 All matchers support `.not` negation: `expect(value).not.toBe(wrong)`.
+
+### Benchmark (`Goccia.Builtins.Benchmark.pas`)
+
+Only available when `ggBenchmark` is enabled (used by the BenchmarkRunner).
+
+**Benchmark structure:**
+
+```javascript
+suite("group name", () => {
+  bench("benchmark name", () => {
+    // Code to benchmark — called many times during measurement
+    someOperation();
+  });
+});
+```
+
+**Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `suite(name, fn)` | Group benchmarks. Executes `fn` immediately to register `bench` entries. |
+| `bench(name, fn)` | Register a benchmark function. Called repeatedly during calibration and measurement. |
+| `runBenchmarks()` | Execute all registered benchmarks and return results. Injected automatically by BenchmarkRunner. |
+
+**Result object** (returned by `runBenchmarks()`):
+
+Each benchmark result includes: `name`, `suite`, `opsPerSec`, `meanMs`, `iterations`, `totalMs`, `variancePercentage`, and optionally `error`.
