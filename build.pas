@@ -40,7 +40,6 @@ begin
       Args.Add('-O-');
       Args.Add('-gw');
       Args.Add('-godwarfsets');
-      Args.Add('-gh');
       Args.Add('-gl');
       Args.Add('-Ct');
       Args.Add('-Cr');
@@ -153,9 +152,38 @@ begin
   WriteLn('BenchmarkRunner built successfully');
 end;
 
+procedure Clean;
+var
+  Files: TStringList;
+  K: Integer;
+begin
+  WriteLn('Cleaning build artifacts...');
+  if not DirectoryExists('build') then
+  begin
+    WriteLn('Nothing to clean');
+    Exit;
+  end;
+
+  Files := TStringList.Create;
+  try
+    Files.AddStrings(FindAllFiles('build', '.ppu'));
+    Files.AddStrings(FindAllFiles('build', '.o'));
+    Files.AddStrings(FindAllFiles('build', '.res'));
+
+    for K := 0 to Files.Count - 1 do
+      DeleteFile(Files[K]);
+
+    WriteLn('Removed ', Files.Count, ' file(s)');
+  finally
+    Files.Free;
+  end;
+end;
+
 procedure Build(const Trigger: string);
 begin
-  if Trigger = 'repl' then
+  if Trigger = 'clean' then
+    Clean
+  else if Trigger = 'repl' then
     BuildREPL
   else if Trigger = 'loader' then
     BuildScriptLoader
@@ -192,6 +220,7 @@ begin
 
   if BuildTriggers.Count = 0 then
   begin
+    BuildTriggers.Add('clean');
     BuildTriggers.Add('tests');
     BuildTriggers.Add('loader');
     BuildTriggers.Add('testrunner');

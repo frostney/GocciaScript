@@ -119,10 +119,13 @@ type
     Parameters.Add('b');
 
     Statements := TObjectList<TGocciaASTNode>.Create;
-    Statements.Add(TGocciaBinaryExpression.Create(
-      TGocciaIdentifierExpression.Create('a', 0, 0),
-      gttPlus,
-      TGocciaIdentifierExpression.Create('b', 0, 0),
+    Statements.Add(TGocciaReturnStatement.Create(
+      TGocciaBinaryExpression.Create(
+        TGocciaIdentifierExpression.Create('a', 0, 0),
+        gttPlus,
+        TGocciaIdentifierExpression.Create('b', 0, 0),
+        0, 0
+      ),
       0, 0
     ));
 

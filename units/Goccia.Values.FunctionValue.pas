@@ -228,26 +228,7 @@ begin
       if E.Value = nil then
         Result := TGocciaUndefinedLiteralValue.UndefinedValue
       else
-      begin
-        // Create a new instance of the same type
-        if E.Value is TGocciaNumberLiteralValue then
-          Result := TGocciaNumberLiteralValue.Create(TGocciaNumberLiteralValue(E.Value).Value)
-        else if E.Value is TGocciaStringLiteralValue then
-          Result := TGocciaStringLiteralValue.Create(TGocciaStringLiteralValue(E.Value).Value)
-        else if E.Value is TGocciaBooleanLiteralValue then
-        begin
-          if TGocciaBooleanLiteralValue(E.Value).Value then
-            Result := TGocciaBooleanLiteralValue.TrueValue
-          else
-            Result := TGocciaBooleanLiteralValue.FalseValue;
-        end
-        else if E.Value is TGocciaUndefinedLiteralValue then
-          Result := TGocciaUndefinedLiteralValue.UndefinedValue
-        else if E.Value is TGocciaObjectValue then
-          Result := E.Value
-        else
-          Result := E.Value;
-      end;
+        Result := E.Value;
     end;
     on E: TGocciaThrowValue do raise;
     on E: TGocciaBreakSignal do raise;

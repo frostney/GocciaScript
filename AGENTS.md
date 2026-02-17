@@ -11,14 +11,16 @@ GocciaScript is a subset of ECMAScript 2020 implemented in FreePascal. It provid
 ### Build Commands
 
 ```bash
-./build.pas                       # Dev build of everything (default)
+./build.pas                       # Clean + dev build of everything (default)
 ./build.pas --dev loader          # Dev build of ScriptLoader
-./build.pas --prod                # Production build of everything
+./build.pas --prod                # Clean + production build of everything
 ./build.pas --prod loader repl    # Production build of specific components
 ./build.pas loader                # Dev build (--dev is the default)
 ./build.pas testrunner            # Dev build of TestRunner
 ./build.pas benchmarkrunner       # Dev build of BenchmarkRunner
 ./build.pas tests                 # Dev build of Pascal unit tests
+./build.pas clean                 # Clean stale artifacts only (no build)
+./build.pas clean loader          # Clean, then dev build of ScriptLoader
 ```
 
 ### Run Commands
@@ -81,8 +83,9 @@ Every new feature or change **must** follow this workflow:
 
 1. **Create a branch** — Create a new branch from `main` with a descriptive name (e.g., `feature/string-prototype-repeat`, `fix/nan-comparison`, `refactor/scope-chain`).
 2. **Implement the feature** — Develop the feature on the branch. Follow the critical rules below (testing, evaluator purity, etc.).
-3. **Update documentation** — Update all relevant documentation (`AGENTS.md`, `docs/*.md`, `README.md`) to reflect the change. Documentation is not optional.
-4. **Commit** — Commit the implementation and documentation together with a clear, descriptive commit message.
+3. **Add/update tests** — If adding a new language feature, create JavaScript test files following the existing patterns in `tests/`. If modifying AST logic, scope chain, evaluator, or value types, also build and run the native Pascal test suite and update `units/*.Test.pas` as needed.
+4. **Update documentation** — Update all relevant documentation (`AGENTS.md`, `docs/*.md`, `README.md`) to reflect the change. Documentation is not optional.
+5. **Commit** — Commit the implementation, tests, and documentation together with a clear, descriptive commit message.
 
 ```bash
 # Example workflow
@@ -122,6 +125,16 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 - Follow the existing directory structure (`tests/language/` for language features, `tests/built-ins/` for built-in objects).
 - Each test file should focus on a single concern.
 - Always verify changes by running: `./build.pas testrunner && ./build/TestRunner tests`
+
+**When adding a new language feature:**
+- Create test files for the feature following the existing directory and naming patterns in `tests/`.
+- Tests should cover happy paths, edge cases, and error cases.
+- Verify all tests pass before committing.
+
+**When modifying AST logic, scope chain, evaluator, or value types:**
+- Build and run the native Pascal test suite: `./build.pas clean tests && for t in build/Goccia.*.Test; do "$t"; done`
+- Update the native tests in `units/*.Test.pas` to reflect any changes in behaviour (e.g. new parameters, changed return semantics).
+- Both the JavaScript tests **and** the native Pascal tests must pass.
 
 ### 4. Garbage Collector Awareness
 
@@ -240,7 +253,8 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 See [docs/build-system.md](docs/build-system.md) for build system details.
 
 - Build script: `./build.pas` (FreePascal script via `instantfpc`)
-- Build modes: `--dev` (default, debug info, heap trace, checks) / `--prod` (O4, stripped, smart-linked)
+- Build modes: `--dev` (default, debug info, checks) / `--prod` (O4, stripped, smart-linked)
+- Clean: `clean` target removes stale `.ppu`, `.o`, `.res` files from `build/` — runs automatically on full builds, or chain it explicitly (e.g. `./build.pas clean loader`)
 - Shared path config: `config.cfg`
 - Shared directives: `units/Goccia.inc` (overflow/range checks conditional on `PRODUCTION` define)
 - Output directory: `build/`
