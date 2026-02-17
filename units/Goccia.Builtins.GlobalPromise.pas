@@ -445,7 +445,7 @@ var
   Promise: TGocciaPromiseValue;
   Executor: TGocciaValue;
   ResolveFn, RejectFn: TGocciaNativeFunctionValue;
-  ExecutorArgs: TGocciaArgumentsCollection;
+  ExecutorArgs, RejectArgs: TGocciaArgumentsCollection;
 begin
   if Args.Length = 0 then
     Goccia.Values.ErrorHelper.ThrowTypeError('Promise resolver undefined is not a function');
@@ -464,7 +464,14 @@ begin
       TGocciaFunctionBase(Executor).Call(ExecutorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     except
       on E: TGocciaThrowValue do
-        Promise.Reject(E.Value);
+      begin
+        RejectArgs := TGocciaArgumentsCollection.Create([E.Value]);
+        try
+          Promise.DoReject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        finally
+          RejectArgs.Free;
+        end;
+      end;
     end;
   finally
     ExecutorArgs.Free;

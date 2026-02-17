@@ -156,3 +156,26 @@ test("exception after reject in executor is ignored", () => {
     expect(e).toBe("err");
   });
 });
+
+test("exception after resolve with pending promise is ignored", () => {
+  let innerResolve;
+  const inner = new Promise((r) => { innerResolve = r; });
+  const outer = new Promise((resolve) => {
+    resolve(inner);
+    throw "should be ignored";
+  });
+  innerResolve("adopted value");
+  return outer.then((v) => {
+    expect(v).toBe("adopted value");
+  });
+});
+
+test("exception after resolve with pending promise does not reject", () => {
+  const pending = new Promise(() => {});
+  return new Promise((resolve) => {
+    resolve(pending);
+    throw "should be ignored";
+  }).catch(() => {
+    throw new Error("promise should not have been rejected");
+  });
+});
