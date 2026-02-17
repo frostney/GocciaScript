@@ -1374,6 +1374,9 @@ begin
         except
           on E: Exception do
           begin
+            // Clear pending microtasks to prevent cross-test callback leakage
+            if Assigned(TGocciaMicrotaskQueue.Instance) then
+              TGocciaMicrotaskQueue.Instance.ClearQueue;
             // Route exception through proper assertion failure mechanism
             AssertionFailed('test execution', 'Test threw an exception: ' + E.Message);
             if TestCase.SuiteName <> '' then
