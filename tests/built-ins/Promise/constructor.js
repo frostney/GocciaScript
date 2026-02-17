@@ -102,21 +102,32 @@ test("Promise constructor with non-function throws TypeError", () => {
 
 test("reject after resolve with pending promise is ignored", () => {
   const pending = new Promise(() => {});
-  return new Promise((resolve, reject) => {
+  let rejectHandlerCalled = false;
+  const p = new Promise((resolve, reject) => {
     resolve(pending);
     reject("should be ignored");
-  }).catch(() => {
-    throw new Error("promise should not have been rejected");
+  });
+  // Register a catch on the pending-adopted promise to detect if reject() leaked through
+  p.catch(() => { rejectHandlerCalled = true; });
+  // Return a separate settled chain so the test itself settles.
+  // After microtask drain, if reject() was incorrectly applied, the catch
+  // handler above would have fired (its microtask enqueued before ours).
+  return Promise.resolve().then(() => {
+    expect(rejectHandlerCalled).toBe(false);
   });
 });
 
 test("resolve after resolve with pending promise is ignored", () => {
   const pending = new Promise(() => {});
-  return new Promise((resolve, reject) => {
+  let rejectHandlerCalled = false;
+  const p = new Promise((resolve, reject) => {
     resolve(pending);
     resolve("should be ignored");
-  }).catch(() => {
-    throw new Error("promise should not have been rejected");
+  });
+  // Verify the second resolve() did not cause a rejection
+  p.catch(() => { rejectHandlerCalled = true; });
+  return Promise.resolve().then(() => {
+    expect(rejectHandlerCalled).toBe(false);
   });
 });
 
@@ -172,10 +183,14 @@ test("exception after resolve with pending promise is ignored", () => {
 
 test("exception after resolve with pending promise does not reject", () => {
   const pending = new Promise(() => {});
-  return new Promise((resolve) => {
+  let rejectHandlerCalled = false;
+  const p = new Promise((resolve) => {
     resolve(pending);
     throw "should be ignored";
-  }).catch(() => {
-    throw new Error("promise should not have been rejected");
+  });
+  // Verify the throw after resolve(pending) did not reject the promise
+  p.catch(() => { rejectHandlerCalled = true; });
+  return Promise.resolve().then(() => {
+    expect(rejectHandlerCalled).toBe(false);
   });
 });

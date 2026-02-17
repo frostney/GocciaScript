@@ -1350,16 +1350,26 @@ begin
           if Assigned(TGocciaMicrotaskQueue.Instance) then
             TGocciaMicrotaskQueue.Instance.DrainQueue;
 
-          // If the test returned a rejected Promise, fail the test
-          if (TestResult is TGocciaPromiseValue) and
-             (TGocciaPromiseValue(TestResult).State = gpsRejected) then
+          // If the test returned a Promise, check its final state
+          if (TestResult is TGocciaPromiseValue) then
           begin
-            RejectionReason := TGocciaPromiseValue(TestResult).PromiseResult.ToStringLiteral.Value;
-            AssertionFailed('async test', 'Returned Promise rejected: ' + RejectionReason);
-            if TestCase.SuiteName <> '' then
-              FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": Promise rejected: ' + RejectionReason)
-            else
-              FailedTestDetails.Add('Test "' + TestCase.Name + '": Promise rejected: ' + RejectionReason);
+            if TGocciaPromiseValue(TestResult).State = gpsRejected then
+            begin
+              RejectionReason := TGocciaPromiseValue(TestResult).PromiseResult.ToStringLiteral.Value;
+              AssertionFailed('async test', 'Returned Promise rejected: ' + RejectionReason);
+              if TestCase.SuiteName <> '' then
+                FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": Promise rejected: ' + RejectionReason)
+              else
+                FailedTestDetails.Add('Test "' + TestCase.Name + '": Promise rejected: ' + RejectionReason);
+            end
+            else if TGocciaPromiseValue(TestResult).State = gpsPending then
+            begin
+              AssertionFailed('async test', 'Returned Promise still pending after microtask drain');
+              if TestCase.SuiteName <> '' then
+                FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": Promise still pending after microtask drain')
+              else
+                FailedTestDetails.Add('Test "' + TestCase.Name + '": Promise still pending after microtask drain');
+            end;
           end;
         except
           on E: Exception do

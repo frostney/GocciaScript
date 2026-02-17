@@ -207,6 +207,26 @@ test("async error handling", () => {
 
 This pattern replaces the need for `done` callbacks or manual queue flushing. Place assertions inside `.then()` or `.catch()` handlers and return the Promise chain from the test.
 
+**Important:** If a test returns a Promise that is still pending after the microtask queue drains, the test **fails** with "Promise still pending after microtask drain". Since GocciaScript has no event loop, a pending Promise after drain will never settle — this catches tests with missing assertions or broken async chains. This mirrors how Jest/Vitest fail tests with a timeout when the returned Promise never resolves.
+
+**Testing intentionally-pending Promises:** When testing behavior around forever-pending Promises (e.g., verifying that `reject()` after `resolve(pendingPromise)` is ignored), never return the pending Promise. Instead, use a separate settled Promise chain to verify state after microtasks drain:
+
+```javascript
+test("reject after resolve with pending promise is ignored", () => {
+  const pending = new Promise(() => {});
+  let rejectHandlerCalled = false;
+  const p = new Promise((resolve, reject) => {
+    resolve(pending);
+    reject("should be ignored");
+  });
+  p.catch(() => { rejectHandlerCalled = true; });
+  // Return a separate settled chain — assertions run after microtask drain
+  return Promise.resolve().then(() => {
+    expect(rejectHandlerCalled).toBe(false);
+  });
+});
+```
+
 ### Skipping Tests
 
 ```javascript
