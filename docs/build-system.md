@@ -212,7 +212,7 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 **`test`** (needs build) — Runs all JavaScript tests. No native tests.
 
-**`benchmark`** (needs build) — Restores the cached benchmark baseline from main, runs all benchmarks with JSON output, and posts a comparison comment on the PR with per-benchmark percentage changes (green for improvements > 2%, red for regressions > 2%). If no baseline exists, shows results without percentages.
+**`benchmark`** (needs build) — Restores the cached benchmark baseline from main, runs all benchmarks with JSON output, and posts a collapsible comparison comment on the PR grouped by file. Each file section shows per-benchmark ops/sec with percentage changes (🟢 for improvements > 7%, 🔴 for regressions > 7%), plus a per-file and overall average percentage. Files with significant changes are auto-expanded. If no baseline exists, shows results without comparison.
 
 FPC is only installed once per platform in the `build` job. Test, benchmark, and example jobs run in parallel, using pre-built binaries.
 

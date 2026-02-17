@@ -488,3 +488,21 @@ build → test       → artifacts
 **`artifacts`** (needs test + benchmark, push only) — Uploads release binaries after both test and benchmark pass.
 
 The `test` and `benchmark` jobs run in parallel since they both depend only on `build`. FPC is installed once per platform, not repeated. Both run across Linux, macOS, and Windows (x64 + ARM where applicable), so platform-specific regressions are caught in both tests and benchmarks.
+
+### PR Workflow (`.github/workflows/pr.yml`)
+
+Runs on pull requests targeting `main`, on **ubuntu-latest x64 only** (single runner, no matrix):
+
+```
+build → test
+      → benchmark → PR comment
+```
+
+**`benchmark`** — Restores the cached benchmark baseline from main, runs all benchmarks with JSON output, and posts a collapsible comparison comment on the PR:
+
+- Results are **grouped by file**, each in a collapsible `<details>` section
+- Files with significant changes (improvements or regressions) are auto-expanded
+- Each file summary shows the count of improved/regressed/unchanged benchmarks and an **average percentage change**
+- The **overall PR summary** at the top shows totals across all files with an average percentage
+- Changes within **±7%** are considered insignificant (shown without color indicators) — this threshold accounts for CI environment noise during active development
+- 🟢 marks improvements > 7%, 🔴 marks regressions > 7%, 🆕 marks new benchmarks with no baseline
