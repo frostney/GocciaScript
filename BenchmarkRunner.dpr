@@ -5,28 +5,11 @@ program BenchmarkRunner;
 uses
   Classes, SysUtils, Generics.Collections, Goccia.Values.Primitives,
   Goccia.Values.ObjectValue, Goccia.Values.ArrayValue, Goccia.Engine,
-  Goccia.Error, FileUtils in 'units/FileUtils.pas';
+  Goccia.Error, Goccia.Benchmark.Reporter,
+  FileUtils in 'units/FileUtils.pas';
 
-function FormatOpsPerSec(Ops: Double): string;
-var
-  IntOps: Int64;
-  S: string;
-  I, Len: Integer;
-begin
-  IntOps := Round(Ops);
-  S := IntToStr(IntOps);
-  Len := Length(S);
-
-  Result := '';
-  for I := 1 to Len do
-  begin
-    if (I > 1) and ((Len - I + 1) mod 3 = 0) then
-      Result := Result + ',';
-    Result := Result + S[I];
-  end;
-end;
-
-function RunBenchmarkFile(const FileName: string): TGocciaObjectValue;
+function CollectBenchmarkFile(const FileName: string;
+  Reporter: TBenchmarkReporter): TGocciaObjectValue;
 var
   Source: TStringList;
   BenchGlobals: TGocciaGlobalBuiltins;
@@ -34,10 +17,10 @@ var
   ScriptResult: TGocciaObjectValue;
   ResultsArray: TGocciaArrayValue;
   SingleResult: TGocciaObjectValue;
-  CurrentSuite, BenchName, ErrorMsg: string;
-  OpsPerSec, MeanMs, VariancePercentage: Double;
-  Iterations: Int64;
-  I: Integer;
+  FileResult: TBenchmarkFileResult;
+  Entry: TBenchmarkEntry;
+  ErrorMsg: string;
+  I, EntryCount: Integer;
 begin
   BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
 
@@ -49,60 +32,63 @@ begin
     try
       TimingResult := TGocciaEngine.RunScriptWithTiming(Source, FileName, BenchGlobals);
 
-      WriteLn(Format('  Lex: %dms | Parse: %dms | Execute: %dms',
-        [TimingResult.LexTimeMs, TimingResult.ParseTimeMs, TimingResult.ExecuteTimeMs]));
-      WriteLn('');
+      FileResult.FileName := FileName;
+      FileResult.LexTimeMs := TimingResult.LexTimeMs;
+      FileResult.ParseTimeMs := TimingResult.ParseTimeMs;
+      FileResult.ExecuteTimeMs := TimingResult.ExecuteTimeMs;
 
       if TimingResult.Result is TGocciaObjectValue then
       begin
         ScriptResult := TGocciaObjectValue(TimingResult.Result);
 
+        FileResult.TotalBenchmarks := Round(ScriptResult.GetProperty('totalBenchmarks').ToNumberLiteral.Value);
+        FileResult.DurationMs := ScriptResult.GetProperty('duration').ToNumberLiteral.Value;
+
         if ScriptResult.GetProperty('results') is TGocciaArrayValue then
         begin
           ResultsArray := TGocciaArrayValue(ScriptResult.GetProperty('results'));
-          CurrentSuite := '';
+          EntryCount := ResultsArray.GetLength;
+          SetLength(FileResult.Entries, EntryCount);
 
-          for I := 0 to ResultsArray.GetLength - 1 do
+          for I := 0 to EntryCount - 1 do
           begin
             SingleResult := TGocciaObjectValue(ResultsArray.GetElement(I));
 
-            // Print suite header if it changed
-            if SingleResult.GetProperty('suite').ToStringLiteral.Value <> CurrentSuite then
-            begin
-              CurrentSuite := SingleResult.GetProperty('suite').ToStringLiteral.Value;
-              if CurrentSuite <> '' then
-                WriteLn('  ', CurrentSuite);
-            end;
+            Entry.Suite := SingleResult.GetProperty('suite').ToStringLiteral.Value;
+            Entry.Name := SingleResult.GetProperty('name').ToStringLiteral.Value;
 
-            BenchName := SingleResult.GetProperty('name').ToStringLiteral.Value;
-
-            // Check for error
             ErrorMsg := SingleResult.GetProperty('error').ToStringLiteral.Value;
             if ErrorMsg <> 'undefined' then
             begin
-              WriteLn(Format('    %-30s  ERROR: %s', [BenchName, ErrorMsg]));
+              Entry.Error := ErrorMsg;
+              Entry.OpsPerSec := 0;
+              Entry.MeanMs := 0;
+              Entry.Iterations := 0;
+              Entry.VariancePercentage := 0;
             end
             else
             begin
-              OpsPerSec := SingleResult.GetProperty('opsPerSec').ToNumberLiteral.Value;
-              MeanMs := SingleResult.GetProperty('meanMs').ToNumberLiteral.Value;
-              Iterations := Round(SingleResult.GetProperty('iterations').ToNumberLiteral.Value);
-              VariancePercentage := SingleResult.GetProperty('variancePercentage').ToNumberLiteral.Value;
-
-              if VariancePercentage > 0 then
-                WriteLn(Format('    %-30s  %12s ops/sec  ±%5.2f%%  %10.4f ms/op  (%d iterations)',
-                  [BenchName, FormatOpsPerSec(OpsPerSec), VariancePercentage, MeanMs, Iterations]))
-              else
-                WriteLn(Format('    %-30s  %12s ops/sec  %10.4f ms/op  (%d iterations)',
-                  [BenchName, FormatOpsPerSec(OpsPerSec), MeanMs, Iterations]));
+              Entry.Error := '';
+              Entry.OpsPerSec := SingleResult.GetProperty('opsPerSec').ToNumberLiteral.Value;
+              Entry.MeanMs := SingleResult.GetProperty('meanMs').ToNumberLiteral.Value;
+              Entry.Iterations := Round(SingleResult.GetProperty('iterations').ToNumberLiteral.Value);
+              Entry.VariancePercentage := SingleResult.GetProperty('variancePercentage').ToNumberLiteral.Value;
             end;
+
+            FileResult.Entries[I] := Entry;
           end;
         end;
 
+        Reporter.AddFileResult(FileResult);
         Result := ScriptResult;
       end
       else
       begin
+        FileResult.TotalBenchmarks := 0;
+        FileResult.DurationMs := 0;
+        SetLength(FileResult.Entries, 0);
+        Reporter.AddFileResult(FileResult);
+
         Result := TGocciaObjectValue.Create;
         Result.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.ZeroValue);
         Result.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
@@ -110,7 +96,18 @@ begin
     except
       on E: Exception do
       begin
-        WriteLn('  Fatal error: ', E.Message);
+        FileResult.FileName := FileName;
+        FileResult.LexTimeMs := 0;
+        FileResult.ParseTimeMs := 0;
+        FileResult.ExecuteTimeMs := 0;
+        FileResult.TotalBenchmarks := 0;
+        FileResult.DurationMs := 0;
+        SetLength(FileResult.Entries, 1);
+        FileResult.Entries[0].Suite := '';
+        FileResult.Entries[0].Name := '(fatal)';
+        FileResult.Entries[0].Error := E.Message;
+        Reporter.AddFileResult(FileResult);
+
         Result := TGocciaObjectValue.Create;
         Result.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.ZeroValue);
         Result.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
@@ -121,64 +118,73 @@ begin
   end;
 end;
 
-procedure RunBenchmarks(const Path: string);
+procedure RunBenchmarks(const Path: string; Format: TBenchmarkReportFormat;
+  const OutputFile: string);
 var
   Files: TStringList;
   I: Integer;
-  TotalBenchmarks: Integer;
-  TotalDuration: Double;
-  ScriptResult: TGocciaObjectValue;
+  Reporter: TBenchmarkReporter;
 begin
-  TotalBenchmarks := 0;
-  TotalDuration := 0;
-
-  if DirectoryExists(Path) then
-  begin
-    Files := FindAllFiles(Path, '.js');
-    try
-      for I := 0 to Files.Count - 1 do
-      begin
-        WriteLn('Running benchmark: ', Files[I]);
-        ScriptResult := RunBenchmarkFile(Files[I]);
-        TotalBenchmarks := TotalBenchmarks + Round(ScriptResult.GetProperty('totalBenchmarks').ToNumberLiteral.Value);
-        TotalDuration := TotalDuration + ScriptResult.GetProperty('duration').ToNumberLiteral.Value;
-        WriteLn('');
+  Reporter := TBenchmarkReporter.Create;
+  try
+    if DirectoryExists(Path) then
+    begin
+      Files := FindAllFiles(Path, '.js');
+      try
+        for I := 0 to Files.Count - 1 do
+          CollectBenchmarkFile(Files[I], Reporter);
+      finally
+        Files.Free;
       end;
-    finally
-      Files.Free;
+    end
+    else if FileExists(Path) then
+      CollectBenchmarkFile(Path, Reporter)
+    else
+    begin
+      WriteLn('Error: Path not found: ', Path);
+      ExitCode := 1;
+      Exit;
     end;
-  end
-  else if FileExists(Path) then
-  begin
-    WriteLn('Running benchmark: ', Path);
-    ScriptResult := RunBenchmarkFile(Path);
-    TotalBenchmarks := TotalBenchmarks + Round(ScriptResult.GetProperty('totalBenchmarks').ToNumberLiteral.Value);
-    TotalDuration := TotalDuration + ScriptResult.GetProperty('duration').ToNumberLiteral.Value;
-    WriteLn('');
-  end
-  else
-  begin
-    WriteLn('Error: Path not found: ', Path);
-    ExitCode := 1;
-    Exit;
-  end;
 
-  WriteLn('Benchmark Summary');
-  WriteLn(Format('  Total benchmarks: %d', [TotalBenchmarks]));
-  if TotalDuration >= 1000 then
-    WriteLn(Format('  Total duration: %.1fs', [TotalDuration / 1000]))
-  else
-    WriteLn(Format('  Total duration: %.0fms', [TotalDuration]));
+    Reporter.Render(Format);
+
+    if OutputFile <> '' then
+      Reporter.WriteToFile(OutputFile)
+    else
+      Reporter.WriteToStdOut;
+  finally
+    Reporter.Free;
+  end;
 end;
 
+var
+  BenchPath, OutputFile, FormatStr: string;
+  Format: TBenchmarkReportFormat;
+  I: Integer;
+
 begin
-  if ParamCount < 1 then
+  BenchPath := '';
+  OutputFile := '';
+  FormatStr := 'console';
+
+  for I := 1 to ParamCount do
   begin
-    WriteLn('Usage: BenchmarkRunner <filename.js>');
-    WriteLn('or');
-    WriteLn('Usage: BenchmarkRunner <directory>');
+    if Copy(ParamStr(I), 1, 9) = '--format=' then
+      FormatStr := Copy(ParamStr(I), 10, MaxInt)
+    else if Copy(ParamStr(I), 1, 9) = '--output=' then
+      OutputFile := Copy(ParamStr(I), 10, MaxInt)
+    else if Copy(ParamStr(I), 1, 2) <> '--' then
+      BenchPath := ParamStr(I);
+  end;
+
+  if BenchPath = '' then
+  begin
+    WriteLn('Usage: BenchmarkRunner <path> [--format=console|text|csv|json] [--output=file]');
     ExitCode := 1;
   end
   else
-    RunBenchmarks(ParamStr(1));
+  begin
+    Format := ParseReportFormat(FormatStr);
+    RunBenchmarks(BenchPath, Format, OutputFile);
+  end;
 end.
