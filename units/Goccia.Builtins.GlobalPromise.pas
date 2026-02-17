@@ -423,6 +423,8 @@ begin
 
   FPromiseConstructor := TGocciaNativeFunctionValue.Create(PromiseConstructorFn, 'Promise', 1);
 
+  TGocciaPromiseValue.ExposePrototype(FPromiseConstructor);
+
   FPromiseConstructor.AssignProperty('resolve',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseResolve, 'resolve', 1));
   FPromiseConstructor.AssignProperty('reject',

@@ -54,3 +54,21 @@ test("Map constructor with NaN key deduplication", () => {
   expect(map.size).toBe(1);
   expect(map.get(NaN)).toBe("second");
 });
+
+test("Map.prototype is an object", () => {
+  expect(typeof Map.prototype).toBe("object");
+});
+
+test("new Map instanceof Map", () => {
+  const m = new Map();
+  expect(m instanceof Map).toBe(true);
+});
+
+test("Map.prototype.constructor is Map", () => {
+  expect(Map.prototype.constructor).toBe(Map);
+});
+
+test("instance constructor is Map", () => {
+  const m = new Map();
+  expect(m.constructor).toBe(Map);
+});

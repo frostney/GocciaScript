@@ -57,3 +57,21 @@ test("Set constructor with another Set", () => {
   expect(copy.has(3)).toBe(true);
   expect(copy).not.toBe(original);
 });
+
+test("Set.prototype is an object", () => {
+  expect(typeof Set.prototype).toBe("object");
+});
+
+test("new Set instanceof Set", () => {
+  const s = new Set();
+  expect(s instanceof Set).toBe(true);
+});
+
+test("Set.prototype.constructor is Set", () => {
+  expect(Set.prototype.constructor).toBe(Set);
+});
+
+test("instance constructor is Set", () => {
+  const s = new Set();
+  expect(s.constructor).toBe(Set);
+});

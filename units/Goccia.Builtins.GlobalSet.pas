@@ -29,6 +29,8 @@ begin
 
   FSetConstructor := TGocciaNativeFunctionValue.Create(SetConstructorFn, 'Set', 0);
 
+  TGocciaSetValue.ExposePrototype(FSetConstructor);
+
   AScope.DefineLexicalBinding(AName, FSetConstructor, dtLet);
 end;
 

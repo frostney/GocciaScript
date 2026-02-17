@@ -194,3 +194,44 @@ test("exception after resolve with pending promise does not reject", () => {
     expect(rejectHandlerCalled).toBe(false);
   });
 });
+
+test("Promise.prototype is an object", () => {
+  expect(typeof Promise.prototype).toBe("object");
+});
+
+test("new Promise instanceof Promise", () => {
+  const p = new Promise((resolve) => resolve(1));
+  expect(p instanceof Promise).toBe(true);
+});
+
+test("Promise.resolve() instanceof Promise", () => {
+  const p = Promise.resolve(42);
+  expect(p instanceof Promise).toBe(true);
+});
+
+test("Promise.reject() instanceof Promise", () => {
+  const p = Promise.reject("err");
+  p.catch(() => {}); // prevent unhandled rejection
+  expect(p instanceof Promise).toBe(true);
+});
+
+test("Promise.prototype.constructor is Promise", () => {
+  expect(Promise.prototype.constructor).toBe(Promise);
+});
+
+test("instance constructor is Promise", () => {
+  const p = new Promise((resolve) => resolve(1));
+  expect(p.constructor).toBe(Promise);
+});
+
+test("Promise.prototype has then method", () => {
+  expect(typeof Promise.prototype.then).toBe("function");
+});
+
+test("Promise.prototype has catch method", () => {
+  expect(typeof Promise.prototype.catch).toBe("function");
+});
+
+test("Promise.prototype has finally method", () => {
+  expect(typeof Promise.prototype.finally).toBe("function");
+});

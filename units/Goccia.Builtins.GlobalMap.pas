@@ -29,6 +29,8 @@ begin
 
   FMapConstructor := TGocciaNativeFunctionValue.Create(MapConstructorFn, 'Map', 0);
 
+  TGocciaMapValue.ExposePrototype(FMapConstructor);
+
   AScope.DefineLexicalBinding(AName, FMapConstructor, dtLet);
 end;
 

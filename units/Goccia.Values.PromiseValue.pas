@@ -7,7 +7,7 @@ interface
 uses
   Goccia.Values.Primitives, Goccia.Values.ObjectValue,
   Goccia.Values.NativeFunction, Goccia.Arguments.Collection,
-  Generics.Collections, SysUtils;
+  Goccia.SharedPrototype, Generics.Collections, SysUtils;
 
 type
   TGocciaPromiseState = (gpsPending, gpsFulfilled, gpsRejected);
@@ -32,8 +32,7 @@ type
 
   TGocciaPromiseValue = class(TGocciaObjectValue)
   private
-    class var FSharedPromisePrototype: TGocciaObjectValue;
-    class var FPrototypeMethodHost: TGocciaPromiseValue;
+    class var FShared: TGocciaSharedPrototype;
   private
     FState: TGocciaPromiseState;
     FResult: TGocciaValue;
@@ -46,10 +45,10 @@ type
 
     procedure TriggerReactions;
     procedure SubscribeTo(APromise: TGocciaPromiseValue);
+    procedure InitializePrototype;
   public
     constructor Create; overload;
     destructor Destroy; override;
-    procedure InitializePrototype;
 
     procedure Resolve(AValue: TGocciaValue);
     procedure Reject(AReason: TGocciaValue);
@@ -61,6 +60,8 @@ type
     function ToStringTag: string; override;
 
     procedure GCMarkReferences; override;
+
+    class procedure ExposePrototype(AConstructor: TGocciaObjectValue);
 
     property State: TGocciaPromiseState read FState;
     property PromiseResult: TGocciaValue read FResult;
@@ -197,29 +198,29 @@ begin
   FReactions := TList<TGocciaPromiseReaction>.Create;
   FAlreadyResolved := False;
   InitializePrototype;
-  if Assigned(FSharedPromisePrototype) then
-    FPrototype := FSharedPromisePrototype;
+  if Assigned(FShared) then
+    FPrototype := FShared.Prototype;
 end;
 
 procedure TGocciaPromiseValue.InitializePrototype;
 begin
-  if Assigned(FSharedPromisePrototype) then Exit;
+  if Assigned(FShared) then Exit;
 
-  FSharedPromisePrototype := TGocciaObjectValue.Create;
-  FPrototypeMethodHost := Self;
+  FShared := TGocciaSharedPrototype.Create(Self);
 
-  FSharedPromisePrototype.RegisterNativeMethod(
+  FShared.Prototype.RegisterNativeMethod(
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseThen, 'then', 2));
-  FSharedPromisePrototype.RegisterNativeMethod(
+  FShared.Prototype.RegisterNativeMethod(
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseCatch, 'catch', 1));
-  FSharedPromisePrototype.RegisterNativeMethod(
+  FShared.Prototype.RegisterNativeMethod(
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseFinally, 'finally', 1));
+end;
 
-  if Assigned(TGocciaGC.Instance) then
-  begin
-    TGocciaGC.Instance.PinValue(FSharedPromisePrototype);
-    TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
-  end;
+class procedure TGocciaPromiseValue.ExposePrototype(AConstructor: TGocciaObjectValue);
+begin
+  if not Assigned(FShared) then
+    TGocciaPromiseValue.Create;
+  FShared.ExposeOnConstructor(AConstructor);
 end;
 
 destructor TGocciaPromiseValue.Destroy;

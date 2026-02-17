@@ -7,7 +7,7 @@ interface
 uses
   Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.ArrayValue,
   Goccia.Values.NativeFunction, Goccia.Arguments.Collection,
-  Generics.Collections, SysUtils;
+  Goccia.SharedPrototype, Generics.Collections, SysUtils;
 
 type
   TGocciaMapEntry = record
@@ -17,8 +17,7 @@ type
 
   TGocciaMapValue = class(TGocciaObjectValue)
   private
-    class var FSharedMapPrototype: TGocciaObjectValue;
-    class var FPrototypeMethodHost: TGocciaMapValue;
+    class var FShared: TGocciaSharedPrototype;
   private
     FEntries: TList<TGocciaMapEntry>;
 
@@ -33,10 +32,10 @@ type
     function MapEntries(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 
     function FindEntry(AKey: TGocciaValue): Integer;
+    procedure InitializePrototype;
   public
     constructor Create; overload;
     destructor Destroy; override;
-    procedure InitializePrototype;
 
     procedure SetEntry(AKey, AValue: TGocciaValue);
 
@@ -45,6 +44,8 @@ type
     function ToStringTag: string; override;
 
     procedure GCMarkReferences; override;
+
+    class procedure ExposePrototype(AConstructor: TGocciaObjectValue);
 
     property Entries: TList<TGocciaMapEntry> read FEntries;
   end;
@@ -60,32 +61,32 @@ begin
   inherited Create(nil);
   FEntries := TList<TGocciaMapEntry>.Create;
   InitializePrototype;
-  if Assigned(FSharedMapPrototype) then
-    FPrototype := FSharedMapPrototype;
+  if Assigned(FShared) then
+    FPrototype := FShared.Prototype;
 end;
 
 procedure TGocciaMapValue.InitializePrototype;
 begin
-  if Assigned(FSharedMapPrototype) then Exit;
+  if Assigned(FShared) then Exit;
 
-  FSharedMapPrototype := TGocciaObjectValue.Create;
-  FPrototypeMethodHost := Self;
+  FShared := TGocciaSharedPrototype.Create(Self);
 
-  FSharedMapPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapGet, 'get', 1));
-  FSharedMapPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapSet, 'set', 2));
-  FSharedMapPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapHas, 'has', 1));
-  FSharedMapPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapDelete, 'delete', 1));
-  FSharedMapPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapClear, 'clear', 0));
-  FSharedMapPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapForEach, 'forEach', 1));
-  FSharedMapPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapKeys, 'keys', 0));
-  FSharedMapPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapValues, 'values', 0));
-  FSharedMapPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapEntries, 'entries', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapGet, 'get', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapSet, 'set', 2));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapHas, 'has', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapDelete, 'delete', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapClear, 'clear', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapForEach, 'forEach', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapKeys, 'keys', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapValues, 'values', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapEntries, 'entries', 0));
+end;
 
-  if Assigned(TGocciaGC.Instance) then
-  begin
-    TGocciaGC.Instance.PinValue(FSharedMapPrototype);
-    TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
-  end;
+class procedure TGocciaMapValue.ExposePrototype(AConstructor: TGocciaObjectValue);
+begin
+  if not Assigned(FShared) then
+    TGocciaMapValue.Create;
+  FShared.ExposeOnConstructor(AConstructor);
 end;
 
 destructor TGocciaMapValue.Destroy;
