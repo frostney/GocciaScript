@@ -10,7 +10,7 @@ uses
   FileUtils in 'units/FileUtils.pas';
 
 type
-  TUnitCategory = (ucSystem, ucProject, ucRelative);
+  TUnitCategory = (ucSystem, ucThirdParty, ucProject, ucRelative);
   TRunMode = (rmFormat, rmCheck);
 
 var
@@ -20,8 +20,10 @@ var
   CheckedCount: Integer;
 
 { ═══════════════════════════════════════════════════════════════════════════
-uses
-  Clause Formatting ═══════════════════════════════════════════════════════════════════════════ }  function IsUsesKeyword(const ALine: string): Boolean;
+  Uses-Clause Formatting
+  ═══════════════════════════════════════════════════════════════════════════ }
+
+function IsUsesKeyword(const ALine: string): Boolean;
 var
   Trimmed: string;
 begin
@@ -49,6 +51,9 @@ var
 begin
   Lower := LowerCase(Trim(AName));
 
+  if Pos(' in ', Lower) > 0 then
+    Exit(ucRelative);
+
   for I := Low(SystemUnits) to High(SystemUnits) do
     if Lower = SystemUnits[I] then
       Exit(ucSystem);
@@ -56,7 +61,7 @@ begin
   if Pos('goccia.', Lower) = 1 then
     Exit(ucProject);
 
-  Result := ucRelative;
+  Result := ucThirdParty;
 end;
 
 function CompareUnitsCI(AList: TStringList; AIdx1, AIdx2: Integer): Integer;
@@ -65,63 +70,58 @@ begin
 end;
 
 function FormatUsesClause(const AUnits: TStringList): TStringList;
+const
+  SectionCount = 4;
 var
-  SystemList, ProjectList, RelativeList: TStringList;
-  I, J, SecIdx, SecCount: Integer;
-  Sections: array[0..2] of TStringList;
+  Lists: array[0..SectionCount - 1] of TStringList;
+  I, J, SecIdx, NonEmpty: Integer;
   IsLast: Boolean;
 begin
   Result := TStringList.Create;
-  SystemList := TStringList.Create;
-  ProjectList := TStringList.Create;
-  RelativeList := TStringList.Create;
+  for I := 0 to SectionCount - 1 do
+    Lists[I] := TStringList.Create;
   try
     for I := 0 to AUnits.Count - 1 do
     begin
       case ClassifyUnit(AUnits[I]) of
-        ucSystem: SystemList.Add(AUnits[I]);
-        ucProject: ProjectList.Add(AUnits[I]);
-        ucRelative: RelativeList.Add(AUnits[I]);
+        ucSystem:     Lists[0].Add(AUnits[I]);
+        ucThirdParty: Lists[1].Add(AUnits[I]);
+        ucProject:    Lists[2].Add(AUnits[I]);
+        ucRelative:   Lists[3].Add(AUnits[I]);
       end;
     end;
 
-    SystemList.CustomSort(@CompareUnitsCI);
-    ProjectList.CustomSort(@CompareUnitsCI);
-    RelativeList.CustomSort(@CompareUnitsCI);
+    for I := 0 to SectionCount - 1 do
+      Lists[I].CustomSort(@CompareUnitsCI);
 
-    Sections[0] := SystemList;
-    Sections[1] := ProjectList;
-    Sections[2] := RelativeList;
-
-    SecCount := 0;
-    for I := 0 to 2 do
-      if Sections[I].Count > 0 then
-        Inc(SecCount);
+    NonEmpty := 0;
+    for I := 0 to SectionCount - 1 do
+      if Lists[I].Count > 0 then
+        Inc(NonEmpty);
 
     SecIdx := 0;
-    for I := 0 to 2 do
+    for I := 0 to SectionCount - 1 do
     begin
-      if Sections[I].Count = 0 then
+      if Lists[I].Count = 0 then
         Continue;
 
       Inc(SecIdx);
 
-      for J := 0 to Sections[I].Count - 1 do
+      for J := 0 to Lists[I].Count - 1 do
       begin
-        IsLast := (SecIdx = SecCount) and (J = Sections[I].Count - 1);
+        IsLast := (SecIdx = NonEmpty) and (J = Lists[I].Count - 1);
         if IsLast then
-          Result.Add('  ' + Sections[I][J] + ';')
+          Result.Add('  ' + Lists[I][J] + ';')
         else
-          Result.Add('  ' + Sections[I][J] + ',');
+          Result.Add('  ' + Lists[I][J] + ',');
       end;
 
-      if SecIdx < SecCount then
+      if SecIdx < NonEmpty then
         Result.Add('');
     end;
   finally
-    SystemList.Free;
-    ProjectList.Free;
-    RelativeList.Free;
+    for I := 0 to SectionCount - 1 do
+      Lists[I].Free;
   end;
 end;
 
@@ -144,15 +144,57 @@ begin
     Result := Copy(Result, 1, P - 1);
 end;
 
+function UpdateBlockState(const ALine: string; AInBlock: Boolean): Boolean;
+var
+  K: Integer;
+  InStr: Boolean;
+begin
+  K := 1;
+  InStr := False;
+  while K <= Length(ALine) do
+  begin
+    if AInBlock then
+    begin
+      if ALine[K] = '}' then
+        AInBlock := False;
+    end
+    else if InStr then
+    begin
+      if ALine[K] = '''' then
+        InStr := False;
+    end
+    else if ALine[K] = '''' then
+      InStr := True
+    else if ALine[K] = '{' then
+      AInBlock := True
+    else if (ALine[K] = '/') and (K < Length(ALine)) and (ALine[K + 1] = '/') then
+      Break;
+    Inc(K);
+  end;
+  Result := AInBlock;
+end;
+
 procedure FormatUsesInLines(const AInput: TStringList; const AOutput: TStringList);
 var
   I, J: Integer;
   UsesContent, AfterUses, FullBlock, BeforeSC: string;
   Units, Formatted: TStringList;
+  InBlock: Boolean;
 begin
   I := 0;
+  InBlock := False;
   while I < AInput.Count do
   begin
+    if InBlock then
+    begin
+      InBlock := UpdateBlockState(AInput[I], InBlock);
+      AOutput.Add(AInput[I]);
+      Inc(I);
+      Continue;
+    end;
+
+    InBlock := UpdateBlockState(AInput[I], InBlock);
+
     if IsUsesKeyword(AInput[I]) then
     begin
       FullBlock := AInput[I];
@@ -272,7 +314,7 @@ const
   Keywords: array[0..14] of string = (
     'as', 'at', 'do', 'if', 'in', 'is', 'of', 'on', 'or', 'to',
     'and', 'end', 'for', 'not', 'set'
-  );
+ );
 var
   Lower: string;
   I: Integer;
@@ -795,6 +837,68 @@ begin
 end;
 
 { ═══════════════════════════════════════════════════════════════════════════
+  Auto-Fix: Stray Spaces
+  ═══════════════════════════════════════════════════════════════════════════ }
+
+function FixStraySpaces(const ALines: TStringList): Boolean;
+var
+  I, J, SpaceStart: Integer;
+  Line: string;
+  InStr, InLineComment: Boolean;
+  InBlock: Integer;
+begin
+  Result := False;
+  InBlock := 0;
+  for I := 0 to ALines.Count - 1 do
+  begin
+    Line := ALines[I];
+    InStr := False;
+    InLineComment := False;
+    J := 1;
+    while J <= Length(Line) do
+    begin
+      if InLineComment then
+        Break;
+      if InStr then
+      begin
+        if Line[J] = '''' then
+          InStr := False;
+        Inc(J);
+        Continue;
+      end;
+      if InBlock > 0 then
+      begin
+        if Line[J] = '}' then
+          Dec(InBlock);
+        Inc(J);
+        Continue;
+      end;
+      if Line[J] = '''' then
+        InStr := True
+      else if Line[J] = '{' then
+        Inc(InBlock)
+      else if (J + 1 <= Length(Line)) and (Line[J] = '/') and (Line[J + 1] = '/') then
+        InLineComment := True
+      else if (Line[J] = ' ') and (J > 1) and (Line[J - 1] <> ' ') and (not (Line[J - 1] in [#9, '(', ','])) then
+      begin
+        SpaceStart := J;
+        while (J + 1 <= Length(Line)) and (Line[J + 1] = ' ') do
+          Inc(J);
+        if (J + 1 <= Length(Line)) and (Line[J + 1] in [';', ')', ',']) then
+        begin
+          Delete(Line, SpaceStart, J - SpaceStart + 1);
+          Result := True;
+          J := SpaceStart;
+          Continue;
+        end;
+      end;
+      Inc(J);
+    end;
+    ALines[I] := Line;
+  end;
+end;
+
+{ ═══════════════════════════════════════════════════════════════════════════
   File Processing
   ═══════════════════════════════════════════════════════════════════════════ }
 
@@ -811,6 +915,7 @@ begin
     FormatUsesInLines(Lines, ResultLines);
     FixFuncNames(ResultLines);
     FixParamNames(ResultLines);
+    FixStraySpaces(ResultLines);
 
     if ResultLines.Text <> Lines.Text then
     begin

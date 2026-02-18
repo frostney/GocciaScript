@@ -232,7 +232,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Private fields:** `F` prefix
 - **Parameters:** `A` prefix for multi-letter names (e.g., `AScope`, `AValue`); single-letter names (`A`, `B`, `E`, `T`) are left as-is. Auto-fixed by `./format.pas`.
 - **`const` parameters:** Prefer `const` for all parameters that are not modified in the function body
-- **Uses clauses:** One unit per line, grouped (System > Project > Relative), alphabetically sorted within each group, blank line between groups. Auto-fixed by `./format.pas`.
+- **Uses clauses:** One unit per line, grouped (System > Third-party > Project > Relative), alphabetically sorted within each group, blank line between groups. Units with `in` paths go in Relative; `Goccia.*` in Project; FPC standard library in System; everything else in Third-party. Auto-fixed by `./format.pas`.
 - **Indentation:** 2 spaces (see `.editorconfig`)
 - **Compiler directives:** All units include `{$I Goccia.inc}`
 - **General rules:** Follow [Embarcadero's Pascal style guide](https://docwiki.embarcadero.com/RADStudio/Athens/en/General_Rules) for casing, keywords, and [type declarations](https://docwiki.embarcadero.com/RADStudio/Athens/en/Type_Declarations)

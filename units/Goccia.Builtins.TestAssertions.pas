@@ -127,6 +127,8 @@ type
 implementation
 
 uses
+  TimingUtils,
+
   Goccia.Evaluator,
   Goccia.Evaluator.Comparison,
   Goccia.MicrotaskQueue,
@@ -135,9 +137,7 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
-  Goccia.Values.SetValue,
-
-  TimingUtils;
+  Goccia.Values.SetValue;
 
 { TTestSuite }
 

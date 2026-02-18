@@ -51,6 +51,10 @@ begin
      (AObj is TGocciaClassValue) or (AObj is TGocciaArrayValue) then
     AObj.SetProperty(APropertyName, AValue)
   else if Assigned(AOnError) then
+    // AOnError is not invoked here — ThrowTypeError must be used because this is
+    // a JavaScript-level TypeError (TGocciaThrowValue), not an interpreter-level
+    // runtime error (TGocciaRuntimeError) which is what AOnError produces.
+    // The Assigned check guards against raising in contexts without error handling.
     ThrowTypeError('Cannot set property on non-object');
 end;
 

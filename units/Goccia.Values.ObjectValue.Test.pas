@@ -5,10 +5,10 @@ program Goccia.Values.ObjectValue.Test;
 uses
   StrUtils,
 
-  Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
+  TestRunner,
 
-  TestRunner;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TTestObjectValue = class(TTestSuite)

@@ -63,8 +63,9 @@ This is auto-fixed by `./format.pas`.
 Each unit in the `uses` clause must appear on its own line, following [Embarcadero's recommended style](https://docwiki.embarcadero.com/RADStudio/Athens/en/Source_Code_Files_Units_and_Their_Structure). Units are grouped by category with a blank line between groups, and sorted alphabetically within each group:
 
 1. **System units** — FPC standard library (`Classes`, `SysUtils`, `Math`, `Generics.Collections`, etc.)
-2. **Project units** — `Goccia.*` namespaced units
-3. **Relative units** — Non-namespaced project utilities (`TimingUtils`, `FileUtils`, etc.)
+2. **Third-party / non-prefixed project units** — units without `Goccia.*` prefix and without an `in` path (`TimingUtils`, etc.)
+3. **Project units** — `Goccia.*` namespaced units
+4. **Relative units** — units with an explicit `in` path (`FileUtils in 'units/FileUtils.pas'`, etc.)
 
 ```pascal
 uses
@@ -72,10 +73,12 @@ uses
   Generics.Collections,
   SysUtils,
 
+  TimingUtils,
+
   Goccia.Scope,
   Goccia.Values.Primitives,
 
-  TimingUtils;
+  FileUtils in 'units/FileUtils.pas';
 ```
 
 This ordering is enforced automatically by `./format.pas` via Lefthook pre-commit hook.
@@ -391,9 +394,10 @@ lefthook install
 
 All of the following are **auto-fixed** (not just warned about):
 
-- **Uses clauses**: one unit per line, grouped (System > Project > Relative), alphabetically sorted within each group, blank line between groups.
+- **Uses clauses**: one unit per line, grouped (System > Third-party > Project > Relative), alphabetically sorted within each group, blank line between groups. Units with an `in` path are always in the Relative group; `Goccia.*` units are Project; known FPC standard library units are System; everything else is Third-party.
 - **Function naming**: capitalizes the first letter of function, procedure, constructor, and destructor names to enforce PascalCase. Renames all references within the same file. External C bindings are excluded.
 - **Parameter naming**: adds the `A` prefix to multi-letter parameters (e.g., `Value` → `AValue`) and renames all references within the function scope (declaration, local variables, and body). Single-letter parameters and Pascal keyword conflicts are skipped.
+- **Stray spaces**: removes spurious spaces before `;`, `)`, and `,` (e.g., `string ;` → `string;`). String literals and comments are left untouched.
 
 ## Editor Configuration
 

@@ -7,12 +7,13 @@ uses
   Generics.Collections,
   SysUtils,
 
+  TimingUtils,
+
   Goccia.Engine,
   Goccia.Error,
   Goccia.Values.Primitives,
 
-  FileUtils in 'units/FileUtils.pas',
-  TimingUtils;
+  FileUtils in 'units/FileUtils.pas';
 
 procedure RunScriptFromFile(const AFileName: string);
 var

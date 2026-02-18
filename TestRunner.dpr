@@ -7,6 +7,8 @@ uses
   Generics.Collections,
   SysUtils,
 
+  TimingUtils,
+
   Goccia.Engine,
   Goccia.Error,
   Goccia.Values.ArrayValue,
@@ -15,8 +17,7 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
 
-  FileUtils in 'units/FileUtils.pas',
-  TimingUtils;
+  FileUtils in 'units/FileUtils.pas';
 
 type
   TTestFileResult = record

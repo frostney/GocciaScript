@@ -34,7 +34,7 @@ type
     tv_nsec: clong;
   end;
 
-function clock_gettime(const AClk_id: cint; const ATp: Pointer): cint; cdecl; external 'c';
+function clock_gettime(clk_id: cint; tp: Pointer): cint; cdecl; external 'c';
 {$ENDIF}
 
 {$IFDEF WINDOWS}

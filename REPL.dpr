@@ -7,11 +7,11 @@ uses
   Generics.Collections,
   SysUtils,
 
+  TimingUtils,
+
   Goccia.Engine,
   Goccia.Error,
-  Goccia.Values.Primitives,
-
-  TimingUtils;
+  Goccia.Values.Primitives;
 
 var
   Line: string;

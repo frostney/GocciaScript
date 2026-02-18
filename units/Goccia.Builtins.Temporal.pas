@@ -68,6 +68,8 @@ implementation
 uses
   DateUtils,
 
+  TimingUtils,
+
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -75,9 +77,7 @@ uses
   Goccia.Values.TemporalInstant,
   Goccia.Values.TemporalPlainDate,
   Goccia.Values.TemporalPlainDateTime,
-  Goccia.Values.TemporalPlainTime,
-
-  TimingUtils;
+  Goccia.Values.TemporalPlainTime;
 
 { TGocciaTemporalBuiltin }
 

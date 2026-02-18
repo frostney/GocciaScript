@@ -6,9 +6,9 @@ uses
   Classes,
   SysUtils,
 
-  Goccia.Values.Primitives,
+  TestRunner,
 
-  TestRunner;
+  Goccia.Values.Primitives;
 
 type
   TTestPrimitives = class(TTestSuite)

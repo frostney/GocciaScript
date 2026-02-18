@@ -218,7 +218,7 @@ FPC is only installed once per platform in the `build` job. Test, benchmark, and
 
 ## Auto-Formatter
 
-The project includes `./format.pas`, an `instantfpc` script that auto-fixes Pascal source files. It enforces uses clause ordering, PascalCase function names, and parameter `A` prefix naming. No build step is needed — it runs directly via the `instantfpc` shebang.
+The project includes `./format.pas`, an `instantfpc` script that auto-fixes Pascal source files. It enforces uses clause ordering, PascalCase function names, parameter `A` prefix naming, and stray space removal (spurious spaces before `;`, `)`, `,`). No build step is needed — it runs directly via the `instantfpc` shebang.
 
 ```bash
 ./format.pas              # Format all project Pascal files
@@ -240,7 +240,7 @@ scoop install lefthook    # Windows
 lefthook install
 ```
 
-The hook configuration is in `lefthook.yml`. It auto-stages formatting fixes (`stage_fixed: true`) so you don't need to `git add` after the hook reformats files. Test files (`*.Test.pas`) are excluded.
+The hook configuration is in `lefthook.yml`. It auto-stages formatting fixes (`stage_fixed: true`) so you don't need to `git add` after the hook reformats files.
 
 ## Direct FPC Compilation
 

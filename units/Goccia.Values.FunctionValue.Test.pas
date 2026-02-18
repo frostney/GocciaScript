@@ -7,6 +7,8 @@ uses
   Generics.Collections,
   SysUtils,
 
+  TestRunner,
+
   Goccia.Arguments.Collection,
   Goccia.AST.Expressions,
   Goccia.AST.Node,
@@ -16,9 +18,7 @@ uses
   Goccia.Token,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
-
-  TestRunner;
+  Goccia.Values.Primitives;
 
 type
   TTestBlockValue = class(TTestSuite)

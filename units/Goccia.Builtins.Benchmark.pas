@@ -10,6 +10,8 @@ uses
   Math,
   SysUtils,
 
+  TimingUtils,
+
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error,
@@ -19,9 +21,7 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
-
-  TimingUtils;
+  Goccia.Values.Primitives;
 
 type
   TGocciaBenchmark = class;
