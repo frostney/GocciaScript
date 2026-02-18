@@ -70,6 +70,7 @@ uses
 
   TimingUtils,
 
+  Goccia.GarbageCollector,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -87,15 +88,19 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   FTemporalNamespace := TGocciaObjectValue.Create;
+  TGocciaGC.Instance.AddTempRoot(FTemporalNamespace);
+  try
+    RegisterDuration;
+    RegisterInstant;
+    RegisterPlainDate;
+    RegisterPlainTime;
+    RegisterPlainDateTime;
+    RegisterNow;
 
-  RegisterDuration;
-  RegisterInstant;
-  RegisterPlainDate;
-  RegisterPlainTime;
-  RegisterPlainDateTime;
-  RegisterNow;
-
-  AScope.DefineLexicalBinding(AName, FTemporalNamespace, dtLet);
+    AScope.DefineLexicalBinding(AName, FTemporalNamespace, dtLet);
+  finally
+    TGocciaGC.Instance.RemoveTempRoot(FTemporalNamespace);
+  end;
 end;
 
 { Duration }

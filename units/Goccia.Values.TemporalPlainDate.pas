@@ -449,11 +449,16 @@ begin
     -Dur.Hours, -Dur.Minutes, -Dur.Seconds,
     -Dur.Milliseconds, -Dur.Microseconds, -Dur.Nanoseconds);
 
-  NewArgs := TGocciaArgumentsCollection.Create([NegatedDur]);
+  TGocciaGC.Instance.AddTempRoot(NegatedDur);
   try
-    Result := DateAdd(NewArgs, AThisValue);
+    NewArgs := TGocciaArgumentsCollection.Create([NegatedDur]);
+    try
+      Result := DateAdd(NewArgs, AThisValue);
+    finally
+      NewArgs.Free;
+    end;
   finally
-    NewArgs.Free;
+    TGocciaGC.Instance.RemoveTempRoot(NegatedDur);
   end;
 end;
 

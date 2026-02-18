@@ -504,20 +504,28 @@ function TGocciaTemporalDurationValue.DurationTotal(const AArgs: TGocciaArgument
 var
   D: TGocciaTemporalDurationValue;
   UnitStr: string;
-  Arg: TGocciaValue;
+  Arg, RelToArg: TGocciaValue;
+  OptionsObj: TGocciaObjectValue;
+  HasRelativeTo: Boolean;
   TotalNs: Double;
 begin
   D := AsDuration(AThisValue, 'Duration.prototype.total');
   Arg := AArgs.GetElement(0);
+  HasRelativeTo := False;
 
   if Arg is TGocciaStringLiteralValue then
     UnitStr := TGocciaStringLiteralValue(Arg).Value
   else if Arg is TGocciaObjectValue then
   begin
-    Arg := TGocciaObjectValue(Arg).GetProperty('unit');
+    OptionsObj := TGocciaObjectValue(Arg);
+
+    Arg := OptionsObj.GetProperty('unit');
     if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
       ThrowRangeError('total() requires a unit option');
     UnitStr := Arg.ToStringLiteral.Value;
+
+    RelToArg := OptionsObj.GetProperty('relativeTo');
+    HasRelativeTo := (RelToArg <> nil) and not (RelToArg is TGocciaUndefinedLiteralValue);
   end
   else
   begin
@@ -525,7 +533,14 @@ begin
     UnitStr := '';
   end;
 
-  // Convert everything to nanoseconds first (ignoring calendar units for simplicity)
+  if (D.FYears <> 0) or (D.FMonths <> 0) then
+  begin
+    if HasRelativeTo then
+      ThrowRangeError('relativeTo for Duration.prototype.total is not yet supported')
+    else
+      ThrowRangeError('Duration with years or months requires relativeTo for total()');
+  end;
+
   TotalNs := D.FNanoseconds +
              D.FMicroseconds * 1000.0 +
              D.FMilliseconds * 1000000.0 +
