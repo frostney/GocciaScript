@@ -525,7 +525,9 @@ begin
     UnitStr := '';
   end;
 
-  // Convert everything to nanoseconds first (ignoring calendar units for simplicity)
+  if (D.FYears <> 0) or (D.FMonths <> 0) then
+    ThrowRangeError('Duration with years or months requires relativeTo for total()');
+
   TotalNs := D.FNanoseconds +
              D.FMicroseconds * 1000.0 +
              D.FMilliseconds * 1000000.0 +
