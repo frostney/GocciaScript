@@ -62,13 +62,14 @@ A dependency-free unit that centralizes all 32 JavaScript keyword string constan
 
 ### Microtask Queue (`Goccia.MicrotaskQueue.pas`)
 
-A singleton microtask queue used by Promises to defer `.then()` callbacks per the ECMAScript specification. Key design:
+A singleton microtask queue used by Promises and `queueMicrotask()` to defer callbacks per the ECMAScript specification. Key design:
 
 - **Singleton** — `TGocciaMicrotaskQueue.Initialize` / `TGocciaMicrotaskQueue.Instance`, mirroring the `TGocciaGC` pattern.
-- **Enqueue** — When a Promise settles and has pending reactions (or when `.then()` is called on an already-settled Promise), the reaction is enqueued as a microtask rather than executed immediately.
-- **DrainQueue** — Called by the engine after `Interpreter.Execute` completes. Processes microtasks in FIFO order, looping until the queue is empty. New microtasks enqueued during processing (e.g., chained `.then()` handlers) are processed in the same drain cycle.
+- **Enqueue** — When a Promise settles and has pending reactions (or when `.then()` is called on an already-settled Promise), the reaction is enqueued as a microtask rather than executed immediately. The global `queueMicrotask(callback)` function also enqueues directly into this queue.
+- **DrainQueue** — Called by the engine after `Interpreter.Execute` completes. Processes microtasks in FIFO order, looping until the queue is empty. New microtasks enqueued during processing (e.g., chained `.then()` handlers or nested `queueMicrotask` calls) are processed in the same drain cycle.
 - **ClearQueue** — Discards all pending microtasks without executing them. Called in `finally` blocks by `Execute` and `ExecuteProgram` to prevent stale callbacks from leaking across executions if a script throws.
 - **GC safety** — Each microtask's handler, value, and result promise are temp-rooted during processing to prevent collection mid-callback.
+- **Error handling** — Promise reaction errors reject the downstream promise. `queueMicrotask` callback errors have no associated promise and are silently discarded (matching how unhandled Promise rejections are handled). The queue keeps draining after an error.
 
 #### Execution Model
 
@@ -77,8 +78,9 @@ GocciaScript uses a synchronous execution model. The entire script is one **macr
 ```
 Script execution (macrotask)     →  Microtask queue drains
 ├── sync code runs to completion     ├── .then() callbacks fire (FIFO)
-├── Promise executors run sync       ├── new microtasks from callbacks
-└── .then() handlers are enqueued    └── repeat until queue is empty
+├── Promise executors run sync       ├── queueMicrotask callbacks fire (FIFO)
+├── .then() handlers are enqueued    ├── new microtasks from callbacks
+└── queueMicrotask() enqueues        └── repeat until queue is empty
 ```
 
 This follows the ECMAScript specification's microtask ordering semantics. Thenable adoption (resolving a Promise with another Promise) is deferred via a microtask rather than resolved synchronously, matching the spec's PromiseResolveThenableJob. The only scenario where interleaving would differ from a full engine is with multiple macrotask sources (`setTimeout`, I/O callbacks), which GocciaScript does not implement. The test framework and benchmark runner also drain the microtask queue after each test callback / measurement round, respectively.

@@ -113,10 +113,13 @@ begin
               Promise.Resolve(HandlerResult);
           except
             on E: TGocciaThrowValue do
-            begin
               if Assigned(Promise) then
                 Promise.Reject(E.Value);
-            end;
+              // TODO: Per HTML spec, queueMicrotask callback errors should be
+              // "reported" (Node.js: uncaughtException, browsers: global error
+              // event). Currently silently discarded because GocciaScript has no
+              // process-level error reporting. Add reporting when/if an error
+              // event mechanism is implemented.
           end;
         finally
           CallArgs.Free;
@@ -149,6 +152,7 @@ begin
   end;
   if I > 0 then
     FQueue.Clear;
+
 end;
 
 procedure TGocciaMicrotaskQueue.ClearQueue;
