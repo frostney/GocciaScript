@@ -69,7 +69,7 @@ The `TStringList` is passed by reference — update its contents and call `Execu
 
 ### Timing
 
-All `RunScript*` methods and the `Execute` method return a `TGocciaScriptResult` record that includes microsecond-precision timing for each pipeline phase:
+All `RunScript*` methods and the `Execute` method return a `TGocciaScriptResult` record that includes nanosecond-precision timing for each pipeline phase:
 
 ```pascal
 uses Goccia.Engine, TimingUtils;
@@ -78,16 +78,16 @@ var
   ScriptResult: TGocciaScriptResult;
 begin
   ScriptResult := TGocciaEngine.RunScript(Source, 'bench.js', TGocciaEngine.DefaultGlobals);
-  WriteLn('Lex: ', FormatDuration(ScriptResult.LexTimeMicroseconds));
-  WriteLn('Parse: ', FormatDuration(ScriptResult.ParseTimeMicroseconds));
-  WriteLn('Execute: ', FormatDuration(ScriptResult.ExecuteTimeMicroseconds));
-  WriteLn('Total: ', FormatDuration(ScriptResult.TotalTimeMicroseconds));
+  WriteLn('Lex: ', FormatDuration(ScriptResult.LexTimeNanoseconds));
+  WriteLn('Parse: ', FormatDuration(ScriptResult.ParseTimeNanoseconds));
+  WriteLn('Execute: ', FormatDuration(ScriptResult.ExecuteTimeNanoseconds));
+  WriteLn('Total: ', FormatDuration(ScriptResult.TotalTimeNanoseconds));
 end;
 ```
 
-`FormatDuration` (from `TimingUtils`) automatically selects the appropriate unit: `μs` for values below 0.5ms, `ms` with two decimal places for values up to 10s, and `s` above that.
+`FormatDuration` (from `TimingUtils`) automatically selects the appropriate unit: `ns` for values below 0.5μs, `μs` for values below 0.5ms, `ms` with two decimal places for values up to 10s, and `s` above that.
 
-Timing uses `fpGetTimeOfDay` on Unix (native microsecond resolution) and `QueryPerformanceCounter` on Windows (sub-microsecond hardware counter).
+`TimingUtils` provides three clock functions: `GetNanoseconds` and `GetMilliseconds` for monotonic duration timing (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows), and `GetEpochNanoseconds` for wall-clock epoch time (`clock_gettime(CLOCK_REALTIME)` on Unix/macOS, `GetSystemTimeAsFileTime` on Windows).
 
 ## Controlling Built-ins
 

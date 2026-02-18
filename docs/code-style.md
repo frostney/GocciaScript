@@ -86,6 +86,24 @@ Units are organized by category using dot-separated names:
 | `Goccia.AST.*` | AST node definitions | `Node`, `Expressions`, `Statements` |
 | `Goccia.Arguments.*` | Function argument handling | `Collection`, `Converter`, `Validator` |
 
+## Platform-Specific Pitfalls
+
+### `Double(Int64)` on FPC 3.2.2 AArch64
+
+On FPC 3.2.2 targeting AArch64 (Apple Silicon), an explicit `Double(Int64Var)` cast performs a **bit reinterpretation** instead of a value conversion. This produces garbage floating-point values (e.g., `Double(Int64(1000))` yields `~4.94e-315` instead of `1000.0`).
+
+**Workaround:** Use implicit promotion via arithmetic instead of explicit casts:
+
+```pascal
+// WRONG on AArch64 — bit-casts instead of converting
+Result := Double(FEpochMilliseconds) * 1000000.0;
+
+// CORRECT — implicit promotion via multiplication
+Result := FEpochMilliseconds * 1000000.0;
+```
+
+This affects any code that converts `Int64` fields to `Double` for floating-point arithmetic. The same issue applies to intermediate `Int64` local variables cast to `Double`.
+
 ## Design Patterns
 
 ### Singleton Pattern (Special Values)

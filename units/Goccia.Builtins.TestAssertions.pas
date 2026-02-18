@@ -1248,7 +1248,7 @@ begin
   // Reset test statistics and clear any previously registered tests from describe blocks
   ResetTestStats;
 
-  StartTime := GetMicroseconds;
+  StartTime := GetNanoseconds;
 
   // Clear tests that were registered from previous describe executions
   // Keep standalone tests that were registered during script execution
@@ -1436,7 +1436,7 @@ begin
   ResultObj.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FTestStats.FailedTests));
   ResultObj.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(FTestStats.SkippedTests));
   ResultObj.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(FTestStats.TotalAssertionCount));
-  ResultObj.AssignProperty('duration', TGocciaNumberLiteralValue.Create(GetMicroseconds - StartTime));
+  ResultObj.AssignProperty('duration', TGocciaNumberLiteralValue.Create(GetNanoseconds - StartTime));
   ResultObj.AssignProperty('failedTests', FailedTestDetailsArray);
   ResultObj.AssignProperty('summary', TGocciaStringLiteralValue.Create(Summary));
 

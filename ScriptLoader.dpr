@@ -13,8 +13,8 @@ begin
     WriteLn('Running script: ', FileName);
     ScriptResult := TGocciaEngine.RunScriptFromFile(FileName, TGocciaEngine.DefaultGlobals);
     WriteLn(SysUtils.Format('  Lex: %s | Parse: %s | Execute: %s | Total: %s',
-      [FormatDuration(ScriptResult.LexTimeMicroseconds), FormatDuration(ScriptResult.ParseTimeMicroseconds),
-       FormatDuration(ScriptResult.ExecuteTimeMicroseconds), FormatDuration(ScriptResult.TotalTimeMicroseconds)]));
+      [FormatDuration(ScriptResult.LexTimeNanoseconds), FormatDuration(ScriptResult.ParseTimeNanoseconds),
+       FormatDuration(ScriptResult.ExecuteTimeNanoseconds), FormatDuration(ScriptResult.TotalTimeNanoseconds)]));
     Writeln('Result: ', ScriptResult.Result.ToStringLiteral.Value);
   except
     on E: Exception do

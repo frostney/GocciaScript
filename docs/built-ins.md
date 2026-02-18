@@ -19,7 +19,8 @@ TGocciaGlobalBuiltin = (
   ggSet,              // Set constructor and prototype
   ggMap,              // Map constructor and prototype
   ggTestAssertions,   // describe, test, expect (testing only)
-  ggBenchmark         // suite, bench, runBenchmarks (benchmarking only)
+  ggBenchmark,        // suite, bench, runBenchmarks (benchmarking only)
+  ggTemporal          // Temporal namespace (dates, times, durations, instants)
 );
 ```
 
@@ -27,7 +28,7 @@ The default set used by `ScriptLoader` and `REPL`:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap];
+                  ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal];
 ```
 
 The `TestRunner` adds `ggTestAssertions` to inject the test framework.
@@ -351,6 +352,168 @@ Promise.resolve(1)
   .catch((e) => "recovered") // "recovered"
   .then((v) => v);           // "recovered"
 ```
+
+### Temporal (`Goccia.Builtins.Temporal.pas`)
+
+An implementation of the ECMAScript Temporal API (Stage 3 proposal) providing modern date/time handling. ISO 8601 calendar only. All Temporal types are immutable — operations return new instances.
+
+**Namespace structure:**
+
+```javascript
+Temporal.Now          // Current time utilities
+Temporal.Duration     // Time duration representation
+Temporal.Instant      // Absolute point in time (epoch-based)
+Temporal.PlainDate    // Calendar date (no time/timezone)
+Temporal.PlainTime    // Wall-clock time (no date/timezone)
+Temporal.PlainDateTime // Date + time (no timezone)
+```
+
+#### Temporal.Duration
+
+Represents a length of time with 10 components (years through nanoseconds).
+
+| Constructor / Static | Description |
+|---------------------|-------------|
+| `new Temporal.Duration(y?, mo?, w?, d?, h?, min?, s?, ms?, us?, ns?)` | Create from components (all default to 0) |
+| `Temporal.Duration.from(item)` | Create from string (`"P1Y2M3DT4H5M6S"`), Duration, or object |
+| `Temporal.Duration.compare(one, two)` | Compare two durations (-1, 0, 1) |
+
+| Getter | Description |
+|--------|-------------|
+| `years`, `months`, `weeks`, `days` | Date components |
+| `hours`, `minutes`, `seconds` | Time components |
+| `milliseconds`, `microseconds`, `nanoseconds` | Sub-second components |
+| `sign` | -1, 0, or 1 |
+| `blank` | True if all components are zero |
+
+| Method | Description |
+|--------|-------------|
+| `negated()` | Return negated duration |
+| `abs()` | Return absolute duration |
+| `add(other)` | Add another duration |
+| `subtract(other)` | Subtract another duration |
+| `with(fields)` | Return new duration with overridden fields |
+| `total(unit)` | Convert to total of a single unit (e.g., `"hours"`) |
+| `toString()` / `toJSON()` | ISO 8601 duration string (e.g., `"P1Y2M3DT4H5M6S"`) |
+| `valueOf()` | Throws TypeError (prevents implicit coercion) |
+
+#### Temporal.PlainDate
+
+Represents a calendar date without time or timezone.
+
+| Constructor / Static | Description |
+|---------------------|-------------|
+| `new Temporal.PlainDate(year, month, day)` | Create from components |
+| `Temporal.PlainDate.from(item)` | Create from string (`"2024-03-15"`), PlainDate, or object |
+| `Temporal.PlainDate.compare(one, two)` | Compare two dates (-1, 0, 1) |
+
+| Getter | Description |
+|--------|-------------|
+| `calendarId` | Always `"iso8601"` |
+| `year`, `month`, `day` | Date components |
+| `monthCode` | `"M01"` through `"M12"` |
+| `dayOfWeek` | 1 (Monday) through 7 (Sunday) |
+| `dayOfYear`, `weekOfYear`, `yearOfWeek` | ISO week-date components |
+| `daysInWeek`, `daysInMonth`, `daysInYear`, `monthsInYear` | Calendar info |
+| `inLeapYear` | Boolean |
+
+| Method | Description |
+|--------|-------------|
+| `with(fields)` | Return new date with overridden fields |
+| `add(duration)` / `subtract(duration)` | Date arithmetic |
+| `until(other)` / `since(other)` | Difference as Duration |
+| `equals(other)` | Equality check |
+| `toPlainDateTime(time?)` | Combine with a time |
+| `toString()` / `toJSON()` | ISO date string (e.g., `"2024-03-15"`) |
+| `valueOf()` | Throws TypeError |
+
+#### Temporal.PlainTime
+
+Represents a wall-clock time without date or timezone.
+
+| Constructor / Static | Description |
+|---------------------|-------------|
+| `new Temporal.PlainTime(h?, min?, s?, ms?, us?, ns?)` | Create from components (all default to 0) |
+| `Temporal.PlainTime.from(item)` | Create from string (`"13:45:30"`), PlainTime, or object |
+| `Temporal.PlainTime.compare(one, two)` | Compare two times (-1, 0, 1) |
+
+| Getter | Description |
+|--------|-------------|
+| `hour`, `minute`, `second` | Time components |
+| `millisecond`, `microsecond`, `nanosecond` | Sub-second components |
+
+| Method | Description |
+|--------|-------------|
+| `with(fields)` | Return new time with overridden fields |
+| `add(duration)` / `subtract(duration)` | Time arithmetic (wraps at midnight) |
+| `until(other)` / `since(other)` | Difference as Duration |
+| `round(unit)` | Round to nearest unit |
+| `equals(other)` | Equality check |
+| `toString()` / `toJSON()` | ISO time string (e.g., `"13:45:30"`) |
+| `valueOf()` | Throws TypeError |
+
+#### Temporal.PlainDateTime
+
+Represents a date and time without timezone. Combines PlainDate and PlainTime.
+
+| Constructor / Static | Description |
+|---------------------|-------------|
+| `new Temporal.PlainDateTime(y, mo, d, h?, min?, s?, ms?, us?, ns?)` | Create from components |
+| `Temporal.PlainDateTime.from(item)` | Create from string, PlainDateTime, or object |
+| `Temporal.PlainDateTime.compare(one, two)` | Compare two date-times (-1, 0, 1) |
+
+| Getter | Description |
+|--------|-------------|
+| All PlainDate getters + all PlainTime getters | Combined date and time access |
+
+| Method | Description |
+|--------|-------------|
+| `with(fields)` | Return new date-time with overridden fields |
+| `withPlainTime(time?)` | Replace time component |
+| `add(duration)` / `subtract(duration)` | Date-time arithmetic |
+| `until(other)` / `since(other)` | Difference as Duration |
+| `round(unit)` | Round to nearest unit |
+| `equals(other)` | Equality check |
+| `toPlainDate()` / `toPlainTime()` | Extract date or time component |
+| `toString()` / `toJSON()` | ISO string (e.g., `"2024-03-15T13:45:30"`) |
+| `valueOf()` | Throws TypeError |
+
+#### Temporal.Instant
+
+Represents an absolute point in time (epoch-based), independent of calendar or timezone.
+
+| Constructor / Static | Description |
+|---------------------|-------------|
+| `new Temporal.Instant(epochNanoseconds)` | Create from epoch nanoseconds |
+| `Temporal.Instant.from(item)` | Create from string or Instant |
+| `Temporal.Instant.fromEpochMilliseconds(ms)` | Create from epoch milliseconds |
+| `Temporal.Instant.fromEpochNanoseconds(ns)` | Create from epoch nanoseconds |
+| `Temporal.Instant.compare(one, two)` | Compare two instants (-1, 0, 1) |
+
+| Getter | Description |
+|--------|-------------|
+| `epochMilliseconds` | Milliseconds since Unix epoch |
+| `epochNanoseconds` | Nanoseconds since Unix epoch (as number) |
+
+| Method | Description |
+|--------|-------------|
+| `add(duration)` / `subtract(duration)` | Time arithmetic (no calendar units) |
+| `until(other)` / `since(other)` | Difference as Duration |
+| `round(unit)` | Round to nearest unit |
+| `equals(other)` | Equality check |
+| `toString()` / `toJSON()` | ISO string with UTC (e.g., `"2024-03-15T13:45:30Z"`) |
+| `valueOf()` | Throws TypeError |
+
+#### Temporal.Now
+
+Provides current time in various representations.
+
+| Method | Description |
+|--------|-------------|
+| `Temporal.Now.instant()` | Current time as Instant |
+| `Temporal.Now.plainDateISO()` | Current date as PlainDate |
+| `Temporal.Now.plainTimeISO()` | Current time as PlainTime |
+| `Temporal.Now.plainDateTimeISO()` | Current date-time as PlainDateTime |
 
 ### Test Assertions (`Goccia.Builtins.TestAssertions.pas`)
 

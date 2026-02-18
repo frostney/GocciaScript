@@ -76,9 +76,11 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules) |
 | Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ, VMT-based chain-walking |
 | Keywords | `Goccia.Keywords.pas` | Centralized JavaScript keyword string constants |
-| Timing Utilities | `TimingUtils.pas` | Cross-platform microsecond timing (`GetMicroseconds`) and duration formatting (`FormatDuration`) |
+| Timing Utilities | `TimingUtils.pas` | Cross-platform timing: monotonic (`GetNanoseconds`, `GetMilliseconds`), wall-clock (`GetEpochNanoseconds`), and duration formatting (`FormatDuration`) |
 | Microtask Queue | `Goccia.MicrotaskQueue.pas` | Singleton FIFO queue for deferred Promise reactions, drained after script execution, cleared on exception |
 | Garbage Collector | `Goccia.GarbageCollector.pas` | Mark-and-sweep memory management for runtime values |
+| Temporal Utilities | `Goccia.Temporal.Utils.pas` | ISO 8601 date math helpers, parsing, formatting |
+| Temporal Built-in | `Goccia.Builtins.Temporal.pas` | Temporal namespace, constructors, static methods, Temporal.Now |
 
 ## Development Workflow
 
@@ -196,6 +198,10 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Indentation:** 2 spaces (see `.editorconfig`)
 - **Compiler directives:** All units include `{$I Goccia.inc}`
 
+### Platform Pitfall: `Double(Int64)` on AArch64
+
+On FPC 3.2.2 AArch64, `Double(Int64Var)` performs a bit reinterpretation, not a value conversion. Use implicit promotion instead: `Int64Var * 1.0` or `Int64Var * 1000000.0`. See [docs/code-style.md](docs/code-style.md) for details.
+
 ### Terminology
 
 - **Define** = create a new variable binding (`DefineLexicalBinding`)
@@ -235,7 +241,7 @@ Built-ins are registered by the engine via `TGocciaGlobalBuiltins` flags:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap];
+ ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal];
 ```
 
 The TestRunner adds `ggTestAssertions` for the test framework (`describe`, `test`, `expect`).
