@@ -189,19 +189,33 @@ Additionally, `ResolveIdentifier(Name)` on `TGocciaScope` provides a unified ide
 
 ## Module System
 
-The interpreter supports ES6-style `import`/`export` with module caching and scope isolation:
+The interpreter supports ES module-style `import`/`export` (named exports only) with module caching, scope isolation, and relative path resolution:
 
-1. `import { x } from './module.js'` triggers `LoadModule`.
-2. The module is lexed, parsed, and executed in an isolated child scope (`skModule`) of the global scope. This prevents module-internal variables from leaking into the global scope or other modules.
-3. Exported bindings are extracted from the module scope (not the global scope) and bound in the importing scope.
-4. Modules are cached by resolved path to avoid re-evaluation.
-5. `CheckForModuleReload` supports development-time hot reloading.
+1. `import { x } from './module.js'` triggers `LoadModule(modulePath, importingFilePath)`.
+2. The module path is resolved relative to the importing file's directory via `ResolveModulePath`. Paths must start with `./` or `../`.
+3. For `.js` files: the module is lexed, parsed, and executed in an isolated child scope (`skModule`) of the global scope.
+4. For `.json` files: the file is parsed via `TGocciaJSONParser.Parse` (`Goccia.JSON` unit) and each top-level key becomes a named export. JSON modules skip the lexer/parser/evaluator pipeline entirely.
+5. Exported bindings are extracted from the module scope (JS) or the parsed object (JSON) and bound in the importing scope.
+6. Modules are cached by resolved absolute path to avoid re-evaluation and prevent loading the same file via different relative paths.
+7. `CheckForModuleReload` supports development-time hot reloading.
+8. Circular dependencies are detected via `FLoadingModules` tracking. A module that is still being loaded returns its partially-populated exports table.
+
+**Export forms:**
+
+| Syntax | AST Node | Processing |
+|--------|----------|------------|
+| `export { x, y as z };` | `TGocciaExportDeclaration` | Post-execution: values read from module scope |
+| `export const x = 5;` | `TGocciaExportVariableDeclaration` | Post-execution: declared names read from module scope |
+| `export { x } from './m.js';` | `TGocciaReExportDeclaration` | Post-execution: source module loaded, values copied |
+| `import { x } from './f.json';` | `TGocciaImportDeclaration` | `LoadJsonModule`: parsed JSON, top-level keys as exports |
+
+**Not supported:** `export default`, namespace imports (`import * as`), side-effect imports (`import "module"`), dynamic `import()`.
 
 Scope hierarchy for a module import:
 
 ```
 GlobalScope (built-ins, main script variables)
-├── ModuleScope:./lib.js (module-internal variables, isolated)
+├── ModuleScope:/abs/path/lib.js (module-internal variables, isolated)
 └── (main script continues with imported bindings)
 ```
 

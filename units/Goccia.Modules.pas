@@ -24,7 +24,7 @@ type
     property LastModified: TDateTime read FLastModified write FLastModified;
   end;
 
-  TLoadModuleCallback = function(const APath: string): TGocciaModule of object;
+  TLoadModuleCallback = function(const AModulePath, AImportingFilePath: string): TGocciaModule of object;
 
 implementation
 

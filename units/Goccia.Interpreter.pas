@@ -36,20 +36,19 @@ type
   private
     FGlobalScope: TGocciaGlobalScope;
     FModules: TDictionary<string, TGocciaModule>;
+    FLoadingModules: TDictionary<string, Boolean>;
     FFileName: string;
     FSourceLines: TStringList;
 
-    // Helper methods
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     function CreateEvaluationContext: TGocciaEvaluationContext;
+    function ResolveModulePath(const AModulePath, AImportingFilePath: string): string;
+    function LoadJsonModule(const AResolvedPath: string): TGocciaModule;
   public
-    // Filename and SourceLines are required for error messages with source context.
-    // A future improvement could encapsulate these in a TGocciaSourceInfo record
-    // shared by the lexer, parser, and interpreter.
     constructor Create(const AFileName: string; const ASourceLines: TStringList);
     destructor Destroy; override;
     function Execute(const AProgram: TGocciaProgram): TGocciaValue;
-    function LoadModule(const APath: string): TGocciaModule;
+    function LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
     procedure CheckForModuleReload(const AModule: TGocciaModule);
 
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
@@ -59,7 +58,8 @@ type
 implementation
 
 uses
-  Goccia.GarbageCollector;
+  Goccia.GarbageCollector,
+  Goccia.JSON;
 
 { TGocciaInterpreter }
 
@@ -70,15 +70,15 @@ begin
   FSourceLines := ASourceLines;
   FGlobalScope := TGocciaGlobalScope.Create;
   FModules := TDictionary<string, TGocciaModule>.Create;
+  FLoadingModules := TDictionary<string, Boolean>.Create;
 end;
 
 destructor TGocciaInterpreter.Destroy;
 begin
-  // FGlobalScope is GC-managed when GC is active; only free manually otherwise
   if not Assigned(TGocciaGarbageCollector.Instance) then
     FGlobalScope.Free;
   FModules.Free;
-  // Don't free FSourceLines - we don't own it, it's owned by the caller
+  FLoadingModules.Free;
 
   inherited;
 end;
@@ -89,6 +89,29 @@ begin
   Result.Scope := FGlobalScope;
   Result.OnError := ThrowError;
   Result.LoadModule := LoadModule;
+  Result.CurrentFilePath := FFileName;
+end;
+
+function TGocciaInterpreter.ResolveModulePath(const AModulePath, AImportingFilePath: string): string;
+var
+  BaseDirectory: string;
+begin
+  if (Length(AModulePath) > 0) and (AModulePath[1] = '/') then
+  begin
+    Result := ExpandFileName(AModulePath);
+    Exit;
+  end;
+
+  if (Copy(AModulePath, 1, 2) <> './') and (Copy(AModulePath, 1, 3) <> '../') then
+    raise TGocciaRuntimeError.Create(
+      Format('Import path "%s" must start with "./" or "../"', [AModulePath]),
+      0, 0, AImportingFilePath, nil);
+
+  BaseDirectory := ExtractFilePath(AImportingFilePath);
+  if BaseDirectory = '' then
+    BaseDirectory := GetCurrentDir + PathDelim;
+
+  Result := ExpandFileName(BaseDirectory + AModulePath);
 end;
 
 function TGocciaInterpreter.Execute(const AProgram: TGocciaProgram): TGocciaValue;
@@ -103,8 +126,9 @@ begin
     Result := EvaluateStatement(AProgram.Body[I], Context);
 end;
 
-function TGocciaInterpreter.LoadModule(const APath: string): TGocciaModule;
+function TGocciaInterpreter.LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
 var
+  ResolvedPath: string;
   Source: TStringList;
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -114,56 +138,98 @@ var
   I: Integer;
   Stmt: TGocciaStatement;
   ExportDecl: TGocciaExportDeclaration;
+  ExportVarDecl: TGocciaExportVariableDeclaration;
+  ReExportDecl: TGocciaReExportDeclaration;
   ExportPair: TPair<string, string>;
   Value: TGocciaValue;
   Context: TGocciaEvaluationContext;
+  SourceModule: TGocciaModule;
+  VarInfo: TGocciaVariableInfo;
 begin
-  if FModules.TryGetValue(APath, Result) then
+  ResolvedPath := ResolveModulePath(AModulePath, AImportingFilePath);
+
+  if not FileExists(ResolvedPath) then
+    raise TGocciaRuntimeError.Create(
+      Format('Module not found: "%s" (resolved to "%s")', [AModulePath, ResolvedPath]),
+      0, 0, AImportingFilePath, nil);
+
+  if FModules.TryGetValue(ResolvedPath, Result) then
   begin
-    CheckForModuleReload(Result);
+    if not FLoadingModules.ContainsKey(ResolvedPath) then
+      CheckForModuleReload(Result);
+    Exit;
+  end;
+
+  if LowerCase(ExtractFileExt(ResolvedPath)) = '.json' then
+  begin
+    Result := LoadJsonModule(ResolvedPath);
     Exit;
   end;
 
   Source := TStringList.Create;
   try
-    Source.LoadFromFile(APath);
+    Source.LoadFromFile(ResolvedPath);
 
-    Lexer := TGocciaLexer.Create(Source.Text, APath);
+    Lexer := TGocciaLexer.Create(Source.Text, ResolvedPath);
     try
-      Parser := TGocciaParser.Create(Lexer.ScanTokens, APath, Source);
+      Parser := TGocciaParser.Create(Lexer.ScanTokens, ResolvedPath, Source);
       try
         ProgramNode := Parser.Parse;
         try
-          Module := TGocciaModule.Create(APath);
-          Module.LastModified := FileDateToDateTime(FileAge(APath));
-          FModules.Add(APath, Module);
+          Module := TGocciaModule.Create(ResolvedPath);
+          Module.LastModified := FileDateToDateTime(FileAge(ResolvedPath));
+          FModules.Add(ResolvedPath, Module);
+          FLoadingModules.Add(ResolvedPath, True);
+          try
+            ModuleScope := FGlobalScope.CreateChild(skModule, 'Module:' + ResolvedPath);
+            Context.Scope := ModuleScope;
+            Context.OnError := ThrowError;
+            Context.LoadModule := LoadModule;
+            Context.CurrentFilePath := ResolvedPath;
 
-          // Execute module in its own isolated scope (child of global)
-          ModuleScope := FGlobalScope.CreateChild(skModule, 'Module:' + APath);
-          Context.Scope := ModuleScope;
-          Context.OnError := ThrowError;
-          Context.LoadModule := LoadModule;
+            for I := 0 to ProgramNode.Body.Count - 1 do
+              EvaluateStatement(ProgramNode.Body[I], Context);
 
-          for I := 0 to ProgramNode.Body.Count - 1 do
-            EvaluateStatement(ProgramNode.Body[I], Context);
-
-          // Process exports from the module scope (not global)
-          for I := 0 to ProgramNode.Body.Count - 1 do
-          begin
-            Stmt := ProgramNode.Body[I];
-            if Stmt is TGocciaExportDeclaration then
+            for I := 0 to ProgramNode.Body.Count - 1 do
             begin
-              ExportDecl := TGocciaExportDeclaration(Stmt);
-              for ExportPair in ExportDecl.ExportsTable do
+              Stmt := ProgramNode.Body[I];
+
+              if Stmt is TGocciaExportDeclaration then
               begin
-                Value := ModuleScope.GetValue(ExportPair.Value);
-                if Assigned(Value) then
-                  Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
+                ExportDecl := TGocciaExportDeclaration(Stmt);
+                for ExportPair in ExportDecl.ExportsTable do
+                begin
+                  Value := ModuleScope.GetValue(ExportPair.Value);
+                  if Assigned(Value) then
+                    Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
+                end;
+              end
+              else if Stmt is TGocciaExportVariableDeclaration then
+              begin
+                ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
+                for VarInfo in ExportVarDecl.Declaration.Variables do
+                begin
+                  Value := ModuleScope.GetValue(VarInfo.Name);
+                  if Assigned(Value) then
+                    Module.ExportsTable.AddOrSetValue(VarInfo.Name, Value);
+                end;
+              end
+              else if Stmt is TGocciaReExportDeclaration then
+              begin
+                ReExportDecl := TGocciaReExportDeclaration(Stmt);
+                SourceModule := LoadModule(ReExportDecl.ModulePath, ResolvedPath);
+                for ExportPair in ReExportDecl.ExportsTable do
+                begin
+                  if SourceModule.ExportsTable.TryGetValue(ExportPair.Value, Value) then
+                    Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
+                end;
               end;
             end;
-          end;
 
-          Result := Module;
+            Result := Module;
+          finally
+            FLoadingModules.Remove(ResolvedPath);
+          end;
         finally
           ProgramNode.Free;
         end;
@@ -185,10 +251,53 @@ begin
   CurrentModified := FileDateToDateTime(FileAge(AModule.Path));
   if CurrentModified > AModule.LastModified then
   begin
-    // Reload module
     AModule.ExportsTable.Clear;
     AModule.LastModified := CurrentModified;
-    LoadModule(AModule.Path);
+    LoadModule(AModule.Path, AModule.Path);
+  end;
+end;
+
+function TGocciaInterpreter.LoadJsonModule(const AResolvedPath: string): TGocciaModule;
+var
+  Source: TStringList;
+  Parser: TGocciaJSONParser;
+  ParsedValue: TGocciaValue;
+  Obj: TGocciaObjectValue;
+  Key: string;
+  Module: TGocciaModule;
+begin
+  Source := TStringList.Create;
+  try
+    Source.LoadFromFile(AResolvedPath);
+
+    Parser := TGocciaJSONParser.Create;
+    try
+      try
+        ParsedValue := Parser.Parse(Source.Text);
+      except
+        on E: EGocciaJSONParseError do
+          raise TGocciaRuntimeError.Create(
+            Format('Failed to parse JSON module "%s": %s', [AResolvedPath, E.Message]),
+            0, 0, AResolvedPath, nil);
+      end;
+
+      Module := TGocciaModule.Create(AResolvedPath);
+      Module.LastModified := FileDateToDateTime(FileAge(AResolvedPath));
+
+      if ParsedValue is TGocciaObjectValue then
+      begin
+        Obj := TGocciaObjectValue(ParsedValue);
+        for Key in Obj.GetOwnPropertyKeys do
+          Module.ExportsTable.AddOrSetValue(Key, Obj.GetProperty(Key));
+      end;
+
+      FModules.Add(AResolvedPath, Module);
+      Result := Module;
+    finally
+      Parser.Free;
+    end;
+  finally
+    Source.Free;
   end;
 end;
 

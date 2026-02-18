@@ -231,6 +231,26 @@ type
     property ExportsTable: TDictionary<string, string> read FExportsTable;
   end;
 
+  TGocciaExportVariableDeclaration = class(TGocciaStatement)
+  private
+    FDeclaration: TGocciaVariableDeclaration;
+  public
+    constructor Create(const ADeclaration: TGocciaVariableDeclaration;
+      const ALine, AColumn: Integer);
+    property Declaration: TGocciaVariableDeclaration read FDeclaration;
+  end;
+
+  TGocciaReExportDeclaration = class(TGocciaStatement)
+  private
+    FExportsTable: TDictionary<string, string>; // exported name -> source name
+    FModulePath: string;
+  public
+    constructor Create(const AExportsTable: TDictionary<string, string>;
+      const AModulePath: string; const ALine, AColumn: Integer);
+    property ExportsTable: TDictionary<string, string> read FExportsTable;
+    property ModulePath: string read FModulePath;
+  end;
+
   TGocciaCaseClause = class(TGocciaASTNode)
   private
     FTest: TGocciaExpression;  // Case value expression (nil for default case)
@@ -468,6 +488,25 @@ implementation
   begin
     inherited Create(ALine, AColumn);
     FExportsTable := AExportsTable;
+  end;
+
+  { TGocciaExportVariableDeclaration }
+
+  constructor TGocciaExportVariableDeclaration.Create(const ADeclaration: TGocciaVariableDeclaration;
+    const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FDeclaration := ADeclaration;
+  end;
+
+  { TGocciaReExportDeclaration }
+
+  constructor TGocciaReExportDeclaration.Create(const AExportsTable: TDictionary<string, string>;
+    const AModulePath: string; const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FExportsTable := AExportsTable;
+    FModulePath := AModulePath;
   end;
 
   { TGocciaWhileStatement }
