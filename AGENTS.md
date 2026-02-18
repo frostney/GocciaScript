@@ -235,6 +235,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Uses clauses:** One unit per line, grouped (System > Third-party > Project > Relative), alphabetically sorted within each group, blank line between groups. Units with `in` paths go in Relative; `Goccia.*` in Project; FPC standard library in System; everything else in Third-party. Auto-fixed by `./format.pas`.
 - **Indentation:** 2 spaces (see `.editorconfig`)
 - **Compiler directives:** All units include `{$I Goccia.inc}`
+- **Editor setup:** VSCode/Cursor auto-formats on save via the `runOnSave` extension (configured in `.vscode/settings.json`). Recommended extensions are in `.vscode/extensions.json`.
 - **General rules:** Follow [Embarcadero's Pascal style guide](https://docwiki.embarcadero.com/RADStudio/Athens/en/General_Rules) for casing, keywords, and [type declarations](https://docwiki.embarcadero.com/RADStudio/Athens/en/Type_Declarations)
 
 ### Platform Pitfall: `Double(Int64)` on AArch64
@@ -311,6 +312,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 - CI: Two workflow files — `ci.yml` (main + tags, full matrix, all checks + release) and `pr.yml` (PRs, ubuntu-latest x64 only, JS tests + benchmark comparison comment)
 - Auto-formatter: `./format.pas` (instantfpc script, no build step) — auto-fixes uses clause ordering, PascalCase function names, and parameter `A` prefix naming
 - Pre-commit hook: [Lefthook](https://github.com/evilmartians/lefthook) (`lefthook.yml`) — requires `lefthook install` after cloning
+- Editor setup: `.vscode/settings.json` (format-on-save) + `.vscode/extensions.json` (recommended extensions)
 
 ## Documentation Index
 
