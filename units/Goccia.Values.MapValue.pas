@@ -49,7 +49,7 @@ type
     function ToArray: TGocciaArrayValue;
     function ToStringTag: string; override;
 
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
 
@@ -103,7 +103,7 @@ begin
   inherited;
 end;
 
-procedure TGocciaMapValue.GCMarkReferences;
+procedure TGocciaMapValue.MarkReferences;
 var
   I: Integer;
 begin
@@ -114,9 +114,9 @@ begin
   for I := 0 to FEntries.Count - 1 do
   begin
     if Assigned(FEntries[I].Key) then
-      FEntries[I].Key.GCMarkReferences;
+      FEntries[I].Key.MarkReferences;
     if Assigned(FEntries[I].Value) then
-      FEntries[I].Value.GCMarkReferences;
+      FEntries[I].Value.MarkReferences;
   end;
 end;
 

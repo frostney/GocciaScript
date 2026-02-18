@@ -39,6 +39,26 @@ Overflow and range checks are **enabled** — correctness is prioritized over ra
 | Parameters | `A` prefix (multi-letter only) | `AScope`, `AValue`, `AFileName` |
 | Enums | `TGoccia<Name>` for type, lowercase prefix for values | `TGocciaScopeKind`, `skGlobal` |
 
+### No Abbreviations
+
+Class names, function names, method names, and type names must use **full words** — do not abbreviate. This keeps the codebase consistent and self-documenting.
+
+```pascal
+// Correct
+TGocciaGarbageCollector
+MarkReferences
+IsExternalDeclaration
+DateTimeAdd
+
+// Wrong — abbreviated
+TGocciaGC
+GCMarkReferences
+IsExternalDecl
+DTAdd
+```
+
+**Exceptions:** Industry-standard abbreviations are kept as-is: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
+
 ### Function and Method Names
 
 All `function`, `procedure`, `constructor`, and `destructor` names must be **PascalCase** — the first letter of each word is uppercase, no underscores. This applies to both free functions and class methods:
@@ -279,8 +299,8 @@ begin
   FSharedPrototype := TGocciaObjectValue.Create;
   FPrototypeMethodHost := Self;
   FSharedPrototype.RegisterNativeMethod(...);
-  TGocciaGC.Instance.PinValue(FSharedPrototype);
-  TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
+  TGocciaGarbageCollector.Instance.PinValue(FSharedPrototype);
+  TGocciaGarbageCollector.Instance.PinValue(FPrototypeMethodHost);
 end;
 ```
 

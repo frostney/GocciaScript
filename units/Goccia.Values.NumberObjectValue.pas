@@ -26,7 +26,7 @@ type
     constructor Create(const APrimitive: TGocciaNumberLiteralValue);
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure InitializePrototype;
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
     property Primitive: TGocciaNumberLiteralValue read FPrimitive;
 
     // Number prototype methods
@@ -85,19 +85,19 @@ begin
   FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberValueOf, 'valueOf', 0));
   FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToPrecision, 'toPrecision', 1));
 
-  if Assigned(TGocciaGC.Instance) then
+  if Assigned(TGocciaGarbageCollector.Instance) then
   begin
-    TGocciaGC.Instance.PinValue(FSharedNumberPrototype);
-    TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
+    TGocciaGarbageCollector.Instance.PinValue(FSharedNumberPrototype);
+    TGocciaGarbageCollector.Instance.PinValue(FPrototypeMethodHost);
   end;
 end;
 
-procedure TGocciaNumberObjectValue.GCMarkReferences;
+procedure TGocciaNumberObjectValue.MarkReferences;
 begin
   if GCMarked then Exit;
   inherited;
   if Assigned(FPrimitive) then
-    FPrimitive.GCMarkReferences;
+    FPrimitive.MarkReferences;
 end;
 
 function TGocciaNumberObjectValue.NumberToFixed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

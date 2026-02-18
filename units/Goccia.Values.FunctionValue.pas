@@ -47,7 +47,7 @@ type
 
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue; virtual;
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
 
     property Parameters: TGocciaParameterArray read FParameters;
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
@@ -71,7 +71,7 @@ type
     function CreateCallScope: TGocciaScope; override;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABodyStatements: TObjectList<TGocciaASTNode>; const AClosure: TGocciaScope; const AName: string; const ASuperClass: TGocciaValue = nil);
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
 
     property SuperClass: TGocciaValue read FSuperClass write FSuperClass;
     property OwningClass: TGocciaValue read FOwningClass write FOwningClass;
@@ -116,14 +116,14 @@ begin
   inherited;
 end;
 
-procedure TGocciaFunctionValue.GCMarkReferences;
+procedure TGocciaFunctionValue.MarkReferences;
 begin
   if GCMarked then Exit;
   inherited; // Marks self + object properties/prototype
 
   // Mark the closure scope
   if Assigned(FClosure) then
-    FClosure.GCMarkReferences;
+    FClosure.MarkReferences;
 end;
 
 procedure TGocciaFunctionValue.BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue);
@@ -269,15 +269,15 @@ begin
   CallScope := CreateCallScope;
 
   // Register with GC as an active scope (protects it from collection during execution)
-  if Assigned(TGocciaGC.Instance) then
-    TGocciaGC.Instance.PushActiveScope(CallScope);
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.PushActiveScope(CallScope);
   try
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
   finally
     // Pop active scope from GC stack - the scope may still be alive
     // if captured by closures; the GC will determine reachability
-    if Assigned(TGocciaGC.Instance) then
-      TGocciaGC.Instance.PopActiveScope;
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.PopActiveScope;
   end;
 end;
 
@@ -360,16 +360,16 @@ begin
   Result := TGocciaMethodCallScope.Create(FClosure, FName, FSuperClass, FOwningClass, Length(FParameters) + 2);
 end;
 
-procedure TGocciaMethodValue.GCMarkReferences;
+procedure TGocciaMethodValue.MarkReferences;
 begin
   if GCMarked then Exit;
   inherited; // Marks self + object properties/prototype + closure
 
   // Mark method-specific references
   if Assigned(FSuperClass) then
-    FSuperClass.GCMarkReferences;
+    FSuperClass.MarkReferences;
   if Assigned(FOwningClass) then
-    FOwningClass.GCMarkReferences;
+    FOwningClass.MarkReferences;
 end;
 
 end.

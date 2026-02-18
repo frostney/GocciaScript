@@ -47,7 +47,7 @@ end;
 
 destructor TGocciaGlobalString.Destroy;
 begin
-  if not Assigned(TGocciaGC.Instance) then
+  if not Assigned(TGocciaGarbageCollector.Instance) then
     FStringConstructor.Free;
   inherited;
 end;

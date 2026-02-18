@@ -12,9 +12,9 @@ uses
   Goccia.Values.Primitives;
 
 type
-  TGocciaGC = class
+  TGocciaGarbageCollector = class
   private class var
-    FInstance: TGocciaGC;
+    FInstance: TGocciaGarbageCollector;
   private
     FManagedValues: TList<TGocciaValue>;
     FManagedScopes: TList<TGocciaScope>;
@@ -35,7 +35,7 @@ type
     function GetManagedValueCount: Integer;
     function GetManagedScopeCount: Integer;
   public
-    class function Instance: TGocciaGC;
+    class function Instance: TGocciaGarbageCollector;
     class procedure Initialize;
     class procedure Shutdown;
 
@@ -69,25 +69,25 @@ implementation
 const
   DEFAULT_GC_THRESHOLD = 10000;
 
-{ TGocciaGC }
+{ TGocciaGarbageCollector }
 
-class function TGocciaGC.Instance: TGocciaGC;
+class function TGocciaGarbageCollector.Instance: TGocciaGarbageCollector;
 begin
   Result := FInstance;
 end;
 
-class procedure TGocciaGC.Initialize;
+class procedure TGocciaGarbageCollector.Initialize;
 begin
   if not Assigned(FInstance) then
-    FInstance := TGocciaGC.Create;
+    FInstance := TGocciaGarbageCollector.Create;
 end;
 
-class procedure TGocciaGC.Shutdown;
+class procedure TGocciaGarbageCollector.Shutdown;
 begin
   FreeAndNil(FInstance);
 end;
 
-constructor TGocciaGC.Create;
+constructor TGocciaGarbageCollector.Create;
 begin
   FManagedValues := TList<TGocciaValue>.Create;
   FManagedScopes := TList<TGocciaScope>.Create;
@@ -103,7 +103,7 @@ begin
   FTotalCollections := 0;
 end;
 
-destructor TGocciaGC.Destroy;
+destructor TGocciaGarbageCollector.Destroy;
 begin
   // Don't free managed objects on shutdown - OS reclaims everything.
   // Freeing in arbitrary order could cause use-after-free in destructors.
@@ -116,63 +116,63 @@ begin
   inherited;
 end;
 
-procedure TGocciaGC.RegisterValue(const AValue: TGocciaValue);
+procedure TGocciaGarbageCollector.RegisterValue(const AValue: TGocciaValue);
 begin
   FManagedValues.Add(AValue);
   Inc(FAllocationsSinceLastGC);
 end;
 
-procedure TGocciaGC.UnregisterValue(const AValue: TGocciaValue);
+procedure TGocciaGarbageCollector.UnregisterValue(const AValue: TGocciaValue);
 begin
   FManagedValues.Remove(AValue);
 end;
 
-procedure TGocciaGC.RegisterScope(const AScope: TGocciaScope);
+procedure TGocciaGarbageCollector.RegisterScope(const AScope: TGocciaScope);
 begin
   FManagedScopes.Add(AScope);
   Inc(FAllocationsSinceLastGC);
 end;
 
-procedure TGocciaGC.PinValue(const AValue: TGocciaValue);
+procedure TGocciaGarbageCollector.PinValue(const AValue: TGocciaValue);
 begin
   if not FPinnedValues.ContainsKey(AValue) then
     FPinnedValues.Add(AValue, True);
 end;
 
-procedure TGocciaGC.AddRoot(const AScope: TGocciaScope);
+procedure TGocciaGarbageCollector.AddRoot(const AScope: TGocciaScope);
 begin
   if not FRootScopes.ContainsKey(AScope) then
     FRootScopes.Add(AScope, True);
 end;
 
-procedure TGocciaGC.RemoveRoot(const AScope: TGocciaScope);
+procedure TGocciaGarbageCollector.RemoveRoot(const AScope: TGocciaScope);
 begin
   FRootScopes.Remove(AScope);
 end;
 
-procedure TGocciaGC.PushActiveScope(const AScope: TGocciaScope);
+procedure TGocciaGarbageCollector.PushActiveScope(const AScope: TGocciaScope);
 begin
   FActiveScopeStack.Add(AScope);
 end;
 
-procedure TGocciaGC.PopActiveScope;
+procedure TGocciaGarbageCollector.PopActiveScope;
 begin
   if FActiveScopeStack.Count > 0 then
     FActiveScopeStack.Delete(FActiveScopeStack.Count - 1);
 end;
 
-procedure TGocciaGC.AddTempRoot(const AValue: TGocciaValue);
+procedure TGocciaGarbageCollector.AddTempRoot(const AValue: TGocciaValue);
 begin
   if Assigned(AValue) and not FTempRoots.ContainsKey(AValue) then
     FTempRoots.Add(AValue, True);
 end;
 
-procedure TGocciaGC.RemoveTempRoot(const AValue: TGocciaValue);
+procedure TGocciaGarbageCollector.RemoveTempRoot(const AValue: TGocciaValue);
 begin
   FTempRoots.Remove(AValue);
 end;
 
-procedure TGocciaGC.MarkPhase;
+procedure TGocciaGarbageCollector.MarkPhase;
 var
   I: Integer;
   Value: TGocciaValue;
@@ -186,22 +186,22 @@ begin
 
   // Mark pinned values (singletons - always reachable)
   for Value in FPinnedValues.Keys do
-    Value.GCMarkReferences;
+    Value.MarkReferences;
 
   // Mark from root scopes (global scope etc.)
   for Scope in FRootScopes.Keys do
-    Scope.GCMarkReferences;
+    Scope.MarkReferences;
 
   // Mark from active scope stack (currently executing functions)
   for I := 0 to FActiveScopeStack.Count - 1 do
-    FActiveScopeStack[I].GCMarkReferences;
+    FActiveScopeStack[I].MarkReferences;
 
   // Mark temporary roots (values held by Pascal code outside the scope chain)
   for Value in FTempRoots.Keys do
-    Value.GCMarkReferences;
+    Value.MarkReferences;
 end;
 
-procedure TGocciaGC.SweepPhase;
+procedure TGocciaGarbageCollector.SweepPhase;
 var
   I, WriteIdx: Integer;
   Collected: Integer;
@@ -245,7 +245,7 @@ begin
   FTotalCollected := FTotalCollected + Collected;
 end;
 
-procedure TGocciaGC.Collect;
+procedure TGocciaGarbageCollector.Collect;
 begin
   if FCollecting then Exit;
   FCollecting := True;
@@ -259,18 +259,18 @@ begin
   end;
 end;
 
-procedure TGocciaGC.CollectIfNeeded;
+procedure TGocciaGarbageCollector.CollectIfNeeded;
 begin
   if FEnabled and (FAllocationsSinceLastGC >= FGCThreshold) and not FCollecting then
     Collect;
 end;
 
-function TGocciaGC.GetManagedValueCount: Integer;
+function TGocciaGarbageCollector.GetManagedValueCount: Integer;
 begin
   Result := FManagedValues.Count;
 end;
 
-function TGocciaGC.GetManagedScopeCount: Integer;
+function TGocciaGarbageCollector.GetManagedScopeCount: Integer;
 begin
   Result := FManagedScopes.Count;
 end;

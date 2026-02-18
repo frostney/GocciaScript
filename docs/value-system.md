@@ -84,13 +84,13 @@ Every `TGocciaValue` participates in the mark-and-sweep garbage collector:
 TGocciaValue = class(TInterfacedObject)
   FGCMarked: Boolean;      // Set during mark phase if reachable
   procedure AfterConstruction; override;  // Auto-registers with GC
-  procedure GCMarkReferences; virtual;    // Override to mark referenced values
+  procedure MarkReferences; virtual;    // Override to mark referenced values
   function RuntimeCopy: TGocciaValue; virtual;  // Create a GC-managed copy
 end;
 ```
 
-- **`AfterConstruction`** — Every value auto-registers with `TGocciaGC.Instance` upon creation.
-- **`GCMarkReferences`** — Base implementation sets `GCMarked := True`. Subclasses override this to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements).
+- **`AfterConstruction`** — Every value auto-registers with `TGocciaGarbageCollector.Instance` upon creation.
+- **`MarkReferences`** — Base implementation sets `GCMarked := True`. Subclasses override this to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements).
 - **`RuntimeCopy`** — Creates a fresh GC-managed copy of the value. Used by the evaluator when evaluating literal expressions: AST-owned literal values are not tracked by the GC, so `RuntimeCopy` produces a runtime value that is. The default implementation returns `Self` (for singletons and complex values). Primitives override this: numbers use the `SmallInt` cache for 0-255, booleans return singletons, strings create new instances (cheap due to copy-on-write).
 
 ## Type Discrimination via Virtual Dispatch
@@ -399,7 +399,7 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 - **Thenable adoption** — If a Promise is resolved with another Promise, `SubscribeTo` defers settlement via a microtask (per the spec's PromiseResolveThenableJob) rather than resolving synchronously. For already-settled inner Promises, the settlement is enqueued as a microtask; for pending inner Promises, a reaction is added to the inner's reaction list.
 - **Self-rejection** — Resolving a Promise with itself throws a `TypeError` per ECMAScript spec.
 - **Shared prototype singleton** — All Promise instances share a single class-level prototype (`FSharedPromisePrototype`). Methods (`then`, `catch`, `finally`) are registered once during `InitializePrototype` and pinned with the GC.
-- **GC integration** — `GCMarkReferences` marks the `PromiseResult`, all pending reaction callbacks, and reaction result Promises.
+- **GC integration** — `MarkReferences` marks the `PromiseResult`, all pending reaction callbacks, and reaction result Promises.
 
 ## Functions
 

@@ -49,19 +49,19 @@ type
     function GetMicrosecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetNanosecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
-    function DTWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DTWithPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DTAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DTSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DTUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DTSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DTRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DTEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DTToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DTToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DTValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DTToPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DTToPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeWithPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeToPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DateTimeToPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
   public
@@ -229,19 +229,19 @@ begin
     TGocciaNativeFunctionValue.CreateWithoutPrototype(GetNanosecond, 'nanosecond', 0), nil, [pfConfigurable]));
 
   // Methods
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTWith, 'with', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTWithPlainTime, 'withPlainTime', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTAdd, 'add', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTSubtract, 'subtract', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTUntil, 'until', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTSince, 'since', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTRound, 'round', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTEquals, 'equals', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTToString, 'toString', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTToJSON, 'toJSON', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTValueOf, 'valueOf', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTToPlainDate, 'toPlainDate', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DTToPlainTime, 'toPlainTime', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeWith, 'with', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeWithPlainTime, 'withPlainTime', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeAdd, 'add', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeSubtract, 'subtract', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeUntil, 'until', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeSince, 'since', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeRound, 'round', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeEquals, 'equals', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeToString, 'toString', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeToJSON, 'toJSON', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeValueOf, 'valueOf', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeToPlainDate, 'toPlainDate', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeToPlainTime, 'toPlainTime', 0));
 end;
 
 class procedure TGocciaTemporalPlainDateTimeValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
@@ -384,7 +384,7 @@ end;
 
 { Methods }
 
-function TGocciaTemporalPlainDateTimeValue.DTWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalPlainDateTimeValue;
   Obj: TGocciaObjectValue;
@@ -415,7 +415,7 @@ begin
     GetFieldOr('nanosecond', D.FNanosecond));
 end;
 
-function TGocciaTemporalPlainDateTimeValue.DTWithPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeWithPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalPlainDateTimeValue;
   Arg: TGocciaValue;
@@ -447,7 +447,7 @@ begin
   Result := TGocciaTemporalPlainDateTimeValue.Create(D.FYear, D.FMonth, D.FDay, H, Mi, S, Ms, Us, Ns);
 end;
 
-function TGocciaTemporalPlainDateTimeValue.DTAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalPlainDateTimeValue;
   Dur: TGocciaTemporalDurationValue;
@@ -520,7 +520,7 @@ begin
     Balanced.Millisecond, Balanced.Microsecond, Balanced.Nanosecond);
 end;
 
-function TGocciaTemporalPlainDateTimeValue.DTSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Dur: TGocciaTemporalDurationValue;
   NegDur: TGocciaTemporalDurationValue;
@@ -573,13 +573,13 @@ begin
 
   NewArgs := TGocciaArgumentsCollection.Create([NegDur]);
   try
-    Result := DTAdd(NewArgs, AThisValue);
+    Result := DateTimeAdd(NewArgs, AThisValue);
   finally
     NewArgs.Free;
   end;
 end;
 
-function TGocciaTemporalPlainDateTimeValue.DTUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D, Other: TGocciaTemporalPlainDateTimeValue;
   T1Ns, T2Ns, TotalNs, AbsNs, RemNs: Int64;
@@ -621,7 +621,7 @@ begin
     Sgn * (RemNs mod 1000));
 end;
 
-function TGocciaTemporalPlainDateTimeValue.DTSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D, Other: TGocciaTemporalPlainDateTimeValue;
   NewArgs: TGocciaArgumentsCollection;
@@ -633,14 +633,14 @@ begin
   // since(other) = other.until(this)
   NewArgs := TGocciaArgumentsCollection.Create([D]);
   try
-    UntilResult := TGocciaTemporalDurationValue(DTUntil(NewArgs, Other));
+    UntilResult := TGocciaTemporalDurationValue(DateTimeUntil(NewArgs, Other));
   finally
     NewArgs.Free;
   end;
   Result := UntilResult;
 end;
 
-function TGocciaTemporalPlainDateTimeValue.DTRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalPlainDateTimeValue;
   UnitStr: string;
@@ -708,7 +708,7 @@ begin
     Balanced.Millisecond, Balanced.Microsecond, Balanced.Nanosecond);
 end;
 
-function TGocciaTemporalPlainDateTimeValue.DTEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D, Other: TGocciaTemporalPlainDateTimeValue;
 begin
@@ -723,7 +723,7 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-function TGocciaTemporalPlainDateTimeValue.DTToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalPlainDateTimeValue;
 begin
@@ -733,7 +733,7 @@ begin
     FormatTimeString(D.FHour, D.FMinute, D.FSecond, D.FMillisecond, D.FMicrosecond, D.FNanosecond));
 end;
 
-function TGocciaTemporalPlainDateTimeValue.DTToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalPlainDateTimeValue;
 begin
@@ -743,13 +743,13 @@ begin
     FormatTimeString(D.FHour, D.FMinute, D.FSecond, D.FMillisecond, D.FMicrosecond, D.FNanosecond));
 end;
 
-function TGocciaTemporalPlainDateTimeValue.DTValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   ThrowTypeError('Temporal.PlainDateTime.prototype.valueOf cannot be used; use toString or compare instead');
   Result := nil;
 end;
 
-function TGocciaTemporalPlainDateTimeValue.DTToPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeToPlainDate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalPlainDateTimeValue;
 begin
@@ -757,7 +757,7 @@ begin
   Result := TGocciaTemporalPlainDateValue.Create(D.FYear, D.FMonth, D.FDay);
 end;
 
-function TGocciaTemporalPlainDateTimeValue.DTToPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainDateTimeValue.DateTimeToPlainTime(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D: TGocciaTemporalPlainDateTimeValue;
 begin

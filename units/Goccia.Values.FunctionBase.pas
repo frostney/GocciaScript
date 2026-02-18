@@ -67,7 +67,7 @@ type
     constructor Create(const AOriginalFunction: TGocciaValue; const ABoundThis: TGocciaValue; const ABoundArgs: TObjectList<TGocciaValue>);
     destructor Destroy; override;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
   end;
 
 implementation
@@ -87,8 +87,8 @@ begin
   begin
     FSharedPrototype := TGocciaFunctionSharedPrototype.Create;
     // Pin the shared prototype so the GC never collects it
-    if Assigned(TGocciaGC.Instance) then
-      TGocciaGC.Instance.PinValue(FSharedPrototype);
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.PinValue(FSharedPrototype);
   end;
 
   Self.Prototype := FSharedPrototype;
@@ -334,7 +334,7 @@ begin
     Result := 'bound ';
 end;
 
-procedure TGocciaBoundFunctionValue.GCMarkReferences;
+procedure TGocciaBoundFunctionValue.MarkReferences;
 var
   I: Integer;
 begin
@@ -343,14 +343,14 @@ begin
 
   // Mark the original function and bound this
   if Assigned(FOriginalFunction) then
-    FOriginalFunction.GCMarkReferences;
+    FOriginalFunction.MarkReferences;
   if Assigned(FBoundThis) then
-    FBoundThis.GCMarkReferences;
+    FBoundThis.MarkReferences;
 
   // Mark bound arguments
   for I := 0 to FBoundArgs.Count - 1 do
     if Assigned(FBoundArgs[I]) then
-      FBoundArgs[I].GCMarkReferences;
+      FBoundArgs[I].MarkReferences;
 end;
 
 end.

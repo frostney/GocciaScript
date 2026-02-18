@@ -97,14 +97,14 @@ begin
 
     Promise := TGocciaPromiseValue(Task.ResultPromise);
 
-    if Assigned(TGocciaGC.Instance) then
+    if Assigned(TGocciaGarbageCollector.Instance) then
     begin
       if Assigned(Task.Handler) then
-        TGocciaGC.Instance.AddTempRoot(Task.Handler);
+        TGocciaGarbageCollector.Instance.AddTempRoot(Task.Handler);
       if Assigned(Task.Value) then
-        TGocciaGC.Instance.AddTempRoot(Task.Value);
+        TGocciaGarbageCollector.Instance.AddTempRoot(Task.Value);
       if Assigned(Promise) then
-        TGocciaGC.Instance.AddTempRoot(Promise);
+        TGocciaGarbageCollector.Instance.AddTempRoot(Promise);
     end;
 
     try
@@ -145,14 +145,14 @@ begin
         end;
       end;
     finally
-      if Assigned(TGocciaGC.Instance) then
+      if Assigned(TGocciaGarbageCollector.Instance) then
       begin
         if Assigned(Task.Handler) then
-          TGocciaGC.Instance.RemoveTempRoot(Task.Handler);
+          TGocciaGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
         if Assigned(Task.Value) then
-          TGocciaGC.Instance.RemoveTempRoot(Task.Value);
+          TGocciaGarbageCollector.Instance.RemoveTempRoot(Task.Value);
         if Assigned(Promise) then
-          TGocciaGC.Instance.RemoveTempRoot(Promise);
+          TGocciaGarbageCollector.Instance.RemoveTempRoot(Promise);
       end;
     end;
   end;
@@ -166,12 +166,12 @@ var
   I: Integer;
   Task: TGocciaMicrotask;
 begin
-  if Assigned(TGocciaGC.Instance) then
+  if Assigned(TGocciaGarbageCollector.Instance) then
     for I := 0 to FQueue.Count - 1 do
     begin
       Task := FQueue[I];
       if Assigned(Task.Handler) then
-        TGocciaGC.Instance.RemoveTempRoot(Task.Handler);
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
     end;
   FQueue.Clear;
 end;

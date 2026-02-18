@@ -63,8 +63,8 @@ begin
   GSharedToString := TGocciaNativeFunctionValue.CreateWithoutPrototype(
     GMethodHost.SymbolToString, 'toString', 0);
 
-  if Assigned(TGocciaGC.Instance) then
-    TGocciaGC.Instance.PinValue(GSharedToString);
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.PinValue(GSharedToString);
 end;
 
 constructor TGocciaSymbolValue.Create(const ADescription: string);

@@ -409,7 +409,7 @@ Represents a length of time with 10 components (years through nanoseconds).
 | `add(other)` | Add another duration |
 | `subtract(other)` | Subtract another duration |
 | `with(fields)` | Return new duration with overridden fields |
-| `total(unit)` | Convert to total of a single unit (e.g., `"hours"`) |
+| `total(unit)` | Convert to total of a single unit (e.g., `"hours"`). Accepts a string or options object `{ unit, relativeTo? }`. Throws `RangeError` if duration has non-zero years/months without `relativeTo`. Calendar-relative conversion (`relativeTo`) is not yet supported. |
 | `toString()` / `toJSON()` | ISO 8601 duration string (e.g., `"P1Y2M3DT4H5M6S"`) |
 | `valueOf()` | Throws TypeError (prevents implicit coercion) |
 
@@ -563,7 +563,7 @@ describe("group name", () => {
 | `.toContain(item)` | Array/Set element or string substring |
 | `.toBeInstanceOf(class)` | instanceof check |
 | `.toHaveLength(n)` | Length check |
-| `.toHaveProperty(name)` | Property exists |
+| `.toHaveProperty(name)` | Property exists on an object. Non-object values always fail; negated (`not.toHaveProperty`) on non-objects passes. |
 | `.toThrow(ErrorType?)` | Throws an error (optionally checks error constructor) |
 | `.toBeCloseTo(n, digits?)` | Approximate equality |
 

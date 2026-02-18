@@ -32,7 +32,7 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
 
     procedure InitializePrototype;
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
     property Primitive: TGocciaStringLiteralValue read FPrimitive;
 
     // String prototype methods
@@ -103,12 +103,12 @@ begin
   inherited Destroy;
 end;
 
-procedure TGocciaStringObjectValue.GCMarkReferences;
+procedure TGocciaStringObjectValue.MarkReferences;
 begin
   if GCMarked then Exit;
   inherited;
   if Assigned(FPrimitive) then
-    FPrimitive.GCMarkReferences;
+    FPrimitive.MarkReferences;
 end;
 
 function TGocciaStringObjectValue.TypeName: string;
@@ -174,10 +174,10 @@ begin
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringConcat, 'concat', 1));
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringAt, 'at', 1));
 
-  if Assigned(TGocciaGC.Instance) then
+  if Assigned(TGocciaGarbageCollector.Instance) then
   begin
-    TGocciaGC.Instance.PinValue(FSharedStringPrototype);
-    TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
+    TGocciaGarbageCollector.Instance.PinValue(FSharedStringPrototype);
+    TGocciaGarbageCollector.Instance.PinValue(FPrototypeMethodHost);
   end;
 end;
 
@@ -649,7 +649,7 @@ begin
   end;
 
   ResultArray := TGocciaArrayValue.Create;
-  TGocciaGC.Instance.AddTempRoot(ResultArray);
+  TGocciaGarbageCollector.Instance.AddTempRoot(ResultArray);
   try
     if StringValue = '' then
     begin
@@ -699,7 +699,7 @@ begin
 
     Result := ResultArray;
   finally
-    TGocciaGC.Instance.RemoveTempRoot(ResultArray);
+    TGocciaGarbageCollector.Instance.RemoveTempRoot(ResultArray);
   end;
 end;
 

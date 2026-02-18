@@ -87,7 +87,7 @@ type
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function Includes(const AValue: TGocciaValue; AFromIndex: Integer = 0): Boolean;
 
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
 
     property Elements: TObjectList<TGocciaValue> read FElements;
   end;
@@ -249,10 +249,10 @@ begin
   FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFill, 'fill', 1));
   FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayAt, 'at', 1));
 
-  if Assigned(TGocciaGC.Instance) then
+  if Assigned(TGocciaGarbageCollector.Instance) then
   begin
-    TGocciaGC.Instance.PinValue(FSharedArrayPrototype);
-    TGocciaGC.Instance.PinValue(FPrototypeMethodHost);
+    TGocciaGarbageCollector.Instance.PinValue(FSharedArrayPrototype);
+    TGocciaGarbageCollector.Instance.PinValue(FPrototypeMethodHost);
   end;
 end;
 
@@ -262,7 +262,7 @@ begin
   inherited;
 end;
 
-procedure TGocciaArrayValue.GCMarkReferences;
+procedure TGocciaArrayValue.MarkReferences;
 var
   I: Integer;
 begin
@@ -273,7 +273,7 @@ begin
   for I := 0 to FElements.Count - 1 do
   begin
     if Assigned(FElements[I]) then
-      FElements[I].GCMarkReferences;
+      FElements[I].MarkReferences;
   end;
 end;
 

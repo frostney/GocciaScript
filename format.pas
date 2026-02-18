@@ -393,7 +393,7 @@ begin
     Result := NamePart;
 end;
 
-function IsExternalDecl(const ALines: TStringList; AStartLine: Integer): Boolean;
+function IsExternalDeclaration(const ALines: TStringList; AStartLine: Integer): Boolean;
 var
   DeclText: string;
   K, Depth: Integer;
@@ -658,7 +658,7 @@ begin
   try
     for I := 0 to ALines.Count - 1 do
     begin
-      if IsFuncDeclStart(ALines[I]) and not IsExternalDecl(ALines, I) then
+      if IsFuncDeclStart(ALines[I]) and not IsExternalDeclaration(ALines, I) then
       begin
         FuncName := ExtractFuncName(ALines[I]);
         if (FuncName <> '') and not IsPascalCase(FuncName) then
@@ -822,7 +822,7 @@ begin
   I := 0;
   while I < ALines.Count do
   begin
-    if IsFuncDeclStart(ALines[I]) and not IsExternalDecl(ALines, I) then
+    if IsFuncDeclStart(ALines[I]) and not IsExternalDeclaration(ALines, I) then
     begin
       DeclEnd := FindDeclEnd(ALines, I);
 
