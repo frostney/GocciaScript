@@ -227,9 +227,19 @@ String prototype methods are implemented on string values:
 
 `charAt`, `charCodeAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `replace`, `replaceAll`, `split`, `padStart`, `padEnd`, `concat`, `at`
 
-### Global Constants and Error Constructors (`Goccia.Builtins.Globals.pas`)
+### Global Constants, Functions, and Error Constructors (`Goccia.Builtins.Globals.pas`)
+
+These are always registered (not flag-gated).
 
 **Constants:** `undefined`, `NaN`, `Infinity`
+
+**Global functions:**
+
+| Function | Description |
+|----------|-------------|
+| `queueMicrotask(callback)` | Enqueue a callback to run as a microtask. Throws `TypeError` if the argument is not callable. |
+
+`queueMicrotask` shares the same microtask queue used by Promise reactions. Callbacks run after the current synchronous code completes but before the engine returns control. If a callback throws, the error is silently discarded and remaining microtasks still execute.
 
 **Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`
 

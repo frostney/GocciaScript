@@ -16,18 +16,19 @@ type
     FReferenceErrorProto: TGocciaObjectValue;
     FRangeErrorProto: TGocciaObjectValue;
   protected
-    // Error constructors
     function ErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function TypeErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function ReferenceErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function RangeErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function QueueMicrotaskCallback(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
 
 implementation
 
-uses Goccia.Values.ClassHelper, Goccia.Values.ErrorHelper;
+uses Goccia.Values.ClassHelper, Goccia.Values.ErrorHelper,
+  Goccia.MicrotaskQueue, Goccia.GarbageCollector;
 
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -78,6 +79,10 @@ begin
   AScope.DefineLexicalBinding('TypeError', TypeErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding('ReferenceError', ReferenceErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding('RangeError', RangeErrorConstructorFunc, dtConst);
+
+  // Global functions
+  AScope.DefineLexicalBinding('queueMicrotask',
+    TGocciaNativeFunctionValue.Create(QueueMicrotaskCallback, 'queueMicrotask', 1), dtConst);
 
   // Note: parseInt, parseFloat, isNaN, isFinite are intentionally NOT registered as globals.
   // They are available only on the Number object (e.g. Number.parseInt, Number.isNaN).
@@ -142,6 +147,30 @@ begin
   ErrorObj := CreateErrorObject('RangeError', Message);
   ErrorObj.Prototype := FRangeErrorProto;
   Result := ErrorObj;
+end;
+
+function TGocciaGlobals.QueueMicrotaskCallback(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+var
+  Callback: TGocciaValue;
+  Task: TGocciaMicrotask;
+begin
+  if Args.Length = 0 then
+    ThrowTypeError('Failed to execute ''queueMicrotask'': 1 argument required, but only 0 present.');
+
+  Callback := Args.GetElement(0);
+  if not Callback.IsCallable then
+    ThrowTypeError('Failed to execute ''queueMicrotask'': parameter 1 is not of type ''Function''.');
+
+  Task.Handler := Callback;
+  Task.ResultPromise := nil;
+  Task.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Task.ReactionType := prtFulfill;
+
+  if Assigned(TGocciaGC.Instance) then
+    TGocciaGC.Instance.AddTempRoot(Callback);
+  TGocciaMicrotaskQueue.Instance.Enqueue(Task);
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 end.
