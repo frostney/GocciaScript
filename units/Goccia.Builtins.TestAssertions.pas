@@ -26,7 +26,7 @@ type
   TGocciaTestAssertions = class;
 
   // Class to hold registered test suites (instead of record)
-  TTestSuite = class
+  TGocciaTestSuite = class
   public
     Name: string;
     SuiteFunction: TGocciaFunctionValue;
@@ -34,7 +34,7 @@ type
   end;
 
   // Class to hold registered tests (instead of record)
-  TTestCase = class
+  TGocciaTestCase = class
   public
     Name: string;
     TestFunction: TGocciaFunctionValue;
@@ -91,8 +91,8 @@ type
       TotalAssertionCount: Integer;        // Total assertions across all tests
     end;
 
-    FRegisteredSuites: TObjectList<TTestSuite>;
-    FRegisteredTests: TObjectList<TTestCase>;
+    FRegisteredSuites: TObjectList<TGocciaTestSuite>;
+    FRegisteredTests: TObjectList<TGocciaTestCase>;
     FBeforeEachCallbacks: TGocciaArgumentsCollection;
     FAfterEachCallbacks: TGocciaArgumentsCollection;
 
@@ -139,18 +139,18 @@ uses
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue;
 
-{ TTestSuite }
+{ TGocciaTestSuite }
 
-constructor TTestSuite.Create(const AName: string; const ASuiteFunction: TGocciaFunctionValue);
+constructor TGocciaTestSuite.Create(const AName: string; const ASuiteFunction: TGocciaFunctionValue);
 begin
   inherited Create;
   Name := AName;
   SuiteFunction := ASuiteFunction;
 end;
 
-{ TTestCase }
+{ TGocciaTestCase }
 
-constructor TTestCase.Create(const AName: string; const ATestFunction: TGocciaFunctionValue; const ASuiteName: string; const AIsSkipped: Boolean = False);
+constructor TGocciaTestCase.Create(const AName: string; const ATestFunction: TGocciaFunctionValue; const ASuiteName: string; const AIsSkipped: Boolean = False);
 begin
   inherited Create;
   Name := AName;
@@ -708,7 +708,15 @@ var
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toHaveProperty', FTestAssertions.ThrowError);
 
-  HasProperty := (FActualValue as TGocciaObjectValue).HasProperty(AArgs.GetElement(0).ToStringLiteral.Value);
+  if not (FActualValue is TGocciaObjectValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
+      'Expected an object but received ' + FActualValue.ToStringLiteral.Value);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  HasProperty := TGocciaObjectValue(FActualValue).HasProperty(AArgs.GetElement(0).ToStringLiteral.Value);
 
   if FIsNegated then
     HasProperty := not HasProperty;
@@ -992,8 +1000,8 @@ var
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FRegisteredSuites := TObjectList<TTestSuite>.Create;
-  FRegisteredTests := TObjectList<TTestCase>.Create;
+  FRegisteredSuites := TObjectList<TGocciaTestSuite>.Create;
+  FRegisteredTests := TObjectList<TGocciaTestCase>.Create;
   FBeforeEachCallbacks := TGocciaArgumentsCollection.Create;
   FAfterEachCallbacks := TGocciaArgumentsCollection.Create;
 
@@ -1129,7 +1137,7 @@ function TGocciaTestAssertions.Describe(const AArgs: TGocciaArgumentsCollection;
 var
   SuiteName: string;
   SuiteFunction: TGocciaFunctionValue;
-  Suite: TTestSuite;
+  Suite: TGocciaTestSuite;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'describe', ThrowError);
 
@@ -1143,7 +1151,7 @@ begin
   SuiteFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
 
   // Just register the test suite - do NOT execute it until runTests() is called
-  Suite := TTestSuite.Create(SuiteName, SuiteFunction);
+  Suite := TGocciaTestSuite.Create(SuiteName, SuiteFunction);
   FRegisteredSuites.Add(Suite);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1153,7 +1161,7 @@ function TGocciaTestAssertions.Test(const AArgs: TGocciaArgumentsCollection; con
 var
   TestName: string;
   TestFunction: TGocciaFunctionValue;
-  TestCase: TTestCase;
+  TestCase: TGocciaTestCase;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'test', ThrowError);
 
@@ -1167,7 +1175,7 @@ begin
   TestFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
 
   // Register the test with the current suite name
-  TestCase := TTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName);
+  TestCase := TGocciaTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName);
   FRegisteredTests.Add(TestCase);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1183,7 +1191,7 @@ function TGocciaTestAssertions.Skip(const AArgs: TGocciaArgumentsCollection; con
 var
   TestName: string;
   TestFunction: TGocciaFunctionValue;
-  TestCase: TTestCase;
+  TestCase: TGocciaTestCase;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'test.skip', ThrowError);
 
@@ -1197,7 +1205,7 @@ begin
   TestFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
 
   // Register the test as skipped with the current suite name
-  TestCase := TTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName, True);
+  TestCase := TGocciaTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName, True);
   FRegisteredTests.Add(TestCase);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1231,8 +1239,8 @@ function TGocciaTestAssertions.RunTests(const AArgs: TGocciaArgumentsCollection;
 var
   I: Integer;
   StartTime: Int64;
-  Suite: TTestSuite;
-  TestCase: TTestCase;
+  Suite: TGocciaTestSuite;
+  TestCase: TGocciaTestCase;
   EmptyArgs: TGocciaArgumentsCollection;
   ResultObj: TGocciaObjectValue;
   ExitOnFirstFailure: Boolean = False;
