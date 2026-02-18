@@ -1,0 +1,9 @@
+{
+  "runOnSave.commands": [
+    {
+      "match": ".*\\.(pas|dpr)$",
+      "command": "cd \"${workspaceFolder}\" && ./format.pas \"${file}\"",
+      "runIn": "backend"
+    }
+  ]
+}

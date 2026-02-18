@@ -195,14 +195,26 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 
 ## Contributing
 
-After cloning, install [Lefthook](https://github.com/evilmartians/lefthook) to enable the pre-commit auto-formatter:
+### Editor Setup
+
+Open the project in **VSCode** or **Cursor** and accept the prompt to install recommended extensions. This gives you:
+
+- Pascal syntax highlighting and code navigation
+- Auto-formatting on save via `./format.pas`
+- EditorConfig support for consistent whitespace
+
+No manual configuration needed — `.vscode/settings.json` and `.vscode/extensions.json` are included in the repository.
+
+### Pre-commit Hook
+
+Install [Lefthook](https://github.com/evilmartians/lefthook) to enable the pre-commit auto-formatter:
 
 ```bash
 brew install lefthook   # macOS — see docs/code-style.md for other platforms
 lefthook install
 ```
 
-See [Code Style](docs/code-style.md) for conventions and [AGENTS.md](AGENTS.md) for the full development workflow.
+See [Code Style](docs/code-style.md) for conventions, editor configuration, and [AGENTS.md](AGENTS.md) for the full development workflow.
 
 ## Roadmap
 

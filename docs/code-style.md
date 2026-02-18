@@ -401,6 +401,8 @@ All of the following are **auto-fixed** (not just warned about):
 
 ## Editor Configuration
 
+### `.editorconfig`
+
 The project uses `.editorconfig` for consistent formatting:
 
 - **Indent:** 2 spaces (no tabs)
@@ -408,3 +410,38 @@ The project uses `.editorconfig` for consistent formatting:
 - **Trailing whitespace:** trimmed
 - **Final newline:** inserted
 - **Charset:** UTF-8
+
+### VSCode / Cursor Setup
+
+The repository includes `.vscode/settings.json` and `.vscode/extensions.json` for a zero-config experience in VSCode and Cursor.
+
+#### Recommended Extensions
+
+Open the project and accept the "Install Recommended Extensions" prompt, or install them manually:
+
+| Extension | ID | Purpose |
+|-----------|----|---------|
+| Pascal | `alefragnani.pascal` | Syntax highlighting, code navigation, and symbol search for Pascal/Delphi |
+| Run on Save | `emeraldwalk.RunOnSave` | Triggers `./format.pas` automatically when a `.pas` or `.dpr` file is saved |
+| EditorConfig | `editorconfig.editorconfig` | Applies `.editorconfig` rules (indent size, line endings, etc.) |
+
+These are declared in `.vscode/extensions.json` so VSCode/Cursor will prompt to install them on first open.
+
+#### Format on Save
+
+`.vscode/settings.json` configures the [Run on Save](https://marketplace.visualstudio.com/items?itemName=emeraldwalk.RunOnSave) extension to run `./format.pas` on every `.pas` and `.dpr` file when saved. This keeps code style consistent without manual intervention — the formatter fixes uses clause ordering, PascalCase naming, parameter prefixes, and stray spaces in the background.
+
+The `runOnSave` command runs silently (`"runIn": "backend"`), so it will not open a terminal or interrupt your workflow. The file is re-read by the editor after formatting, so changes appear immediately.
+
+> **Note:** This requires `instantfpc` (ships with FreePascal) to be on your `PATH`. If you installed FreePascal via the methods in [Getting Started](../README.md#getting-started), this is already the case.
+
+#### How the Layers Work Together
+
+| Layer | When it runs | What it does |
+|-------|-------------|--------------|
+| `.editorconfig` | While typing | Sets indent size, line endings, trailing whitespace, charset |
+| `runOnSave` | On file save | Runs `./format.pas` to auto-fix code conventions |
+| Lefthook pre-commit | On `git commit` | Runs `./format.pas` on staged files as a safety net |
+| CI `--check` | On push / PR | Fails the build if any file needs formatting |
+
+All four layers enforce the same rules, providing defence in depth. The typical developer experience is: EditorConfig handles whitespace while you type, format-on-save fixes everything else when you save, and the pre-commit hook and CI catch anything that slips through.
