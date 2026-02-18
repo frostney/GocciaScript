@@ -48,6 +48,8 @@ var
 function TSymbolMethodHost.SymbolToString(Args: TGocciaArgumentsCollection;
   ThisValue: TGocciaValue): TGocciaValue;
 begin
+  if not (ThisValue is TGocciaSymbolValue) then
+    ThrowTypeError('Symbol.prototype.toString requires that ''this'' be a Symbol');
   Result := ThisValue.ToStringLiteral;
 end;
 

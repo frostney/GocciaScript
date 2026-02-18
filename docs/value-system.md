@@ -249,13 +249,19 @@ Each symbol has a globally unique `Id` assigned at creation. Type coercion follo
 **Implicit coercion restrictions:** Symbols cannot be implicitly converted to strings or numbers. Any operation that triggers implicit coercion throws a `TypeError`:
 
 - **String coercion** — Template literals (`` `${symbol}` ``), string concatenation (`"" + symbol`), `String.prototype.concat`
-- **Number coercion** — Arithmetic operators (`+`, `-`, `*`, `/`, `%`, `**`), unary `+`/`-`, bitwise operators (`|`, `&`, `^`, `~`, `<<`, `>>`, `>>>`), relational comparisons (`<`, `>`, `<=`, `>=`), `Number(symbol)`
+- **Number coercion** — Arithmetic operators (`+`, `-`, `*`, `/`, `%`, `**`), bitwise operators (`|`, `&`, `^`, `~`, `<<`, `>>`, `>>>`), relational comparisons (`<`, `>`, `<=`, `>=`)
 
 **Explicit conversions that work:**
 
 - `String(symbol)` — Returns the descriptive string (e.g., `"Symbol(foo)")`. Uses `ToStringLiteral` internally.
+- `symbol.toString()` — Same result as `String(symbol)`.
 - `Boolean(symbol)` — Returns `true`.
 - `typeof symbol` — Returns `"symbol"`.
+
+**Explicit conversions that throw:**
+
+- `Number(symbol)` — Throws `TypeError`. Internally, `ToNumberLiteral` raises the error.
+- Unary `+symbol` / `-symbol` — Throws `TypeError` (these trigger `ToNumberLiteral`).
 
 The implicit coercion checks are implemented at the operator level (in `Goccia.Evaluator.Arithmetic.pas`, `Goccia.Evaluator.pas`, and `Goccia.Values.StringObjectValue.pas`) rather than in `ToStringLiteral`, because `ToStringLiteral` is also used internally for property keys and display purposes where conversion must succeed.
 

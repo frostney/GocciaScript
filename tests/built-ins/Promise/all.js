@@ -70,3 +70,29 @@ test("Promise.all with multiple rejections only catches first", () => {
     expect(e).toBe("first");
   });
 });
+
+test("Promise.all with string iterates characters", () => {
+  return Promise.all("hello").then((result) => {
+    expect(result).toEqual(["h", "e", "l", "l", "o"]);
+  });
+});
+
+test("Promise.all with Set iterates values", () => {
+  return Promise.all(new Set([1, 2, 3])).then((result) => {
+    expect(result).toEqual([1, 2, 3]);
+  });
+});
+
+test("Promise.all with Set of promises", () => {
+  const s = new Set([Promise.resolve("a"), Promise.resolve("b")]);
+  return Promise.all(s).then((result) => {
+    expect(result).toEqual(["a", "b"]);
+  });
+});
+
+test("Promise.all with Map iterates entries", () => {
+  const m = new Map([["x", 1], ["y", 2]]);
+  return Promise.all(m).then((result) => {
+    expect(result).toEqual([["x", 1], ["y", 2]]);
+  });
+});

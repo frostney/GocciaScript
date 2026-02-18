@@ -347,7 +347,7 @@ If a test returns a rejected Promise, the test framework automatically fails the
 
 **Thenable adoption:** Resolving a Promise with another Promise causes it to adopt the inner Promise's state. Resolving a Promise with itself throws a `TypeError` ("Chaining cycle detected for promise"), matching ECMAScript spec behavior.
 
-**Error validation:** Static combinator methods (`Promise.all`, `Promise.allSettled`, `Promise.race`, `Promise.any`) return a rejected Promise with a `TypeError` when called with a non-iterable argument (number, string, null, undefined, plain object). This matches ECMAScript spec behavior where the rejection is asynchronous rather than a synchronous throw.
+**Error validation:** Static combinator methods (`Promise.all`, `Promise.allSettled`, `Promise.race`, `Promise.any`) accept any iterable argument (arrays, strings, Sets, Maps). Non-iterable arguments (numbers, booleans, null, undefined, plain objects) cause the returned Promise to reject with a `TypeError`, matching ECMAScript spec behavior where the rejection is asynchronous rather than a synchronous throw.
 
 **Chaining and error recovery:**
 

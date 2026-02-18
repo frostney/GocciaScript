@@ -64,3 +64,12 @@ test("symbol.description returns the description", () => {
   expect(Symbol("foo").description).toBe("foo");
   expect(Symbol().description).toBe(undefined);
 });
+
+test("symbol.toString with non-symbol receiver throws TypeError", () => {
+  const fn = Symbol("foo").toString;
+  expect(() => fn.call(42)).toThrow(TypeError);
+  expect(() => fn.call("hello")).toThrow(TypeError);
+  expect(() => fn.call({})).toThrow(TypeError);
+  expect(() => fn.call(null)).toThrow(TypeError);
+  expect(() => fn.call(undefined)).toThrow(TypeError);
+});

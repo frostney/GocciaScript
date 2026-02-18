@@ -33,6 +33,7 @@ implementation
 
 uses
   Goccia.Values.FunctionBase, Goccia.Values.Error, Goccia.Values.ErrorHelper,
+  Goccia.Values.SetValue, Goccia.Values.MapValue,
   Goccia.GarbageCollector, Goccia.MicrotaskQueue;
 
 type
@@ -514,10 +515,23 @@ end;
 function TGocciaGlobalPromise.ExtractPromiseArray(Args: TGocciaArgumentsCollection): TGocciaArrayValue;
 var
   Iterable: TGocciaValue;
+  Str: string;
+  I: Integer;
 begin
   Iterable := Args.GetElement(0);
   if Iterable is TGocciaArrayValue then
     Result := TGocciaArrayValue(Iterable)
+  else if Iterable is TGocciaStringLiteralValue then
+  begin
+    Str := TGocciaStringLiteralValue(Iterable).Value;
+    Result := TGocciaArrayValue.Create;
+    for I := 1 to Length(Str) do
+      Result.Elements.Add(TGocciaStringLiteralValue.Create(Str[I]));
+  end
+  else if Iterable is TGocciaSetValue then
+    Result := TGocciaSetValue(Iterable).ToArray
+  else if Iterable is TGocciaMapValue then
+    Result := TGocciaMapValue(Iterable).ToArray
   else
   begin
     Goccia.Values.ErrorHelper.ThrowTypeError(

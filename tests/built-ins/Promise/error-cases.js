@@ -13,14 +13,6 @@ test("Promise.all with number rejects with TypeError", () => {
   });
 });
 
-test("Promise.all with string rejects with TypeError", () => {
-  return Promise.all("hello").then(() => {
-    throw new Error("Expected rejection");
-  }).catch((e) => {
-    expect(e.name).toBe("TypeError");
-  });
-});
-
 test("Promise.all with null rejects with TypeError", () => {
   return Promise.all(null).then(() => {
     throw new Error("Expected rejection");

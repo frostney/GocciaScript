@@ -18,7 +18,7 @@ function EvaluateInOperator(Left, Right: TGocciaValue): TGocciaValue;
 
 implementation
 
-uses Goccia.Values.ErrorHelper;
+uses Goccia.Values.ErrorHelper, Goccia.Values.SymbolValue;
 
 function EvaluateTypeof(Operand: TGocciaValue): TGocciaValue;
 begin
@@ -136,6 +136,20 @@ begin
   if Right.IsPrimitive then
     ThrowTypeError('Cannot use ''in'' operator to search for ''' +
       Left.ToStringLiteral.Value + ''' in ' + Right.ToStringLiteral.Value);
+
+  if Left is TGocciaSymbolValue then
+  begin
+    if Right is TGocciaObjectValue then
+    begin
+      if TGocciaObjectValue(Right).HasSymbolProperty(TGocciaSymbolValue(Left)) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+    Exit;
+  end;
 
   PropertyName := Left.ToStringLiteral.Value;
 
