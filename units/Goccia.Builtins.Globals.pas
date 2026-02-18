@@ -28,7 +28,7 @@ type
 implementation
 
 uses Goccia.Values.ClassHelper, Goccia.Values.ErrorHelper,
-  Goccia.MicrotaskQueue;
+  Goccia.MicrotaskQueue, Goccia.GarbageCollector;
 
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -166,6 +166,8 @@ begin
   Task.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   Task.ReactionType := prtFulfill;
 
+  if Assigned(TGocciaGC.Instance) then
+    TGocciaGC.Instance.AddTempRoot(Callback);
   TGocciaMicrotaskQueue.Instance.Enqueue(Task);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;

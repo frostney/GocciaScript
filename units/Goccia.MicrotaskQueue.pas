@@ -156,7 +156,17 @@ begin
 end;
 
 procedure TGocciaMicrotaskQueue.ClearQueue;
+var
+  I: Integer;
+  Task: TGocciaMicrotask;
 begin
+  if Assigned(TGocciaGC.Instance) then
+    for I := 0 to FQueue.Count - 1 do
+    begin
+      Task := FQueue[I];
+      if Assigned(Task.Handler) then
+        TGocciaGC.Instance.RemoveTempRoot(Task.Handler);
+    end;
   FQueue.Clear;
 end;
 
