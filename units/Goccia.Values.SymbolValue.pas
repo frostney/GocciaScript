@@ -29,7 +29,7 @@ type
 implementation
 
 uses
-  Goccia.Values.Constants;
+  Goccia.Values.Constants, Goccia.Values.ErrorHelper;
 
 var
   GNextSymbolId: Integer = 0;
@@ -59,7 +59,8 @@ end;
 
 function TGocciaSymbolValue.ToNumberLiteral: TGocciaNumberLiteralValue;
 begin
-  Result := TGocciaNumberLiteralValue.NaNValue;
+  ThrowTypeError('Cannot convert a Symbol value to a number');
+  Result := nil;
 end;
 
 function TGocciaSymbolValue.ToStringLiteral: TGocciaStringLiteralValue;

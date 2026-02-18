@@ -683,7 +683,8 @@ begin
       if Operand.ToBooleanLiteral.Value then Result := TGocciaBooleanLiteralValue.FalseValue else Result := TGocciaBooleanLiteralValue.TrueValue;
     gttMinus:
       begin
-        // Handle infinity cases first
+        if Operand is TGocciaSymbolValue then
+          ThrowTypeError('Cannot convert a Symbol value to a number');
         if (Operand is TGocciaNumberLiteralValue) then
         begin
           if TGocciaNumberLiteralValue(Operand).IsInfinity then
@@ -705,7 +706,11 @@ begin
           Result := TGocciaNumberLiteralValue.Create(-Operand.ToNumberLiteral.Value);
       end;
     gttPlus:
+    begin
+      if Operand is TGocciaSymbolValue then
+        ThrowTypeError('Cannot convert a Symbol value to a number');
       Result := Operand.ToNumberLiteral;
+    end;
     gttTypeof:
       Result := EvaluateTypeof(Operand);
     gttBitwiseNot:
@@ -1886,7 +1891,11 @@ begin
         begin
           ExpressionValue := EvaluateTemplateExpression(ExpressionText, Context, TemplateLiteralExpression.Line, TemplateLiteralExpression.Column);
           if ExpressionValue <> nil then
-            SB.Append(ExpressionValue.ToStringLiteral.Value)
+          begin
+            if ExpressionValue is TGocciaSymbolValue then
+              ThrowTypeError('Cannot convert a Symbol value to a string');
+            SB.Append(ExpressionValue.ToStringLiteral.Value);
+          end
           else
             SB.Append('undefined');
         end;
@@ -2047,6 +2056,8 @@ begin
 
         if (LeftVal <> nil) and (RightVal <> nil) then
         begin
+          if (LeftVal is TGocciaSymbolValue) or (RightVal is TGocciaSymbolValue) then
+            ThrowTypeError('Cannot convert a Symbol value to a string');
           if (LeftVal is TGocciaStringLiteralValue) or (RightVal is TGocciaStringLiteralValue) then
             Result := TGocciaStringLiteralValue.Create(LeftVal.ToStringLiteral.Value + RightVal.ToStringLiteral.Value)
           else

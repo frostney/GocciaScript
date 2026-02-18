@@ -243,7 +243,7 @@ Symbols are unique, immutable primitive values used as property keys.
 |--------|-------------|
 | `Symbol(description?)` | Create a new unique symbol |
 | `Symbol.for(key)` | Get/create a symbol in the global registry |
-| `Symbol.keyFor(symbol)` | Get the key for a global registry symbol |
+| `Symbol.keyFor(symbol)` | Get the key for a global registry symbol (throws `TypeError` for non-symbol arguments) |
 | `Symbol.iterator` | Well-known symbol constant |
 
 Symbols can be used as computed property keys:
@@ -255,6 +255,8 @@ obj[sym]; // "value"
 ```
 
 `Object.defineProperty` and `Object.getOwnPropertySymbols` also support symbol keys.
+
+**Coercion semantics:** Symbols follow ECMAScript strict mode rules — implicit conversion to string or number throws `TypeError`. Use `String(symbol)` for explicit string conversion. See [value-system.md](value-system.md#symbols) for details.
 
 ### Set (`Goccia.Builtins.GlobalSet.pas`)
 
@@ -341,7 +343,7 @@ If a test returns a rejected Promise, the test framework automatically fails the
 
 **Thenable adoption:** Resolving a Promise with another Promise causes it to adopt the inner Promise's state. Resolving a Promise with itself throws a `TypeError` ("Chaining cycle detected for promise"), matching ECMAScript spec behavior.
 
-**Error validation:** Static combinator methods (`Promise.all`, `Promise.allSettled`, `Promise.race`, `Promise.any`) throw a `TypeError` when called with a non-iterable argument (number, string, null, undefined, plain object).
+**Error validation:** Static combinator methods (`Promise.all`, `Promise.allSettled`, `Promise.race`, `Promise.any`) return a rejected Promise with a `TypeError` when called with a non-iterable argument (number, string, null, undefined, plain object). This matches ECMAScript spec behavior where the rejection is asynchronous rather than a synchronous throw.
 
 **Chaining and error recovery:**
 
@@ -544,18 +546,18 @@ describe("group name", () => {
 | `.toBeFalsy()` | Falsy value |
 | `.toBeGreaterThan(n)` | Greater than |
 | `.toBeLessThan(n)` | Less than |
-| `.toContain(item)` | Array/string contains |
+| `.toContain(item)` | Array/Set element or string substring |
 | `.toBeInstanceOf(class)` | instanceof check |
 | `.toHaveLength(n)` | Length check |
 | `.toHaveProperty(name)` | Property exists |
-| `.toThrow()` | Throws an error |
+| `.toThrow(ErrorType?)` | Throws an error (optionally checks error constructor) |
 | `.toBeCloseTo(n, digits?)` | Approximate equality |
 
 All matchers support `.not` negation: `expect(value).not.toBe(wrong)`.
 
 ### Benchmark (`Goccia.Builtins.Benchmark.pas`)
 
-Only available when `ggBenchmark` is enabled (used by the BenchmarkRunner).
+Only available when `ggBenchmark` is enabled (used by the BenchmarkRunner). See [benchmarks.md](benchmarks.md) for usage, output formats, and CI integration.
 
 **Benchmark structure:**
 

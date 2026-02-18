@@ -233,6 +233,8 @@ The evaluator calls these directly (`Value.GetProperty(Name)`, `Value.IsPrimitiv
 
 Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `CreateErrorObject`, etc.). Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
 
+**Symbol coercion:** `TGocciaSymbolValue.ToNumberLiteral` throws `TypeError` (symbols cannot convert to numbers). `ToStringLiteral` returns `"Symbol(description)"` for internal use (display, property keys), but implicit string coercion (template literals, `+` operator, `String.prototype.concat`) must check for symbols and throw `TypeError` at the operator level. See `Goccia.Evaluator.Arithmetic.pas` and `Goccia.Evaluator.pas` for the pattern.
+
 ## Built-in Objects
 
 See [docs/built-ins.md](docs/built-ins.md) for documentation on all built-ins and how to add new ones.
@@ -279,6 +281,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 | [docs/value-system.md](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
 | [docs/built-ins.md](docs/built-ins.md) | Available built-ins, registration system, adding new ones |
 | [docs/testing.md](docs/testing.md) | Test organization, writing tests, running tests |
+| [docs/benchmarks.md](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks, CI comparison |
 | [docs/build-system.md](docs/build-system.md) | Build commands, configuration, CI/CD |
 | [docs/language-restrictions.md](docs/language-restrictions.md) | Supported/excluded features with rationale |
 | [docs/embedding.md](docs/embedding.md) | Embedding the engine in FreePascal applications |

@@ -8,8 +8,8 @@ test("Symbol.for", () => {
   const symbol2 = Symbol.for("foo");
 
   expect(symbol1).toBe(symbol2);
-  expect(`${symbol1}`).toBe("Symbol(foo)");
-  expect(`${symbol2}`).toBe("Symbol(foo)");
+  expect(String(symbol1)).toBe("Symbol(foo)");
+  expect(String(symbol2)).toBe("Symbol(foo)");
 });
 
 test("Symbol.for with different keys", () => {

@@ -234,6 +234,7 @@ GocciaScript operates in an implicit strict mode:
 - `const` reassignment throws `TypeError`.
 - Accessing undeclared variables throws `ReferenceError`.
 - `this` is `undefined` in standalone function calls (no implicit global `this`).
+- Symbol values cannot be implicitly converted to strings or numbers — throws `TypeError`.
 
 ### `this` Binding (Strict Mode Semantics)
 

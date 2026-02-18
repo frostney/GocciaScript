@@ -238,13 +238,26 @@ TGocciaSymbolValue = class(TGocciaValue)
 end;
 ```
 
-Each symbol has a globally unique `Id` assigned at creation. Type coercion:
+Each symbol has a globally unique `Id` assigned at creation. Type coercion follows ECMAScript strict mode semantics:
 
 | Conversion | Result |
 |------------|--------|
 | `ToBoolean` | `true` |
-| `ToNumber` | `NaN` |
-| `ToString` | `"Symbol(description)"` |
+| `ToNumber` | Throws `TypeError` ("Cannot convert a Symbol value to a number") |
+| `ToString` | `"Symbol(description)"` (used by `String(symbol)` and internal display) |
+
+**Implicit coercion restrictions:** Symbols cannot be implicitly converted to strings or numbers. Any operation that triggers implicit coercion throws a `TypeError`:
+
+- **String coercion** — Template literals (`` `${symbol}` ``), string concatenation (`"" + symbol`), `String.prototype.concat`
+- **Number coercion** — Arithmetic operators (`+`, `-`, `*`, `/`, `%`, `**`), unary `+`/`-`, bitwise operators (`|`, `&`, `^`, `~`, `<<`, `>>`, `>>>`), relational comparisons (`<`, `>`, `<=`, `>=`), `Number(symbol)`
+
+**Explicit conversions that work:**
+
+- `String(symbol)` — Returns the descriptive string (e.g., `"Symbol(foo)")`. Uses `ToStringLiteral` internally.
+- `Boolean(symbol)` — Returns `true`.
+- `typeof symbol` — Returns `"symbol"`.
+
+The implicit coercion checks are implemented at the operator level (in `Goccia.Evaluator.Arithmetic.pas`, `Goccia.Evaluator.pas`, and `Goccia.Values.StringObjectValue.pas`) rather than in `ToStringLiteral`, because `ToStringLiteral` is also used internally for property keys and display purposes where conversion must succeed.
 
 Objects store symbol-keyed properties separately from string-keyed properties via `TGocciaObjectValue.FSymbolDescriptors`.
 

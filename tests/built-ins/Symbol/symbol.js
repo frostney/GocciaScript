@@ -9,14 +9,14 @@ test("Symbol creates unique values", () => {
   expect(s1).not.toBe(s2);
 });
 
-test("Symbol with description", () => {
+test("Symbol with description via String()", () => {
   const s = Symbol("test");
-  expect(`${s}`).toBe("Symbol(test)");
+  expect(String(s)).toBe("Symbol(test)");
 });
 
-test("Symbol without description", () => {
+test("Symbol without description via String()", () => {
   const s = Symbol();
-  expect(`${s}`).toBe("Symbol()");
+  expect(String(s)).toBe("Symbol()");
 });
 
 test("typeof Symbol returns symbol", () => {

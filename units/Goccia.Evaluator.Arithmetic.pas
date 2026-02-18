@@ -17,7 +17,8 @@ function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator
 
 implementation
 
-uses Goccia.Values.ClassHelper, Goccia.Values.ToPrimitive, Goccia.Evaluator.Bitwise;
+uses Goccia.Values.ClassHelper, Goccia.Values.ToPrimitive, Goccia.Evaluator.Bitwise,
+  Goccia.Values.SymbolValue, Goccia.Values.ErrorHelper;
 
 type
   TGocciaNumericBinaryOp = function(A, B: Double): Double;
@@ -41,6 +42,9 @@ function EvaluateSimpleNumericBinaryOp(Left, Right: TGocciaValue; AOp: TGocciaNu
 var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
+  if (Left is TGocciaSymbolValue) or (Right is TGocciaSymbolValue) then
+    ThrowTypeError('Cannot convert a Symbol value to a number');
+
   LeftNum := Left.ToNumberLiteral;
   RightNum := Right.ToNumberLiteral;
 
@@ -58,6 +62,10 @@ begin
   // Step 1: Convert both operands to primitives (ECMAScript ToPrimitive)
   PrimLeft := ToPrimitive(Left);
   PrimRight := ToPrimitive(Right);
+
+  // ECMAScript: Symbols cannot be implicitly converted to strings or numbers
+  if (PrimLeft is TGocciaSymbolValue) or (PrimRight is TGocciaSymbolValue) then
+    ThrowTypeError('Cannot convert a Symbol value to a string');
 
   // Step 2: If either primitive is a string, concatenate
   if (PrimLeft is TGocciaStringLiteralValue) or (PrimRight is TGocciaStringLiteralValue) then
@@ -90,6 +98,9 @@ function EvaluateDivision(Left, Right: TGocciaValue): TGocciaValue;
 var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
+  if (Left is TGocciaSymbolValue) or (Right is TGocciaSymbolValue) then
+    ThrowTypeError('Cannot convert a Symbol value to a number');
+
   LeftNum := Left.ToNumberLiteral;
   RightNum := Right.ToNumberLiteral;
 
@@ -116,6 +127,9 @@ function EvaluateModulo(Left, Right: TGocciaValue): TGocciaValue;
 var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
+  if (Left is TGocciaSymbolValue) or (Right is TGocciaSymbolValue) then
+    ThrowTypeError('Cannot convert a Symbol value to a number');
+
   LeftNum := Left.ToNumberLiteral;
   RightNum := Right.ToNumberLiteral;
 

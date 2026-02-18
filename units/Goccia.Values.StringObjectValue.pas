@@ -67,6 +67,8 @@ uses
   Goccia.Values.ClassHelper,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ErrorHelper,
   Goccia.GarbageCollector;
 
 { TGocciaStringObjectValue }
@@ -853,7 +855,11 @@ begin
   StringValue := ExtractStringValue(ThisValue);
 
   for I := 0 to Args.Length - 1 do
+  begin
+    if Args.GetElement(I) is TGocciaSymbolValue then
+      ThrowTypeError('Cannot convert a Symbol value to a string');
     StringValue := StringValue + Args.GetElement(I).ToStringLiteral.Value;
+  end;
 
   Result := TGocciaStringLiteralValue.Create(StringValue);
 end;

@@ -143,7 +143,7 @@ npx vitest run
 ./build/BenchmarkRunner benchmarks --format=csv --output=results.csv
 ```
 
-The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`. Calibration and measurement parameters are configurable via environment variables — see [Testing](docs/testing.md#configuring-benchmark-parameters) for details.
+The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`. Calibration and measurement parameters are configurable via environment variables — see [Benchmarks](docs/benchmarks.md) for details.
 
 ## Architecture
 
@@ -185,7 +185,8 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 | [Code Style](docs/code-style.md) | Naming conventions, patterns, file organization |
 | [Value System](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins, API reference, adding new ones |
-| [Testing](docs/testing.md) | Test organization, writing tests, running tests, benchmarks |
+| [Testing](docs/testing.md) | Test organization, writing tests, running tests |
+| [Benchmarks](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks |
 | [Build System](docs/build-system.md) | Build commands, compiler configuration, CI/CD |
 | [Language Restrictions](docs/language-restrictions.md) | Supported and excluded features with rationale |
 | [AGENTS.md](AGENTS.md) | Instructions for AI coding assistants |
