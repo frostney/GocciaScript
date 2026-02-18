@@ -196,49 +196,33 @@ function TGocciaStringObjectValue.StringCharAt(const AArgs: TGocciaArgumentsColl
 var
   StringValue: string;
   Index: Integer;
-  NumberValue: Double;
   TempNumberValue: TGocciaNumberLiteralValue;
   Arg: TGocciaValue;
 begin
   // Get the string value
   StringValue := ExtractStringValue(AThisValue);
 
-  // Get the index argument with safe conversion
   if AArgs.Length > 0 then
   begin
-    try
-      Arg := AArgs.GetElement(0);
-      
-      // Handle special values according to ECMAScript spec:
-      // - undefined/null convert to 0
-      // - NaN converts to 0
-      // - Infinity/-Infinity are treated as out-of-bounds (use very large number)
-      if (Arg is TGocciaUndefinedLiteralValue) or (Arg is TGocciaNullLiteralValue) then
+    Arg := AArgs.GetElement(0);
+    if (Arg is TGocciaUndefinedLiteralValue) or (Arg is TGocciaNullLiteralValue) then
+      Index := 0
+    else
+    begin
+      TempNumberValue := Arg.ToNumberLiteral;
+      if TempNumberValue.IsNaN then
         Index := 0
-      else if (Arg is TGocciaNumberLiteralValue) then
-      begin
-        if TGocciaNumberLiteralValue(Arg).IsNaN then
-          Index := 0
-        else if TGocciaNumberLiteralValue(Arg).IsInfinity or TGocciaNumberLiteralValue(Arg).IsNegativeInfinity then
-          Index := MaxInt // Force out-of-bounds
-        else
-          Index := Trunc(TGocciaNumberLiteralValue(Arg).Value);
-      end
+      else if TempNumberValue.IsInfinity or TempNumberValue.IsNegativeInfinity then
+        Index := MaxInt
       else
-      begin
-        NumberValue := Arg.ToNumberLiteral.Value;
-        Index := Trunc(NumberValue);
-      end;
-    except
-      Index := 0; // Default to 0 if conversion fails
+        Index := Trunc(TempNumberValue.Value);
     end;
   end
   else
     Index := 0;
 
-  // Return character at index or empty string
   if (Index >= 0) and (Index < Length(StringValue)) then
-    Result := TGocciaStringLiteralValue.Create(StringValue[Index + 1]) // Pascal is 1-indexed
+    Result := TGocciaStringLiteralValue.Create(StringValue[Index + 1])
   else
     Result := TGocciaStringLiteralValue.Create('');
 end;
@@ -247,49 +231,33 @@ function TGocciaStringObjectValue.StringCharCodeAt(const AArgs: TGocciaArguments
 var
   StringValue: string;
   Index: Integer;
-  NumberValue: Double;
   TempNumberValue: TGocciaNumberLiteralValue;
   Arg: TGocciaValue;
 begin
   // Get the string value
   StringValue := ExtractStringValue(AThisValue);
 
-  // Get the index argument with safe conversion
   if AArgs.Length > 0 then
   begin
-    try
-      Arg := AArgs.GetElement(0);
-      
-      // Handle special values according to ECMAScript spec:
-      // - undefined/null convert to 0
-      // - NaN converts to 0
-      // - Infinity/-Infinity are treated as out-of-bounds (use very large number)
-      if (Arg is TGocciaUndefinedLiteralValue) or (Arg is TGocciaNullLiteralValue) then
+    Arg := AArgs.GetElement(0);
+    if (Arg is TGocciaUndefinedLiteralValue) or (Arg is TGocciaNullLiteralValue) then
+      Index := 0
+    else
+    begin
+      TempNumberValue := Arg.ToNumberLiteral;
+      if TempNumberValue.IsNaN then
         Index := 0
-      else if (Arg is TGocciaNumberLiteralValue) then
-      begin
-        if TGocciaNumberLiteralValue(Arg).IsNaN then
-          Index := 0
-        else if TGocciaNumberLiteralValue(Arg).IsInfinity or TGocciaNumberLiteralValue(Arg).IsNegativeInfinity then
-          Index := MaxInt // Force out-of-bounds
-        else
-          Index := Trunc(TGocciaNumberLiteralValue(Arg).Value);
-      end
+      else if TempNumberValue.IsInfinity or TempNumberValue.IsNegativeInfinity then
+        Index := MaxInt
       else
-      begin
-        NumberValue := Arg.ToNumberLiteral.Value;
-        Index := Trunc(NumberValue);
-      end;
-    except
-      Index := 0; // Default to 0 if conversion fails
+        Index := Trunc(TempNumberValue.Value);
     end;
   end
   else
     Index := 0;
 
-  // Return character code at index or NaN
   if (Index >= 0) and (Index < Length(StringValue)) then
-    Result := TGocciaNumberLiteralValue.SmallInt(Ord(StringValue[Index + 1])) // Pascal is 1-indexed
+    Result := TGocciaNumberLiteralValue.SmallInt(Ord(StringValue[Index + 1]))
   else
     Result := TGocciaNumberLiteralValue.NaNValue;
 end;

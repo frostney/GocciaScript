@@ -33,7 +33,8 @@ begin
   if Assigned(TGocciaGC.Instance) then
   begin
     TGocciaGC.Instance.PinValue(FPrototype);
-    TGocciaGC.Instance.PinValue(FMethodHost);
+    if Assigned(FMethodHost) then
+      TGocciaGC.Instance.PinValue(FMethodHost);
   end;
 end;
 

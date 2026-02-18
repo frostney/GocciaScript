@@ -31,6 +31,7 @@ type
 implementation
 
 uses
+  Goccia.GarbageCollector,
   Goccia.Values.ClassHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;
@@ -46,7 +47,8 @@ end;
 
 destructor TGocciaGlobalString.Destroy;
 begin
-  FStringConstructor.Free;
+  if not Assigned(TGocciaGC.Instance) then
+    FStringConstructor.Free;
   inherited;
 end;
 

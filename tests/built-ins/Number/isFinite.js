@@ -28,4 +28,14 @@ describe("Number.isFinite", () => {
     expect(Number.isFinite(null)).toBe(false);
     expect(Number.isFinite(undefined)).toBe(false);
   });
+
+  test("returns false for objects and arrays", () => {
+    expect(Number.isFinite({})).toBe(false);
+    expect(Number.isFinite([])).toBe(false);
+    expect(Number.isFinite({ valueOf: () => 42 })).toBe(false);
+  });
+
+  test("returns false with no arguments", () => {
+    expect(Number.isFinite()).toBe(false);
+  });
 });
