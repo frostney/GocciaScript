@@ -714,8 +714,11 @@ begin
 
   if not (FActualValue is TGocciaObjectValue) then
   begin
-    TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-      'Expected an object but received ' + FActualValue.ToStringLiteral.Value);
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveProperty')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
+        'Expected an object but received ' + FActualValue.ToStringLiteral.Value);
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;

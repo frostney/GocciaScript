@@ -107,6 +107,7 @@ type
     procedure TestToHavePropertyOnBoolean;
     procedure TestToHavePropertyOnNull;
     procedure TestToHavePropertyOnUndefined;
+    procedure TestToHavePropertyNegatedOnNonObject;
 
     { toBeCloseTo }
     procedure TestToBeCloseToPass;
@@ -241,6 +242,7 @@ begin
   Test('toHaveProperty on boolean does not crash', TestToHavePropertyOnBoolean);
   Test('toHaveProperty on null does not crash', TestToHavePropertyOnNull);
   Test('toHaveProperty on undefined does not crash', TestToHavePropertyOnUndefined);
+  Test('not.toHaveProperty passes for non-object', TestToHavePropertyNegatedOnNonObject);
 
   { toBeCloseTo }
   Test('toBeCloseTo passes for close values', TestToBeCloseToPass);
@@ -975,6 +977,18 @@ begin
   A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('x')]);
   try
     ExpectFail(MakeExpectation(TGocciaUndefinedLiteralValue.UndefinedValue).ToHaveProperty(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToHavePropertyNegatedOnNonObject;
+var
+  A: TGocciaArgumentsCollection;
+begin
+  A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('x')]);
+  try
+    ExpectPass(MakeExpectation(TGocciaNumberLiteralValue.Create(42), True).ToHaveProperty(A, nil));
   finally
     A.Free;
   end;
