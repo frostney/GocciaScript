@@ -5,7 +5,8 @@ unit Goccia.Values.ErrorHelper;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 { Creates a JavaScript error object with the given name and message }
 function CreateErrorObject(const AName, AMessage: string): TGocciaObjectValue;

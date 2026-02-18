@@ -18,7 +18,7 @@ type
     function GetConfigurable: Boolean; inline;
     function GetWritable: Boolean; inline;
   public
-    constructor Create(AFlags: TPropertyFlags);
+    constructor Create(const AFlags: TPropertyFlags);
 
     property Flags: TPropertyFlags read FFlags;
     property Enumerable: Boolean read GetEnumerable;
@@ -30,7 +30,7 @@ type
   private
     FValue: TGocciaValue;
   public
-    constructor Create(AValue: TGocciaValue; AFlags: TPropertyFlags);
+    constructor Create(const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 
     property Value: TGocciaValue read FValue;
   end;
@@ -42,7 +42,7 @@ type
 
     function GetWritable: Boolean; inline;
   public
-    constructor Create(AGetter: TGocciaValue; ASetter: TGocciaValue; AFlags: TPropertyFlags);
+    constructor Create(const AGetter: TGocciaValue; const ASetter: TGocciaValue; const AFlags: TPropertyFlags);
 
     property Getter: TGocciaValue read FGetter;
     property Setter: TGocciaValue read FSetter;
@@ -50,7 +50,7 @@ type
 
 implementation
 
-constructor TGocciaPropertyDescriptor.Create(AFlags: TPropertyFlags);
+constructor TGocciaPropertyDescriptor.Create(const AFlags: TPropertyFlags);
 begin
   FFlags := AFlags;
 end;
@@ -70,13 +70,13 @@ begin
   Result := pfWritable in FFlags;
 end;
 
-constructor TGocciaPropertyDescriptorData.Create(AValue: TGocciaValue; AFlags: TPropertyFlags);
+constructor TGocciaPropertyDescriptorData.Create(const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 begin
   inherited Create(AFlags);
   FValue := AValue;
 end;
 
-constructor TGocciaPropertyDescriptorAccessor.Create(AGetter: TGocciaValue; ASetter: TGocciaValue; AFlags: TPropertyFlags);
+constructor TGocciaPropertyDescriptorAccessor.Create(const AGetter: TGocciaValue; const ASetter: TGocciaValue; const AFlags: TPropertyFlags);
 begin
   inherited Create(AFlags);
   FGetter := AGetter;

@@ -5,7 +5,10 @@ unit Goccia.AST.Node;
 interface
 
 uses
-  SysUtils, StrUtils, Classes, Generics.Collections;
+  Classes,
+  Generics.Collections,
+  StrUtils,
+  SysUtils;
 
 type
   TGocciaASTNode = class
@@ -13,7 +16,7 @@ type
     FLine: Integer;
     FColumn: Integer;
   public
-    constructor Create(ALine, AColumn: Integer);
+    constructor Create(const ALine, AColumn: Integer);
     property Line: Integer read FLine;
     property Column: Integer read FColumn;
   end;
@@ -29,13 +32,13 @@ type
   private
     FBody: TObjectList<TGocciaStatement>;
   public
-    constructor Create(ABody: TObjectList<TGocciaStatement>);
+    constructor Create(const ABody: TObjectList<TGocciaStatement>);
     property Body: TObjectList<TGocciaStatement> read FBody;
   end;
 
 implementation
 
-constructor TGocciaASTNode.Create(ALine, AColumn: Integer);
+constructor TGocciaASTNode.Create(const ALine, AColumn: Integer);
 begin
   FLine := ALine;
   FColumn := AColumn;
@@ -43,7 +46,7 @@ end;
 
 { TGocciaProgram }
 
-constructor TGocciaProgram.Create(ABody: TObjectList<TGocciaStatement>);
+constructor TGocciaProgram.Create(const ABody: TObjectList<TGocciaStatement>);
 begin
   inherited Create(0, 0);
   FBody := ABody;

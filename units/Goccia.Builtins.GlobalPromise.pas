@@ -5,26 +5,33 @@ unit Goccia.Builtins.GlobalPromise;
 interface
 
 uses
-  Goccia.Builtins.Base, Goccia.Scope, Goccia.Error.ThrowErrorCallback,
-  Goccia.Values.Primitives, Goccia.Values.PromiseValue,
-  Goccia.Values.NativeFunction, Goccia.Values.ObjectValue,
-  Goccia.Values.ArrayValue, Goccia.Arguments.Collection,
-  Generics.Collections, SysUtils;
+  Generics.Collections,
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.Builtins.Base,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives,
+  Goccia.Values.PromiseValue;
 
 type
   TGocciaGlobalPromise = class(TGocciaBuiltin)
   private
     FPromiseConstructor: TGocciaNativeFunctionValue;
 
-    function PromiseConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function PromiseResolve(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function PromiseReject(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function PromiseAll(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function PromiseAllSettled(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function PromiseRace(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function PromiseAny(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function PromiseConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PromiseResolve(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PromiseReject(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PromiseAll(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PromiseAllSettled(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PromiseRace(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PromiseAny(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
-    function ExtractPromiseArray(Args: TGocciaArgumentsCollection): TGocciaArrayValue;
+    function ExtractPromiseArray(const AArgs: TGocciaArgumentsCollection): TGocciaArrayValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -32,9 +39,13 @@ type
 implementation
 
 uses
-  Goccia.Values.FunctionBase, Goccia.Values.Error, Goccia.Values.ErrorHelper,
-  Goccia.Values.SetValue, Goccia.Values.MapValue,
-  Goccia.GarbageCollector, Goccia.MicrotaskQueue;
+  Goccia.GarbageCollector,
+  Goccia.MicrotaskQueue,
+  Goccia.Values.Error,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.MapValue,
+  Goccia.Values.SetValue;
 
 type
   TPromiseAllState = class(TGocciaObjectValue)
@@ -44,7 +55,7 @@ type
     FResultPromise: TGocciaPromiseValue;
     FSettled: Boolean;
   public
-    constructor Create(AResultPromise: TGocciaPromiseValue; ACount: Integer);
+    constructor Create(const AResultPromise: TGocciaPromiseValue; const ACount: Integer);
     procedure GCMarkReferences; override;
     property Results: TGocciaArrayValue read FResults;
     property Remaining: Integer read FRemaining write FRemaining;
@@ -57,8 +68,8 @@ type
     FState: TPromiseAllState;
     FIndex: Integer;
   public
-    constructor Create(AState: TPromiseAllState; AIndex: Integer);
-    function Invoke(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    constructor Create(const AState: TPromiseAllState; const AIndex: Integer);
+    function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure GCMarkReferences; override;
   end;
 
@@ -66,8 +77,8 @@ type
   private
     FState: TPromiseAllState;
   public
-    constructor Create(AState: TPromiseAllState);
-    function Invoke(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    constructor Create(const AState: TPromiseAllState);
+    function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure GCMarkReferences; override;
   end;
 
@@ -76,8 +87,8 @@ type
     FState: TPromiseAllState;
     FIndex: Integer;
   public
-    constructor Create(AState: TPromiseAllState; AIndex: Integer);
-    function Invoke(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    constructor Create(const AState: TPromiseAllState; const AIndex: Integer);
+    function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure GCMarkReferences; override;
   end;
 
@@ -86,8 +97,8 @@ type
     FState: TPromiseAllState;
     FIndex: Integer;
   public
-    constructor Create(AState: TPromiseAllState; AIndex: Integer);
-    function Invoke(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    constructor Create(const AState: TPromiseAllState; const AIndex: Integer);
+    function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure GCMarkReferences; override;
   end;
 
@@ -96,8 +107,8 @@ type
     FResultPromise: TGocciaPromiseValue;
     FIsResolve: Boolean;
   public
-    constructor Create(AResultPromise: TGocciaPromiseValue; AIsResolve: Boolean);
-    function Invoke(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    constructor Create(const AResultPromise: TGocciaPromiseValue; const AIsResolve: Boolean);
+    function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure GCMarkReferences; override;
   end;
 
@@ -108,7 +119,7 @@ type
     FResultPromise: TGocciaPromiseValue;
     FSettled: Boolean;
   public
-    constructor Create(AResultPromise: TGocciaPromiseValue; ACount: Integer);
+    constructor Create(const AResultPromise: TGocciaPromiseValue; const ACount: Integer);
     procedure GCMarkReferences; override;
     property Errors: TGocciaArrayValue read FErrors;
     property Remaining: Integer read FRemaining write FRemaining;
@@ -120,8 +131,8 @@ type
   private
     FState: TPromiseAnyState;
   public
-    constructor Create(AState: TPromiseAnyState);
-    function Invoke(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    constructor Create(const AState: TPromiseAnyState);
+    function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure GCMarkReferences; override;
   end;
 
@@ -130,13 +141,13 @@ type
     FState: TPromiseAnyState;
     FIndex: Integer;
   public
-    constructor Create(AState: TPromiseAnyState; AIndex: Integer);
-    function Invoke(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    constructor Create(const AState: TPromiseAnyState; const AIndex: Integer);
+    function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure GCMarkReferences; override;
   end;
 
 { Helper: wrap value as Promise if not already one }
-function WrapAsPromise(AValue: TGocciaValue): TGocciaPromiseValue;
+function WrapAsPromise(const AValue: TGocciaValue): TGocciaPromiseValue;
 var
   P: TGocciaPromiseValue;
 begin
@@ -152,7 +163,7 @@ end;
 
 { TPromiseAllState }
 
-constructor TPromiseAllState.Create(AResultPromise: TGocciaPromiseValue; ACount: Integer);
+constructor TPromiseAllState.Create(const AResultPromise: TGocciaPromiseValue; const ACount: Integer);
 var
   I: Integer;
 begin
@@ -175,20 +186,20 @@ end;
 
 { TPromiseAllHandler }
 
-constructor TPromiseAllHandler.Create(AState: TPromiseAllState; AIndex: Integer);
+constructor TPromiseAllHandler.Create(const AState: TPromiseAllState; const AIndex: Integer);
 begin
   inherited Create(nil);
   FState := AState;
   FIndex := AIndex;
 end;
 
-function TPromiseAllHandler.Invoke(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TPromiseAllHandler.Invoke(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FState.Settled then Exit;
 
-  FState.Results.Elements[FIndex] := Args.GetElement(0);
+  FState.Results.Elements[FIndex] := AArgs.GetElement(0);
   FState.Remaining := FState.Remaining - 1;
 
   if FState.Remaining = 0 then
@@ -207,20 +218,20 @@ end;
 
 { TPromiseAllRejectHandler }
 
-constructor TPromiseAllRejectHandler.Create(AState: TPromiseAllState);
+constructor TPromiseAllRejectHandler.Create(const AState: TPromiseAllState);
 begin
   inherited Create(nil);
   FState := AState;
 end;
 
-function TPromiseAllRejectHandler.Invoke(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TPromiseAllRejectHandler.Invoke(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FState.Settled then Exit;
 
   FState.Settled := True;
-  FState.ResultPromise.Reject(Args.GetElement(0));
+  FState.ResultPromise.Reject(AArgs.GetElement(0));
 end;
 
 procedure TPromiseAllRejectHandler.GCMarkReferences;
@@ -232,15 +243,15 @@ end;
 
 { TPromiseAllSettledFulfillHandler }
 
-constructor TPromiseAllSettledFulfillHandler.Create(AState: TPromiseAllState; AIndex: Integer);
+constructor TPromiseAllSettledFulfillHandler.Create(const AState: TPromiseAllState; const AIndex: Integer);
 begin
   inherited Create(nil);
   FState := AState;
   FIndex := AIndex;
 end;
 
-function TPromiseAllSettledFulfillHandler.Invoke(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TPromiseAllSettledFulfillHandler.Invoke(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   Entry: TGocciaObjectValue;
 begin
@@ -249,7 +260,7 @@ begin
 
   Entry := TGocciaObjectValue.Create;
   Entry.AssignProperty('status', TGocciaStringLiteralValue.Create('fulfilled'));
-  Entry.AssignProperty('value', Args.GetElement(0));
+  Entry.AssignProperty('value', AArgs.GetElement(0));
   FState.Results.Elements[FIndex] := Entry;
   FState.Remaining := FState.Remaining - 1;
 
@@ -269,15 +280,15 @@ end;
 
 { TPromiseAllSettledRejectHandler }
 
-constructor TPromiseAllSettledRejectHandler.Create(AState: TPromiseAllState; AIndex: Integer);
+constructor TPromiseAllSettledRejectHandler.Create(const AState: TPromiseAllState; const AIndex: Integer);
 begin
   inherited Create(nil);
   FState := AState;
   FIndex := AIndex;
 end;
 
-function TPromiseAllSettledRejectHandler.Invoke(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TPromiseAllSettledRejectHandler.Invoke(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   Entry: TGocciaObjectValue;
 begin
@@ -286,7 +297,7 @@ begin
 
   Entry := TGocciaObjectValue.Create;
   Entry.AssignProperty('status', TGocciaStringLiteralValue.Create('rejected'));
-  Entry.AssignProperty('reason', Args.GetElement(0));
+  Entry.AssignProperty('reason', AArgs.GetElement(0));
   FState.Results.Elements[FIndex] := Entry;
   FState.Remaining := FState.Remaining - 1;
 
@@ -306,21 +317,21 @@ end;
 
 { TPromiseRaceHandler }
 
-constructor TPromiseRaceHandler.Create(AResultPromise: TGocciaPromiseValue; AIsResolve: Boolean);
+constructor TPromiseRaceHandler.Create(const AResultPromise: TGocciaPromiseValue; const AIsResolve: Boolean);
 begin
   inherited Create(nil);
   FResultPromise := AResultPromise;
   FIsResolve := AIsResolve;
 end;
 
-function TPromiseRaceHandler.Invoke(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TPromiseRaceHandler.Invoke(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FIsResolve then
-    FResultPromise.Resolve(Args.GetElement(0))
+    FResultPromise.Resolve(AArgs.GetElement(0))
   else
-    FResultPromise.Reject(Args.GetElement(0));
+    FResultPromise.Reject(AArgs.GetElement(0));
 end;
 
 procedure TPromiseRaceHandler.GCMarkReferences;
@@ -332,7 +343,7 @@ end;
 
 { TPromiseAnyState }
 
-constructor TPromiseAnyState.Create(AResultPromise: TGocciaPromiseValue; ACount: Integer);
+constructor TPromiseAnyState.Create(const AResultPromise: TGocciaPromiseValue; const ACount: Integer);
 var
   I: Integer;
 begin
@@ -355,20 +366,20 @@ end;
 
 { TPromiseAnyFulfillHandler }
 
-constructor TPromiseAnyFulfillHandler.Create(AState: TPromiseAnyState);
+constructor TPromiseAnyFulfillHandler.Create(const AState: TPromiseAnyState);
 begin
   inherited Create(nil);
   FState := AState;
 end;
 
-function TPromiseAnyFulfillHandler.Invoke(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TPromiseAnyFulfillHandler.Invoke(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FState.Settled then Exit;
 
   FState.Settled := True;
-  FState.ResultPromise.Resolve(Args.GetElement(0));
+  FState.ResultPromise.Resolve(AArgs.GetElement(0));
 end;
 
 procedure TPromiseAnyFulfillHandler.GCMarkReferences;
@@ -380,22 +391,22 @@ end;
 
 { TPromiseAnyRejectHandler }
 
-constructor TPromiseAnyRejectHandler.Create(AState: TPromiseAnyState; AIndex: Integer);
+constructor TPromiseAnyRejectHandler.Create(const AState: TPromiseAnyState; const AIndex: Integer);
 begin
   inherited Create(nil);
   FState := AState;
   FIndex := AIndex;
 end;
 
-function TPromiseAnyRejectHandler.Invoke(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TPromiseAnyRejectHandler.Invoke(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   ErrorObj: TGocciaObjectValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FState.Settled then Exit;
 
-  FState.Errors.Elements[FIndex] := Args.GetElement(0);
+  FState.Errors.Elements[FIndex] := AArgs.GetElement(0);
   FState.Remaining := FState.Remaining - 1;
 
   if FState.Remaining = 0 then
@@ -442,18 +453,18 @@ begin
   AScope.DefineLexicalBinding(AName, FPromiseConstructor, dtLet);
 end;
 
-function TGocciaGlobalPromise.PromiseConstructorFn(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalPromise.PromiseConstructorFn(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   Promise: TGocciaPromiseValue;
   Executor: TGocciaValue;
   ResolveFn, RejectFn: TGocciaNativeFunctionValue;
   ExecutorArgs, RejectArgs: TGocciaArgumentsCollection;
 begin
-  if Args.Length = 0 then
+  if AArgs.Length = 0 then
     Goccia.Values.ErrorHelper.ThrowTypeError('Promise resolver undefined is not a function');
 
-  Executor := Args.GetElement(0);
+  Executor := AArgs.GetElement(0);
   if not Executor.IsCallable then
     Goccia.Values.ErrorHelper.ThrowTypeError('Promise resolver is not a function');
 
@@ -483,13 +494,13 @@ begin
   Result := Promise;
 end;
 
-function TGocciaGlobalPromise.PromiseResolve(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalPromise.PromiseResolve(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   Value: TGocciaValue;
   P: TGocciaPromiseValue;
 begin
-  Value := Args.GetElement(0);
+  Value := AArgs.GetElement(0);
 
   if Value is TGocciaPromiseValue then
   begin
@@ -502,23 +513,23 @@ begin
   Result := P;
 end;
 
-function TGocciaGlobalPromise.PromiseReject(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalPromise.PromiseReject(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   P: TGocciaPromiseValue;
 begin
   P := TGocciaPromiseValue.Create;
-  P.Reject(Args.GetElement(0));
+  P.Reject(AArgs.GetElement(0));
   Result := P;
 end;
 
-function TGocciaGlobalPromise.ExtractPromiseArray(Args: TGocciaArgumentsCollection): TGocciaArrayValue;
+function TGocciaGlobalPromise.ExtractPromiseArray(const AArgs: TGocciaArgumentsCollection): TGocciaArrayValue;
 var
   Iterable: TGocciaValue;
   Str: string;
   I: Integer;
 begin
-  Iterable := Args.GetElement(0);
+  Iterable := AArgs.GetElement(0);
   if Iterable is TGocciaArrayValue then
     Result := TGocciaArrayValue(Iterable)
   else if Iterable is TGocciaStringLiteralValue then
@@ -545,8 +556,8 @@ begin
   end;
 end;
 
-function TGocciaGlobalPromise.PromiseAll(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalPromise.PromiseAll(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   InputArray: TGocciaArrayValue;
   ResultPromise: TGocciaPromiseValue;
@@ -559,7 +570,7 @@ var
 begin
   ResultPromise := TGocciaPromiseValue.Create;
   try
-    InputArray := ExtractPromiseArray(Args);
+    InputArray := ExtractPromiseArray(AArgs);
   except
     on E: TGocciaThrowValue do
     begin
@@ -598,8 +609,8 @@ begin
   Result := ResultPromise;
 end;
 
-function TGocciaGlobalPromise.PromiseAllSettled(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalPromise.PromiseAllSettled(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   InputArray: TGocciaArrayValue;
   ResultPromise: TGocciaPromiseValue;
@@ -612,7 +623,7 @@ var
 begin
   ResultPromise := TGocciaPromiseValue.Create;
   try
-    InputArray := ExtractPromiseArray(Args);
+    InputArray := ExtractPromiseArray(AArgs);
   except
     on E: TGocciaThrowValue do
     begin
@@ -651,8 +662,8 @@ begin
   Result := ResultPromise;
 end;
 
-function TGocciaGlobalPromise.PromiseRace(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalPromise.PromiseRace(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   InputArray: TGocciaArrayValue;
   ResultPromise: TGocciaPromiseValue;
@@ -663,7 +674,7 @@ var
 begin
   ResultPromise := TGocciaPromiseValue.Create;
   try
-    InputArray := ExtractPromiseArray(Args);
+    InputArray := ExtractPromiseArray(AArgs);
   except
     on E: TGocciaThrowValue do
     begin
@@ -693,8 +704,8 @@ begin
   Result := ResultPromise;
 end;
 
-function TGocciaGlobalPromise.PromiseAny(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalPromise.PromiseAny(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   InputArray: TGocciaArrayValue;
   ResultPromise: TGocciaPromiseValue;
@@ -708,7 +719,7 @@ var
 begin
   ResultPromise := TGocciaPromiseValue.Create;
   try
-    InputArray := ExtractPromiseArray(Args);
+    InputArray := ExtractPromiseArray(AArgs);
   except
     on E: TGocciaThrowValue do
     begin

@@ -5,7 +5,11 @@ unit Goccia.Error;
 interface
 
 uses
-  SysUtils, StrUtils, Classes, Goccia.Error.ThrowErrorCallback;
+  Classes,
+  StrUtils,
+  SysUtils,
+
+  Goccia.Error.ThrowErrorCallback;
 
 type
   TGocciaErrorSeverity = (gesError, gesWarning, gesHint);
@@ -23,8 +27,8 @@ type
     FSeverity: TGocciaErrorSeverity;
     FSuggestion: string;
   public
-    constructor Create(const AMessage: string; ALine, AColumn: Integer;
-      const AFileName: string; ASourceLines: TStringList);
+    constructor Create(const AMessage: string; const ALine, AColumn: Integer;
+      const AFileName: string; const ASourceLines: TStringList);
     procedure SetSuggestion(const ASuggestion: string);
     function GetDetailedMessage: string;
     property Line: Integer read FLine;
@@ -42,8 +46,8 @@ type
 
 implementation
 
-constructor TGocciaError.Create(const AMessage: string; ALine, AColumn: Integer;
-  const AFileName: string; ASourceLines: TStringList);
+constructor TGocciaError.Create(const AMessage: string; const ALine, AColumn: Integer;
+  const AFileName: string; const ASourceLines: TStringList);
 begin
   inherited Create(AMessage);
   FLine := ALine;

@@ -5,48 +5,56 @@ unit Goccia.Evaluator.Arithmetic;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Token, Math, SysUtils;
+  Math,
+  SysUtils,
 
-function EvaluateAddition(Left, Right: TGocciaValue): TGocciaValue;
-function EvaluateSubtraction(Left, Right: TGocciaValue): TGocciaValue;
-function EvaluateMultiplication(Left, Right: TGocciaValue): TGocciaValue;
-function EvaluateDivision(Left, Right: TGocciaValue): TGocciaValue;
-function EvaluateModulo(Left, Right: TGocciaValue): TGocciaValue;
-function EvaluateExponentiation(Left, Right: TGocciaValue): TGocciaValue;
-function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator: TGocciaTokenType): TGocciaValue;
+  Goccia.Token,
+  Goccia.Values.Primitives;
+
+function EvaluateAddition(const ALeft, ARight: TGocciaValue): TGocciaValue;
+function EvaluateSubtraction(const ALeft, ARight: TGocciaValue): TGocciaValue;
+function EvaluateMultiplication(const ALeft, ARight: TGocciaValue): TGocciaValue;
+function EvaluateDivision(const ALeft, ARight: TGocciaValue): TGocciaValue;
+function EvaluateModulo(const ALeft, ARight: TGocciaValue): TGocciaValue;
+function EvaluateExponentiation(const ALeft, ARight: TGocciaValue): TGocciaValue;
+function PerformCompoundOperation(const ACurrentValue, ANewValue: TGocciaValue; const AOperator: TGocciaTokenType): TGocciaValue;
 
 implementation
 
-uses Goccia.Values.ClassHelper, Goccia.Values.ToPrimitive, Goccia.Evaluator.Bitwise,
-  Goccia.Values.SymbolValue, Goccia.Values.ErrorHelper;
+uses
+  Goccia.Evaluator.Bitwise,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToPrimitive;
 
 type
-  TGocciaNumericBinaryOp = function(A, B: Double): Double;
+  TGocciaNumericBinaryOp = function(const A, B: Double): Double;
 
-function DoSubtract(A, B: Double): Double;
+function DoSubtract(const A, B: Double): Double;
 begin
   Result := A - B;
 end;
 
-function DoMultiply(A, B: Double): Double;
+function DoMultiply(const A, B: Double): Double;
 begin
   Result := A * B;
 end;
 
-function DoPower(A, B: Double): Double;
+function DoPower(const A, B: Double): Double;
 begin
   Result := Power(A, B);
 end;
 
-function EvaluateSimpleNumericBinaryOp(Left, Right: TGocciaValue; AOp: TGocciaNumericBinaryOp): TGocciaValue;
+function EvaluateSimpleNumericBinaryOp(const ALeft, ARight: TGocciaValue; const AOp: TGocciaNumericBinaryOp): TGocciaValue;
 var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  if (Left is TGocciaSymbolValue) or (Right is TGocciaSymbolValue) then
+  if (ALeft is TGocciaSymbolValue) or (ARight is TGocciaSymbolValue) then
     ThrowTypeError('Cannot convert a Symbol value to a number');
 
-  LeftNum := Left.ToNumberLiteral;
-  RightNum := Right.ToNumberLiteral;
+  LeftNum := ALeft.ToNumberLiteral;
+  RightNum := ARight.ToNumberLiteral;
 
   if LeftNum.IsNaN or RightNum.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
@@ -54,14 +62,14 @@ begin
     Result := TGocciaNumberLiteralValue.Create(AOp(LeftNum.Value, RightNum.Value));
 end;
 
-function EvaluateAddition(Left, Right: TGocciaValue): TGocciaValue;
+function EvaluateAddition(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
   // Step 1: Convert both operands to primitives (ECMAScript ToPrimitive)
-  PrimLeft := ToPrimitive(Left);
-  PrimRight := ToPrimitive(Right);
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
 
   // ECMAScript: Symbols cannot be implicitly converted to strings or numbers
   if (PrimLeft is TGocciaSymbolValue) or (PrimRight is TGocciaSymbolValue) then
@@ -84,25 +92,25 @@ begin
     Result := TGocciaNumberLiteralValue.Create(LeftNum.Value + RightNum.Value);
 end;
 
-function EvaluateSubtraction(Left, Right: TGocciaValue): TGocciaValue;
+function EvaluateSubtraction(const ALeft, ARight: TGocciaValue): TGocciaValue;
 begin
-  Result := EvaluateSimpleNumericBinaryOp(Left, Right, @DoSubtract);
+  Result := EvaluateSimpleNumericBinaryOp(ALeft, ARight, @DoSubtract);
 end;
 
-function EvaluateMultiplication(Left, Right: TGocciaValue): TGocciaValue;
+function EvaluateMultiplication(const ALeft, ARight: TGocciaValue): TGocciaValue;
 begin
-  Result := EvaluateSimpleNumericBinaryOp(Left, Right, @DoMultiply);
+  Result := EvaluateSimpleNumericBinaryOp(ALeft, ARight, @DoMultiply);
 end;
 
-function EvaluateDivision(Left, Right: TGocciaValue): TGocciaValue;
+function EvaluateDivision(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  if (Left is TGocciaSymbolValue) or (Right is TGocciaSymbolValue) then
+  if (ALeft is TGocciaSymbolValue) or (ARight is TGocciaSymbolValue) then
     ThrowTypeError('Cannot convert a Symbol value to a number');
 
-  LeftNum := Left.ToNumberLiteral;
-  RightNum := Right.ToNumberLiteral;
+  LeftNum := ALeft.ToNumberLiteral;
+  RightNum := ARight.ToNumberLiteral;
 
   if LeftNum.IsNaN or RightNum.IsNaN then
   begin
@@ -123,15 +131,15 @@ begin
     Result := TGocciaNumberLiteralValue.Create(LeftNum.Value / RightNum.Value);
 end;
 
-function EvaluateModulo(Left, Right: TGocciaValue): TGocciaValue;
+function EvaluateModulo(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  if (Left is TGocciaSymbolValue) or (Right is TGocciaSymbolValue) then
+  if (ALeft is TGocciaSymbolValue) or (ARight is TGocciaSymbolValue) then
     ThrowTypeError('Cannot convert a Symbol value to a number');
 
-  LeftNum := Left.ToNumberLiteral;
-  RightNum := Right.ToNumberLiteral;
+  LeftNum := ALeft.ToNumberLiteral;
+  RightNum := ARight.ToNumberLiteral;
 
   // NaN propagation
   if LeftNum.IsNaN or RightNum.IsNaN then
@@ -166,38 +174,38 @@ begin
     LeftNum.Value - RightNum.Value * Trunc(LeftNum.Value / RightNum.Value));
 end;
 
-function EvaluateExponentiation(Left, Right: TGocciaValue): TGocciaValue;
+function EvaluateExponentiation(const ALeft, ARight: TGocciaValue): TGocciaValue;
 begin
-  Result := EvaluateSimpleNumericBinaryOp(Left, Right, @DoPower);
+  Result := EvaluateSimpleNumericBinaryOp(ALeft, ARight, @DoPower);
 end;
 
-function PerformCompoundOperation(CurrentValue, NewValue: TGocciaValue; Operator: TGocciaTokenType): TGocciaValue;
+function PerformCompoundOperation(const ACurrentValue, ANewValue: TGocciaValue; const AOperator: TGocciaTokenType): TGocciaValue;
 begin
-  case Operator of
+  case AOperator of
     gttPlusAssign:
-      Result := EvaluateAddition(CurrentValue, NewValue);
+      Result := EvaluateAddition(ACurrentValue, ANewValue);
     gttMinusAssign:
-      Result := EvaluateSubtraction(CurrentValue, NewValue);
+      Result := EvaluateSubtraction(ACurrentValue, ANewValue);
     gttStarAssign:
-      Result := EvaluateMultiplication(CurrentValue, NewValue);
+      Result := EvaluateMultiplication(ACurrentValue, ANewValue);
     gttSlashAssign:
-      Result := EvaluateDivision(CurrentValue, NewValue);
+      Result := EvaluateDivision(ACurrentValue, ANewValue);
     gttPercentAssign:
-      Result := EvaluateModulo(CurrentValue, NewValue);
+      Result := EvaluateModulo(ACurrentValue, ANewValue);
     gttPowerAssign:
-      Result := EvaluateExponentiation(CurrentValue, NewValue);
+      Result := EvaluateExponentiation(ACurrentValue, ANewValue);
     gttBitwiseAndAssign:
-      Result := EvaluateBitwiseAnd(CurrentValue, NewValue);
+      Result := EvaluateBitwiseAnd(ACurrentValue, ANewValue);
     gttBitwiseOrAssign:
-      Result := EvaluateBitwiseOr(CurrentValue, NewValue);
+      Result := EvaluateBitwiseOr(ACurrentValue, ANewValue);
     gttBitwiseXorAssign:
-      Result := EvaluateBitwiseXor(CurrentValue, NewValue);
+      Result := EvaluateBitwiseXor(ACurrentValue, ANewValue);
     gttLeftShiftAssign:
-      Result := EvaluateLeftShift(CurrentValue, NewValue);
+      Result := EvaluateLeftShift(ACurrentValue, ANewValue);
     gttRightShiftAssign:
-      Result := EvaluateRightShift(CurrentValue, NewValue);
+      Result := EvaluateRightShift(ACurrentValue, ANewValue);
     gttUnsignedRightShiftAssign:
-      Result := EvaluateUnsignedRightShift(CurrentValue, NewValue);
+      Result := EvaluateUnsignedRightShift(ACurrentValue, ANewValue);
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;

@@ -5,10 +5,11 @@ unit Goccia.Values.NativeFunctionCallback;
 interface
 
 uses
-  Goccia.Arguments.Collection, Goccia.Values.Primitives;
+  Goccia.Arguments.Collection,
+  Goccia.Values.Primitives;
 
 type
-  TGocciaNativeFunctionCallback = function(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue of object;
+  TGocciaNativeFunctionCallback = function(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue of object;
 
 implementation
 

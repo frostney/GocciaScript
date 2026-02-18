@@ -5,18 +5,20 @@ unit Goccia.Builtins.JSON;
 interface
 
 uses
-  Goccia.Scope,
-  Goccia.Error, Goccia.Error.ThrowErrorCallback,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.Primitives,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.ArrayValue,
+  Generics.Collections,
+  Math,
+  SysUtils,
+
   Goccia.Arguments.Collection,
   Goccia.Arguments.Validator,
-  Generics.Collections,
   Goccia.Builtins.Base,
-  SysUtils,
-  Math;
+  Goccia.Error,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaJSON = class(TGocciaBuiltin)
@@ -38,19 +40,19 @@ type
     procedure SkipWhitespace;
     function PeekChar: Char;
     function ReadChar: Char;
-    function ExpectChar(Expected: Char): Boolean; inline;
+    function ExpectChar(const AExpected: Char): Boolean; inline;
     function IsAtEnd: Boolean; inline;
-    procedure RaiseParseError(const Message: string);
+    procedure RaiseParseError(const AMessage: string);
 
     // Stringifier methods
-    function StringifyValue(Value: TGocciaValue; Indent: Integer = 0): string;
-    function StringifyObject(Obj: TGocciaObjectValue; Indent: Integer): string;
-    function StringifyArray(Arr: TGocciaArrayValue; Indent: Integer): string;
-    function EscapeJsonString(const Str: string): string;
-    function GetIndentString(Level: Integer): string;
+    function StringifyValue(const AValue: TGocciaValue; const AIndent: Integer = 0): string;
+    function StringifyObject(const AObj: TGocciaObjectValue; const AIndent: Integer): string;
+    function StringifyArray(const AArr: TGocciaArrayValue; const AIndent: Integer): string;
+    function EscapeJsonString(const AStr: string): string;
+    function GetIndentString(const ALevel: Integer): string;
   protected
-    function JSONParse(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function JSONStringify(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function JSONParse(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function JSONStringify(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -58,9 +60,9 @@ type
 implementation
 
 uses
-  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ClassHelper,
   Goccia.Values.FunctionValue,
-  Goccia.Values.ClassHelper;
+  Goccia.Values.ObjectPropertyDescriptor;
 
 constructor TGocciaJSON.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
@@ -72,14 +74,14 @@ begin
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;
 
-function TGocciaJSON.JSONParse(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaJSON.JSONParse(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'JSON.parse', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'JSON.parse', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaStringLiteralValue) then
+  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
     ThrowError('JSON.parse: argument must be a string', 0, 0);
 
-  FJsonText := Args.GetElement(0).ToStringLiteral.Value;
+  FJsonText := AArgs.GetElement(0).ToStringLiteral.Value;
   FPosition := 1;
   FLength := Length(FJsonText);
 
@@ -379,10 +381,10 @@ begin
   Inc(FPosition);
 end;
 
-function TGocciaJSON.ExpectChar(Expected: Char): Boolean; inline;
+function TGocciaJSON.ExpectChar(const AExpected: Char): Boolean; inline;
 begin
   SkipWhitespace;
-  if IsAtEnd or (PeekChar <> Expected) then
+  if IsAtEnd or (PeekChar <> AExpected) then
   begin
     Result := False;
     Exit;
@@ -396,21 +398,21 @@ begin
   Result := FPosition > FLength;
 end;
 
-procedure TGocciaJSON.RaiseParseError(const Message: string);
+procedure TGocciaJSON.RaiseParseError(const AMessage: string);
 begin
-  raise Exception.Create(Message + ' at position ' + IntToStr(FPosition));
+  raise Exception.Create(AMessage + ' at position ' + IntToStr(FPosition));
 end;
 
 { Stringifier Implementation }
 
-function TGocciaJSON.JSONStringify(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaJSON.JSONStringify(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Value: TGocciaValue;
   JsonString: string;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(Args, 1, 'JSON.stringify', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'JSON.stringify', ThrowError);
 
-  Value := Args.GetElement(0);
+  Value := AArgs.GetElement(0);
 
   if Value is TGocciaUndefinedLiteralValue then
   begin
@@ -427,40 +429,40 @@ begin
   end;
 end;
 
-function TGocciaJSON.StringifyValue(Value: TGocciaValue; Indent: Integer): string;
+function TGocciaJSON.StringifyValue(const AValue: TGocciaValue; const AIndent: Integer): string;
 begin
-  if Value is TGocciaNullLiteralValue then
+  if AValue is TGocciaNullLiteralValue then
     Result := 'null'
-  else if Value is TGocciaUndefinedLiteralValue then
+  else if AValue is TGocciaUndefinedLiteralValue then
     Result := 'null' // JSON doesn't have undefined
-  else if Value is TGocciaBooleanLiteralValue then
+  else if AValue is TGocciaBooleanLiteralValue then
   begin
-    if Value.ToBooleanLiteral.Value then
+    if AValue.ToBooleanLiteral.Value then
       Result := 'true'
     else
       Result := 'false';
   end
-  else if Value is TGocciaNumberLiteralValue then
+  else if AValue is TGocciaNumberLiteralValue then
   begin
     // Handle special number values using TGocciaNumberLiteralValue properties
-    if TGocciaNumberLiteralValue(Value).IsInfinity or TGocciaNumberLiteralValue(Value).IsNegativeInfinity then
+    if TGocciaNumberLiteralValue(AValue).IsInfinity or TGocciaNumberLiteralValue(AValue).IsNegativeInfinity then
       Result := 'null'
-    else if TGocciaNumberLiteralValue(Value).IsNaN then
+    else if TGocciaNumberLiteralValue(AValue).IsNaN then
       Result := 'null'
     else
-      Result := FloatToStr(Value.ToNumberLiteral.Value);
+      Result := FloatToStr(AValue.ToNumberLiteral.Value);
   end
-  else if Value is TGocciaStringLiteralValue then
-    Result := '"' + EscapeJsonString(Value.ToStringLiteral.Value) + '"'
-  else if Value is TGocciaArrayValue then
-    Result := StringifyArray(TGocciaArrayValue(Value), Indent)
-  else if Value is TGocciaObjectValue then
-    Result := StringifyObject(TGocciaObjectValue(Value), Indent)
+  else if AValue is TGocciaStringLiteralValue then
+    Result := '"' + EscapeJsonString(AValue.ToStringLiteral.Value) + '"'
+  else if AValue is TGocciaArrayValue then
+    Result := StringifyArray(TGocciaArrayValue(AValue), AIndent)
+  else if AValue is TGocciaObjectValue then
+    Result := StringifyObject(TGocciaObjectValue(AValue), AIndent)
   else
     Result := 'null'; // Fallback for unsupported types
 end;
 
-function TGocciaJSON.StringifyObject(Obj: TGocciaObjectValue; Indent: Integer): string;
+function TGocciaJSON.StringifyObject(const AObj: TGocciaObjectValue; const AIndent: Integer): string;
 var
   SB: TStringBuilder;
   Key: string;
@@ -471,9 +473,9 @@ begin
   try
     HasProperties := False;
 
-    for Key in Obj.GetEnumerablePropertyNames do
+    for Key in AObj.GetEnumerablePropertyNames do
     begin
-      Value := Obj.GetProperty(Key);
+      Value := AObj.GetProperty(Key);
 
       // Skip undefined properties and functions
       if not (Value is TGocciaUndefinedLiteralValue) and
@@ -481,7 +483,7 @@ begin
       begin
         if HasProperties then
           SB.Append(',');
-        SB.Append('"').Append(EscapeJsonString(Key)).Append('":').Append(StringifyValue(Value, Indent + 1));
+        SB.Append('"').Append(EscapeJsonString(Key)).Append('":').Append(StringifyValue(Value, AIndent + 1));
         HasProperties := True;
       end;
     end;
@@ -495,12 +497,12 @@ begin
   end;
 end;
 
-function TGocciaJSON.StringifyArray(Arr: TGocciaArrayValue; Indent: Integer): string;
+function TGocciaJSON.StringifyArray(const AArr: TGocciaArrayValue; const AIndent: Integer): string;
 var
   SB: TStringBuilder;
   I: Integer;
 begin
-  if Arr.Elements.Count = 0 then
+  if AArr.Elements.Count = 0 then
   begin
     Result := '[]';
     Exit;
@@ -508,11 +510,11 @@ begin
 
   SB := TStringBuilder.Create;
   try
-    for I := 0 to Arr.Elements.Count - 1 do
+    for I := 0 to AArr.Elements.Count - 1 do
     begin
       if I > 0 then
         SB.Append(',');
-      SB.Append(StringifyValue(Arr.Elements[I], Indent + 1));
+      SB.Append(StringifyValue(AArr.Elements[I], AIndent + 1));
     end;
     Result := '[' + SB.ToString + ']';
   finally
@@ -520,7 +522,7 @@ begin
   end;
 end;
 
-function TGocciaJSON.EscapeJsonString(const Str: string): string;
+function TGocciaJSON.EscapeJsonString(const AStr: string): string;
 var
   SB: TStringBuilder;
   I: Integer;
@@ -528,9 +530,9 @@ var
 begin
   SB := TStringBuilder.Create;
   try
-    for I := 1 to Length(Str) do
+    for I := 1 to Length(AStr) do
     begin
-      Ch := Str[I];
+      Ch := AStr[I];
       case Ch of
         '"': SB.Append('\"');
         '\': SB.Append('\\');
@@ -553,9 +555,9 @@ begin
   end;
 end;
 
-function TGocciaJSON.GetIndentString(Level: Integer): string;
+function TGocciaJSON.GetIndentString(const ALevel: Integer): string;
 begin
-  Result := StringOfChar(' ', Level * 2);
+  Result := StringOfChar(' ', ALevel * 2);
 end;
 
 end.

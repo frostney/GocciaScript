@@ -5,7 +5,9 @@ unit Goccia.Token;
 interface
 
 uses
-  SysUtils, StrUtils, Classes;
+  Classes,
+  StrUtils,
+  SysUtils;
 
 type
   TGocciaTokenType = (
@@ -46,8 +48,8 @@ type
     FLine: Integer;
     FColumn: Integer;
   public
-    constructor Create(AType: TGocciaTokenType; const ALexeme: string;
-      ALine, AColumn: Integer);
+    constructor Create(const AType: TGocciaTokenType; const ALexeme: string;
+      const ALine, AColumn: Integer);
     property TokenType: TGocciaTokenType read FType;
     property Lexeme: string read FLexeme;
     property Line: Integer read FLine;
@@ -56,8 +58,8 @@ type
 
 implementation
 
-constructor TGocciaToken.Create(AType: TGocciaTokenType; const ALexeme: string;
-  ALine, AColumn: Integer);
+constructor TGocciaToken.Create(const AType: TGocciaTokenType; const ALexeme: string;
+  const ALine, AColumn: Integer);
 begin
   FType := AType;
   FLexeme := ALexeme;

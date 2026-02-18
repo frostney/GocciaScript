@@ -5,67 +5,77 @@ unit Goccia.Evaluator.Assignment;
 interface
 
 uses
-  Goccia.Values.ObjectValue, Goccia.Values.ClassValue,
-  Goccia.Values.ArrayValue, Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.Primitives,
-  Goccia.Token, Goccia.Interfaces, Goccia.Error.ThrowErrorCallback, SysUtils, Math, Goccia.Evaluator.Arithmetic;
+  Math,
+  SysUtils,
+
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Evaluator.Arithmetic,
+  Goccia.Interfaces,
+  Goccia.Token,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ClassValue,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 // Property definition with descriptor (falls back to SetProperty for non-objects)
-procedure DefinePropertyOnValue(Obj: TGocciaValue; const PropName: string; Value: TGocciaValue);
+procedure DefinePropertyOnValue(const AObj: TGocciaValue; const APropName: string; const AValue: TGocciaValue);
 
 // Property assignment with error handling for non-objects
-procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
+procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
 
 // Compound assignment operations
-procedure PerformPropertyCompoundAssignment(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; Operator: TGocciaTokenType; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
+procedure PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
 
 // Increment/Decrement operations
-function PerformIncrement(OldValue: TGocciaValue; IsIncrement: Boolean): TGocciaValue; inline;
+function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boolean): TGocciaValue; inline;
 
 implementation
 
-uses Goccia.Values.ClassHelper, Goccia.Values.ErrorHelper;
+uses
+  Goccia.Values.ClassHelper,
+  Goccia.Values.ErrorHelper;
 
-procedure DefinePropertyOnValue(Obj: TGocciaValue; const PropName: string; Value: TGocciaValue);
+procedure DefinePropertyOnValue(const AObj: TGocciaValue; const APropName: string; const AValue: TGocciaValue);
 begin
-  if (Obj is TGocciaObjectValue) then
-    TGocciaObjectValue(Obj).DefineProperty(PropName,
-      TGocciaPropertyDescriptorData.Create(Value, [pfEnumerable, pfConfigurable, pfWritable]))
+  if (AObj is TGocciaObjectValue) then
+    TGocciaObjectValue(AObj).DefineProperty(APropName,
+      TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]))
   else
-    Obj.SetProperty(PropName, Value);
+    AObj.SetProperty(APropName, AValue);
 end;
 
-procedure AssignProperty(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
+procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
 begin
-  if (Obj is TGocciaInstanceValue) or (Obj is TGocciaObjectValue) or
-     (Obj is TGocciaClassValue) or (Obj is TGocciaArrayValue) then
-    Obj.SetProperty(PropertyName, Value)
-  else if Assigned(OnError) then
+  if (AObj is TGocciaInstanceValue) or (AObj is TGocciaObjectValue) or
+     (AObj is TGocciaClassValue) or (AObj is TGocciaArrayValue) then
+    AObj.SetProperty(APropertyName, AValue)
+  else if Assigned(AOnError) then
     ThrowTypeError('Cannot set property on non-object');
 end;
 
-procedure PerformPropertyCompoundAssignment(Obj: TGocciaValue; const PropertyName: string; Value: TGocciaValue; Operator: TGocciaTokenType; OnError: TGocciaThrowErrorCallback; Line, Column: Integer);
+procedure PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
 var
   CurrentValue, NewValue: TGocciaValue;
 begin
-  CurrentValue := Obj.GetProperty(PropertyName);
+  CurrentValue := AObj.GetProperty(APropertyName);
   if CurrentValue = nil then
   begin
-    if Assigned(OnError) then
-      OnError('Cannot access property on non-object', Line, Column);
+    if Assigned(AOnError) then
+      AOnError('Cannot access property on non-object', ALine, AColumn);
     Exit;
   end;
 
-  NewValue := PerformCompoundOperation(CurrentValue, Value, Operator);
-  Obj.SetProperty(PropertyName, NewValue);
+  NewValue := PerformCompoundOperation(CurrentValue, AValue, AOperator);
+  AObj.SetProperty(APropertyName, NewValue);
 end;
 
-function PerformIncrement(OldValue: TGocciaValue; IsIncrement: Boolean): TGocciaValue;
+function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boolean): TGocciaValue;
 begin
-  if IsIncrement then
-    Result := TGocciaNumberLiteralValue.Create(OldValue.ToNumberLiteral.Value + 1)
+  if AIsIncrement then
+    Result := TGocciaNumberLiteralValue.Create(AOldValue.ToNumberLiteral.Value + 1)
   else
-    Result := TGocciaNumberLiteralValue.Create(OldValue.ToNumberLiteral.Value - 1);
+    Result := TGocciaNumberLiteralValue.Create(AOldValue.ToNumberLiteral.Value - 1);
 end;
 
 end.

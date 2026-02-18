@@ -5,9 +5,13 @@ unit Goccia.Values.TemporalPlainTime;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectValue,
-  Goccia.Values.NativeFunction, Goccia.Arguments.Collection,
-  Goccia.SharedPrototype, SysUtils;
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.SharedPrototype,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaTemporalPlainTimeValue = class(TGocciaObjectValue)
@@ -21,30 +25,30 @@ type
     FMicrosecond: Integer;
     FNanosecond: Integer;
 
-    function GetHour(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function GetMinute(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function GetSecond(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function GetMillisecond(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function GetMicrosecond(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function GetNanosecond(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function GetHour(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetMinute(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetSecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetMillisecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetMicrosecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetNanosecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
-    function TimeWith(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function TimeAdd(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function TimeSubtract(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function TimeUntil(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function TimeSince(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function TimeRound(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function TimeEquals(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function TimeToString(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function TimeToJSON(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function TimeValueOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function TimeWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TimeAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TimeSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TimeUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TimeSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TimeRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TimeEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TimeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TimeToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TimeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
   public
-    constructor Create(AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer); overload;
+    constructor Create(const AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer); overload;
 
     function ToStringTag: string; override;
-    class procedure ExposePrototype(AConstructor: TGocciaObjectValue);
+    class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
 
     property Hour: Integer read FHour;
     property Minute: Integer read FMinute;
@@ -57,18 +61,20 @@ type
 implementation
 
 uses
-  Goccia.Values.ErrorHelper, Goccia.GarbageCollector,
-  Goccia.Values.ObjectPropertyDescriptor, Goccia.Temporal.Utils,
+  Goccia.GarbageCollector,
+  Goccia.Temporal.Utils,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalDuration;
 
-function AsPlainTime(AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainTimeValue;
+function AsPlainTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainTimeValue;
 begin
   if not (AValue is TGocciaTemporalPlainTimeValue) then
     ThrowTypeError(AMethod + ' called on non-PlainTime');
   Result := TGocciaTemporalPlainTimeValue(AValue);
 end;
 
-function CoercePlainTime(AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainTimeValue;
+function CoercePlainTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainTimeValue;
 var
   TimeRec: TTemporalTimeRecord;
   Obj: TGocciaObjectValue;
@@ -110,7 +116,7 @@ begin
   end;
 end;
 
-function TimeToTotalNanoseconds(T: TGocciaTemporalPlainTimeValue): Int64;
+function TimeToTotalNanoseconds(const T: TGocciaTemporalPlainTimeValue): Int64;
 begin
   Result := Int64(T.FNanosecond) +
             Int64(T.FMicrosecond) * 1000 +
@@ -122,7 +128,7 @@ end;
 
 { TGocciaTemporalPlainTimeValue }
 
-constructor TGocciaTemporalPlainTimeValue.Create(AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer);
+constructor TGocciaTemporalPlainTimeValue.Create(const AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer);
 begin
   inherited Create(nil);
   if not IsValidTime(AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond) then
@@ -168,7 +174,7 @@ begin
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TimeValueOf, 'valueOf', 0));
 end;
 
-class procedure TGocciaTemporalPlainTimeValue.ExposePrototype(AConstructor: TGocciaObjectValue);
+class procedure TGocciaTemporalPlainTimeValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
 begin
   if not Assigned(FShared) then
     TGocciaTemporalPlainTimeValue.Create(0, 0, 0, 0, 0, 0);
@@ -182,45 +188,45 @@ end;
 
 { Getters }
 
-function TGocciaTemporalPlainTimeValue.GetHour(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.GetHour(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsPlainTime(ThisValue, 'get PlainTime.hour').FHour);
+  Result := TGocciaNumberLiteralValue.Create(AsPlainTime(AThisValue, 'get PlainTime.hour').FHour);
 end;
 
-function TGocciaTemporalPlainTimeValue.GetMinute(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.GetMinute(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsPlainTime(ThisValue, 'get PlainTime.minute').FMinute);
+  Result := TGocciaNumberLiteralValue.Create(AsPlainTime(AThisValue, 'get PlainTime.minute').FMinute);
 end;
 
-function TGocciaTemporalPlainTimeValue.GetSecond(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.GetSecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsPlainTime(ThisValue, 'get PlainTime.second').FSecond);
+  Result := TGocciaNumberLiteralValue.Create(AsPlainTime(AThisValue, 'get PlainTime.second').FSecond);
 end;
 
-function TGocciaTemporalPlainTimeValue.GetMillisecond(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.GetMillisecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsPlainTime(ThisValue, 'get PlainTime.millisecond').FMillisecond);
+  Result := TGocciaNumberLiteralValue.Create(AsPlainTime(AThisValue, 'get PlainTime.millisecond').FMillisecond);
 end;
 
-function TGocciaTemporalPlainTimeValue.GetMicrosecond(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.GetMicrosecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsPlainTime(ThisValue, 'get PlainTime.microsecond').FMicrosecond);
+  Result := TGocciaNumberLiteralValue.Create(AsPlainTime(AThisValue, 'get PlainTime.microsecond').FMicrosecond);
 end;
 
-function TGocciaTemporalPlainTimeValue.GetNanosecond(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.GetNanosecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsPlainTime(ThisValue, 'get PlainTime.nanosecond').FNanosecond);
+  Result := TGocciaNumberLiteralValue.Create(AsPlainTime(AThisValue, 'get PlainTime.nanosecond').FNanosecond);
 end;
 
 { Methods }
 
-function TGocciaTemporalPlainTimeValue.TimeWith(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.TimeWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T: TGocciaTemporalPlainTimeValue;
   Obj: TGocciaObjectValue;
   V: TGocciaValue;
 
-  function GetFieldOr(const AName: string; ADefault: Integer): Integer;
+  function GetFieldOr(const AName: string; const ADefault: Integer): Integer;
   var
     Val: TGocciaValue;
   begin
@@ -232,8 +238,8 @@ var
   end;
 
 begin
-  T := AsPlainTime(ThisValue, 'PlainTime.prototype.with');
-  V := Args.GetElement(0);
+  T := AsPlainTime(AThisValue, 'PlainTime.prototype.with');
+  V := AArgs.GetElement(0);
   if not (V is TGocciaObjectValue) then
     ThrowTypeError('PlainTime.prototype.with requires an object argument');
   Obj := TGocciaObjectValue(V);
@@ -247,7 +253,7 @@ begin
     GetFieldOr('nanosecond', T.FNanosecond));
 end;
 
-function TGocciaTemporalPlainTimeValue.TimeAdd(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.TimeAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T: TGocciaTemporalPlainTimeValue;
   Dur: TGocciaTemporalDurationValue;
@@ -259,8 +265,8 @@ var
   VH: TGocciaValue;
   H, Mi, S, Ms, Us, Ns: Int64;
 begin
-  T := AsPlainTime(ThisValue, 'PlainTime.prototype.add');
-  Arg := Args.GetElement(0);
+  T := AsPlainTime(AThisValue, 'PlainTime.prototype.add');
+  Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaTemporalDurationValue then
     Dur := TGocciaTemporalDurationValue(Arg)
@@ -311,7 +317,7 @@ begin
     Balanced.Millisecond, Balanced.Microsecond, Balanced.Nanosecond);
 end;
 
-function TGocciaTemporalPlainTimeValue.TimeSubtract(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.TimeSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T: TGocciaTemporalPlainTimeValue;
   Dur: TGocciaTemporalDurationValue;
@@ -323,8 +329,8 @@ var
   VH: TGocciaValue;
   H, Mi, S, Ms, Us, Ns: Int64;
 begin
-  T := AsPlainTime(ThisValue, 'PlainTime.prototype.subtract');
-  Arg := Args.GetElement(0);
+  T := AsPlainTime(AThisValue, 'PlainTime.prototype.subtract');
+  Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaTemporalDurationValue then
     Dur := TGocciaTemporalDurationValue(Arg)
@@ -375,13 +381,13 @@ begin
     Balanced.Millisecond, Balanced.Microsecond, Balanced.Nanosecond);
 end;
 
-function TGocciaTemporalPlainTimeValue.TimeUntil(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.TimeUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T, Other: TGocciaTemporalPlainTimeValue;
   DiffNs: Int64;
 begin
-  T := AsPlainTime(ThisValue, 'PlainTime.prototype.until');
-  Other := CoercePlainTime(Args.GetElement(0), 'PlainTime.prototype.until');
+  T := AsPlainTime(AThisValue, 'PlainTime.prototype.until');
+  Other := CoercePlainTime(AArgs.GetElement(0), 'PlainTime.prototype.until');
 
   DiffNs := TimeToTotalNanoseconds(Other) - TimeToTotalNanoseconds(T);
 
@@ -394,13 +400,13 @@ begin
     DiffNs mod 1000);
 end;
 
-function TGocciaTemporalPlainTimeValue.TimeSince(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.TimeSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T, Other: TGocciaTemporalPlainTimeValue;
   DiffNs: Int64;
 begin
-  T := AsPlainTime(ThisValue, 'PlainTime.prototype.since');
-  Other := CoercePlainTime(Args.GetElement(0), 'PlainTime.prototype.since');
+  T := AsPlainTime(AThisValue, 'PlainTime.prototype.since');
+  Other := CoercePlainTime(AArgs.GetElement(0), 'PlainTime.prototype.since');
 
   DiffNs := TimeToTotalNanoseconds(T) - TimeToTotalNanoseconds(Other);
 
@@ -413,7 +419,7 @@ begin
     DiffNs mod 1000);
 end;
 
-function TGocciaTemporalPlainTimeValue.TimeRound(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.TimeRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T: TGocciaTemporalPlainTimeValue;
   UnitStr: string;
@@ -422,8 +428,8 @@ var
   ExtraDays: Int64;
   Balanced: TTemporalTimeRecord;
 begin
-  T := AsPlainTime(ThisValue, 'PlainTime.prototype.round');
-  Arg := Args.GetElement(0);
+  T := AsPlainTime(AThisValue, 'PlainTime.prototype.round');
+  Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaStringLiteralValue then
     UnitStr := TGocciaStringLiteralValue(Arg).Value
@@ -470,12 +476,12 @@ begin
     Balanced.Millisecond, Balanced.Microsecond, Balanced.Nanosecond);
 end;
 
-function TGocciaTemporalPlainTimeValue.TimeEquals(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.TimeEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T, Other: TGocciaTemporalPlainTimeValue;
 begin
-  T := AsPlainTime(ThisValue, 'PlainTime.prototype.equals');
-  Other := CoercePlainTime(Args.GetElement(0), 'PlainTime.prototype.equals');
+  T := AsPlainTime(AThisValue, 'PlainTime.prototype.equals');
+  Other := CoercePlainTime(AArgs.GetElement(0), 'PlainTime.prototype.equals');
 
   if CompareTimes(T.FHour, T.FMinute, T.FSecond, T.FMillisecond, T.FMicrosecond, T.FNanosecond,
                   Other.FHour, Other.FMinute, Other.FSecond, Other.FMillisecond, Other.FMicrosecond, Other.FNanosecond) = 0 then
@@ -484,25 +490,25 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-function TGocciaTemporalPlainTimeValue.TimeToString(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.TimeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T: TGocciaTemporalPlainTimeValue;
 begin
-  T := AsPlainTime(ThisValue, 'PlainTime.prototype.toString');
+  T := AsPlainTime(AThisValue, 'PlainTime.prototype.toString');
   Result := TGocciaStringLiteralValue.Create(
     FormatTimeString(T.FHour, T.FMinute, T.FSecond, T.FMillisecond, T.FMicrosecond, T.FNanosecond));
 end;
 
-function TGocciaTemporalPlainTimeValue.TimeToJSON(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.TimeToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T: TGocciaTemporalPlainTimeValue;
 begin
-  T := AsPlainTime(ThisValue, 'PlainTime.prototype.toJSON');
+  T := AsPlainTime(AThisValue, 'PlainTime.prototype.toJSON');
   Result := TGocciaStringLiteralValue.Create(
     FormatTimeString(T.FHour, T.FMinute, T.FSecond, T.FMillisecond, T.FMicrosecond, T.FNanosecond));
 end;
 
-function TGocciaTemporalPlainTimeValue.TimeValueOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalPlainTimeValue.TimeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   ThrowTypeError('Temporal.PlainTime.prototype.valueOf cannot be used; use toString or compare instead');
   Result := nil;

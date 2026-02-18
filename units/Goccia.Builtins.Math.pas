@@ -5,30 +5,42 @@ unit Goccia.Builtins.Math;
 interface
 
 uses
-  Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Values.NativeFunction, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Generics.Collections, Math, Goccia.Builtins.Base, Goccia.Arguments.Collection, Goccia.Arguments.Validator, Goccia.Arguments.Converter;
+  Generics.Collections,
+  Math,
+
+  Goccia.Arguments.Collection,
+  Goccia.Arguments.Converter,
+  Goccia.Arguments.Validator,
+  Goccia.Builtins.Base,
+  Goccia.Error,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaMath = class(TGocciaBuiltin)
   protected
     // Native methods
-    function MathAbs(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathFloor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathCeil(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathRound(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathMax(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathMin(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathPow(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathSqrt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathRandom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathClamp(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathSign(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathTrunc(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathExp(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathLog(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathLog10(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathSin(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathCos(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MathTan(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function MathAbs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathFloor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathCeil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathMax(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathMin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathPow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathSqrt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathRandom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathClamp(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathSign(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathTrunc(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathExp(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathLog(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathLog10(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathSin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathCos(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathTan(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -36,7 +48,8 @@ type
 
 implementation
 
-uses Goccia.Values.ClassHelper;
+uses
+  Goccia.Values.ClassHelper;
 
 { TGocciaMath }
 
@@ -74,13 +87,13 @@ begin
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;
 
-function TGocciaMath.MathAbs(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathAbs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.abs', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.abs', ThrowError);
 
-  NumberArg := Args.GetElement(0).ToNumberLiteral;
+  NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
   else if NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
@@ -89,40 +102,40 @@ begin
     Result := TGocciaNumberLiteralValue.Create(Abs(NumberArg.Value));
 end;
 
-function TGocciaMath.MathFloor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathFloor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.floor', ThrowError);
-  NumberArg := TGocciaArgumentConverter.GetNumber(Args, 0);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.floor', ThrowError);
+  NumberArg := TGocciaArgumentConverter.GetNumber(AArgs, 0);
   Result := TGocciaNumberLiteralValue.Create(Floor(NumberArg.Value));
 end;
 
-function TGocciaMath.MathCeil(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathCeil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.ceil', ThrowError);
-  NumberArg := TGocciaArgumentConverter.GetNumber(Args, 0);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.ceil', ThrowError);
+  NumberArg := TGocciaArgumentConverter.GetNumber(AArgs, 0);
   Result := TGocciaNumberLiteralValue.Create(Ceil(NumberArg.Value));
 end;
 
-function TGocciaMath.MathRound(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.round', ThrowError);
-  Result := TGocciaNumberLiteralValue.Create(Round(Args.GetElement(0).ToNumberLiteral.Value));
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.round', ThrowError);
+  Result := TGocciaNumberLiteralValue.Create(Round(AArgs.GetElement(0).ToNumberLiteral.Value));
 end;
 
-function TGocciaMath.MathMax(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathMax(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
   MaxVal, NumVal: TGocciaNumberLiteralValue;
 begin
-  if Args.Length = 0 then
+  if AArgs.Length = 0 then
     Result := TGocciaNumberLiteralValue.NegativeInfinityValue
   else
   begin
-    MaxVal := Args.GetElement(0).ToNumberLiteral;
+    MaxVal := AArgs.GetElement(0).ToNumberLiteral;
 
     // If any argument is NaN, return NaN
     if MaxVal.IsNaN then
@@ -131,9 +144,9 @@ begin
       Exit;
     end;
 
-    for I := 1 to Args.Length - 1 do
+    for I := 1 to AArgs.Length - 1 do
     begin
-      NumVal := Args.GetElement(I).ToNumberLiteral;
+      NumVal := AArgs.GetElement(I).ToNumberLiteral;
 
       // If any argument is NaN, return NaN
       if NumVal.IsNaN then
@@ -149,16 +162,16 @@ begin
   end;
 end;
 
-function TGocciaMath.MathMin(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathMin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
   MinVal, NumVal: TGocciaNumberLiteralValue;
 begin
-  if Args.Length = 0 then
+  if AArgs.Length = 0 then
     Result := TGocciaNumberLiteralValue.InfinityValue
   else
   begin
-    MinVal := Args.GetElement(0).ToNumberLiteral;
+    MinVal := AArgs.GetElement(0).ToNumberLiteral;
 
     // If any argument is NaN, return NaN
     if MinVal.IsNaN then
@@ -167,9 +180,9 @@ begin
       Exit;
     end;
 
-    for I := 1 to Args.Length - 1 do
+    for I := 1 to AArgs.Length - 1 do
     begin
-      NumVal := Args.GetElement(I).ToNumberLiteral;
+      NumVal := AArgs.GetElement(I).ToNumberLiteral;
 
       // If any argument is NaN, return NaN
       if NumVal.IsNaN then
@@ -185,23 +198,23 @@ begin
   end;
 end;
 
-function TGocciaMath.MathPow(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathPow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Base, Exponent: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 2, 'Math.pow', ThrowError);
-  Base := TGocciaArgumentConverter.GetNumber(Args, 0);
-  Exponent := TGocciaArgumentConverter.GetNumber(Args, 1);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Math.pow', ThrowError);
+  Base := TGocciaArgumentConverter.GetNumber(AArgs, 0);
+  Exponent := TGocciaArgumentConverter.GetNumber(AArgs, 1);
   Result := TGocciaNumberLiteralValue.Create(Power(Base.Value, Exponent.Value));
 end;
 
-function TGocciaMath.MathSqrt(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathSqrt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.sqrt', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.sqrt', ThrowError);
 
-  NumberArg := Args.GetElement(0).ToNumberLiteral;
+  NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
   else if NumberArg.IsInfinity then
@@ -214,21 +227,21 @@ begin
     Result := TGocciaNumberLiteralValue.Create(Sqrt(NumberArg.Value));
 end;
 
-function TGocciaMath.MathRandom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathRandom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireNone(Args, 'Math.random', ThrowError);
+  TGocciaArgumentValidator.RequireNone(AArgs, 'Math.random', ThrowError);
   Result := TGocciaNumberLiteralValue.Create(Random);
 end;
 
-function TGocciaMath.MathClamp(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathClamp(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Value, MinVal, MaxVal: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 3, 'Math.clamp', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 3, 'Math.clamp', ThrowError);
 
-  Value := Args.GetElement(0).ToNumberLiteral;
-  MinVal := Args.GetElement(1).ToNumberLiteral;
-  MaxVal := Args.GetElement(2).ToNumberLiteral;
+  Value := AArgs.GetElement(0).ToNumberLiteral;
+  MinVal := AArgs.GetElement(1).ToNumberLiteral;
+  MaxVal := AArgs.GetElement(2).ToNumberLiteral;
 
   // If any argument is NaN, return NaN
   if Value.IsNaN or MinVal.IsNaN or MaxVal.IsNaN then
@@ -253,13 +266,13 @@ begin
     Result := Value;
 end;
 
-function TGocciaMath.MathSign(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathSign(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberLiteral: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.sign', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.sign', ThrowError);
 
-  NumberLiteral := Args.GetElement(0).ToNumberLiteral;
+  NumberLiteral := AArgs.GetElement(0).ToNumberLiteral;
 
   if NumberLiteral.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
@@ -271,13 +284,13 @@ begin
     Result := TGocciaNumberLiteralValue.Create(Sign(NumberLiteral.Value));
 end;
 
-function TGocciaMath.MathTrunc(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathTrunc(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.trunc', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.trunc', ThrowError);
 
-  NumberArg := Args.GetElement(0).ToNumberLiteral;
+  NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
   else if NumberArg.IsInfinity then
@@ -288,13 +301,13 @@ begin
     Result := TGocciaNumberLiteralValue.Create(Trunc(NumberArg.Value));
 end;
 
-function TGocciaMath.MathExp(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathExp(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberLiteral: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.exp', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.exp', ThrowError);
 
-  NumberLiteral := Args.GetElement(0).ToNumberLiteral;
+  NumberLiteral := AArgs.GetElement(0).ToNumberLiteral;
 
   if NumberLiteral.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
@@ -306,13 +319,13 @@ begin
     Result := TGocciaNumberLiteralValue.Create(Exp(NumberLiteral.Value));
 end;
 
-function TGocciaMath.MathLog(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathLog(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.log', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.log', ThrowError);
 
-  NumberArg := Args.GetElement(0).ToNumberLiteral;
+  NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
   else if NumberArg.IsInfinity then
@@ -327,13 +340,13 @@ begin
     Result := TGocciaNumberLiteralValue.Create(Ln(NumberArg.Value)); // Natural logarithm (base e)
 end;
 
-function TGocciaMath.MathLog10(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathLog10(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.log10', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.log10', ThrowError);
 
-  NumberArg := Args.GetElement(0).ToNumberLiteral;
+  NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
   else if NumberArg.IsInfinity then
@@ -348,13 +361,13 @@ begin
     Result := TGocciaNumberLiteralValue.Create(Log10(NumberArg.Value));
 end;
 
-function TGocciaMath.MathSin(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathSin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.sin', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.sin', ThrowError);
 
-  NumberArg := Args.GetElement(0).ToNumberLiteral;
+  NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
   else if NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
@@ -363,13 +376,13 @@ begin
     Result := TGocciaNumberLiteralValue.Create(Sin(NumberArg.Value));
 end;
 
-function TGocciaMath.MathCos(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathCos(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.cos', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.cos', ThrowError);
 
-  NumberArg := Args.GetElement(0).ToNumberLiteral;
+  NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
   else if NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
@@ -378,13 +391,13 @@ begin
     Result := TGocciaNumberLiteralValue.Create(Cos(NumberArg.Value));
 end;
 
-function TGocciaMath.MathTan(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMath.MathTan(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Math.tan', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.tan', ThrowError);
 
-  NumberArg := Args.GetElement(0).ToNumberLiteral;
+  NumberArg := AArgs.GetElement(0).ToNumberLiteral;
   if NumberArg.IsNaN then
     Result := TGocciaNumberLiteralValue.NaNValue
   else if NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then

@@ -5,7 +5,7 @@ unit Goccia.Error.ThrowErrorCallback;
 interface
 
 type
-  TGocciaThrowErrorCallback = procedure(const Message: string; Line, Column: Integer) of object;
+  TGocciaThrowErrorCallback = procedure(const AMessage: string; const ALine, AColumn: Integer) of object;
 
 implementation
 

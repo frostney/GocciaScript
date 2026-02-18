@@ -5,8 +5,19 @@ unit Goccia.Builtins.GlobalString;
 interface
 
 uses
-  Goccia.Builtins.Base, Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Values.Error, Goccia.Values.ObjectValue, 
-  Goccia.Values.Primitives, Goccia.Arguments.Collection, Goccia.Arguments.Validator, Goccia.Values.ClassValue, SysUtils, Generics.Collections;
+  Generics.Collections,
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.Arguments.Validator,
+  Goccia.Builtins.Base,
+  Goccia.Error,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.ClassValue,
+  Goccia.Values.Error,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaGlobalString = class(TGocciaBuiltin)
@@ -20,9 +31,9 @@ type
 implementation
 
 uses
+  Goccia.Values.ClassHelper,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ClassHelper;
+  Goccia.Values.ObjectPropertyDescriptor;
 
 constructor TGocciaGlobalString.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin

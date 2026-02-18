@@ -5,7 +5,13 @@ unit Goccia.Lexer;
 interface
 
 uses
-  Goccia.Token, Goccia.Keywords, Goccia.Error, Generics.Collections, Classes, SysUtils;
+  Classes,
+  Generics.Collections,
+  SysUtils,
+
+  Goccia.Error,
+  Goccia.Keywords,
+  Goccia.Token;
 
 type
   TGocciaLexer = class
@@ -29,10 +35,10 @@ type
     function Advance: Char;
     function Peek: Char; inline;
     function PeekNext: Char; inline;
-    function Match(Expected: Char): Boolean; inline;
-    function IsValidIdentifierChar(C: Char): Boolean;
-    procedure AddToken(TokenType: TGocciaTokenType); overload;
-    procedure AddToken(TokenType: TGocciaTokenType; const Literal: string); overload;
+    function Match(const AExpected: Char): Boolean; inline;
+    function IsValidIdentifierChar(const C: Char): Boolean;
+    procedure AddToken(const ATokenType: TGocciaTokenType); overload;
+    procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string); overload;
     procedure ScanToken;
     procedure ScanString;
     procedure ScanTemplate;
@@ -40,7 +46,7 @@ type
     procedure ScanIdentifier;
     function ScanUnicodeEscape: string;
     function ScanHexEscape: string;
-    procedure ProcessEscapeSequence(ASB: TStringBuilder);
+    procedure ProcessEscapeSequence(const ASB: TStringBuilder);
     procedure SkipWhitespace;
     procedure SkipComment;
     procedure SkipBlockComment;
@@ -101,7 +107,7 @@ begin
     Result := FSource[FCurrent + 1];
 end;
 
-function TGocciaLexer.Match(Expected: Char): Boolean; inline;
+function TGocciaLexer.Match(const AExpected: Char): Boolean; inline;
 begin
   if IsAtEnd then
   begin
@@ -109,7 +115,7 @@ begin
     Exit;
   end;
 
-  if FSource[FCurrent] <> Expected then
+  if FSource[FCurrent] <> AExpected then
   begin
     Result := False;
     Exit;
@@ -120,14 +126,14 @@ begin
   Result := True;
 end;
 
-procedure TGocciaLexer.AddToken(TokenType: TGocciaTokenType);
+procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType);
 begin
-  AddToken(TokenType, Copy(FSource, FStart, FCurrent - FStart));
+  AddToken(ATokenType, Copy(FSource, FStart, FCurrent - FStart));
 end;
 
-procedure TGocciaLexer.AddToken(TokenType: TGocciaTokenType; const Literal: string);
+procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string);
 begin
-  FTokens.Add(TGocciaToken.Create(TokenType, Literal, FLine, FStartColumn));
+  FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FLine, FStartColumn));
 end;
 
 procedure TGocciaLexer.SkipWhitespace;
@@ -261,7 +267,7 @@ begin
   Result := Chr(CodePoint);
 end;
 
-procedure TGocciaLexer.ProcessEscapeSequence(ASB: TStringBuilder);
+procedure TGocciaLexer.ProcessEscapeSequence(const ASB: TStringBuilder);
 begin
   case Peek of
     'n': begin ASB.Append(#10); Advance; end;
@@ -457,9 +463,9 @@ begin
   AddToken(gttNumber, Value);
 end;
 
-function TGocciaLexer.IsValidIdentifierChar(C: Char): Boolean;
+function TGocciaLexer.IsValidIdentifierChar(const C: Char): Boolean;
 begin
-  Result := CharInSet(C, ValidIdentifierChars) or (Ord(C) > 127); // Allow Unicode characters
+  Result := CharInSet(C, ValidIdentifierChars) or (Ord(C) > 127);
 end;
 
 class procedure TGocciaLexer.InitKeywords;

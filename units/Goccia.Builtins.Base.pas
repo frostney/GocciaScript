@@ -5,7 +5,15 @@ unit Goccia.Builtins.Base;
 interface
 
 uses
-  Goccia.Values.ObjectValue, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Scope, SysUtils, Generics.Collections, Goccia.Arguments.Collection, Goccia.Values.Primitives;
+  Generics.Collections,
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.Error,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaBuiltin = class
@@ -25,7 +33,8 @@ type
 
 implementation
 
-uses Goccia.GarbageCollector;
+uses
+  Goccia.GarbageCollector;
 
 constructor TGocciaBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin

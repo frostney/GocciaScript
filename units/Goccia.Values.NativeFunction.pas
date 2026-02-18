@@ -5,8 +5,16 @@ unit Goccia.Values.NativeFunction;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.FunctionBase,
-  Goccia.Arguments.Collection, Goccia.Values.NativeFunctionCallback, Generics.Collections, SysUtils, Math, Goccia.Logger;
+  Generics.Collections,
+  Math,
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.Logger,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.NativeFunctionCallback,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaNativeFunctionValue = class(TGocciaFunctionBase)
@@ -18,11 +26,11 @@ type
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
   public
-    constructor Create(AFunction: TGocciaNativeFunctionCallback; const AName: string;
-      AArity: Integer);
-    constructor CreateWithoutPrototype(AFunction: TGocciaNativeFunctionCallback; const AName: string;
-      AArity: Integer);
-    function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; override;
+    constructor Create(const AFunction: TGocciaNativeFunctionCallback; const AName: string;
+      const AArity: Integer);
+    constructor CreateWithoutPrototype(const AFunction: TGocciaNativeFunctionCallback; const AName: string;
+      const AArity: Integer);
+    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     property NativeFunction: TGocciaNativeFunctionCallback read FFunction;
     property Name: string read FName;
     property Arity: Integer read FArity;
@@ -31,8 +39,8 @@ type
 
 implementation
 
-constructor TGocciaNativeFunctionValue.Create(AFunction: TGocciaNativeFunctionCallback;
-  const AName: string; AArity: Integer);
+constructor TGocciaNativeFunctionValue.Create(const AFunction: TGocciaNativeFunctionCallback;
+  const AName: string; const AArity: Integer);
 begin
   FFunction := AFunction;
   FName := AName;
@@ -41,8 +49,8 @@ begin
   inherited Create;
 end;
 
-constructor TGocciaNativeFunctionValue.CreateWithoutPrototype(AFunction: TGocciaNativeFunctionCallback;
-  const AName: string; AArity: Integer);
+constructor TGocciaNativeFunctionValue.CreateWithoutPrototype(const AFunction: TGocciaNativeFunctionCallback;
+  const AName: string; const AArity: Integer);
 begin
   FFunction := AFunction;
   FName := AName;
@@ -51,9 +59,9 @@ begin
   inherited Create; // No prototype for methods that are part of the prototype
 end;
 
-function TGocciaNativeFunctionValue.Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaNativeFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := FFunction(Arguments, ThisValue);
+  Result := FFunction(AArguments, AThisValue);
 end;
 
 function TGocciaNativeFunctionValue.GetFunctionLength: Integer;

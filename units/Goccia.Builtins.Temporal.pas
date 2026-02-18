@@ -5,9 +5,15 @@ unit Goccia.Builtins.Temporal;
 interface
 
 uses
-  Goccia.Builtins.Base, Goccia.Scope, Goccia.Error.ThrowErrorCallback,
-  Goccia.Values.Primitives, Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectValue, Goccia.Arguments.Collection, SysUtils;
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.Builtins.Base,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaTemporalBuiltin = class(TGocciaBuiltin)
@@ -15,37 +21,37 @@ type
     FTemporalNamespace: TGocciaObjectValue;
 
     // Duration constructor + statics
-    function DurationConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function DurationFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function DurationCompare(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function DurationConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     // Instant constructor + statics
-    function InstantConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function InstantFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function InstantFromEpochMilliseconds(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function InstantFromEpochNanoseconds(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function InstantCompare(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function InstantConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantFromEpochMilliseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantFromEpochNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     // PlainDate constructor + statics
-    function PlainDateConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function PlainDateFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function PlainDateCompare(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function PlainDateConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PlainDateFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PlainDateCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     // PlainTime constructor + statics
-    function PlainTimeConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function PlainTimeFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function PlainTimeCompare(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function PlainTimeConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PlainTimeFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PlainTimeCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     // PlainDateTime constructor + statics
-    function PlainDateTimeConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function PlainDateTimeFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function PlainDateTimeCompare(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function PlainDateTimeConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PlainDateTimeFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PlainDateTimeCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     // Temporal.Now
-    function NowInstant(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function NowPlainDateISO(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function NowPlainTimeISO(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function NowPlainDateTimeISO(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function NowInstant(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function NowPlainDateISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function NowPlainTimeISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function NowPlainDateTimeISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure RegisterDuration;
     procedure RegisterInstant;
@@ -60,11 +66,18 @@ type
 implementation
 
 uses
-  Goccia.Values.TemporalDuration, Goccia.Values.TemporalInstant,
-  Goccia.Values.TemporalPlainDate, Goccia.Values.TemporalPlainTime,
-  Goccia.Values.TemporalPlainDateTime, Goccia.Values.ErrorHelper,
-  Goccia.Temporal.Utils, Goccia.Values.ObjectPropertyDescriptor,
-  TimingUtils, DateUtils;
+  DateUtils,
+
+  Goccia.Temporal.Utils,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.TemporalDuration,
+  Goccia.Values.TemporalInstant,
+  Goccia.Values.TemporalPlainDate,
+  Goccia.Values.TemporalPlainDateTime,
+  Goccia.Values.TemporalPlainTime,
+
+  TimingUtils;
 
 { TGocciaTemporalBuiltin }
 
@@ -100,17 +113,17 @@ begin
   FTemporalNamespace.AssignProperty('Duration', Ctor);
 end;
 
-function TGocciaTemporalBuiltin.DurationConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.DurationConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Y, Mo, W, D, H, Mi, S, Ms, Us, Ns: Int64;
 
-  function GetArgOr(AIndex: Integer; ADefault: Int64): Int64;
+  function GetArgOr(const AIndex: Integer; const ADefault: Int64): Int64;
   var
     V: TGocciaValue;
   begin
-    if AIndex < Args.Length then
+    if AIndex < AArgs.Length then
     begin
-      V := Args.GetElement(AIndex);
+      V := AArgs.GetElement(AIndex);
       if (V is TGocciaUndefinedLiteralValue) then
         Result := ADefault
       else
@@ -135,14 +148,14 @@ begin
   Result := TGocciaTemporalDurationValue.Create(Y, Mo, W, D, H, Mi, S, Ms, Us, Ns);
 end;
 
-function TGocciaTemporalBuiltin.DurationFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.DurationFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Arg: TGocciaValue;
   D: TGocciaTemporalDurationValue;
   DurRec: TTemporalDurationRecord;
   Obj: TGocciaObjectValue;
 
-  function GetFieldOr(const AName: string; ADefault: Int64): Int64;
+  function GetFieldOr(const AName: string; const ADefault: Int64): Int64;
   var
     V: TGocciaValue;
   begin
@@ -154,7 +167,7 @@ var
   end;
 
 begin
-  Arg := Args.GetElement(0);
+  Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaTemporalDurationValue then
   begin
@@ -188,12 +201,12 @@ begin
   end;
 end;
 
-function TGocciaTemporalBuiltin.DurationCompare(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.DurationCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D1, D2: TGocciaTemporalDurationValue;
   TotalNs1, TotalNs2: Double;
 
-  function CoerceDuration(AArg: TGocciaValue): TGocciaTemporalDurationValue;
+  function CoerceDuration(const AArg: TGocciaValue): TGocciaTemporalDurationValue;
   var
     DurRec: TTemporalDurationRecord;
     Obj: TGocciaObjectValue;
@@ -217,8 +230,8 @@ var
   end;
 
 begin
-  D1 := CoerceDuration(Args.GetElement(0));
-  D2 := CoerceDuration(Args.GetElement(1));
+  D1 := CoerceDuration(AArgs.GetElement(0));
+  D2 := CoerceDuration(AArgs.GetElement(1));
 
   // Compare using total nanoseconds (ignoring calendar units for simplicity)
   TotalNs1 := D1.Nanoseconds + D1.Microseconds * 1000.0 + D1.Milliseconds * 1000000.0 +
@@ -255,23 +268,23 @@ begin
   FTemporalNamespace.AssignProperty('Instant', Ctor);
 end;
 
-function TGocciaTemporalBuiltin.InstantConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.InstantConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   EpochNs: Double;
   Ms: Int64;
   SubMs: Integer;
 begin
-  if Args.Length < 1 then
+  if AArgs.Length < 1 then
     ThrowTypeError('Temporal.Instant requires epochNanoseconds argument');
 
-  EpochNs := Args.GetElement(0).ToNumberLiteral.Value;
+  EpochNs := AArgs.GetElement(0).ToNumberLiteral.Value;
   Ms := Trunc(EpochNs / 1000000);
   SubMs := Trunc(EpochNs - Ms * 1000000.0);
 
   Result := TGocciaTemporalInstantValue.Create(Ms, SubMs);
 end;
 
-function TGocciaTemporalBuiltin.InstantFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.InstantFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Arg: TGocciaValue;
   Inst: TGocciaTemporalInstantValue;
@@ -280,7 +293,7 @@ var
   EpochMs: Int64;
   SubMs: Integer;
 begin
-  Arg := Args.GetElement(0);
+  Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaTemporalInstantValue then
   begin
@@ -304,33 +317,33 @@ begin
   end;
 end;
 
-function TGocciaTemporalBuiltin.InstantFromEpochMilliseconds(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.InstantFromEpochMilliseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if Args.Length < 1 then
+  if AArgs.Length < 1 then
     ThrowTypeError('Temporal.Instant.fromEpochMilliseconds requires an argument');
   Result := TGocciaTemporalInstantValue.Create(
-    Trunc(Args.GetElement(0).ToNumberLiteral.Value), 0);
+    Trunc(AArgs.GetElement(0).ToNumberLiteral.Value), 0);
 end;
 
-function TGocciaTemporalBuiltin.InstantFromEpochNanoseconds(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.InstantFromEpochNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   EpochNs: Double;
   Ms: Int64;
   SubMs: Integer;
 begin
-  if Args.Length < 1 then
+  if AArgs.Length < 1 then
     ThrowTypeError('Temporal.Instant.fromEpochNanoseconds requires an argument');
-  EpochNs := Args.GetElement(0).ToNumberLiteral.Value;
+  EpochNs := AArgs.GetElement(0).ToNumberLiteral.Value;
   Ms := Trunc(EpochNs / 1000000);
   SubMs := Trunc(EpochNs - Ms * 1000000.0);
   Result := TGocciaTemporalInstantValue.Create(Ms, SubMs);
 end;
 
-function TGocciaTemporalBuiltin.InstantCompare(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.InstantCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   I1, I2: TGocciaTemporalInstantValue;
 
-  function CoerceInst(AArg: TGocciaValue): TGocciaTemporalInstantValue;
+  function CoerceInst(const AArg: TGocciaValue): TGocciaTemporalInstantValue;
   var
     DateRec: TTemporalDateRecord;
     TimeRec: TTemporalTimeRecord;
@@ -357,8 +370,8 @@ var
   end;
 
 begin
-  I1 := CoerceInst(Args.GetElement(0));
-  I2 := CoerceInst(Args.GetElement(1));
+  I1 := CoerceInst(AArgs.GetElement(0));
+  I2 := CoerceInst(AArgs.GetElement(1));
 
   if I1.EpochMilliseconds < I2.EpochMilliseconds then
     Result := TGocciaNumberLiteralValue.Create(-1)
@@ -387,18 +400,18 @@ begin
   FTemporalNamespace.AssignProperty('PlainDate', Ctor);
 end;
 
-function TGocciaTemporalBuiltin.PlainDateConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.PlainDateConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if Args.Length < 3 then
+  if AArgs.Length < 3 then
     ThrowTypeError('Temporal.PlainDate requires year, month, day arguments');
 
   Result := TGocciaTemporalPlainDateValue.Create(
-    Trunc(Args.GetElement(0).ToNumberLiteral.Value),
-    Trunc(Args.GetElement(1).ToNumberLiteral.Value),
-    Trunc(Args.GetElement(2).ToNumberLiteral.Value));
+    Trunc(AArgs.GetElement(0).ToNumberLiteral.Value),
+    Trunc(AArgs.GetElement(1).ToNumberLiteral.Value),
+    Trunc(AArgs.GetElement(2).ToNumberLiteral.Value));
 end;
 
-function TGocciaTemporalBuiltin.PlainDateFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.PlainDateFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Arg: TGocciaValue;
   D: TGocciaTemporalPlainDateValue;
@@ -406,7 +419,7 @@ var
   TimeRec: TTemporalTimeRecord;
   Obj: TGocciaObjectValue;
 begin
-  Arg := Args.GetElement(0);
+  Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaTemporalPlainDateValue then
   begin
@@ -437,11 +450,11 @@ begin
   end;
 end;
 
-function TGocciaTemporalBuiltin.PlainDateCompare(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.PlainDateCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D1, D2: TGocciaTemporalPlainDateValue;
 
-  function CoerceDate(AArg: TGocciaValue): TGocciaTemporalPlainDateValue;
+  function CoerceDate(const AArg: TGocciaValue): TGocciaTemporalPlainDateValue;
   var
     DateRec: TTemporalDateRecord;
     TimeRec: TTemporalTimeRecord;
@@ -468,8 +481,8 @@ var
   end;
 
 begin
-  D1 := CoerceDate(Args.GetElement(0));
-  D2 := CoerceDate(Args.GetElement(1));
+  D1 := CoerceDate(AArgs.GetElement(0));
+  D2 := CoerceDate(AArgs.GetElement(1));
 
   Result := TGocciaNumberLiteralValue.Create(
     CompareDates(D1.Year, D1.Month, D1.Day, D2.Year, D2.Month, D2.Day));
@@ -490,15 +503,15 @@ begin
   FTemporalNamespace.AssignProperty('PlainTime', Ctor);
 end;
 
-function TGocciaTemporalBuiltin.PlainTimeConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.PlainTimeConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
-  function GetArgOr(AIndex: Integer; ADefault: Integer): Integer;
+  function GetArgOr(const AIndex: Integer; const ADefault: Integer): Integer;
   var
     V: TGocciaValue;
   begin
-    if AIndex < Args.Length then
+    if AIndex < AArgs.Length then
     begin
-      V := Args.GetElement(AIndex);
+      V := AArgs.GetElement(AIndex);
       if V is TGocciaUndefinedLiteralValue then
         Result := ADefault
       else
@@ -514,7 +527,7 @@ begin
     GetArgOr(3, 0), GetArgOr(4, 0), GetArgOr(5, 0));
 end;
 
-function TGocciaTemporalBuiltin.PlainTimeFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.PlainTimeFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Arg: TGocciaValue;
   T: TGocciaTemporalPlainTimeValue;
@@ -523,7 +536,7 @@ var
   V: TGocciaValue;
   H, Mi, S, Ms, Us, Ns: Integer;
 begin
-  Arg := Args.GetElement(0);
+  Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaTemporalPlainTimeValue then
   begin
@@ -564,11 +577,11 @@ begin
   end;
 end;
 
-function TGocciaTemporalBuiltin.PlainTimeCompare(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.PlainTimeCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T1, T2: TGocciaTemporalPlainTimeValue;
 
-  function CoerceTime(AArg: TGocciaValue): TGocciaTemporalPlainTimeValue;
+  function CoerceTime(const AArg: TGocciaValue): TGocciaTemporalPlainTimeValue;
   var
     TimeRec: TTemporalTimeRecord;
   begin
@@ -594,8 +607,8 @@ var
   end;
 
 begin
-  T1 := CoerceTime(Args.GetElement(0));
-  T2 := CoerceTime(Args.GetElement(1));
+  T1 := CoerceTime(AArgs.GetElement(0));
+  T2 := CoerceTime(AArgs.GetElement(1));
 
   Result := TGocciaNumberLiteralValue.Create(
     CompareTimes(T1.Hour, T1.Minute, T1.Second, T1.Millisecond, T1.Microsecond, T1.Nanosecond,
@@ -617,15 +630,15 @@ begin
   FTemporalNamespace.AssignProperty('PlainDateTime', Ctor);
 end;
 
-function TGocciaTemporalBuiltin.PlainDateTimeConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.PlainDateTimeConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
-  function GetArgOr(AIndex: Integer; ADefault: Integer): Integer;
+  function GetArgOr(const AIndex: Integer; const ADefault: Integer): Integer;
   var
     V: TGocciaValue;
   begin
-    if AIndex < Args.Length then
+    if AIndex < AArgs.Length then
     begin
-      V := Args.GetElement(AIndex);
+      V := AArgs.GetElement(AIndex);
       if V is TGocciaUndefinedLiteralValue then
         Result := ADefault
       else
@@ -636,7 +649,7 @@ function TGocciaTemporalBuiltin.PlainDateTimeConstructorFn(Args: TGocciaArgument
   end;
 
 begin
-  if Args.Length < 3 then
+  if AArgs.Length < 3 then
     ThrowTypeError('Temporal.PlainDateTime requires at least year, month, day arguments');
 
   Result := TGocciaTemporalPlainDateTimeValue.Create(
@@ -645,7 +658,7 @@ begin
     GetArgOr(6, 0), GetArgOr(7, 0), GetArgOr(8, 0));
 end;
 
-function TGocciaTemporalBuiltin.PlainDateTimeFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.PlainDateTimeFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Arg: TGocciaValue;
   DT: TGocciaTemporalPlainDateTimeValue;
@@ -655,7 +668,7 @@ var
   V: TGocciaValue;
   Y, Mo, D, H, Mi, S, Ms, Us, Ns: Integer;
 begin
-  Arg := Args.GetElement(0);
+  Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaTemporalPlainDateTimeValue then
   begin
@@ -694,12 +707,12 @@ begin
   end;
 end;
 
-function TGocciaTemporalBuiltin.PlainDateTimeCompare(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.PlainDateTimeCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   DT1, DT2: TGocciaTemporalPlainDateTimeValue;
   Cmp: Integer;
 
-  function CoerceDT(AArg: TGocciaValue): TGocciaTemporalPlainDateTimeValue;
+  function CoerceDT(const AArg: TGocciaValue): TGocciaTemporalPlainDateTimeValue;
   var
     DateRec: TTemporalDateRecord;
     TimeRec: TTemporalTimeRecord;
@@ -727,8 +740,8 @@ var
   end;
 
 begin
-  DT1 := CoerceDT(Args.GetElement(0));
-  DT2 := CoerceDT(Args.GetElement(1));
+  DT1 := CoerceDT(AArgs.GetElement(0));
+  DT2 := CoerceDT(AArgs.GetElement(1));
 
   Cmp := CompareDates(DT1.Year, DT1.Month, DT1.Day, DT2.Year, DT2.Month, DT2.Day);
   if Cmp = 0 then
@@ -752,7 +765,7 @@ begin
   FTemporalNamespace.AssignProperty('Now', NowObj);
 end;
 
-function TGocciaTemporalBuiltin.NowInstant(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.NowInstant(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   EpochNs: Int64;
 begin
@@ -760,7 +773,7 @@ begin
   Result := TGocciaTemporalInstantValue.Create(EpochNs div 1000000, Integer(EpochNs mod 1000000));
 end;
 
-function TGocciaTemporalBuiltin.NowPlainDateISO(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.NowPlainDateISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Y, M, D: Word;
 begin
@@ -768,7 +781,7 @@ begin
   Result := TGocciaTemporalPlainDateValue.Create(Y, M, D);
 end;
 
-function TGocciaTemporalBuiltin.NowPlainTimeISO(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.NowPlainTimeISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   H, Mi, S, Ms: Word;
 begin
@@ -776,7 +789,7 @@ begin
   Result := TGocciaTemporalPlainTimeValue.Create(H, Mi, S, Ms, 0, 0);
 end;
 
-function TGocciaTemporalBuiltin.NowPlainDateTimeISO(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalBuiltin.NowPlainDateTimeISO(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Y, Mo, D, H, Mi, S, Ms: Word;
 begin

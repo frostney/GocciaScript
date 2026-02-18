@@ -3,7 +3,11 @@ program Goccia.Values.Primitives.Test;
 {$I Goccia.inc}
 
 uses
-  Classes, SysUtils, Goccia.Values.Primitives,
+  Classes,
+  SysUtils,
+
+  Goccia.Values.Primitives,
+
   TestRunner;
 
 type

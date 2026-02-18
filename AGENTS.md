@@ -48,6 +48,12 @@ GocciaScript is a subset of ECMAScript 2020 implemented in FreePascal. It provid
 
 # Compile and run a specific test
 ./build.pas testrunner && ./build/TestRunner tests/language/expressions/addition/basic-addition.js
+
+# Check formatting without modifying files
+./format.pas --check
+
+# Auto-format all Pascal files
+./format.pas
 ```
 
 ### Direct FPC Compilation
@@ -83,6 +89,35 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Temporal Built-in | `Goccia.Builtins.Temporal.pas` | Temporal namespace, constructors, static methods, Temporal.Now |
 
 ## Development Workflow
+
+### Local Setup
+
+After cloning the repository, install [Lefthook](https://github.com/evilmartians/lefthook) to enable the pre-commit auto-formatter:
+
+```bash
+# macOS
+brew install lefthook
+
+# Linux (Snap)
+sudo snap install lefthook
+
+# Windows (Scoop)
+scoop install lefthook
+
+# Any platform with Go or npm
+go install github.com/evilmartians/lefthook@latest
+npm install -g lefthook
+```
+
+Then register the git hooks:
+
+```bash
+lefthook install
+```
+
+This ensures `./format.pas` runs automatically on staged `.pas`/`.dpr` files before each commit, auto-fixing uses clause ordering, PascalCase function names, and parameter `A` prefix naming.
+
+### Feature Workflow
 
 Every new feature or change **must** follow this workflow:
 
@@ -190,13 +225,17 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 
 ### Key Conventions
 
+- **Function/procedure names:** PascalCase (e.g., `EvaluateBinary`, `GetProperty`). External C bindings are exempt. Auto-fixed by `./format.pas`.
 - **Unit naming:** `Goccia.<Category>.<Name>.pas` (dot-separated hierarchy)
 - **Class naming:** `TGoccia<Name>` prefix
 - **Interface naming:** `I<Name>` prefix
 - **Private fields:** `F` prefix
-- **Parameters:** `A` prefix
+- **Parameters:** `A` prefix for multi-letter names (e.g., `AScope`, `AValue`); single-letter names (`A`, `B`, `E`, `T`) are left as-is. Auto-fixed by `./format.pas`.
+- **`const` parameters:** Prefer `const` for all parameters that are not modified in the function body
+- **Uses clauses:** One unit per line, grouped (System > Project > Relative), alphabetically sorted within each group, blank line between groups. Auto-fixed by `./format.pas`.
 - **Indentation:** 2 spaces (see `.editorconfig`)
 - **Compiler directives:** All units include `{$I Goccia.inc}`
+- **General rules:** Follow [Embarcadero's Pascal style guide](https://docwiki.embarcadero.com/RADStudio/Athens/en/General_Rules) for casing, keywords, and [type declarations](https://docwiki.embarcadero.com/RADStudio/Athens/en/Type_Declarations)
 
 ### Platform Pitfall: `Double(Int64)` on AArch64
 
@@ -270,6 +309,8 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 - Shared directives: `units/Goccia.inc` (overflow/range checks conditional on `PRODUCTION` define)
 - Output directory: `build/`
 - CI: Two workflow files — `ci.yml` (main + tags, full matrix, all checks + release) and `pr.yml` (PRs, ubuntu-latest x64 only, JS tests + benchmark comparison comment)
+- Auto-formatter: `./format.pas` (instantfpc script, no build step) — auto-fixes uses clause ordering, PascalCase function names, and parameter `A` prefix naming
+- Pre-commit hook: [Lefthook](https://github.com/evilmartians/lefthook) (`lefthook.yml`) — requires `lefthook install` after cloning
 
 ## Documentation Index
 

@@ -5,7 +5,12 @@ unit TestRunner;
 interface
 
 uses
-  SysUtils, Classes, Generics.Collections, Generics.Defaults, DateUtils, TypInfo;
+  Classes,
+  DateUtils,
+  Generics.Collections,
+  Generics.Defaults,
+  SysUtils,
+  TypInfo;
 
 type
   // Forward declarations
@@ -44,9 +49,9 @@ type
   TExpect<T> = record
   private
     FActual: T;
-    class function FormatValue(const Value: T): string; static;
+    class function FormatValue(const AValue: T): string; static;
   public
-    procedure ToBe(Expected: T);
+    procedure ToBe(const AExpected: T);
   end;
 
   // Base test suite class
@@ -65,8 +70,8 @@ type
     procedure AfterEach; virtual;
 
     // Test registration
-    procedure Test(const Name: string; Method: TTestMethod);
-    procedure Skip(const Name: string; Method: TTestMethod; const Reason: string = '');
+    procedure Test(const AName: string; const AMethod: TTestMethod);
+    procedure Skip(const AName: string; const AMethod: TTestMethod; const AReason: string = '');
 
 
     // Override this to register your tests
@@ -78,7 +83,7 @@ type
     property Tests: TList<TTestRegistration> read FTests;
 
     // Assertion helper
-    procedure Fail(const Message: string);
+    procedure Fail(const AMessage: string);
   end;
 
   TTestSuiteClass = class of TTestSuite;
@@ -90,22 +95,22 @@ type
     FResults: TList<TTestResult>;
     FStartTime: TDateTime;
 
-    procedure RunTest(Suite: TTestSuite; const Test: TTestRegistration);
+    procedure RunTest(const ASuite: TTestSuite; const ATest: TTestRegistration);
     procedure PrintResults;
     procedure PrintSummary;
   public
     constructor Create;
     destructor Destroy; override;
 
-    procedure AddSuite(SuiteClass: TTestSuiteClass); overload;
-    procedure AddSuite(Suite: TTestSuite); overload;
+    procedure AddSuite(const ASuiteClass: TTestSuiteClass); overload;
+    procedure AddSuite(const ASuite: TTestSuite); overload;
     procedure Run;
 
     property Results: TList<TTestResult> read FResults;
   end;
 
 // Standalone generic function for fluent assertions: Expect<string>('hello').ToBe('hello')
-function Expect<T>(Value: T): TExpect<T>;
+function Expect<T>(const AValue: T): TExpect<T>;
 
 // Global test runner instance
 var
@@ -133,11 +138,11 @@ end;
 
 { TExpect<T> }
 
-class function TExpect<T>.FormatValue(const Value: T): string;
+class function TExpect<T>.FormatValue(const AValue: T): string;
 var
   P: Pointer;
 begin
-  P := @Value;
+  P := @AValue;
   case PTypeInfo(TypeInfo(T))^.Kind of
     tkSString, tkLString, tkAString, tkUString, tkWString:
       Result := '"' + PString(P)^ + '"';
@@ -157,21 +162,21 @@ begin
   end;
 end;
 
-procedure TExpect<T>.ToBe(Expected: T);
+procedure TExpect<T>.ToBe(const AExpected: T);
 var
   Comparer: IEqualityComparer<T>;
 begin
   if Assigned(_ActiveTestSuite) then
     _ActiveTestSuite.FHasAssertions := True;
   Comparer := TEqualityComparer<T>.Default;
-  if not Comparer.Equals(FActual, Expected) then
+  if not Comparer.Equals(FActual, AExpected) then
     raise ETestAssertionError.CreateFmt('Expected %s to be %s',
-      [FormatValue(FActual), FormatValue(Expected)]);
+      [FormatValue(FActual), FormatValue(AExpected)]);
 end;
 
-function Expect<T>(Value: T): TExpect<T>;
+function Expect<T>(const AValue: T): TExpect<T>;
 begin
-  Result.FActual := Value;
+  Result.FActual := AValue;
 end;
 
 { TTestSuite }
@@ -210,31 +215,31 @@ begin
   // Override in derived classes
 end;
 
-procedure TTestSuite.Test(const Name: string; Method: TTestMethod);
+procedure TTestSuite.Test(const AName: string; const AMethod: TTestMethod);
 var
   Registration: TTestRegistration;
 begin
-  Registration.Name := Name;
-  Registration.Method := Method;
+  Registration.Name := AName;
+  Registration.Method := AMethod;
   Registration.Skip := False;
   Registration.SkipReason := '';
   FTests.Add(Registration);
 end;
 
-procedure TTestSuite.Skip(const Name: string; Method: TTestMethod; const Reason: string);
+procedure TTestSuite.Skip(const AName: string; const AMethod: TTestMethod; const AReason: string);
 var
   Registration: TTestRegistration;
 begin
-  Registration.Name := Name;
-  Registration.Method := Method;
+  Registration.Name := AName;
+  Registration.Method := AMethod;
   Registration.Skip := True;
-  Registration.SkipReason := Reason;
+  Registration.SkipReason := AReason;
   FTests.Add(Registration);
 end;
 
-procedure TTestSuite.Fail(const Message: string);
+procedure TTestSuite.Fail(const AMessage: string);
 begin
-  raise ETestAssertionError.Create(Message);
+  raise ETestAssertionError.Create(AMessage);
 end;
 
 { TTestRunner }
@@ -257,50 +262,50 @@ begin
   inherited Destroy;
 end;
 
-procedure TTestRunner.AddSuite(SuiteClass: TTestSuiteClass);
+procedure TTestRunner.AddSuite(const ASuiteClass: TTestSuiteClass);
 var
   Suite: TTestSuite;
 begin
-  Suite := SuiteClass.Create(SuiteClass.ClassName);
+  Suite := ASuiteClass.Create(ASuiteClass.ClassName);
   Suite.FRunner := Self;
   Suite.SetupTests;
   FSuites.Add(Suite);
 end;
 
-procedure TTestRunner.AddSuite(Suite: TTestSuite);
+procedure TTestRunner.AddSuite(const ASuite: TTestSuite);
 begin
-  Suite.FRunner := Self;
-  Suite.SetupTests;
-  FSuites.Add(Suite);
+  ASuite.FRunner := Self;
+  ASuite.SetupTests;
+  FSuites.Add(ASuite);
 end;
 
-procedure TTestRunner.RunTest(Suite: TTestSuite; const Test: TTestRegistration);
+procedure TTestRunner.RunTest(const ASuite: TTestSuite; const ATest: TTestRegistration);
 var
   StartTime: TDateTime;
   Result: TTestResult;
 begin
-  if Test.Skip then
+  if ATest.Skip then
   begin
-    Result.Name := Test.Name;
-    Result.SuiteName := Suite.Name;
+    Result.Name := ATest.Name;
+    Result.SuiteName := ASuite.Name;
     Result.Status := tsSkip;
-    Result.ErrorMessage := Test.SkipReason;
+    Result.ErrorMessage := ATest.SkipReason;
     Result.Duration := 0;
     FResults.Add(Result);
     Exit;
   end;
 
-  Suite.FCurrentTestName := Test.Name;
-  Suite.FHasAssertions := False;
-  _ActiveTestSuite := Suite;
+  ASuite.FCurrentTestName := ATest.Name;
+  ASuite.FHasAssertions := False;
+  _ActiveTestSuite := ASuite;
 
   StartTime := Now;
   try
-    Suite.BeforeEach;
-    Test.Method;
-    Suite.AfterEach;
+    ASuite.BeforeEach;
+    ATest.Method;
+    ASuite.AfterEach;
 
-    if not Suite.FHasAssertions then
+    if not ASuite.FHasAssertions then
       raise ETestAssertionError.Create('Test has no assertions');
 
     Result.Status := tsPass;
@@ -317,8 +322,8 @@ begin
     end;
   end;
 
-  Result.Name := Test.Name;
-  Result.SuiteName := Suite.Name;
+  Result.Name := ATest.Name;
+  Result.SuiteName := ASuite.Name;
   Result.Duration := MilliSecondsBetween(Now, StartTime);
   FResults.Add(Result);
 end;

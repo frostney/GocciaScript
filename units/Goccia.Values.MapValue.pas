@@ -5,9 +5,15 @@ unit Goccia.Values.MapValue;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.ArrayValue,
-  Goccia.Values.NativeFunction, Goccia.Arguments.Collection,
-  Goccia.SharedPrototype, Generics.Collections, SysUtils;
+  Generics.Collections,
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.SharedPrototype,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaMapEntry = record
@@ -21,23 +27,23 @@ type
   private
     FEntries: TList<TGocciaMapEntry>;
 
-    function MapGet(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MapSet(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MapHas(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MapDelete(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MapClear(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MapForEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MapKeys(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MapValues(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function MapEntries(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function MapGet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MapSet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MapHas(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MapDelete(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MapClear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MapForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MapKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MapValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MapEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
-    function FindEntry(AKey: TGocciaValue): Integer;
+    function FindEntry(const AKey: TGocciaValue): Integer;
     procedure InitializePrototype;
   public
     constructor Create; overload;
     destructor Destroy; override;
 
-    procedure SetEntry(AKey, AValue: TGocciaValue);
+    procedure SetEntry(const AKey, AValue: TGocciaValue);
 
     function GetProperty(const AName: string): TGocciaValue; override;
     function ToArray: TGocciaArrayValue;
@@ -45,7 +51,7 @@ type
 
     procedure GCMarkReferences; override;
 
-    class procedure ExposePrototype(AConstructor: TGocciaObjectValue);
+    class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
 
     property Entries: TList<TGocciaMapEntry> read FEntries;
   end;
@@ -53,8 +59,10 @@ type
 implementation
 
 uses
-  Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue,
-  Goccia.Values.FunctionBase, Goccia.GarbageCollector;
+  Goccia.Evaluator.Comparison,
+  Goccia.GarbageCollector,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.FunctionValue;
 
 constructor TGocciaMapValue.Create;
 begin
@@ -82,7 +90,7 @@ begin
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapEntries, 'entries', 0));
 end;
 
-class procedure TGocciaMapValue.ExposePrototype(AConstructor: TGocciaObjectValue);
+class procedure TGocciaMapValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
 begin
   if not Assigned(FShared) then
     TGocciaMapValue.Create;
@@ -112,7 +120,7 @@ begin
   end;
 end;
 
-function TGocciaMapValue.FindEntry(AKey: TGocciaValue): Integer;
+function TGocciaMapValue.FindEntry(const AKey: TGocciaValue): Integer;
 var
   I: Integer;
 begin
@@ -127,7 +135,7 @@ begin
   Result := -1;
 end;
 
-procedure TGocciaMapValue.SetEntry(AKey, AValue: TGocciaValue);
+procedure TGocciaMapValue.SetEntry(const AKey, AValue: TGocciaValue);
 var
   Index: Integer;
   Entry: TGocciaMapEntry;
@@ -172,15 +180,15 @@ end;
 
 { Instance methods }
 
-function TGocciaMapValue.MapGet(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMapValue.MapGet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
   Index: Integer;
 begin
-  M := TGocciaMapValue(ThisValue);
-  if Args.Length > 0 then
+  M := TGocciaMapValue(AThisValue);
+  if AArgs.Length > 0 then
   begin
-    Index := M.FindEntry(Args.GetElement(0));
+    Index := M.FindEntry(AArgs.GetElement(0));
     if Index >= 0 then
     begin
       Result := M.Entries[Index].Value;
@@ -190,42 +198,42 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function TGocciaMapValue.MapSet(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMapValue.MapSet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
   MapKey, MapValue: TGocciaValue;
 begin
-  M := TGocciaMapValue(ThisValue);
-  if Args.Length >= 2 then
+  M := TGocciaMapValue(AThisValue);
+  if AArgs.Length >= 2 then
   begin
-    MapKey := Args.GetElement(0);
-    MapValue := Args.GetElement(1);
+    MapKey := AArgs.GetElement(0);
+    MapValue := AArgs.GetElement(1);
     M.SetEntry(MapKey, MapValue);
   end;
-  Result := ThisValue;
+  Result := AThisValue;
 end;
 
-function TGocciaMapValue.MapHas(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMapValue.MapHas(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
 begin
-  M := TGocciaMapValue(ThisValue);
-  if (Args.Length > 0) and (M.FindEntry(Args.GetElement(0)) >= 0) then
+  M := TGocciaMapValue(AThisValue);
+  if (AArgs.Length > 0) and (M.FindEntry(AArgs.GetElement(0)) >= 0) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-function TGocciaMapValue.MapDelete(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMapValue.MapDelete(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
   Index: Integer;
 begin
-  M := TGocciaMapValue(ThisValue);
+  M := TGocciaMapValue(AThisValue);
   Result := TGocciaBooleanLiteralValue.FalseValue;
-  if Args.Length > 0 then
+  if AArgs.Length > 0 then
   begin
-    Index := M.FindEntry(Args.GetElement(0));
+    Index := M.FindEntry(AArgs.GetElement(0));
     if Index >= 0 then
     begin
       M.FEntries.Delete(Index);
@@ -234,13 +242,13 @@ begin
   end;
 end;
 
-function TGocciaMapValue.MapClear(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMapValue.MapClear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaMapValue(ThisValue).FEntries.Clear;
+  TGocciaMapValue(AThisValue).FEntries.Clear;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function TGocciaMapValue.MapForEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMapValue.MapForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
   Callback: TGocciaValue;
@@ -248,15 +256,15 @@ var
   I: Integer;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if Args.Length = 0 then Exit;
+  if AArgs.Length = 0 then Exit;
 
-  M := TGocciaMapValue(ThisValue);
-  Callback := Args.GetElement(0);
+  M := TGocciaMapValue(AThisValue);
+  Callback := AArgs.GetElement(0);
   if not Callback.IsCallable then Exit;
 
   for I := 0 to M.Entries.Count - 1 do
   begin
-    CallArgs := TGocciaArgumentsCollection.Create([M.Entries[I].Value, M.Entries[I].Key, ThisValue]);
+    CallArgs := TGocciaArgumentsCollection.Create([M.Entries[I].Value, M.Entries[I].Key, AThisValue]);
     try
       TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
@@ -265,35 +273,35 @@ begin
   end;
 end;
 
-function TGocciaMapValue.MapKeys(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMapValue.MapKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
   Arr: TGocciaArrayValue;
   I: Integer;
 begin
-  M := TGocciaMapValue(ThisValue);
+  M := TGocciaMapValue(AThisValue);
   Arr := TGocciaArrayValue.Create;
   for I := 0 to M.Entries.Count - 1 do
     Arr.Elements.Add(M.Entries[I].Key);
   Result := Arr;
 end;
 
-function TGocciaMapValue.MapValues(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMapValue.MapValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   M: TGocciaMapValue;
   Arr: TGocciaArrayValue;
   I: Integer;
 begin
-  M := TGocciaMapValue(ThisValue);
+  M := TGocciaMapValue(AThisValue);
   Arr := TGocciaArrayValue.Create;
   for I := 0 to M.Entries.Count - 1 do
     Arr.Elements.Add(M.Entries[I].Value);
   Result := Arr;
 end;
 
-function TGocciaMapValue.MapEntries(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaMapValue.MapEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaMapValue(ThisValue).ToArray;
+  Result := TGocciaMapValue(AThisValue).ToArray;
 end;
 
 end.

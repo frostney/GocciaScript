@@ -5,74 +5,77 @@ unit Goccia.Arguments.Validator;
 interface
 
 uses
-  Goccia.Arguments.Collection, Goccia.Error.ThrowErrorCallback, SysUtils;
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.Error.ThrowErrorCallback;
 
 type
   // Validation logic for argument requirements
   TGocciaArgumentValidator = class
   public
-    class procedure RequireExactly(Collection: TGocciaArgumentsCollection; ExpectedCount: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback);
-    class procedure RequireAtLeast(Collection: TGocciaArgumentsCollection; MinCount: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback);
-    class procedure RequireAtMost(Collection: TGocciaArgumentsCollection; MaxCount: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback);
-    class procedure RequireBetween(Collection: TGocciaArgumentsCollection; MinCount, MaxCount: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback);
-    class procedure RequireNone(Collection: TGocciaArgumentsCollection; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback);
+    class procedure RequireExactly(const ACollection: TGocciaArgumentsCollection; const AExpectedCount: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback);
+    class procedure RequireAtLeast(const ACollection: TGocciaArgumentsCollection; const AMinCount: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback);
+    class procedure RequireAtMost(const ACollection: TGocciaArgumentsCollection; const AMaxCount: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback);
+    class procedure RequireBetween(const ACollection: TGocciaArgumentsCollection; const AMinCount, AMaxCount: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback);
+    class procedure RequireNone(const ACollection: TGocciaArgumentsCollection; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback);
   end;
 
 implementation
 
 { TGocciaArgumentValidator }
 
-class procedure TGocciaArgumentValidator.RequireExactly(Collection: TGocciaArgumentsCollection; ExpectedCount: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback);
+class procedure TGocciaArgumentValidator.RequireExactly(const ACollection: TGocciaArgumentsCollection; const AExpectedCount: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback);
 begin
-  if Collection.Length <> ExpectedCount then
+  if ACollection.Length <> AExpectedCount then
   begin
-    if ExpectedCount = 0 then
-      ThrowError(Format('%s expects no arguments but got %d', [FunctionName, Collection.Length]), 0, 0)
-    else if ExpectedCount = 1 then
-      ThrowError(Format('%s expects 1 argument but got %d', [FunctionName, Collection.Length]), 0, 0)
+    if AExpectedCount = 0 then
+      AThrowError(Format('%s expects no arguments but got %d', [AFunctionName, ACollection.Length]), 0, 0)
+    else if AExpectedCount = 1 then
+      AThrowError(Format('%s expects 1 argument but got %d', [AFunctionName, ACollection.Length]), 0, 0)
     else
-      ThrowError(Format('%s expects %d arguments but got %d', [FunctionName, ExpectedCount, Collection.Length]), 0, 0);
+      AThrowError(Format('%s expects %d arguments but got %d', [AFunctionName, AExpectedCount, ACollection.Length]), 0, 0);
   end;
 end;
 
-class procedure TGocciaArgumentValidator.RequireAtLeast(Collection: TGocciaArgumentsCollection; MinCount: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback);
+class procedure TGocciaArgumentValidator.RequireAtLeast(const ACollection: TGocciaArgumentsCollection; const AMinCount: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback);
 begin
-  if Collection.Length < MinCount then
+  if ACollection.Length < AMinCount then
   begin
-    if MinCount = 1 then
-      ThrowError(Format('%s expects at least 1 argument but got %d', [FunctionName, Collection.Length]), 0, 0)
+    if AMinCount = 1 then
+      AThrowError(Format('%s expects at least 1 argument but got %d', [AFunctionName, ACollection.Length]), 0, 0)
     else
-      ThrowError(Format('%s expects at least %d arguments but got %d', [FunctionName, MinCount, Collection.Length]), 0, 0);
+      AThrowError(Format('%s expects at least %d arguments but got %d', [AFunctionName, AMinCount, ACollection.Length]), 0, 0);
   end;
 end;
 
-class procedure TGocciaArgumentValidator.RequireAtMost(Collection: TGocciaArgumentsCollection; MaxCount: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback);
+class procedure TGocciaArgumentValidator.RequireAtMost(const ACollection: TGocciaArgumentsCollection; const AMaxCount: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback);
 begin
-  if Collection.Length > MaxCount then
+  if ACollection.Length > AMaxCount then
   begin
-    if MaxCount = 0 then
-      ThrowError(Format('%s expects no arguments but got %d', [FunctionName, Collection.Length]), 0, 0)
-    else if MaxCount = 1 then
-      ThrowError(Format('%s expects at most 1 argument but got %d', [FunctionName, Collection.Length]), 0, 0)
+    if AMaxCount = 0 then
+      AThrowError(Format('%s expects no arguments but got %d', [AFunctionName, ACollection.Length]), 0, 0)
+    else if AMaxCount = 1 then
+      AThrowError(Format('%s expects at most 1 argument but got %d', [AFunctionName, ACollection.Length]), 0, 0)
     else
-      ThrowError(Format('%s expects at most %d arguments but got %d', [FunctionName, MaxCount, Collection.Length]), 0, 0);
+      AThrowError(Format('%s expects at most %d arguments but got %d', [AFunctionName, AMaxCount, ACollection.Length]), 0, 0);
   end;
 end;
 
-class procedure TGocciaArgumentValidator.RequireBetween(Collection: TGocciaArgumentsCollection; MinCount, MaxCount: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback);
+class procedure TGocciaArgumentValidator.RequireBetween(const ACollection: TGocciaArgumentsCollection; const AMinCount, AMaxCount: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback);
 begin
-  if (Collection.Length < MinCount) or (Collection.Length > MaxCount) then
+  if (ACollection.Length < AMinCount) or (ACollection.Length > AMaxCount) then
   begin
-    if MinCount = MaxCount then
-      RequireExactly(Collection, MinCount, FunctionName, ThrowError)
+    if AMinCount = AMaxCount then
+      RequireExactly(ACollection, AMinCount, AFunctionName, AThrowError)
     else
-      ThrowError(Format('%s expects between %d and %d arguments but got %d', [FunctionName, MinCount, MaxCount, Collection.Length]), 0, 0);
+      AThrowError(Format('%s expects between %d and %d arguments but got %d', [AFunctionName, AMinCount, AMaxCount, ACollection.Length]), 0, 0);
   end;
 end;
 
-class procedure TGocciaArgumentValidator.RequireNone(Collection: TGocciaArgumentsCollection; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback);
+class procedure TGocciaArgumentValidator.RequireNone(const ACollection: TGocciaArgumentsCollection; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback);
 begin
-  RequireExactly(Collection, 0, FunctionName, ThrowError);
+  RequireExactly(ACollection, 0, AFunctionName, AThrowError);
 end;
 
 end.

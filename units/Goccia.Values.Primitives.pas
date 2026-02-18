@@ -32,7 +32,7 @@ type
     function IsCallable: Boolean; virtual;
     // Virtual property access — overridden by ObjectValue, ClassValue, etc.
     function GetProperty(const AName: string): TGocciaValue; virtual;
-    procedure SetProperty(const AName: string; AValue: TGocciaValue); virtual;
+    procedure SetProperty(const AName: string; const AValue: TGocciaValue); virtual;
 
     property GCMarked: Boolean read FGCMarked write FGCMarked;
   end;
@@ -71,7 +71,7 @@ type
     class var FTrueValue: TGocciaBooleanLiteralValue;
     class var FFalseValue: TGocciaBooleanLiteralValue;
   public
-    constructor Create(AValue: Boolean);
+    constructor Create(const AValue: Boolean);
 
     class function TrueValue: TGocciaBooleanLiteralValue;
     class function FalseValue: TGocciaBooleanLiteralValue;
@@ -109,7 +109,7 @@ type
     class var FSmallIntCache: array[0..255] of TGocciaNumberLiteralValue;
     class var FSmallIntCacheInitialized: Boolean;
   public
-    constructor Create(AValue: Double; ASpecialValue: TGocciaNumberSpecialValue = nsvNone);
+    constructor Create(const AValue: Double; const ASpecialValue: TGocciaNumberSpecialValue = nsvNone);
 
     class function NaNValue: TGocciaNumberLiteralValue;
     class function NegativeZeroValue: TGocciaNumberLiteralValue;
@@ -118,7 +118,7 @@ type
 
     class function ZeroValue: TGocciaNumberLiteralValue;
     class function OneValue: TGocciaNumberLiteralValue;
-    class function SmallInt(AValue: Integer): TGocciaNumberLiteralValue;
+    class function SmallInt(const AValue: Integer): TGocciaNumberLiteralValue;
 
     function IsPrimitive: Boolean; override;
     function TypeName: string; override;
@@ -141,7 +141,7 @@ type
   private
     FValue: string;
   public
-    constructor Create(AValue: string);
+    constructor Create(const AValue: string);
 
     function IsPrimitive: Boolean; override;
     function TypeName: string; override;
@@ -155,12 +155,16 @@ type
     property Value: string read FValue;
   end;
 
-  function IsPrimitive(Value: TGocciaValue): Boolean;
+  function IsPrimitive(const AValue: TGocciaValue): Boolean;
 
 implementation
 
 uses
-  Goccia.Values.Constants, Goccia.Values.ClassHelper, Math, Goccia.GarbageCollector;
+  Math,
+
+  Goccia.GarbageCollector,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.Constants;
 
 { TGocciaValue }
 
@@ -198,16 +202,16 @@ begin
   Result := nil;
 end;
 
-procedure TGocciaValue.SetProperty(const AName: string; AValue: TGocciaValue);
+procedure TGocciaValue.SetProperty(const AName: string; const AValue: TGocciaValue);
 begin
   // No-op for primitives
 end;
 
 { Utility functions }
 
-function IsPrimitive(Value: TGocciaValue): Boolean;
+function IsPrimitive(const AValue: TGocciaValue): Boolean;
 begin
-  Result := Value.IsPrimitive;
+  Result := AValue.IsPrimitive;
 end;
 
 { TGocciaNullLiteralValue }
@@ -297,7 +301,7 @@ begin
   Result := True;
 end;
 
-constructor TGocciaBooleanLiteralValue.Create(AValue: Boolean);
+constructor TGocciaBooleanLiteralValue.Create(const AValue: Boolean);
 begin
   FValue := AValue;
 end;
@@ -363,7 +367,7 @@ begin
   Result := True;
 end;
 
-constructor TGocciaNumberLiteralValue.Create(AValue: Double; ASpecialValue: TGocciaNumberSpecialValue = nsvNone);
+constructor TGocciaNumberLiteralValue.Create(const AValue: Double; const ASpecialValue: TGocciaNumberSpecialValue = nsvNone);
 begin
   // Check if the input is NaN without storing it
   if Math.IsNaN(AValue) then
@@ -469,7 +473,7 @@ begin
   Result := FOneValue;
 end;
 
-class function TGocciaNumberLiteralValue.SmallInt(AValue: Integer): TGocciaNumberLiteralValue;
+class function TGocciaNumberLiteralValue.SmallInt(const AValue: Integer): TGocciaNumberLiteralValue;
 var
   I: Integer;
 begin
@@ -545,7 +549,7 @@ begin
   Result := True;
 end;
 
-constructor TGocciaStringLiteralValue.Create(AValue: string);
+constructor TGocciaStringLiteralValue.Create(const AValue: string);
 begin
   FValue := AValue;
 end;

@@ -5,8 +5,19 @@ unit Goccia.Builtins.Globals;
 interface
 
 uses
-  SysUtils, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.FunctionValue, 
-  Goccia.Values.Primitives, Goccia.Arguments.Collection, Generics.Collections, Math, Goccia.Builtins.Base, Goccia.Scope, Goccia.Error, Goccia.Error.ThrowErrorCallback;
+  Generics.Collections,
+  Math,
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.Builtins.Base,
+  Goccia.Error,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaGlobals = class(TGocciaBuiltin)
@@ -16,19 +27,22 @@ type
     FReferenceErrorProto: TGocciaObjectValue;
     FRangeErrorProto: TGocciaObjectValue;
   protected
-    function ErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function TypeErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ReferenceErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function RangeErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function QueueMicrotaskCallback(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TypeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ReferenceErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function RangeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function QueueMicrotaskCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
 
 implementation
 
-uses Goccia.Values.ClassHelper, Goccia.Values.ErrorHelper,
-  Goccia.MicrotaskQueue, Goccia.GarbageCollector;
+uses
+  Goccia.GarbageCollector,
+  Goccia.MicrotaskQueue,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.ErrorHelper;
 
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -93,13 +107,13 @@ begin
   //   const isFinite = Number.isFinite;
 end;
 
-function TGocciaGlobals.ErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobals.ErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Message: string;
   ErrorObj: TGocciaObjectValue;
 begin
-  if Args.Length > 0 then
-    Message := Args.GetElement(0).ToStringLiteral.Value
+  if AArgs.Length > 0 then
+    Message := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Message := '';
   ErrorObj := CreateErrorObject('Error', Message);
@@ -107,13 +121,13 @@ begin
   Result := ErrorObj;
 end;
 
-function TGocciaGlobals.TypeErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobals.TypeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Message: string;
   ErrorObj: TGocciaObjectValue;
 begin
-  if Args.Length > 0 then
-    Message := Args.GetElement(0).ToStringLiteral.Value
+  if AArgs.Length > 0 then
+    Message := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Message := '';
   ErrorObj := CreateErrorObject('TypeError', Message);
@@ -121,13 +135,13 @@ begin
   Result := ErrorObj;
 end;
 
-function TGocciaGlobals.ReferenceErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobals.ReferenceErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Message: string;
   ErrorObj: TGocciaObjectValue;
 begin
-  if Args.Length > 0 then
-    Message := Args.GetElement(0).ToStringLiteral.Value
+  if AArgs.Length > 0 then
+    Message := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Message := '';
   ErrorObj := CreateErrorObject('ReferenceError', Message);
@@ -135,13 +149,13 @@ begin
   Result := ErrorObj;
 end;
 
-function TGocciaGlobals.RangeErrorConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobals.RangeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Message: string;
   ErrorObj: TGocciaObjectValue;
 begin
-  if Args.Length > 0 then
-    Message := Args.GetElement(0).ToStringLiteral.Value
+  if AArgs.Length > 0 then
+    Message := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Message := '';
   ErrorObj := CreateErrorObject('RangeError', Message);
@@ -149,15 +163,15 @@ begin
   Result := ErrorObj;
 end;
 
-function TGocciaGlobals.QueueMicrotaskCallback(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobals.QueueMicrotaskCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Callback: TGocciaValue;
   Task: TGocciaMicrotask;
 begin
-  if Args.Length = 0 then
+  if AArgs.Length = 0 then
     ThrowTypeError('Failed to execute ''queueMicrotask'': 1 argument required, but only 0 present.');
 
-  Callback := Args.GetElement(0);
+  Callback := AArgs.GetElement(0);
   if not Callback.IsCallable then
     ThrowTypeError('Failed to execute ''queueMicrotask'': parameter 1 is not of type ''Function''.');
 

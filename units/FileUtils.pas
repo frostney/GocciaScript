@@ -5,13 +5,14 @@ unit FileUtils;
 interface
 
 uses
-  Classes, SysUtils;
+  Classes,
+  SysUtils;
 
-function FindAllFiles(const Directory: string; const FileExtension: string): TStringList;
+function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList;
 
 implementation
 
-function FindAllFiles(const Directory: string; const FileExtension: string): TStringList;
+function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList;
 var
   SearchRec: TSearchRec;
   Files: TStringList;
@@ -19,7 +20,7 @@ var
 begin
   Files := TStringList.Create;
 
-  if FindFirst(Directory + '/*', faAnyFile, SearchRec) = 0 then
+  if FindFirst(ADirectory + '/*', faAnyFile, SearchRec) = 0 then
   begin
     // If the file is a directory, add all the files in the directory
     repeat
@@ -27,7 +28,7 @@ begin
       begin
         if (SearchRec.Name <> '.') and (SearchRec.Name <> '..') then
         begin
-          SubdirFiles := FindAllFiles(Directory + '/' + SearchRec.Name, FileExtension);
+          SubdirFiles := FindAllFiles(ADirectory + '/' + SearchRec.Name, AFileExtension);
           try
             Files.AddStrings(SubdirFiles);
           finally
@@ -37,9 +38,9 @@ begin
       end;
 
       // If the file is a .js file, add it to the list
-      if ExtractFileExt(SearchRec.Name) = FileExtension then
+      if ExtractFileExt(SearchRec.Name) = AFileExtension then
       begin
-        Files.Add(Directory + '/' + SearchRec.Name);
+        Files.Add(ADirectory + '/' + SearchRec.Name);
       end;
     until FindNext(SearchRec) <> 0;
   end;

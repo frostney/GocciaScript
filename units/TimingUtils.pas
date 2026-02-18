@@ -7,14 +7,17 @@ interface
 function GetMilliseconds: Int64;
 function GetNanoseconds: Int64;
 function GetEpochNanoseconds: Int64;
-function FormatDuration(Nanoseconds: Int64): string;
+function FormatDuration(const ANanoseconds: Int64): string;
 
 implementation
 
 uses
-  SysUtils, DateUtils
-  {$IFDEF UNIX}, ctypes{$ENDIF}
-  {$IFDEF WINDOWS}, Windows{$ENDIF};
+  SysUtils,
+  DateUtils
+  {$IFDEF UNIX},
+  ctypes{$ENDIF}
+  {$IFDEF WINDOWS},
+  Windows{$ENDIF};
 
 {$IFDEF UNIX}
 const
@@ -31,7 +34,7 @@ type
     tv_nsec: clong;
   end;
 
-function clock_gettime(clk_id: cint; tp: Pointer): cint; cdecl; external 'c';
+function clock_gettime(const AClk_id: cint; const ATp: Pointer): cint; cdecl; external 'c';
 {$ENDIF}
 
 {$IFDEF WINDOWS}
@@ -94,13 +97,13 @@ end;
 {$ENDIF}
 {$ENDIF}
 
-function FormatDuration(Nanoseconds: Int64): string;
+function FormatDuration(const ANanoseconds: Int64): string;
 var
   Us: Double;
   Ms: Double;
   S: Double;
 begin
-  Us := Nanoseconds / 1000.0;
+  Us := ANanoseconds / 1000.0;
   Ms := Us / 1000.0;
   S := Ms / 1000.0;
   if S >= 10.0 then
@@ -110,7 +113,7 @@ begin
   else if Us >= 0.5 then
     Result := SysUtils.Format('%.2f' + #$C2#$B5 + 's', [Us])
   else
-    Result := SysUtils.Format('%dns', [Nanoseconds]);
+    Result := SysUtils.Format('%dns', [ANanoseconds]);
 end;
 
 {$IFDEF WINDOWS}

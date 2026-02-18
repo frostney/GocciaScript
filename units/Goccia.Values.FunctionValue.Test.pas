@@ -3,11 +3,22 @@ program Goccia.Values.FunctionValue.Test;
 {$I Goccia.inc}
 
 uses
-  Goccia.Values.FunctionValue, Goccia.Values.ObjectValue, Goccia.Values.Primitives,
+  Classes,
+  Generics.Collections,
+  SysUtils,
+
   Goccia.Arguments.Collection,
-  TestRunner, Goccia.AST.Node, Generics.Collections,
-  Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope,
-  Goccia.Token, SysUtils, Classes, Goccia.Evaluator;
+  Goccia.AST.Expressions,
+  Goccia.AST.Node,
+  Goccia.AST.Statements,
+  Goccia.Evaluator,
+  Goccia.Scope,
+  Goccia.Token,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives,
+
+  TestRunner;
 
 type
   TTestBlockValue = class(TTestSuite)

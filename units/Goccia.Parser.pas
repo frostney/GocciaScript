@@ -5,9 +5,20 @@ unit Goccia.Parser;
 interface
 
 uses
-  Goccia.AST.Node, Goccia.Token, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.Values.Primitives,
-  Goccia.Values.ObjectValue, Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
-  Generics.Collections, Classes, SysUtils;
+  Classes,
+  Generics.Collections,
+  SysUtils,
+
+  Goccia.AST.Expressions,
+  Goccia.AST.Node,
+  Goccia.AST.Statements,
+  Goccia.Error,
+  Goccia.Token,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ClassValue,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaParser = class
@@ -24,13 +35,13 @@ type
     function Peek: TGocciaToken; inline;
     function Previous: TGocciaToken; inline;
     function Advance: TGocciaToken;
-    function Check(TokenType: TGocciaTokenType): Boolean; inline;
-    function CheckNext(TokenType: TGocciaTokenType): Boolean; inline;
-    function Match(TokenTypes: array of TGocciaTokenType): Boolean;
-    function Consume(TokenType: TGocciaTokenType; const Message: string): TGocciaToken;
+    function Check(const ATokenType: TGocciaTokenType): Boolean; inline;
+    function CheckNext(const ATokenType: TGocciaTokenType): Boolean; inline;
+    function Match(const ATokenTypes: array of TGocciaTokenType): Boolean;
+    function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken;
     function IsArrowFunction: Boolean;
-    function ConvertNumberLiteral(const Lexeme: string): Double;
-    function ParseBinaryExpression(NextLevel: TParseFunction; const Operators: array of TGocciaTokenType): TGocciaExpression;
+    function ConvertNumberLiteral(const ALexeme: string): Double;
+    function ParseBinaryExpression(const ANextLevel: TParseFunction; const AOperators: array of TGocciaTokenType): TGocciaExpression;
 
     // Expression parsing (private)
     function Conditional: TGocciaExpression;
@@ -46,14 +57,14 @@ type
     function ParseSetterExpression: TGocciaSetterExpression;
 
     // Object method body parsing: (params) { stmts } -> method expression
-    function ParseObjectMethodBody(ALine, AColumn: Integer): TGocciaExpression;
+    function ParseObjectMethodBody(const ALine, AColumn: Integer): TGocciaExpression;
 
     // Destructuring pattern parsing
     function ParsePattern: TGocciaDestructuringPattern;
     function ParseArrayPattern: TGocciaArrayDestructuringPattern;
     function ParseObjectPattern: TGocciaObjectDestructuringPattern;
-    function IsAssignmentPattern(Expr: TGocciaExpression): Boolean;
-    function ConvertToPattern(Expr: TGocciaExpression): TGocciaDestructuringPattern;
+    function IsAssignmentPattern(const AExpr: TGocciaExpression): Boolean;
+    function ConvertToPattern(const AExpr: TGocciaExpression): TGocciaDestructuringPattern;
     procedure SkipDestructuringPattern;
     procedure SkipExpression;
     function BitwiseOr: TGocciaExpression;
@@ -88,24 +99,24 @@ type
     function ReturnStatement: TGocciaStatement;
     function ThrowStatement: TGocciaStatement;
     function TryStatement: TGocciaStatement;
-    function ClassMethod(IsStatic: Boolean = False): TGocciaClassMethod;
+    function ClassMethod(const AIsStatic: Boolean = False): TGocciaClassMethod;
     function ClassDeclaration: TGocciaStatement;
     function ImportDeclaration: TGocciaStatement;
     function ExportDeclaration: TGocciaStatement;
-    function ParseClassBody(const ClassName: string): TGocciaClassDefinition;
+    function ParseClassBody(const AClassName: string): TGocciaClassDefinition;
     function SwitchStatement: TGocciaStatement;
     function BreakStatement: TGocciaStatement;
   public
-    constructor Create(ATokens: TObjectList<TGocciaToken>;
-      const AFileName: string; ASourceLines: TStringList);
+    constructor Create(const ATokens: TObjectList<TGocciaToken>;
+      const AFileName: string; const ASourceLines: TStringList);
     function Parse: TGocciaProgram;
     function Expression: TGocciaExpression;
   end;
 
 implementation
 
-constructor TGocciaParser.Create(ATokens: TObjectList<TGocciaToken>;
-  const AFileName: string; ASourceLines: TStringList);
+constructor TGocciaParser.Create(const ATokens: TObjectList<TGocciaToken>;
+  const AFileName: string; const ASourceLines: TStringList);
 begin
   FTokens := ATokens;
   FFileName := AFileName;
@@ -135,25 +146,25 @@ begin
   Result := Previous;
 end;
 
-function TGocciaParser.Check(TokenType: TGocciaTokenType): Boolean;
+function TGocciaParser.Check(const ATokenType: TGocciaTokenType): Boolean;
 begin
   if IsAtEnd then
     Exit(False);
-  Result := Peek.TokenType = TokenType;
+  Result := Peek.TokenType = ATokenType;
 end;
 
-function TGocciaParser.CheckNext(TokenType: TGocciaTokenType): Boolean;
+function TGocciaParser.CheckNext(const ATokenType: TGocciaTokenType): Boolean;
 begin
   if FCurrent + 1 >= FTokens.Count then
     Exit(False);
-  Result := FTokens[FCurrent + 1].TokenType = TokenType;
+  Result := FTokens[FCurrent + 1].TokenType = ATokenType;
 end;
 
-function TGocciaParser.Match(TokenTypes: array of TGocciaTokenType): Boolean;
+function TGocciaParser.Match(const ATokenTypes: array of TGocciaTokenType): Boolean;
 var
   TokenType: TGocciaTokenType;
 begin
-  for TokenType in TokenTypes do
+  for TokenType in ATokenTypes do
   begin
     if Check(TokenType) then
     begin
@@ -164,13 +175,13 @@ begin
   Result := False;
 end;
 
-function TGocciaParser.Consume(TokenType: TGocciaTokenType;
-  const Message: string): TGocciaToken;
+function TGocciaParser.Consume(const ATokenType: TGocciaTokenType;
+  const AMessage: string): TGocciaToken;
 begin
-  if Check(TokenType) then
+  if Check(ATokenType) then
     Exit(Advance);
 
-  raise TGocciaSyntaxError.Create(Message, Peek.Line, Peek.Column,
+  raise TGocciaSyntaxError.Create(AMessage, Peek.Line, Peek.Column,
     FFileName, FSourceLines);
 end;
 
@@ -199,15 +210,15 @@ begin
   end;
 end;
 
-function TGocciaParser.ParseBinaryExpression(NextLevel: TParseFunction; const Operators: array of TGocciaTokenType): TGocciaExpression;
+function TGocciaParser.ParseBinaryExpression(const ANextLevel: TParseFunction; const AOperators: array of TGocciaTokenType): TGocciaExpression;
 var
   Op: TGocciaToken;
 begin
-  Result := NextLevel();
-  while Match(Operators) do
+  Result := ANextLevel();
+  while Match(AOperators) do
   begin
     Op := Previous;
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, NextLevel(), Op.Line, Op.Column);
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, ANextLevel(), Op.Line, Op.Column);
   end;
 end;
 
@@ -885,7 +896,7 @@ begin
   Result := TGocciaSetterExpression.Create(ParamName, BlockStatement, Line, Column);
 end;
 
-function TGocciaParser.ParseObjectMethodBody(ALine, AColumn: Integer): TGocciaExpression;
+function TGocciaParser.ParseObjectMethodBody(const ALine, AColumn: Integer): TGocciaExpression;
 var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
@@ -1352,7 +1363,7 @@ begin
     FinallyBlock, Line, Column);
 end;
 
-function TGocciaParser.ClassMethod(IsStatic: Boolean = False): TGocciaClassMethod;
+function TGocciaParser.ClassMethod(const AIsStatic: Boolean = False): TGocciaClassMethod;
 var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
@@ -1394,7 +1405,7 @@ begin
 
     Consume(gttRightBrace, 'Expected "}" after method body');
     Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
-    Result := TGocciaClassMethod.Create(Name, Parameters, Body, IsStatic, Line, Column);
+    Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, Line, Column);
   except
     Statements.Free;
     raise;
@@ -1485,7 +1496,7 @@ begin
   Result := TGocciaExportDeclaration.Create(ExportsTable, Line, Column);
 end;
 
-function TGocciaParser.ParseClassBody(const ClassName: string): TGocciaClassDefinition;
+function TGocciaParser.ParseClassBody(const AClassName: string): TGocciaClassDefinition;
 var
   SuperClass: string;
   Methods: TDictionary<string, TGocciaClassMethod>;
@@ -1655,7 +1666,7 @@ begin
   end;
 
   Consume(gttRightBrace, 'Expected "}" after class body');
-  Result := TGocciaClassDefinition.Create(ClassName, SuperClass, Methods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
+  Result := TGocciaClassDefinition.Create(AClassName, SuperClass, Methods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
   // Copy declaration-order lists (Result.Create already created empty lists, replace them)
   Result.FInstancePropertyOrder.Assign(InstancePropertyOrder);
   Result.FPrivateInstancePropertyOrder.Assign(PrivateInstancePropertyOrder);
@@ -1785,7 +1796,7 @@ begin
   Result := ParseBinaryExpression(Addition, [gttLeftShift, gttRightShift, gttUnsignedRightShift]);
 end;
 
-function TGocciaParser.ConvertNumberLiteral(const Lexeme: string): Double;
+function TGocciaParser.ConvertNumberLiteral(const ALexeme: string): Double;
 var
   Value: Double;
   IntValue: Int64;
@@ -1793,12 +1804,12 @@ var
   I: Integer;
 begin
   // Handle special number formats
-  if Length(Lexeme) >= 3 then
+  if Length(ALexeme) >= 3 then
   begin
     // Hexadecimal: 0x10, 0X10
-    if (Lexeme[1] = '0') and ((Lexeme[2] = 'x') or (Lexeme[2] = 'X')) then
+    if (ALexeme[1] = '0') and ((ALexeme[2] = 'x') or (ALexeme[2] = 'X')) then
     begin
-      HexStr := Copy(Lexeme, 3, Length(Lexeme) - 2);
+      HexStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
       IntValue := 0;
       for I := 1 to Length(HexStr) do
       begin
@@ -1813,9 +1824,9 @@ begin
     end
 
     // Binary: 0b1010, 0B1010
-    else if (Lexeme[1] = '0') and ((Lexeme[2] = 'b') or (Lexeme[2] = 'B')) then
+    else if (ALexeme[1] = '0') and ((ALexeme[2] = 'b') or (ALexeme[2] = 'B')) then
     begin
-      BinStr := Copy(Lexeme, 3, Length(Lexeme) - 2);
+      BinStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
       IntValue := 0;
       for I := 1 to Length(BinStr) do
       begin
@@ -1827,9 +1838,9 @@ begin
     end
 
     // Octal: 0o12, 0O12
-    else if (Lexeme[1] = '0') and ((Lexeme[2] = 'o') or (Lexeme[2] = 'O')) then
+    else if (ALexeme[1] = '0') and ((ALexeme[2] = 'o') or (ALexeme[2] = 'O')) then
     begin
-      OctStr := Copy(Lexeme, 3, Length(Lexeme) - 2);
+      OctStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
       IntValue := 0;
       for I := 1 to Length(OctStr) do
       begin
@@ -1841,19 +1852,19 @@ begin
   end;
 
   // Regular decimal numbers (including scientific notation)
-  if TryStrToFloat(Lexeme, Value) then
+  if TryStrToFloat(ALexeme, Value) then
     Exit(Value);
 
-  raise TGocciaSyntaxError.Create('Invalid number format: ' + Lexeme, Peek.Line, Peek.Column,
+  raise TGocciaSyntaxError.Create('Invalid number format: ' + ALexeme, Peek.Line, Peek.Column,
     FFileName, FSourceLines);
 end;
 
-function TGocciaParser.IsAssignmentPattern(Expr: TGocciaExpression): Boolean;
+function TGocciaParser.IsAssignmentPattern(const AExpr: TGocciaExpression): Boolean;
 begin
   // Check if an expression could be a destructuring pattern
   // Only arrays and objects are destructuring patterns for assignments
   // Simple identifiers should be regular assignments, not destructuring
-  Result := (Expr is TGocciaArrayExpression) or (Expr is TGocciaObjectExpression);
+  Result := (AExpr is TGocciaArrayExpression) or (AExpr is TGocciaObjectExpression);
 end;
 
 function TGocciaParser.ParsePattern: TGocciaDestructuringPattern;
@@ -2004,7 +2015,7 @@ begin
   Result := TGocciaObjectDestructuringPattern.Create(Properties, Line, Column);
 end;
 
-function TGocciaParser.ConvertToPattern(Expr: TGocciaExpression): TGocciaDestructuringPattern;
+function TGocciaParser.ConvertToPattern(const AExpr: TGocciaExpression): TGocciaDestructuringPattern;
 var
   ArrayExpr: TGocciaArrayExpression;
   ObjectExpr: TGocciaObjectExpression;
@@ -2017,25 +2028,25 @@ var
   ComputedPair: TPair<TGocciaExpression, TGocciaExpression>;
   Prop: TGocciaDestructuringProperty;
 begin
-  if Expr is TGocciaIdentifierExpression then
+  if AExpr is TGocciaIdentifierExpression then
   begin
-    IdentifierExpr := TGocciaIdentifierExpression(Expr);
-    Result := TGocciaIdentifierDestructuringPattern.Create(IdentifierExpr.Name, Expr.Line, Expr.Column);
+    IdentifierExpr := TGocciaIdentifierExpression(AExpr);
+    Result := TGocciaIdentifierDestructuringPattern.Create(IdentifierExpr.Name, AExpr.Line, AExpr.Column);
   end
-  else if Expr is TGocciaAssignmentExpression then
+  else if AExpr is TGocciaAssignmentExpression then
   begin
     // Handle assignment expressions (for default values)
-    AssignmentExpr := TGocciaAssignmentExpression(Expr);
+    AssignmentExpr := TGocciaAssignmentExpression(AExpr);
     Result := TGocciaAssignmentDestructuringPattern.Create(
-      TGocciaIdentifierDestructuringPattern.Create(AssignmentExpr.Name, Expr.Line, Expr.Column),
+      TGocciaIdentifierDestructuringPattern.Create(AssignmentExpr.Name, AExpr.Line, AExpr.Column),
       AssignmentExpr.Value,
-      Expr.Line,
-      Expr.Column
+      AExpr.Line,
+      AExpr.Column
     );
   end
-  else if Expr is TGocciaArrayExpression then
+  else if AExpr is TGocciaArrayExpression then
   begin
-    ArrayExpr := TGocciaArrayExpression(Expr);
+    ArrayExpr := TGocciaArrayExpression(AExpr);
     Elements := TObjectList<TGocciaDestructuringPattern>.Create(True);
 
     for I := 0 to ArrayExpr.Elements.Count - 1 do
@@ -2050,11 +2061,11 @@ begin
         Elements.Add(ConvertToPattern(ArrayExpr.Elements[I]));
     end;
 
-    Result := TGocciaArrayDestructuringPattern.Create(Elements, Expr.Line, Expr.Column);
+    Result := TGocciaArrayDestructuringPattern.Create(Elements, AExpr.Line, AExpr.Column);
   end
-  else if Expr is TGocciaObjectExpression then
+  else if AExpr is TGocciaObjectExpression then
   begin
-    ObjectExpr := TGocciaObjectExpression(Expr);
+    ObjectExpr := TGocciaObjectExpression(AExpr);
     Properties := TObjectList<TGocciaDestructuringProperty>.Create(True);
 
     // Handle static properties
@@ -2087,10 +2098,10 @@ begin
       end;
     end;
 
-    Result := TGocciaObjectDestructuringPattern.Create(Properties, Expr.Line, Expr.Column);
+    Result := TGocciaObjectDestructuringPattern.Create(Properties, AExpr.Line, AExpr.Column);
   end
   else
-    raise TGocciaSyntaxError.Create('Invalid destructuring target', Expr.Line, Expr.Column, FFileName, FSourceLines);
+    raise TGocciaSyntaxError.Create('Invalid destructuring target', AExpr.Line, AExpr.Column, FFileName, FSourceLines);
 end;
 
 function TGocciaParser.SwitchStatement: TGocciaStatement;

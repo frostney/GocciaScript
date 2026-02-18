@@ -1,0 +1,6 @@
+pre-commit:
+  commands:
+    format-pascal:
+      glob: "*.{pas,dpr}"
+      run: ./format.pas {staged_files}
+      stage_fixed: true
