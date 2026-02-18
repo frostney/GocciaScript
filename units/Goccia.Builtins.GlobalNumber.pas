@@ -254,13 +254,13 @@ begin
     Exit;
   end;
 
-  NumberArg := TGocciaNumberLiteralValue(AArgs.GetElement(0));
-
-  if not (NumberArg is TGocciaNumberLiteralValue) then
+  if not (AArgs.GetElement(0) is TGocciaNumberLiteralValue) then
   begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
+
+  NumberArg := TGocciaNumberLiteralValue(AArgs.GetElement(0));
 
   if NumberArg.IsNaN or NumberArg.IsInfinity or NumberArg.IsNegativeInfinity then
   begin
@@ -305,13 +305,13 @@ begin
     Exit;
   end;
 
-  NumberArg := TGocciaNumberLiteralValue(AArgs.GetElement(0));
-
-  if not (NumberArg is TGocciaNumberLiteralValue) then
+  if not (AArgs.GetElement(0) is TGocciaNumberLiteralValue) then
   begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
+
+  NumberArg := TGocciaNumberLiteralValue(AArgs.GetElement(0));
 
   Value := NumberArg.Value;
 

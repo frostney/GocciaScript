@@ -36,11 +36,14 @@ test("charAt with empty string", () => {
 });
 
 test("charAt with edge cases", () => {
-  // undefined, null, NaN convert to 0, so they return first character
   expect("hello".charAt(undefined)).toBe("h");
   expect("hello".charAt(null)).toBe("h");
   expect("hello".charAt(NaN)).toBe("h");
 
   expect("hello".charAt(Infinity)).toBe("");
   expect("hello".charAt(-Infinity)).toBe("");
+});
+
+test("charAt throws TypeError for Symbol argument", () => {
+  expect(() => "hello".charAt(Symbol())).toThrow("TypeError");
 });

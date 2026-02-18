@@ -125,6 +125,7 @@ type
 implementation
 
 uses
+  Goccia.GarbageCollector,
   Goccia.Values.ClassHelper,
   Goccia.Values.NativeFunction;
 
@@ -421,8 +422,14 @@ begin
     ConstructorToCall := FSuperClass.ConstructorMethod;
 
   if Assigned(ConstructorToCall) then
-    // Call the constructor with the instance as this
-    ConstructorToCall.Call(AArguments, Instance);
+  begin
+    TGocciaGC.Instance.AddTempRoot(Instance);
+    try
+      ConstructorToCall.Call(AArguments, Instance);
+    finally
+      TGocciaGC.Instance.RemoveTempRoot(Instance);
+    end;
+  end;
 
   Result := Instance;
 end;

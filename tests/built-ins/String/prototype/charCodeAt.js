@@ -17,11 +17,14 @@ test("charCodeAt with empty string", () => {
 });
 
 test("charCodeAt with edge cases", () => {
-  // undefined, null, NaN convert to 0, so they return first character code
   expect("hello".charCodeAt(undefined)).toBe(104); // 'h'
   expect("hello".charCodeAt(null)).toBe(104); // 'h'
   expect("hello".charCodeAt(NaN)).toBe(104); // 'h'
 
-  expect("hello".charCodeAt(Infinity)).toBeNaN(); // 'h'
-  expect("hello".charCodeAt(-Infinity)).toBeNaN(); // 'h'
+  expect("hello".charCodeAt(Infinity)).toBeNaN();
+  expect("hello".charCodeAt(-Infinity)).toBeNaN();
+});
+
+test("charCodeAt throws TypeError for Symbol argument", () => {
+  expect(() => "hello".charCodeAt(Symbol())).toThrow("TypeError");
 });
