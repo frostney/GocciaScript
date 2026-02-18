@@ -71,11 +71,9 @@ test("thenable adoption defers settlement by one microtask tick", () => {
   const outer = new Promise((resolve) => resolve(inner));
   outer.then(() => log.push("B"));
   Promise.resolve().then(() => log.push("A"));
-  return Promise.resolve()
-    .then(() => {})
-    .then(() => {
-      expect(log).toEqual(["A", "B"]);
-    });
+  return outer.then(() => {
+    expect(log).toEqual(["A", "B"]);
+  });
 });
 
 test("resolve(fulfilledPromise) does not settle outer synchronously", () => {
@@ -87,11 +85,9 @@ test("resolve(fulfilledPromise) does not settle outer synchronously", () => {
   });
   outer.then((v) => log.push("then:" + v));
   log.push("sync");
-  return Promise.resolve()
-    .then(() => {})
-    .then(() => {
-      expect(log).toEqual(["executor-done", "sync", "then:42"]);
-    });
+  return outer.then(() => {
+    expect(log).toEqual(["executor-done", "sync", "then:42"]);
+  });
 });
 
 test("resolve(rejectedPromise) defers rejection by one tick", () => {
@@ -100,9 +96,7 @@ test("resolve(rejectedPromise) defers rejection by one tick", () => {
   const outer = new Promise((resolve) => resolve(rejected));
   outer.catch((e) => log.push("catch:" + e));
   Promise.resolve().then(() => log.push("A"));
-  return Promise.resolve()
-    .then(() => {})
-    .then(() => {
-      expect(log).toEqual(["A", "catch:err"]);
-    });
+  return outer.catch(() => {
+    expect(log).toEqual(["A", "catch:err"]);
+  });
 });

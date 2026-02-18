@@ -8,7 +8,7 @@ uses
   Goccia.Values.Primitives, Generics.Collections;
 
 type
-  TPromiseReactionType = (prtFulfill, prtReject);
+  TPromiseReactionType = (prtFulfill, prtReject, prtThenableResolve);
 
   TGocciaMicrotask = record
     Handler: TGocciaValue;
@@ -129,6 +129,9 @@ begin
           case Task.ReactionType of
             prtFulfill: Promise.Resolve(Task.Value);
             prtReject: Promise.Reject(Task.Value);
+            prtThenableResolve:
+              if Task.Value is TGocciaPromiseValue then
+                Promise.SubscribeTo(TGocciaPromiseValue(Task.Value));
           end;
         end;
       end;
