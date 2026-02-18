@@ -246,7 +246,7 @@ jobs:
             pkg_dir="gocciascript-${platform}"
             mkdir -p "$pkg_dir"
 
-            cp "$artifact_dir"/* "$pkg_dir/" 2>/dev/null || true
+            find "$artifact_dir" -maxdepth 1 -type f ! -name '*.Test' ! -name '*.Test.exe' -exec cp {} "$pkg_dir/" \;
             cp -r tests/ "$pkg_dir/tests/"
             cp -r benchmarks/ "$pkg_dir/benchmarks/"
             cp -r examples/ "$pkg_dir/examples/"
