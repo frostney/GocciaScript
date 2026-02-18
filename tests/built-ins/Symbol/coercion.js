@@ -193,6 +193,13 @@ describe("explicit conversions work", () => {
     expect(String(Symbol())).toBe("Symbol()");
   });
 
+  test("symbol.toString() returns descriptive string", () => {
+    const s = Symbol("test");
+    expect(s.toString()).toBe("Symbol(test)");
+    expect(s.toString()).toBe(String(s));
+    expect(Symbol().toString()).toBe("Symbol()");
+  });
+
   test("Boolean(symbol) returns true", () => {
     expect(Boolean(Symbol("foo"))).toBe(true);
     expect(Boolean(Symbol())).toBe(true);

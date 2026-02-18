@@ -116,7 +116,7 @@ The `BenchmarkRunner` program:
 
 Console format (default):
 
-```
+```text
   Lex: 287μs | Parse: 0.58ms | Execute: 7207.31ms | Total: 7208.18ms
 
   fibonacci

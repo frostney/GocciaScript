@@ -245,6 +245,8 @@ Symbols are unique, immutable primitive values used as property keys.
 | `Symbol.for(key)` | Get/create a symbol in the global registry |
 | `Symbol.keyFor(symbol)` | Get the key for a global registry symbol (throws `TypeError` for non-symbol arguments) |
 | `Symbol.iterator` | Well-known symbol constant |
+| `symbol.toString()` | Returns `"Symbol(description)"` |
+| `symbol.description` | The description string, or `undefined` |
 
 Symbols can be used as computed property keys:
 
@@ -256,7 +258,9 @@ obj[sym]; // "value"
 
 `Object.defineProperty` and `Object.getOwnPropertySymbols` also support symbol keys.
 
-**Coercion semantics:** Symbols follow ECMAScript strict mode rules — implicit conversion to string or number throws `TypeError`. Use `String(symbol)` for explicit string conversion. See [value-system.md](value-system.md#symbols) for details.
+Symbols have no prototype object — `toString()` and `description` are provided directly via `GetProperty` on the primitive value.
+
+**Coercion semantics:** Symbols follow ECMAScript strict mode rules — implicit conversion to string or number throws `TypeError`. Use `String(symbol)` or `symbol.toString()` for explicit string conversion. See [value-system.md](value-system.md#symbols) for details.
 
 ### Set (`Goccia.Builtins.GlobalSet.pas`)
 

@@ -101,9 +101,6 @@ var
   Arg: TGocciaValue;
   Pair: TPair<string, TGocciaSymbolValue>;
 begin
-  if Args.Length = 0 then
-    ThrowTypeError('Symbol.keyFor requires that the first argument be a symbol');
-
   Arg := Args.GetElement(0);
 
   if not (Arg is TGocciaSymbolValue) then

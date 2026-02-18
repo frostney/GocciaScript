@@ -18,7 +18,7 @@ function EvaluateInOperator(Left, Right: TGocciaValue): TGocciaValue;
 
 implementation
 
-uses Goccia.Values.ClassHelper, Goccia.Values.Error;
+uses Goccia.Values.ErrorHelper;
 
 function EvaluateTypeof(Operand: TGocciaValue): TGocciaValue;
 begin
@@ -131,18 +131,11 @@ function EvaluateInOperator(Left, Right: TGocciaValue): TGocciaValue;
 var
   PropertyName: string;
   Index: Integer;
-  ErrorObj: TGocciaObjectValue;
 begin
   // ECMAScript: right operand must be an object, not a primitive
   if Right.IsPrimitive then
-  begin
-    ErrorObj := TGocciaObjectValue.Create;
-    ErrorObj.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
-    ErrorObj.AssignProperty('message', TGocciaStringLiteralValue.Create(
-      'Cannot use ''in'' operator to search for ''' +
-      Left.ToStringLiteral.Value + ''' in ' + Right.ToStringLiteral.Value));
-    raise TGocciaThrowValue.Create(ErrorObj);
-  end;
+    ThrowTypeError('Cannot use ''in'' operator to search for ''' +
+      Left.ToStringLiteral.Value + ''' in ' + Right.ToStringLiteral.Value);
 
   PropertyName := Left.ToStringLiteral.Value;
 

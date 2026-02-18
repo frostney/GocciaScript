@@ -17,6 +17,7 @@ type
 
     function TypeName: string; override;
     function TypeOf: string; override;
+    function GetProperty(const AName: string): TGocciaValue; override;
 
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
@@ -29,10 +30,38 @@ type
 implementation
 
 uses
-  Goccia.Values.Constants, Goccia.Values.ErrorHelper;
+  Goccia.Values.Constants, Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction, Goccia.Arguments.Collection,
+  Goccia.GarbageCollector;
+
+type
+  TSymbolMethodHost = class
+    function SymbolToString(Args: TGocciaArgumentsCollection;
+      ThisValue: TGocciaValue): TGocciaValue;
+  end;
 
 var
   GNextSymbolId: Integer = 0;
+  GSharedToString: TGocciaNativeFunctionValue = nil;
+  GMethodHost: TSymbolMethodHost = nil;
+
+function TSymbolMethodHost.SymbolToString(Args: TGocciaArgumentsCollection;
+  ThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := ThisValue.ToStringLiteral;
+end;
+
+procedure EnsureSymbolPrototype;
+begin
+  if Assigned(GSharedToString) then Exit;
+
+  GMethodHost := TSymbolMethodHost.Create;
+  GSharedToString := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    GMethodHost.SymbolToString, 'toString', 0);
+
+  if Assigned(TGocciaGC.Instance) then
+    TGocciaGC.Instance.PinValue(GSharedToString);
+end;
 
 constructor TGocciaSymbolValue.Create(const ADescription: string);
 begin
@@ -50,6 +79,24 @@ end;
 function TGocciaSymbolValue.TypeOf: string;
 begin
   Result := SYMBOL_TYPE_NAME;
+end;
+
+function TGocciaSymbolValue.GetProperty(const AName: string): TGocciaValue;
+begin
+  if AName = 'toString' then
+  begin
+    EnsureSymbolPrototype;
+    Result := GSharedToString;
+  end
+  else if AName = 'description' then
+  begin
+    if FDescription <> '' then
+      Result := TGocciaStringLiteralValue.Create(FDescription)
+    else
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end
+  else
+    Result := nil;
 end;
 
 function TGocciaSymbolValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
@@ -70,5 +117,8 @@ begin
   else
     Result := TGocciaStringLiteralValue.Create('Symbol()');
 end;
+
+finalization
+  GMethodHost.Free;
 
 end.

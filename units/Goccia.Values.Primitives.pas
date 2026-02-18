@@ -30,7 +30,6 @@ type
     // Type discrimination via VMT — avoids `is` check chains on hot paths
     function IsPrimitive: Boolean; virtual;
     function IsCallable: Boolean; virtual;
-
     // Virtual property access — overridden by ObjectValue, ClassValue, etc.
     function GetProperty(const AName: string): TGocciaValue; virtual;
     procedure SetProperty(const AName: string; AValue: TGocciaValue); virtual;
@@ -192,6 +191,7 @@ function TGocciaValue.IsCallable: Boolean;
 begin
   Result := False;
 end;
+
 
 function TGocciaValue.GetProperty(const AName: string): TGocciaValue;
 begin

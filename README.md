@@ -118,6 +118,8 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 
 ### Run Tests
 
+GocciaScript has 1250+ JavaScript unit tests covering language features, built-in objects, and edge cases.
+
 ```bash
 # Run all tests (GocciaScript TestRunner)
 ./build.pas testrunner && ./build/TestRunner tests

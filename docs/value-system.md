@@ -259,6 +259,8 @@ Each symbol has a globally unique `Id` assigned at creation. Type coercion follo
 
 The implicit coercion checks are implemented at the operator level (in `Goccia.Evaluator.Arithmetic.pas`, `Goccia.Evaluator.pas`, and `Goccia.Values.StringObjectValue.pas`) rather than in `ToStringLiteral`, because `ToStringLiteral` is also used internally for property keys and display purposes where conversion must succeed.
 
+**No prototype:** Unlike strings and numbers, symbols do not have a shared prototype object. Instance methods (`toString()`) and properties (`description`) are provided directly by the `GetProperty` override on `TGocciaSymbolValue`. The `toString` method is a lazily initialized, GC-pinned singleton `TGocciaNativeFunctionValue` shared across all symbol instances. Symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods, since Symbol is an optional built-in that can be toggled via `TGocciaGlobalBuiltins` flags.
+
 Objects store symbol-keyed properties separately from string-keyed properties via `TGocciaObjectValue.FSymbolDescriptors`.
 
 ## Type Conversion
