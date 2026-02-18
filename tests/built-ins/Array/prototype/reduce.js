@@ -50,9 +50,9 @@ test("Array.protoype.reduce to create object out of array", () => {
   }, {});
 
   expect(reduced).toEqual({ John: 20, Jane: 21, Jim: 22 });
-  expect(reduced).toContain("John");
-  expect(reduced).toContain("Jane");
-  expect(reduced).toContain("Jim");
+  expect(Object.keys(reduced)).toContain("John");
+  expect(Object.keys(reduced)).toContain("Jane");
+  expect(Object.keys(reduced)).toContain("Jim");
   expect(reduced.John).toBe(20);
   expect(reduced.Jane).toBe(21);
   expect(reduced.Jim).toBe(22);
