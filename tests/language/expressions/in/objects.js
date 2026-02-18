@@ -56,3 +56,26 @@ test("in operator in empty object", () => {
   const obj = {};
   expect("anything" in obj).toBe(false);
 });
+
+test("in operator with symbol keys", () => {
+  const sym = Symbol("key");
+  const other = Symbol("other");
+  const obj = { [sym]: "value" };
+  expect(sym in obj).toBe(true);
+  expect(other in obj).toBe(false);
+});
+
+test("in operator with symbol keys in arrays", () => {
+  const sym = Symbol("tag");
+  const arr = [1, 2, 3];
+  arr[sym] = "tagged";
+  expect(sym in arr).toBe(true);
+  expect(Symbol("missing") in arr).toBe(false);
+});
+
+test("in operator with Symbol.for keys", () => {
+  const sym = Symbol.for("global");
+  const obj = { [sym]: "registered" };
+  expect(Symbol.for("global") in obj).toBe(true);
+  expect(Symbol("global") in obj).toBe(false);
+});

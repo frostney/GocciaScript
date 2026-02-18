@@ -238,15 +238,36 @@ TGocciaSymbolValue = class(TGocciaValue)
 end;
 ```
 
-Each symbol has a globally unique `Id` assigned at creation. Type coercion:
+Each symbol has a globally unique `Id` assigned at creation. Type coercion follows ECMAScript strict mode semantics:
 
 | Conversion | Result |
 |------------|--------|
 | `ToBoolean` | `true` |
-| `ToNumber` | `NaN` |
-| `ToString` | `"Symbol(description)"` |
+| `ToNumber` | Throws `TypeError` ("Cannot convert a Symbol value to a number") |
+| `ToString` | `"Symbol(description)"` (used by `String(symbol)` and internal display) |
 
-Objects store symbol-keyed properties separately from string-keyed properties via `TGocciaObjectValue.FSymbolDescriptors`.
+**Implicit coercion restrictions:** Symbols cannot be implicitly converted to strings or numbers. Any operation that triggers implicit coercion throws a `TypeError`:
+
+- **String coercion** — Template literals (`` `${symbol}` ``), string concatenation (`"" + symbol`), `String.prototype.concat`
+- **Number coercion** — Arithmetic operators (`+`, `-`, `*`, `/`, `%`, `**`), bitwise operators (`|`, `&`, `^`, `~`, `<<`, `>>`, `>>>`), relational comparisons (`<`, `>`, `<=`, `>=`)
+
+**Explicit conversions that work:**
+
+- `String(symbol)` — Returns the descriptive string (e.g., `"Symbol(foo)")`. Uses `ToStringLiteral` internally.
+- `symbol.toString()` — Same result as `String(symbol)`.
+- `Boolean(symbol)` — Returns `true`.
+- `typeof symbol` — Returns `"symbol"`.
+
+**Explicit conversions that throw:**
+
+- `Number(symbol)` — Throws `TypeError`. Internally, `ToNumberLiteral` raises the error.
+- Unary `+symbol` / `-symbol` — Throws `TypeError` (these trigger `ToNumberLiteral`).
+
+The implicit coercion checks are implemented at the operator level (in `Goccia.Evaluator.Arithmetic.pas`, `Goccia.Evaluator.pas`, and `Goccia.Values.StringObjectValue.pas`) rather than in `ToStringLiteral`, because `ToStringLiteral` is also used internally for property keys and display purposes where conversion must succeed.
+
+**No prototype:** Unlike strings and numbers, symbols do not have a shared prototype object. Instance methods (`toString()`) and properties (`description`) are provided directly by the `GetProperty` override on `TGocciaSymbolValue`. The `toString` method is a lazily initialized, GC-pinned singleton `TGocciaNativeFunctionValue` shared across all symbol instances. Symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods, since Symbol is an optional built-in that can be toggled via `TGocciaGlobalBuiltins` flags.
+
+Objects store symbol-keyed properties separately from string-keyed properties via `TGocciaObjectValue.FSymbolDescriptors`. The `in` operator handles symbol keys directly via `HasSymbolProperty`, without converting them to strings (see `Goccia.Evaluator.TypeOperations.pas`).
 
 ## Type Conversion
 

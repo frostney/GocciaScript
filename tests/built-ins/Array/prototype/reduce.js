@@ -38,7 +38,7 @@ test("Array.prototype.reduce with index and array parameters", () => {
   expect(reduced).toBe(6);
 });
 
-test("Array.protoype.reduce to create object out of array", () => {
+test("Array.prototype.reduce to create object out of array", () => {
   const arr = [
     { name: "John", age: 20 },
     { name: "Jane", age: 21 },
@@ -50,9 +50,10 @@ test("Array.protoype.reduce to create object out of array", () => {
   }, {});
 
   expect(reduced).toEqual({ John: 20, Jane: 21, Jim: 22 });
-  expect(reduced).toContain("John");
-  expect(reduced).toContain("Jane");
-  expect(reduced).toContain("Jim");
+  const keys = Object.keys(reduced);
+  expect(keys).toContain("John");
+  expect(keys).toContain("Jane");
+  expect(keys).toContain("Jim");
   expect(reduced.John).toBe(20);
   expect(reduced.Jane).toBe(21);
   expect(reduced.Jim).toBe(22);

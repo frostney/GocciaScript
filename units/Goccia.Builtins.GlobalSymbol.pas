@@ -33,7 +33,7 @@ type
 implementation
 
 uses
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue, Goccia.Values.ErrorHelper;
 
 constructor TGocciaGlobalSymbol.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
@@ -101,23 +101,10 @@ var
   Arg: TGocciaValue;
   Pair: TPair<string, TGocciaSymbolValue>;
 begin
-  if Args.Length = 0 then
-  begin
-    Result := TGocciaNullLiteralValue.Create;
-    Exit;
-  end;
-
   Arg := Args.GetElement(0);
 
   if not (Arg is TGocciaSymbolValue) then
-  begin
-    // Non-symbol arguments return null (undefined for undefined)
-    if Arg is TGocciaUndefinedLiteralValue then
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue
-    else
-      Result := TGocciaNullLiteralValue.Create;
-    Exit;
-  end;
+    ThrowTypeError('Symbol.keyFor requires that the first argument be a symbol');
 
   // Search the global registry for this symbol instance
   for Pair in FGlobalRegistry do

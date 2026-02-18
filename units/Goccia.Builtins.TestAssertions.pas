@@ -127,7 +127,7 @@ implementation
 uses
   Goccia.Values.ClassValue, Goccia.Evaluator, Goccia.Evaluator.Comparison,
   Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.Error, Goccia.Values.ClassHelper,
-  Goccia.Values.PromiseValue, Goccia.MicrotaskQueue, TimingUtils;
+  Goccia.Values.PromiseValue, Goccia.Values.SetValue, Goccia.MicrotaskQueue, TimingUtils;
 
 { TTestSuite }
 
@@ -530,19 +530,17 @@ begin
     ExpectedStr := Expected.ToStringLiteral.Value;
     Contains := Pos(ExpectedStr, ActualStr) > 0;
   end
+  else if FActualValue is TGocciaArrayValue then
+  begin
+    Contains := TGocciaArrayValue(FActualValue).Includes(Expected);
+  end
+  else if FActualValue is TGocciaSetValue then
+  begin
+    Contains := TGocciaSetValue(FActualValue).ContainsValue(Expected);
+  end
   else
   begin
-    if FActualValue is TGocciaArrayValue then
-    begin
-      Contains := TGocciaArrayValue(FActualValue).Includes(Expected);
-    end
-    else if FActualValue is TGocciaObjectValue then
-    begin
-      Contains := TGocciaObjectValue(FActualValue).HasOwnProperty(Expected.ToStringLiteral.Value);
-    end else
-    begin
-      Contains := FActualValue.ToStringLiteral.Value = Expected.ToStringLiteral.Value;
-    end;
+    Contains := False;
   end;
 
   if FIsNegated then

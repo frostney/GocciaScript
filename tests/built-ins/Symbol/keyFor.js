@@ -13,10 +13,15 @@ test("Symbol.keyFor with non-global symbol", () => {
   expect(Symbol.keyFor(localSymbol)).toBe(undefined);
 });
 
-test("Symbol.keyFor with non-symbol values", () => {
-  expect(Symbol.keyFor(null)).toBe(null);
-  expect(Symbol.keyFor(undefined)).toBe(undefined);
-  expect(Symbol.keyFor(0)).toBe(null);
-  expect(Symbol.keyFor(false)).toBe(null);
-  expect(Symbol.keyFor("string")).toBe(null);
+test("Symbol.keyFor throws TypeError for non-symbol values", () => {
+  expect(() => { Symbol.keyFor(null); }).toThrow(TypeError);
+  expect(() => { Symbol.keyFor(undefined); }).toThrow(TypeError);
+  expect(() => { Symbol.keyFor(0); }).toThrow(TypeError);
+  expect(() => { Symbol.keyFor(false); }).toThrow(TypeError);
+  expect(() => { Symbol.keyFor("string"); }).toThrow(TypeError);
+  expect(() => { Symbol.keyFor({}); }).toThrow(TypeError);
+});
+
+test("Symbol.keyFor throws TypeError with no arguments", () => {
+  expect(() => { Symbol.keyFor(); }).toThrow(TypeError);
 });

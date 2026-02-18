@@ -44,7 +44,6 @@ type
     function PromiseFinally(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 
     procedure TriggerReactions;
-    procedure SubscribeTo(APromise: TGocciaPromiseValue);
     procedure InitializePrototype;
   public
     constructor Create; overload;
@@ -52,6 +51,7 @@ type
 
     procedure Resolve(AValue: TGocciaValue);
     procedure Reject(AReason: TGocciaValue);
+    procedure SubscribeTo(APromise: TGocciaPromiseValue);
 
     function DoResolve(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function DoReject(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
@@ -253,6 +253,9 @@ begin
 end;
 
 procedure TGocciaPromiseValue.Resolve(AValue: TGocciaValue);
+var
+  Task: TGocciaMicrotask;
+  Queue: TGocciaMicrotaskQueue;
 begin
   if FState <> gpsPending then Exit;
 
@@ -267,7 +270,15 @@ begin
 
   if AValue is TGocciaPromiseValue then
   begin
-    SubscribeTo(TGocciaPromiseValue(AValue));
+    Queue := TGocciaMicrotaskQueue.Instance;
+    if Assigned(Queue) then
+    begin
+      Task.Handler := nil;
+      Task.Value := AValue;
+      Task.ResultPromise := Self;
+      Task.ReactionType := prtThenableResolve;
+      Queue.Enqueue(Task);
+    end;
     Exit;
   end;
 

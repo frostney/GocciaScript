@@ -23,12 +23,12 @@ type
     function SetForEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
     function SetValues(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
 
-    function ContainsValue(AValue: TGocciaValue): Boolean;
     procedure InitializePrototype;
   public
     constructor Create; overload;
     destructor Destroy; override;
 
+    function ContainsValue(AValue: TGocciaValue): Boolean;
     procedure AddItem(AValue: TGocciaValue);
 
     function GetProperty(const AName: string): TGocciaValue; override;

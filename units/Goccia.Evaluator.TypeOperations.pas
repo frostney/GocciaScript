@@ -18,7 +18,7 @@ function EvaluateInOperator(Left, Right: TGocciaValue): TGocciaValue;
 
 implementation
 
-uses Goccia.Values.ClassHelper;
+uses Goccia.Values.ErrorHelper, Goccia.Values.SymbolValue, Goccia.Keywords;
 
 function EvaluateTypeof(Operand: TGocciaValue): TGocciaValue;
 begin
@@ -132,7 +132,26 @@ var
   PropertyName: string;
   Index: Integer;
 begin
-  PropertyName := Left.ToStringLiteral.Value; // Left operand is the property name
+  // ECMAScript: right operand must be an object, not a primitive
+  if Right.IsPrimitive then
+    ThrowTypeError('Cannot use ''' + KEYWORD_IN + ''' operator to search for ''' +
+      Left.ToStringLiteral.Value + ''' in ' + Right.ToStringLiteral.Value);
+
+  if Left is TGocciaSymbolValue then
+  begin
+    if Right is TGocciaObjectValue then
+    begin
+      if TGocciaObjectValue(Right).HasSymbolProperty(TGocciaSymbolValue(Left)) then
+        Result := TGocciaBooleanLiteralValue.TrueValue
+      else
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+    end
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+    Exit;
+  end;
+
+  PropertyName := Left.ToStringLiteral.Value;
 
   if Right is TGocciaArrayValue then
   begin
@@ -159,25 +178,6 @@ begin
         Result := TGocciaBooleanLiteralValue.FalseValue;
     end;
   end
-  else if Right is TGocciaStringLiteralValue then
-  begin
-    // Check if index exists in string
-    if PropertyName = 'length' then
-      Result := TGocciaBooleanLiteralValue.TrueValue
-    else
-    begin
-      try
-        Index := StrToInt(PropertyName);
-        if (Index >= 0) and (Index < Length(Right.ToStringLiteral.Value)) then
-          Result := TGocciaBooleanLiteralValue.TrueValue
-        else
-          Result := TGocciaBooleanLiteralValue.FalseValue;
-      except
-        // If not a valid integer, always false for strings
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-      end;
-    end;
-  end
   else if Right is TGocciaInstanceValue then
   begin
     // Check if property exists in class instance
@@ -196,7 +196,6 @@ begin
   end
   else
   begin
-    // For other types, return false
     Result := TGocciaBooleanLiteralValue.FalseValue;
   end;
 end;

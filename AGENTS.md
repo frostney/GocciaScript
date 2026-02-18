@@ -229,9 +229,11 @@ All values inherit from `TGocciaValue`. Virtual methods on the base class elimin
 - `IsPrimitive` — Returns `True` for null, undefined, boolean, number, and string types. Use `Value.IsPrimitive` instead of multi-`is` check chains.
 - `IsCallable` — Returns `True` for functions and classes. Use `Value.IsCallable` instead of `(Value is TGocciaFunctionBase)` or `(Value is TGocciaFunctionValue) or (Value is TGocciaNativeFunctionValue)`.
 
-The evaluator calls these directly (`Value.GetProperty(Name)`, `Value.IsPrimitive`, `Value.IsCallable`) without type-checking or interface queries. **Always prefer these VMT methods over `is` type checks.**
+The evaluator calls these directly (`Value.GetProperty(Name)`, `Value.IsPrimitive`, `Value.IsCallable`) without type-checking or interface queries. **Prefer these VMT methods over `is` type checks for fundamental type-system properties.** Do not add VMT methods for optional built-in types (e.g., Symbol, Set, Map) — these are toggled via `TGocciaGlobalBuiltins` flags and should use standard RTTI (`is`) checks instead.
 
 Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `CreateErrorObject`, etc.). Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
+
+**Symbol coercion:** `TGocciaSymbolValue.ToNumberLiteral` throws `TypeError` (symbols cannot convert to numbers). `ToStringLiteral` returns `"Symbol(description)"` for internal use (display, property keys), but implicit string coercion (template literals, `+` operator, `String.prototype.concat`) must check for symbols and throw `TypeError` at the operator level. See `Goccia.Evaluator.Arithmetic.pas` and `Goccia.Evaluator.pas` for the pattern.
 
 ## Built-in Objects
 
@@ -279,6 +281,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 | [docs/value-system.md](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
 | [docs/built-ins.md](docs/built-ins.md) | Available built-ins, registration system, adding new ones |
 | [docs/testing.md](docs/testing.md) | Test organization, writing tests, running tests |
+| [docs/benchmarks.md](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks, CI comparison |
 | [docs/build-system.md](docs/build-system.md) | Build commands, configuration, CI/CD |
 | [docs/language-restrictions.md](docs/language-restrictions.md) | Supported/excluded features with rationale |
 | [docs/embedding.md](docs/embedding.md) | Embedding the engine in FreePascal applications |

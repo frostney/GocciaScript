@@ -33,6 +33,7 @@ implementation
 
 uses
   Goccia.Values.FunctionBase, Goccia.Values.Error, Goccia.Values.ErrorHelper,
+  Goccia.Values.SetValue, Goccia.Values.MapValue,
   Goccia.GarbageCollector, Goccia.MicrotaskQueue;
 
 type
@@ -514,13 +515,32 @@ end;
 function TGocciaGlobalPromise.ExtractPromiseArray(Args: TGocciaArgumentsCollection): TGocciaArrayValue;
 var
   Iterable: TGocciaValue;
+  Str: string;
+  I: Integer;
 begin
   Iterable := Args.GetElement(0);
   if Iterable is TGocciaArrayValue then
     Result := TGocciaArrayValue(Iterable)
+  else if Iterable is TGocciaStringLiteralValue then
+  begin
+    Str := TGocciaStringLiteralValue(Iterable).Value;
+    Result := TGocciaArrayValue.Create;
+    TGocciaGC.Instance.AddTempRoot(Result);
+    try
+      for I := 1 to Length(Str) do
+        Result.Elements.Add(TGocciaStringLiteralValue.Create(Str[I]));
+    finally
+      TGocciaGC.Instance.RemoveTempRoot(Result);
+    end;
+  end
+  else if Iterable is TGocciaSetValue then
+    Result := TGocciaSetValue(Iterable).ToArray
+  else if Iterable is TGocciaMapValue then
+    Result := TGocciaMapValue(Iterable).ToArray
   else
   begin
-    Goccia.Values.ErrorHelper.ThrowTypeError('Promise combinator requires an array argument');
+    Goccia.Values.ErrorHelper.ThrowTypeError(
+      Iterable.ToStringLiteral.Value + ' is not iterable');
     Result := nil;
   end;
 end;
@@ -537,8 +557,17 @@ var
   RejectHandler: TPromiseAllRejectHandler;
   ThenArgs: TGocciaArgumentsCollection;
 begin
-  InputArray := ExtractPromiseArray(Args);
   ResultPromise := TGocciaPromiseValue.Create;
+  try
+    InputArray := ExtractPromiseArray(Args);
+  except
+    on E: TGocciaThrowValue do
+    begin
+      ResultPromise.Reject(E.Value);
+      Result := ResultPromise;
+      Exit;
+    end;
+  end;
 
   if InputArray.Elements.Count = 0 then
   begin
@@ -581,8 +610,17 @@ var
   RejectHandler: TPromiseAllSettledRejectHandler;
   ThenArgs: TGocciaArgumentsCollection;
 begin
-  InputArray := ExtractPromiseArray(Args);
   ResultPromise := TGocciaPromiseValue.Create;
+  try
+    InputArray := ExtractPromiseArray(Args);
+  except
+    on E: TGocciaThrowValue do
+    begin
+      ResultPromise.Reject(E.Value);
+      Result := ResultPromise;
+      Exit;
+    end;
+  end;
 
   if InputArray.Elements.Count = 0 then
   begin
@@ -623,8 +661,17 @@ var
   ResolveHandler, RejectHandler: TPromiseRaceHandler;
   ThenArgs: TGocciaArgumentsCollection;
 begin
-  InputArray := ExtractPromiseArray(Args);
   ResultPromise := TGocciaPromiseValue.Create;
+  try
+    InputArray := ExtractPromiseArray(Args);
+  except
+    on E: TGocciaThrowValue do
+    begin
+      ResultPromise.Reject(E.Value);
+      Result := ResultPromise;
+      Exit;
+    end;
+  end;
 
   for I := 0 to InputArray.Elements.Count - 1 do
   begin
@@ -659,8 +706,17 @@ var
   ThenArgs: TGocciaArgumentsCollection;
   ErrorObj: TGocciaObjectValue;
 begin
-  InputArray := ExtractPromiseArray(Args);
   ResultPromise := TGocciaPromiseValue.Create;
+  try
+    InputArray := ExtractPromiseArray(Args);
+  except
+    on E: TGocciaThrowValue do
+    begin
+      ResultPromise.Reject(E.Value);
+      Result := ResultPromise;
+      Exit;
+    end;
+  end;
 
   if InputArray.Elements.Count = 0 then
   begin
