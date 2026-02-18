@@ -520,7 +520,8 @@ begin
     Result := TGocciaArrayValue(Iterable)
   else
   begin
-    Goccia.Values.ErrorHelper.ThrowTypeError('Promise combinator requires an array argument');
+    Goccia.Values.ErrorHelper.ThrowTypeError(
+      Iterable.ToStringLiteral.Value + ' is not iterable');
     Result := nil;
   end;
 end;
@@ -537,8 +538,17 @@ var
   RejectHandler: TPromiseAllRejectHandler;
   ThenArgs: TGocciaArgumentsCollection;
 begin
-  InputArray := ExtractPromiseArray(Args);
   ResultPromise := TGocciaPromiseValue.Create;
+  try
+    InputArray := ExtractPromiseArray(Args);
+  except
+    on E: TGocciaThrowValue do
+    begin
+      ResultPromise.Reject(E.Value);
+      Result := ResultPromise;
+      Exit;
+    end;
+  end;
 
   if InputArray.Elements.Count = 0 then
   begin
@@ -581,8 +591,17 @@ var
   RejectHandler: TPromiseAllSettledRejectHandler;
   ThenArgs: TGocciaArgumentsCollection;
 begin
-  InputArray := ExtractPromiseArray(Args);
   ResultPromise := TGocciaPromiseValue.Create;
+  try
+    InputArray := ExtractPromiseArray(Args);
+  except
+    on E: TGocciaThrowValue do
+    begin
+      ResultPromise.Reject(E.Value);
+      Result := ResultPromise;
+      Exit;
+    end;
+  end;
 
   if InputArray.Elements.Count = 0 then
   begin
@@ -623,8 +642,17 @@ var
   ResolveHandler, RejectHandler: TPromiseRaceHandler;
   ThenArgs: TGocciaArgumentsCollection;
 begin
-  InputArray := ExtractPromiseArray(Args);
   ResultPromise := TGocciaPromiseValue.Create;
+  try
+    InputArray := ExtractPromiseArray(Args);
+  except
+    on E: TGocciaThrowValue do
+    begin
+      ResultPromise.Reject(E.Value);
+      Result := ResultPromise;
+      Exit;
+    end;
+  end;
 
   for I := 0 to InputArray.Elements.Count - 1 do
   begin
@@ -659,8 +687,17 @@ var
   ThenArgs: TGocciaArgumentsCollection;
   ErrorObj: TGocciaObjectValue;
 begin
-  InputArray := ExtractPromiseArray(Args);
   ResultPromise := TGocciaPromiseValue.Create;
+  try
+    InputArray := ExtractPromiseArray(Args);
+  except
+    on E: TGocciaThrowValue do
+    begin
+      ResultPromise.Reject(E.Value);
+      Result := ResultPromise;
+      Exit;
+    end;
+  end;
 
   if InputArray.Elements.Count = 0 then
   begin
