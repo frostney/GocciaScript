@@ -738,18 +738,20 @@ end;
 function TGocciaStringObjectValue.StringRepeat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   StringValue: string;
+  CountValue: TGocciaNumberLiteralValue;
   Count: Integer;
 begin
-  // Get the string value
   StringValue := ExtractStringValue(AThisValue);
 
-  // Get count
   if AArgs.Length > 0 then
-    Count := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value)
+    CountValue := AArgs.GetElement(0).ToNumberLiteral
   else
-    Count := 1;
+    CountValue := TGocciaNumberLiteralValue.Create(1);
 
-  // Repeat the string
+  if CountValue.IsNaN or CountValue.IsInfinity or CountValue.IsNegativeInfinity or (CountValue.Value < 0) then
+    ThrowRangeError('Invalid count value');
+
+  Count := Trunc(CountValue.Value);
   Result := TGocciaStringLiteralValue.Create(DupeString(StringValue, Count));
 end;
 

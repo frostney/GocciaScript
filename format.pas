@@ -132,16 +132,43 @@ end;
 
 function StripLineComment(const ALine: string): string;
 var
-  P: Integer;
+  I: Integer;
+  InStr: Boolean;
 begin
-  P := Pos('//', ALine);
-  if P > 0 then
-    Result := Copy(ALine, 1, P - 1)
-  else
-    Result := ALine;
-  P := Pos('{', Result);
-  if P > 0 then
-    Result := Copy(Result, 1, P - 1);
+  I := 1;
+  InStr := False;
+  while I <= Length(ALine) do
+  begin
+    if InStr then
+    begin
+      if (ALine[I] = '''') then
+      begin
+        if (I < Length(ALine)) and (ALine[I + 1] = '''') then
+        begin
+          Inc(I, 2);
+          Continue;
+        end;
+        InStr := False;
+      end;
+    end
+    else
+    begin
+      if ALine[I] = '''' then
+        InStr := True
+      else if (ALine[I] = '/') and (I < Length(ALine)) and (ALine[I + 1] = '/') then
+      begin
+        Result := Copy(ALine, 1, I - 1);
+        Exit;
+      end
+      else if ALine[I] = '{' then
+      begin
+        Result := Copy(ALine, 1, I - 1);
+        Exit;
+      end;
+    end;
+    Inc(I);
+  end;
+  Result := ALine;
 end;
 
 function UpdateBlockState(const ALine: string; AInBlock: Boolean): Boolean;
@@ -844,11 +871,10 @@ function FixStraySpaces(const ALines: TStringList): Boolean;
 var
   I, J, SpaceStart: Integer;
   Line: string;
-  InStr, InLineComment: Boolean;
-  InBlock: Integer;
+  InStr, InLineComment, InBlockComment: Boolean;
 begin
   Result := False;
-  InBlock := 0;
+  InBlockComment := False;
   for I := 0 to ALines.Count - 1 do
   begin
     Line := ALines[I];
@@ -866,17 +892,17 @@ begin
         Inc(J);
         Continue;
       end;
-      if InBlock > 0 then
+      if InBlockComment then
       begin
         if Line[J] = '}' then
-          Dec(InBlock);
+          InBlockComment := False;
         Inc(J);
         Continue;
       end;
       if Line[J] = '''' then
         InStr := True
       else if Line[J] = '{' then
-        Inc(InBlock)
+        InBlockComment := True
       else if (J + 1 <= Length(Line)) and (Line[J] = '/') and (Line[J + 1] = '/') then
         InLineComment := True
       else if (Line[J] = ' ') and (J > 1) and (Line[J - 1] <> ' ') and (not (Line[J - 1] in [#9, '(', ','])) then
