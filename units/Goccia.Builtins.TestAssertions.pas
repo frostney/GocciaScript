@@ -198,7 +198,7 @@ begin
   DefineProperty('toHaveLength', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToHaveLength, 'toHaveLength', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toHaveProperty', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(ToHaveProperty, 'toHaveProperty', 2), [pfConfigurable, pfWritable]));
+    TGocciaNativeFunctionValue.Create(ToHaveProperty, 'toHaveProperty', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toThrow', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToThrow, 'toThrow', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toBeCloseTo', TGocciaPropertyDescriptorData.Create(
@@ -299,11 +299,7 @@ function TGocciaExpectationValue.ToBeNaN(const AArgs: TGocciaArgumentsCollection
 var
   IsNaNValue: Boolean;
 begin
-  // Use our safe NumberValue.IsNaN method instead of Math.IsNaN on ToNumber
-  if FActualValue is TGocciaNumberLiteralValue then
-    IsNaNValue := TGocciaNumberLiteralValue(FActualValue).IsNaN
-  else
-    IsNaNValue := Math.IsNaN(FActualValue.ToNumberLiteral.Value);
+  IsNaNValue := FActualValue.ToNumberLiteral.IsNaN;
 
   if FIsNegated then
     IsNaNValue := not IsNaNValue;
@@ -708,13 +704,11 @@ end;
 
 function TGocciaExpectationValue.ToHaveProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Expected: TGocciaObjectValue;
   HasProperty: Boolean;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'toHaveProperty', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toHaveProperty', FTestAssertions.ThrowError);
 
-  Expected := AArgs.GetElement(0) as TGocciaObjectValue;
-  HasProperty := Expected.HasProperty(AArgs.GetElement(1).ToStringLiteral.Value);
+  HasProperty := (FActualValue as TGocciaObjectValue).HasProperty(AArgs.GetElement(0).ToStringLiteral.Value);
 
   if FIsNegated then
     HasProperty := not HasProperty;
@@ -728,10 +722,10 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to have property ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to have property ' + AArgs.GetElement(0).ToStringLiteral.Value)
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to have property ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' to have property ' + AArgs.GetElement(0).ToStringLiteral.Value);
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;

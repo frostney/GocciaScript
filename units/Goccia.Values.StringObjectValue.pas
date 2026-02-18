@@ -80,6 +80,8 @@ begin
     Result := TGocciaStringLiteralValue(AValue).Value
   else if AValue is TGocciaStringObjectValue then
     Result := TGocciaStringObjectValue(AValue).Primitive.Value
+  else if AValue is TGocciaSymbolValue then
+    ThrowTypeError('Cannot convert a Symbol value to a string')
   else
     Result := AValue.ToStringLiteral.Value;
 end;
@@ -658,100 +660,79 @@ var
   Limit: Integer;
   HasLimit: Boolean;
 begin
-  // Get the string value
   StringValue := ExtractStringValue(AThisValue);
 
-  // Get separator
   if AArgs.Length > 0 then
     Separator := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Separator := 'undefined';
 
-  // Get limit parameter (ECMAScript requirement)
   HasLimit := AArgs.Length > 1;
   if HasLimit then
   begin
     Limit := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
-    // If limit is 0, return empty array
     if Limit = 0 then
     begin
       Result := TGocciaArrayValue.Create;
       Exit;
     end;
-    // Negative limits are treated as no limit
     if Limit < 0 then
       HasLimit := False;
   end;
 
   ResultArray := TGocciaArrayValue.Create;
+  TGocciaGC.Instance.AddTempRoot(ResultArray);
+  try
+    if StringValue = '' then
+    begin
+      if Separator <> '' then
+        ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(''));
+      Result := ResultArray;
+      Exit;
+    end;
 
-  if StringValue = '' then
-  begin
     if Separator = '' then
     begin
-      // "".split("") should return []
-      Result := ResultArray;
-      Exit;
-    end
-    else
-    begin
-      // "".split("anything") should return [""]
-      ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(''));
-      Result := ResultArray;
-      Exit;
-    end;
-  end;
-
-  if Separator = '' then
-  begin
-    // Split into individual characters
-    for I := 1 to Length(StringValue) do
-    begin
-      ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(StringValue[I]));
-      // Check limit
-      if HasLimit and (ResultArray.Elements.Count >= Limit) then
-        Break;
-    end;
-    Result := ResultArray;
-    Exit;
-  end;
-
-  // Split the string using simple string replacement approach
-  if Pos(Separator, StringValue) = 0 then
-  begin
-    // Separator not found, return array with the original string
-    ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(StringValue));
-  end
-  else
-  begin
-    // Manual split implementation using standard Pascal functions
-    RemainingString := StringValue;
-    while True do
-    begin
-      SeparatorPos := Pos(Separator, RemainingString);
-      if SeparatorPos = 0 then
+      for I := 1 to Length(StringValue) do
       begin
-        // No more separators, add the remaining string
-        ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(RemainingString));
-        Break;
-      end
-      else
-      begin
-        // Found separator, add segment before it
-        Segment := Copy(RemainingString, 1, SeparatorPos - 1);
-        ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(Segment));
-
-        // Check limit before continuing
+        ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(StringValue[I]));
         if HasLimit and (ResultArray.Elements.Count >= Limit) then
           Break;
+      end;
+      Result := ResultArray;
+      Exit;
+    end;
 
-        // Remove processed part including separator
-        RemainingString := Copy(RemainingString, SeparatorPos + Length(Separator), Length(RemainingString));
+    if Pos(Separator, StringValue) = 0 then
+      ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(StringValue))
+    else
+    begin
+      RemainingString := StringValue;
+      while True do
+      begin
+        SeparatorPos := Pos(Separator, RemainingString);
+        if SeparatorPos = 0 then
+        begin
+          ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(RemainingString));
+          Break;
+        end
+        else
+        begin
+          Segment := Copy(RemainingString, 1, SeparatorPos - 1);
+          ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(Segment));
+
+          if HasLimit and (ResultArray.Elements.Count >= Limit) then
+            Break;
+
+          RemainingString := Copy(RemainingString, SeparatorPos + Length(Separator), Length(RemainingString));
+        end;
       end;
     end;
-  end;
 
-  Result := ResultArray;
+    Result := ResultArray;
+  finally
+    TGocciaGC.Instance.RemoveTempRoot(ResultArray);
+  end;
 end;
 
 function TGocciaStringObjectValue.StringRepeat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

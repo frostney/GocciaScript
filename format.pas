@@ -461,7 +461,7 @@ begin
     if (I + OldLen - 1 <= Length(ALine)) and
        (CompareText(Copy(ALine, I, OldLen), AOld) = 0) then
     begin
-      if ((I = 1) or not IsIdentChar(ALine[I - 1])) and
+      if ((I = 1) or (not IsIdentChar(ALine[I - 1]) and (ALine[I - 1] <> '.'))) and
          ((I + OldLen > Length(ALine)) or not IsIdentChar(ALine[I + OldLen])) then
       begin
         Result := Result + ANew;
