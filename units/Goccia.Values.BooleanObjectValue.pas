@@ -14,7 +14,7 @@ type
     FPrimitive: TGocciaBooleanLiteralValue;
   public
     constructor Create(const APrimitive: TGocciaBooleanLiteralValue);
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
     property Primitive: TGocciaBooleanLiteralValue read FPrimitive;
   end;
 
@@ -26,12 +26,12 @@ begin
   FPrimitive := APrimitive;
 end;
 
-procedure TGocciaBooleanObjectValue.GCMarkReferences;
+procedure TGocciaBooleanObjectValue.MarkReferences;
 begin
   if GCMarked then Exit;
   inherited;
   if Assigned(FPrimitive) then
-    FPrimitive.GCMarkReferences;
+    FPrimitive.MarkReferences;
 end;
 
 end.

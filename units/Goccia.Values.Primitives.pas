@@ -17,7 +17,7 @@ type
     FGCMarked: Boolean;
   public
     procedure AfterConstruction; override;
-    procedure GCMarkReferences; virtual;
+    procedure MarkReferences; virtual;
     function RuntimeCopy: TGocciaValue; virtual;
 
     function TypeName: string; virtual; abstract;
@@ -171,11 +171,11 @@ uses
 procedure TGocciaValue.AfterConstruction;
 begin
   inherited;
-  if Assigned(TGocciaGC.Instance) then
-    TGocciaGC.Instance.RegisterValue(Self);
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.RegisterValue(Self);
 end;
 
-procedure TGocciaValue.GCMarkReferences;
+procedure TGocciaValue.MarkReferences;
 begin
   FGCMarked := True;
 end;

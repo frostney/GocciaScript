@@ -180,8 +180,8 @@ begin
   Task.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   Task.ReactionType := prtFulfill;
 
-  if Assigned(TGocciaGC.Instance) then
-    TGocciaGC.Instance.AddTempRoot(Callback);
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.AddTempRoot(Callback);
   TGocciaMicrotaskQueue.Instance.Enqueue(Task);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;

@@ -76,7 +76,7 @@ type
     procedure Freeze;
     function IsFrozen: Boolean;
 
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
 
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
     property Frozen: Boolean read FFrozen;
@@ -96,14 +96,14 @@ begin
   if ADescriptor is TGocciaPropertyDescriptorData then
   begin
     if Assigned(TGocciaPropertyDescriptorData(ADescriptor).Value) then
-      TGocciaPropertyDescriptorData(ADescriptor).Value.GCMarkReferences;
+      TGocciaPropertyDescriptorData(ADescriptor).Value.MarkReferences;
   end
   else if ADescriptor is TGocciaPropertyDescriptorAccessor then
   begin
     if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
-      TGocciaPropertyDescriptorAccessor(ADescriptor).Getter.GCMarkReferences;
+      TGocciaPropertyDescriptorAccessor(ADescriptor).Getter.MarkReferences;
     if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
-      TGocciaPropertyDescriptorAccessor(ADescriptor).Setter.GCMarkReferences;
+      TGocciaPropertyDescriptorAccessor(ADescriptor).Setter.MarkReferences;
   end;
 end;
 
@@ -137,7 +137,7 @@ begin
   inherited;
 end;
 
-procedure TGocciaObjectValue.GCMarkReferences;
+procedure TGocciaObjectValue.MarkReferences;
 var
   Pair: TPair<string, TGocciaPropertyDescriptor>;
   SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
@@ -146,14 +146,14 @@ begin
   inherited; // Sets FGCMarked := True
 
   if Assigned(FPrototype) then
-    FPrototype.GCMarkReferences;
+    FPrototype.MarkReferences;
 
   for Pair in FPropertyDescriptors do
     MarkPropertyDescriptor(Pair.Value);
 
   for SymPair in FSymbolDescriptors do
   begin
-    SymPair.Key.GCMarkReferences;
+    SymPair.Key.MarkReferences;
     MarkPropertyDescriptor(SymPair.Value);
   end;
 end;

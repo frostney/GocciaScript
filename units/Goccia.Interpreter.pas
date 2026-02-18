@@ -75,7 +75,7 @@ end;
 destructor TGocciaInterpreter.Destroy;
 begin
   // FGlobalScope is GC-managed when GC is active; only free manually otherwise
-  if not Assigned(TGocciaGC.Instance) then
+  if not Assigned(TGocciaGarbageCollector.Instance) then
     FGlobalScope.Free;
   FModules.Free;
   // Don't free FSourceLines - we don't own it, it's owned by the caller

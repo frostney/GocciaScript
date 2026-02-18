@@ -181,12 +181,12 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 GocciaScript uses a mark-and-sweep garbage collector (`Goccia.GarbageCollector.pas`). All `TGocciaValue` instances auto-register with the GC via `AfterConstruction`. Key rules:
 
 - **AST literal values** are unregistered from the GC by `TGocciaLiteralExpression.Create` and owned by the AST node. The evaluator calls `Value.RuntimeCopy` to produce fresh GC-managed values when evaluating literals.
-- **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache) are pinned via `TGocciaGC.Instance.PinValue` during engine initialization (consolidated in `PinSingletons`).
+- **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache) are pinned via `TGocciaGarbageCollector.Instance.PinValue` during engine initialization (consolidated in `PinSingletons`).
 - **Shared prototype singletons** (String, Number, Array, Set, Map, Function) are pinned inside each type's `InitializePrototype` method. All prototype method callbacks must use `ThisValue` (not `Self`) to access instance data, since `Self` refers to the method host singleton.
 - **Pinned values, temp roots, and root scopes** are stored in `TDictionary<T, Boolean>` for O(1) membership checks.
 - **Values held only by Pascal code** (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot` for the duration they are needed. Example: benchmark functions held in a `TObjectList`.
 - **Scopes** register with the GC in their constructor. Active call scopes are tracked via `PushActiveScope`/`PopActiveScope` in `TGocciaFunctionValue.Call`.
-- Each value type must override `GCMarkReferences` to mark all `TGocciaValue` references it holds (prototype, closure, elements, property values, etc.).
+- Each value type must override `MarkReferences` to mark all `TGocciaValue` references it holds (prototype, closure, elements, property values, etc.).
 
 ### 5. Language Restrictions
 
@@ -227,6 +227,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 
 - **Function/procedure names:** PascalCase (e.g., `EvaluateBinary`, `GetProperty`). External C bindings are exempt. Auto-fixed by `./format.pas`.
 - **Unit naming:** `Goccia.<Category>.<Name>.pas` (dot-separated hierarchy)
+- **No abbreviations:** Use full words in class, function, method, and type names (e.g., `TGocciaGarbageCollector` not `TGocciaGC`). Exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
 - **Class naming:** `TGoccia<Name>` prefix
 - **Interface naming:** `I<Name>` prefix
 - **Private fields:** `F` prefix
@@ -257,7 +258,7 @@ On FPC 3.2.2 AArch64, `Double(Int64Var)` performs a bit reinterpretation, not a 
 - **Chain of responsibility** for scope lookup
 - **Parser combinator** for binary expressions (`ParseBinaryExpression` shared helper)
 - **Recursive descent** for parsing
-- **Mark-and-sweep** for garbage collection (`TGocciaGC`)
+- **Mark-and-sweep** for garbage collection (`TGocciaGarbageCollector`)
 - **Shared helpers** for evaluator deduplication (`EvaluateStatementsSafe`, `SpreadIterableInto`, `EvaluateSimpleNumericBinaryOp`)
 
 ## Value System

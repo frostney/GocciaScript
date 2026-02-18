@@ -81,7 +81,7 @@ type
     property PrivateInstancePropertyOrder: TStringList read FPrivateInstancePropertyOrder;
     property PrivateStaticProperties: TDictionary<string, TGocciaValue> read FPrivateStaticProperties;
     property PrivateMethods: TDictionary<string, TGocciaMethodValue> read FPrivateMethods;
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
 
     property PrivateGetters: TDictionary<string, TGocciaFunctionValue> read FPrivateGetters;
     property PrivateSetters: TDictionary<string, TGocciaFunctionValue> read FPrivateSetters;
@@ -115,7 +115,7 @@ type
     procedure SetPrivateProperty(const AName: string; const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue);
     function HasPrivateProperty(const AName: string): Boolean;
     function IsInstanceOf(const AClass: TGocciaClassValue): Boolean; inline;
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
 
     property ClassValue: TGocciaClassValue read FClass;
     property Prototype: TGocciaObjectValue read FPrototype write SetPrototype;
@@ -169,7 +169,7 @@ begin
   inherited;
 end;
 
-procedure TGocciaClassValue.GCMarkReferences;
+procedure TGocciaClassValue.MarkReferences;
 var
   MethodPair: TPair<string, TGocciaMethodValue>;
   FuncPair: TPair<string, TGocciaFunctionValue>;
@@ -180,45 +180,45 @@ begin
 
   // Mark superclass
   if Assigned(FSuperClass) then
-    FSuperClass.GCMarkReferences;
+    FSuperClass.MarkReferences;
 
   // Mark prototype
   if Assigned(FPrototype) then
-    FPrototype.GCMarkReferences;
+    FPrototype.MarkReferences;
 
   // Mark constructor
   if Assigned(FConstructorMethod) then
-    FConstructorMethod.GCMarkReferences;
+    FConstructorMethod.MarkReferences;
 
   // Mark methods
   for MethodPair in FMethods do
-    MethodPair.Value.GCMarkReferences;
+    MethodPair.Value.MarkReferences;
 
   // Mark getters and setters
   for FuncPair in FGetters do
-    FuncPair.Value.GCMarkReferences;
+    FuncPair.Value.MarkReferences;
   for FuncPair in FSetters do
-    FuncPair.Value.GCMarkReferences;
+    FuncPair.Value.MarkReferences;
 
   // Mark static methods
   for ValuePair in FStaticMethods do
     if Assigned(ValuePair.Value) then
-      ValuePair.Value.GCMarkReferences;
+      ValuePair.Value.MarkReferences;
 
   // Mark private static properties
   for ValuePair in FPrivateStaticProperties do
     if Assigned(ValuePair.Value) then
-      ValuePair.Value.GCMarkReferences;
+      ValuePair.Value.MarkReferences;
 
   // Mark private methods
   for MethodPair in FPrivateMethods do
-    MethodPair.Value.GCMarkReferences;
+    MethodPair.Value.MarkReferences;
 
   // Mark private getters and setters
   for FuncPair in FPrivateGetters do
-    FuncPair.Value.GCMarkReferences;
+    FuncPair.Value.MarkReferences;
   for FuncPair in FPrivateSetters do
-    FuncPair.Value.GCMarkReferences;
+    FuncPair.Value.MarkReferences;
 end;
 
 function TGocciaClassValue.IsCallable: Boolean;
@@ -423,11 +423,11 @@ begin
 
   if Assigned(ConstructorToCall) then
   begin
-    TGocciaGC.Instance.AddTempRoot(Instance);
+    TGocciaGarbageCollector.Instance.AddTempRoot(Instance);
     try
       ConstructorToCall.Call(AArguments, Instance);
     finally
-      TGocciaGC.Instance.RemoveTempRoot(Instance);
+      TGocciaGarbageCollector.Instance.RemoveTempRoot(Instance);
     end;
   end;
 
@@ -726,7 +726,7 @@ begin
   inherited;
 end;
 
-procedure TGocciaInstanceValue.GCMarkReferences;
+procedure TGocciaInstanceValue.MarkReferences;
 var
   ValuePair: TPair<string, TGocciaValue>;
 begin
@@ -735,12 +735,12 @@ begin
 
   // Mark class reference
   if Assigned(FClass) then
-    FClass.GCMarkReferences;
+    FClass.MarkReferences;
 
   // Mark private properties
   for ValuePair in FPrivateProperties do
     if Assigned(ValuePair.Value) then
-      ValuePair.Value.GCMarkReferences;
+      ValuePair.Value.MarkReferences;
 end;
 
 end.

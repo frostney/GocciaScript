@@ -55,7 +55,7 @@ type
     function CreateChild(const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0): TGocciaScope;
 
     // Garbage collection support
-    procedure GCMarkReferences; virtual;
+    procedure MarkReferences; virtual;
     property GCMarked: Boolean read FGCMarked write FGCMarked;
 
     // New Define/Assign pattern
@@ -113,7 +113,7 @@ type
   public
     constructor Create(const AParent: TGocciaScope; const AFunctionName: string;
       const ASuperClass, AOwningClass: TGocciaValue; const ACapacity: Integer = 0);
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
     property SuperClass: TGocciaValue read FSuperClass;
     property OwningClass: TGocciaValue read FOwningClass;
   end;
@@ -127,7 +127,7 @@ type
     function GetOwningClass: TGocciaValue; override;
   public
     constructor Create(const AParent: TGocciaScope; const AOwningClass: TGocciaValue);
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
     property OwningClass: TGocciaValue read FOwningClass;
   end;
 
@@ -178,8 +178,8 @@ begin
   if Assigned(AParent) then
     FOnError := AParent.FOnError;
 
-  if Assigned(TGocciaGC.Instance) then
-    TGocciaGC.Instance.RegisterScope(Self);
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.RegisterScope(Self);
 end;
 
 destructor TGocciaScope.Destroy;
@@ -394,7 +394,7 @@ end;
 
 { TGocciaScope - GC support }
 
-procedure TGocciaScope.GCMarkReferences;
+procedure TGocciaScope.MarkReferences;
 var
   Binding: TLexicalBinding;
 begin
@@ -403,17 +403,17 @@ begin
 
   // Mark parent scope
   if Assigned(FParent) then
-    FParent.GCMarkReferences;
+    FParent.MarkReferences;
 
   // Mark ThisValue
   if Assigned(FThisValue) then
-    FThisValue.GCMarkReferences;
+    FThisValue.MarkReferences;
 
   // Mark all values in bindings
   for Binding in FLexicalBindings.Values do
   begin
     if Assigned(Binding.Value) then
-      Binding.Value.GCMarkReferences;
+      Binding.Value.MarkReferences;
   end;
 end;
 
@@ -462,13 +462,13 @@ begin
   Result := FSuperClass;
 end;
 
-procedure TGocciaMethodCallScope.GCMarkReferences;
+procedure TGocciaMethodCallScope.MarkReferences;
 begin
   inherited;
   if Assigned(FSuperClass) then
-    FSuperClass.GCMarkReferences;
+    FSuperClass.MarkReferences;
   if Assigned(FOwningClass) then
-    FOwningClass.GCMarkReferences;
+    FOwningClass.MarkReferences;
 end;
 
 { TGocciaClassInitScope }
@@ -489,11 +489,11 @@ begin
   Result := FOwningClass;
 end;
 
-procedure TGocciaClassInitScope.GCMarkReferences;
+procedure TGocciaClassInitScope.MarkReferences;
 begin
   inherited;
   if Assigned(FOwningClass) then
-    FOwningClass.GCMarkReferences;
+    FOwningClass.MarkReferences;
 end;
 
 { TGocciaCatchScope }

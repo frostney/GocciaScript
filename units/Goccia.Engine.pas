@@ -142,7 +142,7 @@ begin
   FGlobals := AGlobals;
 
   // Initialize singletons (only creates if not yet initialized)
-  TGocciaGC.Initialize;
+  TGocciaGarbageCollector.Initialize;
   TGocciaMicrotaskQueue.Initialize;
 
   // Note: We don't collect between engines because class-level shared objects
@@ -154,7 +154,7 @@ begin
   FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines);
 
   // Register the global scope as a GC root
-  TGocciaGC.Instance.AddRoot(FInterpreter.GlobalScope);
+  TGocciaGarbageCollector.Instance.AddRoot(FInterpreter.GlobalScope);
 
   // Pin singleton values so the GC never collects them
   PinSingletons;
@@ -166,8 +166,8 @@ end;
 destructor TGocciaEngine.Destroy;
 begin
   // Remove global scope from GC roots before cleanup
-  if Assigned(TGocciaGC.Instance) and Assigned(FInterpreter) then
-    TGocciaGC.Instance.RemoveRoot(FInterpreter.GlobalScope);
+  if Assigned(TGocciaGarbageCollector.Instance) and Assigned(FInterpreter) then
+    TGocciaGarbageCollector.Instance.RemoveRoot(FInterpreter.GlobalScope);
 
   // Free builtin wrapper objects (these are NOT GC-managed, but their
   // FBuiltinObject fields ARE - the wrapper destructors skip freeing them)
@@ -194,7 +194,7 @@ end;
 procedure PinIfAssigned(const AValue: TGocciaValue); inline;
 begin
   if Assigned(AValue) then
-    TGocciaGC.Instance.PinValue(AValue);
+    TGocciaGarbageCollector.Instance.PinValue(AValue);
 end;
 
 procedure TGocciaEngine.PinSingletons;

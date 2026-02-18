@@ -32,7 +32,7 @@ type
   public
     constructor Create(const AOnFinally: TGocciaValue; const AIsFulfill: Boolean);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
   end;
 
   TGocciaPromiseValue = class(TGocciaObjectValue)
@@ -64,7 +64,7 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function ToStringTag: string; override;
 
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
 
@@ -89,7 +89,7 @@ type
   public
     constructor Create(const AOriginalValue: TGocciaValue; const AIsFulfill: Boolean);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure GCMarkReferences; override;
+    procedure MarkReferences; override;
   end;
 
 { TGocciaFinallyPassthrough }
@@ -110,12 +110,12 @@ begin
     raise TGocciaThrowValue.Create(FOriginalValue);
 end;
 
-procedure TGocciaFinallyPassthrough.GCMarkReferences;
+procedure TGocciaFinallyPassthrough.MarkReferences;
 begin
   if GCMarked then Exit;
   inherited;
   if Assigned(FOriginalValue) then
-    FOriginalValue.GCMarkReferences;
+    FOriginalValue.MarkReferences;
 end;
 
 { TGocciaPromiseFinallyWrapper }
@@ -187,12 +187,12 @@ begin
   end;
 end;
 
-procedure TGocciaPromiseFinallyWrapper.GCMarkReferences;
+procedure TGocciaPromiseFinallyWrapper.MarkReferences;
 begin
   if GCMarked then Exit;
   inherited;
   if Assigned(FOnFinally) then
-    FOnFinally.GCMarkReferences;
+    FOnFinally.MarkReferences;
 end;
 
 { TGocciaPromiseValue }
@@ -236,7 +236,7 @@ begin
   inherited;
 end;
 
-procedure TGocciaPromiseValue.GCMarkReferences;
+procedure TGocciaPromiseValue.MarkReferences;
 var
   I: Integer;
   Reaction: TGocciaPromiseReaction;
@@ -245,17 +245,17 @@ begin
   inherited;
 
   if Assigned(FResult) then
-    FResult.GCMarkReferences;
+    FResult.MarkReferences;
 
   for I := 0 to FReactions.Count - 1 do
   begin
     Reaction := FReactions[I];
     if Assigned(Reaction.OnFulfilled) then
-      Reaction.OnFulfilled.GCMarkReferences;
+      Reaction.OnFulfilled.MarkReferences;
     if Assigned(Reaction.OnRejected) then
-      Reaction.OnRejected.GCMarkReferences;
+      Reaction.OnRejected.MarkReferences;
     if Assigned(Reaction.ResultPromise) then
-      Reaction.ResultPromise.GCMarkReferences;
+      Reaction.ResultPromise.MarkReferences;
   end;
 end;
 

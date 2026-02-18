@@ -47,7 +47,7 @@ end;
 destructor TGocciaBuiltin.Destroy;
 begin
   // FBuiltinObject is GC-managed when GC is active; only free manually otherwise
-  if not Assigned(TGocciaGC.Instance) then
+  if not Assigned(TGocciaGarbageCollector.Instance) then
     FBuiltinObject.Free;
   inherited;
 end;

@@ -201,7 +201,7 @@ GocciaScript runs inside a FreePascal host with manual memory management, but th
 **Why not manual memory management?**
 
 - **Aliased references** — A value assigned to multiple variables, captured in a closure, and stored in an array has no single owner. Determining when to free it requires tracking all references.
-- **Shared prototype singletons** — String, Array, Set, Map, and Function prototype objects are class-level singletons shared across all instances of their type. Each type's `InitializePrototype` creates the singleton once (guarded by `if Assigned`) and pins it with `TGocciaGC.Instance.PinValue`. Manual lifetime tracking of these shared singletons would be fragile.
+- **Shared prototype singletons** — String, Array, Set, Map, and Function prototype objects are class-level singletons shared across all instances of their type. Each type's `InitializePrototype` creates the singleton once (guarded by `if Assigned`) and pins it with `TGocciaGarbageCollector.Instance.PinValue`. Manual lifetime tracking of these shared singletons would be fragile.
 - **Closure captures** — Arrow functions capture their enclosing scope, creating non-obvious reference chains between scopes and values.
 
 **Why not reference counting (via `TInterfacedObject`)?**
@@ -217,7 +217,7 @@ GocciaScript runs inside a FreePascal host with manual memory management, but th
 
 **AST literal ownership:**
 
-The parser creates `TGocciaValue` instances (numbers, strings, booleans) and stores them inside `TGocciaLiteralExpression` AST nodes. These values are owned by the AST, not the GC. `TGocciaLiteralExpression.Create` calls `TGocciaGC.Instance.UnregisterValue` to remove the value from GC tracking, and `TGocciaLiteralExpression.Destroy` frees the value (unless it is a singleton like `UndefinedValue`, `TrueValue`, or `FalseValue`).
+The parser creates `TGocciaValue` instances (numbers, strings, booleans) and stores them inside `TGocciaLiteralExpression` AST nodes. These values are owned by the AST, not the GC. `TGocciaLiteralExpression.Create` calls `TGocciaGarbageCollector.Instance.UnregisterValue` to remove the value from GC tracking, and `TGocciaLiteralExpression.Destroy` frees the value (unless it is a singleton like `UndefinedValue`, `TrueValue`, or `FalseValue`).
 
 When the evaluator encounters a literal expression, it calls `Value.RuntimeCopy` to produce a fresh GC-managed runtime value. This cleanly separates compile-time constants (owned by the AST) from runtime values (managed by the GC). The overhead is minimal: integers 0-255 hit the `SmallInt` cache (zero allocation), booleans return singletons, and strings benefit from FreePascal's copy-on-write semantics.
 

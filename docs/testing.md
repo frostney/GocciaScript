@@ -96,6 +96,7 @@ tests/
 ./build/Goccia.Values.Primitives.Test
 ./build/Goccia.Values.FunctionValue.Test
 ./build/Goccia.Values.ObjectValue.Test
+./build/Goccia.Builtins.TestAssertions.Test
 ```
 
 ## Writing Tests
@@ -308,6 +309,7 @@ Pascal unit tests are a secondary testing layer for low-level value system inter
 | `Goccia.Values.Primitives.Test.pas` | Primitive value creation, type conversion (`ToStringLiteral`, `ToBooleanLiteral`, `ToNumberLiteral`, `TypeName`, `TypeOf`) |
 | `Goccia.Values.FunctionValue.Test.pas` | Function/method creation, closure capture, parameter handling, scope resolution, AST evaluation |
 | `Goccia.Values.ObjectValue.Test.pas` | Object property operations (`AssignProperty`, `GetProperty`, `DeleteProperty`), prototype chain resolution |
+| `Goccia.Builtins.TestAssertions.Test.pas` | All `TGocciaExpectationValue` matchers (`toBe`, `toEqual`, `toBeNull`, `toBeNaN`, `toBeUndefined`, `toBeTruthy`, `toBeFalsy`, `toBeGreaterThan`, `toBeLessThan`, `toContain`, `toHaveLength`, `toHaveProperty`, `toBeCloseTo`, `not`) |
 
 These compile as standalone executables and run directly:
 
@@ -316,6 +318,7 @@ These compile as standalone executables and run directly:
 ./build/Goccia.Values.Primitives.Test
 ./build/Goccia.Values.FunctionValue.Test
 ./build/Goccia.Values.ObjectValue.Test
+./build/Goccia.Builtins.TestAssertions.Test
 ```
 
 ### Pascal Test Framework
@@ -378,9 +381,18 @@ IsNaN(Value.ToNumberLiteral.Value)  // always False!
 
 This is because GocciaScript represents NaN via a `FSpecialValue = nsvNaN` flag with `FValue` set to 0 (avoiding floating-point NaN propagation issues). The `IsNaN` property checks the flag; `Math.IsNaN` checks the stored double.
 
+#### Testing the Test Framework Itself
+
+`Goccia.Builtins.TestAssertions.Test.pas` validates the JS-level assertion matchers from Pascal. Since the matchers call `AssertionPassed`/`AssertionFailed` (which update `TGocciaTestAssertions` internal state) rather than raising Pascal exceptions, the native tests use two helpers to verify both the return value and the recorded pass/fail outcome:
+
+- `ExpectPass(result)` — Asserts the matcher returned `UndefinedValue` **and** `CurrentTestHasFailures` is `False`
+- `ExpectFail(result)` — Asserts the matcher returned `UndefinedValue` **and** `CurrentTestHasFailures` is `True`
+
+Each test starts with a `BeforeEach` override that calls `FAssertions.ResetCurrentTestState` to clear the failure flag. The `CurrentTestHasFailures` property and `ResetCurrentTestState` method are public on `TGocciaTestAssertions` for this purpose.
+
 **When to write Pascal unit tests vs JavaScript tests:**
 - **JavaScript tests** (preferred) — For any behavior observable from script code. This is almost everything.
-- **Pascal unit tests** — Only for internal implementation details not reachable from script code.
+- **Pascal unit tests** — Only for internal implementation details not reachable from script code (e.g., the test framework's own pass/fail recording logic).
 
 ## CI Integration
 

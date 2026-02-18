@@ -268,8 +268,8 @@ begin
     // Phase 3: Multiple measurement rounds, each running the full iteration count
     for Round := 0 to MEASUREMENT_ROUNDS - 1 do
     begin
-      if Assigned(TGocciaGC.Instance) then
-        TGocciaGC.Instance.Collect;
+      if Assigned(TGocciaGarbageCollector.Instance) then
+        TGocciaGarbageCollector.Instance.Collect;
 
       StartNanoseconds := GetNanoseconds;
       I := 0;
@@ -359,15 +359,15 @@ begin
   // Protect ALL benchmark functions from GC before running any benchmarks.
   // These are held by Pascal TBenchmarkCase objects, not in GocciaScript scopes,
   // so the GC wouldn't see them as roots otherwise.
-  if Assigned(TGocciaGC.Instance) then
+  if Assigned(TGocciaGarbageCollector.Instance) then
     for I := 0 to FRegisteredBenchmarks.Count - 1 do
-      TGocciaGC.Instance.AddTempRoot(FRegisteredBenchmarks[I].BenchFunction);
+      TGocciaGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].BenchFunction);
 
   try
     ResultsArray := TGocciaArrayValue.Create;
     // Protect the results array from GC - it's a local Pascal variable
-    if Assigned(TGocciaGC.Instance) then
-      TGocciaGC.Instance.AddTempRoot(ResultsArray);
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.AddTempRoot(ResultsArray);
 
     for I := 0 to FRegisteredBenchmarks.Count - 1 do
     begin
@@ -415,11 +415,11 @@ begin
     Result := ResultObj;
   finally
     // Remove ALL benchmark functions and results array from temp roots
-    if Assigned(TGocciaGC.Instance) then
+    if Assigned(TGocciaGarbageCollector.Instance) then
     begin
       for I := 0 to FRegisteredBenchmarks.Count - 1 do
-        TGocciaGC.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].BenchFunction);
-      TGocciaGC.Instance.RemoveTempRoot(ResultsArray);
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].BenchFunction);
+      TGocciaGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
     end;
   end;
 end;

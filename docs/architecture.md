@@ -26,7 +26,7 @@ The **Engine** (`Goccia.Engine.pas`) sits above this pipeline and orchestrates t
 
 The top-level entry point. Provides static convenience methods (`RunScript`, `RunScriptFromFile`, `RunScriptFromStringList`) and manages:
 
-- **Garbage collector initialization** — Calls `TGocciaGC.Initialize`, registers the global scope as a GC root, and pins singleton values via `PinSingletons` (`UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache, etc.).
+- **Garbage collector initialization** — Calls `TGocciaGarbageCollector.Initialize`, registers the global scope as a GC root, and pins singleton values via `PinSingletons` (`UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache, etc.).
 - **Built-in registration** — A single `RegisterBuiltIns` method selectively creates and registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, error constructors) based on a `TGocciaGlobalBuiltins` flag set. All built-in constructors share the same `(name, scope, ThrowError)` signature.
 - **Interpreter lifecycle** — Creates and owns the `TGocciaInterpreter` instance.
 - **Prototype chain setup** — Calls `RegisterBuiltinConstructors` to wire up the `Object → Array → Number → String` prototype chain.
@@ -64,7 +64,7 @@ A dependency-free unit that centralizes all 32 JavaScript keyword string constan
 
 A singleton microtask queue used by Promises and `queueMicrotask()` to defer callbacks per the ECMAScript specification. Key design:
 
-- **Singleton** — `TGocciaMicrotaskQueue.Initialize` / `TGocciaMicrotaskQueue.Instance`, mirroring the `TGocciaGC` pattern.
+- **Singleton** — `TGocciaMicrotaskQueue.Initialize` / `TGocciaMicrotaskQueue.Instance`, mirroring the `TGocciaGarbageCollector` pattern.
 - **Enqueue** — When a Promise settles and has pending reactions (or when `.then()` is called on an already-settled Promise), the reaction is enqueued as a microtask rather than executed immediately. The global `queueMicrotask(callback)` function also enqueues directly into this queue.
 - **DrainQueue** — Called by the engine after `Interpreter.Execute` completes. Processes microtasks in FIFO order, looping until the queue is empty. New microtasks enqueued during processing (e.g., chained `.then()` handlers or nested `queueMicrotask` calls) are processed in the same drain cycle.
 - **ClearQueue** — Discards all pending microtasks without executing them. Called in `finally` blocks by `Execute` and `ExecuteProgram` to prevent stale callbacks from leaking across executions if a script throws.
@@ -241,7 +241,7 @@ flowchart TD
 | Category | Lifetime | Mechanism |
 |----------|----------|-----------|
 | **AST literals** | AST-owned (script lifetime) | Unregistered from GC; evaluator calls `RuntimeCopy` to produce GC-managed copies |
-| **Singletons** | Permanent (process lifetime) | Pinned via `TGocciaGC.Instance.PinValue` during engine init |
+| **Singletons** | Permanent (process lifetime) | Pinned via `TGocciaGarbageCollector.Instance.PinValue` during engine init |
 | **Shared prototypes** | Permanent (process lifetime) | Class-level singletons (String, Array, Set, Map, Function); pinned via `PinValue` in each type's `InitializePrototype` |
 | **Runtime values** | Dynamic (collected when unreachable) | Registered via `AfterConstruction`, freed during sweep |
 | **Pascal-held values** | Temporary (explicit protection) | `AddTempRoot` / `RemoveTempRoot` |
