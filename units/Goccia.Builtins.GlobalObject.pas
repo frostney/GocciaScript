@@ -5,29 +5,38 @@ unit Goccia.Builtins.GlobalObject;
 interface
 
 uses
-  Goccia.Scope, Goccia.Values.Primitives, Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Values.NativeFunction, 
-  Goccia.Values.ObjectValue, Goccia.Values.SymbolValue, Goccia.Arguments.Collection, Generics.Collections, Goccia.Builtins.Base;
+  Generics.Collections,
+
+  Goccia.Arguments.Collection,
+  Goccia.Builtins.Base,
+  Goccia.Error,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives,
+  Goccia.Values.SymbolValue;
 
 type
   TGocciaGlobalObject = class(TGocciaBuiltin)
   protected
     // Native methods
-    function ObjectIs(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectKeys(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectValues(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectEntries(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectAssign(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectCreate(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectHasOwn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectGetOwnPropertyNames(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectGetOwnPropertyDescriptor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectDefineProperty(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectDefineProperties(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectGetOwnPropertySymbols(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectFreeze(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectIsFrozen(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectGetPrototypeOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ObjectFromEntries(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ObjectIs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectAssign(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectCreate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectHasOwn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectGetOwnPropertyNames(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectGetOwnPropertyDescriptor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectDefineProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectDefineProperties(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectGetOwnPropertySymbols(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectFreeze(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectIsFrozen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectGetPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectFromEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -35,7 +44,13 @@ type
 implementation
 
 uses
-  Goccia.Values.ArrayValue, Goccia.Values.ObjectPropertyDescriptor, Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue, Goccia.Values.ClassValue, Goccia.Values.ClassHelper, Goccia.Arguments.Validator;
+  Goccia.Arguments.Validator,
+  Goccia.Evaluator.Comparison,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.ClassValue,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.ObjectPropertyDescriptor;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
@@ -60,14 +75,14 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectFromEntries, 'fromEntries', 1));
 end;
 
-function TGocciaGlobalObject.ObjectIs(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectIs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Left, Right: TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 2, 'Object.is', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.is', ThrowError);
 
-  Left := Args.GetElement(0);
-  Right := Args.GetElement(1);
+  Left := AArgs.GetElement(0);
+  Right := AArgs.GetElement(1);
 
   if IsSameValue(Left, Right) then
     Result := TGocciaBooleanLiteralValue.TrueValue
@@ -76,19 +91,19 @@ begin
 end;
 
 
-function TGocciaGlobalObject.ObjectKeys(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   Keys: TGocciaArrayValue;
   Names: TArray<string>;
   I: Integer;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.keys', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.keys', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.keys called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args.GetElement(0));
+  Obj := TGocciaObjectValue(AArgs.GetElement(0));
   Keys := TGocciaArrayValue.Create;
 
   Names := Obj.GetEnumerablePropertyNames;
@@ -98,19 +113,19 @@ begin
   Result := Keys;
 end;
 
-function TGocciaGlobalObject.ObjectValues(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   Values: TGocciaArrayValue;
   PropertyValues: TArray<TGocciaValue>;
   I: Integer;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.values', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.values', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.values called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args.GetElement(0));
+  Obj := TGocciaObjectValue(AArgs.GetElement(0));
   Values := TGocciaArrayValue.Create;
 
   PropertyValues := Obj.GetEnumerablePropertyValues;
@@ -120,7 +135,7 @@ begin
   Result := Values;
 end;
 
-function TGocciaGlobalObject.ObjectEntries(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   Entries: TGocciaArrayValue;
@@ -128,12 +143,12 @@ var
   PropertyEntries: TArray<TPair<string, TGocciaValue>>;
   I: Integer;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.entries', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.entries', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.entries called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args.GetElement(0));
+  Obj := TGocciaObjectValue(AArgs.GetElement(0));
   Entries := TGocciaArrayValue.Create;
 
   PropertyEntries := Obj.GetEnumerablePropertyEntries;
@@ -148,27 +163,27 @@ begin
   Result := Entries;
 end;
 
-function TGocciaGlobalObject.ObjectAssign(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectAssign(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   InitialObj: TGocciaObjectValue;
   Source: TGocciaObjectValue;
   PropertyEntries: TArray<TPair<string, TGocciaValue>>;
   I, J: Integer;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(Args, 2, 'Object.assign', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Object.assign', ThrowError);
 
   // JS spec calls ToObject(target) which wraps primitives; we require an object directly.
   // Non-object sources are silently skipped in the loop below, matching JS behavior.
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.assign called on non-object', 0, 0);
 
-  InitialObj := TGocciaObjectValue(Args.GetElement(0));
+  InitialObj := TGocciaObjectValue(AArgs.GetElement(0));
 
-  for I := 1 to Args.Length - 1 do
+  for I := 1 to AArgs.Length - 1 do
   begin
-    if (Args.GetElement(I) is TGocciaObjectValue) then
+    if (AArgs.GetElement(I) is TGocciaObjectValue) then
     begin
-      Source := TGocciaObjectValue(Args.GetElement(I));
+      Source := TGocciaObjectValue(AArgs.GetElement(I));
 
       // Use enumerable property entries to safely copy properties
       PropertyEntries := Source.GetEnumerablePropertyEntries;
@@ -180,14 +195,14 @@ begin
   Result := InitialObj;
 end;
 
-function TGocciaGlobalObject.ObjectCreate(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectCreate(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NewObj: TGocciaObjectValue;
   ProtoArg: TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(Args, 1, 'Object.create', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.create', ThrowError);
 
-  ProtoArg := Args.GetElement(0);
+  ProtoArg := AArgs.GetElement(0);
 
   // Validate the prototype argument - must be an object or null
   if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullLiteralValue) then
@@ -202,19 +217,19 @@ begin
     ThrowError('Object.create called on non-object', 0, 0);
 end;
 
-function TGocciaGlobalObject.ObjectHasOwn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectHasOwn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   PropertyName: string;
   ClassObj: TGocciaClassValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 2, 'Object.hasOwn', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.hasOwn', ThrowError);
 
   // Handle class values (TGocciaClassValue does not extend TGocciaObjectValue)
-  if Args.GetElement(0) is TGocciaClassValue then
+  if AArgs.GetElement(0) is TGocciaClassValue then
   begin
-    ClassObj := TGocciaClassValue(Args.GetElement(0));
-    PropertyName := Args.GetElement(1).ToStringLiteral.Value;
+    ClassObj := TGocciaClassValue(AArgs.GetElement(0));
+    PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
     // Check static properties on the class (private fields are never own properties)
     if not (ClassObj.GetProperty(PropertyName) is TGocciaUndefinedLiteralValue) then
       Result := TGocciaBooleanLiteralValue.TrueValue
@@ -223,11 +238,11 @@ begin
     Exit;
   end;
 
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.hasOwn called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args.GetElement(0));
-  PropertyName := Args.GetElement(1).ToStringLiteral.Value;
+  Obj := TGocciaObjectValue(AArgs.GetElement(0));
+  PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
 
   if Obj.HasOwnProperty(PropertyName) then
     Result := TGocciaBooleanLiteralValue.TrueValue
@@ -235,19 +250,19 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-function TGocciaGlobalObject.ObjectGetOwnPropertyNames(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectGetOwnPropertyNames(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   Names: TGocciaArrayValue;
   PropertyNames: TArray<string>;
   I: Integer;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.getOwnPropertyNames', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.getOwnPropertyNames', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.getOwnPropertyNames called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args.GetElement(0));
+  Obj := TGocciaObjectValue(AArgs.GetElement(0));
   Names := TGocciaArrayValue.Create;
 
   // Get all property names (both enumerable and non-enumerable)
@@ -258,19 +273,19 @@ begin
   Result := Names;
 end;
 
-function TGocciaGlobalObject.ObjectGetOwnPropertyDescriptor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectGetOwnPropertyDescriptor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj, DescriptorObj: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
   PropertyName: string;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 2, 'Object.getOwnPropertyDescriptor', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.getOwnPropertyDescriptor', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.getOwnPropertyDescriptor called on non-object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args.GetElement(0));
-  PropertyName := Args.GetElement(1).ToStringLiteral.Value;
+  Obj := TGocciaObjectValue(AArgs.GetElement(0));
+  PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
 
   Descriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   if Descriptor = nil then
@@ -314,7 +329,7 @@ begin
   end;
 end;
 
-function TGocciaGlobalObject.ObjectDefineProperty(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectDefineProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   PropertyName: string;
@@ -328,16 +343,16 @@ var
   Setter: TGocciaValue;
   PropertyFlags: TPropertyFlags;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 3, 'Object.defineProperty', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 3, 'Object.defineProperty', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.defineProperty called on non-object', 0, 0);
 
-  if not (Args.GetElement(2) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(2) is TGocciaObjectValue) then
     ThrowError('Object.defineProperty: descriptor must be an object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args.GetElement(0));
-  DescriptorObject := TGocciaObjectValue(Args.GetElement(2));
+  Obj := TGocciaObjectValue(AArgs.GetElement(0));
+  DescriptorObject := TGocciaObjectValue(AArgs.GetElement(2));
 
   // Initialize all variables
   Enumerable := False;
@@ -397,17 +412,17 @@ begin
   end;
 
   // Handle symbol keys
-  if Args.GetElement(1) is TGocciaSymbolValue then
-    Obj.DefineSymbolProperty(TGocciaSymbolValue(Args.GetElement(1)), Descriptor)
+  if AArgs.GetElement(1) is TGocciaSymbolValue then
+    Obj.DefineSymbolProperty(TGocciaSymbolValue(AArgs.GetElement(1)), Descriptor)
   else
   begin
-    PropertyName := Args.GetElement(1).ToStringLiteral.Value;
+    PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
     Obj.DefineProperty(PropertyName, Descriptor);
   end;
   Result := Obj;
 end;
 
-function TGocciaGlobalObject.ObjectDefineProperties(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectDefineProperties(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   PropertiesDescriptor: TGocciaObjectValue;
@@ -415,16 +430,16 @@ var
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 2, 'Object.defineProperties', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.defineProperties', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.defineProperties called on non-object', 0, 0);
 
-  if not (Args.GetElement(1) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(1) is TGocciaObjectValue) then
     ThrowError('Object.defineProperties: properties must be an object', 0, 0);
 
-  Obj := TGocciaObjectValue(Args.GetElement(0));
-  PropertiesDescriptor := TGocciaObjectValue(Args.GetElement(1));
+  Obj := TGocciaObjectValue(AArgs.GetElement(0));
+  PropertiesDescriptor := TGocciaObjectValue(AArgs.GetElement(1));
   PropertyEntries := PropertiesDescriptor.GetEnumerablePropertyEntries;
 
   for I := 0 to High(PropertyEntries) do
@@ -434,7 +449,7 @@ begin
       CallArgs.Add(Obj);
       CallArgs.Add(TGocciaStringLiteralValue.Create(PropertyEntries[I].Key));
       CallArgs.Add(PropertyEntries[I].Value);
-      ObjectDefineProperty(CallArgs, ThisValue);
+      ObjectDefineProperty(CallArgs, AThisValue);
     finally
       CallArgs.Free;
     end;
@@ -443,22 +458,22 @@ begin
   Result := Obj;
 end;
 
-function TGocciaGlobalObject.ObjectGetOwnPropertySymbols(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectGetOwnPropertySymbols(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   Arr: TGocciaArrayValue;
   OwnSymbols: TArray<TGocciaSymbolValue>;
   I: Integer;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(Args, 1, 'Object.getOwnPropertySymbols', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.getOwnPropertySymbols', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
   begin
     Result := TGocciaArrayValue.Create;
     Exit;
   end;
 
-  Obj := TGocciaObjectValue(Args.GetElement(0));
+  Obj := TGocciaObjectValue(AArgs.GetElement(0));
   Arr := TGocciaArrayValue.Create;
 
   // Get all own symbol properties (both enumerable and non-enumerable)
@@ -469,52 +484,52 @@ begin
   Result := Arr;
 end;
 
-function TGocciaGlobalObject.ObjectFreeze(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectFreeze(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.freeze', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.freeze', ThrowError);
 
   // Non-objects are returned as-is (ECMAScript spec)
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
   begin
-    Result := Args.GetElement(0);
+    Result := AArgs.GetElement(0);
     Exit;
   end;
 
-  TGocciaObjectValue(Args.GetElement(0)).Freeze;
-  Result := Args.GetElement(0);
+  TGocciaObjectValue(AArgs.GetElement(0)).Freeze;
+  Result := AArgs.GetElement(0);
 end;
 
-function TGocciaGlobalObject.ObjectIsFrozen(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectIsFrozen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.isFrozen', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.isFrozen', ThrowError);
 
   // Non-objects are always frozen (ECMAScript spec)
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
   begin
     Result := TGocciaBooleanLiteralValue.TrueValue;
     Exit;
   end;
 
-  if TGocciaObjectValue(Args.GetElement(0)).IsFrozen then
+  if TGocciaObjectValue(AArgs.GetElement(0)).IsFrozen then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-function TGocciaGlobalObject.ObjectGetPrototypeOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectGetPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.getPrototypeOf', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.getPrototypeOf', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaObjectValue) then
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.getPrototypeOf called on non-object', 0, 0);
 
-  if Assigned(TGocciaObjectValue(Args.GetElement(0)).Prototype) then
-    Result := TGocciaObjectValue(Args.GetElement(0)).Prototype
+  if Assigned(TGocciaObjectValue(AArgs.GetElement(0)).Prototype) then
+    Result := TGocciaObjectValue(AArgs.GetElement(0)).Prototype
   else
     Result := TGocciaNullLiteralValue.Create;
 end;
 
-function TGocciaGlobalObject.ObjectFromEntries(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalObject.ObjectFromEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   Entries: TGocciaArrayValue;
@@ -523,12 +538,12 @@ var
   Key: string;
   Value: TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'Object.fromEntries', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.fromEntries', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaArrayValue) then
+  if not (AArgs.GetElement(0) is TGocciaArrayValue) then
     ThrowError('Object.fromEntries requires an iterable of key-value pairs', 0, 0);
 
-  Entries := TGocciaArrayValue(Args.GetElement(0));
+  Entries := TGocciaArrayValue(AArgs.GetElement(0));
   Obj := TGocciaObjectValue.Create;
 
   for I := 0 to Entries.Elements.Count - 1 do

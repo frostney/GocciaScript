@@ -5,17 +5,27 @@ unit Goccia.Builtins.GlobalArray;
 interface
 
 uses
-  Goccia.Values.ArrayValue, Goccia.Values.ObjectValue, Goccia.Values.NativeFunction, Goccia.Values.Primitives,
-  Goccia.Builtins.Base, Goccia.Arguments.Collection, Generics.Collections, Goccia.Scope,
-  Goccia.Error, Goccia.Error.ThrowErrorCallback, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ClassHelper,
-  Goccia.Values.FunctionValue;
+  Generics.Collections,
+
+  Goccia.Arguments.Collection,
+  Goccia.Builtins.Base,
+  Goccia.Error,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaGlobalArray = class(TGocciaBuiltin)
   protected
-    function IsArray(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ArrayFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ArrayOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function IsArray(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ArrayFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ArrayOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -31,19 +41,19 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayOf, 'of', -1));
 end;
 
-function TGocciaGlobalArray.IsArray(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalArray.IsArray(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Array.isArray accepts 0 or more arguments; returns false if no argument provided
-  if Args.Length < 1 then
+  if AArgs.Length < 1 then
     Result := TGocciaBooleanLiteralValue.FalseValue
   else
-    if Args.GetElement(0) is TGocciaArrayValue then
+    if AArgs.GetElement(0) is TGocciaArrayValue then
       Result := TGocciaBooleanLiteralValue.TrueValue
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-function TGocciaGlobalArray.ArrayFrom(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalArray.ArrayFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ResultArray: TGocciaArrayValue;
   Source: TGocciaValue;
@@ -51,13 +61,13 @@ var
   SourceStr: string;
   I: Integer;
 begin
-  if Args.Length < 1 then
+  if AArgs.Length < 1 then
   begin
     Result := TGocciaArrayValue.Create;
     Exit;
   end;
 
-  Source := Args.GetElement(0);
+  Source := AArgs.GetElement(0);
   ResultArray := TGocciaArrayValue.Create;
 
   // Array-like or iterable
@@ -82,31 +92,31 @@ begin
   end;
 
   // If a map function is provided, apply it
-  if (Args.Length > 1) and ((Args.GetElement(1) is TGocciaFunctionValue) or (Args.GetElement(1) is TGocciaNativeFunctionValue)) then
+  if (AArgs.Length > 1) and ((AArgs.GetElement(1) is TGocciaFunctionValue) or (AArgs.GetElement(1) is TGocciaNativeFunctionValue)) then
   begin
     for I := 0 to ResultArray.Elements.Count - 1 do
     begin
-      if Args.GetElement(1) is TGocciaFunctionValue then
-        ResultArray.Elements[I] := TGocciaFunctionValue(Args.GetElement(1)).Call(
-          TGocciaArgumentsCollection.Create([ResultArray.Elements[I], TGocciaNumberLiteralValue.Create(I)]), ThisValue)
+      if AArgs.GetElement(1) is TGocciaFunctionValue then
+        ResultArray.Elements[I] := TGocciaFunctionValue(AArgs.GetElement(1)).Call(
+          TGocciaArgumentsCollection.Create([ResultArray.Elements[I], TGocciaNumberLiteralValue.Create(I)]), AThisValue)
       else
-        ResultArray.Elements[I] := TGocciaNativeFunctionValue(Args.GetElement(1)).Call(
-          TGocciaArgumentsCollection.Create([ResultArray.Elements[I], TGocciaNumberLiteralValue.Create(I)]), ThisValue);
+        ResultArray.Elements[I] := TGocciaNativeFunctionValue(AArgs.GetElement(1)).Call(
+          TGocciaArgumentsCollection.Create([ResultArray.Elements[I], TGocciaNumberLiteralValue.Create(I)]), AThisValue);
     end;
   end;
 
   Result := ResultArray;
 end;
 
-function TGocciaGlobalArray.ArrayOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalArray.ArrayOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ResultArray: TGocciaArrayValue;
   I: Integer;
 begin
   ResultArray := TGocciaArrayValue.Create;
 
-  for I := 0 to Args.Length - 1 do
-    ResultArray.Elements.Add(Args.GetElement(I));
+  for I := 0 to AArgs.Length - 1 do
+    ResultArray.Elements.Add(AArgs.GetElement(I));
 
   Result := ResultArray;
 end;

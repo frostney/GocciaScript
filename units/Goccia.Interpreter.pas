@@ -5,13 +5,31 @@ unit Goccia.Interpreter;
 interface
 
 uses
-  Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Modules,
-  Goccia.Values.Primitives, Goccia.Values.ObjectValue,
-  Goccia.Values.ArrayValue, Goccia.Values.FunctionValue, Goccia.Values.ClassValue,
-  Goccia.Values.NativeFunction, Goccia.Token, Generics.Collections,
-  Classes, SysUtils, Math, Goccia.Error, Goccia.Values.Error, Goccia.Utils, 
-  Goccia.Parser, Goccia.Lexer, Goccia.Evaluator, Goccia.Scope, 
-  Goccia.Interfaces, Goccia.Logger;
+  Classes,
+  Generics.Collections,
+  Math,
+  SysUtils,
+
+  Goccia.AST.Expressions,
+  Goccia.AST.Node,
+  Goccia.AST.Statements,
+  Goccia.Error,
+  Goccia.Evaluator,
+  Goccia.Interfaces,
+  Goccia.Lexer,
+  Goccia.Logger,
+  Goccia.Modules,
+  Goccia.Parser,
+  Goccia.Scope,
+  Goccia.Token,
+  Goccia.Utils,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ClassValue,
+  Goccia.Values.Error,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaInterpreter = class
@@ -22,17 +40,17 @@ type
     FSourceLines: TStringList;
 
     // Helper methods
-    procedure ThrowError(const Message: string; Line, Column: Integer);
+    procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     function CreateEvaluationContext: TGocciaEvaluationContext;
   public
     // Filename and SourceLines are required for error messages with source context.
     // A future improvement could encapsulate these in a TGocciaSourceInfo record
     // shared by the lexer, parser, and interpreter.
-    constructor Create(const AFileName: string; ASourceLines: TStringList);
+    constructor Create(const AFileName: string; const ASourceLines: TStringList);
     destructor Destroy; override;
-    function Execute(AProgram: TGocciaProgram): TGocciaValue;
+    function Execute(const AProgram: TGocciaProgram): TGocciaValue;
     function LoadModule(const APath: string): TGocciaModule;
-    procedure CheckForModuleReload(Module: TGocciaModule);
+    procedure CheckForModuleReload(const AModule: TGocciaModule);
 
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
   end;
@@ -40,12 +58,13 @@ type
 
 implementation
 
-uses Goccia.GarbageCollector;
+uses
+  Goccia.GarbageCollector;
 
 { TGocciaInterpreter }
 
 constructor TGocciaInterpreter.Create(const AFileName: string;
-  ASourceLines: TStringList);
+  const ASourceLines: TStringList);
 begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
@@ -72,7 +91,7 @@ begin
   Result.LoadModule := LoadModule;
 end;
 
-function TGocciaInterpreter.Execute(AProgram: TGocciaProgram): TGocciaValue;
+function TGocciaInterpreter.Execute(const AProgram: TGocciaProgram): TGocciaValue;
 var
   I: Integer;
   Context: TGocciaEvaluationContext;
@@ -159,23 +178,23 @@ begin
   end;
 end;
 
-procedure TGocciaInterpreter.CheckForModuleReload(Module: TGocciaModule);
+procedure TGocciaInterpreter.CheckForModuleReload(const AModule: TGocciaModule);
 var
   CurrentModified: TDateTime;
 begin
-  CurrentModified := FileDateToDateTime(FileAge(Module.Path));
-  if CurrentModified > Module.LastModified then
+  CurrentModified := FileDateToDateTime(FileAge(AModule.Path));
+  if CurrentModified > AModule.LastModified then
   begin
     // Reload module
-    Module.ExportsTable.Clear;
-    Module.LastModified := CurrentModified;
-    LoadModule(Module.Path);
+    AModule.ExportsTable.Clear;
+    AModule.LastModified := CurrentModified;
+    LoadModule(AModule.Path);
   end;
 end;
 
-procedure TGocciaInterpreter.ThrowError(const Message: string; Line, Column: Integer);
+procedure TGocciaInterpreter.ThrowError(const AMessage: string; const ALine, AColumn: Integer);
 begin
-  raise TGocciaRuntimeError.Create(Message, Line, Column, FFileName, FSourceLines);
+  raise TGocciaRuntimeError.Create(AMessage, ALine, AColumn, FFileName, FSourceLines);
 end;
 
 end.

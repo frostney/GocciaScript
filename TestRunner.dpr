@@ -3,9 +3,21 @@ program TestRunner;
 {$I Goccia.inc}
 
 uses
-  Classes, SysUtils, Generics.Collections, Goccia.Values.Primitives, Goccia.Values.ObjectValue, 
-  Goccia.Values.ArrayValue, Goccia.Engine, TimingUtils, Goccia.Error, 
-  Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ClassHelper, FileUtils in 'units/FileUtils.pas';
+  Classes,
+  Generics.Collections,
+  SysUtils,
+
+  TimingUtils,
+
+  Goccia.Engine,
+  Goccia.Error,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives,
+
+  FileUtils in 'units/FileUtils.pas';
 
 type
   TTestFileResult = record
@@ -13,7 +25,7 @@ type
     Timing: TGocciaScriptResult;
   end;
 
-function RunGocciaScript(const FileName: string): TTestFileResult;
+function RunGocciaScript(const AFileName: string): TTestFileResult;
 var
   Source: TStringList;
   ScriptResult, FileResult: TGocciaObjectValue;
@@ -35,7 +47,7 @@ begin
   Source := TStringList.Create;
   try
     try
-      Source.LoadFromFile(FileName);
+      Source.LoadFromFile(AFileName);
     except
       on E: EStreamError do
       begin
@@ -54,7 +66,7 @@ begin
     Source.Add('runTests({ exitOnFirstFailure: false, showTestResults: false, silent: true });');
 
     try
-      EngineResult := TGocciaEngine.RunScriptFromStringList(Source, FileName, TestGlobals);
+      EngineResult := TGocciaEngine.RunScriptFromStringList(Source, AFileName, TestGlobals);
       Result.Timing := EngineResult;
       FileResult := EngineResult.Result as TGocciaObjectValue;
       
@@ -108,7 +120,7 @@ type
     TotalExecNanoseconds: Int64;
   end;
 
-function RunScriptFromFile(const FileName: string): TAggregatedTestResult;
+function RunScriptFromFile(const AFileName: string): TAggregatedTestResult;
 var
   FileResult: TTestFileResult;
 begin
@@ -116,8 +128,8 @@ begin
   Result.TotalParseNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
   try
-    WriteLn('Running script: ', FileName);
-    FileResult := RunGocciaScript(FileName);
+    WriteLn('Running script: ', AFileName);
+    FileResult := RunGocciaScript(AFileName);
     Result.TestResult := FileResult.TestResult;
     Result.TotalLexNanoseconds := FileResult.Timing.LexTimeNanoseconds;
     Result.TotalParseNanoseconds := FileResult.Timing.ParseTimeNanoseconds;
@@ -131,7 +143,7 @@ begin
   end;
 end;
 
-function RunScriptsFromFiles(const Files: TStringList): TAggregatedTestResult;
+function RunScriptsFromFiles(const AFiles: TStringList): TAggregatedTestResult;
 var
   I: Integer;
   AllTestResults: TGocciaObjectValue;
@@ -159,10 +171,10 @@ begin
   Result.TotalParseNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
 
-  for I := 0 to Files.Count - 1 do
+  for I := 0 to AFiles.Count - 1 do
   begin
-    FileResult := RunScriptFromFile(Files[I]);
-    AllTestResults.AssignProperty(Files[I], FileResult.TestResult);
+    FileResult := RunScriptFromFile(AFiles[I]);
+    AllTestResults.AssignProperty(AFiles[I], FileResult.TestResult);
 
     Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + FileResult.TotalLexNanoseconds;
     Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + FileResult.TotalParseNanoseconds;

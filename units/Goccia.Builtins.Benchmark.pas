@@ -5,32 +5,35 @@ unit Goccia.Builtins.Benchmark;
 interface
 
 uses
+  Classes,
+  Generics.Collections,
+  Math,
+  SysUtils,
+
+  TimingUtils,
+
+  Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
-  Goccia.Values.ObjectValue,
+  Goccia.Error,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.ArrayValue,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
-  Goccia.Values.Primitives,
-  Goccia.Values.ArrayValue,
-  Goccia.Arguments.Collection,
-  Goccia.Scope,
-  Goccia.Error, Goccia.Error.ThrowErrorCallback,
-  Generics.Collections,
-  Classes,
-  SysUtils,
-  TimingUtils,
-  Math;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaBenchmark = class;
 
-  TBenchmarkProgressEvent = procedure(const SuiteName, BenchName: string; Index, Total: Integer) of object;
+  TBenchmarkProgressEvent = procedure(const ASuiteName, ABenchName: string; const AIndex, ATotal: Integer) of object;
 
   TBenchmarkCase = class
   public
     Name: string;
     BenchFunction: TGocciaFunctionValue;
     SuiteName: string;
-    constructor Create(const AName: string; ABenchFunction: TGocciaFunctionValue; const ASuiteName: string);
+    constructor Create(const AName: string; const ABenchFunction: TGocciaFunctionValue; const ASuiteName: string);
   end;
 
   TBenchmarkResult = record
@@ -50,15 +53,15 @@ type
     FCurrentSuiteName: string;
     FOnProgress: TBenchmarkProgressEvent;
 
-    function RunSingleBenchmark(BenchCase: TBenchmarkCase): TBenchmarkResult;
-    function CalibrateIterations(BenchCase: TBenchmarkCase): Int64;
+    function RunSingleBenchmark(const ABenchCase: TBenchmarkCase): TBenchmarkResult;
+    function CalibrateIterations(const ABenchCase: TBenchmarkCase): Int64;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
     destructor Destroy; override;
 
-    function Suite(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function Bench(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function RunBenchmarks(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function Suite(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function Bench(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function RunBenchmarks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     property OnProgress: TBenchmarkProgressEvent read FOnProgress write FOnProgress;
   end;
@@ -66,7 +69,9 @@ type
 implementation
 
 uses
-  Goccia.Values.ClassHelper, Goccia.GarbageCollector, Goccia.MicrotaskQueue;
+  Goccia.GarbageCollector,
+  Goccia.MicrotaskQueue,
+  Goccia.Values.ClassHelper;
 
 const
   DEFAULT_WARMUP_ITERATIONS = 3;
@@ -80,18 +85,18 @@ var
   CALIBRATION_BATCH: Int64;
   MEASUREMENT_ROUNDS: Integer;
 
-function GetEnvInt(const Name: string; Default: Integer): Integer;
+function GetEnvInt(const AName: string; const ADefault: Integer): Integer;
 var
   S: string;
 begin
-  S := GetEnvironmentVariable(Name);
+  S := GetEnvironmentVariable(AName);
   if (S <> '') then
   begin
     if not TryStrToInt(S, Result) then
-      Result := Default;
+      Result := ADefault;
   end
   else
-    Result := Default;
+    Result := ADefault;
 end;
 
 procedure InitBenchmarkConfig;
@@ -106,7 +111,7 @@ end;
 
 { TBenchmarkCase }
 
-constructor TBenchmarkCase.Create(const AName: string; ABenchFunction: TGocciaFunctionValue; const ASuiteName: string);
+constructor TBenchmarkCase.Create(const AName: string; const ABenchFunction: TGocciaFunctionValue; const ASuiteName: string);
 begin
   inherited Create;
   Name := AName;
@@ -137,7 +142,7 @@ begin
   inherited;
 end;
 
-function TGocciaBenchmark.Suite(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaBenchmark.Suite(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   SuiteName: string;
   SuiteFunction: TGocciaFunctionValue;
@@ -146,12 +151,12 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  if Args.Length < 2 then Exit;
-  if not (Args.GetElement(0) is TGocciaStringLiteralValue) then Exit;
-  if not (Args.GetElement(1) is TGocciaFunctionValue) then Exit;
+  if AArgs.Length < 2 then Exit;
+  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then Exit;
+  if not (AArgs.GetElement(1) is TGocciaFunctionValue) then Exit;
 
-  SuiteName := TGocciaStringLiteralValue(Args.GetElement(0)).Value;
-  SuiteFunction := TGocciaFunctionValue(Args.GetElement(1));
+  SuiteName := TGocciaStringLiteralValue(AArgs.GetElement(0)).Value;
+  SuiteFunction := TGocciaFunctionValue(AArgs.GetElement(1));
 
   FRegisteredSuites.Add(SuiteName);
 
@@ -170,24 +175,24 @@ begin
   end;
 end;
 
-function TGocciaBenchmark.Bench(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaBenchmark.Bench(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   BenchName: string;
   BenchFunction: TGocciaFunctionValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  if Args.Length < 2 then Exit;
-  if not (Args.GetElement(0) is TGocciaStringLiteralValue) then Exit;
-  if not (Args.GetElement(1) is TGocciaFunctionValue) then Exit;
+  if AArgs.Length < 2 then Exit;
+  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then Exit;
+  if not (AArgs.GetElement(1) is TGocciaFunctionValue) then Exit;
 
-  BenchName := TGocciaStringLiteralValue(Args.GetElement(0)).Value;
-  BenchFunction := TGocciaFunctionValue(Args.GetElement(1));
+  BenchName := TGocciaStringLiteralValue(AArgs.GetElement(0)).Value;
+  BenchFunction := TGocciaFunctionValue(AArgs.GetElement(1));
 
   FRegisteredBenchmarks.Add(TBenchmarkCase.Create(BenchName, BenchFunction, FCurrentSuiteName));
 end;
 
-function TGocciaBenchmark.CalibrateIterations(BenchCase: TBenchmarkCase): Int64;
+function TGocciaBenchmark.CalibrateIterations(const ABenchCase: TBenchmarkCase): Int64;
 var
   EmptyArgs: TGocciaArgumentsCollection;
   BatchSize: Int64;
@@ -205,7 +210,7 @@ begin
       I := 0;
       while I < BatchSize do
       begin
-        BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        ABenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         Inc(I);
       end;
       if Assigned(TGocciaMicrotaskQueue.Instance) then
@@ -235,7 +240,7 @@ begin
   end;
 end;
 
-function TGocciaBenchmark.RunSingleBenchmark(BenchCase: TBenchmarkCase): TBenchmarkResult;
+function TGocciaBenchmark.RunSingleBenchmark(const ABenchCase: TBenchmarkCase): TBenchmarkResult;
 var
   EmptyArgs: TGocciaArgumentsCollection;
   Iterations: Int64;
@@ -246,19 +251,19 @@ var
   MeanRounds: array[0..4] of Double;  // Max 5 rounds
   TempDouble, OpsMean, OpsVariance: Double;
 begin
-  Result.Name := BenchCase.Name;
-  Result.SuiteName := BenchCase.SuiteName;
+  Result.Name := ABenchCase.Name;
+  Result.SuiteName := ABenchCase.SuiteName;
 
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
     // Phase 1: Warmup
     for K := 1 to WARMUP_ITERATIONS do
-      BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      ABenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     if Assigned(TGocciaMicrotaskQueue.Instance) then
       TGocciaMicrotaskQueue.Instance.DrainQueue;
 
     // Phase 2: Calibrate to find iteration count per round
-    Iterations := CalibrateIterations(BenchCase);
+    Iterations := CalibrateIterations(ABenchCase);
 
     // Phase 3: Multiple measurement rounds, each running the full iteration count
     for Round := 0 to MEASUREMENT_ROUNDS - 1 do
@@ -270,7 +275,7 @@ begin
       I := 0;
       while I < Iterations do
       begin
-        BenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        ABenchCase.BenchFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         Inc(I);
       end;
       if Assigned(TGocciaMicrotaskQueue.Instance) then
@@ -339,7 +344,7 @@ begin
   end;
 end;
 
-function TGocciaBenchmark.RunBenchmarks(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaBenchmark.RunBenchmarks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
   BenchCase: TBenchmarkCase;

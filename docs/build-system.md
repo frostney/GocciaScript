@@ -216,6 +216,32 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 FPC is only installed once per platform in the `build` job. Test, benchmark, and example jobs run in parallel, using pre-built binaries.
 
+## Auto-Formatter
+
+The project includes `./format.pas`, an `instantfpc` script that auto-fixes Pascal source files. It enforces uses clause ordering, PascalCase function names, parameter `A` prefix naming, and stray space removal (spurious spaces before `;`, `)`, `,`). No build step is needed — it runs directly via the `instantfpc` shebang.
+
+```bash
+./format.pas              # Format all project Pascal files
+./format.pas --check      # Check only (exit 1 if changes needed)
+./format.pas file.pas     # Format specific files
+```
+
+### Pre-Commit Hook
+
+The formatter runs automatically on staged `.pas`/`.dpr` files before each commit via [Lefthook](https://github.com/evilmartians/lefthook). To enable this after cloning:
+
+```bash
+# Install Lefthook (see docs/code-style.md for all platforms)
+brew install lefthook     # macOS
+sudo snap install lefthook  # Linux
+scoop install lefthook    # Windows
+
+# Register git hooks
+lefthook install
+```
+
+The hook configuration is in `lefthook.yml`. It auto-stages formatting fixes (`stage_fixed: true`) so you don't need to `git add` after the hook reformats files.
+
 ## Direct FPC Compilation
 
 If you need to bypass the build script:

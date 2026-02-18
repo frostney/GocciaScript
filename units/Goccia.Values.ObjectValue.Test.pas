@@ -3,7 +3,12 @@ program Goccia.Values.ObjectValue.Test;
 {$I Goccia.inc}
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectValue, StrUtils, TestRunner;
+  StrUtils,
+
+  TestRunner,
+
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TTestObjectValue = class(TTestSuite)

@@ -5,7 +5,8 @@ unit Goccia.SharedPrototype;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaSharedPrototype = class
@@ -13,8 +14,8 @@ type
     FPrototype: TGocciaObjectValue;
     FMethodHost: TGocciaValue;
   public
-    constructor Create(AMethodHost: TGocciaValue);
-    procedure ExposeOnConstructor(AConstructor: TGocciaObjectValue);
+    constructor Create(const AMethodHost: TGocciaValue);
+    procedure ExposeOnConstructor(const AConstructor: TGocciaObjectValue);
     property Prototype: TGocciaObjectValue read FPrototype;
   end;
 
@@ -23,7 +24,7 @@ implementation
 uses
   Goccia.GarbageCollector;
 
-constructor TGocciaSharedPrototype.Create(AMethodHost: TGocciaValue);
+constructor TGocciaSharedPrototype.Create(const AMethodHost: TGocciaValue);
 begin
   inherited Create;
   FPrototype := TGocciaObjectValue.Create;
@@ -36,7 +37,7 @@ begin
   end;
 end;
 
-procedure TGocciaSharedPrototype.ExposeOnConstructor(AConstructor: TGocciaObjectValue);
+procedure TGocciaSharedPrototype.ExposeOnConstructor(const AConstructor: TGocciaObjectValue);
 begin
   AConstructor.AssignProperty('prototype', FPrototype);
   FPrototype.AssignProperty('constructor', AConstructor);

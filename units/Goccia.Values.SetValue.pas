@@ -5,9 +5,15 @@ unit Goccia.Values.SetValue;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.ArrayValue,
-  Goccia.Values.NativeFunction, Goccia.Arguments.Collection,
-  Goccia.SharedPrototype, Generics.Collections, SysUtils;
+  Generics.Collections,
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.SharedPrototype,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaSetValue = class(TGocciaObjectValue)
@@ -16,20 +22,20 @@ type
   private
     FItems: TList<TGocciaValue>;
 
-    function SetHas(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function SetAdd(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function SetDelete(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function SetClear(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function SetForEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function SetValues(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function SetHas(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetDelete(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetClear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
   public
     constructor Create; overload;
     destructor Destroy; override;
 
-    function ContainsValue(AValue: TGocciaValue): Boolean;
-    procedure AddItem(AValue: TGocciaValue);
+    function ContainsValue(const AValue: TGocciaValue): Boolean;
+    procedure AddItem(const AValue: TGocciaValue);
 
     function GetProperty(const AName: string): TGocciaValue; override;
     function ToArray: TGocciaArrayValue;
@@ -37,7 +43,7 @@ type
 
     procedure GCMarkReferences; override;
 
-    class procedure ExposePrototype(AConstructor: TGocciaObjectValue);
+    class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
 
     property Items: TList<TGocciaValue> read FItems;
   end;
@@ -45,8 +51,10 @@ type
 implementation
 
 uses
-  Goccia.Evaluator.Comparison, Goccia.Values.FunctionValue,
-  Goccia.Values.FunctionBase, Goccia.GarbageCollector;
+  Goccia.Evaluator.Comparison,
+  Goccia.GarbageCollector,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.FunctionValue;
 
 constructor TGocciaSetValue.Create;
 begin
@@ -71,7 +79,7 @@ begin
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetValues, 'values', 0));
 end;
 
-class procedure TGocciaSetValue.ExposePrototype(AConstructor: TGocciaObjectValue);
+class procedure TGocciaSetValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
 begin
   if not Assigned(FShared) then
     TGocciaSetValue.Create;
@@ -99,7 +107,7 @@ begin
   end;
 end;
 
-function TGocciaSetValue.ContainsValue(AValue: TGocciaValue): Boolean;
+function TGocciaSetValue.ContainsValue(const AValue: TGocciaValue): Boolean;
 var
   I: Integer;
 begin
@@ -114,7 +122,7 @@ begin
   Result := False;
 end;
 
-procedure TGocciaSetValue.AddItem(AValue: TGocciaValue);
+procedure TGocciaSetValue.AddItem(const AValue: TGocciaValue);
 begin
   if not ContainsValue(AValue) then
     FItems.Add(AValue);
@@ -144,39 +152,39 @@ end;
 
 { Instance methods }
 
-function TGocciaSetValue.SetHas(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaSetValue.SetHas(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   S: TGocciaSetValue;
 begin
-  S := TGocciaSetValue(ThisValue);
-  if (Args.Length > 0) and S.ContainsValue(Args.GetElement(0)) then
+  S := TGocciaSetValue(AThisValue);
+  if (AArgs.Length > 0) and S.ContainsValue(AArgs.GetElement(0)) then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-function TGocciaSetValue.SetAdd(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaSetValue.SetAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   S: TGocciaSetValue;
 begin
-  S := TGocciaSetValue(ThisValue);
-  if Args.Length > 0 then
-    S.AddItem(Args.GetElement(0));
-  Result := ThisValue;
+  S := TGocciaSetValue(AThisValue);
+  if AArgs.Length > 0 then
+    S.AddItem(AArgs.GetElement(0));
+  Result := AThisValue;
 end;
 
-function TGocciaSetValue.SetDelete(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaSetValue.SetDelete(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   S: TGocciaSetValue;
   I: Integer;
 begin
-  S := TGocciaSetValue(ThisValue);
+  S := TGocciaSetValue(AThisValue);
   Result := TGocciaBooleanLiteralValue.FalseValue;
-  if Args.Length > 0 then
+  if AArgs.Length > 0 then
   begin
     for I := 0 to S.FItems.Count - 1 do
     begin
-      if IsSameValueZero(S.FItems[I], Args.GetElement(0)) then
+      if IsSameValueZero(S.FItems[I], AArgs.GetElement(0)) then
       begin
         S.FItems.Delete(I);
         Result := TGocciaBooleanLiteralValue.TrueValue;
@@ -186,13 +194,13 @@ begin
   end;
 end;
 
-function TGocciaSetValue.SetClear(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaSetValue.SetClear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaSetValue(ThisValue).FItems.Clear;
+  TGocciaSetValue(AThisValue).FItems.Clear;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function TGocciaSetValue.SetForEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaSetValue.SetForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   S: TGocciaSetValue;
   Callback: TGocciaValue;
@@ -200,15 +208,15 @@ var
   I: Integer;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if Args.Length = 0 then Exit;
+  if AArgs.Length = 0 then Exit;
 
-  S := TGocciaSetValue(ThisValue);
-  Callback := Args.GetElement(0);
+  S := TGocciaSetValue(AThisValue);
+  Callback := AArgs.GetElement(0);
   if not Callback.IsCallable then Exit;
 
   for I := 0 to S.FItems.Count - 1 do
   begin
-    CallArgs := TGocciaArgumentsCollection.Create([S.FItems[I], S.FItems[I], ThisValue]);
+    CallArgs := TGocciaArgumentsCollection.Create([S.FItems[I], S.FItems[I], AThisValue]);
     try
       TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
@@ -217,9 +225,9 @@ begin
   end;
 end;
 
-function TGocciaSetValue.SetValues(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaSetValue.SetValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaSetValue(ThisValue).ToArray;
+  Result := TGocciaSetValue(AThisValue).ToArray;
 end;
 
 end.

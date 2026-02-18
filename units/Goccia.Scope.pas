@@ -5,7 +5,18 @@ unit Goccia.Scope;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.ObjectValue, Goccia.Error, Goccia.Error.ThrowErrorCallback, Generics.Collections, SysUtils, TypInfo, Goccia.Interfaces, Goccia.Token, Goccia.Keywords;
+  Generics.Collections,
+  SysUtils,
+  TypInfo,
+
+  Goccia.Error,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Interfaces,
+  Goccia.Keywords,
+  Goccia.Token,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaDeclarationType = (dtLet, dtConst, dtParameter);
@@ -39,23 +50,23 @@ type
     function GetOwningClass: TGocciaValue; virtual;
     function GetSuperClass: TGocciaValue; virtual;
   public
-    constructor Create(AParent: TGocciaScope = nil; AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0);
+    constructor Create(const AParent: TGocciaScope = nil; const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0);
     destructor Destroy; override;
-    function CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0): TGocciaScope;
+    function CreateChild(const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0): TGocciaScope;
 
     // Garbage collection support
     procedure GCMarkReferences; virtual;
     property GCMarked: Boolean read FGCMarked write FGCMarked;
 
     // New Define/Assign pattern
-    procedure DefineLexicalBinding(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType; ALine: Integer = 0; AColumn: Integer = 0);
-    procedure AssignLexicalBinding(const AName: string; AValue: TGocciaValue; ALine: Integer = 0; AColumn: Integer = 0); virtual;
+    procedure DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
+    procedure AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); virtual;
 
     // Helper methods for token-based declarations
-    procedure DefineFromToken(const AName: string; AValue: TGocciaValue; ATokenType: TGocciaTokenType);
+    procedure DefineFromToken(const AName: string; const AValue: TGocciaValue; const ATokenType: TGocciaTokenType);
 
     // Core methods
-    function GetLexicalBinding(const AName: string; ALine: Integer = 0; AColumn: Integer = 0): TLexicalBinding;
+    function GetLexicalBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
     function GetValue(const AName: string): TGocciaValue; inline;
 
     function ResolveIdentifier(const AName: string): TGocciaValue; inline;
@@ -88,7 +99,7 @@ type
   protected
     function GetThisValue: TGocciaValue; override;
   public
-    constructor Create(AParent: TGocciaScope; const AFunctionName: string; ACapacity: Integer = 0);
+    constructor Create(const AParent: TGocciaScope; const AFunctionName: string; const ACapacity: Integer = 0);
   end;
 
   // Function call scope for class methods -- carries super and owning class
@@ -100,8 +111,8 @@ type
     function GetOwningClass: TGocciaValue; override;
     function GetSuperClass: TGocciaValue; override;
   public
-    constructor Create(AParent: TGocciaScope; const AFunctionName: string;
-      ASuperClass, AOwningClass: TGocciaValue; ACapacity: Integer = 0);
+    constructor Create(const AParent: TGocciaScope; const AFunctionName: string;
+      const ASuperClass, AOwningClass: TGocciaValue; const ACapacity: Integer = 0);
     procedure GCMarkReferences; override;
     property SuperClass: TGocciaValue read FSuperClass;
     property OwningClass: TGocciaValue read FOwningClass;
@@ -115,7 +126,7 @@ type
     function GetThisValue: TGocciaValue; override;
     function GetOwningClass: TGocciaValue; override;
   public
-    constructor Create(AParent: TGocciaScope; AOwningClass: TGocciaValue);
+    constructor Create(const AParent: TGocciaScope; const AOwningClass: TGocciaValue);
     procedure GCMarkReferences; override;
     property OwningClass: TGocciaValue read FOwningClass;
   end;
@@ -125,8 +136,8 @@ type
   private
     FCatchParameter: string;  // Track the catch parameter name for proper shadowing
   public
-    constructor Create(AParent: TGocciaScope; const ACatchParameter: string);
-    procedure AssignLexicalBinding(const AName: string; AValue: TGocciaValue; ALine: Integer = 0; AColumn: Integer = 0); override;
+    constructor Create(const AParent: TGocciaScope; const ACatchParameter: string);
+    procedure AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); override;
   end;
 
 
@@ -134,7 +145,9 @@ type
 
 implementation
 
-uses Goccia.Values.ClassHelper, Goccia.GarbageCollector;
+uses
+  Goccia.GarbageCollector,
+  Goccia.Values.ClassHelper;
 
 { TLexicalBinding }
 
@@ -150,7 +163,7 @@ end;
 
 { TGocciaScope }
 
-constructor TGocciaScope.Create(AParent: TGocciaScope = nil; AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0);
+constructor TGocciaScope.Create(const AParent: TGocciaScope = nil; const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0);
 begin
   FScopeKind := AScopeKind;
   FCustomLabel := ACustomLabel;
@@ -185,7 +198,7 @@ begin
   inherited;
 end;
 
-function TGocciaScope.CreateChild(AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; ACapacity: Integer = 0): TGocciaScope;
+function TGocciaScope.CreateChild(const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0): TGocciaScope;
 begin
   Result := TGocciaScope.Create(Self, AScopeKind, ACustomLabel, ACapacity);
   // Inherit ThisValue so that block scopes can resolve `this` correctly
@@ -249,7 +262,7 @@ begin
   Result := nil;
 end;
 
-procedure TGocciaScope.DefineLexicalBinding(const AName: string; AValue: TGocciaValue; ADeclarationType: TGocciaDeclarationType; ALine: Integer = 0; AColumn: Integer = 0);
+procedure TGocciaScope.DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
 var
   LexicalBinding: TLexicalBinding;
   ExistingLexicalBinding: TLexicalBinding;
@@ -280,7 +293,7 @@ begin
   FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
 end;
 
-procedure TGocciaScope.DefineFromToken(const AName: string; AValue: TGocciaValue; ATokenType: TGocciaTokenType);
+procedure TGocciaScope.DefineFromToken(const AName: string; const AValue: TGocciaValue; const ATokenType: TGocciaTokenType);
 var
   DeclarationType: TGocciaDeclarationType;
 begin
@@ -294,7 +307,7 @@ begin
   DefineLexicalBinding(AName, AValue, DeclarationType);
 end;
 
-procedure TGocciaScope.AssignLexicalBinding(const AName: string; AValue: TGocciaValue; ALine: Integer = 0; AColumn: Integer = 0);
+procedure TGocciaScope.AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
 var
   LexicalBinding: TLexicalBinding;
 begin
@@ -327,7 +340,7 @@ begin
   raise TGocciaReferenceError.Create(Format('Undefined variable: %s', [AName]), ALine, AColumn, '', nil);
 end;
 
-function TGocciaScope.GetLexicalBinding(const AName: string; ALine: Integer = 0; AColumn: Integer = 0): TLexicalBinding;
+function TGocciaScope.GetLexicalBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
 var
   LexicalBinding: TLexicalBinding;
 begin
@@ -419,7 +432,7 @@ end;
 
 { TGocciaCallScope }
 
-constructor TGocciaCallScope.Create(AParent: TGocciaScope; const AFunctionName: string; ACapacity: Integer = 0);
+constructor TGocciaCallScope.Create(const AParent: TGocciaScope; const AFunctionName: string; const ACapacity: Integer = 0);
 begin
   inherited Create(AParent, skFunction, AFunctionName, ACapacity);
 end;
@@ -431,8 +444,8 @@ end;
 
 { TGocciaMethodCallScope }
 
-constructor TGocciaMethodCallScope.Create(AParent: TGocciaScope; const AFunctionName: string;
-  ASuperClass, AOwningClass: TGocciaValue; ACapacity: Integer = 0);
+constructor TGocciaMethodCallScope.Create(const AParent: TGocciaScope; const AFunctionName: string;
+  const ASuperClass, AOwningClass: TGocciaValue; const ACapacity: Integer = 0);
 begin
   inherited Create(AParent, AFunctionName, ACapacity);
   FSuperClass := ASuperClass;
@@ -460,7 +473,7 @@ end;
 
 { TGocciaClassInitScope }
 
-constructor TGocciaClassInitScope.Create(AParent: TGocciaScope; AOwningClass: TGocciaValue);
+constructor TGocciaClassInitScope.Create(const AParent: TGocciaScope; const AOwningClass: TGocciaValue);
 begin
   inherited Create(AParent, skBlock, 'ClassInit');
   FOwningClass := AOwningClass;
@@ -485,13 +498,13 @@ end;
 
 { TGocciaCatchScope }
 
-constructor TGocciaCatchScope.Create(AParent: TGocciaScope; const ACatchParameter: string);
+constructor TGocciaCatchScope.Create(const AParent: TGocciaScope; const ACatchParameter: string);
 begin
   inherited Create(AParent, skBlock, 'CatchBlock');
   FCatchParameter := ACatchParameter;
 end;
 
-procedure TGocciaCatchScope.AssignLexicalBinding(const AName: string; AValue: TGocciaValue; ALine: Integer = 0; AColumn: Integer = 0);
+procedure TGocciaCatchScope.AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);
 begin
   // Surgical fix for catch parameter scopes: assignments to non-parameter variables
   // should propagate to parent scope, but catch parameters should stay for proper shadowing

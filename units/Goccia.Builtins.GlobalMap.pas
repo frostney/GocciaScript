@@ -5,18 +5,24 @@ unit Goccia.Builtins.GlobalMap;
 interface
 
 uses
-  Goccia.Builtins.Base, Goccia.Scope, Goccia.Error.ThrowErrorCallback,
-  Goccia.Values.Primitives, Goccia.Values.MapValue,
-  Goccia.Values.NativeFunction, Goccia.Values.ArrayValue,
+  Generics.Collections,
+  SysUtils,
+
   Goccia.Arguments.Collection,
-  Generics.Collections, SysUtils;
+  Goccia.Builtins.Base,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.MapValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.Primitives;
 
 type
   TGocciaGlobalMap = class(TGocciaBuiltin)
   private
     FMapConstructor: TGocciaNativeFunctionValue;
 
-    function MapConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function MapConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -34,7 +40,7 @@ begin
   AScope.DefineLexicalBinding(AName, FMapConstructor, dtLet);
 end;
 
-function TGocciaGlobalMap.MapConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalMap.MapConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   MapObj: TGocciaMapValue;
   InitArg: TGocciaValue;
@@ -44,9 +50,9 @@ var
 begin
   MapObj := TGocciaMapValue.Create;
 
-  if Args.Length > 0 then
+  if AArgs.Length > 0 then
   begin
-    InitArg := Args.GetElement(0);
+    InitArg := AArgs.GetElement(0);
 
     // Initialize from array of [key, value] pairs
     if InitArg is TGocciaArrayValue then

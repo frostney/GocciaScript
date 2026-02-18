@@ -5,12 +5,13 @@ unit Goccia.Values.NumberObjectValue;
 interface
 
 uses
-  Goccia.Values.Primitives,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.NativeFunction,
-  Goccia.Arguments.Collection,
+  Math,
   SysUtils,
-  Math;
+
+  Goccia.Arguments.Collection,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaNumberObjectValue = class(TGocciaObjectValue)
@@ -20,19 +21,19 @@ type
     class var FSharedNumberPrototype: TGocciaObjectValue;
     class var FPrototypeMethodHost: TGocciaNumberObjectValue;
 
-    function ExtractPrimitive(Value: TGocciaValue): TGocciaNumberLiteralValue;
+    function ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
   public
-    constructor Create(APrimitive: TGocciaNumberLiteralValue);
+    constructor Create(const APrimitive: TGocciaNumberLiteralValue);
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure InitializePrototype;
     procedure GCMarkReferences; override;
     property Primitive: TGocciaNumberLiteralValue read FPrimitive;
 
     // Number prototype methods
-    function NumberToFixed(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function NumberToString(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function NumberValueOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function NumberToPrecision(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function NumberToFixed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function NumberToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function NumberValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function NumberToPrecision(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -40,17 +41,17 @@ implementation
 uses
   Goccia.GarbageCollector;
 
-function TGocciaNumberObjectValue.ExtractPrimitive(Value: TGocciaValue): TGocciaNumberLiteralValue;
+function TGocciaNumberObjectValue.ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
 begin
-  if Value is TGocciaNumberLiteralValue then
-    Result := TGocciaNumberLiteralValue(Value)
-  else if Value is TGocciaNumberObjectValue then
-    Result := TGocciaNumberObjectValue(Value).Primitive
+  if AValue is TGocciaNumberLiteralValue then
+    Result := TGocciaNumberLiteralValue(AValue)
+  else if AValue is TGocciaNumberObjectValue then
+    Result := TGocciaNumberObjectValue(AValue).Primitive
   else
-    Result := Value.ToNumberLiteral;
+    Result := AValue.ToNumberLiteral;
 end;
 
-constructor TGocciaNumberObjectValue.Create(APrimitive: TGocciaNumberLiteralValue);
+constructor TGocciaNumberObjectValue.Create(const APrimitive: TGocciaNumberLiteralValue);
 begin
   inherited Create;
   FPrimitive := APrimitive;
@@ -99,12 +100,12 @@ begin
     FPrimitive.GCMarkReferences;
 end;
 
-function TGocciaNumberObjectValue.NumberToFixed(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaNumberObjectValue.NumberToFixed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Prim: TGocciaNumberLiteralValue;
   Digits: Integer;
 begin
-  Prim := ExtractPrimitive(ThisValue);
+  Prim := ExtractPrimitive(AThisValue);
 
   // Special values return their string representation
   if Prim.IsNaN then
@@ -123,8 +124,8 @@ begin
     Exit;
   end;
 
-  if Args.Length > 0 then
-    Digits := Trunc(Args.GetElement(0).ToNumberLiteral.Value)
+  if AArgs.Length > 0 then
+    Digits := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value)
   else
     Digits := 0;
 
@@ -137,12 +138,12 @@ begin
   Result := TGocciaStringLiteralValue.Create(FormatFloat('0.' + StringOfChar('0', Digits), Prim.Value));
 end;
 
-function TGocciaNumberObjectValue.NumberToString(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaNumberObjectValue.NumberToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Prim: TGocciaNumberLiteralValue;
   Radix: Integer;
 begin
-  Prim := ExtractPrimitive(ThisValue);
+  Prim := ExtractPrimitive(AThisValue);
 
   // Special values always return their default string
   if Prim.IsNaN or Prim.IsInfinity or Prim.IsNegativeInfinity or Prim.IsNegativeZero then
@@ -151,9 +152,9 @@ begin
     Exit;
   end;
 
-  if Args.Length > 0 then
+  if AArgs.Length > 0 then
   begin
-    Radix := Trunc(Args.GetElement(0).ToNumberLiteral.Value);
+    Radix := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
     if (Radix < 2) or (Radix > 36) then
     begin
       Result := TGocciaStringLiteralValue.Create('');
@@ -168,17 +169,17 @@ begin
     Result := Prim.ToStringLiteral;
 end;
 
-function TGocciaNumberObjectValue.NumberValueOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaNumberObjectValue.NumberValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := ExtractPrimitive(ThisValue);
+  Result := ExtractPrimitive(AThisValue);
 end;
 
-function TGocciaNumberObjectValue.NumberToPrecision(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaNumberObjectValue.NumberToPrecision(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Prim: TGocciaNumberLiteralValue;
   Precision: Integer;
 begin
-  Prim := ExtractPrimitive(ThisValue);
+  Prim := ExtractPrimitive(AThisValue);
 
   // Special values return their string representation
   if Prim.IsNaN or Prim.IsInfinity or Prim.IsNegativeInfinity then
@@ -187,13 +188,13 @@ begin
     Exit;
   end;
 
-  if Args.Length = 0 then
+  if AArgs.Length = 0 then
   begin
     Result := Prim.ToStringLiteral;
     Exit;
   end;
 
-  Precision := Trunc(Args.GetElement(0).ToNumberLiteral.Value);
+  Precision := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
 
   if (Precision < 1) or (Precision > 100) then
   begin

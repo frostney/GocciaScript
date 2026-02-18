@@ -30,14 +30,16 @@ type
 implementation
 
 uses
-  Goccia.Values.Constants, Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction, Goccia.Arguments.Collection,
-  Goccia.GarbageCollector;
+  Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
+  Goccia.Values.Constants,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction;
 
 type
   TGocciaSymbolMethodHost = class
-    function SymbolToString(Args: TGocciaArgumentsCollection;
-      ThisValue: TGocciaValue): TGocciaValue;
+    function SymbolToString(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 var
@@ -45,12 +47,12 @@ var
   GSharedToString: TGocciaNativeFunctionValue = nil;
   GMethodHost: TGocciaSymbolMethodHost = nil;
 
-function TGocciaSymbolMethodHost.SymbolToString(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaSymbolMethodHost.SymbolToString(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if not (ThisValue is TGocciaSymbolValue) then
+  if not (AThisValue is TGocciaSymbolValue) then
     ThrowTypeError('Symbol.prototype.toString requires that ''this'' be a Symbol');
-  Result := ThisValue.ToStringLiteral;
+  Result := AThisValue.ToStringLiteral;
 end;
 
 procedure EnsureSymbolPrototype;

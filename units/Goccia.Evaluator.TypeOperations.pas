@@ -5,35 +5,44 @@ unit Goccia.Evaluator.TypeOperations;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ArrayValue, Goccia.Values.ObjectValue,
-  Goccia.Values.ClassValue, Goccia.Values.FunctionValue, Goccia.Values.NativeFunction,
-  Goccia.Values.FunctionBase, SysUtils;
+  SysUtils,
+
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ClassValue,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
-  TIsObjectInstanceOfClassFunction = function(Obj: TGocciaObjectValue; ClassValue: TGocciaClassValue): Boolean;
+  TIsObjectInstanceOfClassFunction = function(const AObj: TGocciaObjectValue; const AClassValue: TGocciaClassValue): Boolean;
 
-function EvaluateTypeof(Operand: TGocciaValue): TGocciaValue; inline;
-function EvaluateInstanceof(Left, Right: TGocciaValue; IsObjectInstanceOfClass: TIsObjectInstanceOfClassFunction): TGocciaValue;
-function EvaluateInOperator(Left, Right: TGocciaValue): TGocciaValue;
+function EvaluateTypeof(const AOperand: TGocciaValue): TGocciaValue; inline;
+function EvaluateInstanceof(const ALeft, ARight: TGocciaValue; const AIsObjectInstanceOfClass: TIsObjectInstanceOfClassFunction): TGocciaValue;
+function EvaluateInOperator(const ALeft, ARight: TGocciaValue): TGocciaValue;
 
 implementation
 
-uses Goccia.Values.ErrorHelper, Goccia.Values.SymbolValue, Goccia.Keywords;
+uses
+  Goccia.Keywords,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.SymbolValue;
 
-function EvaluateTypeof(Operand: TGocciaValue): TGocciaValue;
+function EvaluateTypeof(const AOperand: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(Operand.TypeOf);
+  Result := TGocciaStringLiteralValue.Create(AOperand.TypeOf);
 end;
 
-function IsPrototypeInChain(Obj: TGocciaObjectValue; TargetProto: TGocciaObjectValue): Boolean;
+function IsPrototypeInChain(const AObj: TGocciaObjectValue; const ATargetProto: TGocciaObjectValue): Boolean;
 var
   CurrentProto: TGocciaObjectValue;
 begin
   Result := False;
-  CurrentProto := Obj.Prototype;
+  CurrentProto := AObj.Prototype;
   while Assigned(CurrentProto) do
   begin
-    if CurrentProto = TargetProto then
+    if CurrentProto = ATargetProto then
     begin
       Result := True;
       Exit;
@@ -42,21 +51,21 @@ begin
   end;
 end;
 
-function EvaluateInstanceof(Left, Right: TGocciaValue; IsObjectInstanceOfClass: TIsObjectInstanceOfClassFunction): TGocciaValue;
+function EvaluateInstanceof(const ALeft, ARight: TGocciaValue; const AIsObjectInstanceOfClass: TIsObjectInstanceOfClassFunction): TGocciaValue;
 var
   ConstructorProto: TGocciaValue;
 begin
-  // Right operand must be callable (a constructor)
-  if not (Right is TGocciaClassValue) then
+  // ARight operand must be callable (a constructor)
+  if not (ARight is TGocciaClassValue) then
   begin
     // Check for native function constructors (e.g. Error, TypeError)
-    // ECMAScript: get Right.prototype and walk Left's prototype chain
-    if (Right is TGocciaFunctionBase) and (Left is TGocciaObjectValue) then
+    // ECMAScript: get ARight.prototype and walk ALeft's prototype chain
+    if (ARight is TGocciaFunctionBase) and (ALeft is TGocciaObjectValue) then
     begin
-      ConstructorProto := TGocciaFunctionBase(Right).GetProperty('prototype');
+      ConstructorProto := TGocciaFunctionBase(ARight).GetProperty('prototype');
       if (ConstructorProto is TGocciaObjectValue) then
       begin
-        if IsPrototypeInChain(TGocciaObjectValue(Left), TGocciaObjectValue(ConstructorProto)) then
+        if IsPrototypeInChain(TGocciaObjectValue(ALeft), TGocciaObjectValue(ConstructorProto)) then
           Result := TGocciaBooleanLiteralValue.TrueValue
         else
           Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -67,57 +76,57 @@ begin
   end
   else
   begin
-    // Check if Left is an instance of the Right class
-    if Left is TGocciaInstanceValue then
+    // Check if ALeft is an instance of the ARight class
+    if ALeft is TGocciaInstanceValue then
     begin
       // For class instances, check inheritance chain
-      if TGocciaClassValue(Right).Name = 'Object' then
+      if TGocciaClassValue(ARight).Name = 'Object' then
       begin
         // All class instances are instances of Object
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end
       else
       begin
-        if TGocciaInstanceValue(Left).IsInstanceOf(TGocciaClassValue(Right)) then
+        if TGocciaInstanceValue(ALeft).IsInstanceOf(TGocciaClassValue(ARight)) then
           Result := TGocciaBooleanLiteralValue.TrueValue
         else
           Result := TGocciaBooleanLiteralValue.FalseValue;
       end;
     end
-    else if (Left is TGocciaFunctionValue) and (TGocciaClassValue(Right).Name = 'Function') then
+    else if (ALeft is TGocciaFunctionValue) and (TGocciaClassValue(ARight).Name = 'Function') then
     begin
       // Functions are instances of Function
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    else if (Left is TGocciaNativeFunctionValue) and (TGocciaClassValue(Right).Name = 'Function') then
+    else if (ALeft is TGocciaNativeFunctionValue) and (TGocciaClassValue(ARight).Name = 'Function') then
     begin
       // Native functions are also instances of Function
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    else if (Left is TGocciaClassValue) and (TGocciaClassValue(Right).Name = 'Function') then
+    else if (ALeft is TGocciaClassValue) and (TGocciaClassValue(ARight).Name = 'Function') then
     begin
       // Classes are also instances of Function (since classes are constructor functions)
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    else if (Left is TGocciaArrayValue) and (TGocciaClassValue(Right).Name = 'Array') then
+    else if (ALeft is TGocciaArrayValue) and (TGocciaClassValue(ARight).Name = 'Array') then
     begin
       // Arrays are instances of Array
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    else if (Left is TGocciaArrayValue) and (TGocciaClassValue(Right).Name = 'Object') then
+    else if (ALeft is TGocciaArrayValue) and (TGocciaClassValue(ARight).Name = 'Object') then
     begin
       // Arrays are also instances of Object (inheritance)
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    else if (Left is TGocciaObjectValue) and (TGocciaClassValue(Right).Name = 'Object') then
+    else if (ALeft is TGocciaObjectValue) and (TGocciaClassValue(ARight).Name = 'Object') then
     begin
       // Objects are instances of Object
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    else if Left is TGocciaObjectValue then
+    else if ALeft is TGocciaObjectValue then
     begin
       // General object instanceof check - walk the prototype chain
-      if IsObjectInstanceOfClass(TGocciaObjectValue(Left), TGocciaClassValue(Right)) then
+      if AIsObjectInstanceOfClass(TGocciaObjectValue(ALeft), TGocciaClassValue(ARight)) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -127,21 +136,21 @@ begin
   end;
 end;
 
-function EvaluateInOperator(Left, Right: TGocciaValue): TGocciaValue;
+function EvaluateInOperator(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   PropertyName: string;
   Index: Integer;
 begin
   // ECMAScript: right operand must be an object, not a primitive
-  if Right.IsPrimitive then
+  if ARight.IsPrimitive then
     ThrowTypeError('Cannot use ''' + KEYWORD_IN + ''' operator to search for ''' +
-      Left.ToStringLiteral.Value + ''' in ' + Right.ToStringLiteral.Value);
+      ALeft.ToStringLiteral.Value + ''' in ' + ARight.ToStringLiteral.Value);
 
-  if Left is TGocciaSymbolValue then
+  if ALeft is TGocciaSymbolValue then
   begin
-    if Right is TGocciaObjectValue then
+    if ARight is TGocciaObjectValue then
     begin
-      if TGocciaObjectValue(Right).HasSymbolProperty(TGocciaSymbolValue(Left)) then
+      if TGocciaObjectValue(ARight).HasSymbolProperty(TGocciaSymbolValue(ALeft)) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -151,18 +160,18 @@ begin
     Exit;
   end;
 
-  PropertyName := Left.ToStringLiteral.Value;
+  PropertyName := ALeft.ToStringLiteral.Value;
 
-  if Right is TGocciaArrayValue then
+  if ARight is TGocciaArrayValue then
   begin
     // For arrays, first try to parse as integer index
     try
       Index := StrToInt(PropertyName);
       // Check if index is valid (in bounds and not a hole)
-      if (Index >= 0) and (Index < TGocciaArrayValue(Right).Elements.Count) then
+      if (Index >= 0) and (Index < TGocciaArrayValue(ARight).Elements.Count) then
       begin
         // For sparse arrays, also check that the element is not nil (not a hole)
-        if TGocciaArrayValue(Right).Elements[Index] <> nil then
+        if TGocciaArrayValue(ARight).Elements[Index] <> nil then
           Result := TGocciaBooleanLiteralValue.TrueValue
         else
           Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -172,24 +181,24 @@ begin
     except
       // If not a valid integer, check if it's a property in the prototype chain
       // This includes 'length', array methods like 'push', 'pop', etc.
-      if TGocciaArrayValue(Right).HasProperty(PropertyName) then
+      if TGocciaArrayValue(ARight).HasProperty(PropertyName) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
     end;
   end
-  else if Right is TGocciaInstanceValue then
+  else if ARight is TGocciaInstanceValue then
   begin
     // Check if property exists in class instance
-    if TGocciaInstanceValue(Right).HasProperty(PropertyName) then
+    if TGocciaInstanceValue(ARight).HasProperty(PropertyName) then
       Result := TGocciaBooleanLiteralValue.TrueValue
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;
   end
-  else if Right is TGocciaObjectValue then
+  else if ARight is TGocciaObjectValue then
   begin
     // Check if property exists in object (check after arrays and instances)
-    if TGocciaObjectValue(Right).HasProperty(PropertyName) then
+    if TGocciaObjectValue(ARight).HasProperty(PropertyName) then
       Result := TGocciaBooleanLiteralValue.TrueValue
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;

@@ -5,9 +5,13 @@ unit Goccia.Values.TemporalInstant;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectValue,
-  Goccia.Values.NativeFunction, Goccia.Arguments.Collection,
-  Goccia.SharedPrototype, SysUtils;
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.SharedPrototype,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaTemporalInstantValue = class(TGocciaObjectValue)
@@ -17,26 +21,26 @@ type
     FEpochMilliseconds: Int64;
     FSubMillisecondNanoseconds: Integer;
 
-    function GetEpochMilliseconds(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function GetEpochNanoseconds(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function GetEpochMilliseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetEpochNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
-    function InstantAdd(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function InstantSubtract(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function InstantUntil(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function InstantSince(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function InstantRound(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function InstantEquals(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function InstantToString(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function InstantToJSON(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function InstantValueOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function InstantAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function InstantValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
     function TotalNanoseconds: Double;
   public
-    constructor Create(AEpochMilliseconds: Int64; ASubMillisecondNanoseconds: Integer); overload;
+    constructor Create(const AEpochMilliseconds: Int64; const ASubMillisecondNanoseconds: Integer); overload;
 
     function ToStringTag: string; override;
-    class procedure ExposePrototype(AConstructor: TGocciaObjectValue);
+    class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
 
     property EpochMilliseconds: Int64 read FEpochMilliseconds;
     property SubMillisecondNanoseconds: Integer read FSubMillisecondNanoseconds;
@@ -45,18 +49,20 @@ type
 implementation
 
 uses
-  Goccia.Values.ErrorHelper, Goccia.GarbageCollector,
-  Goccia.Values.ObjectPropertyDescriptor, Goccia.Temporal.Utils,
+  Goccia.GarbageCollector,
+  Goccia.Temporal.Utils,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalDuration;
 
-function AsInstant(AValue: TGocciaValue; const AMethod: string): TGocciaTemporalInstantValue;
+function AsInstant(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalInstantValue;
 begin
   if not (AValue is TGocciaTemporalInstantValue) then
     ThrowTypeError(AMethod + ' called on non-Instant');
   Result := TGocciaTemporalInstantValue(AValue);
 end;
 
-function CoerceInstant(AValue: TGocciaValue; const AMethod: string): TGocciaTemporalInstantValue;
+function CoerceInstant(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalInstantValue;
 var
   DateRec: TTemporalDateRecord;
   TimeRec: TTemporalTimeRecord;
@@ -85,7 +91,7 @@ end;
 
 { TGocciaTemporalInstantValue }
 
-constructor TGocciaTemporalInstantValue.Create(AEpochMilliseconds: Int64; ASubMillisecondNanoseconds: Integer);
+constructor TGocciaTemporalInstantValue.Create(const AEpochMilliseconds: Int64; const ASubMillisecondNanoseconds: Integer);
 begin
   inherited Create(nil);
   FEpochMilliseconds := AEpochMilliseconds;
@@ -134,7 +140,7 @@ begin
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantValueOf, 'valueOf', 0));
 end;
 
-class procedure TGocciaTemporalInstantValue.ExposePrototype(AConstructor: TGocciaObjectValue);
+class procedure TGocciaTemporalInstantValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
 begin
   if not Assigned(FShared) then
     TGocciaTemporalInstantValue.Create(0, 0);
@@ -153,22 +159,22 @@ end;
 
 { Getters }
 
-function TGocciaTemporalInstantValue.GetEpochMilliseconds(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalInstantValue.GetEpochMilliseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(AsInstant(ThisValue, 'get Instant.epochMilliseconds').FEpochMilliseconds);
+  Result := TGocciaNumberLiteralValue.Create(AsInstant(AThisValue, 'get Instant.epochMilliseconds').FEpochMilliseconds);
 end;
 
-function TGocciaTemporalInstantValue.GetEpochNanoseconds(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalInstantValue.GetEpochNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst: TGocciaTemporalInstantValue;
 begin
-  Inst := AsInstant(ThisValue, 'get Instant.epochNanoseconds');
+  Inst := AsInstant(AThisValue, 'get Instant.epochNanoseconds');
   Result := TGocciaNumberLiteralValue.Create(Inst.TotalNanoseconds);
 end;
 
 { Methods }
 
-function TGocciaTemporalInstantValue.InstantAdd(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalInstantValue.InstantAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst: TGocciaTemporalInstantValue;
   Dur: TGocciaTemporalDurationValue;
@@ -177,8 +183,8 @@ var
   NewMs: Int64;
   NewSubMs: Integer;
 begin
-  Inst := AsInstant(ThisValue, 'Instant.prototype.add');
-  Arg := Args.GetElement(0);
+  Inst := AsInstant(AThisValue, 'Instant.prototype.add');
+  Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaTemporalDurationValue then
     Dur := TGocciaTemporalDurationValue(Arg)
@@ -212,7 +218,7 @@ begin
   Result := TGocciaTemporalInstantValue.Create(NewMs, NewSubMs);
 end;
 
-function TGocciaTemporalInstantValue.InstantSubtract(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalInstantValue.InstantSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst: TGocciaTemporalInstantValue;
   Dur: TGocciaTemporalDurationValue;
@@ -221,8 +227,8 @@ var
   NewMs: Int64;
   NewSubMs: Integer;
 begin
-  Inst := AsInstant(ThisValue, 'Instant.prototype.subtract');
-  Arg := Args.GetElement(0);
+  Inst := AsInstant(AThisValue, 'Instant.prototype.subtract');
+  Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaTemporalDurationValue then
     Dur := TGocciaTemporalDurationValue(Arg)
@@ -255,15 +261,15 @@ begin
   Result := TGocciaTemporalInstantValue.Create(NewMs, NewSubMs);
 end;
 
-function TGocciaTemporalInstantValue.InstantUntil(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalInstantValue.InstantUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst, Other: TGocciaTemporalInstantValue;
   DiffMs: Int64;
   DiffSubMs: Integer;
   DiffNs: Int64;
 begin
-  Inst := AsInstant(ThisValue, 'Instant.prototype.until');
-  Other := CoerceInstant(Args.GetElement(0), 'Instant.prototype.until');
+  Inst := AsInstant(AThisValue, 'Instant.prototype.until');
+  Other := CoerceInstant(AArgs.GetElement(0), 'Instant.prototype.until');
 
   DiffMs := Other.FEpochMilliseconds - Inst.FEpochMilliseconds;
   DiffSubMs := Other.FSubMillisecondNanoseconds - Inst.FSubMillisecondNanoseconds;
@@ -280,15 +286,15 @@ begin
     DiffNs mod 1000);
 end;
 
-function TGocciaTemporalInstantValue.InstantSince(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalInstantValue.InstantSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst, Other: TGocciaTemporalInstantValue;
   DiffMs: Int64;
   DiffSubMs: Integer;
   DiffNs: Int64;
 begin
-  Inst := AsInstant(ThisValue, 'Instant.prototype.since');
-  Other := CoerceInstant(Args.GetElement(0), 'Instant.prototype.since');
+  Inst := AsInstant(AThisValue, 'Instant.prototype.since');
+  Other := CoerceInstant(AArgs.GetElement(0), 'Instant.prototype.since');
 
   DiffMs := Inst.FEpochMilliseconds - Other.FEpochMilliseconds;
   DiffSubMs := Inst.FSubMillisecondNanoseconds - Other.FSubMillisecondNanoseconds;
@@ -304,7 +310,7 @@ begin
     DiffNs mod 1000);
 end;
 
-function TGocciaTemporalInstantValue.InstantRound(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalInstantValue.InstantRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst: TGocciaTemporalInstantValue;
   UnitStr: string;
@@ -312,8 +318,8 @@ var
   TotalNs, Divisor, Rounded, NewMs: Int64;
   NewSubMs: Integer;
 begin
-  Inst := AsInstant(ThisValue, 'Instant.prototype.round');
-  Arg := Args.GetElement(0);
+  Inst := AsInstant(AThisValue, 'Instant.prototype.round');
+  Arg := AArgs.GetElement(0);
 
   if Arg is TGocciaStringLiteralValue then
     UnitStr := TGocciaStringLiteralValue(Arg).Value
@@ -360,12 +366,12 @@ begin
   Result := TGocciaTemporalInstantValue.Create(NewMs, NewSubMs);
 end;
 
-function TGocciaTemporalInstantValue.InstantEquals(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalInstantValue.InstantEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst, Other: TGocciaTemporalInstantValue;
 begin
-  Inst := AsInstant(ThisValue, 'Instant.prototype.equals');
-  Other := CoerceInstant(Args.GetElement(0), 'Instant.prototype.equals');
+  Inst := AsInstant(AThisValue, 'Instant.prototype.equals');
+  Other := CoerceInstant(AArgs.GetElement(0), 'Instant.prototype.equals');
 
   if (Inst.FEpochMilliseconds = Other.FEpochMilliseconds) and
      (Inst.FSubMillisecondNanoseconds = Other.FSubMillisecondNanoseconds) then
@@ -374,7 +380,7 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-function TGocciaTemporalInstantValue.InstantToString(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalInstantValue.InstantToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst: TGocciaTemporalInstantValue;
   DateRec: TTemporalDateRecord;
@@ -383,7 +389,7 @@ var
   Us, Ns: Integer;
   S: string;
 begin
-  Inst := AsInstant(ThisValue, 'Instant.prototype.toString');
+  Inst := AsInstant(AThisValue, 'Instant.prototype.toString');
 
   EpochDays := Inst.FEpochMilliseconds div Int64(86400000);
   RemainingMs := Inst.FEpochMilliseconds mod Int64(86400000);
@@ -410,12 +416,12 @@ begin
   Result := TGocciaStringLiteralValue.Create(S);
 end;
 
-function TGocciaTemporalInstantValue.InstantToJSON(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalInstantValue.InstantToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := InstantToString(Args, ThisValue);
+  Result := InstantToString(AArgs, AThisValue);
 end;
 
-function TGocciaTemporalInstantValue.InstantValueOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTemporalInstantValue.InstantValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   ThrowTypeError('Temporal.Instant.prototype.valueOf cannot be used; use epochMilliseconds, epochNanoseconds, or compare instead');
   Result := nil;

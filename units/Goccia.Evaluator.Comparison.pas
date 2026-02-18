@@ -5,173 +5,179 @@ unit Goccia.Evaluator.Comparison;
 interface
 
 uses
-  Math, Goccia.Values.Primitives;
+  Math,
 
-function IsStrictEqual(Left, Right: TGocciaValue): Boolean;
-function IsNotStrictEqual(Left, Right: TGocciaValue): Boolean; inline;
+  Goccia.Values.Primitives;
 
-function IsSameValue(Left, Right: TGocciaValue): Boolean;
-function IsSameValueZero(Left, Right: TGocciaValue): Boolean;
+function IsStrictEqual(const ALeft, ARight: TGocciaValue): Boolean;
+function IsNotStrictEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
 
-function IsDeepEqual(const Actual, Expected: TGocciaValue): Boolean;
+function IsSameValue(const ALeft, ARight: TGocciaValue): Boolean;
+function IsSameValueZero(const ALeft, ARight: TGocciaValue): Boolean;
 
-function GreaterThan(Left, Right: TGocciaValue): Boolean;
-function GreaterThanOrEqual(Left, Right: TGocciaValue): Boolean; inline;
-function LessThan(Left, Right: TGocciaValue): Boolean;
-function LessThanOrEqual(Left, Right: TGocciaValue): Boolean; inline;
+function IsDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
+
+function GreaterThan(const ALeft, ARight: TGocciaValue): Boolean;
+function GreaterThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+function LessThan(const ALeft, ARight: TGocciaValue): Boolean;
+function LessThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
 
 implementation
 
-uses Goccia.Values.ArrayValue, Goccia.Values.ObjectValue, Goccia.Values.ClassHelper,
-     Goccia.Values.SetValue, Goccia.Values.MapValue;
+uses
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.MapValue,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.SetValue;
 
-function IsNegativeZero(Value: TGocciaNumberLiteralValue): Boolean; inline;
+function IsNegativeZero(const AValue: TGocciaNumberLiteralValue): Boolean; inline;
 begin
-  Result := Value.IsNegativeZero;
+  Result := AValue.IsNegativeZero;
 end;
 
-function IsStrictEqual(Left, Right: TGocciaValue): Boolean;
+function IsStrictEqual(const ALeft, ARight: TGocciaValue): Boolean;
 begin
-  if (Left is TGocciaUndefinedLiteralValue) and (Right is TGocciaUndefinedLiteralValue) then
+  if (ALeft is TGocciaUndefinedLiteralValue) and (ARight is TGocciaUndefinedLiteralValue) then
   begin
     Result := True;
     Exit;
   end;
 
-  if (Left is TGocciaNullLiteralValue) and (Right is TGocciaNullLiteralValue) then
+  if (ALeft is TGocciaNullLiteralValue) and (ARight is TGocciaNullLiteralValue) then
   begin
     Result := True;
     Exit;
   end;
 
-  if (Left is TGocciaBooleanLiteralValue) and (Right is TGocciaBooleanLiteralValue) then
+  if (ALeft is TGocciaBooleanLiteralValue) and (ARight is TGocciaBooleanLiteralValue) then
   begin
-    Result := TGocciaBooleanLiteralValue(Left).Value = TGocciaBooleanLiteralValue(Right).Value;
+    Result := TGocciaBooleanLiteralValue(ALeft).Value = TGocciaBooleanLiteralValue(ARight).Value;
     Exit;
   end;
 
-  if (Left is TGocciaNumberLiteralValue) and (Right is TGocciaNumberLiteralValue) then
+  if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaNumberLiteralValue) then
   begin
-    if TGocciaNumberLiteralValue(Left).IsNaN or TGocciaNumberLiteralValue(Right).IsNaN then
+    if TGocciaNumberLiteralValue(ALeft).IsNaN or TGocciaNumberLiteralValue(ARight).IsNaN then
     begin
       Result := False;
       Exit;
     end;
 
-    if (TGocciaNumberLiteralValue(Left).IsInfinity or TGocciaNumberLiteralValue(Left).IsNegativeInfinity) and
-       (TGocciaNumberLiteralValue(Right).IsInfinity or TGocciaNumberLiteralValue(Right).IsNegativeInfinity) then
+    if (TGocciaNumberLiteralValue(ALeft).IsInfinity or TGocciaNumberLiteralValue(ALeft).IsNegativeInfinity) and
+       (TGocciaNumberLiteralValue(ARight).IsInfinity or TGocciaNumberLiteralValue(ARight).IsNegativeInfinity) then
     begin
       // Both are infinity: check if same sign
-      Result := (TGocciaNumberLiteralValue(Left).IsInfinity and TGocciaNumberLiteralValue(Right).IsInfinity) or
-                (TGocciaNumberLiteralValue(Left).IsNegativeInfinity and TGocciaNumberLiteralValue(Right).IsNegativeInfinity);
+      Result := (TGocciaNumberLiteralValue(ALeft).IsInfinity and TGocciaNumberLiteralValue(ARight).IsInfinity) or
+                (TGocciaNumberLiteralValue(ALeft).IsNegativeInfinity and TGocciaNumberLiteralValue(ARight).IsNegativeInfinity);
       Exit;
     end;
 
-    if (TGocciaNumberLiteralValue(Left).IsInfinity or TGocciaNumberLiteralValue(Left).IsNegativeInfinity) or
-       (TGocciaNumberLiteralValue(Right).IsInfinity or TGocciaNumberLiteralValue(Right).IsNegativeInfinity) then
+    if (TGocciaNumberLiteralValue(ALeft).IsInfinity or TGocciaNumberLiteralValue(ALeft).IsNegativeInfinity) or
+       (TGocciaNumberLiteralValue(ARight).IsInfinity or TGocciaNumberLiteralValue(ARight).IsNegativeInfinity) then
     begin
       Result := False;
       Exit;
     end;
 
-    Result := TGocciaNumberLiteralValue(Left).Value = TGocciaNumberLiteralValue(Right).Value;
+    Result := TGocciaNumberLiteralValue(ALeft).Value = TGocciaNumberLiteralValue(ARight).Value;
     Exit;
   end;
 
-  if (Left is TGocciaStringLiteralValue) and (Right is TGocciaStringLiteralValue) then
+  if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
   begin
-    Result := TGocciaStringLiteralValue(Left).Value = TGocciaStringLiteralValue(Right).Value;
+    Result := TGocciaStringLiteralValue(ALeft).Value = TGocciaStringLiteralValue(ARight).Value;
     Exit;
   end;
 
-  Result := Left = Right; // Reference equality for objects
+  Result := ALeft = ARight; // Reference equality for objects
 end;
 
-function IsNotStrictEqual(Left, Right: TGocciaValue): Boolean;
+function IsNotStrictEqual(const ALeft, ARight: TGocciaValue): Boolean;
 begin
-  Result := not IsStrictEqual(Left, Right);
+  Result := not IsStrictEqual(ALeft, ARight);
 end;
 
-function IsSameValue(Left, Right: TGocciaValue): Boolean;
+function IsSameValue(const ALeft, ARight: TGocciaValue): Boolean;
 begin
   // Handle undefined values
-  if (Left is TGocciaUndefinedLiteralValue) and (Right is TGocciaUndefinedLiteralValue) then
+  if (ALeft is TGocciaUndefinedLiteralValue) and (ARight is TGocciaUndefinedLiteralValue) then
   begin
     Result := True;
     Exit;
   end;
 
   // Handle null values
-  if (Left is TGocciaNullLiteralValue) and (Right is TGocciaNullLiteralValue) then
+  if (ALeft is TGocciaNullLiteralValue) and (ARight is TGocciaNullLiteralValue) then
   begin
     Result := True;
     Exit;
   end;
 
   // Handle boolean values
-  if (Left is TGocciaBooleanLiteralValue) and (Right is TGocciaBooleanLiteralValue) then
+  if (ALeft is TGocciaBooleanLiteralValue) and (ARight is TGocciaBooleanLiteralValue) then
   begin
-    Result := TGocciaBooleanLiteralValue(Left).Value = TGocciaBooleanLiteralValue(Right).Value;
+    Result := TGocciaBooleanLiteralValue(ALeft).Value = TGocciaBooleanLiteralValue(ARight).Value;
     Exit;
   end;
 
   // Handle number values
-  if (Left is TGocciaNumberLiteralValue) and (Right is TGocciaNumberLiteralValue) then
+  if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaNumberLiteralValue) then
   begin
     // Both NaN values are considered equal
-    if TGocciaNumberLiteralValue(Left).IsNaN and TGocciaNumberLiteralValue(Right).IsNaN then
+    if TGocciaNumberLiteralValue(ALeft).IsNaN and TGocciaNumberLiteralValue(ARight).IsNaN then
     begin
       Result := True;
       Exit;
     end;
 
     // If one is NaN and the other isn't, they're different
-    if TGocciaNumberLiteralValue(Left).IsNaN or TGocciaNumberLiteralValue(Right).IsNaN then
+    if TGocciaNumberLiteralValue(ALeft).IsNaN or TGocciaNumberLiteralValue(ARight).IsNaN then
     begin
       Result := False;
       Exit;
     end;
 
     // Handle +0 and -0 (they are different in Object.is)
-    if (TGocciaNumberLiteralValue(Left).Value = 0) and (TGocciaNumberLiteralValue(Right).Value = 0) then
+    if (TGocciaNumberLiteralValue(ALeft).Value = 0) and (TGocciaNumberLiteralValue(ARight).Value = 0) then
     begin
       // Use our safe signed zero detection
-      Result := IsNegativeZero(TGocciaNumberLiteralValue(Left)) = IsNegativeZero(TGocciaNumberLiteralValue(Right));
+      Result := IsNegativeZero(TGocciaNumberLiteralValue(ALeft)) = IsNegativeZero(TGocciaNumberLiteralValue(ARight));
       Exit;
     end;
 
     // Regular number comparison
-    Result := TGocciaNumberLiteralValue(Left).Value = TGocciaNumberLiteralValue(Right).Value;
+    Result := TGocciaNumberLiteralValue(ALeft).Value = TGocciaNumberLiteralValue(ARight).Value;
     Exit;
   end;
 
   // Handle string values
-  if (Left is TGocciaStringLiteralValue) and (Right is TGocciaStringLiteralValue) then
+  if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
   begin
-    Result := TGocciaStringLiteralValue(Left).Value = TGocciaStringLiteralValue(Right).Value;
+    Result := TGocciaStringLiteralValue(ALeft).Value = TGocciaStringLiteralValue(ARight).Value;
     Exit;
   end;
 
   // For all other types, use reference equality
-  Result := Left = Right;
+  Result := ALeft = ARight;
 end;
 
-function IsSameValueZero(Left, Right: TGocciaValue): Boolean;
+function IsSameValueZero(const ALeft, ARight: TGocciaValue): Boolean;
 var
   LeftNum, RightNum: Double;
 begin
   // Use SameValue for most cases
-  if IsSameValue(Left, Right) then
+  if IsSameValue(ALeft, ARight) then
   begin
     Result := True;
     Exit;
   end;
 
   // Handle +0 and -0 specifically
-  if (Left is TGocciaNumberLiteralValue) and (Right is TGocciaNumberLiteralValue) then
+  if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaNumberLiteralValue) then
   begin
-    LeftNum := TGocciaNumberLiteralValue(Left).Value;
-    RightNum := TGocciaNumberLiteralValue(Right).Value;
+    LeftNum := TGocciaNumberLiteralValue(ALeft).Value;
+    RightNum := TGocciaNumberLiteralValue(ARight).Value;
 
     // Both are zero (either +0 or -0)
     if (LeftNum = 0) and (RightNum = 0) then
@@ -184,7 +190,7 @@ begin
   Result := False;
 end;
 
-function IsDeepEqual(const Actual, Expected: TGocciaValue): Boolean;
+function IsDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
 var
   ActualObj, ExpectedObj: TGocciaObjectValue;
   ActualArr, ExpectedArr: TGocciaArrayValue;
@@ -193,24 +199,24 @@ var
   Key: string;
 begin
   // Base case: strict equality (handles primitives and same object references)
-  if IsStrictEqual(Actual, Expected) then
+  if IsStrictEqual(AActual, AExpected) then
   begin
     Result := True;
     Exit;
   end;
 
   // Type mismatch
-  if Actual.TypeName <> Expected.TypeName then
+  if AActual.TypeName <> AExpected.TypeName then
   begin
     Result := False;
     Exit;
   end;
 
   // Handle arrays
-  if (Actual is TGocciaArrayValue) and (Expected is TGocciaArrayValue) then
+  if (AActual is TGocciaArrayValue) and (AExpected is TGocciaArrayValue) then
   begin
-    ActualArr := TGocciaArrayValue(Actual);
-    ExpectedArr := TGocciaArrayValue(Expected);
+    ActualArr := TGocciaArrayValue(AActual);
+    ExpectedArr := TGocciaArrayValue(AExpected);
 
     // Check lengths
     if ActualArr.Elements.Count <> ExpectedArr.Elements.Count then
@@ -244,16 +250,16 @@ begin
   end;
 
   // Handle Sets
-  if (Actual is TGocciaSetValue) and (Expected is TGocciaSetValue) then
+  if (AActual is TGocciaSetValue) and (AExpected is TGocciaSetValue) then
   begin
-    if TGocciaSetValue(Actual).Items.Count <> TGocciaSetValue(Expected).Items.Count then
+    if TGocciaSetValue(AActual).Items.Count <> TGocciaSetValue(AExpected).Items.Count then
     begin
       Result := False;
       Exit;
     end;
-    for I := 0 to TGocciaSetValue(Actual).Items.Count - 1 do
+    for I := 0 to TGocciaSetValue(AActual).Items.Count - 1 do
     begin
-      if not IsDeepEqual(TGocciaSetValue(Actual).Items[I], TGocciaSetValue(Expected).Items[I]) then
+      if not IsDeepEqual(TGocciaSetValue(AActual).Items[I], TGocciaSetValue(AExpected).Items[I]) then
       begin
         Result := False;
         Exit;
@@ -264,21 +270,21 @@ begin
   end;
 
   // Handle Maps
-  if (Actual is TGocciaMapValue) and (Expected is TGocciaMapValue) then
+  if (AActual is TGocciaMapValue) and (AExpected is TGocciaMapValue) then
   begin
-    if TGocciaMapValue(Actual).Entries.Count <> TGocciaMapValue(Expected).Entries.Count then
+    if TGocciaMapValue(AActual).Entries.Count <> TGocciaMapValue(AExpected).Entries.Count then
     begin
       Result := False;
       Exit;
     end;
-    for I := 0 to TGocciaMapValue(Actual).Entries.Count - 1 do
+    for I := 0 to TGocciaMapValue(AActual).Entries.Count - 1 do
     begin
-      if not IsDeepEqual(TGocciaMapValue(Actual).Entries[I].Key, TGocciaMapValue(Expected).Entries[I].Key) then
+      if not IsDeepEqual(TGocciaMapValue(AActual).Entries[I].Key, TGocciaMapValue(AExpected).Entries[I].Key) then
       begin
         Result := False;
         Exit;
       end;
-      if not IsDeepEqual(TGocciaMapValue(Actual).Entries[I].Value, TGocciaMapValue(Expected).Entries[I].Value) then
+      if not IsDeepEqual(TGocciaMapValue(AActual).Entries[I].Value, TGocciaMapValue(AExpected).Entries[I].Value) then
       begin
         Result := False;
         Exit;
@@ -289,13 +295,13 @@ begin
   end;
 
   // Handle objects (but not arrays/sets/maps which inherit from TGocciaObjectValue)
-  if (Actual is TGocciaObjectValue) and (Expected is TGocciaObjectValue) and
-     not (Actual is TGocciaArrayValue) and not (Expected is TGocciaArrayValue) and
-     not (Actual is TGocciaSetValue) and not (Expected is TGocciaSetValue) and
-     not (Actual is TGocciaMapValue) and not (Expected is TGocciaMapValue) then
+  if (AActual is TGocciaObjectValue) and (AExpected is TGocciaObjectValue) and
+     not (AActual is TGocciaArrayValue) and not (AExpected is TGocciaArrayValue) and
+     not (AActual is TGocciaSetValue) and not (AExpected is TGocciaSetValue) and
+     not (AActual is TGocciaMapValue) and not (AExpected is TGocciaMapValue) then
   begin
-    ActualObj := TGocciaObjectValue(Actual);
-    ExpectedObj := TGocciaObjectValue(Expected);
+    ActualObj := TGocciaObjectValue(AActual);
+    ExpectedObj := TGocciaObjectValue(AExpected);
 
     // Get enumerable property names from both objects
     ActualKeys := ActualObj.GetEnumerablePropertyNames;
@@ -336,129 +342,129 @@ begin
   Result := False;
 end;
 
-function CompareNumbers(LeftNum, RightNum: TGocciaNumberLiteralValue; IsGreater: Boolean): Boolean;
+function CompareNumbers(const ALeftNum, ARightNum: TGocciaNumberLiteralValue; const AIsGreater: Boolean): Boolean;
 begin
   // Handle NaN - always false
-  if LeftNum.IsNaN or RightNum.IsNaN then
+  if ALeftNum.IsNaN or ARightNum.IsNaN then
   begin
     Result := False;
     Exit;
   end;
 
-  if IsGreater then
+  if AIsGreater then
   begin
-    if LeftNum.IsInfinity then
-      Result := not RightNum.IsInfinity
-    else if LeftNum.IsNegativeInfinity then
+    if ALeftNum.IsInfinity then
+      Result := not ARightNum.IsInfinity
+    else if ALeftNum.IsNegativeInfinity then
       Result := False
-    else if RightNum.IsInfinity then
+    else if ARightNum.IsInfinity then
       Result := False
-    else if RightNum.IsNegativeInfinity then
+    else if ARightNum.IsNegativeInfinity then
       Result := True
     else
-      Result := LeftNum.Value > RightNum.Value;
+      Result := ALeftNum.Value > ARightNum.Value;
   end
   else
   begin
-    if LeftNum.IsInfinity then
+    if ALeftNum.IsInfinity then
       Result := False
-    else if LeftNum.IsNegativeInfinity then
-      Result := not RightNum.IsNegativeInfinity
-    else if RightNum.IsInfinity then
+    else if ALeftNum.IsNegativeInfinity then
+      Result := not ARightNum.IsNegativeInfinity
+    else if ARightNum.IsInfinity then
       Result := True
-    else if RightNum.IsNegativeInfinity then
+    else if ARightNum.IsNegativeInfinity then
       Result := False
     else
-      Result := LeftNum.Value < RightNum.Value;
+      Result := ALeftNum.Value < ARightNum.Value;
   end;
 end;
 
-function GreaterThan(Left, Right: TGocciaValue): Boolean;
+function GreaterThan(const ALeft, ARight: TGocciaValue): Boolean;
 begin
   // undefined compared to anything is always false
-  if (Left is TGocciaUndefinedLiteralValue) or (Right is TGocciaUndefinedLiteralValue) then
+  if (ALeft is TGocciaUndefinedLiteralValue) or (ARight is TGocciaUndefinedLiteralValue) then
   begin
     Result := False;
     Exit;
   end;
 
   // null compared to null is false; null compared to other non-numbers handled via coercion
-  if (Left is TGocciaNullLiteralValue) and (Right is TGocciaNullLiteralValue) then
+  if (ALeft is TGocciaNullLiteralValue) and (ARight is TGocciaNullLiteralValue) then
   begin
     Result := False;
     Exit;
   end;
 
   // If both are strings, compare lexicographically
-  if (Left is TGocciaStringLiteralValue) and (Right is TGocciaStringLiteralValue) then
+  if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
   begin
-    Result := TGocciaStringLiteralValue(Left).Value > TGocciaStringLiteralValue(Right).Value;
+    Result := TGocciaStringLiteralValue(ALeft).Value > TGocciaStringLiteralValue(ARight).Value;
     Exit;
   end;
 
   // Otherwise, coerce both to numbers and compare (ECMAScript Abstract Relational Comparison)
-  Result := CompareNumbers(Left.ToNumberLiteral, Right.ToNumberLiteral, True);
+  Result := CompareNumbers(ALeft.ToNumberLiteral, ARight.ToNumberLiteral, True);
 end;
 
-function GreaterThanOrEqual(Left, Right: TGocciaValue): Boolean;
+function GreaterThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean;
 begin
-  if (Left is TGocciaUndefinedLiteralValue) or (Right is TGocciaUndefinedLiteralValue) then
+  if (ALeft is TGocciaUndefinedLiteralValue) or (ARight is TGocciaUndefinedLiteralValue) then
   begin
     Result := False;
     Exit;
   end;
 
   // NaN check after coercion
-  if Left.ToNumberLiteral.IsNaN or Right.ToNumberLiteral.IsNaN then
+  if ALeft.ToNumberLiteral.IsNaN or ARight.ToNumberLiteral.IsNaN then
   begin
     Result := False;
     Exit;
   end;
 
-  Result := not LessThan(Left, Right);
+  Result := not LessThan(ALeft, ARight);
 end;
 
-function LessThan(Left, Right: TGocciaValue): Boolean;
+function LessThan(const ALeft, ARight: TGocciaValue): Boolean;
 begin
-  if (Left is TGocciaUndefinedLiteralValue) or (Right is TGocciaUndefinedLiteralValue) then
+  if (ALeft is TGocciaUndefinedLiteralValue) or (ARight is TGocciaUndefinedLiteralValue) then
   begin
     Result := False;
     Exit;
   end;
 
-  if (Left is TGocciaNullLiteralValue) and (Right is TGocciaNullLiteralValue) then
+  if (ALeft is TGocciaNullLiteralValue) and (ARight is TGocciaNullLiteralValue) then
   begin
     Result := False;
     Exit;
   end;
 
   // If both are strings, compare lexicographically
-  if (Left is TGocciaStringLiteralValue) and (Right is TGocciaStringLiteralValue) then
+  if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
   begin
-    Result := TGocciaStringLiteralValue(Left).Value < TGocciaStringLiteralValue(Right).Value;
+    Result := TGocciaStringLiteralValue(ALeft).Value < TGocciaStringLiteralValue(ARight).Value;
     Exit;
   end;
 
   // Otherwise, coerce both to numbers and compare (ECMAScript Abstract Relational Comparison)
-  Result := CompareNumbers(Left.ToNumberLiteral, Right.ToNumberLiteral, False);
+  Result := CompareNumbers(ALeft.ToNumberLiteral, ARight.ToNumberLiteral, False);
 end;
 
-function LessThanOrEqual(Left, Right: TGocciaValue): Boolean;
+function LessThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean;
 begin
-  if (Left is TGocciaUndefinedLiteralValue) or (Right is TGocciaUndefinedLiteralValue) then
+  if (ALeft is TGocciaUndefinedLiteralValue) or (ARight is TGocciaUndefinedLiteralValue) then
   begin
     Result := False;
     Exit;
   end;
 
   // NaN check after coercion
-  if Left.ToNumberLiteral.IsNaN or Right.ToNumberLiteral.IsNaN then
+  if ALeft.ToNumberLiteral.IsNaN or ARight.ToNumberLiteral.IsNaN then
   begin
     Result := False;
     Exit;
   end;
 
-  Result := not GreaterThan(Left, Right);
+  Result := not GreaterThan(ALeft, ARight);
 end;
 
 end.

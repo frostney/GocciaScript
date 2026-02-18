@@ -8,10 +8,24 @@ unit Goccia.Values.FunctionValue;
 interface
 
 uses
-  Goccia.Interfaces, Goccia.AST.Node, Goccia.AST.Statements, Goccia.AST.Expressions, Goccia.Scope,
-  Goccia.Error, Goccia.Logger, Goccia.Values.Error, Goccia.Values.ObjectValue, Goccia.Values.FunctionBase,
-  Goccia.Arguments.Collection, Generics.Collections, Classes, Math, SysUtils,
-  Goccia.Values.Primitives, Goccia.Token;
+  Classes,
+  Generics.Collections,
+  Math,
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.AST.Expressions,
+  Goccia.AST.Node,
+  Goccia.AST.Statements,
+  Goccia.Error,
+  Goccia.Interfaces,
+  Goccia.Logger,
+  Goccia.Scope,
+  Goccia.Token,
+  Goccia.Values.Error,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaFunctionValue = class(TGocciaFunctionBase)
@@ -24,15 +38,15 @@ type
     FIsSimpleParams: Boolean;
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
-    procedure BindThis(CallScope: TGocciaScope; ThisValue: TGocciaValue); virtual;
+    procedure BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue); virtual;
     function CreateCallScope: TGocciaScope; virtual;
-    function ExecuteBody(CallScope: TGocciaScope; Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ExecuteBody(const ACallScope: TGocciaScope; const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
-    constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string = '');
+    constructor Create(const AParameters: TGocciaParameterArray; const ABodyStatements: TObjectList<TGocciaASTNode>; const AClosure: TGocciaScope; const AName: string = '');
     destructor Destroy; override;
 
-    function Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue; override;
-    function CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue; virtual;
+    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue; virtual;
     procedure GCMarkReferences; override;
 
     property Parameters: TGocciaParameterArray read FParameters;
@@ -44,9 +58,9 @@ type
 
   TGocciaArrowFunctionValue = class(TGocciaFunctionValue)
   protected
-    procedure BindThis(CallScope: TGocciaScope; ThisValue: TGocciaValue); override;
+    procedure BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue); override;
   public
-    function CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue; override;
+    function CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue; override;
   end;
 
   TGocciaMethodValue = class(TGocciaFunctionValue)
@@ -56,7 +70,7 @@ type
   protected
     function CreateCallScope: TGocciaScope; override;
   public
-    constructor Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
+    constructor Create(const AParameters: TGocciaParameterArray; const ABodyStatements: TObjectList<TGocciaASTNode>; const AClosure: TGocciaScope; const AName: string; const ASuperClass: TGocciaValue = nil);
     procedure GCMarkReferences; override;
 
     property SuperClass: TGocciaValue read FSuperClass write FSuperClass;
@@ -66,11 +80,14 @@ type
 implementation
 
 uses
-  Goccia.Evaluator, Goccia.Values.ClassHelper, Goccia.Values.ArrayValue, Goccia.GarbageCollector;
+  Goccia.Evaluator,
+  Goccia.GarbageCollector,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ClassHelper;
 
 { TGocciaFunctionValue }
 
-constructor TGocciaFunctionValue.Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string = '');
+constructor TGocciaFunctionValue.Create(const AParameters: TGocciaParameterArray; const ABodyStatements: TObjectList<TGocciaASTNode>; const AClosure: TGocciaScope; const AName: string = '');
 var
   I: Integer;
 begin
@@ -109,10 +126,10 @@ begin
     FClosure.GCMarkReferences;
 end;
 
-procedure TGocciaFunctionValue.BindThis(CallScope: TGocciaScope; ThisValue: TGocciaValue);
+procedure TGocciaFunctionValue.BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue);
 begin
   // Non-arrow function: use call-site this (shorthand methods, class methods, getters/setters)
-  CallScope.ThisValue := ThisValue;
+  ACallScope.ThisValue := AThisValue;
 end;
 
 function TGocciaFunctionValue.CreateCallScope: TGocciaScope;
@@ -120,7 +137,7 @@ begin
   Result := TGocciaCallScope.Create(FClosure, FName, Length(FParameters) + 2);
 end;
 
-function TGocciaFunctionValue.ExecuteBody(CallScope: TGocciaScope; Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaFunctionValue.ExecuteBody(const ACallScope: TGocciaScope; const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   I, J: Integer;
   ReturnValue: TGocciaValue;
@@ -132,17 +149,17 @@ begin
   Context.LoadModule := nil;
 
   // Bind this via virtual dispatch (arrow vs non-arrow)
-  BindThis(CallScope, ThisValue);
+  BindThis(ACallScope, AThisValue);
 
   // Bind parameters - fast path for simple named params (no rest/destructuring/defaults)
   if FIsSimpleParams then
   begin
     for I := 0 to Length(FParameters) - 1 do
     begin
-      if I < Arguments.Length then
-        CallScope.DefineLexicalBinding(FParameters[I].Name, Arguments.GetElement(I), dtParameter)
+      if I < AArguments.Length then
+        ACallScope.DefineLexicalBinding(FParameters[I].Name, AArguments.GetElement(I), dtParameter)
       else
-        CallScope.DefineLexicalBinding(FParameters[I].Name, TGocciaUndefinedLiteralValue.UndefinedValue, dtParameter);
+        ACallScope.DefineLexicalBinding(FParameters[I].Name, TGocciaUndefinedLiteralValue.UndefinedValue, dtParameter);
     end;
   end
   else
@@ -153,37 +170,37 @@ begin
       if FParameters[I].IsRest then
       begin
         ReturnValue := TGocciaArrayValue.Create;
-        if I < Arguments.Length then
-          for J := I to Arguments.Length - 1 do
-            TGocciaArrayValue(ReturnValue).Elements.Add(Arguments.GetElement(J));
-        CallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
+        if I < AArguments.Length then
+          for J := I to AArguments.Length - 1 do
+            TGocciaArrayValue(ReturnValue).Elements.Add(AArguments.GetElement(J));
+        ACallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
         Break;
       end
       else if FParameters[I].IsPattern then
       begin
-        if I < Arguments.Length then
-          ReturnValue := Arguments.GetElement(I)
+        if I < AArguments.Length then
+          ReturnValue := AArguments.GetElement(I)
         else if Assigned(FParameters[I].DefaultValue) then
           ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context)
         else
           ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-        Context.Scope := CallScope;
+        Context.Scope := ACallScope;
         AssignPattern(FParameters[I].Pattern, ReturnValue, Context, True);
       end
       else
       begin
-        if I < Arguments.Length then
-          CallScope.DefineLexicalBinding(FParameters[I].Name, Arguments.GetElement(I), dtParameter)
+        if I < AArguments.Length then
+          ACallScope.DefineLexicalBinding(FParameters[I].Name, AArguments.GetElement(I), dtParameter)
         else
         begin
           if Assigned(FParameters[I].DefaultValue) then
           begin
             ReturnValue := EvaluateExpression(FParameters[I].DefaultValue, Context);
-            CallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
+            ACallScope.DefineLexicalBinding(FParameters[I].Name, ReturnValue, dtParameter);
           end
           else
-            CallScope.DefineLexicalBinding(FParameters[I].Name, TGocciaUndefinedLiteralValue.UndefinedValue, dtParameter);
+            ACallScope.DefineLexicalBinding(FParameters[I].Name, TGocciaUndefinedLiteralValue.UndefinedValue, dtParameter);
         end;
       end;
     end;
@@ -191,7 +208,7 @@ begin
 
   // Execute function body statements directly
   try
-    Context.Scope := CallScope;
+    Context.Scope := ACallScope;
     ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
     ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -244,7 +261,7 @@ begin
   end;
 end;
 
-function TGocciaFunctionValue.Call(Arguments: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   CallScope: TGocciaScope;
 begin
@@ -255,7 +272,7 @@ begin
   if Assigned(TGocciaGC.Instance) then
     TGocciaGC.Instance.PushActiveScope(CallScope);
   try
-    Result := ExecuteBody(CallScope, Arguments, ThisValue);
+    Result := ExecuteBody(CallScope, AArguments, AThisValue);
   finally
     // Pop active scope from GC stack - the scope may still be alive
     // if captured by closures; the GC will determine reachability
@@ -264,7 +281,7 @@ begin
   end;
 end;
 
-function TGocciaFunctionValue.CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
+function TGocciaFunctionValue.CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue;
 var
   ClonedStatements: TObjectList<TGocciaASTNode>;
   I: Integer;
@@ -275,7 +292,7 @@ begin
   for I := 0 to FBodyStatements.Count - 1 do
     ClonedStatements.Add(FBodyStatements[I]);
 
-  Result := TGocciaFunctionValue.Create(FParameters, ClonedStatements, NewScope, FName);
+  Result := TGocciaFunctionValue.Create(FParameters, ClonedStatements, ANewScope, FName);
 end;
 
 function TGocciaFunctionValue.GetFunctionLength: Integer;
@@ -300,25 +317,25 @@ end;
 
 { TGocciaArrowFunctionValue }
 
-procedure TGocciaArrowFunctionValue.BindThis(CallScope: TGocciaScope; ThisValue: TGocciaValue);
+procedure TGocciaArrowFunctionValue.BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue);
 var
   ClosureScope: TGocciaScope;
 begin
   // Arrow functions always inherit 'this' from their lexical (closure) scope,
-  // per ECMAScript spec. They never use the call-site ThisValue.
+  // per ECMAScript spec. They never use the call-site AThisValue.
   ClosureScope := FClosure;
   while Assigned(ClosureScope) do
   begin
     if Assigned(ClosureScope.ThisValue) and not (ClosureScope.ThisValue is TGocciaUndefinedLiteralValue) then
     begin
-      CallScope.ThisValue := ClosureScope.ThisValue;
+      ACallScope.ThisValue := ClosureScope.ThisValue;
       Break;
     end;
     ClosureScope := ClosureScope.Parent;
   end;
 end;
 
-function TGocciaArrowFunctionValue.CloneWithNewScope(NewScope: TGocciaScope): TGocciaFunctionValue;
+function TGocciaArrowFunctionValue.CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue;
 var
   ClonedStatements: TObjectList<TGocciaASTNode>;
   I: Integer;
@@ -327,12 +344,12 @@ begin
   for I := 0 to FBodyStatements.Count - 1 do
     ClonedStatements.Add(FBodyStatements[I]);
 
-  Result := TGocciaArrowFunctionValue.Create(FParameters, ClonedStatements, NewScope, FName);
+  Result := TGocciaArrowFunctionValue.Create(FParameters, ClonedStatements, ANewScope, FName);
 end;
 
 { TGocciaMethodValue }
 
-constructor TGocciaMethodValue.Create(AParameters: TGocciaParameterArray; ABodyStatements: TObjectList<TGocciaASTNode>; AClosure: TGocciaScope; const AName: string; ASuperClass: TGocciaValue = nil);
+constructor TGocciaMethodValue.Create(const AParameters: TGocciaParameterArray; const ABodyStatements: TObjectList<TGocciaASTNode>; const AClosure: TGocciaScope; const AName: string; const ASuperClass: TGocciaValue = nil);
 begin
   inherited Create(AParameters, ABodyStatements, AClosure, AName);
   FSuperClass := ASuperClass;

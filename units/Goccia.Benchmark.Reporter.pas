@@ -5,7 +5,11 @@ unit Goccia.Benchmark.Reporter;
 interface
 
 uses
-  Classes, SysUtils, Generics.Collections, TimingUtils;
+  Classes,
+  Generics.Collections,
+  SysUtils,
+
+  TimingUtils;
 
 type
   TBenchmarkEntry = record
@@ -41,7 +45,7 @@ type
     procedure RenderCSV;
     procedure RenderJSON;
 
-    function FormatOpsPerSec(Ops: Double): string;
+    function FormatOpsPerSec(const AOps: Double): string;
     function EscapeCSV(const S: string): string;
     function EscapeJSON(const S: string): string;
   public
@@ -49,9 +53,9 @@ type
     destructor Destroy; override;
 
     procedure AddFileResult(const AResult: TBenchmarkFileResult);
-    procedure Render(Format: TBenchmarkReportFormat);
-    procedure WriteToStream(Stream: TStream);
-    procedure WriteToFile(const FileName: string);
+    procedure Render(const AFormat: TBenchmarkReportFormat);
+    procedure WriteToStream(const AStream: TStream);
+    procedure WriteToFile(const AFileName: string);
     procedure WriteToStdOut;
     property Output: TStringList read FOutput;
   end;
@@ -98,13 +102,13 @@ begin
   FFiles[FFileCount - 1] := AResult;
 end;
 
-function TBenchmarkReporter.FormatOpsPerSec(Ops: Double): string;
+function TBenchmarkReporter.FormatOpsPerSec(const AOps: Double): string;
 var
   IntOps: Int64;
   S: string;
   I, Len: Integer;
 begin
-  IntOps := Round(Ops);
+  IntOps := Round(AOps);
   S := IntToStr(IntOps);
   Len := Length(S);
 
@@ -134,10 +138,10 @@ begin
   Result := StringReplace(Result, #9, '\t', [rfReplaceAll]);
 end;
 
-procedure TBenchmarkReporter.Render(Format: TBenchmarkReportFormat);
+procedure TBenchmarkReporter.Render(const AFormat: TBenchmarkReportFormat);
 begin
   FOutput.Clear;
-  case Format of
+  case AFormat of
     brfConsole: RenderConsole;
     brfText:    RenderText;
     brfCSV:     RenderCSV;
@@ -333,18 +337,18 @@ begin
   FOutput.Add('}');
 end;
 
-procedure TBenchmarkReporter.WriteToStream(Stream: TStream);
+procedure TBenchmarkReporter.WriteToStream(const AStream: TStream);
 var
   S: string;
 begin
   S := FOutput.Text;
   if Length(S) > 0 then
-    Stream.WriteBuffer(S[1], Length(S));
+    AStream.WriteBuffer(S[1], Length(S));
 end;
 
-procedure TBenchmarkReporter.WriteToFile(const FileName: string);
+procedure TBenchmarkReporter.WriteToFile(const AFileName: string);
 begin
-  FOutput.SaveToFile(FileName);
+  FOutput.SaveToFile(AFileName);
 end;
 
 procedure TBenchmarkReporter.WriteToStdOut;

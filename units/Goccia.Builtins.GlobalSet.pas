@@ -5,18 +5,24 @@ unit Goccia.Builtins.GlobalSet;
 interface
 
 uses
-  Goccia.Builtins.Base, Goccia.Scope, Goccia.Error.ThrowErrorCallback,
-  Goccia.Values.Primitives, Goccia.Values.SetValue,
-  Goccia.Values.NativeFunction, Goccia.Values.ArrayValue,
+  Generics.Collections,
+  SysUtils,
+
   Goccia.Arguments.Collection,
-  Generics.Collections, SysUtils;
+  Goccia.Builtins.Base,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.Primitives,
+  Goccia.Values.SetValue;
 
 type
   TGocciaGlobalSet = class(TGocciaBuiltin)
   private
     FSetConstructor: TGocciaNativeFunctionValue;
 
-    function SetConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function SetConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -34,7 +40,7 @@ begin
   AScope.DefineLexicalBinding(AName, FSetConstructor, dtLet);
 end;
 
-function TGocciaGlobalSet.SetConstructorFn(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalSet.SetConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   SetObj: TGocciaSetValue;
   InitArg: TGocciaValue;
@@ -43,9 +49,9 @@ var
 begin
   SetObj := TGocciaSetValue.Create;
 
-  if Args.Length > 0 then
+  if AArgs.Length > 0 then
   begin
-    InitArg := Args.GetElement(0);
+    InitArg := AArgs.GetElement(0);
 
     // Initialize from array iterable
     if InitArg is TGocciaArrayValue then

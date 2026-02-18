@@ -5,9 +5,15 @@ unit Goccia.Values.ObjectValue;
 interface
 
 uses
-  Goccia.Values.Primitives, Generics.Collections,
-  Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.SymbolValue,
-  Math, SysUtils, Classes, Goccia.Arguments.Collection;
+  Classes,
+  Generics.Collections,
+  Math,
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.Primitives,
+  Goccia.Values.SymbolValue;
 
 type
 
@@ -20,7 +26,7 @@ type
     FPrototype: TGocciaObjectValue;
     FFrozen: Boolean;
   public
-    constructor Create(APrototype: TGocciaObjectValue = nil);
+    constructor Create(const APrototype: TGocciaObjectValue = nil);
     destructor Destroy; override;
     function ToDebugString: string;
     function TypeName: string; override;
@@ -32,19 +38,19 @@ type
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
 
-    procedure DefineProperty(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
+    procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
     procedure DefineProperties(const AProperties: TDictionary<string, TGocciaPropertyDescriptor>);
 
-    procedure AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True); virtual;
+    procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); virtual;
 
     // Convenience methods for built-in objects
-    procedure RegisterNativeMethod(AMethod: TGocciaValue);
+    procedure RegisterNativeMethod(const AMethod: TGocciaValue);
     procedure RegisterConstant(const AName: string; const AValue: TGocciaValue);
 
     // Property accessors
     function GetProperty(const AName: string): TGocciaValue; override;
-    procedure SetProperty(const AName: string; AValue: TGocciaValue); override;
-    function GetPropertyWithContext(const AName: string; AThisContext: TGocciaValue): TGocciaValue;
+    procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
+    function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
     function HasProperty(const AName: string): Boolean;
     function HasOwnProperty(const AName: string): Boolean;
@@ -59,10 +65,10 @@ type
     function GetOwnPropertyKeys: TStringList;
 
     // Symbol property methods
-    procedure DefineSymbolProperty(ASymbol: TGocciaSymbolValue; ADescriptor: TGocciaPropertyDescriptor);
-    procedure AssignSymbolProperty(ASymbol: TGocciaSymbolValue; AValue: TGocciaValue);
-    function GetSymbolProperty(ASymbol: TGocciaSymbolValue): TGocciaValue;
-    function HasSymbolProperty(ASymbol: TGocciaSymbolValue): Boolean;
+    procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
+    procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
+    function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
+    function HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
     function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
     function GetOwnSymbols: TArray<TGocciaSymbolValue>;
 
@@ -79,10 +85,13 @@ type
 
 implementation
 
-uses Goccia.Values.FunctionValue, Goccia.Values.NativeFunction,
-    Goccia.Values.ErrorHelper, Goccia.Values.ClassHelper;
+uses
+  Goccia.Values.ClassHelper,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.NativeFunction;
 
-procedure MarkPropertyDescriptor(ADescriptor: TGocciaPropertyDescriptor);
+procedure MarkPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor);
 begin
   if ADescriptor is TGocciaPropertyDescriptorData then
   begin
@@ -100,7 +109,7 @@ end;
 
 { TGocciaObjectValue }
 
-constructor TGocciaObjectValue.Create(APrototype: TGocciaObjectValue = nil);
+constructor TGocciaObjectValue.Create(const APrototype: TGocciaObjectValue = nil);
 begin
   FPropertyDescriptors := TDictionary<string, TGocciaPropertyDescriptor>.Create;
   FPropertyInsertionOrder := TStringList.Create;
@@ -238,7 +247,7 @@ begin
   Result := TGocciaNumberLiteralValue.NaNValue;
 end;
 
-procedure TGocciaObjectValue.AssignProperty(const AName: string; AValue: TGocciaValue; ACanCreate: Boolean = True);
+procedure TGocciaObjectValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
   SetterFunction: TGocciaFunctionValue;
@@ -310,7 +319,7 @@ begin
   DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
-procedure TGocciaObjectValue.DefineProperty(const AName: string; ADescriptor: TGocciaPropertyDescriptor);
+procedure TGocciaObjectValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 var
   ExistingDescriptor: TGocciaPropertyDescriptor;
 begin
@@ -355,7 +364,7 @@ end;
 
 
 
-procedure TGocciaObjectValue.RegisterNativeMethod(AMethod: TGocciaValue);
+procedure TGocciaObjectValue.RegisterNativeMethod(const AMethod: TGocciaValue);
 var
   Descriptor: TGocciaPropertyDescriptor;
   MethodName: string;
@@ -393,12 +402,12 @@ begin
   Result := GetPropertyWithContext(AName, Self);
 end;
 
-procedure TGocciaObjectValue.SetProperty(const AName: string; AValue: TGocciaValue);
+procedure TGocciaObjectValue.SetProperty(const AName: string; const AValue: TGocciaValue);
 begin
   AssignProperty(AName, AValue);
 end;
 
-function TGocciaObjectValue.GetPropertyWithContext(const AName: string; AThisContext: TGocciaValue): TGocciaValue;
+function TGocciaObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
   GetterFunction: TGocciaFunctionValue;
@@ -619,19 +628,19 @@ end;
 
 { Symbol property methods }
 
-procedure TGocciaObjectValue.DefineSymbolProperty(ASymbol: TGocciaSymbolValue; ADescriptor: TGocciaPropertyDescriptor);
+procedure TGocciaObjectValue.DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
 begin
   FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
   if not FSymbolInsertionOrder.Contains(ASymbol) then
     FSymbolInsertionOrder.Add(ASymbol);
 end;
 
-procedure TGocciaObjectValue.AssignSymbolProperty(ASymbol: TGocciaSymbolValue; AValue: TGocciaValue);
+procedure TGocciaObjectValue.AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
 begin
   DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
-function TGocciaObjectValue.GetSymbolProperty(ASymbol: TGocciaSymbolValue): TGocciaValue;
+function TGocciaObjectValue.GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
@@ -654,7 +663,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function TGocciaObjectValue.HasSymbolProperty(ASymbol: TGocciaSymbolValue): Boolean;
+function TGocciaObjectValue.HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
 begin
   Result := FSymbolDescriptors.ContainsKey(ASymbol);
 end;

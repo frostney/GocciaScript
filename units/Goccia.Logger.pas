@@ -5,7 +5,8 @@ unit Goccia.Logger;
 interface
 
 uses
-  SysUtils, TypInfo;
+  SysUtils,
+  TypInfo;
 
 type
   TGocciaLogLevel = (llTrace, llDebug, llInfo, llWarn, llError);
@@ -18,16 +19,16 @@ type
     FLogFormat: TGocciaLogFormat;
   public
     constructor Create(const ALevels: TGocciaLogLevels = [llInfo, llWarn, llError]; const ALogFormat: TGocciaLogFormat = lfConsole);
-    procedure Trace(const Message: string); overload;
-    procedure Trace(const Message: string; const Args: array of Const); overload;
-    procedure Debug(const Message: string); overload;
-    procedure Debug(const Message: string; const Args: array of Const); overload;
-    procedure Info(const Message: string); overload;
-    procedure Info(const Message: string; const Args: array of Const); overload;
-    procedure Warn(const Message: string); overload;
-    procedure Warn(const Message: string; const Args: array of Const); overload;
-    procedure Error(const Message: string); overload;
-    procedure Error(const Message: string; const Args: array of Const); overload;
+    procedure Trace(const AMessage: string); overload;
+    procedure Trace(const AMessage: string; const AArgs: array of Const); overload;
+    procedure Debug(const AMessage: string); overload;
+    procedure Debug(const AMessage: string; const AArgs: array of Const); overload;
+    procedure Info(const AMessage: string); overload;
+    procedure Info(const AMessage: string; const AArgs: array of Const); overload;
+    procedure Warn(const AMessage: string); overload;
+    procedure Warn(const AMessage: string; const AArgs: array of Const); overload;
+    procedure Error(const AMessage: string); overload;
+    procedure Error(const AMessage: string; const AArgs: array of Const); overload;
     property Levels: TGocciaLogLevels read FLevels write FLevels;
     property LogFormat: TGocciaLogFormat read FLogFormat write FLogFormat;
   end;
@@ -52,59 +53,59 @@ begin
   WriteLn(Format('[LOGGER] Logger created with levels: %s and format: %s', [Levels, GetEnumName(TypeInfo(TGocciaLogFormat), Ord(FLogFormat))]));
 end;
 
-procedure TGocciaLogger.Trace(const Message: string);
+procedure TGocciaLogger.Trace(const AMessage: string);
 begin
-  Self.Trace(Message, []);
+  Self.Trace(AMessage, []);
 end;
 
-procedure TGocciaLogger.Trace(const Message: string; const Args: array of Const);
+procedure TGocciaLogger.Trace(const AMessage: string; const AArgs: array of Const);
 begin
   if llTrace in FLevels then
-    WriteLn(Format('[TRACE] ' + Message, Args));
+    WriteLn(Format('[TRACE] ' + AMessage, AArgs));
 end;
 
-procedure TGocciaLogger.Debug(const Message: string);
+procedure TGocciaLogger.Debug(const AMessage: string);
 begin
-  Self.Debug(Message, []);
+  Self.Debug(AMessage, []);
 end;
 
-procedure TGocciaLogger.Debug(const Message: string; const Args: array of Const);
+procedure TGocciaLogger.Debug(const AMessage: string; const AArgs: array of Const);
 begin
   if llDebug in FLevels then
-    WriteLn(Format('[DEBUG] ' + Message, Args));
+    WriteLn(Format('[DEBUG] ' + AMessage, AArgs));
 end;
 
-procedure TGocciaLogger.Info(const Message: string);
+procedure TGocciaLogger.Info(const AMessage: string);
 begin
-  Self.Info(Message, []);
+  Self.Info(AMessage, []);
 end;
 
-procedure TGocciaLogger.Info(const Message: string; const Args: array of Const);
+procedure TGocciaLogger.Info(const AMessage: string; const AArgs: array of Const);
 begin
   if llInfo in FLevels then
-    WriteLn(Format('[INFO ] ' + Message, Args));
+    WriteLn(Format('[INFO ] ' + AMessage, AArgs));
 end;
 
-procedure TGocciaLogger.Warn(const Message: string);
+procedure TGocciaLogger.Warn(const AMessage: string);
 begin
-  Self.Warn(Message, []);
+  Self.Warn(AMessage, []);
 end;
 
-procedure TGocciaLogger.Warn(const Message: string; const Args: array of Const);
+procedure TGocciaLogger.Warn(const AMessage: string; const AArgs: array of Const);
 begin
   if llWarn in FLevels then
-    WriteLn(Format('[WARN ] ' + Message, Args));
+    WriteLn(Format('[WARN ] ' + AMessage, AArgs));
 end;
 
-procedure TGocciaLogger.Error(const Message: string);
+procedure TGocciaLogger.Error(const AMessage: string);
 begin
-  Self.Error(Message, []);
+  Self.Error(AMessage, []);
 end;
 
-procedure TGocciaLogger.Error(const Message: string; const Args: array of Const);
+procedure TGocciaLogger.Error(const AMessage: string; const AArgs: array of Const);
 begin
   if llError in FLevels then
-    WriteLn(Format('[ERROR] ' + Message, Args));
+    WriteLn(Format('[ERROR] ' + AMessage, AArgs));
 end;
 
 initialization

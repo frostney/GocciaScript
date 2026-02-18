@@ -5,165 +5,172 @@ unit Goccia.Arguments.Converter;
 interface
 
 uses
-  Goccia.Arguments.Collection, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.ArrayValue,
-  Goccia.Values.FunctionValue, Goccia.Values.NativeFunction, Goccia.Error.ThrowErrorCallback, SysUtils;
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   // Type conversion and checking logic
   TGocciaArgumentConverter = class
   public
     // Type checks
-    class function HasString(Collection: TGocciaArgumentsCollection; Index: Integer): Boolean;
-    class function HasNumber(Collection: TGocciaArgumentsCollection; Index: Integer): Boolean;
-    class function HasBoolean(Collection: TGocciaArgumentsCollection; Index: Integer): Boolean;
-    class function HasObject(Collection: TGocciaArgumentsCollection; Index: Integer): Boolean;
-    class function HasArray(Collection: TGocciaArgumentsCollection; Index: Integer): Boolean;
-    class function HasFunction(Collection: TGocciaArgumentsCollection; Index: Integer): Boolean;
+    class function HasString(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): Boolean;
+    class function HasNumber(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): Boolean;
+    class function HasBoolean(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): Boolean;
+    class function HasObject(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): Boolean;
+    class function HasArray(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): Boolean;
+    class function HasFunction(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): Boolean;
     
     // Type conversions (always convert via ToXLiteral)
-    class function GetString(Collection: TGocciaArgumentsCollection; Index: Integer): TGocciaStringLiteralValue;
-    class function GetNumber(Collection: TGocciaArgumentsCollection; Index: Integer): TGocciaNumberLiteralValue;
-    class function GetBoolean(Collection: TGocciaArgumentsCollection; Index: Integer): TGocciaBooleanLiteralValue;
-    class function GetObject(Collection: TGocciaArgumentsCollection; Index: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback): TGocciaValue;
-    class function GetArray(Collection: TGocciaArgumentsCollection; Index: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback): TGocciaValue;
-    class function GetFunction(Collection: TGocciaArgumentsCollection; Index: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback): TGocciaValue;
+    class function GetString(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): TGocciaStringLiteralValue;
+    class function GetNumber(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): TGocciaNumberLiteralValue;
+    class function GetBoolean(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): TGocciaBooleanLiteralValue;
+    class function GetObject(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback): TGocciaValue;
+    class function GetArray(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback): TGocciaValue;
+    class function GetFunction(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback): TGocciaValue;
     
     // Type conversions with defaults
-    class function GetStringOr(Collection: TGocciaArgumentsCollection; Index: Integer; const DefaultValue: string): TGocciaStringLiteralValue;
-    class function GetNumberOr(Collection: TGocciaArgumentsCollection; Index: Integer; DefaultValue: Double): TGocciaNumberLiteralValue;
-    class function GetBooleanOr(Collection: TGocciaArgumentsCollection; Index: Integer; DefaultValue: Boolean): TGocciaBooleanLiteralValue;
+    class function GetStringOr(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer; const ADefaultValue: string): TGocciaStringLiteralValue;
+    class function GetNumberOr(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer; const ADefaultValue: Double): TGocciaNumberLiteralValue;
+    class function GetBooleanOr(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer; const ADefaultValue: Boolean): TGocciaBooleanLiteralValue;
   end;
 
 implementation
 
 { TGocciaArgumentConverter }
 
-class function TGocciaArgumentConverter.HasString(Collection: TGocciaArgumentsCollection; Index: Integer): Boolean;
+class function TGocciaArgumentConverter.HasString(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): Boolean;
 begin
-  Result := (Index >= 0) and (Index < Collection.Length) and (Collection.GetElement(Index) is TGocciaStringLiteralValue);
+  Result := (AIndex >= 0) and (AIndex < ACollection.Length) and (ACollection.GetElement(AIndex) is TGocciaStringLiteralValue);
 end;
 
-class function TGocciaArgumentConverter.HasNumber(Collection: TGocciaArgumentsCollection; Index: Integer): Boolean;
+class function TGocciaArgumentConverter.HasNumber(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): Boolean;
 begin
-  Result := (Index >= 0) and (Index < Collection.Length) and (Collection.GetElement(Index) is TGocciaNumberLiteralValue);
+  Result := (AIndex >= 0) and (AIndex < ACollection.Length) and (ACollection.GetElement(AIndex) is TGocciaNumberLiteralValue);
 end;
 
-class function TGocciaArgumentConverter.HasBoolean(Collection: TGocciaArgumentsCollection; Index: Integer): Boolean;
+class function TGocciaArgumentConverter.HasBoolean(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): Boolean;
 begin
-  Result := (Index >= 0) and (Index < Collection.Length) and (Collection.GetElement(Index) is TGocciaBooleanLiteralValue);
+  Result := (AIndex >= 0) and (AIndex < ACollection.Length) and (ACollection.GetElement(AIndex) is TGocciaBooleanLiteralValue);
 end;
 
-class function TGocciaArgumentConverter.HasObject(Collection: TGocciaArgumentsCollection; Index: Integer): Boolean;
+class function TGocciaArgumentConverter.HasObject(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): Boolean;
 begin
-  Result := (Index >= 0) and (Index < Collection.Length) and (Collection.GetElement(Index) is TGocciaObjectValue);
+  Result := (AIndex >= 0) and (AIndex < ACollection.Length) and (ACollection.GetElement(AIndex) is TGocciaObjectValue);
 end;
 
-class function TGocciaArgumentConverter.HasArray(Collection: TGocciaArgumentsCollection; Index: Integer): Boolean;
+class function TGocciaArgumentConverter.HasArray(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): Boolean;
 begin
-  Result := (Index >= 0) and (Index < Collection.Length) and (Collection.GetElement(Index) is TGocciaArrayValue);
+  Result := (AIndex >= 0) and (AIndex < ACollection.Length) and (ACollection.GetElement(AIndex) is TGocciaArrayValue);
 end;
 
-class function TGocciaArgumentConverter.HasFunction(Collection: TGocciaArgumentsCollection; Index: Integer): Boolean;
+class function TGocciaArgumentConverter.HasFunction(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): Boolean;
 var
   Arg: TGocciaValue;
 begin
   Result := False;
-  if (Index >= 0) and (Index < Collection.Length) then
+  if (AIndex >= 0) and (AIndex < ACollection.Length) then
   begin
-    Arg := Collection.GetElement(Index);
+    Arg := ACollection.GetElement(AIndex);
     Result := (Arg is TGocciaFunctionValue) or (Arg is TGocciaNativeFunctionValue);
   end;
 end;
 
-class function TGocciaArgumentConverter.GetString(Collection: TGocciaArgumentsCollection; Index: Integer): TGocciaStringLiteralValue;
+class function TGocciaArgumentConverter.GetString(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): TGocciaStringLiteralValue;
 var
   Arg: TGocciaValue;
 begin
-  Arg := Collection.GetElement(Index); // Returns undefined if out of bounds
+  Arg := ACollection.GetElement(AIndex); // Returns undefined if out of bounds
   Result := Arg.ToStringLiteral;
 end;
 
-class function TGocciaArgumentConverter.GetNumber(Collection: TGocciaArgumentsCollection; Index: Integer): TGocciaNumberLiteralValue;
+class function TGocciaArgumentConverter.GetNumber(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): TGocciaNumberLiteralValue;
 var
   Arg: TGocciaValue;
 begin
-  Arg := Collection.GetElement(Index); // Returns undefined if out of bounds
+  Arg := ACollection.GetElement(AIndex); // Returns undefined if out of bounds
   Result := Arg.ToNumberLiteral;
 end;
 
-class function TGocciaArgumentConverter.GetBoolean(Collection: TGocciaArgumentsCollection; Index: Integer): TGocciaBooleanLiteralValue;
+class function TGocciaArgumentConverter.GetBoolean(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer): TGocciaBooleanLiteralValue;
 var
   Arg: TGocciaValue;
 begin
-  Arg := Collection.GetElement(Index); // Returns undefined if out of bounds
+  Arg := ACollection.GetElement(AIndex); // Returns undefined if out of bounds
   Result := Arg.ToBooleanLiteral;
 end;
 
-class function TGocciaArgumentConverter.GetObject(Collection: TGocciaArgumentsCollection; Index: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback): TGocciaValue;
+class function TGocciaArgumentConverter.GetObject(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback): TGocciaValue;
 var
   Arg: TGocciaValue;
 begin
-  Arg := Collection.GetElement(Index); // Returns undefined if out of bounds
+  Arg := ACollection.GetElement(AIndex); // Returns undefined if out of bounds
   if Arg is TGocciaObjectValue then
     Result := TGocciaObjectValue(Arg)
   else
   begin
-    ThrowError(Format('%s argument %d must be an object', [FunctionName, Index + 1]), 0, 0);
+    AThrowError(Format('%s argument %d must be an object', [AFunctionName, AIndex + 1]), 0, 0);
     Result := nil; // This won't be reached due to exception
   end;
 end;
 
-class function TGocciaArgumentConverter.GetArray(Collection: TGocciaArgumentsCollection; Index: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback): TGocciaValue;
+class function TGocciaArgumentConverter.GetArray(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback): TGocciaValue;
 var
   Arg: TGocciaValue;
 begin
-  Arg := Collection.GetElement(Index); // Returns undefined if out of bounds
+  Arg := ACollection.GetElement(AIndex); // Returns undefined if out of bounds
   if Arg is TGocciaArrayValue then
     Result := TGocciaArrayValue(Arg)
   else
   begin
-    ThrowError(Format('%s argument %d must be an array', [FunctionName, Index + 1]), 0, 0);
+    AThrowError(Format('%s argument %d must be an array', [AFunctionName, AIndex + 1]), 0, 0);
     Result := nil; // This won't be reached due to exception
   end;
 end;
 
-class function TGocciaArgumentConverter.GetFunction(Collection: TGocciaArgumentsCollection; Index: Integer; const FunctionName: string; ThrowError: TGocciaThrowErrorCallback): TGocciaValue;
+class function TGocciaArgumentConverter.GetFunction(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer; const AFunctionName: string; const AThrowError: TGocciaThrowErrorCallback): TGocciaValue;
 var
   Arg: TGocciaValue;
 begin
-  Arg := Collection.GetElement(Index); // Returns undefined if out of bounds
+  Arg := ACollection.GetElement(AIndex); // Returns undefined if out of bounds
   if (Arg is TGocciaFunctionValue) or (Arg is TGocciaNativeFunctionValue) then
     Result := Arg
   else
   begin
-    ThrowError(Format('%s argument %d must be a function', [FunctionName, Index + 1]), 0, 0);
+    AThrowError(Format('%s argument %d must be a function', [AFunctionName, AIndex + 1]), 0, 0);
     Result := nil; // This won't be reached due to exception
   end;
 end;
 
-class function TGocciaArgumentConverter.GetStringOr(Collection: TGocciaArgumentsCollection; Index: Integer; const DefaultValue: string): TGocciaStringLiteralValue;
+class function TGocciaArgumentConverter.GetStringOr(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer; const ADefaultValue: string): TGocciaStringLiteralValue;
 begin
-  if (Index >= 0) and (Index < Collection.Length) then
-    Result := GetString(Collection, Index)
+  if (AIndex >= 0) and (AIndex < ACollection.Length) then
+    Result := GetString(ACollection, AIndex)
   else
-    Result := TGocciaStringLiteralValue.Create(DefaultValue);
+    Result := TGocciaStringLiteralValue.Create(ADefaultValue);
 end;
 
-class function TGocciaArgumentConverter.GetNumberOr(Collection: TGocciaArgumentsCollection; Index: Integer; DefaultValue: Double): TGocciaNumberLiteralValue;
+class function TGocciaArgumentConverter.GetNumberOr(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer; const ADefaultValue: Double): TGocciaNumberLiteralValue;
 begin
-  if (Index >= 0) and (Index < Collection.Length) then
-    Result := GetNumber(Collection, Index)
+  if (AIndex >= 0) and (AIndex < ACollection.Length) then
+    Result := GetNumber(ACollection, AIndex)
   else
-    Result := TGocciaNumberLiteralValue.Create(DefaultValue);
+    Result := TGocciaNumberLiteralValue.Create(ADefaultValue);
 end;
 
-class function TGocciaArgumentConverter.GetBooleanOr(Collection: TGocciaArgumentsCollection; Index: Integer; DefaultValue: Boolean): TGocciaBooleanLiteralValue;
+class function TGocciaArgumentConverter.GetBooleanOr(const ACollection: TGocciaArgumentsCollection; const AIndex: Integer; const ADefaultValue: Boolean): TGocciaBooleanLiteralValue;
 begin
-  if (Index >= 0) and (Index < Collection.Length) then
-    Result := GetBoolean(Collection, Index)
+  if (AIndex >= 0) and (AIndex < ACollection.Length) then
+    Result := GetBoolean(ACollection, AIndex)
   else
   begin
-    if DefaultValue then
+    if ADefaultValue then
       Result := TGocciaBooleanLiteralValue.TrueValue
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;

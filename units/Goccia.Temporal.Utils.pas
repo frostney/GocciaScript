@@ -5,7 +5,8 @@ unit Goccia.Temporal.Utils;
 interface
 
 uses
-  SysUtils, Math;
+  Math,
+  SysUtils;
 
 type
   TTemporalDateRecord = record
@@ -36,47 +37,47 @@ type
     Nanoseconds: Int64;
   end;
 
-function IsLeapYear(AYear: Integer): Boolean;
-function DaysInMonth(AYear, AMonth: Integer): Integer;
-function DaysInYear(AYear: Integer): Integer;
-function IsValidDate(AYear, AMonth, ADay: Integer): Boolean;
-function IsValidTime(AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer): Boolean;
+function IsLeapYear(const AYear: Integer): Boolean;
+function DaysInMonth(const AYear, AMonth: Integer): Integer;
+function DaysInYear(const AYear: Integer): Integer;
+function IsValidDate(const AYear, AMonth, ADay: Integer): Boolean;
+function IsValidTime(const AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer): Boolean;
 
-function DayOfYear(AYear, AMonth, ADay: Integer): Integer;
-function DayOfWeek(AYear, AMonth, ADay: Integer): Integer;
-function WeekOfYear(AYear, AMonth, ADay: Integer): Integer;
-function YearOfWeek(AYear, AMonth, ADay: Integer): Integer;
+function DayOfYear(const AYear, AMonth, ADay: Integer): Integer;
+function DayOfWeek(const AYear, AMonth, ADay: Integer): Integer;
+function WeekOfYear(const AYear, AMonth, ADay: Integer): Integer;
+function YearOfWeek(const AYear, AMonth, ADay: Integer): Integer;
 
-function AddDaysToDate(AYear, AMonth, ADay: Integer; ADays: Int64): TTemporalDateRecord;
-function DateToEpochDays(AYear, AMonth, ADay: Integer): Int64;
-function EpochDaysToDate(ADays: Int64): TTemporalDateRecord;
+function AddDaysToDate(const AYear, AMonth, ADay: Integer; const ADays: Int64): TTemporalDateRecord;
+function DateToEpochDays(const AYear, AMonth, ADay: Integer): Int64;
+function EpochDaysToDate(const ADays: Int64): TTemporalDateRecord;
 
-function BalanceTime(AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Int64;
-  out ExtraDays: Int64): TTemporalTimeRecord;
+function BalanceTime(const AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Int64;
+  out AExtraDays: Int64): TTemporalTimeRecord;
 
-function PadISOYear(AYear: Integer): string;
-function PadTwo(AValue: Integer): string;
-function FormatTimeString(AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer): string;
-function FormatDateString(AYear, AMonth, ADay: Integer): string;
+function PadISOYear(const AYear: Integer): string;
+function PadTwo(const AValue: Integer): string;
+function FormatTimeString(const AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer): string;
+function FormatDateString(const AYear, AMonth, ADay: Integer): string;
 
 function TryParseISODate(const AStr: string; out ADate: TTemporalDateRecord): Boolean;
 function TryParseISOTime(const AStr: string; out ATime: TTemporalTimeRecord): Boolean;
 function TryParseISODateTime(const AStr: string; out ADate: TTemporalDateRecord; out ATime: TTemporalTimeRecord): Boolean;
 function TryParseISODuration(const AStr: string; out ADuration: TTemporalDurationRecord): Boolean;
 
-function CompareIntegers(A, B: Integer): Integer; inline;
-function CompareDates(AYear1, AMonth1, ADay1, AYear2, AMonth2, ADay2: Integer): Integer;
-function CompareTimes(AHour1, AMinute1, ASecond1, AMs1, AUs1, ANs1,
+function CompareIntegers(const A, B: Integer): Integer; inline;
+function CompareDates(const AYear1, AMonth1, ADay1, AYear2, AMonth2, ADay2: Integer): Integer;
+function CompareTimes(const AHour1, AMinute1, ASecond1, AMs1, AUs1, ANs1,
   AHour2, AMinute2, ASecond2, AMs2, AUs2, ANs2: Integer): Integer;
 
 implementation
 
-function IsLeapYear(AYear: Integer): Boolean;
+function IsLeapYear(const AYear: Integer): Boolean;
 begin
   Result := ((AYear mod 4) = 0) and (((AYear mod 100) <> 0) or ((AYear mod 400) = 0));
 end;
 
-function DaysInMonth(AYear, AMonth: Integer): Integer;
+function DaysInMonth(const AYear, AMonth: Integer): Integer;
 const
   DaysPerMonth: array[1..12] of Integer = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31);
 begin
@@ -88,7 +89,7 @@ begin
     Result := DaysPerMonth[AMonth];
 end;
 
-function DaysInYear(AYear: Integer): Integer;
+function DaysInYear(const AYear: Integer): Integer;
 begin
   if IsLeapYear(AYear) then
     Result := 366
@@ -96,13 +97,13 @@ begin
     Result := 365;
 end;
 
-function IsValidDate(AYear, AMonth, ADay: Integer): Boolean;
+function IsValidDate(const AYear, AMonth, ADay: Integer): Boolean;
 begin
   Result := (AMonth >= 1) and (AMonth <= 12) and
             (ADay >= 1) and (ADay <= DaysInMonth(AYear, AMonth));
 end;
 
-function IsValidTime(AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer): Boolean;
+function IsValidTime(const AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer): Boolean;
 begin
   Result := (AHour >= 0) and (AHour <= 23) and
             (AMinute >= 0) and (AMinute <= 59) and
@@ -112,7 +113,7 @@ begin
             (ANanosecond >= 0) and (ANanosecond <= 999);
 end;
 
-function DayOfYear(AYear, AMonth, ADay: Integer): Integer;
+function DayOfYear(const AYear, AMonth, ADay: Integer): Integer;
 var
   M: Integer;
 begin
@@ -122,7 +123,7 @@ begin
   Result := Result + ADay;
 end;
 
-function DayOfWeek(AYear, AMonth, ADay: Integer): Integer;
+function DayOfWeek(const AYear, AMonth, ADay: Integer): Integer;
 var
   EpochDays: Int64;
   D: Integer;
@@ -133,7 +134,7 @@ begin
   Result := D;
 end;
 
-function WeekOfYear(AYear, AMonth, ADay: Integer): Integer;
+function WeekOfYear(const AYear, AMonth, ADay: Integer): Integer;
 var
   Jan1DayOfWeek, DOY, WeekDay: Integer;
   PrevYearDays: Integer;
@@ -165,7 +166,7 @@ begin
   end;
 end;
 
-function YearOfWeek(AYear, AMonth, ADay: Integer): Integer;
+function YearOfWeek(const AYear, AMonth, ADay: Integer): Integer;
 var
   Week: Integer;
 begin
@@ -178,7 +179,7 @@ begin
     Result := AYear;
 end;
 
-function DateToEpochDays(AYear, AMonth, ADay: Integer): Int64;
+function DateToEpochDays(const AYear, AMonth, ADay: Integer): Int64;
 var
   Y, M: Integer;
   EpochDays: Int64;
@@ -206,7 +207,7 @@ begin
   Result := EpochDays;
 end;
 
-function EpochDaysToDate(ADays: Int64): TTemporalDateRecord;
+function EpochDaysToDate(const ADays: Int64): TTemporalDateRecord;
 var
   Z, Era, DOE, YOE, Y, DOY, MP, D, M: Int64;
 begin
@@ -234,7 +235,7 @@ begin
   Result.Day := Integer(D);
 end;
 
-function AddDaysToDate(AYear, AMonth, ADay: Integer; ADays: Int64): TTemporalDateRecord;
+function AddDaysToDate(const AYear, AMonth, ADay: Integer; const ADays: Int64): TTemporalDateRecord;
 var
   EpochDays: Int64;
 begin
@@ -242,8 +243,8 @@ begin
   Result := EpochDaysToDate(EpochDays + ADays);
 end;
 
-function BalanceTime(AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Int64;
-  out ExtraDays: Int64): TTemporalTimeRecord;
+function BalanceTime(const AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Int64;
+  out AExtraDays: Int64): TTemporalTimeRecord;
 var
   TotalNs, Remainder: Int64;
 begin
@@ -256,13 +257,13 @@ begin
 
   if TotalNs >= 0 then
   begin
-    ExtraDays := TotalNs div Int64(86400000000000);
+    AExtraDays := TotalNs div Int64(86400000000000);
     Remainder := TotalNs mod Int64(86400000000000);
   end
   else
   begin
-    ExtraDays := -(-TotalNs + Int64(86400000000000) - 1) div Int64(86400000000000);
-    Remainder := TotalNs - ExtraDays * Int64(86400000000000);
+    AExtraDays := -(-TotalNs + Int64(86400000000000) - 1) div Int64(86400000000000);
+    Remainder := TotalNs - AExtraDays * Int64(86400000000000);
   end;
 
   Result.Hour := Integer(Remainder div Int64(3600000000000));
@@ -277,7 +278,7 @@ begin
   Result.Nanosecond := Integer(Remainder mod 1000);
 end;
 
-function PadISOYear(AYear: Integer): string;
+function PadISOYear(const AYear: Integer): string;
 begin
   if (AYear >= 0) and (AYear <= 9999) then
     Result := Format('%.4d', [AYear])
@@ -287,17 +288,17 @@ begin
     Result := '-' + Format('%.6d', [-AYear]);
 end;
 
-function PadTwo(AValue: Integer): string;
+function PadTwo(const AValue: Integer): string;
 begin
   Result := Format('%.2d', [AValue]);
 end;
 
-function FormatDateString(AYear, AMonth, ADay: Integer): string;
+function FormatDateString(const AYear, AMonth, ADay: Integer): string;
 begin
   Result := PadISOYear(AYear) + '-' + PadTwo(AMonth) + '-' + PadTwo(ADay);
 end;
 
-function FormatTimeString(AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer): string;
+function FormatTimeString(const AHour, AMinute, ASecond, AMillisecond, AMicrosecond, ANanosecond: Integer): string;
 begin
   Result := PadTwo(AHour) + ':' + PadTwo(AMinute) + ':' + PadTwo(ASecond);
 
@@ -310,7 +311,7 @@ begin
   // else no fractional seconds
 end;
 
-function TryParseDigits(const AStr: string; var APos: Integer; ACount: Integer; out AValue: Integer): Boolean;
+function TryParseDigits(const AStr: string; var APos: Integer; const ACount: Integer; out AValue: Integer): Boolean;
 var
   I: Integer;
   C: Char;
@@ -622,7 +623,7 @@ begin
   Result := HasAnyComponent;
 end;
 
-function CompareIntegers(A, B: Integer): Integer;
+function CompareIntegers(const A, B: Integer): Integer;
 begin
   if A < B then
     Result := -1
@@ -632,7 +633,7 @@ begin
     Result := 0;
 end;
 
-function CompareDates(AYear1, AMonth1, ADay1, AYear2, AMonth2, ADay2: Integer): Integer;
+function CompareDates(const AYear1, AMonth1, ADay1, AYear2, AMonth2, ADay2: Integer): Integer;
 begin
   Result := CompareIntegers(AYear1, AYear2);
   if Result <> 0 then Exit;
@@ -641,7 +642,7 @@ begin
   Result := CompareIntegers(ADay1, ADay2);
 end;
 
-function CompareTimes(AHour1, AMinute1, ASecond1, AMs1, AUs1, ANs1,
+function CompareTimes(const AHour1, AMinute1, ASecond1, AMs1, AUs1, ANs1,
   AHour2, AMinute2, ASecond2, AMs2, AUs2, ANs2: Integer): Integer;
 begin
   Result := CompareIntegers(AHour1, AHour2);

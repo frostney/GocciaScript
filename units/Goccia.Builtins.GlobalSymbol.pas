@@ -5,10 +5,16 @@ unit Goccia.Builtins.GlobalSymbol;
 interface
 
 uses
-  Goccia.Builtins.Base, Goccia.Scope, Goccia.Error.ThrowErrorCallback,
-  Goccia.Values.Primitives, Goccia.Values.SymbolValue,
-  Goccia.Values.NativeFunction, Goccia.Arguments.Collection,
-  Generics.Collections, SysUtils;
+  Generics.Collections,
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.Builtins.Base,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.Primitives,
+  Goccia.Values.SymbolValue;
 
 type
   TGocciaGlobalSymbol = class(TGocciaBuiltin)
@@ -19,9 +25,9 @@ type
     // Well-known symbols
     FIteratorSymbol: TGocciaSymbolValue;
 
-    function SymbolConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function SymbolFor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function SymbolKeyFor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function SymbolConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SymbolFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SymbolKeyFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
     destructor Destroy; override;
@@ -33,7 +39,8 @@ type
 implementation
 
 uses
-  Goccia.Values.ObjectValue, Goccia.Values.ErrorHelper;
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.ObjectValue;
 
 constructor TGocciaGlobalSymbol.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
@@ -64,25 +71,25 @@ begin
   inherited;
 end;
 
-function TGocciaGlobalSymbol.SymbolConstructor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalSymbol.SymbolConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Description: string;
 begin
-  if Args.Length > 0 then
-    Description := Args.GetElement(0).ToStringLiteral.Value
+  if AArgs.Length > 0 then
+    Description := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Description := '';
 
   Result := TGocciaSymbolValue.Create(Description);
 end;
 
-function TGocciaGlobalSymbol.SymbolFor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalSymbol.SymbolFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Key: string;
   Symbol: TGocciaSymbolValue;
 begin
-  if Args.Length > 0 then
-    Key := Args.GetElement(0).ToStringLiteral.Value
+  if AArgs.Length > 0 then
+    Key := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Key := 'undefined';
 
@@ -96,12 +103,12 @@ begin
   end;
 end;
 
-function TGocciaGlobalSymbol.SymbolKeyFor(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaGlobalSymbol.SymbolKeyFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Arg: TGocciaValue;
   Pair: TPair<string, TGocciaSymbolValue>;
 begin
-  Arg := Args.GetElement(0);
+  Arg := AArgs.GetElement(0);
 
   if not (Arg is TGocciaSymbolValue) then
     ThrowTypeError('Symbol.keyFor requires that the first argument be a symbol');

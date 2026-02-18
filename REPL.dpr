@@ -3,7 +3,15 @@ program REPL;
 {$I units/Goccia.inc}
 
 uses
-  Classes, SysUtils, Generics.Collections, Goccia.Engine, TimingUtils, Goccia.Error, Goccia.Values.Primitives;
+  Classes,
+  Generics.Collections,
+  SysUtils,
+
+  TimingUtils,
+
+  Goccia.Engine,
+  Goccia.Error,
+  Goccia.Values.Primitives;
 
 var
   Line: string;

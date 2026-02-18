@@ -5,21 +5,22 @@ unit Goccia.Values.BooleanObjectValue;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaBooleanObjectValue = class(TGocciaObjectValue)
   private
     FPrimitive: TGocciaBooleanLiteralValue;
   public
-    constructor Create(APrimitive: TGocciaBooleanLiteralValue);
+    constructor Create(const APrimitive: TGocciaBooleanLiteralValue);
     procedure GCMarkReferences; override;
     property Primitive: TGocciaBooleanLiteralValue read FPrimitive;
   end;
 
 implementation
 
-constructor TGocciaBooleanObjectValue.Create(APrimitive: TGocciaBooleanLiteralValue);
+constructor TGocciaBooleanObjectValue.Create(const APrimitive: TGocciaBooleanLiteralValue);
 begin
   inherited Create;
   FPrimitive := APrimitive;

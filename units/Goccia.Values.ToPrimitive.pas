@@ -18,31 +18,32 @@ uses
   - Relational comparison operators (<, >, <=, >=)
   - Abstract equality (not used in GocciaScript since only === is supported)
   - Template literal interpolation }
-function ToPrimitive(Value: TGocciaValue): TGocciaValue;
+function ToPrimitive(const AValue: TGocciaValue): TGocciaValue;
 
 implementation
 
 uses
-  Goccia.Values.ObjectValue, Goccia.Values.FunctionBase,
-  Goccia.Arguments.Collection;
+  Goccia.Arguments.Collection,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.ObjectValue;
 
-function ToPrimitive(Value: TGocciaValue): TGocciaValue;
+function ToPrimitive(const AValue: TGocciaValue): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   Method, CallResult: TGocciaValue;
   Args: TGocciaArgumentsCollection;
 begin
   // Primitives return as-is (single VMT call instead of 5 `is` checks)
-  if Value.IsPrimitive then
+  if AValue.IsPrimitive then
   begin
-    Result := Value;
+    Result := AValue;
     Exit;
   end;
 
   // Objects: try valueOf first, then toString (default hint = "default"/"number")
-  if Value is TGocciaObjectValue then
+  if AValue is TGocciaObjectValue then
   begin
-    Obj := TGocciaObjectValue(Value);
+    Obj := TGocciaObjectValue(AValue);
 
     // Try valueOf()
     Method := Obj.GetProperty('valueOf');
@@ -50,7 +51,7 @@ begin
     begin
       Args := TGocciaArgumentsCollection.Create;
       try
-        CallResult := TGocciaFunctionBase(Method).Call(Args, Value);
+        CallResult := TGocciaFunctionBase(Method).Call(Args, AValue);
         // If valueOf returned a primitive, use it
         if CallResult.IsPrimitive then
         begin
@@ -68,7 +69,7 @@ begin
     begin
       Args := TGocciaArgumentsCollection.Create;
       try
-        CallResult := TGocciaFunctionBase(Method).Call(Args, Value);
+        CallResult := TGocciaFunctionBase(Method).Call(Args, AValue);
         if CallResult.IsPrimitive then
         begin
           Result := CallResult;
@@ -80,12 +81,12 @@ begin
     end;
 
     // Neither valueOf nor toString returned a primitive — use default
-    Result := Value.ToStringLiteral;
+    Result := AValue.ToStringLiteral;
     Exit;
   end;
 
   // Fallback for any other value type
-  Result := Value;
+  Result := AValue;
 end;
 
 end.

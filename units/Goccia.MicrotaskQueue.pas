@@ -5,7 +5,9 @@ unit Goccia.MicrotaskQueue;
 interface
 
 uses
-  Goccia.Values.Primitives, Generics.Collections;
+  Generics.Collections,
+
+  Goccia.Values.Primitives;
 
 type
   TPromiseReactionType = (prtFulfill, prtReject, prtThenableResolve);
@@ -39,9 +41,13 @@ type
 implementation
 
 uses
-  Goccia.Values.FunctionBase, Goccia.Arguments.Collection,
-  Goccia.Values.PromiseValue, Goccia.Values.Error,
-  Goccia.GarbageCollector, SysUtils;
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
+  Goccia.Values.Error,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.PromiseValue;
 
 class function TGocciaMicrotaskQueue.Instance: TGocciaMicrotaskQueue;
 begin

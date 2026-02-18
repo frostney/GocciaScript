@@ -5,20 +5,22 @@ unit Goccia.Builtins.TestAssertions;
 interface
 
 uses
-  Goccia.Builtins.Base,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.FunctionValue,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.Primitives,
-  Goccia.Values.ArrayValue,
-  Goccia.Arguments.Collection,
-  Goccia.Scope,
-  Goccia.Error, Goccia.Error.ThrowErrorCallback,
-  Goccia.Arguments.Validator,
+  Classes,
   Generics.Collections,
   Math,
-  Classes,
-  SysUtils;
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.Arguments.Validator,
+  Goccia.Builtins.Base,
+  Goccia.Error,
+  Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TGocciaTestAssertions = class;
@@ -28,7 +30,7 @@ type
   public
     Name: string;
     SuiteFunction: TGocciaFunctionValue;
-    constructor Create(const AName: string; ASuiteFunction: TGocciaFunctionValue);
+    constructor Create(const AName: string; const ASuiteFunction: TGocciaFunctionValue);
   end;
 
   // Class to hold registered tests (instead of record)
@@ -38,7 +40,7 @@ type
     TestFunction: TGocciaFunctionValue;
     SuiteName: string;
     IsSkipped: Boolean;
-    constructor Create(const AName: string; ATestFunction: TGocciaFunctionValue; const ASuiteName: string; AIsSkipped: Boolean = False);
+    constructor Create(const AName: string; const ATestFunction: TGocciaFunctionValue; const ASuiteName: string; const AIsSkipped: Boolean = False);
   end;
 
   // Expectation object that provides matchers
@@ -48,29 +50,29 @@ type
     FIsNegated: Boolean;
     FTestAssertions: TGocciaTestAssertions; // Reference to parent
   public
-    constructor Create(ActualValue: TGocciaValue; TestAssertions: TGocciaTestAssertions; IsNegated: Boolean = False);
+    constructor Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean = False);
 
     // Core matchers
-    function ToBe(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToEqual(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToBeNull(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToBeNaN(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToBeUndefined(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToBeTruthy(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToBeFalsy(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToBeGreaterThan(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToBeGreaterThanOrEqual(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToBeLessThan(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToBeLessThanOrEqual(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToContain(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToBeInstanceOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToHaveLength(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToHaveProperty(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToThrow(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function ToBeCloseTo(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function ToBe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToEqual(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToBeNull(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToBeNaN(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToBeUndefined(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToBeTruthy(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToBeFalsy(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToBeGreaterThan(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToBeGreaterThanOrEqual(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToBeLessThan(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToBeLessThanOrEqual(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToContain(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToBeInstanceOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveLength(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToBeCloseTo(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     // Negation support
-    function GetNot(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function GetNot(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
   // Main test assertions builtin
@@ -94,10 +96,10 @@ type
     FBeforeEachCallbacks: TGocciaArgumentsCollection;
     FAfterEachCallbacks: TGocciaArgumentsCollection;
 
-    procedure RunCallbacks(Callbacks: TGocciaArgumentsCollection);
-    procedure AssertionPassed(const TestName: string);
-    procedure AssertionFailed(const TestName, Message: string);
-    procedure StartTest(const TestName: string);
+    procedure RunCallbacks(const ACallbacks: TGocciaArgumentsCollection);
+    procedure AssertionPassed(const ATestName: string);
+    procedure AssertionFailed(const ATestName, AMessage: string);
+    procedure StartTest(const ATestName: string);
     procedure EndTest;
     procedure ResetTestStats;
   public
@@ -105,33 +107,41 @@ type
     destructor Destroy; override;
 
     // Main expect function
-    function Expect(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function Expect(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     // Test registration functions (don't execute immediately)
-    function Describe(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function Test(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function It(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function Skip(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function Describe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function Test(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function It(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function Skip(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
 
     // Setup/teardown
-    function BeforeEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
-    function AfterEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function BeforeEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function AfterEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     // Test execution
-    function RunTests(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+    function RunTests(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
 
 uses
-  Goccia.Values.ClassValue, Goccia.Evaluator, Goccia.Evaluator.Comparison,
-  Goccia.Values.ObjectPropertyDescriptor, Goccia.Values.Error, Goccia.Values.ClassHelper,
-  Goccia.Values.PromiseValue, Goccia.Values.SetValue, Goccia.MicrotaskQueue, TimingUtils;
+  TimingUtils,
+
+  Goccia.Evaluator,
+  Goccia.Evaluator.Comparison,
+  Goccia.MicrotaskQueue,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.ClassValue,
+  Goccia.Values.Error,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.PromiseValue,
+  Goccia.Values.SetValue;
 
 { TTestSuite }
 
-constructor TTestSuite.Create(const AName: string; ASuiteFunction: TGocciaFunctionValue);
+constructor TTestSuite.Create(const AName: string; const ASuiteFunction: TGocciaFunctionValue);
 begin
   inherited Create;
   Name := AName;
@@ -140,7 +150,7 @@ end;
 
 { TTestCase }
 
-constructor TTestCase.Create(const AName: string; ATestFunction: TGocciaFunctionValue; const ASuiteName: string; AIsSkipped: Boolean = False);
+constructor TTestCase.Create(const AName: string; const ATestFunction: TGocciaFunctionValue; const ASuiteName: string; const AIsSkipped: Boolean = False);
 begin
   inherited Create;
   Name := AName;
@@ -151,12 +161,12 @@ end;
 
 { TGocciaExpectationValue }
 
-constructor TGocciaExpectationValue.Create(ActualValue: TGocciaValue; TestAssertions: TGocciaTestAssertions; IsNegated: Boolean);
+constructor TGocciaExpectationValue.Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean);
 begin
   inherited Create;
-  FActualValue := ActualValue;
-  FTestAssertions := TestAssertions;
-  FIsNegated := IsNegated;
+  FActualValue := AActualValue;
+  FTestAssertions := ATestAssertions;
+  FIsNegated := AIsNegated;
 
   // Add matcher methods
   DefineProperty('toBe', TGocciaPropertyDescriptorData.Create(
@@ -188,7 +198,7 @@ begin
   DefineProperty('toHaveLength', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToHaveLength, 'toHaveLength', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toHaveProperty', TGocciaPropertyDescriptorData.Create(
-    TGocciaNativeFunctionValue.Create(ToHaveProperty, 'toHaveProperty', 2), [pfConfigurable, pfWritable]));
+    TGocciaNativeFunctionValue.Create(ToHaveProperty, 'toHaveProperty', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toThrow', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToThrow, 'toThrow', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toBeCloseTo', TGocciaPropertyDescriptorData.Create(
@@ -199,14 +209,14 @@ begin
     TGocciaNativeFunctionValue.Create(GetNot, 'not', 0), nil, [pfConfigurable]));
 end;
 
-function TGocciaExpectationValue.ToBe(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToBe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Expected: TGocciaValue;
   IsEqual: Boolean;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toBe', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toBe', FTestAssertions.ThrowError);
 
-  Expected := Args.GetElement(0);
+  Expected := AArgs.GetElement(0);
   IsEqual := IsSameValue(FActualValue, Expected);
 
   if FIsNegated then
@@ -229,14 +239,14 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToEqual(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToEqual(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Expected: TGocciaValue;
   IsEqual: Boolean;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toEqual', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toEqual', FTestAssertions.ThrowError);
 
-  Expected := Args.GetElement(0);
+  Expected := AArgs.GetElement(0);
   IsEqual := IsDeepEqual(FActualValue, Expected);
 
   if FIsNegated then
@@ -259,7 +269,7 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToBeNull(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToBeNull(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   IsNull: Boolean;
 begin
@@ -285,15 +295,11 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToBeNaN(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToBeNaN(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   IsNaNValue: Boolean;
 begin
-  // Use our safe NumberValue.IsNaN method instead of Math.IsNaN on ToNumber
-  if FActualValue is TGocciaNumberLiteralValue then
-    IsNaNValue := TGocciaNumberLiteralValue(FActualValue).IsNaN
-  else
-    IsNaNValue := Math.IsNaN(FActualValue.ToNumberLiteral.Value);
+  IsNaNValue := FActualValue.ToNumberLiteral.IsNaN;
 
   if FIsNegated then
     IsNaNValue := not IsNaNValue;
@@ -315,7 +321,7 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToBeUndefined(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToBeUndefined(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   IsUndefined: Boolean;
 begin
@@ -341,7 +347,7 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToBeTruthy(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToBeTruthy(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   IsTruthy: Boolean;
 begin
@@ -367,7 +373,7 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToBeFalsy(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToBeFalsy(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   IsFalsy: Boolean;
 begin
@@ -393,14 +399,14 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToBeGreaterThan(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToBeGreaterThan(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Expected: TGocciaValue;
   IsGreater: Boolean;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toBeGreaterThan', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toBeGreaterThan', FTestAssertions.ThrowError);
 
-  Expected := Args.GetElement(0);
+  Expected := AArgs.GetElement(0);
   IsGreater := FActualValue.IsGreaterThan(Expected).Value;
 
   if FIsNegated then
@@ -423,14 +429,14 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToBeGreaterThanOrEqual(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToBeGreaterThanOrEqual(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Expected: TGocciaValue;
   IsGreaterOrEqual: Boolean;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toBeGreaterThanOrEqual', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toBeGreaterThanOrEqual', FTestAssertions.ThrowError);
 
-  Expected := Args.GetElement(0);
+  Expected := AArgs.GetElement(0);
   IsGreaterOrEqual := FActualValue.IsGreaterThanOrEqual(Expected).Value;
 
   if FIsNegated then
@@ -453,14 +459,14 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToBeLessThan(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToBeLessThan(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Expected: TGocciaValue;
   IsLess: Boolean;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toBeLessThan', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toBeLessThan', FTestAssertions.ThrowError);
 
-  Expected := Args.GetElement(0);
+  Expected := AArgs.GetElement(0);
   IsLess := FActualValue.IsLessThan(Expected).Value;
 
   if FIsNegated then
@@ -483,14 +489,14 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToBeLessThanOrEqual(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToBeLessThanOrEqual(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Expected: TGocciaValue;
   IsLessOrEqual: Boolean;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toBeLessThanOrEqual', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toBeLessThanOrEqual', FTestAssertions.ThrowError);
 
-  Expected := Args.GetElement(0);
+  Expected := AArgs.GetElement(0);
   IsLessOrEqual := FActualValue.IsLessThanOrEqual(Expected).Value;
 
   if FIsNegated then
@@ -513,15 +519,15 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToContain(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToContain(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Expected: TGocciaValue;
   Contains: Boolean;
   ActualStr, ExpectedStr: string;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toContain', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toContain', FTestAssertions.ThrowError);
 
-  Expected := Args.GetElement(0);
+  Expected := AArgs.GetElement(0);
 
   // For strings, check substring
   if FActualValue is TGocciaStringLiteralValue then
@@ -563,7 +569,7 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToBeInstanceOf(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToBeInstanceOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ExpectedConstructor: TGocciaValue;
   IsInstance: Boolean;
@@ -571,9 +577,9 @@ var
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toBeInstanceOf', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toBeInstanceOf', FTestAssertions.ThrowError);
 
-  ExpectedConstructor := Args.GetElement(0);
+  ExpectedConstructor := AArgs.GetElement(0);
   IsInstance := False;
 
     // Check for built-in types
@@ -650,14 +656,14 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToHaveLength(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToHaveLength(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Expected: TGocciaValue;
   HasLength: Boolean;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'toHaveLength', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toHaveLength', FTestAssertions.ThrowError);
 
-  Expected := Args.GetElement(0);
+  Expected := AArgs.GetElement(0);
 
   if FActualValue is TGocciaArrayValue then
   begin
@@ -696,15 +702,13 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.ToHaveProperty(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToHaveProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Expected: TGocciaObjectValue;
   HasProperty: Boolean;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 2, 'toHaveProperty', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toHaveProperty', FTestAssertions.ThrowError);
 
-  Expected := Args.GetElement(0) as TGocciaObjectValue;
-  HasProperty := Expected.HasProperty(Args.GetElement(1).ToStringLiteral.Value);
+  HasProperty := (FActualValue as TGocciaObjectValue).HasProperty(AArgs.GetElement(0).ToStringLiteral.Value);
 
   if FIsNegated then
     HasProperty := not HasProperty;
@@ -718,15 +722,15 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to have property ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to have property ' + AArgs.GetElement(0).ToStringLiteral.Value)
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to have property ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' to have property ' + AArgs.GetElement(0).ToStringLiteral.Value);
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
-function TGocciaExpectationValue.ToThrow(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ExpectedErrorType: string;
   EmptyArgs: TGocciaArgumentsCollection;
@@ -743,10 +747,10 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   ExpectedErrorType := '';
-  if Args.Length > 0 then
+  if AArgs.Length > 0 then
   begin
     // If args are provided, expect a specific error type
-    ErrorClassArg := Args.GetElement(0);
+    ErrorClassArg := AArgs.GetElement(0);
     // If it's a class, get its name; otherwise use string representation
     if ErrorClassArg is TGocciaClassValue then
       ExpectedErrorType := TGocciaClassValue(ErrorClassArg).Name
@@ -900,7 +904,7 @@ begin
     'Expected ' + FActualValue.ToStringLiteral.Value + ' to throw an exception');
 end;
 
-function TGocciaExpectationValue.ToBeCloseTo(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.ToBeCloseTo(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Expected: TGocciaValue;
   Precision: Integer;
@@ -908,13 +912,13 @@ var
   IsClose: Boolean;
   ActualTempNum, ExpectedTempNum: TGocciaNumberLiteralValue;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(Args, 1, 'toBeCloseTo', FTestAssertions.ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'toBeCloseTo', FTestAssertions.ThrowError);
 
-  Expected := Args.GetElement(0);
+  Expected := AArgs.GetElement(0);
 
   // Default precision to 2 decimal places if not specified
-  if Args.Length >= 2 then
-    Precision := Trunc(Args.GetElement(1).ToNumberLiteral.Value)
+  if AArgs.Length >= 2 then
+    Precision := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value)
   else
     Precision := 2;
 
@@ -974,7 +978,7 @@ begin
   end;
 end;
 
-function TGocciaExpectationValue.GetNot(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaExpectationValue.GetNot(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // Return a new expectation object with negation enabled
   Result := TGocciaExpectationValue.Create(FActualValue, FTestAssertions, True);
@@ -1045,7 +1049,7 @@ begin
   FTestStats.TotalAssertionCount := 0;
 end;
 
-procedure TGocciaTestAssertions.RunCallbacks(Callbacks: TGocciaArgumentsCollection);
+procedure TGocciaTestAssertions.RunCallbacks(const ACallbacks: TGocciaArgumentsCollection);
 var
   I: Integer;
   Callback: TGocciaValue;
@@ -1053,9 +1057,9 @@ var
 begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
-    for I := 0 to Callbacks.Length - 1 do
+    for I := 0 to ACallbacks.Length - 1 do
     begin
-      Callback := Callbacks.GetElement(I);
+      Callback := ACallbacks.GetElement(I);
       if Callback is TGocciaFunctionValue then
       begin
         try
@@ -1076,9 +1080,9 @@ begin
   end;
 end;
 
-procedure TGocciaTestAssertions.StartTest(const TestName: string);
+procedure TGocciaTestAssertions.StartTest(const ATestName: string);
 begin
-  FTestStats.CurrentTestName := TestName;
+  FTestStats.CurrentTestName := ATestName;
   FTestStats.CurrentTestHasFailures := False;
   FTestStats.CurrentTestIsSkipped := False;
   FTestStats.CurrentTestAssertionCount := 0;
@@ -1094,13 +1098,13 @@ begin
     Inc(FTestStats.PassedTests);
 end;
 
-procedure TGocciaTestAssertions.AssertionPassed(const TestName: string);
+procedure TGocciaTestAssertions.AssertionPassed(const ATestName: string);
 begin
   Inc(FTestStats.CurrentTestAssertionCount);
   Inc(FTestStats.TotalAssertionCount);
 end;
 
-procedure TGocciaTestAssertions.AssertionFailed(const TestName, Message: string);
+procedure TGocciaTestAssertions.AssertionFailed(const ATestName, AMessage: string);
 begin
   Inc(FTestStats.CurrentTestAssertionCount);
   Inc(FTestStats.TotalAssertionCount);
@@ -1109,34 +1113,34 @@ begin
   // Track the failure details for reporting
   // This is called during test execution, so we know the current test context
   if FTestStats.CurrentSuiteName <> '' then
-    WriteLn('    ❌ ', FTestStats.CurrentTestName, ' in ', FTestStats.CurrentSuiteName, ': ', Message)
+    WriteLn('    ❌ ', FTestStats.CurrentTestName, ' in ', FTestStats.CurrentSuiteName, ': ', AMessage)
   else
-    WriteLn('    ❌ ', FTestStats.CurrentTestName, ': ', Message);
+    WriteLn('    ❌ ', FTestStats.CurrentTestName, ': ', AMessage);
 end;
 
-function TGocciaTestAssertions.Expect(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTestAssertions.Expect(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'expect', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'expect', ThrowError);
 
-  Result := TGocciaExpectationValue.Create(Args.GetElement(0), Self);
+  Result := TGocciaExpectationValue.Create(AArgs.GetElement(0), Self);
 end;
 
-function TGocciaTestAssertions.Describe(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTestAssertions.Describe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   SuiteName: string;
   SuiteFunction: TGocciaFunctionValue;
   Suite: TTestSuite;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 2, 'describe', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'describe', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaStringLiteralValue) then
+  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
     ThrowError('describe expects first argument to be a string', 0, 0);
 
-  if not (Args.GetElement(1) is TGocciaFunctionValue) then
+  if not (AArgs.GetElement(1) is TGocciaFunctionValue) then
     ThrowError('describe expects second argument to be a function', 0, 0);
 
-  SuiteName := Args.GetElement(0).ToStringLiteral.Value;
-  SuiteFunction := Args.GetElement(1) as TGocciaFunctionValue;
+  SuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
+  SuiteFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
 
   // Just register the test suite - do NOT execute it until runTests() is called
   Suite := TTestSuite.Create(SuiteName, SuiteFunction);
@@ -1145,22 +1149,22 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function TGocciaTestAssertions.Test(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTestAssertions.Test(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TestName: string;
   TestFunction: TGocciaFunctionValue;
   TestCase: TTestCase;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 2, 'test', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'test', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaStringLiteralValue) then
+  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
     ThrowError('test expects first argument to be a string', 0, 0);
 
-  if not (Args.GetElement(1) is TGocciaFunctionValue) then
+  if not (AArgs.GetElement(1) is TGocciaFunctionValue) then
     ThrowError('test expects second argument to be a function', 0, 0);
 
-  TestName := Args.GetElement(0).ToStringLiteral.Value;
-  TestFunction := Args.GetElement(1) as TGocciaFunctionValue;
+  TestName := AArgs.GetElement(0).ToStringLiteral.Value;
+  TestFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
 
   // Register the test with the current suite name
   TestCase := TTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName);
@@ -1169,28 +1173,28 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function TGocciaTestAssertions.It(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTestAssertions.It(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   // 'it' is an alias for 'test'
-  Result := Test(Args, ThisValue);
+  Result := Test(AArgs, AThisValue);
 end;
 
-function TGocciaTestAssertions.Skip(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTestAssertions.Skip(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TestName: string;
   TestFunction: TGocciaFunctionValue;
   TestCase: TTestCase;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 2, 'test.skip', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'test.skip', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaStringLiteralValue) then
+  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
     ThrowError('test.skip expects first argument to be a string', 0, 0);
 
-  if not (Args.GetElement(1) is TGocciaFunctionValue) then
+  if not (AArgs.GetElement(1) is TGocciaFunctionValue) then
     ThrowError('test.skip expects second argument to be a function', 0, 0);
 
-  TestName := Args.GetElement(0).ToStringLiteral.Value;
-  TestFunction := Args.GetElement(1) as TGocciaFunctionValue;
+  TestName := AArgs.GetElement(0).ToStringLiteral.Value;
+  TestFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
 
   // Register the test as skipped with the current suite name
   TestCase := TTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName, True);
@@ -1199,31 +1203,31 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function TGocciaTestAssertions.BeforeEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTestAssertions.BeforeEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'beforeEach', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'beforeEach', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaFunctionValue) then
+  if not (AArgs.GetElement(0) is TGocciaFunctionValue) then
     ThrowError('beforeEach expects a function argument', 0, 0);
 
-  FBeforeEachCallbacks.Add(Args.GetElement(0));
+  FBeforeEachCallbacks.Add(AArgs.GetElement(0));
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function TGocciaTestAssertions.AfterEach(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTestAssertions.AfterEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(Args, 1, 'afterEach', ThrowError);
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'afterEach', ThrowError);
 
-  if not (Args.GetElement(0) is TGocciaFunctionValue) then
+  if not (AArgs.GetElement(0) is TGocciaFunctionValue) then
     ThrowError('afterEach expects a function argument', 0, 0);
 
-  FAfterEachCallbacks.Add(Args.GetElement(0));
+  FAfterEachCallbacks.Add(AArgs.GetElement(0));
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function TGocciaTestAssertions.RunTests(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TGocciaTestAssertions.RunTests(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
   StartTime: Int64;
@@ -1256,11 +1260,11 @@ begin
       FRegisteredTests.Delete(I);
   end;
 
-  if Args.Length > 0 then
+  if AArgs.Length > 0 then
   begin
-    if Args.GetElement(0) is TGocciaObjectValue then
+    if AArgs.GetElement(0) is TGocciaObjectValue then
     begin
-      TestParams := Args.GetElement(0) as TGocciaObjectValue;
+      TestParams := AArgs.GetElement(0) as TGocciaObjectValue;
       if TestParams.HasProperty('exitOnFirstFailure') then
         ExitOnFirstFailure := TestParams.GetProperty('exitOnFirstFailure').ToBooleanLiteral.Value
       else

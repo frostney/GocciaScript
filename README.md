@@ -193,6 +193,17 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 | [Language Restrictions](docs/language-restrictions.md) | Supported and excluded features with rationale |
 | [AGENTS.md](AGENTS.md) | Instructions for AI coding assistants |
 
+## Contributing
+
+After cloning, install [Lefthook](https://github.com/evilmartians/lefthook) to enable the pre-commit auto-formatter:
+
+```bash
+brew install lefthook   # macOS — see docs/code-style.md for other platforms
+lefthook install
+```
+
+See [Code Style](docs/code-style.md) for conventions and [AGENTS.md](AGENTS.md) for the full development workflow.
+
 ## Roadmap
 
 - [x] Promises (constructor, `.then`/`.catch`/`.finally`, `Promise.all`/`allSettled`/`race`/`any`, microtask queue)

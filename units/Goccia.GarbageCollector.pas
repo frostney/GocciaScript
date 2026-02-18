@@ -5,8 +5,11 @@ unit Goccia.GarbageCollector;
 interface
 
 uses
-  Goccia.Values.Primitives, Goccia.Scope,
-  Generics.Collections, SysUtils;
+  Generics.Collections,
+  SysUtils,
+
+  Goccia.Scope,
+  Goccia.Values.Primitives;
 
 type
   TGocciaGC = class
@@ -39,16 +42,16 @@ type
     constructor Create;
     destructor Destroy; override;
 
-    procedure RegisterValue(Value: TGocciaValue);
-    procedure UnregisterValue(Value: TGocciaValue);
-    procedure RegisterScope(Scope: TGocciaScope);
-    procedure PinValue(Value: TGocciaValue);
-    procedure AddRoot(Scope: TGocciaScope);
-    procedure RemoveRoot(Scope: TGocciaScope);
-    procedure PushActiveScope(Scope: TGocciaScope);
+    procedure RegisterValue(const AValue: TGocciaValue);
+    procedure UnregisterValue(const AValue: TGocciaValue);
+    procedure RegisterScope(const AScope: TGocciaScope);
+    procedure PinValue(const AValue: TGocciaValue);
+    procedure AddRoot(const AScope: TGocciaScope);
+    procedure RemoveRoot(const AScope: TGocciaScope);
+    procedure PushActiveScope(const AScope: TGocciaScope);
     procedure PopActiveScope;
-    procedure AddTempRoot(Value: TGocciaValue);
-    procedure RemoveTempRoot(Value: TGocciaValue);
+    procedure AddTempRoot(const AValue: TGocciaValue);
+    procedure RemoveTempRoot(const AValue: TGocciaValue);
 
     procedure Collect;
     procedure CollectIfNeeded;
@@ -113,43 +116,43 @@ begin
   inherited;
 end;
 
-procedure TGocciaGC.RegisterValue(Value: TGocciaValue);
+procedure TGocciaGC.RegisterValue(const AValue: TGocciaValue);
 begin
-  FManagedValues.Add(Value);
+  FManagedValues.Add(AValue);
   Inc(FAllocationsSinceLastGC);
 end;
 
-procedure TGocciaGC.UnregisterValue(Value: TGocciaValue);
+procedure TGocciaGC.UnregisterValue(const AValue: TGocciaValue);
 begin
-  FManagedValues.Remove(Value);
+  FManagedValues.Remove(AValue);
 end;
 
-procedure TGocciaGC.RegisterScope(Scope: TGocciaScope);
+procedure TGocciaGC.RegisterScope(const AScope: TGocciaScope);
 begin
-  FManagedScopes.Add(Scope);
+  FManagedScopes.Add(AScope);
   Inc(FAllocationsSinceLastGC);
 end;
 
-procedure TGocciaGC.PinValue(Value: TGocciaValue);
+procedure TGocciaGC.PinValue(const AValue: TGocciaValue);
 begin
-  if not FPinnedValues.ContainsKey(Value) then
-    FPinnedValues.Add(Value, True);
+  if not FPinnedValues.ContainsKey(AValue) then
+    FPinnedValues.Add(AValue, True);
 end;
 
-procedure TGocciaGC.AddRoot(Scope: TGocciaScope);
+procedure TGocciaGC.AddRoot(const AScope: TGocciaScope);
 begin
-  if not FRootScopes.ContainsKey(Scope) then
-    FRootScopes.Add(Scope, True);
+  if not FRootScopes.ContainsKey(AScope) then
+    FRootScopes.Add(AScope, True);
 end;
 
-procedure TGocciaGC.RemoveRoot(Scope: TGocciaScope);
+procedure TGocciaGC.RemoveRoot(const AScope: TGocciaScope);
 begin
-  FRootScopes.Remove(Scope);
+  FRootScopes.Remove(AScope);
 end;
 
-procedure TGocciaGC.PushActiveScope(Scope: TGocciaScope);
+procedure TGocciaGC.PushActiveScope(const AScope: TGocciaScope);
 begin
-  FActiveScopeStack.Add(Scope);
+  FActiveScopeStack.Add(AScope);
 end;
 
 procedure TGocciaGC.PopActiveScope;
@@ -158,15 +161,15 @@ begin
     FActiveScopeStack.Delete(FActiveScopeStack.Count - 1);
 end;
 
-procedure TGocciaGC.AddTempRoot(Value: TGocciaValue);
+procedure TGocciaGC.AddTempRoot(const AValue: TGocciaValue);
 begin
-  if Assigned(Value) and not FTempRoots.ContainsKey(Value) then
-    FTempRoots.Add(Value, True);
+  if Assigned(AValue) and not FTempRoots.ContainsKey(AValue) then
+    FTempRoots.Add(AValue, True);
 end;
 
-procedure TGocciaGC.RemoveTempRoot(Value: TGocciaValue);
+procedure TGocciaGC.RemoveTempRoot(const AValue: TGocciaValue);
 begin
-  FTempRoots.Remove(Value);
+  FTempRoots.Remove(AValue);
 end;
 
 procedure TGocciaGC.MarkPhase;

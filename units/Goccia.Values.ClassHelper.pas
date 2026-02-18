@@ -5,7 +5,16 @@ unit Goccia.Values.ClassHelper;
 interface
 
 uses
-  SysUtils, Classes, Math, Goccia.Values.Primitives, Goccia.Values.ObjectValue, Goccia.Values.BooleanObjectValue, Goccia.Values.NumberObjectValue, Goccia.Values.StringObjectValue, Goccia.Values.Constants;
+  Classes,
+  Math,
+  SysUtils,
+
+  Goccia.Values.BooleanObjectValue,
+  Goccia.Values.Constants,
+  Goccia.Values.NumberObjectValue,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives,
+  Goccia.Values.StringObjectValue;
 
 type
 
@@ -24,27 +33,27 @@ type
     function Box: TGocciaObjectValue;
 
     // Arithmetic helpers
-    function Add(Other: TGocciaValue): TGocciaValue;
-    function Subtract(Other: TGocciaValue): TGocciaValue;
-    function Multiply(Other: TGocciaValue): TGocciaValue;
-    function Divide(Other: TGocciaValue): TGocciaValue;
-    function Modulo(Other: TGocciaValue): TGocciaValue;
-    function Power(Other: TGocciaValue): TGocciaValue;
+    function Add(const AOther: TGocciaValue): TGocciaValue;
+    function Subtract(const AOther: TGocciaValue): TGocciaValue;
+    function Multiply(const AOther: TGocciaValue): TGocciaValue;
+    function Divide(const AOther: TGocciaValue): TGocciaValue;
+    function Modulo(const AOther: TGocciaValue): TGocciaValue;
+    function Power(const AOther: TGocciaValue): TGocciaValue;
 
-    function BitwiseAnd(Other: TGocciaValue): TGocciaValue;
-    function BitwiseOr(Other: TGocciaValue): TGocciaValue;
-    function BitwiseXor(Other: TGocciaValue): TGocciaValue;
-    function LeftShift(Other: TGocciaValue): TGocciaValue;
-    function RightShift(Other: TGocciaValue): TGocciaValue;
-    function UnsignedRightShift(Other: TGocciaValue): TGocciaValue;
+    function BitwiseAnd(const AOther: TGocciaValue): TGocciaValue;
+    function BitwiseOr(const AOther: TGocciaValue): TGocciaValue;
+    function BitwiseXor(const AOther: TGocciaValue): TGocciaValue;
+    function LeftShift(const AOther: TGocciaValue): TGocciaValue;
+    function RightShift(const AOther: TGocciaValue): TGocciaValue;
+    function UnsignedRightShift(const AOther: TGocciaValue): TGocciaValue;
     function BitwiseNot: TGocciaValue;
 
-    function IsEqual(Other: TGocciaValue): TGocciaBooleanLiteralValue;
-    function IsNotEqual(Other: TGocciaValue): TGocciaBooleanLiteralValue;
-    function IsLessThan(Other: TGocciaValue): TGocciaBooleanLiteralValue;
-    function IsGreaterThan(Other: TGocciaValue): TGocciaBooleanLiteralValue;
-    function IsLessThanOrEqual(Other: TGocciaValue): TGocciaBooleanLiteralValue;
-    function IsGreaterThanOrEqual(Other: TGocciaValue): TGocciaBooleanLiteralValue;
+    function IsEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
+    function IsNotEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
+    function IsLessThan(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
+    function IsGreaterThan(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
+    function IsLessThanOrEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
+    function IsGreaterThanOrEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
   end;
 
 
@@ -286,23 +295,23 @@ implementation
 
 
 
-  function TGocciaValueHelper.Add(Other: TGocciaValue): TGocciaValue;
+  function TGocciaValueHelper.Add(const AOther: TGocciaValue): TGocciaValue;
   var
     LeftStr, RightStr: TGocciaStringLiteralValue;
     LeftNum, RightNum: TGocciaNumberLiteralValue;
   begin
     // ECMAScript Addition: If either operand is string, do string concatenation
-    if (Self is TGocciaStringLiteralValue) or (Other is TGocciaStringLiteralValue) then
+    if (Self is TGocciaStringLiteralValue) or (AOther is TGocciaStringLiteralValue) then
     begin
       LeftStr := Self.ToStringLiteral;
-      RightStr := Other.ToStringLiteral;
+      RightStr := AOther.ToStringLiteral;
       Result := TGocciaStringLiteralValue.Create(LeftStr.Value + RightStr.Value);
     end
     else
     begin
       // Numeric addition
       LeftNum := Self.ToNumberLiteral;
-      RightNum := Other.ToNumberLiteral;
+      RightNum := AOther.ToNumberLiteral;
 
       // Handle special cases
       if LeftNum.IsNaN or RightNum.IsNaN then
@@ -330,12 +339,12 @@ implementation
     end;
   end;
 
-  function TGocciaValueHelper.Subtract(Other: TGocciaValue): TGocciaValue;
+  function TGocciaValueHelper.Subtract(const AOther: TGocciaValue): TGocciaValue;
   var
     LeftNum, RightNum: TGocciaNumberLiteralValue;
   begin
     LeftNum := Self.ToNumberLiteral;
-    RightNum := Other.ToNumberLiteral;
+    RightNum := AOther.ToNumberLiteral;
 
     // Handle special cases
     if (LeftNum.IsNaN or RightNum.IsNaN) then
@@ -356,12 +365,12 @@ implementation
       Result := TGocciaNumberLiteralValue.Create(LeftNum.Value - RightNum.Value);
   end;
 
-  function TGocciaValueHelper.Multiply(Other: TGocciaValue): TGocciaValue;
+  function TGocciaValueHelper.Multiply(const AOther: TGocciaValue): TGocciaValue;
   var
     LeftNum, RightNum: TGocciaNumberLiteralValue;
   begin
     LeftNum := Self.ToNumberLiteral;
-    RightNum := Other.ToNumberLiteral;
+    RightNum := AOther.ToNumberLiteral;
 
     // Handle special cases
     if LeftNum.IsNaN or RightNum.IsNaN then
@@ -402,12 +411,12 @@ implementation
       Result := TGocciaNumberLiteralValue.Create(LeftNum.Value * RightNum.Value);
   end;
 
-  function TGocciaValueHelper.Divide(Other: TGocciaValue): TGocciaValue;
+  function TGocciaValueHelper.Divide(const AOther: TGocciaValue): TGocciaValue;
   var
     LeftNum, RightNum: TGocciaNumberLiteralValue;
   begin
     LeftNum := Self.ToNumberLiteral;
-    RightNum := Other.ToNumberLiteral;
+    RightNum := AOther.ToNumberLiteral;
 
     // Handle special cases
     if (LeftNum.IsNaN or RightNum.IsNaN) then
@@ -445,13 +454,13 @@ implementation
       Result := TGocciaNumberLiteralValue.Create(LeftNum.Value / RightNum.Value);
   end;
 
-  function TGocciaValueHelper.Modulo(Other: TGocciaValue): TGocciaValue;
+  function TGocciaValueHelper.Modulo(const AOther: TGocciaValue): TGocciaValue;
   var
     LeftNum, RightNum: TGocciaNumberLiteralValue;
     ModResult: Double;
   begin
     LeftNum := Self.ToNumberLiteral;
-    RightNum := Other.ToNumberLiteral;
+    RightNum := AOther.ToNumberLiteral;
 
     // Handle special cases according to ECMAScript spec
     if (LeftNum.IsNaN or RightNum.IsNaN or
@@ -469,13 +478,13 @@ implementation
     end;
   end;
 
-  function TGocciaValueHelper.Power(Other: TGocciaValue): TGocciaValue;
+  function TGocciaValueHelper.Power(const AOther: TGocciaValue): TGocciaValue;
   var
     LeftNum, RightNum: TGocciaNumberLiteralValue;
     Base, Exponent: Extended;
   begin
     LeftNum := Self.ToNumberLiteral;
-    RightNum := Other.ToNumberLiteral;
+    RightNum := AOther.ToNumberLiteral;
 
     // Handle special cases
     if (LeftNum.IsNaN or RightNum.IsNaN) then
@@ -488,57 +497,57 @@ implementation
     end;
   end;
 
-  function TGocciaValueHelper.BitwiseAnd(Other: TGocciaValue): TGocciaValue;
+  function TGocciaValueHelper.BitwiseAnd(const AOther: TGocciaValue): TGocciaValue;
   var
     LeftInt, RightInt: Integer;
   begin
     LeftInt := Trunc(Self.ToNumberLiteral.Value) and $7FFFFFFF;
-    RightInt := Trunc(Other.ToNumberLiteral.Value) and $7FFFFFFF;
+    RightInt := Trunc(AOther.ToNumberLiteral.Value) and $7FFFFFFF;
     Result := TGocciaNumberLiteralValue.Create(LeftInt and RightInt);
   end;
 
-  function TGocciaValueHelper.BitwiseOr(Other: TGocciaValue): TGocciaValue;
+  function TGocciaValueHelper.BitwiseOr(const AOther: TGocciaValue): TGocciaValue;
   var
     LeftInt, RightInt: Integer;
   begin
     LeftInt := Trunc(Self.ToNumberLiteral.Value) and $7FFFFFFF;
-    RightInt := Trunc(Other.ToNumberLiteral.Value) and $7FFFFFFF;
+    RightInt := Trunc(AOther.ToNumberLiteral.Value) and $7FFFFFFF;
     Result := TGocciaNumberLiteralValue.Create(LeftInt or RightInt);
   end;
 
-  function TGocciaValueHelper.BitwiseXor(Other: TGocciaValue): TGocciaValue;
+  function TGocciaValueHelper.BitwiseXor(const AOther: TGocciaValue): TGocciaValue;
   var
     LeftInt, RightInt: Integer;
   begin
     LeftInt := Trunc(Self.ToNumberLiteral.Value) and $7FFFFFFF;
-    RightInt := Trunc(Other.ToNumberLiteral.Value) and $7FFFFFFF;
+    RightInt := Trunc(AOther.ToNumberLiteral.Value) and $7FFFFFFF;
     Result := TGocciaNumberLiteralValue.Create(LeftInt xor RightInt);
   end;
 
-  function TGocciaValueHelper.LeftShift(Other: TGocciaValue): TGocciaValue;
+  function TGocciaValueHelper.LeftShift(const AOther: TGocciaValue): TGocciaValue;
   var
     LeftInt, RightInt: Integer;
   begin
     LeftInt := Trunc(Self.ToNumberLiteral.Value) and $7FFFFFFF;
-    RightInt := Trunc(Other.ToNumberLiteral.Value) and $1F; // Only use lower 5 bits
+    RightInt := Trunc(AOther.ToNumberLiteral.Value) and $1F; // Only use lower 5 bits
     Result := TGocciaNumberLiteralValue.Create(LeftInt shl RightInt);
   end;
 
-  function TGocciaValueHelper.RightShift(Other: TGocciaValue): TGocciaValue;
+  function TGocciaValueHelper.RightShift(const AOther: TGocciaValue): TGocciaValue;
   var
     LeftInt, RightInt: Integer;
   begin
     LeftInt := Trunc(Self.ToNumberLiteral.Value);
-    RightInt := Trunc(Other.ToNumberLiteral.Value) and $1F; // Only use lower 5 bits
+    RightInt := Trunc(AOther.ToNumberLiteral.Value) and $1F; // Only use lower 5 bits
     Result := TGocciaNumberLiteralValue.Create(LeftInt shr RightInt);
   end;
 
-  function TGocciaValueHelper.UnsignedRightShift(Other: TGocciaValue): TGocciaValue;
+  function TGocciaValueHelper.UnsignedRightShift(const AOther: TGocciaValue): TGocciaValue;
   var
     LeftInt, RightInt: Cardinal;
   begin
     LeftInt := Cardinal(Trunc(Self.ToNumberLiteral.Value));
-    RightInt := Cardinal(Trunc(Other.ToNumberLiteral.Value)) and $1F; // Only use lower 5 bits
+    RightInt := Cardinal(Trunc(AOther.ToNumberLiteral.Value)) and $1F; // Only use lower 5 bits
     Result := TGocciaNumberLiteralValue.Create(LeftInt shr RightInt);
   end;
 
@@ -550,61 +559,61 @@ implementation
     Result := TGocciaNumberLiteralValue.Create(not IntValue);
   end;
 
-  function TGocciaValueHelper.IsEqual(Other: TGocciaValue): TGocciaBooleanLiteralValue;
+  function TGocciaValueHelper.IsEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
   begin
     // Strict equality comparison
-    if (Self is TGocciaUndefinedLiteralValue) and (Other is TGocciaUndefinedLiteralValue) then
+    if (Self is TGocciaUndefinedLiteralValue) and (AOther is TGocciaUndefinedLiteralValue) then
       Result := TGocciaBooleanLiteralValue.TrueValue
-    else if (Self is TGocciaNullLiteralValue) and (Other is TGocciaNullLiteralValue) then
+    else if (Self is TGocciaNullLiteralValue) and (AOther is TGocciaNullLiteralValue) then
       Result := TGocciaBooleanLiteralValue.TrueValue
-    else if (Self is TGocciaBooleanLiteralValue) and (Other is TGocciaBooleanLiteralValue) then
-      if TGocciaBooleanLiteralValue(Self).Value = TGocciaBooleanLiteralValue(Other).Value then
+    else if (Self is TGocciaBooleanLiteralValue) and (AOther is TGocciaBooleanLiteralValue) then
+      if TGocciaBooleanLiteralValue(Self).Value = TGocciaBooleanLiteralValue(AOther).Value then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue
-    else if (Self is TGocciaNumberLiteralValue) and (Other is TGocciaNumberLiteralValue) then
+    else if (Self is TGocciaNumberLiteralValue) and (AOther is TGocciaNumberLiteralValue) then
     begin
       // Handle NaN case
-      if TGocciaNumberLiteralValue(Self).IsNaN or TGocciaNumberLiteralValue(Other).IsNaN then
+      if TGocciaNumberLiteralValue(Self).IsNaN or TGocciaNumberLiteralValue(AOther).IsNaN then
         Result := TGocciaBooleanLiteralValue.FalseValue
       else
-        if TGocciaNumberLiteralValue(Self).Value = TGocciaNumberLiteralValue(Other).Value then
+        if TGocciaNumberLiteralValue(Self).Value = TGocciaNumberLiteralValue(AOther).Value then
           Result := TGocciaBooleanLiteralValue.TrueValue
         else
           Result := TGocciaBooleanLiteralValue.FalseValue;
     end
-    else if (Self is TGocciaStringLiteralValue) and (Other is TGocciaStringLiteralValue) then
-      if TGocciaStringLiteralValue(Self).Value = TGocciaStringLiteralValue(Other).Value then
+    else if (Self is TGocciaStringLiteralValue) and (AOther is TGocciaStringLiteralValue) then
+      if TGocciaStringLiteralValue(Self).Value = TGocciaStringLiteralValue(AOther).Value then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue
     else
-      if Self = Other then
+      if Self = AOther then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue; // Reference equality
   end;
 
-  function TGocciaValueHelper.IsNotEqual(Other: TGocciaValue): TGocciaBooleanLiteralValue;
+  function TGocciaValueHelper.IsNotEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
   var
     EqualResult: TGocciaBooleanLiteralValue;
   begin
-    EqualResult := IsEqual(Other);
+    EqualResult := IsEqual(AOther);
     if EqualResult.Value then
       Result := TGocciaBooleanLiteralValue.FalseValue
     else
       Result := TGocciaBooleanLiteralValue.TrueValue;
   end;
 
-  function TGocciaValueHelper.IsLessThan(Other: TGocciaValue): TGocciaBooleanLiteralValue;
+  function TGocciaValueHelper.IsLessThan(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
   var
     LeftNum, RightNum: TGocciaNumberLiteralValue;
     LeftStr, RightStr: TGocciaStringLiteralValue;
   begin
-    if (Self is TGocciaStringLiteralValue) and (Other is TGocciaStringLiteralValue) then
+    if (Self is TGocciaStringLiteralValue) and (AOther is TGocciaStringLiteralValue) then
     begin
       LeftStr := TGocciaStringLiteralValue(Self);
-      RightStr := TGocciaStringLiteralValue(Other);
+      RightStr := TGocciaStringLiteralValue(AOther);
       if LeftStr.Value < RightStr.Value then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
@@ -613,7 +622,7 @@ implementation
     else
     begin
       LeftNum := Self.ToNumberLiteral;
-      RightNum := Other.ToNumberLiteral;
+      RightNum := AOther.ToNumberLiteral;
 
       if (LeftNum.IsNaN or RightNum.IsNaN) then
         Result := TGocciaBooleanLiteralValue.FalseValue
@@ -637,15 +646,15 @@ implementation
     end;
   end;
 
-  function TGocciaValueHelper.IsGreaterThan(Other: TGocciaValue): TGocciaBooleanLiteralValue;
+  function TGocciaValueHelper.IsGreaterThan(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
   var
     LeftNum, RightNum: TGocciaNumberLiteralValue;
     LeftStr, RightStr: TGocciaStringLiteralValue;
   begin
-    if (Self is TGocciaStringLiteralValue) and (Other is TGocciaStringLiteralValue) then
+    if (Self is TGocciaStringLiteralValue) and (AOther is TGocciaStringLiteralValue) then
     begin
       LeftStr := TGocciaStringLiteralValue(Self);
-      RightStr := TGocciaStringLiteralValue(Other);
+      RightStr := TGocciaStringLiteralValue(AOther);
       if LeftStr.Value > RightStr.Value then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
@@ -654,7 +663,7 @@ implementation
     else
     begin
       LeftNum := Self.ToNumberLiteral;
-      RightNum := Other.ToNumberLiteral;
+      RightNum := AOther.ToNumberLiteral;
 
       if (LeftNum.IsNaN or RightNum.IsNaN) then
         Result := TGocciaBooleanLiteralValue.FalseValue
@@ -678,16 +687,16 @@ implementation
     end;
   end;
 
-  function TGocciaValueHelper.IsLessThanOrEqual(Other: TGocciaValue): TGocciaBooleanLiteralValue;
+  function TGocciaValueHelper.IsLessThanOrEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
   var
     LessResult, EqualResult: TGocciaBooleanLiteralValue;
     LeftNum, RightNum: TGocciaNumberLiteralValue;
   begin
     // For numeric comparisons, check NaN first
-    if (Self is TGocciaNumberLiteralValue) and (Other is TGocciaNumberLiteralValue) then
+    if (Self is TGocciaNumberLiteralValue) and (AOther is TGocciaNumberLiteralValue) then
     begin
       LeftNum := TGocciaNumberLiteralValue(Self);
-      RightNum := TGocciaNumberLiteralValue(Other);
+      RightNum := TGocciaNumberLiteralValue(AOther);
       if LeftNum.IsNaN or RightNum.IsNaN then
       begin
         Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -695,24 +704,24 @@ implementation
       end;
     end;
     
-    LessResult := IsLessThan(Other);
-    EqualResult := IsEqual(Other);
+    LessResult := IsLessThan(AOther);
+    EqualResult := IsEqual(AOther);
     if LessResult.Value or EqualResult.Value then
       Result := TGocciaBooleanLiteralValue.TrueValue
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;
   end;
 
-  function TGocciaValueHelper.IsGreaterThanOrEqual(Other: TGocciaValue): TGocciaBooleanLiteralValue;
+  function TGocciaValueHelper.IsGreaterThanOrEqual(const AOther: TGocciaValue): TGocciaBooleanLiteralValue;
   var
     GreaterResult, EqualResult: TGocciaBooleanLiteralValue;
     LeftNum, RightNum: TGocciaNumberLiteralValue;
   begin
     // For numeric comparisons, check NaN first
-    if (Self is TGocciaNumberLiteralValue) and (Other is TGocciaNumberLiteralValue) then
+    if (Self is TGocciaNumberLiteralValue) and (AOther is TGocciaNumberLiteralValue) then
     begin
       LeftNum := TGocciaNumberLiteralValue(Self);
-      RightNum := TGocciaNumberLiteralValue(Other);
+      RightNum := TGocciaNumberLiteralValue(AOther);
       if LeftNum.IsNaN or RightNum.IsNaN then
       begin
         Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -720,8 +729,8 @@ implementation
       end;
     end;
     
-    GreaterResult := IsGreaterThan(Other);
-    EqualResult := IsEqual(Other);
+    GreaterResult := IsGreaterThan(AOther);
+    EqualResult := IsEqual(AOther);
     if GreaterResult.Value or EqualResult.Value then
       Result := TGocciaBooleanLiteralValue.TrueValue
     else

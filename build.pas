@@ -4,7 +4,11 @@
 {$H+}
 
 uses
-  SysUtils, Classes, Process, FileUtils in 'units/FileUtils.pas';
+  Classes,
+  Process,
+  SysUtils,
+
+  FileUtils in 'units/FileUtils.pas';
 
 type
   TBuildMode = (bmDev, bmProd);
@@ -14,7 +18,7 @@ var
   BuildTriggers: TStringList;
   BuildMode: TBuildMode = bmDev;
 
-function FPCArgs(const Source: string): TStringArray;
+function FPCArgs(const ASource: string): TStringArray;
 var
   Arch: string;
   Args: TStringList;
@@ -47,7 +51,7 @@ begin
     end;
 
     Args.Add('-vw-n-h-i-l-d-u-t-p-c-x-');
-    Args.Add(Source);
+    Args.Add(ASource);
 
     SetLength(Result, Args.Count);
     for J := 0 to Args.Count - 1 do
@@ -179,19 +183,19 @@ begin
   end;
 end;
 
-procedure Build(const Trigger: string);
+procedure Build(const ATrigger: string);
 begin
-  if Trigger = 'clean' then
+  if ATrigger = 'clean' then
     Clean
-  else if Trigger = 'repl' then
+  else if ATrigger = 'repl' then
     BuildREPL
-  else if Trigger = 'loader' then
+  else if ATrigger = 'loader' then
     BuildScriptLoader
-  else if Trigger = 'tests' then
+  else if ATrigger = 'tests' then
     BuildTests
-  else if Trigger = 'testrunner' then
+  else if ATrigger = 'testrunner' then
     BuildTestRunner
-  else if Trigger = 'benchmarkrunner' then
+  else if ATrigger = 'benchmarkrunner' then
     BuildBenchmarkRunner;
 end;
 

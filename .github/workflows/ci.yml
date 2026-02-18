@@ -44,6 +44,9 @@ jobs:
           echo 'C:\tools\freepascal\bin\i386-win32' >> "$GITHUB_PATH"
           echo '-FuC:/tools/freepascal/units/$fpctarget/*' >> 'C:/tools/freepascal/bin/i386-win32/fpc.cfg'
 
+      - name: Check formatting
+        run: ./format.pas --check
+
       - name: Build all
         run: ./build.pas --prod
 

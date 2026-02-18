@@ -33,11 +33,81 @@ Overflow and range checks are **enabled** — correctness is prioritized over ra
 | Classes | `TGoccia<Name>` prefix | `TGocciaObjectValue` |
 | Interfaces | `I<Name>` prefix | `IGocciaCallable` |
 | Private fields | `F` prefix | `FValue`, `FPrototype` |
+| Functions/Procedures | PascalCase | `Evaluate`, `EvaluateBinary` |
 | Methods | PascalCase | `GetProperty`, `ToStringLiteral` |
-| Free functions | PascalCase | `Evaluate`, `EvaluateBinary` |
 | Constants | PascalCase or UPPER_CASE | `DefaultGlobals`, `NaN` |
-| Parameters | `A` prefix | `AScope`, `AValue`, `AFileName` |
+| Parameters | `A` prefix (multi-letter only) | `AScope`, `AValue`, `AFileName` |
 | Enums | `TGoccia<Name>` for type, lowercase prefix for values | `TGocciaScopeKind`, `skGlobal` |
+
+### Function and Method Names
+
+All `function`, `procedure`, `constructor`, and `destructor` names must be **PascalCase** — the first letter of each word is uppercase, no underscores. This applies to both free functions and class methods:
+
+```pascal
+// Correct
+function EvaluateBinary(const AExpr: TGocciaBinaryExpression): TGocciaValue;
+procedure RegisterBuiltin(const AName: string; const AValue: TGocciaValue);
+class function CreateFromPairs(const APairs: TGocciaArrayValue): TGocciaMapValue;
+
+// Wrong — camelCase or snake_case
+function evaluateBinary(const AExpr: TGocciaBinaryExpression): TGocciaValue;
+procedure register_builtin(const AName: string; const AValue: TGocciaValue);
+```
+
+**Exception:** External C function bindings (declared with `external`) retain their original C naming (e.g., `clock_gettime`).
+
+This is auto-fixed by `./format.pas`.
+
+### Uses Clauses
+
+Each unit in the `uses` clause must appear on its own line, following [Embarcadero's recommended style](https://docwiki.embarcadero.com/RADStudio/Athens/en/Source_Code_Files_Units_and_Their_Structure). Units are grouped by category with a blank line between groups, and sorted alphabetically within each group:
+
+1. **System units** — FPC standard library (`Classes`, `SysUtils`, `Math`, `Generics.Collections`, etc.)
+2. **Third-party / non-prefixed project units** — units without `Goccia.*` prefix and without an `in` path (`TimingUtils`, etc.)
+3. **Project units** — `Goccia.*` namespaced units
+4. **Relative units** — units with an explicit `in` path (`FileUtils in 'units/FileUtils.pas'`, etc.)
+
+```pascal
+uses
+  Classes,
+  Generics.Collections,
+  SysUtils,
+
+  TimingUtils,
+
+  Goccia.Scope,
+  Goccia.Values.Primitives,
+
+  FileUtils in 'units/FileUtils.pas';
+```
+
+This ordering is enforced automatically by `./format.pas` via Lefthook pre-commit hook.
+
+### Parameters
+
+All function and procedure parameters must follow these rules:
+
+1. **`A` prefix** — Every parameter name with two or more characters starts with `A` (e.g., `AScope`, `AValue`, `AFileName`). This distinguishes parameters from fields (`F` prefix) and local variables. **Single-letter names** (e.g., `A`, `B`, `E`, `T`) are left as-is — the `A` prefix is not applied to them.
+
+2. **`const` where possible** — Use `const` for parameters that are not modified within the function body. This applies to all types: objects, strings, integers, records, etc. For records, `const` prevents field modification, so only omit it when the function needs to mutate the record locally.
+
+```pascal
+// Correct — multi-letter parameters get A prefix + const
+procedure ProcessValue(const AValue: TGocciaValue; const AName: string);
+function CreateChild(const AKind: TGocciaScopeKind): TGocciaScope;
+
+// Correct — single-letter parameters keep their name
+function DefaultCompare(constref A, B: TGocciaValue): Integer;
+function DoSubtract(const A, B: Double): Double;
+
+// Wrong — missing A prefix on multi-letter name, missing const
+procedure ProcessValue(Value: TGocciaValue; Name: string);
+```
+
+Exceptions to `const`:
+- Parameters that are genuinely modified inside the function (e.g., loop counters, accumulator records)
+- `out` parameters (which are written, not read)
+- `var` parameters (which are both read and written)
 
 ### File Organization
 
@@ -51,10 +121,12 @@ unit Goccia.Category.Name;
 interface
 
 uses
-  // Standard library units first
-  SysUtils, Classes, Generics.Collections,
-  // Project units
-  Goccia.Values.Primitives, Goccia.Scope;
+  Classes,
+  Generics.Collections,
+  SysUtils,
+
+  Goccia.Scope,
+  Goccia.Values.Primitives;
 
 type
   // Type declarations (classes, interfaces, records, enums)
@@ -64,7 +136,6 @@ type
 implementation
 
 uses
-  // Implementation-only dependencies (avoids circular references)
   Goccia.Evaluator;
 
 // Implementation
@@ -216,16 +287,16 @@ end;
 The constructor calls `InitializePrototype` and assigns `FPrototype := FSharedPrototype`. All method callbacks must use `ThisValue` (not `Self`) to access instance data:
 
 ```pascal
-function TMyValue.MyMethod(Args: TGocciaArgumentsCollection; ThisValue: TGocciaValue): TGocciaValue;
+function TMyValue.MyMethod(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Inst: TMyValue;
 begin
-  Inst := TMyValue(ThisValue);  // Cast once at method entry
+  Inst := TMyValue(AThisValue);  // Cast once at method entry
   // Use Inst.FData, Inst.Items, etc. — NOT Self.FData
 end;
 ```
 
-Methods that return `Self` for chaining (e.g., `Set.add`, `Map.set`) must return `ThisValue` instead.
+Methods that return `Self` for chaining (e.g., `Set.add`, `Map.set`) must return `AThisValue` instead.
 
 ### Evaluator Helper Patterns
 
@@ -266,6 +337,67 @@ This distinction is critical in the codebase:
 4. **Minimal public API** — Units expose only what's needed. Implementation details stay in the `implementation` section.
 
 5. **No global mutable state** — State flows through parameters (evaluation context, scope) rather than global variables. The only globals are immutable singletons.
+
+## Auto-Formatting
+
+The project includes `./format.pas`, an instantfpc script that formats Pascal source files. It runs automatically as a pre-commit hook via [Lefthook](https://github.com/evilmartians/lefthook) and can also be invoked manually — no build step needed.
+
+### Setup
+
+Install [Lefthook](https://github.com/evilmartians/lefthook) using your platform's package manager, then register the git hooks:
+
+```bash
+# macOS
+brew install lefthook
+
+# Linux (Snap)
+sudo snap install lefthook
+
+# Linux (APT — Debian/Ubuntu)
+# See https://github.com/evilmartians/lefthook/blob/master/docs/install.md
+curl -1sLf 'https://dl.cloudsmith.io/public/evilmartians/lefthook/setup.deb.sh' | sudo -E bash
+sudo apt install lefthook
+
+# Windows (Scoop)
+scoop install lefthook
+
+# Windows (Chocolatey)
+choco install lefthook
+
+# Any platform with Go installed
+go install github.com/evilmartians/lefthook@latest
+
+# Any platform with npm
+npm install -g lefthook
+```
+
+After installation, register the hooks in the repository:
+
+```bash
+lefthook install
+```
+
+### Manual Usage
+
+```bash
+# Format all project Pascal files
+./format.pas
+
+# Format specific files
+./format.pas units/Goccia.Engine.pas
+
+# Check only (exit 1 if changes needed)
+./format.pas --check
+```
+
+### What It Enforces
+
+All of the following are **auto-fixed** (not just warned about):
+
+- **Uses clauses**: one unit per line, grouped (System > Third-party > Project > Relative), alphabetically sorted within each group, blank line between groups. Units with an `in` path are always in the Relative group; `Goccia.*` units are Project; known FPC standard library units are System; everything else is Third-party.
+- **Function naming**: capitalizes the first letter of function, procedure, constructor, and destructor names to enforce PascalCase. Renames all references within the same file. External C bindings are excluded.
+- **Parameter naming**: adds the `A` prefix to multi-letter parameters (e.g., `Value` → `AValue`) and renames all references within the function scope (declaration, local variables, and body). Single-letter parameters and Pascal keyword conflicts are skipped.
+- **Stray spaces**: removes spurious spaces before `;`, `)`, and `,` (e.g., `string ;` → `string;`). String literals and comments are left untouched.
 
 ## Editor Configuration
 
