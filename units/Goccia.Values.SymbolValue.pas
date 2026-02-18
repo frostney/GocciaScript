@@ -35,7 +35,7 @@ uses
   Goccia.GarbageCollector;
 
 type
-  TSymbolMethodHost = class
+  TGocciaSymbolMethodHost = class
     function SymbolToString(Args: TGocciaArgumentsCollection;
       ThisValue: TGocciaValue): TGocciaValue;
   end;
@@ -43,9 +43,9 @@ type
 var
   GNextSymbolId: Integer = 0;
   GSharedToString: TGocciaNativeFunctionValue = nil;
-  GMethodHost: TSymbolMethodHost = nil;
+  GMethodHost: TGocciaSymbolMethodHost = nil;
 
-function TSymbolMethodHost.SymbolToString(Args: TGocciaArgumentsCollection;
+function TGocciaSymbolMethodHost.SymbolToString(Args: TGocciaArgumentsCollection;
   ThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (ThisValue is TGocciaSymbolValue) then
@@ -57,7 +57,7 @@ procedure EnsureSymbolPrototype;
 begin
   if Assigned(GSharedToString) then Exit;
 
-  GMethodHost := TSymbolMethodHost.Create;
+  GMethodHost := TGocciaSymbolMethodHost.Create;
   GSharedToString := TGocciaNativeFunctionValue.CreateWithoutPrototype(
     GMethodHost.SymbolToString, 'toString', 0);
 

@@ -18,7 +18,7 @@ function EvaluateInOperator(Left, Right: TGocciaValue): TGocciaValue;
 
 implementation
 
-uses Goccia.Values.ErrorHelper, Goccia.Values.SymbolValue;
+uses Goccia.Values.ErrorHelper, Goccia.Values.SymbolValue, Goccia.Keywords;
 
 function EvaluateTypeof(Operand: TGocciaValue): TGocciaValue;
 begin
@@ -134,7 +134,7 @@ var
 begin
   // ECMAScript: right operand must be an object, not a primitive
   if Right.IsPrimitive then
-    ThrowTypeError('Cannot use ''in'' operator to search for ''' +
+    ThrowTypeError('Cannot use ''' + KEYWORD_IN + ''' operator to search for ''' +
       Left.ToStringLiteral.Value + ''' in ' + Right.ToStringLiteral.Value);
 
   if Left is TGocciaSymbolValue then

@@ -267,7 +267,7 @@ The implicit coercion checks are implemented at the operator level (in `Goccia.E
 
 **No prototype:** Unlike strings and numbers, symbols do not have a shared prototype object. Instance methods (`toString()`) and properties (`description`) are provided directly by the `GetProperty` override on `TGocciaSymbolValue`. The `toString` method is a lazily initialized, GC-pinned singleton `TGocciaNativeFunctionValue` shared across all symbol instances. Symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods, since Symbol is an optional built-in that can be toggled via `TGocciaGlobalBuiltins` flags.
 
-Objects store symbol-keyed properties separately from string-keyed properties via `TGocciaObjectValue.FSymbolDescriptors`.
+Objects store symbol-keyed properties separately from string-keyed properties via `TGocciaObjectValue.FSymbolDescriptors`. The `in` operator handles symbol keys directly via `HasSymbolProperty`, without converting them to strings (see `Goccia.Evaluator.TypeOperations.pas`).
 
 ## Type Conversion
 

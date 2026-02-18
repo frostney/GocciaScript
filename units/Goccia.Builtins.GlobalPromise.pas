@@ -525,8 +525,13 @@ begin
   begin
     Str := TGocciaStringLiteralValue(Iterable).Value;
     Result := TGocciaArrayValue.Create;
-    for I := 1 to Length(Str) do
-      Result.Elements.Add(TGocciaStringLiteralValue.Create(Str[I]));
+    TGocciaGC.Instance.AddTempRoot(Result);
+    try
+      for I := 1 to Length(Str) do
+        Result.Elements.Add(TGocciaStringLiteralValue.Create(Str[I]));
+    finally
+      TGocciaGC.Instance.RemoveTempRoot(Result);
+    end;
   end
   else if Iterable is TGocciaSetValue then
     Result := TGocciaSetValue(Iterable).ToArray

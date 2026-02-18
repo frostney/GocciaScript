@@ -256,7 +256,7 @@ const obj = { [sym]: "value" };
 obj[sym]; // "value"
 ```
 
-`Object.defineProperty` and `Object.getOwnPropertySymbols` also support symbol keys.
+`Object.defineProperty` and `Object.getOwnPropertySymbols` also support symbol keys. The `in` operator checks for symbol-keyed properties, including global registry symbols created via `Symbol.for()`.
 
 Symbols have no prototype object — `toString()` and `description` are provided directly via `GetProperty` on the primitive value.
 

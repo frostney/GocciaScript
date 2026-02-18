@@ -72,3 +72,10 @@ test("in operator with symbol keys in arrays", () => {
   expect(sym in arr).toBe(true);
   expect(Symbol("missing") in arr).toBe(false);
 });
+
+test("in operator with Symbol.for keys", () => {
+  const sym = Symbol.for("global");
+  const obj = { [sym]: "registered" };
+  expect(Symbol.for("global") in obj).toBe(true);
+  expect(Symbol("global") in obj).toBe(false);
+});
