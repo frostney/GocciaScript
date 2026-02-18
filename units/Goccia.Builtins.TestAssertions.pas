@@ -122,6 +122,10 @@ type
 
     // Test execution
     function RunTests(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    // Exposed for native Pascal unit tests
+    property CurrentTestHasFailures: Boolean read FTestStats.CurrentTestHasFailures;
+    procedure ResetCurrentTestState;
   end;
 
 implementation
@@ -1104,6 +1108,12 @@ begin
     Inc(FTestStats.FailedTests)
   else
     Inc(FTestStats.PassedTests);
+end;
+
+procedure TGocciaTestAssertions.ResetCurrentTestState;
+begin
+  FTestStats.CurrentTestHasFailures := False;
+  FTestStats.CurrentTestAssertionCount := 0;
 end;
 
 procedure TGocciaTestAssertions.AssertionPassed(const ATestName: string);
