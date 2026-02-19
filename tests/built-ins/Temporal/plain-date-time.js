@@ -3,7 +3,9 @@ description: Temporal.PlainDateTime construction, properties, and methods
 features: [Temporal]
 ---*/
 
-describe("Temporal.PlainDateTime", () => {
+const isTemporal = typeof Temporal !== "undefined";
+
+describe.runIf(isTemporal)("Temporal.PlainDateTime", () => {
 
   test("constructor", () => {
     const dt = new Temporal.PlainDateTime(2024, 3, 15, 10, 30, 45);

@@ -42,6 +42,8 @@ var
 begin
   Describe := RunGit(['describe', '--tags', '--always']);
   CachedCommit := RunGit(['rev-parse', '--short', 'HEAD']);
+  if CachedCommit = '' then
+    CachedCommit := 'unknown';
 
   if (Describe = '') or not LooksLikeSemver(Describe) then
   begin

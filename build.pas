@@ -23,10 +23,15 @@ var
   Describe, Commit, Version: string;
   DashPos: SizeInt;
 begin
-  RunCommand('git', ['describe', '--tags', '--always'], Describe);
+  if not RunCommand('git', ['describe', '--tags', '--always'], Describe) then
+    Describe := '';
   Describe := Trim(Describe);
-  RunCommand('git', ['rev-parse', '--short', 'HEAD'], Commit);
+
+  if not RunCommand('git', ['rev-parse', '--short', 'HEAD'], Commit) then
+    Commit := '';
   Commit := Trim(Commit);
+  if Commit = '' then
+    Commit := 'unknown';
 
   if Describe = '' then
     Version := '0.0.0-dev'

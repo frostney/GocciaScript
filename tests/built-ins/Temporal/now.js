@@ -3,7 +3,9 @@ description: Temporal.Now methods
 features: [Temporal]
 ---*/
 
-describe("Temporal.Now", () => {
+const isTemporal = typeof Temporal !== "undefined";
+
+describe.runIf(isTemporal)("Temporal.Now", () => {
 
   test("instant() returns an Instant", () => {
     const instant = Temporal.Now.instant();

@@ -12,15 +12,15 @@ test("String.prototype.repeat repeats strings", () => {
 });
 
 test("String.prototype.repeat throws RangeError for negative count", () => {
-  expect(() => "abc".repeat(-1)).toThrow("RangeError");
-  expect(() => "x".repeat(-5)).toThrow("RangeError");
+  expect(() => "abc".repeat(-1)).toThrow(RangeError);
+  expect(() => "x".repeat(-5)).toThrow(RangeError);
 });
 
 test("String.prototype.repeat throws RangeError for Infinity", () => {
-  expect(() => "abc".repeat(Infinity)).toThrow("RangeError");
-  expect(() => "x".repeat(-Infinity)).toThrow("RangeError");
+  expect(() => "abc".repeat(Infinity)).toThrow(RangeError);
+  expect(() => "x".repeat(-Infinity)).toThrow(RangeError);
 });
 
-test("String.prototype.repeat throws RangeError for NaN", () => {
-  expect(() => "abc".repeat(NaN)).toThrow("RangeError");
+test("String.prototype.repeat treats NaN as 0", () => {
+  expect("abc".repeat(NaN)).toBe("");
 });

@@ -107,18 +107,32 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor;
 
+function NumericRank(const ANum: TGocciaNumberLiteralValue): Double;
+begin
+  if ANum.IsNaN then
+    Result := Infinity
+  else if ANum.IsNegativeInfinity then
+    Result := -1.7e308
+  else if ANum.IsInfinity then
+    Result := 1.7e308
+  else if ANum.IsNegativeZero then
+    Result := -1e-324
+  else
+    Result := ANum.Value;
+end;
+
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var
-  NumA, NumB: Double;
+  RankA, RankB: Double;
   StrA, StrB: string;
 begin
   if A is TGocciaNumberLiteralValue then
   begin
-    NumA := A.ToNumberLiteral.Value;
-    NumB := B.ToNumberLiteral.Value;
-    if NumA < NumB then
+    RankA := NumericRank(TGocciaNumberLiteralValue(A));
+    RankB := NumericRank(TGocciaNumberLiteralValue(B.ToNumberLiteral));
+    if RankA < RankB then
       Result := -1
-    else if NumA > NumB then
+    else if RankA > RankB then
       Result := 1
     else
       Result := 0;
@@ -144,13 +158,24 @@ end;
 
 function CallCompareFunc(const ACompareFunc: TGocciaValue; const ACallArgs: TGocciaArgumentsCollection;
   const A, B: TGocciaValue; const AThisValue: TGocciaValue): Double;
+var
+  CompResult: TGocciaNumberLiteralValue;
 begin
   ACallArgs.SetElement(0, A);
   ACallArgs.SetElement(1, B);
   if ACompareFunc is TGocciaNativeFunctionValue then
-    Result := TGocciaNativeFunctionValue(ACompareFunc).Call(ACallArgs, AThisValue).ToNumberLiteral.Value
+    CompResult := TGocciaNativeFunctionValue(ACompareFunc).Call(ACallArgs, AThisValue).ToNumberLiteral
   else
-    Result := TGocciaFunctionValue(ACompareFunc).Call(ACallArgs, AThisValue).ToNumberLiteral.Value;
+    CompResult := TGocciaFunctionValue(ACompareFunc).Call(ACallArgs, AThisValue).ToNumberLiteral;
+
+  if CompResult.IsNaN then
+    Result := 0
+  else if CompResult.IsInfinity then
+    Result := 1
+  else if CompResult.IsNegativeInfinity then
+    Result := -1
+  else
+    Result := CompResult.Value;
 end;
 
 procedure QuickSortElements(const AElements: TObjectList<TGocciaValue>; const ACompareFunc: TGocciaValue;

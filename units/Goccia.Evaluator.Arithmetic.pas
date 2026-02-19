@@ -171,14 +171,18 @@ begin
       Result := TGocciaNumberLiteralValue.NaNValue;
       Exit;
     end;
-    SameSign := LeftNum.IsInfinity = (RightNum.Value >= 0);
+    SameSign := LeftNum.IsInfinity = ((RightNum.Value > 0) or ((RightNum.Value = 0) and not RightNum.IsNegativeZero));
     Result := InfinityWithSign(SameSign);
     Exit;
   end;
 
   if RightNum.IsInfinite then
   begin
-    Result := TGocciaNumberLiteralValue.ZeroValue;
+    SameSign := (LeftNum.Value > 0) or ((LeftNum.Value = 0) and not LeftNum.IsNegativeZero);
+    if SameSign = RightNum.IsInfinity then
+      Result := TGocciaNumberLiteralValue.ZeroValue
+    else
+      Result := TGocciaNumberLiteralValue.NegativeZeroValue;
     Exit;
   end;
 
@@ -187,9 +191,19 @@ begin
     if LeftNum.Value = 0 then
       Result := TGocciaNumberLiteralValue.NaNValue
     else if LeftNum.Value > 0 then
-      Result := TGocciaNumberLiteralValue.InfinityValue
+    begin
+      if RightNum.IsNegativeZero then
+        Result := TGocciaNumberLiteralValue.NegativeInfinityValue
+      else
+        Result := TGocciaNumberLiteralValue.InfinityValue;
+    end
     else
-      Result := TGocciaNumberLiteralValue.NegativeInfinityValue;
+    begin
+      if RightNum.IsNegativeZero then
+        Result := TGocciaNumberLiteralValue.InfinityValue
+      else
+        Result := TGocciaNumberLiteralValue.NegativeInfinityValue;
+    end;
   end
   else
     Result := TGocciaNumberLiteralValue.Create(LeftNum.Value / RightNum.Value);
@@ -227,42 +241,71 @@ begin
     LeftNum.Value - RightNum.Value * Trunc(LeftNum.Value / RightNum.Value));
 end;
 
+function IsActualZero(const ANum: TGocciaNumberLiteralValue): Boolean; inline;
+begin
+  Result := (ANum.Value = 0) and not ANum.IsNaN and not ANum.IsInfinite;
+end;
+
 function EvaluateExponentiation(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
   if not ToNumericPair(ALeft, ARight, LeftNum, RightNum) then
   begin
-    if RightNum.Value = 0 then
+    if IsActualZero(RightNum) then
       Result := TGocciaNumberLiteralValue.OneValue
     else
       Result := TGocciaNumberLiteralValue.NaNValue;
     Exit;
   end;
 
-  if RightNum.Value = 0 then
+  if IsActualZero(RightNum) then
   begin
     Result := TGocciaNumberLiteralValue.OneValue;
+    Exit;
+  end;
+
+  if RightNum.IsInfinite then
+  begin
+    if LeftNum.IsInfinite or (Abs(LeftNum.Value) > 1) then
+    begin
+      if RightNum.IsInfinity then
+        Result := TGocciaNumberLiteralValue.InfinityValue
+      else
+        Result := TGocciaNumberLiteralValue.ZeroValue;
+    end
+    else if Abs(LeftNum.Value) = 1 then
+      Result := TGocciaNumberLiteralValue.NaNValue
+    else
+    begin
+      if RightNum.IsInfinity then
+        Result := TGocciaNumberLiteralValue.ZeroValue
+      else
+        Result := TGocciaNumberLiteralValue.InfinityValue;
+    end;
     Exit;
   end;
 
   if LeftNum.IsInfinite then
   begin
     if RightNum.Value > 0 then
-      Result := InfinityWithSign(LeftNum.IsInfinity or (Frac(RightNum.Value / 2) = 0))
+    begin
+      if LeftNum.IsInfinity then
+        Result := TGocciaNumberLiteralValue.InfinityValue
+      else if Frac(RightNum.Value) <> 0 then
+        Result := TGocciaNumberLiteralValue.InfinityValue
+      else if Frac(RightNum.Value / 2) = 0 then
+        Result := TGocciaNumberLiteralValue.InfinityValue
+      else
+        Result := TGocciaNumberLiteralValue.NegativeInfinityValue;
+    end
     else
-      Result := TGocciaNumberLiteralValue.ZeroValue;
-    Exit;
-  end;
-
-  if RightNum.IsInfinite then
-  begin
-    if Abs(LeftNum.Value) = 1 then
-      Result := TGocciaNumberLiteralValue.NaNValue
-    else if Abs(LeftNum.Value) > 1 then
-      Result := InfinityWithSign(RightNum.IsInfinity)
-    else
-      Result := InfinityWithSign(RightNum.IsNegativeInfinity);
+    begin
+      if LeftNum.IsNegativeInfinity and (Frac(RightNum.Value) = 0) and (Frac(RightNum.Value / 2) <> 0) then
+        Result := TGocciaNumberLiteralValue.NegativeZeroValue
+      else
+        Result := TGocciaNumberLiteralValue.ZeroValue;
+    end;
     Exit;
   end;
 

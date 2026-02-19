@@ -30,7 +30,8 @@ type
   public
     Name: string;
     SuiteFunction: TGocciaFunctionValue;
-    constructor Create(const AName: string; const ASuiteFunction: TGocciaFunctionValue);
+    IsSkipped: Boolean;
+    constructor Create(const AName: string; const ASuiteFunction: TGocciaFunctionValue; const AIsSkipped: Boolean = False);
   end;
 
   // Class to hold registered tests (instead of record)
@@ -95,6 +96,9 @@ type
     FRegisteredTests: TObjectList<TGocciaTestCase>;
     FBeforeEachCallbacks: TGocciaArgumentsCollection;
     FAfterEachCallbacks: TGocciaArgumentsCollection;
+    FCurrentSuiteIsSkipped: Boolean;
+    FSkipNextDescribe: Boolean;
+    FSkipNextTest: Boolean;
 
     procedure RunCallbacks(const ACallbacks: TGocciaArgumentsCollection);
     procedure AssertionPassed(const ATestName: string);
@@ -111,9 +115,16 @@ type
 
     // Test registration functions (don't execute immediately)
     function Describe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DescribeSkip(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DescribeSkipIf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DescribeRunIf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DescribeConditional(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function Test(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function It(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function Skip(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TestSkipIf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TestRunIf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TestConditional(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
 
     // Setup/teardown
@@ -145,11 +156,12 @@ uses
 
 { TGocciaTestSuite }
 
-constructor TGocciaTestSuite.Create(const AName: string; const ASuiteFunction: TGocciaFunctionValue);
+constructor TGocciaTestSuite.Create(const AName: string; const ASuiteFunction: TGocciaFunctionValue; const AIsSkipped: Boolean = False);
 begin
   inherited Create;
   Name := AName;
   SuiteFunction := ASuiteFunction;
+  IsSkipped := AIsSkipped;
 end;
 
 { TGocciaTestCase }
@@ -1003,6 +1015,7 @@ end;
 
 constructor TGocciaTestAssertions.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
+  DescribeFunction: TGocciaNativeFunctionValue;
   TestFunction: TGocciaNativeFunctionValue;
 begin
   inherited Create(AName, AScope, AThrowError);
@@ -1019,11 +1032,19 @@ begin
 
   // Register testing functions globally for easy access
   AScope.DefineLexicalBinding('expect', TGocciaNativeFunctionValue.Create(Expect, 'expect', 1), dtConst);
-  AScope.DefineLexicalBinding('describe', TGocciaNativeFunctionValue.Create(Describe, 'describe', 2), dtConst);
 
-  // Create test function with skip property
+  // Create describe function with skip/skipIf/runIf properties
+  DescribeFunction := TGocciaNativeFunctionValue.Create(Describe, 'describe', 2);
+  DescribeFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(DescribeSkip, 'skip', 2));
+  DescribeFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(DescribeSkipIf, 'skipIf', 1));
+  DescribeFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(DescribeRunIf, 'runIf', 1));
+  AScope.DefineLexicalBinding('describe', DescribeFunction, dtConst);
+
+  // Create test function with skip/skipIf/runIf properties
   TestFunction := TGocciaNativeFunctionValue.Create(Test, 'test', 2);
   TestFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(Skip, 'skip', 2));
+  TestFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(TestSkipIf, 'skipIf', 1));
+  TestFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(TestRunIf, 'runIf', 1));
   AScope.DefineLexicalBinding('test', TestFunction, dtConst);
 
   AScope.DefineLexicalBinding('it', TGocciaNativeFunctionValue.Create(It, 'it', 2), dtConst);
@@ -1033,8 +1054,8 @@ begin
 
   // Also set them in the builtin object for completeness
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(Expect, 'expect', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(Describe, 'describe', 2));
-  FBuiltinObject.RegisterNativeMethod(TestFunction);  // Use the same test function with skip property
+  FBuiltinObject.RegisterNativeMethod(DescribeFunction);
+  FBuiltinObject.RegisterNativeMethod(TestFunction);
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(It, 'it', 2));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1));
@@ -1062,6 +1083,9 @@ begin
   FTestStats.CurrentTestIsSkipped := False;
   FTestStats.CurrentTestAssertionCount := 0;
   FTestStats.TotalAssertionCount := 0;
+  FCurrentSuiteIsSkipped := False;
+  FSkipNextDescribe := False;
+  FSkipNextTest := False;
 end;
 
 procedure TGocciaTestAssertions.RunCallbacks(const ACallbacks: TGocciaArgumentsCollection);
@@ -1170,6 +1194,68 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+function TGocciaTestAssertions.DescribeSkip(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  SuiteName: string;
+  SuiteFunction: TGocciaFunctionValue;
+  Suite: TGocciaTestSuite;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'describe.skip', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
+    ThrowError('describe.skip expects first argument to be a string', 0, 0);
+
+  if not (AArgs.GetElement(1) is TGocciaFunctionValue) then
+    ThrowError('describe.skip expects second argument to be a function', 0, 0);
+
+  SuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
+  SuiteFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
+
+  Suite := TGocciaTestSuite.Create(SuiteName, SuiteFunction, True);
+  FRegisteredSuites.Add(Suite);
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaTestAssertions.DescribeSkipIf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'describe.skipIf', ThrowError);
+
+  FSkipNextDescribe := AArgs.GetElement(0).ToBooleanLiteral.Value;
+  Result := TGocciaNativeFunctionValue.Create(DescribeConditional, 'describe', 2);
+end;
+
+function TGocciaTestAssertions.DescribeRunIf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'describe.runIf', ThrowError);
+
+  FSkipNextDescribe := not AArgs.GetElement(0).ToBooleanLiteral.Value;
+  Result := TGocciaNativeFunctionValue.Create(DescribeConditional, 'describe', 2);
+end;
+
+function TGocciaTestAssertions.DescribeConditional(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  SuiteName: string;
+  SuiteFunction: TGocciaFunctionValue;
+  Suite: TGocciaTestSuite;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'describe', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
+    ThrowError('describe expects first argument to be a string', 0, 0);
+
+  if not (AArgs.GetElement(1) is TGocciaFunctionValue) then
+    ThrowError('describe expects second argument to be a function', 0, 0);
+
+  SuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
+  SuiteFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
+
+  Suite := TGocciaTestSuite.Create(SuiteName, SuiteFunction, FSkipNextDescribe);
+  FRegisteredSuites.Add(Suite);
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
 function TGocciaTestAssertions.Test(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TestName: string;
@@ -1187,8 +1273,7 @@ begin
   TestName := AArgs.GetElement(0).ToStringLiteral.Value;
   TestFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
 
-  // Register the test with the current suite name
-  TestCase := TGocciaTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName);
+  TestCase := TGocciaTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName, FCurrentSuiteIsSkipped);
   FRegisteredTests.Add(TestCase);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1219,6 +1304,45 @@ begin
 
   // Register the test as skipped with the current suite name
   TestCase := TGocciaTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName, True);
+  FRegisteredTests.Add(TestCase);
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaTestAssertions.TestSkipIf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'test.skipIf', ThrowError);
+
+  FSkipNextTest := AArgs.GetElement(0).ToBooleanLiteral.Value;
+  Result := TGocciaNativeFunctionValue.Create(TestConditional, 'test', 2);
+end;
+
+function TGocciaTestAssertions.TestRunIf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'test.runIf', ThrowError);
+
+  FSkipNextTest := not AArgs.GetElement(0).ToBooleanLiteral.Value;
+  Result := TGocciaNativeFunctionValue.Create(TestConditional, 'test', 2);
+end;
+
+function TGocciaTestAssertions.TestConditional(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  TestName: string;
+  TestFunction: TGocciaFunctionValue;
+  TestCase: TGocciaTestCase;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'test', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
+    ThrowError('test expects first argument to be a string', 0, 0);
+
+  if not (AArgs.GetElement(1) is TGocciaFunctionValue) then
+    ThrowError('test expects second argument to be a function', 0, 0);
+
+  TestName := AArgs.GetElement(0).ToStringLiteral.Value;
+  TestFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
+
+  TestCase := TGocciaTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName, FSkipNextTest or FCurrentSuiteIsSkipped);
   FRegisteredTests.Add(TestCase);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1318,6 +1442,7 @@ begin
       // Set current suite name so test() calls know which suite they belong to
       PreviousSuiteName := FTestStats.CurrentSuiteName;
       FTestStats.CurrentSuiteName := Suite.Name;
+      FCurrentSuiteIsSkipped := Suite.IsSkipped;
 
       try
         // Execute the describe function - this will call test() functions inside
@@ -1331,8 +1456,9 @@ begin
         end;
       end;
 
-      // Restore previous suite name
+      // Restore previous suite name and skip flag
       FTestStats.CurrentSuiteName := PreviousSuiteName;
+      FCurrentSuiteIsSkipped := False;
     end;
 
     // Now execute all registered tests

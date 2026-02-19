@@ -213,6 +213,8 @@ Warning: 'for' loops are not supported in GocciaScript
   --> script.js:1:1
 ```
 
+The parser uses balanced-parenthesis tracking (`SkipBalancedParens`) to correctly skip the loop condition even when it contains nested parentheses (e.g., `for (let i = Math.max(0, 1); i < fn(x); i++)`), then `SkipStatementOrBlock` to skip the loop body. This ensures subsequent code executes correctly.
+
 Traditional loops encourage imperative, mutation-heavy code. GocciaScript favors functional iteration through array methods:
 
 ```javascript
@@ -233,6 +235,8 @@ items.reduce((acc, item) => acc + item, 0);
 Warning: The 'with' statement is not supported in GocciaScript
   --> script.js:1:1
 ```
+
+Like loops, the parser uses `SkipBalancedParens` to safely skip the `with (...)` expression, including nested parentheses.
 
 `with` creates ambiguous scope and is deprecated even in JavaScript's strict mode. Note that `with` is a reserved keyword in GocciaScript (it cannot be used as a variable name), but it can be used as a property name (e.g., `obj.with`).
 

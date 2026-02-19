@@ -5,7 +5,9 @@ description: >
 features: [global-properties, GocciaScript]
 ---*/
 
-describe("GocciaScript global", () => {
+const isGocciaScript = typeof GocciaScript !== "undefined";
+
+describe.runIf(isGocciaScript)("GocciaScript global", () => {
   test("GocciaScript is an object", () => {
     expect(typeof GocciaScript).toBe("object");
   });
@@ -17,7 +19,7 @@ describe("GocciaScript global", () => {
   });
 });
 
-describe("GocciaScript.version", () => {
+describe.runIf(isGocciaScript)("GocciaScript.version", () => {
   test("version is a string", () => {
     expect(typeof GocciaScript.version).toBe("string");
   });
@@ -39,7 +41,7 @@ describe("GocciaScript.version", () => {
   });
 });
 
-describe("GocciaScript.commit", () => {
+describe.runIf(isGocciaScript)("GocciaScript.commit", () => {
   test("commit is a string", () => {
     expect(typeof GocciaScript.commit).toBe("string");
   });
@@ -50,7 +52,7 @@ describe("GocciaScript.commit", () => {
   });
 });
 
-describe("GocciaScript.builtIns", () => {
+describe.runIf(isGocciaScript)("GocciaScript.builtIns", () => {
   test("builtIns is an array", () => {
     expect(Array.isArray(GocciaScript.builtIns)).toBe(true);
   });

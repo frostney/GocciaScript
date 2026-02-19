@@ -202,7 +202,7 @@ end;
 
 Special number singletons: `NaNValue`, `PositiveInfinityValue`, `NegativeInfinityValue`, `NegativeZeroValue`.
 
-**Checking for special values:** Always use the property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) rather than inspecting `FValue` directly. Since special values store `0.0` in `FValue`, standard floating-point checks like `Math.IsNaN(FValue)` will return incorrect results.
+**Checking for special values:** Always use the property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) rather than inspecting `FValue` directly. Since special values store `0.0` in `FValue`, standard floating-point checks like `Math.IsNaN(FValue)` will return incorrect results. When checking for actual zero (not a special value), use `(Value = 0) and not IsNaN and not IsInfinite` — see `IsActualZero` in `Goccia.Evaluator.Arithmetic.pas` for the canonical helper. Similarly, the sort comparator in `Goccia.Values.ArrayValue.pas` uses `NumericRank` to map each special value to a distinct `Double` for correct ordering.
 
 ### Number Prototype (`TGocciaNumberObjectValue`)
 
@@ -225,7 +225,7 @@ TGocciaStringLiteralValue = class(TGocciaValue)
 end;
 ```
 
-String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system. When strings are boxed into `TGocciaStringObjectValue` (e.g., via `new String()` or implicit boxing), all instances share a single class-level string prototype singleton — methods are registered once and reused across all string object instances. This shared prototype singleton pattern is used consistently across the codebase: `TGocciaStringObjectValue`, `TGocciaArrayValue`, `TGocciaSetValue`, `TGocciaMapValue`, and `TGocciaFunctionBase` all follow it.
+String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system. When strings are boxed into `TGocciaStringObjectValue` (e.g., via `new String()` or implicit boxing), all instances share a single class-level string prototype singleton — methods are registered once and reused across all string object instances. This shared prototype singleton pattern is used consistently across the codebase: `TGocciaStringObjectValue`, `TGocciaNumberObjectValue`, `TGocciaArrayValue`, `TGocciaSetValue`, `TGocciaMapValue`, `TGocciaSymbolValue`, and `TGocciaFunctionBase` all follow it.
 
 ### Symbols
 
@@ -265,7 +265,7 @@ Each symbol has a globally unique `Id` assigned at creation. Type coercion follo
 
 The implicit coercion checks are implemented at the operator level (in `Goccia.Evaluator.Arithmetic.pas`, `Goccia.Evaluator.pas`, and `Goccia.Values.StringObjectValue.pas`) rather than in `ToStringLiteral`, because `ToStringLiteral` is also used internally for property keys and display purposes where conversion must succeed.
 
-**No prototype:** Unlike strings and numbers, symbols do not have a shared prototype object. Instance methods (`toString()`) and properties (`description`) are provided directly by the `GetProperty` override on `TGocciaSymbolValue`. The `toString` method is a lazily initialized, GC-pinned singleton `TGocciaNativeFunctionValue` shared across all symbol instances. Symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods, since Symbol is an optional built-in that can be toggled via `TGocciaGlobalBuiltins` flags.
+**Shared prototype singleton:** Like strings and numbers, symbols use a shared prototype object (`FSharedPrototype`), initialized via `InitializePrototype` and pinned with the GC. The `description` getter and `toString()` method are registered on this shared prototype, and `TGocciaSymbolValue.GetProperty` delegates to the prototype via `GetPropertyWithContext` so that accessor getters receive the correct symbol instance as `this`. `Symbol.prototype` is exposed on the Symbol constructor function, matching ECMAScript semantics. Symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods, since Symbol is an optional built-in that can be toggled via `TGocciaGlobalBuiltins` flags.
 
 Objects store symbol-keyed properties separately from string-keyed properties via `TGocciaObjectValue.FSymbolDescriptors`. The `in` operator handles symbol keys directly via `HasSymbolProperty`, without converting them to strings (see `Goccia.Evaluator.TypeOperations.pas`).
 
@@ -322,6 +322,14 @@ TGocciaPropertyDescriptorAccessor = class
   Configurable: Boolean;
 end;
 ```
+
+### Property Deletion
+
+`DeleteProperty` returns `True` for configurable or non-existent properties, `False` for non-configurable properties. The evaluator throws `TypeError` when `DeleteProperty` returns `False`, matching ECMAScript strict mode semantics where deleting a non-configurable property is an error.
+
+### Property Definition Merging
+
+When `Object.defineProperty` is called on an existing property, unspecified descriptor attributes are inherited from the existing descriptor rather than defaulting to `false`. For example, calling `Object.defineProperty(obj, "x", { enumerable: false })` on a property that is `configurable: true, writable: true` preserves those attributes. New properties use `false` as the default for all unspecified attributes, matching ECMAScript spec behavior.
 
 ### Property Order
 

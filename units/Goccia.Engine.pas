@@ -304,8 +304,8 @@ begin
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 
-  RegisterGlobalThis;
   RegisterGocciaScriptGlobal;
+  RegisterGlobalThis;
 end;
 
 procedure TGocciaEngine.RegisterGlobalThis;

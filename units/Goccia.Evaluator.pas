@@ -2486,26 +2486,22 @@ begin
       ArrayValue := TGocciaArrayValue(ObjValue);
       if TryStrToInt(PropertyName, Index) and (Index >= 0) and (Index < ArrayValue.Elements.Count) then
       begin
-        // Set array element to nil (creates a hole/sparse array)
         ArrayValue.Elements[Index] := nil;
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end
       else
       begin
-        // Try to delete as a regular property on the array object
-        ArrayValue.DeleteProperty(PropertyName);
+        if not ArrayValue.DeleteProperty(PropertyName) then
+          ThrowTypeError('Cannot delete property ''' + PropertyName + ''' of [object Array]');
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end;
     end
-    // Handle object property deletion
     else if ObjValue is TGocciaObjectValue then
     begin
       ObjectValue := TGocciaObjectValue(ObjValue);
-      // DeleteProperty returns False for non-configurable properties, True otherwise
-      if ObjectValue.DeleteProperty(PropertyName) then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue;
+      if not ObjectValue.DeleteProperty(PropertyName) then
+        ThrowTypeError('Cannot delete property ''' + PropertyName + ''' of [object Object]');
+      Result := TGocciaBooleanLiteralValue.TrueValue;
     end
     else
     begin

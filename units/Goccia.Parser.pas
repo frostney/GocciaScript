@@ -84,6 +84,7 @@ type
     function CollectGenericParameters: string;
     procedure SkipUntilSemicolon;
     procedure SkipBlock;
+    procedure SkipBalancedParens;
     procedure SkipStatementOrBlock;
     procedure SkipInterfaceDeclaration;
     function IsTypeDeclaration: Boolean;
@@ -1369,6 +1370,21 @@ begin
   Consume(gttRightBrace, 'Expected "}"');
 end;
 
+procedure TGocciaParser.SkipBalancedParens;
+var
+  Depth: Integer;
+begin
+  Consume(gttLeftParen, 'Expected "("');
+  Depth := 1;
+  while not IsAtEnd and (Depth > 0) do
+  begin
+    if Check(gttLeftParen) then Inc(Depth)
+    else if Check(gttRightParen) then Dec(Depth);
+    if Depth > 0 then Advance;
+  end;
+  Consume(gttRightParen, 'Expected ")"');
+end;
+
 procedure TGocciaParser.SkipStatementOrBlock;
 begin
   if Check(gttLeftBrace) then
@@ -1404,10 +1420,7 @@ begin
     'Use array methods like .forEach(), .map(), .filter(), or .reduce() instead',
     Line, Column);
 
-  Consume(gttLeftParen, 'Expected "(" after "for"');
-  while not Check(gttRightParen) and not IsAtEnd do
-    Advance;
-  Consume(gttRightParen, 'Expected ")" after for clauses');
+  SkipBalancedParens;
 
   SkipStatementOrBlock;
 
@@ -1425,10 +1438,7 @@ begin
     'Use array methods like .forEach(), .map(), .filter(), or .reduce() instead',
     Line, Column);
 
-  Consume(gttLeftParen, 'Expected "(" after "while"');
-  while not Check(gttRightParen) and not IsAtEnd do
-    Advance;
-  Consume(gttRightParen, 'Expected ")" after while condition');
+  SkipBalancedParens;
 
   SkipStatementOrBlock;
 
@@ -1449,10 +1459,7 @@ begin
   SkipStatementOrBlock;
 
   Consume(gttWhile, 'Expected "while" after do body');
-  Consume(gttLeftParen, 'Expected "(" after "while"');
-  while not Check(gttRightParen) and not IsAtEnd do
-    Advance;
-  Consume(gttRightParen, 'Expected ")" after do-while condition');
+  SkipBalancedParens;
   Consume(gttSemicolon, 'Expected ";" after do-while statement');
 
   Result := TGocciaEmptyStatement.Create(Line, Column);
@@ -1468,10 +1475,7 @@ begin
   AddWarning('The ''with'' statement is not supported in GocciaScript', '',
     Line, Column);
 
-  Consume(gttLeftParen, 'Expected "(" after "with"');
-  while not Check(gttRightParen) and not IsAtEnd do
-    Advance;
-  Consume(gttRightParen, 'Expected ")" after with expression');
+  SkipBalancedParens;
 
   SkipStatementOrBlock;
 

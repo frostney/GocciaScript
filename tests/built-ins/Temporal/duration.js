@@ -3,7 +3,9 @@ description: Temporal.Duration construction, properties, and methods
 features: [Temporal]
 ---*/
 
-describe("Temporal.Duration", () => {
+const isTemporal = typeof Temporal !== "undefined";
+
+describe.runIf(isTemporal)("Temporal.Duration", () => {
 
   test("constructor with all zeros", () => {
     const d = new Temporal.Duration();
@@ -111,13 +113,13 @@ describe("Temporal.Duration", () => {
 
   test("total() throws RangeError for durations with years or months", () => {
     const withYears = new Temporal.Duration(1);
-    expect(() => withYears.total("days")).toThrow("RangeError");
+    expect(() => withYears.total("days")).toThrow(RangeError);
 
     const withMonths = new Temporal.Duration(0, 3);
-    expect(() => withMonths.total("days")).toThrow("RangeError");
+    expect(() => withMonths.total("days")).toThrow(RangeError);
 
     const withBoth = new Temporal.Duration(1, 2, 0, 5);
-    expect(() => withBoth.total("hours")).toThrow("RangeError");
+    expect(() => withBoth.total("hours")).toThrow(RangeError);
   });
 
   test("from() with string", () => {

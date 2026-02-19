@@ -335,6 +335,7 @@ var
   PropertyName: string;
   DescriptorObject: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
+  ExistingDescriptor: TGocciaPropertyDescriptor;
   Enumerable: Boolean;
   Configurable: Boolean;
   Writable: Boolean;
@@ -342,6 +343,9 @@ var
   Getter: TGocciaValue;
   Setter: TGocciaValue;
   PropertyFlags: TPropertyFlags;
+  IsSymbolKey: Boolean;
+  SymbolKey: TGocciaSymbolValue;
+  HasValue, HasGet, HasSet: Boolean;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 3, 'Object.defineProperty', ThrowError);
 
@@ -354,7 +358,23 @@ begin
   Obj := TGocciaObjectValue(AArgs.GetElement(0));
   DescriptorObject := TGocciaObjectValue(AArgs.GetElement(2));
 
-  // Initialize all variables
+  IsSymbolKey := AArgs.GetElement(1) is TGocciaSymbolValue;
+  SymbolKey := nil;
+  PropertyName := '';
+  ExistingDescriptor := nil;
+
+  if IsSymbolKey then
+  begin
+    SymbolKey := TGocciaSymbolValue(AArgs.GetElement(1));
+    ExistingDescriptor := Obj.GetOwnSymbolPropertyDescriptor(SymbolKey);
+  end
+  else
+  begin
+    PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
+    ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
+  end;
+
+  // Initialize defaults: false for new properties, existing values for updates
   Enumerable := False;
   Configurable := False;
   Writable := False;
@@ -362,32 +382,47 @@ begin
   Getter := nil;
   Setter := nil;
 
-  // Get descriptor properties (defaults to false for missing properties)
+  if Assigned(ExistingDescriptor) then
+  begin
+    Enumerable := ExistingDescriptor.Enumerable;
+    Configurable := ExistingDescriptor.Configurable;
+    if ExistingDescriptor is TGocciaPropertyDescriptorData then
+    begin
+      Writable := ExistingDescriptor.Writable;
+      Value := TGocciaPropertyDescriptorData(ExistingDescriptor).Value;
+    end
+    else if ExistingDescriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      Getter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+      Setter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+    end;
+  end;
+
+  HasValue := DescriptorObject.HasProperty('value');
+  HasGet := DescriptorObject.HasProperty('get');
+  HasSet := DescriptorObject.HasProperty('set');
+
   if DescriptorObject.HasProperty('enumerable') then
     Enumerable := DescriptorObject.GetProperty('enumerable').ToBooleanLiteral.Value;
   if DescriptorObject.HasProperty('configurable') then
     Configurable := DescriptorObject.GetProperty('configurable').ToBooleanLiteral.Value;
   if DescriptorObject.HasProperty('writable') then
     Writable := DescriptorObject.GetProperty('writable').ToBooleanLiteral.Value;
-  if DescriptorObject.HasProperty('value') then
+  if HasValue then
     Value := DescriptorObject.GetProperty('value');
-  if DescriptorObject.HasProperty('get') then
+  if HasGet then
   begin
     Getter := DescriptorObject.GetProperty('get');
-    // Validate getter: must be a function or undefined
     if not (Getter is TGocciaUndefinedLiteralValue) and not (Getter is TGocciaFunctionValue) and not (Getter is TGocciaNativeFunctionValue) then
       ThrowError('TypeError: Object.defineProperty: getter must be a function or undefined', 0, 0);
-    // Treat undefined as nil
     if Getter is TGocciaUndefinedLiteralValue then
       Getter := nil;
   end;
-  if DescriptorObject.HasProperty('set') then
+  if HasSet then
   begin
     Setter := DescriptorObject.GetProperty('set');
-    // Validate setter: must be a function or undefined
     if not (Setter is TGocciaUndefinedLiteralValue) and not (Setter is TGocciaFunctionValue) and not (Setter is TGocciaNativeFunctionValue) then
       ThrowError('TypeError: Object.defineProperty: setter must be a function or undefined', 0, 0);
-    // Treat undefined as nil
     if Setter is TGocciaUndefinedLiteralValue then
       Setter := nil;
   end;
@@ -400,25 +435,24 @@ begin
   if Writable then
     Include(PropertyFlags, pfWritable);
 
-  // Create appropriate descriptor type
-  if DescriptorObject.HasProperty('value') then
+  // Determine descriptor type: if the new descriptor specifies value/writable,
+  // or if the existing descriptor is a data descriptor and no get/set is specified
+  if HasValue or DescriptorObject.HasProperty('writable') or
+     (Assigned(ExistingDescriptor) and (ExistingDescriptor is TGocciaPropertyDescriptorData) and not HasGet and not HasSet) or
+     (not Assigned(ExistingDescriptor) and not HasGet and not HasSet) then
   begin
-    // Data descriptor
     Descriptor := TGocciaPropertyDescriptorData.Create(Value, PropertyFlags);
-  end else
+  end
+  else
   begin
-    // Accessor descriptor
     Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter, PropertyFlags);
   end;
 
-  // Handle symbol keys
-  if AArgs.GetElement(1) is TGocciaSymbolValue then
-    Obj.DefineSymbolProperty(TGocciaSymbolValue(AArgs.GetElement(1)), Descriptor)
+  if IsSymbolKey then
+    Obj.DefineSymbolProperty(SymbolKey, Descriptor)
   else
-  begin
-    PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
     Obj.DefineProperty(PropertyName, Descriptor);
-  end;
+
   Result := Obj;
 end;
 

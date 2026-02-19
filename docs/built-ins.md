@@ -127,7 +127,7 @@ The JSON parser is a recursive descent implementation. Special handling:
 | `Object.create(proto)` | Create with prototype |
 | `Object.is(a, b)` | Same-value equality (handles -0, NaN) |
 | `Object.hasOwn(obj, prop)` | Own property check (supports class values; checks static properties, not private fields) |
-| `Object.defineProperty(obj, prop, desc)` | Define property descriptor |
+| `Object.defineProperty(obj, prop, desc)` | Define/update property descriptor (merges with existing) |
 | `Object.defineProperties(obj, props)` | Define multiple descriptors |
 | `Object.getOwnPropertyNames(obj)` | All own property names |
 | `Object.getOwnPropertyDescriptor(obj, prop)` | Get property descriptor |
@@ -280,7 +280,7 @@ obj[sym]; // "value"
 
 `Object.defineProperty` and `Object.getOwnPropertySymbols` also support symbol keys. The `in` operator checks for symbol-keyed properties, including global registry symbols created via `Symbol.for()`.
 
-Symbols have no prototype object — `toString()` and `description` are provided directly via `GetProperty` on the primitive value.
+**Prototype:** `Symbol.prototype` is an object containing `toString()` and a `description` getter, matching ECMAScript semantics. All symbol instances share this prototype.
 
 **Coercion semantics:** Implicit conversion of a symbol to string or number throws `TypeError`. Use `String(symbol)` or `symbol.toString()` for explicit string conversion. See [value-system.md](value-system.md#symbols) for details.
 
