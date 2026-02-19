@@ -88,12 +88,12 @@ type
 
 implementation
 
+uses
+  Goccia.FileExtensions;
+
 procedure WarnIfJSXExtensionMismatch(const AFilePath: string);
-var
-  Ext: string;
 begin
-  Ext := LowerCase(ExtractFileExt(AFilePath));
-  if (Ext = '.js') or (Ext = '.ts') then
+  if not IsJSXNativeExtension(ExtractFileExt(AFilePath)) then
     WriteLn(Format('Warning: JSX syntax found in %s — consider using a .jsx or .tsx extension', [AFilePath]));
 end;
 

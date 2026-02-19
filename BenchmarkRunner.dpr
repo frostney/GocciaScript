@@ -9,6 +9,7 @@ uses
   Goccia.Benchmark.Reporter,
   Goccia.Builtins.Benchmark,
   Goccia.Engine,
+  Goccia.FileExtensions,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -166,7 +167,7 @@ begin
   try
     if DirectoryExists(APath) then
     begin
-      Files := FindAllFiles(APath);
+      Files := FindAllFiles(APath, ScriptExtensions);
       try
         for I := 0 to Files.Count - 1 do
         begin

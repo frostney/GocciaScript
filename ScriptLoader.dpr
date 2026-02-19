@@ -9,6 +9,7 @@ uses
   TimingUtils,
 
   Goccia.Engine,
+  Goccia.FileExtensions,
   Goccia.Values.Primitives,
 
   FileUtils in 'units/FileUtils.pas';
@@ -40,7 +41,7 @@ var
 begin
   if DirectoryExists(APath) then
   begin
-    Files := FindAllFiles(APath);
+    Files := FindAllFiles(APath, ScriptExtensions);
     try
       for I := 0 to Files.Count - 1 do
       begin
@@ -63,7 +64,7 @@ end;
 begin
   if ParamCount < 1 then
   begin
-    WriteLn('Usage: ScriptLoader <filename.js|.jsx|.ts|.tsx>');
+    WriteLn('Usage: ScriptLoader <filename.js|.jsx|.ts|.tsx|.mjs>');
     WriteLn('or');
     WriteLn('Usage: ScriptLoader <directory>');
     ExitCode := 1;

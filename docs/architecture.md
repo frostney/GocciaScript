@@ -32,6 +32,7 @@ The top-level entry point. Provides static convenience methods (`RunScript`, `Ru
 - **Garbage collector initialization** — Calls `TGocciaGarbageCollector.Initialize`, registers the global scope as a GC root, and pins singleton values via `PinSingletons` (`UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache, etc.).
 - **Built-in registration** — A single `RegisterBuiltIns` method selectively creates and registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, error constructors) based on a `TGocciaGlobalBuiltins` flag set. All built-in constructors share the same `(name, scope, ThrowError)` signature.
 - **Interpreter lifecycle** — Creates and owns the `TGocciaInterpreter` instance.
+- **Module resolver** — Creates a default `TGocciaModuleResolver` (base directory = entry script directory) and passes it to the interpreter. Accepts an optional custom resolver via a constructor overload; when injected, the engine does not own it. Exposes `AddAlias` and `RegisterGlobalModule` convenience methods.
 - **Prototype chain setup** — Calls `RegisterBuiltinConstructors` to wire up the `Object → Array → Number → String` prototype chain.
 - **`globalThis` registration** — After all built-ins are registered, `RegisterGlobalThis` creates a `TGocciaObjectValue` populated with all current global scope bindings, adds a self-referential `globalThis` property, and binds it as `const` in the global scope.
 - **`GocciaScript` global** — `RegisterGocciaScriptGlobal` creates a `const` object with `version` (from `Goccia.Version`), `commit` (short git hash), and `builtIns` (array of enabled `TGocciaGlobalBuiltin` flag names, derived via RTTI).
@@ -137,13 +138,24 @@ The Abstract Syntax Tree is structured into three layers:
 - **Expressions** — Literals, binary/unary operations, member access, calls, arrow functions, template literals, class expressions, destructuring patterns, spread elements, etc.
 - **Statements** — Variable declarations, blocks, if/else, switch/case/break, return, throw, try-catch-finally, import/export, class declarations.
 
+### File Extensions (`Goccia.FileExtensions.pas`)
+
+A dependency-free constants unit (same pattern as `Goccia.Keywords.Reserved.pas`) that centralizes all file extension definitions:
+
+- **Individual constants** — `EXT_JS` (`.js`), `EXT_JSX` (`.jsx`), `EXT_TS` (`.ts`), `EXT_TSX` (`.tsx`), `EXT_MJS` (`.mjs`), `EXT_JSON` (`.json`).
+- **`ScriptExtensions`** — Canonical ordered array of script extensions, used by the file scanner (`FileUtils.pas`) and the module resolver for extension probing.
+- **`JSXNativeExtensions`** — Extensions where JSX syntax is expected (`.jsx`, `.tsx`), used by the JSX transformer to determine whether to emit a warning.
+- **`IsScriptExtension` / `IsJSXNativeExtension`** — Case-insensitive convenience helpers.
+
+Adding a new extension requires a single change in this unit — all consumers pick it up automatically.
+
 ### Interpreter (`Goccia.Interpreter.pas`)
 
 A thin orchestration layer that:
 
 - Owns the **global scope** (`TGocciaScope`).
 - Delegates AST evaluation to the Evaluator.
-- Manages **module loading** and caching (ES6-style imports). Each module executes in its own isolated child scope (`skModule`) of the global scope, preventing module-internal variables from leaking.
+- Manages **module loading** and caching (ES6-style imports). Uses `TGocciaModuleResolver` (received from the engine) for path resolution, with a `GlobalModules` dictionary checked before file resolution for bare-specifier imports. Each module executes in its own isolated child scope (`skModule`) of the global scope, preventing module-internal variables from leaking. All exceptions from the resolver are wrapped into `TGocciaRuntimeError` for consistent error handling.
 - Supports **hot module reloading** for development (`CheckForModuleReload`).
 
 ### Evaluator (`Goccia.Evaluator.pas` + sub-modules)
@@ -222,16 +234,48 @@ Additionally, `ResolveIdentifier(Name)` on `TGocciaScope` provides a unified ide
 
 ## Module System
 
-The interpreter supports ES module-style `import`/`export` (named exports only) with module caching, scope isolation, and relative path resolution:
+The interpreter supports ES module-style `import`/`export` (named exports only) with module caching, scope isolation, and pluggable path resolution.
 
-1. `import { x } from './module.js'` triggers `LoadModule(modulePath, importingFilePath)`.
-2. The module path is resolved relative to the importing file's directory via `ResolveModulePath`. Paths must start with `./` or `../`.
-3. For `.js` files: the module is lexed, parsed, and executed in an isolated child scope (`skModule`) of the global scope.
-4. For `.json` files: the file is parsed via `TGocciaJSONParser.Parse` (`Goccia.JSON` unit) and each top-level key becomes a named export. JSON modules skip the lexer/parser/evaluator pipeline entirely.
-5. Exported bindings are extracted from the module scope (JS) or the parsed object (JSON) and bound in the importing scope.
-6. Modules are cached by resolved absolute path to avoid re-evaluation and prevent loading the same file via different relative paths.
-7. `CheckForModuleReload` supports development-time hot reloading.
-8. Circular dependencies are detected via `FLoadingModules` tracking. A module that is still being loaded returns its partially-populated exports table.
+### Module Resolver (`Goccia.Modules.Resolver.pas`)
+
+`TGocciaModuleResolver` handles all path resolution with a three-stage pipeline:
+
+1. **Alias expansion** — If the import path matches a registered alias prefix (e.g., `@/`), it is replaced with the alias target resolved against the base directory. When multiple aliases match, the longest prefix wins (see [Alias Configuration](#alias-configuration)).
+2. **Path resolution** — Relative (`./`, `../`) and absolute (`/`) paths are resolved against the importing file's directory.
+3. **Extension resolution** — If the exact path does not exist, the resolver tries appending each extension in order: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`. It also tries `index` files within directories (e.g., `./utils` → `./utils/index.js`).
+
+The resolver's `Resolve` method is `virtual`, so embedders can subclass `TGocciaModuleResolver` to implement custom resolution logic (e.g., `node_modules`-style lookup, URL imports, or in-memory modules).
+
+The engine creates a default resolver whose base directory is the entry script's directory. Custom resolvers can be injected via the `TGocciaEngine.Create` overload that accepts a `TGocciaModuleResolver` parameter.
+
+### Global Modules
+
+The interpreter maintains a `GlobalModules` dictionary for bare-specifier imports (paths without `./`, `../`, or `/` prefixes). When a module is loaded, global modules are checked first. Embedders register global modules via `TGocciaEngine.RegisterGlobalModule(Name, Module)`.
+
+### Loading Pipeline
+
+1. `import { x } from './module'` triggers `LoadModule(modulePath, importingFilePath)`.
+2. Global modules are checked first (bare specifiers).
+3. The module path is resolved by `TGocciaModuleResolver.Resolve` — aliases applied, path resolved, extensions tried.
+4. For script files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`): the module is lexed, parsed, and executed in an isolated child scope (`skModule`) of the global scope.
+5. For `.json` files: the file is parsed via `TGocciaJSONParser.Parse` (`Goccia.JSON` unit) and each top-level key becomes a named export. JSON modules skip the lexer/parser/evaluator pipeline entirely.
+6. Exported bindings are extracted from the module scope (JS) or the parsed object (JSON) and bound in the importing scope.
+7. Modules are cached by resolved absolute path to avoid re-evaluation and prevent loading the same file via different relative paths.
+8. `CheckForModuleReload` supports development-time hot reloading.
+9. Circular dependencies are detected via `FLoadingModules` tracking. A module that is still being loaded returns its partially-populated exports table.
+
+### Alias Configuration
+
+Aliases are prefix-based replacements configured on the resolver (or via `Engine.AddAlias`):
+
+```pascal
+Engine.AddAlias('@/', 'src/');              // @/utils → <baseDir>/src/utils
+Engine.AddAlias('@/components/', 'ui/lib/'); // @/components/Button → <baseDir>/ui/lib/Button
+```
+
+The alias value is resolved relative to the resolver's base directory (the entry script's directory by default).
+
+**Longest-prefix matching:** When multiple alias patterns match an import path, the resolver always picks the one with the longest `Pair.Key`. For example, with both `@/` and `@/components/` registered, `@/components/Button` matches `@/components/` (not `@/`). This makes alias resolution deterministic regardless of `TDictionary` iteration order.
 
 **Export forms:**
 
@@ -246,7 +290,9 @@ The interpreter supports ES module-style `import`/`export` (named exports only) 
 | Syntax | AST Node | Processing |
 |--------|----------|------------|
 | `import { x } from './m.js';` | `TGocciaImportDeclaration` | `LoadModule`: lex, parse, execute, bind exports |
+| `import { x } from './m';` | `TGocciaImportDeclaration` | Extension-less: resolver tries `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs` |
 | `import { x } from './f.json';` | `TGocciaImportDeclaration` | `LoadJsonModule`: parsed JSON, top-level keys as exports |
+| `import { x } from '@/lib';` | `TGocciaImportDeclaration` | Alias resolved, then loaded normally |
 
 **Not supported:** `export default`, namespace imports (`import * as`), side-effect imports (`import "module"`), dynamic `import()`.
 

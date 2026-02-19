@@ -89,6 +89,107 @@ end;
 
 `TimingUtils` provides three clock functions: `GetNanoseconds` and `GetMilliseconds` for monotonic duration timing (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows), and `GetEpochNanoseconds` for wall-clock epoch time (`clock_gettime(CLOCK_REALTIME)` on Unix/macOS, `GetSystemTimeAsFileTime` on Windows).
 
+## Module Resolution
+
+The engine uses a pluggable module resolver (`TGocciaModuleResolver`) that supports extensionless imports, path aliases, and index file resolution.
+
+### Extension-Free Imports
+
+Import paths can omit file extensions. The resolver tries extensions in order: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`:
+
+```javascript
+// All of these resolve to the same file:
+import { add } from "./math-utils.js";  // explicit extension
+import { add } from "./math-utils";     // extension resolved automatically
+```
+
+Directory imports resolve to `index` files:
+
+```javascript
+import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx, etc.)
+```
+
+### Path Aliases
+
+Aliases map import prefixes to directories, similar to TypeScript's `paths` or Vite's `resolve.alias`:
+
+```pascal
+Engine.AddAlias('@/', 'src/');              // @/utils → <baseDir>/src/utils
+Engine.AddAlias('~/', 'lib/shared/');       // ~/helpers → <baseDir>/lib/shared/helpers
+Engine.AddAlias('@/components/', 'ui/lib/'); // more specific prefix for a subtree
+```
+
+The alias target is resolved relative to the entry script's directory.
+
+**Longest-prefix matching:** When multiple aliases overlap (e.g., `@/` and `@/components/`), the resolver always picks the longest matching prefix. This means `@/components/Button` uses the `@/components/` alias, not `@/`.
+
+Scripts can then import using the alias:
+
+```javascript
+import { formatDate } from "@/utils/dates";
+```
+
+### Custom Resolver
+
+For advanced resolution logic (e.g., `node_modules` lookup, URL imports, or in-memory modules), subclass `TGocciaModuleResolver` and override the `Resolve` method:
+
+```pascal
+uses Goccia.Modules.Resolver;
+
+type
+  TMyResolver = class(TGocciaModuleResolver)
+  public
+    function Resolve(const AModulePath, AImportingFilePath: string): string; override;
+  end;
+
+function TMyResolver.Resolve(const AModulePath, AImportingFilePath: string): string;
+begin
+  // Custom logic here — fall back to inherited for standard resolution
+  Result := inherited Resolve(AModulePath, AImportingFilePath);
+end;
+
+var
+  Resolver: TMyResolver;
+  Engine: TGocciaEngine;
+begin
+  Resolver := TMyResolver.Create('/path/to/project');
+  Engine := TGocciaEngine.Create('app.js', Source, TGocciaEngine.DefaultGlobals, Resolver);
+  try
+    Engine.Execute;
+  finally
+    Engine.Free;
+    Resolver.Free;  // caller owns the resolver when injected
+  end;
+end;
+```
+
+When no custom resolver is provided, the engine creates a default `TGocciaModuleResolver` whose base directory is the entry script's directory.
+
+### Global Modules
+
+Global modules are bare-specifier imports that bypass file resolution entirely. They are checked before the resolver runs:
+
+```pascal
+uses Goccia.Modules;
+
+var
+  Module: TGocciaModule;
+begin
+  Module := TGocciaModule.Create('my-lib');
+  Module.ExportsTable.Add('version', TGocciaStringLiteralValue.Create('1.0.0'));
+  Engine.RegisterGlobalModule('my-lib', Module);
+end;
+```
+
+Scripts can then import from the global module by name:
+
+```javascript
+import { version } from "my-lib";
+console.log(version);  // "1.0.0"
+```
+
+This provides the foundation for future built-in module packages that can be coupled to `TGocciaGlobalBuiltins` flags.
+
 ## Controlling Built-ins
 
 The `TGocciaGlobalBuiltins` set controls which built-in objects are available to scripts. This is the primary sandboxing mechanism.
@@ -404,7 +505,7 @@ The repository includes four embedding examples:
 
 | Program | File | Description |
 |---------|------|-------------|
-| `ScriptLoader` | `ScriptLoader.dpr` | Executes `.js` files from disk (one-shot) |
+| `ScriptLoader` | `ScriptLoader.dpr` | Executes script files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`) from disk (one-shot) |
 | `REPL` | `REPL.dpr` | Interactive read-eval-print loop (long-lived engine) |
 | `TestRunner` | `TestRunner.dpr` | Runs test suites with `ggTestAssertions` enabled |
 | `BenchmarkRunner` | `BenchmarkRunner.dpr` | Runs benchmarks with `ggBenchmark` enabled |

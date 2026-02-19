@@ -19,6 +19,7 @@ uses
   Goccia.Lexer,
   Goccia.Logger,
   Goccia.Modules,
+  Goccia.Modules.Resolver,
   Goccia.Parser,
   Goccia.Scope,
   Goccia.Token,
@@ -37,13 +38,14 @@ type
     FGlobalScope: TGocciaGlobalScope;
     FModules: TDictionary<string, TGocciaModule>;
     FLoadingModules: TDictionary<string, Boolean>;
+    FGlobalModules: TDictionary<string, TGocciaModule>;
     FFileName: string;
     FSourceLines: TStringList;
     FJSXEnabled: Boolean;
+    FResolver: TGocciaModuleResolver;
 
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     function CreateEvaluationContext: TGocciaEvaluationContext;
-    function ResolveModulePath(const AModulePath, AImportingFilePath: string): string;
     function LoadJsonModule(const AResolvedPath: string): TGocciaModule;
   public
     constructor Create(const AFileName: string; const ASourceLines: TStringList);
@@ -54,12 +56,15 @@ type
 
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
     property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
+    property Resolver: TGocciaModuleResolver read FResolver write FResolver;
+    property GlobalModules: TDictionary<string, TGocciaModule> read FGlobalModules;
   end;
 
 
 implementation
 
 uses
+  Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
   Goccia.JSX.SourceMap,
@@ -75,6 +80,7 @@ begin
   FGlobalScope := TGocciaGlobalScope.Create;
   FModules := TDictionary<string, TGocciaModule>.Create;
   FLoadingModules := TDictionary<string, Boolean>.Create;
+  FGlobalModules := TDictionary<string, TGocciaModule>.Create;
 end;
 
 destructor TGocciaInterpreter.Destroy;
@@ -83,6 +89,7 @@ begin
     FGlobalScope.Free;
   FModules.Free;
   FLoadingModules.Free;
+  FGlobalModules.Free;
 
   inherited;
 end;
@@ -94,28 +101,6 @@ begin
   Result.OnError := ThrowError;
   Result.LoadModule := LoadModule;
   Result.CurrentFilePath := FFileName;
-end;
-
-function TGocciaInterpreter.ResolveModulePath(const AModulePath, AImportingFilePath: string): string;
-var
-  BaseDirectory: string;
-begin
-  if (Length(AModulePath) > 0) and (AModulePath[1] = '/') then
-  begin
-    Result := ExpandFileName(AModulePath);
-    Exit;
-  end;
-
-  if (Copy(AModulePath, 1, 2) <> './') and (Copy(AModulePath, 1, 3) <> '../') then
-    raise TGocciaRuntimeError.Create(
-      Format('Import path "%s" must start with "./" or "../"', [AModulePath]),
-      0, 0, AImportingFilePath, nil);
-
-  BaseDirectory := ExtractFilePath(AImportingFilePath);
-  if BaseDirectory = '' then
-    BaseDirectory := GetCurrentDir + PathDelim;
-
-  Result := ExpandFileName(BaseDirectory + AModulePath);
 end;
 
 function TGocciaInterpreter.Execute(const AProgram: TGocciaProgram): TGocciaValue;
@@ -154,12 +139,21 @@ var
   SourceModule: TGocciaModule;
   VarInfo: TGocciaVariableInfo;
 begin
-  ResolvedPath := ResolveModulePath(AModulePath, AImportingFilePath);
+  if FGlobalModules.TryGetValue(AModulePath, Result) then
+    Exit;
 
-  if not FileExists(ResolvedPath) then
-    raise TGocciaRuntimeError.Create(
-      Format('Module not found: "%s" (resolved to "%s")', [AModulePath, ResolvedPath]),
-      0, 0, AImportingFilePath, nil);
+  try
+    if Assigned(FResolver) then
+      ResolvedPath := FResolver.Resolve(AModulePath, AImportingFilePath)
+    else
+      raise EGocciaModuleNotFound.CreateFmt(
+        'No module resolver configured and cannot resolve "%s"', [AModulePath]);
+  except
+    on E: TGocciaRuntimeError do
+      raise;
+    on E: Exception do
+      raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath, nil);
+  end;
 
   if FModules.TryGetValue(ResolvedPath, Result) then
   begin
@@ -168,7 +162,7 @@ begin
     Exit;
   end;
 
-  if LowerCase(ExtractFileExt(ResolvedPath)) = '.json' then
+  if LowerCase(ExtractFileExt(ResolvedPath)) = EXT_JSON then
   begin
     Result := LoadJsonModule(ResolvedPath);
     Exit;

@@ -9,6 +9,7 @@ uses
   TimingUtils,
 
   Goccia.Engine,
+  Goccia.FileExtensions,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -244,16 +245,16 @@ var
 begin
   if ParamCount < 1 then
   begin
-    WriteLn('Usage: TestRunner <filename.{js|jsx|ts|tsx}>');
+    WriteLn('Usage: TestRunner <filename.{js|jsx|ts|tsx|mjs}>');
     WriteLn('or');
-    WriteLn('Usage: TestRunner <directory> (searches for .js, .jsx, .ts, .tsx files)');
+    WriteLn('Usage: TestRunner <directory> (searches for .js, .jsx, .ts, .tsx, .mjs files)');
     ExitCode := 1;
   end
   else
   begin
     if DirectoryExists(ParamStr(1)) then
     begin
-      Files := FindAllFiles(ParamStr(1));
+      Files := FindAllFiles(ParamStr(1), ScriptExtensions);
       try 
         PrintTestResults(RunScriptsFromFiles(Files));
       finally

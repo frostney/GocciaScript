@@ -25,6 +25,7 @@ uses
   Goccia.Interpreter,
   Goccia.JSX.SourceMap,
   Goccia.Modules,
+  Goccia.Modules.Resolver,
   Goccia.Parser,
   Goccia.Values.Primitives;
 
@@ -63,6 +64,8 @@ type
     const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal, ggJSX];
   private
     FInterpreter: TGocciaInterpreter;
+    FResolver: TGocciaModuleResolver;
+    FOwnsResolver: Boolean;
     FFileName: string;
     FSourceLines: TStringList;
     FGlobals: TGocciaGlobalBuiltins;
@@ -91,11 +94,15 @@ type
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
-    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
+    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins); overload;
+    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver); overload;
     destructor Destroy; override;
 
     function Execute: TGocciaScriptResult;
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
+
+    procedure AddAlias(const APattern, AReplacement: string);
+    procedure RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
 
     class function RunScript(const ASource: string; const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult; overload;
     class function RunScript(const ASource: string; const AFileName: string = 'inline.goccia'): TGocciaScriptResult; overload;
@@ -105,6 +112,7 @@ type
     class function RunScriptFromStringList(const ASource: TStringList; const AFileName: string): TGocciaScriptResult; overload;
 
     property Interpreter: TGocciaInterpreter read FInterpreter;
+    property Resolver: TGocciaModuleResolver read FResolver;
     property BuiltinConsole: TGocciaConsole read FBuiltinConsole;
     property BuiltinMath: TGocciaMath read FBuiltinMath;
     property BuiltinGlobalObject: TGocciaGlobalObject read FBuiltinGlobalObject;
@@ -144,44 +152,45 @@ uses
   Goccia.Version;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
-var
-  I: Integer;
+begin
+  Create(AFileName, ASourceLines, AGlobals, nil);
+end;
+
+constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver);
 begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FGlobals := AGlobals;
 
-  // Initialize singletons (only creates if not yet initialized)
+  if Assigned(AResolver) then
+  begin
+    FResolver := AResolver;
+    FOwnsResolver := False;
+  end
+  else
+  begin
+    FResolver := TGocciaModuleResolver.Create(ExtractFilePath(ExpandFileName(AFileName)));
+    FOwnsResolver := True;
+  end;
+
   TGocciaGarbageCollector.Initialize;
   TGocciaMicrotaskQueue.Initialize;
 
-  // Note: We don't collect between engines because class-level shared objects
-  // (like TGocciaFunctionBase.FSharedPrototype and its children) are only
-  // reachable via class vars, not via GC roots. The GC handles collection
-  // during execution (between function calls, in benchmarks, etc.)
-
-  // Create interpreter without globals
   FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines);
   FInterpreter.JSXEnabled := ggJSX in FGlobals;
+  FInterpreter.Resolver := FResolver;
 
-  // Register the global scope as a GC root
   TGocciaGarbageCollector.Instance.AddRoot(FInterpreter.GlobalScope);
 
-  // Pin singleton values so the GC never collects them
   PinSingletons;
-
-  // Register built-ins based on the globals set
   RegisterBuiltIns;
 end;
 
 destructor TGocciaEngine.Destroy;
 begin
-  // Remove global scope from GC roots before cleanup
   if Assigned(TGocciaGarbageCollector.Instance) and Assigned(FInterpreter) then
     TGocciaGarbageCollector.Instance.RemoveRoot(FInterpreter.GlobalScope);
 
-  // Free builtin wrapper objects (these are NOT GC-managed, but their
-  // FBuiltinObject fields ARE - the wrapper destructors skip freeing them)
   FBuiltinConsole.Free;
   FBuiltinMath.Free;
   FBuiltinGlobalObject.Free;
@@ -197,8 +206,9 @@ begin
   FBuiltinBenchmark.Free;
   FBuiltinTemporal.Free;
 
-  // Free interpreter after builtins
   FInterpreter.Free;
+  if FOwnsResolver then
+    FResolver.Free;
   inherited;
 end;
 
@@ -351,6 +361,16 @@ begin
   GocciaObj.AssignProperty('builtIns', BuiltInsArray);
 
   FInterpreter.GlobalScope.DefineLexicalBinding('GocciaScript', GocciaObj, dtConst);
+end;
+
+procedure TGocciaEngine.AddAlias(const APattern, AReplacement: string);
+begin
+  FResolver.AddAlias(APattern, AReplacement);
+end;
+
+procedure TGocciaEngine.RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
+begin
+  FInterpreter.GlobalModules.AddOrSetValue(AName, AModule);
 end;
 
 function TGocciaEngine.Execute: TGocciaScriptResult;

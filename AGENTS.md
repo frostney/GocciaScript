@@ -90,6 +90,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Version | `Goccia.Version.pas` | Git-derived version and commit hash, resolved once at startup via `RunCommand` |
 | Temporal Utilities | `Goccia.Temporal.Utils.pas` | ISO 8601 date math helpers, parsing, formatting |
 | Temporal Built-in | `Goccia.Builtins.Temporal.pas` | Temporal namespace, constructors, static methods, Temporal.Now |
+| File Extensions | `Goccia.FileExtensions.pas` | Centralized file extension constants (`EXT_JS`, `EXT_MJS`, etc.), `ScriptExtensions` array, `IsScriptExtension`/`IsJSXNativeExtension` helpers |
+| Module Resolver | `Goccia.Modules.Resolver.pas` | Extensionless imports, path aliases, virtual `Resolve` for custom resolvers |
 | JSX Source Map | `Goccia.JSX.SourceMap.pas` | Lightweight internal position mapping for JSX-transformed source |
 | JSX Transformer | `Goccia.JSX.Transformer.pas` | Standalone pre-pass that converts JSX to `createElement` calls |
 
@@ -248,6 +250,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Function/procedure names:** PascalCase (e.g., `EvaluateBinary`, `GetProperty`). External C bindings are exempt. Auto-fixed by `./format.pas`.
 - **Unit naming:** `Goccia.<Category>.<Name>.pas` (dot-separated hierarchy)
 - **No abbreviations:** Use full words in class, function, method, and type names (e.g., `TGocciaGarbageCollector` not `TGocciaGC`). Exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
+- **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`) instead of hardcoded string literals. Use the `ScriptExtensions` array, `IsScriptExtension`, and `IsJSXNativeExtension` helpers instead of duplicating extension lists or ad-hoc checks.
 - **Class naming:** `TGoccia<Name>` prefix
 - **Interface naming:** `I<Name>` prefix
 - **Private fields:** `F` prefix
@@ -344,7 +347,7 @@ const el = <div>hello</div>; // → h("div", null, "hello")
 
 Both `//` and `/* */` comment styles are supported. The pragma must be the first non-whitespace content of the comment.
 
-**Supported file extensions:** `.js`, `.jsx`, `.ts`, `.tsx`. The ScriptLoader, TestRunner, and BenchmarkRunner all discover files with these extensions when scanning directories. A warning is emitted when JSX syntax is found in `.js` or `.ts` files, suggesting the use of `.jsx`/`.tsx` instead.
+**Supported file extensions:** `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`. The ScriptLoader, TestRunner, and BenchmarkRunner all discover files with these extensions when scanning directories. A warning is emitted when JSX syntax is found in `.js`, `.ts`, or `.mjs` files, suggesting the use of `.jsx`/`.tsx` instead.
 
 **Disabling JSX:**
 
