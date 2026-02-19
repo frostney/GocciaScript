@@ -1769,7 +1769,7 @@ begin
     if Check(gttColon) and not IsGetter and not IsSetter then
     begin
       Advance;
-      FieldType := CollectTypeAnnotation([gttAssign, gttSemicolon, gttLeftParen]);
+      FieldType := CollectTypeAnnotation([gttAssign, gttSemicolon]);
     end;
 
     if Check(gttAssign) then
