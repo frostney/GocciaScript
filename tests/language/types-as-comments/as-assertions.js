@@ -34,3 +34,13 @@ test("as const with object", () => {
   const config = { port: 3000, host: "localhost" } as const;
   expect(config.port).toBe(3000);
 });
+
+test("as assertion does not swallow arithmetic operators", () => {
+  const x = (10 as number) + 5;
+  expect(x).toBe(15);
+});
+
+test("as assertion with multiplication", () => {
+  const x = (6 as number) * 7;
+  expect(x).toBe(42);
+});

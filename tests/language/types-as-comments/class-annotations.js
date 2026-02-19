@@ -106,7 +106,7 @@ test("class getter/setter with return types", () => {
       return this.#width * this.#height;
     }
 
-    set width(value: number): void {
+    set width(value: number) {
       this.#width = value;
     }
   }

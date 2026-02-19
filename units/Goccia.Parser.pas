@@ -259,7 +259,12 @@ begin
     if Check(gttConst) then
       Advance
     else
-      CollectTypeAnnotation([gttSemicolon, gttComma, gttRightParen, gttRightBracket, gttRightBrace, gttColon, gttQuestion, gttAnd, gttOr, gttNullishCoalescing]);
+      CollectTypeAnnotation([gttSemicolon, gttComma, gttRightParen, gttRightBracket, gttRightBrace, gttColon, gttQuestion,
+        gttAnd, gttOr, gttNullishCoalescing,
+        gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
+        gttEqual, gttNotEqual,
+        gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign,
+        gttInstanceof, gttIn]);
   end;
 end;
 
@@ -1676,6 +1681,7 @@ var
   IsGetter: Boolean;
   IsSetter: Boolean;
   ClassGenericParams, ClassImplementsClause, FieldType: string;
+  InstancePropertyTypes: TDictionary<string, string>;
 begin
   ClassGenericParams := CollectGenericParameters;
 
@@ -1706,6 +1712,7 @@ begin
   PrivateMethods := TDictionary<string, TGocciaClassMethod>.Create;
   InstancePropertyOrder := TStringList.Create;
   PrivateInstancePropertyOrder := TStringList.Create;
+  InstancePropertyTypes := TDictionary<string, string>.Create;
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
@@ -1784,6 +1791,8 @@ begin
       begin
         InstanceProperties.Add(MemberName, PropertyValue);
         InstancePropertyOrder.Add(MemberName);
+        if FieldType <> '' then
+          InstancePropertyTypes.Add(MemberName, FieldType);
       end;
     end
     else if Check(gttSemicolon) then
@@ -1804,6 +1813,8 @@ begin
       begin
         InstanceProperties.Add(MemberName, PropertyValue);
         InstancePropertyOrder.Add(MemberName);
+        if FieldType <> '' then
+          InstancePropertyTypes.Add(MemberName, FieldType);
       end;
     end
     else if IsGetter then
@@ -1849,8 +1860,11 @@ begin
   Result.ImplementsClause := ClassImplementsClause;
   Result.FInstancePropertyOrder.Assign(InstancePropertyOrder);
   Result.FPrivateInstancePropertyOrder.Assign(PrivateInstancePropertyOrder);
+  for MemberName in InstancePropertyTypes.Keys do
+    Result.FInstancePropertyTypes.Add(MemberName, InstancePropertyTypes[MemberName]);
   InstancePropertyOrder.Free;
   PrivateInstancePropertyOrder.Free;
+  InstancePropertyTypes.Free;
 end;
 
 function TGocciaParser.Parse: TGocciaProgram;
@@ -2069,6 +2083,8 @@ begin
     case Peek.TokenType of
       gttLeftParen, gttLeftBracket, gttLeftBrace, gttLess: Inc(Depth);
       gttRightParen, gttRightBracket, gttRightBrace, gttGreater: Dec(Depth);
+      gttRightShift: Dec(Depth, 2);
+      gttUnsignedRightShift: Dec(Depth, 3);
       gttSemicolon:
         if Depth = 0 then
         begin
