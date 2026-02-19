@@ -34,6 +34,8 @@ type
     property Line: Integer read FLine;
     property Column: Integer read FColumn;
     property FileName: string read FFileName;
+    procedure TranslatePosition(const ANewLine, ANewColumn: Integer;
+      const AOriginalSourceLines: TStringList);
     property Severity: TGocciaErrorSeverity read FSeverity write FSeverity;
     property Suggestion: string read FSuggestion write FSuggestion;
   end;
@@ -61,6 +63,14 @@ end;
 procedure TGocciaError.SetSuggestion(const ASuggestion: string);
 begin
   FSuggestion := ASuggestion;
+end;
+
+procedure TGocciaError.TranslatePosition(const ANewLine, ANewColumn: Integer;
+  const AOriginalSourceLines: TStringList);
+begin
+  FLine := ANewLine;
+  FColumn := ANewColumn;
+  FSourceLines := AOriginalSourceLines;
 end;
 
 function TGocciaError.GetDetailedMessage: string;

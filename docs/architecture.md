@@ -7,9 +7,12 @@ GocciaScript follows a classic interpreter pipeline: source code flows through l
 ```mermaid
 flowchart TD
     Source["Source Code (.js)"]
-    Source -->|"TObjectList‹TGocciaToken›"| Lexer
+    Source -->|"if ggJSX enabled"| JSXTransformer
+    JSXTransformer["**JSX Transformer**\nGoccia.JSX.Transformer.pas\nSource-to-source pre-pass"]
+    JSXTransformer -->|"createElement calls + Source Map"| Lexer
+    Source -->|"if no JSX"| Lexer
     Lexer["**Lexer**\nGoccia.Lexer.pas\nSingle-pass character scanner"]
-    Lexer -->|"TGocciaProgram (AST root)"| Parser
+    Lexer -->|"TObjectList‹TGocciaToken›"| Parser
     Parser["**Parser**\nGoccia.Parser.pas\nRecursive descent with precedence climbing"]
     Parser -->|"Delegates to Evaluator"| Interpreter
     Interpreter["**Interpreter**\nGoccia.Interpreter.pas\nThin orchestration layer"]
@@ -34,6 +37,19 @@ The top-level entry point. Provides static convenience methods (`RunScript`, `Ru
 - **`GocciaScript` global** — `RegisterGocciaScriptGlobal` creates a `const` object with `version` (from `Goccia.Version`), `commit` (short git hash), and `builtIns` (array of enabled `TGocciaGlobalBuiltin` flag names, derived via RTTI).
 
 The configurable built-in system allows different execution contexts (e.g., the TestRunner enables `ggTestAssertions` to inject `describe`, `test`, and `expect`).
+
+### JSX Transformer (`Goccia.JSX.Transformer.pas` + `Goccia.JSX.SourceMap.pas`)
+
+An opt-in source-to-source pre-pass that converts JSX syntax into standard `createElement` function calls before the main pipeline. Activated by including `ggJSX` in the engine's globals set. Key design:
+
+- **Standalone** — Does not modify the lexer, parser, AST, or evaluator. Produces standard JavaScript that the existing pipeline processes normally.
+- **Mini-scanner** — A character-level scanner copies non-JSX source verbatim (strings, comments, template literals, identifiers, operators). Tracks `FLastTokenKind` (expression-end vs. operator) to disambiguate `<` as JSX vs. comparison.
+- **JSX code generation** — Transforms JSX elements into `createElement(tag, props, ...children)` calls. Lowercase tags produce string names; uppercase tags are passed as identifier references. Attributes are emitted as object literals (or `Object.assign` when spreads are present).
+- **Shorthand props** — `<div {value} />` is equivalent to `<div value={value} />`, providing concise attribute shorthand for identifiers.
+- **Recursive JSX** — Supports JSX nested inside expression children (`{<span />}`), attribute values (`content={<span />}`), and deeply nested element trees.
+- **Pragma support** — `@jsxFactory` and `@jsxFragment` pragma comments at the top of a file override the default `createElement`/`Fragment` names (e.g., `/* @jsxFactory h */`).
+- **Internal source map** — `TGocciaSourceMap` stores `(outputLine, outputCol) → (sourceLine, sourceCol)` mappings. The engine catches errors and translates positions back to the original source via binary search with column interpolation.
+- **Enabled by default** — `ggJSX` is included in `DefaultGlobals`. To disable, exclude it from the globals set.
 
 ### Lexer (`Goccia.Lexer.pas`)
 

@@ -28,6 +28,8 @@ uses
   Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.Interpreter,
+  Goccia.JSX.SourceMap,
+  Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
@@ -55,7 +57,8 @@ type
     ggMap,
     ggTestAssertions,
     ggBenchmark,
-    ggTemporal
+    ggTemporal,
+    ggJSX
   );
 
   TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
@@ -72,7 +75,7 @@ type
 type
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal, ggJSX];
   private
     FInterpreter: TGocciaInterpreter;
     FFileName: string;
@@ -100,7 +103,7 @@ type
     procedure RegisterBuiltinConstructors;
     procedure RegisterGlobalThis;
     procedure RegisterGocciaScriptGlobal;
-    procedure PrintParserWarnings(const AParser: TGocciaParser);
+    procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
@@ -158,6 +161,7 @@ begin
 
   // Create interpreter without globals
   FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines);
+  FInterpreter.JSXEnabled := ggJSX in FGlobals;
 
   // Register the global scope as a GC root
   TGocciaGarbageCollector.Instance.AddRoot(FInterpreter.GlobalScope);
@@ -355,40 +359,74 @@ var
   ProgramNode: TGocciaProgram;
   Tokens: TObjectList<TGocciaToken>;
   StartTime, LexEnd, ParseEnd, ExecEnd: Int64;
+  SourceText, Ext: string;
+  JSXResult: TGocciaJSXTransformResult;
+  SourceMap: TGocciaSourceMap;
+  OrigLine, OrigCol: Integer;
 begin
   Result.FileName := FFileName;
   StartTime := GetNanoseconds;
 
-  Lexer := TGocciaLexer.Create(FSourceLines.Text, FFileName);
+  SourceText := FSourceLines.Text;
+  SourceMap := nil;
+
+  if ggJSX in FGlobals then
+  begin
+    JSXResult := TGocciaJSXTransformer.Transform(SourceText);
+    SourceText := JSXResult.Source;
+    SourceMap := JSXResult.SourceMap;
+    if Assigned(SourceMap) then
+    begin
+      Ext := LowerCase(ExtractFileExt(FFileName));
+      if (Ext = '.js') or (Ext = '.ts') then
+        WriteLn(Format('Warning: JSX syntax found in %s — consider using a .jsx or .tsx extension', [FFileName]));
+    end;
+  end;
+
   try
-    Tokens := Lexer.ScanTokens;
-    LexEnd := GetNanoseconds;
-    Result.LexTimeNanoseconds := LexEnd - StartTime;
-
-    Parser := TGocciaParser.Create(Tokens, FFileName, Lexer.SourceLines);
     try
-      ProgramNode := Parser.Parse;
-      PrintParserWarnings(Parser);
-      ParseEnd := GetNanoseconds;
-      Result.ParseTimeNanoseconds := ParseEnd - LexEnd;
-
+      Lexer := TGocciaLexer.Create(SourceText, FFileName);
       try
-        Result.Result := FInterpreter.Execute(ProgramNode);
-        if Assigned(TGocciaMicrotaskQueue.Instance) then
-          TGocciaMicrotaskQueue.Instance.DrainQueue;
-        ExecEnd := GetNanoseconds;
-        Result.ExecuteTimeNanoseconds := ExecEnd - ParseEnd;
-        Result.TotalTimeNanoseconds := ExecEnd - StartTime;
+        Tokens := Lexer.ScanTokens;
+        LexEnd := GetNanoseconds;
+        Result.LexTimeNanoseconds := LexEnd - StartTime;
+
+        Parser := TGocciaParser.Create(Tokens, FFileName, Lexer.SourceLines);
+        try
+          ProgramNode := Parser.Parse;
+          PrintParserWarnings(Parser, SourceMap);
+          ParseEnd := GetNanoseconds;
+          Result.ParseTimeNanoseconds := ParseEnd - LexEnd;
+
+          try
+            Result.Result := FInterpreter.Execute(ProgramNode);
+            if Assigned(TGocciaMicrotaskQueue.Instance) then
+              TGocciaMicrotaskQueue.Instance.DrainQueue;
+            ExecEnd := GetNanoseconds;
+            Result.ExecuteTimeNanoseconds := ExecEnd - ParseEnd;
+            Result.TotalTimeNanoseconds := ExecEnd - StartTime;
+          finally
+            if Assigned(TGocciaMicrotaskQueue.Instance) then
+              TGocciaMicrotaskQueue.Instance.ClearQueue;
+            ProgramNode.Free;
+          end;
+        finally
+          Parser.Free;
+        end;
       finally
-        if Assigned(TGocciaMicrotaskQueue.Instance) then
-          TGocciaMicrotaskQueue.Instance.ClearQueue;
-        ProgramNode.Free;
+        Lexer.Free;
       end;
-    finally
-      Parser.Free;
+    except
+      on E: TGocciaError do
+      begin
+        if Assigned(SourceMap) and
+           SourceMap.Translate(E.Line, E.Column, OrigLine, OrigCol) then
+          E.TranslatePosition(OrigLine, OrigCol, FSourceLines);
+        raise;
+      end;
     end;
   finally
-    Lexer.Free;
+    SourceMap.Free;
   end;
 end;
 
@@ -457,10 +495,10 @@ begin
   Result := RunScriptFromStringList(ASource, AFileName, TGocciaEngine.DefaultGlobals);
 end;
 
-procedure TGocciaEngine.PrintParserWarnings(const AParser: TGocciaParser);
+procedure TGocciaEngine.PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap);
 var
   Warning: TGocciaParserWarning;
-  I: Integer;
+  I, OrigLine, OrigCol: Integer;
 begin
   for I := 0 to AParser.WarningCount - 1 do
   begin
@@ -468,7 +506,10 @@ begin
     WriteLn(Format('Warning: %s', [Warning.Message]));
     if Warning.Suggestion <> '' then
       WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
-    WriteLn(Format('  --> %s:%d:%d', [FFileName, Warning.Line, Warning.Column]));
+    if Assigned(ASourceMap) and ASourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
+      WriteLn(Format('  --> %s:%d:%d', [FFileName, OrigLine, OrigCol]))
+    else
+      WriteLn(Format('  --> %s:%d:%d', [FFileName, Warning.Line, Warning.Column]));
   end;
 end;
 

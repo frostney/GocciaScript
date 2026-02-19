@@ -257,7 +257,7 @@ begin
   begin
     if DirectoryExists(ParamStr(1)) then
     begin
-      Files := FindAllFiles(ParamStr(1), '.js');
+      Files := FindAllFiles(ParamStr(1));
       try 
         PrintTestResults(RunScriptsFromFiles(Files));
       finally

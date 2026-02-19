@@ -39,6 +39,7 @@ type
     FLoadingModules: TDictionary<string, Boolean>;
     FFileName: string;
     FSourceLines: TStringList;
+    FJSXEnabled: Boolean;
 
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     function CreateEvaluationContext: TGocciaEvaluationContext;
@@ -52,6 +53,7 @@ type
     procedure CheckForModuleReload(const AModule: TGocciaModule);
 
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
+    property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
   end;
 
 
@@ -59,7 +61,9 @@ implementation
 
 uses
   Goccia.GarbageCollector,
-  Goccia.JSON;
+  Goccia.JSON,
+  Goccia.JSX.SourceMap,
+  Goccia.JSX.Transformer;
 
 { TGocciaInterpreter }
 
@@ -130,6 +134,10 @@ function TGocciaInterpreter.LoadModule(const AModulePath, AImportingFilePath: st
 var
   ResolvedPath: string;
   Source: TStringList;
+  SourceText: string;
+  Ext: string;
+  JSXResult: TGocciaJSXTransformResult;
+  JSXSourceMap: TGocciaSourceMap;
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
@@ -170,22 +178,38 @@ begin
   try
     Source.LoadFromFile(ResolvedPath);
 
-    Lexer := TGocciaLexer.Create(Source.Text, ResolvedPath);
+    SourceText := Source.Text;
+    JSXSourceMap := nil;
+    if FJSXEnabled then
+    begin
+      JSXResult := TGocciaJSXTransformer.Transform(SourceText);
+      SourceText := JSXResult.Source;
+      JSXSourceMap := JSXResult.SourceMap;
+      if Assigned(JSXSourceMap) then
+      begin
+        Ext := LowerCase(ExtractFileExt(ResolvedPath));
+        if (Ext = '.js') or (Ext = '.ts') then
+          WriteLn(Format('Warning: JSX syntax found in %s — consider using a .jsx or .tsx extension', [ResolvedPath]));
+      end;
+    end;
+
     try
-      Parser := TGocciaParser.Create(Lexer.ScanTokens, ResolvedPath, Source);
+      Lexer := TGocciaLexer.Create(SourceText, ResolvedPath);
       try
-        ProgramNode := Parser.Parse;
+        Parser := TGocciaParser.Create(Lexer.ScanTokens, ResolvedPath, Lexer.SourceLines);
         try
-          Module := TGocciaModule.Create(ResolvedPath);
-          Module.LastModified := FileDateToDateTime(FileAge(ResolvedPath));
-          FModules.Add(ResolvedPath, Module);
-          FLoadingModules.Add(ResolvedPath, True);
+          ProgramNode := Parser.Parse;
           try
-            ModuleScope := FGlobalScope.CreateChild(skModule, 'Module:' + ResolvedPath);
-            Context.Scope := ModuleScope;
-            Context.OnError := ThrowError;
-            Context.LoadModule := LoadModule;
-            Context.CurrentFilePath := ResolvedPath;
+            Module := TGocciaModule.Create(ResolvedPath);
+            Module.LastModified := FileDateToDateTime(FileAge(ResolvedPath));
+            FModules.Add(ResolvedPath, Module);
+            FLoadingModules.Add(ResolvedPath, True);
+            try
+              ModuleScope := FGlobalScope.CreateChild(skModule, 'Module:' + ResolvedPath);
+              Context.Scope := ModuleScope;
+              Context.OnError := ThrowError;
+              Context.LoadModule := LoadModule;
+              Context.CurrentFilePath := ResolvedPath;
 
             for I := 0 to ProgramNode.Body.Count - 1 do
               EvaluateStatement(ProgramNode.Body[I], Context);
@@ -233,11 +257,14 @@ begin
         finally
           ProgramNode.Free;
         end;
+        finally
+          Parser.Free;
+        end;
       finally
-        Parser.Free;
+        Lexer.Free;
       end;
     finally
-      Lexer.Free;
+      JSXSourceMap.Free;
     end;
   finally
     Source.Free;
