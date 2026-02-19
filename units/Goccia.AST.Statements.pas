@@ -16,6 +16,7 @@ type
   TGocciaVariableInfo = record
     Name: string;
     Initializer: TGocciaExpression;
+    TypeAnnotation: string;
   end;
   TGocciaExpressionStatement = class(TGocciaStatement)
   private
@@ -41,11 +42,13 @@ type
     FPattern: TGocciaDestructuringPattern;
     FInitializer: TGocciaExpression;
     FIsConst: Boolean;
+    FTypeAnnotation: string;
   public
     constructor Create(const APattern: TGocciaDestructuringPattern; const AInitializer: TGocciaExpression; const AIsConst: Boolean; const ALine, AColumn: Integer);
     property Pattern: TGocciaDestructuringPattern read FPattern;
     property Initializer: TGocciaExpression read FInitializer;
     property IsConst: Boolean read FIsConst;
+    property TypeAnnotation: string read FTypeAnnotation write FTypeAnnotation;
   end;
 
   TGocciaBlockStatement = class(TGocciaStatement)
@@ -127,6 +130,7 @@ type
     FCatchParam: string;
     FCatchBlock: TGocciaBlockStatement;
     FFinallyBlock: TGocciaBlockStatement;
+    FCatchParamType: string;
   public
     constructor Create(const ABlock: TGocciaBlockStatement; const ACatchParam: string;
       const ACatchBlock, AFinallyBlock: TGocciaBlockStatement; const ALine, AColumn: Integer);
@@ -134,6 +138,7 @@ type
     property CatchParam: string read FCatchParam;
     property CatchBlock: TGocciaBlockStatement read FCatchBlock;
     property FinallyBlock: TGocciaBlockStatement read FFinallyBlock;
+    property CatchParamType: string read FCatchParamType write FCatchParamType;
   end;
 
   // Is this not a statement?
@@ -143,6 +148,8 @@ type
     FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
     FIsStatic: Boolean;
+    FReturnType: string;
+    FGenericParams: string;
   public
     constructor Create(const AName: string; const AParameters: TGocciaParameterArray;
       const ABody: TGocciaASTNode; const AIsStatic: Boolean; const ALine, AColumn: Integer);
@@ -150,6 +157,8 @@ type
     property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
     property IsStatic: Boolean read FIsStatic;
+    property ReturnType: string read FReturnType write FReturnType;
+    property GenericParams: string read FGenericParams write FGenericParams;
   end;
 
   // Shared class definition structure
@@ -167,6 +176,9 @@ type
     FPrivateInstancePropertyOrder: TStringList; // Preserves declaration order
     FPrivateStaticProperties: TDictionary<string, TGocciaExpression>;
     FPrivateMethods: TDictionary<string, TGocciaClassMethod>;
+    FGenericParams: string;
+    FImplementsClause: string;
+    FInstancePropertyTypes: TDictionary<string, string>;
 
     constructor Create(const AName, ASuperClass: string;
       const AMethods: TDictionary<string, TGocciaClassMethod>;
@@ -190,6 +202,9 @@ type
     property PrivateInstancePropertyOrder: TStringList read FPrivateInstancePropertyOrder;
     property PrivateStaticProperties: TDictionary<string, TGocciaExpression> read FPrivateStaticProperties;
     property PrivateMethods: TDictionary<string, TGocciaClassMethod> read FPrivateMethods;
+    property GenericParams: string read FGenericParams write FGenericParams;
+    property ImplementsClause: string read FImplementsClause write FImplementsClause;
+    property InstancePropertyTypes: TDictionary<string, string> read FInstancePropertyTypes;
   end;
 
   TGocciaClassDeclaration = class(TGocciaStatement)
@@ -249,6 +264,11 @@ type
       const AModulePath: string; const ALine, AColumn: Integer);
     property ExportsTable: TDictionary<string, string> read FExportsTable;
     property ModulePath: string read FModulePath;
+  end;
+
+  TGocciaEmptyStatement = class(TGocciaStatement)
+  public
+    constructor Create(const ALine, AColumn: Integer);
   end;
 
   TGocciaCaseClause = class(TGocciaASTNode)
@@ -354,6 +374,8 @@ implementation
       FPrivateStaticProperties := APrivateStaticProperties
     else
       FPrivateStaticProperties := TDictionary<string, TGocciaExpression>.Create;
+
+    FInstancePropertyTypes := TDictionary<string, string>.Create;
   end;
 
   destructor TGocciaClassDefinition.Destroy;
@@ -365,6 +387,7 @@ implementation
     FInstanceProperties.Free;
     FInstancePropertyOrder.Free;
     FPrivateInstancePropertyOrder.Free;
+    FInstancePropertyTypes.Free;
     if Assigned(FPrivateInstanceProperties) then
       FPrivateInstanceProperties.Free;
     if Assigned(FPrivateMethods) then
@@ -507,6 +530,13 @@ implementation
     inherited Create(ALine, AColumn);
     FExportsTable := AExportsTable;
     FModulePath := AModulePath;
+  end;
+
+  { TGocciaEmptyStatement }
+
+  constructor TGocciaEmptyStatement.Create(const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
   end;
 
   { TGocciaWhileStatement }

@@ -27,6 +27,7 @@ const name = "Goccia";
 - `fn.call()`, `fn.apply()`, `fn.bind()` for explicit `this` binding.
 - `fn.length` — Number of formal parameters (before defaults/rest).
 - `fn.name` — Function name (inferred from variable declarations for anonymous functions).
+- Type annotations on parameters and return types (parsed and ignored at runtime — see [Types as Comments](#types-as-comments) below).
 
 ```javascript
 const add = (a, b) => a + b;
@@ -221,6 +222,60 @@ items.reduce((acc, item) => acc + item, 0);
 ### Generators and Iterators
 
 **Not yet implemented.** May be added in future versions.
+
+## Types as Comments
+
+GocciaScript supports the [TC39 Types as Comments](https://tc39.es/proposal-type-annotations/) proposal. TypeScript-style type annotations are parsed but have **no runtime effect** — they are treated as comments by the evaluator. Raw type strings are preserved on AST nodes for potential future optimization.
+
+### Supported Syntax
+
+```javascript
+// Variable type annotations
+let x: number = 42;
+const name: string = "hello";
+let value: string | number = "test";
+
+// Parameter type annotations (simple, optional, rest, destructuring)
+const add = (a: number, b: number): number => a + b;
+const greet = (name?: string) => name === undefined ? "hi" : "hi " + name;
+const sum = (...nums: number[]) => nums.reduce((a, b) => a + b, 0);
+const first = ({ name, age }: { name: string, age: number }) => name;
+
+// Return type annotations
+const double = (x: number): number => x * 2;
+
+// Type and interface declarations (skipped entirely)
+type Point = { x: number, y: number };
+interface Animal { name: string; speak(): string; }
+
+// import type / export type (skipped entirely)
+import type { Foo } from './types.js';
+export type { Bar };
+
+// as Type and as const assertions
+const x = 42 as number;
+const colors = ["red", "green"] as const;
+
+// Class annotations: field types, generics, implements, access modifiers
+class Box<T> implements Container {
+  public value: T;
+  private label?: string;
+  readonly id: number = 1;
+  constructor(value: T) { this.value = value; }
+  get(): T { return this.value; }
+}
+
+// Catch parameter type annotation
+try { throw new Error("oops"); } catch (e: Error) { }
+```
+
+### Not Supported
+
+- Enums (`enum Direction { ... }`) — use plain objects instead.
+- Namespaces (`namespace Foo { ... }`).
+- Parameter properties in constructors (`constructor(public x: number)`).
+- Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
+- Decorators (`@decorator`).
 
 ### `async`/`await`
 

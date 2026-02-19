@@ -24,6 +24,8 @@ type
     DefaultValue: TGocciaExpression;              // nil if no default value
     IsPattern: Boolean;                           // True if this is a destructuring pattern
     IsRest: Boolean;                              // True if this is a rest parameter (...args)
+    IsOptional: Boolean;                          // True if optional parameter (x?)
+    TypeAnnotation: string;                       // Stored for future optimization; ignored at runtime
   end;
   TGocciaParameterArray = array of TGocciaParameter;
 
@@ -277,11 +279,13 @@ type
   private
     FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
+    FReturnType: string;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode;
       const ALine, AColumn: Integer);
     property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
+    property ReturnType: string read FReturnType write FReturnType;
   end;
 
   TGocciaMethodExpression = class(TGocciaExpression)

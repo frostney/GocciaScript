@@ -67,6 +67,13 @@ type
     function ConvertToPattern(const AExpr: TGocciaExpression): TGocciaDestructuringPattern;
     procedure SkipDestructuringPattern;
     procedure SkipExpression;
+    // Type annotation helpers (Types as Comments)
+    function CollectTypeAnnotation(const ATerminators: array of TGocciaTokenType): string;
+    function CollectGenericParameters: string;
+    procedure SkipUntilSemicolon;
+    procedure SkipInterfaceDeclaration;
+    function IsTypeDeclaration: Boolean;
+
     function BitwiseOr: TGocciaExpression;
     function BitwiseXor: TGocciaExpression;
     function BitwiseAnd: TGocciaExpression;
@@ -245,6 +252,15 @@ end;
 function TGocciaParser.Comparison: TGocciaExpression;
 begin
   Result := ParseBinaryExpression(Shift, [gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof, gttIn]);
+
+  while Check(gttAs) do
+  begin
+    Advance;
+    if Check(gttConst) then
+      Advance
+    else
+      CollectTypeAnnotation([gttSemicolon, gttComma, gttRightParen, gttRightBracket, gttRightBrace, gttColon, gttQuestion, gttAnd, gttOr, gttNullishCoalescing]);
+  end;
 end;
 
 function TGocciaParser.Addition: TGocciaExpression;
@@ -820,8 +836,9 @@ begin
     repeat
       SetLength(Result, ParamCount + 1);
       Result[ParamCount].IsRest := False;
+      Result[ParamCount].IsOptional := False;
+      Result[ParamCount].TypeAnnotation := '';
 
-      // Rest parameter (...args)
       if Match([gttSpread]) then
       begin
         ParamName := Consume(gttIdentifier, 'Expected parameter name after "..."').Lexeme;
@@ -830,16 +847,26 @@ begin
         Result[ParamCount].Pattern := nil;
         Result[ParamCount].DefaultValue := nil;
         Result[ParamCount].IsRest := True;
+        if Check(gttColon) then
+        begin
+          Advance;
+          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttRightParen, gttComma]);
+        end;
         Inc(ParamCount);
         Break;
       end
-      // Destructuring pattern parameter
       else if Check(gttLeftBracket) or Check(gttLeftBrace) then
       begin
         Pattern := ParsePattern;
         Result[ParamCount].Pattern := Pattern;
         Result[ParamCount].IsPattern := True;
         Result[ParamCount].Name := '';
+
+        if Check(gttColon) then
+        begin
+          Advance;
+          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
+        end;
 
         if Match([gttAssign]) then
           Result[ParamCount].DefaultValue := Assignment
@@ -848,11 +875,22 @@ begin
       end
       else
       begin
-        // Simple identifier parameter
         ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
         Result[ParamCount].Name := ParamName;
         Result[ParamCount].IsPattern := False;
         Result[ParamCount].Pattern := nil;
+
+        if Check(gttQuestion) then
+        begin
+          Advance;
+          Result[ParamCount].IsOptional := True;
+        end;
+
+        if Check(gttColon) then
+        begin
+          Advance;
+          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
+        end;
 
         if Match([gttAssign]) then
           Result[ParamCount].DefaultValue := Assignment
@@ -875,6 +913,11 @@ begin
   Column := Previous.Column;
   Consume(gttLeftParen, 'Expected "(" after getter name');
   Consume(gttRightParen, 'Getters cannot have parameters');
+  if Check(gttColon) then
+  begin
+    Advance;
+    CollectTypeAnnotation([gttLeftBrace]);
+  end;
   Consume(gttLeftBrace, 'Expected "{" before getter body');
   Result := TGocciaGetterExpression.Create(BlockStatement, Line, Column);
 end;
@@ -891,7 +934,17 @@ begin
     raise TGocciaSyntaxError.Create('Setter must have exactly one parameter',
       Peek.Line, Peek.Column, FFileName, FSourceLines);
   ParamName := Consume(gttIdentifier, 'Expected parameter name in setter').Lexeme;
+  if Check(gttColon) then
+  begin
+    Advance;
+    CollectTypeAnnotation([gttRightParen]);
+  end;
   Consume(gttRightParen, 'Expected ")" after setter parameter');
+  if Check(gttColon) then
+  begin
+    Advance;
+    CollectTypeAnnotation([gttLeftBrace]);
+  end;
   Consume(gttLeftBrace, 'Expected "{" before setter body');
   Result := TGocciaSetterExpression.Create(ParamName, BlockStatement, Line, Column);
 end;
@@ -906,6 +959,12 @@ begin
   Consume(gttLeftParen, 'Expected "(" after method name');
   Parameters := ParseParameterList;
   Consume(gttRightParen, 'Expected ")" after parameters');
+
+  if Check(gttColon) then
+  begin
+    Advance;
+    CollectTypeAnnotation([gttLeftBrace]);
+  end;
 
   Consume(gttLeftBrace, 'Expected "{" before method body');
 
@@ -931,21 +990,32 @@ var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
   Line, Column: Integer;
+  ArrowFn: TGocciaArrowFunctionExpression;
+  FnReturnType: string;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
   Parameters := ParseParameterList;
   Consume(gttRightParen, 'Expected ")" after parameters');
+
+  FnReturnType := '';
+  if Check(gttColon) then
+  begin
+    Advance;
+    FnReturnType := CollectTypeAnnotation([gttArrow]);
+  end;
+
   Consume(gttArrow, 'Expected "=>" in arrow function');
 
-  // Parse body
   if Match([gttLeftBrace]) then
     Body := BlockStatement
   else
     Body := Expression;
 
-  Result := TGocciaArrowFunctionExpression.Create(Parameters, Body, Line, Column);
+  ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, Body, Line, Column);
+  ArrowFn.ReturnType := FnReturnType;
+  Result := ArrowFn;
 end;
 
 function TGocciaParser.Assignment: TGocciaExpression;
@@ -1071,8 +1141,27 @@ begin
 end;
 
 function TGocciaParser.Statement: TGocciaStatement;
+var
+  Line, Column: Integer;
 begin
-  if Match([gttConst, gttLet]) then
+  if Check(gttIdentifier) and (Peek.Lexeme = 'type') and IsTypeDeclaration then
+  begin
+    Line := Peek.Line;
+    Column := Peek.Column;
+    Advance;
+    SkipUntilSemicolon;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+  end
+  else if Check(gttIdentifier) and (Peek.Lexeme = 'interface') and IsTypeDeclaration then
+  begin
+    Line := Peek.Line;
+    Column := Peek.Column;
+    Advance;
+    Advance;
+    SkipInterfaceDeclaration;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+  end
+  else if Match([gttConst, gttLet]) then
     Result := DeclarationStatement
   else if Match([gttClass]) then
     Result := ClassDeclaration
@@ -1113,6 +1202,8 @@ var
   Variables: TArray<TGocciaVariableInfo>;
   VariableCount: Integer;
   Pattern: TGocciaDestructuringPattern;
+  DestructuringType: string;
+  DestructuringDecl: TGocciaDestructuringDeclaration;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -1122,22 +1213,33 @@ begin
   // Check for destructuring pattern
   if Check(gttLeftBracket) or Check(gttLeftBrace) then
   begin
-    // Destructuring declaration
     Pattern := ParsePattern;
+    DestructuringType := '';
+    if Check(gttColon) then
+    begin
+      Advance;
+      DestructuringType := CollectTypeAnnotation([gttAssign]);
+    end;
     Consume(gttAssign, 'Destructuring declarations must have an initializer');
     Initializer := Expression;
     Consume(gttSemicolon, 'Expected ";" after destructuring declaration');
-    Result := TGocciaDestructuringDeclaration.Create(Pattern, Initializer, IsConst, Line, Column);
+    DestructuringDecl := TGocciaDestructuringDeclaration.Create(Pattern, Initializer, IsConst, Line, Column);
+    DestructuringDecl.TypeAnnotation := DestructuringType;
+    Result := DestructuringDecl;
   end
   else
   begin
-    // Regular variable declarations separated by commas
     repeat
-      // Increase array size
       SetLength(Variables, VariableCount + 1);
 
       Name := Consume(gttIdentifier, 'Expected variable name').Lexeme;
       Variables[VariableCount].Name := Name;
+
+      if Check(gttColon) then
+      begin
+        Advance;
+        Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
+      end;
 
       if Match([gttAssign]) then
         Variables[VariableCount].Initializer := Expression
@@ -1320,6 +1422,8 @@ var
   Block, CatchBlock, FinallyBlock: TGocciaBlockStatement;
   CatchParam: string;
   Line, Column: Integer;
+  TryStmt: TGocciaTryStatement;
+  CatchType: string;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -1329,21 +1433,23 @@ begin
   CatchParam := '';
   CatchBlock := nil;
   FinallyBlock := nil;
+  CatchType := '';
 
   if Match([gttCatch]) then
   begin
-    // Check if catch has a parameter: catch (e) vs catch
     if Check(gttLeftParen) then
     begin
       Consume(gttLeftParen, 'Expected "(" after "catch"');
       CatchParam := Consume(gttIdentifier, 'Expected catch parameter').Lexeme;
+      if Check(gttColon) then
+      begin
+        Advance;
+        CatchType := CollectTypeAnnotation([gttRightParen]);
+      end;
       Consume(gttRightParen, 'Expected ")" after catch parameter');
     end
     else
-    begin
-      // No parameter - empty catch parameter
       CatchParam := '';
-    end;
 
     Consume(gttLeftBrace, 'Expected "{" after catch clause');
     CatchBlock := BlockStatement;
@@ -1359,8 +1465,10 @@ begin
     raise TGocciaSyntaxError.Create('Missing catch or finally after try',
       Line, Column, FFileName, FSourceLines);
 
-  Result := TGocciaTryStatement.Create(Block, CatchParam, CatchBlock,
+  TryStmt := TGocciaTryStatement.Create(Block, CatchParam, CatchBlock,
     FinallyBlock, Line, Column);
+  TryStmt.CatchParamType := CatchType;
+  Result := TryStmt;
 end;
 
 function TGocciaParser.ClassMethod(const AIsStatic: Boolean = False): TGocciaClassMethod;
@@ -1371,15 +1479,24 @@ var
   Line, Column: Integer;
   Statements: TObjectList<TGocciaStatement>;
   Stmt: TGocciaStatement;
+  MethodGenericParams, MethodReturnType: string;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
+
+  MethodGenericParams := CollectGenericParameters;
 
   Consume(gttLeftParen, 'Expected "(" after method name');
   Parameters := ParseParameterList;
   Consume(gttRightParen, 'Expected ")" after parameters');
 
-  // Parse method body
+  MethodReturnType := '';
+  if Check(gttColon) then
+  begin
+    Advance;
+    MethodReturnType := CollectTypeAnnotation([gttLeftBrace]);
+  end;
+
   Consume(gttLeftBrace, 'Expected "{" before method body');
 
   // Create a block statement for the method body
@@ -1406,6 +1523,8 @@ begin
     Consume(gttRightBrace, 'Expected "}" after method body');
     Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
     Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, Line, Column);
+    Result.GenericParams := MethodGenericParams;
+    Result.ReturnType := MethodReturnType;
   except
     Statements.Free;
     raise;
@@ -1434,6 +1553,14 @@ var
 begin
   Line := Previous.Line;
   Column := Previous.Column;
+
+  if Check(gttIdentifier) and (Peek.Lexeme = 'type') then
+  begin
+    Advance;
+    SkipUntilSemicolon;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
 
   Consume(gttLeftBrace, 'Expected "{" after "import"');
 
@@ -1472,6 +1599,14 @@ var
 begin
   Line := Previous.Line;
   Column := Previous.Column;
+
+  if Check(gttIdentifier) and (Peek.Lexeme = 'type') then
+  begin
+    Advance;
+    SkipUntilSemicolon;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
 
   if Match([gttConst, gttLet]) then
   begin
@@ -1540,11 +1675,24 @@ var
   IsPrivate: Boolean;
   IsGetter: Boolean;
   IsSetter: Boolean;
+  ClassGenericParams, ClassImplementsClause, FieldType: string;
 begin
+  ClassGenericParams := CollectGenericParameters;
+
   if Match([gttExtends]) then
-    SuperClass := Consume(gttIdentifier, 'Expected superclass name').Lexeme
+  begin
+    SuperClass := Consume(gttIdentifier, 'Expected superclass name').Lexeme;
+    CollectGenericParameters;
+  end
   else
     SuperClass := '';
+
+  ClassImplementsClause := '';
+  if Check(gttIdentifier) and (Peek.Lexeme = 'implements') then
+  begin
+    Advance;
+    ClassImplementsClause := CollectTypeAnnotation([gttLeftBrace]);
+  end;
 
   Consume(gttLeftBrace, 'Expected "{" before class body');
 
@@ -1562,53 +1710,63 @@ begin
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
     IsStatic := Match([gttStatic]);
+
+    while Check(gttIdentifier) and
+      ((Peek.Lexeme = 'public') or (Peek.Lexeme = 'protected') or (Peek.Lexeme = 'private') or
+       (Peek.Lexeme = 'readonly') or (Peek.Lexeme = 'override') or (Peek.Lexeme = 'abstract')) do
+      Advance;
+
+    if not IsStatic and Check(gttStatic) then
+      IsStatic := Match([gttStatic]);
+
     IsPrivate := Match([gttHash]);
     IsGetter := False;
     IsSetter := False;
 
-    // Check for getter/setter syntax (contextual keywords)
-    if Check(gttIdentifier) and (Peek.Lexeme = 'get') and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
+    if Check(gttIdentifier) and (Peek.Lexeme = 'get') and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
     begin
-      Advance; // consume 'get'
+      Advance;
       IsGetter := True;
 
-      // Handle private property names: get #propName() or get propName()
       if Check(gttHash) then
       begin
-        Advance; // consume '#'
-        IsPrivate := True; // Mark as private
+        Advance;
+        IsPrivate := True;
         MemberName := Consume(gttIdentifier, 'Expected property name after "#"').Lexeme;
       end
       else
-      begin
         MemberName := Consume(gttIdentifier, 'Expected property name after "get"').Lexeme;
-      end;
     end
-    else if Check(gttIdentifier) and (Peek.Lexeme = 'set') and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
+    else if Check(gttIdentifier) and (Peek.Lexeme = 'set') and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
     begin
       Advance; // consume 'set'
       IsSetter := True;
 
-      // Handle private property names: set #propName(value) or set propName(value)
       if Check(gttHash) then
       begin
-        Advance; // consume '#'
-        IsPrivate := True; // Mark as private
+        Advance;
+        IsPrivate := True;
         MemberName := Consume(gttIdentifier, 'Expected property name after "#"').Lexeme;
       end
       else
-      begin
         MemberName := Consume(gttIdentifier, 'Expected property name after "set"').Lexeme;
-      end;
     end
     else
     begin
       MemberName := Consume(gttIdentifier, 'Expected method or property name').Lexeme;
     end;
 
+    FieldType := '';
+    if Check(gttQuestion) then
+      Advance;
+    if Check(gttColon) and not IsGetter and not IsSetter then
+    begin
+      Advance;
+      FieldType := CollectTypeAnnotation([gttAssign, gttSemicolon, gttLeftParen]);
+    end;
+
     if Check(gttAssign) then
     begin
-      // Property: [static] [#]name = value
       Consume(gttAssign, 'Expected "=" in property');
       PropertyValue := Expression;
       Consume(gttSemicolon, 'Expected ";" after property');
@@ -1630,7 +1788,6 @@ begin
     end
     else if Check(gttSemicolon) then
     begin
-      // Property declaration without initializer: [static] [#]name;
       Consume(gttSemicolon, 'Expected ";" after property declaration');
       PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, Peek.Line, Peek.Column);
 
@@ -1671,11 +1828,10 @@ begin
       else
         Setters.Add(MemberName, Setter);
     end
-    else if Check(gttLeftParen) then
+    else if Check(gttLeftParen) or Check(gttLess) then
     begin
-      // Method: [static] [#]name() { ... }
       Method := ClassMethod(IsStatic);
-      Method.Name := MemberName; // Set the method name
+      Method.Name := MemberName;
 
       if IsPrivate then
         PrivateMethods.Add(MemberName, Method)
@@ -1689,7 +1845,8 @@ begin
 
   Consume(gttRightBrace, 'Expected "}" after class body');
   Result := TGocciaClassDefinition.Create(AClassName, SuperClass, Methods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
-  // Copy declaration-order lists (Result.Create already created empty lists, replace them)
+  Result.GenericParams := ClassGenericParams;
+  Result.ImplementsClause := ClassImplementsClause;
   Result.FInstancePropertyOrder.Assign(InstancePropertyOrder);
   Result.FPrivateInstancePropertyOrder.Assign(PrivateInstancePropertyOrder);
   InstancePropertyOrder.Free;
@@ -1722,10 +1879,14 @@ begin
     // We're already past the opening (
     ParenCount := 1;
 
-    // Special case: empty parameter list ()
     if Check(gttRightParen) then
     begin
-      Advance; // consume )
+      Advance;
+      if Check(gttColon) then
+      begin
+        Advance;
+        CollectTypeAnnotation([gttArrow]);
+      end;
       Result := Check(gttArrow);
       Exit;
     end;
@@ -1746,39 +1907,47 @@ begin
           end;
         gttLeftBracket, gttLeftBrace:
           begin
-            // Handle destructuring patterns in parameters
-            Advance; // consume [ or {
-            // Skip the destructuring pattern content (simplified)
+            Advance;
             SkipDestructuringPattern;
-                         // Skip optional default value assignment for the whole pattern
-             if Check(gttAssign) then
-             begin
-               Advance; // consume =
-               // Skip the default value expression (handle nested parentheses)
-               SkipExpression;
-             end;
-            // Skip optional comma
+            if Check(gttColon) then
+            begin
+              Advance;
+              CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
+            end;
+            if Check(gttAssign) then
+            begin
+              Advance;
+              SkipExpression;
+            end;
             if Check(gttComma) then
               Advance;
           end;
         gttSpread:
           begin
-            Advance; // consume ...
+            Advance;
             if Check(gttIdentifier) then
-              Advance; // consume parameter name
-            // Rest must be last, so next should be )
+              Advance;
+            if Check(gttColon) then
+            begin
+              Advance;
+              CollectTypeAnnotation([gttRightParen, gttComma]);
+            end;
           end;
         gttIdentifier:
           begin
             Advance;
-            // Skip optional default value assignment
+            if Check(gttQuestion) then
+              Advance;
+            if Check(gttColon) then
+            begin
+              Advance;
+              CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
+            end;
             if Check(gttAssign) then
             begin
-              Advance; // consume =
-              // Skip the default value expression (handle nested parentheses)
+              Advance;
               SkipExpression;
             end;
-            // Skip optional comma
             if Check(gttComma) then
               Advance;
           end;
@@ -1790,10 +1959,156 @@ begin
       end;
     end;
 
-    // Check if we have => after the parameters
+    if Check(gttColon) then
+    begin
+      Advance;
+      CollectTypeAnnotation([gttArrow]);
+    end;
+
     Result := Check(gttArrow);
   finally
-    // Restore position
+    FCurrent := SavedCurrent;
+  end;
+end;
+
+{ Type annotation helpers (Types as Comments) }
+
+function TGocciaParser.CollectTypeAnnotation(const ATerminators: array of TGocciaTokenType): string;
+var
+  Depth: Integer;
+  I: Integer;
+  TokenType: TGocciaTokenType;
+  IsTerminator: Boolean;
+begin
+  Result := '';
+  Depth := 0;
+
+  while not IsAtEnd do
+  begin
+    TokenType := Peek.TokenType;
+
+    if Depth = 0 then
+    begin
+      IsTerminator := False;
+      for I := 0 to High(ATerminators) do
+        if TokenType = ATerminators[I] then
+        begin
+          IsTerminator := True;
+          Break;
+        end;
+      if IsTerminator then
+        Exit;
+    end;
+
+    case TokenType of
+      gttLeftParen: Inc(Depth);
+      gttRightParen: Dec(Depth);
+      gttLeftBracket: Inc(Depth);
+      gttRightBracket: Dec(Depth);
+      gttLeftBrace: Inc(Depth);
+      gttRightBrace: Dec(Depth);
+      gttLess: Inc(Depth);
+      gttGreater: Dec(Depth);
+      gttRightShift: Dec(Depth, 2);
+      gttUnsignedRightShift: Dec(Depth, 3);
+    end;
+
+    if Result <> '' then
+      Result := Result + ' ';
+    Result := Result + Peek.Lexeme;
+    Advance;
+  end;
+end;
+
+function TGocciaParser.CollectGenericParameters: string;
+var
+  Depth: Integer;
+begin
+  Result := '';
+  if not Check(gttLess) then
+    Exit;
+
+  Result := Peek.Lexeme;
+  Advance;
+  Depth := 1;
+
+  while not IsAtEnd and (Depth > 0) do
+  begin
+    case Peek.TokenType of
+      gttLess: Inc(Depth);
+      gttGreater: Dec(Depth);
+      gttRightShift:
+      begin
+        Dec(Depth, 2);
+        Result := Result + ' ' + Peek.Lexeme;
+        Advance;
+        Continue;
+      end;
+      gttUnsignedRightShift:
+      begin
+        Dec(Depth, 3);
+        Result := Result + ' ' + Peek.Lexeme;
+        Advance;
+        Continue;
+      end;
+    end;
+    Result := Result + ' ' + Peek.Lexeme;
+    Advance;
+  end;
+
+  Result := Trim(Result);
+end;
+
+procedure TGocciaParser.SkipUntilSemicolon;
+var
+  Depth: Integer;
+begin
+  Depth := 0;
+  while not IsAtEnd do
+  begin
+    case Peek.TokenType of
+      gttLeftParen, gttLeftBracket, gttLeftBrace, gttLess: Inc(Depth);
+      gttRightParen, gttRightBracket, gttRightBrace, gttGreater: Dec(Depth);
+      gttSemicolon:
+        if Depth = 0 then
+        begin
+          Advance;
+          Exit;
+        end;
+    end;
+    Advance;
+  end;
+end;
+
+procedure TGocciaParser.SkipInterfaceDeclaration;
+var
+  Depth: Integer;
+begin
+  while not IsAtEnd and not Check(gttLeftBrace) do
+    Advance;
+
+  if Check(gttLeftBrace) then
+  begin
+    Advance;
+    Depth := 1;
+    while not IsAtEnd and (Depth > 0) do
+    begin
+      if Check(gttLeftBrace) then Inc(Depth);
+      if Check(gttRightBrace) then Dec(Depth);
+      Advance;
+    end;
+  end;
+end;
+
+function TGocciaParser.IsTypeDeclaration: Boolean;
+var
+  SavedCurrent: Integer;
+begin
+  SavedCurrent := FCurrent;
+  try
+    Advance;
+    Result := Check(gttIdentifier);
+  finally
     FCurrent := SavedCurrent;
   end;
 end;

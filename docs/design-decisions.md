@@ -300,6 +300,34 @@ Benefits:
 
 The build script (`build.pas`) is a FreePascal script executed via `instantfpc` — a cross-platform, out-of-the-box solution within the FreePascal ecosystem that requires no external build tools.
 
+## Types as Comments: Collect, Don't Discard
+
+GocciaScript implements the [TC39 Types as Comments](https://tc39.es/proposal-type-annotations/) proposal with a deliberate design choice: **raw type annotation strings are preserved on AST nodes** rather than being discarded during parsing.
+
+**The problem:** Type annotations have no runtime semantics — they could simply be skipped by the parser. However, the type information may be valuable for future optimization passes (e.g., specializing number operations when a parameter is annotated `: number`).
+
+**The solution:** The parser collects type annotation text into string fields on AST nodes (`TypeAnnotation`, `ReturnType`, `GenericParams`, `ImplementsClause`, `CatchParamType`, `IsOptional`). The evaluator ignores these fields entirely. This gives us:
+
+- **Zero runtime cost** — The evaluator never reads type fields. No branching, no overhead.
+- **Forward compatibility** — A future optimization pass can inspect the stored type annotations without re-parsing source code.
+- **Minimal parser complexity** — Two helper methods (`CollectTypeAnnotation`, `CollectGenericParameters`) handle all type collection with balanced-bracket tracking and configurable terminator tokens. Integration points in the parser are small (typically 4-5 lines each).
+
+**What gets collected vs skipped:**
+
+| Syntax | Treatment |
+|--------|-----------|
+| `let x: number = 5;` | Collected on `TGocciaVariableInfo.TypeAnnotation` |
+| `(a: number) => ...` | Collected on `TGocciaParameter.TypeAnnotation` |
+| `(): string => ...` | Collected on `TGocciaArrowFunctionExpression.ReturnType` |
+| `class Box<T>` | Collected on `TGocciaClassDefinition.GenericParams` |
+| `implements Foo` | Collected on `TGocciaClassDefinition.ImplementsClause` |
+| `catch (e: Error)` | Collected on `TGocciaTryStatement.CatchParamType` |
+| `x as Type` | Skipped (expression value unchanged) |
+| `type X = ...;` | Skipped → `TGocciaEmptyStatement` |
+| `interface X { ... }` | Skipped → `TGocciaEmptyStatement` |
+| `import type { ... }` | Skipped → `TGocciaEmptyStatement` |
+| `export type { ... }` | Skipped → `TGocciaEmptyStatement` |
+
 ## Testing Strategy
 
 JavaScript end-to-end tests are the **primary** testing mechanism. Every new feature or bug fix must include JavaScript tests that validate the behavior through the full pipeline (lexer → parser → evaluator).
