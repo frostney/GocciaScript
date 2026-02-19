@@ -39,6 +39,15 @@ Overflow and range checks are **enabled** — correctness is prioritized over ra
 | Parameters | `A` prefix (multi-letter only) | `AScope`, `AValue`, `AFileName` |
 | Enums | `TGoccia<Name>` for type, lowercase prefix for values | `TGocciaScopeKind`, `skGlobal` |
 
+### Centralized Constants
+
+Use centralized constant units instead of hardcoded string literals:
+
+- **Keywords** — Use `Goccia.Keywords.Reserved` (`KEYWORD_THIS`, `KEYWORD_SUPER`, etc.) and `Goccia.Keywords.Contextual` (`KEYWORD_GET`, `KEYWORD_SET`, etc.) instead of raw `'this'`, `'get'` strings.
+- **File extensions** — Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`) instead of raw `'.js'`, `'.mjs'` strings. Use the `ScriptExtensions` array and `IsScriptExtension`/`IsJSXNativeExtension` helpers instead of duplicating extension lists.
+
+Adding a new keyword or file extension requires a single change in the constants unit — all consumers pick it up automatically.
+
 ### No Abbreviations
 
 Class names, function names, method names, and type names must use **full words** — do not abbreviate. This keeps the codebase consistent and self-documenting.

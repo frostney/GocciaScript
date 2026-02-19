@@ -15,7 +15,6 @@ uses
   Goccia.AST.Statements,
   Goccia.Error,
   Goccia.Evaluator,
-  Goccia.FileExtensions,
   Goccia.Interfaces,
   Goccia.Lexer,
   Goccia.Logger,
@@ -65,6 +64,7 @@ type
 implementation
 
 uses
+  Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
   Goccia.JSX.SourceMap,
@@ -149,7 +149,9 @@ begin
       raise EGocciaModuleNotFound.CreateFmt(
         'No module resolver configured and cannot resolve "%s"', [AModulePath]);
   except
-    on E: EGocciaModuleNotFound do
+    on E: TGocciaRuntimeError do
+      raise;
+    on E: Exception do
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath, nil);
   end;
 

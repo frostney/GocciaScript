@@ -6,9 +6,7 @@ interface
 
 uses
   Generics.Collections,
-  SysUtils,
-
-  Goccia.FileExtensions;
+  SysUtils;
 
 type
   TGocciaModuleResolver = class
@@ -33,6 +31,9 @@ type
   EGocciaModuleNotFound = class(Exception);
 
 implementation
+
+uses
+  Goccia.FileExtensions;
 
 constructor TGocciaModuleResolver.Create(const ABaseDirectory: string);
 begin
@@ -67,22 +68,33 @@ end;
 
 function TGocciaModuleResolver.ApplyAliases(const AModulePath: string): string;
 var
-  Pair: TPair<string, string>;
+  Pair, BestMatch: TPair<string, string>;
   Replacement: string;
+  Found: Boolean;
 begin
   Result := AModulePath;
+  Found := False;
+
   for Pair in FAliases do
   begin
-    if (Length(Result) >= Length(Pair.Key)) and
-       (Copy(Result, 1, Length(Pair.Key)) = Pair.Key) then
+    if (Length(AModulePath) >= Length(Pair.Key)) and
+       (Copy(AModulePath, 1, Length(Pair.Key)) = Pair.Key) then
     begin
-      Replacement := Pair.Value + Copy(Result, Length(Pair.Key) + 1, MaxInt);
-      if (Length(Replacement) > 0) and (Replacement[1] <> '/') then
-        Result := FBaseDirectory + Replacement
-      else
-        Result := Replacement;
-      Exit;
+      if (not Found) or (Length(Pair.Key) > Length(BestMatch.Key)) then
+      begin
+        BestMatch := Pair;
+        Found := True;
+      end;
     end;
+  end;
+
+  if Found then
+  begin
+    Replacement := BestMatch.Value + Copy(AModulePath, Length(BestMatch.Key) + 1, MaxInt);
+    if (Length(Replacement) > 0) and (Replacement[1] <> '/') then
+      Result := FBaseDirectory + Replacement
+    else
+      Result := Replacement;
   end;
 end;
 

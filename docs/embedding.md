@@ -114,11 +114,16 @@ import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx,
 Aliases map import prefixes to directories, similar to TypeScript's `paths` or Vite's `resolve.alias`:
 
 ```pascal
-Engine.AddAlias('@/', 'src/');        // @/utils → <baseDir>/src/utils
-Engine.AddAlias('~/', 'lib/shared/'); // ~/helpers → <baseDir>/lib/shared/helpers
+Engine.AddAlias('@/', 'src/');              // @/utils → <baseDir>/src/utils
+Engine.AddAlias('~/', 'lib/shared/');       // ~/helpers → <baseDir>/lib/shared/helpers
+Engine.AddAlias('@/components/', 'ui/lib/'); // more specific prefix for a subtree
 ```
 
-The alias target is resolved relative to the entry script's directory. Scripts can then import using the alias:
+The alias target is resolved relative to the entry script's directory.
+
+**Longest-prefix matching:** When multiple aliases overlap (e.g., `@/` and `@/components/`), the resolver always picks the longest matching prefix. This means `@/components/Button` uses the `@/components/` alias, not `@/`.
+
+Scripts can then import using the alias:
 
 ```javascript
 import { formatDate } from "@/utils/dates";
@@ -500,7 +505,7 @@ The repository includes four embedding examples:
 
 | Program | File | Description |
 |---------|------|-------------|
-| `ScriptLoader` | `ScriptLoader.dpr` | Executes `.js` files from disk (one-shot) |
+| `ScriptLoader` | `ScriptLoader.dpr` | Executes script files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`) from disk (one-shot) |
 | `REPL` | `REPL.dpr` | Interactive read-eval-print loop (long-lived engine) |
 | `TestRunner` | `TestRunner.dpr` | Runs test suites with `ggTestAssertions` enabled |
 | `BenchmarkRunner` | `BenchmarkRunner.dpr` | Runs benchmarks with `ggBenchmark` enabled |

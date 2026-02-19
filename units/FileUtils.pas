@@ -6,15 +6,16 @@ interface
 
 uses
   Classes,
-  SysUtils,
-
-  Goccia.FileExtensions;
+  SysUtils;
 
 function FindAllFiles(const ADirectory: string): TStringList; overload;
 function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList; overload;
 function FindAllFiles(const ADirectory: string; const AFileExtensions: array of string): TStringList; overload;
 
 implementation
+
+uses
+  Goccia.FileExtensions;
 
 function MatchesExtension(const AName: string; const AExtensions: array of string): Boolean;
 var
