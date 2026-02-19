@@ -6,10 +6,9 @@ interface
 
 uses
   Classes,
-  SysUtils;
+  SysUtils,
 
-const
-  DefaultScriptExtensions: array[0..3] of string = ('.js', '.jsx', '.ts', '.tsx');
+  Goccia.FileExtensions;
 
 function FindAllFiles(const ADirectory: string): TStringList; overload;
 function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList; overload;
@@ -69,7 +68,7 @@ end;
 
 function FindAllFiles(const ADirectory: string): TStringList;
 begin
-  Result := FindAllFiles(ADirectory, DefaultScriptExtensions);
+  Result := FindAllFiles(ADirectory, ScriptExtensions);
 end;
 
 end.

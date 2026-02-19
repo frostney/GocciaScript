@@ -65,7 +65,7 @@ end;
 begin
   if ParamCount < 1 then
   begin
-    WriteLn('Usage: ScriptLoader <filename.js|.jsx|.ts|.tsx>');
+    WriteLn('Usage: ScriptLoader <filename.js|.jsx|.ts|.tsx|.mjs>');
     WriteLn('or');
     WriteLn('Usage: ScriptLoader <directory>');
     ExitCode := 1;

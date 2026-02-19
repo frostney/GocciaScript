@@ -82,12 +82,12 @@ class Counter {
 
 ### Modules
 
-ES module syntax with named exports. Module paths are resolved relative to the importing file.
+ES module syntax with named exports. Supported file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries each extension in order. Directory imports resolve to `index` files.
 
 ```javascript
-// Named imports
+// Named imports (with or without extension)
 import { add, multiply } from "./math.js";
-import { greet as sayHello } from "./utils.js";
+import { add, multiply } from "./math";      // resolves to ./math.js, .jsx, .ts, .tsx, or .mjs
 
 // Named exports
 export { myFunction, myValue };
@@ -103,6 +103,9 @@ export { greet as sayHello } from "./utils.js";
 // JSON imports — top-level keys become named exports
 import { name, version } from "./package.json";
 import { host as dbHost } from "./config.json";
+
+// Directory/index resolution
+import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx, etc.)
 ```
 
 **Not supported:** `export default`, `import x from` (default import), `import * as` (namespace import), `import "module"` (side-effect import), `export * from` (wildcard re-export), dynamic `import()`. The parser accepts these syntactically but treats them as no-ops, emitting a warning with a suggestion:

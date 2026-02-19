@@ -323,7 +323,7 @@ expect([...set.values()]).toEqual([1, 2, 3]);
 
 The `TestRunner` program:
 
-1. Scans the provided path for `.js` files.
+1. Scans the provided path for `.js`, `.jsx`, `.ts`, `.tsx`, and `.mjs` files.
 2. For each file, creates a fresh `TGocciaEngine` with `DefaultGlobals + [ggTestAssertions]`.
 3. Loads the source and appends a `runTests()` call.
 4. Executes the script — `describe`/`test` blocks register themselves during execution.

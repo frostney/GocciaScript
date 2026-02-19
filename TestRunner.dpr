@@ -248,9 +248,9 @@ var
 begin
   if ParamCount < 1 then
   begin
-    WriteLn('Usage: TestRunner <filename.{js|jsx|ts|tsx}>');
+    WriteLn('Usage: TestRunner <filename.{js|jsx|ts|tsx|mjs}>');
     WriteLn('or');
-    WriteLn('Usage: TestRunner <directory> (searches for .js, .jsx, .ts, .tsx files)');
+    WriteLn('Usage: TestRunner <directory> (searches for .js, .jsx, .ts, .tsx, .mjs files)');
     ExitCode := 1;
   end
   else
