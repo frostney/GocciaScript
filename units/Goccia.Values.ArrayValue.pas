@@ -59,6 +59,11 @@ type
     function ArrayFill(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
+    function ArrayValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ArrayKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ArrayEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ArraySymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
     procedure ThrowError(const AMessage: string; const AArgs: array of const); overload; inline;
     procedure ThrowError(const AMessage: string); overload; inline;
   protected
@@ -103,8 +108,10 @@ uses
   Goccia.Utils,
   Goccia.Values.ClassHelper,
   Goccia.Values.FunctionValue,
+  Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue;
 
 function NumericRank(const ANum: TGocciaNumberLiteralValue): Double;
 begin
@@ -272,6 +279,17 @@ begin
   FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayUnshift, 'unshift', -1));
   FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFill, 'fill', 1));
   FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayAt, 'at', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayValues, 'values', 0));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayKeys, 'keys', 0));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayEntries, 'entries', 0));
+
+  FSharedArrayPrototype.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownIterator,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.Create(ArraySymbolIterator, '[Symbol.iterator]', 0),
+      [pfConfigurable, pfWritable]
+    )
+  );
 
   if Assigned(TGocciaGarbageCollector.Instance) then
   begin
@@ -1478,6 +1496,34 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue
   else
     Result := Arr.Elements[Index];
+end;
+
+function TGocciaArrayValue.ArrayValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaArrayValue) then
+    ThrowError('Array.values called on non-array');
+  Result := TGocciaArrayIteratorValue.Create(AThisValue, akValues);
+end;
+
+function TGocciaArrayValue.ArrayKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaArrayValue) then
+    ThrowError('Array.keys called on non-array');
+  Result := TGocciaArrayIteratorValue.Create(AThisValue, akKeys);
+end;
+
+function TGocciaArrayValue.ArrayEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaArrayValue) then
+    ThrowError('Array.entries called on non-array');
+  Result := TGocciaArrayIteratorValue.Create(AThisValue, akEntries);
+end;
+
+function TGocciaArrayValue.ArraySymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaArrayValue) then
+    ThrowError('[Symbol.iterator] called on non-array');
+  Result := TGocciaArrayIteratorValue.Create(AThisValue, akValues);
 end;
 
 end.

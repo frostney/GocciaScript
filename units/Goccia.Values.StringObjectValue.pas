@@ -52,6 +52,7 @@ type
     function StringPadEnd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringConcat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function StringSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 
@@ -65,6 +66,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
@@ -170,6 +172,14 @@ begin
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringPadEnd, 'padEnd', 1));
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringConcat, 'concat', 1));
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringAt, 'at', 1));
+
+  FSharedStringPrototype.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownIterator,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.Create(StringSymbolIterator, '[Symbol.iterator]', 0),
+      [pfConfigurable, pfWritable]
+    )
+  );
 
   if Assigned(TGocciaGarbageCollector.Instance) then
   begin
@@ -842,6 +852,19 @@ begin
   end;
 
   Result := TGocciaStringLiteralValue.Create(StringValue[Index + 1]); // Pascal is 1-based
+end;
+
+function TGocciaStringObjectValue.StringSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  StringValue: TGocciaStringLiteralValue;
+begin
+  if AThisValue is TGocciaStringLiteralValue then
+    StringValue := TGocciaStringLiteralValue(AThisValue)
+  else if AThisValue is TGocciaStringObjectValue then
+    StringValue := TGocciaStringObjectValue(AThisValue).Primitive
+  else
+    ThrowTypeError('[Symbol.iterator] called on non-string');
+  Result := TGocciaStringIteratorValue.Create(StringValue);
 end;
 
 end.

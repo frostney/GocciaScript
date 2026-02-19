@@ -34,6 +34,7 @@ type
     function MapKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MapSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     function FindEntry(const AKey: TGocciaValue): Integer;
     procedure InitializePrototype;
@@ -60,7 +61,10 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Values.FunctionBase,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.Iterator.Concrete,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue;
 
 constructor TGocciaMapValue.Create;
 begin
@@ -86,6 +90,14 @@ begin
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapKeys, 'keys', 0));
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapValues, 'values', 0));
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapEntries, 'entries', 0));
+
+  FShared.Prototype.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownIterator,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(MapSymbolIterator, '[Symbol.iterator]', 0),
+      [pfConfigurable, pfWritable]
+    )
+  );
 end;
 
 class procedure TGocciaMapValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
@@ -272,34 +284,23 @@ begin
 end;
 
 function TGocciaMapValue.MapKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  M: TGocciaMapValue;
-  Arr: TGocciaArrayValue;
-  I: Integer;
 begin
-  M := TGocciaMapValue(AThisValue);
-  Arr := TGocciaArrayValue.Create;
-  for I := 0 to M.Entries.Count - 1 do
-    Arr.Elements.Add(M.Entries[I].Key);
-  Result := Arr;
+  Result := TGocciaMapIteratorValue.Create(AThisValue, mkKeys);
 end;
 
 function TGocciaMapValue.MapValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  M: TGocciaMapValue;
-  Arr: TGocciaArrayValue;
-  I: Integer;
 begin
-  M := TGocciaMapValue(AThisValue);
-  Arr := TGocciaArrayValue.Create;
-  for I := 0 to M.Entries.Count - 1 do
-    Arr.Elements.Add(M.Entries[I].Value);
-  Result := Arr;
+  Result := TGocciaMapIteratorValue.Create(AThisValue, mkValues);
 end;
 
 function TGocciaMapValue.MapEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaMapValue(AThisValue).ToArray;
+  Result := TGocciaMapIteratorValue.Create(AThisValue, mkEntries);
+end;
+
+function TGocciaMapValue.MapSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaMapIteratorValue.Create(AThisValue, mkEntries);
 end;
 
 end.

@@ -27,6 +27,7 @@ uses
   Goccia.Modules,
   Goccia.Modules.Resolver,
   Goccia.Parser,
+  Goccia.Values.IteratorValue,
   Goccia.Values.Primitives;
 
 type
@@ -272,6 +273,7 @@ begin
 
   // Always-registered built-ins
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, ThrowError);
+  Scope.DefineLexicalBinding('Iterator', TGocciaIteratorValue.CreateGlobalObject, dtConst);
   RegisterBuiltinConstructors;
 end;
 

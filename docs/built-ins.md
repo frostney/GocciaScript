@@ -179,6 +179,10 @@ The JSON parser is a recursive descent implementation. Special handling:
 | `toReversed()` | Non-mutating reverse |
 | `toSorted(compareFn?)` | Non-mutating sort |
 | `toSpliced(start, deleteCount?, ...items)` | Non-mutating splice |
+| `values()` | Returns an iterator over values |
+| `keys()` | Returns an iterator over indices |
+| `entries()` | Returns an iterator over `[index, value]` pairs |
+| `[Symbol.iterator]()` | Returns a values iterator (same as `values()`) |
 
 ### Number (`Goccia.Builtins.GlobalNumber.pas`)
 
@@ -225,7 +229,9 @@ String constructor available as `String()`.
 
 String prototype methods are implemented on string values:
 
-`charAt`, `charCodeAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `replace`, `replaceAll`, `split`, `padStart`, `padEnd`, `concat`, `at`
+`charAt`, `charCodeAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `replace`, `replaceAll`, `split`, `padStart`, `padEnd`, `concat`, `at`, `[Symbol.iterator]`
+
+`[Symbol.iterator]()` returns an iterator that yields individual characters.
 
 ### Global Constants, Functions, and Error Constructors (`Goccia.Builtins.Globals.pas`)
 
@@ -256,6 +262,39 @@ A `const` global providing engine metadata:
 **Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`
 
 Each creates a `TGocciaError` with the appropriate `Name` and `Message`.
+
+### Iterator (`Goccia.Values.IteratorValue.pas`, `Iterator.Concrete.pas`, `Iterator.Lazy.pas`, `Iterator.Generic.pas`)
+
+All built-in iterators (Array, String, Map, Set) share a common `Iterator.prototype` with helper methods per the ECMAScript Iterator Helpers proposal:
+
+| Method | Description |
+|--------|-------------|
+| `iter.next()` | Returns `{value, done}` — advances the iterator |
+| `iter[Symbol.iterator]()` | Returns `iter` itself (iterators are iterable) |
+| `iter.map(callback)` | Returns a new iterator with mapped values |
+| `iter.filter(callback)` | Returns a new iterator with filtered values |
+| `iter.take(n)` | Returns a new iterator with the first `n` values |
+| `iter.drop(n)` | Returns a new iterator skipping the first `n` values |
+| `iter.flatMap(callback)` | Map and flatten one level |
+| `iter.forEach(callback)` | Execute callback for each value |
+| `iter.reduce(callback, initial?)` | Reduce to single value |
+| `iter.toArray()` | Collect remaining values into an array |
+| `iter.some(callback)` | Test if any value matches |
+| `iter.every(callback)` | Test if all values match |
+| `iter.find(callback)` | Find first matching value |
+
+**Lazy helpers:** `map`, `filter`, `take`, `drop`, and `flatMap` return new lazy iterators that advance the source on-demand — they do not eagerly consume the underlying iterator. Consuming methods (`forEach`, `reduce`, `toArray`, `some`, `every`, `find`) do consume the iterator.
+
+Iterators are consumed once — calling `next()` past the end returns `{value: undefined, done: true}` forever. Spread (`[...iter]`), destructuring, and `Array.from()` all consume iterators via the `[Symbol.iterator]` protocol.
+
+**User-defined iterables:** Objects with a `[Symbol.iterator]()` method that returns a plain `{next()}` object are fully supported. They work with spread, destructuring, `Array.from()`, and `Iterator.from()`.
+
+**Static method:**
+
+| Method | Description |
+|--------|-------------|
+| `Iterator.from(value)` | Wrap an iterable, iterator, or `{next()}` object as a proper Iterator with helper methods |
+| `Iterator.prototype` | The shared iterator prototype (accessible for inspection) |
 
 ### Symbol (`Goccia.Builtins.GlobalSymbol.pas`)
 
@@ -297,9 +336,12 @@ A collection of unique values with insertion-order iteration.
 | `set.clear()` | Remove all values |
 | `set.size` | Number of values |
 | `set.forEach(callback)` | Iterate over values |
-| `set.values()` | Get values as an array |
+| `set.values()` | Returns an iterator over values |
+| `set.keys()` | Returns an iterator over values (same as `values()` for Set) |
+| `set.entries()` | Returns an iterator over values |
+| `set[Symbol.iterator]()` | Returns a values iterator (same as `values()`) |
 
-Sets are spreadable: `[...mySet]` produces an array of the set's values.
+Sets are iterable: `[...mySet]` spreads the set's values into an array.
 
 ### Map (`Goccia.Builtins.GlobalMap.pas`)
 
@@ -315,11 +357,12 @@ A collection of key-value pairs with insertion-order iteration. Any value (inclu
 | `map.clear()` | Remove all entries |
 | `map.size` | Number of entries |
 | `map.forEach(callback)` | Iterate over entries |
-| `map.keys()` | Get keys as an array |
-| `map.values()` | Get values as an array |
-| `map.entries()` | Get `[key, value]` pairs as an array |
+| `map.keys()` | Returns an iterator over keys |
+| `map.values()` | Returns an iterator over values |
+| `map.entries()` | Returns an iterator over `[key, value]` pairs |
+| `map[Symbol.iterator]()` | Returns an entries iterator (same as `entries()`) |
 
-Maps are spreadable: `[...myMap]` produces an array of `[key, value]` pairs.
+Maps are iterable: `[...myMap]` spreads the map into an array of `[key, value]` pairs.
 
 ### Promise (`Goccia.Builtins.GlobalPromise.pas`, `Goccia.Values.PromiseValue.pas`)
 

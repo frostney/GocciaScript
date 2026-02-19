@@ -75,9 +75,9 @@ uses
 
 const
   DEFAULT_WARMUP_ITERATIONS = 3;
-  DEFAULT_MIN_CALIBRATION_MS = 300;  // Run for at least 300ms during calibration
-  DEFAULT_CALIBRATION_BATCH = 10;    // Initial batch size for calibration
-  DEFAULT_MEASUREMENT_ROUNDS = 3;    // Number of measurement rounds (take median)
+  DEFAULT_MIN_CALIBRATION_MS = 100;  // Run for at least 300ms during calibration
+  DEFAULT_CALIBRATION_BATCH = 5;    // Initial batch size for calibration
+  DEFAULT_MEASUREMENT_ROUNDS = 5;    // Number of measurement rounds (take median)
 
 var
   WARMUP_ITERATIONS: Integer;

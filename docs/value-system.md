@@ -23,6 +23,17 @@ classDiagram
     TGocciaObjectValue <|-- TGocciaFunctionValue
     TGocciaObjectValue <|-- TGocciaClassValue
     TGocciaObjectValue <|-- TGocciaInstanceValue
+    TGocciaObjectValue <|-- TGocciaIteratorValue
+    TGocciaIteratorValue <|-- TGocciaArrayIteratorValue
+    TGocciaIteratorValue <|-- TGocciaStringIteratorValue
+    TGocciaIteratorValue <|-- TGocciaMapIteratorValue
+    TGocciaIteratorValue <|-- TGocciaSetIteratorValue
+    TGocciaIteratorValue <|-- TGocciaLazyMapIteratorValue
+    TGocciaIteratorValue <|-- TGocciaLazyFilterIteratorValue
+    TGocciaIteratorValue <|-- TGocciaLazyTakeIteratorValue
+    TGocciaIteratorValue <|-- TGocciaLazyDropIteratorValue
+    TGocciaIteratorValue <|-- TGocciaLazyFlatMapIteratorValue
+    TGocciaIteratorValue <|-- TGocciaGenericIteratorValue
     TGocciaObjectValue <|-- TGocciaNumberObjectValue
     TGocciaObjectValue <|-- TGocciaStringObjectValue
     TGocciaObjectValue <|-- TGocciaBooleanObjectValue

@@ -89,6 +89,7 @@ uses
   Goccia.Evaluator.Bitwise,
   Goccia.Evaluator.Comparison,
   Goccia.Evaluator.TypeOperations,
+  Goccia.GarbageCollector,
   Goccia.Interfaces,
   Goccia.Keywords.Reserved,
   Goccia.Lexer,
@@ -101,6 +102,9 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
+  Goccia.Values.Iterator.Concrete,
+  Goccia.Values.Iterator.Generic,
+  Goccia.Values.IteratorValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -146,9 +150,64 @@ begin
   end;
 end;
 
+function GetIteratorFromValue(const AValue: TGocciaValue): TGocciaIteratorValue;
+var
+  IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  if AValue is TGocciaIteratorValue then
+  begin
+    Result := TGocciaIteratorValue(AValue);
+    Exit;
+  end;
+
+  if AValue is TGocciaObjectValue then
+  begin
+    IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
+    begin
+      TGocciaGarbageCollector.Instance.AddTempRoot(AValue);
+      try
+        CallArgs := TGocciaArgumentsCollection.Create;
+        try
+          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AValue);
+        finally
+          CallArgs.Free;
+        end;
+      finally
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(AValue);
+      end;
+      if IteratorObj is TGocciaIteratorValue then
+      begin
+        Result := TGocciaIteratorValue(IteratorObj);
+        Exit;
+      end;
+      if IteratorObj is TGocciaObjectValue then
+      begin
+        NextMethod := IteratorObj.GetProperty('next');
+        if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
+        begin
+          Result := TGocciaGenericIteratorValue.Create(IteratorObj);
+          Exit;
+        end;
+      end;
+    end;
+  end;
+
+  if AValue is TGocciaStringLiteralValue then
+  begin
+    Result := TGocciaStringIteratorValue.Create(AValue);
+    Exit;
+  end;
+
+  Result := nil;
+end;
+
 procedure SpreadIterableInto(const ASpreadValue: TGocciaValue; const ATarget: TList<TGocciaValue>);
 var
   SpreadArray: TGocciaArrayValue;
+  Iterator: TGocciaIteratorValue;
+  IterResult: TGocciaObjectValue;
   J: Integer;
 begin
   if ASpreadValue is TGocciaArrayValue then
@@ -162,30 +221,33 @@ begin
         ATarget.Add(SpreadArray.Elements[J]);
     end;
   end
-  else if ASpreadValue is TGocciaStringLiteralValue then
-  begin
-    for J := 1 to Length(ASpreadValue.ToStringLiteral.Value) do
-      ATarget.Add(TGocciaStringLiteralValue.Create(ASpreadValue.ToStringLiteral.Value[J]));
-  end
-  else if ASpreadValue is TGocciaSetValue then
-  begin
-    SpreadArray := TGocciaSetValue(ASpreadValue).ToArray;
-    for J := 0 to SpreadArray.Elements.Count - 1 do
-      ATarget.Add(SpreadArray.Elements[J]);
-  end
-  else if ASpreadValue is TGocciaMapValue then
-  begin
-    SpreadArray := TGocciaMapValue(ASpreadValue).ToArray;
-    for J := 0 to SpreadArray.Elements.Count - 1 do
-      ATarget.Add(SpreadArray.Elements[J]);
-  end
   else
-    ThrowTypeError('Spread syntax requires an iterable');
+  begin
+    Iterator := GetIteratorFromValue(ASpreadValue);
+    if Assigned(Iterator) then
+    begin
+      TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+      try
+        IterResult := Iterator.AdvanceNext;
+        while not TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value do
+        begin
+          ATarget.Add(IterResult.GetProperty('value'));
+          IterResult := Iterator.AdvanceNext;
+        end;
+      finally
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
+      end;
+    end
+    else
+      ThrowTypeError('Spread syntax requires an iterable');
+  end;
 end;
 
 procedure SpreadIterableIntoArgs(const ASpreadValue: TGocciaValue; const AArgs: TGocciaArgumentsCollection);
 var
   SpreadArray: TGocciaArrayValue;
+  Iterator: TGocciaIteratorValue;
+  IterResult: TGocciaObjectValue;
   J: Integer;
 begin
   if ASpreadValue is TGocciaArrayValue then
@@ -199,13 +261,26 @@ begin
         AArgs.Add(SpreadArray.Elements[J]);
     end;
   end
-  else if ASpreadValue is TGocciaStringLiteralValue then
-  begin
-    for J := 1 to Length(ASpreadValue.ToStringLiteral.Value) do
-      AArgs.Add(TGocciaStringLiteralValue.Create(ASpreadValue.ToStringLiteral.Value[J]));
-  end
   else
-    ThrowTypeError('Spread syntax requires an iterable');
+  begin
+    Iterator := GetIteratorFromValue(ASpreadValue);
+    if Assigned(Iterator) then
+    begin
+      TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+      try
+        IterResult := Iterator.AdvanceNext;
+        while not TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value do
+        begin
+          AArgs.Add(IterResult.GetProperty('value'));
+          IterResult := Iterator.AdvanceNext;
+        end;
+      finally
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
+      end;
+    end
+    else
+      ThrowTypeError('Spread syntax requires an iterable');
+  end;
 end;
 
 function Evaluate(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -851,7 +926,6 @@ begin
     else
     begin
       SafeOnError(AContext, Format('%s is not a function', [Callee.TypeName]), ACallExpression.Line, ACallExpression.Column);
-      // If OnError doesn't throw, return undefined
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     end;
 
@@ -950,10 +1024,24 @@ begin
     PropertyValue := EvaluateExpression(AMemberExpression.PropertyExpression, AContext);
 
     // Symbol property access
-    if (PropertyValue is TGocciaSymbolValue) and (Obj is TGocciaObjectValue) then
+    if PropertyValue is TGocciaSymbolValue then
     begin
-      Result := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
-      Exit;
+      if Obj is TGocciaObjectValue then
+      begin
+        Result := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
+        Exit;
+      end
+      else
+      begin
+        BoxedValue := Obj.Box;
+        if Assigned(BoxedValue) then
+        begin
+          Result := BoxedValue.GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
+          Exit;
+        end;
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Exit;
+      end;
     end;
 
     PropertyName := PropertyValue.ToStringLiteral.Value;
@@ -994,25 +1082,27 @@ var
   SpreadValue: TGocciaValue;
 begin
   Arr := TGocciaArrayValue.Create;
-  for I := 0 to AArrayExpression.Elements.Count - 1 do
-  begin
-    if AArrayExpression.Elements[I] is TGocciaHoleExpression then
+  TGocciaGarbageCollector.Instance.AddTempRoot(Arr);
+  try
+    for I := 0 to AArrayExpression.Elements.Count - 1 do
     begin
-      // For holes, add nil to represent the hole
-      Arr.Elements.Add(nil);
-    end
-    else if AArrayExpression.Elements[I] is TGocciaSpreadExpression then
-    begin
-      SpreadValue := EvaluateExpression(TGocciaSpreadExpression(AArrayExpression.Elements[I]).Argument, AContext);
-      SpreadIterableInto(SpreadValue, Arr.Elements);
-    end
-    else
-    begin
-      ElementValue := EvaluateExpression(AArrayExpression.Elements[I], AContext);
-      Arr.Elements.Add(ElementValue);
+      if AArrayExpression.Elements[I] is TGocciaHoleExpression then
+        Arr.Elements.Add(nil)
+      else if AArrayExpression.Elements[I] is TGocciaSpreadExpression then
+      begin
+        SpreadValue := EvaluateExpression(TGocciaSpreadExpression(AArrayExpression.Elements[I]).Argument, AContext);
+        SpreadIterableInto(SpreadValue, Arr.Elements);
+      end
+      else
+      begin
+        ElementValue := EvaluateExpression(AArrayExpression.Elements[I], AContext);
+        Arr.Elements.Add(ElementValue);
+      end;
     end;
+    Result := Arr;
+  finally
+    TGocciaGarbageCollector.Instance.RemoveTempRoot(Arr);
   end;
-  Result := Arr;
 end;
 
 function EvaluateObject(const AObjectExpression: TGocciaObjectExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -2253,12 +2343,16 @@ end;
 procedure AssignArrayPattern(const APattern: TGocciaArrayDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
 var
   ArrayValue: TGocciaArrayValue;
+  Iterator: TGocciaIteratorValue;
+  IterResult: TGocciaObjectValue;
   I: Integer;
   ElementValue: TGocciaValue;
   RestElements: TGocciaArrayValue;
   J: Integer;
 begin
-  // Check if value is iterable (array or string)
+  if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
+    ThrowTypeError('Cannot destructure null or undefined');
+
   if AValue is TGocciaArrayValue then
   begin
     ArrayValue := TGocciaArrayValue(AValue);
@@ -2266,11 +2360,10 @@ begin
     for I := 0 to APattern.Elements.Count - 1 do
     begin
       if APattern.Elements[I] = nil then
-        Continue; // Skip holes
+        Continue;
 
       if APattern.Elements[I] is TGocciaRestDestructuringPattern then
       begin
-        // Rest pattern: collect remaining elements
         RestElements := TGocciaArrayValue.Create;
         for J := I to ArrayValue.Elements.Count - 1 do
         begin
@@ -2284,7 +2377,6 @@ begin
       end
       else
       begin
-        // Regular element
         if (I < ArrayValue.Elements.Count) and (ArrayValue.Elements[I] <> nil) then
           ElementValue := ArrayValue.Elements[I]
         else
@@ -2296,15 +2388,13 @@ begin
   end
   else if AValue is TGocciaStringLiteralValue then
   begin
-    // String destructuring
     for I := 0 to APattern.Elements.Count - 1 do
     begin
       if APattern.Elements[I] = nil then
-        Continue; // Skip holes
+        Continue;
 
       if APattern.Elements[I] is TGocciaRestDestructuringPattern then
       begin
-        // Rest pattern: collect remaining characters
         RestElements := TGocciaArrayValue.Create;
         for J := I + 1 to Length(AValue.ToStringLiteral.Value) do
           RestElements.Elements.Add(TGocciaStringLiteralValue.Create(AValue.ToStringLiteral.Value[J]));
@@ -2313,7 +2403,6 @@ begin
       end
       else
       begin
-        // Regular character
         if I + 1 <= Length(AValue.ToStringLiteral.Value) then
           ElementValue := TGocciaStringLiteralValue.Create(AValue.ToStringLiteral.Value[I + 1])
         else
@@ -2323,13 +2412,48 @@ begin
       end;
     end;
   end
-  else if (AValue is TGocciaNullLiteralValue) or (AValue is TGocciaUndefinedLiteralValue) then
-  begin
-    ThrowTypeError('Cannot destructure null or undefined');
-  end
   else
   begin
-    ThrowTypeError('Value is not iterable');
+    Iterator := GetIteratorFromValue(AValue);
+    if not Assigned(Iterator) then
+      ThrowTypeError('Value is not iterable');
+
+    TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+    try
+      for I := 0 to APattern.Elements.Count - 1 do
+      begin
+        if APattern.Elements[I] = nil then
+        begin
+          Iterator.AdvanceNext;
+          Continue;
+        end;
+
+        if APattern.Elements[I] is TGocciaRestDestructuringPattern then
+        begin
+          RestElements := TGocciaArrayValue.Create;
+          IterResult := Iterator.AdvanceNext;
+          while not TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value do
+          begin
+            RestElements.Elements.Add(IterResult.GetProperty('value'));
+            IterResult := Iterator.AdvanceNext;
+          end;
+          AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration);
+          Break;
+        end
+        else
+        begin
+          IterResult := Iterator.AdvanceNext;
+          if TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value then
+            ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
+          else
+            ElementValue := IterResult.GetProperty('value');
+
+          AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration);
+        end;
+      end;
+    finally
+      TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    end;
   end;
 end;
 

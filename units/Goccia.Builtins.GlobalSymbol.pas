@@ -54,8 +54,8 @@ begin
   PrototypeInitializer := TGocciaSymbolValue.Create;
   PrototypeInitializer.InitializePrototype;
 
-  // Create well-known symbols
-  FIteratorSymbol := TGocciaSymbolValue.Create('Symbol.iterator');
+  // Use the well-known Symbol.iterator singleton
+  FIteratorSymbol := TGocciaSymbolValue.WellKnownIterator;
 
   // Create the Symbol function (callable, creates new symbols)
   FSymbolFunction := TGocciaNativeFunctionValue.Create(SymbolConstructor, 'Symbol', 0);

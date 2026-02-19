@@ -26,6 +26,9 @@ type
     function SetClear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
   public
@@ -52,7 +55,10 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Values.FunctionBase,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.Iterator.Concrete,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue;
 
 constructor TGocciaSetValue.Create;
 begin
@@ -75,6 +81,16 @@ begin
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetClear, 'clear', 0));
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetForEach, 'forEach', 1));
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetValues, 'values', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetKeys, 'keys', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetEntries, 'entries', 0));
+
+  FShared.Prototype.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownIterator,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(SetSymbolIterator, '[Symbol.iterator]', 0),
+      [pfConfigurable, pfWritable]
+    )
+  );
 end;
 
 class procedure TGocciaSetValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
@@ -225,7 +241,22 @@ end;
 
 function TGocciaSetValue.SetValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaSetValue(AThisValue).ToArray;
+  Result := TGocciaSetIteratorValue.Create(AThisValue, skValues);
+end;
+
+function TGocciaSetValue.SetKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaSetIteratorValue.Create(AThisValue, skValues);
+end;
+
+function TGocciaSetValue.SetEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaSetIteratorValue.Create(AThisValue, skEntries);
+end;
+
+function TGocciaSetValue.SetSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaSetIteratorValue.Create(AThisValue, skValues);
 end;
 
 end.

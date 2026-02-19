@@ -13,6 +13,7 @@ type
   private class var
     FSharedPrototype: TGocciaValue;
     FMethodHost: TGocciaSymbolValue;
+    FWellKnownIterator: TGocciaSymbolValue;
   private
     FDescription: string;
     FId: Integer;
@@ -26,6 +27,7 @@ type
     procedure InitializePrototype;
 
     class function SharedPrototype: TGocciaValue;
+    class function WellKnownIterator: TGocciaSymbolValue;
 
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -97,6 +99,17 @@ end;
 class function TGocciaSymbolValue.SharedPrototype: TGocciaValue;
 begin
   Result := FSharedPrototype;
+end;
+
+class function TGocciaSymbolValue.WellKnownIterator: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownIterator) then
+  begin
+    FWellKnownIterator := TGocciaSymbolValue.Create('Symbol.iterator');
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.PinValue(FWellKnownIterator);
+  end;
+  Result := FWellKnownIterator;
 end;
 
 constructor TGocciaSymbolValue.Create(const ADescription: string);
