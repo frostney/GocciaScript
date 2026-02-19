@@ -38,7 +38,8 @@ uses
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.Version;
 
 type
   TGocciaGlobalBuiltin = (
@@ -325,7 +326,6 @@ end;
 
 procedure TGocciaEngine.RegisterGocciaScriptGlobal;
 const
-  GOCCIA_VERSION = '0.2.0';
   PREFIX_LENGTH = 2; // Strip 'gg' prefix from enum names
 var
   GocciaObj: TGocciaObjectValue;
@@ -341,7 +341,8 @@ begin
   end;
 
   GocciaObj := TGocciaObjectValue.Create;
-  GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GOCCIA_VERSION));
+  GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GetVersion));
+  GocciaObj.AssignProperty('commit', TGocciaStringLiteralValue.Create(GetCommit));
   GocciaObj.AssignProperty('builtIns', BuiltInsArray);
 
   FInterpreter.GlobalScope.DefineLexicalBinding('GocciaScript', GocciaObj, dtConst);
@@ -458,14 +459,12 @@ end;
 
 procedure TGocciaEngine.PrintParserWarnings(const AParser: TGocciaParser);
 var
-  Warnings: TArray<TGocciaParserWarning>;
   Warning: TGocciaParserWarning;
+  I: Integer;
 begin
-  if AParser.WarningCount = 0 then Exit;
-
-  Warnings := AParser.GetWarnings;
-  for Warning in Warnings do
+  for I := 0 to AParser.WarningCount - 1 do
   begin
+    Warning := AParser.GetWarning(I);
     WriteLn(Format('Warning: %s', [Warning.Message]));
     if Warning.Suggestion <> '' then
       WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));

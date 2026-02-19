@@ -30,6 +30,8 @@ The top-level entry point. Provides static convenience methods (`RunScript`, `Ru
 - **Built-in registration** — A single `RegisterBuiltIns` method selectively creates and registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, error constructors) based on a `TGocciaGlobalBuiltins` flag set. All built-in constructors share the same `(name, scope, ThrowError)` signature.
 - **Interpreter lifecycle** — Creates and owns the `TGocciaInterpreter` instance.
 - **Prototype chain setup** — Calls `RegisterBuiltinConstructors` to wire up the `Object → Array → Number → String` prototype chain.
+- **`globalThis` registration** — After all built-ins are registered, `RegisterGlobalThis` creates a `TGocciaObjectValue` populated with all current global scope bindings, adds a self-referential `globalThis` property, and binds it as `const` in the global scope.
+- **`GocciaScript` global** — `RegisterGocciaScriptGlobal` creates a `const` object with `version` (from `Goccia.Version`), `commit` (short git hash), and `builtIns` (array of enabled `TGocciaGlobalBuiltin` flag names, derived via RTTI).
 
 The configurable built-in system allows different execution contexts (e.g., the TestRunner enables `ggTestAssertions` to inject `describe`, `test`, and `expect`).
 
@@ -100,6 +102,15 @@ A cross-platform timing unit providing monotonic clocks, a wall-clock epoch sour
 - **`FormatDuration(Nanoseconds)`** — Auto-formats a duration: values below 0.5μs display as `ns` (e.g., `450ns`), values below 0.5ms as `μs` (e.g., `287.50μs`), values up to 10s as `ms` (e.g., `1.39ms`), and larger values as `s` (e.g., `12.34s`).
 
 Used by the engine (lex/parse/execute phase timing in `TGocciaScriptResult`), the test assertions framework (test execution duration), the benchmark runner (calibration and measurement), and `Temporal.Now` (wall-clock epoch time). Has no Goccia-specific dependencies, making it reusable outside the engine.
+
+### Version (`Goccia.Version.pas`)
+
+Provides runtime access to the engine's version and commit hash by executing `git` commands once at startup (in the `initialization` section):
+
+- **`GetVersion`** — Returns a semver string (e.g., `"0.2.0"` for a tagged release, `"0.2.0-dev"` for commits after a tag). Derived from `git describe --tags --always`.
+- **`GetCommit`** — Returns the short commit hash from `git rev-parse --short HEAD`.
+
+Both values are cached in unit-level variables so the git commands run only once per process.
 
 ### AST (`Goccia.AST.Node.pas`, `Goccia.AST.Expressions.pas`, `Goccia.AST.Statements.pas`)
 

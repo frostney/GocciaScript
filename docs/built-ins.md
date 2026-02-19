@@ -231,7 +231,19 @@ String prototype methods are implemented on string values:
 
 These are always registered (not flag-gated).
 
-**Constants:** `undefined`, `NaN`, `Infinity`
+**Constants:** `undefined`, `NaN`, `Infinity`, `globalThis`
+
+`globalThis` is a `const` binding that holds a plain object populated with all global scope bindings at the time of registration. It includes a self-referential `globalThis` property (`globalThis.globalThis === globalThis`).
+
+**`GocciaScript` object:**
+
+A `const` global providing engine metadata:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `version` | `string` | Semver version from the latest git tag (e.g., `"0.2.0"`), or tag + `-dev` suffix if there are commits after the tag (e.g., `"0.2.0-dev"`) |
+| `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
+| `builtIns` | `string[]` | Names of the enabled `TGocciaGlobalBuiltin` flags (e.g., `["Console", "Math", "GlobalObject", ...]`), derived via RTTI at runtime |
 
 **Global functions:**
 
@@ -270,7 +282,7 @@ obj[sym]; // "value"
 
 Symbols have no prototype object — `toString()` and `description` are provided directly via `GetProperty` on the primitive value.
 
-**Coercion semantics:** Symbols follow ECMAScript strict mode rules — implicit conversion to string or number throws `TypeError`. Use `String(symbol)` or `symbol.toString()` for explicit string conversion. See [value-system.md](value-system.md#symbols) for details.
+**Coercion semantics:** Implicit conversion of a symbol to string or number throws `TypeError`. Use `String(symbol)` or `symbol.toString()` for explicit string conversion. See [value-system.md](value-system.md#symbols) for details.
 
 ### Set (`Goccia.Builtins.GlobalSet.pas`)
 

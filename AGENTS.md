@@ -87,6 +87,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Microtask Queue | `Goccia.MicrotaskQueue.pas` | Singleton FIFO queue for Promise reactions and `queueMicrotask` callbacks, drained after script execution, cleared on exception |
 | Garbage Collector | `Goccia.GarbageCollector.pas` | Mark-and-sweep memory management for runtime values |
 | JSON Utilities | `Goccia.JSON.pas` | Standalone JSON ↔ `TGocciaValue` parser and stringifier |
+| Version | `Goccia.Version.pas` | Git-derived version and commit hash, resolved at startup via `RunCommand` |
 | Temporal Utilities | `Goccia.Temporal.Utils.pas` | ISO 8601 date math helpers, parsing, formatting |
 | Temporal Built-in | `Goccia.Builtins.Temporal.pas` | Temporal namespace, constructors, static methods, Temporal.Now |
 
@@ -220,7 +221,7 @@ AST nodes with type fields: `TGocciaParameter` (`TypeAnnotation`, `IsOptional`),
 
 ### 7. `this` Binding Semantics
 
-GocciaScript follows ECMAScript strict mode `this` binding. Two function forms exist with separate AST nodes and runtime types:
+Two function forms exist with separate AST nodes and runtime types:
 
 - **Arrow functions** (`(x) => x + 1`) — AST: `TGocciaArrowFunctionExpression`, Runtime: `TGocciaArrowFunctionValue`. Always inherit `this` from their lexical (closure) scope via `BindThis` override.
 - **Shorthand methods** (`method() { ... }`) — AST: `TGocciaMethodExpression`, Runtime: `TGocciaFunctionValue`. Receive call-site `this` from the receiver.
@@ -306,6 +307,10 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 
 The TestRunner adds `ggTestAssertions` for the test framework (`describe`, `test`, `expect`).
 The BenchmarkRunner adds `ggBenchmark` for the benchmark framework (`suite`, `bench`, `runBenchmarks`). It supports multiple `--format=console|text|csv|json` flags in a single command (each optionally followed by `--output=file`), `--no-progress` for CI builds, and benchmark calibration via environment variables (`GOCCIA_BENCH_CALIBRATION_MS`, `GOCCIA_BENCH_ROUNDS`, etc.).
+
+After all flag-gated built-ins are registered, the engine also creates two always-present `const` globals:
+- **`globalThis`** — A `const` plain object containing all global scope bindings, with a self-referential `globalThis` property.
+- **`GocciaScript`** — Engine metadata object with `version` (semver from git tag, or tag + `-dev`), `commit` (short git hash), and `builtIns` (array of enabled `TGocciaGlobalBuiltin` flag names via RTTI).
 
 ## Testing
 

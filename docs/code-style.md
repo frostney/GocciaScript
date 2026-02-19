@@ -177,6 +177,12 @@ Units are organized by category using dot-separated names:
 | `Goccia.AST.*` | AST node definitions | `Node`, `Expressions`, `Statements` |
 | `Goccia.Arguments.*` | Function argument handling | `Collection`, `Converter`, `Validator` |
 
+### Collection Return Types
+
+Avoid returning `TArray<T>` from public API methods. Prefer indexed access (`GetItem(Index)` + `Count`) or returning the dictionary's own `TKeyCollection` / `TValueCollection` which support `for..in` without allocating an intermediate array. This is consistent with how the codebase iterates dictionaries throughout (e.g., `for Key in Dictionary.Keys do`).
+
+When a method only needs to expose elements for iteration, an indexed getter with a count property is the most lightweight approach — no allocation, no ownership ambiguity.
+
 ## Platform-Specific Pitfalls
 
 ### `Double(Int64)` on FPC 3.2.2 AArch64
