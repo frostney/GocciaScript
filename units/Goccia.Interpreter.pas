@@ -39,6 +39,7 @@ type
     FLoadingModules: TDictionary<string, Boolean>;
     FFileName: string;
     FSourceLines: TStringList;
+    FJSXEnabled: Boolean;
 
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     function CreateEvaluationContext: TGocciaEvaluationContext;
@@ -52,6 +53,7 @@ type
     procedure CheckForModuleReload(const AModule: TGocciaModule);
 
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
+    property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
   end;
 
 
@@ -59,7 +61,9 @@ implementation
 
 uses
   Goccia.GarbageCollector,
-  Goccia.JSON;
+  Goccia.JSON,
+  Goccia.JSX.SourceMap,
+  Goccia.JSX.Transformer;
 
 { TGocciaInterpreter }
 
@@ -130,6 +134,10 @@ function TGocciaInterpreter.LoadModule(const AModulePath, AImportingFilePath: st
 var
   ResolvedPath: string;
   Source: TStringList;
+  SourceText: string;
+  JSXResult: TGocciaJSXTransformResult;
+  JSXSourceMap: TGocciaSourceMap;
+  OrigLine, OrigCol: Integer;
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
@@ -170,74 +178,99 @@ begin
   try
     Source.LoadFromFile(ResolvedPath);
 
-    Lexer := TGocciaLexer.Create(Source.Text, ResolvedPath);
+    SourceText := Source.Text;
+    JSXSourceMap := nil;
+    if FJSXEnabled then
+    begin
+      JSXResult := TGocciaJSXTransformer.Transform(SourceText);
+      SourceText := JSXResult.Source;
+      JSXSourceMap := JSXResult.SourceMap;
+      if Assigned(JSXSourceMap) then
+        WarnIfJSXExtensionMismatch(ResolvedPath);
+    end;
+
     try
-      Parser := TGocciaParser.Create(Lexer.ScanTokens, ResolvedPath, Source);
       try
-        ProgramNode := Parser.Parse;
+        Lexer := TGocciaLexer.Create(SourceText, ResolvedPath);
         try
-          Module := TGocciaModule.Create(ResolvedPath);
-          Module.LastModified := FileDateToDateTime(FileAge(ResolvedPath));
-          FModules.Add(ResolvedPath, Module);
-          FLoadingModules.Add(ResolvedPath, True);
+          Parser := TGocciaParser.Create(Lexer.ScanTokens, ResolvedPath, Lexer.SourceLines);
           try
-            ModuleScope := FGlobalScope.CreateChild(skModule, 'Module:' + ResolvedPath);
-            Context.Scope := ModuleScope;
-            Context.OnError := ThrowError;
-            Context.LoadModule := LoadModule;
-            Context.CurrentFilePath := ResolvedPath;
+            ProgramNode := Parser.Parse;
+            try
+              Module := TGocciaModule.Create(ResolvedPath);
+              Module.LastModified := FileDateToDateTime(FileAge(ResolvedPath));
+              FModules.Add(ResolvedPath, Module);
+              FLoadingModules.Add(ResolvedPath, True);
+              try
+                ModuleScope := FGlobalScope.CreateChild(skModule, 'Module:' + ResolvedPath);
+                Context.Scope := ModuleScope;
+                Context.OnError := ThrowError;
+                Context.LoadModule := LoadModule;
+                Context.CurrentFilePath := ResolvedPath;
 
-            for I := 0 to ProgramNode.Body.Count - 1 do
-              EvaluateStatement(ProgramNode.Body[I], Context);
+                for I := 0 to ProgramNode.Body.Count - 1 do
+                  EvaluateStatement(ProgramNode.Body[I], Context);
 
-            for I := 0 to ProgramNode.Body.Count - 1 do
-            begin
-              Stmt := ProgramNode.Body[I];
+                for I := 0 to ProgramNode.Body.Count - 1 do
+                begin
+                  Stmt := ProgramNode.Body[I];
 
-              if Stmt is TGocciaExportDeclaration then
-              begin
-                ExportDecl := TGocciaExportDeclaration(Stmt);
-                for ExportPair in ExportDecl.ExportsTable do
-                begin
-                  Value := ModuleScope.GetValue(ExportPair.Value);
-                  if Assigned(Value) then
-                    Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
+                  if Stmt is TGocciaExportDeclaration then
+                  begin
+                    ExportDecl := TGocciaExportDeclaration(Stmt);
+                    for ExportPair in ExportDecl.ExportsTable do
+                    begin
+                      Value := ModuleScope.GetValue(ExportPair.Value);
+                      if Assigned(Value) then
+                        Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
+                    end;
+                  end
+                  else if Stmt is TGocciaExportVariableDeclaration then
+                  begin
+                    ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
+                    for VarInfo in ExportVarDecl.Declaration.Variables do
+                    begin
+                      Value := ModuleScope.GetValue(VarInfo.Name);
+                      if Assigned(Value) then
+                        Module.ExportsTable.AddOrSetValue(VarInfo.Name, Value);
+                    end;
+                  end
+                  else if Stmt is TGocciaReExportDeclaration then
+                  begin
+                    ReExportDecl := TGocciaReExportDeclaration(Stmt);
+                    SourceModule := LoadModule(ReExportDecl.ModulePath, ResolvedPath);
+                    for ExportPair in ReExportDecl.ExportsTable do
+                    begin
+                      if SourceModule.ExportsTable.TryGetValue(ExportPair.Value, Value) then
+                        Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
+                    end;
+                  end;
                 end;
-              end
-              else if Stmt is TGocciaExportVariableDeclaration then
-              begin
-                ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
-                for VarInfo in ExportVarDecl.Declaration.Variables do
-                begin
-                  Value := ModuleScope.GetValue(VarInfo.Name);
-                  if Assigned(Value) then
-                    Module.ExportsTable.AddOrSetValue(VarInfo.Name, Value);
-                end;
-              end
-              else if Stmt is TGocciaReExportDeclaration then
-              begin
-                ReExportDecl := TGocciaReExportDeclaration(Stmt);
-                SourceModule := LoadModule(ReExportDecl.ModulePath, ResolvedPath);
-                for ExportPair in ReExportDecl.ExportsTable do
-                begin
-                  if SourceModule.ExportsTable.TryGetValue(ExportPair.Value, Value) then
-                    Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
-                end;
+
+                Result := Module;
+              finally
+                FLoadingModules.Remove(ResolvedPath);
               end;
+            finally
+              ProgramNode.Free;
             end;
-
-            Result := Module;
           finally
-            FLoadingModules.Remove(ResolvedPath);
+            Parser.Free;
           end;
         finally
-          ProgramNode.Free;
+          Lexer.Free;
         end;
-      finally
-        Parser.Free;
+      except
+        on E: TGocciaError do
+        begin
+          if Assigned(JSXSourceMap) and
+             JSXSourceMap.Translate(E.Line, E.Column, OrigLine, OrigCol) then
+            E.TranslatePosition(OrigLine, OrigCol, Source);
+          raise;
+        end;
       end;
     finally
-      Lexer.Free;
+      JSXSourceMap.Free;
     end;
   finally
     Source.Free;

@@ -298,6 +298,28 @@ try { throw new Error("oops"); } catch (e: Error) { }
 - Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
 - Decorators (`@decorator`).
 
+### JSX (Opt-in)
+
+**Supported** when `ggJSX` is enabled. JSX is handled by a source-to-source pre-pass transformer that converts JSX syntax into `createElement` function calls before the main compilation pipeline. This keeps the core lexer/parser/evaluator untouched.
+
+Users must provide their own `createElement` (and `Fragment` for `<>...</>`) in scope:
+
+```javascript
+const createElement = (tag, props, ...children) => ({ tag, props, children });
+const Fragment = Symbol("Fragment");
+
+const el = <div className="active">Hello {name}</div>;
+// Transformed to: createElement("div", { className: "active" }, "Hello ", name)
+```
+
+**Supported syntax:** Elements, self-closing tags (`<br />`), fragments (`<>...</>`), string/expression/boolean attributes, spread attributes (`{...props}`), shorthand props (`<div {value} />` → `value={value}`), expression children (`{expr}`), nested JSX in expressions, dotted component names (`<Foo.Bar />`).
+
+Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are passed as identifier references (component functions/classes).
+
+**Custom factory:** The factory and fragment function names can be overridden per-file using pragma comments (`@jsxFactory`, `@jsxFragment`) at the top of the file, before any code.
+
+The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default in `DefaultGlobals`; to disable it, exclude `ggJSX` from the globals set.
+
 ### `async`/`await`
 
 **Not yet implemented.** Promises are fully implemented (constructor, `.then`/`.catch`/`.finally`, `Promise.all`/`allSettled`/`race`/`any`, microtask queue), but `async`/`await` syntax sugar is not yet available. Use `.then()` chaining instead.

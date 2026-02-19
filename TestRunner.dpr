@@ -248,16 +248,16 @@ var
 begin
   if ParamCount < 1 then
   begin
-    WriteLn('Usage: GocciaScript <filename.js>');
+    WriteLn('Usage: TestRunner <filename.{js|jsx|ts|tsx}>');
     WriteLn('or');
-    WriteLn('Usage: GocciaScript <directory>');
+    WriteLn('Usage: TestRunner <directory> (searches for .js, .jsx, .ts, .tsx files)');
     ExitCode := 1;
   end
   else
   begin
     if DirectoryExists(ParamStr(1)) then
     begin
-      Files := FindAllFiles(ParamStr(1), '.js');
+      Files := FindAllFiles(ParamStr(1));
       try 
         PrintTestResults(RunScriptsFromFiles(Files));
       finally

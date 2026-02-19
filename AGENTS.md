@@ -69,7 +69,7 @@ fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- BenchmarkRunner.dpr
 
 See [docs/architecture.md](docs/architecture.md) for the full architecture deep-dive.
 
-**Pipeline:** Source → Lexer → Parser → Interpreter → Evaluator → Result
+**Pipeline:** Source → (JSX Transformer) → Lexer → Parser → Interpreter → Evaluator → Result
 
 **Key components:**
 
@@ -90,6 +90,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Version | `Goccia.Version.pas` | Git-derived version and commit hash, resolved once at startup via `RunCommand` |
 | Temporal Utilities | `Goccia.Temporal.Utils.pas` | ISO 8601 date math helpers, parsing, formatting |
 | Temporal Built-in | `Goccia.Builtins.Temporal.pas` | Temporal namespace, constructors, static methods, Temporal.Now |
+| JSX Source Map | `Goccia.JSX.SourceMap.pas` | Lightweight internal position mapping for JSX-transformed source |
+| JSX Transformer | `Goccia.JSX.Transformer.pas` | Standalone pre-pass that converts JSX to `createElement` calls |
 
 ## Development Workflow
 
@@ -302,11 +304,56 @@ Built-ins are registered by the engine via `TGocciaGlobalBuiltins` flags:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
- ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal];
+ ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal, ggJSX];
 ```
 
 The TestRunner adds `ggTestAssertions` for the test framework (`describe`, `test`, `expect`).
 The BenchmarkRunner adds `ggBenchmark` for the benchmark framework (`suite`, `bench`, `runBenchmarks`). It supports multiple `--format=console|text|csv|json` flags in a single command (each optionally followed by `--output=file`), `--no-progress` for CI builds, and benchmark calibration via environment variables (`GOCCIA_BENCH_CALIBRATION_MS`, `GOCCIA_BENCH_ROUNDS`, etc.).
+
+### JSX Support (Opt-in)
+
+JSX is handled by a **standalone pre-pass transformer** (`Goccia.JSX.Transformer.pas`) that runs before the lexer/parser pipeline when `ggJSX` is enabled. It converts JSX syntax into `createElement` function calls:
+
+```javascript
+// Input (JSX)
+const el = <div className="active">Hello {name}</div>;
+
+// Output (after transformation)
+const el = createElement("div", { className: "active" }, "Hello ", name);
+```
+
+The transformer generates an internal source map (`Goccia.JSX.SourceMap.pas`) so that errors in transformed code report correct original line/column numbers. When `ggJSX` is not in the globals set (the default), the transformer is skipped entirely — zero overhead.
+
+**Runtime contract:** Users must provide their own `createElement` function (and `Fragment` for fragments) in scope:
+
+```javascript
+const createElement = (tag, props, ...children) => ({ tag, props, children });
+const Fragment = Symbol("Fragment");
+```
+
+**Custom factory via pragmas:** The factory and fragment names can be overridden per-file using pragma comments at the top of the file:
+
+```javascript
+/* @jsxFactory h */
+/* @jsxFragment Frag */
+
+const h = (tag, props, ...children) => ({ tag, props, children });
+const Frag = Symbol("Frag");
+const el = <div>hello</div>; // → h("div", null, "hello")
+```
+
+Both `//` and `/* */` comment styles are supported. The pragma must be the first non-whitespace content of the comment.
+
+**Supported file extensions:** `.js`, `.jsx`, `.ts`, `.tsx`. The ScriptLoader, TestRunner, and BenchmarkRunner all discover files with these extensions when scanning directories. A warning is emitted when JSX syntax is found in `.js` or `.ts` files, suggesting the use of `.jsx`/`.tsx` instead.
+
+**Disabling JSX:**
+
+```pascal
+// Without JSX — zero overhead
+Result := TGocciaEngine.RunScript(Source, FileName, DefaultGlobals - [ggJSX]);
+```
+
+**Supported JSX features:** elements, self-closing tags, fragments (`<>...</>`), string/expression/boolean attributes, spread attributes (`{...props}`), shorthand props (`<div {value} />` → `value={value}`), expression children (`{expr}`), nested JSX, dotted component names (`<Foo.Bar />`), uppercase tags as identifier references, `@jsxFactory`/`@jsxFragment` pragmas.
 
 After all flag-gated built-ins are registered, the engine also creates two always-present `const` globals:
 - **`globalThis`** — A `const` plain object containing all global scope bindings, with a self-referential `globalThis` property.

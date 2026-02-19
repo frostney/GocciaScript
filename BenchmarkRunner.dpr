@@ -168,7 +168,7 @@ begin
   try
     if DirectoryExists(APath) then
     begin
-      Files := FindAllFiles(APath, '.js');
+      Files := FindAllFiles(APath);
       try
         for I := 0 to Files.Count - 1 do
         begin

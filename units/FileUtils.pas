@@ -8,11 +8,28 @@ uses
   Classes,
   SysUtils;
 
-function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList;
+const
+  DefaultScriptExtensions: array[0..3] of string = ('.js', '.jsx', '.ts', '.tsx');
+
+function FindAllFiles(const ADirectory: string): TStringList; overload;
+function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList; overload;
+function FindAllFiles(const ADirectory: string; const AFileExtensions: array of string): TStringList; overload;
 
 implementation
 
-function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList;
+function MatchesExtension(const AName: string; const AExtensions: array of string): Boolean;
+var
+  Ext: string;
+  I: Integer;
+begin
+  Ext := ExtractFileExt(AName);
+  for I := Low(AExtensions) to High(AExtensions) do
+    if Ext = AExtensions[I] then
+      Exit(True);
+  Result := False;
+end;
+
+function FindAllFiles(const ADirectory: string; const AFileExtensions: array of string): TStringList;
 var
   SearchRec: TSearchRec;
   Files: TStringList;
@@ -22,31 +39,37 @@ begin
 
   if FindFirst(ADirectory + '/*', faAnyFile, SearchRec) = 0 then
   begin
-    // If the file is a directory, add all the files in the directory
     repeat
       if (SearchRec.Attr and faDirectory) = faDirectory then
       begin
         if (SearchRec.Name <> '.') and (SearchRec.Name <> '..') then
         begin
-          SubdirFiles := FindAllFiles(ADirectory + '/' + SearchRec.Name, AFileExtension);
+          SubdirFiles := FindAllFiles(ADirectory + '/' + SearchRec.Name, AFileExtensions);
           try
             Files.AddStrings(SubdirFiles);
           finally
-            SubdirFiles.Free; // Free the recursive result to prevent memory leak
+            SubdirFiles.Free;
           end;
         end;
       end;
 
-      // If the file is a .js file, add it to the list
-      if ExtractFileExt(SearchRec.Name) = AFileExtension then
-      begin
+      if MatchesExtension(SearchRec.Name, AFileExtensions) then
         Files.Add(ADirectory + '/' + SearchRec.Name);
-      end;
     until FindNext(SearchRec) <> 0;
   end;
   FindClose(SearchRec);
   Files.Sort;
   Result := Files;
+end;
+
+function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList;
+begin
+  Result := FindAllFiles(ADirectory, [AFileExtension]);
+end;
+
+function FindAllFiles(const ADirectory: string): TStringList;
+begin
+  Result := FindAllFiles(ADirectory, DefaultScriptExtensions);
 end;
 
 end.
