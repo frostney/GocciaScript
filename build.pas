@@ -18,6 +18,31 @@ var
   BuildTriggers: TStringList;
   BuildMode: TBuildMode = bmDev;
 
+procedure PrintVersion;
+var
+  Describe, Commit, Version: string;
+  DashPos: SizeInt;
+begin
+  RunCommand('git', ['describe', '--tags', '--always'], Describe);
+  Describe := Trim(Describe);
+  RunCommand('git', ['rev-parse', '--short', 'HEAD'], Commit);
+  Commit := Trim(Commit);
+
+  if Describe = '' then
+    Version := '0.0.0-dev'
+  else
+  begin
+    DashPos := Pos('-', Describe);
+    if DashPos > 0 then
+      Version := Copy(Describe, 1, DashPos - 1) + '-dev'
+    else
+      Version := Describe;
+  end;
+
+  WriteLn('Version: ', Version, ' (', Commit, ')');
+  WriteLn('');
+end;
+
 function FPCArgs(const ASource: string): TStringArray;
 var
   Arch: string;
@@ -221,6 +246,7 @@ begin
     WriteLn('Build mode: development');
 
   WriteLn('');
+  PrintVersion;
 
   if BuildTriggers.Count = 0 then
   begin

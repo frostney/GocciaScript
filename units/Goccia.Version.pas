@@ -27,6 +27,14 @@ begin
     Result := '';
 end;
 
+function LooksLikeSemver(const AValue: string): Boolean;
+var
+  FirstDot: SizeInt;
+begin
+  FirstDot := Pos('.', AValue);
+  Result := (FirstDot > 1) and (FirstDot < Length(AValue));
+end;
+
 procedure Initialize;
 var
   Describe: string;
@@ -35,7 +43,7 @@ begin
   Describe := RunGit(['describe', '--tags', '--always']);
   CachedCommit := RunGit(['rev-parse', '--short', 'HEAD']);
 
-  if Describe = '' then
+  if (Describe = '') or not LooksLikeSemver(Describe) then
   begin
     CachedVersion := '0.0.0-dev';
     Exit;

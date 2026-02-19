@@ -105,12 +105,12 @@ Used by the engine (lex/parse/execute phase timing in `TGocciaScriptResult`), th
 
 ### Version (`Goccia.Version.pas`)
 
-Provides runtime access to the engine's version and commit hash by executing `git` commands once at startup (in the `initialization` section):
+Provides the engine's version and commit hash, resolved once at startup via `git`:
 
-- **`GetVersion`** — Returns a semver string (e.g., `"0.2.0"` for a tagged release, `"0.2.0-dev"` for commits after a tag). Derived from `git describe --tags --always`.
-- **`GetCommit`** — Returns the short commit hash from `git rev-parse --short HEAD`.
+- **`GetVersion`** — Returns a semver string (e.g., `"0.2.0"` for a tagged release, `"0.2.0-dev"` for commits after a tag). Falls back to `"0.0.0-dev"` when tags are unavailable.
+- **`GetCommit`** — Returns the short commit hash.
 
-Both values are cached in unit-level variables so the git commands run only once per process.
+Uses `RunCommand` from the `Process` unit to execute `git describe --tags --always` and `git rev-parse --short HEAD`. Results are cached in unit-level variables so the git commands run only once per process. CI workflows use `fetch-depth: 0` to ensure full tag history is available.
 
 ### AST (`Goccia.AST.Node.pas`, `Goccia.AST.Expressions.pas`, `Goccia.AST.Statements.pas`)
 
