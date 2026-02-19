@@ -9,7 +9,10 @@ uses
   TimingUtils,
 
   Goccia.Engine,
-  Goccia.Values.Primitives;
+  Goccia.REPL.Formatter,
+  Goccia.REPL.LineEditor,
+  Goccia.Values.Primitives,
+  Goccia.Version;
 
 var
   Line: string;
@@ -18,6 +21,8 @@ var
   ScriptResult: TGocciaScriptResult;
   ShowTiming: Boolean;
   I: Integer;
+  Editor: TLineEditor;
+  ReadResult: TLineReadResult;
 
 begin
   ShowTiming := False;
@@ -27,25 +32,30 @@ begin
       ShowTiming := True;
   end;
 
-  WriteLn('Goccia REPL');
-  
+  WriteLn('Goccia REPL v' + GetVersion);
+
   Source := TStringList.Create;
   Engine := TGocciaEngine.Create('REPL', Source, TGocciaEngine.DefaultGlobals);
+  Editor := TLineEditor.Create;
   try
     while True do
     begin
-      Write('> ');
-      ReadLn(Line);
+      ReadResult := Editor.ReadLine('> ', Line);
+      if ReadResult = lrExit then
+        Break;
       if Line = 'exit' then
         Break;
+      if Line = '' then
+        Continue;
 
+      Editor.AddToHistory(Line);
       Source.Clear;
       Source.Add(Line);
-      
+
       try
         ScriptResult := Engine.Execute;
         if ScriptResult.Result <> nil then
-          WriteLn(ScriptResult.Result.ToStringLiteral.Value);
+          WriteLn(FormatREPLValue(ScriptResult.Result));
         if ShowTiming then
           WriteLn(SysUtils.Format('  [%s lex | %s parse | %s exec | %s total]',
             [FormatDuration(ScriptResult.LexTimeNanoseconds), FormatDuration(ScriptResult.ParseTimeNanoseconds),
@@ -56,6 +66,7 @@ begin
       end;
     end;
   finally
+    Editor.Free;
     Engine.Free;
     Source.Free;
   end;
