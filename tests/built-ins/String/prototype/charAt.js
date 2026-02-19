@@ -45,5 +45,5 @@ test("charAt with edge cases", () => {
 });
 
 test("charAt throws TypeError for Symbol argument", () => {
-  expect(() => "hello".charAt(Symbol())).toThrow("TypeError");
+  expect(() => "hello".charAt(Symbol())).toThrow(TypeError);
 });

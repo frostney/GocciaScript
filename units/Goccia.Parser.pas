@@ -13,6 +13,7 @@ uses
   Goccia.AST.Node,
   Goccia.AST.Statements,
   Goccia.Error,
+  Goccia.Keywords.Contextual,
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
@@ -21,6 +22,13 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TGocciaParserWarning = record
+    Message: string;
+    Suggestion: string;
+    Line: Integer;
+    Column: Integer;
+  end;
+
   TGocciaParser = class
   private
     type
@@ -30,6 +38,10 @@ type
     FCurrent: Integer;
     FFileName: string;
     FSourceLines: TStringList;
+    FWarnings: array of TGocciaParserWarning;
+    FWarningCount: Integer;
+
+    procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
 
     function IsAtEnd: Boolean; inline;
     function Peek: TGocciaToken; inline;
@@ -71,6 +83,9 @@ type
     function CollectTypeAnnotation(const ATerminators: array of TGocciaTokenType): string;
     function CollectGenericParameters: string;
     procedure SkipUntilSemicolon;
+    procedure SkipBlock;
+    procedure SkipBalancedParens;
+    procedure SkipStatementOrBlock;
     procedure SkipInterfaceDeclaration;
     function IsTypeDeclaration: Boolean;
 
@@ -100,9 +115,11 @@ type
     function ExpressionStatement: TGocciaStatement;
     function BlockStatement: TGocciaBlockStatement;
     function IfStatement: TGocciaStatement;
+    function VarStatement: TGocciaStatement;
     function ForStatement: TGocciaStatement;
     function WhileStatement: TGocciaStatement;
     function DoWhileStatement: TGocciaStatement;
+    function WithStatement: TGocciaStatement;
     function ReturnStatement: TGocciaStatement;
     function ThrowStatement: TGocciaStatement;
     function TryStatement: TGocciaStatement;
@@ -118,6 +135,8 @@ type
       const AFileName: string; const ASourceLines: TStringList);
     function Parse: TGocciaProgram;
     function Expression: TGocciaExpression;
+    function GetWarning(const AIndex: Integer): TGocciaParserWarning; inline;
+    property WarningCount: Integer read FWarningCount;
   end;
 
 implementation
@@ -129,6 +148,22 @@ begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FCurrent := 0;
+  FWarningCount := 0;
+end;
+
+procedure TGocciaParser.AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
+begin
+  Inc(FWarningCount);
+  SetLength(FWarnings, FWarningCount);
+  FWarnings[FWarningCount - 1].Message := AMessage;
+  FWarnings[FWarningCount - 1].Suggestion := ASuggestion;
+  FWarnings[FWarningCount - 1].Line := ALine;
+  FWarnings[FWarningCount - 1].Column := AColumn;
+end;
+
+function TGocciaParser.GetWarning(const AIndex: Integer): TGocciaParserWarning;
+begin
+  Result := FWarnings[AIndex];
 end;
 
 function TGocciaParser.IsAtEnd: Boolean;
@@ -409,7 +444,7 @@ begin
         else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                        gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
                        gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                       gttTrue, gttFalse, gttNull, gttUndefined, gttTypeof, gttInstanceof, gttIn, gttDelete]) then
+                       gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
           PropertyName := Previous.Lexeme  // Reserved words are allowed as property names
         else
           raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines);
@@ -477,12 +512,6 @@ begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
       TGocciaNullLiteralValue.Create, Token.Line, Token.Column);
-  end
-  else if Match([gttUndefined]) then
-  begin
-    Token := Previous;
-    Result := TGocciaLiteralExpression.Create(
-      TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
   end
   else if Match([gttNumber]) then
   begin
@@ -665,14 +694,14 @@ begin
 
     // Check for getter/setter syntax (contextual keywords)
     // Only treat as getter/setter if followed by identifier (not colon, parenthesis, comma, or right brace)
-    if Check(gttIdentifier) and (Peek.Lexeme = 'get') and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
+    if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
     begin
-      Advance; // consume 'get'
+      Advance;
       IsGetter := True;
     end
-    else if Check(gttIdentifier) and (Peek.Lexeme = 'set') and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
+    else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) then
     begin
-      Advance; // consume 'set'
+      Advance;
       IsSetter := True;
     end;
 
@@ -722,7 +751,7 @@ begin
     else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                    gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
                    gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
-                   gttTrue, gttFalse, gttNull, gttUndefined, gttTypeof, gttInstanceof, gttIn, gttDelete]) then
+                   gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
       Key := Previous.Lexeme  // Reserved words are allowed as property names
     else
       raise TGocciaSyntaxError.Create('Expected property name', Peek.Line, Peek.Column, FFileName, FSourceLines);
@@ -1149,7 +1178,7 @@ function TGocciaParser.Statement: TGocciaStatement;
 var
   Line, Column: Integer;
 begin
-  if Check(gttIdentifier) and (Peek.Lexeme = 'type') and IsTypeDeclaration then
+  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE) and IsTypeDeclaration then
   begin
     Line := Peek.Line;
     Column := Peek.Column;
@@ -1157,7 +1186,7 @@ begin
     SkipUntilSemicolon;
     Result := TGocciaEmptyStatement.Create(Line, Column);
   end
-  else if Check(gttIdentifier) and (Peek.Lexeme = 'interface') and IsTypeDeclaration then
+  else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_INTERFACE) and IsTypeDeclaration then
   begin
     Line := Peek.Line;
     Column := Peek.Column;
@@ -1168,6 +1197,8 @@ begin
   end
   else if Match([gttConst, gttLet]) then
     Result := DeclarationStatement
+  else if Match([gttVar]) then
+    Result := VarStatement
   else if Match([gttClass]) then
     Result := ClassDeclaration
   else if Match([gttImport]) then
@@ -1182,6 +1213,8 @@ begin
     Result := WhileStatement
   else if Match([gttDo]) then
     Result := DoWhileStatement
+  else if Match([gttWith]) then
+    Result := WithStatement
   else if Match([gttSwitch]) then
     Result := SwitchStatement
   else if Match([gttBreak]) then
@@ -1322,6 +1355,60 @@ begin
     Line, Column);
 end;
 
+procedure TGocciaParser.SkipBlock;
+var
+  Depth: Integer;
+begin
+  Consume(gttLeftBrace, 'Expected "{"');
+  Depth := 1;
+  while not IsAtEnd and (Depth > 0) do
+  begin
+    if Check(gttLeftBrace) then Inc(Depth)
+    else if Check(gttRightBrace) then Dec(Depth);
+    if Depth > 0 then Advance;
+  end;
+  Consume(gttRightBrace, 'Expected "}"');
+end;
+
+procedure TGocciaParser.SkipBalancedParens;
+var
+  Depth: Integer;
+begin
+  Consume(gttLeftParen, 'Expected "("');
+  Depth := 1;
+  while not IsAtEnd and (Depth > 0) do
+  begin
+    if Check(gttLeftParen) then Inc(Depth)
+    else if Check(gttRightParen) then Dec(Depth);
+    if Depth > 0 then Advance;
+  end;
+  Consume(gttRightParen, 'Expected ")"');
+end;
+
+procedure TGocciaParser.SkipStatementOrBlock;
+begin
+  if Check(gttLeftBrace) then
+    SkipBlock
+  else
+    SkipUntilSemicolon;
+end;
+
+function TGocciaParser.VarStatement: TGocciaStatement;
+var
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  AddWarning('''var'' declarations are not supported in GocciaScript',
+    'Use ''let'' or ''const'' instead',
+    Line, Column);
+
+  SkipUntilSemicolon;
+
+  Result := TGocciaEmptyStatement.Create(Line, Column);
+end;
+
 function TGocciaParser.ForStatement: TGocciaStatement;
 var
   Line, Column: Integer;
@@ -1329,67 +1416,70 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  // For now, just consume the basic for loop structure and return a simple statement
-  Consume(gttLeftParen, 'Expected "(" after "for"');
+  AddWarning('''for'' loops are not supported in GocciaScript',
+    'Use array methods like .forEach(), .map(), .filter(), or .reduce() instead',
+    Line, Column);
 
-  // Skip everything until the closing parenthesis
-  while not Check(gttRightParen) and not IsAtEnd do
-    Advance;
+  SkipBalancedParens;
 
-  Consume(gttRightParen, 'Expected ")" after for clauses');
+  SkipStatementOrBlock;
 
-  // Parse body - can be a block or single statement
-  if Check(gttLeftBrace) then
-  begin
-    Advance; // consume the '{'
-    Result := BlockStatement;
-  end
-  else
-    Result := Statement;
+  Result := TGocciaEmptyStatement.Create(Line, Column);
 end;
 
 function TGocciaParser.WhileStatement: TGocciaStatement;
 var
-  Condition: TGocciaExpression;
-  Body: TGocciaStatement;
   Line, Column: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Consume(gttLeftParen, 'Expected "(" after "while"');
-  Condition := Expression;
-  Consume(gttRightParen, 'Expected ")" after while condition');
+  AddWarning('''while'' loops are not supported in GocciaScript',
+    'Use array methods like .forEach(), .map(), .filter(), or .reduce() instead',
+    Line, Column);
 
-  Body := Statement;
+  SkipBalancedParens;
 
-  Result := TGocciaWhileStatement.Create(Condition, Body, Line, Column);
+  SkipStatementOrBlock;
+
+  Result := TGocciaEmptyStatement.Create(Line, Column);
 end;
 
 function TGocciaParser.DoWhileStatement: TGocciaStatement;
 var
-  Body: TGocciaStatement;
-  Condition: TGocciaExpression;
   Line, Column: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  // Parse body first
-  Body := Statement;
+  AddWarning('''do...while'' loops are not supported in GocciaScript',
+    'Use array methods like .forEach(), .map(), .filter(), or .reduce() instead',
+    Line, Column);
 
-  // Expect 'while' keyword
+  SkipStatementOrBlock;
+
   Consume(gttWhile, 'Expected "while" after do body');
-
-  // Parse condition
-  Consume(gttLeftParen, 'Expected "(" after "while"');
-  Condition := Expression;
-  Consume(gttRightParen, 'Expected ")" after do-while condition');
-
-  // Expect semicolon
+  SkipBalancedParens;
   Consume(gttSemicolon, 'Expected ";" after do-while statement');
 
-  Result := TGocciaDoWhileStatement.Create(Body, Condition, Line, Column);
+  Result := TGocciaEmptyStatement.Create(Line, Column);
+end;
+
+function TGocciaParser.WithStatement: TGocciaStatement;
+var
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  AddWarning('The ''with'' statement is not supported in GocciaScript', '',
+    Line, Column);
+
+  SkipBalancedParens;
+
+  SkipStatementOrBlock;
+
+  Result := TGocciaEmptyStatement.Create(Line, Column);
 end;
 
 function TGocciaParser.ReturnStatement: TGocciaStatement;
@@ -1559,9 +1649,39 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  if Check(gttIdentifier) and (Peek.Lexeme = 'type') then
+  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE) then
   begin
     Advance;
+    SkipUntilSemicolon;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
+
+  if Check(gttStar) then
+  begin
+    AddWarning('Namespace imports (import * as ...) are not supported in GocciaScript',
+      'Use named imports instead: import { name } from ''module''',
+      Line, Column);
+    SkipUntilSemicolon;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
+
+  if Check(gttIdentifier) then
+  begin
+    AddWarning('Default imports are not supported in GocciaScript',
+      'Use named imports instead: import { name } from ''module''',
+      Line, Column);
+    SkipUntilSemicolon;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
+
+  if Check(gttString) then
+  begin
+    AddWarning('Side-effect imports (import ''module'') are not supported in GocciaScript',
+      'Use named imports instead: import { name } from ''module''',
+      Line, Column);
     SkipUntilSemicolon;
     Result := TGocciaEmptyStatement.Create(Line, Column);
     Exit;
@@ -1605,10 +1725,28 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  if Check(gttIdentifier) and (Peek.Lexeme = 'type') then
+  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE) then
   begin
     Advance;
     SkipUntilSemicolon;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
+
+  if Check(gttDefault) then
+  begin
+    AddWarning('Default exports are not supported in GocciaScript',
+      'Use named exports instead: export const name = value; or export { name }',
+      Line, Column);
+    Advance;
+    if Check(gttClass) then
+    begin
+      Advance;
+      if Check(gttIdentifier) then Advance;
+      SkipBlock;
+    end
+    else
+      SkipUntilSemicolon;
     Result := TGocciaEmptyStatement.Create(Line, Column);
     Exit;
   end;
@@ -1694,7 +1832,7 @@ begin
     SuperClass := '';
 
   ClassImplementsClause := '';
-  if Check(gttIdentifier) and (Peek.Lexeme = 'implements') then
+  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_IMPLEMENTS) then
   begin
     Advance;
     ClassImplementsClause := CollectTypeAnnotation([gttLeftBrace]);
@@ -1719,8 +1857,8 @@ begin
     IsStatic := Match([gttStatic]);
 
     while Check(gttIdentifier) and
-      ((Peek.Lexeme = 'public') or (Peek.Lexeme = 'protected') or (Peek.Lexeme = 'private') or
-       (Peek.Lexeme = 'readonly') or (Peek.Lexeme = 'override') or (Peek.Lexeme = 'abstract')) do
+      ((Peek.Lexeme = KEYWORD_PUBLIC) or (Peek.Lexeme = KEYWORD_PROTECTED) or (Peek.Lexeme = KEYWORD_PRIVATE) or
+       (Peek.Lexeme = KEYWORD_READONLY) or (Peek.Lexeme = KEYWORD_OVERRIDE) or (Peek.Lexeme = KEYWORD_ABSTRACT)) do
       Advance;
 
     if not IsStatic and Check(gttStatic) then
@@ -1730,7 +1868,7 @@ begin
     IsGetter := False;
     IsSetter := False;
 
-    if Check(gttIdentifier) and (Peek.Lexeme = 'get') and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+    if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
     begin
       Advance;
       IsGetter := True;
@@ -1744,9 +1882,9 @@ begin
       else
         MemberName := Consume(gttIdentifier, 'Expected property name after "get"').Lexeme;
     end
-    else if Check(gttIdentifier) and (Peek.Lexeme = 'set') and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+    else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
     begin
-      Advance; // consume 'set'
+      Advance;
       IsSetter := True;
 
       if Check(gttHash) then

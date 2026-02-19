@@ -3,7 +3,9 @@ description: Temporal.Instant construction, properties, and methods
 features: [Temporal]
 ---*/
 
-describe("Temporal.Instant", () => {
+const isTemporal = typeof Temporal !== "undefined";
+
+describe.runIf(isTemporal)("Temporal.Instant", () => {
 
   test("fromEpochMilliseconds()", () => {
     const instant = Temporal.Instant.fromEpochMilliseconds(0);

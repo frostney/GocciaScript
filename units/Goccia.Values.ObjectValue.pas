@@ -68,6 +68,7 @@ type
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
+    function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
     function HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
     function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
     function GetOwnSymbols: TArray<TGocciaSymbolValue>;
@@ -492,30 +493,27 @@ function TGocciaObjectValue.DeleteProperty(const AName: string): Boolean;
 var
   Index: Integer;
   Descriptor: TGocciaPropertyDescriptor;
-  ErrorValue: TGocciaValue;
 begin
-  if FPropertyDescriptors.ContainsKey(AName) then
+  if not FPropertyDescriptors.ContainsKey(AName) then
   begin
-    Descriptor := FPropertyDescriptors[AName];
-
-    // Check if property is configurable
-    if not Descriptor.Configurable then
-    begin
-      // Non-configurable properties cannot be deleted
-      // In strict mode, this should throw TypeError, but for delete operator
-      // we silently fail (return false in EvaluateDelete)
-      Result := False;
-      Exit;
-    end;
-
-    FPropertyDescriptors.Remove(AName);
-    // Also remove from insertion order
-    Index := FPropertyInsertionOrder.IndexOf(AName);
-    if Index >= 0 then
-      FPropertyInsertionOrder.Delete(Index);
-
     Result := True;
+    Exit;
   end;
+
+  Descriptor := FPropertyDescriptors[AName];
+
+  if not Descriptor.Configurable then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  FPropertyDescriptors.Remove(AName);
+  Index := FPropertyInsertionOrder.IndexOf(AName);
+  if Index >= 0 then
+    FPropertyInsertionOrder.Delete(Index);
+
+  Result := True;
 end;
 
 function TGocciaObjectValue.GetEnumerablePropertyNames: TArray<string>;
@@ -629,10 +627,18 @@ end;
 { Symbol property methods }
 
 procedure TGocciaObjectValue.DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
+var
+  ExistingDescriptor: TGocciaPropertyDescriptor;
 begin
-  FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
-  if not FSymbolInsertionOrder.Contains(ASymbol) then
+  if FSymbolDescriptors.TryGetValue(ASymbol, ExistingDescriptor) then
+  begin
+    if not ExistingDescriptor.Configurable then
+      ThrowTypeError('Cannot redefine non-configurable property ''' + ASymbol.ToStringLiteral.Value + '''');
+  end
+  else
     FSymbolInsertionOrder.Add(ASymbol);
+
+  FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
 end;
 
 procedure TGocciaObjectValue.AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
@@ -661,6 +667,14 @@ begin
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaObjectValue.GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
+begin
+  if FSymbolDescriptors.ContainsKey(ASymbol) then
+    Result := FSymbolDescriptors[ASymbol]
+  else
+    Result := nil;
 end;
 
 function TGocciaObjectValue.HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;

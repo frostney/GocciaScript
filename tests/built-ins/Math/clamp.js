@@ -3,32 +3,35 @@ description: Math.clamp
 features: [Math.clamp]
 ---*/
 
-test("Math.clamp", () => {
-  expect(Math.clamp(5, 0, 10)).toBe(5);
-  expect(Math.clamp(-5, 0, 10)).toBe(0);
-  expect(Math.clamp(15, 0, 10)).toBe(10);
-});
+const hasMathClamp = typeof Math.clamp === "function";
 
-test("Math.clamp to support Infinities", () => {
-  expect(Math.clamp(5, 0, Infinity)).toBe(5);
-  expect(Math.clamp(-5, -Infinity, 10)).toBe(-5);
+describe.runIf(hasMathClamp)("Math.clamp", () => {
+  test("clamps value within range", () => {
+    expect(Math.clamp(5, 0, 10)).toBe(5);
+    expect(Math.clamp(-5, 0, 10)).toBe(0);
+    expect(Math.clamp(15, 0, 10)).toBe(10);
+  });
 
-  expect(Math.clamp(5, 0, Infinity)).toBe(Math.max(5, 0));
-  expect(Math.clamp(-5, -Infinity, 10)).toBe(Math.min(-5, 10));
-});
+  test("supports Infinities", () => {
+    expect(Math.clamp(5, 0, Infinity)).toBe(5);
+    expect(Math.clamp(-5, -Infinity, 10)).toBe(-5);
+    expect(Math.clamp(5, 0, Infinity)).toBe(Math.max(5, 0));
+    expect(Math.clamp(-5, -Infinity, 10)).toBe(Math.min(-5, 10));
+  });
 
-test("Math.clamp to support NaN", () => {
-  expect(Math.clamp(NaN, 0, 10)).toBeNaN();
-  expect(Math.clamp(5, NaN, 10)).toBeNaN();
-  expect(Math.clamp(5, 0, NaN)).toBeNaN();
-});
+  test("returns NaN when any argument is NaN", () => {
+    expect(Math.clamp(NaN, 0, 10)).toBeNaN();
+    expect(Math.clamp(5, NaN, 10)).toBeNaN();
+    expect(Math.clamp(5, 0, NaN)).toBeNaN();
+  });
 
-test("Math.clamp to support negative zero", () => {
-  expect(Math.clamp(-2, -0, 10)).toBeCloseTo(0);
-  expect(Math.clamp(-0, -0, 10)).toBeCloseTo(0);
-  expect(Math.clamp(0, -0, 10)).toBeCloseTo(0);
-});
+  test("supports negative zero", () => {
+    expect(Math.clamp(-2, -0, 10)).toBeCloseTo(0);
+    expect(Math.clamp(-0, -0, 10)).toBeCloseTo(0);
+    expect(Math.clamp(0, -0, 10)).toBeCloseTo(0);
+  });
 
-test("Math.clamp to throw error if minimum bound is larger than the maximum bound", () => {
-  expect(() => Math.clamp(10, 5, 0)).toThrow(RangeError);
+  test("throws RangeError if min > max", () => {
+    expect(() => Math.clamp(10, 5, 0)).toThrow(RangeError);
+  });
 });

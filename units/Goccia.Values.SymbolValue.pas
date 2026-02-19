@@ -5,15 +5,27 @@ unit Goccia.Values.SymbolValue;
 interface
 
 uses
+  Goccia.Arguments.Collection,
   Goccia.Values.Primitives;
 
 type
   TGocciaSymbolValue = class(TGocciaValue)
+  private class var
+    FSharedPrototype: TGocciaValue;
+    FMethodHost: TGocciaSymbolValue;
   private
     FDescription: string;
     FId: Integer;
+
+    function GetDescription(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function SymbolToString(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const ADescription: string = '');
+    procedure InitializePrototype;
+
+    class function SharedPrototype: TGocciaValue;
 
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -30,24 +42,17 @@ type
 implementation
 
 uses
-  Goccia.Arguments.Collection,
   Goccia.GarbageCollector,
   Goccia.Values.Constants,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction;
-
-type
-  TGocciaSymbolMethodHost = class
-    function SymbolToString(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
-  end;
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue;
 
 var
   GNextSymbolId: Integer = 0;
-  GSharedToString: TGocciaNativeFunctionValue = nil;
-  GMethodHost: TGocciaSymbolMethodHost = nil;
 
-function TGocciaSymbolMethodHost.SymbolToString(const AArgs: TGocciaArgumentsCollection;
+function TGocciaSymbolValue.SymbolToString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if not (AThisValue is TGocciaSymbolValue) then
@@ -55,16 +60,43 @@ begin
   Result := AThisValue.ToStringLiteral;
 end;
 
-procedure EnsureSymbolPrototype;
+function TGocciaSymbolValue.GetDescription(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if Assigned(GSharedToString) then Exit;
+  if not (AThisValue is TGocciaSymbolValue) then
+    ThrowTypeError('Symbol.prototype.description requires that ''this'' be a Symbol');
+  if TGocciaSymbolValue(AThisValue).FDescription <> '' then
+    Result := TGocciaStringLiteralValue.Create(TGocciaSymbolValue(AThisValue).FDescription)
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
 
-  GMethodHost := TGocciaSymbolMethodHost.Create;
-  GSharedToString := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    GMethodHost.SymbolToString, 'toString', 0);
+procedure TGocciaSymbolValue.InitializePrototype;
+var
+  Proto: TGocciaObjectValue;
+begin
+  if Assigned(FSharedPrototype) then Exit;
+
+  Proto := TGocciaObjectValue.Create;
+  FSharedPrototype := Proto;
+  FMethodHost := Self;
+
+  Proto.DefineProperty('description', TGocciaPropertyDescriptorAccessor.Create(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetDescription, 'description', 0), nil, [pfConfigurable]));
+
+  Proto.RegisterNativeMethod(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(SymbolToString, 'toString', 0));
 
   if Assigned(TGocciaGarbageCollector.Instance) then
-    TGocciaGarbageCollector.Instance.PinValue(GSharedToString);
+  begin
+    TGocciaGarbageCollector.Instance.PinValue(FSharedPrototype);
+    TGocciaGarbageCollector.Instance.PinValue(FMethodHost);
+  end;
+end;
+
+class function TGocciaSymbolValue.SharedPrototype: TGocciaValue;
+begin
+  Result := FSharedPrototype;
 end;
 
 constructor TGocciaSymbolValue.Create(const ADescription: string);
@@ -87,20 +119,13 @@ end;
 
 function TGocciaSymbolValue.GetProperty(const AName: string): TGocciaValue;
 begin
-  if AName = 'toString' then
+  if Assigned(FSharedPrototype) then
   begin
-    EnsureSymbolPrototype;
-    Result := GSharedToString;
-  end
-  else if AName = 'description' then
-  begin
-    if FDescription <> '' then
-      Result := TGocciaStringLiteralValue.Create(FDescription)
-    else
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end
-  else
-    Result := nil;
+    Result := TGocciaObjectValue(FSharedPrototype).GetPropertyWithContext(AName, Self);
+    if Assigned(Result) then
+      Exit;
+  end;
+  Result := nil;
 end;
 
 function TGocciaSymbolValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
@@ -121,8 +146,5 @@ begin
   else
     Result := TGocciaStringLiteralValue.Create('Symbol()');
 end;
-
-finalization
-  GMethodHost.Free;
 
 end.

@@ -117,8 +117,10 @@ test("Object.defineProperty with configurable attribute", () => {
   delete obj.flexible;
   expect(obj.flexible).toBeUndefined();
 
-  // Non-configurable property cannot be deleted
-  delete obj.fixed;
+  // Non-configurable property cannot be deleted (strict mode throws TypeError)
+  expect(() => {
+    delete obj.fixed;
+  }).toThrow(TypeError);
   expect(obj.fixed).toBe("permanent");
 });
 
@@ -304,6 +306,44 @@ test("Object.defineProperty with modification constraints", () => {
   const desc = Object.getOwnPropertyDescriptor(obj, "constant");
   expect(desc.writable).toBe(false);
   expect(desc.configurable).toBe(false);
+});
+
+test("Object.defineProperty merges with existing descriptor", () => {
+  const obj = {};
+
+  Object.defineProperty(obj, "merged", {
+    value: "original",
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+
+  // Update only enumerable — other attributes should be preserved
+  Object.defineProperty(obj, "merged", { enumerable: false });
+
+  const desc = Object.getOwnPropertyDescriptor(obj, "merged");
+  expect(desc.value).toBe("original");
+  expect(desc.writable).toBe(true);
+  expect(desc.configurable).toBe(true);
+  expect(desc.enumerable).toBe(false);
+
+  // Update only value — other attributes should be preserved
+  Object.defineProperty(obj, "merged", { value: "updated" });
+
+  const desc2 = Object.getOwnPropertyDescriptor(obj, "merged");
+  expect(desc2.value).toBe("updated");
+  expect(desc2.writable).toBe(true);
+  expect(desc2.configurable).toBe(true);
+  expect(desc2.enumerable).toBe(false);
+
+  // Update only writable — other attributes should be preserved
+  Object.defineProperty(obj, "merged", { writable: false });
+
+  const desc3 = Object.getOwnPropertyDescriptor(obj, "merged");
+  expect(desc3.value).toBe("updated");
+  expect(desc3.writable).toBe(false);
+  expect(desc3.configurable).toBe(true);
+  expect(desc3.enumerable).toBe(false);
 });
 
 test("Object.defineProperty with empty object", () => {

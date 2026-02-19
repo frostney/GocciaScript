@@ -103,7 +103,7 @@ procedure SafeOnError(const AContext: TGocciaEvaluationContext; const AMessage: 
 implementation
 
 uses
-  Goccia.Keywords,
+  Goccia.Keywords.Reserved,
   Goccia.Values.ClassHelper,
   Goccia.Values.Constants,
   Goccia.Values.ObjectPropertyDescriptor;
@@ -513,21 +513,6 @@ begin
   else if AStatement is TGocciaIfStatement then
   begin
     Result := EvaluateIf(TGocciaIfStatement(AStatement), AContext);
-  end
-  else if AStatement is TGocciaForStatement then
-  begin
-    // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end
-  else if AStatement is TGocciaWhileStatement then
-  begin
-    // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end
-  else if AStatement is TGocciaDoWhileStatement then
-  begin
-    // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else if AStatement is TGocciaSwitchStatement then
   begin
@@ -2038,11 +2023,6 @@ begin
         Result := TGocciaNullLiteralValue.Create;
         Exit;
       end
-      else if Trimmed = KEYWORD_UNDEFINED then
-      begin
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Exit;
-      end
       else if Trimmed = NAN_LITERAL then
       begin
         Result := TGocciaNumberLiteralValue.NaNValue;
@@ -2506,26 +2486,22 @@ begin
       ArrayValue := TGocciaArrayValue(ObjValue);
       if TryStrToInt(PropertyName, Index) and (Index >= 0) and (Index < ArrayValue.Elements.Count) then
       begin
-        // Set array element to nil (creates a hole/sparse array)
         ArrayValue.Elements[Index] := nil;
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end
       else
       begin
-        // Try to delete as a regular property on the array object
-        ArrayValue.DeleteProperty(PropertyName);
+        if not ArrayValue.DeleteProperty(PropertyName) then
+          ThrowTypeError('Cannot delete property ''' + PropertyName + ''' of [object Array]');
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end;
     end
-    // Handle object property deletion
     else if ObjValue is TGocciaObjectValue then
     begin
       ObjectValue := TGocciaObjectValue(ObjValue);
-      // DeleteProperty returns False for non-configurable properties, True otherwise
-      if ObjectValue.DeleteProperty(PropertyName) then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue;
+      if not ObjectValue.DeleteProperty(PropertyName) then
+        ThrowTypeError('Cannot delete property ''' + PropertyName + ''' of [object Object]');
+      Result := TGocciaBooleanLiteralValue.TrueValue;
     end
     else
     begin

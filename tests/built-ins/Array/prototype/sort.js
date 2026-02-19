@@ -36,4 +36,27 @@ describe("Array.prototype.sort", () => {
     arr.sort((a, b) => a - b);
     expect(arr).toEqual([1, 2, 3]);
   });
+
+  test("default sort with Infinity values", () => {
+    const arr = [3, Infinity, 1, -Infinity, 2];
+    arr.sort((a, b) => a - b);
+    expect(arr[0]).toBe(-Infinity);
+    expect(arr[1]).toBe(1);
+    expect(arr[2]).toBe(2);
+    expect(arr[3]).toBe(3);
+    expect(arr[4]).toBe(Infinity);
+  });
+
+  test("default sort with NaN sorts NaN last", () => {
+    const arr = [3, NaN, 1, 2];
+    arr.sort((a, b) => {
+      if (Number.isNaN(a)) return 1;
+      if (Number.isNaN(b)) return -1;
+      return a - b;
+    });
+    expect(arr[0]).toBe(1);
+    expect(arr[1]).toBe(2);
+    expect(arr[2]).toBe(3);
+    expect(Number.isNaN(arr[3])).toBe(true);
+  });
 });

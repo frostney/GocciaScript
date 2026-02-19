@@ -31,6 +31,7 @@ test("reserved words as object property names", () => {
     catch: "error-handling",
     finally: "error-handling",
     throw: "error-throw",
+    with: "scope",
   };
 
   expect(obj.if).toBe("conditional");
@@ -58,6 +59,7 @@ test("reserved words as object property names", () => {
   expect(obj.catch).toBe("error-handling");
   expect(obj.finally).toBe("error-handling");
   expect(obj.throw).toBe("error-throw");
+  expect(obj.with).toBe("scope");
 });
 
 test("reserved words as object property names with bracket notation", () => {

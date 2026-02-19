@@ -48,6 +48,7 @@ tests/
     ├── declarations/       # let, const
     ├── expressions/        # Arithmetic, comparison, logical, destructuring, etc.
     │   ├── addition/       # Addition with ToPrimitive
+    │   ├── arithmetic/     # Division (IEEE-754 signed zeros, Infinity), exponentiation (Infinity edge cases)
     │   ├── bitwise/        # Bitwise OR, AND, XOR, NOT, shifts
     │   ├── modulo/         # Floating-point modulo
     │   ├── conditional/    # Ternary precedence
@@ -59,7 +60,8 @@ tests/
     ├── modules/            # Import/export
     ├── objects/            # Object literals, methods, computed properties
     ├── statements/         # if/else, switch/case/break, try/catch/finally
-    │   └── try-catch/      # Try-catch-finally edge cases
+    │   ├── try-catch/      # Try-catch-finally edge cases
+    │   └── unsupported-features.js  # Verifies parser skip for for/while/do-while/var/with
     └── unary-operators.js
 ```
 
@@ -229,13 +231,42 @@ test("reject after resolve with pending promise is ignored", () => {
 });
 ```
 
-### Skipping Tests
+### Skipping Tests and Suites
+
+Individual tests can be skipped unconditionally with `test.skip`:
 
 ```javascript
 test.skip("not yet implemented", () => {
   // This test will be counted but not executed
 });
 ```
+
+Entire suites can be skipped unconditionally with `describe.skip`:
+
+```javascript
+describe.skip("feature under development", () => {
+  test("will not run", () => { ... });
+  test("also will not run", () => { ... });
+});
+```
+
+### Conditional Skipping and Running
+
+Both `describe` and `test` support `skipIf(condition)` and `runIf(condition)` for conditional execution. Each returns a function that accepts the usual `(name, fn)` arguments:
+
+```javascript
+const hasFeature = typeof Temporal !== "undefined";
+
+// Skip if condition is truthy
+describe.skipIf(true)("skipped suite", () => { ... });
+test.skipIf(true)("skipped test", () => { ... });
+
+// Run only if condition is truthy (inverse of skipIf)
+describe.runIf(hasFeature)("Temporal tests", () => { ... });
+test.runIf(hasFeature)("uses Temporal.Now", () => { ... });
+```
+
+These follow the [Bun test runner API](https://bun.com/reference/bun/test/Describe/skipIf). When skipped, tests are counted in the total but not executed and reported as skipped.
 
 ## Cross-Runtime Compatibility (Vitest)
 
@@ -309,7 +340,7 @@ Pascal unit tests are a secondary testing layer for low-level value system inter
 | `Goccia.Values.Primitives.Test.pas` | Primitive value creation, type conversion (`ToStringLiteral`, `ToBooleanLiteral`, `ToNumberLiteral`, `TypeName`, `TypeOf`) |
 | `Goccia.Values.FunctionValue.Test.pas` | Function/method creation, closure capture, parameter handling, scope resolution, AST evaluation |
 | `Goccia.Values.ObjectValue.Test.pas` | Object property operations (`AssignProperty`, `GetProperty`, `DeleteProperty`), prototype chain resolution |
-| `Goccia.Builtins.TestAssertions.Test.pas` | All `TGocciaExpectationValue` matchers (`toBe`, `toEqual`, `toBeNull`, `toBeNaN`, `toBeUndefined`, `toBeTruthy`, `toBeFalsy`, `toBeGreaterThan`, `toBeLessThan`, `toContain`, `toHaveLength`, `toHaveProperty`, `toBeCloseTo`, `not`) |
+| `Goccia.Builtins.TestAssertions.Test.pas` | All `TGocciaExpectationValue` matchers (`toBe`, `toEqual`, `toBeNull`, `toBeNaN`, `toBeUndefined`, `toBeTruthy`, `toBeFalsy`, `toBeGreaterThan`, `toBeLessThan`, `toContain`, `toHaveLength`, `toHaveProperty`, `toBeCloseTo`, `not`); skip and conditional APIs (`describe.skip`, `describe.skipIf`, `describe.runIf`, `test.skipIf`, `test.runIf`) |
 
 These compile as standalone executables and run directly:
 

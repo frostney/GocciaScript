@@ -26,5 +26,5 @@ test("charCodeAt with edge cases", () => {
 });
 
 test("charCodeAt throws TypeError for Symbol argument", () => {
-  expect(() => "hello".charCodeAt(Symbol())).toThrow("TypeError");
+  expect(() => "hello".charCodeAt(Symbol())).toThrow(TypeError);
 });

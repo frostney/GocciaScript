@@ -18,6 +18,8 @@ State changes (variable bindings, object mutations) happen through the scope and
 
 **Performance-aware evaluation:** Template literal evaluation and `Array.ToStringLiteral` use `TStringBuilder` for O(n) string assembly instead of O(n^2) repeated concatenation. `Boolean.ToNumberLiteral` returns the existing `ZeroValue`/`OneValue` singletons rather than allocating, avoiding an allocation on every boolean-to-number coercion. `Function.prototype.apply` uses a fast path for `TGocciaArrayValue` arguments (direct `Elements[I]` access) instead of per-element `IntToStr` + `GetProperty`. Numeric binary operations that share a common pattern (subtraction, multiplication, exponentiation) are consolidated through `EvaluateSimpleNumericBinaryOp` to avoid code duplication while maintaining clear semantics.
 
+**IEEE-754 correctness:** Arithmetic operations handle special number values (`NaN`, `Infinity`, `-Infinity`, `-0`) via the `TGocciaNumberSpecialValue` enum rather than the stored `Double` (which is `0.0` for all special values). Division uses explicit `IsNegativeZero` checks to compute correct signed results (e.g., `1 / -Infinity` → `-0`, `-1 / 0` → `-Infinity`). Exponentiation uses an `IsActualZero` guard to distinguish true zero exponents from special values with `Value = 0.0`, and checks `RightNum.IsInfinite` before `RightNum.Value = 0` to correctly handle infinite exponents. The sort comparator (`CallCompareFunc`) maps infinite comparison results to `±1` to avoid passing `0.0` (the internal value of `Infinity`) to the quicksort partitioning logic.
+
 ## Virtual Dispatch Value System
 
 Values follow a small class hierarchy rooted at `TGocciaValue`, with property access unified through virtual methods on the base class:
@@ -55,21 +57,31 @@ Beyond property access, the base class provides two additional virtual methods f
 
 ## Centralized Keyword Constants
 
-JavaScript keyword literals (`this`, `super`, `undefined`, `null`, `true`, `false`, etc.) are defined as named constants in `Goccia.Keywords.pas`:
+JavaScript keyword literals are defined as named constants in two units — `Goccia.Keywords.Reserved.pas` for reserved keywords and `Goccia.Keywords.Contextual.pas` for contextual keywords:
 
 ```pascal
+// Goccia.Keywords.Reserved.pas
 const
   KEYWORD_THIS      = 'this';
   KEYWORD_SUPER     = 'super';
-  KEYWORD_UNDEFINED = 'undefined';
-  // ... 32 keywords total
+  KEYWORD_NULL      = 'null';
+  // ... 33 reserved keywords total
+
+// Goccia.Keywords.Contextual.pas
+const
+  KEYWORD_GET       = 'get';
+  KEYWORD_SET       = 'set';
+  KEYWORD_TYPE      = 'type';
+  KEYWORD_INTERFACE = 'interface';
+  // ... 12 contextual keywords total
 ```
 
-**Why a dedicated unit?**
+**Why dedicated units?**
 
-- **No magic strings** — The evaluator, scope, and other units reference `KEYWORD_THIS` instead of `'this'`, preventing typos and enabling compiler-checked usage.
-- **Minimal dependencies** — `Goccia.Keywords` has no `uses` clause dependencies, so any unit can import it without introducing circular references.
-- **Single source of truth** — All keyword strings are defined once. The lexer's token mapping and the evaluator's identifier handling both reference the same constants.
+- **No magic strings** — The evaluator, scope, parser, and other units reference `KEYWORD_THIS` or `KEYWORD_GET` instead of `'this'` or `'get'`, preventing typos and enabling compiler-checked usage.
+- **Reserved vs contextual** — Reserved keywords always produce a dedicated token type and cannot be used as identifiers. Contextual keywords have special meaning only in specific syntactic positions (e.g., `get`/`set` in object literals, `type`/`interface` in declaration position) but are otherwise valid identifiers.
+- **Minimal dependencies** — Neither unit has `uses` clause dependencies, so any unit can import them without introducing circular references.
+- **Single source of truth** — All keyword strings are defined once. The lexer's token mapping, the parser's contextual checks, and the evaluator's identifier handling all reference the same constants.
 
 ## Inlining Hot-Path Methods
 
@@ -114,6 +126,8 @@ Numbers use a dual representation — a `Double` for normal values and a `TGocci
 - **Negative zero** — `-0` and `+0` are equal in IEEE 754 but distinguishable in JavaScript (`Object.is(-0, +0)` is `false`). Explicit tracking prevents this from being lost.
 - **Display correctness** — `NaN.toString()` must return `"NaN"`, not some floating-point artifact.
 
+**Pitfall: `Value = 0` for special numbers.** Since `NaN`, `Infinity`, `-Infinity`, and `-0` all store `FValue = 0.0`, any code checking `Value = 0` must first verify the value isn't one of these special types. The `IsActualZero` helper in the arithmetic evaluator encapsulates this check: `(Value = 0) and not IsNaN and not IsInfinite`. Similarly, the `NumericRank` helper in `Goccia.Values.ArrayValue.pas` maps each special value to a distinct `Double` for correct sort ordering.
+
 ## No Global Mutable State
 
 The codebase enforces a strict rule: **no global mutable state**. All runtime state flows through explicit parameters — the `TGocciaEvaluationContext` record, the scope chain, and value objects.
@@ -138,7 +152,7 @@ Scopes form a tree with parent pointers, implementing lexical scoping:
 - **Standalone JSON utilities** — `Goccia.JSON` provides `TGocciaJSONParser` and `TGocciaJSONStringifier` as dependency-free utility classes that convert between JSON text and `TGocciaValue` types. `Goccia.Builtins.JSON` (the `JSON.parse`/`JSON.stringify` built-in) delegates to these, keeping the built-in a thin adapter. This separation allows the interpreter and any other component to parse JSON without instantiating a built-in.
 - **Specialized scope hierarchy** — `TGocciaGlobalScope` (root), `TGocciaCallScope` (function calls), `TGocciaMethodCallScope` (class method calls with `SuperClass`/`OwningClass`), `TGocciaClassInitScope` (instance property initialization), and `TGocciaCatchScope` (catch parameter scoping). Each specialized scope overrides virtual methods (`GetThisValue`, `GetOwningClass`, `GetSuperClass`) to participate in VMT-based chain-walking.
 - **VMT-based chain-walking** — `FindThisValue`, `FindOwningClass`, and `FindSuperClass` walk the parent chain calling the corresponding virtual `Get*` method on each scope, stopping at the first non-`nil` result. This eliminates `is` type checks in the evaluator and centralizes resolution logic in the scope hierarchy.
-- **Unified identifier resolution** — `ResolveIdentifier(Name)` on `TGocciaScope` handles `this` (via `FindThisValue`) and keyword constants (via `Goccia.Keywords`) before falling back to the standard scope chain walk, avoiding scattered special-case checks in the evaluator.
+- **Unified identifier resolution** — `ResolveIdentifier(Name)` on `TGocciaScope` handles `this` (via `FindThisValue`) and keyword constants (via `Goccia.Keywords.Reserved`) before falling back to the standard scope chain walk, avoiding scattered special-case checks in the evaluator.
 
 ## `this` Binding: Arrow Functions vs Shorthand Methods
 
@@ -171,6 +185,8 @@ Object properties follow ECMAScript's property descriptor model:
 - **Data descriptors** — `{ value, writable, enumerable, configurable }`
 - **Accessor descriptors** — `{ get, set, enumerable, configurable }`
 - **Insertion order** — Properties maintain their creation order, matching JavaScript's `Object.keys()` ordering guarantee.
+- **Descriptor merging** — `Object.defineProperty` merges the new descriptor with the existing one when the property already exists. Unspecified attributes retain their current values rather than resetting to defaults. This matches ECMAScript spec behavior (e.g., `Object.defineProperty(obj, "x", { enumerable: false })` only changes `enumerable`, preserving `writable`, `configurable`, and `value`).
+- **Strict mode `delete`** — Deleting a non-configurable property throws `TypeError`, matching ECMAScript strict mode semantics. `DeleteProperty` returns `False` for non-configurable properties, and the evaluator converts this into a `TypeError` at the call site. Deleting a non-existent property returns `true` (no error).
 
 This is more complex than a simple key-value map, but it's necessary for `Object.defineProperty`, getters/setters, and non-enumerable properties like prototype methods.
 
@@ -206,7 +222,7 @@ GocciaScript runs inside a FreePascal host with manual memory management, but th
 **Why not manual memory management?**
 
 - **Aliased references** — A value assigned to multiple variables, captured in a closure, and stored in an array has no single owner. Determining when to free it requires tracking all references.
-- **Shared prototype singletons** — String, Array, Set, Map, and Function prototype objects are class-level singletons shared across all instances of their type. Each type's `InitializePrototype` creates the singleton once (guarded by `if Assigned`) and pins it with `TGocciaGarbageCollector.Instance.PinValue`. Manual lifetime tracking of these shared singletons would be fragile.
+- **Shared prototype singletons** — String, Number, Array, Set, Map, Function, and Symbol prototype objects are class-level singletons shared across all instances of their type. Each type's `InitializePrototype` creates the singleton once (guarded by `if Assigned`) and pins it with `TGocciaGarbageCollector.Instance.PinValue`. Manual lifetime tracking of these shared singletons would be fragile.
 - **Closure captures** — Arrow functions capture their enclosing scope, creating non-obvious reference chains between scopes and values.
 
 **Why not reference counting (via `TInterfacedObject`)?**

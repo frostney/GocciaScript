@@ -27,10 +27,17 @@ suite("promises", () => {
   });
 
   bench("resolve + then chain (10 deep)", () => {
-    let p = Promise.resolve(0);
-    for (let i = 0; i < 10; i = i + 1) {
-      p = p.then((v) => v + 1);
-    }
+    Promise.resolve(0)
+      .then((v) => v + 1)
+      .then((v) => v + 1)
+      .then((v) => v + 1)
+      .then((v) => v + 1)
+      .then((v) => v + 1)
+      .then((v) => v + 1)
+      .then((v) => v + 1)
+      .then((v) => v + 1)
+      .then((v) => v + 1)
+      .then((v) => v + 1);
   });
 
   bench("reject + catch + then", () => {

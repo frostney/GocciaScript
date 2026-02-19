@@ -3,7 +3,9 @@ description: Temporal.PlainTime construction, properties, and methods
 features: [Temporal]
 ---*/
 
-describe("Temporal.PlainTime", () => {
+const isTemporal = typeof Temporal !== "undefined";
+
+describe.runIf(isTemporal)("Temporal.PlainTime", () => {
 
   test("constructor with defaults", () => {
     const t = new Temporal.PlainTime();

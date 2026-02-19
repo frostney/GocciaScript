@@ -43,10 +43,16 @@ uses
   Goccia.Values.ObjectValue;
 
 constructor TGocciaGlobalSymbol.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+var
+  PrototypeInitializer: TGocciaSymbolValue;
 begin
   inherited Create(AName, AScope, AThrowError);
 
   FGlobalRegistry := TDictionary<string, TGocciaSymbolValue>.Create;
+
+  // Initialize shared Symbol prototype
+  PrototypeInitializer := TGocciaSymbolValue.Create;
+  PrototypeInitializer.InitializePrototype;
 
   // Create well-known symbols
   FIteratorSymbol := TGocciaSymbolValue.Create('Symbol.iterator');
@@ -60,6 +66,9 @@ begin
 
   // Register well-known symbol constants
   FSymbolFunction.RegisterConstant('iterator', FIteratorSymbol);
+
+  // Expose Symbol.prototype (ECMAScript compatible)
+  FSymbolFunction.AssignProperty('prototype', TGocciaSymbolValue.SharedPrototype);
 
   // Bind Symbol in scope
   AScope.DefineLexicalBinding(AName, FSymbolFunction, dtLet);

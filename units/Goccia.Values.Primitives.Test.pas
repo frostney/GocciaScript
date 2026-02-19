@@ -18,6 +18,10 @@ type
     procedure TestStringValueEmpty;
     procedure TestStringValueNumber;
     procedure TestNumberValue;
+    procedure TestNumberValueNaN;
+    procedure TestNumberValueInfinity;
+    procedure TestNumberValueNegativeInfinity;
+    procedure TestNumberValueNegativeZero;
     procedure TestBooleanValueTrue;
     procedure TestBooleanValueFalse;
     procedure TestNullValue;
@@ -32,6 +36,10 @@ begin
   Test('String value with empty content', TestStringValueEmpty);
   Test('String value with number content', TestStringValueNumber);
   Test('Number value', TestNumberValue);
+  Test('NaN value', TestNumberValueNaN);
+  Test('Infinity value', TestNumberValueInfinity);
+  Test('Negative Infinity value', TestNumberValueNegativeInfinity);
+  Test('Negative zero value', TestNumberValueNegativeZero);
   Test('Boolean value with true value', TestBooleanValueTrue);
   Test('Boolean value with false value', TestBooleanValueFalse);
   Test('Null value', TestNullValue);
@@ -89,6 +97,59 @@ begin
   Expect<string>(Value.ToStringLiteral.Value).ToBe('123.456');
   Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
   Expect<Double>(Value.ToNumberLiteral.Value).ToBe(123.456);
+  Expect<string>(Value.TypeName).ToBe('number');
+end;
+
+procedure TTestPrimitives.TestNumberValueNaN;
+var
+  Value: TGocciaNumberLiteralValue;
+begin
+  Value := TGocciaNumberLiteralValue.NaNValue;
+  Expect<Boolean>(Value.IsNaN).ToBe(True);
+  Expect<Boolean>(Value.IsInfinite).ToBe(False);
+  Expect<Boolean>(Value.IsNegativeZero).ToBe(False);
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(False);
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('NaN');
+  Expect<string>(Value.TypeName).ToBe('number');
+end;
+
+procedure TTestPrimitives.TestNumberValueInfinity;
+var
+  Value: TGocciaNumberLiteralValue;
+begin
+  Value := TGocciaNumberLiteralValue.InfinityValue;
+  Expect<Boolean>(Value.IsInfinity).ToBe(True);
+  Expect<Boolean>(Value.IsInfinite).ToBe(True);
+  Expect<Boolean>(Value.IsNaN).ToBe(False);
+  Expect<Boolean>(Value.IsNegativeZero).ToBe(False);
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('Infinity');
+  Expect<string>(Value.TypeName).ToBe('number');
+end;
+
+procedure TTestPrimitives.TestNumberValueNegativeInfinity;
+var
+  Value: TGocciaNumberLiteralValue;
+begin
+  Value := TGocciaNumberLiteralValue.NegativeInfinityValue;
+  Expect<Boolean>(Value.IsNegativeInfinity).ToBe(True);
+  Expect<Boolean>(Value.IsInfinite).ToBe(True);
+  Expect<Boolean>(Value.IsInfinity).ToBe(False);
+  Expect<Boolean>(Value.IsNaN).ToBe(False);
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('-Infinity');
+  Expect<string>(Value.TypeName).ToBe('number');
+end;
+
+procedure TTestPrimitives.TestNumberValueNegativeZero;
+var
+  Value: TGocciaNumberLiteralValue;
+begin
+  Value := TGocciaNumberLiteralValue.NegativeZeroValue;
+  Expect<Boolean>(Value.IsNegativeZero).ToBe(True);
+  Expect<Boolean>(Value.IsNaN).ToBe(False);
+  Expect<Boolean>(Value.IsInfinite).ToBe(False);
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(False);
   Expect<string>(Value.TypeName).ToBe('number');
 end;
 

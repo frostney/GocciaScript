@@ -13,14 +13,14 @@ type
   TGocciaTokenType = (
     // Literals
     gttNumber, gttString, gttTemplate,
-    gttTrue, gttFalse, gttNull, gttUndefined,
+    gttTrue, gttFalse, gttNull,
     // Identifiers
     gttIdentifier,
     // Keywords
     gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
     gttReturn, gttIf, gttElse, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
     gttThrow, gttTry, gttCatch, gttFinally,
-    gttImport, gttExport, gttFrom, gttAs, gttGet, gttSet,
+    gttImport, gttExport, gttFrom, gttAs, gttGet, gttSet, gttVar, gttWith,
     // Operators
     gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
     gttEqual, gttNotEqual, gttLess, gttGreater, gttLessEqual, gttGreaterEqual,

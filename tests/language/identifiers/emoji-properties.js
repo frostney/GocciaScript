@@ -1,6 +1,6 @@
 /*---
-description: Testing emoji support in identifiers
-features: [unicode-identifiers, emoji]
+description: Testing emoji support in property names
+features: [unicode-properties, emoji]
 ---*/
 
 test("emoji property names", () => {
@@ -15,10 +15,4 @@ test("emoji property names", () => {
     expect(obj["💻"]).toBe("computer emoji");
   });
   
-  test("emoji identifiers", () => {
-    const 🚀 = "rocket";
-    const 🎯 = "target";
-    
-    expect(🚀).toBe("rocket");
-    expect(🎯).toBe("target");
-  }); 
+  

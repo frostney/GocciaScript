@@ -50,8 +50,8 @@ test("Symbol in computed property of object literal", () => {
   expect(obj[sym]).toBe(42);
 });
 
-test("Symbol has no prototype", () => {
-  expect(Symbol.prototype).toBe(undefined);
+test("Symbol.prototype exists", () => {
+  expect(typeof Symbol.prototype).toBe("object");
 });
 
 test("symbol.toString() returns descriptive string", () => {

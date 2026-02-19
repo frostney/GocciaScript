@@ -716,8 +716,14 @@ begin
   else
     CountValue := TGocciaNumberLiteralValue.Create(1);
 
-  if CountValue.IsNaN or CountValue.IsInfinity or CountValue.IsNegativeInfinity or (CountValue.Value < 0) then
-    ThrowRangeError('Invalid count value');
+  if CountValue.IsNaN then
+  begin
+    Result := TGocciaStringLiteralValue.Create('');
+    Exit;
+  end;
+
+  if CountValue.IsInfinity or CountValue.IsNegativeInfinity or (CountValue.Value < 0) then
+    ThrowRangeError('Invalid count value: ' + CountValue.ToStringLiteral.Value);
 
   Count := Trunc(CountValue.Value);
   Result := TGocciaStringLiteralValue.Create(DupeString(StringValue, Count));

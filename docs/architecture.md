@@ -30,6 +30,8 @@ The top-level entry point. Provides static convenience methods (`RunScript`, `Ru
 - **Built-in registration** — A single `RegisterBuiltIns` method selectively creates and registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, error constructors) based on a `TGocciaGlobalBuiltins` flag set. All built-in constructors share the same `(name, scope, ThrowError)` signature.
 - **Interpreter lifecycle** — Creates and owns the `TGocciaInterpreter` instance.
 - **Prototype chain setup** — Calls `RegisterBuiltinConstructors` to wire up the `Object → Array → Number → String` prototype chain.
+- **`globalThis` registration** — After all built-ins are registered, `RegisterGlobalThis` creates a `TGocciaObjectValue` populated with all current global scope bindings, adds a self-referential `globalThis` property, and binds it as `const` in the global scope.
+- **`GocciaScript` global** — `RegisterGocciaScriptGlobal` creates a `const` object with `version` (from `Goccia.Version`), `commit` (short git hash), and `builtIns` (array of enabled `TGocciaGlobalBuiltin` flag names, derived via RTTI).
 
 The configurable built-in system allows different execution contexts (e.g., the TestRunner enables `ggTestAssertions` to inject `describe`, `test`, and `expect`).
 
@@ -54,12 +56,17 @@ A recursive descent parser that builds an AST from the token stream. Implements:
 - **ES6+ syntax** — Arrow functions, template literals, destructuring patterns (array and object), spread/rest operators, rest parameters (`...args`), optional chaining (`?.`), computed property names, shorthand properties, classes with private fields, private/public getters/setters, and static members. Reserved words are accepted as property names in object literals and member expressions. The parser tracks instance property declaration order for correct initialization semantics.
 - **Types as Comments** — Full support for the TC39 Types as Comments proposal. Type annotations on variables, parameters (simple, optional, rest, destructuring), return types, class fields, class generics, `implements` clauses, catch parameters, and `as Type`/`as const` assertions are parsed and collected on AST nodes but ignored at runtime. `type`/`interface` declarations and `import type`/`export type` statements are skipped entirely, producing `TGocciaEmptyStatement` nodes. Access modifiers (`public`, `protected`, `private`, `readonly`, `override`, `abstract`) in class bodies are consumed and discarded. Helper methods `CollectTypeAnnotation` and `CollectGenericParameters` handle balanced-bracket type text collection with configurable terminator tokens.
 - **Shared parsing helpers** — `ParseParameterList` handles parameter parsing for arrow functions, class methods, and object method shorthand. `ParseGetterExpression` and `ParseSetterExpression` handle accessor parsing for both object literals and class bodies. `ParseObjectMethodBody` handles method shorthand in object literals.
+- **Unsupported feature recovery** — `for`, `while`, `do...while`, `var`, and `with` statements are parsed as no-ops (`TGocciaEmptyStatement`) with a warning. `SkipBalancedParens` tracks parenthesis depth to correctly skip conditions containing nested parentheses (e.g., `for (let i = fn(x); ...)`). `SkipStatementOrBlock` skips the statement body (single statement or `{...}` block).
 - **Error recovery** — Throws `TGocciaSyntaxError` with source location for diagnostics.
 - **Arrow function detection** — Uses lookahead (`IsArrowFunction`) to disambiguate parenthesized expressions from arrow function parameters. The lookahead understands type annotations (`?`, `:Type`, `:ReturnType`) to correctly identify typed arrow functions.
 
-### Keywords (`Goccia.Keywords.pas`)
+### Reserved Keywords (`Goccia.Keywords.Reserved.pas`)
 
-A dependency-free unit that centralizes all 32 JavaScript keyword string constants (`KEYWORD_THIS`, `KEYWORD_SUPER`, `KEYWORD_UNDEFINED`, etc.). Used by the evaluator, scope, and other units to avoid hardcoded string literals and ensure consistent keyword references. Has no `uses` clause dependencies, so it can be imported by any unit without introducing circular references.
+A dependency-free unit that centralizes all 33 reserved JavaScript keyword string constants (`KEYWORD_THIS`, `KEYWORD_SUPER`, `KEYWORD_VAR`, `KEYWORD_WITH`, etc.). Reserved keywords always produce a dedicated token type and cannot be used as identifiers. Used by the lexer, evaluator, and scope units. Note: `undefined` is not a keyword — it is a global property registered via `Goccia.Builtins.Globals`.
+
+### Contextual Keywords (`Goccia.Keywords.Contextual.pas`)
+
+A dependency-free unit that centralizes all 12 contextual keyword string constants (`KEYWORD_GET`, `KEYWORD_SET`, `KEYWORD_TYPE`, `KEYWORD_INTERFACE`, `KEYWORD_IMPLEMENTS`, etc.). Contextual keywords have special meaning only in specific syntactic positions but are otherwise valid identifiers. Used by the lexer and parser.
 
 ### Microtask Queue (`Goccia.MicrotaskQueue.pas`)
 
@@ -97,6 +104,15 @@ A cross-platform timing unit providing monotonic clocks, a wall-clock epoch sour
 
 Used by the engine (lex/parse/execute phase timing in `TGocciaScriptResult`), the test assertions framework (test execution duration), the benchmark runner (calibration and measurement), and `Temporal.Now` (wall-clock epoch time). Has no Goccia-specific dependencies, making it reusable outside the engine.
 
+### Version (`Goccia.Version.pas`)
+
+Provides the engine's version and commit hash, resolved once at startup via `git`:
+
+- **`GetVersion`** — Returns a semver string (e.g., `"0.2.0"` for a tagged release, `"0.2.0-dev"` for commits after a tag). Falls back to `"0.0.0-dev"` when tags are unavailable.
+- **`GetCommit`** — Returns the short commit hash.
+
+Uses `RunCommand` from the `Process` unit to execute `git describe --tags --always` and `git rev-parse --short HEAD`. Results are cached in unit-level variables so the git commands run only once per process. CI workflows use `fetch-depth: 0` to ensure full tag history is available.
+
 ### AST (`Goccia.AST.Node.pas`, `Goccia.AST.Expressions.pas`, `Goccia.AST.Statements.pas`)
 
 The Abstract Syntax Tree is structured into three layers:
@@ -121,7 +137,7 @@ The largest component. Implements the actual semantics of the language as **pure
 | Module | Responsibility |
 |--------|---------------|
 | `Goccia.Evaluator.pas` | Core dispatch, expressions, statements, classes, function name inference, `EvaluateStatementsSafe`, spread helpers |
-| `Goccia.Evaluator.Arithmetic.pas` | `+` (uses `ToPrimitive`), `-`, `*`, `**` (via `EvaluateSimpleNumericBinaryOp` helper), `/`, `%` (float), compound assignment dispatch |
+| `Goccia.Evaluator.Arithmetic.pas` | `+` (uses `ToPrimitive`), `-`, `*`, `**`, `/`, `%` (float), compound assignment dispatch. Division and exponentiation use `IsActualZero` and special-value enum checks for IEEE-754 correctness with `NaN`/`±Infinity`/`-0` |
 | `Goccia.Evaluator.Bitwise.pas` | `&`, `\|`, `^`, `<<`, `>>`, `>>>` |
 | `Goccia.Evaluator.Comparison.pas` | `===`, `!==`, `<`, `>`, `<=`, `>=` |
 | `Goccia.Evaluator.Assignment.pas` | `=`, `+=`, `-=`, property assignment, compound property assignment, `DefinePropertyOnValue` |
@@ -186,7 +202,7 @@ The scope system uses a class hierarchy for specialised scope types:
 
 The evaluator resolves `this`, owning class, and super class via `FindThisValue`, `FindOwningClass`, and `FindSuperClass` on the scope. These walk the parent chain calling the corresponding virtual `Get*` method on each scope, stopping at the first non-`nil` result. This VMT-based chain-walking pattern eliminates `is` type checks and centralizes the resolution logic.
 
-Additionally, `ResolveIdentifier(Name)` on `TGocciaScope` provides a unified identifier lookup that handles `this` (via `FindThisValue`) and keyword constants (via `Goccia.Keywords`) before falling back to the standard scope chain walk. This avoids scattering special-case checks across the evaluator.
+Additionally, `ResolveIdentifier(Name)` on `TGocciaScope` provides a unified identifier lookup that handles `this` (via `FindThisValue`) and keyword constants (via `Goccia.Keywords.Reserved`) before falling back to the standard scope chain walk. This avoids scattering special-case checks across the evaluator.
 
 ## Module System
 

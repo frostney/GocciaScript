@@ -127,7 +127,7 @@ The JSON parser is a recursive descent implementation. Special handling:
 | `Object.create(proto)` | Create with prototype |
 | `Object.is(a, b)` | Same-value equality (handles -0, NaN) |
 | `Object.hasOwn(obj, prop)` | Own property check (supports class values; checks static properties, not private fields) |
-| `Object.defineProperty(obj, prop, desc)` | Define property descriptor |
+| `Object.defineProperty(obj, prop, desc)` | Define/update property descriptor (merges with existing) |
 | `Object.defineProperties(obj, props)` | Define multiple descriptors |
 | `Object.getOwnPropertyNames(obj)` | All own property names |
 | `Object.getOwnPropertyDescriptor(obj, prop)` | Get property descriptor |
@@ -231,7 +231,19 @@ String prototype methods are implemented on string values:
 
 These are always registered (not flag-gated).
 
-**Constants:** `undefined`, `NaN`, `Infinity`
+**Constants:** `undefined`, `NaN`, `Infinity`, `globalThis`
+
+`globalThis` is a `const` binding that holds a plain object populated with all global scope bindings at the time of registration. It includes a self-referential `globalThis` property (`globalThis.globalThis === globalThis`).
+
+**`GocciaScript` object:**
+
+A `const` global providing engine metadata:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `version` | `string` | Semver version from the latest git tag (e.g., `"0.2.0"`), or tag + `-dev` suffix if there are commits after the tag (e.g., `"0.2.0-dev"`) |
+| `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
+| `builtIns` | `string[]` | Names of the enabled `TGocciaGlobalBuiltin` flags (e.g., `["Console", "Math", "GlobalObject", ...]`), derived via RTTI at runtime |
 
 **Global functions:**
 
@@ -268,9 +280,9 @@ obj[sym]; // "value"
 
 `Object.defineProperty` and `Object.getOwnPropertySymbols` also support symbol keys. The `in` operator checks for symbol-keyed properties, including global registry symbols created via `Symbol.for()`.
 
-Symbols have no prototype object — `toString()` and `description` are provided directly via `GetProperty` on the primitive value.
+**Prototype:** `Symbol.prototype` is an object containing `toString()` and a `description` getter, matching ECMAScript semantics. All symbol instances share this prototype.
 
-**Coercion semantics:** Symbols follow ECMAScript strict mode rules — implicit conversion to string or number throws `TypeError`. Use `String(symbol)` or `symbol.toString()` for explicit string conversion. See [value-system.md](value-system.md#symbols) for details.
+**Coercion semantics:** Implicit conversion of a symbol to string or number throws `TypeError`. Use `String(symbol)` or `symbol.toString()` for explicit string conversion. See [value-system.md](value-system.md#symbols) for details.
 
 ### Set (`Goccia.Builtins.GlobalSet.pas`)
 
