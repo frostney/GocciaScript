@@ -26,6 +26,7 @@ type
     function ParseString: TGocciaStringLiteralValue;
     function ParseNumber: TGocciaNumberLiteralValue;
     function ParseLiteral: TGocciaValue;
+    function ParseUnicodeEscape: string;
 
     procedure SkipWhitespace;
     function PeekChar: Char; inline;
@@ -210,9 +211,7 @@ begin
         'n': Str := Str + #10;
         'r': Str := Str + #13;
         't': Str := Str + #9;
-        'u': begin
-          Str := Str + '\u';
-        end;
+        'u': Str := Str + ParseUnicodeEscape;
       else
         RaiseParseError('Invalid escape character: \' + Ch);
       end;
@@ -224,10 +223,39 @@ begin
   RaiseParseError('Unterminated string');
 end;
 
+function TGocciaJSONParser.ParseUnicodeEscape: string;
+var
+  HexStr: string;
+  I: Integer;
+  CodePoint: Cardinal;
+  Ch: Char;
+begin
+  HexStr := '';
+  for I := 1 to 4 do
+  begin
+    if IsAtEnd then
+      RaiseParseError('Incomplete unicode escape sequence');
+    Ch := ReadChar;
+    if not (Ch in ['0'..'9', 'a'..'f', 'A'..'F']) then
+      RaiseParseError('Invalid hex digit in unicode escape: ' + Ch);
+    HexStr := HexStr + Ch;
+  end;
+
+  CodePoint := StrToInt('$' + HexStr);
+
+  if CodePoint <= $7F then
+    Result := Chr(CodePoint)
+  else if CodePoint <= $7FF then
+    Result := Chr($C0 or (CodePoint shr 6)) + Chr($80 or (CodePoint and $3F))
+  else
+    Result := Chr($E0 or (CodePoint shr 12)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F));
+end;
+
 function TGocciaJSONParser.ParseNumber: TGocciaNumberLiteralValue;
 var
   NumStr: string;
   Value: Double;
+  FloatFormat: TFormatSettings;
 begin
   NumStr := '';
 
@@ -269,8 +297,11 @@ begin
       NumStr := NumStr + ReadChar;
   end;
 
+  FloatFormat := DefaultFormatSettings;
+  FloatFormat.DecimalSeparator := '.';
+
   try
-    Value := StrToFloat(NumStr);
+    Value := StrToFloat(NumStr, FloatFormat);
     Result := TGocciaNumberLiteralValue.Create(Value);
   except
     on E: Exception do
@@ -413,7 +444,7 @@ begin
       Value := AObj.GetProperty(Key);
 
       if not (Value is TGocciaUndefinedLiteralValue) and
-         (not (Value is TGocciaFunctionValue) or (Pos('Function', Value.ClassName) = 0)) then
+         not (Value is TGocciaFunctionValue) then
       begin
         if HasProperties then
           SB.Append(',');

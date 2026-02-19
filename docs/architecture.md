@@ -207,6 +207,12 @@ The interpreter supports ES module-style `import`/`export` (named exports only) 
 | `export { x, y as z };` | `TGocciaExportDeclaration` | Post-execution: values read from module scope |
 | `export const x = 5;` | `TGocciaExportVariableDeclaration` | Post-execution: declared names read from module scope |
 | `export { x } from './m.js';` | `TGocciaReExportDeclaration` | Post-execution: source module loaded, values copied |
+
+**Import forms:**
+
+| Syntax | AST Node | Processing |
+|--------|----------|------------|
+| `import { x } from './m.js';` | `TGocciaImportDeclaration` | `LoadModule`: lex, parse, execute, bind exports |
 | `import { x } from './f.json';` | `TGocciaImportDeclaration` | `LoadJsonModule`: parsed JSON, top-level keys as exports |
 
 **Not supported:** `export default`, namespace imports (`import * as`), side-effect imports (`import "module"`), dynamic `import()`.
