@@ -8,7 +8,9 @@ uses
   Classes,
   SysUtils,
 
-  Goccia.JSX.SourceMap;
+  Goccia.JSX.SourceMap,
+  Goccia.Keywords.Contextual,
+  Goccia.Keywords.Reserved;
 
 type
   TGocciaJSXTransformResult = record
@@ -16,6 +18,9 @@ type
     SourceMap: TGocciaSourceMap;
   end;
 
+procedure WarnIfJSXExtensionMismatch(const AFilePath: string);
+
+type
   TGocciaJSXTransformer = class
   private
     type
@@ -82,6 +87,15 @@ type
   end;
 
 implementation
+
+procedure WarnIfJSXExtensionMismatch(const AFilePath: string);
+var
+  Ext: string;
+begin
+  Ext := LowerCase(ExtractFileExt(AFilePath));
+  if (Ext = '.js') or (Ext = '.ts') then
+    WriteLn(Format('Warning: JSX syntax found in %s — consider using a .jsx or .tsx extension', [AFilePath]));
+end;
 
 class function TGocciaJSXTransformer.Transform(const ASource: string;
   const AFactoryName: string;
@@ -306,10 +320,10 @@ begin
     CopyChar;
   Result := Copy(FSource, Start, FPos - Start);
 
-  if (Result = 'return') or (Result = 'throw') or (Result = 'case') or
-     (Result = 'new') or (Result = 'typeof') or (Result = 'void') or
-     (Result = 'delete') or (Result = 'in') or (Result = 'instanceof') or
-     (Result = 'of') or (Result = 'yield') or (Result = 'await') then
+  if (Result = KEYWORD_RETURN) or (Result = KEYWORD_THROW) or (Result = KEYWORD_CASE) or
+     (Result = KEYWORD_NEW) or (Result = KEYWORD_TYPEOF) or (Result = KEYWORD_VOID) or
+     (Result = KEYWORD_DELETE) or (Result = KEYWORD_IN) or (Result = KEYWORD_INSTANCEOF) or
+     (Result = KEYWORD_OF) or (Result = KEYWORD_YIELD) or (Result = KEYWORD_AWAIT) then
     FLastTokenKind := ltkOperator
   else
     FLastTokenKind := ltkExpressionEnd;
@@ -1080,9 +1094,10 @@ begin
           AdvanceInput;
         end;
         Ident := Copy(FSource, IdStart, FPos - IdStart);
-        if (Ident = 'return') or (Ident = 'throw') or (Ident = 'case') or
-           (Ident = 'new') or (Ident = 'typeof') or (Ident = 'void') or
-           (Ident = 'delete') or (Ident = 'in') or (Ident = 'instanceof') then
+        if (Ident = KEYWORD_RETURN) or (Ident = KEYWORD_THROW) or (Ident = KEYWORD_CASE) or
+           (Ident = KEYWORD_NEW) or (Ident = KEYWORD_TYPEOF) or (Ident = KEYWORD_VOID) or
+           (Ident = KEYWORD_DELETE) or (Ident = KEYWORD_IN) or (Ident = KEYWORD_INSTANCEOF) or
+           (Ident = KEYWORD_OF) or (Ident = KEYWORD_YIELD) or (Ident = KEYWORD_AWAIT) then
           FLastTokenKind := ltkOperator
         else
           FLastTokenKind := ltkExpressionEnd;

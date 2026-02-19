@@ -57,4 +57,10 @@ describe("JSX attributes", () => {
     const el = <div data-testid="foo"></div>;
     expect(el.props["data-testid"]).toBe("foo");
   });
+
+  test("undefined variable in attribute expression throws", () => {
+    expect(() => {
+      const el = <div value={nonExistentAttrVar}></div>;
+    }).toThrow();
+  });
 });

@@ -35,6 +35,7 @@ const
   KEYWORD_TRY        = 'try';
   KEYWORD_TYPEOF     = 'typeof';
   KEYWORD_VAR        = 'var';
+  KEYWORD_VOID       = 'void';
   KEYWORD_WHILE      = 'while';
   KEYWORD_WITH       = 'with';
 

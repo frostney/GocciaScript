@@ -14,6 +14,11 @@ const
   KEYWORD_GET          = 'get';
   KEYWORD_SET          = 'set';
 
+  // Async/generators
+  KEYWORD_AWAIT        = 'await';
+  KEYWORD_OF           = 'of';
+  KEYWORD_YIELD        = 'yield';
+
   // Types as Comments (parsed, ignored at runtime)
   KEYWORD_TYPE         = 'type';
   KEYWORD_INTERFACE    = 'interface';

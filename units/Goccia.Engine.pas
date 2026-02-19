@@ -359,7 +359,7 @@ var
   ProgramNode: TGocciaProgram;
   Tokens: TObjectList<TGocciaToken>;
   StartTime, LexEnd, ParseEnd, ExecEnd: Int64;
-  SourceText, Ext: string;
+  SourceText: string;
   JSXResult: TGocciaJSXTransformResult;
   SourceMap: TGocciaSourceMap;
   OrigLine, OrigCol: Integer;
@@ -376,11 +376,7 @@ begin
     SourceText := JSXResult.Source;
     SourceMap := JSXResult.SourceMap;
     if Assigned(SourceMap) then
-    begin
-      Ext := LowerCase(ExtractFileExt(FFileName));
-      if (Ext = '.js') or (Ext = '.ts') then
-        WriteLn(Format('Warning: JSX syntax found in %s — consider using a .jsx or .tsx extension', [FFileName]));
-    end;
+      WarnIfJSXExtensionMismatch(FFileName);
   end;
 
   try
