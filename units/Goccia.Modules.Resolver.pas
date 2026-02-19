@@ -66,6 +66,17 @@ begin
   Result := False;
 end;
 
+function IsAbsolutePath(const APath: string): Boolean;
+begin
+  if Length(APath) = 0 then
+    Exit(False);
+  if APath[1] = '/' then
+    Exit(True);
+  if (Length(APath) >= 2) and (APath[2] = ':') then
+    Exit(True);
+  Result := Copy(APath, 1, 2) = '\\';
+end;
+
 function TGocciaModuleResolver.ApplyAliases(const AModulePath: string): string;
 var
   Pair, BestMatch: TPair<string, string>;
@@ -91,7 +102,7 @@ begin
   if Found then
   begin
     Replacement := BestMatch.Value + Copy(AModulePath, Length(BestMatch.Key) + 1, MaxInt);
-    if (Length(Replacement) > 0) and (Replacement[1] <> '/') then
+    if not IsAbsolutePath(Replacement) then
       Result := FBaseDirectory + Replacement
     else
       Result := Replacement;
@@ -143,7 +154,7 @@ begin
       'Module not found: "%s" (alias resolved to "%s")', [AModulePath, ExpandFileName(AliasApplied)]);
   end;
 
-  if (Length(AModulePath) > 0) and (AModulePath[1] = '/') then
+  if IsAbsolutePath(AModulePath) then
   begin
     if TryResolveWithExtensions(ExpandFileName(AModulePath), Result) then
       Exit;

@@ -9,6 +9,7 @@ uses
   TimingUtils,
 
   Goccia.Engine,
+  Goccia.FileExtensions,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -253,7 +254,7 @@ begin
   begin
     if DirectoryExists(ParamStr(1)) then
     begin
-      Files := FindAllFiles(ParamStr(1));
+      Files := FindAllFiles(ParamStr(1), ScriptExtensions);
       try 
         PrintTestResults(RunScriptsFromFiles(Files));
       finally
