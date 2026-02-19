@@ -104,7 +104,9 @@ describe("globalThis exposes namespace objects", () => {
     expect(typeof globalThis.JSON).toBe("object");
   });
 
-  test("Temporal", () => {
+  const hasTemporal = typeof Temporal !== "undefined";
+
+  test.runIf(hasTemporal)("Temporal", () => {
     expect(typeof globalThis.Temporal).toBe("object");
   });
 });
