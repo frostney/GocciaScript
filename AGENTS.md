@@ -202,7 +202,18 @@ GocciaScript intentionally excludes these JavaScript features — do **not** add
 
 See [docs/language-restrictions.md](docs/language-restrictions.md) for the full list and rationale.
 
-### 6. `this` Binding Semantics
+### 6. Types as Comments
+
+GocciaScript supports the TC39 Types as Comments proposal. Type annotations are **parsed but ignored at runtime**. Raw type strings are preserved on AST nodes for potential future optimization. Key parser helpers:
+
+- **`CollectTypeAnnotation(Terminators)`** — Consumes type tokens with balanced bracket tracking, returning the raw text. Stops at any terminator token at depth 0.
+- **`CollectGenericParameters`** — Consumes `<...>` generic parameter lists, returning the raw text.
+
+AST nodes with type fields: `TGocciaParameter` (`TypeAnnotation`, `IsOptional`), `TGocciaVariableInfo` (`TypeAnnotation`), `TGocciaDestructuringDeclaration` (`TypeAnnotation`), `TGocciaArrowFunctionExpression` (`ReturnType`), `TGocciaClassMethod` (`ReturnType`, `GenericParams`), `TGocciaClassDefinition` (`GenericParams`, `ImplementsClause`, `InstancePropertyTypes`), `TGocciaTryStatement` (`CatchParamType`).
+
+`type`/`interface` declarations and `import type`/`export type` produce `TGocciaEmptyStatement` (no-op at runtime). Access modifiers (`public`, `protected`, `private`, `readonly`, `override`, `abstract`) in class bodies are consumed and discarded.
+
+### 7. `this` Binding Semantics
 
 GocciaScript follows ECMAScript strict mode `this` binding. Two function forms exist with separate AST nodes and runtime types:
 

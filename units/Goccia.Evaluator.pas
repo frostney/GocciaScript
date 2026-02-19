@@ -590,7 +590,10 @@ begin
   end
   else if AStatement is TGocciaReExportDeclaration then
   begin
-    // Re-exports are processed by the interpreter, not the evaluator
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end
+  else if AStatement is TGocciaEmptyStatement then
+  begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 
