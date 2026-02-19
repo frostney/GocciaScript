@@ -48,6 +48,7 @@ type
     Scope: TGocciaScope;
     OnError: TGocciaThrowErrorCallback;
     LoadModule: TLoadModuleCallback;
+    CurrentFilePath: string;
   end;
 
 function Evaluate(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -568,7 +569,7 @@ begin
   else if AStatement is TGocciaImportDeclaration then
   begin
     ImportDecl := TGocciaImportDeclaration(AStatement);
-    Module := AContext.LoadModule(ImportDecl.ModulePath);
+    Module := AContext.LoadModule(ImportDecl.ModulePath, AContext.CurrentFilePath);
 
     for ImportPair in ImportDecl.Imports do
     begin
@@ -582,6 +583,15 @@ begin
           [ImportDecl.ModulePath, ImportPair.Value]), AStatement.Line, AStatement.Column);
       end;
     end;
+  end
+  else if AStatement is TGocciaExportVariableDeclaration then
+  begin
+    Result := EvaluateStatement(TGocciaExportVariableDeclaration(AStatement).Declaration, AContext);
+  end
+  else if AStatement is TGocciaReExportDeclaration then
+  begin
+    // Re-exports are processed by the interpreter, not the evaluator
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 
 end;

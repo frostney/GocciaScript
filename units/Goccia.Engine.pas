@@ -83,7 +83,7 @@ type
     FBuiltinGlobalArray: TGocciaGlobalArray;
     FBuiltinGlobalNumber: TGocciaGlobalNumber;
     FBuiltinGlobals: TGocciaGlobals;
-    FBuiltinJSON: TGocciaJSON;
+    FBuiltinJSON: TGocciaJSONBuiltin;
     FBuiltinSymbol: TGocciaGlobalSymbol;
     FBuiltinSet: TGocciaGlobalSet;
     FBuiltinMap: TGocciaGlobalMap;
@@ -117,7 +117,7 @@ type
     property BuiltinGlobalArray: TGocciaGlobalArray read FBuiltinGlobalArray;
     property BuiltinGlobalNumber: TGocciaGlobalNumber read FBuiltinGlobalNumber;
     property BuiltinGlobals: TGocciaGlobals read FBuiltinGlobals;
-    property BuiltinJSON: TGocciaJSON read FBuiltinJSON;
+    property BuiltinJSON: TGocciaJSONBuiltin read FBuiltinJSON;
     property BuiltinSymbol: TGocciaGlobalSymbol read FBuiltinSymbol;
     property BuiltinSet: TGocciaGlobalSet read FBuiltinSet;
     property BuiltinMap: TGocciaGlobalMap read FBuiltinMap;
@@ -233,7 +233,7 @@ begin
   if ggGlobalNumber in FGlobals then
     FBuiltinGlobalNumber := TGocciaGlobalNumber.Create('Number', Scope, ThrowError);
   if ggJSON in FGlobals then
-    FBuiltinJSON := TGocciaJSON.Create('JSON', Scope, ThrowError);
+    FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, ThrowError);
   if ggSymbol in FGlobals then
     FBuiltinSymbol := TGocciaGlobalSymbol.Create('Symbol', Scope, ThrowError);
   if ggSet in FGlobals then

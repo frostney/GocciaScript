@@ -1465,13 +1465,26 @@ end;
 function TGocciaParser.ExportDeclaration: TGocciaStatement;
 var
   ExportsTable: TDictionary<string, string>;
-  LocalName, ExportedName: string;
+  LocalName, ExportedName, ModulePath: string;
   Line, Column: Integer;
+  InnerDecl: TGocciaStatement;
+  VarDecl: TGocciaVariableDeclaration;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Consume(gttLeftBrace, 'Expected "{" after "export"');
+  if Match([gttConst, gttLet]) then
+  begin
+    InnerDecl := DeclarationStatement;
+    if not (InnerDecl is TGocciaVariableDeclaration) then
+      raise TGocciaSyntaxError.Create('Destructuring exports are not supported; use export { name } instead',
+        Line, Column, FFileName, FSourceLines);
+    VarDecl := TGocciaVariableDeclaration(InnerDecl);
+    Result := TGocciaExportVariableDeclaration.Create(VarDecl, Line, Column);
+    Exit;
+  end;
+
+  Consume(gttLeftBrace, 'Expected "{", "const", or "let" after "export"');
 
   ExportsTable := TDictionary<string, string>.Create;
 
@@ -1491,9 +1504,18 @@ begin
   end;
 
   Consume(gttRightBrace, 'Expected "}" after exports');
-  Consume(gttSemicolon, 'Expected ";" after export declaration');
 
-  Result := TGocciaExportDeclaration.Create(ExportsTable, Line, Column);
+  if Match([gttFrom]) then
+  begin
+    ModulePath := Consume(gttString, 'Expected module path after "from"').Lexeme;
+    Consume(gttSemicolon, 'Expected ";" after re-export declaration');
+    Result := TGocciaReExportDeclaration.Create(ExportsTable, ModulePath, Line, Column);
+  end
+  else
+  begin
+    Consume(gttSemicolon, 'Expected ";" after export declaration');
+    Result := TGocciaExportDeclaration.Create(ExportsTable, Line, Column);
+  end;
 end;
 
 function TGocciaParser.ParseClassBody(const AClassName: string): TGocciaClassDefinition;

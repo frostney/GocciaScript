@@ -1,0 +1,11 @@
+{
+  "name": "goccia-test",
+  "version": "1.0.0",
+  "debug": true,
+  "maxRetries": 3,
+  "tags": ["alpha", "beta"],
+  "database": {
+    "host": "localhost",
+    "port": 5432
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "count": 42,
+  "pi": 3.14159,
+  "empty": null,
+  "active": false,
+  "greeting": "hello world"
+}

@@ -77,7 +77,34 @@ class Counter {
 - `throw`
 - `return`
 - Block statements
-- `import`/`export` (module system)
+- `import`/`export` (ES module system — named exports only, no default exports)
+
+### Modules
+
+ES module syntax with named exports. Module paths are resolved relative to the importing file.
+
+```javascript
+// Named imports
+import { add, multiply } from "./math.js";
+import { greet as sayHello } from "./utils.js";
+
+// Named exports
+export { myFunction, myValue };
+
+// Inline exports
+export const PI = 3.14159;
+export let count = 0;
+
+// Re-exports
+export { add, multiply } from "./math.js";
+export { greet as sayHello } from "./utils.js";
+
+// JSON imports — top-level keys become named exports
+import { name, version } from "./package.json";
+import { host as dbHost } from "./config.json";
+```
+
+**Not supported:** `export default`, `import x from` (default import), `import * as` (namespace import), `import "module"` (side-effect import), `export * from` (wildcard re-export), dynamic `import()`.
 
 ### Data Structures
 
