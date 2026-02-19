@@ -9,8 +9,7 @@ uses
   Generics.Collections,
 
   Goccia.AST.Expressions,
-  Goccia.AST.Node,
-  Goccia.Values.Primitives;
+  Goccia.AST.Node;
 
 type
   TGocciaVariableInfo = record
@@ -299,6 +298,9 @@ type
   end;
 
 implementation
+
+uses
+  Goccia.Values.Primitives;
 
 { TGocciaExpressionStatement }
 

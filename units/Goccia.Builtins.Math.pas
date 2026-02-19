@@ -5,17 +5,10 @@ unit Goccia.Builtins.Math;
 interface
 
 uses
-  Generics.Collections,
-  Math,
-
   Goccia.Arguments.Collection,
-  Goccia.Arguments.Converter,
-  Goccia.Arguments.Validator,
   Goccia.Builtins.Base,
-  Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -49,7 +42,12 @@ type
 implementation
 
 uses
-  Goccia.Values.ClassHelper;
+  Math,
+
+  Goccia.Arguments.Converter,
+  Goccia.Arguments.Validator,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.NativeFunction;
 
 { TGocciaMath }
 

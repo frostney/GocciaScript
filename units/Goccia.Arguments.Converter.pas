@@ -5,14 +5,8 @@ unit Goccia.Arguments.Converter;
 interface
 
 uses
-  SysUtils,
-
   Goccia.Arguments.Collection,
   Goccia.Error.ThrowErrorCallback,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.FunctionValue,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
@@ -42,6 +36,14 @@ type
   end;
 
 implementation
+
+uses
+  SysUtils,
+
+  Goccia.Values.ArrayValue,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue;
 
 { TGocciaArgumentConverter }
 

@@ -4,13 +4,11 @@ program BenchmarkRunner;
 
 uses
   Classes,
-  Generics.Collections,
   SysUtils,
 
   Goccia.Benchmark.Reporter,
   Goccia.Builtins.Benchmark,
   Goccia.Engine,
-  Goccia.Error,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,

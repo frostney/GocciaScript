@@ -5,15 +5,10 @@ unit Goccia.Builtins.Console;
 interface
 
 uses
-  Generics.Collections,
-
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
-  Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -29,7 +24,8 @@ type
 implementation
 
 uses
-  Goccia.Values.ClassHelper;
+  Goccia.Values.ClassHelper,
+  Goccia.Values.NativeFunction;
 
 constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin

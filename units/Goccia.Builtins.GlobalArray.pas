@@ -5,18 +5,10 @@ unit Goccia.Builtins.GlobalArray;
 interface
 
 uses
-  Generics.Collections,
-
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
-  Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.ClassHelper,
-  Goccia.Values.FunctionValue,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -31,6 +23,12 @@ type
   end;
 
 implementation
+
+uses
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.NativeFunction;
 
 constructor TGocciaGlobalArray.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin

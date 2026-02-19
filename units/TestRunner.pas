@@ -5,12 +5,8 @@ unit TestRunner;
 interface
 
 uses
-  Classes,
-  DateUtils,
   Generics.Collections,
-  Generics.Defaults,
-  SysUtils,
-  TypInfo;
+  SysUtils;
 
 type
   // Forward declarations
@@ -120,6 +116,11 @@ var
 function TestResultToExitCode: Integer;
 
 implementation
+
+uses
+  DateUtils,
+  Generics.Defaults,
+  TypInfo;
 
 var
   CurrentDescribeSuite: TTestSuite;

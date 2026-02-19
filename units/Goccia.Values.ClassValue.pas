@@ -7,15 +7,11 @@ interface
 uses
   Classes,
   Generics.Collections,
-  Math,
-  SysUtils,
 
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
-  Goccia.Error,
   Goccia.Interfaces,
   Goccia.Values.FunctionValue,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -125,9 +121,13 @@ type
 implementation
 
 uses
+  SysUtils,
+
+  Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.Values.ClassHelper,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor;
 
 constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGocciaClassValue);
 begin

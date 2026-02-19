@@ -5,8 +5,6 @@ unit Goccia.Builtins.JSON;
 interface
 
 uses
-  SysUtils,
-
   Goccia.Arguments.Collection,
   Goccia.Arguments.Validator,
   Goccia.Builtins.Base,
@@ -30,6 +28,9 @@ type
   end;
 
 implementation
+
+uses
+  SysUtils;
 
 constructor TGocciaJSONBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin

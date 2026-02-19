@@ -5,8 +5,6 @@ interface
 {$I Goccia.inc}
 
 uses
-  Generics.Collections,
-
   Goccia.Arguments.Collection,
   Goccia.Values.Primitives;
 

@@ -5,10 +5,7 @@ unit Goccia.AST.Node;
 interface
 
 uses
-  Classes,
-  Generics.Collections,
-  StrUtils,
-  SysUtils;
+  Generics.Collections;
 
 type
   TGocciaASTNode = class

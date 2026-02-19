@@ -6,8 +6,6 @@ interface
 
 uses
   Generics.Collections,
-  Math,
-  SysUtils,
 
   Goccia.Values.Primitives;
 
@@ -35,6 +33,9 @@ type
   end;
 
 implementation
+
+uses
+  Math;
 
 { TGocciaArgumentsCollection }
 

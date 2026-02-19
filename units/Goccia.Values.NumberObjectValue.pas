@@ -5,11 +5,7 @@ unit Goccia.Values.NumberObjectValue;
 interface
 
 uses
-  Math,
-  SysUtils,
-
   Goccia.Arguments.Collection,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -39,7 +35,10 @@ type
 implementation
 
 uses
-  Goccia.GarbageCollector;
+  SysUtils,
+
+  Goccia.GarbageCollector,
+  Goccia.Values.NativeFunction;
 
 function TGocciaNumberObjectValue.ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
 begin

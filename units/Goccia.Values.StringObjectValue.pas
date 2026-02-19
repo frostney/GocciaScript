@@ -5,14 +5,7 @@ unit Goccia.Values.StringObjectValue;
 interface
 
 uses
-  Generics.Collections,
-  Math,
-  StrUtils,
-  SysUtils,
-
   Goccia.Arguments.Collection,
-  Goccia.Values.FunctionValue,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -65,10 +58,14 @@ type
 implementation
 
 uses
+  Math,
+  StrUtils,
+  SysUtils,
+
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 

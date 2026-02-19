@@ -4,9 +4,6 @@ unit Goccia.Values.Primitives;
 
 interface
 
-uses
-  SysUtils;
-
 type
   TGocciaBooleanLiteralValue = class;
   TGocciaNumberLiteralValue = class;
@@ -163,6 +160,7 @@ implementation
 
 uses
   Math,
+  SysUtils,
 
   Goccia.GarbageCollector,
   Goccia.Values.ClassHelper,

@@ -5,17 +5,10 @@ unit Goccia.Builtins.GlobalNumber;
 interface
 
 uses
-  Generics.Collections,
-  Math,
-  SysUtils,
-
   Goccia.Arguments.Collection,
-  Goccia.Arguments.Validator,
   Goccia.Builtins.Base,
-  Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
-  Goccia.Values.Error,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -35,6 +28,9 @@ type
 implementation
 
 uses
+  SysUtils,
+
+  Goccia.Arguments.Validator,
   Goccia.Values.ClassHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;

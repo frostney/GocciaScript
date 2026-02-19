@@ -4,11 +4,6 @@ unit Goccia.Token;
 
 interface
 
-uses
-  Classes,
-  StrUtils,
-  SysUtils;
-
 type
   TGocciaTokenType = (
     // Literals

@@ -6,12 +6,10 @@ interface
 
 uses
   Generics.Collections,
-  SysUtils,
 
   Goccia.Arguments.Collection,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayValue,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -62,7 +60,7 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Values.FunctionBase,
-  Goccia.Values.FunctionValue;
+  Goccia.Values.NativeFunction;
 
 constructor TGocciaMapValue.Create;
 begin

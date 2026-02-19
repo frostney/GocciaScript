@@ -8,23 +8,13 @@ unit Goccia.Values.FunctionValue;
 interface
 
 uses
-  Classes,
   Generics.Collections,
-  Math,
-  SysUtils,
 
   Goccia.Arguments.Collection,
   Goccia.AST.Expressions,
   Goccia.AST.Node,
-  Goccia.AST.Statements,
-  Goccia.Error,
-  Goccia.Interfaces,
-  Goccia.Logger,
   Goccia.Scope,
-  Goccia.Token,
-  Goccia.Values.Error,
   Goccia.Values.FunctionBase,
-  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
@@ -80,10 +70,16 @@ type
 implementation
 
 uses
+  SysUtils,
+
+  Goccia.Error,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
+  Goccia.Interfaces,
+  Goccia.Logger,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ClassHelper;
+  Goccia.Values.ClassHelper,
+  Goccia.Values.Error;
 
 { TGocciaFunctionValue }
 

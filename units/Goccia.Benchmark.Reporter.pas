@@ -5,11 +5,7 @@ unit Goccia.Benchmark.Reporter;
 interface
 
 uses
-  Classes,
-  Generics.Collections,
-  SysUtils,
-
-  TimingUtils;
+  Classes;
 
 type
   TBenchmarkEntry = record
@@ -63,6 +59,11 @@ type
 function ParseReportFormat(const S: string): TBenchmarkReportFormat;
 
 implementation
+
+uses
+  SysUtils,
+
+  TimingUtils;
 
 function ParseReportFormat(const S: string): TBenchmarkReportFormat;
 var

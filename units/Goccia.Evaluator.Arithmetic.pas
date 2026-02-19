@@ -5,9 +5,6 @@ unit Goccia.Evaluator.Arithmetic;
 interface
 
 uses
-  Math,
-  SysUtils,
-
   Goccia.Token,
   Goccia.Values.Primitives;
 
@@ -22,6 +19,8 @@ function PerformCompoundOperation(const ACurrentValue, ANewValue: TGocciaValue; 
 implementation
 
 uses
+  Math,
+
   Goccia.Evaluator.Bitwise,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,

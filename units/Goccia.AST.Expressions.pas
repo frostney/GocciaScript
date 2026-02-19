@@ -7,10 +7,8 @@ interface
 uses
   Classes,
   Generics.Collections,
-  SysUtils,
 
   Goccia.AST.Node,
-  Goccia.GarbageCollector,
   Goccia.Token,
   Goccia.Values.Primitives;
 
@@ -474,6 +472,9 @@ type
   end;
 
 implementation
+
+uses
+  Goccia.GarbageCollector;
 
 { TGocciaLiteralExpression }
 

@@ -4,10 +4,6 @@ unit Goccia.Temporal.Utils;
 
 interface
 
-uses
-  Math,
-  SysUtils;
-
 type
   TTemporalDateRecord = record
     Year: Integer;
@@ -71,6 +67,9 @@ function CompareTimes(const AHour1, AMinute1, ASecond1, AMs1, AUs1, ANs1,
   AHour2, AMinute2, ASecond2, AMs2, AUs2, ANs2: Integer): Integer;
 
 implementation
+
+uses
+  SysUtils;
 
 function IsLeapYear(const AYear: Integer): Boolean;
 begin

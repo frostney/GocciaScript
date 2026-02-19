@@ -4,13 +4,11 @@ program ScriptLoader;
 
 uses
   Classes,
-  Generics.Collections,
   SysUtils,
 
   TimingUtils,
 
   Goccia.Engine,
-  Goccia.Error,
   Goccia.Values.Primitives,
 
   FileUtils in 'units/FileUtils.pas';
