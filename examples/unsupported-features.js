@@ -2,6 +2,14 @@
 // Each construct below parses successfully and is treated as a no-op,
 // with a warning emitted to stdout.
 
+// --- var declarations (use let/const instead) ---
+
+var x = 42;
+
+// The idiomatic GocciaScript alternative:
+let mutable = 42;
+const immutable = 42;
+
 // --- Traditional loops (use array methods instead) ---
 
 for (let i = 0; i < 5; i++) {
