@@ -134,7 +134,7 @@ type
       const AFileName: string; const ASourceLines: TStringList);
     function Parse: TGocciaProgram;
     function Expression: TGocciaExpression;
-    function GetWarnings: TArray<TGocciaParserWarning>;
+    function GetWarning(const AIndex: Integer): TGocciaParserWarning; inline;
     property WarningCount: Integer read FWarningCount;
   end;
 
@@ -160,11 +160,9 @@ begin
   FWarnings[FWarningCount - 1].Column := AColumn;
 end;
 
-function TGocciaParser.GetWarnings: TArray<TGocciaParserWarning>;
+function TGocciaParser.GetWarning(const AIndex: Integer): TGocciaParserWarning;
 begin
-  SetLength(Result, FWarningCount);
-  if FWarningCount > 0 then
-    Move(FWarnings[0], Result[0], FWarningCount * SizeOf(TGocciaParserWarning));
+  Result := FWarnings[AIndex];
 end;
 
 function TGocciaParser.IsAtEnd: Boolean;
