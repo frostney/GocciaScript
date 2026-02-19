@@ -5,17 +5,10 @@ unit Goccia.Builtins.Globals;
 interface
 
 uses
-  Generics.Collections,
-  Math,
-  SysUtils,
-
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
-  Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
-  Goccia.Values.FunctionValue,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -42,7 +35,8 @@ uses
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ClassHelper,
-  Goccia.Values.ErrorHelper;
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction;
 
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var

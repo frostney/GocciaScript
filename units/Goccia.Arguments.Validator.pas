@@ -5,8 +5,6 @@ unit Goccia.Arguments.Validator;
 interface
 
 uses
-  SysUtils,
-
   Goccia.Arguments.Collection,
   Goccia.Error.ThrowErrorCallback;
 
@@ -22,6 +20,9 @@ type
   end;
 
 implementation
+
+uses
+  SysUtils;
 
 { TGocciaArgumentValidator }
 

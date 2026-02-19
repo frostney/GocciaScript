@@ -5,11 +5,6 @@ unit Goccia.Builtins.Base;
 interface
 
 uses
-  Generics.Collections,
-  SysUtils,
-
-  Goccia.Arguments.Collection,
-  Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
   Goccia.Values.ObjectValue,

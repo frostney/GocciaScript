@@ -5,17 +5,11 @@ unit Goccia.Builtins.GlobalString;
 interface
 
 uses
-  Generics.Collections,
-  SysUtils,
-
   Goccia.Arguments.Collection,
-  Goccia.Arguments.Validator,
   Goccia.Builtins.Base,
-  Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
   Goccia.Values.ClassValue,
-  Goccia.Values.Error,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 

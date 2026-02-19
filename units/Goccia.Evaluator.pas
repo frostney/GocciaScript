@@ -5,41 +5,17 @@ unit Goccia.Evaluator;
 interface
 
 uses
-  Classes,
   Generics.Collections,
-  Math,
-  SysUtils,
 
-  Goccia.Arguments.Collection,
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
-  Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
-  Goccia.Evaluator.Arithmetic,
-  Goccia.Evaluator.Assignment,
-  Goccia.Evaluator.Bitwise,
-  Goccia.Evaluator.Comparison,
-  Goccia.Evaluator.TypeOperations,
-  Goccia.Interfaces,
-  Goccia.Lexer,
   Goccia.Modules,
-  Goccia.Parser,
   Goccia.Scope,
-  Goccia.Token,
-  Goccia.Utils,
-  Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
-  Goccia.Values.Error,
-  Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionBase,
-  Goccia.Values.FunctionValue,
-  Goccia.Values.MapValue,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
-  Goccia.Values.SetValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.Primitives;
 
 type
   PGocciaValue = ^TGocciaValue;
@@ -103,10 +79,33 @@ procedure SafeOnError(const AContext: TGocciaEvaluationContext; const AMessage: 
 implementation
 
 uses
+  Classes,
+  SysUtils,
+
+  Goccia.Arguments.Collection,
+  Goccia.Error,
+  Goccia.Evaluator.Arithmetic,
+  Goccia.Evaluator.Assignment,
+  Goccia.Evaluator.Bitwise,
+  Goccia.Evaluator.Comparison,
+  Goccia.Evaluator.TypeOperations,
+  Goccia.Interfaces,
   Goccia.Keywords.Reserved,
+  Goccia.Lexer,
+  Goccia.Parser,
+  Goccia.Token,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.Constants,
-  Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.Error,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.MapValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SetValue,
+  Goccia.Values.SymbolValue;
 
 // Helper function to safely call OnError with proper error handling
 procedure SafeOnError(const AContext: TGocciaEvaluationContext; const AMessage: string; const ALine, AColumn: Integer);

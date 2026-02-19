@@ -5,17 +5,12 @@ unit Goccia.Builtins.GlobalObject;
 interface
 
 uses
-  Generics.Collections,
-
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
-  Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.Primitives;
 
 type
   TGocciaGlobalObject = class(TGocciaBuiltin)
@@ -44,13 +39,17 @@ type
 implementation
 
 uses
+  Generics.Collections,
+
   Goccia.Arguments.Validator,
   Goccia.Evaluator.Comparison,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.FunctionValue,
-  Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin

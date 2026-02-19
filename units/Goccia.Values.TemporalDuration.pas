@@ -5,11 +5,8 @@ unit Goccia.Values.TemporalDuration;
 interface
 
 uses
-  SysUtils,
-
   Goccia.Arguments.Collection,
   Goccia.SharedPrototype,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -79,9 +76,11 @@ type
 implementation
 
 uses
-  Goccia.GarbageCollector,
+  SysUtils,
+
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;
 
 function AsDuration(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalDurationValue;

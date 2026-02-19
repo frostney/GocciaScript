@@ -5,15 +5,9 @@ unit Goccia.Values.NativeFunction;
 interface
 
 uses
-  Generics.Collections,
-  Math,
-  SysUtils,
-
   Goccia.Arguments.Collection,
-  Goccia.Logger,
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunctionCallback,
-  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type

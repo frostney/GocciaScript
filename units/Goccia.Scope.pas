@@ -6,16 +6,9 @@ interface
 
 uses
   Generics.Collections,
-  SysUtils,
-  TypInfo,
 
-  Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
-  Goccia.Interfaces,
-  Goccia.Keywords.Reserved,
   Goccia.Token,
-  Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
@@ -149,8 +142,13 @@ type
 implementation
 
 uses
+  SysUtils,
+
+  Goccia.Error,
   Goccia.GarbageCollector,
-  Goccia.Values.ClassHelper;
+  Goccia.Keywords.Reserved,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.ObjectValue;
 
 { TLexicalBinding }
 

@@ -7,20 +7,14 @@ interface
 uses
   Classes,
   Generics.Collections,
-  Math,
-  SysUtils,
 
   TimingUtils,
 
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
-  Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
-  Goccia.Values.ArrayValue,
   Goccia.Values.FunctionValue,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
@@ -69,9 +63,15 @@ type
 implementation
 
 uses
+  Math,
+  SysUtils,
+
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
-  Goccia.Values.ClassHelper;
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue;
 
 const
   DEFAULT_WARMUP_ITERATIONS = 3;

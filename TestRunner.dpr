@@ -4,16 +4,12 @@ program TestRunner;
 
 uses
   Classes,
-  Generics.Collections,
   SysUtils,
 
   TimingUtils,
 
   Goccia.Engine,
-  Goccia.Error,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ClassHelper,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
 
