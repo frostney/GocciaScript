@@ -105,7 +105,13 @@ import { name, version } from "./package.json";
 import { host as dbHost } from "./config.json";
 ```
 
-**Not supported:** `export default`, `import x from` (default import), `import * as` (namespace import), `import "module"` (side-effect import), `export * from` (wildcard re-export), dynamic `import()`.
+**Not supported:** `export default`, `import x from` (default import), `import * as` (namespace import), `import "module"` (side-effect import), `export * from` (wildcard re-export), dynamic `import()`. The parser accepts these syntactically but treats them as no-ops, emitting a warning with a suggestion:
+
+```
+Warning: Default imports are not supported in GocciaScript
+  Suggestion: Use named imports instead: import { name } from 'module'
+  --> script.js:1:1
+```
 
 ### Data Structures
 
@@ -199,7 +205,13 @@ GocciaScript requires explicit semicolons, preventing this class of bugs.
 
 ### Traditional Loops (`for`, `while`, `do...while`)
 
-**Excluded.** Use array methods instead.
+**Excluded.** Use array methods instead. The parser accepts loop syntax but treats it as a no-op (the loop body is not executed), and emits a warning:
+
+```
+Warning: 'for' loops are not supported in GocciaScript
+  Suggestion: Use array methods like .forEach(), .map(), .filter(), or .reduce() instead
+  --> script.js:1:1
+```
 
 Traditional loops encourage imperative, mutation-heavy code. GocciaScript favors functional iteration through array methods:
 
@@ -215,9 +227,14 @@ items.reduce((acc, item) => acc + item, 0);
 
 ### `with` Statement
 
-**Excluded.** No alternative needed.
+**Excluded.** No alternative needed. The parser accepts `with` syntax but treats it as a no-op (the body is not executed), and emits a warning:
 
-`with` creates ambiguous scope and is deprecated even in JavaScript's strict mode.
+```
+Warning: The 'with' statement is not supported in GocciaScript
+  --> script.js:1:1
+```
+
+`with` creates ambiguous scope and is deprecated even in JavaScript's strict mode. Note that `with` is a reserved keyword in GocciaScript (it cannot be used as a variable name), but it can be used as a property name (e.g., `obj.with`).
 
 ### Generators and Iterators
 

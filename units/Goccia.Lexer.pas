@@ -506,6 +506,7 @@ begin
   FKeywords.Add(KEYWORD_FALSE, gttFalse);
   FKeywords.Add(KEYWORD_NULL, gttNull);
   FKeywords.Add(KEYWORD_UNDEFINED, gttUndefined);
+  FKeywords.Add(KEYWORD_WITH, gttWith);
 end;
 
 class destructor TGocciaLexer.DestroyClass;

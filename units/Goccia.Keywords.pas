@@ -39,6 +39,7 @@ const
   KEYWORD_FALSE      = 'false';
   KEYWORD_NULL       = 'null';
   KEYWORD_UNDEFINED  = 'undefined';
+  KEYWORD_WITH       = 'with';
 
 implementation
 

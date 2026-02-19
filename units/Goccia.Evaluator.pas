@@ -514,21 +514,6 @@ begin
   begin
     Result := EvaluateIf(TGocciaIfStatement(AStatement), AContext);
   end
-  else if AStatement is TGocciaForStatement then
-  begin
-    // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end
-  else if AStatement is TGocciaWhileStatement then
-  begin
-    // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end
-  else if AStatement is TGocciaDoWhileStatement then
-  begin
-    // For now, just return undefined since we only want parsing support
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end
   else if AStatement is TGocciaSwitchStatement then
   begin
     Result := EvaluateSwitch(TGocciaSwitchStatement(AStatement), AContext);

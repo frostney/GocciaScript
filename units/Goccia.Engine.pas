@@ -95,6 +95,7 @@ type
     procedure PinSingletons;
     procedure RegisterBuiltIns;
     procedure RegisterBuiltinConstructors;
+    procedure PrintParserWarnings(const AParser: TGocciaParser);
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
@@ -319,6 +320,7 @@ begin
     Parser := TGocciaParser.Create(Tokens, FFileName, Lexer.SourceLines);
     try
       ProgramNode := Parser.Parse;
+      PrintParserWarnings(Parser);
       ParseEnd := GetNanoseconds;
       Result.ParseTimeNanoseconds := ParseEnd - LexEnd;
 
@@ -405,6 +407,23 @@ end;
 class function TGocciaEngine.RunScriptFromStringList(const ASource: TStringList; const AFileName: string): TGocciaScriptResult;
 begin
   Result := RunScriptFromStringList(ASource, AFileName, TGocciaEngine.DefaultGlobals);
+end;
+
+procedure TGocciaEngine.PrintParserWarnings(const AParser: TGocciaParser);
+var
+  Warnings: TArray<TGocciaParserWarning>;
+  Warning: TGocciaParserWarning;
+begin
+  if AParser.WarningCount = 0 then Exit;
+
+  Warnings := AParser.GetWarnings;
+  for Warning in Warnings do
+  begin
+    WriteLn(Format('Warning: %s', [Warning.Message]));
+    if Warning.Suggestion <> '' then
+      WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
+    WriteLn(Format('  --> %s:%d:%d', [FFileName, Warning.Line, Warning.Column]));
+  end;
 end;
 
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);
