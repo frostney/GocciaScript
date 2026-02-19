@@ -103,7 +103,7 @@ procedure SafeOnError(const AContext: TGocciaEvaluationContext; const AMessage: 
 implementation
 
 uses
-  Goccia.Keywords,
+  Goccia.Keywords.Reserved,
   Goccia.Values.ClassHelper,
   Goccia.Values.Constants,
   Goccia.Values.ObjectPropertyDescriptor;
@@ -2021,11 +2021,6 @@ begin
       else if Trimmed = KEYWORD_NULL then
       begin
         Result := TGocciaNullLiteralValue.Create;
-        Exit;
-      end
-      else if Trimmed = KEYWORD_UNDEFINED then
-      begin
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         Exit;
       end
       else if Trimmed = NAN_LITERAL then

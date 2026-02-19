@@ -99,6 +99,7 @@ type
     function GetIsNegativeZero: Boolean; inline;
     function GetIsInfinity: Boolean; inline;
     function GetIsNegativeInfinity: Boolean; inline;
+    function GetIsInfinite: Boolean; inline;
 
     class var FZeroValue: TGocciaNumberLiteralValue;
     class var FOneValue: TGocciaNumberLiteralValue;
@@ -135,6 +136,7 @@ type
     property IsNaN: Boolean read GetIsNaN;
     property IsInfinity: Boolean read GetIsInfinity;
     property IsNegativeInfinity: Boolean read GetIsNegativeInfinity;
+    property IsInfinite: Boolean read GetIsInfinite;
   end;
 
   TGocciaStringLiteralValue = class(TGocciaValue)
@@ -369,11 +371,10 @@ end;
 
 constructor TGocciaNumberLiteralValue.Create(const AValue: Double; const ASpecialValue: TGocciaNumberSpecialValue = nsvNone);
 begin
-  // Check if the input is NaN without storing it
   if Math.IsNaN(AValue) then
   begin
     FSpecialValue := nsvNaN;
-    FValue := ZERO_VALUE; // Store a safe value instead of NaN
+    FValue := ZERO_VALUE;
   end
   else if Math.IsInfinite(AValue) then
   begin
@@ -381,12 +382,12 @@ begin
       FSpecialValue := nsvInfinity
     else
       FSpecialValue := nsvNegativeInfinity;
-    FValue := ZERO_VALUE; // Store a safe value instead of infinity
+    FValue := ZERO_VALUE;
   end
   else if (AValue = ZERO_VALUE) and (ASpecialValue = nsvNegativeZero) then
   begin
     FSpecialValue := nsvNegativeZero;
-    FValue := ZERO_VALUE; // Store a safe value for negative zero
+    FValue := ZERO_VALUE;
   end
   else
   begin
@@ -413,6 +414,11 @@ end;
 function TGocciaNumberLiteralValue.GetIsNegativeInfinity: Boolean;
 begin
   Result := FSpecialValue = nsvNegativeInfinity;
+end;
+
+function TGocciaNumberLiteralValue.GetIsInfinite: Boolean;
+begin
+  Result := (FSpecialValue = nsvInfinity) or (FSpecialValue = nsvNegativeInfinity);
 end;
 
 class function TGocciaNumberLiteralValue.NaNValue: TGocciaNumberLiteralValue;
@@ -513,8 +519,11 @@ end;
 
 function TGocciaNumberLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
 begin
-  // JavaScript spec: NaN and 0 (including -0) convert to false
-  if (FSpecialValue = nsvNaN) or (FValue = ZERO_VALUE) then
+  if FSpecialValue = nsvNaN then
+    Result := TGocciaBooleanLiteralValue.FalseValue
+  else if (FSpecialValue = nsvInfinity) or (FSpecialValue = nsvNegativeInfinity) then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else if FValue = ZERO_VALUE then
     Result := TGocciaBooleanLiteralValue.FalseValue
   else
     Result := TGocciaBooleanLiteralValue.TrueValue;

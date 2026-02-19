@@ -55,21 +55,31 @@ Beyond property access, the base class provides two additional virtual methods f
 
 ## Centralized Keyword Constants
 
-JavaScript keyword literals (`this`, `super`, `undefined`, `null`, `true`, `false`, etc.) are defined as named constants in `Goccia.Keywords.pas`:
+JavaScript keyword literals are defined as named constants in two units — `Goccia.Keywords.Reserved.pas` for reserved keywords and `Goccia.Keywords.Contextual.pas` for contextual keywords:
 
 ```pascal
+// Goccia.Keywords.Reserved.pas
 const
   KEYWORD_THIS      = 'this';
   KEYWORD_SUPER     = 'super';
-  KEYWORD_UNDEFINED = 'undefined';
-  // ... 32 keywords total
+  KEYWORD_NULL      = 'null';
+  // ... 33 reserved keywords total
+
+// Goccia.Keywords.Contextual.pas
+const
+  KEYWORD_GET       = 'get';
+  KEYWORD_SET       = 'set';
+  KEYWORD_TYPE      = 'type';
+  KEYWORD_INTERFACE = 'interface';
+  // ... 12 contextual keywords total
 ```
 
-**Why a dedicated unit?**
+**Why dedicated units?**
 
-- **No magic strings** — The evaluator, scope, and other units reference `KEYWORD_THIS` instead of `'this'`, preventing typos and enabling compiler-checked usage.
-- **Minimal dependencies** — `Goccia.Keywords` has no `uses` clause dependencies, so any unit can import it without introducing circular references.
-- **Single source of truth** — All keyword strings are defined once. The lexer's token mapping and the evaluator's identifier handling both reference the same constants.
+- **No magic strings** — The evaluator, scope, parser, and other units reference `KEYWORD_THIS` or `KEYWORD_GET` instead of `'this'` or `'get'`, preventing typos and enabling compiler-checked usage.
+- **Reserved vs contextual** — Reserved keywords always produce a dedicated token type and cannot be used as identifiers. Contextual keywords have special meaning only in specific syntactic positions (e.g., `get`/`set` in object literals, `type`/`interface` in declaration position) but are otherwise valid identifiers.
+- **Minimal dependencies** — Neither unit has `uses` clause dependencies, so any unit can import them without introducing circular references.
+- **Single source of truth** — All keyword strings are defined once. The lexer's token mapping, the parser's contextual checks, and the evaluator's identifier handling all reference the same constants.
 
 ## Inlining Hot-Path Methods
 
@@ -138,7 +148,7 @@ Scopes form a tree with parent pointers, implementing lexical scoping:
 - **Standalone JSON utilities** — `Goccia.JSON` provides `TGocciaJSONParser` and `TGocciaJSONStringifier` as dependency-free utility classes that convert between JSON text and `TGocciaValue` types. `Goccia.Builtins.JSON` (the `JSON.parse`/`JSON.stringify` built-in) delegates to these, keeping the built-in a thin adapter. This separation allows the interpreter and any other component to parse JSON without instantiating a built-in.
 - **Specialized scope hierarchy** — `TGocciaGlobalScope` (root), `TGocciaCallScope` (function calls), `TGocciaMethodCallScope` (class method calls with `SuperClass`/`OwningClass`), `TGocciaClassInitScope` (instance property initialization), and `TGocciaCatchScope` (catch parameter scoping). Each specialized scope overrides virtual methods (`GetThisValue`, `GetOwningClass`, `GetSuperClass`) to participate in VMT-based chain-walking.
 - **VMT-based chain-walking** — `FindThisValue`, `FindOwningClass`, and `FindSuperClass` walk the parent chain calling the corresponding virtual `Get*` method on each scope, stopping at the first non-`nil` result. This eliminates `is` type checks in the evaluator and centralizes resolution logic in the scope hierarchy.
-- **Unified identifier resolution** — `ResolveIdentifier(Name)` on `TGocciaScope` handles `this` (via `FindThisValue`) and keyword constants (via `Goccia.Keywords`) before falling back to the standard scope chain walk, avoiding scattered special-case checks in the evaluator.
+- **Unified identifier resolution** — `ResolveIdentifier(Name)` on `TGocciaScope` handles `this` (via `FindThisValue`) and keyword constants (via `Goccia.Keywords.Reserved`) before falling back to the standard scope chain walk, avoiding scattered special-case checks in the evaluator.
 
 ## `this` Binding: Arrow Functions vs Shorthand Methods
 

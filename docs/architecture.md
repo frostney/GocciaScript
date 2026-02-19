@@ -57,9 +57,13 @@ A recursive descent parser that builds an AST from the token stream. Implements:
 - **Error recovery** — Throws `TGocciaSyntaxError` with source location for diagnostics.
 - **Arrow function detection** — Uses lookahead (`IsArrowFunction`) to disambiguate parenthesized expressions from arrow function parameters. The lookahead understands type annotations (`?`, `:Type`, `:ReturnType`) to correctly identify typed arrow functions.
 
-### Keywords (`Goccia.Keywords.pas`)
+### Reserved Keywords (`Goccia.Keywords.Reserved.pas`)
 
-A dependency-free unit that centralizes all 32 JavaScript keyword string constants (`KEYWORD_THIS`, `KEYWORD_SUPER`, `KEYWORD_UNDEFINED`, etc.). Used by the evaluator, scope, and other units to avoid hardcoded string literals and ensure consistent keyword references. Has no `uses` clause dependencies, so it can be imported by any unit without introducing circular references.
+A dependency-free unit that centralizes all 33 reserved JavaScript keyword string constants (`KEYWORD_THIS`, `KEYWORD_SUPER`, `KEYWORD_VAR`, `KEYWORD_WITH`, etc.). Reserved keywords always produce a dedicated token type and cannot be used as identifiers. Used by the lexer, evaluator, and scope units. Note: `undefined` is not a keyword — it is a global property registered via `Goccia.Builtins.Globals`.
+
+### Contextual Keywords (`Goccia.Keywords.Contextual.pas`)
+
+A dependency-free unit that centralizes all 12 contextual keyword string constants (`KEYWORD_GET`, `KEYWORD_SET`, `KEYWORD_TYPE`, `KEYWORD_INTERFACE`, `KEYWORD_IMPLEMENTS`, etc.). Contextual keywords have special meaning only in specific syntactic positions but are otherwise valid identifiers. Used by the lexer and parser.
 
 ### Microtask Queue (`Goccia.MicrotaskQueue.pas`)
 
@@ -186,7 +190,7 @@ The scope system uses a class hierarchy for specialised scope types:
 
 The evaluator resolves `this`, owning class, and super class via `FindThisValue`, `FindOwningClass`, and `FindSuperClass` on the scope. These walk the parent chain calling the corresponding virtual `Get*` method on each scope, stopping at the first non-`nil` result. This VMT-based chain-walking pattern eliminates `is` type checks and centralizes the resolution logic.
 
-Additionally, `ResolveIdentifier(Name)` on `TGocciaScope` provides a unified identifier lookup that handles `this` (via `FindThisValue`) and keyword constants (via `Goccia.Keywords`) before falling back to the standard scope chain walk. This avoids scattering special-case checks across the evaluator.
+Additionally, `ResolveIdentifier(Name)` on `TGocciaScope` provides a unified identifier lookup that handles `this` (via `FindThisValue`) and keyword constants (via `Goccia.Keywords.Reserved`) before falling back to the standard scope chain walk. This avoids scattering special-case checks across the evaluator.
 
 ## Module System
 

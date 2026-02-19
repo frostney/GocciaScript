@@ -25,7 +25,7 @@ function EvaluateInOperator(const ALeft, ARight: TGocciaValue): TGocciaValue;
 implementation
 
 uses
-  Goccia.Keywords,
+  Goccia.Keywords.Reserved,
   Goccia.Values.ErrorHelper,
   Goccia.Values.SymbolValue;
 

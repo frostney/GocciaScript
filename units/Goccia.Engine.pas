@@ -8,6 +8,7 @@ uses
   Classes,
   Generics.Collections,
   SysUtils,
+  TypInfo,
 
   Goccia.AST.Node,
   Goccia.Builtins.Benchmark,
@@ -33,6 +34,7 @@ uses
   Goccia.Parser,
   Goccia.Scope,
   Goccia.Token,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ObjectValue,
@@ -95,6 +97,8 @@ type
     procedure PinSingletons;
     procedure RegisterBuiltIns;
     procedure RegisterBuiltinConstructors;
+    procedure RegisterGlobalThis;
+    procedure RegisterGocciaScriptGlobal;
     procedure PrintParserWarnings(const AParser: TGocciaParser);
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
@@ -298,6 +302,49 @@ begin
   // Create Function constructor
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
+
+  RegisterGlobalThis;
+  RegisterGocciaScriptGlobal;
+end;
+
+procedure TGocciaEngine.RegisterGlobalThis;
+var
+  GlobalThisObj: TGocciaObjectValue;
+  Scope: TGocciaScope;
+  Name: string;
+begin
+  Scope := FInterpreter.GlobalScope;
+  GlobalThisObj := TGocciaObjectValue.Create;
+
+  for Name in Scope.GetOwnBindingNames do
+    GlobalThisObj.AssignProperty(Name, Scope.GetValue(Name));
+
+  GlobalThisObj.AssignProperty('globalThis', GlobalThisObj);
+  Scope.DefineLexicalBinding('globalThis', GlobalThisObj, dtConst);
+end;
+
+procedure TGocciaEngine.RegisterGocciaScriptGlobal;
+const
+  GOCCIA_VERSION = '0.2.0';
+  PREFIX_LENGTH = 2; // Strip 'gg' prefix from enum names
+var
+  GocciaObj: TGocciaObjectValue;
+  BuiltInsArray: TGocciaArrayValue;
+  Flag: TGocciaGlobalBuiltin;
+  Name: string;
+begin
+  BuiltInsArray := TGocciaArrayValue.Create;
+  for Flag in FGlobals do
+  begin
+    Name := GetEnumName(TypeInfo(TGocciaGlobalBuiltin), Ord(Flag));
+    BuiltInsArray.Elements.Add(TGocciaStringLiteralValue.Create(Copy(Name, PREFIX_LENGTH + 1, Length(Name) - PREFIX_LENGTH)));
+  end;
+
+  GocciaObj := TGocciaObjectValue.Create;
+  GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GOCCIA_VERSION));
+  GocciaObj.AssignProperty('builtIns', BuiltInsArray);
+
+  FInterpreter.GlobalScope.DefineLexicalBinding('GocciaScript', GocciaObj, dtConst);
 end;
 
 function TGocciaEngine.Execute: TGocciaScriptResult;

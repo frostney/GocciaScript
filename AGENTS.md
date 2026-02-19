@@ -81,7 +81,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Interpreter | `Goccia.Interpreter.pas` | AST execution, module loading, scope ownership |
 | Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules) |
 | Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ, VMT-based chain-walking |
-| Keywords | `Goccia.Keywords.pas` | Centralized JavaScript keyword string constants |
+| Reserved Keywords | `Goccia.Keywords.Reserved.pas` | Reserved JavaScript keyword string constants (`break`, `class`, `const`, `this`, etc.) |
+| Contextual Keywords | `Goccia.Keywords.Contextual.pas` | Contextual keyword string constants (`get`, `set`, `type`, `interface`, `implements`, etc.) |
 | Timing Utilities | `TimingUtils.pas` | Cross-platform timing: monotonic (`GetNanoseconds`, `GetMilliseconds`), wall-clock (`GetEpochNanoseconds`), and duration formatting (`FormatDuration`) |
 | Microtask Queue | `Goccia.MicrotaskQueue.pas` | Singleton FIFO queue for Promise reactions and `queueMicrotask` callbacks, drained after script execution, cleared on exception |
 | Garbage Collector | `Goccia.GarbageCollector.pas` | Mark-and-sweep memory management for runtime values |
@@ -231,7 +232,7 @@ At the scope level, `this`, owning class, and super class are resolved via VMT-b
 - `Scope.FindOwningClass` / `Scope.FindSuperClass` — same pattern for class resolution.
 - `Scope.ResolveIdentifier(Name)` — unified identifier lookup that handles `this` (via `FindThisValue`) and keyword constants before falling back to the scope chain.
 
-Use `Goccia.Keywords` constants (`KEYWORD_THIS`, `KEYWORD_SUPER`, etc.) instead of hardcoded string literals when referencing JavaScript keywords.
+Use `Goccia.Keywords.Reserved` and `Goccia.Keywords.Contextual` constants (`KEYWORD_THIS`, `KEYWORD_SUPER`, `KEYWORD_GET`, `KEYWORD_TYPE`, etc.) instead of hardcoded string literals when referencing JavaScript keywords.
 
 See [docs/design-decisions.md](docs/design-decisions.md) for the full design rationale.
 

@@ -12,7 +12,7 @@ uses
   Goccia.Error,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Interfaces,
-  Goccia.Keywords,
+  Goccia.Keywords.Reserved,
   Goccia.Token,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
@@ -36,9 +36,11 @@ type
 
   TGocciaScopeKind = (skUnknown, skGlobal, skFunction, skBlock, skCustom, skClass, skModule);
 
+  TLexicalBindingDictionary = TDictionary<string, TLexicalBinding>;
+
   TGocciaScope = class
   private
-    FLexicalBindings: TDictionary<string, TLexicalBinding>;
+    FLexicalBindings: TLexicalBindingDictionary;
     FParent: TGocciaScope;
     FThisValue: TGocciaValue;
     FScopeKind: TGocciaScopeKind;
@@ -72,6 +74,7 @@ type
     function ResolveIdentifier(const AName: string): TGocciaValue; inline;
     function ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
     function Contains(const AName: string): Boolean; inline;
+    function GetOwnBindingNames: TLexicalBindingDictionary.TKeyCollection; inline;
 
     // Walk the parent chain to find the nearest this / owning class / superclass
     function FindThisValue: TGocciaValue;
@@ -390,6 +393,11 @@ function TGocciaScope.Contains(const AName: string): Boolean; inline;
 begin
   Result := ContainsOwnLexicalBinding(AName) or
     (Assigned(FParent) and FParent.Contains(AName));
+end;
+
+function TGocciaScope.GetOwnBindingNames: TLexicalBindingDictionary.TKeyCollection;
+begin
+  Result := FLexicalBindings.Keys;
 end;
 
 { TGocciaScope - GC support }
