@@ -4,10 +4,6 @@ unit Goccia.Logger;
 
 interface
 
-uses
-  SysUtils,
-  TypInfo;
-
 type
   TGocciaLogLevel = (llTrace, llDebug, llInfo, llWarn, llError);
   TGocciaLogLevels = set of TGocciaLogLevel;
@@ -37,6 +33,10 @@ var
   Logger: TGocciaLogger;
 
 implementation
+
+uses
+  SysUtils,
+  TypInfo;
 
 constructor TGocciaLogger.Create(const ALevels: TGocciaLogLevels; const ALogFormat: TGocciaLogFormat);
 var

@@ -6,12 +6,8 @@ interface
 
 uses
   Generics.Collections,
-  Math,
-  SysUtils,
 
   Goccia.Arguments.Collection,
-  Goccia.Error,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -98,13 +94,16 @@ implementation
 
 uses
   Generics.Defaults,
+  Math,
+  SysUtils,
 
-  Goccia.Evaluator,
+  Goccia.Error,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ClassHelper,
   Goccia.Values.FunctionValue,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;
 
 function NumericRank(const ANum: TGocciaNumberLiteralValue): Double;

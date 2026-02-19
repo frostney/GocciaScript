@@ -7,19 +7,11 @@ interface
 uses
   Classes,
   Generics.Collections,
-  SysUtils,
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
-  Goccia.Error,
-  Goccia.Keywords.Contextual,
-  Goccia.Token,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.ClassValue,
-  Goccia.Values.FunctionValue,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Token;
 
 type
   TGocciaParserWarning = record
@@ -140,6 +132,13 @@ type
   end;
 
 implementation
+
+uses
+  SysUtils,
+
+  Goccia.Error,
+  Goccia.Keywords.Contextual,
+  Goccia.Values.Primitives;
 
 constructor TGocciaParser.Create(const ATokens: TObjectList<TGocciaToken>;
   const AFileName: string; const ASourceLines: TStringList);

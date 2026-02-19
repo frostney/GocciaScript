@@ -5,10 +5,7 @@ unit Goccia.Builtins.TestAssertions;
 interface
 
 uses
-  Classes,
   Generics.Collections,
-  Math,
-  SysUtils,
 
   Goccia.Arguments.Collection,
   Goccia.Arguments.Validator,
@@ -142,6 +139,10 @@ type
 implementation
 
 uses
+  Classes,
+  Math,
+  SysUtils,
+
   TimingUtils,
 
   Goccia.Evaluator,

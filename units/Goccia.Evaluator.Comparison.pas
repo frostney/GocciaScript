@@ -5,8 +5,6 @@ unit Goccia.Evaluator.Comparison;
 interface
 
 uses
-  Math,
-
   Goccia.Values.Primitives;
 
 function IsStrictEqual(const ALeft, ARight: TGocciaValue): Boolean;

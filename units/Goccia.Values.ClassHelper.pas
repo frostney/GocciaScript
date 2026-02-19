@@ -5,12 +5,7 @@ unit Goccia.Values.ClassHelper;
 interface
 
 uses
-  Classes,
-  Math,
-  SysUtils,
-
   Goccia.Values.BooleanObjectValue,
-  Goccia.Values.Constants,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -58,6 +53,9 @@ type
 
 
 implementation
+
+uses
+  Math;
 
   // function TGocciaValueHelper.ToBooleanLiteral: TGocciaBooleanLiteralValue;
   // var

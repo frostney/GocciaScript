@@ -6,7 +6,6 @@ interface
 
 uses
   Generics.Collections,
-  SysUtils,
 
   Goccia.Scope,
   Goccia.Values.Primitives;
@@ -65,6 +64,9 @@ type
   end;
 
 implementation
+
+uses
+  SysUtils;
 
 const
   DEFAULT_GC_THRESHOLD = 10000;

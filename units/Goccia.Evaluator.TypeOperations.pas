@@ -5,13 +5,7 @@ unit Goccia.Evaluator.TypeOperations;
 interface
 
 uses
-  SysUtils,
-
-  Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
-  Goccia.Values.FunctionBase,
-  Goccia.Values.FunctionValue,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -25,8 +19,14 @@ function EvaluateInOperator(const ALeft, ARight: TGocciaValue): TGocciaValue;
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Keywords.Reserved,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.NativeFunction,
   Goccia.Values.SymbolValue;
 
 function EvaluateTypeof(const AOperand: TGocciaValue): TGocciaValue;

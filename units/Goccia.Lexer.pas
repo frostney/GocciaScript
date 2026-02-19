@@ -9,9 +9,6 @@ uses
   Generics.Collections,
   SysUtils,
 
-  Goccia.Error,
-  Goccia.Keywords.Contextual,
-  Goccia.Keywords.Reserved,
   Goccia.Token;
 
 type
@@ -59,6 +56,11 @@ type
   end;
 
 implementation
+
+uses
+  Goccia.Error,
+  Goccia.Keywords.Contextual,
+  Goccia.Keywords.Reserved;
 
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
 begin

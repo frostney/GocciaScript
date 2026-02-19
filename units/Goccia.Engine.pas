@@ -6,9 +6,6 @@ interface
 
 uses
   Classes,
-  Generics.Collections,
-  SysUtils,
-  TypInfo,
 
   Goccia.AST.Node,
   Goccia.Builtins.Benchmark,
@@ -25,23 +22,11 @@ uses
   Goccia.Builtins.Math,
   Goccia.Builtins.Temporal,
   Goccia.Builtins.TestAssertions,
-  Goccia.Error,
-  Goccia.GarbageCollector,
   Goccia.Interpreter,
   Goccia.JSX.SourceMap,
-  Goccia.JSX.Transformer,
-  Goccia.Lexer,
-  Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Parser,
-  Goccia.Scope,
-  Goccia.Token,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.ClassValue,
-  Goccia.Values.Error,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
-  Goccia.Version;
+  Goccia.Values.Primitives;
 
 type
   TGocciaGlobalBuiltin = (
@@ -140,7 +125,23 @@ type
 implementation
 
 uses
-  TimingUtils;
+  Generics.Collections,
+  SysUtils,
+  TypInfo,
+
+  TimingUtils,
+
+  Goccia.Error,
+  Goccia.GarbageCollector,
+  Goccia.JSX.Transformer,
+  Goccia.Lexer,
+  Goccia.MicrotaskQueue,
+  Goccia.Scope,
+  Goccia.Token,
+  Goccia.Values.ArrayValue,
+  Goccia.Values.ClassValue,
+  Goccia.Values.ObjectValue,
+  Goccia.Version;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
 var

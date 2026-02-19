@@ -5,17 +5,8 @@ unit Goccia.Evaluator.Assignment;
 interface
 
 uses
-  Math,
-  SysUtils,
-
   Goccia.Error.ThrowErrorCallback,
-  Goccia.Evaluator.Arithmetic,
-  Goccia.Interfaces,
   Goccia.Token,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.ClassValue,
-  Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 // Property definition with descriptor (falls back to SetProperty for non-objects)
@@ -33,8 +24,13 @@ function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boo
 implementation
 
 uses
+  Goccia.Evaluator.Arithmetic,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
-  Goccia.Values.ErrorHelper;
+  Goccia.Values.ClassValue,
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue;
 
 procedure DefinePropertyOnValue(const AObj: TGocciaValue; const APropName: string; const AValue: TGocciaValue);
 begin

@@ -6,11 +6,8 @@ interface
 
 uses
   Generics.Collections,
-  SysUtils,
 
   Goccia.Arguments.Collection,
-  Goccia.Error,
-  Goccia.Interfaces,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -73,6 +70,9 @@ type
 implementation
 
 uses
+  SysUtils,
+
+  Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.NativeFunction;

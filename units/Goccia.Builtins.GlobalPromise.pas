@@ -5,18 +5,13 @@ unit Goccia.Builtins.GlobalPromise;
 interface
 
 uses
-  Generics.Collections,
-  SysUtils,
-
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
   Goccia.Values.ArrayValue,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
-  Goccia.Values.PromiseValue;
+  Goccia.Values.Primitives;
 
 type
   TGocciaGlobalPromise = class(TGocciaBuiltin)
@@ -45,6 +40,8 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.MapValue,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.PromiseValue,
   Goccia.Values.SetValue;
 
 type

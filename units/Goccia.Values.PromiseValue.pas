@@ -6,11 +6,9 @@ interface
 
 uses
   Generics.Collections,
-  SysUtils,
 
   Goccia.Arguments.Collection,
   Goccia.SharedPrototype,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -79,7 +77,8 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionBase;
+  Goccia.Values.FunctionBase,
+  Goccia.Values.NativeFunction;
 
 type
   TGocciaFinallyPassthrough = class(TGocciaObjectValue)

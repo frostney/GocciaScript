@@ -6,10 +6,7 @@ interface
 
 uses
   Classes,
-  StrUtils,
-  SysUtils,
-
-  Goccia.Error.ThrowErrorCallback;
+  SysUtils;
 
 type
   TGocciaErrorSeverity = (gesError, gesWarning, gesHint);
@@ -47,6 +44,9 @@ type
   TGocciaReferenceError = class(TGocciaRuntimeError);
 
 implementation
+
+uses
+  StrUtils;
 
 constructor TGocciaError.Create(const AMessage: string; const ALine, AColumn: Integer;
   const AFileName: string; const ASourceLines: TStringList);
