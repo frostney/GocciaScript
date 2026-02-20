@@ -90,7 +90,6 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.Evaluator.TypeOperations,
   Goccia.GarbageCollector,
-  Goccia.Interfaces,
   Goccia.Keywords.Reserved,
   Goccia.Lexer,
   Goccia.Parser,
@@ -833,7 +832,6 @@ var
   SuperClass: TGocciaClassValue;
   MemberExpr: TGocciaMemberExpression;
   SpreadValue: TGocciaValue;
-  CallableIntf: IGocciaCallable;
   I: Integer;
 begin
 
@@ -930,8 +928,6 @@ begin
       Result := TGocciaBoundFunctionValue(Callee).Call(Arguments, ThisValue)
     else if Callee is TGocciaClassValue then
       Result := TGocciaClassValue(Callee).Call(Arguments, ThisValue)
-    else if Supports(Callee, IGocciaCallable, CallableIntf) then
-      Result := CallableIntf.Call(Arguments, ThisValue)
     else
     begin
       SafeOnError(AContext, Format('%s is not a function', [Callee.TypeName]), ACallExpression.Line, ACallExpression.Column);

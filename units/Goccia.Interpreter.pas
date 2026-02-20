@@ -15,7 +15,6 @@ uses
   Goccia.AST.Statements,
   Goccia.Error,
   Goccia.Evaluator,
-  Goccia.Interfaces,
   Goccia.Lexer,
   Goccia.Logger,
   Goccia.Modules,

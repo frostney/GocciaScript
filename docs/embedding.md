@@ -198,7 +198,7 @@ The `TGocciaGlobalBuiltins` set controls which built-in objects are available to
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap];
+                  ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal, ggJSX];
 ```
 
 ### Available Flags
@@ -215,6 +215,8 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 | `ggSet` | `Set` constructor and methods | Unique value collections |
 | `ggMap` | `Map` constructor and methods | Key-value collections |
 | `ggPromise` | `Promise` | Async operations with microtask queue |
+| `ggTemporal` | `Temporal.*` | Dates, times, durations, instants |
+| `ggJSX` | JSX transformer | Source-to-source JSX → `createElement` pre-pass |
 | `ggTestAssertions` | `describe`, `test`, `expect` | Testing framework |
 | `ggBenchmark` | `suite`, `bench` | Benchmark framework |
 

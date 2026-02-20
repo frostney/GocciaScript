@@ -62,7 +62,7 @@ implementation
 uses
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
-  Goccia.Utils,
+  Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -350,7 +350,7 @@ begin
     //   Call(callbackfn, thisArg, « e.[[Value]], e.[[Key]], M »)
     CallArgs := TGocciaArgumentsCollection.Create([M.Entries[I].Value, M.Entries[I].Key, AThisValue]);
     try
-      CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;

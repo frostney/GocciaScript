@@ -78,6 +78,7 @@ uses
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -699,7 +700,7 @@ begin
         TGocciaStringLiteralValue.Create(StringValue)
       ]);
       try
-        CallResult := CallFunction(ReplaceArg, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        CallResult := TGocciaFunctionBase(ReplaceArg).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         ReplaceValue := CallResult.ToStringLiteral.Value;
       finally
         CallArgs.Free;
@@ -774,7 +775,7 @@ begin
         ResultStr := ResultStr + Copy(StringValue, Offset, SearchPos - 1);
         CallArgs.SetElement(0, TGocciaStringLiteralValue.Create(SearchValue));
         CallArgs.SetElement(1, TGocciaNumberLiteralValue.Create(Offset + SearchPos - 2));
-        CallResult := CallFunction(ReplaceArg, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        CallResult := TGocciaFunctionBase(ReplaceArg).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         ResultStr := ResultStr + CallResult.ToStringLiteral.Value;
         Offset := Offset + SearchPos - 1 + Length(SearchValue);
         if Offset > Length(StringValue) then

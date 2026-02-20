@@ -22,8 +22,8 @@ type
 implementation
 
 uses
-  Goccia.Utils,
   Goccia.Values.ArrayValue,
+  Goccia.Values.FunctionBase,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction;
 
@@ -68,7 +68,7 @@ begin
     try
       CallArgs.Add(Items.Elements[I]);
       CallArgs.Add(TGocciaNumberLiteralValue.SmallInt(I));
-      GroupKey := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      GroupKey := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;

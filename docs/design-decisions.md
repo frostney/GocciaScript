@@ -284,7 +284,7 @@ Built-ins are registered via a `TGocciaGlobalBuiltins` set of flags:
 TGocciaGlobalBuiltin = (ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
                          ggGlobalNumber, ggPromise, ggJSON, ggSymbol,
                          ggSet, ggMap, ggTestAssertions, ggBenchmark,
-                         ggTemporal);
+                         ggTemporal, ggJSX);
 ```
 
 **Why configurable?**

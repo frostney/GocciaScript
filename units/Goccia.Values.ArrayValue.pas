@@ -118,6 +118,7 @@ uses
   Goccia.Utils.Arrays,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -193,7 +194,7 @@ var
 begin
   ACallArgs.SetElement(0, A);
   ACallArgs.SetElement(1, B);
-  CompResult := CallFunction(ACompareFunc, ACallArgs, AThisValue).ToNumberLiteral;
+  CompResult := TGocciaFunctionBase(ACompareFunc).Call(ACallArgs, AThisValue).ToNumberLiteral;
 
   if CompResult.IsNaN then
     Result := 0
@@ -473,7 +474,7 @@ begin
 
       CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
-      ArrayCreateDataProperty(ResultArray, I, CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue));
+      ArrayCreateDataProperty(ResultArray, I, TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue));
     end;
   finally
     CallArgs.Free;
@@ -513,7 +514,7 @@ begin
       CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       // Step 6c-ii: Let selected be ToBoolean(Call(callbackfn, thisArg, « kValue, k, O »))
-      PredicateResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      PredicateResult := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
       // Step 6c-iii: If selected is true, CreateDataPropertyOrThrow(A, ToString(to), kValue)
       if PredicateResult.ToBooleanLiteral.Value then
@@ -569,7 +570,7 @@ begin
       CallArgs.SetElement(0, Accumulator);
       CallArgs.SetElement(1, Arr.Elements[I]);
       CallArgs.SetElement(2, TGocciaNumberLiteralValue.SmallInt(I));
-      Accumulator := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Accumulator := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
   finally
     CallArgs.Free;
@@ -606,7 +607,7 @@ begin
       CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       // Step 5d: Call(callbackfn, thisArg, « kValue, k, O »)
-      CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
   finally
     CallArgs.Free;
@@ -718,7 +719,7 @@ begin
       CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       // Step 5c-ii: Let testResult be ToBoolean(Call(callbackfn, thisArg, « kValue, k, O »))
-      SomeResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      SomeResult := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       // Step 5c-iii: If testResult is true, return true
       if SomeResult.ToBooleanLiteral.Value then
       begin
@@ -760,7 +761,7 @@ begin
       CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       // Step 5c-ii: Let testResult be ToBoolean(Call(callbackfn, thisArg, « kValue, k, O »))
-      EveryResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      EveryResult := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       // Step 5c-iii: If testResult is false, return false
       if not EveryResult.ToBooleanLiteral.Value then
       begin
@@ -862,7 +863,7 @@ begin
       // Step: Let mappedValue be Call(mapperFunction, thisArg, « kValue, k, O »)
       CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
-      MappedValue := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      MappedValue := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
       // Step: If IsConcatSpreadable(mappedValue), flatten one level
       if MappedValue is TGocciaArrayValue then
@@ -1000,7 +1001,7 @@ begin
       CallArgs.Free;
       CallArgs := CreateArrayCallbackArgs(Element, I, AThisValue);
       // Step 5b: Let testResult be ToBoolean(Call(predicate, thisArg, « kValue, k, O »))
-      CallResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallResult := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       // Step 5c: If testResult is true, return kValue
       if CallResult.ToBooleanLiteral.Value then
       begin
@@ -1043,7 +1044,7 @@ begin
       CallArgs.Free;
       CallArgs := CreateArrayCallbackArgs(Element, I, AThisValue);
       // Step 5b: Let testResult be ToBoolean(Call(predicate, thisArg, « kValue, k, O »))
-      CallResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallResult := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       // Step 5c: If testResult is true, return k
       if CallResult.ToBooleanLiteral.Value then
       begin
@@ -1086,7 +1087,7 @@ begin
       CallArgs.Free;
       CallArgs := CreateArrayCallbackArgs(Element, I, AThisValue);
       // Step 5b: Let testResult be ToBoolean(Call(predicate, thisArg, « kValue, k, O »))
-      CallResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallResult := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       // Step 5c: If testResult is true, return kValue
       if CallResult.ToBooleanLiteral.Value then
       begin
@@ -1129,7 +1130,7 @@ begin
       CallArgs.Free;
       CallArgs := CreateArrayCallbackArgs(Element, I, AThisValue);
       // Step 5b: Let testResult be ToBoolean(Call(predicate, thisArg, « kValue, k, O »))
-      CallResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallResult := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       // Step 5c: If testResult is true, return k
       if CallResult.ToBooleanLiteral.Value then
       begin

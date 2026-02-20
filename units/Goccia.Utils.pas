@@ -16,17 +16,10 @@ function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex
 // If ARelative < 0, returns max(ALength + ARelative, 0); else min(ARelative, ALength).
 function NormalizeRelativeIndex(const ARelative, ALength: Integer): Integer; inline;
 
-// ES2026 §7.3.14 Call(F, V, argumentsList) — invoke a callable with args and this value.
-// Dispatches through TGocciaFunctionBase.Call virtual method.
-function CallFunction(const ACallable: TGocciaValue; const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue; inline;
-
 implementation
 
 uses
-  Math,
-
-  Goccia.Values.FunctionBase;
+  Math;
 
 // TODO: We should set defaults for index and default value
 function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer; const ADefault: Integer): Integer;
@@ -43,13 +36,6 @@ begin
     Result := Max(ALength + ARelative, 0)
   else
     Result := Min(ARelative, ALength);
-end;
-
-// TODO: Do we need this?
-function CallFunction(const ACallable: TGocciaValue; const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  Result := TGocciaFunctionBase(ACallable).Call(AArgs, AThisValue);
 end;
 
 end.

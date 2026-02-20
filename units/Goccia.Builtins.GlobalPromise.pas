@@ -40,7 +40,6 @@ uses
 
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
-  Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -498,7 +497,7 @@ begin
   ExecutorArgs := TGocciaArgumentsCollection.Create([ResolveFn, RejectFn]);
   try
     try
-      CallFunction(Executor, ExecutorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      TGocciaFunctionBase(Executor).Call(ExecutorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     except
       on E: TGocciaThrowValue do
       begin
@@ -946,7 +945,7 @@ begin
   try
     EmptyArgs := TGocciaArgumentsCollection.Create;
     try
-      CallbackResult := CallFunction(Callback, EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallbackResult := TGocciaFunctionBase(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       EmptyArgs.Free;
     end;
