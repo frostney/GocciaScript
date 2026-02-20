@@ -48,6 +48,156 @@ begin
   WriteLn('');
 end;
 
+procedure StripBlockComments(var AText: string; var AInBlock: Boolean);
+var
+  OpenPos, ClosePos: SizeInt;
+  Sub: string;
+begin
+  repeat
+    if AInBlock then
+    begin
+      ClosePos := Pos('}', AText);
+      if ClosePos = 0 then
+        ClosePos := Pos('*)', AText);
+      if ClosePos > 0 then
+      begin
+        if AText[ClosePos] = '*' then
+          Delete(AText, 1, ClosePos + 1)
+        else
+          Delete(AText, 1, ClosePos);
+        AText := Trim(AText);
+        AInBlock := False;
+      end
+      else
+      begin
+        AText := '';
+        Exit;
+      end;
+    end
+    else
+    begin
+      OpenPos := Pos('{', AText);
+      if (OpenPos > 0) and (Copy(AText, OpenPos, 2) <> '{$') then
+      begin
+        Sub := Copy(AText, OpenPos + 1, Length(AText));
+        ClosePos := Pos('}', Sub);
+        if ClosePos > 0 then
+        begin
+          Delete(AText, OpenPos, ClosePos + 1);
+          AText := Trim(AText);
+        end
+        else
+        begin
+          Delete(AText, OpenPos, Length(AText));
+          AText := Trim(AText);
+          AInBlock := True;
+          Exit;
+        end;
+        Continue;
+      end;
+
+      OpenPos := Pos('(*', AText);
+      if OpenPos > 0 then
+      begin
+        Sub := Copy(AText, OpenPos + 2, Length(AText));
+        ClosePos := Pos('*)', Sub);
+        if ClosePos > 0 then
+        begin
+          Delete(AText, OpenPos, ClosePos + 3);
+          AText := Trim(AText);
+        end
+        else
+        begin
+          Delete(AText, OpenPos, Length(AText));
+          AText := Trim(AText);
+          AInBlock := True;
+          Exit;
+        end;
+        Continue;
+      end;
+
+      Exit;
+    end;
+  until AText = '';
+end;
+
+procedure CountLines(const AFileName: string; out ALOC, ASLOC: Integer);
+var
+  F: TextFile;
+  Line, Trimmed: string;
+  InBlock: Boolean;
+begin
+  ALOC := 0;
+  ASLOC := 0;
+  InBlock := False;
+
+  AssignFile(F, AFileName);
+  Reset(F);
+  try
+    while not EOF(F) do
+    begin
+      ReadLn(F, Line);
+      Inc(ALOC);
+      Trimmed := Trim(Line);
+
+      StripBlockComments(Trimmed, InBlock);
+
+      if Trimmed = '' then
+        Continue;
+      if Copy(Trimmed, 1, 2) = '//' then
+        Continue;
+
+      Inc(ASLOC);
+    end;
+  finally
+    CloseFile(F);
+  end;
+end;
+
+function FormatNumber(const AValue: Integer): string;
+var
+  S: string;
+  Len, InsertPos: Integer;
+begin
+  S := IntToStr(AValue);
+  Len := Length(S);
+  InsertPos := Len - 3;
+  while InsertPos > 0 do
+  begin
+    Insert(',', S, InsertPos + 1);
+    Dec(InsertPos, 3);
+  end;
+  Result := S;
+end;
+
+procedure PrintSourceStats;
+var
+  Files: TStringList;
+  K, FileLOC, FileSLOC, TotalLOC, TotalSLOC: Integer;
+begin
+  TotalLOC := 0;
+  TotalSLOC := 0;
+
+  Files := TStringList.Create;
+  try
+    Files.AddStrings(FindAllFiles('units', '.pas'));
+    Files.AddStrings(FindAllFiles('.', '.dpr'));
+    Files.AddStrings(FindAllFiles('units', '.inc'));
+
+    for K := 0 to Files.Count - 1 do
+    begin
+      CountLines(Files[K], FileLOC, FileSLOC);
+      TotalLOC := TotalLOC + FileLOC;
+      TotalSLOC := TotalSLOC + FileSLOC;
+    end;
+
+    WriteLn('Source: ', FormatNumber(TotalLOC), ' LOC | ', FormatNumber(TotalSLOC), ' SLOC (', Files.Count, ' files)');
+    WriteLn('');
+  finally
+    Files.Free;
+  end;
+end;
+
 function FPCArgs(const ASource: string): TStringArray;
 var
   Arch: string;
@@ -252,6 +402,7 @@ begin
 
   WriteLn('');
   PrintVersion;
+  PrintSourceStats;
 
   if BuildTriggers.Count = 0 then
   begin
