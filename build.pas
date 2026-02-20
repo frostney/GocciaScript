@@ -48,12 +48,84 @@ begin
   WriteLn('');
 end;
 
+procedure StripBlockComments(var AText: string; var AInBlock: Boolean);
+var
+  OpenPos, ClosePos: SizeInt;
+  Sub: string;
+begin
+  repeat
+    if AInBlock then
+    begin
+      ClosePos := Pos('}', AText);
+      if ClosePos = 0 then
+        ClosePos := Pos('*)', AText);
+      if ClosePos > 0 then
+      begin
+        if AText[ClosePos] = '*' then
+          Delete(AText, 1, ClosePos + 1)
+        else
+          Delete(AText, 1, ClosePos);
+        AText := Trim(AText);
+        AInBlock := False;
+      end
+      else
+      begin
+        AText := '';
+        Exit;
+      end;
+    end
+    else
+    begin
+      OpenPos := Pos('{', AText);
+      if (OpenPos > 0) and (Copy(AText, OpenPos, 2) <> '{$') then
+      begin
+        Sub := Copy(AText, OpenPos + 1, Length(AText));
+        ClosePos := Pos('}', Sub);
+        if ClosePos > 0 then
+        begin
+          Delete(AText, OpenPos, ClosePos + 1);
+          AText := Trim(AText);
+        end
+        else
+        begin
+          Delete(AText, OpenPos, Length(AText));
+          AText := Trim(AText);
+          AInBlock := True;
+          Exit;
+        end;
+        Continue;
+      end;
+
+      OpenPos := Pos('(*', AText);
+      if OpenPos > 0 then
+      begin
+        Sub := Copy(AText, OpenPos + 2, Length(AText));
+        ClosePos := Pos('*)', Sub);
+        if ClosePos > 0 then
+        begin
+          Delete(AText, OpenPos, ClosePos + 3);
+          AText := Trim(AText);
+        end
+        else
+        begin
+          Delete(AText, OpenPos, Length(AText));
+          AText := Trim(AText);
+          AInBlock := True;
+          Exit;
+        end;
+        Continue;
+      end;
+
+      Exit;
+    end;
+  until AText = '';
+end;
+
 procedure CountLines(const AFileName: string; out ALOC, ASLOC: Integer);
 var
   F: TextFile;
   Line, Trimmed: string;
   InBlock: Boolean;
-  ClosePos: SizeInt;
 begin
   ALOC := 0;
   ASLOC := 0;
@@ -68,39 +140,12 @@ begin
       Inc(ALOC);
       Trimmed := Trim(Line);
 
-      if InBlock then
-      begin
-        ClosePos := Pos('}', Trimmed);
-        if ClosePos = 0 then
-          ClosePos := Pos('*)', Trimmed);
-        if ClosePos > 0 then
-        begin
-          InBlock := False;
-          Delete(Trimmed, 1, ClosePos);
-          Trimmed := Trim(Trimmed);
-          if Trimmed <> '' then
-            Inc(ASLOC);
-        end;
-        Continue;
-      end;
+      StripBlockComments(Trimmed, InBlock);
 
       if Trimmed = '' then
         Continue;
-
       if Copy(Trimmed, 1, 2) = '//' then
         Continue;
-
-      if (Copy(Trimmed, 1, 1) = '{') and (Pos('}', Trimmed) = 0) then
-      begin
-        InBlock := True;
-        Continue;
-      end;
-
-      if (Copy(Trimmed, 1, 2) = '(*') and (Pos('*)', Trimmed) = 0) then
-      begin
-        InBlock := True;
-        Continue;
-      end;
 
       Inc(ASLOC);
     end;
@@ -109,7 +154,7 @@ begin
   end;
 end;
 
-function FormatNumber(AValue: Integer): string;
+function FormatNumber(const AValue: Integer): string;
 var
   S: string;
   Len, InsertPos: Integer;
