@@ -16,7 +16,7 @@ test("destructuring assignment with array-like objects", () => {
   // Cannot destructure array-like as array directly - expect error
   expect(() => {
     [a, b, ...rest] = arrayLike;
-  }).toThrow();
+  }).toThrow(TypeError);
 
   // But can destructure as object with numeric keys
   ({ 0: a, 1: b, 2: rest } = arrayLike);

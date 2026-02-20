@@ -42,4 +42,15 @@ describe("Array.prototype.unshift", () => {
     arr.unshift("a", "b");
     expect(arr).toEqual(["a", "b"]);
   });
+
+  test("unshift returns new length", () => {
+    const arr = [3];
+    const len = arr.unshift(1, 2);
+    expect(len).toBe(3);
+  });
+
+  test("unshift with no arguments returns current length", () => {
+    const arr = [1, 2, 3];
+    expect(arr.unshift()).toBe(3);
+  });
 });

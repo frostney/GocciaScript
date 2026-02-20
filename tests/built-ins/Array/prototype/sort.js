@@ -59,4 +59,34 @@ describe("Array.prototype.sort", () => {
     expect(arr[2]).toBe(3);
     expect(Number.isNaN(arr[3])).toBe(true);
   });
+
+  test("sort mutates the original array", () => {
+    const arr = [3, 1, 2];
+    arr.sort((a, b) => a - b);
+    expect(arr).toEqual([1, 2, 3]);
+  });
+
+  test("sort with empty array", () => {
+    const arr = [];
+    arr.sort();
+    expect(arr).toEqual([]);
+  });
+
+  test("sort with single element", () => {
+    const arr = [1];
+    arr.sort();
+    expect(arr).toEqual([1]);
+  });
+
+  test("sort with equal elements", () => {
+    const arr = [1, 1, 1];
+    arr.sort((a, b) => a - b);
+    expect(arr).toEqual([1, 1, 1]);
+  });
+
+  test("default sort converts to string comparison", () => {
+    const arr = [80, 9, 700, 40, 1, 5, 200];
+    arr.sort();
+    expect(arr).toEqual([1, 200, 40, 5, 700, 80, 9]);
+  });
 });

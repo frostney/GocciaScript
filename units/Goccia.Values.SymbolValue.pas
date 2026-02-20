@@ -14,6 +14,11 @@ type
     FSharedPrototype: TGocciaValue;
     FMethodHost: TGocciaSymbolValue;
     FWellKnownIterator: TGocciaSymbolValue;
+    FWellKnownSpecies: TGocciaSymbolValue;
+    FWellKnownHasInstance: TGocciaSymbolValue;
+    FWellKnownToPrimitive: TGocciaSymbolValue;
+    FWellKnownToStringTag: TGocciaSymbolValue;
+    FWellKnownIsConcatSpreadable: TGocciaSymbolValue;
   private
     FDescription: string;
     FId: Integer;
@@ -28,6 +33,11 @@ type
 
     class function SharedPrototype: TGocciaValue;
     class function WellKnownIterator: TGocciaSymbolValue;
+    class function WellKnownSpecies: TGocciaSymbolValue;
+    class function WellKnownHasInstance: TGocciaSymbolValue;
+    class function WellKnownToPrimitive: TGocciaSymbolValue;
+    class function WellKnownToStringTag: TGocciaSymbolValue;
+    class function WellKnownIsConcatSpreadable: TGocciaSymbolValue;
 
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -110,6 +120,61 @@ begin
       TGocciaGarbageCollector.Instance.PinValue(FWellKnownIterator);
   end;
   Result := FWellKnownIterator;
+end;
+
+class function TGocciaSymbolValue.WellKnownSpecies: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownSpecies) then
+  begin
+    FWellKnownSpecies := TGocciaSymbolValue.Create('Symbol.species');
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.PinValue(FWellKnownSpecies);
+  end;
+  Result := FWellKnownSpecies;
+end;
+
+class function TGocciaSymbolValue.WellKnownHasInstance: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownHasInstance) then
+  begin
+    FWellKnownHasInstance := TGocciaSymbolValue.Create('Symbol.hasInstance');
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.PinValue(FWellKnownHasInstance);
+  end;
+  Result := FWellKnownHasInstance;
+end;
+
+class function TGocciaSymbolValue.WellKnownToPrimitive: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownToPrimitive) then
+  begin
+    FWellKnownToPrimitive := TGocciaSymbolValue.Create('Symbol.toPrimitive');
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.PinValue(FWellKnownToPrimitive);
+  end;
+  Result := FWellKnownToPrimitive;
+end;
+
+class function TGocciaSymbolValue.WellKnownToStringTag: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownToStringTag) then
+  begin
+    FWellKnownToStringTag := TGocciaSymbolValue.Create('Symbol.toStringTag');
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.PinValue(FWellKnownToStringTag);
+  end;
+  Result := FWellKnownToStringTag;
+end;
+
+class function TGocciaSymbolValue.WellKnownIsConcatSpreadable: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownIsConcatSpreadable) then
+  begin
+    FWellKnownIsConcatSpreadable := TGocciaSymbolValue.Create('Symbol.isConcatSpreadable');
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.PinValue(FWellKnownIsConcatSpreadable);
+  end;
+  Result := FWellKnownIsConcatSpreadable;
 end;
 
 constructor TGocciaSymbolValue.Create(const ADescription: string);

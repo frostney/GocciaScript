@@ -37,3 +37,34 @@ test("Array.prototype.slice shallowly copies the array", () => {
   expect(sliced).toEqual([1, 2, 3, 4, 5]);
   expect(sliced).not.toBe(arr);
 });
+
+test("slice with both negative indices", () => {
+  const arr = [1, 2, 3, 4, 5];
+  expect(arr.slice(-3, -1)).toEqual([3, 4]);
+});
+
+test("slice with start >= end returns empty array", () => {
+  expect([1, 2, 3].slice(2, 1)).toEqual([]);
+  expect([1, 2, 3].slice(5)).toEqual([]);
+});
+
+test("slice with start beyond length returns empty array", () => {
+  expect([1, 2, 3].slice(100)).toEqual([]);
+});
+
+test("slice with negative start beyond length starts from 0", () => {
+  expect([1, 2, 3].slice(-100)).toEqual([1, 2, 3]);
+});
+
+test("slice with end beyond length clamps to length", () => {
+  expect([1, 2, 3].slice(0, 100)).toEqual([1, 2, 3]);
+});
+
+test("slice preserves undefined and null elements", () => {
+  expect([1, undefined, null, 4].slice(1, 3)).toEqual([undefined, null]);
+});
+
+test("slice on empty array", () => {
+  expect([].slice()).toEqual([]);
+  expect([].slice(0, 5)).toEqual([]);
+});

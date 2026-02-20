@@ -19,11 +19,19 @@ type
     FTypeErrorProto: TGocciaObjectValue;
     FReferenceErrorProto: TGocciaObjectValue;
     FRangeErrorProto: TGocciaObjectValue;
+    FSyntaxErrorProto: TGocciaObjectValue;
+    FURIErrorProto: TGocciaObjectValue;
+    FAggregateErrorProto: TGocciaObjectValue;
+
+    function BuildErrorObject(const AName: string; const AProto: TGocciaObjectValue; const AArgs: TGocciaArgumentsCollection): TGocciaObjectValue;
   protected
     function ErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ReferenceErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function RangeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SyntaxErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function URIErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function AggregateErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function QueueMicrotaskCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -34,6 +42,7 @@ implementation
 uses
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
@@ -44,17 +53,16 @@ var
   TypeErrorConstructorFunc: TGocciaNativeFunctionValue;
   ReferenceErrorConstructorFunc: TGocciaNativeFunctionValue;
   RangeErrorConstructorFunc: TGocciaNativeFunctionValue;
-  ErrorProto, TypeErrorProto, ReferenceErrorProto, RangeErrorProto: TGocciaObjectValue;
+  SyntaxErrorConstructorFunc: TGocciaNativeFunctionValue;
+  URIErrorConstructorFunc: TGocciaNativeFunctionValue;
+  AggregateErrorConstructorFunc: TGocciaNativeFunctionValue;
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  // Global constants
   AScope.DefineLexicalBinding('undefined', TGocciaUndefinedLiteralValue.UndefinedValue, dtConst);
   AScope.DefineLexicalBinding('NaN', TGocciaNumberLiteralValue.NaNValue, dtConst);
   AScope.DefineLexicalBinding('Infinity', TGocciaNumberLiteralValue.InfinityValue, dtConst);
 
-  // Set up Error prototype chain (ECMAScript spec):
-  // TypeError.prototype -> Error.prototype -> Object.prototype
   FErrorProto := TGocciaObjectValue.Create;
   FErrorProto.AssignProperty('name', TGocciaStringLiteralValue.Create('Error'));
   FErrorProto.AssignProperty('message', TGocciaStringLiteralValue.Create(''));
@@ -71,89 +79,143 @@ begin
   FRangeErrorProto.AssignProperty('name', TGocciaStringLiteralValue.Create('RangeError'));
   FRangeErrorProto.AssignProperty('message', TGocciaStringLiteralValue.Create(''));
 
-  // Error constructors - store references so we can use them in the constructor functions
+  FSyntaxErrorProto := TGocciaObjectValue.Create(FErrorProto);
+  FSyntaxErrorProto.AssignProperty('name', TGocciaStringLiteralValue.Create('SyntaxError'));
+  FSyntaxErrorProto.AssignProperty('message', TGocciaStringLiteralValue.Create(''));
+
+  FURIErrorProto := TGocciaObjectValue.Create(FErrorProto);
+  FURIErrorProto.AssignProperty('name', TGocciaStringLiteralValue.Create('URIError'));
+  FURIErrorProto.AssignProperty('message', TGocciaStringLiteralValue.Create(''));
+
+  FAggregateErrorProto := TGocciaObjectValue.Create(FErrorProto);
+  FAggregateErrorProto.AssignProperty('name', TGocciaStringLiteralValue.Create('AggregateError'));
+  FAggregateErrorProto.AssignProperty('message', TGocciaStringLiteralValue.Create(''));
+
   ErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ErrorConstructor, 'Error', 1);
   TypeErrorConstructorFunc := TGocciaNativeFunctionValue.Create(TypeErrorConstructor, 'TypeError', 1);
   ReferenceErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ReferenceErrorConstructor, 'ReferenceError', 1);
   RangeErrorConstructorFunc := TGocciaNativeFunctionValue.Create(RangeErrorConstructor, 'RangeError', 1);
+  SyntaxErrorConstructorFunc := TGocciaNativeFunctionValue.Create(SyntaxErrorConstructor, 'SyntaxError', 1);
+  URIErrorConstructorFunc := TGocciaNativeFunctionValue.Create(URIErrorConstructor, 'URIError', 1);
+  AggregateErrorConstructorFunc := TGocciaNativeFunctionValue.Create(AggregateErrorConstructor, 'AggregateError', 2);
 
-  // Set .prototype on each constructor (used by instanceof)
   ErrorConstructorFunc.AssignProperty('prototype', FErrorProto);
   TypeErrorConstructorFunc.AssignProperty('prototype', FTypeErrorProto);
   ReferenceErrorConstructorFunc.AssignProperty('prototype', FReferenceErrorProto);
   RangeErrorConstructorFunc.AssignProperty('prototype', FRangeErrorProto);
+  SyntaxErrorConstructorFunc.AssignProperty('prototype', FSyntaxErrorProto);
+  URIErrorConstructorFunc.AssignProperty('prototype', FURIErrorProto);
+  AggregateErrorConstructorFunc.AssignProperty('prototype', FAggregateErrorProto);
 
   AScope.DefineLexicalBinding('Error', ErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding('TypeError', TypeErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding('ReferenceError', ReferenceErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding('RangeError', RangeErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding('SyntaxError', SyntaxErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding('URIError', URIErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding('AggregateError', AggregateErrorConstructorFunc, dtConst);
 
-  // Global functions
   AScope.DefineLexicalBinding('queueMicrotask',
     TGocciaNativeFunctionValue.Create(QueueMicrotaskCallback, 'queueMicrotask', 1), dtConst);
+end;
 
-  // Note: parseInt, parseFloat, isNaN, isFinite are intentionally NOT registered as globals.
-  // They are available only on the Number object (e.g. Number.parseInt, Number.isNaN).
-  // If needed, they can be polyfilled:
-  //   const parseInt = Number.parseInt;
-  //   const parseFloat = Number.parseFloat;
-  //   const isNaN = Number.isNaN;
-  //   const isFinite = Number.isFinite;
+function TGocciaGlobals.BuildErrorObject(const AName: string; const AProto: TGocciaObjectValue; const AArgs: TGocciaArgumentsCollection): TGocciaObjectValue;
+var
+  Message: string;
+  OptionsArg, CauseValue: TGocciaValue;
+  OptionsIndex: Integer;
+begin
+  if AArgs.Length > 0 then
+    Message := AArgs.GetElement(0).ToStringLiteral.Value
+  else
+    Message := '';
+
+  Result := CreateErrorObject(AName, Message);
+  Result.Prototype := AProto;
+
+  OptionsIndex := 1;
+  if AArgs.Length > OptionsIndex then
+  begin
+    OptionsArg := AArgs.GetElement(OptionsIndex);
+    if OptionsArg is TGocciaObjectValue then
+    begin
+      CauseValue := OptionsArg.GetProperty('cause');
+      if (CauseValue <> nil) and not (CauseValue is TGocciaUndefinedLiteralValue) then
+        Result.AssignProperty('cause', CauseValue);
+    end;
+  end;
 end;
 
 function TGocciaGlobals.ErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Message: string;
-  ErrorObj: TGocciaObjectValue;
 begin
-  if AArgs.Length > 0 then
-    Message := AArgs.GetElement(0).ToStringLiteral.Value
-  else
-    Message := '';
-  ErrorObj := CreateErrorObject('Error', Message);
-  ErrorObj.Prototype := FErrorProto;
-  Result := ErrorObj;
+  Result := BuildErrorObject('Error', FErrorProto, AArgs);
 end;
 
 function TGocciaGlobals.TypeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Message: string;
-  ErrorObj: TGocciaObjectValue;
 begin
-  if AArgs.Length > 0 then
-    Message := AArgs.GetElement(0).ToStringLiteral.Value
-  else
-    Message := '';
-  ErrorObj := CreateErrorObject('TypeError', Message);
-  ErrorObj.Prototype := FTypeErrorProto;
-  Result := ErrorObj;
+  Result := BuildErrorObject('TypeError', FTypeErrorProto, AArgs);
 end;
 
 function TGocciaGlobals.ReferenceErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Message: string;
-  ErrorObj: TGocciaObjectValue;
 begin
-  if AArgs.Length > 0 then
-    Message := AArgs.GetElement(0).ToStringLiteral.Value
-  else
-    Message := '';
-  ErrorObj := CreateErrorObject('ReferenceError', Message);
-  ErrorObj.Prototype := FReferenceErrorProto;
-  Result := ErrorObj;
+  Result := BuildErrorObject('ReferenceError', FReferenceErrorProto, AArgs);
 end;
 
 function TGocciaGlobals.RangeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Message: string;
-  ErrorObj: TGocciaObjectValue;
 begin
+  Result := BuildErrorObject('RangeError', FRangeErrorProto, AArgs);
+end;
+
+function TGocciaGlobals.SyntaxErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := BuildErrorObject('SyntaxError', FSyntaxErrorProto, AArgs);
+end;
+
+function TGocciaGlobals.URIErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := BuildErrorObject('URIError', FURIErrorProto, AArgs);
+end;
+
+function TGocciaGlobals.AggregateErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ErrorObj: TGocciaObjectValue;
+  Errors: TGocciaValue;
+  ErrorsArray: TGocciaArrayValue;
+  OptionsArg, CauseValue: TGocciaValue;
+  Message: string;
+  I: Integer;
+begin
+  ErrorsArray := TGocciaArrayValue.Create;
   if AArgs.Length > 0 then
-    Message := AArgs.GetElement(0).ToStringLiteral.Value
+  begin
+    Errors := AArgs.GetElement(0);
+    if Errors is TGocciaArrayValue then
+    begin
+      for I := 0 to TGocciaArrayValue(Errors).Elements.Count - 1 do
+        ErrorsArray.Elements.Add(TGocciaArrayValue(Errors).Elements[I]);
+    end;
+  end;
+
+  if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+    Message := AArgs.GetElement(1).ToStringLiteral.Value
   else
     Message := '';
-  ErrorObj := CreateErrorObject('RangeError', Message);
-  ErrorObj.Prototype := FRangeErrorProto;
+
+  ErrorObj := CreateErrorObject('AggregateError', Message);
+  ErrorObj.Prototype := FAggregateErrorProto;
+  ErrorObj.AssignProperty('errors', ErrorsArray);
+
+  if AArgs.Length > 2 then
+  begin
+    OptionsArg := AArgs.GetElement(2);
+    if OptionsArg is TGocciaObjectValue then
+    begin
+      CauseValue := OptionsArg.GetProperty('cause');
+      if (CauseValue <> nil) and not (CauseValue is TGocciaUndefinedLiteralValue) then
+        ErrorObj.AssignProperty('cause', CauseValue);
+    end;
+  end;
+
   Result := ErrorObj;
 end;
 

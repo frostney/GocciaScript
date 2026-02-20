@@ -23,4 +23,13 @@ describe("Array.prototype.at", () => {
     expect(arr.at(10)).toBe(undefined);
     expect(arr.at(-10)).toBe(undefined);
   });
+
+  test("at with 0 returns first element", () => {
+    expect([10, 20, 30].at(0)).toBe(10);
+  });
+
+  test("at on empty array returns undefined", () => {
+    expect([].at(0)).toBe(undefined);
+    expect([].at(-1)).toBe(undefined);
+  });
 });

@@ -55,6 +55,15 @@ test("Map constructor with NaN key deduplication", () => {
   expect(map.get(NaN)).toBe("second");
 });
 
+test("Map treats -0 and +0 as same key", () => {
+  const map = new Map();
+  map.set(-0, "neg");
+  map.set(0, "pos");
+  expect(map.size).toBe(1);
+  expect(map.get(0)).toBe("pos");
+  expect(map.get(-0)).toBe("pos");
+});
+
 test("Map.prototype is an object", () => {
   expect(typeof Map.prototype).toBe("object");
 });

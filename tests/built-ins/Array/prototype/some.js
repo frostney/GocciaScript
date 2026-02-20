@@ -45,3 +45,16 @@ test("Array.prototype.some with sparse array", () => {
   expect([1, , 1].some((x) => x !== 1)).toBe(false);
   expect([1, undefined, 1].some((x) => x !== 1)).toBe(true);
 });
+
+test("some stops iteration on first true", () => {
+  let callCount = 0;
+  [1, 2, 3, 4, 5].some((x) => {
+    callCount = callCount + 1;
+    return x === 3;
+  });
+  expect(callCount).toBe(3);
+});
+
+test("some with all elements failing", () => {
+  expect([1, 2, 3].some((x) => x > 10)).toBe(false);
+});

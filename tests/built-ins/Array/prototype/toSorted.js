@@ -27,3 +27,13 @@ test("Array.prototype.toSorted with custom sort function", () => {
   expect(arr2).toEqual([3, 1, 2, 4, 5]);
   expect(sorted2).toEqual([1, 2, 3, 4, 5]);
 });
+
+test("toSorted returns a new array, not the original", () => {
+  const arr = [3, 1, 2];
+  const sorted = arr.toSorted();
+  expect(sorted).not.toBe(arr);
+});
+
+test("toSorted with single element", () => {
+  expect([42].toSorted()).toEqual([42]);
+});

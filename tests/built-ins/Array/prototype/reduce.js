@@ -64,3 +64,50 @@ test("Array.prototype.reduce with empty array", () => {
   const reduced = arr.reduce((acc, x) => acc + x, 0);
   expect(reduced).toBe(0);
 });
+
+test("reduce without initial value uses first element as accumulator", () => {
+  const arr = [1, 2, 3, 4];
+  const result = arr.reduce((acc, x) => acc + x);
+  expect(result).toBe(10);
+});
+
+test("reduce without initial value starts callback at index 1", () => {
+  const indices = [];
+  [10, 20, 30].reduce((acc, val, idx) => {
+    indices.push(idx);
+    return acc + val;
+  });
+  expect(indices).toEqual([1, 2]);
+});
+
+test("reduce with single element and no initial value returns that element", () => {
+  const result = [42].reduce((acc, x) => acc + x);
+  expect(result).toBe(42);
+});
+
+test("reduce on empty array without initial value throws TypeError", () => {
+  expect(() => {
+    [].reduce((acc, x) => acc + x);
+  }).toThrow(TypeError);
+});
+
+test("reduce with initial value on single-element array", () => {
+  const result = [5].reduce((acc, x) => acc + x, 10);
+  expect(result).toBe(15);
+});
+
+test("reduce passes correct arguments to callback", () => {
+  const calls = [];
+  [1, 2, 3].reduce((acc, val, idx, arr) => {
+    calls.push({ acc, val, idx, len: arr.length });
+    return acc + val;
+  }, 0);
+  expect(calls.length).toBe(3);
+  expect(calls[0].acc).toBe(0);
+  expect(calls[0].val).toBe(1);
+  expect(calls[0].idx).toBe(0);
+  expect(calls[0].len).toBe(3);
+  expect(calls[2].acc).toBe(3);
+  expect(calls[2].val).toBe(3);
+  expect(calls[2].idx).toBe(2);
+});

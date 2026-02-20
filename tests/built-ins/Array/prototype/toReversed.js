@@ -18,3 +18,15 @@ test("Array.prototype.toReversed with empty array", () => {
   const reversed = arr.toReversed();
   expect(reversed).toEqual([]);
 });
+
+test("toReversed does not mutate the original array", () => {
+  const arr = [1, 2, 3];
+  const reversed = arr.toReversed();
+  expect(arr).toEqual([1, 2, 3]);
+  expect(reversed).toEqual([3, 2, 1]);
+  expect(reversed).not.toBe(arr);
+});
+
+test("toReversed with single element", () => {
+  expect([42].toReversed()).toEqual([42]);
+});

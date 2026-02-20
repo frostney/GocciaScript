@@ -70,7 +70,7 @@ describe("Infinity immutability", () => {
   test("global Infinity cannot be reassigned", () => {
     expect(() => {
       Infinity = 42;
-    }).toThrow();
+    }).toThrow(TypeError);
   });
 
   test("global Infinity remains unchanged after failed reassignment", () => {

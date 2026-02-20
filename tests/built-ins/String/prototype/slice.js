@@ -3,16 +3,43 @@ description: String.prototype.slice works correctly
 features: [String.prototype.slice]
 ---*/
 
-test("String.prototype.slice extracts strings", () => {
-  const str = "hello world";
-  expect(str.slice(0, 5)).toBe("hello");
-  expect(str.slice(-5)).toBe("world");
-  expect(str.slice(0)).toBe("hello world");
-  expect(str.slice(0, 0)).toBe("");
-  expect(str.slice(0, 1)).toBe("h");
-  expect(str.slice(1, 2)).toBe("e");
-  expect(str.slice(1, 3)).toBe("el");
-  expect(str.slice(1, 4)).toBe("ell");
-  expect(str.slice(1, 5)).toBe("ello");
-  expect(str.slice(1, 6)).toBe("ello ");
+describe("String.prototype.slice", () => {
+  test("extracts with start and end", () => {
+    expect("hello world".slice(0, 5)).toBe("hello");
+    expect("hello world".slice(6)).toBe("world");
+  });
+
+  test("negative start counts from end", () => {
+    expect("hello world".slice(-5)).toBe("world");
+  });
+
+  test("negative start and end", () => {
+    expect("hello world".slice(-5, -1)).toBe("worl");
+  });
+
+  test("start >= end returns empty string", () => {
+    expect("hello".slice(3, 1)).toBe("");
+    expect("hello".slice(5, 5)).toBe("");
+  });
+
+  test("no arguments returns full string", () => {
+    expect("hello".slice()).toBe("hello");
+  });
+
+  test("start beyond length returns empty string", () => {
+    expect("hello".slice(100)).toBe("");
+  });
+
+  test("negative start beyond length starts from 0", () => {
+    expect("hello".slice(-100)).toBe("hello");
+  });
+
+  test("end beyond length clamps to length", () => {
+    expect("hello".slice(0, 100)).toBe("hello");
+  });
+
+  test("empty string", () => {
+    expect("".slice(0)).toBe("");
+    expect("".slice(0, 5)).toBe("");
+  });
 });

@@ -58,3 +58,16 @@ test("Object.assign mutates the first argument", () => {
   expect(obj.c).toBe(3);
   expect(obj.d).toBe(4);
 });
+
+test("Object.assign returns the target object", () => {
+  const target = {};
+  const result = Object.assign(target, { a: 1 });
+  expect(result).toBe(target);
+});
+
+test("Object.assign with no sources returns target unchanged", () => {
+  const target = { a: 1 };
+  const result = Object.assign(target);
+  expect(result).toBe(target);
+  expect(result.a).toBe(1);
+});

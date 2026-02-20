@@ -9,41 +9,86 @@ uses
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
-  Goccia.Values.ClassValue,
-  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
   TGocciaGlobalString = class(TGocciaBuiltin)
-  private
-    FStringConstructor: TGocciaStringClassValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
-    destructor Destroy; override;
+
+    function StringFromCharCode(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function StringFromCodePoint(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
 
 uses
-  Goccia.GarbageCollector,
-  Goccia.Values.ClassHelper,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor;
+  SysUtils,
+
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction;
 
 constructor TGocciaGlobalString.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  // Create String constructor as a class value
-  FStringConstructor := TGocciaStringClassValue.Create('String', nil);
-  AScope.DefineLexicalBinding(AName, FStringConstructor, dtLet);
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringFromCharCode, 'fromCharCode', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringFromCodePoint, 'fromCodePoint', 1));
 end;
 
-destructor TGocciaGlobalString.Destroy;
+function TGocciaGlobalString.StringFromCharCode(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ResultStr: string;
+  I, CodeUnit: Integer;
 begin
-  if not Assigned(TGocciaGarbageCollector.Instance) then
-    FStringConstructor.Free;
-  inherited;
+  ResultStr := '';
+  I := 0;
+  while I < AArgs.Length do
+  begin
+    CodeUnit := Trunc(AArgs.GetElement(I).ToNumberLiteral.Value);
+    CodeUnit := CodeUnit and $FFFF;
+    if CodeUnit < $80 then
+      ResultStr := ResultStr + Chr(CodeUnit)
+    else if CodeUnit < $800 then
+      ResultStr := ResultStr + Chr($C0 or (CodeUnit shr 6)) + Chr($80 or (CodeUnit and $3F))
+    else
+      ResultStr := ResultStr + Chr($E0 or (CodeUnit shr 12)) + Chr($80 or ((CodeUnit shr 6) and $3F)) + Chr($80 or (CodeUnit and $3F));
+    Inc(I);
+  end;
+  Result := TGocciaStringLiteralValue.Create(ResultStr);
+end;
+
+function TGocciaGlobalString.StringFromCodePoint(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ResultStr: string;
+  I: Integer;
+  NumArg: TGocciaNumberLiteralValue;
+  RawValue: Double;
+  CodePoint: Cardinal;
+begin
+  ResultStr := '';
+  I := 0;
+  while I < AArgs.Length do
+  begin
+    NumArg := AArgs.GetElement(I).ToNumberLiteral;
+    if NumArg.IsNaN or NumArg.IsInfinity or NumArg.IsNegativeInfinity then
+      ThrowRangeError('Invalid code point');
+    RawValue := NumArg.Value;
+    if (RawValue < 0) or (RawValue > $10FFFF) or (RawValue <> Trunc(RawValue)) then
+      ThrowRangeError(FloatToStr(RawValue) + ' is not a valid code point');
+    CodePoint := Trunc(RawValue);
+
+    if CodePoint < $80 then
+      ResultStr := ResultStr + Chr(CodePoint)
+    else if CodePoint < $800 then
+      ResultStr := ResultStr + Chr($C0 or (CodePoint shr 6)) + Chr($80 or (CodePoint and $3F))
+    else if CodePoint < $10000 then
+      ResultStr := ResultStr + Chr($E0 or (CodePoint shr 12)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F))
+    else
+      ResultStr := ResultStr + Chr($F0 or (CodePoint shr 18)) + Chr($80 or ((CodePoint shr 12) and $3F)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F));
+    Inc(I);
+  end;
+  Result := TGocciaStringLiteralValue.Create(ResultStr);
 end;
 
 end.

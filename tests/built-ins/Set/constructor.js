@@ -58,6 +58,13 @@ test("Set constructor with another Set", () => {
   expect(copy).not.toBe(original);
 });
 
+test("Set treats -0 and +0 as same value", () => {
+  const set = new Set([-0, 0]);
+  expect(set.size).toBe(1);
+  expect(set.has(0)).toBe(true);
+  expect(set.has(-0)).toBe(true);
+});
+
 test("Set.prototype is an object", () => {
   expect(typeof Set.prototype).toBe("object");
 });

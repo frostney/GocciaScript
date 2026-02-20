@@ -115,21 +115,21 @@ describe.runIf(isTemporal)("Temporal.Instant", () => {
     const instant = Temporal.Instant.fromEpochMilliseconds(0);
     expect(() => {
       instant.add(new Temporal.Duration(1));
-    }).toThrow();
+    }).toThrow(RangeError);
   });
 
   test("add() throws on months", () => {
     const instant = Temporal.Instant.fromEpochMilliseconds(0);
     expect(() => {
       instant.add(new Temporal.Duration(0, 1));
-    }).toThrow();
+    }).toThrow(RangeError);
   });
 
   test("subtract() throws on weeks", () => {
     const instant = Temporal.Instant.fromEpochMilliseconds(0);
     expect(() => {
       instant.subtract(new Temporal.Duration(0, 0, 1));
-    }).toThrow();
+    }).toThrow(RangeError);
   });
 
 });

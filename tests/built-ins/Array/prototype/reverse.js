@@ -24,4 +24,17 @@ describe('Array.prototype.reverse', () => {
     arr.reverse();
     expect(arr.length).toBe(0);
   });
+
+  test('reverse mutates in place', () => {
+    const arr = [1, 2, 3];
+    const result = arr.reverse();
+    expect(result).toBe(arr);
+    expect(arr).toEqual([3, 2, 1]);
+  });
+
+  test('reverse with two elements', () => {
+    const arr = [1, 2];
+    arr.reverse();
+    expect(arr).toEqual([2, 1]);
+  });
 });

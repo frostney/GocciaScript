@@ -8,7 +8,7 @@ describe("arrow function edge cases", () => {
     const Foo = () => {};
     expect(() => {
       new Foo();
-    }).toThrow();
+    }).toThrow(TypeError);
   });
 
   test("arrow function expression body returns value", () => {

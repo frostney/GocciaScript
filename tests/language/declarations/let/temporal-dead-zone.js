@@ -8,14 +8,14 @@ describe("Temporal Dead Zone", () => {
     expect(() => {
       const val = x;
       let x = 10;
-    }).toThrow();
+    }).toThrow(ReferenceError);
   });
 
   test("accessing const before declaration throws", () => {
     expect(() => {
       const val = y;
       const y = 20;
-    }).toThrow();
+    }).toThrow(ReferenceError);
   });
 
   test("typeof on undeclared variable returns undefined", () => {
@@ -30,7 +30,7 @@ describe("Temporal Dead Zone", () => {
     }
     expect(() => {
       const val = inner;
-    }).toThrow();
+    }).toThrow(ReferenceError);
   });
 
   test("let in nested blocks shadows outer", () => {
@@ -46,7 +46,7 @@ describe("Temporal Dead Zone", () => {
     const a = 42;
     expect(() => {
       a = 99;
-    }).toThrow();
+    }).toThrow(TypeError);
   });
 
   test("const object properties can still be mutated", () => {

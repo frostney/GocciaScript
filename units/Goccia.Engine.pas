@@ -17,6 +17,7 @@ uses
   Goccia.Builtins.GlobalPromise,
   Goccia.Builtins.Globals,
   Goccia.Builtins.GlobalSet,
+  Goccia.Builtins.GlobalString,
   Goccia.Builtins.GlobalSymbol,
   Goccia.Builtins.JSON,
   Goccia.Builtins.Math,
@@ -77,6 +78,7 @@ type
     FBuiltinGlobalObject: TGocciaGlobalObject;
     FBuiltinGlobalArray: TGocciaGlobalArray;
     FBuiltinGlobalNumber: TGocciaGlobalNumber;
+    FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
     FBuiltinJSON: TGocciaJSONBuiltin;
     FBuiltinSymbol: TGocciaGlobalSymbol;
@@ -202,6 +204,7 @@ begin
   FBuiltinGlobalObject.Free;
   FBuiltinGlobalArray.Free;
   FBuiltinGlobalNumber.Free;
+  FBuiltinGlobalString.Free;
   FBuiltinGlobals.Free;
   FBuiltinJSON.Free;
   FBuiltinSymbol.Free;
@@ -277,6 +280,7 @@ begin
     FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
 
   // Always-registered built-ins
+  FBuiltinGlobalString := TGocciaGlobalString.Create('String', Scope, ThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, ThrowError);
   Scope.DefineLexicalBinding('Iterator', TGocciaIteratorValue.CreateGlobalObject, dtConst);
   RegisterBuiltinConstructors;
@@ -312,6 +316,9 @@ begin
     MapConstructor := TGocciaMapClassValue.Create('Map', nil);
     TGocciaMapValue.ExposePrototype(MapConstructor);
     MapConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    if Assigned(FBuiltinMap) then
+      for Key in FBuiltinMap.BuiltinObject.GetAllPropertyNames do
+        MapConstructor.SetProperty(Key, FBuiltinMap.BuiltinObject.GetProperty(Key));
     FInterpreter.GlobalScope.DefineLexicalBinding('Map', MapConstructor, dtConst);
   end;
 
@@ -327,6 +334,9 @@ begin
   StringConstructor.ReplacePrototype(TGocciaStringObjectValue.GetSharedPrototype);
   StringConstructor.Prototype.AssignProperty('constructor', StringConstructor);
   StringConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+  if Assigned(FBuiltinGlobalString) then
+    for Key in FBuiltinGlobalString.BuiltinObject.GetAllPropertyNames do
+      StringConstructor.SetProperty(Key, FBuiltinGlobalString.BuiltinObject.GetProperty(Key));
   FInterpreter.GlobalScope.DefineLexicalBinding('String', StringConstructor, dtConst);
 
   NumberConstructor := TGocciaNumberClassValue.Create('Number', nil);

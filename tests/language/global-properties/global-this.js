@@ -139,7 +139,7 @@ describe("globalThis immutability", () => {
   test("global globalThis cannot be reassigned", () => {
     expect(() => {
       globalThis = {};
-    }).toThrow();
+    }).toThrow(TypeError);
   });
 
   test("global globalThis remains unchanged after failed reassignment", () => {

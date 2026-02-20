@@ -27,6 +27,8 @@ type
     function PromiseAny(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     function ExtractPromiseArray(const AArgs: TGocciaArgumentsCollection): TGocciaArrayValue;
+    function PromiseWithResolvers(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PromiseTry(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -34,6 +36,8 @@ type
 implementation
 
 uses
+  SysUtils,
+
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.Error,
@@ -446,6 +450,10 @@ begin
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseRace, 'race', 1));
   FPromiseConstructor.AssignProperty('any',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseAny, 'any', 1));
+  FPromiseConstructor.AssignProperty('withResolvers',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseWithResolvers, 'withResolvers', 0));
+  FPromiseConstructor.AssignProperty('try',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseTry, 'try', 1));
 
   AScope.DefineLexicalBinding(AName, FPromiseConstructor, dtLet);
 end;
@@ -756,6 +764,58 @@ begin
   end;
 
   Result := ResultPromise;
+end;
+
+function TGocciaGlobalPromise.PromiseWithResolvers(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+  ResolveFn, RejectFn: TGocciaNativeFunctionValue;
+  ResultObj: TGocciaObjectValue;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(Promise.DoResolve, 'resolve', 1);
+  RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(Promise.DoReject, 'reject', 1);
+
+  ResultObj := TGocciaObjectValue.Create;
+  ResultObj.AssignProperty('promise', Promise);
+  ResultObj.AssignProperty('resolve', ResolveFn);
+  ResultObj.AssignProperty('reject', RejectFn);
+
+  Result := ResultObj;
+end;
+
+function TGocciaGlobalPromise.PromiseTry(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+  Callback: TGocciaValue;
+  CallbackResult: TGocciaValue;
+  EmptyArgs: TGocciaArgumentsCollection;
+begin
+  Promise := TGocciaPromiseValue.Create;
+
+  if AArgs.Length = 0 then
+    Goccia.Values.ErrorHelper.ThrowTypeError('Promise.try requires a callback function');
+
+  Callback := AArgs.GetElement(0);
+  if not Callback.IsCallable then
+    Goccia.Values.ErrorHelper.ThrowTypeError('Promise.try requires a callback function');
+
+  try
+    EmptyArgs := TGocciaArgumentsCollection.Create;
+    try
+      CallbackResult := TGocciaFunctionBase(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      EmptyArgs.Free;
+    end;
+    Promise.Resolve(CallbackResult);
+  except
+    on E: TGocciaThrowValue do
+      Promise.Reject(E.Value);
+    on E: Exception do
+      Promise.Reject(CreateErrorObject('Error', E.Message));
+  end;
+
+  Result := Promise;
 end;
 
 end.

@@ -30,6 +30,13 @@ type
     function SetKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetUnion(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetIntersection(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetDifference(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetSymmetricDifference(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetIsSubsetOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetIsSupersetOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function SetIsDisjointFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
   public
@@ -85,6 +92,13 @@ begin
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetValues, 'values', 0));
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetKeys, 'keys', 0));
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetEntries, 'entries', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetUnion, 'union', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetIntersection, 'intersection', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetDifference, 'difference', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetSymmetricDifference, 'symmetricDifference', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetIsSubsetOf, 'isSubsetOf', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetIsSupersetOf, 'isSupersetOf', 1));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetIsDisjointFrom, 'isDisjointFrom', 1));
 
   FShared.Prototype.DefineSymbolProperty(
     TGocciaSymbolValue.WellKnownIterator,
@@ -281,6 +295,129 @@ end;
 function TGocciaSetValue.SetSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaSetIteratorValue.Create(AThisValue, skValues);
+end;
+
+function TGocciaSetValue.SetUnion(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ThisSet, OtherSet, ResultSet: TGocciaSetValue;
+  I: Integer;
+begin
+  ThisSet := TGocciaSetValue(AThisValue);
+  OtherSet := TGocciaSetValue(AArgs.GetElement(0));
+  ResultSet := TGocciaSetValue.Create;
+
+  for I := 0 to ThisSet.FItems.Count - 1 do
+    ResultSet.AddItem(ThisSet.FItems[I]);
+  for I := 0 to OtherSet.FItems.Count - 1 do
+    ResultSet.AddItem(OtherSet.FItems[I]);
+
+  Result := ResultSet;
+end;
+
+function TGocciaSetValue.SetIntersection(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ThisSet, OtherSet, ResultSet: TGocciaSetValue;
+  I: Integer;
+begin
+  ThisSet := TGocciaSetValue(AThisValue);
+  OtherSet := TGocciaSetValue(AArgs.GetElement(0));
+  ResultSet := TGocciaSetValue.Create;
+
+  for I := 0 to ThisSet.FItems.Count - 1 do
+    if OtherSet.ContainsValue(ThisSet.FItems[I]) then
+      ResultSet.AddItem(ThisSet.FItems[I]);
+
+  Result := ResultSet;
+end;
+
+function TGocciaSetValue.SetDifference(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ThisSet, OtherSet, ResultSet: TGocciaSetValue;
+  I: Integer;
+begin
+  ThisSet := TGocciaSetValue(AThisValue);
+  OtherSet := TGocciaSetValue(AArgs.GetElement(0));
+  ResultSet := TGocciaSetValue.Create;
+
+  for I := 0 to ThisSet.FItems.Count - 1 do
+    if not OtherSet.ContainsValue(ThisSet.FItems[I]) then
+      ResultSet.AddItem(ThisSet.FItems[I]);
+
+  Result := ResultSet;
+end;
+
+function TGocciaSetValue.SetSymmetricDifference(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ThisSet, OtherSet, ResultSet: TGocciaSetValue;
+  I: Integer;
+begin
+  ThisSet := TGocciaSetValue(AThisValue);
+  OtherSet := TGocciaSetValue(AArgs.GetElement(0));
+  ResultSet := TGocciaSetValue.Create;
+
+  for I := 0 to ThisSet.FItems.Count - 1 do
+    if not OtherSet.ContainsValue(ThisSet.FItems[I]) then
+      ResultSet.AddItem(ThisSet.FItems[I]);
+
+  for I := 0 to OtherSet.FItems.Count - 1 do
+    if not ThisSet.ContainsValue(OtherSet.FItems[I]) then
+      ResultSet.AddItem(OtherSet.FItems[I]);
+
+  Result := ResultSet;
+end;
+
+function TGocciaSetValue.SetIsSubsetOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ThisSet, OtherSet: TGocciaSetValue;
+  I: Integer;
+begin
+  ThisSet := TGocciaSetValue(AThisValue);
+  OtherSet := TGocciaSetValue(AArgs.GetElement(0));
+
+  for I := 0 to ThisSet.FItems.Count - 1 do
+    if not OtherSet.ContainsValue(ThisSet.FItems[I]) then
+    begin
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+      Exit;
+    end;
+
+  Result := TGocciaBooleanLiteralValue.TrueValue;
+end;
+
+function TGocciaSetValue.SetIsSupersetOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ThisSet, OtherSet: TGocciaSetValue;
+  I: Integer;
+begin
+  ThisSet := TGocciaSetValue(AThisValue);
+  OtherSet := TGocciaSetValue(AArgs.GetElement(0));
+
+  for I := 0 to OtherSet.FItems.Count - 1 do
+    if not ThisSet.ContainsValue(OtherSet.FItems[I]) then
+    begin
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+      Exit;
+    end;
+
+  Result := TGocciaBooleanLiteralValue.TrueValue;
+end;
+
+function TGocciaSetValue.SetIsDisjointFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ThisSet, OtherSet: TGocciaSetValue;
+  I: Integer;
+begin
+  ThisSet := TGocciaSetValue(AThisValue);
+  OtherSet := TGocciaSetValue(AArgs.GetElement(0));
+
+  for I := 0 to ThisSet.FItems.Count - 1 do
+    if OtherSet.ContainsValue(ThisSet.FItems[I]) then
+    begin
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+      Exit;
+    end;
+
+  Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
 
 end.

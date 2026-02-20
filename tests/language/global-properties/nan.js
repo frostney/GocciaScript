@@ -44,7 +44,7 @@ describe("NaN immutability", () => {
   test("global NaN cannot be reassigned", () => {
     expect(() => {
       NaN = 42;
-    }).toThrow();
+    }).toThrow(TypeError);
   });
 
   test("global NaN remains unchanged after failed reassignment", () => {

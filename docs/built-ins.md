@@ -66,6 +66,22 @@ end;
 | Method | Description |
 |--------|-------------|
 | `console.log(...args)` | Output to stdout with space-separated values |
+| `console.warn(...args)` | Output with "Warning:" prefix |
+| `console.error(...args)` | Output with "Error:" prefix |
+| `console.info(...args)` | Output with "Info:" prefix |
+| `console.debug(...args)` | Output with "Debug:" prefix |
+| `console.dir(obj)` | Display object properties |
+| `console.assert(condition, ...args)` | Print if assertion fails |
+| `console.count(label?)` | Increment and print named counter |
+| `console.countReset(label?)` | Reset named counter |
+| `console.time(label?)` | Start a named timer |
+| `console.timeEnd(label?)` | Stop timer and print elapsed time |
+| `console.timeLog(label?)` | Print elapsed time without stopping timer |
+| `console.clear()` | No-op (placeholder for terminal clearing) |
+| `console.group(label?)` | Increase indentation level |
+| `console.groupEnd()` | Decrease indentation level |
+| `console.trace(...args)` | Print with "Trace:" prefix |
+| `console.table(data)` | Display data (formatted output) |
 
 ### Math (`Goccia.Builtins.Math.pas`)
 
@@ -77,7 +93,10 @@ end;
 | `Math.E` | 2.71828182845904... |
 | `Math.LN2` | 0.693147... |
 | `Math.LN10` | 2.302585... |
+| `Math.LOG2E` | 1.442695... |
+| `Math.LOG10E` | 0.434294... |
 | `Math.SQRT2` | 1.414213... |
+| `Math.SQRT1_2` | 0.707106... |
 
 **Methods:**
 
@@ -101,6 +120,24 @@ end;
 | `Math.sin(x)` | Sine |
 | `Math.cos(x)` | Cosine |
 | `Math.tan(x)` | Tangent |
+| `Math.acos(x)` | Arc cosine |
+| `Math.asin(x)` | Arc sine |
+| `Math.atan(x)` | Arc tangent |
+| `Math.atan2(y, x)` | Arc tangent of y/x |
+| `Math.cbrt(x)` | Cube root |
+| `Math.cosh(x)` | Hyperbolic cosine |
+| `Math.sinh(x)` | Hyperbolic sine |
+| `Math.tanh(x)` | Hyperbolic tangent |
+| `Math.acosh(x)` | Inverse hyperbolic cosine |
+| `Math.asinh(x)` | Inverse hyperbolic sine |
+| `Math.atanh(x)` | Inverse hyperbolic tangent |
+| `Math.expm1(x)` | e^x - 1 (precise for small x) |
+| `Math.fround(x)` | Nearest 32-bit float |
+| `Math.hypot(x, y)` | Square root of sum of squares |
+| `Math.imul(a, b)` | 32-bit integer multiplication |
+| `Math.log1p(x)` | ln(1 + x) (precise for small x) |
+| `Math.log2(x)` | Base-2 logarithm |
+| `Math.clz32(x)` | Count leading zeros (32-bit) |
 
 All methods handle `NaN` and `Infinity` edge cases correctly.
 
@@ -108,8 +145,8 @@ All methods handle `NaN` and `Infinity` edge cases correctly.
 
 | Method | Description |
 |--------|-------------|
-| `JSON.parse(text)` | Parse JSON string to value |
-| `JSON.stringify(value)` | Convert value to JSON string |
+| `JSON.parse(text, reviver?)` | Parse JSON string to value, with optional reviver function |
+| `JSON.stringify(value, replacer?, space?)` | Convert value to JSON string, with optional replacer (function or array) and indentation |
 
 The JSON parser is a recursive descent implementation. Special handling:
 - `NaN` → `null` in stringify
@@ -136,6 +173,12 @@ The JSON parser is a recursive descent implementation. Special handling:
 | `Object.isFrozen(obj)` | Check if object is frozen |
 | `Object.getPrototypeOf(obj)` | Get the prototype of an object |
 | `Object.fromEntries(entries)` | Create object from `[[key, value], ...]` array |
+| `Object.seal(obj)` | Seal object (prevent new properties, keep existing writable) |
+| `Object.isSealed(obj)` | Check if object is sealed |
+| `Object.preventExtensions(obj)` | Prevent new properties from being added |
+| `Object.isExtensible(obj)` | Check if object is extensible |
+| `Object.setPrototypeOf(obj, proto)` | Set the prototype of an object |
+| `Object.groupBy(iterable, callback)` | Group elements by callback return value |
 
 ### Array (`Goccia.Builtins.GlobalArray.pas`)
 
@@ -161,6 +204,8 @@ The JSON parser is a recursive descent implementation. Special handling:
 | `flatMap(callback)` | Map then flatten one level |
 | `find(callback)` | Find first matching element |
 | `findIndex(callback)` | Find index of first match |
+| `findLast(callback)` | Find last matching element |
+| `findLastIndex(callback)` | Find index of last match |
 | `indexOf(value, fromIndex?)` | Find index of value |
 | `lastIndexOf(value, fromIndex?)` | Find last index of value |
 | `includes(value, fromIndex?)` | Check if array contains value |
@@ -178,6 +223,8 @@ The JSON parser is a recursive descent implementation. Special handling:
 | `at(index)` | Access element (supports negative index) |
 | `toReversed()` | Non-mutating reverse |
 | `toSorted(compareFn?)` | Non-mutating sort |
+| `with(index, value)` | Non-mutating element replacement |
+| `copyWithin(target, start, end?)` | Copy within array (mutating) |
 | `toSpliced(start, deleteCount?, ...items)` | Non-mutating splice |
 | `values()` | Returns an iterator over values |
 | `keys()` | Returns an iterator over indices |
@@ -220,6 +267,7 @@ These are **not** available as global functions — see [language-restrictions.m
 | `num.toString(radix?)` | Convert to string (supports radix 10 and 16) |
 | `num.valueOf()` | Return the primitive number value |
 | `num.toPrecision(precision?)` | Format to specified significant digits |
+| `num.toExponential(fractionDigits?)` | Format in exponential notation |
 
 All prototype methods correctly handle special values — `NaN`, `Infinity`, `-Infinity`, and `-0` return their standard string representations rather than attempting numeric formatting.
 
@@ -227,9 +275,16 @@ All prototype methods correctly handle special values — `NaN`, `Infinity`, `-I
 
 String constructor available as `String()`.
 
+**Static methods:**
+
+| Method | Description |
+|--------|-------------|
+| `String.fromCharCode(...codes)` | Create string from UTF-16 code units |
+| `String.fromCodePoint(...codePoints)` | Create string from Unicode code points |
+
 String prototype methods are implemented on string values:
 
-`charAt`, `charCodeAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `replace`, `replaceAll`, `split`, `padStart`, `padEnd`, `concat`, `at`, `[Symbol.iterator]`
+`charAt`, `charCodeAt`, `codePointAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `replace`, `replaceAll`, `split`, `padStart`, `padEnd`, `concat`, `at`, `localeCompare`, `normalize`, `isWellFormed`, `toWellFormed`, `[Symbol.iterator]`
 
 `[Symbol.iterator]()` returns an iterator that yields individual characters.
 
@@ -259,7 +314,9 @@ A `const` global providing engine metadata:
 
 `queueMicrotask` shares the same microtask queue used by Promise reactions. Callbacks run after the current synchronous code completes but before the engine returns control. If a callback throws, the error is silently discarded and remaining microtasks still execute.
 
-**Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`
+**Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`
+
+All error constructors accept an optional second argument `options` with a `cause` property. `AggregateError` takes `(errors, message, options?)` where `errors` is an array of error objects.
 
 Each creates a `TGocciaError` with the appropriate `Name` and `Message`.
 
@@ -305,7 +362,12 @@ Symbols are unique, immutable primitive values used as property keys.
 | `Symbol(description?)` | Create a new unique symbol |
 | `Symbol.for(key)` | Get/create a symbol in the global registry |
 | `Symbol.keyFor(symbol)` | Get the key for a global registry symbol (throws `TypeError` for non-symbol arguments) |
-| `Symbol.iterator` | Well-known symbol constant |
+| `Symbol.iterator` | Well-known symbol for iteration protocol |
+| `Symbol.species` | Well-known symbol for constructor species |
+| `Symbol.hasInstance` | Well-known symbol for instanceof behavior |
+| `Symbol.toPrimitive` | Well-known symbol for type conversion |
+| `Symbol.toStringTag` | Well-known symbol for Object.prototype.toString |
+| `Symbol.isConcatSpreadable` | Well-known symbol for Array.prototype.concat |
 | `symbol.toString()` | Returns `"Symbol(description)"` |
 | `symbol.description` | The description string, or `undefined` |
 
@@ -340,6 +402,13 @@ A collection of unique values with insertion-order iteration.
 | `set.keys()` | Returns an iterator over values (same as `values()` for Set) |
 | `set.entries()` | Returns an iterator of `[value, value]` pairs (matches `Map.entries()` shape) |
 | `set[Symbol.iterator]()` | Returns a values iterator (same as `values()`) |
+| `set.union(other)` | Returns new Set with elements from both |
+| `set.intersection(other)` | Returns new Set with common elements |
+| `set.difference(other)` | Returns new Set with elements in this but not other |
+| `set.symmetricDifference(other)` | Returns new Set with elements in either but not both |
+| `set.isSubsetOf(other)` | Check if all elements are in other |
+| `set.isSupersetOf(other)` | Check if contains all elements of other |
+| `set.isDisjointFrom(other)` | Check if no common elements |
 
 Sets are iterable: `[...mySet]` spreads the set's values into an array.
 
@@ -361,6 +430,12 @@ A collection of key-value pairs with insertion-order iteration. Any value (inclu
 | `map.values()` | Returns an iterator over values |
 | `map.entries()` | Returns an iterator over `[key, value]` pairs |
 | `map[Symbol.iterator]()` | Returns an entries iterator (same as `entries()`) |
+
+**Static methods:**
+
+| Method | Description |
+|--------|-------------|
+| `Map.groupBy(iterable, callback)` | Group elements into a Map by callback return value |
 
 Maps are iterable: `[...myMap]` spreads the map into an array of `[key, value]` pairs.
 
@@ -395,6 +470,8 @@ const p = new Promise((resolve, reject) => {
 | `Promise.allSettled(iterable)` | Wait for all to settle; returns `{status, value/reason}` objects |
 | `Promise.race(iterable)` | Settle with first settled value |
 | `Promise.any(iterable)` | Resolve with first fulfillment; reject with AggregateError if all reject |
+| `Promise.withResolvers()` | Returns object with `promise`, `resolve`, `reject` |
+| `Promise.try(callback)` | Execute callback, wrap result or error in Promise |
 
 **Microtask queue:** `.then()` callbacks are enqueued as microtasks and drained automatically after script execution completes — the script is one macrotask, and microtasks drain after it finishes, matching ECMAScript specification behavior. Thenable adoption (resolving a Promise with another Promise) is deferred via a microtask per the spec's PromiseResolveThenableJob, ensuring correct ordering relative to other microtasks. If the script throws an exception, pending microtasks are discarded via `ClearQueue` in a `finally` block, preventing stale callbacks from leaking into subsequent executions. The test framework also drains microtasks after each test callback, so tests can return a Promise and place assertions inside `.then()` handlers. The benchmark runner drains after each measurement round.
 

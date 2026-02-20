@@ -1,6 +1,6 @@
 # Language Restrictions
 
-GocciaScript implements a curated subset of ECMAScript 2020. This document details what's supported, what's excluded, and the rationale for each decision.
+GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision.
 
 ## Guiding Principle
 
@@ -245,7 +245,18 @@ Like loops, the parser uses `SkipBalancedParens` to safely skip the `with (...)`
 
 ### Generators and Iterators
 
-**Not yet implemented.** May be added in future versions.
+**Partially implemented.** Iterator protocol and Iterator Helpers are fully implemented. Generator functions (`function*`) are not supported.
+
+### Deferred Built-ins
+
+The following standard ECMAScript built-ins are **not yet implemented** and may be added in future versions:
+
+- **WeakMap / WeakSet / WeakRef / FinalizationRegistry** — Weak reference collections and finalizers. These require tight GC integration. Deferred until demand warrants the complexity.
+- **structuredClone** — Deep clone of values. May be added as a utility.
+- **URI functions** (`encodeURI`, `decodeURI`, `encodeURIComponent`, `decodeURIComponent`) — URL encoding/decoding.
+- **atob / btoa** — Base64 encoding/decoding.
+- **Regular Expressions** — `RegExp` constructor and regex literal syntax. String methods like `replace` currently work with string patterns only.
+- **async / await** — Syntax sugar for Promises. Use `.then()` chaining instead.
 
 ## Types as Comments
 

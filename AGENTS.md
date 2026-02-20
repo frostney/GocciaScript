@@ -4,7 +4,7 @@ Instructions for AI coding assistants working on GocciaScript. For deep-dive doc
 
 ## Project Overview
 
-GocciaScript is a subset of ECMAScript 2020 implemented in FreePascal. It provides a JavaScript-like scripting language with intentional limitations for security and simplicity. See [docs/language-restrictions.md](docs/language-restrictions.md) for the full rationale.
+GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a JavaScript-like scripting language with intentional limitations for security and simplicity. See [docs/language-restrictions.md](docs/language-restrictions.md) for the full rationale.
 
 ## Quick Reference
 

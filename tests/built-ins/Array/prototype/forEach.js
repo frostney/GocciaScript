@@ -45,3 +45,24 @@ test("Array.prototype.forEach with empty array", () => {
   const mapped = arr.forEach((x) => x * 2);
   expect(mapped).toBeUndefined();
 });
+
+test("forEach returns undefined always", () => {
+  const result = [1, 2, 3].forEach((x) => x * 2);
+  expect(result).toBe(undefined);
+});
+
+test("forEach calls callback for each element in order", () => {
+  const collected = [];
+  [10, 20, 30].forEach((val) => {
+    collected.push(val);
+  });
+  expect(collected).toEqual([10, 20, 30]);
+});
+
+test("forEach callback count matches array length", () => {
+  let count = 0;
+  [1, 2, 3, 4, 5].forEach(() => {
+    count = count + 1;
+  });
+  expect(count).toBe(5);
+});

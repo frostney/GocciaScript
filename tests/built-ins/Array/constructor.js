@@ -30,4 +30,29 @@ describe("Array constructor", () => {
     const arr = new Array();
     expect(arr instanceof Array).toBe(true);
   });
+
+  test("new Array(0) creates empty array", () => {
+    const arr = new Array(0);
+    expect(arr.length).toBe(0);
+  });
+
+  test("new Array with single non-number creates single-element array", () => {
+    const arr = new Array("abc");
+    expect(arr.length).toBe(1);
+    expect(arr[0]).toBe("abc");
+  });
+
+  test("new Array with negative length throws RangeError", () => {
+    expect(() => new Array(-1)).toThrow(RangeError);
+  });
+
+  test("new Array with non-integer length throws RangeError", () => {
+    expect(() => new Array(1.5)).toThrow(RangeError);
+  });
+
+  test("Array literal and Array constructor produce equivalent arrays", () => {
+    const literal = [1, 2, 3];
+    const constructed = new Array(1, 2, 3);
+    expect(literal).toEqual(constructed);
+  });
 });

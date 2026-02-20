@@ -35,4 +35,13 @@ describe("Array.isArray", () => {
   test("returns true for empty array", () => {
     expect(Array.isArray([])).toBe(true);
   });
+
+  test("returns true for new Array()", () => {
+    expect(Array.isArray(new Array())).toBe(true);
+    expect(Array.isArray(new Array(3))).toBe(true);
+  });
+
+  test("returns false with no argument", () => {
+    expect(Array.isArray()).toBe(false);
+  });
 });

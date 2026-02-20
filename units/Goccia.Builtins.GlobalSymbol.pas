@@ -66,6 +66,11 @@ begin
 
   // Register well-known symbol constants
   FSymbolFunction.RegisterConstant('iterator', FIteratorSymbol);
+  FSymbolFunction.RegisterConstant('species', TGocciaSymbolValue.WellKnownSpecies);
+  FSymbolFunction.RegisterConstant('hasInstance', TGocciaSymbolValue.WellKnownHasInstance);
+  FSymbolFunction.RegisterConstant('toPrimitive', TGocciaSymbolValue.WellKnownToPrimitive);
+  FSymbolFunction.RegisterConstant('toStringTag', TGocciaSymbolValue.WellKnownToStringTag);
+  FSymbolFunction.RegisterConstant('isConcatSpreadable', TGocciaSymbolValue.WellKnownIsConcatSpreadable);
 
   // Expose Symbol.prototype (ECMAScript compatible)
   FSymbolFunction.AssignProperty('prototype', TGocciaSymbolValue.SharedPrototype);

@@ -34,14 +34,17 @@ type
     function NumberToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function NumberValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function NumberToPrecision(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function NumberToExponential(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
 
 uses
+  Math,
   SysUtils,
 
   Goccia.GarbageCollector,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction;
 
 function TGocciaNumberObjectValue.ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
@@ -84,6 +87,7 @@ begin
   FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToString, 'toString', 1));
   FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberValueOf, 'valueOf', 0));
   FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToPrecision, 'toPrecision', 1));
+  FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToExponential, 'toExponential', 1));
 
   if Assigned(TGocciaGarbageCollector.Instance) then
   begin
@@ -210,6 +214,93 @@ begin
   end;
 
   Result := TGocciaStringLiteralValue.Create(FloatToStrF(Prim.Value, ffGeneral, Precision, 0));
+end;
+
+function TGocciaNumberObjectValue.NumberToExponential(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Prim: TGocciaNumberLiteralValue;
+  FractionDigits, Exp: Integer;
+  HasExplicitDigits: Boolean;
+  NumVal, Mantissa: Double;
+  Sign, MantissaStr, ExpSign: string;
+begin
+  Prim := ExtractPrimitive(AThisValue);
+
+  if Prim.IsNaN then
+  begin
+    Result := TGocciaStringLiteralValue.Create('NaN');
+    Exit;
+  end;
+  if Prim.IsInfinity then
+  begin
+    Result := TGocciaStringLiteralValue.Create('Infinity');
+    Exit;
+  end;
+  if Prim.IsNegativeInfinity then
+  begin
+    Result := TGocciaStringLiteralValue.Create('-Infinity');
+    Exit;
+  end;
+
+  HasExplicitDigits := (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue);
+  if HasExplicitDigits then
+  begin
+    FractionDigits := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+    if (FractionDigits < 0) or (FractionDigits > 100) then
+      ThrowRangeError('toExponential() argument must be between 0 and 100');
+  end
+  else
+    FractionDigits := -1;
+
+  NumVal := Prim.Value;
+  Sign := '';
+  if NumVal < 0 then
+  begin
+    Sign := '-';
+    NumVal := -NumVal;
+  end;
+
+  if NumVal = 0 then
+  begin
+    if FractionDigits < 0 then
+      FractionDigits := 0;
+    if FractionDigits = 0 then
+      MantissaStr := '0'
+    else
+      MantissaStr := '0.' + StringOfChar('0', FractionDigits);
+    Result := TGocciaStringLiteralValue.Create(Sign + MantissaStr + 'e+0');
+    Exit;
+  end;
+
+  Exp := Trunc(Math.Floor(Math.Log10(NumVal)));
+  Mantissa := NumVal / Math.Power(10, Exp);
+
+  if FractionDigits < 0 then
+  begin
+    MantissaStr := FloatToStrF(Mantissa, ffGeneral, 15, 0);
+    if Pos('.', MantissaStr) = 0 then
+      MantissaStr := MantissaStr;
+  end
+  else
+  begin
+    MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa);
+    if (Length(MantissaStr) > 1) and (MantissaStr[1] <> '0') and (Pos('.', MantissaStr) > 0) then
+    begin
+      if (MantissaStr[1] >= '2') then
+      begin
+        Mantissa := Mantissa / 10;
+        Inc(Exp);
+        MantissaStr := FormatFloat('0.' + StringOfChar('0', FractionDigits), Mantissa);
+      end;
+    end;
+  end;
+
+  if Exp >= 0 then
+    ExpSign := '+'
+  else
+    ExpSign := '';
+
+  Result := TGocciaStringLiteralValue.Create(Sign + MantissaStr + 'e' + ExpSign + IntToStr(Exp));
 end;
 
 end.

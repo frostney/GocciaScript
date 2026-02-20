@@ -32,6 +32,12 @@ type
     function ObjectIsFrozen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectGetPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectFromEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectSeal(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectIsSealed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectPreventExtensions(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectIsExtensible(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectSetPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectGroupBy(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -72,6 +78,12 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectIsFrozen, 'isFrozen', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetPrototypeOf, 'getPrototypeOf', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectFromEntries, 'fromEntries', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectSeal, 'seal', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectIsSealed, 'isSealed', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectPreventExtensions, 'preventExtensions', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectIsExtensible, 'isExtensible', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectSetPrototypeOf, 'setPrototypeOf', 2));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGroupBy, 'groupBy', 2));
 end;
 
 function TGocciaGlobalObject.ObjectIs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -169,10 +181,8 @@ var
   PropertyEntries: TArray<TPair<string, TGocciaValue>>;
   I, J: Integer;
 begin
-  TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Object.assign', ThrowError);
+  TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.assign', ThrowError);
 
-  // JS spec calls ToObject(target) which wraps primitives; we require an object directly.
-  // Non-object sources are silently skipped in the loop below, matching JS behavior.
   if not (AArgs.GetElement(0) is TGocciaObjectValue) then
     ThrowError('Object.assign called on non-object', 0, 0);
 
@@ -594,6 +604,148 @@ begin
   end;
 
   Result := Obj;
+end;
+
+function TGocciaGlobalObject.ObjectSeal(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.seal', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
+  begin
+    Result := AArgs.GetElement(0);
+    Exit;
+  end;
+
+  TGocciaObjectValue(AArgs.GetElement(0)).Seal;
+  Result := AArgs.GetElement(0);
+end;
+
+function TGocciaGlobalObject.ObjectIsSealed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.isSealed', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
+  begin
+    Result := TGocciaBooleanLiteralValue.TrueValue;
+    Exit;
+  end;
+
+  if TGocciaObjectValue(AArgs.GetElement(0)).IsSealed then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+function TGocciaGlobalObject.ObjectPreventExtensions(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.preventExtensions', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
+  begin
+    Result := AArgs.GetElement(0);
+    Exit;
+  end;
+
+  TGocciaObjectValue(AArgs.GetElement(0)).PreventExtensions;
+  Result := AArgs.GetElement(0);
+end;
+
+function TGocciaGlobalObject.ObjectIsExtensible(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Object.isExtensible', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
+  begin
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+    Exit;
+  end;
+
+  if TGocciaObjectValue(AArgs.GetElement(0)).IsExtensible then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+function TGocciaGlobalObject.ObjectSetPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ProtoArg: TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.setPrototypeOf', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    ThrowError('Object.setPrototypeOf called on non-object', 0, 0);
+
+  ProtoArg := AArgs.GetElement(1);
+  if not (ProtoArg is TGocciaObjectValue) and not (ProtoArg is TGocciaNullLiteralValue) then
+    ThrowError('Object prototype may only be an Object or null', 0, 0);
+
+  if not TGocciaObjectValue(AArgs.GetElement(0)).IsExtensible then
+    ThrowError('Object.setPrototypeOf called on non-extensible object', 0, 0);
+
+  if ProtoArg is TGocciaNullLiteralValue then
+    TGocciaObjectValue(AArgs.GetElement(0)).Prototype := nil
+  else
+    TGocciaObjectValue(AArgs.GetElement(0)).Prototype := TGocciaObjectValue(ProtoArg);
+
+  Result := AArgs.GetElement(0);
+end;
+
+function TGocciaGlobalObject.ObjectGroupBy(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Items: TGocciaArrayValue;
+  Callback: TGocciaValue;
+  ResultObj: TGocciaObjectValue;
+  GroupKey: string;
+  GroupArray: TGocciaArrayValue;
+  CallArgs: TGocciaArgumentsCollection;
+  KeyValue: TGocciaValue;
+  I: Integer;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'Object.groupBy', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaArrayValue) then
+    ThrowError('Object.groupBy requires an iterable as first argument', 0, 0);
+  if not AArgs.GetElement(1).IsCallable then
+    ThrowError('Object.groupBy requires a callback function as second argument', 0, 0);
+
+  Items := TGocciaArrayValue(AArgs.GetElement(0));
+  Callback := AArgs.GetElement(1);
+  ResultObj := TGocciaObjectValue.Create;
+  ResultObj.Prototype := nil;
+
+  I := 0;
+  while I < Items.Elements.Count do
+  begin
+    CallArgs := TGocciaArgumentsCollection.Create;
+    try
+      CallArgs.Add(Items.Elements[I]);
+      CallArgs.Add(TGocciaNumberLiteralValue.SmallInt(I));
+
+      if Callback is TGocciaFunctionValue then
+        KeyValue := TGocciaFunctionValue(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else if Callback is TGocciaNativeFunctionValue then
+        KeyValue := TGocciaNativeFunctionValue(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        ThrowError('Object.groupBy callback is not callable', 0, 0);
+    finally
+      CallArgs.Free;
+    end;
+
+    GroupKey := KeyValue.ToStringLiteral.Value;
+
+    if ResultObj.HasOwnProperty(GroupKey) then
+      GroupArray := TGocciaArrayValue(ResultObj.GetProperty(GroupKey))
+    else
+    begin
+      GroupArray := TGocciaArrayValue.Create;
+      ResultObj.AssignProperty(GroupKey, GroupArray);
+    end;
+
+    GroupArray.Elements.Add(Items.Elements[I]);
+    Inc(I);
+  end;
+
+  Result := ResultObj;
 end;
 
 end.

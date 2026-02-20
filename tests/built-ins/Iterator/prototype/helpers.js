@@ -182,7 +182,7 @@ describe("Iterator.prototype.flatMap()", () => {
   test("non-iterable return value throws TypeError", () => {
     expect(() => {
       [1, 2, 3].values().flatMap((x) => x * 10).toArray();
-    }).toThrow();
+    }).toThrow(TypeError);
   });
 
   test("flatMap is lazy - returns an iterator", () => {
