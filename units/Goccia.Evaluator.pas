@@ -229,7 +229,7 @@ begin
       TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
       try
         IterResult := Iterator.AdvanceNext;
-        while not TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value do
+        while not IterResult.GetProperty('done').ToBooleanLiteral.Value do
         begin
           ATarget.Add(IterResult.GetProperty('value'));
           IterResult := Iterator.AdvanceNext;
@@ -269,7 +269,7 @@ begin
       TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
       try
         IterResult := Iterator.AdvanceNext;
-        while not TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value do
+        while not IterResult.GetProperty('done').ToBooleanLiteral.Value do
         begin
           AArgs.Add(IterResult.GetProperty('value'));
           IterResult := Iterator.AdvanceNext;
@@ -2439,7 +2439,7 @@ begin
         begin
           RestElements := TGocciaArrayValue.Create;
           IterResult := Iterator.AdvanceNext;
-          while not TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value do
+          while not IterResult.GetProperty('done').ToBooleanLiteral.Value do
           begin
             RestElements.Elements.Add(IterResult.GetProperty('value'));
             IterResult := Iterator.AdvanceNext;
@@ -2450,7 +2450,7 @@ begin
         else
         begin
           IterResult := Iterator.AdvanceNext;
-          if TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value then
+          if IterResult.GetProperty('done').ToBooleanLiteral.Value then
             ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
           else
             ElementValue := IterResult.GetProperty('value');

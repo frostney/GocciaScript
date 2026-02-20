@@ -143,6 +143,10 @@ describe("Iterator.prototype.some()", () => {
   test("returns false if none match", () => {
     expect([1, 2, 3].values().some((x) => x === 5)).toBe(false);
   });
+
+  test("some on empty iterator returns false", () => {
+    expect([].values().some(() => true)).toBe(false);
+  });
 });
 
 describe("Iterator.prototype.every()", () => {
@@ -152,6 +156,10 @@ describe("Iterator.prototype.every()", () => {
 
   test("returns false if any element fails", () => {
     expect([2, 3, 6].values().every((x) => x % 2 === 0)).toBe(false);
+  });
+
+  test("every on empty iterator returns true", () => {
+    expect([].values().every(() => false)).toBe(true);
   });
 });
 

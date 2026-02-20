@@ -25,6 +25,8 @@ type
 implementation
 
 uses
+  Classes,
+
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
@@ -65,12 +67,13 @@ var
   SourceStr: string;
   Iterator: TGocciaIteratorValue;
   IterResult: TGocciaObjectValue;
-  IteratorMethod: TGocciaValue;
+  IteratorMethod, NextMethod: TGocciaValue;
   IteratorObj: TGocciaValue;
-  LengthVal: TGocciaValue;
+  LengthVal, PropVal: TGocciaValue;
+  PropKeys: TStringList;
   CallArgs: TGocciaArgumentsCollection;
   MapCallback: TGocciaValue;
-  I, Len: Integer;
+  I, Len, PropIndex, Code: Integer;
 begin
   if AArgs.Length < 1 then
   begin
@@ -84,12 +87,14 @@ begin
   if Source is TGocciaArrayValue then
   begin
     SourceArr := TGocciaArrayValue(Source);
+    ResultArray.Elements.Capacity := SourceArr.Elements.Count;
     for I := 0 to SourceArr.Elements.Count - 1 do
       ResultArray.Elements.Add(SourceArr.Elements[I]);
   end
   else if Source is TGocciaStringLiteralValue then
   begin
     SourceStr := TGocciaStringLiteralValue(Source).Value;
+    ResultArray.Elements.Capacity := Length(SourceStr);
     for I := 1 to Length(SourceStr) do
       ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(SourceStr[I]));
   end
@@ -106,11 +111,14 @@ begin
       end;
       if IteratorObj is TGocciaIteratorValue then
         Iterator := TGocciaIteratorValue(IteratorObj)
-      else if (IteratorObj is TGocciaObjectValue) and
-              Assigned(IteratorObj.GetProperty('next')) and
-              not (IteratorObj.GetProperty('next') is TGocciaUndefinedLiteralValue) and
-              IteratorObj.GetProperty('next').IsCallable then
-        Iterator := TGocciaGenericIteratorValue.Create(IteratorObj)
+      else if IteratorObj is TGocciaObjectValue then
+      begin
+        NextMethod := IteratorObj.GetProperty('next');
+        if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
+          Iterator := TGocciaGenericIteratorValue.Create(IteratorObj)
+        else
+          Iterator := nil;
+      end
       else
         Iterator := nil;
 
@@ -121,7 +129,7 @@ begin
       TGocciaGarbageCollector.Instance.AddTempRoot(ResultArray);
       try
         IterResult := Iterator.AdvanceNext;
-        while not TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value do
+        while not IterResult.GetProperty('done').ToBooleanLiteral.Value do
         begin
           ResultArray.Elements.Add(IterResult.GetProperty('value'));
           IterResult := Iterator.AdvanceNext;
@@ -137,8 +145,20 @@ begin
       if Assigned(LengthVal) and not (LengthVal is TGocciaUndefinedLiteralValue) then
       begin
         Len := Trunc(LengthVal.ToNumberLiteral.Value);
+        ResultArray.Elements.Capacity := Len;
         for I := 0 to Len - 1 do
           ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+        PropKeys := TGocciaObjectValue(Source).GetOwnPropertyKeys;
+        for I := 0 to PropKeys.Count - 1 do
+        begin
+          Val(PropKeys[I], PropIndex, Code);
+          if (Code = 0) and (PropIndex >= 0) and (PropIndex < Len) then
+          begin
+            PropVal := Source.GetProperty(PropKeys[I]);
+            if Assigned(PropVal) and not (PropVal is TGocciaUndefinedLiteralValue) then
+              ResultArray.Elements[PropIndex] := PropVal;
+          end;
+        end;
       end;
     end;
   end;
@@ -146,14 +166,16 @@ begin
   if (AArgs.Length > 1) and AArgs.GetElement(1).IsCallable then
   begin
     MapCallback := AArgs.GetElement(1);
-    for I := 0 to ResultArray.Elements.Count - 1 do
-    begin
-      CallArgs := TGocciaArgumentsCollection.Create([ResultArray.Elements[I], TGocciaNumberLiteralValue.Create(I)]);
-      try
+    CallArgs := TGocciaArgumentsCollection.Create([TGocciaUndefinedLiteralValue.UndefinedValue, TGocciaNumberLiteralValue.ZeroValue]);
+    try
+      for I := 0 to ResultArray.Elements.Count - 1 do
+      begin
+        CallArgs.SetElement(0, ResultArray.Elements[I]);
+        CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
         ResultArray.Elements[I] := TGocciaFunctionBase(MapCallback).Call(CallArgs, AThisValue);
-      finally
-        CallArgs.Free;
       end;
+    finally
+      CallArgs.Free;
     end;
   end;
 
