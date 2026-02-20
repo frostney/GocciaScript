@@ -49,10 +49,10 @@ uses
 
   Goccia.Arguments.Validator,
   Goccia.Evaluator.Comparison,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
-  Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -799,7 +799,7 @@ begin
       CallArgs.Add(Items.Elements[I]);
       CallArgs.Add(TGocciaNumberLiteralValue.SmallInt(I));
 
-      KeyValue := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      KeyValue := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;

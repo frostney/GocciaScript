@@ -78,7 +78,6 @@ uses
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -348,7 +347,7 @@ begin
   Len := Length(StringValue);
 
   // Step 4: Let intStart be ToIntegerOrInfinity(start)
-  StartIndex := ToIntegerFromArgs(AArgs, 0, 0);
+  StartIndex := ToIntegerFromArgs(AArgs);
 
   // Step 5: If intStart < 0, let from be max(len + intStart, 0); else let from be min(intStart, len)
   StartIndex := NormalizeRelativeIndex(StartIndex, Len);
@@ -386,7 +385,7 @@ begin
   Len := Length(StringValue);
 
   // Step 4: Let intStart be ToIntegerOrInfinity(start)
-  StartIndex := ToIntegerFromArgs(AArgs, 0, 0);
+  StartIndex := ToIntegerFromArgs(AArgs);
 
   // Step 5: If end is undefined, let intEnd be len; else let intEnd be ToIntegerOrInfinity(end)
   EndIndex := ToIntegerFromArgs(AArgs, 1, Len);
@@ -429,7 +428,7 @@ begin
     SearchValue := 'undefined';
 
   // Step 4: Let pos be ToIntegerOrInfinity(position)
-  StartPosition := ToIntegerFromArgs(AArgs, 1, 0);
+  StartPosition := ToIntegerFromArgs(AArgs, 1);
 
   // Step 5: Let start be min(max(pos, 0), len)
   StartPosition := Max(0, StartPosition);
@@ -700,7 +699,7 @@ begin
         TGocciaStringLiteralValue.Create(StringValue)
       ]);
       try
-        CallResult := TGocciaFunctionBase(ReplaceArg).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        CallResult := InvokeCallable(ReplaceArg, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         ReplaceValue := CallResult.ToStringLiteral.Value;
       finally
         CallArgs.Free;
@@ -775,7 +774,7 @@ begin
         ResultStr := ResultStr + Copy(StringValue, Offset, SearchPos - 1);
         CallArgs.SetElement(0, TGocciaStringLiteralValue.Create(SearchValue));
         CallArgs.SetElement(1, TGocciaNumberLiteralValue.Create(Offset + SearchPos - 2));
-        CallResult := TGocciaFunctionBase(ReplaceArg).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        CallResult := InvokeCallable(ReplaceArg, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         ResultStr := ResultStr + CallResult.ToStringLiteral.Value;
         Offset := Offset + SearchPos - 1 + Length(SearchValue);
         if Offset > Length(StringValue) then
@@ -936,7 +935,7 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Let intMaxLength be ToLength(maxLength)
-  TargetLength := ToIntegerFromArgs(AArgs, 0, 0);
+  TargetLength := ToIntegerFromArgs(AArgs);
 
   // Step 4: If intMaxLength <= len(S), return S
   if Length(StringValue) >= TargetLength then
@@ -980,7 +979,7 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Let intMaxLength be ToLength(maxLength)
-  TargetLength := ToIntegerFromArgs(AArgs, 0, 0);
+  TargetLength := ToIntegerFromArgs(AArgs);
 
   // Step 4: If intMaxLength <= len(S), return S
   if Length(StringValue) >= TargetLength then
@@ -1047,7 +1046,7 @@ begin
 
   // Step 3: Let len be the length of S
   // Step 4: Let relativeIndex be ToIntegerOrInfinity(index)
-  Index := ToIntegerFromArgs(AArgs, 0, 0);
+  Index := ToIntegerFromArgs(AArgs);
 
   // Step 5: If relativeIndex >= 0, let k be relativeIndex; else let k be len + relativeIndex
   if Index < 0 then
@@ -1100,7 +1099,7 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Let position be ToIntegerOrInfinity(pos)
-  Index := ToIntegerFromArgs(AArgs, 0, 0);
+  Index := ToIntegerFromArgs(AArgs);
 
   // Step 4: If position < 0 or position >= len(S), return undefined
   if (Index < 0) or (Index >= Length(StringValue)) then
