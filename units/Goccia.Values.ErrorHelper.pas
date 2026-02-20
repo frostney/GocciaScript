@@ -28,6 +28,7 @@ procedure ThrowError(const AMessage: string);
 implementation
 
 uses
+  Goccia.CallStack,
   Goccia.Values.Error,
   Goccia.Values.Primitives;
 
@@ -36,6 +37,11 @@ begin
   Result := TGocciaObjectValue.Create;
   Result.AssignProperty('name', TGocciaStringLiteralValue.Create(AName));
   Result.AssignProperty('message', TGocciaStringLiteralValue.Create(AMessage));
+
+  if Assigned(TGocciaCallStack.Instance) then
+    Result.AssignProperty('stack',
+      TGocciaStringLiteralValue.Create(
+        TGocciaCallStack.Instance.CaptureStackTrace(AName, AMessage)));
 end;
 
 procedure ThrowTypeError(const AMessage: string);

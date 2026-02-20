@@ -144,6 +144,7 @@ uses
 
   TimingUtils,
 
+  Goccia.CallStack,
   Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
@@ -187,6 +188,7 @@ begin
   end;
 
   TGocciaGarbageCollector.Initialize;
+  TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
 
   FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines);
