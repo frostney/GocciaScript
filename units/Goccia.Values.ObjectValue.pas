@@ -17,7 +17,7 @@ type
   TGocciaObjectValue = class(TGocciaValue)
   protected
     FPropertyDescriptors: TDictionary<string, TGocciaPropertyDescriptor>;
-    FPropertyInsertionOrder: TStringList; // Track insertion order for property enumeration
+    FPropertyInsertionOrder: TStringList;
     FSymbolDescriptors: TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
     FSymbolInsertionOrder: TList<TGocciaSymbolValue>;
     FPrototype: TGocciaObjectValue;
@@ -125,16 +125,10 @@ end;
 
 destructor TGocciaObjectValue.Destroy;
 begin
-  // Don't free the values - they might be referenced elsewhere
-  // The scope or other owners should handle their cleanup
-
-  // Property descriptors are now records - no manual cleanup needed
   FPropertyDescriptors.Free;
   FPropertyInsertionOrder.Free;
-
   FSymbolDescriptors.Free;
   FSymbolInsertionOrder.Free;
-
   inherited;
 end;
 
@@ -144,7 +138,7 @@ var
   SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
 begin
   if GCMarked then Exit;
-  inherited; // Sets FGCMarked := True
+  inherited;
 
   if Assigned(FPrototype) then
     FPrototype.MarkReferences;

@@ -10,6 +10,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayValue,
+  Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -19,7 +20,7 @@ type
     Value: TGocciaValue;
   end;
 
-  TGocciaMapValue = class(TGocciaObjectValue)
+  TGocciaMapValue = class(TGocciaInstanceValue)
   private
     class var FShared: TGocciaSharedPrototype;
   private
@@ -39,7 +40,7 @@ type
     function FindEntry(const AKey: TGocciaValue): Integer;
     procedure InitializePrototype;
   public
-    constructor Create; overload;
+    constructor Create(const AClass: TGocciaClassValue = nil);
     destructor Destroy; override;
 
     procedure SetEntry(const AKey, AValue: TGocciaValue);
@@ -48,9 +49,10 @@ type
     function ToArray: TGocciaArrayValue;
     function ToStringTag: string; override;
 
+    procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
 
-    class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
+    class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
     property Entries: TList<TGocciaMapEntry> read FEntries;
   end;
@@ -66,12 +68,12 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
-constructor TGocciaMapValue.Create;
+constructor TGocciaMapValue.Create(const AClass: TGocciaClassValue = nil);
 begin
-  inherited Create(nil);
+  inherited Create(AClass);
   FEntries := TList<TGocciaMapEntry>.Create;
   InitializePrototype;
-  if Assigned(FShared) then
+  if not Assigned(AClass) and Assigned(FShared) then
     FPrototype := FShared.Prototype;
 end;
 
@@ -100,7 +102,7 @@ begin
   );
 end;
 
-class procedure TGocciaMapValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
+class procedure TGocciaMapValue.ExposePrototype(const AConstructor: TGocciaValue);
 begin
   if not Assigned(FShared) then
     TGocciaMapValue.Create;
@@ -113,14 +115,38 @@ begin
   inherited;
 end;
 
+procedure TGocciaMapValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
+var
+  InitArg: TGocciaValue;
+  ArrValue: TGocciaArrayValue;
+  EntryArr: TGocciaArrayValue;
+  I: Integer;
+begin
+  if AArguments.Length = 0 then
+    Exit;
+  InitArg := AArguments.GetElement(0);
+  if InitArg is TGocciaArrayValue then
+  begin
+    ArrValue := TGocciaArrayValue(InitArg);
+    for I := 0 to ArrValue.Elements.Count - 1 do
+    begin
+      if Assigned(ArrValue.Elements[I]) and (ArrValue.Elements[I] is TGocciaArrayValue) then
+      begin
+        EntryArr := TGocciaArrayValue(ArrValue.Elements[I]);
+        if EntryArr.Elements.Count >= 2 then
+          SetEntry(EntryArr.Elements[0], EntryArr.Elements[1]);
+      end;
+    end;
+  end;
+end;
+
 procedure TGocciaMapValue.MarkReferences;
 var
   I: Integer;
 begin
   if GCMarked then Exit;
-  inherited; // Marks self + object properties/prototype
+  inherited;
 
-  // Mark all map entries (keys and values)
   for I := 0 to FEntries.Count - 1 do
   begin
     if Assigned(FEntries[I].Key) then

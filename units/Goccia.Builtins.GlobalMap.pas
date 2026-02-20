@@ -34,10 +34,7 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   FMapConstructor := TGocciaNativeFunctionValue.Create(MapConstructorFn, 'Map', 0);
-
   TGocciaMapValue.ExposePrototype(FMapConstructor);
-
-  AScope.DefineLexicalBinding(AName, FMapConstructor, dtLet);
 end;
 
 function TGocciaGlobalMap.MapConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

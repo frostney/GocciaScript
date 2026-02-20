@@ -34,10 +34,7 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   FSetConstructor := TGocciaNativeFunctionValue.Create(SetConstructorFn, 'Set', 0);
-
   TGocciaSetValue.ExposePrototype(FSetConstructor);
-
-  AScope.DefineLexicalBinding(AName, FSetConstructor, dtLet);
 end;
 
 function TGocciaGlobalSet.SetConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

@@ -6,11 +6,12 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
-  TGocciaStringObjectValue = class(TGocciaObjectValue)
+  TGocciaStringObjectValue = class(TGocciaInstanceValue)
   private
     FPrimitive: TGocciaStringLiteralValue;
 
@@ -19,13 +20,16 @@ type
 
     function ExtractStringValue(const AValue: TGocciaValue): string;
   public
-    constructor Create(const APrimitive: TGocciaStringLiteralValue);
+    constructor Create(const APrimitive: TGocciaStringLiteralValue; const AClass: TGocciaClassValue = nil);
     destructor Destroy; override;
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
 
     procedure InitializePrototype;
     procedure MarkReferences; override;
+
+    class function GetSharedPrototype: TGocciaObjectValue;
+
     property Primitive: TGocciaStringLiteralValue read FPrimitive;
 
     // String prototype methods
@@ -52,6 +56,8 @@ type
     function StringPadEnd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringConcat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function StringValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function StringToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
@@ -85,15 +91,13 @@ begin
     Result := AValue.ToStringLiteral.Value;
 end;
 
-constructor TGocciaStringObjectValue.Create(const APrimitive: TGocciaStringLiteralValue);
+constructor TGocciaStringObjectValue.Create(const APrimitive: TGocciaStringLiteralValue; const AClass: TGocciaClassValue = nil);
 begin
-  inherited Create;
+  inherited Create(AClass);
   FPrimitive := APrimitive;
-
   InitializePrototype;
-
-  if Assigned(FSharedStringPrototype) then
-    Self.Prototype := FSharedStringPrototype;
+  if not Assigned(AClass) and Assigned(FSharedStringPrototype) then
+    FPrototype := FSharedStringPrototype;
 end;
 
 destructor TGocciaStringObjectValue.Destroy;
@@ -122,7 +126,6 @@ var
 begin
   StringValue := FPrimitive.ToStringLiteral.Value;
 
-  // Handle numeric index access: str[0], str[1], etc.
   if TryStrToInt(AName, Index) then
   begin
     if (Index >= 0) and (Index < Length(StringValue)) then
@@ -132,13 +135,12 @@ begin
     Exit;
   end;
 
-  // Look up in shared prototype with this object as context
+  Result := inherited GetProperty(AName);
+  if not (Result is TGocciaUndefinedLiteralValue) then
+    Exit;
+
   if Assigned(FSharedStringPrototype) then
-    Result := FSharedStringPrototype.GetPropertyWithContext(AName, Self)
-  else if Assigned(FPrototype) then
-    Result := FPrototype.GetPropertyWithContext(AName, Self)
-  else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := FSharedStringPrototype.GetPropertyWithContext(AName, Self);
 end;
 
 procedure TGocciaStringObjectValue.InitializePrototype;
@@ -172,6 +174,8 @@ begin
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringPadEnd, 'padEnd', 1));
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringConcat, 'concat', 1));
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringAt, 'at', 1));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringValueOf, 'valueOf', 0));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToString, 'toString', 0));
 
   FSharedStringPrototype.DefineSymbolProperty(
     TGocciaSymbolValue.WellKnownIterator,
@@ -188,7 +192,12 @@ begin
   end;
 end;
 
-{ TGocciaStringObjectValue }
+class function TGocciaStringObjectValue.GetSharedPrototype: TGocciaObjectValue;
+begin
+  if not Assigned(FSharedStringPrototype) then
+    TGocciaStringObjectValue.Create(TGocciaStringLiteralValue.Create(''));
+  Result := FSharedStringPrototype;
+end;
 
 function TGocciaStringObjectValue.StringLength(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -852,6 +861,16 @@ begin
   end;
 
   Result := TGocciaStringLiteralValue.Create(StringValue[Index + 1]); // Pascal is 1-based
+end;
+
+function TGocciaStringObjectValue.StringValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create(ExtractStringValue(AThisValue));
+end;
+
+function TGocciaStringObjectValue.StringToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create(ExtractStringValue(AThisValue));
 end;
 
 function TGocciaStringObjectValue.StringSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

@@ -148,8 +148,13 @@ uses
   Goccia.Scope,
   Goccia.Token,
   Goccia.Values.ArrayValue,
+  Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassValue,
+  Goccia.Values.MapValue,
+  Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectValue,
+  Goccia.Values.SetValue,
+  Goccia.Values.StringObjectValue,
   Goccia.Version;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
@@ -279,45 +284,66 @@ end;
 
 procedure TGocciaEngine.RegisterBuiltinConstructors;
 var
-  ArrayConstructor, ObjectConstructor, StringConstructor, NumberConstructor: TGocciaClassValue;
-  BooleanConstructor, FunctionConstructor: TGocciaClassValue;
+  ObjectConstructor, FunctionConstructor: TGocciaClassValue;
+  ArrayConstructor: TGocciaArrayClassValue;
+  MapConstructor: TGocciaMapClassValue;
+  SetConstructor: TGocciaSetClassValue;
+  StringConstructor: TGocciaStringClassValue;
+  NumberConstructor: TGocciaNumberClassValue;
+  BooleanConstructor: TGocciaBooleanClassValue;
   Key: string;
 begin
-  // Create Object constructor first (must be first since it's the root of the prototype chain)
   ObjectConstructor := TGocciaClassValue.Create('Object', nil);
   if Assigned(FBuiltinGlobalObject) then
-  begin
     for Key in FBuiltinGlobalObject.BuiltinObject.GetAllPropertyNames do
       ObjectConstructor.SetProperty(Key, FBuiltinGlobalObject.BuiltinObject.GetProperty(Key));
-  end;
   FInterpreter.GlobalScope.DefineLexicalBinding('Object', ObjectConstructor, dtConst);
 
-  // Create Array constructor and copy static methods
-  ArrayConstructor := TGocciaClassValue.Create('Array', nil);
+  ArrayConstructor := TGocciaArrayClassValue.Create('Array', nil);
+  TGocciaArrayValue.ExposePrototype(ArrayConstructor);
   ArrayConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   if Assigned(FBuiltinGlobalArray) then
-  begin
     for Key in FBuiltinGlobalArray.BuiltinObject.GetAllPropertyNames do
       ArrayConstructor.SetProperty(Key, FBuiltinGlobalArray.BuiltinObject.GetProperty(Key));
-  end;
   FInterpreter.GlobalScope.DefineLexicalBinding('Array', ArrayConstructor, dtConst);
 
-  // Create other constructors - use specialized subclasses for primitives
+  if ggMap in FGlobals then
+  begin
+    MapConstructor := TGocciaMapClassValue.Create('Map', nil);
+    TGocciaMapValue.ExposePrototype(MapConstructor);
+    MapConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    FInterpreter.GlobalScope.DefineLexicalBinding('Map', MapConstructor, dtConst);
+  end;
+
+  if ggSet in FGlobals then
+  begin
+    SetConstructor := TGocciaSetClassValue.Create('Set', nil);
+    TGocciaSetValue.ExposePrototype(SetConstructor);
+    SetConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    FInterpreter.GlobalScope.DefineLexicalBinding('Set', SetConstructor, dtConst);
+  end;
+
   StringConstructor := TGocciaStringClassValue.Create('String', nil);
+  StringConstructor.ReplacePrototype(TGocciaStringObjectValue.GetSharedPrototype);
+  StringConstructor.Prototype.AssignProperty('constructor', StringConstructor);
+  StringConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   FInterpreter.GlobalScope.DefineLexicalBinding('String', StringConstructor, dtConst);
 
   NumberConstructor := TGocciaNumberClassValue.Create('Number', nil);
+  NumberConstructor.ReplacePrototype(TGocciaNumberObjectValue.GetSharedPrototype);
+  NumberConstructor.Prototype.AssignProperty('constructor', NumberConstructor);
+  NumberConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   if Assigned(FBuiltinGlobalNumber) then
-  begin
     for Key in FBuiltinGlobalNumber.BuiltinObject.GetAllPropertyNames do
       NumberConstructor.SetProperty(Key, FBuiltinGlobalNumber.BuiltinObject.GetProperty(Key));
-  end;
   FInterpreter.GlobalScope.DefineLexicalBinding('Number', NumberConstructor, dtConst);
 
   BooleanConstructor := TGocciaBooleanClassValue.Create('Boolean', nil);
+  BooleanConstructor.ReplacePrototype(TGocciaBooleanObjectValue.GetSharedPrototype);
+  BooleanConstructor.Prototype.AssignProperty('constructor', BooleanConstructor);
+  BooleanConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   FInterpreter.GlobalScope.DefineLexicalBinding('Boolean', BooleanConstructor, dtConst);
 
-  // Create Function constructor
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 

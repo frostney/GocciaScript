@@ -8,11 +8,12 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Collection,
+  Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
-  TGocciaArrayValue = class(TGocciaObjectValue)
+  TGocciaArrayValue = class(TGocciaInstanceValue)
   private
     class var FSharedArrayPrototype: TGocciaObjectValue;
     class var FPrototypeMethodHost: TGocciaArrayValue;
@@ -69,7 +70,7 @@ type
   protected
     FElements: TObjectList<TGocciaValue>;
   public
-    constructor Create;
+    constructor Create(const AClass: TGocciaClassValue = nil);
     destructor Destroy; override;
     procedure InitializePrototype;
 
@@ -88,7 +89,10 @@ type
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function Includes(const AValue: TGocciaValue; AFromIndex: Integer = 0): Boolean;
 
+    procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
+
+    class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
     property Elements: TObjectList<TGocciaValue> read FElements;
   end;
@@ -234,12 +238,12 @@ begin
   Result := TGocciaArgumentsCollection.Create([AElement, TGocciaNumberLiteralValue.SmallInt(AIndex), AThisArray]);
 end;
 
-constructor TGocciaArrayValue.Create;
+constructor TGocciaArrayValue.Create(const AClass: TGocciaClassValue = nil);
 begin
-  inherited Create;
+  inherited Create(AClass);
   FElements := TObjectList<TGocciaValue>.Create(False);
   InitializePrototype;
-  if Assigned(FSharedArrayPrototype) then
+  if not Assigned(AClass) and Assigned(FSharedArrayPrototype) then
     FPrototype := FSharedArrayPrototype;
 end;
 
@@ -298,10 +302,51 @@ begin
   end;
 end;
 
+class procedure TGocciaArrayValue.ExposePrototype(const AConstructor: TGocciaValue);
+begin
+  if not Assigned(FSharedArrayPrototype) then
+    TGocciaArrayValue.Create;
+  if AConstructor is TGocciaClassValue then
+    TGocciaClassValue(AConstructor).ReplacePrototype(FSharedArrayPrototype)
+  else if AConstructor is TGocciaObjectValue then
+    TGocciaObjectValue(AConstructor).AssignProperty('prototype', FSharedArrayPrototype);
+  FSharedArrayPrototype.AssignProperty('constructor', AConstructor);
+end;
+
 destructor TGocciaArrayValue.Destroy;
 begin
   FElements.Free;
   inherited;
+end;
+
+procedure TGocciaArrayValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
+var
+  LenArg: TGocciaValue;
+  Len: Double;
+  I: Integer;
+begin
+  if AArguments.Length = 0 then
+    Exit;
+
+  if AArguments.Length = 1 then
+  begin
+    LenArg := AArguments.GetElement(0);
+    if LenArg is TGocciaNumberLiteralValue then
+    begin
+      Len := TGocciaNumberLiteralValue(LenArg).Value;
+      if (Len <> Trunc(Len)) or (Len < 0) or (Len > 4294967295) then
+        raise Exception.Create('Invalid array length');
+      FElements.Count := Trunc(Len);
+    end
+    else
+      FElements.Add(LenArg);
+  end
+  else
+  begin
+    FElements.Capacity := AArguments.Length;
+    for I := 0 to AArguments.Length - 1 do
+      FElements.Add(AArguments.GetElement(I));
+  end;
 end;
 
 procedure TGocciaArrayValue.MarkReferences;
@@ -309,9 +354,8 @@ var
   I: Integer;
 begin
   if GCMarked then Exit;
-  inherited; // Marks self + object properties/prototype
+  inherited;
 
-  // Mark all elements
   for I := 0 to FElements.Count - 1 do
   begin
     if Assigned(FElements[I]) then

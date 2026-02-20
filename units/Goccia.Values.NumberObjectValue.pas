@@ -6,11 +6,12 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
-  TGocciaNumberObjectValue = class(TGocciaObjectValue)
+  TGocciaNumberObjectValue = class(TGocciaInstanceValue)
   private
     FPrimitive: TGocciaNumberLiteralValue;
 
@@ -19,10 +20,13 @@ type
 
     function ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
   public
-    constructor Create(const APrimitive: TGocciaNumberLiteralValue);
+    constructor Create(const APrimitive: TGocciaNumberLiteralValue; const AClass: TGocciaClassValue = nil);
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure InitializePrototype;
     procedure MarkReferences; override;
+
+    class function GetSharedPrototype: TGocciaObjectValue;
+
     property Primitive: TGocciaNumberLiteralValue read FPrimitive;
 
     // Number prototype methods
@@ -50,26 +54,23 @@ begin
     Result := AValue.ToNumberLiteral;
 end;
 
-constructor TGocciaNumberObjectValue.Create(const APrimitive: TGocciaNumberLiteralValue);
+constructor TGocciaNumberObjectValue.Create(const APrimitive: TGocciaNumberLiteralValue; const AClass: TGocciaClassValue = nil);
 begin
-  inherited Create;
+  inherited Create(AClass);
   FPrimitive := APrimitive;
-
   InitializePrototype;
-
-  if Assigned(FSharedNumberPrototype) then
-    Self.Prototype := FSharedNumberPrototype;
+  if not Assigned(AClass) and Assigned(FSharedNumberPrototype) then
+    FPrototype := FSharedNumberPrototype;
 end;
 
 function TGocciaNumberObjectValue.GetProperty(const AName: string): TGocciaValue;
 begin
-  // Look up in shared prototype with this object as context
+  Result := inherited GetProperty(AName);
+  if not (Result is TGocciaUndefinedLiteralValue) then
+    Exit;
+
   if Assigned(FSharedNumberPrototype) then
-    Result := FSharedNumberPrototype.GetPropertyWithContext(AName, Self)
-  else if Assigned(FPrototype) then
-    Result := FPrototype.GetPropertyWithContext(AName, Self)
-  else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := FSharedNumberPrototype.GetPropertyWithContext(AName, Self);
 end;
 
 procedure TGocciaNumberObjectValue.InitializePrototype;
@@ -89,6 +90,13 @@ begin
     TGocciaGarbageCollector.Instance.PinValue(FSharedNumberPrototype);
     TGocciaGarbageCollector.Instance.PinValue(FPrototypeMethodHost);
   end;
+end;
+
+class function TGocciaNumberObjectValue.GetSharedPrototype: TGocciaObjectValue;
+begin
+  if not Assigned(FSharedNumberPrototype) then
+    TGocciaNumberObjectValue.Create(TGocciaNumberLiteralValue.ZeroValue);
+  Result := FSharedNumberPrototype;
 end;
 
 procedure TGocciaNumberObjectValue.MarkReferences;

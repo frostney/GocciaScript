@@ -10,11 +10,12 @@ uses
   Goccia.Arguments.Collection,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayValue,
+  Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
-  TGocciaSetValue = class(TGocciaObjectValue)
+  TGocciaSetValue = class(TGocciaInstanceValue)
   private
     class var FShared: TGocciaSharedPrototype;
   private
@@ -32,7 +33,7 @@ type
 
     procedure InitializePrototype;
   public
-    constructor Create; overload;
+    constructor Create(const AClass: TGocciaClassValue = nil);
     destructor Destroy; override;
 
     function ContainsValue(const AValue: TGocciaValue): Boolean;
@@ -42,9 +43,10 @@ type
     function ToArray: TGocciaArrayValue;
     function ToStringTag: string; override;
 
+    procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
 
-    class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
+    class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
     property Items: TList<TGocciaValue> read FItems;
   end;
@@ -60,12 +62,12 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
-constructor TGocciaSetValue.Create;
+constructor TGocciaSetValue.Create(const AClass: TGocciaClassValue = nil);
 begin
-  inherited Create(nil);
+  inherited Create(AClass);
   FItems := TList<TGocciaValue>.Create;
   InitializePrototype;
-  if Assigned(FShared) then
+  if not Assigned(AClass) and Assigned(FShared) then
     FPrototype := FShared.Prototype;
 end;
 
@@ -93,7 +95,7 @@ begin
   );
 end;
 
-class procedure TGocciaSetValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
+class procedure TGocciaSetValue.ExposePrototype(const AConstructor: TGocciaValue);
 begin
   if not Assigned(FShared) then
     TGocciaSetValue.Create;
@@ -106,14 +108,36 @@ begin
   inherited;
 end;
 
+procedure TGocciaSetValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
+var
+  InitArg: TGocciaValue;
+  ArrValue: TGocciaArrayValue;
+  I: Integer;
+begin
+  if AArguments.Length = 0 then
+    Exit;
+  InitArg := AArguments.GetElement(0);
+  if InitArg is TGocciaArrayValue then
+  begin
+    ArrValue := TGocciaArrayValue(InitArg);
+    for I := 0 to ArrValue.Elements.Count - 1 do
+      if Assigned(ArrValue.Elements[I]) then
+        AddItem(ArrValue.Elements[I]);
+  end
+  else if InitArg is TGocciaSetValue then
+  begin
+    for I := 0 to TGocciaSetValue(InitArg).Items.Count - 1 do
+      AddItem(TGocciaSetValue(InitArg).Items[I]);
+  end;
+end;
+
 procedure TGocciaSetValue.MarkReferences;
 var
   I: Integer;
 begin
   if GCMarked then Exit;
-  inherited; // Marks self + object properties/prototype
+  inherited;
 
-  // Mark all set items
   for I := 0 to FItems.Count - 1 do
   begin
     if Assigned(FItems[I]) then

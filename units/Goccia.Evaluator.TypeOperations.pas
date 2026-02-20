@@ -79,18 +79,21 @@ begin
     // Check if ALeft is an instance of the ARight class
     if ALeft is TGocciaInstanceValue then
     begin
-      // For class instances, check inheritance chain
       if TGocciaClassValue(ARight).Name = 'Object' then
       begin
-        // All class instances are instances of Object
+        Result := TGocciaBooleanLiteralValue.TrueValue;
+      end
+      else if TGocciaInstanceValue(ALeft).IsInstanceOf(TGocciaClassValue(ARight)) then
+      begin
+        Result := TGocciaBooleanLiteralValue.TrueValue;
+      end
+      else if AIsObjectInstanceOfClass(TGocciaObjectValue(ALeft), TGocciaClassValue(ARight)) then
+      begin
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end
       else
       begin
-        if TGocciaInstanceValue(ALeft).IsInstanceOf(TGocciaClassValue(ARight)) then
-          Result := TGocciaBooleanLiteralValue.TrueValue
-        else
-          Result := TGocciaBooleanLiteralValue.FalseValue;
+        Result := TGocciaBooleanLiteralValue.FalseValue;
       end;
     end
     else if (ALeft is TGocciaFunctionValue) and (TGocciaClassValue(ARight).Name = 'Function') then

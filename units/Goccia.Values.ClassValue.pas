@@ -62,10 +62,13 @@ type
     function GetPrivateStaticProperty(const AName: string): TGocciaValue;
     procedure AddPrivateMethod(const AName: string; const AMethod: TGocciaMethodValue);
     function GetPrivateMethod(const AName: string): TGocciaMethodValue;
-    function Instantiate(const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; virtual;
+    function Instantiate(const AArguments: TGocciaArgumentsCollection): TGocciaValue; virtual;
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
+
+    procedure ReplacePrototype(const APrototype: TGocciaObjectValue);
 
     property Name: string read FName;
     property SuperClass: TGocciaClassValue read FSuperClass;
@@ -83,24 +86,36 @@ type
     property PrivateSetters: TDictionary<string, TGocciaFunctionValue> read FPrivateSetters;
   end;
 
-  // Subclasses for primitive wrapper constructors
+  TGocciaArrayClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+  end;
+
+  TGocciaMapClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+  end;
+
+  TGocciaSetClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+  end;
+
   TGocciaStringClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
 
   TGocciaNumberClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
 
   TGocciaBooleanClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
 
   TGocciaInstanceValue = class(TGocciaObjectValue)
   private
     FClass: TGocciaClassValue;
-    FPrototype: TGocciaObjectValue;
-    FPrivateProperties: TDictionary<string, TGocciaValue>; // Private field values
-    procedure SetPrototype(const APrototype: TGocciaObjectValue);
+    FPrivateProperties: TDictionary<string, TGocciaValue>;
   public
-    constructor Create(const AClass: TGocciaClassValue);
+    constructor Create(const AClass: TGocciaClassValue = nil);
     destructor Destroy; override;
     function TypeName: string; override;
     function ToStringLiteral: TGocciaStringLiteralValue; override;
@@ -111,10 +126,10 @@ type
     procedure SetPrivateProperty(const AName: string; const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue);
     function HasPrivateProperty(const AName: string): Boolean;
     function IsInstanceOf(const AClass: TGocciaClassValue): Boolean; inline;
+    procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure MarkReferences; override;
 
-    property ClassValue: TGocciaClassValue read FClass;
-    property Prototype: TGocciaObjectValue read FPrototype write SetPrototype;
+    property ClassValue: TGocciaClassValue read FClass write FClass;
     property PrivateProperties: TDictionary<string, TGocciaValue> read FPrivateProperties;
   end;
 
@@ -125,9 +140,12 @@ uses
 
   Goccia.Error,
   Goccia.GarbageCollector,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
+  Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SetValue;
 
 constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGocciaClassValue);
 begin
@@ -405,18 +423,46 @@ begin
     Result := nil;
 end;
 
+function TGocciaClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := nil;
+end;
+
+procedure TGocciaClassValue.ReplacePrototype(const APrototype: TGocciaObjectValue);
+begin
+  FPrototype := APrototype;
+end;
+
 function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollection): TGocciaValue;
 var
-  Instance: TGocciaInstanceValue;
+  Instance: TGocciaObjectValue;
+  WalkClass: TGocciaClassValue;
+  NativeInstance: TGocciaObjectValue;
   ConstructorToCall: TGocciaMethodValue;
 begin
-  // Step 1: Create the basic instance
-  Instance := TGocciaInstanceValue.Create(Self);
+  NativeInstance := nil;
+  WalkClass := Self;
+  while Assigned(WalkClass) do
+  begin
+    NativeInstance := WalkClass.CreateNativeInstance(AArguments);
+    if Assigned(NativeInstance) then
+      Break;
+    WalkClass := WalkClass.SuperClass;
+  end;
 
-  // Step 2: Set up the prototype chain
-  Instance.Prototype := FPrototype;
+  if Assigned(NativeInstance) then
+  begin
+    Instance := NativeInstance;
+    Instance.Prototype := FPrototype;
+    if NativeInstance is TGocciaInstanceValue then
+      TGocciaInstanceValue(NativeInstance).ClassValue := Self;
+  end
+  else
+  begin
+    Instance := TGocciaInstanceValue.Create(Self);
+    Instance.Prototype := FPrototype;
+  end;
 
-  // Step 3: Find and call constructor (NOTE: No property initialization in basic path)
   ConstructorToCall := FConstructorMethod;
   if not Assigned(ConstructorToCall) and Assigned(FSuperClass) then
     ConstructorToCall := FSuperClass.ConstructorMethod;
@@ -429,7 +475,9 @@ begin
     finally
       TGocciaGarbageCollector.Instance.RemoveTempRoot(Instance);
     end;
-  end;
+  end
+  else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
+    TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
 
   Result := Instance;
 end;
@@ -462,7 +510,6 @@ end;
 
 function TGocciaClassValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  // Handle primitive wrappers when called as functions (type conversion)
   if FName = 'String' then
   begin
     if AArguments.Length = 0 then
@@ -484,27 +531,94 @@ begin
     else
       Result := AArguments.GetElement(0).ToBooleanLiteral;
   end
+  else if (FName = 'Array') or (FName = 'Map') or (FName = 'Set') then
+    Result := Instantiate(AArguments)
   else
-    // Default: create an instance
     Result := Instantiate(AArguments);
 end;
 
-constructor TGocciaInstanceValue.Create(const AClass: TGocciaClassValue);
+{ TGocciaArrayClassValue }
+
+function TGocciaArrayClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaArrayValue.Create;
+end;
+
+{ TGocciaMapClassValue }
+
+function TGocciaMapClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaMapValue.Create;
+end;
+
+{ TGocciaSetClassValue }
+
+function TGocciaSetClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaSetValue.Create;
+end;
+
+{ TGocciaStringClassValue }
+
+function TGocciaStringClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+var
+  Prim: TGocciaStringLiteralValue;
+begin
+  if AArguments.Length = 0 then
+    Prim := TGocciaStringLiteralValue.Create('')
+  else
+    Prim := AArguments.GetElement(0).ToStringLiteral;
+  Result := Prim.Box;
+end;
+
+{ TGocciaNumberClassValue }
+
+function TGocciaNumberClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+var
+  Prim: TGocciaNumberLiteralValue;
+begin
+  if AArguments.Length = 0 then
+    Prim := TGocciaNumberLiteralValue.ZeroValue
+  else
+    Prim := AArguments.GetElement(0).ToNumberLiteral;
+  Result := Prim.Box;
+end;
+
+{ TGocciaBooleanClassValue }
+
+function TGocciaBooleanClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+var
+  Prim: TGocciaBooleanLiteralValue;
+begin
+  if AArguments.Length = 0 then
+    Prim := TGocciaBooleanLiteralValue.FalseValue
+  else
+    Prim := AArguments.GetElement(0).ToBooleanLiteral;
+  Result := Prim.Box;
+end;
+
+{ TGocciaInstanceValue }
+
+constructor TGocciaInstanceValue.Create(const AClass: TGocciaClassValue = nil);
 begin
   inherited Create;
   FClass := AClass;
-  FPrototype := nil;
-  FPrivateProperties := TDictionary<string, TGocciaValue>.Create;
 end;
 
 function TGocciaInstanceValue.TypeName: string;
 begin
-  Result := FClass.Name;
+  if Assigned(FClass) then
+    Result := FClass.Name
+  else
+    Result := 'Object';
 end;
 
 function TGocciaInstanceValue.ToStringLiteral: TGocciaStringLiteralValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(Format('[Instance of %s]', [FClass.Name]));
+  if Assigned(FClass) then
+    Result := TGocciaStringLiteralValue.Create(Format('[Instance of %s]', [FClass.Name]))
+  else
+    Result := TGocciaStringLiteralValue.Create('[object Object]');
 end;
 
 function TGocciaInstanceValue.GetProperty(const AName: string): TGocciaValue;
@@ -529,12 +643,14 @@ begin
       Exit;
   end;
 
-  // Check for class methods
-  Method := FClass.GetMethod(AName);
-  if Assigned(Method) then
+  if Assigned(FClass) then
   begin
-    Result := Method;
-    Exit;
+    Method := FClass.GetMethod(AName);
+    if Assigned(Method) then
+    begin
+      Result := Method;
+      Exit;
+    end;
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -592,21 +708,16 @@ begin
   AssignProperty(AName, AValue);
 end;
 
-procedure TGocciaInstanceValue.SetPrototype(const APrototype: TGocciaObjectValue);
-begin
-  FPrototype := APrototype;
-
-  // Also set the inherited prototype field so that inherited GetProperty works correctly
-  inherited Prototype := APrototype;
-end;
-
 function TGocciaInstanceValue.HasPrivateProperty(const AName: string): Boolean;
 var
   Key: string;
   Suffix: string;
 begin
-  // Private properties are stored with composite keys (ClassName:FieldName)
-  // Check if any class's version of this field exists
+  if not Assigned(FPrivateProperties) then
+  begin
+    Result := False;
+    Exit;
+  end;
   Suffix := ':' + AName;
   for Key in FPrivateProperties.Keys do
   begin
@@ -617,6 +728,11 @@ begin
     end;
   end;
   Result := False;
+end;
+
+procedure TGocciaInstanceValue.InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
+begin
+  // No-op by default; native subclasses override to handle constructor arguments
 end;
 
 function TGocciaInstanceValue.IsInstanceOf(const AClass: TGocciaClassValue): Boolean; inline;
@@ -674,7 +790,7 @@ begin
 
   // Use composite key (ClassName:FieldName) to support per-class private field scoping
   CompositeKey := AAccessClass.Name + ':' + AName;
-  if FPrivateProperties.TryGetValue(CompositeKey, Result) then
+  if Assigned(FPrivateProperties) and FPrivateProperties.TryGetValue(CompositeKey, Result) then
     Exit
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -717,6 +833,8 @@ begin
 
   // Use composite key (ClassName:FieldName) to support per-class private field scoping
   CompositeKey := AAccessClass.Name + ':' + AName;
+  if not Assigned(FPrivateProperties) then
+    FPrivateProperties := TDictionary<string, TGocciaValue>.Create;
   FPrivateProperties.AddOrSetValue(CompositeKey, AValue);
 end;
 
@@ -737,10 +855,10 @@ begin
   if Assigned(FClass) then
     FClass.MarkReferences;
 
-  // Mark private properties
-  for ValuePair in FPrivateProperties do
-    if Assigned(ValuePair.Value) then
-      ValuePair.Value.MarkReferences;
+  if Assigned(FPrivateProperties) then
+    for ValuePair in FPrivateProperties do
+      if Assigned(ValuePair.Value) then
+        ValuePair.Value.MarkReferences;
 end;
 
 end.
