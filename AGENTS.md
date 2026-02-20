@@ -203,6 +203,7 @@ GocciaScript uses a mark-and-sweep garbage collector (`Goccia.GarbageCollector.p
 
 - **AST literal values** are unregistered from the GC by `TGocciaLiteralExpression.Create` and owned by the AST node. The evaluator calls `Value.RuntimeCopy` to produce fresh GC-managed values when evaluating literals.
 - **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache) are pinned via `TGocciaGarbageCollector.Instance.PinValue` during engine initialization (consolidated in `PinSingletons`).
+- **Interned strings** — `TGocciaStringLiteralValue.Intern(AValue)` returns a cached, GC-pinned instance for strings up to `MAX_INTERN_LENGTH` (64 chars). Longer strings get a fresh allocation. `RuntimeCopy` routes through `Intern`, so all AST string literals and type-conversion results (`ToStringLiteral`) are automatically interned. Use `Intern` in built-in code for short, commonly repeated strings; use `Create` for strings that are genuinely unique (concatenation results, user input).
 - **Shared prototype singletons** (String, Number, Array, Set, Map, Function, Symbol) are pinned inside each type's `InitializePrototype` method. All prototype method callbacks must use `ThisValue` (not `Self`) to access instance data, since `Self` refers to the method host singleton.
 - **Pinned values, temp roots, and root scopes** are stored in `TDictionary<T, Boolean>` for O(1) membership checks.
 - **Values held only by Pascal code** (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot` for the duration they are needed. Example: benchmark functions held in a `TObjectList`.
@@ -315,7 +316,7 @@ On FPC 3.2.2 AArch64, `Double(Int64Var)` performs a bit reinterpretation, not a 
 
 ### Design Patterns in Use
 
-- **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`) and shared prototype singletons (String, Number, Array, Set, Map, Function, Symbol — each type uses `class var` + `InitializePrototype` guarded by `if Assigned`)
+- **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`), shared prototype singletons (String, Number, Array, Set, Map, Function, Symbol — each type uses `class var` + `InitializePrototype` guarded by `if Assigned`), and interned strings (`TGocciaStringLiteralValue.Intern` with `class var FInternTable`)
 - **Factory method** for scope creation (`CreateChild`, with optional capacity hint)
 - **Context object** for evaluation state (`TGocciaEvaluationContext`)
 - **Virtual dispatch** for property access (`GetProperty`/`SetProperty`), type discrimination (`IsPrimitive`/`IsCallable`), and scope chain resolution (`GetThisValue`/`GetOwningClass`/`GetSuperClass`) on the `TGocciaValue` and `TGocciaScope` hierarchies

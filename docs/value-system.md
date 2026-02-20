@@ -236,6 +236,8 @@ TGocciaStringLiteralValue = class(TGocciaValue)
 end;
 ```
 
+**String interning:** Strings up to 64 characters (`MAX_INTERN_LENGTH`) are interned via `TGocciaStringLiteralValue.Intern(AValue)`, which maintains a class-level `TDictionary<string, TGocciaStringLiteralValue>`. Interned strings are GC-pinned at creation time and shared across all references. `RuntimeCopy` routes through `Intern`, so all AST string literals and type-conversion results are automatically interned. Longer strings bypass the intern table and are allocated fresh. This follows the same pattern as the `SmallInt` cache on `TGocciaNumberLiteralValue`.
+
 String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system. When strings are boxed into `TGocciaStringObjectValue` (e.g., via `new String()` or implicit boxing), all instances share a single class-level string prototype singleton — methods are registered once and reused across all string object instances. This shared prototype singleton pattern is used consistently across the codebase: `TGocciaStringObjectValue`, `TGocciaNumberObjectValue`, `TGocciaArrayValue`, `TGocciaSetValue`, `TGocciaMapValue`, `TGocciaSymbolValue`, and `TGocciaFunctionBase` all follow it.
 
 ### Symbols
