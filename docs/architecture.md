@@ -85,6 +85,15 @@ A dependency-free unit that centralizes all 33 reserved JavaScript keyword strin
 
 A dependency-free unit that centralizes all 12 contextual keyword string constants (`KEYWORD_GET`, `KEYWORD_SET`, `KEYWORD_TYPE`, `KEYWORD_INTERFACE`, `KEYWORD_IMPLEMENTS`, etc.). Contextual keywords have special meaning only in specific syntactic positions but are otherwise valid identifiers. Used by the lexer and parser.
 
+### Call Stack (`Goccia.CallStack.pas`)
+
+A singleton call frame stack that tracks the active function call chain for `Error.stack` trace generation. Key design:
+
+- **Singleton** — `TGocciaCallStack.Initialize` / `TGocciaCallStack.Instance`, mirroring the `TGocciaGarbageCollector` pattern.
+- **Push/Pop** — `EvaluateCall` and `EvaluateNewExpression` in the evaluator push a frame (function name, file path, line, column) before dispatching to the callee and pop after return (via `try/finally`). Each frame records the call-site position from the AST node and the callee's name.
+- **CaptureStackTrace** — Called by error constructors and `CreateErrorObject` to snapshot the current stack as a formatted string. Accepts a `SkipTop` parameter to omit the Error constructor frame when errors are created via `new Error()`.
+- **Pre-allocated** — Uses a fixed-capacity dynamic array (initial size 32) with doubling growth, avoiding per-frame heap allocation.
+
 ### Microtask Queue (`Goccia.MicrotaskQueue.pas`)
 
 A singleton microtask queue used by Promises and `queueMicrotask()` to defer callbacks per the ECMAScript specification. Key design:

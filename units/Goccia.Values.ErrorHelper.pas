@@ -7,8 +7,9 @@ interface
 uses
   Goccia.Values.ObjectValue;
 
-{ Creates a JavaScript error object with the given name and message }
-function CreateErrorObject(const AName, AMessage: string): TGocciaObjectValue;
+{ Creates a JavaScript error object with the given name and message.
+  ASkipTop controls how many frames to skip from the top of the call stack. }
+function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Integer = 0): TGocciaObjectValue;
 
 { Raises a TGocciaThrowValue with a TypeError }
 procedure ThrowTypeError(const AMessage: string);
@@ -28,14 +29,20 @@ procedure ThrowError(const AMessage: string);
 implementation
 
 uses
+  Goccia.CallStack,
   Goccia.Values.Error,
   Goccia.Values.Primitives;
 
-function CreateErrorObject(const AName, AMessage: string): TGocciaObjectValue;
+function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Integer = 0): TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create;
   Result.AssignProperty('name', TGocciaStringLiteralValue.Create(AName));
   Result.AssignProperty('message', TGocciaStringLiteralValue.Create(AMessage));
+
+  if Assigned(TGocciaCallStack.Instance) then
+    Result.AssignProperty('stack',
+      TGocciaStringLiteralValue.Create(
+        TGocciaCallStack.Instance.CaptureStackTrace(AName, AMessage, ASkipTop)));
 end;
 
 procedure ThrowTypeError(const AMessage: string);

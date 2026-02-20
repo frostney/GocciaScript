@@ -85,6 +85,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Contextual Keywords | `Goccia.Keywords.Contextual.pas` | Contextual keyword string constants (`get`, `set`, `type`, `interface`, `implements`, etc.) |
 | Timing Utilities | `TimingUtils.pas` | Cross-platform timing: monotonic (`GetNanoseconds`, `GetMilliseconds`), wall-clock (`GetEpochNanoseconds`), and duration formatting (`FormatDuration`) |
 | Microtask Queue | `Goccia.MicrotaskQueue.pas` | Singleton FIFO queue for Promise reactions and `queueMicrotask` callbacks, drained after script execution, cleared on exception |
+| Call Stack | `Goccia.CallStack.pas` | Singleton call frame stack for `Error.stack` traces — pushed/popped in `EvaluateCall`/`EvaluateNewExpression`, captured at error construction |
 | Garbage Collector | `Goccia.GarbageCollector.pas` | Mark-and-sweep memory management for runtime values |
 | Iterator Base | `Goccia.Values.IteratorValue.pas` | Iterator protocol base class, shared prototype with helper methods, `Iterator.from()`, `CreateGlobalObject` |
 | Concrete Iterators | `Goccia.Values.Iterator.Concrete.pas` | Array/String/Map/Set iterator subclasses with virtual `AdvanceNext` |
@@ -336,7 +337,7 @@ All values inherit from `TGocciaValue`. Virtual methods on the base class elimin
 
 The evaluator calls these directly (`Value.GetProperty(Name)`, `Value.IsPrimitive`, `Value.IsCallable`) without type-checking or interface queries. **Prefer these VMT methods over `is` type checks for fundamental type-system properties.** Do not add VMT methods for optional built-in types (e.g., Symbol, Set, Map) — these are toggled via `TGocciaGlobalBuiltins` flags and should use standard RTTI (`is`) checks instead.
 
-Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `CreateErrorObject`, etc.). Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
+Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `CreateErrorObject`, etc.). All error objects (both user-created via `new Error()` and runtime-thrown via `ThrowTypeError` etc.) receive a `stack` property containing a formatted stack trace captured at the point of construction. The call stack is maintained by `Goccia.CallStack.pas`, a singleton that tracks function name, file path, and line/column for each active call frame. Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
 
 **Symbol coercion:** `TGocciaSymbolValue.ToNumberLiteral` throws `TypeError` (symbols cannot convert to numbers). `ToStringLiteral` returns `"Symbol(description)"` for internal use (display, property keys), but implicit string coercion (template literals, `+` operator, `String.prototype.concat`) must check for symbols and throw `TypeError` at the operator level. See `Goccia.Evaluator.Arithmetic.pas` and `Goccia.Evaluator.pas` for the pattern. Symbols use a shared prototype singleton (like String, Number, Array) with `description` as an accessor getter and `toString()` as a method. `Symbol.prototype` is exposed on the Symbol constructor function.
 
