@@ -48,6 +48,111 @@ begin
   WriteLn('');
 end;
 
+procedure CountLines(const AFileName: string; out ALOC, ASLOC: Integer);
+var
+  F: TextFile;
+  Line, Trimmed: string;
+  InBlock: Boolean;
+  ClosePos: SizeInt;
+begin
+  ALOC := 0;
+  ASLOC := 0;
+  InBlock := False;
+
+  AssignFile(F, AFileName);
+  Reset(F);
+  try
+    while not EOF(F) do
+    begin
+      ReadLn(F, Line);
+      Inc(ALOC);
+      Trimmed := Trim(Line);
+
+      if InBlock then
+      begin
+        ClosePos := Pos('}', Trimmed);
+        if ClosePos = 0 then
+          ClosePos := Pos('*)', Trimmed);
+        if ClosePos > 0 then
+        begin
+          InBlock := False;
+          Delete(Trimmed, 1, ClosePos);
+          Trimmed := Trim(Trimmed);
+          if Trimmed <> '' then
+            Inc(ASLOC);
+        end;
+        Continue;
+      end;
+
+      if Trimmed = '' then
+        Continue;
+
+      if Copy(Trimmed, 1, 2) = '//' then
+        Continue;
+
+      if (Copy(Trimmed, 1, 1) = '{') and (Pos('}', Trimmed) = 0) then
+      begin
+        InBlock := True;
+        Continue;
+      end;
+
+      if (Copy(Trimmed, 1, 2) = '(*') and (Pos('*)', Trimmed) = 0) then
+      begin
+        InBlock := True;
+        Continue;
+      end;
+
+      Inc(ASLOC);
+    end;
+  finally
+    CloseFile(F);
+  end;
+end;
+
+function FormatNumber(AValue: Integer): string;
+var
+  S: string;
+  Len, InsertPos: Integer;
+begin
+  S := IntToStr(AValue);
+  Len := Length(S);
+  InsertPos := Len - 3;
+  while InsertPos > 0 do
+  begin
+    Insert(',', S, InsertPos + 1);
+    Dec(InsertPos, 3);
+  end;
+  Result := S;
+end;
+
+procedure PrintSourceStats;
+var
+  Files: TStringList;
+  K, FileLOC, FileSLOC, TotalLOC, TotalSLOC: Integer;
+begin
+  TotalLOC := 0;
+  TotalSLOC := 0;
+
+  Files := TStringList.Create;
+  try
+    Files.AddStrings(FindAllFiles('units', '.pas'));
+    Files.AddStrings(FindAllFiles('.', '.dpr'));
+    Files.AddStrings(FindAllFiles('units', '.inc'));
+
+    for K := 0 to Files.Count - 1 do
+    begin
+      CountLines(Files[K], FileLOC, FileSLOC);
+      TotalLOC := TotalLOC + FileLOC;
+      TotalSLOC := TotalSLOC + FileSLOC;
+    end;
+
+    WriteLn('Source: ', FormatNumber(TotalLOC), ' LOC | ', FormatNumber(TotalSLOC), ' SLOC (', Files.Count, ' files)');
+    WriteLn('');
+  finally
+    Files.Free;
+  end;
+end;
+
 function FPCArgs(const ASource: string): TStringArray;
 var
   Arch: string;
@@ -252,6 +357,7 @@ begin
 
   WriteLn('');
   PrintVersion;
+  PrintSourceStats;
 
   if BuildTriggers.Count = 0 then
   begin
