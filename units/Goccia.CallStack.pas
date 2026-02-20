@@ -105,7 +105,10 @@ begin
   else
     Result := AErrorName;
 
-  EffectiveCount := FCount - ASkipTop;
+  if ASkipTop > 0 then
+    EffectiveCount := FCount - ASkipTop
+  else
+    EffectiveCount := FCount;
   if EffectiveCount < 0 then
     EffectiveCount := 0;
 

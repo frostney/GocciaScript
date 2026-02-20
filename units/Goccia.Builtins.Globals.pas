@@ -40,7 +40,6 @@ type
 implementation
 
 uses
-  Goccia.CallStack,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayValue,
@@ -143,14 +142,8 @@ begin
     Message := '';
 
   { Step 2: Let O = OrdinaryCreateFromConstructor with prototype }
-  Result := CreateErrorObject(AName, Message);
+  Result := CreateErrorObject(AName, Message, 1);
   Result.Prototype := AProto;
-
-  { Capture stack trace at construction site, skipping the Error constructor frame }
-  if Assigned(TGocciaCallStack.Instance) then
-    Result.AssignProperty('stack',
-      TGocciaStringLiteralValue.Create(
-        TGocciaCallStack.Instance.CaptureStackTrace(AName, Message, 1)));
 
   { Step 4: InstallErrorCause(O, options) }
   OptionsIndex := 1;
