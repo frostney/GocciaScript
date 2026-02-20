@@ -322,7 +322,15 @@ A `const` global providing engine metadata:
 
 All error constructors accept an optional second argument `options` with a `cause` property. `AggregateError` takes `(errors, message, options?)` where `errors` is an array of error objects.
 
-Each creates a `TGocciaError` with the appropriate `Name` and `Message`.
+Each creates an error object with `name`, `message`, and `stack` properties. The `stack` property is a formatted string with the following structure:
+
+```
+ErrorName: message
+    at functionName (filePath:line:col)
+    at outerFunction (filePath:line:col)
+```
+
+Runtime errors thrown by the engine (e.g., `TypeError` from accessing a property on `undefined`) also receive a `stack` property.
 
 ### Iterator (`Goccia.Values.IteratorValue.pas`, `Iterator.Concrete.pas`, `Iterator.Lazy.pas`, `Iterator.Generic.pas`)
 
