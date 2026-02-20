@@ -75,9 +75,9 @@ uses
   SysUtils,
 
   Goccia.GarbageCollector,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -347,24 +347,16 @@ begin
   Len := Length(StringValue);
 
   // Step 4: Let intStart be ToIntegerOrInfinity(start)
-  if AArgs.Length > 0 then
-    StartIndex := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value)
-  else
-    StartIndex := 0;
+  StartIndex := ToIntegerFromArgs(AArgs, 0, 0);
 
   // Step 5: If intStart < 0, let from be max(len + intStart, 0); else let from be min(intStart, len)
-  if StartIndex < 0 then
-    StartIndex := Max(0, Len + StartIndex);
+  StartIndex := NormalizeRelativeIndex(StartIndex, Len);
 
   // Step 6: If end is undefined, let intEnd be len; else let intEnd be ToIntegerOrInfinity(end)
-  if AArgs.Length > 1 then
-    EndIndex := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value)
-  else
-    EndIndex := Len;
+  EndIndex := ToIntegerFromArgs(AArgs, 1, Len);
 
   // Step 7: If intEnd < 0, let to be max(len + intEnd, 0); else let to be min(intEnd, len)
-  if EndIndex < 0 then
-    EndIndex := Max(0, Len + EndIndex);
+  EndIndex := NormalizeRelativeIndex(EndIndex, Len);
 
   // Step 8: If from >= to, return ""
   if StartIndex > EndIndex then
@@ -393,16 +385,10 @@ begin
   Len := Length(StringValue);
 
   // Step 4: Let intStart be ToIntegerOrInfinity(start)
-  if AArgs.Length > 0 then
-    StartIndex := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value)
-  else
-    StartIndex := 0;
+  StartIndex := ToIntegerFromArgs(AArgs, 0, 0);
 
   // Step 5: If end is undefined, let intEnd be len; else let intEnd be ToIntegerOrInfinity(end)
-  if AArgs.Length > 1 then
-    EndIndex := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value)
-  else
-    EndIndex := Len;
+  EndIndex := ToIntegerFromArgs(AArgs, 1, Len);
 
   // Step 6: Let finalStart be min(max(intStart, 0), len)
   // Step 7: Let finalEnd be min(max(intEnd, 0), len)
@@ -442,10 +428,7 @@ begin
     SearchValue := 'undefined';
 
   // Step 4: Let pos be ToIntegerOrInfinity(position)
-  if AArgs.Length > 1 then
-    StartPosition := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value)
-  else
-    StartPosition := 0;
+  StartPosition := ToIntegerFromArgs(AArgs, 1, 0);
 
   // Step 5: Let start be min(max(pos, 0), len)
   StartPosition := Max(0, StartPosition);
@@ -716,7 +699,7 @@ begin
         TGocciaStringLiteralValue.Create(StringValue)
       ]);
       try
-        CallResult := TGocciaFunctionBase(ReplaceArg).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        CallResult := CallFunction(ReplaceArg, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         ReplaceValue := CallResult.ToStringLiteral.Value;
       finally
         CallArgs.Free;
@@ -791,7 +774,7 @@ begin
         ResultStr := ResultStr + Copy(StringValue, Offset, SearchPos - 1);
         CallArgs.SetElement(0, TGocciaStringLiteralValue.Create(SearchValue));
         CallArgs.SetElement(1, TGocciaNumberLiteralValue.Create(Offset + SearchPos - 2));
-        CallResult := TGocciaFunctionBase(ReplaceArg).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        CallResult := CallFunction(ReplaceArg, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         ResultStr := ResultStr + CallResult.ToStringLiteral.Value;
         Offset := Offset + SearchPos - 1 + Length(SearchValue);
         if Offset > Length(StringValue) then
@@ -952,10 +935,7 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Let intMaxLength be ToLength(maxLength)
-  if AArgs.Length > 0 then
-    TargetLength := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value)
-  else
-    TargetLength := 0;
+  TargetLength := ToIntegerFromArgs(AArgs, 0, 0);
 
   // Step 4: If intMaxLength <= len(S), return S
   if Length(StringValue) >= TargetLength then
@@ -999,10 +979,7 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Let intMaxLength be ToLength(maxLength)
-  if AArgs.Length > 0 then
-    TargetLength := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value)
-  else
-    TargetLength := 0;
+  TargetLength := ToIntegerFromArgs(AArgs, 0, 0);
 
   // Step 4: If intMaxLength <= len(S), return S
   if Length(StringValue) >= TargetLength then
@@ -1069,10 +1046,7 @@ begin
 
   // Step 3: Let len be the length of S
   // Step 4: Let relativeIndex be ToIntegerOrInfinity(index)
-  if AArgs.Length > 0 then
-    Index := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value)
-  else
-    Index := 0;
+  Index := ToIntegerFromArgs(AArgs, 0, 0);
 
   // Step 5: If relativeIndex >= 0, let k be relativeIndex; else let k be len + relativeIndex
   if Index < 0 then
@@ -1125,10 +1099,7 @@ begin
   StringValue := ExtractStringValue(AThisValue);
 
   // Step 3: Let position be ToIntegerOrInfinity(pos)
-  if AArgs.Length = 0 then
-    Index := 0
-  else
-    Index := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  Index := ToIntegerFromArgs(AArgs, 0, 0);
 
   // Step 4: If position < 0 or position >= len(S), return undefined
   if (Index < 0) or (Index >= Length(StringValue)) then

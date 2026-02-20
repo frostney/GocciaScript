@@ -538,6 +538,7 @@ function TGocciaClassValue.GetProperty(const AName: string): TGocciaValue;
 var
   Getter: TGocciaFunctionValue;
   Args: TGocciaArgumentsCollection;
+  Current: TGocciaClassValue;
 begin
   if AName = 'prototype' then
   begin
@@ -545,41 +546,48 @@ begin
     Exit;
   end;
 
-  if FStaticMethods.TryGetValue(AName, Result) then
-    Exit;
+  Current := Self;
+  repeat
+    if Current.FStaticMethods.TryGetValue(AName, Result) then
+      Exit;
 
-  if FStaticGetters.TryGetValue(AName, Getter) then
-  begin
-    Args := TGocciaArgumentsCollection.Create;
-    try
-      Result := Getter.Call(Args, Self);
-    finally
-      Args.Free;
+    if Current.FStaticGetters.TryGetValue(AName, Getter) then
+    begin
+      Args := TGocciaArgumentsCollection.Create;
+      try
+        Result := Getter.Call(Args, Self);
+      finally
+        Args.Free;
+      end;
+      Exit;
     end;
-    Exit;
-  end;
 
-  if Assigned(FSuperClass) then
-    Result := FSuperClass.GetProperty(AName)
-  else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Current := Current.FSuperClass;
+  until not Assigned(Current);
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocciaValue);
 var
   Setter: TGocciaFunctionValue;
   Args: TGocciaArgumentsCollection;
+  Current: TGocciaClassValue;
 begin
-  if FStaticSetters.TryGetValue(AName, Setter) then
-  begin
-    Args := TGocciaArgumentsCollection.Create([AValue]);
-    try
-      Setter.Call(Args, Self);
-    finally
-      Args.Free;
+  Current := Self;
+  repeat
+    if Current.FStaticSetters.TryGetValue(AName, Setter) then
+    begin
+      Args := TGocciaArgumentsCollection.Create([AValue]);
+      try
+        Setter.Call(Args, Self);
+      finally
+        Args.Free;
+      end;
+      Exit;
     end;
-    Exit;
-  end;
+    Current := Current.FSuperClass;
+  until not Assigned(Current);
 
   FStaticMethods.AddOrSetValue(AName, AValue);
 end;

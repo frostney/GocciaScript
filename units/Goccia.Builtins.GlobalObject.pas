@@ -49,6 +49,7 @@ uses
 
   Goccia.Arguments.Validator,
   Goccia.Evaluator.Comparison,
+  Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
@@ -798,12 +799,7 @@ begin
       CallArgs.Add(Items.Elements[I]);
       CallArgs.Add(TGocciaNumberLiteralValue.SmallInt(I));
 
-      if Callback is TGocciaFunctionValue then
-        KeyValue := TGocciaFunctionValue(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-      else if Callback is TGocciaNativeFunctionValue then
-        KeyValue := TGocciaNativeFunctionValue(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
-      else
-        ThrowError('Object.groupBy callback is not callable', 0, 0);
+      KeyValue := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;

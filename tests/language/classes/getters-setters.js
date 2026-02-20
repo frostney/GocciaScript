@@ -236,6 +236,88 @@ test("static setter with validation", () => {
   expect(Settings.volume).toBe(75);
 });
 
+test("inherited static setter", () => {
+  class Base {
+    static _value = 10;
+
+    static get value() {
+      return Base._value;
+    }
+
+    static set value(v) {
+      Base._value = v;
+    }
+  }
+  class Derived extends Base {}
+  expect(Derived.value).toBe(10);
+  Derived.value = 42;
+  expect(Derived.value).toBe(42);
+  expect(Base.value).toBe(42);
+});
+
+test("static setter override in subclass", () => {
+  class Base {
+    static _log = [];
+
+    static set record(entry) {
+      Base._log.push("base:" + entry);
+    }
+
+    static get log() {
+      return Base._log;
+    }
+  }
+  class Derived extends Base {
+    static set record(entry) {
+      Base._log.push("derived:" + entry);
+    }
+  }
+  Base.record = "a";
+  Derived.record = "b";
+  expect(Base.log).toEqual(["base:a", "derived:b"]);
+});
+
+test("inherited static getter uses this of caller", () => {
+  class Base {
+    static _name = "Base";
+
+    static get label() {
+      return this._name;
+    }
+
+    static set label(v) {
+      this._name = v;
+    }
+  }
+  class Derived extends Base {
+    static _name = "Derived";
+  }
+  expect(Base.label).toBe("Base");
+  expect(Derived.label).toBe("Derived");
+  Derived.label = "Updated";
+  expect(Derived.label).toBe("Updated");
+  expect(Base.label).toBe("Base");
+});
+
+test("multi-level static getter/setter inheritance", () => {
+  class A {
+    static get kind() {
+      return "A";
+    }
+  }
+  class B extends A {}
+  class C extends B {
+    static get kind() {
+      return "C";
+    }
+  }
+  class D extends C {}
+  expect(A.kind).toBe("A");
+  expect(B.kind).toBe("A");
+  expect(C.kind).toBe("C");
+  expect(D.kind).toBe("C");
+});
+
 test("computed static getter with symbol key", () => {
   const key = Symbol("info");
   class MyClass {

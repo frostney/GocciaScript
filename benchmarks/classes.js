@@ -137,3 +137,61 @@ suite("getters and setters", () => {
     t.fahrenheit = 72;
   });
 });
+
+suite("static getters and setters", () => {
+  bench("static getter read", () => {
+    class Config {
+      static get defaultPort() { return 8080; }
+      static get defaultHost() { return "localhost"; }
+    }
+    const p = Config.defaultPort;
+    const h = Config.defaultHost;
+  });
+
+  bench("static getter/setter pair", () => {
+    class Registry {
+      static _count = 0;
+      static get count() { return Registry._count; }
+      static set count(v) { Registry._count = v; }
+    }
+    Registry.count = 10;
+    const c = Registry.count;
+    Registry.count = c + 1;
+  });
+
+  bench("inherited static getter", () => {
+    class Base {
+      static get kind() { return "base"; }
+    }
+    class Child extends Base {}
+    class GrandChild extends Child {}
+    const a = Child.kind;
+    const b = GrandChild.kind;
+  });
+
+  bench("inherited static setter", () => {
+    class Base {
+      static _val = 0;
+      static get val() { return Base._val; }
+      static set val(v) { Base._val = v; }
+    }
+    class Child extends Base {}
+    Child.val = 42;
+    const v = Child.val;
+  });
+
+  bench("inherited static getter with this binding", () => {
+    class Base {
+      static _label = "Base";
+      static get label() { return this._label; }
+      static set label(v) { this._label = v; }
+    }
+    class Child extends Base {
+      static _label = "Child";
+    }
+    const baseLabel = Base.label;
+    const childLabel = Child.label;
+    Child.label = "Updated";
+    const updated = Child.label;
+  });
+});

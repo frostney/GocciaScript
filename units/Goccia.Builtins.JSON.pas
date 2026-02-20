@@ -40,8 +40,8 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue;
 
 constructor TGocciaJSONBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -116,7 +116,7 @@ begin
   Args := TGocciaArgumentsCollection.Create;
   Args.Add(TGocciaStringLiteralValue.Create(AKey));
   Args.Add(Value);
-  Result := TGocciaFunctionBase(AReviver).Call(Args, AHolder);
+  Result := CallFunction(AReviver, Args, AHolder);
 end;
 
 // §25.5.1 JSON.parse ( text [ , reviver ] )
@@ -195,7 +195,7 @@ begin
   Args := TGocciaArgumentsCollection.Create;
   Args.Add(TGocciaStringLiteralValue.Create(AKey));
   Args.Add(AValue);
-  Result := TGocciaFunctionBase(AReplacer).Call(Args, AHolder);
+  Result := CallFunction(AReplacer, Args, AHolder);
 end;
 
 // §25.5.2.1 SerializeJSONProperty ( state, key, holder ) — recursive transformation.
