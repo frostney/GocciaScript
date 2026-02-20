@@ -53,6 +53,76 @@ suite("JSON.stringify", () => {
   });
 });
 
+suite("JSON.parse with reviver", () => {
+  bench("reviver doubles numbers", () => {
+    const result = JSON.parse('{"a":1,"b":2,"c":3,"d":4,"e":5}', (key, value) => {
+      if (typeof value === "number") {
+        return value * 2;
+      }
+      return value;
+    });
+  });
+
+  bench("reviver filters properties", () => {
+    const result = JSON.parse('{"keep":1,"drop":2,"keep2":3,"drop2":4}', (key, value) => {
+      if (key.startsWith("drop")) {
+        return undefined;
+      }
+      return value;
+    });
+  });
+
+  bench("reviver on nested object", () => {
+    const result = JSON.parse('{"user":{"name":"Alice","age":30},"score":95}', (key, value) => {
+      if (typeof value === "string") {
+        return value.toUpperCase();
+      }
+      return value;
+    });
+  });
+
+  bench("reviver on array", () => {
+    const result = JSON.parse('[1,2,3,4,5,6,7,8,9,10]', (key, value) => {
+      if (typeof value === "number") {
+        return value + 10;
+      }
+      return value;
+    });
+  });
+});
+
+suite("JSON.stringify with replacer", () => {
+  bench("replacer function doubles numbers", () => {
+    const s = JSON.stringify({ a: 1, b: 2, c: 3, d: 4, e: 5 }, (key, value) => {
+      if (typeof value === "number") {
+        return value * 2;
+      }
+      return value;
+    });
+  });
+
+  bench("replacer function excludes properties", () => {
+    const s = JSON.stringify({ a: 1, secret: "hidden", b: 2, password: "nope" }, (key, value) => {
+      if (key === "secret" || key === "password") {
+        return undefined;
+      }
+      return value;
+    });
+  });
+
+  bench("array replacer (allowlist)", () => {
+    const s = JSON.stringify({ a: 1, b: 2, c: 3, d: 4, e: 5 }, ["a", "c", "e"]);
+  });
+
+  bench("stringify with 2-space indent", () => {
+    const s = JSON.stringify({ name: "test", items: [1, 2, 3], nested: { x: 1 } }, null, 2);
+  });
+
+  bench("stringify with tab indent", () => {
+    const s = JSON.stringify({ name: "test", items: [1, 2, 3], nested: { x: 1 } }, null, "\t");
+  });
+});
+
 suite("JSON roundtrip", () => {
   bench("parse then stringify", () => {
     const json = '{"users":[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}],"total":2}';

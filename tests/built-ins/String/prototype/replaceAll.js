@@ -14,4 +14,14 @@ describe('String.prototype.replaceAll', () => {
   test('replaces with empty string', () => {
     expect('aabbcc'.replaceAll('b', '')).toBe('aacc');
   });
+
+  test('replaceAll with callback function', () => {
+    const result = 'hello hello'.replaceAll('hello', (match) => match.toUpperCase());
+    expect(result).toBe('HELLO HELLO');
+  });
+
+  test('no occurrences returns original', () => {
+    const str = 'hello';
+    expect(str.replaceAll('xyz', 'abc')).toBe('hello');
+  });
 });

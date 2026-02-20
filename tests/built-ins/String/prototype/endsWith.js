@@ -3,16 +3,31 @@ description: String.prototype.endsWith works correctly
 features: [String.prototype.endsWith]
 ---*/
 
-test("String.prototype.endsWith checks if a string ends with a substring", () => {
-  const str = "hello world";
-  expect(str.endsWith("world")).toBe(true);
-  expect(str.endsWith("hello")).toBe(false);
-  expect("".endsWith("")).toBe(true);
-  expect("".endsWith("a")).toBe(false);
-  expect("a".endsWith("")).toBe(true);
-  expect("a".endsWith("a")).toBe(true);
-  expect("a".endsWith("b")).toBe(false);
-  expect("a".endsWith("ab")).toBe(false);
-  expect("ab".endsWith("a")).toBe(false);
-  expect("ab".endsWith("b")).toBe(true);
+describe("String.prototype.endsWith", () => {
+  test("basic matching", () => {
+    expect("hello world".endsWith("world")).toBe(true);
+    expect("hello world".endsWith("hello")).toBe(false);
+  });
+
+  test("with endPosition argument", () => {
+    expect("hello world".endsWith("hello", 5)).toBe(true);
+    expect("hello world".endsWith("world", 5)).toBe(false);
+  });
+
+  test("empty search string always true", () => {
+    expect("hello".endsWith("")).toBe(true);
+    expect("".endsWith("")).toBe(true);
+  });
+
+  test("search string longer than string", () => {
+    expect("a".endsWith("ab")).toBe(false);
+  });
+
+  test("case sensitive", () => {
+    expect("Hello".endsWith("hello")).toBe(false);
+  });
+
+  test("entire string match", () => {
+    expect("hello".endsWith("hello")).toBe(true);
+  });
 });

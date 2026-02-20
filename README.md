@@ -2,9 +2,9 @@
 
 ![](./logo.png)
 
-A drop of JavaScript — A subset of ECMAScript 2020 implemented in FreePascal.
+A drop of JavaScript — A subset of ECMAScript 2026+ implemented in FreePascal
 
-GocciaScript includes the parts of JavaScript that lead to clear, predictable, and secure code. Features that are error-prone, redundant, or security risks are intentionally excluded. See [Language Restrictions](docs/language-restrictions.md) for the full rationale.
+It's based on the thought "What if we implement ECMAScript today, but without the quirks of early ECMAScript implementations". Features that are error-prone, redundant, or security risks are intentionally excluded. See [Language Restrictions](docs/language-restrictions.md) for the full rationale.
 
 ## Features
 

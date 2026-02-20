@@ -3,15 +3,33 @@ description: Array.prototype.pop removes the last element from an array
 features: [Array.prototype.pop]
 ---*/
 
-test("Array.prototype.pop removes the last element from an array", () => {
-  const arr = [1, 2, 3];
+describe("Array.prototype.pop", () => {
+  test("removes and returns the last element", () => {
+    const arr = [1, 2, 3];
+    const last = arr.pop();
+    expect(last).toBe(3);
+    expect(arr).toEqual([1, 2]);
+    expect(arr.length).toBe(2);
+  });
 
-  expect(arr).toEqual([1, 2, 3]);
-  expect(arr.length).toBe(3);
+  test("pop on empty array returns undefined", () => {
+    const arr = [];
+    expect(arr.pop()).toBe(undefined);
+    expect(arr.length).toBe(0);
+  });
 
-  const last = arr.pop();
-  expect(last).toBe(3);
+  test("pop on single element array", () => {
+    const arr = [42];
+    expect(arr.pop()).toBe(42);
+    expect(arr.length).toBe(0);
+    expect(arr).toEqual([]);
+  });
 
-  expect(arr).toEqual([1, 2]);
-  expect(arr.length).toEqual(2);
+  test("successive pops empty the array", () => {
+    const arr = [1, 2];
+    arr.pop();
+    arr.pop();
+    expect(arr.length).toBe(0);
+    expect(arr.pop()).toBe(undefined);
+  });
 });

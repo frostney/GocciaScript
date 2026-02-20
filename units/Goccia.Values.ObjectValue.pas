@@ -17,11 +17,13 @@ type
   TGocciaObjectValue = class(TGocciaValue)
   protected
     FPropertyDescriptors: TDictionary<string, TGocciaPropertyDescriptor>;
-    FPropertyInsertionOrder: TStringList; // Track insertion order for property enumeration
+    FPropertyInsertionOrder: TStringList;
     FSymbolDescriptors: TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
     FSymbolInsertionOrder: TList<TGocciaSymbolValue>;
     FPrototype: TGocciaObjectValue;
     FFrozen: Boolean;
+    FSealed: Boolean;
+    FExtensible: Boolean;
   public
     constructor Create(const APrototype: TGocciaObjectValue = nil);
     destructor Destroy; override;
@@ -70,14 +72,20 @@ type
     function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
     function GetOwnSymbols: TArray<TGocciaSymbolValue>;
 
-    // Freeze support
+    // Freeze/seal/extensibility support
     procedure Freeze;
     function IsFrozen: Boolean;
+    procedure Seal;
+    function IsSealed: Boolean;
+    procedure PreventExtensions;
+    function IsExtensible: Boolean;
 
     procedure MarkReferences; override;
 
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
     property Frozen: Boolean read FFrozen;
+    property Sealed: Boolean read FSealed;
+    property Extensible: Boolean read FExtensible;
   end;
 
 
@@ -121,20 +129,16 @@ begin
 
   FPrototype := APrototype;
   FFrozen := False;
+  FSealed := False;
+  FExtensible := True;
 end;
 
 destructor TGocciaObjectValue.Destroy;
 begin
-  // Don't free the values - they might be referenced elsewhere
-  // The scope or other owners should handle their cleanup
-
-  // Property descriptors are now records - no manual cleanup needed
   FPropertyDescriptors.Free;
   FPropertyInsertionOrder.Free;
-
   FSymbolDescriptors.Free;
   FSymbolInsertionOrder.Free;
-
   inherited;
 end;
 
@@ -144,7 +148,7 @@ var
   SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
 begin
   if GCMarked then Exit;
-  inherited; // Sets FGCMarked := True
+  inherited;
 
   if Assigned(FPrototype) then
     FPrototype.MarkReferences;
@@ -315,8 +319,9 @@ begin
   if not ACanCreate then
     ThrowTypeError('Cannot assign to non-existent property ''' + AName + '''');
 
-  // Create new property with proper descriptor (JavaScript default attributes)
-  // Use DefineProperty to track insertion order
+  if not FExtensible then
+    ThrowTypeError('Cannot add property ''' + AName + ''', object is not extensible');
+
   DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
@@ -649,12 +654,35 @@ end;
 function TGocciaObjectValue.GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  Accessor: TGocciaPropertyDescriptorAccessor;
+  Args: TGocciaArgumentsCollection;
 begin
   if FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
   begin
     if Descriptor is TGocciaPropertyDescriptorData then
     begin
       Result := TGocciaPropertyDescriptorData(Descriptor).Value;
+      Exit;
+    end
+    else if Descriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
+      if Assigned(Accessor.Getter) then
+      begin
+        Args := TGocciaArgumentsCollection.Create;
+        try
+          if Accessor.Getter is TGocciaNativeFunctionValue then
+            Result := TGocciaNativeFunctionValue(Accessor.Getter).Call(Args, Self)
+          else if Accessor.Getter is TGocciaFunctionValue then
+            Result := TGocciaFunctionValue(Accessor.Getter).Call(Args, Self)
+          else
+            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        finally
+          Args.Free;
+        end;
+        Exit;
+      end;
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
     end;
   end;
@@ -762,11 +790,64 @@ begin
     end;
   end;
   FFrozen := True;
+  FSealed := True;
+  FExtensible := False;
 end;
 
 function TGocciaObjectValue.IsFrozen: Boolean;
 begin
   Result := FFrozen;
+end;
+
+procedure TGocciaObjectValue.Seal;
+var
+  Key: string;
+  Descriptor: TGocciaPropertyDescriptor;
+  NewDescriptor: TGocciaPropertyDescriptor;
+  Flags: TPropertyFlags;
+begin
+  for Key in FPropertyInsertionOrder do
+  begin
+    if FPropertyDescriptors.ContainsKey(Key) then
+    begin
+      Descriptor := FPropertyDescriptors[Key];
+      Flags := [];
+      if Descriptor.Enumerable then
+        Include(Flags, pfEnumerable);
+      if Descriptor is TGocciaPropertyDescriptorData then
+      begin
+        if Descriptor.Writable then
+          Include(Flags, pfWritable);
+        NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, Flags);
+        FPropertyDescriptors[Key] := NewDescriptor;
+      end
+      else if Descriptor is TGocciaPropertyDescriptorAccessor then
+      begin
+        NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
+          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+          Flags);
+        FPropertyDescriptors[Key] := NewDescriptor;
+      end;
+    end;
+  end;
+  FSealed := True;
+  FExtensible := False;
+end;
+
+function TGocciaObjectValue.IsSealed: Boolean;
+begin
+  Result := FSealed or FFrozen;
+end;
+
+procedure TGocciaObjectValue.PreventExtensions;
+begin
+  FExtensible := False;
+end;
+
+function TGocciaObjectValue.IsExtensible: Boolean;
+begin
+  Result := FExtensible and not FSealed and not FFrozen;
 end;
 
 end.

@@ -61,6 +61,6 @@ describe("JSX attributes", () => {
   test("undefined variable in attribute expression throws", () => {
     expect(() => {
       const el = <div value={nonExistentAttrVar}></div>;
-    }).toThrow();
+    }).toThrow(ReferenceError);
   });
 });

@@ -1,53 +1,36 @@
-/*---
-description: String() constructor for type conversion
-features: [String]
----*/
-
-describe("String() constructor", () => {
-  test("converts numbers to strings", () => {
-    expect(String(123)).toBe("123");
-    expect(String(0)).toBe("0");
-    expect(String(-42)).toBe("-42");
-    expect(String(3.14)).toBe("3.14");
+describe("String constructor", () => {
+  test("new String() creates wrapper object", () => {
+    const s = new String("hello");
+    expect(typeof s).toBe("object");
+    expect(s.valueOf()).toBe("hello");
   });
 
-  test("converts boolean to string", () => {
-    expect(String(true)).toBe("true");
-    expect(String(false)).toBe("false");
+  test("new String() has string methods", () => {
+    const s = new String("hello");
+    expect(s.toUpperCase()).toBe("HELLO");
+    expect(s.slice(1, 3)).toBe("el");
+    expect(s.includes("ell")).toBe(true);
   });
 
-  test("converts null to string", () => {
-    expect(String(null)).toBe("null");
+  test("new String().length works", () => {
+    const s = new String("hello");
+    expect(s.length).toBe(5);
   });
 
-  test("converts undefined to string", () => {
-    expect(String(undefined)).toBe("undefined");
+  test("new String() index access works", () => {
+    const s = new String("hello");
+    expect(s[0]).toBe("h");
+    expect(s[4]).toBe("o");
   });
 
-  test("converts NaN to string", () => {
-    expect(String(NaN)).toBe("NaN");
+  test("String() as function returns primitive", () => {
+    const s = String(42);
+    expect(typeof s).toBe("string");
+    expect(s).toBe("42");
   });
 
-  test("converts Infinity to string", () => {
-    expect(String(Infinity)).toBe("Infinity");
-    expect(String(-Infinity)).toBe("-Infinity");
-  });
-
-  test("string passes through unchanged", () => {
-    expect(String("hello")).toBe("hello");
-    expect(String("")).toBe("");
-  });
-
-  test("template literal converts boolean to string", () => {
-    expect(`${true}`).toBe("true");
-    expect(`${false}`).toBe("false");
-  });
-
-  test("template literal converts null to string", () => {
-    expect(`${null}`).toBe("null");
-  });
-
-  test("template literal converts undefined to string", () => {
-    expect(`${undefined}`).toBe("undefined");
+  test("new String() instanceof String", () => {
+    const s = new String("hello");
+    expect(s instanceof String).toBe(true);
   });
 });

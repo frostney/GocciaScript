@@ -7,6 +7,10 @@ suite("array creation", () => {
     const arr = Array.from({ length: 100 }, (_, i) => i);
   });
 
+  bench("Array.from 10 elements", () => {
+    const arr = Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  });
+
   bench("Array.of 10 elements", () => {
     const arr = Array.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
   });

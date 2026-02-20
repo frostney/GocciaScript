@@ -160,6 +160,11 @@ type
     property GenericParams: string read FGenericParams write FGenericParams;
   end;
 
+  TGocciaComputedStaticAccessorEntry = record
+    KeyExpression: TGocciaExpression;
+    GetterExpression: TGocciaGetterExpression;
+  end;
+
   // Shared class definition structure
   TGocciaClassDefinition = class
   public
@@ -168,6 +173,9 @@ type
     FMethods: TDictionary<string, TGocciaClassMethod>;
     FGetters: TDictionary<string, TGocciaGetterExpression>;
     FSetters: TDictionary<string, TGocciaSetterExpression>;
+    FStaticGetters: TDictionary<string, TGocciaGetterExpression>;
+    FStaticSetters: TDictionary<string, TGocciaSetterExpression>;
+    FComputedStaticGetters: array of TGocciaComputedStaticAccessorEntry;
     FStaticProperties: TDictionary<string, TGocciaExpression>;
     FInstanceProperties: TDictionary<string, TGocciaExpression>;
     FInstancePropertyOrder: TStringList; // Preserves declaration order
@@ -194,6 +202,8 @@ type
     property Methods: TDictionary<string, TGocciaClassMethod> read FMethods;
     property Getters: TDictionary<string, TGocciaGetterExpression> read FGetters;
     property Setters: TDictionary<string, TGocciaSetterExpression> read FSetters;
+    property StaticGetters: TDictionary<string, TGocciaGetterExpression> read FStaticGetters;
+    property StaticSetters: TDictionary<string, TGocciaSetterExpression> read FStaticSetters;
     property StaticProperties: TDictionary<string, TGocciaExpression> read FStaticProperties;
     property InstanceProperties: TDictionary<string, TGocciaExpression> read FInstanceProperties;
     property InstancePropertyOrder: TStringList read FInstancePropertyOrder;
@@ -357,6 +367,9 @@ uses
     FMethods := AMethods;
     FGetters := AGetters;
     FSetters := ASetters;
+    FStaticGetters := TDictionary<string, TGocciaGetterExpression>.Create;
+    FStaticSetters := TDictionary<string, TGocciaSetterExpression>.Create;
+    SetLength(FComputedStaticGetters, 0);
     FStaticProperties := AStaticProperties;
     FInstanceProperties := AInstanceProperties;
     FInstancePropertyOrder := TStringList.Create;
@@ -385,6 +398,8 @@ uses
     FMethods.Free;
     FGetters.Free;
     FSetters.Free;
+    FStaticGetters.Free;
+    FStaticSetters.Free;
     FStaticProperties.Free;
     FInstanceProperties.Free;
     FInstancePropertyOrder.Free;

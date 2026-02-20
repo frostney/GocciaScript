@@ -33,4 +33,34 @@ describe("Array.prototype.fill", () => {
     const result = arr.fill(0);
     expect(result).toBe(arr);
   });
+
+  test("fill with start >= end does nothing", () => {
+    const arr = [1, 2, 3];
+    arr.fill(0, 2, 1);
+    expect(arr).toEqual([1, 2, 3]);
+  });
+
+  test("fill with start beyond length does nothing", () => {
+    const arr = [1, 2, 3];
+    arr.fill(0, 100);
+    expect(arr).toEqual([1, 2, 3]);
+  });
+
+  test("fill with negative start and end", () => {
+    const arr = [1, 2, 3, 4, 5];
+    arr.fill(0, -3, -1);
+    expect(arr).toEqual([1, 2, 0, 0, 5]);
+  });
+
+  test("fill on empty array", () => {
+    const arr = [];
+    arr.fill(0);
+    expect(arr).toEqual([]);
+  });
+
+  test("fill with undefined value", () => {
+    const arr = [1, 2, 3];
+    arr.fill(undefined);
+    expect(arr).toEqual([undefined, undefined, undefined]);
+  });
 });

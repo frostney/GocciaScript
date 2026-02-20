@@ -52,3 +52,20 @@ test("Array.prototype.every with sparse array", () => {
   expect([1, , 3].every((x) => x !== undefined)).toBe(true);
   expect([2, , 2].every((x) => x === 2)).toBe(true);
 });
+
+test("every stops iteration on first false", () => {
+  let callCount = 0;
+  [1, 2, 3, 4, 5].every((x) => {
+    callCount = callCount + 1;
+    return x < 3;
+  });
+  expect(callCount).toBe(3);
+});
+
+test("every returns true for empty array (vacuous truth)", () => {
+  expect([].every(() => false)).toBe(true);
+});
+
+test("every with all elements failing", () => {
+  expect([1, 2, 3].every((x) => x > 10)).toBe(false);
+});

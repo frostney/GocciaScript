@@ -880,14 +880,17 @@ begin
       end;
       on E: TGocciaError do
       begin
-        // Handle Goccia-specific errors (syntax, runtime, etc.)
         if ExpectedErrorType = '' then
         begin
           TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
           Exit;
         end;
 
-        if (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
+        if ((ExpectedErrorType = 'TypeError') and (E is TGocciaTypeError)) or
+           ((ExpectedErrorType = 'ReferenceError') and (E is TGocciaReferenceError)) or
+           ((ExpectedErrorType = 'SyntaxError') and (E is TGocciaSyntaxError)) or
+           ((ExpectedErrorType = 'Error') and (E is TGocciaRuntimeError)) or
+           (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
         begin
           TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
           Exit;
@@ -1185,11 +1188,13 @@ begin
   if not (AArgs.GetElement(1) is TGocciaFunctionValue) then
     ThrowError('describe expects second argument to be a function', 0, 0);
 
-  SuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
+  if FTestStats.CurrentSuiteName <> '' then
+    SuiteName := FTestStats.CurrentSuiteName + ' > ' + AArgs.GetElement(0).ToStringLiteral.Value
+  else
+    SuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
   SuiteFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
 
-  // Just register the test suite - do NOT execute it until runTests() is called
-  Suite := TGocciaTestSuite.Create(SuiteName, SuiteFunction);
+  Suite := TGocciaTestSuite.Create(SuiteName, SuiteFunction, FCurrentSuiteIsSkipped);
   FRegisteredSuites.Add(Suite);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1209,7 +1214,10 @@ begin
   if not (AArgs.GetElement(1) is TGocciaFunctionValue) then
     ThrowError('describe.skip expects second argument to be a function', 0, 0);
 
-  SuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
+  if FTestStats.CurrentSuiteName <> '' then
+    SuiteName := FTestStats.CurrentSuiteName + ' > ' + AArgs.GetElement(0).ToStringLiteral.Value
+  else
+    SuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
   SuiteFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
 
   Suite := TGocciaTestSuite.Create(SuiteName, SuiteFunction, True);
@@ -1248,10 +1256,13 @@ begin
   if not (AArgs.GetElement(1) is TGocciaFunctionValue) then
     ThrowError('describe expects second argument to be a function', 0, 0);
 
-  SuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
+  if FTestStats.CurrentSuiteName <> '' then
+    SuiteName := FTestStats.CurrentSuiteName + ' > ' + AArgs.GetElement(0).ToStringLiteral.Value
+  else
+    SuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
   SuiteFunction := AArgs.GetElement(1) as TGocciaFunctionValue;
 
-  Suite := TGocciaTestSuite.Create(SuiteName, SuiteFunction, FSkipNextDescribe);
+  Suite := TGocciaTestSuite.Create(SuiteName, SuiteFunction, FSkipNextDescribe or FCurrentSuiteIsSkipped);
   FRegisteredSuites.Add(Suite);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1386,6 +1397,7 @@ var
   Silent: Boolean = False;
   Summary: string;
   PreviousSuiteName: string;
+  PreviousSuiteIsSkipped: Boolean;
   FailedTestDetails: TStringList;
   FailedTestDetailsArray: TGocciaArrayValue;
   ClonedFunction: TGocciaFunctionValue;
@@ -1435,13 +1447,15 @@ begin
   FailedTestDetails := TStringList.Create;
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
-    // First, execute all describe blocks to register their tests
-    for I := 0 to FRegisteredSuites.Count - 1 do
+    // Execute all describe blocks to register their tests (while-loop
+    // re-evaluates Count each iteration so nested describes are picked up)
+    I := 0;
+    while I < FRegisteredSuites.Count do
     begin
       Suite := FRegisteredSuites[I];
 
-      // Set current suite name so test() calls know which suite they belong to
       PreviousSuiteName := FTestStats.CurrentSuiteName;
+      PreviousSuiteIsSkipped := FCurrentSuiteIsSkipped;
       FTestStats.CurrentSuiteName := Suite.Name;
       FCurrentSuiteIsSkipped := Suite.IsSkipped;
 
@@ -1457,9 +1471,9 @@ begin
         end;
       end;
 
-      // Restore previous suite name and skip flag
       FTestStats.CurrentSuiteName := PreviousSuiteName;
-      FCurrentSuiteIsSkipped := False;
+      FCurrentSuiteIsSkipped := PreviousSuiteIsSkipped;
+      Inc(I);
     end;
 
     // Now execute all registered tests

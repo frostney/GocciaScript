@@ -19,6 +19,9 @@ procedure ThrowRangeError(const AMessage: string);
 { Raises a TGocciaThrowValue with a ReferenceError }
 procedure ThrowReferenceError(const AMessage: string);
 
+{ Raises a TGocciaThrowValue with a SyntaxError }
+procedure ThrowSyntaxError(const AMessage: string);
+
 { Raises a TGocciaThrowValue with a generic Error }
 procedure ThrowError(const AMessage: string);
 
@@ -48,6 +51,11 @@ end;
 procedure ThrowReferenceError(const AMessage: string);
 begin
   raise TGocciaThrowValue.Create(CreateErrorObject('ReferenceError', AMessage));
+end;
+
+procedure ThrowSyntaxError(const AMessage: string);
+begin
+  raise TGocciaThrowValue.Create(CreateErrorObject('SyntaxError', AMessage));
 end;
 
 procedure ThrowError(const AMessage: string);

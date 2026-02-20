@@ -23,6 +23,17 @@ classDiagram
     TGocciaObjectValue <|-- TGocciaFunctionValue
     TGocciaObjectValue <|-- TGocciaClassValue
     TGocciaObjectValue <|-- TGocciaInstanceValue
+    TGocciaObjectValue <|-- TGocciaIteratorValue
+    TGocciaIteratorValue <|-- TGocciaArrayIteratorValue
+    TGocciaIteratorValue <|-- TGocciaStringIteratorValue
+    TGocciaIteratorValue <|-- TGocciaMapIteratorValue
+    TGocciaIteratorValue <|-- TGocciaSetIteratorValue
+    TGocciaIteratorValue <|-- TGocciaLazyMapIteratorValue
+    TGocciaIteratorValue <|-- TGocciaLazyFilterIteratorValue
+    TGocciaIteratorValue <|-- TGocciaLazyTakeIteratorValue
+    TGocciaIteratorValue <|-- TGocciaLazyDropIteratorValue
+    TGocciaIteratorValue <|-- TGocciaLazyFlatMapIteratorValue
+    TGocciaIteratorValue <|-- TGocciaGenericIteratorValue
     TGocciaObjectValue <|-- TGocciaNumberObjectValue
     TGocciaObjectValue <|-- TGocciaStringObjectValue
     TGocciaObjectValue <|-- TGocciaBooleanObjectValue
@@ -485,6 +496,7 @@ Represent class constructors. Store:
 - Constructor method
 - Instance methods (on prototype)
 - Static methods
+- Static symbol-keyed properties (`FStaticSymbolDescriptors`) — supports `static get [Symbol.species]()` and similar computed symbol accessors. Use `DefineSymbolProperty` to register and `GetSymbolPropertyWithReceiver` to look up (preserves receiver for getter `this` context across superclass chain)
 - Public getters and setters (on prototype via accessor descriptors)
 - Private getters and setters (in `FPrivateGetters`/`FPrivateSetters`, separate from public ones)
 - Private instance and static fields/methods

@@ -40,12 +40,14 @@ type
 
   TGocciaJSONStringifier = class
   private
+    FGap: string;
     function StringifyValue(const AValue: TGocciaValue; const AIndent: Integer = 0): string;
     function StringifyObject(const AObj: TGocciaObjectValue; const AIndent: Integer): string;
     function StringifyArray(const AArr: TGocciaArrayValue; const AIndent: Integer): string;
     function EscapeString(const AStr: string): string;
+    function MakeIndent(const ALevel: Integer): string;
   public
-    function Stringify(const AValue: TGocciaValue): string;
+    function Stringify(const AValue: TGocciaValue; const AGap: string = ''): string;
   end;
 
 implementation
@@ -391,9 +393,21 @@ end;
 
 { TGocciaJSONStringifier }
 
-function TGocciaJSONStringifier.Stringify(const AValue: TGocciaValue): string;
+function TGocciaJSONStringifier.Stringify(const AValue: TGocciaValue; const AGap: string): string;
 begin
+  FGap := AGap;
   Result := StringifyValue(AValue);
+end;
+
+function TGocciaJSONStringifier.MakeIndent(const ALevel: Integer): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  if FGap = '' then
+    Exit;
+  for I := 1 to ALevel do
+    Result := Result + FGap;
 end;
 
 function TGocciaJSONStringifier.StringifyValue(const AValue: TGocciaValue; const AIndent: Integer): string;
@@ -434,10 +448,24 @@ var
   Key: string;
   Value: TGocciaValue;
   HasProperties: Boolean;
+  Separator, ChildIndent, CloseIndent: string;
 begin
   SB := TStringBuilder.Create;
   try
     HasProperties := False;
+
+    if FGap <> '' then
+    begin
+      Separator := ',' + #10;
+      ChildIndent := MakeIndent(AIndent + 1);
+      CloseIndent := MakeIndent(AIndent);
+    end
+    else
+    begin
+      Separator := ',';
+      ChildIndent := '';
+      CloseIndent := '';
+    end;
 
     for Key in AObj.GetEnumerablePropertyNames do
     begin
@@ -447,14 +475,20 @@ begin
          not (Value is TGocciaFunctionValue) then
       begin
         if HasProperties then
-          SB.Append(',');
-        SB.Append('"').Append(EscapeString(Key)).Append('":').Append(StringifyValue(Value, AIndent + 1));
+          SB.Append(Separator);
+        SB.Append(ChildIndent);
+        SB.Append('"').Append(EscapeString(Key)).Append('":');
+        if FGap <> '' then
+          SB.Append(' ');
+        SB.Append(StringifyValue(Value, AIndent + 1));
         HasProperties := True;
       end;
     end;
 
     if not HasProperties then
       Result := '{}'
+    else if FGap <> '' then
+      Result := '{' + #10 + SB.ToString + #10 + CloseIndent + '}'
     else
       Result := '{' + SB.ToString + '}';
   finally
@@ -466,6 +500,7 @@ function TGocciaJSONStringifier.StringifyArray(const AArr: TGocciaArrayValue; co
 var
   SB: TStringBuilder;
   I: Integer;
+  Separator, ChildIndent, CloseIndent: string;
 begin
   if AArr.Elements.Count = 0 then
   begin
@@ -473,15 +508,32 @@ begin
     Exit;
   end;
 
+  if FGap <> '' then
+  begin
+    Separator := ',' + #10;
+    ChildIndent := MakeIndent(AIndent + 1);
+    CloseIndent := MakeIndent(AIndent);
+  end
+  else
+  begin
+    Separator := ',';
+    ChildIndent := '';
+    CloseIndent := '';
+  end;
+
   SB := TStringBuilder.Create;
   try
     for I := 0 to AArr.Elements.Count - 1 do
     begin
       if I > 0 then
-        SB.Append(',');
+        SB.Append(Separator);
+      SB.Append(ChildIndent);
       SB.Append(StringifyValue(AArr.Elements[I], AIndent + 1));
     end;
-    Result := '[' + SB.ToString + ']';
+    if FGap <> '' then
+      Result := '[' + #10 + SB.ToString + #10 + CloseIndent + ']'
+    else
+      Result := '[' + SB.ToString + ']';
   finally
     SB.Free;
   end;

@@ -1,6 +1,6 @@
 /*---
-description: Map.prototype.values returns values as an array
-features: [Map.prototype.values]
+description: Map.prototype.values returns an iterator over values
+features: [Map.prototype.values, Iterator]
 ---*/
 
 test("values returns all values in insertion order", () => {
@@ -16,4 +16,13 @@ test("values on empty Map", () => {
 test("values with duplicate values across keys", () => {
   const map = new Map([["a", 1], ["b", 1], ["c", 1]]);
   expect([...map.values()]).toEqual([1, 1, 1]);
+});
+
+test("values returns an iterator with next()", () => {
+  const map = new Map([["a", 1], ["b", 2], ["c", 3]]);
+  const iter = map.values();
+  expect(iter.next().value).toBe(1);
+  expect(iter.next().value).toBe(2);
+  expect(iter.next().value).toBe(3);
+  expect(iter.next().done).toBe(true);
 });

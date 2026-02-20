@@ -26,7 +26,7 @@ describe("property descriptors", () => {
     // In strict mode, assignment to non-writable should throw
     expect(() => {
       obj.readonly = 99;
-    }).toThrow();
+    }).toThrow(TypeError);
     expect(obj.readonly).toBe(10);
   });
 
@@ -61,7 +61,7 @@ describe("property descriptors", () => {
       Object.defineProperty(obj, "locked", {
         enumerable: false,
       });
-    }).toThrow();
+    }).toThrow(TypeError);
   });
 
   test("accessor property with getter and setter", () => {

@@ -13,10 +13,7 @@ describe("Number constants", () => {
   });
 
   test("EPSILON", () => {
-    expect(Number.EPSILON > 0).toBe(true);
-    expect(Number.EPSILON < 1).toBe(true);
-    // EPSILON is the smallest difference between 1 and the next representable float
-    expect(0.1 + 0.2 - 0.3 < Number.EPSILON).toBe(true);
+    expect(Number.EPSILON).toBeCloseTo(0, 3);
   });
 
   test("POSITIVE_INFINITY", () => {

@@ -7,6 +7,7 @@ interface
 uses
   Classes,
 
+  Goccia.Arguments.Collection,
   Goccia.AST.Node,
   Goccia.Builtins.Benchmark,
   Goccia.Builtins.Console,
@@ -17,6 +18,7 @@ uses
   Goccia.Builtins.GlobalPromise,
   Goccia.Builtins.Globals,
   Goccia.Builtins.GlobalSet,
+  Goccia.Builtins.GlobalString,
   Goccia.Builtins.GlobalSymbol,
   Goccia.Builtins.JSON,
   Goccia.Builtins.Math,
@@ -27,6 +29,7 @@ uses
   Goccia.Modules,
   Goccia.Modules.Resolver,
   Goccia.Parser,
+  Goccia.Values.IteratorValue,
   Goccia.Values.Primitives;
 
 type
@@ -76,6 +79,7 @@ type
     FBuiltinGlobalObject: TGocciaGlobalObject;
     FBuiltinGlobalArray: TGocciaGlobalArray;
     FBuiltinGlobalNumber: TGocciaGlobalNumber;
+    FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
     FBuiltinJSON: TGocciaJSONBuiltin;
     FBuiltinSymbol: TGocciaGlobalSymbol;
@@ -91,6 +95,7 @@ type
     procedure RegisterBuiltinConstructors;
     procedure RegisterGlobalThis;
     procedure RegisterGocciaScriptGlobal;
+    function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
@@ -147,8 +152,16 @@ uses
   Goccia.Scope,
   Goccia.Token,
   Goccia.Values.ArrayValue,
+  Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassValue,
+  Goccia.Values.MapValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.NumberObjectValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
+  Goccia.Values.SetValue,
+  Goccia.Values.StringObjectValue,
+  Goccia.Values.SymbolValue,
   Goccia.Version;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
@@ -196,6 +209,7 @@ begin
   FBuiltinGlobalObject.Free;
   FBuiltinGlobalArray.Free;
   FBuiltinGlobalNumber.Free;
+  FBuiltinGlobalString.Free;
   FBuiltinGlobals.Free;
   FBuiltinJSON.Free;
   FBuiltinSymbol.Free;
@@ -271,51 +285,95 @@ begin
     FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
 
   // Always-registered built-ins
+  FBuiltinGlobalString := TGocciaGlobalString.Create('String', Scope, ThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, ThrowError);
+  Scope.DefineLexicalBinding('Iterator', TGocciaIteratorValue.CreateGlobalObject, dtConst);
   RegisterBuiltinConstructors;
 end;
 
 procedure TGocciaEngine.RegisterBuiltinConstructors;
 var
-  ArrayConstructor, ObjectConstructor, StringConstructor, NumberConstructor: TGocciaClassValue;
-  BooleanConstructor, FunctionConstructor: TGocciaClassValue;
+  ObjectConstructor, FunctionConstructor: TGocciaClassValue;
+  ArrayConstructor: TGocciaArrayClassValue;
+  MapConstructor: TGocciaMapClassValue;
+  SetConstructor: TGocciaSetClassValue;
+  StringConstructor: TGocciaStringClassValue;
+  NumberConstructor: TGocciaNumberClassValue;
+  BooleanConstructor: TGocciaBooleanClassValue;
   Key: string;
 begin
-  // Create Object constructor first (must be first since it's the root of the prototype chain)
   ObjectConstructor := TGocciaClassValue.Create('Object', nil);
   if Assigned(FBuiltinGlobalObject) then
-  begin
     for Key in FBuiltinGlobalObject.BuiltinObject.GetAllPropertyNames do
       ObjectConstructor.SetProperty(Key, FBuiltinGlobalObject.BuiltinObject.GetProperty(Key));
-  end;
   FInterpreter.GlobalScope.DefineLexicalBinding('Object', ObjectConstructor, dtConst);
 
-  // Create Array constructor and copy static methods
-  ArrayConstructor := TGocciaClassValue.Create('Array', nil);
+  ArrayConstructor := TGocciaArrayClassValue.Create('Array', nil);
+  TGocciaArrayValue.ExposePrototype(ArrayConstructor);
   ArrayConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   if Assigned(FBuiltinGlobalArray) then
-  begin
     for Key in FBuiltinGlobalArray.BuiltinObject.GetAllPropertyNames do
       ArrayConstructor.SetProperty(Key, FBuiltinGlobalArray.BuiltinObject.GetProperty(Key));
-  end;
+  ArrayConstructor.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownSpecies,
+    TGocciaPropertyDescriptorAccessor.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
+      nil, [pfConfigurable]));
   FInterpreter.GlobalScope.DefineLexicalBinding('Array', ArrayConstructor, dtConst);
 
-  // Create other constructors - use specialized subclasses for primitives
+  if ggMap in FGlobals then
+  begin
+    MapConstructor := TGocciaMapClassValue.Create('Map', nil);
+    TGocciaMapValue.ExposePrototype(MapConstructor);
+    MapConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    if Assigned(FBuiltinMap) then
+      for Key in FBuiltinMap.BuiltinObject.GetAllPropertyNames do
+        MapConstructor.SetProperty(Key, FBuiltinMap.BuiltinObject.GetProperty(Key));
+    MapConstructor.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownSpecies,
+      TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
+        nil, [pfConfigurable]));
+    FInterpreter.GlobalScope.DefineLexicalBinding('Map', MapConstructor, dtConst);
+  end;
+
+  if ggSet in FGlobals then
+  begin
+    SetConstructor := TGocciaSetClassValue.Create('Set', nil);
+    TGocciaSetValue.ExposePrototype(SetConstructor);
+    SetConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    SetConstructor.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownSpecies,
+      TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
+        nil, [pfConfigurable]));
+    FInterpreter.GlobalScope.DefineLexicalBinding('Set', SetConstructor, dtConst);
+  end;
+
   StringConstructor := TGocciaStringClassValue.Create('String', nil);
+  StringConstructor.ReplacePrototype(TGocciaStringObjectValue.GetSharedPrototype);
+  StringConstructor.Prototype.AssignProperty('constructor', StringConstructor);
+  StringConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+  if Assigned(FBuiltinGlobalString) then
+    for Key in FBuiltinGlobalString.BuiltinObject.GetAllPropertyNames do
+      StringConstructor.SetProperty(Key, FBuiltinGlobalString.BuiltinObject.GetProperty(Key));
   FInterpreter.GlobalScope.DefineLexicalBinding('String', StringConstructor, dtConst);
 
   NumberConstructor := TGocciaNumberClassValue.Create('Number', nil);
+  NumberConstructor.ReplacePrototype(TGocciaNumberObjectValue.GetSharedPrototype);
+  NumberConstructor.Prototype.AssignProperty('constructor', NumberConstructor);
+  NumberConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   if Assigned(FBuiltinGlobalNumber) then
-  begin
     for Key in FBuiltinGlobalNumber.BuiltinObject.GetAllPropertyNames do
       NumberConstructor.SetProperty(Key, FBuiltinGlobalNumber.BuiltinObject.GetProperty(Key));
-  end;
   FInterpreter.GlobalScope.DefineLexicalBinding('Number', NumberConstructor, dtConst);
 
   BooleanConstructor := TGocciaBooleanClassValue.Create('Boolean', nil);
+  BooleanConstructor.ReplacePrototype(TGocciaBooleanObjectValue.GetSharedPrototype);
+  BooleanConstructor.Prototype.AssignProperty('constructor', BooleanConstructor);
+  BooleanConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   FInterpreter.GlobalScope.DefineLexicalBinding('Boolean', BooleanConstructor, dtConst);
 
-  // Create Function constructor
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 
@@ -528,6 +586,11 @@ begin
     else
       WriteLn(Format('  --> %s:%d:%d', [FFileName, Warning.Line, Warning.Column]));
   end;
+end;
+
+function TGocciaEngine.SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := AThisValue;
 end;
 
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);

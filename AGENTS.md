@@ -4,7 +4,7 @@ Instructions for AI coding assistants working on GocciaScript. For deep-dive doc
 
 ## Project Overview
 
-GocciaScript is a subset of ECMAScript 2020 implemented in FreePascal. It provides a JavaScript-like scripting language with intentional limitations for security and simplicity. See [docs/language-restrictions.md](docs/language-restrictions.md) for the full rationale.
+GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a JavaScript-like scripting language with intentional limitations for security and simplicity. See [docs/language-restrictions.md](docs/language-restrictions.md) for the full rationale.
 
 ## Quick Reference
 
@@ -86,6 +86,10 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Timing Utilities | `TimingUtils.pas` | Cross-platform timing: monotonic (`GetNanoseconds`, `GetMilliseconds`), wall-clock (`GetEpochNanoseconds`), and duration formatting (`FormatDuration`) |
 | Microtask Queue | `Goccia.MicrotaskQueue.pas` | Singleton FIFO queue for Promise reactions and `queueMicrotask` callbacks, drained after script execution, cleared on exception |
 | Garbage Collector | `Goccia.GarbageCollector.pas` | Mark-and-sweep memory management for runtime values |
+| Iterator Base | `Goccia.Values.IteratorValue.pas` | Iterator protocol base class, shared prototype with helper methods, `Iterator.from()`, `CreateGlobalObject` |
+| Concrete Iterators | `Goccia.Values.Iterator.Concrete.pas` | Array/String/Map/Set iterator subclasses with virtual `AdvanceNext` |
+| Lazy Iterators | `Goccia.Values.Iterator.Lazy.pas` | Lazy `map`/`filter`/`take`/`drop`/`flatMap` iterator wrappers |
+| Generic Iterator | `Goccia.Values.Iterator.Generic.pas` | Wraps user-defined `{next()}` objects as proper iterators |
 | JSON Utilities | `Goccia.JSON.pas` | Standalone JSON ↔ `TGocciaValue` parser and stringifier |
 | Version | `Goccia.Version.pas` | Git-derived version and commit hash, resolved once at startup via `RunCommand` |
 | Temporal Utilities | `Goccia.Temporal.Utils.pas` | ISO 8601 date math helpers, parsing, formatting |
@@ -299,6 +303,18 @@ Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowType
 
 **Symbol coercion:** `TGocciaSymbolValue.ToNumberLiteral` throws `TypeError` (symbols cannot convert to numbers). `ToStringLiteral` returns `"Symbol(description)"` for internal use (display, property keys), but implicit string coercion (template literals, `+` operator, `String.prototype.concat`) must check for symbols and throw `TypeError` at the operator level. See `Goccia.Evaluator.Arithmetic.pas` and `Goccia.Evaluator.pas` for the pattern. Symbols use a shared prototype singleton (like String, Number, Array) with `description` as an accessor getter and `toString()` as a method. `Symbol.prototype` is exposed on the Symbol constructor function.
 
+**Well-known symbols:** `Symbol.iterator` is a well-known symbol singleton accessed via `TGocciaSymbolValue.WellKnownIterator`. `Symbol.species` is accessed via `TGocciaSymbolValue.WellKnownSpecies`. Both are lazily initialized and GC-pinned. The `TGocciaGlobalSymbol` built-in uses these same instances.
+
+**`Symbol.species` semantics:** The `[Symbol.species]` static getter is registered on `Array`, `Map`, and `Set` constructors in `Goccia.Engine.pas`. The default getter returns `this`, so subclasses inherit the correct constructor. Array prototype methods (`map`, `filter`, `slice`, `concat`, `flat`, `flatMap`, `splice`) use the `ArraySpeciesCreate` helper (`Goccia.Values.ArrayValue.pas`) to create result arrays via the species constructor, enabling subclass-aware array derivation. User-defined classes can override `static get [Symbol.species]()` to control which constructor is used for derived arrays. `TGocciaClassValue` supports symbol-keyed static properties via `FStaticSymbolDescriptors`, `DefineSymbolProperty`, and `GetSymbolPropertyWithReceiver` (which preserves the original receiver when traversing the superclass chain for getter invocation).
+
+**Iterator protocol:** `TGocciaIteratorValue` (`Goccia.Values.IteratorValue.pas`) is the abstract base class for all iterators, providing the shared prototype with helper methods and a virtual `AdvanceNext` method. Iterators are organized into a class hierarchy across four files:
+
+1. **Concrete** (`Goccia.Values.Iterator.Concrete.pas`) — `TGocciaArrayIteratorValue`, `TGocciaStringIteratorValue`, `TGocciaMapIteratorValue`, `TGocciaSetIteratorValue`. Each overrides `AdvanceNext` for its collection type and uses sub-kind enums (`TGocciaArrayIteratorKind`, `TGocciaMapIteratorKind`, `TGocciaSetIteratorKind`) for values/keys/entries variants.
+2. **Lazy** (`Goccia.Values.Iterator.Lazy.pas`) — `TGocciaLazyMapIteratorValue`, `TGocciaLazyFilterIteratorValue`, `TGocciaLazyTakeIteratorValue`, `TGocciaLazyDropIteratorValue`, `TGocciaLazyFlatMapIteratorValue`. Each wraps a source iterator and advances on-demand (one element per `next()` call).
+3. **Generic** (`Goccia.Values.Iterator.Generic.pas`) — `TGocciaGenericIteratorValue` wraps user-defined iterator objects (plain objects with `next()` method), enabling user-defined iterables to work with spread, destructuring, and `Array.from()`.
+
+All subclasses inherit from `TGocciaIteratorValue`, so existing `is TGocciaIteratorValue` checks in the evaluator work with zero changes. The evaluator's `GetIteratorFromValue` helper resolves iterators by checking for `[Symbol.iterator]` symbol properties on objects (including boxing primitives), and wraps plain `{next()}` objects as generic iterators. A global `Iterator` object with `Iterator.from()` and `Iterator.prototype` is always registered.
+
 ## Built-in Objects
 
 See [docs/built-ins.md](docs/built-ins.md) for documentation on all built-ins and how to add new ones.
@@ -368,7 +384,7 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 
 - **Primary:** JavaScript end-to-end tests in `tests/` directory — these are the source of truth for correctness
 - **Secondary:** Pascal unit tests in `units/*.Test.pas` — only for internal implementation details
-- **JS test framework:** built-in `describe`/`test`/`expect` (enabled via `ggTestAssertions`). Supports `test.skip`/`describe.skip` for unconditional skipping, and `skipIf(condition)`/`runIf(condition)` on both `describe` and `test` for conditional execution.
+- **JS test framework:** built-in `describe`/`test`/`expect` (enabled via `ggTestAssertions`). Supports nested `describe` blocks (suite names are composed with ` > ` separators), `test.skip`/`describe.skip` for unconditional skipping, and `skipIf(condition)`/`runIf(condition)` on both `describe` and `test` for conditional execution. Skip state is inherited by nested describes.
 - **Pascal test framework:** `TestRunner.pas` provides generic `Expect<T>(...).ToBe(...)` assertions. `Expect<T>` is a **standalone function** (not a method on `TTestSuite`) to avoid FPC 3.2.2 AArch64 compiler crash with cross-unit generic method inheritance.
 - **NaN checks:** In Pascal tests, use `Value.ToNumberLiteral.IsNaN` (not `Math.IsNaN`) — special values store `0.0` internally
 

@@ -15,14 +15,15 @@ type
     FMethodHost: TGocciaValue;
   public
     constructor Create(const AMethodHost: TGocciaValue);
-    procedure ExposeOnConstructor(const AConstructor: TGocciaObjectValue);
+    procedure ExposeOnConstructor(const AConstructor: TGocciaValue);
     property Prototype: TGocciaObjectValue read FPrototype;
   end;
 
 implementation
 
 uses
-  Goccia.GarbageCollector;
+  Goccia.GarbageCollector,
+  Goccia.Values.ClassValue;
 
 constructor TGocciaSharedPrototype.Create(const AMethodHost: TGocciaValue);
 begin
@@ -38,9 +39,12 @@ begin
   end;
 end;
 
-procedure TGocciaSharedPrototype.ExposeOnConstructor(const AConstructor: TGocciaObjectValue);
+procedure TGocciaSharedPrototype.ExposeOnConstructor(const AConstructor: TGocciaValue);
 begin
-  AConstructor.AssignProperty('prototype', FPrototype);
+  if AConstructor is TGocciaClassValue then
+    TGocciaClassValue(AConstructor).ReplacePrototype(FPrototype)
+  else if AConstructor is TGocciaObjectValue then
+    TGocciaObjectValue(AConstructor).AssignProperty('prototype', FPrototype);
   FPrototype.AssignProperty('constructor', AConstructor);
 end;
 

@@ -34,12 +34,10 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   FSetConstructor := TGocciaNativeFunctionValue.Create(SetConstructorFn, 'Set', 0);
-
   TGocciaSetValue.ExposePrototype(FSetConstructor);
-
-  AScope.DefineLexicalBinding(AName, FSetConstructor, dtLet);
 end;
 
+// ES2026 §24.2.1.1 Set([ iterable ])
 function TGocciaGlobalSet.SetConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   SetObj: TGocciaSetValue;
@@ -47,13 +45,20 @@ var
   ArrValue: TGocciaArrayValue;
   I: Integer;
 begin
+  // Step 1: If NewTarget is undefined, throw a TypeError exception (implicit)
+  // Step 2: Let set be OrdinaryCreateFromConstructor(NewTarget, "%Set.prototype%", « [[SetData]] »)
+  // Step 3: Set set.[[SetData]] to a new empty List
   SetObj := TGocciaSetValue.Create;
 
+  // Step 4: If iterable is either undefined or null, return set
   if AArgs.Length > 0 then
   begin
     InitArg := AArgs.GetElement(0);
 
-    // Initialize from array iterable
+    // Step 5: Let adder be Get(set, "add")
+    // Step 6: If IsCallable(adder) is false, throw a TypeError exception
+    // Step 7: Let iteratorRecord be GetIterator(iterable, sync)
+    // Step 8: Repeat — for each element from iterable, Call(adder, set, « nextValue »)
     if InitArg is TGocciaArrayValue then
     begin
       ArrValue := TGocciaArrayValue(InitArg);
@@ -63,7 +68,6 @@ begin
           SetObj.AddItem(ArrValue.Elements[I]);
       end;
     end;
-    // Initialize from another Set
     if InitArg is TGocciaSetValue then
     begin
       for I := 0 to TGocciaSetValue(InitArg).Items.Count - 1 do
@@ -71,6 +75,7 @@ begin
     end;
   end;
 
+  // Step 9: Return set
   Result := SetObj;
 end;
 

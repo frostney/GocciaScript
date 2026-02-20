@@ -38,4 +38,18 @@ describe("Number.parseInt", () => {
   test("handles leading whitespace", () => {
     expect(Number.parseInt("  42")).toBe(42);
   });
+
+  test("radix 0 or undefined treated as 10", () => {
+    expect(Number.parseInt("10", 0)).toBe(10);
+    expect(Number.parseInt("10", undefined)).toBe(10);
+  });
+
+  test("radix out of range returns NaN", () => {
+    expect(Number.isNaN(Number.parseInt("10", 1))).toBe(true);
+    expect(Number.isNaN(Number.parseInt("10", 37))).toBe(true);
+  });
+
+  test("leading plus sign", () => {
+    expect(Number.parseInt("+42")).toBe(42);
+  });
 });

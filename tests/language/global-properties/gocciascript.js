@@ -15,7 +15,7 @@ describe.runIf(isGocciaScript)("GocciaScript global", () => {
   test("GocciaScript cannot be reassigned", () => {
     expect(() => {
       GocciaScript = {};
-    }).toThrow();
+    }).toThrow(TypeError);
   });
 });
 

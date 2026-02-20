@@ -62,3 +62,19 @@ test("Array.prototype.includes with undefined", () => {
 test("Array.prototype.includes finds undefined in array", () => {
   expect([1, undefined, 3].includes(undefined)).toBe(true);
 });
+
+test("includes uses SameValueZero so NaN is found", () => {
+  expect([1, NaN, 3].includes(NaN)).toBe(true);
+});
+
+test("includes treats +0 and -0 as equal", () => {
+  expect([0].includes(-0)).toBe(true);
+  expect([-0].includes(0)).toBe(true);
+});
+
+test("includes with boolean values", () => {
+  expect([true, false].includes(true)).toBe(true);
+  expect([true, false].includes(false)).toBe(true);
+  expect([0].includes(false)).toBe(false);
+  expect([1].includes(true)).toBe(false);
+});

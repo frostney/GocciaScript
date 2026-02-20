@@ -20,4 +20,56 @@ suite("fibonacci", () => {
     )[0];
     fib(20);
   });
+
+  bench("iterator fib(20)", () => {
+    const fibIter = {
+      [Symbol.iterator]() {
+        let a = 0;
+        let b = 1;
+        let count = 0;
+        return {
+          next() {
+            if (count >= 20) {
+              return { value: undefined, done: true };
+            }
+            const value = a;
+            const next = a + b;
+            a = b;
+            b = next;
+            count = count + 1;
+            return { value: value, done: false };
+          }
+        };
+      }
+    };
+    const fibs = [...fibIter];
+  });
+
+  bench("iterator fib(20) via Iterator.from + take", () => {
+    let a = 0;
+    let b = 1;
+    const fibs = Iterator.from({
+      next() {
+        const value = a;
+        const next = a + b;
+        a = b;
+        b = next;
+        return { value: value, done: false };
+      }
+    }).take(20).toArray();
+  });
+
+  bench("iterator fib(20) last value via reduce", () => {
+    let a = 0;
+    let b = 1;
+    const last = Iterator.from({
+      next() {
+        const value = a;
+        const next = a + b;
+        a = b;
+        b = next;
+        return { value: value, done: false };
+      }
+    }).take(20).reduce((_, v) => v, 0);
+  });
 });

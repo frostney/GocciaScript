@@ -45,7 +45,7 @@ describe("undefined immutability", () => {
   test("global undefined cannot be reassigned", () => {
     expect(() => {
       undefined = 42;
-    }).toThrow();
+    }).toThrow(TypeError);
   });
 
   test("global undefined remains unchanged after failed reassignment", () => {

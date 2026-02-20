@@ -42,5 +42,5 @@ test("variable defined in inner scope, only available in inner scope", () => {
 
   expect(() => {
     testVar;
-  }).toThrow();
+  }).toThrow(ReferenceError);
 });

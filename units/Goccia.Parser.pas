@@ -1817,6 +1817,11 @@ var
   IsPrivate: Boolean;
   IsGetter: Boolean;
   IsSetter: Boolean;
+  IsComputed: Boolean;
+  ComputedKeyExpression: TGocciaExpression;
+  StaticGetters: TDictionary<string, TGocciaGetterExpression>;
+  StaticSetters: TDictionary<string, TGocciaSetterExpression>;
+  ComputedStaticGetters: array of TGocciaComputedStaticAccessorEntry;
   ClassGenericParams, ClassImplementsClause, FieldType: string;
   InstancePropertyTypes: TDictionary<string, string>;
 begin
@@ -1850,6 +1855,9 @@ begin
   InstancePropertyOrder := TStringList.Create;
   PrivateInstancePropertyOrder := TStringList.Create;
   InstancePropertyTypes := TDictionary<string, string>.Create;
+  StaticGetters := TDictionary<string, TGocciaGetterExpression>.Create;
+  StaticSetters := TDictionary<string, TGocciaSetterExpression>.Create;
+  SetLength(ComputedStaticGetters, 0);
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
@@ -1866,13 +1874,23 @@ begin
     IsPrivate := Match([gttHash]);
     IsGetter := False;
     IsSetter := False;
+    IsComputed := False;
+    ComputedKeyExpression := nil;
 
     if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
     begin
       Advance;
       IsGetter := True;
 
-      if Check(gttHash) then
+      if Check(gttLeftBracket) then
+      begin
+        Advance;
+        ComputedKeyExpression := Expression;
+        Consume(gttRightBracket, 'Expected "]" after computed property name');
+        IsComputed := True;
+        MemberName := '';
+      end
+      else if Check(gttHash) then
       begin
         Advance;
         IsPrivate := True;
@@ -1886,7 +1904,15 @@ begin
       Advance;
       IsSetter := True;
 
-      if Check(gttHash) then
+      if Check(gttLeftBracket) then
+      begin
+        Advance;
+        ComputedKeyExpression := Expression;
+        Consume(gttRightBracket, 'Expected "]" after computed property name');
+        IsComputed := True;
+        MemberName := '';
+      end
+      else if Check(gttHash) then
       begin
         Advance;
         IsPrivate := True;
@@ -1956,22 +1982,29 @@ begin
     end
     else if IsGetter then
     begin
-      if IsStatic then
-        raise TGocciaSyntaxError.Create('Static getters not supported yet', Peek.Line, Peek.Column, FFileName, FSourceLines);
-
       Getter := ParseGetterExpression;
-      if IsPrivate then
+      if IsStatic then
+      begin
+        if IsComputed then
+        begin
+          SetLength(ComputedStaticGetters, Length(ComputedStaticGetters) + 1);
+          ComputedStaticGetters[High(ComputedStaticGetters)].KeyExpression := ComputedKeyExpression;
+          ComputedStaticGetters[High(ComputedStaticGetters)].GetterExpression := Getter;
+        end
+        else
+          StaticGetters.Add(MemberName, Getter);
+      end
+      else if IsPrivate then
         Getters.Add('#' + MemberName, Getter)
       else
         Getters.Add(MemberName, Getter);
     end
     else if IsSetter then
     begin
-      if IsStatic then
-        raise TGocciaSyntaxError.Create('Static setters not supported yet', Peek.Line, Peek.Column, FFileName, FSourceLines);
-
       Setter := ParseSetterExpression;
-      if IsPrivate then
+      if IsStatic then
+        StaticSetters.Add(MemberName, Setter)
+      else if IsPrivate then
         Setters.Add('#' + MemberName, Setter)
       else
         Setters.Add(MemberName, Setter);
@@ -1999,6 +2032,14 @@ begin
   Result.FPrivateInstancePropertyOrder.Assign(PrivateInstancePropertyOrder);
   for MemberName in InstancePropertyTypes.Keys do
     Result.FInstancePropertyTypes.Add(MemberName, InstancePropertyTypes[MemberName]);
+
+  // Transfer static getters/setters
+  Result.FStaticGetters.Free;
+  Result.FStaticGetters := StaticGetters;
+  Result.FStaticSetters.Free;
+  Result.FStaticSetters := StaticSetters;
+  Result.FComputedStaticGetters := ComputedStaticGetters;
+
   InstancePropertyOrder.Free;
   PrivateInstancePropertyOrder.Free;
   InstancePropertyTypes.Free;
