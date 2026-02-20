@@ -44,4 +44,34 @@ describe("Array subclassing", () => {
     expect(arr instanceof MyArray).toBe(true);
     expect(arr.length).toBe(3);
   });
+
+  test("subclass constructor with super(...args) spread", () => {
+    class MyArray extends Array {
+      constructor(...args) {
+        super(...args);
+      }
+    }
+    const arr = new MyArray(1, 2, 3);
+    expect(arr.length).toBe(3);
+    expect(arr[0]).toBe(1);
+    expect(arr[1]).toBe(2);
+    expect(arr[2]).toBe(3);
+    expect(arr instanceof Array).toBe(true);
+    expect(arr instanceof MyArray).toBe(true);
+  });
+
+  test("subclass constructor with super() and custom logic", () => {
+    class TaggedArray extends Array {
+      constructor(tag, ...items) {
+        super(...items);
+        this.tag = tag;
+      }
+    }
+    const arr = new TaggedArray("nums", 10, 20, 30);
+    expect(arr.tag).toBe("nums");
+    expect(arr.length).toBe(3);
+    expect(arr[0]).toBe(10);
+    expect(arr[1]).toBe(20);
+    expect(arr[2]).toBe(30);
+  });
 });

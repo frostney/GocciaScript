@@ -853,7 +853,15 @@ begin
 
     try
       for ArgumentExpr in ACallExpression.Arguments do
-        Arguments.Add(EvaluateExpression(ArgumentExpr, AContext));
+      begin
+        if ArgumentExpr is TGocciaSpreadExpression then
+        begin
+          SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ArgumentExpr).Argument, AContext);
+          SpreadIterableIntoArgs(SpreadValue, Arguments);
+        end
+        else
+          Arguments.Add(EvaluateExpression(ArgumentExpr, AContext));
+      end;
 
       if Assigned(SuperClass.ConstructorMethod) then
       begin
@@ -1530,6 +1538,7 @@ function EvaluateNewExpression(const ANewExpression: TGocciaNewExpression; const
 var
   Callee: TGocciaValue;
   Arguments: TGocciaArgumentsCollection;
+  SpreadValue: TGocciaValue;
   I: Integer;
   Instance: TGocciaInstanceValue;
   NativeInstance: TGocciaObjectValue;
@@ -1542,7 +1551,15 @@ begin
   Arguments := TGocciaArgumentsCollection.Create;
   try
     for I := 0 to ANewExpression.Arguments.Count - 1 do
-      Arguments.Add(EvaluateExpression(ANewExpression.Arguments[I], AContext));
+    begin
+      if ANewExpression.Arguments[I] is TGocciaSpreadExpression then
+      begin
+        SpreadValue := EvaluateExpression(TGocciaSpreadExpression(ANewExpression.Arguments[I]).Argument, AContext);
+        SpreadIterableIntoArgs(SpreadValue, Arguments);
+      end
+      else
+        Arguments.Add(EvaluateExpression(ANewExpression.Arguments[I], AContext));
+    end;
 
     if Callee is TGocciaClassValue then
     begin
