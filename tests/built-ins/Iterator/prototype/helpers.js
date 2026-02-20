@@ -118,6 +118,10 @@ describe("Iterator.prototype.reduce()", () => {
     const result = [42].values().reduce((acc, x) => acc + x);
     expect(result).toBe(42);
   });
+
+  test("reduce empty iterator with no initial value throws TypeError", () => {
+    expect(() => [].values().reduce((acc, x) => acc + x)).toThrow(TypeError);
+  });
 });
 
 describe("Iterator.prototype.toArray()", () => {

@@ -60,6 +60,7 @@ type
     FCallback: TGocciaValue;
     FIndex: Integer;
     FInnerIterator: TGocciaIteratorValue;
+    function ResolveIterator(const AValue: TGocciaValue): TGocciaIteratorValue;
   public
     constructor Create(const ASourceIterator: TGocciaIteratorValue; const ACallback: TGocciaValue);
     function AdvanceNext: TGocciaObjectValue; override;
@@ -69,9 +70,14 @@ type
 implementation
 
 uses
+  Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.Iterator.Concrete;
+  Goccia.Values.FunctionBase,
+  Goccia.Values.Iterator.Concrete,
+  Goccia.Values.Iterator.Generic,
+  Goccia.Values.SymbolValue;
 
 { TGocciaLazyMapIteratorValue }
 
@@ -268,6 +274,65 @@ begin
   FInnerIterator := nil;
 end;
 
+function TGocciaLazyFlatMapIteratorValue.ResolveIterator(const AValue: TGocciaValue): TGocciaIteratorValue;
+var
+  IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  if AValue is TGocciaIteratorValue then
+  begin
+    Result := TGocciaIteratorValue(AValue);
+    Exit;
+  end;
+
+  if AValue is TGocciaArrayValue then
+  begin
+    Result := TGocciaArrayIteratorValue.Create(AValue, akValues);
+    Exit;
+  end;
+
+  if AValue is TGocciaStringLiteralValue then
+  begin
+    Result := TGocciaStringIteratorValue.Create(AValue);
+    Exit;
+  end;
+
+  if AValue is TGocciaObjectValue then
+  begin
+    IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+    if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
+    begin
+      TGocciaGarbageCollector.Instance.AddTempRoot(AValue);
+      try
+        CallArgs := TGocciaArgumentsCollection.Create;
+        try
+          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AValue);
+        finally
+          CallArgs.Free;
+        end;
+      finally
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(AValue);
+      end;
+      if IteratorObj is TGocciaIteratorValue then
+      begin
+        Result := TGocciaIteratorValue(IteratorObj);
+        Exit;
+      end;
+      if IteratorObj is TGocciaObjectValue then
+      begin
+        NextMethod := IteratorObj.GetProperty('next');
+        if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
+        begin
+          Result := TGocciaGenericIteratorValue.Create(IteratorObj);
+          Exit;
+        end;
+      end;
+    end;
+  end;
+
+  Result := nil;
+end;
+
 function TGocciaLazyFlatMapIteratorValue.AdvanceNext: TGocciaObjectValue;
 var
   IterResult, InnerResult: TGocciaObjectValue;
@@ -303,14 +368,9 @@ begin
     MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
     Inc(FIndex);
 
-    if MappedValue is TGocciaIteratorValue then
-      FInnerIterator := TGocciaIteratorValue(MappedValue)
-    else if MappedValue is TGocciaArrayValue then
-      FInnerIterator := TGocciaArrayIteratorValue.Create(MappedValue, akValues)
-    else if MappedValue is TGocciaStringLiteralValue then
-      FInnerIterator := TGocciaStringIteratorValue.Create(MappedValue)
-    else
-      ThrowTypeError('Iterator.prototype.flatMap called on non-object');
+    FInnerIterator := ResolveIterator(MappedValue);
+    if not Assigned(FInnerIterator) then
+      ThrowTypeError('Iterator.prototype.flatMap callback must return an iterable');
 
     InnerResult := FInnerIterator.AdvanceNext;
     if not TGocciaBooleanLiteralValue(InnerResult.GetProperty('done')).Value then

@@ -88,4 +88,12 @@ describe("Iterator.from()", () => {
   test("Iterator.prototype is exposed", () => {
     expect(Iterator.prototype).toBeDefined();
   });
+
+  test("throws TypeError for null", () => {
+    expect(() => Iterator.from(null)).toThrow(TypeError);
+  });
+
+  test("throws TypeError for undefined", () => {
+    expect(() => Iterator.from(undefined)).toThrow(TypeError);
+  });
 });

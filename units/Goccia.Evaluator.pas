@@ -1026,6 +1026,13 @@ begin
     // Symbol property access
     if PropertyValue is TGocciaSymbolValue then
     begin
+      if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
+      begin
+        AContext.OnError('Cannot read property ''Symbol()'' of ' + Obj.ToStringLiteral.Value,
+          AMemberExpression.Line, AMemberExpression.Column);
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Exit;
+      end;
       if Obj is TGocciaObjectValue then
       begin
         Result := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));

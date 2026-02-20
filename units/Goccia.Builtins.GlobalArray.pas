@@ -28,6 +28,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.Iterator.Generic,
@@ -113,19 +114,21 @@ begin
       else
         Iterator := nil;
 
-      if Assigned(Iterator) then
-      begin
-        TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
-        try
+      if not Assigned(Iterator) then
+        ThrowTypeError('[Symbol.iterator] did not return a valid iterator');
+
+      TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+      TGocciaGarbageCollector.Instance.AddTempRoot(ResultArray);
+      try
+        IterResult := Iterator.AdvanceNext;
+        while not TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value do
+        begin
+          ResultArray.Elements.Add(IterResult.GetProperty('value'));
           IterResult := Iterator.AdvanceNext;
-          while not TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value do
-          begin
-            ResultArray.Elements.Add(IterResult.GetProperty('value'));
-            IterResult := Iterator.AdvanceNext;
-          end;
-        finally
-          TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
         end;
+      finally
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(ResultArray);
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
       end;
     end
     else

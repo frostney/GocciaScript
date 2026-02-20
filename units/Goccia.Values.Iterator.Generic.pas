@@ -65,7 +65,10 @@ begin
     if Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value then
     begin
       FDone := True;
-      Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+      ValueVal := TGocciaObjectValue(NextResult).GetProperty('value');
+      if not Assigned(ValueVal) then
+        ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Result := CreateIteratorResult(ValueVal, True);
     end
     else
     begin

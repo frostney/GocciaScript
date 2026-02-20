@@ -855,16 +855,8 @@ begin
 end;
 
 function TGocciaStringObjectValue.StringSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  StringValue: TGocciaStringLiteralValue;
 begin
-  if AThisValue is TGocciaStringLiteralValue then
-    StringValue := TGocciaStringLiteralValue(AThisValue)
-  else if AThisValue is TGocciaStringObjectValue then
-    StringValue := TGocciaStringObjectValue(AThisValue).Primitive
-  else
-    ThrowTypeError('[Symbol.iterator] called on non-string');
-  Result := TGocciaStringIteratorValue.Create(StringValue);
+  Result := TGocciaStringIteratorValue.Create(TGocciaStringLiteralValue.Create(ExtractStringValue(AThisValue)));
 end;
 
 end.

@@ -338,7 +338,7 @@ A collection of unique values with insertion-order iteration.
 | `set.forEach(callback)` | Iterate over values |
 | `set.values()` | Returns an iterator over values |
 | `set.keys()` | Returns an iterator over values (same as `values()` for Set) |
-| `set.entries()` | Returns an iterator over values |
+| `set.entries()` | Returns an iterator of `[value, value]` pairs (matches `Map.entries()` shape) |
 | `set[Symbol.iterator]()` | Returns a values iterator (same as `values()`) |
 
 Sets are iterable: `[...mySet]` spreads the set's values into an array.
