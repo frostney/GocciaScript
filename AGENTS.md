@@ -98,6 +98,15 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Module Resolver | `Goccia.Modules.Resolver.pas` | Extensionless imports, path aliases, virtual `Resolve` for custom resolvers |
 | JSX Source Map | `Goccia.JSX.SourceMap.pas` | Lightweight internal position mapping for JSX-transformed source |
 | JSX Transformer | `Goccia.JSX.Transformer.pas` | Standalone pre-pass that converts JSX to `createElement` calls |
+| Logger | `Goccia.Logger.pas` | Configurable logging with levels and output formats |
+| Benchmark Reporter | `Goccia.Benchmark.Reporter.pas` | Multi-format benchmark output (console, text, CSV, JSON) |
+| REPL Line Editor | `Goccia.REPL.LineEditor.pas` | Interactive line editing with history for the REPL |
+| REPL Formatter | `Goccia.REPL.Formatter.pas` | Color-formatted value output for the REPL |
+| Shared Prototype | `Goccia.SharedPrototype.pas` | Shared prototype singleton utilities |
+| Value Constants | `Goccia.Values.Constants.pas` | Centralized runtime value constants |
+| ToPrimitive | `Goccia.Values.ToPrimitive.pas` | ECMAScript `ToPrimitive` abstract operation |
+| Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, centralized error construction |
+| Argument Validator | `Goccia.Arguments.Validator.pas` | `RequireExactly`, `RequireAtLeast` — standardized argument count/type validation |
 
 ## Development Workflow
 
@@ -134,9 +143,10 @@ Every new feature or change **must** follow this workflow:
 
 1. **Create a branch** — Create a new branch from `main` with a descriptive name (e.g., `feature/string-prototype-repeat`, `fix/nan-comparison`, `refactor/scope-chain`).
 2. **Implement the feature** — Develop the feature on the branch. Follow the critical rules below (testing, evaluator purity, etc.).
-3. **Add/update tests** — If adding a new language feature, create JavaScript test files following the existing patterns in `tests/`. If modifying AST logic, scope chain, evaluator, or value types, also build and run the native Pascal test suite and update `units/*.Test.pas` as needed.
-4. **Update documentation** — Update all relevant documentation (`AGENTS.md`, `docs/*.md`, `README.md`) to reflect the change. Documentation is not optional.
-5. **Commit** — Commit the implementation, tests, and documentation together with a clear, descriptive commit message.
+3. **Annotate spec references** — If the feature implements ECMAScript-specified behavior, add `// ESYYYY §X.Y.Z` spec annotations above each function body and at key algorithm steps within the body (see [Code Style: ECMAScript Spec Annotations](#ecmascript-spec-annotations)).
+4. **Add/update tests** — If adding a new language feature, create JavaScript test files following the existing patterns in `tests/`. If modifying AST logic, scope chain, evaluator, or value types, also build and run the native Pascal test suite and update `units/*.Test.pas` as needed.
+5. **Update documentation** — Update all relevant documentation (`AGENTS.md`, `docs/*.md`, `README.md`) to reflect the change. Documentation is not optional.
+6. **Commit** — Commit the implementation, tests, and documentation together with a clear, descriptive commit message.
 
 ```bash
 # Example workflow
@@ -265,6 +275,33 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Compiler directives:** All units include `{$I Goccia.inc}`
 - **Editor setup:** VSCode/Cursor auto-formats on save via the `runOnSave` extension (configured in `.vscode/settings.json`). Recommended extensions are in `.vscode/extensions.json`.
 - **General rules:** Follow [Embarcadero's Pascal style guide](https://docwiki.embarcadero.com/RADStudio/Athens/en/General_Rules) for casing, keywords, and [type declarations](https://docwiki.embarcadero.com/RADStudio/Athens/en/Type_Declarations)
+
+### ECMAScript Spec Annotations
+
+When implementing ECMAScript-specified behavior, annotate each function or method with a comment referencing the relevant spec section. Use the format `// ESYYYY §X.Y.Z MethodName(params)` where `YYYY` is the current edition year of the specification (e.g., `ES2026` for 2026). Place the annotation immediately above the function body in the `implementation` section. For multi-step algorithms, annotate individual steps inline:
+
+```pascal
+// ES2026 §23.1.3.18 Array.prototype.map(callbackfn [, thisArg])
+function TGocciaArrayValue.Map(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+begin
+  Arr := TGocciaArrayValue(AThisValue);
+  // ES2026 §23.1.3.18 step 4: ArraySpeciesCreate(O, len)
+  ResultArray := ArraySpeciesCreate(Arr, Arr.Elements.Count);
+```
+
+This applies to:
+- Built-in method implementations (Array, String, Number, Object, Set, Map, Promise, Symbol, etc.)
+- Abstract operations (`ToPrimitive`, `ArraySpeciesCreate`, `FlattenIntoArray`, etc.)
+- Evaluator operations that implement spec algorithms (property access, type coercion, operator semantics)
+
+The section numbers reference [ECMA-262](https://tc39.es/ecma262/) (the living standard). Use the edition year matching the current year (e.g., `ES2026` for 2026, `ES2027` for 2027). For TC39 proposals not yet merged into the main spec (e.g., Temporal, Iterator Helpers), reference the proposal name instead:
+
+```pascal
+// TC39 Temporal §5.5.3 Temporal.Duration.prototype.add(other)
+// TC39 Iterator Helpers §2.1.3.1 Iterator.prototype.map(mapper)
+```
 
 ### Platform Pitfall: `Double(Int64)` on AArch64
 

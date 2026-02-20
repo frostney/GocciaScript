@@ -193,7 +193,7 @@ var
 begin
   ACallArgs.SetElement(0, A);
   ACallArgs.SetElement(1, B);
-  CompResult := CallFunction(ACompareFunc, ACallArgs, AThisValue).ToNumberLiteral;
+  CompResult := InvokeCallable(ACompareFunc, ACallArgs, AThisValue).ToNumberLiteral;
 
   if CompResult.IsNaN then
     Result := 0
@@ -473,7 +473,7 @@ begin
 
       CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
-      ArrayCreateDataProperty(ResultArray, I, CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue));
+      ArrayCreateDataProperty(ResultArray, I, InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue));
     end;
   finally
     CallArgs.Free;
@@ -513,7 +513,7 @@ begin
       CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       // Step 6c-ii: Let selected be ToBoolean(Call(callbackfn, thisArg, « kValue, k, O »))
-      PredicateResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      PredicateResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
       // Step 6c-iii: If selected is true, CreateDataPropertyOrThrow(A, ToString(to), kValue)
       if PredicateResult.ToBooleanLiteral.Value then
@@ -569,7 +569,7 @@ begin
       CallArgs.SetElement(0, Accumulator);
       CallArgs.SetElement(1, Arr.Elements[I]);
       CallArgs.SetElement(2, TGocciaNumberLiteralValue.SmallInt(I));
-      Accumulator := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      Accumulator := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
   finally
     CallArgs.Free;
@@ -606,7 +606,7 @@ begin
       CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       // Step 5d: Call(callbackfn, thisArg, « kValue, k, O »)
-      CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
   finally
     CallArgs.Free;
@@ -683,7 +683,7 @@ begin
   SearchValue := AArgs.GetElement(0);
 
   // Steps 4-5: Let n be ToIntegerOrInfinity(fromIndex), compute k
-  FromIndex := ToIntegerFromArgs(AArgs, 1, 0);
+  FromIndex := ToIntegerFromArgs(AArgs, 1);
 
   // Steps 6-8: Search using SameValueZero comparison
   if Arr.Includes(SearchValue, FromIndex) then
@@ -718,7 +718,7 @@ begin
       CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       // Step 5c-ii: Let testResult be ToBoolean(Call(callbackfn, thisArg, « kValue, k, O »))
-      SomeResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      SomeResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       // Step 5c-iii: If testResult is true, return true
       if SomeResult.ToBooleanLiteral.Value then
       begin
@@ -760,7 +760,7 @@ begin
       CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
       // Step 5c-ii: Let testResult be ToBoolean(Call(callbackfn, thisArg, « kValue, k, O »))
-      EveryResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      EveryResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       // Step 5c-iii: If testResult is false, return false
       if not EveryResult.ToBooleanLiteral.Value then
       begin
@@ -862,7 +862,7 @@ begin
       // Step: Let mappedValue be Call(mapperFunction, thisArg, « kValue, k, O »)
       CallArgs.SetElement(0, Arr.Elements[I]);
       CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
-      MappedValue := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      MappedValue := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
       // Step: If IsConcatSpreadable(mappedValue), flatten one level
       if MappedValue is TGocciaArrayValue then
@@ -942,7 +942,7 @@ begin
   Arr := TGocciaArrayValue(AThisValue);
 
   // Step 3: Let relativeStart be ToIntegerOrInfinity(start)
-  StartIndex := ToIntegerFromArgs(AArgs, 0, 0);
+  StartIndex := ToIntegerFromArgs(AArgs);
 
   // Step 4: If relativeStart < 0, let k be max(len + relativeStart, 0); else min(relativeStart, len)
   StartIndex := NormalizeRelativeIndex(StartIndex, Arr.Elements.Count);
@@ -1000,7 +1000,7 @@ begin
       CallArgs.Free;
       CallArgs := CreateArrayCallbackArgs(Element, I, AThisValue);
       // Step 5b: Let testResult be ToBoolean(Call(predicate, thisArg, « kValue, k, O »))
-      CallResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       // Step 5c: If testResult is true, return kValue
       if CallResult.ToBooleanLiteral.Value then
       begin
@@ -1043,7 +1043,7 @@ begin
       CallArgs.Free;
       CallArgs := CreateArrayCallbackArgs(Element, I, AThisValue);
       // Step 5b: Let testResult be ToBoolean(Call(predicate, thisArg, « kValue, k, O »))
-      CallResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       // Step 5c: If testResult is true, return k
       if CallResult.ToBooleanLiteral.Value then
       begin
@@ -1086,7 +1086,7 @@ begin
       CallArgs.Free;
       CallArgs := CreateArrayCallbackArgs(Element, I, AThisValue);
       // Step 5b: Let testResult be ToBoolean(Call(predicate, thisArg, « kValue, k, O »))
-      CallResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       // Step 5c: If testResult is true, return kValue
       if CallResult.ToBooleanLiteral.Value then
       begin
@@ -1129,7 +1129,7 @@ begin
       CallArgs.Free;
       CallArgs := CreateArrayCallbackArgs(Element, I, AThisValue);
       // Step 5b: Let testResult be ToBoolean(Call(predicate, thisArg, « kValue, k, O »))
-      CallResult := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       // Step 5c: If testResult is true, return k
       if CallResult.ToBooleanLiteral.Value then
       begin
@@ -1163,7 +1163,7 @@ begin
     ThrowError('Array.with requires index and value arguments');
 
   // Step 3: Let relativeIndex be ToIntegerOrInfinity(index)
-  Index := ToIntegerFromArgs(AArgs, 0, 0);
+  Index := ToIntegerFromArgs(AArgs);
   // Step 5: Let value be args[1]
   NewValue := AArgs.GetElement(1);
 
@@ -1212,12 +1212,12 @@ begin
     ThrowError('Array.copyWithin requires a target argument');
 
   // Step 3: Let relativeTarget be ToIntegerOrInfinity(target)
-  Target := ToIntegerFromArgs(AArgs, 0, 0);
+  Target := ToIntegerFromArgs(AArgs);
   // Step 4: If relativeTarget < 0, let to be max(len + relativeTarget, 0); else min(relativeTarget, len)
   Target := NormalizeRelativeIndex(Target, Len);
 
   // Step 5: Let relativeStart be ToIntegerOrInfinity(start)
-  Start := ToIntegerFromArgs(AArgs, 1, 0);
+  Start := ToIntegerFromArgs(AArgs, 1);
   // Step 6: If relativeStart < 0, let from be max(len + relativeStart, 0); else min(relativeStart, len)
   Start := NormalizeRelativeIndex(Start, Len);
 
@@ -1270,7 +1270,7 @@ begin
 
   // Step 4: Let n be ToIntegerOrInfinity(fromIndex)
   // Step 6: If n >= 0, let k be n; else let k be max(len + n, 0)
-  FromIndex := ToIntegerFromArgs(AArgs, 1, 0);
+  FromIndex := ToIntegerFromArgs(AArgs, 1);
   if FromIndex < 0 then
     FromIndex := Arr.Elements.Count + FromIndex;
   if FromIndex < 0 then
@@ -1505,7 +1505,7 @@ begin
   Arr := TGocciaArrayValue(AThisValue);
 
   // Step 3: Let relativeStart be ToIntegerOrInfinity(start)
-  StartIndex := ToIntegerFromArgs(AArgs, 0, 0);
+  StartIndex := ToIntegerFromArgs(AArgs);
 
   // Step 4: If relativeStart < 0, let actualStart be max(len + relativeStart, 0); else min(relativeStart, len)
   ActualStartIndex := NormalizeRelativeIndex(StartIndex, Arr.Elements.Count);
@@ -1741,7 +1741,7 @@ begin
   end;
 
   // Step 3: Let relativeStart be ToIntegerOrInfinity(start)
-  StartIndex := ToIntegerFromArgs(AArgs, 0, 0);
+  StartIndex := ToIntegerFromArgs(AArgs);
 
   // Step 4: If relativeStart < 0, let actualStart be max(len + relativeStart, 0); else min(relativeStart, len)
   ActualStart := NormalizeRelativeIndex(StartIndex, Arr.Elements.Count);
@@ -1842,7 +1842,7 @@ begin
     FillValue := AArgs.GetElement(0);
 
   // Step 4: Let relativeStart be ToIntegerOrInfinity(start)
-  StartIdx := ToIntegerFromArgs(AArgs, 1, 0);
+  StartIdx := ToIntegerFromArgs(AArgs, 1);
 
   // Step 6: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
   EndIdx := ToIntegerFromArgs(AArgs, 2, Arr.Elements.Count);

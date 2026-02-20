@@ -20,7 +20,8 @@ TGocciaGlobalBuiltin = (
   ggMap,              // Map constructor and prototype
   ggTestAssertions,   // describe, test, expect (testing only)
   ggBenchmark,        // suite, bench, runBenchmarks (benchmarking only)
-  ggTemporal          // Temporal namespace (dates, times, durations, instants)
+  ggTemporal,         // Temporal namespace (dates, times, durations, instants)
+  ggJSX              // JSX transformer support
 );
 ```
 
@@ -28,7 +29,7 @@ The default set used by `ScriptLoader` and `REPL`:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal];
+                  ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal, ggJSX];
 ```
 
 The `TestRunner` adds `ggTestAssertions` to inject the test framework.

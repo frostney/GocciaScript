@@ -10,7 +10,6 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
-  Goccia.Interfaces,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
@@ -21,7 +20,7 @@ type
   // Forward declaration
   TGocciaInstanceValue = class;
 
-  TGocciaClassValue = class(TGocciaValue, IGocciaCallable)
+  TGocciaClassValue = class(TGocciaValue)
   private
     FName: string;
     FSuperClass: TGocciaClassValue;

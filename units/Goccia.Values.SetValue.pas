@@ -309,7 +309,7 @@ begin
     //   Call(callbackfn, thisArg, « e, e, S »)
     CallArgs := TGocciaArgumentsCollection.Create([S.FItems[I], S.FItems[I], AThisValue]);
     try
-      CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;

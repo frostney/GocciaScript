@@ -799,7 +799,7 @@ begin
       CallArgs.Add(Items.Elements[I]);
       CallArgs.Add(TGocciaNumberLiteralValue.SmallInt(I));
 
-      KeyValue := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      KeyValue := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;

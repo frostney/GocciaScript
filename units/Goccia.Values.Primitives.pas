@@ -9,7 +9,7 @@ type
   TGocciaNumberLiteralValue = class;
   TGocciaStringLiteralValue = class;
 
-  TGocciaValue = class(TInterfacedObject)
+  TGocciaValue = class
   private
     FGCMarked: Boolean;
   public

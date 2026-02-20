@@ -498,7 +498,7 @@ begin
   ExecutorArgs := TGocciaArgumentsCollection.Create([ResolveFn, RejectFn]);
   try
     try
-      CallFunction(Executor, ExecutorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      InvokeCallable(Executor, ExecutorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     except
       on E: TGocciaThrowValue do
       begin
@@ -946,7 +946,7 @@ begin
   try
     EmptyArgs := TGocciaArgumentsCollection.Create;
     try
-      CallbackResult := CallFunction(Callback, EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallbackResult := InvokeCallable(Callback, EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       EmptyArgs.Free;
     end;

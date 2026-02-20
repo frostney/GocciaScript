@@ -75,7 +75,6 @@ uses
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
-  Goccia.Interfaces,
   Goccia.Logger,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,

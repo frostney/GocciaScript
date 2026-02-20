@@ -31,7 +31,7 @@ Overflow and range checks are **enabled** — correctness is prioritized over ra
 |---------|-----------|---------|
 | Units | `Goccia.<Category>.<Name>.pas` | `Goccia.Values.Primitives.pas` |
 | Classes | `TGoccia<Name>` prefix | `TGocciaObjectValue` |
-| Interfaces | `I<Name>` prefix | `IGocciaCallable` |
+| Interfaces | `I<Name>` prefix | `IGocciaSerializable` |
 | Private fields | `F` prefix | `FValue`, `FPrototype` |
 | Functions/Procedures | PascalCase | `Evaluate`, `EvaluateBinary` |
 | Methods | PascalCase | `GetProperty`, `ToStringLiteral` |
@@ -47,6 +47,53 @@ Use centralized constant units instead of hardcoded string literals:
 - **File extensions** — Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`) instead of raw `'.js'`, `'.mjs'` strings. Use the `ScriptExtensions` array and `IsScriptExtension`/`IsJSXNativeExtension` helpers instead of duplicating extension lists.
 
 Adding a new keyword or file extension requires a single change in the constants unit — all consumers pick it up automatically.
+
+### ECMAScript Spec Annotations
+
+When implementing ECMAScript-specified behavior, annotate each function or method with a comment referencing the relevant specification section. Place the annotation immediately above the function body in the `implementation` section. For multi-step spec algorithms, also annotate individual steps inline within the function body:
+
+```pascal
+// ES2026 §23.1.3.18 Array.prototype.map(callbackfn [, thisArg])
+function TGocciaArrayValue.Map(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  ResultArray: TGocciaArrayValue;
+begin
+  Arr := TGocciaArrayValue(AThisValue);
+  // ES2026 §23.1.3.18 step 4: ArraySpeciesCreate(O, len)
+  ResultArray := ArraySpeciesCreate(Arr, Arr.Elements.Count);
+  // ...
+end;
+```
+
+**Format:** `// ESYYYY §X.Y.Z FullMethodName(params)`
+
+- `YYYY` is the current edition year of the ECMA-262 specification (e.g., `ES2026` for 2026, `ES2027` for 2027). Use the year matching the current year.
+- The section numbers reference [ECMA-262](https://tc39.es/ecma262/), the living standard.
+- Use the full qualified name as it appears in the spec (e.g., `Array.prototype.map`, `Object.keys`, `Number.parseInt`).
+- Include the parameter list from the spec signature (e.g., `(callbackfn [, thisArg])`) for quick lookup.
+- For individual algorithm steps within a function body, use `// ESYYYY §X.Y.Z step N: description`.
+
+**What to annotate:**
+
+| Category | Example |
+|----------|---------|
+| Built-in prototype methods | `// ES2026 §22.1.3.22 String.prototype.slice(start, end)` |
+| Built-in static methods | `// ES2026 §20.1.2.1 Object.assign(target, ...sources)` |
+| Built-in constructors | `// ES2026 §23.1.1.1 Array(len)` |
+| Abstract operations | `// ES2026 §7.1.1 ToPrimitive(input [, preferredType])` |
+| Internal algorithms | `// ES2026 §7.3.35 ArraySpeciesCreate(originalArray, length)` |
+| Algorithm steps (inline) | `// ES2026 §23.1.3.18 step 4: ArraySpeciesCreate(O, len)` |
+
+**TC39 proposals** not yet merged into ECMA-262 use the proposal name instead of a section number:
+
+```pascal
+// TC39 Temporal §5.5.3 Temporal.Duration.prototype.add(other)
+// TC39 Iterator Helpers §2.1.3.1 Iterator.prototype.map(mapper)
+// TC39 Set Methods §2.1 Set.prototype.union(other)
+```
+
+**What not to annotate:** Internal GocciaScript helpers that don't correspond to a spec algorithm (e.g., `EvaluateStatementsSafe`, `SpreadIterableInto`, Pascal-specific utilities).
 
 ### No Abbreviations
 

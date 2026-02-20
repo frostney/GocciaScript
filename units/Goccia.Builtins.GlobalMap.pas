@@ -68,7 +68,7 @@ begin
     try
       CallArgs.Add(Items.Elements[I]);
       CallArgs.Add(TGocciaNumberLiteralValue.SmallInt(I));
-      GroupKey := CallFunction(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      GroupKey := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;

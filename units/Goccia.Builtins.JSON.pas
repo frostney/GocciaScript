@@ -116,7 +116,7 @@ begin
   Args := TGocciaArgumentsCollection.Create;
   Args.Add(TGocciaStringLiteralValue.Create(AKey));
   Args.Add(Value);
-  Result := CallFunction(AReviver, Args, AHolder);
+  Result := InvokeCallable(AReviver, Args, AHolder);
 end;
 
 // §25.5.1 JSON.parse ( text [ , reviver ] )
@@ -195,7 +195,7 @@ begin
   Args := TGocciaArgumentsCollection.Create;
   Args.Add(TGocciaStringLiteralValue.Create(AKey));
   Args.Add(AValue);
-  Result := CallFunction(AReplacer, Args, AHolder);
+  Result := InvokeCallable(AReplacer, Args, AHolder);
 end;
 
 // §25.5.2.1 SerializeJSONProperty ( state, key, holder ) — recursive transformation.

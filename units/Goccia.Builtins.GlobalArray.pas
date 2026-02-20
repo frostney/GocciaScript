@@ -165,7 +165,7 @@ begin
         begin
           MapArgs.SetElement(0, KValue);
           MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
-          KValue := CallFunction(MapCallback, MapArgs, ThisArg);
+          KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
         end;
         // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
         CreateDataProperty(K, KValue);
@@ -189,7 +189,7 @@ begin
         begin
           MapArgs.SetElement(0, KValue);
           MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K - 1));
-          KValue := CallFunction(MapCallback, MapArgs, ThisArg);
+          KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
         end;
         CreateDataProperty(K - 1, KValue);
       end;
@@ -246,7 +246,7 @@ begin
             begin
               MapArgs.SetElement(0, KValue);
               MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
-              KValue := CallFunction(MapCallback, MapArgs, ThisArg);
+              KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
             end;
             // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
             CreateDataProperty(K, KValue);
@@ -285,7 +285,7 @@ begin
             begin
               MapArgs.SetElement(0, KValue);
               MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
-              KValue := CallFunction(MapCallback, MapArgs, ThisArg);
+              KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
             end;
             // Step 12e: CreateDataPropertyOrThrow(A, Pk, mappedValue)
             CreateDataProperty(K, KValue);
