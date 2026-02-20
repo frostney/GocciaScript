@@ -25,8 +25,10 @@ implementation
 
 uses
   Math,
+  SysUtils,
 
   Goccia.Values.ClassValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
 
 function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer; const ADefault: Integer): Integer;
@@ -50,8 +52,10 @@ function InvokeCallable(const ACallable: TGocciaValue; const AArgs: TGocciaArgum
 begin
   if ACallable is TGocciaFunctionBase then
     Result := TGocciaFunctionBase(ACallable).Call(AArgs, AThisValue)
+  else if ACallable is TGocciaClassValue then
+    Result := TGocciaClassValue(ACallable).Call(AArgs, AThisValue)
   else
-    Result := TGocciaClassValue(ACallable).Call(AArgs, AThisValue);
+    ThrowTypeError(Format('%s is not a function', [ACallable.TypeName]));
 end;
 
 end.
