@@ -116,6 +116,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ClassHelper,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionValue,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
@@ -309,7 +310,7 @@ begin
     begin
       Len := TGocciaNumberLiteralValue(LenArg).Value;
       if (Len <> Trunc(Len)) or (Len < 0) or (Len > 4294967295) then
-        raise Exception.Create('Invalid array length');
+        ThrowRangeError('Invalid array length');
       FElements.Count := Trunc(Len);
     end
     else
@@ -501,7 +502,7 @@ begin
   else
   begin
     if Arr.Elements.Count = 0 then
-      ThrowError('Reduce of empty array with no initial value');
+      ThrowTypeError('Reduce of empty array with no initial value');
     Accumulator := Arr.Elements[0];
     StartIndex := 1;
   end;
@@ -1021,7 +1022,7 @@ begin
     ActualIndex := Index;
 
   if (ActualIndex < 0) or (ActualIndex >= Arr.Elements.Count) then
-    ThrowError('Invalid index for Array.with');
+    ThrowRangeError('Invalid index for Array.with');
 
   ResultArray := TGocciaArrayValue.Create;
   for I := 0 to Arr.Elements.Count - 1 do

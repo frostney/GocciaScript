@@ -880,14 +880,17 @@ begin
       end;
       on E: TGocciaError do
       begin
-        // Handle Goccia-specific errors (syntax, runtime, etc.)
         if ExpectedErrorType = '' then
         begin
           TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
           Exit;
         end;
 
-        if (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
+        if ((ExpectedErrorType = 'TypeError') and (E is TGocciaTypeError)) or
+           ((ExpectedErrorType = 'ReferenceError') and (E is TGocciaReferenceError)) or
+           ((ExpectedErrorType = 'SyntaxError') and (E is TGocciaSyntaxError)) or
+           ((ExpectedErrorType = 'Error') and (E is TGocciaRuntimeError)) or
+           (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
         begin
           TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
           Exit;

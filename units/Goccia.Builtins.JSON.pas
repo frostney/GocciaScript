@@ -40,6 +40,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue;
 
@@ -122,7 +123,7 @@ begin
     Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
   except
     on E: Exception do
-      ThrowError('JSON.parse error: ' + E.Message, 0, 0);
+      ThrowSyntaxError(E.Message);
   end;
 
   if AArgs.Length >= 2 then
