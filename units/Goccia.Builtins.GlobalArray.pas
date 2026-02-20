@@ -25,7 +25,7 @@ type
 implementation
 
 uses
-  Classes,
+  SysUtils,
 
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
@@ -62,18 +62,15 @@ end;
 function TGocciaGlobalArray.ArrayFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ResultArray: TGocciaArrayValue;
-  Source: TGocciaValue;
-  SourceArr: TGocciaArrayValue;
-  SourceStr: string;
+  Source, MapCallback, ThisArg, KValue: TGocciaValue;
+  IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
   Iterator: TGocciaIteratorValue;
   IterResult: TGocciaObjectValue;
-  IteratorMethod, NextMethod: TGocciaValue;
-  IteratorObj: TGocciaValue;
-  LengthVal, PropVal: TGocciaValue;
-  PropKeys: TStringList;
-  CallArgs: TGocciaArgumentsCollection;
-  MapCallback: TGocciaValue;
-  I, Len, PropIndex, Code: Integer;
+  LengthVal: TGocciaValue;
+  CallArgs, MapArgs: TGocciaArgumentsCollection;
+  SourceStr: string;
+  Mapping: Boolean;
+  K, Len: Integer;
 begin
   if AArgs.Length < 1 then
   begin
@@ -82,25 +79,33 @@ begin
   end;
 
   Source := AArgs.GetElement(0);
-  ResultArray := TGocciaArrayValue.Create;
 
-  if Source is TGocciaArrayValue then
+  Mapping := False;
+  MapCallback := nil;
+  ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if AArgs.Length > 1 then
   begin
-    SourceArr := TGocciaArrayValue(Source);
-    ResultArray.Elements.Capacity := SourceArr.Elements.Count;
-    for I := 0 to SourceArr.Elements.Count - 1 do
-      ResultArray.Elements.Add(SourceArr.Elements[I]);
-  end
-  else if Source is TGocciaStringLiteralValue then
-  begin
-    SourceStr := TGocciaStringLiteralValue(Source).Value;
-    ResultArray.Elements.Capacity := Length(SourceStr);
-    for I := 1 to Length(SourceStr) do
-      ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(SourceStr[I]));
-  end
-  else if Source is TGocciaObjectValue then
-  begin
-    IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+    MapCallback := AArgs.GetElement(1);
+    if not (MapCallback is TGocciaUndefinedLiteralValue) then
+    begin
+      if not MapCallback.IsCallable then
+        ThrowTypeError('Array.from: when provided, the second argument must be a function');
+      Mapping := True;
+      if AArgs.Length > 2 then
+        ThisArg := AArgs.GetElement(2);
+    end;
+  end;
+
+  ResultArray := TGocciaArrayValue.Create;
+  MapArgs := nil;
+  if Mapping then
+    MapArgs := TGocciaArgumentsCollection.Create([TGocciaUndefinedLiteralValue.UndefinedValue, TGocciaNumberLiteralValue.ZeroValue]);
+
+  try
+    IteratorMethod := nil;
+    if Source is TGocciaObjectValue then
+      IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+
     if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
     begin
       CallArgs := TGocciaArgumentsCollection.Create;
@@ -109,6 +114,7 @@ begin
       finally
         CallArgs.Free;
       end;
+
       if IteratorObj is TGocciaIteratorValue then
         Iterator := TGocciaIteratorValue(IteratorObj)
       else if IteratorObj is TGocciaObjectValue then
@@ -128,15 +134,40 @@ begin
       TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
       TGocciaGarbageCollector.Instance.AddTempRoot(ResultArray);
       try
+        K := 0;
         IterResult := Iterator.AdvanceNext;
         while not IterResult.GetProperty('done').ToBooleanLiteral.Value do
         begin
-          ResultArray.Elements.Add(IterResult.GetProperty('value'));
+          KValue := IterResult.GetProperty('value');
+          if Mapping then
+          begin
+            MapArgs.SetElement(0, KValue);
+            MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+            KValue := TGocciaFunctionBase(MapCallback).Call(MapArgs, ThisArg);
+          end;
+          ResultArray.Elements.Add(KValue);
+          Inc(K);
           IterResult := Iterator.AdvanceNext;
         end;
       finally
         TGocciaGarbageCollector.Instance.RemoveTempRoot(ResultArray);
         TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
+      end;
+    end
+    else if Source is TGocciaStringLiteralValue then
+    begin
+      SourceStr := TGocciaStringLiteralValue(Source).Value;
+      ResultArray.Elements.Capacity := Length(SourceStr);
+      for K := 1 to Length(SourceStr) do
+      begin
+        KValue := TGocciaStringLiteralValue.Create(SourceStr[K]);
+        if Mapping then
+        begin
+          MapArgs.SetElement(0, KValue);
+          MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K - 1));
+          KValue := TGocciaFunctionBase(MapCallback).Call(MapArgs, ThisArg);
+        end;
+        ResultArray.Elements.Add(KValue);
       end;
     end
     else
@@ -146,40 +177,26 @@ begin
       begin
         Len := Trunc(LengthVal.ToNumberLiteral.Value);
         ResultArray.Elements.Capacity := Len;
-        for I := 0 to Len - 1 do
-          ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-        PropKeys := TGocciaObjectValue(Source).GetOwnPropertyKeys;
-        for I := 0 to PropKeys.Count - 1 do
+        for K := 0 to Len - 1 do
         begin
-          Val(PropKeys[I], PropIndex, Code);
-          if (Code = 0) and (PropIndex >= 0) and (PropIndex < Len) then
+          KValue := Source.GetProperty(IntToStr(K));
+          if not Assigned(KValue) then
+            KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          if Mapping then
           begin
-            PropVal := Source.GetProperty(PropKeys[I]);
-            if Assigned(PropVal) and not (PropVal is TGocciaUndefinedLiteralValue) then
-              ResultArray.Elements[PropIndex] := PropVal;
+            MapArgs.SetElement(0, KValue);
+            MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+            KValue := TGocciaFunctionBase(MapCallback).Call(MapArgs, ThisArg);
           end;
+          ResultArray.Elements.Add(KValue);
         end;
       end;
     end;
-  end;
 
-  if (AArgs.Length > 1) and AArgs.GetElement(1).IsCallable then
-  begin
-    MapCallback := AArgs.GetElement(1);
-    CallArgs := TGocciaArgumentsCollection.Create([TGocciaUndefinedLiteralValue.UndefinedValue, TGocciaNumberLiteralValue.ZeroValue]);
-    try
-      for I := 0 to ResultArray.Elements.Count - 1 do
-      begin
-        CallArgs.SetElement(0, ResultArray.Elements[I]);
-        CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
-        ResultArray.Elements[I] := TGocciaFunctionBase(MapCallback).Call(CallArgs, AThisValue);
-      end;
-    finally
-      CallArgs.Free;
-    end;
+    Result := ResultArray;
+  finally
+    MapArgs.Free;
   end;
-
-  Result := ResultArray;
 end;
 
 function TGocciaGlobalArray.ArrayOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
