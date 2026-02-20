@@ -37,4 +37,9 @@ describe("Map subclassing", () => {
     expect(m.has("x")).toBe(true);
     expect(m.get("x")).toBe(42);
   });
+
+  test("subclass inherits Symbol.species from Map", () => {
+    class MyMap extends Map {}
+    expect(MyMap[Symbol.species]).toBe(MyMap);
+  });
 });

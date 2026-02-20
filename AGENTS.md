@@ -303,7 +303,9 @@ Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowType
 
 **Symbol coercion:** `TGocciaSymbolValue.ToNumberLiteral` throws `TypeError` (symbols cannot convert to numbers). `ToStringLiteral` returns `"Symbol(description)"` for internal use (display, property keys), but implicit string coercion (template literals, `+` operator, `String.prototype.concat`) must check for symbols and throw `TypeError` at the operator level. See `Goccia.Evaluator.Arithmetic.pas` and `Goccia.Evaluator.pas` for the pattern. Symbols use a shared prototype singleton (like String, Number, Array) with `description` as an accessor getter and `toString()` as a method. `Symbol.prototype` is exposed on the Symbol constructor function.
 
-**Well-known symbols:** `Symbol.iterator` is a well-known symbol singleton accessed via `TGocciaSymbolValue.WellKnownIterator`. It is lazily initialized and GC-pinned. The `TGocciaGlobalSymbol` built-in uses this same instance.
+**Well-known symbols:** `Symbol.iterator` is a well-known symbol singleton accessed via `TGocciaSymbolValue.WellKnownIterator`. `Symbol.species` is accessed via `TGocciaSymbolValue.WellKnownSpecies`. Both are lazily initialized and GC-pinned. The `TGocciaGlobalSymbol` built-in uses these same instances.
+
+**`Symbol.species` semantics:** The `[Symbol.species]` static getter is registered on `Array`, `Map`, and `Set` constructors in `Goccia.Engine.pas`. The default getter returns `this`, so subclasses inherit the correct constructor. Array prototype methods (`map`, `filter`, `slice`, `concat`, `flat`, `flatMap`, `splice`) use the `ArraySpeciesCreate` helper (`Goccia.Values.ArrayValue.pas`) to create result arrays via the species constructor, enabling subclass-aware array derivation. User-defined classes can override `static get [Symbol.species]()` to control which constructor is used for derived arrays. `TGocciaClassValue` supports symbol-keyed static properties via `FStaticSymbolDescriptors`, `DefineSymbolProperty`, and `GetSymbolPropertyWithReceiver` (which preserves the original receiver when traversing the superclass chain for getter invocation).
 
 **Iterator protocol:** `TGocciaIteratorValue` (`Goccia.Values.IteratorValue.pas`) is the abstract base class for all iterators, providing the shared prototype with helper methods and a virtual `AdvanceNext` method. Iterators are organized into a class hierarchy across four files:
 
@@ -382,7 +384,7 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 
 - **Primary:** JavaScript end-to-end tests in `tests/` directory — these are the source of truth for correctness
 - **Secondary:** Pascal unit tests in `units/*.Test.pas` — only for internal implementation details
-- **JS test framework:** built-in `describe`/`test`/`expect` (enabled via `ggTestAssertions`). Supports `test.skip`/`describe.skip` for unconditional skipping, and `skipIf(condition)`/`runIf(condition)` on both `describe` and `test` for conditional execution.
+- **JS test framework:** built-in `describe`/`test`/`expect` (enabled via `ggTestAssertions`). Supports nested `describe` blocks (suite names are composed with ` > ` separators), `test.skip`/`describe.skip` for unconditional skipping, and `skipIf(condition)`/`runIf(condition)` on both `describe` and `test` for conditional execution. Skip state is inherited by nested describes.
 - **Pascal test framework:** `TestRunner.pas` provides generic `Expect<T>(...).ToBe(...)` assertions. `Expect<T>` is a **standalone function** (not a method on `TTestSuite`) to avoid FPC 3.2.2 AArch64 compiler crash with cross-unit generic method inheritance.
 - **NaN checks:** In Pascal tests, use `Value.ToNumberLiteral.IsNaN` (not `Math.IsNaN`) — special values store `0.0` internally
 

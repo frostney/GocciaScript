@@ -7,6 +7,7 @@ interface
 uses
   Classes,
 
+  Goccia.Arguments.Collection,
   Goccia.AST.Node,
   Goccia.Builtins.Benchmark,
   Goccia.Builtins.Console,
@@ -94,6 +95,7 @@ type
     procedure RegisterBuiltinConstructors;
     procedure RegisterGlobalThis;
     procedure RegisterGocciaScriptGlobal;
+    function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
@@ -153,10 +155,13 @@ uses
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassValue,
   Goccia.Values.MapValue,
+  Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.SetValue,
   Goccia.Values.StringObjectValue,
+  Goccia.Values.SymbolValue,
   Goccia.Version;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
@@ -309,6 +314,11 @@ begin
   if Assigned(FBuiltinGlobalArray) then
     for Key in FBuiltinGlobalArray.BuiltinObject.GetAllPropertyNames do
       ArrayConstructor.SetProperty(Key, FBuiltinGlobalArray.BuiltinObject.GetProperty(Key));
+  ArrayConstructor.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownSpecies,
+    TGocciaPropertyDescriptorAccessor.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
+      nil, [pfConfigurable]));
   FInterpreter.GlobalScope.DefineLexicalBinding('Array', ArrayConstructor, dtConst);
 
   if ggMap in FGlobals then
@@ -319,6 +329,11 @@ begin
     if Assigned(FBuiltinMap) then
       for Key in FBuiltinMap.BuiltinObject.GetAllPropertyNames do
         MapConstructor.SetProperty(Key, FBuiltinMap.BuiltinObject.GetProperty(Key));
+    MapConstructor.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownSpecies,
+      TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
+        nil, [pfConfigurable]));
     FInterpreter.GlobalScope.DefineLexicalBinding('Map', MapConstructor, dtConst);
   end;
 
@@ -327,6 +342,11 @@ begin
     SetConstructor := TGocciaSetClassValue.Create('Set', nil);
     TGocciaSetValue.ExposePrototype(SetConstructor);
     SetConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    SetConstructor.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownSpecies,
+      TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
+        nil, [pfConfigurable]));
     FInterpreter.GlobalScope.DefineLexicalBinding('Set', SetConstructor, dtConst);
   end;
 
@@ -566,6 +586,11 @@ begin
     else
       WriteLn(Format('  --> %s:%d:%d', [FFileName, Warning.Line, Warning.Column]));
   end;
+end;
+
+function TGocciaEngine.SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := AThisValue;
 end;
 
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);

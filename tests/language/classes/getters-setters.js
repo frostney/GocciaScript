@@ -1,6 +1,6 @@
 /*---
-description: Class getters and setters work correctly
-features: [class-getters, class-setters]
+description: Class getters and setters work correctly (instance and static)
+features: [class-getters, class-setters, static-getters, static-setters]
 ---*/
 
 test("basic getters and setters", () => {
@@ -139,4 +139,139 @@ test("complex example", () => {
   calculator.reset = null;
   expect(calculator.value).toBe(0);
   expect(calculator.operations).toBe(4);
+});
+
+test("static getter", () => {
+  class Config {
+    static get defaultPort() {
+      return 8080;
+    }
+  }
+  expect(Config.defaultPort).toBe(8080);
+});
+
+test("static getter and setter", () => {
+  class Registry {
+    static _count = 0;
+
+    static get count() {
+      return Registry._count;
+    }
+
+    static set count(value) {
+      Registry._count = value;
+    }
+  }
+  expect(Registry.count).toBe(0);
+  Registry.count = 5;
+  expect(Registry.count).toBe(5);
+});
+
+test("static getter is not on instances", () => {
+  class Foo {
+    static get bar() {
+      return 42;
+    }
+  }
+  expect(Foo.bar).toBe(42);
+  const f = new Foo();
+  expect(f.bar).toBeUndefined();
+});
+
+test("static getter with this refers to the class", () => {
+  class Base {
+    static _name = "Base";
+
+    static get label() {
+      return this._name;
+    }
+  }
+  expect(Base.label).toBe("Base");
+});
+
+test("static getter inheritance", () => {
+  class Base {
+    static get type() {
+      return "base";
+    }
+  }
+  class Derived extends Base {}
+  expect(Derived.type).toBe("base");
+});
+
+test("static getter override in subclass", () => {
+  class Base {
+    static get type() {
+      return "base";
+    }
+  }
+  class Derived extends Base {
+    static get type() {
+      return "derived";
+    }
+  }
+  expect(Base.type).toBe("base");
+  expect(Derived.type).toBe("derived");
+});
+
+test("static setter with validation", () => {
+  class Settings {
+    static _volume = 50;
+
+    static get volume() {
+      return Settings._volume;
+    }
+
+    static set volume(v) {
+      if (v >= 0 && v <= 100) {
+        Settings._volume = v;
+      }
+    }
+  }
+  Settings.volume = 75;
+  expect(Settings.volume).toBe(75);
+  Settings.volume = -10;
+  expect(Settings.volume).toBe(75);
+  Settings.volume = 200;
+  expect(Settings.volume).toBe(75);
+});
+
+test("computed static getter with symbol key", () => {
+  const key = Symbol("info");
+  class MyClass {
+    static get [key]() {
+      return "computed symbol getter";
+    }
+  }
+  expect(MyClass[key]).toBe("computed symbol getter");
+});
+
+test("computed static getter with string key", () => {
+  const prop = "dynamicProp";
+  class MyClass {
+    static get [prop]() {
+      return 123;
+    }
+  }
+  expect(MyClass.dynamicProp).toBe(123);
+});
+
+test("computed static getter with Symbol.species pattern", () => {
+  class MyCollection {
+    static get [Symbol.species]() {
+      return Array;
+    }
+  }
+  expect(MyCollection[Symbol.species]).toBe(Array);
+});
+
+test("computed static getter this context", () => {
+  class Base {
+    static get [Symbol.species]() {
+      return this;
+    }
+  }
+  class Derived extends Base {}
+  expect(Base[Symbol.species]).toBe(Base);
+  expect(Derived[Symbol.species]).toBe(Derived);
 });

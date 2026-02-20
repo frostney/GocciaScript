@@ -119,8 +119,16 @@ describe("Feature Name", () => {
       riskyOperation();
     }).toThrow();
   });
+
+  describe("sub-feature", () => {
+    test("nested test", () => {
+      expect(1 + 1).toBe(2);
+    });
+  });
 });
 ```
+
+Nested `describe` blocks compose their suite names with ` > ` separators. In the example above, the nested test's suite name would be `"Feature Name > sub-feature"`.
 
 ### Test Metadata (Optional)
 
@@ -326,7 +334,7 @@ The `TestRunner` program:
 1. Scans the provided path for `.js`, `.jsx`, `.ts`, `.tsx`, and `.mjs` files.
 2. For each file, creates a fresh `TGocciaEngine` with `DefaultGlobals + [ggTestAssertions]`.
 3. Loads the source and appends a `runTests()` call.
-4. Executes the script — `describe`/`test` blocks register themselves during execution.
+4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
 5. `runTests()` executes all registered tests and collects results.
 6. Aggregates pass/fail/skip counts across all files.
 7. Prints a summary with total statistics.

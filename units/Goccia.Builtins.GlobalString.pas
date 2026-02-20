@@ -36,6 +36,7 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringFromCodePoint, 'fromCodePoint', 1));
 end;
 
+// ES2026 §22.1.2.1 String.fromCharCode(...codeUnits)
 function TGocciaGlobalString.StringFromCharCode(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ResultStr: string;
@@ -58,6 +59,7 @@ begin
   Result := TGocciaStringLiteralValue.Create(ResultStr);
 end;
 
+// ES2026 §22.1.2.2 String.fromCodePoint(...codePoints)
 function TGocciaGlobalString.StringFromCodePoint(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ResultStr: string;

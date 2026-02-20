@@ -119,63 +119,97 @@ begin
     TGocciaNativeFunctionValue.Create(QueueMicrotaskCallback, 'queueMicrotask', 1), dtConst);
 end;
 
+{ NativeError ( message [ , options ] ) — §20.5.6.1.1 (shared by all NativeError constructors)
+  1. If NewTarget is undefined, let newTarget be the active function object;
+     else let newTarget be NewTarget.
+  2. Let O be ? OrdinaryCreateFromConstructor(newTarget, "%NativeError.prototype%").
+  3. If message is not undefined, then
+     a. Let msg be ? ToString(message).
+     b. Perform ! CreateNonEnumerableDataPropertyOrThrow(O, "message", msg).
+  4. Perform ? InstallErrorCause(O, options).
+     a. If options has a "cause" property, CreateNonEnumerableDataPropertyOrThrow(O, "cause", cause).
+  5. Return O. }
 function TGocciaGlobals.BuildErrorObject(const AName: string; const AProto: TGocciaObjectValue; const AArgs: TGocciaArgumentsCollection): TGocciaObjectValue;
 var
   Message: string;
   OptionsArg, CauseValue: TGocciaValue;
   OptionsIndex: Integer;
 begin
+  { Step 3: If message is not undefined, let msg = ToString(message) }
   if AArgs.Length > 0 then
     Message := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Message := '';
 
+  { Step 2: Let O = OrdinaryCreateFromConstructor with prototype }
   Result := CreateErrorObject(AName, Message);
   Result.Prototype := AProto;
 
+  { Step 4: InstallErrorCause(O, options) }
   OptionsIndex := 1;
   if AArgs.Length > OptionsIndex then
   begin
     OptionsArg := AArgs.GetElement(OptionsIndex);
     if OptionsArg is TGocciaObjectValue then
     begin
+      { Step 4a: If options has "cause", CreateDataPropertyOrThrow(O, "cause", cause) }
       CauseValue := OptionsArg.GetProperty('cause');
       if (CauseValue <> nil) and not (CauseValue is TGocciaUndefinedLiteralValue) then
         Result.AssignProperty('cause', CauseValue);
     end;
   end;
+  { Step 5: Return O }
 end;
 
+{ Error ( message [ , options ] ) — §20.5.1.1
+  Delegates to BuildErrorObject which implements the shared NativeError steps. }
 function TGocciaGlobals.ErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject('Error', FErrorProto, AArgs);
 end;
 
+{ TypeError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
 function TGocciaGlobals.TypeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject('TypeError', FTypeErrorProto, AArgs);
 end;
 
+{ ReferenceError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
 function TGocciaGlobals.ReferenceErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject('ReferenceError', FReferenceErrorProto, AArgs);
 end;
 
+{ RangeError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
 function TGocciaGlobals.RangeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject('RangeError', FRangeErrorProto, AArgs);
 end;
 
+{ SyntaxError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
 function TGocciaGlobals.SyntaxErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject('SyntaxError', FSyntaxErrorProto, AArgs);
 end;
 
+{ URIError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
 function TGocciaGlobals.URIErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject('URIError', FURIErrorProto, AArgs);
 end;
 
+{ AggregateError ( errors, message [ , options ] ) — §20.5.7.1
+  1. If NewTarget is undefined, let newTarget be the active function object;
+     else let newTarget be NewTarget.
+  2. Let O be ? OrdinaryCreateFromConstructor(newTarget, "%AggregateError.prototype%").
+  3. If message is not undefined, then
+     a. Let msg be ? ToString(message).
+     b. Perform ! CreateNonEnumerableDataPropertyOrThrow(O, "message", msg).
+  4. Perform ? InstallErrorCause(O, options).
+  5. Let errorsList be ? IterableToList(errors).
+  6. Perform ! DefinePropertyOrThrow(O, "errors",
+     PropertyDescriptor [[Value]]: CreateArrayFromList(errorsList)).
+  7. Return O. }
 function TGocciaGlobals.AggregateErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ErrorObj: TGocciaObjectValue;
@@ -185,6 +219,7 @@ var
   Message: string;
   I: Integer;
 begin
+  { Step 5: Let errorsList = IterableToList(errors) }
   ErrorsArray := TGocciaArrayValue.Create;
   if AArgs.Length > 0 then
   begin
@@ -196,15 +231,19 @@ begin
     end;
   end;
 
+  { Step 3: If message is not undefined, let msg = ToString(message) }
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
     Message := AArgs.GetElement(1).ToStringLiteral.Value
   else
     Message := '';
 
+  { Step 2: Let O = OrdinaryCreateFromConstructor }
   ErrorObj := CreateErrorObject('AggregateError', Message);
   ErrorObj.Prototype := FAggregateErrorProto;
+  { Step 6: CreateDataPropertyOrThrow(O, "errors", CreateArrayFromList(errorsList)) }
   ErrorObj.AssignProperty('errors', ErrorsArray);
 
+  { Step 4: InstallErrorCause(O, options) }
   if AArgs.Length > 2 then
   begin
     OptionsArg := AArgs.GetElement(2);
@@ -216,14 +255,20 @@ begin
     end;
   end;
 
+  { Step 7: Return O }
   Result := ErrorObj;
 end;
 
+{ queueMicrotask ( callback ) — §27.8.1 (HTML spec / §8.4 HostEnqueueGenericJob)
+  1. If IsCallable(callback) is false, throw a TypeError exception.
+  2. Perform HostEnqueueMicrotask(callback).
+  3. Return undefined. }
 function TGocciaGlobals.QueueMicrotaskCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Callback: TGocciaValue;
   Task: TGocciaMicrotask;
 begin
+  { Step 1: If IsCallable(callback) is false, throw a TypeError }
   if AArgs.Length = 0 then
     ThrowTypeError('Failed to execute ''queueMicrotask'': 1 argument required, but only 0 present.');
 
@@ -231,6 +276,7 @@ begin
   if not Callback.IsCallable then
     ThrowTypeError('Failed to execute ''queueMicrotask'': parameter 1 is not of type ''Function''.');
 
+  { Step 2: HostEnqueueMicrotask(callback) }
   Task.Handler := Callback;
   Task.ResultPromise := nil;
   Task.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -240,6 +286,7 @@ begin
     TGocciaGarbageCollector.Instance.AddTempRoot(Callback);
   TGocciaMicrotaskQueue.Instance.Enqueue(Task);
 
+  { Step 3: Return undefined }
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 

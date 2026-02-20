@@ -1042,7 +1042,12 @@ begin
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         Exit;
       end;
-      if Obj is TGocciaObjectValue then
+      if Obj is TGocciaClassValue then
+      begin
+        Result := TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
+        Exit;
+      end
+      else if Obj is TGocciaObjectValue then
       begin
         Result := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
         Exit;
@@ -1675,6 +1680,7 @@ var
   GetterPair: TPair<string, TGocciaGetterExpression>;
   SetterPair: TPair<string, TGocciaSetterExpression>;
   Method: TGocciaMethodValue;
+  ComputedKey: TGocciaValue;
   PropertyValue: TGocciaValue;
   PropertyExpr: TGocciaExpression;
   GetterFunction, SetterFunction: TGocciaFunctionValue;
@@ -1700,6 +1706,7 @@ begin
     ClassName := '<anonymous>';
 
   ClassValue := TGocciaClassValue.Create(ClassName, SuperClass);
+  ClassValue.Prototype.AssignProperty('constructor', ClassValue);
 
   // Handle methods
   for MethodPair in AClassDef.Methods do
@@ -1778,6 +1785,33 @@ begin
       ClassValue.AddPrivateSetter(Copy(SetterPair.Key, 2, Length(SetterPair.Key) - 1), SetterFunction)
     else
       ClassValue.AddSetter(SetterPair.Key, SetterFunction);
+  end;
+
+  // Handle named static getters
+  for GetterPair in AClassDef.FStaticGetters do
+  begin
+    GetterFunction := TGocciaFunctionValue(EvaluateGetter(GetterPair.Value, AContext));
+    ClassValue.AddStaticGetter(GetterPair.Key, GetterFunction);
+  end;
+
+  // Handle named static setters
+  for SetterPair in AClassDef.FStaticSetters do
+  begin
+    SetterFunction := TGocciaFunctionValue(EvaluateSetter(SetterPair.Value, AContext));
+    ClassValue.AddStaticSetter(SetterPair.Key, SetterFunction);
+  end;
+
+  // Handle computed static getters (e.g., static get [Symbol.species]())
+  for I := 0 to Length(AClassDef.FComputedStaticGetters) - 1 do
+  begin
+    ComputedKey := EvaluateExpression(AClassDef.FComputedStaticGetters[I].KeyExpression, AContext);
+    GetterFunction := TGocciaFunctionValue(EvaluateGetter(AClassDef.FComputedStaticGetters[I].GetterExpression, AContext));
+    if ComputedKey is TGocciaSymbolValue then
+      ClassValue.DefineSymbolProperty(
+        TGocciaSymbolValue(ComputedKey),
+        TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfConfigurable]))
+    else
+      ClassValue.AddStaticGetter(ComputedKey.ToStringLiteral.Value, GetterFunction);
   end;
 
   // For class expressions, don't automatically bind to scope - just return the class value

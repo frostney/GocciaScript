@@ -85,38 +85,64 @@ begin
   inherited;
 end;
 
+{ Symbol ( [ description ] ) — §20.4.1.1
+  1. If NewTarget is not undefined, throw a TypeError exception.
+  2. If description is undefined, let descString be undefined.
+  3. Else, let descString be ? ToString(description).
+  4. Return a new unique Symbol value whose [[Description]] is descString. }
 function TGocciaGlobalSymbol.SymbolConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Description: string;
 begin
+  { Steps 2-3: If description present, let descString = ToString(description) }
   if AArgs.Length > 0 then
     Description := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Description := '';
 
+  { Step 4: Return a new unique Symbol with [[Description]] descString }
   Result := TGocciaSymbolValue.Create(Description);
 end;
 
+{ Symbol.for ( key ) — §20.4.2.2
+  1. Let stringKey be ? ToString(key).
+  2. For each element e of the GlobalSymbolRegistry List, do
+     a. If SameValue(e.[[Key]], stringKey) is true, return e.[[Symbol]].
+  3. Assert: GlobalSymbolRegistry does not currently contain an entry for stringKey.
+  4. Let newSymbol be a new unique Symbol value whose [[Description]] is stringKey.
+  5. Append the Record ([[Key]]: stringKey, [[Symbol]]: newSymbol) to
+     the GlobalSymbolRegistry List.
+  6. Return newSymbol. }
 function TGocciaGlobalSymbol.SymbolFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Key: string;
   Symbol: TGocciaSymbolValue;
 begin
+  { Step 1: Let stringKey = ToString(key) }
   if AArgs.Length > 0 then
     Key := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Key := 'undefined';
 
+  { Step 2: Search GlobalSymbolRegistry for existing entry }
   if FGlobalRegistry.TryGetValue(Key, Symbol) then
     Result := Symbol
   else
   begin
+    { Steps 4-5: Create new symbol, append to GlobalSymbolRegistry }
     Symbol := TGocciaSymbolValue.Create(Key);
     FGlobalRegistry.Add(Key, Symbol);
+    { Step 6: Return newSymbol }
     Result := Symbol;
   end;
 end;
 
+{ Symbol.keyFor ( sym ) — §20.4.2.5
+  1. If Type(sym) is not Symbol, throw a TypeError exception.
+  2. For each element e of the GlobalSymbolRegistry List, do
+     a. If SameValue(e.[[Symbol]], sym) is true, return e.[[Key]].
+  3. Assert: GlobalSymbolRegistry does not currently contain an entry for sym.
+  4. Return undefined. }
 function TGocciaGlobalSymbol.SymbolKeyFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Arg: TGocciaValue;
@@ -124,20 +150,22 @@ var
 begin
   Arg := AArgs.GetElement(0);
 
+  { Step 1: If Type(sym) is not Symbol, throw a TypeError }
   if not (Arg is TGocciaSymbolValue) then
     ThrowTypeError('Symbol.keyFor requires that the first argument be a symbol');
 
-  // Search the global registry for this symbol instance
+  { Step 2: Search GlobalSymbolRegistry for matching symbol }
   for Pair in FGlobalRegistry do
   begin
     if Pair.Value = TGocciaSymbolValue(Arg) then
     begin
+      { Step 2a: SameValue match found — return e.[[Key]] }
       Result := TGocciaStringLiteralValue.Create(Pair.Key);
       Exit;
     end;
   end;
 
-  // Symbol not in global registry
+  { Step 4: Return undefined }
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 

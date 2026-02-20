@@ -38,4 +38,9 @@ describe("Set subclassing", () => {
     expect(s.has(42)).toBe(true);
     expect(s.size).toBe(1);
   });
+
+  test("subclass inherits Symbol.species from Set", () => {
+    class MySet extends Set {}
+    expect(MySet[Symbol.species]).toBe(MySet);
+  });
 });

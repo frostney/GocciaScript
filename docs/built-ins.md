@@ -363,7 +363,7 @@ Symbols are unique, immutable primitive values used as property keys.
 | `Symbol.for(key)` | Get/create a symbol in the global registry |
 | `Symbol.keyFor(symbol)` | Get the key for a global registry symbol (throws `TypeError` for non-symbol arguments) |
 | `Symbol.iterator` | Well-known symbol for iteration protocol |
-| `Symbol.species` | Well-known symbol for constructor species |
+| `Symbol.species` | Well-known symbol for constructor species (behavioral: Array/Map/Set constructors have default `[Symbol.species]` getter returning `this`; Array prototype methods use `ArraySpeciesCreate` for subclass-aware result construction) |
 | `Symbol.hasInstance` | Well-known symbol for instanceof behavior |
 | `Symbol.toPrimitive` | Well-known symbol for type conversion |
 | `Symbol.toStringTag` | Well-known symbol for Object.prototype.toString |

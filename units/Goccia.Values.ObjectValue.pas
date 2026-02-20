@@ -654,12 +654,35 @@ end;
 function TGocciaObjectValue.GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  Accessor: TGocciaPropertyDescriptorAccessor;
+  Args: TGocciaArgumentsCollection;
 begin
   if FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
   begin
     if Descriptor is TGocciaPropertyDescriptorData then
     begin
       Result := TGocciaPropertyDescriptorData(Descriptor).Value;
+      Exit;
+    end
+    else if Descriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
+      if Assigned(Accessor.Getter) then
+      begin
+        Args := TGocciaArgumentsCollection.Create;
+        try
+          if Accessor.Getter is TGocciaNativeFunctionValue then
+            Result := TGocciaNativeFunctionValue(Accessor.Getter).Call(Args, Self)
+          else if Accessor.Getter is TGocciaFunctionValue then
+            Result := TGocciaFunctionValue(Accessor.Getter).Call(Args, Self)
+          else
+            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        finally
+          Args.Free;
+        end;
+        Exit;
+      end;
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
     end;
   end;

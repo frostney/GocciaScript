@@ -28,6 +28,7 @@ uses
   SysUtils,
 
   Goccia.GarbageCollector,
+  Goccia.Utils.Arrays,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
@@ -48,9 +49,10 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayOf, 'of', -1));
 end;
 
+// ES2026 §23.1.2.2 Array.isArray(arg)
 function TGocciaGlobalArray.IsArray(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  // Array.isArray accepts 0 or more arguments; returns false if no argument provided
+  // Step 1: Return IsArray(arg)
   if AArgs.Length < 1 then
     Result := TGocciaBooleanLiteralValue.FalseValue
   else
@@ -60,6 +62,7 @@ begin
       Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
+// ES2026 §23.1.2.1 Array.from(items [, mapfn [, thisArg]])
 function TGocciaGlobalArray.ArrayFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ResultObj: TGocciaValue;
@@ -77,7 +80,8 @@ var
   Mapping: Boolean;
   K, Len: Integer;
 
-  procedure AddToResult(const AIndex: Integer; const AValue: TGocciaValue);
+  // ES2026 §7.3.5 CreateDataPropertyOrThrow(A, P, V)
+  procedure CreateDataProperty(const AIndex: Integer; const AValue: TGocciaValue);
   begin
     if UseConstructor and not (ResultObj is TGocciaArrayValue) then
       ResultObj.SetProperty(IntToStr(AIndex), AValue)
@@ -85,7 +89,8 @@ var
       TGocciaArrayValue(ResultObj).Elements.Add(AValue);
   end;
 
-  function CreateResult(const ALen: Integer): TGocciaValue;
+  // Steps 5a-b / 9-10: If IsConstructor(C), Construct(C, « len »); else ArrayCreate(len)
+  function ConstructOrCreate(const ALen: Integer): TGocciaValue;
   begin
     if (AThisValue is TGocciaClassValue) and (AThisValue <> nil) then
     begin
@@ -105,16 +110,18 @@ var
   end;
 
 begin
+  // Step 1: Let C be the this value
   UseConstructor := False;
 
   if AArgs.Length < 1 then
   begin
-    Result := CreateResult(0);
+    Result := ConstructOrCreate(0);
     Exit;
   end;
 
   Source := AArgs.GetElement(0);
 
+  // Steps 2-3: Handle mapfn argument
   Mapping := False;
   MapCallback := nil;
   ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -123,8 +130,10 @@ begin
     MapCallback := AArgs.GetElement(1);
     if not (MapCallback is TGocciaUndefinedLiteralValue) then
     begin
+      // Step 3a: If IsCallable(mapfn) is false, throw TypeError
       if not MapCallback.IsCallable then
         ThrowTypeError('Array.from: when provided, the second argument must be a function');
+      // Step 3b: Let mapping be true
       Mapping := True;
       if AArgs.Length > 2 then
         ThisArg := AArgs.GetElement(2);
@@ -136,33 +145,40 @@ begin
     MapArgs := TGocciaArgumentsCollection.Create([TGocciaUndefinedLiteralValue.UndefinedValue, TGocciaNumberLiteralValue.ZeroValue]);
 
   try
+    // Fast path: source is already an array (avoids iterator overhead)
     if Source is TGocciaArrayValue then
     begin
       SourceArray := TGocciaArrayValue(Source);
-      ResultObj := CreateResult(0);
+      // Step 5a-b: Construct or create result (iterable path uses 0)
+      ResultObj := ConstructOrCreate(0);
       if ResultObj is TGocciaArrayValue then
         TGocciaArrayValue(ResultObj).Elements.Capacity := SourceArray.Elements.Count;
+      // Step 5e: Iterate and populate
       for K := 0 to SourceArray.Elements.Count - 1 do
       begin
         KValue := SourceArray.Elements[K];
         if not Assigned(KValue) then
           KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        // Step 5e-iv: If mapping, let mappedValue = Call(mapfn, thisArg, « next, k »)
         if Mapping then
         begin
           MapArgs.SetElement(0, KValue);
           MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
           KValue := TGocciaFunctionBase(MapCallback).Call(MapArgs, ThisArg);
         end;
-        AddToResult(K, KValue);
+        // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
+        CreateDataProperty(K, KValue);
       end;
+      // Step 5e-iii: Set length
       if UseConstructor and not (ResultObj is TGocciaArrayValue) then
         ResultObj.SetProperty('length', TGocciaNumberLiteralValue.SmallInt(SourceArray.Elements.Count));
       Result := ResultObj;
     end
+    // Fast path: source is a string (iterate code points)
     else if Source is TGocciaStringLiteralValue then
     begin
       SourceStr := TGocciaStringLiteralValue(Source).Value;
-      ResultObj := CreateResult(0);
+      ResultObj := ConstructOrCreate(0);
       if ResultObj is TGocciaArrayValue then
         TGocciaArrayValue(ResultObj).Elements.Capacity := Length(SourceStr);
       for K := 1 to Length(SourceStr) do
@@ -174,7 +190,7 @@ begin
           MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K - 1));
           KValue := TGocciaFunctionBase(MapCallback).Call(MapArgs, ThisArg);
         end;
-        AddToResult(K - 1, KValue);
+        CreateDataProperty(K - 1, KValue);
       end;
       if UseConstructor and not (ResultObj is TGocciaArrayValue) then
         ResultObj.SetProperty('length', TGocciaNumberLiteralValue.SmallInt(Length(SourceStr)));
@@ -182,12 +198,15 @@ begin
     end
     else
     begin
+      // Step 4: Let usingIterator = GetMethod(items, @@iterator)
       IteratorMethod := nil;
       if Source is TGocciaObjectValue then
         IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
 
+      // Step 5: If usingIterator is not undefined
       if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
       begin
+        // Step 5c: Let iteratorRecord = GetIteratorFromMethod(items, usingIterator)
         CallArgs := TGocciaArgumentsCollection.Create;
         try
           IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Source);
@@ -211,10 +230,12 @@ begin
         if not Assigned(Iterator) then
           ThrowTypeError('[Symbol.iterator] did not return a valid iterator');
 
-        ResultObj := CreateResult(0);
+        // Step 5a-b: If IsConstructor(C), Construct(C, « »); else ArrayCreate(0)
+        ResultObj := ConstructOrCreate(0);
         TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
         TGocciaGarbageCollector.Instance.AddTempRoot(ResultObj);
         try
+          // Step 5d-e: Iterate
           K := 0;
           IterResult := Iterator.AdvanceNext;
           while not IterResult.GetProperty('done').ToBooleanLiteral.Value do
@@ -226,7 +247,8 @@ begin
               MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
               KValue := TGocciaFunctionBase(MapCallback).Call(MapArgs, ThisArg);
             end;
-            AddToResult(K, KValue);
+            // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
+            CreateDataProperty(K, KValue);
             Inc(K);
             IterResult := Iterator.AdvanceNext;
           end;
@@ -234,38 +256,46 @@ begin
           TGocciaGarbageCollector.Instance.RemoveTempRoot(ResultObj);
           TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
         end;
+        // Step 5e-iii: Set A.[[length]] to k
         if UseConstructor and not (ResultObj is TGocciaArrayValue) then
           ResultObj.SetProperty('length', TGocciaNumberLiteralValue.SmallInt(K));
         Result := ResultObj;
       end
       else
       begin
+        // Steps 7-8: Array-like path — Let arrayLike = ToObject(items), len = LengthOfArrayLike
         LengthVal := Source.GetProperty('length');
         if Assigned(LengthVal) and not (LengthVal is TGocciaUndefinedLiteralValue) then
         begin
           Len := Trunc(LengthVal.ToNumberLiteral.Value);
-          ResultObj := CreateResult(0);
+          // Step 9-10: If IsConstructor(C), Construct(C, « len »); else ArrayCreate(len)
+          ResultObj := ConstructOrCreate(0);
           if ResultObj is TGocciaArrayValue then
             TGocciaArrayValue(ResultObj).Elements.Capacity := Len;
+          // Step 12: Iterate array-like
           for K := 0 to Len - 1 do
           begin
+            // Step 12b: Let kValue = Get(arrayLike, Pk)
             KValue := Source.GetProperty(IntToStr(K));
             if not Assigned(KValue) then
               KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+            // Step 12c-d: If mapping, Call(mapfn, thisArg, « kValue, k »)
             if Mapping then
             begin
               MapArgs.SetElement(0, KValue);
               MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
               KValue := TGocciaFunctionBase(MapCallback).Call(MapArgs, ThisArg);
             end;
-            AddToResult(K, KValue);
+            // Step 12e: CreateDataPropertyOrThrow(A, Pk, mappedValue)
+            CreateDataProperty(K, KValue);
           end;
+          // Step 13: Set A.[[length]] = len
           if UseConstructor and not (ResultObj is TGocciaArrayValue) then
             ResultObj.SetProperty('length', TGocciaNumberLiteralValue.SmallInt(Len));
           Result := ResultObj;
         end
         else
-          Result := CreateResult(0);
+          Result := ConstructOrCreate(0);
       end;
     end;
   finally
@@ -273,42 +303,52 @@ begin
   end;
 end;
 
+// ES2026 §23.1.2.3 Array.of(...items)
 function TGocciaGlobalArray.ArrayOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   ResultObj: TGocciaValue;
+  Arr: TGocciaArrayValue;
   ConstructorArgs: TGocciaArgumentsCollection;
-  I: Integer;
+  Len, K: Integer;
 begin
+  // Step 1: Let len be the number of elements in items
+  Len := AArgs.Length;
+
+  // Steps 3-5: Let C be the this value; if IsConstructor(C), Construct(C, « len »); else ArrayCreate(len)
   if (AThisValue is TGocciaClassValue) and (AThisValue <> nil) then
   begin
-    ConstructorArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.SmallInt(AArgs.Length)]);
+    // Step 4a: Let A = Construct(C, « len »)
+    ConstructorArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.SmallInt(Len)]);
     try
       ResultObj := TGocciaClassValue(AThisValue).Instantiate(ConstructorArgs);
     finally
       ConstructorArgs.Free;
     end;
 
+    // Steps 6-7: CreateDataPropertyOrThrow(A, ToString(k), items[k])
     if ResultObj is TGocciaArrayValue then
     begin
-      TGocciaArrayValue(ResultObj).Elements.Clear;
-      for I := 0 to AArgs.Length - 1 do
-        TGocciaArrayValue(ResultObj).Elements.Add(AArgs.GetElement(I));
+      Arr := TGocciaArrayValue(ResultObj);
+      for K := 0 to Len - 1 do
+        ArrayCreateDataProperty(Arr, K, AArgs.GetElement(K));
     end
     else
     begin
-      for I := 0 to AArgs.Length - 1 do
-        ResultObj.SetProperty(IntToStr(I), AArgs.GetElement(I));
-      ResultObj.SetProperty('length', TGocciaNumberLiteralValue.SmallInt(AArgs.Length));
+      for K := 0 to Len - 1 do
+        ResultObj.SetProperty(IntToStr(K), AArgs.GetElement(K));
+      // Step 8: Set A.[[length]] = len
+      ResultObj.SetProperty('length', TGocciaNumberLiteralValue.SmallInt(Len));
     end;
 
     Result := ResultObj;
   end
   else
   begin
-    ResultObj := TGocciaArrayValue.Create;
-    for I := 0 to AArgs.Length - 1 do
-      TGocciaArrayValue(ResultObj).Elements.Add(AArgs.GetElement(I));
-    Result := ResultObj;
+    // Step 5a: Let A = ArrayCreate(len)
+    Arr := TGocciaArrayValue.Create;
+    for K := 0 to Len - 1 do
+      Arr.Elements.Add(AArgs.GetElement(K));
+    Result := Arr;
   end;
 end;
 
