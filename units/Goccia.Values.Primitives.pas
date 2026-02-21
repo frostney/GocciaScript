@@ -4,9 +4,6 @@ unit Goccia.Values.Primitives;
 
 interface
 
-uses
-  Generics.Collections;
-
 type
   TGocciaBooleanLiteralValue = class;
   TGocciaNumberLiteralValue = class;
@@ -142,15 +139,8 @@ type
   TGocciaStringLiteralValue = class(TGocciaValue)
   private
     FValue: string;
-
-    class var FInternTable: TDictionary<string, TGocciaStringLiteralValue>;
   public
-    const MAX_INTERN_LENGTH = 64;
-
     constructor Create(const AValue: string);
-
-    class function Intern(const AValue: string): TGocciaStringLiteralValue;
-    class procedure ShutdownIntern;
 
     function IsPrimitive: Boolean; override;
     function TypeName: string; override;
@@ -174,7 +164,8 @@ uses
 
   Goccia.GarbageCollector,
   Goccia.Values.ClassHelper,
-  Goccia.Values.Constants;
+  Goccia.Values.Constants,
+  Goccia.Values.TypeNames;
 
 { TGocciaValue }
 
@@ -259,7 +250,7 @@ end;
 
 function TGocciaNullLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
 begin
-  Result := TGocciaStringLiteralValue.Intern(NULL_LITERAL);
+  Result := TGocciaStringLiteralValue.Create('null');
 end;
 
 
@@ -299,7 +290,7 @@ end;
 
 function TGocciaUndefinedLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
 begin
-  Result := TGocciaStringLiteralValue.Intern(UNDEFINED_LITERAL);
+  Result := TGocciaStringLiteralValue.Create('undefined');
 end;
 
 
@@ -365,9 +356,9 @@ end;
 function TGocciaBooleanLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
 begin
   if FValue then
-    Result := TGocciaStringLiteralValue.Intern(BOOLEAN_TRUE_LITERAL)
+    Result := TGocciaStringLiteralValue.Create('true')
   else
-    Result := TGocciaStringLiteralValue.Intern(BOOLEAN_FALSE_LITERAL);
+    Result := TGocciaStringLiteralValue.Create('false');
 end;
 
 { TGocciaNumberLiteralValue }
@@ -546,15 +537,15 @@ function TGocciaNumberLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
 begin
   case FSpecialValue of
     nsvNaN:
-      Result := TGocciaStringLiteralValue.Intern(NAN_LITERAL);
+      Result := TGocciaStringLiteralValue.Create('NaN');
     nsvInfinity:
-      Result := TGocciaStringLiteralValue.Intern(INFINITY_LITERAL);
+      Result := TGocciaStringLiteralValue.Create('Infinity');
     nsvNegativeInfinity:
-      Result := TGocciaStringLiteralValue.Intern(NEGATIVE_INFINITY_LITERAL);
+      Result := TGocciaStringLiteralValue.Create('-Infinity');
     nsvNegativeZero:
-      Result := TGocciaStringLiteralValue.Intern('0');
+      Result := TGocciaStringLiteralValue.Create('0');
   else
-    Result := TGocciaStringLiteralValue.Intern(FloatToStr(FValue));
+    Result := TGocciaStringLiteralValue.Create(FloatToStr(FValue));
   end;
 end;
 
@@ -571,28 +562,6 @@ begin
   FValue := AValue;
 end;
 
-class function TGocciaStringLiteralValue.Intern(const AValue: string): TGocciaStringLiteralValue;
-begin
-  if Length(AValue) > MAX_INTERN_LENGTH then
-    Exit(TGocciaStringLiteralValue.Create(AValue));
-
-  if not Assigned(FInternTable) then
-    FInternTable := TDictionary<string, TGocciaStringLiteralValue>.Create;
-
-  if FInternTable.TryGetValue(AValue, Result) then
-    Exit;
-
-  Result := TGocciaStringLiteralValue.Create(AValue);
-  FInternTable.Add(AValue, Result);
-  if Assigned(TGocciaGarbageCollector.Instance) then
-    TGocciaGarbageCollector.Instance.PinValue(Result);
-end;
-
-class procedure TGocciaStringLiteralValue.ShutdownIntern;
-begin
-  FreeAndNil(FInternTable);
-end;
-
 function TGocciaStringLiteralValue.TypeName: string;
 begin
   Result := STRING_TYPE_NAME;
@@ -605,7 +574,7 @@ end;
 
 function TGocciaStringLiteralValue.RuntimeCopy: TGocciaValue;
 begin
-  Result := Intern(FValue);
+  Result := TGocciaStringLiteralValue.Create(FValue);
 end;
 
 function TGocciaStringLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;

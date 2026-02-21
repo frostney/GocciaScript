@@ -25,7 +25,8 @@ implementation
 uses
   Goccia.Arguments.Collection,
   Goccia.Values.FunctionBase,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.PropertyNames;
 
 function ToPrimitive(const AValue: TGocciaValue): TGocciaValue;
 var
@@ -46,7 +47,7 @@ begin
     Obj := TGocciaObjectValue(AValue);
 
     // Try valueOf()
-    Method := Obj.GetProperty('valueOf');
+    Method := Obj.GetProperty(PROP_VALUE_OF);
     if Assigned(Method) and Method.IsCallable then
     begin
       Args := TGocciaArgumentsCollection.Create;
@@ -64,7 +65,7 @@ begin
     end;
 
     // Try toString()
-    Method := Obj.GetProperty('toString');
+    Method := Obj.GetProperty(PROP_TO_STRING);
     if Assigned(Method) and Method.IsCallable then
     begin
       Args := TGocciaArgumentsCollection.Create;

@@ -99,6 +99,7 @@ uses
   Goccia.Values.Constants,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.ErrorNames,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.Iterator.Concrete,
@@ -107,6 +108,7 @@ uses
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.PropertyNames,
   Goccia.Values.SetValue,
   Goccia.Values.SymbolValue;
 
@@ -183,7 +185,7 @@ begin
       end;
       if IteratorObj is TGocciaObjectValue then
       begin
-        NextMethod := IteratorObj.GetProperty('next');
+        NextMethod := IteratorObj.GetProperty(PROP_NEXT);
         if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
         begin
           Result := TGocciaGenericIteratorValue.Create(IteratorObj);
@@ -228,9 +230,9 @@ begin
       TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
       try
         IterResult := Iterator.AdvanceNext;
-        while not IterResult.GetProperty('done').ToBooleanLiteral.Value do
+        while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
         begin
-          ATarget.Add(IterResult.GetProperty('value'));
+          ATarget.Add(IterResult.GetProperty(PROP_VALUE));
           IterResult := Iterator.AdvanceNext;
         end;
       finally
@@ -268,9 +270,9 @@ begin
       TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
       try
         IterResult := Iterator.AdvanceNext;
-        while not IterResult.GetProperty('done').ToBooleanLiteral.Value do
+        while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
         begin
-          AArgs.Add(IterResult.GetProperty('value'));
+          AArgs.Add(IterResult.GetProperty(PROP_VALUE));
           IterResult := Iterator.AdvanceNext;
         end;
       finally
@@ -1388,11 +1390,11 @@ end;
 function PascalExceptionToErrorObject(const E: Exception): TGocciaValue;
 begin
   if E is TGocciaTypeError then
-    Result := CreateErrorObject('TypeError', E.Message)
+    Result := CreateErrorObject(TYPE_ERROR_NAME, E.Message)
   else if E is TGocciaReferenceError then
-    Result := CreateErrorObject('ReferenceError', E.Message)
+    Result := CreateErrorObject(REFERENCE_ERROR_NAME, E.Message)
   else
-    Result := CreateErrorObject('Error', E.Message);
+    Result := CreateErrorObject(ERROR_NAME, E.Message);
 end;
 
 function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1702,7 +1704,7 @@ begin
     ClassName := '<anonymous>';
 
   ClassValue := TGocciaClassValue.Create(ClassName, SuperClass);
-  ClassValue.Prototype.AssignProperty('constructor', ClassValue);
+  ClassValue.Prototype.AssignProperty(PROP_CONSTRUCTOR, ClassValue);
 
   // Handle methods
   for MethodPair in AClassDef.Methods do
@@ -2523,9 +2525,9 @@ begin
         begin
           RestElements := TGocciaArrayValue.Create;
           IterResult := Iterator.AdvanceNext;
-          while not IterResult.GetProperty('done').ToBooleanLiteral.Value do
+          while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
           begin
-            RestElements.Elements.Add(IterResult.GetProperty('value'));
+            RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
             IterResult := Iterator.AdvanceNext;
           end;
           AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration);
@@ -2534,10 +2536,10 @@ begin
         else
         begin
           IterResult := Iterator.AdvanceNext;
-          if IterResult.GetProperty('done').ToBooleanLiteral.Value then
+          if IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value then
             ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue
           else
-            ElementValue := IterResult.GetProperty('value');
+            ElementValue := IterResult.GetProperty(PROP_VALUE);
 
           AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration);
         end;

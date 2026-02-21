@@ -77,6 +77,7 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic,
+  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 { TGocciaLazyMapIteratorValue }
@@ -101,13 +102,13 @@ begin
   end;
 
   IterResult := FSourceIterator.AdvanceNext;
-  if TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value then
+  if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
   begin
     FDone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
-  Value := IterResult.GetProperty('value');
+  Value := IterResult.GetProperty(PROP_VALUE);
   MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
   Inc(FIndex);
   Result := CreateIteratorResult(MappedValue, False);
@@ -146,13 +147,13 @@ begin
 
   repeat
     IterResult := FSourceIterator.AdvanceNext;
-    if TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value then
+    if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
     begin
       FDone := True;
       Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
       Exit;
     end;
-    Value := IterResult.GetProperty('value');
+    Value := IterResult.GetProperty(PROP_VALUE);
     if InvokeIteratorCallback(FCallback, Value, FIndex).ToBooleanLiteral.Value then
     begin
       Inc(FIndex);
@@ -195,14 +196,14 @@ begin
   end;
 
   IterResult := FSourceIterator.AdvanceNext;
-  if TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value then
+  if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
   begin
     FDone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
   Inc(FIndex);
-  Result := CreateIteratorResult(IterResult.GetProperty('value'), False);
+  Result := CreateIteratorResult(IterResult.GetProperty(PROP_VALUE), False);
 end;
 
 procedure TGocciaLazyTakeIteratorValue.MarkReferences;
@@ -236,7 +237,7 @@ begin
   while FIndex < FLimit do
   begin
     IterResult := FSourceIterator.AdvanceNext;
-    if TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value then
+    if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
     begin
       FDone := True;
       Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
@@ -246,13 +247,13 @@ begin
   end;
 
   IterResult := FSourceIterator.AdvanceNext;
-  if TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value then
+  if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
   begin
     FDone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
     Exit;
   end;
-  Result := CreateIteratorResult(IterResult.GetProperty('value'), False);
+  Result := CreateIteratorResult(IterResult.GetProperty(PROP_VALUE), False);
 end;
 
 procedure TGocciaLazyDropIteratorValue.MarkReferences;
@@ -320,7 +321,7 @@ begin
       end;
       if IteratorObj is TGocciaObjectValue then
       begin
-        NextMethod := IteratorObj.GetProperty('next');
+        NextMethod := IteratorObj.GetProperty(PROP_NEXT);
         if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
         begin
           Result := TGocciaGenericIteratorValue.Create(IteratorObj);
@@ -347,9 +348,9 @@ begin
   if Assigned(FInnerIterator) then
   begin
     InnerResult := FInnerIterator.AdvanceNext;
-    if not TGocciaBooleanLiteralValue(InnerResult.GetProperty('done')).Value then
+    if not TGocciaBooleanLiteralValue(InnerResult.GetProperty(PROP_DONE)).Value then
     begin
-      Result := CreateIteratorResult(InnerResult.GetProperty('value'), False);
+      Result := CreateIteratorResult(InnerResult.GetProperty(PROP_VALUE), False);
       Exit;
     end;
     FInnerIterator := nil;
@@ -357,14 +358,14 @@ begin
 
   repeat
     IterResult := FSourceIterator.AdvanceNext;
-    if TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value then
+    if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
     begin
       FDone := True;
       Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
       Exit;
     end;
 
-    Value := IterResult.GetProperty('value');
+    Value := IterResult.GetProperty(PROP_VALUE);
     MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
     Inc(FIndex);
 
@@ -373,9 +374,9 @@ begin
       ThrowTypeError('Iterator.prototype.flatMap callback must return an iterable');
 
     InnerResult := FInnerIterator.AdvanceNext;
-    if not TGocciaBooleanLiteralValue(InnerResult.GetProperty('done')).Value then
+    if not TGocciaBooleanLiteralValue(InnerResult.GetProperty(PROP_DONE)).Value then
     begin
-      Result := CreateIteratorResult(InnerResult.GetProperty('value'), False);
+      Result := CreateIteratorResult(InnerResult.GetProperty(PROP_VALUE), False);
       Exit;
     end;
     FInnerIterator := nil;

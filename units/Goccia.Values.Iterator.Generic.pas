@@ -23,7 +23,8 @@ implementation
 
 uses
   Goccia.Arguments.Collection,
-  Goccia.Values.FunctionBase;
+  Goccia.Values.FunctionBase,
+  Goccia.Values.PropertyNames;
 
 { TGocciaGenericIteratorValue }
 
@@ -44,7 +45,7 @@ begin
     Exit;
   end;
 
-  NextMethod := FSource.GetProperty('next');
+  NextMethod := FSource.GetProperty(PROP_NEXT);
   if not Assigned(NextMethod) or not NextMethod.IsCallable then
   begin
     FDone := True;
@@ -61,18 +62,18 @@ begin
 
   if NextResult is TGocciaObjectValue then
   begin
-    DoneVal := TGocciaObjectValue(NextResult).GetProperty('done');
+    DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
     if Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value then
     begin
       FDone := True;
-      ValueVal := TGocciaObjectValue(NextResult).GetProperty('value');
+      ValueVal := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
       if not Assigned(ValueVal) then
         ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
       Result := CreateIteratorResult(ValueVal, True);
     end
     else
     begin
-      ValueVal := TGocciaObjectValue(NextResult).GetProperty('value');
+      ValueVal := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
       if not Assigned(ValueVal) then
         ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
       Result := CreateIteratorResult(ValueVal, False);

@@ -55,11 +55,12 @@ implementation
 
 uses
   Goccia.GarbageCollector,
-  Goccia.Values.Constants,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.PropertyNames,
+  Goccia.Values.TypeNames;
 
 var
   GNextSymbolId: Integer = 0;
@@ -93,11 +94,11 @@ begin
   FSharedPrototype := Proto;
   FMethodHost := Self;
 
-  Proto.DefineProperty('description', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetDescription, 'description', 0), nil, [pfConfigurable]));
+  Proto.DefineProperty(PROP_DESCRIPTION, TGocciaPropertyDescriptorAccessor.Create(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetDescription, PROP_DESCRIPTION, 0), nil, [pfConfigurable]));
 
   Proto.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(SymbolToString, 'toString', 0));
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(SymbolToString, PROP_TO_STRING, 0));
 
   if Assigned(TGocciaGarbageCollector.Instance) then
   begin

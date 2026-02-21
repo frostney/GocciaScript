@@ -121,6 +121,7 @@ uses
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
@@ -146,7 +147,7 @@ var
   Instance: TGocciaValue;
 begin
   // Step 3: Let C be Get(originalArray, "constructor")
-  Ctor := AOriginal.GetProperty('constructor');
+  Ctor := AOriginal.GetProperty(PROP_CONSTRUCTOR);
 
   // Steps 4-5: If C is an object, get @@species; if null/undefined, fall through
   if Ctor is TGocciaClassValue then
@@ -318,8 +319,8 @@ begin
   if AConstructor is TGocciaClassValue then
     TGocciaClassValue(AConstructor).ReplacePrototype(FSharedArrayPrototype)
   else if AConstructor is TGocciaObjectValue then
-    TGocciaObjectValue(AConstructor).AssignProperty('prototype', FSharedArrayPrototype);
-  FSharedArrayPrototype.AssignProperty('constructor', AConstructor);
+    TGocciaObjectValue(AConstructor).AssignProperty(PROP_PROTOTYPE, FSharedArrayPrototype);
+  FSharedArrayPrototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
 end;
 
 destructor TGocciaArrayValue.Destroy;

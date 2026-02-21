@@ -64,9 +64,11 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
+  Goccia.Values.ConstructorNames,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaSetValue.Create(const AClass: TGocciaClassValue = nil);
@@ -182,7 +184,7 @@ end;
 
 function TGocciaSetValue.GetProperty(const AName: string): TGocciaValue;
 begin
-  if AName = 'size' then
+  if AName = PROP_SIZE then
     Result := TGocciaNumberLiteralValue.Create(FItems.Count)
   else
     Result := inherited GetProperty(AName);
@@ -199,7 +201,7 @@ end;
 
 function TGocciaSetValue.ToStringTag: string;
 begin
-  Result := 'Set';
+  Result := CTOR_SET;
 end;
 
 { Instance methods }

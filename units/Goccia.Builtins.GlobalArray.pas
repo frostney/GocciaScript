@@ -39,6 +39,7 @@ uses
   Goccia.Values.Iterator.Generic,
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaGlobalArray.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -172,7 +173,7 @@ begin
       end;
       // Step 5e-iii: Set length
       if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-        ResultObj.SetProperty('length', TGocciaNumberLiteralValue.SmallInt(SourceArray.Elements.Count));
+        ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(SourceArray.Elements.Count));
       Result := ResultObj;
     end
     // Fast path: source is a string (iterate code points)
@@ -194,7 +195,7 @@ begin
         CreateDataProperty(K - 1, KValue);
       end;
       if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-        ResultObj.SetProperty('length', TGocciaNumberLiteralValue.SmallInt(Length(SourceStr)));
+        ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(Length(SourceStr)));
       Result := ResultObj;
     end
     else
@@ -219,7 +220,7 @@ begin
           Iterator := TGocciaIteratorValue(IteratorObj)
         else if IteratorObj is TGocciaObjectValue then
         begin
-          NextMethod := IteratorObj.GetProperty('next');
+          NextMethod := IteratorObj.GetProperty(PROP_NEXT);
           if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
             Iterator := TGocciaGenericIteratorValue.Create(IteratorObj)
           else
@@ -239,9 +240,9 @@ begin
           // Step 5d-e: Iterate
           K := 0;
           IterResult := Iterator.AdvanceNext;
-          while not IterResult.GetProperty('done').ToBooleanLiteral.Value do
+          while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
           begin
-            KValue := IterResult.GetProperty('value');
+            KValue := IterResult.GetProperty(PROP_VALUE);
             if Mapping then
             begin
               MapArgs.SetElement(0, KValue);
@@ -259,13 +260,13 @@ begin
         end;
         // Step 5e-iii: Set A.[[length]] to k
         if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-          ResultObj.SetProperty('length', TGocciaNumberLiteralValue.SmallInt(K));
+          ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
         Result := ResultObj;
       end
       else
       begin
         // Steps 7-8: Array-like path — Let arrayLike = ToObject(items), len = LengthOfArrayLike
-        LengthVal := Source.GetProperty('length');
+        LengthVal := Source.GetProperty(PROP_LENGTH);
         if Assigned(LengthVal) and not (LengthVal is TGocciaUndefinedLiteralValue) then
         begin
           Len := Trunc(LengthVal.ToNumberLiteral.Value);
@@ -292,7 +293,7 @@ begin
           end;
           // Step 13: Set A.[[length]] = len
           if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-            ResultObj.SetProperty('length', TGocciaNumberLiteralValue.SmallInt(Len));
+            ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(Len));
           Result := ResultObj;
         end
         else
@@ -338,7 +339,7 @@ begin
       for K := 0 to Len - 1 do
         ResultObj.SetProperty(IntToStr(K), AArgs.GetElement(K));
       // Step 8: Set A.[[length]] = len
-      ResultObj.SetProperty('length', TGocciaNumberLiteralValue.SmallInt(Len));
+      ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(Len));
     end;
 
     Result := ResultObj;

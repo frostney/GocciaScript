@@ -96,6 +96,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Values.ClassHelper,
+  Goccia.Values.ConstructorNames,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction;
@@ -234,7 +235,7 @@ end;
 
 function TGocciaObjectValue.ToStringTag: string;
 begin
-  Result := 'Object';
+  Result := CTOR_OBJECT;
 end;
 
 function TGocciaObjectValue.ToStringLiteral: TGocciaStringLiteralValue;

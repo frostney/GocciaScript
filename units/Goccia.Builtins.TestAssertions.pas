@@ -151,8 +151,10 @@ uses
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
+  Goccia.Values.ErrorNames,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
+  Goccia.Values.PropertyNames,
   Goccia.Values.SetValue;
 
 { TGocciaTestSuite }
@@ -831,9 +833,9 @@ begin
           ThrownObj := TGocciaObjectValue(E.Value);
 
           // Check if the error object has a name property that matches
-          if ThrownObj.HasProperty('name') then
+          if ThrownObj.HasProperty(PROP_NAME) then
           begin
-            ErrorName := ThrownObj.GetProperty('name').ToStringLiteral.Value;
+            ErrorName := ThrownObj.GetProperty(PROP_NAME).ToStringLiteral.Value;
             // Direct comparison: "TypeError" == "TypeError"
             if (ErrorName = ExpectedErrorType) or
                (LowerCase(ErrorName) = LowerCase(ExpectedErrorType)) then
@@ -844,9 +846,9 @@ begin
           end;
 
           // Fallback: check constructor property
-          if ThrownObj.HasProperty('constructor') then
+          if ThrownObj.HasProperty(PROP_CONSTRUCTOR) then
           begin
-            ErrorConstructor := ThrownObj.GetProperty('constructor');
+            ErrorConstructor := ThrownObj.GetProperty(PROP_CONSTRUCTOR);
             if ErrorConstructor.ToStringLiteral.Value = ExpectedErrorType then
             begin
               TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
@@ -886,10 +888,10 @@ begin
           Exit;
         end;
 
-        if ((ExpectedErrorType = 'TypeError') and (E is TGocciaTypeError)) or
-           ((ExpectedErrorType = 'ReferenceError') and (E is TGocciaReferenceError)) or
-           ((ExpectedErrorType = 'SyntaxError') and (E is TGocciaSyntaxError)) or
-           ((ExpectedErrorType = 'Error') and (E is TGocciaRuntimeError)) or
+        if ((ExpectedErrorType = TYPE_ERROR_NAME) and (E is TGocciaTypeError)) or
+           ((ExpectedErrorType = REFERENCE_ERROR_NAME) and (E is TGocciaReferenceError)) or
+           ((ExpectedErrorType = SYNTAX_ERROR_NAME) and (E is TGocciaSyntaxError)) or
+           ((ExpectedErrorType = ERROR_NAME) and (E is TGocciaRuntimeError)) or
            (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
         begin
           TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');

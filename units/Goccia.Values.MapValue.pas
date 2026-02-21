@@ -63,9 +63,11 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
+  Goccia.Values.ConstructorNames,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaMapValue.Create(const AClass: TGocciaClassValue = nil);
@@ -188,7 +190,7 @@ end;
 
 function TGocciaMapValue.GetProperty(const AName: string): TGocciaValue;
 begin
-  if AName = 'size' then
+  if AName = PROP_SIZE then
     Result := TGocciaNumberLiteralValue.Create(FEntries.Count)
   else
     Result := inherited GetProperty(AName);
@@ -211,7 +213,7 @@ end;
 
 function TGocciaMapValue.ToStringTag: string;
 begin
-  Result := 'Map';
+  Result := CTOR_MAP;
 end;
 
 { Instance methods }

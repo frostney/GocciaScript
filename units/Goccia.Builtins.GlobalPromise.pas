@@ -43,10 +43,12 @@ uses
   Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.ErrorNames,
   Goccia.Values.FunctionBase,
   Goccia.Values.MapValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
+  Goccia.Values.PropertyNames,
   Goccia.Values.SetValue;
 
 type
@@ -262,7 +264,7 @@ begin
 
   Entry := TGocciaObjectValue.Create;
   Entry.AssignProperty('status', TGocciaStringLiteralValue.Create('fulfilled'));
-  Entry.AssignProperty('value', AArgs.GetElement(0));
+  Entry.AssignProperty(PROP_VALUE, AArgs.GetElement(0));
   FState.Results.Elements[FIndex] := Entry;
   FState.Remaining := FState.Remaining - 1;
 
@@ -414,9 +416,9 @@ begin
   if FState.Remaining = 0 then
   begin
     FState.Settled := True;
-    ErrorObj := Goccia.Values.ErrorHelper.CreateErrorObject('AggregateError',
+    ErrorObj := Goccia.Values.ErrorHelper.CreateErrorObject(AGGREGATE_ERROR_NAME,
       'All promises were rejected');
-    ErrorObj.AssignProperty('errors', FState.Errors);
+    ErrorObj.AssignProperty(PROP_ERRORS, FState.Errors);
     FState.ResultPromise.Reject(ErrorObj);
   end;
 end;
@@ -851,9 +853,9 @@ begin
   { Empty iterable: reject with AggregateError (all zero promises rejected) }
   if InputArray.Elements.Count = 0 then
   begin
-    ErrorObj := Goccia.Values.ErrorHelper.CreateErrorObject('AggregateError',
+    ErrorObj := Goccia.Values.ErrorHelper.CreateErrorObject(AGGREGATE_ERROR_NAME,
       'All promises were rejected');
-    ErrorObj.AssignProperty('errors', TGocciaArrayValue.Create);
+    ErrorObj.AssignProperty(PROP_ERRORS, TGocciaArrayValue.Create);
     ResultPromise.Reject(ErrorObj);
     Result := ResultPromise;
     Exit;
@@ -957,7 +959,7 @@ begin
       { Step 5: Abrupt completion — Call(reject, status.[[Value]]) }
       Promise.Reject(E.Value);
     on E: Exception do
-      Promise.Reject(CreateErrorObject('Error', E.Message));
+      Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
   end;
 
   { Step 7: Return promiseCapability.[[Promise]] }

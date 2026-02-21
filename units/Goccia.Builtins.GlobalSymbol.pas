@@ -40,7 +40,8 @@ implementation
 
 uses
   Goccia.Values.ErrorHelper,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.PropertyNames;
 
 constructor TGocciaGlobalSymbol.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -73,7 +74,7 @@ begin
   FSymbolFunction.RegisterConstant('isConcatSpreadable', TGocciaSymbolValue.WellKnownIsConcatSpreadable);
 
   // Expose Symbol.prototype (ECMAScript compatible)
-  FSymbolFunction.AssignProperty('prototype', TGocciaSymbolValue.SharedPrototype);
+  FSymbolFunction.AssignProperty(PROP_PROTOTYPE, TGocciaSymbolValue.SharedPrototype);
 
   // Bind Symbol in scope
   AScope.DefineLexicalBinding(AName, FSymbolFunction, dtLet);

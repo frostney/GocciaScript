@@ -77,6 +77,7 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.ErrorNames,
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction;
 
@@ -268,7 +269,7 @@ begin
   if AValue = Self then
   begin
     FState := gpsRejected;
-    FResult := Goccia.Values.ErrorHelper.CreateErrorObject('TypeError',
+    FResult := Goccia.Values.ErrorHelper.CreateErrorObject(TYPE_ERROR_NAME,
       'Chaining cycle detected for promise');
     TriggerReactions;
     Exit;
