@@ -83,6 +83,7 @@ uses
   SysUtils,
 
   Goccia.Arguments.Collection,
+  Goccia.CallStack,
   Goccia.Constants,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
@@ -834,6 +835,7 @@ var
   SuperClass: TGocciaClassValue;
   MemberExpr: TGocciaMemberExpression;
   SpreadValue: TGocciaValue;
+  CalleeName: string;
   I: Integer;
 begin
 
@@ -923,17 +925,34 @@ begin
     end;
 
     if Callee is TGocciaNativeFunctionValue then
-      Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, ThisValue)
+      CalleeName := TGocciaNativeFunctionValue(Callee).Name
     else if Callee is TGocciaFunctionValue then
-      Result := TGocciaFunctionValue(Callee).Call(Arguments, ThisValue)
-    else if Callee is TGocciaBoundFunctionValue then
-      Result := TGocciaBoundFunctionValue(Callee).Call(Arguments, ThisValue)
+      CalleeName := TGocciaFunctionValue(Callee).Name
     else if Callee is TGocciaClassValue then
-      Result := TGocciaClassValue(Callee).Call(Arguments, ThisValue)
+      CalleeName := TGocciaClassValue(Callee).Name
     else
-    begin
-      SafeOnError(AContext, Format('%s is not a function', [Callee.TypeName]), ACallExpression.Line, ACallExpression.Column);
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      CalleeName := '';
+
+    if Assigned(TGocciaCallStack.Instance) then
+      TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
+        ACallExpression.Line, ACallExpression.Column);
+    try
+      if Callee is TGocciaNativeFunctionValue then
+        Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, ThisValue)
+      else if Callee is TGocciaFunctionValue then
+        Result := TGocciaFunctionValue(Callee).Call(Arguments, ThisValue)
+      else if Callee is TGocciaBoundFunctionValue then
+        Result := TGocciaBoundFunctionValue(Callee).Call(Arguments, ThisValue)
+      else if Callee is TGocciaClassValue then
+        Result := TGocciaClassValue(Callee).Call(Arguments, ThisValue)
+      else
+      begin
+        SafeOnError(AContext, Format('%s is not a function', [Callee.TypeName]), ACallExpression.Line, ACallExpression.Column);
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      end;
+    finally
+      if Assigned(TGocciaCallStack.Instance) then
+        TGocciaCallStack.Instance.Pop;
     end;
 
   finally
@@ -1542,6 +1561,7 @@ var
   Callee: TGocciaValue;
   Arguments: TGocciaArgumentsCollection;
   SpreadValue: TGocciaValue;
+  CalleeName: string;
   I: Integer;
   Instance: TGocciaInstanceValue;
   NativeInstance: TGocciaObjectValue;
@@ -1565,92 +1585,105 @@ begin
     end;
 
     if Callee is TGocciaClassValue then
-    begin
-      ClassValue := TGocciaClassValue(Callee);
+      CalleeName := TGocciaClassValue(Callee).Name
+    else if Callee is TGocciaNativeFunctionValue then
+      CalleeName := TGocciaNativeFunctionValue(Callee).Name
+    else
+      CalleeName := '';
 
-      NativeInstance := nil;
-      WalkClass := ClassValue;
-      while Assigned(WalkClass) do
+    if Assigned(TGocciaCallStack.Instance) then
+      TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
+        ANewExpression.Line, ANewExpression.Column);
+    try
+      if Callee is TGocciaClassValue then
       begin
-        NativeInstance := WalkClass.CreateNativeInstance(Arguments);
-        if Assigned(NativeInstance) then
-          Break;
-        WalkClass := WalkClass.SuperClass;
-      end;
+        ClassValue := TGocciaClassValue(Callee);
 
-      if Assigned(NativeInstance) then
-      begin
-        NativeInstance.Prototype := ClassValue.Prototype;
-        if NativeInstance is TGocciaInstanceValue then
-          TGocciaInstanceValue(NativeInstance).ClassValue := ClassValue;
-
-        InitContext := AContext;
-        InitScope := TGocciaClassInitScope.Create(AContext.Scope, ClassValue);
-        InitScope.ThisValue := NativeInstance;
-        InitContext.Scope := InitScope;
-
-        InitializeInstanceProperties(TGocciaInstanceValue(NativeInstance), ClassValue, InitContext);
-
-        if Assigned(ClassValue.SuperClass) then
+        NativeInstance := nil;
+        WalkClass := ClassValue;
+        while Assigned(WalkClass) do
         begin
-          SuperInitContext := AContext;
-          SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, ClassValue.SuperClass);
-          SuperInitScope.ThisValue := NativeInstance;
-          SuperInitContext.Scope := SuperInitScope;
-          InitializePrivateInstanceProperties(TGocciaInstanceValue(NativeInstance), ClassValue.SuperClass, SuperInitContext);
+          NativeInstance := WalkClass.CreateNativeInstance(Arguments);
+          if Assigned(NativeInstance) then
+            Break;
+          WalkClass := WalkClass.SuperClass;
         end;
 
-        InitializePrivateInstanceProperties(TGocciaInstanceValue(NativeInstance), ClassValue, InitContext);
+        if Assigned(NativeInstance) then
+        begin
+          NativeInstance.Prototype := ClassValue.Prototype;
+          if NativeInstance is TGocciaInstanceValue then
+            TGocciaInstanceValue(NativeInstance).ClassValue := ClassValue;
 
-        if Assigned(ClassValue.ConstructorMethod) then
-          ClassValue.ConstructorMethod.Call(Arguments, NativeInstance)
-        else if Assigned(ClassValue.SuperClass) and Assigned(ClassValue.SuperClass.ConstructorMethod) then
-          ClassValue.SuperClass.ConstructorMethod.Call(Arguments, NativeInstance)
+          InitContext := AContext;
+          InitScope := TGocciaClassInitScope.Create(AContext.Scope, ClassValue);
+          InitScope.ThisValue := NativeInstance;
+          InitContext.Scope := InitScope;
+
+          InitializeInstanceProperties(TGocciaInstanceValue(NativeInstance), ClassValue, InitContext);
+
+          if Assigned(ClassValue.SuperClass) then
+          begin
+            SuperInitContext := AContext;
+            SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, ClassValue.SuperClass);
+            SuperInitScope.ThisValue := NativeInstance;
+            SuperInitContext.Scope := SuperInitScope;
+            InitializePrivateInstanceProperties(TGocciaInstanceValue(NativeInstance), ClassValue.SuperClass, SuperInitContext);
+          end;
+
+          InitializePrivateInstanceProperties(TGocciaInstanceValue(NativeInstance), ClassValue, InitContext);
+
+          if Assigned(ClassValue.ConstructorMethod) then
+            ClassValue.ConstructorMethod.Call(Arguments, NativeInstance)
+          else if Assigned(ClassValue.SuperClass) and Assigned(ClassValue.SuperClass.ConstructorMethod) then
+            ClassValue.SuperClass.ConstructorMethod.Call(Arguments, NativeInstance)
+          else
+            TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(Arguments);
+
+          Result := NativeInstance;
+        end
         else
-          TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(Arguments);
+        begin
+          Instance := TGocciaInstanceValue.Create(ClassValue);
+          Instance.Prototype := ClassValue.Prototype;
 
-        Result := NativeInstance;
+          InitContext := AContext;
+          InitScope := TGocciaClassInitScope.Create(AContext.Scope, ClassValue);
+          InitScope.ThisValue := Instance;
+          InitContext.Scope := InitScope;
+
+          InitializeInstanceProperties(Instance, ClassValue, InitContext);
+
+          if Assigned(ClassValue.SuperClass) then
+          begin
+            SuperInitContext := AContext;
+            SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, ClassValue.SuperClass);
+            SuperInitScope.ThisValue := Instance;
+            SuperInitContext.Scope := SuperInitScope;
+            InitializePrivateInstanceProperties(Instance, ClassValue.SuperClass, SuperInitContext);
+          end;
+
+          InitializePrivateInstanceProperties(Instance, ClassValue, InitContext);
+
+          if Assigned(ClassValue.ConstructorMethod) then
+            ClassValue.ConstructorMethod.Call(Arguments, Instance)
+          else if Assigned(ClassValue.SuperClass) and Assigned(ClassValue.SuperClass.ConstructorMethod) then
+            ClassValue.SuperClass.ConstructorMethod.Call(Arguments, Instance);
+
+          Result := Instance;
+        end;
+      end
+      else if Callee is TGocciaNativeFunctionValue then
+      begin
+        Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
       end
       else
       begin
-        Instance := TGocciaInstanceValue.Create(ClassValue);
-        Instance.Prototype := ClassValue.Prototype;
-
-        InitContext := AContext;
-        InitScope := TGocciaClassInitScope.Create(AContext.Scope, ClassValue);
-        InitScope.ThisValue := Instance;
-        InitContext.Scope := InitScope;
-
-        InitializeInstanceProperties(Instance, ClassValue, InitContext);
-
-        if Assigned(ClassValue.SuperClass) then
-        begin
-          SuperInitContext := AContext;
-          SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, ClassValue.SuperClass);
-          SuperInitScope.ThisValue := Instance;
-          SuperInitContext.Scope := SuperInitScope;
-          InitializePrivateInstanceProperties(Instance, ClassValue.SuperClass, SuperInitContext);
-        end;
-
-        InitializePrivateInstanceProperties(Instance, ClassValue, InitContext);
-
-        if Assigned(ClassValue.ConstructorMethod) then
-          ClassValue.ConstructorMethod.Call(Arguments, Instance)
-        else if Assigned(ClassValue.SuperClass) and Assigned(ClassValue.SuperClass.ConstructorMethod) then
-          ClassValue.SuperClass.ConstructorMethod.Call(Arguments, Instance);
-
-        Result := Instance;
+        ThrowTypeError(Callee.TypeName + ' is not a constructor');
       end;
-    end
-    else if Callee is TGocciaNativeFunctionValue then
-    begin
-      // Native function constructors (e.g. Error, TypeError, etc.)
-      Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
-    end
-    else
-    begin
-      // Throw proper TypeError for non-constructors
-      ThrowTypeError(Callee.TypeName + ' is not a constructor');
+    finally
+      if Assigned(TGocciaCallStack.Instance) then
+        TGocciaCallStack.Instance.Pop;
     end;
   finally
     Arguments.Free;

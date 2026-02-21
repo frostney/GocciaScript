@@ -144,7 +144,7 @@ begin
     Message := '';
 
   { Step 2: Let O = OrdinaryCreateFromConstructor with prototype }
-  Result := CreateErrorObject(AName, Message);
+  Result := CreateErrorObject(AName, Message, 1);
   Result.Prototype := AProto;
 
   { Step 4: InstallErrorCause(O, options) }
