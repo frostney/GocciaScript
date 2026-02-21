@@ -41,6 +41,9 @@ type
 implementation
 
 uses
+  Classes,
+  Generics.Collections,
+
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
