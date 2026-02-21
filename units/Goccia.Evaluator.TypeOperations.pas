@@ -21,6 +21,8 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.ConstructorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.Keywords.Reserved,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -62,7 +64,7 @@ begin
     // ECMAScript: get ARight.prototype and walk ALeft's prototype chain
     if (ARight is TGocciaFunctionBase) and (ALeft is TGocciaObjectValue) then
     begin
-      ConstructorProto := TGocciaFunctionBase(ARight).GetProperty('prototype');
+      ConstructorProto := TGocciaFunctionBase(ARight).GetProperty(PROP_PROTOTYPE);
       if (ConstructorProto is TGocciaObjectValue) then
       begin
         if IsPrototypeInChain(TGocciaObjectValue(ALeft), TGocciaObjectValue(ConstructorProto)) then
@@ -79,7 +81,7 @@ begin
     // Check if ALeft is an instance of the ARight class
     if ALeft is TGocciaInstanceValue then
     begin
-      if TGocciaClassValue(ARight).Name = 'Object' then
+      if TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT then
       begin
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end
@@ -111,17 +113,17 @@ begin
       // Classes are also instances of Function (since classes are constructor functions)
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    else if (ALeft is TGocciaArrayValue) and (TGocciaClassValue(ARight).Name = 'Array') then
+    else if (ALeft is TGocciaArrayValue) and (TGocciaClassValue(ARight).Name = CONSTRUCTOR_ARRAY) then
     begin
       // Arrays are instances of Array
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    else if (ALeft is TGocciaArrayValue) and (TGocciaClassValue(ARight).Name = 'Object') then
+    else if (ALeft is TGocciaArrayValue) and (TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT) then
     begin
       // Arrays are also instances of Object (inheritance)
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    else if (ALeft is TGocciaObjectValue) and (TGocciaClassValue(ARight).Name = 'Object') then
+    else if (ALeft is TGocciaObjectValue) and (TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT) then
     begin
       // Objects are instances of Object
       Result := TGocciaBooleanLiteralValue.TrueValue;

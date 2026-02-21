@@ -73,6 +73,7 @@ type
 implementation
 
 uses
+  Goccia.Constants.ErrorNames,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.Error,
@@ -268,7 +269,7 @@ begin
   if AValue = Self then
   begin
     FState := gpsRejected;
-    FResult := Goccia.Values.ErrorHelper.CreateErrorObject('TypeError',
+    FResult := Goccia.Values.ErrorHelper.CreateErrorObject(TYPE_ERROR_NAME,
       'Chaining cycle detected for promise');
     TriggerReactions;
     Exit;

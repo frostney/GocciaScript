@@ -72,6 +72,8 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
+  Goccia.Constants.TypeNames,
   Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
@@ -97,12 +99,12 @@ end;
 function TGocciaFunctionBase.GetProperty(const AName: string): TGocciaValue;
 begin
   // ECMAScript: Function.length and Function.name
-  if AName = 'length' then
+  if AName = PROP_LENGTH then
   begin
     Result := TGocciaNumberLiteralValue.Create(GetFunctionLength);
     Exit;
   end;
-  if AName = 'name' then
+  if AName = PROP_NAME then
   begin
     Result := TGocciaStringLiteralValue.Create(GetFunctionName);
     Exit;
@@ -127,12 +129,12 @@ end;
 
 function TGocciaFunctionBase.TypeName: string;
 begin
-  Result := 'function';
+  Result := FUNCTION_TYPE_NAME;
 end;
 
 function TGocciaFunctionBase.TypeOf: string;
 begin
-  Result := 'function';
+  Result := FUNCTION_TYPE_NAME;
 end;
 
 function TGocciaFunctionBase.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -216,7 +218,7 @@ begin
       else if AArgs.GetElement(1) is TGocciaObjectValue then
       begin
         ArrayObj := TGocciaObjectValue(AArgs.GetElement(1));
-        LengthProp := ArrayObj.GetProperty('length');
+        LengthProp := ArrayObj.GetProperty(PROP_LENGTH);
         if not (LengthProp is TGocciaUndefinedLiteralValue) then
         begin
           ArrayLength := Trunc((LengthProp as TGocciaNumberLiteralValue).Value);

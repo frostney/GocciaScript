@@ -22,6 +22,7 @@ type
 implementation
 
 uses
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.Values.ClassValue;
 
@@ -44,8 +45,8 @@ begin
   if AConstructor is TGocciaClassValue then
     TGocciaClassValue(AConstructor).ReplacePrototype(FPrototype)
   else if AConstructor is TGocciaObjectValue then
-    TGocciaObjectValue(AConstructor).AssignProperty('prototype', FPrototype);
-  FPrototype.AssignProperty('constructor', AConstructor);
+    TGocciaObjectValue(AConstructor).AssignProperty(PROP_PROTOTYPE, FPrototype);
+  FPrototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
 end;
 
 end.

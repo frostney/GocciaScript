@@ -65,3 +65,41 @@ suite("array transformation", () => {
     const result = arr.flatMap((x) => [x, x * 2]);
   });
 });
+
+suite("nested callbacks", () => {
+  bench("map inside map (5x5)", () => {
+    const matrix = [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15], [16, 17, 18, 19, 20], [21, 22, 23, 24, 25]];
+    const result = matrix.map((row) => row.map((x) => x * 2));
+  });
+
+  bench("filter inside map (5x10)", () => {
+    const data = Array.from({ length: 5 }, (_, i) => Array.from({ length: 10 }, (_, j) => i * 10 + j));
+    const result = data.map((row) => row.filter((x) => x % 2 === 0));
+  });
+
+  bench("reduce inside map (5x10)", () => {
+    const data = Array.from({ length: 5 }, (_, i) => Array.from({ length: 10 }, (_, j) => i * 10 + j));
+    const sums = data.map((row) => row.reduce((a, b) => a + b, 0));
+  });
+
+  bench("forEach inside forEach (5x10)", () => {
+    const matrix = Array.from({ length: 5 }, (_, i) => Array.from({ length: 10 }, (_, j) => i * 10 + j));
+    let sum = 0;
+    matrix.forEach((row) => { row.forEach((x) => { sum = sum + x; }); });
+  });
+
+  bench("find inside some (10x10)", () => {
+    const groups = Array.from({ length: 10 }, (_, i) => Array.from({ length: 10 }, (_, j) => i * 10 + j));
+    const found = groups.some((g) => g.find((x) => x === 77) !== undefined);
+  });
+
+  bench("map+filter chain nested (5x20)", () => {
+    const data = Array.from({ length: 5 }, (_, i) => Array.from({ length: 20 }, (_, j) => i * 20 + j));
+    const result = data.map((row) => row.map((x) => x * 3).filter((x) => x % 2 === 0));
+  });
+
+  bench("reduce flatten (10x5)", () => {
+    const matrix = Array.from({ length: 10 }, (_, i) => Array.from({ length: 5 }, (_, j) => i * 5 + j));
+    const flat = matrix.reduce((acc, row) => [...acc, ...row], []);
+  });
+});

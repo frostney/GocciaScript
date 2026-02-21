@@ -104,7 +104,11 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | REPL Line Editor | `Goccia.REPL.LineEditor.pas` | Interactive line editing with history for the REPL |
 | REPL Formatter | `Goccia.REPL.Formatter.pas` | Color-formatted value output for the REPL |
 | Shared Prototype | `Goccia.SharedPrototype.pas` | Shared prototype singleton utilities |
-| Value Constants | `Goccia.Values.Constants.pas` | Centralized runtime value constants |
+| Constants | `Goccia.Constants.pas` | Literal value strings (`'true'`, `'NaN'`, etc.) and numeric constants |
+| Constants: Type Names | `Goccia.Constants.TypeNames.pas` | `typeof` result string constants (`'object'`, `'string'`, etc.) |
+| Constants: Property Names | `Goccia.Constants.PropertyNames.pas` | Common property name constants (`'length'`, `'constructor'`, etc.) |
+| Constants: Error Names | `Goccia.Constants.ErrorNames.pas` | Error type name constants (`'TypeError'`, `'RangeError'`, etc.) |
+| Constants: Constructor Names | `Goccia.Constants.ConstructorNames.pas` | Built-in constructor name constants (`'Object'`, `'Array'`, etc.) |
 | ToPrimitive | `Goccia.Values.ToPrimitive.pas` | ECMAScript `ToPrimitive` abstract operation |
 | Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, centralized error construction |
 | Argument Validator | `Goccia.Arguments.Validator.pas` | `RequireExactly`, `RequireAtLeast` — standardized argument count/type validation |
@@ -266,6 +270,12 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Unit naming:** `Goccia.<Category>.<Name>.pas` (dot-separated hierarchy)
 - **No abbreviations:** Use full words in class, function, method, and type names (e.g., `TGocciaGarbageCollector` not `TGocciaGC`). Exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
 - **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`) instead of hardcoded string literals. Use the `ScriptExtensions` array, `IsScriptExtension`, and `IsJSXNativeExtension` helpers instead of duplicating extension lists or ad-hoc checks.
+- **Runtime constants:** Use the split constant units instead of hardcoded string literals for property names, type names, error names, and constructor names:
+  - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, etc.
+  - `Goccia.Constants.TypeNames` — `OBJECT_TYPE_NAME`, `STRING_TYPE_NAME`, `FUNCTION_TYPE_NAME`, etc.
+  - `Goccia.Constants.ErrorNames` — `ERROR_NAME`, `TYPE_ERROR_NAME`, `RANGE_ERROR_NAME`, etc.
+  - `Goccia.Constants.ConstructorNames` — `CONSTRUCTOR_OBJECT`, `CONSTRUCTOR_ARRAY`, `CONSTRUCTOR_STRING`, `CONSTRUCTOR_MAP`, etc.
+  - `Goccia.Constants` — `BOOLEAN_TRUE_LITERAL`, `NULL_LITERAL`, `NAN_LITERAL`, `ZERO_VALUE`, `EMPTY_STRING`, etc.
 - **Class naming:** `TGoccia<Name>` prefix
 - **Interface naming:** `I<Name>` prefix
 - **Private fields:** `F` prefix
@@ -303,6 +313,10 @@ The section numbers reference [ECMA-262](https://tc39.es/ecma262/) (the living s
 // TC39 Temporal §5.5.3 Temporal.Duration.prototype.add(other)
 // TC39 Iterator Helpers §2.1.3.1 Iterator.prototype.map(mapper)
 ```
+
+### Do Not Implement String Interning
+
+Dictionary-based string interning (`TDictionary<string, TGocciaStringLiteralValue>` cache) was attempted and **benchmarked at -4% across 172 benchmarks** (49 regressions, 3 improvements). The hash + lookup cost per string exceeds FreePascal's allocation cost. See [docs/design-decisions.md](docs/design-decisions.md) for the full analysis and alternative approaches.
 
 ### Platform Pitfall: `Double(Int64)` on AArch64
 
