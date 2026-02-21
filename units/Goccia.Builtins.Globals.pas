@@ -33,6 +33,7 @@ type
     function URIErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function AggregateErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function QueueMicrotaskCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -40,6 +41,9 @@ type
 implementation
 
 uses
+  Classes,
+  Generics.Collections,
+
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
@@ -47,7 +51,11 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.MapValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SetValue,
+  Goccia.Values.SymbolValue;
 
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -119,6 +127,9 @@ begin
 
   AScope.DefineLexicalBinding('queueMicrotask',
     TGocciaNativeFunctionValue.Create(QueueMicrotaskCallback, 'queueMicrotask', 1), dtConst);
+
+  AScope.DefineLexicalBinding('structuredClone',
+    TGocciaNativeFunctionValue.Create(StructuredCloneCallback, 'structuredClone', 1), dtConst);
 end;
 
 { NativeError ( message [ , options ] ) — §20.5.6.1.1 (shared by all NativeError constructors)
@@ -290,6 +301,140 @@ begin
 
   { Step 3: Return undefined }
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+{ structuredClone(value) — HTML spec §2.7.3 StructuredSerializeInternal / StructuredDeserialize
+  Deep-clones a value using the structured clone algorithm. Handles circular
+  references via a memory map. Throws DataCloneError (as a DOMException
+  equivalent) for non-serializable types (functions, symbols). }
+
+function StructuredCloneValue(const AValue: TGocciaValue;
+  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaValue; forward;
+
+function CloneObject(const AObj: TGocciaObjectValue;
+  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
+var
+  I: Integer;
+  Keys: TStringList;
+  Descriptor: TGocciaPropertyDescriptor;
+  ClonedValue: TGocciaValue;
+begin
+  Result := TGocciaObjectValue.Create;
+  AMemory.Add(AObj, Result);
+
+  Keys := AObj.GetOwnPropertyKeys;
+  for I := 0 to Keys.Count - 1 do
+  begin
+    Descriptor := AObj.GetOwnPropertyDescriptor(Keys[I]);
+    if not Assigned(Descriptor) then
+      Continue;
+
+    if Descriptor is TGocciaPropertyDescriptorData then
+    begin
+      ClonedValue := StructuredCloneValue(TGocciaPropertyDescriptorData(Descriptor).Value, AMemory);
+      Result.DefineProperty(Keys[I],
+        TGocciaPropertyDescriptorData.Create(ClonedValue, Descriptor.Flags));
+    end
+    else if Descriptor is TGocciaPropertyDescriptorAccessor then
+      ThrowTypeError('Failed to execute ''structuredClone'': accessor property ''' +
+        Keys[I] + ''' could not be cloned.');
+  end;
+end;
+
+function CloneArray(const AArr: TGocciaArrayValue;
+  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaArrayValue;
+var
+  I: Integer;
+  Element: TGocciaValue;
+begin
+  Result := TGocciaArrayValue.Create;
+  AMemory.Add(AArr, Result);
+
+  for I := 0 to AArr.Elements.Count - 1 do
+  begin
+    Element := AArr.Elements[I];
+    if Element = nil then
+      Result.Elements.Add(nil)
+    else
+      Result.Elements.Add(StructuredCloneValue(Element, AMemory));
+  end;
+end;
+
+function CloneMap(const AMap: TGocciaMapValue;
+  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaMapValue;
+var
+  I: Integer;
+  Entry: TGocciaMapEntry;
+begin
+  Result := TGocciaMapValue.Create;
+  AMemory.Add(AMap, Result);
+
+  for I := 0 to AMap.Entries.Count - 1 do
+  begin
+    Entry := AMap.Entries[I];
+    Result.SetEntry(
+      StructuredCloneValue(Entry.Key, AMemory),
+      StructuredCloneValue(Entry.Value, AMemory));
+  end;
+end;
+
+function CloneSet(const ASet: TGocciaSetValue;
+  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaSetValue;
+var
+  I: Integer;
+begin
+  Result := TGocciaSetValue.Create;
+  AMemory.Add(ASet, Result);
+
+  for I := 0 to ASet.Items.Count - 1 do
+    Result.AddItem(StructuredCloneValue(ASet.Items[I], AMemory));
+end;
+
+function StructuredCloneValue(const AValue: TGocciaValue;
+  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaValue;
+var
+  Existing: TGocciaValue;
+begin
+  if AValue = nil then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  if AValue.IsPrimitive then
+    Exit(AValue);
+
+  if AValue is TGocciaSymbolValue then
+    ThrowTypeError('Failed to execute ''structuredClone'': ' + AValue.ToStringLiteral.Value + ' could not be cloned.');
+
+  if AValue.IsCallable then
+    ThrowTypeError('Failed to execute ''structuredClone'': function could not be cloned.');
+
+  if AMemory.TryGetValue(AValue, Existing) then
+    Exit(Existing);
+
+  if AValue is TGocciaArrayValue then
+    Result := CloneArray(TGocciaArrayValue(AValue), AMemory)
+  else if AValue is TGocciaMapValue then
+    Result := CloneMap(TGocciaMapValue(AValue), AMemory)
+  else if AValue is TGocciaSetValue then
+    Result := CloneSet(TGocciaSetValue(AValue), AMemory)
+  else if AValue is TGocciaObjectValue then
+    Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
+  else
+    ThrowTypeError('Failed to execute ''structuredClone'': value could not be cloned.');
+end;
+
+function TGocciaGlobals.StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Memory: TDictionary<TGocciaValue, TGocciaValue>;
+begin
+  if AArgs.Length = 0 then
+    ThrowTypeError('Failed to execute ''structuredClone'': 1 argument required, but only 0 present.');
+
+  Memory := TDictionary<TGocciaValue, TGocciaValue>.Create;
+  try
+    Result := StructuredCloneValue(AArgs.GetElement(0), Memory);
+  finally
+    Memory.Free;
+  end;
 end;
 
 end.
