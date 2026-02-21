@@ -1,5 +1,11 @@
 {$mode delphi} {H+}
-{$IFNDEF PRODUCTION}
+{$IFDEF PRODUCTION}
+  {$overflowchecks off}
+  {$rangechecks off}
+  {$S-}
+  {$OBJECTCHECKS OFF}
+  {$C-}
+{$ELSE}
   {$overflowchecks on}
   {$rangechecks on}
 {$ENDIF}
