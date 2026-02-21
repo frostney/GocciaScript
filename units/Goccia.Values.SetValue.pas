@@ -66,6 +66,7 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
+  Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -287,36 +288,33 @@ function TGocciaSetValue.SetForEach(const AArgs: TGocciaArgumentsCollection; con
 var
   S: TGocciaSetValue;
   Callback: TGocciaValue;
+  TypedCallback: TGocciaFunctionBase;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if AArgs.Length = 0 then Exit;
 
-  // Step 1: Let S be the this value
   S := TGocciaSetValue(AThisValue);
-  // Steps 2-3 (implicit): Require S has [[SetData]] internal slot
-  // Step 4: If IsCallable(callbackfn) is false, throw a TypeError exception
   Callback := AArgs.GetElement(0);
   if not Callback.IsCallable then Exit;
 
-  // Step 5: Let entries be S.[[SetData]]
-  // Step 6: Let numEntries be the number of elements of entries
-  // Step 7: Let index be 0
-  // Step 8: Repeat, while index < numEntries
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
   for I := 0 to S.FItems.Count - 1 do
   begin
-    // Step 8a: Let e be entries[index]
-    // Step 8b: If e is not empty, then
-    //   Call(callbackfn, thisArg, « e, e, S »)
     CallArgs := TGocciaArgumentsCollection.Create([S.FItems[I], S.FItems[I], AThisValue]);
     try
-      InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      if Assigned(TypedCallback) then
+        TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;
   end;
-  // Step 9: Return undefined
 end;
 
 // ES2026 §24.2.3.10 Set.prototype.values()

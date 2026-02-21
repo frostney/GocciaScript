@@ -5,35 +5,22 @@ unit Goccia.Scope;
 interface
 
 uses
-  Generics.Collections,
-
   Goccia.Error.ThrowErrorCallback,
+  Goccia.Scope.BindingMap,
   Goccia.Token,
   Goccia.Values.Primitives;
 
+const
+  dtLet = Goccia.Scope.BindingMap.dtLet;
+  dtConst = Goccia.Scope.BindingMap.dtConst;
+  dtParameter = Goccia.Scope.BindingMap.dtParameter;
+
 type
-  TGocciaDeclarationType = (dtLet, dtConst, dtParameter);
-
-  TLexicalBinding = record
-  private
-    function IsWritable: Boolean; // computed from DeclarationType
-    function CanAccess: Boolean; // computed from DeclarationType and Initialized
-  public
-    Value: TGocciaValue;
-    DeclarationType: TGocciaDeclarationType;
-    Initialized: Boolean;
-
-    property Writable: Boolean read IsWritable;
-    property IsAccessible: Boolean read CanAccess;
-  end;
-
   TGocciaScopeKind = (skUnknown, skGlobal, skFunction, skBlock, skCustom, skClass, skModule);
-
-  TLexicalBindingDictionary = TDictionary<string, TLexicalBinding>;
 
   TGocciaScope = class
   private
-    FLexicalBindings: TLexicalBindingDictionary;
+    FLexicalBindings: TGocciaBindingMap;
     FParent: TGocciaScope;
     FThisValue: TGocciaValue;
     FScopeKind: TGocciaScopeKind;
@@ -67,7 +54,7 @@ type
     function ResolveIdentifier(const AName: string): TGocciaValue; inline;
     function ContainsOwnLexicalBinding(const AName: string): Boolean; inline;
     function Contains(const AName: string): Boolean; inline;
-    function GetOwnBindingNames: TLexicalBindingDictionary.TKeyCollection; inline;
+    function GetOwnBindingNames: TGocciaStringArray; inline;
 
     // Walk the parent chain to find the nearest this / owning class / superclass
     function FindThisValue: TGocciaValue;
@@ -150,18 +137,6 @@ uses
   Goccia.Values.ClassHelper,
   Goccia.Values.ObjectValue;
 
-{ TLexicalBinding }
-
-function TLexicalBinding.IsWritable: Boolean;
-begin
-  Result := DeclarationType in [dtLet, dtParameter];
-end;
-
-function TLexicalBinding.CanAccess: Boolean;
-begin
-  Result := Initialized or (DeclarationType = dtParameter); // Parameters have no TDZ
-end;
-
 { TGocciaScope }
 
 constructor TGocciaScope.Create(const AParent: TGocciaScope = nil; const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0);
@@ -170,10 +145,7 @@ begin
   FCustomLabel := ACustomLabel;
   FThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   FParent := AParent;
-  if ACapacity > 0 then
-    FLexicalBindings := TDictionary<string, TLexicalBinding>.Create(ACapacity)
-  else
-    FLexicalBindings := TDictionary<string, TLexicalBinding>.Create;
+  FLexicalBindings := TGocciaBindingMap.Create(ACapacity);
 
   // Inherit interpreter context from parent scope
   if Assigned(AParent) then
@@ -184,9 +156,6 @@ begin
 end;
 
 destructor TGocciaScope.Destroy;
-var
-  LexicalBinding: TLexicalBinding;
-  Key: string;
 begin
   if Assigned(FLexicalBindings) then
     FLexicalBindings.Free;
@@ -393,33 +362,32 @@ begin
     (Assigned(FParent) and FParent.Contains(AName));
 end;
 
-function TGocciaScope.GetOwnBindingNames: TLexicalBindingDictionary.TKeyCollection;
+function TGocciaScope.GetOwnBindingNames: TGocciaStringArray;
 begin
-  Result := FLexicalBindings.Keys;
+  Result := FLexicalBindings.GetKeys;
 end;
 
 { TGocciaScope - GC support }
 
 procedure TGocciaScope.MarkReferences;
 var
-  Binding: TLexicalBinding;
+  I: Integer;
+  Val: TGocciaValue;
 begin
   if FGCMarked then Exit;
   FGCMarked := True;
 
-  // Mark parent scope
   if Assigned(FParent) then
     FParent.MarkReferences;
 
-  // Mark ThisValue
   if Assigned(FThisValue) then
     FThisValue.MarkReferences;
 
-  // Mark all values in bindings
-  for Binding in FLexicalBindings.Values do
+  for I := 0 to FLexicalBindings.Count - 1 do
   begin
-    if Assigned(Binding.Value) then
-      Binding.Value.MarkReferences;
+    Val := FLexicalBindings[I];
+    if Assigned(Val) then
+      Val.MarkReferences;
   end;
 end;
 

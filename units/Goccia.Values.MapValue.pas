@@ -65,6 +65,7 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
+  Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -328,36 +329,33 @@ function TGocciaMapValue.MapForEach(const AArgs: TGocciaArgumentsCollection; con
 var
   M: TGocciaMapValue;
   Callback: TGocciaValue;
+  TypedCallback: TGocciaFunctionBase;
   CallArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if AArgs.Length = 0 then Exit;
 
-  // Step 1: Let M be the this value
   M := TGocciaMapValue(AThisValue);
-  // Steps 2-3 (implicit): Require M has [[MapData]] internal slot
-  // Step 4: If IsCallable(callbackfn) is false, throw a TypeError exception
   Callback := AArgs.GetElement(0);
   if not Callback.IsCallable then Exit;
 
-  // Step 5: Let entries be M.[[MapData]]
-  // Step 6: Let numEntries be the number of elements of entries
-  // Step 7: Let index be 0
-  // Step 8: Repeat, while index < numEntries
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
   for I := 0 to M.Entries.Count - 1 do
   begin
-    // Step 8a: Let e be entries[index]
-    // Step 8b: If e.[[Key]] is not empty, then
-    //   Call(callbackfn, thisArg, « e.[[Value]], e.[[Key]], M »)
     CallArgs := TGocciaArgumentsCollection.Create([M.Entries[I].Value, M.Entries[I].Key, AThisValue]);
     try
-      InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      if Assigned(TypedCallback) then
+        TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       CallArgs.Free;
     end;
   end;
-  // Step 9: Return undefined
 end;
 
 // ES2026 §24.1.3.8 Map.prototype.keys()
