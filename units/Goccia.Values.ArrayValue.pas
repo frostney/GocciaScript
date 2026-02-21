@@ -111,6 +111,7 @@ uses
   Math,
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
@@ -121,7 +122,6 @@ uses
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
@@ -141,18 +141,18 @@ end;
 // ES2026 §7.3.35 ArraySpeciesCreate(originalArray, length)
 function ArraySpeciesCreate(const AOriginal: TGocciaArrayValue; const ALength: Integer): TGocciaArrayValue;
 var
-  Ctor, Species: TGocciaValue;
+  ConstructorMethod, Species: TGocciaValue;
   SpeciesClass: TGocciaClassValue;
   LengthArgs: TGocciaArgumentsCollection;
   Instance: TGocciaValue;
 begin
   // Step 3: Let C be Get(originalArray, "constructor")
-  Ctor := AOriginal.GetProperty(PROP_CONSTRUCTOR);
+  ConstructorMethod := AOriginal.GetProperty(PROP_CONSTRUCTOR);
 
   // Steps 4-5: If C is an object, get @@species; if null/undefined, fall through
-  if Ctor is TGocciaClassValue then
+  if ConstructorMethod is TGocciaClassValue then
   begin
-    SpeciesClass := TGocciaClassValue(Ctor);
+    SpeciesClass := TGocciaClassValue(ConstructorMethod);
     Species := SpeciesClass.GetSymbolProperty(TGocciaSymbolValue.WellKnownSpecies);
 
     if (Species is TGocciaUndefinedLiteralValue) or (Species is TGocciaNullLiteralValue) then

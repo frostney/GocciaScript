@@ -74,6 +74,7 @@ uses
   StrUtils,
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -81,7 +82,6 @@ uses
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 { TGocciaStringObjectValue }

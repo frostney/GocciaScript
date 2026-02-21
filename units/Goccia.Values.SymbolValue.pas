@@ -54,13 +54,13 @@ type
 implementation
 
 uses
+  Goccia.Constants.PropertyNames,
+  Goccia.Constants.TypeNames,
   Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.PropertyNames,
-  Goccia.Values.TypeNames;
+  Goccia.Values.ObjectValue;
 
 var
   GNextSymbolId: Integer = 0;

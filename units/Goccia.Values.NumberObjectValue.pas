@@ -43,10 +43,10 @@ uses
   Math,
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.PropertyNames;
+  Goccia.Values.NativeFunction;
 
 function TGocciaNumberObjectValue.ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
 begin

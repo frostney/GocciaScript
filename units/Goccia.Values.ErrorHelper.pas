@@ -28,10 +28,10 @@ procedure ThrowError(const AMessage: string);
 implementation
 
 uses
+  Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.Values.Error,
-  Goccia.Values.ErrorNames,
-  Goccia.Values.Primitives,
-  Goccia.Values.PropertyNames;
+  Goccia.Values.Primitives;
 
 function CreateErrorObject(const AName, AMessage: string): TGocciaObjectValue;
 begin

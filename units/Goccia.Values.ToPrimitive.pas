@@ -24,9 +24,9 @@ implementation
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.Constants.PropertyNames,
   Goccia.Values.FunctionBase,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.PropertyNames;
+  Goccia.Values.ObjectValue;
 
 function ToPrimitive(const AValue: TGocciaValue): TGocciaValue;
 var

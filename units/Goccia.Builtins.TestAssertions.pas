@@ -145,16 +145,16 @@ uses
 
   TimingUtils,
 
+  Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.Evaluator,
   Goccia.Evaluator.Comparison,
   Goccia.MicrotaskQueue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
-  Goccia.Values.ErrorNames,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SetValue;
 
 { TGocciaTestSuite }

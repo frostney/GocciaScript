@@ -144,6 +144,8 @@ uses
 
   TimingUtils,
 
+  Goccia.Constants.ConstructorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.JSX.Transformer,
@@ -154,13 +156,11 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassValue,
-  Goccia.Values.ConstructorNames,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SetValue,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
@@ -264,21 +264,21 @@ begin
   if ggMath in FGlobals then
     FBuiltinMath := TGocciaMath.Create('Math', Scope, ThrowError);
   if ggGlobalObject in FGlobals then
-    FBuiltinGlobalObject := TGocciaGlobalObject.Create(CTOR_OBJECT, Scope, ThrowError);
+    FBuiltinGlobalObject := TGocciaGlobalObject.Create(CONSTRUCTOR_OBJECT, Scope, ThrowError);
   if ggGlobalArray in FGlobals then
-    FBuiltinGlobalArray := TGocciaGlobalArray.Create(CTOR_ARRAY, Scope, ThrowError);
+    FBuiltinGlobalArray := TGocciaGlobalArray.Create(CONSTRUCTOR_ARRAY, Scope, ThrowError);
   if ggGlobalNumber in FGlobals then
-    FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CTOR_NUMBER, Scope, ThrowError);
+    FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, ThrowError);
   if ggJSON in FGlobals then
     FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, ThrowError);
   if ggSymbol in FGlobals then
-    FBuiltinSymbol := TGocciaGlobalSymbol.Create(CTOR_SYMBOL, Scope, ThrowError);
+    FBuiltinSymbol := TGocciaGlobalSymbol.Create(CONSTRUCTOR_SYMBOL, Scope, ThrowError);
   if ggSet in FGlobals then
-    FBuiltinSet := TGocciaGlobalSet.Create(CTOR_SET, Scope, ThrowError);
+    FBuiltinSet := TGocciaGlobalSet.Create(CONSTRUCTOR_SET, Scope, ThrowError);
   if ggMap in FGlobals then
-    FBuiltinMap := TGocciaGlobalMap.Create(CTOR_MAP, Scope, ThrowError);
+    FBuiltinMap := TGocciaGlobalMap.Create(CONSTRUCTOR_MAP, Scope, ThrowError);
   if ggPromise in FGlobals then
-    FBuiltinPromise := TGocciaGlobalPromise.Create(CTOR_PROMISE, Scope, ThrowError);
+    FBuiltinPromise := TGocciaGlobalPromise.Create(CONSTRUCTOR_PROMISE, Scope, ThrowError);
   if ggTestAssertions in FGlobals then
     FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions', Scope, ThrowError);
   if ggBenchmark in FGlobals then
@@ -287,9 +287,9 @@ begin
     FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
 
   // Always-registered built-ins
-  FBuiltinGlobalString := TGocciaGlobalString.Create(CTOR_STRING, Scope, ThrowError);
+  FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, ThrowError);
   FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, ThrowError);
-  Scope.DefineLexicalBinding(CTOR_ITERATOR, TGocciaIteratorValue.CreateGlobalObject, dtConst);
+  Scope.DefineLexicalBinding(CONSTRUCTOR_ITERATOR, TGocciaIteratorValue.CreateGlobalObject, dtConst);
   RegisterBuiltinConstructors;
 end;
 
@@ -304,13 +304,13 @@ var
   BooleanConstructor: TGocciaBooleanClassValue;
   Key: string;
 begin
-  ObjectConstructor := TGocciaClassValue.Create(CTOR_OBJECT, nil);
+  ObjectConstructor := TGocciaClassValue.Create(CONSTRUCTOR_OBJECT, nil);
   if Assigned(FBuiltinGlobalObject) then
     for Key in FBuiltinGlobalObject.BuiltinObject.GetAllPropertyNames do
       ObjectConstructor.SetProperty(Key, FBuiltinGlobalObject.BuiltinObject.GetProperty(Key));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CTOR_OBJECT, ObjectConstructor, dtConst);
+  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_OBJECT, ObjectConstructor, dtConst);
 
-  ArrayConstructor := TGocciaArrayClassValue.Create(CTOR_ARRAY, nil);
+  ArrayConstructor := TGocciaArrayClassValue.Create(CONSTRUCTOR_ARRAY, nil);
   TGocciaArrayValue.ExposePrototype(ArrayConstructor);
   ArrayConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   if Assigned(FBuiltinGlobalArray) then
@@ -321,11 +321,11 @@ begin
     TGocciaPropertyDescriptorAccessor.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
       nil, [pfConfigurable]));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CTOR_ARRAY, ArrayConstructor, dtConst);
+  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY, ArrayConstructor, dtConst);
 
   if ggMap in FGlobals then
   begin
-    MapConstructor := TGocciaMapClassValue.Create(CTOR_MAP, nil);
+    MapConstructor := TGocciaMapClassValue.Create(CONSTRUCTOR_MAP, nil);
     TGocciaMapValue.ExposePrototype(MapConstructor);
     MapConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
     if Assigned(FBuiltinMap) then
@@ -336,12 +336,12 @@ begin
       TGocciaPropertyDescriptorAccessor.Create(
         TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
         nil, [pfConfigurable]));
-    FInterpreter.GlobalScope.DefineLexicalBinding(CTOR_MAP, MapConstructor, dtConst);
+    FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_MAP, MapConstructor, dtConst);
   end;
 
   if ggSet in FGlobals then
   begin
-    SetConstructor := TGocciaSetClassValue.Create(CTOR_SET, nil);
+    SetConstructor := TGocciaSetClassValue.Create(CONSTRUCTOR_SET, nil);
     TGocciaSetValue.ExposePrototype(SetConstructor);
     SetConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
     SetConstructor.DefineSymbolProperty(
@@ -349,32 +349,32 @@ begin
       TGocciaPropertyDescriptorAccessor.Create(
         TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
         nil, [pfConfigurable]));
-    FInterpreter.GlobalScope.DefineLexicalBinding(CTOR_SET, SetConstructor, dtConst);
+    FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SET, SetConstructor, dtConst);
   end;
 
-  StringConstructor := TGocciaStringClassValue.Create(CTOR_STRING, nil);
+  StringConstructor := TGocciaStringClassValue.Create(CONSTRUCTOR_STRING, nil);
   StringConstructor.ReplacePrototype(TGocciaStringObjectValue.GetSharedPrototype);
   StringConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, StringConstructor);
   StringConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   if Assigned(FBuiltinGlobalString) then
     for Key in FBuiltinGlobalString.BuiltinObject.GetAllPropertyNames do
       StringConstructor.SetProperty(Key, FBuiltinGlobalString.BuiltinObject.GetProperty(Key));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CTOR_STRING, StringConstructor, dtConst);
+  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_STRING, StringConstructor, dtConst);
 
-  NumberConstructor := TGocciaNumberClassValue.Create(CTOR_NUMBER, nil);
+  NumberConstructor := TGocciaNumberClassValue.Create(CONSTRUCTOR_NUMBER, nil);
   NumberConstructor.ReplacePrototype(TGocciaNumberObjectValue.GetSharedPrototype);
   NumberConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, NumberConstructor);
   NumberConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
   if Assigned(FBuiltinGlobalNumber) then
     for Key in FBuiltinGlobalNumber.BuiltinObject.GetAllPropertyNames do
       NumberConstructor.SetProperty(Key, FBuiltinGlobalNumber.BuiltinObject.GetProperty(Key));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CTOR_NUMBER, NumberConstructor, dtConst);
+  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_NUMBER, NumberConstructor, dtConst);
 
-  BooleanConstructor := TGocciaBooleanClassValue.Create(CTOR_BOOLEAN, nil);
+  BooleanConstructor := TGocciaBooleanClassValue.Create(CONSTRUCTOR_BOOLEAN, nil);
   BooleanConstructor.ReplacePrototype(TGocciaBooleanObjectValue.GetSharedPrototype);
   BooleanConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, BooleanConstructor);
   BooleanConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  FInterpreter.GlobalScope.DefineLexicalBinding(CTOR_BOOLEAN, BooleanConstructor, dtConst);
+  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_BOOLEAN, BooleanConstructor, dtConst);
 
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);

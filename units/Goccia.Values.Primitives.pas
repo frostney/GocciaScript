@@ -162,10 +162,10 @@ uses
   Math,
   SysUtils,
 
+  Goccia.Constants,
+  Goccia.Constants.TypeNames,
   Goccia.GarbageCollector,
-  Goccia.Values.ClassHelper,
-  Goccia.Values.Constants,
-  Goccia.Values.TypeNames;
+  Goccia.Values.ClassHelper;
 
 { TGocciaValue }
 

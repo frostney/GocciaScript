@@ -60,12 +60,12 @@ type
 implementation
 
 uses
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PropertyNames,
   Goccia.Values.TemporalDuration,
   Goccia.Values.TemporalPlainDateTime,
   Goccia.Values.TemporalPlainTime;

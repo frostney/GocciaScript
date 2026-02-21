@@ -61,14 +61,14 @@ type
 implementation
 
 uses
+  Goccia.Constants.ConstructorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
-  Goccia.Values.ConstructorNames,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaSetValue.Create(const AClass: TGocciaClassValue = nil);
@@ -201,7 +201,7 @@ end;
 
 function TGocciaSetValue.ToStringTag: string;
 begin
-  Result := CTOR_SET;
+  Result := CONSTRUCTOR_SET;
 end;
 
 { Instance methods }

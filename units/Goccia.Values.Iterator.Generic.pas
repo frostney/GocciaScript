@@ -23,8 +23,8 @@ implementation
 
 uses
   Goccia.Arguments.Collection,
-  Goccia.Values.FunctionBase,
-  Goccia.Values.PropertyNames;
+  Goccia.Constants.PropertyNames,
+  Goccia.Values.FunctionBase;
 
 { TGocciaGenericIteratorValue }
 

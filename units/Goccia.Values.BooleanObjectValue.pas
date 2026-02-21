@@ -34,9 +34,9 @@ type
 implementation
 
 uses
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.PropertyNames;
+  Goccia.Values.NativeFunction;
 
 constructor TGocciaBooleanObjectValue.Create(const APrimitive: TGocciaBooleanLiteralValue; const AClass: TGocciaClassValue = nil);
 begin

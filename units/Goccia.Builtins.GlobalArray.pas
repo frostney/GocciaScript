@@ -27,6 +27,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -39,7 +40,6 @@ uses
   Goccia.Values.Iterator.Generic,
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaGlobalArray.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);

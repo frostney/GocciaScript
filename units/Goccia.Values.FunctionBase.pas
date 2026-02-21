@@ -72,12 +72,12 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
+  Goccia.Constants.TypeNames,
   Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.PropertyNames,
-  Goccia.Values.TypeNames;
+  Goccia.Values.NativeFunction;
 
 { TGocciaFunctionBase }
 

@@ -71,13 +71,13 @@ implementation
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 { TGocciaLazyMapIteratorValue }

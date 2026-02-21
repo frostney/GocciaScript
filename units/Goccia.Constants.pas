@@ -1,4 +1,4 @@
-unit Goccia.Values.Constants;
+unit Goccia.Constants;
 
 {$I Goccia.inc}
 

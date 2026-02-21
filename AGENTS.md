@@ -103,11 +103,11 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | REPL Line Editor | `Goccia.REPL.LineEditor.pas` | Interactive line editing with history for the REPL |
 | REPL Formatter | `Goccia.REPL.Formatter.pas` | Color-formatted value output for the REPL |
 | Shared Prototype | `Goccia.SharedPrototype.pas` | Shared prototype singleton utilities |
-| Value Constants | `Goccia.Values.Constants.pas` | Literal value strings (`'true'`, `'NaN'`, etc.) and numeric constants |
-| Type Names | `Goccia.Values.TypeNames.pas` | `typeof` result string constants (`'object'`, `'string'`, etc.) |
-| Property Names | `Goccia.Values.PropertyNames.pas` | Common property name constants (`'length'`, `'constructor'`, etc.) |
-| Error Names | `Goccia.Values.ErrorNames.pas` | Error type name constants (`'TypeError'`, `'RangeError'`, etc.) |
-| Constructor Names | `Goccia.Values.ConstructorNames.pas` | Built-in constructor name constants (`'Object'`, `'Array'`, etc.) |
+| Constants | `Goccia.Constants.pas` | Literal value strings (`'true'`, `'NaN'`, etc.) and numeric constants |
+| Constants: Type Names | `Goccia.Constants.TypeNames.pas` | `typeof` result string constants (`'object'`, `'string'`, etc.) |
+| Constants: Property Names | `Goccia.Constants.PropertyNames.pas` | Common property name constants (`'length'`, `'constructor'`, etc.) |
+| Constants: Error Names | `Goccia.Constants.ErrorNames.pas` | Error type name constants (`'TypeError'`, `'RangeError'`, etc.) |
+| Constants: Constructor Names | `Goccia.Constants.ConstructorNames.pas` | Built-in constructor name constants (`'Object'`, `'Array'`, etc.) |
 | ToPrimitive | `Goccia.Values.ToPrimitive.pas` | ECMAScript `ToPrimitive` abstract operation |
 | Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, centralized error construction |
 | Argument Validator | `Goccia.Arguments.Validator.pas` | `RequireExactly`, `RequireAtLeast` — standardized argument count/type validation |
@@ -270,11 +270,11 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **No abbreviations:** Use full words in class, function, method, and type names (e.g., `TGocciaGarbageCollector` not `TGocciaGC`). Exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
 - **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`) instead of hardcoded string literals. Use the `ScriptExtensions` array, `IsScriptExtension`, and `IsJSXNativeExtension` helpers instead of duplicating extension lists or ad-hoc checks.
 - **Runtime constants:** Use the split constant units instead of hardcoded string literals for property names, type names, error names, and constructor names:
-  - `Goccia.Values.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, etc.
-  - `Goccia.Values.TypeNames` — `OBJECT_TYPE_NAME`, `STRING_TYPE_NAME`, `FUNCTION_TYPE_NAME`, etc.
-  - `Goccia.Values.ErrorNames` — `ERROR_NAME`, `TYPE_ERROR_NAME`, `RANGE_ERROR_NAME`, etc.
-  - `Goccia.Values.ConstructorNames` — `CTOR_OBJECT`, `CTOR_ARRAY`, `CTOR_STRING`, `CTOR_MAP`, etc.
-  - `Goccia.Values.Constants` — `BOOLEAN_TRUE_LITERAL`, `NULL_LITERAL`, `NAN_LITERAL`, `ZERO_VALUE`, `EMPTY_STRING`, etc.
+  - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, etc.
+  - `Goccia.Constants.TypeNames` — `OBJECT_TYPE_NAME`, `STRING_TYPE_NAME`, `FUNCTION_TYPE_NAME`, etc.
+  - `Goccia.Constants.ErrorNames` — `ERROR_NAME`, `TYPE_ERROR_NAME`, `RANGE_ERROR_NAME`, etc.
+  - `Goccia.Constants.ConstructorNames` — `CONSTRUCTOR_OBJECT`, `CONSTRUCTOR_ARRAY`, `CONSTRUCTOR_STRING`, `CONSTRUCTOR_MAP`, etc.
+  - `Goccia.Constants` — `BOOLEAN_TRUE_LITERAL`, `NULL_LITERAL`, `NAN_LITERAL`, `ZERO_VALUE`, `EMPTY_STRING`, etc.
 - **Class naming:** `TGoccia<Name>` prefix
 - **Interface naming:** `I<Name>` prefix
 - **Private fields:** `F` prefix

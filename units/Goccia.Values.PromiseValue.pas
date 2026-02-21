@@ -73,11 +73,11 @@ type
 implementation
 
 uses
+  Goccia.Constants.ErrorNames,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.ErrorNames,
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction;
 

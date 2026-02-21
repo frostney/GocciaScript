@@ -60,14 +60,14 @@ type
 implementation
 
 uses
+  Goccia.Constants.ConstructorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
-  Goccia.Values.ConstructorNames,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaMapValue.Create(const AClass: TGocciaClassValue = nil);
@@ -213,7 +213,7 @@ end;
 
 function TGocciaMapValue.ToStringTag: string;
 begin
-  Result := CTOR_MAP;
+  Result := CONSTRUCTOR_MAP;
 end;
 
 { Instance methods }

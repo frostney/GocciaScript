@@ -83,6 +83,9 @@ uses
   SysUtils,
 
   Goccia.Arguments.Collection,
+  Goccia.Constants,
+  Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
@@ -96,10 +99,8 @@ uses
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
-  Goccia.Values.Constants,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.ErrorNames,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.Iterator.Concrete,
@@ -108,7 +109,6 @@ uses
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SetValue,
   Goccia.Values.SymbolValue;
 

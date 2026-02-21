@@ -48,6 +48,7 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Validator,
+  Goccia.Constants.PropertyNames,
   Goccia.Evaluator.Comparison,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -56,7 +57,6 @@ uses
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);

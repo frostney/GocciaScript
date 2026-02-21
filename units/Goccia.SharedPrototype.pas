@@ -22,9 +22,9 @@ type
 implementation
 
 uses
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
-  Goccia.Values.ClassValue,
-  Goccia.Values.PropertyNames;
+  Goccia.Values.ClassValue;
 
 constructor TGocciaSharedPrototype.Create(const AMethodHost: TGocciaValue);
 begin

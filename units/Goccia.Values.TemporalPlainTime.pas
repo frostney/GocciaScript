@@ -58,11 +58,11 @@ type
 implementation
 
 uses
+  Goccia.Constants.PropertyNames,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PropertyNames,
   Goccia.Values.TemporalDuration;
 
 function AsPlainTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainTimeValue;

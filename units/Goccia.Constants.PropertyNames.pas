@@ -1,4 +1,4 @@
-unit Goccia.Values.PropertyNames;
+unit Goccia.Constants.PropertyNames;
 
 {$I Goccia.inc}
 

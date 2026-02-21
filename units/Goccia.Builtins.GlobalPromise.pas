@@ -38,17 +38,17 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.ErrorNames,
   Goccia.Values.FunctionBase,
   Goccia.Values.MapValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SetValue;
 
 type

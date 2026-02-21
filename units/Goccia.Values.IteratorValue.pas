@@ -51,9 +51,10 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.ConstructorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ConstructorNames,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
@@ -61,7 +62,6 @@ uses
   Goccia.Values.Iterator.Lazy,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 function CreateIteratorResult(const AValue: TGocciaValue; const ADone: Boolean): TGocciaObjectValue;
@@ -105,7 +105,7 @@ end;
 
 function TGocciaIteratorValue.ToStringTag: string;
 begin
-  Result := CTOR_ITERATOR;
+  Result := CONSTRUCTOR_ITERATOR;
 end;
 
 class procedure TGocciaIteratorValue.EnsurePrototypeInitialized;

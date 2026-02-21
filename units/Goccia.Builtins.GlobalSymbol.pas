@@ -39,9 +39,9 @@ type
 implementation
 
 uses
+  Goccia.Constants.PropertyNames,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.PropertyNames;
+  Goccia.Values.ObjectValue;
 
 constructor TGocciaGlobalSymbol.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var

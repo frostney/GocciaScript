@@ -78,11 +78,11 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PropertyNames;
+  Goccia.Values.ObjectPropertyDescriptor;
 
 function AsDuration(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalDurationValue;
 begin

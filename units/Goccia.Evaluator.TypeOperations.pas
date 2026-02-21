@@ -21,14 +21,14 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.ConstructorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.Keywords.Reserved,
   Goccia.Values.ArrayValue,
-  Goccia.Values.ConstructorNames,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
-  Goccia.Values.PropertyNames,
   Goccia.Values.SymbolValue;
 
 function EvaluateTypeof(const AOperand: TGocciaValue): TGocciaValue;
@@ -81,7 +81,7 @@ begin
     // Check if ALeft is an instance of the ARight class
     if ALeft is TGocciaInstanceValue then
     begin
-      if TGocciaClassValue(ARight).Name = CTOR_OBJECT then
+      if TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT then
       begin
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end
@@ -113,17 +113,17 @@ begin
       // Classes are also instances of Function (since classes are constructor functions)
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    else if (ALeft is TGocciaArrayValue) and (TGocciaClassValue(ARight).Name = CTOR_ARRAY) then
+    else if (ALeft is TGocciaArrayValue) and (TGocciaClassValue(ARight).Name = CONSTRUCTOR_ARRAY) then
     begin
       // Arrays are instances of Array
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    else if (ALeft is TGocciaArrayValue) and (TGocciaClassValue(ARight).Name = CTOR_OBJECT) then
+    else if (ALeft is TGocciaArrayValue) and (TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT) then
     begin
       // Arrays are also instances of Object (inheritance)
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end
-    else if (ALeft is TGocciaObjectValue) and (TGocciaClassValue(ARight).Name = CTOR_OBJECT) then
+    else if (ALeft is TGocciaObjectValue) and (TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT) then
     begin
       // Objects are instances of Object
       Result := TGocciaBooleanLiteralValue.TrueValue;

@@ -1,4 +1,4 @@
-unit Goccia.Values.ErrorNames;
+unit Goccia.Constants.ErrorNames;
 
 {$I Goccia.inc}
 

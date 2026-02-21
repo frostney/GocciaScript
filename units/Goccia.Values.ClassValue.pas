@@ -147,17 +147,17 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.ConstructorNames,
+  Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
+  Goccia.Constants.TypeNames,
   Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
-  Goccia.Values.ConstructorNames,
-  Goccia.Values.ErrorNames,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
-  Goccia.Values.PropertyNames,
-  Goccia.Values.SetValue,
-  Goccia.Values.TypeNames;
+  Goccia.Values.SetValue;
 
 constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGocciaClassValue);
 begin
@@ -649,28 +649,28 @@ end;
 
 function TGocciaClassValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if FName = CTOR_STRING then
+  if FName = CONSTRUCTOR_STRING then
   begin
     if AArguments.Length = 0 then
       Result := TGocciaStringLiteralValue.Create('')
     else
       Result := AArguments.GetElement(0).ToStringLiteral;
   end
-  else if FName = CTOR_NUMBER then
+  else if FName = CONSTRUCTOR_NUMBER then
   begin
     if AArguments.Length = 0 then
       Result := TGocciaNumberLiteralValue.ZeroValue
     else
       Result := AArguments.GetElement(0).ToNumberLiteral;
   end
-  else if FName = CTOR_BOOLEAN then
+  else if FName = CONSTRUCTOR_BOOLEAN then
   begin
     if AArguments.Length = 0 then
       Result := TGocciaBooleanLiteralValue.FalseValue
     else
       Result := AArguments.GetElement(0).ToBooleanLiteral;
   end
-  else if (FName = CTOR_ARRAY) or (FName = CTOR_MAP) or (FName = CTOR_SET) then
+  else if (FName = CONSTRUCTOR_ARRAY) or (FName = CONSTRUCTOR_MAP) or (FName = CONSTRUCTOR_SET) then
     Result := Instantiate(AArguments)
   else
     Result := Instantiate(AArguments);
@@ -749,7 +749,7 @@ begin
   if Assigned(FClass) then
     Result := FClass.Name
   else
-    Result := CTOR_OBJECT;
+    Result := CONSTRUCTOR_OBJECT;
 end;
 
 function TGocciaInstanceValue.ToStringLiteral: TGocciaStringLiteralValue;

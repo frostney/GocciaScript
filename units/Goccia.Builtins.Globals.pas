@@ -40,14 +40,14 @@ type
 implementation
 
 uses
+  Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.ErrorNames,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.PropertyNames;
+  Goccia.Values.NativeFunction;
 
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
