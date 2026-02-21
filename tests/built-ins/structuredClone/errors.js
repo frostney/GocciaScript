@@ -47,6 +47,23 @@ test("throws on object containing a function", () => {
   expect(threw).toBe(true);
 });
 
+test("throws on object with accessor property", () => {
+  const obj = {};
+  Object.defineProperty(obj, "value", {
+    get() { return 42; },
+    enumerable: true,
+    configurable: true,
+  });
+  let threw = false;
+  try {
+    structuredClone(obj);
+  } catch (e) {
+    threw = true;
+    expect(e.message.includes("could not be cloned")).toBe(true);
+  }
+  expect(threw).toBe(true);
+});
+
 test("second argument (options) is accepted and ignored", () => {
   const original = { a: 1 };
   const clone = structuredClone(original, { transfer: [] });

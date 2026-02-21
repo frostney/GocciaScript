@@ -44,7 +44,6 @@ uses
   Classes,
   Generics.Collections,
 
-  Goccia.CallStack,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayValue,
@@ -335,11 +334,8 @@ begin
         TGocciaPropertyDescriptorData.Create(ClonedValue, Descriptor.Flags));
     end
     else if Descriptor is TGocciaPropertyDescriptorAccessor then
-      Result.DefineProperty(Keys[I],
-        TGocciaPropertyDescriptorAccessor.Create(
-          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-          Descriptor.Flags));
+      ThrowTypeError('Failed to execute ''structuredClone'': accessor property ''' +
+        Keys[I] + ''' could not be cloned.');
   end;
 end;
 
