@@ -61,6 +61,8 @@ type
 implementation
 
 uses
+  Goccia.Constants.ConstructorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
@@ -182,7 +184,7 @@ end;
 
 function TGocciaSetValue.GetProperty(const AName: string): TGocciaValue;
 begin
-  if AName = 'size' then
+  if AName = PROP_SIZE then
     Result := TGocciaNumberLiteralValue.Create(FItems.Count)
   else
     Result := inherited GetProperty(AName);
@@ -199,7 +201,7 @@ end;
 
 function TGocciaSetValue.ToStringTag: string;
 begin
-  Result := 'Set';
+  Result := CONSTRUCTOR_SET;
 end;
 
 { Instance methods }

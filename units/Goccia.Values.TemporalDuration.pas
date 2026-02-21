@@ -78,6 +78,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -198,11 +199,11 @@ begin
   FShared.Prototype.RegisterNativeMethod(
     TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationTotal, 'total', 1));
   FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationToString, 'toString', 0));
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationToString, PROP_TO_STRING, 0));
   FShared.Prototype.RegisterNativeMethod(
     TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationToJSON, 'toJSON', 0));
   FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationValueOf, 'valueOf', 0));
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationValueOf, PROP_VALUE_OF, 0));
 end;
 
 class procedure TGocciaTemporalDurationValue.ExposePrototype(const AConstructor: TGocciaObjectValue);

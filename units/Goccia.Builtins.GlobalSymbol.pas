@@ -39,6 +39,7 @@ type
 implementation
 
 uses
+  Goccia.Constants.PropertyNames,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue;
 
@@ -73,7 +74,7 @@ begin
   FSymbolFunction.RegisterConstant('isConcatSpreadable', TGocciaSymbolValue.WellKnownIsConcatSpreadable);
 
   // Expose Symbol.prototype (ECMAScript compatible)
-  FSymbolFunction.AssignProperty('prototype', TGocciaSymbolValue.SharedPrototype);
+  FSymbolFunction.AssignProperty(PROP_PROTOTYPE, TGocciaSymbolValue.SharedPrototype);
 
   // Bind Symbol in scope
   AScope.DefineLexicalBinding(AName, FSymbolFunction, dtLet);

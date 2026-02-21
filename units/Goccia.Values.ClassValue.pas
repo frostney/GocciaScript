@@ -147,6 +147,10 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.ConstructorNames,
+  Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
+  Goccia.Constants.TypeNames,
   Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
@@ -287,18 +291,18 @@ end;
 
 function TGocciaClassValue.TypeName: string;
 begin
-  Result := 'function';
+  Result := FUNCTION_TYPE_NAME;
 end;
 
 function TGocciaClassValue.TypeOf: string;
 begin
-  Result := 'function';
+  Result := FUNCTION_TYPE_NAME;
 end;
 
 function TGocciaClassValue.ToStringLiteral: TGocciaStringLiteralValue;
 begin
   // For error classes, just return the name to make toThrow work properly
-  if (FName = 'RangeError') or (FName = 'Error') or (FName = 'TypeError') or (FName = 'ReferenceError') then
+  if (FName = RANGE_ERROR_NAME) or (FName = ERROR_NAME) or (FName = TYPE_ERROR_NAME) or (FName = REFERENCE_ERROR_NAME) then
     Result := TGocciaStringLiteralValue.Create(FName)
   else
     Result := TGocciaStringLiteralValue.Create(Format('[Class: %s]', [FName]));
@@ -317,7 +321,7 @@ end;
 procedure TGocciaClassValue.AddMethod(const AName: string; const AMethod: TGocciaMethodValue);
 begin
   // If this is the constructor, store it separately
-  if AName = 'constructor' then
+  if AName = PROP_CONSTRUCTOR then
   begin
     FConstructorMethod := AMethod;
     Exit;
@@ -539,7 +543,7 @@ var
   Args: TGocciaArgumentsCollection;
   Current: TGocciaClassValue;
 begin
-  if AName = 'prototype' then
+  if AName = PROP_PROTOTYPE then
   begin
     Result := FPrototype;
     Exit;
@@ -645,28 +649,28 @@ end;
 
 function TGocciaClassValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if FName = 'String' then
+  if FName = CONSTRUCTOR_STRING then
   begin
     if AArguments.Length = 0 then
       Result := TGocciaStringLiteralValue.Create('')
     else
       Result := AArguments.GetElement(0).ToStringLiteral;
   end
-  else if FName = 'Number' then
+  else if FName = CONSTRUCTOR_NUMBER then
   begin
     if AArguments.Length = 0 then
       Result := TGocciaNumberLiteralValue.ZeroValue
     else
       Result := AArguments.GetElement(0).ToNumberLiteral;
   end
-  else if FName = 'Boolean' then
+  else if FName = CONSTRUCTOR_BOOLEAN then
   begin
     if AArguments.Length = 0 then
       Result := TGocciaBooleanLiteralValue.FalseValue
     else
       Result := AArguments.GetElement(0).ToBooleanLiteral;
   end
-  else if (FName = 'Array') or (FName = 'Map') or (FName = 'Set') then
+  else if (FName = CONSTRUCTOR_ARRAY) or (FName = CONSTRUCTOR_MAP) or (FName = CONSTRUCTOR_SET) then
     Result := Instantiate(AArguments)
   else
     Result := Instantiate(AArguments);
@@ -745,7 +749,7 @@ begin
   if Assigned(FClass) then
     Result := FClass.Name
   else
-    Result := 'Object';
+    Result := CONSTRUCTOR_OBJECT;
 end;
 
 function TGocciaInstanceValue.ToStringLiteral: TGocciaStringLiteralValue;

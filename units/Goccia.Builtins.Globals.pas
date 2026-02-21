@@ -40,6 +40,8 @@ type
 implementation
 
 uses
+  Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayValue,
@@ -64,56 +66,56 @@ begin
   AScope.DefineLexicalBinding('Infinity', TGocciaNumberLiteralValue.InfinityValue, dtConst);
 
   FErrorProto := TGocciaObjectValue.Create;
-  FErrorProto.AssignProperty('name', TGocciaStringLiteralValue.Create('Error'));
-  FErrorProto.AssignProperty('message', TGocciaStringLiteralValue.Create(''));
+  FErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(ERROR_NAME));
+  FErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
 
   FTypeErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FTypeErrorProto.AssignProperty('name', TGocciaStringLiteralValue.Create('TypeError'));
-  FTypeErrorProto.AssignProperty('message', TGocciaStringLiteralValue.Create(''));
+  FTypeErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(TYPE_ERROR_NAME));
+  FTypeErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
 
   FReferenceErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FReferenceErrorProto.AssignProperty('name', TGocciaStringLiteralValue.Create('ReferenceError'));
-  FReferenceErrorProto.AssignProperty('message', TGocciaStringLiteralValue.Create(''));
+  FReferenceErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(REFERENCE_ERROR_NAME));
+  FReferenceErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
 
   FRangeErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FRangeErrorProto.AssignProperty('name', TGocciaStringLiteralValue.Create('RangeError'));
-  FRangeErrorProto.AssignProperty('message', TGocciaStringLiteralValue.Create(''));
+  FRangeErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(RANGE_ERROR_NAME));
+  FRangeErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
 
   FSyntaxErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FSyntaxErrorProto.AssignProperty('name', TGocciaStringLiteralValue.Create('SyntaxError'));
-  FSyntaxErrorProto.AssignProperty('message', TGocciaStringLiteralValue.Create(''));
+  FSyntaxErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(SYNTAX_ERROR_NAME));
+  FSyntaxErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
 
   FURIErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FURIErrorProto.AssignProperty('name', TGocciaStringLiteralValue.Create('URIError'));
-  FURIErrorProto.AssignProperty('message', TGocciaStringLiteralValue.Create(''));
+  FURIErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(URI_ERROR_NAME));
+  FURIErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
 
   FAggregateErrorProto := TGocciaObjectValue.Create(FErrorProto);
-  FAggregateErrorProto.AssignProperty('name', TGocciaStringLiteralValue.Create('AggregateError'));
-  FAggregateErrorProto.AssignProperty('message', TGocciaStringLiteralValue.Create(''));
+  FAggregateErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AGGREGATE_ERROR_NAME));
+  FAggregateErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
 
-  ErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ErrorConstructor, 'Error', 1);
-  TypeErrorConstructorFunc := TGocciaNativeFunctionValue.Create(TypeErrorConstructor, 'TypeError', 1);
-  ReferenceErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ReferenceErrorConstructor, 'ReferenceError', 1);
-  RangeErrorConstructorFunc := TGocciaNativeFunctionValue.Create(RangeErrorConstructor, 'RangeError', 1);
-  SyntaxErrorConstructorFunc := TGocciaNativeFunctionValue.Create(SyntaxErrorConstructor, 'SyntaxError', 1);
-  URIErrorConstructorFunc := TGocciaNativeFunctionValue.Create(URIErrorConstructor, 'URIError', 1);
-  AggregateErrorConstructorFunc := TGocciaNativeFunctionValue.Create(AggregateErrorConstructor, 'AggregateError', 2);
+  ErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ErrorConstructor, ERROR_NAME, 1);
+  TypeErrorConstructorFunc := TGocciaNativeFunctionValue.Create(TypeErrorConstructor, TYPE_ERROR_NAME, 1);
+  ReferenceErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ReferenceErrorConstructor, REFERENCE_ERROR_NAME, 1);
+  RangeErrorConstructorFunc := TGocciaNativeFunctionValue.Create(RangeErrorConstructor, RANGE_ERROR_NAME, 1);
+  SyntaxErrorConstructorFunc := TGocciaNativeFunctionValue.Create(SyntaxErrorConstructor, SYNTAX_ERROR_NAME, 1);
+  URIErrorConstructorFunc := TGocciaNativeFunctionValue.Create(URIErrorConstructor, URI_ERROR_NAME, 1);
+  AggregateErrorConstructorFunc := TGocciaNativeFunctionValue.Create(AggregateErrorConstructor, AGGREGATE_ERROR_NAME, 2);
 
-  ErrorConstructorFunc.AssignProperty('prototype', FErrorProto);
-  TypeErrorConstructorFunc.AssignProperty('prototype', FTypeErrorProto);
-  ReferenceErrorConstructorFunc.AssignProperty('prototype', FReferenceErrorProto);
-  RangeErrorConstructorFunc.AssignProperty('prototype', FRangeErrorProto);
-  SyntaxErrorConstructorFunc.AssignProperty('prototype', FSyntaxErrorProto);
-  URIErrorConstructorFunc.AssignProperty('prototype', FURIErrorProto);
-  AggregateErrorConstructorFunc.AssignProperty('prototype', FAggregateErrorProto);
+  ErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FErrorProto);
+  TypeErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FTypeErrorProto);
+  ReferenceErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FReferenceErrorProto);
+  RangeErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FRangeErrorProto);
+  SyntaxErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FSyntaxErrorProto);
+  URIErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FURIErrorProto);
+  AggregateErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FAggregateErrorProto);
 
-  AScope.DefineLexicalBinding('Error', ErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding('TypeError', TypeErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding('ReferenceError', ReferenceErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding('RangeError', RangeErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding('SyntaxError', SyntaxErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding('URIError', URIErrorConstructorFunc, dtConst);
-  AScope.DefineLexicalBinding('AggregateError', AggregateErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding(ERROR_NAME, ErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding(TYPE_ERROR_NAME, TypeErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding(REFERENCE_ERROR_NAME, ReferenceErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding(RANGE_ERROR_NAME, RangeErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding(SYNTAX_ERROR_NAME, SyntaxErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding(URI_ERROR_NAME, URIErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding(AGGREGATE_ERROR_NAME, AggregateErrorConstructorFunc, dtConst);
 
   AScope.DefineLexicalBinding('queueMicrotask',
     TGocciaNativeFunctionValue.Create(QueueMicrotaskCallback, 'queueMicrotask', 1), dtConst);
@@ -153,9 +155,9 @@ begin
     if OptionsArg is TGocciaObjectValue then
     begin
       { Step 4a: If options has "cause", CreateDataPropertyOrThrow(O, "cause", cause) }
-      CauseValue := OptionsArg.GetProperty('cause');
+      CauseValue := OptionsArg.GetProperty(PROP_CAUSE);
       if (CauseValue <> nil) and not (CauseValue is TGocciaUndefinedLiteralValue) then
-        Result.AssignProperty('cause', CauseValue);
+        Result.AssignProperty(PROP_CAUSE, CauseValue);
     end;
   end;
   { Step 5: Return O }
@@ -165,37 +167,37 @@ end;
   Delegates to BuildErrorObject which implements the shared NativeError steps. }
 function TGocciaGlobals.ErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BuildErrorObject('Error', FErrorProto, AArgs);
+  Result := BuildErrorObject(ERROR_NAME, FErrorProto, AArgs);
 end;
 
 { TypeError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
 function TGocciaGlobals.TypeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BuildErrorObject('TypeError', FTypeErrorProto, AArgs);
+  Result := BuildErrorObject(TYPE_ERROR_NAME, FTypeErrorProto, AArgs);
 end;
 
 { ReferenceError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
 function TGocciaGlobals.ReferenceErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BuildErrorObject('ReferenceError', FReferenceErrorProto, AArgs);
+  Result := BuildErrorObject(REFERENCE_ERROR_NAME, FReferenceErrorProto, AArgs);
 end;
 
 { RangeError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
 function TGocciaGlobals.RangeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BuildErrorObject('RangeError', FRangeErrorProto, AArgs);
+  Result := BuildErrorObject(RANGE_ERROR_NAME, FRangeErrorProto, AArgs);
 end;
 
 { SyntaxError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
 function TGocciaGlobals.SyntaxErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BuildErrorObject('SyntaxError', FSyntaxErrorProto, AArgs);
+  Result := BuildErrorObject(SYNTAX_ERROR_NAME, FSyntaxErrorProto, AArgs);
 end;
 
 { URIError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
 function TGocciaGlobals.URIErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BuildErrorObject('URIError', FURIErrorProto, AArgs);
+  Result := BuildErrorObject(URI_ERROR_NAME, FURIErrorProto, AArgs);
 end;
 
 { AggregateError ( errors, message [ , options ] ) — §20.5.7.1
@@ -238,10 +240,10 @@ begin
     Message := '';
 
   { Step 2: Let O = OrdinaryCreateFromConstructor }
-  ErrorObj := CreateErrorObject('AggregateError', Message);
+  ErrorObj := CreateErrorObject(AGGREGATE_ERROR_NAME, Message);
   ErrorObj.Prototype := FAggregateErrorProto;
   { Step 6: CreateDataPropertyOrThrow(O, "errors", CreateArrayFromList(errorsList)) }
-  ErrorObj.AssignProperty('errors', ErrorsArray);
+  ErrorObj.AssignProperty(PROP_ERRORS, ErrorsArray);
 
   { Step 4: InstallErrorCause(O, options) }
   if AArgs.Length > 2 then
@@ -249,9 +251,9 @@ begin
     OptionsArg := AArgs.GetElement(2);
     if OptionsArg is TGocciaObjectValue then
     begin
-      CauseValue := OptionsArg.GetProperty('cause');
+      CauseValue := OptionsArg.GetProperty(PROP_CAUSE);
       if (CauseValue <> nil) and not (CauseValue is TGocciaUndefinedLiteralValue) then
-        ErrorObj.AssignProperty('cause', CauseValue);
+        ErrorObj.AssignProperty(PROP_CAUSE, CauseValue);
     end;
   end;
 

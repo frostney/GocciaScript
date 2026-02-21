@@ -106,15 +106,15 @@ end;
 
 procedure TGocciaTemporalBuiltin.RegisterDuration;
 var
-  Ctor: TGocciaNativeFunctionValue;
+  ConstructorMethod: TGocciaNativeFunctionValue;
 begin
-  Ctor := TGocciaNativeFunctionValue.Create(DurationConstructorFn, 'Duration', 0);
-  TGocciaTemporalDurationValue.ExposePrototype(Ctor);
-  Ctor.AssignProperty('from',
+  ConstructorMethod := TGocciaNativeFunctionValue.Create(DurationConstructorFn, 'Duration', 0);
+  TGocciaTemporalDurationValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.AssignProperty('from',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationFrom, 'from', 1));
-  Ctor.AssignProperty('compare',
+  ConstructorMethod.AssignProperty('compare',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('Duration', Ctor);
+  FTemporalNamespace.AssignProperty('Duration', ConstructorMethod);
 end;
 
 function TGocciaTemporalBuiltin.DurationConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -257,19 +257,19 @@ end;
 
 procedure TGocciaTemporalBuiltin.RegisterInstant;
 var
-  Ctor: TGocciaNativeFunctionValue;
+  ConstructorMethod: TGocciaNativeFunctionValue;
 begin
-  Ctor := TGocciaNativeFunctionValue.Create(InstantConstructorFn, 'Instant', 1);
-  TGocciaTemporalInstantValue.ExposePrototype(Ctor);
-  Ctor.AssignProperty('from',
+  ConstructorMethod := TGocciaNativeFunctionValue.Create(InstantConstructorFn, 'Instant', 1);
+  TGocciaTemporalInstantValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.AssignProperty('from',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantFrom, 'from', 1));
-  Ctor.AssignProperty('fromEpochMilliseconds',
+  ConstructorMethod.AssignProperty('fromEpochMilliseconds',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantFromEpochMilliseconds, 'fromEpochMilliseconds', 1));
-  Ctor.AssignProperty('fromEpochNanoseconds',
+  ConstructorMethod.AssignProperty('fromEpochNanoseconds',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantFromEpochNanoseconds, 'fromEpochNanoseconds', 1));
-  Ctor.AssignProperty('compare',
+  ConstructorMethod.AssignProperty('compare',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('Instant', Ctor);
+  FTemporalNamespace.AssignProperty('Instant', ConstructorMethod);
 end;
 
 function TGocciaTemporalBuiltin.InstantConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -393,15 +393,15 @@ end;
 
 procedure TGocciaTemporalBuiltin.RegisterPlainDate;
 var
-  Ctor: TGocciaNativeFunctionValue;
+  ConstructorMethod: TGocciaNativeFunctionValue;
 begin
-  Ctor := TGocciaNativeFunctionValue.Create(PlainDateConstructorFn, 'PlainDate', 3);
-  TGocciaTemporalPlainDateValue.ExposePrototype(Ctor);
-  Ctor.AssignProperty('from',
+  ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainDateConstructorFn, 'PlainDate', 3);
+  TGocciaTemporalPlainDateValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.AssignProperty('from',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateFrom, 'from', 1));
-  Ctor.AssignProperty('compare',
+  ConstructorMethod.AssignProperty('compare',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('PlainDate', Ctor);
+  FTemporalNamespace.AssignProperty('PlainDate', ConstructorMethod);
 end;
 
 function TGocciaTemporalBuiltin.PlainDateConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -496,15 +496,15 @@ end;
 
 procedure TGocciaTemporalBuiltin.RegisterPlainTime;
 var
-  Ctor: TGocciaNativeFunctionValue;
+  ConstructorMethod: TGocciaNativeFunctionValue;
 begin
-  Ctor := TGocciaNativeFunctionValue.Create(PlainTimeConstructorFn, 'PlainTime', 0);
-  TGocciaTemporalPlainTimeValue.ExposePrototype(Ctor);
-  Ctor.AssignProperty('from',
+  ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainTimeConstructorFn, 'PlainTime', 0);
+  TGocciaTemporalPlainTimeValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.AssignProperty('from',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainTimeFrom, 'from', 1));
-  Ctor.AssignProperty('compare',
+  ConstructorMethod.AssignProperty('compare',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainTimeCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('PlainTime', Ctor);
+  FTemporalNamespace.AssignProperty('PlainTime', ConstructorMethod);
 end;
 
 function TGocciaTemporalBuiltin.PlainTimeConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -623,15 +623,15 @@ end;
 
 procedure TGocciaTemporalBuiltin.RegisterPlainDateTime;
 var
-  Ctor: TGocciaNativeFunctionValue;
+  ConstructorMethod: TGocciaNativeFunctionValue;
 begin
-  Ctor := TGocciaNativeFunctionValue.Create(PlainDateTimeConstructorFn, 'PlainDateTime', 3);
-  TGocciaTemporalPlainDateTimeValue.ExposePrototype(Ctor);
-  Ctor.AssignProperty('from',
+  ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainDateTimeConstructorFn, 'PlainDateTime', 3);
+  TGocciaTemporalPlainDateTimeValue.ExposePrototype(ConstructorMethod);
+  ConstructorMethod.AssignProperty('from',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateTimeFrom, 'from', 1));
-  Ctor.AssignProperty('compare',
+  ConstructorMethod.AssignProperty('compare',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateTimeCompare, 'compare', 2));
-  FTemporalNamespace.AssignProperty('PlainDateTime', Ctor);
+  FTemporalNamespace.AssignProperty('PlainDateTime', ConstructorMethod);
 end;
 
 function TGocciaTemporalBuiltin.PlainDateTimeConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

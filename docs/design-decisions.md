@@ -344,6 +344,21 @@ GocciaScript implements the [TC39 Types as Comments](https://tc39.es/proposal-ty
 | `import type { ... }` | Skipped → `TGocciaEmptyStatement` |
 | `export type { ... }` | Skipped → `TGocciaEmptyStatement` |
 
+## String Interning — Attempted and Rejected
+
+String interning (caching `TGocciaStringLiteralValue` instances in a `TDictionary<string, TGocciaStringLiteralValue>` keyed by content, returning cached instances from `RuntimeCopy` and `ToStringLiteral`) was implemented and benchmarked. The results showed a **net -4% regression** across 172 benchmarks, with 49 regressions, only 3 improvements, and 120 unchanged.
+
+**Why it doesn't help:**
+
+- **Dictionary lookup cost exceeds allocation cost.** FreePascal's allocator is fast. A `TDictionary.TryGetValue` call involves hashing the string (O(n) in string length) plus a hash-table probe, which is more expensive than simply allocating a short-lived `TGocciaStringLiteralValue` and letting the GC reclaim it later.
+- **Low hit rate on hot paths.** `ToStringLiteral` on numbers produces mostly unique strings (`"42"`, `"3.14"`, etc.) that never hit the cache, paying the hash cost with zero benefit. This path is called frequently in arithmetic-heavy benchmarks.
+- **`RuntimeCopy` is the wrong interception point.** Every string literal evaluation goes through `RuntimeCopy`. Adding a dictionary lookup to this universal hot path penalizes all string operations, including those that create one-off strings (concatenation results, method return values).
+- **GC pressure is not the bottleneck.** The SmallInt cache works for numbers because integer equality is a single comparison. String equality requires content comparison, so the lookup cost scales with string length rather than being O(1).
+
+**The `SmallInt` cache works because:** integer comparison is a single machine instruction, the cache is a fixed-size array (no hashing), and the hit rate for integers 0–255 is very high in typical code. None of these properties hold for arbitrary strings.
+
+**Do not re-attempt** dictionary-based string interning. If string allocation becomes a measurable bottleneck in future profiling, consider instead: (a) pre-allocated singletons for a small fixed set of ultra-common strings (like `SmallInt` but for `"length"`, `"undefined"`, etc.), or (b) arena/pool allocation for `TGocciaStringLiteralValue` objects to reduce per-object GC overhead without per-string hashing.
+
 ## Testing Strategy
 
 JavaScript end-to-end tests are the **primary** testing mechanism. Every new feature or bug fix must include JavaScript tests that validate the behavior through the full pipeline (lexer → parser → evaluator).

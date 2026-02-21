@@ -162,9 +162,10 @@ uses
   Math,
   SysUtils,
 
+  Goccia.Constants,
+  Goccia.Constants.TypeNames,
   Goccia.GarbageCollector,
-  Goccia.Values.ClassHelper,
-  Goccia.Values.Constants;
+  Goccia.Values.ClassHelper;
 
 { TGocciaValue }
 
@@ -542,7 +543,7 @@ begin
     nsvNegativeInfinity:
       Result := TGocciaStringLiteralValue.Create('-Infinity');
     nsvNegativeZero:
-      Result := TGocciaStringLiteralValue.Create('0');  // Convert -0 to string as "0"
+      Result := TGocciaStringLiteralValue.Create('0');
   else
     Result := TGocciaStringLiteralValue.Create(FloatToStr(FValue));
   end;

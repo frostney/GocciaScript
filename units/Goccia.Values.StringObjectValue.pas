@@ -74,6 +74,7 @@ uses
   StrUtils,
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -156,7 +157,7 @@ begin
   FSharedStringPrototype := TGocciaObjectValue.Create;
   FPrototypeMethodHost := Self;
 
-  FSharedStringPrototype.DefineProperty('length', TGocciaPropertyDescriptorAccessor.Create(TGocciaNativeFunctionValue.Create(StringLength, 'length', 0), nil, []));
+  FSharedStringPrototype.DefineProperty(PROP_LENGTH, TGocciaPropertyDescriptorAccessor.Create(TGocciaNativeFunctionValue.Create(StringLength, PROP_LENGTH, 0), nil, []));
 
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringCharAt, 'charAt', 1));
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringCharCodeAt, 'charCodeAt', 1));
@@ -180,8 +181,8 @@ begin
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringPadEnd, 'padEnd', 1));
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringConcat, 'concat', 1));
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringAt, 'at', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringValueOf, 'valueOf', 0));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToString, 'toString', 0));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringValueOf, PROP_VALUE_OF, 0));
+  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToString, PROP_TO_STRING, 0));
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringCodePointAt, 'codePointAt', 1));
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringLocaleCompare, 'localeCompare', 1));
   FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringNormalize, 'normalize', 0));
