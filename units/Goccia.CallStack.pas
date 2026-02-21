@@ -125,7 +125,7 @@ begin
     else
       Location := Format('<unknown>:%d:%d', [Frame.Line, Frame.Column]);
 
-    Result := Result + sLineBreak + '    at ' + FuncName + ' (' + Location + ')';
+    Result := Result + #10 + '    at ' + FuncName + ' (' + Location + ')';
   end;
 end;
 
