@@ -72,6 +72,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.AST.Statements,
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
@@ -201,39 +202,45 @@ begin
     end;
   end;
 
-  // Execute function body statements directly
+  // Expression-body fast path: skip try/except entirely since expression bodies
+  // cannot contain return/break statements — exceptions propagate naturally
+  if FIsExpressionBody and (FBodyStatements.Count = 1) then
+  begin
+    Context.Scope := ACallScope;
+    Result := Evaluate(FBodyStatements[0], Context);
+    Exit;
+  end;
+
+  // Single-return fast path: (x) => { return expr; } — evaluate the return
+  // expression directly, bypassing try/except and TGocciaReturnValue exception
+  if (FBodyStatements.Count = 1) and (FBodyStatements[0] is TGocciaReturnStatement) then
+  begin
+    Context.Scope := ACallScope;
+    if TGocciaReturnStatement(FBodyStatements[0]).Value <> nil then
+      Result := Evaluate(TGocciaReturnStatement(FBodyStatements[0]).Value, Context)
+    else
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  // Block body: full execution with exception handling for return/break signals
   try
     Context.Scope := ACallScope;
     ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-    ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
     for I := 0 to FBodyStatements.Count - 1 do
     begin
       try
         ReturnValue := Evaluate(FBodyStatements[I], Context);
       except
-        on E: TGocciaReturnValue do
-        begin
-          raise;
-        end;
-        on E: TGocciaThrowValue do
-        begin
-          // Let thrown values bubble up for try-catch handling
-          raise;
-        end;
+        on E: TGocciaReturnValue do raise;
+        on E: TGocciaThrowValue do raise;
         on E: Exception do
-        begin
           raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-        end;
       end;
     end;
 
-    // Expression body (e.g. (x) => x * 2) implicitly returns the last expression value.
-    // Block body (e.g. (x) => { x * 2; }) without explicit return always returns undefined.
-    if FIsExpressionBody then
-      Result := ReturnValue
-    else
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   except
     on E: TGocciaReturnValue do
     begin

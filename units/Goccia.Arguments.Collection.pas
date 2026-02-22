@@ -18,11 +18,11 @@ type
     destructor Destroy; override;
 
     // Index-based element access
-    function GetElement(const AIndex: Integer): TGocciaValue;
+    function GetElement(const AIndex: Integer): TGocciaValue; virtual;
     function SetElement(const AIndex: Integer; const AValue: TGocciaValue): Boolean;
 
     // Collection operations
-    function GetLength: Integer; inline;
+    function GetLength: Integer; virtual;
     function IsEmpty: Boolean; inline;
     procedure Add(const AValue: TGocciaValue);
     function Slice(AStartIndex: Integer = 0; AEndIndex: Integer = -1): TGocciaArgumentsCollection;

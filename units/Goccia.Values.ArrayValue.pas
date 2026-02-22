@@ -109,6 +109,7 @@ uses
   Math,
   SysUtils,
 
+  Goccia.Arguments.Callbacks,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Evaluator.Comparison,
@@ -117,6 +118,7 @@ uses
   Goccia.Utils.Arrays,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -185,14 +187,14 @@ begin
 end;
 
 
-function CallCompareFunc(const ACompareFunc: TGocciaValue; const ACallArgs: TGocciaArgumentsCollection;
+function CallCompareFunc(const ACompareFunc: TGocciaFunctionBase; const ACallArgs: TGocciaArgumentsCollection;
   const A, B: TGocciaValue; const AThisValue: TGocciaValue): Double;
 var
   CompResult: TGocciaNumberLiteralValue;
 begin
   ACallArgs.SetElement(0, A);
   ACallArgs.SetElement(1, B);
-  CompResult := InvokeCallable(ACompareFunc, ACallArgs, AThisValue).ToNumberLiteral;
+  CompResult := ACompareFunc.Call(ACallArgs, AThisValue).ToNumberLiteral;
 
   if CompResult.IsNaN then
     Result := 0
@@ -204,7 +206,7 @@ begin
     Result := CompResult.Value;
 end;
 
-procedure QuickSortElements(const AElements: TGocciaValueList; const ACompareFunc: TGocciaValue;
+procedure QuickSortElements(const AElements: TGocciaValueList; const ACompareFunc: TGocciaFunctionBase;
   const ACallArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue; const ALo, AHi: Integer);
 var
   I, J: Integer;
@@ -235,11 +237,6 @@ begin
     QuickSortElements(AElements, ACompareFunc, ACallArgs, AThisValue, ALo, J);
   if I < AHi then
     QuickSortElements(AElements, ACompareFunc, ACallArgs, AThisValue, I, AHi);
-end;
-
-function CreateArrayCallbackArgs(const AElement: TGocciaValue; const AIndex: Integer; const AThisArray: TGocciaValue): TGocciaArgumentsCollection;
-begin
-  Result := TGocciaArgumentsCollection.Create([AElement, TGocciaNumberLiteralValue.SmallInt(AIndex), AThisArray]);
 end;
 
 constructor TGocciaArrayValue.Create(const AClass: TGocciaClassValue = nil);
@@ -454,25 +451,31 @@ var
   Arr: TGocciaArrayValue;
   ResultArray: TGocciaArrayValue;
   Callback: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
+  TypedCallback: TGocciaFunctionBase;
+  CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
 begin
   Callback := ValidateArrayMethodCall('map', AArgs, AThisValue, True);
   Arr := TGocciaArrayValue(AThisValue);
-  // ES2026 §23.1.3.18 step 4: ArraySpeciesCreate(O, len)
   ResultArray := ArraySpeciesCreate(Arr, Arr.Elements.Count);
 
-  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, AThisValue]);
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
+  CallArgs := TGocciaArrayCallbackArgs.Create(AThisValue);
   try
     for I := 0 to Arr.Elements.Count - 1 do
     begin
-      // Step 6c: If kPresent, CreateDataPropertyOrThrow(A, Pk, mappedValue)
       if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
-      CallArgs.SetElement(0, Arr.Elements[I]);
-      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
-      ArrayCreateDataProperty(ResultArray, I, InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue));
+      CallArgs.Element := Arr.Elements[I];
+      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      if Assigned(TypedCallback) then
+        ArrayCreateDataProperty(ResultArray, I, TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue))
+      else
+        ArrayCreateDataProperty(ResultArray, I, InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue));
     end;
   finally
     CallArgs.Free;
@@ -486,35 +489,34 @@ function TGocciaArrayValue.ArrayFilter(const AArgs: TGocciaArgumentsCollection; 
 var
   Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
+  TypedCallback: TGocciaFunctionBase;
   ResultArray: TGocciaArrayValue;
-  CallArgs: TGocciaArgumentsCollection;
+  CallArgs: TGocciaArrayCallbackArgs;
   PredicateResult: TGocciaValue;
   I: Integer;
 begin
-  // Steps 1-2: Let O be ToObject(this), let len be LengthOfArrayLike(O)
-  // Step 3: If IsCallable(callbackfn) is false, throw TypeError
   Callback := ValidateArrayMethodCall('filter', AArgs, AThisValue, True);
   Arr := TGocciaArrayValue(AThisValue);
-  // Step 4: Let A be ArraySpeciesCreate(O, 0)
   ResultArray := ArraySpeciesCreate(Arr, 0);
 
-  // Step 5: Let k be 0, let to be 0
-  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, AThisValue]);
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
+  CallArgs := TGocciaArrayCallbackArgs.Create(AThisValue);
   try
-    // Step 6: Repeat, while k < len
     for I := 0 to Arr.Elements.Count - 1 do
     begin
-      // Step 6b: Let kPresent be HasProperty(O, Pk)
       if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
-      // Step 6c-i: Let kValue be Get(O, Pk)
-      CallArgs.SetElement(0, Arr.Elements[I]);
-      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
-      // Step 6c-ii: Let selected be ToBoolean(Call(callbackfn, thisArg, « kValue, k, O »))
-      PredicateResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallArgs.Element := Arr.Elements[I];
+      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      if Assigned(TypedCallback) then
+        PredicateResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        PredicateResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
-      // Step 6c-iii: If selected is true, CreateDataPropertyOrThrow(A, ToString(to), kValue)
       if PredicateResult.ToBooleanLiteral.Value then
         ResultArray.Elements.Add(Arr.Elements[I]);
     end;
@@ -522,7 +524,6 @@ begin
     CallArgs.Free;
   end;
 
-  // Step 7: Return A
   Result := ResultArray;
 end;
 
@@ -531,16 +532,14 @@ function TGocciaArrayValue.ArrayReduce(const AArgs: TGocciaArgumentsCollection; 
 var
   Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
+  TypedCallback: TGocciaFunctionBase;
   Accumulator: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
+  CallArgs: TGocciaReduceCallbackArgs;
   I, StartIndex: Integer;
 begin
-  // Steps 1-2: Let O be ToObject(this), let len be LengthOfArrayLike(O)
-  // Step 3: If IsCallable(callbackfn) is false, throw TypeError
   Callback := ValidateArrayMethodCall('reduce', AArgs, AThisValue, True);
   Arr := TGocciaArrayValue(AThisValue);
 
-  // Steps 4-6: If initialValue is present, set accumulator; else find first element
   if AArgs.Length >= 2 then
   begin
     Accumulator := AArgs.GetElement(1);
@@ -548,33 +547,35 @@ begin
   end
   else
   begin
-    // Step 6: If kPresent is false, throw TypeError
     if Arr.Elements.Count = 0 then
       ThrowTypeError('Reduce of empty array with no initial value');
     Accumulator := Arr.Elements[0];
     StartIndex := 1;
   end;
 
-  // Step 7: Repeat, while k < len
-  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, nil, AThisValue]);
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
+  CallArgs := TGocciaReduceCallbackArgs.Create(AThisValue);
   try
     for I := StartIndex to Arr.Elements.Count - 1 do
     begin
-      // Step 7b: Let kPresent be HasProperty(O, Pk)
       if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
-      // Step 7c: Let accumulator be Call(callbackfn, undefined, « accumulator, kValue, k, O »)
-      CallArgs.SetElement(0, Accumulator);
-      CallArgs.SetElement(1, Arr.Elements[I]);
-      CallArgs.SetElement(2, TGocciaNumberLiteralValue.SmallInt(I));
-      Accumulator := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallArgs.Accumulator := Accumulator;
+      CallArgs.Element := Arr.Elements[I];
+      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      if Assigned(TypedCallback) then
+        Accumulator := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        Accumulator := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
   finally
     CallArgs.Free;
   end;
 
-  // Step 8: Return accumulator
   Result := Accumulator;
 end;
 
@@ -583,35 +584,35 @@ function TGocciaArrayValue.ArrayForEach(const AArgs: TGocciaArgumentsCollection;
 var
   Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
+  TypedCallback: TGocciaFunctionBase;
+  CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
 begin
-  // Steps 1-2: Let O be ToObject(this), let len be LengthOfArrayLike(O)
-  // Step 3: If IsCallable(callbackfn) is false, throw TypeError
   Callback := ValidateArrayMethodCall('forEach', AArgs, AThisValue, True);
   Arr := TGocciaArrayValue(AThisValue);
 
-  // Step 4: Let k be 0
-  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, AThisValue]);
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
+  CallArgs := TGocciaArrayCallbackArgs.Create(AThisValue);
   try
-    // Step 5: Repeat, while k < len
     for I := 0 to Arr.Elements.Count - 1 do
     begin
-      // Step 5b: Let kPresent be HasProperty(O, Pk)
       if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
-      // Step 5c: Let kValue be Get(O, Pk)
-      CallArgs.SetElement(0, Arr.Elements[I]);
-      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
-      // Step 5d: Call(callbackfn, thisArg, « kValue, k, O »)
-      InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallArgs.Element := Arr.Elements[I];
+      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      if Assigned(TypedCallback) then
+        TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
   finally
     CallArgs.Free;
   end;
 
-  // Step 6: Return undefined
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -696,29 +697,31 @@ function TGocciaArrayValue.ArraySome(const AArgs: TGocciaArgumentsCollection; co
 var
   Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
+  TypedCallback: TGocciaFunctionBase;
+  CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   SomeResult: TGocciaValue;
 begin
-  // Steps 1-3: Let O be ToObject(this), let len be LengthOfArrayLike(O), validate callbackfn
   Callback := ValidateArrayMethodCall('some', AArgs, AThisValue, True);
   Arr := TGocciaArrayValue(AThisValue);
 
-  // Step 4: Let k be 0
-  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, AThisValue]);
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
+  CallArgs := TGocciaArrayCallbackArgs.Create(AThisValue);
   try
-    // Step 5: Repeat, while k < len
     for I := 0 to Arr.Elements.Count - 1 do
     begin
       if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
-      // Step 5c-i: Let kValue be Get(O, Pk)
-      CallArgs.SetElement(0, Arr.Elements[I]);
-      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
-      // Step 5c-ii: Let testResult be ToBoolean(Call(callbackfn, thisArg, « kValue, k, O »))
-      SomeResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-      // Step 5c-iii: If testResult is true, return true
+      CallArgs.Element := Arr.Elements[I];
+      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      if Assigned(TypedCallback) then
+        SomeResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        SomeResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       if SomeResult.ToBooleanLiteral.Value then
       begin
         Result := TGocciaBooleanLiteralValue.TrueValue;
@@ -729,7 +732,6 @@ begin
     CallArgs.Free;
   end;
 
-  // Step 6: Return false
   Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
@@ -738,29 +740,31 @@ function TGocciaArrayValue.ArrayEvery(const AArgs: TGocciaArgumentsCollection; c
 var
   Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
+  TypedCallback: TGocciaFunctionBase;
+  CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   EveryResult: TGocciaValue;
 begin
-  // Steps 1-3: Let O be ToObject(this), let len be LengthOfArrayLike(O), validate callbackfn
   Callback := ValidateArrayMethodCall('every', AArgs, AThisValue, True);
   Arr := TGocciaArrayValue(AThisValue);
 
-  // Step 4: Let k be 0
-  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, AThisValue]);
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
+  CallArgs := TGocciaArrayCallbackArgs.Create(AThisValue);
   try
-    // Step 5: Repeat, while k < len
     for I := 0 to Arr.Elements.Count - 1 do
     begin
       if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
-      // Step 5c-i: Let kValue be Get(O, Pk)
-      CallArgs.SetElement(0, Arr.Elements[I]);
-      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
-      // Step 5c-ii: Let testResult be ToBoolean(Call(callbackfn, thisArg, « kValue, k, O »))
-      EveryResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-      // Step 5c-iii: If testResult is false, return false
+      CallArgs.Element := Arr.Elements[I];
+      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      if Assigned(TypedCallback) then
+        EveryResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        EveryResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       if not EveryResult.ToBooleanLiteral.Value then
       begin
         Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -771,7 +775,6 @@ begin
     CallArgs.Free;
   end;
 
-  // Step 6: Return true
   Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
 
@@ -840,30 +843,33 @@ var
   Arr: TGocciaArrayValue;
   ResultArray: TGocciaArrayValue;
   Callback: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
+  TypedCallback: TGocciaFunctionBase;
+  CallArgs: TGocciaArrayCallbackArgs;
   I, J: Integer;
   MappedValue: TGocciaValue;
 begin
-  // Steps 1-3: Let O be ToObject(this), let len, validate callbackfn
   Callback := ValidateArrayMethodCall('flatMap', AArgs, AThisValue, True);
   Arr := TGocciaArrayValue(AThisValue);
-  // Step 4: Let A be ArraySpeciesCreate(O, 0)
   ResultArray := ArraySpeciesCreate(Arr, 0);
 
-  // Step 5: FlattenIntoArray(A, O, sourceLen, 0, 1, mapperFunction, thisArg)
-  CallArgs := TGocciaArgumentsCollection.Create([nil, nil, AThisValue]);
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
+  CallArgs := TGocciaArrayCallbackArgs.Create(AThisValue);
   try
     for I := 0 to Arr.Elements.Count - 1 do
     begin
       if IsArrayHole(Arr.Elements[I]) then
         Continue;
 
-      // Step: Let mappedValue be Call(mapperFunction, thisArg, « kValue, k, O »)
-      CallArgs.SetElement(0, Arr.Elements[I]);
-      CallArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(I));
-      MappedValue := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      CallArgs.Element := Arr.Elements[I];
+      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      if Assigned(TypedCallback) then
+        MappedValue := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        MappedValue := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
-      // Step: If IsConcatSpreadable(mappedValue), flatten one level
       if MappedValue is TGocciaArrayValue then
       begin
         for J := 0 to TGocciaArrayValue(MappedValue).Elements.Count - 1 do
@@ -879,7 +885,6 @@ begin
     CallArgs.Free;
   end;
 
-  // Step 6: Return A
   Result := ResultArray;
 end;
 
@@ -977,30 +982,32 @@ function TGocciaArrayValue.ArrayFind(const AArgs: TGocciaArgumentsCollection; co
 var
   Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
+  TypedCallback: TGocciaFunctionBase;
+  CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   Element, CallResult: TGocciaValue;
 begin
-  // Steps 1-3: Let O be ToObject(this), let len, validate predicate
   Callback := ValidateArrayMethodCall('find', AArgs, AThisValue, True);
   Arr := TGocciaArrayValue(AThisValue);
 
-  // Step 4: Let k be 0
-  CallArgs := nil;
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
+  CallArgs := TGocciaArrayCallbackArgs.Create(AThisValue);
   try
-    // Step 5: Repeat, while k < len
     for I := 0 to Arr.Elements.Count - 1 do
     begin
-      // Step 5a: Let kValue be Get(O, Pk)
       Element := Arr.Elements[I];
       if IsArrayHole(Element) then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-      CallArgs.Free;
-      CallArgs := CreateArrayCallbackArgs(Element, I, AThisValue);
-      // Step 5b: Let testResult be ToBoolean(Call(predicate, thisArg, « kValue, k, O »))
-      CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-      // Step 5c: If testResult is true, return kValue
+      CallArgs.Element := Element;
+      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      if Assigned(TypedCallback) then
+        CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       if CallResult.ToBooleanLiteral.Value then
       begin
         Result := Element;
@@ -1011,7 +1018,6 @@ begin
     CallArgs.Free;
   end;
 
-  // Step 6: Return undefined
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -1020,30 +1026,32 @@ function TGocciaArrayValue.ArrayFindIndex(const AArgs: TGocciaArgumentsCollectio
 var
   Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
+  TypedCallback: TGocciaFunctionBase;
+  CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   Element, CallResult: TGocciaValue;
 begin
-  // Steps 1-3: Let O be ToObject(this), let len, validate predicate
   Callback := ValidateArrayMethodCall('findIndex', AArgs, AThisValue, True);
   Arr := TGocciaArrayValue(AThisValue);
 
-  // Step 4: Let k be 0
-  CallArgs := nil;
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
+  CallArgs := TGocciaArrayCallbackArgs.Create(AThisValue);
   try
-    // Step 5: Repeat, while k < len
     for I := 0 to Arr.Elements.Count - 1 do
     begin
-      // Step 5a: Let kValue be Get(O, Pk)
       Element := Arr.Elements[I];
       if IsArrayHole(Element) then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-      CallArgs.Free;
-      CallArgs := CreateArrayCallbackArgs(Element, I, AThisValue);
-      // Step 5b: Let testResult be ToBoolean(Call(predicate, thisArg, « kValue, k, O »))
-      CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-      // Step 5c: If testResult is true, return k
+      CallArgs.Element := Element;
+      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      if Assigned(TypedCallback) then
+        CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       if CallResult.ToBooleanLiteral.Value then
       begin
         Result := TGocciaNumberLiteralValue.SmallInt(I);
@@ -1054,7 +1062,6 @@ begin
     CallArgs.Free;
   end;
 
-  // Step 6: Return -1𝔽
   Result := TGocciaNumberLiteralValue.Create(-1);
 end;
 
@@ -1063,30 +1070,32 @@ function TGocciaArrayValue.ArrayFindLast(const AArgs: TGocciaArgumentsCollection
 var
   Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
+  TypedCallback: TGocciaFunctionBase;
+  CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   Element, CallResult: TGocciaValue;
 begin
-  // Steps 1-3: Let O be ToObject(this), let len, validate predicate
   Callback := ValidateArrayMethodCall('findLast', AArgs, AThisValue, True);
   Arr := TGocciaArrayValue(AThisValue);
 
-  // Step 4: Let k be len - 1
-  CallArgs := nil;
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
+  CallArgs := TGocciaArrayCallbackArgs.Create(AThisValue);
   try
-    // Step 5: Repeat, while k >= 0
     for I := Arr.Elements.Count - 1 downto 0 do
     begin
-      // Step 5a: Let kValue be Get(O, Pk)
       Element := Arr.Elements[I];
       if IsArrayHole(Element) then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-      CallArgs.Free;
-      CallArgs := CreateArrayCallbackArgs(Element, I, AThisValue);
-      // Step 5b: Let testResult be ToBoolean(Call(predicate, thisArg, « kValue, k, O »))
-      CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-      // Step 5c: If testResult is true, return kValue
+      CallArgs.Element := Element;
+      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      if Assigned(TypedCallback) then
+        CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       if CallResult.ToBooleanLiteral.Value then
       begin
         Result := Element;
@@ -1097,7 +1106,6 @@ begin
     CallArgs.Free;
   end;
 
-  // Step 6: Return undefined
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -1106,30 +1114,32 @@ function TGocciaArrayValue.ArrayFindLastIndex(const AArgs: TGocciaArgumentsColle
 var
   Arr: TGocciaArrayValue;
   Callback: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
+  TypedCallback: TGocciaFunctionBase;
+  CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   Element, CallResult: TGocciaValue;
 begin
-  // Steps 1-3: Let O be ToObject(this), let len, validate predicate
   Callback := ValidateArrayMethodCall('findLastIndex', AArgs, AThisValue, True);
   Arr := TGocciaArrayValue(AThisValue);
 
-  // Step 4: Let k be len - 1
-  CallArgs := nil;
+  TypedCallback := nil;
+  if Callback is TGocciaFunctionBase then
+    TypedCallback := TGocciaFunctionBase(Callback);
+
+  CallArgs := TGocciaArrayCallbackArgs.Create(AThisValue);
   try
-    // Step 5: Repeat, while k >= 0
     for I := Arr.Elements.Count - 1 downto 0 do
     begin
-      // Step 5a: Let kValue be Get(O, Pk)
       Element := Arr.Elements[I];
       if IsArrayHole(Element) then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-      CallArgs.Free;
-      CallArgs := CreateArrayCallbackArgs(Element, I, AThisValue);
-      // Step 5b: Let testResult be ToBoolean(Call(predicate, thisArg, « kValue, k, O »))
-      CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-      // Step 5c: If testResult is true, return k
+      CallArgs.Element := Element;
+      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      if Assigned(TypedCallback) then
+        CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       if CallResult.ToBooleanLiteral.Value then
       begin
         Result := TGocciaNumberLiteralValue.SmallInt(I);
@@ -1140,7 +1150,6 @@ begin
     CallArgs.Free;
   end;
 
-  // Step 6: Return -1𝔽
   Result := TGocciaNumberLiteralValue.Create(-1);
 end;
 
@@ -1463,7 +1472,6 @@ begin
   for I := 0 to Arr.Elements.Count - 1 do
     ResultArray.Elements.Add(Arr.Elements[I]);
 
-  // Step 6: Sort A using SortCompare with comparefn
   if AArgs.Length > 0 then
   begin
     CustomSortFunction := AArgs.GetElement(0);
@@ -1473,15 +1481,12 @@ begin
 
     CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
     try
-      QuickSortElements(ResultArray.Elements, CustomSortFunction, CallArgs, AThisValue, 0, ResultArray.Elements.Count - 1);
+      QuickSortElements(ResultArray.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, ResultArray.Elements.Count - 1);
     finally
       CallArgs.Free;
     end;
   end else
-  begin
-    // Default: sort by ToString comparison
     ResultArray.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
-  end;
 
   // Step 7: Return A
   Result := ResultArray;
@@ -1684,14 +1689,11 @@ var
   CustomSortFunction: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
-  // Step 1: If comparefn is not undefined and IsCallable(comparefn) is false, throw TypeError
   if not (AThisValue is TGocciaArrayValue) then
     ThrowError('Array.sort called on non-array');
 
-  // Step 2: Let obj be ToObject(this value)
   Arr := TGocciaArrayValue(AThisValue);
 
-  // Step 4: Sort elements using SortCompare with comparefn
   if AArgs.Length > 0 then
   begin
     CustomSortFunction := AArgs.GetElement(0);
@@ -1701,17 +1703,13 @@ begin
 
     CallArgs := TGocciaArgumentsCollection.Create([nil, nil]);
     try
-      QuickSortElements(Arr.Elements, CustomSortFunction, CallArgs, AThisValue, 0, Arr.Elements.Count - 1);
+      QuickSortElements(Arr.Elements, TGocciaFunctionBase(CustomSortFunction), CallArgs, AThisValue, 0, Arr.Elements.Count - 1);
     finally
       CallArgs.Free;
     end;
   end else
-  begin
-    // Default: sort by ToString comparison (§23.1.3.29.2 SortCompare)
     Arr.Elements.Sort(TComparer<TGocciaValue>.Construct(DefaultCompare));
-  end;
 
-  // Step 5: Return obj (mutated in-place)
   Result := Arr;
 end;
 
