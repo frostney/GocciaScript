@@ -309,8 +309,14 @@ begin
         begin
           if DirectoryExists(Paths[I]) then
             Files.AddStrings(FindAllFiles(Paths[I], ScriptExtensions))
+          else if FileExists(Paths[I]) then
+            Files.Add(Paths[I])
           else
-            Files.Add(Paths[I]);
+          begin
+            WriteLn('Error: Path not found: ', Paths[I]);
+            ExitCode := 1;
+            Exit;
+          end;
         end;
 
         if Files.Count = 1 then
