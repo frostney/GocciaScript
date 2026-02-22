@@ -115,6 +115,34 @@ DTAdd
 
 **Exceptions:** Industry-standard abbreviations are kept as-is: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
 
+### Generic Lists for Class Types
+
+Prefer `TObjectList<T>` over `TList<T>` when `T` is a class. `TObjectList` makes ownership semantics explicit via `OwnsObjects` — use `Create` (or `Create(True)`) for owning collections, `Create(False)` for non-owning references.
+
+**Named type aliases:** When a generic specialization like `TObjectList<TSomeClass>` is used across multiple compilation units, define a **single named type alias** in the unit that declares `TSomeClass`. This ensures FPC produces one VMT for the specialization, avoiding "Invalid type cast" failures when `{$OBJECTCHECKS ON}` performs cross-unit type checks.
+
+```pascal
+// In Goccia.Values.Primitives.pas (where TGocciaValue is declared)
+TGocciaValueList = TObjectList<TGocciaValue>;
+
+// In Goccia.Scope.pas (where TGocciaScope is declared)
+TGocciaScopeList = TObjectList<TGocciaScope>;
+```
+
+All consumers import the alias from the declaring unit — never re-specialize `TObjectList<TGocciaValue>` or `TObjectList<TGocciaScope>` locally:
+
+```pascal
+// Correct — uses the shared alias
+FElements: TGocciaValueList;
+FManagedScopes: TGocciaScopeList;
+
+// Wrong — local re-specialization creates a separate VMT
+FElements: TObjectList<TGocciaValue>;
+FManagedScopes: TObjectList<TGocciaScope>;
+```
+
+**Why `TObjectList(False)` instead of `TList`?** Even when the collection does not own its elements (e.g., the GC's managed scopes list, which uses manual mark-and-sweep), using `TObjectList<T>.Create(False)` with a named alias keeps the VMT consistent. `TList<T>` and `TObjectList<T>` produce incompatible VMTs, so mixing them across units reintroduces the same cross-unit type check failures.
+
 ### Function and Method Names
 
 All `function`, `procedure`, `constructor`, and `destructor` names must be **PascalCase** — the first letter of each word is uppercase, no underscores. This applies to both free functions and class methods:

@@ -986,7 +986,7 @@ function TGocciaParser.ParseObjectMethodBody(const ALine, AColumn: Integer): TGo
 var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
-  Statements: TObjectList<TGocciaStatement>;
+  Statements: TObjectList<TGocciaASTNode>;
   Stmt: TGocciaStatement;
 begin
   Consume(gttLeftParen, 'Expected "(" after method name');
@@ -1001,7 +1001,7 @@ begin
 
   Consume(gttLeftBrace, 'Expected "{" before method body');
 
-  Statements := TObjectList<TGocciaStatement>.Create(True);
+  Statements := TObjectList<TGocciaASTNode>.Create(True);
   try
     while not Check(gttRightBrace) and not IsAtEnd do
     begin
@@ -1010,7 +1010,7 @@ begin
     end;
 
     Consume(gttRightBrace, 'Expected "}" after method body');
-    Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), ALine, AColumn);
+    Body := TGocciaBlockStatement.Create(Statements, ALine, AColumn);
     Result := TGocciaMethodExpression.Create(Parameters, Body, ALine, AColumn);
   except
     Statements.Free;
@@ -1571,7 +1571,7 @@ var
   Body: TGocciaASTNode;
   Name: string;
   Line, Column: Integer;
-  Statements: TObjectList<TGocciaStatement>;
+  Statements: TObjectList<TGocciaASTNode>;
   Stmt: TGocciaStatement;
   MethodGenericParams, MethodReturnType: string;
 begin
@@ -1593,20 +1593,18 @@ begin
 
   Consume(gttLeftBrace, 'Expected "{" before method body');
 
-  // Create a block statement for the method body
-  Statements := TObjectList<TGocciaStatement>.Create(True);
+  Statements := TObjectList<TGocciaASTNode>.Create(True);
   try
     while not Check(gttRightBrace) and not IsAtEnd do
     begin
       Stmt := Statement;
       if Stmt is TGocciaExpressionStatement then
       begin
-        // For expression statements in class methods, don't require semicolons
         if not Check(gttSemicolon) then
           Statements.Add(Stmt)
         else
         begin
-          Advance; // Consume the semicolon
+          Advance;
           Statements.Add(Stmt);
         end;
       end
@@ -1615,7 +1613,7 @@ begin
     end;
 
     Consume(gttRightBrace, 'Expected "}" after method body');
-    Body := TGocciaBlockStatement.Create(TObjectList<TGocciaASTNode>(Statements), Line, Column);
+    Body := TGocciaBlockStatement.Create(Statements, Line, Column);
     Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, Line, Column);
     Result.GenericParams := MethodGenericParams;
     Result.ReturnType := MethodReturnType;

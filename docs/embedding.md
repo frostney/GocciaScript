@@ -425,7 +425,7 @@ end;
 | `TGocciaNullLiteralValue` | `null` | Singleton via `.NullValue` |
 | `TGocciaUndefinedLiteralValue` | `undefined` | Singleton via `.UndefinedValue` |
 | `TGocciaObjectValue` | `object` | `.GetProperty(Name)`, `.AssignProperty(Name, Value)` |
-| `TGocciaArrayValue` | `object` (array) | `.Elements: TList<TGocciaValue>` |
+| `TGocciaArrayValue` | `object` (array) | `.Elements: TGocciaValueList` |
 | `TGocciaFunctionValue` | `function` | `.Call(Args, ThisValue)` |
 | `TGocciaInstanceValue` | `object` (class instance) | `.ClassValue`, `.GetProperty(Name)` |
 

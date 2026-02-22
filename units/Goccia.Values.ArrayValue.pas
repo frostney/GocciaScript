@@ -5,8 +5,6 @@ unit Goccia.Values.ArrayValue;
 interface
 
 uses
-  Generics.Collections,
-
   Goccia.Arguments.Collection,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
@@ -73,7 +71,7 @@ type
     procedure ThrowError(const AMessage: string; const AArgs: array of const); overload; inline;
     procedure ThrowError(const AMessage: string); overload; inline;
   protected
-    FElements: TObjectList<TGocciaValue>;
+    FElements: TGocciaValueList;
   public
     constructor Create(const AClass: TGocciaClassValue = nil);
     destructor Destroy; override;
@@ -99,7 +97,7 @@ type
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
-    property Elements: TObjectList<TGocciaValue> read FElements;
+    property Elements: TGocciaValueList read FElements;
   end;
 
   function DefaultCompare(constref A, B: TGocciaValue): Integer;
@@ -206,7 +204,7 @@ begin
     Result := CompResult.Value;
 end;
 
-procedure QuickSortElements(const AElements: TObjectList<TGocciaValue>; const ACompareFunc: TGocciaValue;
+procedure QuickSortElements(const AElements: TGocciaValueList; const ACompareFunc: TGocciaValue;
   const ACallArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue; const ALo, AHi: Integer);
 var
   I, J: Integer;
@@ -247,7 +245,7 @@ end;
 constructor TGocciaArrayValue.Create(const AClass: TGocciaClassValue = nil);
 begin
   inherited Create(AClass);
-  FElements := TObjectList<TGocciaValue>.Create(False);
+  FElements := TGocciaValueList.Create(False);
   InitializePrototype;
   if not Assigned(AClass) and Assigned(FSharedArrayPrototype) then
     FPrototype := FSharedArrayPrototype;

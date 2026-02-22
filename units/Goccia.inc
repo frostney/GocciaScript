@@ -8,6 +8,9 @@
 {$ELSE}
   {$overflowchecks on}
   {$rangechecks on}
+  {$S+}
+  {$OBJECTCHECKS ON}
+  {$C+}
 {$ENDIF}
 {$modeswitch advancedrecords}
 {$modeswitch multihelpers}

@@ -15,10 +15,10 @@ type
   private class var
     FInstance: TGocciaGarbageCollector;
   private
-    FManagedValues: TList<TGocciaValue>;
-    FManagedScopes: TList<TGocciaScope>;
+    FManagedValues: TGocciaValueList;
+    FManagedScopes: TGocciaScopeList;
     FRootScopes: TDictionary<TGocciaScope, Boolean>;
-    FActiveScopeStack: TList<TGocciaScope>;
+    FActiveScopeStack: TGocciaScopeList;
     FPinnedValues: TDictionary<TGocciaValue, Boolean>;
     FTempRoots: TDictionary<TGocciaValue, Boolean>;
 
@@ -91,10 +91,10 @@ end;
 
 constructor TGocciaGarbageCollector.Create;
 begin
-  FManagedValues := TList<TGocciaValue>.Create;
-  FManagedScopes := TList<TGocciaScope>.Create;
+  FManagedValues := TGocciaValueList.Create(False);
+  FManagedScopes := TGocciaScopeList.Create(False);
   FRootScopes := TDictionary<TGocciaScope, Boolean>.Create;
-  FActiveScopeStack := TList<TGocciaScope>.Create;
+  FActiveScopeStack := TGocciaScopeList.Create(False);
   FPinnedValues := TDictionary<TGocciaValue, Boolean>.Create;
   FTempRoots := TDictionary<TGocciaValue, Boolean>.Create;
   FAllocationsSinceLastGC := 0;

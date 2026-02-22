@@ -205,7 +205,7 @@ begin
   Result := nil;
 end;
 
-procedure SpreadIterableInto(const ASpreadValue: TGocciaValue; const ATarget: TList<TGocciaValue>);
+procedure SpreadIterableInto(const ASpreadValue: TGocciaValue; const ATarget: TGocciaValueList);
 var
   SpreadArray: TGocciaArrayValue;
   Iterator: TGocciaIteratorValue;
@@ -314,7 +314,7 @@ var
   PropertyValue: TGocciaValue;
   I: Integer;
   Callee: TGocciaValue;
-  Arguments: TObjectList<TGocciaValue>;
+  Arguments: TGocciaValueList;
   OldValue: TGocciaValue; // For increment/decrement operations
 begin
   if AExpression is TGocciaLiteralExpression then

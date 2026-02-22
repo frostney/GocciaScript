@@ -276,6 +276,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
   - `Goccia.Constants.ErrorNames` — `ERROR_NAME`, `TYPE_ERROR_NAME`, `RANGE_ERROR_NAME`, etc.
   - `Goccia.Constants.ConstructorNames` — `CONSTRUCTOR_OBJECT`, `CONSTRUCTOR_ARRAY`, `CONSTRUCTOR_STRING`, `CONSTRUCTOR_MAP`, etc.
   - `Goccia.Constants` — `BOOLEAN_TRUE_LITERAL`, `NULL_LITERAL`, `NAN_LITERAL`, `ZERO_VALUE`, `EMPTY_STRING`, etc.
+- **Generic lists for class types:** Prefer `TObjectList<T>` over `TList<T>` when `T` is a class. When a specialization is used across multiple units, define a **named type alias** in the unit that declares `T` (e.g., `TGocciaValueList = TObjectList<TGocciaValue>` in `Goccia.Values.Primitives.pas`, `TGocciaScopeList = TObjectList<TGocciaScope>` in `Goccia.Scope.pas`). All consumers must use the alias — never re-specialize locally. Use `Create(False)` for non-owning collections. This prevents FPC's per-unit generic VMT specialization from causing "Invalid type cast" failures with `{$OBJECTCHECKS ON}`.
 - **Class naming:** `TGoccia<Name>` prefix
 - **Interface naming:** `I<Name>` prefix
 - **Private fields:** `F` prefix

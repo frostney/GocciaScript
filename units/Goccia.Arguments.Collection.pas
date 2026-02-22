@@ -5,15 +5,13 @@ unit Goccia.Arguments.Collection;
 interface
 
 uses
-  Generics.Collections,
-
   Goccia.Values.Primitives;
 
 type
   // Array-like collection for function arguments
   TGocciaArgumentsCollection = class(TInterfacedObject)
   private
-    FArgs: TObjectList<TGocciaValue>;
+    FArgs: TGocciaValueList;
   public
     constructor Create; overload;
     constructor Create(const AValues: array of TGocciaValue); overload;
@@ -41,14 +39,14 @@ uses
 
 constructor TGocciaArgumentsCollection.Create;
 begin
-  FArgs := TObjectList<TGocciaValue>.Create(False);
+  FArgs := TGocciaValueList.Create(False);
 end;
 
 constructor TGocciaArgumentsCollection.Create(const AValues: array of TGocciaValue);
 var
   I: Integer;
 begin
-  FArgs := TObjectList<TGocciaValue>.Create(False);
+  FArgs := TGocciaValueList.Create(False);
   for I := 0 to High(AValues) do
     FArgs.Add(AValues[I]);
 end;
