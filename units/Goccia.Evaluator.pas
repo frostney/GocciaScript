@@ -205,7 +205,7 @@ begin
   Result := nil;
 end;
 
-procedure SpreadIterableInto(const ASpreadValue: TGocciaValue; const ATarget: TList<TGocciaValue>);
+procedure SpreadIterableInto(const ASpreadValue: TGocciaValue; const ATarget: TGocciaValueList);
 var
   SpreadArray: TGocciaArrayValue;
   Iterator: TGocciaIteratorValue;
@@ -246,43 +246,8 @@ begin
 end;
 
 procedure SpreadIterableIntoArgs(const ASpreadValue: TGocciaValue; const AArgs: TGocciaArgumentsCollection);
-var
-  SpreadArray: TGocciaArrayValue;
-  Iterator: TGocciaIteratorValue;
-  IterResult: TGocciaObjectValue;
-  J: Integer;
 begin
-  if ASpreadValue is TGocciaArrayValue then
-  begin
-    SpreadArray := TGocciaArrayValue(ASpreadValue);
-    for J := 0 to SpreadArray.Elements.Count - 1 do
-    begin
-      if SpreadArray.Elements[J] = nil then
-        AArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
-      else
-        AArgs.Add(SpreadArray.Elements[J]);
-    end;
-  end
-  else
-  begin
-    Iterator := GetIteratorFromValue(ASpreadValue);
-    if Assigned(Iterator) then
-    begin
-      TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
-      try
-        IterResult := Iterator.AdvanceNext;
-        while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-        begin
-          AArgs.Add(IterResult.GetProperty(PROP_VALUE));
-          IterResult := Iterator.AdvanceNext;
-        end;
-      finally
-        TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
-      end;
-    end
-    else
-      ThrowTypeError('Spread syntax requires an iterable');
-  end;
+  SpreadIterableInto(ASpreadValue, AArgs.Items);
 end;
 
 function Evaluate(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -307,15 +272,11 @@ end;
 
 function EvaluateExpression(const AExpression: TGocciaExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
-  LeftExpr: TGocciaExpression;
   Value: TGocciaValue;
   Obj: TGocciaValue;
   PropName: string;
   PropertyValue: TGocciaValue;
-  I: Integer;
-  Callee: TGocciaValue;
-  Arguments: TObjectList<TGocciaValue>;
-  OldValue: TGocciaValue; // For increment/decrement operations
+  OldValue: TGocciaValue;
 begin
   if AExpression is TGocciaLiteralExpression then
   begin

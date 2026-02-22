@@ -4,6 +4,9 @@ unit Goccia.Values.Primitives;
 
 interface
 
+uses
+  Generics.Collections;
+
 type
   TGocciaBooleanLiteralValue = class;
   TGocciaNumberLiteralValue = class;
@@ -33,6 +36,8 @@ type
 
     property GCMarked: Boolean read FGCMarked write FGCMarked;
   end;
+
+  TGocciaValueList = TObjectList<TGocciaValue>;
 
   TGocciaNullLiteralValue = class(TGocciaValue)
   public

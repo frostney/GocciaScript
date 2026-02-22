@@ -5,8 +5,6 @@ unit Goccia.Values.FunctionBase;
 interface
 
 uses
-  Generics.Collections,
-
   Goccia.Arguments.Collection,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -56,12 +54,12 @@ type
   private
     FOriginalFunction: TGocciaValue; // The function being bound
     FBoundThis: TGocciaValue; // The bound 'this' value
-    FBoundArgs: TObjectList<TGocciaValue>; // Pre-filled arguments
+    FBoundArgs: TGocciaValueList; // Pre-filled arguments
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
   public
-    constructor Create(const AOriginalFunction: TGocciaValue; const ABoundThis: TGocciaValue; const ABoundArgs: TObjectList<TGocciaValue>);
+    constructor Create(const AOriginalFunction: TGocciaValue; const ABoundThis: TGocciaValue; const ABoundArgs: TGocciaValueList);
     destructor Destroy; override;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
@@ -158,9 +156,7 @@ end;
 
 function TGocciaFunctionSharedPrototype.FunctionCall(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  CallArgs: TObjectList<TGocciaValue>;
   NewThisValue: TGocciaValue;
-  I: Integer;
   SlicedArgs: TGocciaArgumentsCollection;
 begin
   // Function.prototype.call(thisArg, ...args)
@@ -241,7 +237,7 @@ end;
 function TGocciaFunctionSharedPrototype.FunctionBind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   BoundThis: TGocciaValue;
-  BoundArgs: TObjectList<TGocciaValue>;
+  BoundArgs: TGocciaValueList;
   I: Integer;
 begin
   // Function.prototype.bind(thisArg, ...args)
@@ -257,24 +253,27 @@ begin
     BoundThis := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   // Remaining arguments are pre-filled arguments
-  BoundArgs := TObjectList<TGocciaValue>.Create(False);
-  for I := 1 to AArgs.Length - 1 do
-    BoundArgs.Add(AArgs.GetElement(I));
+  BoundArgs := TGocciaValueList.Create(False);
+  try
+    for I := 1 to AArgs.Length - 1 do
+      BoundArgs.Add(AArgs.GetElement(I));
 
-  // Create and return a bound function
-  Result := TGocciaBoundFunctionValue.Create(AThisValue, BoundThis, BoundArgs);
+    Result := TGocciaBoundFunctionValue.Create(AThisValue, BoundThis, BoundArgs);
+  finally
+    BoundArgs.Free;
+  end;
 end;
 
 { TGocciaBoundFunctionValue }
 
-constructor TGocciaBoundFunctionValue.Create(const AOriginalFunction: TGocciaValue; const ABoundThis: TGocciaValue; const ABoundArgs: TObjectList<TGocciaValue>);
+constructor TGocciaBoundFunctionValue.Create(const AOriginalFunction: TGocciaValue; const ABoundThis: TGocciaValue; const ABoundArgs: TGocciaValueList);
 var
   I: Integer;
 begin
   inherited Create;
   FOriginalFunction := AOriginalFunction;
   FBoundThis := ABoundThis;
-  FBoundArgs := TObjectList<TGocciaValue>.Create(False);
+  FBoundArgs := TGocciaValueList.Create(False);
 
   // Copy the bound arguments
   for I := 0 to ABoundArgs.Count - 1 do

@@ -136,6 +136,8 @@ type
     procedure AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); override;
   end;
 
+  TGocciaScopeList = TObjectList<TGocciaScope>;
+
 
 
 
