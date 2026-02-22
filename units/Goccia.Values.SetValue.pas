@@ -5,8 +5,6 @@ unit Goccia.Values.SetValue;
 interface
 
 uses
-  Generics.Collections,
-
   Goccia.Arguments.Collection,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayValue,
@@ -19,7 +17,7 @@ type
   private
     class var FShared: TGocciaSharedPrototype;
   private
-    FItems: TList<TGocciaValue>;
+    FItems: TGocciaValueList;
 
     function SetHas(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -55,7 +53,7 @@ type
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
-    property Items: TList<TGocciaValue> read FItems;
+    property Items: TGocciaValueList read FItems;
   end;
 
 implementation
@@ -75,7 +73,7 @@ uses
 constructor TGocciaSetValue.Create(const AClass: TGocciaClassValue = nil);
 begin
   inherited Create(AClass);
-  FItems := TList<TGocciaValue>.Create;
+  FItems := TGocciaValueList.Create(False);
   InitializePrototype;
   if not Assigned(AClass) and Assigned(FShared) then
     FPrototype := FShared.Prototype;

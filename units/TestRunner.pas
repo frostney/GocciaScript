@@ -87,7 +87,7 @@ type
   // Test runner
   TTestRunner = class
   private
-    FSuites: TList<TTestSuite>;
+    FSuites: TObjectList<TTestSuite>;
     FResults: TList<TTestResult>;
     FStartTime: TDateTime;
 
@@ -248,16 +248,12 @@ end;
 constructor TTestRunner.Create;
 begin
   inherited Create;
-  FSuites := TList<TTestSuite>.Create;
+  FSuites := TObjectList<TTestSuite>.Create;
   FResults := TList<TTestResult>.Create;
 end;
 
 destructor TTestRunner.Destroy;
-var
-  Suite: TTestSuite;
 begin
-  for Suite in FSuites do
-    Suite.Free;
   FSuites.Free;
   FResults.Free;
   inherited Destroy;
