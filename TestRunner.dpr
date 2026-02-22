@@ -41,7 +41,7 @@ begin
   TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
 
   ScriptResult := TGocciaObjectValue.Create;
-  ScriptResult.AssignProperty('totalTests', TGocciaNumberLiteralValue.ZeroValue);
+  ScriptResult.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(1));
   ScriptResult.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.ZeroValue);
   ScriptResult.AssignProperty('passed', TGocciaNumberLiteralValue.ZeroValue);
   ScriptResult.AssignProperty('failed', TGocciaNumberLiteralValue.ZeroValue);
@@ -93,8 +93,6 @@ begin
       
       if FileResult <> nil then
       begin
-        if FileResult.GetProperty('totalTests').ToStringLiteral.Value <> 'undefined' then
-          ScriptResult.AssignProperty('totalTests', FileResult.GetProperty('totalTests'));
         if FileResult.GetProperty('totalRunTests').ToStringLiteral.Value <> 'undefined' then
           ScriptResult.AssignProperty('totalRunTests', FileResult.GetProperty('totalRunTests'));
         if FileResult.GetProperty('passed').ToStringLiteral.Value <> 'undefined' then
@@ -142,6 +140,7 @@ function RunScriptFromFile(const AFileName: string): TAggregatedTestResult;
 var
   FileResult: TTestFileResult;
 begin
+  Result.TestResult := nil;
   Result.TotalLexNanoseconds := 0;
   Result.TotalParseNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
@@ -193,6 +192,9 @@ begin
     if GShowProgress then
       WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
     FileResult := RunScriptFromFile(AFiles[I]);
+    if FileResult.TestResult = nil then
+      Continue;
+
     AllTestResults.AssignProperty(AFiles[I], FileResult.TestResult);
 
     Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + FileResult.TotalLexNanoseconds;
@@ -210,6 +212,7 @@ begin
       Break;
   end;
   
+  AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(SkippedCount));
@@ -234,6 +237,8 @@ var
 begin
   ExitCode := 0;
   TestResult := AResult.TestResult;
+  if TestResult = nil then
+    Exit;
 
   TotalRunTests := TestResult.GetProperty('totalRunTests').ToStringLiteral.Value;
   TotalPassed := TestResult.GetProperty('passed').ToStringLiteral.Value;
@@ -245,7 +250,7 @@ begin
 
   if GShowResults then
   begin
-    Writeln('Test Results Total Tests: ', TestResult.GetProperty('totalTests').ToStringLiteral.Value);
+    Writeln('Test Results Test Files: ', TestResult.GetProperty('totalTests').ToStringLiteral.Value);
     Writeln(Format('Test Results Run Tests: %s', [TotalRunTests]));
 
     if RunCount > 0 then
