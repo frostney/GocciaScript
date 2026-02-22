@@ -266,53 +266,66 @@ end;
 
 var
   Files: TStringList;
-  TestPath: string;
+  Paths: TStringList;
   I: Integer;
 
 begin
-  TestPath := '';
   GShowProgress := True;
   GShowResults := True;
   GExitOnFirstFailure := False;
   GSilentConsole := False;
 
-  for I := 1 to ParamCount do
-  begin
-    if ParamStr(I) = '--no-progress' then
-      GShowProgress := False
-    else if ParamStr(I) = '--no-results' then
-      GShowResults := False
-    else if ParamStr(I) = '--exit-on-first-failure' then
-      GExitOnFirstFailure := True
-    else if ParamStr(I) = '--silent' then
-      GSilentConsole := True
-    else if Copy(ParamStr(I), 1, 2) <> '--' then
-      TestPath := ParamStr(I);
-  end;
-
-  if TestPath = '' then
-  begin
-    WriteLn('Usage: TestRunner <path> [options]');
-    WriteLn('  <path>                  Script file (.js, .jsx, .ts, .tsx, .mjs) or directory');
-    WriteLn('  --no-progress           Suppress per-file progress output');
-    WriteLn('  --no-results            Suppress test results summary');
-    WriteLn('  --exit-on-first-failure Stop on first test failure');
-    WriteLn('  --silent                Suppress console output from test scripts');
-    ExitCode := 1;
-  end
-  else if DirectoryExists(TestPath) then
-  begin
-    Files := FindAllFiles(TestPath, ScriptExtensions);
-    try
-      PrintTestResults(RunScriptsFromFiles(Files));
-    finally
-      Files.Free;
+  Paths := TStringList.Create;
+  try
+    for I := 1 to ParamCount do
+    begin
+      if ParamStr(I) = '--no-progress' then
+        GShowProgress := False
+      else if ParamStr(I) = '--no-results' then
+        GShowResults := False
+      else if ParamStr(I) = '--exit-on-first-failure' then
+        GExitOnFirstFailure := True
+      else if ParamStr(I) = '--silent' then
+        GSilentConsole := True
+      else if Copy(ParamStr(I), 1, 2) <> '--' then
+        Paths.Add(ParamStr(I));
     end;
-  end
-  else
-  begin
-    if GShowProgress then
-      WriteLn('[1/1] ', TestPath);
-    PrintTestResults(RunScriptFromFile(TestPath));
+
+    if Paths.Count = 0 then
+    begin
+      WriteLn('Usage: TestRunner <path...> [options]');
+      WriteLn('  <path...>               Script files (.js, .jsx, .ts, .tsx, .mjs) or directories');
+      WriteLn('  --no-progress           Suppress per-file progress output');
+      WriteLn('  --no-results            Suppress test results summary');
+      WriteLn('  --exit-on-first-failure Stop on first test failure');
+      WriteLn('  --silent                Suppress console output from test scripts');
+      ExitCode := 1;
+    end
+    else
+    begin
+      Files := TStringList.Create;
+      try
+        for I := 0 to Paths.Count - 1 do
+        begin
+          if DirectoryExists(Paths[I]) then
+            Files.AddStrings(FindAllFiles(Paths[I], ScriptExtensions))
+          else
+            Files.Add(Paths[I]);
+        end;
+
+        if Files.Count = 1 then
+        begin
+          if GShowProgress then
+            WriteLn('[1/1] ', Files[0]);
+          PrintTestResults(RunScriptFromFile(Files[0]));
+        end
+        else
+          PrintTestResults(RunScriptsFromFiles(Files));
+      finally
+        Files.Free;
+      end;
+    end;
+  finally
+    Paths.Free;
   end;
 end.
