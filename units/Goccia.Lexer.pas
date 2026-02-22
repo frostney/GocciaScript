@@ -490,6 +490,7 @@ begin
   FKeywords.Add(KEYWORD_FALSE, gttFalse);
   FKeywords.Add(KEYWORD_FINALLY, gttFinally);
   FKeywords.Add(KEYWORD_FOR, gttFor);
+  FKeywords.Add(KEYWORD_FUNCTION, gttFunction);
   FKeywords.Add(KEYWORD_IF, gttIf);
   FKeywords.Add(KEYWORD_IMPORT, gttImport);
   FKeywords.Add(KEYWORD_IN, gttIn);
@@ -603,8 +604,7 @@ begin
         if Match('=') then
           AddToken(gttNotEqual)
         else
-          raise TGocciaLexerError.Create('Use !== for inequality',
-            FLine, FStartColumn, FFileName, FSourceLines);
+          AddToken(gttLooseNotEqual);
       end
       else
         AddToken(gttNot);
@@ -614,8 +614,7 @@ begin
         if Match('=') then
           AddToken(gttEqual)
         else
-          raise TGocciaLexerError.Create('Use === for equality',
-            FLine, FStartColumn, FFileName, FSourceLines);
+          AddToken(gttLooseEqual);
       end
       else if Match('>') then
         AddToken(gttArrow)

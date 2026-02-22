@@ -15,10 +15,10 @@ type
     gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
     gttReturn, gttIf, gttElse, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
     gttThrow, gttTry, gttCatch, gttFinally,
-    gttImport, gttExport, gttFrom, gttAs, gttGet, gttSet, gttVar, gttWith,
+    gttImport, gttExport, gttFrom, gttAs, gttGet, gttSet, gttVar, gttWith, gttFunction,
     // Operators
     gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
-    gttEqual, gttNotEqual, gttLess, gttGreater, gttLessEqual, gttGreaterEqual,
+    gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual, gttLess, gttGreater, gttLessEqual, gttGreaterEqual,
     gttAnd, gttOr, gttNullishCoalescing, gttNot, gttTypeof, gttInstanceof, gttIn, gttDelete, gttAssign, gttPlusAssign, gttMinusAssign,
     gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign,
     gttIncrement, gttDecrement,

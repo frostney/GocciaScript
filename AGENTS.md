@@ -227,7 +227,7 @@ GocciaScript intentionally excludes these JavaScript features — do **not** add
 - Default imports/exports — use named imports/exports
 - Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` — use `Number.*` instead (intentional divergence; keeps these functions on the object they belong to)
 
-The parser accepts unsupported syntax (loops, `with`, default imports/exports, namespace imports, side-effect imports) but treats it as a no-op — the code parses successfully, the unsupported construct is skipped at runtime, and a warning is emitted to stdout with a suggestion. This design preserves the AST for a potential future compatibility mode.
+The parser accepts unsupported syntax (loops, `with`, `function`, `==`, `!=`, default imports/exports, namespace imports, side-effect imports, wildcard re-exports, labeled statements) but treats it as a no-op — the code parses successfully, the unsupported construct is skipped at runtime, and a warning is emitted to stdout with a suggestion. `function` declarations produce `TGocciaEmptyStatement`; `function` expressions evaluate to `undefined`. `==`/`!=` expressions evaluate to `undefined` (both operands are parsed and discarded). Labeled statements strip the label and execute the labeled statement normally. This design preserves the AST for a potential future compatibility mode.
 
 See [docs/language-restrictions.md](docs/language-restrictions.md) for the full list and rationale.
 

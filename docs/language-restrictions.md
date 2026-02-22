@@ -114,6 +114,10 @@ import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx,
 Warning: Default imports are not supported in GocciaScript
   Suggestion: Use named imports instead: import { name } from 'module'
   --> script.js:1:1
+
+Warning: Wildcard re-exports (export * from ...) are not supported in GocciaScript
+  Suggestion: Use named re-exports instead: export { name } from 'module'
+  --> script.js:2:1
 ```
 
 ### Data Structures
@@ -151,7 +155,15 @@ With `let`/`const`, accessing before declaration is a `ReferenceError` (Temporal
 
 ### `function` Keyword
 
-**Excluded.** Use arrow functions or shorthand methods instead.
+**Excluded.** Use arrow functions or shorthand methods instead. The parser accepts `function` declarations and expressions but treats them as no-ops (the function body is not executed and the binding is not created), and emits a warning:
+
+```
+Warning: 'function' declarations are not supported in GocciaScript
+  Suggestion: Use arrow functions instead: const name = (...) => { ... }
+  --> script.js:1:1
+```
+
+Function expressions in assignment position evaluate to `undefined`. Generator function declarations (`function*`) are also skipped.
 
 The `function` keyword creates several problems:
 - **`this` binding confusion** — Regular functions have their own `this` that changes based on how they're called.
@@ -167,7 +179,15 @@ This separation is clean and matches ECMAScript strict mode semantics exactly.
 
 ### Loose Equality (`==` and `!=`)
 
-**Excluded.** Use `===` and `!==` instead.
+**Excluded.** Use `===` and `!==` instead. The parser accepts `==` and `!=` but treats them as no-ops (the expression evaluates to `undefined`), and emits a warning:
+
+```
+Warning: '==' (loose equality) is not supported in GocciaScript
+  Suggestion: Use '===' (strict equality) instead
+  --> script.js:1:10
+```
+
+Both operands are parsed but discarded. Because `undefined` is falsy, `==`/`!=` in conditions (e.g., `if (a == b)`) will never enter the truthy branch.
 
 Loose equality's type coercion rules are notoriously confusing:
 
@@ -242,6 +262,19 @@ Warning: The 'with' statement is not supported in GocciaScript
 Like loops, the parser uses `SkipBalancedParens` to safely skip the `with (...)` expression, including nested parentheses.
 
 `with` creates ambiguous scope and is deprecated even in JavaScript's strict mode. Note that `with` is a reserved keyword in GocciaScript (it cannot be used as a variable name), but it can be used as a property name (e.g., `obj.with`).
+
+### Labeled Statements
+
+**Excluded.** No alternative needed. The parser accepts labeled statements but strips the label and emits a warning:
+
+```
+Warning: Labeled statements are not supported in GocciaScript
+  --> script.js:1:1
+```
+
+The labeled statement itself (the statement after the `:`) is still parsed and executed normally. For example, `myLabel: x = 2;` strips the label and executes `x = 2;`. If the labeled statement is itself unsupported (e.g., `outer: for (...)`), both a label warning and a loop warning are emitted.
+
+Labels exist primarily for `break`/`continue` targets in nested loops. Since GocciaScript excludes traditional loops, labels serve no purpose.
 
 ### Generators and Iterators
 

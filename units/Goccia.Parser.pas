@@ -112,6 +112,7 @@ type
     function WhileStatement: TGocciaStatement;
     function DoWhileStatement: TGocciaStatement;
     function WithStatement: TGocciaStatement;
+    function FunctionStatement: TGocciaStatement;
     function ReturnStatement: TGocciaStatement;
     function ThrowStatement: TGocciaStatement;
     function TryStatement: TGocciaStatement;
@@ -138,6 +139,7 @@ uses
 
   Goccia.Error,
   Goccia.Keywords.Contextual,
+  Goccia.Keywords.Reserved,
   Goccia.Values.Primitives;
 
 constructor TGocciaParser.Create(const ATokens: TObjectList<TGocciaToken>;
@@ -279,8 +281,29 @@ begin
 end;
 
 function TGocciaParser.Equality: TGocciaExpression;
+var
+  Op: TGocciaToken;
 begin
-  Result := ParseBinaryExpression(Comparison, [gttEqual, gttNotEqual]);
+  Result := Comparison;
+  while Match([gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual]) do
+  begin
+    Op := Previous;
+    if Op.TokenType in [gttLooseEqual, gttLooseNotEqual] then
+    begin
+      if Op.TokenType = gttLooseEqual then
+        AddWarning('''=='' (loose equality) is not supported in GocciaScript',
+          'Use ''==='' (strict equality) instead', Op.Line, Op.Column)
+      else
+        AddWarning('''!='' (loose inequality) is not supported in GocciaScript',
+          'Use ''!=='' (strict inequality) instead', Op.Line, Op.Column);
+      Comparison;
+      Result := TGocciaLiteralExpression.Create(
+        TGocciaUndefinedLiteralValue.UndefinedValue, Op.Line, Op.Column);
+    end
+    else
+      Result := TGocciaBinaryExpression.Create(
+        Result, Op.TokenType, Comparison, Op.Line, Op.Column);
+  end;
 end;
 
 function TGocciaParser.Comparison: TGocciaExpression;
@@ -606,6 +629,19 @@ begin
       Consume(gttRightParen, 'Expected ")" after expression');
       Result := Expr;
     end;
+  end
+  else if Match([gttFunction]) then
+  begin
+    Token := Previous;
+    AddWarning('''function'' expressions are not supported in GocciaScript',
+      'Use arrow functions instead: const name = (...) => { ... }',
+      Token.Line, Token.Column);
+    if Check(gttStar) then Advance;
+    if Check(gttIdentifier) then Advance;
+    SkipBalancedParens;
+    SkipBlock;
+    Result := TGocciaLiteralExpression.Create(
+      TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
   end
   else if Match([gttLeftBracket]) then
     Result := ArrayLiteral
@@ -1214,6 +1250,8 @@ begin
     Result := DoWhileStatement
   else if Match([gttWith]) then
     Result := WithStatement
+  else if Match([gttFunction]) then
+    Result := FunctionStatement
   else if Match([gttSwitch]) then
     Result := SwitchStatement
   else if Match([gttBreak]) then
@@ -1226,6 +1264,16 @@ begin
     Result := TryStatement
   else if Match([gttLeftBrace]) then
     Result := BlockStatement
+  else if Check(gttIdentifier) and CheckNext(gttColon) then
+  begin
+    Line := Peek.Line;
+    Column := Peek.Column;
+    AddWarning('Labeled statements are not supported in GocciaScript', '',
+      Line, Column);
+    Advance;
+    Advance;
+    Result := Statement;
+  end
   else
     Result := ExpressionStatement;
 end;
@@ -1477,6 +1525,25 @@ begin
   SkipBalancedParens;
 
   SkipStatementOrBlock;
+
+  Result := TGocciaEmptyStatement.Create(Line, Column);
+end;
+
+function TGocciaParser.FunctionStatement: TGocciaStatement;
+var
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  AddWarning('''function'' declarations are not supported in GocciaScript',
+    'Use arrow functions instead: const name = (...) => { ... }',
+    Line, Column);
+
+  if Check(gttStar) then Advance;
+  if Check(gttIdentifier) then Advance;
+  SkipBalancedParens;
+  SkipBlock;
 
   Result := TGocciaEmptyStatement.Create(Line, Column);
 end;
@@ -1742,6 +1809,14 @@ begin
       if Check(gttIdentifier) then Advance;
       SkipBlock;
     end
+    else if Check(gttFunction) then
+    begin
+      Advance;
+      if Check(gttStar) then Advance;
+      if Check(gttIdentifier) then Advance;
+      SkipBalancedParens;
+      SkipBlock;
+    end
     else
       SkipUntilSemicolon;
     Result := TGocciaEmptyStatement.Create(Line, Column);
@@ -1756,6 +1831,16 @@ begin
         Line, Column, FFileName, FSourceLines);
     VarDecl := TGocciaVariableDeclaration(InnerDecl);
     Result := TGocciaExportVariableDeclaration.Create(VarDecl, Line, Column);
+    Exit;
+  end;
+
+  if Check(gttStar) then
+  begin
+    AddWarning('Wildcard re-exports (export * from ...) are not supported in GocciaScript',
+      'Use named re-exports instead: export { name } from ''module''',
+      Line, Column);
+    SkipUntilSemicolon;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
     Exit;
   end;
 
