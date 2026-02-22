@@ -331,7 +331,7 @@ end;
 
 function TGocciaObjectValue.GetOwnPropertyNames: TArray<string>;
 begin
-  Result := FProperties.Keys;
+  Result := GetOwnPropertyKeys;
 end;
 
 function TGocciaObjectValue.GetOwnPropertyKeys: TArray<string>;

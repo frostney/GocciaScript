@@ -392,6 +392,8 @@ function TOrderedMap<TValue>.EntryAt(const AIndex: Integer): TKeyValuePair;
 var
   I, J: Integer;
 begin
+  if FCount = 0 then
+    raise ERangeError.CreateFmt('EntryAt index %d out of range: map is empty', [AIndex]);
   if (AIndex < 0) or (AIndex >= FCount) then
     raise ERangeError.CreateFmt('EntryAt index %d out of range [0..%d]', [AIndex, FCount - 1]);
 
