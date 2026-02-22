@@ -60,7 +60,7 @@ jobs:
         run: chmod +x build/*
 
       - name: Run all JavaScript tests
-        run: ./build/TestRunner tests
+        run: ./build/TestRunner tests --silent --no-progress
 
   benchmark:
     needs: build

@@ -89,6 +89,7 @@ type
     FBuiltinTestAssertions: TGocciaTestAssertions;
     FBuiltinBenchmark: TGocciaBenchmark;
     FBuiltinTemporal: TGocciaTemporalBuiltin;
+    FSuppressWarnings: Boolean;
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
@@ -132,6 +133,7 @@ type
     property BuiltinTestAssertions: TGocciaTestAssertions read FBuiltinTestAssertions;
     property BuiltinBenchmark: TGocciaBenchmark read FBuiltinBenchmark;
     property BuiltinTemporal: TGocciaTemporalBuiltin read FBuiltinTemporal;
+    property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
   end;
 
 
@@ -579,6 +581,8 @@ var
   Warning: TGocciaParserWarning;
   I, OrigLine, OrigCol: Integer;
 begin
+  if FSuppressWarnings then
+    Exit;
   for I := 0 to AParser.WarningCount - 1 do
   begin
     Warning := AParser.GetWarning(I);

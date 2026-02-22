@@ -8,6 +8,7 @@ uses
 
   TimingUtils,
 
+  Goccia.Builtins.TestConsole,
   Goccia.Engine,
   Goccia.FileExtensions,
   Goccia.Values.ArrayValue,
@@ -15,6 +16,12 @@ uses
   Goccia.Values.Primitives,
 
   FileUtils in 'units/FileUtils.pas';
+
+var
+  GShowProgress: Boolean = True;
+  GShowResults: Boolean = True;
+  GExitOnFirstFailure: Boolean = False;
+  GSilentConsole: Boolean = False;
 
 type
   TTestFileResult = record
@@ -26,6 +33,8 @@ function RunGocciaScript(const AFileName: string): TTestFileResult;
 var
   Source: TStringList;
   ScriptResult, FileResult: TGocciaObjectValue;
+  Engine: TGocciaEngine;
+  SilentConsole: TGocciaTestConsole;
   EngineResult: TGocciaScriptResult;
   TestGlobals: TGocciaGlobalBuiltins;
 begin
@@ -60,10 +69,25 @@ begin
       end;
     end;
 
-    Source.Add('runTests({ exitOnFirstFailure: false, showTestResults: false, silent: true });');
+    Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
+      [BoolToStr(GExitOnFirstFailure, 'true', 'false')]));
 
     try
-      EngineResult := TGocciaEngine.RunScriptFromStringList(Source, AFileName, TestGlobals);
+      SilentConsole := nil;
+      Engine := TGocciaEngine.Create(AFileName, Source, TestGlobals);
+      try
+        if GSilentConsole then
+        begin
+          SilentConsole := TGocciaTestConsole.Create;
+          SilentConsole.Silence(Engine.BuiltinConsole.BuiltinObject);
+          Engine.SuppressWarnings := True;
+        end;
+
+        EngineResult := Engine.Execute;
+      finally
+        SilentConsole.Free;
+        Engine.Free;
+      end;
       Result.Timing := EngineResult;
       FileResult := EngineResult.Result as TGocciaObjectValue;
       
@@ -125,7 +149,6 @@ begin
   Result.TotalParseNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
   try
-    WriteLn('Running script: ', AFileName);
     FileResult := RunGocciaScript(AFileName);
     Result.TestResult := FileResult.TestResult;
     Result.TotalLexNanoseconds := FileResult.Timing.LexTimeNanoseconds;
@@ -170,6 +193,8 @@ begin
 
   for I := 0 to AFiles.Count - 1 do
   begin
+    if GShowProgress then
+      WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
     FileResult := RunScriptFromFile(AFiles[I]);
     AllTestResults.AssignProperty(AFiles[I], FileResult.TestResult);
 
@@ -218,21 +243,24 @@ begin
   DurationNanoseconds := Round(TestResult.GetProperty('duration').ToNumberLiteral.Value);
   RunCount := StrToFloat(TotalRunTests);
 
-  Writeln('Test Results Total Tests: ', TestResult.GetProperty('totalTests').ToStringLiteral.Value);
-  Writeln(Format('Test Results Run Tests: %s', [TotalRunTests]));
-
-  if RunCount > 0 then
+  if GShowResults then
   begin
-    PerTestNanoseconds := Round(DurationNanoseconds / RunCount);
-    Writeln(Format('Test Results Passed: %s (%2.2f%%)', [TotalPassed, (StrToFloat(TotalPassed) / RunCount * 100)]));
-    Writeln(Format('Test Results Failed: %s (%2.2f%%)', [TotalFailed, (StrToFloat(TotalFailed) / RunCount * 100)]));
-    Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / RunCount * 100)]));
-    Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
-    Writeln(Format('Test Results Test Execution: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
-    Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
-      [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
-       FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds)]));
-    Writeln(Format('Test Results Failed Tests: %s', [TestResult.GetProperty('failedTests').ToStringLiteral.Value]));
+    Writeln('Test Results Total Tests: ', TestResult.GetProperty('totalTests').ToStringLiteral.Value);
+    Writeln(Format('Test Results Run Tests: %s', [TotalRunTests]));
+
+    if RunCount > 0 then
+    begin
+      PerTestNanoseconds := Round(DurationNanoseconds / RunCount);
+      Writeln(Format('Test Results Passed: %s (%2.2f%%)', [TotalPassed, (StrToFloat(TotalPassed) / RunCount * 100)]));
+      Writeln(Format('Test Results Failed: %s (%2.2f%%)', [TotalFailed, (StrToFloat(TotalFailed) / RunCount * 100)]));
+      Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / RunCount * 100)]));
+      Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
+      Writeln(Format('Test Results Test Execution: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
+      Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
+        [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
+         FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds)]));
+      Writeln(Format('Test Results Failed Tests: %s', [TestResult.GetProperty('failedTests').ToStringLiteral.Value]));
+    end;
   end;
 
   if StrToFloat(TotalFailed) > 0 then
@@ -241,29 +269,53 @@ end;
 
 var
   Files: TStringList;
+  TestPath: string;
+  I: Integer;
 
 begin
-  if ParamCount < 1 then
+  TestPath := '';
+  GShowProgress := True;
+  GShowResults := True;
+  GExitOnFirstFailure := False;
+  GSilentConsole := False;
+
+  for I := 1 to ParamCount do
   begin
-    WriteLn('Usage: TestRunner <filename.{js|jsx|ts|tsx|mjs}>');
-    WriteLn('or');
-    WriteLn('Usage: TestRunner <directory> (searches for .js, .jsx, .ts, .tsx, .mjs files)');
+    if ParamStr(I) = '--no-progress' then
+      GShowProgress := False
+    else if ParamStr(I) = '--no-results' then
+      GShowResults := False
+    else if ParamStr(I) = '--exit-on-first-failure' then
+      GExitOnFirstFailure := True
+    else if ParamStr(I) = '--silent' then
+      GSilentConsole := True
+    else if Copy(ParamStr(I), 1, 2) <> '--' then
+      TestPath := ParamStr(I);
+  end;
+
+  if TestPath = '' then
+  begin
+    WriteLn('Usage: TestRunner <path> [options]');
+    WriteLn('  <path>                  Script file (.js, .jsx, .ts, .tsx, .mjs) or directory');
+    WriteLn('  --no-progress           Suppress per-file progress output');
+    WriteLn('  --no-results            Suppress test results summary');
+    WriteLn('  --exit-on-first-failure Stop on first test failure');
+    WriteLn('  --silent                Suppress console output from test scripts');
     ExitCode := 1;
+  end
+  else if DirectoryExists(TestPath) then
+  begin
+    Files := FindAllFiles(TestPath, ScriptExtensions);
+    try
+      PrintTestResults(RunScriptsFromFiles(Files));
+    finally
+      Files.Free;
+    end;
   end
   else
   begin
-    if DirectoryExists(ParamStr(1)) then
-    begin
-      Files := FindAllFiles(ParamStr(1), ScriptExtensions);
-      try 
-        PrintTestResults(RunScriptsFromFiles(Files));
-      finally
-        Files.Free;
-      end;
-    end
-    else
-    begin
-      PrintTestResults(RunScriptFromFile(ParamStr(1)));
-    end;
+    if GShowProgress then
+      WriteLn('[1/1] ', TestPath);
+    PrintTestResults(RunScriptFromFile(TestPath));
   end;
 end.

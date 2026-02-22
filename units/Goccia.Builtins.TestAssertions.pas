@@ -1114,8 +1114,6 @@ begin
           begin
             // Route callback exceptions through proper assertion failure mechanism
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
-            // Also log for debugging
-            WriteLn('Warning: Error in callback: ', E.Message);
           end;
         end;
       end;
@@ -1162,7 +1160,6 @@ begin
   FTestStats.CurrentTestHasFailures := True;
 
   // Track the failure details for reporting
-  // This is called during test execution, so we know the current test context
   if FTestStats.CurrentSuiteName <> '' then
     WriteLn('    ❌ ', FTestStats.CurrentTestName, ' in ', FTestStats.CurrentSuiteName, ': ', AMessage)
   else
@@ -1396,7 +1393,6 @@ var
   ResultObj: TGocciaObjectValue;
   ExitOnFirstFailure: Boolean = False;
   ShowTestResults: Boolean = True;
-  Silent: Boolean = False;
   Summary: string;
   PreviousSuiteName: string;
   PreviousSuiteIsSkipped: Boolean;
@@ -1433,16 +1429,11 @@ begin
         ShowTestResults := TestParams.GetProperty('showTestResults').ToBooleanLiteral.Value
       else
         ShowTestResults := True;
-      if TestParams.HasProperty('silent') then
-        Silent := TestParams.GetProperty('silent').ToBooleanLiteral.Value
-      else
-        Silent := False;
     end
     else
     begin
       ExitOnFirstFailure := False;
       ShowTestResults := True;
-      Silent := False;
     end;
   end;
 
@@ -1467,8 +1458,7 @@ begin
       except
         on E: Exception do
         begin
-          if not Silent then
-            WriteLn('Error in describe block "', Suite.Name, '": ', E.Message);
+          WriteLn('Error in describe block "', Suite.Name, '": ', E.Message);
           FailedTestDetails.Add('Describe "' + Suite.Name + '": ' + E.Message);
         end;
       end;
@@ -1494,13 +1484,10 @@ begin
       begin
         // Mark test as skipped and don't execute it
         FTestStats.CurrentTestIsSkipped := True;
-        if not Silent then
-        begin
-          if TestCase.SuiteName <> '' then
-            WriteLn('    ⏸️ ', TestCase.Name, ' in ', TestCase.SuiteName, ': SKIPPED')
-          else
-            WriteLn('    ⏸️ ', TestCase.Name, ': SKIPPED');
-        end;
+        if TestCase.SuiteName <> '' then
+          WriteLn('    ⏸️ ', TestCase.Name, ' in ', TestCase.SuiteName, ': SKIPPED')
+        else
+          WriteLn('    ⏸️ ', TestCase.Name, ': SKIPPED');
       end
       else
       begin
