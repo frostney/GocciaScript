@@ -315,7 +315,7 @@ function CloneObject(const AObj: TGocciaObjectValue;
   const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
 var
   I: Integer;
-  Keys: TStringList;
+  Keys: TArray<string>;
   Descriptor: TGocciaPropertyDescriptor;
   ClonedValue: TGocciaValue;
 begin
@@ -323,7 +323,7 @@ begin
   AMemory.Add(AObj, Result);
 
   Keys := AObj.GetOwnPropertyKeys;
-  for I := 0 to Keys.Count - 1 do
+  for I := 0 to Length(Keys) - 1 do
   begin
     Descriptor := AObj.GetOwnPropertyDescriptor(Keys[I]);
     if not Assigned(Descriptor) then

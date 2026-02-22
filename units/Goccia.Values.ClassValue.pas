@@ -768,7 +768,7 @@ var
   Args: TGocciaArgumentsCollection;
 begin
   // First check instance properties directly using property descriptors
-  if FPropertyDescriptors.ContainsKey(AName) then
+  if FProperties.ContainsKey(AName) then
   begin
     Result := inherited GetProperty(AName);
     Exit;
