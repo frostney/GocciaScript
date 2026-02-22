@@ -37,6 +37,7 @@ type
     function URIErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function AggregateErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DOMExceptionConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ErrorIsError(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function QueueMicrotaskCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
@@ -123,6 +124,7 @@ begin
   DOMExceptionConstructorFunc := TGocciaNativeFunctionValue.Create(DOMExceptionConstructor, DOM_EXCEPTION_NAME, 2);
 
   ErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FErrorProto);
+  ErrorConstructorFunc.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ErrorIsError, 'isError', 1));
   TypeErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FTypeErrorProto);
   ReferenceErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FReferenceErrorProto);
   RangeErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FRangeErrorProto);
@@ -194,6 +196,23 @@ end;
 function TGocciaGlobals.ErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := BuildErrorObject(ERROR_NAME, FErrorProto, AArgs);
+end;
+
+// ES2026 §20.5.2.1 Error.isError(arg)
+function TGocciaGlobals.ErrorIsError(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Arg: TGocciaValue;
+begin
+  if AArgs.Length = 0 then
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+
+  Arg := AArgs.GetElement(0);
+
+  // ES2026 §20.5.2.1 step 2: If arg has [[ErrorData]], return true
+  if (Arg is TGocciaObjectValue) and TGocciaObjectValue(Arg).HasErrorData then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
 { TypeError ( message [ , options ] ) — §20.5.6.1.1 (NativeError) }
@@ -317,6 +336,7 @@ begin
     Name := ERROR_NAME;
 
   ErrorObj := CreateErrorObject(Name, Message, 1);
+  ErrorObj.HasErrorData := False;
   ErrorObj.Prototype := FDOMExceptionProto;
   ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(DOMExceptionLegacyCode(Name)));
 

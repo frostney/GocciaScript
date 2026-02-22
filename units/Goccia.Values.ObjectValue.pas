@@ -22,6 +22,7 @@ type
     FFrozen: Boolean;
     FSealed: Boolean;
     FExtensible: Boolean;
+    FHasErrorData: Boolean;
   public
     constructor Create(const APrototype: TGocciaObjectValue = nil);
     destructor Destroy; override;
@@ -79,6 +80,7 @@ type
     property Frozen: Boolean read FFrozen;
     property Sealed: Boolean read FSealed;
     property Extensible: Boolean read FExtensible;
+    property HasErrorData: Boolean read FHasErrorData write FHasErrorData;
   end;
 
 
