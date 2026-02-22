@@ -187,7 +187,7 @@ Warning: '==' (loose equality) is not supported in GocciaScript
   --> script.js:1:10
 ```
 
-Both operands are parsed but discarded. Because `undefined` is falsy, `==`/`!=` in conditions (e.g., `if (a == b)`) will never enter the truthy branch.
+Both operands are parsed but not evaluated at runtime (no side effects). Because the entire expression becomes `undefined`, which is falsy, `==`/`!=` in conditions (e.g., `if (a == b)`) will never enter the truthy branch.
 
 Loose equality's type coercion rules are notoriously confusing:
 
