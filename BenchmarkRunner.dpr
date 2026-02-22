@@ -157,44 +157,37 @@ type
     OutputFile: string;
   end;
 
-procedure RunBenchmarks(const APath: string; const AReports: array of TReportSpec);
+procedure RunBenchmarks(const APaths: TStringList; const AReports: array of TReportSpec);
 var
   Files: TStringList;
-  I, J: Integer;
+  I, J, P: Integer;
   Reporter: TBenchmarkReporter;
 begin
+  Files := TStringList.Create;
   Reporter := TBenchmarkReporter.Create;
   try
-    if DirectoryExists(APath) then
+    for P := 0 to APaths.Count - 1 do
     begin
-      Files := FindAllFiles(APath, ScriptExtensions);
-      try
-        for I := 0 to Files.Count - 1 do
-        begin
-          if GShowProgress then
-            WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, Files.Count, ExtractFileName(Files[I])]));
-          CollectBenchmarkFile(Files[I], Reporter);
-        end;
-        if GShowProgress and (Files.Count > 0) then
-          WriteLn;
-      finally
-        Files.Free;
+      if DirectoryExists(APaths[P]) then
+        Files.AddStrings(FindAllFiles(APaths[P], ScriptExtensions))
+      else if FileExists(APaths[P]) then
+        Files.Add(APaths[P])
+      else
+      begin
+        WriteLn('Error: Path not found: ', APaths[P]);
+        ExitCode := 1;
+        Exit;
       end;
-    end
-    else if FileExists(APath) then
-    begin
-      if GShowProgress then
-        WriteLn('[1/1] ', ExtractFileName(APath));
-      CollectBenchmarkFile(APath, Reporter);
-      if GShowProgress then
-        WriteLn;
-    end
-    else
-    begin
-      WriteLn('Error: Path not found: ', APath);
-      ExitCode := 1;
-      Exit;
     end;
+
+    for I := 0 to Files.Count - 1 do
+    begin
+      if GShowProgress then
+        WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, Files.Count, ExtractFileName(Files[I])]));
+      CollectBenchmarkFile(Files[I], Reporter);
+    end;
+    if GShowProgress and (Files.Count > 0) then
+      WriteLn;
 
     for J := 0 to Length(AReports) - 1 do
     begin
@@ -206,62 +199,67 @@ begin
     end;
   finally
     Reporter.Free;
+    Files.Free;
   end;
 end;
 
 var
-  BenchPath: string;
+  Paths: TStringList;
   Reports: array of TReportSpec;
   ReportCount: Integer;
   I: Integer;
   OutputStr: string;
 
 begin
-  BenchPath := '';
   ReportCount := 0;
   GShowProgress := True;
   SetLength(Reports, 0);
 
-  for I := 1 to ParamCount do
-  begin
-    if Copy(ParamStr(I), 1, 9) = '--format=' then
+  Paths := TStringList.Create;
+  try
+    for I := 1 to ParamCount do
     begin
-      Inc(ReportCount);
-      SetLength(Reports, ReportCount);
-      Reports[ReportCount - 1].Format := ParseReportFormat(Copy(ParamStr(I), 10, MaxInt));
-      Reports[ReportCount - 1].OutputFile := '';
-    end
-    else if Copy(ParamStr(I), 1, 9) = '--output=' then
-    begin
-      OutputStr := Copy(ParamStr(I), 10, MaxInt);
-      if ReportCount > 0 then
-        Reports[ReportCount - 1].OutputFile := OutputStr
-      else
+      if Copy(ParamStr(I), 1, 9) = '--format=' then
       begin
         Inc(ReportCount);
         SetLength(Reports, ReportCount);
-        Reports[ReportCount - 1].Format := brfConsole;
-        Reports[ReportCount - 1].OutputFile := OutputStr;
-      end;
+        Reports[ReportCount - 1].Format := ParseReportFormat(Copy(ParamStr(I), 10, MaxInt));
+        Reports[ReportCount - 1].OutputFile := '';
+      end
+      else if Copy(ParamStr(I), 1, 9) = '--output=' then
+      begin
+        OutputStr := Copy(ParamStr(I), 10, MaxInt);
+        if ReportCount > 0 then
+          Reports[ReportCount - 1].OutputFile := OutputStr
+        else
+        begin
+          Inc(ReportCount);
+          SetLength(Reports, ReportCount);
+          Reports[ReportCount - 1].Format := brfConsole;
+          Reports[ReportCount - 1].OutputFile := OutputStr;
+        end;
+      end
+      else if ParamStr(I) = '--no-progress' then
+        GShowProgress := False
+      else if Copy(ParamStr(I), 1, 2) <> '--' then
+        Paths.Add(ParamStr(I));
+    end;
+
+    if ReportCount = 0 then
+    begin
+      SetLength(Reports, 1);
+      Reports[0].Format := brfConsole;
+      Reports[0].OutputFile := '';
+    end;
+
+    if Paths.Count = 0 then
+    begin
+      WriteLn('Usage: BenchmarkRunner <path...> [--format=console|text|csv|json [--output=file]] ... [--no-progress]');
+      ExitCode := 1;
     end
-    else if ParamStr(I) = '--no-progress' then
-      GShowProgress := False
-    else if Copy(ParamStr(I), 1, 2) <> '--' then
-      BenchPath := ParamStr(I);
+    else
+      RunBenchmarks(Paths, Reports);
+  finally
+    Paths.Free;
   end;
-
-  if ReportCount = 0 then
-  begin
-    SetLength(Reports, 1);
-    Reports[0].Format := brfConsole;
-    Reports[0].OutputFile := '';
-  end;
-
-  if BenchPath = '' then
-  begin
-    WriteLn('Usage: BenchmarkRunner <path> [--format=console|text|csv|json [--output=file]] ... [--no-progress]');
-    ExitCode := 1;
-  end
-  else
-    RunBenchmarks(BenchPath, Reports);
 end.

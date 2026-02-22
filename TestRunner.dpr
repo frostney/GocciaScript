@@ -8,6 +8,7 @@ uses
 
   TimingUtils,
 
+  Goccia.Builtins.TestConsole,
   Goccia.Engine,
   Goccia.FileExtensions,
   Goccia.Values.ArrayValue,
@@ -15,6 +16,12 @@ uses
   Goccia.Values.Primitives,
 
   FileUtils in 'units/FileUtils.pas';
+
+var
+  GShowProgress: Boolean = True;
+  GShowResults: Boolean = True;
+  GExitOnFirstFailure: Boolean = False;
+  GSilentConsole: Boolean = False;
 
 type
   TTestFileResult = record
@@ -26,13 +33,15 @@ function RunGocciaScript(const AFileName: string): TTestFileResult;
 var
   Source: TStringList;
   ScriptResult, FileResult: TGocciaObjectValue;
+  Engine: TGocciaEngine;
+  SilentConsole: TGocciaTestConsole;
   EngineResult: TGocciaScriptResult;
   TestGlobals: TGocciaGlobalBuiltins;
 begin
   TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
 
   ScriptResult := TGocciaObjectValue.Create;
-  ScriptResult.AssignProperty('totalTests', TGocciaNumberLiteralValue.ZeroValue);
+  ScriptResult.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(1));
   ScriptResult.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.ZeroValue);
   ScriptResult.AssignProperty('passed', TGocciaNumberLiteralValue.ZeroValue);
   ScriptResult.AssignProperty('failed', TGocciaNumberLiteralValue.ZeroValue);
@@ -60,17 +69,30 @@ begin
       end;
     end;
 
-    Source.Add('runTests({ exitOnFirstFailure: false, showTestResults: false, silent: true });');
+    Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
+      [BoolToStr(GExitOnFirstFailure, 'true', 'false')]));
 
     try
-      EngineResult := TGocciaEngine.RunScriptFromStringList(Source, AFileName, TestGlobals);
+      SilentConsole := nil;
+      Engine := TGocciaEngine.Create(AFileName, Source, TestGlobals);
+      try
+        if GSilentConsole then
+        begin
+          SilentConsole := TGocciaTestConsole.Create;
+          SilentConsole.Silence(Engine.BuiltinConsole.BuiltinObject);
+          Engine.SuppressWarnings := True;
+        end;
+
+        EngineResult := Engine.Execute;
+      finally
+        SilentConsole.Free;
+        Engine.Free;
+      end;
       Result.Timing := EngineResult;
       FileResult := EngineResult.Result as TGocciaObjectValue;
       
       if FileResult <> nil then
       begin
-        if FileResult.GetProperty('totalTests').ToStringLiteral.Value <> 'undefined' then
-          ScriptResult.AssignProperty('totalTests', FileResult.GetProperty('totalTests'));
         if FileResult.GetProperty('totalRunTests').ToStringLiteral.Value <> 'undefined' then
           ScriptResult.AssignProperty('totalRunTests', FileResult.GetProperty('totalRunTests'));
         if FileResult.GetProperty('passed').ToStringLiteral.Value <> 'undefined' then
@@ -85,9 +107,6 @@ begin
           ScriptResult.AssignProperty('duration', FileResult.GetProperty('duration'));
         if FileResult.GetProperty('failedTests').ToStringLiteral.Value <> 'undefined' then
           ScriptResult.AssignProperty('failedTests', FileResult.GetProperty('failedTests'));
-      end else
-      begin
-        ScriptResult := FileResult;
       end;
 
       Result.TestResult := ScriptResult;
@@ -121,11 +140,11 @@ function RunScriptFromFile(const AFileName: string): TAggregatedTestResult;
 var
   FileResult: TTestFileResult;
 begin
+  Result.TestResult := nil;
   Result.TotalLexNanoseconds := 0;
   Result.TotalParseNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
   try
-    WriteLn('Running script: ', AFileName);
     FileResult := RunGocciaScript(AFileName);
     Result.TestResult := FileResult.TestResult;
     Result.TotalLexNanoseconds := FileResult.Timing.LexTimeNanoseconds;
@@ -170,7 +189,12 @@ begin
 
   for I := 0 to AFiles.Count - 1 do
   begin
+    if GShowProgress then
+      WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
     FileResult := RunScriptFromFile(AFiles[I]);
+    if FileResult.TestResult = nil then
+      Continue;
+
     AllTestResults.AssignProperty(AFiles[I], FileResult.TestResult);
 
     Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + FileResult.TotalLexNanoseconds;
@@ -183,8 +207,12 @@ begin
     TotalRunCount := TotalRunCount + FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
     TotalDuration := TotalDuration + FileResult.TestResult.GetProperty('duration').ToNumberLiteral.Value;
     TotalAssertions := TotalAssertions + FileResult.TestResult.GetProperty('assertions').ToNumberLiteral.Value;
+
+    if GExitOnFirstFailure and (FailedCount > 0) then
+      Break;
   end;
   
+  AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(SkippedCount));
@@ -209,6 +237,8 @@ var
 begin
   ExitCode := 0;
   TestResult := AResult.TestResult;
+  if TestResult = nil then
+    Exit;
 
   TotalRunTests := TestResult.GetProperty('totalRunTests').ToStringLiteral.Value;
   TotalPassed := TestResult.GetProperty('passed').ToStringLiteral.Value;
@@ -218,21 +248,24 @@ begin
   DurationNanoseconds := Round(TestResult.GetProperty('duration').ToNumberLiteral.Value);
   RunCount := StrToFloat(TotalRunTests);
 
-  Writeln('Test Results Total Tests: ', TestResult.GetProperty('totalTests').ToStringLiteral.Value);
-  Writeln(Format('Test Results Run Tests: %s', [TotalRunTests]));
-
-  if RunCount > 0 then
+  if GShowResults then
   begin
-    PerTestNanoseconds := Round(DurationNanoseconds / RunCount);
-    Writeln(Format('Test Results Passed: %s (%2.2f%%)', [TotalPassed, (StrToFloat(TotalPassed) / RunCount * 100)]));
-    Writeln(Format('Test Results Failed: %s (%2.2f%%)', [TotalFailed, (StrToFloat(TotalFailed) / RunCount * 100)]));
-    Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / RunCount * 100)]));
-    Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
-    Writeln(Format('Test Results Test Execution: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
-    Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
-      [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
-       FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds)]));
-    Writeln(Format('Test Results Failed Tests: %s', [TestResult.GetProperty('failedTests').ToStringLiteral.Value]));
+    Writeln('Test Results Test Files: ', TestResult.GetProperty('totalTests').ToStringLiteral.Value);
+    Writeln(Format('Test Results Run Tests: %s', [TotalRunTests]));
+
+    if RunCount > 0 then
+    begin
+      PerTestNanoseconds := Round(DurationNanoseconds / RunCount);
+      Writeln(Format('Test Results Passed: %s (%2.2f%%)', [TotalPassed, (StrToFloat(TotalPassed) / RunCount * 100)]));
+      Writeln(Format('Test Results Failed: %s (%2.2f%%)', [TotalFailed, (StrToFloat(TotalFailed) / RunCount * 100)]));
+      Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / RunCount * 100)]));
+      Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
+      Writeln(Format('Test Results Test Execution: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
+      Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
+        [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
+         FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds)]));
+      Writeln(Format('Test Results Failed Tests: %s', [TestResult.GetProperty('failedTests').ToStringLiteral.Value]));
+    end;
   end;
 
   if StrToFloat(TotalFailed) > 0 then
@@ -241,29 +274,72 @@ end;
 
 var
   Files: TStringList;
+  Paths: TStringList;
+  I: Integer;
 
 begin
-  if ParamCount < 1 then
-  begin
-    WriteLn('Usage: TestRunner <filename.{js|jsx|ts|tsx|mjs}>');
-    WriteLn('or');
-    WriteLn('Usage: TestRunner <directory> (searches for .js, .jsx, .ts, .tsx, .mjs files)');
-    ExitCode := 1;
-  end
-  else
-  begin
-    if DirectoryExists(ParamStr(1)) then
+  GShowProgress := True;
+  GShowResults := True;
+  GExitOnFirstFailure := False;
+  GSilentConsole := False;
+
+  Paths := TStringList.Create;
+  try
+    for I := 1 to ParamCount do
     begin
-      Files := FindAllFiles(ParamStr(1), ScriptExtensions);
-      try 
-        PrintTestResults(RunScriptsFromFiles(Files));
-      finally
-        Files.Free;
-      end;
+      if ParamStr(I) = '--no-progress' then
+        GShowProgress := False
+      else if ParamStr(I) = '--no-results' then
+        GShowResults := False
+      else if ParamStr(I) = '--exit-on-first-failure' then
+        GExitOnFirstFailure := True
+      else if ParamStr(I) = '--silent' then
+        GSilentConsole := True
+      else if Copy(ParamStr(I), 1, 2) <> '--' then
+        Paths.Add(ParamStr(I));
+    end;
+
+    if Paths.Count = 0 then
+    begin
+      WriteLn('Usage: TestRunner <path...> [options]');
+      WriteLn('  <path...>               Script files (.js, .jsx, .ts, .tsx, .mjs) or directories');
+      WriteLn('  --no-progress           Suppress per-file progress output');
+      WriteLn('  --no-results            Suppress test results summary');
+      WriteLn('  --exit-on-first-failure Stop on first test failure');
+      WriteLn('  --silent                Suppress console output from test scripts');
+      ExitCode := 1;
     end
     else
     begin
-      PrintTestResults(RunScriptFromFile(ParamStr(1)));
+      Files := TStringList.Create;
+      try
+        for I := 0 to Paths.Count - 1 do
+        begin
+          if DirectoryExists(Paths[I]) then
+            Files.AddStrings(FindAllFiles(Paths[I], ScriptExtensions))
+          else if FileExists(Paths[I]) then
+            Files.Add(Paths[I])
+          else
+          begin
+            WriteLn('Error: Path not found: ', Paths[I]);
+            ExitCode := 1;
+            Exit;
+          end;
+        end;
+
+        if Files.Count = 1 then
+        begin
+          if GShowProgress then
+            WriteLn('[1/1] ', Files[0]);
+          PrintTestResults(RunScriptFromFile(Files[0]));
+        end
+        else
+          PrintTestResults(RunScriptsFromFiles(Files));
+      finally
+        Files.Free;
+      end;
     end;
+  finally
+    Paths.Free;
   end;
 end.
