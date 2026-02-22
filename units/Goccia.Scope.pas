@@ -5,6 +5,8 @@ unit Goccia.Scope;
 interface
 
 uses
+  Generics.Collections,
+
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope.BindingMap,
   Goccia.Token,
