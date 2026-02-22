@@ -336,8 +336,11 @@ begin
         TGocciaPropertyDescriptorData.Create(ClonedValue, Descriptor.Flags));
     end
     else if Descriptor is TGocciaPropertyDescriptorAccessor then
-      ThrowTypeError('Failed to execute ''structuredClone'': accessor property ''' +
-        Keys[I] + ''' could not be cloned.');
+    begin
+      ClonedValue := StructuredCloneValue(AObj.GetProperty(Keys[I]), AMemory);
+      Result.DefineProperty(Keys[I],
+        TGocciaPropertyDescriptorData.Create(ClonedValue, Descriptor.Flags - [pfConfigurable, pfWritable] + [pfEnumerable]));
+    end;
   end;
 end;
 

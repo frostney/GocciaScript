@@ -209,9 +209,9 @@ end;
 
 function TGocciaLexer.ScanUnicodeEscape: string;
 var
-  CodePoint: Cardinal;
+  CodePoint, LowSurrogate: Cardinal;
   HexStr: string;
-  I: Integer;
+  I, SavedCurrent: Integer;
 begin
   // Called after consuming '\u', Peek is the next character
   if Peek = '{' then
@@ -238,6 +238,32 @@ begin
   end;
 
   CodePoint := StrToInt('$' + HexStr);
+
+  // ES2026 §12.9.4: Combine UTF-16 surrogate pairs into a single code point
+  if (CodePoint >= $D800) and (CodePoint <= $DBFF) and (Peek = '\') and (PeekNext = 'u') then
+  begin
+    SavedCurrent := FCurrent;
+    Advance; // consume '\'
+    Advance; // consume 'u'
+    HexStr := '';
+    for I := 1 to 4 do
+    begin
+      if IsAtEnd then
+      begin
+        FCurrent := SavedCurrent;
+        Break;
+      end;
+      HexStr := HexStr + Advance;
+    end;
+    if Length(HexStr) = 4 then
+    begin
+      LowSurrogate := StrToInt('$' + HexStr);
+      if (LowSurrogate >= $DC00) and (LowSurrogate <= $DFFF) then
+        CodePoint := $10000 + ((CodePoint - $D800) shl 10) + (LowSurrogate - $DC00)
+      else
+        FCurrent := SavedCurrent;
+    end;
+  end;
 
   // Convert code point to UTF-8
   if CodePoint <= $7F then
@@ -485,6 +511,7 @@ begin
   FKeywords.Add(KEYWORD_DELETE, gttDelete);
   FKeywords.Add(KEYWORD_DO, gttDo);
   FKeywords.Add(KEYWORD_ELSE, gttElse);
+  FKeywords.Add(KEYWORD_ENUM, gttEnum);
   FKeywords.Add(KEYWORD_EXPORT, gttExport);
   FKeywords.Add(KEYWORD_EXTENDS, gttExtends);
   FKeywords.Add(KEYWORD_FALSE, gttFalse);

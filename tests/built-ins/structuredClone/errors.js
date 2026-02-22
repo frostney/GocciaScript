@@ -26,14 +26,9 @@ test("throws on symbol", () => {
 });
 
 test("throws when no arguments provided", () => {
-  let threw = false;
-  try {
+  expect(() => {
     structuredClone();
-  } catch (e) {
-    threw = true;
-    expect(e.message.includes("1 argument required")).toBe(true);
-  }
-  expect(threw).toBe(true);
+  }).toThrow(TypeError);
 });
 
 test("throws on object containing a function", () => {
@@ -47,21 +42,18 @@ test("throws on object containing a function", () => {
   expect(threw).toBe(true);
 });
 
-test("throws on object with accessor property", () => {
+test("clones object with accessor property by reading getter value", () => {
   const obj = {};
   Object.defineProperty(obj, "value", {
-    get() { return 42; },
+    get() {
+      return 42;
+    },
     enumerable: true,
     configurable: true,
   });
-  let threw = false;
-  try {
-    structuredClone(obj);
-  } catch (e) {
-    threw = true;
-    expect(e.message.includes("could not be cloned")).toBe(true);
-  }
-  expect(threw).toBe(true);
+  const clone = structuredClone(obj);
+  expect(clone.value).toBe(42);
+  expect(clone !== obj).toBe(true);
 });
 
 test("second argument (options) is accepted and ignored", () => {

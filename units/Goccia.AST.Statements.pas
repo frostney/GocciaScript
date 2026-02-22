@@ -234,6 +234,32 @@ type
     property ClassDefinition: TGocciaClassDefinition read FClassDefinition;
   end;
 
+  // Enums
+  TGocciaEnumMember = record
+    Name: string;
+    Initializer: TGocciaExpression;
+  end;
+
+  TGocciaEnumDeclaration = class(TGocciaStatement)
+  private
+    FName: string;
+    FMembers: TArray<TGocciaEnumMember>;
+  public
+    constructor Create(const AName: string; const AMembers: TArray<TGocciaEnumMember>;
+      const ALine, AColumn: Integer);
+    property Name: string read FName;
+    property Members: TArray<TGocciaEnumMember> read FMembers;
+  end;
+
+  TGocciaExportEnumDeclaration = class(TGocciaStatement)
+  private
+    FDeclaration: TGocciaEnumDeclaration;
+  public
+    constructor Create(const ADeclaration: TGocciaEnumDeclaration;
+      const ALine, AColumn: Integer);
+    property Declaration: TGocciaEnumDeclaration read FDeclaration;
+  end;
+
   // Modules
   TGocciaImportDeclaration = class(TGocciaStatement)
   private
@@ -509,6 +535,25 @@ uses
   begin
     FClassDefinition.Free;
     inherited;
+  end;
+
+  { TGocciaEnumDeclaration }
+
+  constructor TGocciaEnumDeclaration.Create(const AName: string;
+    const AMembers: TArray<TGocciaEnumMember>; const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FName := AName;
+    FMembers := AMembers;
+  end;
+
+  { TGocciaExportEnumDeclaration }
+
+  constructor TGocciaExportEnumDeclaration.Create(const ADeclaration: TGocciaEnumDeclaration;
+    const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FDeclaration := ADeclaration;
   end;
 
   { TGocciaImportDeclaration }

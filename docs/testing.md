@@ -91,6 +91,23 @@ tests/
 ./build/TestRunner tests/built-ins/Math/
 ```
 
+### TestRunner Options
+
+| Flag | Description |
+|------|-------------|
+| `--no-progress` | Suppress per-file progress output |
+| `--no-results` | Suppress test results summary |
+| `--exit-on-first-failure` | Stop on first test failure |
+| `--silent` | Suppress `console.log` output from test scripts |
+
+```bash
+# CI-friendly: no progress, stop on first failure
+./build/TestRunner tests --no-progress --exit-on-first-failure
+
+# Silent mode: only show results, suppress script console output
+./build/TestRunner tests --silent
+```
+
 ### Run Pascal Unit Tests
 
 ```bash

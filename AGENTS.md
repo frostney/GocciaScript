@@ -91,6 +91,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Concrete Iterators | `Goccia.Values.Iterator.Concrete.pas` | Array/String/Map/Set iterator subclasses with virtual `AdvanceNext` |
 | Lazy Iterators | `Goccia.Values.Iterator.Lazy.pas` | Lazy `map`/`filter`/`take`/`drop`/`flatMap` iterator wrappers |
 | Generic Iterator | `Goccia.Values.Iterator.Generic.pas` | Wraps user-defined `{next()}` objects as proper iterators |
+| Enum Value | `Goccia.Values.EnumValue.pas` | TC39 proposal-enum: `TGocciaEnumValue` (null-prototype, non-extensible, iterable via `Symbol.iterator`) |
 | JSON Utilities | `Goccia.JSON.pas` | Standalone JSON ↔ `TGocciaValue` parser and stringifier |
 | Version | `Goccia.Version.pas` | Git-derived version and commit hash, resolved once at startup via `RunCommand` |
 | Temporal Utilities | `Goccia.Temporal.Utils.pas` | ISO 8601 date math helpers, parsing, formatting |
@@ -112,6 +113,11 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | ToPrimitive | `Goccia.Values.ToPrimitive.pas` | ECMAScript `ToPrimitive` abstract operation |
 | Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, centralized error construction |
 | Argument Validator | `Goccia.Arguments.Validator.pas` | `RequireExactly`, `RequireAtLeast` — standardized argument count/type validation |
+| Argument Callbacks | `Goccia.Arguments.Callbacks.pas` | Pre-typed callback argument collections for array prototype methods |
+| Ordered Map | `OrderedMap.pas` | Generic insertion-order-preserving string-keyed map (`TOrderedMap<T>`) |
+| Binding Map | `Goccia.Scope.BindingMap.pas` | Ordered map specialized for lexical bindings (`TOrderedMap<TLexicalBinding>`) |
+| Array Utils | `Goccia.Utils.Array.pas` | `ArrayCreateDataProperty` helper for spec-compliant array operations |
+| Test Console | `Goccia.Builtins.TestConsole.pas` | Silent console override for `--silent` mode in TestRunner |
 
 ## Development Workflow
 

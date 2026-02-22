@@ -24,28 +24,57 @@ It's based on the thought "What if we implement ECMAScript today, but without th
 
 ### ES6+ Features
 
-- Template strings with interpolation
-- Object shorthand properties and methods
-- Computed property names
-- Nullish coalescing (`??`)
-- Optional chaining (`?.`)
-- Arrow function expressions
-- Rest parameters (`...args`)
-- Unicode escape sequences (`\uXXXX`, `\u{XXXXX}`, `\xHH`)
-- Function `length` and `name` properties
-- `Object.freeze`, `Object.isFrozen`
-- `Array.from`, `Array.of`, `Number.MAX_SAFE_INTEGER`, `Number.EPSILON`, `Number.isSafeInteger`
+| Feature | Example |
+|---------|---------|
+| Template strings | `` `Hello, ${name}!` `` |
+| Object shorthand properties and methods | `{ x, y, method() {} }` |
+| Computed property names | `{ [expr]: value }` |
+| Nullish coalescing | `a ?? b` |
+| Optional chaining | `obj?.prop?.method?.()` |
+| Arrow functions | `(x) => x + 1` |
+| Rest parameters | `(...args) => args` |
+| Destructuring | `const { a, b } = obj` |
+| Spread operator | `[...arr]`, `{ ...obj }` |
+| Unicode escapes | `\uXXXX`, `\u{XXXXX}`, `\xHH` |
+| Function `length` and `name` | `fn.length`, `fn.name` |
+| `Symbol` | `Symbol("desc")`, `Symbol.iterator` |
+| `Promise` | Constructor, `.then`/`.catch`/`.finally`, `all`/`allSettled`/`race`/`any` |
+| `Object.freeze`, `Object.isFrozen` | Immutable objects |
+| `Array.from`, `Array.of` | Array construction |
 
-### ECMAScript 2020+ Implementations
+### ECMAScript 2022–2025 Features
 
-- `Math.clamp` (TC39 proposal)
-- Private fields, methods, getters, and setters in classes
-- `Object.hasOwn`, `Object.fromEntries`
-- `Array.prototype.at`, `Array.prototype.sort`, `Array.prototype.splice`, `Array.prototype.fill`
+| Feature | Spec |
+|---------|------|
+| Private fields, methods, getters, setters | ES2022 |
+| `Array.prototype.at` | ES2022 |
+| `Object.hasOwn` | ES2022 |
+| `structuredClone` | ES2022 |
+| `Array.prototype.findLast`, `findLastIndex` | ES2023 |
+| `Array.prototype.toReversed`, `toSorted`, `toSpliced`, `with` | ES2023 |
+| `Object.groupBy`, `Map.groupBy` | ES2024 |
+| `Promise.withResolvers` | ES2024 |
+| `String.prototype.isWellFormed`, `toWellFormed` | ES2024 |
+| Set methods: `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom` | ES2025 |
+| `Promise.try` | ES2025 |
+| Iterator Helpers: `map`, `filter`, `take`, `drop`, `flatMap`, `forEach`, `reduce`, `toArray`, `some`, `every`, `find` | ES2025 |
+
+### TC39 Proposals
+
+GocciaScript implements several active TC39 proposals:
+
+| Proposal | Stage | Description |
+|----------|-------|-------------|
+| [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | TypeScript-style type annotations parsed and ignored at runtime |
+| [Enum Declarations](https://github.com/tc39/proposal-enum) | 0 | Frozen, null-prototype enum objects with `Symbol.iterator` |
+| [Temporal](https://tc39.es/proposal-temporal/) | 3 | Modern date/time API (`Temporal.PlainDate`, `Temporal.Duration`, `Temporal.Instant`, etc.) |
+| [`Math.clamp`](https://github.com/tc39/proposal-math-clamp) | 3 | Clamp a value to a range |
+
+See [Language Restrictions](docs/language-restrictions.md) for details on supported syntax.
 
 ### Built-in Objects
 
-`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, `Promise`, `Temporal`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`).
+`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, `Promise`, `Temporal`, `Iterator`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`).
 
 See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 
@@ -118,7 +147,7 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 
 ### Run Tests
 
-GocciaScript has 2200+ JavaScript unit tests covering language features, built-in objects, and edge cases.
+GocciaScript has 2300+ JavaScript unit tests covering language features, built-in objects, and edge cases.
 
 ```bash
 # Run all tests (GocciaScript TestRunner)
@@ -219,9 +248,14 @@ See [Code Style](docs/code-style.md) for conventions, editor configuration, and 
 ## Roadmap
 
 - [x] Promises (constructor, `.then`/`.catch`/`.finally`, `Promise.all`/`allSettled`/`race`/`any`, microtask queue)
+- [x] Iterator Helpers (`map`, `filter`, `take`, `drop`, `flatMap`, `forEach`, `reduce`, `toArray`, `some`, `every`, `find`)
+- [x] Temporal API (`Temporal.PlainDate`, `Temporal.PlainTime`, `Temporal.PlainDateTime`, `Temporal.Instant`, `Temporal.Duration`, `Temporal.Now`)
+- [x] Types as Comments (TC39 proposal-type-annotations)
+- [x] Enum declarations (TC39 proposal-enum)
+- [x] Set methods (`union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`)
 - [ ] Async/await syntax
 - [ ] Regular expressions
-- [ ] Generators and iterators
+- [ ] Generator functions (`function*`)
 - [ ] Pre-compiled binary releases
 
 ## License

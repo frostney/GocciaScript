@@ -228,6 +228,12 @@ begin
                         Module.ExportsTable.AddOrSetValue(VarInfo.Name, Value);
                     end;
                   end
+                  else if Stmt is TGocciaExportEnumDeclaration then
+                  begin
+                    Value := ModuleScope.GetValue(TGocciaExportEnumDeclaration(Stmt).Declaration.Name);
+                    if Assigned(Value) then
+                      Module.ExportsTable.AddOrSetValue(TGocciaExportEnumDeclaration(Stmt).Declaration.Name, Value);
+                  end
                   else if Stmt is TGocciaReExportDeclaration then
                   begin
                     ReExportDecl := TGocciaReExportDeclaration(Stmt);

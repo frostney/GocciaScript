@@ -285,7 +285,6 @@ Labels exist primarily for `break`/`continue` targets in nested loops. Since Goc
 The following standard ECMAScript built-ins are **not yet implemented** and may be added in future versions:
 
 - **WeakMap / WeakSet / WeakRef / FinalizationRegistry** — Weak reference collections and finalizers. These require tight GC integration. Deferred until demand warrants the complexity.
-- **structuredClone** — Deep clone of values. May be added as a utility.
 - **URI functions** (`encodeURI`, `decodeURI`, `encodeURIComponent`, `decodeURIComponent`) — URL encoding/decoding.
 - **atob / btoa** — Base64 encoding/decoding.
 - **Regular Expressions** — `RegExp` constructor and regex literal syntax. String methods like `replace` currently work with string patterns only.
@@ -337,9 +336,51 @@ class Box<T> implements Container {
 try { throw new Error("oops"); } catch (e: Error) { }
 ```
 
+### Enums (TC39 proposal-enum)
+
+GocciaScript supports the [TC39 proposal-enum](https://github.com/tc39/proposal-enum) `enum` declaration. Enums create frozen, null-prototype objects with typed member values.
+
+```javascript
+enum Direction {
+  Up = 0,
+  Down = 1,
+  Left = 2,
+  Right = 3
+}
+
+Direction.Up;           // 0
+typeof Direction;       // "object"
+[...Direction];         // [["Up", 0], ["Down", 1], ["Left", 2], ["Right", 3]]
+
+// Self-references: members can reference prior members and the enum itself
+enum Flags {
+  Read = 1,
+  Write = 2,
+  ReadWrite = Read | Flags.Write
+}
+
+// Allowed value types: Number, String, Symbol
+enum Color { Red = "red", Green = "green" }
+enum Tokens { Alpha = Symbol("alpha") }
+```
+
+**Semantics:**
+- All members require explicit initializers (no auto-initialization).
+- Member values must be Number, String, or Symbol — other types throw `TypeError`.
+- Enum objects have a `null` prototype and are non-extensible.
+- Members are non-writable and non-configurable.
+- `Symbol.iterator` yields `[key, value]` entry pairs in declaration order.
+- `Symbol.toStringTag` is set to the enum name.
+- `export enum` is supported for module exports.
+
+**Not supported (future directions in proposal):**
+- Auto-initializers (`enum E { A, B, C }`).
+- Algebraic Data Type (ADT) enums.
+- Enum decorators.
+- `enum` expressions.
+
 ### Not Supported
 
-- Enums (`enum Direction { ... }`) — use plain objects instead.
 - Namespaces (`namespace Foo { ... }`).
 - Parameter properties in constructors (`constructor(public x: number)`).
 - Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
