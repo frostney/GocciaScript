@@ -156,9 +156,7 @@ end;
 
 function TGocciaFunctionSharedPrototype.FunctionCall(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  CallArgs: TGocciaValueList;
   NewThisValue: TGocciaValue;
-  I: Integer;
   SlicedArgs: TGocciaArgumentsCollection;
 begin
   // Function.prototype.call(thisArg, ...args)
@@ -256,11 +254,14 @@ begin
 
   // Remaining arguments are pre-filled arguments
   BoundArgs := TGocciaValueList.Create(False);
-  for I := 1 to AArgs.Length - 1 do
-    BoundArgs.Add(AArgs.GetElement(I));
+  try
+    for I := 1 to AArgs.Length - 1 do
+      BoundArgs.Add(AArgs.GetElement(I));
 
-  // Create and return a bound function
-  Result := TGocciaBoundFunctionValue.Create(AThisValue, BoundThis, BoundArgs);
+    Result := TGocciaBoundFunctionValue.Create(AThisValue, BoundThis, BoundArgs);
+  finally
+    BoundArgs.Free;
+  end;
 end;
 
 { TGocciaBoundFunctionValue }

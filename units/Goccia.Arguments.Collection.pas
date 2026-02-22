@@ -28,6 +28,7 @@ type
     function Slice(AStartIndex: Integer = 0; AEndIndex: Integer = -1): TGocciaArgumentsCollection;
 
     property Length: Integer read GetLength;
+    property Items: TGocciaValueList read FArgs;
   end;
 
 implementation
