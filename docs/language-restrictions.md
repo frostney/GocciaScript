@@ -110,7 +110,7 @@ import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx,
 
 **Not supported:** `export default`, `import x from` (default import), `import * as` (namespace import), `import "module"` (side-effect import), `export * from` (wildcard re-export), dynamic `import()`. The parser accepts these syntactically but treats them as no-ops, emitting a warning with a suggestion:
 
-```
+```text
 Warning: Default imports are not supported in GocciaScript
   Suggestion: Use named imports instead: import { name } from 'module'
   --> script.js:1:1
@@ -157,7 +157,7 @@ With `let`/`const`, accessing before declaration is a `ReferenceError` (Temporal
 
 **Excluded.** Use arrow functions or shorthand methods instead. The parser accepts `function` declarations and expressions but treats them as no-ops (the function body is not executed and the binding is not created), and emits a warning:
 
-```
+```text
 Warning: 'function' declarations are not supported in GocciaScript
   Suggestion: Use arrow functions instead: const name = (...) => { ... }
   --> script.js:1:1
@@ -181,7 +181,7 @@ This separation is clean and matches ECMAScript strict mode semantics exactly.
 
 **Excluded.** Use `===` and `!==` instead. The parser accepts `==` and `!=` but treats them as no-ops (the expression evaluates to `undefined`), and emits a warning:
 
-```
+```text
 Warning: '==' (loose equality) is not supported in GocciaScript
   Suggestion: Use '===' (strict equality) instead
   --> script.js:1:10
@@ -230,7 +230,7 @@ GocciaScript requires explicit semicolons, preventing this class of bugs.
 
 **Excluded.** Use array methods instead. The parser accepts loop syntax but treats it as a no-op (the loop body is not executed), and emits a warning:
 
-```
+```text
 Warning: 'for' loops are not supported in GocciaScript
   Suggestion: Use array methods like .forEach(), .map(), .filter(), or .reduce() instead
   --> script.js:1:1
@@ -254,7 +254,7 @@ items.reduce((acc, item) => acc + item, 0);
 
 **Excluded.** No alternative needed. The parser accepts `with` syntax but treats it as a no-op (the body is not executed), and emits a warning:
 
-```
+```text
 Warning: The 'with' statement is not supported in GocciaScript
   --> script.js:1:1
 ```
@@ -267,7 +267,7 @@ Like loops, the parser uses `SkipBalancedParens` to safely skip the `with (...)`
 
 **Excluded.** No alternative needed. The parser accepts labeled statements but strips the label and emits a warning:
 
-```
+```text
 Warning: Labeled statements are not supported in GocciaScript
   --> script.js:1:1
 ```
