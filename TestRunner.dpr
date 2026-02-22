@@ -205,6 +205,9 @@ begin
     TotalRunCount := TotalRunCount + FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
     TotalDuration := TotalDuration + FileResult.TestResult.GetProperty('duration').ToNumberLiteral.Value;
     TotalAssertions := TotalAssertions + FileResult.TestResult.GetProperty('assertions').ToNumberLiteral.Value;
+
+    if GExitOnFirstFailure and (FailedCount > 0) then
+      Break;
   end;
   
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
