@@ -6,6 +6,12 @@ export default defineConfig({
     watch: false,
     environment: "node",
     include: ["tests/**/*.js"],
-    exclude: ["tests/**/helpers/**/*.js", 'tests/**/modules/local-module.js', "tests/**/types-as-comments/**/*.js", "tests/**/emoji-identifiers.js"]
+    exclude: [
+      "tests/**/helpers/**/*.js",
+      "tests/**/modules/local-module.js",
+      "tests/**/types-as-comments/**/*.js",
+      "tests/**/enums/**/*.js",
+      "tests/**/emoji-identifiers.js",
+    ],
   },
 });

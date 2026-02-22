@@ -23,12 +23,16 @@ procedure ThrowReferenceError(const AMessage: string);
 { Raises a TGocciaThrowValue with a SyntaxError }
 procedure ThrowSyntaxError(const AMessage: string);
 
+{ Raises a TGocciaThrowValue with a DataCloneError (DOMException with code 25) }
+procedure ThrowDataCloneError(const AMessage: string);
+
 { Raises a TGocciaThrowValue with a generic Error }
 procedure ThrowError(const AMessage: string);
 
 implementation
 
 uses
+  Goccia.Builtins.Globals,
   Goccia.CallStack,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
@@ -65,6 +69,17 @@ end;
 procedure ThrowSyntaxError(const AMessage: string);
 begin
   raise TGocciaThrowValue.Create(CreateErrorObject(SYNTAX_ERROR_NAME, AMessage));
+end;
+
+procedure ThrowDataCloneError(const AMessage: string);
+var
+  ErrorObj: TGocciaObjectValue;
+begin
+  ErrorObj := CreateErrorObject(DATA_CLONE_ERROR_NAME, AMessage);
+  ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(25));
+  if Assigned(GDOMExceptionProto) then
+    ErrorObj.Prototype := GDOMExceptionProto;
+  raise TGocciaThrowValue.Create(ErrorObj);
 end;
 
 procedure ThrowError(const AMessage: string);

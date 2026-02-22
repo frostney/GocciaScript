@@ -14,6 +14,7 @@ const
   KEYWORD_DELETE     = 'delete';
   KEYWORD_DO         = 'do';
   KEYWORD_ELSE       = 'else';
+  KEYWORD_ENUM       = 'enum';
   KEYWORD_EXPORT     = 'export';
   KEYWORD_EXTENDS    = 'extends';
   KEYWORD_FALSE      = 'false';

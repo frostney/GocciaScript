@@ -23,6 +23,7 @@ classDiagram
     TGocciaObjectValue <|-- TGocciaFunctionValue
     TGocciaObjectValue <|-- TGocciaClassValue
     TGocciaObjectValue <|-- TGocciaInstanceValue
+    TGocciaObjectValue <|-- TGocciaEnumValue
     TGocciaObjectValue <|-- TGocciaIteratorValue
     TGocciaIteratorValue <|-- TGocciaArrayIteratorValue
     TGocciaIteratorValue <|-- TGocciaStringIteratorValue
@@ -526,6 +527,21 @@ flowchart TD
 ```
 
 Field initializers have access to `this` (the instance being constructed) and can reference previously-initialized private fields.
+
+## Enums
+
+### Enum Values (`TGocciaEnumValue`)
+
+Created by `enum` declarations (TC39 proposal-enum). Extend `TGocciaObjectValue` with:
+- **Null prototype** — `Object.create(null)` semantics
+- **Non-extensible** — `Object.preventExtensions` applied after construction
+- **Non-writable, non-configurable members** — defined via `TGocciaPropertyDescriptorData` with `[pfEnumerable]` flags only
+- **Ordered entries** (`FEntries: TGocciaArrayValue`) — array of `[key, value]` pair arrays preserving declaration order
+- **`Symbol.iterator`** — native function returning an array iterator over `FEntries`
+- **`Symbol.toStringTag`** — set to the enum name
+- **Value type restriction** — member values must be Number, String, or Symbol; other types throw `TypeError` during evaluation
+
+Self-references in initializers are supported via a child scope that binds each member name as it is evaluated, plus the enum object itself under the enum name.
 
 ## Error Values
 

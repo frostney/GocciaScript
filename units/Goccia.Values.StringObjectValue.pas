@@ -1206,7 +1206,9 @@ var
   I: Integer;
   B: Byte;
 begin
-  // Step 1: Let O be RequireObjectCoercible(this value)
+  // ES2026 §22.1.3.8 step 1: Let O be RequireObjectCoercible(this value)
+  if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError('String.prototype.isWellFormed requires that ''this'' not be null or undefined');
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
   // Step 3: Return IsStringWellFormedUnicode(S)
@@ -1228,6 +1230,12 @@ begin
     else if (B and $F0) = $E0 then
     begin
       if (I + 2 > Length(StringValue)) or ((Ord(StringValue[I + 1]) and $C0) <> $80) or ((Ord(StringValue[I + 2]) and $C0) <> $80) then
+      begin
+        Result := TGocciaBooleanLiteralValue.FalseValue;
+        Exit;
+      end;
+      // ES2026 §6.1.4: Surrogate code points (U+D800..U+DFFF) are not well-formed
+      if (B = $ED) and (Ord(StringValue[I + 1]) >= $A0) then
       begin
         Result := TGocciaBooleanLiteralValue.FalseValue;
         Exit;
@@ -1259,7 +1267,9 @@ var
   I: Integer;
   B: Byte;
 begin
-  // Step 1: Let O be RequireObjectCoercible(this value)
+  // ES2026 §22.1.3.33 step 1: Let O be RequireObjectCoercible(this value)
+  if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError('String.prototype.toWellFormed requires that ''this'' not be null or undefined');
   // Step 2: Let S be ToString(O)
   StringValue := ExtractStringValue(AThisValue);
   // Step 3: Let result be ""
@@ -1293,6 +1303,12 @@ begin
       begin
         ResultStr := ResultStr + #$EF#$BF#$BD;
         Inc(I);
+      end
+      else if (B = $ED) and (Ord(StringValue[I + 1]) >= $A0) then
+      begin
+        // ES2026 §6.1.4: Replace surrogate code points (U+D800..U+DFFF) with U+FFFD
+        ResultStr := ResultStr + #$EF#$BF#$BD;
+        Inc(I, 3);
       end
       else
       begin

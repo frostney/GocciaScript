@@ -118,6 +118,7 @@ type
     function TryStatement: TGocciaStatement;
     function ClassMethod(const AIsStatic: Boolean = False): TGocciaClassMethod;
     function ClassDeclaration: TGocciaStatement;
+    function EnumDeclaration: TGocciaStatement;
     function ImportDeclaration: TGocciaStatement;
     function ExportDeclaration: TGocciaStatement;
     function ParseClassBody(const AClassName: string): TGocciaClassDefinition;
@@ -463,7 +464,7 @@ begin
       begin
         if Check(gttIdentifier) then
           PropertyName := Advance.Lexeme
-        else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
+        else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                        gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
                        gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
                        gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
@@ -783,7 +784,7 @@ begin
       NumericValue := ConvertNumberLiteral(Advance.Lexeme);
       Key := FloatToStr(NumericValue);
     end
-    else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
+    else if Match([gttIf, gttElse, gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis, gttSuper, gttStatic,
                    gttReturn, gttFor, gttWhile, gttDo, gttSwitch, gttCase, gttDefault, gttBreak,
                    gttThrow, gttTry, gttCatch, gttFinally, gttImport, gttExport, gttFrom, gttAs,
                    gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
@@ -1236,6 +1237,8 @@ begin
     Result := VarStatement
   else if Match([gttClass]) then
     Result := ClassDeclaration
+  else if Match([gttEnum]) then
+    Result := EnumDeclaration
   else if Match([gttImport]) then
     Result := ImportDeclaration
   else if Match([gttExport]) then
@@ -1704,6 +1707,54 @@ begin
   Result := TGocciaClassDeclaration.Create(ClassDef, Line, Column);
 end;
 
+// TC39 proposal-enum
+function TGocciaParser.EnumDeclaration: TGocciaStatement;
+var
+  Name, MemberName: string;
+  Members: TArray<TGocciaEnumMember>;
+  MemberCount: Integer;
+  Initializer: TGocciaExpression;
+  Line, Column: Integer;
+begin
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  Name := Consume(gttIdentifier, 'Expected enum name').Lexeme;
+  Consume(gttLeftBrace, 'Expected "{" after enum name');
+
+  MemberCount := 0;
+  SetLength(Members, 0);
+
+  while not Check(gttRightBrace) and not IsAtEnd do
+  begin
+    if Check(gttString) then
+      MemberName := Advance.Lexeme
+    else
+      MemberName := Consume(gttIdentifier, 'Expected enum member name').Lexeme;
+
+    if Check(gttColon) then
+    begin
+      Advance;
+      CollectTypeAnnotation([gttAssign]);
+    end;
+
+    Consume(gttAssign, 'Expected "=" after enum member name (enum members require explicit initializers)');
+    Initializer := Expression;
+
+    Inc(MemberCount);
+    SetLength(Members, MemberCount);
+    Members[MemberCount - 1].Name := MemberName;
+    Members[MemberCount - 1].Initializer := Initializer;
+
+    if not Match([gttComma]) then
+      Break;
+  end;
+
+  Consume(gttRightBrace, 'Expected "}" after enum members');
+
+  Result := TGocciaEnumDeclaration.Create(Name, Members, Line, Column);
+end;
+
 function TGocciaParser.ImportDeclaration: TGocciaStatement;
 var
   Imports: TDictionary<string, string>;
@@ -1803,7 +1854,7 @@ begin
       'Use named exports instead: export const name = value; or export { name }',
       Line, Column);
     Advance;
-    if Check(gttClass) then
+    if Check(gttClass) or Check(gttEnum) then
     begin
       Advance;
       if Check(gttIdentifier) then Advance;
@@ -1820,6 +1871,13 @@ begin
     else
       SkipUntilSemicolon;
     Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
+
+  if Match([gttEnum]) then
+  begin
+    InnerDecl := EnumDeclaration;
+    Result := TGocciaExportEnumDeclaration.Create(TGocciaEnumDeclaration(InnerDecl), Line, Column);
     Exit;
   end;
 

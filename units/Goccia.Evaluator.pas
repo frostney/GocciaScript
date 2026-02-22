@@ -57,6 +57,7 @@ function EvaluatePrivateMember(const APrivateMemberExpression: TGocciaPrivateMem
 function EvaluatePrivatePropertyAssignment(const APrivatePropertyAssignmentExpression: TGocciaPrivatePropertyAssignmentExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluatePrivatePropertyCompoundAssignment(const APrivatePropertyCompoundAssignmentExpression: TGocciaPrivatePropertyCompoundAssignmentExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateDestructuringAssignment(const ADestructuringAssignmentExpression: TGocciaDestructuringAssignmentExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateEnumDeclaration(const AEnumDeclaration: TGocciaEnumDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateDestructuringDeclaration(const ADestructuringDeclaration: TGocciaDestructuringDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateLiteral(const ATemplateLiteralExpression: TGocciaTemplateLiteralExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateExpression(const AExpressionText: string; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaValue;
@@ -100,6 +101,7 @@ uses
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
+  Goccia.Values.EnumValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -587,6 +589,14 @@ begin
   else if AStatement is TGocciaClassDeclaration then
   begin
     Result := EvaluateClass(TGocciaClassDeclaration(AStatement), AContext);
+  end
+  else if AStatement is TGocciaEnumDeclaration then
+  begin
+    Result := EvaluateEnumDeclaration(TGocciaEnumDeclaration(AStatement), AContext);
+  end
+  else if AStatement is TGocciaExportEnumDeclaration then
+  begin
+    Result := EvaluateEnumDeclaration(TGocciaExportEnumDeclaration(AStatement).Declaration, AContext);
   end
   else if AStatement is TGocciaImportDeclaration then
   begin
@@ -1427,6 +1437,59 @@ begin
 
   // For class declarations, bind the class name to the scope
   AContext.Scope.DefineLexicalBinding(ClassDef.Name, Result, dtLet);
+end;
+
+// TC39 proposal-enum
+function EvaluateEnumDeclaration(const AEnumDeclaration: TGocciaEnumDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  EnumValue: TGocciaEnumValue;
+  EnumEntries: TGocciaArrayValue;
+  ChildScope: TGocciaScope;
+  ChildContext: TGocciaEvaluationContext;
+  I: Integer;
+  MemberValue: TGocciaValue;
+  EntryPair: TGocciaArrayValue;
+begin
+  EnumValue := TGocciaEnumValue.Create(AEnumDeclaration.Name);
+  EnumEntries := TGocciaArrayValue.Create;
+
+  ChildScope := AContext.Scope.CreateChild(skBlock);
+  ChildContext := AContext;
+  ChildContext.Scope := ChildScope;
+
+  ChildScope.DefineLexicalBinding(AEnumDeclaration.Name, EnumValue, dtLet);
+
+  TGocciaGarbageCollector.Instance.AddTempRoot(EnumEntries);
+  try
+    for I := 0 to Length(AEnumDeclaration.Members) - 1 do
+    begin
+      MemberValue := EvaluateExpression(AEnumDeclaration.Members[I].Initializer, ChildContext);
+
+      if not ((MemberValue is TGocciaNumberLiteralValue) or
+              (MemberValue is TGocciaStringLiteralValue) or
+              (MemberValue is TGocciaSymbolValue)) then
+        ThrowTypeError('Enum member initializer must evaluate to a Number, String, or Symbol value');
+
+      EnumValue.DefineProperty(AEnumDeclaration.Members[I].Name,
+        TGocciaPropertyDescriptorData.Create(MemberValue, [pfEnumerable]));
+
+      ChildScope.DefineLexicalBinding(AEnumDeclaration.Members[I].Name, MemberValue, dtLet);
+
+      EntryPair := TGocciaArrayValue.Create;
+      EntryPair.Elements.Add(TGocciaStringLiteralValue.Create(AEnumDeclaration.Members[I].Name));
+      EntryPair.Elements.Add(MemberValue);
+      EnumEntries.Elements.Add(EntryPair);
+    end;
+  finally
+    TGocciaGarbageCollector.Instance.RemoveTempRoot(EnumEntries);
+  end;
+
+  EnumValue.Entries := EnumEntries;
+  InitializeEnumSymbols(EnumValue);
+  EnumValue.PreventExtensions;
+
+  AContext.Scope.DefineLexicalBinding(AEnumDeclaration.Name, EnumValue, dtLet);
+  Result := EnumValue;
 end;
 
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);

@@ -142,9 +142,10 @@ It:
 1. Creates the `build/` directory if it doesn't exist.
 2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`).
 3. Parses remaining arguments to determine which components to build.
-4. Calls `fpc` with `@config.cfg`, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
-5. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
-6. For the `tests` target, auto-discovers all `*.Test.pas` files in `units/`.
+4. Counts and prints source statistics: total lines of code (LOC), significant lines of code (SLOC, excluding blanks and comments), and file count.
+5. Calls `fpc` with `@config.cfg`, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
+6. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
+7. For the `tests` target, auto-discovers all `*.Test.pas` files in `units/`.
 
 ## Project Structure for Compilation
 

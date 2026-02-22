@@ -12,6 +12,9 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
+var
+  GDOMExceptionProto: TGocciaObjectValue;
+
 type
   TGocciaGlobals = class(TGocciaBuiltin)
   private
@@ -22,6 +25,7 @@ type
     FSyntaxErrorProto: TGocciaObjectValue;
     FURIErrorProto: TGocciaObjectValue;
     FAggregateErrorProto: TGocciaObjectValue;
+    FDOMExceptionProto: TGocciaObjectValue;
 
     function BuildErrorObject(const AName: string; const AProto: TGocciaObjectValue; const AArgs: TGocciaArgumentsCollection): TGocciaObjectValue;
   protected
@@ -32,6 +36,7 @@ type
     function SyntaxErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function URIErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function AggregateErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DOMExceptionConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function QueueMicrotaskCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
@@ -66,6 +71,7 @@ var
   SyntaxErrorConstructorFunc: TGocciaNativeFunctionValue;
   URIErrorConstructorFunc: TGocciaNativeFunctionValue;
   AggregateErrorConstructorFunc: TGocciaNativeFunctionValue;
+  DOMExceptionConstructorFunc: TGocciaNativeFunctionValue;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -101,6 +107,12 @@ begin
   FAggregateErrorProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AGGREGATE_ERROR_NAME));
   FAggregateErrorProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
 
+  FDOMExceptionProto := TGocciaObjectValue.Create(FErrorProto);
+  FDOMExceptionProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(ERROR_NAME));
+  FDOMExceptionProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
+  FDOMExceptionProto.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(0));
+  GDOMExceptionProto := FDOMExceptionProto;
+
   ErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ErrorConstructor, ERROR_NAME, 1);
   TypeErrorConstructorFunc := TGocciaNativeFunctionValue.Create(TypeErrorConstructor, TYPE_ERROR_NAME, 1);
   ReferenceErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ReferenceErrorConstructor, REFERENCE_ERROR_NAME, 1);
@@ -108,6 +120,7 @@ begin
   SyntaxErrorConstructorFunc := TGocciaNativeFunctionValue.Create(SyntaxErrorConstructor, SYNTAX_ERROR_NAME, 1);
   URIErrorConstructorFunc := TGocciaNativeFunctionValue.Create(URIErrorConstructor, URI_ERROR_NAME, 1);
   AggregateErrorConstructorFunc := TGocciaNativeFunctionValue.Create(AggregateErrorConstructor, AGGREGATE_ERROR_NAME, 2);
+  DOMExceptionConstructorFunc := TGocciaNativeFunctionValue.Create(DOMExceptionConstructor, DOM_EXCEPTION_NAME, 2);
 
   ErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FErrorProto);
   TypeErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FTypeErrorProto);
@@ -116,6 +129,7 @@ begin
   SyntaxErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FSyntaxErrorProto);
   URIErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FURIErrorProto);
   AggregateErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FAggregateErrorProto);
+  DOMExceptionConstructorFunc.AssignProperty(PROP_PROTOTYPE, FDOMExceptionProto);
 
   AScope.DefineLexicalBinding(ERROR_NAME, ErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding(TYPE_ERROR_NAME, TypeErrorConstructorFunc, dtConst);
@@ -124,6 +138,7 @@ begin
   AScope.DefineLexicalBinding(SYNTAX_ERROR_NAME, SyntaxErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding(URI_ERROR_NAME, URIErrorConstructorFunc, dtConst);
   AScope.DefineLexicalBinding(AGGREGATE_ERROR_NAME, AggregateErrorConstructorFunc, dtConst);
+  AScope.DefineLexicalBinding(DOM_EXCEPTION_NAME, DOMExceptionConstructorFunc, dtConst);
 
   AScope.DefineLexicalBinding('queueMicrotask',
     TGocciaNativeFunctionValue.Create(QueueMicrotaskCallback, 'queueMicrotask', 1), dtConst);
@@ -272,6 +287,42 @@ begin
   Result := ErrorObj;
 end;
 
+{ HTML spec §4.3: DOMException(message?, name?)
+  1. Let message be the first argument, or "" if not provided.
+  2. Let name be the second argument, or "Error" if not provided.
+  3. Set this.name to name.
+  4. Set this.message to message.
+  5. Set this.code to the legacy code for name (e.g. DataCloneError -> 25), or 0. }
+function DOMExceptionLegacyCode(const AName: string): Integer;
+begin
+  if AName = DATA_CLONE_ERROR_NAME then
+    Result := 25
+  else
+    Result := 0;
+end;
+
+function TGocciaGlobals.DOMExceptionConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ErrorObj: TGocciaObjectValue;
+  Message, Name: string;
+begin
+  if (AArgs.Length > 0) and not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
+    Message := AArgs.GetElement(0).ToStringLiteral.Value
+  else
+    Message := '';
+
+  if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+    Name := AArgs.GetElement(1).ToStringLiteral.Value
+  else
+    Name := ERROR_NAME;
+
+  ErrorObj := CreateErrorObject(Name, Message, 1);
+  ErrorObj.Prototype := FDOMExceptionProto;
+  ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(DOMExceptionLegacyCode(Name)));
+
+  Result := ErrorObj;
+end;
+
 { queueMicrotask ( callback ) — §27.8.1 (HTML spec / §8.4 HostEnqueueGenericJob)
   1. If IsCallable(callback) is false, throw a TypeError exception.
   2. Perform HostEnqueueMicrotask(callback).
@@ -305,8 +356,8 @@ end;
 
 { structuredClone(value) — HTML spec §2.7.3 StructuredSerializeInternal / StructuredDeserialize
   Deep-clones a value using the structured clone algorithm. Handles circular
-  references via a memory map. Throws DataCloneError (as a DOMException
-  equivalent) for non-serializable types (functions, symbols). }
+  references via a memory map. Throws DOMException with name "DataCloneError"
+  (code 25) for non-serializable types (functions, symbols). }
 
 function StructuredCloneValue(const AValue: TGocciaValue;
   const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaValue; forward;
@@ -335,9 +386,13 @@ begin
       Result.DefineProperty(Keys[I],
         TGocciaPropertyDescriptorData.Create(ClonedValue, Descriptor.Flags));
     end
+    // HTML spec §2.7.3: accessor properties are read via getter and cloned as data properties
     else if Descriptor is TGocciaPropertyDescriptorAccessor then
-      ThrowTypeError('Failed to execute ''structuredClone'': accessor property ''' +
-        Keys[I] + ''' could not be cloned.');
+    begin
+      ClonedValue := StructuredCloneValue(AObj.GetProperty(Keys[I]), AMemory);
+      Result.DefineProperty(Keys[I],
+        TGocciaPropertyDescriptorData.Create(ClonedValue, Descriptor.Flags - [pfConfigurable, pfWritable] + [pfEnumerable]));
+    end;
   end;
 end;
 
@@ -402,10 +457,10 @@ begin
     Exit(AValue);
 
   if AValue is TGocciaSymbolValue then
-    ThrowTypeError('Failed to execute ''structuredClone'': ' + AValue.ToStringLiteral.Value + ' could not be cloned.');
+    ThrowDataCloneError(AValue.ToStringLiteral.Value + ' could not be cloned.');
 
   if AValue.IsCallable then
-    ThrowTypeError('Failed to execute ''structuredClone'': function could not be cloned.');
+    ThrowDataCloneError(AValue.ToStringLiteral.Value + ' could not be cloned.');
 
   if AMemory.TryGetValue(AValue, Existing) then
     Exit(Existing);
@@ -419,7 +474,7 @@ begin
   else if AValue is TGocciaObjectValue then
     Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
   else
-    ThrowTypeError('Failed to execute ''structuredClone'': value could not be cloned.');
+    ThrowDataCloneError('value could not be cloned.');
 end;
 
 function TGocciaGlobals.StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

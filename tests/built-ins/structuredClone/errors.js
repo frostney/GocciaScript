@@ -3,65 +3,59 @@ description: structuredClone throws on non-cloneable values
 features: [structuredClone]
 ---*/
 
-test("throws on function", () => {
-  let threw = false;
+test("throws DOMException with DataCloneError on function", () => {
   try {
     structuredClone(() => {});
   } catch (e) {
-    threw = true;
+    expect(e instanceof DOMException).toBe(true);
+    expect(e.name).toBe("DataCloneError");
+    expect(e.code).toBe(25);
     expect(e.message.includes("could not be cloned")).toBe(true);
+    return;
   }
-  expect(threw).toBe(true);
+  expect(true).toBe(false);
 });
 
-test("throws on symbol", () => {
-  let threw = false;
+test("throws DOMException with DataCloneError on symbol", () => {
   try {
     structuredClone(Symbol("test"));
   } catch (e) {
-    threw = true;
-    expect(e.message.includes("could not be cloned")).toBe(true);
+    expect(e instanceof DOMException).toBe(true);
+    expect(e.name).toBe("DataCloneError");
+    expect(e.code).toBe(25);
+    return;
   }
-  expect(threw).toBe(true);
+  expect(true).toBe(false);
 });
 
 test("throws when no arguments provided", () => {
-  let threw = false;
-  try {
-    structuredClone();
-  } catch (e) {
-    threw = true;
-    expect(e.message.includes("1 argument required")).toBe(true);
-  }
-  expect(threw).toBe(true);
+  expect(() => structuredClone()).toThrow();
 });
 
-test("throws on object containing a function", () => {
-  let threw = false;
+test("throws DOMException with DataCloneError on object containing a function", () => {
   try {
     structuredClone({ fn: () => {} });
   } catch (e) {
-    threw = true;
-    expect(e.message.includes("could not be cloned")).toBe(true);
+    expect(e instanceof DOMException).toBe(true);
+    expect(e.name).toBe("DataCloneError");
+    expect(e.code).toBe(25);
+    return;
   }
-  expect(threw).toBe(true);
+  expect(true).toBe(false);
 });
 
-test("throws on object with accessor property", () => {
+test("clones object with accessor property by reading getter value", () => {
   const obj = {};
   Object.defineProperty(obj, "value", {
-    get() { return 42; },
+    get() {
+      return 42;
+    },
     enumerable: true,
     configurable: true,
   });
-  let threw = false;
-  try {
-    structuredClone(obj);
-  } catch (e) {
-    threw = true;
-    expect(e.message.includes("could not be cloned")).toBe(true);
-  }
-  expect(threw).toBe(true);
+  const clone = structuredClone(obj);
+  expect(clone.value).toBe(42);
+  expect(clone !== obj).toBe(true);
 });
 
 test("second argument (options) is accepted and ignored", () => {
