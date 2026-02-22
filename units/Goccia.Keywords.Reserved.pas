@@ -19,6 +19,7 @@ const
   KEYWORD_FALSE      = 'false';
   KEYWORD_FINALLY    = 'finally';
   KEYWORD_FOR        = 'for';
+  KEYWORD_FUNCTION   = 'function';
   KEYWORD_IF         = 'if';
   KEYWORD_IMPORT     = 'import';
   KEYWORD_IN         = 'in';
