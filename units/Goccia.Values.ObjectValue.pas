@@ -5,7 +5,6 @@ unit Goccia.Values.ObjectValue;
 interface
 
 uses
-  Classes,
   Generics.Collections,
 
   Goccia.Values.ObjectPropertyDescriptor,
@@ -16,8 +15,7 @@ type
 
   TGocciaObjectValue = class(TGocciaValue)
   protected
-    FPropertyDescriptors: TDictionary<string, TGocciaPropertyDescriptor>;
-    FPropertyInsertionOrder: TStringList;
+    FProperties: TGocciaPropertyMap;
     FSymbolDescriptors: TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
     FSymbolInsertionOrder: TList<TGocciaSymbolValue>;
     FPrototype: TGocciaObjectValue;
@@ -38,15 +36,12 @@ type
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
 
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
-    procedure DefineProperties(const AProperties: TDictionary<string, TGocciaPropertyDescriptor>);
 
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); virtual;
 
-    // Convenience methods for built-in objects
     procedure RegisterNativeMethod(const AMethod: TGocciaValue);
     procedure RegisterConstant(const AName: string; const AValue: TGocciaValue);
 
-    // Property accessors
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
@@ -55,15 +50,13 @@ type
     function HasOwnProperty(const AName: string): Boolean;
     function DeleteProperty(const AName: string): Boolean;
 
-    // Property enumeration methods
     function GetEnumerablePropertyNames: TArray<string>;
     function GetEnumerablePropertyValues: TArray<TGocciaValue>;
     function GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>;
     function GetAllPropertyNames: TArray<string>;
-    function GetOwnPropertyNames: TStringList;
-    function GetOwnPropertyKeys: TStringList;
+    function GetOwnPropertyNames: TArray<string>;
+    function GetOwnPropertyKeys: TArray<string>;
 
-    // Symbol property methods
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
@@ -72,7 +65,6 @@ type
     function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
     function GetOwnSymbols: TArray<TGocciaSymbolValue>;
 
-    // Freeze/seal/extensibility support
     procedure Freeze;
     function IsFrozen: Boolean;
     procedure Seal;
@@ -82,6 +74,7 @@ type
 
     procedure MarkReferences; override;
 
+    property Properties: TGocciaPropertyMap read FProperties;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
     property Frozen: Boolean read FFrozen;
     property Sealed: Boolean read FSealed;
@@ -121,13 +114,9 @@ end;
 
 constructor TGocciaObjectValue.Create(const APrototype: TGocciaObjectValue = nil);
 begin
-  FPropertyDescriptors := TDictionary<string, TGocciaPropertyDescriptor>.Create;
-  FPropertyInsertionOrder := TStringList.Create;
-  FPropertyInsertionOrder.Duplicates := dupIgnore; // Prevent duplicates
-
+  FProperties := TGocciaPropertyMap.Create;
   FSymbolDescriptors := TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>.Create;
   FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
-
   FPrototype := APrototype;
   FFrozen := False;
   FSealed := False;
@@ -135,17 +124,28 @@ begin
 end;
 
 destructor TGocciaObjectValue.Destroy;
+var
+  PropEntries: TGocciaPropertyMap.TKeyValueArray;
+  I: Integer;
+  SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
 begin
-  FPropertyDescriptors.Free;
-  FPropertyInsertionOrder.Free;
+  PropEntries := FProperties.ToArray;
+  for I := 0 to Length(PropEntries) - 1 do
+    PropEntries[I].Value.Free;
+  FProperties.Free;
+
+  for SymPair in FSymbolDescriptors do
+    SymPair.Value.Free;
   FSymbolDescriptors.Free;
+
   FSymbolInsertionOrder.Free;
   inherited;
 end;
 
 procedure TGocciaObjectValue.MarkReferences;
 var
-  Pair: TPair<string, TGocciaPropertyDescriptor>;
+  Entries: TGocciaPropertyMap.TKeyValueArray;
+  I: Integer;
   SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
 begin
   if GCMarked then Exit;
@@ -154,8 +154,9 @@ begin
   if Assigned(FPrototype) then
     FPrototype.MarkReferences;
 
-  for Pair in FPropertyDescriptors do
-    MarkPropertyDescriptor(Pair.Value);
+  Entries := FProperties.ToArray;
+  for I := 0 to Length(Entries) - 1 do
+    MarkPropertyDescriptor(Entries[I].Value);
 
   for SymPair in FSymbolDescriptors do
   begin
@@ -167,7 +168,8 @@ end;
 function TGocciaObjectValue.ToDebugString: string;
 var
   SB: TStringBuilder;
-  Pair: TPair<string, TGocciaPropertyDescriptor>;
+  Entries: TGocciaPropertyMap.TKeyValueArray;
+  I: Integer;
   First: Boolean;
   Value: TGocciaValue;
 begin
@@ -176,29 +178,26 @@ begin
     SB.Append('{');
     First := True;
 
-    // Iterate through property descriptors
-    for Pair in FPropertyDescriptors do
+    Entries := FProperties.ToArray;
+    for I := 0 to Length(Entries) - 1 do
     begin
       if not First then
         SB.Append(', ');
 
-      // Get the value from the descriptor
-      if Pair.Value is TGocciaPropertyDescriptorData then
-        Value := TGocciaPropertyDescriptorData(Pair.Value).Value
-      else if Pair.Value is TGocciaPropertyDescriptorAccessor then
-        Value := nil
+      if Entries[I].Value is TGocciaPropertyDescriptorData then
+        Value := TGocciaPropertyDescriptorData(Entries[I].Value).Value
       else
         Value := nil;
 
       if Assigned(Value) then
       begin
         if Value is TGocciaObjectValue then
-          SB.Append(Pair.Key).Append(': ').Append(TGocciaObjectValue(Value).ToDebugString)
+          SB.Append(Entries[I].Key).Append(': ').Append(TGocciaObjectValue(Value).ToDebugString)
         else
-          SB.Append(Pair.Key).Append(': ').Append(Value.ToStringLiteral.Value);
+          SB.Append(Entries[I].Key).Append(': ').Append(Value.ToStringLiteral.Value);
       end
       else
-        SB.Append(Pair.Key).Append(': [accessor]');
+        SB.Append(Entries[I].Key).Append(': [accessor]');
 
       First := False;
     end;
@@ -207,7 +206,6 @@ begin
     begin
       if not First then
         SB.Append(', ');
-
       SB.Append('[[Prototype]]: ').Append(FPrototype.ToDebugString);
     end;
 
@@ -260,17 +258,13 @@ var
   NativeSetterFunction: TGocciaNativeFunctionValue;
   Args: TGocciaArgumentsCollection;
 begin
-  // Frozen objects cannot be modified
   if FFrozen then
     ThrowTypeError('Cannot assign to read only property ''' + AName + ''' of frozen object');
 
-  // First check for existing property descriptors
-  if FPropertyDescriptors.ContainsKey(AName) then
+  if FProperties.TryGetValue(AName, Descriptor) then
   begin
-    Descriptor := FPropertyDescriptors[AName];
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      // Call the setter function if it exists
       if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
       begin
         if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionValue then
@@ -298,25 +292,20 @@ begin
           Exit;
         end;
       end;
-      // Accessor descriptor without setter - property is not writable
       ThrowTypeError('Cannot set property ''' + AName + ''' which has only a getter');
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
     begin
-      // Check if property is writable
       if TGocciaPropertyDescriptorData(Descriptor).Writable then
       begin
-        // Property has a data descriptor, update its value while preserving flags
-        Descriptor := TGocciaPropertyDescriptorData.Create(AValue, Descriptor.Flags);
-        FPropertyDescriptors[AName] := Descriptor;
+        FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue, Descriptor.Flags));
+        Descriptor.Free;
         Exit;
       end;
-      // Property is not writable - throw TypeError (strict mode behavior)
       ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
     end;
   end;
 
-  // Property doesn't exist - check if we can create it
   if not ACanCreate then
     ThrowTypeError('Cannot assign to non-existent property ''' + AName + '''');
 
@@ -330,78 +319,48 @@ procedure TGocciaObjectValue.DefineProperty(const AName: string; const ADescript
 var
   ExistingDescriptor: TGocciaPropertyDescriptor;
 begin
-  if FPropertyDescriptors.ContainsKey(AName) then
+  if FProperties.TryGetValue(AName, ExistingDescriptor) then
   begin
-    ExistingDescriptor := FPropertyDescriptors[AName];
-
-    // Check if the existing property is configurable
     if not ExistingDescriptor.Configurable then
       ThrowTypeError('Cannot redefine non-configurable property ''' + AName + '''');
-
-    // Property is configurable - allow redefinition
-    FPropertyDescriptors[AName] := ADescriptor;
-    Exit; // Don't change insertion order for existing properties
-  end
-  else
-  begin
-    // New property - track insertion order
-    FPropertyInsertionOrder.Add(AName);
+    ExistingDescriptor.Free;
   end;
 
-  FPropertyDescriptors.AddOrSetValue(AName, ADescriptor);
+  FProperties.Add(AName, ADescriptor);
 end;
 
-procedure TGocciaObjectValue.DefineProperties(const AProperties: TDictionary<string, TGocciaPropertyDescriptor>);
-var
-  Pair: TPair<string, TGocciaPropertyDescriptor>;
+function TGocciaObjectValue.GetOwnPropertyNames: TArray<string>;
 begin
-  for Pair in AProperties do
-    DefineProperty(Pair.Key, Pair.Value);
+  Result := GetOwnPropertyKeys;
 end;
 
-function TGocciaObjectValue.GetOwnPropertyNames: TStringList;
+function TGocciaObjectValue.GetOwnPropertyKeys: TArray<string>;
 begin
-  Result := FPropertyInsertionOrder;
-end;
-
-function TGocciaObjectValue.GetOwnPropertyKeys: TStringList;
-begin
-  Result := FPropertyInsertionOrder;
+  Result := FProperties.Keys;
 end;
 
 
 
 procedure TGocciaObjectValue.RegisterNativeMethod(const AMethod: TGocciaValue);
 var
-  Descriptor: TGocciaPropertyDescriptor;
-  MethodName: string;
+  OldDescriptor: TGocciaPropertyDescriptor;
 begin
   if not (AMethod is TGocciaNativeFunctionValue) then
     raise Exception.Create('Method must be a native function');
 
-  // Built-in methods: { writable: true, enumerable: false, configurable: true }
-  Descriptor := TGocciaPropertyDescriptorData.Create(AMethod, [pfConfigurable, pfWritable]);
-
-  if AMethod is TGocciaNativeFunctionValue then
-  begin
-    MethodName := TGocciaNativeFunctionValue(AMethod).Name;
-    FPropertyDescriptors.AddOrSetValue(MethodName, Descriptor);
-    // Track insertion order for GetAllPropertyNames
-    if FPropertyInsertionOrder.IndexOf(MethodName) = -1 then
-      FPropertyInsertionOrder.Add(MethodName);
-  end;
+  if FProperties.TryGetValue(TGocciaNativeFunctionValue(AMethod).Name, OldDescriptor) then
+    OldDescriptor.Free;
+  FProperties.Add(TGocciaNativeFunctionValue(AMethod).Name,
+    TGocciaPropertyDescriptorData.Create(AMethod, [pfConfigurable, pfWritable]));
 end;
 
 procedure TGocciaObjectValue.RegisterConstant(const AName: string; const AValue: TGocciaValue);
 var
-  Descriptor: TGocciaPropertyDescriptor;
+  OldDescriptor: TGocciaPropertyDescriptor;
 begin
-  // Built-in constants: { writable: false, enumerable: false, configurable: false }
-  Descriptor := TGocciaPropertyDescriptorData.Create(AValue, []);
-  FPropertyDescriptors.AddOrSetValue(AName, Descriptor);
-  // Track insertion order for GetAllPropertyNames
-  if FPropertyInsertionOrder.IndexOf(AName) = -1 then
-    FPropertyInsertionOrder.Add(AName);
+  if FProperties.TryGetValue(AName, OldDescriptor) then
+    OldDescriptor.Free;
+  FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue, []));
 end;
 
 function TGocciaObjectValue.GetProperty(const AName: string): TGocciaValue;
@@ -421,13 +380,10 @@ var
   NativeGetterFunction: TGocciaNativeFunctionValue;
   Args: TGocciaArgumentsCollection;
 begin
-  // Check property descriptors (getters/setters) with the provided this context
-  if FPropertyDescriptors.ContainsKey(AName) then
+  if FProperties.TryGetValue(AName, Descriptor) then
   begin
-    Descriptor := FPropertyDescriptors[AName];
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      // Call the getter function with the provided this context if it exists
       if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
       begin
         if TGocciaPropertyDescriptorAccessor(Descriptor).Getter is TGocciaFunctionValue then
@@ -453,7 +409,6 @@ begin
           Exit;
         end;
       end;
-      // No getter - return undefined
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
     end
@@ -464,7 +419,6 @@ begin
     end;
   end;
 
-  // Check prototype chain
   if Assigned(FPrototype) then
   begin
     Result := FPrototype.GetPropertyWithContext(AName, AThisContext);
@@ -476,15 +430,13 @@ end;
 
 function TGocciaObjectValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
 begin
-  if FPropertyDescriptors.ContainsKey(AName) then
-    Result := FPropertyDescriptors[AName]
-  else
+  if not FProperties.TryGetValue(AName, Result) then
     Result := nil;
 end;
 
 function TGocciaObjectValue.HasProperty(const AName: string): Boolean;
 begin
-  Result := HasOwnProperty(AName);
+  Result := FProperties.ContainsKey(AName);
 
   if not Result and Assigned(FPrototype) then
     Result := FPrototype.HasProperty(AName);
@@ -492,21 +444,18 @@ end;
 
 function TGocciaObjectValue.HasOwnProperty(const AName: string): Boolean;
 begin
-  Result := FPropertyDescriptors.ContainsKey(AName);
+  Result := FProperties.ContainsKey(AName);
 end;
 
 function TGocciaObjectValue.DeleteProperty(const AName: string): Boolean;
 var
-  Index: Integer;
   Descriptor: TGocciaPropertyDescriptor;
 begin
-  if not FPropertyDescriptors.ContainsKey(AName) then
+  if not FProperties.TryGetValue(AName, Descriptor) then
   begin
     Result := True;
     Exit;
   end;
-
-  Descriptor := FPropertyDescriptors[AName];
 
   if not Descriptor.Configurable then
   begin
@@ -514,35 +463,27 @@ begin
     Exit;
   end;
 
-  FPropertyDescriptors.Remove(AName);
-  Index := FPropertyInsertionOrder.IndexOf(AName);
-  if Index >= 0 then
-    FPropertyInsertionOrder.Delete(Index);
-
+  FProperties.Remove(AName);
+  Descriptor.Free;
   Result := True;
 end;
 
 function TGocciaObjectValue.GetEnumerablePropertyNames: TArray<string>;
 var
+  AllEntries: TGocciaPropertyMap.TKeyValueArray;
   Names: TArray<string>;
-  Count: Integer;
-  I: Integer;
-  PropertyName: string;
-  Descriptor: TGocciaPropertyDescriptor;
+  Count, I: Integer;
 begin
-  SetLength(Names, FPropertyInsertionOrder.Count);
+  AllEntries := FProperties.ToArray;
+  SetLength(Names, Length(AllEntries));
   Count := 0;
 
-  // Iterate in insertion order
-  for I := 0 to FPropertyInsertionOrder.Count - 1 do
-  begin
-    PropertyName := FPropertyInsertionOrder[I];
-    if FPropertyDescriptors.TryGetValue(PropertyName, Descriptor) and Descriptor.Enumerable then
+  for I := 0 to Length(AllEntries) - 1 do
+    if AllEntries[I].Value.Enumerable then
     begin
-      Names[Count] := PropertyName;
+      Names[Count] := AllEntries[I].Key;
       Inc(Count);
     end;
-  end;
 
   SetLength(Names, Count);
   Result := Names;
@@ -550,26 +491,20 @@ end;
 
 function TGocciaObjectValue.GetEnumerablePropertyValues: TArray<TGocciaValue>;
 var
+  AllEntries: TGocciaPropertyMap.TKeyValueArray;
   Values: TArray<TGocciaValue>;
-  Count: Integer;
-  I: Integer;
-  PropertyName: string;
-  Descriptor: TGocciaPropertyDescriptor;
+  Count, I: Integer;
 begin
-  SetLength(Values, FPropertyInsertionOrder.Count);
+  AllEntries := FProperties.ToArray;
+  SetLength(Values, Length(AllEntries));
   Count := 0;
 
-  // Iterate in insertion order
-  for I := 0 to FPropertyInsertionOrder.Count - 1 do
-  begin
-    PropertyName := FPropertyInsertionOrder[I];
-    if FPropertyDescriptors.TryGetValue(PropertyName, Descriptor) and
-       Descriptor.Enumerable and (Descriptor is TGocciaPropertyDescriptorData) then
+  for I := 0 to Length(AllEntries) - 1 do
+    if AllEntries[I].Value.Enumerable and (AllEntries[I].Value is TGocciaPropertyDescriptorData) then
     begin
-      Values[Count] := TGocciaPropertyDescriptorData(Descriptor).Value;
+      Values[Count] := TGocciaPropertyDescriptorData(AllEntries[I].Value).Value;
       Inc(Count);
     end;
-  end;
 
   SetLength(Values, Count);
   Result := Values;
@@ -577,57 +512,31 @@ end;
 
 function TGocciaObjectValue.GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>;
 var
+  AllEntries: TGocciaPropertyMap.TKeyValueArray;
   Entries: TArray<TPair<string, TGocciaValue>>;
-  Count: Integer;
-  I: Integer;
-  PropertyName: string;
-  Descriptor: TGocciaPropertyDescriptor;
+  Count, I: Integer;
   Entry: TPair<string, TGocciaValue>;
 begin
-  SetLength(Entries, FPropertyInsertionOrder.Count);
+  AllEntries := FProperties.ToArray;
+  SetLength(Entries, Length(AllEntries));
   Count := 0;
 
-  // Iterate in insertion order
-  for I := 0 to FPropertyInsertionOrder.Count - 1 do
-  begin
-    PropertyName := FPropertyInsertionOrder[I];
-    if FPropertyDescriptors.TryGetValue(PropertyName, Descriptor) and
-       Descriptor.Enumerable and (Descriptor is TGocciaPropertyDescriptorData) then
+  for I := 0 to Length(AllEntries) - 1 do
+    if AllEntries[I].Value.Enumerable and (AllEntries[I].Value is TGocciaPropertyDescriptorData) then
     begin
-      Entry.Key := PropertyName;
-      Entry.Value := TGocciaPropertyDescriptorData(Descriptor).Value;
+      Entry.Key := AllEntries[I].Key;
+      Entry.Value := TGocciaPropertyDescriptorData(AllEntries[I].Value).Value;
       Entries[Count] := Entry;
       Inc(Count);
     end;
-  end;
 
   SetLength(Entries, Count);
   Result := Entries;
 end;
 
 function TGocciaObjectValue.GetAllPropertyNames: TArray<string>;
-var
-  Names: TArray<string>;
-  Count: Integer;
-  I: Integer;
-  PropertyName: string;
 begin
-  SetLength(Names, FPropertyInsertionOrder.Count);
-  Count := 0;
-
-  // Iterate in insertion order
-  for I := 0 to FPropertyInsertionOrder.Count - 1 do
-  begin
-    PropertyName := FPropertyInsertionOrder[I];
-    if FPropertyDescriptors.ContainsKey(PropertyName) then
-    begin
-      Names[Count] := PropertyName;
-      Inc(Count);
-    end;
-  end;
-
-  SetLength(Names, Count);
-  Result := Names;
+  Result := FProperties.Keys;
 end;
 
 { Symbol property methods }
@@ -640,6 +549,7 @@ begin
   begin
     if not ExistingDescriptor.Configurable then
       ThrowTypeError('Cannot redefine non-configurable property ''' + ASymbol.ToStringLiteral.Value + '''');
+    ExistingDescriptor.Free;
   end
   else
     FSymbolInsertionOrder.Add(ASymbol);
@@ -754,40 +664,38 @@ end;
 
 procedure TGocciaObjectValue.Freeze;
 var
-  Key: string;
+  AllEntries: TGocciaPropertyMap.TKeyValueArray;
+  I: Integer;
   Descriptor: TGocciaPropertyDescriptor;
   NewDescriptor: TGocciaPropertyDescriptor;
 begin
-  // Make all existing properties non-writable and non-configurable
-  for Key in FPropertyInsertionOrder do
+  AllEntries := FProperties.ToArray;
+  for I := 0 to Length(AllEntries) - 1 do
   begin
-    if FPropertyDescriptors.ContainsKey(Key) then
+    Descriptor := AllEntries[I].Value;
+    if Descriptor is TGocciaPropertyDescriptorData then
     begin
-      Descriptor := FPropertyDescriptors[Key];
-      if Descriptor is TGocciaPropertyDescriptorData then
-      begin
-        // Recreate with only enumerable flag (no writable, no configurable)
-        if Descriptor.Enumerable then
-          NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, [pfEnumerable])
-        else
-          NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, []);
-        FPropertyDescriptors[Key] := NewDescriptor;
-      end
-      else if Descriptor is TGocciaPropertyDescriptorAccessor then
-      begin
-        // Accessor descriptors become non-configurable
-        if Descriptor.Enumerable then
-          NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
-            TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-            TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-            [pfEnumerable])
-        else
-          NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
-            TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-            TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-            []);
-        FPropertyDescriptors[Key] := NewDescriptor;
-      end;
+      if Descriptor.Enumerable then
+        NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, [pfEnumerable])
+      else
+        NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, []);
+      FProperties.Add(AllEntries[I].Key, NewDescriptor);
+      Descriptor.Free;
+    end
+    else if Descriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      if Descriptor.Enumerable then
+        NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
+          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+          [pfEnumerable])
+      else
+        NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
+          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+          []);
+      FProperties.Add(AllEntries[I].Key, NewDescriptor);
+      Descriptor.Free;
     end;
   end;
   FFrozen := True;
@@ -802,34 +710,35 @@ end;
 
 procedure TGocciaObjectValue.Seal;
 var
-  Key: string;
+  AllEntries: TGocciaPropertyMap.TKeyValueArray;
+  I: Integer;
   Descriptor: TGocciaPropertyDescriptor;
   NewDescriptor: TGocciaPropertyDescriptor;
   Flags: TPropertyFlags;
 begin
-  for Key in FPropertyInsertionOrder do
+  AllEntries := FProperties.ToArray;
+  for I := 0 to Length(AllEntries) - 1 do
   begin
-    if FPropertyDescriptors.ContainsKey(Key) then
+    Descriptor := AllEntries[I].Value;
+    Flags := [];
+    if Descriptor.Enumerable then
+      Include(Flags, pfEnumerable);
+    if Descriptor is TGocciaPropertyDescriptorData then
     begin
-      Descriptor := FPropertyDescriptors[Key];
-      Flags := [];
-      if Descriptor.Enumerable then
-        Include(Flags, pfEnumerable);
-      if Descriptor is TGocciaPropertyDescriptorData then
-      begin
-        if Descriptor.Writable then
-          Include(Flags, pfWritable);
-        NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, Flags);
-        FPropertyDescriptors[Key] := NewDescriptor;
-      end
-      else if Descriptor is TGocciaPropertyDescriptorAccessor then
-      begin
-        NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
-          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-          Flags);
-        FPropertyDescriptors[Key] := NewDescriptor;
-      end;
+      if Descriptor.Writable then
+        Include(Flags, pfWritable);
+      NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, Flags);
+      FProperties.Add(AllEntries[I].Key, NewDescriptor);
+      Descriptor.Free;
+    end
+    else if Descriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      NewDescriptor := TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+        TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+        Flags);
+      FProperties.Add(AllEntries[I].Key, NewDescriptor);
+      Descriptor.Free;
     end;
   end;
   FSealed := True;

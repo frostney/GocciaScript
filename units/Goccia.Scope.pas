@@ -22,7 +22,7 @@ type
 
   TGocciaScope = class
   private
-    FLexicalBindings: TGocciaBindingMap;
+    FLexicalBindings: TGocciaScopeBindingMap;
     FParent: TGocciaScope;
     FThisValue: TGocciaValue;
     FScopeKind: TGocciaScopeKind;
@@ -149,7 +149,7 @@ begin
   FCustomLabel := ACustomLabel;
   FThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   FParent := AParent;
-  FLexicalBindings := TGocciaBindingMap.Create(ACapacity);
+  FLexicalBindings := TGocciaScopeBindingMap.Create(ACapacity);
 
   // Inherit interpreter context from parent scope
   if Assigned(AParent) then
@@ -368,15 +368,15 @@ end;
 
 function TGocciaScope.GetOwnBindingNames: TGocciaStringArray;
 begin
-  Result := FLexicalBindings.GetKeys;
+  Result := FLexicalBindings.Keys;
 end;
 
 { TGocciaScope - GC support }
 
 procedure TGocciaScope.MarkReferences;
 var
+  Bindings: TGocciaScopeBindingMap.TValueArray;
   I: Integer;
-  Val: TGocciaValue;
 begin
   if FGCMarked then Exit;
   FGCMarked := True;
@@ -387,12 +387,10 @@ begin
   if Assigned(FThisValue) then
     FThisValue.MarkReferences;
 
-  for I := 0 to FLexicalBindings.Count - 1 do
-  begin
-    Val := FLexicalBindings[I];
-    if Assigned(Val) then
-      Val.MarkReferences;
-  end;
+  Bindings := FLexicalBindings.Values;
+  for I := 0 to Length(Bindings) - 1 do
+    if Assigned(Bindings[I].Value) then
+      Bindings[I].Value.MarkReferences;
 end;
 
 { TGocciaGlobalScope }
