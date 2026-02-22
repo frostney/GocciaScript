@@ -124,9 +124,20 @@ begin
 end;
 
 destructor TGocciaObjectValue.Destroy;
+var
+  PropEntries: TGocciaPropertyMap.TKeyValueArray;
+  I: Integer;
+  SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
 begin
+  PropEntries := FProperties.ToArray;
+  for I := 0 to Length(PropEntries) - 1 do
+    PropEntries[I].Value.Free;
   FProperties.Free;
+
+  for SymPair in FSymbolDescriptors do
+    SymPair.Value.Free;
   FSymbolDescriptors.Free;
+
   FSymbolInsertionOrder.Free;
   inherited;
 end;
@@ -288,6 +299,7 @@ begin
       if TGocciaPropertyDescriptorData(Descriptor).Writable then
       begin
         FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue, Descriptor.Flags));
+        Descriptor.Free;
         Exit;
       end;
       ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
@@ -311,6 +323,7 @@ begin
   begin
     if not ExistingDescriptor.Configurable then
       ThrowTypeError('Cannot redefine non-configurable property ''' + AName + '''');
+    ExistingDescriptor.Free;
   end;
 
   FProperties.Add(AName, ADescriptor);
@@ -329,16 +342,24 @@ end;
 
 
 procedure TGocciaObjectValue.RegisterNativeMethod(const AMethod: TGocciaValue);
+var
+  OldDescriptor: TGocciaPropertyDescriptor;
 begin
   if not (AMethod is TGocciaNativeFunctionValue) then
     raise Exception.Create('Method must be a native function');
 
+  if FProperties.TryGetValue(TGocciaNativeFunctionValue(AMethod).Name, OldDescriptor) then
+    OldDescriptor.Free;
   FProperties.Add(TGocciaNativeFunctionValue(AMethod).Name,
     TGocciaPropertyDescriptorData.Create(AMethod, [pfConfigurable, pfWritable]));
 end;
 
 procedure TGocciaObjectValue.RegisterConstant(const AName: string; const AValue: TGocciaValue);
+var
+  OldDescriptor: TGocciaPropertyDescriptor;
 begin
+  if FProperties.TryGetValue(AName, OldDescriptor) then
+    OldDescriptor.Free;
   FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue, []));
 end;
 
@@ -443,6 +464,7 @@ begin
   end;
 
   FProperties.Remove(AName);
+  Descriptor.Free;
   Result := True;
 end;
 
@@ -527,6 +549,7 @@ begin
   begin
     if not ExistingDescriptor.Configurable then
       ThrowTypeError('Cannot redefine non-configurable property ''' + ASymbol.ToStringLiteral.Value + '''');
+    ExistingDescriptor.Free;
   end
   else
     FSymbolInsertionOrder.Add(ASymbol);
@@ -657,6 +680,7 @@ begin
       else
         NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, []);
       FProperties.Add(AllEntries[I].Key, NewDescriptor);
+      Descriptor.Free;
     end
     else if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
@@ -671,6 +695,7 @@ begin
           TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
           []);
       FProperties.Add(AllEntries[I].Key, NewDescriptor);
+      Descriptor.Free;
     end;
   end;
   FFrozen := True;
@@ -704,6 +729,7 @@ begin
         Include(Flags, pfWritable);
       NewDescriptor := TGocciaPropertyDescriptorData.Create(TGocciaPropertyDescriptorData(Descriptor).Value, Flags);
       FProperties.Add(AllEntries[I].Key, NewDescriptor);
+      Descriptor.Free;
     end
     else if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
@@ -712,6 +738,7 @@ begin
         TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
         Flags);
       FProperties.Add(AllEntries[I].Key, NewDescriptor);
+      Descriptor.Free;
     end;
   end;
   FSealed := True;

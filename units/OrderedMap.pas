@@ -51,9 +51,9 @@ type
     FBucketCount: Integer;
 
     class function HashKey(const AKey: string): Cardinal; static; inline;
-    function FindBucket(const AKey: string; AHash: Cardinal; out ABucketIdx: Integer): Boolean;
+    function FindBucket(const AKey: string; const AHash: Cardinal; out ABucketIdx: Integer): Boolean;
     procedure Grow;
-    procedure Rehash(ANewBucketCount: Integer);
+    procedure Rehash(const ANewBucketCount: Integer);
     procedure Compact;
 
     function GetValue(const AKey: string): TValue;
@@ -76,7 +76,7 @@ type
     procedure ForEach(ACallback: TForEachCallback);
     function Keys: TKeyArray;
     function Values: TValueArray;
-    function EntryAt(AIndex: Integer): TKeyValuePair;
+    function EntryAt(const AIndex: Integer): TKeyValuePair;
 
     property Items[const AKey: string]: TValue read GetValue write SetValue; default;
     property Count: Integer read FCount;
@@ -98,7 +98,7 @@ begin
 end;
 {$POP}
 
-function TOrderedMap<TValue>.FindBucket(const AKey: string; AHash: Cardinal;
+function TOrderedMap<TValue>.FindBucket(const AKey: string; const AHash: Cardinal;
   out ABucketIdx: Integer): Boolean;
 var
   Idx, EntryIdx, FirstDeleted: Integer;
@@ -150,7 +150,7 @@ begin
   Rehash(N);
 end;
 
-procedure TOrderedMap<TValue>.Rehash(ANewBucketCount: Integer);
+procedure TOrderedMap<TValue>.Rehash(const ANewBucketCount: Integer);
 var
   I, Idx: Integer;
 begin
@@ -388,7 +388,7 @@ begin
     end;
 end;
 
-function TOrderedMap<TValue>.EntryAt(AIndex: Integer): TKeyValuePair;
+function TOrderedMap<TValue>.EntryAt(const AIndex: Integer): TKeyValuePair;
 var
   I, J: Integer;
 begin
