@@ -109,9 +109,6 @@ begin
           ScriptResult.AssignProperty('duration', FileResult.GetProperty('duration'));
         if FileResult.GetProperty('failedTests').ToStringLiteral.Value <> 'undefined' then
           ScriptResult.AssignProperty('failedTests', FileResult.GetProperty('failedTests'));
-      end else
-      begin
-        ScriptResult := FileResult;
       end;
 
       Result.TestResult := ScriptResult;
