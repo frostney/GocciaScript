@@ -98,7 +98,7 @@ tests/
 | `--no-progress` | Suppress per-file progress output |
 | `--no-results` | Suppress test results summary |
 | `--exit-on-first-failure` | Stop on first test failure |
-| `--silent` | Suppress `console.log` output from test scripts |
+| `--silent` | Suppress all console output from test scripts |
 
 ```bash
 # CI-friendly: no progress, stop on first failure
@@ -134,7 +134,7 @@ describe("Feature Name", () => {
   test("should handle edge case", () => {
     expect(() => {
       riskyOperation();
-    }).toThrow();
+    }).toThrow(RangeError);
   });
 
   describe("sub-feature", () => {

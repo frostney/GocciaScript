@@ -1459,25 +1459,29 @@ begin
 
   ChildScope.DefineLexicalBinding(AEnumDeclaration.Name, EnumValue, dtLet);
 
-  for I := 0 to Length(AEnumDeclaration.Members) - 1 do
-  begin
-    MemberValue := EvaluateExpression(AEnumDeclaration.Members[I].Initializer, ChildContext);
+  TGocciaGarbageCollector.Instance.AddTempRoot(EnumEntries);
+  try
+    for I := 0 to Length(AEnumDeclaration.Members) - 1 do
+    begin
+      MemberValue := EvaluateExpression(AEnumDeclaration.Members[I].Initializer, ChildContext);
 
-    if not ((MemberValue is TGocciaNumberLiteralValue) or
-            (MemberValue is TGocciaStringLiteralValue) or
-            (MemberValue is TGocciaSymbolValue)) then
-      AContext.OnError('Enum member initializer must evaluate to a Number, String, or Symbol value',
-        AEnumDeclaration.Line, AEnumDeclaration.Column);
+      if not ((MemberValue is TGocciaNumberLiteralValue) or
+              (MemberValue is TGocciaStringLiteralValue) or
+              (MemberValue is TGocciaSymbolValue)) then
+        ThrowTypeError('Enum member initializer must evaluate to a Number, String, or Symbol value');
 
-    EnumValue.DefineProperty(AEnumDeclaration.Members[I].Name,
-      TGocciaPropertyDescriptorData.Create(MemberValue, [pfEnumerable]));
+      EnumValue.DefineProperty(AEnumDeclaration.Members[I].Name,
+        TGocciaPropertyDescriptorData.Create(MemberValue, [pfEnumerable]));
 
-    ChildScope.DefineLexicalBinding(AEnumDeclaration.Members[I].Name, MemberValue, dtLet);
+      ChildScope.DefineLexicalBinding(AEnumDeclaration.Members[I].Name, MemberValue, dtLet);
 
-    EntryPair := TGocciaArrayValue.Create;
-    EntryPair.Elements.Add(TGocciaStringLiteralValue.Create(AEnumDeclaration.Members[I].Name));
-    EntryPair.Elements.Add(MemberValue);
-    EnumEntries.Elements.Add(EntryPair);
+      EntryPair := TGocciaArrayValue.Create;
+      EntryPair.Elements.Add(TGocciaStringLiteralValue.Create(AEnumDeclaration.Members[I].Name));
+      EntryPair.Elements.Add(MemberValue);
+      EnumEntries.Elements.Add(EntryPair);
+    end;
+  finally
+    TGocciaGarbageCollector.Instance.RemoveTempRoot(EnumEntries);
   end;
 
   EnumValue.Entries := EnumEntries;

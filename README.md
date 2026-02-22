@@ -74,7 +74,7 @@ See [Language Restrictions](docs/language-restrictions.md) for details on suppor
 
 ### Built-in Objects
 
-`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, `Promise`, `Temporal`, `Iterator`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`).
+`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, `Promise`, `Temporal`, `Iterator`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
 
 See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 

@@ -205,7 +205,7 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 
 | Flag | Provides | Notes |
 |------|----------|-------|
-| `ggConsole` | `console.log` | Output to stdout |
+| `ggConsole` | `console.*` | `log`, `warn`, `error`, `info`, `debug`, `dir`, `assert`, `count`, `time`, etc. |
 | `ggMath` | `Math.*` | Constants and functions |
 | `ggGlobalObject` | `Object.*` | `keys`, `assign`, `create`, `freeze`, etc. |
 | `ggGlobalArray` | `Array.isArray`, `Array.from`, `Array.of` | Static array methods |

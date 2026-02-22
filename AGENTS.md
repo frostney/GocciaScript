@@ -28,8 +28,10 @@ GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a 
 ```bash
 ./build/ScriptLoader example.js                  # Execute a script
 ./build/REPL                                      # Start interactive REPL
-./build/TestRunner tests/                         # Run all JavaScript tests
-./build/TestRunner tests/language/expressions/    # Run a test category
+./build/TestRunner tests/                                                      # Run all JavaScript tests
+./build/TestRunner tests/language/expressions/                                 # Run a test category
+./build/TestRunner tests --no-progress --exit-on-first-failure                 # CI mode
+./build/TestRunner tests --silent                                              # Suppress all console output
 ./build/BenchmarkRunner benchmarks/                                               # Run all benchmarks
 ./build/BenchmarkRunner benchmarks/fibonacci.js                                   # Run a specific benchmark
 ./build/BenchmarkRunner benchmarks --format=json --output=out.json                # Export as JSON
@@ -111,7 +113,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Constants: Error Names | `Goccia.Constants.ErrorNames.pas` | Error type name constants (`'TypeError'`, `'RangeError'`, etc.) |
 | Constants: Constructor Names | `Goccia.Constants.ConstructorNames.pas` | Built-in constructor name constants (`'Object'`, `'Array'`, etc.) |
 | ToPrimitive | `Goccia.Values.ToPrimitive.pas` | ECMAScript `ToPrimitive` abstract operation |
-| Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, centralized error construction |
+| Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, `ThrowDataCloneError` (creates DOMException with code 25), centralized error construction |
 | Argument Validator | `Goccia.Arguments.Validator.pas` | `RequireExactly`, `RequireAtLeast` — standardized argument count/type validation |
 | Argument Callbacks | `Goccia.Arguments.Callbacks.pas` | Pre-typed callback argument collections for array prototype methods |
 | Ordered Map | `OrderedMap.pas` | Generic insertion-order-preserving string-keyed map (`TOrderedMap<T>`) |

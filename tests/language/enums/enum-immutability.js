@@ -8,7 +8,7 @@ test("enum members are non-writable", () => {
 
   expect(() => {
     E.A = 99;
-  }).toThrow();
+  }).toThrow(TypeError);
 
   expect(E.A).toBe(1);
 });
@@ -18,7 +18,7 @@ test("enum object is non-extensible", () => {
 
   expect(() => {
     E.B = 2;
-  }).toThrow();
+  }).toThrow(TypeError);
 });
 
 test("enum members are non-configurable", () => {
@@ -26,7 +26,7 @@ test("enum members are non-configurable", () => {
 
   expect(() => {
     Object.defineProperty(E, "A", { value: 99 });
-  }).toThrow();
+  }).toThrow(TypeError);
 });
 
 test("Object.isExtensible returns false for enum", () => {

@@ -6,35 +6,35 @@ features: [enum-declaration]
 test("rejects boolean value", () => {
   expect(() => {
     enum E { A = true }
-  }).toThrow();
+  }).toThrow(TypeError);
 });
 
 test("rejects null value", () => {
   expect(() => {
     enum E { A = null }
-  }).toThrow();
+  }).toThrow(TypeError);
 });
 
 test("rejects undefined value", () => {
   expect(() => {
     enum E { A = undefined }
-  }).toThrow();
+  }).toThrow(TypeError);
 });
 
 test("rejects object value", () => {
   expect(() => {
     enum E { A = {} }
-  }).toThrow();
+  }).toThrow(TypeError);
 });
 
 test("rejects array value", () => {
   expect(() => {
     enum E { A = [] }
-  }).toThrow();
+  }).toThrow(TypeError);
 });
 
 test("rejects function value", () => {
   expect(() => {
     enum E { A = () => {} }
-  }).toThrow();
+  }).toThrow(TypeError);
 });

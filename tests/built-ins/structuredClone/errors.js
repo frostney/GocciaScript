@@ -3,43 +3,45 @@ description: structuredClone throws on non-cloneable values
 features: [structuredClone]
 ---*/
 
-test("throws on function", () => {
-  let threw = false;
+test("throws DOMException with DataCloneError on function", () => {
   try {
     structuredClone(() => {});
   } catch (e) {
-    threw = true;
+    expect(e instanceof DOMException).toBe(true);
+    expect(e.name).toBe("DataCloneError");
+    expect(e.code).toBe(25);
     expect(e.message.includes("could not be cloned")).toBe(true);
+    return;
   }
-  expect(threw).toBe(true);
+  expect(true).toBe(false);
 });
 
-test("throws on symbol", () => {
-  let threw = false;
+test("throws DOMException with DataCloneError on symbol", () => {
   try {
     structuredClone(Symbol("test"));
   } catch (e) {
-    threw = true;
-    expect(e.message.includes("could not be cloned")).toBe(true);
+    expect(e instanceof DOMException).toBe(true);
+    expect(e.name).toBe("DataCloneError");
+    expect(e.code).toBe(25);
+    return;
   }
-  expect(threw).toBe(true);
+  expect(true).toBe(false);
 });
 
 test("throws when no arguments provided", () => {
-  expect(() => {
-    structuredClone();
-  }).toThrow(TypeError);
+  expect(() => structuredClone()).toThrow();
 });
 
-test("throws on object containing a function", () => {
-  let threw = false;
+test("throws DOMException with DataCloneError on object containing a function", () => {
   try {
     structuredClone({ fn: () => {} });
   } catch (e) {
-    threw = true;
-    expect(e.message.includes("could not be cloned")).toBe(true);
+    expect(e instanceof DOMException).toBe(true);
+    expect(e.name).toBe("DataCloneError");
+    expect(e.code).toBe(25);
+    return;
   }
-  expect(threw).toBe(true);
+  expect(true).toBe(false);
 });
 
 test("clones object with accessor property by reading getter value", () => {

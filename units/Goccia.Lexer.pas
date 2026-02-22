@@ -211,7 +211,7 @@ function TGocciaLexer.ScanUnicodeEscape: string;
 var
   CodePoint, LowSurrogate: Cardinal;
   HexStr: string;
-  I, SavedCurrent: Integer;
+  I, SavedCurrent, SavedColumn: Integer;
 begin
   // Called after consuming '\u', Peek is the next character
   if Peek = '{' then
@@ -243,6 +243,7 @@ begin
   if (CodePoint >= $D800) and (CodePoint <= $DBFF) and (Peek = '\') and (PeekNext = 'u') then
   begin
     SavedCurrent := FCurrent;
+    SavedColumn := FColumn;
     Advance; // consume '\'
     Advance; // consume 'u'
     HexStr := '';
@@ -251,6 +252,7 @@ begin
       if IsAtEnd then
       begin
         FCurrent := SavedCurrent;
+        FColumn := SavedColumn;
         Break;
       end;
       HexStr := HexStr + Advance;
@@ -261,7 +263,10 @@ begin
       if (LowSurrogate >= $DC00) and (LowSurrogate <= $DFFF) then
         CodePoint := $10000 + ((CodePoint - $D800) shl 10) + (LowSurrogate - $DC00)
       else
+      begin
         FCurrent := SavedCurrent;
+        FColumn := SavedColumn;
+      end;
     end;
   end;
 
