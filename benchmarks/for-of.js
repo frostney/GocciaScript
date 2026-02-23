@@ -51,14 +51,11 @@ suite("for...of", () => {
     }
   });
 
-  bench("for-await-of with sync array", () => {
-    const fn = async () => {
-      let sum = 0;
-      for await (const item of smallArray) {
-        sum = sum + item;
-      }
-      return sum;
-    };
-    fn();
+  bench("for-await-of with sync array", async () => {
+    let sum = 0;
+    for await (const item of smallArray) {
+      sum = sum + item;
+    }
+    return sum;
   });
 });

@@ -13,6 +13,7 @@ uses
   Goccia.Error.ThrowErrorCallback,
   Goccia.Modules,
   Goccia.Scope,
+  Goccia.Scope.BindingMap,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -66,12 +67,12 @@ function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const ACont
 function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
 
 // Destructuring pattern assignment procedures
-procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
-procedure AssignIdentifierPattern(const APattern: TGocciaIdentifierDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
-procedure AssignArrayPattern(const APattern: TGocciaArrayDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
-procedure AssignObjectPattern(const APattern: TGocciaObjectDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
-procedure AssignAssignmentPattern(const APattern: TGocciaAssignmentDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
-procedure AssignRestPattern(const APattern: TGocciaRestDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
+procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
+procedure AssignIdentifierPattern(const APattern: TGocciaIdentifierDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
+procedure AssignArrayPattern(const APattern: TGocciaArrayDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
+procedure AssignObjectPattern(const APattern: TGocciaObjectDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
+procedure AssignAssignmentPattern(const APattern: TGocciaAssignmentDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
+procedure AssignRestPattern(const APattern: TGocciaRestDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 procedure InitializePrivateInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 
@@ -105,7 +106,6 @@ uses
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Parser,
-  Goccia.Scope.BindingMap,
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.AsyncFunctionValue,
@@ -1295,7 +1295,7 @@ begin
   Result := TGocciaFunctionValue.Create(Parameters, Statements, AContext.Scope.CreateChild);
 end;
 
-// ES2026 §27.7.5.3 Await
+// ES2026 §27.7.5.3 Await(value)
 function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Value, ThenMethod: TGocciaValue;
@@ -1339,28 +1339,35 @@ begin
     Exit;
   end;
 
-  if Promise.State <> gpsPending then
-  begin
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.AddTempRoot(Promise);
+  try
+    if Promise.State <> gpsPending then
+    begin
+      if Promise.State = gpsFulfilled then
+        Result := Promise.PromiseResult
+      else
+        raise TGocciaThrowValue.Create(Promise.PromiseResult);
+      Exit;
+    end;
+
+    if Assigned(TGocciaMicrotaskQueue.Instance) then
+      TGocciaMicrotaskQueue.Instance.DrainQueue;
+
     if Promise.State = gpsFulfilled then
       Result := Promise.PromiseResult
+    else if Promise.State = gpsRejected then
+      raise TGocciaThrowValue.Create(Promise.PromiseResult)
     else
-      raise TGocciaThrowValue.Create(Promise.PromiseResult);
-    Exit;
+      raise TGocciaError.Create('await: Promise did not settle after microtask drain',
+        AAwaitExpression.Line, AAwaitExpression.Column, '', nil);
+  finally
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
-
-  if Assigned(TGocciaMicrotaskQueue.Instance) then
-    TGocciaMicrotaskQueue.Instance.DrainQueue;
-
-  if Promise.State = gpsFulfilled then
-    Result := Promise.PromiseResult
-  else if Promise.State = gpsRejected then
-    raise TGocciaThrowValue.Create(Promise.PromiseResult)
-  else
-    raise TGocciaError.Create('await: Promise did not settle after microtask drain',
-      AAwaitExpression.Line, AAwaitExpression.Column, '', nil);
 end;
 
-// ES2026 §14.7.5.6 ForIn/OfBodyEvaluation — for...of variant
+// ES2026 §14.7.5.6 ForIn/OfBodyEvaluation(lhs, stmt, iteratorRecord, iterationKind, lhsKind)
 function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   IterableValue: TGocciaValue;
@@ -1383,33 +1390,40 @@ begin
   else
     DeclarationType := dtLet;
 
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    IterResult := Iterator.AdvanceNext;
-    while not TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value do
-    begin
-      CurrentValue := IterResult.GetProperty('value');
-
-      IterScope := AContext.Scope.CreateChild(skBlock);
-      IterContext := AContext;
-      IterContext.Scope := IterScope;
-
-      if AForOfStatement.BindingPattern <> nil then
-        AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True)
-      else
-        IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
-
-      try
-        Evaluate(AForOfStatement.Body, IterContext);
-      except
-        on E: TGocciaBreakSignal do
-          Exit;
-      end;
-
+    try
       IterResult := Iterator.AdvanceNext;
+      while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+      begin
+        CurrentValue := IterResult.GetProperty(PROP_VALUE);
+
+        IterScope := AContext.Scope.CreateChild(skBlock);
+        IterContext := AContext;
+        IterContext.Scope := IterScope;
+
+        if AForOfStatement.BindingPattern <> nil then
+          AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
+        else
+          IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
+
+        try
+          Evaluate(AForOfStatement.Body, IterContext);
+        except
+          on E: TGocciaBreakSignal do
+            Exit;
+        end;
+
+        IterResult := Iterator.AdvanceNext;
+      end;
+    except
+      on E: TGocciaBreakSignal do
+        ;
     end;
-  except
-    on E: TGocciaBreakSignal do
-      ;
+  finally
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
 
@@ -1447,55 +1461,69 @@ begin
       EmptyArgs.Free;
     end;
 
-    EmptyArgs := TGocciaArgumentsCollection.Create;
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.AddTempRoot(IteratorObj);
     try
-      NextMethod := IteratorObj.GetProperty('next');
-      if not Assigned(NextMethod) or not NextMethod.IsCallable then
-        ThrowTypeError('Async iterator .next is not callable');
+      EmptyArgs := TGocciaArgumentsCollection.Create;
+      try
+        NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+        if not Assigned(NextMethod) or not NextMethod.IsCallable then
+          ThrowTypeError('Async iterator .next is not callable');
 
-      while True do
-      begin
-        NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
-
-        if NextResult is TGocciaPromiseValue then
+        while True do
         begin
-          Promise := TGocciaPromiseValue(NextResult);
-          if Promise.State = gpsPending then
+          NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
+
+          if NextResult is TGocciaPromiseValue then
           begin
-            if Assigned(TGocciaMicrotaskQueue.Instance) then
-              TGocciaMicrotaskQueue.Instance.DrainQueue;
+            Promise := TGocciaPromiseValue(NextResult);
+            if Assigned(TGocciaGarbageCollector.Instance) then
+              TGocciaGarbageCollector.Instance.AddTempRoot(Promise);
+            try
+              if Promise.State = gpsPending then
+              begin
+                if Assigned(TGocciaMicrotaskQueue.Instance) then
+                  TGocciaMicrotaskQueue.Instance.DrainQueue;
+              end;
+              if Promise.State = gpsRejected then
+                raise TGocciaThrowValue.Create(Promise.PromiseResult);
+              NextResult := Promise.PromiseResult;
+            finally
+              if Assigned(TGocciaGarbageCollector.Instance) then
+                TGocciaGarbageCollector.Instance.RemoveTempRoot(Promise);
+            end;
           end;
-          if Promise.State = gpsRejected then
-            raise TGocciaThrowValue.Create(Promise.PromiseResult);
-          NextResult := Promise.PromiseResult;
+
+          DoneValue := NextResult.GetProperty(PROP_DONE);
+          if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+            Break;
+
+          CurrentValue := NextResult.GetProperty(PROP_VALUE);
+          if not Assigned(CurrentValue) then
+            CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+          IterScope := AContext.Scope.CreateChild(skBlock);
+          IterContext := AContext;
+          IterContext.Scope := IterScope;
+
+          if AForAwaitOfStatement.BindingPattern <> nil then
+            AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
+          else
+            IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
+
+          try
+            Evaluate(AForAwaitOfStatement.Body, IterContext);
+          except
+            on E: TGocciaBreakSignal do
+              Exit;
+          end;
         end;
-
-        DoneValue := NextResult.GetProperty('done');
-        if Assigned(DoneValue) and (DoneValue is TGocciaBooleanLiteralValue) and TGocciaBooleanLiteralValue(DoneValue).Value then
-          Break;
-
-        CurrentValue := NextResult.GetProperty('value');
-        if not Assigned(CurrentValue) then
-          CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-
-        IterScope := AContext.Scope.CreateChild(skBlock);
-        IterContext := AContext;
-        IterContext.Scope := IterScope;
-
-        if AForAwaitOfStatement.BindingPattern <> nil then
-          AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True)
-        else
-          IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
-
-        try
-          Evaluate(AForAwaitOfStatement.Body, IterContext);
-        except
-          on E: TGocciaBreakSignal do
-            Exit;
-        end;
+      finally
+        EmptyArgs.Free;
       end;
     finally
-      EmptyArgs.Free;
+      if Assigned(TGocciaGarbageCollector.Instance) then
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(IteratorObj);
     end;
   end
   else
@@ -1504,47 +1532,61 @@ begin
     if Iterator = nil then
       ThrowTypeError('Value is not iterable');
 
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
     try
-      GenericNextResult := Iterator.AdvanceNext;
-      while not TGocciaBooleanLiteralValue(GenericNextResult.GetProperty('done')).Value do
-      begin
-        CurrentValue := GenericNextResult.GetProperty('value');
-
-        if CurrentValue is TGocciaPromiseValue then
-        begin
-          Promise := TGocciaPromiseValue(CurrentValue);
-          if Promise.State = gpsPending then
-          begin
-            if Assigned(TGocciaMicrotaskQueue.Instance) then
-              TGocciaMicrotaskQueue.Instance.DrainQueue;
-          end;
-          if Promise.State = gpsRejected then
-            raise TGocciaThrowValue.Create(Promise.PromiseResult);
-          if Promise.State = gpsFulfilled then
-            CurrentValue := Promise.PromiseResult;
-        end;
-
-        IterScope := AContext.Scope.CreateChild(skBlock);
-        IterContext := AContext;
-        IterContext.Scope := IterScope;
-
-        if AForAwaitOfStatement.BindingPattern <> nil then
-          AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True)
-        else
-          IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
-
-        try
-          Evaluate(AForAwaitOfStatement.Body, IterContext);
-        except
-          on E: TGocciaBreakSignal do
-            Exit;
-        end;
-
+      try
         GenericNextResult := Iterator.AdvanceNext;
+        while not GenericNextResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+        begin
+          CurrentValue := GenericNextResult.GetProperty(PROP_VALUE);
+
+          if CurrentValue is TGocciaPromiseValue then
+          begin
+            Promise := TGocciaPromiseValue(CurrentValue);
+            if Assigned(TGocciaGarbageCollector.Instance) then
+              TGocciaGarbageCollector.Instance.AddTempRoot(Promise);
+            try
+              if Promise.State = gpsPending then
+              begin
+                if Assigned(TGocciaMicrotaskQueue.Instance) then
+                  TGocciaMicrotaskQueue.Instance.DrainQueue;
+              end;
+              if Promise.State = gpsRejected then
+                raise TGocciaThrowValue.Create(Promise.PromiseResult);
+              if Promise.State = gpsFulfilled then
+                CurrentValue := Promise.PromiseResult;
+            finally
+              if Assigned(TGocciaGarbageCollector.Instance) then
+                TGocciaGarbageCollector.Instance.RemoveTempRoot(Promise);
+            end;
+          end;
+
+          IterScope := AContext.Scope.CreateChild(skBlock);
+          IterContext := AContext;
+          IterContext.Scope := IterScope;
+
+          if AForAwaitOfStatement.BindingPattern <> nil then
+            AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
+          else
+            IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
+
+          try
+            Evaluate(AForAwaitOfStatement.Body, IterContext);
+          except
+            on E: TGocciaBreakSignal do
+              Exit;
+          end;
+
+          GenericNextResult := Iterator.AdvanceNext;
+        end;
+      except
+        on E: TGocciaBreakSignal do
+          ;
       end;
-    except
-      on E: TGocciaBreakSignal do
-        ;
+    finally
+      if Assigned(TGocciaGarbageCollector.Instance) then
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
     end;
   end;
 end;
@@ -3100,34 +3142,37 @@ begin
   Value := EvaluateExpression(ADestructuringDeclaration.Initializer, AContext);
 
   // Apply the destructuring pattern to declare variables
-  AssignPattern(ADestructuringDeclaration.Pattern, Value, AContext, True); // IsDeclaration = True
+  if ADestructuringDeclaration.IsConst then
+    AssignPattern(ADestructuringDeclaration.Pattern, Value, AContext, True, dtConst)
+  else
+    AssignPattern(ADestructuringDeclaration.Pattern, Value, AContext, True, dtLet);
 
   Result := Value;
 end;
 
-procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
+procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
-    AssignIdentifierPattern(TGocciaIdentifierDestructuringPattern(APattern), AValue, AContext, AIsDeclaration)
+    AssignIdentifierPattern(TGocciaIdentifierDestructuringPattern(APattern), AValue, AContext, AIsDeclaration, ADeclarationType)
   else if APattern is TGocciaArrayDestructuringPattern then
-    AssignArrayPattern(TGocciaArrayDestructuringPattern(APattern), AValue, AContext, AIsDeclaration)
+    AssignArrayPattern(TGocciaArrayDestructuringPattern(APattern), AValue, AContext, AIsDeclaration, ADeclarationType)
   else if APattern is TGocciaObjectDestructuringPattern then
-    AssignObjectPattern(TGocciaObjectDestructuringPattern(APattern), AValue, AContext, AIsDeclaration)
+    AssignObjectPattern(TGocciaObjectDestructuringPattern(APattern), AValue, AContext, AIsDeclaration, ADeclarationType)
   else if APattern is TGocciaAssignmentDestructuringPattern then
-    AssignAssignmentPattern(TGocciaAssignmentDestructuringPattern(APattern), AValue, AContext, AIsDeclaration)
+    AssignAssignmentPattern(TGocciaAssignmentDestructuringPattern(APattern), AValue, AContext, AIsDeclaration, ADeclarationType)
   else if APattern is TGocciaRestDestructuringPattern then
-    AssignRestPattern(TGocciaRestDestructuringPattern(APattern), AValue, AContext, AIsDeclaration);
+    AssignRestPattern(TGocciaRestDestructuringPattern(APattern), AValue, AContext, AIsDeclaration, ADeclarationType);
 end;
 
-procedure AssignIdentifierPattern(const APattern: TGocciaIdentifierDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
+procedure AssignIdentifierPattern(const APattern: TGocciaIdentifierDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 begin
   if AIsDeclaration then
-    AContext.Scope.DefineLexicalBinding(APattern.Name, AValue, dtLet)
+    AContext.Scope.DefineLexicalBinding(APattern.Name, AValue, ADeclarationType)
   else
     AContext.Scope.AssignLexicalBinding(APattern.Name, AValue);
 end;
 
-procedure AssignArrayPattern(const APattern: TGocciaArrayDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
+procedure AssignArrayPattern(const APattern: TGocciaArrayDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 var
   ArrayValue: TGocciaArrayValue;
   Iterator: TGocciaIteratorValue;
@@ -3159,7 +3204,7 @@ begin
           else
             RestElements.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
         end;
-        AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration);
+        AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration, ADeclarationType);
         Break;
       end
       else
@@ -3169,7 +3214,7 @@ begin
         else
           ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-        AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration);
+        AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration, ADeclarationType);
       end;
     end;
   end
@@ -3185,7 +3230,7 @@ begin
         RestElements := TGocciaArrayValue.Create;
         for J := I + 1 to Length(AValue.ToStringLiteral.Value) do
           RestElements.Elements.Add(TGocciaStringLiteralValue.Create(AValue.ToStringLiteral.Value[J]));
-        AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration);
+        AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration, ADeclarationType);
         Break;
       end
       else
@@ -3195,7 +3240,7 @@ begin
         else
           ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-        AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration);
+        AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration, ADeclarationType);
       end;
     end;
   end
@@ -3224,7 +3269,7 @@ begin
             RestElements.Elements.Add(IterResult.GetProperty(PROP_VALUE));
             IterResult := Iterator.AdvanceNext;
           end;
-          AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration);
+          AssignPattern(TGocciaRestDestructuringPattern(APattern.Elements[I]).Argument, RestElements, AContext, AIsDeclaration, ADeclarationType);
           Break;
         end
         else
@@ -3235,7 +3280,7 @@ begin
           else
             ElementValue := IterResult.GetProperty(PROP_VALUE);
 
-          AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration);
+          AssignPattern(APattern.Elements[I], ElementValue, AContext, AIsDeclaration, ADeclarationType);
         end;
       end;
     finally
@@ -3244,7 +3289,7 @@ begin
   end;
 end;
 
-procedure AssignObjectPattern(const APattern: TGocciaObjectDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
+procedure AssignObjectPattern(const APattern: TGocciaObjectDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 var
   ObjectValue: TGocciaObjectValue;
   Prop: TGocciaDestructuringProperty;
@@ -3281,7 +3326,7 @@ begin
           if UsedKeys.IndexOf(Key) = -1 then
             RestObject.AssignProperty(Key, ObjectValue.GetProperty(Key));
         end;
-        AssignPattern(TGocciaRestDestructuringPattern(Prop.Pattern).Argument, RestObject, AContext, AIsDeclaration);
+        AssignPattern(TGocciaRestDestructuringPattern(Prop.Pattern).Argument, RestObject, AContext, AIsDeclaration, ADeclarationType);
       end
       else
       begin
@@ -3293,7 +3338,7 @@ begin
           if PropValue is TGocciaSymbolValue then
           begin
             PropValue := ObjectValue.GetSymbolProperty(TGocciaSymbolValue(PropValue));
-            AssignPattern(Prop.Pattern, PropValue, AContext, AIsDeclaration);
+            AssignPattern(Prop.Pattern, PropValue, AContext, AIsDeclaration, ADeclarationType);
             Continue;
           end;
           Key := PropValue.ToStringLiteral.Value;
@@ -3305,7 +3350,7 @@ begin
 
         UsedKeys.Add(Key);
         PropValue := ObjectValue.GetProperty(Key);
-        AssignPattern(Prop.Pattern, PropValue, AContext, AIsDeclaration);
+        AssignPattern(Prop.Pattern, PropValue, AContext, AIsDeclaration, ADeclarationType);
       end;
     end;
   finally
@@ -3313,7 +3358,7 @@ begin
   end;
 end;
 
-procedure AssignAssignmentPattern(const APattern: TGocciaAssignmentDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
+procedure AssignAssignmentPattern(const APattern: TGocciaAssignmentDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 var
   DefaultValue: TGocciaValue;
 begin
@@ -3321,18 +3366,17 @@ begin
   if AValue is TGocciaUndefinedLiteralValue then
   begin
     DefaultValue := EvaluateExpression(APattern.Right, AContext);
-    AssignPattern(APattern.Left, DefaultValue, AContext, AIsDeclaration);
+    AssignPattern(APattern.Left, DefaultValue, AContext, AIsDeclaration, ADeclarationType);
   end
   else
   begin
-    AssignPattern(APattern.Left, AValue, AContext, AIsDeclaration);
+    AssignPattern(APattern.Left, AValue, AContext, AIsDeclaration, ADeclarationType);
   end;
 end;
 
-procedure AssignRestPattern(const APattern: TGocciaRestDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
+procedure AssignRestPattern(const APattern: TGocciaRestDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 begin
-  // Rest patterns are handled by their containing array/object patterns
-  AssignPattern(APattern.Argument, AValue, AContext, AIsDeclaration);
+  AssignPattern(APattern.Argument, AValue, AContext, AIsDeclaration, ADeclarationType);
 end;
 
 function IsObjectInstanceOfClass(const AObj: TGocciaObjectValue; const AClassValue: TGocciaClassValue): Boolean;

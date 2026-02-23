@@ -182,6 +182,7 @@ begin
   Result := FWellKnownIsConcatSpreadable;
 end;
 
+// ES2026 §20.1.2.1 Symbol.asyncIterator
 class function TGocciaSymbolValue.WellKnownAsyncIterator: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownAsyncIterator) then

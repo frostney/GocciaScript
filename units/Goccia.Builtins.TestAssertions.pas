@@ -153,6 +153,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator,
   Goccia.Evaluator.Comparison,
+  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
@@ -1214,16 +1215,23 @@ begin
         try
           CallbackResult := TGocciaFunctionBase(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
-          if Assigned(TGocciaMicrotaskQueue.Instance) then
-            TGocciaMicrotaskQueue.Instance.DrainQueue;
+          if Assigned(TGocciaGarbageCollector.Instance) then
+            TGocciaGarbageCollector.Instance.AddTempRoot(CallbackResult);
+          try
+            if Assigned(TGocciaMicrotaskQueue.Instance) then
+              TGocciaMicrotaskQueue.Instance.DrainQueue;
 
-          if CallbackResult is TGocciaPromiseValue then
-          begin
-            Promise := TGocciaPromiseValue(CallbackResult);
-            if Promise.State = gpsRejected then
-              AssertionFailed('callback execution', 'Async callback rejected: ' + Promise.PromiseResult.ToStringLiteral.Value)
-            else if Promise.State = gpsPending then
-              AssertionFailed('callback execution', 'Async callback Promise still pending after microtask drain');
+            if CallbackResult is TGocciaPromiseValue then
+            begin
+              Promise := TGocciaPromiseValue(CallbackResult);
+              if Promise.State = gpsRejected then
+                AssertionFailed('callback execution', 'Async callback rejected: ' + Promise.PromiseResult.ToStringLiteral.Value)
+              else if Promise.State = gpsPending then
+                AssertionFailed('callback execution', 'Async callback Promise still pending after microtask drain');
+            end;
+          finally
+            if Assigned(TGocciaGarbageCollector.Instance) then
+              TGocciaGarbageCollector.Instance.RemoveTempRoot(CallbackResult);
           end;
         except
           on E: Exception do

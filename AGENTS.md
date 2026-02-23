@@ -303,12 +303,13 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Unit naming:** `Goccia.<Category>.<Name>.pas` (dot-separated hierarchy)
 - **No abbreviations:** Use full words in class, function, method, and type names (e.g., `TGocciaGarbageCollector` not `TGocciaGC`). Exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
 - **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`) instead of hardcoded string literals. Use the `ScriptExtensions` array, `IsScriptExtension`, and `IsJSXNativeExtension` helpers instead of duplicating extension lists or ad-hoc checks.
-- **Runtime constants:** Use the split constant units instead of hardcoded string literals for property names, type names, error names, and constructor names:
-  - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, `PROP_GET`, `PROP_SET`, `PROP_KIND`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_INIT`, `PROP_ADD_INITIALIZER`, etc.
-  - `Goccia.Constants.TypeNames` — `OBJECT_TYPE_NAME`, `STRING_TYPE_NAME`, `FUNCTION_TYPE_NAME`, etc.
-  - `Goccia.Constants.ErrorNames` — `ERROR_NAME`, `TYPE_ERROR_NAME`, `RANGE_ERROR_NAME`, etc.
-  - `Goccia.Constants.ConstructorNames` — `CONSTRUCTOR_OBJECT`, `CONSTRUCTOR_ARRAY`, `CONSTRUCTOR_STRING`, `CONSTRUCTOR_MAP`, etc.
-  - `Goccia.Constants` — `BOOLEAN_TRUE_LITERAL`, `NULL_LITERAL`, `NAN_LITERAL`, `ZERO_VALUE`, `EMPTY_STRING`, etc.
+- **Runtime constants:** Use the split constant units instead of hardcoded string literals for property names, type names, error names, constructor names, and symbol names:
+ - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, `PROP_GET`, `PROP_SET`, `PROP_KIND`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_INIT`, `PROP_ADD_INITIALIZER`, etc.
+ - `Goccia.Constants.TypeNames` — `OBJECT_TYPE_NAME`, `STRING_TYPE_NAME`, `FUNCTION_TYPE_NAME`, etc.
+ - `Goccia.Constants.ErrorNames` — `ERROR_NAME`, `TYPE_ERROR_NAME`, `RANGE_ERROR_NAME`, etc.
+ - `Goccia.Constants.ConstructorNames` — `CONSTRUCTOR_OBJECT`, `CONSTRUCTOR_ARRAY`, `CONSTRUCTOR_STRING`, `CONSTRUCTOR_MAP`, etc.
+ - `Goccia.Constants.SymbolNames` — `SYMBOL_ITERATOR`, `SYMBOL_ASYNC_ITERATOR`, `SYMBOL_SPECIES`, `SYMBOL_HAS_INSTANCE`, `SYMBOL_TO_PRIMITIVE`, `SYMBOL_TO_STRING_TAG`, `SYMBOL_IS_CONCAT_SPREADABLE`, `SYMBOL_METADATA`
+ - `Goccia.Constants` — `BOOLEAN_TRUE_LITERAL`, `NULL_LITERAL`, `NAN_LITERAL`, `ZERO_VALUE`, `EMPTY_STRING`, etc.
 - **Generic lists for class types:** Prefer `TObjectList<T>` over `TList<T>` when `T` is a class. When a specialization is used across multiple units, define a **named type alias** in the unit that declares `T` (e.g., `TGocciaValueList = TObjectList<TGocciaValue>` in `Goccia.Values.Primitives.pas`, `TGocciaScopeList = TObjectList<TGocciaScope>` in `Goccia.Scope.pas`). All consumers must use the alias — never re-specialize locally. Use `Create(False)` for non-owning collections. This prevents FPC's per-unit generic VMT specialization from causing "Invalid type cast" failures with `{$OBJECTCHECKS ON}`.
 - **Class naming:** `TGoccia<Name>` prefix
 - **Interface naming:** `I<Name>` prefix

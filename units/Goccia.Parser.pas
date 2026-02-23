@@ -364,7 +364,7 @@ var
   Operator: TGocciaToken;
   Right: TGocciaExpression;
 begin
-  // await expression (only valid inside async functions)
+  // ES2026 §15.8.2 AwaitExpression: await UnaryExpression
   if (FInAsyncFunction > 0) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
   begin
     Operator := Advance; // consume 'await'
@@ -650,7 +650,7 @@ begin
       end;
     end
     // async single-param arrow: async x => body
-    else if (Name = KEYWORD_ASYNC) and Check(gttIdentifier) and (FTokens[FCurrent + 1].TokenType = gttArrow) then
+    else if (Name = KEYWORD_ASYNC) and Check(gttIdentifier) and CheckNext(gttArrow) then
     begin
       Token := Advance; // consume param identifier
       Name := Token.Lexeme;
@@ -669,6 +669,7 @@ begin
       SetLength(Parameters, 1);
       Parameters[0].Name := Name;
       Parameters[0].DefaultValue := nil;
+      Parameters[0].Pattern := nil;
       Parameters[0].IsPattern := False;
       Parameters[0].IsRest := False;
       Parameters[0].IsOptional := False;
@@ -1552,6 +1553,7 @@ begin
   Result := TGocciaEmptyStatement.Create(Line, Column);
 end;
 
+// ES2026 §14.7.5 ForIn/OfStatement
 function TGocciaParser.ForStatement: TGocciaStatement;
 var
   Line, Column: Integer;

@@ -42,7 +42,7 @@ uses
 
 { TGocciaAsyncFunctionValue }
 
-// ES2026 §27.7.5.1 AsyncFunctionStart
+// ES2026 §27.7.5.1 AsyncFunctionStart(promiseCapability, asyncFunctionBody)
 function TGocciaAsyncFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Promise: TGocciaPromiseValue;
@@ -91,7 +91,7 @@ end;
 
 { TGocciaAsyncArrowFunctionValue }
 
-// ES2026 §27.7.5.1 AsyncFunctionStart
+// ES2026 §27.7.5.1 AsyncFunctionStart(promiseCapability, asyncFunctionBody)
 function TGocciaAsyncArrowFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Promise: TGocciaPromiseValue;
@@ -141,7 +141,7 @@ end;
 
 { TGocciaAsyncMethodValue }
 
-// ES2026 §27.7.5.1 AsyncFunctionStart
+// ES2026 §27.7.5.1 AsyncFunctionStart(promiseCapability, asyncFunctionBody)
 function TGocciaAsyncMethodValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Promise: TGocciaPromiseValue;

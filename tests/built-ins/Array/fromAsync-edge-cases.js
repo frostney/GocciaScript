@@ -180,9 +180,6 @@ describe("Array.fromAsync with async iterables", () => {
     const obj = {
       [Symbol.asyncIterator]() {
         return {
-          next() {
-            return Promise.resolve({ value: "async", done: false });
-          },
           count: 0,
           next() {
             this.count = this.count + 1;

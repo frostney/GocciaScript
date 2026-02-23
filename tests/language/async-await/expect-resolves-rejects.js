@@ -86,7 +86,7 @@ describe("expect().rejects", () => {
     const asyncFn = async () => {
       throw new Error("any error");
     };
-    await expect(asyncFn()).rejects.toThrow();
+    await expect(asyncFn()).rejects.toThrow(Error);
   });
 
   test("rejects works with called async function", async () => {
