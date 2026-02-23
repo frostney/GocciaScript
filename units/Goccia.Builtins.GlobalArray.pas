@@ -324,7 +324,8 @@ var
   AwaitedPromise: TGocciaPromiseValue;
   EmptyArgs, MapArgs, ConstructorArgs: TGocciaArgumentsCollection;
   Mapping, UseConstructor: Boolean;
-  K: Integer;
+  K, Len: Integer;
+  LengthValue: TGocciaValue;
   GC: TGocciaGarbageCollector;
 
   function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
@@ -540,30 +541,35 @@ begin
                 GC.RemoveTempRoot(Iterator);
             end;
           end
-          else if Assigned(Source.GetProperty(PROP_LENGTH)) and not (Source.GetProperty(PROP_LENGTH) is TGocciaUndefinedLiteralValue) then
+          else
           begin
-            K := 0;
-            while K < Trunc(Source.GetProperty(PROP_LENGTH).ToNumberLiteral.Value) do
+            LengthValue := Source.GetProperty(PROP_LENGTH);
+            if Assigned(LengthValue) and not (LengthValue is TGocciaUndefinedLiteralValue) then
             begin
-              KValue := Source.GetProperty(IntToStr(K));
-              if not Assigned(KValue) then
-                KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-              KValue := AwaitValue(KValue);
-
-              if Mapping then
+              Len := Trunc(LengthValue.ToNumberLiteral.Value);
+              K := 0;
+              while K < Len do
               begin
-                MapArgs.SetElement(0, KValue);
-                MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
-                KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
+                KValue := Source.GetProperty(IntToStr(K));
+                if not Assigned(KValue) then
+                  KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
                 KValue := AwaitValue(KValue);
+
+                if Mapping then
+                begin
+                  MapArgs.SetElement(0, KValue);
+                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+                  KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
+                  KValue := AwaitValue(KValue);
+                end;
+
+                AddElement(K, KValue);
+                Inc(K);
               end;
 
-              AddElement(K, KValue);
-              Inc(K);
+              if UseConstructor and not (ResultObj is TGocciaArrayValue) then
+                ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
             end;
-
-            if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-              ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
           end;
         end;
 

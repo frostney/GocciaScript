@@ -86,7 +86,7 @@ suite("collections", () => {
 
 ### Data flow
 
-```
+```text
 setup() → [return value] → warmup(run × N) → calibrate(run × N) → measure(run × N × rounds) → teardown()
    ↓                                                                    ↓                          ↓
  setupMs                                                        opsPerSec, meanMs, variance   teardownMs

@@ -63,6 +63,7 @@ function EvaluateDestructuringDeclaration(const ADestructuringDeclaration: TGocc
 function EvaluateTemplateLiteral(const ATemplateLiteralExpression: TGocciaTemplateLiteralExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateExpression(const AExpressionText: string; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaValue;
 function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
 function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
 
@@ -1302,51 +1303,50 @@ begin
 end;
 
 // ES2026 §27.7.5.3 Await(value)
-function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
 var
-  Value, ThenMethod: TGocciaValue;
+  ThenMethod: TGocciaValue;
   Promise: TGocciaPromiseValue;
   ThenArgs: TGocciaArgumentsCollection;
 begin
-  Value := EvaluateExpression(AAwaitExpression.Operand, AContext);
-
-  // ES2026 §27.7.5.3 step 2: If value is a Promise, await it directly
-  if Value is TGocciaPromiseValue then
+  if AValue is TGocciaPromiseValue then
   begin
-    Promise := TGocciaPromiseValue(Value);
+    Promise := TGocciaPromiseValue(AValue);
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.AddTempRoot(Promise);
   end
   // ES2026 §25.6.4.6.1 PromiseResolve: If value is a thenable (object with
   // callable .then), wrap it in a Promise via resolve
-  else if Value is TGocciaObjectValue then
+  else if AValue is TGocciaObjectValue then
   begin
-    ThenMethod := Value.GetProperty(PROP_THEN);
+    ThenMethod := AValue.GetProperty(PROP_THEN);
     if Assigned(ThenMethod) and not (ThenMethod is TGocciaUndefinedLiteralValue) and ThenMethod.IsCallable then
     begin
       Promise := TGocciaPromiseValue.Create;
+      if Assigned(TGocciaGarbageCollector.Instance) then
+        TGocciaGarbageCollector.Instance.AddTempRoot(Promise);
       ThenArgs := TGocciaArgumentsCollection.Create([
         TGocciaNativeFunctionValue.Create(Promise.DoResolve, 'resolve', 1),
         TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
       ]);
       try
-        TGocciaFunctionBase(ThenMethod).Call(ThenArgs, Value);
+        TGocciaFunctionBase(ThenMethod).Call(ThenArgs, AValue);
       finally
         ThenArgs.Free;
       end;
     end
     else
     begin
-      Result := Value;
+      Result := AValue;
       Exit;
     end;
   end
   else
   begin
-    Result := Value;
+    Result := AValue;
     Exit;
   end;
 
-  if Assigned(TGocciaGarbageCollector.Instance) then
-    TGocciaGarbageCollector.Instance.AddTempRoot(Promise);
   try
     if Promise.State <> gpsPending then
     begin
@@ -1365,12 +1365,17 @@ begin
     else if Promise.State = gpsRejected then
       raise TGocciaThrowValue.Create(Promise.PromiseResult)
     else
-      raise TGocciaError.Create('await: Promise did not settle after microtask drain',
-        AAwaitExpression.Line, AAwaitExpression.Column, '', nil);
+      ThrowTypeError('await: Promise did not settle after microtask drain');
   finally
     if Assigned(TGocciaGarbageCollector.Instance) then
       TGocciaGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
+end;
+
+// ES2026 §27.7.5.3 Await(value)
+function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := AwaitValue(EvaluateExpression(AAwaitExpression.Operand, AContext));
 end;
 
 // ES2026 §14.7.5.6 ForIn/OfBodyEvaluation(lhs, stmt, iteratorRecord, iterationKind, lhsKind)
@@ -1439,7 +1444,6 @@ var
   IterableValue, IteratorMethod, IteratorObj, NextMethod, NextResult, DoneValue, CurrentValue: TGocciaValue;
   Iterator: TGocciaIteratorValue;
   GenericNextResult: TGocciaObjectValue;
-  Promise: TGocciaPromiseValue;
   IterScope: TGocciaScope;
   IterContext: TGocciaEvaluationContext;
   DeclarationType: TGocciaDeclarationType;
@@ -1479,26 +1483,7 @@ begin
         while True do
         begin
           NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
-
-          if NextResult is TGocciaPromiseValue then
-          begin
-            Promise := TGocciaPromiseValue(NextResult);
-            if Assigned(TGocciaGarbageCollector.Instance) then
-              TGocciaGarbageCollector.Instance.AddTempRoot(Promise);
-            try
-              if Promise.State = gpsPending then
-              begin
-                if Assigned(TGocciaMicrotaskQueue.Instance) then
-                  TGocciaMicrotaskQueue.Instance.DrainQueue;
-              end;
-              if Promise.State = gpsRejected then
-                raise TGocciaThrowValue.Create(Promise.PromiseResult);
-              NextResult := Promise.PromiseResult;
-            finally
-              if Assigned(TGocciaGarbageCollector.Instance) then
-                TGocciaGarbageCollector.Instance.RemoveTempRoot(Promise);
-            end;
-          end;
+          NextResult := AwaitValue(NextResult);
 
           DoneValue := NextResult.GetProperty(PROP_DONE);
           if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
@@ -1546,27 +1531,7 @@ begin
         while not GenericNextResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
         begin
           CurrentValue := GenericNextResult.GetProperty(PROP_VALUE);
-
-          if CurrentValue is TGocciaPromiseValue then
-          begin
-            Promise := TGocciaPromiseValue(CurrentValue);
-            if Assigned(TGocciaGarbageCollector.Instance) then
-              TGocciaGarbageCollector.Instance.AddTempRoot(Promise);
-            try
-              if Promise.State = gpsPending then
-              begin
-                if Assigned(TGocciaMicrotaskQueue.Instance) then
-                  TGocciaMicrotaskQueue.Instance.DrainQueue;
-              end;
-              if Promise.State = gpsRejected then
-                raise TGocciaThrowValue.Create(Promise.PromiseResult);
-              if Promise.State = gpsFulfilled then
-                CurrentValue := Promise.PromiseResult;
-            finally
-              if Assigned(TGocciaGarbageCollector.Instance) then
-                TGocciaGarbageCollector.Instance.RemoveTempRoot(Promise);
-            end;
-          end;
+          CurrentValue := AwaitValue(CurrentValue);
 
           IterScope := AContext.Scope.CreateChild(skBlock);
           IterContext := AContext;

@@ -7,7 +7,7 @@ suite("Set operations", () => {
     setup: () => Array.from({ length: 50 }, (_, i) => i),
     run: (items) => {
       const s = new Set();
-      items.forEach((i) => s.add(i));
+      items.forEach((i) => { s.add(i); });
     },
   });
 
@@ -61,7 +61,7 @@ suite("Map operations", () => {
     setup: () => Array.from({ length: 50 }, (_, i) => i),
     run: (items) => {
       const m = new Map();
-      items.forEach((i) => m.set("key" + i, i));
+      items.forEach((i) => { m.set("key" + i, i); });
     },
   });
 

@@ -234,10 +234,10 @@ begin
     TGocciaNativeFunctionValue.Create(GetNot, 'not', 0), nil, [pfConfigurable]));
 
   // Promise unwrapping properties — Vitest/Jest-compatible
-  DefineProperty('resolves', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.Create(GetResolves, 'resolves', 0), nil, [pfConfigurable]));
-  DefineProperty('rejects', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.Create(GetRejects, 'rejects', 0), nil, [pfConfigurable]));
+  DefineProperty(PROP_RESOLVES, TGocciaPropertyDescriptorAccessor.Create(
+    TGocciaNativeFunctionValue.Create(GetResolves, PROP_RESOLVES, 0), nil, [pfConfigurable]));
+  DefineProperty(PROP_REJECTS, TGocciaPropertyDescriptorAccessor.Create(
+    TGocciaNativeFunctionValue.Create(GetRejects, PROP_REJECTS, 0), nil, [pfConfigurable]));
 end;
 
 function TGocciaExpectationValue.ToBe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

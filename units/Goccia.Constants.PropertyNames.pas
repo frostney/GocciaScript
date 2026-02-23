@@ -34,6 +34,8 @@ const
   PROP_METADATA     = 'metadata';
   PROP_ADD_INITIALIZER = 'addInitializer';
   PROP_THEN         = 'then';
+  PROP_RESOLVES     = 'resolves';
+  PROP_REJECTS      = 'rejects';
 
 implementation
 
