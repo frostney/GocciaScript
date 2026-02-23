@@ -44,7 +44,7 @@ It's based on the thought "What if we implement ECMAScript today, but without th
 | `Promise` | Constructor, `.then`/`.catch`/`.finally`, `all`/`allSettled`/`race`/`any` |
 | `Object.freeze`, `Object.isFrozen` | Immutable objects |
 | `Array.from`, `Array.of`, `Array.fromAsync` | Array construction (sync and async) |
-| `async`/`await` | `async () => { await promise }` |
+| `async`/`await` | `async () => { await promise; }` |
 | `for...of` | `for (const x of iterable) { ... }` |
 
 ### ECMAScript 2022–2025 Features
