@@ -16,6 +16,7 @@ const
   KEYWORD_ACCESSOR     = 'accessor';
 
   // Async/generators
+  KEYWORD_ASYNC        = 'async';
   KEYWORD_AWAIT        = 'await';
   KEYWORD_OF           = 'of';
   KEYWORD_YIELD        = 'yield';

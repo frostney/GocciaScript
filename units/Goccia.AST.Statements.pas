@@ -109,6 +109,27 @@ type
     property Condition: TGocciaExpression read FCondition;
   end;
 
+  TGocciaForOfStatement = class(TGocciaStatement)
+  private
+    FIsConst: Boolean;
+    FBindingName: string;
+    FBindingPattern: TGocciaDestructuringPattern;
+    FIterable: TGocciaExpression;
+    FBody: TGocciaStatement;
+  public
+    constructor Create(const AIsConst: Boolean; const ABindingName: string;
+      const ABindingPattern: TGocciaDestructuringPattern; const AIterable: TGocciaExpression;
+      const ABody: TGocciaStatement; const ALine, AColumn: Integer);
+    property IsConst: Boolean read FIsConst;
+    property BindingName: string read FBindingName;
+    property BindingPattern: TGocciaDestructuringPattern read FBindingPattern;
+    property Iterable: TGocciaExpression read FIterable;
+    property Body: TGocciaStatement read FBody;
+  end;
+
+  TGocciaForAwaitOfStatement = class(TGocciaForOfStatement)
+  end;
+
   TGocciaReturnStatement = class(TGocciaStatement)
   private
     FValue: TGocciaExpression;
@@ -149,6 +170,7 @@ type
     FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
     FIsStatic: Boolean;
+    FIsAsync: Boolean;
     FReturnType: string;
     FGenericParams: string;
   public
@@ -158,6 +180,7 @@ type
     property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
     property IsStatic: Boolean read FIsStatic;
+    property IsAsync: Boolean read FIsAsync write FIsAsync;
     property ReturnType: string read FReturnType write FReturnType;
     property GenericParams: string read FGenericParams write FGenericParams;
   end;
@@ -183,6 +206,7 @@ type
     IsStatic: Boolean;
     IsPrivate: Boolean;
     IsComputed: Boolean;
+    IsAsync: Boolean;
     ComputedKeyExpression: TGocciaExpression;
     Decorators: TGocciaDecoratorList;
     MethodNode: TGocciaClassMethod;
@@ -477,6 +501,20 @@ uses
     FInit := AInit;
     FCondition := ACondition;
     FUpdate := AUpdate;
+    FBody := ABody;
+  end;
+
+  { TGocciaForOfStatement }
+
+  constructor TGocciaForOfStatement.Create(const AIsConst: Boolean; const ABindingName: string;
+    const ABindingPattern: TGocciaDestructuringPattern; const AIterable: TGocciaExpression;
+    const ABody: TGocciaStatement; const ALine, AColumn: Integer);
+  begin
+    inherited Create(ALine, AColumn);
+    FIsConst := AIsConst;
+    FBindingName := ABindingName;
+    FBindingPattern := ABindingPattern;
+    FIterable := AIterable;
     FBody := ABody;
   end;
 

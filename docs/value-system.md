@@ -441,6 +441,18 @@ Extends `TGocciaFunctionValue`. Overrides `BindThis` to walk the closure scope c
 
 Created from `TGocciaArrowFunctionExpression` AST nodes (arrow function syntax: `(x) => ...`).
 
+### Async Function Values (`Goccia.Values.AsyncFunctionValue.pas`)
+
+Async functions extend their sync counterparts and return Promises:
+
+| Type | Extends | Created from |
+|------|---------|--------------|
+| `TGocciaAsyncFunctionValue` | `TGocciaFunctionValue` | `async` shorthand methods |
+| `TGocciaAsyncArrowFunctionValue` | `TGocciaArrowFunctionValue` | `async` arrow functions |
+| `TGocciaAsyncMethodValue` | `TGocciaMethodValue` | `async` class methods |
+
+**Call semantics:** `Call` creates a `TGocciaPromiseValue`, executes the body in a try/except, resolves on success, and rejects on `TGocciaThrowValue`. `this` binding is inherited from the superclass via virtual dispatch (`BindThis`).
+
 ### `this` Binding
 
 `this` binding is determined by the runtime type via virtual dispatch on `BindThis`:
@@ -450,6 +462,7 @@ Created from `TGocciaArrowFunctionExpression` AST nodes (arrow function syntax: 
 | `TGocciaFunctionValue` | Call-site (receiver) | `TGocciaMethodExpression` (shorthand methods) |
 | `TGocciaArrowFunctionValue` | Lexical (closure scope walk) | `TGocciaArrowFunctionExpression` (arrow syntax) |
 | `TGocciaMethodValue` | Call-site (inherited from base) | `TGocciaClassMethod` (class methods) |
+| `TGocciaAsyncFunctionValue` / `TGocciaAsyncArrowFunctionValue` / `TGocciaAsyncMethodValue` | Inherited from superclass via `BindThis` | `async` functions |
 
 Standalone calls to any function type receive `undefined` as `this` (strict mode, no implicit global).
 

@@ -11,6 +11,7 @@ export default defineConfig({
       "tests/**/modules/local-module.js",
       "tests/**/types-as-comments/**/*.js",
       "tests/**/enums/**/*.js",
+      "tests/**/decorators/**/*.js",
       "tests/**/emoji-identifiers.js",
     ],
   },

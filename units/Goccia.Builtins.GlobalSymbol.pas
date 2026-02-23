@@ -71,6 +71,7 @@ begin
   FSymbolFunction.RegisterConstant('hasInstance', TGocciaSymbolValue.WellKnownHasInstance);
   FSymbolFunction.RegisterConstant('toPrimitive', TGocciaSymbolValue.WellKnownToPrimitive);
   FSymbolFunction.RegisterConstant('toStringTag', TGocciaSymbolValue.WellKnownToStringTag);
+  FSymbolFunction.RegisterConstant('asyncIterator', TGocciaSymbolValue.WellKnownAsyncIterator);
   FSymbolFunction.RegisterConstant('isConcatSpreadable', TGocciaSymbolValue.WellKnownIsConcatSpreadable);
   FSymbolFunction.RegisterConstant('metadata', TGocciaSymbolValue.WellKnownMetadata);
 

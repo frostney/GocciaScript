@@ -28,6 +28,7 @@ const name = "Goccia";
 - `fn.length` — Number of formal parameters (before defaults/rest).
 - `fn.name` — Function name (inferred from variable declarations for anonymous functions).
 - Type annotations on parameters and return types (parsed and ignored at runtime — see [Types as Comments](#types-as-comments) below).
+- `async`/`await` — Async functions return Promises; `await` suspends until the Promise settles (see [Async Functions](#async-functions) below).
 
 ```javascript
 const add = (a, b) => a + b;
@@ -36,6 +37,41 @@ const first = ([head, ...rest]) => head;
 add.name;   // "add"
 add.length; // 2
 ```
+
+### Async Functions
+
+`async`/`await` syntax sugar for Promises is fully supported.
+
+**`async` arrow functions:**
+
+```javascript
+const fn = async () => { return 42; };
+fn(); // Returns a Promise that resolves to 42
+```
+
+**`async` methods in objects:**
+
+```javascript
+const obj = {
+  async fetch() {
+    return await fetchData();
+  }
+};
+```
+
+**`async` class methods:**
+
+```javascript
+class C {
+  async method() {
+    return await Promise.resolve(1);
+  }
+}
+```
+
+**`await` expressions:** Only valid inside `async` functions. Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason.
+
+**Return semantics:** Async functions always return a Promise. If the body returns a value, the Promise resolves to that value. If the body throws, the Promise rejects.
 
 ### Classes
 
@@ -125,6 +161,7 @@ C[Symbol.metadata].decorated; // true
 - `throw`
 - `return`
 - Block statements
+- `for...of` and `for await...of` (see [Supported Iteration](#supported-iteration))
 - `import`/`export` (ES module system — named exports only, no default exports)
 
 ### Modules
@@ -275,7 +312,7 @@ GocciaScript requires explicit semicolons, preventing this class of bugs.
 
 ### Traditional Loops (`for`, `while`, `do...while`)
 
-**Excluded.** Use array methods instead. The parser accepts loop syntax but treats it as a no-op (the loop body is not executed), and emits a warning:
+**Excluded.** Use `for...of`, `for await...of`, or array methods instead. The parser accepts traditional loop syntax but treats it as a no-op (the loop body is not executed), and emits a warning:
 
 ```text
 Warning: 'for' loops are not supported in GocciaScript
@@ -285,17 +322,60 @@ Warning: 'for' loops are not supported in GocciaScript
 
 The parser uses balanced-parenthesis tracking (`SkipBalancedParens`) to correctly skip the loop condition even when it contains nested parentheses (e.g., `for (let i = Math.max(0, 1); i < fn(x); i++)`), then `SkipStatementOrBlock` to skip the loop body. This ensures subsequent code executes correctly.
 
-Traditional loops encourage imperative, mutation-heavy code. GocciaScript favors functional iteration through array methods:
+Traditional loops encourage imperative, mutation-heavy code. GocciaScript supports `for...of` and `for await...of` for iteration (see [Supported Iteration](#supported-iteration) below), and favors functional iteration through array methods:
 
 ```javascript
 // Instead of: for (let i = 0; i < items.length; i++) { ... }
+for (const item of items) { ... }
 items.forEach((item) => { ... });
 items.map((item) => transform(item));
 items.filter((item) => item.isValid);
 items.reduce((acc, item) => acc + item, 0);
 ```
 
-`break` and `continue` are only available inside `switch` statements.
+`break` and `continue` are available inside `switch` statements and inside `for...of`/`for await...of` loops.
+
+## Supported Iteration
+
+GocciaScript supports iteration via `for...of` and `for await...of`, which work with the iterator protocol.
+
+### `for...of`
+
+Iterates over sync iterables using `[Symbol.iterator]`:
+
+- **Arrays** — Yields each element.
+- **Strings** — Yields each character.
+- **Sets** — Yields each value.
+- **Maps** — Yields `[key, value]` pairs.
+- **Custom iterables** — Any object with a `[Symbol.iterator]()` method that returns an iterator.
+
+```javascript
+for (const x of [1, 2, 3]) { console.log(x); }
+for (const c of "hello") { console.log(c); }
+for (const [k, v] of new Map([["a", 1]])) { console.log(k, v); }
+```
+
+**Destructuring in bindings:** The loop variable can use destructuring patterns:
+
+```javascript
+for (const [a, b] of [[1, 2], [3, 4]]) { console.log(a + b); }
+```
+
+**`break`:** Exits the loop early. Supported inside `for...of`.
+
+### `for await...of`
+
+Iterates over async iterables using `[Symbol.asyncIterator]`. Requires an async function context:
+
+```javascript
+const fn = async () => {
+  for await (const x of asyncIterable) {
+    console.log(x);
+  }
+};
+```
+
+Each value is awaited before the loop body runs. Works with sync iterables too — Promises yielded by a sync iterator are awaited.
 
 ### `with` Statement
 
@@ -335,7 +415,6 @@ The following standard ECMAScript built-ins are **not yet implemented** and may 
 - **URI functions** (`encodeURI`, `decodeURI`, `encodeURIComponent`, `decodeURIComponent`) — URL encoding/decoding.
 - **atob / btoa** — Base64 encoding/decoding.
 - **Regular Expressions** — `RegExp` constructor and regex literal syntax. String methods like `replace` currently work with string patterns only.
-- **async / await** — Syntax sugar for Promises. Use `.then()` chaining instead.
 
 ## Types as Comments
 
@@ -453,10 +532,6 @@ Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are 
 **Custom factory:** The factory and fragment function names can be overridden per-file using pragma comments (`@jsxFactory`, `@jsxFragment`) at the top of the file, before any code.
 
 The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default in `DefaultGlobals`; to disable it, exclude `ggJSX` from the globals set.
-
-### `async`/`await`
-
-**Not yet implemented.** Promises are fully implemented (constructor, `.then`/`.catch`/`.finally`, `Promise.all`/`allSettled`/`race`/`any`, microtask queue), but `async`/`await` syntax sugar is not yet available. Use `.then()` chaining instead.
 
 ### Regular Expressions
 

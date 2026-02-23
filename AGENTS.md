@@ -79,12 +79,12 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 |-----------|------|------|
 | Engine | `Goccia.Engine.pas` | Top-level orchestration, built-in registration |
 | Lexer | `Goccia.Lexer.pas` | Source → tokens |
-| Parser | `Goccia.Parser.pas` | Tokens → AST |
+| Parser | `Goccia.Parser.pas` | Tokens → AST (including `TGocciaForOfStatement`, `TGocciaForAwaitOfStatement` in `Goccia.AST.Statements.pas`) |
 | Interpreter | `Goccia.Interpreter.pas` | AST execution, module loading, scope ownership |
 | Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules: Arithmetic, Bitwise, Comparison, Assignment, TypeOperations) |
 | Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ, VMT-based chain-walking |
 | Reserved Keywords | `Goccia.Keywords.Reserved.pas` | Reserved JavaScript keyword string constants (`break`, `class`, `const`, `this`, etc.) |
-| Contextual Keywords | `Goccia.Keywords.Contextual.pas` | Contextual keyword string constants (`get`, `set`, `type`, `interface`, `implements`, etc.) |
+| Contextual Keywords | `Goccia.Keywords.Contextual.pas` | Contextual keyword string constants (`async`, `get`, `set`, `type`, `interface`, `implements`, etc.) |
 | Timing Utilities | `TimingUtils.pas` | Cross-platform timing: monotonic (`GetNanoseconds`, `GetMilliseconds`), wall-clock (`GetEpochNanoseconds`), and duration formatting (`FormatDuration`) |
 | Microtask Queue | `Goccia.MicrotaskQueue.pas` | Singleton FIFO queue for Promise reactions and `queueMicrotask` callbacks, drained after script execution, cleared on exception |
 | Call Stack | `Goccia.CallStack.pas` | Singleton call frame stack for `Error.stack` traces — pushed/popped in `EvaluateCall`/`EvaluateNewExpression`, captured at error construction |
@@ -95,6 +95,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Generic Iterator | `Goccia.Values.Iterator.Generic.pas` | Wraps user-defined `{next()}` objects as proper iterators |
 | Enum Value | `Goccia.Values.EnumValue.pas` | TC39 proposal-enum: `TGocciaEnumValue` (null-prototype, non-extensible, iterable via `Symbol.iterator`) |
 | Auto-Accessor Helpers | `Goccia.Values.AutoAccessor.pas` | `TGocciaAutoAccessorGetter`, `TGocciaAutoAccessorSetter` — getter/setter methods for auto-accessor backing fields |
+| Async Function Values | `Goccia.Values.AsyncFunctionValue.pas` | `TGocciaAsyncFunctionValue`, `TGocciaAsyncArrowFunctionValue`, `TGocciaAsyncMethodValue` — async variants that wrap body execution in Promise |
 | Evaluator Decorator Helpers | `Goccia.Evaluator.Decorators.pas` | `TGocciaInitializerCollector`, `TGocciaAccessGetter`, `TGocciaAccessSetter` — helper classes for decorator runtime (FPC closure workaround) |
 | JSON Utilities | `Goccia.JSON.pas` | Standalone JSON ↔ `TGocciaValue` parser and stringifier |
 | Version | `Goccia.Version.pas` | Git-derived version and commit hash, resolved once at startup via `RunCommand` |
@@ -233,7 +234,7 @@ GocciaScript intentionally excludes these JavaScript features — do **not** add
 - `eval()` and `arguments` object
 - Automatic semicolon insertion (semicolons are required)
 - `with` statement
-- Traditional loops (`for`, `while`, `do...while`) — use array methods instead
+- Traditional loops (`for`, `while`, `do...while`) — use `for...of`, `for await...of`, or array methods instead. `for...of` and `for await...of` are supported.
 - Default imports/exports — use named imports/exports
 - Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` — use `Number.*` instead (intentional divergence; keeps these functions on the object they belong to)
 
@@ -281,7 +282,7 @@ Two function forms exist with separate AST nodes and runtime types:
 - **Arrow functions** (`(x) => x + 1`) — AST: `TGocciaArrowFunctionExpression`, Runtime: `TGocciaArrowFunctionValue`. Always inherit `this` from their lexical (closure) scope via `BindThis` override.
 - **Shorthand methods** (`method() { ... }`) — AST: `TGocciaMethodExpression`, Runtime: `TGocciaFunctionValue`. Receive call-site `this` from the receiver.
 
-`this` binding is resolved via virtual dispatch on `TGocciaFunctionValue.BindThis` — no boolean flags or runtime branches. Array prototype callbacks pass `undefined` as `ThisValue`, so arrow callbacks correctly inherit their enclosing scope's `this`.
+`this` binding is resolved via virtual dispatch on `TGocciaFunctionValue.BindThis` — no boolean flags or runtime branches. Async variants (`TGocciaAsyncFunctionValue`, `TGocciaAsyncArrowFunctionValue`, `TGocciaAsyncMethodValue`) inherit `this` binding from their non-async superclasses. Array prototype callbacks pass `undefined` as `ThisValue`, so arrow callbacks correctly inherit their enclosing scope's `this`.
 
 At the scope level, `this`, owning class, and super class are resolved via VMT-based chain-walking:
 - `Scope.FindThisValue` — walks the parent chain calling `GetThisValue` (virtual) on each scope.
@@ -400,6 +401,8 @@ Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowType
 
 All subclasses inherit from `TGocciaIteratorValue`, so existing `is TGocciaIteratorValue` checks in the evaluator work with zero changes. The evaluator's `GetIteratorFromValue` helper resolves iterators by checking for `[Symbol.iterator]` symbol properties on objects (including boxing primitives), and wraps plain `{next()}` objects as generic iterators. A global `Iterator` object with `Iterator.from()` and `Iterator.prototype` is always registered.
 
+**Async functions:** `TGocciaAsyncFunctionValue`, `TGocciaAsyncArrowFunctionValue`, and `TGocciaAsyncMethodValue` (`Goccia.Values.AsyncFunctionValue.pas`) are subclasses of their non-async counterparts. Their `Call` method wraps `ExecuteBody` in a try/except, creating a `TGocciaPromiseValue` that resolves on success or rejects on `TGocciaThrowValue`. Arrow async functions inherit lexical `this` via virtual dispatch on `BindThis`.
+
 ## Built-in Objects
 
 See [docs/built-ins.md](docs/built-ins.md) for documentation on all built-ins and how to add new ones.
@@ -413,6 +416,10 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 
 The TestRunner adds `ggTestAssertions` for the test framework (`describe`, `test`, `expect`).
 The BenchmarkRunner adds `ggBenchmark` for the benchmark framework (`suite`, `bench`, `runBenchmarks`). It supports multiple `--format=console|text|csv|json` flags in a single command (each optionally followed by `--output=file`), `--no-progress` for CI builds, and benchmark calibration via environment variables (`GOCCIA_BENCH_CALIBRATION_MS`, `GOCCIA_BENCH_ROUNDS`, etc.).
+
+`Array.fromAsync(asyncItems [, mapfn [, thisArg]])` creates an array from an async iterable, sync iterable, or array-like, returning a `Promise<Array>`. It tries `[Symbol.asyncIterator]` first, falls back to `[Symbol.iterator]`, then array-like. Each element value is awaited (Promises resolved via synchronous microtask drain).
+
+**`Symbol.asyncIterator`:** `TGocciaSymbolValue.WellKnownAsyncIterator` (lazily initialized, GC-pinned). Registered on the `Symbol` constructor in `Goccia.Builtins.GlobalSymbol.pas`. Used by `for await...of` and `Array.fromAsync` to obtain async iterators.
 
 ### JSX Support (Opt-in)
 
@@ -469,7 +476,9 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 
 - **Primary:** JavaScript end-to-end tests in `tests/` directory — these are the source of truth for correctness
 - **Secondary:** Pascal unit tests in `units/*.Test.pas` — only for internal implementation details
-- **JS test framework:** built-in `describe`/`test`/`expect` (enabled via `ggTestAssertions`). Supports nested `describe` blocks (suite names are composed with ` > ` separators), `test.skip`/`describe.skip` for unconditional skipping, and `skipIf(condition)`/`runIf(condition)` on both `describe` and `test` for conditional execution. Skip state is inherited by nested describes.
+- **Test directories:** `tests/language/async-await/` — async functions, await expressions, async class/object methods, error handling; `tests/language/for-of/` — for...of loops, destructuring, break, iterators, for-await-of; `tests/built-ins/Array/fromAsync.js` — Array.fromAsync with async/sync iterables; `tests/built-ins/Symbol/asyncIterator.js` — Symbol.asyncIterator well-known symbol
+- **JS test framework:** built-in `describe`/`test`/`expect` (enabled via `ggTestAssertions`). Supports nested `describe` blocks (suite names are composed with ` > ` separators), `test.skip`/`describe.skip` for unconditional skipping, and `skipIf(condition)`/`runIf(condition)` on both `describe` and `test` for conditional execution. Skip state is inherited by nested describes. Test callbacks can be `async` — `await` works directly in the test body and inside `expect()` calls (e.g., `expect(await somePromise).toBe(42)`). Returning a Promise from a non-async test callback is still supported as the primary pattern for testing Promise-based code. Lifecycle hooks (`beforeEach`/`afterEach`) and benchmark callbacks (`bench()`) also support `async` functions with `await`.
+- **`.resolves` / `.rejects`:** Vitest/Jest-compatible Promise unwrapping on the `expect()` object. `await expect(promise).resolves.toBe(42)` unwraps a fulfilled Promise; `await expect(promise).rejects.toThrow(TypeError)` unwraps a rejected Promise. Both are getter properties (like `.not`) that drain the microtask queue and return a new expectation with the unwrapped value. `.rejects.toThrow(ErrorType)` checks the rejection reason's error name. Both require an actual Promise — call async functions explicitly: `expect(fn())` not `expect(fn)`.
 - **`.toThrow()` best practice:** Always pass an explicit error constructor (`TypeError`, `RangeError`, `Error`, etc.) to `.toThrow()` — e.g. `expect(() => null.foo).toThrow(TypeError)`. Bare `.toThrow()` only asserts *something* throws; the constructor form also verifies the error type.
 - **Pascal test framework:** `TestRunner.pas` provides generic `Expect<T>(...).ToBe(...)` assertions. `Expect<T>` is a **standalone function** (not a method on `TTestSuite`) to avoid FPC 3.2.2 AArch64 compiler crash with cross-unit generic method inheritance.
 - **NaN checks:** In Pascal tests, use `Value.ToNumberLiteral.IsNaN` (not `Math.IsNaN`) — special values store `0.0` internally

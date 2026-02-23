@@ -61,6 +61,9 @@ function EvaluateEnumDeclaration(const AEnumDeclaration: TGocciaEnumDeclaration;
 function EvaluateDestructuringDeclaration(const ADestructuringDeclaration: TGocciaDestructuringDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateLiteral(const ATemplateLiteralExpression: TGocciaTemplateLiteralExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateTemplateExpression(const AExpressionText: string; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaValue;
+function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
 
 // Destructuring pattern assignment procedures
 procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False);
@@ -100,9 +103,12 @@ uses
   Goccia.GarbageCollector,
   Goccia.Keywords.Reserved,
   Goccia.Lexer,
+  Goccia.MicrotaskQueue,
   Goccia.Parser,
+  Goccia.Scope.BindingMap,
   Goccia.Token,
   Goccia.Values.ArrayValue,
+  Goccia.Values.AsyncFunctionValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,
   Goccia.Values.Error,
@@ -115,6 +121,7 @@ uses
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
   Goccia.Values.SymbolValue;
 
@@ -430,6 +437,8 @@ begin
     Result := EvaluateObject(TGocciaObjectExpression(AExpression), AContext)
   else if AExpression is TGocciaMethodExpression then
     Result := EvaluateMethodExpression(TGocciaMethodExpression(AExpression), AContext)
+  else if AExpression is TGocciaAwaitExpression then
+    Result := EvaluateAwait(TGocciaAwaitExpression(AExpression), AContext)
   else if AExpression is TGocciaArrowFunctionExpression then
     Result := EvaluateArrowFunction(TGocciaArrowFunctionExpression(AExpression), AContext)
   else if AExpression is TGocciaConditionalExpression then
@@ -626,6 +635,14 @@ begin
   else if AStatement is TGocciaReExportDeclaration then
   begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end
+  else if AStatement is TGocciaForAwaitOfStatement then
+  begin
+    Result := EvaluateForAwaitOf(TGocciaForAwaitOfStatement(AStatement), AContext);
+  end
+  else if AStatement is TGocciaForOfStatement then
+  begin
+    Result := EvaluateForOf(TGocciaForOfStatement(AStatement), AContext);
   end
   else if AStatement is TGocciaEmptyStatement then
   begin
@@ -1278,6 +1295,260 @@ begin
   Result := TGocciaFunctionValue.Create(Parameters, Statements, AContext.Scope.CreateChild);
 end;
 
+// ES2026 §27.7.5.3 Await
+function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  Value, ThenMethod: TGocciaValue;
+  Promise: TGocciaPromiseValue;
+  ThenArgs: TGocciaArgumentsCollection;
+begin
+  Value := EvaluateExpression(AAwaitExpression.Operand, AContext);
+
+  // ES2026 §27.7.5.3 step 2: If value is a Promise, await it directly
+  if Value is TGocciaPromiseValue then
+  begin
+    Promise := TGocciaPromiseValue(Value);
+  end
+  // ES2026 §25.6.4.6.1 PromiseResolve: If value is a thenable (object with
+  // callable .then), wrap it in a Promise via resolve
+  else if Value is TGocciaObjectValue then
+  begin
+    ThenMethod := Value.GetProperty(PROP_THEN);
+    if Assigned(ThenMethod) and not (ThenMethod is TGocciaUndefinedLiteralValue) and ThenMethod.IsCallable then
+    begin
+      Promise := TGocciaPromiseValue.Create;
+      ThenArgs := TGocciaArgumentsCollection.Create([
+        TGocciaNativeFunctionValue.Create(Promise.DoResolve, 'resolve', 1),
+        TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
+      ]);
+      try
+        TGocciaFunctionBase(ThenMethod).Call(ThenArgs, Value);
+      finally
+        ThenArgs.Free;
+      end;
+    end
+    else
+    begin
+      Result := Value;
+      Exit;
+    end;
+  end
+  else
+  begin
+    Result := Value;
+    Exit;
+  end;
+
+  if Promise.State <> gpsPending then
+  begin
+    if Promise.State = gpsFulfilled then
+      Result := Promise.PromiseResult
+    else
+      raise TGocciaThrowValue.Create(Promise.PromiseResult);
+    Exit;
+  end;
+
+  if Assigned(TGocciaMicrotaskQueue.Instance) then
+    TGocciaMicrotaskQueue.Instance.DrainQueue;
+
+  if Promise.State = gpsFulfilled then
+    Result := Promise.PromiseResult
+  else if Promise.State = gpsRejected then
+    raise TGocciaThrowValue.Create(Promise.PromiseResult)
+  else
+    raise TGocciaError.Create('await: Promise did not settle after microtask drain',
+      AAwaitExpression.Line, AAwaitExpression.Column, '', nil);
+end;
+
+// ES2026 §14.7.5.6 ForIn/OfBodyEvaluation — for...of variant
+function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  IterableValue: TGocciaValue;
+  Iterator: TGocciaIteratorValue;
+  IterResult: TGocciaObjectValue;
+  CurrentValue: TGocciaValue;
+  IterScope: TGocciaScope;
+  IterContext: TGocciaEvaluationContext;
+  DeclarationType: TGocciaDeclarationType;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  IterableValue := EvaluateExpression(AForOfStatement.Iterable, AContext);
+  Iterator := GetIteratorFromValue(IterableValue);
+  if Iterator = nil then
+    raise TGocciaTypeError.Create('Value is not iterable', AForOfStatement.Line, AForOfStatement.Column, '', nil);
+
+  if AForOfStatement.IsConst then
+    DeclarationType := dtConst
+  else
+    DeclarationType := dtLet;
+
+  try
+    IterResult := Iterator.AdvanceNext;
+    while not TGocciaBooleanLiteralValue(IterResult.GetProperty('done')).Value do
+    begin
+      CurrentValue := IterResult.GetProperty('value');
+
+      IterScope := AContext.Scope.CreateChild(skBlock);
+      IterContext := AContext;
+      IterContext.Scope := IterScope;
+
+      if AForOfStatement.BindingPattern <> nil then
+        AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True)
+      else
+        IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
+
+      try
+        Evaluate(AForOfStatement.Body, IterContext);
+      except
+        on E: TGocciaBreakSignal do
+          Exit;
+      end;
+
+      IterResult := Iterator.AdvanceNext;
+    end;
+  except
+    on E: TGocciaBreakSignal do
+      ;
+  end;
+end;
+
+// ES2026 §14.7.5.6 ForIn/OfBodyEvaluation — for-await-of variant
+function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  IterableValue, IteratorMethod, IteratorObj, NextMethod, NextResult, DoneValue, CurrentValue: TGocciaValue;
+  Iterator: TGocciaIteratorValue;
+  GenericNextResult: TGocciaObjectValue;
+  Promise: TGocciaPromiseValue;
+  IterScope: TGocciaScope;
+  IterContext: TGocciaEvaluationContext;
+  DeclarationType: TGocciaDeclarationType;
+  EmptyArgs: TGocciaArgumentsCollection;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  IterableValue := EvaluateExpression(AForAwaitOfStatement.Iterable, AContext);
+
+  if AForAwaitOfStatement.IsConst then
+    DeclarationType := dtConst
+  else
+    DeclarationType := dtLet;
+
+  IteratorMethod := nil;
+  if IterableValue is TGocciaObjectValue then
+    IteratorMethod := TGocciaObjectValue(IterableValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownAsyncIterator);
+
+  if Assigned(IteratorMethod) and IteratorMethod.IsCallable then
+  begin
+    EmptyArgs := TGocciaArgumentsCollection.Create;
+    try
+      IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(EmptyArgs, IterableValue);
+    finally
+      EmptyArgs.Free;
+    end;
+
+    EmptyArgs := TGocciaArgumentsCollection.Create;
+    try
+      NextMethod := IteratorObj.GetProperty('next');
+      if not Assigned(NextMethod) or not NextMethod.IsCallable then
+        ThrowTypeError('Async iterator .next is not callable');
+
+      while True do
+      begin
+        NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
+
+        if NextResult is TGocciaPromiseValue then
+        begin
+          Promise := TGocciaPromiseValue(NextResult);
+          if Promise.State = gpsPending then
+          begin
+            if Assigned(TGocciaMicrotaskQueue.Instance) then
+              TGocciaMicrotaskQueue.Instance.DrainQueue;
+          end;
+          if Promise.State = gpsRejected then
+            raise TGocciaThrowValue.Create(Promise.PromiseResult);
+          NextResult := Promise.PromiseResult;
+        end;
+
+        DoneValue := NextResult.GetProperty('done');
+        if Assigned(DoneValue) and (DoneValue is TGocciaBooleanLiteralValue) and TGocciaBooleanLiteralValue(DoneValue).Value then
+          Break;
+
+        CurrentValue := NextResult.GetProperty('value');
+        if not Assigned(CurrentValue) then
+          CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+        IterScope := AContext.Scope.CreateChild(skBlock);
+        IterContext := AContext;
+        IterContext.Scope := IterScope;
+
+        if AForAwaitOfStatement.BindingPattern <> nil then
+          AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True)
+        else
+          IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
+
+        try
+          Evaluate(AForAwaitOfStatement.Body, IterContext);
+        except
+          on E: TGocciaBreakSignal do
+            Exit;
+        end;
+      end;
+    finally
+      EmptyArgs.Free;
+    end;
+  end
+  else
+  begin
+    Iterator := GetIteratorFromValue(IterableValue);
+    if Iterator = nil then
+      ThrowTypeError('Value is not iterable');
+
+    try
+      GenericNextResult := Iterator.AdvanceNext;
+      while not TGocciaBooleanLiteralValue(GenericNextResult.GetProperty('done')).Value do
+      begin
+        CurrentValue := GenericNextResult.GetProperty('value');
+
+        if CurrentValue is TGocciaPromiseValue then
+        begin
+          Promise := TGocciaPromiseValue(CurrentValue);
+          if Promise.State = gpsPending then
+          begin
+            if Assigned(TGocciaMicrotaskQueue.Instance) then
+              TGocciaMicrotaskQueue.Instance.DrainQueue;
+          end;
+          if Promise.State = gpsRejected then
+            raise TGocciaThrowValue.Create(Promise.PromiseResult);
+          if Promise.State = gpsFulfilled then
+            CurrentValue := Promise.PromiseResult;
+        end;
+
+        IterScope := AContext.Scope.CreateChild(skBlock);
+        IterContext := AContext;
+        IterContext.Scope := IterScope;
+
+        if AForAwaitOfStatement.BindingPattern <> nil then
+          AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True)
+        else
+          IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
+
+        try
+          Evaluate(AForAwaitOfStatement.Body, IterContext);
+        except
+          on E: TGocciaBreakSignal do
+            Exit;
+        end;
+
+        GenericNextResult := Iterator.AdvanceNext;
+      end;
+    except
+      on E: TGocciaBreakSignal do
+        ;
+    end;
+  end;
+end;
+
 function EvaluateArrowFunction(const AArrowFunctionExpression: TGocciaArrowFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
@@ -1291,8 +1562,10 @@ begin
     Statements.Add(AArrowFunctionExpression.Body);
   end;
 
-  // Arrow functions always use lexical this per ECMAScript spec
-  Result := TGocciaArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild);
+  if AArrowFunctionExpression.IsAsync then
+    Result := TGocciaAsyncArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild)
+  else
+    Result := TGocciaArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild);
   TGocciaFunctionValue(Result).IsExpressionBody := not (AArrowFunctionExpression.Body is TGocciaBlockStatement);
 end;
 
@@ -1308,8 +1581,10 @@ begin
     Statements.Add(AMethodExpression.Body);
   end;
 
-  // Shorthand methods use call-site this like regular functions
-  Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, AContext.Scope.CreateChild);
+  if AMethodExpression.IsAsync then
+    Result := TGocciaAsyncFunctionValue.Create(AMethodExpression.Parameters, Statements, AContext.Scope.CreateChild)
+  else
+    Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, AContext.Scope.CreateChild);
 end;
 
 function EvaluateBlock(const ABlockStatement: TGocciaBlockStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1427,8 +1702,10 @@ var
 begin
   Statements := CopyStatementList(TGocciaBlockStatement(AClassMethod.Body).Nodes);
 
-  // Always create a unique child scope for the closure - now with default parameter support
-  Result := TGocciaMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass);
+  if AClassMethod.IsAsync then
+    Result := TGocciaAsyncMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass)
+  else
+    Result := TGocciaMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass);
 end;
 
 function EvaluateClass(const AClassDeclaration: TGocciaClassDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;

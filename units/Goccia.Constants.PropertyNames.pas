@@ -33,6 +33,7 @@ const
   PROP_ACCESS       = 'access';
   PROP_METADATA     = 'metadata';
   PROP_ADD_INITIALIZER = 'addInitializer';
+  PROP_THEN         = 'then';
 
 implementation
 

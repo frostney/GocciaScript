@@ -71,6 +71,10 @@ type
 
     // Negation support
     function GetNot(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    // Promise unwrapping (Vitest/Jest-compatible)
+    function GetResolves(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetRejects(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
   // Main test assertions builtin
@@ -153,6 +157,7 @@ uses
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
+  Goccia.Values.FunctionBase,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue;
@@ -226,6 +231,12 @@ begin
   // Negation property - use accessor to make it a getter
   DefineProperty('not', TGocciaPropertyDescriptorAccessor.Create(
     TGocciaNativeFunctionValue.Create(GetNot, 'not', 0), nil, [pfConfigurable]));
+
+  // Promise unwrapping properties — Vitest/Jest-compatible
+  DefineProperty('resolves', TGocciaPropertyDescriptorAccessor.Create(
+    TGocciaNativeFunctionValue.Create(GetResolves, 'resolves', 0), nil, [pfConfigurable]));
+  DefineProperty('rejects', TGocciaPropertyDescriptorAccessor.Create(
+    TGocciaNativeFunctionValue.Create(GetRejects, 'rejects', 0), nil, [pfConfigurable]));
 end;
 
 function TGocciaExpectationValue.ToBe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -792,6 +803,33 @@ begin
 
   if not (FActualValue is TGocciaFunctionValue) then
   begin
+    // Support .rejects.toThrow(TypeError) — actual value is the rejection reason
+    if (FActualValue is TGocciaObjectValue) and TGocciaObjectValue(FActualValue).HasErrorData then
+    begin
+      if ExpectedErrorType = '' then
+      begin
+        TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Exit;
+      end;
+      ThrownObj := TGocciaObjectValue(FActualValue);
+      if ThrownObj.HasProperty(PROP_NAME) then
+      begin
+        ErrorName := ThrownObj.GetProperty(PROP_NAME).ToStringLiteral.Value;
+        if (ErrorName = ExpectedErrorType) or
+           (LowerCase(ErrorName) = LowerCase(ExpectedErrorType)) then
+        begin
+          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+          Exit;
+        end;
+      end;
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
+        'Expected error of type ' + ExpectedErrorType + ' but got: ' + FActualValue.ToStringLiteral.Value);
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
+    end;
+
     FTestAssertions.ThrowError('toThrow expects actual value to be a function', 0, 0);
     Exit;
   end;
@@ -1013,8 +1051,73 @@ end;
 
 function TGocciaExpectationValue.GetNot(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  // Return a new expectation object with negation enabled
   Result := TGocciaExpectationValue.Create(FActualValue, FTestAssertions, True);
+end;
+
+function TGocciaExpectationValue.GetResolves(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+begin
+  if Assigned(TGocciaMicrotaskQueue.Instance) then
+    TGocciaMicrotaskQueue.Instance.DrainQueue;
+
+  if not (FActualValue is TGocciaPromiseValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('resolves',
+      'Expected a Promise but received ' + FActualValue.ToStringLiteral.Value);
+    Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+    Exit;
+  end;
+
+  Promise := TGocciaPromiseValue(FActualValue);
+
+  if Promise.State = gpsFulfilled then
+    Result := TGocciaExpectationValue.Create(Promise.PromiseResult, FTestAssertions, FIsNegated)
+  else if Promise.State = gpsRejected then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('resolves',
+      'Expected Promise to resolve but it rejected with: ' + Promise.PromiseResult.ToStringLiteral.Value);
+    Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+  end
+  else
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('resolves',
+      'Promise still pending after microtask drain');
+    Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+  end;
+end;
+
+function TGocciaExpectationValue.GetRejects(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+begin
+  if Assigned(TGocciaMicrotaskQueue.Instance) then
+    TGocciaMicrotaskQueue.Instance.DrainQueue;
+
+  if not (FActualValue is TGocciaPromiseValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
+      'Expected a Promise but received ' + FActualValue.ToStringLiteral.Value);
+    Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+    Exit;
+  end;
+
+  Promise := TGocciaPromiseValue(FActualValue);
+
+  if Promise.State = gpsRejected then
+    Result := TGocciaExpectationValue.Create(Promise.PromiseResult, FTestAssertions, FIsNegated)
+  else if Promise.State = gpsFulfilled then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
+      'Expected Promise to reject but it resolved with: ' + Promise.PromiseResult.ToStringLiteral.Value);
+    Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+  end
+  else
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
+      'Promise still pending after microtask drain');
+    Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+  end;
 end;
 
 { TGocciaTestAssertions }
@@ -1097,24 +1200,34 @@ end;
 procedure TGocciaTestAssertions.RunCallbacks(const ACallbacks: TGocciaArgumentsCollection);
 var
   I: Integer;
-  Callback: TGocciaValue;
+  Callback, CallbackResult: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
+  Promise: TGocciaPromiseValue;
 begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
     for I := 0 to ACallbacks.Length - 1 do
     begin
       Callback := ACallbacks.GetElement(I);
-      if Callback is TGocciaFunctionValue then
+      if Callback.IsCallable then
       begin
         try
-          TGocciaFunctionValue(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+          CallbackResult := TGocciaFunctionBase(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+
+          if Assigned(TGocciaMicrotaskQueue.Instance) then
+            TGocciaMicrotaskQueue.Instance.DrainQueue;
+
+          if CallbackResult is TGocciaPromiseValue then
+          begin
+            Promise := TGocciaPromiseValue(CallbackResult);
+            if Promise.State = gpsRejected then
+              AssertionFailed('callback execution', 'Async callback rejected: ' + Promise.PromiseResult.ToStringLiteral.Value)
+            else if Promise.State = gpsPending then
+              AssertionFailed('callback execution', 'Async callback Promise still pending after microtask drain');
+          end;
         except
           on E: Exception do
-          begin
-            // Route callback exceptions through proper assertion failure mechanism
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
-          end;
         end;
       end;
     end;

@@ -32,6 +32,7 @@ type
     FSourceLines: TStringList;
     FWarnings: array of TGocciaParserWarning;
     FWarningCount: Integer;
+    FInAsyncFunction: Integer;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
 
@@ -156,6 +157,7 @@ begin
   FSourceLines := ASourceLines;
   FCurrent := 0;
   FWarningCount := 0;
+  FInAsyncFunction := 0;
 end;
 
 procedure TGocciaParser.AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
@@ -362,6 +364,15 @@ var
   Operator: TGocciaToken;
   Right: TGocciaExpression;
 begin
+  // await expression (only valid inside async functions)
+  if (FInAsyncFunction > 0) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
+  begin
+    Operator := Advance; // consume 'await'
+    Right := Unary;
+    Result := TGocciaAwaitExpression.Create(Right, Operator.Line, Operator.Column);
+    Exit;
+  end;
+
   if Match([gttNot, gttMinus, gttPlus, gttTypeof, gttBitwiseNot, gttDelete]) then
   begin
     Operator := Previous;
@@ -522,6 +533,9 @@ var
   Expr: TGocciaExpression;
   Name: string;
   Args: TObjectList<TGocciaExpression>;
+  Parameters: TGocciaParameterArray;
+  ArrowFn: TGocciaArrowFunctionExpression;
+  ArrowBody: TGocciaASTNode;
 begin
   if Match([gttTrue]) then
   begin
@@ -613,7 +627,59 @@ begin
   begin
     Token := Previous;
     Name := Token.Lexeme;
-    Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
+
+    // async arrow function: async (params) => body
+    if (Name = KEYWORD_ASYNC) and Check(gttLeftParen) then
+    begin
+      Advance; // consume '('
+      if IsArrowFunction() then
+      begin
+        Inc(FInAsyncFunction);
+        try
+          Expr := ArrowFunction;
+        finally
+          Dec(FInAsyncFunction);
+        end;
+        TGocciaArrowFunctionExpression(Expr).IsAsync := True;
+        Result := Expr;
+      end
+      else
+      begin
+        FCurrent := FCurrent - 1; // back up past '('
+        Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
+      end;
+    end
+    // async single-param arrow: async x => body
+    else if (Name = KEYWORD_ASYNC) and Check(gttIdentifier) and (FTokens[FCurrent + 1].TokenType = gttArrow) then
+    begin
+      Token := Advance; // consume param identifier
+      Name := Token.Lexeme;
+      Consume(gttArrow, 'Expected "=>" in async arrow function');
+
+      Inc(FInAsyncFunction);
+      try
+        if Match([gttLeftBrace]) then
+          ArrowBody := BlockStatement
+        else
+          ArrowBody := Expression;
+      finally
+        Dec(FInAsyncFunction);
+      end;
+
+      SetLength(Parameters, 1);
+      Parameters[0].Name := Name;
+      Parameters[0].DefaultValue := nil;
+      Parameters[0].IsPattern := False;
+      Parameters[0].IsRest := False;
+      Parameters[0].IsOptional := False;
+      Parameters[0].TypeAnnotation := '';
+
+      ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, Token.Line, Token.Column);
+      ArrowFn.IsAsync := True;
+      Result := ArrowFn;
+    end
+    else
+      Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
   end
   else if Match([gttHash]) then
   begin
@@ -710,6 +776,7 @@ var
   NumericValue: Double;
   IsComputed: Boolean;
   IsGetter, IsSetter: Boolean;
+  IsAsync: Boolean;
   ComputedCount, SourceOrderCount: Integer;
 begin
   Line := Previous.Line;
@@ -732,6 +799,14 @@ begin
     IsComputed := False;
     IsGetter := False;
     IsSetter := False;
+    IsAsync := False;
+
+    // Check for async method syntax
+    if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttLeftParen) then
+    begin
+      Advance;
+      IsAsync := True;
+    end;
 
     // Check for getter/setter syntax (contextual keywords)
     // Only treat as getter/setter if followed by identifier (not colon, parenthesis, comma, or right brace)
@@ -822,7 +897,16 @@ begin
     end
     // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
     else if Check(gttLeftParen) then
-      Value := ParseObjectMethodBody(Peek.Line, Peek.Column)
+    begin
+      if IsAsync then Inc(FInAsyncFunction);
+      try
+        Value := ParseObjectMethodBody(Peek.Line, Peek.Column);
+      finally
+        if IsAsync then Dec(FInAsyncFunction);
+      end;
+      if IsAsync then
+        TGocciaMethodExpression(Value).IsAsync := True;
+    end
     else
     begin
       // Check for shorthand property syntax: { name } means { name: name }
@@ -1471,9 +1555,88 @@ end;
 function TGocciaParser.ForStatement: TGocciaStatement;
 var
   Line, Column: Integer;
+  IsAwait: Boolean;
+  IsConst: Boolean;
+  BindingName: string;
+  BindingPattern: TGocciaDestructuringPattern;
+  IterableExpr: TGocciaExpression;
+  BodyStmt: TGocciaStatement;
+  SavedCurrent: Integer;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
+
+  // Try to parse for...of / for-await-of
+  SavedCurrent := FCurrent;
+  IsAwait := False;
+  BindingPattern := nil;
+
+  // for-await-of: 'await' appears between 'for' and '('
+  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
+  begin
+    IsAwait := True;
+    Advance; // consume 'await'
+  end;
+
+  if Check(gttLeftParen) then
+  begin
+    Advance; // consume '('
+
+    // Check for const/let binding
+    if Check(gttConst) or Check(gttLet) then
+    begin
+      IsConst := Check(gttConst);
+      Advance; // consume const/let
+
+      // Check if this is a for...of: need binding + 'of'
+      if Check(gttLeftBracket) or Check(gttLeftBrace) then
+      begin
+        BindingPattern := ParsePattern;
+        BindingName := '';
+      end
+      else if Check(gttIdentifier) then
+      begin
+        BindingName := Advance.Lexeme;
+      end
+      else
+      begin
+        FCurrent := SavedCurrent;
+        AddWarning('''for'' loops are not supported in GocciaScript',
+          'Use array methods like .forEach(), .map(), .filter(), or .reduce() instead',
+          Line, Column);
+        SkipBalancedParens;
+        SkipStatementOrBlock;
+        Result := TGocciaEmptyStatement.Create(Line, Column);
+        Exit;
+      end;
+
+      // Check for 'of' keyword
+      if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_OF) then
+      begin
+        Advance; // consume 'of'
+
+        IterableExpr := Expression;
+        Consume(gttRightParen, 'Expected ")" after for...of expression');
+
+        if Check(gttLeftBrace) then
+        begin
+          Advance;
+          BodyStmt := BlockStatement;
+        end
+        else
+          BodyStmt := Statement;
+
+        if IsAwait then
+          Result := TGocciaForAwaitOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column)
+        else
+          Result := TGocciaForOfStatement.Create(IsConst, BindingName, BindingPattern, IterableExpr, BodyStmt, Line, Column);
+        Exit;
+      end;
+    end;
+
+    // Not a for...of — fall back to traditional for loop (unsupported, skip with warning)
+    FCurrent := SavedCurrent;
+  end;
 
   AddWarning('''for'' loops are not supported in GocciaScript',
     'Use array methods like .forEach(), .map(), .filter(), or .reduce() instead',
@@ -2056,6 +2219,7 @@ var
   MemberDecorators: TGocciaDecoratorList;
   Elements: array of TGocciaClassElement;
   IsAccessor: Boolean;
+  IsAsync: Boolean;
 begin
   SetLength(Elements, 0);
   ClassGenericParams := CollectGenericParameters;
@@ -2109,6 +2273,13 @@ begin
     begin
       Advance;
       IsAccessor := True;
+    end;
+
+    IsAsync := False;
+    if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+    begin
+      Advance;
+      IsAsync := True;
     end;
 
     IsPrivate := Match([gttHash]);
@@ -2321,8 +2492,14 @@ begin
     end
     else if Check(gttLeftParen) or Check(gttLess) then
     begin
-      Method := ClassMethod(IsStatic);
+      if IsAsync then Inc(FInAsyncFunction);
+      try
+        Method := ClassMethod(IsStatic);
+      finally
+        if IsAsync then Dec(FInAsyncFunction);
+      end;
       Method.Name := MemberName;
+      Method.IsAsync := IsAsync;
 
       if Length(MemberDecorators) > 0 then
       begin
@@ -2335,6 +2512,7 @@ begin
         Elements[High(Elements)].ComputedKeyExpression := nil;
         Elements[High(Elements)].Decorators := MemberDecorators;
         Elements[High(Elements)].MethodNode := Method;
+        Elements[High(Elements)].IsAsync := IsAsync;
       end;
 
       if IsPrivate then
