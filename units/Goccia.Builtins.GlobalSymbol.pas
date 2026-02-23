@@ -72,6 +72,7 @@ begin
   FSymbolFunction.RegisterConstant('toPrimitive', TGocciaSymbolValue.WellKnownToPrimitive);
   FSymbolFunction.RegisterConstant('toStringTag', TGocciaSymbolValue.WellKnownToStringTag);
   FSymbolFunction.RegisterConstant('isConcatSpreadable', TGocciaSymbolValue.WellKnownIsConcatSpreadable);
+  FSymbolFunction.RegisterConstant('metadata', TGocciaSymbolValue.WellKnownMetadata);
 
   // Expose Symbol.prototype (ECMAScript compatible)
   FSymbolFunction.AssignProperty(PROP_PROTOTYPE, TGocciaSymbolValue.SharedPrototype);

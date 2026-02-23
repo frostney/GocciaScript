@@ -12,7 +12,7 @@ It's based on the thought "What if we implement ECMAScript today, but without th
 
 - **Variables**: `let` and `const` declarations (no `var`)
 - **Functions**: Arrow functions only (no `function` keyword)
-- **Classes**: Full class support with private fields (`#field`), static methods, getters/setters, and inheritance
+- **Classes**: Full class support with private fields (`#field`), static methods, getters/setters, inheritance, and decorators
 - **Equality**: Strict equality only (`===` / `!==`)
 - **Strict Mode**: Implicit — all code runs in strict mode
 - **Template Literals**: String interpolation with `${expression}`
@@ -65,6 +65,8 @@ GocciaScript implements several active TC39 proposals:
 
 | Proposal | Stage | Description |
 |----------|-------|-------------|
+| [Decorators](https://github.com/tc39/proposal-decorators) | 3 | Class, method, field, getter/setter, auto-accessor decorators with `addInitializer` |
+| [Decorator Metadata](https://github.com/tc39/proposal-decorator-metadata) | 3 | `Symbol.metadata` for decorator-attached class metadata with inheritance |
 | [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | TypeScript-style type annotations parsed and ignored at runtime |
 | [Enum Declarations](https://github.com/tc39/proposal-enum) | 0 | Frozen, null-prototype enum objects with `Symbol.iterator` |
 | [Temporal](https://tc39.es/proposal-temporal/) | 3 | Modern date/time API (`Temporal.PlainDate`, `Temporal.Duration`, `Temporal.Instant`, etc.) |

@@ -118,6 +118,9 @@ type
     function TryStatement: TGocciaStatement;
     function ClassMethod(const AIsStatic: Boolean = False): TGocciaClassMethod;
     function ClassDeclaration: TGocciaStatement;
+    function DecoratedClassDeclaration(const ADecorators: TGocciaDecoratorList): TGocciaStatement;
+    function ParseDecorators: TGocciaDecoratorList;
+    function ParseDecoratorExpression: TGocciaExpression;
     function EnumDeclaration: TGocciaStatement;
     function ImportDeclaration: TGocciaStatement;
     function ExportDeclaration: TGocciaStatement;
@@ -1235,6 +1238,10 @@ begin
     Result := DeclarationStatement
   else if Match([gttVar]) then
     Result := VarStatement
+  else if Check(gttAt) then
+  begin
+    Result := DecoratedClassDeclaration(ParseDecorators);
+  end
   else if Match([gttClass]) then
     Result := ClassDeclaration
   else if Match([gttEnum]) then
@@ -1707,6 +1714,87 @@ begin
   Result := TGocciaClassDeclaration.Create(ClassDef, Line, Column);
 end;
 
+// TC39 proposal-decorators
+function TGocciaParser.ParseDecoratorExpression: TGocciaExpression;
+var
+  Arguments: TObjectList<TGocciaExpression>;
+  Arg: TGocciaExpression;
+  PropertyName: string;
+  Line, Column: Integer;
+begin
+  if Match([gttLeftParen]) then
+  begin
+    Result := Expression;
+    Consume(gttRightParen, 'Expected ")" after decorator expression');
+    Exit;
+  end;
+
+  Result := Primary;
+
+  while True do
+  begin
+    if Match([gttLeftParen]) then
+    begin
+      Line := Previous.Line;
+      Column := Previous.Column;
+      Arguments := TObjectList<TGocciaExpression>.Create(True);
+      try
+        if not Check(gttRightParen) then
+        begin
+          repeat
+            if Match([gttSpread]) then
+              Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
+            else
+              Arg := Expression;
+            Arguments.Add(Arg);
+          until not Match([gttComma]);
+        end;
+        Consume(gttRightParen, 'Expected ")" after arguments');
+        Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
+      except
+        Arguments.Free;
+        raise;
+      end;
+    end
+    else if Match([gttDot]) then
+    begin
+      Line := Previous.Line;
+      Column := Previous.Column;
+      PropertyName := Consume(gttIdentifier, 'Expected property name after "."').Lexeme;
+      Result := TGocciaMemberExpression.Create(Result, PropertyName, False, Line, Column);
+    end
+    else
+      Break;
+  end;
+end;
+
+function TGocciaParser.ParseDecorators: TGocciaDecoratorList;
+begin
+  SetLength(Result, 0);
+  while Check(gttAt) do
+  begin
+    Advance;
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := ParseDecoratorExpression;
+  end;
+end;
+
+function TGocciaParser.DecoratedClassDeclaration(const ADecorators: TGocciaDecoratorList): TGocciaStatement;
+var
+  Name: string;
+  ClassDef: TGocciaClassDefinition;
+  Line, Column: Integer;
+begin
+  Consume(gttClass, 'Decorators can only be applied to class declarations');
+  Line := Previous.Line;
+  Column := Previous.Column;
+
+  Name := Consume(gttIdentifier, 'Expected class name').Lexeme;
+  ClassDef := ParseClassBody(Name);
+  ClassDef.FDecorators := ADecorators;
+  Result := TGocciaClassDeclaration.Create(ClassDef, Line, Column);
+end;
+
 // TC39 proposal-enum
 function TGocciaParser.EnumDeclaration: TGocciaStatement;
 var
@@ -1965,7 +2053,11 @@ var
   ComputedStaticGetters: array of TGocciaComputedStaticAccessorEntry;
   ClassGenericParams, ClassImplementsClause, FieldType: string;
   InstancePropertyTypes: TDictionary<string, string>;
+  MemberDecorators: TGocciaDecoratorList;
+  Elements: array of TGocciaClassElement;
+  IsAccessor: Boolean;
 begin
+  SetLength(Elements, 0);
   ClassGenericParams := CollectGenericParameters;
 
   if Match([gttExtends]) then
@@ -2002,6 +2094,9 @@ begin
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
+    MemberDecorators := ParseDecorators;
+    IsAccessor := False;
+
     IsStatic := Match([gttStatic]);
 
     while Check(gttIdentifier) and
@@ -2012,13 +2107,19 @@ begin
     if not IsStatic and Check(gttStatic) then
       IsStatic := Match([gttStatic]);
 
+    if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ACCESSOR) and not CheckNext(gttLeftParen) and not CheckNext(gttColon) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) then
+    begin
+      Advance;
+      IsAccessor := True;
+    end;
+
     IsPrivate := Match([gttHash]);
     IsGetter := False;
     IsSetter := False;
     IsComputed := False;
     ComputedKeyExpression := nil;
 
-    if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+    if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
     begin
       Advance;
       IsGetter := True;
@@ -2040,7 +2141,7 @@ begin
       else
         MemberName := Consume(gttIdentifier, 'Expected property name after "get"').Lexeme;
     end
-    else if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+    else if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
     begin
       Advance;
       IsSetter := True;
@@ -2076,11 +2177,47 @@ begin
       FieldType := CollectTypeAnnotation([gttAssign, gttSemicolon]);
     end;
 
-    if Check(gttAssign) then
+    if IsAccessor then
+    begin
+      if Check(gttAssign) then
+      begin
+        Advance;
+        PropertyValue := Expression;
+      end
+      else
+        PropertyValue := nil;
+      Consume(gttSemicolon, 'Expected ";" after accessor declaration');
+
+      SetLength(Elements, Length(Elements) + 1);
+      Elements[High(Elements)].Kind := cekAccessor;
+      Elements[High(Elements)].Name := MemberName;
+      Elements[High(Elements)].IsStatic := IsStatic;
+      Elements[High(Elements)].IsPrivate := IsPrivate;
+      Elements[High(Elements)].IsComputed := False;
+      Elements[High(Elements)].ComputedKeyExpression := nil;
+      Elements[High(Elements)].Decorators := MemberDecorators;
+      Elements[High(Elements)].FieldInitializer := PropertyValue;
+      Elements[High(Elements)].TypeAnnotation := FieldType;
+    end
+    else if Check(gttAssign) then
     begin
       Consume(gttAssign, 'Expected "=" in property');
       PropertyValue := Expression;
       Consume(gttSemicolon, 'Expected ";" after property');
+
+      if Length(MemberDecorators) > 0 then
+      begin
+        SetLength(Elements, Length(Elements) + 1);
+        Elements[High(Elements)].Kind := cekField;
+        Elements[High(Elements)].Name := MemberName;
+        Elements[High(Elements)].IsStatic := IsStatic;
+        Elements[High(Elements)].IsPrivate := IsPrivate;
+        Elements[High(Elements)].IsComputed := False;
+        Elements[High(Elements)].ComputedKeyExpression := nil;
+        Elements[High(Elements)].Decorators := MemberDecorators;
+        Elements[High(Elements)].FieldInitializer := PropertyValue;
+        Elements[High(Elements)].TypeAnnotation := FieldType;
+      end;
 
       if IsPrivate and IsStatic then
         PrivateStaticProperties.Add(MemberName, PropertyValue)
@@ -2104,6 +2241,20 @@ begin
       Consume(gttSemicolon, 'Expected ";" after property declaration');
       PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, Peek.Line, Peek.Column);
 
+      if Length(MemberDecorators) > 0 then
+      begin
+        SetLength(Elements, Length(Elements) + 1);
+        Elements[High(Elements)].Kind := cekField;
+        Elements[High(Elements)].Name := MemberName;
+        Elements[High(Elements)].IsStatic := IsStatic;
+        Elements[High(Elements)].IsPrivate := IsPrivate;
+        Elements[High(Elements)].IsComputed := False;
+        Elements[High(Elements)].ComputedKeyExpression := nil;
+        Elements[High(Elements)].Decorators := MemberDecorators;
+        Elements[High(Elements)].FieldInitializer := PropertyValue;
+        Elements[High(Elements)].TypeAnnotation := FieldType;
+      end;
+
       if IsPrivate and IsStatic then
         PrivateStaticProperties.Add(MemberName, PropertyValue)
       else if IsPrivate then
@@ -2124,6 +2275,20 @@ begin
     else if IsGetter then
     begin
       Getter := ParseGetterExpression;
+
+      if Length(MemberDecorators) > 0 then
+      begin
+        SetLength(Elements, Length(Elements) + 1);
+        Elements[High(Elements)].Kind := cekGetter;
+        Elements[High(Elements)].Name := MemberName;
+        Elements[High(Elements)].IsStatic := IsStatic;
+        Elements[High(Elements)].IsPrivate := IsPrivate;
+        Elements[High(Elements)].IsComputed := IsComputed;
+        Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
+        Elements[High(Elements)].Decorators := MemberDecorators;
+        Elements[High(Elements)].GetterNode := Getter;
+      end;
+
       if IsStatic then
       begin
         if IsComputed then
@@ -2143,6 +2308,20 @@ begin
     else if IsSetter then
     begin
       Setter := ParseSetterExpression;
+
+      if Length(MemberDecorators) > 0 then
+      begin
+        SetLength(Elements, Length(Elements) + 1);
+        Elements[High(Elements)].Kind := cekSetter;
+        Elements[High(Elements)].Name := MemberName;
+        Elements[High(Elements)].IsStatic := IsStatic;
+        Elements[High(Elements)].IsPrivate := IsPrivate;
+        Elements[High(Elements)].IsComputed := IsComputed;
+        Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
+        Elements[High(Elements)].Decorators := MemberDecorators;
+        Elements[High(Elements)].SetterNode := Setter;
+      end;
+
       if IsStatic then
         StaticSetters.Add(MemberName, Setter)
       else if IsPrivate then
@@ -2154,6 +2333,19 @@ begin
     begin
       Method := ClassMethod(IsStatic);
       Method.Name := MemberName;
+
+      if Length(MemberDecorators) > 0 then
+      begin
+        SetLength(Elements, Length(Elements) + 1);
+        Elements[High(Elements)].Kind := cekMethod;
+        Elements[High(Elements)].Name := MemberName;
+        Elements[High(Elements)].IsStatic := IsStatic;
+        Elements[High(Elements)].IsPrivate := IsPrivate;
+        Elements[High(Elements)].IsComputed := False;
+        Elements[High(Elements)].ComputedKeyExpression := nil;
+        Elements[High(Elements)].Decorators := MemberDecorators;
+        Elements[High(Elements)].MethodNode := Method;
+      end;
 
       if IsPrivate then
         PrivateMethods.Add(MemberName, Method)
@@ -2180,6 +2372,7 @@ begin
   Result.FStaticSetters.Free;
   Result.FStaticSetters := StaticSetters;
   Result.FComputedStaticGetters := ComputedStaticGetters;
+  Result.FElements := Elements;
 
   InstancePropertyOrder.Free;
   PrivateInstancePropertyOrder.Free;

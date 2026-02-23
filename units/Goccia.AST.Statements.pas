@@ -165,6 +165,31 @@ type
     GetterExpression: TGocciaGetterExpression;
   end;
 
+  // TC39 proposal-decorators: class element kinds
+  TGocciaClassElementKind = (
+    cekMethod,
+    cekGetter,
+    cekSetter,
+    cekField,
+    cekAccessor
+  );
+
+  // TC39 proposal-decorators: unified class element with optional decorators
+  TGocciaClassElement = record
+    Kind: TGocciaClassElementKind;
+    Name: string;
+    IsStatic: Boolean;
+    IsPrivate: Boolean;
+    IsComputed: Boolean;
+    ComputedKeyExpression: TGocciaExpression;
+    Decorators: TGocciaDecoratorList;
+    MethodNode: TGocciaClassMethod;
+    GetterNode: TGocciaGetterExpression;
+    SetterNode: TGocciaSetterExpression;
+    FieldInitializer: TGocciaExpression;
+    TypeAnnotation: string;
+  end;
+
   // Shared class definition structure
   TGocciaClassDefinition = class
   public
@@ -178,14 +203,16 @@ type
     FComputedStaticGetters: array of TGocciaComputedStaticAccessorEntry;
     FStaticProperties: TDictionary<string, TGocciaExpression>;
     FInstanceProperties: TDictionary<string, TGocciaExpression>;
-    FInstancePropertyOrder: TStringList; // Preserves declaration order
+    FInstancePropertyOrder: TStringList;
     FPrivateInstanceProperties: TDictionary<string, TGocciaExpression>;
-    FPrivateInstancePropertyOrder: TStringList; // Preserves declaration order
+    FPrivateInstancePropertyOrder: TStringList;
     FPrivateStaticProperties: TDictionary<string, TGocciaExpression>;
     FPrivateMethods: TDictionary<string, TGocciaClassMethod>;
     FGenericParams: string;
     FImplementsClause: string;
     FInstancePropertyTypes: TDictionary<string, string>;
+    FDecorators: TGocciaDecoratorList;
+    FElements: array of TGocciaClassElement;
 
     constructor Create(const AName, ASuperClass: string;
       const AMethods: TDictionary<string, TGocciaClassMethod>;
@@ -214,6 +241,7 @@ type
     property GenericParams: string read FGenericParams write FGenericParams;
     property ImplementsClause: string read FImplementsClause write FImplementsClause;
     property InstancePropertyTypes: TDictionary<string, string> read FInstancePropertyTypes;
+    property Decorators: TGocciaDecoratorList read FDecorators write FDecorators;
   end;
 
   TGocciaClassDeclaration = class(TGocciaStatement)

@@ -13,6 +13,7 @@ const
   KEYWORD_STATIC       = 'static';
   KEYWORD_GET          = 'get';
   KEYWORD_SET          = 'set';
+  KEYWORD_ACCESSOR     = 'accessor';
 
   // Async/generators
   KEYWORD_AWAIT        = 'await';

@@ -389,6 +389,7 @@ Symbols are unique, immutable primitive values used as property keys.
 | `Symbol.toPrimitive` | Well-known symbol for type conversion |
 | `Symbol.toStringTag` | Well-known symbol for Object.prototype.toString |
 | `Symbol.isConcatSpreadable` | Well-known symbol for Array.prototype.concat |
+| `Symbol.metadata` | Well-known symbol for decorator metadata (TC39 proposal-decorator-metadata) |
 | `symbol.toString()` | Returns `"Symbol(description)"` |
 | `symbol.description` | The description string, or `undefined` |
 

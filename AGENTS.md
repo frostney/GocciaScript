@@ -94,6 +94,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Lazy Iterators | `Goccia.Values.Iterator.Lazy.pas` | Lazy `map`/`filter`/`take`/`drop`/`flatMap` iterator wrappers |
 | Generic Iterator | `Goccia.Values.Iterator.Generic.pas` | Wraps user-defined `{next()}` objects as proper iterators |
 | Enum Value | `Goccia.Values.EnumValue.pas` | TC39 proposal-enum: `TGocciaEnumValue` (null-prototype, non-extensible, iterable via `Symbol.iterator`) |
+| Auto-Accessor Helpers | `Goccia.Values.AutoAccessor.pas` | `TGocciaAutoAccessorGetter`, `TGocciaAutoAccessorSetter` — getter/setter methods for auto-accessor backing fields |
+| Evaluator Decorator Helpers | `Goccia.Evaluator.Decorators.pas` | `TGocciaInitializerCollector`, `TGocciaAccessGetter`, `TGocciaAccessSetter` — helper classes for decorator runtime (FPC closure workaround) |
 | JSON Utilities | `Goccia.JSON.pas` | Standalone JSON ↔ `TGocciaValue` parser and stringifier |
 | Version | `Goccia.Version.pas` | Git-derived version and commit hash, resolved once at startup via `RunCommand` |
 | Temporal Utilities | `Goccia.Temporal.Utils.pas` | ISO 8601 date math helpers, parsing, formatting |
@@ -250,7 +252,27 @@ AST nodes with type fields: `TGocciaParameter` (`TypeAnnotation`, `IsOptional`),
 
 `type`/`interface` declarations and `import type`/`export type` produce `TGocciaEmptyStatement` (no-op at runtime). Access modifiers (`public`, `protected`, `private`, `readonly`, `override`, `abstract`) in class bodies are consumed and discarded.
 
-### 7. `this` Binding Semantics
+### 7. Decorators
+
+GocciaScript supports TC39 Stage 3 decorators ([proposal-decorators](https://github.com/tc39/proposal-decorators)) and decorator metadata ([proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata)).
+
+**Lexer:** `@` is tokenized as `gttAt` in `Goccia.Lexer.pas`.
+
+**Parser:** `ParseDecorators` collects decorator lists; `ParseDecoratorExpression` parses restricted expressions (identifier, member access, call — no private member access or computed access). `ParseClassBody` stores decorators on the unified `TGocciaClassElement` record. Class-level decorators are stored on `TGocciaClassDefinition.FDecorators`.
+
+**AST:** `TGocciaDecoratorList = array of TGocciaExpression` in `Goccia.AST.Expressions.pas`. `TGocciaClassElementKind` (method, getter, setter, field, accessor) and `TGocciaClassElement` record in `Goccia.AST.Statements.pas`. The `FElements` array preserves source order.
+
+**Evaluator:** `EvaluateClassDefinition` in `Goccia.Evaluator.pas` implements three-phase decorator evaluation: (1) evaluate all decorator expressions in source order, (2) call decorators bottom-up with context objects, (3) apply results. Auto-accessors generate private backing fields with getter/setter pairs.
+
+**Helper classes** in `Goccia.Evaluator.Decorators.pas` and `Goccia.Values.AutoAccessor.pas` work around FPC's lack of anonymous closures by encapsulating captured state as class instances whose methods serve as native function callbacks.
+
+**`Symbol.metadata`:** `TGocciaSymbolValue.WellKnownMetadata` (lazily initialized, GC-pinned). Registered on the `Symbol` constructor in `Goccia.Builtins.GlobalSymbol.pas`.
+
+**Contextual keyword:** `KEYWORD_ACCESSOR = 'accessor'` in `Goccia.Keywords.Contextual.pas`.
+
+**Not supported:** Parameter decorators.
+
+### 8. `this` Binding Semantics
 
 Two function forms exist with separate AST nodes and runtime types:
 
@@ -364,7 +386,7 @@ Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowType
 
 **Symbol coercion:** `TGocciaSymbolValue.ToNumberLiteral` throws `TypeError` (symbols cannot convert to numbers). `ToStringLiteral` returns `"Symbol(description)"` for internal use (display, property keys), but implicit string coercion (template literals, `+` operator, `String.prototype.concat`) must check for symbols and throw `TypeError` at the operator level. See `Goccia.Evaluator.Arithmetic.pas` and `Goccia.Evaluator.pas` for the pattern. Symbols use a shared prototype singleton (like String, Number, Array) with `description` as an accessor getter and `toString()` as a method. `Symbol.prototype` is exposed on the Symbol constructor function.
 
-**Well-known symbols:** `Symbol.iterator` is a well-known symbol singleton accessed via `TGocciaSymbolValue.WellKnownIterator`. `Symbol.species` is accessed via `TGocciaSymbolValue.WellKnownSpecies`. Both are lazily initialized and GC-pinned. The `TGocciaGlobalSymbol` built-in uses these same instances.
+**Well-known symbols:** `Symbol.iterator` is a well-known symbol singleton accessed via `TGocciaSymbolValue.WellKnownIterator`. `Symbol.species` is accessed via `TGocciaSymbolValue.WellKnownSpecies`. `Symbol.metadata` is accessed via `TGocciaSymbolValue.WellKnownMetadata`. All are lazily initialized and GC-pinned. The `TGocciaGlobalSymbol` built-in uses these same instances.
 
 **`Symbol.species` semantics:** The `[Symbol.species]` static getter is registered on `Array`, `Map`, and `Set` constructors in `Goccia.Engine.pas`. The default getter returns `this`, so subclasses inherit the correct constructor. Array prototype methods (`map`, `filter`, `slice`, `concat`, `flat`, `flatMap`, `splice`) use the `ArraySpeciesCreate` helper (`Goccia.Values.ArrayValue.pas`) to create result arrays via the species constructor, enabling subclass-aware array derivation. User-defined classes can override `static get [Symbol.species]()` to control which constructor is used for derived arrays. `TGocciaClassValue` supports symbol-keyed static properties via `FStaticSymbolDescriptors`, `DefineSymbolProperty`, and `GetSymbolPropertyWithReceiver` (which preserves the original receiver when traversing the superclass chain for getter invocation).
 

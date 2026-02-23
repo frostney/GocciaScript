@@ -31,7 +31,7 @@ type
     // Punctuation
     gttLeftParen, gttRightParen, gttLeftBrace, gttRightBrace,
     gttLeftBracket, gttRightBracket, gttComma, gttDot, gttSemicolon,
-    gttArrow, gttSpread, gttHash,
+    gttArrow, gttSpread, gttHash, gttAt,
     // Special
     gttEOF, gttNewLine
   );

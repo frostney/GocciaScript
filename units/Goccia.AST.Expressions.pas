@@ -471,6 +471,8 @@ type
     property Value: TGocciaExpression read FValue;
   end;
 
+  TGocciaDecoratorList = array of TGocciaExpression;
+
 implementation
 
 uses
