@@ -54,16 +54,16 @@ describe.runIf(isGocciaScript)("Math.sumPrecise", () => {
   });
 
   test("throws TypeError for non-number elements", () => {
-    expect(() => Math.sumPrecise([1, "2", 3])).toThrow();
-    expect(() => Math.sumPrecise([true])).toThrow();
-    expect(() => Math.sumPrecise([null])).toThrow();
-    expect(() => Math.sumPrecise([undefined])).toThrow();
-    expect(() => Math.sumPrecise([{}])).toThrow();
+    expect(() => Math.sumPrecise([1, "2", 3])).toThrow(TypeError);
+    expect(() => Math.sumPrecise([true])).toThrow(TypeError);
+    expect(() => Math.sumPrecise([null])).toThrow(TypeError);
+    expect(() => Math.sumPrecise([undefined])).toThrow(TypeError);
+    expect(() => Math.sumPrecise([{}])).toThrow(TypeError);
   });
 
   test("throws TypeError for non-iterable argument", () => {
-    expect(() => Math.sumPrecise(42)).toThrow();
-    expect(() => Math.sumPrecise(null)).toThrow();
+    expect(() => Math.sumPrecise(42)).toThrow(TypeError);
+    expect(() => Math.sumPrecise(null)).toThrow(TypeError);
   });
 
   test("sum of many values", () => {

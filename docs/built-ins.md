@@ -143,7 +143,7 @@ end;
 
 All methods handle `NaN` and `Infinity` edge cases correctly.
 
-`Math.sumPrecise` takes an iterable of numbers and returns their sum using Kahan-Babuska-Neumaier compensated summation, avoiding floating-point precision loss from naive addition. Non-number values in the iterable throw `TypeError`. An empty iterable returns `-0`. If any element is `NaN`, returns `NaN`. Mixed `+Infinity` and `-Infinity` returns `NaN`.
+`Math.sumPrecise(iterable)` takes an iterable of numbers and returns their sum using Kahan-Babuska-Neumaier compensated summation, avoiding floating-point precision loss from naive addition. Throws `TypeError` if the argument is not iterable (e.g., `null`, `undefined`, numbers, plain objects without `[Symbol.iterator]`). Non-number values in the iterable also throw `TypeError`. An empty iterable returns `-0`. If any element is `NaN`, returns `NaN`. Mixed `+Infinity` and `-Infinity` returns `NaN`.
 
 ### JSON (`Goccia.Builtins.JSON.pas`)
 

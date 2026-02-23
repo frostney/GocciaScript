@@ -69,6 +69,9 @@ GocciaScript implements several active TC39 proposals:
 | [Enum Declarations](https://github.com/tc39/proposal-enum) | 0 | Frozen, null-prototype enum objects with `Symbol.iterator` |
 | [Temporal](https://tc39.es/proposal-temporal/) | 3 | Modern date/time API (`Temporal.PlainDate`, `Temporal.Duration`, `Temporal.Instant`, etc.) |
 | [`Math.clamp`](https://github.com/tc39/proposal-math-clamp) | 3 | Clamp a value to a range |
+| [`Math.sumPrecise`](https://github.com/tc39/proposal-math-sum) | 3 | Precise summation of iterables using compensated algorithm |
+| [`Map.prototype.getOrInsert`](https://github.com/tc39/proposal-upsert) | 3 | Get existing value or insert a default / computed value |
+| [`Error.isError`](https://github.com/tc39/proposal-is-error) | 4 | Reliable brand check for error objects via `[[ErrorData]]` |
 
 See [Language Restrictions](docs/language-restrictions.md) for details on supported syntax.
 
@@ -147,7 +150,7 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 
 ### Run Tests
 
-GocciaScript has 2300+ JavaScript unit tests covering language features, built-in objects, and edge cases.
+GocciaScript has 2400+ JavaScript unit tests covering language features, built-in objects, and edge cases.
 
 ```bash
 # Run all tests (GocciaScript TestRunner)
@@ -244,19 +247,6 @@ lefthook install
 ```
 
 See [Code Style](docs/code-style.md) for conventions, editor configuration, and [AGENTS.md](AGENTS.md) for the full development workflow.
-
-## Roadmap
-
-- [x] Promises (constructor, `.then`/`.catch`/`.finally`, `Promise.all`/`allSettled`/`race`/`any`, microtask queue)
-- [x] Iterator Helpers (`map`, `filter`, `take`, `drop`, `flatMap`, `forEach`, `reduce`, `toArray`, `some`, `every`, `find`)
-- [x] Temporal API (`Temporal.PlainDate`, `Temporal.PlainTime`, `Temporal.PlainDateTime`, `Temporal.Instant`, `Temporal.Duration`, `Temporal.Now`)
-- [x] Types as Comments (TC39 proposal-type-annotations)
-- [x] Enum declarations (TC39 proposal-enum)
-- [x] Set methods (`union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`)
-- [ ] Async/await syntax
-- [ ] Regular expressions
-- [ ] Generator functions (`function*`)
-- [ ] Pre-compiled binary releases
 
 ## License
 
