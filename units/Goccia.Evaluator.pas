@@ -1891,7 +1891,7 @@ begin
       ClassValue.AddStaticGetter(ComputedKey.ToStringLiteral.Value, GetterFunction);
   end;
 
-  // TC39 proposal-decorators: Set up auto-accessors (creates backing field + getter + setter)
+  // TC39 proposal-decorators §3.1 ClassDefinitionEvaluation — auto-accessor setup
   for I := 0 to High(AClassDef.FElements) do
   begin
     if AClassDef.FElements[I].Kind = cekAccessor then
@@ -1900,15 +1900,13 @@ begin
       AccessorBackingName := '__accessor_' + Elem.Name;
 
       if Assigned(Elem.FieldInitializer) then
-        ClassValue.AddInstanceProperty(Elem.Name, Elem.FieldInitializer)
-      else
-        ClassValue.AddInstanceProperty(Elem.Name, nil);
+        ClassValue.AddInstanceProperty(AccessorBackingName, Elem.FieldInitializer);
 
       ClassValue.AddAutoAccessor(Elem.Name, AccessorBackingName, Elem.IsStatic);
     end;
   end;
 
-  // TC39 proposal-decorators: Apply decorators to class elements and class itself
+  // TC39 proposal-decorators §3.2 ApplyDecoratorsToClassDefinition
   HasDecorators := (Length(AClassDef.FDecorators) > 0) or (Length(AClassDef.FElements) > 0);
 
   if HasDecorators then
@@ -1922,6 +1920,12 @@ begin
     else
       MetadataObject := TGocciaObjectValue.Create;
     TGocciaGarbageCollector.Instance.AddTempRoot(MetadataObject);
+
+    MethodCollector := TGocciaInitializerCollector.Create;
+    FieldCollector := TGocciaInitializerCollector.Create;
+    StaticFieldCollector := TGocciaInitializerCollector.Create;
+    ClassCollector := TGocciaInitializerCollector.Create;
+    try
 
     // Phase 1: Evaluate all decorator expressions in source order
     SetLength(EvaluatedElementDecorators, Length(AClassDef.FElements));
@@ -1937,9 +1941,6 @@ begin
       EvaluatedClassDecorators[I] := EvaluateExpression(AClassDef.FDecorators[I], AContext);
 
     // Phase 2: Call element decorators (applied per-element, bottom-up within each element)
-    MethodCollector := TGocciaInitializerCollector.Create;
-    FieldCollector := TGocciaInitializerCollector.Create;
-    StaticFieldCollector := TGocciaInitializerCollector.Create;
 
     for I := 0 to High(AClassDef.FElements) do
     begin
@@ -1951,33 +1952,33 @@ begin
       begin
         DecoratorFn := EvaluatedElementDecorators[I][J];
         if not DecoratorFn.IsCallable then
-          AContext.OnError('Decorator must be a function', ALine, AColumn);
+          ThrowTypeError('Decorator must be a function');
 
         // Build context object
         ContextObject := TGocciaObjectValue.Create;
 
         case Elem.Kind of
-          cekMethod: ContextObject.AssignProperty('kind', TGocciaStringLiteralValue.Create('method'));
-          cekGetter: ContextObject.AssignProperty('kind', TGocciaStringLiteralValue.Create('getter'));
-          cekSetter: ContextObject.AssignProperty('kind', TGocciaStringLiteralValue.Create('setter'));
-          cekField: ContextObject.AssignProperty('kind', TGocciaStringLiteralValue.Create('field'));
-          cekAccessor: ContextObject.AssignProperty('kind', TGocciaStringLiteralValue.Create('accessor'));
+          cekMethod: ContextObject.AssignProperty(PROP_KIND, TGocciaStringLiteralValue.Create('method'));
+          cekGetter: ContextObject.AssignProperty(PROP_KIND, TGocciaStringLiteralValue.Create('getter'));
+          cekSetter: ContextObject.AssignProperty(PROP_KIND, TGocciaStringLiteralValue.Create('setter'));
+          cekField: ContextObject.AssignProperty(PROP_KIND, TGocciaStringLiteralValue.Create('field'));
+          cekAccessor: ContextObject.AssignProperty(PROP_KIND, TGocciaStringLiteralValue.Create('accessor'));
         end;
 
         if Elem.IsPrivate then
-          ContextObject.AssignProperty('name', TGocciaStringLiteralValue.Create('#' + Elem.Name))
+          ContextObject.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create('#' + Elem.Name))
         else
-          ContextObject.AssignProperty('name', TGocciaStringLiteralValue.Create(Elem.Name));
+          ContextObject.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(Elem.Name));
 
         if Elem.IsStatic then
-          ContextObject.AssignProperty('static', TGocciaBooleanLiteralValue.TrueValue)
+          ContextObject.AssignProperty(PROP_STATIC, TGocciaBooleanLiteralValue.TrueValue)
         else
-          ContextObject.AssignProperty('static', TGocciaBooleanLiteralValue.FalseValue);
+          ContextObject.AssignProperty(PROP_STATIC, TGocciaBooleanLiteralValue.FalseValue);
         if Elem.IsPrivate then
-          ContextObject.AssignProperty('private', TGocciaBooleanLiteralValue.TrueValue)
+          ContextObject.AssignProperty(PROP_PRIVATE, TGocciaBooleanLiteralValue.TrueValue)
         else
-          ContextObject.AssignProperty('private', TGocciaBooleanLiteralValue.FalseValue);
-        ContextObject.AssignProperty('metadata', MetadataObject);
+          ContextObject.AssignProperty(PROP_PRIVATE, TGocciaBooleanLiteralValue.FalseValue);
+        ContextObject.AssignProperty(PROP_METADATA, MetadataObject);
 
         // Build access object
         ElementName := Elem.Name;
@@ -1994,32 +1995,32 @@ begin
               CurrentMethod := ClassValue.Prototype.GetProperty(ElementName);
 
             AccessGetterHelper := TGocciaAccessGetter.Create(CurrentMethod, ElementName);
-            AccessObject.AssignProperty('get',
-              TGocciaNativeFunctionValue.CreateWithoutPrototype(AccessGetterHelper.Get, 'get', 0));
-            ContextObject.AssignProperty('access', AccessObject);
+            AccessObject.AssignProperty(PROP_GET,
+              TGocciaNativeFunctionValue.CreateWithoutPrototype(AccessGetterHelper.Get, PROP_GET, 0));
+            ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
           end;
           cekField, cekAccessor:
           begin
             AccessGetterHelper := TGocciaAccessGetter.Create(nil, ElementName);
             AccessSetterHelper := TGocciaAccessSetter.Create(ElementName);
-            AccessObject.AssignProperty('get',
-              TGocciaNativeFunctionValue.CreateWithoutPrototype(AccessGetterHelper.Get, 'get', 0));
-            AccessObject.AssignProperty('set',
-              TGocciaNativeFunctionValue.CreateWithoutPrototype(AccessSetterHelper.SetValue, 'set', 1));
-            ContextObject.AssignProperty('access', AccessObject);
+            AccessObject.AssignProperty(PROP_GET,
+              TGocciaNativeFunctionValue.CreateWithoutPrototype(AccessGetterHelper.Get, PROP_GET, 0));
+            AccessObject.AssignProperty(PROP_SET,
+              TGocciaNativeFunctionValue.CreateWithoutPrototype(AccessSetterHelper.SetValue, PROP_SET, 1));
+            ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
           end;
         end;
 
         // addInitializer - use appropriate collector based on element kind
         if Elem.IsStatic then
-          ContextObject.AssignProperty('addInitializer',
-            TGocciaNativeFunctionValue.CreateWithoutPrototype(StaticFieldCollector.AddInitializer, 'addInitializer', 1))
+          ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
+            TGocciaNativeFunctionValue.CreateWithoutPrototype(StaticFieldCollector.AddInitializer, PROP_ADD_INITIALIZER, 1))
         else if Elem.Kind in [cekField, cekAccessor] then
-          ContextObject.AssignProperty('addInitializer',
-            TGocciaNativeFunctionValue.CreateWithoutPrototype(FieldCollector.AddInitializer, 'addInitializer', 1))
+          ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
+            TGocciaNativeFunctionValue.CreateWithoutPrototype(FieldCollector.AddInitializer, PROP_ADD_INITIALIZER, 1))
         else
-          ContextObject.AssignProperty('addInitializer',
-            TGocciaNativeFunctionValue.CreateWithoutPrototype(MethodCollector.AddInitializer, 'addInitializer', 1));
+          ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
+            TGocciaNativeFunctionValue.CreateWithoutPrototype(MethodCollector.AddInitializer, PROP_ADD_INITIALIZER, 1));
 
         // Call the decorator
         DecoratorArgs := TGocciaArgumentsCollection.Create;
@@ -2128,8 +2129,8 @@ begin
             cekAccessor:
             begin
               AutoAccessorValue := TGocciaObjectValue.Create;
-              AutoAccessorValue.AssignProperty('get', ClassValue.PropertyGetter[ElementName]);
-              AutoAccessorValue.AssignProperty('set', ClassValue.PropertySetter[ElementName]);
+              AutoAccessorValue.AssignProperty(PROP_GET, ClassValue.PropertyGetter[ElementName]);
+              AutoAccessorValue.AssignProperty(PROP_SET, ClassValue.PropertySetter[ElementName]);
 
               DecoratorArgs.Add(AutoAccessorValue);
               DecoratorArgs.Add(ContextObject);
@@ -2141,9 +2142,9 @@ begin
                 if not (DecoratorResult is TGocciaObjectValue) then
                   AContext.OnError('Accessor decorator must return an object or undefined', ALine, AColumn);
                 DecResultObj := TGocciaObjectValue(DecoratorResult);
-                NewGetter := DecResultObj.GetProperty('get');
-                NewSetter := DecResultObj.GetProperty('set');
-                NewInit := DecResultObj.GetProperty('init');
+                NewGetter := DecResultObj.GetProperty(PROP_GET);
+                NewSetter := DecResultObj.GetProperty(PROP_SET);
+                NewInit := DecResultObj.GetProperty(PROP_INIT);
 
                 if Assigned(NewGetter) and not (NewGetter is TGocciaUndefinedLiteralValue) then
                   ClassValue.AddGetter(ElementName, TGocciaFunctionValue(NewGetter));
@@ -2161,23 +2162,21 @@ begin
     end;
 
     // Phase 3: Call class decorators (bottom-up)
-    ClassCollector := TGocciaInitializerCollector.Create;
-
     for I := High(EvaluatedClassDecorators) downto 0 do
     begin
       DecoratorFn := EvaluatedClassDecorators[I];
       if not DecoratorFn.IsCallable then
-        AContext.OnError('Decorator must be a function', ALine, AColumn);
+        ThrowTypeError('Decorator must be a function');
 
       ContextObject := TGocciaObjectValue.Create;
-      ContextObject.AssignProperty('kind', TGocciaStringLiteralValue.Create('class'));
+      ContextObject.AssignProperty(PROP_KIND, TGocciaStringLiteralValue.Create('class'));
       if AClassDef.Name <> '' then
-        ContextObject.AssignProperty('name', TGocciaStringLiteralValue.Create(AClassDef.Name))
+        ContextObject.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AClassDef.Name))
       else
-        ContextObject.AssignProperty('name', TGocciaUndefinedLiteralValue.UndefinedValue);
-      ContextObject.AssignProperty('metadata', MetadataObject);
-      ContextObject.AssignProperty('addInitializer',
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(ClassCollector.AddInitializer, 'addInitializer', 1));
+        ContextObject.AssignProperty(PROP_NAME, TGocciaUndefinedLiteralValue.UndefinedValue);
+      ContextObject.AssignProperty(PROP_METADATA, MetadataObject);
+      ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(ClassCollector.AddInitializer, PROP_ADD_INITIALIZER, 1));
 
       DecoratorArgs := TGocciaArgumentsCollection.Create([ClassValue, ContextObject]);
       try
@@ -2185,8 +2184,8 @@ begin
 
         if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
         begin
-          if not DecoratorResult.IsCallable then
-            AContext.OnError('Class decorator must return a class/function or undefined', ALine, AColumn);
+          if not (DecoratorResult is TGocciaClassValue) then
+            AContext.OnError('Class decorator must return a class or undefined', ALine, AColumn);
           ClassValue := TGocciaClassValue(DecoratorResult);
         end;
       finally
@@ -2229,11 +2228,13 @@ begin
       end;
     end;
 
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(MetadataObject);
-    MethodCollector.Free;
-    FieldCollector.Free;
-    StaticFieldCollector.Free;
-    ClassCollector.Free;
+    finally
+      TGocciaGarbageCollector.Instance.RemoveTempRoot(MetadataObject);
+      MethodCollector.Free;
+      FieldCollector.Free;
+      StaticFieldCollector.Free;
+      ClassCollector.Free;
+    end;
   end;
 
   Result := ClassValue;

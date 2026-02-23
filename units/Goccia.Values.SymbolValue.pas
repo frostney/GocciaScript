@@ -180,7 +180,7 @@ begin
   Result := FWellKnownIsConcatSpreadable;
 end;
 
-// TC39 proposal-decorator-metadata
+// TC39 proposal-decorator-metadata §2 Symbol.metadata
 class function TGocciaSymbolValue.WellKnownMetadata: TGocciaSymbolValue;
 begin
   if not Assigned(FWellKnownMetadata) then

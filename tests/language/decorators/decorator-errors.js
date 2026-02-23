@@ -5,15 +5,11 @@ features: [decorators]
 
 describe("decorator errors", () => {
   test("non-callable decorator throws", () => {
-    let threw = false;
-    try {
+    expect(() => {
       const notAFunction = 42;
 
       @notAFunction
       class C {}
-    } catch (e) {
-      threw = true;
-    }
-    expect(threw).toBe(true);
+    }).toThrow(TypeError);
   });
 });

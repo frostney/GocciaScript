@@ -4,7 +4,7 @@ features: [decorators]
 ---*/
 
 describe("decorator ordering", () => {
-  test("decorators evaluated top-to-bottom", () => {
+  test("decorators applied bottom-to-top", () => {
     const order = [];
 
     const first = (value, context) => { order.push("first-call"); };

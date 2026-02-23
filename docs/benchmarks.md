@@ -109,7 +109,7 @@ The `BenchmarkRunner` program:
 | `benchmarks/closures.js` | Closure capture, higher-order functions, call/apply/bind, recursion |
 | `benchmarks/collections.js` | Set add/has/delete/forEach, Map set/get/has/delete/forEach/keys/values |
 | `benchmarks/json.js` | JSON.parse, JSON.stringify, roundtrip with nested and mixed data |
-| `benchmarks/destructuring.js` | Array/object/parameter destructuring, rest, defaults, nesting |
+| `benchmarks/destructuring.js` | Array/object/parameter/callback destructuring, rest, defaults, nesting |
 | `benchmarks/promises.js` | Promise.resolve/reject, then chains, catch/finally, all/race/allSettled/any |
 
 ## Sample Output

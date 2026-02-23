@@ -57,4 +57,24 @@ describe("decorator metadata", () => {
     expect(collected.length).toBe(2);
     expect(collected[0] === collected[1]).toBe(true);
   });
+
+  test("subclass metadata inherits from superclass metadata", () => {
+    const tag = (key, val) => (value, context) => {
+      context.metadata[key] = val;
+    };
+
+    @tag('base', true)
+    class Base {}
+
+    @tag('child', true)
+    class Child extends Base {}
+
+    const baseMeta = Base[Symbol.metadata];
+    const childMeta = Child[Symbol.metadata];
+
+    expect(baseMeta.base).toBe(true);
+    expect(childMeta.child).toBe(true);
+    expect(childMeta.base).toBe(true);
+    expect(baseMeta.child).toBe(undefined);
+  });
 });

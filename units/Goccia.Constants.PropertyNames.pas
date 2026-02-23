@@ -26,6 +26,13 @@ const
   PROP_CONFIGURABLE = 'configurable';
   PROP_GET          = 'get';
   PROP_SET          = 'set';
+  PROP_INIT         = 'init';
+  PROP_KIND         = 'kind';
+  PROP_STATIC       = 'static';
+  PROP_PRIVATE      = 'private';
+  PROP_ACCESS       = 'access';
+  PROP_METADATA     = 'metadata';
+  PROP_ADD_INITIALIZER = 'addInitializer';
 
 implementation
 

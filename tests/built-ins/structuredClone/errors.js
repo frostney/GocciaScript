@@ -29,7 +29,7 @@ test("throws DOMException with DataCloneError on symbol", () => {
 });
 
 test("throws when no arguments provided", () => {
-  expect(() => structuredClone()).toThrow();
+  expect(() => structuredClone()).toThrow(TypeError);
 });
 
 test("throws DOMException with DataCloneError on object containing a function", () => {

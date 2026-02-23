@@ -83,3 +83,46 @@ suite("parameter destructuring", () => {
     const values = data.map(({ id, value }) => id + value);
   });
 });
+
+suite("callback destructuring", () => {
+  bench("forEach with array destructuring", () => {
+    const pairs = [[1, 10], [2, 20], [3, 30], [4, 40], [5, 50]];
+    let sum = 0;
+    pairs.forEach(([k, v]) => { sum = sum + k + v; });
+  });
+
+  bench("map with array destructuring", () => {
+    const pairs = [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]];
+    const sums = pairs.map(([a, b]) => a + b);
+  });
+
+  bench("filter with array destructuring", () => {
+    const entries = [[1, 10], [2, 5], [3, 20], [4, 3], [5, 15]];
+    const big = entries.filter(([, val]) => val > 8);
+  });
+
+  bench("reduce with array destructuring", () => {
+    const entries = [[1, 10], [2, 20], [3, 30], [4, 40], [5, 50]];
+    const total = entries.reduce((acc, [, v]) => acc + v, 0);
+  });
+
+  bench("map with object destructuring", () => {
+    const items = Array.from({ length: 10 }, (_, i) => ({ id: i, name: "item", value: i * 10 }));
+    const ids = items.map(({ id }) => id);
+  });
+
+  bench("map with nested destructuring", () => {
+    const data = Array.from({ length: 10 }, (_, i) => ({ user: { name: "u" + i }, score: i }));
+    const names = data.map(({ user: { name } }) => name);
+  });
+
+  bench("map with rest in destructuring", () => {
+    const rows = Array.from({ length: 10 }, (_, i) => [i, i + 1, i + 2, i + 3]);
+    const firsts = rows.map(([first, ...rest]) => first + rest.length);
+  });
+
+  bench("map with defaults in destructuring", () => {
+    const items = Array.from({ length: 10 }, (_, i) => ({ x: i }));
+    const ys = items.map(({ x, y = 0 }) => x + y);
+  });
+});

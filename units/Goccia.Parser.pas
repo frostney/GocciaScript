@@ -413,7 +413,7 @@ begin
           else
             Arg := Expression;
           Arguments.Add(Arg);
-        until not Match([gttComma]);
+        until not Match([gttComma]) or Check(gttRightParen);
       end;
 
       Consume(gttRightParen, 'Expected ")" after arguments');
@@ -454,7 +454,7 @@ begin
               else
                 Arg := Expression;
               Arguments.Add(Arg);
-            until not Match([gttComma]);
+            until not Match([gttComma]) or Check(gttRightParen);
           end;
           Consume(gttRightParen, 'Expected ")" after arguments');
           // Wrap call in optional chaining by wrapping the callee in an optional member
@@ -598,7 +598,7 @@ begin
             Args.Add(TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column))
           else
             Args.Add(Expression);
-        until not Match([gttComma]);
+        until not Match([gttComma]) or Check(gttRightParen);
       end;
       Consume(gttRightParen, 'Expected ")" after constructor arguments');
       Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
@@ -974,7 +974,7 @@ begin
       end;
 
       Inc(ParamCount);
-    until not Match([gttComma]);
+    until not Match([gttComma]) or Check(gttRightParen);
   end;
 
   SetLength(Result, ParamCount);
@@ -1749,7 +1749,7 @@ begin
             else
               Arg := Expression;
             Arguments.Add(Arg);
-          until not Match([gttComma]);
+          until not Match([gttComma]) or Check(gttRightParen);
         end;
         Consume(gttRightParen, 'Expected ")" after arguments');
         Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);

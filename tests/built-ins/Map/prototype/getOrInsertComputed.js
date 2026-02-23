@@ -37,10 +37,12 @@ describe.runIf(isGocciaScript)("Map.prototype.getOrInsertComputed", () => {
 
   test("throws TypeError for non-callable callback", () => {
     const map = new Map();
-    expect(() => map.getOrInsertComputed("key", "not a function")).toThrow();
-    expect(() => map.getOrInsertComputed("key", 42)).toThrow();
-    expect(() => map.getOrInsertComputed("key", null)).toThrow();
-    expect(() => map.getOrInsertComputed("key", undefined)).toThrow();
+    expect(() => map.getOrInsertComputed("key", "not a function")).toThrow(
+      TypeError,
+    );
+    expect(() => map.getOrInsertComputed("key", 42)).toThrow(TypeError);
+    expect(() => map.getOrInsertComputed("key", null)).toThrow(TypeError);
+    expect(() => map.getOrInsertComputed("key", undefined)).toThrow(TypeError);
   });
 
   test("works with NaN key", () => {

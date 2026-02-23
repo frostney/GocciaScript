@@ -58,6 +58,10 @@ begin
       on E: EStreamError do
       begin
         WriteLn('Error loading test file: ', E.Message);
+        ScriptResult.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(1));
+        ScriptResult.AssignProperty('failed', TGocciaNumberLiteralValue.Create(1));
+        TGocciaArrayValue(ScriptResult.GetProperty('failedTests')).Elements.Add(
+          TGocciaStringLiteralValue.Create(AFileName + ': ' + E.Message));
         Result.TestResult := ScriptResult;
         Result.Timing.Result := nil;
         Result.Timing.LexTimeNanoseconds := 0;
@@ -114,6 +118,10 @@ begin
       on E: Exception do
       begin
         WriteLn('Fatal error: ', E.Message);
+        ScriptResult.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(1));
+        ScriptResult.AssignProperty('failed', TGocciaNumberLiteralValue.Create(1));
+        TGocciaArrayValue(ScriptResult.GetProperty('failedTests')).Elements.Add(
+          TGocciaStringLiteralValue.Create(AFileName + ': ' + E.Message));
         Result.TestResult := ScriptResult;
         Result.Timing.Result := nil;
         Result.Timing.LexTimeNanoseconds := 0;
@@ -161,12 +169,15 @@ end;
 
 function RunScriptsFromFiles(const AFiles: TStringList): TAggregatedTestResult;
 var
-  I: Integer;
+  I, J: Integer;
   AllTestResults: TGocciaObjectValue;
+  AllFailedTests: TGocciaArrayValue;
   FileResult: TAggregatedTestResult;
+  FileFailedTests: TGocciaValue;
   PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions, TotalDuration: Double;
 begin
   AllTestResults := TGocciaObjectValue.Create;
+  AllFailedTests := TGocciaArrayValue.Create;
 
   AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.ZeroValue);
@@ -175,7 +186,7 @@ begin
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
-  AllTestResults.AssignProperty('failedTests', TGocciaArrayValue.Create);
+  AllTestResults.AssignProperty('failedTests', AllFailedTests);
 
   PassedCount := 0;
   FailedCount := 0;
@@ -207,6 +218,11 @@ begin
     TotalRunCount := TotalRunCount + FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
     TotalDuration := TotalDuration + FileResult.TestResult.GetProperty('duration').ToNumberLiteral.Value;
     TotalAssertions := TotalAssertions + FileResult.TestResult.GetProperty('assertions').ToNumberLiteral.Value;
+
+    FileFailedTests := FileResult.TestResult.GetProperty('failedTests');
+    if FileFailedTests is TGocciaArrayValue then
+      for J := 0 to TGocciaArrayValue(FileFailedTests).Elements.Count - 1 do
+        AllFailedTests.Elements.Add(TGocciaArrayValue(FileFailedTests).Elements[J]);
 
     if GExitOnFirstFailure and (FailedCount > 0) then
       Break;

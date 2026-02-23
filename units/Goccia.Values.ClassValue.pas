@@ -231,6 +231,7 @@ var
   ValuePair: TPair<string, TGocciaValue>;
   SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
   Accessor: TGocciaPropertyDescriptorAccessor;
+  I: Integer;
 begin
   if GCMarked then Exit;
   inherited; // Sets mark
@@ -301,6 +302,17 @@ begin
         Accessor.Setter.MarkReferences;
     end;
   end;
+
+  // Mark decorator initializer arrays
+  for I := 0 to High(FMethodInitializers) do
+    if Assigned(FMethodInitializers[I]) then
+      FMethodInitializers[I].MarkReferences;
+  for I := 0 to High(FFieldInitializers) do
+    if Assigned(FFieldInitializers[I]) then
+      FFieldInitializers[I].MarkReferences;
+  for I := 0 to High(FDecoratorFieldInitializers) do
+    if Assigned(FDecoratorFieldInitializers[I].Initializer) then
+      FDecoratorFieldInitializers[I].Initializer.MarkReferences;
 end;
 
 function TGocciaClassValue.IsCallable: Boolean;
