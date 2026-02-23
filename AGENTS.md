@@ -94,6 +94,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Lazy Iterators | `Goccia.Values.Iterator.Lazy.pas` | Lazy `map`/`filter`/`take`/`drop`/`flatMap` iterator wrappers |
 | Generic Iterator | `Goccia.Values.Iterator.Generic.pas` | Wraps user-defined `{next()}` objects as proper iterators |
 | Enum Value | `Goccia.Values.EnumValue.pas` | TC39 proposal-enum: `TGocciaEnumValue` (null-prototype, non-extensible, iterable via `Symbol.iterator`) |
+| Auto-Accessor Helpers | `Goccia.Values.AutoAccessor.pas` | `TGocciaAutoAccessorGetter`, `TGocciaAutoAccessorSetter` — getter/setter methods for auto-accessor backing fields |
+| Evaluator Decorator Helpers | `Goccia.Evaluator.Decorators.pas` | `TGocciaInitializerCollector`, `TGocciaAccessGetter`, `TGocciaAccessSetter` — helper classes for decorator runtime (FPC closure workaround) |
 | JSON Utilities | `Goccia.JSON.pas` | Standalone JSON ↔ `TGocciaValue` parser and stringifier |
 | Version | `Goccia.Version.pas` | Git-derived version and commit hash, resolved once at startup via `RunCommand` |
 | Temporal Utilities | `Goccia.Temporal.Utils.pas` | ISO 8601 date math helpers, parsing, formatting |
@@ -250,7 +252,29 @@ AST nodes with type fields: `TGocciaParameter` (`TypeAnnotation`, `IsOptional`),
 
 `type`/`interface` declarations and `import type`/`export type` produce `TGocciaEmptyStatement` (no-op at runtime). Access modifiers (`public`, `protected`, `private`, `readonly`, `override`, `abstract`) in class bodies are consumed and discarded.
 
-### 7. `this` Binding Semantics
+### 7. Decorators
+
+GocciaScript supports TC39 Stage 3 decorators ([proposal-decorators](https://github.com/tc39/proposal-decorators)) and decorator metadata ([proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata)).
+
+**Lexer:** `@` is tokenized as `gttAt` in `Goccia.Lexer.pas`.
+
+**Parser:** `ParseDecorators` collects decorator lists; `ParseDecoratorExpression` parses restricted expressions (identifier, member access, call — no private member access or computed access). `ParseClassBody` stores decorators on the unified `TGocciaClassElement` record. Class-level decorators are stored on `TGocciaClassDefinition.FDecorators`.
+
+**AST:** `TGocciaDecoratorList = array of TGocciaExpression` in `Goccia.AST.Expressions.pas`. `TGocciaClassElementKind` (method, getter, setter, field, accessor) and `TGocciaClassElement` record in `Goccia.AST.Statements.pas`. The `FElements` array preserves source order.
+
+**Evaluator:** `EvaluateClassDefinition` in `Goccia.Evaluator.pas` implements three-phase decorator evaluation: (1) evaluate all decorator expressions in source order, (2) call decorators bottom-up with context objects, (3) apply results. Auto-accessors generate private backing fields with getter/setter pairs; the field initializer is registered on the backing field name (e.g. `__accessor_x`), not the public accessor name. The entire decorator pipeline is wrapped in `try..finally` to ensure `MetadataObject` temp root removal and collector cleanup even if a decorator throws. Decorator context properties use `Goccia.Constants.PropertyNames` constants (`PROP_KIND`, `PROP_NAME`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_ADD_INITIALIZER`).
+
+**Helper classes** in `Goccia.Evaluator.Decorators.pas` and `Goccia.Values.AutoAccessor.pas` work around FPC's lack of anonymous closures by encapsulating captured state as class instances whose methods serve as native function callbacks.
+
+**GC awareness:** `TGocciaClassValue.MarkReferences` must mark `FMethodInitializers`, `FFieldInitializers`, and `FDecoratorFieldInitializers[].Initializer` — these hold `TGocciaValue` references to decorator initializer functions that would otherwise be collected.
+
+**`Symbol.metadata`:** `TGocciaSymbolValue.WellKnownMetadata` (lazily initialized, GC-pinned). Registered on the `Symbol` constructor in `Goccia.Builtins.GlobalSymbol.pas`.
+
+**Contextual keyword:** `KEYWORD_ACCESSOR = 'accessor'` in `Goccia.Keywords.Contextual.pas`.
+
+**Not supported:** Parameter decorators.
+
+### 8. `this` Binding Semantics
 
 Two function forms exist with separate AST nodes and runtime types:
 
@@ -279,7 +303,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **No abbreviations:** Use full words in class, function, method, and type names (e.g., `TGocciaGarbageCollector` not `TGocciaGC`). Exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
 - **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`) instead of hardcoded string literals. Use the `ScriptExtensions` array, `IsScriptExtension`, and `IsJSXNativeExtension` helpers instead of duplicating extension lists or ad-hoc checks.
 - **Runtime constants:** Use the split constant units instead of hardcoded string literals for property names, type names, error names, and constructor names:
-  - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, etc.
+  - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, `PROP_GET`, `PROP_SET`, `PROP_KIND`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_INIT`, `PROP_ADD_INITIALIZER`, etc.
   - `Goccia.Constants.TypeNames` — `OBJECT_TYPE_NAME`, `STRING_TYPE_NAME`, `FUNCTION_TYPE_NAME`, etc.
   - `Goccia.Constants.ErrorNames` — `ERROR_NAME`, `TYPE_ERROR_NAME`, `RANGE_ERROR_NAME`, etc.
   - `Goccia.Constants.ConstructorNames` — `CONSTRUCTOR_OBJECT`, `CONSTRUCTOR_ARRAY`, `CONSTRUCTOR_STRING`, `CONSTRUCTOR_MAP`, etc.
@@ -364,7 +388,7 @@ Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowType
 
 **Symbol coercion:** `TGocciaSymbolValue.ToNumberLiteral` throws `TypeError` (symbols cannot convert to numbers). `ToStringLiteral` returns `"Symbol(description)"` for internal use (display, property keys), but implicit string coercion (template literals, `+` operator, `String.prototype.concat`) must check for symbols and throw `TypeError` at the operator level. See `Goccia.Evaluator.Arithmetic.pas` and `Goccia.Evaluator.pas` for the pattern. Symbols use a shared prototype singleton (like String, Number, Array) with `description` as an accessor getter and `toString()` as a method. `Symbol.prototype` is exposed on the Symbol constructor function.
 
-**Well-known symbols:** `Symbol.iterator` is a well-known symbol singleton accessed via `TGocciaSymbolValue.WellKnownIterator`. `Symbol.species` is accessed via `TGocciaSymbolValue.WellKnownSpecies`. Both are lazily initialized and GC-pinned. The `TGocciaGlobalSymbol` built-in uses these same instances.
+**Well-known symbols:** `Symbol.iterator` is a well-known symbol singleton accessed via `TGocciaSymbolValue.WellKnownIterator`. `Symbol.species` is accessed via `TGocciaSymbolValue.WellKnownSpecies`. `Symbol.metadata` is accessed via `TGocciaSymbolValue.WellKnownMetadata`. All are lazily initialized and GC-pinned. The `TGocciaGlobalSymbol` built-in uses these same instances.
 
 **`Symbol.species` semantics:** The `[Symbol.species]` static getter is registered on `Array`, `Map`, and `Set` constructors in `Goccia.Engine.pas`. The default getter returns `this`, so subclasses inherit the correct constructor. Array prototype methods (`map`, `filter`, `slice`, `concat`, `flat`, `flatMap`, `splice`) use the `ArraySpeciesCreate` helper (`Goccia.Values.ArrayValue.pas`) to create result arrays via the species constructor, enabling subclass-aware array derivation. User-defined classes can override `static get [Symbol.species]()` to control which constructor is used for derived arrays. `TGocciaClassValue` supports symbol-keyed static properties via `FStaticSymbolDescriptors`, `DefineSymbolProperty`, and `GetSymbolPropertyWithReceiver` (which preserves the original receiver when traversing the superclass chain for getter invocation).
 
@@ -446,6 +470,7 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 - **Primary:** JavaScript end-to-end tests in `tests/` directory — these are the source of truth for correctness
 - **Secondary:** Pascal unit tests in `units/*.Test.pas` — only for internal implementation details
 - **JS test framework:** built-in `describe`/`test`/`expect` (enabled via `ggTestAssertions`). Supports nested `describe` blocks (suite names are composed with ` > ` separators), `test.skip`/`describe.skip` for unconditional skipping, and `skipIf(condition)`/`runIf(condition)` on both `describe` and `test` for conditional execution. Skip state is inherited by nested describes.
+- **`.toThrow()` best practice:** Always pass an explicit error constructor (`TypeError`, `RangeError`, `Error`, etc.) to `.toThrow()` — e.g. `expect(() => null.foo).toThrow(TypeError)`. Bare `.toThrow()` only asserts *something* throws; the constructor form also verifies the error type.
 - **Pascal test framework:** `TestRunner.pas` provides generic `Expect<T>(...).ToBe(...)` assertions. `Expect<T>` is a **standalone function** (not a method on `TTestSuite`) to avoid FPC 3.2.2 AArch64 compiler crash with cross-unit generic method inheritance.
 - **NaN checks:** In Pascal tests, use `Value.ToNumberLiteral.IsNaN` (not `Math.IsNaN`) — special values store `0.0` internally
 

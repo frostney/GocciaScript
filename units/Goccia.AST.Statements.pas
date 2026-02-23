@@ -8,6 +8,8 @@ uses
   Classes,
   Generics.Collections,
 
+  OrderedMap,
+
   Goccia.AST.Expressions,
   Goccia.AST.Node;
 
@@ -165,6 +167,31 @@ type
     GetterExpression: TGocciaGetterExpression;
   end;
 
+  // TC39 proposal-decorators: class element kinds
+  TGocciaClassElementKind = (
+    cekMethod,
+    cekGetter,
+    cekSetter,
+    cekField,
+    cekAccessor
+  );
+
+  // TC39 proposal-decorators: unified class element with optional decorators
+  TGocciaClassElement = record
+    Kind: TGocciaClassElementKind;
+    Name: string;
+    IsStatic: Boolean;
+    IsPrivate: Boolean;
+    IsComputed: Boolean;
+    ComputedKeyExpression: TGocciaExpression;
+    Decorators: TGocciaDecoratorList;
+    MethodNode: TGocciaClassMethod;
+    GetterNode: TGocciaGetterExpression;
+    SetterNode: TGocciaSetterExpression;
+    FieldInitializer: TGocciaExpression;
+    TypeAnnotation: string;
+  end;
+
   // Shared class definition structure
   TGocciaClassDefinition = class
   public
@@ -177,23 +204,23 @@ type
     FStaticSetters: TDictionary<string, TGocciaSetterExpression>;
     FComputedStaticGetters: array of TGocciaComputedStaticAccessorEntry;
     FStaticProperties: TDictionary<string, TGocciaExpression>;
-    FInstanceProperties: TDictionary<string, TGocciaExpression>;
-    FInstancePropertyOrder: TStringList; // Preserves declaration order
-    FPrivateInstanceProperties: TDictionary<string, TGocciaExpression>;
-    FPrivateInstancePropertyOrder: TStringList; // Preserves declaration order
+    FInstanceProperties: TOrderedMap<TGocciaExpression>;
+    FPrivateInstanceProperties: TOrderedMap<TGocciaExpression>;
     FPrivateStaticProperties: TDictionary<string, TGocciaExpression>;
     FPrivateMethods: TDictionary<string, TGocciaClassMethod>;
     FGenericParams: string;
     FImplementsClause: string;
     FInstancePropertyTypes: TDictionary<string, string>;
+    FDecorators: TGocciaDecoratorList;
+    FElements: array of TGocciaClassElement;
 
     constructor Create(const AName, ASuperClass: string;
       const AMethods: TDictionary<string, TGocciaClassMethod>;
       const AGetters: TDictionary<string, TGocciaGetterExpression>;
       const ASetters: TDictionary<string, TGocciaSetterExpression>;
       const AStaticProperties: TDictionary<string, TGocciaExpression>;
-      const AInstanceProperties: TDictionary<string, TGocciaExpression>;
-      const APrivateInstanceProperties: TDictionary<string, TGocciaExpression> = nil;
+      const AInstanceProperties: TOrderedMap<TGocciaExpression>;
+      const APrivateInstanceProperties: TOrderedMap<TGocciaExpression>;
       const APrivateMethods: TDictionary<string, TGocciaClassMethod> = nil;
       const APrivateStaticProperties: TDictionary<string, TGocciaExpression> = nil);
     destructor Destroy; override;
@@ -205,15 +232,14 @@ type
     property StaticGetters: TDictionary<string, TGocciaGetterExpression> read FStaticGetters;
     property StaticSetters: TDictionary<string, TGocciaSetterExpression> read FStaticSetters;
     property StaticProperties: TDictionary<string, TGocciaExpression> read FStaticProperties;
-    property InstanceProperties: TDictionary<string, TGocciaExpression> read FInstanceProperties;
-    property InstancePropertyOrder: TStringList read FInstancePropertyOrder;
-    property PrivateInstanceProperties: TDictionary<string, TGocciaExpression> read FPrivateInstanceProperties;
-    property PrivateInstancePropertyOrder: TStringList read FPrivateInstancePropertyOrder;
+    property InstanceProperties: TOrderedMap<TGocciaExpression> read FInstanceProperties;
+    property PrivateInstanceProperties: TOrderedMap<TGocciaExpression> read FPrivateInstanceProperties;
     property PrivateStaticProperties: TDictionary<string, TGocciaExpression> read FPrivateStaticProperties;
     property PrivateMethods: TDictionary<string, TGocciaClassMethod> read FPrivateMethods;
     property GenericParams: string read FGenericParams write FGenericParams;
     property ImplementsClause: string read FImplementsClause write FImplementsClause;
     property InstancePropertyTypes: TDictionary<string, string> read FInstancePropertyTypes;
+    property Decorators: TGocciaDecoratorList read FDecorators write FDecorators;
   end;
 
   TGocciaClassDeclaration = class(TGocciaStatement)
@@ -383,8 +409,8 @@ uses
     const AGetters: TDictionary<string, TGocciaGetterExpression>;
     const ASetters: TDictionary<string, TGocciaSetterExpression>;
     const AStaticProperties: TDictionary<string, TGocciaExpression>;
-    const AInstanceProperties: TDictionary<string, TGocciaExpression>;
-    const APrivateInstanceProperties: TDictionary<string, TGocciaExpression> = nil;
+    const AInstanceProperties: TOrderedMap<TGocciaExpression>;
+    const APrivateInstanceProperties: TOrderedMap<TGocciaExpression>;
     const APrivateMethods: TDictionary<string, TGocciaClassMethod> = nil;
     const APrivateStaticProperties: TDictionary<string, TGocciaExpression> = nil);
   begin
@@ -398,13 +424,7 @@ uses
     SetLength(FComputedStaticGetters, 0);
     FStaticProperties := AStaticProperties;
     FInstanceProperties := AInstanceProperties;
-    FInstancePropertyOrder := TStringList.Create;
-    FPrivateInstancePropertyOrder := TStringList.Create;
-
-    if Assigned(APrivateInstanceProperties) then
-      FPrivateInstanceProperties := APrivateInstanceProperties
-    else
-      FPrivateInstanceProperties := TDictionary<string, TGocciaExpression>.Create;
+    FPrivateInstanceProperties := APrivateInstanceProperties;
 
     if Assigned(APrivateMethods) then
       FPrivateMethods := APrivateMethods
@@ -428,11 +448,8 @@ uses
     FStaticSetters.Free;
     FStaticProperties.Free;
     FInstanceProperties.Free;
-    FInstancePropertyOrder.Free;
-    FPrivateInstancePropertyOrder.Free;
+    FPrivateInstanceProperties.Free;
     FInstancePropertyTypes.Free;
-    if Assigned(FPrivateInstanceProperties) then
-      FPrivateInstanceProperties.Free;
     if Assigned(FPrivateMethods) then
       FPrivateMethods.Free;
     if Assigned(FPrivateStaticProperties) then

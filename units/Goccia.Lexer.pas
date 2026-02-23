@@ -716,6 +716,7 @@ begin
       else
         AddToken(gttDot);
     '#': AddToken(gttHash);
+    '@': AddToken(gttAt);
     '`':
       ScanTemplate;
     '''', '"':

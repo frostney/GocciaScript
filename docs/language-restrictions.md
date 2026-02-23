@@ -45,6 +45,7 @@ add.length; // 2
 - Private fields and methods (`#field`).
 - Static properties.
 - Inheritance with `extends` and `super`.
+- Decorators (see [Decorators](#decorators) below).
 
 ```javascript
 class Counter {
@@ -53,6 +54,52 @@ class Counter {
   get value() { return this.#count; }
 }
 ```
+
+### Decorators
+
+TC39 Stage 3 decorators ([proposal-decorators](https://github.com/tc39/proposal-decorators)) and decorator metadata ([proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata)) are fully supported.
+
+**Supported decorator targets:**
+- Class declarations (`@decorator class C {}`)
+- Instance and static methods (`@decorator method() {}`)
+- Getters and setters (`@decorator get x() {}`, `@decorator set x(v) {}`)
+- Class fields (`@decorator field = value;`)
+- Auto-accessors (`@decorator accessor prop = value;`)
+- Private elements (`@decorator #method() {}`)
+
+**Decorator context object properties:** `kind`, `name`, `access` (with `get`/`set`), `static`, `private`, `addInitializer`, `metadata`.
+
+**Decorator expressions:** Identifiers (`@log`), member access (`@decorators.log`), call expressions (`@factory(arg)`), and parenthesized expressions (`@(expr)`).
+
+**Auto-accessors:** The `accessor` keyword creates a property backed by a private storage slot with generated getter/setter methods:
+
+```javascript
+class C {
+  accessor name = "default";
+}
+// Equivalent to a private #name field with get name() / set name(v)
+```
+
+**`addInitializer`:** Decorators can register initialization callbacks via `context.addInitializer()`. Timing depends on decorator kind:
+- Class decorators: after the class is fully defined and static fields are assigned.
+- Static method/getter/setter: during class definition, after static methods are placed.
+- Non-static method/getter/setter: during class construction, before field initialization.
+- Field/accessor: during construction, immediately after the decorated element is initialized.
+
+**`Symbol.metadata`:** Each decorated class receives a `[Symbol.metadata]` property containing a null-prototype object. Metadata objects inherit from the parent class's metadata via prototype chain.
+
+```javascript
+const meta = (value, context) => {
+  context.metadata.decorated = true;
+};
+
+@meta
+class C {}
+
+C[Symbol.metadata].decorated; // true
+```
+
+**Not supported:** Parameter decorators.
 
 ### Expressions
 
@@ -384,7 +431,6 @@ enum Tokens { Alpha = Symbol("alpha") }
 - Namespaces (`namespace Foo { ... }`).
 - Parameter properties in constructors (`constructor(public x: number)`).
 - Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
-- Decorators (`@decorator`).
 
 ### JSX (Opt-in)
 

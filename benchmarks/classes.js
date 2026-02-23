@@ -138,6 +138,212 @@ suite("getters and setters", () => {
   });
 });
 
+suite("decorators: class", () => {
+  bench("class decorator (identity)", () => {
+    const noop = (cls, context) => cls;
+
+    @noop
+    class C {
+      value = 1;
+    }
+    const c = new C();
+  });
+
+  bench("class decorator (wrapping)", () => {
+    const wrap = (cls, context) => {
+      return class extends cls {
+        constructor(...args) {
+          super(...args);
+          this.wrapped = true;
+        }
+      };
+    };
+
+    @wrap
+    class C {
+      constructor() { this.x = 1; }
+    }
+    const c = new C();
+  });
+});
+
+suite("decorators: method", () => {
+  bench("identity method decorator", () => {
+    const noop = (method, context) => method;
+
+    class C {
+      @noop
+      greet() { return "hello"; }
+    }
+    const c = new C();
+    const v = c.greet();
+  });
+
+  bench("wrapping method decorator", () => {
+    const logged = (method, context) => {
+      return (...args) => method(...args);
+    };
+
+    class C {
+      @logged
+      compute(x) { return x * 2; }
+    }
+    const c = new C();
+    const v = c.compute(5);
+  });
+
+  bench("stacked method decorators (x3)", () => {
+    const d1 = (method, context) => method;
+    const d2 = (method, context) => method;
+    const d3 = (method, context) => method;
+
+    class C {
+      @d1 @d2 @d3
+      run() { return 42; }
+    }
+    const c = new C();
+    const v = c.run();
+  });
+});
+
+suite("decorators: field", () => {
+  bench("identity field decorator", () => {
+    const noop = (value, context) => {};
+
+    class C {
+      @noop
+      x = 10;
+    }
+    const c = new C();
+  });
+
+  bench("field initializer decorator", () => {
+    const double = (value, context) => {
+      return (initialValue) => initialValue * 2;
+    };
+
+    class C {
+      @double
+      x = 5;
+    }
+    const c = new C();
+  });
+});
+
+suite("decorators: getter/setter", () => {
+  bench("getter decorator (identity)", () => {
+    const noop = (getter, context) => getter;
+
+    class C {
+      #val = 42;
+      @noop
+      get value() { return this.#val; }
+    }
+    const c = new C();
+    const v = c.value;
+  });
+
+  bench("setter decorator (identity)", () => {
+    const noop = (setter, context) => setter;
+
+    class C {
+      #val = 0;
+      get value() { return this.#val; }
+      @noop
+      set value(v) { this.#val = v; }
+    }
+    const c = new C();
+    c.value = 99;
+    const v = c.value;
+  });
+});
+
+suite("decorators: static", () => {
+  bench("static method decorator", () => {
+    const noop = (method, context) => method;
+
+    class C {
+      @noop
+      static compute(x) { return x + 1; }
+    }
+    const v = C.compute(10);
+  });
+
+  bench("static field decorator", () => {
+    const noop = (value, context) => {};
+
+    class C {
+      @noop
+      static label = "hello";
+    }
+    const v = C.label;
+  });
+});
+
+suite("decorators: private", () => {
+  bench("private method decorator", () => {
+    const noop = (method, context) => method;
+
+    class C {
+      @noop
+      #compute(x) { return x * 3; }
+      run(x) { return this.#compute(x); }
+    }
+    const c = new C();
+    const v = c.run(7);
+  });
+
+  bench("private field decorator", () => {
+    const noop = (value, context) => {};
+
+    class C {
+      @noop
+      #secret = 42;
+      get secret() { return this.#secret; }
+    }
+    const c = new C();
+    const v = c.secret;
+  });
+});
+
+suite("decorators: auto-accessor", () => {
+  bench("plain auto-accessor (no decorator)", () => {
+    class C {
+      accessor name = "world";
+    }
+    const c = new C();
+    const v = c.name;
+    c.name = "updated";
+  });
+
+  bench("auto-accessor with decorator", () => {
+    const noop = (value, context) => value;
+
+    class C {
+      @noop
+      accessor count = 0;
+    }
+    const c = new C();
+    const v = c.count;
+    c.count = 5;
+  });
+});
+
+suite("decorators: metadata", () => {
+  bench("decorator writing metadata", () => {
+    const meta = (key, val) => (value, context) => {
+      context.metadata[key] = val;
+    };
+
+    @meta("kind", "entity")
+    class C {
+      @meta("role", "id")
+      id = 1;
+    }
+    const m = C[Symbol.metadata];
+  });
+});
+
 suite("static getters and setters", () => {
   bench("static getter read", () => {
     class Config {

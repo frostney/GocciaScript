@@ -8,6 +8,8 @@ uses
   Classes,
   Generics.Collections,
 
+  OrderedMap,
+
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
   Goccia.Values.FunctionValue,
@@ -29,18 +31,30 @@ type
     FSetters: TDictionary<string, TGocciaFunctionValue>;
     FPrototype: TGocciaObjectValue;
     FConstructorMethod: TGocciaMethodValue;
-    FStaticMethods: TDictionary<string, TGocciaValue>; // For static methods like Array.isArray
-    FInstancePropertyDefs: TDictionary<string, TGocciaExpression>; // Instance property definitions
-    FInstancePropertyOrder: TStringList; // Preserves declaration order for instance properties
-    FPrivateInstancePropertyDefs: TDictionary<string, TGocciaExpression>; // Private instance property definitions
-    FPrivateInstancePropertyOrder: TStringList; // Preserves declaration order for private instance properties
-    FPrivateStaticProperties: TDictionary<string, TGocciaValue>; // Private static property values
-    FPrivateMethods: TDictionary<string, TGocciaMethodValue>; // Private methods
+    FStaticMethods: TDictionary<string, TGocciaValue>;
+    FInstancePropertyDefs: TOrderedMap<TGocciaExpression>;
+    FPrivateInstancePropertyDefs: TOrderedMap<TGocciaExpression>;
+    FPrivateStaticProperties: TDictionary<string, TGocciaValue>;
+    FPrivateMethods: TDictionary<string, TGocciaMethodValue>;
     FPrivateGetters: TDictionary<string, TGocciaFunctionValue>;
     FPrivateSetters: TDictionary<string, TGocciaFunctionValue>;
     FStaticGetters: TDictionary<string, TGocciaFunctionValue>;
     FStaticSetters: TDictionary<string, TGocciaFunctionValue>;
     FStaticSymbolDescriptors: TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
+    FMethodInitializers: array of TGocciaValue;
+    FFieldInitializers: array of TGocciaValue;
+    FDecoratorFieldInitializers: array of record
+      Name: string;
+      Initializer: TGocciaValue;
+      IsPrivate: Boolean;
+      IsStatic: Boolean;
+    end;
+    function GetPropertyGetter(const AName: string): TGocciaFunctionValue; inline;
+    function GetPropertySetter(const AName: string): TGocciaFunctionValue; inline;
+    function GetStaticPropertyGetter(const AName: string): TGocciaFunctionValue; inline;
+    function GetStaticPropertySetter(const AName: string): TGocciaFunctionValue; inline;
+    function GetPrivatePropertyGetter(const AName: string): TGocciaFunctionValue;
+    function GetPrivatePropertySetter(const AName: string): TGocciaFunctionValue;
   public
     constructor Create(const AName: string; const ASuperClass: TGocciaClassValue);
     destructor Destroy; override;
@@ -60,8 +74,6 @@ type
     procedure AddPrivateSetter(const AName: string; const ASetter: TGocciaFunctionValue);
     function HasPrivateGetter(const AName: string): Boolean;
     function HasPrivateSetter(const AName: string): Boolean;
-    function GetPrivateGetter(const AName: string): TGocciaFunctionValue;
-    function GetPrivateSetter(const AName: string): TGocciaFunctionValue;
     procedure AddInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
     procedure AddPrivateInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
     procedure AddPrivateStaticProperty(const AName: string; const AValue: TGocciaValue);
@@ -83,16 +95,25 @@ type
     property SuperClass: TGocciaClassValue read FSuperClass;
     property Prototype: TGocciaObjectValue read FPrototype;
     property ConstructorMethod: TGocciaMethodValue read FConstructorMethod;
-    property InstancePropertyDefs: TDictionary<string, TGocciaExpression> read FInstancePropertyDefs;
-    property InstancePropertyOrder: TStringList read FInstancePropertyOrder;
-    property PrivateInstancePropertyDefs: TDictionary<string, TGocciaExpression> read FPrivateInstancePropertyDefs;
-    property PrivateInstancePropertyOrder: TStringList read FPrivateInstancePropertyOrder;
+    property InstancePropertyDefs: TOrderedMap<TGocciaExpression> read FInstancePropertyDefs;
+    property PrivateInstancePropertyDefs: TOrderedMap<TGocciaExpression> read FPrivateInstancePropertyDefs;
     property PrivateStaticProperties: TDictionary<string, TGocciaValue> read FPrivateStaticProperties;
     property PrivateMethods: TDictionary<string, TGocciaMethodValue> read FPrivateMethods;
+    property PropertyGetter[const AName: string]: TGocciaFunctionValue read GetPropertyGetter;
+    property PropertySetter[const AName: string]: TGocciaFunctionValue read GetPropertySetter;
+    property StaticPropertyGetter[const AName: string]: TGocciaFunctionValue read GetStaticPropertyGetter;
+    property StaticPropertySetter[const AName: string]: TGocciaFunctionValue read GetStaticPropertySetter;
+    property PrivatePropertyGetter[const AName: string]: TGocciaFunctionValue read GetPrivatePropertyGetter;
+    property PrivatePropertySetter[const AName: string]: TGocciaFunctionValue read GetPrivatePropertySetter;
     procedure MarkReferences; override;
 
-    property PrivateGetters: TDictionary<string, TGocciaFunctionValue> read FPrivateGetters;
-    property PrivateSetters: TDictionary<string, TGocciaFunctionValue> read FPrivateSetters;
+    procedure AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
+    procedure SetMethodInitializers(const AInitializers: array of TGocciaValue);
+    procedure SetFieldInitializers(const AInitializers: array of TGocciaValue);
+    procedure AddAutoAccessor(const AName, ABackingName: string; const AIsStatic: Boolean);
+    procedure RunMethodInitializers(const AInstance: TGocciaValue);
+    procedure RunFieldInitializers(const AInstance: TGocciaValue);
+    procedure RunDecoratorFieldInitializers(const AInstance: TGocciaValue);
   end;
 
   TGocciaArrayClassValue = class(TGocciaClassValue)
@@ -154,7 +175,9 @@ uses
   Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
+  Goccia.Values.AutoAccessor,
   Goccia.Values.ClassHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.SetValue;
@@ -167,10 +190,8 @@ begin
   FGetters := TDictionary<string, TGocciaFunctionValue>.Create;
   FSetters := TDictionary<string, TGocciaFunctionValue>.Create;
   FStaticMethods := TDictionary<string, TGocciaValue>.Create;
-  FInstancePropertyDefs := TDictionary<string, TGocciaExpression>.Create;
-  FInstancePropertyOrder := TStringList.Create;
-  FPrivateInstancePropertyDefs := TDictionary<string, TGocciaExpression>.Create;
-  FPrivateInstancePropertyOrder := TStringList.Create;
+  FInstancePropertyDefs := TOrderedMap<TGocciaExpression>.Create;
+  FPrivateInstancePropertyDefs := TOrderedMap<TGocciaExpression>.Create;
   FPrivateStaticProperties := TDictionary<string, TGocciaValue>.Create;
   FPrivateMethods := TDictionary<string, TGocciaMethodValue>.Create;
   FPrivateGetters := TDictionary<string, TGocciaFunctionValue>.Create;
@@ -191,9 +212,7 @@ begin
   FSetters.Free;
   FStaticMethods.Free;
   FInstancePropertyDefs.Free;
-  FInstancePropertyOrder.Free;
   FPrivateInstancePropertyDefs.Free;
-  FPrivateInstancePropertyOrder.Free;
   FPrivateStaticProperties.Free;
   FPrivateMethods.Free;
   FPrivateGetters.Free;
@@ -212,6 +231,7 @@ var
   ValuePair: TPair<string, TGocciaValue>;
   SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
   Accessor: TGocciaPropertyDescriptorAccessor;
+  I: Integer;
 begin
   if GCMarked then Exit;
   inherited; // Sets mark
@@ -282,6 +302,17 @@ begin
         Accessor.Setter.MarkReferences;
     end;
   end;
+
+  // Mark decorator initializer arrays
+  for I := 0 to High(FMethodInitializers) do
+    if Assigned(FMethodInitializers[I]) then
+      FMethodInitializers[I].MarkReferences;
+  for I := 0 to High(FFieldInitializers) do
+    if Assigned(FFieldInitializers[I]) then
+      FFieldInitializers[I].MarkReferences;
+  for I := 0 to High(FDecoratorFieldInitializers) do
+    if Assigned(FDecoratorFieldInitializers[I].Initializer) then
+      FDecoratorFieldInitializers[I].Initializer.MarkReferences;
 end;
 
 function TGocciaClassValue.IsCallable: Boolean;
@@ -422,38 +453,163 @@ begin
     Result := FSuperClass.HasPrivateSetter(AName);
 end;
 
-function TGocciaClassValue.GetPrivateGetter(const AName: string): TGocciaFunctionValue;
+function TGocciaClassValue.GetPrivatePropertyGetter(const AName: string): TGocciaFunctionValue;
 begin
   if FPrivateGetters.TryGetValue(AName, Result) then
     Exit;
   if Assigned(FSuperClass) then
-    Result := FSuperClass.GetPrivateGetter(AName)
+    Result := FSuperClass.GetPrivatePropertyGetter(AName)
   else
     Result := nil;
 end;
 
-function TGocciaClassValue.GetPrivateSetter(const AName: string): TGocciaFunctionValue;
+function TGocciaClassValue.GetPrivatePropertySetter(const AName: string): TGocciaFunctionValue;
 begin
   if FPrivateSetters.TryGetValue(AName, Result) then
     Exit;
   if Assigned(FSuperClass) then
-    Result := FSuperClass.GetPrivateSetter(AName)
+    Result := FSuperClass.GetPrivatePropertySetter(AName)
   else
     Result := nil;
 end;
 
+function TGocciaClassValue.GetPropertyGetter(const AName: string): TGocciaFunctionValue;
+begin
+  if not FGetters.TryGetValue(AName, Result) then
+    Result := nil;
+end;
+
+function TGocciaClassValue.GetPropertySetter(const AName: string): TGocciaFunctionValue;
+begin
+  if not FSetters.TryGetValue(AName, Result) then
+    Result := nil;
+end;
+
+function TGocciaClassValue.GetStaticPropertyGetter(const AName: string): TGocciaFunctionValue;
+begin
+  if not FStaticGetters.TryGetValue(AName, Result) then
+    Result := nil;
+end;
+
+function TGocciaClassValue.GetStaticPropertySetter(const AName: string): TGocciaFunctionValue;
+begin
+  if not FStaticSetters.TryGetValue(AName, Result) then
+    Result := nil;
+end;
+
+procedure TGocciaClassValue.AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
+begin
+  SetLength(FDecoratorFieldInitializers, Length(FDecoratorFieldInitializers) + 1);
+  FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].Name := AName;
+  FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].Initializer := AInitializer;
+  FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].IsPrivate := AIsPrivate;
+  FDecoratorFieldInitializers[High(FDecoratorFieldInitializers)].IsStatic := AIsStatic;
+end;
+
+procedure TGocciaClassValue.SetMethodInitializers(const AInitializers: array of TGocciaValue);
+var
+  Idx: Integer;
+begin
+  SetLength(FMethodInitializers, Length(AInitializers));
+  for Idx := 0 to High(AInitializers) do
+    FMethodInitializers[Idx] := AInitializers[Idx];
+end;
+
+procedure TGocciaClassValue.SetFieldInitializers(const AInitializers: array of TGocciaValue);
+var
+  Idx: Integer;
+begin
+  SetLength(FFieldInitializers, Length(AInitializers));
+  for Idx := 0 to High(AInitializers) do
+    FFieldInitializers[Idx] := AInitializers[Idx];
+end;
+
+// TC39 proposal-decorators: auto-accessor creates backing getter/setter
+procedure TGocciaClassValue.AddAutoAccessor(const AName, ABackingName: string; const AIsStatic: Boolean);
+var
+  GetterHelper: TGocciaAutoAccessorGetter;
+  SetterHelper: TGocciaAutoAccessorSetter;
+  GetterFn, SetterFn: TGocciaNativeFunctionValue;
+begin
+  GetterHelper := TGocciaAutoAccessorGetter.Create(ABackingName);
+  SetterHelper := TGocciaAutoAccessorSetter.Create(ABackingName);
+
+  GetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(GetterHelper.Get, 'get ' + AName, 0);
+  SetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(SetterHelper.SetValue, 'set ' + AName, 1);
+
+  FPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(
+    GetterFn, SetterFn, [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+procedure TGocciaClassValue.RunMethodInitializers(const AInstance: TGocciaValue);
+var
+  Idx: Integer;
+  Args: TGocciaArgumentsCollection;
+begin
+  for Idx := 0 to High(FMethodInitializers) do
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      TGocciaFunctionBase(FMethodInitializers[Idx]).Call(Args, AInstance);
+    finally
+      Args.Free;
+    end;
+  end;
+end;
+
+procedure TGocciaClassValue.RunFieldInitializers(const AInstance: TGocciaValue);
+var
+  Idx: Integer;
+  Args: TGocciaArgumentsCollection;
+begin
+  for Idx := 0 to High(FFieldInitializers) do
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      TGocciaFunctionBase(FFieldInitializers[Idx]).Call(Args, AInstance);
+    finally
+      Args.Free;
+    end;
+  end;
+end;
+
+procedure TGocciaClassValue.RunDecoratorFieldInitializers(const AInstance: TGocciaValue);
+var
+  Idx: Integer;
+  Args: TGocciaArgumentsCollection;
+  InitResult, OriginalValue: TGocciaValue;
+begin
+  for Idx := 0 to High(FDecoratorFieldInitializers) do
+  begin
+    if FDecoratorFieldInitializers[Idx].IsStatic then
+      Continue;
+
+    if Assigned(AInstance) and (AInstance is TGocciaObjectValue) then
+    begin
+      OriginalValue := TGocciaObjectValue(AInstance).GetProperty(FDecoratorFieldInitializers[Idx].Name);
+      if not Assigned(OriginalValue) then
+        OriginalValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+      Args := TGocciaArgumentsCollection.Create([OriginalValue]);
+      try
+        InitResult := TGocciaFunctionBase(FDecoratorFieldInitializers[Idx].Initializer).Call(Args, AInstance);
+        if Assigned(InitResult) and not (InitResult is TGocciaUndefinedLiteralValue) then
+          TGocciaObjectValue(AInstance).AssignProperty(FDecoratorFieldInitializers[Idx].Name, InitResult);
+      finally
+        Args.Free;
+      end;
+    end;
+  end;
+end;
+
 procedure TGocciaClassValue.AddInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
 begin
-  FInstancePropertyDefs.AddOrSetValue(AName, AExpression);
-  if FInstancePropertyOrder.IndexOf(AName) = -1 then
-    FInstancePropertyOrder.Add(AName);
+  FInstancePropertyDefs.Add(AName, AExpression);
 end;
 
 procedure TGocciaClassValue.AddPrivateInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
 begin
-  FPrivateInstancePropertyDefs.AddOrSetValue(AName, AExpression);
-  if FPrivateInstancePropertyOrder.IndexOf(AName) = -1 then
-    FPrivateInstancePropertyOrder.Add(AName);
+  FPrivateInstancePropertyDefs.Add(AName, AExpression);
 end;
 
 procedure TGocciaClassValue.AddPrivateStaticProperty(const AName: string; const AValue: TGocciaValue);

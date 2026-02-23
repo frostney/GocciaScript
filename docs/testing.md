@@ -46,13 +46,15 @@ tests/
 └── language/               # Core language feature tests
     ├── classes/            # Class declarations, inheritance, private fields/methods/getters/setters
     ├── declarations/       # let, const
-    ├── expressions/        # Arithmetic, comparison, logical, destructuring, etc.
+    ├── decorators/         # TC39 Stage 3 decorators and decorator metadata
+    ├── expressions/        # Arithmetic, comparison, logical, destructuring, trailing commas, etc.
     │   ├── addition/       # Addition with ToPrimitive
     │   ├── arithmetic/     # Division (IEEE-754 signed zeros, Infinity), exponentiation (Infinity edge cases)
     │   ├── bitwise/        # Bitwise OR, AND, XOR, NOT, shifts
     │   ├── modulo/         # Floating-point modulo
     │   ├── conditional/    # Ternary precedence
     │   ├── optional-chaining/  # Optional chaining (?.) edge cases
+    │   ├── trailing-commas.js  # Trailing commas in calls, parameters, constructors
     │   └── ...
     ├── functions/          # Arrow functions, closures, higher-order, recursion
     │   └── function-length-name.js  # Function.length and Function.name
@@ -188,6 +190,7 @@ expect(value).toBeInstanceOf(ClassName);
 // Errors
 expect(() => throwingFn()).toThrow();
 expect(() => throwingFn()).toThrow(TypeError);  // Check error constructor
+expect(() => throwingFn()).toThrow(RangeError);
 
 // Negation
 expect(value).not.toBe(wrong);
@@ -343,6 +346,20 @@ expect([...set.values()]).toEqual([1, 2, 3]);
 5. **Edge cases matter** — Tests should cover `NaN`, `undefined`, `null`, empty arrays, negative numbers, boundary conditions, and type coercion scenarios.
 
 6. **Readable as specification** — Test names should describe the expected behavior. A passing test suite serves as living documentation of what GocciaScript supports.
+
+7. **Always pass an error constructor to `.toThrow()`** — When testing that code throws, pass the expected error constructor (`TypeError`, `RangeError`, `SyntaxError`, `Error`, etc.) to `.toThrow()` rather than calling it bare. This ensures the test verifies the correct error type, not just that *something* throws.
+
+```javascript
+// Preferred — verifies the error type
+expect(() => null.foo).toThrow(TypeError);
+expect(() => new Array(-1)).toThrow(RangeError);
+
+// Acceptable for cases where the error type is implementation-defined
+expect(() => riskyOp()).toThrow();
+
+// Avoid — doesn't verify the error type
+expect(() => null.foo).toThrow();  // passes even if the wrong error is thrown
+```
 
 ## How the TestRunner Works
 

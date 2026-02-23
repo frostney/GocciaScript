@@ -19,6 +19,7 @@ type
     FWellKnownToPrimitive: TGocciaSymbolValue;
     FWellKnownToStringTag: TGocciaSymbolValue;
     FWellKnownIsConcatSpreadable: TGocciaSymbolValue;
+    FWellKnownMetadata: TGocciaSymbolValue;
   private
     FDescription: string;
     FId: Integer;
@@ -38,6 +39,7 @@ type
     class function WellKnownToPrimitive: TGocciaSymbolValue;
     class function WellKnownToStringTag: TGocciaSymbolValue;
     class function WellKnownIsConcatSpreadable: TGocciaSymbolValue;
+    class function WellKnownMetadata: TGocciaSymbolValue;
 
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -176,6 +178,18 @@ begin
       TGocciaGarbageCollector.Instance.PinValue(FWellKnownIsConcatSpreadable);
   end;
   Result := FWellKnownIsConcatSpreadable;
+end;
+
+// TC39 proposal-decorator-metadata §2 Symbol.metadata
+class function TGocciaSymbolValue.WellKnownMetadata: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownMetadata) then
+  begin
+    FWellKnownMetadata := TGocciaSymbolValue.Create('Symbol.metadata');
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.PinValue(FWellKnownMetadata);
+  end;
+  Result := FWellKnownMetadata;
 end;
 
 constructor TGocciaSymbolValue.Create(const ADescription: string);
