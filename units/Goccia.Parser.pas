@@ -141,6 +141,8 @@ implementation
 uses
   SysUtils,
 
+  OrderedMap,
+
   Goccia.Error,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
@@ -2031,12 +2033,10 @@ var
   Getters: TDictionary<string, TGocciaGetterExpression>;
   Setters: TDictionary<string, TGocciaSetterExpression>;
   StaticProperties: TDictionary<string, TGocciaExpression>;
-  InstanceProperties: TDictionary<string, TGocciaExpression>;
-  PrivateInstanceProperties: TDictionary<string, TGocciaExpression>;
+  InstanceProperties: TOrderedMap<TGocciaExpression>;
+  PrivateInstanceProperties: TOrderedMap<TGocciaExpression>;
   PrivateStaticProperties: TDictionary<string, TGocciaExpression>;
   PrivateMethods: TDictionary<string, TGocciaClassMethod>;
-  InstancePropertyOrder: TStringList;
-  PrivateInstancePropertyOrder: TStringList;
   MemberName: string;
   Method: TGocciaClassMethod;
   Getter: TGocciaGetterExpression;
@@ -2081,12 +2081,10 @@ begin
   Getters := TDictionary<string, TGocciaGetterExpression>.Create;
   Setters := TDictionary<string, TGocciaSetterExpression>.Create;
   StaticProperties := TDictionary<string, TGocciaExpression>.Create;
-  InstanceProperties := TDictionary<string, TGocciaExpression>.Create;
-  PrivateInstanceProperties := TDictionary<string, TGocciaExpression>.Create;
+  InstanceProperties := TOrderedMap<TGocciaExpression>.Create;
+  PrivateInstanceProperties := TOrderedMap<TGocciaExpression>.Create;
   PrivateStaticProperties := TDictionary<string, TGocciaExpression>.Create;
   PrivateMethods := TDictionary<string, TGocciaClassMethod>.Create;
-  InstancePropertyOrder := TStringList.Create;
-  PrivateInstancePropertyOrder := TStringList.Create;
   InstancePropertyTypes := TDictionary<string, string>.Create;
   StaticGetters := TDictionary<string, TGocciaGetterExpression>.Create;
   StaticSetters := TDictionary<string, TGocciaSetterExpression>.Create;
@@ -2222,16 +2220,12 @@ begin
       if IsPrivate and IsStatic then
         PrivateStaticProperties.Add(MemberName, PropertyValue)
       else if IsPrivate then
-      begin
-        PrivateInstanceProperties.Add(MemberName, PropertyValue);
-        PrivateInstancePropertyOrder.Add(MemberName);
-      end
+        PrivateInstanceProperties.Add(MemberName, PropertyValue)
       else if IsStatic then
         StaticProperties.Add(MemberName, PropertyValue)
       else
       begin
         InstanceProperties.Add(MemberName, PropertyValue);
-        InstancePropertyOrder.Add(MemberName);
         if FieldType <> '' then
           InstancePropertyTypes.Add(MemberName, FieldType);
       end;
@@ -2258,16 +2252,12 @@ begin
       if IsPrivate and IsStatic then
         PrivateStaticProperties.Add(MemberName, PropertyValue)
       else if IsPrivate then
-      begin
-        PrivateInstanceProperties.Add(MemberName, PropertyValue);
-        PrivateInstancePropertyOrder.Add(MemberName);
-      end
+        PrivateInstanceProperties.Add(MemberName, PropertyValue)
       else if IsStatic then
         StaticProperties.Add(MemberName, PropertyValue)
       else
       begin
         InstanceProperties.Add(MemberName, PropertyValue);
-        InstancePropertyOrder.Add(MemberName);
         if FieldType <> '' then
           InstancePropertyTypes.Add(MemberName, FieldType);
       end;
@@ -2361,12 +2351,9 @@ begin
   Result := TGocciaClassDefinition.Create(AClassName, SuperClass, Methods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
   Result.GenericParams := ClassGenericParams;
   Result.ImplementsClause := ClassImplementsClause;
-  Result.FInstancePropertyOrder.Assign(InstancePropertyOrder);
-  Result.FPrivateInstancePropertyOrder.Assign(PrivateInstancePropertyOrder);
   for MemberName in InstancePropertyTypes.Keys do
     Result.FInstancePropertyTypes.Add(MemberName, InstancePropertyTypes[MemberName]);
 
-  // Transfer static getters/setters
   Result.FStaticGetters.Free;
   Result.FStaticGetters := StaticGetters;
   Result.FStaticSetters.Free;
@@ -2374,8 +2361,6 @@ begin
   Result.FComputedStaticGetters := ComputedStaticGetters;
   Result.FElements := Elements;
 
-  InstancePropertyOrder.Free;
-  PrivateInstancePropertyOrder.Free;
   InstancePropertyTypes.Free;
 end;
 

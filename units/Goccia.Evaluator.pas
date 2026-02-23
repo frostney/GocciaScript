@@ -83,6 +83,8 @@ uses
   Classes,
   SysUtils,
 
+  OrderedMap,
+
   Goccia.Arguments.Collection,
   Goccia.CallStack,
   Goccia.Constants,
@@ -1496,24 +1498,17 @@ end;
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
-  PropertyExpr: TGocciaExpression;
+  Entry: TOrderedMap<TGocciaExpression>.TKeyValuePair;
   I: Integer;
-  PropName: string;
 begin
-  // Initialize inherited properties first (parent to child order)
   if Assigned(AClassValue.SuperClass) then
     InitializeInstanceProperties(AInstance, AClassValue.SuperClass, AContext);
 
-  // Then initialize this class's properties in declaration order (child properties can shadow parent properties)
-  for I := 0 to AClassValue.InstancePropertyOrder.Count - 1 do
+  for I := 0 to AClassValue.InstancePropertyDefs.Count - 1 do
   begin
-    PropName := AClassValue.InstancePropertyOrder[I];
-    if AClassValue.InstancePropertyDefs.TryGetValue(PropName, PropertyExpr) then
-    begin
-      // Evaluate the property expression in the current context
-      PropertyValue := EvaluateExpression(PropertyExpr, AContext);
-      AInstance.AssignProperty(PropName, PropertyValue);
-    end;
+    Entry := AClassValue.InstancePropertyDefs.EntryAt(I);
+    PropertyValue := EvaluateExpression(Entry.Value, AContext);
+    AInstance.AssignProperty(Entry.Key, PropertyValue);
   end;
 end;
 
@@ -1741,6 +1736,7 @@ var
   ClassValue: TGocciaClassValue;
   MethodPair: TPair<string, TGocciaClassMethod>;
   PropertyPair: TPair<string, TGocciaExpression>;
+  PropertyEntry: TOrderedMap<TGocciaExpression>.TKeyValuePair;
   GetterPair: TPair<string, TGocciaGetterExpression>;
   SetterPair: TPair<string, TGocciaSetterExpression>;
   Method: TGocciaMethodValue;
@@ -1825,17 +1821,17 @@ begin
   end;
 
   // Store instance property definitions on the class in declaration order
-  for I := 0 to AClassDef.InstancePropertyOrder.Count - 1 do
+  for I := 0 to AClassDef.InstanceProperties.Count - 1 do
   begin
-    if AClassDef.InstanceProperties.TryGetValue(AClassDef.InstancePropertyOrder[I], PropertyExpr) then
-      ClassValue.AddInstanceProperty(AClassDef.InstancePropertyOrder[I], PropertyExpr);
+    PropertyEntry := AClassDef.InstanceProperties.EntryAt(I);
+    ClassValue.AddInstanceProperty(PropertyEntry.Key, PropertyEntry.Value);
   end;
 
   // Store private instance property definitions on the class in declaration order
-  for I := 0 to AClassDef.PrivateInstancePropertyOrder.Count - 1 do
+  for I := 0 to AClassDef.PrivateInstanceProperties.Count - 1 do
   begin
-    if AClassDef.PrivateInstanceProperties.TryGetValue(AClassDef.PrivateInstancePropertyOrder[I], PropertyExpr) then
-      ClassValue.AddPrivateInstanceProperty(AClassDef.PrivateInstancePropertyOrder[I], PropertyExpr);
+    PropertyEntry := AClassDef.PrivateInstanceProperties.EntryAt(I);
+    ClassValue.AddPrivateInstanceProperty(PropertyEntry.Key, PropertyEntry.Value);
   end;
 
   // Store private methods on the class
@@ -2061,11 +2057,11 @@ begin
             cekGetter:
             begin
               if Elem.IsPrivate then
-                GetterFnValue := ClassValue.GetPrivateGetter(ElementName)
+                GetterFnValue := ClassValue.PrivatePropertyGetter[ElementName]
               else if Elem.IsStatic then
-                GetterFnValue := ClassValue.GetStaticGetter(ElementName)
+                GetterFnValue := ClassValue.StaticPropertyGetter[ElementName]
               else
-                GetterFnValue := ClassValue.GetGetter(ElementName);
+                GetterFnValue := ClassValue.PropertyGetter[ElementName];
 
               DecoratorArgs.Add(GetterFnValue);
               DecoratorArgs.Add(ContextObject);
@@ -2089,11 +2085,11 @@ begin
             cekSetter:
             begin
               if Elem.IsPrivate then
-                SetterFnValue := ClassValue.GetPrivateSetter(ElementName)
+                SetterFnValue := ClassValue.PrivatePropertySetter[ElementName]
               else if Elem.IsStatic then
-                SetterFnValue := ClassValue.GetStaticSetter(ElementName)
+                SetterFnValue := ClassValue.StaticPropertySetter[ElementName]
               else
-                SetterFnValue := ClassValue.GetSetter(ElementName);
+                SetterFnValue := ClassValue.PropertySetter[ElementName];
 
               DecoratorArgs.Add(SetterFnValue);
               DecoratorArgs.Add(ContextObject);
@@ -2132,8 +2128,8 @@ begin
             cekAccessor:
             begin
               AutoAccessorValue := TGocciaObjectValue.Create;
-              AutoAccessorValue.AssignProperty('get', ClassValue.GetGetter(ElementName));
-              AutoAccessorValue.AssignProperty('set', ClassValue.GetSetter(ElementName));
+              AutoAccessorValue.AssignProperty('get', ClassValue.PropertyGetter[ElementName]);
+              AutoAccessorValue.AssignProperty('set', ClassValue.PropertySetter[ElementName]);
 
               DecoratorArgs.Add(AutoAccessorValue);
               DecoratorArgs.Add(ContextObject);
@@ -2270,7 +2266,7 @@ begin
   // Check if this is a private getter
   if AccessClass.HasPrivateGetter(APrivateName) then
   begin
-    GetterFn := AccessClass.GetPrivateGetter(APrivateName);
+    GetterFn := AccessClass.PrivatePropertyGetter[APrivateName];
     EmptyArgs := TGocciaArgumentsCollection.Create;
     try
       Result := GetterFn.Call(EmptyArgs, AInstance);
@@ -2380,7 +2376,7 @@ begin
     // Check if this is a private setter
     if AccessClass.HasPrivateSetter(APrivatePropertyAssignmentExpression.PrivateName) then
     begin
-      SetterFn := AccessClass.GetPrivateSetter(APrivatePropertyAssignmentExpression.PrivateName);
+      SetterFn := AccessClass.PrivatePropertySetter[APrivatePropertyAssignmentExpression.PrivateName];
       SetterArgs := TGocciaArgumentsCollection.Create;
       try
         SetterArgs.Add(Value);
@@ -2469,20 +2465,14 @@ end;
 procedure InitializePrivateInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
-  PropertyExpr: TGocciaExpression;
+  Entry: TOrderedMap<TGocciaExpression>.TKeyValuePair;
   I: Integer;
-  PropName: string;
 begin
-  // Initialize private instance properties in declaration order (only from the exact class, not inherited)
-  for I := 0 to AClassValue.PrivateInstancePropertyOrder.Count - 1 do
+  for I := 0 to AClassValue.PrivateInstancePropertyDefs.Count - 1 do
   begin
-    PropName := AClassValue.PrivateInstancePropertyOrder[I];
-    if AClassValue.PrivateInstancePropertyDefs.TryGetValue(PropName, PropertyExpr) then
-    begin
-      // Evaluate the property expression in the current context
-      PropertyValue := EvaluateExpression(PropertyExpr, AContext);
-      AInstance.SetPrivateProperty(PropName, PropertyValue, AClassValue);
-    end;
+    Entry := AClassValue.PrivateInstancePropertyDefs.EntryAt(I);
+    PropertyValue := EvaluateExpression(Entry.Value, AContext);
+    AInstance.SetPrivateProperty(Entry.Key, PropertyValue, AClassValue);
   end;
 end;
 
