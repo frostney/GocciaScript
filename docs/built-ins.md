@@ -139,8 +139,11 @@ end;
 | `Math.log1p(x)` | ln(1 + x) (precise for small x) |
 | `Math.log2(x)` | Base-2 logarithm |
 | `Math.clz32(x)` | Count leading zeros (32-bit) |
+| `Math.sumPrecise(iterable)` | Precise sum of iterable of numbers (TC39 proposal) |
 
 All methods handle `NaN` and `Infinity` edge cases correctly.
+
+`Math.sumPrecise(iterable)` takes an iterable of numbers and returns their sum using Kahan-Babuska-Neumaier compensated summation, avoiding floating-point precision loss from naive addition. Throws `TypeError` if the argument is not iterable (e.g., `null`, `undefined`, numbers, plain objects without `[Symbol.iterator]`). Non-number values in the iterable also throw `TypeError`. An empty iterable returns `-0`. If any element is `NaN`, returns `NaN`. Mixed `+Infinity` and `-Infinity` returns `NaN`.
 
 ### JSON (`Goccia.Builtins.JSON.pas`)
 
@@ -320,6 +323,12 @@ A `const` global providing engine metadata:
 
 **Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `DOMException`
 
+**Static methods:**
+
+| Method | Description |
+|--------|-------------|
+| `Error.isError(arg)` | Returns `true` if `arg` is an Error instance (prototype chain includes `Error.prototype`), `false` otherwise (ES2026) |
+
 All error constructors accept an optional second argument `options` with a `cause` property. `AggregateError` takes `(errors, message, options?)` where `errors` is an array of error objects. `DOMException` takes `(message?, name?)` where `name` defaults to `"Error"` — the `code` property is automatically set from the legacy error code mapping (e.g., `"DataCloneError"` → 25).
 
 Each creates an error object with `name`, `message`, and `stack` properties. The `stack` property is a formatted string with the following structure:
@@ -442,6 +451,8 @@ A collection of key-value pairs with insertion-order iteration. Any value (inclu
 | `map.values()` | Returns an iterator over values |
 | `map.entries()` | Returns an iterator over `[key, value]` pairs |
 | `map[Symbol.iterator]()` | Returns an entries iterator (same as `entries()`) |
+| `map.getOrInsert(key, default)` | Return value for key if present; otherwise insert default and return it (TC39 proposal-upsert) |
+| `map.getOrInsertComputed(key, cb)` | Return value for key if present; otherwise call `cb(key)`, insert result, and return it (TC39 proposal-upsert) |
 
 **Static methods:**
 

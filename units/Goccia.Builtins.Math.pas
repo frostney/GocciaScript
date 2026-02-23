@@ -52,6 +52,7 @@ type
     function MathLog1p(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MathLog2(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MathClz32(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MathSumPrecise(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -64,8 +65,16 @@ uses
 
   Goccia.Arguments.Converter,
   Goccia.Arguments.Validator,
+  Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.Iterator.Generic,
+  Goccia.Values.IteratorValue,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.SymbolValue;
 
 { TGocciaMath }
 
@@ -120,6 +129,7 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathLog1p, 'log1p', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathLog2, 'log2', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathClz32, 'clz32', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathSumPrecise, 'sumPrecise', 1));
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;
@@ -957,6 +967,131 @@ begin
     // Step 3: Return 𝔽(p).
     Result := TGocciaNumberLiteralValue.Create(Count);
   end;
+end;
+
+// TC39 proposal-math-sum §1 Math.sumPrecise(items)
+function TGocciaMath.MathSumPrecise(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+  procedure AccumulateValue(const AElement: TGocciaValue;
+    var ASum, ACompensation: Double;
+    var AHasPosInf, AHasNegInf, AHasNaN, AHasAnyValue: Boolean);
+  var
+    NumVal: TGocciaNumberLiteralValue;
+    T: Double;
+  begin
+    if not (AElement is TGocciaNumberLiteralValue) then
+      Goccia.Values.ErrorHelper.ThrowTypeError('Math.sumPrecise: element is not a number');
+    NumVal := TGocciaNumberLiteralValue(AElement);
+    AHasAnyValue := True;
+    if NumVal.IsNaN then
+      AHasNaN := True
+    else if NumVal.IsInfinity then
+      AHasPosInf := True
+    else if NumVal.IsNegativeInfinity then
+      AHasNegInf := True
+    else
+    begin
+      // Neumaier compensated summation
+      T := ASum + NumVal.Value;
+      if Abs(ASum) >= Abs(NumVal.Value) then
+        ACompensation := ACompensation + ((ASum - T) + NumVal.Value)
+      else
+        ACompensation := ACompensation + ((NumVal.Value - T) + ASum);
+      ASum := T;
+    end;
+  end;
+
+var
+  Iterable, IteratorMethod, IteratorObj, NextMethod, Element: TGocciaValue;
+  Iterator: TGocciaIteratorValue;
+  IterResult: TGocciaObjectValue;
+  ArrValue: TGocciaArrayValue;
+  CallArgs: TGocciaArgumentsCollection;
+  I: Integer;
+  Sum, Compensation: Double;
+  HasPosInf, HasNegInf, HasNaN, HasAnyValue: Boolean;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'Math.sumPrecise', ThrowError);
+
+  Iterable := AArgs.GetElement(0);
+
+  Sum := 0.0;
+  Compensation := 0.0;
+  HasPosInf := False;
+  HasNegInf := False;
+  HasNaN := False;
+  HasAnyValue := False;
+
+  // Fast path for arrays
+  if Iterable is TGocciaArrayValue then
+  begin
+    ArrValue := TGocciaArrayValue(Iterable);
+    for I := 0 to ArrValue.Elements.Count - 1 do
+    begin
+      Element := ArrValue.Elements[I];
+      if not Assigned(Element) then
+        Element := TGocciaUndefinedLiteralValue.UndefinedValue;
+      AccumulateValue(Element, Sum, Compensation, HasPosInf, HasNegInf, HasNaN, HasAnyValue);
+    end;
+  end
+  else
+  begin
+    // Resolve [Symbol.iterator] on the iterable
+    Iterator := nil;
+    if Iterable is TGocciaIteratorValue then
+      Iterator := TGocciaIteratorValue(Iterable)
+    else if Iterable is TGocciaObjectValue then
+    begin
+      IteratorMethod := TGocciaObjectValue(Iterable).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+      if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
+      begin
+        CallArgs := TGocciaArgumentsCollection.Create;
+        try
+          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, Iterable);
+        finally
+          CallArgs.Free;
+        end;
+        if IteratorObj is TGocciaIteratorValue then
+          Iterator := TGocciaIteratorValue(IteratorObj)
+        else if IteratorObj is TGocciaObjectValue then
+        begin
+          NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+          if Assigned(NextMethod) and not (NextMethod is TGocciaUndefinedLiteralValue) and NextMethod.IsCallable then
+            Iterator := TGocciaGenericIteratorValue.Create(IteratorObj);
+        end;
+      end;
+    end;
+
+    if not Assigned(Iterator) then
+      Goccia.Values.ErrorHelper.ThrowTypeError('Math.sumPrecise: argument is not iterable');
+
+    TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+    try
+      IterResult := Iterator.AdvanceNext;
+      while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+      begin
+        Element := IterResult.GetProperty(PROP_VALUE);
+        AccumulateValue(Element, Sum, Compensation, HasPosInf, HasNegInf, HasNaN, HasAnyValue);
+        IterResult := Iterator.AdvanceNext;
+      end;
+    finally
+      TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    end;
+  end;
+
+  // Handle special cases per spec
+  if HasNaN then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+  if HasPosInf and HasNegInf then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+  if HasPosInf then
+    Exit(TGocciaNumberLiteralValue.InfinityValue);
+  if HasNegInf then
+    Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
+  if not HasAnyValue then
+    Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
+
+  Result := TGocciaNumberLiteralValue.Create(Sum + Compensation);
 end;
 
 end.

@@ -36,6 +36,8 @@ type
     function MapValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapEntries(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MapGetOrInsert(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function MapGetOrInsertComputed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     function FindEntry(const AKey: TGocciaValue): Integer;
     procedure InitializePrototype;
@@ -65,6 +67,7 @@ uses
   Goccia.Evaluator.Comparison,
   Goccia.GarbageCollector,
   Goccia.Utils,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
@@ -95,6 +98,8 @@ begin
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapKeys, 'keys', 0));
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapValues, 'values', 0));
   FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapEntries, 'entries', 0));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapGetOrInsert, 'getOrInsert', 2));
+  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapGetOrInsertComputed, 'getOrInsertComputed', 2));
 
   FShared.Prototype.DefineSymbolProperty(
     TGocciaSymbolValue.WellKnownIterator,
@@ -387,6 +392,87 @@ function TGocciaMapValue.MapSymbolIterator(const AArgs: TGocciaArgumentsCollecti
 begin
   // Step 1: Return the result of calling Map.prototype.entries()
   Result := TGocciaMapIteratorValue.Create(AThisValue, mkEntries);
+end;
+
+// TC39 proposal-upsert §1.1 Map.prototype.getOrInsert(key, value)
+function TGocciaMapValue.MapGetOrInsert(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  M: TGocciaMapValue;
+  MapKey, DefaultValue: TGocciaValue;
+  Index: Integer;
+begin
+  M := TGocciaMapValue(AThisValue);
+  if AArgs.Length < 2 then
+  begin
+    if AArgs.Length > 0 then
+      MapKey := AArgs.GetElement(0)
+    else
+      MapKey := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Index := M.FindEntry(MapKey);
+    if Index >= 0 then
+      Exit(M.Entries[Index].Value);
+    DefaultValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    M.SetEntry(MapKey, DefaultValue);
+    Exit(DefaultValue);
+  end;
+
+  MapKey := AArgs.GetElement(0);
+  DefaultValue := AArgs.GetElement(1);
+  // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
+  //   If SameValueZero(p.[[Key]], key) is true, return p.[[Value]]
+  Index := M.FindEntry(MapKey);
+  if Index >= 0 then
+    Exit(M.Entries[Index].Value);
+  // Step 5: Set key to CanonicalizeKeyedCollectionKey(key)
+  // Step 6: Append Record { [[Key]]: key, [[Value]]: value } to M.[[MapData]]
+  M.SetEntry(MapKey, DefaultValue);
+  // Step 7: Return value
+  Result := DefaultValue;
+end;
+
+// TC39 proposal-upsert §1.2 Map.prototype.getOrInsertComputed(key, callbackfn)
+function TGocciaMapValue.MapGetOrInsertComputed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  M: TGocciaMapValue;
+  MapKey, CallbackArg, ComputedValue: TGocciaValue;
+  TypedCallback: TGocciaFunctionBase;
+  CallArgs: TGocciaArgumentsCollection;
+  Index: Integer;
+begin
+  M := TGocciaMapValue(AThisValue);
+  if AArgs.Length > 0 then
+    MapKey := AArgs.GetElement(0)
+  else
+    MapKey := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  // Step 3: If IsCallable(callbackfn) is false, throw a TypeError
+  if AArgs.Length > 1 then
+    CallbackArg := AArgs.GetElement(1)
+  else
+    CallbackArg := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not CallbackArg.IsCallable then
+    ThrowTypeError('Map.getOrInsertComputed: callbackfn is not a function');
+
+  // Step 4: For each Record { [[Key]], [[Value]] } p of M.[[MapData]], do
+  //   If SameValueZero(p.[[Key]], key) is true, return p.[[Value]]
+  Index := M.FindEntry(MapKey);
+  if Index >= 0 then
+    Exit(M.Entries[Index].Value);
+
+  // Step 5: Let value be ? Call(callbackfn, undefined, « key »)
+  TypedCallback := TGocciaFunctionBase(CallbackArg);
+  CallArgs := TGocciaArgumentsCollection.Create([MapKey]);
+  try
+    ComputedValue := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    CallArgs.Free;
+  end;
+
+  // Step 6: Set key to CanonicalizeKeyedCollectionKey(key)
+  // Step 7: Append Record { [[Key]]: key, [[Value]]: value } to M.[[MapData]]
+  M.SetEntry(MapKey, ComputedValue);
+  // Step 8: Return value
+  Result := ComputedValue;
 end;
 
 end.

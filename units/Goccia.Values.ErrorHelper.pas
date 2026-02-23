@@ -39,9 +39,11 @@ uses
   Goccia.Values.Error,
   Goccia.Values.Primitives;
 
+// ES2026 §10.4.4.4 [[ErrorData]]
 function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Integer = 0): TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create;
+  Result.HasErrorData := True;
   Result.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AName));
   Result.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(AMessage));
 
@@ -76,6 +78,7 @@ var
   ErrorObj: TGocciaObjectValue;
 begin
   ErrorObj := CreateErrorObject(DATA_CLONE_ERROR_NAME, AMessage);
+  ErrorObj.HasErrorData := False;
   ErrorObj.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(25));
   if Assigned(GDOMExceptionProto) then
     ErrorObj.Prototype := GDOMExceptionProto;
