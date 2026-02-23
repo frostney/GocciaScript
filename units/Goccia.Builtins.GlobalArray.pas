@@ -420,12 +420,14 @@ begin
       GC.AddTempRoot(ResultObj);
     try
       try
+        // ES2026 §23.1.2.1 step 3.c: GetMethod(asyncItems, @@asyncIterator)
         IteratorMethod := nil;
         if Source is TGocciaObjectValue then
           IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownAsyncIterator);
 
         if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
         begin
+          // ES2026 §23.1.2.1 step 4.a: GetIterator(asyncItems, async)
           EmptyArgs := TGocciaArgumentsCollection.Create;
           try
             IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(EmptyArgs, Source);
@@ -443,15 +445,23 @@ begin
             K := 0;
             EmptyArgs := TGocciaArgumentsCollection.Create;
             try
+              // ES2026 §23.1.2.1 step 4.b: Repeat
               while True do
               begin
+                // ES2026 §23.1.2.1 step 4.b.ii: Await(IteratorNext(iteratorRecord))
                 NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
                 NextResult := AwaitValue(NextResult);
 
+                // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
+                if NextResult.IsPrimitive then
+                  ThrowTypeError('Iterator result ' + NextResult.ToStringLiteral.Value + ' is not an object');
+
+                // ES2026 §23.1.2.1 step 4.b.iii: IteratorComplete(next)
                 DoneValue := NextResult.GetProperty(PROP_DONE);
                 if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
                   Break;
 
+                // ES2026 §23.1.2.1 step 4.b.v: Await(IteratorValue(next))
                 KValue := NextResult.GetProperty(PROP_VALUE);
                 if not Assigned(KValue) then
                   KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -459,12 +469,14 @@ begin
 
                 if Mapping then
                 begin
+                  // ES2026 §23.1.2.1 step 4.b.vii: Await(Call(mapfn, thisArg, « kValue, k »))
                   MapArgs.SetElement(0, KValue);
                   MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
                   KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
                   KValue := AwaitValue(KValue);
                 end;
 
+                // ES2026 §23.1.2.1 step 4.b.ix: CreateDataPropertyOrThrow(A, Pk, mappedValue)
                 AddElement(K, KValue);
                 Inc(K);
               end;
@@ -472,6 +484,7 @@ begin
               EmptyArgs.Free;
             end;
 
+            // ES2026 §23.1.2.1 step 4.b.iv: Set A.[[length]] to k
             if UseConstructor and not (ResultObj is TGocciaArrayValue) then
               ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
           finally
@@ -481,12 +494,14 @@ begin
         end
         else
         begin
+          // ES2026 §23.1.2.1 step 3.d: GetMethod(asyncItems, @@iterator)
           Iterator := nil;
           if Source is TGocciaObjectValue then
           begin
             IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
             if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
             begin
+              // ES2026 §23.1.2.1 step 4.a: GetIterator(asyncItems, sync)
               EmptyArgs := TGocciaArgumentsCollection.Create;
               try
                 IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(EmptyArgs, Source);
@@ -515,9 +530,11 @@ begin
               GC.AddTempRoot(Iterator);
             try
               K := 0;
+              // ES2026 §23.1.2.1 step 4.b: Repeat (sync iterator path)
               IterResult := Iterator.AdvanceNext;
               while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
               begin
+                // ES2026 §23.1.2.1 step 4.b.v: Await(IteratorValue(next))
                 KValue := IterResult.GetProperty(PROP_VALUE);
                 KValue := AwaitValue(KValue);
 
@@ -543,16 +560,19 @@ begin
           end
           else
           begin
+            // ES2026 §23.1.2.1 step 5: Array-like path — Let len be LengthOfArrayLike(arrayLike)
             LengthValue := Source.GetProperty(PROP_LENGTH);
             if Assigned(LengthValue) and not (LengthValue is TGocciaUndefinedLiteralValue) then
             begin
               Len := Trunc(LengthValue.ToNumberLiteral.Value);
               K := 0;
+              // ES2026 §23.1.2.1 step 5.e: Repeat, while k < len
               while K < Len do
               begin
                 KValue := Source.GetProperty(IntToStr(K));
                 if not Assigned(KValue) then
                   KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                // ES2026 §23.1.2.1 step 5.e.iii: Await(kValue)
                 KValue := AwaitValue(KValue);
 
                 if Mapping then
@@ -567,6 +587,7 @@ begin
                 Inc(K);
               end;
 
+              // ES2026 §23.1.2.1 step 5.f: Set A.[[length]] to len
               if UseConstructor and not (ResultObj is TGocciaArrayValue) then
                 ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
             end;

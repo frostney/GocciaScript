@@ -66,12 +66,13 @@ begin
 end;
 ```
 
-**Format:** `// ESYYYY §X.Y.Z FullMethodName(params)`
+**Format:** `// ESYYYY §X.Y.Z SpecMethodName(specParams)`
 
 - `YYYY` is the current edition year of the ECMA-262 specification (e.g., `ES2026` for 2026, `ES2027` for 2027). Use the year matching the current year.
 - The section numbers reference [ECMA-262](https://tc39.es/ecma262/), the living standard.
+- **The method name and parameter list must match the spec's pseudo-code exactly** — use `Array.prototype.map(callbackfn [, thisArg])`, not the Pascal implementation name `TGocciaArrayValue.Map(AArgs, AThisValue)`. The annotation is a spec cross-reference, not a Pascal signature.
 - Use the full qualified name as it appears in the spec (e.g., `Array.prototype.map`, `Object.keys`, `Number.parseInt`).
-- Include the parameter list from the spec signature (e.g., `(callbackfn [, thisArg])`) for quick lookup.
+- For abstract operations, use the spec's operation name and parameters (e.g., `Await(value)`, `ToPrimitive(input [, preferredType])`, `IteratorNext(iteratorRecord)`).
 - For individual algorithm steps within a function body, use `// ESYYYY §X.Y.Z step N: description`.
 
 **What to annotate:**

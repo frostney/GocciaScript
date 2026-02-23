@@ -1330,7 +1330,13 @@ begin
         TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
       ]);
       try
-        TGocciaFunctionBase(ThenMethod).Call(ThenArgs, AValue);
+        // ES2026 §25.6.4.6.1 step 9: If Call(then, ...) throws, reject promise
+        try
+          TGocciaFunctionBase(ThenMethod).Call(ThenArgs, AValue);
+        except
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
       finally
         ThenArgs.Free;
       end;
@@ -1480,12 +1486,16 @@ begin
         if not Assigned(NextMethod) or not NextMethod.IsCallable then
           ThrowTypeError('Async iterator .next is not callable');
 
-        while True do
-        begin
-          NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
-          NextResult := AwaitValue(NextResult);
+          while True do
+          begin
+            NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
+            NextResult := AwaitValue(NextResult);
 
-          DoneValue := NextResult.GetProperty(PROP_DONE);
+            // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
+            if NextResult.IsPrimitive then
+              ThrowTypeError('Iterator result ' + NextResult.ToStringLiteral.Value + ' is not an object');
+
+            DoneValue := NextResult.GetProperty(PROP_DONE);
           if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
             Break;
 

@@ -324,7 +324,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 
 ### ECMAScript Spec Annotations
 
-When implementing ECMAScript-specified behavior, annotate each function or method with a comment referencing the relevant spec section. Use the format `// ESYYYY §X.Y.Z MethodName(params)` where `YYYY` is the current edition year of the specification (e.g., `ES2026` for 2026). Place the annotation immediately above the function body in the `implementation` section. For multi-step algorithms, annotate individual steps inline:
+When implementing ECMAScript-specified behavior, annotate each function or method with a comment referencing the relevant spec section. Use the format `// ESYYYY §X.Y.Z SpecMethodName(specParams)` where `YYYY` is the current edition year of the specification (e.g., `ES2026` for 2026). **The method name and parameter list must match the spec's pseudo-code exactly** — use `Array.prototype.map(callbackfn [, thisArg])`, not the Pascal implementation name `TGocciaArrayValue.Map(AArgs, AThisValue)`. The annotation is a spec cross-reference, not a Pascal signature. Place the annotation immediately above the function body in the `implementation` section. For multi-step algorithms, annotate individual steps inline:
 
 ```pascal
 // ES2026 §23.1.3.18 Array.prototype.map(callbackfn [, thisArg])
@@ -339,7 +339,7 @@ begin
 
 This applies to:
 - Built-in method implementations (Array, String, Number, Object, Set, Map, Promise, Symbol, etc.)
-- Abstract operations (`ToPrimitive`, `ArraySpeciesCreate`, `FlattenIntoArray`, etc.)
+- Abstract operations — use the spec's operation name and parameters (e.g., `Await(value)`, `ToPrimitive(input [, preferredType])`, `IteratorNext(iteratorRecord)`)
 - Evaluator operations that implement spec algorithms (property access, type coercion, operator semantics)
 
 The section numbers reference [ECMA-262](https://tc39.es/ecma262/) (the living standard). Use the edition year matching the current year (e.g., `ES2026` for 2026, `ES2027` for 2027). For TC39 proposals not yet merged into the main spec (e.g., Temporal, Iterator Helpers), reference the proposal name instead:
