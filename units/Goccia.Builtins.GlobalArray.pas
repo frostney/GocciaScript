@@ -510,28 +510,35 @@ begin
 
           if Assigned(Iterator) then
           begin
-            K := 0;
-            IterResult := Iterator.AdvanceNext;
-            while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-            begin
-              KValue := IterResult.GetProperty(PROP_VALUE);
-              KValue := AwaitValue(KValue);
-
-              if Mapping then
+            if Assigned(GC) then
+              GC.AddTempRoot(Iterator);
+            try
+              K := 0;
+              IterResult := Iterator.AdvanceNext;
+              while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
               begin
-                MapArgs.SetElement(0, KValue);
-                MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
-                KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
+                KValue := IterResult.GetProperty(PROP_VALUE);
                 KValue := AwaitValue(KValue);
+
+                if Mapping then
+                begin
+                  MapArgs.SetElement(0, KValue);
+                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+                  KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
+                  KValue := AwaitValue(KValue);
+                end;
+
+                AddElement(K, KValue);
+                Inc(K);
+                IterResult := Iterator.AdvanceNext;
               end;
 
-              AddElement(K, KValue);
-              Inc(K);
-              IterResult := Iterator.AdvanceNext;
+              if UseConstructor and not (ResultObj is TGocciaArrayValue) then
+                ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
+            finally
+              if Assigned(GC) then
+                GC.RemoveTempRoot(Iterator);
             end;
-
-            if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-              ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
           end
           else if Assigned(Source.GetProperty(PROP_LENGTH)) and not (Source.GetProperty(PROP_LENGTH) is TGocciaUndefinedLiteralValue) then
           begin

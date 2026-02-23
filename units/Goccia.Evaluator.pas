@@ -168,6 +168,8 @@ function GetIteratorFromValue(const AValue: TGocciaValue): TGocciaIteratorValue;
 var
   IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  WasAlreadyRooted: Boolean;
+  GC: TGocciaGarbageCollector;
 begin
   if AValue is TGocciaIteratorValue then
   begin
@@ -180,7 +182,10 @@ begin
     IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
     if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
     begin
-      TGocciaGarbageCollector.Instance.AddTempRoot(AValue);
+      GC := TGocciaGarbageCollector.Instance;
+      WasAlreadyRooted := Assigned(GC) and GC.IsTempRoot(AValue);
+      if Assigned(GC) and not WasAlreadyRooted then
+        GC.AddTempRoot(AValue);
       try
         CallArgs := TGocciaArgumentsCollection.Create;
         try
@@ -189,7 +194,8 @@ begin
           CallArgs.Free;
         end;
       finally
-        TGocciaGarbageCollector.Instance.RemoveTempRoot(AValue);
+        if Assigned(GC) and not WasAlreadyRooted then
+          GC.RemoveTempRoot(AValue);
       end;
       if IteratorObj is TGocciaIteratorValue then
       begin

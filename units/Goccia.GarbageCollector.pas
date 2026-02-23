@@ -51,6 +51,7 @@ type
     procedure PopActiveScope;
     procedure AddTempRoot(const AValue: TGocciaValue);
     procedure RemoveTempRoot(const AValue: TGocciaValue);
+    function IsTempRoot(const AValue: TGocciaValue): Boolean;
 
     procedure Collect;
     procedure CollectIfNeeded;
@@ -172,6 +173,11 @@ end;
 procedure TGocciaGarbageCollector.RemoveTempRoot(const AValue: TGocciaValue);
 begin
   FTempRoots.Remove(AValue);
+end;
+
+function TGocciaGarbageCollector.IsTempRoot(const AValue: TGocciaValue): Boolean;
+begin
+  Result := Assigned(AValue) and FTempRoots.ContainsKey(AValue);
 end;
 
 procedure TGocciaGarbageCollector.MarkPhase;

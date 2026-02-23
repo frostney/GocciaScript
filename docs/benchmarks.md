@@ -26,10 +26,10 @@ The BenchmarkRunner supports four output formats via the `--format` flag:
 
 | Format | Description |
 |--------|-------------|
-| `console` (default) | Pretty-printed columnar output with suite headers, variance, and summary |
-| `text` | Compact one-line-per-benchmark format, suitable for piping or logging |
-| `csv` | Standard CSV with header row (`file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,error`) |
-| `json` | Structured JSON with `files[]` array containing nested `benchmarks[]` |
+| `console` (default) | Pretty-printed columnar output with suite headers, variance, setup/teardown times, and summary |
+| `text` | Compact one-line-per-benchmark format with optional `setup=Xms teardown=Xms` suffixes |
+| `csv` | Standard CSV with header row (`file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,setup_ms,teardown_ms,error`) |
+| `json` | Structured JSON with `files[]` array containing nested `benchmarks[]`, each with `setupMs` and `teardownMs` fields |
 
 Use `--output=<file>` to write results to a file instead of stdout.
 
@@ -40,38 +40,64 @@ Benchmark calibration and measurement parameters can be configured via environme
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `GOCCIA_BENCH_WARMUP` | 3 | Number of warmup iterations before calibration |
-| `GOCCIA_BENCH_CALIBRATION_MS` | 300 | Target calibration time in milliseconds |
-| `GOCCIA_BENCH_CALIBRATION_BATCH` | 10 | Initial batch size for calibration |
-| `GOCCIA_BENCH_ROUNDS` | 3 | Number of measurement rounds (1–5; median is reported) |
+| `GOCCIA_BENCH_CALIBRATION_MS` | 100 | Target calibration time in milliseconds |
+| `GOCCIA_BENCH_CALIBRATION_BATCH` | 5 | Initial batch size for calibration |
+| `GOCCIA_BENCH_ROUNDS` | 5 | Number of measurement rounds (1–5; median is reported) |
 
 Example:
 
 ```bash
 # Fast run with shorter calibration and fewer rounds
-GOCCIA_BENCH_CALIBRATION_MS=100 GOCCIA_BENCH_ROUNDS=1 ./build/BenchmarkRunner benchmarks
+GOCCIA_BENCH_CALIBRATION_MS=50 GOCCIA_BENCH_ROUNDS=1 ./build/BenchmarkRunner benchmarks
 
 # Thorough run with longer calibration and more rounds
-GOCCIA_BENCH_CALIBRATION_MS=1000 GOCCIA_BENCH_ROUNDS=5 ./build/BenchmarkRunner benchmarks
+GOCCIA_BENCH_CALIBRATION_MS=300 GOCCIA_BENCH_ROUNDS=5 ./build/BenchmarkRunner benchmarks
 ```
 
 ## Writing Benchmarks
 
+The `bench()` function takes a name and an options object with `setup`, `run`, and `teardown` fields:
+
 ```javascript
-suite("fibonacci", () => {
-  bench("recursive fib(20)", () => {
-    const fib = (n) => n <= 1 ? n : fib(n - 1) + fib(n - 2);
-    fib(20);
+suite("collections", () => {
+  bench("Set iteration", {
+    setup: () => new Set(Array.from({ length: 50 }, (_, i) => i)),
+    run: (s) => {
+      let sum = 0;
+      s.forEach((v) => { sum = sum + v; });
+    },
+    teardown: (s) => { s.clear(); },
   });
 
-  bench("iterative fib(20) via reduce", () => {
-    const fib = (n) => Array.from({ length: n }).reduce(
-      (acc) => [acc[1], acc[0] + acc[1]],
-      [0, 1]
-    )[0];
-    fib(20);
+  bench("simple computation", {
+    run: () => {
+      const result = 1 + 2 + 3;
+    },
   });
 });
 ```
+
+### API
+
+- **`setup`** (optional): Called once before warmup. Its return value is passed as the first argument to `run` and `teardown`.
+- **`run`** (required): The timed benchmark function. Called many times during warmup, calibration, and measurement.
+- **`teardown`** (optional): Called once after all measurement rounds complete. Receives the setup return value.
+- All three phases are independently timed and reported as `setupMs`, `teardownMs`, and the main `opsPerSec`/`meanMs` metrics.
+
+### Data flow
+
+```
+setup() → [return value] → warmup(run × N) → calibrate(run × N) → measure(run × N × rounds) → teardown()
+   ↓                                                                    ↓                          ↓
+ setupMs                                                        opsPerSec, meanMs, variance   teardownMs
+```
+
+### Guidelines
+
+- Use `setup` to create data structures that the `run` function operates on. This isolates allocation cost from the operation being measured.
+- Use `teardown` for cleanup when the setup creates resources that should be explicitly released.
+- When the benchmark IS the creation (e.g., measuring `Array.from` speed), put everything in `run` with no `setup`.
+- The `run` function can be `async` for benchmarking async/await operations.
 
 ## How the BenchmarkRunner Works
 
@@ -84,9 +110,11 @@ The `BenchmarkRunner` program:
 5. Executes the script — the engine measures lex, parse, and execute phases separately with nanosecond precision via `TimingUtils.GetNanoseconds`.
 6. `suite()` calls execute immediately, registering `bench()` entries.
 7. `runBenchmarks()` runs each registered benchmark:
-   - **Warmup:** Configurable iterations to stabilize (default 3).
-   - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 300ms). Uses nanosecond-resolution timing via `TimingUtils` (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows).
-   - **Measure:** Runs multiple measurement rounds (default 3), computes the coefficient of variation (CV%) from the unsorted ops/sec data, then reports the median values.
+   - **Setup:** Calls the `setup` function once (timed), caches the return value.
+   - **Warmup:** Configurable iterations to stabilize (default 3). The setup return value is passed to each call.
+   - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 100ms). Uses nanosecond-resolution timing via `TimingUtils` (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows).
+   - **Measure:** Runs multiple measurement rounds (default 5), computes the coefficient of variation (CV%) from the unsorted ops/sec data, then reports the median values.
+   - **Teardown:** Calls the `teardown` function once (timed) after measurement completes.
 8. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
 
 ## Script API
@@ -94,7 +122,7 @@ The `BenchmarkRunner` program:
 | Function | Description |
 |----------|-------------|
 | `suite(name, fn)` | Group benchmarks (like `describe` in tests). Executes `fn` immediately. |
-| `bench(name, fn)` | Register a benchmark. `fn` is called many times during measurement. |
+| `bench(name, { setup?, run, teardown? })` | Register a benchmark with optional setup/teardown. `run` is called many times during measurement; `setup` and `teardown` run once each and are independently timed. |
 | `runBenchmarks()` | Execute all registered benchmarks and return results. Injected automatically by BenchmarkRunner. |
 
 ## Available Benchmarks
@@ -111,6 +139,10 @@ The `BenchmarkRunner` program:
 | `benchmarks/json.js` | JSON.parse, JSON.stringify, roundtrip with nested and mixed data |
 | `benchmarks/destructuring.js` | Array/object/parameter/callback destructuring, rest, defaults, nesting |
 | `benchmarks/promises.js` | Promise.resolve/reject, then chains, catch/finally, all/race/allSettled/any |
+| `benchmarks/numbers.js` | Integer/float arithmetic, coercion, prototype methods, static methods |
+| `benchmarks/iterators.js` | Iterator.from, user-defined iterables, lazy iterator helpers, built-in iterator chaining |
+| `benchmarks/for-of.js` | for...of with arrays, strings, Sets, Maps, destructuring, for-await-of |
+| `benchmarks/async-await.js` | Single/multiple awaits, await non-Promise, try/catch, Promise.all, nested async |
 
 ## Sample Output
 
@@ -124,14 +156,20 @@ Console format (default):
     recursive fib(20)                         18 ops/sec  ± 2.40%     55.6868 ms/op  (10 iterations)
     iterative fib(20) via reduce         111,301 ops/sec  ± 0.43%      0.0090 ms/op  (40960 iterations)
 
+  collections
+    Set iteration                         50,366 ops/sec  ± 1.23%      0.0199 ms/op  (5000 iterations)
+                                    setup: 0.0120ms  teardown: 0.0010ms
+
 Benchmark Summary
-  Total benchmarks: 3
+  Total benchmarks: 4
   Total duration: 7.21s
 ```
 
 Durations are auto-formatted by `FormatDuration` from `TimingUtils`: values below 0.5μs display as `ns`, values below 0.5ms as `μs`, values up to 10s as `ms` with two decimal places, and larger values as `s`.
 
 The `±X.XX%` column shows the coefficient of variation across measurement rounds. It is omitted when variance is zero (e.g., with a single measurement round).
+
+When a benchmark has a `setup` or `teardown` function, a second line displays their durations (e.g., `setup: 0.0120ms  teardown: 0.0010ms`).
 
 ## CI Integration
 

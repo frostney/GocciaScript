@@ -106,7 +106,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | JSX Source Map | `Goccia.JSX.SourceMap.pas` | Lightweight internal position mapping for JSX-transformed source |
 | JSX Transformer | `Goccia.JSX.Transformer.pas` | Standalone pre-pass that converts JSX to `createElement` calls |
 | Logger | `Goccia.Logger.pas` | Configurable logging with levels and output formats |
-| Benchmark Reporter | `Goccia.Benchmark.Reporter.pas` | Multi-format benchmark output (console, text, CSV, JSON) |
+| Benchmark Reporter | `Goccia.Benchmark.Reporter.pas` | Multi-format benchmark output (console, text, CSV, JSON) with setup/teardown timing |
 | REPL Line Editor | `Goccia.REPL.LineEditor.pas` | Interactive line editing with history for the REPL |
 | REPL Formatter | `Goccia.REPL.Formatter.pas` | Color-formatted value output for the REPL |
 | Shared Prototype | `Goccia.SharedPrototype.pas` | Shared prototype singleton utilities |
@@ -304,12 +304,12 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **No abbreviations:** Use full words in class, function, method, and type names (e.g., `TGocciaGarbageCollector` not `TGocciaGC`). Exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
 - **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`) instead of hardcoded string literals. Use the `ScriptExtensions` array, `IsScriptExtension`, and `IsJSXNativeExtension` helpers instead of duplicating extension lists or ad-hoc checks.
 - **Runtime constants:** Use the split constant units instead of hardcoded string literals for property names, type names, error names, constructor names, and symbol names:
- - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, `PROP_GET`, `PROP_SET`, `PROP_KIND`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_INIT`, `PROP_ADD_INITIALIZER`, etc.
- - `Goccia.Constants.TypeNames` — `OBJECT_TYPE_NAME`, `STRING_TYPE_NAME`, `FUNCTION_TYPE_NAME`, etc.
- - `Goccia.Constants.ErrorNames` — `ERROR_NAME`, `TYPE_ERROR_NAME`, `RANGE_ERROR_NAME`, etc.
- - `Goccia.Constants.ConstructorNames` — `CONSTRUCTOR_OBJECT`, `CONSTRUCTOR_ARRAY`, `CONSTRUCTOR_STRING`, `CONSTRUCTOR_MAP`, etc.
- - `Goccia.Constants.SymbolNames` — `SYMBOL_ITERATOR`, `SYMBOL_ASYNC_ITERATOR`, `SYMBOL_SPECIES`, `SYMBOL_HAS_INSTANCE`, `SYMBOL_TO_PRIMITIVE`, `SYMBOL_TO_STRING_TAG`, `SYMBOL_IS_CONCAT_SPREADABLE`, `SYMBOL_METADATA`
- - `Goccia.Constants` — `BOOLEAN_TRUE_LITERAL`, `NULL_LITERAL`, `NAN_LITERAL`, `ZERO_VALUE`, `EMPTY_STRING`, etc.
+  - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, `PROP_GET`, `PROP_SET`, `PROP_KIND`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_INIT`, `PROP_ADD_INITIALIZER`, etc.
+  - `Goccia.Constants.TypeNames` — `OBJECT_TYPE_NAME`, `STRING_TYPE_NAME`, `FUNCTION_TYPE_NAME`, etc.
+  - `Goccia.Constants.ErrorNames` — `ERROR_NAME`, `TYPE_ERROR_NAME`, `RANGE_ERROR_NAME`, etc.
+  - `Goccia.Constants.ConstructorNames` — `CONSTRUCTOR_OBJECT`, `CONSTRUCTOR_ARRAY`, `CONSTRUCTOR_STRING`, `CONSTRUCTOR_MAP`, etc.
+  - `Goccia.Constants.SymbolNames` — `SYMBOL_ITERATOR`, `SYMBOL_ASYNC_ITERATOR`, `SYMBOL_SPECIES`, `SYMBOL_HAS_INSTANCE`, `SYMBOL_TO_PRIMITIVE`, `SYMBOL_TO_STRING_TAG`, `SYMBOL_IS_CONCAT_SPREADABLE`, `SYMBOL_METADATA`
+  - `Goccia.Constants` — `BOOLEAN_TRUE_LITERAL`, `NULL_LITERAL`, `NAN_LITERAL`, `ZERO_VALUE`, `EMPTY_STRING`, etc.
 - **Generic lists for class types:** Prefer `TObjectList<T>` over `TList<T>` when `T` is a class. When a specialization is used across multiple units, define a **named type alias** in the unit that declares `T` (e.g., `TGocciaValueList = TObjectList<TGocciaValue>` in `Goccia.Values.Primitives.pas`, `TGocciaScopeList = TObjectList<TGocciaScope>` in `Goccia.Scope.pas`). All consumers must use the alias — never re-specialize locally. Use `Create(False)` for non-owning collections. This prevents FPC's per-unit generic VMT specialization from causing "Invalid type cast" failures with `{$OBJECTCHECKS ON}`.
 - **Class naming:** `TGoccia<Name>` prefix
 - **Interface naming:** `I<Name>` prefix
@@ -416,7 +416,7 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 ```
 
 The TestRunner adds `ggTestAssertions` for the test framework (`describe`, `test`, `expect`).
-The BenchmarkRunner adds `ggBenchmark` for the benchmark framework (`suite`, `bench`, `runBenchmarks`). It supports multiple `--format=console|text|csv|json` flags in a single command (each optionally followed by `--output=file`), `--no-progress` for CI builds, and benchmark calibration via environment variables (`GOCCIA_BENCH_CALIBRATION_MS`, `GOCCIA_BENCH_ROUNDS`, etc.).
+The BenchmarkRunner adds `ggBenchmark` for the benchmark framework (`suite`, `bench`, `runBenchmarks`). The `bench()` API takes a name and an options object: `bench(name, { setup?, run, teardown? })`. The `setup` function runs once before warmup and its return value is passed to `run` and `teardown`. All three phases are independently timed and reported (`setupMs`, `teardownMs`). It supports multiple `--format=console|text|csv|json` flags in a single command (each optionally followed by `--output=file`), `--no-progress` for CI builds, and benchmark calibration via environment variables (`GOCCIA_BENCH_CALIBRATION_MS`, `GOCCIA_BENCH_ROUNDS`, etc.).
 
 `Array.fromAsync(asyncItems [, mapfn [, thisArg]])` creates an array from an async iterable, sync iterable, or array-like, returning a `Promise<Array>`. It tries `[Symbol.asyncIterator]` first, falls back to `[Symbol.iterator]`, then array-like. Each element value is awaited (Promises resolved via synchronous microtask drain).
 

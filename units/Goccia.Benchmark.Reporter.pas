@@ -15,6 +15,8 @@ type
     MeanMs: Double;
     Iterations: Int64;
     VariancePercentage: Double;
+    SetupMs: Double;
+    TeardownMs: Double;
     Error: string;
   end;
 
@@ -157,6 +159,7 @@ var
   CurrentSuite: string;
   TotalBenchmarks: Integer;
   TotalDurationNanoseconds: Int64;
+  HasSetupTeardown: Boolean;
 begin
   TotalBenchmarks := 0;
   TotalDurationNanoseconds := 0;
@@ -191,6 +194,17 @@ begin
       else
         FOutput.Add(SysUtils.Format('    %-30s  %12s ops/sec  %10.4f ms/op  (%d iterations)',
           [Entry.Name, FormatOpsPerSec(Entry.OpsPerSec), Entry.MeanMs, Entry.Iterations]));
+
+      HasSetupTeardown := (Entry.SetupMs > 0) or (Entry.TeardownMs > 0);
+      if HasSetupTeardown and (Entry.Error = '') then
+      begin
+        if (Entry.SetupMs > 0) and (Entry.TeardownMs > 0) then
+          FOutput.Add(SysUtils.Format('    %-30s  setup: %.4fms  teardown: %.4fms', ['', Entry.SetupMs, Entry.TeardownMs]))
+        else if Entry.SetupMs > 0 then
+          FOutput.Add(SysUtils.Format('    %-30s  setup: %.4fms', ['', Entry.SetupMs]))
+        else
+          FOutput.Add(SysUtils.Format('    %-30s  teardown: %.4fms', ['', Entry.TeardownMs]));
+      end;
     end;
 
     TotalBenchmarks := TotalBenchmarks + FFiles[F].TotalBenchmarks;
@@ -212,6 +226,7 @@ var
   Entry: TBenchmarkEntry;
   TotalBenchmarks: Integer;
   TotalDurationNanoseconds: Int64;
+  Line: string;
 begin
   TotalBenchmarks := 0;
   TotalDurationNanoseconds := 0;
@@ -226,14 +241,24 @@ begin
 
       if Entry.Error <> '' then
         FOutput.Add(SysUtils.Format('%s > %s: ERROR: %s', [Entry.Suite, Entry.Name, Entry.Error]))
-      else if Entry.VariancePercentage > 0 then
-        FOutput.Add(SysUtils.Format('%s > %s: %s ops/sec ±%.2f%% (%.4f ms/op, %d iterations)',
-          [Entry.Suite, Entry.Name, FormatOpsPerSec(Entry.OpsPerSec),
-           Entry.VariancePercentage, Entry.MeanMs, Entry.Iterations]))
       else
-        FOutput.Add(SysUtils.Format('%s > %s: %s ops/sec (%.4f ms/op, %d iterations)',
-          [Entry.Suite, Entry.Name, FormatOpsPerSec(Entry.OpsPerSec),
-           Entry.MeanMs, Entry.Iterations]));
+      begin
+        if Entry.VariancePercentage > 0 then
+          Line := SysUtils.Format('%s > %s: %s ops/sec ±%.2f%% (%.4f ms/op, %d iterations)',
+            [Entry.Suite, Entry.Name, FormatOpsPerSec(Entry.OpsPerSec),
+             Entry.VariancePercentage, Entry.MeanMs, Entry.Iterations])
+        else
+          Line := SysUtils.Format('%s > %s: %s ops/sec (%.4f ms/op, %d iterations)',
+            [Entry.Suite, Entry.Name, FormatOpsPerSec(Entry.OpsPerSec),
+             Entry.MeanMs, Entry.Iterations]);
+
+        if Entry.SetupMs > 0 then
+          Line := Line + SysUtils.Format(' setup=%.4fms', [Entry.SetupMs]);
+        if Entry.TeardownMs > 0 then
+          Line := Line + SysUtils.Format(' teardown=%.4fms', [Entry.TeardownMs]);
+
+        FOutput.Add(Line);
+      end;
     end;
 
     TotalBenchmarks := TotalBenchmarks + FFiles[F].TotalBenchmarks;
@@ -250,7 +275,7 @@ var
   F, E: Integer;
   Entry: TBenchmarkEntry;
 begin
-  FOutput.Add('file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,error');
+  FOutput.Add('file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,setup_ms,teardown_ms,error');
 
   for F := 0 to FFileCount - 1 do
   begin
@@ -259,14 +284,14 @@ begin
       Entry := FFiles[F].Entries[E];
 
       if Entry.Error <> '' then
-        FOutput.Add(SysUtils.Format('%s,%s,%s,,,,,%s',
+        FOutput.Add(SysUtils.Format('%s,%s,%s,,,,,,,%s',
           [EscapeCSV(FFiles[F].FileName), EscapeCSV(Entry.Suite),
            EscapeCSV(Entry.Name), EscapeCSV(Entry.Error)]))
       else
-        FOutput.Add(SysUtils.Format('%s,%s,%s,%.6f,%.4f,%.6f,%d,',
+        FOutput.Add(SysUtils.Format('%s,%s,%s,%.6f,%.4f,%.6f,%d,%.6f,%.6f,',
           [EscapeCSV(FFiles[F].FileName), EscapeCSV(Entry.Suite),
            EscapeCSV(Entry.Name), Entry.OpsPerSec, Entry.VariancePercentage,
-           Entry.MeanMs, Entry.Iterations]));
+           Entry.MeanMs, Entry.Iterations, Entry.SetupMs, Entry.TeardownMs]));
     end;
   end;
 end;
@@ -316,7 +341,9 @@ begin
         FOutput.Add(SysUtils.Format('          "opsPerSec": %.6f,', [Entry.OpsPerSec]));
         FOutput.Add(SysUtils.Format('          "variancePercentage": %.4f,', [Entry.VariancePercentage]));
         FOutput.Add(SysUtils.Format('          "meanMs": %.6f,', [Entry.MeanMs]));
-        FOutput.Add(SysUtils.Format('          "iterations": %d', [Entry.Iterations]));
+        FOutput.Add(SysUtils.Format('          "iterations": %d,', [Entry.Iterations]));
+        FOutput.Add(SysUtils.Format('          "setupMs": %.6f,', [Entry.SetupMs]));
+        FOutput.Add(SysUtils.Format('          "teardownMs": %.6f', [Entry.TeardownMs]));
       end;
 
       FOutput.Add('        }');

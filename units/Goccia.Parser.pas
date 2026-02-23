@@ -1573,8 +1573,8 @@ begin
   IsAwait := False;
   BindingPattern := nil;
 
-  // for-await-of: 'await' appears between 'for' and '('
-  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
+  // for-await-of: 'await' appears between 'for' and '(' (async context only)
+  if (FInAsyncFunction > 0) and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_AWAIT) then
   begin
     IsAwait := True;
     Advance; // consume 'await'

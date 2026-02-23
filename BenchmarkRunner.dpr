@@ -98,6 +98,8 @@ begin
               Entry.MeanMs := 0;
               Entry.Iterations := 0;
               Entry.VariancePercentage := 0;
+              Entry.SetupMs := 0;
+              Entry.TeardownMs := 0;
             end
             else
             begin
@@ -106,6 +108,8 @@ begin
               Entry.MeanMs := SingleResult.GetProperty('meanMs').ToNumberLiteral.Value;
               Entry.Iterations := Round(SingleResult.GetProperty('iterations').ToNumberLiteral.Value);
               Entry.VariancePercentage := SingleResult.GetProperty('variancePercentage').ToNumberLiteral.Value;
+              Entry.SetupMs := SingleResult.GetProperty('setupMs').ToNumberLiteral.Value;
+              Entry.TeardownMs := SingleResult.GetProperty('teardownMs').ToNumberLiteral.Value;
             end;
 
             FileResult.Entries[I] := Entry;

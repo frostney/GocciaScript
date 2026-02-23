@@ -1059,32 +1059,39 @@ function TGocciaExpectationValue.GetResolves(const AArgs: TGocciaArgumentsCollec
 var
   Promise: TGocciaPromiseValue;
 begin
-  if Assigned(TGocciaMicrotaskQueue.Instance) then
-    TGocciaMicrotaskQueue.Instance.DrainQueue;
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.AddTempRoot(FActualValue);
+  try
+    if Assigned(TGocciaMicrotaskQueue.Instance) then
+      TGocciaMicrotaskQueue.Instance.DrainQueue;
 
-  if not (FActualValue is TGocciaPromiseValue) then
-  begin
-    TGocciaTestAssertions(FTestAssertions).AssertionFailed('resolves',
-      'Expected a Promise but received ' + FActualValue.ToStringLiteral.Value);
-    Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
-    Exit;
-  end;
+    if not (FActualValue is TGocciaPromiseValue) then
+    begin
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('resolves',
+        'Expected a Promise but received ' + FActualValue.ToStringLiteral.Value);
+      Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+      Exit;
+    end;
 
-  Promise := TGocciaPromiseValue(FActualValue);
+    Promise := TGocciaPromiseValue(FActualValue);
 
-  if Promise.State = gpsFulfilled then
-    Result := TGocciaExpectationValue.Create(Promise.PromiseResult, FTestAssertions, FIsNegated)
-  else if Promise.State = gpsRejected then
-  begin
-    TGocciaTestAssertions(FTestAssertions).AssertionFailed('resolves',
-      'Expected Promise to resolve but it rejected with: ' + Promise.PromiseResult.ToStringLiteral.Value);
-    Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
-  end
-  else
-  begin
-    TGocciaTestAssertions(FTestAssertions).AssertionFailed('resolves',
-      'Promise still pending after microtask drain');
-    Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+    if Promise.State = gpsFulfilled then
+      Result := TGocciaExpectationValue.Create(Promise.PromiseResult, FTestAssertions, FIsNegated)
+    else if Promise.State = gpsRejected then
+    begin
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('resolves',
+        'Expected Promise to resolve but it rejected with: ' + Promise.PromiseResult.ToStringLiteral.Value);
+      Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+    end
+    else
+    begin
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('resolves',
+        'Promise still pending after microtask drain');
+      Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+    end;
+  finally
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.RemoveTempRoot(FActualValue);
   end;
 end;
 
@@ -1092,32 +1099,39 @@ function TGocciaExpectationValue.GetRejects(const AArgs: TGocciaArgumentsCollect
 var
   Promise: TGocciaPromiseValue;
 begin
-  if Assigned(TGocciaMicrotaskQueue.Instance) then
-    TGocciaMicrotaskQueue.Instance.DrainQueue;
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.AddTempRoot(FActualValue);
+  try
+    if Assigned(TGocciaMicrotaskQueue.Instance) then
+      TGocciaMicrotaskQueue.Instance.DrainQueue;
 
-  if not (FActualValue is TGocciaPromiseValue) then
-  begin
-    TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
-      'Expected a Promise but received ' + FActualValue.ToStringLiteral.Value);
-    Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
-    Exit;
-  end;
+    if not (FActualValue is TGocciaPromiseValue) then
+    begin
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
+        'Expected a Promise but received ' + FActualValue.ToStringLiteral.Value);
+      Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+      Exit;
+    end;
 
-  Promise := TGocciaPromiseValue(FActualValue);
+    Promise := TGocciaPromiseValue(FActualValue);
 
-  if Promise.State = gpsRejected then
-    Result := TGocciaExpectationValue.Create(Promise.PromiseResult, FTestAssertions, FIsNegated)
-  else if Promise.State = gpsFulfilled then
-  begin
-    TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
-      'Expected Promise to reject but it resolved with: ' + Promise.PromiseResult.ToStringLiteral.Value);
-    Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
-  end
-  else
-  begin
-    TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
-      'Promise still pending after microtask drain');
-    Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+    if Promise.State = gpsRejected then
+      Result := TGocciaExpectationValue.Create(Promise.PromiseResult, FTestAssertions, FIsNegated)
+    else if Promise.State = gpsFulfilled then
+    begin
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
+        'Expected Promise to reject but it resolved with: ' + Promise.PromiseResult.ToStringLiteral.Value);
+      Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+    end
+    else
+    begin
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
+        'Promise still pending after microtask drain');
+      Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
+    end;
+  finally
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.RemoveTempRoot(FActualValue);
   end;
 end;
 
