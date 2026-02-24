@@ -217,9 +217,41 @@ describe("with setup", () => {
 });
 ```
 
+Hooks can also be `async`, allowing `await` in the hook body:
+
+```javascript
+describe("async setup", () => {
+  beforeEach(async () => {
+    const data = await Promise.resolve("ready");
+  });
+
+  afterEach(async () => {
+    await Promise.resolve();
+  });
+});
+```
+
 ### Async Tests (Promises)
 
-Tests can return a Promise. The test framework automatically drains the microtask queue after each test callback and checks the returned Promise's state. If the Promise is rejected, the test fails with the rejection reason.
+Test callbacks can be `async` functions, allowing `await` directly in the test body and inside `expect()` calls:
+
+```javascript
+test("async test with await", async () => {
+  const result = await Promise.resolve(42);
+  expect(result).toBe(42);
+});
+
+test("await inside expect", async () => {
+  expect(await Promise.resolve(42)).toBe(42);
+});
+
+test("await async function result in expect", async () => {
+  const fetchData = async () => [1, 2, 3];
+  expect(await fetchData()).toEqual([1, 2, 3]);
+});
+```
+
+Tests can also return a Promise from a non-async callback. The test framework automatically drains the microtask queue after each test callback and checks the returned Promise's state. If the Promise is rejected, the test fails with the rejection reason.
 
 ```javascript
 test("async value check", () => {
@@ -237,7 +269,7 @@ test("async error handling", () => {
 });
 ```
 
-This pattern replaces the need for `done` callbacks or manual queue flushing. Place assertions inside `.then()` or `.catch()` handlers and return the Promise chain from the test.
+Both patterns work because GocciaScript's `await` is a synchronous microtask drain — the entire async function body executes within a single `.Call()`, so assertions run before the Promise settles. Place assertions inside `.then()` or `.catch()` handlers when using the Promise-return pattern.
 
 **Important:** If a test returns a Promise that is still pending after the microtask queue drains, the test **fails** with "Promise still pending after microtask drain". Since GocciaScript has no event loop, a pending Promise after drain will never settle — this catches tests with missing assertions or broken async chains. This mirrors how Jest/Vitest fail tests with a timeout when the returned Promise never resolves.
 
@@ -258,6 +290,33 @@ test("reject after resolve with pending promise is ignored", () => {
   });
 });
 ```
+
+### Promise Matchers: `.resolves` and `.rejects`
+
+The `expect()` object supports `.resolves` and `.rejects` properties for Vitest/Jest-compatible Promise assertions:
+
+```javascript
+// .resolves — unwrap a fulfilled Promise
+test("resolves example", async () => {
+  await expect(Promise.resolve(42)).resolves.toBe(42);
+  await expect(Promise.resolve([1, 2])).resolves.toEqual([1, 2]);
+  await expect(Promise.resolve(null)).resolves.toBeNull();
+});
+
+// .rejects — unwrap a rejected Promise
+test("rejects example", async () => {
+  await expect(Promise.reject("oops")).rejects.toBe("oops");
+  await expect(Promise.reject({ code: 404 })).rejects.toEqual({ code: 404 });
+});
+
+// .rejects.toThrow() — check rejection error type
+test("rejects.toThrow example", async () => {
+  const fn = async () => { throw new TypeError("bad"); };
+  await expect(fn()).rejects.toThrow(TypeError);
+});
+```
+
+Both properties drain the microtask queue, then return a new expectation with the unwrapped value. All standard matchers (`.toBe()`, `.toEqual()`, `.toThrow()`, `.not`, etc.) chain after `.resolves`/`.rejects`. Both require an actual Promise — call async functions explicitly: `expect(fn())` not `expect(fn)`.
 
 ### Skipping Tests and Suites
 

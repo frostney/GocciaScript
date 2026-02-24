@@ -40,6 +40,7 @@ implementation
 
 uses
   Goccia.Constants.PropertyNames,
+  Goccia.Constants.SymbolNames,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue;
 
@@ -66,13 +67,14 @@ begin
   FSymbolFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(SymbolKeyFor, 'keyFor', 1));
 
   // Register well-known symbol constants
-  FSymbolFunction.RegisterConstant('iterator', FIteratorSymbol);
-  FSymbolFunction.RegisterConstant('species', TGocciaSymbolValue.WellKnownSpecies);
-  FSymbolFunction.RegisterConstant('hasInstance', TGocciaSymbolValue.WellKnownHasInstance);
-  FSymbolFunction.RegisterConstant('toPrimitive', TGocciaSymbolValue.WellKnownToPrimitive);
-  FSymbolFunction.RegisterConstant('toStringTag', TGocciaSymbolValue.WellKnownToStringTag);
-  FSymbolFunction.RegisterConstant('isConcatSpreadable', TGocciaSymbolValue.WellKnownIsConcatSpreadable);
-  FSymbolFunction.RegisterConstant('metadata', TGocciaSymbolValue.WellKnownMetadata);
+  FSymbolFunction.RegisterConstant(SYMBOL_ITERATOR, FIteratorSymbol);
+  FSymbolFunction.RegisterConstant(SYMBOL_SPECIES, TGocciaSymbolValue.WellKnownSpecies);
+  FSymbolFunction.RegisterConstant(SYMBOL_HAS_INSTANCE, TGocciaSymbolValue.WellKnownHasInstance);
+  FSymbolFunction.RegisterConstant(SYMBOL_TO_PRIMITIVE, TGocciaSymbolValue.WellKnownToPrimitive);
+  FSymbolFunction.RegisterConstant(SYMBOL_TO_STRING_TAG, TGocciaSymbolValue.WellKnownToStringTag);
+  FSymbolFunction.RegisterConstant(SYMBOL_ASYNC_ITERATOR, TGocciaSymbolValue.WellKnownAsyncIterator);
+  FSymbolFunction.RegisterConstant(SYMBOL_IS_CONCAT_SPREADABLE, TGocciaSymbolValue.WellKnownIsConcatSpreadable);
+  FSymbolFunction.RegisterConstant(SYMBOL_METADATA, TGocciaSymbolValue.WellKnownMetadata);
 
   // Expose Symbol.prototype (ECMAScript compatible)
   FSymbolFunction.AssignProperty(PROP_PROTOTYPE, TGocciaSymbolValue.SharedPrototype);

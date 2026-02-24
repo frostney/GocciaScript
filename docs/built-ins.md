@@ -192,6 +192,7 @@ The JSON parser is a recursive descent implementation. Special handling:
 |--------|-------------|
 | `Array.isArray(value)` | Check if value is an array |
 | `Array.from(iterable, mapFn?)` | Create array from iterable (array or string) with optional map |
+| `Array.fromAsync(asyncItems [, mapfn [, thisArg]])` | Returns a Promise that resolves to an Array. Tries `[Symbol.asyncIterator]` first, falls back to `[Symbol.iterator]`, then array-like. Each value is awaited (Promise-aware via synchronous microtask drain). |
 | `Array.of(...items)` | Create array from arguments |
 
 **Prototype methods** (implemented directly on `TGocciaArrayValue`):
@@ -384,6 +385,7 @@ Symbols are unique, immutable primitive values used as property keys.
 | `Symbol.for(key)` | Get/create a symbol in the global registry |
 | `Symbol.keyFor(symbol)` | Get the key for a global registry symbol (throws `TypeError` for non-symbol arguments) |
 | `Symbol.iterator` | Well-known symbol for iteration protocol |
+| `Symbol.asyncIterator` | Well-known symbol for async iteration protocol. Returns the singleton symbol. Used by `for await...of` and `Array.fromAsync`. Objects with a `[Symbol.asyncIterator]()` method are async iterables. |
 | `Symbol.species` | Well-known symbol for constructor species (behavioral: Array/Map/Set constructors have default `[Symbol.species]` getter returning `this`; Array prototype methods use `ArraySpeciesCreate` for subclass-aware result construction) |
 | `Symbol.hasInstance` | Well-known symbol for instanceof behavior |
 | `Symbol.toPrimitive` | Well-known symbol for type conversion |

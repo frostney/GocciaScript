@@ -8,6 +8,7 @@ uses
 
   Goccia.Benchmark.Reporter,
   Goccia.Builtins.Benchmark,
+  Goccia.Constants.PropertyNames,
   Goccia.Engine,
   Goccia.FileExtensions,
   Goccia.Values.ArrayValue,
@@ -88,7 +89,7 @@ begin
             SingleResult := TGocciaObjectValue(ResultsArray.GetElement(I));
 
             Entry.Suite := SingleResult.GetProperty('suite').ToStringLiteral.Value;
-            Entry.Name := SingleResult.GetProperty('name').ToStringLiteral.Value;
+            Entry.Name := SingleResult.GetProperty(PROP_NAME).ToStringLiteral.Value;
 
             ErrorMsg := SingleResult.GetProperty('error').ToStringLiteral.Value;
             if ErrorMsg <> 'undefined' then
@@ -98,6 +99,8 @@ begin
               Entry.MeanMs := 0;
               Entry.Iterations := 0;
               Entry.VariancePercentage := 0;
+              Entry.SetupMs := 0;
+              Entry.TeardownMs := 0;
             end
             else
             begin
@@ -106,6 +109,8 @@ begin
               Entry.MeanMs := SingleResult.GetProperty('meanMs').ToNumberLiteral.Value;
               Entry.Iterations := Round(SingleResult.GetProperty('iterations').ToNumberLiteral.Value);
               Entry.VariancePercentage := SingleResult.GetProperty('variancePercentage').ToNumberLiteral.Value;
+              Entry.SetupMs := SingleResult.GetProperty('setupMs').ToNumberLiteral.Value;
+              Entry.TeardownMs := SingleResult.GetProperty('teardownMs').ToNumberLiteral.Value;
             end;
 
             FileResult.Entries[I] := Entry;

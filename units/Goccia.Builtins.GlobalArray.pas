@@ -17,6 +17,7 @@ type
   protected
     function IsArray(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ArrayFromAsync(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -27,19 +28,24 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
+  Goccia.MicrotaskQueue,
   Goccia.Utils,
   Goccia.Utils.Arrays,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
+  Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
+  Goccia.Values.Iterator.Concrete,
   Goccia.Values.Iterator.Generic,
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaGlobalArray.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -48,6 +54,7 @@ begin
 
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(IsArray, 'isArray', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFrom, 'from', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFromAsync, 'fromAsync', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayOf, 'of', -1));
 end;
 
@@ -303,6 +310,309 @@ begin
   finally
     MapArgs.Free;
   end;
+end;
+
+// TC39 Array.fromAsync §2.1.1.1 Array.fromAsync(asyncItems [, mapfn [, thisArg]])
+function TGocciaGlobalArray.ArrayFromAsync(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+  ResultObj: TGocciaValue;
+  Source, MapCallback, ThisArg, KValue: TGocciaValue;
+  IteratorMethod, IteratorObj, NextMethod, NextResult, DoneValue: TGocciaValue;
+  Iterator: TGocciaIteratorValue;
+  IterResult: TGocciaObjectValue;
+  AwaitedPromise: TGocciaPromiseValue;
+  EmptyArgs, MapArgs, ConstructorArgs: TGocciaArgumentsCollection;
+  Mapping, UseConstructor: Boolean;
+  K, Len: Integer;
+  LengthValue: TGocciaValue;
+  GC: TGocciaGarbageCollector;
+
+  function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
+  begin
+    if AValue is TGocciaPromiseValue then
+    begin
+      AwaitedPromise := TGocciaPromiseValue(AValue);
+      if Assigned(GC) then
+        GC.AddTempRoot(AwaitedPromise);
+      try
+        if AwaitedPromise.State = gpsPending then
+        begin
+          if Assigned(TGocciaMicrotaskQueue.Instance) then
+            TGocciaMicrotaskQueue.Instance.DrainQueue;
+        end;
+        if AwaitedPromise.State = gpsFulfilled then
+          Result := AwaitedPromise.PromiseResult
+        else if AwaitedPromise.State = gpsRejected then
+          raise TGocciaThrowValue.Create(AwaitedPromise.PromiseResult)
+        else
+          ThrowTypeError('await: Promise did not settle after microtask drain');
+      finally
+        if Assigned(GC) then
+          GC.RemoveTempRoot(AwaitedPromise);
+      end;
+    end
+    else
+      Result := AValue;
+  end;
+
+  procedure AddElement(const AIndex: Integer; const AValue: TGocciaValue);
+  begin
+    if ResultObj is TGocciaArrayValue then
+      TGocciaArrayValue(ResultObj).Elements.Add(AValue)
+    else
+      ResultObj.SetProperty(IntToStr(AIndex), AValue);
+  end;
+
+begin
+  GC := TGocciaGarbageCollector.Instance;
+  Promise := TGocciaPromiseValue.Create;
+
+  if Assigned(GC) then
+    GC.AddTempRoot(Promise);
+  try
+    Source := AArgs.GetElement(0);
+
+    // TC39 Array.fromAsync §2.1.1.1 step 3.c: GetMethod(asyncItems, @@asyncIterator) — ToObject throws on null/undefined
+    if (Source is TGocciaNullLiteralValue) or (Source is TGocciaUndefinedLiteralValue) then
+    begin
+      Promise.Reject(CreateErrorObject(TYPE_ERROR_NAME, 'Cannot convert ' + Source.ToStringLiteral.Value + ' to object'));
+      Result := Promise;
+      Exit;
+    end;
+
+    Mapping := False;
+    MapCallback := nil;
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
+    if AArgs.Length > 1 then
+    begin
+      MapCallback := AArgs.GetElement(1);
+      if not (MapCallback is TGocciaUndefinedLiteralValue) then
+      begin
+        if not MapCallback.IsCallable then
+        begin
+          Promise.Reject(CreateErrorObject(TYPE_ERROR_NAME, MapCallback.ToStringLiteral.Value + ' is not a function'));
+          Result := Promise;
+          Exit;
+        end;
+        Mapping := True;
+        if AArgs.Length > 2 then
+          ThisArg := AArgs.GetElement(2);
+      end;
+    end;
+
+    MapArgs := nil;
+    if Mapping then
+      MapArgs := TGocciaArgumentsCollection.Create([TGocciaUndefinedLiteralValue.UndefinedValue, TGocciaNumberLiteralValue.ZeroValue]);
+
+    // TC39 Array.fromAsync §2.1.1.1 step 5: If IsConstructor(C), Construct(C, « 0 »); else ArrayCreate(0)
+    UseConstructor := AThisValue is TGocciaClassValue;
+    if UseConstructor then
+    begin
+      ConstructorArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.ZeroValue]);
+      try
+        ResultObj := TGocciaClassValue(AThisValue).Instantiate(ConstructorArgs);
+      finally
+        ConstructorArgs.Free;
+      end;
+    end
+    else
+      ResultObj := TGocciaArrayValue.Create;
+
+    if Assigned(GC) then
+      GC.AddTempRoot(ResultObj);
+    try
+      try
+        // TC39 Array.fromAsync §2.1.1.1 step 3.c: GetMethod(asyncItems, @@asyncIterator)
+        IteratorMethod := nil;
+        if Source is TGocciaObjectValue then
+          IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownAsyncIterator);
+
+        if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
+        begin
+          // TC39 Array.fromAsync §2.1.1.1 step 4.a: GetIterator(asyncItems, async)
+          EmptyArgs := TGocciaArgumentsCollection.Create;
+          try
+            IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(EmptyArgs, Source);
+          finally
+            EmptyArgs.Free;
+          end;
+
+          if Assigned(GC) then
+            GC.AddTempRoot(IteratorObj);
+          try
+            NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+            if not Assigned(NextMethod) or not NextMethod.IsCallable then
+              ThrowTypeError('Async iterator .next is not callable');
+
+            K := 0;
+            EmptyArgs := TGocciaArgumentsCollection.Create;
+            try
+              // TC39 Array.fromAsync §2.1.1.1 step 4.b: Repeat
+              while True do
+              begin
+                // TC39 Array.fromAsync §2.1.1.1 step 4.b.ii: Await(IteratorNext(iteratorRecord))
+                NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
+                NextResult := AwaitValue(NextResult);
+
+                // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
+                if NextResult.IsPrimitive then
+                  ThrowTypeError('Iterator result ' + NextResult.ToStringLiteral.Value + ' is not an object');
+
+                // TC39 Array.fromAsync §2.1.1.1 step 4.b.iii: IteratorComplete(next)
+                DoneValue := NextResult.GetProperty(PROP_DONE);
+                if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+                  Break;
+
+                // TC39 Array.fromAsync §2.1.1.1 step 4.b.v: Await(IteratorValue(next))
+                KValue := NextResult.GetProperty(PROP_VALUE);
+                if not Assigned(KValue) then
+                  KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                KValue := AwaitValue(KValue);
+
+                if Mapping then
+                begin
+                  // TC39 Array.fromAsync §2.1.1.1 step 4.b.vii: Await(Call(mapfn, thisArg, « kValue, k »))
+                  MapArgs.SetElement(0, KValue);
+                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+                  KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
+                  KValue := AwaitValue(KValue);
+                end;
+
+                // TC39 Array.fromAsync §2.1.1.1 step 4.b.ix: CreateDataPropertyOrThrow(A, Pk, mappedValue)
+                AddElement(K, KValue);
+                Inc(K);
+              end;
+            finally
+              EmptyArgs.Free;
+            end;
+
+            // TC39 Array.fromAsync §2.1.1.1 step 4.b.iv: Set A.[[length]] to k
+            if UseConstructor and not (ResultObj is TGocciaArrayValue) then
+              ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
+          finally
+            if Assigned(GC) then
+              GC.RemoveTempRoot(IteratorObj);
+          end;
+        end
+        else
+        begin
+          // TC39 Array.fromAsync §2.1.1.1 step 3.d: GetMethod(asyncItems, @@iterator)
+          Iterator := nil;
+          if Source is TGocciaObjectValue then
+          begin
+            IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+            if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
+            begin
+              // TC39 Array.fromAsync §2.1.1.1 step 4.a: GetIterator(asyncItems, sync)
+              EmptyArgs := TGocciaArgumentsCollection.Create;
+              try
+                IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(EmptyArgs, Source);
+              finally
+                EmptyArgs.Free;
+              end;
+
+              if IteratorObj is TGocciaIteratorValue then
+                Iterator := TGocciaIteratorValue(IteratorObj)
+              else if IteratorObj is TGocciaObjectValue then
+              begin
+                NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+                if Assigned(NextMethod) and NextMethod.IsCallable then
+                  Iterator := TGocciaGenericIteratorValue.Create(IteratorObj)
+                else
+                  Iterator := nil;
+              end;
+            end;
+          end
+          else if Source is TGocciaStringLiteralValue then
+            Iterator := TGocciaStringIteratorValue.Create(Source);
+
+          if Assigned(Iterator) then
+          begin
+            if Assigned(GC) then
+              GC.AddTempRoot(Iterator);
+            try
+              K := 0;
+              // TC39 Array.fromAsync §2.1.1.1 step 4.b: Repeat (sync iterator path)
+              IterResult := Iterator.AdvanceNext;
+              while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+              begin
+                // TC39 Array.fromAsync §2.1.1.1 step 4.b.v: Await(IteratorValue(next))
+                KValue := IterResult.GetProperty(PROP_VALUE);
+                KValue := AwaitValue(KValue);
+
+                if Mapping then
+                begin
+                  MapArgs.SetElement(0, KValue);
+                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+                  KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
+                  KValue := AwaitValue(KValue);
+                end;
+
+                AddElement(K, KValue);
+                Inc(K);
+                IterResult := Iterator.AdvanceNext;
+              end;
+
+              if UseConstructor and not (ResultObj is TGocciaArrayValue) then
+                ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
+            finally
+              if Assigned(GC) then
+                GC.RemoveTempRoot(Iterator);
+            end;
+          end
+          else
+          begin
+            // TC39 Array.fromAsync §2.1.1.1 step 5: Array-like path — Let len be LengthOfArrayLike(arrayLike)
+            LengthValue := Source.GetProperty(PROP_LENGTH);
+            if Assigned(LengthValue) and not (LengthValue is TGocciaUndefinedLiteralValue) then
+            begin
+              Len := Trunc(LengthValue.ToNumberLiteral.Value);
+              K := 0;
+              // TC39 Array.fromAsync §2.1.1.1 step 5.e: Repeat, while k < len
+              while K < Len do
+              begin
+                KValue := Source.GetProperty(IntToStr(K));
+                if not Assigned(KValue) then
+                  KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                // TC39 Array.fromAsync §2.1.1.1 step 5.e.iii: Await(kValue)
+                KValue := AwaitValue(KValue);
+
+                if Mapping then
+                begin
+                  MapArgs.SetElement(0, KValue);
+                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+                  KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
+                  KValue := AwaitValue(KValue);
+                end;
+
+                AddElement(K, KValue);
+                Inc(K);
+              end;
+
+              // TC39 Array.fromAsync §2.1.1.1 step 5.f: Set A.[[length]] to len
+              if UseConstructor and not (ResultObj is TGocciaArrayValue) then
+                ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
+            end;
+          end;
+        end;
+
+        Promise.Resolve(ResultObj);
+      except
+        on E: TGocciaThrowValue do
+          Promise.Reject(E.Value);
+      end;
+    finally
+      MapArgs.Free;
+      if Assigned(GC) then
+        GC.RemoveTempRoot(ResultObj);
+    end;
+  finally
+    if Assigned(GC) then
+      GC.RemoveTempRoot(Promise);
+  end;
+
+  Result := Promise;
 end;
 
 // ES2026 §23.1.2.3 Array.of(...items)

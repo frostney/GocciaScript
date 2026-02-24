@@ -19,6 +19,7 @@ type
     FWellKnownToPrimitive: TGocciaSymbolValue;
     FWellKnownToStringTag: TGocciaSymbolValue;
     FWellKnownIsConcatSpreadable: TGocciaSymbolValue;
+    FWellKnownAsyncIterator: TGocciaSymbolValue;
     FWellKnownMetadata: TGocciaSymbolValue;
   private
     FDescription: string;
@@ -39,6 +40,7 @@ type
     class function WellKnownToPrimitive: TGocciaSymbolValue;
     class function WellKnownToStringTag: TGocciaSymbolValue;
     class function WellKnownIsConcatSpreadable: TGocciaSymbolValue;
+    class function WellKnownAsyncIterator: TGocciaSymbolValue;
     class function WellKnownMetadata: TGocciaSymbolValue;
 
     function TypeName: string; override;
@@ -178,6 +180,18 @@ begin
       TGocciaGarbageCollector.Instance.PinValue(FWellKnownIsConcatSpreadable);
   end;
   Result := FWellKnownIsConcatSpreadable;
+end;
+
+// ES2026 §20.1.2.1 Symbol.asyncIterator
+class function TGocciaSymbolValue.WellKnownAsyncIterator: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownAsyncIterator) then
+  begin
+    FWellKnownAsyncIterator := TGocciaSymbolValue.Create('Symbol.asyncIterator');
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.PinValue(FWellKnownAsyncIterator);
+  end;
+  Result := FWellKnownAsyncIterator;
 end;
 
 // TC39 proposal-decorator-metadata §2 Symbol.metadata

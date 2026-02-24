@@ -18,6 +18,9 @@ It's based on the thought "What if we implement ECMAScript today, but without th
 - **Template Literals**: String interpolation with `${expression}`
 - **Destructuring**: Array and object destructuring patterns
 - **Spread/Rest**: `...` operator for arrays, objects, and function parameters
+- **Async/Await**: `async` arrow functions and methods, `await` expressions
+- **Iteration**: `for...of` loops over iterables (arrays, strings, Sets, Maps, custom iterables)
+- **Async Iteration**: `for await...of` loops over async iterables
 - **Modules**: ES6-style `import`/`export`
 - **No `eval`**: Excluded for security
 - **No `arguments`**: Use rest parameters (`...args`) instead
@@ -40,7 +43,9 @@ It's based on the thought "What if we implement ECMAScript today, but without th
 | `Symbol` | `Symbol("desc")`, `Symbol.iterator` |
 | `Promise` | Constructor, `.then`/`.catch`/`.finally`, `all`/`allSettled`/`race`/`any` |
 | `Object.freeze`, `Object.isFrozen` | Immutable objects |
-| `Array.from`, `Array.of` | Array construction |
+| `Array.from`, `Array.of`, `Array.fromAsync` | Array construction (sync and async) |
+| `async`/`await` | `async () => { await promise; }` |
+| `for...of` | `for (const x of iterable) { ... }` |
 
 ### ECMAScript 2022–2025 Features
 
@@ -152,7 +157,7 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 
 ### Run Tests
 
-GocciaScript has 2400+ JavaScript unit tests covering language features, built-in objects, and edge cases.
+GocciaScript has 2600+ JavaScript unit tests covering language features, built-in objects, and edge cases.
 
 ```bash
 # Run all tests (GocciaScript TestRunner)
@@ -187,12 +192,13 @@ GocciaScript follows a classic interpreter pipeline:
 
 ```mermaid
 flowchart LR
-    Source["Source Code"] --> Lexer --> Parser --> Interpreter --> Evaluator --> Result
+    Source["Source Code"] --> JSXTransformer["JSX Transformer"] --> Lexer --> Parser --> Interpreter --> Evaluator --> Result
 ```
 
 | Component | File | Role |
 |-----------|------|------|
 | Engine | `Goccia.Engine.pas` | Top-level orchestration, built-in registration |
+| JSX Transformer | `Goccia.JSX.Transformer.pas` | Optional pre-pass converting JSX to `createElement` calls |
 | Lexer | `Goccia.Lexer.pas` | Tokenization |
 | Parser | `Goccia.Parser.pas` | Recursive descent AST construction |
 | Interpreter | `Goccia.Interpreter.pas` | Execution orchestration, module loading |

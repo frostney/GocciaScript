@@ -278,23 +278,35 @@ type
     FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
     FReturnType: string;
+    FIsAsync: Boolean;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode;
       const ALine, AColumn: Integer);
     property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
     property ReturnType: string read FReturnType write FReturnType;
+    property IsAsync: Boolean read FIsAsync write FIsAsync;
   end;
 
   TGocciaMethodExpression = class(TGocciaExpression)
   private
     FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
+    FIsAsync: Boolean;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode;
       const ALine, AColumn: Integer);
     property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
+    property IsAsync: Boolean read FIsAsync write FIsAsync;
+  end;
+
+  TGocciaAwaitExpression = class(TGocciaExpression)
+  private
+    FOperand: TGocciaExpression;
+  public
+    constructor Create(const AOperand: TGocciaExpression; const ALine, AColumn: Integer);
+    property Operand: TGocciaExpression read FOperand;
   end;
 
   TGocciaConditionalExpression = class(TGocciaExpression)
@@ -791,6 +803,15 @@ begin
   inherited Create(ALine, AColumn);
   FParameters := AParameters;
   FBody := ABody;
+end;
+
+{ TGocciaAwaitExpression }
+
+constructor TGocciaAwaitExpression.Create(const AOperand: TGocciaExpression;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FOperand := AOperand;
 end;
 
 { TGocciaConditionalExpression }
