@@ -1,6 +1,6 @@
 /*---
 description: ArrayBuffer constructor
-features: [ArrayBuffer]
+features: [ArrayBuffer, SharedArrayBuffer]
 ---*/
 
 describe("ArrayBuffer constructor", () => {

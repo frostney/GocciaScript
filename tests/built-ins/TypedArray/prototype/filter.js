@@ -26,4 +26,15 @@ describe("TypedArray.prototype.filter", () => {
     const ta = new Int32Array([1, 2, 3]);
     expect(() => ta.filter()).toThrow(TypeError);
   });
+
+  test("passes thisArg to callback", () => {
+    const ta = new Int32Array([1, 2, 3, 4, 5]);
+    const ctx = { threshold: 3 };
+    const obj = { fn(x) { return x >= this.threshold; } };
+    const filtered = ta.filter(obj.fn, ctx);
+    expect(filtered.length).toBe(3);
+    expect(filtered[0]).toBe(3);
+    expect(filtered[1]).toBe(4);
+    expect(filtered[2]).toBe(5);
+  });
 });

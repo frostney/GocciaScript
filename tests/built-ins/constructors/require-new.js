@@ -1,18 +1,22 @@
 describe("class constructors require 'new'", () => {
   describe("built-in constructors throw TypeError without new", () => {
     test("Map() throws TypeError", () => {
+      // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional - testing that Map() without new throws
       expect(() => Map()).toThrow(TypeError);
     });
 
     test("Set() throws TypeError", () => {
+      // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional - testing that Set() without new throws
       expect(() => Set()).toThrow(TypeError);
     });
 
     test("ArrayBuffer() throws TypeError", () => {
+      // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional - testing that ArrayBuffer() without new throws
       expect(() => ArrayBuffer(8)).toThrow(TypeError);
     });
 
     test("SharedArrayBuffer() throws TypeError", () => {
+      // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional - testing that SharedArrayBuffer() without new throws
       expect(() => SharedArrayBuffer(8)).toThrow(TypeError);
     });
   });

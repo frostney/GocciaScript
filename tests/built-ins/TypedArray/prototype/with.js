@@ -2,6 +2,7 @@ describe("TypedArray.prototype.with", () => {
   test("returns new array with element replaced", () => {
     const ta = new Int32Array([1, 2, 3]);
     const result = ta.with(1, 99);
+    expect(result).not.toBe(ta);
     expect(result[0]).toBe(1);
     expect(result[1]).toBe(99);
     expect(result[2]).toBe(3);
@@ -39,6 +40,7 @@ describe("TypedArray.prototype.with", () => {
   test("preserves type", () => {
     const ta = new Float64Array([1.5, 2.5, 3.5]);
     const result = ta.with(1, 9.9);
+    expect(result instanceof Float64Array).toBe(true);
     expect(result[0]).toBe(1.5);
     expect(result[1]).toBe(9.9);
     expect(result[2]).toBe(3.5);

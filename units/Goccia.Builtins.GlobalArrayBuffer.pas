@@ -12,22 +12,17 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
-  Goccia.Values.SharedArrayBufferValue;
+  Goccia.Values.Primitives;
 
 type
   TGocciaGlobalArrayBuffer = class(TGocciaBuiltin)
   private
     FArrayBufferConstructor: TGocciaNativeFunctionValue;
-    FSharedArrayBufferBuiltin: TGocciaObjectValue;
 
     function ArrayBufferConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferIsView(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-
-    function SharedArrayBufferConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
-    property SharedArrayBufferBuiltin: TGocciaObjectValue read FSharedArrayBufferBuiltin;
   end;
 
 implementation
@@ -47,18 +42,19 @@ begin
 
   FBuiltinObject.RegisterNativeMethod(
     TGocciaNativeFunctionValue.CreateWithoutPrototype(ArrayBufferIsView, 'isView', 1));
-
-  FSharedArrayBufferBuiltin := TGocciaObjectValue.Create;
 end;
 
-// ES2026 §25.1.4.1 ArrayBuffer(length)
+// ES2026 §25.1.4.1 ArrayBuffer(length) — ToIndex(undefined) returns 0
 function TGocciaGlobalArrayBuffer.ArrayBufferConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Num: TGocciaNumberLiteralValue;
   Len: Integer;
 begin
   if AArgs.Length = 0 then
-    ThrowRangeError('Invalid array buffer length');
+  begin
+    Result := TGocciaArrayBufferValue.Create(0);
+    Exit;
+  end;
 
   Num := AArgs.GetElement(0).ToNumberLiteral;
 
@@ -76,24 +72,6 @@ begin
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
-end;
-
-// ES2026 §25.2.3.1 SharedArrayBuffer(length)
-function TGocciaGlobalArrayBuffer.SharedArrayBufferConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Num: TGocciaNumberLiteralValue;
-  Len: Integer;
-begin
-  if AArgs.Length = 0 then
-    ThrowRangeError('Invalid shared array buffer length');
-
-  Num := AArgs.GetElement(0).ToNumberLiteral;
-
-  if Num.IsNaN or Num.IsInfinite or (Num.Value < 0) or (Num.Value <> Trunc(Num.Value)) then
-    ThrowRangeError('Invalid shared array buffer length');
-
-  Len := Trunc(Num.Value);
-  Result := TGocciaSharedArrayBufferValue.Create(Len);
 end;
 
 end.

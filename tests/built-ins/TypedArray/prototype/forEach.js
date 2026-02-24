@@ -13,12 +13,20 @@ describe("TypedArray.prototype.forEach", () => {
 
   test("returns undefined", () => {
     const ta = new Int32Array([1, 2, 3]);
-    const result = ta.forEach((x) => x);
+    const result = ta.forEach((_x) => {});
     expect(result).toBeUndefined();
   });
 
   test("without callback throws TypeError", () => {
     const ta = new Int32Array([1, 2, 3]);
     expect(() => ta.forEach()).toThrow(TypeError);
+  });
+
+  test("passes thisArg to callback", () => {
+    const ta = new Int32Array([1, 2, 3]);
+    const ctx = { sum: 0 };
+    const obj = { fn(x) { this.sum += x; } };
+    ta.forEach(obj.fn, ctx);
+    expect(ctx.sum).toBe(6);
   });
 });

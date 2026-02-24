@@ -21,9 +21,11 @@ implementation
 uses
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.SymbolValue;
 
 function TryCallMethod(const AObj: TGocciaObjectValue; const AMethodName: string; const AThisValue: TGocciaValue; out AResult: TGocciaValue): Boolean;
 var
@@ -37,7 +39,14 @@ begin
     Args := TGocciaArgumentsCollection.Create;
     try
       AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue);
-      Result := AResult.IsPrimitive;
+      if Assigned(TGocciaGarbageCollector.Instance) then
+        TGocciaGarbageCollector.Instance.AddTempRoot(AResult);
+      try
+        Result := AResult.IsPrimitive;
+      finally
+        if Assigned(TGocciaGarbageCollector.Instance) then
+          TGocciaGarbageCollector.Instance.RemoveTempRoot(AResult);
+      end;
     finally
       Args.Free;
     end;
@@ -79,7 +88,7 @@ begin
   Result := AValue;
 end;
 
-// ES2026 §7.1.17 ToString(argument)
+// ES2026 §7.1.17 ToString(argument) — Symbols cannot be converted to strings
 function ToECMAString(const AValue: TGocciaValue): TGocciaStringLiteralValue;
 var
   Prim: TGocciaValue;
@@ -90,6 +99,9 @@ begin
     Exit;
   end;
 
+  if AValue is TGocciaSymbolValue then
+    ThrowTypeError('Cannot convert a Symbol value to a string');
+
   if AValue.IsPrimitive then
   begin
     Result := AValue.ToStringLiteral;
@@ -98,6 +110,8 @@ begin
 
   // ES2026 §7.1.17 step 1: ToPrimitive(argument, string)
   Prim := ToPrimitive(AValue, tphString);
+  if Prim is TGocciaSymbolValue then
+    ThrowTypeError('Cannot convert a Symbol value to a string');
   Result := Prim.ToStringLiteral;
 end;
 

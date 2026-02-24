@@ -16,6 +16,7 @@ describe("structuredClone with SharedArrayBuffer", () => {
   test("cloned SharedArrayBuffer is a distinct instance", () => {
     const sab = new SharedArrayBuffer(16);
     const cloned = structuredClone(sab);
+    expect(cloned).not.toBe(sab);
     expect(cloned.byteLength).toBe(16);
   });
 

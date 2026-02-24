@@ -108,6 +108,21 @@ describe("computed symbol setters on class instances", () => {
     f[setSym] = 42;
     expect(f[getSym]).toBe(42);
   });
+
+  test("symbol getter and setter on same symbol (merge)", () => {
+    const sym = Symbol("accessor");
+    let stored = 0;
+    class Foo {
+      get [sym]() { return stored; }
+      set [sym](v) { stored = v; }
+    }
+    const f = new Foo();
+    expect(f[sym]).toBe(0);
+    f[sym] = 99;
+    expect(f[sym]).toBe(99);
+    f[sym] = 42;
+    expect(f[sym]).toBe(42);
+  });
 });
 
 describe("computed symbol accessors on static members", () => {
@@ -131,5 +146,19 @@ describe("computed symbol accessors on static members", () => {
     }
     Foo[sym] = "test";
     expect(captured).toBe("test");
+  });
+
+  test("static getter and setter on same symbol (merge)", () => {
+    const sym = Symbol("staticAccessor");
+    let stored = 0;
+    class Foo {
+      static get [sym]() { return stored; }
+      static set [sym](v) { stored = v; }
+    }
+    expect(Foo[sym]).toBe(0);
+    Foo[sym] = 100;
+    expect(Foo[sym]).toBe(100);
+    Foo[sym] = 200;
+    expect(Foo[sym]).toBe(200);
   });
 });

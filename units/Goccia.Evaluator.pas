@@ -2061,6 +2061,7 @@ var
   AccessSetterHelper: TGocciaAccessSetter;
   InitializerResults: TArray<TGocciaValue>;
   AccessorBackingName: string;
+  ExistingDescriptor: TGocciaPropertyDescriptor;
 begin
   SuperClass := nil;
   if AClassDef.SuperClass <> '' then
@@ -2189,15 +2190,27 @@ begin
       ClassValue.AddStaticGetter(ComputedKey.ToStringLiteral.Value, GetterFunction);
   end;
 
-  // Handle computed static setters
+  // Handle computed static setters (merge with existing getter if same symbol)
   for I := 0 to Length(AClassDef.FComputedStaticSetters) - 1 do
   begin
     ComputedKey := EvaluateExpression(AClassDef.FComputedStaticSetters[I].KeyExpression, AContext);
     SetterFunction := TGocciaFunctionValue(EvaluateSetter(AClassDef.FComputedStaticSetters[I].SetterExpression, AContext));
     if ComputedKey is TGocciaSymbolValue then
-      ClassValue.DefineSymbolProperty(
-        TGocciaSymbolValue(ComputedKey),
-        TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfConfigurable]))
+    begin
+      ExistingDescriptor := ClassValue.GetOwnStaticSymbolDescriptor(TGocciaSymbolValue(ComputedKey));
+      if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+         Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
+        ClassValue.DefineSymbolProperty(
+          TGocciaSymbolValue(ComputedKey),
+          TGocciaPropertyDescriptorAccessor.Create(
+            TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter,
+            SetterFunction,
+            [pfConfigurable]))
+      else
+        ClassValue.DefineSymbolProperty(
+          TGocciaSymbolValue(ComputedKey),
+          TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfConfigurable]));
+    end
     else
       ClassValue.AddStaticSetter(ComputedKey.ToStringLiteral.Value, SetterFunction);
   end;
@@ -2215,15 +2228,27 @@ begin
       ClassValue.AddGetter(ComputedKey.ToStringLiteral.Value, GetterFunction);
   end;
 
-  // Handle computed instance setters
+  // Handle computed instance setters (merge with existing getter if same symbol)
   for I := 0 to Length(AClassDef.FComputedInstanceSetters) - 1 do
   begin
     ComputedKey := EvaluateExpression(AClassDef.FComputedInstanceSetters[I].KeyExpression, AContext);
     SetterFunction := TGocciaFunctionValue(EvaluateSetter(AClassDef.FComputedInstanceSetters[I].SetterExpression, AContext));
     if ComputedKey is TGocciaSymbolValue then
-      ClassValue.Prototype.DefineSymbolProperty(
-        TGocciaSymbolValue(ComputedKey),
-        TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfConfigurable]))
+    begin
+      ExistingDescriptor := ClassValue.Prototype.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(ComputedKey));
+      if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+         Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
+        ClassValue.Prototype.DefineSymbolProperty(
+          TGocciaSymbolValue(ComputedKey),
+          TGocciaPropertyDescriptorAccessor.Create(
+            TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter,
+            SetterFunction,
+            [pfConfigurable]))
+      else
+        ClassValue.Prototype.DefineSymbolProperty(
+          TGocciaSymbolValue(ComputedKey),
+          TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfConfigurable]));
+    end
     else
       ClassValue.AddSetter(ComputedKey.ToStringLiteral.Value, SetterFunction);
   end;

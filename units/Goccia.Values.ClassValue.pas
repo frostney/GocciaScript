@@ -89,6 +89,7 @@ type
     procedure ReplacePrototype(const APrototype: TGocciaObjectValue);
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
+    function GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
 
@@ -768,6 +769,14 @@ end;
 procedure TGocciaClassValue.DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
 begin
   FStaticSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
+end;
+
+function TGocciaClassValue.GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
+begin
+  if FStaticSymbolDescriptors.TryGetValue(ASymbol, Result) then
+    { Result set by TryGetValue }
+  else
+    Result := nil;
 end;
 
 procedure TGocciaClassValue.AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);

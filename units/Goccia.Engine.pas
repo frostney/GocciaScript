@@ -443,10 +443,10 @@ begin
   TAConstructor.Prototype.AssignProperty(PROP_BYTES_PER_ELEMENT, BPE);
 
   FromFn := TGocciaTypedArrayStaticFrom.Create(AKind);
-  TAConstructor.SetProperty('from',
+  TAConstructor.SetProperty(PROP_FROM,
     TGocciaNativeFunctionValue.CreateWithoutPrototype(FromFn.TypedArrayFrom, 'from', 1));
   OfFn := TGocciaTypedArrayStaticFrom.Create(AKind);
-  TAConstructor.SetProperty('of',
+  TAConstructor.SetProperty(PROP_OF,
     TGocciaNativeFunctionValue.CreateWithoutPrototype(OfFn.TypedArrayOf, 'of', 0));
 
   FInterpreter.GlobalScope.DefineLexicalBinding(AName, TAConstructor, dtConst);

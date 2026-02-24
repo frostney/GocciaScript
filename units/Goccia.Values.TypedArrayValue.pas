@@ -540,7 +540,7 @@ begin
   Result := TGocciaTypedArrayValue(AThisValue);
 end;
 
-function InvokeCallback(const ACallback: TGocciaValue; const AElement, AIndex, AArray: TGocciaValue): TGocciaValue;
+function InvokeCallback(const ACallback: TGocciaValue; const AElement, AIndex, AArray, AThisArg: TGocciaValue): TGocciaValue;
 var
   Args: TGocciaArgumentsCollection;
 begin
@@ -549,7 +549,7 @@ begin
     Args.Add(AElement);
     Args.Add(AIndex);
     Args.Add(AArray);
-    Result := TGocciaFunctionBase(ACallback).Call(Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+    Result := TGocciaFunctionBase(ACallback).Call(Args, AThisArg);
   finally
     Args.Free;
   end;
@@ -987,15 +987,19 @@ function TGocciaTypedArrayValue.TypedArrayFind(const AArgs: TGocciaArgumentsColl
 var
   TA: TGocciaTypedArrayValue;
   I: Integer;
-  Element, CallResult: TGocciaValue;
+  Element, CallResult, ThisArg: TGocciaValue;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.find');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError('TypedArray.prototype.find requires a callable argument');
+  if AArgs.Length > 1 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   for I := 0 to TA.FLength - 1 do
   begin
     Element := TGocciaNumberLiteralValue.Create(TA.ReadElement(I));
-    CallResult := InvokeCallback(AArgs.GetElement(0), Element, TGocciaNumberLiteralValue.Create(I), AThisValue);
+    CallResult := InvokeCallback(AArgs.GetElement(0), Element, TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
     if CallResult.ToNumberLiteral.Value <> 0 then
       Exit(Element);
   end;
@@ -1007,15 +1011,19 @@ function TGocciaTypedArrayValue.TypedArrayFindIndex(const AArgs: TGocciaArgument
 var
   TA: TGocciaTypedArrayValue;
   I: Integer;
-  Element, CallResult: TGocciaValue;
+  Element, CallResult, ThisArg: TGocciaValue;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.findIndex');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError('TypedArray.prototype.findIndex requires a callable argument');
+  if AArgs.Length > 1 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   for I := 0 to TA.FLength - 1 do
   begin
     Element := TGocciaNumberLiteralValue.Create(TA.ReadElement(I));
-    CallResult := InvokeCallback(AArgs.GetElement(0), Element, TGocciaNumberLiteralValue.Create(I), AThisValue);
+    CallResult := InvokeCallback(AArgs.GetElement(0), Element, TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
     if CallResult.ToNumberLiteral.Value <> 0 then
       Exit(TGocciaNumberLiteralValue.Create(I));
   end;
@@ -1027,15 +1035,19 @@ function TGocciaTypedArrayValue.TypedArrayFindLast(const AArgs: TGocciaArguments
 var
   TA: TGocciaTypedArrayValue;
   I: Integer;
-  Element, CallResult: TGocciaValue;
+  Element, CallResult, ThisArg: TGocciaValue;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.findLast');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError('TypedArray.prototype.findLast requires a callable argument');
+  if AArgs.Length > 1 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   for I := TA.FLength - 1 downto 0 do
   begin
     Element := TGocciaNumberLiteralValue.Create(TA.ReadElement(I));
-    CallResult := InvokeCallback(AArgs.GetElement(0), Element, TGocciaNumberLiteralValue.Create(I), AThisValue);
+    CallResult := InvokeCallback(AArgs.GetElement(0), Element, TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
     if CallResult.ToNumberLiteral.Value <> 0 then
       Exit(Element);
   end;
@@ -1047,15 +1059,19 @@ function TGocciaTypedArrayValue.TypedArrayFindLastIndex(const AArgs: TGocciaArgu
 var
   TA: TGocciaTypedArrayValue;
   I: Integer;
-  Element, CallResult: TGocciaValue;
+  Element, CallResult, ThisArg: TGocciaValue;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.findLastIndex');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError('TypedArray.prototype.findLastIndex requires a callable argument');
+  if AArgs.Length > 1 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   for I := TA.FLength - 1 downto 0 do
   begin
     Element := TGocciaNumberLiteralValue.Create(TA.ReadElement(I));
-    CallResult := InvokeCallback(AArgs.GetElement(0), Element, TGocciaNumberLiteralValue.Create(I), AThisValue);
+    CallResult := InvokeCallback(AArgs.GetElement(0), Element, TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
     if CallResult.ToNumberLiteral.Value <> 0 then
       Exit(TGocciaNumberLiteralValue.Create(I));
   end;
@@ -1067,16 +1083,20 @@ function TGocciaTypedArrayValue.TypedArrayEvery(const AArgs: TGocciaArgumentsCol
 var
   TA: TGocciaTypedArrayValue;
   I: Integer;
-  CallResult: TGocciaValue;
+  CallResult, ThisArg: TGocciaValue;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.every');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError('TypedArray.prototype.every requires a callable argument');
+  if AArgs.Length > 1 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   for I := 0 to TA.FLength - 1 do
   begin
     CallResult := InvokeCallback(AArgs.GetElement(0),
       TGocciaNumberLiteralValue.Create(TA.ReadElement(I)),
-      TGocciaNumberLiteralValue.Create(I), AThisValue);
+      TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
     if CallResult.ToNumberLiteral.Value = 0 then
       Exit(TGocciaBooleanLiteralValue.FalseValue);
   end;
@@ -1088,16 +1108,20 @@ function TGocciaTypedArrayValue.TypedArraySome(const AArgs: TGocciaArgumentsColl
 var
   TA: TGocciaTypedArrayValue;
   I: Integer;
-  CallResult: TGocciaValue;
+  CallResult, ThisArg: TGocciaValue;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.some');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError('TypedArray.prototype.some requires a callable argument');
+  if AArgs.Length > 1 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   for I := 0 to TA.FLength - 1 do
   begin
     CallResult := InvokeCallback(AArgs.GetElement(0),
       TGocciaNumberLiteralValue.Create(TA.ReadElement(I)),
-      TGocciaNumberLiteralValue.Create(I), AThisValue);
+      TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
     if CallResult.ToNumberLiteral.Value <> 0 then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
   end;
@@ -1109,14 +1133,19 @@ function TGocciaTypedArrayValue.TypedArrayForEach(const AArgs: TGocciaArgumentsC
 var
   TA: TGocciaTypedArrayValue;
   I: Integer;
+  ThisArg: TGocciaValue;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.forEach');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError('TypedArray.prototype.forEach requires a callable argument');
+  if AArgs.Length > 1 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   for I := 0 to TA.FLength - 1 do
     InvokeCallback(AArgs.GetElement(0),
       TGocciaNumberLiteralValue.Create(TA.ReadElement(I)),
-      TGocciaNumberLiteralValue.Create(I), AThisValue);
+      TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -1125,17 +1154,21 @@ function TGocciaTypedArrayValue.TypedArrayMap(const AArgs: TGocciaArgumentsColle
 var
   TA, NewTA: TGocciaTypedArrayValue;
   I: Integer;
-  CallResult: TGocciaValue;
+  CallResult, ThisArg: TGocciaValue;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.map');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError('TypedArray.prototype.map requires a callable argument');
+  if AArgs.Length > 1 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
   NewTA := CreateSameKindArray(TA, TA.FLength);
   for I := 0 to TA.FLength - 1 do
   begin
     CallResult := InvokeCallback(AArgs.GetElement(0),
       TGocciaNumberLiteralValue.Create(TA.ReadElement(I)),
-      TGocciaNumberLiteralValue.Create(I), AThisValue);
+      TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
     NewTA.WriteNumberLiteral(I, CallResult.ToNumberLiteral);
   end;
   Result := NewTA;
@@ -1147,12 +1180,16 @@ var
   TA, NewTA: TGocciaTypedArrayValue;
   I, Count: Integer;
   ElemVal: Double;
-  CallResult: TGocciaValue;
+  CallResult, ThisArg: TGocciaValue;
   Kept: array of Double;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.filter');
   if (AArgs.Length = 0) or not AArgs.GetElement(0).IsCallable then
     ThrowTypeError('TypedArray.prototype.filter requires a callable argument');
+  if AArgs.Length > 1 then
+    ThisArg := AArgs.GetElement(1)
+  else
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   SetLength(Kept, 0);
   for I := 0 to TA.FLength - 1 do
@@ -1160,7 +1197,7 @@ begin
     ElemVal := TA.ReadElement(I);
     CallResult := InvokeCallback(AArgs.GetElement(0),
       TGocciaNumberLiteralValue.Create(ElemVal),
-      TGocciaNumberLiteralValue.Create(I), AThisValue);
+      TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
     if CallResult.ToNumberLiteral.Value <> 0 then
     begin
       Count := System.Length(Kept);

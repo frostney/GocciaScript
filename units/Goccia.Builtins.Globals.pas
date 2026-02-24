@@ -490,6 +490,8 @@ begin
   Len := Length(ABuf.Data);
   Result := TGocciaArrayBufferValue.Create(Len);
   AMemory.Add(ABuf, Result);
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.AddTempRoot(Result);
 
   if Len > 0 then
     Move(ABuf.Data[0], Result.Data[0], Len);
@@ -503,6 +505,8 @@ begin
   Len := Length(ABuf.Data);
   Result := TGocciaSharedArrayBufferValue.Create(Len);
   AMemory.Add(ABuf, Result);
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.AddTempRoot(Result);
 
   if Len > 0 then
     Move(ABuf.Data[0], Result.Data[0], Len);
@@ -547,6 +551,7 @@ end;
 function TGocciaGlobals.StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Memory: TDictionary<TGocciaValue, TGocciaValue>;
+  CloneValue: TGocciaValue;
 begin
   if AArgs.Length = 0 then
     ThrowTypeError('Failed to execute ''structuredClone'': 1 argument required, but only 0 present.');
@@ -555,6 +560,9 @@ begin
   try
     Result := StructuredCloneValue(AArgs.GetElement(0), Memory);
   finally
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      for CloneValue in Memory.Values do
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(CloneValue);
     Memory.Free;
   end;
 end;

@@ -1,4 +1,8 @@
 describe("TypedArray.prototype.indexOf", () => {
+  test("throws on non-TypedArray receiver", () => {
+    expect(() => Int32Array.prototype.indexOf.call({}, 1)).toThrow(TypeError);
+  });
+
   test("finds element", () => {
     const ta = new Int32Array([10, 20, 30, 20]);
     expect(ta.indexOf(20)).toBe(1);
