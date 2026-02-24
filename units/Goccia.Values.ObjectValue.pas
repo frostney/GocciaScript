@@ -7,6 +7,7 @@ interface
 uses
   Generics.Collections,
 
+  Goccia.Arguments.Collection,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives,
   Goccia.Values.SymbolValue;
@@ -14,6 +15,16 @@ uses
 type
 
   TGocciaObjectValue = class(TGocciaValue)
+  private
+    class var FSharedObjectPrototype: TGocciaObjectValue;
+    class var FPrototypeMethodHost: TGocciaObjectValue;
+  private
+    function ObjectPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectPrototypeHasOwnProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectPrototypeIsPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectPrototypePropertyIsEnumerable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectPrototypeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectPrototypeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   protected
     FProperties: TGocciaPropertyMap;
     FSymbolDescriptors: TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
@@ -24,6 +35,8 @@ type
     FExtensible: Boolean;
     FHasErrorData: Boolean;
   public
+    class procedure InitializeSharedPrototype;
+    class property SharedObjectPrototype: TGocciaObjectValue read FSharedObjectPrototype write FSharedObjectPrototype;
     constructor Create(const APrototype: TGocciaObjectValue = nil);
     destructor Destroy; override;
     function ToDebugString: string;
@@ -46,9 +59,9 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
-    function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
+    function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; virtual;
     function HasProperty(const AName: string): Boolean;
-    function HasOwnProperty(const AName: string): Boolean;
+    function HasOwnProperty(const AName: string): Boolean; virtual;
     function DeleteProperty(const AName: string): Boolean;
 
     function GetEnumerablePropertyNames: TArray<string>;
@@ -89,8 +102,9 @@ implementation
 uses
   SysUtils,
 
-  Goccia.Arguments.Collection,
   Goccia.Constants.ConstructorNames,
+  Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionValue,
@@ -123,6 +137,199 @@ begin
   FFrozen := False;
   FSealed := False;
   FExtensible := True;
+end;
+
+// ES2026 §20.1.3.6 Object.prototype.toString()
+function TGocciaObjectValue.ObjectPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Tag: string;
+  SymbolTag: TGocciaValue;
+  Obj: TGocciaObjectValue;
+begin
+  if AThisValue is TGocciaUndefinedLiteralValue then
+    Exit(TGocciaStringLiteralValue.Create('[object Undefined]'));
+  if AThisValue is TGocciaNullLiteralValue then
+    Exit(TGocciaStringLiteralValue.Create('[object Null]'));
+
+  if AThisValue is TGocciaObjectValue then
+  begin
+    Obj := TGocciaObjectValue(AThisValue);
+    SymbolTag := Obj.GetSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag);
+    if Assigned(SymbolTag) and (SymbolTag is TGocciaStringLiteralValue) then
+      Tag := TGocciaStringLiteralValue(SymbolTag).Value
+    else if AThisValue.IsCallable then
+      Tag := 'Function'
+    else
+      Tag := Obj.ToStringTag;
+  end
+  else if AThisValue is TGocciaBooleanLiteralValue then
+    Tag := CONSTRUCTOR_BOOLEAN
+  else if AThisValue is TGocciaNumberLiteralValue then
+    Tag := CONSTRUCTOR_NUMBER
+  else if AThisValue is TGocciaStringLiteralValue then
+    Tag := CONSTRUCTOR_STRING
+  else if AThisValue is TGocciaSymbolValue then
+    Tag := CONSTRUCTOR_SYMBOL
+  else
+    Tag := CONSTRUCTOR_OBJECT;
+
+  Result := TGocciaStringLiteralValue.Create('[object ' + Tag + ']');
+end;
+
+// ES2026 §20.1.3.2 Object.prototype.hasOwnProperty(V)
+function TGocciaObjectValue.ObjectPrototypeHasOwnProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Key: string;
+  Obj: TGocciaObjectValue;
+begin
+  // Step 1: Let P be ? ToPropertyKey(V)
+  if AArgs.Length = 0 then
+    Key := 'undefined'
+  else
+    Key := AArgs.GetElement(0).ToStringLiteral.Value;
+
+  // Step 2: Let O be ? ToObject(this value)
+  if AThisValue is TGocciaObjectValue then
+  begin
+    Obj := TGocciaObjectValue(AThisValue);
+    // Step 3: Return ? HasOwnProperty(O, P)
+    if Obj.HasOwnProperty(Key) then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+  end
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+// ES2026 §20.1.3.3 Object.prototype.isPrototypeOf(V)
+function TGocciaObjectValue.ObjectPrototypeIsPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  V, Current: TGocciaObjectValue;
+begin
+  // Step 1: If V is not an Object, return false
+  if (AArgs.Length = 0) or not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+
+  // Step 2: Let O be ? ToObject(this value)
+  if not (AThisValue is TGocciaObjectValue) then
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+
+  V := TGocciaObjectValue(AArgs.GetElement(0));
+  // Step 3: Repeat — walk V's prototype chain
+  Current := V.FPrototype;
+  while Assigned(Current) do
+  begin
+    // Step 3a: If SameValue(O, V.[[Prototype]]) is true, return true
+    if Current = AThisValue then
+      Exit(TGocciaBooleanLiteralValue.TrueValue);
+    Current := Current.FPrototype;
+  end;
+
+  Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+// ES2026 §20.1.3.4 Object.prototype.propertyIsEnumerable(V)
+function TGocciaObjectValue.ObjectPrototypePropertyIsEnumerable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Key: string;
+  Obj: TGocciaObjectValue;
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  // Step 1: Let P be ? ToPropertyKey(V)
+  if AArgs.Length = 0 then
+    Key := 'undefined'
+  else
+    Key := AArgs.GetElement(0).ToStringLiteral.Value;
+
+  // Step 2: Let O be ? ToObject(this value)
+  if not (AThisValue is TGocciaObjectValue) then
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+
+  Obj := TGocciaObjectValue(AThisValue);
+  // Step 3: Let desc be ? O.[[GetOwnProperty]](P)
+  Descriptor := Obj.GetOwnPropertyDescriptor(Key);
+  // Step 4: If desc is undefined, return false
+  if not Assigned(Descriptor) then
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+
+  // Step 5: Return desc.[[Enumerable]]
+  if Descriptor.Enumerable then
+    Result := TGocciaBooleanLiteralValue.TrueValue
+  else
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+// ES2026 §20.1.3.5 Object.prototype.toLocaleString()
+function TGocciaObjectValue.ObjectPrototypeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ToStringMethod: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  // Step 1: Let O be the this value
+  // Step 2: Return ? Invoke(O, "toString")
+  if AThisValue is TGocciaObjectValue then
+  begin
+    ToStringMethod := TGocciaObjectValue(AThisValue).GetProperty(PROP_TO_STRING);
+    if Assigned(ToStringMethod) and ToStringMethod.IsCallable then
+    begin
+      CallArgs := TGocciaArgumentsCollection.Create;
+      try
+        if ToStringMethod is TGocciaNativeFunctionValue then
+          Result := TGocciaNativeFunctionValue(ToStringMethod).Call(CallArgs, AThisValue)
+        else if ToStringMethod is TGocciaFunctionValue then
+          Result := TGocciaFunctionValue(ToStringMethod).Call(CallArgs, AThisValue)
+        else
+          Result := AThisValue.ToStringLiteral;
+      finally
+        CallArgs.Free;
+      end;
+    end
+    else
+      Result := AThisValue.ToStringLiteral;
+  end
+  else
+    Result := AThisValue.ToStringLiteral;
+end;
+
+// ES2026 §20.1.3.7 Object.prototype.valueOf()
+function TGocciaObjectValue.ObjectPrototypeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  // Step 1: Return ? ToObject(this value)
+  Result := AThisValue;
+end;
+
+class procedure TGocciaObjectValue.InitializeSharedPrototype;
+begin
+  if Assigned(FSharedObjectPrototype) then Exit;
+
+  FPrototypeMethodHost := TGocciaObjectValue.Create;
+  FSharedObjectPrototype := TGocciaObjectValue.Create;
+
+  FSharedObjectPrototype.RegisterNativeMethod(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FPrototypeMethodHost.ObjectPrototypeToString, PROP_TO_STRING, 0));
+  FSharedObjectPrototype.RegisterNativeMethod(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FPrototypeMethodHost.ObjectPrototypeHasOwnProperty, PROP_HAS_OWN_PROPERTY, 1));
+  FSharedObjectPrototype.RegisterNativeMethod(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FPrototypeMethodHost.ObjectPrototypeIsPrototypeOf, PROP_IS_PROTOTYPE_OF, 1));
+  FSharedObjectPrototype.RegisterNativeMethod(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FPrototypeMethodHost.ObjectPrototypePropertyIsEnumerable, PROP_PROPERTY_IS_ENUMERABLE, 1));
+  FSharedObjectPrototype.RegisterNativeMethod(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FPrototypeMethodHost.ObjectPrototypeToLocaleString, PROP_TO_LOCALE_STRING, 0));
+  FSharedObjectPrototype.RegisterNativeMethod(
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      FPrototypeMethodHost.ObjectPrototypeValueOf, PROP_VALUE_OF, 0));
+
+  if Assigned(TGocciaGarbageCollector.Instance) then
+  begin
+    TGocciaGarbageCollector.Instance.PinValue(FSharedObjectPrototype);
+    TGocciaGarbageCollector.Instance.PinValue(FPrototypeMethodHost);
+  end;
 end;
 
 destructor TGocciaObjectValue.Destroy;
@@ -253,12 +460,14 @@ begin
   Result := TGocciaNumberLiteralValue.NaNValue;
 end;
 
+// ES2026 §10.1.9 [[Set]](P, V, Receiver)
 procedure TGocciaObjectValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
   SetterFunction: TGocciaFunctionValue;
   NativeSetterFunction: TGocciaNativeFunctionValue;
   Args: TGocciaArgumentsCollection;
+  Proto: TGocciaObjectValue;
 begin
   if FFrozen then
     ThrowTypeError('Cannot assign to read only property ''' + AName + ''' of frozen object');
@@ -294,7 +503,7 @@ begin
           Exit;
         end;
       end;
-      ThrowTypeError('Cannot set property ''' + AName + ''' which has only a getter');
+      ThrowTypeError('Cannot set property ' + AName + ' of #<' + ToStringTag + '> which has only a getter');
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
     begin
@@ -306,6 +515,54 @@ begin
       end;
       ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
     end;
+  end;
+
+  // ES2026 §10.1.9 step 2-3: Walk prototype chain for inherited accessor descriptors
+  Proto := FPrototype;
+  while Assigned(Proto) do
+  begin
+    if Proto.FProperties.TryGetValue(AName, Descriptor) then
+    begin
+      if Descriptor is TGocciaPropertyDescriptorAccessor then
+      begin
+        if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
+        begin
+          if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionValue then
+          begin
+            SetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
+            Args := TGocciaArgumentsCollection.Create;
+            try
+              Args.Add(AValue);
+              SetterFunction.Call(Args, Self);
+            finally
+              Args.Free;
+            end;
+            Exit;
+          end
+          else if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaNativeFunctionValue then
+          begin
+            NativeSetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
+            Args := TGocciaArgumentsCollection.Create;
+            try
+              Args.Add(AValue);
+              NativeSetterFunction.Call(Args, Self);
+            finally
+              Args.Free;
+            end;
+            Exit;
+          end;
+        end;
+        // Getter-only accessor in prototype chain — strict mode TypeError
+        ThrowTypeError('Cannot set property ' + AName + ' of #<' + ToStringTag + '> which has only a getter');
+      end
+      else if Descriptor is TGocciaPropertyDescriptorData then
+      begin
+        if not TGocciaPropertyDescriptorData(Descriptor).Writable then
+          ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
+        Break;
+      end;
+    end;
+    Proto := Proto.FPrototype;
   end;
 
   if not ACanCreate then
@@ -560,7 +817,41 @@ begin
 end;
 
 procedure TGocciaObjectValue.AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Accessor: TGocciaPropertyDescriptorAccessor;
+  Args: TGocciaArgumentsCollection;
+  Current: TGocciaObjectValue;
 begin
+  Current := Self;
+  while Assigned(Current) do
+  begin
+    if Current.FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+    begin
+      if Descriptor is TGocciaPropertyDescriptorAccessor then
+      begin
+        Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
+        if Assigned(Accessor.Setter) then
+        begin
+          Args := TGocciaArgumentsCollection.Create;
+          try
+            Args.Add(AValue);
+            if Accessor.Setter is TGocciaNativeFunctionValue then
+              TGocciaNativeFunctionValue(Accessor.Setter).Call(Args, Self)
+            else if Accessor.Setter is TGocciaFunctionValue then
+              TGocciaFunctionValue(Accessor.Setter).Call(Args, Self);
+          finally
+            Args.Free;
+          end;
+          Exit;
+        end;
+        ThrowTypeError('Cannot set property which has only a getter');
+      end;
+      Break;
+    end;
+    Current := Current.FPrototype;
+  end;
+
   DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 

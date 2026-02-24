@@ -21,7 +21,8 @@ TGocciaGlobalBuiltin = (
   ggTestAssertions,   // describe, test, expect (testing only)
   ggBenchmark,        // suite, bench, runBenchmarks (benchmarking only)
   ggTemporal,         // Temporal namespace (dates, times, durations, instants)
-  ggJSX              // JSX transformer support
+  ggJSX,             // JSX transformer support
+  ggArrayBuffer      // ArrayBuffer constructor and prototype
 );
 ```
 
@@ -29,7 +30,8 @@ The default set used by `ScriptLoader` and `REPL`:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal, ggJSX];
+                  ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap,
+                  ggTemporal, ggJSX, ggArrayBuffer];
 ```
 
 The `TestRunner` adds `ggTestAssertions` to inject the test framework.
@@ -37,28 +39,7 @@ The `BenchmarkRunner` adds `ggBenchmark` to inject the benchmark framework.
 
 ## Adding a New Built-in
 
-To add a new built-in object:
-
-1. **Create a unit** — `units/Goccia.Builtins.YourBuiltin.pas`
-2. **Extend `TGocciaBuiltin`** — Implement the `Register` method.
-3. **Register methods** — Create a `TGocciaObjectValue` and attach `TGocciaNativeFunction` callbacks.
-4. **Add a flag** — Add to `TGocciaGlobalBuiltin` enum.
-5. **Register in Engine** — Add a `RegisterYourBuiltin` method to `TGocciaEngine`.
-6. **Write tests** — Add test files under `tests/built-ins/YourBuiltin/`.
-
-### Example: Implementing a Built-in Method
-
-```pascal
-function MathFloor(Args: TGocciaValueArray; ThisValue: TGocciaValue): TGocciaValue;
-var
-  Num: TGocciaNumberLiteralValue;
-begin
-  Num := Args[0].ToNumberLiteral;
-  if Num.IsSpecialValue then
-    Exit(Num);  // NaN, Infinity pass through
-  Result := TGocciaNumberLiteralValue.Create(Floor(Num.Value));
-end;
-```
+See [Adding a New Built-in Type](adding-built-in-types.md) for the complete step-by-step guide with code templates, GC considerations, and a checklist.
 
 ## Available Built-ins
 
@@ -184,6 +165,17 @@ The JSON parser is a recursive descent implementation. Special handling:
 | `Object.setPrototypeOf(obj, proto)` | Set the prototype of an object |
 | `Object.groupBy(iterable, callback)` | Group elements by callback return value |
 
+**Prototype methods (registered on `Object.prototype` in `Goccia.Engine.pas`):**
+
+| Method | Description |
+|--------|-------------|
+| `Object.prototype.toString()` | Returns `[object Tag]` where Tag is `Symbol.toStringTag` if present, or the built-in type tag (e.g. `Object`, `Array`, `Function`, `Set`, `Map`, `Promise`, `ArrayBuffer`). Handles primitives via `.call()`: `undefined` → `[object Undefined]`, `null` → `[object Null]`, booleans → `[object Boolean]`, numbers → `[object Number]`, strings → `[object String]`, symbols → `[object Symbol]`. |
+| `Object.prototype.hasOwnProperty(V)` | Returns `true` if the object has the named own property (not inherited). Property key is coerced to string. |
+| `Object.prototype.isPrototypeOf(V)` | Walks `V`'s prototype chain to check if `this` appears in it. Returns `false` for non-object arguments. |
+| `Object.prototype.propertyIsEnumerable(V)` | Returns `true` if the named own property exists and has the enumerable flag set. |
+| `Object.prototype.toLocaleString()` | Calls `this.toString()` and returns the result. |
+| `Object.prototype.valueOf()` | Returns `this` (identity for objects). |
+
 ### Array (`Goccia.Builtins.GlobalArray.pas`)
 
 **Static methods:**
@@ -215,6 +207,7 @@ The JSON parser is a recursive descent implementation. Special handling:
 | `lastIndexOf(value, fromIndex?)` | Find last index of value |
 | `includes(value, fromIndex?)` | Check if array contains value |
 | `join(separator?)` | Join elements into string |
+| `toString()` | Returns comma-separated string (delegates to `join()`) |
 | `concat(...arrays)` | Concatenate arrays |
 | `slice(start?, end?)` | Extract a section |
 | `push(...items)` | Add to end (mutating) |
@@ -324,11 +317,22 @@ A `const` global providing engine metadata:
 
 **Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `DOMException`
 
+**Prototype chain:** All error types follow the ES2026 prototype hierarchy. `TypeError.prototype`, `RangeError.prototype`, etc. inherit from `Error.prototype`. This means `new TypeError("msg") instanceof TypeError` is `true` AND `new TypeError("msg") instanceof Error` is `true`. Cross-type checks return `false` (e.g., `new TypeError("msg") instanceof RangeError` is `false`).
+
+**Runtime errors:** Errors thrown internally by the engine (e.g., `TypeError` from accessing a property on `null`/`undefined`, or `RangeError` from invalid `ArrayBuffer` length) have the same prototype chain as user-constructed errors. This means `instanceof` checks work correctly in catch blocks:
+
+```javascript
+try { null.x; } catch (e) {
+  e instanceof TypeError; // true
+  e instanceof Error;     // true
+}
+```
+
 **Static methods:**
 
 | Method | Description |
 |--------|-------------|
-| `Error.isError(arg)` | Returns `true` if `arg` is an Error instance (prototype chain includes `Error.prototype`), `false` otherwise (ES2026) |
+| `Error.isError(arg)` | Returns `true` if `arg` is an Error instance (has `[[ErrorData]]` internal slot), `false` otherwise (ES2026) |
 
 All error constructors accept an optional second argument `options` with a `cause` property. `AggregateError` takes `(errors, message, options?)` where `errors` is an array of error objects. `DOMException` takes `(message?, name?)` where `name` defaults to `"Error"` — the `code` property is automatically set from the legacy error code mapping (e.g., `"DataCloneError"` → 25).
 
@@ -339,8 +343,6 @@ ErrorName: message
     at functionName (filePath:line:col)
     at outerFunction (filePath:line:col)
 ```
-
-Runtime errors thrown by the engine (e.g., `TypeError` from accessing a property on `undefined`) also receive a `stack` property.
 
 ### Iterator (`Goccia.Values.IteratorValue.pas`, `Iterator.Concrete.pas`, `Iterator.Lazy.pas`, `Iterator.Generic.pas`)
 
@@ -689,6 +691,151 @@ Provides current time in various representations.
 | `Temporal.Now.plainTimeISO()` | Current time as PlainTime |
 | `Temporal.Now.plainDateTimeISO()` | Current date-time as PlainDateTime |
 
+### ArrayBuffer (`Goccia.Builtins.GlobalArrayBuffer.pas`, `Goccia.Values.ArrayBufferValue.pas`)
+
+A fixed-length raw binary data buffer. Internally backed by a zero-initialized `TBytes` array.
+
+**Constructor:**
+
+| Constructor | Description |
+|-------------|-------------|
+| `new ArrayBuffer(length)` | Create a buffer with the given byte length (must be a non-negative integer). Throws `RangeError` for negative, fractional, NaN, or Infinity values. |
+
+**Static methods:**
+
+| Method | Description |
+|--------|-------------|
+| `ArrayBuffer.isView(arg)` | Returns `true` if `arg` is a TypedArray, `false` otherwise |
+
+**Prototype properties:**
+
+| Property | Description |
+|----------|-------------|
+| `buf.byteLength` | The size, in bytes, of the ArrayBuffer (read-only getter) |
+| `buf[Symbol.toStringTag]` | `"ArrayBuffer"` |
+
+**Prototype methods:**
+
+| Method | Description |
+|--------|-------------|
+| `buf.slice(begin?, end?)` | Returns a new ArrayBuffer containing bytes from `begin` (inclusive) to `end` (exclusive). Supports negative indices (count from end). Clamps out-of-range indices. Defaults: `begin` = 0, `end` = `byteLength`. |
+
+**structuredClone:** ArrayBuffer instances are cloneable. The byte contents are copied into a new buffer.
+
+### SharedArrayBuffer (`Goccia.Values.SharedArrayBufferValue.pas`)
+
+A fixed-length raw binary data buffer intended for shared-memory use. In GocciaScript, `SharedArrayBuffer` has the same API as `ArrayBuffer` but is a distinct type (not an instance of `ArrayBuffer`). Both are gated behind the `ggArrayBuffer` flag.
+
+**Constructor:**
+
+| Constructor | Description |
+|-------------|-------------|
+| `new SharedArrayBuffer(length)` | Create a buffer with the given byte length (must be a non-negative integer). Throws `RangeError` for negative, fractional, NaN, or Infinity values. |
+
+**Prototype properties:**
+
+| Property | Description |
+|----------|-------------|
+| `sab.byteLength` | The size, in bytes, of the SharedArrayBuffer (read-only getter) |
+| `sab[Symbol.toStringTag]` | `"SharedArrayBuffer"` |
+
+**Prototype methods:**
+
+| Method | Description |
+|--------|-------------|
+| `sab.slice(begin?, end?)` | Returns a new SharedArrayBuffer containing bytes from `begin` (inclusive) to `end` (exclusive). Supports negative indices. Clamps out-of-range indices. |
+
+**structuredClone:** SharedArrayBuffer instances are cloneable. The byte contents are copied into a new buffer.
+
+### TypedArrays (`Goccia.Values.TypedArrayValue.pas`)
+
+TypedArrays provide array-like views over ArrayBuffer data with fixed element types. All TypedArray constructors are gated behind the `ggArrayBuffer` flag. GocciaScript supports 9 non-BigInt TypedArray types:
+
+| Type | Element size | Value range |
+|------|-------------|-------------|
+| `Int8Array` | 1 byte | -128 to 127 |
+| `Uint8Array` | 1 byte | 0 to 255 |
+| `Uint8ClampedArray` | 1 byte | 0 to 255 (clamped) |
+| `Int16Array` | 2 bytes | -32768 to 32767 |
+| `Uint16Array` | 2 bytes | 0 to 65535 |
+| `Int32Array` | 4 bytes | -2147483648 to 2147483647 |
+| `Uint32Array` | 4 bytes | 0 to 4294967295 |
+| `Float32Array` | 4 bytes | IEEE 754 single-precision |
+| `Float64Array` | 8 bytes | IEEE 754 double-precision |
+
+**Constructors:**
+
+| Constructor | Description |
+|-------------|-------------|
+| `new TypedArray()` | Zero-length typed array with its own buffer |
+| `new TypedArray(length)` | Creates array of `length` elements, zero-initialized |
+| `new TypedArray(typedArray)` | Copies elements from another typed array (with type conversion) |
+| `new TypedArray(array)` | Creates from a regular array |
+| `new TypedArray(buffer [, byteOffset [, length]])` | Creates a view over an ArrayBuffer |
+
+**Static properties:**
+
+| Property | Description |
+|----------|-------------|
+| `TypedArray.BYTES_PER_ELEMENT` | Element size in bytes |
+
+**Static methods:**
+
+| Method | Description |
+|--------|-------------|
+| `TypedArray.from(source [, mapFn])` | Creates from array or typed array, with optional mapping |
+| `TypedArray.of(...items)` | Creates from argument list |
+
+**Instance properties (getters):**
+
+| Property | Description |
+|----------|-------------|
+| `ta.buffer` | The underlying ArrayBuffer |
+| `ta.byteLength` | Total size in bytes |
+| `ta.byteOffset` | Offset into the buffer |
+| `ta.length` | Number of elements |
+| `ta.BYTES_PER_ELEMENT` | Element size in bytes |
+
+**Prototype methods:**
+
+| Method | Description |
+|--------|-------------|
+| `ta.at(index)` | Element at index (supports negative) |
+| `ta.fill(value [, start [, end]])` | Fill range with value |
+| `ta.copyWithin(target, start [, end])` | Copy elements within array |
+| `ta.slice(start?, end?)` | New typed array from slice |
+| `ta.subarray(begin?, end?)` | New view sharing the same buffer |
+| `ta.set(source [, offset])` | Copy from array/typed array into this |
+| `ta.reverse()` | Reverse in place |
+| `ta.sort([compareFn])` | Sort in place (numeric default) |
+| `ta.indexOf(value [, fromIndex])` | First index of value |
+| `ta.lastIndexOf(value [, fromIndex])` | Last index of value |
+| `ta.includes(value [, fromIndex])` | Whether value exists (SameValueZero) |
+| `ta.find(predicate)` | First element matching predicate |
+| `ta.findIndex(predicate)` | First index matching predicate |
+| `ta.findLast(predicate)` | Last element matching predicate |
+| `ta.findLastIndex(predicate)` | Last index matching predicate |
+| `ta.every(predicate)` | Whether all elements match |
+| `ta.some(predicate)` | Whether any element matches |
+| `ta.forEach(callback)` | Call function for each element |
+| `ta.map(callback)` | New typed array from mapping |
+| `ta.filter(predicate)` | New typed array from filter |
+| `ta.reduce(callback [, initialValue])` | Reduce left-to-right |
+| `ta.reduceRight(callback [, initialValue])` | Reduce right-to-left |
+| `ta.join(separator?)` | Join elements as string |
+| `ta.toString()` | Same as `join()` |
+| `ta.toReversed()` | New reversed copy |
+| `ta.toSorted([compareFn])` | New sorted copy |
+| `ta.with(index, value)` | New copy with one element replaced |
+| `ta.values()` | Iterator over values |
+| `ta.keys()` | Iterator over indices |
+| `ta.entries()` | Iterator over [index, value] pairs |
+| `ta[Symbol.iterator]()` | Same as `values()` |
+
+**Value encoding:** Integer types use fixed-width truncation (overflow wraps). `Uint8ClampedArray` clamps to [0, 255] with half-to-even rounding. `Float32Array` rounds to IEEE 754 single precision. `Float64Array` preserves full double precision. NaN is stored as 0 in integer types and as NaN in float types.
+
+**Not supported:** `BigInt64Array`, `BigUint64Array` (BigInt types), `DataView`.
+
 ### Test Assertions (`Goccia.Builtins.TestAssertions.pas`)
 
 Only available when `ggTestAssertions` is enabled.
@@ -714,6 +861,7 @@ describe("group name", () => {
 | `.toBeNull()` | Is null |
 | `.toBeNaN()` | Is NaN |
 | `.toBeUndefined()` | Is undefined |
+| `.toBeDefined()` | Is not undefined |
 | `.toBeTruthy()` | Truthy value |
 | `.toBeFalsy()` | Falsy value |
 | `.toBeGreaterThan(n)` | Greater than |

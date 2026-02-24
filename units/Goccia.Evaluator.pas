@@ -124,7 +124,8 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToPrimitive;
 
 // Helper function to safely call OnError with proper error handling
 procedure SafeOnError(const AContext: TGocciaEvaluationContext; const AMessage: string; const ALine, AColumn: Integer);
@@ -332,7 +333,9 @@ begin
     Obj := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(AExpression).ObjectExpr, AContext);
     PropertyValue := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(AExpression).PropertyExpression, AContext);
     Value := EvaluateExpression(TGocciaComputedPropertyAssignmentExpression(AExpression).Value, AContext);
-    if (PropertyValue is TGocciaSymbolValue) and (Obj is TGocciaObjectValue) then
+    if (PropertyValue is TGocciaSymbolValue) and (Obj is TGocciaClassValue) then
+      TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyValue), Value)
+    else if (PropertyValue is TGocciaSymbolValue) and (Obj is TGocciaObjectValue) then
       TGocciaObjectValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyValue), Value)
     else
     begin
@@ -945,8 +948,7 @@ begin
         Result := TGocciaClassValue(Callee).Call(Arguments, ThisValue)
       else
       begin
-        SafeOnError(AContext, Format('%s is not a function', [Callee.TypeName]), ACallExpression.Line, ACallExpression.Column);
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        ThrowTypeError(Format('%s is not a function', [Callee.TypeName]));
       end;
     finally
       if Assigned(TGocciaCallStack.Instance) then
@@ -1051,12 +1053,8 @@ begin
     if PropertyValue is TGocciaSymbolValue then
     begin
       if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
-      begin
-        AContext.OnError('Cannot read property ''Symbol()'' of ' + Obj.ToStringLiteral.Value,
-          AMemberExpression.Line, AMemberExpression.Column);
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Exit;
-      end;
+        ThrowTypeError('Cannot read properties of ' + Obj.ToStringLiteral.Value + ' (reading ''Symbol()'')');
+
       if Obj is TGocciaClassValue then
       begin
         Result := TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
@@ -1098,11 +1096,7 @@ begin
       Result := BoxedValue.GetProperty(PropertyName);
     end
     else if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
-    begin
-      AContext.OnError('Cannot read property ''' + PropertyName + ''' of ' + Obj.ToStringLiteral.Value,
-        AMemberExpression.Line, AMemberExpression.Column);
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end
+      ThrowTypeError('Cannot read properties of ' + Obj.ToStringLiteral.Value + ' (reading ''' + PropertyName + ''')')
     else
     begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1161,7 +1155,7 @@ var
   ExistingGetter: TGocciaValue;
   SymbolEntry: TPair<TGocciaSymbolValue, TGocciaValue>;
 begin
-  Obj := TGocciaObjectValue.Create;
+  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
 
   // Process all properties in source order
   for I := 0 to High(AObjectExpression.PropertySourceOrder) do
@@ -1684,6 +1678,10 @@ begin
     Result := CreateErrorObject(TYPE_ERROR_NAME, E.Message)
   else if E is TGocciaReferenceError then
     Result := CreateErrorObject(REFERENCE_ERROR_NAME, E.Message)
+  else if E is TGocciaSyntaxError then
+    Result := CreateErrorObject(SYNTAX_ERROR_NAME, E.Message)
+  else if E is TGocciaRuntimeError then
+    Result := CreateErrorObject(ERROR_NAME, E.Message)
   else
     Result := CreateErrorObject(ERROR_NAME, E.Message);
 end;
@@ -2189,6 +2187,45 @@ begin
         TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfConfigurable]))
     else
       ClassValue.AddStaticGetter(ComputedKey.ToStringLiteral.Value, GetterFunction);
+  end;
+
+  // Handle computed static setters
+  for I := 0 to Length(AClassDef.FComputedStaticSetters) - 1 do
+  begin
+    ComputedKey := EvaluateExpression(AClassDef.FComputedStaticSetters[I].KeyExpression, AContext);
+    SetterFunction := TGocciaFunctionValue(EvaluateSetter(AClassDef.FComputedStaticSetters[I].SetterExpression, AContext));
+    if ComputedKey is TGocciaSymbolValue then
+      ClassValue.DefineSymbolProperty(
+        TGocciaSymbolValue(ComputedKey),
+        TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfConfigurable]))
+    else
+      ClassValue.AddStaticSetter(ComputedKey.ToStringLiteral.Value, SetterFunction);
+  end;
+
+  // Handle computed instance getters (e.g., get [Symbol.toStringTag]())
+  for I := 0 to Length(AClassDef.FComputedInstanceGetters) - 1 do
+  begin
+    ComputedKey := EvaluateExpression(AClassDef.FComputedInstanceGetters[I].KeyExpression, AContext);
+    GetterFunction := TGocciaFunctionValue(EvaluateGetter(AClassDef.FComputedInstanceGetters[I].GetterExpression, AContext));
+    if ComputedKey is TGocciaSymbolValue then
+      ClassValue.Prototype.DefineSymbolProperty(
+        TGocciaSymbolValue(ComputedKey),
+        TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfConfigurable]))
+    else
+      ClassValue.AddGetter(ComputedKey.ToStringLiteral.Value, GetterFunction);
+  end;
+
+  // Handle computed instance setters
+  for I := 0 to Length(AClassDef.FComputedInstanceSetters) - 1 do
+  begin
+    ComputedKey := EvaluateExpression(AClassDef.FComputedInstanceSetters[I].KeyExpression, AContext);
+    SetterFunction := TGocciaFunctionValue(EvaluateSetter(AClassDef.FComputedInstanceSetters[I].SetterExpression, AContext));
+    if ComputedKey is TGocciaSymbolValue then
+      ClassValue.Prototype.DefineSymbolProperty(
+        TGocciaSymbolValue(ComputedKey),
+        TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfConfigurable]))
+    else
+      ClassValue.AddSetter(ComputedKey.ToStringLiteral.Value, SetterFunction);
   end;
 
   // TC39 proposal-decorators §3.1 ClassDefinitionEvaluation — auto-accessor setup
@@ -2823,7 +2860,8 @@ begin
           begin
             if ExpressionValue is TGocciaSymbolValue then
               ThrowTypeError('Cannot convert a Symbol value to a string');
-            SB.Append(ExpressionValue.ToStringLiteral.Value);
+            // ES2026 §13.15.5.1 step 5e: ToString(value) on each substitution
+            SB.Append(ToECMAString(ExpressionValue).Value);
           end
           else
             SB.Append('undefined');

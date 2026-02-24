@@ -7,87 +7,98 @@ interface
 uses
   Goccia.Values.Primitives;
 
-{ ECMAScript Abstract Operation: ToPrimitive
-  Converts a value to a primitive type. If the value is already a primitive,
-  it is returned as-is. For objects, the operation tries valueOf() first,
-  then toString(). If neither returns a primitive, falls back to the default
-  ToStringLiteral conversion.
+type
+  TGocciaToPrimitiveHint = (tphDefault, tphNumber, tphString);
 
-  This is a spec-level operation used by:
-  - The addition operator (+)
-  - Relational comparison operators (<, >, <=, >=)
-  - Abstract equality (not used in GocciaScript since only === is supported)
-  - Template literal interpolation }
-function ToPrimitive(const AValue: TGocciaValue): TGocciaValue;
+// ES2026 §7.1.1 ToPrimitive(input [, preferredType])
+function ToPrimitive(const AValue: TGocciaValue; const AHint: TGocciaToPrimitiveHint = tphDefault): TGocciaValue;
+
+// ES2026 §7.1.17 ToString(argument)
+function ToECMAString(const AValue: TGocciaValue): TGocciaStringLiteralValue;
 
 implementation
 
 uses
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue;
 
-function ToPrimitive(const AValue: TGocciaValue): TGocciaValue;
+function TryCallMethod(const AObj: TGocciaObjectValue; const AMethodName: string; const AThisValue: TGocciaValue; out AResult: TGocciaValue): Boolean;
 var
-  Obj: TGocciaObjectValue;
-  Method, CallResult: TGocciaValue;
+  Method: TGocciaValue;
   Args: TGocciaArgumentsCollection;
 begin
-  // Primitives return as-is (single VMT call instead of 5 `is` checks)
+  Result := False;
+  Method := AObj.GetProperty(AMethodName);
+  if Assigned(Method) and Method.IsCallable then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue);
+      Result := AResult.IsPrimitive;
+    finally
+      Args.Free;
+    end;
+  end;
+end;
+
+// ES2026 §7.1.1 ToPrimitive(input [, preferredType])
+function ToPrimitive(const AValue: TGocciaValue; const AHint: TGocciaToPrimitiveHint = tphDefault): TGocciaValue;
+var
+  Obj: TGocciaObjectValue;
+begin
   if AValue.IsPrimitive then
   begin
     Result := AValue;
     Exit;
   end;
 
-  // Objects: try valueOf first, then toString (default hint = "default"/"number")
   if AValue is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(AValue);
 
-    // Try valueOf()
-    Method := Obj.GetProperty(PROP_VALUE_OF);
-    if Assigned(Method) and Method.IsCallable then
+    if AHint = tphString then
     begin
-      Args := TGocciaArgumentsCollection.Create;
-      try
-        CallResult := TGocciaFunctionBase(Method).Call(Args, AValue);
-        // If valueOf returned a primitive, use it
-        if CallResult.IsPrimitive then
-        begin
-          Result := CallResult;
-          Exit;
-        end;
-      finally
-        Args.Free;
-      end;
+      // String hint: toString() first, then valueOf()
+      if TryCallMethod(Obj, PROP_TO_STRING, AValue, Result) then Exit;
+      if TryCallMethod(Obj, PROP_VALUE_OF, AValue, Result) then Exit;
+    end
+    else
+    begin
+      // Default/number hint: valueOf() first, then toString()
+      if TryCallMethod(Obj, PROP_VALUE_OF, AValue, Result) then Exit;
+      if TryCallMethod(Obj, PROP_TO_STRING, AValue, Result) then Exit;
     end;
 
-    // Try toString()
-    Method := Obj.GetProperty(PROP_TO_STRING);
-    if Assigned(Method) and Method.IsCallable then
-    begin
-      Args := TGocciaArgumentsCollection.Create;
-      try
-        CallResult := TGocciaFunctionBase(Method).Call(Args, AValue);
-        if CallResult.IsPrimitive then
-        begin
-          Result := CallResult;
-          Exit;
-        end;
-      finally
-        Args.Free;
-      end;
-    end;
+    // ES2026 §7.1.1 step 3e: Throw TypeError if no method returned a primitive
+    ThrowTypeError('Cannot convert object to primitive value');
+  end;
 
-    // Neither valueOf nor toString returned a primitive — use default
+  Result := AValue;
+end;
+
+// ES2026 §7.1.17 ToString(argument)
+function ToECMAString(const AValue: TGocciaValue): TGocciaStringLiteralValue;
+var
+  Prim: TGocciaValue;
+begin
+  if AValue is TGocciaStringLiteralValue then
+  begin
+    Result := TGocciaStringLiteralValue(AValue);
+    Exit;
+  end;
+
+  if AValue.IsPrimitive then
+  begin
     Result := AValue.ToStringLiteral;
     Exit;
   end;
 
-  // Fallback for any other value type
-  Result := AValue;
+  // ES2026 §7.1.17 step 1: ToPrimitive(argument, string)
+  Prim := ToPrimitive(AValue, tphString);
+  Result := Prim.ToStringLiteral;
 end;
 
 end.

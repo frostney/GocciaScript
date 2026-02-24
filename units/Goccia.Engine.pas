@@ -12,6 +12,7 @@ uses
   Goccia.Builtins.Benchmark,
   Goccia.Builtins.Console,
   Goccia.Builtins.GlobalArray,
+  Goccia.Builtins.GlobalArrayBuffer,
   Goccia.Builtins.GlobalMap,
   Goccia.Builtins.GlobalNumber,
   Goccia.Builtins.GlobalObject,
@@ -29,8 +30,10 @@ uses
   Goccia.Modules,
   Goccia.Modules.Resolver,
   Goccia.Parser,
+  Goccia.Values.ClassValue,
   Goccia.Values.IteratorValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.Values.TypedArrayValue;
 
 type
   TGocciaGlobalBuiltin = (
@@ -47,7 +50,8 @@ type
     ggTestAssertions,
     ggBenchmark,
     ggTemporal,
-    ggJSX
+    ggJSX,
+    ggArrayBuffer
   );
 
   TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
@@ -64,7 +68,7 @@ type
 type
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal, ggJSX];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal, ggJSX, ggArrayBuffer];
   private
     FInterpreter: TGocciaInterpreter;
     FResolver: TGocciaModuleResolver;
@@ -89,11 +93,13 @@ type
     FBuiltinTestAssertions: TGocciaTestAssertions;
     FBuiltinBenchmark: TGocciaBenchmark;
     FBuiltinTemporal: TGocciaTemporalBuiltin;
+    FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
     FSuppressWarnings: Boolean;
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
     procedure RegisterBuiltinConstructors;
+    procedure RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
     procedure RegisterGlobalThis;
     procedure RegisterGocciaScriptGlobal;
     function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -133,6 +139,7 @@ type
     property BuiltinTestAssertions: TGocciaTestAssertions read FBuiltinTestAssertions;
     property BuiltinBenchmark: TGocciaBenchmark read FBuiltinBenchmark;
     property BuiltinTemporal: TGocciaTemporalBuiltin read FBuiltinTemporal;
+    property BuiltinArrayBuffer: TGocciaGlobalArrayBuffer read FBuiltinArrayBuffer;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
   end;
 
@@ -156,15 +163,16 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.Scope,
   Goccia.Token,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
-  Goccia.Values.ClassValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.SetValue,
+  Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.StringObjectValue,
   Goccia.Values.SymbolValue,
   Goccia.Version;
@@ -225,6 +233,7 @@ begin
   FBuiltinTestAssertions.Free;
   FBuiltinBenchmark.Free;
   FBuiltinTemporal.Free;
+  FBuiltinArrayBuffer.Free;
 
   FInterpreter.Free;
   if FOwnsResolver then
@@ -289,6 +298,8 @@ begin
     FBuiltinBenchmark := TGocciaBenchmark.Create('Benchmark', Scope, ThrowError);
   if ggTemporal in FGlobals then
     FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
+  if ggArrayBuffer in FGlobals then
+    FBuiltinArrayBuffer := TGocciaGlobalArrayBuffer.Create(CONSTRUCTOR_ARRAY_BUFFER, Scope, ThrowError);
 
   // Always-registered built-ins
   FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, ThrowError);
@@ -303,12 +314,17 @@ var
   ArrayConstructor: TGocciaArrayClassValue;
   MapConstructor: TGocciaMapClassValue;
   SetConstructor: TGocciaSetClassValue;
+  ArrayBufferConstructor: TGocciaArrayBufferClassValue;
+  SharedArrayBufferConstructor: TGocciaSharedArrayBufferClassValue;
   StringConstructor: TGocciaStringClassValue;
   NumberConstructor: TGocciaNumberClassValue;
   BooleanConstructor: TGocciaBooleanClassValue;
   Key: string;
 begin
+  TGocciaObjectValue.InitializeSharedPrototype;
   ObjectConstructor := TGocciaClassValue.Create(CONSTRUCTOR_OBJECT, nil);
+  ObjectConstructor.ReplacePrototype(TGocciaObjectValue.SharedObjectPrototype);
+  TGocciaObjectValue.SharedObjectPrototype.AssignProperty(PROP_CONSTRUCTOR, ObjectConstructor);
   if Assigned(FBuiltinGlobalObject) then
     for Key in FBuiltinGlobalObject.BuiltinObject.GetAllPropertyNames do
       ObjectConstructor.SetProperty(Key, FBuiltinGlobalObject.BuiltinObject.GetProperty(Key));
@@ -356,6 +372,32 @@ begin
     FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SET, SetConstructor, dtConst);
   end;
 
+  if ggArrayBuffer in FGlobals then
+  begin
+    ArrayBufferConstructor := TGocciaArrayBufferClassValue.Create(CONSTRUCTOR_ARRAY_BUFFER, nil);
+    TGocciaArrayBufferValue.ExposePrototype(ArrayBufferConstructor);
+    ArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    if Assigned(FBuiltinArrayBuffer) then
+      for Key in FBuiltinArrayBuffer.BuiltinObject.GetAllPropertyNames do
+        ArrayBufferConstructor.SetProperty(Key, FBuiltinArrayBuffer.BuiltinObject.GetProperty(Key));
+    FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY_BUFFER, ArrayBufferConstructor, dtConst);
+
+    SharedArrayBufferConstructor := TGocciaSharedArrayBufferClassValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER, nil);
+    TGocciaSharedArrayBufferValue.ExposePrototype(SharedArrayBufferConstructor);
+    SharedArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst);
+
+    RegisterTypedArrayConstructor(CONSTRUCTOR_INT8_ARRAY, takInt8, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_ARRAY, takUint8, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_CLAMPED_ARRAY, takUint8Clamped, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_INT16_ARRAY, takInt16, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT16_ARRAY, takUint16, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_INT32_ARRAY, takInt32, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT32_ARRAY, takUint32, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT32_ARRAY, takFloat32, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT64_ARRAY, takFloat64, ObjectConstructor);
+  end;
+
   StringConstructor := TGocciaStringClassValue.Create(CONSTRUCTOR_STRING, nil);
   StringConstructor.ReplacePrototype(TGocciaStringObjectValue.GetSharedPrototype);
   StringConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, StringConstructor);
@@ -385,6 +427,29 @@ begin
 
   RegisterGocciaScriptGlobal;
   RegisterGlobalThis;
+end;
+
+procedure TGocciaEngine.RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
+var
+  TAConstructor: TGocciaTypedArrayClassValue;
+  BPE: TGocciaNumberLiteralValue;
+  FromFn, OfFn: TGocciaTypedArrayStaticFrom;
+begin
+  TAConstructor := TGocciaTypedArrayClassValue.Create(AName, nil, AKind);
+  TGocciaTypedArrayValue.ExposePrototype(TAConstructor);
+  TAConstructor.Prototype.Prototype := AObjectConstructor.Prototype;
+  BPE := TGocciaNumberLiteralValue.Create(TGocciaTypedArrayValue.BytesPerElement(AKind));
+  TAConstructor.SetProperty(PROP_BYTES_PER_ELEMENT, BPE);
+  TAConstructor.Prototype.AssignProperty(PROP_BYTES_PER_ELEMENT, BPE);
+
+  FromFn := TGocciaTypedArrayStaticFrom.Create(AKind);
+  TAConstructor.SetProperty('from',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(FromFn.TypedArrayFrom, 'from', 1));
+  OfFn := TGocciaTypedArrayStaticFrom.Create(AKind);
+  TAConstructor.SetProperty('of',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(OfFn.TypedArrayOf, 'of', 0));
+
+  FInterpreter.GlobalScope.DefineLexicalBinding(AName, TAConstructor, dtConst);
 end;
 
 procedure TGocciaEngine.RegisterGlobalThis;

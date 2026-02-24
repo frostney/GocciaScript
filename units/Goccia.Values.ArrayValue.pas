@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.Values.ClassValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -34,6 +35,7 @@ type
     function ArrayFlatMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     function ArrayJoin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ArrayToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayIncludes(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     function ArrayPush(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -90,6 +92,8 @@ type
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
+    function HasOwnProperty(const AName: string): Boolean; override;
+    function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
     function Includes(const AValue: TGocciaValue; AFromIndex: Integer = 0): Boolean;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
@@ -121,8 +125,8 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.ToPrimitive;
 
 function DefaultCompare(constref A, B: TGocciaValue): Integer;
 var
@@ -265,6 +269,7 @@ begin
   FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFlat, 'flat', 1));
   FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayFlatMap, 'flatMap', 1));
   FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayJoin, 'join', 1));
+  FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayToString, PROP_TO_STRING, 0));
   FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayIncludes, 'includes', 1));
   FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayPush, 'push', 1));
   FSharedArrayPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ArrayPop, 'pop', 0));
@@ -650,11 +655,25 @@ begin
        (Arr.Elements[I] is TGocciaNullLiteralValue) then
       Continue
     else
-      ResultString := ResultString + Arr.Elements[I].ToStringLiteral.Value;
+      // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
+      ResultString := ResultString + ToECMAString(Arr.Elements[I]).Value;
   end;
 
   // Step 9: Return R
   Result := TGocciaStringLiteralValue.Create(ResultString);
+end;
+
+// ES2026 §23.1.3.35 Array.prototype.toString()
+function TGocciaArrayValue.ArrayToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  EmptyArgs: TGocciaArgumentsCollection;
+begin
+  EmptyArgs := TGocciaArgumentsCollection.Create([]);
+  try
+    Result := ArrayJoin(EmptyArgs, AThisValue);
+  finally
+    EmptyArgs.Free;
+  end;
 end;
 
 // ES2026 §23.1.3.14 Array.prototype.includes(searchElement [, fromIndex])
@@ -1680,6 +1699,30 @@ begin
     // Fall back to regular object property assignment
     inherited AssignProperty(AName, AValue);
   end;
+end;
+
+function TGocciaArrayValue.HasOwnProperty(const AName: string): Boolean;
+var
+  Index: Integer;
+begin
+  if TryStrToInt(AName, Index) and (Index >= 0) and (Index < FElements.Count) then
+    Result := True
+  else if AName = PROP_LENGTH then
+    Result := True
+  else
+    Result := inherited HasOwnProperty(AName);
+end;
+
+function TGocciaArrayValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
+var
+  Index: Integer;
+begin
+  if TryStrToInt(AName, Index) and (Index >= 0) and (Index < FElements.Count) then
+    Result := TGocciaPropertyDescriptorData.Create(FElements[Index], [pfEnumerable, pfConfigurable, pfWritable])
+  else if AName = PROP_LENGTH then
+    Result := TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(FElements.Count), [pfWritable])
+  else
+    Result := inherited GetOwnPropertyDescriptor(AName);
 end;
 
 // ES2026 §23.1.3.29 Array.prototype.sort(comparefn)

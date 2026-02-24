@@ -18,6 +18,12 @@ tests/
 │   │       ├── sort.js, splice.js, shift-unshift.js, fill.js, at.js
 │   │       ├── includes.js, concat.js, reverse.js
 │   │       └── ...
+│   ├── ArrayBuffer/        # ArrayBuffer constructor, static/prototype methods
+│   │   ├── constructor.js, isView.js, toString-tag.js
+│   │   └── prototype/
+│   │       └── slice.js
+│   ├── constructors/       # Built-in constructor validation
+│   │   └── require-new.js  # Verifies constructors require `new`
 │   ├── Error/
 │   ├── JSON/
 │   ├── Map/
@@ -25,12 +31,15 @@ tests/
 │   ├── Number/             # Number methods and constants
 │   │   ├── parseInt.js, parseFloat.js, isNaN.js, isFinite.js, isInteger.js
 │   │   └── constants.js    # MAX_SAFE_INTEGER, EPSILON, isSafeInteger, etc.
-│   ├── Object/             # Object static methods
+│   ├── Object/             # Object static and prototype methods
 │   │   ├── keys.js, values.js, entries.js, assign.js, create.js, is.js
 │   │   ├── defineProperty.js, defineProperties.js, getOwnPropertyDescriptor.js
 │   │   ├── freeze.js       # Object.freeze, Object.isFrozen
-│   │   ├── getPrototypeOf.js
-│   │   ├── fromEntries.js
+│   │   ├── getPrototypeOf.js, setPrototypeOf.js
+│   │   ├── fromEntries.js, groupBy.js
+│   │   ├── prototype/      # Object.prototype instance methods
+│   │   │   ├── toString.js, hasOwnProperty.js, isPrototypeOf.js
+│   │   │   ├── propertyIsEnumerable.js, toLocaleString.js, valueOf.js
 │   │   └── ...
 │   ├── Promise/             # Promise constructor, static methods, microtask ordering
 │   │   ├── constructor.js, resolve.js, reject.js
@@ -39,9 +48,26 @@ tests/
 │   │   └── prototype/
 │   │       ├── then.js, catch.js, finally.js
 │   ├── Set/
+│   ├── SharedArrayBuffer/  # SharedArrayBuffer constructor, prototype methods
+│   │   ├── constructor.js, toString-tag.js
+│   │   └── prototype/
+│   │       └── slice.js
 │   ├── String/
 │   │   └── prototype/
-│   └── Symbol/
+│   ├── structuredClone/    # structuredClone tests (primitives, objects, collections, errors, arraybuffer)
+│   ├── Symbol/
+│   └── TypedArray/         # TypedArray constructors, prototype methods
+│       ├── constructors.js, element-access.js, buffer-sharing.js
+│       ├── from.js, of.js  # Static methods at top level
+│       └── prototype/      # Instance methods (one file per method, edge cases included)
+│           ├── fill.js, map.js, filter.js, reduce.js, reduceRight.js
+│           ├── indexOf.js, lastIndexOf.js, includes.js
+│           ├── find.js, findIndex.js, findLast.js, findLastIndex.js
+│           ├── sort.js, reverse.js, slice.js, subarray.js
+│           ├── set.js, copyWithin.js, at.js, with.js
+│           ├── every.js, some.js, forEach.js, join.js
+│           ├── toReversed.js, toSorted.js
+│           └── values.js, keys.js, entries.js
 │
 └── language/               # Core language feature tests
     ├── classes/            # Class declarations, inheritance, private fields/methods/getters/setters
@@ -65,6 +91,72 @@ tests/
     │   ├── try-catch/      # Try-catch-finally edge cases
     │   └── unsupported-features.js  # Verifies parser skip for for/while/do-while/var/with
     └── unary-operators.js
+```
+
+### File Naming and Layout Conventions
+
+Follow these rules when creating or organizing test files:
+
+**1. One method per file** — Each built-in method or static function gets its own test file. Never bundle multiple methods into a single file like `prototype-methods.js` or `static-methods.js`.
+
+```
+# Correct — each method is its own file
+tests/built-ins/TypedArray/prototype/fill.js
+tests/built-ins/TypedArray/prototype/map.js
+tests/built-ins/TypedArray/prototype/indexOf.js
+
+# Wrong — multiple methods in one file
+tests/built-ins/TypedArray/prototype-methods.js
+```
+
+**2. Prototype methods go in a `prototype/` subfolder** — Instance methods (e.g., `Array.prototype.map`) live in `BuiltIn/prototype/methodName.js`. Static methods and constructor tests live directly in the `BuiltIn/` folder (no separate `static/` subfolder).
+
+```
+tests/built-ins/TypedArray/
+├── constructors.js              # new TypedArray(...) constructor variants
+├── buffer-sharing.js            # Buffer sharing behavior across views
+├── from.js, of.js               # Static methods at top level
+└── prototype/                   # Instance methods
+    ├── at.js
+    ├── fill.js
+    ├── indexOf.js
+    ├── map.js
+    └── ...
+```
+
+**3. Edge cases are co-located, not separate** — Edge cases (NaN handling, Infinity, negative indices, empty arrays, clamping, etc.) belong **in the same file** as the happy-path tests for that method. Do **not** create standalone `edge-cases.js` files — they become disconnected from the feature they test and make it unclear which method the edge case validates.
+
+```javascript
+// tests/built-ins/TypedArray/prototype/fill.js — CORRECT
+describe("TypedArray.prototype.fill", () => {
+  test("fills entire array", () => { ... });
+  test("fills with start and end", () => { ... });
+
+  // Edge cases are part of the same file
+  test("negative start index counts from end", () => { ... });
+  test("NaN fill value becomes 0 for integer types", () => { ... });
+  test("Infinity clamps to 255 for Uint8ClampedArray", () => { ... });
+});
+```
+
+```
+# Wrong — edge cases in a separate catch-all file
+tests/built-ins/TypedArray/edge-cases.js
+```
+
+**4. Object prototype methods use `prototype/` too** — `Object.prototype.toString`, `Object.prototype.hasOwnProperty`, etc. follow the same convention as Array. Use `Object/prototype/toString.js`, not `Object/prototype-toString.js`.
+
+```
+tests/built-ins/Object/
+├── keys.js                      # Object.keys (static method)
+├── assign.js                    # Object.assign (static method)
+├── prototype/                   # Instance methods on Object.prototype
+│   ├── toString.js
+│   ├── hasOwnProperty.js
+│   ├── isPrototypeOf.js
+│   ├── propertyIsEnumerable.js
+│   ├── toLocaleString.js
+│   └── valueOf.js
 ```
 
 ## Running Tests
@@ -171,6 +263,7 @@ expect(value).toEqual(expected);        // Deep equality
 expect(value).toBeNull();
 expect(value).toBeNaN();
 expect(value).toBeUndefined();
+expect(value).toBeDefined();
 expect(value).toBeTruthy();
 expect(value).toBeFalsy();
 
@@ -398,11 +491,11 @@ expect([...set.values()]).toEqual([1, 2, 3]);
 
 2. **Isolation** — Each test file is independent. No shared state between files. The TestRunner executes each file in a fresh engine instance.
 
-3. **Grouped by feature** — Tests are organized by the feature they validate, mirroring the structure of the language specification.
+3. **Grouped by feature** — Tests are organized by the feature they validate, mirroring the structure of the language specification. Prototype methods live in `prototype/` subfolders; static methods live in the built-in's root folder.
 
-4. **One concern per file** — Each test file focuses on a single method, operation, or language feature. `array-creation.js` tests array creation; `map.js` tests `Array.prototype.map`.
+4. **One method per file** — Each test file focuses on a single method, operation, or language feature. `fill.js` tests `TypedArray.prototype.fill`; `map.js` tests `Array.prototype.map`. Never bundle multiple methods into a single file.
 
-5. **Edge cases matter** — Tests should cover `NaN`, `undefined`, `null`, empty arrays, negative numbers, boundary conditions, and type coercion scenarios.
+5. **Edge cases are co-located** — Edge cases (NaN, Infinity, negative indices, empty collections, clamping, boundary conditions, type coercion) belong **in the same file** as the happy-path tests for that method. Do not create separate `edge-cases.js` files — they become disconnected from the feature they validate and make it unclear which method they test.
 
 6. **Readable as specification** — Test names should describe the expected behavior. A passing test suite serves as living documentation of what GocciaScript supports.
 
@@ -441,7 +534,7 @@ Pascal unit tests are a secondary testing layer for low-level value system inter
 | `Goccia.Values.Primitives.Test.pas` | Primitive value creation, type conversion (`ToStringLiteral`, `ToBooleanLiteral`, `ToNumberLiteral`, `TypeName`, `TypeOf`) |
 | `Goccia.Values.FunctionValue.Test.pas` | Function/method creation, closure capture, parameter handling, scope resolution, AST evaluation |
 | `Goccia.Values.ObjectValue.Test.pas` | Object property operations (`AssignProperty`, `GetProperty`, `DeleteProperty`), prototype chain resolution |
-| `Goccia.Builtins.TestAssertions.Test.pas` | All `TGocciaExpectationValue` matchers (`toBe`, `toEqual`, `toBeNull`, `toBeNaN`, `toBeUndefined`, `toBeTruthy`, `toBeFalsy`, `toBeGreaterThan`, `toBeLessThan`, `toContain`, `toHaveLength`, `toHaveProperty`, `toBeCloseTo`, `not`); skip and conditional APIs (`describe.skip`, `describe.skipIf`, `describe.runIf`, `test.skipIf`, `test.runIf`) |
+| `Goccia.Builtins.TestAssertions.Test.pas` | All `TGocciaExpectationValue` matchers (`toBe`, `toEqual`, `toBeNull`, `toBeNaN`, `toBeUndefined`, `toBeDefined`, `toBeTruthy`, `toBeFalsy`, `toBeGreaterThan`, `toBeLessThan`, `toContain`, `toHaveLength`, `toHaveProperty`, `toBeCloseTo`, `not`); skip and conditional APIs (`describe.skip`, `describe.skipIf`, `describe.runIf`, `test.skipIf`, `test.runIf`) |
 
 These compile as standalone executables and run directly:
 

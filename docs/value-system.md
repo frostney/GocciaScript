@@ -35,6 +35,9 @@ classDiagram
     TGocciaIteratorValue <|-- TGocciaLazyDropIteratorValue
     TGocciaIteratorValue <|-- TGocciaLazyFlatMapIteratorValue
     TGocciaIteratorValue <|-- TGocciaGenericIteratorValue
+    TGocciaObjectValue <|-- TGocciaArrayBufferValue
+    TGocciaObjectValue <|-- TGocciaSharedArrayBufferValue
+    TGocciaObjectValue <|-- TGocciaTypedArrayValue
     TGocciaObjectValue <|-- TGocciaNumberObjectValue
     TGocciaObjectValue <|-- TGocciaStringObjectValue
     TGocciaObjectValue <|-- TGocciaBooleanObjectValue
@@ -82,6 +85,15 @@ classDiagram
     }
     class TGocciaNativeFunction {
         Built-in Pascal functions
+    }
+    class TGocciaArrayBufferValue {
+        Fixed-length binary data buffer
+    }
+    class TGocciaSharedArrayBufferValue {
+        Shared-memory binary data buffer
+    }
+    class TGocciaTypedArrayValue {
+        Typed view over ArrayBuffer
     }
     class TGocciaError {
         Error objects
@@ -555,6 +567,43 @@ Created by `enum` declarations (TC39 proposal-enum). Extend `TGocciaObjectValue`
 - **Value type restriction** — member values must be Number, String, or Symbol; other types throw `TypeError` during evaluation
 
 Self-references in initializers are supported via a child scope that binds each member name as it is evaluated, plus the enum object itself under the enum name.
+
+## ArrayBuffer
+
+`TGocciaArrayBufferValue` extends `TGocciaObjectValue` (`Goccia.Values.ArrayBufferValue.pas`). A fixed-length raw binary data buffer backed by a zero-initialized `TBytes` array.
+
+- **Internal storage** — `FData: TBytes` holds the raw bytes. `FByteLength: Integer` tracks the buffer size.
+- **Shared prototype singleton** — All ArrayBuffer instances share a single class-level prototype (`FShared: TGocciaSharedPrototype`). Methods (`slice`) and accessors (`byteLength`) are registered once during `InitializePrototype` and pinned with the GC.
+- **`Symbol.toStringTag`** — `"ArrayBuffer"`, registered on the prototype.
+- **`slice(begin?, end?)`** — Returns a new ArrayBuffer containing a byte range copy. Supports negative indices (resolved relative to `byteLength`), out-of-range clamping, and defaults (`begin` = 0, `end` = `byteLength`).
+- **`GCMarked` integration** — `MarkReferences` calls `inherited` (no `TGocciaValue` references to mark — only holds `TBytes`).
+- **structuredClone** — Byte contents are copied into a new buffer.
+
+## SharedArrayBuffer
+
+`TGocciaSharedArrayBufferValue` extends `TGocciaObjectValue` (`Goccia.Values.SharedArrayBufferValue.pas`). Same API as ArrayBuffer but a distinct type — `SharedArrayBuffer` instances are not instances of `ArrayBuffer` and vice versa.
+
+- **Internal storage** — Same `TBytes`-backed design as ArrayBuffer.
+- **Shared prototype singleton** — Separate from ArrayBuffer's prototype. `Symbol.toStringTag` is `"SharedArrayBuffer"`.
+- **`slice(begin?, end?)`** — Returns a new SharedArrayBuffer (not ArrayBuffer).
+- **structuredClone** — Byte contents are copied into a new buffer.
+
+## TypedArray
+
+`TGocciaTypedArrayValue` extends `TGocciaInstanceValue` (`Goccia.Values.TypedArrayValue.pas`). Provides array-like views over ArrayBuffer data with fixed element types. Nine non-BigInt types are supported: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`.
+
+- **Internal storage** — `FBuffer: TGocciaArrayBufferValue` (the underlying buffer), `FByteOffset: Integer`, `FLength: Integer`, `FKind: TGocciaTypedArrayKind`.
+- **Shared prototype singleton** — All TypedArray instances (regardless of kind) share a single prototype (`FShared: TGocciaSharedPrototype`). Prototype methods are registered once during `InitializePrototype`.
+- **Element access** — `ReadElement(index): Double` reads raw bytes from the buffer and converts to `Double`. `WriteElement(index, value)` converts from `Double` to the target element type with overflow wrapping (integer types) or clamping (`Uint8ClampedArray`).
+- **`WriteNumberLiteral(index, num)`** — Handles `TGocciaNumberLiteralValue` special values (`NaN`, `Infinity`, `-Infinity`) correctly: NaN → 0 for integer types, NaN for float types; Infinity → 255 for `Uint8ClampedArray`, 0 for other integer types; raw IEEE 754 bytes for float types via `WriteFloatSpecial`. All write sites (property assignment, `fill`, `set`, `map`, `with`, constructors, `from`, `of`) use this helper.
+- **`WriteFloatSpecial`** — Writes canonical IEEE 754 byte representations of NaN, Infinity, and -Infinity directly into the buffer via `Move`, bypassing FPC's floating-point conversion.
+- **Buffer sharing** — Multiple TypedArrays can share the same ArrayBuffer with different byte offsets and element types. Changes through one view are visible in others.
+- **Prototype methods** — `at`, `fill`, `copyWithin`, `slice`, `subarray`, `set`, `reverse`, `sort`, `indexOf`, `lastIndexOf`, `includes`, `find`, `findIndex`, `findLast`, `findLastIndex`, `every`, `some`, `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `join`, `toString`, `toReversed`, `toSorted`, `with`, `values`, `keys`, `entries`, `[Symbol.iterator]`.
+- **Static methods** — `TypedArray.from(source [, mapFn])`, `TypedArray.of(...items)`.
+- **GC integration** — `MarkReferences` marks `FBuffer` (the underlying ArrayBuffer).
+- **Class values** — `TGocciaTypedArrayClassValue` (one per kind) handles `new TypedArray(...)` construction. `TGocciaTypedArrayStaticFrom` provides `from` and `of` static methods.
+
+**Search semantics:** `indexOf` and `lastIndexOf` use strict equality (`NaN !== NaN` — always returns -1 for NaN). `includes` uses SameValueZero (`NaN === NaN` — finds NaN in float arrays via `Math.IsNaN`). All three handle Infinity/-Infinity by comparing actual IEEE 754 doubles for float arrays (where Infinity is stored as-is) and returning -1/false for integer arrays (where Infinity truncates to 0, losing identity).
 
 ## Error Values
 
