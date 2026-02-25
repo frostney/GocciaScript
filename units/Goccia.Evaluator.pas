@@ -1156,7 +1156,10 @@ var
   SymbolEntry: TPair<TGocciaSymbolValue, TGocciaValue>;
 begin
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.AddTempRoot(Obj);
 
+  try
   // Process all properties in source order
   for I := 0 to High(AObjectExpression.PropertySourceOrder) do
     begin
@@ -1264,6 +1267,10 @@ begin
     end;
 
   Result := Obj;
+  finally
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.RemoveTempRoot(Obj);
+  end;
 end;
 
 function EvaluateGetter(const AGetterExpression: TGocciaGetterExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;

@@ -137,10 +137,12 @@ describe("ArrayBuffer constructor meta", () => {
   });
 
   test("throws TypeError when called without new", () => {
+    // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional - testing that ArrayBuffer() without new throws
     expect(() => ArrayBuffer(8)).toThrow(TypeError);
   });
 
   test("throws TypeError when called without new and no arguments", () => {
+    // biome-ignore lint/correctness/noInvalidBuiltinInstantiation: intentional - testing that ArrayBuffer() without new throws
     expect(() => ArrayBuffer()).toThrow(TypeError);
   });
 });

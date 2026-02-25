@@ -760,7 +760,11 @@ begin
     ThrowTypeError('TypedArray.prototype.set requires at least one argument');
 
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
-    TargetOffset := Max(0, Trunc(AArgs.GetElement(1).ToNumberLiteral.Value))
+  begin
+    TargetOffset := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
+    if TargetOffset < 0 then
+      ThrowRangeError('TypedArray.prototype.set offset must be >= 0');
+  end
   else
     TargetOffset := 0;
 

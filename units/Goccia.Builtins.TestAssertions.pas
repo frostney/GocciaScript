@@ -1659,8 +1659,11 @@ begin
         RunCallbacks(FBeforeEachCallbacks);
 
         try
-          // Execute the test function
-          ClonedFunction := TestCase.TestFunction.CloneWithNewScope(FScope.CreateChild(skFunction, 'TestFunction'));
+          // Execute the test function — use the test's original closure as parent so
+          // lexical captures (e.g. from forEach) remain visible; create a child scope
+          // for test-local bindings.
+          ClonedFunction := TestCase.TestFunction.CloneWithNewScope(
+            TestCase.TestFunction.Closure.CreateChild(skFunction, 'TestFunction'));
           TestResult := ClonedFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
           // Drain microtask queue after each test to process Promise reactions

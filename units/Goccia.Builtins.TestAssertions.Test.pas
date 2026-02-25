@@ -65,8 +65,10 @@ type
 
     { toBeDefined }
     procedure TestToBeDefinedWithValue;
+    procedure TestToBeDefinedWithNull;
     procedure TestToBeDefinedWithUndefined;
     procedure TestToBeDefinedNegated;
+    procedure TestToBeDefinedNegatedFail;
 
     { toBeTruthy }
     procedure TestToBeTruthyWithTrue;
@@ -247,8 +249,10 @@ begin
 
   { toBeDefined }
   Test('toBeDefined passes for defined value', TestToBeDefinedWithValue);
+  Test('toBeDefined passes for null', TestToBeDefinedWithNull);
   Test('toBeDefined fails for undefined', TestToBeDefinedWithUndefined);
   Test('not.toBeDefined passes for undefined', TestToBeDefinedNegated);
+  Test('not.toBeDefined fails for defined value', TestToBeDefinedNegatedFail);
 
   { toBeTruthy }
   Test('toBeTruthy passes for true', TestToBeTruthyWithTrue);
@@ -562,6 +566,18 @@ begin
   end;
 end;
 
+procedure TTestExpectationMatchers.TestToBeDefinedWithNull;
+var
+  A: TGocciaArgumentsCollection;
+begin
+  A := TGocciaArgumentsCollection.Create([]);
+  try
+    ExpectPass(MakeExpectation(TGocciaNullLiteralValue.Create).ToBeDefined(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
 procedure TTestExpectationMatchers.TestToBeDefinedWithUndefined;
 var
   A: TGocciaArgumentsCollection;
@@ -581,6 +597,18 @@ begin
   A := TGocciaArgumentsCollection.Create([]);
   try
     ExpectPass(MakeExpectation(TGocciaUndefinedLiteralValue.UndefinedValue, True).ToBeDefined(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToBeDefinedNegatedFail;
+var
+  A: TGocciaArgumentsCollection;
+begin
+  A := TGocciaArgumentsCollection.Create([]);
+  try
+    ExpectFail(MakeExpectation(TGocciaNumberLiteralValue.Create(42), True).ToBeDefined(A, nil));
   finally
     A.Free;
   end;

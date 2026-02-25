@@ -17,6 +17,11 @@ describe("TypedArray.prototype.set", () => {
     expect(ta[3]).toBe(20);
   });
 
+  test("negative offset throws RangeError", () => {
+    const ta = new Int32Array(4);
+    expect(() => ta.set([10], -1)).toThrow(RangeError);
+  });
+
   test("set from another typed array", () => {
     const src = new Float64Array([1.5, 2.5, 3.5]);
     const dst = new Int32Array(3);

@@ -161,4 +161,14 @@ describe("computed symbol accessors on static members", () => {
     Foo[sym] = 200;
     expect(Foo[sym]).toBe(200);
   });
+
+  test("assigning to static getter-only symbol throws TypeError", () => {
+    const sym = Symbol("getterOnly");
+    class Foo {
+      static get [sym]() {
+        return "read-only";
+      }
+    }
+    expect(() => { Foo[sym] = "x"; }).toThrow(TypeError);
+  });
 });

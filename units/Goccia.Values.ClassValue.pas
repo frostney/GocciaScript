@@ -807,7 +807,9 @@ begin
             Args.Free;
           end;
           Exit;
-        end;
+        end
+        else
+          ThrowTypeError('Cannot set property on class with getter-only accessor');
       end;
       Break;
     end;
