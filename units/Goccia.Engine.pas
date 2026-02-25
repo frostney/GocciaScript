@@ -437,7 +437,7 @@ var
 begin
   TAConstructor := TGocciaTypedArrayClassValue.Create(AName, nil, AKind);
   TGocciaTypedArrayValue.ExposePrototype(TAConstructor);
-  TAConstructor.Prototype.Prototype := AObjectConstructor.Prototype;
+  TGocciaTypedArrayValue.SetSharedPrototypeParent(AObjectConstructor.Prototype);
   BPE := TGocciaNumberLiteralValue.Create(TGocciaTypedArrayValue.BytesPerElement(AKind));
   TAConstructor.SetProperty(PROP_BYTES_PER_ELEMENT, BPE);
   TAConstructor.Prototype.AssignProperty(PROP_BYTES_PER_ELEMENT, BPE);

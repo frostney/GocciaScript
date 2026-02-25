@@ -326,10 +326,14 @@ begin
 
   Obj := TGocciaObjectValue(AArgs.GetElement(0));
   // Step 2: Let key be ? ToPropertyKey(P)
-  PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
-
   // Step 3: Let desc be ? O.[[GetOwnProperty]](key)
-  Descriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
+  if AArgs.GetElement(1) is TGocciaSymbolValue then
+    Descriptor := Obj.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AArgs.GetElement(1)))
+  else
+  begin
+    PropertyName := AArgs.GetElement(1).ToStringLiteral.Value;
+    Descriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
+  end;
   // Step 4: Return FromPropertyDescriptor(desc)
   if Descriptor = nil then
   begin

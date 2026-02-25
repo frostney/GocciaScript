@@ -123,6 +123,16 @@ describe("computed symbol setters on class instances", () => {
     f[sym] = 42;
     expect(f[sym]).toBe(42);
   });
+
+  test("assigning to getter-only computed symbol throws TypeError", () => {
+    const sym = Symbol("getterOnly");
+    class Foo {
+      get [sym]() { return 1; }
+    }
+    const f = new Foo();
+    expect(() => { f[sym] = 2; }).toThrow(TypeError);
+    expect(f[sym]).toBe(1);
+  });
 });
 
 describe("computed symbol accessors on static members", () => {

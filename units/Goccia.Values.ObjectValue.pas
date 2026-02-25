@@ -74,6 +74,7 @@ type
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
+    function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
     function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
     function HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
     function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
@@ -856,6 +857,11 @@ begin
 end;
 
 function TGocciaObjectValue.GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
+begin
+  Result := GetSymbolPropertyWithReceiver(ASymbol, Self);
+end;
+
+function TGocciaObjectValue.GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
   Accessor: TGocciaPropertyDescriptorAccessor;
@@ -876,9 +882,9 @@ begin
         Args := TGocciaArgumentsCollection.Create;
         try
           if Accessor.Getter is TGocciaNativeFunctionValue then
-            Result := TGocciaNativeFunctionValue(Accessor.Getter).Call(Args, Self)
+            Result := TGocciaNativeFunctionValue(Accessor.Getter).Call(Args, AReceiver)
           else if Accessor.Getter is TGocciaFunctionValue then
-            Result := TGocciaFunctionValue(Accessor.Getter).Call(Args, Self)
+            Result := TGocciaFunctionValue(Accessor.Getter).Call(Args, AReceiver)
           else
             Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         finally
@@ -894,7 +900,7 @@ begin
   // Check prototype chain
   if Assigned(FPrototype) then
   begin
-    Result := FPrototype.GetSymbolProperty(ASymbol);
+    Result := FPrototype.GetSymbolPropertyWithReceiver(ASymbol, AReceiver);
     Exit;
   end;
 

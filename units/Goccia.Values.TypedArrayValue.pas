@@ -71,6 +71,7 @@ type
     function TypedArrayByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayByteOffsetGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TypedArrayToStringTagGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AKind: TGocciaTypedArrayKind; const ALength: Integer); overload;
     constructor Create(const AKind: TGocciaTypedArrayKind; const ABuffer: TGocciaArrayBufferValue;
@@ -86,6 +87,7 @@ type
     class function BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
     class function KindName(const AKind: TGocciaTypedArrayKind): string;
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
+    class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
 
     property Buffer: TGocciaArrayBufferValue read FBuffer;
     property ByteOffset: Integer read FByteOffset;
@@ -457,13 +459,28 @@ begin
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayValues, 'values', 0),
       [pfConfigurable, pfWritable]));
+  FShared.Prototype.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownToStringTag,
+    TGocciaPropertyDescriptorAccessor.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayToStringTagGetter, 'get [Symbol.toStringTag]', 0),
+      nil, [pfConfigurable]));
 end;
 
 class procedure TGocciaTypedArrayValue.ExposePrototype(const AConstructor: TGocciaValue);
 begin
   if not Assigned(FShared) then
     TGocciaTypedArrayValue.Create(takUint8, 0);
-  FShared.ExposeOnConstructor(AConstructor);
+  if AConstructor is TGocciaClassValue then
+  begin
+    TGocciaClassValue(AConstructor).Prototype.Prototype := FShared.Prototype;
+    TGocciaClassValue(AConstructor).Prototype.AssignProperty(PROP_CONSTRUCTOR, AConstructor);
+  end;
+end;
+
+class procedure TGocciaTypedArrayValue.SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
+begin
+  if Assigned(FShared) and not Assigned(FShared.Prototype.Prototype) then
+    FShared.Prototype.Prototype := AParent;
 end;
 
 { Property access — indexed elements }
@@ -558,6 +575,7 @@ end;
 function CreateSameKindArray(const ASource: TGocciaTypedArrayValue; const ALength: Integer): TGocciaTypedArrayValue;
 begin
   Result := TGocciaTypedArrayValue.Create(ASource.FKind, ALength);
+  Result.Prototype := ASource.Prototype;
 end;
 
 { Prototype getters }
@@ -583,6 +601,14 @@ end;
 function TGocciaTypedArrayValue.TypedArrayLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaNumberLiteralValue.Create(RequireTypedArray(AThisValue, 'TypedArray.prototype.length').FLength);
+end;
+
+// ES2026 §23.2.3.32 get %TypedArray%.prototype [ @@toStringTag ]
+function TGocciaTypedArrayValue.TypedArrayToStringTagGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (AThisValue is TGocciaTypedArrayValue) then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := TGocciaStringLiteralValue.Create(KindName(TGocciaTypedArrayValue(AThisValue).FKind));
 end;
 
 { Prototype methods }
@@ -1489,6 +1515,8 @@ begin
     else
       ByteOff := 0;
 
+    if ByteOff < 0 then
+      ThrowRangeError('Start offset of ' + TGocciaTypedArrayValue.KindName(FKind) + ' must be non-negative');
     if (ByteOff mod BPE) <> 0 then
       ThrowRangeError('Start offset of ' + TGocciaTypedArrayValue.KindName(FKind) + ' should be a multiple of ' + IntToStr(BPE));
     if ByteOff > System.Length(Buf.Data) then
@@ -1497,6 +1525,8 @@ begin
     if AArguments.Length > 2 then
     begin
       ElemLen := Trunc(AArguments.GetElement(2).ToNumberLiteral.Value);
+      if ElemLen < 0 then
+        ThrowRangeError('Invalid typed array length');
       if ByteOff + ElemLen * BPE > System.Length(Buf.Data) then
         ThrowRangeError('Invalid typed array length');
     end
@@ -1505,6 +1535,8 @@ begin
       if ((System.Length(Buf.Data) - ByteOff) mod BPE) <> 0 then
         ThrowRangeError('Byte length of ' + TGocciaTypedArrayValue.KindName(FKind) + ' should be a multiple of ' + IntToStr(BPE));
       ElemLen := (System.Length(Buf.Data) - ByteOff) div BPE;
+      if ElemLen < 0 then
+        ThrowRangeError('Invalid typed array length');
     end;
 
     Exit(TGocciaTypedArrayValue.Create(FKind, Buf, ByteOff, ElemLen));
@@ -1550,6 +1582,8 @@ var
   NewTA: TGocciaTypedArrayValue;
   HasMapFn: Boolean;
   MapFn: TGocciaFunctionBase;
+  MapFnArg: TGocciaValue;
+  ThisArg: TGocciaValue;
   I: Integer;
   Val: TGocciaValue;
   MapArgs: TGocciaArgumentsCollection;
@@ -1557,11 +1591,20 @@ begin
   if AArgs.Length = 0 then
     ThrowTypeError('TypedArray.from requires at least one argument');
   Source := AArgs.GetElement(0);
-  HasMapFn := (AArgs.Length > 1) and AArgs.GetElement(1).IsCallable;
-  if HasMapFn then
-    MapFn := TGocciaFunctionBase(AArgs.GetElement(1))
+  HasMapFn := False;
+  MapFn := nil;
+  if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
+  begin
+    MapFnArg := AArgs.GetElement(1);
+    if not MapFnArg.IsCallable then
+      ThrowTypeError('TypedArray.from mapfn must be a function');
+    HasMapFn := True;
+    MapFn := TGocciaFunctionBase(MapFnArg);
+  end;
+  if AArgs.Length > 2 then
+    ThisArg := AArgs.GetElement(2)
   else
-    MapFn := nil;
+    ThisArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   if Source is TGocciaTypedArrayValue then
   begin
@@ -1576,7 +1619,7 @@ begin
         try
           MapArgs.Add(Val);
           MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
-          Val := MapFn.Call(MapArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+          Val := MapFn.Call(MapArgs, ThisArg);
         finally
           MapArgs.Free;
         end;
@@ -1599,7 +1642,7 @@ begin
         try
           MapArgs.Add(Val);
           MapArgs.Add(TGocciaNumberLiteralValue.Create(I));
-          Val := MapFn.Call(MapArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+          Val := MapFn.Call(MapArgs, ThisArg);
         finally
           MapArgs.Free;
         end;

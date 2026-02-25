@@ -16,5 +16,17 @@ describe("TypedArray Symbol.toStringTag", () => {
     test(tag, () => {
       expect(Object.prototype.toString.call(new Ctor(0))).toBe(tag);
     });
+    test(tag + " accessor returns tag", () => {
+      const typedArrayProto = Object.getPrototypeOf(Ctor.prototype);
+      const desc = Object.getOwnPropertyDescriptor(typedArrayProto, Symbol.toStringTag);
+      expect(desc.get).toBeDefined();
+      const shortTag = tag.slice(8, -1);
+      expect(desc.get.call(new Ctor(0))).toBe(shortTag);
+    });
+    test(tag + " accessor returns undefined for non-TypedArray receiver", () => {
+      const typedArrayProto = Object.getPrototypeOf(Ctor.prototype);
+      const desc = Object.getOwnPropertyDescriptor(typedArrayProto, Symbol.toStringTag);
+      expect(desc.get.call({})).toBe(undefined);
+    });
   });
 });

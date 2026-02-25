@@ -402,7 +402,7 @@ begin
         'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be defined')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeDefined',
-        'Expected undefined to be defined');
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be defined');
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;

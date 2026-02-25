@@ -372,12 +372,22 @@ begin
   begin
     // Computed property compound assignment (e.g., obj[expr] += value)
     Obj := EvaluateExpression(TGocciaComputedPropertyCompoundAssignmentExpression(AExpression).ObjectExpr, AContext);
-    PropName := EvaluateExpression(TGocciaComputedPropertyCompoundAssignmentExpression(AExpression).PropertyExpression, AContext).ToStringLiteral.Value;
+    PropertyValue := EvaluateExpression(TGocciaComputedPropertyCompoundAssignmentExpression(AExpression).PropertyExpression, AContext);
     Value := EvaluateExpression(TGocciaComputedPropertyCompoundAssignmentExpression(AExpression).Value, AContext);
-    PerformPropertyCompoundAssignment(Obj, PropName, Value, TGocciaComputedPropertyCompoundAssignmentExpression(AExpression).Operator, AContext.OnError, AExpression.Line, AExpression.Column);
-
-    // Get the final result
-    Result := Obj.GetProperty(PropName);
+    if (PropertyValue is TGocciaSymbolValue) and ((Obj is TGocciaClassValue) or (Obj is TGocciaObjectValue)) then
+    begin
+      PerformSymbolPropertyCompoundAssignment(Obj, TGocciaSymbolValue(PropertyValue), Value, TGocciaComputedPropertyCompoundAssignmentExpression(AExpression).Operator, AContext.OnError, AExpression.Line, AExpression.Column);
+      if Obj is TGocciaClassValue then
+        Result := TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyValue))
+      else
+        Result := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyValue));
+    end
+    else
+    begin
+      PropName := PropertyValue.ToStringLiteral.Value;
+      PerformPropertyCompoundAssignment(Obj, PropName, Value, TGocciaComputedPropertyCompoundAssignmentExpression(AExpression).Operator, AContext.OnError, AExpression.Line, AExpression.Column);
+      Result := Obj.GetProperty(PropName);
+    end;
     if Result = nil then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end

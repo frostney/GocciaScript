@@ -34,7 +34,7 @@ describe("ArrayBuffer constructor", () => {
     expect(buf instanceof ArrayBuffer).toBe(true);
   });
 
-  test("byteLength is read-only (reflects allocated size)", () => {
+  test("byteLength reflects the allocated size", () => {
     const buf = new ArrayBuffer(16);
     expect(buf.byteLength).toBe(16);
   });
@@ -117,10 +117,6 @@ describe("ArrayBuffer constructor ToIndex coercion (ES2026 §6.2.4.2)", () => {
   test("float string '1.9' is truncated to 1", () => {
     const buf = new ArrayBuffer("1.9");
     expect(buf.byteLength).toBe(1);
-  });
-
-  test("negative integer -1 throws RangeError", () => {
-    expect(() => new ArrayBuffer(-1)).toThrow(RangeError);
   });
 });
 

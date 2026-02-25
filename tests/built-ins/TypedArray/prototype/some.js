@@ -4,6 +4,17 @@ describe("TypedArray.prototype.some", () => {
     expect(ta.some((x) => x === 2)).toBe(true);
   });
 
+  test("stops iterating once callback returns true", () => {
+    const ta = new Int32Array([1, 2, 3, 4, 5]);
+    const calls = [];
+    const result = ta.some((x, i) => {
+      calls.push(i);
+      return x === 3;
+    });
+    expect(result).toBe(true);
+    expect(calls).toEqual([0, 1, 2]);
+  });
+
   test("callback receives (value, index, array)", () => {
     const ta = new Int32Array([10]);
     let value, index, arr;

@@ -7,7 +7,8 @@ interface
 uses
   Goccia.Error.ThrowErrorCallback,
   Goccia.Token,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.Values.SymbolValue;
 
 // Property definition with descriptor (falls back to SetProperty for non-objects)
 procedure DefinePropertyOnValue(const AObj: TGocciaValue; const APropName: string; const AValue: TGocciaValue);
@@ -17,6 +18,7 @@ procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; 
 
 // Compound assignment operations
 procedure PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+procedure PerformSymbolPropertyCompoundAssignment(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
 
 // Increment/Decrement operations
 function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boolean): TGocciaValue; inline;
@@ -68,6 +70,29 @@ begin
 
   NewValue := PerformCompoundOperation(CurrentValue, AValue, AOperator);
   AObj.SetProperty(APropertyName, NewValue);
+end;
+
+procedure PerformSymbolPropertyCompoundAssignment(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer);
+var
+  CurrentValue, NewValue: TGocciaValue;
+begin
+  if AObj is TGocciaClassValue then
+    CurrentValue := TGocciaClassValue(AObj).GetSymbolProperty(ASymbol)
+  else if AObj is TGocciaObjectValue then
+    CurrentValue := TGocciaObjectValue(AObj).GetSymbolProperty(ASymbol)
+  else
+  begin
+    if Assigned(AOnError) then
+      AOnError('Cannot access property on non-object', ALine, AColumn);
+    Exit;
+  end;
+  if CurrentValue = nil then
+    CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  NewValue := PerformCompoundOperation(CurrentValue, AValue, AOperator);
+  if AObj is TGocciaClassValue then
+    TGocciaClassValue(AObj).AssignSymbolProperty(ASymbol, NewValue)
+  else
+    TGocciaObjectValue(AObj).AssignSymbolProperty(ASymbol, NewValue);
 end;
 
 function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boolean): TGocciaValue;
