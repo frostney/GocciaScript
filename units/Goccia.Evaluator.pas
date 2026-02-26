@@ -1198,9 +1198,8 @@ begin
                 SpreadObj := TGocciaObjectValue(SpreadValue);
                 for Key in SpreadObj.GetEnumerablePropertyNames do
                   Obj.DefineProperty(Key, TGocciaPropertyDescriptorData.Create(SpreadObj.GetProperty(Key), [pfEnumerable, pfConfigurable, pfWritable]));
-                // Also spread symbol properties
                 for SymbolEntry in SpreadObj.GetEnumerableSymbolProperties do
-                  Obj.AssignSymbolProperty(SymbolEntry.Key, SymbolEntry.Value);
+                  Obj.DefineSymbolProperty(SymbolEntry.Key, TGocciaPropertyDescriptorData.Create(SymbolEntry.Value, [pfEnumerable, pfConfigurable, pfWritable]));
               end
                              else if SpreadValue is TGocciaArrayValue then
                begin
@@ -1225,7 +1224,7 @@ begin
               // Regular computed property: {[expr]: value}
               PropertyValue := EvaluateExpression(ComputedPair.Key, AContext);
               if PropertyValue is TGocciaSymbolValue then
-                Obj.AssignSymbolProperty(TGocciaSymbolValue(PropertyValue), EvaluateExpression(ComputedPair.Value, AContext))
+                Obj.DefineSymbolProperty(TGocciaSymbolValue(PropertyValue), TGocciaPropertyDescriptorData.Create(EvaluateExpression(ComputedPair.Value, AContext), [pfEnumerable, pfConfigurable, pfWritable]))
               else
               begin
                 ComputedKey := PropertyValue.ToStringLiteral.Value;

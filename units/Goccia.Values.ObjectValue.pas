@@ -182,25 +182,38 @@ function TGocciaObjectValue.ObjectPrototypeHasOwnProperty(const AArgs: TGocciaAr
 var
   Key: string;
   Obj: TGocciaObjectValue;
+  PropertyArg: TGocciaValue;
 begin
+  // Step 2: Let O be ? ToObject(this value)
+  if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError('Cannot convert undefined or null to object');
+
+  if not (AThisValue is TGocciaObjectValue) then
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+
+  Obj := TGocciaObjectValue(AThisValue);
+
   // Step 1: Let P be ? ToPropertyKey(V)
   if AArgs.Length = 0 then
-    Key := 'undefined'
+    PropertyArg := TGocciaUndefinedLiteralValue.UndefinedValue
   else
-    Key := AArgs.GetElement(0).ToStringLiteral.Value;
+    PropertyArg := AArgs.GetElement(0);
 
-  // Step 2: Let O be ? ToObject(this value)
-  if AThisValue is TGocciaObjectValue then
+  if PropertyArg is TGocciaSymbolValue then
   begin
-    Obj := TGocciaObjectValue(AThisValue);
-    // Step 3: Return ? HasOwnProperty(O, P)
-    if Obj.HasOwnProperty(Key) then
+    if Assigned(Obj.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(PropertyArg))) then
       Result := TGocciaBooleanLiteralValue.TrueValue
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;
   end
   else
-    Result := TGocciaBooleanLiteralValue.FalseValue;
+  begin
+    Key := PropertyArg.ToStringLiteral.Value;
+    if Obj.HasOwnProperty(Key) then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+  end;
 end;
 
 // ES2026 §20.1.3.3 Object.prototype.isPrototypeOf(V)
@@ -236,29 +249,47 @@ var
   Key: string;
   Obj: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
+  PropertyArg: TGocciaValue;
 begin
-  // Step 1: Let P be ? ToPropertyKey(V)
-  if AArgs.Length = 0 then
-    Key := 'undefined'
-  else
-    Key := AArgs.GetElement(0).ToStringLiteral.Value;
-
   // Step 2: Let O be ? ToObject(this value)
+  if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError('Cannot convert undefined or null to object');
+
   if not (AThisValue is TGocciaObjectValue) then
     Exit(TGocciaBooleanLiteralValue.FalseValue);
 
   Obj := TGocciaObjectValue(AThisValue);
-  // Step 3: Let desc be ? O.[[GetOwnProperty]](P)
-  Descriptor := Obj.GetOwnPropertyDescriptor(Key);
-  // Step 4: If desc is undefined, return false
-  if not Assigned(Descriptor) then
-    Exit(TGocciaBooleanLiteralValue.FalseValue);
 
-  // Step 5: Return desc.[[Enumerable]]
-  if Descriptor.Enumerable then
-    Result := TGocciaBooleanLiteralValue.TrueValue
+  // Step 1: Let P be ? ToPropertyKey(V)
+  if AArgs.Length = 0 then
+    PropertyArg := TGocciaUndefinedLiteralValue.UndefinedValue
   else
-    Result := TGocciaBooleanLiteralValue.FalseValue;
+    PropertyArg := AArgs.GetElement(0);
+
+  if PropertyArg is TGocciaSymbolValue then
+  begin
+    Descriptor := Obj.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(PropertyArg));
+    if not Assigned(Descriptor) then
+      Exit(TGocciaBooleanLiteralValue.FalseValue);
+    if Descriptor.Enumerable then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+  end
+  else
+  begin
+    Key := PropertyArg.ToStringLiteral.Value;
+    // Step 3: Let desc be ? O.[[GetOwnProperty]](P)
+    Descriptor := Obj.GetOwnPropertyDescriptor(Key);
+    // Step 4: If desc is undefined, return false
+    if not Assigned(Descriptor) then
+      Exit(TGocciaBooleanLiteralValue.FalseValue);
+    // Step 5: Return desc.[[Enumerable]]
+    if Descriptor.Enumerable then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+  end;
 end;
 
 // ES2026 §20.1.3.5 Object.prototype.toLocaleString()
@@ -824,7 +855,43 @@ var
   Args: TGocciaArgumentsCollection;
   Current: TGocciaObjectValue;
 begin
-  Current := Self;
+  if FFrozen then
+    ThrowTypeError('Cannot assign to property of frozen object');
+
+  if FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+  begin
+    if Descriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
+      if Assigned(Accessor.Setter) then
+      begin
+        Args := TGocciaArgumentsCollection.Create;
+        try
+          Args.Add(AValue);
+          if Accessor.Setter is TGocciaNativeFunctionValue then
+            TGocciaNativeFunctionValue(Accessor.Setter).Call(Args, Self)
+          else if Accessor.Setter is TGocciaFunctionValue then
+            TGocciaFunctionValue(Accessor.Setter).Call(Args, Self);
+        finally
+          Args.Free;
+        end;
+        Exit;
+      end;
+      ThrowTypeError('Cannot set property which has only a getter');
+    end
+    else if Descriptor is TGocciaPropertyDescriptorData then
+    begin
+      if TGocciaPropertyDescriptorData(Descriptor).Writable then
+      begin
+        FSymbolDescriptors.AddOrSetValue(ASymbol, TGocciaPropertyDescriptorData.Create(AValue, Descriptor.Flags));
+        Descriptor.Free;
+        Exit;
+      end;
+      ThrowTypeError('Cannot assign to read only symbol property');
+    end;
+  end;
+
+  Current := FPrototype;
   while Assigned(Current) do
   begin
     if Current.FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
@@ -847,11 +914,19 @@ begin
           Exit;
         end;
         ThrowTypeError('Cannot set property which has only a getter');
+      end
+      else if Descriptor is TGocciaPropertyDescriptorData then
+      begin
+        if not TGocciaPropertyDescriptorData(Descriptor).Writable then
+          ThrowTypeError('Cannot assign to read only symbol property');
+        Break;
       end;
-      Break;
     end;
     Current := Current.FPrototype;
   end;
+
+  if not FExtensible then
+    ThrowTypeError('Cannot add symbol property, object is not extensible');
 
   DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
 end;

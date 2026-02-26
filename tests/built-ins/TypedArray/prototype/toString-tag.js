@@ -19,6 +19,7 @@ describe("TypedArray Symbol.toStringTag", () => {
     test(tag + " accessor returns tag", () => {
       const typedArrayProto = Object.getPrototypeOf(Ctor.prototype);
       const desc = Object.getOwnPropertyDescriptor(typedArrayProto, Symbol.toStringTag);
+      expect(desc).toBeDefined();
       expect(desc.get).toBeDefined();
       const shortTag = tag.slice(8, -1);
       expect(desc.get.call(new Ctor(0))).toBe(shortTag);
@@ -26,6 +27,7 @@ describe("TypedArray Symbol.toStringTag", () => {
     test(tag + " accessor returns undefined for non-TypedArray receiver", () => {
       const typedArrayProto = Object.getPrototypeOf(Ctor.prototype);
       const desc = Object.getOwnPropertyDescriptor(typedArrayProto, Symbol.toStringTag);
+      expect(desc).toBeDefined();
       expect(desc.get.call({})).toBe(undefined);
     });
   });

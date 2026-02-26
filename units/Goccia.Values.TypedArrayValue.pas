@@ -837,16 +837,41 @@ end;
 function TGocciaTypedArrayValue.TypedArraySort(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
-  I, J: Integer;
+  I, J, SortLen, NaNCount: Integer;
   Tmp, CompResult: Double;
   HasCompare: Boolean;
   CompareArgs: TGocciaArgumentsCollection;
   CompareResult: TGocciaValue;
+  IsFloat: Boolean;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.sort');
   HasCompare := (AArgs.Length > 0) and AArgs.GetElement(0).IsCallable;
+  SortLen := TA.FLength;
 
-  for I := 1 to TA.FLength - 1 do
+  // For float kinds, partition NaN values to the end before sorting
+  IsFloat := TA.FKind in [takFloat32, takFloat64];
+  if IsFloat and not HasCompare then
+  begin
+    NaNCount := 0;
+    J := 0;
+    for I := 0 to SortLen - 1 do
+    begin
+      Tmp := TA.ReadElement(I);
+      if Math.IsNaN(Tmp) then
+        Inc(NaNCount)
+      else
+      begin
+        if J <> I then
+          TA.WriteElement(J, Tmp);
+        Inc(J);
+      end;
+    end;
+    SortLen := SortLen - NaNCount;
+    for I := SortLen to SortLen + NaNCount - 1 do
+      TA.WriteElement(I, Math.NaN);
+  end;
+
+  for I := 1 to SortLen - 1 do
   begin
     Tmp := TA.ReadElement(I);
     J := I - 1;
@@ -1030,7 +1055,7 @@ begin
   begin
     Element := TGocciaNumberLiteralValue.Create(TA.ReadElement(I));
     CallResult := InvokeCallback(AArgs.GetElement(0), Element, TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
-    if CallResult.ToNumberLiteral.Value <> 0 then
+    if CallResult.ToBooleanLiteral.Value then
       Exit(Element);
   end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1054,7 +1079,7 @@ begin
   begin
     Element := TGocciaNumberLiteralValue.Create(TA.ReadElement(I));
     CallResult := InvokeCallback(AArgs.GetElement(0), Element, TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
-    if CallResult.ToNumberLiteral.Value <> 0 then
+    if CallResult.ToBooleanLiteral.Value then
       Exit(TGocciaNumberLiteralValue.Create(I));
   end;
   Result := TGocciaNumberLiteralValue.Create(-1);
@@ -1078,7 +1103,7 @@ begin
   begin
     Element := TGocciaNumberLiteralValue.Create(TA.ReadElement(I));
     CallResult := InvokeCallback(AArgs.GetElement(0), Element, TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
-    if CallResult.ToNumberLiteral.Value <> 0 then
+    if CallResult.ToBooleanLiteral.Value then
       Exit(Element);
   end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1102,7 +1127,7 @@ begin
   begin
     Element := TGocciaNumberLiteralValue.Create(TA.ReadElement(I));
     CallResult := InvokeCallback(AArgs.GetElement(0), Element, TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
-    if CallResult.ToNumberLiteral.Value <> 0 then
+    if CallResult.ToBooleanLiteral.Value then
       Exit(TGocciaNumberLiteralValue.Create(I));
   end;
   Result := TGocciaNumberLiteralValue.Create(-1);
@@ -1127,7 +1152,7 @@ begin
     CallResult := InvokeCallback(AArgs.GetElement(0),
       TGocciaNumberLiteralValue.Create(TA.ReadElement(I)),
       TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
-    if CallResult.ToNumberLiteral.Value = 0 then
+    if not CallResult.ToBooleanLiteral.Value then
       Exit(TGocciaBooleanLiteralValue.FalseValue);
   end;
   Result := TGocciaBooleanLiteralValue.TrueValue;
@@ -1152,7 +1177,7 @@ begin
     CallResult := InvokeCallback(AArgs.GetElement(0),
       TGocciaNumberLiteralValue.Create(TA.ReadElement(I)),
       TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
-    if CallResult.ToNumberLiteral.Value <> 0 then
+    if CallResult.ToBooleanLiteral.Value then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
   end;
   Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -1228,7 +1253,7 @@ begin
     CallResult := InvokeCallback(AArgs.GetElement(0),
       TGocciaNumberLiteralValue.Create(ElemVal),
       TGocciaNumberLiteralValue.Create(I), AThisValue, ThisArg);
-    if CallResult.ToNumberLiteral.Value <> 0 then
+    if CallResult.ToBooleanLiteral.Value then
     begin
       Count := System.Length(Kept);
       SetLength(Kept, Count + 1);
@@ -1527,14 +1552,14 @@ begin
       ElemLen := Trunc(AArguments.GetElement(2).ToNumberLiteral.Value);
       if ElemLen < 0 then
         ThrowRangeError('Invalid typed array length');
-      if ByteOff + ElemLen * BPE > System.Length(Buf.Data) then
+      if Int64(ByteOff) + Int64(ElemLen) * Int64(BPE) > Int64(System.Length(Buf.Data)) then
         ThrowRangeError('Invalid typed array length');
     end
     else
     begin
-      if ((System.Length(Buf.Data) - ByteOff) mod BPE) <> 0 then
+      if ((Int64(System.Length(Buf.Data)) - Int64(ByteOff)) mod Int64(BPE)) <> 0 then
         ThrowRangeError('Byte length of ' + TGocciaTypedArrayValue.KindName(FKind) + ' should be a multiple of ' + IntToStr(BPE));
-      ElemLen := (System.Length(Buf.Data) - ByteOff) div BPE;
+      ElemLen := Integer((Int64(System.Length(Buf.Data)) - Int64(ByteOff)) div Int64(BPE));
       if ElemLen < 0 then
         ThrowRangeError('Invalid typed array length');
     end;
