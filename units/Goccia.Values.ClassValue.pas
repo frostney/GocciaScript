@@ -88,6 +88,8 @@ type
 
     procedure ReplacePrototype(const APrototype: TGocciaObjectValue);
     procedure DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
+    procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
+    function GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
 
@@ -140,6 +142,14 @@ type
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
 
+  TGocciaArrayBufferClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+  end;
+
+  TGocciaSharedArrayBufferClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+  end;
+
   TGocciaInstanceValue = class(TGocciaObjectValue)
   private
     FClass: TGocciaClassValue;
@@ -174,13 +184,16 @@ uses
   Goccia.Constants.TypeNames,
   Goccia.Error,
   Goccia.GarbageCollector,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
   Goccia.Values.ClassHelper,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
-  Goccia.Values.SetValue;
+  Goccia.Values.SetValue,
+  Goccia.Values.SharedArrayBufferValue;
 
 constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGocciaClassValue);
 begin
@@ -202,7 +215,9 @@ begin
   FPrototype := TGocciaObjectValue.Create;
   FConstructorMethod := nil;
   if Assigned(FSuperClass) then
-    FPrototype.Prototype := FSuperClass.Prototype;
+    FPrototype.Prototype := FSuperClass.Prototype
+  else if Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    FPrototype.Prototype := TGocciaObjectValue.SharedObjectPrototype;
 end;
 
 destructor TGocciaClassValue.Destroy;
@@ -756,6 +771,54 @@ begin
   FStaticSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
 end;
 
+function TGocciaClassValue.GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
+begin
+  if FStaticSymbolDescriptors.TryGetValue(ASymbol, Result) then
+    { Result set by TryGetValue }
+  else
+    Result := nil;
+end;
+
+procedure TGocciaClassValue.AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Accessor: TGocciaPropertyDescriptorAccessor;
+  Args: TGocciaArgumentsCollection;
+  Current: TGocciaClassValue;
+begin
+  Current := Self;
+  while Assigned(Current) do
+  begin
+    if Current.FStaticSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+    begin
+      if Descriptor is TGocciaPropertyDescriptorAccessor then
+      begin
+        Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
+        if Assigned(Accessor.Setter) then
+        begin
+          Args := TGocciaArgumentsCollection.Create;
+          try
+            Args.Add(AValue);
+            if Accessor.Setter is TGocciaNativeFunctionValue then
+              TGocciaNativeFunctionValue(Accessor.Setter).Call(Args, Self)
+            else if Accessor.Setter is TGocciaFunctionValue then
+              TGocciaFunctionValue(Accessor.Setter).Call(Args, Self);
+          finally
+            Args.Free;
+          end;
+          Exit;
+        end
+        else
+          ThrowTypeError('Cannot set property on class with getter-only accessor');
+      end;
+      Break;
+    end;
+    Current := Current.FSuperClass;
+  end;
+
+  DefineSymbolProperty(ASymbol, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
 function TGocciaClassValue.GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue;
 begin
   Result := GetSymbolPropertyWithReceiver(ASymbol, Self);
@@ -803,8 +866,10 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+// ES2026 §10.2.2 [[Call]] — class constructors are not callable without new
 function TGocciaClassValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
+  // String/Number/Boolean act as type conversion functions when called without new
   if FName = CONSTRUCTOR_STRING then
   begin
     if AArguments.Length = 0 then
@@ -826,10 +891,11 @@ begin
     else
       Result := AArguments.GetElement(0).ToBooleanLiteral;
   end
-  else if (FName = CONSTRUCTOR_ARRAY) or (FName = CONSTRUCTOR_MAP) or (FName = CONSTRUCTOR_SET) then
+  // Array and Object are callable without new (ES2026 §20.1.1, §23.1.1)
+  else if (FName = CONSTRUCTOR_ARRAY) or (FName = CONSTRUCTOR_OBJECT) then
     Result := Instantiate(AArguments)
   else
-    Result := Instantiate(AArguments);
+    ThrowTypeError('Class constructor ' + FName + ' cannot be invoked without ''new''');
 end;
 
 { TGocciaArrayClassValue }
@@ -851,6 +917,20 @@ end;
 function TGocciaSetClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := TGocciaSetValue.Create;
+end;
+
+{ TGocciaArrayBufferClassValue }
+
+function TGocciaArrayBufferClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaArrayBufferValue.Create(nil);
+end;
+
+{ TGocciaSharedArrayBufferClassValue }
+
+function TGocciaSharedArrayBufferClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaSharedArrayBufferValue.Create(nil);
 end;
 
 { TGocciaStringClassValue }

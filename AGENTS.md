@@ -93,6 +93,9 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Concrete Iterators | `Goccia.Values.Iterator.Concrete.pas` | Array/String/Map/Set iterator subclasses with virtual `AdvanceNext` |
 | Lazy Iterators | `Goccia.Values.Iterator.Lazy.pas` | Lazy `map`/`filter`/`take`/`drop`/`flatMap` iterator wrappers |
 | Generic Iterator | `Goccia.Values.Iterator.Generic.pas` | Wraps user-defined `{next()}` objects as proper iterators |
+| ArrayBuffer Value | `Goccia.Values.ArrayBufferValue.pas` | `TGocciaArrayBufferValue` — fixed-length raw binary data buffer backed by `TBytes` |
+| SharedArrayBuffer Value | `Goccia.Values.SharedArrayBufferValue.pas` | `TGocciaSharedArrayBufferValue` — shared-memory binary data buffer backed by `TBytes` |
+| ArrayBuffer Built-in | `Goccia.Builtins.GlobalArrayBuffer.pas` | ArrayBuffer/SharedArrayBuffer constructors, `isView` static method |
 | Enum Value | `Goccia.Values.EnumValue.pas` | TC39 proposal-enum: `TGocciaEnumValue` (null-prototype, non-extensible, iterable via `Symbol.iterator`) |
 | Auto-Accessor Helpers | `Goccia.Values.AutoAccessor.pas` | `TGocciaAutoAccessorGetter`, `TGocciaAutoAccessorSetter` — getter/setter methods for auto-accessor backing fields |
 | Async Function Values | `Goccia.Values.AsyncFunctionValue.pas` | `TGocciaAsyncFunctionValue`, `TGocciaAsyncArrowFunctionValue`, `TGocciaAsyncMethodValue` — async variants that wrap body execution in Promise |
@@ -109,19 +112,20 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Benchmark Reporter | `Goccia.Benchmark.Reporter.pas` | Multi-format benchmark output (console, text, CSV, JSON) with setup/teardown timing |
 | REPL Line Editor | `Goccia.REPL.LineEditor.pas` | Interactive line editing with history for the REPL |
 | REPL Formatter | `Goccia.REPL.Formatter.pas` | Color-formatted value output for the REPL |
-| Shared Prototype | `Goccia.SharedPrototype.pas` | Shared prototype singleton utilities |
+| Shared Prototype | `Goccia.SharedPrototype.pas` | Shared prototype singleton utilities; `Create` auto-pins both prototype and method host with the GC |
 | Constants | `Goccia.Constants.pas` | Literal value strings (`'true'`, `'NaN'`, etc.) and numeric constants |
 | Constants: Type Names | `Goccia.Constants.TypeNames.pas` | `typeof` result string constants (`'object'`, `'string'`, etc.) |
 | Constants: Property Names | `Goccia.Constants.PropertyNames.pas` | Common property name constants (`'length'`, `'constructor'`, etc.) |
 | Constants: Error Names | `Goccia.Constants.ErrorNames.pas` | Error type name constants (`'TypeError'`, `'RangeError'`, etc.) |
 | Constants: Constructor Names | `Goccia.Constants.ConstructorNames.pas` | Built-in constructor name constants (`'Object'`, `'Array'`, etc.) |
 | ToPrimitive | `Goccia.Values.ToPrimitive.pas` | ECMAScript `ToPrimitive` abstract operation |
-| Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, `ThrowDataCloneError` (creates DOMException with code 25), centralized error construction |
+| Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, `ThrowDataCloneError` (creates DOMException with code 25), centralized error construction with proper prototype chain |
 | Argument Validator | `Goccia.Arguments.Validator.pas` | `RequireExactly`, `RequireAtLeast` — standardized argument count/type validation |
 | Argument Callbacks | `Goccia.Arguments.Callbacks.pas` | Pre-typed callback argument collections for array prototype methods |
 | Ordered Map | `OrderedMap.pas` | Generic insertion-order-preserving string-keyed map (`TOrderedMap<T>`) |
 | Binding Map | `Goccia.Scope.BindingMap.pas` | Ordered map specialized for lexical bindings (`TOrderedMap<TLexicalBinding>`) |
 | Array Utils | `Goccia.Utils.Array.pas` | `ArrayCreateDataProperty` helper for spec-compliant array operations |
+| TypedArray Value | `Goccia.Values.TypedArrayValue.pas` | `TGocciaTypedArrayValue` — view over ArrayBuffer with fixed element type (Int8, Uint8, Uint8Clamped, Int16, Uint16, Int32, Uint32, Float32, Float64), `TGocciaTypedArrayClassValue`, `TGocciaTypedArrayStaticFrom` |
 | Test Console | `Goccia.Builtins.TestConsole.pas` | Silent console override for `--silent` mode in TestRunner |
 
 ## Development Workflow
@@ -200,12 +204,14 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 - Add JavaScript tests under the `tests/` directory.
 - Keep tests isolated and grouped by feature/filename.
 - Follow the existing directory structure (`tests/language/` for language features, `tests/built-ins/` for built-in objects).
-- Each test file should focus on a single concern.
+- **One method per file** — each test file focuses on a single method or operation. Never bundle multiple methods into one file (no `prototype-methods.js` or `static-methods.js`).
+- **Prototype methods go in `prototype/`** — instance methods live in `BuiltIn/prototype/methodName.js`. Static methods and constructor tests live directly in the `BuiltIn/` folder. See `tests/built-ins/Array/prototype/` for the canonical example.
+- **Edge cases are co-located** — edge case tests (NaN, Infinity, negative indices, clamping, empty collections, boundary conditions) belong in the **same file** as the happy-path tests for that method. Do **not** create separate `edge-cases.js` files.
 - Always verify changes by running: `./build.pas testrunner && ./build/TestRunner tests`
 
 **When adding a new language feature:**
 - Create test files for the feature following the existing directory and naming patterns in `tests/`.
-- Tests should cover happy paths, edge cases, and error cases.
+- Tests should cover happy paths, edge cases, and error cases — all in the same file for each method.
 - Verify all tests pass before committing.
 
 **When modifying AST logic, scope chain, evaluator, or value types:**
@@ -219,7 +225,7 @@ GocciaScript uses a mark-and-sweep garbage collector (`Goccia.GarbageCollector.p
 
 - **AST literal values** are unregistered from the GC by `TGocciaLiteralExpression.Create` and owned by the AST node. The evaluator calls `Value.RuntimeCopy` to produce fresh GC-managed values when evaluating literals.
 - **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache) are pinned via `TGocciaGarbageCollector.Instance.PinValue` during engine initialization (consolidated in `PinSingletons`).
-- **Shared prototype singletons** (String, Number, Array, Set, Map, Function, Symbol) are pinned inside each type's `InitializePrototype` method. All prototype method callbacks must use `ThisValue` (not `Self`) to access instance data, since `Self` refers to the method host singleton.
+- **Shared prototype singletons** (String, Number, Array, Set, Map, Function, Symbol, ArrayBuffer, SharedArrayBuffer, TypedArray) are pinned inside each type's `InitializePrototype` method. `TGocciaSharedPrototype.Create` automatically pins both the prototype object and the method host via `TGocciaGarbageCollector.Instance.PinValue` — no manual pinning is needed after calling `TGocciaSharedPrototype.Create`. All prototype method callbacks must use `ThisValue` (not `Self`) to access instance data, since `Self` refers to the method host singleton. **Object.prototype** is the `ObjectConstructor.Prototype` created in `RegisterBuiltinConstructors` — it hosts `toString()` (ES2026 §20.1.3.6) and is stored in `TGocciaObjectValue.SharedObjectPrototype` so the evaluator can assign it as the prototype of object literals.
 - **Pinned values, temp roots, and root scopes** are stored in `TDictionary<T, Boolean>` for O(1) membership checks.
 - **Values held only by Pascal code** (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot` for the duration they are needed. Example: benchmark functions held in a `TObjectList`.
 - **Scopes** register with the GC in their constructor. Active call scopes are tracked via `PushActiveScope`/`PopActiveScope` in `TGocciaFunctionValue.Call`.
@@ -365,7 +371,7 @@ On FPC 3.2.2 AArch64, `Double(Int64Var)` performs a bit reinterpretation, not a 
 
 ### Design Patterns in Use
 
-- **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`) and shared prototype singletons (String, Number, Array, Set, Map, Function, Symbol — each type uses `class var` + `InitializePrototype` guarded by `if Assigned`)
+- **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`) and shared prototype singletons (String, Number, Array, Set, Map, Function, Symbol, ArrayBuffer, SharedArrayBuffer, TypedArray — each type uses `class var FShared: TGocciaSharedPrototype` + `InitializePrototype` guarded by `if Assigned`; `TGocciaSharedPrototype.Create` handles GC pinning automatically)
 - **Factory method** for scope creation (`CreateChild`, with optional capacity hint)
 - **Context object** for evaluation state (`TGocciaEvaluationContext`)
 - **Virtual dispatch** for property access (`GetProperty`/`SetProperty`), type discrimination (`IsPrimitive`/`IsCallable`), and scope chain resolution (`GetThisValue`/`GetOwningClass`/`GetSuperClass`) on the `TGocciaValue` and `TGocciaScope` hierarchies
@@ -386,7 +392,7 @@ All values inherit from `TGocciaValue`. Virtual methods on the base class elimin
 
 The evaluator calls these directly (`Value.GetProperty(Name)`, `Value.IsPrimitive`, `Value.IsCallable`) without type-checking or interface queries. **Prefer these VMT methods over `is` type checks for fundamental type-system properties.** Do not add VMT methods for optional built-in types (e.g., Symbol, Set, Map) — these are toggled via `TGocciaGlobalBuiltins` flags and should use standard RTTI (`is`) checks instead.
 
-Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `CreateErrorObject`, etc.). All error objects (both user-created via `new Error()` and runtime-thrown via `ThrowTypeError` etc.) receive a `stack` property containing a formatted stack trace captured at the point of construction. The call stack is maintained by `Goccia.CallStack.pas`, a singleton that tracks function name, file path, and line/column for each active call frame. Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
+Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `CreateErrorObject`, etc.). All error objects — both user-created via `new Error()` and runtime-thrown via `ThrowTypeError` etc. — are linked to the correct error type prototype (e.g., `GTypeErrorProto`, `GRangeErrorProto`). This ensures `instanceof TypeError`, `instanceof RangeError`, etc. work correctly for both user-constructed and internally-thrown errors. The global error prototypes are exposed from `Goccia.Builtins.Globals.pas` and follow the ES2026 prototype hierarchy: `TypeError.prototype` → `Error.prototype` → `Object.prototype`. All error objects receive a `stack` property containing a formatted stack trace captured at the point of construction. The call stack is maintained by `Goccia.CallStack.pas`, a singleton that tracks function name, file path, and line/column for each active call frame. Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
 
 **Symbol coercion:** `TGocciaSymbolValue.ToNumberLiteral` throws `TypeError` (symbols cannot convert to numbers). `ToStringLiteral` returns `"Symbol(description)"` for internal use (display, property keys), but implicit string coercion (template literals, `+` operator, `String.prototype.concat`) must check for symbols and throw `TypeError` at the operator level. See `Goccia.Evaluator.Arithmetic.pas` and `Goccia.Evaluator.pas` for the pattern. Symbols use a shared prototype singleton (like String, Number, Array) with `description` as an accessor getter and `toString()` as a method. `Symbol.prototype` is exposed on the Symbol constructor function.
 
@@ -412,7 +418,7 @@ Built-ins are registered by the engine via `TGocciaGlobalBuiltins` flags:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
- ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal, ggJSX];
+ ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal, ggJSX, ggArrayBuffer];
 ```
 
 The TestRunner adds `ggTestAssertions` for the test framework (`describe`, `test`, `expect`).
@@ -477,7 +483,7 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 
 - **Primary:** JavaScript end-to-end tests in `tests/` directory — these are the source of truth for correctness
 - **Secondary:** Pascal unit tests in `units/*.Test.pas` — only for internal implementation details
-- **Test directories:** `tests/language/async-await/` — async functions, await expressions, async class/object methods, error handling; `tests/language/for-of/` — for...of loops, destructuring, break, iterators, for-await-of; `tests/built-ins/Array/fromAsync.js` — Array.fromAsync with async/sync iterables; `tests/built-ins/Symbol/asyncIterator.js` — Symbol.asyncIterator well-known symbol
+- **Test directories:** `tests/language/async-await/` — async functions, await expressions, async class/object methods, error handling; `tests/language/for-of/` — for...of loops, destructuring, break, iterators, for-await-of; `tests/built-ins/Array/fromAsync.js` — Array.fromAsync with async/sync iterables; `tests/built-ins/Symbol/asyncIterator.js` — Symbol.asyncIterator well-known symbol; `tests/built-ins/ArrayBuffer/` — ArrayBuffer constructor, `isView`, `slice`, `Symbol.toStringTag`; `tests/built-ins/SharedArrayBuffer/` — SharedArrayBuffer constructor, `slice`, `Symbol.toStringTag`; `tests/built-ins/TypedArray/` — constructors, element access, prototype methods, static methods, iterators, buffer sharing, edge cases (NaN/Infinity handling, clamping, negative indices); `tests/built-ins/constructors/` — `new` requirement for built-in constructors; `tests/built-ins/structuredClone/arraybuffer.js` — structuredClone of ArrayBuffer/SharedArrayBuffer
 - **JS test framework:** built-in `describe`/`test`/`expect` (enabled via `ggTestAssertions`). Supports nested `describe` blocks (suite names are composed with ` > ` separators), `test.skip`/`describe.skip` for unconditional skipping, and `skipIf(condition)`/`runIf(condition)` on both `describe` and `test` for conditional execution. Skip state is inherited by nested describes. Test callbacks can be `async` — `await` works directly in the test body and inside `expect()` calls (e.g., `expect(await somePromise).toBe(42)`). Returning a Promise from a non-async test callback is supported for backward compatibility. Lifecycle hooks (`beforeEach`/`afterEach`) and benchmark callbacks (`bench()`) also support `async` functions with `await`.
 - **`.resolves` / `.rejects`:** Vitest/Jest-compatible Promise unwrapping on the `expect()` object. `await expect(promise).resolves.toBe(42)` unwraps a fulfilled Promise; `await expect(promise).rejects.toThrow(TypeError)` unwraps a rejected Promise. Both are getter properties (like `.not`) that drain the microtask queue and return a new expectation with the unwrapped value. `.rejects.toThrow(ErrorType)` checks the rejection reason's error name. Both require an actual Promise — call async functions explicitly: `expect(fn())` not `expect(fn)`.
 - **`.toThrow()` best practice:** Always pass an explicit error constructor (`TypeError`, `RangeError`, `Error`, etc.) to `.toThrow()` — e.g. `expect(() => null.foo).toThrow(TypeError)`. Bare `.toThrow()` only asserts *something* throws; the constructor form also verifies the error type.
@@ -508,6 +514,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 | [docs/code-style.md](docs/code-style.md) | Naming conventions, patterns, file organization |
 | [docs/value-system.md](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
 | [docs/built-ins.md](docs/built-ins.md) | Available built-ins, registration system, adding new ones |
+| [docs/adding-built-in-types.md](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
 | [docs/testing.md](docs/testing.md) | Test organization, writing tests, running tests |
 | [docs/benchmarks.md](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks, CI comparison |
 | [docs/build-system.md](docs/build-system.md) | Build commands, configuration, CI/CD |

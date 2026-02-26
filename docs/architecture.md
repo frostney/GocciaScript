@@ -30,7 +30,7 @@ The **Engine** (`Goccia.Engine.pas`) sits above this pipeline and orchestrates t
 The top-level entry point. Provides static convenience methods (`RunScript`, `RunScriptFromFile`, `RunScriptFromStringList`) and manages:
 
 - **Garbage collector initialization** — Calls `TGocciaGarbageCollector.Initialize`, registers the global scope as a GC root, and pins singleton values via `PinSingletons` (`UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache, etc.).
-- **Built-in registration** — A single `RegisterBuiltIns` method selectively creates and registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, error constructors) based on a `TGocciaGlobalBuiltins` flag set. All built-in constructors share the same `(name, scope, ThrowError)` signature.
+- **Built-in registration** — A single `RegisterBuiltIns` method selectively creates and registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays, error constructors) based on a `TGocciaGlobalBuiltins` flag set. All built-in constructors share the same `(name, scope, ThrowError)` signature.
 - **Interpreter lifecycle** — Creates and owns the `TGocciaInterpreter` instance.
 - **Module resolver** — Creates a default `TGocciaModuleResolver` (base directory = entry script directory) and passes it to the interpreter. Accepts an optional custom resolver via a constructor overload; when injected, the engine does not own it. Exposes `AddAlias` and `RegisterGlobalModule` convenience methods.
 - **Prototype chain setup** — Calls `RegisterBuiltinConstructors` to wire up the `Object → Array → Number → String` prototype chain.
@@ -202,7 +202,7 @@ flowchart TD
     Run["TGocciaEngine.RunScript(Code)"]
     Run --> Create["Create TGocciaInterpreter"]
     Run --> Register["RegisterBuiltIns(GlobalScope)"]
-    Register --> Builtins["Create and register each enabled built-in:\nconsole, Math, JSON, Object, Array,\nNumber, String, Symbol, Set, Map,\nundefined, NaN, Infinity, Error constructors"]
+    Register --> Builtins["Create and register each enabled built-in:\nconsole, Math, JSON, Object, Array,\nNumber, String, Symbol, Set, Map,\nArrayBuffer, SharedArrayBuffer, TypedArrays,\nundefined, NaN, Infinity, Error constructors"]
     Register --> Constructors["RegisterBuiltinConstructors → prototype chains"]
     Run --> Lex["TGocciaLexer.Create(Code).ScanTokens → Tokens"]
     Run --> Parse["TGocciaParser.Create(Tokens).Parse → AST"]

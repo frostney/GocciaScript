@@ -185,10 +185,17 @@ type
     property GenericParams: string read FGenericParams write FGenericParams;
   end;
 
-  TGocciaComputedStaticAccessorEntry = record
+  TGocciaComputedGetterEntry = record
     KeyExpression: TGocciaExpression;
     GetterExpression: TGocciaGetterExpression;
   end;
+
+  TGocciaComputedSetterEntry = record
+    KeyExpression: TGocciaExpression;
+    SetterExpression: TGocciaSetterExpression;
+  end;
+
+  TGocciaComputedStaticAccessorEntry = TGocciaComputedGetterEntry;
 
   // TC39 proposal-decorators: class element kinds
   TGocciaClassElementKind = (
@@ -226,7 +233,10 @@ type
     FSetters: TDictionary<string, TGocciaSetterExpression>;
     FStaticGetters: TDictionary<string, TGocciaGetterExpression>;
     FStaticSetters: TDictionary<string, TGocciaSetterExpression>;
-    FComputedStaticGetters: array of TGocciaComputedStaticAccessorEntry;
+    FComputedStaticGetters: array of TGocciaComputedGetterEntry;
+    FComputedStaticSetters: array of TGocciaComputedSetterEntry;
+    FComputedInstanceGetters: array of TGocciaComputedGetterEntry;
+    FComputedInstanceSetters: array of TGocciaComputedSetterEntry;
     FStaticProperties: TDictionary<string, TGocciaExpression>;
     FInstanceProperties: TOrderedMap<TGocciaExpression>;
     FPrivateInstanceProperties: TOrderedMap<TGocciaExpression>;
@@ -446,6 +456,9 @@ uses
     FStaticGetters := TDictionary<string, TGocciaGetterExpression>.Create;
     FStaticSetters := TDictionary<string, TGocciaSetterExpression>.Create;
     SetLength(FComputedStaticGetters, 0);
+    SetLength(FComputedStaticSetters, 0);
+    SetLength(FComputedInstanceGetters, 0);
+    SetLength(FComputedInstanceSetters, 0);
     FStaticProperties := AStaticProperties;
     FInstanceProperties := AInstanceProperties;
     FPrivateInstanceProperties := APrivateInstanceProperties;

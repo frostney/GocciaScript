@@ -36,6 +36,16 @@ const
   PROP_THEN         = 'then';
   PROP_RESOLVES     = 'resolves';
   PROP_REJECTS      = 'rejects';
+  PROP_BYTE_LENGTH  = 'byteLength';
+  PROP_BYTE_OFFSET  = 'byteOffset';
+  PROP_BUFFER       = 'buffer';
+  PROP_BYTES_PER_ELEMENT = 'BYTES_PER_ELEMENT';
+  PROP_FROM             = 'from';
+  PROP_OF               = 'of';
+  PROP_HAS_OWN_PROPERTY       = 'hasOwnProperty';
+  PROP_IS_PROTOTYPE_OF        = 'isPrototypeOf';
+  PROP_PROPERTY_IS_ENUMERABLE = 'propertyIsEnumerable';
+  PROP_TO_LOCALE_STRING       = 'toLocaleString';
 
 implementation
 

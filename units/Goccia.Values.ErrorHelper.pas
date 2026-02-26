@@ -39,10 +39,36 @@ uses
   Goccia.Values.Error,
   Goccia.Values.Primitives;
 
+function GetErrorPrototype(const AName: string): TGocciaObjectValue;
+begin
+  if AName = TYPE_ERROR_NAME then
+    Result := GTypeErrorProto
+  else if AName = RANGE_ERROR_NAME then
+    Result := GRangeErrorProto
+  else if AName = REFERENCE_ERROR_NAME then
+    Result := GReferenceErrorProto
+  else if AName = SYNTAX_ERROR_NAME then
+    Result := GSyntaxErrorProto
+  else if AName = URI_ERROR_NAME then
+    Result := GURIErrorProto
+  else if AName = AGGREGATE_ERROR_NAME then
+    Result := GAggregateErrorProto
+  else if AName = ERROR_NAME then
+    Result := GErrorProto
+  else
+    Result := GErrorProto;
+end;
+
 // ES2026 §10.4.4.4 [[ErrorData]]
 function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Integer = 0): TGocciaObjectValue;
+var
+  Proto: TGocciaObjectValue;
 begin
-  Result := TGocciaObjectValue.Create;
+  Proto := GetErrorPrototype(AName);
+  if Assigned(Proto) then
+    Result := TGocciaObjectValue.Create(Proto)
+  else
+    Result := TGocciaObjectValue.Create;
   Result.HasErrorData := True;
   Result.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AName));
   Result.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(AMessage));

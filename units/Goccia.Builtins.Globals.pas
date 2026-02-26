@@ -13,6 +13,13 @@ uses
   Goccia.Values.Primitives;
 
 var
+  GErrorProto: TGocciaObjectValue;
+  GTypeErrorProto: TGocciaObjectValue;
+  GReferenceErrorProto: TGocciaObjectValue;
+  GRangeErrorProto: TGocciaObjectValue;
+  GSyntaxErrorProto: TGocciaObjectValue;
+  GURIErrorProto: TGocciaObjectValue;
+  GAggregateErrorProto: TGocciaObjectValue;
   GDOMExceptionProto: TGocciaObjectValue;
 
 type
@@ -54,6 +61,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
@@ -61,6 +69,7 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SetValue,
+  Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -112,6 +121,14 @@ begin
   FDOMExceptionProto.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(ERROR_NAME));
   FDOMExceptionProto.AssignProperty(PROP_MESSAGE, TGocciaStringLiteralValue.Create(''));
   FDOMExceptionProto.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(0));
+
+  GErrorProto := FErrorProto;
+  GTypeErrorProto := FTypeErrorProto;
+  GReferenceErrorProto := FReferenceErrorProto;
+  GRangeErrorProto := FRangeErrorProto;
+  GSyntaxErrorProto := FSyntaxErrorProto;
+  GURIErrorProto := FURIErrorProto;
+  GAggregateErrorProto := FAggregateErrorProto;
   GDOMExceptionProto := FDOMExceptionProto;
 
   ErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ErrorConstructor, ERROR_NAME, 1);
@@ -465,6 +482,36 @@ begin
     Result.AddItem(StructuredCloneValue(ASet.Items[I], AMemory));
 end;
 
+function CloneArrayBuffer(const ABuf: TGocciaArrayBufferValue;
+  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaArrayBufferValue;
+var
+  Len: Integer;
+begin
+  Len := Length(ABuf.Data);
+  Result := TGocciaArrayBufferValue.Create(Len);
+  AMemory.Add(ABuf, Result);
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.AddTempRoot(Result);
+
+  if Len > 0 then
+    Move(ABuf.Data[0], Result.Data[0], Len);
+end;
+
+function CloneSharedArrayBuffer(const ABuf: TGocciaSharedArrayBufferValue;
+  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaSharedArrayBufferValue;
+var
+  Len: Integer;
+begin
+  Len := Length(ABuf.Data);
+  Result := TGocciaSharedArrayBufferValue.Create(Len);
+  AMemory.Add(ABuf, Result);
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.AddTempRoot(Result);
+
+  if Len > 0 then
+    Move(ABuf.Data[0], Result.Data[0], Len);
+end;
+
 function StructuredCloneValue(const AValue: TGocciaValue;
   const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaValue;
 var
@@ -485,7 +532,11 @@ begin
   if AMemory.TryGetValue(AValue, Existing) then
     Exit(Existing);
 
-  if AValue is TGocciaArrayValue then
+  if AValue is TGocciaSharedArrayBufferValue then
+    Result := CloneSharedArrayBuffer(TGocciaSharedArrayBufferValue(AValue), AMemory)
+  else if AValue is TGocciaArrayBufferValue then
+    Result := CloneArrayBuffer(TGocciaArrayBufferValue(AValue), AMemory)
+  else if AValue is TGocciaArrayValue then
     Result := CloneArray(TGocciaArrayValue(AValue), AMemory)
   else if AValue is TGocciaMapValue then
     Result := CloneMap(TGocciaMapValue(AValue), AMemory)
@@ -500,6 +551,7 @@ end;
 function TGocciaGlobals.StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Memory: TDictionary<TGocciaValue, TGocciaValue>;
+  CloneValue: TGocciaValue;
 begin
   if AArgs.Length = 0 then
     ThrowTypeError('Failed to execute ''structuredClone'': 1 argument required, but only 0 present.');
@@ -508,6 +560,9 @@ begin
   try
     Result := StructuredCloneValue(AArgs.GetElement(0), Memory);
   finally
+    if Assigned(TGocciaGarbageCollector.Instance) then
+      for CloneValue in Memory.Values do
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(CloneValue);
     Memory.Free;
   end;
 end;

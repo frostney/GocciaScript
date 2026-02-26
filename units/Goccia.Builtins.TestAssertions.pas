@@ -56,6 +56,7 @@ type
     function ToBeNull(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToBeNaN(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToBeUndefined(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToBeDefined(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToBeTruthy(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToBeFalsy(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToBeGreaterThan(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -204,6 +205,8 @@ begin
     TGocciaNativeFunctionValue.Create(ToBeNaN, 'toBeNaN', 0), [pfConfigurable, pfWritable]));
   DefineProperty('toBeUndefined', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToBeUndefined, 'toBeUndefined', 0), [pfConfigurable, pfWritable]));
+  DefineProperty('toBeDefined', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToBeDefined, 'toBeDefined', 0), [pfConfigurable, pfWritable]));
   DefineProperty('toBeTruthy', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToBeTruthy, 'toBeTruthy', 0), [pfConfigurable, pfWritable]));
   DefineProperty('toBeFalsy', TGocciaPropertyDescriptorData.Create(
@@ -374,6 +377,32 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeUndefined',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to be undefined');
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
+function TGocciaExpectationValue.ToBeDefined(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  IsDefined: Boolean;
+begin
+  IsDefined := not (FActualValue is TGocciaUndefinedLiteralValue);
+
+  if FIsNegated then
+    IsDefined := not IsDefined;
+
+  if IsDefined then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toBeDefined');
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeDefined',
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to be defined')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeDefined',
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' to be defined');
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1630,8 +1659,11 @@ begin
         RunCallbacks(FBeforeEachCallbacks);
 
         try
-          // Execute the test function
-          ClonedFunction := TestCase.TestFunction.CloneWithNewScope(FScope.CreateChild(skFunction, 'TestFunction'));
+          // Execute the test function — use the test's original closure as parent so
+          // lexical captures (e.g. from forEach) remain visible; create a child scope
+          // for test-local bindings.
+          ClonedFunction := TestCase.TestFunction.CloneWithNewScope(
+            TestCase.TestFunction.Closure.CreateChild(skFunction, 'TestFunction'));
           TestResult := ClonedFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
           // Drain microtask queue after each test to process Promise reactions

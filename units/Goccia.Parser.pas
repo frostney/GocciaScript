@@ -2215,7 +2215,10 @@ var
   ComputedKeyExpression: TGocciaExpression;
   StaticGetters: TDictionary<string, TGocciaGetterExpression>;
   StaticSetters: TDictionary<string, TGocciaSetterExpression>;
-  ComputedStaticGetters: array of TGocciaComputedStaticAccessorEntry;
+  ComputedStaticGetters: array of TGocciaComputedGetterEntry;
+  ComputedStaticSetters: array of TGocciaComputedSetterEntry;
+  ComputedInstanceGetters: array of TGocciaComputedGetterEntry;
+  ComputedInstanceSetters: array of TGocciaComputedSetterEntry;
   ClassGenericParams, ClassImplementsClause, FieldType: string;
   InstancePropertyTypes: TDictionary<string, string>;
   MemberDecorators: TGocciaDecoratorList;
@@ -2255,6 +2258,9 @@ begin
   StaticGetters := TDictionary<string, TGocciaGetterExpression>.Create;
   StaticSetters := TDictionary<string, TGocciaSetterExpression>.Create;
   SetLength(ComputedStaticGetters, 0);
+  SetLength(ComputedStaticSetters, 0);
+  SetLength(ComputedInstanceGetters, 0);
+  SetLength(ComputedInstanceSetters, 0);
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
@@ -2439,7 +2445,7 @@ begin
     begin
       Getter := ParseGetterExpression;
 
-      if Length(MemberDecorators) > 0 then
+      if (Length(MemberDecorators) > 0) or IsComputed then
       begin
         SetLength(Elements, Length(Elements) + 1);
         Elements[High(Elements)].Kind := cekGetter;
@@ -2463,6 +2469,12 @@ begin
         else
           StaticGetters.Add(MemberName, Getter);
       end
+      else if IsComputed then
+      begin
+        SetLength(ComputedInstanceGetters, Length(ComputedInstanceGetters) + 1);
+        ComputedInstanceGetters[High(ComputedInstanceGetters)].KeyExpression := ComputedKeyExpression;
+        ComputedInstanceGetters[High(ComputedInstanceGetters)].GetterExpression := Getter;
+      end
       else if IsPrivate then
         Getters.Add('#' + MemberName, Getter)
       else
@@ -2472,7 +2484,7 @@ begin
     begin
       Setter := ParseSetterExpression;
 
-      if Length(MemberDecorators) > 0 then
+      if (Length(MemberDecorators) > 0) or IsComputed then
       begin
         SetLength(Elements, Length(Elements) + 1);
         Elements[High(Elements)].Kind := cekSetter;
@@ -2486,7 +2498,22 @@ begin
       end;
 
       if IsStatic then
-        StaticSetters.Add(MemberName, Setter)
+      begin
+        if IsComputed then
+        begin
+          SetLength(ComputedStaticSetters, Length(ComputedStaticSetters) + 1);
+          ComputedStaticSetters[High(ComputedStaticSetters)].KeyExpression := ComputedKeyExpression;
+          ComputedStaticSetters[High(ComputedStaticSetters)].SetterExpression := Setter;
+        end
+        else
+          StaticSetters.Add(MemberName, Setter);
+      end
+      else if IsComputed then
+      begin
+        SetLength(ComputedInstanceSetters, Length(ComputedInstanceSetters) + 1);
+        ComputedInstanceSetters[High(ComputedInstanceSetters)].KeyExpression := ComputedKeyExpression;
+        ComputedInstanceSetters[High(ComputedInstanceSetters)].SetterExpression := Setter;
+      end
       else if IsPrivate then
         Setters.Add('#' + MemberName, Setter)
       else
@@ -2539,6 +2566,9 @@ begin
   Result.FStaticSetters.Free;
   Result.FStaticSetters := StaticSetters;
   Result.FComputedStaticGetters := ComputedStaticGetters;
+  Result.FComputedStaticSetters := ComputedStaticSetters;
+  Result.FComputedInstanceGetters := ComputedInstanceGetters;
+  Result.FComputedInstanceSetters := ComputedInstanceSetters;
   Result.FElements := Elements;
 
   InstancePropertyTypes.Free;
