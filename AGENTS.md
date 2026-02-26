@@ -112,7 +112,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Benchmark Reporter | `Goccia.Benchmark.Reporter.pas` | Multi-format benchmark output (console, text, CSV, JSON) with setup/teardown timing |
 | REPL Line Editor | `Goccia.REPL.LineEditor.pas` | Interactive line editing with history for the REPL |
 | REPL Formatter | `Goccia.REPL.Formatter.pas` | Color-formatted value output for the REPL |
-| Shared Prototype | `Goccia.SharedPrototype.pas` | Shared prototype singleton utilities |
+| Shared Prototype | `Goccia.SharedPrototype.pas` | Shared prototype singleton utilities; `Create` auto-pins both prototype and method host with the GC |
 | Constants | `Goccia.Constants.pas` | Literal value strings (`'true'`, `'NaN'`, etc.) and numeric constants |
 | Constants: Type Names | `Goccia.Constants.TypeNames.pas` | `typeof` result string constants (`'object'`, `'string'`, etc.) |
 | Constants: Property Names | `Goccia.Constants.PropertyNames.pas` | Common property name constants (`'length'`, `'constructor'`, etc.) |
@@ -225,7 +225,7 @@ GocciaScript uses a mark-and-sweep garbage collector (`Goccia.GarbageCollector.p
 
 - **AST literal values** are unregistered from the GC by `TGocciaLiteralExpression.Create` and owned by the AST node. The evaluator calls `Value.RuntimeCopy` to produce fresh GC-managed values when evaluating literals.
 - **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache) are pinned via `TGocciaGarbageCollector.Instance.PinValue` during engine initialization (consolidated in `PinSingletons`).
-- **Shared prototype singletons** (String, Number, Array, Set, Map, Function, Symbol, ArrayBuffer, SharedArrayBuffer) are pinned inside each type's `InitializePrototype` method. All prototype method callbacks must use `ThisValue` (not `Self`) to access instance data, since `Self` refers to the method host singleton. **Object.prototype** is the `ObjectConstructor.Prototype` created in `RegisterBuiltinConstructors` — it hosts `toString()` (ES2026 §20.1.3.6) and is stored in `TGocciaObjectValue.SharedObjectPrototype` so the evaluator can assign it as the prototype of object literals.
+- **Shared prototype singletons** (String, Number, Array, Set, Map, Function, Symbol, ArrayBuffer, SharedArrayBuffer, TypedArray) are pinned inside each type's `InitializePrototype` method. `TGocciaSharedPrototype.Create` automatically pins both the prototype object and the method host via `TGocciaGarbageCollector.Instance.PinValue` — no manual pinning is needed after calling `TGocciaSharedPrototype.Create`. All prototype method callbacks must use `ThisValue` (not `Self`) to access instance data, since `Self` refers to the method host singleton. **Object.prototype** is the `ObjectConstructor.Prototype` created in `RegisterBuiltinConstructors` — it hosts `toString()` (ES2026 §20.1.3.6) and is stored in `TGocciaObjectValue.SharedObjectPrototype` so the evaluator can assign it as the prototype of object literals.
 - **Pinned values, temp roots, and root scopes** are stored in `TDictionary<T, Boolean>` for O(1) membership checks.
 - **Values held only by Pascal code** (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot` for the duration they are needed. Example: benchmark functions held in a `TObjectList`.
 - **Scopes** register with the GC in their constructor. Active call scopes are tracked via `PushActiveScope`/`PopActiveScope` in `TGocciaFunctionValue.Call`.
@@ -371,7 +371,7 @@ On FPC 3.2.2 AArch64, `Double(Int64Var)` performs a bit reinterpretation, not a 
 
 ### Design Patterns in Use
 
-- **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`) and shared prototype singletons (String, Number, Array, Set, Map, Function, Symbol — each type uses `class var` + `InitializePrototype` guarded by `if Assigned`)
+- **Singleton** for special values (`undefined`, `null`, `true`, `false`, `NaN`, `Infinity`) and shared prototype singletons (String, Number, Array, Set, Map, Function, Symbol, ArrayBuffer, SharedArrayBuffer, TypedArray — each type uses `class var FShared: TGocciaSharedPrototype` + `InitializePrototype` guarded by `if Assigned`; `TGocciaSharedPrototype.Create` handles GC pinning automatically)
 - **Factory method** for scope creation (`CreateChild`, with optional capacity hint)
 - **Context object** for evaluation state (`TGocciaEvaluationContext`)
 - **Virtual dispatch** for property access (`GetProperty`/`SetProperty`), type discrimination (`IsPrimitive`/`IsCallable`), and scope chain resolution (`GetThisValue`/`GetOwningClass`/`GetSuperClass`) on the `TGocciaValue` and `TGocciaScope` hierarchies

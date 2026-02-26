@@ -771,7 +771,7 @@ TypedArrays provide array-like views over ArrayBuffer data with fixed element ty
 | `new TypedArray(length)` | Creates array of `length` elements, zero-initialized |
 | `new TypedArray(typedArray)` | Copies elements from another typed array (with type conversion) |
 | `new TypedArray(array)` | Creates from a regular array |
-| `new TypedArray(buffer [, byteOffset [, length]])` | Creates a view over an ArrayBuffer |
+| `new TypedArray(buffer [, byteOffset [, length]])` | Creates a view over an ArrayBuffer or SharedArrayBuffer. The `.buffer` property returns the original buffer object. |
 
 **Static properties:**
 
