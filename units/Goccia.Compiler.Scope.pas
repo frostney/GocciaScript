@@ -64,6 +64,9 @@ type
 
 implementation
 
+uses
+  SysUtils;
+
 { TGocciaCompilerScope }
 
 constructor TGocciaCompilerScope.Create(const AParent: TGocciaCompilerScope;
@@ -81,6 +84,8 @@ end;
 function TGocciaCompilerScope.DeclareLocal(const AName: string;
   const AIsConst: Boolean): UInt8;
 begin
+  if FNextSlot >= High(UInt8) then
+    raise Exception.Create('Compiler error: local variable slot overflow (>255)');
   if FLocalCount >= Length(FLocals) then
     SetLength(FLocals, FLocalCount * 2 + 8);
   FLocals[FLocalCount].Name := AName;
@@ -122,7 +127,11 @@ begin
 
   UpvalueIdx := FParent.ResolveUpvalue(AName);
   if UpvalueIdx >= 0 then
+  begin
+    if UpvalueIdx > High(UInt8) then
+      raise Exception.Create('Compiler error: upvalue index overflow (>255)');
     Exit(AddUpvalue(UInt8(UpvalueIdx), False));
+  end;
 
   Result := -1;
 end;
@@ -172,11 +181,10 @@ begin
     Dec(FLocalCount);
     if FLocals[FLocalCount].IsCaptured then
     begin
-      if AClosedCount < Length(AClosedLocals) then
-      begin
-        AClosedLocals[AClosedCount] := FLocals[FLocalCount].Slot;
-        Inc(AClosedCount);
-      end;
+      if AClosedCount >= Length(AClosedLocals) then
+        raise Exception.Create('AClosedLocals buffer too small for captured locals');
+      AClosedLocals[AClosedCount] := FLocals[FLocalCount].Slot;
+      Inc(AClosedCount);
     end;
     Dec(FNextSlot);
   end;

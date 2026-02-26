@@ -152,6 +152,15 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | GocciaScript Backend | `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — bridges GocciaScript engine to Souffle VM |
 | GocciaScript Compiler | `Goccia.Compiler.pas` | `TGocciaCompiler` — AST → Souffle bytecode compilation |
 | GocciaScript Runtime | `Goccia.Runtime.Operations.pas` | `TGocciaRuntimeOperations` — GocciaScript semantics for Souffle VM |
+| Compiler Scope | `Goccia.Compiler.Scope.pas` | `TGocciaCompilerScope` — lexical scope tracking, local/upvalue resolution for the bytecode compiler |
+
+**Souffle VM known limitations:** Iteration (`GetIterator`, `IteratorNext`, `SpreadInto`), module imports (`ImportModule`), and async/await (`AwaitValue`) are currently stubbed in `TGocciaRuntimeOperations`. Closure receiver binding is accepted but not stored into the frame. `.sbc` binary format uses native endianness (not yet portable). ABC-encoded instructions limit constant pool references to 255 per prototype. See [docs/souffle-vm.md § Known Limitations](docs/souffle-vm.md#known-limitations) for the full list.
+
+**Souffle VM design rules:**
+- The `souffle/` directory must not import `Goccia.*` units — all GocciaScript dependencies live in the bridge files (`Goccia.Engine.Backend.pas`, `Goccia.Runtime.Operations.pas`, `Goccia.Compiler.pas`).
+- NaN handling in the Souffle layer uses raw IEEE 754 bit-pattern checks (`FloatBitsAreNaN`), not FPC's `Math.IsNaN`, to avoid language-runtime dependencies and AArch64 pitfalls.
+- New Tier 2 opcodes should only be added when no combination of existing opcodes can express the semantics efficiently. Language-specific features should be desugared by the compiler.
+- The `TSouffleRuntimeOperations` abstract class defines the contract between the VM and any language frontend. GocciaScript's `TGocciaRuntimeOperations` is one implementation; future frontends provide their own.
 
 ## Development Workflow
 

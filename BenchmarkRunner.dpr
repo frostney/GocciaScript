@@ -269,6 +269,8 @@ begin
   case GMode of
     ebTreeWalk:  Result := CollectBenchmarkFileInterpreted(AFileName, AReporter);
     ebSouffleVM: Result := CollectBenchmarkFileBytecode(AFileName, AReporter);
+  else
+    raise Exception.CreateFmt('Unsupported execution backend: %d', [Ord(GMode)]);
   end;
 end;
 

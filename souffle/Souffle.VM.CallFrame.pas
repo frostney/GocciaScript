@@ -81,6 +81,11 @@ end;
 
 function TSouffleCallStack.Peek: PSouffleVMCallFrame;
 begin
+  {$IFDEF DEBUG}
+  Assert(FCount > 0, 'TSouffleCallStack.Peek called on empty stack');
+  {$ENDIF}
+  if FCount = 0 then
+    Exit(nil);
   Result := @FFrames[FCount - 1];
 end;
 

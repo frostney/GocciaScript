@@ -78,6 +78,8 @@ end;
 
 destructor TSouffleVM.Destroy;
 begin
+  if Assigned(FGC) then
+    FGC.SetExternalRootMarker(nil);
   FCallStack.Free;
   FHandlerStack.Free;
   inherited;
@@ -106,6 +108,9 @@ begin
   Base := 0;
   if not FCallStack.IsEmpty then
     Base := FCallStack.Peek^.BaseRegister + FCallStack.Peek^.Prototype.MaxRegisters;
+
+  if Base + AClosure.Prototype.MaxRegisters > Length(FRegisters) then
+    raise Exception.Create('Stack overflow: register window exceeds capacity');
 
   Frame := FCallStack.Push(AClosure.Prototype, AClosure, Base, Base, FHandlerStack.Count);
 
@@ -391,9 +396,12 @@ begin
       FHandlerStack.Pop;
 
       while FCallStack.Count - 1 > Handler.FrameIndex do
+      begin
+        CloseUpvalues(FCallStack.Peek^.BaseRegister);
         FCallStack.Pop;
+      end;
 
-      AFrame^.IP := Handler.CatchIP;
+      FCallStack.Peek^.IP := Handler.CatchIP;
       FRegisters[Handler.BaseRegister + Handler.CatchRegister] :=
         FRegisters[Base + A];
     end;

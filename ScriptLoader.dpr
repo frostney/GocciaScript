@@ -197,7 +197,10 @@ begin
 
     if GEmitOnly then
     begin
-      EmitBytecode(AFileName, GEmitPath);
+      if GEmitPath <> '' then
+        EmitBytecode(AFileName, GEmitPath)
+      else
+        EmitBytecode(AFileName, ChangeFileExt(AFileName, EXT_SBC));
       Exit;
     end;
 

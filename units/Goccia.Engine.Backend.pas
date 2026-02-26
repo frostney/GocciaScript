@@ -47,6 +47,7 @@ implementation
 
 uses
   Classes,
+  SysUtils,
 
   Souffle.Heap,
   Souffle.Value,
@@ -149,6 +150,8 @@ var
   Names: TGocciaStringArray;
   I: Integer;
 begin
+  FreeAndNil(FEngine);
+
   EmptySource := TStringList.Create;
   try
     FEngine := TGocciaEngine.Create(FSourcePath, EmptySource, AGlobals);

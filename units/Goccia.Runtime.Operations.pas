@@ -195,7 +195,9 @@ end;
 
 procedure TGocciaWrappedValue.MarkReferences;
 begin
-  // Wrapped GocciaValue is managed by Goccia's own GC
+  inherited;
+  if Assigned(FValue) then
+    FValue.MarkReferences;
 end;
 
 function TGocciaWrappedValue.DebugString: string;
@@ -619,8 +621,21 @@ end;
 
 function TGocciaRuntimeOperations.DeleteProperty(const AObject: TSouffleValue;
   const AKey: string): TSouffleValue;
+var
+  GocciaObj: TGocciaValue;
 begin
-  Result := SouffleBoolean(True);
+  if SouffleIsReference(AObject) and Assigned(AObject.AsReference) and
+     (AObject.AsReference is TGocciaWrappedValue) then
+  begin
+    GocciaObj := TGocciaWrappedValue(AObject.AsReference).Value;
+    if GocciaObj is TGocciaObjectValue then
+    begin
+      TGocciaObjectValue(GocciaObj).DeleteProperty(AKey);
+      Result := SouffleBoolean(True);
+      Exit;
+    end;
+  end;
+  Result := SouffleBoolean(False);
 end;
 
 { Invocation -- delegates to GocciaScript's existing call mechanism }

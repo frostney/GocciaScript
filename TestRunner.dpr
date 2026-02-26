@@ -437,7 +437,13 @@ begin
         ExitCode := 1;
         Exit;
       end
-      else if Copy(ParamStr(I), 1, 2) <> '--' then
+      else if Copy(ParamStr(I), 1, 2) = '--' then
+      begin
+        WriteLn('Error: Unknown option "', ParamStr(I), '"');
+        ExitCode := 1;
+        Exit;
+      end
+      else
         Paths.Add(ParamStr(I));
     end;
 

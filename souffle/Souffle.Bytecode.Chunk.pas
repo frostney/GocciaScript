@@ -93,6 +93,15 @@ const
 
 implementation
 
+function FloatBitsAreNaN(const AValue: Double): Boolean; inline;
+var
+  Bits: UInt64;
+begin
+  Move(AValue, Bits, SizeOf(Double));
+  Result := ((Bits and $7FF0000000000000) = $7FF0000000000000) and
+            ((Bits and $000FFFFFFFFFFFFF) <> 0);
+end;
+
 { TSouffleFunctionPrototype }
 
 constructor TSouffleFunctionPrototype.Create(const AName: string);
@@ -192,7 +201,9 @@ var
   I: Integer;
 begin
   for I := 0 to FConstantCount - 1 do
-    if (FConstants[I].Kind = bckFloat) and (FConstants[I].FloatValue = AValue) then
+    if (FConstants[I].Kind = bckFloat) and
+       ((FConstants[I].FloatValue = AValue) or
+        (FloatBitsAreNaN(FConstants[I].FloatValue) and FloatBitsAreNaN(AValue))) then
       Exit(UInt16(I));
 
   if FConstantCount >= Length(FConstants) then

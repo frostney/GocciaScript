@@ -402,7 +402,7 @@ procedure TGocciaCompiler.CompilePropertyAssignment(
   const AExpr: TGocciaPropertyAssignmentExpression; const ADest: UInt8);
 var
   ObjReg, ValReg: UInt8;
-  KeyIdx: UInt8;
+  KeyIdx: UInt16;
 begin
   ObjReg := FCurrentScope.AllocateRegister;
   ValReg := FCurrentScope.AllocateRegister;
@@ -410,7 +410,9 @@ begin
   CompileExpression(AExpr.ObjectExpr, ObjReg);
   CompileExpression(AExpr.Value, ValReg);
 
-  KeyIdx := UInt8(FCurrentPrototype.AddConstantString(AExpr.PropertyName) and $FF);
+  KeyIdx := FCurrentPrototype.AddConstantString(AExpr.PropertyName);
+  if KeyIdx > High(UInt8) then
+    raise Exception.Create('Constant pool overflow: property name index exceeds 255');
   Emit(EncodeABC(OP_RT_SET_PROP, ObjReg, KeyIdx, ValReg));
 
   if ADest <> ValReg then
@@ -626,23 +628,29 @@ var
   Key: string;
   ValExpr: TGocciaExpression;
   ValReg: UInt8;
-  KeyIdx: UInt8;
+  KeyIdx: UInt16;
   Names: TStringList;
 begin
   Emit(EncodeABC(OP_RT_NEW_COMPOUND, ADest, COMPOUND_TAG_OBJECT, 0));
 
   Names := AExpr.GetPropertyNamesInOrder;
-  for I := 0 to Names.Count - 1 do
-  begin
-    Key := Names[I];
-    if AExpr.Properties.TryGetValue(Key, ValExpr) then
+  try
+    for I := 0 to Names.Count - 1 do
     begin
-      ValReg := FCurrentScope.AllocateRegister;
-      CompileExpression(ValExpr, ValReg);
-      KeyIdx := UInt8(FCurrentPrototype.AddConstantString(Key) and $FF);
-      Emit(EncodeABC(OP_RT_INIT_FIELD, ADest, KeyIdx, ValReg));
-      FCurrentScope.FreeRegister;
+      Key := Names[I];
+      if AExpr.Properties.TryGetValue(Key, ValExpr) then
+      begin
+        ValReg := FCurrentScope.AllocateRegister;
+        CompileExpression(ValExpr, ValReg);
+        KeyIdx := FCurrentPrototype.AddConstantString(Key);
+        if KeyIdx > High(UInt8) then
+          raise Exception.Create('Constant pool overflow: property name index exceeds 255');
+        Emit(EncodeABC(OP_RT_INIT_FIELD, ADest, KeyIdx, ValReg));
+        FCurrentScope.FreeRegister;
+      end;
     end;
+  finally
+    Names.Free;
   end;
 end;
 

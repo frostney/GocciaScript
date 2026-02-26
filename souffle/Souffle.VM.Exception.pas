@@ -51,7 +51,10 @@ implementation
 constructor TSouffleHandlerStack.Create(const AInitialCapacity: Integer);
 begin
   inherited Create;
-  FCapacity := AInitialCapacity;
+  if AInitialCapacity < 1 then
+    FCapacity := 1
+  else
+    FCapacity := AInitialCapacity;
   SetLength(FEntries, FCapacity);
   FCount := 0;
 end;
@@ -62,7 +65,10 @@ procedure TSouffleHandlerStack.Push(const ACatchIP, AFinallyIP: Integer;
 begin
   if FCount >= FCapacity then
   begin
-    FCapacity := FCapacity * 2;
+    if FCapacity < 1 then
+      FCapacity := 1
+    else
+      FCapacity := FCapacity * 2;
     SetLength(FEntries, FCapacity);
   end;
   FEntries[FCount].CatchIP := ACatchIP;
@@ -81,6 +87,11 @@ end;
 
 function TSouffleHandlerStack.Peek: TSouffleHandlerEntry;
 begin
+  {$IFDEF DEBUG}
+  Assert(FCount > 0, 'TSouffleHandlerStack.Peek called on empty stack');
+  {$ENDIF}
+  if FCount = 0 then
+    raise Exception.Create('TSouffleHandlerStack.Peek: stack is empty');
   Result := FEntries[FCount - 1];
 end;
 

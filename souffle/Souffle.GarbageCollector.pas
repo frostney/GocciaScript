@@ -100,7 +100,11 @@ begin
 end;
 
 destructor TSouffleGarbageCollector.Destroy;
+var
+  I: Integer;
 begin
+  for I := 0 to FManagedObjects.Count - 1 do
+    FManagedObjects[I].Free;
   FManagedObjects.Free;
   FPinnedObjects.Free;
   FTempRoots.Free;

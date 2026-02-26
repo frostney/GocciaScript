@@ -2825,13 +2825,15 @@ begin
     begin
       InitializeInstanceProperties(TGocciaInstanceValue(Instance), AClassValue, InitContext);
 
-      if Assigned(AClassValue.SuperClass) then
+      WalkClass := AClassValue.SuperClass;
+      while Assigned(WalkClass) do
       begin
         SuperInitContext := AContext;
-        SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue.SuperClass);
+        SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
         SuperInitScope.ThisValue := Instance;
         SuperInitContext.Scope := SuperInitScope;
-        InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), AClassValue.SuperClass, SuperInitContext);
+        InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), WalkClass, SuperInitContext);
+        WalkClass := WalkClass.SuperClass;
       end;
 
       InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), AClassValue, InitContext);

@@ -405,6 +405,23 @@ Language-specific features are compiled into sequences of generic VM instruction
 
 This keeps the VM general-purpose: new language features are expressed through existing operations.
 
+### Deferred Runtime Operations
+
+Several runtime operations are currently stubbed in `TGocciaRuntimeOperations` and will need full implementations before the corresponding GocciaScript features work in bytecode mode:
+
+- **Iteration** (`GetIterator`, `IteratorNext`, `SpreadInto`) — Not yet wired to GocciaScript's iterator protocol. Blocks `for...of`, spread syntax, and destructuring in bytecode mode.
+- **Module imports** (`ImportModule`) — Returns nil. Blocks `import`/`export` in bytecode mode.
+- **Async/await** (`AwaitValue`) — Returns the value unchanged. Blocks async function execution in bytecode mode.
+
+These stubs exist because the core execution pipeline (variables, closures, classes, property access, invocation) was prioritized first. Each stub has a clear contract defined by the abstract `TSouffleRuntimeOperations` base class.
+
+### Rejected Findings
+
+During code review, the following findings were investigated and determined to be non-issues:
+
+- **`SBIAS_24` (Souffle.Bytecode.pas)** — The 24-bit signed bias constant 8388607 is correct. The 24-bit unsigned range 0..16777215 centered at 8388607 gives a signed range of −8388607..+8388608. This is standard Lua-style bias encoding.
+- **Token list leak in `Goccia.Compiler.Test.pas`** — `Lexer.ScanTokens` returns the lexer's own `FTokens` list (freed in the lexer's destructor). Adding manual `Tokens.Free` causes a double-free crash.
+
 ## Testing Strategy
 
 JavaScript end-to-end tests are the **primary** testing mechanism. Every new feature or bug fix must include JavaScript tests that validate the behavior through the full pipeline (lexer → parser → evaluator).
