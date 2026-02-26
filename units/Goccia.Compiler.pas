@@ -121,20 +121,26 @@ begin
   FCurrentPrototype.DebugInfo := TSouffleDebugInfo.Create(FSourcePath);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
 
-  for I := 0 to AProgram.Body.Count - 1 do
-    CompileStatement(AProgram.Body[I]);
+  try
+    for I := 0 to AProgram.Body.Count - 1 do
+      CompileStatement(AProgram.Body[I]);
 
-  Emit(EncodeABC(OP_RETURN_NIL, 0, 0, 0));
+    Emit(EncodeABC(OP_RETURN_NIL, 0, 0, 0));
 
-  FCurrentPrototype.MaxRegisters := FCurrentScope.MaxSlot;
-  FModule.TopLevel := FCurrentPrototype;
+    FCurrentPrototype.MaxRegisters := FCurrentScope.MaxSlot;
+    FModule.TopLevel := FCurrentPrototype;
 
-  FCurrentScope.Free;
-  FCurrentScope := nil;
-  FCurrentPrototype := nil;
-
-  Result := FModule;
-  FModule := nil;
+    Result := FModule;
+    FModule := nil;
+    FCurrentPrototype := nil;
+  finally
+    FreeAndNil(FCurrentScope);
+    if Assigned(FModule) then
+    begin
+      FCurrentPrototype := nil;
+      FreeAndNil(FModule);
+    end;
+  end;
 end;
 
 { Expression dispatch }
@@ -941,7 +947,7 @@ procedure TGocciaCompiler.CompileTryStatement(
   const AStmt: TGocciaTryStatement);
 var
   CatchReg: UInt8;
-  HandlerJump, EndJump: Integer;
+  HandlerJump, EndJump, I: Integer;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
 begin
@@ -966,7 +972,11 @@ begin
     CompileBlockStatement(AStmt.CatchBlock);
 
   if AStmt.CatchParam <> '' then
+  begin
     FCurrentScope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      Emit(EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+  end;
 
   PatchJump(EndJump);
 
@@ -980,7 +990,7 @@ procedure TGocciaCompiler.CompileForOfStatement(
   const AStmt: TGocciaForOfStatement);
 var
   IterReg, ValueReg, DoneReg: UInt8;
-  LoopStart, ExitJump: Integer;
+  LoopStart, ExitJump, I: Integer;
   Slot: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
@@ -1008,6 +1018,8 @@ begin
   CompileStatement(AStmt.Body);
 
   FCurrentScope.EndScope(ClosedLocals, ClosedCount);
+  for I := 0 to ClosedCount - 1 do
+    Emit(EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
 
   Emit(EncodeAx(OP_JUMP, LoopStart - CurrentCodeCount - 1));
 
@@ -1081,6 +1093,8 @@ function TGocciaCompiler.EmitJump(const AOp: TSouffleOpCode;
 begin
   if AOp = OP_JUMP then
     Result := Emit(EncodeAx(AOp, 0))
+  else if AOp = OP_PUSH_HANDLER then
+    Result := Emit(EncodeABx(AOp, AReg, 0))
   else
     Result := Emit(EncodeAsBx(AOp, AReg, 0));
 end;
@@ -1098,6 +1112,12 @@ begin
 
   if TSouffleOpCode(Op) = OP_JUMP then
     FCurrentPrototype.PatchInstruction(AIndex, EncodeAx(OP_JUMP, Offset))
+  else if TSouffleOpCode(Op) = OP_PUSH_HANDLER then
+  begin
+    A := DecodeA(Instruction);
+    FCurrentPrototype.PatchInstruction(AIndex,
+      EncodeABx(OP_PUSH_HANDLER, A, UInt16(Offset)));
+  end
   else
   begin
     A := DecodeA(Instruction);

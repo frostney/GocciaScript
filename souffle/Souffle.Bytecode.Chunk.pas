@@ -249,6 +249,8 @@ end;
 function TSouffleFunctionPrototype.AddFunction(
   const AFunction: TSouffleFunctionPrototype): UInt16;
 begin
+  if FFunctions.Count > High(UInt16) then
+    raise Exception.Create('Function pool overflow: exceeds 65535 entries');
   Result := UInt16(FFunctions.Count);
   FFunctions.Add(AFunction);
 end;
@@ -327,6 +329,10 @@ end;
 function TSouffleFunctionPrototype.GetExceptionHandler(
   const AIndex: Integer): TSouffleExceptionHandler;
 begin
+  {$IFDEF DEBUG}
+  if (AIndex < 0) or (AIndex >= FExceptionHandlerCount) then
+    raise ERangeError.CreateFmt('GetExceptionHandler: index %d out of range 0..%d', [AIndex, FExceptionHandlerCount - 1]);
+  {$ENDIF}
   Result := FExceptionHandlers[AIndex];
 end;
 

@@ -157,6 +157,7 @@ var
   I: Integer;
 begin
   FreeAndNil(FEngine);
+  FRuntime.Engine := nil;
 
   EmptySource := TStringList.Create;
   try
