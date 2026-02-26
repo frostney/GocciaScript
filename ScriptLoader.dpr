@@ -38,6 +38,8 @@ var
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
+  Warning: TGocciaParserWarning;
+  I: Integer;
 begin
   Source := TStringList.Create;
   try
@@ -48,6 +50,14 @@ begin
       Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
       try
         Result := Parser.Parse;
+        for I := 0 to Parser.WarningCount - 1 do
+        begin
+          Warning := Parser.GetWarning(I);
+          WriteLn(SysUtils.Format('Warning: %s', [Warning.Message]));
+          if Warning.Suggestion <> '' then
+            WriteLn(SysUtils.Format('  Suggestion: %s', [Warning.Suggestion]));
+          WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
+        end;
       finally
         Parser.Free;
       end;
