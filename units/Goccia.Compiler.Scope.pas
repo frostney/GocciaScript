@@ -145,6 +145,8 @@ begin
     if (FUpvalues[I].Index = AIndex) and (FUpvalues[I].IsLocal = AIsLocal) then
       Exit(I);
 
+  if FUpvalueCount >= High(UInt8) then
+    raise Exception.Create('Compiler error: upvalue count overflow (>255)');
   if FUpvalueCount >= Length(FUpvalues) then
     SetLength(FUpvalues, FUpvalueCount * 2 + 4);
   FUpvalues[FUpvalueCount].Index := AIndex;
@@ -155,6 +157,8 @@ end;
 
 function TGocciaCompilerScope.AllocateRegister: UInt8;
 begin
+  if FNextSlot >= High(UInt8) then
+    raise Exception.Create('Compiler error: register slot overflow (>255)');
   Result := FNextSlot;
   Inc(FNextSlot);
   if FNextSlot > FMaxSlot then

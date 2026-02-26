@@ -525,8 +525,9 @@ begin
     else
     begin
       PropIdx := FCurrentPrototype.AddConstantString(MemberExpr.PropertyName);
-      Emit(EncodeABC(OP_RT_GET_PROP, BaseReg, ObjReg,
-        UInt8(PropIdx and $FF)));
+      if PropIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: property name index exceeds 255');
+      Emit(EncodeABC(OP_RT_GET_PROP, BaseReg, ObjReg, UInt8(PropIdx)));
     end;
 
     for I := 0 to ArgCount - 1 do
@@ -581,7 +582,9 @@ begin
   else
   begin
     PropIdx := FCurrentPrototype.AddConstantString(AExpr.PropertyName);
-    Emit(EncodeABC(OP_RT_GET_PROP, ADest, ObjReg, UInt8(PropIdx and $FF)));
+    if PropIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: property name index exceeds 255');
+    Emit(EncodeABC(OP_RT_GET_PROP, ADest, ObjReg, UInt8(PropIdx)));
   end;
 
   FCurrentScope.FreeRegister;
@@ -1031,7 +1034,9 @@ begin
   begin
     Slot := FCurrentScope.DeclareLocal(Pair.Key, True);
     NameIdx := FCurrentPrototype.AddConstantString(Pair.Value);
-    Emit(EncodeABC(OP_RT_GET_PROP, Slot, ModReg, UInt8(NameIdx and $FF)));
+    if NameIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: import name index exceeds 255');
+    Emit(EncodeABC(OP_RT_GET_PROP, Slot, ModReg, UInt8(NameIdx)));
   end;
 
   FCurrentScope.FreeRegister;

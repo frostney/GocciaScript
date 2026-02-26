@@ -35,6 +35,7 @@ type
       const AHandlerDepth: Integer): PSouffleVMCallFrame;
     procedure Pop;
     function Peek: PSouffleVMCallFrame; inline;
+    function GetFrame(const AIndex: Integer): PSouffleVMCallFrame; inline;
     function IsEmpty: Boolean; inline;
 
     property Count: Integer read FCount;
@@ -87,6 +88,11 @@ begin
   if FCount = 0 then
     Exit(nil);
   Result := @FFrames[FCount - 1];
+end;
+
+function TSouffleCallStack.GetFrame(const AIndex: Integer): PSouffleVMCallFrame;
+begin
+  Result := @FFrames[AIndex];
 end;
 
 function TSouffleCallStack.IsEmpty: Boolean;

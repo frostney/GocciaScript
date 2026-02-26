@@ -54,6 +54,7 @@ uses
 
   Goccia.AST.Statements,
   Goccia.Evaluator,
+  Goccia.GarbageCollector,
   Goccia.Interpreter,
   Goccia.Scope,
   Goccia.Scope.BindingMap;
@@ -116,9 +117,14 @@ begin
           Context, Entry.Line, Entry.Column);
         if Assigned(ClassValue) then
         begin
-          RegisterGlobal(Entry.ClassDeclaration.ClassDefinition.Name, ClassValue);
-          Context.Scope.DefineLexicalBinding(
-            Entry.ClassDeclaration.ClassDefinition.Name, ClassValue, dtConst);
+          TGocciaGarbageCollector.Instance.AddTempRoot(ClassValue);
+          try
+            RegisterGlobal(Entry.ClassDeclaration.ClassDefinition.Name, ClassValue);
+            Context.Scope.DefineLexicalBinding(
+              Entry.ClassDeclaration.ClassDefinition.Name, ClassValue, dtConst);
+          finally
+            TGocciaGarbageCollector.Instance.RemoveTempRoot(ClassValue);
+          end;
         end;
       end;
     end;

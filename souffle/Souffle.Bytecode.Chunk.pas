@@ -93,6 +93,9 @@ const
 
 implementation
 
+uses
+  SysUtils;
+
 function FloatBitsAreNaN(const AValue: Double): Boolean; inline;
 var
   Bits: UInt64;
@@ -138,6 +141,8 @@ end;
 procedure TSouffleFunctionPrototype.PatchInstruction(const AIndex: Integer;
   const AInstruction: UInt32);
 begin
+  if (AIndex < 0) or (AIndex >= FCodeCount) then
+    raise ERangeError.CreateFmt('PatchInstruction: index %d out of range 0..%d', [AIndex, FCodeCount - 1]);
   FCode[AIndex] := AInstruction;
 end;
 
@@ -149,6 +154,8 @@ begin
     if FConstants[I].Kind = bckNil then
       Exit(UInt16(I));
 
+  if FConstantCount > High(UInt16) then
+    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckNil;
@@ -171,6 +178,8 @@ begin
     if FConstants[I].Kind = Target then
       Exit(UInt16(I));
 
+  if FConstantCount > High(UInt16) then
+    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := Target;
@@ -187,6 +196,8 @@ begin
     if (FConstants[I].Kind = bckInteger) and (FConstants[I].IntValue = AValue) then
       Exit(UInt16(I));
 
+  if FConstantCount > High(UInt16) then
+    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckInteger;
@@ -206,6 +217,8 @@ begin
         (FloatBitsAreNaN(FConstants[I].FloatValue) and FloatBitsAreNaN(AValue))) then
       Exit(UInt16(I));
 
+  if FConstantCount > High(UInt16) then
+    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckFloat;
@@ -223,6 +236,8 @@ begin
     if (FConstants[I].Kind = bckString) and (FConstants[I].StringValue = AValue) then
       Exit(UInt16(I));
 
+  if FConstantCount > High(UInt16) then
+    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckString;
@@ -241,6 +256,8 @@ end;
 procedure TSouffleFunctionPrototype.AddUpvalueDescriptor(
   const AIsLocal: Boolean; const AIndex: UInt8);
 begin
+  if FUpvalueCount >= High(UInt8) then
+    raise Exception.Create('Upvalue descriptor overflow: exceeds 255 entries');
   if FUpvalueCount >= Length(FUpvalueDescriptors) then
     SetLength(FUpvalueDescriptors, FUpvalueCount * 2 + 4);
   FUpvalueDescriptors[FUpvalueCount].IsLocal := AIsLocal;
@@ -265,24 +282,40 @@ end;
 function TSouffleFunctionPrototype.GetInstruction(
   const AIndex: Integer): UInt32;
 begin
+  {$IFDEF DEBUG}
+  if (AIndex < 0) or (AIndex >= FCodeCount) then
+    raise ERangeError.CreateFmt('GetInstruction: index %d out of range 0..%d', [AIndex, FCodeCount - 1]);
+  {$ENDIF}
   Result := FCode[AIndex];
 end;
 
 function TSouffleFunctionPrototype.GetConstant(
   const AIndex: Integer): TSouffleBytecodeConstant;
 begin
+  {$IFDEF DEBUG}
+  if (AIndex < 0) or (AIndex >= FConstantCount) then
+    raise ERangeError.CreateFmt('GetConstant: index %d out of range 0..%d', [AIndex, FConstantCount - 1]);
+  {$ENDIF}
   Result := FConstants[AIndex];
 end;
 
 function TSouffleFunctionPrototype.GetFunction(
   const AIndex: Integer): TSouffleFunctionPrototype;
 begin
+  {$IFDEF DEBUG}
+  if (AIndex < 0) or (AIndex >= FFunctions.Count) then
+    raise ERangeError.CreateFmt('GetFunction: index %d out of range 0..%d', [AIndex, FFunctions.Count - 1]);
+  {$ENDIF}
   Result := FFunctions[AIndex];
 end;
 
 function TSouffleFunctionPrototype.GetUpvalueDescriptor(
   const AIndex: Integer): TSouffleUpvalueDescriptor;
 begin
+  {$IFDEF DEBUG}
+  if (AIndex < 0) or (AIndex >= FUpvalueCount) then
+    raise ERangeError.CreateFmt('GetUpvalueDescriptor: index %d out of range 0..%d', [AIndex, FUpvalueCount - 1]);
+  {$ENDIF}
   Result := FUpvalueDescriptors[AIndex];
 end;
 

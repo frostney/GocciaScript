@@ -103,7 +103,7 @@ function TSouffleVM.ExecuteFunction(const AClosure: TSouffleClosure;
   const AArgs: array of TSouffleValue): TSouffleValue;
 var
   Frame: PSouffleVMCallFrame;
-  I, Base, SavedBaseFrameCount: Integer;
+  I, Base, SavedBaseFrameCount, ArgsToCopy: Integer;
 begin
   Base := 0;
   if not FCallStack.IsEmpty then
@@ -114,9 +114,13 @@ begin
 
   Frame := FCallStack.Push(AClosure.Prototype, AClosure, Base, Base, FHandlerStack.Count);
 
-  for I := 0 to High(AArgs) do
+  ArgsToCopy := Length(AArgs);
+  if ArgsToCopy > AClosure.Prototype.MaxRegisters then
+    ArgsToCopy := AClosure.Prototype.MaxRegisters;
+
+  for I := 0 to ArgsToCopy - 1 do
     FRegisters[Base + I] := AArgs[I];
-  for I := Length(AArgs) to AClosure.Prototype.MaxRegisters - 1 do
+  for I := ArgsToCopy to AClosure.Prototype.MaxRegisters - 1 do
     FRegisters[Base + I] := SouffleNil;
 
   SavedBaseFrameCount := FBaseFrameCount;
@@ -128,7 +132,10 @@ begin
     on E: ESouffleThrow do
     begin
       while FCallStack.Count >= FBaseFrameCount do
+      begin
+        CloseUpvalues(FCallStack.Peek^.BaseRegister);
         FCallStack.Pop;
+      end;
       FBaseFrameCount := SavedBaseFrameCount;
       Result := SouffleNil;
       Exit;
@@ -172,16 +179,20 @@ procedure TSouffleVM.CallClosure(const AClosure: TSouffleClosure;
   const AArgBase, AArgCount, AReturnAbsolute: Integer;
   const AReceiver: TSouffleValue);
 var
-  NewBase, I: Integer;
+  NewBase, I, ArgsToCopy: Integer;
   Frame: PSouffleVMCallFrame;
 begin
   NewBase := FCallStack.Peek^.BaseRegister + FCallStack.Peek^.Prototype.MaxRegisters;
   if NewBase + AClosure.Prototype.MaxRegisters > MAX_REGISTERS then
     raise Exception.Create('Stack overflow');
 
-  for I := 0 to AArgCount - 1 do
+  ArgsToCopy := AArgCount;
+  if ArgsToCopy > AClosure.Prototype.MaxRegisters then
+    ArgsToCopy := AClosure.Prototype.MaxRegisters;
+
+  for I := 0 to ArgsToCopy - 1 do
     FRegisters[NewBase + I] := FRegisters[AArgBase + I];
-  for I := AArgCount to AClosure.Prototype.MaxRegisters - 1 do
+  for I := ArgsToCopy to AClosure.Prototype.MaxRegisters - 1 do
     FRegisters[NewBase + I] := SouffleNil;
 
   Frame := FCallStack.Push(AClosure.Prototype, AClosure, NewBase,
@@ -770,6 +781,7 @@ procedure TSouffleVM.MarkVMRoots;
 var
   I: Integer;
   HighWater: Integer;
+  Frame: PSouffleVMCallFrame;
 begin
   if FCallStack.IsEmpty then
     Exit;
@@ -778,6 +790,13 @@ begin
   for I := 0 to HighWater - 1 do
     if SouffleIsReference(FRegisters[I]) and Assigned(FRegisters[I].AsReference) then
       FRegisters[I].AsReference.MarkReferences;
+
+  for I := 0 to FCallStack.Count - 1 do
+  begin
+    Frame := FCallStack.GetFrame(I);
+    if Assigned(Frame^.Closure) then
+      Frame^.Closure.MarkReferences;
+  end;
 
   if Assigned(FOpenUpvalues) then
     FOpenUpvalues.MarkReferences;

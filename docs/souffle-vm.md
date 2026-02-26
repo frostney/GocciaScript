@@ -45,7 +45,7 @@ The key architectural principle is the **separation of language semantics from V
 
 ## Execution Pipeline
 
-```
+```text
 Source file --[Lexer]--> Tokens --[Parser]--> AST --[Compiler]--> Module --[VM]--> Result
                                                        |
                                               --emit-> .sbc file
@@ -105,15 +105,17 @@ By routing these through an abstract interface, the VM remains language-agnostic
 
 There is no `CLASS` opcode. Classes are syntactic sugar that the **compiler** desugars into generic operations:
 
-```
+```text
 ; class Foo extends Bar { constructor(x) { this.x = x; } greet() { return "hi"; } }
 
-CLOSURE      r0, <constructor_proto>     ; constructor function
-CLOSURE      r1, <greet_proto>           ; method
-RT_NEW_COMPOUND r2                        ; create prototype object
-RT_SET_PROP  r2, "greet", r1             ; prototype.greet = greet
-RT_SET_PROP  r0, "prototype", r2         ; Foo.prototype = proto
-RT_LINK_PARENT r0, r_bar                 ; inheritance (runtime-specific semantics)
+CLOSURE          r0, <constructor_proto>     ; constructor function
+CLOSURE          r1, <greet_proto>           ; method
+RT_NEW_COMPOUND  r2                          ; create prototype object
+RT_SET_PROP      r2, "greet", r1             ; prototype.greet = greet
+RT_SET_PROP      r0, "prototype", r2         ; Foo.prototype = proto
+; Inheritance is handled by the runtime via Invoke/Construct — no dedicated opcode.
+; The compiler emits RT_SET_PROP calls to wire prototype chains as appropriate
+; for the language (JS: Object.setPrototypeOf, Python: metaclass, etc.).
 ```
 
 Every language compiles its "class" concept differently, but all use the same generic opcodes. JavaScript does prototype chains, Python does metaclass invocation + MRO, Lua does metatables.
@@ -135,7 +137,7 @@ Signed operands use bias encoding: `sBx` is stored as `sBx + 32767`, `Ax` is sto
 
 Souffle uses a register-based architecture (like Lua 5, LuaJIT, and Dalvik) rather than a stack-based one.
 
-```
+```text
  Register File (array of TSouffleValue, 16 bytes each):
  ┌──────────────────┬─────────────────┬─────────────────┬─────┐
  │ Frame 0 (global) │ Frame 1 (fn A)  │ Frame 2 (fn B)  │ ... │
@@ -165,7 +167,7 @@ The VM supports re-entrant execution: when a runtime operation (e.g., a closure 
 
 The VM has its own value system, completely independent of `TGocciaValue`:
 
-```
+```text
 TSouffleValue (16 bytes):
 ┌──────────────────┬────────────────────────────────┐
 │ Kind: UInt8 (1B) │ padding (7B)                   │
@@ -231,7 +233,7 @@ Souffle uses a handler-table approach (not try/catch blocks in bytecode):
 
 Each function prototype contains an array of `TSouffleExceptionHandler` records:
 
-```
+```text
 TSouffleExceptionHandler:
   TryStart: UInt32     — first PC of the try range
   TryEnd: UInt32       — last PC of the try range
@@ -256,7 +258,7 @@ Souffle has its own mark-and-sweep garbage collector (`Souffle.GarbageCollector.
 
 ## Bytecode Module Structure
 
-```
+```text
 TSouffleBytecodeModule
   ├── FormatVersion: UInt16
   ├── RuntimeTag: string                              (e.g., "goccia-js", "goccia-py")
@@ -272,7 +274,7 @@ TSouffleBytecodeModule
 
 ### Function Prototype
 
-```
+```text
 TSouffleFunctionPrototype
   ├── Name: string
   ├── Code: array of UInt32                         (instruction words)
@@ -314,7 +316,7 @@ Constants are deduplicated within each prototype — adding a duplicate returns 
 
 The `.sbc` (Souffle ByteCode) binary format enables ahead-of-time compilation and module distribution:
 
-```
+```text
 .sbc Binary:
 ┌──────────────────────────────────────┐
 │ Header                               │
@@ -504,6 +506,10 @@ These were reviewed and determined to be correct or not applicable:
 | **`SBIAS_24` off-by-one** | Correct as-is | 24-bit unsigned range 0..16777215 with bias 8388607 gives signed range −8388607..+8388608 — standard Lua-style bias encoding. The comment and arithmetic are consistent. |
 | **Tokens leak in `Goccia.Compiler.Test.pas`** | Not a leak | `Lexer.ScanTokens` returns a reference to the lexer's internal `FTokens` list, which the lexer frees in its destructor. Manually freeing `Tokens` causes a double-free crash. |
 | **`Souffle.VM.RuntimeOperations.pas` uses `{$I Souffle.inc}`** | Intentional | This unit is part of the Souffle VM layer and follows Souffle naming conventions. The abstract `TSouffleRuntimeOperations` class is VM-level infrastructure, not a GocciaScript bridge. |
+| **`InitScope`/`SuperInitScope` leak in `InstantiateClass`** | Not a leak | `TGocciaClassInitScope` is a `TGocciaScope` subclass that auto-registers with the GC in its constructor. All scopes are GC-managed — they are collected during sweep, not manually freed. This is consistent with every scope creation in the evaluator. |
+| **null vs undefined conflation in runtime ops** | Intentional design | `svkNil` maps to `undefined`; `null` is a wrapped `TGocciaNullLiteralValue` reference registered as a global via `OP_RT_GET_GLOBAL('null')`. This keeps language-specific null semantics out of the VM's value system — adding `svkNull` would violate the language-agnostic design principle. |
+| **`InitIndex` ignores array index** | Correct for current use | `OP_RT_INIT_INDEX` is emitted by the compiler for array literal initialization, which always emits elements in sequential order. `TGocciaArrayValue.Elements.Add` appends in order, matching the compiler's emission pattern. |
+| **`MergeFileResult` string comparison for undefined** | Style preference | The `GetProperty(...).ToStringLiteral.Value = 'undefined'` check works correctly because `TGocciaUndefinedLiteralValue.ToStringLiteral` always returns `'undefined'`. A type check would be marginally more robust but the current code has no known failure mode. |
 
 ### Constant Pool Limitation (ABC Encoding)
 
