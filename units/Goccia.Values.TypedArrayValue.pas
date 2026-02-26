@@ -12,7 +12,8 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.Values.SharedArrayBufferValue;
 
 type
   TGocciaTypedArrayKind = (
@@ -26,7 +27,8 @@ type
   private
     class var FShared: TGocciaSharedPrototype;
   private
-    FBuffer: TGocciaArrayBufferValue;
+    FBufferValue: TGocciaValue;
+    FBufferData: TBytes;
     FByteOffset: Integer;
     FLength: Integer;
     FKind: TGocciaTypedArrayKind;
@@ -76,6 +78,8 @@ type
     constructor Create(const AKind: TGocciaTypedArrayKind; const ALength: Integer); overload;
     constructor Create(const AKind: TGocciaTypedArrayKind; const ABuffer: TGocciaArrayBufferValue;
       const AByteOffset: Integer = 0; const ALength: Integer = -1); overload;
+    constructor Create(const AKind: TGocciaTypedArrayKind; const ASharedBuffer: TGocciaSharedArrayBufferValue;
+      const AByteOffset: Integer = 0; const ALength: Integer = -1); overload;
 
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
@@ -89,7 +93,8 @@ type
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
 
-    property Buffer: TGocciaArrayBufferValue read FBuffer;
+    property BufferValue: TGocciaValue read FBufferValue;
+    property BufferData: TBytes read FBufferData;
     property ByteOffset: Integer read FByteOffset;
     property Length: Integer read FLength;
     property Kind: TGocciaTypedArrayKind read FKind;
@@ -127,7 +132,6 @@ uses
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.SymbolValue;
 
 class function TGocciaTypedArrayValue.BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
@@ -177,42 +181,42 @@ begin
   case FKind of
     takInt8:
     begin
-      I8 := ShortInt(FBuffer.Data[Offset]);
+      I8 := ShortInt(FBufferData[Offset]);
       Result := I8;
     end;
     takUint8, takUint8Clamped:
     begin
-      U8 := FBuffer.Data[Offset];
+      U8 := FBufferData[Offset];
       Result := U8;
     end;
     takInt16:
     begin
-      Move(FBuffer.Data[Offset], I16, 2);
+      Move(FBufferData[Offset], I16, 2);
       Result := I16;
     end;
     takUint16:
     begin
-      Move(FBuffer.Data[Offset], U16, 2);
+      Move(FBufferData[Offset], U16, 2);
       Result := U16;
     end;
     takInt32:
     begin
-      Move(FBuffer.Data[Offset], I32, 4);
+      Move(FBufferData[Offset], I32, 4);
       Result := I32;
     end;
     takUint32:
     begin
-      Move(FBuffer.Data[Offset], U32, 4);
+      Move(FBufferData[Offset], U32, 4);
       Result := U32;
     end;
     takFloat32:
     begin
-      Move(FBuffer.Data[Offset], F32, 4);
+      Move(FBufferData[Offset], F32, 4);
       Result := F32;
     end;
     takFloat64:
     begin
-      Move(FBuffer.Data[Offset], F64, 8);
+      Move(FBufferData[Offset], F64, 8);
       Result := F64;
     end;
   else
@@ -238,12 +242,12 @@ begin
     takInt8:
     begin
       I8 := ShortInt(Trunc(AValue));
-      FBuffer.Data[Offset] := Byte(I8);
+      FBufferData[Offset] := Byte(I8);
     end;
     takUint8:
     begin
       U8 := Byte(Trunc(AValue));
-      FBuffer.Data[Offset] := U8;
+      FBufferData[Offset] := U8;
     end;
     takUint8Clamped:
     begin
@@ -255,42 +259,42 @@ begin
         Clamped := 255
       else
         Clamped := Round(AValue);
-      FBuffer.Data[Offset] := Byte(Clamped);
+      FBufferData[Offset] := Byte(Clamped);
     end;
     takInt16:
     begin
       I16 := SmallInt(Trunc(AValue));
-      Move(I16, FBuffer.Data[Offset], 2);
+      Move(I16, FBufferData[Offset], 2);
     end;
     takUint16:
     begin
       U16 := Word(Trunc(AValue));
-      Move(U16, FBuffer.Data[Offset], 2);
+      Move(U16, FBufferData[Offset], 2);
     end;
     takInt32:
     begin
       I32 := LongInt(Trunc(AValue));
-      Move(I32, FBuffer.Data[Offset], 4);
+      Move(I32, FBufferData[Offset], 4);
     end;
     takUint32:
     begin
       U32 := LongWord(Trunc(AValue));
-      Move(U32, FBuffer.Data[Offset], 4);
+      Move(U32, FBufferData[Offset], 4);
     end;
     takFloat32:
     begin
       F32 := AValue;
-      Move(F32, FBuffer.Data[Offset], 4);
+      Move(F32, FBufferData[Offset], 4);
     end;
     takFloat64:
     begin
       F64 := AValue;
-      Move(F64, FBuffer.Data[Offset], 8);
+      Move(F64, FBufferData[Offset], 8);
     end;
   end;
 end;
 
-procedure WriteFloatSpecial(const ABuffer: TGocciaArrayBufferValue;
+procedure WriteFloatSpecial(var AData: TBytes;
   const AOffset: Integer; const AKind: TGocciaTypedArrayKind;
   const ASpecial: TGocciaNumberSpecialValue);
 const
@@ -304,15 +308,15 @@ begin
   case AKind of
     takFloat32:
       case ASpecial of
-        nsvNaN: Move(NAN_F32, ABuffer.Data[AOffset], 4);
-        nsvInfinity: Move(INF_F32, ABuffer.Data[AOffset], 4);
-        nsvNegativeInfinity: Move(NINF_F32, ABuffer.Data[AOffset], 4);
+        nsvNaN: Move(NAN_F32, AData[AOffset], 4);
+        nsvInfinity: Move(INF_F32, AData[AOffset], 4);
+        nsvNegativeInfinity: Move(NINF_F32, AData[AOffset], 4);
       end;
     takFloat64:
       case ASpecial of
-        nsvNaN: Move(NAN_F64, ABuffer.Data[AOffset], 8);
-        nsvInfinity: Move(INF_F64, ABuffer.Data[AOffset], 8);
-        nsvNegativeInfinity: Move(NINF_F64, ABuffer.Data[AOffset], 8);
+        nsvNaN: Move(NAN_F64, AData[AOffset], 8);
+        nsvInfinity: Move(INF_F64, AData[AOffset], 8);
+        nsvNegativeInfinity: Move(NINF_F64, AData[AOffset], 8);
       end;
   end;
 end;
@@ -326,7 +330,7 @@ begin
     if FKind in [takFloat32, takFloat64] then
     begin
       Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-      WriteFloatSpecial(FBuffer, Offset, FKind, nsvNaN);
+      WriteFloatSpecial(FBufferData, Offset, FKind, nsvNaN);
     end
     else
       WriteElement(AIndex, 0);
@@ -338,7 +342,7 @@ begin
       takFloat32, takFloat64:
       begin
         Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-        WriteFloatSpecial(FBuffer, Offset, FKind, nsvInfinity);
+        WriteFloatSpecial(FBufferData, Offset, FKind, nsvInfinity);
       end;
     else
       WriteElement(AIndex, 0);
@@ -350,7 +354,7 @@ begin
       takFloat32, takFloat64:
       begin
         Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-        WriteFloatSpecial(FBuffer, Offset, FKind, nsvNegativeInfinity);
+        WriteFloatSpecial(FBufferData, Offset, FKind, nsvNegativeInfinity);
       end;
     else
       WriteElement(AIndex, 0);
@@ -365,13 +369,16 @@ end;
 constructor TGocciaTypedArrayValue.Create(const AKind: TGocciaTypedArrayKind; const ALength: Integer);
 var
   ByteLen: Integer;
+  Buf: TGocciaArrayBufferValue;
 begin
   inherited Create(nil);
   FKind := AKind;
   FByteOffset := 0;
   FLength := ALength;
   ByteLen := ALength * BytesPerElement(AKind);
-  FBuffer := TGocciaArrayBufferValue.Create(ByteLen);
+  Buf := TGocciaArrayBufferValue.Create(ByteLen);
+  FBufferValue := Buf;
+  FBufferData := Buf.Data;
   InitializePrototype;
   if Assigned(FShared) then
     FPrototype := FShared.Prototype;
@@ -384,7 +391,8 @@ var
 begin
   inherited Create(nil);
   FKind := AKind;
-  FBuffer := ABuffer;
+  FBufferValue := ABuffer;
+  FBufferData := ABuffer.Data;
   FByteOffset := AByteOffset;
   BPE := BytesPerElement(AKind);
 
@@ -392,6 +400,28 @@ begin
     FLength := ALength
   else
     FLength := (System.Length(ABuffer.Data) - AByteOffset) div BPE;
+
+  InitializePrototype;
+  if Assigned(FShared) then
+    FPrototype := FShared.Prototype;
+end;
+
+constructor TGocciaTypedArrayValue.Create(const AKind: TGocciaTypedArrayKind;
+  const ASharedBuffer: TGocciaSharedArrayBufferValue; const AByteOffset: Integer; const ALength: Integer);
+var
+  BPE: Integer;
+begin
+  inherited Create(nil);
+  FKind := AKind;
+  FBufferValue := ASharedBuffer;
+  FBufferData := ASharedBuffer.Data;
+  FByteOffset := AByteOffset;
+  BPE := BytesPerElement(AKind);
+
+  if ALength >= 0 then
+    FLength := ALength
+  else
+    FLength := (System.Length(ASharedBuffer.Data) - AByteOffset) div BPE;
 
   InitializePrototype;
   if Assigned(FShared) then
@@ -504,7 +534,7 @@ begin
   if AName = PROP_BYTE_OFFSET then
     Exit(TGocciaNumberLiteralValue.Create(FByteOffset));
   if AName = PROP_BUFFER then
-    Exit(FBuffer);
+    Exit(FBufferValue);
   if AName = PROP_BYTES_PER_ELEMENT then
     Exit(TGocciaNumberLiteralValue.Create(BytesPerElement(FKind)));
   Result := inherited GetProperty(AName);
@@ -544,8 +574,8 @@ procedure TGocciaTypedArrayValue.MarkReferences;
 begin
   if GCMarked then Exit;
   inherited;
-  if Assigned(FBuffer) and not FBuffer.GCMarked then
-    FBuffer.MarkReferences;
+  if Assigned(FBufferValue) and not FBufferValue.GCMarked then
+    FBufferValue.MarkReferences;
 end;
 
 { Helpers }
@@ -582,7 +612,7 @@ end;
 
 function TGocciaTypedArrayValue.TypedArrayBufferGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := RequireTypedArray(AThisValue, 'TypedArray.prototype.buffer').FBuffer;
+  Result := RequireTypedArray(AThisValue, 'TypedArray.prototype.buffer').FBufferValue;
 end;
 
 function TGocciaTypedArrayValue.TypedArrayByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -708,8 +738,8 @@ begin
   SetLength(TempBuf, Count * BPE);
   From := TA.FByteOffset + Start * BPE;
   To_ := TA.FByteOffset + Target * BPE;
-  Move(TA.FBuffer.Data[From], TempBuf[0], Count * BPE);
-  Move(TempBuf[0], TA.FBuffer.Data[To_], Count * BPE);
+  Move(TA.FBufferData[From], TempBuf[0], Count * BPE);
+  Move(TempBuf[0], TA.FBufferData[To_], Count * BPE);
 
   Result := AThisValue;
 end;
@@ -771,7 +801,11 @@ begin
     EndIdx := TA.FLength;
 
   NewLen := Max(EndIdx - BeginIdx, 0);
-  Result := TGocciaTypedArrayValue.Create(TA.FKind, TA.FBuffer, TA.FByteOffset + BeginIdx * BPE, NewLen);
+  if TA.FBufferValue is TGocciaSharedArrayBufferValue then
+    Result := TGocciaTypedArrayValue.Create(TA.FKind, TGocciaSharedArrayBufferValue(TA.FBufferValue), TA.FByteOffset + BeginIdx * BPE, NewLen)
+  else
+    Result := TGocciaTypedArrayValue.Create(TA.FKind, TGocciaArrayBufferValue(TA.FBufferValue), TA.FByteOffset + BeginIdx * BPE, NewLen);
+  TGocciaTypedArrayValue(Result).Prototype := TA.Prototype;
 end;
 
 // ES2026 §23.2.3.25 %TypedArray%.prototype.set(source [, offset])
@@ -1509,6 +1543,7 @@ var
   Num: TGocciaNumberLiteralValue;
   Len, BPE, ByteOff, ElemLen: Integer;
   Buf: TGocciaArrayBufferValue;
+  SAB: TGocciaSharedArrayBufferValue;
   SrcTA: TGocciaTypedArrayValue;
   SrcArr: TGocciaArrayValue;
   I: Integer;
@@ -1532,7 +1567,7 @@ begin
   end;
 
   // new TypedArray(buffer [, byteOffset [, length]])
-  if (FirstArg is TGocciaArrayBufferValue) and not (FirstArg is TGocciaSharedArrayBufferValue) then
+  if FirstArg is TGocciaArrayBufferValue then
   begin
     Buf := TGocciaArrayBufferValue(FirstArg);
     if AArguments.Length > 1 then
@@ -1565,6 +1600,42 @@ begin
     end;
 
     Exit(TGocciaTypedArrayValue.Create(FKind, Buf, ByteOff, ElemLen));
+  end;
+
+  // new TypedArray(sharedBuffer [, byteOffset [, length]])
+  if FirstArg is TGocciaSharedArrayBufferValue then
+  begin
+    SAB := TGocciaSharedArrayBufferValue(FirstArg);
+    if AArguments.Length > 1 then
+      ByteOff := Trunc(AArguments.GetElement(1).ToNumberLiteral.Value)
+    else
+      ByteOff := 0;
+
+    if ByteOff < 0 then
+      ThrowRangeError('Start offset of ' + TGocciaTypedArrayValue.KindName(FKind) + ' must be non-negative');
+    if (ByteOff mod BPE) <> 0 then
+      ThrowRangeError('Start offset of ' + TGocciaTypedArrayValue.KindName(FKind) + ' should be a multiple of ' + IntToStr(BPE));
+    if ByteOff > System.Length(SAB.Data) then
+      ThrowRangeError('Start offset is outside the bounds of the buffer');
+
+    if AArguments.Length > 2 then
+    begin
+      ElemLen := Trunc(AArguments.GetElement(2).ToNumberLiteral.Value);
+      if ElemLen < 0 then
+        ThrowRangeError('Invalid typed array length');
+      if Int64(ByteOff) + Int64(ElemLen) * Int64(BPE) > Int64(System.Length(SAB.Data)) then
+        ThrowRangeError('Invalid typed array length');
+    end
+    else
+    begin
+      if ((Int64(System.Length(SAB.Data)) - Int64(ByteOff)) mod Int64(BPE)) <> 0 then
+        ThrowRangeError('Byte length of ' + TGocciaTypedArrayValue.KindName(FKind) + ' should be a multiple of ' + IntToStr(BPE));
+      ElemLen := Integer((Int64(System.Length(SAB.Data)) - Int64(ByteOff)) div Int64(BPE));
+      if ElemLen < 0 then
+        ThrowRangeError('Invalid typed array length');
+    end;
+
+    Exit(TGocciaTypedArrayValue.Create(FKind, SAB, ByteOff, ElemLen));
   end;
 
   // new TypedArray(array)

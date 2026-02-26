@@ -28,6 +28,7 @@ describe("TypedArray Symbol.toStringTag", () => {
       const typedArrayProto = Object.getPrototypeOf(Ctor.prototype);
       const desc = Object.getOwnPropertyDescriptor(typedArrayProto, Symbol.toStringTag);
       expect(desc).toBeDefined();
+      expect(typeof desc.get).toBe("function");
       expect(desc.get.call({})).toBe(undefined);
     });
   });

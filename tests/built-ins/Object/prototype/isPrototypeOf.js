@@ -64,4 +64,10 @@ describe('Object.prototype.isPrototypeOf', () => {
     const obj = {};
     expect(obj.isPrototypeOf(nullProto)).toBe(false);
   });
+
+  test('throws TypeError when called on null or undefined', () => {
+    const fn = Object.prototype.isPrototypeOf;
+    expect(() => fn.call(null, {})).toThrow(TypeError);
+    expect(() => fn.call(undefined, {})).toThrow(TypeError);
+  });
 });

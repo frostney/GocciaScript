@@ -226,6 +226,8 @@ begin
     Exit(TGocciaBooleanLiteralValue.FalseValue);
 
   // Step 2: Let O be ? ToObject(this value)
+  if (AThisValue is TGocciaUndefinedLiteralValue) or (AThisValue is TGocciaNullLiteralValue) then
+    ThrowTypeError('Cannot convert undefined or null to object');
   if not (AThisValue is TGocciaObjectValue) then
     Exit(TGocciaBooleanLiteralValue.FalseValue);
 

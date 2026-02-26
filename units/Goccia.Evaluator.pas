@@ -2193,80 +2193,87 @@ begin
     ClassValue.AddStaticSetter(SetterPair.Key, SetterFunction);
   end;
 
-  // Handle computed static getters (e.g., static get [Symbol.species]())
-  for I := 0 to Length(AClassDef.FComputedStaticGetters) - 1 do
+  // Handle computed accessors in source declaration order via FElements
+  for I := 0 to High(AClassDef.FElements) do
   begin
-    ComputedKey := EvaluateExpression(AClassDef.FComputedStaticGetters[I].KeyExpression, AContext);
-    GetterFunction := TGocciaFunctionValue(EvaluateGetter(AClassDef.FComputedStaticGetters[I].GetterExpression, AContext));
-    if ComputedKey is TGocciaSymbolValue then
-      ClassValue.DefineSymbolProperty(
-        TGocciaSymbolValue(ComputedKey),
-        TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfConfigurable]))
-    else
-      ClassValue.AddStaticGetter(ComputedKey.ToStringLiteral.Value, GetterFunction);
-  end;
+    Elem := AClassDef.FElements[I];
+    if not Elem.IsComputed then
+      Continue;
+    if not (Elem.Kind in [cekGetter, cekSetter]) then
+      Continue;
 
-  // Handle computed static setters (merge with existing getter if same symbol)
-  for I := 0 to Length(AClassDef.FComputedStaticSetters) - 1 do
-  begin
-    ComputedKey := EvaluateExpression(AClassDef.FComputedStaticSetters[I].KeyExpression, AContext);
-    SetterFunction := TGocciaFunctionValue(EvaluateSetter(AClassDef.FComputedStaticSetters[I].SetterExpression, AContext));
-    if ComputedKey is TGocciaSymbolValue then
-    begin
-      ExistingDescriptor := ClassValue.GetOwnStaticSymbolDescriptor(TGocciaSymbolValue(ComputedKey));
-      if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
-         Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
-        ClassValue.DefineSymbolProperty(
-          TGocciaSymbolValue(ComputedKey),
-          TGocciaPropertyDescriptorAccessor.Create(
-            TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter,
-            SetterFunction,
-            [pfConfigurable]))
-      else
-        ClassValue.DefineSymbolProperty(
-          TGocciaSymbolValue(ComputedKey),
-          TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfConfigurable]));
-    end
-    else
-      ClassValue.AddStaticSetter(ComputedKey.ToStringLiteral.Value, SetterFunction);
-  end;
+    ComputedKey := EvaluateExpression(Elem.ComputedKeyExpression, AContext);
 
-  // Handle computed instance getters (e.g., get [Symbol.toStringTag]())
-  for I := 0 to Length(AClassDef.FComputedInstanceGetters) - 1 do
-  begin
-    ComputedKey := EvaluateExpression(AClassDef.FComputedInstanceGetters[I].KeyExpression, AContext);
-    GetterFunction := TGocciaFunctionValue(EvaluateGetter(AClassDef.FComputedInstanceGetters[I].GetterExpression, AContext));
-    if ComputedKey is TGocciaSymbolValue then
-      ClassValue.Prototype.DefineSymbolProperty(
-        TGocciaSymbolValue(ComputedKey),
-        TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfConfigurable]))
-    else
-      ClassValue.AddGetter(ComputedKey.ToStringLiteral.Value, GetterFunction);
-  end;
+    case Elem.Kind of
+      cekGetter:
+      begin
+        GetterFunction := TGocciaFunctionValue(EvaluateGetter(Elem.GetterNode, AContext));
+        if ComputedKey is TGocciaSymbolValue then
+        begin
+          if Elem.IsStatic then
+            ClassValue.DefineSymbolProperty(
+              TGocciaSymbolValue(ComputedKey),
+              TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfConfigurable]))
+          else
+            ClassValue.Prototype.DefineSymbolProperty(
+              TGocciaSymbolValue(ComputedKey),
+              TGocciaPropertyDescriptorAccessor.Create(GetterFunction, nil, [pfConfigurable]));
+        end
+        else
+        begin
+          if Elem.IsStatic then
+            ClassValue.AddStaticGetter(ComputedKey.ToStringLiteral.Value, GetterFunction)
+          else
+            ClassValue.AddGetter(ComputedKey.ToStringLiteral.Value, GetterFunction);
+        end;
+      end;
+      cekSetter:
+      begin
+        SetterFunction := TGocciaFunctionValue(EvaluateSetter(Elem.SetterNode, AContext));
+        if ComputedKey is TGocciaSymbolValue then
+        begin
+          if Elem.IsStatic then
+            ExistingDescriptor := ClassValue.GetOwnStaticSymbolDescriptor(TGocciaSymbolValue(ComputedKey))
+          else
+            ExistingDescriptor := ClassValue.Prototype.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(ComputedKey));
 
-  // Handle computed instance setters (merge with existing getter if same symbol)
-  for I := 0 to Length(AClassDef.FComputedInstanceSetters) - 1 do
-  begin
-    ComputedKey := EvaluateExpression(AClassDef.FComputedInstanceSetters[I].KeyExpression, AContext);
-    SetterFunction := TGocciaFunctionValue(EvaluateSetter(AClassDef.FComputedInstanceSetters[I].SetterExpression, AContext));
-    if ComputedKey is TGocciaSymbolValue then
-    begin
-      ExistingDescriptor := ClassValue.Prototype.GetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(ComputedKey));
-      if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
-         Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
-        ClassValue.Prototype.DefineSymbolProperty(
-          TGocciaSymbolValue(ComputedKey),
-          TGocciaPropertyDescriptorAccessor.Create(
-            TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter,
-            SetterFunction,
-            [pfConfigurable]))
-      else
-        ClassValue.Prototype.DefineSymbolProperty(
-          TGocciaSymbolValue(ComputedKey),
-          TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfConfigurable]));
-    end
-    else
-      ClassValue.AddSetter(ComputedKey.ToStringLiteral.Value, SetterFunction);
+          if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
+             Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
+          begin
+            if Elem.IsStatic then
+              ClassValue.DefineSymbolProperty(
+                TGocciaSymbolValue(ComputedKey),
+                TGocciaPropertyDescriptorAccessor.Create(
+                  TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter,
+                  SetterFunction, [pfConfigurable]))
+            else
+              ClassValue.Prototype.DefineSymbolProperty(
+                TGocciaSymbolValue(ComputedKey),
+                TGocciaPropertyDescriptorAccessor.Create(
+                  TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter,
+                  SetterFunction, [pfConfigurable]));
+          end
+          else
+          begin
+            if Elem.IsStatic then
+              ClassValue.DefineSymbolProperty(
+                TGocciaSymbolValue(ComputedKey),
+                TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfConfigurable]))
+            else
+              ClassValue.Prototype.DefineSymbolProperty(
+                TGocciaSymbolValue(ComputedKey),
+                TGocciaPropertyDescriptorAccessor.Create(nil, SetterFunction, [pfConfigurable]));
+          end;
+        end
+        else
+        begin
+          if Elem.IsStatic then
+            ClassValue.AddStaticSetter(ComputedKey.ToStringLiteral.Value, SetterFunction)
+          else
+            ClassValue.AddSetter(ComputedKey.ToStringLiteral.Value, SetterFunction);
+        end;
+      end;
+    end;
   end;
 
   // TC39 proposal-decorators §3.1 ClassDefinitionEvaluation — auto-accessor setup

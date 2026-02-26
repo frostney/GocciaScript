@@ -2445,7 +2445,7 @@ begin
     begin
       Getter := ParseGetterExpression;
 
-      if Length(MemberDecorators) > 0 then
+      if (Length(MemberDecorators) > 0) or IsComputed then
       begin
         SetLength(Elements, Length(Elements) + 1);
         Elements[High(Elements)].Kind := cekGetter;
@@ -2484,7 +2484,7 @@ begin
     begin
       Setter := ParseSetterExpression;
 
-      if Length(MemberDecorators) > 0 then
+      if (Length(MemberDecorators) > 0) or IsComputed then
       begin
         SetLength(Elements, Length(Elements) + 1);
         Elements[High(Elements)].Kind := cekSetter;
