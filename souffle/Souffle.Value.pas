@@ -172,7 +172,12 @@ begin
     svkFloat:
       Result := A.AsFloat = B.AsFloat;
     svkReference:
-      Result := A.AsReference = B.AsReference;
+      if A.AsReference = B.AsReference then
+        Result := True
+      else if (A.AsReference is TSouffleString) and (B.AsReference is TSouffleString) then
+        Result := TSouffleString(A.AsReference).Value = TSouffleString(B.AsReference).Value
+      else
+        Result := False;
   else
     Result := False;
   end;
