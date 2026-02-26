@@ -44,9 +44,9 @@ type
     FResolver: TGocciaModuleResolver;
 
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
-    function CreateEvaluationContext: TGocciaEvaluationContext;
     function LoadJsonModule(const AResolvedPath: string): TGocciaModule;
   public
+    function CreateEvaluationContext: TGocciaEvaluationContext;
     constructor Create(const AFileName: string; const ASourceLines: TStringList);
     destructor Destroy; override;
     function Execute(const AProgram: TGocciaProgram): TGocciaValue;

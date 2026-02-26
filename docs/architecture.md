@@ -2,7 +2,11 @@
 
 GocciaScript follows a classic interpreter pipeline: source code flows through lexing, parsing, and evaluation stages before producing a result. The system is implemented in FreePascal using object-oriented design with virtual method dispatch.
 
+GocciaScript supports two execution backends: a **tree-walk interpreter** (default) and a **bytecode compiler + Souffle VM**. Both share the same frontend (lexer, parser, AST) and built-in object system. See [souffle-vm.md](souffle-vm.md) for the full Souffle VM architecture.
+
 ## Pipeline Overview
+
+### Tree-Walk Interpreter (default)
 
 ```mermaid
 flowchart TD
@@ -21,7 +25,25 @@ flowchart TD
     Evaluator --> Result
 ```
 
-The **Engine** (`Goccia.Engine.pas`) sits above this pipeline and orchestrates the entire process: it creates the interpreter, registers built-in globals, initializes the garbage collector, invokes the lexer/parser, and hands the AST to the interpreter for execution.
+### Bytecode Compiler + Souffle VM (`--mode=bytecode`)
+
+```mermaid
+flowchart TD
+    Source["Source Code (.js)"]
+    Source --> Lexer
+    Lexer["**Lexer** → **Parser**\nShared frontend"]
+    Lexer -->|"AST"| Compiler
+    Compiler["**Compiler**\nGoccia.Compiler.pas\nAST → Souffle Bytecode"]
+    Compiler -->|"TSouffleBytecodeModule"| VM
+    Compiler -->|"--emit"| SBC[".sbc Binary File"]
+    SBC -->|"load"| VM
+    VM["**Souffle VM**\nSouffle.VM.pas\nRegister-based dispatch"]
+    VM -->|"Tier 2 opcodes"| Runtime
+    Runtime["**Runtime Operations**\nGoccia.Runtime.Operations.pas\nGocciaScript semantics"]
+    VM --> Result
+```
+
+The **Engine** (`Goccia.Engine.pas`) sits above both pipelines and orchestrates the process: it creates the interpreter, registers built-in globals, initializes the garbage collector, invokes the lexer/parser, and hands the AST to the interpreter (or compiler) for execution. The **Backend** (`Goccia.Engine.Backend.pas`) provides the Souffle VM bridge, bootstrapping GocciaScript globals into the VM's runtime environment.
 
 ## Component Responsibilities
 

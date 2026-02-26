@@ -7,6 +7,7 @@ interface
 uses
   Generics.Collections,
 
+  Goccia.Arguments.Collection,
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
@@ -76,6 +77,7 @@ procedure AssignAssignmentPattern(const APattern: TGocciaAssignmentDestructuring
 procedure AssignRestPattern(const APattern: TGocciaRestDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 procedure InitializePrivateInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
+function InstantiateClass(const AClassValue: TGocciaClassValue; const AArguments: TGocciaArgumentsCollection; const AContext: TGocciaEvaluationContext): TGocciaValue;
 
 function IsObjectInstanceOfClass(const AObj: TGocciaObjectValue; const AClassValue: TGocciaClassValue): Boolean;
 
@@ -90,7 +92,6 @@ uses
 
   OrderedMap,
 
-  Goccia.Arguments.Collection,
   Goccia.CallStack,
   Goccia.Constants,
   Goccia.Constants.ErrorNames,
@@ -1931,89 +1932,7 @@ begin
     try
       if Callee is TGocciaClassValue then
       begin
-        ClassValue := TGocciaClassValue(Callee);
-
-        NativeInstance := nil;
-        WalkClass := ClassValue;
-        while Assigned(WalkClass) do
-        begin
-          NativeInstance := WalkClass.CreateNativeInstance(Arguments);
-          if Assigned(NativeInstance) then
-            Break;
-          WalkClass := WalkClass.SuperClass;
-        end;
-
-        if Assigned(NativeInstance) then
-        begin
-          NativeInstance.Prototype := ClassValue.Prototype;
-          if NativeInstance is TGocciaInstanceValue then
-            TGocciaInstanceValue(NativeInstance).ClassValue := ClassValue;
-
-          InitContext := AContext;
-          InitScope := TGocciaClassInitScope.Create(AContext.Scope, ClassValue);
-          InitScope.ThisValue := NativeInstance;
-          InitContext.Scope := InitScope;
-
-          InitializeInstanceProperties(TGocciaInstanceValue(NativeInstance), ClassValue, InitContext);
-
-          if Assigned(ClassValue.SuperClass) then
-          begin
-            SuperInitContext := AContext;
-            SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, ClassValue.SuperClass);
-            SuperInitScope.ThisValue := NativeInstance;
-            SuperInitContext.Scope := SuperInitScope;
-            InitializePrivateInstanceProperties(TGocciaInstanceValue(NativeInstance), ClassValue.SuperClass, SuperInitContext);
-          end;
-
-          InitializePrivateInstanceProperties(TGocciaInstanceValue(NativeInstance), ClassValue, InitContext);
-
-          ClassValue.RunMethodInitializers(NativeInstance);
-          ClassValue.RunFieldInitializers(NativeInstance);
-          ClassValue.RunDecoratorFieldInitializers(NativeInstance);
-
-          if Assigned(ClassValue.ConstructorMethod) then
-            ClassValue.ConstructorMethod.Call(Arguments, NativeInstance)
-          else if Assigned(ClassValue.SuperClass) and Assigned(ClassValue.SuperClass.ConstructorMethod) then
-            ClassValue.SuperClass.ConstructorMethod.Call(Arguments, NativeInstance)
-          else
-            TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(Arguments);
-
-          Result := NativeInstance;
-        end
-        else
-        begin
-          Instance := TGocciaInstanceValue.Create(ClassValue);
-          Instance.Prototype := ClassValue.Prototype;
-
-          InitContext := AContext;
-          InitScope := TGocciaClassInitScope.Create(AContext.Scope, ClassValue);
-          InitScope.ThisValue := Instance;
-          InitContext.Scope := InitScope;
-
-          InitializeInstanceProperties(Instance, ClassValue, InitContext);
-
-          if Assigned(ClassValue.SuperClass) then
-          begin
-            SuperInitContext := AContext;
-            SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, ClassValue.SuperClass);
-            SuperInitScope.ThisValue := Instance;
-            SuperInitContext.Scope := SuperInitScope;
-            InitializePrivateInstanceProperties(Instance, ClassValue.SuperClass, SuperInitContext);
-          end;
-
-          InitializePrivateInstanceProperties(Instance, ClassValue, InitContext);
-
-          ClassValue.RunMethodInitializers(Instance);
-          ClassValue.RunFieldInitializers(Instance);
-          ClassValue.RunDecoratorFieldInitializers(Instance);
-
-          if Assigned(ClassValue.ConstructorMethod) then
-            ClassValue.ConstructorMethod.Call(Arguments, Instance)
-          else if Assigned(ClassValue.SuperClass) and Assigned(ClassValue.SuperClass.ConstructorMethod) then
-            ClassValue.SuperClass.ConstructorMethod.Call(Arguments, Instance);
-
-          Result := Instance;
-        end;
+        Result := InstantiateClass(TGocciaClassValue(Callee), Arguments, AContext);
       end
       else if Callee is TGocciaNativeFunctionValue then
       begin
@@ -2860,6 +2779,81 @@ begin
     PropertyValue := EvaluateExpression(Entry.Value, AContext);
     AInstance.SetPrivateProperty(Entry.Key, PropertyValue, AClassValue);
   end;
+end;
+
+function InstantiateClass(const AClassValue: TGocciaClassValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  Instance: TGocciaObjectValue;
+  WalkClass: TGocciaClassValue;
+  NativeInstance: TGocciaObjectValue;
+  InitContext, SuperInitContext: TGocciaEvaluationContext;
+  InitScope, SuperInitScope: TGocciaScope;
+begin
+  NativeInstance := nil;
+  WalkClass := AClassValue;
+  while Assigned(WalkClass) do
+  begin
+    NativeInstance := WalkClass.CreateNativeInstance(AArguments);
+    if Assigned(NativeInstance) then
+      Break;
+    WalkClass := WalkClass.SuperClass;
+  end;
+
+  if Assigned(NativeInstance) then
+  begin
+    Instance := NativeInstance;
+    Instance.Prototype := AClassValue.Prototype;
+    if NativeInstance is TGocciaInstanceValue then
+      TGocciaInstanceValue(NativeInstance).ClassValue := AClassValue;
+  end
+  else
+  begin
+    Instance := TGocciaInstanceValue.Create(AClassValue);
+    Instance.Prototype := AClassValue.Prototype;
+  end;
+
+  TGocciaGarbageCollector.Instance.AddTempRoot(Instance);
+  try
+    InitContext := AContext;
+    InitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
+    InitScope.ThisValue := Instance;
+    InitContext.Scope := InitScope;
+
+    if Instance is TGocciaInstanceValue then
+    begin
+      InitializeInstanceProperties(TGocciaInstanceValue(Instance), AClassValue, InitContext);
+
+      WalkClass := AClassValue.SuperClass;
+      while Assigned(WalkClass) do
+      begin
+        SuperInitContext := AContext;
+        SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
+        SuperInitScope.ThisValue := Instance;
+        SuperInitContext.Scope := SuperInitScope;
+        InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), WalkClass, SuperInitContext);
+        WalkClass := WalkClass.SuperClass;
+      end;
+
+      InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), AClassValue, InitContext);
+    end;
+
+    AClassValue.RunMethodInitializers(Instance);
+    AClassValue.RunFieldInitializers(Instance);
+    AClassValue.RunDecoratorFieldInitializers(Instance);
+
+    if Assigned(AClassValue.ConstructorMethod) then
+      AClassValue.ConstructorMethod.Call(AArguments, Instance)
+    else if Assigned(AClassValue.SuperClass) and Assigned(AClassValue.SuperClass.ConstructorMethod) then
+      AClassValue.SuperClass.ConstructorMethod.Call(AArguments, Instance)
+    else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
+      TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+  finally
+    TGocciaGarbageCollector.Instance.RemoveTempRoot(Instance);
+  end;
+
+  Result := Instance;
 end;
 
 function EvaluateTemplateLiteral(const ATemplateLiteralExpression: TGocciaTemplateLiteralExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
