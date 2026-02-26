@@ -4,13 +4,21 @@ program TestRunner;
 
 uses
   Classes,
+  Generics.Collections,
   SysUtils,
 
+  Souffle.Bytecode.Module,
   TimingUtils,
 
+  Goccia.AST.Node,
   Goccia.Builtins.TestConsole,
+  Goccia.Compiler,
   Goccia.Engine,
+  Goccia.Engine.Backend,
   Goccia.FileExtensions,
+  Goccia.Lexer,
+  Goccia.Parser,
+  Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -22,6 +30,7 @@ var
   GShowResults: Boolean = True;
   GExitOnFirstFailure: Boolean = False;
   GSilentConsole: Boolean = False;
+  GMode: TGocciaEngineBackend = ebTreeWalk;
 
 type
   TTestFileResult = record
@@ -29,7 +38,58 @@ type
     Timing: TGocciaScriptResult;
   end;
 
-function RunGocciaScript(const AFileName: string): TTestFileResult;
+function MakeEmptyTestResult(const AScriptResult: TGocciaObjectValue): TTestFileResult;
+begin
+  Result.TestResult := AScriptResult;
+  Result.Timing.Result := nil;
+  Result.Timing.LexTimeNanoseconds := 0;
+  Result.Timing.ParseTimeNanoseconds := 0;
+  Result.Timing.ExecuteTimeNanoseconds := 0;
+  Result.Timing.TotalTimeNanoseconds := 0;
+  Result.Timing.FileName := '';
+end;
+
+function CreateDefaultScriptResult: TGocciaObjectValue;
+begin
+  Result := TGocciaObjectValue.Create;
+  Result.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(1));
+  Result.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.ZeroValue);
+  Result.AssignProperty('passed', TGocciaNumberLiteralValue.ZeroValue);
+  Result.AssignProperty('failed', TGocciaNumberLiteralValue.ZeroValue);
+  Result.AssignProperty('skipped', TGocciaNumberLiteralValue.ZeroValue);
+  Result.AssignProperty('assertions', TGocciaNumberLiteralValue.ZeroValue);
+  Result.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
+  Result.AssignProperty('failedTests', TGocciaArrayValue.Create);
+end;
+
+procedure MergeFileResult(const ATarget: TGocciaObjectValue; const AFileResult: TGocciaObjectValue);
+begin
+  if AFileResult = nil then Exit;
+  if AFileResult.GetProperty('totalRunTests').ToStringLiteral.Value <> 'undefined' then
+    ATarget.AssignProperty('totalRunTests', AFileResult.GetProperty('totalRunTests'));
+  if AFileResult.GetProperty('passed').ToStringLiteral.Value <> 'undefined' then
+    ATarget.AssignProperty('passed', AFileResult.GetProperty('passed'));
+  if AFileResult.GetProperty('failed').ToStringLiteral.Value <> 'undefined' then
+    ATarget.AssignProperty('failed', AFileResult.GetProperty('failed'));
+  if AFileResult.GetProperty('skipped').ToStringLiteral.Value <> 'undefined' then
+    ATarget.AssignProperty('skipped', AFileResult.GetProperty('skipped'));
+  if AFileResult.GetProperty('assertions').ToStringLiteral.Value <> 'undefined' then
+    ATarget.AssignProperty('assertions', AFileResult.GetProperty('assertions'));
+  if AFileResult.GetProperty('duration').ToStringLiteral.Value <> 'undefined' then
+    ATarget.AssignProperty('duration', AFileResult.GetProperty('duration'));
+  if AFileResult.GetProperty('failedTests').ToStringLiteral.Value <> 'undefined' then
+    ATarget.AssignProperty('failedTests', AFileResult.GetProperty('failedTests'));
+end;
+
+procedure MarkLoadError(const AResult: TGocciaObjectValue; const AFileName, AMessage: string);
+begin
+  AResult.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(1));
+  AResult.AssignProperty('failed', TGocciaNumberLiteralValue.Create(1));
+  TGocciaArrayValue(AResult.GetProperty('failedTests')).Elements.Add(
+    TGocciaStringLiteralValue.Create(AFileName + ': ' + AMessage));
+end;
+
+function RunGocciaScriptInterpreted(const AFileName: string): TTestFileResult;
 var
   Source: TStringList;
   ScriptResult, FileResult: TGocciaObjectValue;
@@ -39,16 +99,7 @@ var
   TestGlobals: TGocciaGlobalBuiltins;
 begin
   TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
-
-  ScriptResult := TGocciaObjectValue.Create;
-  ScriptResult.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(1));
-  ScriptResult.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.ZeroValue);
-  ScriptResult.AssignProperty('passed', TGocciaNumberLiteralValue.ZeroValue);
-  ScriptResult.AssignProperty('failed', TGocciaNumberLiteralValue.ZeroValue);
-  ScriptResult.AssignProperty('skipped', TGocciaNumberLiteralValue.ZeroValue);
-  ScriptResult.AssignProperty('assertions', TGocciaNumberLiteralValue.ZeroValue);
-  ScriptResult.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
-  ScriptResult.AssignProperty('failedTests', TGocciaArrayValue.Create);
+  ScriptResult := CreateDefaultScriptResult;
 
   Source := TStringList.Create;
   try
@@ -58,17 +109,8 @@ begin
       on E: EStreamError do
       begin
         WriteLn('Error loading test file: ', E.Message);
-        ScriptResult.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(1));
-        ScriptResult.AssignProperty('failed', TGocciaNumberLiteralValue.Create(1));
-        TGocciaArrayValue(ScriptResult.GetProperty('failedTests')).Elements.Add(
-          TGocciaStringLiteralValue.Create(AFileName + ': ' + E.Message));
-        Result.TestResult := ScriptResult;
-        Result.Timing.Result := nil;
-        Result.Timing.LexTimeNanoseconds := 0;
-        Result.Timing.ParseTimeNanoseconds := 0;
-        Result.Timing.ExecuteTimeNanoseconds := 0;
-        Result.Timing.TotalTimeNanoseconds := 0;
-        Result.Timing.FileName := '';
+        MarkLoadError(ScriptResult, AFileName, E.Message);
+        Result := MakeEmptyTestResult(ScriptResult);
         Exit;
       end;
     end;
@@ -94,45 +136,118 @@ begin
       end;
       Result.Timing := EngineResult;
       FileResult := EngineResult.Result as TGocciaObjectValue;
-      
-      if FileResult <> nil then
-      begin
-        if FileResult.GetProperty('totalRunTests').ToStringLiteral.Value <> 'undefined' then
-          ScriptResult.AssignProperty('totalRunTests', FileResult.GetProperty('totalRunTests'));
-        if FileResult.GetProperty('passed').ToStringLiteral.Value <> 'undefined' then
-          ScriptResult.AssignProperty('passed', FileResult.GetProperty('passed'));
-        if FileResult.GetProperty('failed').ToStringLiteral.Value <> 'undefined' then
-          ScriptResult.AssignProperty('failed', FileResult.GetProperty('failed'));
-        if FileResult.GetProperty('skipped').ToStringLiteral.Value <> 'undefined' then
-          ScriptResult.AssignProperty('skipped', FileResult.GetProperty('skipped'));
-        if FileResult.GetProperty('assertions').ToStringLiteral.Value <> 'undefined' then
-          ScriptResult.AssignProperty('assertions', FileResult.GetProperty('assertions'));
-        if FileResult.GetProperty('duration').ToStringLiteral.Value <> 'undefined' then
-          ScriptResult.AssignProperty('duration', FileResult.GetProperty('duration'));
-        if FileResult.GetProperty('failedTests').ToStringLiteral.Value <> 'undefined' then
-          ScriptResult.AssignProperty('failedTests', FileResult.GetProperty('failedTests'));
-      end;
-
+      MergeFileResult(ScriptResult, FileResult);
       Result.TestResult := ScriptResult;
     except
       on E: Exception do
       begin
         WriteLn('Fatal error: ', E.Message);
-        ScriptResult.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(1));
-        ScriptResult.AssignProperty('failed', TGocciaNumberLiteralValue.Create(1));
-        TGocciaArrayValue(ScriptResult.GetProperty('failedTests')).Elements.Add(
-          TGocciaStringLiteralValue.Create(AFileName + ': ' + E.Message));
-        Result.TestResult := ScriptResult;
-        Result.Timing.Result := nil;
-        Result.Timing.LexTimeNanoseconds := 0;
-        Result.Timing.ParseTimeNanoseconds := 0;
-        Result.Timing.ExecuteTimeNanoseconds := 0;
-        Result.Timing.TotalTimeNanoseconds := 0;
-        Result.Timing.FileName := '';
+        MarkLoadError(ScriptResult, AFileName, E.Message);
+        Result := MakeEmptyTestResult(ScriptResult);
       end;
     end;
   finally
     Source.Free;
+  end;
+end;
+
+function RunGocciaScriptBytecode(const AFileName: string): TTestFileResult;
+var
+  Source: TStringList;
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  Module: TSouffleBytecodeModule;
+  Backend: TGocciaSouffleBackend;
+  ScriptResult: TGocciaObjectValue;
+  ResultValue: TGocciaValue;
+  TestGlobals: TGocciaGlobalBuiltins;
+  StartTime, EndTime: Int64;
+begin
+  TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
+  ScriptResult := CreateDefaultScriptResult;
+
+  Source := TStringList.Create;
+  try
+    try
+      Source.LoadFromFile(AFileName);
+    except
+      on E: EStreamError do
+      begin
+        WriteLn('Error loading test file: ', E.Message);
+        MarkLoadError(ScriptResult, AFileName, E.Message);
+        Result := MakeEmptyTestResult(ScriptResult);
+        Exit;
+      end;
+    end;
+
+    Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
+      [BoolToStr(GExitOnFirstFailure, 'true', 'false')]));
+
+    try
+      StartTime := GetNanoseconds;
+
+      Backend := TGocciaSouffleBackend.Create(AFileName);
+      try
+        Backend.RegisterBuiltIns(TestGlobals);
+
+        Lexer := TGocciaLexer.Create(Source.Text, AFileName);
+        try
+          Tokens := Lexer.ScanTokens;
+          Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
+          try
+            ProgramNode := Parser.Parse;
+            try
+              Module := Backend.CompileToModule(ProgramNode);
+            finally
+              ProgramNode.Free;
+            end;
+          finally
+            Parser.Free;
+          end;
+        finally
+          Lexer.Free;
+        end;
+
+        try
+          ResultValue := Backend.RunModule(Module);
+          EndTime := GetNanoseconds;
+
+          if ResultValue is TGocciaObjectValue then
+            MergeFileResult(ScriptResult, TGocciaObjectValue(ResultValue));
+
+          Result.TestResult := ScriptResult;
+          Result.Timing.Result := ResultValue;
+          Result.Timing.LexTimeNanoseconds := 0;
+          Result.Timing.ParseTimeNanoseconds := 0;
+          Result.Timing.ExecuteTimeNanoseconds := EndTime - StartTime;
+          Result.Timing.TotalTimeNanoseconds := EndTime - StartTime;
+          Result.Timing.FileName := AFileName;
+        finally
+          Module.Free;
+        end;
+      finally
+        Backend.Free;
+      end;
+    except
+      on E: Exception do
+      begin
+        WriteLn('Fatal error: ', E.Message);
+        MarkLoadError(ScriptResult, AFileName, E.Message);
+        Result := MakeEmptyTestResult(ScriptResult);
+      end;
+    end;
+  finally
+    Source.Free;
+  end;
+end;
+
+function RunGocciaScript(const AFileName: string): TTestFileResult;
+begin
+  case GMode of
+    ebTreeWalk:  Result := RunGocciaScriptInterpreted(AFileName);
+    ebSouffleVM: Result := RunGocciaScriptBytecode(AFileName);
   end;
 end;
 
@@ -298,6 +413,7 @@ begin
   GShowResults := True;
   GExitOnFirstFailure := False;
   GSilentConsole := False;
+  GMode := ebTreeWalk;
 
   Paths := TStringList.Create;
   try
@@ -311,6 +427,16 @@ begin
         GExitOnFirstFailure := True
       else if ParamStr(I) = '--silent' then
         GSilentConsole := True
+      else if ParamStr(I) = '--mode=interpreted' then
+        GMode := ebTreeWalk
+      else if ParamStr(I) = '--mode=bytecode' then
+        GMode := ebSouffleVM
+      else if Copy(ParamStr(I), 1, 7) = '--mode=' then
+      begin
+        WriteLn('Error: Unknown mode "', Copy(ParamStr(I), 8, MaxInt), '". Use "interpreted" or "bytecode".');
+        ExitCode := 1;
+        Exit;
+      end
       else if Copy(ParamStr(I), 1, 2) <> '--' then
         Paths.Add(ParamStr(I));
     end;
@@ -323,6 +449,7 @@ begin
       WriteLn('  --no-results            Suppress test results summary');
       WriteLn('  --exit-on-first-failure Stop on first test failure');
       WriteLn('  --silent                Suppress console output from test scripts');
+      WriteLn('  --mode=interpreted|bytecode  Execution backend (default: interpreted)');
       ExitCode := 1;
     end
     else

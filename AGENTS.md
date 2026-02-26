@@ -26,17 +26,23 @@ GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a 
 ### Run Commands
 
 ```bash
-./build/ScriptLoader example.js                  # Execute a script
+./build/ScriptLoader example.js                  # Execute a script (interpreted)
+./build/ScriptLoader example.js --mode=bytecode  # Execute via Souffle VM
+./build/ScriptLoader example.js --emit           # Compile to .sbc (no execution)
+./build/ScriptLoader example.js --emit=out.sbc   # Compile to specific .sbc file
+./build/ScriptLoader out.sbc                     # Load and execute .sbc bytecode
 ./build/REPL                                      # Start interactive REPL
 ./build/TestRunner tests/                                                      # Run all JavaScript tests
 ./build/TestRunner tests/language/expressions/                                 # Run a test category
 ./build/TestRunner tests --no-progress --exit-on-first-failure                 # CI mode
 ./build/TestRunner tests --silent                                              # Suppress all console output
+./build/TestRunner tests --mode=bytecode                                       # Run tests via Souffle VM
 ./build/BenchmarkRunner benchmarks/                                               # Run all benchmarks
 ./build/BenchmarkRunner benchmarks/fibonacci.js                                   # Run a specific benchmark
 ./build/BenchmarkRunner benchmarks --format=json --output=out.json                # Export as JSON
 ./build/BenchmarkRunner benchmarks --format=console --format=json --output=out.json # Console + JSON
 ./build/BenchmarkRunner benchmarks --no-progress                                  # Suppress progress (CI)
+./build/BenchmarkRunner benchmarks --mode=bytecode                                # Benchmarks via Souffle VM
 ```
 
 ### Compile and Run (Common Workflows)
@@ -69,9 +75,11 @@ fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- BenchmarkRunner.dpr
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for the full architecture deep-dive.
+See [docs/architecture.md](docs/architecture.md) for the full architecture deep-dive. See [docs/souffle-vm.md](docs/souffle-vm.md) for the Souffle VM architecture.
 
-**Pipeline:** Source → (JSX Transformer) → Lexer → Parser → Interpreter → Evaluator → Result
+**Interpreted pipeline:** Source → (JSX Transformer) → Lexer → Parser → Interpreter → Evaluator → Result
+
+**Bytecode pipeline:** Source → Lexer → Parser → Compiler → Souffle Bytecode → Souffle VM → Result
 
 **Key components:**
 
@@ -104,7 +112,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Version | `Goccia.Version.pas` | Git-derived version and commit hash, resolved once at startup via `RunCommand` |
 | Temporal Utilities | `Goccia.Temporal.Utils.pas` | ISO 8601 date math helpers, parsing, formatting |
 | Temporal Built-in | `Goccia.Builtins.Temporal.pas` | Temporal namespace, constructors, static methods, Temporal.Now |
-| File Extensions | `Goccia.FileExtensions.pas` | Centralized file extension constants (`EXT_JS`, `EXT_MJS`, etc.), `ScriptExtensions` array, `IsScriptExtension`/`IsJSXNativeExtension` helpers |
+| File Extensions | `Goccia.FileExtensions.pas` | Centralized file extension constants (`EXT_JS`, `EXT_MJS`, `EXT_SBC`, etc.), `ScriptExtensions` array, `IsScriptExtension`/`IsJSXNativeExtension` helpers |
 | Module Resolver | `Goccia.Modules.Resolver.pas` | Extensionless imports, path aliases, virtual `Resolve` for custom resolvers |
 | JSX Source Map | `Goccia.JSX.SourceMap.pas` | Lightweight internal position mapping for JSX-transformed source |
 | JSX Transformer | `Goccia.JSX.Transformer.pas` | Standalone pre-pass that converts JSX to `createElement` calls |
@@ -127,6 +135,23 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Array Utils | `Goccia.Utils.Array.pas` | `ArrayCreateDataProperty` helper for spec-compliant array operations |
 | TypedArray Value | `Goccia.Values.TypedArrayValue.pas` | `TGocciaTypedArrayValue` — view over ArrayBuffer with fixed element type (Int8, Uint8, Uint8Clamped, Int16, Uint16, Int32, Uint32, Float32, Float64), `TGocciaTypedArrayClassValue`, `TGocciaTypedArrayStaticFrom` |
 | Test Console | `Goccia.Builtins.TestConsole.pas` | Silent console override for `--silent` mode in TestRunner |
+| Souffle VM | `Souffle.VM.pas` | Register-based bytecode VM with two-tier dispatch (Tier 1 intrinsic + Tier 2 runtime) |
+| Souffle Value | `Souffle.Value.pas` | `TSouffleValue` tagged union: Nil, Boolean, Integer, Float, Reference |
+| Souffle Bytecode | `Souffle.Bytecode.pas` | Opcode definitions (Tier 1 + Tier 2), 32-bit instruction encoding/decoding |
+| Souffle Bytecode Chunk | `Souffle.Bytecode.Chunk.pas` | `TSouffleFunctionPrototype` — code, constants, upvalue descriptors, exception handlers |
+| Souffle Bytecode Module | `Souffle.Bytecode.Module.pas` | `TSouffleBytecodeModule` — top-level prototype, imports, exports, runtime tag |
+| Souffle Bytecode Binary | `Souffle.Bytecode.Binary.pas` | `.sbc` file serialization/deserialization |
+| Souffle Debug Info | `Souffle.Bytecode.Debug.pas` | Source line mapping, local variable info for debuggers |
+| Souffle Closure | `Souffle.VM.Closure.pas` | `TSouffleClosure` — function prototype + captured upvalue array |
+| Souffle Upvalue | `Souffle.VM.Upvalue.pas` | `TSouffleUpvalue` — open (register pointer) or closed (captured value) |
+| Souffle Call Frame | `Souffle.VM.CallFrame.pas` | `TSouffleVMCallFrame`, `TSouffleCallStack` |
+| Souffle Exception | `Souffle.VM.Exception.pas` | `TSouffleHandlerStack`, `ESouffleThrow` — handler-table exception model |
+| Souffle Runtime Ops | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` — abstract interface for language-specific semantics |
+| Souffle GC | `Souffle.GarbageCollector.pas` | Mark-and-sweep GC for `TSouffleHeapObject` instances |
+| Souffle Heap | `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleString`, heap kind constants |
+| GocciaScript Backend | `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — bridges GocciaScript engine to Souffle VM |
+| GocciaScript Compiler | `Goccia.Compiler.pas` | `TGocciaCompiler` — AST → Souffle bytecode compilation |
+| GocciaScript Runtime | `Goccia.Runtime.Operations.pas` | `TGocciaRuntimeOperations` — GocciaScript semantics for Souffle VM |
 
 ## Development Workflow
 
@@ -308,7 +333,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Function/procedure names:** PascalCase (e.g., `EvaluateBinary`, `GetProperty`). External C bindings are exempt. Auto-fixed by `./format.pas`.
 - **Unit naming:** `Goccia.<Category>.<Name>.pas` (dot-separated hierarchy)
 - **No abbreviations:** Use full words in class, function, method, and type names (e.g., `TGocciaGarbageCollector` not `TGocciaGC`). Exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
-- **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`) instead of hardcoded string literals. Use the `ScriptExtensions` array, `IsScriptExtension`, and `IsJSXNativeExtension` helpers instead of duplicating extension lists or ad-hoc checks.
+- **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`, `EXT_SBC`) instead of hardcoded string literals. Use the `ScriptExtensions` array, `IsScriptExtension`, and `IsJSXNativeExtension` helpers instead of duplicating extension lists or ad-hoc checks.
 - **Runtime constants:** Use the split constant units instead of hardcoded string literals for property names, type names, error names, constructor names, and symbol names:
   - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, `PROP_GET`, `PROP_SET`, `PROP_KIND`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_INIT`, `PROP_ADD_INITIALIZER`, etc.
   - `Goccia.Constants.TypeNames` — `OBJECT_TYPE_NAME`, `STRING_TYPE_NAME`, `FUNCTION_TYPE_NAME`, etc.
@@ -510,6 +535,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 | Document | Description |
 |----------|-------------|
 | [docs/architecture.md](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
+| [docs/souffle-vm.md](docs/souffle-vm.md) | Souffle VM architecture, two-tier ISA, value system, binary format, WASM alignment |
 | [docs/design-decisions.md](docs/design-decisions.md) | Rationale behind key technical choices |
 | [docs/code-style.md](docs/code-style.md) | Naming conventions, patterns, file organization |
 | [docs/value-system.md](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |

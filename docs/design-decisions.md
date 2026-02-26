@@ -359,6 +359,52 @@ String interning (caching `TGocciaStringLiteralValue` instances in a `TDictionar
 
 **Do not re-attempt** dictionary-based string interning. If string allocation becomes a measurable bottleneck in future profiling, consider instead: (a) pre-allocated singletons for a small fixed set of ultra-common strings (like `SmallInt` but for `"length"`, `"undefined"`, etc.), or (b) arena/pool allocation for `TGocciaStringLiteralValue` objects to reduce per-object GC overhead without per-string hashing.
 
+## Souffle VM: Two-Tier ISA with Pluggable Runtime
+
+GocciaScript includes an alternative bytecode execution backend — the **Souffle VM** — designed as a general-purpose virtual machine that can support multiple language frontends. See [souffle-vm.md](souffle-vm.md) for the full architecture.
+
+### Why a Bytecode VM?
+
+The tree-walk interpreter directly evaluates AST nodes via recursive function calls. This is simple and debuggable, but carries overhead from VMT dispatch on every AST node, deep call stacks for nested expressions, and no opportunity for instruction-level optimization. A bytecode VM trades compilation cost for faster execution: flat instruction dispatch, register-based operands, and a compact in-memory representation.
+
+### Why Register-Based?
+
+Stack-based VMs (like the JVM and WASM) are simpler to compile to and have smaller instruction encoding. Register-based VMs (like Lua 5, LuaJIT, and Dalvik) need fewer instructions per operation and avoid redundant stack manipulations. For WASM output, register-to-stack translation is straightforward — the VM architecture doesn't need to mirror the target. Register-based was chosen for execution performance.
+
+### Why Two Tiers?
+
+Opcodes like "get property", "typeof", and "instanceof" have fundamentally different semantics across languages. JavaScript walks prototype chains; Python does MRO + `__getattr__`; Lua checks metatables. Baking any one language's semantics into the instruction set would prevent reuse.
+
+The solution is a split opcode space:
+
+- **Tier 1 (0–127):** VM-intrinsic operations with fixed, universal semantics (register moves, control flow, closures, exceptions). Implemented directly in the dispatch loop.
+- **Tier 2 (128–255):** Runtime operations dispatched through `TSouffleRuntimeOperations`, an abstract class each language provides. The VM calls `RuntimeOps.GetProperty(obj, key)` without knowing what "get property" means.
+
+Adding a new language frontend requires implementing `TSouffleRuntimeOperations` — zero VM changes.
+
+### Why a Self-Contained Value System?
+
+The Souffle VM has its own `TSouffleValue` tagged union (16 bytes: 1-byte kind tag + 8-byte data) with only 5 value kinds: Nil, Boolean, Integer, Float, Reference. This is independent of `TGocciaValue`.
+
+The separation exists because:
+
+- **Language-agnostic** — The VM doesn't know what "a string" or "an object" is. Those are all `svkReference` (pointer to a `TSouffleHeapObject`). The heap object's type tag is interpreted by the runtime, not the VM.
+- **No GocciaScript dependency** — The VM can be used without any GocciaScript code, making it viable for other frontends.
+- **Inline primitives** — Booleans, integers, and floats live in the register file with zero heap allocation. Only complex types go through the heap.
+- **WASM 3.0 mapping** — The 5 kinds map naturally to WASM's `anyref` hierarchy: Nil → `ref.null`, small integers/booleans → `i31ref`, floats → boxed `f64` GC structs, references → GC struct subtypes.
+
+Bridge conversions between `TSouffleValue` and `TGocciaValue` happen at the runtime operations boundary. `TGocciaWrappedValue` wraps a `TGocciaValue` as a `TSouffleHeapObject` for VM register storage; `TGocciaSouffleClosureBridge` wraps a `TSouffleClosure` as a `TGocciaFunctionBase` for GocciaScript callback compatibility.
+
+### Compiler-Side Desugaring
+
+Language-specific features are compiled into sequences of generic VM instructions rather than adding specialized opcodes:
+
+- **Classes** — No `CLASS` opcode. The compiler emits `OP_CLOSURE` (constructor/methods) + `OP_RT_NEW_COMPOUND` (prototype) + `OP_RT_SET_PROP` (method registration).
+- **Nullish coalescing (`??`)** — No `IS_NULLISH` opcode. The compiler emits `OP_JUMP_IF_NOT_NIL` (check for `undefined`) followed by `OP_RT_GET_GLOBAL('null')` + `OP_RT_EQ` (check for `null`) with conditional jumps.
+- **Template literals** — The compiler parses interpolations at compile time, emits string constants and expression compilations, then chains `OP_RT_ADD` instructions for concatenation.
+
+This keeps the VM general-purpose: new language features are expressed through existing operations.
+
 ## Testing Strategy
 
 JavaScript end-to-end tests are the **primary** testing mechanism. Every new feature or bug fix must include JavaScript tests that validate the behavior through the full pipeline (lexer → parser → evaluator).

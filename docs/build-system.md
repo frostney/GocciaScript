@@ -71,6 +71,30 @@ A full build (no specific targets) automatically cleans first.
 ./build.pas testrunner && ./build/TestRunner tests
 ```
 
+### Bytecode Mode
+
+All execution tools support `--mode=bytecode` to compile and run via the Souffle VM instead of the tree-walk interpreter:
+
+```bash
+# Execute via Souffle VM
+./build/ScriptLoader example.js --mode=bytecode
+
+# Emit bytecode to .sbc file (no execution)
+./build/ScriptLoader example.js --emit
+./build/ScriptLoader example.js --emit=output.sbc
+
+# Load and execute a pre-compiled .sbc file
+./build/ScriptLoader output.sbc
+
+# Run tests via Souffle VM
+./build/TestRunner tests --mode=bytecode
+
+# Run benchmarks via Souffle VM
+./build/BenchmarkRunner benchmarks --mode=bytecode
+```
+
+See [souffle-vm.md](souffle-vm.md) for the full Souffle VM architecture and binary format.
+
 ## Build Output
 
 All compiled binaries go to the `build/` directory:
@@ -162,6 +186,12 @@ GocciaScript/
 │   ├── TimingUtils.pas # Cross-platform microsecond timing and duration formatting
 │   ├── *.pas          # All unit source files
 │   └── *.Test.pas     # Pascal unit test programs
+├── souffle/           # Souffle VM (general-purpose bytecode VM)
+│   ├── Souffle.inc    # Shared compiler directives for Souffle units
+│   ├── Souffle.VM.pas # Core VM: dispatch loop, register file, execution
+│   ├── Souffle.Bytecode.pas # Opcode definitions, instruction encoding
+│   ├── Souffle.Value.pas    # Tagged union value system
+│   └── *.pas          # Other Souffle units (heap, GC, closures, etc.)
 └── build/             # All output (gitignored)
     ├── *.o            # Object files
     ├── *.ppu          # Compiled unit files

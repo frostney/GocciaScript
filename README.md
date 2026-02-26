@@ -149,6 +149,23 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 ./build.pas loader && ./build/ScriptLoader example.js
 ```
 
+### Run via Souffle VM (Bytecode)
+
+GocciaScript includes an alternative bytecode execution backend — the **Souffle VM** — a general-purpose register-based virtual machine:
+
+```bash
+# Compile and execute via Souffle VM
+./build/ScriptLoader example.js --mode=bytecode
+
+# Compile to .sbc bytecode file (no execution)
+./build/ScriptLoader example.js --emit
+
+# Load and execute a pre-compiled .sbc file
+./build/ScriptLoader example.sbc
+```
+
+See [Souffle VM](docs/souffle-vm.md) for the full architecture.
+
 ### Start the REPL
 
 ```bash
@@ -188,12 +205,16 @@ The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec w
 
 ## Architecture
 
-GocciaScript follows a classic interpreter pipeline:
+GocciaScript supports two execution backends that share the same frontend (lexer, parser, AST):
 
 ```mermaid
 flowchart LR
-    Source["Source Code"] --> JSXTransformer["JSX Transformer"] --> Lexer --> Parser --> Interpreter --> Evaluator --> Result
+    Source["Source Code"] --> Lexer --> Parser --> AST
+    AST --> Interpreter["Tree-Walk Interpreter"] --> Result1["Result"]
+    AST --> Compiler["Bytecode Compiler"] --> VM["Souffle VM"] --> Result2["Result"]
 ```
+
+### Tree-Walk Interpreter (default)
 
 | Component | File | Role |
 |-----------|------|------|
@@ -205,7 +226,19 @@ flowchart LR
 | Evaluator | `Goccia.Evaluator.pas` | Pure-function AST evaluation |
 | GC | `Goccia.GarbageCollector.pas` | Mark-and-sweep garbage collection |
 
-See [Architecture](docs/architecture.md) for the full deep-dive.
+### Souffle VM (`--mode=bytecode`)
+
+| Component | File | Role |
+|-----------|------|------|
+| Compiler | `Goccia.Compiler.pas` | AST → Souffle bytecode |
+| VM | `Souffle.VM.pas` | Register-based dispatch with two-tier ISA |
+| Runtime Ops | `Goccia.Runtime.Operations.pas` | GocciaScript semantics for Tier 2 opcodes |
+| Backend | `Goccia.Engine.Backend.pas` | Orchestration, built-in bridging |
+| Binary I/O | `Souffle.Bytecode.Binary.pas` | `.sbc` file serialization/deserialization |
+
+The Souffle VM is a general-purpose bytecode virtual machine designed to support multiple language frontends and future WASM 3.0 output. Its two-tier instruction set separates universal VM mechanics (Tier 1) from pluggable language semantics (Tier 2).
+
+See [Architecture](docs/architecture.md) for the interpreter deep-dive and [Souffle VM](docs/souffle-vm.md) for the bytecode VM architecture.
 
 ## Design Principles
 
@@ -223,6 +256,7 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 | Document | Description |
 |----------|-------------|
 | [Architecture](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
+| [Souffle VM](docs/souffle-vm.md) | Bytecode VM architecture, two-tier ISA, value system, WASM 3.0 alignment |
 | [Design Decisions](docs/design-decisions.md) | Rationale behind key technical choices |
 | [Code Style](docs/code-style.md) | Naming conventions, patterns, file organization |
 | [Value System](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
