@@ -12,6 +12,7 @@ uses
   Goccia.AST.Node,
   Goccia.Compiler,
   Goccia.Engine,
+  Goccia.MicrotaskQueue,
   Goccia.Runtime.Operations,
   Goccia.Values.Primitives;
 
@@ -138,8 +139,15 @@ function TGocciaSouffleBackend.RunModule(
 var
   SouffleResult: TSouffleValue;
 begin
-  SouffleResult := FVM.Execute(AModule);
-  Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
+  try
+    SouffleResult := FVM.Execute(AModule);
+    if Assigned(TGocciaMicrotaskQueue.Instance) then
+      TGocciaMicrotaskQueue.Instance.DrainQueue;
+    Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
+  finally
+    if Assigned(TGocciaMicrotaskQueue.Instance) then
+      TGocciaMicrotaskQueue.Instance.ClearQueue;
+  end;
 end;
 
 procedure TGocciaSouffleBackend.RegisterGlobal(const AName: string;
