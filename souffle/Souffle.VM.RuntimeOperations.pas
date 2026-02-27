@@ -43,13 +43,6 @@ type
     function HasProperty(const AObject, AKey: TSouffleValue): TSouffleValue; virtual; abstract;
     function ToBoolean(const A: TSouffleValue): TSouffleValue; virtual; abstract;
 
-    // Compound creation
-    function CreateCompound(const ATypeTag: UInt8): TSouffleValue; virtual; abstract;
-    procedure InitField(const ACompound: TSouffleValue; const AKey: string;
-      const AValue: TSouffleValue); virtual; abstract;
-    procedure InitIndex(const ACompound: TSouffleValue; const AIndex: TSouffleValue;
-      const AValue: TSouffleValue); virtual; abstract;
-
     // Property access
     function GetProperty(const AObject: TSouffleValue;
       const AKey: string): TSouffleValue; virtual; abstract;

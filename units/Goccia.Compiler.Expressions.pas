@@ -43,15 +43,12 @@ procedure CompileNewExpression(const ACtx: TGocciaCompilationContext;
 procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt8);
 
-const
-  COMPOUND_TAG_OBJECT = 0;
-  COMPOUND_TAG_ARRAY  = 1;
-
 implementation
 
 uses
   Classes,
   Generics.Collections,
+  Math,
   SysUtils,
 
   Souffle.Bytecode,
@@ -273,7 +270,7 @@ begin
   KeyIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
   if KeyIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ObjReg, KeyIdx, ValReg));
+  EmitInstruction(ACtx, EncodeABC(OP_TABLE_SET, ObjReg, KeyIdx, ValReg));
 
   if ADest <> ValReg then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ValReg, 0));
@@ -342,14 +339,14 @@ begin
     if MemberExpr.Computed then
     begin
       ACtx.CompileExpression(MemberExpr.PropertyExpression, BaseReg);
-      EmitInstruction(ACtx, EncodeABC(OP_RT_GET_INDEX, BaseReg, ObjReg, BaseReg));
+      EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, BaseReg, ObjReg, BaseReg));
     end
     else
     begin
       PropIdx := ACtx.Template.AddConstantString(MemberExpr.PropertyName);
       if PropIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, BaseReg, ObjReg, UInt8(PropIdx)));
+      EmitInstruction(ACtx, EncodeABC(OP_TABLE_GET, BaseReg, ObjReg, UInt8(PropIdx)));
     end;
 
     for I := 0 to ArgCount - 1 do
@@ -390,7 +387,7 @@ end;
 procedure CompileMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaMemberExpression; const ADest: UInt8);
 var
-  ObjReg: UInt8;
+  ObjReg, IdxReg: UInt8;
   PropIdx: UInt16;
 begin
   ObjReg := ACtx.Scope.AllocateRegister;
@@ -398,15 +395,17 @@ begin
 
   if AExpr.Computed then
   begin
-    ACtx.CompileExpression(AExpr.PropertyExpression, ADest);
-    EmitInstruction(ACtx, EncodeABC(OP_RT_GET_INDEX, ADest, ObjReg, ADest));
+    IdxReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AExpr.PropertyExpression, IdxReg);
+    EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ADest, ObjReg, IdxReg));
+    ACtx.Scope.FreeRegister;
   end
   else
   begin
     PropIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
     if PropIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, ADest, ObjReg, UInt8(PropIdx)));
+    EmitInstruction(ACtx, EncodeABC(OP_TABLE_GET, ADest, ObjReg, UInt8(PropIdx)));
   end;
 
   ACtx.Scope.FreeRegister;
@@ -430,18 +429,16 @@ procedure CompileArray(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaArrayExpression; const ADest: UInt8);
 var
   I: Integer;
-  ElemReg, IdxReg: UInt8;
+  ElemReg: UInt8;
 begin
-  EmitInstruction(ACtx, EncodeABC(OP_RT_NEW_COMPOUND, ADest, COMPOUND_TAG_ARRAY, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_NEW_ARRAY, ADest,
+    UInt8(Min(AExpr.Elements.Count, 255)), 0));
 
   for I := 0 to AExpr.Elements.Count - 1 do
   begin
     ElemReg := ACtx.Scope.AllocateRegister;
-    IdxReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.Elements[I], ElemReg);
-    EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, IdxReg, Int16(I)));
-    EmitInstruction(ACtx, EncodeABC(OP_RT_INIT_INDEX, ADest, IdxReg, ElemReg));
-    ACtx.Scope.FreeRegister;
+    EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, ADest, ElemReg, 0));
     ACtx.Scope.FreeRegister;
   end;
 end;
@@ -456,7 +453,8 @@ var
   KeyIdx: UInt16;
   Names: TStringList;
 begin
-  EmitInstruction(ACtx, EncodeABC(OP_RT_NEW_COMPOUND, ADest, COMPOUND_TAG_OBJECT, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_NEW_TABLE, ADest,
+    UInt8(Min(AExpr.Properties.Count, 255)), 0));
 
   Names := AExpr.GetPropertyNamesInOrder;
   try
@@ -470,7 +468,7 @@ begin
         KeyIdx := ACtx.Template.AddConstantString(Key);
         if KeyIdx > High(UInt8) then
           raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-        EmitInstruction(ACtx, EncodeABC(OP_RT_INIT_FIELD, ADest, KeyIdx, ValReg));
+        EmitInstruction(ACtx, EncodeABC(OP_TABLE_SET, ADest, KeyIdx, ValReg));
         ACtx.Scope.FreeRegister;
       end;
     end;

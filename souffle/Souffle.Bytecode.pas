@@ -48,9 +48,20 @@ type
     OP_RETURN        = 20,  // A     Return R[A] to caller
     OP_RETURN_NIL    = 21,  //       Return Nil to caller
 
+    // ── Core: Compound Types ──
+    OP_NEW_ARRAY     = 24,  // AB    R[A] := new Array(capacity=B)
+    OP_ARRAY_PUSH    = 25,  // AB    Array(R[A]).push(R[B])
+    OP_ARRAY_GET     = 26,  // ABC   R[A] := Array(R[B])[R[C].AsInteger]
+    OP_ARRAY_SET     = 27,  // ABC   Array(R[A])[R[B].AsInteger] := R[C]
+    OP_NEW_TABLE     = 28,  // AB    R[A] := new Table(capacity=B)
+    OP_TABLE_GET     = 29,  // ABC   R[A] := Table(R[B])[Constants[C]]
+    OP_TABLE_SET     = 30,  // ABC   Table(R[A])[Constants[B]] := R[C]
+    OP_TABLE_DELETE  = 31,  // ABx   delete Table(R[A])[Constants[Bx]]
+    OP_GET_LENGTH    = 32,  // AB    R[A] := Length(R[B])
+
     // ── Core: Debug ──
-    OP_NOP           = 22,  //       No operation
-    OP_LINE          = 23,  // Bx    Source line annotation
+    OP_NOP           = 33,  //       No operation
+    OP_LINE          = 34,  // Bx    Source line annotation
 
     // ── Runtime: Polymorphic Arithmetic ──
     OP_RT_ADD        = 128, // ABC   R[A] := Runtime.Add(R[B], R[C])
@@ -84,11 +95,6 @@ type
     OP_RT_IS_INSTANCE = 150, // ABC  R[A] := Runtime.IsInstance(R[B], R[C])
     OP_RT_HAS_PROPERTY = 151, // ABC R[A] := Runtime.HasProperty(R[B], R[C])
     OP_RT_TO_BOOLEAN = 152, // AB    R[A] := Runtime.ToBoolean(R[B])
-
-    // ── Runtime: Compound Creation ──
-    OP_RT_NEW_COMPOUND = 153, // AB  R[A] := Runtime.CreateCompound(B)
-    OP_RT_INIT_FIELD = 154, // ABC   Runtime.InitField(R[A], Constants[B], R[C])
-    OP_RT_INIT_INDEX = 155, // ABC   Runtime.InitIndex(R[A], R[B], R[C])
 
     // ── Runtime: Property Access ──
     OP_RT_GET_PROP   = 156, // ABC   R[A] := Runtime.GetProperty(R[B], Constants[C])

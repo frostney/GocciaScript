@@ -255,7 +255,7 @@ begin
     NameIdx := ACtx.Template.AddConstantString(Pair.Value);
     if NameIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: import name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, Slot, ModReg, UInt8(NameIdx)));
+    EmitInstruction(ACtx, EncodeABC(OP_TABLE_GET, Slot, ModReg, UInt8(NameIdx)));
   end;
 
   ACtx.Scope.FreeRegister;

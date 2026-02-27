@@ -8,6 +8,7 @@ uses
   Souffle.Bytecode,
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Module,
+  Souffle.Compound,
   Souffle.GarbageCollector,
   Souffle.Heap,
   Souffle.Value,
@@ -203,7 +204,7 @@ end;
 procedure TSouffleVM.ExecuteCoreOp(const AFrame: PSouffleVMCallFrame;
   const AInstruction: UInt32; const AOp: UInt8);
 var
-  A, B: UInt8;
+  A, B, C: UInt8;
   Bx: UInt16;
   sBx: Int16;
   Ax: Int32;
@@ -214,6 +215,9 @@ var
   Desc: TSouffleUpvalueDescriptor;
   I: Integer;
   Handler: TSouffleHandlerEntry;
+  Arr: TSouffleArray;
+  Tbl: TSouffleTable;
+  TblVal: TSouffleValue;
 begin
   Base := AFrame^.BaseRegister;
 
@@ -431,6 +435,138 @@ begin
       CloseUpvalues(Base);
       FRegisters[AFrame^.ReturnRegister] := SouffleNil;
       FCallStack.Pop;
+    end;
+
+    OP_NEW_ARRAY:
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      Arr := TSouffleArray.Create(B);
+      if Assigned(FGC) then
+        FGC.AllocateObject(Arr);
+      FRegisters[Base + A] := SouffleReference(Arr);
+    end;
+
+    OP_ARRAY_PUSH:
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      if SouffleIsReference(FRegisters[Base + A]) and
+         (FRegisters[Base + A].AsReference is TSouffleArray) then
+        TSouffleArray(FRegisters[Base + A].AsReference).Push(FRegisters[Base + B]);
+    end;
+
+    OP_ARRAY_GET:
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      C := DecodeC(AInstruction);
+      if SouffleIsReference(FRegisters[Base + B]) and
+         (FRegisters[Base + B].AsReference is TSouffleArray) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := TSouffleArray(
+          FRegisters[Base + B].AsReference).Get(
+            Integer(FRegisters[Base + C].AsInteger))
+      else
+        FRegisters[Base + A] := FRuntimeOps.GetIndex(
+          FRegisters[Base + B], FRegisters[Base + C]);
+    end;
+
+    OP_ARRAY_SET:
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      C := DecodeC(AInstruction);
+      if SouffleIsReference(FRegisters[Base + A]) and
+         (FRegisters[Base + A].AsReference is TSouffleArray) and
+         (FRegisters[Base + B].Kind = svkInteger) then
+        TSouffleArray(FRegisters[Base + A].AsReference).Put(
+          Integer(FRegisters[Base + B].AsInteger), FRegisters[Base + C])
+      else
+        FRuntimeOps.SetIndex(
+          FRegisters[Base + A], FRegisters[Base + B], FRegisters[Base + C]);
+    end;
+
+    OP_NEW_TABLE:
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      Tbl := TSouffleTable.Create(B);
+      if Assigned(FGC) then
+        FGC.AllocateObject(Tbl);
+      FRegisters[Base + A] := SouffleReference(Tbl);
+    end;
+
+    OP_TABLE_GET:
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      C := DecodeC(AInstruction);
+      if SouffleIsReference(FRegisters[Base + B]) and
+         (FRegisters[Base + B].AsReference is TSouffleTable) then
+      begin
+        Tbl := TSouffleTable(FRegisters[Base + B].AsReference);
+        if not Tbl.Get(AFrame^.Template.GetConstant(C).StringValue, TblVal) then
+          FRegisters[Base + A] := FRuntimeOps.GetProperty(
+            FRegisters[Base + B], AFrame^.Template.GetConstant(C).StringValue)
+        else
+          FRegisters[Base + A] := TblVal;
+      end
+      else
+        FRegisters[Base + A] := FRuntimeOps.GetProperty(
+          FRegisters[Base + B], AFrame^.Template.GetConstant(C).StringValue);
+    end;
+
+    OP_TABLE_SET:
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      C := DecodeC(AInstruction);
+      if SouffleIsReference(FRegisters[Base + A]) and
+         (FRegisters[Base + A].AsReference is TSouffleTable) then
+        TSouffleTable(FRegisters[Base + A].AsReference).Put(
+          AFrame^.Template.GetConstant(B).StringValue, FRegisters[Base + C])
+      else
+        FRuntimeOps.SetProperty(
+          FRegisters[Base + A], AFrame^.Template.GetConstant(B).StringValue,
+          FRegisters[Base + C]);
+    end;
+
+    OP_TABLE_DELETE:
+    begin
+      A := DecodeA(AInstruction);
+      Bx := DecodeBx(AInstruction);
+      if SouffleIsReference(FRegisters[Base + A]) and
+         (FRegisters[Base + A].AsReference is TSouffleTable) then
+        TSouffleTable(FRegisters[Base + A].AsReference).Delete(
+          AFrame^.Template.GetConstant(Bx).StringValue)
+      else
+        FRuntimeOps.DeleteProperty(
+          FRegisters[Base + A], AFrame^.Template.GetConstant(Bx).StringValue);
+    end;
+
+    OP_GET_LENGTH:
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      if SouffleIsReference(FRegisters[Base + B]) and
+         Assigned(FRegisters[Base + B].AsReference) then
+      begin
+        if FRegisters[Base + B].AsReference is TSouffleArray then
+          FRegisters[Base + A] := SouffleInteger(
+            TSouffleArray(FRegisters[Base + B].AsReference).Count)
+        else if FRegisters[Base + B].AsReference is TSouffleTable then
+          FRegisters[Base + A] := SouffleInteger(
+            TSouffleTable(FRegisters[Base + B].AsReference).Count)
+        else if FRegisters[Base + B].AsReference is TSouffleString then
+          FRegisters[Base + A] := SouffleInteger(
+            Length(TSouffleString(FRegisters[Base + B].AsReference).Value))
+        else
+          FRegisters[Base + A] := FRuntimeOps.GetProperty(
+            FRegisters[Base + B], 'length');
+      end
+      else
+        FRegisters[Base + A] := SouffleInteger(0);
     end;
 
     OP_NOP:;
@@ -752,26 +888,6 @@ begin
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction);
       FRegisters[Base + A] := FRuntimeOps.ToBoolean(FRegisters[Base + B]);
-    end;
-
-    // Compound creation
-    OP_RT_NEW_COMPOUND:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.CreateCompound(B);
-    end;
-    OP_RT_INIT_FIELD:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRuntimeOps.InitField(FRegisters[Base + A],
-        AFrame^.Template.GetConstant(B).StringValue,
-        FRegisters[Base + C]);
-    end;
-    OP_RT_INIT_INDEX:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRuntimeOps.InitIndex(FRegisters[Base + A],
-        FRegisters[Base + B], FRegisters[Base + C]);
     end;
 
     // Property access
