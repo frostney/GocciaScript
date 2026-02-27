@@ -115,6 +115,8 @@ function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TSouffleBytecodeModule;
 var
   I: Integer;
+  LastStmt: TGocciaStatement;
+  RetReg: UInt8;
 begin
   FModule := TSouffleBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentPrototype := TSouffleFunctionPrototype.Create('<module>');
@@ -122,10 +124,28 @@ begin
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
 
   try
-    for I := 0 to AProgram.Body.Count - 1 do
-      CompileStatement(AProgram.Body[I]);
+    if AProgram.Body.Count > 0 then
+    begin
+      for I := 0 to AProgram.Body.Count - 2 do
+        CompileStatement(AProgram.Body[I]);
 
-    Emit(EncodeABC(OP_RETURN_NIL, 0, 0, 0));
+      LastStmt := AProgram.Body[AProgram.Body.Count - 1];
+      if LastStmt is TGocciaExpressionStatement then
+      begin
+        RetReg := FCurrentScope.AllocateRegister;
+        EmitLine(LastStmt.Line, LastStmt.Column);
+        CompileExpression(TGocciaExpressionStatement(LastStmt).Expression, RetReg);
+        Emit(EncodeABC(OP_RETURN, RetReg, 0, 0));
+        FCurrentScope.FreeRegister;
+      end
+      else
+      begin
+        CompileStatement(LastStmt);
+        Emit(EncodeABC(OP_RETURN_NIL, 0, 0, 0));
+      end;
+    end
+    else
+      Emit(EncodeABC(OP_RETURN_NIL, 0, 0, 0));
 
     FCurrentPrototype.MaxRegisters := FCurrentScope.MaxSlot;
     FModule.TopLevel := FCurrentPrototype;
@@ -367,6 +387,11 @@ begin
   case AExpr.Operator of
     gttNot:        Emit(EncodeABC(OP_RT_NOT, ADest, RegB, 0));
     gttMinus:      Emit(EncodeABC(OP_RT_NEG, ADest, RegB, 0));
+    gttPlus:
+    begin
+      if ADest <> RegB then
+        Emit(EncodeABC(OP_MOVE, ADest, RegB, 0));
+    end;
     gttTypeof:     Emit(EncodeABC(OP_RT_TYPEOF, ADest, RegB, 0));
     gttBitwiseNot: Emit(EncodeABC(OP_RT_BNOT, ADest, RegB, 0));
   else

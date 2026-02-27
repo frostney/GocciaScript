@@ -17,13 +17,11 @@ type
   TGocciaAsyncFunctionValue = class(TGocciaFunctionValue)
   public
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
-    function CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue; override;
   end;
 
   TGocciaAsyncArrowFunctionValue = class(TGocciaArrowFunctionValue)
   public
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
-    function CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue; override;
   end;
 
   TGocciaAsyncMethodValue = class(TGocciaMethodValue)
@@ -78,17 +76,6 @@ begin
   Result := Promise;
 end;
 
-function TGocciaAsyncFunctionValue.CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue;
-var
-  ClonedStatements: TObjectList<TGocciaASTNode>;
-  I: Integer;
-begin
-  ClonedStatements := TObjectList<TGocciaASTNode>.Create(False);
-  for I := 0 to FBodyStatements.Count - 1 do
-    ClonedStatements.Add(FBodyStatements[I]);
-  Result := TGocciaAsyncFunctionValue.Create(FParameters, ClonedStatements, ANewScope, FName);
-end;
-
 { TGocciaAsyncArrowFunctionValue }
 
 // ES2026 §27.7.5.1 AsyncFunctionStart(promiseCapability, asyncFunctionBody)
@@ -125,18 +112,6 @@ begin
   end;
 
   Result := Promise;
-end;
-
-function TGocciaAsyncArrowFunctionValue.CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue;
-var
-  ClonedStatements: TObjectList<TGocciaASTNode>;
-  I: Integer;
-begin
-  ClonedStatements := TObjectList<TGocciaASTNode>.Create(False);
-  for I := 0 to FBodyStatements.Count - 1 do
-    ClonedStatements.Add(FBodyStatements[I]);
-  Result := TGocciaAsyncArrowFunctionValue.Create(FParameters, ClonedStatements, ANewScope, FName);
-  TGocciaFunctionValue(Result).IsExpressionBody := FIsExpressionBody;
 end;
 
 { TGocciaAsyncMethodValue }

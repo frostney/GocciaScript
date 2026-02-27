@@ -125,6 +125,7 @@ begin
   FileResult.FileName := AFileName;
   FileResult.LexTimeNanoseconds := 0;
   FileResult.ParseTimeNanoseconds := 0;
+  FileResult.CompileTimeNanoseconds := 0;
   FileResult.ExecuteTimeNanoseconds := 0;
   FileResult.TotalBenchmarks := 0;
   FileResult.DurationNanoseconds := 0;
@@ -170,6 +171,7 @@ begin
       FileResult.FileName := AFileName;
       FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
       FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
+      FileResult.CompileTimeNanoseconds := 0;
       FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds;
 
       ScriptResult := nil;
@@ -200,7 +202,7 @@ var
   FileResult: TBenchmarkFileResult;
   ScriptResult: TGocciaObjectValue;
   BenchGlobals: TGocciaGlobalBuiltins;
-  StartTime, EndTime: Int64;
+  CompileStart, CompileEnd, ExecEnd: Int64;
 begin
   BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
 
@@ -210,7 +212,7 @@ begin
     Source.Add('runBenchmarks();');
 
     try
-      StartTime := GetNanoseconds;
+      CompileStart := GetNanoseconds;
 
       Backend := TGocciaSouffleBackend.Create(AFileName);
       try
@@ -234,14 +236,17 @@ begin
           Lexer.Free;
         end;
 
+        CompileEnd := GetNanoseconds;
+
         try
           ResultValue := Backend.RunModule(Module);
-          EndTime := GetNanoseconds;
+          ExecEnd := GetNanoseconds;
 
           FileResult.FileName := AFileName;
           FileResult.LexTimeNanoseconds := 0;
           FileResult.ParseTimeNanoseconds := 0;
-          FileResult.ExecuteTimeNanoseconds := EndTime - StartTime;
+          FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
+          FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
 
           ScriptResult := nil;
           if ResultValue is TGocciaObjectValue then
