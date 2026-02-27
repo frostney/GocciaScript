@@ -14,6 +14,9 @@ procedure CompileLiteral(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaLiteralExpression; const ADest: UInt8);
 procedure CompileIdentifier(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIdentifierExpression; const ADest: UInt8);
+procedure CompileIdentifierAccess(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaIdentifierExpression; const ADest: UInt8;
+  const ASafe: Boolean);
 procedure CompileBinary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaBinaryExpression; const ADest: UInt8);
 procedure CompileUnary(const ACtx: TGocciaCompilationContext;
@@ -61,6 +64,7 @@ uses
 
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Scope,
+  Goccia.Constants.ErrorNames,
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.Token,
@@ -114,9 +118,19 @@ end;
 
 procedure CompileIdentifier(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIdentifierExpression; const ADest: UInt8);
+begin
+  CompileIdentifierAccess(ACtx, AExpr, ADest, False);
+end;
+
+procedure CompileIdentifierAccess(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaIdentifierExpression; const ADest: UInt8;
+  const ASafe: Boolean);
 var
   LocalIdx, UpvalIdx: Integer;
   Slot: UInt8;
+  NameIdx: UInt16;
+  CondReg, ArgReg: UInt8;
+  OkJump: Integer;
 begin
   LocalIdx := ACtx.Scope.ResolveLocal(AExpr.Name);
   if LocalIdx >= 0 then
@@ -134,8 +148,33 @@ begin
     Exit;
   end;
 
-  EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, ADest,
-    ACtx.Template.AddConstantString(AExpr.Name)));
+  NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
+
+  if ASafe then
+  begin
+    EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, ADest, NameIdx));
+    Exit;
+  end;
+
+  CondReg := ACtx.Scope.AllocateRegister;
+  ArgReg := ACtx.Scope.AllocateRegister;
+
+  EmitInstruction(ACtx, EncodeABx(OP_RT_HAS_GLOBAL, CondReg, NameIdx));
+  OkJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CondReg);
+
+  EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, CondReg,
+    ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
+  EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ArgReg,
+    ACtx.Template.AddConstantString(AExpr.Name + ' is not defined')));
+  EmitInstruction(ACtx, EncodeABC(OP_RT_CONSTRUCT, CondReg, CondReg, 1));
+  EmitInstruction(ACtx, EncodeABC(OP_THROW, CondReg, 0, 0));
+
+  PatchJumpTarget(ACtx, OkJump);
+
+  EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, ADest, NameIdx));
+
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileBinary(const ACtx: TGocciaCompilationContext;
@@ -212,7 +251,11 @@ begin
     Exit;
 
   RegB := ACtx.Scope.AllocateRegister;
-  ACtx.CompileExpression(AExpr.Operand, RegB);
+
+  if (AExpr.Operator = gttTypeof) and (AExpr.Operand is TGocciaIdentifierExpression) then
+    CompileIdentifierAccess(ACtx, TGocciaIdentifierExpression(AExpr.Operand), RegB, True)
+  else
+    ACtx.CompileExpression(AExpr.Operand, RegB);
 
   case AExpr.Operator of
     gttNot:        EmitInstruction(ACtx, EncodeABC(OP_RT_NOT, ADest, RegB, 0));

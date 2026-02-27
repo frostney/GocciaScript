@@ -78,6 +78,7 @@ type
     function GetGlobal(const AName: string): TSouffleValue; virtual; abstract;
     procedure SetGlobal(const AName: string;
       const AValue: TSouffleValue); virtual; abstract;
+    function HasGlobal(const AName: string): Boolean; virtual; abstract;
 
   end;
 

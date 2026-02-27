@@ -122,7 +122,8 @@ type
 
     // ── Runtime: Globals ──
     OP_RT_GET_GLOBAL = 170, // ABx   R[A] := Runtime.GetGlobal(Constants[Bx])
-    OP_RT_SET_GLOBAL = 171  // ABx   Runtime.SetGlobal(Constants[Bx], R[A])
+    OP_RT_SET_GLOBAL = 171, // ABx   Runtime.SetGlobal(Constants[Bx], R[A])
+    OP_RT_HAS_GLOBAL = 172  // ABx   R[A] := Boolean(Runtime.HasGlobal(Constants[Bx]))
   );
 
 { Instruction encoding/decoding helpers }

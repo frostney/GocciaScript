@@ -189,33 +189,39 @@ var
   I: Integer;
   Node: TGocciaASTNode;
   Reg: UInt8;
+  SavedFinally: TObject;
 begin
-  if ABody is TGocciaBlockStatement then
-  begin
-    Block := TGocciaBlockStatement(ABody);
-    for I := 0 to Block.Nodes.Count - 1 do
+  SavedFinally := Goccia.Compiler.Statements.SavePendingFinally;
+  try
+    if ABody is TGocciaBlockStatement then
     begin
-      Node := Block.Nodes[I];
-      if Node is TGocciaStatement then
-        DoCompileStatement(TGocciaStatement(Node))
-      else if Node is TGocciaExpression then
+      Block := TGocciaBlockStatement(ABody);
+      for I := 0 to Block.Nodes.Count - 1 do
       begin
-        Reg := FCurrentScope.AllocateRegister;
-        DoCompileExpression(TGocciaExpression(Node), Reg);
-        FCurrentScope.FreeRegister;
+        Node := Block.Nodes[I];
+        if Node is TGocciaStatement then
+          DoCompileStatement(TGocciaStatement(Node))
+        else if Node is TGocciaExpression then
+        begin
+          Reg := FCurrentScope.AllocateRegister;
+          DoCompileExpression(TGocciaExpression(Node), Reg);
+          FCurrentScope.FreeRegister;
+        end;
       end;
-    end;
-    EmitInstruction(BuildContext, EncodeABC(OP_RETURN_NIL, 0, 0, 0));
-  end
-  else if ABody is TGocciaExpression then
-  begin
-    Reg := FCurrentScope.AllocateRegister;
-    DoCompileExpression(TGocciaExpression(ABody), Reg);
-    EmitInstruction(BuildContext, EncodeABC(OP_RETURN, Reg, 0, 0));
-    FCurrentScope.FreeRegister;
-  end
-  else
-    EmitInstruction(BuildContext, EncodeABC(OP_RETURN_NIL, 0, 0, 0));
+      EmitInstruction(BuildContext, EncodeABC(OP_RETURN_NIL, 0, 0, 0));
+    end
+    else if ABody is TGocciaExpression then
+    begin
+      Reg := FCurrentScope.AllocateRegister;
+      DoCompileExpression(TGocciaExpression(ABody), Reg);
+      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, Reg, 0, 0));
+      FCurrentScope.FreeRegister;
+    end
+    else
+      EmitInstruction(BuildContext, EncodeABC(OP_RETURN_NIL, 0, 0, 0));
+  finally
+    Goccia.Compiler.Statements.RestorePendingFinally(SavedFinally);
+  end;
 end;
 
 function TGocciaCompiler.Compile(

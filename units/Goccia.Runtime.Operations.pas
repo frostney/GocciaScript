@@ -124,6 +124,7 @@ type
     function GetGlobal(const AName: string): TSouffleValue; override;
     procedure SetGlobal(const AName: string;
       const AValue: TSouffleValue); override;
+    function HasGlobal(const AName: string): Boolean; override;
 
     function UnwrapToGocciaValue(const AValue: TSouffleValue): TGocciaValue;
     function ToSouffleValue(const AValue: TGocciaValue): TSouffleValue;
@@ -148,6 +149,7 @@ uses
 
   Souffle.Compound,
   Souffle.GarbageCollector,
+  Souffle.VM.Exception,
   Souffle.VM.NativeFunction,
 
   Goccia.Arguments.Collection,
@@ -157,6 +159,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
+  Goccia.Values.Error,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue;
 
@@ -208,7 +211,13 @@ begin
   for I := 0 to AArguments.Length - 1 do
     Args[I] := FRuntime.ToSouffleValue(AArguments.GetElement(I));
 
-  SouffleResult := FRuntime.VM.ExecuteFunction(FClosure, Args);
+  try
+    SouffleResult := FRuntime.VM.ExecuteFunction(FClosure, Args);
+  except
+    on E: ESouffleThrow do
+      raise TGocciaThrowValue.Create(
+        FRuntime.UnwrapToGocciaValue(E.ThrownValue));
+  end;
   Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
 end;
 
@@ -937,6 +946,11 @@ procedure TGocciaRuntimeOperations.SetGlobal(const AName: string;
   const AValue: TSouffleValue);
 begin
   FGlobals.AddOrSetValue(AName, AValue);
+end;
+
+function TGocciaRuntimeOperations.HasGlobal(const AName: string): Boolean;
+begin
+  Result := FGlobals.ContainsKey(AName);
 end;
 
 { Proxy resolution — single dispatch point for all Souffle compound types }

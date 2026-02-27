@@ -151,8 +151,7 @@ begin
         FCallStack.Pop;
       end;
       FBaseFrameCount := SavedBaseFrameCount;
-      Result := SouffleNil;
-      Exit;
+      raise;
     end;
   end;
 
@@ -1063,6 +1062,12 @@ begin
       FRuntimeOps.SetGlobal(
         AFrame^.Template.GetConstant(Bx).StringValue,
         FRegisters[Base + A]);
+    end;
+    OP_RT_HAS_GLOBAL:
+    begin
+      A := DecodeA(AInstruction); Bx := DecodeBx(AInstruction);
+      FRegisters[Base + A] := SouffleBoolean(FRuntimeOps.HasGlobal(
+        AFrame^.Template.GetConstant(Bx).StringValue));
     end;
 
   end;

@@ -52,13 +52,15 @@ uses
 
   Souffle.Heap,
   Souffle.Value,
+  Souffle.VM.Exception,
 
   Goccia.AST.Statements,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
   Goccia.Interpreter,
   Goccia.Scope,
-  Goccia.Scope.BindingMap;
+  Goccia.Scope.BindingMap,
+  Goccia.Values.Error;
 
 { TGocciaSouffleBackend }
 
@@ -140,10 +142,16 @@ var
   SouffleResult: TSouffleValue;
 begin
   try
-    SouffleResult := FVM.Execute(AModule);
-    if Assigned(TGocciaMicrotaskQueue.Instance) then
-      TGocciaMicrotaskQueue.Instance.DrainQueue;
-    Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
+    try
+      SouffleResult := FVM.Execute(AModule);
+      if Assigned(TGocciaMicrotaskQueue.Instance) then
+        TGocciaMicrotaskQueue.Instance.DrainQueue;
+      Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
+    except
+      on E: ESouffleThrow do
+        raise TGocciaThrowValue.Create(
+          FRuntime.UnwrapToGocciaValue(E.ThrownValue));
+    end;
   finally
     if Assigned(TGocciaMicrotaskQueue.Instance) then
       TGocciaMicrotaskQueue.Instance.ClearQueue;

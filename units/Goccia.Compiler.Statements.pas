@@ -36,6 +36,9 @@ procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaSwitchStatement);
 procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
 
+function SavePendingFinally: TObject;
+procedure RestorePendingFinally(const ASaved: TObject);
+
 implementation
 
 uses
@@ -45,8 +48,14 @@ uses
 
   Goccia.Compiler.Scope;
 
+type
+  TPendingFinallyEntry = record
+    FinallyBlock: TGocciaBlockStatement;
+  end;
+
 var
   GBreakJumps: TList<Integer> = nil;
+  GPendingFinally: TList<TPendingFinallyEntry>;
 
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
@@ -133,16 +142,34 @@ procedure CompileReturnStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReturnStatement);
 var
   Reg: UInt8;
+  I: Integer;
 begin
   if Assigned(AStmt.Value) then
   begin
     Reg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AStmt.Value, Reg);
+
+    if Assigned(GPendingFinally) then
+      for I := GPendingFinally.Count - 1 downto 0 do
+      begin
+        EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+        CompileBlockStatement(ACtx, GPendingFinally[I].FinallyBlock);
+      end;
+
     EmitInstruction(ACtx, EncodeABC(OP_RETURN, Reg, 0, 0));
     ACtx.Scope.FreeRegister;
   end
   else
+  begin
+    if Assigned(GPendingFinally) then
+      for I := GPendingFinally.Count - 1 downto 0 do
+      begin
+        EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+        CompileBlockStatement(ACtx, GPendingFinally[I].FinallyBlock);
+      end;
+
     EmitInstruction(ACtx, EncodeABC(OP_RETURN_NIL, 0, 0, 0));
+  end;
 end;
 
 procedure CompileThrowStatement(const ACtx: TGocciaCompilationContext;
@@ -160,42 +187,70 @@ procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaTryStatement);
 var
   CatchReg: UInt8;
-  HandlerJump, EndJump, I: Integer;
+  HandlerJump, EndJump: Integer;
+  HasCatch, HasFinally: Boolean;
+  I: Integer;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
+  Entry: TPendingFinallyEntry;
 begin
+  HasCatch := Assigned(AStmt.CatchBlock);
+  HasFinally := Assigned(AStmt.FinallyBlock);
+
   CatchReg := ACtx.Scope.AllocateRegister;
   HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, CatchReg);
+
+  if HasFinally then
+  begin
+    if not Assigned(GPendingFinally) then
+      GPendingFinally := TList<TPendingFinallyEntry>.Create;
+    Entry.FinallyBlock := AStmt.FinallyBlock;
+    GPendingFinally.Add(Entry);
+  end;
 
   CompileBlockStatement(ACtx, AStmt.Block);
 
   EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+
+  if HasFinally then
+    GPendingFinally.Delete(GPendingFinally.Count - 1);
+
+  if HasFinally then
+    CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+
   EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
 
   PatchJumpTarget(ACtx, HandlerJump);
 
-  if AStmt.CatchParam <> '' then
+  if HasCatch then
   begin
-    ACtx.Scope.BeginScope;
-    ACtx.Scope.DeclareLocal(AStmt.CatchParam, False);
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ACtx.Scope.NextSlot - 1, CatchReg, 0));
-  end;
+    if AStmt.CatchParam <> '' then
+    begin
+      ACtx.Scope.BeginScope;
+      ACtx.Scope.DeclareLocal(AStmt.CatchParam, False);
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ACtx.Scope.NextSlot - 1, CatchReg, 0));
+    end;
 
-  if Assigned(AStmt.CatchBlock) then
     CompileBlockStatement(ACtx, AStmt.CatchBlock);
 
-  if AStmt.CatchParam <> '' then
+    if AStmt.CatchParam <> '' then
+    begin
+      ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+      for I := 0 to ClosedCount - 1 do
+        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    end;
+
+    if HasFinally then
+      CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+  end
+  else
   begin
-    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
-    for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+    if HasFinally then
+      CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+    EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchReg, 0, 0));
   end;
 
   PatchJumpTarget(ACtx, EndJump);
-
-  if Assigned(AStmt.FinallyBlock) then
-    CompileBlockStatement(ACtx, AStmt.FinallyBlock);
-
   ACtx.Scope.FreeRegister;
 end;
 
@@ -388,6 +443,18 @@ procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
 begin
   if Assigned(GBreakJumps) then
     GBreakJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
+end;
+
+function SavePendingFinally: TObject;
+begin
+  Result := TObject(GPendingFinally);
+  GPendingFinally := nil;
+end;
+
+procedure RestorePendingFinally(const ASaved: TObject);
+begin
+  GPendingFinally.Free;
+  GPendingFinally := TList<TPendingFinallyEntry>(ASaved);
 end;
 
 end.
