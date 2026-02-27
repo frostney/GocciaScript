@@ -32,6 +32,9 @@ procedure CompileImportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaImportDeclaration);
 procedure CompileExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportDeclaration);
+procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaSwitchStatement);
+procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
 
 implementation
 
@@ -41,6 +44,9 @@ uses
   Souffle.Bytecode,
 
   Goccia.Compiler.Scope;
+
+var
+  GBreakJumps: TList<Integer> = nil;
 
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
@@ -279,6 +285,109 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, Reg, NameIdx));
     end;
   end;
+end;
+
+procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaSwitchStatement);
+var
+  DiscReg, TestReg, CmpReg: UInt8;
+  I, J, DefaultIndex: Integer;
+  CaseClause: TGocciaCaseClause;
+  CaseBodyJumps: array of Integer;
+  DefaultJump, EndJump: Integer;
+  OldBreakJumps: TList<Integer>;
+  BreakJumps: TList<Integer>;
+  Node: TGocciaASTNode;
+  Reg: UInt8;
+  ClosedLocals: array[0..255] of UInt8;
+  ClosedCount: Integer;
+begin
+  DiscReg := ACtx.Scope.AllocateRegister;
+  TestReg := ACtx.Scope.AllocateRegister;
+  CmpReg := ACtx.Scope.AllocateRegister;
+
+  ACtx.CompileExpression(AStmt.Discriminant, DiscReg);
+
+  SetLength(CaseBodyJumps, AStmt.Cases.Count);
+  DefaultIndex := -1;
+  DefaultJump := -1;
+  EndJump := -1;
+
+  for I := 0 to AStmt.Cases.Count - 1 do
+  begin
+    CaseClause := AStmt.Cases[I];
+    if not Assigned(CaseClause.Test) then
+    begin
+      DefaultIndex := I;
+      CaseBodyJumps[I] := -1;
+      Continue;
+    end;
+    ACtx.CompileExpression(CaseClause.Test, TestReg);
+    EmitInstruction(ACtx, EncodeABC(OP_RT_EQ, CmpReg, DiscReg, TestReg));
+    CaseBodyJumps[I] := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CmpReg);
+  end;
+
+  if DefaultIndex >= 0 then
+    DefaultJump := EmitJumpInstruction(ACtx, OP_JUMP, 0)
+  else
+    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+
+  OldBreakJumps := GBreakJumps;
+  BreakJumps := TList<Integer>.Create;
+  GBreakJumps := BreakJumps;
+  try
+    for I := 0 to AStmt.Cases.Count - 1 do
+    begin
+      CaseClause := AStmt.Cases[I];
+
+      if I = DefaultIndex then
+      begin
+        if DefaultJump >= 0 then
+          PatchJumpTarget(ACtx, DefaultJump);
+      end
+      else
+      begin
+        if CaseBodyJumps[I] >= 0 then
+          PatchJumpTarget(ACtx, CaseBodyJumps[I]);
+      end;
+
+      ACtx.Scope.BeginScope;
+      for J := 0 to CaseClause.Consequent.Count - 1 do
+      begin
+        Node := CaseClause.Consequent[J];
+        if Node is TGocciaStatement then
+          ACtx.CompileStatement(TGocciaStatement(Node))
+        else if Node is TGocciaExpression then
+        begin
+          Reg := ACtx.Scope.AllocateRegister;
+          ACtx.CompileExpression(TGocciaExpression(Node), Reg);
+          ACtx.Scope.FreeRegister;
+        end;
+      end;
+      ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+      for J := 0 to ClosedCount - 1 do
+        EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[J], 0, 0));
+    end;
+
+    if EndJump >= 0 then
+      PatchJumpTarget(ACtx, EndJump);
+
+    for I := 0 to BreakJumps.Count - 1 do
+      PatchJumpTarget(ACtx, BreakJumps[I]);
+  finally
+    BreakJumps.Free;
+    GBreakJumps := OldBreakJumps;
+  end;
+end;
+
+procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
+begin
+  if Assigned(GBreakJumps) then
+    GBreakJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
 end;
 
 end.

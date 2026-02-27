@@ -116,6 +116,10 @@ begin
     Goccia.Compiler.Expressions.CompileAssignment(Ctx, TGocciaAssignmentExpression(AExpr), ADest)
   else if AExpr is TGocciaPropertyAssignmentExpression then
     Goccia.Compiler.Expressions.CompilePropertyAssignment(Ctx, TGocciaPropertyAssignmentExpression(AExpr), ADest)
+  else if AExpr is TGocciaComputedPropertyAssignmentExpression then
+    Goccia.Compiler.Expressions.CompileComputedPropertyAssignment(Ctx, TGocciaComputedPropertyAssignmentExpression(AExpr), ADest)
+  else if AExpr is TGocciaMethodExpression then
+    Goccia.Compiler.Expressions.CompileMethod(Ctx, TGocciaMethodExpression(AExpr), ADest)
   else if AExpr is TGocciaArrowFunctionExpression then
     Goccia.Compiler.Expressions.CompileArrowFunction(Ctx, TGocciaArrowFunctionExpression(AExpr), ADest)
   else if AExpr is TGocciaCallExpression then
@@ -169,6 +173,10 @@ begin
     FPendingClasses[High(FPendingClasses)].Line := AStmt.Line;
     FPendingClasses[High(FPendingClasses)].Column := AStmt.Column;
   end
+  else if AStmt is TGocciaSwitchStatement then
+    Goccia.Compiler.Statements.CompileSwitchStatement(Ctx, TGocciaSwitchStatement(AStmt))
+  else if AStmt is TGocciaBreakStatement then
+    Goccia.Compiler.Statements.CompileBreakStatement(Ctx)
   else if AStmt is TGocciaImportDeclaration then
     Goccia.Compiler.Statements.CompileImportDeclaration(Ctx, TGocciaImportDeclaration(AStmt))
   else if AStmt is TGocciaExportDeclaration then

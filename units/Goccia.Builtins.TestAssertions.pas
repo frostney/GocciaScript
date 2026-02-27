@@ -1541,7 +1541,8 @@ var
   PreviousSuiteIsSkipped: Boolean;
   FailedTestDetails: TStringList;
   FailedTestDetailsArray: TGocciaArrayValue;
-  TestParams: TGocciaObjectValue;
+  Param: TGocciaValue;
+  Val: TGocciaValue;
   TestResult: TGocciaValue;
   RejectionReason: string;
 begin
@@ -1560,15 +1561,17 @@ begin
 
   if AArgs.Length > 0 then
   begin
-    if AArgs.GetElement(0) is TGocciaObjectValue then
+    Param := AArgs.GetElement(0);
+    if not Param.IsPrimitive then
     begin
-      TestParams := AArgs.GetElement(0) as TGocciaObjectValue;
-      if TestParams.HasProperty('exitOnFirstFailure') then
-        ExitOnFirstFailure := TestParams.GetProperty('exitOnFirstFailure').ToBooleanLiteral.Value
+      Val := Param.GetProperty('exitOnFirstFailure');
+      if Assigned(Val) and not (Val is TGocciaUndefinedLiteralValue) then
+        ExitOnFirstFailure := Val.ToBooleanLiteral.Value
       else
         ExitOnFirstFailure := False;
-      if TestParams.HasProperty('showTestResults') then
-        ShowTestResults := TestParams.GetProperty('showTestResults').ToBooleanLiteral.Value
+      Val := Param.GetProperty('showTestResults');
+      if Assigned(Val) and not (Val is TGocciaUndefinedLiteralValue) then
+        ShowTestResults := Val.ToBooleanLiteral.Value
       else
         ShowTestResults := True;
     end

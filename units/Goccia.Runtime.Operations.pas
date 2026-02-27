@@ -42,9 +42,12 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string;
       const AValue: TGocciaValue); override;
-    function ToStringLiteral: TGocciaStringLiteralValue; override;
+    function TypeName: string; override;
     function TypeOf: string; override;
     function IsPrimitive: Boolean; override;
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
     procedure MarkReferences; override;
 
     property Target: TSouffleHeapObject read FTarget;
@@ -58,6 +61,7 @@ type
     FEngine: TObject;
 
     function WrapGocciaValue(const AValue: TGocciaValue): TSouffleValue;
+    function CoerceKeyToString(const AKey: TSouffleValue): string;
   public
     constructor Create;
     destructor Destroy; override;
@@ -289,6 +293,11 @@ begin
     Result := TGocciaStringLiteralValue.Create('[object]');
 end;
 
+function TGocciaSouffleProxy.TypeName: string;
+begin
+  Result := 'object';
+end;
+
 function TGocciaSouffleProxy.TypeOf: string;
 begin
   Result := 'object';
@@ -297,6 +306,16 @@ end;
 function TGocciaSouffleProxy.IsPrimitive: Boolean;
 begin
   Result := False;
+end;
+
+function TGocciaSouffleProxy.ToBooleanLiteral: TGocciaBooleanLiteralValue;
+begin
+  Result := TGocciaBooleanLiteralValue.TrueValue;
+end;
+
+function TGocciaSouffleProxy.ToNumberLiteral: TGocciaNumberLiteralValue;
+begin
+  Result := TGocciaNumberLiteralValue.NaNValue;
 end;
 
 procedure TGocciaSouffleProxy.MarkReferences;
@@ -331,6 +350,17 @@ begin
   Result := SouffleReference(TGocciaWrappedValue.Create(AValue));
 end;
 
+function ConvertSouffleArrayToGocciaArray(
+  const ARuntime: TGocciaRuntimeOperations;
+  const AArr: TSouffleArray): TGocciaArrayValue;
+var
+  I: Integer;
+begin
+  Result := TGocciaArrayValue.Create;
+  for I := 0 to AArr.Count - 1 do
+    Result.Elements.Add(ARuntime.UnwrapToGocciaValue(AArr.Get(I)));
+end;
+
 function TGocciaRuntimeOperations.UnwrapToGocciaValue(
   const AValue: TSouffleValue): TGocciaValue;
 begin
@@ -352,8 +382,10 @@ begin
       else if AValue.AsReference is TSouffleString then
         Result := TGocciaStringLiteralValue.Create(
           TSouffleString(AValue.AsReference).Value)
-      else if (AValue.AsReference is TSouffleArray)
-           or (AValue.AsReference is TSouffleTable) then
+      else if AValue.AsReference is TSouffleArray then
+        Result := ConvertSouffleArrayToGocciaArray(Self,
+          TSouffleArray(AValue.AsReference))
+      else if AValue.AsReference is TSouffleTable then
         Result := TGocciaSouffleProxy.Create(AValue.AsReference, Self)
       else if (AValue.AsReference is TSouffleClosure) and Assigned(FVM) then
         Result := TGocciaSouffleClosureBridge.Create(
@@ -698,6 +730,19 @@ begin
   end;
 end;
 
+function TGocciaRuntimeOperations.CoerceKeyToString(
+  const AKey: TSouffleValue): string;
+begin
+  if AKey.Kind = svkNil then
+    Exit('undefined');
+  if SouffleIsReference(AKey) and Assigned(AKey.AsReference) then
+  begin
+    if AKey.AsReference is TGocciaWrappedValue then
+      Exit(TGocciaWrappedValue(AKey.AsReference).Value.ToStringLiteral.Value);
+  end;
+  Result := SouffleValueToString(AKey);
+end;
+
 function TGocciaRuntimeOperations.GetIndex(
   const AObject, AKey: TSouffleValue): TSouffleValue;
 begin
@@ -705,7 +750,7 @@ begin
      (AObject.AsReference is TSouffleArray) and (AKey.Kind = svkInteger) then
     Result := TSouffleArray(AObject.AsReference).Get(Integer(AKey.AsInteger))
   else
-    Result := GetProperty(AObject, SouffleValueToString(AKey));
+    Result := GetProperty(AObject, CoerceKeyToString(AKey));
 end;
 
 procedure TGocciaRuntimeOperations.SetIndex(const AObject: TSouffleValue;
@@ -715,7 +760,7 @@ begin
      (AObject.AsReference is TSouffleArray) and (AKey.Kind = svkInteger) then
     TSouffleArray(AObject.AsReference).Put(Integer(AKey.AsInteger), AValue)
   else
-    SetProperty(AObject, SouffleValueToString(AKey), AValue);
+    SetProperty(AObject, CoerceKeyToString(AKey), AValue);
 end;
 
 function TGocciaRuntimeOperations.DeleteProperty(const AObject: TSouffleValue;
@@ -903,6 +948,7 @@ var
   Tbl: TSouffleTable;
   Index: Integer;
   Val: TSouffleValue;
+  TempArr: TGocciaArrayValue;
 begin
   if ATarget is TSouffleArray then
   begin
@@ -911,7 +957,8 @@ begin
       Exit(TGocciaNumberLiteralValue.Create(Arr.Count * 1.0));
     if TryStrToInt(AName, Index) and (Index >= 0) and (Index < Arr.Count) then
       Exit(UnwrapToGocciaValue(Arr.Get(Index)));
-    Result := nil;
+    TempArr := ConvertSouffleArrayToGocciaArray(Self, Arr);
+    Result := TempArr.GetProperty(AName);
   end
   else if ATarget is TSouffleTable then
   begin

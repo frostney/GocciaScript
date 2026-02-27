@@ -214,19 +214,20 @@ end;
 procedure TSouffleTable.Grow;
 var
   OldEntries: array of TSouffleTableEntry;
-  OldCapacity, I, Slot: Integer;
+  OldCount, OldCapacity, I, Slot: Integer;
   NewCapacity: Integer;
 begin
   OldEntries := FEntries;
   OldCapacity := FCapacity;
+  OldCount := FCount;
   NewCapacity := FCapacity * 2;
 
   FCapacity := NewCapacity;
   SetLength(FEntries, FCapacity);
+  for I := 0 to FCapacity - 1 do
+    FEntries[I].Occupied := False;
 
-  // Rebuild the order array with new slot indices
-  SetLength(FOrder, 0);
-  SetLength(FOrder, FCount);
+  SetLength(FOrder, OldCount);
   FCount := 0;
 
   for I := 0 to OldCapacity - 1 do

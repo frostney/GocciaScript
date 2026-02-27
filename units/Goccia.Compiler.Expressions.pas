@@ -40,8 +40,12 @@ procedure CompileTemplateWithInterpolation(const ACtx: TGocciaCompilationContext
   const AExpr: TGocciaTemplateWithInterpolationExpression; const ADest: UInt8);
 procedure CompileNewExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaNewExpression; const ADest: UInt8);
+procedure CompileComputedPropertyAssignment(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaComputedPropertyAssignmentExpression; const ADest: UInt8);
 procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt8);
+procedure CompileMethod(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaMethodExpression; const ADest: UInt8);
 
 implementation
 
@@ -449,15 +453,56 @@ var
   I: Integer;
   Key: string;
   ValExpr: TGocciaExpression;
-  ValReg: UInt8;
+  ValReg, KeyReg: UInt8;
   KeyIdx: UInt16;
   Names: TStringList;
+  Order: TArray<TGocciaPropertySourceOrder>;
+  Pair: TPair<TGocciaExpression, TGocciaExpression>;
 begin
   EmitInstruction(ACtx, EncodeABC(OP_NEW_TABLE, ADest,
     UInt8(Min(AExpr.Properties.Count, 255)), 0));
 
-  Names := AExpr.GetPropertyNamesInOrder;
-  try
+  Order := AExpr.PropertySourceOrder;
+  if Length(Order) > 0 then
+  begin
+    for I := 0 to High(Order) do
+    begin
+      case Order[I].PropertyType of
+        pstStatic:
+        begin
+          Key := Order[I].StaticKey;
+          if AExpr.Properties.TryGetValue(Key, ValExpr) then
+          begin
+            ValReg := ACtx.Scope.AllocateRegister;
+            ACtx.CompileExpression(ValExpr, ValReg);
+            KeyIdx := ACtx.Template.AddConstantString(Key);
+            if KeyIdx > High(UInt8) then
+              raise Exception.Create('Constant pool overflow: property name index exceeds 255');
+            EmitInstruction(ACtx, EncodeABC(OP_TABLE_SET, ADest, KeyIdx, ValReg));
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
+        pstComputed:
+        begin
+          if (Order[I].ComputedIndex >= 0) and
+             (Order[I].ComputedIndex <= High(AExpr.ComputedPropertiesInOrder)) then
+          begin
+            Pair := AExpr.ComputedPropertiesInOrder[Order[I].ComputedIndex];
+            KeyReg := ACtx.Scope.AllocateRegister;
+            ValReg := ACtx.Scope.AllocateRegister;
+            ACtx.CompileExpression(Pair.Key, KeyReg);
+            ACtx.CompileExpression(Pair.Value, ValReg);
+            EmitInstruction(ACtx, EncodeABC(OP_ARRAY_SET, ADest, KeyReg, ValReg));
+            ACtx.Scope.FreeRegister;
+            ACtx.Scope.FreeRegister;
+          end;
+        end;
+      end;
+    end;
+  end
+  else
+  begin
+    Names := AExpr.GetPropertyNamesInOrder;
     for I := 0 to Names.Count - 1 do
     begin
       Key := Names[I];
@@ -472,8 +517,6 @@ begin
         ACtx.Scope.FreeRegister;
       end;
     end;
-  finally
-    Names.Free;
   end;
 end;
 
@@ -645,6 +688,68 @@ begin
   for I := 0 to ArgCount - 1 do
     ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
+end;
+
+procedure CompileComputedPropertyAssignment(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaComputedPropertyAssignmentExpression; const ADest: UInt8);
+var
+  ObjReg, KeyReg, ValReg: UInt8;
+begin
+  ObjReg := ACtx.Scope.AllocateRegister;
+  KeyReg := ACtx.Scope.AllocateRegister;
+  ValReg := ACtx.Scope.AllocateRegister;
+
+  ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
+  ACtx.CompileExpression(AExpr.PropertyExpression, KeyReg);
+  ACtx.CompileExpression(AExpr.Value, ValReg);
+
+  EmitInstruction(ACtx, EncodeABC(OP_ARRAY_SET, ObjReg, KeyReg, ValReg));
+
+  if ADest <> ValReg then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ValReg, 0));
+
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+end;
+
+procedure CompileMethod(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaMethodExpression; const ADest: UInt8);
+var
+  OldTemplate: TSouffleFunctionTemplate;
+  OldScope: TGocciaCompilerScope;
+  ChildTemplate: TSouffleFunctionTemplate;
+  ChildScope: TGocciaCompilerScope;
+  FuncIdx: UInt16;
+  I: Integer;
+begin
+  OldTemplate := ACtx.Template;
+  OldScope := ACtx.Scope;
+
+  ChildTemplate := TSouffleFunctionTemplate.Create('<method>');
+  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
+
+  ChildTemplate.ParameterCount := Length(AExpr.Parameters);
+  for I := 0 to High(AExpr.Parameters) do
+    if not AExpr.Parameters[I].IsPattern then
+      ChildScope.DeclareLocal(AExpr.Parameters[I].Name, False);
+
+  ACtx.SwapState(ChildTemplate, ChildScope);
+  ACtx.CompileFunctionBody(AExpr.Body);
+
+  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+  for I := 0 to ChildScope.UpvalueCount - 1 do
+    ChildTemplate.AddUpvalueDescriptor(
+      ChildScope.GetUpvalue(I).IsLocal,
+      ChildScope.GetUpvalue(I).Index);
+
+  ACtx.SwapState(OldTemplate, OldScope);
+  ChildScope.Free;
+
+  FuncIdx := OldTemplate.AddFunction(ChildTemplate);
+  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, ADest, FuncIdx));
 end;
 
 procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
