@@ -219,7 +219,7 @@ Kind 128+ is reserved for runtime-specific heap types. GocciaScript uses `TGocci
 
 Souffle uses a Lua-style upvalue model for lexical closures:
 
-- **`TSouffleClosure`** — Pairs a `TSouffleFunctionPrototype` (code + constants) with an array of `TSouffleUpvalue` references
+- **`TSouffleClosure`** — Pairs a `TSouffleFunctionTemplate` (code + constants) with an array of `TSouffleUpvalue` references
 - **`TSouffleUpvalue`** — Either *open* (pointing to a live register) or *closed* (holding a captured value)
 - **`OP_CLOSURE`** — Creates a closure from a nested function prototype, capturing upvalues as described by the prototype's `UpvalueDescriptors`
 - **`OP_GET_UPVALUE` / `OP_SET_UPVALUE`** — Read/write through upvalue indirection
@@ -262,7 +262,7 @@ Souffle has its own mark-and-sweep garbage collector (`Souffle.GarbageCollector.
 TSouffleBytecodeModule
   ├── FormatVersion: UInt16
   ├── RuntimeTag: string                              (e.g., "goccia-js", "goccia-py")
-  ├── TopLevel: TSouffleFunctionPrototype
+  ├── TopLevel: TSouffleFunctionTemplate
   ├── SourcePath: string
   ├── Imports: array of TSouffleModuleImport
   │     ├── ModulePath: string
@@ -275,11 +275,11 @@ TSouffleBytecodeModule
 ### Function Prototype
 
 ```text
-TSouffleFunctionPrototype
+TSouffleFunctionTemplate
   ├── Name: string
   ├── Code: array of UInt32                         (instruction words)
   ├── Constants: array of TSouffleBytecodeConstant   (typed constant pool)
-  ├── Functions: array of TSouffleFunctionPrototype   (nested closures)
+  ├── Functions: array of TSouffleFunctionTemplate   (nested closures)
   ├── MaxRegisters: UInt8                            (register window size)
   ├── ParameterCount: UInt8
   ├── UpvalueCount: UInt8
@@ -421,7 +421,7 @@ All Souffle VM source files live in the `souffle/` directory with `Souffle.` pre
 | `Souffle.Value.pas` | `TSouffleValue` tagged union, constructors, type checks, truthiness |
 | `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleString` |
 | `Souffle.Bytecode.pas` | Opcode definitions, instruction encoding/decoding helpers |
-| `Souffle.Bytecode.Chunk.pas` | `TSouffleFunctionPrototype`, constant pool, upvalue descriptors |
+| `Souffle.Bytecode.Chunk.pas` | `TSouffleFunctionTemplate`, constant pool, upvalue descriptors |
 | `Souffle.Bytecode.Module.pas` | `TSouffleBytecodeModule`, import/export tables |
 | `Souffle.Bytecode.Binary.pas` | `.sbc` serialization/deserialization |
 | `Souffle.Bytecode.Debug.pas` | `TSouffleDebugInfo`, source line mapping, local variable info |
@@ -493,7 +493,7 @@ These features are stubbed in the runtime operations layer and will need real im
 | **Iteration** (`for...of`, spread) | `GetIterator` returns the value unchanged; `IteratorNext` always returns done; `SpreadInto` is a no-op | Wire to GocciaScript's `GetIteratorFromValue` / `TGocciaIteratorValue` protocol; handle arrays, strings, maps, sets, and user-defined iterables |
 | **Module imports** | `ImportModule` returns `SouffleNil` | Resolve module paths, compile or load `.sbc` modules, return the module namespace object |
 | **Async/await** | `AwaitValue` returns its argument unchanged | Integrate with `TGocciaPromiseValue` and the microtask queue |
-| **Closure receiver slot** | `CallClosure` accepts `AReceiver` but does not store it into the new frame's register window | Define a receiver register convention in `TSouffleFunctionPrototype` and assign `AReceiver` into that slot when creating the closure call frame |
+| **Closure receiver slot** | `CallClosure` accepts `AReceiver` but does not store it into the new frame's register window | Define a receiver register convention in `TSouffleFunctionTemplate` and assign `AReceiver` into that slot when creating the closure call frame |
 | **Template literal parsing** | The compiler re-lexes/re-parses each `${...}` interpolation from the raw template string | Enhance the parser to produce a template AST node with pre-parsed static and expression parts; the compiler would then iterate those directly |
 | **Binary endianness** | `.sbc` serialization uses native-endian writes | Normalize to little-endian for cross-platform `.sbc` portability |
 

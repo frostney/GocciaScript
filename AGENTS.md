@@ -138,8 +138,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Souffle VM | `Souffle.VM.pas` | Register-based bytecode VM with two-tier dispatch (Tier 1 intrinsic + Tier 2 runtime) |
 | Souffle Value | `Souffle.Value.pas` | `TSouffleValue` tagged union: Nil, Boolean, Integer, Float, Reference |
 | Souffle Bytecode | `Souffle.Bytecode.pas` | Opcode definitions (Tier 1 + Tier 2), 32-bit instruction encoding/decoding |
-| Souffle Bytecode Chunk | `Souffle.Bytecode.Chunk.pas` | `TSouffleFunctionPrototype` — code, constants, upvalue descriptors, exception handlers |
-| Souffle Bytecode Module | `Souffle.Bytecode.Module.pas` | `TSouffleBytecodeModule` — top-level prototype, imports, exports, runtime tag |
+| Souffle Bytecode Chunk | `Souffle.Bytecode.Chunk.pas` | `TSouffleFunctionTemplate` — code, constants, upvalue descriptors, exception handlers |
+| Souffle Bytecode Module | `Souffle.Bytecode.Module.pas` | `TSouffleBytecodeModule` — top-level function template, imports, exports, runtime tag |
 | Souffle Bytecode Binary | `Souffle.Bytecode.Binary.pas` | `.sbc` file serialization/deserialization |
 | Souffle Debug Info | `Souffle.Bytecode.Debug.pas` | Source line mapping, local variable info for debuggers |
 | Souffle Closure | `Souffle.VM.Closure.pas` | `TSouffleClosure` — function prototype + captured upvalue array |

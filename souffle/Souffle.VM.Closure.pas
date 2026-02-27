@@ -12,11 +12,11 @@ uses
 type
   TSouffleClosure = class(TSouffleHeapObject)
   private
-    FPrototype: TSouffleFunctionPrototype;
+    FTemplate: TSouffleFunctionTemplate;
     FUpvalues: array of TSouffleUpvalue;
     FUpvalueCount: Integer;
   public
-    constructor Create(const APrototype: TSouffleFunctionPrototype);
+    constructor Create(const ATemplate: TSouffleFunctionTemplate);
 
     function GetUpvalue(const AIndex: Integer): TSouffleUpvalue; inline;
     procedure SetUpvalue(const AIndex: Integer; const AUpvalue: TSouffleUpvalue); inline;
@@ -24,7 +24,7 @@ type
     procedure MarkReferences; override;
     function DebugString: string; override;
 
-    property Prototype: TSouffleFunctionPrototype read FPrototype;
+    property Template: TSouffleFunctionTemplate read FTemplate;
     property UpvalueCount: Integer read FUpvalueCount;
   end;
 
@@ -32,11 +32,11 @@ implementation
 
 { TSouffleClosure }
 
-constructor TSouffleClosure.Create(const APrototype: TSouffleFunctionPrototype);
+constructor TSouffleClosure.Create(const ATemplate: TSouffleFunctionTemplate);
 begin
   inherited Create(SOUFFLE_HEAP_CLOSURE);
-  FPrototype := APrototype;
-  FUpvalueCount := APrototype.UpvalueCount;
+  FTemplate := ATemplate;
+  FUpvalueCount := ATemplate.UpvalueCount;
   SetLength(FUpvalues, FUpvalueCount);
 end;
 
@@ -63,7 +63,7 @@ end;
 
 function TSouffleClosure.DebugString: string;
 begin
-  Result := '<closure:' + FPrototype.Name + '>';
+  Result := '<closure:' + FTemplate.Name + '>';
 end;
 
 end.

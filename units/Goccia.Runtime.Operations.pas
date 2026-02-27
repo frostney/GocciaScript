@@ -161,12 +161,12 @@ end;
 
 function TGocciaSouffleClosureBridge.GetFunctionLength: Integer;
 begin
-  Result := FClosure.Prototype.ParameterCount;
+  Result := FClosure.Template.ParameterCount;
 end;
 
 function TGocciaSouffleClosureBridge.GetFunctionName: string;
 begin
-  Result := FClosure.Prototype.Name;
+  Result := FClosure.Template.Name;
 end;
 
 function TGocciaSouffleClosureBridge.Call(

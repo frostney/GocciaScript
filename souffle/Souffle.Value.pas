@@ -155,7 +155,7 @@ begin
   end;
 end;
 
-{ Identity equality for Tier 1 operations }
+{ Identity equality for core operations }
 
 function SouffleValuesEqual(const A, B: TSouffleValue): Boolean;
 begin

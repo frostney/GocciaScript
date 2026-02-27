@@ -39,9 +39,9 @@ type
       const AReceiver: TSouffleValue);
 
     procedure ExecuteLoop;
-    procedure ExecuteTier1(const AFrame: PSouffleVMCallFrame;
+    procedure ExecuteCoreOp(const AFrame: PSouffleVMCallFrame;
       const AInstruction: UInt32; const AOp: UInt8);
-    procedure ExecuteTier2(const AFrame: PSouffleVMCallFrame;
+    procedure ExecuteRuntimeOp(const AFrame: PSouffleVMCallFrame;
       const AInstruction: UInt32; const AOp: UInt8);
 
     function MaterializeConstant(
@@ -108,20 +108,20 @@ var
 begin
   Base := 0;
   if not FCallStack.IsEmpty then
-    Base := FCallStack.Peek^.BaseRegister + FCallStack.Peek^.Prototype.MaxRegisters;
+    Base := FCallStack.Peek^.BaseRegister + FCallStack.Peek^.Template.MaxRegisters;
 
-  if Base + AClosure.Prototype.MaxRegisters > Length(FRegisters) then
+  if Base + AClosure.Template.MaxRegisters > Length(FRegisters) then
     raise Exception.Create('Stack overflow: register window exceeds capacity');
 
-  Frame := FCallStack.Push(AClosure.Prototype, AClosure, Base, Base, FHandlerStack.Count);
+  Frame := FCallStack.Push(AClosure.Template, AClosure, Base, Base, FHandlerStack.Count);
 
   ArgsToCopy := Length(AArgs);
-  if ArgsToCopy > AClosure.Prototype.MaxRegisters then
-    ArgsToCopy := AClosure.Prototype.MaxRegisters;
+  if ArgsToCopy > AClosure.Template.MaxRegisters then
+    ArgsToCopy := AClosure.Template.MaxRegisters;
 
   for I := 0 to ArgsToCopy - 1 do
     FRegisters[Base + I] := AArgs[I];
-  for I := ArgsToCopy to AClosure.Prototype.MaxRegisters - 1 do
+  for I := ArgsToCopy to AClosure.Template.MaxRegisters - 1 do
     FRegisters[Base + I] := SouffleNil;
 
   SavedBaseFrameCount := FBaseFrameCount;
@@ -157,7 +157,7 @@ begin
   begin
     Frame := FCallStack.Peek;
 
-    if Frame^.IP >= Frame^.Prototype.CodeCount then
+    if Frame^.IP >= Frame^.Template.CodeCount then
     begin
       CloseUpvalues(Frame^.BaseRegister);
       FRegisters[Frame^.ReturnRegister] := SouffleNil;
@@ -165,14 +165,14 @@ begin
       Continue;
     end;
 
-    Instruction := Frame^.Prototype.GetInstruction(Frame^.IP);
+    Instruction := Frame^.Template.GetInstruction(Frame^.IP);
     Inc(Frame^.IP);
     Op := DecodeOp(Instruction);
 
     if Op < OP_RT_FIRST then
-      ExecuteTier1(Frame, Instruction, Op)
+      ExecuteCoreOp(Frame, Instruction, Op)
     else
-      ExecuteTier2(Frame, Instruction, Op);
+      ExecuteRuntimeOp(Frame, Instruction, Op);
   end;
 end;
 
@@ -183,24 +183,24 @@ var
   NewBase, I, ArgsToCopy: Integer;
   Frame: PSouffleVMCallFrame;
 begin
-  NewBase := FCallStack.Peek^.BaseRegister + FCallStack.Peek^.Prototype.MaxRegisters;
-  if NewBase + AClosure.Prototype.MaxRegisters > MAX_REGISTERS then
+  NewBase := FCallStack.Peek^.BaseRegister + FCallStack.Peek^.Template.MaxRegisters;
+  if NewBase + AClosure.Template.MaxRegisters > MAX_REGISTERS then
     raise Exception.Create('Stack overflow');
 
   ArgsToCopy := AArgCount;
-  if ArgsToCopy > AClosure.Prototype.MaxRegisters then
-    ArgsToCopy := AClosure.Prototype.MaxRegisters;
+  if ArgsToCopy > AClosure.Template.MaxRegisters then
+    ArgsToCopy := AClosure.Template.MaxRegisters;
 
   for I := 0 to ArgsToCopy - 1 do
     FRegisters[NewBase + I] := FRegisters[AArgBase + I];
-  for I := ArgsToCopy to AClosure.Prototype.MaxRegisters - 1 do
+  for I := ArgsToCopy to AClosure.Template.MaxRegisters - 1 do
     FRegisters[NewBase + I] := SouffleNil;
 
-  Frame := FCallStack.Push(AClosure.Prototype, AClosure, NewBase,
+  Frame := FCallStack.Push(AClosure.Template, AClosure, NewBase,
     AReturnAbsolute, FHandlerStack.Count);
 end;
 
-procedure TSouffleVM.ExecuteTier1(const AFrame: PSouffleVMCallFrame;
+procedure TSouffleVM.ExecuteCoreOp(const AFrame: PSouffleVMCallFrame;
   const AInstruction: UInt32; const AOp: UInt8);
 var
   A, B: UInt8;
@@ -210,7 +210,7 @@ var
   Base: Integer;
   Closure: TSouffleClosure;
   Upval: TSouffleUpvalue;
-  Proto: TSouffleFunctionPrototype;
+  Tmpl: TSouffleFunctionTemplate;
   Desc: TSouffleUpvalueDescriptor;
   I: Integer;
   Handler: TSouffleHandlerEntry;
@@ -223,7 +223,7 @@ begin
       A := DecodeA(AInstruction);
       Bx := DecodeBx(AInstruction);
       FRegisters[Base + A] := MaterializeConstant(
-        AFrame^.Prototype.GetConstant(Bx));
+        AFrame^.Template.GetConstant(Bx));
     end;
 
     OP_LOAD_NIL:
@@ -360,14 +360,14 @@ begin
     begin
       A := DecodeA(AInstruction);
       Bx := DecodeBx(AInstruction);
-      Proto := AFrame^.Prototype.GetFunction(Bx);
-      Closure := TSouffleClosure.Create(Proto);
+      Tmpl := AFrame^.Template.GetFunction(Bx);
+      Closure := TSouffleClosure.Create(Tmpl);
       if Assigned(FGC) then
         FGC.AllocateObject(Closure);
 
-      for I := 0 to Proto.UpvalueCount - 1 do
+      for I := 0 to Tmpl.UpvalueCount - 1 do
       begin
-        Desc := Proto.GetUpvalueDescriptor(I);
+        Desc := Tmpl.GetUpvalueDescriptor(I);
         if Desc.IsLocal then
           Upval := CaptureUpvalue(Base + Desc.Index)
         else if Assigned(AFrame^.Closure) then
@@ -439,7 +439,7 @@ begin
   end;
 end;
 
-procedure TSouffleVM.ExecuteTier2(const AFrame: PSouffleVMCallFrame;
+procedure TSouffleVM.ExecuteRuntimeOp(const AFrame: PSouffleVMCallFrame;
   const AInstruction: UInt32; const AOp: UInt8);
 var
   A, B, C: UInt8;
@@ -764,7 +764,7 @@ begin
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       FRuntimeOps.InitField(FRegisters[Base + A],
-        AFrame^.Prototype.GetConstant(B).StringValue,
+        AFrame^.Template.GetConstant(B).StringValue,
         FRegisters[Base + C]);
     end;
     OP_RT_INIT_INDEX:
@@ -779,13 +779,13 @@ begin
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       FRegisters[Base + A] := FRuntimeOps.GetProperty(FRegisters[Base + B],
-        AFrame^.Prototype.GetConstant(C).StringValue);
+        AFrame^.Template.GetConstant(C).StringValue);
     end;
     OP_RT_SET_PROP:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       FRuntimeOps.SetProperty(FRegisters[Base + A],
-        AFrame^.Prototype.GetConstant(B).StringValue,
+        AFrame^.Template.GetConstant(B).StringValue,
         FRegisters[Base + C]);
     end;
     OP_RT_GET_INDEX:
@@ -802,7 +802,7 @@ begin
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       FRegisters[Base + A] := FRuntimeOps.DeleteProperty(FRegisters[Base + B],
-        AFrame^.Prototype.GetConstant(C).StringValue);
+        AFrame^.Template.GetConstant(C).StringValue);
     end;
 
     // Invocation
@@ -876,13 +876,13 @@ begin
     begin
       A := DecodeA(AInstruction); Bx := DecodeBx(AInstruction);
       FRegisters[Base + A] := FRuntimeOps.ImportModule(
-        AFrame^.Prototype.GetConstant(Bx).StringValue);
+        AFrame^.Template.GetConstant(Bx).StringValue);
     end;
     OP_RT_EXPORT:
     begin
       A := DecodeA(AInstruction); Bx := DecodeBx(AInstruction);
       FRuntimeOps.ExportBinding(FRegisters[Base + A],
-        AFrame^.Prototype.GetConstant(Bx).StringValue);
+        AFrame^.Template.GetConstant(Bx).StringValue);
     end;
 
     // Async
@@ -897,13 +897,13 @@ begin
     begin
       A := DecodeA(AInstruction); Bx := DecodeBx(AInstruction);
       FRegisters[Base + A] := FRuntimeOps.GetGlobal(
-        AFrame^.Prototype.GetConstant(Bx).StringValue);
+        AFrame^.Template.GetConstant(Bx).StringValue);
     end;
     OP_RT_SET_GLOBAL:
     begin
       A := DecodeA(AInstruction); Bx := DecodeBx(AInstruction);
       FRuntimeOps.SetGlobal(
-        AFrame^.Prototype.GetConstant(Bx).StringValue,
+        AFrame^.Template.GetConstant(Bx).StringValue,
         FRegisters[Base + A]);
     end;
 
@@ -958,7 +958,7 @@ begin
   if FCallStack.IsEmpty then
     Exit;
 
-  HighWater := FCallStack.Peek^.BaseRegister + FCallStack.Peek^.Prototype.MaxRegisters;
+  HighWater := FCallStack.Peek^.BaseRegister + FCallStack.Peek^.Template.MaxRegisters;
   for I := 0 to HighWater - 1 do
     if SouffleIsReference(FRegisters[I]) and Assigned(FRegisters[I].AsReference) then
       FRegisters[I].AsReference.MarkReferences;
