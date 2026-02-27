@@ -58,6 +58,7 @@ type
 implementation
 
 uses
+  Math,
   SysUtils;
 
 { TSouffleVM }
@@ -445,45 +446,124 @@ var
   Bx: UInt16;
   Base: Integer;
   Done: Boolean;
+  FloatB, FloatC: Double;
 begin
   Base := AFrame^.BaseRegister;
 
   case TSouffleOpCode(AOp) of
-    // Arithmetic
+    // Arithmetic — inline integer/float fast paths, fallback to runtime for strings/objects
     OP_RT_ADD:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.Add(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleInteger(
+          FRegisters[Base + B].AsInteger + FRegisters[Base + C].AsInteger)
+      else if SouffleIsNumeric(FRegisters[Base + B]) and
+              SouffleIsNumeric(FRegisters[Base + C]) then
+        FRegisters[Base + A] := SouffleFloat(
+          SouffleAsNumber(FRegisters[Base + B]) + SouffleAsNumber(FRegisters[Base + C]))
+      else
+        FRegisters[Base + A] := FRuntimeOps.Add(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_SUB:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.Subtract(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleInteger(
+          FRegisters[Base + B].AsInteger - FRegisters[Base + C].AsInteger)
+      else if SouffleIsNumeric(FRegisters[Base + B]) and
+              SouffleIsNumeric(FRegisters[Base + C]) then
+        FRegisters[Base + A] := SouffleFloat(
+          SouffleAsNumber(FRegisters[Base + B]) - SouffleAsNumber(FRegisters[Base + C]))
+      else
+        FRegisters[Base + A] := FRuntimeOps.Subtract(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_MUL:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.Multiply(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleInteger(
+          FRegisters[Base + B].AsInteger * FRegisters[Base + C].AsInteger)
+      else if SouffleIsNumeric(FRegisters[Base + B]) and
+              SouffleIsNumeric(FRegisters[Base + C]) then
+        FRegisters[Base + A] := SouffleFloat(
+          SouffleAsNumber(FRegisters[Base + B]) * SouffleAsNumber(FRegisters[Base + C]))
+      else
+        FRegisters[Base + A] := FRuntimeOps.Multiply(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_DIV:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.Divide(FRegisters[Base + B], FRegisters[Base + C]);
+      if SouffleIsNumeric(FRegisters[Base + B]) and
+         SouffleIsNumeric(FRegisters[Base + C]) then
+      begin
+        FloatB := SouffleAsNumber(FRegisters[Base + B]);
+        FloatC := SouffleAsNumber(FRegisters[Base + C]);
+        if FloatC = 0.0 then
+        begin
+          if FloatB = 0.0 then
+            FRegisters[Base + A] := SouffleFloat(NaN)
+          else if FloatB > 0 then
+            FRegisters[Base + A] := SouffleFloat(Infinity)
+          else
+            FRegisters[Base + A] := SouffleFloat(NegInfinity);
+        end
+        else
+          FRegisters[Base + A] := SouffleFloat(FloatB / FloatC);
+      end
+      else
+        FRegisters[Base + A] := FRuntimeOps.Divide(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_MOD:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.Modulo(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) and
+         (FRegisters[Base + C].AsInteger <> 0) then
+        FRegisters[Base + A] := SouffleInteger(
+          FRegisters[Base + B].AsInteger mod FRegisters[Base + C].AsInteger)
+      else if SouffleIsNumeric(FRegisters[Base + B]) and
+              SouffleIsNumeric(FRegisters[Base + C]) then
+      begin
+        FloatC := SouffleAsNumber(FRegisters[Base + C]);
+        if FloatC = 0.0 then
+          FRegisters[Base + A] := SouffleFloat(NaN)
+        else
+          FRegisters[Base + A] := SouffleFloat(
+            FMod(SouffleAsNumber(FRegisters[Base + B]), FloatC));
+      end
+      else
+        FRegisters[Base + A] := FRuntimeOps.Modulo(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_POW:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.Power(FRegisters[Base + B], FRegisters[Base + C]);
+      if SouffleIsNumeric(FRegisters[Base + B]) and
+         SouffleIsNumeric(FRegisters[Base + C]) then
+        FRegisters[Base + A] := SouffleFloat(
+          Math.Power(SouffleAsNumber(FRegisters[Base + B]),
+                     SouffleAsNumber(FRegisters[Base + C])))
+      else
+        FRegisters[Base + A] := FRuntimeOps.Power(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_NEG:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.Negate(FRegisters[Base + B]);
+      if FRegisters[Base + B].Kind = svkInteger then
+        FRegisters[Base + A] := SouffleInteger(-FRegisters[Base + B].AsInteger)
+      else if FRegisters[Base + B].Kind = svkFloat then
+        FRegisters[Base + A] := SouffleFloat(-FRegisters[Base + B].AsFloat)
+      else
+        FRegisters[Base + A] := FRuntimeOps.Negate(FRegisters[Base + B]);
     end;
 
     // Bitwise
@@ -523,36 +603,128 @@ begin
       FRegisters[Base + A] := FRuntimeOps.BitwiseNot(FRegisters[Base + B]);
     end;
 
-    // Comparison
+    // Comparison — inline primitive fast paths, fallback to runtime for references
     OP_RT_EQ:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.Equal(FRegisters[Base + B], FRegisters[Base + C]);
+      if FRegisters[Base + B].Kind <> FRegisters[Base + C].Kind then
+      begin
+        if SouffleIsNumeric(FRegisters[Base + B]) and
+           SouffleIsNumeric(FRegisters[Base + C]) then
+          FRegisters[Base + A] := SouffleBoolean(
+            SouffleAsNumber(FRegisters[Base + B]) = SouffleAsNumber(FRegisters[Base + C]))
+        else
+          FRegisters[Base + A] := FRuntimeOps.Equal(
+            FRegisters[Base + B], FRegisters[Base + C]);
+      end
+      else
+        case FRegisters[Base + B].Kind of
+          svkNil:
+            FRegisters[Base + A] := SouffleBoolean(True);
+          svkBoolean:
+            FRegisters[Base + A] := SouffleBoolean(
+              FRegisters[Base + B].AsBoolean = FRegisters[Base + C].AsBoolean);
+          svkInteger:
+            FRegisters[Base + A] := SouffleBoolean(
+              FRegisters[Base + B].AsInteger = FRegisters[Base + C].AsInteger);
+          svkFloat:
+            FRegisters[Base + A] := SouffleBoolean(
+              FRegisters[Base + B].AsFloat = FRegisters[Base + C].AsFloat);
+        else
+          FRegisters[Base + A] := FRuntimeOps.Equal(
+            FRegisters[Base + B], FRegisters[Base + C]);
+        end;
     end;
     OP_RT_NEQ:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.NotEqual(FRegisters[Base + B], FRegisters[Base + C]);
+      if FRegisters[Base + B].Kind <> FRegisters[Base + C].Kind then
+      begin
+        if SouffleIsNumeric(FRegisters[Base + B]) and
+           SouffleIsNumeric(FRegisters[Base + C]) then
+          FRegisters[Base + A] := SouffleBoolean(
+            SouffleAsNumber(FRegisters[Base + B]) <> SouffleAsNumber(FRegisters[Base + C]))
+        else
+          FRegisters[Base + A] := FRuntimeOps.NotEqual(
+            FRegisters[Base + B], FRegisters[Base + C]);
+      end
+      else
+        case FRegisters[Base + B].Kind of
+          svkNil:
+            FRegisters[Base + A] := SouffleBoolean(False);
+          svkBoolean:
+            FRegisters[Base + A] := SouffleBoolean(
+              FRegisters[Base + B].AsBoolean <> FRegisters[Base + C].AsBoolean);
+          svkInteger:
+            FRegisters[Base + A] := SouffleBoolean(
+              FRegisters[Base + B].AsInteger <> FRegisters[Base + C].AsInteger);
+          svkFloat:
+            FRegisters[Base + A] := SouffleBoolean(
+              FRegisters[Base + B].AsFloat <> FRegisters[Base + C].AsFloat);
+        else
+          FRegisters[Base + A] := FRuntimeOps.NotEqual(
+            FRegisters[Base + B], FRegisters[Base + C]);
+        end;
     end;
     OP_RT_LT:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.LessThan(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleBoolean(
+          FRegisters[Base + B].AsInteger < FRegisters[Base + C].AsInteger)
+      else if SouffleIsNumeric(FRegisters[Base + B]) and
+              SouffleIsNumeric(FRegisters[Base + C]) then
+        FRegisters[Base + A] := SouffleBoolean(
+          SouffleAsNumber(FRegisters[Base + B]) < SouffleAsNumber(FRegisters[Base + C]))
+      else
+        FRegisters[Base + A] := FRuntimeOps.LessThan(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_GT:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.GreaterThan(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleBoolean(
+          FRegisters[Base + B].AsInteger > FRegisters[Base + C].AsInteger)
+      else if SouffleIsNumeric(FRegisters[Base + B]) and
+              SouffleIsNumeric(FRegisters[Base + C]) then
+        FRegisters[Base + A] := SouffleBoolean(
+          SouffleAsNumber(FRegisters[Base + B]) > SouffleAsNumber(FRegisters[Base + C]))
+      else
+        FRegisters[Base + A] := FRuntimeOps.GreaterThan(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_LTE:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.LessThanOrEqual(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleBoolean(
+          FRegisters[Base + B].AsInteger <= FRegisters[Base + C].AsInteger)
+      else if SouffleIsNumeric(FRegisters[Base + B]) and
+              SouffleIsNumeric(FRegisters[Base + C]) then
+        FRegisters[Base + A] := SouffleBoolean(
+          SouffleAsNumber(FRegisters[Base + B]) <= SouffleAsNumber(FRegisters[Base + C]))
+      else
+        FRegisters[Base + A] := FRuntimeOps.LessThanOrEqual(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_GTE:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.GreaterThanOrEqual(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleBoolean(
+          FRegisters[Base + B].AsInteger >= FRegisters[Base + C].AsInteger)
+      else if SouffleIsNumeric(FRegisters[Base + B]) and
+              SouffleIsNumeric(FRegisters[Base + C]) then
+        FRegisters[Base + A] := SouffleBoolean(
+          SouffleAsNumber(FRegisters[Base + B]) >= SouffleAsNumber(FRegisters[Base + C]))
+      else
+        FRegisters[Base + A] := FRuntimeOps.GreaterThanOrEqual(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
 
     // Logical / Type

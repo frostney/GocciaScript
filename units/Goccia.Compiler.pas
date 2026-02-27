@@ -71,8 +71,14 @@ type
     procedure PatchJump(const AIndex: Integer);
     function CurrentCodeCount: Integer;
 
+    procedure CompileCompoundAssignment(const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt8);
     procedure CompileFunctionBody(const ABody: TGocciaASTNode);
     function TokenTypeToRTOp(const ATokenType: TGocciaTokenType): TSouffleOpCode;
+    function CompoundOpToRTOp(const ATokenType: TGocciaTokenType): TSouffleOpCode;
+
+    function TryFoldBinary(const AExpr: TGocciaBinaryExpression; const ADest: UInt8): Boolean;
+    function TryFoldUnary(const AExpr: TGocciaUnaryExpression; const ADest: UInt8): Boolean;
+    procedure EmitFoldedNumber(const AValue: Double; const ADest: UInt8);
   public
     constructor Create(const ASourcePath: string);
     destructor Destroy; override;
@@ -90,6 +96,7 @@ const
 implementation
 
 uses
+  Math,
   SysUtils,
 
   Goccia.Lexer,
@@ -178,6 +185,8 @@ begin
     CompileBinary(TGocciaBinaryExpression(AExpr), ADest)
   else if AExpr is TGocciaUnaryExpression then
     CompileUnary(TGocciaUnaryExpression(AExpr), ADest)
+  else if AExpr is TGocciaCompoundAssignmentExpression then
+    CompileCompoundAssignment(TGocciaCompoundAssignmentExpression(AExpr), ADest)
   else if AExpr is TGocciaAssignmentExpression then
     CompileAssignment(TGocciaAssignmentExpression(AExpr), ADest)
   else if AExpr is TGocciaPropertyAssignmentExpression then
@@ -321,6 +330,9 @@ var
   Op: TSouffleOpCode;
   JumpIdx, JumpIdx2: Integer;
 begin
+  if TryFoldBinary(AExpr, ADest) then
+    Exit;
+
   if AExpr.Operator = gttAnd then
   begin
     CompileExpression(AExpr.Left, ADest);
@@ -381,6 +393,9 @@ procedure TGocciaCompiler.CompileUnary(
 var
   RegB: UInt8;
 begin
+  if TryFoldUnary(AExpr, ADest) then
+    Exit;
+
   RegB := FCurrentScope.AllocateRegister;
   CompileExpression(AExpr.Operand, RegB);
 
@@ -1165,6 +1180,310 @@ function TGocciaCompiler.GetPendingClass(
   const AIndex: Integer): TGocciaCompilerClassEntry;
 begin
   Result := FPendingClasses[AIndex];
+end;
+
+procedure TGocciaCompiler.CompileCompoundAssignment(
+  const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt8);
+var
+  LocalIdx, UpvalIdx: Integer;
+  Slot, RegVal, RegResult: UInt8;
+  Op: TSouffleOpCode;
+begin
+  Op := CompoundOpToRTOp(AExpr.Operator);
+
+  LocalIdx := FCurrentScope.ResolveLocal(AExpr.Name);
+  if LocalIdx >= 0 then
+  begin
+    Slot := FCurrentScope.GetLocal(LocalIdx).Slot;
+    RegVal := FCurrentScope.AllocateRegister;
+    CompileExpression(AExpr.Value, RegVal);
+    Emit(EncodeABC(Op, Slot, Slot, RegVal));
+    if ADest <> Slot then
+      Emit(EncodeABC(OP_MOVE, ADest, Slot, 0));
+    FCurrentScope.FreeRegister;
+    Exit;
+  end;
+
+  UpvalIdx := FCurrentScope.ResolveUpvalue(AExpr.Name);
+  if UpvalIdx >= 0 then
+  begin
+    RegVal := FCurrentScope.AllocateRegister;
+    RegResult := FCurrentScope.AllocateRegister;
+    Emit(EncodeABx(OP_GET_UPVALUE, RegResult, UInt16(UpvalIdx)));
+    CompileExpression(AExpr.Value, RegVal);
+    Emit(EncodeABC(Op, RegResult, RegResult, RegVal));
+    Emit(EncodeABx(OP_SET_UPVALUE, RegResult, UInt16(UpvalIdx)));
+    if ADest <> RegResult then
+      Emit(EncodeABC(OP_MOVE, ADest, RegResult, 0));
+    FCurrentScope.FreeRegister;
+    FCurrentScope.FreeRegister;
+    Exit;
+  end;
+
+  RegVal := FCurrentScope.AllocateRegister;
+  RegResult := FCurrentScope.AllocateRegister;
+  Emit(EncodeABx(OP_RT_GET_GLOBAL, RegResult,
+    FCurrentPrototype.AddConstantString(AExpr.Name)));
+  CompileExpression(AExpr.Value, RegVal);
+  Emit(EncodeABC(Op, ADest, RegResult, RegVal));
+  Emit(EncodeABx(OP_RT_SET_GLOBAL, ADest,
+    FCurrentPrototype.AddConstantString(AExpr.Name)));
+  FCurrentScope.FreeRegister;
+  FCurrentScope.FreeRegister;
+end;
+
+function TGocciaCompiler.CompoundOpToRTOp(
+  const ATokenType: TGocciaTokenType): TSouffleOpCode;
+begin
+  case ATokenType of
+    gttPlusAssign:               Result := OP_RT_ADD;
+    gttMinusAssign:              Result := OP_RT_SUB;
+    gttStarAssign:               Result := OP_RT_MUL;
+    gttSlashAssign:              Result := OP_RT_DIV;
+    gttPercentAssign:            Result := OP_RT_MOD;
+    gttPowerAssign:              Result := OP_RT_POW;
+    gttBitwiseAndAssign:         Result := OP_RT_BAND;
+    gttBitwiseOrAssign:          Result := OP_RT_BOR;
+    gttBitwiseXorAssign:         Result := OP_RT_BXOR;
+    gttLeftShiftAssign:          Result := OP_RT_SHL;
+    gttRightShiftAssign:         Result := OP_RT_SHR;
+    gttUnsignedRightShiftAssign: Result := OP_RT_USHR;
+  else
+    Result := OP_RT_ADD;
+  end;
+end;
+
+procedure TGocciaCompiler.EmitFoldedNumber(const AValue: Double; const ADest: UInt8);
+var
+  Idx: UInt16;
+begin
+  if not IsNaN(AValue) and not IsInfinite(AValue)
+     and (Frac(AValue) = 0.0) and (AValue >= -32768) and (AValue <= 32767) then
+    Emit(EncodeAsBx(OP_LOAD_INT, ADest, Int16(Trunc(AValue))))
+  else
+  begin
+    Idx := FCurrentPrototype.AddConstantFloat(AValue);
+    Emit(EncodeABx(OP_LOAD_CONST, ADest, Idx));
+  end;
+end;
+
+function TGocciaCompiler.TryFoldBinary(
+  const AExpr: TGocciaBinaryExpression; const ADest: UInt8): Boolean;
+var
+  LeftLit, RightLit: TGocciaLiteralExpression;
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
+  LeftVal, RightVal, FoldedVal: Double;
+  Divisor: Double;
+  LeftStr, RightStr: TGocciaStringLiteralValue;
+  BoolResult: Boolean;
+  Idx: UInt16;
+begin
+  Result := False;
+
+  if not (AExpr.Left is TGocciaLiteralExpression) or
+     not (AExpr.Right is TGocciaLiteralExpression) then
+    Exit;
+
+  LeftLit := TGocciaLiteralExpression(AExpr.Left);
+  RightLit := TGocciaLiteralExpression(AExpr.Right);
+
+  // Numeric binary folding
+  if (LeftLit.Value is TGocciaNumberLiteralValue) and
+     (RightLit.Value is TGocciaNumberLiteralValue) then
+  begin
+    LeftNum := TGocciaNumberLiteralValue(LeftLit.Value);
+    RightNum := TGocciaNumberLiteralValue(RightLit.Value);
+
+    if LeftNum.IsNaN or LeftNum.IsInfinite or LeftNum.IsNegativeZero or
+       RightNum.IsNaN or RightNum.IsInfinite or RightNum.IsNegativeZero then
+      Exit;
+
+    LeftVal := LeftNum.Value;
+    RightVal := RightNum.Value;
+
+    case AExpr.Operator of
+      gttPlus:
+      begin
+        EmitFoldedNumber(LeftVal + RightVal, ADest);
+        Result := True;
+      end;
+      gttMinus:
+      begin
+        EmitFoldedNumber(LeftVal - RightVal, ADest);
+        Result := True;
+      end;
+      gttStar:
+      begin
+        EmitFoldedNumber(LeftVal * RightVal, ADest);
+        Result := True;
+      end;
+      gttSlash:
+      begin
+        if RightVal = 0.0 then
+          Exit;
+        FoldedVal := LeftVal / RightVal;
+        if not IsNaN(FoldedVal) and not IsInfinite(FoldedVal) then
+        begin
+          EmitFoldedNumber(FoldedVal, ADest);
+          Result := True;
+        end;
+      end;
+      gttPercent:
+      begin
+        if RightVal = 0.0 then
+          Exit;
+        if (Frac(LeftVal) = 0.0) and (Frac(RightVal) = 0.0) then
+          EmitFoldedNumber(Trunc(LeftVal) mod Trunc(RightVal), ADest)
+        else
+          EmitFoldedNumber(FMod(LeftVal, RightVal), ADest);
+        Result := True;
+      end;
+      gttPower:
+      begin
+        FoldedVal := Math.Power(LeftVal, RightVal);
+        if not IsNaN(FoldedVal) and not IsInfinite(FoldedVal) then
+        begin
+          EmitFoldedNumber(FoldedVal, ADest);
+          Result := True;
+        end;
+      end;
+      gttEqual:
+      begin
+        if LeftVal = RightVal then
+          Emit(EncodeABC(OP_LOAD_TRUE, ADest, 0, 0))
+        else
+          Emit(EncodeABC(OP_LOAD_FALSE, ADest, 0, 0));
+        Result := True;
+      end;
+      gttNotEqual:
+      begin
+        if LeftVal <> RightVal then
+          Emit(EncodeABC(OP_LOAD_TRUE, ADest, 0, 0))
+        else
+          Emit(EncodeABC(OP_LOAD_FALSE, ADest, 0, 0));
+        Result := True;
+      end;
+      gttLess:
+      begin
+        if LeftVal < RightVal then
+          Emit(EncodeABC(OP_LOAD_TRUE, ADest, 0, 0))
+        else
+          Emit(EncodeABC(OP_LOAD_FALSE, ADest, 0, 0));
+        Result := True;
+      end;
+      gttGreater:
+      begin
+        if LeftVal > RightVal then
+          Emit(EncodeABC(OP_LOAD_TRUE, ADest, 0, 0))
+        else
+          Emit(EncodeABC(OP_LOAD_FALSE, ADest, 0, 0));
+        Result := True;
+      end;
+      gttLessEqual:
+      begin
+        if LeftVal <= RightVal then
+          Emit(EncodeABC(OP_LOAD_TRUE, ADest, 0, 0))
+        else
+          Emit(EncodeABC(OP_LOAD_FALSE, ADest, 0, 0));
+        Result := True;
+      end;
+      gttGreaterEqual:
+      begin
+        if LeftVal >= RightVal then
+          Emit(EncodeABC(OP_LOAD_TRUE, ADest, 0, 0))
+        else
+          Emit(EncodeABC(OP_LOAD_FALSE, ADest, 0, 0));
+        Result := True;
+      end;
+      gttBitwiseAnd:
+      begin
+        EmitFoldedNumber(Int32(Trunc(LeftVal)) and Int32(Trunc(RightVal)), ADest);
+        Result := True;
+      end;
+      gttBitwiseOr:
+      begin
+        EmitFoldedNumber(Int32(Trunc(LeftVal)) or Int32(Trunc(RightVal)), ADest);
+        Result := True;
+      end;
+      gttBitwiseXor:
+      begin
+        EmitFoldedNumber(Int32(Trunc(LeftVal)) xor Int32(Trunc(RightVal)), ADest);
+        Result := True;
+      end;
+      gttLeftShift:
+      begin
+        EmitFoldedNumber(Int32(Trunc(LeftVal)) shl (Int32(Trunc(RightVal)) and $1F), ADest);
+        Result := True;
+      end;
+      gttRightShift:
+      begin
+        EmitFoldedNumber(Int32(Trunc(LeftVal)) shr (Int32(Trunc(RightVal)) and $1F), ADest);
+        Result := True;
+      end;
+      gttUnsignedRightShift:
+      begin
+        EmitFoldedNumber(Int64(UInt32(Trunc(LeftVal)) shr
+          (Int32(Trunc(RightVal)) and $1F)), ADest);
+        Result := True;
+      end;
+    end;
+    Exit;
+  end;
+
+  // String concatenation folding
+  if (AExpr.Operator = gttPlus) and
+     (LeftLit.Value is TGocciaStringLiteralValue) and
+     (RightLit.Value is TGocciaStringLiteralValue) then
+  begin
+    LeftStr := TGocciaStringLiteralValue(LeftLit.Value);
+    RightStr := TGocciaStringLiteralValue(RightLit.Value);
+    Idx := FCurrentPrototype.AddConstantString(LeftStr.Value + RightStr.Value);
+    Emit(EncodeABx(OP_LOAD_CONST, ADest, Idx));
+    Result := True;
+  end;
+end;
+
+function TGocciaCompiler.TryFoldUnary(
+  const AExpr: TGocciaUnaryExpression; const ADest: UInt8): Boolean;
+var
+  Lit: TGocciaLiteralExpression;
+  Num: TGocciaNumberLiteralValue;
+  NumVal: Double;
+begin
+  Result := False;
+
+  if not (AExpr.Operand is TGocciaLiteralExpression) then
+    Exit;
+
+  Lit := TGocciaLiteralExpression(AExpr.Operand);
+
+  if not (Lit.Value is TGocciaNumberLiteralValue) then
+    Exit;
+
+  Num := TGocciaNumberLiteralValue(Lit.Value);
+
+  if Num.IsNaN or Num.IsInfinite or Num.IsNegativeZero then
+    Exit;
+
+  NumVal := Num.Value;
+
+  case AExpr.Operator of
+    gttMinus:
+    begin
+      EmitFoldedNumber(-NumVal, ADest);
+      Result := True;
+    end;
+    gttPlus:
+    begin
+      EmitFoldedNumber(NumVal, ADest);
+      Result := True;
+    end;
+    gttBitwiseNot:
+    begin
+      EmitFoldedNumber(not Int32(Trunc(NumVal)), ADest);
+      Result := True;
+    end;
+  end;
 end;
 
 function TGocciaCompiler.TokenTypeToRTOp(
