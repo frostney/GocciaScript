@@ -192,20 +192,28 @@ procedure TSouffleVM.CallClosure(const AClosure: TSouffleClosure;
   const AArgBase, AArgCount, AReturnAbsolute: Integer;
   const AReceiver: TSouffleValue);
 var
-  NewBase, I, ArgsToCopy: Integer;
+  NewBase, I, ArgsToCopy, ArgOffset: Integer;
   Frame: PSouffleVMCallFrame;
 begin
   NewBase := FCallStack.Peek^.BaseRegister + FCallStack.Peek^.Template.MaxRegisters;
   if NewBase + AClosure.Template.MaxRegisters > MAX_REGISTERS then
     raise Exception.Create('Stack overflow');
 
+  if AClosure.Template.HasReceiver then
+    ArgOffset := 1
+  else
+    ArgOffset := 0;
+
   ArgsToCopy := AArgCount;
-  if ArgsToCopy > AClosure.Template.MaxRegisters then
-    ArgsToCopy := AClosure.Template.MaxRegisters;
+  if ArgsToCopy + ArgOffset > AClosure.Template.MaxRegisters then
+    ArgsToCopy := AClosure.Template.MaxRegisters - ArgOffset;
+
+  if AClosure.Template.HasReceiver then
+    FRegisters[NewBase] := AReceiver;
 
   for I := 0 to ArgsToCopy - 1 do
-    FRegisters[NewBase + I] := FRegisters[AArgBase + I];
-  for I := ArgsToCopy to AClosure.Template.MaxRegisters - 1 do
+    FRegisters[NewBase + ArgOffset + I] := FRegisters[AArgBase + I];
+  for I := ArgsToCopy + ArgOffset to AClosure.Template.MaxRegisters - 1 do
     FRegisters[NewBase + I] := SouffleNil;
 
   Frame := FCallStack.Push(AClosure.Template, AClosure, NewBase,
@@ -245,6 +253,12 @@ begin
     begin
       A := DecodeA(AInstruction);
       FRegisters[Base + A] := SouffleNil;
+    end;
+
+    OP_LOAD_NULL:
+    begin
+      A := DecodeA(AInstruction);
+      FRegisters[Base + A] := SouffleNull;
     end;
 
     OP_LOAD_TRUE:
@@ -359,7 +373,8 @@ begin
     begin
       A := DecodeA(AInstruction);
       sBx := DecodesBx(AInstruction);
-      if SouffleIsNil(FRegisters[Base + A]) then
+      if SouffleIsNil(FRegisters[Base + A]) or
+         SouffleIsNull(FRegisters[Base + A]) then
         AFrame^.IP := AFrame^.IP + sBx;
     end;
 
@@ -367,7 +382,8 @@ begin
     begin
       A := DecodeA(AInstruction);
       sBx := DecodesBx(AInstruction);
-      if not SouffleIsNil(FRegisters[Base + A]) then
+      if not SouffleIsNil(FRegisters[Base + A]) and
+         not SouffleIsNull(FRegisters[Base + A]) then
         AFrame^.IP := AFrame^.IP + sBx;
     end;
 
@@ -776,7 +792,7 @@ begin
       end
       else
         case FRegisters[Base + B].Kind of
-          svkNil:
+          svkNil, svkNull:
             FRegisters[Base + A] := SouffleBoolean(True);
           svkBoolean:
             FRegisters[Base + A] := SouffleBoolean(
@@ -807,7 +823,7 @@ begin
       end
       else
         case FRegisters[Base + B].Kind of
-          svkNil:
+          svkNil, svkNull:
             FRegisters[Base + A] := SouffleBoolean(False);
           svkBoolean:
             FRegisters[Base + A] := SouffleBoolean(
@@ -1068,6 +1084,20 @@ begin
       A := DecodeA(AInstruction); Bx := DecodeBx(AInstruction);
       FRegisters[Base + A] := SouffleBoolean(FRuntimeOps.HasGlobal(
         AFrame^.Template.GetConstant(Bx).StringValue));
+    end;
+
+    OP_RT_DEF_GETTER:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
+      FRuntimeOps.DefineGetter(FRegisters[Base + A],
+        AFrame^.Template.GetConstant(B).StringValue, FRegisters[Base + C]);
+    end;
+
+    OP_RT_DEF_SETTER:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
+      FRuntimeOps.DefineSetter(FRegisters[Base + A],
+        AFrame^.Template.GetConstant(B).StringValue, FRegisters[Base + C]);
     end;
 
   end;

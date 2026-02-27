@@ -108,6 +108,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction;
 
@@ -498,8 +499,7 @@ end;
 procedure TGocciaObjectValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
-  SetterFunction: TGocciaFunctionValue;
-  NativeSetterFunction: TGocciaNativeFunctionValue;
+  Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
   Proto: TGocciaObjectValue;
 begin
@@ -510,32 +510,17 @@ begin
   begin
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
+      Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
+      if Assigned(Accessor.Setter) and (Accessor.Setter is TGocciaFunctionBase) then
       begin
-        if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionValue then
-        begin
-          SetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
-          Args := TGocciaArgumentsCollection.Create;
-          try
-            Args.Add(AValue);
-            SetterFunction.Call(Args, Self);
-          finally
-            Args.Free;
-          end;
-          Exit;
-        end
-        else if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaNativeFunctionValue then
-        begin
-          NativeSetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
-          Args := TGocciaArgumentsCollection.Create;
-          try
-            Args.Add(AValue);
-            NativeSetterFunction.Call(Args, Self);
-          finally
-            Args.Free;
-          end;
-          Exit;
+        Args := TGocciaArgumentsCollection.Create;
+        try
+          Args.Add(AValue);
+          TGocciaFunctionBase(Accessor.Setter).Call(Args, Self);
+        finally
+          Args.Free;
         end;
+        Exit;
       end;
       ThrowTypeError('Cannot set property ' + AName + ' of #<' + ToStringTag + '> which has only a getter');
     end
@@ -559,34 +544,18 @@ begin
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
-        if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
+        Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
+        if Assigned(Accessor.Setter) and (Accessor.Setter is TGocciaFunctionBase) then
         begin
-          if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionValue then
-          begin
-            SetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
-            Args := TGocciaArgumentsCollection.Create;
-            try
-              Args.Add(AValue);
-              SetterFunction.Call(Args, Self);
-            finally
-              Args.Free;
-            end;
-            Exit;
-          end
-          else if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaNativeFunctionValue then
-          begin
-            NativeSetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
-            Args := TGocciaArgumentsCollection.Create;
-            try
-              Args.Add(AValue);
-              NativeSetterFunction.Call(Args, Self);
-            finally
-              Args.Free;
-            end;
-            Exit;
+          Args := TGocciaArgumentsCollection.Create;
+          try
+            Args.Add(AValue);
+            TGocciaFunctionBase(Accessor.Setter).Call(Args, Self);
+          finally
+            Args.Free;
           end;
+          Exit;
         end;
-        // Getter-only accessor in prototype chain — strict mode TypeError
         ThrowTypeError('Cannot set property ' + AName + ' of #<' + ToStringTag + '> which has only a getter');
       end
       else if Descriptor is TGocciaPropertyDescriptorData then
@@ -669,38 +638,23 @@ end;
 function TGocciaObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
-  GetterFunction: TGocciaFunctionValue;
-  NativeGetterFunction: TGocciaNativeFunctionValue;
+  Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
 begin
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
+      Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
+      if Assigned(Accessor.Getter) and (Accessor.Getter is TGocciaFunctionBase) then
       begin
-        if TGocciaPropertyDescriptorAccessor(Descriptor).Getter is TGocciaFunctionValue then
-        begin
-          GetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
-          Args := TGocciaArgumentsCollection.Create;
-          try
-            Result := GetterFunction.Call(Args, AThisContext);
-          finally
-            Args.Free;
-          end;
-          Exit;
-        end
-        else if TGocciaPropertyDescriptorAccessor(Descriptor).Getter is TGocciaNativeFunctionValue then
-        begin
-          NativeGetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
-          Args := TGocciaArgumentsCollection.Create;
-          try
-            Result := NativeGetterFunction.Call(Args, AThisContext);
-          finally
-            Args.Free;
-          end;
-          Exit;
+        Args := TGocciaArgumentsCollection.Create;
+        try
+          Result := TGocciaFunctionBase(Accessor.Getter).Call(Args, AThisContext);
+        finally
+          Args.Free;
         end;
+        Exit;
       end;
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;

@@ -80,8 +80,24 @@ type
       const AValue: TSouffleValue); virtual; abstract;
     function HasGlobal(const AName: string): Boolean; virtual; abstract;
 
+    // Accessor properties
+    procedure DefineGetter(const AObject: TSouffleValue; const AKey: string;
+      const AGetter: TSouffleValue); virtual;
+    procedure DefineSetter(const AObject: TSouffleValue; const AKey: string;
+      const ASetter: TSouffleValue); virtual;
+
   end;
 
 implementation
+
+procedure TSouffleRuntimeOperations.DefineGetter(const AObject: TSouffleValue;
+  const AKey: string; const AGetter: TSouffleValue);
+begin
+end;
+
+procedure TSouffleRuntimeOperations.DefineSetter(const AObject: TSouffleValue;
+  const AKey: string; const ASetter: TSouffleValue);
+begin
+end;
 
 end.

@@ -10,6 +10,7 @@ uses
 type
   TSouffleValueKind = (
     svkNil,
+    svkNull,
     svkBoolean,
     svkInteger,
     svkFloat,
@@ -22,6 +23,7 @@ type
     Kind: TSouffleValueKind;
     case TSouffleValueKind of
       svkNil:       ();
+      svkNull:      ();
       svkBoolean:   (AsBoolean: Boolean);
       svkInteger:   (AsInteger: Int64);
       svkFloat:     (AsFloat: Double);
@@ -32,12 +34,14 @@ type
   PSouffleValueArray = ^TSouffleValueArray;
 
 function SouffleNil: TSouffleValue; inline;
+function SouffleNull: TSouffleValue; inline;
 function SouffleBoolean(const AValue: Boolean): TSouffleValue; inline;
 function SouffleInteger(const AValue: Int64): TSouffleValue; inline;
 function SouffleFloat(const AValue: Double): TSouffleValue; inline;
 function SouffleReference(const AObject: TSouffleHeapObject): TSouffleValue; inline;
 
 function SouffleIsNil(const AValue: TSouffleValue): Boolean; inline;
+function SouffleIsNull(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsBoolean(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsInteger(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsFloat(const AValue: TSouffleValue): Boolean; inline;
@@ -61,6 +65,12 @@ uses
 function SouffleNil: TSouffleValue;
 begin
   Result.Kind := svkNil;
+  Result.AsInteger := 0;
+end;
+
+function SouffleNull: TSouffleValue;
+begin
+  Result.Kind := svkNull;
   Result.AsInteger := 0;
 end;
 
@@ -96,6 +106,11 @@ begin
   Result := AValue.Kind = svkNil;
 end;
 
+function SouffleIsNull(const AValue: TSouffleValue): Boolean;
+begin
+  Result := AValue.Kind = svkNull;
+end;
+
 function SouffleIsBoolean(const AValue: TSouffleValue): Boolean;
 begin
   Result := AValue.Kind = svkBoolean;
@@ -126,7 +141,7 @@ end;
 function SouffleIsTrue(const AValue: TSouffleValue): Boolean;
 begin
   case AValue.Kind of
-    svkNil:
+    svkNil, svkNull:
       Result := False;
     svkBoolean:
       Result := AValue.AsBoolean;
@@ -163,7 +178,7 @@ begin
     Exit(False);
 
   case A.Kind of
-    svkNil:
+    svkNil, svkNull:
       Result := True;
     svkBoolean:
       Result := A.AsBoolean = B.AsBoolean;
@@ -190,6 +205,8 @@ begin
   case AValue.Kind of
     svkNil:
       Result := 'nil';
+    svkNull:
+      Result := 'null';
     svkBoolean:
       if AValue.AsBoolean then
         Result := 'true'

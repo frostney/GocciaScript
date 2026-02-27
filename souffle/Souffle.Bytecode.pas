@@ -47,6 +47,7 @@ type
     // ── Core: Return ──
     OP_RETURN        = 20,  // A     Return R[A] to caller
     OP_RETURN_NIL    = 21,  //       Return Nil to caller
+    OP_LOAD_NULL     = 22,  // A     R[A] := Null
 
     // ── Core: Compound Types ──
     OP_NEW_ARRAY     = 24,  // AB    R[A] := new Array(capacity=B)
@@ -123,7 +124,11 @@ type
     // ── Runtime: Globals ──
     OP_RT_GET_GLOBAL = 170, // ABx   R[A] := Runtime.GetGlobal(Constants[Bx])
     OP_RT_SET_GLOBAL = 171, // ABx   Runtime.SetGlobal(Constants[Bx], R[A])
-    OP_RT_HAS_GLOBAL = 172  // ABx   R[A] := Boolean(Runtime.HasGlobal(Constants[Bx]))
+    OP_RT_HAS_GLOBAL = 172, // ABx   R[A] := Boolean(Runtime.HasGlobal(Constants[Bx]))
+
+    // ── Runtime: Accessor Properties ──
+    OP_RT_DEF_GETTER = 173, // ABC   Runtime.DefineGetter(R[A], Constants[B], R[C])
+    OP_RT_DEF_SETTER = 174  // ABC   Runtime.DefineSetter(R[A], Constants[B], R[C])
   );
 
 { Instruction encoding/decoding helpers }

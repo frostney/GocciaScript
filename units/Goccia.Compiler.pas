@@ -138,6 +138,8 @@ begin
     Goccia.Compiler.Expressions.CompileTemplateLiteral(Ctx, TGocciaTemplateLiteralExpression(AExpr), ADest)
   else if AExpr is TGocciaNewExpression then
     Goccia.Compiler.Expressions.CompileNewExpression(Ctx, TGocciaNewExpression(AExpr), ADest)
+  else if AExpr is TGocciaThisExpression then
+    Goccia.Compiler.Expressions.CompileThis(Ctx, ADest)
   else
     EmitInstruction(Ctx, EncodeABC(OP_LOAD_NIL, ADest, 0, 0));
 end;

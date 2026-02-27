@@ -13,6 +13,7 @@ uses
   Souffle.VM.Closure,
   Souffle.VM.RuntimeOperations,
 
+  Goccia.Values.Error,
   Goccia.Values.Primitives;
 
 const
@@ -62,6 +63,7 @@ type
 
     function WrapGocciaValue(const AValue: TGocciaValue): TSouffleValue;
     function CoerceKeyToString(const AKey: TSouffleValue): string;
+    procedure RethrowAsVM(const E: TGocciaThrowValue);
   public
     constructor Create;
     destructor Destroy; override;
@@ -126,6 +128,11 @@ type
       const AValue: TSouffleValue); override;
     function HasGlobal(const AName: string): Boolean; override;
 
+    procedure DefineGetter(const AObject: TSouffleValue; const AKey: string;
+      const AGetter: TSouffleValue); override;
+    procedure DefineSetter(const AObject: TSouffleValue; const AKey: string;
+      const ASetter: TSouffleValue); override;
+
     function UnwrapToGocciaValue(const AValue: TSouffleValue): TGocciaValue;
     function ToSouffleValue(const AValue: TGocciaValue): TSouffleValue;
 
@@ -159,8 +166,10 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
-  Goccia.Values.Error,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
 
 type
@@ -204,12 +213,23 @@ function TGocciaSouffleClosureBridge.Call(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Args: array of TSouffleValue;
-  I: Integer;
+  I, Offset: Integer;
   SouffleResult: TSouffleValue;
 begin
-  SetLength(Args, AArguments.Length);
+  if FClosure.Template.HasReceiver then
+  begin
+    Offset := 1;
+    SetLength(Args, AArguments.Length + 1);
+    Args[0] := FRuntime.ToSouffleValue(AThisValue);
+  end
+  else
+  begin
+    Offset := 0;
+    SetLength(Args, AArguments.Length);
+  end;
+
   for I := 0 to AArguments.Length - 1 do
-    Args[I] := FRuntime.ToSouffleValue(AArguments.GetElement(I));
+    Args[Offset + I] := FRuntime.ToSouffleValue(AArguments.GetElement(I));
 
   try
     SouffleResult := FRuntime.VM.ExecuteFunction(FClosure, Args);
@@ -342,8 +362,6 @@ begin
   FGlobals := TDictionary<string, TSouffleValue>.Create;
   FExports := TDictionary<string, TSouffleValue>.Create;
   FVM := nil;
-  FGlobals.AddOrSetValue('null',
-    WrapGocciaValue(TGocciaNullLiteralValue.Create));
 end;
 
 destructor TGocciaRuntimeOperations.Destroy;
@@ -357,6 +375,11 @@ function TGocciaRuntimeOperations.WrapGocciaValue(
   const AValue: TGocciaValue): TSouffleValue;
 begin
   Result := SouffleReference(TGocciaWrappedValue.Create(AValue));
+end;
+
+procedure TGocciaRuntimeOperations.RethrowAsVM(const E: TGocciaThrowValue);
+begin
+  raise ESouffleThrow.Create(WrapGocciaValue(E.Value));
 end;
 
 function ConvertSouffleArrayToGocciaArray(
@@ -376,6 +399,8 @@ begin
   case AValue.Kind of
     svkNil:
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    svkNull:
+      Result := TGocciaNullLiteralValue.Create;
     svkBoolean:
       if AValue.AsBoolean then
         Result := TGocciaBooleanLiteralValue.TrueValue
@@ -417,7 +442,7 @@ begin
   if AValue is TGocciaUndefinedLiteralValue then
     Result := SouffleNil
   else if AValue is TGocciaNullLiteralValue then
-    Result := SouffleNil
+    Result := SouffleNull
   else if AValue is TGocciaBooleanLiteralValue then
     Result := SouffleBoolean(TGocciaBooleanLiteralValue(AValue).Value)
   else if AValue is TGocciaNumberLiteralValue then
@@ -686,36 +711,41 @@ var
   Tbl: TSouffleTable;
   Arr: TSouffleArray;
 begin
-  if SouffleIsReference(AObject) and Assigned(AObject.AsReference) then
-  begin
-    if AObject.AsReference is TSouffleTable then
+  try
+    if SouffleIsReference(AObject) and Assigned(AObject.AsReference) then
     begin
-      Tbl := TSouffleTable(AObject.AsReference);
-      if Tbl.Get(AKey, Result) then
-        Exit;
-    end
-    else if AObject.AsReference is TSouffleArray then
-    begin
-      Arr := TSouffleArray(AObject.AsReference);
-      if AKey = 'length' then
-        Exit(SouffleInteger(Arr.Count));
+      if AObject.AsReference is TSouffleTable then
+      begin
+        Tbl := TSouffleTable(AObject.AsReference);
+        if Tbl.Get(AKey, Result) then
+          Exit;
+      end
+      else if AObject.AsReference is TSouffleArray then
+      begin
+        Arr := TSouffleArray(AObject.AsReference);
+        if AKey = 'length' then
+          Exit(SouffleInteger(Arr.Count));
+      end;
     end;
+
+    GocciaObj := UnwrapToGocciaValue(AObject);
+    Prop := GocciaObj.GetProperty(AKey);
+
+    if not Assigned(Prop) then
+    begin
+      Boxed := GocciaObj.Box;
+      if Assigned(Boxed) then
+        Prop := Boxed.GetProperty(AKey);
+    end;
+
+    if Assigned(Prop) then
+      Result := ToSouffleValue(Prop)
+    else
+      Result := SouffleNil;
+  except
+    on E: TGocciaThrowValue do
+      RethrowAsVM(E);
   end;
-
-  GocciaObj := UnwrapToGocciaValue(AObject);
-  Prop := GocciaObj.GetProperty(AKey);
-
-  if not Assigned(Prop) then
-  begin
-    Boxed := GocciaObj.Box;
-    if Assigned(Boxed) then
-      Prop := Boxed.GetProperty(AKey);
-  end;
-
-  if Assigned(Prop) then
-    Result := ToSouffleValue(Prop)
-  else
-    Result := SouffleNil;
 end;
 
 procedure TGocciaRuntimeOperations.SetProperty(const AObject: TSouffleValue;
@@ -723,19 +753,24 @@ procedure TGocciaRuntimeOperations.SetProperty(const AObject: TSouffleValue;
 var
   GocciaObj, Val: TGocciaValue;
 begin
-  if SouffleIsReference(AObject) and Assigned(AObject.AsReference) then
-  begin
-    if AObject.AsReference is TSouffleTable then
+  try
+    if SouffleIsReference(AObject) and Assigned(AObject.AsReference) then
     begin
-      TSouffleTable(AObject.AsReference).Put(AKey, AValue);
-      Exit;
+      if AObject.AsReference is TSouffleTable then
+      begin
+        TSouffleTable(AObject.AsReference).Put(AKey, AValue);
+        Exit;
+      end;
+      if AObject.AsReference is TGocciaWrappedValue then
+      begin
+        GocciaObj := TGocciaWrappedValue(AObject.AsReference).Value;
+        Val := UnwrapToGocciaValue(AValue);
+        GocciaObj.SetProperty(AKey, Val);
+      end;
     end;
-    if AObject.AsReference is TGocciaWrappedValue then
-    begin
-      GocciaObj := TGocciaWrappedValue(AObject.AsReference).Value;
-      Val := UnwrapToGocciaValue(AValue);
-      GocciaObj.SetProperty(AKey, Val);
-    end;
+  except
+    on E: TGocciaThrowValue do
+      RethrowAsVM(E);
   end;
 end;
 
@@ -744,6 +779,8 @@ function TGocciaRuntimeOperations.CoerceKeyToString(
 begin
   if AKey.Kind = svkNil then
     Exit('undefined');
+  if AKey.Kind = svkNull then
+    Exit('null');
   if SouffleIsReference(AKey) and Assigned(AKey.AsReference) then
   begin
     if AKey.AsReference is TGocciaWrappedValue then
@@ -817,21 +854,26 @@ begin
 
   Args := TGocciaArgumentsCollection.Create;
   try
-    for I := 0 to AArgCount - 1 do
-      Args.Add(UnwrapToGocciaValue(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+    try
+      for I := 0 to AArgCount - 1 do
+        Args.Add(UnwrapToGocciaValue(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
 
-    GocciaReceiver := UnwrapToGocciaValue(AReceiver);
-    if GocciaCallee is TGocciaFunctionBase then
-      GocciaResult := TGocciaFunctionBase(GocciaCallee).Call(Args, GocciaReceiver)
-    else if GocciaCallee is TGocciaClassValue then
-      GocciaResult := TGocciaClassValue(GocciaCallee).Call(Args, GocciaReceiver)
-    else
-      GocciaResult := nil;
+      GocciaReceiver := UnwrapToGocciaValue(AReceiver);
+      if GocciaCallee is TGocciaFunctionBase then
+        GocciaResult := TGocciaFunctionBase(GocciaCallee).Call(Args, GocciaReceiver)
+      else if GocciaCallee is TGocciaClassValue then
+        GocciaResult := TGocciaClassValue(GocciaCallee).Call(Args, GocciaReceiver)
+      else
+        GocciaResult := nil;
 
-    if Assigned(GocciaResult) then
-      Result := ToSouffleValue(GocciaResult)
-    else
-      Result := SouffleNil;
+      if Assigned(GocciaResult) then
+        Result := ToSouffleValue(GocciaResult)
+      else
+        Result := SouffleNil;
+    except
+      on E: TGocciaThrowValue do
+        RethrowAsVM(E);
+    end;
   finally
     Args.Free;
   end;
@@ -845,36 +887,55 @@ var
   Context: TGocciaEvaluationContext;
   I: Integer;
 begin
-  GocciaConstructor := UnwrapToGocciaValue(AConstructor);
-
-  if not GocciaConstructor.IsCallable then
-  begin
-    Result := SouffleNil;
-    Exit;
-  end;
-
-  Args := TGocciaArgumentsCollection.Create;
   try
-    for I := 0 to AArgCount - 1 do
-      Args.Add(UnwrapToGocciaValue(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+    GocciaConstructor := UnwrapToGocciaValue(AConstructor);
 
-    if (GocciaConstructor is TGocciaClassValue) and Assigned(FEngine) then
+    if (GocciaConstructor is TGocciaClassValue) then
     begin
-      Context := TGocciaEngine(FEngine).Interpreter.CreateEvaluationContext;
-      GocciaResult := InstantiateClass(
-        TGocciaClassValue(GocciaConstructor), Args, Context);
-    end
-    else if GocciaConstructor is TGocciaFunctionBase then
-      GocciaResult := TGocciaFunctionBase(GocciaConstructor).Call(Args, nil)
-    else
-      GocciaResult := nil;
+      Args := TGocciaArgumentsCollection.Create;
+      try
+        for I := 0 to AArgCount - 1 do
+          Args.Add(UnwrapToGocciaValue(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
 
-    if Assigned(GocciaResult) then
-      Result := ToSouffleValue(GocciaResult)
-    else
-      Result := SouffleNil;
-  finally
-    Args.Free;
+        Context := TGocciaEngine(FEngine).Interpreter.CreateEvaluationContext;
+        GocciaResult := InstantiateClass(
+          TGocciaClassValue(GocciaConstructor), Args, Context);
+
+        if Assigned(GocciaResult) then
+          Result := ToSouffleValue(GocciaResult)
+        else
+          Result := SouffleNil;
+      finally
+        Args.Free;
+      end;
+      Exit;
+    end;
+
+    if GocciaConstructor is TGocciaNativeFunctionValue then
+    begin
+      Args := TGocciaArgumentsCollection.Create;
+      try
+        for I := 0 to AArgCount - 1 do
+          Args.Add(UnwrapToGocciaValue(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+
+        GocciaResult := TGocciaNativeFunctionValue(GocciaConstructor).Call(
+          Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+
+        if Assigned(GocciaResult) then
+          Result := ToSouffleValue(GocciaResult)
+        else
+          Result := SouffleNil;
+      finally
+        Args.Free;
+      end;
+      Exit;
+    end;
+
+    ThrowTypeError(GocciaConstructor.TypeName + ' is not a constructor');
+    Result := SouffleNil;
+  except
+    on E: TGocciaThrowValue do
+      RethrowAsVM(E);
   end;
 end;
 
@@ -951,6 +1012,46 @@ end;
 function TGocciaRuntimeOperations.HasGlobal(const AName: string): Boolean;
 begin
   Result := FGlobals.ContainsKey(AName);
+end;
+
+procedure TGocciaRuntimeOperations.DefineGetter(const AObject: TSouffleValue;
+  const AKey: string; const AGetter: TSouffleValue);
+var
+  Obj: TGocciaObjectValue;
+  GocciaGetter: TGocciaValue;
+  Existing: TGocciaPropertyDescriptor;
+  ExistingSetter: TGocciaValue;
+begin
+  Obj := UnwrapToGocciaValue(AObject) as TGocciaObjectValue;
+  GocciaGetter := UnwrapToGocciaValue(AGetter);
+
+  ExistingSetter := nil;
+  Existing := Obj.GetOwnPropertyDescriptor(AKey);
+  if (Existing <> nil) and (Existing is TGocciaPropertyDescriptorAccessor) then
+    ExistingSetter := TGocciaPropertyDescriptorAccessor(Existing).Setter;
+
+  Obj.DefineProperty(AKey, TGocciaPropertyDescriptorAccessor.Create(
+    GocciaGetter, ExistingSetter, [pfEnumerable, pfConfigurable]));
+end;
+
+procedure TGocciaRuntimeOperations.DefineSetter(const AObject: TSouffleValue;
+  const AKey: string; const ASetter: TSouffleValue);
+var
+  Obj: TGocciaObjectValue;
+  GocciaSetter: TGocciaValue;
+  Existing: TGocciaPropertyDescriptor;
+  ExistingGetter: TGocciaValue;
+begin
+  Obj := UnwrapToGocciaValue(AObject) as TGocciaObjectValue;
+  GocciaSetter := UnwrapToGocciaValue(ASetter);
+
+  ExistingGetter := nil;
+  Existing := Obj.GetOwnPropertyDescriptor(AKey);
+  if (Existing <> nil) and (Existing is TGocciaPropertyDescriptorAccessor) then
+    ExistingGetter := TGocciaPropertyDescriptorAccessor(Existing).Getter;
+
+  Obj.DefineProperty(AKey, TGocciaPropertyDescriptorAccessor.Create(
+    ExistingGetter, GocciaSetter, [pfEnumerable, pfConfigurable]));
 end;
 
 { Proxy resolution — single dispatch point for all Souffle compound types }

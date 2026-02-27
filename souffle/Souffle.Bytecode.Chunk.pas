@@ -53,6 +53,7 @@ type
     FMaxRegisters: UInt8;
     FParameterCount: UInt8;
     FUpvalueCount: UInt8;
+    FHasReceiver: Boolean;
     FDebugInfo: TSouffleDebugInfo;
     function GetFunctionCount: Integer;
   public
@@ -85,6 +86,7 @@ type
     property MaxRegisters: UInt8 read FMaxRegisters write FMaxRegisters;
     property ParameterCount: UInt8 read FParameterCount write FParameterCount;
     property UpvalueCount: UInt8 read FUpvalueCount;
+    property HasReceiver: Boolean read FHasReceiver write FHasReceiver;
     property DebugInfo: TSouffleDebugInfo read FDebugInfo write FDebugInfo;
   end;
 
