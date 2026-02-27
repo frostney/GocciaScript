@@ -15,6 +15,7 @@ uses
   Souffle.VM.CallFrame,
   Souffle.VM.Closure,
   Souffle.VM.Exception,
+  Souffle.VM.NativeFunction,
   Souffle.VM.RuntimeOperations,
   Souffle.VM.Upvalue;
 
@@ -32,6 +33,9 @@ type
     FGC: TSouffleGarbageCollector;
     FBaseFrameCount: Integer;
 
+    FArrayMetatable: TSouffleHeapObject;
+    FTableMetatable: TSouffleHeapObject;
+
     function CaptureUpvalue(const ARegisterIndex: Integer): TSouffleUpvalue;
     procedure CloseUpvalues(const ALastRegister: Integer);
     procedure MarkVMRoots;
@@ -47,6 +51,9 @@ type
 
     function MaterializeConstant(
       const AConstant: TSouffleBytecodeConstant): TSouffleValue;
+
+    function MetatableGet(const AObject: TSouffleHeapObject;
+      const AKey: string; out AValue: TSouffleValue): Boolean;
   public
     constructor Create(const ARuntimeOps: TSouffleRuntimeOperations);
     destructor Destroy; override;
@@ -54,6 +61,9 @@ type
     function Execute(const AModule: TSouffleBytecodeModule): TSouffleValue;
     function ExecuteFunction(const AClosure: TSouffleClosure;
       const AArgs: array of TSouffleValue): TSouffleValue;
+
+    property ArrayMetatable: TSouffleHeapObject read FArrayMetatable write FArrayMetatable;
+    property TableMetatable: TSouffleHeapObject read FTableMetatable write FTableMetatable;
   end;
 
 implementation
@@ -72,6 +82,8 @@ begin
   FHandlerStack := TSouffleHandlerStack.Create;
   FOpenUpvalues := nil;
   FRuntimeOps := ARuntimeOps;
+  FArrayMetatable := nil;
+  FTableMetatable := nil;
 
   FGC := TSouffleGarbageCollector.Instance;
   if Assigned(FGC) then
@@ -442,6 +454,7 @@ begin
       A := DecodeA(AInstruction);
       B := DecodeB(AInstruction);
       Arr := TSouffleArray.Create(B);
+      Arr.Metatable := FArrayMetatable;
       if Assigned(FGC) then
         FGC.AllocateObject(Arr);
       FRegisters[Base + A] := SouffleReference(Arr);
@@ -492,6 +505,7 @@ begin
       A := DecodeA(AInstruction);
       B := DecodeB(AInstruction);
       Tbl := TSouffleTable.Create(B);
+      Tbl.Metatable := FTableMetatable;
       if Assigned(FGC) then
         FGC.AllocateObject(Tbl);
       FRegisters[Base + A] := SouffleReference(Tbl);
@@ -503,18 +517,26 @@ begin
       B := DecodeB(AInstruction);
       C := DecodeC(AInstruction);
       if SouffleIsReference(FRegisters[Base + B]) and
-         (FRegisters[Base + B].AsReference is TSouffleTable) then
+         Assigned(FRegisters[Base + B].AsReference) then
       begin
-        Tbl := TSouffleTable(FRegisters[Base + B].AsReference);
-        if not Tbl.Get(AFrame^.Template.GetConstant(C).StringValue, TblVal) then
-          FRegisters[Base + A] := FRuntimeOps.GetProperty(
-            FRegisters[Base + B], AFrame^.Template.GetConstant(C).StringValue)
-        else
+        if FRegisters[Base + B].AsReference is TSouffleTable then
+        begin
+          Tbl := TSouffleTable(FRegisters[Base + B].AsReference);
+          if Tbl.Get(AFrame^.Template.GetConstant(C).StringValue, TblVal) then
+          begin
+            FRegisters[Base + A] := TblVal;
+            Exit;
+          end;
+        end;
+        if MetatableGet(FRegisters[Base + B].AsReference,
+             AFrame^.Template.GetConstant(C).StringValue, TblVal) then
+        begin
           FRegisters[Base + A] := TblVal;
-      end
-      else
-        FRegisters[Base + A] := FRuntimeOps.GetProperty(
-          FRegisters[Base + B], AFrame^.Template.GetConstant(C).StringValue);
+          Exit;
+        end;
+      end;
+      FRegisters[Base + A] := FRuntimeOps.GetProperty(
+        FRegisters[Base + B], AFrame^.Template.GetConstant(C).StringValue);
     end;
 
     OP_TABLE_SET:
@@ -926,17 +948,26 @@ begin
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction);
       if SouffleIsReference(FRegisters[Base + A]) and
-         (FRegisters[Base + A].AsReference is TSouffleClosure) then
-        CallClosure(TSouffleClosure(FRegisters[Base + A].AsReference),
-          Base + A + 1, B, Base + A, SouffleNil)
-      else
+         Assigned(FRegisters[Base + A].AsReference) then
       begin
+        if FRegisters[Base + A].AsReference is TSouffleClosure then
+        begin
+          CallClosure(TSouffleClosure(FRegisters[Base + A].AsReference),
+            Base + A + 1, B, Base + A, SouffleNil);
+        end
+        else if FRegisters[Base + A].AsReference is TSouffleNativeFunction then
+        begin
+          FRegisters[Base + A] := TSouffleNativeFunction(
+            FRegisters[Base + A].AsReference).Invoke(
+              SouffleNil, @FRegisters[Base + A + 1], B);
+        end
+        else
+          FRegisters[Base + A] := FRuntimeOps.Invoke(
+            FRegisters[Base + A], @FRegisters[Base + A + 1], B, SouffleNil);
+      end
+      else
         FRegisters[Base + A] := FRuntimeOps.Invoke(
-          FRegisters[Base + A],
-          @FRegisters[Base + A + 1],
-          B,
-          SouffleNil);
-      end;
+          FRegisters[Base + A], @FRegisters[Base + A + 1], B, SouffleNil);
       if Assigned(FGC) then
         FGC.CollectIfNeeded;
     end;
@@ -944,17 +975,28 @@ begin
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction);
       if SouffleIsReference(FRegisters[Base + A]) and
-         (FRegisters[Base + A].AsReference is TSouffleClosure) then
-        CallClosure(TSouffleClosure(FRegisters[Base + A].AsReference),
-          Base + A + 1, B, Base + A, FRegisters[Base + A - 1])
-      else
+         Assigned(FRegisters[Base + A].AsReference) then
       begin
+        if FRegisters[Base + A].AsReference is TSouffleClosure then
+        begin
+          CallClosure(TSouffleClosure(FRegisters[Base + A].AsReference),
+            Base + A + 1, B, Base + A, FRegisters[Base + A - 1]);
+        end
+        else if FRegisters[Base + A].AsReference is TSouffleNativeFunction then
+        begin
+          FRegisters[Base + A] := TSouffleNativeFunction(
+            FRegisters[Base + A].AsReference).Invoke(
+              FRegisters[Base + A - 1], @FRegisters[Base + A + 1], B);
+        end
+        else
+          FRegisters[Base + A] := FRuntimeOps.Invoke(
+            FRegisters[Base + A], @FRegisters[Base + A + 1], B,
+            FRegisters[Base + A - 1]);
+      end
+      else
         FRegisters[Base + A] := FRuntimeOps.Invoke(
-          FRegisters[Base + A],
-          @FRegisters[Base + A + 1],
-          B,
+          FRegisters[Base + A], @FRegisters[Base + A + 1], B,
           FRegisters[Base + A - 1]);
-      end;
       if Assigned(FGC) then
         FGC.CollectIfNeeded;
     end;
@@ -1088,6 +1130,22 @@ begin
 
   if Assigned(FOpenUpvalues) then
     FOpenUpvalues.MarkReferences;
+
+  if Assigned(FArrayMetatable) and not FArrayMetatable.GCMarked then
+    FArrayMetatable.MarkReferences;
+  if Assigned(FTableMetatable) and not FTableMetatable.GCMarked then
+    FTableMetatable.MarkReferences;
+end;
+
+function TSouffleVM.MetatableGet(const AObject: TSouffleHeapObject;
+  const AKey: string; out AValue: TSouffleValue): Boolean;
+var
+  Meta: TSouffleHeapObject;
+begin
+  Meta := AObject.Metatable;
+  if Assigned(Meta) and (Meta is TSouffleTable) then
+    Exit(TSouffleTable(Meta).Get(AKey, AValue));
+  Result := False;
 end;
 
 function TSouffleVM.MaterializeConstant(

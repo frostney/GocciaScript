@@ -9,6 +9,7 @@ type
   private
     FGCMarked: Boolean;
     FHeapKind: UInt8;
+    FMetatable: TSouffleHeapObject;
   public
     constructor Create(const AHeapKind: UInt8);
 
@@ -17,6 +18,7 @@ type
 
     property GCMarked: Boolean read FGCMarked write FGCMarked;
     property HeapKind: UInt8 read FHeapKind;
+    property Metatable: TSouffleHeapObject read FMetatable write FMetatable;
   end;
 
   TSouffleString = class(TSouffleHeapObject)
@@ -36,6 +38,7 @@ const
   SOUFFLE_HEAP_UPVALUE  = 2;
   SOUFFLE_HEAP_ARRAY    = 3;
   SOUFFLE_HEAP_TABLE    = 4;
+  SOUFFLE_HEAP_NATIVE_FUNCTION = 5;
   SOUFFLE_HEAP_RUNTIME  = 128;
 
 implementation
@@ -50,11 +53,14 @@ begin
   inherited Create;
   FGCMarked := False;
   FHeapKind := AHeapKind;
+  FMetatable := nil;
 end;
 
 procedure TSouffleHeapObject.MarkReferences;
 begin
   FGCMarked := True;
+  if Assigned(FMetatable) and not FMetatable.GCMarked then
+    FMetatable.MarkReferences;
 end;
 
 function TSouffleHeapObject.DebugString: string;

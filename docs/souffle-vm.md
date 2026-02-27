@@ -218,9 +218,12 @@ All heap-allocated values inherit from `TSouffleHeapObject`:
 | 2 | `SOUFFLE_HEAP_UPVALUE` | `TSouffleUpvalue` | Open or closed upvalue |
 | 3 | `SOUFFLE_HEAP_ARRAY` | `TSouffleArray` | Dense dynamic array of `TSouffleValue` |
 | 4 | `SOUFFLE_HEAP_TABLE` | `TSouffleTable` | String-keyed ordered hash map of `TSouffleValue` |
+| 5 | `SOUFFLE_HEAP_NATIVE_FUNCTION` | `TSouffleNativeFunction` | Pascal callback wrapped as a callable heap object |
 | 128 | `SOUFFLE_HEAP_RUNTIME` | `TGocciaWrappedValue` | Language-specific wrapped value |
 
 Kind 128+ is reserved for runtime-specific heap types. GocciaScript uses `TGocciaWrappedValue` to wrap `TGocciaValue` instances as Souffle heap objects, enabling GocciaScript's rich type system (classes, promises, etc.) to be referenced from VM registers.
+
+All heap objects have an optional **metatable** field (`TSouffleHeapObject.Metatable`), which enables prototype-chain-like method dispatch at the VM level without crossing the language boundary. See [Metatables](#metatables) below.
 
 ## Native Compound Types
 
@@ -311,6 +314,65 @@ Both compound types participate in mark-and-sweep:
 - `TSouffleArray.MarkReferences` — marks all elements that are `svkReference`
 - `TSouffleTable.MarkReferences` — marks all occupied values that are `svkReference`
 - Both are registered via `AllocateObject` and tracked by the Souffle GC
+
+## Metatables
+
+Inspired by Lua's metatable concept, every `TSouffleHeapObject` can have an optional **metatable** — a `TSouffleTable` that the VM consults for key lookups that miss on the primary data. This provides prototype-chain-like method dispatch at the VM level, without crossing into language-specific runtime code.
+
+### How It Works
+
+When `OP_TABLE_GET` resolves a string-keyed property:
+
+1. **Direct lookup** — If the object is a `TSouffleTable`, check the table's own entries
+2. **Metatable lookup** — If the object has a non-nil metatable, look up the key in the metatable
+3. **Runtime fallback** — Delegate to `TSouffleRuntimeOperations.GetProperty`
+
+For `arr.push(6)` on a `TSouffleArray`:
+- Step 1 skips (arrays aren't tables)
+- Step 2 finds `push` in the array's metatable → returns a `TSouffleNativeFunction`
+- `OP_RT_CALL_METHOD` invokes the native function directly with the array as receiver
+- **Zero wrapping** — the entire call stays within the Souffle VM
+
+### `TSouffleNativeFunction`
+
+A heap object (`SOUFFLE_HEAP_NATIVE_FUNCTION`) that wraps a Pascal function pointer:
+
+```pascal
+TSouffleNativeCallback = function(
+  const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue;
+  const AArgCount: Integer): TSouffleValue;
+```
+
+The callback receives `TSouffleValue` arguments and returns a `TSouffleValue` result. It operates directly on Souffle's value system — no language boundary crossing.
+
+### VM Integration
+
+The VM holds configurable default metatables per compound type:
+
+- `TSouffleVM.ArrayMetatable` — assigned to every `TSouffleArray` created by `OP_NEW_ARRAY`
+- `TSouffleVM.TableMetatable` — assigned to every `TSouffleTable` created by `OP_NEW_TABLE`
+
+The language frontend populates these metatables during initialization. Individual instances can override their metatable after creation.
+
+`OP_RT_CALL` and `OP_RT_CALL_METHOD` dispatch `TSouffleNativeFunction` directly (inline invocation), before falling to the runtime operations interface. This gives metatable methods the same call overhead as closures.
+
+### GocciaScript Registration
+
+The GocciaScript bridge layer (`TGocciaRuntimeOperations.RegisterMetatables`) creates a `TSouffleTable` for each type and populates it with native function implementations:
+
+| Type | Method | Description |
+|------|--------|-------------|
+| Array | `push(value)` | Appends value, returns new length |
+| Array | `pop()` | Removes and returns last element |
+| Array | `join(sep)` | Joins elements with separator string |
+
+### Language Agnosticism
+
+The metatable mechanism is language-agnostic:
+- The VM only performs string-keyed table lookups — it knows nothing about prototypes, `this`, or method binding
+- The receiver is passed as a `TSouffleValue` to the native callback — the callback decides how to interpret it
+- Different language frontends can register different metatables with different methods for the same compound types
 
 ## Closures and Upvalues
 
@@ -504,9 +566,11 @@ When `--emit` is used without a path, the output filename is derived from the in
 
 `TGocciaRuntimeOperations` (`Goccia.Runtime.Operations.pas`) implements `TSouffleRuntimeOperations` with GocciaScript semantics. It bridges between `TSouffleValue` and `TGocciaValue` at the runtime boundary:
 
-- **`ToSouffleValue`** / **`UnwrapToGocciaValue`** — Convert between value systems. `UnwrapToGocciaValue` materializes `TSouffleArray` → `TGocciaArrayValue` and `TSouffleTable` → `TGocciaObjectValue` for GocciaScript built-in methods that expect native GocciaScript types
+- **`ToSouffleValue`** / **`UnwrapToGocciaValue`** — Convert between value systems. `UnwrapToGocciaValue` creates a lazy `TGocciaSouffleProxy` for `TSouffleArray`/`TSouffleTable` instead of deep-copying. `ToSouffleValue` detects proxies and extracts the original Souffle object (zero-copy round-trip)
+- **`TGocciaSouffleProxy`** — A single `TGocciaValue` subclass that wraps any Souffle compound type. Property access is delegated to `TGocciaRuntimeOperations.ResolveProxyGet`/`ResolveProxySet`, which dispatch based on the target's type. This is a higher-order function pattern: one proxy class handles all compound types, and the resolution logic lives in the runtime. No per-type subclassing needed
 - **`TGocciaWrappedValue`** — Wraps a `TGocciaValue` as a `TSouffleHeapObject` for VM register storage (used for types without native VM representation: classes, promises, symbols, etc.)
 - **`TGocciaSouffleClosureBridge`** — Wraps a `TSouffleClosure` as a `TGocciaFunctionBase`, enabling Souffle closures to be called by GocciaScript built-in methods (e.g., `Array.prototype.map` callbacks)
+- **Metatable registration** — `RegisterMetatables` creates VM-native metatables for arrays (with `push`, `pop`, `join` as `TSouffleNativeFunction` callbacks) and assigns them to the VM's default metatable slots. Method calls like `arr.push(6)` are dispatched entirely within the VM without crossing the language boundary
 - **Native compound fast paths** — `GetProperty`, `SetProperty`, `GetIndex`, `SetIndex`, `HasProperty`, `DeleteProperty`, and `TypeOf` all check for `TSouffleArray`/`TSouffleTable` before falling through to wrapped value unwrapping, avoiding unnecessary materialization
 - **Auto-boxing** — `GetProperty` performs primitive boxing when a direct property lookup returns `nil`, enabling prototype methods on primitives (e.g., `(42).toFixed(2)`)
 
@@ -527,6 +591,7 @@ All Souffle VM source files live in the `souffle/` directory with `Souffle.` pre
 | `Souffle.VM.pas` | Core VM: dispatch loop, register file, execution |
 | `Souffle.VM.CallFrame.pas` | `TSouffleVMCallFrame`, `TSouffleCallStack` |
 | `Souffle.VM.Closure.pas` | `TSouffleClosure` (prototype + upvalue array) |
+| `Souffle.VM.NativeFunction.pas` | `TSouffleNativeFunction` (Pascal callback as callable heap object) |
 | `Souffle.VM.Upvalue.pas` | `TSouffleUpvalue` (open/closed variable capture) |
 | `Souffle.VM.Exception.pas` | `TSouffleHandlerStack`, `ESouffleThrow` |
 | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` abstract interface |
