@@ -5,6 +5,8 @@ unit Goccia.Compiler;
 interface
 
 uses
+  Generics.Collections,
+
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Module,
 
@@ -27,6 +29,7 @@ type
     FCurrentTemplate: TSouffleFunctionTemplate;
     FCurrentScope: TGocciaCompilerScope;
     FSourcePath: string;
+    FFormalParameterCounts: TFormalParameterCountMap;
     FPendingClasses: array of TGocciaCompilerClassEntry;
 
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
@@ -43,6 +46,8 @@ type
     function Compile(const AProgram: TGocciaProgram): TSouffleBytecodeModule;
     function PendingClassCount: Integer;
     function GetPendingClass(const AIndex: Integer): TGocciaCompilerClassEntry;
+    property FormalParameterCounts: TFormalParameterCountMap
+      read FFormalParameterCounts;
   end;
 
 const
@@ -65,6 +70,7 @@ constructor TGocciaCompiler.Create(const ASourcePath: string);
 begin
   inherited Create;
   FSourcePath := ASourcePath;
+  FFormalParameterCounts := TFormalParameterCountMap.Create;
   FModule := nil;
   FCurrentTemplate := nil;
   FCurrentScope := nil;
@@ -72,6 +78,7 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
+  FFormalParameterCounts.Free;
   inherited;
 end;
 
@@ -80,6 +87,7 @@ begin
   Result.Template := FCurrentTemplate;
   Result.Scope := FCurrentScope;
   Result.SourcePath := FSourcePath;
+  Result.FormalParameterCounts := FFormalParameterCounts;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;
   Result.CompileFunctionBody := DoCompileFunctionBody;
@@ -138,6 +146,8 @@ begin
     Goccia.Compiler.Expressions.CompileTemplateLiteral(Ctx, TGocciaTemplateLiteralExpression(AExpr), ADest)
   else if AExpr is TGocciaNewExpression then
     Goccia.Compiler.Expressions.CompileNewExpression(Ctx, TGocciaNewExpression(AExpr), ADest)
+  else if AExpr is TGocciaIncrementExpression then
+    Goccia.Compiler.Expressions.CompileIncrement(Ctx, TGocciaIncrementExpression(AExpr), ADest)
   else if AExpr is TGocciaThisExpression then
     Goccia.Compiler.Expressions.CompileThis(Ctx, ADest)
   else

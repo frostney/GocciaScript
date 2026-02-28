@@ -117,16 +117,24 @@ function TSouffleVM.ExecuteFunction(const AClosure: TSouffleClosure;
   const AArgs: array of TSouffleValue): TSouffleValue;
 var
   Frame: PSouffleVMCallFrame;
-  I, Base, SavedBaseFrameCount, ArgsToCopy: Integer;
+  I, Base, SavedBaseFrameCount, ArgsToCopy, ArgOffset, RequiredSpace: Integer;
 begin
   Base := 0;
   if not FCallStack.IsEmpty then
     Base := FCallStack.Peek^.BaseRegister + FCallStack.Peek^.Template.MaxRegisters;
 
-  if Base + AClosure.Template.MaxRegisters > Length(FRegisters) then
+  RequiredSpace := AClosure.Template.MaxRegisters;
+  if Length(AArgs) > RequiredSpace then
+    RequiredSpace := Length(AArgs);
+  if Base + RequiredSpace > Length(FRegisters) then
     raise Exception.Create('Stack overflow: register window exceeds capacity');
 
   Frame := FCallStack.Push(AClosure.Template, AClosure, Base, Base, FHandlerStack.Count);
+
+  if AClosure.Template.HasReceiver then
+    ArgOffset := 1
+  else
+    ArgOffset := 0;
 
   ArgsToCopy := Length(AArgs);
   if ArgsToCopy > AClosure.Template.MaxRegisters then
@@ -136,6 +144,12 @@ begin
     FRegisters[Base + I] := AArgs[I];
   for I := ArgsToCopy to AClosure.Template.MaxRegisters - 1 do
     FRegisters[Base + I] := SouffleNil;
+
+  for I := AClosure.Template.MaxRegisters to Length(AArgs) - 1 do
+    FRegisters[Base + I] := AArgs[I];
+
+  Frame^.ArgCount := Length(AArgs) - ArgOffset;
+  Frame^.ArgSourceBase := Base + ArgOffset;
 
   SavedBaseFrameCount := FBaseFrameCount;
   FBaseFrameCount := FCallStack.Count;
@@ -204,12 +218,12 @@ begin
   else
     ArgOffset := 0;
 
+  if AClosure.Template.HasReceiver then
+    FRegisters[NewBase] := AReceiver;
+
   ArgsToCopy := AArgCount;
   if ArgsToCopy + ArgOffset > AClosure.Template.MaxRegisters then
     ArgsToCopy := AClosure.Template.MaxRegisters - ArgOffset;
-
-  if AClosure.Template.HasReceiver then
-    FRegisters[NewBase] := AReceiver;
 
   for I := 0 to ArgsToCopy - 1 do
     FRegisters[NewBase + ArgOffset + I] := FRegisters[AArgBase + I];
@@ -218,6 +232,8 @@ begin
 
   Frame := FCallStack.Push(AClosure.Template, AClosure, NewBase,
     AReturnAbsolute, FHandlerStack.Count);
+  Frame^.ArgCount := AArgCount;
+  Frame^.ArgSourceBase := AArgBase;
 end;
 
 procedure TSouffleVM.ExecuteCoreOp(const AFrame: PSouffleVMCallFrame;
@@ -234,7 +250,8 @@ var
   Desc: TSouffleUpvalueDescriptor;
   I: Integer;
   Handler: TSouffleHandlerEntry;
-  Arr: TSouffleArray;
+  Arr, RestArr: TSouffleArray;
+  RestCount: Integer;
   Tbl: TSouffleTable;
   TblVal: TSouffleValue;
 begin
@@ -604,6 +621,28 @@ begin
       end
       else
         FRegisters[Base + A] := SouffleInteger(0);
+    end;
+
+    OP_ARG_COUNT:
+    begin
+      A := DecodeA(AInstruction);
+      FRegisters[Base + A] := SouffleInteger(AFrame^.ArgCount);
+    end;
+
+    OP_COLLECT_REST:
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      RestCount := AFrame^.ArgCount - Integer(B);
+      if RestCount < 0 then
+        RestCount := 0;
+      RestArr := TSouffleArray.Create(RestCount);
+      RestArr.Metatable := FArrayMetatable;
+      if Assigned(FGC) then
+        FGC.AllocateObject(RestArr);
+      for I := 0 to RestCount - 1 do
+        RestArr.Push(FRegisters[AFrame^.ArgSourceBase + Integer(B) + I]);
+      FRegisters[Base + A] := SouffleReference(RestArr);
     end;
 
     OP_NOP:;

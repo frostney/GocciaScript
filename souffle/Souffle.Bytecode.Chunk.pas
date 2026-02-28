@@ -78,7 +78,7 @@ type
     function GetUpvalueDescriptor(const AIndex: Integer): TSouffleUpvalueDescriptor;
     function GetExceptionHandler(const AIndex: Integer): TSouffleExceptionHandler;
 
-    property Name: string read FName;
+    property Name: string read FName write FName;
     property CodeCount: Integer read FCodeCount;
     property ConstantCount: Integer read FConstantCount;
     property FunctionCount: Integer read GetFunctionCount;
@@ -120,6 +120,7 @@ begin
   FMaxRegisters := 0;
   FParameterCount := 0;
   FUpvalueCount := 0;
+  FHasReceiver := False;
   FDebugInfo := nil;
 end;
 

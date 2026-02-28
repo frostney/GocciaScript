@@ -7,6 +7,7 @@ interface
 uses
   Generics.Collections,
 
+  Souffle.Bytecode.Chunk,
   Souffle.Heap,
   Souffle.Value,
   Souffle.VM,
@@ -58,6 +59,8 @@ type
   private
     FGlobals: TDictionary<string, TSouffleValue>;
     FExports: TDictionary<string, TSouffleValue>;
+    FClosureBridgeCache: TDictionary<TSouffleClosure, TObject>;
+    FFormalParameterCounts: TDictionary<TSouffleFunctionTemplate, Integer>;
     FVM: TSouffleVM;
     FEngine: TObject;
 
@@ -143,6 +146,10 @@ type
 
     procedure RegisterMetatables;
     procedure RegisterGlobal(const AName: string; const AValue: TSouffleValue);
+    procedure RegisterFormalParameterCount(
+      const ATemplate: TSouffleFunctionTemplate; const ACount: Integer);
+    function GetFormalParameterCount(
+      const ATemplate: TSouffleFunctionTemplate): Integer;
     property ModuleExports: TDictionary<string, TSouffleValue> read FExports;
     property VM: TSouffleVM read FVM write FVM;
     property Engine: TObject read FEngine write FEngine;
@@ -185,6 +192,7 @@ type
       const ARuntime: TGocciaRuntimeOperations);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
+    property Closure: TSouffleClosure read FClosure;
   end;
 
 { TGocciaSouffleClosureBridge }
@@ -200,7 +208,9 @@ end;
 
 function TGocciaSouffleClosureBridge.GetFunctionLength: Integer;
 begin
-  Result := FClosure.Template.ParameterCount;
+  Result := FRuntime.GetFormalParameterCount(FClosure.Template);
+  if Result < 0 then
+    Result := FClosure.Template.ParameterCount;
 end;
 
 function TGocciaSouffleClosureBridge.GetFunctionName: string;
@@ -361,6 +371,8 @@ begin
   inherited Create;
   FGlobals := TDictionary<string, TSouffleValue>.Create;
   FExports := TDictionary<string, TSouffleValue>.Create;
+  FClosureBridgeCache := TDictionary<TSouffleClosure, TObject>.Create;
+  FFormalParameterCounts := TDictionary<TSouffleFunctionTemplate, Integer>.Create;
   FVM := nil;
 end;
 
@@ -368,6 +380,8 @@ destructor TGocciaRuntimeOperations.Destroy;
 begin
   FGlobals.Free;
   FExports.Free;
+  FClosureBridgeCache.Free;
+  FFormalParameterCounts.Free;
   inherited;
 end;
 
@@ -395,6 +409,8 @@ end;
 
 function TGocciaRuntimeOperations.UnwrapToGocciaValue(
   const AValue: TSouffleValue): TGocciaValue;
+var
+  CachedBridge: TObject;
 begin
   case AValue.Kind of
     svkNil:
@@ -422,8 +438,17 @@ begin
       else if AValue.AsReference is TSouffleTable then
         Result := TGocciaSouffleProxy.Create(AValue.AsReference, Self)
       else if (AValue.AsReference is TSouffleClosure) and Assigned(FVM) then
-        Result := TGocciaSouffleClosureBridge.Create(
-          TSouffleClosure(AValue.AsReference), Self)
+      begin
+        if not FClosureBridgeCache.TryGetValue(
+            TSouffleClosure(AValue.AsReference), CachedBridge) then
+        begin
+          CachedBridge := TGocciaSouffleClosureBridge.Create(
+            TSouffleClosure(AValue.AsReference), Self);
+          FClosureBridgeCache.Add(TSouffleClosure(AValue.AsReference),
+            CachedBridge);
+        end;
+        Result := TGocciaValue(CachedBridge);
+      end
       else
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   else
@@ -438,6 +463,9 @@ var
 begin
   if AValue is TGocciaSouffleProxy then
     Exit(SouffleReference(TGocciaSouffleProxy(AValue).Target));
+
+  if AValue is TGocciaSouffleClosureBridge then
+    Exit(SouffleReference(TGocciaSouffleClosureBridge(AValue).Closure));
 
   if AValue is TGocciaUndefinedLiteralValue then
     Result := SouffleNil
@@ -1211,6 +1239,19 @@ begin
   ArrayMeta.Put('join', SouffleReference(JoinFn));
 
   FVM.ArrayMetatable := ArrayMeta;
+end;
+
+procedure TGocciaRuntimeOperations.RegisterFormalParameterCount(
+  const ATemplate: TSouffleFunctionTemplate; const ACount: Integer);
+begin
+  FFormalParameterCounts.AddOrSetValue(ATemplate, ACount);
+end;
+
+function TGocciaRuntimeOperations.GetFormalParameterCount(
+  const ATemplate: TSouffleFunctionTemplate): Integer;
+begin
+  if not FFormalParameterCounts.TryGetValue(ATemplate, Result) then
+    Result := -1;
 end;
 
 procedure TGocciaRuntimeOperations.RegisterGlobal(const AName: string;

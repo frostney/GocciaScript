@@ -17,6 +17,8 @@ uses
   Goccia.Engine.Backend,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.JSX.SourceMap,
+  Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.Token,
@@ -32,9 +34,11 @@ var
   GEmitPath: string = '';
   GEmitOnly: Boolean = False;
 
-function ParseSourceFile(const AFileName: string): TGocciaProgram;
+function ParseSourceFile(const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaProgram;
 var
   Source: TStringList;
+  SourceText: string;
+  JSXResult: TGocciaJSXTransformResult;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
@@ -44,7 +48,16 @@ begin
   Source := TStringList.Create;
   try
     Source.LoadFromFile(AFileName);
-    Lexer := TGocciaLexer.Create(Source.Text, AFileName);
+    SourceText := Source.Text;
+
+    if ggJSX in AGlobals then
+    begin
+      JSXResult := TGocciaJSXTransformer.Transform(SourceText);
+      SourceText := JSXResult.Source;
+      JSXResult.SourceMap.Free;
+    end;
+
+    Lexer := TGocciaLexer.Create(SourceText, AFileName);
     try
       Tokens := Lexer.ScanTokens;
       Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
@@ -69,12 +82,13 @@ begin
   end;
 end;
 
-function CompileSourceFile(const AFileName: string): TSouffleBytecodeModule;
+function CompileSourceFile(const AFileName: string;
+  const AGlobals: TGocciaGlobalBuiltins): TSouffleBytecodeModule;
 var
   ProgramNode: TGocciaProgram;
   Compiler: TGocciaCompiler;
 begin
-  ProgramNode := ParseSourceFile(AFileName);
+  ProgramNode := ParseSourceFile(AFileName, AGlobals);
   try
     Compiler := TGocciaCompiler.Create(AFileName);
     try
@@ -114,7 +128,7 @@ begin
   try
     Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
 
-    ProgramNode := ParseSourceFile(AFileName);
+    ProgramNode := ParseSourceFile(AFileName, TGocciaEngine.DefaultGlobals);
     try
       Module := Backend.CompileToModule(ProgramNode);
     finally
@@ -178,7 +192,7 @@ begin
 
   TGocciaGarbageCollector.Initialize;
   try
-    Module := CompileSourceFile(AFileName);
+    Module := CompileSourceFile(AFileName, TGocciaEngine.DefaultGlobals);
     try
       SaveModuleToFile(Module, AOutputPath);
       EndTime := GetNanoseconds;

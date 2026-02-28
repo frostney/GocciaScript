@@ -16,6 +16,8 @@ uses
   Goccia.Engine,
   Goccia.Engine.Backend,
   Goccia.FileExtensions,
+  Goccia.JSX.SourceMap,
+  Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.Token,
@@ -154,6 +156,8 @@ end;
 function RunGocciaScriptBytecode(const AFileName: string): TTestFileResult;
 var
   Source: TStringList;
+  SourceText: string;
+  JSXResult: TGocciaJSXTransformResult;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
@@ -185,6 +189,14 @@ begin
     Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
       [BoolToStr(GExitOnFirstFailure, 'true', 'false')]));
 
+    SourceText := Source.Text;
+    if ggJSX in TestGlobals then
+    begin
+      JSXResult := TGocciaJSXTransformer.Transform(SourceText);
+      SourceText := JSXResult.Source;
+      JSXResult.SourceMap.Free;
+    end;
+
     try
       CompileStart := GetNanoseconds;
 
@@ -192,7 +204,7 @@ begin
       try
         Backend.RegisterBuiltIns(TestGlobals);
 
-        Lexer := TGocciaLexer.Create(Source.Text, AFileName);
+        Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
           Tokens := Lexer.ScanTokens;
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);

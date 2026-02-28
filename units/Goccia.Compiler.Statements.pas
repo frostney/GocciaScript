@@ -45,6 +45,7 @@ uses
   SysUtils,
 
   Souffle.Bytecode,
+  Souffle.Bytecode.Chunk,
 
   Goccia.Compiler.Scope;
 
@@ -70,16 +71,33 @@ end;
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
-  I: Integer;
+  I, FuncCount: Integer;
   Info: TGocciaVariableInfo;
   Slot: UInt8;
+  InferredTemplate: TSouffleFunctionTemplate;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
     Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
     if Assigned(Info.Initializer) then
-      ACtx.CompileExpression(Info.Initializer, Slot)
+    begin
+      FuncCount := ACtx.Template.FunctionCount;
+      ACtx.CompileExpression(Info.Initializer, Slot);
+
+      if (Info.Initializer is TGocciaArrowFunctionExpression) or
+         (Info.Initializer is TGocciaMethodExpression) then
+      begin
+        if ACtx.Template.FunctionCount > FuncCount then
+        begin
+          InferredTemplate := ACtx.Template.GetFunction(
+            ACtx.Template.FunctionCount - 1);
+          if (InferredTemplate.Name = '<arrow>') or
+             (InferredTemplate.Name = '<method>') then
+            InferredTemplate.Name := Info.Name;
+        end;
+      end;
+    end
     else
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, Slot, 0, 0));
   end;

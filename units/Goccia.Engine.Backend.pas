@@ -50,6 +50,7 @@ uses
   Classes,
   SysUtils,
 
+  Souffle.Bytecode.Chunk,
   Souffle.Heap,
   Souffle.Value,
   Souffle.VM.Exception,
@@ -104,10 +105,15 @@ var
   Entry: TGocciaCompilerClassEntry;
   Context: TGocciaEvaluationContext;
   ClassValue: TGocciaValue;
+  Template: TSouffleFunctionTemplate;
 begin
   Compiler := TGocciaCompiler.Create(FSourcePath);
   try
     Result := Compiler.Compile(AProgram);
+
+    for Template in Compiler.FormalParameterCounts.Keys do
+      FRuntime.RegisterFormalParameterCount(
+        Template, Compiler.FormalParameterCounts[Template]);
 
     if Assigned(FEngine) and (Compiler.PendingClassCount > 0) then
     begin

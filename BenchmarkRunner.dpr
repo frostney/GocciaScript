@@ -18,6 +18,8 @@ uses
   Goccia.Engine,
   Goccia.Engine.Backend,
   Goccia.FileExtensions,
+  Goccia.JSX.SourceMap,
+  Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.Token,
@@ -192,6 +194,8 @@ function CollectBenchmarkFileBytecode(const AFileName: string;
   const AReporter: TBenchmarkReporter): TGocciaObjectValue;
 var
   Source: TStringList;
+  SourceText: string;
+  JSXResult: TGocciaJSXTransformResult;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
@@ -211,6 +215,14 @@ begin
     Source.LoadFromFile(AFileName);
     Source.Add('runBenchmarks();');
 
+    SourceText := Source.Text;
+    if ggJSX in BenchGlobals then
+    begin
+      JSXResult := TGocciaJSXTransformer.Transform(SourceText);
+      SourceText := JSXResult.Source;
+      JSXResult.SourceMap.Free;
+    end;
+
     try
       CompileStart := GetNanoseconds;
 
@@ -218,7 +230,7 @@ begin
       try
         Backend.RegisterBuiltIns(BenchGlobals);
 
-        Lexer := TGocciaLexer.Create(Source.Text, AFileName);
+        Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
           Tokens := Lexer.ScanTokens;
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);

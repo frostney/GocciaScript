@@ -60,9 +60,13 @@ type
     OP_TABLE_DELETE  = 31,  // ABx   delete Table(R[A])[Constants[Bx]]
     OP_GET_LENGTH    = 32,  // AB    R[A] := Length(R[B])
 
+    // ── Core: Arguments ──
+    OP_ARG_COUNT     = 33,  // A     R[A] := ArgCount (number of actual arguments passed)
+    OP_COLLECT_REST  = 34,  // AB    R[A] := Array(args[B..ArgCount-1])
+
     // ── Core: Debug ──
-    OP_NOP           = 33,  //       No operation
-    OP_LINE          = 34,  // Bx    Source line annotation
+    OP_NOP           = 35,  //       No operation
+    OP_LINE          = 36,  // Bx    Source line annotation
 
     // ── Runtime: Polymorphic Arithmetic ──
     OP_RT_ADD        = 128, // ABC   R[A] := Runtime.Add(R[B], R[C])
