@@ -5,7 +5,9 @@ unit Goccia.Compiler.Scope;
 interface
 
 uses
-  Generics.Collections;
+  Generics.Collections,
+
+  Souffle.Bytecode.Chunk;
 
 type
   TGocciaCompilerVariableKind = (cvkLocal, cvkUpvalue, cvkGlobal);
@@ -16,6 +18,7 @@ type
     Depth: Integer;
     IsCaptured: Boolean;
     IsConst: Boolean;
+    TypeHint: TSouffleLocalType;
   end;
 
   TGocciaCompilerUpvalue = record
@@ -60,6 +63,8 @@ type
     function GetLocal(const AIndex: Integer): TGocciaCompilerLocal;
     function GetUpvalue(const AIndex: Integer): TGocciaCompilerUpvalue;
     procedure MarkCaptured(const AIndex: Integer);
+    procedure SetLocalTypeHint(const AIndex: Integer;
+      const ATypeHint: TSouffleLocalType);
   end;
 
 implementation
@@ -93,6 +98,7 @@ begin
   FLocals[FLocalCount].Depth := FDepth;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsConst := AIsConst;
+  FLocals[FLocalCount].TypeHint := sltUntyped;
   Result := FNextSlot;
   Inc(FLocalCount);
   Inc(FNextSlot);
@@ -210,6 +216,12 @@ end;
 procedure TGocciaCompilerScope.MarkCaptured(const AIndex: Integer);
 begin
   FLocals[AIndex].IsCaptured := True;
+end;
+
+procedure TGocciaCompilerScope.SetLocalTypeHint(const AIndex: Integer;
+  const ATypeHint: TSouffleLocalType);
+begin
+  FLocals[AIndex].TypeHint := ATypeHint;
 end;
 
 end.

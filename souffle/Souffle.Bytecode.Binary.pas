@@ -190,6 +190,11 @@ begin
       WriteUInt32(AProto.DebugInfo.GetLocalInfo(I).EndPC);
     end;
   end;
+
+  // Local type hints
+  WriteUInt8(AProto.LocalTypeCount);
+  for I := 0 to AProto.LocalTypeCount - 1 do
+    WriteUInt8(Ord(AProto.GetLocalType(UInt8(I))));
 end;
 
 procedure TSouffleBytecodeWriter.WriteModule(
@@ -289,7 +294,7 @@ end;
 function TSouffleBytecodeReader.ReadFunctionTemplate: TSouffleFunctionTemplate;
 var
   Name: string;
-  MaxRegs, ParamCount, UpvalueCount: UInt8;
+  MaxRegs, ParamCount, UpvalueCount, LocalTypeCount: UInt8;
   CodeCount: UInt32;
   ConstCount, FuncCount, HandlerCount: UInt16;
   I: Integer;
@@ -360,6 +365,11 @@ begin
 
     Result.DebugInfo := DebugInfo;
   end;
+
+  // Local type hints
+  LocalTypeCount := ReadUInt8;
+  for I := 0 to LocalTypeCount - 1 do
+    Result.SetLocalType(UInt8(I), TSouffleLocalType(ReadUInt8));
 end;
 
 function TSouffleBytecodeReader.ReadModule: TSouffleBytecodeModule;

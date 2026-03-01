@@ -399,7 +399,7 @@ Bridge conversions between `TSouffleValue` and `TGocciaValue` happen at the runt
 
 Language-specific features are compiled into sequences of generic VM instructions rather than adding specialized opcodes:
 
-- **Classes** — No `CLASS` opcode. The compiler emits `OP_CLOSURE` (constructor/methods) + `OP_NEW_TABLE` (prototype) + `OP_TABLE_SET` (method registration).
+- **Classes** — No `CLASS` opcode. The compiler emits `OP_CLOSURE` (constructor/methods) + `OP_NEW_RECORD` (prototype) + `OP_RECORD_SET` (method registration).
 - **Nullish coalescing (`??`)** — No `IS_NULLISH` opcode. The compiler emits `OP_JUMP_IF_NOT_NIL` (check for `undefined`) followed by `OP_RT_GET_GLOBAL('null')` + `OP_RT_EQ` (check for `null`) with conditional jumps.
 - **Template literals** — The compiler parses interpolations at compile time, emits string constants and expression compilations, then chains `OP_RT_ADD` instructions for concatenation.
 

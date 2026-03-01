@@ -195,7 +195,7 @@ begin
   for I := 0 to Length(Names) - 1 do
     RegisterGlobal(Names[I], GlobalScope.GetValue(Names[I]));
 
-  FRuntime.RegisterMetatables;
+  FRuntime.RegisterDelegates;
 end;
 
 end.

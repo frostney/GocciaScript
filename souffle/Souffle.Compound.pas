@@ -32,26 +32,33 @@ type
     property Capacity: Integer read FCapacity;
   end;
 
-  TSouffleTableEntry = record
+  TSouffleRecordEntry = record
     Key: string;
     Value: TSouffleValue;
     Hash: UInt32;
     Occupied: Boolean;
   end;
 
-  { String-keyed ordered hash map of TSouffleValue — covers JS objects,
-    Python dicts (str keys), Lua hash part, Wren ObjMap (string keys) }
-  TSouffleTable = class(TSouffleHeapObject)
+  TSouffleBlueprint = class;
+
+  { String-keyed ordered hash map with optional blueprint (type descriptor)
+    and indexed slots. Without a blueprint: plain key-value record (covers
+    JS objects, Python dicts, Lua hash part). With a blueprint: structured
+    object with fast O(1) slot access plus dynamic named properties. }
+  TSouffleRecord = class(TSouffleHeapObject)
   private
-    FEntries: array of TSouffleTableEntry;
+    FEntries: array of TSouffleRecordEntry;
     FOrder: array of Integer;
     FCount: Integer;
     FCapacity: Integer;
+    FBlueprint: TSouffleBlueprint;
+    FSlots: array of TSouffleValue;
     function HashKey(const AKey: string): UInt32;
-    function FindSlot(const AKey: string; const AHash: UInt32): Integer;
+    function FindEntry(const AKey: string; const AHash: UInt32): Integer;
     procedure Grow;
   public
     constructor Create(const AInitialCapacity: Integer = 0);
+    constructor CreateFromBlueprint(const ABlueprint: TSouffleBlueprint);
 
     function Get(const AKey: string; out AValue: TSouffleValue): Boolean;
     procedure Put(const AKey: string; const AValue: TSouffleValue);
@@ -61,10 +68,38 @@ type
     function GetOrderedKey(const AIndex: Integer): string; inline;
     function GetOrderedValue(const AIndex: Integer): TSouffleValue; inline;
 
+    function GetSlot(const AIndex: Integer): TSouffleValue; inline;
+    procedure SetSlot(const AIndex: Integer; const AValue: TSouffleValue); inline;
+
     procedure MarkReferences; override;
     function DebugString: string; override;
 
     property Count: Integer read FCount;
+    property Blueprint: TSouffleBlueprint read FBlueprint;
+  end;
+
+  { Blueprint — type descriptor with method table and optional super link.
+    Language-agnostic equivalent of a class/struct definition. }
+  TSouffleBlueprint = class(TSouffleHeapObject)
+  private
+    FName: string;
+    FSlotCount: Integer;
+    FMethods: TSouffleRecord;
+    FSuperBlueprint: TSouffleBlueprint;
+    FPrototype: TSouffleRecord;
+    function GetPrototype: TSouffleRecord;
+  public
+    constructor Create(const AName: string; const ASlotCount: Integer);
+    destructor Destroy; override;
+
+    procedure MarkReferences; override;
+    function DebugString: string; override;
+
+    property Name: string read FName;
+    property SlotCount: Integer read FSlotCount write FSlotCount;
+    property Methods: TSouffleRecord read FMethods;
+    property SuperBlueprint: TSouffleBlueprint read FSuperBlueprint write FSuperBlueprint;
+    property Prototype: TSouffleRecord read GetPrototype;
   end;
 
 implementation
@@ -74,8 +109,8 @@ uses
 
 const
   MIN_ARRAY_CAPACITY = 8;
-  MIN_TABLE_CAPACITY = 8;
-  TABLE_MAX_LOAD_FACTOR = 75; // percent
+  MIN_RECORD_CAPACITY = 8;
+  RECORD_MAX_LOAD_FACTOR = 75; // percent
 
 { TSouffleArray }
 
@@ -168,24 +203,32 @@ begin
   Result := '<array:' + IntToStr(FCount) + '>';
 end;
 
-{ TSouffleTable }
+{ TSouffleRecord }
 
-constructor TSouffleTable.Create(const AInitialCapacity: Integer);
+constructor TSouffleRecord.Create(const AInitialCapacity: Integer);
 var
   Cap: Integer;
 begin
-  inherited Create(SOUFFLE_HEAP_TABLE);
+  inherited Create(SOUFFLE_HEAP_RECORD);
   FCount := 0;
-  if AInitialCapacity > MIN_TABLE_CAPACITY then
+  FBlueprint := nil;
+  if AInitialCapacity > MIN_RECORD_CAPACITY then
     Cap := AInitialCapacity
   else
-    Cap := MIN_TABLE_CAPACITY;
+    Cap := MIN_RECORD_CAPACITY;
   FCapacity := Cap;
   SetLength(FEntries, FCapacity);
   SetLength(FOrder, 0);
 end;
 
-function TSouffleTable.HashKey(const AKey: string): UInt32;
+constructor TSouffleRecord.CreateFromBlueprint(const ABlueprint: TSouffleBlueprint);
+begin
+  Create;
+  FBlueprint := ABlueprint;
+  SetLength(FSlots, ABlueprint.SlotCount);
+end;
+
+function TSouffleRecord.HashKey(const AKey: string): UInt32;
 var
   I: Integer;
   H: UInt64;
@@ -196,7 +239,7 @@ begin
   Result := UInt32(H);
 end;
 
-function TSouffleTable.FindSlot(const AKey: string; const AHash: UInt32): Integer;
+function TSouffleRecord.FindEntry(const AKey: string; const AHash: UInt32): Integer;
 var
   Idx: Integer;
 begin
@@ -211,9 +254,9 @@ begin
   end;
 end;
 
-procedure TSouffleTable.Grow;
+procedure TSouffleRecord.Grow;
 var
-  OldEntries: array of TSouffleTableEntry;
+  OldEntries: array of TSouffleRecordEntry;
   OldCount, OldCapacity, I, Slot: Integer;
   NewCapacity: Integer;
 begin
@@ -234,7 +277,7 @@ begin
   begin
     if OldEntries[I].Occupied then
     begin
-      Slot := FindSlot(OldEntries[I].Key, OldEntries[I].Hash);
+      Slot := FindEntry(OldEntries[I].Key, OldEntries[I].Hash);
       FEntries[Slot] := OldEntries[I];
       FOrder[FCount] := Slot;
       Inc(FCount);
@@ -242,7 +285,7 @@ begin
   end;
 end;
 
-function TSouffleTable.Get(const AKey: string; out AValue: TSouffleValue): Boolean;
+function TSouffleRecord.Get(const AKey: string; out AValue: TSouffleValue): Boolean;
 var
   Hash: UInt32;
   Slot: Integer;
@@ -253,7 +296,7 @@ begin
     Exit(False);
   end;
   Hash := HashKey(AKey);
-  Slot := FindSlot(AKey, Hash);
+  Slot := FindEntry(AKey, Hash);
   if FEntries[Slot].Occupied then
   begin
     AValue := FEntries[Slot].Value;
@@ -266,16 +309,16 @@ begin
   end;
 end;
 
-procedure TSouffleTable.Put(const AKey: string; const AValue: TSouffleValue);
+procedure TSouffleRecord.Put(const AKey: string; const AValue: TSouffleValue);
 var
   Hash: UInt32;
   Slot: Integer;
 begin
-  if (FCount + 1) * 100 > FCapacity * TABLE_MAX_LOAD_FACTOR then
+  if (FCount + 1) * 100 > FCapacity * RECORD_MAX_LOAD_FACTOR then
     Grow;
 
   Hash := HashKey(AKey);
-  Slot := FindSlot(AKey, Hash);
+  Slot := FindEntry(AKey, Hash);
 
   if not FEntries[Slot].Occupied then
   begin
@@ -291,7 +334,7 @@ begin
   FEntries[Slot].Value := AValue;
 end;
 
-function TSouffleTable.Delete(const AKey: string): Boolean;
+function TSouffleRecord.Delete(const AKey: string): Boolean;
 var
   Hash: UInt32;
   Slot, I: Integer;
@@ -300,17 +343,15 @@ begin
     Exit(False);
 
   Hash := HashKey(AKey);
-  Slot := FindSlot(AKey, Hash);
+  Slot := FindEntry(AKey, Hash);
 
   if not FEntries[Slot].Occupied then
     Exit(False);
 
-  // Tombstone: mark empty but keep probe chain intact
   FEntries[Slot].Occupied := False;
   FEntries[Slot].Key := '';
   FEntries[Slot].Value := SouffleNil;
 
-  // Remove from insertion order
   for I := 0 to FCount - 1 do
   begin
     if FOrder[I] = Slot then
@@ -324,7 +365,7 @@ begin
   Result := True;
 end;
 
-function TSouffleTable.Has(const AKey: string): Boolean;
+function TSouffleRecord.Has(const AKey: string): Boolean;
 var
   Hash: UInt32;
   Slot: Integer;
@@ -332,21 +373,35 @@ begin
   if FCount = 0 then
     Exit(False);
   Hash := HashKey(AKey);
-  Slot := FindSlot(AKey, Hash);
+  Slot := FindEntry(AKey, Hash);
   Result := FEntries[Slot].Occupied;
 end;
 
-function TSouffleTable.GetOrderedKey(const AIndex: Integer): string;
+function TSouffleRecord.GetOrderedKey(const AIndex: Integer): string;
 begin
   Result := FEntries[FOrder[AIndex]].Key;
 end;
 
-function TSouffleTable.GetOrderedValue(const AIndex: Integer): TSouffleValue;
+function TSouffleRecord.GetOrderedValue(const AIndex: Integer): TSouffleValue;
 begin
   Result := FEntries[FOrder[AIndex]].Value;
 end;
 
-procedure TSouffleTable.MarkReferences;
+function TSouffleRecord.GetSlot(const AIndex: Integer): TSouffleValue;
+begin
+  if (AIndex >= 0) and (AIndex < Length(FSlots)) then
+    Result := FSlots[AIndex]
+  else
+    Result := SouffleNil;
+end;
+
+procedure TSouffleRecord.SetSlot(const AIndex: Integer; const AValue: TSouffleValue);
+begin
+  if (AIndex >= 0) and (AIndex < Length(FSlots)) then
+    FSlots[AIndex] := AValue;
+end;
+
+procedure TSouffleRecord.MarkReferences;
 var
   I: Integer;
 begin
@@ -356,11 +411,65 @@ begin
        SouffleIsReference(FEntries[I].Value) and
        Assigned(FEntries[I].Value.AsReference) then
       FEntries[I].Value.AsReference.MarkReferences;
+  if Assigned(FBlueprint) and not FBlueprint.GCMarked then
+    FBlueprint.MarkReferences;
+  for I := 0 to High(FSlots) do
+    if SouffleIsReference(FSlots[I]) and Assigned(FSlots[I].AsReference) then
+      FSlots[I].AsReference.MarkReferences;
 end;
 
-function TSouffleTable.DebugString: string;
+function TSouffleRecord.DebugString: string;
 begin
-  Result := '<table:' + IntToStr(FCount) + '>';
+  if Assigned(FBlueprint) then
+    Result := '<' + FBlueprint.Name + '>'
+  else
+    Result := '<record:' + IntToStr(FCount) + '>';
+end;
+
+{ TSouffleBlueprint }
+
+constructor TSouffleBlueprint.Create(const AName: string; const ASlotCount: Integer);
+begin
+  inherited Create(SOUFFLE_HEAP_BLUEPRINT);
+  FName := AName;
+  FSlotCount := ASlotCount;
+  FMethods := TSouffleRecord.Create;
+  FSuperBlueprint := nil;
+  FPrototype := nil;
+end;
+
+destructor TSouffleBlueprint.Destroy;
+begin
+  FMethods.Free;
+  inherited;
+end;
+
+function TSouffleBlueprint.GetPrototype: TSouffleRecord;
+begin
+  if not Assigned(FPrototype) then
+  begin
+    if Assigned(FSuperBlueprint) then
+      FPrototype := TSouffleRecord.CreateFromBlueprint(FSuperBlueprint)
+    else
+      FPrototype := TSouffleRecord.Create;
+  end;
+  Result := FPrototype;
+end;
+
+procedure TSouffleBlueprint.MarkReferences;
+begin
+  inherited;
+  if Assigned(FMethods) and not FMethods.GCMarked then
+    FMethods.MarkReferences;
+  if Assigned(FSuperBlueprint) and not FSuperBlueprint.GCMarked then
+    FSuperBlueprint.MarkReferences;
+  if Assigned(FPrototype) and not FPrototype.GCMarked then
+    FPrototype.MarkReferences;
+end;
+
+function TSouffleBlueprint.DebugString: string;
+begin
+  Result := '<blueprint:' + FName + '>';
 end;
 
 end.

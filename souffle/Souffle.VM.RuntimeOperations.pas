@@ -53,6 +53,7 @@ type
       const AKey, AValue: TSouffleValue); virtual; abstract;
     function DeleteProperty(const AObject: TSouffleValue;
       const AKey: string): TSouffleValue; virtual; abstract;
+    function DeleteIndex(const AObject, AKey: TSouffleValue): TSouffleValue; virtual;
 
     // Invocation
     function Invoke(const ACallee: TSouffleValue; const AArgs: PSouffleValue;
@@ -65,6 +66,13 @@ type
     function IteratorNext(const AIterator: TSouffleValue;
       out ADone: Boolean): TSouffleValue; virtual; abstract;
     procedure SpreadInto(const ATarget, ASource: TSouffleValue); virtual; abstract;
+    procedure SpreadObjectInto(const ATarget, ASource: TSouffleValue); virtual;
+
+    function ArrayRest(const ASource: TSouffleValue;
+      const AStartIndex: Integer): TSouffleValue; virtual;
+    function ObjectRest(const ASource, AExclusionKeys: TSouffleValue): TSouffleValue; virtual;
+    procedure RequireObjectCoercible(const AValue: TSouffleValue); virtual;
+    function CoerceValueToString(const A: TSouffleValue): TSouffleValue; virtual;
 
     // Modules
     function ImportModule(const APath: string): TSouffleValue; virtual; abstract;
@@ -90,6 +98,9 @@ type
 
 implementation
 
+uses
+  Souffle.Compound;
+
 procedure TSouffleRuntimeOperations.DefineGetter(const AObject: TSouffleValue;
   const AKey: string; const AGetter: TSouffleValue);
 begin
@@ -98,6 +109,91 @@ end;
 procedure TSouffleRuntimeOperations.DefineSetter(const AObject: TSouffleValue;
   const AKey: string; const ASetter: TSouffleValue);
 begin
+end;
+
+function TSouffleRuntimeOperations.DeleteIndex(
+  const AObject, AKey: TSouffleValue): TSouffleValue;
+begin
+  Result := DeleteProperty(AObject, SouffleValueToString(AKey));
+end;
+
+procedure TSouffleRuntimeOperations.SpreadObjectInto(
+  const ATarget, ASource: TSouffleValue);
+var
+  SrcRec, TgtRec: TSouffleRecord;
+  I: Integer;
+begin
+  if not (SouffleIsReference(ATarget) and (ATarget.AsReference is TSouffleRecord)) then
+    Exit;
+  if not (SouffleIsReference(ASource) and (ASource.AsReference is TSouffleRecord)) then
+    Exit;
+  TgtRec := TSouffleRecord(ATarget.AsReference);
+  SrcRec := TSouffleRecord(ASource.AsReference);
+  for I := 0 to SrcRec.Count - 1 do
+    TgtRec.Put(SrcRec.GetOrderedKey(I), SrcRec.GetOrderedValue(I));
+end;
+
+function TSouffleRuntimeOperations.ArrayRest(const ASource: TSouffleValue;
+  const AStartIndex: Integer): TSouffleValue;
+var
+  SrcArr, RestArr: TSouffleArray;
+  I: Integer;
+begin
+  if SouffleIsReference(ASource) and (ASource.AsReference is TSouffleArray) then
+  begin
+    SrcArr := TSouffleArray(ASource.AsReference);
+    RestArr := TSouffleArray.Create(SrcArr.Count - AStartIndex);
+    for I := AStartIndex to SrcArr.Count - 1 do
+      RestArr.Push(SrcArr.Get(I));
+    Result := SouffleReference(RestArr);
+  end
+  else
+    Result := SouffleNil;
+end;
+
+function TSouffleRuntimeOperations.ObjectRest(
+  const ASource, AExclusionKeys: TSouffleValue): TSouffleValue;
+var
+  SrcRec, RestRec: TSouffleRecord;
+  ExclArr: TSouffleArray;
+  I, J: Integer;
+  Key: string;
+  Excluded: Boolean;
+begin
+  if not (SouffleIsReference(ASource) and (ASource.AsReference is TSouffleRecord)) then
+    Exit(SouffleNil);
+  SrcRec := TSouffleRecord(ASource.AsReference);
+  RestRec := TSouffleRecord.Create;
+  if SouffleIsReference(AExclusionKeys) and
+     (AExclusionKeys.AsReference is TSouffleArray) then
+  begin
+    ExclArr := TSouffleArray(AExclusionKeys.AsReference);
+    for I := 0 to SrcRec.Count - 1 do
+    begin
+      Key := SrcRec.GetOrderedKey(I);
+      Excluded := False;
+      for J := 0 to ExclArr.Count - 1 do
+        if SouffleValueToString(ExclArr.Get(J)) = Key then
+        begin
+          Excluded := True;
+          Break;
+        end;
+      if not Excluded then
+        RestRec.Put(Key, SrcRec.GetOrderedValue(I));
+    end;
+  end;
+  Result := SouffleReference(RestRec);
+end;
+
+procedure TSouffleRuntimeOperations.RequireObjectCoercible(
+  const AValue: TSouffleValue);
+begin
+end;
+
+function TSouffleRuntimeOperations.CoerceValueToString(
+  const A: TSouffleValue): TSouffleValue;
+begin
+  Result := SouffleNil;
 end;
 
 end.

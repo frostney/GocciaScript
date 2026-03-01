@@ -7,49 +7,59 @@ interface
 uses
   Souffle.Heap;
 
+const
+  SOUFFLE_INLINE_STRING_MAX = 23;
+  SOUFFLE_NIL_DEFAULT = 0;
+
 type
   TSouffleValueKind = (
     svkNil,
-    svkNull,
     svkBoolean,
     svkInteger,
     svkFloat,
+    svkString,
     svkReference
   );
 
+  TSouffleInlineString = string[SOUFFLE_INLINE_STRING_MAX];
+
   PSouffleValue = ^TSouffleValue;
 
-  TSouffleValue = record
+  TSouffleValue = packed record
     Kind: TSouffleValueKind;
+    Flags: Byte;
     case TSouffleValueKind of
       svkNil:       ();
-      svkNull:      ();
       svkBoolean:   (AsBoolean: Boolean);
       svkInteger:   (AsInteger: Int64);
       svkFloat:     (AsFloat: Double);
+      svkString:    (AsInlineString: TSouffleInlineString);
       svkReference: (AsReference: TSouffleHeapObject);
   end;
 
   TSouffleValueArray = array of TSouffleValue;
   PSouffleValueArray = ^TSouffleValueArray;
 
-function SouffleNil: TSouffleValue; inline;
-function SouffleNull: TSouffleValue; inline;
-function SouffleBoolean(const AValue: Boolean): TSouffleValue; inline;
-function SouffleInteger(const AValue: Int64): TSouffleValue; inline;
-function SouffleFloat(const AValue: Double): TSouffleValue; inline;
-function SouffleReference(const AObject: TSouffleHeapObject): TSouffleValue; inline;
+function SouffleNil: TSouffleValue;
+function SouffleNilWithFlags(const AFlags: Byte): TSouffleValue;
+function SouffleBoolean(const AValue: Boolean): TSouffleValue;
+function SouffleInteger(const AValue: Int64): TSouffleValue;
+function SouffleFloat(const AValue: Double): TSouffleValue;
+function SouffleString(const AValue: string): TSouffleValue;
+function SouffleReference(const AObject: TSouffleHeapObject): TSouffleValue;
 
 function SouffleIsNil(const AValue: TSouffleValue): Boolean; inline;
-function SouffleIsNull(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsBoolean(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsInteger(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsFloat(const AValue: TSouffleValue): Boolean; inline;
+function SouffleIsInlineString(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsReference(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsNumeric(const AValue: TSouffleValue): Boolean; inline;
+function SouffleIsStringValue(const AValue: TSouffleValue): Boolean; inline;
 
-function SouffleIsTrue(const AValue: TSouffleValue): Boolean; inline;
+function SouffleIsTrue(const AValue: TSouffleValue): Boolean;
 function SouffleAsNumber(const AValue: TSouffleValue): Double; inline;
+function SouffleGetString(const AValue: TSouffleValue): string;
 
 function SouffleValuesEqual(const A, B: TSouffleValue): Boolean;
 function SouffleValueToString(const AValue: TSouffleValue): string;
@@ -58,43 +68,72 @@ implementation
 
 uses
   Math,
-  SysUtils;
+  SysUtils,
+
+  Souffle.GarbageCollector;
 
 { Value constructors }
 
 function SouffleNil: TSouffleValue;
 begin
+  FillChar(Result, SizeOf(Result), 0);
   Result.Kind := svkNil;
-  Result.AsInteger := 0;
+  Result.Flags := SOUFFLE_NIL_DEFAULT;
 end;
 
-function SouffleNull: TSouffleValue;
+function SouffleNilWithFlags(const AFlags: Byte): TSouffleValue;
 begin
-  Result.Kind := svkNull;
-  Result.AsInteger := 0;
+  FillChar(Result, SizeOf(Result), 0);
+  Result.Kind := svkNil;
+  Result.Flags := AFlags;
 end;
 
 function SouffleBoolean(const AValue: Boolean): TSouffleValue;
 begin
+  FillChar(Result, SizeOf(Result), 0);
   Result.Kind := svkBoolean;
-  Result.AsInteger := 0;
   Result.AsBoolean := AValue;
 end;
 
 function SouffleInteger(const AValue: Int64): TSouffleValue;
 begin
+  FillChar(Result, SizeOf(Result), 0);
   Result.Kind := svkInteger;
   Result.AsInteger := AValue;
 end;
 
 function SouffleFloat(const AValue: Double): TSouffleValue;
 begin
+  FillChar(Result, SizeOf(Result), 0);
   Result.Kind := svkFloat;
   Result.AsFloat := AValue;
 end;
 
+function SouffleString(const AValue: string): TSouffleValue;
+var
+  HeapStr: TSouffleHeapString;
+  GC: TSouffleGarbageCollector;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+  if Length(AValue) <= SOUFFLE_INLINE_STRING_MAX then
+  begin
+    Result.Kind := svkString;
+    Result.AsInlineString := AValue;
+  end
+  else
+  begin
+    HeapStr := TSouffleHeapString.Create(AValue);
+    GC := TSouffleGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.AllocateObject(HeapStr);
+    Result.Kind := svkReference;
+    Result.AsReference := HeapStr;
+  end;
+end;
+
 function SouffleReference(const AObject: TSouffleHeapObject): TSouffleValue;
 begin
+  FillChar(Result, SizeOf(Result), 0);
   Result.Kind := svkReference;
   Result.AsReference := AObject;
 end;
@@ -104,11 +143,6 @@ end;
 function SouffleIsNil(const AValue: TSouffleValue): Boolean;
 begin
   Result := AValue.Kind = svkNil;
-end;
-
-function SouffleIsNull(const AValue: TSouffleValue): Boolean;
-begin
-  Result := AValue.Kind = svkNull;
 end;
 
 function SouffleIsBoolean(const AValue: TSouffleValue): Boolean;
@@ -126,6 +160,11 @@ begin
   Result := AValue.Kind = svkFloat;
 end;
 
+function SouffleIsInlineString(const AValue: TSouffleValue): Boolean;
+begin
+  Result := AValue.Kind = svkString;
+end;
+
 function SouffleIsReference(const AValue: TSouffleValue): Boolean;
 begin
   Result := AValue.Kind = svkReference;
@@ -136,12 +175,18 @@ begin
   Result := (AValue.Kind = svkInteger) or (AValue.Kind = svkFloat);
 end;
 
+function SouffleIsStringValue(const AValue: TSouffleValue): Boolean;
+begin
+  Result := (AValue.Kind = svkString) or
+    ((AValue.Kind = svkReference) and (AValue.AsReference is TSouffleHeapString));
+end;
+
 { Truthiness -- universal semantics used by JUMP_IF_TRUE/JUMP_IF_FALSE }
 
 function SouffleIsTrue(const AValue: TSouffleValue): Boolean;
 begin
   case AValue.Kind of
-    svkNil, svkNull:
+    svkNil:
       Result := False;
     svkBoolean:
       Result := AValue.AsBoolean;
@@ -149,6 +194,8 @@ begin
       Result := AValue.AsInteger <> 0;
     svkFloat:
       Result := (AValue.AsFloat <> 0.0) and not IsNaN(AValue.AsFloat);
+    svkString:
+      Result := AValue.AsInlineString <> '';
     svkReference:
       Result := Assigned(AValue.AsReference);
   else
@@ -170,29 +217,42 @@ begin
   end;
 end;
 
+{ String access -- handles both inline (svkString) and heap (TSouffleHeapString) }
+
+function SouffleGetString(const AValue: TSouffleValue): string;
+begin
+  if AValue.Kind = svkString then
+    Result := AValue.AsInlineString
+  else if (AValue.Kind = svkReference) and (AValue.AsReference is TSouffleHeapString) then
+    Result := TSouffleHeapString(AValue.AsReference).Value
+  else
+    Result := '';
+end;
+
 { Identity equality for core operations }
 
 function SouffleValuesEqual(const A, B: TSouffleValue): Boolean;
 begin
   if A.Kind <> B.Kind then
+  begin
+    if SouffleIsStringValue(A) and SouffleIsStringValue(B) then
+      Exit(SouffleGetString(A) = SouffleGetString(B));
     Exit(False);
+  end;
 
   case A.Kind of
-    svkNil, svkNull:
-      Result := True;
+    svkNil:
+      Result := A.Flags = B.Flags;
     svkBoolean:
       Result := A.AsBoolean = B.AsBoolean;
     svkInteger:
       Result := A.AsInteger = B.AsInteger;
     svkFloat:
       Result := A.AsFloat = B.AsFloat;
+    svkString:
+      Result := A.AsInlineString = B.AsInlineString;
     svkReference:
-      if A.AsReference = B.AsReference then
-        Result := True
-      else if (A.AsReference is TSouffleString) and (B.AsReference is TSouffleString) then
-        Result := TSouffleString(A.AsReference).Value = TSouffleString(B.AsReference).Value
-      else
-        Result := False;
+      Result := A.AsReference = B.AsReference;
   else
     Result := False;
   end;
@@ -205,8 +265,6 @@ begin
   case AValue.Kind of
     svkNil:
       Result := 'nil';
-    svkNull:
-      Result := 'null';
     svkBoolean:
       if AValue.AsBoolean then
         Result := 'true'
@@ -215,15 +273,24 @@ begin
     svkInteger:
       Result := IntToStr(AValue.AsInteger);
     svkFloat:
-      Result := FloatToStr(AValue.AsFloat);
-    svkReference:
-      if Assigned(AValue.AsReference) then
+      if IsNaN(AValue.AsFloat) then
+        Result := 'NaN'
+      else if IsInfinite(AValue.AsFloat) then
       begin
-        if AValue.AsReference is TSouffleString then
-          Result := TSouffleString(AValue.AsReference).Value
+        if AValue.AsFloat > 0 then
+          Result := 'Infinity'
         else
-          Result := AValue.AsReference.DebugString;
+          Result := '-Infinity';
       end
+      else
+        Result := FloatToStr(AValue.AsFloat);
+    svkString:
+      Result := AValue.AsInlineString;
+    svkReference:
+      if AValue.AsReference is TSouffleHeapString then
+        Result := TSouffleHeapString(AValue.AsReference).Value
+      else if Assigned(AValue.AsReference) then
+        Result := AValue.AsReference.DebugString
       else
         Result := 'nil';
   else

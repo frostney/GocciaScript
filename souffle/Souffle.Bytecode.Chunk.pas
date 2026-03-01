@@ -39,6 +39,15 @@ type
     CatchRegister: UInt8;
   end;
 
+  TSouffleLocalType = (
+    sltUntyped,
+    sltInteger,
+    sltFloat,
+    sltBoolean,
+    sltString,
+    sltReference
+  );
+
   TSouffleFunctionTemplate = class
   private
     FName: string;
@@ -53,8 +62,9 @@ type
     FMaxRegisters: UInt8;
     FParameterCount: UInt8;
     FUpvalueCount: UInt8;
-    FHasReceiver: Boolean;
     FDebugInfo: TSouffleDebugInfo;
+    FLocalTypes: array of TSouffleLocalType;
+    FLocalTypeCount: UInt8;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -86,8 +96,11 @@ type
     property MaxRegisters: UInt8 read FMaxRegisters write FMaxRegisters;
     property ParameterCount: UInt8 read FParameterCount write FParameterCount;
     property UpvalueCount: UInt8 read FUpvalueCount;
-    property HasReceiver: Boolean read FHasReceiver write FHasReceiver;
     property DebugInfo: TSouffleDebugInfo read FDebugInfo write FDebugInfo;
+
+    procedure SetLocalType(const ASlot: UInt8; const AKind: TSouffleLocalType);
+    function GetLocalType(const ASlot: UInt8): TSouffleLocalType;
+    property LocalTypeCount: UInt8 read FLocalTypeCount;
   end;
 
 const
@@ -120,8 +133,8 @@ begin
   FMaxRegisters := 0;
   FParameterCount := 0;
   FUpvalueCount := 0;
-  FHasReceiver := False;
   FDebugInfo := nil;
+  FLocalTypeCount := 0;
 end;
 
 destructor TSouffleFunctionTemplate.Destroy;
@@ -337,6 +350,25 @@ begin
     raise ERangeError.CreateFmt('GetExceptionHandler: index %d out of range 0..%d', [AIndex, FExceptionHandlerCount - 1]);
   {$ENDIF}
   Result := FExceptionHandlers[AIndex];
+end;
+
+procedure TSouffleFunctionTemplate.SetLocalType(const ASlot: UInt8;
+  const AKind: TSouffleLocalType);
+begin
+  if ASlot >= Length(FLocalTypes) then
+    SetLength(FLocalTypes, ASlot + 1);
+  FLocalTypes[ASlot] := AKind;
+  if ASlot >= FLocalTypeCount then
+    FLocalTypeCount := ASlot + 1;
+end;
+
+function TSouffleFunctionTemplate.GetLocalType(
+  const ASlot: UInt8): TSouffleLocalType;
+begin
+  if ASlot < FLocalTypeCount then
+    Result := FLocalTypes[ASlot]
+  else
+    Result := sltUntyped;
 end;
 
 end.

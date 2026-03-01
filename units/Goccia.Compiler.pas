@@ -118,6 +118,12 @@ begin
     Goccia.Compiler.Expressions.CompileBinary(Ctx, TGocciaBinaryExpression(AExpr), ADest)
   else if AExpr is TGocciaUnaryExpression then
     Goccia.Compiler.Expressions.CompileUnary(Ctx, TGocciaUnaryExpression(AExpr), ADest)
+  else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
+    Goccia.Compiler.Expressions.CompilePropertyCompoundAssignment(Ctx,
+      TGocciaPropertyCompoundAssignmentExpression(AExpr), ADest)
+  else if AExpr is TGocciaComputedPropertyCompoundAssignmentExpression then
+    Goccia.Compiler.Expressions.CompileComputedPropertyCompoundAssignment(Ctx,
+      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr), ADest)
   else if AExpr is TGocciaCompoundAssignmentExpression then
     Goccia.Compiler.Expressions.CompileCompoundAssignment(Ctx, TGocciaCompoundAssignmentExpression(AExpr), ADest)
   else if AExpr is TGocciaAssignmentExpression then
@@ -150,6 +156,9 @@ begin
     Goccia.Compiler.Expressions.CompileIncrement(Ctx, TGocciaIncrementExpression(AExpr), ADest)
   else if AExpr is TGocciaThisExpression then
     Goccia.Compiler.Expressions.CompileThis(Ctx, ADest)
+  else if AExpr is TGocciaDestructuringAssignmentExpression then
+    Goccia.Compiler.Expressions.CompileDestructuringAssignment(Ctx,
+      TGocciaDestructuringAssignmentExpression(AExpr), ADest)
   else
     EmitInstruction(Ctx, EncodeABC(OP_LOAD_NIL, ADest, 0, 0));
 end;
@@ -179,11 +188,18 @@ begin
     Goccia.Compiler.Statements.CompileForOfStatement(Ctx, TGocciaForOfStatement(AStmt))
   else if AStmt is TGocciaClassDeclaration then
   begin
-    SetLength(FPendingClasses, Length(FPendingClasses) + 1);
-    FPendingClasses[High(FPendingClasses)].ClassDeclaration :=
-      TGocciaClassDeclaration(AStmt);
-    FPendingClasses[High(FPendingClasses)].Line := AStmt.Line;
-    FPendingClasses[High(FPendingClasses)].Column := AStmt.Column;
+    if Goccia.Compiler.Statements.IsSimpleClass(
+        TGocciaClassDeclaration(AStmt).ClassDefinition) then
+      Goccia.Compiler.Statements.CompileClassDeclaration(Ctx,
+        TGocciaClassDeclaration(AStmt))
+    else
+    begin
+      SetLength(FPendingClasses, Length(FPendingClasses) + 1);
+      FPendingClasses[High(FPendingClasses)].ClassDeclaration :=
+        TGocciaClassDeclaration(AStmt);
+      FPendingClasses[High(FPendingClasses)].Line := AStmt.Line;
+      FPendingClasses[High(FPendingClasses)].Column := AStmt.Column;
+    end;
   end
   else if AStmt is TGocciaSwitchStatement then
     Goccia.Compiler.Statements.CompileSwitchStatement(Ctx, TGocciaSwitchStatement(AStmt))
@@ -192,7 +208,9 @@ begin
   else if AStmt is TGocciaImportDeclaration then
     Goccia.Compiler.Statements.CompileImportDeclaration(Ctx, TGocciaImportDeclaration(AStmt))
   else if AStmt is TGocciaExportDeclaration then
-    Goccia.Compiler.Statements.CompileExportDeclaration(Ctx, TGocciaExportDeclaration(AStmt));
+    Goccia.Compiler.Statements.CompileExportDeclaration(Ctx, TGocciaExportDeclaration(AStmt))
+  else if AStmt is TGocciaDestructuringDeclaration then
+    Goccia.Compiler.Statements.CompileDestructuringDeclaration(Ctx, TGocciaDestructuringDeclaration(AStmt));
 end;
 
 procedure TGocciaCompiler.DoCompileFunctionBody(const ABody: TGocciaASTNode);
@@ -248,6 +266,7 @@ begin
   FCurrentTemplate := TSouffleFunctionTemplate.Create('<module>');
   FCurrentTemplate.DebugInfo := TSouffleDebugInfo.Create(FSourcePath);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
+  FCurrentScope.DeclareLocal('__receiver', False);
 
   try
     if AProgram.Body.Count > 0 then

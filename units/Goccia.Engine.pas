@@ -148,6 +148,7 @@ implementation
 
 uses
   Generics.Collections,
+  Math,
   SysUtils,
   TypInfo,
 
@@ -184,6 +185,7 @@ end;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver);
 begin
+  SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FGlobals := AGlobals;

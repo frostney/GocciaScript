@@ -63,13 +63,20 @@ Fixed semantics implemented directly in the dispatch loop. These are universal o
 
 | Category | Opcodes | Description |
 |----------|---------|-------------|
-| Load/Store | `OP_LOAD_CONST`, `OP_LOAD_NIL`, `OP_LOAD_TRUE`, `OP_LOAD_FALSE`, `OP_LOAD_INT`, `OP_MOVE` | Register manipulation and constant loading |
+| Load/Store | `OP_LOAD_CONST`, `OP_LOAD_NIL` (AB: R[A]:=nil(flags=B)), `OP_LOAD_TRUE`, `OP_LOAD_FALSE`, `OP_LOAD_INT`, `OP_MOVE` | Register manipulation and constant loading |
 | Variables | `OP_GET_LOCAL`, `OP_SET_LOCAL`, `OP_GET_UPVALUE`, `OP_SET_UPVALUE`, `OP_CLOSE_UPVALUE` | Local and upvalue access |
+| Typed Variables | `OP_GET_LOCAL_INT`, `OP_SET_LOCAL_INT`, `OP_GET_LOCAL_FLOAT`, `OP_SET_LOCAL_FLOAT`, `OP_GET_LOCAL_BOOL`, `OP_SET_LOCAL_BOOL`, `OP_GET_LOCAL_STRING`, `OP_SET_LOCAL_STRING`, `OP_GET_LOCAL_REF`, `OP_SET_LOCAL_REF` | Type-specialized local access for future WASM/JIT optimization |
 | Control Flow | `OP_JUMP`, `OP_JUMP_IF_TRUE`, `OP_JUMP_IF_FALSE`, `OP_JUMP_IF_NIL`, `OP_JUMP_IF_NOT_NIL` | Branching and conditional jumps |
 | Closures | `OP_CLOSURE` | Closure creation from function prototypes |
-| Compound Types | `OP_NEW_ARRAY`, `OP_ARRAY_PUSH`, `OP_ARRAY_GET`, `OP_ARRAY_SET` | VM-native dense array creation and access |
-| Compound Types | `OP_NEW_TABLE`, `OP_TABLE_GET`, `OP_TABLE_SET`, `OP_TABLE_DELETE` | VM-native string-keyed hash table creation and access |
-| Compound Types | `OP_GET_LENGTH` | Length query for arrays, tables, and strings |
+| Compound Types | `OP_NEW_ARRAY`, `OP_ARRAY_PUSH`, `OP_ARRAY_POP`, `OP_ARRAY_GET`, `OP_ARRAY_SET` | VM-native dense array creation and access |
+| Compound Types | `OP_NEW_RECORD`, `OP_RECORD_GET`, `OP_RECORD_SET`, `OP_RECORD_DELETE` | VM-native string-keyed record creation and access |
+| Compound Types | `OP_GET_LENGTH` | Length query for arrays, records, and strings |
+| Arguments | `OP_ARG_COUNT`, `OP_PACK_ARGS` | Actual argument count and variadic argument packing |
+| Integer Arithmetic | `OP_ADD_INT`, `OP_SUB_INT`, `OP_MUL_INT`, `OP_DIV_INT`, `OP_MOD_INT`, `OP_NEG_INT` | Fast-path integer operations (no runtime dispatch) |
+| Float Arithmetic | `OP_ADD_FLOAT`, `OP_SUB_FLOAT`, `OP_MUL_FLOAT`, `OP_DIV_FLOAT`, `OP_MOD_FLOAT`, `OP_NEG_FLOAT` | Fast-path float operations (no runtime dispatch) |
+| Integer Comparison | `OP_EQ_INT`, `OP_NEQ_INT`, `OP_LT_INT`, `OP_GT_INT`, `OP_LTE_INT`, `OP_GTE_INT` | Fast-path integer comparison (no runtime dispatch) |
+| String | `OP_CONCAT` | Direct string concatenation |
+| Blueprint | `OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_BLUEPRINT_METHOD`, `OP_INSTANTIATE`, `OP_GET_SLOT`, `OP_SET_SLOT` | Wren-inspired blueprint primitives for optimized dispatch |
 | Exceptions | `OP_PUSH_HANDLER`, `OP_POP_HANDLER`, `OP_THROW` | Handler-table exception model |
 | Return | `OP_RETURN`, `OP_RETURN_NIL` | Function return |
 | Debug | `OP_NOP`, `OP_LINE` | No-ops and source line annotations |
@@ -103,24 +110,28 @@ Language-specific concepts like property access, arithmetic on polymorphic value
 
 By routing these through an abstract interface, the VM remains language-agnostic. Adding a new language frontend requires implementing `TSouffleRuntimeOperations` — zero VM changes.
 
-### Classes as a Compiler Concern
+### Blueprint Compilation
 
-There is no `CLASS` opcode. Classes are syntactic sugar that the **compiler** desugars into generic operations:
+The compiler uses a two-path strategy for class declarations:
+
+**Simple classes** (constructor + named methods, no getters/setters, statics, private members, decorators, or computed properties) are compiled directly to VM blueprint opcodes:
 
 ```text
-; class Foo extends Bar { constructor(x) { this.x = x; } greet() { return "hi"; } }
+; class Dog extends Animal { constructor(name) { super(name); } bark() { return name + " barks"; } }
 
-CLOSURE          r0, <constructor_proto>     ; constructor function
-CLOSURE          r1, <greet_proto>           ; method
-NEW_TABLE        r2, 1                       ; create prototype table
-TABLE_SET        r2, "greet", r1             ; prototype.greet = greet
-TABLE_SET        r0, "prototype", r2         ; Foo.prototype = proto
-; Inheritance is handled by the runtime via Invoke/Construct — no dedicated opcode.
-; The compiler emits TABLE_SET calls to wire prototype chains as appropriate
-; for the language (JS: Object.setPrototypeOf, Python: metaclass, etc.).
+NEW_BLUEPRINT    r0, "Dog"                   ; create TSouffleBlueprint
+RT_GET_GLOBAL    r1, "Animal"                ; load super blueprint
+INHERIT          r0, r1                      ; wire super blueprint chain
+CLOSURE          r2, <constructor_proto>     ; compile constructor
+BLUEPRINT_METHOD r0, "constructor", r2       ; attach to blueprint
+CLOSURE          r3, <bark_proto>            ; compile method
+BLUEPRINT_METHOD r0, "bark", r3             ; attach to blueprint
+RT_SET_GLOBAL    "Dog", r0                   ; register globally
 ```
 
-Every language compiles its "class" concept differently, but all use the same generic opcodes. JavaScript does prototype chains, Python does metaclass invocation + MRO, Lua does metatables.
+The `IsSimpleClass` function in `Goccia.Compiler.Statements.pas` performs the complexity detection. At runtime, `TGocciaRuntimeOperations.Construct` walks the `TSouffleBlueprint` super blueprint chain to find inherited constructors, and `GetProperty` on blueprint-backed records checks dynamic properties first, then walks the blueprint's method record hierarchy.
+
+**Complex classes** (with getters, setters, static properties, private members, decorators, or computed properties) are deferred to the interpreter via `FPendingClasses`. The backend evaluates them using the GocciaScript evaluator to produce proper `TGocciaClassValue` objects, which are then registered as wrapped globals. This ensures full language feature support while the VM blueprint opcodes handle the common fast path.
 
 ## Instruction Encoding
 
@@ -140,7 +151,7 @@ Signed operands use bias encoding: `sBx` is stored as `sBx + 32767`, `Ax` is sto
 Souffle uses a register-based architecture (like Lua 5, LuaJIT, and Dalvik) rather than a stack-based one.
 
 ```text
- Register File (array of TSouffleValue, 16 bytes each):
+ Register File (array of TSouffleValue, 26 bytes each):
  ┌──────────────────┬─────────────────┬─────────────────┬─────┐
  │ Frame 0 (global) │ Frame 1 (fn A)  │ Frame 2 (fn B)  │ ... │
  │ R[0]..R[15]      │ R[0]..R[8]      │ R[0]..R[5]      │     │
@@ -165,47 +176,92 @@ Each function call pushes a `TSouffleVMCallFrame` onto the call stack:
 
 The VM supports re-entrant execution: when a runtime operation (e.g., a closure bridge) needs to call back into the VM, `ExecuteFunction` saves and restores `FBaseFrameCount` to correctly handle nested dispatch loops. If `OP_THROW` fires with an empty handler stack, `ExecuteFunction` cleans up the call stack (closing upvalues) and re-raises `ESouffleThrow` — the VM never swallows unhandled throws. The GocciaScript integration layer (`TGocciaSouffleClosureBridge.Call`, `TGocciaSouffleBackend.RunModule`) catches `ESouffleThrow` and converts it to `TGocciaThrowValue` so exceptions propagate correctly through the interpreter.
 
+### Uniform Receiver Handling
+
+Every function call uses a uniform register layout: **register 0 always holds the receiver**. For non-method calls (top-level functions, arrow functions), the receiver is `SouffleNil`. For method calls, it holds the object the method was called on.
+
+```text
+Frame layout:
+  R[Base + 0]  = receiver (SouffleNil for non-methods)
+  R[Base + 1]  = first argument
+  R[Base + 2]  = second argument
+  ...
+```
+
+`ExecuteFunction` and `CallClosure` always place the receiver in register 0 unconditionally — there is no `AIsMethodCall` flag or side-table lookup. The compiler reserves slot 0 for the receiver in every function by declaring a `__receiver` local (for arrow functions and the top-level module) or `this` (for methods). Arrow functions inherit `this` from their lexical closure scope, so the `SouffleNil` in register 0 is ignored by the language runtime. `TGocciaSouffleClosureBridge.Call` always passes `AThisValue` as `Args[0]`, making the bridge layer equally uniform.
+
 ## Tagged Union Value System
 
 The VM has its own value system, completely independent of `TGocciaValue`:
 
 ```text
-TSouffleValue (16 bytes):
-┌──────────────────┬────────────────────────────────┐
-│ Kind: UInt8 (1B) │ padding (7B)                   │
-├──────────────────┴────────────────────────────────┤
-│ Data (8B): Int64 / Double / Pointer               │
-└───────────────────────────────────────────────────┘
+TSouffleValue (packed record, 26 bytes):
+┌──────────────────┬──────────────┬──────────────────────────────┐
+│ Kind: UInt8 (1B) │ Flags: (1B)  │ Variant Data (24B)           │
+├──────────────────┴──────────────┴──────────────────────────────┤
+│ svkNil:       (nothing)                                        │
+│ svkBoolean:   AsBoolean: Boolean                               │
+│ svkInteger:   AsInteger: Int64                                 │
+│ svkFloat:     AsFloat: Double                                  │
+│ svkString:    AsInlineString: TSouffleInlineString (string[23]) │
+│ svkReference: AsReference: TSouffleHeapObject                  │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-### Five Value Kinds
+### Six Value Kinds
 
 | Kind | In-Value Data | Heap? | Description |
 |------|--------------|-------|-------------|
-| `svkNil` | — | No | Absence of value |
+| `svkNil` | — | No | Absence of value (flags distinguish flavors) |
 | `svkBoolean` | `AsBoolean: Boolean` | No | True or false |
 | `svkInteger` | `AsInteger: Int64` | No | 64-bit integer |
 | `svkFloat` | `AsFloat: Double` | No | 64-bit float |
+| `svkString` | `AsInlineString: TSouffleInlineString` | No | Short string (up to 23 bytes, inline) |
 | `svkReference` | `AsReference: TSouffleHeapObject` | Yes | Pointer to heap object |
 
-Primitives are inline — zero heap allocation, zero GC pressure. All complex types (strings, objects, closures) are `svkReference` pointing to `TSouffleHeapObject` subclasses. The VM never inspects what kind of reference it is — that's the runtime's job.
+### Flags Byte
 
-### Why Only 5 Kinds?
+Every `TSouffleValue` carries a `Flags: Byte` field alongside `Kind`. This provides per-value metadata without adding new value kinds, keeping the VM general-purpose while allowing language runtimes to attach semantics:
 
-The VM does **not** distinguish between strings, objects, arrays, closures, classes, etc. at the value kind level. Those are all `svkReference` — a pointer to a heap object. The heap object carries its own type tag (`HeapKind: UInt8`).
+- **`svkNil` flags** — Distinguishes flavors of "nothing". The VM treats all nils identically (falsy, numeric NaN). The runtime interprets flags: GocciaScript maps flags=0 to `undefined` (the default absent value), flags=1 to `null` (explicit null assignment), flags=2 to "the hole" (sparse array gap). `SouffleValuesEqual` compares flags for `svkNil` values — two nils with different flags are not equal.
+- **Other kinds** — Flags default to 0. Reserved for future use (e.g., frozen strings, tainted values).
 
-For performance-critical compound types (arrays and tables), the VM provides inline type checks in core opcodes. For example, `OP_ARRAY_GET` checks `HeapKind = SOUFFLE_HEAP_ARRAY` and performs a direct element access; if the check fails, it falls through to the runtime. This gives the best of both worlds: VM-native speed for common operations, full language-specific semantics via runtime dispatch for complex cases.
+`OP_LOAD_NIL` uses AB encoding: `R[A] := Nil(flags=B)`. The compiler emits the appropriate flag for each language construct.
+
+### Inline Short String Optimization
+
+Strings up to 23 characters are stored inline as `svkString` using `TSouffleInlineString = string[23]`. This avoids heap allocation for the vast majority of strings (property names, short literals, single characters). Strings longer than 23 characters are stored as `svkReference` pointing to a `TSouffleHeapString` heap object.
+
+The `SouffleString(AValue)` constructor auto-selects the representation:
+- `Length(AValue) <= 23` → `svkString` with `AsInlineString`
+- `Length(AValue) > 23` → `svkReference` to a new `TSouffleHeapString`
+
+The `SouffleGetString(AValue)` accessor handles both representations transparently. `SouffleIsStringValue(AValue)` checks for both `svkString` and `svkReference` to `TSouffleHeapString`.
+
+### Design Rationale
+
+**Packed record (26 bytes)**: The `packed` directive removes alignment padding between `Kind` (1B) and `Flags` (1B), saving 6 bytes per value compared to a non-packed layout (which would pad to 32 bytes). On modern hardware, the unaligned access penalty for `Int64`/`Double` is negligible — measured at less than 1% in benchmarks. With 65,536 registers, this saves ~384 KB of register file memory.
+
+**Why not NaN boxing**: NaN boxing (as used by V8/SpiderMonkey/Wren) encodes type tags in the mantissa bits of a 64-bit double, achieving 8 bytes per value. However, FPC's `Double` type does not expose raw bit manipulation as idiomatically as C, making NaN boxing fragile and non-portable across FPC targets (x86, ARM, WASM). The packed record approach is transparent, debuggable, and works identically on all FPC targets.
+
+**Why not a class hierarchy**: A class-based `TSouffleValue` (one subclass per kind) would require heap allocation for every primitive, adding pointer indirection, GC pressure, and ~40 bytes overhead per value (VMT + instance header). The flat variant record keeps primitives inline with zero allocation.
+
+### Why Only 6 Kinds?
+
+The VM does **not** distinguish between objects, arrays, closures, classes, etc. at the value kind level. Those are all `svkReference` — a pointer to a heap object. The heap object carries its own type tag (`HeapKind: UInt8`). Strings are the exception: short strings are inline (`svkString`) for performance, while long strings use `svkReference` to `TSouffleHeapString`.
+
+For performance-critical compound types (arrays and records), the VM provides inline type checks in core opcodes. For example, `OP_ARRAY_GET` checks `HeapKind = SOUFFLE_HEAP_ARRAY` and performs a direct element access; if the check fails, it falls through to the runtime. This gives the best of both worlds: VM-native speed for common operations, full language-specific semantics via runtime dispatch for complex cases.
 
 This means:
 
-- The VM is language-agnostic — it provides generic array/table primitives usable by any language
+- The VM is language-agnostic — it provides generic array/record primitives usable by any language
 - Adding new heap types requires zero VM changes (runtime dispatch handles them)
 - Core compound opcodes provide fast paths that eliminate wrapping overhead for the most common operations
-- The register file is a flat array of 16-byte values — cache-friendly, no indirection for primitives
+- The register file is a flat array of 26-byte packed values — cache-friendly, no indirection for primitives or short strings
 
 ### Truthiness Semantics
 
-`IsTrue` is the one Tier 1 operation that touches value kinds. It has universal behavior: Nil is falsy, Boolean checks the flag, Integer 0 is falsy, Float 0.0/NaN is falsy, all References are truthy. Languages that need different truthiness (e.g., Python where empty list is falsy) can use `RT_TO_BOOLEAN` instead of `JUMP_IF_TRUE`.
+`SouffleIsTrue` is the one Tier 1 operation that touches value kinds. It has universal behavior: Nil is falsy (regardless of flags), Boolean checks the flag, Integer 0 is falsy, Float 0.0/NaN is falsy, empty inline string is falsy, all References are truthy. Languages that need different truthiness (e.g., Python where empty list is falsy) can use `RT_TO_BOOLEAN` instead of `JUMP_IF_TRUE`.
 
 ### Heap Objects
 
@@ -213,12 +269,13 @@ All heap-allocated values inherit from `TSouffleHeapObject`:
 
 | Heap Kind | Constant | Class | Description |
 |-----------|----------|-------|-------------|
-| 0 | `SOUFFLE_HEAP_STRING` | `TSouffleString` | Immutable string value |
 | 1 | `SOUFFLE_HEAP_CLOSURE` | `TSouffleClosure` | Function prototype + captured upvalues |
 | 2 | `SOUFFLE_HEAP_UPVALUE` | `TSouffleUpvalue` | Open or closed upvalue |
 | 3 | `SOUFFLE_HEAP_ARRAY` | `TSouffleArray` | Dense dynamic array of `TSouffleValue` |
-| 4 | `SOUFFLE_HEAP_TABLE` | `TSouffleTable` | String-keyed ordered hash map of `TSouffleValue` |
+| 4 | `SOUFFLE_HEAP_RECORD` | `TSouffleRecord` | Unified compound type: plain key-value map or blueprint-backed with indexed slots |
 | 5 | `SOUFFLE_HEAP_NATIVE_FUNCTION` | `TSouffleNativeFunction` | Pascal callback wrapped as a callable heap object |
+| 6 | `SOUFFLE_HEAP_BLUEPRINT` | `TSouffleBlueprint` | Type descriptor with SlotCount, method record (TSouffleRecord), and optional SuperBlueprint |
+| 7 | `SOUFFLE_HEAP_STRING` | `TSouffleHeapString` | Heap-allocated string (for strings exceeding 23-byte inline limit) |
 | 128 | `SOUFFLE_HEAP_RUNTIME` | `TGocciaWrappedValue` | Language-specific wrapped value |
 
 Kind 128+ is reserved for runtime-specific heap types. GocciaScript uses `TGocciaWrappedValue` to wrap `TGocciaValue` instances as Souffle heap objects, enabling GocciaScript's rich type system (classes, promises, etc.) to be referenced from VM registers.
@@ -235,17 +292,19 @@ Dense dynamic array of `TSouffleValue`. Universal across languages (JS arrays, P
 
 - O(1) indexed get/set
 - O(1) amortized push (doubling capacity, minimum 8)
+- O(1) pop via `OP_ARRAY_POP` (AB format: R[A] := Array(R[B]).Pop())
 - Negative or out-of-range indices return `nil`
 - `Put` auto-extends with `nil` fill when the index exceeds the current count
 
-### `TSouffleTable` (heap kind 4)
+### `TSouffleRecord` (heap kind 4)
 
-String-keyed ordered hash map of `TSouffleValue`. Covers JS objects, Python dicts (str keys), Lua hash part, Wren ObjMap (string keys).
+Unified compound type for all key-value data. Records without a blueprint are plain string-keyed hash maps (object literals, Python dicts, Lua hash part). Records with a blueprint (created via `CreateFromBlueprint`) have both key-value entries and indexed slots for O(1) field access.
 
 - FNV-1a 32-bit hash with open addressing (linear probing)
 - 75% max load factor, doubles capacity on grow
 - Insertion-order iteration via `GetOrderedKey`/`GetOrderedValue`
 - Tombstone-based deletion preserves probe chains
+- Blueprint-backed records: O(1) indexed slot access alongside key-value map
 
 **Why string-keyed only**: String keys cover the vast majority of property access across target languages. Non-string keys (JS Symbols, Python arbitrary-type dict keys) are rare and inherently language-specific — they remain in the runtime layer.
 
@@ -254,31 +313,33 @@ String-keyed ordered hash map of `TSouffleValue`. Covers JS objects, Python dict
 The compiler emits core compound opcodes for statically known operations:
 
 - Array literals `[1, 2, 3]` → `OP_NEW_ARRAY` + `OP_ARRAY_PUSH`
-- Object literals `{a: 1}` → `OP_NEW_TABLE` + `OP_TABLE_SET`
+- Object literals `{a: 1}` → `OP_NEW_RECORD` + `OP_RECORD_SET`
 - Computed index `arr[i]` → `OP_ARRAY_GET` (fast path for native arrays, fallback to runtime)
-- Named property `obj.key` → `OP_TABLE_GET` (fast path for native tables, fallback to runtime)
-- Property assignment `obj.key = val` → `OP_TABLE_SET` (fast path for native tables, fallback to runtime)
+- Named property `obj.key` → `OP_RECORD_GET` (fast path for native records, fallback to runtime)
+- Property assignment `obj.key = val` → `OP_RECORD_SET` (fast path for native records, fallback to runtime)
 
-All core compound opcodes have runtime fallbacks: if the operand is not the expected native type (e.g., a wrapped GocciaScript value instead of a `TSouffleTable`), the VM delegates to `TSouffleRuntimeOperations.GetProperty` / `SetProperty` / `GetIndex` / `SetIndex`.
+All core compound opcodes have runtime fallbacks: if the operand is not the expected native type (e.g., a wrapped GocciaScript value instead of a `TSouffleRecord`), the VM delegates to `TSouffleRuntimeOperations.GetProperty` / `SetProperty` / `GetIndex` / `SetIndex`.
 
 The runtime opcodes (`OP_RT_GET_PROP`, `OP_RT_SET_PROP`, etc.) remain for complex cases: prototype chain walking, Symbol-keyed properties, accessor invocation, and `typeof`/`instanceof`/`in`.
 
-### Classes: Not a VM Primitive
+### Blueprint Primitives (Wren-inspired)
 
-Consistent with WASM GC, Lua, CPython, and this architecture's design:
+The VM provides minimal blueprint primitives (`TSouffleBlueprint` heap type) alongside the unified `TSouffleRecord`. A blueprint defines a type descriptor with SlotCount, a method record (TSouffleRecord), and optional SuperBlueprint. Records can be plain key-value maps or blueprint-backed (via `CreateFromBlueprint`), in which case they have both key-value entries and indexed slots. This design enables the VM and runtime to optimize:
 
-> "There is no CLASS opcode. Classes are syntactic sugar that the compiler desugars into generic operations."
+- **Blueprint-backed record slot access** uses O(1) integer-indexed slots instead of string-keyed hash lookups
+- **Method dispatch** uses the blueprint's method record (TSouffleRecord) directly, enabling efficient inheritance chains
+- The runtime opcodes (`OP_RT_CONSTRUCT`, `OP_RT_IS_INSTANCE`, `OP_RT_GET_PROP`, `OP_RT_SET_PROP`) remain as polymorphic fallbacks for cases where the compiler can't statically determine the type
 
-A class instance is a `TSouffleTable` (for own properties) with prototype chain semantics handled by the runtime. The compiler emits table creation + table set operations. The runtime adds prototype walking for `GetProperty` when the table doesn't have the key directly.
+The blueprint opcodes are a fast path — not a replacement for the existing record-based approach. Languages that don't have classes (or use different class semantics) continue to use plain `TSouffleRecord` for everything.
 
 ### WASM GC Mapping
 
 ```
 TSouffleArray   →  WASM array type (array.new, array.get, array.set)
-TSouffleTable   →  WASM struct type (struct.new, struct.get, struct.set)
-                   For dynamic tables: WASM GC hash map (runtime library)
+TSouffleRecord  →  WASM struct type (struct.new, struct.get, struct.set)
+                   For dynamic records: WASM GC hash map (runtime library)
 OP_ARRAY_GET    →  array.get
-OP_TABLE_GET    →  struct.get (static) or runtime hash lookup (dynamic)
+OP_RECORD_GET   →  struct.get (static) or runtime hash lookup (dynamic)
 ```
 
 ### Performance
@@ -312,18 +373,18 @@ vs. the previous path via `TGocciaWrappedValue`:
 Both compound types participate in mark-and-sweep:
 
 - `TSouffleArray.MarkReferences` — marks all elements that are `svkReference`
-- `TSouffleTable.MarkReferences` — marks all occupied values that are `svkReference`
+- `TSouffleRecord.MarkReferences` — marks all occupied values that are `svkReference`
 - Both are registered via `AllocateObject` and tracked by the Souffle GC
 
 ## Metatables
 
-Inspired by Lua's metatable concept, every `TSouffleHeapObject` can have an optional **metatable** — a `TSouffleTable` that the VM consults for key lookups that miss on the primary data. This provides prototype-chain-like method dispatch at the VM level, without crossing into language-specific runtime code.
+Inspired by Lua's metatable concept, every `TSouffleHeapObject` can have an optional **metatable** — a `TSouffleRecord` that the VM consults for key lookups that miss on the primary data. This provides prototype-chain-like method dispatch at the VM level, without crossing into language-specific runtime code.
 
 ### How It Works
 
-When `OP_TABLE_GET` resolves a string-keyed property:
+When `OP_RECORD_GET` resolves a string-keyed property:
 
-1. **Direct lookup** — If the object is a `TSouffleTable`, check the table's own entries
+1. **Direct lookup** — If the object is a `TSouffleRecord`, check the record's own entries
 2. **Metatable lookup** — If the object has a non-nil metatable, look up the key in the metatable
 3. **Runtime fallback** — Delegate to `TSouffleRuntimeOperations.GetProperty`
 
@@ -351,7 +412,7 @@ The callback receives `TSouffleValue` arguments and returns a `TSouffleValue` re
 The VM holds configurable default metatables per compound type:
 
 - `TSouffleVM.ArrayMetatable` — assigned to every `TSouffleArray` created by `OP_NEW_ARRAY`
-- `TSouffleVM.TableMetatable` — assigned to every `TSouffleTable` created by `OP_NEW_TABLE`
+- `TSouffleVM.RecordMetatable` — assigned to every `TSouffleRecord` created by `OP_NEW_RECORD`
 
 The language frontend populates these metatables during initialization. Individual instances can override their metatable after creation.
 
@@ -359,7 +420,7 @@ The language frontend populates these metatables during initialization. Individu
 
 ### GocciaScript Registration
 
-The GocciaScript bridge layer (`TGocciaRuntimeOperations.RegisterMetatables`) creates a `TSouffleTable` for each type and populates it with native function implementations:
+The GocciaScript bridge layer (`TGocciaRuntimeOperations.RegisterDelegates`) creates a `TSouffleRecord` for each type and populates it with native function implementations:
 
 | Type | Method | Description |
 |------|--------|-------------|
@@ -370,7 +431,7 @@ The GocciaScript bridge layer (`TGocciaRuntimeOperations.RegisterMetatables`) cr
 ### Language Agnosticism
 
 The metatable mechanism is language-agnostic:
-- The VM only performs string-keyed table lookups — it knows nothing about prototypes, `this`, or method binding
+- The VM only performs string-keyed record lookups — it knows nothing about prototypes, `this`, or method binding
 - The receiver is passed as a `TSouffleValue` to the native callback — the callback decides how to interpret it
 - Different language frontends can register different metatables with different methods for the same compound types
 
@@ -450,11 +511,17 @@ TSouffleFunctionTemplate
   │     ├── CatchTarget: UInt32
   │     ├── FinallyTarget: UInt32 ($FFFFFFFF if none)
   │     └── CatchRegister: UInt8
-  └── DebugInfo: TSouffleDebugInfo (optional)
-        ├── SourceFile: string
-        ├── LineMap: array of (PC, Line, Column)
-        └── LocalNames: array of (Slot, Name, StartPC, EndPC)
+  ├── DebugInfo: TSouffleDebugInfo (optional)
+  │     ├── SourceFile: string
+  │     ├── LineMap: array of (PC, Line, Column)
+  │     └── LocalNames: array of (Slot, Name, StartPC, EndPC)
+  └── LocalTypes: array of TSouffleLocalType   (per-slot type hints)
+        ├── LocalTypeCount: UInt8
+        └── Per slot: sltUntyped (0), sltInteger (1), sltFloat (2),
+                      sltBoolean (3), sltString (4), sltReference (5)
 ```
+
+The compiler infers type hints from literal initializers (e.g., `const x = 42` gets `sltInteger`, `const y = 3.14` gets `sltFloat`). These hints are stored on the template and used to emit type-specialized load/store opcodes (`OP_GET_LOCAL_INT`, `OP_SET_LOCAL_FLOAT`, etc.) instead of generic `OP_GET_LOCAL`/`OP_SET_LOCAL`. At runtime the typed opcodes are functionally identical to the generic versions, but they carry type information for future WASM generation and JIT compilation.
 
 ### Constant Pool
 
@@ -527,6 +594,9 @@ The `.sbc` (Souffle ByteCode) binary format enables ahead-of-time compilation an
 │   HasDebug: UInt8 (boolean)          │
 │   [if debug:]                        │
 │     DebugInfo block                  │
+│   LocalTypeCount: UInt8              │
+│   Per local type:                    │
+│     Kind: UInt8 (0=untyped..5=ref)   │
 └──────────────────────────────────────┘
 ```
 
@@ -566,12 +636,12 @@ When `--emit` is used without a path, the output filename is derived from the in
 
 `TGocciaRuntimeOperations` (`Goccia.Runtime.Operations.pas`) implements `TSouffleRuntimeOperations` with GocciaScript semantics. It bridges between `TSouffleValue` and `TGocciaValue` at the runtime boundary:
 
-- **`ToSouffleValue`** / **`UnwrapToGocciaValue`** — Convert between value systems. `UnwrapToGocciaValue` creates a lazy `TGocciaSouffleProxy` for `TSouffleArray`/`TSouffleTable` instead of deep-copying. `ToSouffleValue` detects proxies and extracts the original Souffle object (zero-copy round-trip)
+- **`ToSouffleValue`** / **`UnwrapToGocciaValue`** — Convert between value systems. `UnwrapToGocciaValue` creates a lazy `TGocciaSouffleProxy` for `TSouffleArray`/`TSouffleRecord` instead of deep-copying. `ToSouffleValue` detects proxies and extracts the original Souffle object (zero-copy round-trip)
 - **`TGocciaSouffleProxy`** — A single `TGocciaValue` subclass that wraps any Souffle compound type. Property access is delegated to `TGocciaRuntimeOperations.ResolveProxyGet`/`ResolveProxySet`, which dispatch based on the target's type. This is a higher-order function pattern: one proxy class handles all compound types, and the resolution logic lives in the runtime. No per-type subclassing needed
 - **`TGocciaWrappedValue`** — Wraps a `TGocciaValue` as a `TSouffleHeapObject` for VM register storage (used for types without native VM representation: classes, promises, symbols, etc.)
 - **`TGocciaSouffleClosureBridge`** — Wraps a `TSouffleClosure` as a `TGocciaFunctionBase`, enabling Souffle closures to be called by GocciaScript built-in methods (e.g., `Array.prototype.map` callbacks)
-- **Metatable registration** — `RegisterMetatables` creates VM-native metatables for arrays (with `push`, `pop`, `join` as `TSouffleNativeFunction` callbacks) and assigns them to the VM's default metatable slots. Method calls like `arr.push(6)` are dispatched entirely within the VM without crossing the language boundary
-- **Native compound fast paths** — `GetProperty`, `SetProperty`, `GetIndex`, `SetIndex`, `HasProperty`, `DeleteProperty`, and `TypeOf` all check for `TSouffleArray`/`TSouffleTable` before falling through to wrapped value unwrapping, avoiding unnecessary materialization
+- **Delegate registration** — `RegisterDelegates` creates VM-native delegate records for arrays (with `push`, `pop`, `join` as `TSouffleNativeFunction` callbacks) and assigns them to the VM's default metatable slots. Method calls like `arr.push(6)` are dispatched entirely within the VM without crossing the language boundary
+- **Native compound fast paths** — `GetProperty`, `SetProperty`, `GetIndex`, `SetIndex`, `HasProperty`, `DeleteProperty`, and `TypeOf` all check for `TSouffleArray`/`TSouffleRecord` before falling through to wrapped value unwrapping, avoiding unnecessary materialization
 - **Auto-boxing** — `GetProperty` performs primitive boxing when a direct property lookup returns `nil`, enabling prototype methods on primitives (e.g., `(42).toFixed(2)`)
 
 ## File Organization
@@ -580,9 +650,9 @@ All Souffle VM source files live in the `souffle/` directory with `Souffle.` pre
 
 | File | Description |
 |------|-------------|
-| `Souffle.Value.pas` | `TSouffleValue` tagged union, constructors, type checks, truthiness |
-| `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleString`, heap kind constants |
-| `Souffle.Compound.pas` | `TSouffleArray` (dense array) and `TSouffleTable` (string-keyed hash map) |
+| `Souffle.Value.pas` | `TSouffleValue` packed record (26B), `TSouffleInlineString`, constructors, `SouffleGetString`/`SouffleIsStringValue`, type checks, truthiness |
+| `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleHeapString` (long string fallback), heap kind constants |
+| `Souffle.Compound.pas` | `TSouffleArray` (dense array), `TSouffleRecord` (unified compound: plain key-value map or blueprint-backed with slots), `TSouffleBlueprint` (type descriptor with method record and optional super blueprint) |
 | `Souffle.Bytecode.pas` | Opcode definitions, instruction encoding/decoding helpers |
 | `Souffle.Bytecode.Chunk.pas` | `TSouffleFunctionTemplate`, constant pool, upvalue descriptors |
 | `Souffle.Bytecode.Module.pas` | `TSouffleBytecodeModule`, import/export tables |
@@ -594,7 +664,7 @@ All Souffle VM source files live in the `souffle/` directory with `Souffle.` pre
 | `Souffle.VM.NativeFunction.pas` | `TSouffleNativeFunction` (Pascal callback as callable heap object) |
 | `Souffle.VM.Upvalue.pas` | `TSouffleUpvalue` (open/closed variable capture) |
 | `Souffle.VM.Exception.pas` | `TSouffleHandlerStack`, `ESouffleThrow` |
-| `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` abstract interface |
+| `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` abstract interface for language-specific semantics |
 | `Souffle.GarbageCollector.pas` | Mark-and-sweep GC for `TSouffleHeapObject` |
 
 GocciaScript-specific bridge files in `units/`:
@@ -602,7 +672,12 @@ GocciaScript-specific bridge files in `units/`:
 | File | Description |
 |------|-------------|
 | `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — orchestration, built-in registration |
-| `Goccia.Compiler.pas` | `TGocciaCompiler` — AST to Souffle bytecode |
+| `Goccia.Compiler.pas` | `TGocciaCompiler` — AST to Souffle bytecode, top-level compilation dispatch |
+| `Goccia.Compiler.Expressions.pas` | Expression compilation: functions, methods, identifiers, typed local load/store |
+| `Goccia.Compiler.Statements.pas` | Statement compilation: variables, classes (`IsSimpleClass` + `CompileClassDeclaration`), control flow |
+| `Goccia.Compiler.Context.pas` | `TGocciaCompilationContext` — compilation state passed through sub-units |
+| `Goccia.Compiler.Scope.pas` | `TGocciaCompilerScope` — lexical scope tracking, local/upvalue resolution, type hints |
+| `Goccia.Compiler.ConstantFolding.pas` | Compile-time constant folding for arithmetic and comparison expressions |
 | `Goccia.Runtime.Operations.pas` | `TGocciaRuntimeOperations` — GocciaScript runtime semantics |
 
 ## WASM 3.0 Alignment
@@ -614,7 +689,7 @@ The architecture is designed to make a future WASM 3.0 backend a natural fit:
 | `TSouffleValue` tagged union | `anyref` hierarchy (`i31ref` for small ints/bools, GC structs for boxed values) |
 | `TSouffleHeapObject` | GC struct types with subtyping (`ref.cast`, `ref.test`) |
 | `TSouffleArray` | GC array type (`array.new`, `array.get`, `array.set`) |
-| `TSouffleTable` | GC struct (static fields) or runtime hash map (dynamic keys) |
+| `TSouffleRecord` | GC struct (static fields) or runtime hash map (dynamic keys) |
 | `TSouffleClosure` | GC struct with `funcref` field + upvalue array |
 | `TSouffleUpvalue` | Mutable GC struct field |
 | Handler-table exception model | `try_table` / `throw` / `throw_ref` / `exnref` |
@@ -634,7 +709,7 @@ The architecture is designed to make a future WASM 3.0 backend a natural fit:
 | `svkFloat` | `(ref $boxed_f64)` GC struct with `f64` field |
 | `svkReference` → String | `(ref $string)` GC array of `i8` |
 | `svkReference` → Array | `(ref $array)` GC array of `anyref` (`array.new`, `array.get`, `array.set`) |
-| `svkReference` → Table | `(ref $table)` GC struct (static fields) or runtime hash map (dynamic) |
+| `svkReference` → Record | `(ref $record)` GC struct (static fields) or runtime hash map (dynamic) |
 | `svkReference` → Closure | `(ref $closure)` GC struct with `funcref` + upvalue array |
 
 Key WASM 3.0 features this leverages:
@@ -660,7 +735,6 @@ These features are stubbed in the runtime operations layer and will need real im
 | **Iteration** (`for...of`, spread) | `GetIterator` returns the value unchanged; `IteratorNext` always returns done; `SpreadInto` is a no-op | Wire to GocciaScript's `GetIteratorFromValue` / `TGocciaIteratorValue` protocol; handle arrays, strings, maps, sets, and user-defined iterables |
 | **Module imports** | `ImportModule` returns `SouffleNil` | Resolve module paths, compile or load `.sbc` modules, return the module namespace object |
 | **Async/await** | `AwaitValue` returns its argument unchanged | Integrate with `TGocciaPromiseValue` and the microtask queue |
-| **Closure receiver slot** | `CallClosure` accepts `AReceiver` but does not store it into the new frame's register window | Define a receiver register convention in `TSouffleFunctionTemplate` and assign `AReceiver` into that slot when creating the closure call frame |
 | **Template literal parsing** | The compiler re-lexes/re-parses each `${...}` interpolation from the raw template string | Enhance the parser to produce a template AST node with pre-parsed static and expression parts; the compiler would then iterate those directly |
 | **Binary endianness** | `.sbc` serialization uses native-endian writes | Normalize to little-endian for cross-platform `.sbc` portability |
 
@@ -674,12 +748,12 @@ These were reviewed and determined to be correct or not applicable:
 | **Tokens leak in `Goccia.Compiler.Test.pas`** | Not a leak | `Lexer.ScanTokens` returns a reference to the lexer's internal `FTokens` list, which the lexer frees in its destructor. Manually freeing `Tokens` causes a double-free crash. |
 | **`Souffle.VM.RuntimeOperations.pas` uses `{$I Souffle.inc}`** | Intentional | This unit is part of the Souffle VM layer and follows Souffle naming conventions. The abstract `TSouffleRuntimeOperations` class is VM-level infrastructure, not a GocciaScript bridge. |
 | **`InitScope`/`SuperInitScope` leak in `InstantiateClass`** | Not a leak | `TGocciaClassInitScope` is a `TGocciaScope` subclass that auto-registers with the GC in its constructor. All scopes are GC-managed — they are collected during sweep, not manually freed. This is consistent with every scope creation in the evaluator. |
-| **null vs undefined conflation in runtime ops** | Intentional design | `svkNil` maps to `undefined`; `null` is a wrapped `TGocciaNullLiteralValue` reference registered as a global via `OP_RT_GET_GLOBAL('null')`. `OP_RT_HAS_GLOBAL` disambiguates "variable holds undefined" from "variable doesn't exist" — the compiler emits `HasGlobal` + `GetGlobal` for identifier access, and constructs a `ReferenceError` at the bytecode level if the global is absent. `typeof` uses safe `GetGlobal` (returns nil for missing globals). This keeps language-specific null/undefined semantics out of the VM's value system. |
+| **null vs undefined via nil flags** | Intentional design | `svkNil` with `Flags=0` (the VM's default) maps to `undefined` in GocciaScript; `Flags=1` maps to `null`. The compiler emits `OP_LOAD_NIL` with B=0 for undefined literals and B=1 for null literals. `SouffleValuesEqual` compares flags for nil values, so `null === null` is true but `null === undefined` is false. All VM-internal absent values (uninitialized registers, missing properties, function-with-no-return) naturally produce flags=0, matching JavaScript's `undefined` semantics. The runtime constants `GOCCIA_NIL_UNDEFINED=0`, `GOCCIA_NIL_NULL=1`, `GOCCIA_NIL_HOLE=2` are defined in `Goccia.Runtime.Operations.pas` — the VM itself only knows about `SOUFFLE_NIL_DEFAULT=0`. |
 | **`MergeFileResult` string comparison for undefined** | Style preference | The `GetProperty(...).ToStringLiteral.Value = 'undefined'` check works correctly because `TGocciaUndefinedLiteralValue.ToStringLiteral` always returns `'undefined'`. A type check would be marginally more robust but the current code has no known failure mode. |
 
 ### Constant Pool Limitation (ABC Encoding)
 
-The ABC instruction format encodes operand B and C as 8-bit values. This limits constant pool indices used in `OP_TABLE_GET`, `OP_TABLE_SET`, `OP_RT_SET_PROP`, `OP_RT_GET_PROP`, and `OP_RT_DEL_PROP` to 255 entries per prototype. `OP_TABLE_DELETE` uses ABx encoding (16-bit Bx) and does not have this limitation. The compiler raises a clear error if the ABC limit is exceeded. A future ABx-style wide-operand variant could lift this restriction for the remaining opcodes if needed.
+The ABC instruction format encodes operand B and C as 8-bit values. This limits constant pool indices used in `OP_RECORD_GET`, `OP_RECORD_SET`, `OP_RT_SET_PROP`, `OP_RT_GET_PROP`, and `OP_RT_DEL_PROP` to 255 entries per prototype. `OP_RECORD_DELETE` uses ABx encoding (16-bit Bx) and does not have this limitation. The compiler raises a clear error if the ABC limit is exceeded. A future ABx-style wide-operand variant could lift this restriction for the remaining opcodes if needed.
 
 ### NaN Handling in the Constant Pool
 

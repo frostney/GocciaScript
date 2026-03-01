@@ -16,7 +16,7 @@ type
   TSouffleOpCode = (
     // ── Core: Load / Store / Move ──
     OP_LOAD_CONST    = 0,   // ABx   R[A] := Constants[Bx]
-    OP_LOAD_NIL      = 1,   // A     R[A] := Nil
+    OP_LOAD_NIL      = 1,   // AB    R[A] := Nil(flags=B)
     OP_LOAD_TRUE     = 2,   // A     R[A] := Boolean(true)
     OP_LOAD_FALSE    = 3,   // A     R[A] := Boolean(false)
     OP_LOAD_INT      = 4,   // AsBx  R[A] := Integer(sBx)
@@ -47,26 +47,75 @@ type
     // ── Core: Return ──
     OP_RETURN        = 20,  // A     Return R[A] to caller
     OP_RETURN_NIL    = 21,  //       Return Nil to caller
-    OP_LOAD_NULL     = 22,  // A     R[A] := Null
 
     // ── Core: Compound Types ──
+    OP_ARRAY_POP     = 23,  // AB    R[A] := Array(R[B]).Pop()
     OP_NEW_ARRAY     = 24,  // AB    R[A] := new Array(capacity=B)
     OP_ARRAY_PUSH    = 25,  // AB    Array(R[A]).push(R[B])
     OP_ARRAY_GET     = 26,  // ABC   R[A] := Array(R[B])[R[C].AsInteger]
     OP_ARRAY_SET     = 27,  // ABC   Array(R[A])[R[B].AsInteger] := R[C]
-    OP_NEW_TABLE     = 28,  // AB    R[A] := new Table(capacity=B)
-    OP_TABLE_GET     = 29,  // ABC   R[A] := Table(R[B])[Constants[C]]
-    OP_TABLE_SET     = 30,  // ABC   Table(R[A])[Constants[B]] := R[C]
-    OP_TABLE_DELETE  = 31,  // ABx   delete Table(R[A])[Constants[Bx]]
+    OP_NEW_RECORD    = 28,  // AB    R[A] := new Record(capacity=B)
+    OP_RECORD_GET    = 29,  // ABC   R[A] := Record(R[B])[Constants[C]]
+    OP_RECORD_SET    = 30,  // ABC   Record(R[A])[Constants[B]] := R[C]
+    OP_RECORD_DELETE = 31,  // ABx   delete Record(R[A])[Constants[Bx]]
     OP_GET_LENGTH    = 32,  // AB    R[A] := Length(R[B])
 
     // ── Core: Arguments ──
     OP_ARG_COUNT     = 33,  // A     R[A] := ArgCount (number of actual arguments passed)
-    OP_COLLECT_REST  = 34,  // AB    R[A] := Array(args[B..ArgCount-1])
+    OP_PACK_ARGS     = 34,  // AB    R[A] := Array(args[B..ArgCount-1])
 
     // ── Core: Debug ──
     OP_NOP           = 35,  //       No operation
     OP_LINE          = 36,  // Bx    Source line annotation
+
+    // ── Core: Integer Arithmetic ──
+    OP_ADD_INT       = 37,  // ABC   R[A] := R[B].AsInteger + R[C].AsInteger
+    OP_SUB_INT       = 38,  // ABC   R[A] := R[B].AsInteger - R[C].AsInteger
+    OP_MUL_INT       = 39,  // ABC   R[A] := R[B].AsInteger * R[C].AsInteger
+    OP_DIV_INT       = 40,  // ABC   R[A] := Float(R[B].AsInteger) / Float(R[C].AsInteger)
+    OP_MOD_INT       = 41,  // ABC   R[A] := R[B].AsInteger mod R[C].AsInteger
+    OP_NEG_INT       = 42,  // AB    R[A] := -R[B].AsInteger
+
+    // ── Core: Float Arithmetic ──
+    OP_ADD_FLOAT     = 43,  // ABC   R[A] := R[B].AsFloat + R[C].AsFloat
+    OP_SUB_FLOAT     = 44,  // ABC   R[A] := R[B].AsFloat - R[C].AsFloat
+    OP_MUL_FLOAT     = 45,  // ABC   R[A] := R[B].AsFloat * R[C].AsFloat
+    OP_DIV_FLOAT     = 46,  // ABC   R[A] := R[B].AsFloat / R[C].AsFloat
+    OP_MOD_FLOAT     = 47,  // ABC   R[A] := FMod(R[B].AsFloat, R[C].AsFloat)
+    OP_NEG_FLOAT     = 48,  // AB    R[A] := -R[B].AsFloat
+
+    // ── Core: Integer Comparison ──
+    OP_EQ_INT        = 49,  // ABC   R[A] := Boolean(R[B].AsInteger = R[C].AsInteger)
+    OP_NEQ_INT       = 50,  // ABC   R[A] := Boolean(R[B].AsInteger <> R[C].AsInteger)
+    OP_LT_INT        = 51,  // ABC   R[A] := Boolean(R[B].AsInteger < R[C].AsInteger)
+    OP_GT_INT        = 52,  // ABC   R[A] := Boolean(R[B].AsInteger > R[C].AsInteger)
+    OP_LTE_INT       = 53,  // ABC   R[A] := Boolean(R[B].AsInteger <= R[C].AsInteger)
+    OP_GTE_INT       = 54,  // ABC   R[A] := Boolean(R[B].AsInteger >= R[C].AsInteger)
+
+    // ── Core: String ──
+    OP_CONCAT        = 55,  // ABC   R[A] := String(R[B]) + String(R[C])
+
+    // ── Core: Typed Locals ──
+    OP_GET_LOCAL_INT    = 56,  // ABx  R[A] := Locals[Bx] (typed: integer)
+    OP_SET_LOCAL_INT    = 57,  // ABx  Locals[Bx] := R[A] (typed: integer)
+    OP_GET_LOCAL_FLOAT  = 58,  // ABx  R[A] := Locals[Bx] (typed: float)
+    OP_SET_LOCAL_FLOAT  = 59,  // ABx  Locals[Bx] := R[A] (typed: float)
+    OP_GET_LOCAL_BOOL   = 60,  // ABx  R[A] := Locals[Bx] (typed: boolean)
+    OP_SET_LOCAL_BOOL   = 61,  // ABx  Locals[Bx] := R[A] (typed: boolean)
+    OP_GET_LOCAL_STRING = 62,  // ABx  R[A] := Locals[Bx] (typed: string reference)
+    OP_SET_LOCAL_STRING = 63,  // ABx  Locals[Bx] := R[A] (typed: string reference)
+    OP_GET_LOCAL_REF    = 64,  // ABx  R[A] := Locals[Bx] (typed: heap reference)
+    OP_SET_LOCAL_REF    = 65,  // ABx  Locals[Bx] := R[A] (typed: heap reference)
+
+    // ── Core: Blueprint ──
+    OP_NEW_BLUEPRINT = 66,  // ABx   R[A] := new Blueprint(name=Constants[Bx])
+    OP_INHERIT       = 67,  // AB    Blueprint(R[A]).super := Blueprint(R[B])
+    OP_BLUEPRINT_METHOD = 68, // ABC Blueprint(R[A]).methods[Constants[B]] := R[C]
+    OP_INSTANTIATE   = 69,  // AB    R[A] := new Record(blueprint=Blueprint(R[B]))
+    OP_GET_SLOT      = 70,  // ABC   R[A] := Record(R[B]).slots[C]
+    OP_SET_SLOT      = 71,  // ABC   Record(R[A]).slots[B] := R[C]
+
+    // (opcode 72 removed: was OP_JUMP_IF_NOT_UNDEF, language-specific)
 
     // ── Runtime: Polymorphic Arithmetic ──
     OP_RT_ADD        = 128, // ABC   R[A] := Runtime.Add(R[B], R[C])
@@ -132,7 +181,18 @@ type
 
     // ── Runtime: Accessor Properties ──
     OP_RT_DEF_GETTER = 173, // ABC   Runtime.DefineGetter(R[A], Constants[B], R[C])
-    OP_RT_DEF_SETTER = 174  // ABC   Runtime.DefineSetter(R[A], Constants[B], R[C])
+    OP_RT_DEF_SETTER = 174, // ABC   Runtime.DefineSetter(R[A], Constants[B], R[C])
+
+    // ── Runtime: Extended ──
+    OP_RT_DEL_INDEX  = 175, // ABC   R[A] := Runtime.DeleteIndex(R[B], R[C])
+    OP_RT_SPREAD_OBJ = 176, // AB    Runtime.SpreadObjectInto(R[A], R[B])
+    OP_RT_ARRAY_REST = 177, // ABC   R[A] := Runtime.ArrayRest(R[B], C) — slice R[B] from index C
+    OP_RT_OBJ_REST   = 178, // ABC   R[A] := Runtime.ObjectRest(R[B], R[C]) — R[C] is exclusion key array
+
+    OP_RT_CALL_SPREAD = 179, // ABC   R[A] := Runtime.Call(R[A], R[B]=argsArray); spread call
+    OP_RT_CALL_METHOD_SPREAD = 180, // ABC  R[A] := Runtime.CallMethod(R[A], R[A-1]=this, R[B]=argsArray)
+    OP_RT_REQUIRE_OBJECT = 181, // A    Throw TypeError if R[A] is null or undefined
+    OP_RT_TO_STRING = 182 // AB    R[A] := Runtime.ToString(R[B])
   );
 
 { Instruction encoding/decoding helpers }

@@ -203,11 +203,14 @@ begin
     Exit;
   end;
 
-  // Type mismatch
+  // Type mismatch — allow TGocciaObjectValue/TGocciaInstanceValue interop
   if AActual.TypeName <> AExpected.TypeName then
   begin
-    Result := False;
-    Exit;
+    if not ((AActual is TGocciaObjectValue) and (AExpected is TGocciaObjectValue)) then
+    begin
+      Result := False;
+      Exit;
+    end;
   end;
 
   // Handle arrays
