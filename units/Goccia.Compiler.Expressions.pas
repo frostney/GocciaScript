@@ -268,6 +268,11 @@ begin
   ACtx.CompileExpression(AExpr.Right, RegC);
 
   Op := TokenTypeToRuntimeOp(AExpr.Operator);
+  if AExpr.Operator = gttPlus then
+  begin
+    EmitInstruction(ACtx, EncodeABx(OP_TO_PRIMITIVE, RegB, RegB));
+    EmitInstruction(ACtx, EncodeABx(OP_TO_PRIMITIVE, RegC, RegC));
+  end;
   if AExpr.Operator = gttIn then
     EmitInstruction(ACtx, EncodeABC(Op, ADest, RegC, RegB))
   else
@@ -575,7 +580,7 @@ begin
       if ArrPat.Elements[I] is TGocciaRestDestructuringPattern then
       begin
         DestSlot := ACtx.Scope.AllocateRegister;
-        EmitInstruction(ACtx, EncodeABC(OP_RT_ARRAY_REST, DestSlot, ASrcReg,
+        EmitInstruction(ACtx, EncodeABC(OP_UNPACK, DestSlot, ASrcReg,
           UInt8(I)));
         EmitDestructuring(ACtx,
           TGocciaRestDestructuringPattern(ArrPat.Elements[I]).Argument, DestSlot);

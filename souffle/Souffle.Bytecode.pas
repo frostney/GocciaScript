@@ -110,12 +110,13 @@ type
     // ── Core: Blueprint ──
     OP_NEW_BLUEPRINT = 66,  // ABx   R[A] := new Blueprint(name=Constants[Bx])
     OP_INHERIT       = 67,  // AB    Blueprint(R[A]).super := Blueprint(R[B])
-    OP_BLUEPRINT_METHOD = 68, // ABC Blueprint(R[A]).methods[Constants[B]] := R[C]
+    // opcode 68 removed: was OP_BLUEPRINT_METHOD, use OP_RECORD_SET on blueprint instead
     OP_INSTANTIATE   = 69,  // AB    R[A] := new Record(blueprint=Blueprint(R[B]))
     OP_GET_SLOT      = 70,  // ABC   R[A] := Record(R[B]).slots[C]
     OP_SET_SLOT      = 71,  // ABC   Record(R[A]).slots[B] := R[C]
 
-    // (opcode 72 removed: was OP_JUMP_IF_NOT_UNDEF, language-specific)
+    // ── Core: Type Coercion ──
+    OP_TO_PRIMITIVE  = 72,  // AB    R[A] := ToPrimitive(R[B]) — fast-path for nil/bool/int/float/string, runtime callback for references
 
     // ── Runtime: Polymorphic Arithmetic ──
     OP_RT_ADD        = 128, // ABC   R[A] := Runtime.Add(R[B], R[C])
@@ -186,7 +187,7 @@ type
     // ── Runtime: Extended ──
     OP_RT_DEL_INDEX  = 175, // ABC   R[A] := Runtime.DeleteIndex(R[B], R[C])
     OP_RT_SPREAD_OBJ = 176, // AB    Runtime.SpreadObjectInto(R[A], R[B])
-    OP_RT_ARRAY_REST = 177, // ABC   R[A] := Runtime.ArrayRest(R[B], C) — slice R[B] from index C
+    OP_UNPACK        = 177, // ABC   R[A] := Runtime.ArrayRest(R[B], C) — unpack R[B] from index C
     OP_RT_OBJ_REST   = 178, // ABC   R[A] := Runtime.ObjectRest(R[B], R[C]) — R[C] is exclusion key array
 
     OP_RT_CALL_SPREAD = 179, // ABC   R[A] := Runtime.Call(R[A], R[B]=argsArray); spread call

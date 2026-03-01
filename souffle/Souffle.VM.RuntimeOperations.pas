@@ -42,6 +42,7 @@ type
     function IsInstance(const A, B: TSouffleValue): TSouffleValue; virtual; abstract;
     function HasProperty(const AObject, AKey: TSouffleValue): TSouffleValue; virtual; abstract;
     function ToBoolean(const A: TSouffleValue): TSouffleValue; virtual; abstract;
+    function ToPrimitive(const A: TSouffleValue): TSouffleValue; virtual; abstract;
 
     // Property access
     function GetProperty(const AObject: TSouffleValue;

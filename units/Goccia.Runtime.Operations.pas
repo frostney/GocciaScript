@@ -102,6 +102,7 @@ type
     function IsInstance(const A, B: TSouffleValue): TSouffleValue; override;
     function HasProperty(const AObject, AKey: TSouffleValue): TSouffleValue; override;
     function ToBoolean(const A: TSouffleValue): TSouffleValue; override;
+    function ToPrimitive(const A: TSouffleValue): TSouffleValue; override;
 
     function GetProperty(const AObject: TSouffleValue;
       const AKey: string): TSouffleValue; override;
@@ -754,8 +755,6 @@ begin
 end;
 
 function TGocciaRuntimeOperations.Add(const A, B: TSouffleValue): TSouffleValue;
-var
-  PA, PB: TSouffleValue;
 begin
   try
     if SouffleIsInteger(A) and SouffleIsInteger(B) then
@@ -766,19 +765,12 @@ begin
     if IsWrappedSymbol(A) or IsWrappedSymbol(B) then
       ThrowTypeError('Cannot convert a Symbol value to a string');
 
-    PA := CoerceToPrimitiveSouffle(Self, A);
-    PB := CoerceToPrimitiveSouffle(Self, B);
-
-    if SouffleIsStringValue(PA) then
-      Result := SouffleString(SouffleGetString(PA) + CoerceToString(PB))
-    else if SouffleIsStringValue(PB) then
-      Result := SouffleString(CoerceToString(PA) + SouffleGetString(PB))
-    else if SouffleIsStringValue(A) then
+    if SouffleIsStringValue(A) then
       Result := SouffleString(SouffleGetString(A) + CoerceToString(B))
     else if SouffleIsStringValue(B) then
       Result := SouffleString(CoerceToString(A) + SouffleGetString(B))
     else
-      Result := SouffleFloat(CoerceToNumber(PA) + CoerceToNumber(PB));
+      Result := SouffleFloat(CoerceToNumber(A) + CoerceToNumber(B));
   except
     on E: TGocciaThrowValue do
       RethrowAsVM(E);
@@ -801,25 +793,11 @@ begin
     Result := SouffleFloat(CoerceToNumber(A) * CoerceToNumber(B));
 end;
 
+// ES2026 §13.7 Multiplicative Operators — IEEE 754 handles all edge cases
+// (NaN propagation, division by ±0, Infinity arithmetic, negative zero sign)
 function TGocciaRuntimeOperations.Divide(const A, B: TSouffleValue): TSouffleValue;
-var
-  Dividend, Divisor: Double;
 begin
-  Dividend := CoerceToNumber(A);
-  Divisor := CoerceToNumber(B);
-  if IsNaN(Dividend) or IsNaN(Divisor) then
-    Result := SouffleFloat(NaN)
-  else if Divisor = 0.0 then
-  begin
-    if Dividend = 0.0 then
-      Result := SouffleFloat(NaN)
-    else if Dividend > 0 then
-      Result := SouffleFloat(Infinity)
-    else
-      Result := SouffleFloat(NegInfinity);
-  end
-  else
-    Result := SouffleFloat(Dividend / Divisor);
+  Result := SouffleFloat(CoerceToNumber(A) / CoerceToNumber(B));
 end;
 
 function TGocciaRuntimeOperations.Modulo(const A, B: TSouffleValue): TSouffleValue;
@@ -1231,6 +1209,11 @@ end;
 function TGocciaRuntimeOperations.ToBoolean(const A: TSouffleValue): TSouffleValue;
 begin
   Result := SouffleBoolean(SouffleIsTrue(A));
+end;
+
+function TGocciaRuntimeOperations.ToPrimitive(const A: TSouffleValue): TSouffleValue;
+begin
+  Result := CoerceToPrimitiveSouffle(Self, A);
 end;
 
 { Property access }
@@ -2017,7 +2000,7 @@ begin
   end;
 end;
 
-{ Native metatable callbacks }
+{ Native delegate callbacks }
 
 function NativeArrayPush(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;

@@ -618,7 +618,7 @@ begin
     MethodNameIdx := ACtx.Template.AddConstantString(MethodPair.Key);
     if MethodNameIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: method name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_BLUEPRINT_METHOD,
+    EmitInstruction(ACtx, EncodeABC(OP_RECORD_SET,
       ClassReg, UInt8(MethodNameIdx), MethodReg));
     ACtx.Scope.FreeRegister;
   end;

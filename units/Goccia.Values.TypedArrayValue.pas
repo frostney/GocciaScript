@@ -294,30 +294,20 @@ begin
   end;
 end;
 
-procedure WriteFloatSpecial(var AData: TBytes;
+procedure WriteFloatDirect(var AData: TBytes;
   const AOffset: Integer; const AKind: TGocciaTypedArrayKind;
-  const ASpecial: TGocciaNumberSpecialValue);
-const
-  NAN_F32: LongWord = $7FC00000;
-  INF_F32: LongWord = $7F800000;
-  NINF_F32: LongWord = $FF800000;
-  NAN_F64: Int64 = Int64($7FF8000000000000);
-  INF_F64: Int64 = Int64($7FF0000000000000);
-  NINF_F64: Int64 = Int64($FFF0000000000000);
+  const AValue: Double);
+var
+  F32: Single;
 begin
   case AKind of
     takFloat32:
-      case ASpecial of
-        nsvNaN: Move(NAN_F32, AData[AOffset], 4);
-        nsvInfinity: Move(INF_F32, AData[AOffset], 4);
-        nsvNegativeInfinity: Move(NINF_F32, AData[AOffset], 4);
-      end;
+    begin
+      F32 := AValue;
+      Move(F32, AData[AOffset], 4);
+    end;
     takFloat64:
-      case ASpecial of
-        nsvNaN: Move(NAN_F64, AData[AOffset], 8);
-        nsvInfinity: Move(INF_F64, AData[AOffset], 8);
-        nsvNegativeInfinity: Move(NINF_F64, AData[AOffset], 8);
-      end;
+      Move(AValue, AData[AOffset], 8);
   end;
 end;
 
@@ -330,7 +320,7 @@ begin
     if FKind in [takFloat32, takFloat64] then
     begin
       Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-      WriteFloatSpecial(FBufferData, Offset, FKind, nsvNaN);
+      WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
     end
     else
       WriteElement(AIndex, 0);
@@ -342,7 +332,7 @@ begin
       takFloat32, takFloat64:
       begin
         Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-        WriteFloatSpecial(FBufferData, Offset, FKind, nsvInfinity);
+        WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
       end;
     else
       WriteElement(AIndex, 0);
@@ -354,7 +344,7 @@ begin
       takFloat32, takFloat64:
       begin
         Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-        WriteFloatSpecial(FBufferData, Offset, FKind, nsvNegativeInfinity);
+        WriteFloatDirect(FBufferData, Offset, FKind, ANum.Value);
       end;
     else
       WriteElement(AIndex, 0);

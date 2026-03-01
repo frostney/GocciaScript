@@ -839,8 +839,12 @@ begin
     if not (AArgs.GetElement(0) is TGocciaNumberLiteralValue) then
       ThrowError('Array.flat expects depth argument to be a number');
 
-    if AArgs.GetElement(0).ToNumberLiteral.IsInfinity then
+    if AArgs.GetElement(0).ToNumberLiteral.IsNaN then
+      Depth := 0
+    else if AArgs.GetElement(0).ToNumberLiteral.IsInfinity then
       Depth := MaxInt
+    else if AArgs.GetElement(0).ToNumberLiteral.IsNegativeInfinity then
+      Depth := 0
     else
       Depth := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
 

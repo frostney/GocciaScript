@@ -8,6 +8,7 @@ uses
 
   TestRunner,
 
+  Goccia.TestSetup,
   Goccia.Values.Primitives;
 
 type

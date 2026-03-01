@@ -611,14 +611,19 @@ begin
       A := DecodeA(AInstruction);
       B := DecodeB(AInstruction);
       C := DecodeC(AInstruction);
-      if SouffleIsReference(FRegisters[Base + A]) and
-         (FRegisters[Base + A].AsReference is TSouffleRecord) then
-        TSouffleRecord(FRegisters[Base + A].AsReference).Put(
-          AFrame^.Template.GetConstant(B).StringValue, FRegisters[Base + C])
-      else
-        FRuntimeOps.SetProperty(
-          FRegisters[Base + A], AFrame^.Template.GetConstant(B).StringValue,
-          FRegisters[Base + C]);
+      if SouffleIsReference(FRegisters[Base + A]) then
+      begin
+        if FRegisters[Base + A].AsReference is TSouffleRecord then
+          TSouffleRecord(FRegisters[Base + A].AsReference).Put(
+            AFrame^.Template.GetConstant(B).StringValue, FRegisters[Base + C])
+        else if FRegisters[Base + A].AsReference is TSouffleBlueprint then
+          TSouffleBlueprint(FRegisters[Base + A].AsReference).Methods.Put(
+            AFrame^.Template.GetConstant(B).StringValue, FRegisters[Base + C])
+        else
+          FRuntimeOps.SetProperty(
+            FRegisters[Base + A], AFrame^.Template.GetConstant(B).StringValue,
+            FRegisters[Base + C]);
+      end;
     end;
 
     OP_RECORD_DELETE:
@@ -902,17 +907,6 @@ begin
           TSouffleBlueprint(FRegisters[Base + B].AsReference);
     end;
 
-    OP_BLUEPRINT_METHOD:
-    begin
-      A := DecodeA(AInstruction);
-      B := DecodeB(AInstruction);
-      C := DecodeC(AInstruction);
-      if SouffleIsReference(FRegisters[Base + A]) and
-         (FRegisters[Base + A].AsReference is TSouffleBlueprint) then
-        TSouffleBlueprint(FRegisters[Base + A].AsReference).Methods.Put(
-          AFrame^.Template.GetConstant(B).StringValue, FRegisters[Base + C]);
-    end;
-
     OP_INSTANTIATE:
     begin
       A := DecodeA(AInstruction);
@@ -953,6 +947,21 @@ begin
          (FRegisters[Base + A].AsReference is TSouffleRecord) then
         TSouffleRecord(FRegisters[Base + A].AsReference).SetSlot(
           B, FRegisters[Base + C]);
+    end;
+
+    OP_TO_PRIMITIVE:
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      case FRegisters[Base + B].Kind of
+        svkNil, svkBoolean, svkInteger, svkFloat:
+          FRegisters[Base + A] := FRegisters[Base + B];
+      else
+        if SouffleIsStringValue(FRegisters[Base + B]) then
+          FRegisters[Base + A] := FRegisters[Base + B]
+        else
+          FRegisters[Base + A] := FRuntimeOps.ToPrimitive(FRegisters[Base + B]);
+      end;
     end;
 
     OP_NOP:;
@@ -1023,21 +1032,9 @@ begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       if SouffleIsNumeric(FRegisters[Base + B]) and
          SouffleIsNumeric(FRegisters[Base + C]) then
-      begin
-        FloatB := SouffleAsNumber(FRegisters[Base + B]);
-        FloatC := SouffleAsNumber(FRegisters[Base + C]);
-        if FloatC = 0.0 then
-        begin
-          if FloatB = 0.0 then
-            FRegisters[Base + A] := SouffleFloat(NaN)
-          else if FloatB > 0 then
-            FRegisters[Base + A] := SouffleFloat(Infinity)
-          else
-            FRegisters[Base + A] := SouffleFloat(NegInfinity);
-        end
-        else
-          FRegisters[Base + A] := SouffleFloat(FloatB / FloatC);
-      end
+        FRegisters[Base + A] := SouffleFloat(
+          SouffleAsNumber(FRegisters[Base + B]) /
+          SouffleAsNumber(FRegisters[Base + C]))
       else
         FRegisters[Base + A] := FRuntimeOps.Divide(
           FRegisters[Base + B], FRegisters[Base + C]);
@@ -1470,7 +1467,7 @@ begin
       FRuntimeOps.SpreadObjectInto(FRegisters[Base + A], FRegisters[Base + B]);
     end;
 
-    OP_RT_ARRAY_REST:
+    OP_UNPACK:
     begin
       A := DecodeA(AInstruction);
       B := DecodeB(AInstruction);

@@ -15,6 +15,7 @@ uses
   Goccia.Builtins.TestAssertions,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
+  Goccia.TestSetup,
   Goccia.Values.ArrayValue,
   Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,

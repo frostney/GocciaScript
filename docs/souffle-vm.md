@@ -76,7 +76,8 @@ Fixed semantics implemented directly in the dispatch loop. These are universal o
 | Float Arithmetic | `OP_ADD_FLOAT`, `OP_SUB_FLOAT`, `OP_MUL_FLOAT`, `OP_DIV_FLOAT`, `OP_MOD_FLOAT`, `OP_NEG_FLOAT` | Fast-path float operations (no runtime dispatch) |
 | Integer Comparison | `OP_EQ_INT`, `OP_NEQ_INT`, `OP_LT_INT`, `OP_GT_INT`, `OP_LTE_INT`, `OP_GTE_INT` | Fast-path integer comparison (no runtime dispatch) |
 | String | `OP_CONCAT` | Direct string concatenation |
-| Blueprint | `OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_BLUEPRINT_METHOD`, `OP_INSTANTIATE`, `OP_GET_SLOT`, `OP_SET_SLOT` | Wren-inspired blueprint primitives for optimized dispatch |
+| Type Coercion | `OP_TO_PRIMITIVE` | Fast-path for primitives (nil/bool/int/float/string pass through), runtime callback for references |
+| Blueprint | `OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_INSTANTIATE`, `OP_GET_SLOT`, `OP_SET_SLOT` | Wren-inspired blueprint primitives for optimized dispatch |
 | Exceptions | `OP_PUSH_HANDLER`, `OP_POP_HANDLER`, `OP_THROW` | Handler-table exception model |
 | Return | `OP_RETURN`, `OP_RETURN_NIL` | Function return |
 | Debug | `OP_NOP`, `OP_LINE` | No-ops and source line annotations |
@@ -123,9 +124,9 @@ NEW_BLUEPRINT    r0, "Dog"                   ; create TSouffleBlueprint
 RT_GET_GLOBAL    r1, "Animal"                ; load super blueprint
 INHERIT          r0, r1                      ; wire super blueprint chain
 CLOSURE          r2, <constructor_proto>     ; compile constructor
-BLUEPRINT_METHOD r0, "constructor", r2       ; attach to blueprint
+RECORD_SET       r0, "constructor", r2       ; attach to blueprint methods
 CLOSURE          r3, <bark_proto>            ; compile method
-BLUEPRINT_METHOD r0, "bark", r3             ; attach to blueprint
+RECORD_SET       r0, "bark", r3             ; attach to blueprint methods
 RT_SET_GLOBAL    "Dog", r0                   ; register globally
 ```
 
@@ -280,7 +281,7 @@ All heap-allocated values inherit from `TSouffleHeapObject`:
 
 Kind 128+ is reserved for runtime-specific heap types. GocciaScript uses `TGocciaWrappedValue` to wrap `TGocciaValue` instances as Souffle heap objects, enabling GocciaScript's rich type system (classes, promises, etc.) to be referenced from VM registers.
 
-All heap objects have an optional **metatable** field (`TSouffleHeapObject.Metatable`), which enables prototype-chain-like method dispatch at the VM level without crossing the language boundary. See [Metatables](#metatables) below.
+All heap objects have an optional **delegate** field (`TSouffleHeapObject.Delegate`), which enables prototype-chain-like method dispatch at the VM level without crossing the language boundary. See [Delegates](#delegates) below.
 
 ## Native Compound Types
 
@@ -324,13 +325,52 @@ The runtime opcodes (`OP_RT_GET_PROP`, `OP_RT_SET_PROP`, etc.) remain for comple
 
 ### Blueprint Primitives (Wren-inspired)
 
-The VM provides minimal blueprint primitives (`TSouffleBlueprint` heap type) alongside the unified `TSouffleRecord`. A blueprint defines a type descriptor with SlotCount, a method record (TSouffleRecord), and optional SuperBlueprint. Records can be plain key-value maps or blueprint-backed (via `CreateFromBlueprint`), in which case they have both key-value entries and indexed slots. This design enables the VM and runtime to optimize:
+The VM provides blueprint primitives (`TSouffleBlueprint` heap type) for class-like type descriptors. Blueprints sit alongside the unified `TSouffleRecord` and enable efficient method dispatch and instance creation without runtime dispatch.
+
+#### `TSouffleBlueprint` Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `FName` | `string` | Type name (e.g., `"Dog"`) — used for debug output and `OP_RT_IS_INSTANCE` |
+| `FSlotCount` | `Integer` | Number of indexed instance slots for O(1) field access |
+| `FMethods` | `TSouffleRecord` | Key-value record holding method closures (created in constructor) |
+| `FSuperBlueprint` | `TSouffleBlueprint` | Optional parent blueprint for inheritance (set by `OP_INHERIT`) |
+| `FPrototype` | `TSouffleRecord` | Lazily created: if a super blueprint exists, created via `CreateFromBlueprint(Super)`; otherwise a plain `TSouffleRecord` |
+
+#### Lifecycle
+
+1. **`OP_NEW_BLUEPRINT`** — Creates a `TSouffleBlueprint` with the given name and slot count. The `FMethods` record is created empty.
+
+2. **`OP_INHERIT`** — Sets `Blueprint.SuperBlueprint := SuperBlueprint`. This wires up the inheritance chain but does not copy methods.
+
+3. **`OP_RECORD_SET` on a blueprint** — `OP_RECORD_SET` is overloaded to handle blueprints: when the target register holds a `TSouffleBlueprint`, the operation stores the value in `Blueprint.Methods`. This eliminates the need for a dedicated blueprint-method opcode. Called once per method during class definition.
+
+4. **`OP_INSTANTIATE`** — Creates a new `TSouffleRecord` via `CreateFromBlueprint(Blueprint)`. The instance gets indexed slots (for O(1) field access) and its delegate is set to `Blueprint.Methods`. This means method lookups on instances walk the delegate chain: instance → methods → super methods → ...
+
+5. **Construction** — The runtime's `Construct` operation walks the super blueprint chain to find a `constructor` method, then calls it as a closure with the instance as receiver.
+
+#### Method Dispatch
+
+When accessing a property on a blueprint-backed instance:
+
+```text
+obj.bark()
+  1. OP_RECORD_GET checks obj's own entries (dynamic properties)
+  2. DelegateGet walks: obj.Delegate (= Blueprint.Methods)
+     → Blueprint.Methods.Delegate (= SuperBlueprint.Methods)
+     → ... until the key is found or the chain ends
+  3. Runtime fallback: TSouffleRuntimeOperations.GetProperty
+```
+
+This gives O(1) own-property access and O(depth) inherited method lookup — all within the VM, no language boundary crossing.
+
+#### Optimization Properties
 
 - **Blueprint-backed record slot access** uses O(1) integer-indexed slots instead of string-keyed hash lookups
-- **Method dispatch** uses the blueprint's method record (TSouffleRecord) directly, enabling efficient inheritance chains
+- **Method dispatch** uses the delegate chain directly, enabling efficient inheritance without runtime dispatch
 - The runtime opcodes (`OP_RT_CONSTRUCT`, `OP_RT_IS_INSTANCE`, `OP_RT_GET_PROP`, `OP_RT_SET_PROP`) remain as polymorphic fallbacks for cases where the compiler can't statically determine the type
 
-The blueprint opcodes are a fast path — not a replacement for the existing record-based approach. Languages that don't have classes (or use different class semantics) continue to use plain `TSouffleRecord` for everything.
+The blueprint opcodes are a fast path — not a replacement for the record-based approach. Languages that don't have classes (or use different class semantics) continue to use plain `TSouffleRecord` for everything.
 
 ### WASM GC Mapping
 
@@ -376,23 +416,29 @@ Both compound types participate in mark-and-sweep:
 - `TSouffleRecord.MarkReferences` — marks all occupied values that are `svkReference`
 - Both are registered via `AllocateObject` and tracked by the Souffle GC
 
-## Metatables
+## Delegates
 
-Inspired by Lua's metatable concept, every `TSouffleHeapObject` can have an optional **metatable** — a `TSouffleRecord` that the VM consults for key lookups that miss on the primary data. This provides prototype-chain-like method dispatch at the VM level, without crossing into language-specific runtime code.
+Every `TSouffleHeapObject` can have an optional **delegate** — another `TSouffleHeapObject` (typically a `TSouffleRecord`) that the VM consults for key lookups that miss on the primary data. Delegates form a chain: each delegate can itself have a delegate, enabling inheritance-like method dispatch at the VM level without crossing into language-specific runtime code.
 
 ### How It Works
 
 When `OP_RECORD_GET` resolves a string-keyed property:
 
 1. **Direct lookup** — If the object is a `TSouffleRecord`, check the record's own entries
-2. **Metatable lookup** — If the object has a non-nil metatable, look up the key in the metatable
+2. **Delegate chain walk** — `DelegateGet` walks `Object.Delegate → Delegate.Delegate → ...`, checking each `TSouffleRecord` for the key
 3. **Runtime fallback** — Delegate to `TSouffleRuntimeOperations.GetProperty`
 
 For `arr.push(6)` on a `TSouffleArray`:
-- Step 1 skips (arrays aren't tables)
-- Step 2 finds `push` in the array's metatable → returns a `TSouffleNativeFunction`
+- Step 1 skips (arrays aren't records)
+- Step 2 finds `push` in the array's delegate → returns a `TSouffleNativeFunction`
 - `OP_RT_CALL_METHOD` invokes the native function directly with the array as receiver
 - **Zero wrapping** — the entire call stays within the Souffle VM
+
+For blueprint-backed instances (e.g., `dog.bark()`):
+- Step 1 checks the instance record's own entries (dynamic properties)
+- Step 2 walks the delegate chain: instance → `Blueprint.Methods` → `SuperBlueprint.Methods` → ...
+- The first record containing `bark` returns the closure
+- This enables class inheritance without any runtime dispatch
 
 ### `TSouffleNativeFunction`
 
@@ -409,14 +455,14 @@ The callback receives `TSouffleValue` arguments and returns a `TSouffleValue` re
 
 ### VM Integration
 
-The VM holds configurable default metatables per compound type:
+The VM holds configurable default delegates per compound type:
 
-- `TSouffleVM.ArrayMetatable` — assigned to every `TSouffleArray` created by `OP_NEW_ARRAY`
-- `TSouffleVM.RecordMetatable` — assigned to every `TSouffleRecord` created by `OP_NEW_RECORD`
+- `TSouffleVM.ArrayDelegate` — assigned to every `TSouffleArray` created by `OP_NEW_ARRAY`
+- `TSouffleVM.RecordDelegate` — assigned to every `TSouffleRecord` created by `OP_NEW_RECORD`
 
-The language frontend populates these metatables during initialization. Individual instances can override their metatable after creation.
+The language frontend populates these delegates during initialization. Individual instances can override their delegate after creation.
 
-`OP_RT_CALL` and `OP_RT_CALL_METHOD` dispatch `TSouffleNativeFunction` directly (inline invocation), before falling to the runtime operations interface. This gives metatable methods the same call overhead as closures.
+`OP_RT_CALL` and `OP_RT_CALL_METHOD` dispatch `TSouffleNativeFunction` directly (inline invocation), before falling to the runtime operations interface. This gives delegate methods the same call overhead as closures.
 
 ### GocciaScript Registration
 
@@ -430,10 +476,10 @@ The GocciaScript bridge layer (`TGocciaRuntimeOperations.RegisterDelegates`) cre
 
 ### Language Agnosticism
 
-The metatable mechanism is language-agnostic:
+The delegate mechanism is language-agnostic:
 - The VM only performs string-keyed record lookups — it knows nothing about prototypes, `this`, or method binding
 - The receiver is passed as a `TSouffleValue` to the native callback — the callback decides how to interpret it
-- Different language frontends can register different metatables with different methods for the same compound types
+- Different language frontends can register different delegates with different methods for the same compound types
 
 ## Closures and Upvalues
 
@@ -640,7 +686,7 @@ When `--emit` is used without a path, the output filename is derived from the in
 - **`TGocciaSouffleProxy`** — A single `TGocciaValue` subclass that wraps any Souffle compound type. Property access is delegated to `TGocciaRuntimeOperations.ResolveProxyGet`/`ResolveProxySet`, which dispatch based on the target's type. This is a higher-order function pattern: one proxy class handles all compound types, and the resolution logic lives in the runtime. No per-type subclassing needed
 - **`TGocciaWrappedValue`** — Wraps a `TGocciaValue` as a `TSouffleHeapObject` for VM register storage (used for types without native VM representation: classes, promises, symbols, etc.)
 - **`TGocciaSouffleClosureBridge`** — Wraps a `TSouffleClosure` as a `TGocciaFunctionBase`, enabling Souffle closures to be called by GocciaScript built-in methods (e.g., `Array.prototype.map` callbacks)
-- **Delegate registration** — `RegisterDelegates` creates VM-native delegate records for arrays (with `push`, `pop`, `join` as `TSouffleNativeFunction` callbacks) and assigns them to the VM's default metatable slots. Method calls like `arr.push(6)` are dispatched entirely within the VM without crossing the language boundary
+- **Delegate registration** — `RegisterDelegates` creates VM-native delegate records for arrays (with `push`, `pop`, `join` as `TSouffleNativeFunction` callbacks) and assigns them to the VM's default delegate slots. Method calls like `arr.push(6)` are dispatched entirely within the VM without crossing the language boundary
 - **Native compound fast paths** — `GetProperty`, `SetProperty`, `GetIndex`, `SetIndex`, `HasProperty`, `DeleteProperty`, and `TypeOf` all check for `TSouffleArray`/`TSouffleRecord` before falling through to wrapped value unwrapping, avoiding unnecessary materialization
 - **Auto-boxing** — `GetProperty` performs primitive boxing when a direct property lookup returns `nil`, enabling prototype methods on primitives (e.g., `(42).toFixed(2)`)
 
@@ -758,6 +804,60 @@ The ABC instruction format encodes operand B and C as 8-bit values. This limits 
 ### NaN Handling in the Constant Pool
 
 Float constant deduplication uses a raw IEEE 754 bit-pattern check (`FloatBitsAreNaN`) rather than FPC's `Math.IsNaN`. This avoids introducing language-runtime dependencies into the Souffle layer and works reliably across platforms including AArch64, where FPC's floating-point behavior has known pitfalls (see [code-style.md](code-style.md) § Platform Pitfall).
+
+## Responsibility Boundaries
+
+The bytecode execution pipeline has four distinct layers with strict boundaries. Mixing responsibilities across layers is an anti-pattern that compromises the VM's generality.
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ Interpreter (Goccia.Evaluator*.pas)                          │
+│   Direct AST execution — not involved in bytecode path       │
+│   Owns: scope chain walking, evaluator purity, `this` binding│
+└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ Compiler (Goccia.Compiler*.pas)                              │
+│   AST → Souffle bytecode translation                         │
+│   Owns: desugaring, constant folding, OP_LOAD_NIL flags,    │
+│         simple-vs-complex class detection, type hint emission │
+│   Boundary: emits only Souffle opcodes; no TGocciaValue refs │
+└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ Runtime (Goccia.Runtime.Operations.pas)                      │
+│   Language-specific callbacks for OP_RT_* opcodes            │
+│   Owns: null/undefined flag interpretation, prototype chains,│
+│         type coercion, property descriptors, Symbol keys,    │
+│         TSouffleValue ↔ TGocciaValue bridging                │
+│   Boundary: implements TSouffleRuntimeOperations interface   │
+└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ VM (souffle/*.pas)                                           │
+│   Opcode dispatch, register file, call frames, GC            │
+│   Owns: delegate chain lookup, upvalue management,           │
+│         exception handler stack, native function invocation   │
+│   Boundary: NO language imports (Goccia.* forbidden)         │
+│             NO language keywords in opcodes                   │
+│             All absent values are svkNil (flags=0)            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Anti-patterns
+
+| Anti-pattern | Why it's wrong | Correct approach |
+|-------------|---------------|-----------------|
+| VM opcode named after a language keyword (e.g., `OP_LOAD_UNDEFINED`) | Couples VM to one language; other frontends don't have "undefined" | Use `OP_LOAD_NIL` with flags; runtime interprets flags |
+| VM checking `Flags` to decide `null` vs `undefined` semantics | The VM should not know what the flags mean | Runtime interprets flags in `UnwrapToGocciaValue` |
+| Compiler importing `TGocciaValue` or `TGocciaScope` | Compiler emits bytecode, not runtime objects | Compiler works with `TGocciaCompilationContext` and `TSouffleFunctionTemplate` |
+| Runtime modifying VM internals (register file, IP) | The VM is a black box to the runtime | Runtime returns `TSouffleValue`; VM handles register storage |
+| Souffle unit importing `Goccia.*` | Breaks VM independence; prevents extraction to a separate project | All cross-boundary ops go through `TSouffleRuntimeOperations` |
+
+### NaN/Infinity Rationale
+
+IEEE 754 floating-point is enabled at the FreePascal compiler level (`SetExceptionMask` in both `Goccia.Engine.pas` and `Souffle.VM.pas`). This means:
+- FPC's `Double` type natively produces `NaN` for `0.0/0.0`, `Infinity` for `1.0/0.0`, etc.
+- The VM stores these as ordinary `svkFloat` values — no special float flags or singletons
+- The interpreter's `TGocciaNumberLiteralValue` stores real IEEE 754 `NaN`/`Infinity` Doubles directly
+- Language-specific NaN/Infinity semantics (e.g., `NaN !== NaN`, `typeof NaN === "number"`) are handled by the evaluator/runtime, not the VM
 
 ## Design Principles
 
