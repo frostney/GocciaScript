@@ -73,6 +73,7 @@ type
       const AStartIndex: Integer): TSouffleValue; virtual;
     function ObjectRest(const ASource, AExclusionKeys: TSouffleValue): TSouffleValue; virtual;
     procedure RequireObjectCoercible(const AValue: TSouffleValue); virtual;
+    procedure RequireIterable(const AValue: TSouffleValue); virtual;
     function CoerceValueToString(const A: TSouffleValue): TSouffleValue; virtual;
 
     // Modules
@@ -187,6 +188,11 @@ begin
 end;
 
 procedure TSouffleRuntimeOperations.RequireObjectCoercible(
+  const AValue: TSouffleValue);
+begin
+end;
+
+procedure TSouffleRuntimeOperations.RequireIterable(
   const AValue: TSouffleValue);
 begin
 end;

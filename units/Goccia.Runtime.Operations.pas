@@ -131,6 +131,7 @@ type
     function ObjectRest(const ASource,
       AExclusionKeys: TSouffleValue): TSouffleValue; override;
     procedure RequireObjectCoercible(const AValue: TSouffleValue); override;
+    procedure RequireIterable(const AValue: TSouffleValue); override;
     function CoerceValueToString(const A: TSouffleValue): TSouffleValue; override;
 
     function ImportModule(const APath: string): TSouffleValue; override;
@@ -1128,11 +1129,12 @@ var
   GocciaVal: TGocciaValue;
 begin
  try
-  if not SouffleIsReference(AObject) or not Assigned(AObject.AsReference) then
+  if SouffleIsStringValue(AObject) or
+     (not SouffleIsReference(AObject) or not Assigned(AObject.AsReference)) then
   begin
     if SouffleIsNil(AObject) or
        SouffleIsBoolean(AObject) or SouffleIsInteger(AObject) or
-       SouffleIsFloat(AObject) then
+       SouffleIsFloat(AObject) or SouffleIsStringValue(AObject) then
       ThrowTypeError('Cannot use ''in'' operator to search for ''' +
         SouffleValueToString(AKey) + ''' in ' + SouffleValueToString(AObject));
     Exit(SouffleBoolean(False));
@@ -2161,6 +2163,33 @@ procedure TGocciaRuntimeOperations.RegisterGlobal(const AName: string;
   const AValue: TSouffleValue);
 begin
   FGlobals.AddOrSetValue(AName, AValue);
+end;
+
+procedure TGocciaRuntimeOperations.RequireIterable(
+  const AValue: TSouffleValue);
+var
+  GocciaVal: TGocciaValue;
+begin
+  try
+    if SouffleIsStringValue(AValue) then
+      Exit;
+    if SouffleIsReference(AValue) and Assigned(AValue.AsReference) then
+    begin
+      if AValue.AsReference is TSouffleArray then
+        Exit;
+      if AValue.AsReference is TGocciaWrappedValue then
+      begin
+        GocciaVal := TGocciaWrappedValue(AValue.AsReference).Value;
+        if (GocciaVal is TGocciaArrayValue) or
+           (GocciaVal is TGocciaStringLiteralValue) then
+          Exit;
+      end;
+    end;
+    ThrowTypeError(CoerceToString(AValue) + ' is not iterable');
+  except
+    on E: TGocciaThrowValue do
+      RethrowAsVM(E);
+  end;
 end;
 
 procedure TGocciaRuntimeOperations.RequireObjectCoercible(

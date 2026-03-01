@@ -79,6 +79,7 @@ uses
   Souffle.Bytecode,
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Debug,
+  Souffle.Value,
 
   Goccia.Compiler.ConstantFolding,
   Goccia.Constants.ConstructorNames,
@@ -415,7 +416,8 @@ end;
 procedure EmitUndefinedCheck(const ACtx: TGocciaCompilationContext;
   const ASlot: UInt8; out AJumpIdx: Integer);
 begin
-  AJumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NIL, ASlot);
+  AJumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NIL, ASlot,
+    SOUFFLE_NIL_DEFAULT);
 end;
 
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
@@ -570,7 +572,7 @@ begin
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
-    EmitInstruction(ACtx, EncodeABC(OP_RT_REQUIRE_OBJECT, ASrcReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_RT_REQUIRE_ITERABLE, ASrcReg, 0, 0));
     ArrPat := TGocciaArrayDestructuringPattern(APattern);
     for I := 0 to ArrPat.Elements.Count - 1 do
     begin

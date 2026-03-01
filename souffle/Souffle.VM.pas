@@ -426,17 +426,21 @@ begin
     OP_JUMP_IF_NIL:
     begin
       A := DecodeA(AInstruction);
-      sBx := DecodesBx(AInstruction);
-      if SouffleIsNil(FRegisters[Base + A]) then
-        AFrame^.IP := AFrame^.IP + sBx;
+      B := DecodeB(AInstruction);
+      C := DecodeC(AInstruction);
+      if SouffleIsNil(FRegisters[Base + A]) and
+         ((B = SOUFFLE_NIL_MATCH_ANY) or (FRegisters[Base + A].Flags = B)) then
+        AFrame^.IP := AFrame^.IP + C;
     end;
 
     OP_JUMP_IF_NOT_NIL:
     begin
       A := DecodeA(AInstruction);
-      sBx := DecodesBx(AInstruction);
-      if not SouffleIsNil(FRegisters[Base + A]) then
-        AFrame^.IP := AFrame^.IP + sBx;
+      B := DecodeB(AInstruction);
+      C := DecodeC(AInstruction);
+      if not (SouffleIsNil(FRegisters[Base + A]) and
+              ((B = SOUFFLE_NIL_MATCH_ANY) or (FRegisters[Base + A].Flags = B))) then
+        AFrame^.IP := AFrame^.IP + C;
     end;
 
     OP_CLOSURE:
@@ -964,6 +968,15 @@ begin
       end;
     end;
 
+    OP_UNPACK:
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      C := DecodeC(AInstruction);
+      FRegisters[Base + A] := FRuntimeOps.ArrayRest(FRegisters[Base + B], C);
+    end;
+
+
     OP_NOP:;
 
     OP_LINE:;
@@ -1467,14 +1480,6 @@ begin
       FRuntimeOps.SpreadObjectInto(FRegisters[Base + A], FRegisters[Base + B]);
     end;
 
-    OP_UNPACK:
-    begin
-      A := DecodeA(AInstruction);
-      B := DecodeB(AInstruction);
-      C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.ArrayRest(FRegisters[Base + B], C);
-    end;
-
     OP_RT_OBJ_REST:
     begin
       A := DecodeA(AInstruction);
@@ -1488,6 +1493,12 @@ begin
     begin
       A := DecodeA(AInstruction);
       FRuntimeOps.RequireObjectCoercible(FRegisters[Base + A]);
+    end;
+
+    OP_RT_REQUIRE_ITERABLE:
+    begin
+      A := DecodeA(AInstruction);
+      FRuntimeOps.RequireIterable(FRegisters[Base + A]);
     end;
 
     OP_RT_TO_STRING:

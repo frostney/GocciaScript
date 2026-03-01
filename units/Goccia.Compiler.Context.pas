@@ -10,6 +10,7 @@ uses
   Souffle.Bytecode,
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Debug,
+  Souffle.Value,
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
@@ -43,7 +44,9 @@ function EmitInstruction(const ACtx: TGocciaCompilationContext;
 procedure EmitLineMapping(const ACtx: TGocciaCompilationContext;
   const ALine, AColumn: Integer);
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
-  const AOp: TSouffleOpCode; const AReg: UInt8): Integer;
+  const AOp: TSouffleOpCode; const AReg: UInt8): Integer; overload;
+function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
+  const AOp: TSouffleOpCode; const AReg, AFlags: UInt8): Integer; overload;
 procedure PatchJumpTarget(const ACtx: TGocciaCompilationContext;
   const AIndex: Integer);
 function CurrentCodePosition(const ACtx: TGocciaCompilationContext): Integer;
@@ -76,8 +79,16 @@ begin
     Result := EmitInstruction(ACtx, EncodeAx(AOp, 0))
   else if AOp = OP_PUSH_HANDLER then
     Result := EmitInstruction(ACtx, EncodeABx(AOp, AReg, 0))
+  else if (AOp = OP_JUMP_IF_NIL) or (AOp = OP_JUMP_IF_NOT_NIL) then
+    Result := EmitInstruction(ACtx, EncodeABC(AOp, AReg, SOUFFLE_NIL_MATCH_ANY, 0))
   else
     Result := EmitInstruction(ACtx, EncodeAsBx(AOp, AReg, 0));
+end;
+
+function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
+  const AOp: TSouffleOpCode; const AReg, AFlags: UInt8): Integer;
+begin
+  Result := EmitInstruction(ACtx, EncodeABC(AOp, AReg, AFlags, 0));
 end;
 
 procedure PatchJumpTarget(const ACtx: TGocciaCompilationContext;
@@ -85,7 +96,7 @@ procedure PatchJumpTarget(const ACtx: TGocciaCompilationContext;
 var
   Offset: Integer;
   Instruction: UInt32;
-  Op, A: UInt8;
+  Op, A, B: UInt8;
 begin
   Offset := CurrentCodePosition(ACtx) - AIndex - 1;
   Instruction := ACtx.Template.GetInstruction(AIndex);
@@ -98,6 +109,15 @@ begin
     A := DecodeA(Instruction);
     ACtx.Template.PatchInstruction(AIndex,
       EncodeABx(OP_PUSH_HANDLER, A, UInt16(Offset)));
+  end
+  else if (TSouffleOpCode(Op) = OP_JUMP_IF_NIL) or
+          (TSouffleOpCode(Op) = OP_JUMP_IF_NOT_NIL) then
+  begin
+    A := DecodeA(Instruction);
+    B := DecodeB(Instruction);
+    Assert(Offset <= 255, 'Nil jump offset exceeds 8-bit range');
+    ACtx.Template.PatchInstruction(AIndex,
+      EncodeABC(TSouffleOpCode(Op), A, B, UInt8(Offset)));
   end
   else
   begin

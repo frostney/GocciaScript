@@ -33,8 +33,8 @@ type
     OP_JUMP          = 11,  // Ax    PC += Ax (signed 24-bit)
     OP_JUMP_IF_TRUE  = 12,  // AsBx  if IsTrue(R[A]): PC += sBx
     OP_JUMP_IF_FALSE = 13,  // AsBx  if not IsTrue(R[A]): PC += sBx
-    OP_JUMP_IF_NIL   = 14,  // AsBx  if R[A].Kind = svkNil: PC += sBx
-    OP_JUMP_IF_NOT_NIL = 15, // AsBx if R[A].Kind <> svkNil: PC += sBx
+    OP_JUMP_IF_NIL   = 14,  // ABC   if R[A] is nil(flags match B): PC += C — B=255 matches any nil, B=0..254 matches specific flag
+    OP_JUMP_IF_NOT_NIL = 15, // ABC   if R[A] is not nil(flags match B): PC += C — B=255 skips unless any nil, B=0..254 skips unless specific flag
 
     // ── Core: Closures ──
     OP_CLOSURE       = 16,  // ABx   R[A] := Closure(FunctionTemplates[Bx])
@@ -118,6 +118,9 @@ type
     // ── Core: Type Coercion ──
     OP_TO_PRIMITIVE  = 72,  // AB    R[A] := ToPrimitive(R[B]) — fast-path for nil/bool/int/float/string, runtime callback for references
 
+    // ── Core: Destructuring ──
+    OP_UNPACK        = 73,  // ABC   R[A] := Runtime.ArrayRest(R[B], C) — unpack R[B] from index C
+
     // ── Runtime: Polymorphic Arithmetic ──
     OP_RT_ADD        = 128, // ABC   R[A] := Runtime.Add(R[B], R[C])
     OP_RT_SUB        = 129, // ABC   R[A] := Runtime.Subtract(R[B], R[C])
@@ -187,13 +190,14 @@ type
     // ── Runtime: Extended ──
     OP_RT_DEL_INDEX  = 175, // ABC   R[A] := Runtime.DeleteIndex(R[B], R[C])
     OP_RT_SPREAD_OBJ = 176, // AB    Runtime.SpreadObjectInto(R[A], R[B])
-    OP_UNPACK        = 177, // ABC   R[A] := Runtime.ArrayRest(R[B], C) — unpack R[B] from index C
+    // opcode 177 removed: was OP_RT_ARRAY_REST, moved to core as OP_UNPACK (73)
     OP_RT_OBJ_REST   = 178, // ABC   R[A] := Runtime.ObjectRest(R[B], R[C]) — R[C] is exclusion key array
 
     OP_RT_CALL_SPREAD = 179, // ABC   R[A] := Runtime.Call(R[A], R[B]=argsArray); spread call
     OP_RT_CALL_METHOD_SPREAD = 180, // ABC  R[A] := Runtime.CallMethod(R[A], R[A-1]=this, R[B]=argsArray)
     OP_RT_REQUIRE_OBJECT = 181, // A    Throw TypeError if R[A] is null or undefined
-    OP_RT_TO_STRING = 182 // AB    R[A] := Runtime.ToString(R[B])
+    OP_RT_TO_STRING = 182, // AB    R[A] := Runtime.ToString(R[B])
+    OP_RT_REQUIRE_ITERABLE = 183 // A  Throw TypeError if R[A] is not iterable (not array/string/wrapped iterable)
   );
 
 { Instruction encoding/decoding helpers }

@@ -10,6 +10,7 @@ uses
 const
   SOUFFLE_INLINE_STRING_MAX = 23;
   SOUFFLE_NIL_DEFAULT = 0;
+  SOUFFLE_NIL_MATCH_ANY = 255;
 
 type
   TSouffleValueKind = (
