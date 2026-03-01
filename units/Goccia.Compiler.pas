@@ -207,8 +207,12 @@ begin
     Goccia.Compiler.Statements.CompileBreakStatement(Ctx)
   else if AStmt is TGocciaImportDeclaration then
     Goccia.Compiler.Statements.CompileImportDeclaration(Ctx, TGocciaImportDeclaration(AStmt))
+  else if AStmt is TGocciaExportVariableDeclaration then
+    Goccia.Compiler.Statements.CompileExportVariableDeclaration(Ctx, TGocciaExportVariableDeclaration(AStmt))
   else if AStmt is TGocciaExportDeclaration then
     Goccia.Compiler.Statements.CompileExportDeclaration(Ctx, TGocciaExportDeclaration(AStmt))
+  else if AStmt is TGocciaReExportDeclaration then
+    Goccia.Compiler.Statements.CompileReExportDeclaration(Ctx, TGocciaReExportDeclaration(AStmt))
   else if AStmt is TGocciaDestructuringDeclaration then
     Goccia.Compiler.Statements.CompileDestructuringDeclaration(Ctx, TGocciaDestructuringDeclaration(AStmt));
 end;

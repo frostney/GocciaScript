@@ -64,6 +64,7 @@ type
     FFormalParameterCounts: TDictionary<TSouffleFunctionTemplate, Integer>;
     FVM: TSouffleVM;
     FEngine: TObject;
+    FSourcePath: string;
 
     function WrapGocciaValue(const AValue: TGocciaValue): TSouffleValue;
     function CoerceKeyToString(const AKey: TSouffleValue): string;
@@ -167,6 +168,7 @@ type
     property ModuleExports: TDictionary<string, TSouffleValue> read FExports;
     property VM: TSouffleVM read FVM write FVM;
     property Engine: TObject read FEngine write FEngine;
+    property SourcePath: string read FSourcePath write FSourcePath;
   end;
 
 implementation
@@ -187,6 +189,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.TypeOperations,
   Goccia.Interpreter,
+  Goccia.Modules,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
@@ -658,7 +661,7 @@ begin
     Exit(SouffleReference(TGocciaSouffleClosureBridge(AValue).Closure));
 
   if AValue is TGocciaNullLiteralValue then
-    Result := SouffleNil
+    Result := SouffleNilWithFlags(GOCCIA_NIL_NULL)
   else if AValue is TGocciaUndefinedLiteralValue then
     Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)
   else if AValue is TGocciaBooleanLiteralValue then
@@ -1864,8 +1867,28 @@ end;
 { Modules }
 
 function TGocciaRuntimeOperations.ImportModule(const APath: string): TSouffleValue;
+var
+  EngineObj: TGocciaEngine;
+  Module: TGocciaModule;
+  Rec: TSouffleRecord;
+  Pair: TPair<string, TGocciaValue>;
 begin
-  Result := SouffleNil;
+  if not Assigned(FEngine) then
+    Exit(SouffleNil);
+
+  EngineObj := TGocciaEngine(FEngine);
+  Module := EngineObj.Interpreter.LoadModule(APath, FSourcePath);
+  if not Assigned(Module) then
+    Exit(SouffleNil);
+
+  Rec := TSouffleRecord.Create(Module.ExportsTable.Count);
+  if Assigned(TSouffleGarbageCollector.Instance) then
+    TSouffleGarbageCollector.Instance.AllocateObject(Rec);
+
+  for Pair in Module.ExportsTable do
+    Rec.Put(Pair.Key, ToSouffleValue(Pair.Value));
+
+  Result := SouffleReference(Rec);
 end;
 
 procedure TGocciaRuntimeOperations.ExportBinding(const AValue: TSouffleValue;

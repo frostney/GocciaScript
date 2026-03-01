@@ -32,6 +32,11 @@ procedure CompileImportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaImportDeclaration);
 procedure CompileExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportDeclaration);
+procedure CompileExportVariableDeclaration(
+  const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExportVariableDeclaration);
+procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaReExportDeclaration);
 procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaSwitchStatement);
 procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
@@ -370,19 +375,33 @@ var
   ModReg: UInt8;
   PathIdx, NameIdx: UInt16;
   Pair: TPair<string, string>;
-  Slot: UInt8;
+  Slots: array of UInt8;
+  Names: array of string;
+  I, Count: Integer;
 begin
+  Count := AStmt.Imports.Count;
+  SetLength(Slots, Count);
+  SetLength(Names, Count);
+
+  I := 0;
+  for Pair in AStmt.Imports do
+  begin
+    Slots[I] := ACtx.Scope.DeclareLocal(Pair.Key, True);
+    Names[I] := Pair.Value;
+    Inc(I);
+  end;
+
   ModReg := ACtx.Scope.AllocateRegister;
   PathIdx := ACtx.Template.AddConstantString(AStmt.ModulePath);
   EmitInstruction(ACtx, EncodeABx(OP_RT_IMPORT, ModReg, PathIdx));
 
-  for Pair in AStmt.Imports do
+  for I := 0 to Count - 1 do
   begin
-    Slot := ACtx.Scope.DeclareLocal(Pair.Key, True);
-    NameIdx := ACtx.Template.AddConstantString(Pair.Value);
+    NameIdx := ACtx.Template.AddConstantString(Names[I]);
     if NameIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: import name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_RECORD_GET, Slot, ModReg, UInt8(NameIdx)));
+    EmitInstruction(ACtx, EncodeABC(OP_RECORD_GET, Slots[I], ModReg,
+      UInt8(NameIdx)));
   end;
 
   ACtx.Scope.FreeRegister;
@@ -406,6 +425,58 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, Reg, NameIdx));
     end;
   end;
+end;
+
+procedure CompileExportVariableDeclaration(
+  const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExportVariableDeclaration);
+var
+  I: Integer;
+  VarInfo: TGocciaVariableInfo;
+  LocalIdx: Integer;
+  Reg: UInt8;
+  NameIdx: UInt16;
+begin
+  CompileVariableDeclaration(ACtx, AStmt.Declaration);
+
+  for I := 0 to Length(AStmt.Declaration.Variables) - 1 do
+  begin
+    VarInfo := AStmt.Declaration.Variables[I];
+    LocalIdx := ACtx.Scope.ResolveLocal(VarInfo.Name);
+    if LocalIdx >= 0 then
+    begin
+      Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+      NameIdx := ACtx.Template.AddConstantString(VarInfo.Name);
+      EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, Reg, NameIdx));
+    end;
+  end;
+end;
+
+procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaReExportDeclaration);
+var
+  ModReg, ValReg: UInt8;
+  PathIdx, SrcNameIdx, ExportNameIdx: UInt16;
+  Pair: TPair<string, string>;
+begin
+  ModReg := ACtx.Scope.AllocateRegister;
+  ValReg := ACtx.Scope.AllocateRegister;
+  PathIdx := ACtx.Template.AddConstantString(AStmt.ModulePath);
+  EmitInstruction(ACtx, EncodeABx(OP_RT_IMPORT, ModReg, PathIdx));
+
+  for Pair in AStmt.ExportsTable do
+  begin
+    SrcNameIdx := ACtx.Template.AddConstantString(Pair.Value);
+    if SrcNameIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: re-export source name index exceeds 255');
+    EmitInstruction(ACtx, EncodeABC(OP_RECORD_GET, ValReg, ModReg,
+      UInt8(SrcNameIdx)));
+    ExportNameIdx := ACtx.Template.AddConstantString(Pair.Key);
+    EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, ValReg, ExportNameIdx));
+  end;
+
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;

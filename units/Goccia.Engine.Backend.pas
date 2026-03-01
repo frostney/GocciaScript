@@ -189,6 +189,7 @@ begin
   end;
 
   FRuntime.Engine := FEngine;
+  FRuntime.SourcePath := FSourcePath;
 
   GlobalScope := FEngine.Interpreter.GlobalScope;
   Names := GlobalScope.GetOwnBindingNames;
