@@ -184,6 +184,8 @@ begin
     Goccia.Compiler.Statements.CompileThrowStatement(Ctx, TGocciaThrowStatement(AStmt))
   else if AStmt is TGocciaTryStatement then
     Goccia.Compiler.Statements.CompileTryStatement(Ctx, TGocciaTryStatement(AStmt))
+  else if AStmt is TGocciaForAwaitOfStatement then
+    Goccia.Compiler.Statements.CompileForAwaitOfStatement(Ctx, TGocciaForAwaitOfStatement(AStmt))
   else if AStmt is TGocciaForOfStatement then
     Goccia.Compiler.Statements.CompileForOfStatement(Ctx, TGocciaForOfStatement(AStmt))
   else if AStmt is TGocciaClassDeclaration then

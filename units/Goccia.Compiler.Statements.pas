@@ -28,6 +28,8 @@ procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaTryStatement);
 procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
+procedure CompileForAwaitOfStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaForAwaitOfStatement);
 procedure CompileImportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaImportDeclaration);
 procedure CompileExportDeclaration(const ACtx: TGocciaCompilationContext;
@@ -333,6 +335,8 @@ var
   Slot: UInt8;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
+  OldBreakJumps: TList<Integer>;
+  BreakJumps: TList<Integer>;
 begin
   IterReg := ACtx.Scope.AllocateRegister;
   ValueReg := ACtx.Scope.AllocateRegister;
@@ -341,28 +345,106 @@ begin
   ACtx.CompileExpression(AStmt.Iterable, IterReg);
   EmitInstruction(ACtx, EncodeABC(OP_RT_GET_ITER, IterReg, IterReg, 0));
 
-  LoopStart := CurrentCodePosition(ACtx);
+  OldBreakJumps := GBreakJumps;
+  BreakJumps := TList<Integer>.Create;
+  GBreakJumps := BreakJumps;
+  try
+    LoopStart := CurrentCodePosition(ACtx);
 
-  EmitInstruction(ACtx, EncodeABC(OP_RT_ITER_NEXT, ValueReg, DoneReg, IterReg));
-  ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
+    EmitInstruction(ACtx, EncodeABC(OP_RT_ITER_NEXT, ValueReg, DoneReg, IterReg));
+    ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
 
-  ACtx.Scope.BeginScope;
+    ACtx.Scope.BeginScope;
 
-  if AStmt.BindingName <> '' then
-  begin
-    Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
+    if Assigned(AStmt.BindingPattern) then
+    begin
+      CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope);
+      EmitDestructuring(ACtx, AStmt.BindingPattern, ValueReg);
+    end
+    else if AStmt.BindingName <> '' then
+    begin
+      Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
+    end;
+
+    ACtx.CompileStatement(AStmt.Body);
+
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+
+    EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+
+    PatchJumpTarget(ACtx, ExitJump);
+
+    for I := 0 to BreakJumps.Count - 1 do
+      PatchJumpTarget(ACtx, BreakJumps[I]);
+  finally
+    BreakJumps.Free;
+    GBreakJumps := OldBreakJumps;
   end;
 
-  ACtx.CompileStatement(AStmt.Body);
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+end;
 
-  ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
-  for I := 0 to ClosedCount - 1 do
-    EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+procedure CompileForAwaitOfStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaForAwaitOfStatement);
+var
+  IterReg, ValueReg, DoneReg: UInt8;
+  LoopStart, ExitJump, I: Integer;
+  Slot: UInt8;
+  ClosedLocals: array[0..255] of UInt8;
+  ClosedCount: Integer;
+  OldBreakJumps: TList<Integer>;
+  BreakJumps: TList<Integer>;
+begin
+  IterReg := ACtx.Scope.AllocateRegister;
+  ValueReg := ACtx.Scope.AllocateRegister;
+  DoneReg := ACtx.Scope.AllocateRegister;
 
-  EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+  ACtx.CompileExpression(AStmt.Iterable, IterReg);
+  EmitInstruction(ACtx, EncodeABC(OP_RT_GET_ASYNC_ITER, IterReg, IterReg, 0));
 
-  PatchJumpTarget(ACtx, ExitJump);
+  OldBreakJumps := GBreakJumps;
+  BreakJumps := TList<Integer>.Create;
+  GBreakJumps := BreakJumps;
+  try
+    LoopStart := CurrentCodePosition(ACtx);
+
+    EmitInstruction(ACtx, EncodeABC(OP_RT_ASYNC_ITER_NEXT, ValueReg, DoneReg, IterReg));
+    ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
+
+    ACtx.Scope.BeginScope;
+
+    if Assigned(AStmt.BindingPattern) then
+    begin
+      CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope);
+      EmitDestructuring(ACtx, AStmt.BindingPattern, ValueReg);
+    end
+    else if AStmt.BindingName <> '' then
+    begin
+      Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
+    end;
+
+    ACtx.CompileStatement(AStmt.Body);
+
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+
+    EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+
+    PatchJumpTarget(ACtx, ExitJump);
+
+    for I := 0 to BreakJumps.Count - 1 do
+      PatchJumpTarget(ACtx, BreakJumps[I]);
+  finally
+    BreakJumps.Free;
+    GBreakJumps := OldBreakJumps;
+  end;
 
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;

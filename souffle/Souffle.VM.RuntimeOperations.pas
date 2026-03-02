@@ -81,6 +81,11 @@ type
     procedure ExportBinding(const AValue: TSouffleValue;
       const AName: string); virtual; abstract;
 
+    // Async iteration
+    function GetAsyncIterator(const AIterable: TSouffleValue): TSouffleValue; virtual;
+    function AsyncIteratorNext(const AIterator: TSouffleValue;
+      out ADone: Boolean): TSouffleValue; virtual;
+
     // Async
     function AwaitValue(const AValue: TSouffleValue): TSouffleValue; virtual; abstract;
 
@@ -195,6 +200,18 @@ end;
 procedure TSouffleRuntimeOperations.RequireIterable(
   const AValue: TSouffleValue);
 begin
+end;
+
+function TSouffleRuntimeOperations.GetAsyncIterator(
+  const AIterable: TSouffleValue): TSouffleValue;
+begin
+  Result := GetIterator(AIterable);
+end;
+
+function TSouffleRuntimeOperations.AsyncIteratorNext(
+  const AIterator: TSouffleValue; out ADone: Boolean): TSouffleValue;
+begin
+  Result := IteratorNext(AIterator, ADone);
 end;
 
 function TSouffleRuntimeOperations.CoerceValueToString(

@@ -184,6 +184,7 @@ var
   Frame: PSouffleVMCallFrame;
   Instruction: UInt32;
   Op: UInt8;
+  HandlerEntry: TSouffleHandlerEntry;
 begin
   while FCallStack.Count >= FBaseFrameCount do
   begin
@@ -201,10 +202,31 @@ begin
     Inc(Frame^.IP);
     Op := DecodeOp(Instruction);
 
-    if Op < OP_RT_FIRST then
-      ExecuteCoreOp(Frame, Instruction, Op)
-    else
-      ExecuteRuntimeOp(Frame, Instruction, Op);
+    try
+      if Op < OP_RT_FIRST then
+        ExecuteCoreOp(Frame, Instruction, Op)
+      else
+        ExecuteRuntimeOp(Frame, Instruction, Op);
+    except
+      on E: ESouffleThrow do
+      begin
+        if FHandlerStack.IsEmpty then
+          raise;
+
+        HandlerEntry := FHandlerStack.Peek;
+        FHandlerStack.Pop;
+
+        while FCallStack.Count - 1 > HandlerEntry.FrameIndex do
+        begin
+          CloseUpvalues(FCallStack.Peek^.BaseRegister);
+          FCallStack.Pop;
+        end;
+
+        FCallStack.Peek^.IP := HandlerEntry.CatchIP;
+        FRegisters[HandlerEntry.BaseRegister + HandlerEntry.CatchRegister] :=
+          E.ThrownValue;
+      end;
+    end;
   end;
 end;
 
@@ -1506,6 +1528,18 @@ begin
       A := DecodeA(AInstruction);
       B := DecodeB(AInstruction);
       FRegisters[Base + A] := FRuntimeOps.CoerceValueToString(FRegisters[Base + B]);
+    end;
+
+    OP_RT_GET_ASYNC_ITER:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
+      FRegisters[Base + A] := FRuntimeOps.GetAsyncIterator(FRegisters[Base + B]);
+    end;
+    OP_RT_ASYNC_ITER_NEXT:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
+      FRegisters[Base + A] := FRuntimeOps.AsyncIteratorNext(FRegisters[Base + C], Done);
+      FRegisters[Base + B] := SouffleBoolean(Done);
     end;
 
   end;
