@@ -1347,7 +1347,12 @@ function TGocciaRuntimeOperations.CoerceKeyToString(
   const AKey: TSouffleValue): string;
 begin
   if AKey.Kind = svkNil then
-    Exit('null');
+  begin
+    if AKey.Flags = GOCCIA_NIL_NULL then
+      Exit('null')
+    else
+      Exit('undefined');
+  end;
   if SouffleIsReference(AKey) and Assigned(AKey.AsReference) then
   begin
     if AKey.AsReference is TGocciaWrappedValue then
