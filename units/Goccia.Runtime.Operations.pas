@@ -121,7 +121,8 @@ type
     function Construct(const AConstructor: TSouffleValue; const AArgs: PSouffleValue;
       const AArgCount: Integer): TSouffleValue; override;
 
-    function GetIterator(const AIterable: TSouffleValue): TSouffleValue; override;
+    function GetIterator(const AIterable: TSouffleValue;
+      const ATryAsync: Boolean = False): TSouffleValue; override;
     function IteratorNext(const AIterator: TSouffleValue;
       out ADone: Boolean): TSouffleValue; override;
     procedure SpreadInto(const ATarget, ASource: TSouffleValue); override;
@@ -138,11 +139,6 @@ type
     function ImportModule(const APath: string): TSouffleValue; override;
     procedure ExportBinding(const AValue: TSouffleValue;
       const AName: string); override;
-
-    function GetAsyncIterator(
-      const AIterable: TSouffleValue): TSouffleValue; override;
-    function AsyncIteratorNext(const AIterator: TSouffleValue;
-      out ADone: Boolean): TSouffleValue; override;
 
     function AwaitValue(const AValue: TSouffleValue): TSouffleValue; override;
 
@@ -1441,15 +1437,16 @@ var
   Args: TGocciaArgumentsCollection;
   I: Integer;
 begin
-  GocciaCallee := UnwrapToGocciaValue(ACallee);
-  if not GocciaCallee.IsCallable then
-  begin
-    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
-    Exit;
-  end;
-
-  Args := TGocciaArgumentsCollection.Create;
   try
+    GocciaCallee := UnwrapToGocciaValue(ACallee);
+    if not GocciaCallee.IsCallable then
+    begin
+      ThrowTypeError(GocciaCallee.ToStringLiteral.Value + ' is not a function');
+      Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+      Exit;
+    end;
+
+    Args := TGocciaArgumentsCollection.Create;
     try
       for I := 0 to AArgCount - 1 do
         Args.Add(UnwrapToGocciaValue(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
@@ -1466,12 +1463,12 @@ begin
         Result := ToSouffleValue(GocciaResult)
       else
         Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
-    except
-      on E: TGocciaThrowValue do
-        RethrowAsVM(E);
+    finally
+      Args.Free;
     end;
-  finally
-    Args.Free;
+  except
+    on E: TGocciaThrowValue do
+      RethrowAsVM(E);
   end;
 end;
 
@@ -1574,7 +1571,8 @@ end;
 { Iteration }
 
 function TGocciaRuntimeOperations.GetIterator(
-  const AIterable: TSouffleValue): TSouffleValue;
+  const AIterable: TSouffleValue;
+  const ATryAsync: Boolean): TSouffleValue;
 var
   GocciaVal: TGocciaValue;
   Iterator: TGocciaIteratorValue;
@@ -1584,15 +1582,12 @@ begin
   try
     GocciaVal := UnwrapToGocciaValue(AIterable);
 
-    if GocciaVal is TGocciaIteratorValue then
-      Iterator := TGocciaIteratorValue(GocciaVal)
-    else if GocciaVal is TGocciaStringLiteralValue then
-      Iterator := TGocciaStringIteratorValue.Create(GocciaVal)
-    else if GocciaVal is TGocciaObjectValue then
+    Iterator := nil;
+
+    if ATryAsync and (GocciaVal is TGocciaObjectValue) then
     begin
-      Iterator := nil;
       IteratorMethod := TGocciaObjectValue(GocciaVal).GetSymbolProperty(
-        TGocciaSymbolValue.WellKnownIterator);
+        TGocciaSymbolValue.WellKnownAsyncIterator);
       if Assigned(IteratorMethod) and
          not (IteratorMethod is TGocciaUndefinedLiteralValue) and
          IteratorMethod.IsCallable then
@@ -1604,20 +1599,50 @@ begin
         finally
           CallArgs.Free;
         end;
-        if IteratorObj is TGocciaIteratorValue then
-          Iterator := TGocciaIteratorValue(IteratorObj)
-        else if IteratorObj is TGocciaObjectValue then
+        if Assigned(IteratorObj) then
         begin
-          NextMethod := IteratorObj.GetProperty(PROP_NEXT);
-          if Assigned(NextMethod) and
-             not (NextMethod is TGocciaUndefinedLiteralValue) and
-             NextMethod.IsCallable then
-            Iterator := TGocciaGenericIteratorValue.Create(IteratorObj);
+          if Assigned(TGocciaGarbageCollector.Instance) then
+            TGocciaGarbageCollector.Instance.AddTempRoot(IteratorObj);
+          Result := WrapGocciaValue(IteratorObj);
+          Exit;
         end;
       end;
-    end
-    else
-      Iterator := nil;
+    end;
+
+    if Iterator = nil then
+    begin
+      if GocciaVal is TGocciaIteratorValue then
+        Iterator := TGocciaIteratorValue(GocciaVal)
+      else if GocciaVal is TGocciaStringLiteralValue then
+        Iterator := TGocciaStringIteratorValue.Create(GocciaVal)
+      else if GocciaVal is TGocciaObjectValue then
+      begin
+        IteratorMethod := TGocciaObjectValue(GocciaVal).GetSymbolProperty(
+          TGocciaSymbolValue.WellKnownIterator);
+        if Assigned(IteratorMethod) and
+           not (IteratorMethod is TGocciaUndefinedLiteralValue) and
+           IteratorMethod.IsCallable then
+        begin
+          CallArgs := TGocciaArgumentsCollection.Create;
+          try
+            IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(
+              CallArgs, GocciaVal);
+          finally
+            CallArgs.Free;
+          end;
+          if IteratorObj is TGocciaIteratorValue then
+            Iterator := TGocciaIteratorValue(IteratorObj)
+          else if IteratorObj is TGocciaObjectValue then
+          begin
+            NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+            if Assigned(NextMethod) and
+               not (NextMethod is TGocciaUndefinedLiteralValue) and
+               NextMethod.IsCallable then
+              Iterator := TGocciaGenericIteratorValue.Create(IteratorObj);
+          end;
+        end;
+      end;
+    end;
 
     if Iterator = nil then
     begin
@@ -1641,23 +1666,56 @@ var
   GocciaVal: TGocciaValue;
   Iterator: TGocciaIteratorValue;
   IterResult: TGocciaObjectValue;
-  Value: TGocciaValue;
+  Value, NextMethod, NextResult, Resolved, DoneValue: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
 begin
   ADone := True;
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
   try
     GocciaVal := UnwrapToGocciaValue(AIterator);
-    if not (GocciaVal is TGocciaIteratorValue) then
-      Exit;
 
-    Iterator := TGocciaIteratorValue(GocciaVal);
-    IterResult := Iterator.AdvanceNext;
-
-    ADone := IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value;
-    if not ADone then
+    if GocciaVal is TGocciaIteratorValue then
     begin
-      Value := IterResult.GetProperty(PROP_VALUE);
-      Result := ToSouffleValue(Value);
+      Iterator := TGocciaIteratorValue(GocciaVal);
+      IterResult := Iterator.AdvanceNext;
+
+      ADone := IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value;
+      if not ADone then
+      begin
+        Value := IterResult.GetProperty(PROP_VALUE);
+        Result := ToSouffleValue(Value);
+      end;
+    end
+    else if GocciaVal is TGocciaObjectValue then
+    begin
+      NextMethod := GocciaVal.GetProperty(PROP_NEXT);
+      if not Assigned(NextMethod) or not NextMethod.IsCallable then
+        Exit;
+
+      CallArgs := TGocciaArgumentsCollection.Create;
+      try
+        NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, GocciaVal);
+      finally
+        CallArgs.Free;
+      end;
+
+      Resolved := Goccia.Evaluator.AwaitValue(NextResult);
+      if Resolved.IsPrimitive then
+      begin
+        ThrowTypeError('Iterator result ' +
+          Resolved.ToStringLiteral.Value + ' is not an object');
+        Exit;
+      end;
+
+      DoneValue := Resolved.GetProperty(PROP_DONE);
+      ADone := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+      if not ADone then
+      begin
+        Value := Resolved.GetProperty(PROP_VALUE);
+        if not Assigned(Value) then
+          Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Result := ToSouffleValue(Value);
+      end;
     end;
   except
     on E: TGocciaThrowValue do
@@ -1983,112 +2041,6 @@ procedure TGocciaRuntimeOperations.ExportBinding(const AValue: TSouffleValue;
   const AName: string);
 begin
   FExports.AddOrSetValue(AName, AValue);
-end;
-
-{ Async iteration }
-
-function TGocciaRuntimeOperations.GetAsyncIterator(
-  const AIterable: TSouffleValue): TSouffleValue;
-var
-  GocciaVal: TGocciaValue;
-  IteratorMethod, IteratorObj: TGocciaValue;
-  CallArgs: TGocciaArgumentsCollection;
-begin
-  try
-    GocciaVal := UnwrapToGocciaValue(AIterable);
-
-    if GocciaVal is TGocciaObjectValue then
-    begin
-      IteratorMethod := TGocciaObjectValue(GocciaVal).GetSymbolProperty(
-        TGocciaSymbolValue.WellKnownAsyncIterator);
-      if Assigned(IteratorMethod) and
-         not (IteratorMethod is TGocciaUndefinedLiteralValue) and
-         IteratorMethod.IsCallable then
-      begin
-        CallArgs := TGocciaArgumentsCollection.Create;
-        try
-          IteratorObj := TGocciaFunctionBase(IteratorMethod).Call(
-            CallArgs, GocciaVal);
-        finally
-          CallArgs.Free;
-        end;
-        if Assigned(TGocciaGarbageCollector.Instance) then
-          TGocciaGarbageCollector.Instance.AddTempRoot(IteratorObj);
-        Result := WrapGocciaValue(IteratorObj);
-        Exit;
-      end;
-    end;
-
-    Result := GetIterator(AIterable);
-  except
-    on E: TGocciaThrowValue do
-      RethrowAsVM(E);
-  end;
-end;
-
-function TGocciaRuntimeOperations.AsyncIteratorNext(
-  const AIterator: TSouffleValue; out ADone: Boolean): TSouffleValue;
-var
-  GocciaVal, NextMethod, NextResult, DoneValue, CurrentValue, Resolved: TGocciaValue;
-  Iterator: TGocciaIteratorValue;
-  IterResult: TGocciaObjectValue;
-  CallArgs: TGocciaArgumentsCollection;
-begin
-  ADone := True;
-  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
-  try
-    GocciaVal := UnwrapToGocciaValue(AIterator);
-
-    if GocciaVal is TGocciaIteratorValue then
-    begin
-      Iterator := TGocciaIteratorValue(GocciaVal);
-      IterResult := Iterator.AdvanceNext;
-      ADone := IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value;
-      if not ADone then
-      begin
-        CurrentValue := IterResult.GetProperty(PROP_VALUE);
-        Resolved := Goccia.Evaluator.AwaitValue(CurrentValue);
-        Result := ToSouffleValue(Resolved);
-      end;
-    end
-    else if GocciaVal is TGocciaObjectValue then
-    begin
-      NextMethod := GocciaVal.GetProperty(PROP_NEXT);
-      if not Assigned(NextMethod) or not NextMethod.IsCallable then
-      begin
-        ThrowTypeError('Async iterator .next is not callable');
-        Exit;
-      end;
-
-      CallArgs := TGocciaArgumentsCollection.Create;
-      try
-        NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, GocciaVal);
-      finally
-        CallArgs.Free;
-      end;
-
-      Resolved := Goccia.Evaluator.AwaitValue(NextResult);
-      if Resolved.IsPrimitive then
-      begin
-        ThrowTypeError('Iterator result ' +
-          Resolved.ToStringLiteral.Value + ' is not an object');
-        Exit;
-      end;
-
-      DoneValue := Resolved.GetProperty(PROP_DONE);
-      ADone := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
-      if not ADone then
-      begin
-        CurrentValue := Resolved.GetProperty(PROP_VALUE);
-        if not Assigned(CurrentValue) then
-          CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Result := ToSouffleValue(CurrentValue);
-      end;
-    end;
-  except
-    on E: TGocciaThrowValue do
-      RethrowAsVM(E);
-  end;
 end;
 
 { Async }

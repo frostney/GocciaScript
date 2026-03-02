@@ -1422,8 +1422,8 @@ begin
 
     OP_RT_GET_ITER:
     begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.GetIterator(FRegisters[Base + B]);
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
+      FRegisters[Base + A] := FRuntimeOps.GetIterator(FRegisters[Base + B], C = 1);
     end;
     OP_RT_ITER_NEXT:
     begin
@@ -1528,18 +1528,6 @@ begin
       A := DecodeA(AInstruction);
       B := DecodeB(AInstruction);
       FRegisters[Base + A] := FRuntimeOps.CoerceValueToString(FRegisters[Base + B]);
-    end;
-
-    OP_RT_GET_ASYNC_ITER:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.GetAsyncIterator(FRegisters[Base + B]);
-    end;
-    OP_RT_ASYNC_ITER_NEXT:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.AsyncIteratorNext(FRegisters[Base + C], Done);
-      FRegisters[Base + B] := SouffleBoolean(Done);
     end;
 
   end;

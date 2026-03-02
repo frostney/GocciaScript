@@ -405,7 +405,7 @@ begin
   DoneReg := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(AStmt.Iterable, IterReg);
-  EmitInstruction(ACtx, EncodeABC(OP_RT_GET_ASYNC_ITER, IterReg, IterReg, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_RT_GET_ITER, IterReg, IterReg, 1));
 
   OldBreakJumps := GBreakJumps;
   BreakJumps := TList<Integer>.Create;
@@ -413,8 +413,9 @@ begin
   try
     LoopStart := CurrentCodePosition(ACtx);
 
-    EmitInstruction(ACtx, EncodeABC(OP_RT_ASYNC_ITER_NEXT, ValueReg, DoneReg, IterReg));
+    EmitInstruction(ACtx, EncodeABC(OP_RT_ITER_NEXT, ValueReg, DoneReg, IterReg));
     ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
+    EmitInstruction(ACtx, EncodeABC(OP_RT_AWAIT, ValueReg, ValueReg, 0));
 
     ACtx.Scope.BeginScope;
 

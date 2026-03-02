@@ -159,6 +159,11 @@ begin
   else if AExpr is TGocciaDestructuringAssignmentExpression then
     Goccia.Compiler.Expressions.CompileDestructuringAssignment(Ctx,
       TGocciaDestructuringAssignmentExpression(AExpr), ADest)
+  else if AExpr is TGocciaAwaitExpression then
+  begin
+    DoCompileExpression(TGocciaAwaitExpression(AExpr).Operand, ADest);
+    EmitInstruction(Ctx, EncodeABC(OP_RT_AWAIT, ADest, ADest, 0));
+  end
   else
     EmitInstruction(Ctx, EncodeABC(OP_LOAD_NIL, ADest, 0, 0));
 end;

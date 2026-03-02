@@ -167,7 +167,7 @@ type
     OP_RT_CONSTRUCT  = 163, // ABC   R[A] := Runtime.Construct(R[B], args, C=argc)
 
     // ── Runtime: Iteration ──
-    OP_RT_GET_ITER   = 164, // AB    R[A] := Runtime.GetIterator(R[B])
+    OP_RT_GET_ITER   = 164, // ABC   R[A] := Runtime.GetIterator(R[B], C) — C: 0=sync, 1=try-async-first
     OP_RT_ITER_NEXT  = 165, // ABC   (R[A], R[B]) := Runtime.IteratorNext(R[C])
     OP_RT_SPREAD     = 166, // AB    Runtime.SpreadInto(R[A], R[B])
 
@@ -197,9 +197,7 @@ type
     OP_RT_CALL_METHOD_SPREAD = 180, // ABC  R[A] := Runtime.CallMethod(R[A], R[A-1]=this, R[B]=argsArray)
     OP_RT_REQUIRE_OBJECT = 181, // A    Throw TypeError if R[A] is null or undefined
     OP_RT_TO_STRING = 182, // AB    R[A] := Runtime.ToString(R[B])
-    OP_RT_REQUIRE_ITERABLE = 183, // A  Throw TypeError if R[A] is not iterable (not array/string/wrapped iterable)
-    OP_RT_GET_ASYNC_ITER = 184, // AB  R[A] := Runtime.GetAsyncIterator(R[B]) — tries asyncIterator, falls back to sync
-    OP_RT_ASYNC_ITER_NEXT = 185 // ABC (R[A], R[B]) := Runtime.AsyncIteratorNext(R[C]) — next() + await
+    OP_RT_REQUIRE_ITERABLE = 183 // A  Throw TypeError if R[A] is not iterable (not array/string/wrapped iterable)
   );
 
 { Instruction encoding/decoding helpers }

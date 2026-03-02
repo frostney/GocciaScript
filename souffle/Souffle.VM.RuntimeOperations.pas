@@ -63,7 +63,8 @@ type
       const AArgCount: Integer): TSouffleValue; virtual; abstract;
 
     // Iteration
-    function GetIterator(const AIterable: TSouffleValue): TSouffleValue; virtual; abstract;
+    function GetIterator(const AIterable: TSouffleValue;
+      const ATryAsync: Boolean = False): TSouffleValue; virtual; abstract;
     function IteratorNext(const AIterator: TSouffleValue;
       out ADone: Boolean): TSouffleValue; virtual; abstract;
     procedure SpreadInto(const ATarget, ASource: TSouffleValue); virtual; abstract;
@@ -80,11 +81,6 @@ type
     function ImportModule(const APath: string): TSouffleValue; virtual; abstract;
     procedure ExportBinding(const AValue: TSouffleValue;
       const AName: string); virtual; abstract;
-
-    // Async iteration
-    function GetAsyncIterator(const AIterable: TSouffleValue): TSouffleValue; virtual;
-    function AsyncIteratorNext(const AIterator: TSouffleValue;
-      out ADone: Boolean): TSouffleValue; virtual;
 
     // Async
     function AwaitValue(const AValue: TSouffleValue): TSouffleValue; virtual; abstract;
@@ -200,18 +196,6 @@ end;
 procedure TSouffleRuntimeOperations.RequireIterable(
   const AValue: TSouffleValue);
 begin
-end;
-
-function TSouffleRuntimeOperations.GetAsyncIterator(
-  const AIterable: TSouffleValue): TSouffleValue;
-begin
-  Result := GetIterator(AIterable);
-end;
-
-function TSouffleRuntimeOperations.AsyncIteratorNext(
-  const AIterator: TSouffleValue; out ADone: Boolean): TSouffleValue;
-begin
-  Result := IteratorNext(AIterator, ADone);
 end;
 
 function TSouffleRuntimeOperations.CoerceValueToString(
