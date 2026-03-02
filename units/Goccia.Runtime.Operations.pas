@@ -141,6 +141,8 @@ type
       const AName: string); override;
 
     function AwaitValue(const AValue: TSouffleValue): TSouffleValue; override;
+    function WrapInPromise(const AValue: TSouffleValue;
+      const AIsRejected: Boolean): TSouffleValue; override;
 
     function GetGlobal(const AName: string): TSouffleValue; override;
     procedure SetGlobal(const AName: string;
@@ -191,6 +193,7 @@ uses
   Goccia.Evaluator.TypeOperations,
   Goccia.GarbageCollector,
   Goccia.Interpreter,
+  Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
@@ -204,6 +207,7 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
+  Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
@@ -1238,6 +1242,14 @@ var
   Bp: TSouffleBlueprint;
 begin
   try
+    if AObject.Kind = svkNil then
+    begin
+      if AObject.Flags = GOCCIA_NIL_NULL then
+        ThrowTypeError('Cannot read properties of null (reading ''' + AKey + ''')')
+      else
+        ThrowTypeError('Cannot read properties of undefined (reading ''' + AKey + ''')');
+    end;
+
     if SouffleIsReference(AObject) and Assigned(AObject.AsReference) then
     begin
       if AObject.AsReference is TSouffleRecord then
@@ -1303,6 +1315,14 @@ var
   GocciaObj, Val: TGocciaValue;
 begin
   try
+    if AObject.Kind = svkNil then
+    begin
+      if AObject.Flags = GOCCIA_NIL_NULL then
+        ThrowTypeError('Cannot set properties of null (setting ''' + AKey + ''')')
+      else
+        ThrowTypeError('Cannot set properties of undefined (setting ''' + AKey + ''')');
+    end;
+
     if SouffleIsReference(AObject) and Assigned(AObject.AsReference) then
     begin
       if AObject.AsReference is TSouffleRecord then
@@ -1343,25 +1363,38 @@ var
   SymKey: TGocciaSymbolValue;
   PropVal: TGocciaValue;
 begin
-  if SouffleIsReference(AObject) and Assigned(AObject.AsReference) and
-     (AObject.AsReference is TSouffleArray) and (AKey.Kind = svkInteger) then
-    Result := TSouffleArray(AObject.AsReference).Get(Integer(AKey.AsInteger))
-  else if SouffleIsReference(AKey) and Assigned(AKey.AsReference) and
-     (AKey.AsReference is TGocciaWrappedValue) and
-     (TGocciaWrappedValue(AKey.AsReference).Value is TGocciaSymbolValue) then
-  begin
-    SymKey := TGocciaSymbolValue(TGocciaWrappedValue(AKey.AsReference).Value);
-    GocciaObj := UnwrapToGocciaValue(AObject);
-    if GocciaObj is TGocciaObjectValue then
+  try
+    if AObject.Kind = svkNil then
     begin
-      PropVal := TGocciaObjectValue(GocciaObj).GetSymbolProperty(SymKey);
-      if Assigned(PropVal) then
-        Exit(ToSouffleValue(PropVal));
+      if AObject.Flags = GOCCIA_NIL_NULL then
+        ThrowTypeError('Cannot read properties of null (reading ''' + CoerceKeyToString(AKey) + ''')')
+      else
+        ThrowTypeError('Cannot read properties of undefined (reading ''' + CoerceKeyToString(AKey) + ''')');
     end;
-    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
-  end
-  else
-    Result := GetProperty(AObject, CoerceKeyToString(AKey));
+
+    if SouffleIsReference(AObject) and Assigned(AObject.AsReference) and
+       (AObject.AsReference is TSouffleArray) and (AKey.Kind = svkInteger) then
+      Result := TSouffleArray(AObject.AsReference).Get(Integer(AKey.AsInteger))
+    else if SouffleIsReference(AKey) and Assigned(AKey.AsReference) and
+       (AKey.AsReference is TGocciaWrappedValue) and
+       (TGocciaWrappedValue(AKey.AsReference).Value is TGocciaSymbolValue) then
+    begin
+      SymKey := TGocciaSymbolValue(TGocciaWrappedValue(AKey.AsReference).Value);
+      GocciaObj := UnwrapToGocciaValue(AObject);
+      if GocciaObj is TGocciaObjectValue then
+      begin
+        PropVal := TGocciaObjectValue(GocciaObj).GetSymbolProperty(SymKey);
+        if Assigned(PropVal) then
+          Exit(ToSouffleValue(PropVal));
+      end;
+      Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+    end
+    else
+      Result := GetProperty(AObject, CoerceKeyToString(AKey));
+  except
+    on E: TGocciaThrowValue do
+      RethrowAsVM(E);
+  end;
 end;
 
 procedure TGocciaRuntimeOperations.SetIndex(const AObject: TSouffleValue;
@@ -1370,20 +1403,33 @@ var
   GocciaObj: TGocciaValue;
   SymKey: TGocciaSymbolValue;
 begin
-  if SouffleIsReference(AObject) and Assigned(AObject.AsReference) and
-     (AObject.AsReference is TSouffleArray) and (AKey.Kind = svkInteger) then
-    TSouffleArray(AObject.AsReference).Put(Integer(AKey.AsInteger), AValue)
-  else if SouffleIsReference(AKey) and Assigned(AKey.AsReference) and
-     (AKey.AsReference is TGocciaWrappedValue) and
-     (TGocciaWrappedValue(AKey.AsReference).Value is TGocciaSymbolValue) then
-  begin
-    SymKey := TGocciaSymbolValue(TGocciaWrappedValue(AKey.AsReference).Value);
-    GocciaObj := UnwrapToGocciaValue(AObject);
-    if GocciaObj is TGocciaObjectValue then
-      TGocciaObjectValue(GocciaObj).AssignSymbolProperty(SymKey, UnwrapToGocciaValue(AValue));
-  end
-  else
-    SetProperty(AObject, CoerceKeyToString(AKey), AValue);
+  try
+    if AObject.Kind = svkNil then
+    begin
+      if AObject.Flags = GOCCIA_NIL_NULL then
+        ThrowTypeError('Cannot set properties of null (setting ''' + CoerceKeyToString(AKey) + ''')')
+      else
+        ThrowTypeError('Cannot set properties of undefined (setting ''' + CoerceKeyToString(AKey) + ''')');
+    end;
+
+    if SouffleIsReference(AObject) and Assigned(AObject.AsReference) and
+       (AObject.AsReference is TSouffleArray) and (AKey.Kind = svkInteger) then
+      TSouffleArray(AObject.AsReference).Put(Integer(AKey.AsInteger), AValue)
+    else if SouffleIsReference(AKey) and Assigned(AKey.AsReference) and
+       (AKey.AsReference is TGocciaWrappedValue) and
+       (TGocciaWrappedValue(AKey.AsReference).Value is TGocciaSymbolValue) then
+    begin
+      SymKey := TGocciaSymbolValue(TGocciaWrappedValue(AKey.AsReference).Value);
+      GocciaObj := UnwrapToGocciaValue(AObject);
+      if GocciaObj is TGocciaObjectValue then
+        TGocciaObjectValue(GocciaObj).AssignSymbolProperty(SymKey, UnwrapToGocciaValue(AValue));
+    end
+    else
+      SetProperty(AObject, CoerceKeyToString(AKey), AValue);
+  except
+    on E: TGocciaThrowValue do
+      RethrowAsVM(E);
+  end;
 end;
 
 function TGocciaRuntimeOperations.DeleteProperty(const AObject: TSouffleValue;
@@ -2057,6 +2103,23 @@ begin
     on E: TGocciaThrowValue do
       RethrowAsVM(E);
   end;
+end;
+
+function TGocciaRuntimeOperations.WrapInPromise(const AValue: TSouffleValue;
+  const AIsRejected: Boolean): TSouffleValue;
+var
+  Promise: TGocciaPromiseValue;
+  GocciaVal: TGocciaValue;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  GocciaVal := UnwrapToGocciaValue(AValue);
+  if AIsRejected then
+    Promise.Reject(GocciaVal)
+  else
+    Promise.Resolve(GocciaVal);
+  if Assigned(TGocciaMicrotaskQueue.Instance) then
+    TGocciaMicrotaskQueue.Instance.DrainQueue;
+  Result := WrapGocciaValue(Promise);
 end;
 
 { Globals }

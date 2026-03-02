@@ -216,6 +216,7 @@ procedure CompileReturnStatement(const ACtx: TGocciaCompilationContext;
 var
   Reg: UInt8;
   I: Integer;
+  SavedFinally: TList<TPendingFinallyEntry>;
 begin
   if Assigned(AStmt.Value) then
   begin
@@ -223,11 +224,16 @@ begin
     ACtx.CompileExpression(AStmt.Value, Reg);
 
     if Assigned(GPendingFinally) then
-      for I := GPendingFinally.Count - 1 downto 0 do
+    begin
+      SavedFinally := GPendingFinally;
+      GPendingFinally := nil;
+      for I := SavedFinally.Count - 1 downto 0 do
       begin
         EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
-        CompileBlockStatement(ACtx, GPendingFinally[I].FinallyBlock);
+        CompileBlockStatement(ACtx, SavedFinally[I].FinallyBlock);
       end;
+      GPendingFinally := SavedFinally;
+    end;
 
     EmitInstruction(ACtx, EncodeABC(OP_RETURN, Reg, 0, 0));
     ACtx.Scope.FreeRegister;
@@ -235,11 +241,16 @@ begin
   else
   begin
     if Assigned(GPendingFinally) then
-      for I := GPendingFinally.Count - 1 downto 0 do
+    begin
+      SavedFinally := GPendingFinally;
+      GPendingFinally := nil;
+      for I := SavedFinally.Count - 1 downto 0 do
       begin
         EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
-        CompileBlockStatement(ACtx, GPendingFinally[I].FinallyBlock);
+        CompileBlockStatement(ACtx, SavedFinally[I].FinallyBlock);
       end;
+      GPendingFinally := SavedFinally;
+    end;
 
     EmitInstruction(ACtx, EncodeABC(OP_RETURN_NIL, 0, 0, 0));
   end;
@@ -718,6 +729,7 @@ begin
 
     ChildTemplate := TSouffleFunctionTemplate.Create('<method ' + MethodPair.Key + '>');
     ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+    ChildTemplate.IsAsync := MethodPair.Value.IsAsync;
     ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
     ChildScope.DeclareLocal('this', False);

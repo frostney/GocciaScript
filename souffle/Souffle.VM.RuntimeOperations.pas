@@ -84,6 +84,8 @@ type
 
     // Async
     function AwaitValue(const AValue: TSouffleValue): TSouffleValue; virtual; abstract;
+    function WrapInPromise(const AValue: TSouffleValue;
+      const AIsRejected: Boolean): TSouffleValue; virtual;
 
     // Globals
     function GetGlobal(const AName: string): TSouffleValue; virtual; abstract;
@@ -202,6 +204,12 @@ function TSouffleRuntimeOperations.CoerceValueToString(
   const A: TSouffleValue): TSouffleValue;
 begin
   Result := SouffleNil;
+end;
+
+function TSouffleRuntimeOperations.WrapInPromise(const AValue: TSouffleValue;
+  const AIsRejected: Boolean): TSouffleValue;
+begin
+  Result := AValue;
 end;
 
 end.

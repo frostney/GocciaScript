@@ -65,6 +65,7 @@ type
     FDebugInfo: TSouffleDebugInfo;
     FLocalTypes: array of TSouffleLocalType;
     FLocalTypeCount: UInt8;
+    FIsAsync: Boolean;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -101,6 +102,7 @@ type
     procedure SetLocalType(const ASlot: UInt8; const AKind: TSouffleLocalType);
     function GetLocalType(const ASlot: UInt8): TSouffleLocalType;
     property LocalTypeCount: UInt8 read FLocalTypeCount;
+    property IsAsync: Boolean read FIsAsync write FIsAsync;
   end;
 
 const

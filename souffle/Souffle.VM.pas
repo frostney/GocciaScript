@@ -50,6 +50,7 @@ type
       const AInstruction: UInt32; const AOp: UInt8);
     procedure ExecuteRuntimeOp(const AFrame: PSouffleVMCallFrame;
       const AInstruction: UInt32; const AOp: UInt8);
+    function ResolveAsyncThrow(const AThrownValue: TSouffleValue): Boolean;
 
     function MaterializeConstant(
       const AConstant: TSouffleBytecodeConstant): TSouffleValue;
@@ -179,6 +180,32 @@ begin
   Result := FRegisters[Base];
 end;
 
+function TSouffleVM.ResolveAsyncThrow(
+  const AThrownValue: TSouffleValue): Boolean;
+var
+  CurrentFrame: PSouffleVMCallFrame;
+  ReturnReg: Integer;
+begin
+  Result := False;
+  while FCallStack.Count >= FBaseFrameCount do
+  begin
+    CurrentFrame := FCallStack.Peek;
+    CloseUpvalues(CurrentFrame^.BaseRegister);
+    while FHandlerStack.Count > CurrentFrame^.HandlerDepth do
+      FHandlerStack.Pop;
+    if CurrentFrame^.Template.IsAsync then
+    begin
+      ReturnReg := CurrentFrame^.ReturnRegister;
+      FCallStack.Pop;
+      FRegisters[ReturnReg] :=
+        FRuntimeOps.WrapInPromise(AThrownValue, True);
+      Result := True;
+      Exit;
+    end;
+    FCallStack.Pop;
+  end;
+end;
+
 procedure TSouffleVM.ExecuteLoop;
 var
   Frame: PSouffleVMCallFrame;
@@ -193,7 +220,11 @@ begin
     if Frame^.IP >= Frame^.Template.CodeCount then
     begin
       CloseUpvalues(Frame^.BaseRegister);
-      FRegisters[Frame^.ReturnRegister] := SouffleNil;
+      if Frame^.Template.IsAsync then
+        FRegisters[Frame^.ReturnRegister] :=
+          FRuntimeOps.WrapInPromise(SouffleNil, False)
+      else
+        FRegisters[Frame^.ReturnRegister] := SouffleNil;
       FCallStack.Pop;
       Continue;
     end;
@@ -210,21 +241,27 @@ begin
     except
       on E: ESouffleThrow do
       begin
-        if FHandlerStack.IsEmpty then
-          raise;
-
-        HandlerEntry := FHandlerStack.Peek;
-        FHandlerStack.Pop;
-
-        while FCallStack.Count - 1 > HandlerEntry.FrameIndex do
+        if (not FHandlerStack.IsEmpty) and
+           (FHandlerStack.Peek.FrameIndex >= FBaseFrameCount - 1) then
         begin
-          CloseUpvalues(FCallStack.Peek^.BaseRegister);
-          FCallStack.Pop;
-        end;
+          HandlerEntry := FHandlerStack.Peek;
+          FHandlerStack.Pop;
 
-        FCallStack.Peek^.IP := HandlerEntry.CatchIP;
-        FRegisters[HandlerEntry.BaseRegister + HandlerEntry.CatchRegister] :=
-          E.ThrownValue;
+          while FCallStack.Count - 1 > HandlerEntry.FrameIndex do
+          begin
+            CloseUpvalues(FCallStack.Peek^.BaseRegister);
+            FCallStack.Pop;
+          end;
+
+          FCallStack.Peek^.IP := HandlerEntry.CatchIP;
+          FRegisters[HandlerEntry.BaseRegister + HandlerEntry.CatchRegister] :=
+            E.ThrownValue;
+        end
+        else
+        begin
+          if not ResolveAsyncThrow(E.ThrownValue) then
+            raise;
+        end;
       end;
     end;
   end;
@@ -531,14 +568,22 @@ begin
     begin
       A := DecodeA(AInstruction);
       CloseUpvalues(Base);
-      FRegisters[AFrame^.ReturnRegister] := FRegisters[Base + A];
+      if AFrame^.Template.IsAsync then
+        FRegisters[AFrame^.ReturnRegister] :=
+          FRuntimeOps.WrapInPromise(FRegisters[Base + A], False)
+      else
+        FRegisters[AFrame^.ReturnRegister] := FRegisters[Base + A];
       FCallStack.Pop;
     end;
 
     OP_RETURN_NIL:
     begin
       CloseUpvalues(Base);
-      FRegisters[AFrame^.ReturnRegister] := SouffleNil;
+      if AFrame^.Template.IsAsync then
+        FRegisters[AFrame^.ReturnRegister] :=
+          FRuntimeOps.WrapInPromise(SouffleNil, False)
+      else
+        FRegisters[AFrame^.ReturnRegister] := SouffleNil;
       FCallStack.Pop;
     end;
 
@@ -649,7 +694,11 @@ begin
           FRuntimeOps.SetProperty(
             FRegisters[Base + A], AFrame^.Template.GetConstant(B).StringValue,
             FRegisters[Base + C]);
-      end;
+      end
+      else
+        FRuntimeOps.SetProperty(
+          FRegisters[Base + A], AFrame^.Template.GetConstant(B).StringValue,
+          FRegisters[Base + C]);
     end;
 
     OP_RECORD_DELETE:

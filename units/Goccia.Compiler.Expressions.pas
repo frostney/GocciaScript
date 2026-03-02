@@ -663,6 +663,7 @@ begin
 
   ChildTemplate := TSouffleFunctionTemplate.Create('<arrow>');
   ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ChildScope.DeclareLocal('__receiver', False);
@@ -1303,6 +1304,7 @@ begin
 
   ChildTemplate := TSouffleFunctionTemplate.Create('<method>');
   ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
   ChildScope.DeclareLocal('this', False);
