@@ -850,23 +850,51 @@ procedure CompileMember(const ACtx: TGocciaCompilationContext;
 var
   ObjReg, IdxReg: UInt8;
   PropIdx: UInt16;
+  NilJump, EndJump: Integer;
 begin
   ObjReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
 
-  if AExpr.Computed then
+  if AExpr.Optional then
   begin
-    IdxReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(AExpr.PropertyExpression, IdxReg);
-    EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ADest, ObjReg, IdxReg));
-    ACtx.Scope.FreeRegister;
+    NilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NIL, ObjReg);
+
+    if AExpr.Computed then
+    begin
+      IdxReg := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(AExpr.PropertyExpression, IdxReg);
+      EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ADest, ObjReg, IdxReg));
+      ACtx.Scope.FreeRegister;
+    end
+    else
+    begin
+      PropIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
+      if PropIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: property name index exceeds 255');
+      EmitInstruction(ACtx, EncodeABC(OP_RECORD_GET, ADest, ObjReg, UInt8(PropIdx)));
+    end;
+
+    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+    PatchJumpTarget(ACtx, NilJump);
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ADest, 0, 0));
+    PatchJumpTarget(ACtx, EndJump);
   end
   else
   begin
-    PropIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
-    if PropIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_RECORD_GET, ADest, ObjReg, UInt8(PropIdx)));
+    if AExpr.Computed then
+    begin
+      IdxReg := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(AExpr.PropertyExpression, IdxReg);
+      EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ADest, ObjReg, IdxReg));
+      ACtx.Scope.FreeRegister;
+    end
+    else
+    begin
+      PropIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
+      if PropIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: property name index exceeds 255');
+      EmitInstruction(ACtx, EncodeABC(OP_RECORD_GET, ADest, ObjReg, UInt8(PropIdx)));
+    end;
   end;
 
   ACtx.Scope.FreeRegister;
