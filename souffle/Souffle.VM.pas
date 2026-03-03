@@ -67,6 +67,7 @@ type
 
     property ArrayDelegate: TSouffleHeapObject read FArrayDelegate write FArrayDelegate;
     property RecordDelegate: TSouffleHeapObject read FRecordDelegate write FRecordDelegate;
+    property CallStack: TSouffleCallStack read FCallStack;
   end;
 
 implementation
@@ -354,7 +355,7 @@ var
   RestCount: Integer;
   Rec: TSouffleRecord;
   RecVal: TSouffleValue;
-  Bp: TSouffleBlueprint;
+  Bp, WalkBp: TSouffleBlueprint;
 begin
   Base := AFrame^.BaseRegister;
 
@@ -994,7 +995,21 @@ begin
       begin
         Bp := TSouffleBlueprint(FRegisters[Base + B].AsReference);
         Rec := TSouffleRecord.CreateFromBlueprint(Bp);
-        Rec.Delegate := Bp.Methods;
+        Rec.Delegate := Bp.Prototype;
+        WalkBp := Bp;
+        while Assigned(WalkBp) do
+        begin
+          if not Assigned(WalkBp.Prototype.Delegate) then
+            WalkBp.Prototype.Delegate := WalkBp.Methods;
+          if not Assigned(WalkBp.Methods.Delegate) then
+          begin
+            if Assigned(WalkBp.SuperBlueprint) then
+              WalkBp.Methods.Delegate := WalkBp.SuperBlueprint.Prototype
+            else if Assigned(FRecordDelegate) then
+              WalkBp.Methods.Delegate := FRecordDelegate;
+          end;
+          WalkBp := WalkBp.SuperBlueprint;
+        end;
         if Assigned(FGC) then
           FGC.AllocateObject(Rec);
         FRegisters[Base + A] := SouffleReference(Rec);

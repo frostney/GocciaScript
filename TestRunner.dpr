@@ -161,12 +161,14 @@ var
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
+  Warning: TGocciaParserWarning;
   ProgramNode: TGocciaProgram;
   Module: TSouffleBytecodeModule;
   Backend: TGocciaSouffleBackend;
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
   TestGlobals: TGocciaGlobalBuiltins;
+  I: Integer;
   CompileStart, CompileEnd, ExecEnd: Int64;
 begin
   TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
@@ -210,6 +212,15 @@ begin
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
           try
             ProgramNode := Parser.Parse;
+            if not GSilentConsole then
+              for I := 0 to Parser.WarningCount - 1 do
+              begin
+                Warning := Parser.GetWarning(I);
+                WriteLn(Format('Warning: %s', [Warning.Message]));
+                if Warning.Suggestion <> '' then
+                  WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
+                WriteLn(Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
+              end;
             try
               Module := Backend.CompileToModule(ProgramNode);
             finally

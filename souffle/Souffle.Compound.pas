@@ -582,7 +582,7 @@ begin
   FExtensible := False;
   for I := 0 to FCapacity - 1 do
     if FEntries[I].Occupied then
-      FEntries[I].Flags := 0;
+      FEntries[I].Flags := FEntries[I].Flags and SOUFFLE_PROP_ENUMERABLE;
 end;
 
 procedure TSouffleRecord.PreventExtensions;

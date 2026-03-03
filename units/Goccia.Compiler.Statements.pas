@@ -313,6 +313,9 @@ begin
 
   if HasCatch then
   begin
+    if HasFinally then
+      GPendingFinally.Add(Entry);
+
     if AStmt.CatchParam <> '' then
     begin
       ACtx.Scope.BeginScope;
@@ -330,7 +333,10 @@ begin
     end;
 
     if HasFinally then
+    begin
+      GPendingFinally.Delete(GPendingFinally.Count - 1);
       CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+    end;
   end
   else
   begin
@@ -986,7 +992,8 @@ begin
     begin
       ACtx.Scope.MarkGlobalBacked(I);
       NameIdx := ACtx.Template.AddConstantString(Local.Name);
-      EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, Local.Slot, NameIdx));
+      EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, Local.Slot,
+        GOCCIA_EXT_DEFINE_GLOBAL, UInt8(NameIdx)));
     end;
   end;
 
@@ -995,7 +1002,8 @@ begin
     GOCCIA_EXT_EVAL_CLASS, UInt8(APendingIndex)));
 
   NameIdx := ACtx.Template.AddConstantString(ClassDef.Name);
-  EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, ClassReg, NameIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ClassReg,
+    GOCCIA_EXT_DEFINE_GLOBAL, UInt8(NameIdx)));
 
   for I := 0 to ACtx.Scope.LocalCount - 1 do
   begin
@@ -1003,7 +1011,8 @@ begin
     if Local.IsGlobalBacked then
     begin
       NameIdx := ACtx.Template.AddConstantString(Local.Name);
-      EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, Local.Slot, NameIdx));
+      EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, Local.Slot,
+        GOCCIA_EXT_DEFINE_GLOBAL, UInt8(NameIdx)));
     end;
   end;
 end;

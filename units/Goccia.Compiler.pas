@@ -66,7 +66,8 @@ uses
   Souffle.Bytecode.Debug,
 
   Goccia.Compiler.Expressions,
-  Goccia.Compiler.Statements;
+  Goccia.Compiler.Statements,
+  Goccia.Constants.ConstructorNames;
 
 { TGocciaCompiler }
 
@@ -95,6 +96,12 @@ begin
     Exit(True);
   if (AClassDef.SuperClass <> '') and
      FPendingClassNames.ContainsKey(AClassDef.SuperClass) then
+    Exit(True);
+  if (AClassDef.SuperClass = CONSTRUCTOR_ARRAY) or
+     (AClassDef.SuperClass = CONSTRUCTOR_MAP) or
+     (AClassDef.SuperClass = CONSTRUCTOR_SET) or
+     (AClassDef.SuperClass = CONSTRUCTOR_PROMISE) or
+     (AClassDef.SuperClass = CONSTRUCTOR_OBJECT) then
     Exit(True);
   Result := False;
 end;

@@ -18,6 +18,7 @@ const
   GOCCIA_EXT_SUPER_GET           = 11; // A=dest, C=prop constant, R[A+1]=super blueprint
   GOCCIA_EXT_SPREAD              = 12; // A=target array, C=source reg
   GOCCIA_EXT_REQUIRE_ITERABLE    = 13; // A=value (overwritten with array)
+  GOCCIA_EXT_DEFINE_GLOBAL       = 14; // A=value, C=name constant (create-or-update)
 
 implementation
 

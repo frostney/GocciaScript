@@ -1393,8 +1393,9 @@ begin
   begin
     Local := ACtx.Scope.GetLocal(I);
     if Local.IsGlobalBacked then
-      EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, Local.Slot,
-        ACtx.Template.AddConstantString(Local.Name)));
+      EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, Local.Slot,
+        GOCCIA_EXT_DEFINE_GLOBAL,
+        UInt8(ACtx.Template.AddConstantString(Local.Name))));
   end;
 end;
 

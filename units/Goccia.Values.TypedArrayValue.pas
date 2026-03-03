@@ -174,6 +174,7 @@ var
   U16: Word;
   I32: LongInt;
   U32: LongWord;
+  I64: Int64;
   F32: Single;
   F64: Double;
 begin
@@ -202,12 +203,14 @@ begin
     takInt32:
     begin
       Move(FBufferData[Offset], I32, 4);
-      Result := I32;
+      I64 := I32;
+      Result := I64;
     end;
     takUint32:
     begin
       Move(FBufferData[Offset], U32, 4);
-      Result := U32;
+      I64 := U32;
+      Result := I64;
     end;
     takFloat32:
     begin
