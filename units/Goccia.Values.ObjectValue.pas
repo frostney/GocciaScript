@@ -693,7 +693,7 @@ begin
         Exit;
       end;
     end;
-    Result := FPrototype.GetProperty(AName);
+    Result := FPrototype.GetPropertyWithContext(AName, AThisContext);
     Exit;
   end;
 

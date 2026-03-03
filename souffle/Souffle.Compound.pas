@@ -44,6 +44,7 @@ type
     Value: TSouffleValue;
     Hash: UInt32;
     Occupied: Boolean;
+    Deleted: Boolean;
     Flags: Byte;
   end;
 
@@ -58,6 +59,7 @@ type
     FEntries: array of TSouffleRecordEntry;
     FOrder: array of Integer;
     FCount: Integer;
+    FDeletedCount: Integer;
     FCapacity: Integer;
     FBlueprint: TSouffleBlueprint;
     FSlots: array of TSouffleValue;
@@ -66,6 +68,7 @@ type
     FSetters: TSouffleRecord;
     function HashKey(const AKey: string): UInt32;
     function FindEntry(const AKey: string; const AHash: UInt32): Integer;
+    function FindInsertSlot(const AKey: string; const AHash: UInt32): Integer;
     procedure Grow;
     function GetGetters: TSouffleRecord;
     function GetSetters: TSouffleRecord;
@@ -271,6 +274,7 @@ var
 begin
   inherited Create(SOUFFLE_HEAP_RECORD);
   FCount := 0;
+  FDeletedCount := 0;
   FBlueprint := nil;
   FExtensible := True;
   FGetters := nil;
@@ -317,8 +321,40 @@ begin
   while True do
   begin
     if not FEntries[Idx].Occupied then
+    begin
+      if not FEntries[Idx].Deleted then
+        Exit(Idx);
+    end
+    else if (FEntries[Idx].Hash = AHash) and (FEntries[Idx].Key = AKey) then
       Exit(Idx);
-    if (FEntries[Idx].Hash = AHash) and (FEntries[Idx].Key = AKey) then
+    Idx := (Idx + 1) mod FCapacity;
+  end;
+end;
+
+function TSouffleRecord.FindInsertSlot(const AKey: string; const AHash: UInt32): Integer;
+var
+  Idx, FirstAvail: Integer;
+begin
+  Idx := Integer(AHash mod UInt32(FCapacity));
+  FirstAvail := -1;
+  while True do
+  begin
+    if not FEntries[Idx].Occupied then
+    begin
+      if FEntries[Idx].Deleted then
+      begin
+        if FirstAvail < 0 then
+          FirstAvail := Idx;
+      end
+      else
+      begin
+        if FirstAvail >= 0 then
+          Exit(FirstAvail)
+        else
+          Exit(Idx);
+      end;
+    end
+    else if (FEntries[Idx].Hash = AHash) and (FEntries[Idx].Key = AKey) then
       Exit(Idx);
     Idx := (Idx + 1) mod FCapacity;
   end;
@@ -336,9 +372,13 @@ begin
   NewCapacity := FCapacity * 2;
 
   FCapacity := NewCapacity;
+  FDeletedCount := 0;
   SetLength(FEntries, FCapacity);
   for I := 0 to FCapacity - 1 do
+  begin
     FEntries[I].Occupied := False;
+    FEntries[I].Deleted := False;
+  end;
 
   SetLength(FOrder, OldCount);
   FCount := 0;
@@ -349,6 +389,7 @@ begin
     begin
       Slot := FindEntry(OldEntries[I].Key, OldEntries[I].Hash);
       FEntries[Slot] := OldEntries[I];
+      FEntries[Slot].Deleted := False;
       FOrder[FCount] := Slot;
       Inc(FCount);
     end;
@@ -383,19 +424,24 @@ procedure TSouffleRecord.Put(const AKey: string; const AValue: TSouffleValue);
 var
   Hash: UInt32;
   Slot: Integer;
+  WasTombstone: Boolean;
 begin
-  if (FCount + 1) * 100 > FCapacity * RECORD_MAX_LOAD_FACTOR then
+  if (FCount + FDeletedCount + 1) * 100 > FCapacity * RECORD_MAX_LOAD_FACTOR then
     Grow;
 
   Hash := HashKey(AKey);
-  Slot := FindEntry(AKey, Hash);
+  Slot := FindInsertSlot(AKey, Hash);
 
   if not FEntries[Slot].Occupied then
   begin
+    WasTombstone := FEntries[Slot].Deleted;
     FEntries[Slot].Key := AKey;
     FEntries[Slot].Hash := Hash;
     FEntries[Slot].Occupied := True;
+    FEntries[Slot].Deleted := False;
     FEntries[Slot].Flags := SOUFFLE_PROP_DEFAULT;
+    if WasTombstone then
+      Dec(FDeletedCount);
     if FCount >= Length(FOrder) then
       SetLength(FOrder, FCount + 8);
     FOrder[FCount] := Slot;
@@ -410,18 +456,23 @@ procedure TSouffleRecord.PutWithFlags(const AKey: string;
 var
   Hash: UInt32;
   Slot: Integer;
+  WasTombstone: Boolean;
 begin
-  if (FCount + 1) * 100 > FCapacity * RECORD_MAX_LOAD_FACTOR then
+  if (FCount + FDeletedCount + 1) * 100 > FCapacity * RECORD_MAX_LOAD_FACTOR then
     Grow;
 
   Hash := HashKey(AKey);
-  Slot := FindEntry(AKey, Hash);
+  Slot := FindInsertSlot(AKey, Hash);
 
   if not FEntries[Slot].Occupied then
   begin
+    WasTombstone := FEntries[Slot].Deleted;
     FEntries[Slot].Key := AKey;
     FEntries[Slot].Hash := Hash;
     FEntries[Slot].Occupied := True;
+    FEntries[Slot].Deleted := False;
+    if WasTombstone then
+      Dec(FDeletedCount);
     if FCount >= Length(FOrder) then
       SetLength(FOrder, FCount + 8);
     FOrder[FCount] := Slot;
@@ -437,12 +488,13 @@ function TSouffleRecord.PutChecked(const AKey: string;
 var
   Hash: UInt32;
   Slot: Integer;
+  WasTombstone: Boolean;
 begin
-  if (FCount + 1) * 100 > FCapacity * RECORD_MAX_LOAD_FACTOR then
+  if (FCount + FDeletedCount + 1) * 100 > FCapacity * RECORD_MAX_LOAD_FACTOR then
     Grow;
 
   Hash := HashKey(AKey);
-  Slot := FindEntry(AKey, Hash);
+  Slot := FindInsertSlot(AKey, Hash);
 
   if FEntries[Slot].Occupied then
   begin
@@ -455,10 +507,14 @@ begin
   if not FExtensible then
     Exit(False);
 
+  WasTombstone := FEntries[Slot].Deleted;
   FEntries[Slot].Key := AKey;
   FEntries[Slot].Hash := Hash;
   FEntries[Slot].Occupied := True;
+  FEntries[Slot].Deleted := False;
   FEntries[Slot].Flags := SOUFFLE_PROP_DEFAULT;
+  if WasTombstone then
+    Dec(FDeletedCount);
   if FCount >= Length(FOrder) then
     SetLength(FOrder, FCount + 8);
   FOrder[FCount] := Slot;
@@ -482,8 +538,10 @@ begin
     Exit(False);
 
   FEntries[Slot].Occupied := False;
+  FEntries[Slot].Deleted := True;
   FEntries[Slot].Key := '';
   FEntries[Slot].Value := SouffleNil;
+  Inc(FDeletedCount);
 
   for I := 0 to FCount - 1 do
   begin
@@ -516,9 +574,11 @@ begin
     Exit(False);
 
   FEntries[Slot].Occupied := False;
+  FEntries[Slot].Deleted := True;
   FEntries[Slot].Key := '';
   FEntries[Slot].Value := SouffleNil;
   FEntries[Slot].Flags := SOUFFLE_PROP_DEFAULT;
+  Inc(FDeletedCount);
 
   for I := 0 to FCount - 1 do
   begin

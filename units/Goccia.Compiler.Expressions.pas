@@ -66,7 +66,7 @@ procedure CompileSuperAccess(const ACtx: TGocciaCompilationContext;
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
 procedure CollectDestructuringBindings(const APattern: TGocciaDestructuringPattern;
-  const AScope: TGocciaCompilerScope);
+  const AScope: TGocciaCompilerScope; const AIsConst: Boolean = False);
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt8);
 procedure CompileDestructuringAssignment(const ACtx: TGocciaCompilationContext;
@@ -373,6 +373,7 @@ var
   LocalIdx, UpvalIdx: Integer;
   Local: TGocciaCompilerLocal;
   Slot: UInt8;
+  MsgIdx: UInt16;
   Hint: TSouffleLocalType;
 begin
   ACtx.CompileExpression(AExpr.Value, ADest);
@@ -383,10 +384,12 @@ begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
     if Local.IsConst then
     begin
+      MsgIdx := ACtx.Template.AddConstantString(
+        'Assignment to constant variable.');
+      if MsgIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: error message index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, 0,
-        GOCCIA_EXT_THROW_TYPE_ERROR,
-        ACtx.Template.AddConstantString(
-          'Assignment to constant variable.')));
+        GOCCIA_EXT_THROW_TYPE_ERROR, UInt8(MsgIdx)));
       Exit;
     end;
     if Local.IsGlobalBacked then
@@ -412,10 +415,12 @@ begin
   begin
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsConst then
     begin
+      MsgIdx := ACtx.Template.AddConstantString(
+        'Assignment to constant variable.');
+      if MsgIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: error message index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, 0,
-        GOCCIA_EXT_THROW_TYPE_ERROR,
-        ACtx.Template.AddConstantString(
-          'Assignment to constant variable.')));
+        GOCCIA_EXT_THROW_TYPE_ERROR, UInt8(MsgIdx)));
       Exit;
     end;
     EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, ADest, UInt16(UpvalIdx)));
@@ -492,7 +497,7 @@ begin
 end;
 
 procedure CollectDestructuringBindings(const APattern: TGocciaDestructuringPattern;
-  const AScope: TGocciaCompilerScope);
+  const AScope: TGocciaCompilerScope; const AIsConst: Boolean);
 var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;
@@ -500,28 +505,28 @@ var
   I: Integer;
 begin
   if APattern is TGocciaIdentifierDestructuringPattern then
-    AScope.DeclareLocal(TGocciaIdentifierDestructuringPattern(APattern).Name, False)
+    AScope.DeclareLocal(TGocciaIdentifierDestructuringPattern(APattern).Name, AIsConst)
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
     for I := 0 to ObjPat.Properties.Count - 1 do
-      CollectDestructuringBindings(ObjPat.Properties[I].Pattern, AScope);
+      CollectDestructuringBindings(ObjPat.Properties[I].Pattern, AScope, AIsConst);
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
     ArrPat := TGocciaArrayDestructuringPattern(APattern);
     for I := 0 to ArrPat.Elements.Count - 1 do
       if Assigned(ArrPat.Elements[I]) then
-        CollectDestructuringBindings(ArrPat.Elements[I], AScope);
+        CollectDestructuringBindings(ArrPat.Elements[I], AScope, AIsConst);
   end
   else if APattern is TGocciaAssignmentDestructuringPattern then
   begin
     AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
-    CollectDestructuringBindings(AssignPat.Left, AScope);
+    CollectDestructuringBindings(AssignPat.Left, AScope, AIsConst);
   end
   else if APattern is TGocciaRestDestructuringPattern then
     CollectDestructuringBindings(
-      TGocciaRestDestructuringPattern(APattern).Argument, AScope);
+      TGocciaRestDestructuringPattern(APattern).Argument, AScope, AIsConst);
 end;
 
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
@@ -601,6 +606,8 @@ begin
       else
       begin
         PropIdx := ACtx.Template.AddConstantString(Prop.Key);
+        if PropIdx > High(UInt8) then
+          raise Exception.Create('Constant pool overflow: property name index exceeds 255');
         EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, DestSlot, ASrcReg,
           UInt8(PropIdx)));
       end;
@@ -1373,6 +1380,7 @@ procedure CompileNewExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaNewExpression; const ADest: UInt8);
 var
   CtorReg: UInt8;
+  NameIdx: UInt16;
   ArgCount, I: Integer;
   Local: TGocciaCompilerLocal;
 begin
@@ -1393,9 +1401,13 @@ begin
   begin
     Local := ACtx.Scope.GetLocal(I);
     if Local.IsGlobalBacked then
+    begin
+      NameIdx := ACtx.Template.AddConstantString(Local.Name);
+      if NameIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: global name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, Local.Slot,
-        GOCCIA_EXT_DEFINE_GLOBAL,
-        UInt8(ACtx.Template.AddConstantString(Local.Name))));
+        GOCCIA_EXT_DEFINE_GLOBAL, UInt8(NameIdx)));
+    end;
   end;
 end;
 
@@ -1509,6 +1521,7 @@ procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
 var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegVal, RegResult: UInt8;
+  MsgIdx: UInt16;
   Op: TSouffleOpCode;
 begin
   Op := CompoundOpToRuntimeOp(AExpr.Operator);
@@ -1518,10 +1531,26 @@ begin
   begin
     if ACtx.Scope.GetLocal(LocalIdx).IsConst then
     begin
+      MsgIdx := ACtx.Template.AddConstantString(
+        'Assignment to constant variable.');
+      if MsgIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: error message index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, 0,
-        GOCCIA_EXT_THROW_TYPE_ERROR,
-        ACtx.Template.AddConstantString(
-          'Assignment to constant variable.')));
+        GOCCIA_EXT_THROW_TYPE_ERROR, UInt8(MsgIdx)));
+      Exit;
+    end;
+    if ACtx.Scope.GetLocal(LocalIdx).IsGlobalBacked then
+    begin
+      RegVal := ACtx.Scope.AllocateRegister;
+      RegResult := ACtx.Scope.AllocateRegister;
+      EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, RegResult,
+        ACtx.Template.AddConstantString(AExpr.Name)));
+      ACtx.CompileExpression(AExpr.Value, RegVal);
+      EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
+      EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, ADest,
+        ACtx.Template.AddConstantString(AExpr.Name)));
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
       Exit;
     end;
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
@@ -1576,6 +1605,8 @@ begin
 
   ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
   PropIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
+  if PropIdx > High(UInt8) then
+    raise Exception.Create('Constant pool overflow: property name index exceeds 255');
   EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, CurReg, ObjReg,
     UInt8(PropIdx)));
   ACtx.CompileExpression(AExpr.Value, ValReg);
@@ -1626,13 +1657,14 @@ procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
 var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegOne, RegResult: UInt8;
+  MsgIdx: UInt16;
   Op: TSouffleOpCode;
   Ident: TGocciaIdentifierExpression;
 begin
   if AExpr.Operator = gttIncrement then
-    Op := OP_ADD_INT
+    Op := OP_RT_ADD
   else
-    Op := OP_SUB_INT;
+    Op := OP_RT_SUB;
 
   if not (AExpr.Operand is TGocciaIdentifierExpression) then
   begin
@@ -1647,10 +1679,30 @@ begin
   begin
     if ACtx.Scope.GetLocal(LocalIdx).IsConst then
     begin
+      MsgIdx := ACtx.Template.AddConstantString(
+        'Assignment to constant variable.');
+      if MsgIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: error message index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, 0,
-        GOCCIA_EXT_THROW_TYPE_ERROR,
-        ACtx.Template.AddConstantString(
-          'Assignment to constant variable.')));
+        GOCCIA_EXT_THROW_TYPE_ERROR, UInt8(MsgIdx)));
+      Exit;
+    end;
+    if ACtx.Scope.GetLocal(LocalIdx).IsGlobalBacked then
+    begin
+      RegResult := ACtx.Scope.AllocateRegister;
+      RegOne := ACtx.Scope.AllocateRegister;
+      EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, RegResult,
+        ACtx.Template.AddConstantString(Ident.Name)));
+      EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
+      if not AExpr.IsPrefix then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
+      EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegOne));
+      EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, RegResult,
+        ACtx.Template.AddConstantString(Ident.Name)));
+      if AExpr.IsPrefix then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
       Exit;
     end;
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;

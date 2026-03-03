@@ -27,10 +27,10 @@ uses
 function IsNegativeZeroFloat(const AValue: Double): Boolean; inline;
 var
   V: Double;
-  Bytes: array[0..7] of Byte absolute V;
+  Bits: Int64 absolute V;
 begin
   V := AValue;
-  Result := (V = 0.0) and ((Bytes[7] and $80) <> 0);
+  Result := (V = 0.0) and (Bits < 0);
 end;
 
 procedure EmitFoldedNumber(const ACtx: TGocciaCompilationContext;
@@ -196,7 +196,7 @@ begin
       end;
       gttRightShift:
       begin
-        EmitFoldedNumber(ACtx, Int32(Trunc(LeftVal)) shr (Int32(Trunc(RightVal)) and $1F), ADest);
+        EmitFoldedNumber(ACtx, SarLongint(Int32(Trunc(LeftVal)), Int32(Trunc(RightVal)) and $1F), ADest);
         Result := True;
       end;
       gttUnsignedRightShift:

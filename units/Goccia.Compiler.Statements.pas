@@ -78,6 +78,7 @@ type
 var
   GBreakJumps: TList<Integer> = nil;
   GPendingFinally: TList<TPendingFinallyEntry>;
+  GBreakFinallyBase: Integer = 0;
 
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
@@ -358,6 +359,7 @@ var
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
   OldBreakJumps: TList<Integer>;
+  OldBreakFinallyBase: Integer;
   BreakJumps: TList<Integer>;
 begin
   IterReg := ACtx.Scope.AllocateRegister;
@@ -368,8 +370,13 @@ begin
   EmitInstruction(ACtx, EncodeABC(OP_RT_GET_ITER, IterReg, IterReg, 0));
 
   OldBreakJumps := GBreakJumps;
+  OldBreakFinallyBase := GBreakFinallyBase;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
+  if Assigned(GPendingFinally) then
+    GBreakFinallyBase := GPendingFinally.Count
+  else
+    GBreakFinallyBase := 0;
   try
     LoopStart := CurrentCodePosition(ACtx);
 
@@ -380,7 +387,7 @@ begin
 
     if Assigned(AStmt.BindingPattern) then
     begin
-      CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope);
+      CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope, AStmt.IsConst);
       EmitDestructuring(ACtx, AStmt.BindingPattern, ValueReg);
     end
     else if AStmt.BindingName <> '' then
@@ -404,6 +411,7 @@ begin
   finally
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
+    GBreakFinallyBase := OldBreakFinallyBase;
   end;
 
   ACtx.Scope.FreeRegister;
@@ -420,6 +428,7 @@ var
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount: Integer;
   OldBreakJumps: TList<Integer>;
+  OldBreakFinallyBase: Integer;
   BreakJumps: TList<Integer>;
 begin
   IterReg := ACtx.Scope.AllocateRegister;
@@ -430,8 +439,13 @@ begin
   EmitInstruction(ACtx, EncodeABC(OP_RT_GET_ITER, IterReg, IterReg, 1));
 
   OldBreakJumps := GBreakJumps;
+  OldBreakFinallyBase := GBreakFinallyBase;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
+  if Assigned(GPendingFinally) then
+    GBreakFinallyBase := GPendingFinally.Count
+  else
+    GBreakFinallyBase := 0;
   try
     LoopStart := CurrentCodePosition(ACtx);
 
@@ -443,7 +457,7 @@ begin
 
     if Assigned(AStmt.BindingPattern) then
     begin
-      CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope);
+      CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope, AStmt.IsConst);
       EmitDestructuring(ACtx, AStmt.BindingPattern, ValueReg);
     end
     else if AStmt.BindingName <> '' then
@@ -467,6 +481,7 @@ begin
   finally
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
+    GBreakFinallyBase := OldBreakFinallyBase;
   end;
 
   ACtx.Scope.FreeRegister;
@@ -593,6 +608,7 @@ var
   CaseBodyJumps: array of Integer;
   DefaultJump, EndJump: Integer;
   OldBreakJumps: TList<Integer>;
+  OldBreakFinallyBase: Integer;
   BreakJumps: TList<Integer>;
   Node: TGocciaASTNode;
   Reg: UInt8;
@@ -634,8 +650,13 @@ begin
   ACtx.Scope.FreeRegister;
 
   OldBreakJumps := GBreakJumps;
+  OldBreakFinallyBase := GBreakFinallyBase;
   BreakJumps := TList<Integer>.Create;
   GBreakJumps := BreakJumps;
+  if Assigned(GPendingFinally) then
+    GBreakFinallyBase := GPendingFinally.Count
+  else
+    GBreakFinallyBase := 0;
   try
     for I := 0 to AStmt.Cases.Count - 1 do
     begin
@@ -678,13 +699,25 @@ begin
   finally
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
+    GBreakFinallyBase := OldBreakFinallyBase;
   end;
 end;
 
 procedure CompileBreakStatement(const ACtx: TGocciaCompilationContext);
+var
+  I: Integer;
 begin
-  if Assigned(GBreakJumps) then
-    GBreakJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
+  if not Assigned(GBreakJumps) then
+    Exit;
+
+  if Assigned(GPendingFinally) and (GPendingFinally.Count > GBreakFinallyBase) then
+    for I := GPendingFinally.Count - 1 downto GBreakFinallyBase do
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+      CompileBlockStatement(ACtx, GPendingFinally[I].FinallyBlock);
+    end;
+
+  GBreakJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
 end;
 
 function IsSimpleClass(const AClassDef: TGocciaClassDefinition): Boolean;
@@ -992,6 +1025,8 @@ begin
     begin
       ACtx.Scope.MarkGlobalBacked(I);
       NameIdx := ACtx.Template.AddConstantString(Local.Name);
+      if NameIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: global name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, Local.Slot,
         GOCCIA_EXT_DEFINE_GLOBAL, UInt8(NameIdx)));
     end;
@@ -1002,6 +1037,8 @@ begin
     GOCCIA_EXT_EVAL_CLASS, UInt8(APendingIndex)));
 
   NameIdx := ACtx.Template.AddConstantString(ClassDef.Name);
+  if NameIdx > High(UInt8) then
+    raise Exception.Create('Constant pool overflow: global name index exceeds 255');
   EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ClassReg,
     GOCCIA_EXT_DEFINE_GLOBAL, UInt8(NameIdx)));
 
@@ -1011,6 +1048,8 @@ begin
     if Local.IsGlobalBacked then
     begin
       NameIdx := ACtx.Template.AddConstantString(Local.Name);
+      if NameIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: global name index exceeds 255');
       EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, Local.Slot,
         GOCCIA_EXT_DEFINE_GLOBAL, UInt8(NameIdx)));
     end;
@@ -1022,7 +1061,7 @@ procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
 var
   SrcReg: UInt8;
 begin
-  CollectDestructuringBindings(AStmt.Pattern, ACtx.Scope);
+  CollectDestructuringBindings(AStmt.Pattern, ACtx.Scope, AStmt.IsConst);
 
   SrcReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AStmt.Initializer, SrcReg);
@@ -1054,12 +1093,16 @@ begin
     MemberSlot := ACtx.Scope.DeclareLocal(AStmt.Members[I].Name, False);
     ACtx.CompileExpression(AStmt.Members[I].Initializer, MemberSlot);
     KeyIdx := ACtx.Template.AddConstantString(AStmt.Members[I].Name);
-    EmitInstruction(ACtx, EncodeABC(OP_RECORD_SET, EnumSlot, KeyIdx, MemberSlot));
+    if KeyIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: enum member name index exceeds 255');
+    EmitInstruction(ACtx, EncodeABC(OP_RECORD_SET, EnumSlot, UInt8(KeyIdx), MemberSlot));
   end;
 
+  KeyIdx := ACtx.Template.AddConstantString(AStmt.Name);
+  if KeyIdx > High(UInt8) then
+    raise Exception.Create('Constant pool overflow: enum name index exceeds 255');
   EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, EnumSlot,
-    GOCCIA_EXT_FINALIZE_ENUM,
-    ACtx.Template.AddConstantString(AStmt.Name)));
+    GOCCIA_EXT_FINALIZE_ENUM, UInt8(KeyIdx)));
 
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for J := 0 to ClosedCount - 1 do

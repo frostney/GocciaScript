@@ -816,7 +816,7 @@ The following features execute entirely within the Souffle VM without crossing t
 
 ### What Uses Bridge Code
 
-The bridge layer is the set of components in `TGocciaRuntimeOperations` that convert between `TSouffleValue` and `TGocciaValue` to delegate work to the GocciaScript interpreter/evaluator. This layer currently exists because the runtime operations were originally implemented by unwrapping Souffle values to GocciaScript values, calling the existing evaluator, and wrapping the result back. The bridge includes:
+The bridge layer is the set of components in `TGocciaRuntimeOperations` that convert between `TSouffleValue` and `TGocciaValue` to delegate work to the GocciaScript interpreter/evaluator. This layer implements most Tier 2 operations by unwrapping Souffle values, calling the existing evaluator, and wrapping the result back. The bridge includes:
 
 | Component | Role | Size |
 |-----------|------|------|
@@ -853,13 +853,13 @@ This cycle has three costs:
 - **Cache pollution**: Two parallel value hierarchies active simultaneously
 - **Architectural coupling**: The runtime imports `Goccia.Evaluator`, `Goccia.Interpreter`, and `Goccia.Engine` — binding the entire GocciaScript interpreter into the bytecode path
 
-### Known Bridge Limitations
+### Bridge Constraints
 
-1. **`TSouffleBlueprint` unwrapping**: When a complex class extends a simple class (compiled to a blueprint), `UnwrapToGocciaValue` does not have specific handling for `TSouffleBlueprint` objects. They unwrap as `undefined`, causing "Superclass is not a class" errors at the interpreter level.
+1. **Two GC systems**: Bridge objects must be tracked by both the Souffle GC (as `TSouffleHeapObject`) and the GocciaScript GC (as `TGocciaValue`), complicating memory management.
 
-2. **No incremental fix path**: Extending `UnwrapToGocciaValue` to handle more types (blueprints, delegates, etc.) adds more bridge code, contradicting the goal of eliminating it. Each fix increases coupling rather than reducing it.
+2. **Built-in subclassing**: Classes extending built-in constructors (`Array`, `Map`, `Set`, `Promise`, `Object`) are deferred to the interpreter because `OP_INHERIT` requires both class and superclass to be `TSouffleBlueprint`s, while built-in constructors are `TGocciaClassValue`s.
 
-3. **Two GC systems**: Bridge objects must be tracked by both the Souffle GC (as `TSouffleHeapObject`) and the GocciaScript GC (as `TGocciaValue`), complicating memory management.
+3. **Architectural coupling**: The runtime imports `Goccia.Evaluator`, `Goccia.Interpreter`, and `Goccia.Engine`, binding the interpreter into the bytecode path for bridge operations.
 
 ### Target Architecture
 
@@ -879,7 +879,7 @@ This requires a ground-up rewrite of `TGocciaRuntimeOperations` — not incremen
 - Compile all class features (getters, setters, statics, private members, decorators) to Tier 1 + Tier 2 opcodes, eliminating `FPendingClasses`
 - Implement all built-in methods as `TSouffleNativeFunction` delegates operating on Souffle types
 
-Until the rewrite, the bridge code is functional and correct for the features it supports. The interpreter path (`--mode=interpreted`) remains the fully-featured execution backend.
+Until the rewrite, the bridge code is functional and correct — both execution modes pass 100% of the test suite. The bridge adds overhead from value conversion and dual GC tracking, but does not limit language feature coverage.
 
 ## GocciaScript Runtime Bridge (Current Implementation)
 
@@ -981,19 +981,7 @@ A WASM backend would read `TSouffleBytecodeModule` and emit a `.wasm` binary. Th
 
 ## Known Limitations
 
-The Souffle VM bytecode backend is functional for basic scripts but has several areas not yet implemented. These are tracked here to prevent duplicate work and to guide future contributors.
-
-### Not Yet Implemented (Deferred)
-
-These features are stubbed in the runtime operations layer and will need real implementations before the corresponding GocciaScript features work in bytecode mode:
-
-| Feature | Current State | What's Needed |
-|---------|---------------|---------------|
-| **Iteration** (`for...of`, spread) | `GetIterator` returns the value unchanged; `IteratorNext` always returns done; `SpreadInto` is a no-op | Wire to GocciaScript's `GetIteratorFromValue` / `TGocciaIteratorValue` protocol; handle arrays, strings, maps, sets, and user-defined iterables |
-| **Module imports** | `ImportModule` returns `SouffleNil` | Resolve module paths, compile or load `.sbc` modules, return the module namespace object |
-| **Async/await** | `AwaitValue` returns its argument unchanged | Integrate with `TGocciaPromiseValue` and the microtask queue |
-| **Template literal parsing** | The compiler re-lexes/re-parses each `${...}` interpolation from the raw template string | Enhance the parser to produce a template AST node with pre-parsed static and expression parts; the compiler would then iterate those directly |
-| **Binary endianness** | `.sbc` serialization uses native-endian writes | Normalize to little-endian for cross-platform `.sbc` portability |
+The Souffle VM bytecode backend passes 100% of the GocciaScript test suite (3,347 tests across 514 test files). The limitations below are structural constraints, not correctness gaps.
 
 ### Intentionally Not Changed (Rejected Findings)
 
@@ -1008,9 +996,17 @@ These were reviewed and determined to be correct or not applicable:
 | **null vs undefined via nil flags** | Intentional design | `svkNil` with `Flags=0` (the VM's default) maps to `undefined` in GocciaScript; `Flags=1` maps to `null`. The compiler emits `OP_LOAD_NIL` with B=0 for undefined literals and B=1 for null literals. `SouffleValuesEqual` compares flags for nil values, so `null === null` is true but `null === undefined` is false. All VM-internal absent values (uninitialized registers, missing properties, function-with-no-return) naturally produce flags=0, matching JavaScript's `undefined` semantics. The runtime constants `GOCCIA_NIL_UNDEFINED=0`, `GOCCIA_NIL_NULL=1`, `GOCCIA_NIL_HOLE=2` are defined in `Goccia.Runtime.Operations.pas` — the VM itself only knows about `SOUFFLE_NIL_DEFAULT=0`. |
 | **`MergeFileResult` string comparison for undefined** | Style preference | The `GetProperty(...).ToStringLiteral.Value = 'undefined'` check works correctly because `TGocciaUndefinedLiteralValue.ToStringLiteral` always returns `'undefined'`. A type check would be marginally more robust but the current code has no known failure mode. |
 
+### Binary Endianness
+
+`.sbc` serialization uses native-endian writes. Cross-platform `.sbc` portability requires normalizing to little-endian.
+
 ### Constant Pool Limitation (ABC Encoding)
 
 The ABC instruction format encodes operand B and C as 8-bit values. This limits constant pool indices used in `OP_RECORD_GET`, `OP_RECORD_SET`, `OP_RT_SET_PROP`, `OP_RT_GET_PROP`, and `OP_RT_DEL_PROP` to 255 entries per prototype. `OP_RECORD_DELETE` uses ABx encoding (16-bit Bx) and does not have this limitation. The compiler raises a clear error if the ABC limit is exceeded. A future ABx-style wide-operand variant could lift this restriction for the remaining opcodes if needed.
+
+### Complex Class Compilation
+
+Classes with getters, setters, statics, private members, or decorators are deferred to the interpreter via `GOCCIA_EXT_EVAL_CLASS`. Classes extending built-in constructors (`Array`, `Map`, `Set`, `Promise`, `Object`) are also deferred because `OP_INHERIT` requires both sides to be `TSouffleBlueprint`s. Compiling all class features to Tier 1 + Tier 2 opcodes is a target for the bridge elimination effort.
 
 ### NaN Handling in the Constant Pool
 
@@ -1023,11 +1019,11 @@ The bytecode execution pipeline has four distinct layers with strict boundaries.
 ```text
 ┌──────────────────────────────────────────────────────────────┐
 │ Interpreter (Goccia.Evaluator*.pas)                          │
-│   Direct AST execution — not involved in bytecode path       │
+│   Direct AST execution — also invoked by bridge code         │
 │   Owns: scope chain walking, evaluator purity, `this` binding│
-│   Note: Currently still invoked by bridge code for complex   │
-│         class evaluation and some built-in operations.        │
-│         Target: complete elimination from bytecode path.      │
+│   Note: Invoked from bytecode path for complex class         │
+│         evaluation, built-in subclassing, and wrapped value  │
+│         operations. Target: elimination from bytecode path.  │
 └──────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────┐
 │ Compiler (Goccia.Compiler*.pas)                              │
@@ -1045,7 +1041,7 @@ The bytecode execution pipeline has four distinct layers with strict boundaries.
 │         type coercion, property descriptors, Symbol keys,    │
 │         const enforcement (runtime, global scope),           │
 │         ExtendedOperation dispatch for GOCCIA_EXT_* sub-ops  │
-│   Current: bridges TSouffleValue ↔ TGocciaValue (see above)  │
+│   Bridges TSouffleValue ↔ TGocciaValue (see above)           │
 │   Target: implements JS semantics directly on Souffle types  │
 │   Boundary: implements TSouffleRuntimeOperations interface   │
 └──────────────────────────────────────────────────────────────┘

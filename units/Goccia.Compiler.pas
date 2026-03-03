@@ -352,7 +352,7 @@ begin
     FreeAndNil(FCurrentScope);
     if Assigned(FModule) then
     begin
-      FCurrentTemplate := nil;
+      FreeAndNil(FCurrentTemplate);
       FreeAndNil(FModule);
     end;
   end;

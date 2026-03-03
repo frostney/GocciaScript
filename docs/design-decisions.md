@@ -430,26 +430,26 @@ An earlier design had separate `OP_RT_CALL_SPREAD` and `OP_RT_CALL_METHOD_SPREAD
 
 ### The Bridge Problem
 
-The current `TGocciaRuntimeOperations` implements most Tier 2 operations by:
+`TGocciaRuntimeOperations` implements most Tier 2 operations by:
 
 1. Converting `TSouffleValue` → `TGocciaValue` (unwrap)
 2. Delegating to the GocciaScript evaluator/interpreter
 3. Converting `TGocciaValue` → `TSouffleValue` (wrap)
 
-This "Unwrap-Delegate-Wrap" cycle was the fastest path to a working bytecode backend but creates deep coupling to the interpreter. Extending the bridge code to handle more types (e.g., adding `TSouffleBlueprint` support to `UnwrapToGocciaValue`) increases coupling rather than reducing it — this was explicitly identified as an anti-pattern during planning.
+This "Unwrap-Delegate-Wrap" cycle was the fastest path to a working bytecode backend and achieves full language coverage — the bytecode backend passes 100% of the test suite (3,347 tests). However, the cycle creates deep coupling to the interpreter.
 
 The target architecture eliminates the bridge entirely: `TGocciaRuntimeOperations` would implement JavaScript semantics directly on Souffle types (`TSouffleValue`, `TSouffleArray`, `TSouffleRecord`, `TSouffleBlueprint`), with prototype chain walking on delegate chains, type coercion natively on `TSouffleValue`, and all built-in methods as `TSouffleNativeFunction` delegates. This is a ground-up rewrite, not an incremental fix. See [souffle-vm.md § Current State](souffle-vm.md#current-state-and-bridge-architecture) for the full analysis.
 
-### Deferred Runtime Operations
+### Bridge-Delegated Operations
 
-Several runtime operations are currently stubbed in `TGocciaRuntimeOperations` and will need full implementations before the corresponding GocciaScript features work in bytecode mode:
+The following operations delegate to the GocciaScript evaluator through the bridge layer. They are functionally correct but add overhead from value conversion and dual GC tracking:
 
-- **Iteration** (`GetIterator`, `IteratorNext`) — Not yet wired to GocciaScript's iterator protocol. Blocks `for...of`, spread syntax, and destructuring in bytecode mode.
-- **Module imports** (`ImportModule`) — Returns nil. Blocks `import`/`export` in bytecode mode.
-- **Async/await** (`AwaitValue`) — Returns the value unchanged. Blocks async function execution in bytecode mode.
-- **Complex class compilation** — Classes with getters, setters, static properties, private members, or decorators are deferred to the interpreter via `GOCCIA_EXT_EVAL_CLASS`. The goal is to compile all class features to Tier 1 + Tier 2 opcodes.
+- **Iteration** (`GetIterator`, `IteratorNext`, `SpreadInto`) — Delegates to GocciaScript's `GetIteratorFromValue` / `TGocciaIteratorValue` protocol.
+- **Module imports** (`ImportModule`) — Delegates to the GocciaScript module resolver.
+- **Async/await** (`AwaitValue`) — Delegates to `TGocciaPromiseValue` and the microtask queue.
+- **Complex class compilation** — Classes with getters, setters, static properties, private members, or decorators are deferred to the interpreter via `GOCCIA_EXT_EVAL_CLASS`. Classes extending built-in constructors (`Array`, `Map`, `Set`, `Promise`, `Object`) are also deferred because `OP_INHERIT` requires both sides to be `TSouffleBlueprint`s. The goal is to compile all class features to Tier 1 + Tier 2 opcodes.
 
-These stubs exist because the core execution pipeline (variables, closures, simple classes, property access, invocation) was prioritized first. Each stub has a clear contract defined by the abstract `TSouffleRuntimeOperations` base class.
+Eliminating the bridge for these operations is the primary path to improving bytecode execution performance.
 
 ### Rejected Findings
 

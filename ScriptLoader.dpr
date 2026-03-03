@@ -39,43 +39,52 @@ var
   Source: TStringList;
   SourceText: string;
   JSXResult: TGocciaJSXTransformResult;
+  SourceMap: TGocciaSourceMap;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   Warning: TGocciaParserWarning;
-  I: Integer;
+  OrigLine, OrigCol, I: Integer;
 begin
   Source := TStringList.Create;
   try
     Source.LoadFromFile(AFileName);
     SourceText := Source.Text;
 
+    SourceMap := nil;
     if ggJSX in AGlobals then
     begin
       JSXResult := TGocciaJSXTransformer.Transform(SourceText);
       SourceText := JSXResult.Source;
-      JSXResult.SourceMap.Free;
+      SourceMap := JSXResult.SourceMap;
     end;
 
-    Lexer := TGocciaLexer.Create(SourceText, AFileName);
     try
-      Tokens := Lexer.ScanTokens;
-      Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
+      Lexer := TGocciaLexer.Create(SourceText, AFileName);
       try
-        Result := Parser.Parse;
-        for I := 0 to Parser.WarningCount - 1 do
-        begin
-          Warning := Parser.GetWarning(I);
-          WriteLn(SysUtils.Format('Warning: %s', [Warning.Message]));
-          if Warning.Suggestion <> '' then
-            WriteLn(SysUtils.Format('  Suggestion: %s', [Warning.Suggestion]));
-          WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
+        Tokens := Lexer.ScanTokens;
+        Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
+        try
+          Result := Parser.Parse;
+          for I := 0 to Parser.WarningCount - 1 do
+          begin
+            Warning := Parser.GetWarning(I);
+            WriteLn(SysUtils.Format('Warning: %s', [Warning.Message]));
+            if Warning.Suggestion <> '' then
+              WriteLn(SysUtils.Format('  Suggestion: %s', [Warning.Suggestion]));
+            if Assigned(SourceMap) and SourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
+              WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, OrigLine, OrigCol]))
+            else
+              WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
+          end;
+        finally
+          Parser.Free;
         end;
       finally
-        Parser.Free;
+        Lexer.Free;
       end;
     finally
-      Lexer.Free;
+      SourceMap.Free;
     end;
   finally
     Source.Free;

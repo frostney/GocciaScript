@@ -158,6 +158,7 @@ var
   Source: TStringList;
   SourceText: string;
   JSXResult: TGocciaJSXTransformResult;
+  SourceMap: TGocciaSourceMap;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
@@ -168,7 +169,7 @@ var
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
   TestGlobals: TGocciaGlobalBuiltins;
-  I: Integer;
+  OrigLine, OrigCol, I: Integer;
   CompileStart, CompileEnd, ExecEnd: Int64;
 begin
   TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
@@ -192,14 +193,15 @@ begin
       [BoolToStr(GExitOnFirstFailure, 'true', 'false')]));
 
     SourceText := Source.Text;
+    SourceMap := nil;
     if ggJSX in TestGlobals then
     begin
       JSXResult := TGocciaJSXTransformer.Transform(SourceText);
       SourceText := JSXResult.Source;
-      JSXResult.SourceMap.Free;
+      SourceMap := JSXResult.SourceMap;
     end;
 
-    try
+    try try
       CompileStart := GetNanoseconds;
 
       Backend := TGocciaSouffleBackend.Create(AFileName);
@@ -219,7 +221,10 @@ begin
                 WriteLn(Format('Warning: %s', [Warning.Message]));
                 if Warning.Suggestion <> '' then
                   WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
-                WriteLn(Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
+                if Assigned(SourceMap) and SourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
+                  WriteLn(Format('  --> %s:%d:%d', [AFileName, OrigLine, OrigCol]))
+                else
+                  WriteLn(Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
               end;
             try
               Module := Backend.CompileToModule(ProgramNode);
@@ -262,6 +267,9 @@ begin
         MarkLoadError(ScriptResult, AFileName, E.Message);
         Result := MakeEmptyTestResult(ScriptResult);
       end;
+    end;
+    finally
+      SourceMap.Free;
     end;
   finally
     Source.Free;

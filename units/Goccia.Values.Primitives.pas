@@ -383,10 +383,10 @@ end;
 function TGocciaNumberLiteralValue.GetIsNegativeZero: Boolean;
 var
   V: Double;
-  Bytes: array[0..7] of Byte absolute V;
+  Bits: Int64 absolute V;
 begin
   V := FValue;
-  Result := (V = ZERO_VALUE) and ((Bytes[7] and $80) <> 0);
+  Result := (V = ZERO_VALUE) and (Bits < 0);
 end;
 
 function TGocciaNumberLiteralValue.GetIsInfinity: Boolean;

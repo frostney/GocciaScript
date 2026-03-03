@@ -5,6 +5,8 @@ unit Souffle.VM;
 interface
 
 uses
+  Math,
+
   Souffle.Bytecode,
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Module,
@@ -33,6 +35,7 @@ type
     FGC: TSouffleGarbageCollector;
     FBaseFrameCount: Integer;
 
+    FPreviousExceptionMask: TFPUExceptionMask;
     FArrayDelegate: TSouffleHeapObject;
     FRecordDelegate: TSouffleHeapObject;
 
@@ -73,7 +76,6 @@ type
 implementation
 
 uses
-  Math,
   SysUtils;
 
 { TSouffleVM }
@@ -81,6 +83,7 @@ uses
 constructor TSouffleVM.Create(const ARuntimeOps: TSouffleRuntimeOperations);
 begin
   inherited Create;
+  FPreviousExceptionMask := GetExceptionMask;
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   SetLength(FRegisters, MAX_REGISTERS);
   FCallStack := TSouffleCallStack.Create(INITIAL_FRAMES);
@@ -101,6 +104,7 @@ begin
     FGC.SetExternalRootMarker(nil);
   FCallStack.Free;
   FHandlerStack.Free;
+  SetExceptionMask(FPreviousExceptionMask);
   inherited;
 end;
 

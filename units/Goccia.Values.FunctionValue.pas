@@ -76,7 +76,8 @@ uses
   Goccia.Logger,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
-  Goccia.Values.Error;
+  Goccia.Values.Error,
+  Goccia.Values.ErrorHelper;
 
 { TGocciaFunctionValue }
 
@@ -238,7 +239,7 @@ begin
         on E: TGocciaRuntimeError do raise;
         on E: TGocciaError do raise;
         on E: Exception do
-          raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
+          ThrowError('Error executing statement: ' + E.Message);
       end;
     end;
 

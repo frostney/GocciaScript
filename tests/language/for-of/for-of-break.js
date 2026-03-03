@@ -27,4 +27,56 @@ describe("for...of break", () => {
     }
     expect(result).toEqual(["a1", "b1"]);
   });
+
+  test("break inside try-finally executes finally block", () => {
+    const log = [];
+    for (const x of [1, 2, 3]) {
+      try {
+        if (x === 2) {
+          break;
+        }
+        log.push("body:" + x);
+      } finally {
+        log.push("finally:" + x);
+      }
+    }
+    expect(log).toEqual(["body:1", "finally:1", "finally:2"]);
+  });
+
+  test("break inside nested try-finally executes all finally blocks", () => {
+    const log = [];
+    for (const x of [1, 2]) {
+      try {
+        try {
+          if (x === 1) {
+            break;
+          }
+        } finally {
+          log.push("inner:" + x);
+        }
+      } finally {
+        log.push("outer:" + x);
+      }
+    }
+    expect(log).toEqual(["inner:1", "outer:1"]);
+  });
+
+  test("break inside try-finally inside outer try-finally", () => {
+    const log = [];
+    try {
+      for (const x of [1, 2, 3]) {
+        try {
+          if (x === 2) {
+            break;
+          }
+          log.push("body:" + x);
+        } finally {
+          log.push("loop-finally:" + x);
+        }
+      }
+    } finally {
+      log.push("outer-finally");
+    }
+    expect(log).toEqual(["body:1", "loop-finally:1", "loop-finally:2", "outer-finally"]);
+  });
 });

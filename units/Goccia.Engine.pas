@@ -94,6 +94,7 @@ type
     FBuiltinBenchmark: TGocciaBenchmark;
     FBuiltinTemporal: TGocciaTemporalBuiltin;
     FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
+    FPreviousExceptionMask: TFPUExceptionMask;
     FSuppressWarnings: Boolean;
 
     procedure PinSingletons;
@@ -185,6 +186,7 @@ end;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver);
 begin
+  FPreviousExceptionMask := GetExceptionMask;
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   FFileName := AFileName;
   FSourceLines := ASourceLines;
@@ -240,6 +242,7 @@ begin
   FInterpreter.Free;
   if FOwnsResolver then
     FResolver.Free;
+  SetExceptionMask(FPreviousExceptionMask);
   inherited;
 end;
 
