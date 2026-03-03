@@ -14,6 +14,14 @@ type
     const AArgs: PSouffleValue;
     const AArgCount: Integer): TSouffleValue;
 
+  TSouffleMethodEntry = record
+    Name: string;
+    Arity: Integer;
+    Callback: TSouffleNativeCallback;
+  end;
+
+  TSouffleMethodTable = array of TSouffleMethodEntry;
+
   TSouffleNativeFunction = class(TSouffleHeapObject)
   private
     FCallback: TSouffleNativeCallback;
@@ -33,7 +41,14 @@ type
     property Arity: Integer read FArity;
   end;
 
+function BuildDelegate(
+  const AEntries: array of TSouffleMethodEntry): TSouffleHeapObject;
+
 implementation
+
+uses
+  Souffle.Compound,
+  Souffle.GarbageCollector;
 
 { TSouffleNativeFunction }
 
@@ -55,6 +70,29 @@ end;
 function TSouffleNativeFunction.DebugString: string;
 begin
   Result := '<native:' + FName + '>';
+end;
+
+function BuildDelegate(
+  const AEntries: array of TSouffleMethodEntry): TSouffleHeapObject;
+var
+  Rec: TSouffleRecord;
+  Fn: TSouffleNativeFunction;
+  GC: TSouffleGarbageCollector;
+  I: Integer;
+begin
+  GC := TSouffleGarbageCollector.Instance;
+  Rec := TSouffleRecord.Create(Length(AEntries));
+  if Assigned(GC) then
+    GC.AllocateObject(Rec);
+  for I := 0 to High(AEntries) do
+  begin
+    Fn := TSouffleNativeFunction.Create(
+      AEntries[I].Name, AEntries[I].Arity, AEntries[I].Callback);
+    if Assigned(GC) then
+      GC.AllocateObject(Fn);
+    Rec.Put(AEntries[I].Name, SouffleReference(Fn));
+  end;
+  Result := Rec;
 end;
 
 end.

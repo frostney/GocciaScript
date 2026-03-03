@@ -485,14 +485,43 @@ begin
   raise ESouffleThrow.Create(WrapGocciaValue(E.Value));
 end;
 
+function CoerceToPrimitiveSouffle(const ARuntime: TGocciaRuntimeOperations;
+  const A: TSouffleValue): TSouffleValue; forward;
+
+function StringToNumber(const S: string): Double;
+var
+  Trimmed: string;
+  Code: Integer;
+  HexVal: Int64;
+begin
+  Trimmed := Trim(S);
+  if Trimmed = '' then
+    Exit(0.0);
+  if Trimmed = 'Infinity' then
+    Exit(Infinity);
+  if Trimmed = '-Infinity' then
+    Exit(NegInfinity);
+  Val(Trimmed, Result, Code);
+  if Code <> 0 then
+  begin
+    if (Length(Trimmed) > 2) and (Trimmed[1] = '0') and
+       ((Trimmed[2] = 'x') or (Trimmed[2] = 'X')) then
+    begin
+      Val(Trimmed, HexVal, Code);
+      if Code = 0 then
+        Result := HexVal * 1.0
+      else
+        Result := NaN;
+    end
+    else
+      Result := NaN;
+  end;
+end;
+
 function TGocciaRuntimeOperations.CoerceToNumber(
   const A: TSouffleValue): Double;
 var
-  GocciaVal: TGocciaValue;
-  NumVal: TGocciaNumberLiteralValue;
-  S: string;
-  Code: Integer;
-  HexVal: Int64;
+  Prim: TSouffleValue;
 begin
   case A.Kind of
     svkInteger:
@@ -510,69 +539,18 @@ begin
       else
         Result := NaN;
     svkString:
-    begin
-      S := Trim(SouffleGetString(A));
-      if S = '' then
-        Result := 0.0
-      else if S = 'Infinity' then
-        Result := Infinity
-      else if S = '-Infinity' then
-        Result := NegInfinity
-      else
-      begin
-        Val(S, Result, Code);
-        if Code <> 0 then
-        begin
-          if (Length(S) > 2) and (S[1] = '0') and
-             ((S[2] = 'x') or (S[2] = 'X')) then
-          begin
-            Val(S, HexVal, Code);
-            if Code = 0 then
-              Result := HexVal * 1.0
-            else
-              Result := NaN;
-          end
-          else
-            Result := NaN;
-        end;
-      end;
-    end;
+      Result := StringToNumber(SouffleGetString(A));
     svkReference:
       if A.AsReference is TSouffleHeapString then
-      begin
-        S := Trim(TSouffleHeapString(A.AsReference).Value);
-        if S = '' then
-          Result := 0.0
-        else
-        begin
-          Val(S, Result, Code);
-          if Code <> 0 then
-            Result := NaN;
-        end;
-      end
-      else if A.AsReference is TSouffleArray then
-      begin
-        S := Trim(CoerceToString(A));
-        if S = '' then
-          Result := 0.0
-        else
-        begin
-          Val(S, Result, Code);
-          if Code <> 0 then
-            Result := NaN;
-        end;
-      end
-      else if A.AsReference is TGocciaWrappedValue then
-      begin
-        GocciaVal := TGocciaWrappedValue(A.AsReference).Value;
-        NumVal := GocciaVal.ToNumberLiteral;
-        if NumVal.IsNaN then
-          Result := NaN
-        else
-          Result := NumVal.Value;
-      end
+        Result := StringToNumber(TSouffleHeapString(A.AsReference).Value)
       else
-        Result := NaN;
+      begin
+        Prim := CoerceToPrimitiveSouffle(Self, A);
+        if (Prim.Kind <> svkReference) or SouffleIsStringValue(Prim) then
+          Result := CoerceToNumber(Prim)
+        else
+          Result := NaN;
+      end;
   else
     Result := NaN;
   end;
@@ -600,10 +578,79 @@ begin
   Result := JoinArrayElements(AArr, ',', ARuntime);
 end;
 
+function FloatToECMAString(const AValue: Double): string;
+begin
+  if IsNaN(AValue) then
+    Result := 'NaN'
+  else if IsInfinite(AValue) then
+  begin
+    if AValue > 0 then
+      Result := 'Infinity'
+    else
+      Result := '-Infinity';
+  end
+  else if (Frac(AValue) = 0.0) and (Abs(AValue) < 1e20) then
+    Result := FloatToStrF(AValue, ffFixed, 20, 0)
+  else
+    Result := FloatToStr(AValue);
+end;
+
+function InvokeToStringMethod(const ARuntime: TGocciaRuntimeOperations;
+  const AMethodVal, ASelf: TSouffleValue; out AResult: string): Boolean;
+var
+  MethodResult: TSouffleValue;
+  VMArgs: array of TSouffleValue;
+begin
+  Result := False;
+  if not SouffleIsReference(AMethodVal) or not Assigned(AMethodVal.AsReference) then
+    Exit;
+  SetLength(VMArgs, 1);
+  VMArgs[0] := ASelf;
+  if AMethodVal.AsReference is TSouffleClosure then
+    MethodResult := ARuntime.VM.ExecuteFunction(
+      TSouffleClosure(AMethodVal.AsReference), VMArgs)
+  else if AMethodVal.AsReference is TSouffleNativeFunction then
+    MethodResult := TSouffleNativeFunction(AMethodVal.AsReference)
+      .Invoke(ASelf, nil, 0)
+  else
+    Exit;
+  if SouffleIsStringValue(MethodResult) then
+  begin
+    AResult := SouffleGetString(MethodResult);
+    Result := True;
+  end
+  else if MethodResult.Kind <> svkReference then
+  begin
+    AResult := ARuntime.CoerceToString(MethodResult);
+    Result := True;
+  end;
+end;
+
+function RecordToString(const ARuntime: TGocciaRuntimeOperations;
+  const ARec: TSouffleRecord; const ASelf: TSouffleValue): string;
+var
+  Bp: TSouffleBlueprint;
+  MethodVal: TSouffleValue;
+begin
+  if ARec.Get(PROP_TO_STRING, MethodVal) then
+    if InvokeToStringMethod(ARuntime, MethodVal, ASelf, Result) then
+      Exit;
+  if Assigned(ARec.Blueprint) then
+  begin
+    Bp := ARec.Blueprint;
+    while Assigned(Bp) do
+    begin
+      if Bp.Methods.Get(PROP_TO_STRING, MethodVal) then
+        if InvokeToStringMethod(ARuntime, MethodVal, ASelf, Result) then
+          Exit;
+      Bp := Bp.SuperBlueprint;
+    end;
+  end;
+  Result := '[object Object]';
+end;
+
 function TGocciaRuntimeOperations.CoerceToString(
   const A: TSouffleValue): string;
-var
-  GocciaVal: TGocciaValue;
 begin
   case A.Kind of
     svkNil:
@@ -619,31 +666,32 @@ begin
     svkInteger:
       Result := IntToStr(A.AsInteger);
     svkFloat:
-      if IsNaN(A.AsFloat) then
-        Result := 'NaN'
-      else if IsInfinite(A.AsFloat) then
-      begin
-        if A.AsFloat > 0 then
-          Result := 'Infinity'
-        else
-          Result := '-Infinity';
-      end
-      else if (Frac(A.AsFloat) = 0.0) and (Abs(A.AsFloat) < 1e20) then
-        Result := FloatToStrF(A.AsFloat, ffFixed, 20, 0)
-      else
-        Result := FloatToStr(A.AsFloat);
+      Result := FloatToECMAString(A.AsFloat);
     svkString:
       Result := SouffleGetString(A);
     svkReference:
       if A.AsReference is TSouffleHeapString then
         Result := TSouffleHeapString(A.AsReference).Value
-      else if A.AsReference is TGocciaWrappedValue then
-      begin
-        GocciaVal := TGocciaWrappedValue(A.AsReference).Value;
-        Result := GocciaVal.ToStringLiteral.Value;
-      end
       else if A.AsReference is TSouffleArray then
         Result := SouffleArrayToString(Self, TSouffleArray(A.AsReference))
+      else if A.AsReference is TSouffleRecord then
+        Result := RecordToString(Self, TSouffleRecord(A.AsReference), A)
+      else if A.AsReference is TSouffleClosure then
+      begin
+        if TSouffleClosure(A.AsReference).Template.Name <> '' then
+          Result := 'function ' + TSouffleClosure(A.AsReference).Template.Name +
+            '() { [native code] }'
+        else
+          Result := 'function () { [native code] }';
+      end
+      else if A.AsReference is TSouffleNativeFunction then
+        Result := 'function ' + TSouffleNativeFunction(A.AsReference).Name +
+          '() { [native code] }'
+      else if A.AsReference is TSouffleBlueprint then
+        Result := 'function ' + TSouffleBlueprint(A.AsReference).Name +
+          '() { [native code] }'
+      else if A.AsReference is TGocciaWrappedValue then
+        Result := TGocciaWrappedValue(A.AsReference).Value.ToStringLiteral.Value
       else
         Result := '[object Object]';
   else
@@ -779,6 +827,28 @@ end;
 
 { Arithmetic }
 
+function InvokePrimitiveMethod(const ARuntime: TGocciaRuntimeOperations;
+  const AMethodVal, ASelf: TSouffleValue;
+  out AResult: TSouffleValue): Boolean;
+var
+  VMArgs: array of TSouffleValue;
+begin
+  Result := False;
+  if not SouffleIsReference(AMethodVal) or not Assigned(AMethodVal.AsReference) then
+    Exit;
+  SetLength(VMArgs, 1);
+  VMArgs[0] := ASelf;
+  if AMethodVal.AsReference is TSouffleClosure then
+    AResult := ARuntime.VM.ExecuteFunction(
+      TSouffleClosure(AMethodVal.AsReference), VMArgs)
+  else if AMethodVal.AsReference is TSouffleNativeFunction then
+    AResult := TSouffleNativeFunction(AMethodVal.AsReference)
+      .Invoke(ASelf, nil, 0)
+  else
+    Exit;
+  Result := not SouffleIsReference(AResult) or SouffleIsStringValue(AResult);
+end;
+
 function CoerceToPrimitiveSouffle(const ARuntime: TGocciaRuntimeOperations;
   const A: TSouffleValue): TSouffleValue;
 var
@@ -786,11 +856,10 @@ var
   Rec: TSouffleRecord;
   Bp: TSouffleBlueprint;
   MethodVal, MethodResult: TSouffleValue;
-  VMArgs: array of TSouffleValue;
 begin
-  if SouffleIsStringValue(A) then
-    Exit(A);
   if not SouffleIsReference(A) or not Assigned(A.AsReference) then
+    Exit(A);
+  if SouffleIsStringValue(A) then
     Exit(A);
   if A.AsReference is TSouffleArray then
     Exit(SouffleString(
@@ -798,29 +867,25 @@ begin
   if A.AsReference is TSouffleRecord then
   begin
     Rec := TSouffleRecord(A.AsReference);
+
+    if Rec.Get(PROP_VALUE_OF, MethodVal) then
+      if InvokePrimitiveMethod(ARuntime, MethodVal, A, MethodResult) then
+        Exit(MethodResult);
+    if Rec.Get(PROP_TO_STRING, MethodVal) then
+      if InvokePrimitiveMethod(ARuntime, MethodVal, A, MethodResult) then
+        Exit(MethodResult);
+
     if Assigned(Rec.Blueprint) then
     begin
       Bp := Rec.Blueprint;
       while Assigned(Bp) do
       begin
         if Bp.Methods.Get(PROP_VALUE_OF, MethodVal) then
-        begin
-          SetLength(VMArgs, 1);
-          VMArgs[0] := A;
-          MethodResult := ARuntime.VM.ExecuteFunction(
-            TSouffleClosure(MethodVal.AsReference), VMArgs);
-          if not SouffleIsReference(MethodResult) or SouffleIsStringValue(MethodResult) then
+          if InvokePrimitiveMethod(ARuntime, MethodVal, A, MethodResult) then
             Exit(MethodResult);
-        end;
         if Bp.Methods.Get(PROP_TO_STRING, MethodVal) then
-        begin
-          SetLength(VMArgs, 1);
-          VMArgs[0] := A;
-          MethodResult := ARuntime.VM.ExecuteFunction(
-            TSouffleClosure(MethodVal.AsReference), VMArgs);
-          if not SouffleIsReference(MethodResult) or SouffleIsStringValue(MethodResult) then
+          if InvokePrimitiveMethod(ARuntime, MethodVal, A, MethodResult) then
             Exit(MethodResult);
-        end;
         Bp := Bp.SuperBlueprint;
       end;
     end;
@@ -834,7 +899,7 @@ begin
     Prim := Goccia.Values.ToPrimitive.ToPrimitive(GocciaVal);
     Exit(ARuntime.ToSouffleValue(Prim));
   end;
-  Result := A;
+  Result := SouffleString('[object Object]');
 end;
 
 function IsWrappedSymbol(const A: TSouffleValue): Boolean; inline;
@@ -1357,6 +1422,12 @@ begin
         ThrowTypeError('Cannot read properties of undefined (reading ''' + AKey + ''')');
     end;
 
+    if SouffleIsStringValue(AObject) then
+    begin
+      if AKey = PROP_LENGTH then
+        Exit(SouffleInteger(Length(SouffleGetString(AObject))));
+    end;
+
     if SouffleIsReference(AObject) and Assigned(AObject.AsReference) then
     begin
       if AObject.AsReference is TSouffleRecord then
@@ -1382,6 +1453,9 @@ begin
             Bp := Bp.SuperBlueprint;
           end;
         end;
+        if Assigned(Rec.Delegate) and (Rec.Delegate is TSouffleRecord) and
+           TSouffleRecord(Rec.Delegate).Get(AKey, Result) then
+          Exit;
       end
       else if AObject.AsReference is TSouffleBlueprint then
       begin
@@ -1549,19 +1623,7 @@ end;
 function TGocciaRuntimeOperations.CoerceKeyToString(
   const AKey: TSouffleValue): string;
 begin
-  if AKey.Kind = svkNil then
-  begin
-    if AKey.Flags = GOCCIA_NIL_NULL then
-      Exit('null')
-    else
-      Exit('undefined');
-  end;
-  if SouffleIsReference(AKey) and Assigned(AKey.AsReference) then
-  begin
-    if AKey.AsReference is TGocciaWrappedValue then
-      Exit(TGocciaWrappedValue(AKey.AsReference).Value.ToStringLiteral.Value);
-  end;
-  Result := SouffleValueToString(AKey);
+  Result := CoerceToString(AKey);
 end;
 
 function TGocciaRuntimeOperations.GetIndex(
@@ -3462,22 +3524,45 @@ begin
     Result := SouffleString('[object Object]');
 end;
 
+const
+  ARRAY_PROTOTYPE_METHODS: array[0..26] of TSouffleMethodEntry = (
+    (Name: 'push';          Arity: 1; Callback: @NativeArrayPush),
+    (Name: 'pop';           Arity: 0; Callback: @NativeArrayPop),
+    (Name: 'join';          Arity: 1; Callback: @NativeArrayJoin),
+    (Name: 'indexOf';       Arity: 1; Callback: @NativeArrayIndexOf),
+    (Name: 'includes';      Arity: 1; Callback: @NativeArrayIncludes),
+    (Name: 'slice';         Arity: 2; Callback: @NativeArraySlice),
+    (Name: 'reverse';       Arity: 0; Callback: @NativeArrayReverse),
+    (Name: 'concat';        Arity: 1; Callback: @NativeArrayConcat),
+    (Name: 'shift';         Arity: 0; Callback: @NativeArrayShift),
+    (Name: 'unshift';       Arity: 1; Callback: @NativeArrayUnshift),
+    (Name: 'fill';          Arity: 1; Callback: @NativeArrayFill),
+    (Name: 'at';            Arity: 1; Callback: @NativeArrayAt),
+    (Name: 'forEach';       Arity: 1; Callback: @NativeArrayForEach),
+    (Name: 'map';           Arity: 1; Callback: @NativeArrayMap),
+    (Name: 'filter';        Arity: 1; Callback: @NativeArrayFilter),
+    (Name: 'find';          Arity: 1; Callback: @NativeArrayFind),
+    (Name: 'findIndex';     Arity: 1; Callback: @NativeArrayFindIndex),
+    (Name: 'every';         Arity: 1; Callback: @NativeArrayEvery),
+    (Name: 'some';          Arity: 1; Callback: @NativeArraySome),
+    (Name: 'reduce';        Arity: 1; Callback: @NativeArrayReduce),
+    (Name: 'reduceRight';   Arity: 1; Callback: @NativeArrayReduceRight),
+    (Name: 'sort';          Arity: 0; Callback: @NativeArraySort),
+    (Name: 'findLast';      Arity: 1; Callback: @NativeArrayFindLast),
+    (Name: 'findLastIndex';  Arity: 1; Callback: @NativeArrayFindLastIndex),
+    (Name: 'flat';          Arity: 0; Callback: @NativeArrayFlat),
+    (Name: 'flatMap';       Arity: 1; Callback: @NativeArrayFlatMap),
+    (Name: 'splice';        Arity: 2; Callback: @NativeArraySplice)
+  );
+
+  RECORD_PROTOTYPE_METHODS: array[0..3] of TSouffleMethodEntry = (
+    (Name: 'hasOwnProperty';  Arity: 1; Callback: @NativeRecordHasOwnProperty),
+    (Name: 'toString';        Arity: 0; Callback: @NativeRecordToString),
+    (Name: 'valueOf';         Arity: 0; Callback: @NativeRecordValueOf),
+    (Name: 'toLocaleString';  Arity: 0; Callback: @NativeRecordToLocaleString)
+  );
+
 procedure TGocciaRuntimeOperations.RegisterDelegates;
-
-  procedure RegisterNative(const ARec: TSouffleRecord;
-    const AName: string; const AArity: Integer;
-    const ACallback: TSouffleNativeCallback);
-  var
-    Fn: TSouffleNativeFunction;
-  begin
-    Fn := TSouffleNativeFunction.Create(AName, AArity, ACallback);
-    if Assigned(TSouffleGarbageCollector.Instance) then
-      TSouffleGarbageCollector.Instance.AllocateObject(Fn);
-    ARec.Put(AName, SouffleReference(Fn));
-  end;
-
-var
-  ArrayMeta, RecordMeta: TSouffleRecord;
 begin
   if not Assigned(FVM) then Exit;
 
@@ -3487,46 +3572,10 @@ begin
 
   GNativeArrayJoinRuntime := Self;
 
-  ArrayMeta := TSouffleRecord.Create(32);
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(ArrayMeta);
-  RegisterNative(ArrayMeta, 'push', 1, @NativeArrayPush);
-  RegisterNative(ArrayMeta, 'pop', 0, @NativeArrayPop);
-  RegisterNative(ArrayMeta, 'join', 1, @NativeArrayJoin);
-  RegisterNative(ArrayMeta, 'indexOf', 1, @NativeArrayIndexOf);
-  RegisterNative(ArrayMeta, 'includes', 1, @NativeArrayIncludes);
-  RegisterNative(ArrayMeta, 'slice', 2, @NativeArraySlice);
-  RegisterNative(ArrayMeta, 'reverse', 0, @NativeArrayReverse);
-  RegisterNative(ArrayMeta, 'concat', 1, @NativeArrayConcat);
-  RegisterNative(ArrayMeta, 'shift', 0, @NativeArrayShift);
-  RegisterNative(ArrayMeta, 'unshift', 1, @NativeArrayUnshift);
-  RegisterNative(ArrayMeta, 'fill', 1, @NativeArrayFill);
-  RegisterNative(ArrayMeta, 'at', 1, @NativeArrayAt);
-  RegisterNative(ArrayMeta, 'forEach', 1, @NativeArrayForEach);
-  RegisterNative(ArrayMeta, 'map', 1, @NativeArrayMap);
-  RegisterNative(ArrayMeta, 'filter', 1, @NativeArrayFilter);
-  RegisterNative(ArrayMeta, 'find', 1, @NativeArrayFind);
-  RegisterNative(ArrayMeta, 'findIndex', 1, @NativeArrayFindIndex);
-  RegisterNative(ArrayMeta, 'every', 1, @NativeArrayEvery);
-  RegisterNative(ArrayMeta, 'some', 1, @NativeArraySome);
-  RegisterNative(ArrayMeta, 'reduce', 1, @NativeArrayReduce);
-  RegisterNative(ArrayMeta, 'reduceRight', 1, @NativeArrayReduceRight);
-  RegisterNative(ArrayMeta, 'sort', 0, @NativeArraySort);
-  RegisterNative(ArrayMeta, 'findLast', 1, @NativeArrayFindLast);
-  RegisterNative(ArrayMeta, 'findLastIndex', 1, @NativeArrayFindLastIndex);
-  RegisterNative(ArrayMeta, 'flat', 0, @NativeArrayFlat);
-  RegisterNative(ArrayMeta, 'flatMap', 1, @NativeArrayFlatMap);
-  RegisterNative(ArrayMeta, 'splice', 2, @NativeArraySplice);
-  FVM.ArrayDelegate := ArrayMeta;
-
-  RecordMeta := TSouffleRecord.Create(8);
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(RecordMeta);
-  RegisterNative(RecordMeta, 'hasOwnProperty', 1, @NativeRecordHasOwnProperty);
-  RegisterNative(RecordMeta, 'toString', 0, @NativeRecordToString);
-  RegisterNative(RecordMeta, 'valueOf', 0, @NativeRecordValueOf);
-  RegisterNative(RecordMeta, 'toLocaleString', 0, @NativeRecordToLocaleString);
-  FVM.RecordDelegate := RecordMeta;
+  FVM.ArrayDelegate := TSouffleRecord(
+    BuildDelegate(ARRAY_PROTOTYPE_METHODS));
+  FVM.RecordDelegate := TSouffleRecord(
+    BuildDelegate(RECORD_PROTOTYPE_METHODS));
 end;
 
 procedure TGocciaRuntimeOperations.RegisterFormalParameterCount(
@@ -3616,70 +3665,11 @@ end;
 
 function TGocciaRuntimeOperations.CoerceValueToString(
   const A: TSouffleValue): TSouffleValue;
-var
-  GocciaVal: TGocciaValue;
-  StrVal: TGocciaStringLiteralValue;
-  MethodVal, MethodResult: TSouffleValue;
-  Bp: TSouffleBlueprint;
-  Rec: TSouffleRecord;
-  VMArgs: array of TSouffleValue;
 begin
   try
-    case A.Kind of
-      svkNil:
-        if A.Flags = GOCCIA_NIL_NULL then
-          Result := SouffleString('null')
-        else
-          Result := SouffleString('undefined');
-      svkBoolean:
-        if A.AsBoolean then
-          Result := SouffleString('true')
-        else
-          Result := SouffleString('false');
-      svkInteger:
-        Result := SouffleString(IntToStr(A.AsInteger));
-      svkFloat:
-        Result := SouffleString(CoerceToString(A));
-      svkString:
-        Result := A;
-    else
-      if SouffleIsReference(A) and Assigned(A.AsReference) then
-      begin
-        if A.AsReference is TSouffleHeapString then
-        begin
-          Result := A;
-          Exit;
-        end;
-        if A.AsReference is TSouffleRecord then
-        begin
-          Rec := TSouffleRecord(A.AsReference);
-          if Assigned(Rec.Blueprint) then
-          begin
-            Bp := Rec.Blueprint;
-            while Assigned(Bp) do
-            begin
-              if Bp.Methods.Get(PROP_TO_STRING, MethodVal) then
-              begin
-                SetLength(VMArgs, 1);
-                VMArgs[0] := A;
-                MethodResult := VM.ExecuteFunction(
-                  TSouffleClosure(MethodVal.AsReference), VMArgs);
-                Exit(CoerceValueToString(MethodResult));
-              end;
-              Bp := Bp.SuperBlueprint;
-            end;
-          end;
-          Result := SouffleString('[object Object]');
-          Exit;
-        end;
-
-        GocciaVal := UnwrapToGocciaValue(A);
-        StrVal := Goccia.Values.ToPrimitive.ToECMAString(GocciaVal);
-        Result := SouffleString(StrVal.Value);
-      end
-      else
-        Result := SouffleString(CoerceToString(A));
-    end;
+    if SouffleIsStringValue(A) then
+      Exit(A);
+    Result := SouffleString(CoerceToString(A));
   except
     on E: TGocciaThrowValue do
       RethrowAsVM(E);
