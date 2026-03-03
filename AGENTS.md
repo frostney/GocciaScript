@@ -127,7 +127,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Constants: Error Names | `Goccia.Constants.ErrorNames.pas` | Error type name constants (`'TypeError'`, `'RangeError'`, etc.) |
 | Constants: Constructor Names | `Goccia.Constants.ConstructorNames.pas` | Built-in constructor name constants (`'Object'`, `'Array'`, etc.) |
 | ToPrimitive | `Goccia.Values.ToPrimitive.pas` | ECMAScript `ToPrimitive` abstract operation |
-| Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, `ThrowDataCloneError` (creates DOMException with code 25), centralized error construction with proper prototype chain |
+| Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, `ThrowReferenceError`, `ThrowSyntaxError`, `ThrowError`, `ThrowDataCloneError` (creates DOMException with code 25), centralized error construction with proper prototype chain. All runtime errors must go through these helpers (not `TGocciaError.Create`) so the resulting exception is a `TGocciaThrowValue` with a proper JS Error object, catchable from JavaScript `try...catch`. |
 | Argument Validator | `Goccia.Arguments.Validator.pas` | `RequireExactly`, `RequireAtLeast` — standardized argument count/type validation |
 | Argument Callbacks | `Goccia.Arguments.Callbacks.pas` | Pre-typed callback argument collections for array prototype methods |
 | Ordered Map | `OrderedMap.pas` | Generic insertion-order-preserving string-keyed map (`TOrderedMap<T>`) |
@@ -407,6 +407,22 @@ Dictionary-based string interning (`TDictionary<string, TGocciaStringLiteralValu
 
 On FPC 3.2.2 AArch64, `Double(Int64Var)` performs a bit reinterpretation, not a value conversion. Use implicit promotion instead: `Int64Var * 1.0` or `Int64Var * 1000000.0`. See [docs/code-style.md](docs/code-style.md) for details.
 
+### Platform Pitfall: Endian-Dependent Byte Indexing
+
+Do **not** use `Bytes[7] and $80` to check the sign bit of a `Double`. This assumes little-endian byte layout. Instead, overlay with `Int64 absolute` and test `Bits < 0`:
+
+```pascal
+var
+  V: Double;
+  Bits: Int64 absolute V;
+begin
+  V := SomeDouble;
+  IsNegative := Bits < 0;  // endian-neutral sign bit check
+end;
+```
+
+This pattern is used in `TGocciaNumberLiteralValue.GetIsNegativeZero` and `IsNegativeZeroFloat` in `Goccia.Compiler.ConstantFolding.pas`.
+
 ### Terminology
 
 - **Define** = create a new variable binding (`DefineLexicalBinding`)
@@ -434,9 +450,9 @@ All values inherit from `TGocciaValue`. Virtual methods on the base class elimin
 - `IsPrimitive` — Returns `True` for null, undefined, boolean, number, and string types. Use `Value.IsPrimitive` instead of multi-`is` check chains.
 - `IsCallable` — Returns `True` for functions and classes. Use `Value.IsCallable` instead of `(Value is TGocciaFunctionBase)` or `(Value is TGocciaFunctionValue) or (Value is TGocciaNativeFunctionValue)`.
 
-The evaluator calls these directly (`Value.GetProperty(Name)`, `Value.IsPrimitive`, `Value.IsCallable`) without type-checking or interface queries. **Prefer these VMT methods over `is` type checks for fundamental type-system properties.** Do not add VMT methods for optional built-in types (e.g., Symbol, Set, Map) — these are toggled via `TGocciaGlobalBuiltins` flags and should use standard RTTI (`is`) checks instead.
+The evaluator calls these directly (`Value.GetProperty(Name)`, `Value.IsPrimitive`, `Value.IsCallable`) without type-checking or interface queries. **Prefer these VMT methods over `is` type checks for fundamental type-system properties.** Do not add VMT methods for optional built-in types (e.g., Symbol, Set, Map) — these are toggled via `TGocciaGlobalBuiltins` flags and should use standard RTTI (`is`) checks instead. **Exception:** When the code needs to cast to `TGocciaFunctionBase` after the check (e.g., to call `.Call()`), use `is TGocciaFunctionBase` instead of `IsCallable`, because `IsCallable` also returns `True` for `TGocciaClassValue` which inherits from `TGocciaValue`, not `TGocciaFunctionBase`.
 
-Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `CreateErrorObject`, etc.). All error objects — both user-created via `new Error()` and runtime-thrown via `ThrowTypeError` etc. — are linked to the correct error type prototype (e.g., `GTypeErrorProto`, `GRangeErrorProto`). This ensures `instanceof TypeError`, `instanceof RangeError`, etc. work correctly for both user-constructed and internally-thrown errors. The global error prototypes are exposed from `Goccia.Builtins.Globals.pas` and follow the ES2026 prototype hierarchy: `TypeError.prototype` → `Error.prototype` → `Object.prototype`. All error objects receive a `stack` property containing a formatted stack trace captured at the point of construction. The call stack is maintained by `Goccia.CallStack.pas`, a singleton that tracks function name, file path, and line/column for each active call frame. Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
+Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `ThrowError`, `CreateErrorObject`, etc.). All error objects — both user-created via `new Error()` and runtime-thrown via `ThrowTypeError`/`ThrowError` etc. — are linked to the correct error type prototype (e.g., `GTypeErrorProto`, `GRangeErrorProto`). This ensures `instanceof TypeError`, `instanceof RangeError`, etc. work correctly for both user-constructed and internally-thrown errors. **All runtime errors must use these helpers** (never `TGocciaError.Create` directly) so the exception is a `TGocciaThrowValue` with a proper JS Error object, catchable from JavaScript `try...catch`. The global error prototypes are exposed from `Goccia.Builtins.Globals.pas` and follow the ES2026 prototype hierarchy: `TypeError.prototype` → `Error.prototype` → `Object.prototype`. All error objects receive a `stack` property containing a formatted stack trace captured at the point of construction. The call stack is maintained by `Goccia.CallStack.pas`, a singleton that tracks function name, file path, and line/column for each active call frame. Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
 
 **Symbol coercion:** `TGocciaSymbolValue.ToNumberLiteral` throws `TypeError` (symbols cannot convert to numbers). `ToStringLiteral` returns `"Symbol(description)"` for internal use (display, property keys), but implicit string coercion (template literals, `+` operator, `String.prototype.concat`) must check for symbols and throw `TypeError` at the operator level. See `Goccia.Evaluator.Arithmetic.pas` and `Goccia.Evaluator.pas` for the pattern. Symbols use a shared prototype singleton (like String, Number, Array) with `description` as an accessor getter and `toString()` as a method. `Symbol.prototype` is exposed on the Symbol constructor function.
 

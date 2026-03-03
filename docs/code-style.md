@@ -286,6 +286,28 @@ Result := FEpochMilliseconds * 1000000.0;
 
 This affects any code that converts `Int64` fields to `Double` for floating-point arithmetic. The same issue applies to intermediate `Int64` local variables cast to `Double`.
 
+### Endian-Dependent Byte Indexing
+
+Do **not** inspect raw byte arrays of `Double` values to check the sign bit (e.g., `Bytes[7] and $80`). This assumes little-endian byte layout and breaks on big-endian platforms.
+
+Instead, overlay the `Double` with `Int64 absolute` and test via integer sign:
+
+```pascal
+// WRONG — assumes little-endian byte order
+var V: Double; Bytes: array[0..7] of Byte absolute V;
+begin
+  Result := (V = 0.0) and ((Bytes[7] and $80) <> 0);
+end;
+
+// CORRECT — endian-neutral sign bit check
+var V: Double; Bits: Int64 absolute V;
+begin
+  Result := (V = 0.0) and (Bits < 0);
+end;
+```
+
+This works because `Int64` and `Double` share the same sign bit position (bit 63) at the integer level, regardless of byte ordering.
+
 ## Design Patterns
 
 ### Singleton Pattern (Special Values)

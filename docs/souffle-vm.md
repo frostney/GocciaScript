@@ -638,6 +638,10 @@ TSouffleExceptionHandler:
 
 At runtime, `OP_PUSH_HANDLER` pushes a handler entry; `OP_POP_HANDLER` removes it. When `OP_THROW` fires, the VM searches the handler stack for a matching handler and jumps to `CatchTarget`, storing the thrown value in `CatchRegister`.
 
+### Non-Local Exits Through Finally
+
+When `break` or `return` occurs inside a `try...finally` block, the compiler inlines the finally block before the exit instruction. The compiler tracks pending finally blocks via `GPendingFinally` (a stack of `TPendingFinallyEntry` records). `CompileReturnStatement` pops all pending handlers and compiles all finally blocks before emitting `OP_RETURN`. `CompileBreakStatement` uses `GBreakFinallyBase` to process only the finally blocks added since the current loop/switch started — outer finally blocks are left intact. This ensures finally blocks execute on all exit paths without runtime support.
+
 ## Garbage Collection
 
 Souffle has its own mark-and-sweep garbage collector (`Souffle.GarbageCollector.pas`), independent of GocciaScript's GC:
@@ -1107,7 +1111,7 @@ The current boundary was established through a systematic multi-session process:
 
 ### NaN/Infinity Rationale
 
-IEEE 754 floating-point is enabled at the FreePascal compiler level (`SetExceptionMask` in both `Goccia.Engine.pas` and `Souffle.VM.pas`). This means:
+IEEE 754 floating-point is enabled at the FreePascal compiler level (`SetExceptionMask` in both `Goccia.Engine.pas` and `Souffle.VM.pas`). Both classes save the previous FPU exception mask in their constructor and restore it in their destructor, so the host application's FPU state is not permanently altered. This means:
 - FPC's `Double` type natively produces `NaN` for `0.0/0.0`, `Infinity` for `1.0/0.0`, etc.
 - The VM stores these as ordinary `svkFloat` values — no special float flags or singletons
 - The interpreter's `TGocciaNumberLiteralValue` stores real IEEE 754 `NaN`/`Infinity` Doubles directly

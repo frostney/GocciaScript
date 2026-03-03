@@ -459,6 +459,10 @@ end;
 | `TGocciaReferenceError` | Undefined variable access |
 | `TGocciaRangeError` | Value out of range |
 
+## FPU Exception Mask
+
+Both `TGocciaEngine` and `TSouffleVM` mask all FPU exceptions on creation (via `SetExceptionMask`) to enable IEEE 754 semantics (`NaN`, `Infinity`, `-0`). The previous mask is saved in the constructor and **restored in the destructor**, so the host application's FPU state is not permanently altered. This is transparent for one-shot execution (`RunScript`), but embedders creating long-lived engine instances should be aware that FPU exceptions are suppressed while the engine exists.
+
 ## Microtask Queue (Promises)
 
 When `ggPromise` is included in the globals set, the engine initializes a singleton microtask queue (`TGocciaMicrotaskQueue`) alongside the GC. Promise `.then()` callbacks are enqueued as microtasks and **drained automatically** after each `Execute`, `ExecuteWithTiming`, or `ExecuteProgram` call. Embedders do not need to drain the queue manually.
