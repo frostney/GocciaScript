@@ -1159,9 +1159,7 @@ var
   GetterExpr: TGocciaGetterExpression;
   SetterExpr: TGocciaSetterExpression;
 begin
-  EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, ADest,
-    ACtx.Template.AddConstantString(CONSTRUCTOR_OBJECT)));
-  EmitInstruction(ACtx, EncodeABC(OP_RT_CONSTRUCT, ADest, ADest, 0));
+  EmitInstruction(ACtx, EncodeABx(OP_NEW_RECORD, ADest, AExpr.Properties.Count));
 
   Order := AExpr.PropertySourceOrder;
   if Length(Order) > 0 then

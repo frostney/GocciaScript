@@ -927,9 +927,11 @@ begin
       A := DecodeA(AInstruction);
       B := DecodeB(AInstruction);
       C := DecodeC(AInstruction);
+      FRegisters[Base + B] := FRuntimeOps.CoerceValueToString(FRegisters[Base + B]);
+      FRegisters[Base + C] := FRuntimeOps.CoerceValueToString(FRegisters[Base + C]);
       FRegisters[Base + A] := SouffleString(
-        SouffleValueToString(FRegisters[Base + B]) +
-        SouffleValueToString(FRegisters[Base + C]));
+        SouffleGetString(FRegisters[Base + B]) +
+        SouffleGetString(FRegisters[Base + C]));
     end;
 
     OP_GET_LOCAL_INT, OP_GET_LOCAL_FLOAT, OP_GET_LOCAL_BOOL,

@@ -11,7 +11,8 @@ uses
 const
   SOUFFLE_PROP_WRITABLE     = $01;
   SOUFFLE_PROP_CONFIGURABLE = $02;
-  SOUFFLE_PROP_DEFAULT      = SOUFFLE_PROP_WRITABLE or SOUFFLE_PROP_CONFIGURABLE;
+  SOUFFLE_PROP_ENUMERABLE   = $04;
+  SOUFFLE_PROP_DEFAULT      = SOUFFLE_PROP_WRITABLE or SOUFFLE_PROP_CONFIGURABLE or SOUFFLE_PROP_ENUMERABLE;
 
 type
   { Dense dynamic array of TSouffleValue — universal across languages
@@ -61,12 +62,17 @@ type
     FBlueprint: TSouffleBlueprint;
     FSlots: array of TSouffleValue;
     FExtensible: Boolean;
+    FGetters: TSouffleRecord;
+    FSetters: TSouffleRecord;
     function HashKey(const AKey: string): UInt32;
     function FindEntry(const AKey: string; const AHash: UInt32): Integer;
     procedure Grow;
+    function GetGetters: TSouffleRecord;
+    function GetSetters: TSouffleRecord;
   public
     constructor Create(const AInitialCapacity: Integer = 0);
     constructor CreateFromBlueprint(const ABlueprint: TSouffleBlueprint);
+    destructor Destroy; override;
 
     function Get(const AKey: string; out AValue: TSouffleValue): Boolean;
     procedure Put(const AKey: string; const AValue: TSouffleValue);
@@ -87,6 +93,9 @@ type
     function GetSlot(const AIndex: Integer): TSouffleValue; inline;
     procedure SetSlot(const AIndex: Integer; const AValue: TSouffleValue); inline;
 
+    function HasGetters: Boolean; inline;
+    function HasSetters: Boolean; inline;
+
     procedure MarkReferences; override;
     function DebugString: string; override;
 
@@ -95,6 +104,8 @@ type
     property Count: Integer read FCount;
     property Blueprint: TSouffleBlueprint read FBlueprint;
     property Extensible: Boolean read FExtensible;
+    property Getters: TSouffleRecord read GetGetters;
+    property Setters: TSouffleRecord read GetSetters;
   end;
 
   { Blueprint — type descriptor with method table and optional super link.
@@ -262,6 +273,8 @@ begin
   FCount := 0;
   FBlueprint := nil;
   FExtensible := True;
+  FGetters := nil;
+  FSetters := nil;
   if AInitialCapacity > MIN_RECORD_CAPACITY then
     Cap := AInitialCapacity
   else
@@ -276,6 +289,13 @@ begin
   Create;
   FBlueprint := ABlueprint;
   SetLength(FSlots, ABlueprint.SlotCount);
+end;
+
+destructor TSouffleRecord.Destroy;
+begin
+  FGetters.Free;
+  FSetters.Free;
+  inherited;
 end;
 
 function TSouffleRecord.HashKey(const AKey: string): UInt32;
@@ -570,6 +590,30 @@ begin
   FExtensible := False;
 end;
 
+function TSouffleRecord.GetGetters: TSouffleRecord;
+begin
+  if not Assigned(FGetters) then
+    FGetters := TSouffleRecord.Create;
+  Result := FGetters;
+end;
+
+function TSouffleRecord.GetSetters: TSouffleRecord;
+begin
+  if not Assigned(FSetters) then
+    FSetters := TSouffleRecord.Create;
+  Result := FSetters;
+end;
+
+function TSouffleRecord.HasGetters: Boolean;
+begin
+  Result := Assigned(FGetters) and (FGetters.Count > 0);
+end;
+
+function TSouffleRecord.HasSetters: Boolean;
+begin
+  Result := Assigned(FSetters) and (FSetters.Count > 0);
+end;
+
 function TSouffleRecord.GetOrderedKey(const AIndex: Integer): string;
 begin
   Result := FEntries[FOrder[AIndex]].Key;
@@ -609,6 +653,10 @@ begin
   for I := 0 to High(FSlots) do
     if SouffleIsReference(FSlots[I]) and Assigned(FSlots[I].AsReference) then
       FSlots[I].AsReference.MarkReferences;
+  if Assigned(FGetters) and not FGetters.GCMarked then
+    FGetters.MarkReferences;
+  if Assigned(FSetters) and not FSetters.GCMarked then
+    FSetters.MarkReferences;
 end;
 
 function TSouffleRecord.DebugString: string;
