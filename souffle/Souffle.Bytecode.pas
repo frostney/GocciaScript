@@ -118,9 +118,6 @@ type
     // ── Core: Type Coercion ──
     OP_TO_PRIMITIVE  = 72,  // AB    R[A] := ToPrimitive(R[B]) — fast-path for nil/bool/int/float/string, runtime callback for references
 
-    // ── Core: Record Metadata ──
-    OP_RECORD_FREEZE = 74,  // A     Freeze Record(R[A]) — set all entries writable=0, configurable=0
-
     // ── Core: Destructuring ──
     OP_UNPACK        = 73,  // ABC   R[A] := Array(R[B])[C..] — unpack rest of TSouffleArray from index C
 
@@ -165,8 +162,8 @@ type
     OP_RT_DEL_PROP   = 160, // ABC   R[A] := Runtime.DeleteProperty(R[B], Constants[C])
 
     // ── Runtime: Invocation ──
-    OP_RT_CALL       = 161, // ABC   R[A] := Runtime.Invoke(R[A], args, B=argc, C=flags)
-    OP_RT_CALL_METHOD = 162, // ABC  Like RT_CALL but receiver = R[A-1]
+    OP_RT_CALL       = 161, // ABC   R[A] := Runtime.Invoke(R[A], args, B=argc, C=flags); C bit 0: spread (B=argsArray reg)
+    OP_RT_CALL_METHOD = 162, // ABC  Like RT_CALL but receiver = R[A-1]; C bit 0: spread (B=argsArray reg)
     OP_RT_CONSTRUCT  = 163, // ABC   R[A] := Runtime.Construct(R[B], args, C=argc)
 
     // ── Runtime: Iteration ──
@@ -187,10 +184,6 @@ type
 
     // ── Runtime: Extended Property ──
     OP_RT_DEL_INDEX  = 175, // ABC   R[A] := Runtime.DeleteIndex(R[B], R[C])
-
-    // ── Runtime: Spread Call ──
-    OP_RT_CALL_SPREAD = 179, // ABC   R[A] := Runtime.Call(R[A], R[B]=argsArray); spread call
-    OP_RT_CALL_METHOD_SPREAD = 180, // ABC  R[A] := Runtime.CallMethod(R[A], R[A-1]=this, R[B]=argsArray)
 
     // ── Runtime: Coercion ──
     OP_RT_TO_STRING = 182, // AB    R[A] := Runtime.CoerceValueToString(R[B])

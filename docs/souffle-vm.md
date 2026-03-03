@@ -1,6 +1,8 @@
 # Souffle VM
 
-Souffle is a general-purpose bytecode virtual machine designed for extensibility, maintainability, and performance. It serves as an alternative execution backend for GocciaScript and is architected to support multiple programming language frontends and future WASM 3.0 output.
+Souffle is a general-purpose, language-agnostic bytecode virtual machine designed for extensibility, maintainability, and performance. It is architected as a **standalone project** that can be extracted from the GocciaScript repository and used independently. While it currently serves as an alternative execution backend for GocciaScript, its architecture supports multiple programming language frontends (JavaScript/GocciaScript, Boo, C#, Ruby-like, or any other language) and future WASM 3.0 output.
+
+The key design goal: the `souffle/` directory has **zero imports** from `Goccia.*` units. All language-specific behavior is injected through a pluggable abstract runtime interface (`TSouffleRuntimeOperations`). Adding a new language frontend requires implementing this interface — zero VM changes.
 
 ## Architecture Overview
 
@@ -69,8 +71,9 @@ Fixed semantics implemented directly in the dispatch loop. These are universal o
 | Control Flow | `OP_JUMP`, `OP_JUMP_IF_TRUE`, `OP_JUMP_IF_FALSE`, `OP_JUMP_IF_NIL`, `OP_JUMP_IF_NOT_NIL` | Branching and conditional jumps |
 | Closures | `OP_CLOSURE` | Closure creation from function prototypes |
 | Compound Types | `OP_NEW_ARRAY`, `OP_ARRAY_PUSH`, `OP_ARRAY_POP`, `OP_ARRAY_GET`, `OP_ARRAY_SET` | VM-native dense array creation and access |
-| Compound Types | `OP_NEW_RECORD`, `OP_RECORD_GET`, `OP_RECORD_SET`, `OP_RECORD_DELETE` | VM-native string-keyed record creation and access |
+| Compound Types | `OP_NEW_RECORD`, `OP_RECORD_GET`, `OP_RECORD_SET`, `OP_RECORD_DELETE` | VM-native string-keyed record with per-entry property flags (writable, configurable) |
 | Compound Types | `OP_GET_LENGTH` | Length query for arrays, records, and strings |
+| Destructuring | `OP_UNPACK` | Extract rest of array from index N into a new array |
 | Arguments | `OP_ARG_COUNT`, `OP_PACK_ARGS` | Actual argument count and variadic argument packing |
 | Integer Arithmetic | `OP_ADD_INT`, `OP_SUB_INT`, `OP_MUL_INT`, `OP_DIV_INT`, `OP_MOD_INT`, `OP_NEG_INT` | Fast-path integer operations (no runtime dispatch) |
 | Float Arithmetic | `OP_ADD_FLOAT`, `OP_SUB_FLOAT`, `OP_MUL_FLOAT`, `OP_DIV_FLOAT`, `OP_MOD_FLOAT`, `OP_NEG_FLOAT` | Fast-path float operations (no runtime dispatch) |
@@ -88,16 +91,18 @@ Language-specific semantics dispatched through `TSouffleRuntimeOperations`, an a
 
 | Category | Opcodes | Description |
 |----------|---------|-------------|
-| Arithmetic | `OP_RT_ADD` through `OP_RT_NEG` | Polymorphic arithmetic (addition, subtraction, etc.) |
-| Bitwise | `OP_RT_BAND` through `OP_RT_BNOT` | Polymorphic bitwise operations |
-| Comparison | `OP_RT_EQ` through `OP_RT_GTE` | Polymorphic comparison |
-| Logical/Type | `OP_RT_NOT`, `OP_RT_TYPEOF`, `OP_RT_IS_INSTANCE`, `OP_RT_HAS_PROPERTY`, `OP_RT_TO_BOOLEAN` | Type checks and logical operations |
-| Property Access | `OP_RT_GET_PROP`, `OP_RT_SET_PROP`, `OP_RT_GET_INDEX`, `OP_RT_SET_INDEX`, `OP_RT_DEL_PROP` | Property read/write/delete (prototype chains, symbol keys, descriptors) |
-| Invocation | `OP_RT_CALL`, `OP_RT_CALL_METHOD`, `OP_RT_CONSTRUCT` | Function calls and construction |
-| Iteration | `OP_RT_GET_ITER`, `OP_RT_ITER_NEXT`, `OP_RT_SPREAD` | Iterator protocol |
-| Modules | `OP_RT_IMPORT`, `OP_RT_EXPORT` | Module system |
-| Async | `OP_RT_AWAIT` | Async/await support |
-| Globals | `OP_RT_GET_GLOBAL`, `OP_RT_SET_GLOBAL`, `OP_RT_HAS_GLOBAL` | Global variable access and existence check |
+| Arithmetic (7) | `OP_RT_ADD` through `OP_RT_NEG` | Polymorphic arithmetic with language-specific coercion |
+| Bitwise (7) | `OP_RT_BAND` through `OP_RT_BNOT` | Polymorphic bitwise operations |
+| Comparison (6) | `OP_RT_EQ` through `OP_RT_GTE` | Polymorphic comparison with language-specific equality/ordering |
+| Logic/Type (5) | `OP_RT_NOT`, `OP_RT_TYPEOF`, `OP_RT_IS_INSTANCE`, `OP_RT_HAS_PROPERTY`, `OP_RT_TO_BOOLEAN` | Type checks, truthiness, logical operations |
+| Property (6) | `OP_RT_GET_PROP`, `OP_RT_SET_PROP`, `OP_RT_GET_INDEX`, `OP_RT_SET_INDEX`, `OP_RT_DEL_PROP`, `OP_RT_DEL_INDEX` | Property read/write/delete with language-specific dispatch |
+| Invocation (3) | `OP_RT_CALL`, `OP_RT_CALL_METHOD`, `OP_RT_CONSTRUCT` | Function calls (C flag bit 0 = spread mode) and construction |
+| Iteration (2) | `OP_RT_GET_ITER`, `OP_RT_ITER_NEXT` | Iterator protocol |
+| Modules (2) | `OP_RT_IMPORT`, `OP_RT_EXPORT` | Module system |
+| Async (1) | `OP_RT_AWAIT` | Async/await support |
+| Globals (3) | `OP_RT_GET_GLOBAL`, `OP_RT_SET_GLOBAL`, `OP_RT_HAS_GLOBAL` | Global variable access and existence check |
+| Coercion (1) | `OP_RT_TO_STRING` | Language-specific value-to-string (template literals, interpolation) |
+| Extension (1) | `OP_RT_EXT` | Generic dispatch to `ExtendedOperation` for language-specific sub-opcodes |
 
 The VM doesn't know what "get property" means. It calls `RuntimeOps.GetProperty(obj, key)`. GocciaScript's runtime walks prototype chains. A future Python runtime would do MRO + `__getattr__`. A future Lua runtime would check metatables. Same opcodes, completely different semantics — the **compiler** makes those choices, not the VM.
 
@@ -110,6 +115,129 @@ Language-specific concepts like property access, arithmetic on polymorphic value
 - **Lua**: Metatable lookups, `type()` function, raw equality
 
 By routing these through an abstract interface, the VM remains language-agnostic. Adding a new language frontend requires implementing `TSouffleRuntimeOperations` — zero VM changes.
+
+### TSouffleRuntimeOperations: The Abstract Interface
+
+The runtime interface defines **45 methods + 1 extension entry point**, all expressed in language-agnostic terms. No method name, parameter, or return type references JavaScript concepts. The full method listing:
+
+| Group | Methods | Count |
+|-------|---------|-------|
+| Arithmetic | `Add`, `Subtract`, `Multiply`, `Divide`, `Modulo`, `Power`, `Negate` | 7 |
+| Bitwise | `BitwiseAnd`, `BitwiseOr`, `BitwiseXor`, `ShiftLeft`, `ShiftRight`, `UnsignedShiftRight`, `BitwiseNot` | 7 |
+| Comparison | `Equal`, `NotEqual`, `LessThan`, `GreaterThan`, `LessThanOrEqual`, `GreaterThanOrEqual` | 6 |
+| Logic/Type | `LogicalNot`, `TypeOf`, `IsInstance`, `HasProperty`, `ToBoolean`, `ToPrimitive` | 6 |
+| Property | `GetProperty`, `SetProperty`, `GetIndex`, `SetIndex`, `DeleteProperty`, `DeleteIndex` | 6 |
+| Invocation | `Invoke`, `Construct` | 2 |
+| Globals | `GetGlobal`, `SetGlobal`, `HasGlobal` | 3 |
+| Iteration | `GetIterator`, `IteratorNext` | 2 |
+| Modules | `ImportModule`, `ExportBinding` | 2 |
+| Async | `AwaitValue`, `WrapInPromise` | 2 |
+| Coercion | `CoerceValueToString` | 1 |
+| Extension | `ExtendedOperation` | 1 |
+
+All methods operate on `TSouffleValue` — the VM's own tagged union. The runtime never touches registers, the instruction pointer, or the call stack. It receives values, performs language-specific logic, and returns values. The VM handles all register storage, frame management, and dispatch.
+
+**Default implementations**: `DeleteIndex` (delegates to `DeleteProperty` with string coercion), `CoerceValueToString` (returns `SouffleNil`), `WrapInPromise` (returns the value unchanged), and `ExtendedOperation` (no-op) have default implementations in the base class. All other methods are abstract.
+
+**Why these specific groups?** Every practical language needs arithmetic on polymorphic values, some form of property access, a way to call functions, and a way to compare values. The interface was designed by asking: *"What operations would a Boo, C#, Ruby, or fully-compliant ES engine need?"* Operations that only apply to one language (object spread, enum finalization, super method lookup) are routed through `ExtendedOperation` instead.
+
+### OP_RT_EXT: Language Extension Mechanism
+
+`OP_RT_EXT` (opcode 190) is a single generic extension opcode that allows language frontends to define their own sub-opcode IDs for complex, language-specific operations without polluting the VM's opcode space. The instruction encodes `ABC` where `B` is the sub-opcode ID, and `A`/`C` are register operands. The VM dispatches blindly to `RuntimeOps.ExtendedOperation(B, R[A], R[C], R[A+1], Template, C)`.
+
+#### Design Decision: Why One Extension Opcode?
+
+Three alternatives were evaluated during the boundary cleanup:
+
+1. **Per-feature language opcodes** (e.g., `OP_RT_SPREAD_OBJ`, `OP_RT_DEF_GETTER`, `OP_RT_EVAL_CLASS`) — Rejected because each opcode couples the VM to one language. A Python frontend does not need `OP_RT_EVAL_CLASS`; a Ruby frontend does not need `OP_RT_SPREAD_OBJ`. This was the original design and led to 13 JS-specific opcodes accumulating in the VM's opcode table — a pattern explicitly identified as architectural drift.
+
+2. **Multiple generic extension opcodes** (e.g., `OP_RT_EXT1` through `OP_RT_EXT8`) — Rejected as unnecessary complexity. One entry point with a sub-opcode byte provides 256 extension slots per language, which is more than sufficient. Multiple entry points add dispatch overhead without adding expressiveness.
+
+3. **Single `OP_RT_EXT` with sub-opcode dispatch** — Chosen. The VM performs one virtual dispatch to `ExtendedOperation`, passing the sub-opcode ID. The runtime's `case` statement on sub-opcode IDs is compiled to a jump table by FPC — effectively zero overhead beyond the single virtual call. The sub-opcode constants live in the language's compiler unit, invisible to the VM.
+
+#### GocciaScript Sub-opcodes
+
+GocciaScript defines its sub-opcodes in `Goccia.Compiler.ExtOps.pas`:
+
+| Sub-opcode | ID | Description |
+|------------|----|-------------|
+| `GOCCIA_EXT_SPREAD_OBJ` | 1 | Spread object properties into a target record |
+| `GOCCIA_EXT_OBJ_REST` | 2 | Object rest destructuring (collect remaining properties) |
+| `GOCCIA_EXT_FINALIZE_ENUM` | 3 | Finalize enum value (freeze, set up iterator) |
+| `GOCCIA_EXT_DEF_GETTER` | 4 | Define getter on blueprint |
+| `GOCCIA_EXT_DEF_SETTER` | 5 | Define setter on blueprint |
+| `GOCCIA_EXT_DEF_STATIC_GETTER` | 6 | Define static getter on class |
+| `GOCCIA_EXT_DEF_STATIC_SETTER` | 7 | Define static setter on class |
+| `GOCCIA_EXT_REQUIRE_OBJECT` | 8 | Require object-coercible value (throw TypeError on null/undefined) |
+| `GOCCIA_EXT_EVAL_CLASS` | 9 | Evaluate complex class definition (temporary bridge, see [Current State](#current-state-and-bridge-architecture)) |
+| `GOCCIA_EXT_THROW_TYPE_ERROR` | 10 | Throw TypeError with message from constant pool |
+| `GOCCIA_EXT_SUPER_GET` | 11 | Super method lookup in class hierarchy |
+| `GOCCIA_EXT_SPREAD` | 12 | Spread iterable into array |
+| `GOCCIA_EXT_REQUIRE_ITERABLE` | 13 | Require iterable value (throw TypeError if not iterable) |
+
+A future C# frontend would define its own sub-opcode constants (e.g., `CSHARP_EXT_LINQ_SELECT`, `CSHARP_EXT_ASYNC_STATE_MACHINE`) and its own `ExtendedOperation` handler. The VM itself never interprets the sub-opcode IDs — they are opaque bytes.
+
+### Record Property Flags
+
+`TSouffleRecordEntry` carries a `Flags: Byte` field with per-entry property metadata:
+
+- **Bit 0** (`SOUFFLE_PROP_WRITABLE`): Can this entry be reassigned? Default: 1 (writable)
+- **Bit 1** (`SOUFFLE_PROP_CONFIGURABLE`): Can this entry be deleted/redefined? Default: 1 (configurable)
+
+The per-property flag is the fundamental primitive. Bulk operations (freeze, seal) are derived from it.
+
+#### Per-Property Primitives
+
+| Method | Description |
+|--------|-------------|
+| `PutWithFlags(key, value, flags)` | Create or update a property with explicit flags |
+| `SetEntryFlags(key, flags)` | Modify flags on an existing property |
+| `GetEntryFlags(key)` | Read flags from an existing property |
+| `PutChecked(key, value)` | Write that respects the writable flag (silently no-ops if non-writable) |
+| `DeleteChecked(key)` | Delete that respects the configurable flag (silently no-ops if non-configurable) |
+| `PreventExtensions` | Stop new properties from being added to the record |
+
+`OP_RECORD_SET` in the VM dispatch uses `PutChecked`. `OP_RECORD_DELETE` uses `DeleteChecked`. These enforce per-property flags without runtime dispatch.
+
+#### Derived Operations
+
+Bulk operations like freeze and seal are built from the per-property primitives:
+
+```text
+Freeze            = for each entry: SetEntryFlags(key, 0) + PreventExtensions
+Seal              = for each entry: SetEntryFlags(key, flags & ~CONFIGURABLE) + PreventExtensions
+PreventExtensions = just set the extensibility flag (no per-property changes)
+```
+
+`TSouffleRecord.Freeze` exists as a convenience method that implements the first pattern. Language runtimes call it (or compose their own variant from the primitives) — there is no freeze opcode. JavaScript's `Object.freeze`, `Object.seal`, and `Object.preventExtensions` all reduce to different combinations of `SetEntryFlags` and `PreventExtensions`.
+
+#### Design Decision: Per-Property Flags as Tier 1
+
+Property mutability (writable/configurable) is a **Tier 1 concern** — every language with objects needs per-property control over mutability. The flags live directly on `TSouffleRecordEntry` and are enforced by the VM's `PutChecked`/`DeleteChecked` — no runtime dispatch needed. This is universal: JavaScript's `Object.defineProperty`, Ruby's `.freeze`, C#'s `readonly`, and Python's `__slots__` all reduce to per-property mutability control.
+
+Property **visibility** (public/private/protected) and **accessor semantics** (getter/setter invocation) are **Tier 2 concerns** — these vary fundamentally across languages. JavaScript uses private name mangling with `#field`, C# uses CLR visibility metadata, Ruby uses `attr_reader`/`attr_writer`. These remain in the runtime operations layer.
+
+An earlier design included a dedicated `OP_RECORD_FREEZE` opcode for bulk freezing. This was removed because:
+1. The per-property flag primitive (`SetEntryFlags`) is the real building block — freezing is derived
+2. Freezing semantics differ across languages (JS freezes shallowly at one level, Ruby freezes differently, some languages don't support freezing)
+3. A bulk operation is trivially composed from per-property calls by the runtime — no opcode needed
+
+### Spread Calling
+
+Function call spread (`fn(...args)`) is handled via a **flag bit** on the existing invocation opcodes, not via dedicated spread opcodes:
+
+- `OP_RT_CALL` and `OP_RT_CALL_METHOD` encode spread mode in **C flag bit 0**
+- When bit 0 is set: register B holds the arguments array (a `TSouffleArray`), and the runtime's `InvokeWithSpread` unpacks and invokes
+- When bit 0 is clear: B holds the argument count, and arguments are in consecutive registers starting at `R[Base + A + 1]`
+
+#### Design Decision: Flags Over Separate Opcodes
+
+An earlier design included `OP_RT_CALL_SPREAD` and `OP_RT_CALL_METHOD_SPREAD` as separate opcodes. These were removed and consolidated into the C flags byte on the existing opcodes. The rationale:
+
+- Spread is a **modifier** on an existing operation (calling), not a fundamentally different operation
+- Adding separate opcodes doubles the invocation opcode count (2→4) without adding expressiveness
+- The C byte was previously unused in these opcodes, making it free to repurpose
+- The same pattern (flag bits for mode selection) is used by other VMs (Lua's `OP_CALL` uses flags for vararg passing)
 
 ### Blueprint Compilation
 
@@ -132,7 +260,7 @@ RT_SET_GLOBAL    "Dog", r0                   ; register globally
 
 The `IsSimpleClass` function in `Goccia.Compiler.Statements.pas` performs the complexity detection. At runtime, `TGocciaRuntimeOperations.Construct` walks the `TSouffleBlueprint` super blueprint chain to find inherited constructors, and `GetProperty` on blueprint-backed records checks dynamic properties first, then walks the blueprint's method record hierarchy.
 
-**Complex classes** (with getters, setters, static properties, private members, decorators, or computed properties) are deferred to the interpreter via `FPendingClasses`. The backend evaluates them using the GocciaScript evaluator to produce proper `TGocciaClassValue` objects, which are then registered as wrapped globals. This ensures full language feature support while the VM blueprint opcodes handle the common fast path.
+**Complex classes** (with getters, setters, static properties, private members, decorators, or computed properties) are compiled using a mix of blueprint opcodes and `OP_RT_EXT` sub-opcodes for language-specific features (e.g., `GOCCIA_EXT_DEF_GETTER`, `GOCCIA_EXT_DEF_SETTER`, `GOCCIA_EXT_EVAL_CLASS`). Classes that cannot be fully compiled to bytecode are deferred to the interpreter via `FPendingClasses` and evaluated through `GOCCIA_EXT_EVAL_CLASS`.
 
 ## Instruction Encoding
 
@@ -670,7 +798,90 @@ The `ScriptLoader`, `TestRunner`, and `BenchmarkRunner` all support switching be
 
 When `--emit` is used without a path, the output filename is derived from the input (e.g., `example.js` → `example.sbc`).
 
-## GocciaScript Runtime Bridge
+## Current State and Bridge Architecture
+
+### What Works Natively
+
+The following features execute entirely within the Souffle VM without crossing the language boundary:
+
+- **Primitives**: Integer and float arithmetic, string concatenation, boolean logic, nil semantics (with null/undefined distinction via flags)
+- **Variables**: `const`/`let` declarations with compile-time const enforcement, proper scoping, closures with upvalue capture/close
+- **Compound types**: Array/record literals, property access, indexed access, `delete`, spread, rest destructuring
+- **Control flow**: If/else, ternary, logical and/or, nullish coalescing, short-circuit evaluation
+- **Functions**: Arrow functions, shorthand methods, default parameters, rest parameters, variadic argument packing
+- **Simple classes**: Constructor + named methods compiled to blueprint opcodes (`OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_RECORD_SET`, `OP_INSTANTIATE`)
+- **Exception handling**: try/catch/finally, throw, handler-table model
+- **Delegates**: Array prototype methods (`push`, `pop`, `join`) dispatch within the VM via delegate chain — zero wrapping
+- **Global built-ins**: All interpreter-side built-ins (`console`, `Math`, `JSON`, `Object`, `Array`, etc.) are available as wrapped values
+
+### What Uses Bridge Code
+
+The bridge layer is the set of components in `TGocciaRuntimeOperations` that convert between `TSouffleValue` and `TGocciaValue` to delegate work to the GocciaScript interpreter/evaluator. This layer currently exists because the runtime operations were originally implemented by unwrapping Souffle values to GocciaScript values, calling the existing evaluator, and wrapping the result back. The bridge includes:
+
+| Component | Role | Size |
+|-----------|------|------|
+| `UnwrapToGocciaValue` / `ToSouffleValue` | Value conversion between the two type systems | ~200 LOC |
+| `TGocciaSouffleProxy` | Wraps Souffle compound types as `TGocciaValue` for interpreter consumption | ~100 LOC |
+| `TGocciaWrappedValue` | Wraps `TGocciaValue` as Souffle heap object for VM register storage | ~50 LOC |
+| `TGocciaSouffleClosureBridge` | Wraps `TSouffleClosure` as `TGocciaFunctionBase` for interpreter callbacks | ~80 LOC |
+| `FClosureBridgeCache` / `FArrayBridgeCache` | Caches to avoid re-wrapping the same objects | ~30 LOC |
+| `CreateBridgedContext` | Maps VM globals to an interpreter scope for evaluator calls | ~80 LOC |
+| `FPendingClasses` | Deferred class definitions that require interpreter evaluation | ~50 LOC |
+
+The bridge is currently used by these runtime operations:
+
+- **`Invoke`** / **`Construct`**: For non-closure callables (wrapped `TGocciaFunctionBase`, `TGocciaClassValue`), unwraps the callee, converts arguments, calls via the GocciaScript evaluator, wraps the result
+- **`GetProperty`** / **`SetProperty`**: For wrapped values (classes, promises, symbols, etc.), unwraps the target, delegates to `TGocciaValue.GetProperty`/`SetProperty`
+- **`IsInstance`** / **`TypeOf`**: For wrapped values, delegates to the GocciaScript type system
+- **`ExtendedOperation` sub-ops**: All 13 `GOCCIA_EXT_*` sub-opcodes delegate to GocciaScript evaluator methods
+- **Complex class evaluation**: `GOCCIA_EXT_EVAL_CLASS` bootstraps an interpreter scope from VM globals and evaluates the class AST
+
+### The Unwrap-Delegate-Wrap Cycle
+
+The current runtime follows this pattern for most Tier 2 operations:
+
+```text
+1. VM calls RuntimeOps.SomeOperation(souffleValue)     [Tier 2 dispatch]
+2. RuntimeOps converts: gocciaValue := UnwrapToGocciaValue(souffleValue)  [bridge]
+3. RuntimeOps delegates: result := gocciaValue.SomeMethod(args)          [evaluator]
+4. RuntimeOps converts: souffleResult := ToSouffleValue(result)          [bridge]
+5. VM stores souffleResult in register                                   [Tier 1]
+```
+
+This cycle has three costs:
+- **Allocation**: Each unwrap/wrap may allocate proxy or wrapper objects
+- **Cache pollution**: Two parallel value hierarchies active simultaneously
+- **Architectural coupling**: The runtime imports `Goccia.Evaluator`, `Goccia.Interpreter`, and `Goccia.Engine` — binding the entire GocciaScript interpreter into the bytecode path
+
+### Known Bridge Limitations
+
+1. **`TSouffleBlueprint` unwrapping**: When a complex class extends a simple class (compiled to a blueprint), `UnwrapToGocciaValue` does not have specific handling for `TSouffleBlueprint` objects. They unwrap as `undefined`, causing "Superclass is not a class" errors at the interpreter level.
+
+2. **No incremental fix path**: Extending `UnwrapToGocciaValue` to handle more types (blueprints, delegates, etc.) adds more bridge code, contradicting the goal of eliminating it. Each fix increases coupling rather than reducing it.
+
+3. **Two GC systems**: Bridge objects must be tracked by both the Souffle GC (as `TSouffleHeapObject`) and the GocciaScript GC (as `TGocciaValue`), complicating memory management.
+
+### Target Architecture
+
+The long-term goal is to **eliminate the bridge entirely** by having `TGocciaRuntimeOperations` implement JavaScript semantics directly on Souffle types (`TSouffleValue`, `TSouffleArray`, `TSouffleRecord`, `TSouffleBlueprint`). The target:
+
+```text
+1. VM calls RuntimeOps.SomeOperation(souffleValue)     [Tier 2 dispatch]
+2. RuntimeOps operates directly on souffleValue         [native Souffle types]
+3. VM stores result in register                         [Tier 1]
+```
+
+This requires a ground-up rewrite of `TGocciaRuntimeOperations` — not incremental patching of the bridge. The rewrite would:
+
+- Remove all `UnwrapToGocciaValue` / `ToSouffleValue` conversions
+- Implement prototype chain walking on `TSouffleRecord` delegate chains
+- Implement type coercion (ToPrimitive, ToString, ToNumber) natively on `TSouffleValue`
+- Compile all class features (getters, setters, statics, private members, decorators) to Tier 1 + Tier 2 opcodes, eliminating `FPendingClasses`
+- Implement all built-in methods as `TSouffleNativeFunction` delegates operating on Souffle types
+
+Until the rewrite, the bridge code is functional and correct for the features it supports. The interpreter path (`--mode=interpreted`) remains the fully-featured execution backend.
+
+## GocciaScript Runtime Bridge (Current Implementation)
 
 `TGocciaSouffleBackend` (`Goccia.Engine.Backend.pas`) bridges GocciaScript to the Souffle VM:
 
@@ -807,49 +1018,96 @@ Float constant deduplication uses a raw IEEE 754 bit-pattern check (`FloatBitsAr
 
 ## Responsibility Boundaries
 
-The bytecode execution pipeline has four distinct layers with strict boundaries. Mixing responsibilities across layers is an anti-pattern that compromises the VM's generality.
+The bytecode execution pipeline has four distinct layers with strict boundaries. Mixing responsibilities across layers is an anti-pattern that compromises the VM's generality. These boundaries were established through a systematic audit that removed 13 JS-specific opcodes and 16 JS-specific abstract methods from the Souffle VM.
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
 │ Interpreter (Goccia.Evaluator*.pas)                          │
 │   Direct AST execution — not involved in bytecode path       │
 │   Owns: scope chain walking, evaluator purity, `this` binding│
+│   Note: Currently still invoked by bridge code for complex   │
+│         class evaluation and some built-in operations.        │
+│         Target: complete elimination from bytecode path.      │
 └──────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────┐
 │ Compiler (Goccia.Compiler*.pas)                              │
 │   AST → Souffle bytecode translation                         │
 │   Owns: desugaring, constant folding, OP_LOAD_NIL flags,    │
-│         simple-vs-complex class detection, type hint emission │
+│         simple-vs-complex class detection, type hint emission,│
+│         const enforcement (compile-time), OP_RT_EXT sub-ops  │
 │   Boundary: emits only Souffle opcodes; no TGocciaValue refs │
+│   Note: Extension sub-opcodes in Goccia.Compiler.ExtOps.pas │
 └──────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────┐
 │ Runtime (Goccia.Runtime.Operations.pas)                      │
 │   Language-specific callbacks for OP_RT_* opcodes            │
 │   Owns: null/undefined flag interpretation, prototype chains,│
 │         type coercion, property descriptors, Symbol keys,    │
-│         TSouffleValue ↔ TGocciaValue bridging                │
+│         const enforcement (runtime, global scope),           │
+│         ExtendedOperation dispatch for GOCCIA_EXT_* sub-ops  │
+│   Current: bridges TSouffleValue ↔ TGocciaValue (see above)  │
+│   Target: implements JS semantics directly on Souffle types  │
 │   Boundary: implements TSouffleRuntimeOperations interface   │
 └──────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────┐
 │ VM (souffle/*.pas)                                           │
 │   Opcode dispatch, register file, call frames, GC            │
 │   Owns: delegate chain lookup, upvalue management,           │
-│         exception handler stack, native function invocation   │
+│         exception handler stack, native function invocation,  │
+│         record property flag enforcement (PutChecked/DeleteChecked) │
 │   Boundary: NO language imports (Goccia.* forbidden)         │
 │             NO language keywords in opcodes                   │
 │             All absent values are svkNil (flags=0)            │
+│             ExtendedOperation dispatches opaque sub-op bytes  │
 └──────────────────────────────────────────────────────────────┘
 ```
 
+### What Lives Where
+
+The following table clarifies where specific concerns are handled:
+
+| Concern | Layer | Rationale |
+|---------|-------|-----------|
+| Property mutability (writable/configurable) | VM (Tier 1) | Per-property flags are the fundamental primitive; enforced by `PutChecked`/`DeleteChecked` |
+| Property visibility (public/private) | Runtime (Tier 2) | Language-specific semantics |
+| Accessor invocation (getter/setter) | Runtime (Tier 2) | At the VM level, getters, setters, and methods are all functions — the difference is in how they are invoked. The runtime decides whether a property access triggers a getter call. |
+| `null` vs `undefined` distinction | Runtime (Tier 2) | The VM only knows `svkNil` with a flags byte. GocciaScript interprets flags=0 as `undefined` and flags=1 as `null`. Other languages may not have this distinction. |
+| Prototype chain walking | Runtime (Tier 2), VM delegate chain (Tier 1) | The VM's delegate chain provides O(depth) method lookup for native records. Full prototype semantics (Symbol keys, accessor invocation, `Object.getPrototypeOf`) are in the runtime. |
+| `const` enforcement (locals) | Compiler | Emit `OP_RT_EXT(GOCCIA_EXT_THROW_TYPE_ERROR)` at assignment sites for known-const locals/upvalues. Caught at compile time. |
+| `const` enforcement (globals) | Runtime | `FConstGlobals` dictionary + `SetGlobal` check. Caught at runtime because globals are shared across modules. |
+| Class compilation (simple) | Compiler → VM | Blueprint opcodes: `OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_RECORD_SET`, `OP_INSTANTIATE` |
+| Class compilation (complex) | Compiler → Runtime → Interpreter | `GOCCIA_EXT_EVAL_CLASS` defers to the interpreter (bridge code, to be eliminated) |
+| Built-in methods (native) | VM delegates | `TSouffleNativeFunction` in delegate records — zero language boundary crossing |
+| Built-in methods (wrapped) | Runtime → Interpreter | Wrapped `TGocciaValue` methods (bridge code, to be eliminated) |
+
 ### Anti-patterns
+
+These anti-patterns were identified during the boundary cleanup and are enforced going forward:
 
 | Anti-pattern | Why it's wrong | Correct approach |
 |-------------|---------------|-----------------|
 | VM opcode named after a language keyword (e.g., `OP_LOAD_UNDEFINED`) | Couples VM to one language; other frontends don't have "undefined" | Use `OP_LOAD_NIL` with flags; runtime interprets flags |
-| VM checking `Flags` to decide `null` vs `undefined` semantics | The VM should not know what the flags mean | Runtime interprets flags in `UnwrapToGocciaValue` |
+| VM checking `Flags` to decide `null` vs `undefined` semantics | The VM should not know what the flags mean | Runtime interprets flags in its value handling |
 | Compiler importing `TGocciaValue` or `TGocciaScope` | Compiler emits bytecode, not runtime objects | Compiler works with `TGocciaCompilationContext` and `TSouffleFunctionTemplate` |
 | Runtime modifying VM internals (register file, IP) | The VM is a black box to the runtime | Runtime returns `TSouffleValue`; VM handles register storage |
 | Souffle unit importing `Goccia.*` | Breaks VM independence; prevents extraction to a separate project | All cross-boundary ops go through `TSouffleRuntimeOperations` |
+| Adding JS-specific opcodes to Tier 2 (e.g., `OP_RT_SPREAD_OBJ`) | Pollutes the VM's opcode space with one language's concepts | Use `OP_RT_EXT` with language-specific sub-opcode constants |
+| Extending bridge code to handle more types | Each fix increases coupling rather than reducing it | Rewrite the runtime to operate directly on Souffle types |
+| Adding language-specific methods to `TSouffleRuntimeOperations` abstract class | Forces all language frontends to implement operations they don't need | Use `ExtendedOperation` for language-specific features |
+
+### Boundary Cleanup History
+
+The current boundary was established through a systematic multi-session process:
+
+1. **Audit** — Identified 13 JS-specific Tier 2 opcodes (`OP_RT_SPREAD`, `OP_RT_SPREAD_OBJ`, `OP_RT_OBJ_REST`, `OP_RT_EVAL_CLASS`, `OP_RT_FINALIZE_ENUM`, `OP_RT_SUPER_GET`, `OP_RT_THROW_TYPE_ERROR`, `OP_RT_REQUIRE_OBJECT`, `OP_RT_REQUIRE_ITERABLE`, `OP_RT_DEF_GETTER`, `OP_RT_DEF_SETTER`, `OP_RT_DEF_STATIC_GETTER`, `OP_RT_DEF_STATIC_SETTER`) and 16 JS-specific abstract methods on `TSouffleRuntimeOperations`.
+
+2. **Mechanism selection** — Evaluated three alternatives (per-feature opcodes, multiple extension opcodes, single extension opcode). Chose single `OP_RT_EXT` with sub-opcode dispatch. See [OP_RT_EXT](#design-decision-why-one-extension-opcode) for the rationale.
+
+3. **Removal** — All 13 opcodes and 16 abstract methods were removed from the Souffle VM. The JS-specific functionality was preserved as private methods on `TGocciaRuntimeOperations`, dispatched via `ExtendedOperation`. The VM dispatch loop, compiler, and runtime were updated in a coordinated change.
+
+4. **Consolidation** — Separate spread opcodes (`OP_RT_CALL_SPREAD`, `OP_RT_CALL_METHOD_SPREAD`) were consolidated into the C flags byte of `OP_RT_CALL`/`OP_RT_CALL_METHOD`. `OP_RECORD_FREEZE` was removed (freezing is a `TSouffleRecord` method, not an opcode). `OP_UNPACK` was made fully Tier 1 by inlining the array rest logic.
+
+5. **Verification** — After cleanup: Tier 1 has 44 language-agnostic opcodes, Tier 2 has 44 runtime-dispatched opcodes + 1 extension opcode. The `souffle/` directory has zero `Goccia.*` imports. The abstract interface has 45 generic methods + 1 extension entry point.
 
 ### NaN/Infinity Rationale
 
@@ -859,16 +1117,87 @@ IEEE 754 floating-point is enabled at the FreePascal compiler level (`SetExcepti
 - The interpreter's `TGocciaNumberLiteralValue` stores real IEEE 754 `NaN`/`Infinity` Doubles directly
 - Language-specific NaN/Infinity semantics (e.g., `NaN !== NaN`, `typeof NaN === "number"`) are handled by the evaluator/runtime, not the VM
 
+## Souffle VM as a Standalone Project
+
+Souffle is designed to be extracted from the GocciaScript repository as an independent project. This is not hypothetical — it is a core architectural constraint that drives all design decisions.
+
+### Independence Guarantee
+
+The `souffle/` directory contains a self-contained bytecode VM with zero knowledge of any specific programming language:
+
+- **Zero language imports**: No `Goccia.*` units, no `uses` clauses referencing the host language
+- **Generic value system**: `TSouffleValue` represents values without language-specific type tags
+- **Abstract runtime interface**: `TSouffleRuntimeOperations` is the sole injection point for language semantics
+- **Own GC**: `Souffle.GarbageCollector.pas` manages Souffle heap objects independently
+- **Portable binary format**: `.sbc` files are self-describing (runtime tag, version, debug info)
+
+### Multi-Frontend Vision
+
+The architecture supports compiling multiple languages to the same bytecode:
+
+```text
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│ GocciaScript │  │    Boo      │  │    C#       │  │   Ruby-like │
+│ (ES subset)  │  │             │  │             │  │             │
+└──────┬───────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘
+       │                 │                │                │
+  Compiler          Compiler         Compiler         Compiler
+       │                 │                │                │
+       ▼                 ▼                ▼                ▼
+┌──────────────────────────────────────────────────────────────┐
+│              Souffle Bytecode (.sbc)                          │
+│  Same instruction set, same encoding, same module format     │
+└────────────────────────────┬─────────────────────────────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+    ┌──────────────┐  ┌──────────┐  ┌──────────────┐
+    │  Souffle VM   │  │  WASM    │  │  Native JIT  │
+    │  (FreePascal) │  │  Backend │  │  (future)    │
+    └──────────────┘  └──────────┘  └──────────────┘
+```
+
+Each frontend provides:
+1. **A compiler** — Translates its AST to `TSouffleBytecodeModule`
+2. **A runtime** — Implements `TSouffleRuntimeOperations` with that language's semantics
+3. **Sub-opcodes** — Defines `LANGUAGE_EXT_*` constants for `OP_RT_EXT` dispatch
+
+The VM provides:
+1. **Execution** — Dispatch loop, register file, call frames, exception handling
+2. **Compound types** — Arrays, records, blueprints (usable by any language)
+3. **GC** — Mark-and-sweep for heap objects
+4. **Delegates** — Method dispatch via delegate chains (any language can populate)
+
+### What Makes This Possible
+
+The design constraints that enable multi-frontend use:
+
+| Constraint | Enforcement |
+|-----------|-------------|
+| No language keywords in opcodes | `OP_LOAD_NIL` not `OP_LOAD_UNDEFINED` |
+| Flags are opaque bytes | VM stores and compares them; runtime interprets them |
+| No language-specific abstract methods | 45 generic methods; language extensions via `ExtendedOperation` |
+| Record property flags are universal | Writable/configurable — every OOP language needs these |
+| Getters, setters, methods are all functions | No accessor-specific opcodes; the runtime decides invocation semantics |
+| Blueprint methods are just records | `OP_RECORD_SET` on a blueprint stores to its method record; no visibility opcodes |
+| Runtime tag on modules | `"goccia-js"`, `"boo"`, `"csharp"` — loader rejects mismatches |
+
 ## Design Principles
 
-1. **Language-agnostic VM** — The VM knows about 5 value kinds and generic operations. All language semantics live in the runtime operations layer.
+These principles emerged from four planning sessions and a systematic boundary cleanup:
 
-2. **Compiler-side desugaring** — Language-specific features (classes, nullish coalescing, template literals) are compiled into sequences of generic VM instructions. The compiler makes semantic choices, not the VM.
+1. **Language-agnostic VM** — The VM knows about 6 value kinds and generic operations. All language semantics live in the runtime operations layer. The litmus test: *"Would a Boo, C#, or Ruby frontend need this opcode/method?"* If not, it belongs in `OP_RT_EXT` or the language's runtime, not the VM.
 
-3. **Self-contained value system** — `TSouffleValue` is independent of `TGocciaValue`. Bridge conversions happen at the runtime operations boundary, keeping the VM free of GocciaScript dependencies.
+2. **Compiler-side desugaring** — Language-specific features (classes, nullish coalescing, template literals, object spread) are compiled into sequences of generic VM instructions or `OP_RT_EXT` sub-opcodes. The compiler makes semantic choices, not the VM.
 
-4. **Minimal opcode surface** — New language features should be expressible using existing Tier 1 + Tier 2 opcodes. Adding a new Tier 2 opcode is acceptable only when no combination of existing operations can express the semantics efficiently.
+3. **Self-contained value system** — `TSouffleValue` is independent of `TGocciaValue`. The current bridge layer converts between them, but the target architecture operates directly on Souffle types. No language-specific value types should leak into the VM layer.
 
-5. **Zero-overhead abstraction boundary** — The runtime tag on modules ensures type safety (a module compiled for one runtime cannot be loaded by another), but the actual dispatch is a single virtual method call per Tier 2 instruction.
+4. **Minimal opcode surface** — New language features should be expressible using existing Tier 1 + Tier 2 opcodes. Adding a new Tier 2 opcode to the abstract interface is acceptable only when no combination of existing operations can express the semantics efficiently and the operation is **universally useful across languages**. Language-specific operations use `OP_RT_EXT` sub-opcodes.
 
-6. **No language-runtime dependencies in the VM** — The `souffle/` directory must not import GocciaScript units (`Goccia.*`). All cross-boundary operations (NaN checks, type coercion, property semantics) use IEEE 754 bit-level operations or are delegated to the runtime operations interface. This ensures the VM layer remains reusable for other language frontends.
+5. **Zero-overhead abstraction boundary** — The runtime tag on modules ensures type safety (a module compiled for one runtime cannot be loaded by another), but the actual dispatch is a single virtual method call per Tier 2 instruction. `OP_RT_EXT` adds one more virtual call for sub-opcode dispatch, but the runtime's `case` statement is compiled to a jump table.
+
+6. **No language-runtime dependencies in the VM** — The `souffle/` directory must not import GocciaScript units (`Goccia.*`). All cross-boundary operations (NaN checks, type coercion, property semantics) use IEEE 754 bit-level operations or are delegated to the runtime operations interface. This ensures the VM layer remains extractable as a standalone project.
+
+7. **Tier 1 is universal, Tier 2 is pluggable** — Tier 1 opcodes have fixed semantics that every language needs (load/store, control flow, closures, arrays, records, blueprints, exceptions). Tier 2 opcodes delegate to an abstract interface that each language implements differently. The boundary between them is: *"Does the operation have one correct implementation, or does it depend on the language?"*
+
+8. **Properties over opcodes for language-specific VM features** — When the VM needs to expose a capability that languages use differently (record freezing, property flags), it provides a method or data field on the compound type rather than a dedicated opcode. This keeps the opcode table small and the API flexible.

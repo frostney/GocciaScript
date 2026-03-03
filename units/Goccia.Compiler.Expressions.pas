@@ -894,7 +894,7 @@ begin
       begin
         ArgsReg := ACtx.Scope.AllocateRegister;
         CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
-        EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD_SPREAD, BaseReg, ArgsReg, 0));
+        EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, ArgsReg, 1));
         ACtx.Scope.FreeRegister;
       end
       else
@@ -923,7 +923,7 @@ begin
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
-      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_SPREAD, BaseReg, ArgsReg, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL, BaseReg, ArgsReg, 1));
       ACtx.Scope.FreeRegister;
     end
     else

@@ -146,7 +146,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Souffle Upvalue | `Souffle.VM.Upvalue.pas` | `TSouffleUpvalue` — open (register pointer) or closed (captured value) |
 | Souffle Call Frame | `Souffle.VM.CallFrame.pas` | `TSouffleVMCallFrame`, `TSouffleCallStack` |
 | Souffle Exception | `Souffle.VM.Exception.pas` | `TSouffleHandlerStack`, `ESouffleThrow` — handler-table exception model |
-| Souffle Runtime Ops | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` — abstract interface for language-specific semantics |
+| Souffle Runtime Ops | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` — 45-method abstract interface for language-specific semantics, plus `ExtendedOperation` for sub-opcode dispatch |
 | Souffle GC | `Souffle.GarbageCollector.pas` | Mark-and-sweep GC for `TSouffleHeapObject` instances |
 | Souffle Heap | `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleString`, heap kind constants |
 | GocciaScript Backend | `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — bridges GocciaScript engine to Souffle VM |
@@ -156,9 +156,10 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Compiler Context | `Goccia.Compiler.Context.pas` | `TGocciaCompilationContext` — compilation state passed through sub-units |
 | Compiler Scope | `Goccia.Compiler.Scope.pas` | `TGocciaCompilerScope` — lexical scope tracking, local/upvalue resolution, type hints (`TSouffleLocalType`) |
 | Compiler Constant Folding | `Goccia.Compiler.ConstantFolding.pas` | Compile-time constant folding for arithmetic and comparison expressions |
-| GocciaScript Runtime | `Goccia.Runtime.Operations.pas` | `TGocciaRuntimeOperations` — GocciaScript semantics for Souffle VM |
+| Compiler Extension Ops | `Goccia.Compiler.ExtOps.pas` | GocciaScript-specific sub-opcode constants (`GOCCIA_EXT_*`) for `OP_RT_EXT` dispatch |
+| GocciaScript Runtime | `Goccia.Runtime.Operations.pas` | `TGocciaRuntimeOperations` — GocciaScript semantics for Souffle VM, `ExtendedOperation` handler |
 
-**Souffle VM known limitations:** Iteration (`GetIterator`, `IteratorNext`, `SpreadInto`), module imports (`ImportModule`), and async/await (`AwaitValue`) are currently stubbed in `TGocciaRuntimeOperations`. `.sbc` binary format uses native endianness (not yet portable). ABC-encoded instructions limit constant pool references to 255 per prototype. See [docs/souffle-vm.md § Known Limitations](docs/souffle-vm.md#known-limitations) for the full list.
+**Souffle VM known limitations:** Module imports (`ImportModule`) and async/await (`AwaitValue`) delegate to the GocciaScript evaluator through bridge code. Complex class compilation still defers to the interpreter via `FPendingClasses` / `GOCCIA_EXT_EVAL_CLASS`. `.sbc` binary format uses native endianness (not yet portable). ABC-encoded instructions limit constant pool references to 255 per prototype. See [docs/souffle-vm.md § Known Limitations](docs/souffle-vm.md#known-limitations) for the full list.
 
 **Souffle VM design rules:**
 - The `souffle/` directory must not import `Goccia.*` units — all GocciaScript dependencies live in the bridge files (`Goccia.Engine.Backend.pas`, `Goccia.Runtime.Operations.pas`, `Goccia.Compiler.pas`, and `Goccia.Compiler.*.pas` sub-units).
@@ -166,8 +167,10 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 - **Typed local variables** — The compiler infers `TSouffleLocalType` hints (`sltUntyped`, `sltInteger`, `sltFloat`, `sltBoolean`, `sltString`, `sltReference`) from literal initializers and stores them on `TSouffleFunctionTemplate`. Typed load/store opcodes (`OP_GET_LOCAL_INT`, `OP_SET_LOCAL_FLOAT`, etc.) are emitted for known-type locals. At runtime these are functionally identical to generic `OP_GET_LOCAL`/`OP_SET_LOCAL` but carry type information for future WASM/JIT use.
 - **Simple class compilation** — Classes with only constructors and named methods are compiled to VM blueprint opcodes (`OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_RECORD_SET`, `OP_INSTANTIATE`). Complex classes (getters, setters, statics, private members, decorators) are deferred to the interpreter via `FPendingClasses`. `OP_RECORD_SET` is overloaded: when the target is a `TSouffleBlueprint`, it stores into `Blueprint.Methods`.
 - NaN handling in the Souffle layer uses raw IEEE 754 bit-pattern checks (`FloatBitsAreNaN`), not FPC's `Math.IsNaN`, to avoid language-runtime dependencies and AArch64 pitfalls.
-- New Tier 2 opcodes should only be added when no combination of existing opcodes can express the semantics efficiently. Language-specific features should be desugared by the compiler.
-- The `TSouffleRuntimeOperations` abstract class defines the contract between the VM and any language frontend. GocciaScript's `TGocciaRuntimeOperations` is one implementation; future frontends provide their own.
+- New Tier 2 opcodes should only be added when no combination of existing opcodes can express the semantics efficiently. Language-specific features should use `OP_RT_EXT` with sub-opcode IDs defined in the language's extension constants unit (e.g., `Goccia.Compiler.ExtOps.pas`).
+- The `TSouffleRuntimeOperations` abstract class defines the contract between the VM and any language frontend (45 generic methods + 1 `ExtendedOperation` for sub-opcode dispatch). GocciaScript's `TGocciaRuntimeOperations` is one implementation; future frontends provide their own.
+- **Spread calling** uses the C flags byte on `OP_RT_CALL` / `OP_RT_CALL_METHOD` (bit 0 = spread mode, B = args array register). No separate spread opcodes.
+- **Per-property flags** (writable, configurable) on `TSouffleRecordEntry.Flags` are the fundamental primitive. `SetEntryFlags`, `PutWithFlags`, and `PreventExtensions` are the building blocks. Bulk operations like `Freeze` (set all flags to 0 + prevent extensions) are derived convenience methods called from language runtimes — not opcodes.
 
 ## Development Workflow
 

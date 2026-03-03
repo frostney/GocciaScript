@@ -1040,14 +1040,6 @@ begin
       end;
     end;
 
-    OP_RECORD_FREEZE:
-    begin
-      A := DecodeA(AInstruction);
-      if (FRegisters[Base + A].Kind = svkReference) and
-         (FRegisters[Base + A].AsReference is TSouffleRecord) then
-        TSouffleRecord(FRegisters[Base + A].AsReference).Freeze;
-    end;
-
     OP_UNPACK:
     begin
       A := DecodeA(AInstruction);
@@ -1413,20 +1405,20 @@ begin
     OP_RT_CALL:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      if SouffleIsReference(FRegisters[Base + A]) and
+      C := DecodeC(AInstruction);
+      if C and 1 = 1 then
+        FRegisters[Base + A] := InvokeWithSpread(
+          FRegisters[Base + A], FRegisters[Base + B], SouffleNil)
+      else if SouffleIsReference(FRegisters[Base + A]) and
          Assigned(FRegisters[Base + A].AsReference) then
       begin
         if FRegisters[Base + A].AsReference is TSouffleClosure then
-        begin
           CallClosure(TSouffleClosure(FRegisters[Base + A].AsReference),
-            Base + A + 1, B, Base + A, SouffleNil);
-        end
+            Base + A + 1, B, Base + A, SouffleNil)
         else if FRegisters[Base + A].AsReference is TSouffleNativeFunction then
-        begin
           FRegisters[Base + A] := TSouffleNativeFunction(
             FRegisters[Base + A].AsReference).Invoke(
-              SouffleNil, @FRegisters[Base + A + 1], B);
-        end
+              SouffleNil, @FRegisters[Base + A + 1], B)
         else
           FRegisters[Base + A] := FRuntimeOps.Invoke(
             FRegisters[Base + A], @FRegisters[Base + A + 1], B, SouffleNil);
@@ -1440,20 +1432,20 @@ begin
     OP_RT_CALL_METHOD:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      if SouffleIsReference(FRegisters[Base + A]) and
+      C := DecodeC(AInstruction);
+      if C and 1 = 1 then
+        FRegisters[Base + A] := InvokeWithSpread(
+          FRegisters[Base + A], FRegisters[Base + B], FRegisters[Base + A - 1])
+      else if SouffleIsReference(FRegisters[Base + A]) and
          Assigned(FRegisters[Base + A].AsReference) then
       begin
         if FRegisters[Base + A].AsReference is TSouffleClosure then
-        begin
           CallClosure(TSouffleClosure(FRegisters[Base + A].AsReference),
-            Base + A + 1, B, Base + A, FRegisters[Base + A - 1]);
-        end
+            Base + A + 1, B, Base + A, FRegisters[Base + A - 1])
         else if FRegisters[Base + A].AsReference is TSouffleNativeFunction then
-        begin
           FRegisters[Base + A] := TSouffleNativeFunction(
             FRegisters[Base + A].AsReference).Invoke(
-              FRegisters[Base + A - 1], @FRegisters[Base + A + 1], B);
-        end
+              FRegisters[Base + A - 1], @FRegisters[Base + A + 1], B)
         else
           FRegisters[Base + A] := FRuntimeOps.Invoke(
             FRegisters[Base + A], @FRegisters[Base + A + 1], B,
@@ -1463,22 +1455,6 @@ begin
         FRegisters[Base + A] := FRuntimeOps.Invoke(
           FRegisters[Base + A], @FRegisters[Base + A + 1], B,
           FRegisters[Base + A - 1]);
-      if Assigned(FGC) then
-        FGC.CollectIfNeeded;
-    end;
-    OP_RT_CALL_SPREAD:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      FRegisters[Base + A] := InvokeWithSpread(
-        FRegisters[Base + A], FRegisters[Base + B], SouffleNil);
-      if Assigned(FGC) then
-        FGC.CollectIfNeeded;
-    end;
-    OP_RT_CALL_METHOD_SPREAD:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      FRegisters[Base + A] := InvokeWithSpread(
-        FRegisters[Base + A], FRegisters[Base + B], FRegisters[Base + A - 1]);
       if Assigned(FGC) then
         FGC.CollectIfNeeded;
     end;
