@@ -957,6 +957,8 @@ begin
         Result := TGocciaBoundFunctionValue(Callee).Call(Arguments, ThisValue)
       else if Callee is TGocciaClassValue then
         Result := TGocciaClassValue(Callee).Call(Arguments, ThisValue)
+      else if Callee is TGocciaFunctionBase then
+        Result := TGocciaFunctionBase(Callee).Call(Arguments, ThisValue)
       else
       begin
         ThrowTypeError(Format('%s is not a function', [Callee.TypeName]));

@@ -12,6 +12,7 @@ function TryFoldBinary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaBinaryExpression; const ADest: UInt8): Boolean;
 function TryFoldUnary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaUnaryExpression; const ADest: UInt8): Boolean;
+function IsNegativeZeroFloat(const AValue: Double): Boolean; inline;
 
 implementation
 
@@ -23,12 +24,22 @@ uses
   Goccia.Token,
   Goccia.Values.Primitives;
 
+function IsNegativeZeroFloat(const AValue: Double): Boolean; inline;
+var
+  V: Double;
+  Bytes: array[0..7] of Byte absolute V;
+begin
+  V := AValue;
+  Result := (V = 0.0) and ((Bytes[7] and $80) <> 0);
+end;
+
 procedure EmitFoldedNumber(const ACtx: TGocciaCompilationContext;
   const AValue: Double; const ADest: UInt8);
 var
   Idx: UInt16;
 begin
   if not IsNaN(AValue) and not IsInfinite(AValue)
+     and not IsNegativeZeroFloat(AValue)
      and (Frac(AValue) = 0.0) and (AValue >= -32768) and (AValue <= 32767) then
     EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, ADest, Int16(Trunc(AValue))))
   else

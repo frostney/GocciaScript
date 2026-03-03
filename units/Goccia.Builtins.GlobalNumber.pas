@@ -43,8 +43,8 @@ begin
   FBuiltinObject.DefineProperty('NaN', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.NaNValue, []));
   FBuiltinObject.DefineProperty('POSITIVE_INFINITY', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.InfinityValue, []));
   FBuiltinObject.DefineProperty('NEGATIVE_INFINITY', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.NegativeInfinityValue, []));
-  FBuiltinObject.DefineProperty('MAX_SAFE_INTEGER', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(9007199254740991), []));
-  FBuiltinObject.DefineProperty('MIN_SAFE_INTEGER', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(-9007199254740991), []));
+  FBuiltinObject.DefineProperty('MAX_SAFE_INTEGER', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(9007199254740991.0), []));
+  FBuiltinObject.DefineProperty('MIN_SAFE_INTEGER', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(-9007199254740991.0), []));
   FBuiltinObject.DefineProperty('MAX_VALUE', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(1.7976931348623157e+308), []));
   FBuiltinObject.DefineProperty('MIN_VALUE', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(5e-324), []));
   FBuiltinObject.DefineProperty('EPSILON', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(2.2204460492503131e-16), []));

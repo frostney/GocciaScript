@@ -8,6 +8,11 @@ uses
   Souffle.Heap,
   Souffle.Value;
 
+const
+  SOUFFLE_PROP_WRITABLE     = $01;
+  SOUFFLE_PROP_CONFIGURABLE = $02;
+  SOUFFLE_PROP_DEFAULT      = SOUFFLE_PROP_WRITABLE or SOUFFLE_PROP_CONFIGURABLE;
+
 type
   { Dense dynamic array of TSouffleValue — universal across languages
     (JS arrays, Python lists, Lua array part, Wren lists, WASM GC arrays) }
@@ -24,6 +29,7 @@ type
     function Get(const AIndex: Integer): TSouffleValue; inline;
     procedure Put(const AIndex: Integer; const AValue: TSouffleValue); inline;
     function Pop: TSouffleValue;
+    procedure Clear;
 
     procedure MarkReferences; override;
     function DebugString: string; override;
@@ -37,6 +43,7 @@ type
     Value: TSouffleValue;
     Hash: UInt32;
     Occupied: Boolean;
+    Flags: Byte;
   end;
 
   TSouffleBlueprint = class;
@@ -53,6 +60,7 @@ type
     FCapacity: Integer;
     FBlueprint: TSouffleBlueprint;
     FSlots: array of TSouffleValue;
+    FExtensible: Boolean;
     function HashKey(const AKey: string): UInt32;
     function FindEntry(const AKey: string; const AHash: UInt32): Integer;
     procedure Grow;
@@ -62,8 +70,16 @@ type
 
     function Get(const AKey: string; out AValue: TSouffleValue): Boolean;
     procedure Put(const AKey: string; const AValue: TSouffleValue);
+    procedure PutWithFlags(const AKey: string; const AValue: TSouffleValue;
+      const AFlags: Byte);
+    function PutChecked(const AKey: string;
+      const AValue: TSouffleValue): Boolean;
     function Delete(const AKey: string): Boolean;
+    function DeleteChecked(const AKey: string): Boolean;
     function Has(const AKey: string): Boolean;
+    function GetEntryFlags(const AKey: string): Byte;
+    function SetEntryFlags(const AKey: string; const AFlags: Byte): Boolean;
+    procedure Freeze;
 
     function GetOrderedKey(const AIndex: Integer): string; inline;
     function GetOrderedValue(const AIndex: Integer): TSouffleValue; inline;
@@ -74,8 +90,11 @@ type
     procedure MarkReferences; override;
     function DebugString: string; override;
 
+    procedure PreventExtensions; inline;
+
     property Count: Integer read FCount;
     property Blueprint: TSouffleBlueprint read FBlueprint;
+    property Extensible: Boolean read FExtensible;
   end;
 
   { Blueprint — type descriptor with method table and optional super link.
@@ -87,7 +106,17 @@ type
     FMethods: TSouffleRecord;
     FSuperBlueprint: TSouffleBlueprint;
     FPrototype: TSouffleRecord;
+    FGetters: TSouffleRecord;
+    FSetters: TSouffleRecord;
+    FStaticGetters: TSouffleRecord;
+    FStaticSetters: TSouffleRecord;
+    FStaticFields: TSouffleRecord;
     function GetPrototype: TSouffleRecord;
+    function GetGetters: TSouffleRecord;
+    function GetSetters: TSouffleRecord;
+    function GetStaticGetters: TSouffleRecord;
+    function GetStaticSetters: TSouffleRecord;
+    function GetStaticFields: TSouffleRecord;
   public
     constructor Create(const AName: string; const ASlotCount: Integer);
     destructor Destroy; override;
@@ -95,11 +124,22 @@ type
     procedure MarkReferences; override;
     function DebugString: string; override;
 
+    function HasGetters: Boolean; inline;
+    function HasSetters: Boolean; inline;
+    function HasStaticGetters: Boolean; inline;
+    function HasStaticSetters: Boolean; inline;
+    function HasStaticFields: Boolean; inline;
+
     property Name: string read FName;
     property SlotCount: Integer read FSlotCount write FSlotCount;
     property Methods: TSouffleRecord read FMethods;
     property SuperBlueprint: TSouffleBlueprint read FSuperBlueprint write FSuperBlueprint;
     property Prototype: TSouffleRecord read GetPrototype;
+    property Getters: TSouffleRecord read GetGetters;
+    property Setters: TSouffleRecord read GetSetters;
+    property StaticGetters: TSouffleRecord read GetStaticGetters;
+    property StaticSetters: TSouffleRecord read GetStaticSetters;
+    property StaticFields: TSouffleRecord read GetStaticFields;
   end;
 
 implementation
@@ -188,6 +228,15 @@ begin
   FElements[FCount] := SouffleNil;
 end;
 
+procedure TSouffleArray.Clear;
+var
+  I: Integer;
+begin
+  for I := 0 to FCount - 1 do
+    FElements[I] := SouffleNil;
+  FCount := 0;
+end;
+
 procedure TSouffleArray.MarkReferences;
 var
   I: Integer;
@@ -212,6 +261,7 @@ begin
   inherited Create(SOUFFLE_HEAP_RECORD);
   FCount := 0;
   FBlueprint := nil;
+  FExtensible := True;
   if AInitialCapacity > MIN_RECORD_CAPACITY then
     Cap := AInitialCapacity
   else
@@ -325,6 +375,7 @@ begin
     FEntries[Slot].Key := AKey;
     FEntries[Slot].Hash := Hash;
     FEntries[Slot].Occupied := True;
+    FEntries[Slot].Flags := SOUFFLE_PROP_DEFAULT;
     if FCount >= Length(FOrder) then
       SetLength(FOrder, FCount + 8);
     FOrder[FCount] := Slot;
@@ -332,6 +383,68 @@ begin
   end;
 
   FEntries[Slot].Value := AValue;
+end;
+
+procedure TSouffleRecord.PutWithFlags(const AKey: string;
+  const AValue: TSouffleValue; const AFlags: Byte);
+var
+  Hash: UInt32;
+  Slot: Integer;
+begin
+  if (FCount + 1) * 100 > FCapacity * RECORD_MAX_LOAD_FACTOR then
+    Grow;
+
+  Hash := HashKey(AKey);
+  Slot := FindEntry(AKey, Hash);
+
+  if not FEntries[Slot].Occupied then
+  begin
+    FEntries[Slot].Key := AKey;
+    FEntries[Slot].Hash := Hash;
+    FEntries[Slot].Occupied := True;
+    if FCount >= Length(FOrder) then
+      SetLength(FOrder, FCount + 8);
+    FOrder[FCount] := Slot;
+    Inc(FCount);
+  end;
+
+  FEntries[Slot].Value := AValue;
+  FEntries[Slot].Flags := AFlags;
+end;
+
+function TSouffleRecord.PutChecked(const AKey: string;
+  const AValue: TSouffleValue): Boolean;
+var
+  Hash: UInt32;
+  Slot: Integer;
+begin
+  if (FCount + 1) * 100 > FCapacity * RECORD_MAX_LOAD_FACTOR then
+    Grow;
+
+  Hash := HashKey(AKey);
+  Slot := FindEntry(AKey, Hash);
+
+  if FEntries[Slot].Occupied then
+  begin
+    if FEntries[Slot].Flags and SOUFFLE_PROP_WRITABLE = 0 then
+      Exit(False);
+    FEntries[Slot].Value := AValue;
+    Exit(True);
+  end;
+
+  if not FExtensible then
+    Exit(False);
+
+  FEntries[Slot].Key := AKey;
+  FEntries[Slot].Hash := Hash;
+  FEntries[Slot].Occupied := True;
+  FEntries[Slot].Flags := SOUFFLE_PROP_DEFAULT;
+  if FCount >= Length(FOrder) then
+    SetLength(FOrder, FCount + 8);
+  FOrder[FCount] := Slot;
+  Inc(FCount);
+  FEntries[Slot].Value := AValue;
+  Result := True;
 end;
 
 function TSouffleRecord.Delete(const AKey: string): Boolean;
@@ -365,6 +478,41 @@ begin
   Result := True;
 end;
 
+function TSouffleRecord.DeleteChecked(const AKey: string): Boolean;
+var
+  Hash: UInt32;
+  Slot, I: Integer;
+begin
+  if FCount = 0 then
+    Exit(True);
+
+  Hash := HashKey(AKey);
+  Slot := FindEntry(AKey, Hash);
+
+  if not FEntries[Slot].Occupied then
+    Exit(True);
+
+  if FEntries[Slot].Flags and SOUFFLE_PROP_CONFIGURABLE = 0 then
+    Exit(False);
+
+  FEntries[Slot].Occupied := False;
+  FEntries[Slot].Key := '';
+  FEntries[Slot].Value := SouffleNil;
+  FEntries[Slot].Flags := SOUFFLE_PROP_DEFAULT;
+
+  for I := 0 to FCount - 1 do
+  begin
+    if FOrder[I] = Slot then
+    begin
+      Move(FOrder[I + 1], FOrder[I], (FCount - I - 1) * SizeOf(Integer));
+      Dec(FCount);
+      Break;
+    end;
+  end;
+
+  Result := True;
+end;
+
 function TSouffleRecord.Has(const AKey: string): Boolean;
 var
   Hash: UInt32;
@@ -375,6 +523,51 @@ begin
   Hash := HashKey(AKey);
   Slot := FindEntry(AKey, Hash);
   Result := FEntries[Slot].Occupied;
+end;
+
+function TSouffleRecord.GetEntryFlags(const AKey: string): Byte;
+var
+  Hash: UInt32;
+  Slot: Integer;
+begin
+  if FCount = 0 then
+    Exit(SOUFFLE_PROP_DEFAULT);
+  Hash := HashKey(AKey);
+  Slot := FindEntry(AKey, Hash);
+  if not FEntries[Slot].Occupied then
+    Exit(SOUFFLE_PROP_DEFAULT);
+  Result := FEntries[Slot].Flags;
+end;
+
+function TSouffleRecord.SetEntryFlags(const AKey: string;
+  const AFlags: Byte): Boolean;
+var
+  Hash: UInt32;
+  Slot: Integer;
+begin
+  if FCount = 0 then
+    Exit(False);
+  Hash := HashKey(AKey);
+  Slot := FindEntry(AKey, Hash);
+  if not FEntries[Slot].Occupied then
+    Exit(False);
+  FEntries[Slot].Flags := AFlags;
+  Result := True;
+end;
+
+procedure TSouffleRecord.Freeze;
+var
+  I: Integer;
+begin
+  FExtensible := False;
+  for I := 0 to FCapacity - 1 do
+    if FEntries[I].Occupied then
+      FEntries[I].Flags := 0;
+end;
+
+procedure TSouffleRecord.PreventExtensions;
+begin
+  FExtensible := False;
 end;
 
 function TSouffleRecord.GetOrderedKey(const AIndex: Integer): string;
@@ -436,11 +629,21 @@ begin
   FMethods := TSouffleRecord.Create;
   FSuperBlueprint := nil;
   FPrototype := nil;
+  FGetters := nil;
+  FSetters := nil;
+  FStaticGetters := nil;
+  FStaticSetters := nil;
+  FStaticFields := nil;
 end;
 
 destructor TSouffleBlueprint.Destroy;
 begin
   FMethods.Free;
+  FGetters.Free;
+  FSetters.Free;
+  FStaticGetters.Free;
+  FStaticSetters.Free;
+  FStaticFields.Free;
   inherited;
 end;
 
@@ -456,6 +659,66 @@ begin
   Result := FPrototype;
 end;
 
+function TSouffleBlueprint.GetGetters: TSouffleRecord;
+begin
+  if not Assigned(FGetters) then
+    FGetters := TSouffleRecord.Create;
+  Result := FGetters;
+end;
+
+function TSouffleBlueprint.GetSetters: TSouffleRecord;
+begin
+  if not Assigned(FSetters) then
+    FSetters := TSouffleRecord.Create;
+  Result := FSetters;
+end;
+
+function TSouffleBlueprint.GetStaticGetters: TSouffleRecord;
+begin
+  if not Assigned(FStaticGetters) then
+    FStaticGetters := TSouffleRecord.Create;
+  Result := FStaticGetters;
+end;
+
+function TSouffleBlueprint.GetStaticSetters: TSouffleRecord;
+begin
+  if not Assigned(FStaticSetters) then
+    FStaticSetters := TSouffleRecord.Create;
+  Result := FStaticSetters;
+end;
+
+function TSouffleBlueprint.HasGetters: Boolean;
+begin
+  Result := Assigned(FGetters) and (FGetters.Count > 0);
+end;
+
+function TSouffleBlueprint.HasSetters: Boolean;
+begin
+  Result := Assigned(FSetters) and (FSetters.Count > 0);
+end;
+
+function TSouffleBlueprint.HasStaticGetters: Boolean;
+begin
+  Result := Assigned(FStaticGetters) and (FStaticGetters.Count > 0);
+end;
+
+function TSouffleBlueprint.HasStaticSetters: Boolean;
+begin
+  Result := Assigned(FStaticSetters) and (FStaticSetters.Count > 0);
+end;
+
+function TSouffleBlueprint.GetStaticFields: TSouffleRecord;
+begin
+  if not Assigned(FStaticFields) then
+    FStaticFields := TSouffleRecord.Create;
+  Result := FStaticFields;
+end;
+
+function TSouffleBlueprint.HasStaticFields: Boolean;
+begin
+  Result := Assigned(FStaticFields) and (FStaticFields.Count > 0);
+end;
+
 procedure TSouffleBlueprint.MarkReferences;
 begin
   inherited;
@@ -465,6 +728,16 @@ begin
     FSuperBlueprint.MarkReferences;
   if Assigned(FPrototype) and not FPrototype.GCMarked then
     FPrototype.MarkReferences;
+  if Assigned(FGetters) and not FGetters.GCMarked then
+    FGetters.MarkReferences;
+  if Assigned(FSetters) and not FSetters.GCMarked then
+    FSetters.MarkReferences;
+  if Assigned(FStaticGetters) and not FStaticGetters.GCMarked then
+    FStaticGetters.MarkReferences;
+  if Assigned(FStaticSetters) and not FStaticSetters.GCMarked then
+    FStaticSetters.MarkReferences;
+  if Assigned(FStaticFields) and not FStaticFields.GCMarked then
+    FStaticFields.MarkReferences;
 end;
 
 function TSouffleBlueprint.DebugString: string;

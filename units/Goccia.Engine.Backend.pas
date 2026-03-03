@@ -51,13 +51,9 @@ uses
   SysUtils,
 
   Souffle.Bytecode.Chunk,
-  Souffle.Heap,
   Souffle.Value,
   Souffle.VM.Exception,
 
-  Goccia.AST.Statements,
-  Goccia.Evaluator,
-  Goccia.GarbageCollector,
   Goccia.Interpreter,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -103,8 +99,6 @@ var
   Compiler: TGocciaCompiler;
   I: Integer;
   Entry: TGocciaCompilerClassEntry;
-  Context: TGocciaEvaluationContext;
-  ClassValue: TGocciaValue;
   Template: TSouffleFunctionTemplate;
 begin
   Compiler := TGocciaCompiler.Create(FSourcePath);
@@ -115,27 +109,12 @@ begin
       FRuntime.RegisterFormalParameterCount(
         Template, Compiler.FormalParameterCounts[Template]);
 
-    if Assigned(FEngine) and (Compiler.PendingClassCount > 0) then
+    for I := 0 to Compiler.PendingClassCount - 1 do
     begin
-      Context := FEngine.Interpreter.CreateEvaluationContext;
-      for I := 0 to Compiler.PendingClassCount - 1 do
-      begin
-        Entry := Compiler.GetPendingClass(I);
-        ClassValue := EvaluateClassDefinition(
-          Entry.ClassDeclaration.ClassDefinition,
-          Context, Entry.Line, Entry.Column);
-        if Assigned(ClassValue) then
-        begin
-          TGocciaGarbageCollector.Instance.AddTempRoot(ClassValue);
-          try
-            RegisterGlobal(Entry.ClassDeclaration.ClassDefinition.Name, ClassValue);
-            Context.Scope.DefineLexicalBinding(
-              Entry.ClassDeclaration.ClassDefinition.Name, ClassValue, dtConst);
-          finally
-            TGocciaGarbageCollector.Instance.RemoveTempRoot(ClassValue);
-          end;
-        end;
-      end;
+      Entry := Compiler.GetPendingClass(I);
+      FRuntime.AddPendingClassDef(
+        Entry.ClassDeclaration.ClassDefinition,
+        Entry.Line, Entry.Column);
     end;
   finally
     Compiler.Free;
@@ -194,7 +173,13 @@ begin
   GlobalScope := FEngine.Interpreter.GlobalScope;
   Names := GlobalScope.GetOwnBindingNames;
   for I := 0 to Length(Names) - 1 do
-    RegisterGlobal(Names[I], GlobalScope.GetValue(Names[I]));
+  begin
+    if GlobalScope.GetLexicalBinding(Names[I]).DeclarationType = dtConst then
+      FRuntime.RegisterConstGlobal(Names[I],
+        FRuntime.ToSouffleValue(GlobalScope.GetValue(Names[I])))
+    else
+      RegisterGlobal(Names[I], GlobalScope.GetValue(Names[I]));
+  end;
 
   FRuntime.RegisterDelegates;
 end;

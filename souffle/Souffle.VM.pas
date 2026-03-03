@@ -685,8 +685,9 @@ begin
       if SouffleIsReference(FRegisters[Base + A]) then
       begin
         if FRegisters[Base + A].AsReference is TSouffleRecord then
-          TSouffleRecord(FRegisters[Base + A].AsReference).Put(
-            AFrame^.Template.GetConstant(B).StringValue, FRegisters[Base + C])
+          TSouffleRecord(FRegisters[Base + A].AsReference).PutChecked(
+            AFrame^.Template.GetConstant(B).StringValue,
+            FRegisters[Base + C])
         else if FRegisters[Base + A].AsReference is TSouffleBlueprint then
           TSouffleBlueprint(FRegisters[Base + A].AsReference).Methods.Put(
             AFrame^.Template.GetConstant(B).StringValue, FRegisters[Base + C])
@@ -707,7 +708,7 @@ begin
       Bx := DecodeBx(AInstruction);
       if SouffleIsReference(FRegisters[Base + A]) and
          (FRegisters[Base + A].AsReference is TSouffleRecord) then
-        TSouffleRecord(FRegisters[Base + A].AsReference).Delete(
+        TSouffleRecord(FRegisters[Base + A].AsReference).DeleteChecked(
           AFrame^.Template.GetConstant(Bx).StringValue)
       else
         FRuntimeOps.DeleteProperty(
@@ -1039,12 +1040,36 @@ begin
       end;
     end;
 
+    OP_RECORD_FREEZE:
+    begin
+      A := DecodeA(AInstruction);
+      if (FRegisters[Base + A].Kind = svkReference) and
+         (FRegisters[Base + A].AsReference is TSouffleRecord) then
+        TSouffleRecord(FRegisters[Base + A].AsReference).Freeze;
+    end;
+
     OP_UNPACK:
     begin
       A := DecodeA(AInstruction);
       B := DecodeB(AInstruction);
       C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.ArrayRest(FRegisters[Base + B], C);
+      if SouffleIsReference(FRegisters[Base + B]) and
+         (FRegisters[Base + B].AsReference is TSouffleArray) then
+      begin
+        Arr := TSouffleArray(FRegisters[Base + B].AsReference);
+        RestCount := Arr.Count - Integer(C);
+        if RestCount < 0 then
+          RestCount := 0;
+        RestArr := TSouffleArray.Create(RestCount);
+        RestArr.Delegate := FArrayDelegate;
+        if Assigned(FGC) then
+          FGC.AllocateObject(RestArr);
+        for I := Integer(C) to Arr.Count - 1 do
+          RestArr.Push(Arr.Get(I));
+        FRegisters[Base + A] := SouffleReference(RestArr);
+      end
+      else
+        FRegisters[Base + A] := SouffleNil;
     end;
 
 
@@ -1480,11 +1505,6 @@ begin
       FRegisters[Base + A] := FRuntimeOps.IteratorNext(FRegisters[Base + C], Done);
       FRegisters[Base + B] := SouffleBoolean(Done);
     end;
-    OP_RT_SPREAD:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      FRuntimeOps.SpreadInto(FRegisters[Base + A], FRegisters[Base + B]);
-    end;
 
     OP_RT_IMPORT:
     begin
@@ -1525,19 +1545,6 @@ begin
         AFrame^.Template.GetConstant(Bx).StringValue));
     end;
 
-    OP_RT_DEF_GETTER:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRuntimeOps.DefineGetter(FRegisters[Base + A],
-        AFrame^.Template.GetConstant(B).StringValue, FRegisters[Base + C]);
-    end;
-
-    OP_RT_DEF_SETTER:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRuntimeOps.DefineSetter(FRegisters[Base + A],
-        AFrame^.Template.GetConstant(B).StringValue, FRegisters[Base + C]);
-    end;
 
     OP_RT_DEL_INDEX:
     begin
@@ -1545,38 +1552,23 @@ begin
       FRegisters[Base + A] := FRuntimeOps.DeleteIndex(
         FRegisters[Base + B], FRegisters[Base + C]);
     end;
-    OP_RT_SPREAD_OBJ:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      FRuntimeOps.SpreadObjectInto(FRegisters[Base + A], FRegisters[Base + B]);
-    end;
-
-    OP_RT_OBJ_REST:
-    begin
-      A := DecodeA(AInstruction);
-      B := DecodeB(AInstruction);
-      C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.ObjectRest(
-        FRegisters[Base + B], FRegisters[Base + C]);
-    end;
-
-    OP_RT_REQUIRE_OBJECT:
-    begin
-      A := DecodeA(AInstruction);
-      FRuntimeOps.RequireObjectCoercible(FRegisters[Base + A]);
-    end;
-
-    OP_RT_REQUIRE_ITERABLE:
-    begin
-      A := DecodeA(AInstruction);
-      FRuntimeOps.RequireIterable(FRegisters[Base + A]);
-    end;
 
     OP_RT_TO_STRING:
     begin
       A := DecodeA(AInstruction);
       B := DecodeB(AInstruction);
       FRegisters[Base + A] := FRuntimeOps.CoerceValueToString(FRegisters[Base + B]);
+    end;
+
+
+    OP_RT_EXT:
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      C := DecodeC(AInstruction);
+      FRuntimeOps.ExtendedOperation(B,
+        FRegisters[Base + A], FRegisters[Base + C],
+        FRegisters[Base + A + 1], AFrame^.Template, C);
     end;
 
   end;

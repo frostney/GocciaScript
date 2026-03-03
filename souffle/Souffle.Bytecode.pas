@@ -118,8 +118,11 @@ type
     // ── Core: Type Coercion ──
     OP_TO_PRIMITIVE  = 72,  // AB    R[A] := ToPrimitive(R[B]) — fast-path for nil/bool/int/float/string, runtime callback for references
 
+    // ── Core: Record Metadata ──
+    OP_RECORD_FREEZE = 74,  // A     Freeze Record(R[A]) — set all entries writable=0, configurable=0
+
     // ── Core: Destructuring ──
-    OP_UNPACK        = 73,  // ABC   R[A] := Runtime.ArrayRest(R[B], C) — unpack R[B] from index C
+    OP_UNPACK        = 73,  // ABC   R[A] := Array(R[B])[C..] — unpack rest of TSouffleArray from index C
 
     // ── Runtime: Polymorphic Arithmetic ──
     OP_RT_ADD        = 128, // ABC   R[A] := Runtime.Add(R[B], R[C])
@@ -169,7 +172,6 @@ type
     // ── Runtime: Iteration ──
     OP_RT_GET_ITER   = 164, // ABC   R[A] := Runtime.GetIterator(R[B], C) — C: 0=sync, 1=try-async-first
     OP_RT_ITER_NEXT  = 165, // ABC   (R[A], R[B]) := Runtime.IteratorNext(R[C])
-    OP_RT_SPREAD     = 166, // AB    Runtime.SpreadInto(R[A], R[B])
 
     // ── Runtime: Modules ──
     OP_RT_IMPORT     = 167, // ABx   R[A] := Runtime.ImportModule(Constants[Bx])
@@ -183,21 +185,18 @@ type
     OP_RT_SET_GLOBAL = 171, // ABx   Runtime.SetGlobal(Constants[Bx], R[A])
     OP_RT_HAS_GLOBAL = 172, // ABx   R[A] := Boolean(Runtime.HasGlobal(Constants[Bx]))
 
-    // ── Runtime: Accessor Properties ──
-    OP_RT_DEF_GETTER = 173, // ABC   Runtime.DefineGetter(R[A], Constants[B], R[C])
-    OP_RT_DEF_SETTER = 174, // ABC   Runtime.DefineSetter(R[A], Constants[B], R[C])
-
-    // ── Runtime: Extended ──
+    // ── Runtime: Extended Property ──
     OP_RT_DEL_INDEX  = 175, // ABC   R[A] := Runtime.DeleteIndex(R[B], R[C])
-    OP_RT_SPREAD_OBJ = 176, // AB    Runtime.SpreadObjectInto(R[A], R[B])
-    // opcode 177 removed: was OP_RT_ARRAY_REST, moved to core as OP_UNPACK (73)
-    OP_RT_OBJ_REST   = 178, // ABC   R[A] := Runtime.ObjectRest(R[B], R[C]) — R[C] is exclusion key array
 
+    // ── Runtime: Spread Call ──
     OP_RT_CALL_SPREAD = 179, // ABC   R[A] := Runtime.Call(R[A], R[B]=argsArray); spread call
     OP_RT_CALL_METHOD_SPREAD = 180, // ABC  R[A] := Runtime.CallMethod(R[A], R[A-1]=this, R[B]=argsArray)
-    OP_RT_REQUIRE_OBJECT = 181, // A    Throw TypeError if R[A] is null or undefined
-    OP_RT_TO_STRING = 182, // AB    R[A] := Runtime.ToString(R[B])
-    OP_RT_REQUIRE_ITERABLE = 183 // A  Throw TypeError if R[A] is not iterable (not array/string/wrapped iterable)
+
+    // ── Runtime: Coercion ──
+    OP_RT_TO_STRING = 182, // AB    R[A] := Runtime.CoerceValueToString(R[B])
+
+    // ── Runtime: Language Extension ──
+    OP_RT_EXT = 190             // ABC   Runtime.ExtendedOperation(B=sub-opcode, R[A], R[C], R[A+1], Template, C)
   );
 
 { Instruction encoding/decoding helpers }

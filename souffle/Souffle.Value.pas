@@ -210,7 +210,11 @@ function SouffleAsNumber(const AValue: TSouffleValue): Double;
 begin
   case AValue.Kind of
     svkInteger:
-      Result := AValue.AsInteger * 1.0;
+      if (AValue.AsInteger >= -2147483648) and (AValue.AsInteger <= 2147483647) then
+        Result := Int32(AValue.AsInteger) * 1.0
+      else
+        Result := (AValue.AsInteger div 1000000) * 1000000.0 +
+                  (AValue.AsInteger mod 1000000) * 1.0;
     svkFloat:
       Result := AValue.AsFloat;
   else
@@ -283,6 +287,8 @@ begin
         else
           Result := '-Infinity';
       end
+      else if (Frac(AValue.AsFloat) = 0.0) and (Abs(AValue.AsFloat) < 1e20) then
+        Result := FloatToStrF(AValue.AsFloat, ffFixed, 20, 0)
       else
         Result := FloatToStr(AValue.AsFloat);
     svkString:

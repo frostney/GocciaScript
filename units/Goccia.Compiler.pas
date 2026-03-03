@@ -31,6 +31,10 @@ type
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
     FPendingClasses: array of TGocciaCompilerClassEntry;
+    FPendingClassNames: TDictionary<string, Boolean>;
+
+    function ShouldDeferClass(
+      const AClassDef: TGocciaClassDefinition): Boolean;
 
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt8);
@@ -71,6 +75,7 @@ begin
   inherited Create;
   FSourcePath := ASourcePath;
   FFormalParameterCounts := TFormalParameterCountMap.Create;
+  FPendingClassNames := TDictionary<string, Boolean>.Create;
   FModule := nil;
   FCurrentTemplate := nil;
   FCurrentScope := nil;
@@ -78,8 +83,20 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
+  FPendingClassNames.Free;
   FFormalParameterCounts.Free;
   inherited;
+end;
+
+function TGocciaCompiler.ShouldDeferClass(
+  const AClassDef: TGocciaClassDefinition): Boolean;
+begin
+  if not Goccia.Compiler.Statements.IsSimpleClass(AClassDef) then
+    Exit(True);
+  if (AClassDef.SuperClass <> '') and
+     FPendingClassNames.ContainsKey(AClassDef.SuperClass) then
+    Exit(True);
+  Result := False;
 end;
 
 function TGocciaCompiler.BuildContext: TGocciaCompilationContext;
@@ -156,6 +173,10 @@ begin
     Goccia.Compiler.Expressions.CompileIncrement(Ctx, TGocciaIncrementExpression(AExpr), ADest)
   else if AExpr is TGocciaThisExpression then
     Goccia.Compiler.Expressions.CompileThis(Ctx, ADest)
+  else if AExpr is TGocciaSuperExpression then
+  begin
+    Goccia.Compiler.Expressions.CompileSuperAccess(Ctx, ADest);
+  end
   else if AExpr is TGocciaDestructuringAssignmentExpression then
     Goccia.Compiler.Expressions.CompileDestructuringAssignment(Ctx,
       TGocciaDestructuringAssignmentExpression(AExpr), ADest)
@@ -195,17 +216,20 @@ begin
     Goccia.Compiler.Statements.CompileForOfStatement(Ctx, TGocciaForOfStatement(AStmt))
   else if AStmt is TGocciaClassDeclaration then
   begin
-    if Goccia.Compiler.Statements.IsSimpleClass(
-        TGocciaClassDeclaration(AStmt).ClassDefinition) then
+    if not ShouldDeferClass(TGocciaClassDeclaration(AStmt).ClassDefinition) then
       Goccia.Compiler.Statements.CompileClassDeclaration(Ctx,
         TGocciaClassDeclaration(AStmt))
     else
     begin
+      FPendingClassNames.AddOrSetValue(
+        TGocciaClassDeclaration(AStmt).ClassDefinition.Name, True);
       SetLength(FPendingClasses, Length(FPendingClasses) + 1);
       FPendingClasses[High(FPendingClasses)].ClassDeclaration :=
         TGocciaClassDeclaration(AStmt);
       FPendingClasses[High(FPendingClasses)].Line := AStmt.Line;
       FPendingClasses[High(FPendingClasses)].Column := AStmt.Column;
+      Goccia.Compiler.Statements.CompileComplexClassDeclaration(Ctx,
+        TGocciaClassDeclaration(AStmt), High(FPendingClasses));
     end;
   end
   else if AStmt is TGocciaSwitchStatement then
@@ -221,7 +245,12 @@ begin
   else if AStmt is TGocciaReExportDeclaration then
     Goccia.Compiler.Statements.CompileReExportDeclaration(Ctx, TGocciaReExportDeclaration(AStmt))
   else if AStmt is TGocciaDestructuringDeclaration then
-    Goccia.Compiler.Statements.CompileDestructuringDeclaration(Ctx, TGocciaDestructuringDeclaration(AStmt));
+    Goccia.Compiler.Statements.CompileDestructuringDeclaration(Ctx, TGocciaDestructuringDeclaration(AStmt))
+  else if AStmt is TGocciaEnumDeclaration then
+    Goccia.Compiler.Statements.CompileEnumDeclaration(Ctx, TGocciaEnumDeclaration(AStmt))
+  else if AStmt is TGocciaExportEnumDeclaration then
+    Goccia.Compiler.Statements.CompileEnumDeclaration(Ctx,
+      TGocciaExportEnumDeclaration(AStmt).Declaration);
 end;
 
 procedure TGocciaCompiler.DoCompileFunctionBody(const ABody: TGocciaASTNode);
