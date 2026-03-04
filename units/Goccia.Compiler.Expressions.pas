@@ -89,6 +89,8 @@ uses
   Goccia.Compiler.ExtOps,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
+  Goccia.Keywords.Reserved,
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.Token,
@@ -144,8 +146,8 @@ begin
     if not TGocciaNumberLiteralValue(Value).IsNaN
        and not TGocciaNumberLiteralValue(Value).IsInfinite
        and (Frac(TGocciaNumberLiteralValue(Value).Value) = 0.0)
-       and (TGocciaNumberLiteralValue(Value).Value >= -32768)
-       and (TGocciaNumberLiteralValue(Value).Value <= 32767) then
+       and (TGocciaNumberLiteralValue(Value).Value >= MIN_SBX)
+       and (TGocciaNumberLiteralValue(Value).Value <= MAX_SBX) then
       EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, ADest,
         Int16(Trunc(TGocciaNumberLiteralValue(Value).Value))))
     else
@@ -741,32 +743,33 @@ begin
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
+  try
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
 
-  ChildCtx := ACtx;
-  ChildCtx.Template := ChildTemplate;
-  ChildCtx.Scope := ChildScope;
+    if RestParamIndex >= 0 then
+    begin
+      RestReg := ChildScope.ResolveLocal(AExpr.Parameters[RestParamIndex].Name);
+      EmitInstruction(ChildCtx,
+        EncodeABC(OP_PACK_ARGS, UInt8(RestReg), UInt8(RestParamIndex), 0));
+    end;
 
-  if RestParamIndex >= 0 then
-  begin
-    RestReg := ChildScope.ResolveLocal(AExpr.Parameters[RestParamIndex].Name);
-    EmitInstruction(ChildCtx,
-      EncodeABC(OP_PACK_ARGS, UInt8(RestReg), UInt8(RestParamIndex), 0));
+    EmitDefaultParameters(ChildCtx, AExpr.Parameters);
+    EmitDestructuringParameters(ChildCtx, AExpr.Parameters);
+
+    ACtx.CompileFunctionBody(AExpr.Body);
+
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index);
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
   end;
-
-  EmitDefaultParameters(ChildCtx, AExpr.Parameters);
-  EmitDestructuringParameters(ChildCtx, AExpr.Parameters);
-
-  ACtx.CompileFunctionBody(AExpr.Body);
-
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
-
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index);
-
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, ADest, FuncIdx));
@@ -817,6 +820,8 @@ var
   UseSpread: Boolean;
 begin
   ArgCount := AExpr.Arguments.Count;
+  if ArgCount > High(UInt8) then
+    raise Exception.Create('Compiler error: too many arguments (>255)');
   UseSpread := HasSpreadArgument(AExpr);
 
   if AExpr.Callee is TGocciaSuperExpression then
@@ -826,7 +831,7 @@ begin
     BaseReg := ACtx.Scope.AllocateRegister;
     SuperReg := ACtx.Scope.AllocateRegister;
     CompileSuperAccess(ACtx, SuperReg);
-    PropIdx := ACtx.Template.AddConstantString('constructor');
+    PropIdx := ACtx.Template.AddConstantString(PROP_CONSTRUCTOR);
     if PropIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow');
     if SuperReg <> BaseReg + 1 then
@@ -1079,20 +1084,22 @@ begin
   ChildTemplate := TSouffleFunctionTemplate.Create('<get ' + AKey + '>');
   ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
-  ChildScope.DeclareLocal('this', False);
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := 0;
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-  ACtx.CompileFunctionBody(AGetter.Body);
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+  try
+    ACtx.CompileFunctionBody(AGetter.Body);
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index);
-
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index);
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
+  end;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   GetterReg := ACtx.Scope.AllocateRegister;
@@ -1125,21 +1132,23 @@ begin
   ChildTemplate := TSouffleFunctionTemplate.Create('<set ' + AKey + '>');
   ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
-  ChildScope.DeclareLocal('this', False);
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildScope.DeclareLocal(ASetter.Parameter, False);
   ChildTemplate.ParameterCount := 1;
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-  ACtx.CompileFunctionBody(ASetter.Body);
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+  try
+    ACtx.CompileFunctionBody(ASetter.Body);
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index);
-
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index);
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
+  end;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   SetterReg := ACtx.Scope.AllocateRegister;
@@ -1388,6 +1397,8 @@ begin
   ACtx.CompileExpression(AExpr.Callee, CtorReg);
 
   ArgCount := AExpr.Arguments.Count;
+  if ArgCount > High(UInt8) then
+    raise Exception.Create('Compiler error: too many constructor arguments (>255)');
   for I := 0 to ArgCount - 1 do
     ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
 
@@ -1456,7 +1467,7 @@ begin
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
-  ChildScope.DeclareLocal('this', False);
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := Length(AExpr.Parameters);
 
   FormalCount := -1;
@@ -1485,32 +1496,33 @@ begin
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
+  try
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
 
-  ChildCtx := ACtx;
-  ChildCtx.Template := ChildTemplate;
-  ChildCtx.Scope := ChildScope;
+    if RestParamIndex >= 0 then
+    begin
+      RestReg := ChildScope.ResolveLocal(AExpr.Parameters[RestParamIndex].Name);
+      EmitInstruction(ChildCtx,
+        EncodeABC(OP_PACK_ARGS, UInt8(RestReg), UInt8(RestParamIndex), 0));
+    end;
 
-  if RestParamIndex >= 0 then
-  begin
-    RestReg := ChildScope.ResolveLocal(AExpr.Parameters[RestParamIndex].Name);
-    EmitInstruction(ChildCtx,
-      EncodeABC(OP_PACK_ARGS, UInt8(RestReg), UInt8(RestParamIndex), 0));
+    EmitDefaultParameters(ChildCtx, AExpr.Parameters);
+    EmitDestructuringParameters(ChildCtx, AExpr.Parameters);
+
+    ACtx.CompileFunctionBody(AExpr.Body);
+
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index);
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
   end;
-
-  EmitDefaultParameters(ChildCtx, AExpr.Parameters);
-  EmitDestructuringParameters(ChildCtx, AExpr.Parameters);
-
-  ACtx.CompileFunctionBody(AExpr.Body);
-
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
-
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index);
-
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, ADest, FuncIdx));
@@ -1757,7 +1769,7 @@ var
   LocalIdx, UpvalIdx: Integer;
   Slot: UInt8;
 begin
-  LocalIdx := ACtx.Scope.ResolveLocal('this');
+  LocalIdx := ACtx.Scope.ResolveLocal(KEYWORD_THIS);
   if LocalIdx >= 0 then
   begin
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
@@ -1766,7 +1778,7 @@ begin
     Exit;
   end;
 
-  UpvalIdx := ACtx.Scope.ResolveUpvalue('this');
+  UpvalIdx := ACtx.Scope.ResolveUpvalue(KEYWORD_THIS);
   if UpvalIdx >= 0 then
   begin
     EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest, UInt16(UpvalIdx)));

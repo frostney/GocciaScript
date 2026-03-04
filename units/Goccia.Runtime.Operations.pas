@@ -5,6 +5,7 @@ unit Goccia.Runtime.Operations;
 interface
 
 uses
+  Classes,
   Generics.Collections,
 
   Souffle.Bytecode.Chunk,
@@ -92,11 +93,14 @@ type
     FExports: TDictionary<string, TSouffleValue>;
     FClosureBridgeCache: TDictionary<TSouffleClosure, TObject>;
     FArrayBridgeCache: TDictionary<TObject, TObject>;
+    FArrayBridgeReverse: TDictionary<TObject, TObject>;
     FRecordBridgeCache: TDictionary<TObject, TObject>;
     FFormalParameterCounts: TDictionary<TSouffleFunctionTemplate, Integer>;
     FPendingClasses: array of TGocciaPendingClassEntry;
     FPendingClassCount: Integer;
     FClassDefinitionScopes: TDictionary<TObject, TObject>;
+    FWrappedValues: TList;
+    FBridgeCallDepth: Integer;
     FVM: TSouffleVM;
     FEngine: TObject;
     FSourcePath: string;
@@ -106,6 +110,7 @@ type
     function CoerceToNumber(const A: TSouffleValue): Double;
     function CoerceToString(const A: TSouffleValue): string;
     procedure RethrowAsVM(const E: TGocciaThrowValue);
+    procedure MarkWrappedGocciaValues;
   public
     constructor Create;
     destructor Destroy; override;
@@ -210,6 +215,7 @@ type
       var ADest: TSouffleValue; const AOperand, AExtra: TSouffleValue;
       const ATemplate: TSouffleFunctionTemplate;
       const AOperandIndex: UInt8); override;
+    procedure MarkExternalRoots; override;
 
     function AddPendingClassDef(
       const AClassDef: TGocciaClassDefinition;
@@ -419,17 +425,30 @@ begin
     Args[1 + I] := FRuntime.ToSouffleValue(AArguments.GetElement(I));
 
   SyncCachedGocciaToSouffle(FRuntime);
+  Inc(FRuntime.FBridgeCallDepth);
   try
     SouffleResult := FRuntime.VM.ExecuteFunction(FClosure, Args);
   except
     on E: ESouffleThrow do
     begin
       SyncCachedSouffleToGoccia(FRuntime);
+      Dec(FRuntime.FBridgeCallDepth);
+      if FRuntime.FBridgeCallDepth = 0 then
+      begin
+        FRuntime.FArrayBridgeCache.Clear;
+        FRuntime.FRecordBridgeCache.Clear;
+      end;
       raise TGocciaThrowValue.Create(
         FRuntime.UnwrapToGocciaValue(E.ThrownValue));
     end;
   end;
   SyncCachedSouffleToGoccia(FRuntime);
+  Dec(FRuntime.FBridgeCallDepth);
+  if FRuntime.FBridgeCallDepth = 0 then
+  begin
+    FRuntime.FArrayBridgeCache.Clear;
+    FRuntime.FRecordBridgeCache.Clear;
+  end;
   Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
 end;
 
@@ -467,17 +486,30 @@ begin
     Args[1 + I] := FBridgeRuntime.ToSouffleValue(AArguments.GetElement(I));
 
   SyncCachedGocciaToSouffle(FBridgeRuntime);
+  Inc(FBridgeRuntime.FBridgeCallDepth);
   try
     SouffleResult := FBridgeRuntime.VM.ExecuteFunction(FSouffleClosure, Args);
   except
     on E: ESouffleThrow do
     begin
       SyncCachedSouffleToGoccia(FBridgeRuntime);
+      Dec(FBridgeRuntime.FBridgeCallDepth);
+      if FBridgeRuntime.FBridgeCallDepth = 0 then
+      begin
+        FBridgeRuntime.FArrayBridgeCache.Clear;
+        FBridgeRuntime.FRecordBridgeCache.Clear;
+      end;
       raise TGocciaThrowValue.Create(
         FBridgeRuntime.UnwrapToGocciaValue(E.ThrownValue));
     end;
   end;
   SyncCachedSouffleToGoccia(FBridgeRuntime);
+  Dec(FBridgeRuntime.FBridgeCallDepth);
+  if FBridgeRuntime.FBridgeCallDepth = 0 then
+  begin
+    FBridgeRuntime.FArrayBridgeCache.Clear;
+    FBridgeRuntime.FRecordBridgeCache.Clear;
+  end;
   Result := FBridgeRuntime.UnwrapToGocciaValue(SouffleResult);
 end;
 
@@ -935,29 +967,42 @@ begin
   FExports := TDictionary<string, TSouffleValue>.Create;
   FClosureBridgeCache := TDictionary<TSouffleClosure, TObject>.Create;
   FArrayBridgeCache := TDictionary<TObject, TObject>.Create;
+  FArrayBridgeReverse := TDictionary<TObject, TObject>.Create;
   FRecordBridgeCache := TDictionary<TObject, TObject>.Create;
   FClassDefinitionScopes := TDictionary<TObject, TObject>.Create;
+  FWrappedValues := TList.Create;
   FFormalParameterCounts := TDictionary<TSouffleFunctionTemplate, Integer>.Create;
+  FBridgeCallDepth := 0;
   FVM := nil;
+  TGocciaGarbageCollector.Initialize;
+  TGocciaGarbageCollector.Instance.SetExternalRootMarker(MarkWrappedGocciaValues);
 end;
 
 destructor TGocciaRuntimeOperations.Destroy;
 begin
+  if Assigned(TGocciaGarbageCollector.Instance) then
+    TGocciaGarbageCollector.Instance.SetExternalRootMarker(nil);
   FGlobals.Free;
   FConstGlobals.Free;
   FExports.Free;
   FClosureBridgeCache.Free;
   FArrayBridgeCache.Free;
+  FArrayBridgeReverse.Free;
   FRecordBridgeCache.Free;
   FClassDefinitionScopes.Free;
+  FWrappedValues.Free;
   FFormalParameterCounts.Free;
   inherited;
 end;
 
 function TGocciaRuntimeOperations.WrapGocciaValue(
   const AValue: TGocciaValue): TSouffleValue;
+var
+  Wrapped: TGocciaWrappedValue;
 begin
-  Result := SouffleReference(TGocciaWrappedValue.Create(AValue));
+  Wrapped := TGocciaWrappedValue.Create(AValue);
+  FWrappedValues.Add(Wrapped);
+  Result := SouffleReference(Wrapped);
 end;
 
 procedure TGocciaRuntimeOperations.RethrowAsVM(const E: TGocciaThrowValue);
@@ -1301,6 +1346,7 @@ begin
         begin
           CachedBridge := TGocciaArrayValue.Create;
           FArrayBridgeCache.Add(AValue.AsReference, CachedBridge);
+          FArrayBridgeReverse.AddOrSetValue(CachedBridge, AValue.AsReference);
           ConvertSouffleArrayInto(Self,
             TSouffleArray(AValue.AsReference),
             TGocciaArrayValue(CachedBridge));
@@ -1402,6 +1448,8 @@ begin
   end
   else if AValue is TGocciaStringLiteralValue then
     Result := SouffleString(TGocciaStringLiteralValue(AValue).Value)
+  else if FArrayBridgeReverse.ContainsKey(AValue) then
+    Result := SouffleReference(TSouffleHeapObject(FArrayBridgeReverse[AValue]))
   else
     Result := WrapGocciaValue(AValue);
 end;
@@ -5024,6 +5072,61 @@ begin
       FGlobals.AddOrSetValue(
         ATemplate.GetConstant(AOperandIndex).StringValue, ADest);
   end;
+end;
+
+procedure TGocciaRuntimeOperations.MarkExternalRoots;
+var
+  GlobalVal: TSouffleValue;
+  ClosureKey: TSouffleClosure;
+  BridgeKey: TObject;
+begin
+  for GlobalVal in FGlobals.Values do
+    if SouffleIsReference(GlobalVal) and Assigned(GlobalVal.AsReference)
+      and not GlobalVal.AsReference.GCMarked then
+      GlobalVal.AsReference.MarkReferences;
+
+  for GlobalVal in FExports.Values do
+    if SouffleIsReference(GlobalVal) and Assigned(GlobalVal.AsReference)
+      and not GlobalVal.AsReference.GCMarked then
+      GlobalVal.AsReference.MarkReferences;
+
+  for ClosureKey in FClosureBridgeCache.Keys do
+    if not ClosureKey.GCMarked then
+      ClosureKey.MarkReferences;
+
+  for BridgeKey in FArrayBridgeCache.Keys do
+    if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
+      TSouffleHeapObject(BridgeKey).MarkReferences;
+
+  for BridgeKey in FRecordBridgeCache.Keys do
+    if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
+      TSouffleHeapObject(BridgeKey).MarkReferences;
+end;
+
+procedure TGocciaRuntimeOperations.MarkWrappedGocciaValues;
+var
+  I: Integer;
+  Wrapped: TGocciaWrappedValue;
+  BridgeVal: TObject;
+begin
+  for I := 0 to FWrappedValues.Count - 1 do
+  begin
+    Wrapped := TGocciaWrappedValue(FWrappedValues[I]);
+    if Assigned(Wrapped.Value) and not Wrapped.Value.GCMarked then
+      Wrapped.Value.MarkReferences;
+  end;
+
+  for BridgeVal in FClosureBridgeCache.Values do
+    if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
+      TGocciaValue(BridgeVal).MarkReferences;
+
+  for BridgeVal in FArrayBridgeCache.Values do
+    if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
+      TGocciaValue(BridgeVal).MarkReferences;
+
+  for BridgeVal in FRecordBridgeCache.Values do
+    if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
+      TGocciaValue(BridgeVal).MarkReferences;
 end;
 
 end.

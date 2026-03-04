@@ -68,6 +68,7 @@ uses
   Goccia.Compiler.Expressions,
   Goccia.Compiler.ExtOps,
   Goccia.Compiler.Scope,
+  Goccia.Keywords.Reserved,
   Goccia.Values.Primitives;
 
 type
@@ -755,7 +756,7 @@ begin
   ChildTemplate.IsAsync := AMethod.IsAsync;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
-  ChildScope.DeclareLocal('this', False);
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
 
   FormalCount := -1;
@@ -834,7 +835,7 @@ begin
   ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
-  ChildScope.DeclareLocal('this', False);
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   ACtx.CompileFunctionBody(AGetter.Body);
@@ -881,7 +882,7 @@ begin
   ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.ParameterCount := 1;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
-  ChildScope.DeclareLocal('this', False);
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildScope.DeclareLocal(ASetter.Parameter, False);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
@@ -1021,7 +1022,7 @@ begin
   begin
     Local := ACtx.Scope.GetLocal(I);
     if (Local.Name <> '') and (Local.Name <> '__receiver') and
-       (Local.Name <> 'this') then
+       (Local.Name <> KEYWORD_THIS) then
     begin
       ACtx.Scope.MarkGlobalBacked(I);
       NameIdx := ACtx.Template.AddConstantString(Local.Name);
@@ -1033,6 +1034,8 @@ begin
   end;
 
   ClassReg := ACtx.Scope.DeclareLocal(ClassDef.Name, True);
+  if APendingIndex > High(UInt8) then
+    raise Exception.Create('Compiler error: pending class index exceeds 255');
   EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ClassReg,
     GOCCIA_EXT_EVAL_CLASS, UInt8(APendingIndex)));
 
@@ -1072,7 +1075,7 @@ end;
 procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaEnumDeclaration);
 var
-  EnumSlot, MemberSlot: UInt8;
+  EnumSlot, InnerSlot, MemberSlot: UInt8;
   I: Integer;
   KeyIdx: UInt16;
   ClosedLocals: array[0..255] of UInt8;
@@ -1084,9 +1087,8 @@ begin
 
   ACtx.Scope.BeginScope;
 
-  ACtx.Scope.DeclareLocal(AStmt.Name, False);
-  EmitInstruction(ACtx, EncodeABC(OP_MOVE,
-    ACtx.Scope.ResolveLocal(AStmt.Name), EnumSlot, 0));
+  InnerSlot := ACtx.Scope.DeclareLocal(AStmt.Name, False);
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, InnerSlot, EnumSlot, 0));
 
   for I := 0 to High(AStmt.Members) do
   begin

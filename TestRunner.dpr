@@ -307,6 +307,7 @@ begin
     Result.TestResult := FileResult.TestResult;
     Result.TotalLexNanoseconds := FileResult.Timing.LexTimeNanoseconds;
     Result.TotalParseNanoseconds := FileResult.Timing.ParseTimeNanoseconds;
+    Result.TotalCompileNanoseconds := FileResult.Timing.LexTimeNanoseconds;
     Result.TotalExecNanoseconds := FileResult.Timing.ExecuteTimeNanoseconds;
   except
     on E: Exception do
@@ -431,8 +432,8 @@ begin
       Writeln(Format('Test Results Test Execution: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
       if GMode = ebSouffleVM then
         Writeln(Format('Test Results Engine Timing: Compile: %s | Execute: %s | Total: %s',
-          [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
-           FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalExecNanoseconds)]))
+          [FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
+           FormatDuration(AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]))
       else
         Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
           [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),

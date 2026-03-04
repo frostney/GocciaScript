@@ -502,7 +502,7 @@ The blueprint opcodes are a fast path — not a replacement for the record-based
 
 ### WASM GC Mapping
 
-```
+```text
 TSouffleArray   →  WASM array type (array.new, array.get, array.set)
 TSouffleRecord  →  WASM struct type (struct.new, struct.get, struct.set)
                    For dynamic records: WASM GC hash map (runtime library)
@@ -1129,7 +1129,7 @@ The `souffle/` directory contains a self-contained bytecode VM with zero knowled
 - **Generic value system**: `TSouffleValue` represents values without language-specific type tags
 - **Abstract runtime interface**: `TSouffleRuntimeOperations` is the sole injection point for language semantics
 - **Own GC**: `Souffle.GarbageCollector.pas` manages Souffle heap objects independently
-- **Portable binary format**: `.sbc` files are self-describing (runtime tag, version, debug info)
+- **Self-describing binary format**: `.sbc` files include a runtime tag, version, and debug info. Serialization currently uses native endianness; cross-platform portability requires byte-order normalization (see [Known Limitations](#known-limitations))
 
 ### Multi-Frontend Vision
 

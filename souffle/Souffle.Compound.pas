@@ -547,7 +547,8 @@ begin
   begin
     if FOrder[I] = Slot then
     begin
-      Move(FOrder[I + 1], FOrder[I], (FCount - I - 1) * SizeOf(Integer));
+      if I < FCount - 1 then
+        Move(FOrder[I + 1], FOrder[I], (FCount - I - 1) * SizeOf(Integer));
       Dec(FCount);
       Break;
     end;
@@ -584,7 +585,8 @@ begin
   begin
     if FOrder[I] = Slot then
     begin
-      Move(FOrder[I + 1], FOrder[I], (FCount - I - 1) * SizeOf(Integer));
+      if I < FCount - 1 then
+        Move(FOrder[I + 1], FOrder[I], (FCount - I - 1) * SizeOf(Integer));
       Dec(FCount);
       Break;
     end;

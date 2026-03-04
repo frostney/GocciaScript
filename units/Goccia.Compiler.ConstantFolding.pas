@@ -40,7 +40,7 @@ var
 begin
   if not IsNaN(AValue) and not IsInfinite(AValue)
      and not IsNegativeZeroFloat(AValue)
-     and (Frac(AValue) = 0.0) and (AValue >= -32768) and (AValue <= 32767) then
+     and (Frac(AValue) = 0.0) and (AValue >= MIN_SBX) and (AValue <= MAX_SBX) then
     EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, ADest, Int16(Trunc(AValue))))
   else
   begin

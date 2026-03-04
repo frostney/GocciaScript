@@ -219,30 +219,33 @@ end;
 
 destructor TGocciaEngine.Destroy;
 begin
-  if Assigned(TGocciaGarbageCollector.Instance) and Assigned(FInterpreter) then
-    TGocciaGarbageCollector.Instance.RemoveRoot(FInterpreter.GlobalScope);
+  try
+    if Assigned(TGocciaGarbageCollector.Instance) and Assigned(FInterpreter) then
+      TGocciaGarbageCollector.Instance.RemoveRoot(FInterpreter.GlobalScope);
 
-  FBuiltinConsole.Free;
-  FBuiltinMath.Free;
-  FBuiltinGlobalObject.Free;
-  FBuiltinGlobalArray.Free;
-  FBuiltinGlobalNumber.Free;
-  FBuiltinGlobalString.Free;
-  FBuiltinGlobals.Free;
-  FBuiltinJSON.Free;
-  FBuiltinSymbol.Free;
-  FBuiltinSet.Free;
-  FBuiltinMap.Free;
-  FBuiltinPromise.Free;
-  FBuiltinTestAssertions.Free;
-  FBuiltinBenchmark.Free;
-  FBuiltinTemporal.Free;
-  FBuiltinArrayBuffer.Free;
+    FBuiltinConsole.Free;
+    FBuiltinMath.Free;
+    FBuiltinGlobalObject.Free;
+    FBuiltinGlobalArray.Free;
+    FBuiltinGlobalNumber.Free;
+    FBuiltinGlobalString.Free;
+    FBuiltinGlobals.Free;
+    FBuiltinJSON.Free;
+    FBuiltinSymbol.Free;
+    FBuiltinSet.Free;
+    FBuiltinMap.Free;
+    FBuiltinPromise.Free;
+    FBuiltinTestAssertions.Free;
+    FBuiltinBenchmark.Free;
+    FBuiltinTemporal.Free;
+    FBuiltinArrayBuffer.Free;
 
-  FInterpreter.Free;
-  if FOwnsResolver then
-    FResolver.Free;
-  SetExceptionMask(FPreviousExceptionMask);
+    FInterpreter.Free;
+    if FOwnsResolver then
+      FResolver.Free;
+  finally
+    SetExceptionMask(FPreviousExceptionMask);
+  end;
   inherited;
 end;
 

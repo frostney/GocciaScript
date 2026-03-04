@@ -161,6 +161,15 @@ type
       const ATemplate: TSouffleFunctionTemplate;
       const AOperandIndex: UInt8); virtual;
 
+    { ── GC coordination (1) ──
+      Called by the VM's external root marker during Souffle GC mark
+      phase. Frontends that cache Souffle heap objects outside the VM
+      (e.g. bridge caches, global tables) must override this to mark
+      those objects so the Souffle GC does not collect them. Default
+      is a no-op. }
+
+    procedure MarkExternalRoots; virtual;
+
   end;
 
 implementation
@@ -187,6 +196,10 @@ procedure TSouffleRuntimeOperations.ExtendedOperation(const ASubOp: UInt8;
   var ADest: TSouffleValue; const AOperand, AExtra: TSouffleValue;
   const ATemplate: TSouffleFunctionTemplate;
   const AOperandIndex: UInt8);
+begin
+end;
+
+procedure TSouffleRuntimeOperations.MarkExternalRoots;
 begin
 end;
 

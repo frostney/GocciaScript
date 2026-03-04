@@ -10,6 +10,9 @@ const
 
   OP_RT_FIRST = 128;
 
+  MIN_SBX: Int16 = -32768;
+  MAX_SBX: Int16 =  32767;
+
 type
   { Core operations (VM-intrinsic, fixed semantics) — opcodes 0..127 }
   { Runtime operations (pluggable semantics) — opcodes 128..255 }

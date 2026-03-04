@@ -808,8 +808,11 @@ begin
       A := DecodeA(AInstruction);
       B := DecodeB(AInstruction);
       C := DecodeC(AInstruction);
-      FRegisters[Base + A] := SouffleInteger(
-        FRegisters[Base + B].AsInteger mod FRegisters[Base + C].AsInteger);
+      if FRegisters[Base + C].AsInteger = 0 then
+        FRegisters[Base + A] := SouffleFloat(NaN)
+      else
+        FRegisters[Base + A] := SouffleInteger(
+          FRegisters[Base + B].AsInteger mod FRegisters[Base + C].AsInteger);
     end;
 
     OP_NEG_INT:
@@ -1616,6 +1619,9 @@ var
   HighWater: Integer;
   Frame: PSouffleVMCallFrame;
 begin
+  if Assigned(FRuntimeOps) then
+    FRuntimeOps.MarkExternalRoots;
+
   if FCallStack.IsEmpty then
     Exit;
 

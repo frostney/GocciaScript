@@ -40,6 +40,7 @@ begin
   Result := TGocciaNumberLiteralValue.Create(Trunc(ALeft.ToNumberLiteral.Value) shl (Trunc(ARight.ToNumberLiteral.Value) and 31));
 end;
 
+// ES2026 §13.15.3 ShiftExpression : ShiftExpression >> AdditiveExpression
 function EvaluateRightShift(const ALeft, ARight: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaNumberLiteralValue.Create(

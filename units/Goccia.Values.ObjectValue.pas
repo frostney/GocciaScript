@@ -511,7 +511,7 @@ begin
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
       Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-      if Assigned(Accessor.Setter) and (Accessor.Setter is TGocciaFunctionBase) then
+      if Assigned(Accessor.Setter) and Accessor.Setter.IsCallable then
       begin
         Args := TGocciaArgumentsCollection.Create;
         try
@@ -545,7 +545,7 @@ begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
         Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-        if Assigned(Accessor.Setter) and (Accessor.Setter is TGocciaFunctionBase) then
+        if Assigned(Accessor.Setter) and Accessor.Setter.IsCallable then
         begin
           Args := TGocciaArgumentsCollection.Create;
           try
@@ -646,7 +646,7 @@ begin
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
       Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-      if Assigned(Accessor.Getter) and (Accessor.Getter is TGocciaFunctionBase) then
+      if Assigned(Accessor.Getter) and Accessor.Getter.IsCallable then
       begin
         Args := TGocciaArgumentsCollection.Create;
         try
@@ -674,7 +674,7 @@ begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
         Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-        if Assigned(Accessor.Getter) and (Accessor.Getter is TGocciaFunctionBase) then
+        if Assigned(Accessor.Getter) and Accessor.Getter.IsCallable then
         begin
           Args := TGocciaArgumentsCollection.Create;
           try
