@@ -18,6 +18,8 @@ uses
   Goccia.Engine,
   Goccia.Engine.Backend,
   Goccia.FileExtensions,
+  Goccia.JSX.SourceMap,
+  Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.Token,
@@ -125,6 +127,7 @@ begin
   FileResult.FileName := AFileName;
   FileResult.LexTimeNanoseconds := 0;
   FileResult.ParseTimeNanoseconds := 0;
+  FileResult.CompileTimeNanoseconds := 0;
   FileResult.ExecuteTimeNanoseconds := 0;
   FileResult.TotalBenchmarks := 0;
   FileResult.DurationNanoseconds := 0;
@@ -170,6 +173,7 @@ begin
       FileResult.FileName := AFileName;
       FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
       FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
+      FileResult.CompileTimeNanoseconds := 0;
       FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds;
 
       ScriptResult := nil;
@@ -190,6 +194,8 @@ function CollectBenchmarkFileBytecode(const AFileName: string;
   const AReporter: TBenchmarkReporter): TGocciaObjectValue;
 var
   Source: TStringList;
+  SourceText: string;
+  JSXResult: TGocciaJSXTransformResult;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
@@ -200,7 +206,7 @@ var
   FileResult: TBenchmarkFileResult;
   ScriptResult: TGocciaObjectValue;
   BenchGlobals: TGocciaGlobalBuiltins;
-  StartTime, EndTime: Int64;
+  CompileStart, CompileEnd, ExecEnd: Int64;
 begin
   BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
 
@@ -209,14 +215,22 @@ begin
     Source.LoadFromFile(AFileName);
     Source.Add('runBenchmarks();');
 
+    SourceText := Source.Text;
+    if ggJSX in BenchGlobals then
+    begin
+      JSXResult := TGocciaJSXTransformer.Transform(SourceText);
+      SourceText := JSXResult.Source;
+      JSXResult.SourceMap.Free;
+    end;
+
     try
-      StartTime := GetNanoseconds;
+      CompileStart := GetNanoseconds;
 
       Backend := TGocciaSouffleBackend.Create(AFileName);
       try
         Backend.RegisterBuiltIns(BenchGlobals);
 
-        Lexer := TGocciaLexer.Create(Source.Text, AFileName);
+        Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
           Tokens := Lexer.ScanTokens;
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
@@ -234,14 +248,17 @@ begin
           Lexer.Free;
         end;
 
+        CompileEnd := GetNanoseconds;
+
         try
           ResultValue := Backend.RunModule(Module);
-          EndTime := GetNanoseconds;
+          ExecEnd := GetNanoseconds;
 
           FileResult.FileName := AFileName;
           FileResult.LexTimeNanoseconds := 0;
           FileResult.ParseTimeNanoseconds := 0;
-          FileResult.ExecuteTimeNanoseconds := EndTime - StartTime;
+          FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
+          FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
 
           ScriptResult := nil;
           if ResultValue is TGocciaObjectValue then

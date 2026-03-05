@@ -45,6 +45,7 @@ type
     // New Define/Assign pattern
     procedure DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
     procedure AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0); virtual;
+    procedure ForceUpdateBinding(const AName: string; const AValue: TGocciaValue);
 
     // Helper methods for token-based declarations
     procedure DefineFromToken(const AName: string; const AValue: TGocciaValue; const ATokenType: TGocciaTokenType);
@@ -279,6 +280,18 @@ begin
   end;
 
   DefineLexicalBinding(AName, AValue, DeclarationType);
+end;
+
+procedure TGocciaScope.ForceUpdateBinding(const AName: string; const AValue: TGocciaValue);
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
+  begin
+    LexicalBinding.Value := AValue;
+    LexicalBinding.Initialized := True;
+    FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
+  end;
 end;
 
 procedure TGocciaScope.AssignLexicalBinding(const AName: string; const AValue: TGocciaValue; const ALine: Integer = 0; const AColumn: Integer = 0);

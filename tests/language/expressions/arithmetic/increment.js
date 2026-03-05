@@ -1,6 +1,6 @@
 /*---
-description: Increment and decrement operators work correctly
-features: [increment-operators, decrement-operators]
+description: Increment operator works correctly
+features: [increment-operators]
 ---*/
 
 test("pre-increment", () => {
@@ -15,4 +15,14 @@ test("post-increment", () => {
   expect(a).toBe(5);
   expect(a++).toBe(5);
   expect(a).toBe(6);
+});
+
+test("increment preserves fractional part", () => {
+  let x = 1.5;
+  x++;
+  expect(x).toBe(2.5);
+
+  let y = -0.5;
+  ++y;
+  expect(y).toBe(0.5);
 });

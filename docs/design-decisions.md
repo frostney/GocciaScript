@@ -18,7 +18,7 @@ State changes (variable bindings, object mutations) happen through the scope and
 
 **Performance-aware evaluation:** Template literal evaluation and `Array.ToStringLiteral` use `TStringBuilder` for O(n) string assembly instead of O(n^2) repeated concatenation. `Boolean.ToNumberLiteral` returns the existing `ZeroValue`/`OneValue` singletons rather than allocating, avoiding an allocation on every boolean-to-number coercion. `Function.prototype.apply` uses a fast path for `TGocciaArrayValue` arguments (direct `Elements[I]` access) instead of per-element `IntToStr` + `GetProperty`. Numeric binary operations that share a common pattern (subtraction, multiplication, exponentiation) are consolidated through `EvaluateSimpleNumericBinaryOp` to avoid code duplication while maintaining clear semantics.
 
-**IEEE-754 correctness:** Arithmetic operations handle special number values (`NaN`, `Infinity`, `-Infinity`, `-0`) via the `TGocciaNumberSpecialValue` enum rather than the stored `Double` (which is `0.0` for all special values). Division uses explicit `IsNegativeZero` checks to compute correct signed results (e.g., `1 / -Infinity` → `-0`, `-1 / 0` → `-Infinity`). Exponentiation uses an `IsActualZero` guard to distinguish true zero exponents from special values with `Value = 0.0`, and checks `RightNum.IsInfinite` before `RightNum.Value = 0` to correctly handle infinite exponents. The sort comparator (`CallCompareFunc`) maps infinite comparison results to `±1` to avoid passing `0.0` (the internal value of `Infinity`) to the quicksort partitioning logic.
+**IEEE-754 correctness:** Arithmetic operations handle special number values (`NaN`, `Infinity`, `-Infinity`, `-0`) via the `TGocciaNumberSpecialValue` enum rather than the stored `Double` (which is `0.0` for all special values). Division uses explicit `IsNegativeZero` checks to compute correct signed results (e.g., `1 / -Infinity` → `-0`, `-1 / 0` → `-Infinity`). Exponentiation uses an `IsActualZero` guard to distinguish true zero exponents from special values with `Value = 0.0`, and checks `RightNum.IsInfinite` before `RightNum.Value = 0` to correctly handle infinite exponents. The sort comparator (`CallCompareFunc`) maps infinite comparison results to `±1` to avoid passing `0.0` (the internal value of `Infinity`) to the quicksort partitioning logic. Negative zero detection (`IsNegativeZero`) uses an endian-neutral `Int64 absolute` overlay to check the sign bit (`Bits < 0`) instead of byte-indexed checks (`Bytes[7] and $80`) that assume little-endian layout.
 
 ## Virtual Dispatch Value System
 
@@ -361,7 +361,7 @@ String interning (caching `TGocciaStringLiteralValue` instances in a `TDictionar
 
 ## Souffle VM: Two-Tier ISA with Pluggable Runtime
 
-GocciaScript includes an alternative bytecode execution backend — the **Souffle VM** — designed as a general-purpose virtual machine that can support multiple language frontends. See [souffle-vm.md](souffle-vm.md) for the full architecture.
+GocciaScript includes an alternative bytecode execution backend — the **Souffle VM** — designed as a standalone, language-agnostic virtual machine that can support multiple language frontends. The Souffle VM is intended to be extractable from the GocciaScript repository as an independent project. See [souffle-vm.md](souffle-vm.md) for the full architecture.
 
 ### Why a Bytecode VM?
 
@@ -377,43 +377,79 @@ Opcodes like "get property", "typeof", and "instanceof" have fundamentally diffe
 
 The solution is a split opcode space:
 
-- **Tier 1 (0–127):** VM-intrinsic operations with fixed, universal semantics (register moves, control flow, closures, exceptions). Implemented directly in the dispatch loop.
-- **Tier 2 (128–255):** Runtime operations dispatched through `TSouffleRuntimeOperations`, an abstract class each language provides. The VM calls `RuntimeOps.GetProperty(obj, key)` without knowing what "get property" means.
+- **Tier 1 (0–127):** VM-intrinsic operations with fixed, universal semantics (register moves, control flow, closures, arrays, records, blueprints, exceptions). Implemented directly in the dispatch loop. The litmus test: *"Does this operation have one correct implementation regardless of language?"*
+- **Tier 2 (128–255):** Runtime operations dispatched through `TSouffleRuntimeOperations`, an abstract class each language provides. The VM calls `RuntimeOps.GetProperty(obj, key)` without knowing what "get property" means. The litmus test: *"Does this operation's behavior depend on the language?"*
 
-Adding a new language frontend requires implementing `TSouffleRuntimeOperations` — zero VM changes.
+Adding a new language frontend requires implementing `TSouffleRuntimeOperations` — zero VM changes. Currently, the abstract interface has 45 generic methods + 1 `ExtendedOperation` entry point for language-specific sub-opcodes.
 
 ### Why a Self-Contained Value System?
 
-The Souffle VM has its own `TSouffleValue` tagged union (16 bytes: 1-byte kind tag + 8-byte data) with only 5 value kinds: Nil, Boolean, Integer, Float, Reference. This is independent of `TGocciaValue`.
+The Souffle VM has its own `TSouffleValue` tagged union (26 bytes: kind + flags + variant data) with 6 value kinds: Nil, Boolean, Integer, Float, String (inline ≤23 chars), Reference. This is independent of `TGocciaValue`.
 
 The separation exists because:
 
 - **Language-agnostic** — The VM doesn't know what "a string" or "an object" is. Those are all `svkReference` (pointer to a `TSouffleHeapObject`). The heap object's type tag is interpreted by the runtime, not the VM.
 - **No GocciaScript dependency** — The VM can be used without any GocciaScript code, making it viable for other frontends.
-- **Inline primitives** — Booleans, integers, and floats live in the register file with zero heap allocation. Only complex types go through the heap.
-- **WASM 3.0 mapping** — The 5 kinds map naturally to WASM's `anyref` hierarchy: Nil → `ref.null`, small integers/booleans → `i31ref`, floats → boxed `f64` GC structs, references → GC struct subtypes.
-
-Bridge conversions between `TSouffleValue` and `TGocciaValue` happen at the runtime operations boundary. `TGocciaWrappedValue` wraps a `TGocciaValue` as a `TSouffleHeapObject` for VM register storage; `TGocciaSouffleClosureBridge` wraps a `TSouffleClosure` as a `TGocciaFunctionBase` for GocciaScript callback compatibility.
+- **Inline primitives** — Booleans, integers, floats, and short strings (≤23 chars) live in the register file with zero heap allocation. Only complex types and long strings go through the heap.
+- **Opaque flags** — `svkNil` carries a `Flags` byte the VM stores and compares but never interprets. GocciaScript uses it to distinguish `undefined` (flags=0) from `null` (flags=1). Other languages may use it differently or not at all.
+- **WASM 3.0 mapping** — The 6 kinds map naturally to WASM's `anyref` hierarchy: Nil → `ref.null`, small integers/booleans → `i31ref`, floats → boxed `f64` GC structs, references → GC struct subtypes.
 
 ### Compiler-Side Desugaring
 
 Language-specific features are compiled into sequences of generic VM instructions rather than adding specialized opcodes:
 
-- **Classes** — No `CLASS` opcode. The compiler emits `OP_CLOSURE` (constructor/methods) + `OP_RT_NEW_COMPOUND` (prototype) + `OP_RT_SET_PROP` (method registration).
-- **Nullish coalescing (`??`)** — No `IS_NULLISH` opcode. The compiler emits `OP_JUMP_IF_NOT_NIL` (check for `undefined`) followed by `OP_RT_GET_GLOBAL('null')` + `OP_RT_EQ` (check for `null`) with conditional jumps.
-- **Template literals** — The compiler parses interpolations at compile time, emits string constants and expression compilations, then chains `OP_RT_ADD` instructions for concatenation.
+- **Simple classes** — The compiler emits `OP_NEW_BLUEPRINT` + `OP_INHERIT` + `OP_CLOSURE` (per method) + `OP_RECORD_SET` (to blueprint methods) + `OP_INSTANTIATE`.
+- **Nullish coalescing (`??`)** — The compiler emits `OP_JUMP_IF_NOT_NIL` (check for `undefined`) followed by `OP_RT_GET_GLOBAL('null')` + `OP_RT_EQ` (check for `null`) with conditional jumps.
+- **Template literals** — The compiler parses interpolations at compile time, emits string constants and `OP_RT_TO_STRING` for expression parts, then chains `OP_CONCAT` instructions.
+- **Object spread** — The compiler emits `OP_RT_EXT(GOCCIA_EXT_SPREAD_OBJ)`, routing to the GocciaScript-specific extension handler.
 
-This keeps the VM general-purpose: new language features are expressed through existing operations.
+This keeps the VM general-purpose: new language features are expressed through existing operations or routed through `OP_RT_EXT`.
 
-### Deferred Runtime Operations
+### Why `OP_RT_EXT` Over Per-Feature Opcodes?
 
-Several runtime operations are currently stubbed in `TGocciaRuntimeOperations` and will need full implementations before the corresponding GocciaScript features work in bytecode mode:
+An early design added JS-specific opcodes directly to the Tier 2 table (`OP_RT_SPREAD_OBJ`, `OP_RT_DEF_GETTER`, `OP_RT_EVAL_CLASS`, etc.). This accumulated 13 JS-specific opcodes — 16 if you count the abstract methods they required. Each opcode was unusable by any other language frontend.
 
-- **Iteration** (`GetIterator`, `IteratorNext`, `SpreadInto`) — Not yet wired to GocciaScript's iterator protocol. Blocks `for...of`, spread syntax, and destructuring in bytecode mode.
-- **Module imports** (`ImportModule`) — Returns nil. Blocks `import`/`export` in bytecode mode.
-- **Async/await** (`AwaitValue`) — Returns the value unchanged. Blocks async function execution in bytecode mode.
+A systematic boundary cleanup replaced all 13 opcodes with a single `OP_RT_EXT` that dispatches to `ExtendedOperation(subOpcode, ...)`. GocciaScript defines its sub-opcode constants in `Goccia.Compiler.ExtOps.pas`. The VM never interprets sub-opcode IDs — they are opaque bytes. A future C# or Ruby frontend would define its own sub-opcode constants and handler. See [souffle-vm.md § OP_RT_EXT](souffle-vm.md#op_rt_ext-language-extension-mechanism) for the full rationale on why alternatives were rejected.
 
-These stubs exist because the core execution pipeline (variables, closures, classes, property access, invocation) was prioritized first. Each stub has a clear contract defined by the abstract `TSouffleRuntimeOperations` base class.
+### Tier 1 Property Flags vs Tier 2 Visibility
+
+Property **mutability** (writable/configurable) is a Tier 1 concern. Every language with objects needs per-property control over mutability. These flags are stored as a `Flags` byte on each `TSouffleRecordEntry` and enforced by the VM's `PutChecked`/`DeleteChecked` methods — no runtime dispatch needed. The per-property flag is the fundamental primitive; bulk operations like freeze and seal are derived from it:
+
+- `SetEntryFlags(key, flags)` — modify flags on a single property
+- `PutWithFlags(key, value, flags)` — create a property with specific flags
+- `PreventExtensions` — stop new properties from being added
+- `Freeze` = iterate all entries, set flags to 0, prevent extensions (a convenience, not a primitive)
+
+Property **visibility** (public/private/protected) and **accessor semantics** (getter/setter invocation) are Tier 2 concerns. JavaScript uses `#field` private name mangling; C# uses CLR visibility metadata; Ruby uses `attr_reader`/`attr_writer`. At the VM level, getters, setters, and methods are all functions — the runtime decides whether a property access triggers a function call.
+
+An earlier design included `OP_RECORD_FREEZE` as a dedicated opcode for bulk freezing. This was removed because (1) per-property flag setting is the real building block, (2) freezing semantics differ across languages, and (3) a bulk operation is trivially composed from per-property calls by the runtime.
+
+### Spread Calling Consolidation
+
+An earlier design had separate `OP_RT_CALL_SPREAD` and `OP_RT_CALL_METHOD_SPREAD` opcodes for spread-based function calls. These were consolidated into the C flags byte of `OP_RT_CALL`/`OP_RT_CALL_METHOD` (bit 0 = spread mode, B = args array register). Spread is a modifier on an existing operation, not a fundamentally different one. The C byte was unused in these opcodes, making it free to repurpose.
+
+### The Bridge Problem
+
+`TGocciaRuntimeOperations` implements most Tier 2 operations by:
+
+1. Converting `TSouffleValue` → `TGocciaValue` (unwrap)
+2. Delegating to the GocciaScript evaluator/interpreter
+3. Converting `TGocciaValue` → `TSouffleValue` (wrap)
+
+This "Unwrap-Delegate-Wrap" cycle was the fastest path to a working bytecode backend and achieves full language coverage — the bytecode backend passes 100% of the test suite (3,347 tests). However, the cycle creates deep coupling to the interpreter.
+
+The target architecture eliminates the bridge entirely: `TGocciaRuntimeOperations` would implement JavaScript semantics directly on Souffle types (`TSouffleValue`, `TSouffleArray`, `TSouffleRecord`, `TSouffleBlueprint`), with prototype chain walking on delegate chains, type coercion natively on `TSouffleValue`, and all built-in methods as `TSouffleNativeFunction` delegates. This is a ground-up rewrite, not an incremental fix. See [souffle-vm.md § Current State](souffle-vm.md#current-state-and-bridge-architecture) for the full analysis.
+
+### Bridge-Delegated Operations
+
+The following operations delegate to the GocciaScript evaluator through the bridge layer. They are functionally correct but add overhead from value conversion and dual GC tracking:
+
+- **Iteration** (`GetIterator`, `IteratorNext`, `SpreadInto`) — Delegates to GocciaScript's `GetIteratorFromValue` / `TGocciaIteratorValue` protocol.
+- **Module imports** (`ImportModule`) — Delegates to the GocciaScript module resolver.
+- **Async/await** (`AwaitValue`) — Delegates to `TGocciaPromiseValue` and the microtask queue.
+- **Complex class compilation** — Classes with getters, setters, static properties, private members, or decorators are deferred to the interpreter via `GOCCIA_EXT_EVAL_CLASS`. Classes extending built-in constructors (`Array`, `Map`, `Set`, `Promise`, `Object`) are also deferred because `OP_INHERIT` requires both sides to be `TSouffleBlueprint`s. The goal is to compile all class features to Tier 1 + Tier 2 opcodes.
+
+Eliminating the bridge for these operations is the primary path to improving bytecode execution performance.
 
 ### Rejected Findings
 

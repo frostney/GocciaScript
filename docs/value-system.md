@@ -158,6 +158,9 @@ Used by:
 - `Function.prototype.call/apply/bind` — to validate that the receiver is callable.
 - Array method callbacks (`map`, `filter`, `reduce`, `sort`, etc.) — to validate user-provided callbacks.
 - `Set.prototype.forEach` and `Map.prototype.forEach` — to validate the callback argument.
+- `IsDeepEqual` — to reject callable objects from deep structural comparison when TypeNames differ.
+
+**Important:** When code needs to cast to `TGocciaFunctionBase` after the check (e.g., accessor property invocation via `.Call()`), use `is TGocciaFunctionBase` instead of `IsCallable`. This is because `TGocciaClassValue` inherits from `TGocciaValue` (not `TGocciaFunctionBase`) but returns `True` for `IsCallable`. The RTTI check ensures the cast is safe.
 
 ## Virtual Property Access
 
@@ -226,7 +229,7 @@ end;
 
 Special number singletons: `NaNValue`, `PositiveInfinityValue`, `NegativeInfinityValue`, `NegativeZeroValue`.
 
-**Checking for special values:** Always use the property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) rather than inspecting `FValue` directly. Since special values store `0.0` in `FValue`, standard floating-point checks like `Math.IsNaN(FValue)` will return incorrect results. When checking for actual zero (not a special value), use `(Value = 0) and not IsNaN and not IsInfinite` — see `IsActualZero` in `Goccia.Evaluator.Arithmetic.pas` for the canonical helper. Similarly, the sort comparator in `Goccia.Values.ArrayValue.pas` uses `NumericRank` to map each special value to a distinct `Double` for correct ordering.
+**Checking for special values:** Always use the property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) rather than inspecting `FValue` directly. Since special values store `0.0` in `FValue`, standard floating-point checks like `Math.IsNaN(FValue)` will return incorrect results. `IsNegativeZero` uses an endian-neutral `Int64 absolute` overlay (`Bits < 0`) to detect the sign bit — see [docs/code-style.md](code-style.md) for the pattern. When checking for actual zero (not a special value), use `(Value = 0) and not IsNaN and not IsInfinite` — see `IsActualZero` in `Goccia.Evaluator.Arithmetic.pas` for the canonical helper. Similarly, the sort comparator in `Goccia.Values.ArrayValue.pas` uses `NumericRank` to map each special value to a distinct `Double` for correct ordering.
 
 ### Number Prototype (`TGocciaNumberObjectValue`)
 

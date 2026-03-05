@@ -822,6 +822,7 @@ function TGocciaArrayValue.ArrayFlat(const AArgs: TGocciaArgumentsCollection; co
 var
   Arr: TGocciaArrayValue;
   ResultArray: TGocciaArrayValue;
+  DepthNum: TGocciaNumberLiteralValue;
   Depth: Integer;
 begin
   // Step 1: Let O be ToObject(this value)
@@ -839,13 +840,19 @@ begin
     if not (AArgs.GetElement(0) is TGocciaNumberLiteralValue) then
       ThrowError('Array.flat expects depth argument to be a number');
 
-    if AArgs.GetElement(0).ToNumberLiteral.IsInfinity then
+    DepthNum := AArgs.GetElement(0).ToNumberLiteral;
+    if DepthNum.IsNaN then
+      Depth := 0
+    else if DepthNum.IsInfinity then
       Depth := MaxInt
+    else if DepthNum.IsNegativeInfinity then
+      Depth := 0
+    else if DepthNum.Value > MaxInt then
+      Depth := MaxInt
+    else if DepthNum.Value < 0 then
+      Depth := 0
     else
-      Depth := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
-
-    if Depth < 0 then
-      Depth := 0;
+      Depth := Trunc(DepthNum.Value);
   end;
 
   // Step 5: Let A be ArraySpeciesCreate(O, 0)

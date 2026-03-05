@@ -16,6 +16,8 @@ uses
   Goccia.Engine,
   Goccia.Engine.Backend,
   Goccia.FileExtensions,
+  Goccia.JSX.SourceMap,
+  Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.Token,
@@ -154,16 +156,21 @@ end;
 function RunGocciaScriptBytecode(const AFileName: string): TTestFileResult;
 var
   Source: TStringList;
+  SourceText: string;
+  JSXResult: TGocciaJSXTransformResult;
+  SourceMap: TGocciaSourceMap;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
+  Warning: TGocciaParserWarning;
   ProgramNode: TGocciaProgram;
   Module: TSouffleBytecodeModule;
   Backend: TGocciaSouffleBackend;
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
   TestGlobals: TGocciaGlobalBuiltins;
-  StartTime, EndTime: Int64;
+  OrigLine, OrigCol, I: Integer;
+  CompileStart, CompileEnd, ExecEnd: Int64;
 begin
   TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
   ScriptResult := CreateDefaultScriptResult;
@@ -185,19 +192,40 @@ begin
     Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
       [BoolToStr(GExitOnFirstFailure, 'true', 'false')]));
 
-    try
-      StartTime := GetNanoseconds;
+    SourceText := Source.Text;
+    SourceMap := nil;
+    if ggJSX in TestGlobals then
+    begin
+      JSXResult := TGocciaJSXTransformer.Transform(SourceText);
+      SourceText := JSXResult.Source;
+      SourceMap := JSXResult.SourceMap;
+    end;
+
+    try try
+      CompileStart := GetNanoseconds;
 
       Backend := TGocciaSouffleBackend.Create(AFileName);
       try
         Backend.RegisterBuiltIns(TestGlobals);
 
-        Lexer := TGocciaLexer.Create(Source.Text, AFileName);
+        Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
           Tokens := Lexer.ScanTokens;
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
           try
             ProgramNode := Parser.Parse;
+            if not GSilentConsole then
+              for I := 0 to Parser.WarningCount - 1 do
+              begin
+                Warning := Parser.GetWarning(I);
+                WriteLn(Format('Warning: %s', [Warning.Message]));
+                if Warning.Suggestion <> '' then
+                  WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
+                if Assigned(SourceMap) and SourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
+                  WriteLn(Format('  --> %s:%d:%d', [AFileName, OrigLine, OrigCol]))
+                else
+                  WriteLn(Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
+              end;
             try
               Module := Backend.CompileToModule(ProgramNode);
             finally
@@ -210,19 +238,21 @@ begin
           Lexer.Free;
         end;
 
+        CompileEnd := GetNanoseconds;
+
         try
           ResultValue := Backend.RunModule(Module);
-          EndTime := GetNanoseconds;
+          ExecEnd := GetNanoseconds;
 
           if ResultValue is TGocciaObjectValue then
             MergeFileResult(ScriptResult, TGocciaObjectValue(ResultValue));
 
           Result.TestResult := ScriptResult;
           Result.Timing.Result := ResultValue;
-          Result.Timing.LexTimeNanoseconds := 0;
+          Result.Timing.LexTimeNanoseconds := CompileEnd - CompileStart;
           Result.Timing.ParseTimeNanoseconds := 0;
-          Result.Timing.ExecuteTimeNanoseconds := EndTime - StartTime;
-          Result.Timing.TotalTimeNanoseconds := EndTime - StartTime;
+          Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
+          Result.Timing.TotalTimeNanoseconds := ExecEnd - CompileStart;
           Result.Timing.FileName := AFileName;
         finally
           Module.Free;
@@ -237,6 +267,9 @@ begin
         MarkLoadError(ScriptResult, AFileName, E.Message);
         Result := MakeEmptyTestResult(ScriptResult);
       end;
+    end;
+    finally
+      SourceMap.Free;
     end;
   finally
     Source.Free;
@@ -256,6 +289,7 @@ type
     TestResult: TGocciaObjectValue;
     TotalLexNanoseconds: Int64;
     TotalParseNanoseconds: Int64;
+    TotalCompileNanoseconds: Int64;
     TotalExecNanoseconds: Int64;
   end;
 
@@ -266,12 +300,14 @@ begin
   Result.TestResult := nil;
   Result.TotalLexNanoseconds := 0;
   Result.TotalParseNanoseconds := 0;
+  Result.TotalCompileNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
   try
     FileResult := RunGocciaScript(AFileName);
     Result.TestResult := FileResult.TestResult;
     Result.TotalLexNanoseconds := FileResult.Timing.LexTimeNanoseconds;
     Result.TotalParseNanoseconds := FileResult.Timing.ParseTimeNanoseconds;
+    Result.TotalCompileNanoseconds := FileResult.Timing.LexTimeNanoseconds;
     Result.TotalExecNanoseconds := FileResult.Timing.ExecuteTimeNanoseconds;
   except
     on E: Exception do
@@ -311,6 +347,7 @@ begin
   TotalDuration := 0;
   Result.TotalLexNanoseconds := 0;
   Result.TotalParseNanoseconds := 0;
+  Result.TotalCompileNanoseconds := 0;
   Result.TotalExecNanoseconds := 0;
 
   for I := 0 to AFiles.Count - 1 do
@@ -325,6 +362,7 @@ begin
 
     Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + FileResult.TotalLexNanoseconds;
     Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + FileResult.TotalParseNanoseconds;
+    Result.TotalCompileNanoseconds := Result.TotalCompileNanoseconds + FileResult.TotalCompileNanoseconds;
     Result.TotalExecNanoseconds := Result.TotalExecNanoseconds + FileResult.TotalExecNanoseconds;
 
     PassedCount := PassedCount + FileResult.TestResult.GetProperty('passed').ToNumberLiteral.Value;
@@ -392,9 +430,14 @@ begin
       Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / RunCount * 100)]));
       Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
       Writeln(Format('Test Results Test Execution: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
-      Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
-        [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
-         FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds)]));
+      if GMode = ebSouffleVM then
+        Writeln(Format('Test Results Engine Timing: Compile: %s | Execute: %s | Total: %s',
+          [FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
+           FormatDuration(AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]))
+      else
+        Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
+          [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
+           FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds)]));
       Writeln(Format('Test Results Failed Tests: %s', [TestResult.GetProperty('failedTests').ToStringLiteral.Value]));
     end;
   end;

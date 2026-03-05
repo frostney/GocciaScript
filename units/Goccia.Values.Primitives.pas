@@ -90,12 +90,9 @@ type
     property Value: Boolean read FValue;
   end;
 
-  TGocciaNumberSpecialValue = (nsvNone, nsvNaN, nsvNegativeZero, nsvInfinity, nsvNegativeInfinity);
-
   TGocciaNumberLiteralValue = class(TGocciaValue)
   private
     FValue: Double;
-    FSpecialValue: TGocciaNumberSpecialValue;
 
     function GetIsNaN: Boolean; inline;
     function GetIsNegativeZero: Boolean; inline;
@@ -112,7 +109,7 @@ type
     class var FSmallIntCache: array[0..255] of TGocciaNumberLiteralValue;
     class var FSmallIntCacheInitialized: Boolean;
   public
-    constructor Create(const AValue: Double; const ASpecialValue: TGocciaNumberSpecialValue = nsvNone);
+    constructor Create(const AValue: Double);
 
     class function NaNValue: TGocciaNumberLiteralValue;
     class function NegativeZeroValue: TGocciaNumberLiteralValue;
@@ -373,99 +370,71 @@ begin
   Result := True;
 end;
 
-constructor TGocciaNumberLiteralValue.Create(const AValue: Double; const ASpecialValue: TGocciaNumberSpecialValue = nsvNone);
+constructor TGocciaNumberLiteralValue.Create(const AValue: Double);
 begin
-  if Math.IsNaN(AValue) then
-  begin
-    FSpecialValue := nsvNaN;
-    FValue := ZERO_VALUE;
-  end
-  else if Math.IsInfinite(AValue) then
-  begin
-    if AValue > 0 then
-      FSpecialValue := nsvInfinity
-    else
-      FSpecialValue := nsvNegativeInfinity;
-    FValue := ZERO_VALUE;
-  end
-  else if (AValue = ZERO_VALUE) and (ASpecialValue = nsvNegativeZero) then
-  begin
-    FSpecialValue := nsvNegativeZero;
-    FValue := ZERO_VALUE;
-  end
-  else
-  begin
-    FSpecialValue := ASpecialValue;
-    FValue := AValue;
-  end;
+  FValue := AValue;
 end;
 
 function TGocciaNumberLiteralValue.GetIsNaN: Boolean;
 begin
-  Result := FSpecialValue = nsvNaN;
+  Result := Math.IsNaN(FValue);
 end;
 
 function TGocciaNumberLiteralValue.GetIsNegativeZero: Boolean;
+var
+  V: Double;
+  Bits: Int64 absolute V;
 begin
-  Result := FSpecialValue = nsvNegativeZero;
+  V := FValue;
+  Result := (V = ZERO_VALUE) and (Bits < 0);
 end;
 
 function TGocciaNumberLiteralValue.GetIsInfinity: Boolean;
 begin
-  Result := FSpecialValue = nsvInfinity;
+  Result := Math.IsInfinite(FValue) and (FValue > 0);
 end;
 
 function TGocciaNumberLiteralValue.GetIsNegativeInfinity: Boolean;
 begin
-  Result := FSpecialValue = nsvNegativeInfinity;
+  Result := Math.IsInfinite(FValue) and (FValue < 0);
 end;
 
 function TGocciaNumberLiteralValue.GetIsInfinite: Boolean;
 begin
-  Result := (FSpecialValue = nsvInfinity) or (FSpecialValue = nsvNegativeInfinity);
+  Result := Math.IsInfinite(FValue);
 end;
 
 class function TGocciaNumberLiteralValue.NaNValue: TGocciaNumberLiteralValue;
 begin
   if not Assigned(FNanValue) then
-  begin
-    FNaNValue := TGocciaNumberLiteralValue.Create(ZERO_VALUE, nsvNaN);
-  end;
-
-  // Return the cached value
+    FNaNValue := TGocciaNumberLiteralValue.Create(Math.NaN);
   Result := FNaNValue;
 end;
 
 class function TGocciaNumberLiteralValue.NegativeZeroValue: TGocciaNumberLiteralValue;
+var
+  NZ: Double;
 begin
   if not Assigned(FNegativeZeroValue) then
   begin
-    FNegativeZeroValue := TGocciaNumberLiteralValue.Create(ZERO_VALUE, nsvNegativeZero);
+    NZ := ZERO_VALUE;
+    NZ := NZ * (-1.0);
+    FNegativeZeroValue := TGocciaNumberLiteralValue.Create(NZ);
   end;
-
-  // Return the cached value
   Result := FNegativeZeroValue;
 end;
 
 class function TGocciaNumberLiteralValue.InfinityValue: TGocciaNumberLiteralValue;
 begin
   if not Assigned(FInfinityValue) then
-  begin
-    FInfinityValue := TGocciaNumberLiteralValue.Create(ZERO_VALUE, nsvInfinity);
-  end;
-
-  // Return the cached value
+    FInfinityValue := TGocciaNumberLiteralValue.Create(Math.Infinity);
   Result := FInfinityValue;
 end;
 
 class function TGocciaNumberLiteralValue.NegativeInfinityValue: TGocciaNumberLiteralValue;
 begin
   if not Assigned(FNegativeInfinityValue) then
-  begin
-    FNegativeInfinityValue := TGocciaNumberLiteralValue.Create(ZERO_VALUE, nsvNegativeInfinity);
-  end;
-
-  // Return the cached value
+    FNegativeInfinityValue := TGocciaNumberLiteralValue.Create(Math.NegInfinity);
   Result := FNegativeInfinityValue;
 end;
 
@@ -513,21 +482,16 @@ end;
 
 function TGocciaNumberLiteralValue.RuntimeCopy: TGocciaValue;
 begin
-  // Use SmallInt cache for common integer values (already GC-pinned, zero allocation)
-  if (FSpecialValue = nsvNone) and (FValue >= 0) and (FValue <= 255)
+  if (not IsNegativeZero) and (FValue >= 0) and (FValue <= 255)
      and (Frac(FValue) = 0) then
     Result := SmallInt(Round(FValue))
   else
-    Result := TGocciaNumberLiteralValue.Create(FValue, FSpecialValue);
+    Result := TGocciaNumberLiteralValue.Create(FValue);
 end;
 
 function TGocciaNumberLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
 begin
-  if FSpecialValue = nsvNaN then
-    Result := TGocciaBooleanLiteralValue.FalseValue
-  else if (FSpecialValue = nsvInfinity) or (FSpecialValue = nsvNegativeInfinity) then
-    Result := TGocciaBooleanLiteralValue.TrueValue
-  else if FValue = ZERO_VALUE then
+  if Math.IsNaN(FValue) or (FValue = ZERO_VALUE) then
     Result := TGocciaBooleanLiteralValue.FalseValue
   else
     Result := TGocciaBooleanLiteralValue.TrueValue;
@@ -540,18 +504,19 @@ end;
 
 function TGocciaNumberLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
 begin
-  case FSpecialValue of
-    nsvNaN:
-      Result := TGocciaStringLiteralValue.Create('NaN');
-    nsvInfinity:
-      Result := TGocciaStringLiteralValue.Create('Infinity');
-    nsvNegativeInfinity:
-      Result := TGocciaStringLiteralValue.Create('-Infinity');
-    nsvNegativeZero:
-      Result := TGocciaStringLiteralValue.Create('0');
+  if Math.IsNaN(FValue) then
+    Result := TGocciaStringLiteralValue.Create(NAN_LITERAL)
+  else if Math.IsInfinite(FValue) then
+  begin
+    if FValue > 0 then
+      Result := TGocciaStringLiteralValue.Create(INFINITY_LITERAL)
+    else
+      Result := TGocciaStringLiteralValue.Create(NEGATIVE_INFINITY_LITERAL);
+  end
+  else if IsNegativeZero then
+    Result := TGocciaStringLiteralValue.Create('0')
   else
     Result := TGocciaStringLiteralValue.Create(FloatToStr(FValue));
-  end;
 end;
 
 

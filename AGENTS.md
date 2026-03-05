@@ -127,7 +127,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Constants: Error Names | `Goccia.Constants.ErrorNames.pas` | Error type name constants (`'TypeError'`, `'RangeError'`, etc.) |
 | Constants: Constructor Names | `Goccia.Constants.ConstructorNames.pas` | Built-in constructor name constants (`'Object'`, `'Array'`, etc.) |
 | ToPrimitive | `Goccia.Values.ToPrimitive.pas` | ECMAScript `ToPrimitive` abstract operation |
-| Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, `ThrowDataCloneError` (creates DOMException with code 25), centralized error construction with proper prototype chain |
+| Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, `ThrowReferenceError`, `ThrowSyntaxError`, `ThrowError`, `ThrowDataCloneError` (creates DOMException with code 25), centralized error construction with proper prototype chain. All runtime errors must go through these helpers (not `TGocciaError.Create`) so the resulting exception is a `TGocciaThrowValue` with a proper JS Error object, catchable from JavaScript `try...catch`. |
 | Argument Validator | `Goccia.Arguments.Validator.pas` | `RequireExactly`, `RequireAtLeast` — standardized argument count/type validation |
 | Argument Callbacks | `Goccia.Arguments.Callbacks.pas` | Pre-typed callback argument collections for array prototype methods |
 | Ordered Map | `OrderedMap.pas` | Generic insertion-order-preserving string-keyed map (`TOrderedMap<T>`) |
@@ -138,29 +138,39 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Souffle VM | `Souffle.VM.pas` | Register-based bytecode VM with two-tier dispatch (Tier 1 intrinsic + Tier 2 runtime) |
 | Souffle Value | `Souffle.Value.pas` | `TSouffleValue` tagged union: Nil, Boolean, Integer, Float, Reference |
 | Souffle Bytecode | `Souffle.Bytecode.pas` | Opcode definitions (Tier 1 + Tier 2), 32-bit instruction encoding/decoding |
-| Souffle Bytecode Chunk | `Souffle.Bytecode.Chunk.pas` | `TSouffleFunctionPrototype` — code, constants, upvalue descriptors, exception handlers |
-| Souffle Bytecode Module | `Souffle.Bytecode.Module.pas` | `TSouffleBytecodeModule` — top-level prototype, imports, exports, runtime tag |
+| Souffle Bytecode Chunk | `Souffle.Bytecode.Chunk.pas` | `TSouffleFunctionTemplate` — code, constants, upvalue descriptors, exception handlers |
+| Souffle Bytecode Module | `Souffle.Bytecode.Module.pas` | `TSouffleBytecodeModule` — top-level function template, imports, exports, runtime tag |
 | Souffle Bytecode Binary | `Souffle.Bytecode.Binary.pas` | `.sbc` file serialization/deserialization |
 | Souffle Debug Info | `Souffle.Bytecode.Debug.pas` | Source line mapping, local variable info for debuggers |
 | Souffle Closure | `Souffle.VM.Closure.pas` | `TSouffleClosure` — function prototype + captured upvalue array |
 | Souffle Upvalue | `Souffle.VM.Upvalue.pas` | `TSouffleUpvalue` — open (register pointer) or closed (captured value) |
 | Souffle Call Frame | `Souffle.VM.CallFrame.pas` | `TSouffleVMCallFrame`, `TSouffleCallStack` |
 | Souffle Exception | `Souffle.VM.Exception.pas` | `TSouffleHandlerStack`, `ESouffleThrow` — handler-table exception model |
-| Souffle Runtime Ops | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` — abstract interface for language-specific semantics |
+| Souffle Runtime Ops | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` — 45-method abstract interface for language-specific semantics, plus `ExtendedOperation` for sub-opcode dispatch |
 | Souffle GC | `Souffle.GarbageCollector.pas` | Mark-and-sweep GC for `TSouffleHeapObject` instances |
 | Souffle Heap | `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleString`, heap kind constants |
 | GocciaScript Backend | `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — bridges GocciaScript engine to Souffle VM |
-| GocciaScript Compiler | `Goccia.Compiler.pas` | `TGocciaCompiler` — AST → Souffle bytecode compilation |
-| GocciaScript Runtime | `Goccia.Runtime.Operations.pas` | `TGocciaRuntimeOperations` — GocciaScript semantics for Souffle VM |
-| Compiler Scope | `Goccia.Compiler.Scope.pas` | `TGocciaCompilerScope` — lexical scope tracking, local/upvalue resolution for the bytecode compiler |
+| GocciaScript Compiler | `Goccia.Compiler.pas` | `TGocciaCompiler` — AST → Souffle bytecode compilation, top-level dispatch |
+| Compiler Expressions | `Goccia.Compiler.Expressions.pas` | Expression compilation: functions, methods, identifiers, typed local load/store |
+| Compiler Statements | `Goccia.Compiler.Statements.pas` | Statement compilation: variables, classes (`IsSimpleClass` + `CompileClassDeclaration`), control flow |
+| Compiler Context | `Goccia.Compiler.Context.pas` | `TGocciaCompilationContext` — compilation state passed through sub-units |
+| Compiler Scope | `Goccia.Compiler.Scope.pas` | `TGocciaCompilerScope` — lexical scope tracking, local/upvalue resolution, type hints (`TSouffleLocalType`) |
+| Compiler Constant Folding | `Goccia.Compiler.ConstantFolding.pas` | Compile-time constant folding for arithmetic and comparison expressions |
+| Compiler Extension Ops | `Goccia.Compiler.ExtOps.pas` | GocciaScript-specific sub-opcode constants (`GOCCIA_EXT_*`) for `OP_RT_EXT` dispatch |
+| GocciaScript Runtime | `Goccia.Runtime.Operations.pas` | `TGocciaRuntimeOperations` — GocciaScript semantics for Souffle VM, bridge caches (`FClosureBridgeCache`, `FArrayBridgeCache`, `FArrayBridgeReverse`, `FRecordBridgeCache`), cross-GC rooting, array bridge sync (`SyncCachedGocciaToSouffle` at bridge entry, `SyncSouffleArrayToCache` after native mutations), native array delegate methods |
 
-**Souffle VM known limitations:** Iteration (`GetIterator`, `IteratorNext`, `SpreadInto`), module imports (`ImportModule`), and async/await (`AwaitValue`) are currently stubbed in `TGocciaRuntimeOperations`. Closure receiver binding is accepted but not stored into the frame. `.sbc` binary format uses native endianness (not yet portable). ABC-encoded instructions limit constant pool references to 255 per prototype. See [docs/souffle-vm.md § Known Limitations](docs/souffle-vm.md#known-limitations) for the full list.
+**Souffle VM known limitations:** The bytecode backend passes 100% of the test suite (3,358 tests). All language features work through a bridge layer that delegates to the GocciaScript evaluator for module imports, async/await, iteration, and built-in method calls. Bridged arrays use a dual-representation model with `SyncCachedGocciaToSouffle` at bridge entry and `SyncSouffleArrayToCache` after native mutations; `FArrayBridgeReverse` preserves reference identity across round-trips. Complex classes and classes extending built-in constructors (`Array`, `Map`, `Set`, `Promise`, `Object`) are deferred to the interpreter via `FPendingClasses` / `GOCCIA_EXT_EVAL_CLASS`. `.sbc` binary format uses native endianness (not yet portable). ABC-encoded instructions limit constant pool references to 255 per prototype. See [docs/souffle-vm.md § Known Limitations](docs/souffle-vm.md#known-limitations) for the full list.
 
 **Souffle VM design rules:**
-- The `souffle/` directory must not import `Goccia.*` units — all GocciaScript dependencies live in the bridge files (`Goccia.Engine.Backend.pas`, `Goccia.Runtime.Operations.pas`, `Goccia.Compiler.pas`).
+- The `souffle/` directory must not import `Goccia.*` units — all GocciaScript dependencies live in the bridge files (`Goccia.Engine.Backend.pas`, `Goccia.Runtime.Operations.pas`, `Goccia.Compiler.pas`, and `Goccia.Compiler.*.pas` sub-units).
+- **Uniform receiver handling** — Register 0 always holds the receiver (`SouffleNil` for non-methods). There is no `AIsMethodCall` flag or side-table. The compiler reserves slot 0 for the receiver in every function.
+- **Typed local variables** — The compiler infers `TSouffleLocalType` hints (`sltUntyped`, `sltInteger`, `sltFloat`, `sltBoolean`, `sltString`, `sltReference`) from literal initializers and stores them on `TSouffleFunctionTemplate`. Typed load/store opcodes (`OP_GET_LOCAL_INT`, `OP_SET_LOCAL_FLOAT`, etc.) are emitted for known-type locals. At runtime these are functionally identical to generic `OP_GET_LOCAL`/`OP_SET_LOCAL` but carry type information for future WASM/JIT use.
+- **Simple class compilation** — Classes with only constructors and named methods are compiled to VM blueprint opcodes (`OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_RECORD_SET`, `OP_INSTANTIATE`). Complex classes (getters, setters, statics, private members, decorators) are deferred to the interpreter via `FPendingClasses`. `OP_RECORD_SET` is overloaded: when the target is a `TSouffleBlueprint`, it stores into `Blueprint.Methods`.
 - NaN handling in the Souffle layer uses raw IEEE 754 bit-pattern checks (`FloatBitsAreNaN`), not FPC's `Math.IsNaN`, to avoid language-runtime dependencies and AArch64 pitfalls.
-- New Tier 2 opcodes should only be added when no combination of existing opcodes can express the semantics efficiently. Language-specific features should be desugared by the compiler.
-- The `TSouffleRuntimeOperations` abstract class defines the contract between the VM and any language frontend. GocciaScript's `TGocciaRuntimeOperations` is one implementation; future frontends provide their own.
+- New Tier 2 opcodes should only be added when no combination of existing opcodes can express the semantics efficiently. Language-specific features should use `OP_RT_EXT` with sub-opcode IDs defined in the language's extension constants unit (e.g., `Goccia.Compiler.ExtOps.pas`).
+- The `TSouffleRuntimeOperations` abstract class defines the contract between the VM and any language frontend (45 generic methods + 1 `ExtendedOperation` for sub-opcode dispatch). GocciaScript's `TGocciaRuntimeOperations` is one implementation; future frontends provide their own.
+- **Spread calling** uses the C flags byte on `OP_RT_CALL` / `OP_RT_CALL_METHOD` (bit 0 = spread mode, B = args array register). No separate spread opcodes.
+- **Per-property flags** (writable, configurable) on `TSouffleRecordEntry.Flags` are the fundamental primitive. `SetEntryFlags`, `PutWithFlags`, and `PreventExtensions` are the building blocks. Bulk operations like `Freeze` (set all flags to 0 + prevent extensions) are derived convenience methods called from language runtimes — not opcodes.
 
 ## Development Workflow
 
@@ -397,6 +407,22 @@ Dictionary-based string interning (`TDictionary<string, TGocciaStringLiteralValu
 
 On FPC 3.2.2 AArch64, `Double(Int64Var)` performs a bit reinterpretation, not a value conversion. Use implicit promotion instead: `Int64Var * 1.0` or `Int64Var * 1000000.0`. See [docs/code-style.md](docs/code-style.md) for details.
 
+### Platform Pitfall: Endian-Dependent Byte Indexing
+
+Do **not** use `Bytes[7] and $80` to check the sign bit of a `Double`. This assumes little-endian byte layout. Instead, overlay with `Int64 absolute` and test `Bits < 0`:
+
+```pascal
+var
+  V: Double;
+  Bits: Int64 absolute V;
+begin
+  V := SomeDouble;
+  IsNegative := Bits < 0;  // endian-neutral sign bit check
+end;
+```
+
+This pattern is used in `TGocciaNumberLiteralValue.GetIsNegativeZero` and `IsNegativeZeroFloat` in `Goccia.Compiler.ConstantFolding.pas`.
+
 ### Terminology
 
 - **Define** = create a new variable binding (`DefineLexicalBinding`)
@@ -424,9 +450,9 @@ All values inherit from `TGocciaValue`. Virtual methods on the base class elimin
 - `IsPrimitive` — Returns `True` for null, undefined, boolean, number, and string types. Use `Value.IsPrimitive` instead of multi-`is` check chains.
 - `IsCallable` — Returns `True` for functions and classes. Use `Value.IsCallable` instead of `(Value is TGocciaFunctionBase)` or `(Value is TGocciaFunctionValue) or (Value is TGocciaNativeFunctionValue)`.
 
-The evaluator calls these directly (`Value.GetProperty(Name)`, `Value.IsPrimitive`, `Value.IsCallable`) without type-checking or interface queries. **Prefer these VMT methods over `is` type checks for fundamental type-system properties.** Do not add VMT methods for optional built-in types (e.g., Symbol, Set, Map) — these are toggled via `TGocciaGlobalBuiltins` flags and should use standard RTTI (`is`) checks instead.
+The evaluator calls these directly (`Value.GetProperty(Name)`, `Value.IsPrimitive`, `Value.IsCallable`) without type-checking or interface queries. **Prefer these VMT methods over `is` type checks for fundamental type-system properties.** Do not add VMT methods for optional built-in types (e.g., Symbol, Set, Map) — these are toggled via `TGocciaGlobalBuiltins` flags and should use standard RTTI (`is`) checks instead. **Exception:** When the code needs to cast to `TGocciaFunctionBase` after the check (e.g., to call `.Call()`), use `is TGocciaFunctionBase` instead of `IsCallable`, because `IsCallable` also returns `True` for `TGocciaClassValue` which inherits from `TGocciaValue`, not `TGocciaFunctionBase`.
 
-Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `CreateErrorObject`, etc.). All error objects — both user-created via `new Error()` and runtime-thrown via `ThrowTypeError` etc. — are linked to the correct error type prototype (e.g., `GTypeErrorProto`, `GRangeErrorProto`). This ensures `instanceof TypeError`, `instanceof RangeError`, etc. work correctly for both user-constructed and internally-thrown errors. The global error prototypes are exposed from `Goccia.Builtins.Globals.pas` and follow the ES2026 prototype hierarchy: `TypeError.prototype` → `Error.prototype` → `Object.prototype`. All error objects receive a `stack` property containing a formatted stack trace captured at the point of construction. The call stack is maintained by `Goccia.CallStack.pas`, a singleton that tracks function name, file path, and line/column for each active call frame. Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
+Error construction is centralized in `Goccia.Values.ErrorHelper.pas` (`ThrowTypeError`, `ThrowRangeError`, `ThrowError`, `CreateErrorObject`, etc.). All error objects — both user-created via `new Error()` and runtime-thrown via `ThrowTypeError`/`ThrowError` etc. — are linked to the correct error type prototype (e.g., `GTypeErrorProto`, `GRangeErrorProto`). This ensures `instanceof TypeError`, `instanceof RangeError`, etc. work correctly for both user-constructed and internally-thrown errors. **All runtime errors must use these helpers** (never `TGocciaError.Create` directly) so the exception is a `TGocciaThrowValue` with a proper JS Error object, catchable from JavaScript `try...catch`. The global error prototypes are exposed from `Goccia.Builtins.Globals.pas` and follow the ES2026 prototype hierarchy: `TypeError.prototype` → `Error.prototype` → `Object.prototype`. All error objects receive a `stack` property containing a formatted stack trace captured at the point of construction. The call stack is maintained by `Goccia.CallStack.pas`, a singleton that tracks function name, file path, and line/column for each active call frame. Built-in argument validation uses `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`).
 
 **Symbol coercion:** `TGocciaSymbolValue.ToNumberLiteral` throws `TypeError` (symbols cannot convert to numbers). `ToStringLiteral` returns `"Symbol(description)"` for internal use (display, property keys), but implicit string coercion (template literals, `+` operator, `String.prototype.concat`) must check for symbols and throw `TypeError` at the operator level. See `Goccia.Evaluator.Arithmetic.pas` and `Goccia.Evaluator.pas` for the pattern. Symbols use a shared prototype singleton (like String, Number, Array) with `description` as an accessor getter and `toString()` as a method. `Symbol.prototype` is exposed on the Symbol constructor function.
 

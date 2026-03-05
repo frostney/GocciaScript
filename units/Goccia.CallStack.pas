@@ -12,6 +12,8 @@ type
     Column: Integer;
   end;
 
+  TGocciaCallFrameArray = array of TGocciaCallFrame;
+
   TGocciaCallStack = class
   private class var
     FInstance: TGocciaCallStack;

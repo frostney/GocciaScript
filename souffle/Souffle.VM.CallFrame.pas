@@ -12,12 +12,14 @@ type
   PSouffleVMCallFrame = ^TSouffleVMCallFrame;
 
   TSouffleVMCallFrame = record
-    Prototype: TSouffleFunctionPrototype;
+    Template: TSouffleFunctionTemplate;
     Closure: TSouffleClosure;
     IP: Integer;
     BaseRegister: Integer;
     HandlerDepth: Integer;
     ReturnRegister: Integer;
+    ArgCount: Integer;
+    ArgSourceBase: Integer;
   end;
 
   TSouffleCallStack = class
@@ -28,7 +30,7 @@ type
   public
     constructor Create(const AInitialCapacity: Integer = 64);
 
-    function Push(const APrototype: TSouffleFunctionPrototype;
+    function Push(const ATemplate: TSouffleFunctionTemplate;
       const AClosure: TSouffleClosure;
       const ABaseRegister: Integer;
       const AReturnRegister: Integer;
@@ -53,7 +55,7 @@ begin
   FCount := 0;
 end;
 
-function TSouffleCallStack.Push(const APrototype: TSouffleFunctionPrototype;
+function TSouffleCallStack.Push(const ATemplate: TSouffleFunctionTemplate;
   const AClosure: TSouffleClosure;
   const ABaseRegister: Integer;
   const AReturnRegister: Integer;
@@ -64,12 +66,14 @@ begin
     FCapacity := FCapacity * 2;
     SetLength(FFrames, FCapacity);
   end;
-  FFrames[FCount].Prototype := APrototype;
+  FFrames[FCount].Template := ATemplate;
   FFrames[FCount].Closure := AClosure;
   FFrames[FCount].IP := 0;
   FFrames[FCount].BaseRegister := ABaseRegister;
   FFrames[FCount].ReturnRegister := AReturnRegister;
   FFrames[FCount].HandlerDepth := AHandlerDepth;
+  FFrames[FCount].ArgCount := 0;
+  FFrames[FCount].ArgSourceBase := 0;
   Result := @FFrames[FCount];
   Inc(FCount);
 end;

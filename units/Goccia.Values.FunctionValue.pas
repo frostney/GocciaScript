@@ -36,7 +36,6 @@ type
     destructor Destroy; override;
 
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
-    function CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue; virtual;
     procedure MarkReferences; override;
 
     property Parameters: TGocciaParameterArray read FParameters;
@@ -49,8 +48,6 @@ type
   TGocciaArrowFunctionValue = class(TGocciaFunctionValue)
   protected
     procedure BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue); override;
-  public
-    function CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue; override;
   end;
 
   TGocciaMethodValue = class(TGocciaFunctionValue)
@@ -79,7 +76,8 @@ uses
   Goccia.Logger,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
-  Goccia.Values.Error;
+  Goccia.Values.Error,
+  Goccia.Values.ErrorHelper;
 
 { TGocciaFunctionValue }
 
@@ -235,8 +233,13 @@ begin
       except
         on E: TGocciaReturnValue do raise;
         on E: TGocciaThrowValue do raise;
+        on E: TGocciaBreakSignal do raise;
+        on E: TGocciaTypeError do raise;
+        on E: TGocciaReferenceError do raise;
+        on E: TGocciaRuntimeError do raise;
+        on E: TGocciaError do raise;
         on E: Exception do
-          raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
+          ThrowError('Error executing statement: ' + E.Message);
       end;
     end;
 
@@ -283,20 +286,6 @@ begin
   end;
 end;
 
-function TGocciaFunctionValue.CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue;
-var
-  ClonedStatements: TObjectList<TGocciaASTNode>;
-  I: Integer;
-begin
-  // Create a copy of the statements - we can't share the same reference
-  // since both functions would try to free the same object
-  ClonedStatements := TObjectList<TGocciaASTNode>.Create(False); // Don't own the objects
-  for I := 0 to FBodyStatements.Count - 1 do
-    ClonedStatements.Add(FBodyStatements[I]);
-
-  Result := TGocciaFunctionValue.Create(FParameters, ClonedStatements, ANewScope, FName);
-end;
-
 function TGocciaFunctionValue.GetFunctionLength: Integer;
 var
   I: Integer;
@@ -335,18 +324,6 @@ begin
     end;
     ClosureScope := ClosureScope.Parent;
   end;
-end;
-
-function TGocciaArrowFunctionValue.CloneWithNewScope(const ANewScope: TGocciaScope): TGocciaFunctionValue;
-var
-  ClonedStatements: TObjectList<TGocciaASTNode>;
-  I: Integer;
-begin
-  ClonedStatements := TObjectList<TGocciaASTNode>.Create(False);
-  for I := 0 to FBodyStatements.Count - 1 do
-    ClonedStatements.Add(FBodyStatements[I]);
-
-  Result := TGocciaArrowFunctionValue.Create(FParameters, ClonedStatements, ANewScope, FName);
 end;
 
 { TGocciaMethodValue }

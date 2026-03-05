@@ -21,7 +21,7 @@ type
     procedure WriteDouble(const AValue: Double);
     procedure WriteString(const AValue: string);
     procedure WriteBoolean(const AValue: Boolean);
-    procedure WriteFunctionPrototype(const AProto: TSouffleFunctionPrototype);
+    procedure WriteFunctionTemplate(const AProto: TSouffleFunctionTemplate);
   public
     constructor Create(const AStream: TStream);
     procedure WriteModule(const AModule: TSouffleBytecodeModule);
@@ -37,7 +37,7 @@ type
     function ReadDouble: Double;
     function ReadString: string;
     function ReadBoolean: Boolean;
-    function ReadFunctionPrototype: TSouffleFunctionPrototype;
+    function ReadFunctionTemplate: TSouffleFunctionTemplate;
   public
     constructor Create(const AStream: TStream);
     function ReadModule: TSouffleBytecodeModule;
@@ -108,8 +108,8 @@ begin
     WriteUInt8(0);
 end;
 
-procedure TSouffleBytecodeWriter.WriteFunctionPrototype(
-  const AProto: TSouffleFunctionPrototype);
+procedure TSouffleBytecodeWriter.WriteFunctionTemplate(
+  const AProto: TSouffleFunctionTemplate);
 var
   I: Integer;
   Constant: TSouffleBytecodeConstant;
@@ -167,7 +167,7 @@ begin
   // Nested functions
   WriteUInt16(UInt16(AProto.FunctionCount));
   for I := 0 to AProto.FunctionCount - 1 do
-    WriteFunctionPrototype(AProto.GetFunction(I));
+    WriteFunctionTemplate(AProto.GetFunction(I));
 
   // Debug info
   WriteBoolean(Assigned(AProto.DebugInfo));
@@ -190,6 +190,11 @@ begin
       WriteUInt32(AProto.DebugInfo.GetLocalInfo(I).EndPC);
     end;
   end;
+
+  // Local type hints
+  WriteUInt8(AProto.LocalTypeCount);
+  for I := 0 to AProto.LocalTypeCount - 1 do
+    WriteUInt8(Ord(AProto.GetLocalType(UInt8(I))));
 end;
 
 procedure TSouffleBytecodeWriter.WriteModule(
@@ -232,7 +237,7 @@ begin
   end;
 
   // Top-level function
-  WriteFunctionPrototype(AModule.TopLevel);
+  WriteFunctionTemplate(AModule.TopLevel);
 end;
 
 { TSouffleBytecodeReader }
@@ -286,10 +291,10 @@ begin
   Result := ReadUInt8 <> 0;
 end;
 
-function TSouffleBytecodeReader.ReadFunctionPrototype: TSouffleFunctionPrototype;
+function TSouffleBytecodeReader.ReadFunctionTemplate: TSouffleFunctionTemplate;
 var
   Name: string;
-  MaxRegs, ParamCount, UpvalueCount: UInt8;
+  MaxRegs, ParamCount, UpvalueCount, LocalTypeCount: UInt8;
   CodeCount: UInt32;
   ConstCount, FuncCount, HandlerCount: UInt16;
   I: Integer;
@@ -304,7 +309,7 @@ begin
   ParamCount := ReadUInt8;
   UpvalueCount := ReadUInt8;
 
-  Result := TSouffleFunctionPrototype.Create(Name);
+  Result := TSouffleFunctionTemplate.Create(Name);
   Result.MaxRegisters := MaxRegs;
   Result.ParameterCount := ParamCount;
 
@@ -341,7 +346,7 @@ begin
   // Nested functions
   FuncCount := ReadUInt16;
   for I := 0 to FuncCount - 1 do
-    Result.AddFunction(ReadFunctionPrototype);
+    Result.AddFunction(ReadFunctionTemplate);
 
   // Debug info
   HasDebug := ReadBoolean;
@@ -360,6 +365,11 @@ begin
 
     Result.DebugInfo := DebugInfo;
   end;
+
+  // Local type hints
+  LocalTypeCount := ReadUInt8;
+  for I := 0 to LocalTypeCount - 1 do
+    Result.SetLocalType(UInt8(I), TSouffleLocalType(ReadUInt8));
 end;
 
 function TSouffleBytecodeReader.ReadModule: TSouffleBytecodeModule;
@@ -412,7 +422,7 @@ begin
     Result.AddExport(ReadString, ReadUInt16);
 
   // Top-level function
-  Result.TopLevel := ReadFunctionPrototype;
+  Result.TopLevel := ReadFunctionTemplate;
 end;
 
 { File I/O helpers }

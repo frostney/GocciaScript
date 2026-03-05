@@ -22,6 +22,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.TestSetup,
   Goccia.Token,
   Goccia.Values.Primitives;
 

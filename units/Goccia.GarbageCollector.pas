@@ -11,6 +11,8 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TGocciaGCExternalRootMarker = procedure of object;
+
   TGocciaGarbageCollector = class
   private class var
     FInstance: TGocciaGarbageCollector;
@@ -28,6 +30,8 @@ type
     FCollecting: Boolean;
     FTotalCollected: Int64;
     FTotalCollections: Integer;
+
+    FExternalRootMarker: TGocciaGCExternalRootMarker;
 
     procedure MarkPhase;
     procedure SweepPhase;
@@ -52,6 +56,9 @@ type
     procedure AddTempRoot(const AValue: TGocciaValue);
     procedure RemoveTempRoot(const AValue: TGocciaValue);
     function IsTempRoot(const AValue: TGocciaValue): Boolean;
+
+    procedure SetExternalRootMarker(
+      const AMarker: TGocciaGCExternalRootMarker);
 
     procedure Collect;
     procedure CollectIfNeeded;
@@ -104,6 +111,7 @@ begin
   FCollecting := False;
   FTotalCollected := 0;
   FTotalCollections := 0;
+  FExternalRootMarker := nil;
 end;
 
 destructor TGocciaGarbageCollector.Destroy;
@@ -180,6 +188,12 @@ begin
   Result := Assigned(AValue) and FTempRoots.ContainsKey(AValue);
 end;
 
+procedure TGocciaGarbageCollector.SetExternalRootMarker(
+  const AMarker: TGocciaGCExternalRootMarker);
+begin
+  FExternalRootMarker := AMarker;
+end;
+
 procedure TGocciaGarbageCollector.MarkPhase;
 var
   I: Integer;
@@ -207,6 +221,10 @@ begin
   // Mark temporary roots (values held by Pascal code outside the scope chain)
   for Value in FTempRoots.Keys do
     Value.MarkReferences;
+
+  // Mark roots held by external systems (e.g. Souffle VM wrapped values)
+  if Assigned(FExternalRootMarker) then
+    FExternalRootMarker();
 end;
 
 procedure TGocciaGarbageCollector.SweepPhase;

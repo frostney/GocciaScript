@@ -28,7 +28,7 @@ type
     FFormatVersion: UInt16;
     FRuntimeTag: string;
     FSourcePath: string;
-    FTopLevel: TSouffleFunctionPrototype;
+    FTopLevel: TSouffleFunctionTemplate;
     FImports: array of TSouffleModuleImport;
     FImportCount: Integer;
     FExports: array of TSouffleModuleExport;
@@ -48,7 +48,7 @@ type
     property FormatVersion: UInt16 read FFormatVersion;
     property RuntimeTag: string read FRuntimeTag;
     property SourcePath: string read FSourcePath;
-    property TopLevel: TSouffleFunctionPrototype read FTopLevel write FTopLevel;
+    property TopLevel: TSouffleFunctionTemplate read FTopLevel write FTopLevel;
     property ImportCount: Integer read FImportCount;
     property ExportCount: Integer read FExportCount;
     property HasDebugInfo: Boolean read FHasDebugInfo write FHasDebugInfo;

@@ -14,7 +14,7 @@ uses
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
-  Goccia.Values.FunctionValue,
+  Goccia.Values.FunctionBase,
   Goccia.Values.Primitives;
 
 type
@@ -26,12 +26,12 @@ type
   public
     Name: string;
     SuiteName: string;
-    SetupFunction: TGocciaFunctionValue;
-    RunFunction: TGocciaFunctionValue;
-    TeardownFunction: TGocciaFunctionValue;
-    constructor Create(const AName: string; const ARunFunction: TGocciaFunctionValue;
-      const ASuiteName: string; const ASetupFunction: TGocciaFunctionValue = nil;
-      const ATeardownFunction: TGocciaFunctionValue = nil);
+    SetupFunction: TGocciaFunctionBase;
+    RunFunction: TGocciaFunctionBase;
+    TeardownFunction: TGocciaFunctionBase;
+    constructor Create(const AName: string; const ARunFunction: TGocciaFunctionBase;
+      const ASuiteName: string; const ASetupFunction: TGocciaFunctionBase = nil;
+      const ATeardownFunction: TGocciaFunctionBase = nil);
   end;
 
   TBenchmarkResult = record
@@ -117,9 +117,9 @@ end;
 
 { TBenchmarkCase }
 
-constructor TBenchmarkCase.Create(const AName: string; const ARunFunction: TGocciaFunctionValue;
-  const ASuiteName: string; const ASetupFunction: TGocciaFunctionValue;
-  const ATeardownFunction: TGocciaFunctionValue);
+constructor TBenchmarkCase.Create(const AName: string; const ARunFunction: TGocciaFunctionBase;
+  const ASuiteName: string; const ASetupFunction: TGocciaFunctionBase;
+  const ATeardownFunction: TGocciaFunctionBase);
 begin
   inherited Create;
   Name := AName;
@@ -154,7 +154,7 @@ end;
 function TGocciaBenchmark.Suite(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   SuiteName: string;
-  SuiteFunction: TGocciaFunctionValue;
+  SuiteFunction: TGocciaFunctionBase;
   EmptyArgs: TGocciaArgumentsCollection;
   PreviousSuiteName: string;
 begin
@@ -162,10 +162,10 @@ begin
 
   if AArgs.Length < 2 then Exit;
   if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then Exit;
-  if not (AArgs.GetElement(1) is TGocciaFunctionValue) then Exit;
+  if not (AArgs.GetElement(1) is TGocciaFunctionBase) then Exit;
 
   SuiteName := TGocciaStringLiteralValue(AArgs.GetElement(0)).Value;
-  SuiteFunction := TGocciaFunctionValue(AArgs.GetElement(1));
+  SuiteFunction := TGocciaFunctionBase(AArgs.GetElement(1));
 
   FRegisteredSuites.Add(SuiteName);
 
@@ -188,7 +188,7 @@ var
   BenchName: string;
   OptionsObj: TGocciaObjectValue;
   RunProp, SetupProp, TeardownProp: TGocciaValue;
-  RunFn, SetupFn, TeardownFn: TGocciaFunctionValue;
+  RunFn, SetupFn, TeardownFn: TGocciaFunctionBase;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
@@ -200,18 +200,18 @@ begin
   OptionsObj := TGocciaObjectValue(AArgs.GetElement(1));
 
   RunProp := OptionsObj.GetProperty('run');
-  if not Assigned(RunProp) or not (RunProp is TGocciaFunctionValue) then Exit;
-  RunFn := TGocciaFunctionValue(RunProp);
+  if not Assigned(RunProp) or not (RunProp is TGocciaFunctionBase) then Exit;
+  RunFn := TGocciaFunctionBase(RunProp);
 
   SetupFn := nil;
   SetupProp := OptionsObj.GetProperty('setup');
-  if Assigned(SetupProp) and (SetupProp is TGocciaFunctionValue) then
-    SetupFn := TGocciaFunctionValue(SetupProp);
+  if Assigned(SetupProp) and (SetupProp is TGocciaFunctionBase) then
+    SetupFn := TGocciaFunctionBase(SetupProp);
 
   TeardownFn := nil;
   TeardownProp := OptionsObj.GetProperty('teardown');
-  if Assigned(TeardownProp) and (TeardownProp is TGocciaFunctionValue) then
-    TeardownFn := TGocciaFunctionValue(TeardownProp);
+  if Assigned(TeardownProp) and (TeardownProp is TGocciaFunctionBase) then
+    TeardownFn := TGocciaFunctionBase(TeardownProp);
 
   FRegisteredBenchmarks.Add(TBenchmarkCase.Create(BenchName, RunFn, FCurrentSuiteName, SetupFn, TeardownFn));
 end;

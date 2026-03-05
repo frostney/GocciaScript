@@ -94,6 +94,7 @@ type
     FBuiltinBenchmark: TGocciaBenchmark;
     FBuiltinTemporal: TGocciaTemporalBuiltin;
     FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
+    FPreviousExceptionMask: TFPUExceptionMask;
     FSuppressWarnings: Boolean;
 
     procedure PinSingletons;
@@ -148,6 +149,7 @@ implementation
 
 uses
   Generics.Collections,
+  Math,
   SysUtils,
   TypInfo,
 
@@ -184,6 +186,8 @@ end;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver);
 begin
+  FPreviousExceptionMask := GetExceptionMask;
+  SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FGlobals := AGlobals;
@@ -215,29 +219,33 @@ end;
 
 destructor TGocciaEngine.Destroy;
 begin
-  if Assigned(TGocciaGarbageCollector.Instance) and Assigned(FInterpreter) then
-    TGocciaGarbageCollector.Instance.RemoveRoot(FInterpreter.GlobalScope);
+  try
+    if Assigned(TGocciaGarbageCollector.Instance) and Assigned(FInterpreter) then
+      TGocciaGarbageCollector.Instance.RemoveRoot(FInterpreter.GlobalScope);
 
-  FBuiltinConsole.Free;
-  FBuiltinMath.Free;
-  FBuiltinGlobalObject.Free;
-  FBuiltinGlobalArray.Free;
-  FBuiltinGlobalNumber.Free;
-  FBuiltinGlobalString.Free;
-  FBuiltinGlobals.Free;
-  FBuiltinJSON.Free;
-  FBuiltinSymbol.Free;
-  FBuiltinSet.Free;
-  FBuiltinMap.Free;
-  FBuiltinPromise.Free;
-  FBuiltinTestAssertions.Free;
-  FBuiltinBenchmark.Free;
-  FBuiltinTemporal.Free;
-  FBuiltinArrayBuffer.Free;
+    FBuiltinConsole.Free;
+    FBuiltinMath.Free;
+    FBuiltinGlobalObject.Free;
+    FBuiltinGlobalArray.Free;
+    FBuiltinGlobalNumber.Free;
+    FBuiltinGlobalString.Free;
+    FBuiltinGlobals.Free;
+    FBuiltinJSON.Free;
+    FBuiltinSymbol.Free;
+    FBuiltinSet.Free;
+    FBuiltinMap.Free;
+    FBuiltinPromise.Free;
+    FBuiltinTestAssertions.Free;
+    FBuiltinBenchmark.Free;
+    FBuiltinTemporal.Free;
+    FBuiltinArrayBuffer.Free;
 
-  FInterpreter.Free;
-  if FOwnsResolver then
-    FResolver.Free;
+    FInterpreter.Free;
+    if FOwnsResolver then
+      FResolver.Free;
+  finally
+    SetExceptionMask(FPreviousExceptionMask);
+  end;
   inherited;
 end;
 

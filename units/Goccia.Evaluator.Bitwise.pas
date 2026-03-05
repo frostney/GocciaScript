@@ -40,9 +40,12 @@ begin
   Result := TGocciaNumberLiteralValue.Create(Trunc(ALeft.ToNumberLiteral.Value) shl (Trunc(ARight.ToNumberLiteral.Value) and 31));
 end;
 
+// ES2026 §13.15.3 ShiftExpression : ShiftExpression >> AdditiveExpression
 function EvaluateRightShift(const ALeft, ARight: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaNumberLiteralValue.Create(Trunc(ALeft.ToNumberLiteral.Value) shr (Trunc(ARight.ToNumberLiteral.Value) and 31));
+  Result := TGocciaNumberLiteralValue.Create(
+    SarLongint(Int32(Trunc(ALeft.ToNumberLiteral.Value)),
+               Trunc(ARight.ToNumberLiteral.Value) and 31));
 end;
 
 function EvaluateUnsignedRightShift(const ALeft, ARight: TGocciaValue): TGocciaValue;

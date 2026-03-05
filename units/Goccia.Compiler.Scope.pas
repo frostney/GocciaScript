@@ -5,7 +5,9 @@ unit Goccia.Compiler.Scope;
 interface
 
 uses
-  Generics.Collections;
+  Generics.Collections,
+
+  Souffle.Bytecode.Chunk;
 
 type
   TGocciaCompilerVariableKind = (cvkLocal, cvkUpvalue, cvkGlobal);
@@ -16,11 +18,14 @@ type
     Depth: Integer;
     IsCaptured: Boolean;
     IsConst: Boolean;
+    IsGlobalBacked: Boolean;
+    TypeHint: TSouffleLocalType;
   end;
 
   TGocciaCompilerUpvalue = record
     Index: UInt8;
     IsLocal: Boolean;
+    IsConst: Boolean;
   end;
 
   TGocciaCompilerScope = class
@@ -42,7 +47,7 @@ type
     function ResolveLocal(const AName: string): Integer;
     function ResolveUpvalue(const AName: string): Integer;
     function AddUpvalue(const AIndex: UInt8;
-      const AIsLocal: Boolean): Integer;
+      const AIsLocal: Boolean; const AIsConst: Boolean = False): Integer;
 
     function AllocateRegister: UInt8;
     procedure FreeRegister;
@@ -60,6 +65,9 @@ type
     function GetLocal(const AIndex: Integer): TGocciaCompilerLocal;
     function GetUpvalue(const AIndex: Integer): TGocciaCompilerUpvalue;
     procedure MarkCaptured(const AIndex: Integer);
+    procedure MarkGlobalBacked(const AIndex: Integer);
+    procedure SetLocalTypeHint(const AIndex: Integer;
+      const ATypeHint: TSouffleLocalType);
   end;
 
 implementation
@@ -93,6 +101,7 @@ begin
   FLocals[FLocalCount].Depth := FDepth;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsConst := AIsConst;
+  FLocals[FLocalCount].TypeHint := sltUntyped;
   Result := FNextSlot;
   Inc(FLocalCount);
   Inc(FNextSlot);
@@ -122,7 +131,8 @@ begin
   if LocalIdx >= 0 then
   begin
     FParent.MarkCaptured(LocalIdx);
-    Exit(AddUpvalue(FParent.FLocals[LocalIdx].Slot, True));
+    Exit(AddUpvalue(FParent.FLocals[LocalIdx].Slot, True,
+      FParent.FLocals[LocalIdx].IsConst));
   end;
 
   UpvalueIdx := FParent.ResolveUpvalue(AName);
@@ -130,14 +140,15 @@ begin
   begin
     if UpvalueIdx > High(UInt8) then
       raise Exception.Create('Compiler error: upvalue index overflow (>255)');
-    Exit(AddUpvalue(UInt8(UpvalueIdx), False));
+    Exit(AddUpvalue(UInt8(UpvalueIdx), False,
+      FParent.FUpvalues[UpvalueIdx].IsConst));
   end;
 
   Result := -1;
 end;
 
 function TGocciaCompilerScope.AddUpvalue(const AIndex: UInt8;
-  const AIsLocal: Boolean): Integer;
+  const AIsLocal: Boolean; const AIsConst: Boolean): Integer;
 var
   I: Integer;
 begin
@@ -151,6 +162,7 @@ begin
     SetLength(FUpvalues, FUpvalueCount * 2 + 4);
   FUpvalues[FUpvalueCount].Index := AIndex;
   FUpvalues[FUpvalueCount].IsLocal := AIsLocal;
+  FUpvalues[FUpvalueCount].IsConst := AIsConst;
   Result := FUpvalueCount;
   Inc(FUpvalueCount);
 end;
@@ -210,6 +222,17 @@ end;
 procedure TGocciaCompilerScope.MarkCaptured(const AIndex: Integer);
 begin
   FLocals[AIndex].IsCaptured := True;
+end;
+
+procedure TGocciaCompilerScope.MarkGlobalBacked(const AIndex: Integer);
+begin
+  FLocals[AIndex].IsGlobalBacked := True;
+end;
+
+procedure TGocciaCompilerScope.SetLocalTypeHint(const AIndex: Integer;
+  const ATypeHint: TSouffleLocalType);
+begin
+  FLocals[AIndex].TypeHint := ATypeHint;
 end;
 
 end.

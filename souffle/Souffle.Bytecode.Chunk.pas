@@ -39,14 +39,23 @@ type
     CatchRegister: UInt8;
   end;
 
-  TSouffleFunctionPrototype = class
+  TSouffleLocalType = (
+    sltUntyped,
+    sltInteger,
+    sltFloat,
+    sltBoolean,
+    sltString,
+    sltReference
+  );
+
+  TSouffleFunctionTemplate = class
   private
     FName: string;
     FCode: array of UInt32;
     FCodeCount: Integer;
     FConstants: array of TSouffleBytecodeConstant;
     FConstantCount: Integer;
-    FFunctions: TObjectList<TSouffleFunctionPrototype>;
+    FFunctions: TObjectList<TSouffleFunctionTemplate>;
     FUpvalueDescriptors: array of TSouffleUpvalueDescriptor;
     FExceptionHandlers: array of TSouffleExceptionHandler;
     FExceptionHandlerCount: Integer;
@@ -54,6 +63,9 @@ type
     FParameterCount: UInt8;
     FUpvalueCount: UInt8;
     FDebugInfo: TSouffleDebugInfo;
+    FLocalTypes: array of TSouffleLocalType;
+    FLocalTypeCount: UInt8;
+    FIsAsync: Boolean;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -66,18 +78,18 @@ type
     function AddConstantInteger(const AValue: Int64): UInt16;
     function AddConstantFloat(const AValue: Double): UInt16;
     function AddConstantString(const AValue: string): UInt16;
-    function AddFunction(const AFunction: TSouffleFunctionPrototype): UInt16;
+    function AddFunction(const AFunction: TSouffleFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8);
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
       AFinallyTarget: UInt32; const ACatchRegister: UInt8);
 
     function GetInstruction(const AIndex: Integer): UInt32;
     function GetConstant(const AIndex: Integer): TSouffleBytecodeConstant;
-    function GetFunction(const AIndex: Integer): TSouffleFunctionPrototype;
+    function GetFunction(const AIndex: Integer): TSouffleFunctionTemplate;
     function GetUpvalueDescriptor(const AIndex: Integer): TSouffleUpvalueDescriptor;
     function GetExceptionHandler(const AIndex: Integer): TSouffleExceptionHandler;
 
-    property Name: string read FName;
+    property Name: string read FName write FName;
     property CodeCount: Integer read FCodeCount;
     property ConstantCount: Integer read FConstantCount;
     property FunctionCount: Integer read GetFunctionCount;
@@ -86,6 +98,11 @@ type
     property ParameterCount: UInt8 read FParameterCount write FParameterCount;
     property UpvalueCount: UInt8 read FUpvalueCount;
     property DebugInfo: TSouffleDebugInfo read FDebugInfo write FDebugInfo;
+
+    procedure SetLocalType(const ASlot: UInt8; const AKind: TSouffleLocalType);
+    function GetLocalType(const ASlot: UInt8): TSouffleLocalType;
+    property LocalTypeCount: UInt8 read FLocalTypeCount;
+    property IsAsync: Boolean read FIsAsync write FIsAsync;
   end;
 
 const
@@ -105,30 +122,31 @@ begin
             ((Bits and $000FFFFFFFFFFFFF) <> 0);
 end;
 
-{ TSouffleFunctionPrototype }
+{ TSouffleFunctionTemplate }
 
-constructor TSouffleFunctionPrototype.Create(const AName: string);
+constructor TSouffleFunctionTemplate.Create(const AName: string);
 begin
   inherited Create;
   FName := AName;
   FCodeCount := 0;
   FConstantCount := 0;
-  FFunctions := TObjectList<TSouffleFunctionPrototype>.Create(True);
+  FFunctions := TObjectList<TSouffleFunctionTemplate>.Create(True);
   FExceptionHandlerCount := 0;
   FMaxRegisters := 0;
   FParameterCount := 0;
   FUpvalueCount := 0;
   FDebugInfo := nil;
+  FLocalTypeCount := 0;
 end;
 
-destructor TSouffleFunctionPrototype.Destroy;
+destructor TSouffleFunctionTemplate.Destroy;
 begin
   FFunctions.Free;
   FDebugInfo.Free;
   inherited;
 end;
 
-function TSouffleFunctionPrototype.EmitInstruction(
+function TSouffleFunctionTemplate.EmitInstruction(
   const AInstruction: UInt32): Integer;
 begin
   if FCodeCount >= Length(FCode) then
@@ -138,7 +156,7 @@ begin
   Inc(FCodeCount);
 end;
 
-procedure TSouffleFunctionPrototype.PatchInstruction(const AIndex: Integer;
+procedure TSouffleFunctionTemplate.PatchInstruction(const AIndex: Integer;
   const AInstruction: UInt32);
 begin
   if (AIndex < 0) or (AIndex >= FCodeCount) then
@@ -146,7 +164,7 @@ begin
   FCode[AIndex] := AInstruction;
 end;
 
-function TSouffleFunctionPrototype.AddConstantNil: UInt16;
+function TSouffleFunctionTemplate.AddConstantNil: UInt16;
 var
   I: Integer;
 begin
@@ -163,7 +181,7 @@ begin
   Inc(FConstantCount);
 end;
 
-function TSouffleFunctionPrototype.AddConstantBoolean(
+function TSouffleFunctionTemplate.AddConstantBoolean(
   const AValue: Boolean): UInt16;
 var
   I: Integer;
@@ -187,7 +205,7 @@ begin
   Inc(FConstantCount);
 end;
 
-function TSouffleFunctionPrototype.AddConstantInteger(
+function TSouffleFunctionTemplate.AddConstantInteger(
   const AValue: Int64): UInt16;
 var
   I: Integer;
@@ -206,7 +224,7 @@ begin
   Inc(FConstantCount);
 end;
 
-function TSouffleFunctionPrototype.AddConstantFloat(
+function TSouffleFunctionTemplate.AddConstantFloat(
   const AValue: Double): UInt16;
 var
   I: Integer;
@@ -227,7 +245,7 @@ begin
   Inc(FConstantCount);
 end;
 
-function TSouffleFunctionPrototype.AddConstantString(
+function TSouffleFunctionTemplate.AddConstantString(
   const AValue: string): UInt16;
 var
   I: Integer;
@@ -246,8 +264,8 @@ begin
   Inc(FConstantCount);
 end;
 
-function TSouffleFunctionPrototype.AddFunction(
-  const AFunction: TSouffleFunctionPrototype): UInt16;
+function TSouffleFunctionTemplate.AddFunction(
+  const AFunction: TSouffleFunctionTemplate): UInt16;
 begin
   if FFunctions.Count > High(UInt16) then
     raise Exception.Create('Function pool overflow: exceeds 65535 entries');
@@ -255,7 +273,7 @@ begin
   FFunctions.Add(AFunction);
 end;
 
-procedure TSouffleFunctionPrototype.AddUpvalueDescriptor(
+procedure TSouffleFunctionTemplate.AddUpvalueDescriptor(
   const AIsLocal: Boolean; const AIndex: UInt8);
 begin
   if FUpvalueCount >= High(UInt8) then
@@ -267,7 +285,7 @@ begin
   Inc(FUpvalueCount);
 end;
 
-procedure TSouffleFunctionPrototype.AddExceptionHandler(
+procedure TSouffleFunctionTemplate.AddExceptionHandler(
   const ATryStart, ATryEnd, ACatchTarget, AFinallyTarget: UInt32;
   const ACatchRegister: UInt8);
 begin
@@ -281,7 +299,7 @@ begin
   Inc(FExceptionHandlerCount);
 end;
 
-function TSouffleFunctionPrototype.GetInstruction(
+function TSouffleFunctionTemplate.GetInstruction(
   const AIndex: Integer): UInt32;
 begin
   {$IFDEF DEBUG}
@@ -291,7 +309,7 @@ begin
   Result := FCode[AIndex];
 end;
 
-function TSouffleFunctionPrototype.GetConstant(
+function TSouffleFunctionTemplate.GetConstant(
   const AIndex: Integer): TSouffleBytecodeConstant;
 begin
   {$IFDEF DEBUG}
@@ -301,8 +319,8 @@ begin
   Result := FConstants[AIndex];
 end;
 
-function TSouffleFunctionPrototype.GetFunction(
-  const AIndex: Integer): TSouffleFunctionPrototype;
+function TSouffleFunctionTemplate.GetFunction(
+  const AIndex: Integer): TSouffleFunctionTemplate;
 begin
   {$IFDEF DEBUG}
   if (AIndex < 0) or (AIndex >= FFunctions.Count) then
@@ -311,7 +329,7 @@ begin
   Result := FFunctions[AIndex];
 end;
 
-function TSouffleFunctionPrototype.GetUpvalueDescriptor(
+function TSouffleFunctionTemplate.GetUpvalueDescriptor(
   const AIndex: Integer): TSouffleUpvalueDescriptor;
 begin
   {$IFDEF DEBUG}
@@ -321,12 +339,12 @@ begin
   Result := FUpvalueDescriptors[AIndex];
 end;
 
-function TSouffleFunctionPrototype.GetFunctionCount: Integer;
+function TSouffleFunctionTemplate.GetFunctionCount: Integer;
 begin
   Result := FFunctions.Count;
 end;
 
-function TSouffleFunctionPrototype.GetExceptionHandler(
+function TSouffleFunctionTemplate.GetExceptionHandler(
   const AIndex: Integer): TSouffleExceptionHandler;
 begin
   {$IFDEF DEBUG}
@@ -334,6 +352,25 @@ begin
     raise ERangeError.CreateFmt('GetExceptionHandler: index %d out of range 0..%d', [AIndex, FExceptionHandlerCount - 1]);
   {$ENDIF}
   Result := FExceptionHandlers[AIndex];
+end;
+
+procedure TSouffleFunctionTemplate.SetLocalType(const ASlot: UInt8;
+  const AKind: TSouffleLocalType);
+begin
+  if ASlot >= Length(FLocalTypes) then
+    SetLength(FLocalTypes, ASlot + 1);
+  FLocalTypes[ASlot] := AKind;
+  if ASlot >= FLocalTypeCount then
+    FLocalTypeCount := ASlot + 1;
+end;
+
+function TSouffleFunctionTemplate.GetLocalType(
+  const ASlot: UInt8): TSouffleLocalType;
+begin
+  if ASlot < FLocalTypeCount then
+    Result := FLocalTypes[ASlot]
+  else
+    Result := sltUntyped;
 end;
 
 end.

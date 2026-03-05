@@ -461,7 +461,7 @@ begin
   if HasGet then
   begin
     Getter := DescriptorObject.GetProperty(PROP_GET);
-    if not (Getter is TGocciaUndefinedLiteralValue) and not (Getter is TGocciaFunctionValue) and not (Getter is TGocciaNativeFunctionValue) then
+    if not (Getter is TGocciaUndefinedLiteralValue) and not Getter.IsCallable then
       ThrowError('TypeError: Object.defineProperty: getter must be a function or undefined', 0, 0);
     if Getter is TGocciaUndefinedLiteralValue then
       Getter := nil;
@@ -469,7 +469,7 @@ begin
   if HasSet then
   begin
     Setter := DescriptorObject.GetProperty(PROP_SET);
-    if not (Setter is TGocciaUndefinedLiteralValue) and not (Setter is TGocciaFunctionValue) and not (Setter is TGocciaNativeFunctionValue) then
+    if not (Setter is TGocciaUndefinedLiteralValue) and not Setter.IsCallable then
       ThrowError('TypeError: Object.defineProperty: setter must be a function or undefined', 0, 0);
     if Setter is TGocciaUndefinedLiteralValue then
       Setter := nil;
