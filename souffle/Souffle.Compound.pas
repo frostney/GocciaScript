@@ -363,13 +363,17 @@ end;
 procedure TSouffleRecord.Grow;
 var
   OldEntries: array of TSouffleRecordEntry;
-  OldCount, OldCapacity, I, Slot: Integer;
+  OldOrder: array of Integer;
+  OldCount, I, Slot, OldSlot: Integer;
   NewCapacity: Integer;
 begin
   OldEntries := FEntries;
-  OldCapacity := FCapacity;
   OldCount := FCount;
   NewCapacity := FCapacity * 2;
+
+  SetLength(OldOrder, OldCount);
+  for I := 0 to OldCount - 1 do
+    OldOrder[I] := FOrder[I];
 
   FCapacity := NewCapacity;
   FDeletedCount := 0;
@@ -383,16 +387,14 @@ begin
   SetLength(FOrder, OldCount);
   FCount := 0;
 
-  for I := 0 to OldCapacity - 1 do
+  for I := 0 to OldCount - 1 do
   begin
-    if OldEntries[I].Occupied then
-    begin
-      Slot := FindEntry(OldEntries[I].Key, OldEntries[I].Hash);
-      FEntries[Slot] := OldEntries[I];
-      FEntries[Slot].Deleted := False;
-      FOrder[FCount] := Slot;
-      Inc(FCount);
-    end;
+    OldSlot := OldOrder[I];
+    Slot := FindEntry(OldEntries[OldSlot].Key, OldEntries[OldSlot].Hash);
+    FEntries[Slot] := OldEntries[OldSlot];
+    FEntries[Slot].Deleted := False;
+    FOrder[FCount] := Slot;
+    Inc(FCount);
   end;
 end;
 
@@ -748,6 +750,7 @@ end;
 
 destructor TSouffleBlueprint.Destroy;
 begin
+  FPrototype.Free;
   FMethods.Free;
   FGetters.Free;
   FSetters.Free;

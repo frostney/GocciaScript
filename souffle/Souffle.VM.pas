@@ -167,21 +167,23 @@ begin
   FBaseFrameCount := FCallStack.Count;
 
   try
-    ExecuteLoop;
-  except
-    on E: ESouffleThrow do
-    begin
-      while FCallStack.Count >= FBaseFrameCount do
+    try
+      ExecuteLoop;
+    except
+      on E: ESouffleThrow do
       begin
-        CloseUpvalues(FCallStack.Peek^.BaseRegister);
-        FCallStack.Pop;
+        while FCallStack.Count >= FBaseFrameCount do
+        begin
+          CloseUpvalues(FCallStack.Peek^.BaseRegister);
+          FCallStack.Pop;
+        end;
+        raise;
       end;
-      FBaseFrameCount := SavedBaseFrameCount;
-      raise;
     end;
+  finally
+    FBaseFrameCount := SavedBaseFrameCount;
   end;
 
-  FBaseFrameCount := SavedBaseFrameCount;
   Result := FRegisters[Base];
 end;
 
@@ -296,7 +298,7 @@ begin
 
   Frame := FCallStack.Push(AClosure.Template, AClosure, NewBase,
     AReturnAbsolute, FHandlerStack.Count);
-  Frame^.ArgCount := AArgCount;
+  Frame^.ArgCount := ArgsToCopy;
   Frame^.ArgSourceBase := NewBase + 1;
 end;
 
@@ -1622,6 +1624,11 @@ begin
   if Assigned(FRuntimeOps) then
     FRuntimeOps.MarkExternalRoots;
 
+  if Assigned(FArrayDelegate) and not FArrayDelegate.GCMarked then
+    FArrayDelegate.MarkReferences;
+  if Assigned(FRecordDelegate) and not FRecordDelegate.GCMarked then
+    FRecordDelegate.MarkReferences;
+
   if FCallStack.IsEmpty then
     Exit;
 
@@ -1639,11 +1646,6 @@ begin
 
   if Assigned(FOpenUpvalues) then
     FOpenUpvalues.MarkReferences;
-
-  if Assigned(FArrayDelegate) and not FArrayDelegate.GCMarked then
-    FArrayDelegate.MarkReferences;
-  if Assigned(FRecordDelegate) and not FRecordDelegate.GCMarked then
-    FRecordDelegate.MarkReferences;
 end;
 
 function TSouffleVM.DelegateGet(const AObject: TSouffleHeapObject;

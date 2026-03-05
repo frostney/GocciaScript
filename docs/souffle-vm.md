@@ -118,7 +118,7 @@ By routing these through an abstract interface, the VM remains language-agnostic
 
 ### TSouffleRuntimeOperations: The Abstract Interface
 
-The runtime interface defines **45 methods + 1 extension entry point**, all expressed in language-agnostic terms. No method name, parameter, or return type references JavaScript concepts. The full method listing:
+The runtime interface defines **45 methods (including the `ExtendedOperation` extension entry point)**, all expressed in language-agnostic terms. No method name, parameter, or return type references JavaScript concepts. The full method listing:
 
 | Group | Methods | Count |
 |-------|---------|-------|
