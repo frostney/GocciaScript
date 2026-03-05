@@ -151,7 +151,7 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 
 ### Run via Souffle VM (Bytecode)
 
-GocciaScript includes an alternative bytecode execution backend — the **Souffle VM** — a general-purpose register-based virtual machine. The bytecode backend covers the core language and passes the vast majority of the test suite. Known limitations: iteration helpers (`GetIterator`, `IteratorNext`, `SpreadInto`), module imports (`ImportModule`), and async/await (`AwaitValue`) are stubbed in the runtime bridge; `.sbc` files use native endianness (not yet cross-platform portable); the ABC-encoded instruction format limits constant pool references to 255 per prototype. See [Souffle VM Architecture](docs/souffle-vm.md) for full details.
+GocciaScript includes an alternative bytecode execution backend — the **Souffle VM** — a general-purpose register-based virtual machine. The bytecode backend passes 100% of the test suite (3,358 tests). All language features work through a bridge layer that delegates to the GocciaScript evaluator where needed. Known structural limitations: `.sbc` files use native endianness (not yet cross-platform portable); the ABC-encoded instruction format limits constant pool references to 255 per prototype. See [Souffle VM Architecture](docs/souffle-vm.md) for full details.
 
 ```bash
 # Compile and execute via Souffle VM
@@ -232,7 +232,7 @@ flowchart LR
 |-----------|------|------|
 | Compiler | `Goccia.Compiler.pas` | AST → Souffle bytecode |
 | VM | `Souffle.VM.pas` | Register-based dispatch with two-tier ISA |
-| Runtime Ops | `Goccia.Runtime.Operations.pas` | GocciaScript semantics for Tier 2 opcodes |
+| Runtime Ops | `Goccia.Runtime.Operations.pas` | GocciaScript semantics, bridge caches, array sync, native delegates |
 | Backend | `Goccia.Engine.Backend.pas` | Orchestration, built-in bridging |
 | Binary I/O | `Souffle.Bytecode.Binary.pas` | `.sbc` file serialization/deserialization |
 

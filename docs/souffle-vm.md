@@ -598,9 +598,35 @@ The GocciaScript bridge layer (`TGocciaRuntimeOperations.RegisterDelegates`) cre
 
 | Type | Method | Description |
 |------|--------|-------------|
-| Array | `push(value)` | Appends value, returns new length |
-| Array | `pop()` | Removes and returns last element |
+| Array | `push(value)` | Appends value, returns new length (syncs to cache) |
+| Array | `pop()` | Removes and returns last element (syncs to cache) |
+| Array | `shift()` | Removes and returns first element (syncs to cache) |
+| Array | `unshift(...values)` | Prepends values, returns new length (syncs to cache) |
+| Array | `splice(start, count, ...items)` | Removes/inserts elements (syncs to cache) |
+| Array | `reverse()` | Reverses in place (syncs to cache) |
+| Array | `sort([comparator])` | Sorts in place (syncs to cache) |
+| Array | `fill(value [, start [, end]])` | Fills range with value (syncs to cache) |
 | Array | `join(sep)` | Joins elements with separator string |
+| Array | `indexOf(value)` | First index of value, or -1 |
+| Array | `includes(value)` | Whether array contains value |
+| Array | `slice([start [, end]])` | Returns shallow copy of range |
+| Array | `concat(...args)` | Returns merged array |
+| Array | `at(index)` | Element at index (negative wraps) |
+| Array | `forEach(callback)` | Calls callback for each element |
+| Array | `map(callback)` | Returns mapped array |
+| Array | `filter(callback)` | Returns filtered array |
+| Array | `find(callback)` | First element passing test |
+| Array | `findIndex(callback)` | Index of first passing element |
+| Array | `findLast(callback)` | Last element passing test |
+| Array | `findLastIndex(callback)` | Index of last passing element |
+| Array | `every(callback)` | Whether all pass test |
+| Array | `some(callback)` | Whether any passes test |
+| Array | `reduce(callback [, init])` | Left fold |
+| Array | `reduceRight(callback [, init])` | Right fold |
+| Array | `flat([depth])` | Flattens nested arrays |
+| Array | `flatMap(callback)` | Maps then flattens one level |
+| Array | `toString()` | String representation |
+| Array | `length` | Element count (read-only) |
 
 ### Language Agnosticism
 
@@ -815,7 +841,7 @@ The following features execute entirely within the Souffle VM without crossing t
 - **Functions**: Arrow functions, shorthand methods, default parameters, rest parameters, variadic argument packing
 - **Simple classes**: Constructor + named methods compiled to blueprint opcodes (`OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_RECORD_SET`, `OP_INSTANTIATE`)
 - **Exception handling**: try/catch/finally, throw, handler-table model
-- **Delegates**: Array prototype methods (`push`, `pop`, `join`) dispatch within the VM via delegate chain — zero wrapping
+- **Delegates**: Array prototype methods (`push`, `pop`, `shift`, `unshift`, `join`, `indexOf`, `includes`, `slice`, `reverse`, `concat`, `fill`, `at`, `forEach`, `map`, `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `every`, `some`, `reduce`, `reduceRight`, `sort`, `flat`, `flatMap`, `splice`, `toString`, `length`) dispatch within the VM via delegate chain — zero wrapping. Mutating methods (`push`, `pop`, `shift`, `unshift`, `splice`, `reverse`, `sort`, `fill`) immediately sync changes to the bridge cache via `SyncSouffleArrayToCache`
 - **Global built-ins**: All interpreter-side built-ins (`console`, `Math`, `JSON`, `Object`, `Array`, etc.) are available as wrapped values
 
 ### What Uses Bridge Code
@@ -828,7 +854,10 @@ The bridge layer is the set of components in `TGocciaRuntimeOperations` that con
 | `TGocciaSouffleProxy` | Wraps Souffle compound types as `TGocciaValue` for interpreter consumption | ~100 LOC |
 | `TGocciaWrappedValue` | Wraps `TGocciaValue` as Souffle heap object for VM register storage | ~50 LOC |
 | `TGocciaSouffleClosureBridge` | Wraps `TSouffleClosure` as `TGocciaFunctionBase` for interpreter callbacks | ~80 LOC |
-| `FClosureBridgeCache` / `FArrayBridgeCache` | Caches to avoid re-wrapping the same objects | ~30 LOC |
+| `FClosureBridgeCache` / `FArrayBridgeCache` | Forward caches (`TSouffleHeapObject` → `TGocciaValue`) to avoid re-wrapping | ~30 LOC |
+| `FArrayBridgeReverse` | Reverse cache (`TGocciaArrayValue` → `TSouffleArray`) for reference identity preservation | ~10 LOC |
+| `SyncCachedGocciaToSouffle` | One-way sync at bridge entry: pushes `TGocciaArrayValue` contents to `TSouffleArray` | ~15 LOC |
+| `SyncSouffleArrayToCache` | Immediate sync after native array mutations: pushes `TSouffleArray` contents to `TGocciaArrayValue` | ~15 LOC |
 | `CreateBridgedContext` | Maps VM globals to an interpreter scope for evaluator calls | ~80 LOC |
 | `FPendingClasses` | Deferred class definitions that require interpreter evaluation | ~50 LOC |
 
@@ -897,13 +926,14 @@ Until the rewrite, the bridge code is functional and correct — both execution 
 
 `TGocciaRuntimeOperations` (`Goccia.Runtime.Operations.pas`) implements `TSouffleRuntimeOperations` with GocciaScript semantics. It bridges between `TSouffleValue` and `TGocciaValue` at the runtime boundary:
 
-- **`ToSouffleValue`** / **`UnwrapToGocciaValue`** — Convert between value systems. `UnwrapToGocciaValue` creates a lazy `TGocciaSouffleProxy` for `TSouffleArray`/`TSouffleRecord` instead of deep-copying. `ToSouffleValue` detects proxies and extracts the original Souffle object (zero-copy round-trip)
+- **`ToSouffleValue`** / **`UnwrapToGocciaValue`** — Convert between value systems. `UnwrapToGocciaValue` creates a `TGocciaArrayValue` bridge for `TSouffleArray` (cached in `FArrayBridgeCache`) and a lazy `TGocciaSouffleProxy` for `TSouffleRecord`. `ToSouffleValue` checks `FArrayBridgeReverse` to recover the original `TSouffleArray` from a bridge `TGocciaArrayValue`, preserving reference identity across round-trips
 - **`TGocciaSouffleProxy`** — A single `TGocciaValue` subclass that wraps any Souffle compound type. Property access is delegated to `TGocciaRuntimeOperations.ResolveProxyGet`/`ResolveProxySet`, which dispatch based on the target's type. This is a higher-order function pattern: one proxy class handles all compound types, and the resolution logic lives in the runtime. No per-type subclassing needed
 - **`TGocciaWrappedValue`** — Wraps a `TGocciaValue` as a `TSouffleHeapObject` for VM register storage (used for types without native VM representation: classes, promises, symbols, etc.)
-- **`TGocciaSouffleClosureBridge`** — Wraps a `TSouffleClosure` as a `TGocciaFunctionBase`, enabling Souffle closures to be called by GocciaScript built-in methods (e.g., `Array.prototype.map` callbacks)
-- **Delegate registration** — `RegisterDelegates` creates VM-native delegate records for arrays (with `push`, `pop`, `join` as `TSouffleNativeFunction` callbacks) and assigns them to the VM's default delegate slots. Method calls like `arr.push(6)` are dispatched entirely within the VM without crossing the language boundary
+- **`TGocciaSouffleClosureBridge`** — Wraps a `TSouffleClosure` as a `TGocciaFunctionBase`, enabling Souffle closures to be called by GocciaScript built-in methods (e.g., `Array.prototype.map` callbacks). At bridge entry, `SyncCachedGocciaToSouffle` pushes GocciaScript-side array changes to their Souffle counterparts. No exit sync is needed — native array mutations sync immediately via `SyncSouffleArrayToCache`
+- **Delegate registration** — `RegisterDelegates` creates VM-native delegate records for arrays and records (with all array prototype methods as `TSouffleNativeFunction` callbacks) and assigns them to the VM's default delegate slots. Method calls like `arr.push(6)` are dispatched entirely within the VM without crossing the language boundary. Mutating array methods immediately sync changes to the bridge cache
 - **Native compound fast paths** — `GetProperty`, `SetProperty`, `GetIndex`, `SetIndex`, `HasProperty`, `DeleteProperty`, and `TypeOf` all check for `TSouffleArray`/`TSouffleRecord` before falling through to wrapped value unwrapping, avoiding unnecessary materialization
 - **Auto-boxing** — `GetProperty` performs primitive boxing when a direct property lookup returns `nil`, enabling prototype methods on primitives (e.g., `(42).toFixed(2)`)
+- **Array bridge sync model** — Bridged arrays have dual representation: `TSouffleArray` (read by the VM) and `TGocciaArrayValue` (read by GocciaScript built-ins). `TGocciaArrayValue` is the authoritative source. Two sync paths keep them consistent: (1) `SyncSouffleArrayToCache` — called immediately after native delegate methods mutate a `TSouffleArray`, propagates the change to the cached `TGocciaArrayValue`; (2) `SyncCachedGocciaToSouffle` — called once at bridge entry (when GocciaScript calls back into the Souffle VM), pushes `TGocciaArrayValue` contents to the `TSouffleArray`. `FArrayBridgeReverse` (never cleared at bridge depth 0) preserves reference identity for arrays held by long-lived objects like Promises
 
 ## File Organization
 
@@ -985,7 +1015,7 @@ A WASM backend would read `TSouffleBytecodeModule` and emit a `.wasm` binary. Th
 
 ## Known Limitations
 
-The Souffle VM bytecode backend passes 100% of the GocciaScript test suite (3,347 tests across 514 test files). The limitations below are structural constraints, not correctness gaps.
+The Souffle VM bytecode backend passes 100% of the GocciaScript test suite (3,358 tests across 514 test files). The limitations below are structural constraints, not correctness gaps.
 
 ### Intentionally Not Changed (Rejected Findings)
 

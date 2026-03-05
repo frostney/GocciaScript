@@ -340,9 +340,6 @@ procedure RebuildArrayBridgeCache(
   const AScope: TGocciaScope); forward;
 procedure SyncCachedGocciaToSouffle(
   const ARuntime: TGocciaRuntimeOperations); forward;
-procedure SyncCachedSouffleToGoccia(
-  const ARuntime: TGocciaRuntimeOperations); forward;
-
 function SouffleIsHole(const AValue: TSouffleValue): Boolean;
 begin
   Result := (AValue.Kind = svkNil) and (AValue.Flags = GOCCIA_NIL_HOLE);
@@ -431,7 +428,6 @@ begin
   except
     on E: ESouffleThrow do
     begin
-      SyncCachedSouffleToGoccia(FRuntime);
       Dec(FRuntime.FBridgeCallDepth);
       if FRuntime.FBridgeCallDepth = 0 then
       begin
@@ -442,7 +438,6 @@ begin
         FRuntime.UnwrapToGocciaValue(E.ThrownValue));
     end;
   end;
-  SyncCachedSouffleToGoccia(FRuntime);
   Dec(FRuntime.FBridgeCallDepth);
   if FRuntime.FBridgeCallDepth = 0 then
   begin
@@ -492,7 +487,6 @@ begin
   except
     on E: ESouffleThrow do
     begin
-      SyncCachedSouffleToGoccia(FBridgeRuntime);
       Dec(FBridgeRuntime.FBridgeCallDepth);
       if FBridgeRuntime.FBridgeCallDepth = 0 then
       begin
@@ -503,7 +497,6 @@ begin
         FBridgeRuntime.UnwrapToGocciaValue(E.ThrownValue));
     end;
   end;
-  SyncCachedSouffleToGoccia(FBridgeRuntime);
   Dec(FBridgeRuntime.FBridgeCallDepth);
   if FBridgeRuntime.FBridgeCallDepth = 0 then
   begin
@@ -3473,6 +3466,8 @@ end;
 
 { Native delegate callbacks }
 
+procedure SyncSouffleArrayToCache(const AArr: TSouffleArray); forward;
+
 function NativeArrayPush(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
@@ -3485,6 +3480,7 @@ begin
     Arr := TSouffleArray(AReceiver.AsReference);
     for I := 0 to AArgCount - 1 do
       Arr.Push(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^);
+    SyncSouffleArrayToCache(Arr);
     Result := SouffleInteger(Arr.Count);
   end
   else
@@ -3493,13 +3489,17 @@ end;
 
 function NativeArrayPop(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Arr: TSouffleArray;
 begin
   if SouffleIsReference(AReceiver) and Assigned(AReceiver.AsReference)
      and (AReceiver.AsReference is TSouffleArray) then
   begin
-    Result := TSouffleArray(AReceiver.AsReference).Pop;
+    Arr := TSouffleArray(AReceiver.AsReference);
+    Result := Arr.Pop;
     if SouffleIsHole(Result) then
       Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+    SyncSouffleArrayToCache(Arr);
   end
   else
     Result := SouffleNil;
@@ -3563,6 +3563,23 @@ end;
 
 var
   GNativeArrayJoinRuntime: TGocciaRuntimeOperations;
+
+procedure SyncSouffleArrayToCache(const AArr: TSouffleArray);
+var
+  CachedBridge: TObject;
+  GArr: TGocciaArrayValue;
+  J: Integer;
+begin
+  if not Assigned(GNativeArrayJoinRuntime) then Exit;
+  if not GNativeArrayJoinRuntime.FArrayBridgeCache.TryGetValue(
+      AArr, CachedBridge) then
+    Exit;
+  GArr := TGocciaArrayValue(CachedBridge);
+  GArr.Elements.Clear;
+  for J := 0 to AArr.Count - 1 do
+    GArr.Elements.Add(
+      GNativeArrayJoinRuntime.UnwrapToGocciaValue(AArr.Get(J)));
+end;
 
 function NativeArrayJoin(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
@@ -3755,6 +3772,7 @@ begin
     Arr.Put(I, Arr.Get(Arr.Count - 1 - I));
     Arr.Put(Arr.Count - 1 - I, Tmp);
   end;
+  SyncSouffleArrayToCache(Arr);
 end;
 
 function NativeArrayConcat(const AReceiver: TSouffleValue;
@@ -3807,6 +3825,7 @@ begin
   for I := 1 to Arr.Count - 1 do
     Arr.Put(I - 1, Arr.Get(I));
   Arr.Pop;
+  SyncSouffleArrayToCache(Arr);
 end;
 
 function NativeArrayUnshift(const AReceiver: TSouffleValue;
@@ -3828,6 +3847,7 @@ begin
     Arr.Put(I + AArgCount, Arr.Get(I));
   for J := 0 to AArgCount - 1 do
     Arr.Put(J, PSouffleValue(PByte(AArgs) + J * SizeOf(TSouffleValue))^);
+  SyncSouffleArrayToCache(Arr);
   Result := SouffleInteger(Arr.Count);
 end;
 
@@ -3868,6 +3888,7 @@ begin
   end;
   for I := Start to Stop - 1 do
     Arr.Put(I, FillVal);
+  SyncSouffleArrayToCache(Arr);
 end;
 
 function NativeArrayAt(const AReceiver: TSouffleValue;
@@ -4225,6 +4246,7 @@ begin
         Arr.Put(J + 1, Tmp);
       end;
     end;
+  SyncSouffleArrayToCache(Arr);
 end;
 
 function NativeArrayFindLast(const AReceiver: TSouffleValue;
@@ -4432,6 +4454,7 @@ begin
   Arr.Clear;
   for I := 0 to TmpArr.Count - 1 do
     Arr.Push(TmpArr.Get(I));
+  SyncSouffleArrayToCache(Arr);
 
   Result := SouffleReference(Removed);
 end;
@@ -4872,39 +4895,6 @@ begin
     SArr.Clear;
     for I := 0 to GArr.Elements.Count - 1 do
       SArr.Push(ARuntime.ToSouffleValue(GArr.Elements[I]));
-  end;
-end;
-
-procedure SyncCachedSouffleToGoccia(
-  const ARuntime: TGocciaRuntimeOperations);
-var
-  CacheKeys: array of TObject;
-  Count, I, J: Integer;
-  Pair: TPair<TObject, TObject>;
-  CachedValue: TObject;
-  SArr: TSouffleArray;
-  GArr: TGocciaArrayValue;
-begin
-  Count := ARuntime.FArrayBridgeCache.Count;
-  if Count = 0 then
-    Exit;
-  SetLength(CacheKeys, Count);
-  I := 0;
-  for Pair in ARuntime.FArrayBridgeCache do
-  begin
-    CacheKeys[I] := Pair.Key;
-    Inc(I);
-  end;
-  for I := 0 to Count - 1 do
-  begin
-    if not ARuntime.FArrayBridgeCache.TryGetValue(
-        CacheKeys[I], CachedValue) then
-      Continue;
-    SArr := TSouffleArray(CacheKeys[I]);
-    GArr := TGocciaArrayValue(CachedValue);
-    GArr.Elements.Clear;
-    for J := 0 to SArr.Count - 1 do
-      GArr.Elements.Add(ARuntime.UnwrapToGocciaValue(SArr.Get(J)));
   end;
 end;
 
