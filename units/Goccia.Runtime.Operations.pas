@@ -9,6 +9,7 @@ uses
   Generics.Collections,
 
   Souffle.Bytecode.Chunk,
+  Souffle.Compound,
   Souffle.Heap,
   Souffle.Value,
   Souffle.VM,
@@ -17,6 +18,7 @@ uses
 
   Goccia.AST.Statements,
   Goccia.Values.Error,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -24,6 +26,51 @@ uses
 
 const
   GOCCIA_HEAP_WRAPPED = 128;
+
+{$IFDEF BRIDGE_METRICS}
+type
+  TBridgeMetrics = record
+    UnwrapCount: Int64;
+    WrapCount: Int64;
+    WrapGocciaCount: Int64;
+
+    InvokeGocciaCount: Int64;
+    InvokeNativeCount: Int64;
+    InvokeClosureDirectCount: Int64;
+    InvokeNativeDirectCount: Int64;
+    ConstructGocciaCount: Int64;
+    ConstructNativeCount: Int64;
+
+    GetPropertyBridgeCount: Int64;
+    GetPropertyNativeCount: Int64;
+    SetPropertyBridgeCount: Int64;
+    SetPropertyNativeCount: Int64;
+
+    CoercionBridgeCount: Int64;
+    IsInstanceBridgeCount: Int64;
+    TypeOfBridgeCount: Int64;
+
+    GetIteratorCount: Int64;
+    IteratorNextCount: Int64;
+    AwaitValueCount: Int64;
+    ImportModuleCount: Int64;
+    EvaluateClassCount: Int64;
+
+    ArrayCacheHit: Int64;
+    ArrayCacheMiss: Int64;
+    ClosureCacheHit: Int64;
+    ClosureCacheMiss: Int64;
+    RecordCacheHit: Int64;
+    RecordCacheMiss: Int64;
+
+    procedure Reset;
+    procedure Dump;
+    class procedure DumpGlobal; static;
+  end;
+
+var
+  GBridgeMetrics: TBridgeMetrics;
+{$ENDIF}
 
 type
   TGocciaRuntimeOperations = class;
@@ -42,6 +89,23 @@ type
     procedure MarkReferences; override;
     function DebugString: string; override;
     property Value: TGocciaValue read FValue;
+  end;
+
+  TGocciaBridgedFunction = class(TSouffleHeapObject)
+  private
+    FGocciaFn: TGocciaNativeFunctionValue;
+    FRuntime: TGocciaRuntimeOperations;
+    FName: string;
+    FArity: Integer;
+  public
+    constructor Create(const AGocciaFn: TGocciaNativeFunctionValue;
+      const ARuntime: TGocciaRuntimeOperations);
+    function Invoke(const AReceiver: TSouffleValue;
+      const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+    procedure MarkReferences; override;
+    function DebugString: string; override;
+    property Name: string read FName;
+    property Arity: Integer read FArity;
   end;
 
   TGocciaSouffleProxy = class(TGocciaObjectValue)
@@ -104,7 +168,10 @@ type
     FVM: TSouffleVM;
     FEngine: TObject;
     FSourcePath: string;
-
+    FStringDelegate: TSouffleRecord;
+    FNumberDelegate: TSouffleRecord;
+    FDescribeDelegate: TSouffleRecord;
+    FTestDelegate: TSouffleRecord;
     function WrapGocciaValue(const AValue: TGocciaValue): TSouffleValue;
     function CoerceKeyToString(const AKey: TSouffleValue): string;
     function CoerceToNumber(const A: TSouffleValue): Double;
@@ -230,6 +297,8 @@ type
       const AName: string; const AValue: TGocciaValue);
 
     procedure RegisterDelegates;
+    procedure RegisterTestNatives;
+    procedure RegisterNativeBuiltins;
     procedure RegisterGlobal(const AName: string; const AValue: TSouffleValue);
     procedure RegisterConstGlobal(const AName: string;
       const AValue: TSouffleValue);
@@ -247,10 +316,10 @@ implementation
 
 uses
   Math,
+  StrUtils,
   SysUtils,
 
   Souffle.Bytecode.Debug,
-  Souffle.Compound,
   Souffle.GarbageCollector,
   Souffle.VM.CallFrame,
   Souffle.VM.Exception,
@@ -280,7 +349,6 @@ uses
   Goccia.Values.Iterator.Generic,
   Goccia.Values.IteratorValue,
   Goccia.Values.MapValue,
-  Goccia.Values.NativeFunction,
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
   Goccia.Values.ToPrimitive;
@@ -527,6 +595,55 @@ begin
     Result := '[Wrapped: ' + FValue.ToStringLiteral.Value + ']'
   else
     Result := '[Wrapped: nil]';
+end;
+
+{ TGocciaBridgedFunction }
+
+constructor TGocciaBridgedFunction.Create(
+  const AGocciaFn: TGocciaNativeFunctionValue;
+  const ARuntime: TGocciaRuntimeOperations);
+begin
+  inherited Create(SOUFFLE_HEAP_NATIVE_FUNCTION);
+  FGocciaFn := AGocciaFn;
+  FRuntime := ARuntime;
+  FName := AGocciaFn.Name;
+  FArity := AGocciaFn.Arity;
+end;
+
+function TGocciaBridgedFunction.Invoke(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Args: TGocciaArgumentsCollection;
+  GocciaReceiver, GocciaResult: TGocciaValue;
+  I: Integer;
+begin
+  Args := TGocciaArgumentsCollection.Create;
+  try
+    for I := 0 to AArgCount - 1 do
+      Args.Add(FRuntime.UnwrapToGocciaValue(
+        PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+    if SouffleIsNil(AReceiver) then
+      GocciaReceiver := TGocciaUndefinedLiteralValue.UndefinedValue
+    else
+      GocciaReceiver := FRuntime.UnwrapToGocciaValue(AReceiver);
+    GocciaResult := FGocciaFn.Call(Args, GocciaReceiver);
+    if Assigned(GocciaResult) then
+      Result := FRuntime.ToSouffleValue(GocciaResult)
+    else
+      Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  finally
+    Args.Free;
+  end;
+end;
+
+procedure TGocciaBridgedFunction.MarkReferences;
+begin
+  inherited;
+end;
+
+function TGocciaBridgedFunction.DebugString: string;
+begin
+  Result := '[BridgedFn: ' + FName + ']';
 end;
 
 { TGocciaSouffleProxy }
@@ -950,6 +1067,63 @@ begin
     Result := False;
 end;
 
+{$IFDEF BRIDGE_METRICS}
+procedure TBridgeMetrics.Reset;
+begin
+  FillChar(Self, SizeOf(Self), 0);
+end;
+
+class procedure TBridgeMetrics.DumpGlobal;
+begin
+  if GBridgeMetrics.UnwrapCount > 0 then
+    GBridgeMetrics.Dump;
+end;
+
+procedure TBridgeMetrics.Dump;
+  procedure W(const ALabel: string; const AValue: Int64);
+  begin
+    if AValue > 0 then
+      WriteLn(StdErr, '  ', ALabel:40, AValue:12);
+  end;
+begin
+  WriteLn(StdErr, '--- Bridge Metrics ---');
+  WriteLn(StdErr, 'Conversions:');
+  W('UnwrapToGocciaValue', UnwrapCount);
+  W('ToSouffleValue', WrapCount);
+  W('WrapGocciaValue', WrapGocciaCount);
+  WriteLn(StdErr, 'Invocation:');
+  W('Invoke (bridge to interpreter)', InvokeGocciaCount);
+  W('Invoke (Souffle closures/native)', InvokeNativeCount);
+  W('Invoke (closure direct)', InvokeClosureDirectCount);
+  W('Invoke (native direct)', InvokeNativeDirectCount);
+  W('Construct (bridge to interpreter)', ConstructGocciaCount);
+  W('Construct (Souffle blueprints)', ConstructNativeCount);
+  WriteLn(StdErr, 'Property access:');
+  W('GetProperty (bridge)', GetPropertyBridgeCount);
+  W('GetProperty (Souffle types)', GetPropertyNativeCount);
+  W('SetProperty (bridge)', SetPropertyBridgeCount);
+  W('SetProperty (Souffle types)', SetPropertyNativeCount);
+  WriteLn(StdErr, 'Type operations:');
+  W('Coercion (bridge)', CoercionBridgeCount);
+  W('IsInstance (bridge)', IsInstanceBridgeCount);
+  W('TypeOf (bridge)', TypeOfBridgeCount);
+  WriteLn(StdErr, 'Interpreter delegation:');
+  W('GetIterator', GetIteratorCount);
+  W('IteratorNext', IteratorNextCount);
+  W('AwaitValue', AwaitValueCount);
+  W('ImportModule', ImportModuleCount);
+  W('EvaluateClassByIndex', EvaluateClassCount);
+  WriteLn(StdErr, 'Bridge caches:');
+  W('Array cache hit', ArrayCacheHit);
+  W('Array cache miss', ArrayCacheMiss);
+  W('Closure cache hit', ClosureCacheHit);
+  W('Closure cache miss', ClosureCacheMiss);
+  W('Record cache hit', RecordCacheHit);
+  W('Record cache miss', RecordCacheMiss);
+  WriteLn(StdErr, '----------------------');
+end;
+{$ENDIF}
+
 { TGocciaRuntimeOperations }
 
 constructor TGocciaRuntimeOperations.Create;
@@ -993,6 +1167,9 @@ function TGocciaRuntimeOperations.WrapGocciaValue(
 var
   Wrapped: TGocciaWrappedValue;
 begin
+  {$IFDEF BRIDGE_METRICS}
+  Inc(GBridgeMetrics.WrapGocciaCount);
+  {$ENDIF}
   Wrapped := TGocciaWrappedValue.Create(AValue);
   FWrappedValues.Add(Wrapped);
   Result := SouffleReference(Wrapped);
@@ -1310,6 +1487,9 @@ function TGocciaRuntimeOperations.UnwrapToGocciaValue(
 var
   CachedBridge: TObject;
 begin
+  {$IFDEF BRIDGE_METRICS}
+  Inc(GBridgeMetrics.UnwrapCount);
+  {$ENDIF}
   case AValue.Kind of
     svkNil:
       if AValue.Flags = GOCCIA_NIL_NULL then
@@ -1333,26 +1513,44 @@ begin
           TSouffleHeapString(AValue.AsReference).Value)
       else if AValue.AsReference is TGocciaWrappedValue then
         Result := TGocciaWrappedValue(AValue.AsReference).Value
+      else if AValue.AsReference is TGocciaBridgedFunction then
+        Result := TGocciaBridgedFunction(AValue.AsReference).FGocciaFn
       else if AValue.AsReference is TSouffleArray then
       begin
         if not FArrayBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
         begin
+          {$IFDEF BRIDGE_METRICS}
+          Inc(GBridgeMetrics.ArrayCacheMiss);
+          {$ENDIF}
           CachedBridge := TGocciaArrayValue.Create;
           FArrayBridgeCache.Add(AValue.AsReference, CachedBridge);
           FArrayBridgeReverse.AddOrSetValue(CachedBridge, AValue.AsReference);
           ConvertSouffleArrayInto(Self,
             TSouffleArray(AValue.AsReference),
             TGocciaArrayValue(CachedBridge));
-        end;
+        end
+        {$IFDEF BRIDGE_METRICS}
+        else
+          Inc(GBridgeMetrics.ArrayCacheHit)
+        {$ENDIF}
+        ;
         Result := TGocciaValue(CachedBridge);
       end
       else if AValue.AsReference is TSouffleRecord then
       begin
         if not FRecordBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
         begin
+          {$IFDEF BRIDGE_METRICS}
+          Inc(GBridgeMetrics.RecordCacheMiss);
+          {$ENDIF}
           CachedBridge := TGocciaSouffleProxy.Create(AValue.AsReference, Self);
           FRecordBridgeCache.Add(AValue.AsReference, CachedBridge);
-        end;
+        end
+        {$IFDEF BRIDGE_METRICS}
+        else
+          Inc(GBridgeMetrics.RecordCacheHit)
+        {$ENDIF}
+        ;
         if not TGocciaSouffleProxy(CachedBridge).FPrototypeResolved and
            Assigned(TSouffleRecord(AValue.AsReference).Delegate) and
            (TSouffleRecord(AValue.AsReference).Delegate is TSouffleRecord) then
@@ -1375,11 +1573,19 @@ begin
         if not FClosureBridgeCache.TryGetValue(
             TSouffleClosure(AValue.AsReference), CachedBridge) then
         begin
+          {$IFDEF BRIDGE_METRICS}
+          Inc(GBridgeMetrics.ClosureCacheMiss);
+          {$ENDIF}
           CachedBridge := TGocciaSouffleClosureBridge.Create(
             TSouffleClosure(AValue.AsReference), Self);
           FClosureBridgeCache.Add(TSouffleClosure(AValue.AsReference),
             CachedBridge);
-        end;
+        end
+        {$IFDEF BRIDGE_METRICS}
+        else
+          Inc(GBridgeMetrics.ClosureCacheHit)
+        {$ENDIF}
+        ;
         Result := TGocciaValue(CachedBridge);
       end
       else if AValue.AsReference is TSouffleNativeFunction then
@@ -1400,6 +1606,9 @@ function TGocciaRuntimeOperations.ToSouffleValue(
 var
   NumVal: TGocciaNumberLiteralValue;
 begin
+  {$IFDEF BRIDGE_METRICS}
+  Inc(GBridgeMetrics.WrapCount);
+  {$ENDIF}
   if not Assigned(AValue) then
     Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
 
@@ -1443,6 +1652,13 @@ begin
     Result := SouffleString(TGocciaStringLiteralValue(AValue).Value)
   else if FArrayBridgeReverse.ContainsKey(AValue) then
     Result := SouffleReference(TSouffleHeapObject(FArrayBridgeReverse[AValue]))
+  else if AValue is TGocciaNativeFunctionValue then
+  begin
+    Result := SouffleReference(TGocciaBridgedFunction.Create(
+      TGocciaNativeFunctionValue(AValue), Self));
+    if Assigned(TSouffleGarbageCollector.Instance) then
+      TSouffleGarbageCollector.Instance.AllocateObject(Result.AsReference);
+  end
   else
     Result := WrapGocciaValue(AValue);
 end;
@@ -1515,6 +1731,9 @@ begin
   end;
   if A.AsReference is TGocciaWrappedValue then
   begin
+    {$IFDEF BRIDGE_METRICS}
+    Inc(GBridgeMetrics.CoercionBridgeCount);
+    {$ENDIF}
     GocciaVal := TGocciaWrappedValue(A.AsReference).Value;
     if GocciaVal.IsPrimitive then
       Exit(ARuntime.ToSouffleValue(GocciaVal));
@@ -1892,13 +2111,19 @@ begin
         Exit(SouffleString('undefined'));
       if (A.AsReference is TSouffleClosure) or
          (A.AsReference is TSouffleNativeFunction) or
-         (A.AsReference is TSouffleBlueprint) then
+         (A.AsReference is TSouffleBlueprint) or
+         (A.AsReference is TGocciaBridgedFunction) then
         Result := SouffleString('function')
       else if A.AsReference is TSouffleHeapString then
         Result := SouffleString('string')
       else if A.AsReference is TGocciaWrappedValue then
+      begin
+        {$IFDEF BRIDGE_METRICS}
+        Inc(GBridgeMetrics.TypeOfBridgeCount);
+        {$ENDIF}
         Result := SouffleString(
-          TGocciaWrappedValue(A.AsReference).Value.TypeOf)
+          TGocciaWrappedValue(A.AsReference).Value.TypeOf);
+      end
       else
         Result := SouffleString('object');
     end;
@@ -1986,6 +2211,9 @@ begin
     end;
   end;
 
+  {$IFDEF BRIDGE_METRICS}
+  Inc(GBridgeMetrics.IsInstanceBridgeCount);
+  {$ENDIF}
   GocciaObj := UnwrapToGocciaValue(A);
   GocciaClass := UnwrapToGocciaValue(B);
 
@@ -2118,6 +2346,9 @@ var
   Bp: TSouffleBlueprint;
   GetterVal: TSouffleValue;
 begin
+  {$IFDEF BRIDGE_METRICS}
+  Inc(GBridgeMetrics.GetPropertyNativeCount);
+  {$ENDIF}
   try
     if AObject.Kind = svkNil then
     begin
@@ -2131,6 +2362,14 @@ begin
     begin
       if AKey = PROP_LENGTH then
         Exit(SouffleInteger(Length(SouffleGetString(AObject))));
+      if Assigned(FStringDelegate) and FStringDelegate.Get(AKey, Result) then
+        Exit;
+    end;
+
+    if SouffleIsNumeric(AObject) then
+    begin
+      if Assigned(FNumberDelegate) and FNumberDelegate.Get(AKey, Result) then
+        Exit;
     end;
 
     if SouffleIsReference(AObject) and Assigned(AObject.AsReference) then
@@ -2248,9 +2487,33 @@ begin
         if AKey = PROP_LENGTH then
           Exit(SouffleInteger(
             TSouffleNativeFunction(AObject.AsReference).Arity));
+        if Assigned(FDescribeDelegate) and
+           (TSouffleNativeFunction(AObject.AsReference).Name = 'describe') and
+           FDescribeDelegate.Get(AKey, Result) then
+          Exit;
+        if Assigned(FTestDelegate) and
+           (TSouffleNativeFunction(AObject.AsReference).Name = 'test') and
+           FTestDelegate.Get(AKey, Result) then
+          Exit;
+      end
+      else if AObject.AsReference is TGocciaBridgedFunction then
+      begin
+        if AKey = PROP_NAME then
+          Exit(SouffleString(
+            TGocciaBridgedFunction(AObject.AsReference).Name));
+        if AKey = PROP_LENGTH then
+          Exit(SouffleInteger(
+            TGocciaBridgedFunction(AObject.AsReference).Arity));
+        Prop := TGocciaBridgedFunction(AObject.AsReference).FGocciaFn
+          .GetProperty(AKey);
+        if Assigned(Prop) then
+          Exit(ToSouffleValue(Prop));
       end;
     end;
 
+    {$IFDEF BRIDGE_METRICS}
+    Inc(GBridgeMetrics.GetPropertyBridgeCount);
+    {$ENDIF}
     GocciaObj := UnwrapToGocciaValue(AObject);
     Prop := GocciaObj.GetProperty(AKey);
 
@@ -2341,6 +2604,9 @@ begin
       end;
       if AObject.AsReference is TGocciaWrappedValue then
       begin
+        {$IFDEF BRIDGE_METRICS}
+        Inc(GBridgeMetrics.SetPropertyBridgeCount);
+        {$ENDIF}
         GocciaObj := TGocciaWrappedValue(AObject.AsReference).Value;
         Val := UnwrapToGocciaValue(AValue);
         GocciaObj.SetProperty(AKey, Val);
@@ -2364,6 +2630,7 @@ var
   GocciaObj: TGocciaValue;
   SymKey: TGocciaSymbolValue;
   PropVal: TGocciaValue;
+  I: Integer;
 begin
   try
     if AObject.Kind = svkNil then
@@ -2374,7 +2641,15 @@ begin
         ThrowTypeError('Cannot read properties of undefined (reading ''' + CoerceKeyToString(AKey) + ''')');
     end;
 
-    if SouffleIsReference(AObject) and Assigned(AObject.AsReference) and
+    if SouffleIsStringValue(AObject) and (AKey.Kind = svkInteger) then
+    begin
+      I := Integer(AKey.AsInteger);
+      if (I >= 0) and (I < Length(SouffleGetString(AObject))) then
+        Exit(SouffleString(SouffleGetString(AObject)[I + 1]))
+      else
+        Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    end
+    else if SouffleIsReference(AObject) and Assigned(AObject.AsReference) and
        (AObject.AsReference is TSouffleArray) and (AKey.Kind = svkInteger) then
     begin
       Result := TSouffleArray(AObject.AsReference).Get(Integer(AKey.AsInteger));
@@ -2532,8 +2807,59 @@ function TGocciaRuntimeOperations.Invoke(const ACallee: TSouffleValue;
 var
   GocciaCallee, GocciaReceiver, GocciaResult: TGocciaValue;
   Args: TGocciaArgumentsCollection;
+  DirectArgs: array of TSouffleValue;
   I: Integer;
 begin
+  if SouffleIsReference(ACallee) and Assigned(ACallee.AsReference) then
+  begin
+    if ACallee.AsReference is TSouffleClosure then
+    begin
+      {$IFDEF BRIDGE_METRICS}
+      Inc(GBridgeMetrics.InvokeClosureDirectCount);
+      {$ENDIF}
+      SetLength(DirectArgs, AArgCount + 1);
+      DirectArgs[0] := AReceiver;
+      if AArgCount > 0 then
+        Move(AArgs^, DirectArgs[1], AArgCount * SizeOf(TSouffleValue));
+      Result := FVM.ExecuteFunction(
+        TSouffleClosure(ACallee.AsReference), DirectArgs);
+      Exit;
+    end;
+
+    if ACallee.AsReference is TSouffleNativeFunction then
+    begin
+      {$IFDEF BRIDGE_METRICS}
+      Inc(GBridgeMetrics.InvokeNativeDirectCount);
+      {$ENDIF}
+      try
+        Result := TSouffleNativeFunction(ACallee.AsReference).Invoke(
+          AReceiver, AArgs, AArgCount);
+      except
+        on E: TGocciaThrowValue do
+          RethrowAsVM(E);
+      end;
+      Exit;
+    end;
+
+    if ACallee.AsReference is TGocciaBridgedFunction then
+    begin
+      {$IFDEF BRIDGE_METRICS}
+      Inc(GBridgeMetrics.InvokeNativeDirectCount);
+      {$ENDIF}
+      try
+        Result := TGocciaBridgedFunction(ACallee.AsReference).Invoke(
+          AReceiver, AArgs, AArgCount);
+      except
+        on E: TGocciaThrowValue do
+          RethrowAsVM(E);
+      end;
+      Exit;
+    end;
+  end;
+
+  {$IFDEF BRIDGE_METRICS}
+  Inc(GBridgeMetrics.InvokeGocciaCount);
+  {$ENDIF}
   try
     if SouffleIsReference(ACallee) and Assigned(ACallee.AsReference) and
        (ACallee.AsReference is TSouffleBlueprint) then
@@ -2580,6 +2906,10 @@ end;
 
 function TGocciaRuntimeOperations.Construct(const AConstructor: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+{$IFDEF BRIDGE_METRICS}
+  procedure MetricNative; begin Inc(AGBridgeMetrics.ConstructNativeCount); end;
+  procedure MetricBridge; begin Inc(AGBridgeMetrics.ConstructGocciaCount); end;
+{$ENDIF}
 var
   GocciaConstructor, GocciaResult: TGocciaValue;
   Args: TGocciaArgumentsCollection;
@@ -2637,9 +2967,15 @@ begin
       end;
 
       Result := SouffleReference(Rec);
+      {$IFDEF BRIDGE_METRICS}
+      MetricNative;
+      {$ENDIF}
       Exit;
     end;
 
+    {$IFDEF BRIDGE_METRICS}
+    MetricBridge;
+    {$ENDIF}
     GocciaConstructor := UnwrapToGocciaValue(AConstructor);
 
     if (GocciaConstructor is TGocciaClassValue) then
@@ -2724,6 +3060,9 @@ var
   IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
+  {$IFDEF BRIDGE_METRICS}
+  Inc(GBridgeMetrics.GetIteratorCount);
+  {$ENDIF}
   try
     GocciaVal := UnwrapToGocciaValue(AIterable);
 
@@ -2814,6 +3153,9 @@ var
   Value, NextMethod, NextResult, Resolved, DoneValue: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
+  {$IFDEF BRIDGE_METRICS}
+  Inc(GBridgeMetrics.IteratorNextCount);
+  {$ENDIF}
   ADone := True;
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
   try
@@ -3149,6 +3491,9 @@ var
   Rec: TSouffleRecord;
   Pair: TPair<string, TGocciaValue>;
 begin
+  {$IFDEF BRIDGE_METRICS}
+  Inc(GBridgeMetrics.ImportModuleCount);
+  {$ENDIF}
   if not Assigned(FEngine) then
     Exit(SouffleNil);
 
@@ -3179,6 +3524,9 @@ function TGocciaRuntimeOperations.AwaitValue(const AValue: TSouffleValue): TSouf
 var
   GocciaVal, Resolved: TGocciaValue;
 begin
+  {$IFDEF BRIDGE_METRICS}
+  Inc(GBridgeMetrics.AwaitValueCount);
+  {$ENDIF}
   try
     GocciaVal := UnwrapToGocciaValue(AValue);
     Resolved := Goccia.Evaluator.AwaitValue(GocciaVal);
@@ -3518,8 +3866,6 @@ end;
 function JoinElementToString(const AElem: TSouffleValue;
   const ARuntime: TGocciaRuntimeOperations): string;
 var
-  GocciaVal: TGocciaValue;
-  StrVal: TGocciaStringLiteralValue;
   StrResult: TSouffleValue;
 begin
   if SouffleIsNil(AElem) then
@@ -3538,13 +3884,7 @@ begin
       Exit('[object Object]');
     end;
   end;
-
-  GocciaVal := ARuntime.UnwrapToGocciaValue(AElem);
-  if (GocciaVal is TGocciaUndefinedLiteralValue) or
-     (GocciaVal is TGocciaNullLiteralValue) then
-    Exit('');
-  StrVal := Goccia.Values.ToPrimitive.ToECMAString(GocciaVal);
-  Result := StrVal.Value;
+  Result := ARuntime.CoerceToString(AElem);
 end;
 
 function JoinArrayElements(const AArr: TSouffleArray;
@@ -3563,6 +3903,123 @@ end;
 
 var
   GNativeArrayJoinRuntime: TGocciaRuntimeOperations;
+
+{ Bridged test framework globals }
+var
+  GBridgedDescribe: TGocciaNativeFunctionValue;
+  GBridgedDescribeSkip: TGocciaNativeFunctionValue;
+  GBridgedDescribeSkipIf: TGocciaNativeFunctionValue;
+  GBridgedDescribeRunIf: TGocciaNativeFunctionValue;
+  GBridgedTest: TGocciaNativeFunctionValue;
+  GBridgedTestSkip: TGocciaNativeFunctionValue;
+  GBridgedTestSkipIf: TGocciaNativeFunctionValue;
+  GBridgedTestRunIf: TGocciaNativeFunctionValue;
+  GBridgedExpect: TGocciaNativeFunctionValue;
+  GBridgedIt: TGocciaNativeFunctionValue;
+  GBridgedBeforeEach: TGocciaNativeFunctionValue;
+  GBridgedAfterEach: TGocciaNativeFunctionValue;
+  GBridgedRunTests: TGocciaNativeFunctionValue;
+
+function InvokeBridgedFn(const AGocciaFn: TGocciaNativeFunctionValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Args: TGocciaArgumentsCollection;
+  GocciaResult: TGocciaValue;
+  I: Integer;
+begin
+  Args := TGocciaArgumentsCollection.Create;
+  try
+    for I := 0 to AArgCount - 1 do
+      Args.Add(GNativeArrayJoinRuntime.UnwrapToGocciaValue(
+        PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+    GocciaResult := AGocciaFn.Call(Args,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+    if Assigned(GocciaResult) then
+      Result := GNativeArrayJoinRuntime.ToSouffleValue(GocciaResult)
+    else
+      Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  finally
+    Args.Free;
+  end;
+end;
+
+function NativeBridgedDescribe(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedDescribe, AArgs, AArgCount);
+end;
+
+function NativeBridgedTest(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedTest, AArgs, AArgCount);
+end;
+
+function NativeBridgedIt(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedIt, AArgs, AArgCount);
+end;
+
+function NativeBridgedExpect(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedExpect, AArgs, AArgCount);
+end;
+
+function NativeBridgedBeforeEach(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedBeforeEach, AArgs, AArgCount);
+end;
+
+function NativeBridgedAfterEach(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedAfterEach, AArgs, AArgCount);
+end;
+
+function NativeBridgedRunTests(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedRunTests, AArgs, AArgCount);
+end;
+
+function NativeBridgedDescribeSkip(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedDescribeSkip, AArgs, AArgCount);
+end;
+
+function NativeBridgedDescribeSkipIf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedDescribeSkipIf, AArgs, AArgCount);
+end;
+
+function NativeBridgedDescribeRunIf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedDescribeRunIf, AArgs, AArgCount);
+end;
+
+function NativeBridgedTestSkip(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedTestSkip, AArgs, AArgCount);
+end;
+
+function NativeBridgedTestSkipIf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedTestSkipIf, AArgs, AArgCount);
+end;
+
+function NativeBridgedTestRunIf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeBridgedFn(GBridgedTestRunIf, AArgs, AArgCount);
+end;
 
 procedure SyncSouffleArrayToCache(const AArr: TSouffleArray);
 var
@@ -4587,7 +5044,941 @@ begin
     Result := SouffleString('[object Object]');
 end;
 
+{ Native String Prototype Methods }
+
+function NativeStrArgAsInt(const AArgs: PSouffleValue;
+  const AArgCount, AIndex: Integer; const ADefault: Int64 = 0): Int64;
+var
+  V: TSouffleValue;
+  D: Double;
+begin
+  if AIndex >= AArgCount then
+    Exit(ADefault);
+  V := PSouffleValue(PByte(AArgs) + AIndex * SizeOf(TSouffleValue))^;
+  case V.Kind of
+    svkInteger: Result := V.AsInteger;
+    svkFloat:
+    begin
+      D := V.AsFloat;
+      if IsNaN(D) then Result := 0
+      else if IsInfinite(D) then
+      begin
+        if D > 0 then Result := High(Int64) else Result := Low(Int64);
+      end
+      else Result := Trunc(D);
+    end;
+    svkBoolean: if V.AsBoolean then Result := 1 else Result := 0;
+    svkNil: Result := 0;
+  else
+    if SouffleIsReference(V) and Assigned(V.AsReference) and
+       (V.AsReference is TGocciaWrappedValue) and
+       (TGocciaWrappedValue(V.AsReference).Value is TGocciaSymbolValue) then
+      Goccia.Values.ErrorHelper.ThrowTypeError(
+        'Cannot convert a Symbol value to a number')
+    else
+      Result := ADefault;
+  end;
+end;
+
+function NativeStrArgAsString(const AArgs: PSouffleValue;
+  const AArgCount, AIndex: Integer;
+  const ADefault: string = 'undefined'): string;
+var
+  V: TSouffleValue;
+begin
+  if AIndex >= AArgCount then Exit(ADefault);
+  V := PSouffleValue(PByte(AArgs) + AIndex * SizeOf(TSouffleValue))^;
+  case V.Kind of
+    svkNil:
+      if V.Flags = GOCCIA_NIL_NULL then Result := 'null'
+      else Result := 'undefined';
+    svkBoolean:
+      if V.AsBoolean then Result := 'true' else Result := 'false';
+    svkInteger:
+      Result := IntToStr(V.AsInteger);
+    svkFloat:
+      Result := GNativeArrayJoinRuntime.CoerceToString(V);
+  else
+    if SouffleIsStringValue(V) then
+      Result := SouffleGetString(V)
+    else
+      Result := GNativeArrayJoinRuntime.CoerceToString(V);
+  end;
+end;
+
+function NativeStrArgIsUndefined(const AArgs: PSouffleValue;
+  const AArgCount, AIndex: Integer): Boolean;
+var
+  V: TSouffleValue;
+begin
+  if AIndex >= AArgCount then Exit(True);
+  V := PSouffleValue(PByte(AArgs) + AIndex * SizeOf(TSouffleValue))^;
+  Result := (V.Kind = svkNil) and (V.Flags <> GOCCIA_NIL_NULL);
+end;
+
+function NativeStrNormalizeIndex(const ARelative, ALength: Integer): Integer;
+  inline;
+begin
+  if ARelative < 0 then
+    Result := Max(ALength + ARelative, 0)
+  else
+    Result := Min(ARelative, ALength);
+end;
+
+// ES2026 §22.1.3.1 String.prototype.charAt(pos)
+function NativeStringCharAt(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  Idx: Int64;
+begin
+  S := SouffleGetString(AReceiver);
+  Idx := NativeStrArgAsInt(AArgs, AArgCount, 0);
+  if (Idx >= 0) and (Idx < Length(S)) then
+    Result := SouffleString(S[Idx + 1])
+  else
+    Result := SouffleString('');
+end;
+
+// ES2026 §22.1.3.2 String.prototype.charCodeAt(pos)
+function NativeStringCharCodeAt(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  Idx: Int64;
+begin
+  S := SouffleGetString(AReceiver);
+  Idx := NativeStrArgAsInt(AArgs, AArgCount, 0);
+  if (Idx >= 0) and (Idx < Length(S)) then
+    Result := SouffleInteger(Ord(S[Idx + 1]))
+  else
+    Result := SouffleFloat(NaN);
+end;
+
+// ES2026 §22.1.3.3 String.prototype.codePointAt(pos)
+function NativeStringCodePointAt(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  Idx: Int64;
+  B: Byte;
+  CP: Cardinal;
+begin
+  S := SouffleGetString(AReceiver);
+  Idx := NativeStrArgAsInt(AArgs, AArgCount, 0);
+  if (Idx < 0) or (Idx >= Length(S)) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  B := Ord(S[Idx + 1]);
+  if B < $80 then
+    CP := B
+  else if (B and $E0) = $C0 then
+  begin
+    if Idx + 2 > Length(S) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    CP := (Cardinal(B and $1F) shl 6) or Cardinal(Ord(S[Idx + 2]) and $3F);
+  end
+  else if (B and $F0) = $E0 then
+  begin
+    if Idx + 3 > Length(S) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    CP := (Cardinal(B and $0F) shl 12) or
+      (Cardinal(Ord(S[Idx + 2]) and $3F) shl 6) or
+      Cardinal(Ord(S[Idx + 3]) and $3F);
+  end
+  else if (B and $F8) = $F0 then
+  begin
+    if Idx + 4 > Length(S) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    CP := (Cardinal(B and $07) shl 18) or
+      (Cardinal(Ord(S[Idx + 2]) and $3F) shl 12) or
+      (Cardinal(Ord(S[Idx + 3]) and $3F) shl 6) or
+      Cardinal(Ord(S[Idx + 4]) and $3F);
+  end
+  else
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  Result := SouffleFloat(CP * 1.0);
+end;
+
+// ES2026 §22.1.3.1 String.prototype.at(index)
+function NativeStringAt(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  Idx: Int64;
+begin
+  S := SouffleGetString(AReceiver);
+  Idx := NativeStrArgAsInt(AArgs, AArgCount, 0);
+  if Idx < 0 then Idx := Length(S) + Idx;
+  if (Idx < 0) or (Idx >= Length(S)) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  Result := SouffleString(S[Idx + 1]);
+end;
+
+// ES2026 §22.1.3.9 String.prototype.indexOf(searchString [, position])
+function NativeStringIndexOf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S, SearchStr: string;
+  StartPos, Found: Integer;
+begin
+  S := SouffleGetString(AReceiver);
+  SearchStr := NativeStrArgAsString(AArgs, AArgCount, 0, 'undefined');
+  StartPos := Integer(Min(Max(NativeStrArgAsInt(AArgs, AArgCount, 1, 0),
+    0), Length(S)));
+  if SearchStr = '' then
+    Exit(SouffleInteger(Min(StartPos, Length(S))));
+  if StartPos < Length(S) then
+  begin
+    Found := Pos(SearchStr, Copy(S, StartPos + 1, Length(S)));
+    if Found > 0 then
+      Exit(SouffleInteger(Found + StartPos - 1));
+  end;
+  Result := SouffleInteger(-1);
+end;
+
+// ES2026 §22.1.3.10 String.prototype.lastIndexOf(searchString [, position])
+function NativeStringLastIndexOf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S, SearchStr: string;
+  StartPos, I, Found: Integer;
+begin
+  S := SouffleGetString(AReceiver);
+  SearchStr := NativeStrArgAsString(AArgs, AArgCount, 0, 'undefined');
+  StartPos := Integer(Min(NativeStrArgAsInt(AArgs, AArgCount, 1, Length(S)),
+    Int64(Length(S))));
+  if SearchStr = '' then
+    Exit(SouffleInteger(StartPos));
+  Found := -1;
+  for I := Min(StartPos, Length(S) - Length(SearchStr)) downto 0 do
+    if Copy(S, I + 1, Length(SearchStr)) = SearchStr then
+    begin
+      Found := I;
+      Break;
+    end;
+  Result := SouffleInteger(Found);
+end;
+
+// ES2026 §22.1.3.7 String.prototype.includes(searchString [, position])
+function NativeStringIncludes(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S, SearchStr: string;
+  StartPos: Integer;
+begin
+  S := SouffleGetString(AReceiver);
+  SearchStr := NativeStrArgAsString(AArgs, AArgCount, 0, 'undefined');
+  StartPos := Integer(Min(Max(NativeStrArgAsInt(AArgs, AArgCount, 1, 0),
+    0), Int64(Length(S))));
+  if SearchStr = '' then Exit(SouffleBoolean(True));
+  if StartPos >= Length(S) then Exit(SouffleBoolean(False));
+  Result := SouffleBoolean(
+    Pos(SearchStr, Copy(S, StartPos + 1, Length(S))) > 0);
+end;
+
+// ES2026 §22.1.3.24 String.prototype.startsWith(searchString [, position])
+function NativeStringStartsWith(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S, SearchStr: string;
+  StartPos: Integer;
+begin
+  S := SouffleGetString(AReceiver);
+  SearchStr := NativeStrArgAsString(AArgs, AArgCount, 0, 'undefined');
+  StartPos := Integer(Min(Max(NativeStrArgAsInt(AArgs, AArgCount, 1, 0),
+    0), Int64(Length(S))));
+  if StartPos + Length(SearchStr) > Length(S) then
+    Exit(SouffleBoolean(False));
+  Result := SouffleBoolean(
+    Copy(S, StartPos + 1, Length(SearchStr)) = SearchStr);
+end;
+
+// ES2026 §22.1.3.6 String.prototype.endsWith(searchString [, endPosition])
+function NativeStringEndsWith(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S, SearchStr: string;
+  EndPos: Integer;
+begin
+  S := SouffleGetString(AReceiver);
+  SearchStr := NativeStrArgAsString(AArgs, AArgCount, 0, 'undefined');
+  if NativeStrArgIsUndefined(AArgs, AArgCount, 1) then
+    EndPos := Length(S)
+  else
+    EndPos := Integer(Min(Max(NativeStrArgAsInt(AArgs, AArgCount, 1), 0),
+      Int64(Length(S))));
+  if EndPos < Length(SearchStr) then Exit(SouffleBoolean(False));
+  Result := SouffleBoolean(
+    Copy(S, EndPos - Length(SearchStr) + 1, Length(SearchStr)) = SearchStr);
+end;
+
+// ES2026 §22.1.3.22 String.prototype.slice(start, end)
+function NativeStringSlice(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  Len, StartIdx, EndIdx: Integer;
+  RawStart, RawEnd: Int64;
+begin
+  S := SouffleGetString(AReceiver);
+  Len := Length(S);
+  RawStart := NativeStrArgAsInt(AArgs, AArgCount, 0);
+  StartIdx := NativeStrNormalizeIndex(
+    Integer(Min(Max(RawStart, Int64(-Len)), Int64(Len))), Len);
+  if NativeStrArgIsUndefined(AArgs, AArgCount, 1) then
+    EndIdx := Len
+  else
+  begin
+    RawEnd := NativeStrArgAsInt(AArgs, AArgCount, 1);
+    EndIdx := NativeStrNormalizeIndex(
+      Integer(Min(Max(RawEnd, Int64(-Len)), Int64(Len))), Len);
+  end;
+  if StartIdx > EndIdx then StartIdx := EndIdx;
+  if (StartIdx >= 0) and (StartIdx < Len) and (EndIdx > StartIdx) then
+    Result := SouffleString(Copy(S, StartIdx + 1, EndIdx - StartIdx))
+  else
+    Result := SouffleString('');
+end;
+
+// ES2026 §22.1.3.25 String.prototype.substring(start, end)
+function NativeStringSubstring(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  Len, StartIdx, EndIdx, Temp: Integer;
+begin
+  S := SouffleGetString(AReceiver);
+  Len := Length(S);
+  StartIdx := Integer(Min(Max(NativeStrArgAsInt(AArgs, AArgCount, 0), 0),
+    Int64(Len)));
+  if NativeStrArgIsUndefined(AArgs, AArgCount, 1) then
+    EndIdx := Len
+  else
+    EndIdx := Integer(Min(Max(NativeStrArgAsInt(AArgs, AArgCount, 1), 0),
+      Int64(Len)));
+  if StartIdx > EndIdx then
+  begin
+    Temp := StartIdx; StartIdx := EndIdx; EndIdx := Temp;
+  end;
+  if EndIdx > StartIdx then
+    Result := SouffleString(Copy(S, StartIdx + 1, EndIdx - StartIdx))
+  else
+    Result := SouffleString('');
+end;
+
+// ES2026 §22.1.3.28 String.prototype.toUpperCase()
+function NativeStringToUpperCase(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleString(UpperCase(SouffleGetString(AReceiver)));
+end;
+
+// ES2026 §22.1.3.26 String.prototype.toLowerCase()
+function NativeStringToLowerCase(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleString(LowerCase(SouffleGetString(AReceiver)));
+end;
+
+// ES2026 §22.1.3.29 String.prototype.trim()
+function NativeStringTrim(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleString(Trim(SouffleGetString(AReceiver)));
+end;
+
+// ES2026 §22.1.3.30 String.prototype.trimStart()
+function NativeStringTrimStart(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleString(TrimLeft(SouffleGetString(AReceiver)));
+end;
+
+// ES2026 §22.1.3.31 String.prototype.trimEnd()
+function NativeStringTrimEnd(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleString(TrimRight(SouffleGetString(AReceiver)));
+end;
+
+// ES2026 §22.1.3.18 String.prototype.repeat(count)
+function NativeStringRepeat(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  Count: Int64;
+begin
+  S := SouffleGetString(AReceiver);
+  Count := NativeStrArgAsInt(AArgs, AArgCount, 0, 0);
+  if Count < 0 then
+    Goccia.Values.ErrorHelper.ThrowRangeError(
+      'Invalid count value: must be non-negative');
+  if Count > MaxInt then
+    Goccia.Values.ErrorHelper.ThrowRangeError(
+      'Invalid count value: too large');
+  Result := SouffleString(DupeString(S, Integer(Count)));
+end;
+
+// ES2026 §22.1.3.15 String.prototype.padStart(maxLength [, fillString])
+function NativeStringPadStart(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S, PadStr, Padding: string;
+  TargetLen, PadNeeded: Integer;
+begin
+  S := SouffleGetString(AReceiver);
+  TargetLen := Integer(Min(NativeStrArgAsInt(AArgs, AArgCount, 0),
+    Int64(MaxInt)));
+  if Length(S) >= TargetLen then Exit(SouffleString(S));
+  if (AArgCount > 1) and not NativeStrArgIsUndefined(AArgs, AArgCount, 1) then
+    PadStr := NativeStrArgAsString(AArgs, AArgCount, 1, ' ')
+  else
+    PadStr := ' ';
+  if PadStr = '' then Exit(SouffleString(S));
+  PadNeeded := TargetLen - Length(S);
+  Padding := '';
+  while Length(Padding) < PadNeeded do
+    Padding := Padding + PadStr;
+  Padding := Copy(Padding, 1, PadNeeded);
+  Result := SouffleString(Padding + S);
+end;
+
+// ES2026 §22.1.3.14 String.prototype.padEnd(maxLength [, fillString])
+function NativeStringPadEnd(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S, PadStr, Padding: string;
+  TargetLen, PadNeeded: Integer;
+begin
+  S := SouffleGetString(AReceiver);
+  TargetLen := Integer(Min(NativeStrArgAsInt(AArgs, AArgCount, 0),
+    Int64(MaxInt)));
+  if Length(S) >= TargetLen then Exit(SouffleString(S));
+  if (AArgCount > 1) and not NativeStrArgIsUndefined(AArgs, AArgCount, 1) then
+    PadStr := NativeStrArgAsString(AArgs, AArgCount, 1, ' ')
+  else
+    PadStr := ' ';
+  if PadStr = '' then Exit(SouffleString(S));
+  PadNeeded := TargetLen - Length(S);
+  Padding := '';
+  while Length(Padding) < PadNeeded do
+    Padding := Padding + PadStr;
+  Padding := Copy(Padding, 1, PadNeeded);
+  Result := SouffleString(S + Padding);
+end;
+
+// ES2026 §22.1.3.19 String.prototype.replace(searchValue, replaceValue)
+function NativeStringReplace(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S, SearchStr, ReplaceStr: string;
+  ReplacerArg, CallResult: TSouffleValue;
+  FoundPos: Integer;
+begin
+  S := SouffleGetString(AReceiver);
+  SearchStr := NativeStrArgAsString(AArgs, AArgCount, 0, 'undefined');
+  if AArgCount >= 2 then
+    ReplacerArg := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^
+  else
+    ReplacerArg := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if SouffleIsReference(ReplacerArg) and
+     Assigned(ReplacerArg.AsReference) and
+     (ReplacerArg.AsReference is TSouffleClosure) then
+  begin
+    FoundPos := Pos(SearchStr, S);
+    if FoundPos = 0 then Exit(SouffleString(S));
+    CallResult := GNativeArrayJoinRuntime.VM.ExecuteFunction(
+      TSouffleClosure(ReplacerArg.AsReference),
+      [SouffleNil, SouffleString(SearchStr),
+       SouffleInteger(FoundPos - 1), AReceiver]);
+    ReplaceStr := GNativeArrayJoinRuntime.CoerceToString(CallResult);
+    Result := SouffleString(
+      Copy(S, 1, FoundPos - 1) + ReplaceStr +
+      Copy(S, FoundPos + Length(SearchStr), Length(S)));
+  end
+  else
+  begin
+    ReplaceStr := NativeStrArgAsString(AArgs, AArgCount, 1, 'undefined');
+    if SearchStr = '' then
+      Result := SouffleString(ReplaceStr + S)
+    else
+      Result := SouffleString(StringReplace(S, SearchStr, ReplaceStr, []));
+  end;
+end;
+
+// ES2026 §22.1.3.20 String.prototype.replaceAll(searchValue, replaceValue)
+function NativeStringReplaceAll(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S, SearchStr, ReplaceStr, Remaining, Built: string;
+  ReplacerArg, CallResult: TSouffleValue;
+  FoundPos: Integer;
+begin
+  S := SouffleGetString(AReceiver);
+  SearchStr := NativeStrArgAsString(AArgs, AArgCount, 0, 'undefined');
+  if AArgCount >= 2 then
+    ReplacerArg := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^
+  else
+    ReplacerArg := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if SouffleIsReference(ReplacerArg) and
+     Assigned(ReplacerArg.AsReference) and
+     (ReplacerArg.AsReference is TSouffleClosure) then
+  begin
+    Built := '';
+    Remaining := S;
+    if SearchStr = '' then
+    begin
+      FoundPos := 1;
+      while FoundPos <= Length(Remaining) do
+      begin
+        CallResult := GNativeArrayJoinRuntime.VM.ExecuteFunction(
+          TSouffleClosure(ReplacerArg.AsReference),
+          [SouffleNil, SouffleString(''),
+           SouffleInteger(FoundPos - 1), AReceiver]);
+        Built := Built +
+          GNativeArrayJoinRuntime.CoerceToString(CallResult) +
+          Remaining[FoundPos];
+        Inc(FoundPos);
+      end;
+      CallResult := GNativeArrayJoinRuntime.VM.ExecuteFunction(
+        TSouffleClosure(ReplacerArg.AsReference),
+        [SouffleNil, SouffleString(''),
+         SouffleInteger(Length(S)), AReceiver]);
+      Built := Built +
+        GNativeArrayJoinRuntime.CoerceToString(CallResult);
+      Result := SouffleString(Built);
+    end
+    else
+    begin
+      while True do
+      begin
+        FoundPos := Pos(SearchStr, Remaining);
+        if FoundPos = 0 then
+        begin
+          Built := Built + Remaining;
+          Break;
+        end;
+        Built := Built + Copy(Remaining, 1, FoundPos - 1);
+        CallResult := GNativeArrayJoinRuntime.VM.ExecuteFunction(
+          TSouffleClosure(ReplacerArg.AsReference),
+          [SouffleNil, SouffleString(SearchStr),
+           SouffleInteger(Length(S) - Length(Remaining) + FoundPos - 1),
+           AReceiver]);
+        Built := Built +
+          GNativeArrayJoinRuntime.CoerceToString(CallResult);
+        Remaining := Copy(Remaining,
+          FoundPos + Length(SearchStr), Length(Remaining));
+      end;
+      Result := SouffleString(Built);
+    end;
+  end
+  else
+  begin
+    ReplaceStr := NativeStrArgAsString(AArgs, AArgCount, 1, 'undefined');
+    Result := SouffleString(
+      StringReplace(S, SearchStr, ReplaceStr, [rfReplaceAll]));
+  end;
+end;
+
+// ES2026 §22.1.3.23 String.prototype.split(separator, limit)
+function NativeStringSplit(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S, Sep, Remaining, Segment: string;
+  Arr: TSouffleArray;
+  GC: TSouffleGarbageCollector;
+  SepPos, Limit, I: Integer;
+  HasLimit: Boolean;
+begin
+  S := SouffleGetString(AReceiver);
+  Sep := NativeStrArgAsString(AArgs, AArgCount, 0, 'undefined');
+  HasLimit := (AArgCount > 1) and
+    not NativeStrArgIsUndefined(AArgs, AArgCount, 1);
+  if HasLimit then
+  begin
+    Limit := Integer(NativeStrArgAsInt(AArgs, AArgCount, 1));
+    if Limit = 0 then
+    begin
+      Arr := TSouffleArray.Create(0);
+      GC := TSouffleGarbageCollector.Instance;
+      if Assigned(GC) then GC.AllocateObject(Arr);
+      if Assigned(GNativeArrayJoinRuntime) then
+        Arr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
+      Exit(SouffleReference(Arr));
+    end;
+    if Limit < 0 then HasLimit := False;
+  end;
+
+  Arr := TSouffleArray.Create(4);
+  GC := TSouffleGarbageCollector.Instance;
+  if Assigned(GC) then GC.AllocateObject(Arr);
+  if Assigned(GNativeArrayJoinRuntime) then
+    Arr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
+
+  if S = '' then
+  begin
+    if Sep <> '' then Arr.Push(SouffleString(''));
+    Exit(SouffleReference(Arr));
+  end;
+  if Sep = '' then
+  begin
+    for I := 1 to Length(S) do
+    begin
+      Arr.Push(SouffleString(S[I]));
+      if HasLimit and (Arr.Count >= Limit) then Break;
+    end;
+    Exit(SouffleReference(Arr));
+  end;
+  if Pos(Sep, S) = 0 then
+  begin
+    Arr.Push(SouffleString(S));
+    Exit(SouffleReference(Arr));
+  end;
+
+  Remaining := S;
+  while True do
+  begin
+    SepPos := Pos(Sep, Remaining);
+    if SepPos = 0 then
+    begin
+      Arr.Push(SouffleString(Remaining));
+      Break;
+    end;
+    Segment := Copy(Remaining, 1, SepPos - 1);
+    Arr.Push(SouffleString(Segment));
+    if HasLimit and (Arr.Count >= Limit) then Break;
+    Remaining := Copy(Remaining, SepPos + Length(Sep), Length(Remaining));
+  end;
+  Result := SouffleReference(Arr);
+end;
+
+// ES2026 §22.1.3.4 String.prototype.concat(...args)
+function NativeStringConcat(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  I: Integer;
+begin
+  S := SouffleGetString(AReceiver);
+  for I := 0 to AArgCount - 1 do
+    S := S + NativeStrArgAsString(AArgs, AArgCount, I);
+  Result := SouffleString(S);
+end;
+
+// ES2026 §22.1.3.11 String.prototype.localeCompare(that)
+function NativeStringLocaleCompare(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S, That: string;
+begin
+  S := SouffleGetString(AReceiver);
+  That := NativeStrArgAsString(AArgs, AArgCount, 0, 'undefined');
+  if S < That then Result := SouffleInteger(-1)
+  else if S > That then Result := SouffleInteger(1)
+  else Result := SouffleInteger(0);
+end;
+
+// ES2026 §22.1.3.13 String.prototype.normalize([form])
+function NativeStringNormalize(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Form: string;
+begin
+  if (AArgCount > 0) and not NativeStrArgIsUndefined(AArgs, AArgCount, 0) then
+  begin
+    Form := NativeStrArgAsString(AArgs, AArgCount, 0, 'NFC');
+    if (Form <> 'NFC') and (Form <> 'NFD') and
+       (Form <> 'NFKC') and (Form <> 'NFKD') then
+      Goccia.Values.ErrorHelper.ThrowRangeError(
+        'The normalization form should be one of NFC, NFD, NFKC, NFKD');
+  end;
+  Result := SouffleString(SouffleGetString(AReceiver));
+end;
+
+// ES2026 §22.1.3.8 String.prototype.isWellFormed()
+function NativeStringIsWellFormed(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  I: Integer;
+  B: Byte;
+begin
+  S := SouffleGetString(AReceiver);
+  I := 1;
+  while I <= Length(S) do
+  begin
+    B := Ord(S[I]);
+    if B < $80 then Inc(I)
+    else if (B and $E0) = $C0 then
+    begin
+      if (I + 1 > Length(S)) or ((Ord(S[I + 1]) and $C0) <> $80) then
+        Exit(SouffleBoolean(False));
+      Inc(I, 2);
+    end
+    else if (B and $F0) = $E0 then
+    begin
+      if (I + 2 > Length(S)) or ((Ord(S[I + 1]) and $C0) <> $80) or
+         ((Ord(S[I + 2]) and $C0) <> $80) then
+        Exit(SouffleBoolean(False));
+      if (B = $ED) and (Ord(S[I + 1]) >= $A0) then
+        Exit(SouffleBoolean(False));
+      Inc(I, 3);
+    end
+    else if (B and $F8) = $F0 then
+    begin
+      if (I + 3 > Length(S)) or ((Ord(S[I + 1]) and $C0) <> $80) or
+         ((Ord(S[I + 2]) and $C0) <> $80) or
+         ((Ord(S[I + 3]) and $C0) <> $80) then
+        Exit(SouffleBoolean(False));
+      Inc(I, 4);
+    end
+    else
+      Exit(SouffleBoolean(False));
+  end;
+  Result := SouffleBoolean(True);
+end;
+
+// ES2026 §22.1.3.33 String.prototype.toWellFormed()
+function NativeStringToWellFormed(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S, R: string;
+  I: Integer;
+  B: Byte;
+begin
+  S := SouffleGetString(AReceiver);
+  R := '';
+  I := 1;
+  while I <= Length(S) do
+  begin
+    B := Ord(S[I]);
+    if B < $80 then begin R := R + S[I]; Inc(I); end
+    else if (B and $E0) = $C0 then
+    begin
+      if (I + 1 > Length(S)) or ((Ord(S[I + 1]) and $C0) <> $80) then
+      begin R := R + #$EF#$BF#$BD; Inc(I); end
+      else begin R := R + Copy(S, I, 2); Inc(I, 2); end;
+    end
+    else if (B and $F0) = $E0 then
+    begin
+      if (I + 2 > Length(S)) or ((Ord(S[I + 1]) and $C0) <> $80) or
+         ((Ord(S[I + 2]) and $C0) <> $80) then
+      begin R := R + #$EF#$BF#$BD; Inc(I); end
+      else if (B = $ED) and (Ord(S[I + 1]) >= $A0) then
+      begin R := R + #$EF#$BF#$BD; Inc(I, 3); end
+      else begin R := R + Copy(S, I, 3); Inc(I, 3); end;
+    end
+    else if (B and $F8) = $F0 then
+    begin
+      if (I + 3 > Length(S)) or ((Ord(S[I + 1]) and $C0) <> $80) or
+         ((Ord(S[I + 2]) and $C0) <> $80) or
+         ((Ord(S[I + 3]) and $C0) <> $80) then
+      begin R := R + #$EF#$BF#$BD; Inc(I); end
+      else begin R := R + Copy(S, I, 4); Inc(I, 4); end;
+    end
+    else begin R := R + #$EF#$BF#$BD; Inc(I); end;
+  end;
+  Result := SouffleString(R);
+end;
+
+// ES2026 §22.1.3.32 String.prototype.valueOf()
+function NativeStringValueOf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleString(SouffleGetString(AReceiver));
+end;
+
+// ES2026 §22.1.3.27 String.prototype.toString()
+function NativeStringToString(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleString(SouffleGetString(AReceiver));
+end;
+
+{ Native Number Prototype Methods }
+
+function NativeNumExtract(const AReceiver: TSouffleValue): Double; inline;
+begin
+  case AReceiver.Kind of
+    svkInteger: Result := AReceiver.AsInteger;
+    svkFloat:   Result := AReceiver.AsFloat;
+  else
+    Result := NaN;
+  end;
+end;
+
+// ES2026 §21.1.3.3 Number.prototype.toFixed(fractionDigits)
+function NativeNumberToFixed(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Num: Double;
+  Digits: Integer;
+begin
+  Num := NativeNumExtract(AReceiver);
+  if IsNaN(Num) then Exit(SouffleString('NaN'));
+  if IsInfinite(Num) then
+  begin
+    if Num > 0 then Exit(SouffleString('Infinity'))
+    else Exit(SouffleString('-Infinity'));
+  end;
+  Digits := Integer(NativeStrArgAsInt(AArgs, AArgCount, 0, 0));
+  if (Digits < 0) or (Digits > 100) then
+    Goccia.Values.ErrorHelper.ThrowRangeError(
+      'toFixed() digits argument must be between 0 and 100');
+  Result := SouffleString(
+    FormatFloat('0.' + StringOfChar('0', Digits), Num));
+end;
+
+// ES2026 §21.1.3.6 Number.prototype.toString([radix])
+function NativeNumberToString(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Num: Double;
+  Radix: Integer;
+begin
+  Num := NativeNumExtract(AReceiver);
+  if IsNaN(Num) then Exit(SouffleString('NaN'));
+  if IsInfinite(Num) then
+  begin
+    if Num > 0 then Exit(SouffleString('Infinity'))
+    else Exit(SouffleString('-Infinity'));
+  end;
+  if NativeStrArgIsUndefined(AArgs, AArgCount, 0) then
+    Exit(SouffleString(
+      GNativeArrayJoinRuntime.CoerceToString(AReceiver)));
+  Radix := Integer(NativeStrArgAsInt(AArgs, AArgCount, 0, 10));
+  if (Radix < 2) or (Radix > 36) then
+    Goccia.Values.ErrorHelper.ThrowRangeError(
+      'toString() radix must be between 2 and 36');
+  if Radix = 16 then
+    Result := SouffleString(LowerCase(IntToHex(Trunc(Num), 1)))
+  else
+    Result := SouffleString(
+      GNativeArrayJoinRuntime.CoerceToString(AReceiver));
+end;
+
+// ES2026 §21.1.3.7 Number.prototype.valueOf()
+function NativeNumberValueOf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := AReceiver;
+end;
+
+// ES2026 §21.1.3.5 Number.prototype.toPrecision(precision)
+function NativeNumberToPrecision(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Num: Double;
+  Precision: Integer;
+begin
+  Num := NativeNumExtract(AReceiver);
+  if IsNaN(Num) or IsInfinite(Num) then
+    Exit(SouffleString(
+      GNativeArrayJoinRuntime.CoerceToString(AReceiver)));
+  if NativeStrArgIsUndefined(AArgs, AArgCount, 0) then
+    Exit(SouffleString(
+      GNativeArrayJoinRuntime.CoerceToString(AReceiver)));
+  Precision := Integer(NativeStrArgAsInt(AArgs, AArgCount, 0, 1));
+  if (Precision < 1) or (Precision > 100) then
+    Goccia.Values.ErrorHelper.ThrowRangeError(
+      'toPrecision() argument must be between 1 and 100');
+  Result := SouffleString(FloatToStrF(Num, ffGeneral, Precision, 0));
+end;
+
+// ES2026 §21.1.3.2 Number.prototype.toExponential(fractionDigits)
+function NativeNumberToExponential(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Num, Mantissa: Double;
+  FractionDigits, Exp: Integer;
+  HasExplicit: Boolean;
+  Sign, MantissaStr, ExpSign: string;
+begin
+  Num := NativeNumExtract(AReceiver);
+  if IsNaN(Num) then Exit(SouffleString('NaN'));
+  if IsInfinite(Num) then
+  begin
+    if Num > 0 then Exit(SouffleString('Infinity'))
+    else Exit(SouffleString('-Infinity'));
+  end;
+  HasExplicit := (AArgCount > 0) and
+    not NativeStrArgIsUndefined(AArgs, AArgCount, 0);
+  if HasExplicit then
+  begin
+    FractionDigits := Integer(NativeStrArgAsInt(AArgs, AArgCount, 0));
+    if (FractionDigits < 0) or (FractionDigits > 100) then
+      Goccia.Values.ErrorHelper.ThrowRangeError(
+        'toExponential() argument must be between 0 and 100');
+  end
+  else
+    FractionDigits := -1;
+  Sign := '';
+  if Num < 0 then begin Sign := '-'; Num := -Num; end;
+  if Num = 0 then
+  begin
+    if FractionDigits < 0 then FractionDigits := 0;
+    if FractionDigits = 0 then MantissaStr := '0'
+    else MantissaStr := '0.' + StringOfChar('0', FractionDigits);
+    Exit(SouffleString(Sign + MantissaStr + 'e+0'));
+  end;
+  Exp := Trunc(Math.Floor(Math.Log10(Num)));
+  Mantissa := Num / Math.Power(10, Exp);
+  if FractionDigits < 0 then
+    MantissaStr := FloatToStrF(Mantissa, ffGeneral, 15, 0)
+  else
+  begin
+    MantissaStr := FormatFloat(
+      '0.' + StringOfChar('0', FractionDigits), Mantissa);
+    if (Length(MantissaStr) > 1) and (MantissaStr[1] <> '0') and
+       (Pos('.', MantissaStr) > 0) and (MantissaStr[1] >= '2') then
+    begin
+      Mantissa := Mantissa / 10; Inc(Exp);
+      MantissaStr := FormatFloat(
+        '0.' + StringOfChar('0', FractionDigits), Mantissa);
+    end;
+  end;
+  if Exp >= 0 then ExpSign := '+' else ExpSign := '';
+  Result := SouffleString(
+    Sign + MantissaStr + 'e' + ExpSign + IntToStr(Exp));
+end;
+
 const
+  STRING_PROTOTYPE_METHODS: array[0..27] of TSouffleMethodEntry = (
+    (Name: 'charAt';         Arity: 1; Callback: @NativeStringCharAt),
+    (Name: 'charCodeAt';     Arity: 1; Callback: @NativeStringCharCodeAt),
+    (Name: 'codePointAt';    Arity: 1; Callback: @NativeStringCodePointAt),
+    (Name: 'at';             Arity: 1; Callback: @NativeStringAt),
+    (Name: 'indexOf';        Arity: 1; Callback: @NativeStringIndexOf),
+    (Name: 'lastIndexOf';    Arity: 1; Callback: @NativeStringLastIndexOf),
+    (Name: 'includes';       Arity: 1; Callback: @NativeStringIncludes),
+    (Name: 'startsWith';     Arity: 1; Callback: @NativeStringStartsWith),
+    (Name: 'endsWith';       Arity: 1; Callback: @NativeStringEndsWith),
+    (Name: 'slice';          Arity: 2; Callback: @NativeStringSlice),
+    (Name: 'substring';      Arity: 2; Callback: @NativeStringSubstring),
+    (Name: 'toUpperCase';    Arity: 0; Callback: @NativeStringToUpperCase),
+    (Name: 'toLowerCase';    Arity: 0; Callback: @NativeStringToLowerCase),
+    (Name: 'trim';           Arity: 0; Callback: @NativeStringTrim),
+    (Name: 'trimStart';      Arity: 0; Callback: @NativeStringTrimStart),
+    (Name: 'trimEnd';        Arity: 0; Callback: @NativeStringTrimEnd),
+    (Name: 'repeat';         Arity: 1; Callback: @NativeStringRepeat),
+    (Name: 'padStart';       Arity: 1; Callback: @NativeStringPadStart),
+    (Name: 'padEnd';         Arity: 1; Callback: @NativeStringPadEnd),
+    (Name: 'replace';        Arity: 2; Callback: @NativeStringReplace),
+    (Name: 'replaceAll';     Arity: 2; Callback: @NativeStringReplaceAll),
+    (Name: 'split';          Arity: 1; Callback: @NativeStringSplit),
+    (Name: 'concat';         Arity: 1; Callback: @NativeStringConcat),
+    (Name: 'localeCompare';  Arity: 1; Callback: @NativeStringLocaleCompare),
+    (Name: 'normalize';      Arity: 0; Callback: @NativeStringNormalize),
+    (Name: 'isWellFormed';   Arity: 0; Callback: @NativeStringIsWellFormed),
+    (Name: 'toWellFormed';   Arity: 0; Callback: @NativeStringToWellFormed),
+    (Name: 'toString';       Arity: 0; Callback: @NativeStringToString)
+  );
+
+  NUMBER_PROTOTYPE_METHODS: array[0..4] of TSouffleMethodEntry = (
+    (Name: 'toFixed';       Arity: 1; Callback: @NativeNumberToFixed),
+    (Name: 'toString';      Arity: 1; Callback: @NativeNumberToString),
+    (Name: 'valueOf';       Arity: 0; Callback: @NativeNumberValueOf),
+    (Name: 'toPrecision';   Arity: 1; Callback: @NativeNumberToPrecision),
+    (Name: 'toExponential'; Arity: 1; Callback: @NativeNumberToExponential)
+  );
+
   ARRAY_PROTOTYPE_METHODS: array[0..27] of TSouffleMethodEntry = (
     (Name: 'toString';      Arity: 0; Callback: @NativeArrayToString),
     (Name: 'push';          Arity: 1; Callback: @NativeArrayPush),
@@ -4638,10 +6029,221 @@ begin
 
   GNativeArrayJoinRuntime := Self;
 
+  FStringDelegate := TSouffleRecord(
+    BuildDelegate(STRING_PROTOTYPE_METHODS));
+  FNumberDelegate := TSouffleRecord(
+    BuildDelegate(NUMBER_PROTOTYPE_METHODS));
+
   FVM.ArrayDelegate := TSouffleRecord(
     BuildDelegate(ARRAY_PROTOTYPE_METHODS));
   FVM.RecordDelegate := TSouffleRecord(
     BuildDelegate(RECORD_PROTOTYPE_METHODS));
+end;
+
+function ExtractNativeFn(const AGlobals: TDictionary<string, TSouffleValue>;
+  const AName: string): TGocciaNativeFunctionValue;
+var
+  Val: TSouffleValue;
+begin
+  Result := nil;
+  if AGlobals.TryGetValue(AName, Val) and SouffleIsReference(Val) and
+     Assigned(Val.AsReference) and (Val.AsReference is TGocciaWrappedValue) and
+     (TGocciaWrappedValue(Val.AsReference).Value is TGocciaNativeFunctionValue) then
+    Result := TGocciaNativeFunctionValue(TGocciaWrappedValue(Val.AsReference).Value);
+end;
+
+function ExtractSubMethod(const AFn: TGocciaNativeFunctionValue;
+  const AName: string): TGocciaNativeFunctionValue;
+var
+  Sub: TGocciaValue;
+begin
+  Result := nil;
+  if not Assigned(AFn) then Exit;
+  Sub := AFn.GetProperty(AName);
+  if Assigned(Sub) and (Sub is TGocciaNativeFunctionValue) then
+    Result := TGocciaNativeFunctionValue(Sub);
+end;
+
+procedure ReplaceGlobalWithNative(
+  const AGlobals: TDictionary<string, TSouffleValue>;
+  const AConstGlobals: TDictionary<string, Boolean>;
+  const AName: string; const AArity: Integer;
+  const ACallback: TSouffleNativeCallback);
+var
+  Fn: TSouffleNativeFunction;
+  GC: TSouffleGarbageCollector;
+begin
+  GC := TSouffleGarbageCollector.Instance;
+  Fn := TSouffleNativeFunction.Create(AName, AArity, ACallback);
+  if Assigned(GC) then GC.AllocateObject(Fn);
+  AGlobals.AddOrSetValue(AName, SouffleReference(Fn));
+  AConstGlobals.AddOrSetValue(AName, True);
+end;
+
+function BuildSubMethodDelegate(
+  const AEntries: array of TSouffleMethodEntry): TSouffleRecord;
+var
+  Fn: TSouffleNativeFunction;
+  GC: TSouffleGarbageCollector;
+  I: Integer;
+begin
+  GC := TSouffleGarbageCollector.Instance;
+  Result := TSouffleRecord.Create(Length(AEntries));
+  if Assigned(GC) then GC.AllocateObject(Result);
+  for I := 0 to High(AEntries) do
+  begin
+    Fn := TSouffleNativeFunction.Create(
+      AEntries[I].Name, AEntries[I].Arity, AEntries[I].Callback);
+    if Assigned(GC) then GC.AllocateObject(Fn);
+    Result.Put(AEntries[I].Name, SouffleReference(Fn));
+  end;
+end;
+
+procedure TGocciaRuntimeOperations.RegisterTestNatives;
+const
+  DESCRIBE_SUB_METHODS: array[0..2] of TSouffleMethodEntry = (
+    (Name: 'skip';   Arity: 2; Callback: @NativeBridgedDescribeSkip),
+    (Name: 'skipIf'; Arity: 1; Callback: @NativeBridgedDescribeSkipIf),
+    (Name: 'runIf';  Arity: 1; Callback: @NativeBridgedDescribeRunIf)
+  );
+  TEST_SUB_METHODS: array[0..2] of TSouffleMethodEntry = (
+    (Name: 'skip';   Arity: 2; Callback: @NativeBridgedTestSkip),
+    (Name: 'skipIf'; Arity: 1; Callback: @NativeBridgedTestSkipIf),
+    (Name: 'runIf';  Arity: 1; Callback: @NativeBridgedTestRunIf)
+  );
+var
+  DescribeFn, TestFn: TGocciaNativeFunctionValue;
+begin
+  if not Assigned(FVM) then Exit;
+  if not FGlobals.ContainsKey('describe') then Exit;
+
+  DescribeFn := ExtractNativeFn(FGlobals, 'describe');
+  if not Assigned(DescribeFn) then Exit;
+
+  GBridgedDescribe := DescribeFn;
+  GBridgedDescribeSkip := ExtractSubMethod(DescribeFn, 'skip');
+  GBridgedDescribeSkipIf := ExtractSubMethod(DescribeFn, 'skipIf');
+  GBridgedDescribeRunIf := ExtractSubMethod(DescribeFn, 'runIf');
+  ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'describe', 2, @NativeBridgedDescribe);
+  FDescribeDelegate := BuildSubMethodDelegate(DESCRIBE_SUB_METHODS);
+
+  TestFn := ExtractNativeFn(FGlobals, 'test');
+  if Assigned(TestFn) then
+  begin
+    GBridgedTest := TestFn;
+    GBridgedTestSkip := ExtractSubMethod(TestFn, 'skip');
+    GBridgedTestSkipIf := ExtractSubMethod(TestFn, 'skipIf');
+    GBridgedTestRunIf := ExtractSubMethod(TestFn, 'runIf');
+    ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'test', 2, @NativeBridgedTest);
+    FTestDelegate := BuildSubMethodDelegate(TEST_SUB_METHODS);
+  end;
+
+  GBridgedExpect := ExtractNativeFn(FGlobals, 'expect');
+  if Assigned(GBridgedExpect) then
+    ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'expect', 1, @NativeBridgedExpect);
+
+  GBridgedIt := ExtractNativeFn(FGlobals, 'it');
+  if Assigned(GBridgedIt) then
+    ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'it', 2, @NativeBridgedIt);
+
+  GBridgedBeforeEach := ExtractNativeFn(FGlobals, 'beforeEach');
+  if Assigned(GBridgedBeforeEach) then
+    ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'beforeEach', 1, @NativeBridgedBeforeEach);
+
+  GBridgedAfterEach := ExtractNativeFn(FGlobals, 'afterEach');
+  if Assigned(GBridgedAfterEach) then
+    ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'afterEach', 1, @NativeBridgedAfterEach);
+
+  GBridgedRunTests := ExtractNativeFn(FGlobals, 'runTests');
+  if Assigned(GBridgedRunTests) then
+    ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'runTests', 0, @NativeBridgedRunTests);
+end;
+
+function ConvertObjectToNativeRecord(
+  const AObj: TGocciaObjectValue;
+  const ARuntime: TGocciaRuntimeOperations): TSouffleRecord;
+var
+  Names: TArray<string>;
+  I: Integer;
+  PropVal: TGocciaValue;
+  BridgedFn: TGocciaBridgedFunction;
+  GC: TSouffleGarbageCollector;
+begin
+  GC := TSouffleGarbageCollector.Instance;
+  Names := AObj.GetOwnPropertyNames;
+  Result := TSouffleRecord.Create(Length(Names));
+  if Assigned(GC) then GC.AllocateObject(Result);
+  for I := 0 to High(Names) do
+  begin
+    PropVal := AObj.GetProperty(Names[I]);
+    if not Assigned(PropVal) then Continue;
+    if PropVal is TGocciaNativeFunctionValue then
+    begin
+      BridgedFn := TGocciaBridgedFunction.Create(
+        TGocciaNativeFunctionValue(PropVal), ARuntime);
+      if Assigned(GC) then GC.AllocateObject(BridgedFn);
+      Result.Put(Names[I], SouffleReference(BridgedFn));
+    end
+    else
+      Result.Put(Names[I], ARuntime.ToSouffleValue(PropVal));
+  end;
+end;
+
+procedure TGocciaRuntimeOperations.RegisterNativeBuiltins;
+var
+  Keys: TArray<string>;
+  Key: string;
+  Val, GlobalThisVal: TSouffleValue;
+  Wrapped: TGocciaWrappedValue;
+  GocciaVal: TGocciaValue;
+  ObjVal: TGocciaObjectValue;
+  NativeFnVal: TGocciaNativeFunctionValue;
+  BridgedFn: TGocciaBridgedFunction;
+  Rec, GlobalThisRec: TSouffleRecord;
+  GC: TSouffleGarbageCollector;
+  Pair: TPair<string, TSouffleValue>;
+begin
+  if not Assigned(FVM) then Exit;
+  GC := TSouffleGarbageCollector.Instance;
+  Keys := FGlobals.Keys.ToArray;
+  for Key in Keys do
+  begin
+    if Key = 'globalThis' then Continue;
+    Val := FGlobals[Key];
+    if not SouffleIsReference(Val) or not Assigned(Val.AsReference) then Continue;
+    if not (Val.AsReference is TGocciaWrappedValue) then Continue;
+
+    Wrapped := TGocciaWrappedValue(Val.AsReference);
+    GocciaVal := Wrapped.Value;
+
+    if GocciaVal is TGocciaNativeFunctionValue then
+    begin
+      NativeFnVal := TGocciaNativeFunctionValue(GocciaVal);
+      BridgedFn := TGocciaBridgedFunction.Create(NativeFnVal, Self);
+      if Assigned(GC) then GC.AllocateObject(BridgedFn);
+      FGlobals.AddOrSetValue(Key, SouffleReference(BridgedFn));
+    end
+    else if (GocciaVal is TGocciaObjectValue)
+      and not (GocciaVal is TGocciaClassValue)
+      and not (GocciaVal is TGocciaFunctionBase) then
+    begin
+      ObjVal := TGocciaObjectValue(GocciaVal);
+      Rec := ConvertObjectToNativeRecord(ObjVal, Self);
+      FGlobals.AddOrSetValue(Key, SouffleReference(Rec));
+    end;
+  end;
+
+  if FGlobals.TryGetValue('globalThis', GlobalThisVal) and
+     SouffleIsReference(GlobalThisVal) and
+     Assigned(GlobalThisVal.AsReference) then
+  begin
+    GlobalThisRec := TSouffleRecord.Create(FGlobals.Count);
+    if Assigned(GC) then GC.AllocateObject(GlobalThisRec);
+    for Pair in FGlobals do
+      GlobalThisRec.Put(Pair.Key, Pair.Value);
+    GlobalThisRec.Put('globalThis', SouffleReference(GlobalThisRec));
+    FGlobals.AddOrSetValue('globalThis', SouffleReference(GlobalThisRec));
+  end;
 end;
 
 procedure TGocciaRuntimeOperations.RegisterFormalParameterCount(
@@ -4933,6 +6535,9 @@ var
   GocciaValue: TGocciaValue;
   Pair: TPair<string, TSouffleValue>;
 begin
+  {$IFDEF BRIDGE_METRICS}
+  Inc(GBridgeMetrics.EvaluateClassCount);
+  {$ENDIF}
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
   if (AIndex < 0) or (AIndex >= FPendingClassCount) then
     Exit;
@@ -5091,6 +6696,15 @@ begin
   for BridgeKey in FRecordBridgeCache.Keys do
     if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
       TSouffleHeapObject(BridgeKey).MarkReferences;
+
+  if Assigned(FStringDelegate) and not FStringDelegate.GCMarked then
+    FStringDelegate.MarkReferences;
+  if Assigned(FNumberDelegate) and not FNumberDelegate.GCMarked then
+    FNumberDelegate.MarkReferences;
+  if Assigned(FDescribeDelegate) and not FDescribeDelegate.GCMarked then
+    FDescribeDelegate.MarkReferences;
+  if Assigned(FTestDelegate) and not FTestDelegate.GCMarked then
+    FTestDelegate.MarkReferences;
 end;
 
 procedure TGocciaRuntimeOperations.MarkWrappedGocciaValues;
@@ -5118,5 +6732,13 @@ begin
     if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
       TGocciaValue(BridgeVal).MarkReferences;
 end;
+
+{$IFDEF BRIDGE_METRICS}
+initialization
+  GBridgeMetrics.Reset;
+
+finalization
+  TBridgeMetrics.DumpGlobal;
+{$ENDIF}
 
 end.

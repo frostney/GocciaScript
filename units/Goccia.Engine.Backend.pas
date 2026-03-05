@@ -182,6 +182,8 @@ begin
   end;
 
   FRuntime.RegisterDelegates;
+  FRuntime.RegisterTestNatives;
+  FRuntime.RegisterNativeBuiltins;
 end;
 
 end.
