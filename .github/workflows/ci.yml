@@ -103,8 +103,11 @@ jobs:
         if: runner.os != 'Windows'
         run: chmod +x build/*
 
-      - name: Run all JavaScript tests
+      - name: Run all JavaScript tests (interpreted)
         run: ./build/TestRunner tests --silent --no-progress
+
+      - name: Run all JavaScript tests (bytecode)
+        run: ./build/TestRunner tests --mode=bytecode --silent --no-progress
 
       - name: Run Pascal unit tests
         run: |

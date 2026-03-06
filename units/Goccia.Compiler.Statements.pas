@@ -50,6 +50,8 @@ procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;
 function IsSimpleClass(const AClassDef: TGocciaClassDefinition): Boolean;
 procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
+procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
+  const AClassDef: TGocciaClassDefinition; const ADest: UInt8);
 procedure CompileComplexClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration; const APendingIndex: Integer);
 
@@ -61,6 +63,7 @@ implementation
 uses
   SysUtils,
 
+  OrderedMap,
   Souffle.Bytecode,
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Debug,
@@ -723,14 +726,7 @@ end;
 
 function IsSimpleClass(const AClassDef: TGocciaClassDefinition): Boolean;
 begin
-  Result := (AClassDef.InstanceProperties.Count = 0) and
-    (AClassDef.PrivateInstanceProperties.Count = 0) and
-    (Length(AClassDef.Decorators) = 0) and
-    (Length(AClassDef.FElements) = 0) and
-    (Length(AClassDef.FComputedStaticGetters) = 0) and
-    (Length(AClassDef.FComputedStaticSetters) = 0) and
-    (Length(AClassDef.FComputedInstanceGetters) = 0) and
-    (Length(AClassDef.FComputedInstanceSetters) = 0);
+  Result := True;
 end;
 
 procedure CompileMethodBody(const ACtx: TGocciaCompilationContext;
@@ -910,6 +906,480 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+procedure CompileComputedGetterBody(const ACtx: TGocciaCompilationContext;
+  const ATargetReg: UInt8; const AKeyReg: UInt8;
+  const AGetter: TGocciaGetterExpression; const AExtOp: UInt8);
+var
+  OldTemplate: TSouffleFunctionTemplate;
+  OldScope: TGocciaCompilerScope;
+  ChildTemplate: TSouffleFunctionTemplate;
+  ChildScope: TGocciaCompilerScope;
+  FuncIdx: UInt16;
+  FnReg, SafeKeyReg: UInt8;
+  I: Integer;
+begin
+  OldTemplate := ACtx.Template;
+  OldScope := ACtx.Scope;
+
+  ChildTemplate := TSouffleFunctionTemplate.Create('<get [computed]>');
+  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.ParameterCount := 0;
+  ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
+
+  ACtx.SwapState(ChildTemplate, ChildScope);
+  ACtx.CompileFunctionBody(AGetter.Body);
+  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+  for I := 0 to ChildScope.UpvalueCount - 1 do
+    ChildTemplate.AddUpvalueDescriptor(
+      ChildScope.GetUpvalue(I).IsLocal,
+      ChildScope.GetUpvalue(I).Index);
+
+  ACtx.SwapState(OldTemplate, OldScope);
+  ChildScope.Free;
+
+  FuncIdx := OldTemplate.AddFunction(ChildTemplate);
+  FnReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
+
+  if AKeyReg = ATargetReg + 1 then
+  begin
+    SafeKeyReg := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, SafeKeyReg, AKeyReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ATargetReg, AExtOp, SafeKeyReg));
+    ACtx.Scope.FreeRegister;
+  end
+  else
+  begin
+    if FnReg <> ATargetReg + 1 then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ATargetReg, AExtOp, AKeyReg));
+  end;
+  ACtx.Scope.FreeRegister;
+end;
+
+procedure CompileComputedSetterBody(const ACtx: TGocciaCompilationContext;
+  const ATargetReg: UInt8; const AKeyReg: UInt8;
+  const ASetter: TGocciaSetterExpression; const AExtOp: UInt8);
+var
+  OldTemplate: TSouffleFunctionTemplate;
+  OldScope: TGocciaCompilerScope;
+  ChildTemplate: TSouffleFunctionTemplate;
+  ChildScope: TGocciaCompilerScope;
+  FuncIdx: UInt16;
+  FnReg, SafeKeyReg: UInt8;
+  I: Integer;
+begin
+  OldTemplate := ACtx.Template;
+  OldScope := ACtx.Scope;
+
+  ChildTemplate := TSouffleFunctionTemplate.Create('<set [computed]>');
+  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.ParameterCount := 1;
+  ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
+  ChildScope.DeclareLocal(ASetter.Parameter, False);
+
+  ACtx.SwapState(ChildTemplate, ChildScope);
+  ACtx.CompileFunctionBody(ASetter.Body);
+  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+  for I := 0 to ChildScope.UpvalueCount - 1 do
+    ChildTemplate.AddUpvalueDescriptor(
+      ChildScope.GetUpvalue(I).IsLocal,
+      ChildScope.GetUpvalue(I).Index);
+
+  ACtx.SwapState(OldTemplate, OldScope);
+  ChildScope.Free;
+
+  FuncIdx := OldTemplate.AddFunction(ChildTemplate);
+  FnReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
+
+  if AKeyReg = ATargetReg + 1 then
+  begin
+    SafeKeyReg := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, SafeKeyReg, AKeyReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ATargetReg, AExtOp, SafeKeyReg));
+    ACtx.Scope.FreeRegister;
+  end
+  else
+  begin
+    if FnReg <> ATargetReg + 1 then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ATargetReg, AExtOp, AKeyReg));
+  end;
+  ACtx.Scope.FreeRegister;
+end;
+
+procedure CompileComputedElements(const ACtx: TGocciaCompilationContext;
+  const ATargetReg: UInt8; const AClassDef: TGocciaClassDefinition);
+var
+  I: Integer;
+  Elem: TGocciaClassElement;
+  KeyReg: UInt8;
+begin
+  for I := 0 to High(AClassDef.FElements) do
+  begin
+    Elem := AClassDef.FElements[I];
+    if not Elem.IsComputed then
+      Continue;
+
+    KeyReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(Elem.ComputedKeyExpression, KeyReg);
+
+    case Elem.Kind of
+      cekGetter:
+        if Elem.IsStatic then
+          CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
+            Elem.GetterNode, GOCCIA_EXT_DEF_COMPUTED_STATIC_GETTER)
+        else
+          CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
+            Elem.GetterNode, GOCCIA_EXT_DEF_COMPUTED_GETTER);
+      cekSetter:
+        if Elem.IsStatic then
+          CompileComputedSetterBody(ACtx, ATargetReg, KeyReg,
+            Elem.SetterNode, GOCCIA_EXT_DEF_COMPUTED_STATIC_SETTER)
+        else
+          CompileComputedSetterBody(ACtx, ATargetReg, KeyReg,
+            Elem.SetterNode, GOCCIA_EXT_DEF_COMPUTED_SETTER);
+    end;
+
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
+function HasAccessorInitializers(
+  const AClassDef: TGocciaClassDefinition): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AClassDef.FElements) do
+    if (AClassDef.FElements[I].Kind = cekAccessor) and
+       Assigned(AClassDef.FElements[I].FieldInitializer) then
+      Exit(True);
+  Result := False;
+end;
+
+procedure CompileFieldInitializer(const ACtx: TGocciaCompilationContext;
+  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition);
+var
+  OldTemplate: TSouffleFunctionTemplate;
+  OldScope: TGocciaCompilerScope;
+  ChildTemplate: TSouffleFunctionTemplate;
+  ChildScope: TGocciaCompilerScope;
+  ChildCtx: TGocciaCompilationContext;
+  FuncIdx: UInt16;
+  FnReg: UInt8;
+  MethodNameIdx: UInt16;
+  ValReg, ThisReg: UInt8;
+  KeyIdx: UInt16;
+  I: Integer;
+  Entry: TOrderedMap<TGocciaExpression>.TKeyValuePair;
+  Elem: TGocciaClassElement;
+  FieldExpr: TGocciaExpression;
+begin
+  OldTemplate := ACtx.Template;
+  OldScope := ACtx.Scope;
+
+  ChildTemplate := TSouffleFunctionTemplate.Create('<fields>');
+  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.ParameterCount := 0;
+  ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
+
+  ThisReg := ChildScope.DeclareLocal(KEYWORD_THIS, False);
+
+  ACtx.SwapState(ChildTemplate, ChildScope);
+
+  ChildCtx := ACtx;
+  ChildCtx.Template := ChildTemplate;
+  ChildCtx.Scope := ChildScope;
+
+  if Length(AClassDef.FFieldOrder) > 0 then
+  begin
+    for I := 0 to High(AClassDef.FFieldOrder) do
+    begin
+      ValReg := ChildScope.AllocateRegister;
+      if AClassDef.FFieldOrder[I].IsPrivate then
+      begin
+        if AClassDef.PrivateInstanceProperties.TryGetValue(
+            AClassDef.FFieldOrder[I].Name, FieldExpr) then
+          ACtx.CompileExpression(FieldExpr, ValReg);
+        KeyIdx := ChildTemplate.AddConstantString(
+          '#' + ChildScope.ResolvePrivatePrefix + AClassDef.FFieldOrder[I].Name);
+      end
+      else
+      begin
+        if AClassDef.InstanceProperties.TryGetValue(
+            AClassDef.FFieldOrder[I].Name, FieldExpr) then
+          ACtx.CompileExpression(FieldExpr, ValReg);
+        KeyIdx := ChildTemplate.AddConstantString(AClassDef.FFieldOrder[I].Name);
+      end;
+      if KeyIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: field name index exceeds 255');
+      EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
+        UInt8(KeyIdx), ValReg));
+      ChildScope.FreeRegister;
+    end;
+  end
+  else
+  begin
+    for I := 0 to AClassDef.InstanceProperties.Count - 1 do
+    begin
+      Entry := AClassDef.InstanceProperties.EntryAt(I);
+      ValReg := ChildScope.AllocateRegister;
+      ACtx.CompileExpression(Entry.Value, ValReg);
+      KeyIdx := ChildTemplate.AddConstantString(Entry.Key);
+      if KeyIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: field name index exceeds 255');
+      EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
+        UInt8(KeyIdx), ValReg));
+      ChildScope.FreeRegister;
+    end;
+
+    for I := 0 to AClassDef.PrivateInstanceProperties.Count - 1 do
+    begin
+      Entry := AClassDef.PrivateInstanceProperties.EntryAt(I);
+      ValReg := ChildScope.AllocateRegister;
+      ACtx.CompileExpression(Entry.Value, ValReg);
+      KeyIdx := ChildTemplate.AddConstantString('#' + ChildScope.ResolvePrivatePrefix + Entry.Key);
+      if KeyIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: field name index exceeds 255');
+      EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
+        UInt8(KeyIdx), ValReg));
+      ChildScope.FreeRegister;
+    end;
+  end;
+
+  for I := 0 to High(AClassDef.FElements) do
+  begin
+    Elem := AClassDef.FElements[I];
+    if (Elem.Kind <> cekAccessor) or not Assigned(Elem.FieldInitializer) then
+      Continue;
+    ValReg := ChildScope.AllocateRegister;
+    ACtx.CompileExpression(Elem.FieldInitializer, ValReg);
+    KeyIdx := ChildTemplate.AddConstantString('__accessor_' + Elem.Name);
+    if KeyIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: accessor backing field name index exceeds 255');
+    EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
+      UInt8(KeyIdx), ValReg));
+    ChildScope.FreeRegister;
+  end;
+
+  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+  for I := 0 to ChildScope.UpvalueCount - 1 do
+    ChildTemplate.AddUpvalueDescriptor(
+      ChildScope.GetUpvalue(I).IsLocal,
+      ChildScope.GetUpvalue(I).Index);
+
+  ACtx.SwapState(OldTemplate, OldScope);
+  ChildScope.Free;
+
+  FuncIdx := OldTemplate.AddFunction(ChildTemplate);
+  FnReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
+
+  MethodNameIdx := ACtx.Template.AddConstantString('__fields__');
+  if MethodNameIdx > High(UInt8) then
+    raise Exception.Create('Constant pool overflow: __fields__ name index exceeds 255');
+  EmitInstruction(ACtx, EncodeABC(OP_RECORD_SET,
+    AClassReg, UInt8(MethodNameIdx), FnReg));
+  ACtx.Scope.FreeRegister;
+end;
+
+function ElementDescriptor(const AKind: TGocciaClassElementKind;
+  const AName: string; const AIsStatic, AIsPrivate: Boolean): string;
+var
+  KindChar: Char;
+  Flags: Integer;
+begin
+  case AKind of
+    cekMethod: KindChar := 'm';
+    cekGetter: KindChar := 'g';
+    cekSetter: KindChar := 's';
+    cekField: KindChar := 'f';
+    cekAccessor: KindChar := 'a';
+  else
+    KindChar := 'm';
+  end;
+  Flags := 0;
+  if AIsStatic then Flags := Flags or 1;
+  if AIsPrivate then Flags := Flags or 2;
+  Result := KindChar + ':' + AName + ':' + IntToStr(Flags);
+end;
+
+function HasDecoratorsOrAccessors(
+  const AClassDef: TGocciaClassDefinition): Boolean;
+var
+  I: Integer;
+begin
+  if Length(AClassDef.FDecorators) > 0 then
+    Exit(True);
+  for I := 0 to High(AClassDef.FElements) do
+  begin
+    if Length(AClassDef.FElements[I].Decorators) > 0 then
+      Exit(True);
+    if AClassDef.FElements[I].Kind = cekAccessor then
+      Exit(True);
+  end;
+  Result := False;
+end;
+
+procedure CompileAutoAccessors(const ACtx: TGocciaCompilationContext;
+  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition);
+var
+  I: Integer;
+  Elem: TGocciaClassElement;
+  NameIdx: UInt16;
+  PairReg, InitReg: UInt8;
+begin
+  for I := 0 to High(AClassDef.FElements) do
+  begin
+    Elem := AClassDef.FElements[I];
+    if Elem.Kind <> cekAccessor then
+      Continue;
+
+    NameIdx := ACtx.Template.AddConstantString(Elem.Name);
+    if NameIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: accessor name index exceeds 255');
+
+    PairReg := ACtx.Scope.AllocateRegister;
+    InitReg := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, InitReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, PairReg,
+      GOCCIA_EXT_SETUP_AUTO_ACCESSOR, UInt8(NameIdx)));
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
+procedure CompileDecoratorOrchestration(
+  const ACtx: TGocciaCompilationContext;
+  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition);
+var
+  I, J: Integer;
+  Elem: TGocciaClassElement;
+  DecoRegs: array of array of UInt8;
+  ClassDecoRegs: array of UInt8;
+  DescIdx: UInt16;
+  Desc: string;
+  PairReg, ExtraReg: UInt8;
+  HasElementDecorators: Boolean;
+begin
+  HasElementDecorators := False;
+  for I := 0 to High(AClassDef.FElements) do
+    if Length(AClassDef.FElements[I].Decorators) > 0 then
+    begin
+      HasElementDecorators := True;
+      Break;
+    end;
+
+  if not HasElementDecorators and (Length(AClassDef.FDecorators) = 0) then
+    Exit;
+
+  SetLength(DecoRegs, Length(AClassDef.FElements));
+  for I := 0 to High(AClassDef.FElements) do
+  begin
+    Elem := AClassDef.FElements[I];
+    SetLength(DecoRegs[I], Length(Elem.Decorators));
+    for J := 0 to High(Elem.Decorators) do
+    begin
+      DecoRegs[I][J] := ACtx.Scope.AllocateRegister;
+      ACtx.CompileExpression(Elem.Decorators[J], DecoRegs[I][J]);
+    end;
+  end;
+
+  SetLength(ClassDecoRegs, Length(AClassDef.FDecorators));
+  for I := 0 to High(AClassDef.FDecorators) do
+  begin
+    ClassDecoRegs[I] := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(AClassDef.FDecorators[I], ClassDecoRegs[I]);
+  end;
+
+  for I := 0 to High(AClassDef.FElements) do
+  begin
+    Elem := AClassDef.FElements[I];
+    if Length(DecoRegs[I]) = 0 then
+      Continue;
+
+    for J := High(DecoRegs[I]) downto 0 do
+    begin
+      Desc := ElementDescriptor(Elem.Kind, Elem.Name,
+        Elem.IsStatic, Elem.IsPrivate);
+      DescIdx := ACtx.Template.AddConstantString(Desc);
+      if DescIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: descriptor index exceeds 255');
+
+      PairReg := ACtx.Scope.AllocateRegister;
+      ExtraReg := ACtx.Scope.AllocateRegister;
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, DecoRegs[I][J], 0));
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ExtraReg, 0, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, PairReg,
+        GOCCIA_EXT_APPLY_ELEMENT_DECORATOR, UInt8(DescIdx)));
+      ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+    end;
+  end;
+
+  for I := High(ClassDecoRegs) downto 0 do
+  begin
+    PairReg := ACtx.Scope.AllocateRegister;
+    ExtraReg := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, ClassDecoRegs[I], 0));
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ExtraReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, PairReg,
+      GOCCIA_EXT_APPLY_CLASS_DECORATOR, 0));
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end;
+
+  for I := High(ClassDecoRegs) downto 0 do
+    ACtx.Scope.FreeRegister;
+  for I := High(AClassDef.FElements) downto 0 do
+    for J := High(DecoRegs[I]) downto 0 do
+      ACtx.Scope.FreeRegister;
+end;
+
+procedure CompileDecoratorAndAccessorPass(
+  const ACtx: TGocciaCompilationContext;
+  const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition;
+  const ASuperReg: Integer);
+var
+  PairReg, ExtraReg: UInt8;
+begin
+  if not HasDecoratorsOrAccessors(AClassDef) then
+    Exit;
+
+  PairReg := ACtx.Scope.AllocateRegister;
+  ExtraReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, AClassReg, 0));
+  if ASuperReg >= 0 then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg, UInt8(ASuperReg), 0))
+  else
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ExtraReg, 0, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, PairReg,
+    GOCCIA_EXT_BEGIN_DECORATORS, 0));
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+
+  CompileAutoAccessors(ACtx, AClassReg, AClassDef);
+  CompileDecoratorOrchestration(ACtx, AClassReg, AClassDef);
+
+  PairReg := ACtx.Scope.AllocateRegister;
+  ExtraReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, AClassReg, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ExtraReg, 0, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, PairReg,
+    GOCCIA_EXT_FINISH_DECORATORS, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, AClassReg, PairReg, 0));
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+end;
+
 procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
 var
@@ -922,9 +1392,13 @@ var
   StaticPropPair: TPair<string, TGocciaExpression>;
   LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
+  PrivPrefix: string;
 begin
   ClassDef := AStmt.ClassDefinition;
   HasSuper := ClassDef.SuperClass <> '';
+
+  PrivPrefix := NextClassPrivatePrefix;
+  ACtx.Scope.PrivatePrefix := PrivPrefix;
 
   ClassReg := ACtx.Scope.DeclareLocal(ClassDef.Name, True);
   NameIdx := ACtx.Template.AddConstantString(ClassDef.Name);
@@ -950,6 +1424,8 @@ begin
     end;
 
     EmitInstruction(ACtx, EncodeABC(OP_INHERIT, ClassReg, SuperReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ClassReg,
+      GOCCIA_EXT_SET_WRAPPED_SUPER, SuperReg));
   end;
 
   for MethodPair in ClassDef.Methods do
@@ -963,16 +1439,30 @@ begin
   end;
 
   for MethodPair in ClassDef.PrivateMethods do
-    CompileMethodBody(ACtx, ClassReg, '#' + MethodPair.Key,
+    CompileMethodBody(ACtx, ClassReg, '#' + PrivPrefix + MethodPair.Key,
       MethodPair.Value, OP_RECORD_SET);
 
   for GetterPair in ClassDef.Getters do
-    CompileGetterBody(ACtx, ClassReg, GetterPair.Key,
-      GetterPair.Value, GOCCIA_EXT_DEF_GETTER);
+  begin
+    if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
+      CompileGetterBody(ACtx, ClassReg,
+        '#' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
+        GetterPair.Value, GOCCIA_EXT_DEF_GETTER)
+    else
+      CompileGetterBody(ACtx, ClassReg, GetterPair.Key,
+        GetterPair.Value, GOCCIA_EXT_DEF_GETTER);
+  end;
 
   for SetterPair in ClassDef.Setters do
-    CompileSetterBody(ACtx, ClassReg, SetterPair.Key,
-      SetterPair.Value, GOCCIA_EXT_DEF_SETTER);
+  begin
+    if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
+      CompileSetterBody(ACtx, ClassReg,
+        '#' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
+        SetterPair.Value, GOCCIA_EXT_DEF_SETTER)
+    else
+      CompileSetterBody(ACtx, ClassReg, SetterPair.Key,
+        SetterPair.Value, GOCCIA_EXT_DEF_SETTER);
+  end;
 
   for GetterPair in ClassDef.StaticGetters do
     CompileGetterBody(ACtx, ClassReg, GetterPair.Key,
@@ -981,6 +1471,11 @@ begin
   for SetterPair in ClassDef.StaticSetters do
     CompileSetterBody(ACtx, ClassReg, SetterPair.Key,
       SetterPair.Value, GOCCIA_EXT_DEF_STATIC_SETTER);
+
+  if (ClassDef.InstanceProperties.Count > 0) or
+     (ClassDef.PrivateInstanceProperties.Count > 0) or
+     HasAccessorInitializers(ClassDef) then
+    CompileFieldInitializer(ACtx, ClassReg, ClassDef);
 
   for StaticPropPair in ClassDef.StaticProperties do
   begin
@@ -998,13 +1493,178 @@ begin
   begin
     ValReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(StaticPropPair.Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString('#' + StaticPropPair.Key);
+    KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ClassReg,
       UInt8(KeyIdx), ValReg));
     ACtx.Scope.FreeRegister;
   end;
+
+  CompileComputedElements(ACtx, ClassReg, ClassDef);
+
+  if HasSuper then
+    CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, SuperReg)
+  else
+    CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, -1);
+
+  ACtx.Scope.PrivatePrefix := '';
+end;
+
+procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
+  const AClassDef: TGocciaClassDefinition; const ADest: UInt8);
+var
+  ClassDef: TGocciaClassDefinition;
+  SuperReg, ValReg: UInt8;
+  NameIdx, KeyIdx: UInt16;
+  MethodPair: TPair<string, TGocciaClassMethod>;
+  GetterPair: TPair<string, TGocciaGetterExpression>;
+  SetterPair: TPair<string, TGocciaSetterExpression>;
+  StaticPropPair: TPair<string, TGocciaExpression>;
+  LocalIdx, UpvalIdx: Integer;
+  HasSuper: Boolean;
+  PrivPrefix: string;
+  HasNameBinding: Boolean;
+  ClosedLocals: array[0..0] of UInt8;
+  ClosedCount, I: Integer;
+begin
+  ClassDef := AClassDef;
+  HasSuper := ClassDef.SuperClass <> '';
+  HasNameBinding := ClassDef.Name <> '';
+
+  PrivPrefix := NextClassPrivatePrefix;
+  ACtx.Scope.PrivatePrefix := PrivPrefix;
+
+  if HasNameBinding then
+    NameIdx := ACtx.Template.AddConstantString(ClassDef.Name)
+  else
+    NameIdx := ACtx.Template.AddConstantString('<anonymous>');
+  EmitInstruction(ACtx, EncodeABx(OP_NEW_BLUEPRINT, ADest, NameIdx));
+
+  // ES2026 §15.7.14: Named class expressions bind the name in an inner
+  // block scope visible to methods/static initializers via upvalue capture
+  if HasNameBinding then
+  begin
+    ACtx.Scope.BeginScope;
+    ACtx.Scope.DeclareLocal(ClassDef.Name, True);
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ACtx.Scope.NextSlot - 1, ADest, 0));
+  end;
+
+  if HasSuper then
+  begin
+    SuperReg := ACtx.Scope.AllocateRegister;
+
+    LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.SuperClass);
+    if LocalIdx >= 0 then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, SuperReg,
+        ACtx.Scope.GetLocal(LocalIdx).Slot, 0))
+    else
+    begin
+      UpvalIdx := ACtx.Scope.ResolveUpvalue(ClassDef.SuperClass);
+      if UpvalIdx >= 0 then
+        EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, SuperReg,
+          UInt16(UpvalIdx)))
+      else
+        EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, SuperReg,
+          ACtx.Template.AddConstantString(ClassDef.SuperClass)));
+    end;
+
+    EmitInstruction(ACtx, EncodeABC(OP_INHERIT, ADest, SuperReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ADest,
+      GOCCIA_EXT_SET_WRAPPED_SUPER, SuperReg));
+  end;
+
+  for MethodPair in ClassDef.Methods do
+  begin
+    if MethodPair.Value.IsStatic then
+      CompileMethodBody(ACtx, ADest, MethodPair.Key,
+        MethodPair.Value, OP_RT_SET_PROP)
+    else
+      CompileMethodBody(ACtx, ADest, MethodPair.Key,
+        MethodPair.Value, OP_RECORD_SET);
+  end;
+
+  for MethodPair in ClassDef.PrivateMethods do
+    CompileMethodBody(ACtx, ADest, '#' + PrivPrefix + MethodPair.Key,
+      MethodPair.Value, OP_RECORD_SET);
+
+  for GetterPair in ClassDef.Getters do
+  begin
+    if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
+      CompileGetterBody(ACtx, ADest,
+        '#' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
+        GetterPair.Value, GOCCIA_EXT_DEF_GETTER)
+    else
+      CompileGetterBody(ACtx, ADest, GetterPair.Key,
+        GetterPair.Value, GOCCIA_EXT_DEF_GETTER);
+  end;
+
+  for SetterPair in ClassDef.Setters do
+  begin
+    if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
+      CompileSetterBody(ACtx, ADest,
+        '#' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
+        SetterPair.Value, GOCCIA_EXT_DEF_SETTER)
+    else
+      CompileSetterBody(ACtx, ADest, SetterPair.Key,
+        SetterPair.Value, GOCCIA_EXT_DEF_SETTER);
+  end;
+
+  for GetterPair in ClassDef.StaticGetters do
+    CompileGetterBody(ACtx, ADest, GetterPair.Key,
+      GetterPair.Value, GOCCIA_EXT_DEF_STATIC_GETTER);
+
+  for SetterPair in ClassDef.StaticSetters do
+    CompileSetterBody(ACtx, ADest, SetterPair.Key,
+      SetterPair.Value, GOCCIA_EXT_DEF_STATIC_SETTER);
+
+  if (ClassDef.InstanceProperties.Count > 0) or
+     (ClassDef.PrivateInstanceProperties.Count > 0) or
+     HasAccessorInitializers(ClassDef) then
+    CompileFieldInitializer(ACtx, ADest, ClassDef);
+
+  for StaticPropPair in ClassDef.StaticProperties do
+  begin
+    ValReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+    KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
+    if KeyIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
+    EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ADest,
+      UInt8(KeyIdx), ValReg));
+    ACtx.Scope.FreeRegister;
+  end;
+
+  for StaticPropPair in ClassDef.PrivateStaticProperties do
+  begin
+    ValReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+    KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
+    if KeyIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
+    EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ADest,
+      UInt8(KeyIdx), ValReg));
+    ACtx.Scope.FreeRegister;
+  end;
+
+  CompileComputedElements(ACtx, ADest, ClassDef);
+
+  if HasSuper then
+  begin
+    CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, SuperReg);
+    ACtx.Scope.FreeRegister;
+  end
+  else
+    CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, -1);
+
+  if HasNameBinding then
+  begin
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+  end;
+
+  ACtx.Scope.PrivatePrefix := '';
 end;
 
 procedure CompileComplexClassDeclaration(const ACtx: TGocciaCompilationContext;

@@ -2217,10 +2217,12 @@ var
   InstancePropertyTypes: TDictionary<string, string>;
   MemberDecorators: TGocciaDecoratorList;
   Elements: array of TGocciaClassElement;
+  FieldOrder: array of TGocciaFieldOrderEntry;
   IsAccessor: Boolean;
   IsAsync: Boolean;
 begin
   SetLength(Elements, 0);
+  SetLength(FieldOrder, 0);
   ClassGenericParams := CollectGenericParameters;
 
   if Match([gttExtends]) then
@@ -2393,12 +2395,20 @@ begin
       if IsPrivate and IsStatic then
         PrivateStaticProperties.Add(MemberName, PropertyValue)
       else if IsPrivate then
-        PrivateInstanceProperties.Add(MemberName, PropertyValue)
+      begin
+        PrivateInstanceProperties.Add(MemberName, PropertyValue);
+        SetLength(FieldOrder, Length(FieldOrder) + 1);
+        FieldOrder[High(FieldOrder)].Name := MemberName;
+        FieldOrder[High(FieldOrder)].IsPrivate := True;
+      end
       else if IsStatic then
         StaticProperties.Add(MemberName, PropertyValue)
       else
       begin
         InstanceProperties.Add(MemberName, PropertyValue);
+        SetLength(FieldOrder, Length(FieldOrder) + 1);
+        FieldOrder[High(FieldOrder)].Name := MemberName;
+        FieldOrder[High(FieldOrder)].IsPrivate := False;
         if FieldType <> '' then
           InstancePropertyTypes.Add(MemberName, FieldType);
       end;
@@ -2425,12 +2435,20 @@ begin
       if IsPrivate and IsStatic then
         PrivateStaticProperties.Add(MemberName, PropertyValue)
       else if IsPrivate then
-        PrivateInstanceProperties.Add(MemberName, PropertyValue)
+      begin
+        PrivateInstanceProperties.Add(MemberName, PropertyValue);
+        SetLength(FieldOrder, Length(FieldOrder) + 1);
+        FieldOrder[High(FieldOrder)].Name := MemberName;
+        FieldOrder[High(FieldOrder)].IsPrivate := True;
+      end
       else if IsStatic then
         StaticProperties.Add(MemberName, PropertyValue)
       else
       begin
         InstanceProperties.Add(MemberName, PropertyValue);
+        SetLength(FieldOrder, Length(FieldOrder) + 1);
+        FieldOrder[High(FieldOrder)].Name := MemberName;
+        FieldOrder[High(FieldOrder)].IsPrivate := False;
         if FieldType <> '' then
           InstancePropertyTypes.Add(MemberName, FieldType);
       end;
@@ -2564,6 +2582,7 @@ begin
   Result.FComputedInstanceGetters := ComputedInstanceGetters;
   Result.FComputedInstanceSetters := ComputedInstanceSetters;
   Result.FElements := Elements;
+  Result.FFieldOrder := FieldOrder;
 
   InstancePropertyTypes.Free;
 end;

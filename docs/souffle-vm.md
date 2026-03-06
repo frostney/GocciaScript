@@ -243,7 +243,7 @@ An earlier design included `OP_RT_CALL_SPREAD` and `OP_RT_CALL_METHOD_SPREAD` as
 
 The compiler uses a two-path strategy for class declarations:
 
-**Simple classes** (constructor + named methods, no getters/setters, statics, private members, decorators, or computed properties) are compiled directly to VM blueprint opcodes:
+**Most classes** (constructor, named methods, getters, setters, static members, private fields/methods, computed property names, and classes extending built-in constructors) are compiled directly to VM blueprint opcodes:
 
 ```text
 ; class Dog extends Animal { constructor(name) { super(name); } bark() { return name + " barks"; } }
@@ -260,7 +260,7 @@ RT_SET_GLOBAL    "Dog", r0                   ; register globally
 
 The `IsSimpleClass` function in `Goccia.Compiler.Statements.pas` performs the complexity detection. At runtime, `TGocciaRuntimeOperations.Construct` walks the `TSouffleBlueprint` super blueprint chain to find inherited constructors, and `GetProperty` on blueprint-backed records checks dynamic properties first, then walks the blueprint's method record hierarchy.
 
-**Complex classes** (with getters, setters, static properties, private members, decorators, or computed properties) are compiled using a mix of blueprint opcodes and `OP_RT_EXT` sub-opcodes for language-specific features (e.g., `GOCCIA_EXT_DEF_GETTER`, `GOCCIA_EXT_DEF_SETTER`, `GOCCIA_EXT_EVAL_CLASS`). Classes that cannot be fully compiled to bytecode are deferred to the interpreter via `FPendingClasses` and evaluated through `GOCCIA_EXT_EVAL_CLASS`.
+**Classes with decorators** are the only remaining category deferred to the interpreter via `FPendingClasses` and evaluated through `GOCCIA_EXT_EVAL_CLASS`. All other class features (getters, setters, statics, private members, computed properties, built-in subclassing) are compiled using a mix of blueprint opcodes and `OP_RT_EXT` sub-opcodes (e.g., `GOCCIA_EXT_DEF_GETTER`, `GOCCIA_EXT_DEF_SETTER`). Classes extending built-in constructors are compiled natively via `FBlueprintSuperValues` (mapping blueprints to their wrapped non-blueprint superclasses) and `TGocciaSuperCallHelper` (bridging `super()` calls to non-blueprint constructors).
 
 ## Instruction Encoding
 
@@ -627,6 +627,22 @@ The GocciaScript bridge layer (`TGocciaRuntimeOperations.RegisterDelegates`) cre
 | Array | `flatMap(callback)` | Maps then flattens one level |
 | Array | `toString()` | String representation |
 | Array | `length` | Element count (read-only) |
+| Map | `get(key)` | Get value for key (direct `FindEntry` access) |
+| Map | `set(key, value)` | Set key-value pair (direct `SetEntry` access) |
+| Map | `has(key)` | Check if key exists (direct `FindEntry` access) |
+| Map | `delete(key)` | Remove key |
+| Map | `clear()` | Remove all entries |
+| Map | `forEach(callback)` | Iterate over entries |
+| Map | `keys()` | Returns an iterator over keys |
+| Map | `values()` | Returns an iterator over values |
+| Map | `entries()` | Returns an iterator over entries |
+| Set | `has(value)` | Check if value exists |
+| Set | `add(value)` | Add a value |
+| Set | `delete(value)` | Remove a value |
+| Set | `clear()` | Remove all values |
+| Set | `forEach(callback)` | Iterate over values |
+| Set | `values()` | Returns an iterator over values |
+| Set | `entries()` | Returns an iterator of `[value, value]` pairs |
 
 ### Language Agnosticism
 
@@ -839,9 +855,9 @@ The following features execute entirely within the Souffle VM without crossing t
 - **Compound types**: Array/record literals, property access, indexed access, `delete`, spread, rest destructuring
 - **Control flow**: If/else, ternary, logical and/or, nullish coalescing, short-circuit evaluation
 - **Functions**: Arrow functions, shorthand methods, default parameters, rest parameters, variadic argument packing
-- **Simple classes**: Constructor + named methods compiled to blueprint opcodes (`OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_RECORD_SET`, `OP_INSTANTIATE`)
+- **Classes**: Constructor, named methods, getters, setters, static members, private fields/methods, computed property names, and classes extending built-in constructors — all compiled to blueprint opcodes plus extension sub-opcodes. Only classes with decorators are deferred
 - **Exception handling**: try/catch/finally, throw, handler-table model
-- **Delegates**: Array prototype methods (`push`, `pop`, `shift`, `unshift`, `join`, `indexOf`, `includes`, `slice`, `reverse`, `concat`, `fill`, `at`, `forEach`, `map`, `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `every`, `some`, `reduce`, `reduceRight`, `sort`, `flat`, `flatMap`, `splice`, `toString`, `length`) dispatch within the VM via delegate chain — zero wrapping. Mutating methods (`push`, `pop`, `shift`, `unshift`, `splice`, `reverse`, `sort`, `fill`) immediately sync changes to the bridge cache via `SyncSouffleArrayToCache`
+- **Delegates**: Array prototype methods (`push`, `pop`, `shift`, `unshift`, `join`, `indexOf`, `includes`, `slice`, `reverse`, `concat`, `fill`, `at`, `forEach`, `map`, `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `every`, `some`, `reduce`, `reduceRight`, `sort`, `flat`, `flatMap`, `splice`, `toString`, `length`), Map methods (`get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys`, `values`, `entries`, `size`), and Set methods (`has`, `add`, `delete`, `clear`, `forEach`, `values`, `entries`) dispatch within the VM via delegate chain — zero wrapping. Mutating array methods (`push`, `pop`, `shift`, `unshift`, `splice`, `reverse`, `sort`, `fill`) immediately sync changes to the bridge cache via `SyncSouffleArrayToCache`. Map/Set `get`/`set`/`has` use direct `FindEntry`/`SetEntry` access on the underlying `TGocciaMapValue`/`TGocciaSetValue` for optimal performance
 - **Global built-ins**: All interpreter-side built-ins (`console`, `Math`, `JSON`, `Object`, `Array`, etc.) are available as wrapped values
 
 ### What Uses Bridge Code
@@ -863,11 +879,12 @@ The bridge layer is the set of components in `TGocciaRuntimeOperations` that con
 
 The bridge is currently used by these runtime operations:
 
-- **`Invoke`** / **`Construct`**: For non-closure callables (wrapped `TGocciaFunctionBase`, `TGocciaClassValue`), unwraps the callee, converts arguments, calls via the GocciaScript evaluator, wraps the result
+- **`Invoke`**: Only 55 calls still bridge to the interpreter (99.7% reduction). 20,565 calls go directly to native functions. Remaining bridge calls are for edge-case wrapped callables
+- **`Construct`**: 770 calls bridge for `TGocciaClassValue` (built-in constructors). 389 calls use native `TSouffleBlueprint` construction
 - **`GetProperty`** / **`SetProperty`**: For wrapped values (classes, promises, symbols, etc.), unwraps the target, delegates to `TGocciaValue.GetProperty`/`SetProperty`
 - **`IsInstance`** / **`TypeOf`**: For wrapped values, delegates to the GocciaScript type system
 - **`ExtendedOperation` sub-ops**: All 13 `GOCCIA_EXT_*` sub-opcodes delegate to GocciaScript evaluator methods
-- **Complex class evaluation**: `GOCCIA_EXT_EVAL_CLASS` bootstraps an interpreter scope from VM globals and evaluates the class AST
+- **Decorator class evaluation**: `GOCCIA_EXT_EVAL_CLASS` bootstraps an interpreter scope from VM globals and evaluates classes with decorators (the only remaining deferred class category)
 
 ### The Unwrap-Delegate-Wrap Cycle
 
@@ -1040,7 +1057,21 @@ The ABC instruction format encodes operand B and C as 8-bit values. This limits 
 
 ### Complex Class Compilation
 
-Classes with getters, setters, statics, private members, or decorators are deferred to the interpreter via `GOCCIA_EXT_EVAL_CLASS`. Classes extending built-in constructors (`Array`, `Map`, `Set`, `Promise`, `Object`) are also deferred because `OP_INHERIT` requires both sides to be `TSouffleBlueprint`s. Compiling all class features to Tier 1 + Tier 2 opcodes is a target for the bridge elimination effort.
+Only classes with decorators are deferred to the interpreter via `GOCCIA_EXT_EVAL_CLASS`. Computed property names, private fields/methods, and classes extending built-in constructors are all compiled natively. Built-in subclassing uses `FBlueprintSuperValues` (mapping blueprints to wrapped non-blueprint superclasses) and `TGocciaSuperCallHelper` (bridging `super()` calls). `FBlueprintBridgeCache` persists across bridge calls (never cleared at bridge depth 0) to maintain `instanceof` identity for blueprint-backed classes. Instance fields (both public and private) are compiled natively — field initialization is emitted as a `__fields__` closure on the blueprint, called by `Construct` before the constructor (super's fields first via reverse chain walk).
+
+### Accepted Interpreter Bridge Operations
+
+The following operations remain in the bridge as an **architectural boundary** — the complexity of native implementation exceeds the benefit, and they represent less than 0.5% of total operations:
+
+- **AwaitValue** (170 calls) — Async/await requires the microtask queue, Promise resolution, and thenable unwrapping. These are deeply integrated with the GocciaScript Promise implementation.
+- **ImportModule** (29 calls) — Module loading involves file I/O, path resolution, and recursive compilation. Inherently interpreter-coupled.
+- **Decorator evaluation** — Classes with decorators use `FElements` and require the full interpreter pipeline for three-phase decorator application.
+- **Construct** (770 calls) — Construction of wrapped `TGocciaClassValue` instances (built-in constructors). Blueprint construction (389 calls) is fully native.
+- **GetIterator/IteratorNext** (146/427 calls) — Iteration over types other than arrays, strings, Maps, and Sets still bridges. Map/Set iteration has dedicated fast paths.
+- **TypeOf** (44 calls) — Mostly handled natively; remaining are rare wrapped types.
+- **Coercion** (10 calls) — Negligible frequency.
+
+The bridge provides fast paths that bypass `UnwrapToGocciaValue` for the most common types: `TGocciaBridgedFunction` (constructors, built-in functions), `TGocciaWrappedValue` (property access, function calls, `instanceof`), `TSouffleArray` and `TSouffleHeapString` (native iterators).
 
 ### NaN Handling in the Constant Pool
 

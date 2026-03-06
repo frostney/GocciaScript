@@ -38,6 +38,7 @@ type
     FDepth: Integer;
     FNextSlot: UInt8;
     FMaxSlot: UInt8;
+    FPrivatePrefix: string;
   public
     constructor Create(const AParent: TGocciaCompilerScope;
       const ADepth: Integer);
@@ -68,7 +69,11 @@ type
     procedure MarkGlobalBacked(const AIndex: Integer);
     procedure SetLocalTypeHint(const AIndex: Integer;
       const ATypeHint: TSouffleLocalType);
+    function ResolvePrivatePrefix: string;
+    property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
   end;
+
+function NextClassPrivatePrefix: string;
 
 implementation
 
@@ -233,6 +238,29 @@ procedure TGocciaCompilerScope.SetLocalTypeHint(const AIndex: Integer;
   const ATypeHint: TSouffleLocalType);
 begin
   FLocals[AIndex].TypeHint := ATypeHint;
+end;
+
+function TGocciaCompilerScope.ResolvePrivatePrefix: string;
+var
+  S: TGocciaCompilerScope;
+begin
+  S := Self;
+  while Assigned(S) do
+  begin
+    if S.FPrivatePrefix <> '' then
+      Exit(S.FPrivatePrefix);
+    S := S.FParent;
+  end;
+  Result := '';
+end;
+
+var
+  GClassPrivateCounter: Integer = 0;
+
+function NextClassPrivatePrefix: string;
+begin
+  Result := IntToStr(GClassPrivateCounter) + '$';
+  Inc(GClassPrivateCounter);
 end;
 
 end.

@@ -74,6 +74,9 @@ end;
 
 destructor TGocciaSouffleBackend.Destroy;
 begin
+  {$IFDEF BRIDGE_METRICS}
+  TBridgeMetrics.DumpGlobal;
+  {$ENDIF}
   FVM.Free;
   FRuntime.Free;
   FEngine.Free;
@@ -182,6 +185,8 @@ begin
   end;
 
   FRuntime.RegisterDelegates;
+  FRuntime.RegisterTestNatives;
+  FRuntime.RegisterNativeBuiltins;
 end;
 
 end.
