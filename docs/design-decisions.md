@@ -436,7 +436,7 @@ An earlier design had separate `OP_RT_CALL_SPREAD` and `OP_RT_CALL_METHOD_SPREAD
 2. Delegating to the GocciaScript evaluator/interpreter
 3. Converting `TGocciaValue` → `TSouffleValue` (wrap)
 
-This "Unwrap-Delegate-Wrap" cycle was the fastest path to a working bytecode backend and achieves full language coverage — the bytecode backend passes 100% of the test suite (3,347 tests). However, the cycle creates deep coupling to the interpreter.
+This "Unwrap-Delegate-Wrap" cycle was the fastest path to a working bytecode backend and achieves full language coverage — the bytecode backend passes 100% of the test suite (3,358 tests). However, the cycle creates deep coupling to the interpreter.
 
 The target architecture eliminates the bridge entirely: `TGocciaRuntimeOperations` would implement JavaScript semantics directly on Souffle types (`TSouffleValue`, `TSouffleArray`, `TSouffleRecord`, `TSouffleBlueprint`), with prototype chain walking on delegate chains, type coercion natively on `TSouffleValue`, and all built-in methods as `TSouffleNativeFunction` delegates. This is a ground-up rewrite, not an incremental fix. See [souffle-vm.md § Current State](souffle-vm.md#current-state-and-bridge-architecture) for the full analysis.
 
@@ -444,12 +444,12 @@ The target architecture eliminates the bridge entirely: `TGocciaRuntimeOperation
 
 The following operations delegate to the GocciaScript evaluator through the bridge layer. They are functionally correct but add overhead from value conversion and dual GC tracking:
 
-- **Iteration** (`GetIterator`, `IteratorNext`, `SpreadInto`) — Delegates to GocciaScript's `GetIteratorFromValue` / `TGocciaIteratorValue` protocol.
-- **Module imports** (`ImportModule`) — Delegates to the GocciaScript module resolver.
-- **Async/await** (`AwaitValue`) — Delegates to `TGocciaPromiseValue` and the microtask queue.
-- **Complex class compilation** — Classes with getters, setters, static properties, private members, or decorators are deferred to the interpreter via `GOCCIA_EXT_EVAL_CLASS`. Classes extending built-in constructors (`Array`, `Map`, `Set`, `Promise`, `Object`) are also deferred because `OP_INHERIT` requires both sides to be `TSouffleBlueprint`s. The goal is to compile all class features to Tier 1 + Tier 2 opcodes.
+- **Module imports** (`ImportModule`, 29 calls) — Delegates to the GocciaScript module resolver. Inherently interpreter-coupled (file I/O, path resolution, recursive compilation).
+- **Async/await** (`AwaitValue`, 170 calls) — Delegates to `TGocciaPromiseValue` and the microtask queue.
+- **Iteration** (`GetIterator`/`IteratorNext`, 146/427 calls) — Array, string, Map, and Set iteration has native fast paths. Remaining bridge calls are for other iterable types.
+- **Decorator class compilation** — Classes with decorators are deferred to the interpreter via `GOCCIA_EXT_EVAL_CLASS`. All other class features (getters, setters, statics, private members, computed properties, built-in subclassing) compile natively to blueprint opcodes.
 
-Eliminating the bridge for these operations is the primary path to improving bytecode execution performance.
+Bridge reduction has dramatically reduced these crossings: `Invoke` went from 21,326 to 55 bridge calls (-99.7%), `GetProperty` from 12,408 to 157 (-98.7%), and `UnwrapToGocciaValue` from 97,212 to 50,132 (-48.4%). `EvaluateClassByIndex` was completely eliminated. The remaining bridge crossings are concentrated in construction (770 calls), async/await (170), iterators (573), and module imports (29).
 
 ### Rejected Findings
 

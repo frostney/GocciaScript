@@ -22,6 +22,11 @@ type
   // Forward declaration
   TGocciaInstanceValue = class;
 
+  TGocciaClassFieldOrderEntry = record
+    Name: string;
+    IsPrivate: Boolean;
+  end;
+
   TGocciaClassValue = class(TGocciaValue)
   private
     FName: string;
@@ -34,6 +39,7 @@ type
     FStaticMethods: TDictionary<string, TGocciaValue>;
     FInstancePropertyDefs: TOrderedMap<TGocciaExpression>;
     FPrivateInstancePropertyDefs: TOrderedMap<TGocciaExpression>;
+    FFieldOrder: array of TGocciaClassFieldOrderEntry;
     FPrivateStaticProperties: TDictionary<string, TGocciaValue>;
     FPrivateMethods: TDictionary<string, TGocciaMethodValue>;
     FPrivateGetters: TDictionary<string, TGocciaFunctionValue>;
@@ -94,11 +100,14 @@ type
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
 
     property Name: string read FName;
-    property SuperClass: TGocciaClassValue read FSuperClass;
+    property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
     property Prototype: TGocciaObjectValue read FPrototype;
     property ConstructorMethod: TGocciaMethodValue read FConstructorMethod;
     property InstancePropertyDefs: TOrderedMap<TGocciaExpression> read FInstancePropertyDefs;
     property PrivateInstancePropertyDefs: TOrderedMap<TGocciaExpression> read FPrivateInstancePropertyDefs;
+    procedure SetFieldOrder(const AOrder: array of TGocciaClassFieldOrderEntry);
+    function FieldOrderCount: Integer;
+    function FieldOrderEntry(const AIndex: Integer): TGocciaClassFieldOrderEntry;
     property PrivateStaticProperties: TDictionary<string, TGocciaValue> read FPrivateStaticProperties;
     property PrivateMethods: TDictionary<string, TGocciaMethodValue> read FPrivateMethods;
     property PropertyGetter[const AName: string]: TGocciaFunctionValue read GetPropertyGetter;
@@ -112,6 +121,8 @@ type
     procedure AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
     procedure SetMethodInitializers(const AInitializers: array of TGocciaValue);
     procedure SetFieldInitializers(const AInitializers: array of TGocciaValue);
+    procedure AppendMethodInitializers(const AInitializers: array of TGocciaValue);
+    procedure AppendFieldInitializers(const AInitializers: array of TGocciaValue);
     procedure AddAutoAccessor(const AName, ABackingName: string; const AIsStatic: Boolean);
     procedure RunMethodInitializers(const AInstance: TGocciaValue);
     procedure RunFieldInitializers(const AInstance: TGocciaValue);
@@ -539,6 +550,26 @@ begin
     FFieldInitializers[Idx] := AInitializers[Idx];
 end;
 
+procedure TGocciaClassValue.AppendMethodInitializers(const AInitializers: array of TGocciaValue);
+var
+  OldLen, Idx: Integer;
+begin
+  OldLen := Length(FMethodInitializers);
+  SetLength(FMethodInitializers, OldLen + Length(AInitializers));
+  for Idx := 0 to High(AInitializers) do
+    FMethodInitializers[OldLen + Idx] := AInitializers[Idx];
+end;
+
+procedure TGocciaClassValue.AppendFieldInitializers(const AInitializers: array of TGocciaValue);
+var
+  OldLen, Idx: Integer;
+begin
+  OldLen := Length(FFieldInitializers);
+  SetLength(FFieldInitializers, OldLen + Length(AInitializers));
+  for Idx := 0 to High(AInitializers) do
+    FFieldInitializers[OldLen + Idx] := AInitializers[Idx];
+end;
+
 // TC39 proposal-decorators: auto-accessor creates backing getter/setter
 procedure TGocciaClassValue.AddAutoAccessor(const AName, ABackingName: string; const AIsStatic: Boolean);
 var
@@ -657,6 +688,25 @@ end;
 procedure TGocciaClassValue.ReplacePrototype(const APrototype: TGocciaObjectValue);
 begin
   FPrototype := APrototype;
+end;
+
+procedure TGocciaClassValue.SetFieldOrder(const AOrder: array of TGocciaClassFieldOrderEntry);
+var
+  I: Integer;
+begin
+  SetLength(FFieldOrder, Length(AOrder));
+  for I := 0 to High(AOrder) do
+    FFieldOrder[I] := AOrder[I];
+end;
+
+function TGocciaClassValue.FieldOrderCount: Integer;
+begin
+  Result := Length(FFieldOrder);
+end;
+
+function TGocciaClassValue.FieldOrderEntry(const AIndex: Integer): TGocciaClassFieldOrderEntry;
+begin
+  Result := FFieldOrder[AIndex];
 end;
 
 function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollection): TGocciaValue;

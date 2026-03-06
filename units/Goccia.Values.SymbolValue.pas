@@ -42,6 +42,7 @@ type
     class function WellKnownIsConcatSpreadable: TGocciaSymbolValue;
     class function WellKnownAsyncIterator: TGocciaSymbolValue;
     class function WellKnownMetadata: TGocciaSymbolValue;
+    class function ById(const AId: Integer): TGocciaSymbolValue;
 
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -58,6 +59,8 @@ type
 implementation
 
 uses
+  Generics.Collections,
+
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.GarbageCollector,
@@ -68,6 +71,7 @@ uses
 
 var
   GNextSymbolId: Integer = 0;
+  GSymbolRegistry: TDictionary<Integer, TGocciaSymbolValue> = nil;
 
 function TGocciaSymbolValue.SymbolToString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -212,6 +216,16 @@ begin
   FDescription := ADescription;
   FId := GNextSymbolId;
   Inc(GNextSymbolId);
+  if not Assigned(GSymbolRegistry) then
+    GSymbolRegistry := TDictionary<Integer, TGocciaSymbolValue>.Create;
+  GSymbolRegistry.AddOrSetValue(FId, Self);
+end;
+
+class function TGocciaSymbolValue.ById(const AId: Integer): TGocciaSymbolValue;
+begin
+  if Assigned(GSymbolRegistry) and GSymbolRegistry.TryGetValue(AId, Result) then
+    Exit;
+  Result := nil;
 end;
 
 function TGocciaSymbolValue.TypeName: string;

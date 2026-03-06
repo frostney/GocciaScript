@@ -1817,15 +1817,44 @@ var
   PropertyValue: TGocciaValue;
   Entry: TOrderedMap<TGocciaExpression>.TKeyValuePair;
   I: Integer;
+  FOEntry: TGocciaClassFieldOrderEntry;
+  Expr: TGocciaExpression;
 begin
   if Assigned(AClassValue.SuperClass) then
     InitializeInstanceProperties(AInstance, AClassValue.SuperClass, AContext);
 
-  for I := 0 to AClassValue.InstancePropertyDefs.Count - 1 do
+  if AClassValue.FieldOrderCount > 0 then
   begin
-    Entry := AClassValue.InstancePropertyDefs.EntryAt(I);
-    PropertyValue := EvaluateExpression(Entry.Value, AContext);
-    AInstance.AssignProperty(Entry.Key, PropertyValue);
+    for I := 0 to AClassValue.FieldOrderCount - 1 do
+    begin
+      FOEntry := AClassValue.FieldOrderEntry(I);
+      Expr := nil;
+      if FOEntry.IsPrivate then
+      begin
+        if AClassValue.PrivateInstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
+        begin
+          PropertyValue := EvaluateExpression(Expr, AContext);
+          AInstance.SetPrivateProperty(FOEntry.Name, PropertyValue, AClassValue);
+        end;
+      end
+      else
+      begin
+        if AClassValue.InstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
+        begin
+          PropertyValue := EvaluateExpression(Expr, AContext);
+          AInstance.AssignProperty(FOEntry.Name, PropertyValue);
+        end;
+      end;
+    end;
+  end
+  else
+  begin
+    for I := 0 to AClassValue.InstancePropertyDefs.Count - 1 do
+    begin
+      Entry := AClassValue.InstancePropertyDefs.EntryAt(I);
+      PropertyValue := EvaluateExpression(Entry.Value, AContext);
+      AInstance.AssignProperty(Entry.Key, PropertyValue);
+    end;
   end;
 end;
 
@@ -1956,12 +1985,27 @@ end;
 function EvaluateClassExpression(const AClassExpression: TGocciaClassExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   ClassDef: TGocciaClassDefinition;
+  InnerContext: TGocciaEvaluationContext;
+  InnerScope: TGocciaScope;
 begin
   ClassDef := AClassExpression.ClassDefinition;
-  Result := EvaluateClassDefinition(ClassDef, AContext, AClassExpression.Line, AClassExpression.Column);
 
-  // For class expressions, don't automatically bind to scope - just return the class value
-  // If it's a named class expression, the name is only visible inside the class methods
+  if ClassDef.Name <> '' then
+  begin
+    // ES2026 §15.7.14: Named class expressions create an inner binding
+    // visible only inside the class body
+    InnerScope := AContext.Scope.CreateChild(skBlock);
+    InnerScope.DefineLexicalBinding(ClassDef.Name,
+      TGocciaUndefinedLiteralValue.UndefinedValue, dtConst);
+    InnerContext := AContext;
+    InnerContext.Scope := InnerScope;
+    Result := EvaluateClassDefinition(ClassDef, InnerContext,
+      AClassExpression.Line, AClassExpression.Column);
+    InnerScope.ForceUpdateBinding(ClassDef.Name, Result);
+  end
+  else
+    Result := EvaluateClassDefinition(ClassDef, AContext,
+      AClassExpression.Line, AClassExpression.Column);
 end;
 
 function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaClassValue;
@@ -1982,6 +2026,7 @@ var
   ClassName: string;
   I, J: Integer;
   HasDecorators: Boolean;
+  FieldOrderEntries: array of TGocciaClassFieldOrderEntry;
   MetadataObject: TGocciaObjectValue;
   SuperMetadata: TGocciaValue;
   EvaluatedElementDecorators: array of array of TGocciaValue;
@@ -2068,6 +2113,18 @@ begin
   begin
     PropertyEntry := AClassDef.PrivateInstanceProperties.EntryAt(I);
     ClassValue.AddPrivateInstanceProperty(PropertyEntry.Key, PropertyEntry.Value);
+  end;
+
+  // Copy field order for source-order initialization
+  if Length(AClassDef.FFieldOrder) > 0 then
+  begin
+    SetLength(FieldOrderEntries, Length(AClassDef.FFieldOrder));
+    for I := 0 to High(AClassDef.FFieldOrder) do
+    begin
+      FieldOrderEntries[I].Name := AClassDef.FFieldOrder[I].Name;
+      FieldOrderEntries[I].IsPrivate := AClassDef.FFieldOrder[I].IsPrivate;
+    end;
+    ClassValue.SetFieldOrder(FieldOrderEntries);
   end;
 
   // Store private methods on the class
@@ -2827,18 +2884,22 @@ begin
     begin
       InitializeInstanceProperties(TGocciaInstanceValue(Instance), AClassValue, InitContext);
 
-      WalkClass := AClassValue.SuperClass;
-      while Assigned(WalkClass) do
+      if AClassValue.FieldOrderCount = 0 then
       begin
-        SuperInitContext := AContext;
-        SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
-        SuperInitScope.ThisValue := Instance;
-        SuperInitContext.Scope := SuperInitScope;
-        InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), WalkClass, SuperInitContext);
-        WalkClass := WalkClass.SuperClass;
-      end;
+        WalkClass := AClassValue.SuperClass;
+        while Assigned(WalkClass) do
+        begin
+          SuperInitContext := AContext;
+          SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
+          SuperInitScope.ThisValue := Instance;
+          SuperInitContext.Scope := SuperInitScope;
+          if WalkClass.FieldOrderCount = 0 then
+            InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), WalkClass, SuperInitContext);
+          WalkClass := WalkClass.SuperClass;
+        end;
 
-      InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), AClassValue, InitContext);
+        InitializePrivateInstanceProperties(TGocciaInstanceValue(Instance), AClassValue, InitContext);
+      end;
     end;
 
     AClassValue.RunMethodInitializers(Instance);
