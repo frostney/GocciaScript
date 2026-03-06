@@ -39,9 +39,9 @@ type
     function MapGetOrInsert(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapGetOrInsertComputed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
-    function FindEntry(const AKey: TGocciaValue): Integer;
     procedure InitializePrototype;
   public
+    function FindEntry(const AKey: TGocciaValue): Integer;
     constructor Create(const AClass: TGocciaClassValue = nil);
     destructor Destroy; override;
 

@@ -97,12 +97,6 @@ begin
   if (AClassDef.SuperClass <> '') and
      FPendingClassNames.ContainsKey(AClassDef.SuperClass) then
     Exit(True);
-  if (AClassDef.SuperClass = CONSTRUCTOR_ARRAY) or
-     (AClassDef.SuperClass = CONSTRUCTOR_MAP) or
-     (AClassDef.SuperClass = CONSTRUCTOR_SET) or
-     (AClassDef.SuperClass = CONSTRUCTOR_PROMISE) or
-     (AClassDef.SuperClass = CONSTRUCTOR_OBJECT) then
-    Exit(True);
   Result := False;
 end;
 
@@ -184,9 +178,26 @@ begin
   begin
     Goccia.Compiler.Expressions.CompileSuperAccess(Ctx, ADest);
   end
+  else if AExpr is TGocciaPrivatePropertyCompoundAssignmentExpression then
+    Goccia.Compiler.Expressions.CompilePrivatePropertyCompoundAssignment(Ctx,
+      TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr), ADest)
+  else if AExpr is TGocciaPrivatePropertyAssignmentExpression then
+    Goccia.Compiler.Expressions.CompilePrivatePropertyAssignment(Ctx,
+      TGocciaPrivatePropertyAssignmentExpression(AExpr), ADest)
+  else if AExpr is TGocciaPrivateMemberExpression then
+    Goccia.Compiler.Expressions.CompilePrivateMember(Ctx,
+      TGocciaPrivateMemberExpression(AExpr), ADest)
   else if AExpr is TGocciaDestructuringAssignmentExpression then
     Goccia.Compiler.Expressions.CompileDestructuringAssignment(Ctx,
       TGocciaDestructuringAssignmentExpression(AExpr), ADest)
+  else if AExpr is TGocciaClassExpression then
+  begin
+    if not ShouldDeferClass(TGocciaClassExpression(AExpr).ClassDefinition) then
+      Goccia.Compiler.Statements.CompileClassExpression(Ctx,
+        TGocciaClassExpression(AExpr).ClassDefinition, ADest)
+    else
+      EmitInstruction(Ctx, EncodeABC(OP_LOAD_NIL, ADest, 0, 0));
+  end
   else if AExpr is TGocciaAwaitExpression then
   begin
     DoCompileExpression(TGocciaAwaitExpression(AExpr).Operand, ADest);

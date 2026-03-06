@@ -94,7 +94,7 @@ type
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
 
     property Name: string read FName;
-    property SuperClass: TGocciaClassValue read FSuperClass;
+    property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
     property Prototype: TGocciaObjectValue read FPrototype;
     property ConstructorMethod: TGocciaMethodValue read FConstructorMethod;
     property InstancePropertyDefs: TOrderedMap<TGocciaExpression> read FInstancePropertyDefs;
@@ -112,6 +112,8 @@ type
     procedure AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
     procedure SetMethodInitializers(const AInitializers: array of TGocciaValue);
     procedure SetFieldInitializers(const AInitializers: array of TGocciaValue);
+    procedure AppendMethodInitializers(const AInitializers: array of TGocciaValue);
+    procedure AppendFieldInitializers(const AInitializers: array of TGocciaValue);
     procedure AddAutoAccessor(const AName, ABackingName: string; const AIsStatic: Boolean);
     procedure RunMethodInitializers(const AInstance: TGocciaValue);
     procedure RunFieldInitializers(const AInstance: TGocciaValue);
@@ -537,6 +539,26 @@ begin
   SetLength(FFieldInitializers, Length(AInitializers));
   for Idx := 0 to High(AInitializers) do
     FFieldInitializers[Idx] := AInitializers[Idx];
+end;
+
+procedure TGocciaClassValue.AppendMethodInitializers(const AInitializers: array of TGocciaValue);
+var
+  OldLen, Idx: Integer;
+begin
+  OldLen := Length(FMethodInitializers);
+  SetLength(FMethodInitializers, OldLen + Length(AInitializers));
+  for Idx := 0 to High(AInitializers) do
+    FMethodInitializers[OldLen + Idx] := AInitializers[Idx];
+end;
+
+procedure TGocciaClassValue.AppendFieldInitializers(const AInitializers: array of TGocciaValue);
+var
+  OldLen, Idx: Integer;
+begin
+  OldLen := Length(FFieldInitializers);
+  SetLength(FFieldInitializers, OldLen + Length(AInitializers));
+  for Idx := 0 to High(AInitializers) do
+    FFieldInitializers[OldLen + Idx] := AInitializers[Idx];
 end;
 
 // TC39 proposal-decorators: auto-accessor creates backing getter/setter

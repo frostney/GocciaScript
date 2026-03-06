@@ -17,6 +17,7 @@ uses
   Souffle.VM.RuntimeOperations,
 
   Goccia.AST.Statements,
+  Goccia.Evaluator.Decorators,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -39,6 +40,8 @@ type
     InvokeClosureDirectCount: Int64;
     InvokeNativeDirectCount: Int64;
     ConstructGocciaCount: Int64;
+    ConstructClassValueCount: Int64;
+    ConstructNativeFnCount: Int64;
     ConstructNativeCount: Int64;
 
     GetPropertyBridgeCount: Int64;
@@ -75,6 +78,18 @@ var
 type
   TGocciaRuntimeOperations = class;
 
+  TGocciaDecoratorSession = class
+  public
+    MetadataObject: TGocciaObjectValue;
+    MethodCollector: TGocciaInitializerCollector;
+    FieldCollector: TGocciaInitializerCollector;
+    StaticFieldCollector: TGocciaInitializerCollector;
+    ClassCollector: TGocciaInitializerCollector;
+    ClassValue: TGocciaValue;
+    constructor Create(const AMetadataObject: TGocciaObjectValue);
+    destructor Destroy; override;
+  end;
+
   TGocciaPendingClassEntry = record
     ClassDefinition: TGocciaClassDefinition;
     Line: Integer;
@@ -106,6 +121,40 @@ type
     function DebugString: string; override;
     property Name: string read FName;
     property Arity: Integer read FArity;
+  end;
+
+  TGocciaSuperCallHelper = class(TSouffleHeapObject)
+  private
+    FSuperClass: TObject;
+    FRuntime: TGocciaRuntimeOperations;
+  public
+    constructor Create(const ASuperClass: TObject;
+      const ARuntime: TGocciaRuntimeOperations);
+    function Invoke(const AReceiver: TSouffleValue;
+      const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+    procedure MarkReferences; override;
+    function DebugString: string; override;
+  end;
+
+  TGocciaSouffleArrayIterator = class(TSouffleHeapObject)
+  private
+    FArray: TSouffleArray;
+    FIndex: Integer;
+  public
+    constructor Create(const AArray: TSouffleArray);
+    function Next(out ADone: Boolean): TSouffleValue;
+    procedure MarkReferences; override;
+    function DebugString: string; override;
+  end;
+
+  TGocciaSouffleStringIterator = class(TSouffleHeapObject)
+  private
+    FValue: string;
+    FIndex: Integer;
+  public
+    constructor Create(const AValue: string);
+    function Next(out ADone: Boolean): TSouffleValue;
+    function DebugString: string; override;
   end;
 
   TGocciaSouffleProxy = class(TGocciaObjectValue)
@@ -159,6 +208,8 @@ type
     FArrayBridgeCache: TDictionary<TObject, TObject>;
     FArrayBridgeReverse: TDictionary<TObject, TObject>;
     FRecordBridgeCache: TDictionary<TObject, TObject>;
+    FBlueprintBridgeCache: TDictionary<TObject, TObject>;
+    FBlueprintSuperValues: TDictionary<TObject, TSouffleValue>;
     FFormalParameterCounts: TDictionary<TSouffleFunctionTemplate, Integer>;
     FPendingClasses: array of TGocciaPendingClassEntry;
     FPendingClassCount: Integer;
@@ -170,8 +221,11 @@ type
     FSourcePath: string;
     FStringDelegate: TSouffleRecord;
     FNumberDelegate: TSouffleRecord;
+    FMapDelegate: TSouffleRecord;
+    FSetDelegate: TSouffleRecord;
     FDescribeDelegate: TSouffleRecord;
     FTestDelegate: TSouffleRecord;
+    FActiveDecoratorSession: TGocciaDecoratorSession;
     function WrapGocciaValue(const AValue: TGocciaValue): TSouffleValue;
     function CoerceKeyToString(const AKey: TSouffleValue): string;
     function CoerceToNumber(const A: TSouffleValue): Double;
@@ -266,6 +320,19 @@ type
     procedure DefineStaticSetter(const AObject: TSouffleValue; const AKey: string;
       const ASetter: TSouffleValue);
 
+    function ComputedKeyAsString(const AKey: TSouffleValue): string;
+    procedure DefineComputedGetter(const AObject, AKey, AGetter: TSouffleValue);
+    procedure DefineComputedSetter(const AObject, AKey, ASetter: TSouffleValue);
+    procedure DefineComputedStaticGetter(const AObject, AKey, AGetter: TSouffleValue);
+    procedure DefineComputedStaticSetter(const AObject, AKey, ASetter: TSouffleValue);
+
+    function GetSymbolOnNativeObject(const AObject: TSouffleValue;
+      const ASymKey: TGocciaSymbolValue;
+      out AFound: Boolean): TSouffleValue;
+    function SetSymbolOnNativeObject(const AObject: TSouffleValue;
+      const ASymKey: TGocciaSymbolValue;
+      const AValue: TSouffleValue): Boolean;
+
     procedure PropertyWriteViolation(const AObject: TSouffleValue;
       const AKey: string);
     procedure PropertyDeleteViolation(const AObject: TSouffleValue;
@@ -277,6 +344,14 @@ type
       const AIndex: Integer): TSouffleValue;
     function FinalizeEnum(const ARecord: TSouffleValue;
       const AName: string): TSouffleValue;
+
+    procedure SetupAutoAccessor(const ABlueprint: TSouffleValue;
+      const AName: string; const AInitClosure: TSouffleValue);
+    procedure BeginDecorators(const ABlueprint, ASuper: TSouffleValue);
+    procedure ApplyElementDecorator(const ADecoratorFn: TSouffleValue;
+      const ADescriptor: string);
+    procedure ApplyClassDecorator(const ADecoratorFn: TSouffleValue);
+    procedure FinishDecorators(var ADest: TSouffleValue);
 
     procedure ExtendedOperation(const ASubOp: UInt8;
       var ADest: TSouffleValue; const AOperand, AExtra: TSouffleValue;
@@ -339,6 +414,7 @@ uses
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.Values.ArrayValue,
+  Goccia.Values.AutoAccessor,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.EnumValue,
@@ -644,6 +720,120 @@ end;
 function TGocciaBridgedFunction.DebugString: string;
 begin
   Result := '[BridgedFn: ' + FName + ']';
+end;
+
+{ TGocciaSuperCallHelper }
+
+constructor TGocciaSuperCallHelper.Create(
+  const ASuperClass: TObject;
+  const ARuntime: TGocciaRuntimeOperations);
+begin
+  inherited Create(SOUFFLE_HEAP_NATIVE_FUNCTION);
+  FSuperClass := ASuperClass;
+  FRuntime := ARuntime;
+end;
+
+function TGocciaSuperCallHelper.Invoke(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Instance: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  I: Integer;
+  SuperClass: TGocciaClassValue;
+begin
+  Instance := FRuntime.UnwrapToGocciaValue(AReceiver);
+  SuperClass := TGocciaClassValue(FSuperClass);
+  Args := TGocciaArgumentsCollection.Create;
+  try
+    for I := 0 to AArgCount - 1 do
+      Args.Add(FRuntime.UnwrapToGocciaValue(
+        PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+    if Assigned(SuperClass.ConstructorMethod) then
+      SuperClass.ConstructorMethod.Call(Args, Instance)
+    else if (Instance is TGocciaInstanceValue) then
+      TGocciaInstanceValue(Instance).InitializeNativeFromArguments(Args);
+  finally
+    Args.Free;
+  end;
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
+procedure TGocciaSuperCallHelper.MarkReferences;
+begin
+  inherited;
+end;
+
+function TGocciaSuperCallHelper.DebugString: string;
+begin
+  Result := '[SuperCallHelper]';
+end;
+
+{ TGocciaSouffleArrayIterator }
+
+constructor TGocciaSouffleArrayIterator.Create(const AArray: TSouffleArray);
+begin
+  inherited Create(0);
+  FArray := AArray;
+  FIndex := 0;
+end;
+
+function TGocciaSouffleArrayIterator.Next(out ADone: Boolean): TSouffleValue;
+begin
+  if FIndex >= FArray.Count then
+  begin
+    ADone := True;
+    Result := SouffleNil;
+  end
+  else
+  begin
+    ADone := False;
+    Result := FArray.Get(FIndex);
+    Inc(FIndex);
+  end;
+end;
+
+procedure TGocciaSouffleArrayIterator.MarkReferences;
+begin
+  inherited;
+  if Assigned(FArray) and not FArray.GCMarked then
+    FArray.MarkReferences;
+end;
+
+function TGocciaSouffleArrayIterator.DebugString: string;
+begin
+  Result := '[ArrayIterator: ' + IntToStr(FIndex) + ']';
+end;
+
+{ TGocciaSouffleStringIterator }
+
+constructor TGocciaSouffleStringIterator.Create(const AValue: string);
+begin
+  inherited Create(0);
+  FValue := AValue;
+  FIndex := 1;
+end;
+
+function TGocciaSouffleStringIterator.Next(out ADone: Boolean): TSouffleValue;
+var
+  Ch: string;
+begin
+  if FIndex > Length(FValue) then
+  begin
+    ADone := True;
+    Result := SouffleNil;
+  end
+  else
+  begin
+    ADone := False;
+    Ch := FValue[FIndex];
+    Result := SouffleString(Ch);
+    Inc(FIndex);
+  end;
+end;
+
+function TGocciaSouffleStringIterator.DebugString: string;
+begin
+  Result := '[StringIterator: ' + IntToStr(FIndex) + ']';
 end;
 
 { TGocciaSouffleProxy }
@@ -1015,8 +1205,47 @@ end;
 
 function TGocciaSouffleProxy.GetSymbolProperty(
   const ASymbol: TGocciaSymbolValue): TGocciaValue;
+var
+  SymPropKey: string;
+  Rec: TSouffleRecord;
+  Bp: TSouffleBlueprint;
+  GetterVal: TSouffleValue;
 begin
   Result := inherited GetSymbolProperty(ASymbol);
+  if Assigned(Result) and not (Result is TGocciaUndefinedLiteralValue) then
+    Exit;
+
+  if FTarget is TSouffleRecord then
+  begin
+    SymPropKey := '@@sym:' + IntToStr(ASymbol.Id);
+    Rec := TSouffleRecord(FTarget);
+    if Rec.HasGetters and Rec.Getters.Get(SymPropKey, GetterVal) then
+    begin
+      if SouffleIsReference(GetterVal) and
+         (GetterVal.AsReference is TSouffleClosure) then
+        Exit(FRuntime.UnwrapToGocciaValue(
+          FRuntime.FVM.ExecuteFunction(
+            TSouffleClosure(GetterVal.AsReference),
+            [SouffleReference(FTarget)])));
+    end;
+    if Assigned(Rec.Blueprint) then
+    begin
+      Bp := Rec.Blueprint;
+      while Assigned(Bp) do
+      begin
+        if Bp.HasGetters and Bp.Getters.Get(SymPropKey, GetterVal) then
+        begin
+          if SouffleIsReference(GetterVal) and
+             (GetterVal.AsReference is TSouffleClosure) then
+            Exit(FRuntime.UnwrapToGocciaValue(
+              FRuntime.FVM.ExecuteFunction(
+                TSouffleClosure(GetterVal.AsReference),
+                [SouffleReference(FTarget)])));
+        end;
+        Bp := Bp.SuperBlueprint;
+      end;
+    end;
+  end;
 end;
 
 function TGocciaSouffleProxy.HasSymbolProperty(
@@ -1097,6 +1326,8 @@ begin
   W('Invoke (closure direct)', InvokeClosureDirectCount);
   W('Invoke (native direct)', InvokeNativeDirectCount);
   W('Construct (bridge to interpreter)', ConstructGocciaCount);
+  W('  -> TGocciaClassValue', ConstructClassValueCount);
+  W('  -> TGocciaNativeFunctionValue', ConstructNativeFnCount);
   W('Construct (Souffle blueprints)', ConstructNativeCount);
   WriteLn(StdErr, 'Property access:');
   W('GetProperty (bridge)', GetPropertyBridgeCount);
@@ -1136,6 +1367,8 @@ begin
   FArrayBridgeCache := TDictionary<TObject, TObject>.Create;
   FArrayBridgeReverse := TDictionary<TObject, TObject>.Create;
   FRecordBridgeCache := TDictionary<TObject, TObject>.Create;
+  FBlueprintBridgeCache := TDictionary<TObject, TObject>.Create;
+  FBlueprintSuperValues := TDictionary<TObject, TSouffleValue>.Create;
   FClassDefinitionScopes := TDictionary<TObject, TObject>.Create;
   FWrappedValues := TList.Create;
   FFormalParameterCounts := TDictionary<TSouffleFunctionTemplate, Integer>.Create;
@@ -1156,9 +1389,12 @@ begin
   FArrayBridgeCache.Free;
   FArrayBridgeReverse.Free;
   FRecordBridgeCache.Free;
+  FBlueprintBridgeCache.Free;
+  FBlueprintSuperValues.Free;
   FClassDefinitionScopes.Free;
   FWrappedValues.Free;
   FFormalParameterCounts.Free;
+  FActiveDecoratorSession.Free;
   inherited;
 end;
 
@@ -1313,6 +1549,9 @@ procedure SyncDefinitionScopesBack(
   const ARuntime: TGocciaRuntimeOperations); forward;
 
 function BlueprintToClassValue(const ABlueprint: TSouffleBlueprint;
+  const ARuntime: TGocciaRuntimeOperations): TGocciaClassValue; forward;
+
+function ConvertBlueprintToClassValue(const ABp: TSouffleBlueprint;
   const ARuntime: TGocciaRuntimeOperations): TGocciaClassValue; forward;
 
 function SouffleArrayToString(const ARuntime: TGocciaRuntimeOperations;
@@ -1592,8 +1831,15 @@ begin
         Result := TGocciaSouffleNativeFunctionBridge.Create(
           TSouffleNativeFunction(AValue.AsReference), Self)
       else if AValue.AsReference is TSouffleBlueprint then
-        Result := BlueprintToClassValue(
-          TSouffleBlueprint(AValue.AsReference), Self)
+      begin
+        if not FBlueprintBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
+        begin
+          CachedBridge := BlueprintToClassValue(
+            TSouffleBlueprint(AValue.AsReference), Self);
+          FBlueprintBridgeCache.Add(AValue.AsReference, CachedBridge);
+        end;
+        Result := TGocciaValue(CachedBridge);
+      end
       else
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   else
@@ -1650,7 +1896,7 @@ begin
   end
   else if AValue is TGocciaStringLiteralValue then
     Result := SouffleString(TGocciaStringLiteralValue(AValue).Value)
-  else if FArrayBridgeReverse.ContainsKey(AValue) then
+  else if (AValue is TGocciaArrayValue) and FArrayBridgeReverse.ContainsKey(AValue) then
     Result := SouffleReference(TSouffleHeapObject(FArrayBridgeReverse[AValue]))
   else if AValue is TGocciaNativeFunctionValue then
   begin
@@ -2211,6 +2457,24 @@ begin
     end;
   end;
 
+  if SouffleIsReference(A) and Assigned(A.AsReference) and
+     (A.AsReference is TGocciaWrappedValue) then
+  begin
+    GocciaObj := TGocciaWrappedValue(A.AsReference).Value;
+    if SouffleIsReference(B) and Assigned(B.AsReference) and
+       (B.AsReference is TGocciaBridgedFunction) then
+      GocciaClass := TGocciaBridgedFunction(B.AsReference).FGocciaFn
+    else if SouffleIsReference(B) and Assigned(B.AsReference) and
+       (B.AsReference is TGocciaWrappedValue) then
+      GocciaClass := TGocciaWrappedValue(B.AsReference).Value
+    else
+      GocciaClass := UnwrapToGocciaValue(B);
+
+    R := EvaluateInstanceof(GocciaObj, GocciaClass, IsObjectInstanceOfClass);
+    Result := SouffleBoolean(R = TGocciaBooleanLiteralValue.TrueValue);
+    Exit;
+  end;
+
   {$IFDEF BRIDGE_METRICS}
   Inc(GBridgeMetrics.IsInstanceBridgeCount);
   {$ENDIF}
@@ -2460,6 +2724,18 @@ begin
           Bp := Bp.SuperBlueprint;
         end;
 
+        Bp := TSouffleBlueprint(AObject.AsReference);
+        if FBlueprintSuperValues.ContainsKey(Bp) then
+        begin
+          GocciaObj := UnwrapToGocciaValue(FBlueprintSuperValues[Bp]);
+          if Assigned(GocciaObj) then
+          begin
+            Prop := GocciaObj.GetProperty(AKey);
+            if Assigned(Prop) and not (Prop is TGocciaUndefinedLiteralValue) then
+              Exit(ToSouffleValue(Prop));
+          end;
+        end;
+
         Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
       end
       else if AObject.AsReference is TSouffleArray then
@@ -2509,6 +2785,40 @@ begin
         if Assigned(Prop) then
           Exit(ToSouffleValue(Prop));
       end;
+    end;
+
+    if SouffleIsReference(AObject) and Assigned(AObject.AsReference) and
+       (AObject.AsReference is TGocciaWrappedValue) then
+    begin
+      GocciaObj := TGocciaWrappedValue(AObject.AsReference).Value;
+
+      if GocciaObj is TGocciaMapValue then
+      begin
+        if AKey = PROP_SIZE then
+          Exit(SouffleInteger(TGocciaMapValue(GocciaObj).Entries.Count));
+        if Assigned(FMapDelegate) and FMapDelegate.Get(AKey, Result) then
+          Exit;
+      end
+      else if GocciaObj is TGocciaSetValue then
+      begin
+        if AKey = PROP_SIZE then
+          Exit(SouffleInteger(TGocciaSetValue(GocciaObj).Items.Count));
+        if Assigned(FSetDelegate) and FSetDelegate.Get(AKey, Result) then
+          Exit;
+      end;
+
+      Prop := GocciaObj.GetProperty(AKey);
+      if not Assigned(Prop) then
+      begin
+        Boxed := GocciaObj.Box;
+        if Assigned(Boxed) then
+          Prop := Boxed.GetProperty(AKey);
+      end;
+      if Assigned(Prop) then
+        Result := ToSouffleValue(Prop)
+      else
+        Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+      Exit;
     end;
 
     {$IFDEF BRIDGE_METRICS}
@@ -2580,7 +2890,12 @@ begin
             Bp := Bp.SuperBlueprint;
           end;
         end;
-        if not Rec.PutChecked(AKey, AValue) then
+        if (AKey <> '') and (AKey[1] = '#') then
+        begin
+          Rec.PutWithFlags(AKey, AValue,
+            SOUFFLE_PROP_WRITABLE or SOUFFLE_PROP_CONFIGURABLE);
+        end
+        else if not Rec.PutChecked(AKey, AValue) then
           ThrowTypeError('Cannot assign to read only property ''' + AKey + '''');
         Exit;
       end;
@@ -2624,6 +2939,18 @@ begin
   Result := CoerceToString(AKey);
 end;
 
+function TGocciaRuntimeOperations.ComputedKeyAsString(
+  const AKey: TSouffleValue): string;
+begin
+  if SouffleIsReference(AKey) and Assigned(AKey.AsReference) and
+     (AKey.AsReference is TGocciaWrappedValue) and
+     (TGocciaWrappedValue(AKey.AsReference).Value is TGocciaSymbolValue) then
+    Result := '@@sym:' + IntToStr(
+      TGocciaSymbolValue(TGocciaWrappedValue(AKey.AsReference).Value).Id)
+  else
+    Result := CoerceToString(AKey);
+end;
+
 function TGocciaRuntimeOperations.GetIndex(
   const AObject, AKey: TSouffleValue): TSouffleValue;
 var
@@ -2631,6 +2958,7 @@ var
   SymKey: TGocciaSymbolValue;
   PropVal: TGocciaValue;
   I: Integer;
+  Found: Boolean;
 begin
   try
     if AObject.Kind = svkNil then
@@ -2661,6 +2989,11 @@ begin
        (TGocciaWrappedValue(AKey.AsReference).Value is TGocciaSymbolValue) then
     begin
       SymKey := TGocciaSymbolValue(TGocciaWrappedValue(AKey.AsReference).Value);
+
+      Result := GetSymbolOnNativeObject(AObject, SymKey, Found);
+      if Found then
+        Exit;
+
       GocciaObj := UnwrapToGocciaValue(AObject);
       if GocciaObj is TGocciaClassValue then
       begin
@@ -2718,6 +3051,10 @@ begin
        (TGocciaWrappedValue(AKey.AsReference).Value is TGocciaSymbolValue) then
     begin
       SymKey := TGocciaSymbolValue(TGocciaWrappedValue(AKey.AsReference).Value);
+
+      if SetSymbolOnNativeObject(AObject, SymKey, AValue) then
+        Exit;
+
       GocciaObj := UnwrapToGocciaValue(AObject);
       ClassKey := nil;
       if GocciaObj is TGocciaClassValue then
@@ -2841,6 +3178,21 @@ begin
       Exit;
     end;
 
+    if ACallee.AsReference is TGocciaSuperCallHelper then
+    begin
+      {$IFDEF BRIDGE_METRICS}
+      Inc(GBridgeMetrics.InvokeNativeDirectCount);
+      {$ENDIF}
+      try
+        Result := TGocciaSuperCallHelper(ACallee.AsReference).Invoke(
+          AReceiver, AArgs, AArgCount);
+      except
+        on E: TGocciaThrowValue do
+          RethrowAsVM(E);
+      end;
+      Exit;
+    end;
+
     if ACallee.AsReference is TGocciaBridgedFunction then
     begin
       {$IFDEF BRIDGE_METRICS}
@@ -2849,6 +3201,37 @@ begin
       try
         Result := TGocciaBridgedFunction(ACallee.AsReference).Invoke(
           AReceiver, AArgs, AArgCount);
+      except
+        on E: TGocciaThrowValue do
+          RethrowAsVM(E);
+      end;
+      Exit;
+    end;
+  end;
+
+  if SouffleIsReference(ACallee) and Assigned(ACallee.AsReference) and
+     (ACallee.AsReference is TGocciaWrappedValue) then
+  begin
+    GocciaCallee := TGocciaWrappedValue(ACallee.AsReference).Value;
+    if GocciaCallee is TGocciaFunctionBase then
+    begin
+      {$IFDEF BRIDGE_METRICS}
+      Inc(GBridgeMetrics.InvokeNativeDirectCount);
+      {$ENDIF}
+      try
+        Args := TGocciaArgumentsCollection.Create;
+        try
+          for I := 0 to AArgCount - 1 do
+            Args.Add(UnwrapToGocciaValue(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+          GocciaReceiver := UnwrapToGocciaValue(AReceiver);
+          GocciaResult := TGocciaFunctionBase(GocciaCallee).Call(Args, GocciaReceiver);
+          if Assigned(GocciaResult) then
+            Result := ToSouffleValue(GocciaResult)
+          else
+            Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+        finally
+          Args.Free;
+        end;
       except
         on E: TGocciaThrowValue do
           RethrowAsVM(E);
@@ -2914,12 +3297,14 @@ var
   GocciaConstructor, GocciaResult: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   Context: TGocciaEvaluationContext;
-  CachedScope: TObject;
+  CachedScope, CachedBridge: TObject;
   I: Integer;
   Bp, WalkBp: TSouffleBlueprint;
   Rec: TSouffleRecord;
   CtorMethod: TSouffleValue;
   VMArgs: array of TSouffleValue;
+  FieldInits: array of TSouffleClosure;
+  FieldInitCount: Integer;
 begin
   PushVMFramesToGoccia(FVM);
   try try
@@ -2928,6 +3313,50 @@ begin
        (AConstructor.AsReference is TSouffleBlueprint) then
     begin
       Bp := TSouffleBlueprint(AConstructor.AsReference);
+
+      if not Assigned(Bp.SuperBlueprint) and
+         FBlueprintSuperValues.ContainsKey(Bp) then
+      begin
+        if not FBlueprintBridgeCache.TryGetValue(Bp, CachedBridge) then
+        begin
+          CachedBridge := ConvertBlueprintToClassValue(Bp, Self);
+          FBlueprintBridgeCache.Add(Bp, CachedBridge);
+        end;
+        GocciaConstructor := TGocciaValue(CachedBridge);
+        {$IFDEF BRIDGE_METRICS}
+        MetricBridge;
+        Inc(GBridgeMetrics.ConstructClassValueCount);
+        {$ENDIF}
+        Args := TGocciaArgumentsCollection.Create;
+        try
+          for I := 0 to AArgCount - 1 do
+            Args.Add(UnwrapToGocciaValue(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+
+          if FClassDefinitionScopes.TryGetValue(GocciaConstructor, CachedScope) then
+          begin
+            Context := TGocciaEngine(FEngine).Interpreter.CreateEvaluationContext;
+            Context.Scope := TGocciaScope(CachedScope);
+            RebuildArrayBridgeCache(Self, TGocciaScope(CachedScope));
+          end
+          else
+            Context := CreateBridgedContext(Self);
+
+          GocciaResult := InstantiateClass(
+            TGocciaClassValue(GocciaConstructor), Args, Context);
+
+          SyncArraysBack(Self, Context.Scope);
+          FArrayBridgeCache.Clear;
+
+          if Assigned(GocciaResult) then
+            Result := ToSouffleValue(GocciaResult)
+          else
+            Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+        finally
+          Args.Free;
+        end;
+        Exit;
+      end;
+
       Rec := TSouffleRecord.CreateFromBlueprint(Bp);
       Rec.Delegate := Bp.Prototype;
       WalkBp := Bp;
@@ -2946,6 +3375,29 @@ begin
       end;
       if Assigned(TSouffleGarbageCollector.Instance) then
         TSouffleGarbageCollector.Instance.AllocateObject(Rec);
+
+      FieldInitCount := 0;
+      SetLength(FieldInits, 4);
+      WalkBp := Bp;
+      while Assigned(WalkBp) do
+      begin
+        if WalkBp.Methods.Get('__fields__', CtorMethod) and
+           SouffleIsReference(CtorMethod) and
+           (CtorMethod.AsReference is TSouffleClosure) then
+        begin
+          if FieldInitCount >= Length(FieldInits) then
+            SetLength(FieldInits, Length(FieldInits) * 2);
+          FieldInits[FieldInitCount] := TSouffleClosure(CtorMethod.AsReference);
+          Inc(FieldInitCount);
+        end;
+        WalkBp := WalkBp.SuperBlueprint;
+      end;
+      for I := FieldInitCount - 1 downto 0 do
+      begin
+        SetLength(VMArgs, 1);
+        VMArgs[0] := SouffleReference(Rec);
+        FVM.ExecuteFunction(FieldInits[I], VMArgs);
+      end;
 
       WalkBp := Bp;
       CtorMethod := SouffleNil;
@@ -2973,6 +3425,39 @@ begin
       Exit;
     end;
 
+    if SouffleIsReference(AConstructor) and
+       Assigned(AConstructor.AsReference) and
+       (AConstructor.AsReference is TGocciaBridgedFunction) then
+    begin
+      {$IFDEF BRIDGE_METRICS}
+      MetricNative;
+      {$ENDIF}
+      Args := TGocciaArgumentsCollection.Create;
+      try
+        for I := 0 to AArgCount - 1 do
+          Args.Add(UnwrapToGocciaValue(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+
+        if Assigned(TGocciaCallStack.Instance) then
+          TGocciaCallStack.Instance.Push(
+            TGocciaBridgedFunction(AConstructor.AsReference).Name, '', 0, 0);
+        try
+          GocciaResult := TGocciaBridgedFunction(AConstructor.AsReference).FGocciaFn.Call(
+            Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+        finally
+          if Assigned(TGocciaCallStack.Instance) then
+            TGocciaCallStack.Instance.Pop;
+        end;
+
+        if Assigned(GocciaResult) then
+          Result := ToSouffleValue(GocciaResult)
+        else
+          Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+      finally
+        Args.Free;
+      end;
+      Exit;
+    end;
+
     {$IFDEF BRIDGE_METRICS}
     MetricBridge;
     {$ENDIF}
@@ -2980,6 +3465,9 @@ begin
 
     if (GocciaConstructor is TGocciaClassValue) then
     begin
+      {$IFDEF BRIDGE_METRICS}
+      Inc(GBridgeMetrics.ConstructClassValueCount);
+      {$ENDIF}
       Args := TGocciaArgumentsCollection.Create;
       try
         for I := 0 to AArgCount - 1 do
@@ -3012,6 +3500,9 @@ begin
 
     if GocciaConstructor is TGocciaNativeFunctionValue then
     begin
+      {$IFDEF BRIDGE_METRICS}
+      Inc(GBridgeMetrics.ConstructNativeFnCount);
+      {$ENDIF}
       Args := TGocciaArgumentsCollection.Create;
       try
         for I := 0 to AArgCount - 1 do
@@ -3064,6 +3555,51 @@ begin
   Inc(GBridgeMetrics.GetIteratorCount);
   {$ENDIF}
   try
+    if (not ATryAsync) and SouffleIsReference(AIterable) and
+       Assigned(AIterable.AsReference) then
+    begin
+      if AIterable.AsReference is TSouffleArray then
+      begin
+        Result := SouffleReference(
+          TGocciaSouffleArrayIterator.Create(
+            TSouffleArray(AIterable.AsReference)));
+        if Assigned(TSouffleGarbageCollector.Instance) then
+          TSouffleGarbageCollector.Instance.AllocateObject(
+            TGocciaSouffleArrayIterator(Result.AsReference));
+        Exit;
+      end;
+      if AIterable.AsReference is TSouffleHeapString then
+      begin
+        Result := SouffleReference(
+          TGocciaSouffleStringIterator.Create(
+            TSouffleHeapString(AIterable.AsReference).Value));
+        if Assigned(TSouffleGarbageCollector.Instance) then
+          TSouffleGarbageCollector.Instance.AllocateObject(
+            TGocciaSouffleStringIterator(Result.AsReference));
+        Exit;
+      end;
+      if AIterable.AsReference is TGocciaWrappedValue then
+      begin
+        GocciaVal := TGocciaWrappedValue(AIterable.AsReference).Value;
+        if GocciaVal is TGocciaMapValue then
+        begin
+          Iterator := TGocciaMapIteratorValue.Create(GocciaVal, mkEntries);
+          if Assigned(TGocciaGarbageCollector.Instance) then
+            TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+          Result := WrapGocciaValue(Iterator);
+          Exit;
+        end;
+        if GocciaVal is TGocciaSetValue then
+        begin
+          Iterator := TGocciaSetIteratorValue.Create(GocciaVal, skValues);
+          if Assigned(TGocciaGarbageCollector.Instance) then
+            TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+          Result := WrapGocciaValue(Iterator);
+          Exit;
+        end;
+      end;
+    end;
+
     GocciaVal := UnwrapToGocciaValue(AIterable);
 
     Iterator := nil;
@@ -3159,6 +3695,20 @@ begin
   ADone := True;
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
   try
+    if SouffleIsReference(AIterator) and Assigned(AIterator.AsReference) then
+    begin
+      if AIterator.AsReference is TGocciaSouffleArrayIterator then
+      begin
+        Result := TGocciaSouffleArrayIterator(AIterator.AsReference).Next(ADone);
+        Exit;
+      end;
+      if AIterator.AsReference is TGocciaSouffleStringIterator then
+      begin
+        Result := TGocciaSouffleStringIterator(AIterator.AsReference).Next(ADone);
+        Exit;
+      end;
+    end;
+
     GocciaVal := UnwrapToGocciaValue(AIterator);
 
     if GocciaVal is TGocciaIteratorValue then
@@ -3698,6 +4248,192 @@ begin
   begin
     Bp := TSouffleBlueprint(AObject.AsReference);
     Bp.StaticSetters.Put(AKey, ASetter);
+  end;
+end;
+
+procedure TGocciaRuntimeOperations.DefineComputedGetter(
+  const AObject, AKey, AGetter: TSouffleValue);
+begin
+  DefineGetter(AObject, ComputedKeyAsString(AKey), AGetter);
+end;
+
+procedure TGocciaRuntimeOperations.DefineComputedSetter(
+  const AObject, AKey, ASetter: TSouffleValue);
+begin
+  DefineSetter(AObject, ComputedKeyAsString(AKey), ASetter);
+end;
+
+procedure TGocciaRuntimeOperations.DefineComputedStaticGetter(
+  const AObject, AKey, AGetter: TSouffleValue);
+begin
+  DefineStaticGetter(AObject, ComputedKeyAsString(AKey), AGetter);
+end;
+
+procedure TGocciaRuntimeOperations.DefineComputedStaticSetter(
+  const AObject, AKey, ASetter: TSouffleValue);
+begin
+  DefineStaticSetter(AObject, ComputedKeyAsString(AKey), ASetter);
+end;
+
+function TGocciaRuntimeOperations.GetSymbolOnNativeObject(
+  const AObject: TSouffleValue;
+  const ASymKey: TGocciaSymbolValue;
+  out AFound: Boolean): TSouffleValue;
+var
+  SymPropKey: string;
+  Rec: TSouffleRecord;
+  Bp: TSouffleBlueprint;
+  GetterVal: TSouffleValue;
+begin
+  AFound := False;
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if not SouffleIsReference(AObject) or not Assigned(AObject.AsReference) then
+    Exit;
+
+  SymPropKey := '@@sym:' + IntToStr(ASymKey.Id);
+
+  if AObject.AsReference is TSouffleRecord then
+  begin
+    Rec := TSouffleRecord(AObject.AsReference);
+    if Rec.HasGetters and Rec.Getters.Get(SymPropKey, GetterVal) then
+    begin
+      AFound := True;
+      if SouffleIsReference(GetterVal) and
+         (GetterVal.AsReference is TSouffleClosure) then
+        Result := FVM.ExecuteFunction(
+          TSouffleClosure(GetterVal.AsReference), [AObject]);
+      Exit;
+    end;
+    if Assigned(Rec.Blueprint) then
+    begin
+      Bp := Rec.Blueprint;
+      while Assigned(Bp) do
+      begin
+        if Bp.HasGetters and Bp.Getters.Get(SymPropKey, GetterVal) then
+        begin
+          AFound := True;
+          if SouffleIsReference(GetterVal) and
+             (GetterVal.AsReference is TSouffleClosure) then
+            Result := FVM.ExecuteFunction(
+              TSouffleClosure(GetterVal.AsReference), [AObject]);
+          Exit;
+        end;
+        Bp := Bp.SuperBlueprint;
+      end;
+    end;
+  end
+  else if AObject.AsReference is TSouffleBlueprint then
+  begin
+    Bp := TSouffleBlueprint(AObject.AsReference);
+    if Bp.HasStaticGetters and Bp.StaticGetters.Get(SymPropKey, GetterVal) then
+    begin
+      AFound := True;
+      if SouffleIsReference(GetterVal) and
+         (GetterVal.AsReference is TSouffleClosure) then
+        Result := FVM.ExecuteFunction(
+          TSouffleClosure(GetterVal.AsReference), [AObject]);
+      Exit;
+    end;
+    Bp := Bp.SuperBlueprint;
+    while Assigned(Bp) do
+    begin
+      if Bp.HasStaticGetters and Bp.StaticGetters.Get(SymPropKey, GetterVal) then
+      begin
+        AFound := True;
+        if SouffleIsReference(GetterVal) and
+           (GetterVal.AsReference is TSouffleClosure) then
+          Result := FVM.ExecuteFunction(
+            TSouffleClosure(GetterVal.AsReference), [AObject]);
+        Exit;
+      end;
+      Bp := Bp.SuperBlueprint;
+    end;
+  end;
+end;
+
+function TGocciaRuntimeOperations.SetSymbolOnNativeObject(
+  const AObject: TSouffleValue;
+  const ASymKey: TGocciaSymbolValue;
+  const AValue: TSouffleValue): Boolean;
+var
+  SymPropKey: string;
+  Rec: TSouffleRecord;
+  Bp: TSouffleBlueprint;
+  SetterVal, GetterVal: TSouffleValue;
+begin
+  Result := False;
+  if not SouffleIsReference(AObject) or not Assigned(AObject.AsReference) then
+    Exit;
+
+  SymPropKey := '@@sym:' + IntToStr(ASymKey.Id);
+
+  if AObject.AsReference is TSouffleRecord then
+  begin
+    Rec := TSouffleRecord(AObject.AsReference);
+    if Rec.HasSetters and Rec.Setters.Get(SymPropKey, SetterVal) then
+    begin
+      if SouffleIsReference(SetterVal) and
+         (SetterVal.AsReference is TSouffleClosure) then
+      begin
+        FVM.ExecuteFunction(
+          TSouffleClosure(SetterVal.AsReference), [AObject, AValue]);
+        Exit(True);
+      end;
+    end;
+    if Rec.HasGetters and Rec.Getters.Get(SymPropKey, GetterVal) then
+    begin
+      ThrowTypeError('Cannot set property Symbol(' +
+        ASymKey.Description + ') which has only a getter');
+      Exit(True);
+    end;
+    if Assigned(Rec.Blueprint) then
+    begin
+      Bp := Rec.Blueprint;
+      while Assigned(Bp) do
+      begin
+        if Bp.HasSetters and Bp.Setters.Get(SymPropKey, SetterVal) then
+        begin
+          if SouffleIsReference(SetterVal) and
+             (SetterVal.AsReference is TSouffleClosure) then
+          begin
+            FVM.ExecuteFunction(
+              TSouffleClosure(SetterVal.AsReference), [AObject, AValue]);
+            Exit(True);
+          end;
+        end;
+        if Bp.HasGetters and Bp.Getters.Get(SymPropKey, GetterVal) then
+        begin
+          ThrowTypeError('Cannot set property Symbol(' +
+            ASymKey.Description + ') which has only a getter');
+          Exit(True);
+        end;
+        Bp := Bp.SuperBlueprint;
+      end;
+    end;
+  end
+  else if AObject.AsReference is TSouffleBlueprint then
+  begin
+    Bp := TSouffleBlueprint(AObject.AsReference);
+    while Assigned(Bp) do
+    begin
+      if Bp.HasStaticSetters and Bp.StaticSetters.Get(SymPropKey, SetterVal) then
+      begin
+        if SouffleIsReference(SetterVal) and
+           (SetterVal.AsReference is TSouffleClosure) then
+        begin
+          FVM.ExecuteFunction(
+            TSouffleClosure(SetterVal.AsReference), [AObject, AValue]);
+          Exit(True);
+        end;
+      end;
+      if Bp.HasStaticGetters and Bp.StaticGetters.Get(SymPropKey, GetterVal) then
+      begin
+        ThrowTypeError('Cannot set property Symbol(' +
+          ASymKey.Description + ') which has only a getter');
+        Exit(True);
+      end;
+      Bp := Bp.SuperBlueprint;
+    end;
   end;
 end;
 
@@ -4916,6 +5652,188 @@ begin
   Result := SouffleReference(Removed);
 end;
 
+{ Native Map delegate methods }
+
+function UnwrapMapFromReceiver(const AReceiver: TSouffleValue): TGocciaMapValue; inline;
+begin
+  Result := nil;
+  if SouffleIsReference(AReceiver) and Assigned(AReceiver.AsReference) and
+     (AReceiver.AsReference is TGocciaWrappedValue) and
+     (TGocciaWrappedValue(AReceiver.AsReference).Value is TGocciaMapValue) then
+    Result := TGocciaMapValue(TGocciaWrappedValue(AReceiver.AsReference).Value);
+end;
+
+function UnwrapSetFromReceiver(const AReceiver: TSouffleValue): TGocciaSetValue; inline;
+begin
+  Result := nil;
+  if SouffleIsReference(AReceiver) and Assigned(AReceiver.AsReference) and
+     (AReceiver.AsReference is TGocciaWrappedValue) and
+     (TGocciaWrappedValue(AReceiver.AsReference).Value is TGocciaSetValue) then
+    Result := TGocciaSetValue(TGocciaWrappedValue(AReceiver.AsReference).Value);
+end;
+
+function InvokeGocciaMethod(const AReceiver: TSouffleValue;
+  const AMethodName: string; const AArgs: PSouffleValue;
+  const AArgCount: Integer): TSouffleValue;
+var
+  GocciaObj: TGocciaValue;
+  MethodFn, GocciaResult: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  I: Integer;
+begin
+  GocciaObj := TGocciaWrappedValue(AReceiver.AsReference).Value;
+  MethodFn := GocciaObj.GetProperty(AMethodName);
+  if not Assigned(MethodFn) or not (MethodFn is TGocciaFunctionBase) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  Args := TGocciaArgumentsCollection.Create;
+  try
+    for I := 0 to AArgCount - 1 do
+      Args.Add(GNativeArrayJoinRuntime.UnwrapToGocciaValue(
+        PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+    GocciaResult := TGocciaFunctionBase(MethodFn).Call(Args, GocciaObj);
+    if Assigned(GocciaResult) then
+      Result := GNativeArrayJoinRuntime.ToSouffleValue(GocciaResult)
+    else
+      Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  finally
+    Args.Free;
+  end;
+end;
+
+function NativeMapGet(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  M: TGocciaMapValue;
+  Key: TGocciaValue;
+  Index: Integer;
+begin
+  M := UnwrapMapFromReceiver(AReceiver);
+  if not Assigned(M) or (AArgCount < 1) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  Key := GNativeArrayJoinRuntime.UnwrapToGocciaValue(AArgs^);
+  Index := M.FindEntry(Key);
+  if Index >= 0 then
+    Result := GNativeArrayJoinRuntime.ToSouffleValue(M.Entries[Index].Value)
+  else
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
+function NativeMapSet(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  M: TGocciaMapValue;
+  Key, Val: TGocciaValue;
+begin
+  M := UnwrapMapFromReceiver(AReceiver);
+  if not Assigned(M) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  if AArgCount >= 2 then
+  begin
+    Key := GNativeArrayJoinRuntime.UnwrapToGocciaValue(AArgs^);
+    Val := GNativeArrayJoinRuntime.UnwrapToGocciaValue(
+      PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^);
+    M.SetEntry(Key, Val);
+  end
+  else if AArgCount = 1 then
+  begin
+    Key := GNativeArrayJoinRuntime.UnwrapToGocciaValue(AArgs^);
+    M.SetEntry(Key, TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+  Result := AReceiver;
+end;
+
+function NativeMapHas(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  M: TGocciaMapValue;
+  Key: TGocciaValue;
+begin
+  M := UnwrapMapFromReceiver(AReceiver);
+  if not Assigned(M) or (AArgCount < 1) then
+    Exit(SouffleBoolean(False));
+  Key := GNativeArrayJoinRuntime.UnwrapToGocciaValue(AArgs^);
+  Result := SouffleBoolean(M.FindEntry(Key) >= 0);
+end;
+
+function NativeMapDelete(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'delete', AArgs, AArgCount);
+end;
+
+function NativeMapClear(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'clear', AArgs, AArgCount);
+end;
+
+function NativeMapForEach(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'forEach', AArgs, AArgCount);
+end;
+
+function NativeMapKeys(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'keys', AArgs, AArgCount);
+end;
+
+function NativeMapValues(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'values', AArgs, AArgCount);
+end;
+
+function NativeMapEntries(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'entries', AArgs, AArgCount);
+end;
+
+{ Native Set delegate methods }
+
+function NativeSetHas(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'has', AArgs, AArgCount);
+end;
+
+function NativeSetAdd(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'add', AArgs, AArgCount);
+end;
+
+function NativeSetDelete(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'delete', AArgs, AArgCount);
+end;
+
+function NativeSetClear(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'clear', AArgs, AArgCount);
+end;
+
+function NativeSetForEach(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'forEach', AArgs, AArgCount);
+end;
+
+function NativeSetValues(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'values', AArgs, AArgCount);
+end;
+
+function NativeSetEntries(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'entries', AArgs, AArgCount);
+end;
+
 function NativeRecordHasOwnProperty(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
@@ -6019,6 +6937,28 @@ const
     (Name: 'toLocaleString';       Arity: 0; Callback: @NativeRecordToLocaleString)
   );
 
+  MAP_PROTOTYPE_METHODS: array[0..8] of TSouffleMethodEntry = (
+    (Name: 'get';      Arity: 1; Callback: @NativeMapGet),
+    (Name: 'set';      Arity: 2; Callback: @NativeMapSet),
+    (Name: 'has';      Arity: 1; Callback: @NativeMapHas),
+    (Name: 'delete';   Arity: 1; Callback: @NativeMapDelete),
+    (Name: 'clear';    Arity: 0; Callback: @NativeMapClear),
+    (Name: 'forEach';  Arity: 1; Callback: @NativeMapForEach),
+    (Name: 'keys';     Arity: 0; Callback: @NativeMapKeys),
+    (Name: 'values';   Arity: 0; Callback: @NativeMapValues),
+    (Name: 'entries';  Arity: 0; Callback: @NativeMapEntries)
+  );
+
+  SET_PROTOTYPE_METHODS: array[0..6] of TSouffleMethodEntry = (
+    (Name: 'has';      Arity: 1; Callback: @NativeSetHas),
+    (Name: 'add';      Arity: 1; Callback: @NativeSetAdd),
+    (Name: 'delete';   Arity: 1; Callback: @NativeSetDelete),
+    (Name: 'clear';    Arity: 0; Callback: @NativeSetClear),
+    (Name: 'forEach';  Arity: 1; Callback: @NativeSetForEach),
+    (Name: 'values';   Arity: 0; Callback: @NativeSetValues),
+    (Name: 'entries';  Arity: 0; Callback: @NativeSetEntries)
+  );
+
 procedure TGocciaRuntimeOperations.RegisterDelegates;
 begin
   if not Assigned(FVM) then Exit;
@@ -6033,6 +6973,11 @@ begin
     BuildDelegate(STRING_PROTOTYPE_METHODS));
   FNumberDelegate := TSouffleRecord(
     BuildDelegate(NUMBER_PROTOTYPE_METHODS));
+
+  FMapDelegate := TSouffleRecord(
+    BuildDelegate(MAP_PROTOTYPE_METHODS));
+  FSetDelegate := TSouffleRecord(
+    BuildDelegate(SET_PROTOTYPE_METHODS));
 
   FVM.ArrayDelegate := TSouffleRecord(
     BuildDelegate(ARRAY_PROTOTYPE_METHODS));
@@ -6352,21 +7297,43 @@ function TGocciaRuntimeOperations.SuperMethodGet(
 var
   Bp: TSouffleBlueprint;
   Method: TSouffleValue;
+  GocciaVal, PropVal: TGocciaValue;
+  Helper: TGocciaSuperCallHelper;
 begin
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
-  if not (SouffleIsReference(ASuperBlueprint) and
-     Assigned(ASuperBlueprint.AsReference) and
-     (ASuperBlueprint.AsReference is TSouffleBlueprint)) then
-    Exit;
+  if not SouffleIsReference(ASuperBlueprint) then Exit;
+  if not Assigned(ASuperBlueprint.AsReference) then Exit;
 
-  Bp := TSouffleBlueprint(ASuperBlueprint.AsReference);
-  while Assigned(Bp) do
+  if ASuperBlueprint.AsReference is TSouffleBlueprint then
   begin
-    if Bp.Methods.Get(AMethodName, Method) then
-      Exit(Method);
-    if Bp.HasStaticFields and Bp.StaticFields.Get(AMethodName, Method) then
-      Exit(Method);
-    Bp := Bp.SuperBlueprint;
+    Bp := TSouffleBlueprint(ASuperBlueprint.AsReference);
+    while Assigned(Bp) do
+    begin
+      if Bp.Methods.Get(AMethodName, Method) then
+        Exit(Method);
+      if Bp.HasStaticFields and Bp.StaticFields.Get(AMethodName, Method) then
+        Exit(Method);
+      Bp := Bp.SuperBlueprint;
+    end;
+    Exit;
+  end;
+
+  GocciaVal := UnwrapToGocciaValue(ASuperBlueprint);
+  if not Assigned(GocciaVal) then Exit;
+
+  if (AMethodName = PROP_CONSTRUCTOR) and (GocciaVal is TGocciaClassValue) then
+  begin
+    Helper := TGocciaSuperCallHelper.Create(
+      TGocciaClassValue(GocciaVal), Self);
+    if Assigned(TSouffleGarbageCollector.Instance) then
+      TSouffleGarbageCollector.Instance.AllocateObject(Helper);
+    Result := SouffleReference(Helper);
+  end
+  else
+  begin
+    PropVal := GocciaVal.GetProperty(AMethodName);
+    if Assigned(PropVal) then
+      Result := ToSouffleValue(PropVal);
   end;
 end;
 
@@ -6387,6 +7354,8 @@ function BlueprintToClassValue(const ABlueprint: TSouffleBlueprint;
   const ARuntime: TGocciaRuntimeOperations): TGocciaClassValue;
 var
   SuperClass: TGocciaClassValue;
+  GocciaSuperVal: TGocciaValue;
+  WrappedSuperVal: TSouffleValue;
   I: Integer;
   Key: string;
   MethodVal: TSouffleValue;
@@ -6394,7 +7363,13 @@ var
 begin
   SuperClass := nil;
   if Assigned(ABlueprint.SuperBlueprint) then
-    SuperClass := BlueprintToClassValue(ABlueprint.SuperBlueprint, ARuntime);
+    SuperClass := BlueprintToClassValue(ABlueprint.SuperBlueprint, ARuntime)
+  else if ARuntime.FBlueprintSuperValues.TryGetValue(ABlueprint, WrappedSuperVal) then
+  begin
+    GocciaSuperVal := ARuntime.UnwrapToGocciaValue(WrappedSuperVal);
+    if GocciaSuperVal is TGocciaClassValue then
+      SuperClass := TGocciaClassValue(GocciaSuperVal);
+  end;
   Result := TGocciaClassValue.Create(ABlueprint.Name, SuperClass);
   for I := 0 to ABlueprint.Methods.Count - 1 do
   begin
@@ -6631,6 +7606,623 @@ begin
   end;
 end;
 
+{ TGocciaDecoratorSession }
+
+constructor TGocciaDecoratorSession.Create(const AMetadataObject: TGocciaObjectValue);
+begin
+  inherited Create;
+  MetadataObject := AMetadataObject;
+  MethodCollector := TGocciaInitializerCollector.Create;
+  FieldCollector := TGocciaInitializerCollector.Create;
+  StaticFieldCollector := TGocciaInitializerCollector.Create;
+  ClassCollector := TGocciaInitializerCollector.Create;
+  ClassValue := nil;
+end;
+
+destructor TGocciaDecoratorSession.Destroy;
+begin
+  MethodCollector.Free;
+  FieldCollector.Free;
+  StaticFieldCollector.Free;
+  ClassCollector.Free;
+  inherited;
+end;
+
+procedure ParseElementDescriptor(const ADescriptor: string;
+  out AKind: Char; out AName: string; out AFlags: Integer);
+var
+  P1, P2: Integer;
+begin
+  P1 := Pos(':', ADescriptor);
+  AKind := ADescriptor[1];
+  P2 := Pos(':', ADescriptor, P1 + 1);
+  AName := Copy(ADescriptor, P1 + 1, P2 - P1 - 1);
+  AFlags := StrToIntDef(Copy(ADescriptor, P2 + 1, Length(ADescriptor) - P2), 0);
+end;
+
+procedure TGocciaRuntimeOperations.SetupAutoAccessor(
+  const ABlueprint: TSouffleValue; const AName: string;
+  const AInitClosure: TSouffleValue);
+var
+  ClassVal: TGocciaClassValue;
+  BackingName: string;
+begin
+  try
+    if not Assigned(FActiveDecoratorSession) then
+      Exit;
+    if not (FActiveDecoratorSession.ClassValue is TGocciaClassValue) then
+      Exit;
+    ClassVal := TGocciaClassValue(FActiveDecoratorSession.ClassValue);
+    BackingName := '__accessor_' + AName;
+    ClassVal.AddAutoAccessor(AName, BackingName, False);
+  except
+    on E: TGocciaThrowValue do
+      RethrowAsVM(E);
+  end;
+end;
+
+function ResolveSymbolFromKey(const AKey: string): TGocciaSymbolValue;
+var
+  SymIdStr: string;
+  SymId: Integer;
+begin
+  Result := nil;
+  if (Length(AKey) > 6) and (Copy(AKey, 1, 6) = '@@sym:') then
+  begin
+    SymIdStr := Copy(AKey, 7, Length(AKey) - 6);
+    if TryStrToInt(SymIdStr, SymId) then
+      Result := TGocciaSymbolValue.ById(SymId);
+  end;
+end;
+
+function ConvertBlueprintToClassValue(const ABp: TSouffleBlueprint;
+  const ARuntime: TGocciaRuntimeOperations): TGocciaClassValue;
+var
+  SuperClass: TGocciaClassValue;
+  I: Integer;
+  Key: string;
+  Val, WrappedSuperVal: TSouffleValue;
+  GocciaSuperVal: TGocciaValue;
+  MethodBridge: TGocciaSouffleMethodBridge;
+  Sym: TGocciaSymbolValue;
+begin
+  SuperClass := nil;
+  if Assigned(ABp.SuperBlueprint) then
+    SuperClass := ConvertBlueprintToClassValue(ABp.SuperBlueprint, ARuntime)
+  else if ARuntime.FBlueprintSuperValues.TryGetValue(ABp, WrappedSuperVal) then
+  begin
+    GocciaSuperVal := ARuntime.UnwrapToGocciaValue(WrappedSuperVal);
+    if GocciaSuperVal is TGocciaClassValue then
+      SuperClass := TGocciaClassValue(GocciaSuperVal);
+  end;
+
+  Result := TGocciaClassValue.Create(ABp.Name, SuperClass);
+  Result.Prototype.AssignProperty(PROP_CONSTRUCTOR, Result);
+
+  for I := 0 to ABp.Methods.Count - 1 do
+  begin
+    Key := ABp.Methods.GetOrderedKey(I);
+    Val := ABp.Methods.GetOrderedValue(I);
+    if Key = '__fields__' then Continue;
+    if not SouffleIsReference(Val) then Continue;
+    if not (Val.AsReference is TSouffleClosure) then Continue;
+    MethodBridge := TGocciaSouffleMethodBridge.Create(
+      TSouffleClosure(Val.AsReference), ARuntime);
+    MethodBridge.OwningClass := Result;
+    if (Length(Key) > 1) and (Key[1] = '#') then
+    begin
+      Result.AddPrivateMethod(Copy(Key, 2, Length(Key) - 1), MethodBridge);
+      Result.Prototype.AssignProperty(Key, MethodBridge);
+    end
+    else
+      Result.AddMethod(Key, MethodBridge);
+  end;
+
+  if ABp.HasGetters then
+    for I := 0 to ABp.Getters.Count - 1 do
+    begin
+      Key := ABp.Getters.GetOrderedKey(I);
+      Val := ABp.Getters.GetOrderedValue(I);
+      if SouffleIsReference(Val) and (Val.AsReference is TSouffleClosure) then
+      begin
+        Sym := ResolveSymbolFromKey(Key);
+        if Assigned(Sym) then
+          Result.Prototype.DefineSymbolProperty(Sym,
+            TGocciaPropertyDescriptorAccessor.Create(
+              TGocciaSouffleMethodBridge.Create(
+                TSouffleClosure(Val.AsReference), ARuntime),
+              nil, [pfConfigurable]))
+        else
+          Result.AddGetter(Key, TGocciaSouffleMethodBridge.Create(
+            TSouffleClosure(Val.AsReference), ARuntime));
+      end;
+    end;
+
+  if ABp.HasSetters then
+    for I := 0 to ABp.Setters.Count - 1 do
+    begin
+      Key := ABp.Setters.GetOrderedKey(I);
+      Val := ABp.Setters.GetOrderedValue(I);
+      if SouffleIsReference(Val) and (Val.AsReference is TSouffleClosure) then
+      begin
+        Sym := ResolveSymbolFromKey(Key);
+        if Assigned(Sym) then
+          Result.Prototype.DefineSymbolProperty(Sym,
+            TGocciaPropertyDescriptorAccessor.Create(nil,
+              TGocciaSouffleMethodBridge.Create(
+                TSouffleClosure(Val.AsReference), ARuntime),
+              [pfConfigurable]))
+        else
+          Result.AddSetter(Key, TGocciaSouffleMethodBridge.Create(
+            TSouffleClosure(Val.AsReference), ARuntime));
+      end;
+    end;
+
+  if ABp.HasStaticGetters then
+    for I := 0 to ABp.StaticGetters.Count - 1 do
+    begin
+      Key := ABp.StaticGetters.GetOrderedKey(I);
+      Val := ABp.StaticGetters.GetOrderedValue(I);
+      if SouffleIsReference(Val) and (Val.AsReference is TSouffleClosure) then
+      begin
+        Sym := ResolveSymbolFromKey(Key);
+        if Assigned(Sym) then
+          Result.DefineSymbolProperty(Sym,
+            TGocciaPropertyDescriptorAccessor.Create(
+              TGocciaSouffleMethodBridge.Create(
+                TSouffleClosure(Val.AsReference), ARuntime),
+              nil, [pfConfigurable]))
+        else
+          Result.AddStaticGetter(Key, TGocciaSouffleMethodBridge.Create(
+            TSouffleClosure(Val.AsReference), ARuntime));
+      end;
+    end;
+
+  if ABp.HasStaticSetters then
+    for I := 0 to ABp.StaticSetters.Count - 1 do
+    begin
+      Key := ABp.StaticSetters.GetOrderedKey(I);
+      Val := ABp.StaticSetters.GetOrderedValue(I);
+      if SouffleIsReference(Val) and (Val.AsReference is TSouffleClosure) then
+      begin
+        Sym := ResolveSymbolFromKey(Key);
+        if Assigned(Sym) then
+          Result.DefineSymbolProperty(Sym,
+            TGocciaPropertyDescriptorAccessor.Create(nil,
+              TGocciaSouffleMethodBridge.Create(
+                TSouffleClosure(Val.AsReference), ARuntime),
+              [pfConfigurable]))
+        else
+          Result.AddStaticSetter(Key, TGocciaSouffleMethodBridge.Create(
+            TSouffleClosure(Val.AsReference), ARuntime));
+      end;
+    end;
+
+  if ABp.HasStaticFields then
+    for I := 0 to ABp.StaticFields.Count - 1 do
+    begin
+      Key := ABp.StaticFields.GetOrderedKey(I);
+      Val := ABp.StaticFields.GetOrderedValue(I);
+      Result.SetProperty(Key, ARuntime.UnwrapToGocciaValue(Val));
+    end;
+
+  if ABp.Methods.Get('__fields__', Val) and
+     SouffleIsReference(Val) and (Val.AsReference is TSouffleClosure) then
+    Result.SetMethodInitializers([TGocciaSouffleMethodBridge.Create(
+      TSouffleClosure(Val.AsReference), ARuntime)]);
+end;
+
+procedure TGocciaRuntimeOperations.BeginDecorators(
+  const ABlueprint, ASuper: TSouffleValue);
+var
+  Bp: TSouffleBlueprint;
+  ClassVal: TGocciaClassValue;
+  SuperClassVal: TGocciaClassValue;
+  SuperMetadata: TGocciaValue;
+  Meta: TGocciaObjectValue;
+begin
+  try
+    if not (SouffleIsReference(ABlueprint) and
+            Assigned(ABlueprint.AsReference) and
+            (ABlueprint.AsReference is TSouffleBlueprint)) then
+      Exit;
+
+    Bp := TSouffleBlueprint(ABlueprint.AsReference);
+    ClassVal := ConvertBlueprintToClassValue(Bp, Self);
+
+    if not Assigned(ClassVal.SuperClass) and not SouffleIsNil(ASuper) then
+    begin
+      SuperClassVal := nil;
+      if SouffleIsReference(ASuper) and Assigned(ASuper.AsReference) then
+      begin
+        if ASuper.AsReference is TSouffleBlueprint then
+          SuperClassVal := ConvertBlueprintToClassValue(
+            TSouffleBlueprint(ASuper.AsReference), Self)
+        else
+        begin
+          SuperMetadata := UnwrapToGocciaValue(ASuper);
+          if SuperMetadata is TGocciaClassValue then
+            SuperClassVal := TGocciaClassValue(SuperMetadata);
+        end;
+      end;
+      if Assigned(SuperClassVal) then
+        ClassVal.SuperClass := SuperClassVal;
+    end;
+
+    SuperMetadata := nil;
+    if Assigned(ClassVal.SuperClass) then
+      SuperMetadata := ClassVal.SuperClass.GetSymbolProperty(
+        TGocciaSymbolValue.WellKnownMetadata);
+
+    if (SuperMetadata <> nil) and (SuperMetadata is TGocciaObjectValue) then
+      Meta := TGocciaObjectValue.Create(TGocciaObjectValue(SuperMetadata))
+    else
+      Meta := TGocciaObjectValue.Create;
+    TGocciaGarbageCollector.Instance.AddTempRoot(Meta);
+
+    FreeAndNil(FActiveDecoratorSession);
+    FActiveDecoratorSession := TGocciaDecoratorSession.Create(Meta);
+    FActiveDecoratorSession.ClassValue := ClassVal;
+  except
+    on E: TGocciaThrowValue do
+      RethrowAsVM(E);
+  end;
+end;
+
+procedure TGocciaRuntimeOperations.ApplyElementDecorator(
+  const ADecoratorFn: TSouffleValue; const ADescriptor: string);
+var
+  Kind: Char;
+  Name: string;
+  Flags: Integer;
+  IsStatic, IsPrivate: Boolean;
+  ClassVal: TGocciaClassValue;
+  DecoratorFn, ElementValue, DecoratorResult: TGocciaValue;
+  ContextObject, AccessObject, AutoAccessorValue, DecResultObj: TGocciaObjectValue;
+  AccessGetterHelper: TGocciaAccessGetter;
+  AccessSetterHelper: TGocciaAccessSetter;
+  Collector: TGocciaInitializerCollector;
+  DecoratorArgs: TGocciaArgumentsCollection;
+  KindStr: string;
+  NewGetter, NewSetter, NewInit: TGocciaValue;
+begin
+  try
+    if not Assigned(FActiveDecoratorSession) then
+      Exit;
+    ClassVal := nil;
+    if FActiveDecoratorSession.ClassValue is TGocciaClassValue then
+      ClassVal := TGocciaClassValue(FActiveDecoratorSession.ClassValue);
+    if not Assigned(ClassVal) then
+      Exit;
+
+    DecoratorFn := UnwrapToGocciaValue(ADecoratorFn);
+    if not DecoratorFn.IsCallable then
+      ThrowTypeError('Decorator must be a function');
+
+    ParseElementDescriptor(ADescriptor, Kind, Name, Flags);
+    IsStatic := (Flags and 1) <> 0;
+    IsPrivate := (Flags and 2) <> 0;
+
+    case Kind of
+      'm': KindStr := 'method';
+      'g': KindStr := 'getter';
+      's': KindStr := 'setter';
+      'f': KindStr := 'field';
+      'a': KindStr := 'accessor';
+    else
+      KindStr := 'method';
+    end;
+
+    ContextObject := TGocciaObjectValue.Create;
+    ContextObject.AssignProperty(PROP_KIND,
+      TGocciaStringLiteralValue.Create(KindStr));
+    if IsPrivate then
+      ContextObject.AssignProperty(PROP_NAME,
+        TGocciaStringLiteralValue.Create('#' + Name))
+    else
+      ContextObject.AssignProperty(PROP_NAME,
+        TGocciaStringLiteralValue.Create(Name));
+    if IsStatic then
+      ContextObject.AssignProperty(PROP_STATIC,
+        TGocciaBooleanLiteralValue.TrueValue)
+    else
+      ContextObject.AssignProperty(PROP_STATIC,
+        TGocciaBooleanLiteralValue.FalseValue);
+    if IsPrivate then
+      ContextObject.AssignProperty(PROP_PRIVATE,
+        TGocciaBooleanLiteralValue.TrueValue)
+    else
+      ContextObject.AssignProperty(PROP_PRIVATE,
+        TGocciaBooleanLiteralValue.FalseValue);
+    ContextObject.AssignProperty(PROP_METADATA,
+      FActiveDecoratorSession.MetadataObject);
+
+    AccessObject := TGocciaObjectValue.Create;
+    case Kind of
+      'm':
+      begin
+        if IsPrivate then
+        begin
+          ElementValue := ClassVal.GetPrivateMethod(Name);
+          if not Assigned(ElementValue) then
+            ElementValue := ClassVal.Prototype.GetProperty('#' + Name);
+        end
+        else if IsStatic then
+          ElementValue := ClassVal.GetProperty(Name)
+        else
+          ElementValue := ClassVal.Prototype.GetProperty(Name);
+        AccessGetterHelper := TGocciaAccessGetter.Create(ElementValue, Name);
+        AccessObject.AssignProperty(PROP_GET,
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            AccessGetterHelper.Get, PROP_GET, 0));
+        ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
+      end;
+      'f', 'a':
+      begin
+        AccessGetterHelper := TGocciaAccessGetter.Create(nil, Name);
+        AccessSetterHelper := TGocciaAccessSetter.Create(Name);
+        AccessObject.AssignProperty(PROP_GET,
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            AccessGetterHelper.Get, PROP_GET, 0));
+        AccessObject.AssignProperty(PROP_SET,
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            AccessSetterHelper.SetValue, PROP_SET, 1));
+        ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
+      end;
+    end;
+
+    if IsStatic then
+      Collector := FActiveDecoratorSession.StaticFieldCollector
+    else if Kind in ['f', 'a'] then
+      Collector := FActiveDecoratorSession.FieldCollector
+    else
+      Collector := FActiveDecoratorSession.MethodCollector;
+    ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        Collector.AddInitializer, PROP_ADD_INITIALIZER, 1));
+
+    case Kind of
+      'm':
+        ; // ElementValue already set above
+      'g':
+      begin
+        if IsPrivate then
+          ElementValue := ClassVal.PrivatePropertyGetter[Name]
+        else if IsStatic then
+          ElementValue := ClassVal.StaticPropertyGetter[Name]
+        else
+          ElementValue := ClassVal.PropertyGetter[Name];
+      end;
+      's':
+      begin
+        if IsPrivate then
+          ElementValue := ClassVal.PrivatePropertySetter[Name]
+        else if IsStatic then
+          ElementValue := ClassVal.StaticPropertySetter[Name]
+        else
+          ElementValue := ClassVal.PropertySetter[Name];
+      end;
+      'f':
+        ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      'a':
+      begin
+        AutoAccessorValue := TGocciaObjectValue.Create;
+        AutoAccessorValue.AssignProperty(PROP_GET,
+          ClassVal.PropertyGetter[Name]);
+        AutoAccessorValue.AssignProperty(PROP_SET,
+          ClassVal.PropertySetter[Name]);
+        ElementValue := AutoAccessorValue;
+      end;
+    end;
+
+    DecoratorArgs := TGocciaArgumentsCollection.Create([ElementValue, ContextObject]);
+    try
+      DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(
+        DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      DecoratorArgs.Free;
+    end;
+
+    if (DecoratorResult = nil) or (DecoratorResult is TGocciaUndefinedLiteralValue) then
+      Exit;
+
+    case Kind of
+      'm':
+      begin
+        if not DecoratorResult.IsCallable then
+          ThrowTypeError('Method decorator must return a function or undefined');
+        if IsPrivate then
+        begin
+          if DecoratorResult is TGocciaMethodValue then
+            ClassVal.AddPrivateMethod(Name, TGocciaMethodValue(DecoratorResult));
+          ClassVal.Prototype.AssignProperty('#' + Name, DecoratorResult);
+        end
+        else if IsStatic then
+          ClassVal.SetProperty(Name, DecoratorResult)
+        else
+          ClassVal.Prototype.AssignProperty(Name, DecoratorResult);
+      end;
+      'g':
+      begin
+        if not DecoratorResult.IsCallable then
+          ThrowTypeError('Getter decorator must return a function or undefined');
+        if IsPrivate then
+          ClassVal.AddPrivateGetter(Name, TGocciaFunctionValue(DecoratorResult))
+        else if IsStatic then
+          ClassVal.AddStaticGetter(Name, TGocciaFunctionValue(DecoratorResult))
+        else
+          ClassVal.AddGetter(Name, TGocciaFunctionValue(DecoratorResult));
+      end;
+      's':
+      begin
+        if not DecoratorResult.IsCallable then
+          ThrowTypeError('Setter decorator must return a function or undefined');
+        if IsPrivate then
+          ClassVal.AddPrivateSetter(Name, TGocciaFunctionValue(DecoratorResult))
+        else if IsStatic then
+          ClassVal.AddStaticSetter(Name, TGocciaFunctionValue(DecoratorResult))
+        else
+          ClassVal.AddSetter(Name, TGocciaFunctionValue(DecoratorResult));
+      end;
+      'f':
+      begin
+        if not DecoratorResult.IsCallable then
+          ThrowTypeError('Field decorator must return a function or undefined');
+        ClassVal.AddFieldInitializer(Name, DecoratorResult, IsPrivate, IsStatic);
+      end;
+      'a':
+      begin
+        if not (DecoratorResult is TGocciaObjectValue) then
+          ThrowTypeError('Accessor decorator must return an object or undefined');
+        DecResultObj := TGocciaObjectValue(DecoratorResult);
+        NewGetter := DecResultObj.GetProperty(PROP_GET);
+        NewSetter := DecResultObj.GetProperty(PROP_SET);
+        NewInit := DecResultObj.GetProperty(PROP_INIT);
+        if Assigned(NewGetter) and not (NewGetter is TGocciaUndefinedLiteralValue) then
+          ClassVal.AddGetter(Name, TGocciaFunctionValue(NewGetter));
+        if Assigned(NewSetter) and not (NewSetter is TGocciaUndefinedLiteralValue) then
+          ClassVal.AddSetter(Name, TGocciaFunctionValue(NewSetter));
+        if Assigned(NewInit) and not (NewInit is TGocciaUndefinedLiteralValue) and
+           NewInit.IsCallable then
+          ClassVal.AddFieldInitializer(Name, NewInit, IsPrivate, IsStatic);
+      end;
+    end;
+  except
+    on E: TGocciaThrowValue do
+      RethrowAsVM(E);
+  end;
+end;
+
+procedure TGocciaRuntimeOperations.ApplyClassDecorator(
+  const ADecoratorFn: TSouffleValue);
+var
+  ClassVal: TGocciaClassValue;
+  DecoratorFn, DecoratorResult: TGocciaValue;
+  ContextObject: TGocciaObjectValue;
+  DecoratorArgs: TGocciaArgumentsCollection;
+begin
+  try
+    if not Assigned(FActiveDecoratorSession) then
+      Exit;
+    ClassVal := nil;
+    if FActiveDecoratorSession.ClassValue is TGocciaClassValue then
+      ClassVal := TGocciaClassValue(FActiveDecoratorSession.ClassValue);
+    if not Assigned(ClassVal) then
+      Exit;
+
+    DecoratorFn := UnwrapToGocciaValue(ADecoratorFn);
+    if not DecoratorFn.IsCallable then
+      ThrowTypeError('Decorator must be a function');
+
+    ContextObject := TGocciaObjectValue.Create;
+    ContextObject.AssignProperty(PROP_KIND,
+      TGocciaStringLiteralValue.Create('class'));
+    ContextObject.AssignProperty(PROP_NAME,
+      TGocciaStringLiteralValue.Create(ClassVal.Name));
+    ContextObject.AssignProperty(PROP_METADATA,
+      FActiveDecoratorSession.MetadataObject);
+    ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        FActiveDecoratorSession.ClassCollector.AddInitializer,
+        PROP_ADD_INITIALIZER, 1));
+
+    DecoratorArgs := TGocciaArgumentsCollection.Create([ClassVal, ContextObject]);
+    try
+      DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(
+        DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      DecoratorArgs.Free;
+    end;
+
+    if (DecoratorResult <> nil) and
+       not (DecoratorResult is TGocciaUndefinedLiteralValue) then
+    begin
+      if not (DecoratorResult is TGocciaClassValue) then
+        ThrowTypeError('Class decorator must return a class or undefined');
+      FActiveDecoratorSession.ClassValue := DecoratorResult;
+    end;
+  except
+    on E: TGocciaThrowValue do
+      RethrowAsVM(E);
+  end;
+end;
+
+procedure TGocciaRuntimeOperations.FinishDecorators(
+  var ADest: TSouffleValue);
+var
+  ClassVal: TGocciaClassValue;
+  InitializerResults: TArray<TGocciaValue>;
+  I: Integer;
+  InitArgs: TGocciaArgumentsCollection;
+begin
+  try
+    if not Assigned(FActiveDecoratorSession) then
+      Exit;
+
+    ClassVal := nil;
+    if FActiveDecoratorSession.ClassValue is TGocciaClassValue then
+      ClassVal := TGocciaClassValue(FActiveDecoratorSession.ClassValue);
+    if not Assigned(ClassVal) then
+    begin
+      TGocciaGarbageCollector.Instance.RemoveTempRoot(
+        FActiveDecoratorSession.MetadataObject);
+      FreeAndNil(FActiveDecoratorSession);
+      Exit;
+    end;
+
+    FClassDefinitionScopes.AddOrSetValue(ClassVal, nil);
+
+    ClassVal.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownMetadata,
+      TGocciaPropertyDescriptorData.Create(
+        FActiveDecoratorSession.MetadataObject, [pfConfigurable]));
+
+    InitializerResults := FActiveDecoratorSession.MethodCollector.GetInitializers;
+    ClassVal.AppendMethodInitializers(InitializerResults);
+    InitializerResults := FActiveDecoratorSession.FieldCollector.GetInitializers;
+    ClassVal.AppendFieldInitializers(InitializerResults);
+
+    InitializerResults := FActiveDecoratorSession.ClassCollector.GetInitializers;
+    for I := 0 to High(InitializerResults) do
+    begin
+      InitArgs := TGocciaArgumentsCollection.Create;
+      try
+        TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassVal);
+      finally
+        InitArgs.Free;
+      end;
+    end;
+
+    InitializerResults := FActiveDecoratorSession.StaticFieldCollector.GetInitializers;
+    for I := 0 to High(InitializerResults) do
+    begin
+      InitArgs := TGocciaArgumentsCollection.Create;
+      try
+        TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassVal);
+      finally
+        InitArgs.Free;
+      end;
+    end;
+
+    ADest := WrapGocciaValue(ClassVal);
+
+    TGocciaGarbageCollector.Instance.RemoveTempRoot(
+      FActiveDecoratorSession.MetadataObject);
+    FreeAndNil(FActiveDecoratorSession);
+  except
+    on E: TGocciaThrowValue do
+    begin
+      if Assigned(FActiveDecoratorSession) then
+      begin
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(
+          FActiveDecoratorSession.MetadataObject);
+        FreeAndNil(FActiveDecoratorSession);
+      end;
+      RethrowAsVM(E);
+    end;
+  end;
+end;
+
 procedure TGocciaRuntimeOperations.ExtendedOperation(const ASubOp: UInt8;
   var ADest: TSouffleValue; const AOperand, AExtra: TSouffleValue;
   const ATemplate: TSouffleFunctionTemplate;
@@ -6666,6 +8258,34 @@ begin
     14: // GOCCIA_EXT_DEFINE_GLOBAL
       FGlobals.AddOrSetValue(
         ATemplate.GetConstant(AOperandIndex).StringValue, ADest);
+    15: // GOCCIA_EXT_SETUP_AUTO_ACCESSOR
+      SetupAutoAccessor(ADest,
+        ATemplate.GetConstant(AOperandIndex).StringValue, AExtra);
+    16: // GOCCIA_EXT_BEGIN_DECORATORS
+      BeginDecorators(ADest, AExtra);
+    17: // GOCCIA_EXT_APPLY_ELEMENT_DECORATOR
+      ApplyElementDecorator(ADest,
+        ATemplate.GetConstant(AOperandIndex).StringValue);
+    18: // GOCCIA_EXT_APPLY_CLASS_DECORATOR
+      ApplyClassDecorator(ADest);
+    19: // GOCCIA_EXT_FINISH_DECORATORS
+      FinishDecorators(ADest);
+    20: // GOCCIA_EXT_DEF_COMPUTED_GETTER
+      DefineComputedGetter(ADest, AOperand, AExtra);
+    21: // GOCCIA_EXT_DEF_COMPUTED_SETTER
+      DefineComputedSetter(ADest, AOperand, AExtra);
+    22: // GOCCIA_EXT_DEF_COMPUTED_STATIC_GETTER
+      DefineComputedStaticGetter(ADest, AOperand, AExtra);
+    23: // GOCCIA_EXT_DEF_COMPUTED_STATIC_SETTER
+      DefineComputedStaticSetter(ADest, AOperand, AExtra);
+    24: // GOCCIA_EXT_SET_WRAPPED_SUPER
+    begin
+      if SouffleIsReference(ADest) and
+         (ADest.AsReference is TSouffleBlueprint) and
+         not Assigned(TSouffleBlueprint(ADest.AsReference).SuperBlueprint) and
+         SouffleIsReference(AOperand) and Assigned(AOperand.AsReference) then
+        FBlueprintSuperValues.AddOrSetValue(ADest.AsReference, AOperand);
+    end;
   end;
 end;
 
@@ -6694,6 +8314,10 @@ begin
       TSouffleHeapObject(BridgeKey).MarkReferences;
 
   for BridgeKey in FRecordBridgeCache.Keys do
+    if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
+      TSouffleHeapObject(BridgeKey).MarkReferences;
+
+  for BridgeKey in FBlueprintBridgeCache.Keys do
     if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
       TSouffleHeapObject(BridgeKey).MarkReferences;
 
@@ -6731,6 +8355,20 @@ begin
   for BridgeVal in FRecordBridgeCache.Values do
     if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
       TGocciaValue(BridgeVal).MarkReferences;
+
+  for BridgeVal in FBlueprintBridgeCache.Values do
+    if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
+      TGocciaValue(BridgeVal).MarkReferences;
+
+  if Assigned(FActiveDecoratorSession) then
+  begin
+    if Assigned(FActiveDecoratorSession.MetadataObject) and
+       not FActiveDecoratorSession.MetadataObject.GCMarked then
+      FActiveDecoratorSession.MetadataObject.MarkReferences;
+    if Assigned(FActiveDecoratorSession.ClassValue) and
+       not FActiveDecoratorSession.ClassValue.GCMarked then
+      FActiveDecoratorSession.ClassValue.MarkReferences;
+  end;
 end;
 
 {$IFDEF BRIDGE_METRICS}

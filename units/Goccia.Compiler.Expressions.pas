@@ -58,6 +58,14 @@ procedure CompileMethod(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaMethodExpression; const ADest: UInt8);
 procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const ADest: UInt8);
+procedure CompilePrivateMember(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaPrivateMemberExpression; const ADest: UInt8);
+procedure CompilePrivatePropertyAssignment(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaPrivatePropertyAssignmentExpression; const ADest: UInt8);
+procedure CompilePrivatePropertyCompoundAssignment(
+  const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaPrivatePropertyCompoundAssignmentExpression;
+  const ADest: UInt8);
 procedure CompileThis(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8);
 procedure CompileSuperAccess(const ACtx: TGocciaCompilationContext;
@@ -120,6 +128,15 @@ begin
   else
     Result := OP_SET_LOCAL;
   end;
+end;
+
+function PrivateKey(const AScope: TGocciaCompilerScope;
+  const AName: string): string;
+var
+  Prefix: string;
+begin
+  Prefix := AScope.ResolvePrivatePrefix;
+  Result := '#' + Prefix + AName;
 end;
 
 procedure CompileLiteral(const ACtx: TGocciaCompilationContext;
@@ -839,15 +856,59 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, BaseReg, GOCCIA_EXT_SUPER_GET, UInt8(PropIdx)));
     ACtx.Scope.FreeRegister;
 
-    for I := 0 to ArgCount - 1 do
-      ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
-    EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
-    for I := 0 to ArgCount - 1 do
+    if UseSpread then
+    begin
+      ArgsReg := ACtx.Scope.AllocateRegister;
+      CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, ArgsReg, 1));
       ACtx.Scope.FreeRegister;
+    end
+    else
+    begin
+      for I := 0 to ArgCount - 1 do
+        ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
+      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
+      for I := 0 to ArgCount - 1 do
+        ACtx.Scope.FreeRegister;
+    end;
 
     if ADest <> BaseReg then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
 
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end
+  else if AExpr.Callee is TGocciaPrivateMemberExpression then
+  begin
+    ObjReg := ACtx.Scope.AllocateRegister;
+    BaseReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(
+      TGocciaPrivateMemberExpression(AExpr.Callee).ObjectExpr, ObjReg);
+    PropIdx := ACtx.Template.AddConstantString(
+      PrivateKey(ACtx.Scope,
+        TGocciaPrivateMemberExpression(AExpr.Callee).PrivateName));
+    if PropIdx > High(UInt8) then
+      raise Exception.Create('Constant pool overflow: private method name index exceeds 255');
+    EmitInstruction(ACtx, EncodeABC(OP_RECORD_GET, BaseReg, ObjReg, UInt8(PropIdx)));
+
+    if UseSpread then
+    begin
+      ArgsReg := ACtx.Scope.AllocateRegister;
+      CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, ArgsReg, 1));
+      ACtx.Scope.FreeRegister;
+    end
+    else
+    begin
+      for I := 0 to ArgCount - 1 do
+        ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
+      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
+      for I := 0 to ArgCount - 1 do
+        ACtx.Scope.FreeRegister;
+    end;
+
+    if ADest <> BaseReg then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
   end
@@ -870,11 +931,21 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, BaseReg, GOCCIA_EXT_SUPER_GET, UInt8(PropIdx)));
       ACtx.Scope.FreeRegister;
 
-      for I := 0 to ArgCount - 1 do
-        ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
-      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
-      for I := 0 to ArgCount - 1 do
+      if UseSpread then
+      begin
+        ArgsReg := ACtx.Scope.AllocateRegister;
+        CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+        EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, ArgsReg, 1));
         ACtx.Scope.FreeRegister;
+      end
+      else
+      begin
+        for I := 0 to ArgCount - 1 do
+          ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
+        EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
+        for I := 0 to ArgCount - 1 do
+          ACtx.Scope.FreeRegister;
+      end;
 
       if ADest <> BaseReg then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
@@ -1759,6 +1830,72 @@ begin
     ACtx.Template.AddConstantString(Ident.Name)));
   if AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+end;
+
+procedure CompilePrivateMember(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaPrivateMemberExpression; const ADest: UInt8);
+var
+  ObjReg: UInt8;
+  PropIdx: UInt16;
+begin
+  ObjReg := ACtx.Scope.AllocateRegister;
+  ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
+  PropIdx := ACtx.Template.AddConstantString(
+    PrivateKey(ACtx.Scope, AExpr.PrivateName));
+  if PropIdx > High(UInt8) then
+    raise Exception.Create('Constant pool overflow: private property name index exceeds 255');
+  EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, ADest, ObjReg, UInt8(PropIdx)));
+  ACtx.Scope.FreeRegister;
+end;
+
+procedure CompilePrivatePropertyAssignment(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaPrivatePropertyAssignmentExpression; const ADest: UInt8);
+var
+  ObjReg, ValReg: UInt8;
+  KeyIdx: UInt16;
+begin
+  ObjReg := ACtx.Scope.AllocateRegister;
+  ValReg := ACtx.Scope.AllocateRegister;
+  ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
+  ACtx.CompileExpression(AExpr.Value, ValReg);
+  KeyIdx := ACtx.Template.AddConstantString(
+    PrivateKey(ACtx.Scope, AExpr.PrivateName));
+  if KeyIdx > High(UInt8) then
+    raise Exception.Create('Constant pool overflow: private property name index exceeds 255');
+  EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ObjReg, UInt8(KeyIdx), ValReg));
+  if ADest <> ValReg then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ValReg, 0));
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+end;
+
+procedure CompilePrivatePropertyCompoundAssignment(
+  const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaPrivatePropertyCompoundAssignmentExpression;
+  const ADest: UInt8);
+var
+  ObjReg, CurReg, ValReg: UInt8;
+  Op: TSouffleOpCode;
+  PropIdx: UInt16;
+begin
+  Op := CompoundOpToRuntimeOp(AExpr.Operator);
+  ObjReg := ACtx.Scope.AllocateRegister;
+  CurReg := ACtx.Scope.AllocateRegister;
+  ValReg := ACtx.Scope.AllocateRegister;
+  ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
+  PropIdx := ACtx.Template.AddConstantString(
+    PrivateKey(ACtx.Scope, AExpr.PrivateName));
+  if PropIdx > High(UInt8) then
+    raise Exception.Create('Constant pool overflow: private property name index exceeds 255');
+  EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, CurReg, ObjReg, UInt8(PropIdx)));
+  ACtx.CompileExpression(AExpr.Value, ValReg);
+  EmitInstruction(ACtx, EncodeABC(Op, CurReg, CurReg, ValReg));
+  EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ObjReg, UInt8(PropIdx), CurReg));
+  if ADest <> CurReg then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
+  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
