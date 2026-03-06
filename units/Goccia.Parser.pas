@@ -1987,12 +1987,6 @@ begin
     else
       MemberName := Consume(gttIdentifier, 'Expected enum member name').Lexeme;
 
-    if Check(gttColon) then
-    begin
-      Advance;
-      CollectTypeAnnotation([gttAssign]);
-    end;
-
     Consume(gttAssign, 'Expected "=" after enum member name (enum members require explicit initializers)');
     Initializer := Expression;
 
