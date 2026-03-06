@@ -223,6 +223,11 @@ type
     TypeAnnotation: string;
   end;
 
+  TGocciaFieldOrderEntry = record
+    Name: string;
+    IsPrivate: Boolean;
+  end;
+
   // Shared class definition structure
   TGocciaClassDefinition = class
   public
@@ -247,6 +252,7 @@ type
     FInstancePropertyTypes: TDictionary<string, string>;
     FDecorators: TGocciaDecoratorList;
     FElements: array of TGocciaClassElement;
+    FFieldOrder: array of TGocciaFieldOrderEntry;
 
     constructor Create(const AName, ASuperClass: string;
       const AMethods: TDictionary<string, TGocciaClassMethod>;

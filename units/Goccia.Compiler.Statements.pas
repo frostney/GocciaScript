@@ -1080,6 +1080,7 @@ var
   I: Integer;
   Entry: TOrderedMap<TGocciaExpression>.TKeyValuePair;
   Elem: TGocciaClassElement;
+  FieldExpr: TGocciaExpression;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -1097,30 +1098,60 @@ begin
   ChildCtx.Template := ChildTemplate;
   ChildCtx.Scope := ChildScope;
 
-  for I := 0 to AClassDef.InstanceProperties.Count - 1 do
+  if Length(AClassDef.FFieldOrder) > 0 then
   begin
-    Entry := AClassDef.InstanceProperties.EntryAt(I);
-    ValReg := ChildScope.AllocateRegister;
-    ACtx.CompileExpression(Entry.Value, ValReg);
-    KeyIdx := ChildTemplate.AddConstantString(Entry.Key);
-    if KeyIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: field name index exceeds 255');
-    EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
-      UInt8(KeyIdx), ValReg));
-    ChildScope.FreeRegister;
-  end;
+    for I := 0 to High(AClassDef.FFieldOrder) do
+    begin
+      ValReg := ChildScope.AllocateRegister;
+      if AClassDef.FFieldOrder[I].IsPrivate then
+      begin
+        if AClassDef.PrivateInstanceProperties.TryGetValue(
+            AClassDef.FFieldOrder[I].Name, FieldExpr) then
+          ACtx.CompileExpression(FieldExpr, ValReg);
+        KeyIdx := ChildTemplate.AddConstantString(
+          '#' + ChildScope.ResolvePrivatePrefix + AClassDef.FFieldOrder[I].Name);
+      end
+      else
+      begin
+        if AClassDef.InstanceProperties.TryGetValue(
+            AClassDef.FFieldOrder[I].Name, FieldExpr) then
+          ACtx.CompileExpression(FieldExpr, ValReg);
+        KeyIdx := ChildTemplate.AddConstantString(AClassDef.FFieldOrder[I].Name);
+      end;
+      if KeyIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: field name index exceeds 255');
+      EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
+        UInt8(KeyIdx), ValReg));
+      ChildScope.FreeRegister;
+    end;
+  end
+  else
+  begin
+    for I := 0 to AClassDef.InstanceProperties.Count - 1 do
+    begin
+      Entry := AClassDef.InstanceProperties.EntryAt(I);
+      ValReg := ChildScope.AllocateRegister;
+      ACtx.CompileExpression(Entry.Value, ValReg);
+      KeyIdx := ChildTemplate.AddConstantString(Entry.Key);
+      if KeyIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: field name index exceeds 255');
+      EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
+        UInt8(KeyIdx), ValReg));
+      ChildScope.FreeRegister;
+    end;
 
-  for I := 0 to AClassDef.PrivateInstanceProperties.Count - 1 do
-  begin
-    Entry := AClassDef.PrivateInstanceProperties.EntryAt(I);
-    ValReg := ChildScope.AllocateRegister;
-    ACtx.CompileExpression(Entry.Value, ValReg);
-    KeyIdx := ChildTemplate.AddConstantString('#' + ChildScope.ResolvePrivatePrefix + Entry.Key);
-    if KeyIdx > High(UInt8) then
-      raise Exception.Create('Constant pool overflow: field name index exceeds 255');
-    EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
-      UInt8(KeyIdx), ValReg));
-    ChildScope.FreeRegister;
+    for I := 0 to AClassDef.PrivateInstanceProperties.Count - 1 do
+    begin
+      Entry := AClassDef.PrivateInstanceProperties.EntryAt(I);
+      ValReg := ChildScope.AllocateRegister;
+      ACtx.CompileExpression(Entry.Value, ValReg);
+      KeyIdx := ChildTemplate.AddConstantString('#' + ChildScope.ResolvePrivatePrefix + Entry.Key);
+      if KeyIdx > High(UInt8) then
+        raise Exception.Create('Constant pool overflow: field name index exceeds 255');
+      EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
+        UInt8(KeyIdx), ValReg));
+      ChildScope.FreeRegister;
+    end;
   end;
 
   for I := 0 to High(AClassDef.FElements) do
@@ -1493,18 +1524,31 @@ var
   LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;
+  HasNameBinding: Boolean;
+  ClosedLocals: array[0..0] of UInt8;
+  ClosedCount, I: Integer;
 begin
   ClassDef := AClassDef;
   HasSuper := ClassDef.SuperClass <> '';
+  HasNameBinding := ClassDef.Name <> '';
 
   PrivPrefix := NextClassPrivatePrefix;
   ACtx.Scope.PrivatePrefix := PrivPrefix;
 
-  if ClassDef.Name <> '' then
+  if HasNameBinding then
     NameIdx := ACtx.Template.AddConstantString(ClassDef.Name)
   else
     NameIdx := ACtx.Template.AddConstantString('<anonymous>');
   EmitInstruction(ACtx, EncodeABx(OP_NEW_BLUEPRINT, ADest, NameIdx));
+
+  // ES2026 §15.7.14: Named class expressions bind the name in an inner
+  // block scope visible to methods/static initializers via upvalue capture
+  if HasNameBinding then
+  begin
+    ACtx.Scope.BeginScope;
+    ACtx.Scope.DeclareLocal(ClassDef.Name, True);
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ACtx.Scope.NextSlot - 1, ADest, 0));
+  end;
 
   if HasSuper then
   begin
@@ -1612,6 +1656,13 @@ begin
   end
   else
     CompileDecoratorAndAccessorPass(ACtx, ADest, ClassDef, -1);
+
+  if HasNameBinding then
+  begin
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+  end;
 
   ACtx.Scope.PrivatePrefix := '';
 end;
