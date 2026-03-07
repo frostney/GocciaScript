@@ -13,6 +13,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.ControlFlow,
   Goccia.Evaluator,
   Goccia.Scope,
   Goccia.TestSetup,
@@ -526,7 +527,7 @@ type
     LastValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
     for I := 0 to Statements.Count - 1 do
-      LastValue := Evaluate(Statements[I], Context);
+      LastValue := Evaluate(Statements[I], Context).Value;
 
     Expect<Double>(LastValue.ToNumberLiteral.Value).ToBe(1);
 
@@ -556,7 +557,7 @@ type
     LastValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
     for I := 0 to Statements.Count - 1 do
-      LastValue := Evaluate(Statements[I], Context);
+      LastValue := Evaluate(Statements[I], Context).Value;
 
     Expect<Double>(LastValue.ToNumberLiteral.Value).ToBe(3);
 

@@ -211,11 +211,11 @@ GocciaScript uses a layered error approach:
 2. **Runtime errors** use a callback pattern (`OnError` in `TGocciaEvaluationContext`) — this keeps evaluator functions pure.
 3. **JavaScript-level errors** use `TGocciaThrowValue` for `throw` statements and `try/catch` — these flow through the evaluator's return path.
 4. **`try-finally` without `catch`** — The evaluator wraps the Pascal `try...except` in a Pascal `try...finally` to guarantee the JS `finally` block runs before exceptions propagate, even when no `catch` clause exists.
-5. **`break` in `switch`** — Uses `TGocciaBreakSignal` (a Pascal exception) to exit `switch` cases. The `EvaluateSwitch` function catches this signal to implement JavaScript's fall-through-until-break semantics.
+5. **`break` and `return`** — Use `TGocciaControlFlow` result records (`cfkBreak`, `cfkReturn`) instead of Pascal exceptions. Statement-level evaluator functions return `TGocciaControlFlow`, and callers check `Result.Kind` to propagate signals. This eliminates `FPC_SETJMP` overhead from the interpreter's hot path (function calls, loop iterations, switch statements). `EvaluateSwitch` checks `CF.Kind = cfkBreak` after each case statement to implement JavaScript's fall-through-until-break semantics.
 
 **Centralized error construction** — `Goccia.Values.ErrorHelper.pas` provides `ThrowTypeError`, `ThrowRangeError`, `ThrowReferenceError`, and `CreateErrorObject` helpers. All error throw sites across the codebase use these helpers instead of manually building error objects, reducing duplication and ensuring consistent error formatting.
 
-**Why not exceptions everywhere?** Pascal exceptions disrupt the pure-function model of the evaluator. The callback pattern allows the evaluator to signal errors without unwinding the call stack, making control flow explicit. The exceptions to this rule (`TGocciaThrowValue`, `TGocciaReturnValue`, `TGocciaBreakSignal`) are used only for non-local exits where unwinding is the intended behavior.
+**Why not exceptions everywhere?** Pascal exceptions disrupt the pure-function model of the evaluator. The callback pattern allows the evaluator to signal errors without unwinding the call stack, making control flow explicit. `TGocciaThrowValue` is the only exception used for non-local exits — it propagates naturally through the call stack to `EvaluateTry` (JS `try...catch`) or the top-level handler. `return` and `break` use lightweight `TGocciaControlFlow` records instead of exceptions, avoiding `setjmp`/`longjmp` overhead on every function call and loop iteration.
 
 ## Mark-and-Sweep Garbage Collector
 

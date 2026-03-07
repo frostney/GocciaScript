@@ -197,7 +197,7 @@ The largest component. Implements the actual semantics of the language as **pure
 
 | Module | Responsibility |
 |--------|---------------|
-| `Goccia.Evaluator.pas` | Core dispatch, expressions, statements, classes, function name inference, `EvaluateStatementsSafe`, spread helpers |
+| `Goccia.Evaluator.pas` | Core dispatch, expressions, statements, classes, function name inference, `EvaluateStatements`, spread helpers |
 | `Goccia.Evaluator.Arithmetic.pas` | `+` (uses `ToPrimitive`), `-`, `*`, `**`, `/`, `%` (float), compound assignment dispatch. Division and exponentiation use `IsActualZero` and special-value enum checks for IEEE-754 correctness with `NaN`/`±Infinity`/`-0` |
 | `Goccia.Evaluator.Bitwise.pas` | `&`, `\|`, `^`, `<<`, `>>`, `>>>` |
 | `Goccia.Evaluator.Comparison.pas` | `===`, `!==`, `<`, `>`, `<=`, `>=` |
@@ -208,7 +208,7 @@ The largest component. Implements the actual semantics of the language as **pure
 
 Shared helper functions reduce duplication across the evaluator:
 
-- **`EvaluateStatementsSafe`** — Executes a list of AST nodes with standardized exception handling: re-raises GocciaScript signals (`TGocciaReturnValue`, `TGocciaThrowValue`, `TGocciaBreakSignal`, type/reference/runtime errors) and wraps unexpected Pascal exceptions. Used by `EvaluateBlock`, `EvaluateTry` (try/catch/finally blocks), and other statement-list contexts.
+- **`EvaluateStatements`** — Executes a list of AST nodes, returning `TGocciaControlFlow`. Propagates `cfkReturn` and `cfkBreak` signals by exiting early when `Result.Kind <> cfkNormal`. `TGocciaThrowValue` exceptions propagate naturally without interception. Used by `EvaluateBlock`, `EvaluateTry` (try/catch/finally blocks), and other statement-list contexts.
 - **`SpreadIterableInto` / `SpreadIterableIntoArgs`** — Shared spread expansion logic for array, string, Set, and Map values. Used by `EvaluateCall`, `EvaluateArray`, and `EvaluateObject` to handle `...spread` expressions uniformly.
 - **`CopyStatementList`** — Creates a non-owning copy of an AST statement list (used by getters, setters, arrow functions, and class methods to avoid ownership conflicts).
 - **`DefinePropertyOnValue`** — Defines a property with a full descriptor on objects, falling back to `SetProperty` for non-objects.
