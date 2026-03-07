@@ -4,7 +4,7 @@
 
 ## What is GocciaScript?
 
-GocciaScript is a subset of JavaScript implemented in FreePascal. It strips away the quirks of early ECMAScript — `var`, `function`, loose equality, `eval`, traditional loops — and keeps the modern parts: arrow functions, classes with private fields, async/await, modules, and strict typing. If you've written modern JavaScript, you already know most of GocciaScript.
+GocciaScript is a subset of JavaScript implemented in FreePascal. It strips away the quirks of early ECMAScript — `var`, `function`, loose equality, `eval`, traditional loops — and keeps the modern parts: arrow functions, classes with private fields, async/await, modules, and implicit strict mode. If you've written modern JavaScript, you already know most of GocciaScript.
 
 ## Prerequisites
 
@@ -24,7 +24,7 @@ choco install freepascal
 Clone the repository and build the script loader:
 
 ```bash
-git clone https://github.com/nicholasgasior/GocciaScript.git
+git clone https://github.com/frostney/GocciaScript.git
 cd GocciaScript
 ./build.pas loader
 ```
@@ -48,7 +48,7 @@ Run it:
 
 You should see:
 
-```
+```text
 Hello from GocciaScript!
 ```
 
