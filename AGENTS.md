@@ -135,12 +135,12 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Array Utils | `Goccia.Utils.Array.pas` | `ArrayCreateDataProperty` helper for spec-compliant array operations |
 | TypedArray Value | `Goccia.Values.TypedArrayValue.pas` | `TGocciaTypedArrayValue` — view over ArrayBuffer with fixed element type (Int8, Uint8, Uint8Clamped, Int16, Uint16, Int32, Uint32, Float32, Float64), `TGocciaTypedArrayClassValue`, `TGocciaTypedArrayStaticFrom` |
 | Test Console | `Goccia.Builtins.TestConsole.pas` | Silent console override for `--silent` mode in TestRunner |
-| Souffle VM | `Souffle.VM.pas` | Register-based bytecode VM with two-tier dispatch (Tier 1 intrinsic + Tier 2 runtime) |
+| Souffle VM | `Souffle.VM.pas` | Register-based bytecode VM with two-tier dispatch (Tier 1 intrinsic + Tier 2 runtime); `ResolveAsyncThrow` converts unhandled throws in async frames to rejected promises and resumes the VM loop when caller frames remain |
 | Souffle Value | `Souffle.Value.pas` | `TSouffleValue` tagged union: Nil, Boolean, Integer, Float, Reference |
 | Souffle Bytecode | `Souffle.Bytecode.pas` | Opcode definitions (Tier 1 + Tier 2), 32-bit instruction encoding/decoding |
 | Souffle Bytecode Chunk | `Souffle.Bytecode.Chunk.pas` | `TSouffleFunctionTemplate` — code, constants, upvalue descriptors, exception handlers |
 | Souffle Bytecode Module | `Souffle.Bytecode.Module.pas` | `TSouffleBytecodeModule` — top-level function template, imports, exports, runtime tag |
-| Souffle Bytecode Binary | `Souffle.Bytecode.Binary.pas` | `.sbc` file serialization/deserialization |
+| Souffle Bytecode Binary | `Souffle.Bytecode.Binary.pas` | `.sbc` file serialization/deserialization (`SOUFFLE_FORMAT_VERSION = 2`: adds per-local strict flags and `TypeCheckPreambleSize`) |
 | Souffle Debug Info | `Souffle.Bytecode.Debug.pas` | Source line mapping, local variable info for debuggers |
 | Souffle Closure | `Souffle.VM.Closure.pas` | `TSouffleClosure` — function prototype + captured upvalue array |
 | Souffle Upvalue | `Souffle.VM.Upvalue.pas` | `TSouffleUpvalue` — open (register pointer) or closed (captured value) |
@@ -154,7 +154,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Compiler Expressions | `Goccia.Compiler.Expressions.pas` | Expression compilation: functions, methods, identifiers, typed local load/store |
 | Compiler Statements | `Goccia.Compiler.Statements.pas` | Statement compilation: variables, classes (`IsSimpleClass` + `CompileClassDeclaration`), control flow |
 | Compiler Context | `Goccia.Compiler.Context.pas` | `TGocciaCompilationContext` — compilation state passed through sub-units |
-| Compiler Scope | `Goccia.Compiler.Scope.pas` | `TGocciaCompilerScope` — lexical scope tracking, local/upvalue resolution, type hints (`TSouffleLocalType`); `DeclareLocal` resets all fields including `ReturnTypeHint`, `ParamTypeSignature`, and `IsGlobalBacked` to prevent stale metadata when array slots are reused after `EndScope` |
+| Compiler Scope | `Goccia.Compiler.Scope.pas` | `TGocciaCompilerScope` — lexical scope tracking, local/upvalue resolution, type hints (`TSouffleLocalType`); `DeclareLocal` resets all fields including `ReturnTypeHint`, `ParamTypeSignature`, and `IsGlobalBacked` to prevent stale metadata when array slots are reused after `EndScope`. `TGocciaCompilerUpvalue` carries `IsGlobalBacked` — propagated from the parent local or parent upvalue in `ResolveUpvalue` — so trusted-call inference can reject global-backed upvalue callees |
 | Compiler Constant Folding | `Goccia.Compiler.ConstantFolding.pas` | Compile-time constant folding for arithmetic and comparison expressions |
 | Compiler Extension Ops | `Goccia.Compiler.ExtOps.pas` | GocciaScript-specific sub-opcode constants (`GOCCIA_EXT_*`) for `OP_RT_EXT` dispatch |
 | GocciaScript Runtime | `Goccia.Runtime.Operations.pas` | `TGocciaRuntimeOperations` — GocciaScript semantics for Souffle VM, bridge caches (`FClosureBridgeCache`, `FArrayBridgeCache`, `FArrayBridgeReverse`, `FRecordBridgeCache`, `FBlueprintBridgeCache`), cross-GC rooting, array bridge sync (`SyncCachedGocciaToSouffle` at bridge entry, `SyncSouffleArrayToCache` after native mutations), native delegate methods (array, string, number, Map, Set), `FBlueprintSuperValues` for built-in subclass static property inheritance |
@@ -169,7 +169,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 - NaN handling in the Souffle layer uses raw IEEE 754 bit-pattern checks (`FloatBitsAreNaN`), not FPC's `Math.IsNaN`, to avoid language-runtime dependencies and AArch64 pitfalls.
 - New Tier 2 opcodes should only be added when no combination of existing opcodes can express the semantics efficiently. Language-specific features should use `OP_RT_EXT` with sub-opcode IDs defined in the language's extension constants unit (e.g., `Goccia.Compiler.ExtOps.pas`).
 - The `TSouffleRuntimeOperations` abstract class defines the contract between the VM and any language frontend (45 generic methods + 1 `ExtendedOperation` for sub-opcode dispatch). GocciaScript's `TGocciaRuntimeOperations` is one implementation; future frontends provide their own.
-- **Spread calling** uses the C flags byte on `OP_RT_CALL` / `OP_RT_CALL_METHOD` (bit 0 = spread mode, B = args array register). No separate spread opcodes.
+- **Spread calling** uses the C flags byte on `OP_RT_CALL` / `OP_RT_CALL_METHOD` (bit 0 = spread mode, bit 1 = trusted flag, B = args array register in spread mode). Both opcodes propagate the trusted flag into `CallClosure`. No separate spread opcodes.
 - **Per-property flags** (writable, configurable) on `TSouffleRecordEntry.Flags` are the fundamental primitive. `SetEntryFlags`, `PutWithFlags`, and `PreventExtensions` are the building blocks. Bulk operations like `Freeze` (set all flags to 0 + prevent extensions) are derived convenience methods called from language runtimes — not opcodes.
 
 ## Development Workflow

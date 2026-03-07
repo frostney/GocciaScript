@@ -5,7 +5,7 @@ unit Souffle.Bytecode;
 interface
 
 const
-  SOUFFLE_FORMAT_VERSION = 1;
+  SOUFFLE_FORMAT_VERSION = 2;
   SOUFFLE_BINARY_MAGIC: array[0..3] of Byte = (Ord('S'), Ord('B'), Ord('C'), 0);
 
   OP_RT_FIRST = 128;

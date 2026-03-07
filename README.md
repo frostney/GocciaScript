@@ -72,7 +72,7 @@ GocciaScript implements several active TC39 proposals:
 |----------|-------|-------------|
 | [Decorators](https://github.com/tc39/proposal-decorators) | 3 | Class, method, field, getter/setter, auto-accessor decorators with `addInitializer` |
 | [Decorator Metadata](https://github.com/tc39/proposal-decorator-metadata) | 3 | `Symbol.metadata` for decorator-attached class metadata with inheritance |
-| [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | TypeScript-style type annotations parsed at runtime; in bytecode mode, annotations and inferred types provide strict enforcement (reassignment to incompatible types throws `TypeError`) |
+| [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | TypeScript-style type annotations parsed by the frontend; in bytecode mode, annotations and inferred types provide runtime enforcement (reassignment to incompatible types throws `TypeError`) |
 | [Enum Declarations](https://github.com/tc39/proposal-enum) | 0 | Frozen, null-prototype enum objects with `Symbol.iterator` |
 | [Temporal](https://tc39.es/proposal-temporal/) | 3 | Modern date/time API (`Temporal.PlainDate`, `Temporal.Duration`, `Temporal.Instant`, etc.) |
 | [`Math.clamp`](https://github.com/tc39/proposal-math-clamp) | 3 | Clamp a value to a range |

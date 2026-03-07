@@ -29,6 +29,7 @@ type
     Index: UInt8;
     IsLocal: Boolean;
     IsConst: Boolean;
+    IsGlobalBacked: Boolean;
     TypeHint: TSouffleLocalType;
     IsStrictlyTyped: Boolean;
     ReturnTypeHint: TSouffleLocalType;
@@ -156,6 +157,7 @@ begin
     FParent.MarkCaptured(LocalIdx);
     Idx := AddUpvalue(FParent.FLocals[LocalIdx].Slot, True,
       FParent.FLocals[LocalIdx].IsConst);
+    FUpvalues[Idx].IsGlobalBacked := FParent.FLocals[LocalIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FLocals[LocalIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FLocals[LocalIdx].IsStrictlyTyped;
     FUpvalues[Idx].ReturnTypeHint := FParent.FLocals[LocalIdx].ReturnTypeHint;
@@ -170,6 +172,7 @@ begin
       raise Exception.Create('Compiler error: upvalue index overflow (>255)');
     Idx := AddUpvalue(UInt8(UpvalueIdx), False,
       FParent.FUpvalues[UpvalueIdx].IsConst);
+    FUpvalues[Idx].IsGlobalBacked := FParent.FUpvalues[UpvalueIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FUpvalues[UpvalueIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FUpvalues[UpvalueIdx].IsStrictlyTyped;
     FUpvalues[Idx].ReturnTypeHint := FParent.FUpvalues[UpvalueIdx].ReturnTypeHint;
@@ -196,6 +199,7 @@ begin
   FUpvalues[FUpvalueCount].Index := AIndex;
   FUpvalues[FUpvalueCount].IsLocal := AIsLocal;
   FUpvalues[FUpvalueCount].IsConst := AIsConst;
+  FUpvalues[FUpvalueCount].IsGlobalBacked := False;
   FUpvalues[FUpvalueCount].TypeHint := sltUntyped;
   FUpvalues[FUpvalueCount].IsStrictlyTyped := False;
   FUpvalues[FUpvalueCount].ReturnTypeHint := sltUntyped;

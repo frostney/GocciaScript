@@ -295,6 +295,8 @@ begin
       UV := ACtx.Scope.GetUpvalue(LocalIdx);
       if not UV.IsConst then
         Exit;
+      if UV.IsGlobalBacked then
+        Exit;
       Sig := UV.ParamTypeSignature;
     end;
   end;

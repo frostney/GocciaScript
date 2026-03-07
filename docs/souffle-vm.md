@@ -819,6 +819,10 @@ The `.sbc` (Souffle ByteCode) binary format enables ahead-of-time compilation an
 │   LocalTypeCount: UInt8              │
 │   Per local type:                    │
 │     Kind: UInt8 (0=untyped..5=ref)   │
+│   LocalStrictCount: UInt8            │
+│   Per local strict flag:             │
+│     IsStrict: UInt8 (boolean)        │
+│   TypeCheckPreambleSize: UInt8       │
 └──────────────────────────────────────┘
 ```
 

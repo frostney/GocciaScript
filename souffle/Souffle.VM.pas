@@ -534,6 +534,8 @@ begin
         begin
           if not ResolveAsyncThrow(E.ThrownValue) then
             raise;
+          if FCallStack.Count >= FBaseFrameCount then
+            Running := True;
         end;
       end;
     end;
@@ -1794,7 +1796,8 @@ begin
       begin
         if FRegisters[Base + A].AsReference is TSouffleClosure then
           CallClosure(TSouffleClosure(FRegisters[Base + A].AsReference),
-            Base + A + 1, B, Base + A, FRegisters[Base + A - 1])
+            Base + A + 1, B, Base + A, FRegisters[Base + A - 1],
+            C and 2 <> 0)
         else if FRegisters[Base + A].AsReference is TSouffleNativeFunction then
           FRegisters[Base + A] := TSouffleNativeFunction(
             FRegisters[Base + A].AsReference).Invoke(
