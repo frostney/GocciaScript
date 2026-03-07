@@ -184,6 +184,7 @@ begin
       RegisterGlobal(Names[I], GlobalScope.GetValue(Names[I]));
   end;
 
+  FRuntime.PatchGocciaScriptStrictTypes;
   FRuntime.RegisterDelegates;
   FRuntime.RegisterTestNatives;
   FRuntime.RegisterNativeBuiltins;

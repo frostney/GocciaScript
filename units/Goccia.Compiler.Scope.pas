@@ -20,12 +20,15 @@ type
     IsConst: Boolean;
     IsGlobalBacked: Boolean;
     TypeHint: TSouffleLocalType;
+    IsStrictlyTyped: Boolean;
   end;
 
   TGocciaCompilerUpvalue = record
     Index: UInt8;
     IsLocal: Boolean;
     IsConst: Boolean;
+    TypeHint: TSouffleLocalType;
+    IsStrictlyTyped: Boolean;
   end;
 
   TGocciaCompilerScope = class
@@ -69,6 +72,8 @@ type
     procedure MarkGlobalBacked(const AIndex: Integer);
     procedure SetLocalTypeHint(const AIndex: Integer;
       const ATypeHint: TSouffleLocalType);
+    procedure SetLocalStrictlyTyped(const AIndex: Integer;
+      const AStrictlyTyped: Boolean);
     function ResolvePrivatePrefix: string;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
   end;
@@ -107,6 +112,7 @@ begin
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsConst := AIsConst;
   FLocals[FLocalCount].TypeHint := sltUntyped;
+  FLocals[FLocalCount].IsStrictlyTyped := False;
   Result := FNextSlot;
   Inc(FLocalCount);
   Inc(FNextSlot);
@@ -128,6 +134,7 @@ function TGocciaCompilerScope.ResolveUpvalue(const AName: string): Integer;
 var
   LocalIdx: Integer;
   UpvalueIdx: Integer;
+  Idx: Integer;
 begin
   if not Assigned(FParent) then
     Exit(-1);
@@ -136,8 +143,11 @@ begin
   if LocalIdx >= 0 then
   begin
     FParent.MarkCaptured(LocalIdx);
-    Exit(AddUpvalue(FParent.FLocals[LocalIdx].Slot, True,
-      FParent.FLocals[LocalIdx].IsConst));
+    Idx := AddUpvalue(FParent.FLocals[LocalIdx].Slot, True,
+      FParent.FLocals[LocalIdx].IsConst);
+    FUpvalues[Idx].TypeHint := FParent.FLocals[LocalIdx].TypeHint;
+    FUpvalues[Idx].IsStrictlyTyped := FParent.FLocals[LocalIdx].IsStrictlyTyped;
+    Exit(Idx);
   end;
 
   UpvalueIdx := FParent.ResolveUpvalue(AName);
@@ -145,8 +155,11 @@ begin
   begin
     if UpvalueIdx > High(UInt8) then
       raise Exception.Create('Compiler error: upvalue index overflow (>255)');
-    Exit(AddUpvalue(UInt8(UpvalueIdx), False,
-      FParent.FUpvalues[UpvalueIdx].IsConst));
+    Idx := AddUpvalue(UInt8(UpvalueIdx), False,
+      FParent.FUpvalues[UpvalueIdx].IsConst);
+    FUpvalues[Idx].TypeHint := FParent.FUpvalues[UpvalueIdx].TypeHint;
+    FUpvalues[Idx].IsStrictlyTyped := FParent.FUpvalues[UpvalueIdx].IsStrictlyTyped;
+    Exit(Idx);
   end;
 
   Result := -1;
@@ -168,6 +181,8 @@ begin
   FUpvalues[FUpvalueCount].Index := AIndex;
   FUpvalues[FUpvalueCount].IsLocal := AIsLocal;
   FUpvalues[FUpvalueCount].IsConst := AIsConst;
+  FUpvalues[FUpvalueCount].TypeHint := sltUntyped;
+  FUpvalues[FUpvalueCount].IsStrictlyTyped := False;
   Result := FUpvalueCount;
   Inc(FUpvalueCount);
 end;
@@ -238,6 +253,12 @@ procedure TGocciaCompilerScope.SetLocalTypeHint(const AIndex: Integer;
   const ATypeHint: TSouffleLocalType);
 begin
   FLocals[AIndex].TypeHint := ATypeHint;
+end;
+
+procedure TGocciaCompilerScope.SetLocalStrictlyTyped(const AIndex: Integer;
+  const AStrictlyTyped: Boolean);
+begin
+  FLocals[AIndex].IsStrictlyTyped := AStrictlyTyped;
 end;
 
 function TGocciaCompilerScope.ResolvePrivatePrefix: string;

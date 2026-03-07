@@ -5,11 +5,16 @@ unit Goccia.Compiler.Expressions;
 interface
 
 uses
+  Souffle.Bytecode,
+  Souffle.Bytecode.Chunk,
+
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
   Goccia.Compiler.Context,
   Goccia.Compiler.Scope;
+
+function TypedSetLocalOp(const AHint: TSouffleLocalType): TSouffleOpCode;
 
 procedure CompileLiteral(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaLiteralExpression; const ADest: UInt8);
@@ -88,13 +93,12 @@ uses
   Math,
   SysUtils,
 
-  Souffle.Bytecode,
-  Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Debug,
   Souffle.Value,
 
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.ExtOps,
+  Goccia.Compiler.Statements,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
@@ -112,6 +116,7 @@ begin
     sltBoolean:   Result := OP_GET_LOCAL_BOOL;
     sltString:    Result := OP_GET_LOCAL_STRING;
     sltReference: Result := OP_GET_LOCAL_REF;
+    sltNumber:    Result := OP_GET_LOCAL_NUMBER;
   else
     Result := OP_GET_LOCAL;
   end;
@@ -125,6 +130,7 @@ begin
     sltBoolean:   Result := OP_SET_LOCAL_BOOL;
     sltString:    Result := OP_SET_LOCAL_STRING;
     sltReference: Result := OP_SET_LOCAL_REF;
+    sltNumber:    Result := OP_SET_LOCAL_NUMBER;
   else
     Result := OP_SET_LOCAL;
   end;
@@ -419,7 +425,9 @@ begin
     end;
     Slot := Local.Slot;
     Hint := Local.TypeHint;
-    if ADest <> Slot then
+    if Local.IsStrictlyTyped and (Hint <> sltUntyped) then
+      EmitInstruction(ACtx, EncodeABx(TypedSetLocalOp(Hint), ADest, Slot))
+    else if ADest <> Slot then
     begin
       if Hint <> sltUntyped then
         EmitInstruction(ACtx, EncodeABx(TypedSetLocalOp(Hint), ADest, Slot))
@@ -442,6 +450,10 @@ begin
         GOCCIA_EXT_THROW_TYPE_ERROR, UInt8(MsgIdx)));
       Exit;
     end;
+    if ACtx.Scope.GetUpvalue(UpvalIdx).IsStrictlyTyped then
+      EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ADest,
+        GOCCIA_EXT_CHECK_TYPE,
+        UInt8(Ord(ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint))));
     EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, ADest, UInt16(UpvalIdx)));
     Exit;
   end;
@@ -709,6 +721,70 @@ begin
   end;
 end;
 
+procedure ApplyParameterTypeAnnotations(
+  const AScope: TGocciaCompilerScope;
+  const ATemplate: TSouffleFunctionTemplate;
+  const AParameters: TGocciaParameterArray);
+var
+  I, LocalIdx: Integer;
+  AnnotationType: TSouffleLocalType;
+  ParamName: string;
+begin
+  for I := 0 to High(AParameters) do
+  begin
+    if AParameters[I].TypeAnnotation = '' then
+      Continue;
+    if AParameters[I].IsRest then
+      Continue;
+    if AParameters[I].IsOptional then
+      Continue;
+    if Assigned(AParameters[I].DefaultValue) then
+      Continue;
+    AnnotationType := TypeAnnotationToLocalType(AParameters[I].TypeAnnotation);
+    if AnnotationType = sltUntyped then
+      Continue;
+    if AParameters[I].IsPattern then
+      ParamName := '__param' + IntToStr(I)
+    else
+      ParamName := AParameters[I].Name;
+    LocalIdx := AScope.ResolveLocal(ParamName);
+    if LocalIdx < 0 then
+      Continue;
+    AScope.SetLocalTypeHint(LocalIdx, AnnotationType);
+    AScope.SetLocalStrictlyTyped(LocalIdx, True);
+    ATemplate.SetLocalType(AScope.GetLocal(LocalIdx).Slot, AnnotationType);
+    ATemplate.SetLocalStrictFlag(AScope.GetLocal(LocalIdx).Slot, True);
+  end;
+end;
+
+procedure EmitParameterTypeChecks(const ACtx: TGocciaCompilationContext;
+  const AParameters: TGocciaParameterArray);
+var
+  I, LocalIdx: Integer;
+  Local: TGocciaCompilerLocal;
+  ParamName: string;
+begin
+  for I := 0 to High(AParameters) do
+  begin
+    if AParameters[I].TypeAnnotation = '' then
+      Continue;
+    if AParameters[I].IsRest then
+      Continue;
+    if AParameters[I].IsPattern then
+      ParamName := '__param' + IntToStr(I)
+    else
+      ParamName := AParameters[I].Name;
+    LocalIdx := ACtx.Scope.ResolveLocal(ParamName);
+    if LocalIdx < 0 then
+      Continue;
+    Local := ACtx.Scope.GetLocal(LocalIdx);
+    if not Local.IsStrictlyTyped then
+      Continue;
+    EmitInstruction(ACtx, EncodeABx(
+      TypedSetLocalOp(Local.TypeHint), Local.Slot, Local.Slot));
+  end;
+end;
+
 procedure CompileArrowFunction(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaArrowFunctionExpression; const ADest: UInt8);
 var
@@ -754,6 +830,8 @@ begin
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
 
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters);
+
   if FormalCount < 0 then
     FormalCount := Length(AExpr.Parameters);
   if Assigned(ACtx.FormalParameterCounts) then
@@ -774,6 +852,7 @@ begin
 
     EmitDefaultParameters(ChildCtx, AExpr.Parameters);
     EmitDestructuringParameters(ChildCtx, AExpr.Parameters);
+    EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
 
     ACtx.CompileFunctionBody(AExpr.Body);
 
@@ -1561,6 +1640,8 @@ begin
     if AExpr.Parameters[I].IsPattern and Assigned(AExpr.Parameters[I].Pattern) then
       CollectDestructuringBindings(AExpr.Parameters[I].Pattern, ChildScope);
 
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters);
+
   if FormalCount < 0 then
     FormalCount := Length(AExpr.Parameters);
   if Assigned(ACtx.FormalParameterCounts) then
@@ -1581,6 +1662,7 @@ begin
 
     EmitDefaultParameters(ChildCtx, AExpr.Parameters);
     EmitDestructuringParameters(ChildCtx, AExpr.Parameters);
+    EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
 
     ACtx.CompileFunctionBody(AExpr.Body);
 

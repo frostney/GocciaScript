@@ -358,6 +358,8 @@ type
       const ATemplate: TSouffleFunctionTemplate;
       const AOperandIndex: UInt8); override;
     procedure MarkExternalRoots; override;
+    procedure CheckLocalType(const AValue: TSouffleValue;
+      const AExpectedType: TSouffleLocalType); override;
 
     function AddPendingClassDef(
       const AClassDef: TGocciaClassDefinition;
@@ -377,6 +379,7 @@ type
     procedure RegisterGlobal(const AName: string; const AValue: TSouffleValue);
     procedure RegisterConstGlobal(const AName: string;
       const AValue: TSouffleValue);
+    procedure PatchGocciaScriptStrictTypes;
     procedure RegisterFormalParameterCount(
       const ATemplate: TSouffleFunctionTemplate; const ACount: Integer);
     function GetFormalParameterCount(
@@ -4462,6 +4465,64 @@ begin
   end;
 end;
 
+function LocalTypeDisplayName(const AType: TSouffleLocalType): string;
+begin
+  case AType of
+    sltInteger:   Result := 'number';
+    sltFloat:     Result := 'number';
+    sltNumber:    Result := 'number';
+    sltBoolean:   Result := 'boolean';
+    sltString:    Result := 'string';
+    sltReference: Result := 'object';
+  else
+    Result := 'unknown';
+  end;
+end;
+
+function ExtValueMatchesType(const AValue: TSouffleValue;
+  const AType: TSouffleLocalType): Boolean;
+begin
+  case AType of
+    sltInteger:   Result := SouffleIsInteger(AValue);
+    sltFloat:     Result := SouffleIsFloat(AValue);
+    sltNumber:    Result := SouffleIsInteger(AValue) or SouffleIsFloat(AValue);
+    sltBoolean:   Result := SouffleIsBoolean(AValue);
+    sltString:    Result := SouffleIsStringValue(AValue);
+    sltReference: Result := SouffleIsReference(AValue) and
+                            not SouffleIsStringValue(AValue);
+  else
+    Result := True;
+  end;
+end;
+
+function SouffleValueTypeName(const AValue: TSouffleValue): string;
+begin
+  if SouffleIsNil(AValue) then
+  begin
+    if AValue.Flags = GOCCIA_NIL_NULL then
+      Result := 'null'
+    else
+      Result := 'undefined';
+  end
+  else if SouffleIsBoolean(AValue) then
+    Result := 'boolean'
+  else if SouffleIsInteger(AValue) or SouffleIsFloat(AValue) then
+    Result := 'number'
+  else if SouffleIsStringValue(AValue) then
+    Result := 'string'
+  else if SouffleIsReference(AValue) then
+    Result := 'object'
+  else
+    Result := 'unknown';
+end;
+
+procedure TGocciaRuntimeOperations.CheckLocalType(
+  const AValue: TSouffleValue; const AExpectedType: TSouffleLocalType);
+begin
+  ThrowTypeErrorMessage('Type ''' + SouffleValueTypeName(AValue) +
+    ''' is not assignable to type ''' + LocalTypeDisplayName(AExpectedType) + '''');
+end;
+
 procedure TGocciaRuntimeOperations.PropertyDeleteViolation(
   const AObject: TSouffleValue; const AKey: string);
 begin
@@ -7217,6 +7278,27 @@ begin
   FConstGlobals.AddOrSetValue(AName, True);
 end;
 
+procedure TGocciaRuntimeOperations.PatchGocciaScriptStrictTypes;
+var
+  Val: TSouffleValue;
+  Obj: TGocciaObjectValue;
+begin
+  if not FGlobals.TryGetValue('GocciaScript', Val) then
+    Exit;
+  if not SouffleIsReference(Val) then
+    Exit;
+  if Val.AsReference is TGocciaWrappedValue then
+  begin
+    if TGocciaWrappedValue(Val.AsReference).Value is TGocciaObjectValue then
+    begin
+      Obj := TGocciaObjectValue(TGocciaWrappedValue(Val.AsReference).Value);
+      Obj.AssignProperty('strictTypes', TGocciaBooleanLiteralValue.TrueValue);
+    end;
+  end
+  else if Val.AsReference is TSouffleRecord then
+    TSouffleRecord(Val.AsReference).Put('strictTypes', SouffleBoolean(True));
+end;
+
 function TGocciaRuntimeOperations.RequireIterable(
   const AValue: TSouffleValue): TSouffleValue;
 var
@@ -8285,6 +8367,11 @@ begin
          not Assigned(TSouffleBlueprint(ADest.AsReference).SuperBlueprint) and
          SouffleIsReference(AOperand) and Assigned(AOperand.AsReference) then
         FBlueprintSuperValues.AddOrSetValue(ADest.AsReference, AOperand);
+    end;
+    25: // GOCCIA_EXT_CHECK_TYPE
+    begin
+      if not ExtValueMatchesType(ADest, TSouffleLocalType(AOperandIndex)) then
+        CheckLocalType(ADest, TSouffleLocalType(AOperandIndex));
     end;
   end;
 end;

@@ -45,7 +45,8 @@ type
     sltFloat,
     sltBoolean,
     sltString,
-    sltReference
+    sltReference,
+    sltNumber
   );
 
   TSouffleFunctionTemplate = class
@@ -65,6 +66,8 @@ type
     FDebugInfo: TSouffleDebugInfo;
     FLocalTypes: array of TSouffleLocalType;
     FLocalTypeCount: UInt8;
+    FLocalStrictFlags: array of Boolean;
+    FLocalStrictCount: UInt8;
     FIsAsync: Boolean;
     function GetFunctionCount: Integer;
   public
@@ -102,6 +105,11 @@ type
     procedure SetLocalType(const ASlot: UInt8; const AKind: TSouffleLocalType);
     function GetLocalType(const ASlot: UInt8): TSouffleLocalType;
     property LocalTypeCount: UInt8 read FLocalTypeCount;
+
+    procedure SetLocalStrictFlag(const ASlot: UInt8; const AStrict: Boolean);
+    function GetLocalStrictFlag(const ASlot: UInt8): Boolean;
+    property LocalStrictCount: UInt8 read FLocalStrictCount;
+
     property IsAsync: Boolean read FIsAsync write FIsAsync;
   end;
 
@@ -137,6 +145,7 @@ begin
   FUpvalueCount := 0;
   FDebugInfo := nil;
   FLocalTypeCount := 0;
+  FLocalStrictCount := 0;
 end;
 
 destructor TSouffleFunctionTemplate.Destroy;
@@ -371,6 +380,25 @@ begin
     Result := FLocalTypes[ASlot]
   else
     Result := sltUntyped;
+end;
+
+procedure TSouffleFunctionTemplate.SetLocalStrictFlag(const ASlot: UInt8;
+  const AStrict: Boolean);
+begin
+  if ASlot >= Length(FLocalStrictFlags) then
+    SetLength(FLocalStrictFlags, ASlot + 1);
+  FLocalStrictFlags[ASlot] := AStrict;
+  if ASlot >= FLocalStrictCount then
+    FLocalStrictCount := ASlot + 1;
+end;
+
+function TSouffleFunctionTemplate.GetLocalStrictFlag(
+  const ASlot: UInt8): Boolean;
+begin
+  if ASlot < FLocalStrictCount then
+    Result := FLocalStrictFlags[ASlot]
+  else
+    Result := False;
 end;
 
 end.

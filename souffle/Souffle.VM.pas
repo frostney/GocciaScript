@@ -58,6 +58,8 @@ type
     function MaterializeConstant(
       const AConstant: TSouffleBytecodeConstant): TSouffleValue;
 
+    procedure CheckStrictLocalType(const ATemplate: TSouffleFunctionTemplate;
+      const ASlot: UInt16; const AValue: TSouffleValue);
     function DelegateGet(const AObject: TSouffleHeapObject;
       const AKey: string; out AValue: TSouffleValue): Boolean;
   public
@@ -945,7 +947,7 @@ begin
     end;
 
     OP_GET_LOCAL_INT, OP_GET_LOCAL_FLOAT, OP_GET_LOCAL_BOOL,
-    OP_GET_LOCAL_STRING, OP_GET_LOCAL_REF:
+    OP_GET_LOCAL_STRING, OP_GET_LOCAL_REF, OP_GET_LOCAL_NUMBER:
     begin
       A := DecodeA(AInstruction);
       Bx := DecodeBx(AInstruction);
@@ -953,10 +955,12 @@ begin
     end;
 
     OP_SET_LOCAL_INT, OP_SET_LOCAL_FLOAT, OP_SET_LOCAL_BOOL,
-    OP_SET_LOCAL_STRING, OP_SET_LOCAL_REF:
+    OP_SET_LOCAL_STRING, OP_SET_LOCAL_REF, OP_SET_LOCAL_NUMBER:
     begin
       A := DecodeA(AInstruction);
       Bx := DecodeBx(AInstruction);
+      if AFrame^.Template.GetLocalStrictFlag(Bx) then
+        CheckStrictLocalType(AFrame^.Template, Bx, FRegisters[Base + A]);
       FRegisters[Base + Bx] := FRegisters[Base + A];
     end;
 
@@ -1646,6 +1650,33 @@ begin
 
   if Assigned(FOpenUpvalues) then
     FOpenUpvalues.MarkReferences;
+end;
+
+procedure TSouffleVM.CheckStrictLocalType(
+  const ATemplate: TSouffleFunctionTemplate;
+  const ASlot: UInt16; const AValue: TSouffleValue);
+var
+  ExpectedType: TSouffleLocalType;
+
+  function ValueMatchesType: Boolean;
+  begin
+    case ExpectedType of
+      sltInteger:   Result := SouffleIsInteger(AValue);
+      sltFloat:     Result := SouffleIsFloat(AValue);
+      sltNumber:    Result := SouffleIsInteger(AValue) or SouffleIsFloat(AValue);
+      sltBoolean:   Result := SouffleIsBoolean(AValue);
+      sltString:    Result := SouffleIsStringValue(AValue);
+      sltReference: Result := SouffleIsReference(AValue) and
+                              not SouffleIsStringValue(AValue);
+    else
+      Result := True;
+    end;
+  end;
+
+begin
+  ExpectedType := ATemplate.GetLocalType(UInt8(ASlot));
+  if not ValueMatchesType then
+    FRuntimeOps.CheckLocalType(AValue, ExpectedType);
 end;
 
 function TSouffleVM.DelegateGet(const AObject: TSouffleHeapObject;

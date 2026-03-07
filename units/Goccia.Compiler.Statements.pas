@@ -7,6 +7,8 @@ interface
 uses
   Generics.Collections,
 
+  Souffle.Bytecode.Chunk,
+
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
@@ -55,6 +57,8 @@ procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
 procedure CompileComplexClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration; const APendingIndex: Integer);
 
+function TypeAnnotationToLocalType(const AAnnotation: string): TSouffleLocalType;
+
 function SavePendingFinally: TObject;
 procedure RestorePendingFinally(const ASaved: TObject);
 
@@ -65,7 +69,6 @@ uses
 
   OrderedMap,
   Souffle.Bytecode,
-  Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Debug,
 
   Goccia.Compiler.Expressions,
@@ -118,7 +121,43 @@ begin
   else if AExpr is TGocciaTemplateLiteralExpression then
     Result := sltString
   else if AExpr is TGocciaTemplateWithInterpolationExpression then
-    Result := sltString;
+    Result := sltString
+  else if AExpr is TGocciaObjectExpression then
+    Result := sltReference
+  else if AExpr is TGocciaArrayExpression then
+    Result := sltReference
+  else if AExpr is TGocciaNewExpression then
+    Result := sltReference
+  else if AExpr is TGocciaArrowFunctionExpression then
+    Result := sltReference
+  else if AExpr is TGocciaMethodExpression then
+    Result := sltReference;
+end;
+
+function TypeAnnotationToLocalType(const AAnnotation: string): TSouffleLocalType;
+begin
+  Result := sltUntyped;
+  if AAnnotation = '' then
+    Exit;
+  if Pos('|', AAnnotation) > 0 then
+    Exit;
+  if AAnnotation = 'number' then
+    Result := sltNumber
+  else if AAnnotation = 'string' then
+    Result := sltString
+  else if AAnnotation = 'boolean' then
+    Result := sltBoolean
+  else if (AAnnotation = 'object') or (AAnnotation = 'Object')
+       or (AAnnotation = 'Function')
+       or (Pos('<', AAnnotation) > 0)
+       or (Pos('[', AAnnotation) > 0) then
+    Result := sltReference;
+end;
+
+function IsUndefinedInitializer(const AExpr: TGocciaExpression): Boolean;
+begin
+  Result := (AExpr is TGocciaLiteralExpression) and
+            (TGocciaLiteralExpression(AExpr).Value is TGocciaUndefinedLiteralValue);
 end;
 
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
@@ -128,27 +167,58 @@ var
   Info: TGocciaVariableInfo;
   Slot: UInt8;
   InferredTemplate: TSouffleFunctionTemplate;
-  TypeHint: TSouffleLocalType;
+  TypeHint, AnnotationType: TSouffleLocalType;
+  IsStrict, HasRealInitializer: Boolean;
+  TempReg: UInt8;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
     Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
-    if Assigned(Info.Initializer) then
+
+    HasRealInitializer := Assigned(Info.Initializer) and
+                          not IsUndefinedInitializer(Info.Initializer);
+
+    AnnotationType := TypeAnnotationToLocalType(Info.TypeAnnotation);
+    IsStrict := AnnotationType <> sltUntyped;
+
+    if IsStrict then
+      TypeHint := AnnotationType
+    else if HasRealInitializer then
+      TypeHint := InferLocalType(Info.Initializer)
+    else
+      TypeHint := sltUntyped;
+
+    if TypeHint <> sltUntyped then
     begin
-      TypeHint := InferLocalType(Info.Initializer);
-      if TypeHint <> sltUntyped then
+      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      if LocalIdx >= 0 then
       begin
-        LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
-        if LocalIdx >= 0 then
+        ACtx.Scope.SetLocalTypeHint(LocalIdx, TypeHint);
+        ACtx.Template.SetLocalType(Slot, TypeHint);
+        if IsStrict then
         begin
-          ACtx.Scope.SetLocalTypeHint(LocalIdx, TypeHint);
-          ACtx.Template.SetLocalType(Slot, TypeHint);
+          ACtx.Scope.SetLocalStrictlyTyped(LocalIdx, True);
+          ACtx.Template.SetLocalStrictFlag(Slot, True);
         end;
       end;
+    end;
 
-      FuncCount := ACtx.Template.FunctionCount;
-      ACtx.CompileExpression(Info.Initializer, Slot);
+    if Assigned(Info.Initializer) then
+    begin
+      if IsStrict and HasRealInitializer then
+      begin
+        TempReg := ACtx.Scope.AllocateRegister;
+        FuncCount := ACtx.Template.FunctionCount;
+        ACtx.CompileExpression(Info.Initializer, TempReg);
+        EmitInstruction(ACtx, EncodeABx(TypedSetLocalOp(TypeHint), TempReg, Slot));
+        ACtx.Scope.FreeRegister;
+      end
+      else
+      begin
+        FuncCount := ACtx.Template.FunctionCount;
+        ACtx.CompileExpression(Info.Initializer, Slot);
+      end;
 
       if (Info.Initializer is TGocciaArrowFunctionExpression) or
          (Info.Initializer is TGocciaMethodExpression) then

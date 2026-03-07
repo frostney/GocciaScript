@@ -109,6 +109,8 @@ type
     OP_SET_LOCAL_STRING = 63,  // ABx  Locals[Bx] := R[A] (typed: string reference)
     OP_GET_LOCAL_REF    = 64,  // ABx  R[A] := Locals[Bx] (typed: heap reference)
     OP_SET_LOCAL_REF    = 65,  // ABx  Locals[Bx] := R[A] (typed: heap reference)
+    OP_GET_LOCAL_NUMBER = 74,  // ABx  R[A] := Locals[Bx] (typed: number — integer or float)
+    OP_SET_LOCAL_NUMBER = 75,  // ABx  Locals[Bx] := R[A] (typed: number — integer or float)
 
     // ── Core: Blueprint ──
     OP_NEW_BLUEPRINT = 66,  // ABx   R[A] := new Blueprint(name=Constants[Bx])
