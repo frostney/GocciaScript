@@ -333,7 +333,21 @@ begin
           end;
 
           OP_SET_UPVALUE:
-            ExecuteCoreOp(Frame, Instruction, Op);
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            Bx := UInt16((Instruction shr 16) and $FFFF);
+            if Assigned(Frame^.Closure) then
+            begin
+              Upval := Frame^.Closure.GetUpvalue(Bx);
+              if Assigned(Upval) then
+              begin
+                if Upval.IsOpen then
+                  FRegisters[Upval.RegisterIndex] := FRegisters[Base + A]
+                else
+                  Upval.Closed := FRegisters[Base + A];
+              end;
+            end;
+          end;
 
           OP_JUMP_IF_FALSE:
           begin

@@ -42,7 +42,8 @@ type
     function Advance: TGocciaToken;
     function Check(const ATokenType: TGocciaTokenType): Boolean; inline;
     function CheckNext(const ATokenType: TGocciaTokenType): Boolean; inline;
-    function Match(const ATokenTypes: array of TGocciaTokenType): Boolean;
+    function Match(const ATokenTypes: array of TGocciaTokenType): Boolean; overload;
+    function Match(const ATokenType: TGocciaTokenType): Boolean; overload; inline;
     function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken;
     function IsArrowFunction: Boolean;
     function ConvertNumberLiteral(const ALexeme: string): Double;
@@ -226,6 +227,16 @@ begin
   Result := False;
 end;
 
+function TGocciaParser.Match(const ATokenType: TGocciaTokenType): Boolean;
+begin
+  if Check(ATokenType) then
+  begin
+    Advance;
+    Exit(True);
+  end;
+  Result := False;
+end;
+
 function TGocciaParser.Consume(const ATokenType: TGocciaTokenType;
   const AMessage: string): TGocciaToken;
 begin
@@ -248,7 +259,7 @@ var
 begin
   Result := LogicalOr;
 
-  if Match([gttQuestion]) then
+  if Match(gttQuestion) then
   begin
     Line := Previous.Line;
     Column := Previous.Column;
@@ -350,7 +361,7 @@ var
 begin
   Result := Unary;
 
-  if Match([gttPower]) then
+  if Match(gttPower) then
   begin
     Operator := Previous;
     Right := Exponentiation; // Right associative
@@ -410,7 +421,7 @@ begin
 
   while True do
   begin
-    if Match([gttLeftParen]) then
+    if Match(gttLeftParen) then
     begin
       Line := Previous.Line;
       Column := Previous.Column;
@@ -419,12 +430,12 @@ begin
       if not Check(gttRightParen) then
       begin
         repeat
-          if Match([gttSpread]) then
+          if Match(gttSpread) then
             Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
           else
             Arg := Expression;
           Arguments.Add(Arg);
-        until not Match([gttComma]) or Check(gttRightParen);
+        until not Match(gttComma) or Check(gttRightParen);
       end;
 
       Consume(gttRightParen, 'Expected ")" after arguments');
@@ -460,12 +471,12 @@ begin
           if not Check(gttRightParen) then
           begin
             repeat
-              if Match([gttSpread]) then
+              if Match(gttSpread) then
                 Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
               else
                 Arg := Expression;
               Arguments.Add(Arg);
-            until not Match([gttComma]) or Check(gttRightParen);
+            until not Match(gttComma) or Check(gttRightParen);
           end;
           Consume(gttRightParen, 'Expected ")" after arguments');
           // Wrap call in optional chaining by wrapping the callee in an optional member
@@ -492,14 +503,14 @@ begin
           Line, Column, IsOptionalChain);
       end;
     end
-    else if Match([gttHash]) then
+    else if Match(gttHash) then
     begin
       Line := Previous.Line;
       Column := Previous.Column;
       PropertyName := Consume(gttIdentifier, 'Expected private field name after "#"').Lexeme;
       Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
     end
-    else if Match([gttLeftBracket]) then
+    else if Match(gttLeftBracket) then
     begin
       Line := Previous.Line;
       Column := Previous.Column;
@@ -537,57 +548,57 @@ var
   ArrowFn: TGocciaArrowFunctionExpression;
   ArrowBody: TGocciaASTNode;
 begin
-  if Match([gttTrue]) then
+  if Match(gttTrue) then
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
       TGocciaBooleanLiteralValue.TrueValue, Token.Line, Token.Column);
   end
-  else if Match([gttFalse]) then
+  else if Match(gttFalse) then
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
       TGocciaBooleanLiteralValue.FalseValue, Token.Line, Token.Column);
   end
-  else if Match([gttNull]) then
+  else if Match(gttNull) then
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
       TGocciaNullLiteralValue.Create, Token.Line, Token.Column);
   end
-  else if Match([gttNumber]) then
+  else if Match(gttNumber) then
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
       TGocciaNumberLiteralValue.Create(ConvertNumberLiteral(Token.Lexeme)), Token.Line, Token.Column);
   end
-  else if Match([gttString]) then
+  else if Match(gttString) then
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
       TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Line, Token.Column);
   end
-  else if Match([gttTemplate]) then
+  else if Match(gttTemplate) then
   begin
     Token := Previous;
     Result := TGocciaTemplateLiteralExpression.Create(Token.Lexeme, Token.Line, Token.Column);
   end
-  else if Match([gttThis]) then
+  else if Match(gttThis) then
   begin
     Token := Previous;
     Result := TGocciaThisExpression.Create(Token.Line, Token.Column);
   end
-  else if Match([gttSuper]) then
+  else if Match(gttSuper) then
   begin
     Token := Previous;
     Result := TGocciaSuperExpression.Create(Token.Line, Token.Column);
   end
-  else if Match([gttClass]) then
+  else if Match(gttClass) then
   begin
     Token := Previous;
     Result := ClassExpression;
   end
-  else if Match([gttNew]) then
+  else if Match(gttNew) then
   begin
     Token := Previous;
     // Parse the callee: class name with optional member access (e.g. new a.B.C())
@@ -602,17 +613,17 @@ begin
         raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines);
     end;
     // Parse constructor arguments if present
-    if Match([gttLeftParen]) then
+    if Match(gttLeftParen) then
     begin
       Args := TObjectList<TGocciaExpression>.Create(True);
       if not Check(gttRightParen) then
       begin
         repeat
-          if Match([gttSpread]) then
+          if Match(gttSpread) then
             Args.Add(TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column))
           else
             Args.Add(Expression);
-        until not Match([gttComma]) or Check(gttRightParen);
+        until not Match(gttComma) or Check(gttRightParen);
       end;
       Consume(gttRightParen, 'Expected ")" after constructor arguments');
       Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
@@ -623,7 +634,7 @@ begin
       Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
     end;
   end
-  else if Match([gttIdentifier]) then
+  else if Match(gttIdentifier) then
   begin
     Token := Previous;
     Name := Token.Lexeme;
@@ -658,7 +669,7 @@ begin
 
       Inc(FInAsyncFunction);
       try
-        if Match([gttLeftBrace]) then
+        if Match(gttLeftBrace) then
           ArrowBody := BlockStatement
         else
           ArrowBody := Expression;
@@ -682,7 +693,7 @@ begin
     else
       Result := TGocciaIdentifierExpression.Create(Name, Token.Line, Token.Column);
   end
-  else if Match([gttHash]) then
+  else if Match(gttHash) then
   begin
     Token := Previous;
     Name := Consume(gttIdentifier, 'Expected private field name after "#"').Lexeme;
@@ -691,7 +702,7 @@ begin
       TGocciaThisExpression.Create(Token.Line, Token.Column),
       Name, Token.Line, Token.Column);
   end
-  else if Match([gttLeftParen]) then
+  else if Match(gttLeftParen) then
   begin
     // Check for arrow function by looking for pattern: () => or (id) => or (id, id) =>
     if IsArrowFunction() then
@@ -703,7 +714,7 @@ begin
       Result := Expr;
     end;
   end
-  else if Match([gttFunction]) then
+  else if Match(gttFunction) then
   begin
     Token := Previous;
     AddWarning('''function'' expressions are not supported in GocciaScript',
@@ -716,9 +727,9 @@ begin
     Result := TGocciaLiteralExpression.Create(
       TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
   end
-  else if Match([gttLeftBracket]) then
+  else if Match(gttLeftBracket) then
     Result := ArrayLiteral
-  else if Match([gttLeftBrace]) then
+  else if Match(gttLeftBrace) then
     Result := ObjectLiteral
   else
     raise TGocciaSyntaxError.Create('Expected expression',
@@ -742,7 +753,7 @@ begin
       // This is a hole in the array
       Elements.Add(TGocciaHoleExpression.Create(Peek.Line, Peek.Column));
     end
-    else if Match([gttSpread]) then
+    else if Match(gttSpread) then
     begin
       // Spread expression: ...array
       Elements.Add(TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column));
@@ -753,7 +764,7 @@ begin
       Elements.Add(Expression);
     end;
 
-    if not Match([gttComma]) then
+    if not Match(gttComma) then
       Break;
   end;
 
@@ -823,7 +834,7 @@ begin
     end;
 
         // Handle spread syntax: ...obj
-    if not IsGetter and not IsSetter and Match([gttSpread]) then
+    if not IsGetter and not IsSetter and Match(gttSpread) then
     begin
       // Create a spread expression
       Line := Previous.Line;
@@ -844,11 +855,11 @@ begin
       PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
 
       // For spread expressions, no further processing is needed
-      if not Match([gttComma]) then
+      if not Match(gttComma) then
         Break;
       Continue;
     end
-    else if Match([gttLeftBracket]) then
+    else if Match(gttLeftBracket) then
     begin
       // Computed property name: [expr]: value
       IsComputed := True;
@@ -927,7 +938,7 @@ begin
         Value := TGocciaIdentifierExpression.Create(Key, Previous.Line, Previous.Column);
 
         // Check for default value in shorthand property
-        if Match([gttAssign]) then
+        if Match(gttAssign) then
         begin
           // This creates an assignment expression for use in destructuring patterns
           Value := TGocciaAssignmentExpression.Create(Key, Expression, Previous.Line, Previous.Column);
@@ -974,7 +985,7 @@ begin
       end;
     end;
 
-    if not Match([gttComma]) then
+    if not Match(gttComma) then
       Break;
   end;
 
@@ -999,7 +1010,7 @@ begin
       Result[ParamCount].IsOptional := False;
       Result[ParamCount].TypeAnnotation := '';
 
-      if Match([gttSpread]) then
+      if Match(gttSpread) then
       begin
         ParamName := Consume(gttIdentifier, 'Expected parameter name after "..."').Lexeme;
         Result[ParamCount].Name := ParamName;
@@ -1028,7 +1039,7 @@ begin
           Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
         end;
 
-        if Match([gttAssign]) then
+        if Match(gttAssign) then
           Result[ParamCount].DefaultValue := Assignment
         else
           Result[ParamCount].DefaultValue := nil;
@@ -1052,14 +1063,14 @@ begin
           Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttRightParen, gttComma]);
         end;
 
-        if Match([gttAssign]) then
+        if Match(gttAssign) then
           Result[ParamCount].DefaultValue := Assignment
         else
           Result[ParamCount].DefaultValue := nil;
       end;
 
       Inc(ParamCount);
-    until not Match([gttComma]) or Check(gttRightParen);
+    until not Match(gttComma) or Check(gttRightParen);
   end;
 
   SetLength(Result, ParamCount);
@@ -1168,7 +1179,7 @@ begin
 
   Consume(gttArrow, 'Expected "=>" in arrow function');
 
-  if Match([gttLeftBrace]) then
+  if Match(gttLeftBrace) then
     Body := BlockStatement
   else
     Body := Expression;
@@ -1323,43 +1334,43 @@ begin
   end
   else if Match([gttConst, gttLet]) then
     Result := DeclarationStatement
-  else if Match([gttVar]) then
+  else if Match(gttVar) then
     Result := VarStatement
   else if Check(gttAt) then
   begin
     Result := DecoratedClassDeclaration(ParseDecorators);
   end
-  else if Match([gttClass]) then
+  else if Match(gttClass) then
     Result := ClassDeclaration
-  else if Match([gttEnum]) then
+  else if Match(gttEnum) then
     Result := EnumDeclaration
-  else if Match([gttImport]) then
+  else if Match(gttImport) then
     Result := ImportDeclaration
-  else if Match([gttExport]) then
+  else if Match(gttExport) then
     Result := ExportDeclaration
-  else if Match([gttIf]) then
+  else if Match(gttIf) then
     Result := IfStatement
-  else if Match([gttFor]) then
+  else if Match(gttFor) then
     Result := ForStatement
-  else if Match([gttWhile]) then
+  else if Match(gttWhile) then
     Result := WhileStatement
-  else if Match([gttDo]) then
+  else if Match(gttDo) then
     Result := DoWhileStatement
-  else if Match([gttWith]) then
+  else if Match(gttWith) then
     Result := WithStatement
-  else if Match([gttFunction]) then
+  else if Match(gttFunction) then
     Result := FunctionStatement
-  else if Match([gttSwitch]) then
+  else if Match(gttSwitch) then
     Result := SwitchStatement
-  else if Match([gttBreak]) then
+  else if Match(gttBreak) then
     Result := BreakStatement
-  else if Match([gttReturn]) then
+  else if Match(gttReturn) then
     Result := ReturnStatement
-  else if Match([gttThrow]) then
+  else if Match(gttThrow) then
     Result := ThrowStatement
-  else if Match([gttTry]) then
+  else if Match(gttTry) then
     Result := TryStatement
-  else if Match([gttLeftBrace]) then
+  else if Match(gttLeftBrace) then
     Result := BlockStatement
   else if Check(gttIdentifier) and CheckNext(gttColon) then
   begin
@@ -1423,7 +1434,7 @@ begin
         Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma]);
       end;
 
-      if Match([gttAssign]) then
+      if Match(gttAssign) then
         Variables[VariableCount].Initializer := Expression
       else if IsConst then
         raise TGocciaSyntaxError.Create('const declarations must have an initializer',
@@ -1433,7 +1444,7 @@ begin
           TGocciaUndefinedLiteralValue.UndefinedValue, Line, Column);
 
       Inc(VariableCount);
-    until not Match([gttComma]);
+    until not Match(gttComma);
 
     Consume(gttSemicolon, 'Expected ";" after variable declaration');
     Result := TGocciaVariableDeclaration.Create(Variables, IsConst, Line, Column);
@@ -1490,7 +1501,7 @@ begin
 
   Consequent := Statement;
 
-  if Match([gttElse]) then
+  if Match(gttElse) then
     Alternate := Statement
   else
     Alternate := nil;
@@ -1773,7 +1784,7 @@ begin
   FinallyBlock := nil;
   CatchType := '';
 
-  if Match([gttCatch]) then
+  if Match(gttCatch) then
   begin
     if Check(gttLeftParen) then
     begin
@@ -1793,7 +1804,7 @@ begin
     CatchBlock := BlockStatement;
   end;
 
-  if Match([gttFinally]) then
+  if Match(gttFinally) then
   begin
     Consume(gttLeftBrace, 'Expected "{" after "finally"');
     FinallyBlock := BlockStatement;
@@ -1889,7 +1900,7 @@ var
   PropertyName: string;
   Line, Column: Integer;
 begin
-  if Match([gttLeftParen]) then
+  if Match(gttLeftParen) then
   begin
     Result := Expression;
     Consume(gttRightParen, 'Expected ")" after decorator expression');
@@ -1900,7 +1911,7 @@ begin
 
   while True do
   begin
-    if Match([gttLeftParen]) then
+    if Match(gttLeftParen) then
     begin
       Line := Previous.Line;
       Column := Previous.Column;
@@ -1909,12 +1920,12 @@ begin
         if not Check(gttRightParen) then
         begin
           repeat
-            if Match([gttSpread]) then
+            if Match(gttSpread) then
               Arg := TGocciaSpreadExpression.Create(Expression, Previous.Line, Previous.Column)
             else
               Arg := Expression;
             Arguments.Add(Arg);
-          until not Match([gttComma]) or Check(gttRightParen);
+          until not Match(gttComma) or Check(gttRightParen);
         end;
         Consume(gttRightParen, 'Expected ")" after arguments');
         Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
@@ -1923,7 +1934,7 @@ begin
         raise;
       end;
     end
-    else if Match([gttDot]) then
+    else if Match(gttDot) then
     begin
       Line := Previous.Line;
       Column := Previous.Column;
@@ -1995,7 +2006,7 @@ begin
     Members[MemberCount - 1].Name := MemberName;
     Members[MemberCount - 1].Initializer := Initializer;
 
-    if not Match([gttComma]) then
+    if not Match(gttComma) then
       Break;
   end;
 
@@ -2059,14 +2070,14 @@ begin
   begin
     ImportedName := Consume(gttIdentifier, 'Expected import name').Lexeme;
 
-    if Match([gttAs]) then
+    if Match(gttAs) then
       LocalName := Consume(gttIdentifier, 'Expected local name after "as"').Lexeme
     else
       LocalName := ImportedName;
 
     Imports.Add(LocalName, ImportedName);
 
-    if not Match([gttComma]) then
+    if not Match(gttComma) then
       Break;
   end;
 
@@ -2123,7 +2134,7 @@ begin
     Exit;
   end;
 
-  if Match([gttEnum]) then
+  if Match(gttEnum) then
   begin
     InnerDecl := EnumDeclaration;
     Result := TGocciaExportEnumDeclaration.Create(TGocciaEnumDeclaration(InnerDecl), Line, Column);
@@ -2159,20 +2170,20 @@ begin
   begin
     LocalName := Consume(gttIdentifier, 'Expected export name').Lexeme;
 
-    if Match([gttAs]) then
+    if Match(gttAs) then
       ExportedName := Consume(gttIdentifier, 'Expected exported name after "as"').Lexeme
     else
       ExportedName := LocalName;
 
     ExportsTable.Add(ExportedName, LocalName);
 
-    if not Match([gttComma]) then
+    if not Match(gttComma) then
       Break;
   end;
 
   Consume(gttRightBrace, 'Expected "}" after exports');
 
-  if Match([gttFrom]) then
+  if Match(gttFrom) then
   begin
     ModulePath := Consume(gttString, 'Expected module path after "from"').Lexeme;
     Consume(gttSemicolon, 'Expected ";" after re-export declaration');
@@ -2225,7 +2236,7 @@ begin
   SetLength(FieldOrder, 0);
   ClassGenericParams := CollectGenericParameters;
 
-  if Match([gttExtends]) then
+  if Match(gttExtends) then
   begin
     SuperClass := Consume(gttIdentifier, 'Expected superclass name').Lexeme;
     CollectGenericParameters;
@@ -2263,7 +2274,7 @@ begin
     MemberDecorators := ParseDecorators;
     IsAccessor := False;
 
-    IsStatic := Match([gttStatic]);
+    IsStatic := Match(gttStatic);
 
     while Check(gttIdentifier) and
       ((Peek.Lexeme = KEYWORD_PUBLIC) or (Peek.Lexeme = KEYWORD_PROTECTED) or (Peek.Lexeme = KEYWORD_PRIVATE) or
@@ -2271,7 +2282,7 @@ begin
       Advance;
 
     if not IsStatic and Check(gttStatic) then
-      IsStatic := Match([gttStatic]);
+      IsStatic := Match(gttStatic);
 
     if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ACCESSOR) and not CheckNext(gttLeftParen) and not CheckNext(gttColon) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) then
     begin
@@ -2286,7 +2297,7 @@ begin
       IsAsync := True;
     end;
 
-    IsPrivate := Match([gttHash]);
+    IsPrivate := Match(gttHash);
     IsGetter := False;
     IsSetter := False;
     IsComputed := False;
@@ -2977,7 +2988,7 @@ begin
       // Hole in array pattern
       Elements.Add(nil);
     end
-    else if Match([gttSpread]) then
+    else if Match(gttSpread) then
     begin
       // Rest pattern: ...rest
       Pattern := ParsePattern;
@@ -2988,7 +2999,7 @@ begin
       Pattern := ParsePattern;
 
       // Check for default value
-      if Match([gttAssign]) then
+      if Match(gttAssign) then
       begin
         Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Expression, Pattern.Line, Pattern.Column);
       end;
@@ -2996,7 +3007,7 @@ begin
       Elements.Add(Pattern);
     end;
 
-    if not Match([gttComma]) then
+    if not Match(gttComma) then
       Break;
   end;
 
@@ -3023,7 +3034,7 @@ begin
     IsComputed := False;
     KeyExpression := nil;
 
-    if Match([gttSpread]) then
+    if Match(gttSpread) then
     begin
       // Rest pattern in object: ...rest
       Pattern := ParsePattern;
@@ -3033,7 +3044,7 @@ begin
     else
     begin
       // Parse property key
-      if Match([gttLeftBracket]) then
+      if Match(gttLeftBracket) then
       begin
         // Computed property: [expr]: pattern
         IsComputed := True;
@@ -3053,13 +3064,13 @@ begin
         raise TGocciaSyntaxError.Create('Expected property name in object pattern', Peek.Line, Peek.Column, FFileName, FSourceLines);
 
       // Check for shorthand or full syntax
-      if Match([gttColon]) then
+      if Match(gttColon) then
       begin
         // Full syntax: key: pattern
         Pattern := ParsePattern;
 
         // Check for default value
-        if Match([gttAssign]) then
+        if Match(gttAssign) then
         begin
           Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Expression, Pattern.Line, Pattern.Column);
         end;
@@ -3070,7 +3081,7 @@ begin
         Pattern := TGocciaIdentifierDestructuringPattern.Create(Key, Previous.Line, Previous.Column);
 
         // Check for default value in shorthand
-        if Match([gttAssign]) then
+        if Match(gttAssign) then
         begin
           Pattern := TGocciaAssignmentDestructuringPattern.Create(Pattern, Expression, Pattern.Line, Pattern.Column);
         end;
@@ -3080,7 +3091,7 @@ begin
       Properties.Add(Prop);
     end;
 
-    if not Match([gttComma]) then
+    if not Match(gttComma) then
       Break;
   end;
 
@@ -3201,13 +3212,13 @@ begin
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
-    if Match([gttCase]) then
+    if Match(gttCase) then
     begin
       // Parse case value
       TestExpression := Expression;
       Consume(gttColon, 'Expected ":" after case value');
     end
-    else if Match([gttDefault]) then
+    else if Match(gttDefault) then
     begin
       // Default case
       TestExpression := nil;

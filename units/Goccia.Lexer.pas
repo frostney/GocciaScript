@@ -28,6 +28,7 @@ type
     FStartColumn: Integer;
     FFileName: string;
     FSourceLines: TStringList;
+    function GetSourceLines: TStringList;
 
     function IsAtEnd: Boolean; inline;
     function Advance: Char;
@@ -52,7 +53,7 @@ type
     constructor Create(const ASource, AFileName: string);
     destructor Destroy; override;
     function ScanTokens: TObjectList<TGocciaToken>;
-    property SourceLines: TStringList read FSourceLines;
+    property SourceLines: TStringList read GetSourceLines;
   end;
 
 implementation
@@ -68,8 +69,7 @@ begin
   FSource := ASource;
   FFileName := AFileName;
   FTokens := TObjectList<TGocciaToken>.Create(True);
-  FSourceLines := TStringList.Create;
-  FSourceLines.Text := ASource;
+  FSourceLines := nil;
   FCurrent := 1;
   FLine := 1;
   FColumn := 1;
@@ -80,6 +80,16 @@ begin
   FTokens.Free;
   FSourceLines.Free;
   inherited;
+end;
+
+function TGocciaLexer.GetSourceLines: TStringList;
+begin
+  if not Assigned(FSourceLines) then
+  begin
+    FSourceLines := TStringList.Create;
+    FSourceLines.Text := FSource;
+  end;
+  Result := FSourceLines;
 end;
 
 function TGocciaLexer.IsAtEnd: Boolean;
@@ -204,37 +214,37 @@ begin
 
   // If we reach here, we hit end of file without finding closing */
   raise TGocciaLexerError.Create('Unterminated block comment', FLine, FColumn,
-    FFileName, FSourceLines);
+    FFileName, GetSourceLines);
 end;
 
 function TGocciaLexer.ScanUnicodeEscape: string;
 var
   CodePoint, LowSurrogate: Cardinal;
   HexStr: string;
-  I, SavedCurrent, SavedColumn: Integer;
+  I, HexStart, SavedCurrent, SavedColumn: Integer;
 begin
   // Called after consuming '\u', Peek is the next character
   if Peek = '{' then
   begin
-    // Variable-length: \u{XXXX} or \u{XXXXX}
     Advance; // consume '{'
-    HexStr := '';
+    HexStart := FCurrent;
     while (Peek <> '}') and not IsAtEnd do
-      HexStr := HexStr + Advance;
+      Advance;
     if IsAtEnd then
-      raise TGocciaLexerError.Create('Unterminated unicode escape', FLine, FColumn, FFileName, FSourceLines);
+      raise TGocciaLexerError.Create('Unterminated unicode escape', FLine, FColumn, FFileName, GetSourceLines);
+    HexStr := Copy(FSource, HexStart, FCurrent - HexStart);
     Advance; // consume '}'
   end
   else
   begin
-    // Fixed 4-digit: \uXXXX
-    HexStr := '';
+    HexStart := FCurrent;
     for I := 1 to 4 do
     begin
       if IsAtEnd then
-        raise TGocciaLexerError.Create('Invalid unicode escape', FLine, FColumn, FFileName, FSourceLines);
-      HexStr := HexStr + Advance;
+        raise TGocciaLexerError.Create('Invalid unicode escape', FLine, FColumn, FFileName, GetSourceLines);
+      Advance;
     end;
+    HexStr := Copy(FSource, HexStart, FCurrent - HexStart);
   end;
 
   CodePoint := StrToInt('$' + HexStr);
@@ -246,7 +256,7 @@ begin
     SavedColumn := FColumn;
     Advance; // consume '\'
     Advance; // consume 'u'
-    HexStr := '';
+    HexStart := FCurrent;
     for I := 1 to 4 do
     begin
       if IsAtEnd then
@@ -255,8 +265,9 @@ begin
         FColumn := SavedColumn;
         Break;
       end;
-      HexStr := HexStr + Advance;
+      Advance;
     end;
+    HexStr := Copy(FSource, HexStart, FCurrent - HexStart);
     if Length(HexStr) = 4 then
     begin
       LowSurrogate := StrToInt('$' + HexStr);
@@ -280,22 +291,24 @@ begin
   else if CodePoint <= $10FFFF then
     Result := Chr($F0 or (CodePoint shr 18)) + Chr($80 or ((CodePoint shr 12) and $3F)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F))
   else
-    raise TGocciaLexerError.Create('Invalid unicode code point', FLine, FColumn, FFileName, FSourceLines);
+    raise TGocciaLexerError.Create('Invalid unicode code point', FLine, FColumn, FFileName, GetSourceLines);
 end;
 
 function TGocciaLexer.ScanHexEscape: string;
 var
   HexStr: string;
+  HexStart: Integer;
   CodePoint: Cardinal;
 begin
   // Called after consuming '\x', Peek is the first hex digit
-  HexStr := '';
   if IsAtEnd then
-    raise TGocciaLexerError.Create('Invalid hex escape', FLine, FColumn, FFileName, FSourceLines);
-  HexStr := HexStr + Advance;
+    raise TGocciaLexerError.Create('Invalid hex escape', FLine, FColumn, FFileName, GetSourceLines);
+  HexStart := FCurrent;
+  Advance;
   if IsAtEnd then
-    raise TGocciaLexerError.Create('Invalid hex escape', FLine, FColumn, FFileName, FSourceLines);
-  HexStr := HexStr + Advance;
+    raise TGocciaLexerError.Create('Invalid hex escape', FLine, FColumn, FFileName, GetSourceLines);
+  Advance;
+  HexStr := Copy(FSource, HexStart, 2);
 
   CodePoint := StrToInt('$' + HexStr);
   Result := Chr(CodePoint);
@@ -352,7 +365,7 @@ begin
 
     if IsAtEnd then
       raise TGocciaLexerError.Create('Unterminated string', FLine, FColumn,
-        FFileName, FSourceLines);
+        FFileName, GetSourceLines);
 
     Advance; // Closing quote
     AddToken(gttString, SB.ToString);
@@ -404,7 +417,7 @@ begin
 
     if IsAtEnd then
       raise TGocciaLexerError.Create('Unterminated template literal', FLine, FColumn,
-        FFileName, FSourceLines);
+        FFileName, GetSourceLines);
 
     Advance; // Closing backtick
     AddToken(gttTemplate, SB.ToString);
@@ -415,86 +428,70 @@ end;
 
 procedure TGocciaLexer.ScanNumber;
 var
-  Value: string;
   Ch: Char;
 begin
-  Value := '';
   Ch := Peek;
 
-  // Handle different number formats
   if Ch = '0' then
   begin
-    Value := Value + Advance; // consume '0'
+    Advance;
     Ch := Peek;
 
     if (Ch = 'x') or (Ch = 'X') then
     begin
-      // Hexadecimal: 0x10, 0X10
-      Value := Value + Advance; // consume 'x' or 'X'
+      Advance;
       if not CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) then
-        raise TGocciaLexerError.Create('Invalid hexadecimal number', FLine, FColumn, FFileName, FSourceLines);
-
+        raise TGocciaLexerError.Create('Invalid hexadecimal number', FLine, FColumn, FFileName, GetSourceLines);
       while CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) do
-        Value := Value + Advance;
+        Advance;
     end
     else if (Ch = 'b') or (Ch = 'B') then
     begin
-      // Binary: 0b1010, 0B1010
-      Value := Value + Advance; // consume 'b' or 'B'
+      Advance;
       if not CharInSet(Peek, ['0', '1']) then
-        raise TGocciaLexerError.Create('Invalid binary number', FLine, FColumn, FFileName, FSourceLines);
-
+        raise TGocciaLexerError.Create('Invalid binary number', FLine, FColumn, FFileName, GetSourceLines);
       while CharInSet(Peek, ['0', '1']) do
-        Value := Value + Advance;
+        Advance;
     end
     else if (Ch = 'o') or (Ch = 'O') then
     begin
-      // Octal: 0o12, 0O12
-      Value := Value + Advance; // consume 'o' or 'O'
+      Advance;
       if not CharInSet(Peek, ['0'..'7']) then
-        raise TGocciaLexerError.Create('Invalid octal number', FLine, FColumn, FFileName, FSourceLines);
-
+        raise TGocciaLexerError.Create('Invalid octal number', FLine, FColumn, FFileName, GetSourceLines);
       while CharInSet(Peek, ['0'..'7']) do
-        Value := Value + Advance;
+        Advance;
     end
     else
     begin
-      // Handle regular numbers starting with 0 (including 0.xxx)
-      // Continue consuming digits if present (for cases like 000123)
       while CharInSet(Peek, ['0'..'9']) do
-        Value := Value + Advance;
+        Advance;
     end;
   end
   else
   begin
-    // Regular decimal number (not starting with 0)
     while CharInSet(Peek, ['0'..'9']) do
-      Value := Value + Advance;
+      Advance;
   end;
 
-  // Handle decimal part (e.g., 0.69314, 1.5)
   if (Peek = '.') and CharInSet(PeekNext, ['0'..'9']) then
   begin
-    Value := Value + Advance; // Consume '.'
+    Advance;
     while CharInSet(Peek, ['0'..'9']) do
-      Value := Value + Advance;
+      Advance;
   end;
 
-  // Handle scientific notation (e.g., 1e3, 2.5E-10, 0.69314e2)
   if CharInSet(Peek, ['e', 'E']) then
   begin
-    Value := Value + Advance; // Consume 'e' or 'E'
+    Advance;
     if CharInSet(Peek, ['+', '-']) then
-      Value := Value + Advance; // Consume optional '+' or '-'
-
+      Advance;
     if not CharInSet(Peek, ['0'..'9']) then
-      raise TGocciaLexerError.Create('Invalid scientific notation', FLine, FColumn, FFileName, FSourceLines);
-
+      raise TGocciaLexerError.Create('Invalid scientific notation', FLine, FColumn, FFileName, GetSourceLines);
     while CharInSet(Peek, ['0'..'9']) do
-      Value := Value + Advance;
+      Advance;
   end;
 
-  AddToken(gttNumber, Value);
+  AddToken(gttNumber, Copy(FSource, FStart, FCurrent - FStart));
 end;
 
 function TGocciaLexer.IsValidIdentifierChar(const C: Char): Boolean;
@@ -711,7 +708,7 @@ begin
           AddToken(gttSpread)
         else
           raise TGocciaLexerError.Create('Invalid token ..',
-            FLine, FStartColumn, FFileName, FSourceLines);
+            FLine, FStartColumn, FFileName, GetSourceLines);
       end
       else
         AddToken(gttDot);
@@ -736,7 +733,7 @@ begin
     end
     else
       raise TGocciaLexerError.Create(Format('Unexpected character: %s', [C]),
-        FLine, FStartColumn, FFileName, FSourceLines);
+        FLine, FStartColumn, FFileName, GetSourceLines);
   end;
 end;
 

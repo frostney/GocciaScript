@@ -36,7 +36,7 @@ type
       const ABaseRegister: Integer;
       const AReturnRegister: Integer;
       const AHandlerDepth: Integer): PSouffleVMCallFrame;
-    procedure Pop;
+    procedure Pop; inline;
     function Peek: PSouffleVMCallFrame; inline;
     function GetFrame(const AIndex: Integer): PSouffleVMCallFrame; inline;
     function IsEmpty: Boolean; inline;
