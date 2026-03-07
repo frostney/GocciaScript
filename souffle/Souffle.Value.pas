@@ -223,8 +223,16 @@ function SouffleToDouble(const AValue: TSouffleValue): Double;
 begin
   if AValue.Kind = svkFloat then
     Result := AValue.AsFloat
+  else if AValue.Kind = svkInteger then
+    Result := AValue.AsInteger * 1.0
   else
-    Result := AValue.AsInteger * 1.0;
+  begin
+    {$IFDEF DEBUG}
+    Assert(False, 'SouffleToDouble: expected svkFloat or svkInteger, got kind ' +
+      IntToStr(Ord(AValue.Kind)));
+    {$ENDIF}
+    Result := NaN;
+  end;
 end;
 
 { String access -- handles both inline (svkString) and heap (TSouffleHeapString) }

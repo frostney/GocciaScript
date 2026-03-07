@@ -83,12 +83,15 @@ test("reassignment with correct type works", () => {
 
 test("error message includes type names", () => {
   let x: number = 1;
+  let err = null;
   try {
     x = "hello";
   } catch (e) {
-    expect(e instanceof TypeError).toBe(true);
-    expect(e.message).toBe("Type 'string' is not assignable to type 'number'");
+    err = e;
   }
+  expect(err !== null).toBe(true);
+  expect(err instanceof TypeError).toBe(true);
+  expect(err.message).toBe("Type 'string' is not assignable to type 'number'");
 });
 
 }); // describe

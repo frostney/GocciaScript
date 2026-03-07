@@ -78,8 +78,10 @@ Fixed semantics implemented directly in the dispatch loop. These are universal o
 | Integer Arithmetic | `OP_ADD_INT`, `OP_SUB_INT`, `OP_MUL_INT`, `OP_DIV_INT`, `OP_MOD_INT`, `OP_NEG_INT` | Fast-path integer operations (no runtime dispatch) |
 | Float Arithmetic | `OP_ADD_FLOAT`, `OP_SUB_FLOAT`, `OP_MUL_FLOAT`, `OP_DIV_FLOAT`, `OP_MOD_FLOAT`, `OP_NEG_FLOAT` | Fast-path float operations (no runtime dispatch) |
 | Integer Comparison | `OP_EQ_INT`, `OP_NEQ_INT`, `OP_LT_INT`, `OP_GT_INT`, `OP_LTE_INT`, `OP_GTE_INT` | Fast-path integer comparison (no runtime dispatch) |
+| Float Comparison | `OP_EQ_FLOAT`, `OP_NEQ_FLOAT`, `OP_LT_FLOAT`, `OP_GT_FLOAT`, `OP_LTE_FLOAT`, `OP_GTE_FLOAT` | Fast-path float comparison (no runtime dispatch) |
 | String | `OP_CONCAT` | Direct string concatenation |
 | Type Coercion | `OP_TO_PRIMITIVE` | Fast-path for primitives (nil/bool/int/float/string pass through), runtime callback for references |
+| Type Checking | `OP_CHECK_TYPE` | Runtime type validation for strictly typed locals; coerces integer-to-float for `sltFloat` |
 | Blueprint | `OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_INSTANTIATE`, `OP_GET_SLOT`, `OP_SET_SLOT` | Wren-inspired blueprint primitives for optimized dispatch |
 | Exceptions | `OP_PUSH_HANDLER`, `OP_POP_HANDLER`, `OP_THROW` | Handler-table exception model |
 | Return | `OP_RETURN`, `OP_RETURN_NIL` | Function return |
@@ -741,7 +743,7 @@ TSouffleFunctionTemplate
                       sltBoolean (3), sltString (4), sltReference (5)
 ```
 
-The compiler infers type hints from literal initializers and type annotations (e.g., `const x = 42` gets `sltFloat`, `let z: number` gets `sltFloat`). All JavaScript numeric values are `sltFloat` (IEEE 754 double); `sltInteger` is reserved for known-integer results like `.length`. These hints are stored on the template and used to emit type-specialized opcodes (`OP_GET_LOCAL_FLOAT`, `OP_ADD_FLOAT`, `OP_LTE_FLOAT`, etc.) instead of generic `OP_GET_LOCAL`/`OP_RT_ADD`. Typed float opcodes are inlined in the VM's main dispatch loop for maximum performance, eliminating procedure call overhead. `OP_CHECK_TYPE` for `sltFloat` coerces integer values to float at function boundaries, ensuring the function body can use direct float operations. All variables with initializers or type annotations are strictly typed — reassignment to an incompatible type throws a `TypeError`.
+The compiler infers type hints from literal initializers and type annotations (e.g., `const x = 42` gets `sltFloat`, `let z: number` gets `sltFloat`). All JavaScript numeric values are `sltFloat` (IEEE 754 double); `sltInteger` is reserved for known-integer results like `.length`. These hints are stored on the template and used to emit type-specialized opcodes (`OP_GET_LOCAL_FLOAT`, `OP_ADD_FLOAT`, `OP_LTE_FLOAT`, etc.) instead of generic `OP_GET_LOCAL`/`OP_RT_ADD`. Typed float opcodes are inlined in the VM's main dispatch loop for maximum performance, eliminating procedure call overhead. `OP_CHECK_TYPE` for `sltFloat` coerces integer values to float at function boundaries, ensuring the function body can use direct float operations. `OP_CHECK_TYPE` always executes — there is no frame-wide bypass. Preamble type checks (parameter validation at function entry) are skipped for trusted calls by advancing `Frame^.IP` past `TypeCheckPreambleSize` in `CallClosure`, so body-level type checks remain active even in trusted frames. All variables with initializers or type annotations are strictly typed — reassignment to an incompatible type throws a `TypeError`. Trusted calls require immutable (`const`) and non-global-backed bindings; mutable bindings are never trusted because the callee could be rebound.
 
 ### Constant Pool
 
@@ -1032,7 +1034,7 @@ A WASM backend would read `TSouffleBytecodeModule` and emit a `.wasm` binary. Th
 
 ## Known Limitations
 
-The Souffle VM bytecode backend passes 100% of the GocciaScript test suite (3,358 tests across 514 test files). The limitations below are structural constraints, not correctness gaps.
+The Souffle VM bytecode backend passes 100% of the GocciaScript test suite (3,406 tests across 522 test files). The limitations below are structural constraints, not correctness gaps.
 
 ### Intentionally Not Changed (Rejected Findings)
 

@@ -38,6 +38,7 @@ describe.skipIf(!GocciaScript.strictTypes)("strict type inference", () => {
   });
 });
 
+// TC39 "Types as Comments" — union/any/unknown annotations are parsed but not enforced at runtime
 test("union type annotation does not enforce", () => {
   let value: string | number = "hello";
   expect(value).toBe("hello");
@@ -66,4 +67,13 @@ test("let without initializer with type allows first assignment", () => {
   expect(x).toBe(undefined);
   x = 42;
   expect(x).toBe(42);
+});
+
+describe.skipIf(!GocciaScript.strictTypes)("typed uninitialized enforcement", () => {
+  test("let without initializer enforces type on subsequent assignment", () => {
+    let x: number;
+    x = 42;
+    expect(x).toBe(42);
+    expect(() => { x = "hello"; }).toThrow(TypeError);
+  });
 });

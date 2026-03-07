@@ -39,12 +39,14 @@ test("optional parameter skips enforcement", () => {
   const greet = (name?: string) => name === undefined ? "hello" : "hello " + name;
   expect(greet()).toBe("hello");
   expect(greet("world")).toBe("hello world");
+  expect(greet(42)).toBe("hello 42");
 });
 
 test("parameter with default value skips enforcement", () => {
   const greet = (name: string = "world") => "hello " + name;
   expect(greet()).toBe("hello world");
   expect(greet("test")).toBe("hello test");
+  expect(greet(42)).toBe("hello 42");
 });
 
 }); // describe

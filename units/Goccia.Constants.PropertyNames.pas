@@ -46,6 +46,7 @@ const
   PROP_IS_PROTOTYPE_OF        = 'isPrototypeOf';
   PROP_PROPERTY_IS_ENUMERABLE = 'propertyIsEnumerable';
   PROP_TO_LOCALE_STRING       = 'toLocaleString';
+  PROP_STRICT_TYPES           = 'strictTypes';
 
 implementation
 

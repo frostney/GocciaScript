@@ -79,6 +79,7 @@ uses
 
   Goccia.Compiler.Expressions,
   Goccia.Compiler.ExtOps,
+  Goccia.Constants.TypeNames,
   Goccia.Keywords.Reserved,
   Goccia.Token,
   Goccia.Values.Primitives;
@@ -141,16 +142,18 @@ begin
     Exit;
   if Pos('|', AAnnotation) > 0 then
     Exit;
-  if AAnnotation = 'number' then
+  if AAnnotation = NUMBER_TYPE_NAME then
     Result := sltFloat
-  else if AAnnotation = 'string' then
+  else if AAnnotation = STRING_TYPE_NAME then
     Result := sltString
-  else if AAnnotation = 'boolean' then
+  else if AAnnotation = BOOLEAN_TYPE_NAME then
     Result := sltBoolean
-  else if (AAnnotation = 'object') or (AAnnotation = 'Object')
+  else if (AAnnotation = OBJECT_TYPE_NAME) or (AAnnotation = 'Object')
        or (AAnnotation = 'Function')
        or (Pos('<', AAnnotation) > 0)
-       or (Pos('[', AAnnotation) > 0) then
+       or (Pos('[', AAnnotation) > 0)
+       or (Pos('{', AAnnotation) > 0)
+       or (Pos('=>', AAnnotation) > 0) then
     Result := sltReference;
 end;
 
@@ -318,6 +321,11 @@ begin
   begin
     if AParams[I].IsRest then
       Break;
+    if AParams[I].IsOptional or Assigned(AParams[I].DefaultValue) then
+    begin
+      Result := '';
+      Exit;
+    end;
     ParamType := TypeAnnotationToLocalType(AParams[I].TypeAnnotation);
     if ParamType = sltUntyped then
     begin

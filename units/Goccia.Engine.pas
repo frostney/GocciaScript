@@ -496,7 +496,7 @@ begin
   GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GetVersion));
   GocciaObj.AssignProperty('commit', TGocciaStringLiteralValue.Create(GetCommit));
   GocciaObj.AssignProperty('builtIns', BuiltInsArray);
-  GocciaObj.AssignProperty('strictTypes', TGocciaBooleanLiteralValue.FalseValue);
+  GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.FalseValue);
 
   FInterpreter.GlobalScope.DefineLexicalBinding('GocciaScript', GocciaObj, dtConst);
 end;

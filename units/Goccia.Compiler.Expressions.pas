@@ -267,6 +267,8 @@ var
   Sig: string;
   LocalIdx, I: Integer;
   ArgType, ParamType: TSouffleLocalType;
+  Local: TGocciaCompilerLocal;
+  UV: TGocciaCompilerUpvalue;
 begin
   Result := 0;
   if not (AExpr.Callee is TGocciaIdentifierExpression) then
@@ -276,13 +278,25 @@ begin
   LocalIdx := ACtx.Scope.ResolveLocal(
     TGocciaIdentifierExpression(AExpr.Callee).Name);
   if LocalIdx >= 0 then
-    Sig := ACtx.Scope.GetLocal(LocalIdx).ParamTypeSignature
+  begin
+    Local := ACtx.Scope.GetLocal(LocalIdx);
+    if not Local.IsConst then
+      Exit;
+    if Local.IsGlobalBacked then
+      Exit;
+    Sig := Local.ParamTypeSignature;
+  end
   else
   begin
     LocalIdx := ACtx.Scope.ResolveUpvalue(
       TGocciaIdentifierExpression(AExpr.Callee).Name);
     if LocalIdx >= 0 then
-      Sig := ACtx.Scope.GetUpvalue(LocalIdx).ParamTypeSignature;
+    begin
+      UV := ACtx.Scope.GetUpvalue(LocalIdx);
+      if not UV.IsConst then
+        Exit;
+      Sig := UV.ParamTypeSignature;
+    end;
   end;
 
   if (Sig = '') or (Length(Sig) > AExpr.Arguments.Count) then

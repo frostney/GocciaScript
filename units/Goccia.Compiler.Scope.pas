@@ -119,8 +119,11 @@ begin
   FLocals[FLocalCount].Depth := FDepth;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsConst := AIsConst;
+  FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
+  FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
+  FLocals[FLocalCount].ParamTypeSignature := '';
   Result := FNextSlot;
   Inc(FLocalCount);
   Inc(FNextSlot);

@@ -301,7 +301,7 @@ end;
 function TSouffleBytecodeReader.ReadFunctionTemplate: TSouffleFunctionTemplate;
 var
   Name: string;
-  MaxRegs, ParamCount, UpvalueCount, LocalTypeCount: UInt8;
+  MaxRegs, ParamCount, UpvalueCount, LocalTypeCount, LocalStrictCount: UInt8;
   CodeCount: UInt32;
   ConstCount, FuncCount, HandlerCount: UInt16;
   I: Integer;
@@ -379,8 +379,8 @@ begin
     Result.SetLocalType(UInt8(I), TSouffleLocalType(ReadUInt8));
 
   // Local strict flags
-  LocalTypeCount := ReadUInt8;
-  for I := 0 to LocalTypeCount - 1 do
+  LocalStrictCount := ReadUInt8;
+  for I := 0 to LocalStrictCount - 1 do
     Result.SetLocalStrictFlag(UInt8(I), ReadBoolean);
 
   Result.TypeCheckPreambleSize := ReadUInt8;

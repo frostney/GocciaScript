@@ -224,6 +224,7 @@ var
   Base: Integer;
   HandlerEntry: TSouffleHandlerEntry;
   Running: Boolean;
+  Upval: TSouffleUpvalue;
 begin
   Running := True;
   while Running do
@@ -316,12 +317,16 @@ begin
             Bx := UInt16((Instruction shr 16) and $FFFF);
             if Assigned(Frame^.Closure) then
             begin
-              if Frame^.Closure.GetUpvalue(Bx).IsOpen then
-                FRegisters[Base + A] :=
-                  FRegisters[Frame^.Closure.GetUpvalue(Bx).RegisterIndex]
+              Upval := Frame^.Closure.GetUpvalue(Bx);
+              if Assigned(Upval) then
+              begin
+                if Upval.IsOpen then
+                  FRegisters[Base + A] := FRegisters[Upval.RegisterIndex]
+                else
+                  FRegisters[Base + A] := Upval.Closed;
+              end
               else
-                FRegisters[Base + A] :=
-                  Frame^.Closure.GetUpvalue(Bx).Closed;
+                FRegisters[Base + A] := SouffleNil;
             end
             else
               FRegisters[Base + A] := SouffleNil;
@@ -481,7 +486,6 @@ begin
           end;
 
           OP_CHECK_TYPE:
-          if not Frame^.Trusted then
           begin
             A := UInt8((Instruction shr 8) and $FF);
             B := UInt8((Instruction shr 16) and $FF);
@@ -1215,7 +1219,6 @@ begin
     end;
 
     OP_CHECK_TYPE:
-    if not AFrame^.Trusted then
     begin
       A := DecodeA(AInstruction);
       B := DecodeB(AInstruction);
