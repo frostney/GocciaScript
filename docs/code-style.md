@@ -1,5 +1,7 @@
 # Code Style
 
+*For contributors writing or reviewing FreePascal code in this repository.*
+
 This document describes the coding conventions and patterns used throughout the GocciaScript codebase.
 
 ## Pascal Conventions

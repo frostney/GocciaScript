@@ -146,7 +146,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Souffle Upvalue | `Souffle.VM.Upvalue.pas` | `TSouffleUpvalue` — open (register pointer) or closed (captured value) |
 | Souffle Call Frame | `Souffle.VM.CallFrame.pas` | `TSouffleVMCallFrame`, `TSouffleCallStack` |
 | Souffle Exception | `Souffle.VM.Exception.pas` | `TSouffleHandlerStack`, `ESouffleThrow` — handler-table exception model |
-| Souffle Runtime Ops | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` — 45-method abstract interface for language-specific semantics, plus `ExtendedOperation` for sub-opcode dispatch |
+| Souffle Runtime Ops | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` — 47-method interface (41 abstract + 6 virtual with defaults) for language-specific semantics, including `ExtendedOperation` for sub-opcode dispatch |
 | Souffle GC | `Souffle.GarbageCollector.pas` | Mark-and-sweep GC for `TSouffleHeapObject` instances |
 | Souffle Heap | `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleString`, heap kind constants |
 | GocciaScript Backend | `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — bridges GocciaScript engine to Souffle VM |
@@ -168,7 +168,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 - **Class compilation** — Classes with constructors, named methods, getters, setters, static members, private fields/methods, and computed property names are compiled to VM blueprint opcodes (`OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_RECORD_SET`, `OP_INSTANTIATE`) plus extension opcodes (`GOCCIA_EXT_DEF_GETTER`, `GOCCIA_EXT_DEF_SETTER`, `GOCCIA_EXT_DEF_STATIC_GETTER`, `GOCCIA_EXT_DEF_STATIC_SETTER`). Classes extending built-in constructors are compiled natively via `FBlueprintSuperValues` (which maps blueprints to their wrapped non-blueprint superclasses) and `TGocciaSuperCallHelper` (which bridges `super()` calls to non-blueprint constructors). Only classes with decorators are deferred to the interpreter via `FPendingClasses`. `OP_RECORD_SET` is overloaded: when the target is a `TSouffleBlueprint`, it stores into `Blueprint.Methods`. Private members use `#`-prefixed keys (e.g., `#field`, `#method`). Computed property names are evaluated at class definition time and stored as dynamic keys.
 - NaN handling in the Souffle layer uses raw IEEE 754 bit-pattern checks (`FloatBitsAreNaN`), not FPC's `Math.IsNaN`, to avoid language-runtime dependencies and AArch64 pitfalls.
 - New Tier 2 opcodes should only be added when no combination of existing opcodes can express the semantics efficiently. Language-specific features should use `OP_RT_EXT` with sub-opcode IDs defined in the language's extension constants unit (e.g., `Goccia.Compiler.ExtOps.pas`).
-- The `TSouffleRuntimeOperations` abstract class defines the contract between the VM and any language frontend (46 methods: 44 abstract + `CheckLocalType`, `ExtendedOperation` with default no-ops). `CheckLocalType` is called by `OP_CHECK_TYPE` for non-fast-path cases (e.g., type mismatches other than integer→float); frontends override it to throw type errors. GocciaScript's `TGocciaRuntimeOperations` is one implementation; future frontends provide their own.
+- The `TSouffleRuntimeOperations` abstract class defines the contract between the VM and any language frontend (47 methods: 41 abstract + 6 virtual with defaults — `DeleteIndex`, `WrapInPromise`, `CoerceValueToString`, `ExtendedOperation`, `CheckLocalType`, `MarkExternalRoots`). `CheckLocalType` is called by `OP_CHECK_TYPE` for non-fast-path cases (e.g., type mismatches other than integer→float); frontends override it to throw type errors. GocciaScript's `TGocciaRuntimeOperations` is one implementation; future frontends provide their own.
 - **Spread calling** uses the C flags byte on `OP_RT_CALL` / `OP_RT_CALL_METHOD` (bit 0 = spread mode, bit 1 = trusted flag, B = args array register in spread mode). Both opcodes propagate the trusted flag into `CallClosure`. No separate spread opcodes.
 - **Per-property flags** (writable, configurable) on `TSouffleRecordEntry.Flags` are the fundamental primitive. `SetEntryFlags`, `PutWithFlags`, and `PreventExtensions` are the building blocks. Bulk operations like `Freeze` (set all flags to 0 + prevent extensions) are derived convenience methods called from language runtimes — not opcodes.
 
@@ -569,6 +569,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 
 | Document | Description |
 |----------|-------------|
+| [docs/tutorial.md](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
 | [docs/architecture.md](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
 | [docs/souffle-vm.md](docs/souffle-vm.md) | Souffle VM architecture, two-tier ISA, value system, binary format, WASM alignment |
 | [docs/design-decisions.md](docs/design-decisions.md) | Rationale behind key technical choices |

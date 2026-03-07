@@ -203,6 +203,68 @@ npx vitest run
 
 The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`. Calibration and measurement parameters are configurable via environment variables — see [Benchmarks](docs/benchmarks.md) for details.
 
+## Quick Tour
+
+GocciaScript looks like modern JavaScript — with a few intentional differences. Here's a taste of the language.
+
+**Arrow functions only** — no `function` keyword:
+
+```javascript
+const greet = (name) => `Hello, ${name}!`;
+const add = (a, b) => a + b;
+```
+
+**No traditional loops** — use array methods and `for...of`:
+
+```javascript
+const numbers = [1, 2, 3, 4, 5];
+const doubled = numbers.map((n) => n * 2);
+const sum = numbers.reduce((total, n) => total + n, 0);
+
+for (const n of numbers) {
+  console.log(n);
+}
+```
+
+**Classes** with private fields, getters, and inheritance:
+
+```javascript
+class Account {
+  #balance = 0;
+
+  deposit(amount) {
+    this.#balance = this.#balance + amount;
+  }
+
+  get balance() {
+    return this.#balance;
+  }
+}
+```
+
+**Modules** with named imports/exports (no default exports):
+
+```javascript
+// math.js
+export const add = (a, b) => a + b;
+
+// app.js
+import { add } from "./math.js";
+```
+
+**Async/await** with full Promise support:
+
+```javascript
+const fetchData = async () => {
+  const result = await Promise.resolve({ status: "ok" });
+  return result;
+};
+```
+
+**Strict equality only** — `===` and `!==` (no `==` or `!=`).
+
+For a full guided walkthrough, see the [Tutorial](docs/tutorial.md). For the complete list of what's supported and excluded, see [Language Restrictions](docs/language-restrictions.md).
+
 ## Architecture
 
 GocciaScript supports two execution backends that share the same frontend (lexer, parser, AST):
@@ -255,17 +317,19 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 
 | Document | Description |
 |----------|-------------|
+| [Tutorial](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
+| [Language Restrictions](docs/language-restrictions.md) | Supported and excluded features with rationale |
+| [Built-in Objects](docs/built-ins.md) | Available built-ins, API reference, adding new ones |
 | [Architecture](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
 | [Souffle VM](docs/souffle-vm.md) | Bytecode VM architecture, two-tier ISA, value system, WASM 3.0 alignment |
 | [Design Decisions](docs/design-decisions.md) | Rationale behind key technical choices |
 | [Code Style](docs/code-style.md) | Naming conventions, patterns, file organization |
 | [Value System](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
-| [Built-in Objects](docs/built-ins.md) | Available built-ins, API reference, adding new ones |
 | [Adding Built-in Types](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
+| [Embedding the Engine](docs/embedding.md) | Embedding GocciaScript in FreePascal applications |
 | [Testing](docs/testing.md) | Test organization, writing tests, running tests |
 | [Benchmarks](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks |
 | [Build System](docs/build-system.md) | Build commands, compiler configuration, CI/CD |
-| [Language Restrictions](docs/language-restrictions.md) | Supported and excluded features with rationale |
 | [AGENTS.md](AGENTS.md) | Instructions for AI coding assistants |
 
 ## Contributing

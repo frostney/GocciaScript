@@ -1,5 +1,7 @@
 # Language Restrictions
 
+*For script authors learning what GocciaScript supports and excludes, and for contributors understanding the design boundaries.*
+
 GocciaScript implements a curated subset of ECMAScript. This document details what's supported, what's excluded, and the rationale for each decision.
 
 ## Guiding Principle

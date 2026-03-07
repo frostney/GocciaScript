@@ -1,5 +1,7 @@
 # Souffle VM
 
+*For contributors working on the bytecode backend, or anyone designing a new language frontend targeting the Souffle VM.*
+
 Souffle is a general-purpose, language-agnostic bytecode virtual machine designed for extensibility, maintainability, and performance. It is architected as a **standalone project** that can be extracted from the GocciaScript repository and used independently. While it currently serves as an alternative execution backend for GocciaScript, its architecture supports multiple programming language frontends (JavaScript/GocciaScript, Boo, C#, Ruby-like, or any other language) and future WASM 3.0 output.
 
 The key design goal: the `souffle/` directory has **zero imports** from `Goccia.*` units. All language-specific behavior is injected through a pluggable abstract runtime interface (`TSouffleRuntimeOperations`). Adding a new language frontend requires implementing this interface — zero VM changes.
@@ -120,7 +122,7 @@ By routing these through an abstract interface, the VM remains language-agnostic
 
 ### TSouffleRuntimeOperations: The Abstract Interface
 
-The runtime interface defines **46 methods (including the `ExtendedOperation` extension entry point)**, all expressed in language-agnostic terms. No method name, parameter, or return type references JavaScript concepts. The full method listing:
+The runtime interface defines **47 methods (41 abstract + 6 virtual with defaults, including the `ExtendedOperation` extension entry point)**, all expressed in language-agnostic terms. No method name, parameter, or return type references JavaScript concepts. The full method listing:
 
 | Group | Methods | Count |
 |-------|---------|-------|
@@ -137,10 +139,11 @@ The runtime interface defines **46 methods (including the `ExtendedOperation` ex
 | Coercion | `CoerceValueToString` | 1 |
 | Type Checking | `CheckLocalType` | 1 |
 | Extension | `ExtendedOperation` | 1 |
+| GC Coordination | `MarkExternalRoots` | 1 |
 
 All methods operate on `TSouffleValue` — the VM's own tagged union. The runtime never touches registers, the instruction pointer, or the call stack. It receives values, performs language-specific logic, and returns values. The VM handles all register storage, frame management, and dispatch.
 
-**Default implementations**: `DeleteIndex` (delegates to `DeleteProperty` with string coercion), `CoerceValueToString` (returns `SouffleNil`), `WrapInPromise` (returns the value unchanged), `CheckLocalType` (no-op), and `ExtendedOperation` (no-op) have default implementations in the base class. All other methods are abstract.
+**Default implementations**: `DeleteIndex` (delegates to `DeleteProperty` with string coercion), `CoerceValueToString` (returns `SouffleNil`), `WrapInPromise` (returns the value unchanged), `CheckLocalType` (no-op), `ExtendedOperation` (no-op), and `MarkExternalRoots` (no-op) have default implementations in the base class. All other methods are abstract.
 
 **Why these specific groups?** Every practical language needs arithmetic on polymorphic values, some form of property access, a way to call functions, and a way to compare values. The interface was designed by asking: *"What operations would a Boo, C#, Ruby, or fully-compliant ES engine need?"* Operations that only apply to one language (object spread, enum finalization, super method lookup) are routed through `ExtendedOperation` instead.
 
@@ -848,6 +851,8 @@ The `.sbc` (Souffle ByteCode) binary format enables ahead-of-time compilation an
 └──────────────────────────────────────┘
 ```
 
+The current format version is `SOUFFLE_FORMAT_VERSION = 2` (defined in `Souffle.Bytecode.pas`). Version 2 added per-local strict flags (`LocalStrictCount` + `IsStrict` per local) and `TypeCheckPreambleSize` to the function prototype layout. The loader rejects modules with a mismatched format version.
+
 The `RuntimeTag` field (e.g., `"goccia-js"`) identifies which runtime operations implementation is needed to execute the module. A loader can reject modules compiled for an incompatible runtime.
 
 ## CLI Integration
@@ -1196,7 +1201,7 @@ The current boundary was established through a systematic multi-session process:
 
 4. **Consolidation** — Separate spread opcodes (`OP_RT_CALL_SPREAD`, `OP_RT_CALL_METHOD_SPREAD`) were consolidated into the C flags byte of `OP_RT_CALL`/`OP_RT_CALL_METHOD`. `OP_RECORD_FREEZE` was removed (freezing is a `TSouffleRecord` method, not an opcode). `OP_UNPACK` was made fully Tier 1 by inlining the array rest logic.
 
-5. **Verification** — After cleanup: Tier 1 has 44 language-agnostic opcodes, Tier 2 has 44 runtime-dispatched opcodes + 1 extension opcode. The `souffle/` directory has zero `Goccia.*` imports. The abstract interface has 45 generic methods + 1 extension entry point.
+5. **Verification** — After cleanup: Tier 1 has 79 language-agnostic opcodes (including typed local access, integer/float arithmetic, integer/float comparison, blueprint, and destructuring opcodes added post-cleanup), Tier 2 has 43 runtime-dispatched opcodes + 1 extension opcode. The `souffle/` directory has zero `Goccia.*` imports. The abstract interface has 47 methods (41 abstract + 6 virtual with defaults).
 
 ### NaN/Infinity Rationale
 
@@ -1265,7 +1270,7 @@ The design constraints that enable multi-frontend use:
 |-----------|-------------|
 | No language keywords in opcodes | `OP_LOAD_NIL` not `OP_LOAD_UNDEFINED` |
 | Flags are opaque bytes | VM stores and compares them; runtime interprets them |
-| No language-specific abstract methods | 45 generic methods; language extensions via `ExtendedOperation` |
+| No language-specific abstract methods | 47 generic methods (41 abstract + 6 virtual with defaults); language extensions via `ExtendedOperation` |
 | Record property flags are universal | Writable/configurable — every OOP language needs these |
 | Getters, setters, methods are all functions | No accessor-specific opcodes; the runtime decides invocation semantics |
 | Blueprint methods are just records | `OP_RECORD_SET` on a blueprint stores to its method record; no visibility opcodes |

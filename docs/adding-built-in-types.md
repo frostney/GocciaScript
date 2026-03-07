@@ -1,5 +1,7 @@
 # Adding a New Built-in Type
 
+*For contributors adding a new built-in type to the engine — a step-by-step recipe.*
+
 This guide walks through every step needed to add a new built-in type to GocciaScript. Follow the steps in order; each section references the exact files and patterns involved.
 
 ## Overview

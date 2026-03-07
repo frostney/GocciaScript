@@ -1,5 +1,7 @@
 # Build System
 
+*For contributors setting up their development environment or troubleshooting builds.*
+
 GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself.
 
 ## Prerequisites

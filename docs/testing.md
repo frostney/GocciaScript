@@ -1,5 +1,7 @@
 # Testing
 
+*For contributors writing, running, or debugging tests.*
+
 JavaScript end-to-end tests are the **primary** way of testing GocciaScript and ensuring ECMAScript compatibility. Every new feature or bug fix should include JavaScript tests that exercise the full pipeline (lexer → parser → evaluator). Pascal unit tests exist as a secondary layer for low-level value system validation.
 
 ## Test Organization
