@@ -98,7 +98,7 @@ Language-specific semantics dispatched through `TSouffleRuntimeOperations`, an a
 | Comparison (6) | `OP_RT_EQ` through `OP_RT_GTE` | Polymorphic comparison with language-specific equality/ordering |
 | Logic/Type (5) | `OP_RT_NOT`, `OP_RT_TYPEOF`, `OP_RT_IS_INSTANCE`, `OP_RT_HAS_PROPERTY`, `OP_RT_TO_BOOLEAN` | Type checks, truthiness, logical operations |
 | Property (6) | `OP_RT_GET_PROP`, `OP_RT_SET_PROP`, `OP_RT_GET_INDEX`, `OP_RT_SET_INDEX`, `OP_RT_DEL_PROP`, `OP_RT_DEL_INDEX` | Property read/write/delete with language-specific dispatch |
-| Invocation (3) | `OP_RT_CALL`, `OP_RT_CALL_METHOD`, `OP_RT_CONSTRUCT` | Function calls (C flag bit 0 = spread mode) and construction |
+| Invocation (3) | `OP_RT_CALL`, `OP_RT_CALL_METHOD`, `OP_RT_CONSTRUCT` | Function calls (C flags: bit 0 = spread, bit 1 = trusted) and construction |
 | Iteration (2) | `OP_RT_GET_ITER`, `OP_RT_ITER_NEXT` | Iterator protocol |
 | Modules (2) | `OP_RT_IMPORT`, `OP_RT_EXPORT` | Module system |
 | Async (1) | `OP_RT_AWAIT` | Async/await support |
@@ -120,7 +120,7 @@ By routing these through an abstract interface, the VM remains language-agnostic
 
 ### TSouffleRuntimeOperations: The Abstract Interface
 
-The runtime interface defines **45 methods (including the `ExtendedOperation` extension entry point)**, all expressed in language-agnostic terms. No method name, parameter, or return type references JavaScript concepts. The full method listing:
+The runtime interface defines **46 methods (including the `ExtendedOperation` extension entry point)**, all expressed in language-agnostic terms. No method name, parameter, or return type references JavaScript concepts. The full method listing:
 
 | Group | Methods | Count |
 |-------|---------|-------|
@@ -135,11 +135,12 @@ The runtime interface defines **45 methods (including the `ExtendedOperation` ex
 | Modules | `ImportModule`, `ExportBinding` | 2 |
 | Async | `AwaitValue`, `WrapInPromise` | 2 |
 | Coercion | `CoerceValueToString` | 1 |
+| Type Checking | `CheckLocalType` | 1 |
 | Extension | `ExtendedOperation` | 1 |
 
 All methods operate on `TSouffleValue` — the VM's own tagged union. The runtime never touches registers, the instruction pointer, or the call stack. It receives values, performs language-specific logic, and returns values. The VM handles all register storage, frame management, and dispatch.
 
-**Default implementations**: `DeleteIndex` (delegates to `DeleteProperty` with string coercion), `CoerceValueToString` (returns `SouffleNil`), `WrapInPromise` (returns the value unchanged), and `ExtendedOperation` (no-op) have default implementations in the base class. All other methods are abstract.
+**Default implementations**: `DeleteIndex` (delegates to `DeleteProperty` with string coercion), `CoerceValueToString` (returns `SouffleNil`), `WrapInPromise` (returns the value unchanged), `CheckLocalType` (no-op), and `ExtendedOperation` (no-op) have default implementations in the base class. All other methods are abstract.
 
 **Why these specific groups?** Every practical language needs arithmetic on polymorphic values, some form of property access, a way to call functions, and a way to compare values. The interface was designed by asking: *"What operations would a Boo, C#, Ruby, or fully-compliant ES engine need?"* Operations that only apply to one language (object spread, enum finalization, super method lookup) are routed through `ExtendedOperation` instead.
 
@@ -228,9 +229,9 @@ An earlier design included a dedicated `OP_RECORD_FREEZE` opcode for bulk freezi
 
 Function call spread (`fn(...args)`) is handled via a **flag bit** on the existing invocation opcodes, not via dedicated spread opcodes:
 
-- `OP_RT_CALL` and `OP_RT_CALL_METHOD` encode spread mode in **C flag bit 0**
-- When bit 0 is set: register B holds the arguments array (a `TSouffleArray`), and the runtime's `InvokeWithSpread` unpacks and invokes
-- When bit 0 is clear: B holds the argument count, and arguments are in consecutive registers starting at `R[Base + A + 1]`
+- `OP_RT_CALL` and `OP_RT_CALL_METHOD` encode flags in the **C byte**:
+  - **Bit 0** (spread): When set, register B holds the arguments array (a `TSouffleArray`), and the runtime's `InvokeWithSpread` unpacks and invokes. When clear, B holds the argument count, and arguments are in consecutive registers starting at `R[Base + A + 1]`
+  - **Bit 1** (trusted): When set and the callee is a `TSouffleClosure`, `CallClosure` advances `Frame^.IP` past the function's `TypeCheckPreambleSize` to skip parameter preamble type checks. The compiler sets this bit only when the callee is a known immutable (`const`), non-global-backed binding whose parameter type signature exactly matches the argument types at the call site
 
 #### Design Decision: Flags Over Separate Opcodes
 
@@ -743,7 +744,22 @@ TSouffleFunctionTemplate
                       sltBoolean (3), sltString (4), sltReference (5)
 ```
 
-The compiler infers type hints from literal initializers and type annotations (e.g., `const x = 42` gets `sltFloat`, `let z: number` gets `sltFloat`). All JavaScript numeric values are `sltFloat` (IEEE 754 double); `sltInteger` is reserved for known-integer results like `.length`. These hints are stored on the template and used to emit type-specialized opcodes (`OP_GET_LOCAL_FLOAT`, `OP_ADD_FLOAT`, `OP_LTE_FLOAT`, etc.) instead of generic `OP_GET_LOCAL`/`OP_RT_ADD`. Typed float opcodes are inlined in the VM's main dispatch loop for maximum performance, eliminating procedure call overhead. `OP_CHECK_TYPE` for `sltFloat` coerces integer values to float at function boundaries, ensuring the function body can use direct float operations. `OP_CHECK_TYPE` always executes — there is no frame-wide bypass. Preamble type checks (parameter validation at function entry) are skipped for trusted calls by advancing `Frame^.IP` past `TypeCheckPreambleSize` in `CallClosure`, so body-level type checks remain active even in trusted frames. All variables with initializers or type annotations are strictly typed — reassignment to an incompatible type throws a `TypeError`. Trusted calls require immutable (`const`) and non-global-backed bindings; mutable bindings are never trusted because the callee could be rebound.
+The compiler infers type hints from literal initializers and type annotations (e.g., `const x = 42` gets `sltFloat`, `let z: number` gets `sltFloat`). All JavaScript numeric values are `sltFloat` (IEEE 754 double); `sltInteger` is reserved for known-integer results like `.length`. These hints are stored on the template and used to emit type-specialized opcodes (`OP_GET_LOCAL_FLOAT`, `OP_ADD_FLOAT`, `OP_LTE_FLOAT`, etc.) instead of generic `OP_GET_LOCAL`/`OP_RT_ADD`. Typed float opcodes are inlined in the VM's main dispatch loop for maximum performance, eliminating procedure call overhead. All typed float opcodes use `SouffleToDouble`, which safely handles both `svkFloat` and `svkInteger` values — so integer values in float-typed slots produce correct results without explicit coercion. All variables with initializers or type annotations are strictly typed — reassignment to an incompatible type throws a `TypeError`.
+
+#### OP_CHECK_TYPE and Trusted Calls
+
+`OP_CHECK_TYPE` is emitted at function entry (the "preamble") and at assignment sites. It validates that a register holds a value compatible with the expected `TSouffleLocalType`. For `sltFloat`, it coerces `svkInteger` to `svkFloat`; for other mismatches, it delegates to `CheckLocalType` on the runtime interface, which can throw a `TypeError`.
+
+`OP_CHECK_TYPE` always executes — there is no frame-wide bypass. The only optimization is **preamble skipping**: when `CallClosure` receives a trusted call (C flag bit 1), it advances `Frame^.IP` past `TypeCheckPreambleSize` instructions, skipping parameter validation at function entry. Body-level type checks (assignment guards) remain active even in trusted frames.
+
+**Trusted call constraints** — The compiler sets the trusted bit only when all of the following hold:
+1. The callee is resolved as a local or upvalue binding
+2. The binding is immutable (`IsConst`)
+3. The binding is not global-backed (`not IsGlobalBacked`)
+4. All parameter types in the callee's `ParamTypeSignature` are known (non-`sltUntyped`)
+5. All argument types at the call site match the parameter types via `TypesAreCompatible` (exact match, plus integer→float coercion)
+
+Integer arguments passed to float parameters are considered compatible because all typed float opcodes use `SouffleToDouble`, which handles both `svkInteger` and `svkFloat` — the coercion is implicit in the opcode execution, not dependent on the preamble.
 
 ### Constant Pool
 
