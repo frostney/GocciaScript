@@ -98,7 +98,7 @@ Language-specific semantics dispatched through `TSouffleRuntimeOperations`, an a
 | Comparison (6) | `OP_RT_EQ` through `OP_RT_GTE` | Polymorphic comparison with language-specific equality/ordering |
 | Logic/Type (5) | `OP_RT_NOT`, `OP_RT_TYPEOF`, `OP_RT_IS_INSTANCE`, `OP_RT_HAS_PROPERTY`, `OP_RT_TO_BOOLEAN` | Type checks, truthiness, logical operations |
 | Property (6) | `OP_RT_GET_PROP`, `OP_RT_SET_PROP`, `OP_RT_GET_INDEX`, `OP_RT_SET_INDEX`, `OP_RT_DEL_PROP`, `OP_RT_DEL_INDEX` | Property read/write/delete with language-specific dispatch |
-| Invocation (3) | `OP_RT_CALL`, `OP_RT_CALL_METHOD`, `OP_RT_CONSTRUCT` | Function calls (C flags: bit 0 = spread, bit 1 = trusted) and construction |
+| Invocation (3) | `OP_RT_CALL`, `OP_RT_CALL_METHOD`, `OP_RT_CONSTRUCT` | Function calls and construction. `OP_RT_CALL` and `OP_RT_CALL_METHOD` use C as a flags byte (bit 0 = spread, bit 1 = trusted; no separate spread opcodes); `OP_RT_CONSTRUCT` uses C as a plain argument count — do not set flag bits on `OP_RT_CONSTRUCT` |
 | Iteration (2) | `OP_RT_GET_ITER`, `OP_RT_ITER_NEXT` | Iterator protocol |
 | Modules (2) | `OP_RT_IMPORT`, `OP_RT_EXPORT` | Module system |
 | Async (1) | `OP_RT_AWAIT` | Async/await support |
@@ -738,13 +738,19 @@ TSouffleFunctionTemplate
   │     ├── SourceFile: string
   │     ├── LineMap: array of (PC, Line, Column)
   │     └── LocalNames: array of (Slot, Name, StartPC, EndPC)
-  └── LocalTypes: array of TSouffleLocalType   (per-slot type hints)
-        ├── LocalTypeCount: UInt8
-        └── Per slot: sltUntyped (0), sltInteger (1), sltFloat (2),
-                      sltBoolean (3), sltString (4), sltReference (5)
+  ├── LocalTypes: array of TSouffleLocalType   (per-slot type hints)
+  │     ├── LocalTypeCount: UInt8
+  │     └── Per slot: sltUntyped (0), sltInteger (1), sltFloat (2),
+  │                   sltBoolean (3), sltString (4), sltReference (5)
+  ├── LocalStrictFlags: array of Boolean       (per-slot strict enforcement)
+  │     ├── LocalStrictCount: UInt8
+  │     └── Per slot: IsStrict (true = reassignment type-checked)
+  └── TypeCheckPreambleSize: UInt8             (instructions to skip for trusted calls)
 ```
 
-The compiler infers type hints from literal initializers and type annotations (e.g., `const x = 42` gets `sltFloat`, `let z: number` gets `sltFloat`). All JavaScript numeric values are `sltFloat` (IEEE 754 double); `sltInteger` is reserved for known-integer results like `.length`. These hints are stored on the template and used to emit type-specialized opcodes (`OP_GET_LOCAL_FLOAT`, `OP_ADD_FLOAT`, `OP_LTE_FLOAT`, etc.) instead of generic `OP_GET_LOCAL`/`OP_RT_ADD`. Typed float opcodes are inlined in the VM's main dispatch loop for maximum performance, eliminating procedure call overhead. All typed float opcodes use `SouffleToDouble`, which safely handles both `svkFloat` and `svkInteger` values — so integer values in float-typed slots produce correct results without explicit coercion. All variables with initializers or type annotations are strictly typed — reassignment to an incompatible type throws a `TypeError`.
+The compiler infers `TSouffleLocalType` hints from literal initializers and type annotations (e.g., `const x = 42` gets `sltFloat`, `let z: number` gets `sltFloat`). All JavaScript numeric values are `sltFloat` (IEEE 754 double); `sltInteger` is reserved for known-integer results like `.length`. These type hints are stored on the template and used to emit type-specialized opcodes (`OP_GET_LOCAL_FLOAT`, `OP_ADD_FLOAT`, `OP_LTE_FLOAT`, etc.) instead of generic `OP_GET_LOCAL`/`OP_RT_ADD`. Typed float opcodes are inlined in the VM's main dispatch loop for maximum performance, eliminating procedure call overhead. All typed float opcodes use `SouffleToDouble`, which safely handles both `svkFloat` and `svkInteger` values — so integer values in float-typed slots produce correct results without explicit coercion.
+
+Separately from type hints, each local slot has a per-local `IsStrict` flag (stored in `LocalStrictFlags`) that controls whether reassignment to an incompatible type throws a `TypeError`. A slot with a type hint but without the strict flag set may still benefit from optimized typed opcodes, but will not throw on type-incompatible reassignment. In the current GocciaScript compiler, `IsStrict` is set whenever a non-untyped type hint is inferred — so variables with initializers or type annotations are both type-hinted and strictly typed. The per-function `TypeCheckPreambleSize` records how many `OP_CHECK_TYPE` instructions form the parameter validation preamble, enabling trusted calls to skip them.
 
 #### OP_CHECK_TYPE and Trusted Calls
 
