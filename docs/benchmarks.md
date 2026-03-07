@@ -1,5 +1,7 @@
 # Benchmarks
 
+*For contributors measuring performance or adding new benchmarks.*
+
 GocciaScript includes a benchmark runner for measuring execution performance. Benchmarks live in the `benchmarks/` directory and use a `suite`/`bench` API.
 
 ## Running Benchmarks

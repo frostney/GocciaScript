@@ -1,5 +1,7 @@
 # Design Decisions
 
+*For contributors who want to understand why GocciaScript is built the way it is — the reasoning behind each architectural choice.*
+
 This document explains the key design decisions behind GocciaScript — the "why" behind the choices.
 
 ## Pure Evaluator Functions
@@ -380,7 +382,7 @@ The solution is a split opcode space:
 - **Tier 1 (0–127):** VM-intrinsic operations with fixed, universal semantics (register moves, control flow, closures, arrays, records, blueprints, exceptions). Implemented directly in the dispatch loop. The litmus test: *"Does this operation have one correct implementation regardless of language?"*
 - **Tier 2 (128–255):** Runtime operations dispatched through `TSouffleRuntimeOperations`, an abstract class each language provides. The VM calls `RuntimeOps.GetProperty(obj, key)` without knowing what "get property" means. The litmus test: *"Does this operation's behavior depend on the language?"*
 
-Adding a new language frontend requires implementing `TSouffleRuntimeOperations` — zero VM changes. Currently, the abstract interface has 45 generic methods + 1 `ExtendedOperation` entry point for language-specific sub-opcodes.
+Adding a new language frontend requires implementing `TSouffleRuntimeOperations` — zero VM changes. Currently, the abstract interface has 47 methods (41 abstract + 6 virtual with defaults), including the `ExtendedOperation` entry point for language-specific sub-opcodes.
 
 ### Why a Self-Contained Value System?
 
@@ -436,7 +438,7 @@ An earlier design had separate `OP_RT_CALL_SPREAD` and `OP_RT_CALL_METHOD_SPREAD
 2. Delegating to the GocciaScript evaluator/interpreter
 3. Converting `TGocciaValue` → `TSouffleValue` (wrap)
 
-This "Unwrap-Delegate-Wrap" cycle was the fastest path to a working bytecode backend and achieves full language coverage — the bytecode backend passes 100% of the test suite (3,358 tests). However, the cycle creates deep coupling to the interpreter.
+This "Unwrap-Delegate-Wrap" cycle was the fastest path to a working bytecode backend and achieves full language coverage — the bytecode backend passes 100% of the test suite (3,406 tests). However, the cycle creates deep coupling to the interpreter.
 
 The target architecture eliminates the bridge entirely: `TGocciaRuntimeOperations` would implement JavaScript semantics directly on Souffle types (`TSouffleValue`, `TSouffleArray`, `TSouffleRecord`, `TSouffleBlueprint`), with prototype chain walking on delegate chains, type coercion natively on `TSouffleValue`, and all built-in methods as `TSouffleNativeFunction` delegates. This is a ground-up rewrite, not an incremental fix. See [souffle-vm.md § Current State](souffle-vm.md#current-state-and-bridge-architecture) for the full analysis.
 

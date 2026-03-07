@@ -1,5 +1,7 @@
 # Built-in Objects
 
+*For contributors adding or modifying built-in objects, and for script authors looking up available APIs.*
+
 GocciaScript provides a set of built-in global objects that mirror JavaScript's standard library. Each built-in is implemented as a Pascal unit and registered by the engine based on configuration flags.
 
 ## Registration System
@@ -303,6 +305,7 @@ A `const` global providing engine metadata:
 | `version` | `string` | Semver version from the latest git tag (e.g., `"0.2.0"`), or tag + `-dev` suffix if there are commits after the tag (e.g., `"0.2.0-dev"`) |
 | `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
 | `builtIns` | `string[]` | Names of the enabled `TGocciaGlobalBuiltin` flags (e.g., `["Console", "Math", "GlobalObject", ...]`), derived via RTTI at runtime |
+| `strictTypes` | `boolean` | `true` in bytecode mode where strict local type enforcement is active (covering both explicit type annotations and types inferred from literal initializers); `false` in interpreted mode |
 
 **Global functions:**
 

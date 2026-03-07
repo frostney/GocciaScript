@@ -1,5 +1,7 @@
 # Architecture
 
+*For contributors who need to understand how source code flows through the system — from lexer to runtime result.*
+
 GocciaScript follows a classic interpreter pipeline: source code flows through lexing, parsing, and evaluation stages before producing a result. The system is implemented in FreePascal using object-oriented design with virtual method dispatch.
 
 GocciaScript supports two execution backends: a **tree-walk interpreter** (default) and a **bytecode compiler + Souffle VM**. Both share the same frontend (lexer, parser, AST) and built-in object system. See [souffle-vm.md](souffle-vm.md) for the full Souffle VM architecture.
