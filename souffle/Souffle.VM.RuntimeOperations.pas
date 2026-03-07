@@ -13,7 +13,7 @@ type
     language frontend. Every method operates exclusively on TSouffleValue;
     frontends must NOT expose their own value systems through this interface.
 
-    Grouped by domain (45 abstract + 4 virtual with defaults). A new
+    Grouped by domain (41 abstract + 6 virtual with defaults). A new
     language frontend implements this class and passes it to the VM. }
 
   TSouffleRuntimeOperations = class abstract

@@ -1,5 +1,7 @@
 # Value System
 
+*For contributors working on the runtime — type coercion, property access, or adding new value types.*
+
 The value system is the foundation of GocciaScript's runtime. Every piece of data — numbers, strings, objects, functions — is represented as a `TGocciaValue` or one of its subclasses.
 
 ## Type Hierarchy
