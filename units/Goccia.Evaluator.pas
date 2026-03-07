@@ -1724,14 +1724,21 @@ begin
   // Phase 2: Execute finally block (always runs)
   if Assigned(ATryStatement.FinallyBlock) then
   begin
-    FinallyCF := EvaluateStatements(ATryStatement.FinallyBlock.Nodes, AContext);
-    // Per JS semantics: finally's control flow overrides try/catch result AND pending throw
-    if FinallyCF.Kind <> cfkNormal then
-    begin
-      Result := FinallyCF;
-      Exit;
+    if HasUnhandledThrow and Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.AddTempRoot(ThrownValue);
+    try
+      FinallyCF := EvaluateStatements(ATryStatement.FinallyBlock.Nodes, AContext);
+      // Per JS semantics: finally's control flow overrides try/catch result AND pending throw
+      if FinallyCF.Kind <> cfkNormal then
+      begin
+        Result := FinallyCF;
+        Exit;
+      end;
+      // If finally throws (TGocciaThrowValue), it propagates naturally and overrides everything
+    finally
+      if HasUnhandledThrow and Assigned(TGocciaGarbageCollector.Instance) then
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(ThrownValue);
     end;
-    // If finally throws (TGocciaThrowValue), it propagates naturally and overrides everything
   end;
 
   // Phase 3: Re-raise unhandled throw (if not overridden by finally)

@@ -237,7 +237,7 @@ begin
       Exit;
     end;
     if CF.Kind = cfkBreak then
-      Exit;
+      ThrowSyntaxError('Illegal break statement');
   end;
 end;
 
