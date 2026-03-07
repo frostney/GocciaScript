@@ -20,6 +20,7 @@ type
     ReturnRegister: Integer;
     ArgCount: Integer;
     ArgSourceBase: Integer;
+    Trusted: Boolean;
   end;
 
   TSouffleCallStack = class
@@ -74,6 +75,7 @@ begin
   FFrames[FCount].HandlerDepth := AHandlerDepth;
   FFrames[FCount].ArgCount := 0;
   FFrames[FCount].ArgSourceBase := 0;
+  FFrames[FCount].Trusted := False;
   Result := @FFrames[FCount];
   Inc(FCount);
 end;

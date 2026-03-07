@@ -60,6 +60,7 @@ function SouffleIsStringValue(const AValue: TSouffleValue): Boolean; inline;
 
 function SouffleIsTrue(const AValue: TSouffleValue): Boolean;
 function SouffleAsNumber(const AValue: TSouffleValue): Double; inline;
+function SouffleToDouble(const AValue: TSouffleValue): Double; inline;
 function SouffleGetString(const AValue: TSouffleValue): string;
 
 function SouffleValuesEqual(const A, B: TSouffleValue): Boolean;
@@ -214,6 +215,22 @@ begin
     svkFloat:
       Result := AValue.AsFloat;
   else
+    Result := NaN;
+  end;
+end;
+
+function SouffleToDouble(const AValue: TSouffleValue): Double;
+begin
+  if AValue.Kind = svkFloat then
+    Result := AValue.AsFloat
+  else if AValue.Kind = svkInteger then
+    Result := AValue.AsInteger * 1.0
+  else
+  begin
+    {$IFDEF DEBUG}
+    Assert(False, 'SouffleToDouble: expected svkFloat or svkInteger, got kind ' +
+      IntToStr(Ord(AValue.Kind)));
+    {$ENDIF}
     Result := NaN;
   end;
 end;

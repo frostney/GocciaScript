@@ -5,7 +5,7 @@ unit Souffle.Bytecode;
 interface
 
 const
-  SOUFFLE_FORMAT_VERSION = 1;
+  SOUFFLE_FORMAT_VERSION = 2;
   SOUFFLE_BINARY_MAGIC: array[0..3] of Byte = (Ord('S'), Ord('B'), Ord('C'), 0);
 
   OP_RT_FIRST = 128;
@@ -123,6 +123,17 @@ type
 
     // ── Core: Destructuring ──
     OP_UNPACK        = 73,  // ABC   R[A] := Array(R[B])[C..] — unpack rest of TSouffleArray from index C
+
+    // ── Core: Type Checking ──
+    OP_CHECK_TYPE    = 76,  // ABC   if R[A] not matches TSouffleLocalType(B): RuntimeOps.CheckLocalType(R[A], B)
+
+    // ── Core: Float Comparison ──
+    OP_EQ_FLOAT      = 77,  // ABC   R[A] := Boolean(AsNumber(R[B]) = AsNumber(R[C]))
+    OP_NEQ_FLOAT     = 78,  // ABC   R[A] := Boolean(AsNumber(R[B]) <> AsNumber(R[C]))
+    OP_LT_FLOAT      = 79,  // ABC   R[A] := Boolean(AsNumber(R[B]) < AsNumber(R[C]))
+    OP_GT_FLOAT      = 80,  // ABC   R[A] := Boolean(AsNumber(R[B]) > AsNumber(R[C]))
+    OP_LTE_FLOAT     = 81,  // ABC   R[A] := Boolean(AsNumber(R[B]) <= AsNumber(R[C]))
+    OP_GTE_FLOAT     = 82,  // ABC   R[A] := Boolean(AsNumber(R[B]) >= AsNumber(R[C]))
 
     // ── Runtime: Polymorphic Arithmetic ──
     OP_RT_ADD        = 128, // ABC   R[A] := Runtime.Add(R[B], R[C])

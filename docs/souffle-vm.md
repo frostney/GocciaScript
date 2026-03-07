@@ -78,8 +78,10 @@ Fixed semantics implemented directly in the dispatch loop. These are universal o
 | Integer Arithmetic | `OP_ADD_INT`, `OP_SUB_INT`, `OP_MUL_INT`, `OP_DIV_INT`, `OP_MOD_INT`, `OP_NEG_INT` | Fast-path integer operations (no runtime dispatch) |
 | Float Arithmetic | `OP_ADD_FLOAT`, `OP_SUB_FLOAT`, `OP_MUL_FLOAT`, `OP_DIV_FLOAT`, `OP_MOD_FLOAT`, `OP_NEG_FLOAT` | Fast-path float operations (no runtime dispatch) |
 | Integer Comparison | `OP_EQ_INT`, `OP_NEQ_INT`, `OP_LT_INT`, `OP_GT_INT`, `OP_LTE_INT`, `OP_GTE_INT` | Fast-path integer comparison (no runtime dispatch) |
+| Float Comparison | `OP_EQ_FLOAT`, `OP_NEQ_FLOAT`, `OP_LT_FLOAT`, `OP_GT_FLOAT`, `OP_LTE_FLOAT`, `OP_GTE_FLOAT` | Fast-path float comparison (no runtime dispatch) |
 | String | `OP_CONCAT` | Direct string concatenation |
 | Type Coercion | `OP_TO_PRIMITIVE` | Fast-path for primitives (nil/bool/int/float/string pass through), runtime callback for references |
+| Type Checking | `OP_CHECK_TYPE` | Runtime type validation for strictly typed locals; coerces integer-to-float for `sltFloat` |
 | Blueprint | `OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_INSTANTIATE`, `OP_GET_SLOT`, `OP_SET_SLOT` | Wren-inspired blueprint primitives for optimized dispatch |
 | Exceptions | `OP_PUSH_HANDLER`, `OP_POP_HANDLER`, `OP_THROW` | Handler-table exception model |
 | Return | `OP_RETURN`, `OP_RETURN_NIL` | Function return |
@@ -96,7 +98,7 @@ Language-specific semantics dispatched through `TSouffleRuntimeOperations`, an a
 | Comparison (6) | `OP_RT_EQ` through `OP_RT_GTE` | Polymorphic comparison with language-specific equality/ordering |
 | Logic/Type (5) | `OP_RT_NOT`, `OP_RT_TYPEOF`, `OP_RT_IS_INSTANCE`, `OP_RT_HAS_PROPERTY`, `OP_RT_TO_BOOLEAN` | Type checks, truthiness, logical operations |
 | Property (6) | `OP_RT_GET_PROP`, `OP_RT_SET_PROP`, `OP_RT_GET_INDEX`, `OP_RT_SET_INDEX`, `OP_RT_DEL_PROP`, `OP_RT_DEL_INDEX` | Property read/write/delete with language-specific dispatch |
-| Invocation (3) | `OP_RT_CALL`, `OP_RT_CALL_METHOD`, `OP_RT_CONSTRUCT` | Function calls (C flag bit 0 = spread mode) and construction |
+| Invocation (3) | `OP_RT_CALL`, `OP_RT_CALL_METHOD`, `OP_RT_CONSTRUCT` | Function calls and construction. `OP_RT_CALL` and `OP_RT_CALL_METHOD` use C as a flags byte (bit 0 = spread, bit 1 = trusted; no separate spread opcodes); `OP_RT_CONSTRUCT` uses C as a plain argument count — do not set flag bits on `OP_RT_CONSTRUCT` |
 | Iteration (2) | `OP_RT_GET_ITER`, `OP_RT_ITER_NEXT` | Iterator protocol |
 | Modules (2) | `OP_RT_IMPORT`, `OP_RT_EXPORT` | Module system |
 | Async (1) | `OP_RT_AWAIT` | Async/await support |
@@ -118,7 +120,7 @@ By routing these through an abstract interface, the VM remains language-agnostic
 
 ### TSouffleRuntimeOperations: The Abstract Interface
 
-The runtime interface defines **45 methods (including the `ExtendedOperation` extension entry point)**, all expressed in language-agnostic terms. No method name, parameter, or return type references JavaScript concepts. The full method listing:
+The runtime interface defines **46 methods (including the `ExtendedOperation` extension entry point)**, all expressed in language-agnostic terms. No method name, parameter, or return type references JavaScript concepts. The full method listing:
 
 | Group | Methods | Count |
 |-------|---------|-------|
@@ -133,11 +135,12 @@ The runtime interface defines **45 methods (including the `ExtendedOperation` ex
 | Modules | `ImportModule`, `ExportBinding` | 2 |
 | Async | `AwaitValue`, `WrapInPromise` | 2 |
 | Coercion | `CoerceValueToString` | 1 |
+| Type Checking | `CheckLocalType` | 1 |
 | Extension | `ExtendedOperation` | 1 |
 
 All methods operate on `TSouffleValue` — the VM's own tagged union. The runtime never touches registers, the instruction pointer, or the call stack. It receives values, performs language-specific logic, and returns values. The VM handles all register storage, frame management, and dispatch.
 
-**Default implementations**: `DeleteIndex` (delegates to `DeleteProperty` with string coercion), `CoerceValueToString` (returns `SouffleNil`), `WrapInPromise` (returns the value unchanged), and `ExtendedOperation` (no-op) have default implementations in the base class. All other methods are abstract.
+**Default implementations**: `DeleteIndex` (delegates to `DeleteProperty` with string coercion), `CoerceValueToString` (returns `SouffleNil`), `WrapInPromise` (returns the value unchanged), `CheckLocalType` (no-op), and `ExtendedOperation` (no-op) have default implementations in the base class. All other methods are abstract.
 
 **Why these specific groups?** Every practical language needs arithmetic on polymorphic values, some form of property access, a way to call functions, and a way to compare values. The interface was designed by asking: *"What operations would a Boo, C#, Ruby, or fully-compliant ES engine need?"* Operations that only apply to one language (object spread, enum finalization, super method lookup) are routed through `ExtendedOperation` instead.
 
@@ -226,9 +229,9 @@ An earlier design included a dedicated `OP_RECORD_FREEZE` opcode for bulk freezi
 
 Function call spread (`fn(...args)`) is handled via a **flag bit** on the existing invocation opcodes, not via dedicated spread opcodes:
 
-- `OP_RT_CALL` and `OP_RT_CALL_METHOD` encode spread mode in **C flag bit 0**
-- When bit 0 is set: register B holds the arguments array (a `TSouffleArray`), and the runtime's `InvokeWithSpread` unpacks and invokes
-- When bit 0 is clear: B holds the argument count, and arguments are in consecutive registers starting at `R[Base + A + 1]`
+- `OP_RT_CALL` and `OP_RT_CALL_METHOD` encode flags in the **C byte**:
+  - **Bit 0** (spread): When set, register B holds the arguments array (a `TSouffleArray`), and the runtime's `InvokeWithSpread` unpacks and invokes. When clear, B holds the argument count, and arguments are in consecutive registers starting at `R[Base + A + 1]`
+  - **Bit 1** (trusted): When set and the callee is a `TSouffleClosure`, `CallClosure` advances `Frame^.IP` past the function's `TypeCheckPreambleSize` to skip parameter preamble type checks. The compiler sets this bit only when the callee is a known immutable (`const`), non-global-backed binding whose parameter type signature exactly matches the argument types at the call site
 
 #### Design Decision: Flags Over Separate Opcodes
 
@@ -735,13 +738,34 @@ TSouffleFunctionTemplate
   │     ├── SourceFile: string
   │     ├── LineMap: array of (PC, Line, Column)
   │     └── LocalNames: array of (Slot, Name, StartPC, EndPC)
-  └── LocalTypes: array of TSouffleLocalType   (per-slot type hints)
-        ├── LocalTypeCount: UInt8
-        └── Per slot: sltUntyped (0), sltInteger (1), sltFloat (2),
-                      sltBoolean (3), sltString (4), sltReference (5)
+  ├── LocalTypes: array of TSouffleLocalType   (per-slot type hints)
+  │     ├── LocalTypeCount: UInt8
+  │     └── Per slot: sltUntyped (0), sltInteger (1), sltFloat (2),
+  │                   sltBoolean (3), sltString (4), sltReference (5)
+  ├── LocalStrictFlags: array of Boolean       (per-slot strict enforcement)
+  │     ├── LocalStrictCount: UInt8
+  │     └── Per slot: IsStrict (true = reassignment type-checked)
+  └── TypeCheckPreambleSize: UInt8             (instructions to skip for trusted calls)
 ```
 
-The compiler infers type hints from literal initializers (e.g., `const x = 42` gets `sltInteger`, `const y = 3.14` gets `sltFloat`). These hints are stored on the template and used to emit type-specialized load/store opcodes (`OP_GET_LOCAL_INT`, `OP_SET_LOCAL_FLOAT`, etc.) instead of generic `OP_GET_LOCAL`/`OP_SET_LOCAL`. At runtime the typed opcodes are functionally identical to the generic versions, but they carry type information for future WASM generation and JIT compilation.
+The compiler infers `TSouffleLocalType` hints from literal initializers and type annotations (e.g., `const x = 42` gets `sltFloat`, `let z: number` gets `sltFloat`). All JavaScript numeric values are `sltFloat` (IEEE 754 double); `sltInteger` is reserved for known-integer results like `.length`. These type hints are stored on the template and used to emit type-specialized opcodes (`OP_GET_LOCAL_FLOAT`, `OP_ADD_FLOAT`, `OP_LTE_FLOAT`, etc.) instead of generic `OP_GET_LOCAL`/`OP_RT_ADD`. Typed float opcodes are inlined in the VM's main dispatch loop for maximum performance, eliminating procedure call overhead. All typed float opcodes use `SouffleToDouble`, which safely handles both `svkFloat` and `svkInteger` values — so integer values in float-typed slots produce correct results without explicit coercion.
+
+Separately from type hints, each local slot has a per-local `IsStrict` flag (stored in `LocalStrictFlags`) that controls whether reassignment to an incompatible type throws a `TypeError`. A slot with a type hint but without the strict flag set may still benefit from optimized typed opcodes, but will not throw on type-incompatible reassignment. In the current GocciaScript compiler, `IsStrict` is set whenever a non-untyped type hint is inferred — so variables with initializers or type annotations are both type-hinted and strictly typed. The per-function `TypeCheckPreambleSize` records how many `OP_CHECK_TYPE` instructions form the parameter validation preamble, enabling trusted calls to skip them.
+
+#### OP_CHECK_TYPE and Trusted Calls
+
+`OP_CHECK_TYPE` is emitted at function entry (the "preamble") and at assignment sites. It validates that a register holds a value compatible with the expected `TSouffleLocalType`. For `sltFloat`, it coerces `svkInteger` to `svkFloat`; for other mismatches, it delegates to `CheckLocalType` on the runtime interface, which can throw a `TypeError`.
+
+`OP_CHECK_TYPE` always executes — there is no frame-wide bypass. The only optimization is **preamble skipping**: when `CallClosure` receives a trusted call (C flag bit 1), it advances `Frame^.IP` past `TypeCheckPreambleSize` instructions, skipping parameter validation at function entry. Body-level type checks (assignment guards) remain active even in trusted frames.
+
+**Trusted call constraints** — The compiler sets the trusted bit only when all of the following hold:
+1. The callee is resolved as a local or upvalue binding
+2. The binding is immutable (`IsConst`)
+3. The binding is not global-backed (`not IsGlobalBacked`)
+4. All parameter types in the callee's `ParamTypeSignature` are known (non-`sltUntyped`)
+5. All argument types at the call site match the parameter types via `TypesAreCompatible` (exact match, plus integer→float coercion)
+
+Integer arguments passed to float parameters are considered compatible because all typed float opcodes use `SouffleToDouble`, which handles both `svkInteger` and `svkFloat` — the coercion is implicit in the opcode execution, not dependent on the preamble.
 
 ### Constant Pool
 
@@ -817,6 +841,10 @@ The `.sbc` (Souffle ByteCode) binary format enables ahead-of-time compilation an
 │   LocalTypeCount: UInt8              │
 │   Per local type:                    │
 │     Kind: UInt8 (0=untyped..5=ref)   │
+│   LocalStrictCount: UInt8            │
+│   Per local strict flag:             │
+│     IsStrict: UInt8 (boolean)        │
+│   TypeCheckPreambleSize: UInt8       │
 └──────────────────────────────────────┘
 ```
 
@@ -1032,7 +1060,7 @@ A WASM backend would read `TSouffleBytecodeModule` and emit a `.wasm` binary. Th
 
 ## Known Limitations
 
-The Souffle VM bytecode backend passes 100% of the GocciaScript test suite (3,358 tests across 514 test files). The limitations below are structural constraints, not correctness gaps.
+The Souffle VM bytecode backend passes 100% of the GocciaScript test suite (3,406 tests across 522 test files). The limitations below are structural constraints, not correctness gaps.
 
 ### Intentionally Not Changed (Rejected Findings)
 

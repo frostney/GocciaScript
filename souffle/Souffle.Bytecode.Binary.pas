@@ -195,6 +195,13 @@ begin
   WriteUInt8(AProto.LocalTypeCount);
   for I := 0 to AProto.LocalTypeCount - 1 do
     WriteUInt8(Ord(AProto.GetLocalType(UInt8(I))));
+
+  // Local strict flags
+  WriteUInt8(AProto.LocalStrictCount);
+  for I := 0 to AProto.LocalStrictCount - 1 do
+    WriteBoolean(AProto.GetLocalStrictFlag(UInt8(I)));
+
+  WriteUInt8(AProto.TypeCheckPreambleSize);
 end;
 
 procedure TSouffleBytecodeWriter.WriteModule(
@@ -294,7 +301,7 @@ end;
 function TSouffleBytecodeReader.ReadFunctionTemplate: TSouffleFunctionTemplate;
 var
   Name: string;
-  MaxRegs, ParamCount, UpvalueCount, LocalTypeCount: UInt8;
+  MaxRegs, ParamCount, UpvalueCount, LocalTypeCount, LocalStrictCount: UInt8;
   CodeCount: UInt32;
   ConstCount, FuncCount, HandlerCount: UInt16;
   I: Integer;
@@ -370,6 +377,13 @@ begin
   LocalTypeCount := ReadUInt8;
   for I := 0 to LocalTypeCount - 1 do
     Result.SetLocalType(UInt8(I), TSouffleLocalType(ReadUInt8));
+
+  // Local strict flags
+  LocalStrictCount := ReadUInt8;
+  for I := 0 to LocalStrictCount - 1 do
+    Result.SetLocalStrictFlag(UInt8(I), ReadBoolean);
+
+  Result.TypeCheckPreambleSize := ReadUInt8;
 end;
 
 function TSouffleBytecodeReader.ReadModule: TSouffleBytecodeModule;

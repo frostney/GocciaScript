@@ -7,10 +7,13 @@ interface
 uses
   Generics.Collections,
 
+  Souffle.Bytecode.Chunk,
+
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
-  Goccia.Compiler.Context;
+  Goccia.Compiler.Context,
+  Goccia.Compiler.Scope;
 
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
@@ -55,6 +58,13 @@ procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
 procedure CompileComplexClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration; const APendingIndex: Integer);
 
+function TypeAnnotationToLocalType(const AAnnotation: string): TSouffleLocalType;
+function TypesAreCompatible(const AProduced, AExpected: TSouffleLocalType): Boolean;
+function InferLocalType(const AExpr: TGocciaExpression): TSouffleLocalType;
+function ExpressionType(const AScope: TGocciaCompilerScope;
+  const AExpr: TGocciaExpression): TSouffleLocalType;
+function CharToLocalType(const ACh: Char): TSouffleLocalType;
+
 function SavePendingFinally: TObject;
 procedure RestorePendingFinally(const ASaved: TObject);
 
@@ -65,13 +75,13 @@ uses
 
   OrderedMap,
   Souffle.Bytecode,
-  Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Debug,
 
   Goccia.Compiler.Expressions,
   Goccia.Compiler.ExtOps,
-  Goccia.Compiler.Scope,
+  Goccia.Constants.TypeNames,
   Goccia.Keywords.Reserved,
+  Goccia.Token,
   Goccia.Values.Primitives;
 
 type
@@ -103,13 +113,7 @@ begin
   begin
     Lit := TGocciaLiteralExpression(AExpr);
     if Lit.Value is TGocciaNumberLiteralValue then
-    begin
-      if (Frac(TGocciaNumberLiteralValue(Lit.Value).Value) = 0) and
-         (Abs(TGocciaNumberLiteralValue(Lit.Value).Value) < MaxInt) then
-        Result := sltInteger
-      else
-        Result := sltFloat;
-    end
+      Result := sltFloat
     else if Lit.Value is TGocciaBooleanLiteralValue then
       Result := sltBoolean
     else if Lit.Value is TGocciaStringLiteralValue then
@@ -118,7 +122,218 @@ begin
   else if AExpr is TGocciaTemplateLiteralExpression then
     Result := sltString
   else if AExpr is TGocciaTemplateWithInterpolationExpression then
-    Result := sltString;
+    Result := sltString
+  else if AExpr is TGocciaObjectExpression then
+    Result := sltReference
+  else if AExpr is TGocciaArrayExpression then
+    Result := sltReference
+  else if AExpr is TGocciaNewExpression then
+    Result := sltReference
+  else if AExpr is TGocciaArrowFunctionExpression then
+    Result := sltReference
+  else if AExpr is TGocciaMethodExpression then
+    Result := sltReference;
+end;
+
+function TypeAnnotationToLocalType(const AAnnotation: string): TSouffleLocalType;
+begin
+  Result := sltUntyped;
+  if AAnnotation = '' then
+    Exit;
+  if Pos('|', AAnnotation) > 0 then
+    Exit;
+  if AAnnotation = NUMBER_TYPE_NAME then
+    Result := sltFloat
+  else if AAnnotation = STRING_TYPE_NAME then
+    Result := sltString
+  else if AAnnotation = BOOLEAN_TYPE_NAME then
+    Result := sltBoolean
+  else if (AAnnotation = OBJECT_TYPE_NAME) or (AAnnotation = 'Object')
+       or (AAnnotation = 'Function')
+       or (Pos('<', AAnnotation) > 0)
+       or (Pos('[', AAnnotation) > 0)
+       or (Pos('{', AAnnotation) > 0)
+       or (Pos('=>', AAnnotation) > 0) then
+    Result := sltReference;
+end;
+
+function TypesAreCompatible(const AProduced, AExpected: TSouffleLocalType): Boolean;
+begin
+  if AProduced = sltUntyped then
+    Exit(False);
+  if AProduced = AExpected then
+    Exit(True);
+  if (AExpected = sltFloat) and (AProduced = sltInteger) then
+    Exit(True);
+  Result := False;
+end;
+
+function IsKnownNumeric(const AType: TSouffleLocalType): Boolean; inline;
+begin
+  Result := AType in [sltInteger, sltFloat];
+end;
+
+function IsArithmeticOp(const ATokenType: TGocciaTokenType): Boolean;
+begin
+  Result := ATokenType in [gttMinus, gttStar, gttSlash, gttPercent, gttPower];
+end;
+
+function IsComparisonOp(const ATokenType: TGocciaTokenType): Boolean;
+begin
+  Result := ATokenType in [gttLess, gttGreater, gttLessEqual, gttGreaterEqual,
+    gttEqual, gttNotEqual];
+end;
+
+function ExpressionType(const AScope: TGocciaCompilerScope;
+  const AExpr: TGocciaExpression): TSouffleLocalType;
+var
+  Bin: TGocciaBinaryExpression;
+  LocalIdx: Integer;
+  LeftType, RightType: TSouffleLocalType;
+begin
+  Result := sltUntyped;
+  if AExpr is TGocciaLiteralExpression then
+  begin
+    if TGocciaLiteralExpression(AExpr).Value is TGocciaNumberLiteralValue then
+      Result := sltFloat
+    else if TGocciaLiteralExpression(AExpr).Value is TGocciaBooleanLiteralValue then
+      Result := sltBoolean
+    else if TGocciaLiteralExpression(AExpr).Value is TGocciaStringLiteralValue then
+      Result := sltString;
+  end
+  else if AExpr is TGocciaIdentifierExpression then
+  begin
+    LocalIdx := AScope.ResolveLocal(TGocciaIdentifierExpression(AExpr).Name);
+    if LocalIdx >= 0 then
+    begin
+      if AScope.GetLocal(LocalIdx).IsConst or
+         AScope.GetLocal(LocalIdx).IsStrictlyTyped then
+        Result := AScope.GetLocal(LocalIdx).TypeHint;
+    end
+    else
+    begin
+      LocalIdx := AScope.ResolveUpvalue(TGocciaIdentifierExpression(AExpr).Name);
+      if LocalIdx >= 0 then
+        if AScope.GetUpvalue(LocalIdx).IsConst or
+           AScope.GetUpvalue(LocalIdx).IsStrictlyTyped then
+          Result := AScope.GetUpvalue(LocalIdx).TypeHint;
+    end;
+  end
+  else if AExpr is TGocciaBinaryExpression then
+  begin
+    Bin := TGocciaBinaryExpression(AExpr);
+    if IsComparisonOp(Bin.Operator) then
+      Result := sltBoolean
+    else if IsArithmeticOp(Bin.Operator) then
+    begin
+      LeftType := ExpressionType(AScope, Bin.Left);
+      RightType := ExpressionType(AScope, Bin.Right);
+      if (LeftType = sltInteger) and (RightType = sltInteger) then
+        Result := sltInteger
+      else if IsKnownNumeric(LeftType) and IsKnownNumeric(RightType) then
+        Result := sltFloat;
+    end;
+  end
+  else if AExpr is TGocciaCallExpression then
+  begin
+    if TGocciaCallExpression(AExpr).Callee is TGocciaIdentifierExpression then
+    begin
+      LocalIdx := AScope.ResolveLocal(
+        TGocciaIdentifierExpression(TGocciaCallExpression(AExpr).Callee).Name);
+      if LocalIdx >= 0 then
+        Result := AScope.GetLocal(LocalIdx).ReturnTypeHint
+      else
+      begin
+        LocalIdx := AScope.ResolveUpvalue(
+          TGocciaIdentifierExpression(TGocciaCallExpression(AExpr).Callee).Name);
+        if LocalIdx >= 0 then
+          Result := AScope.GetUpvalue(LocalIdx).ReturnTypeHint;
+      end;
+    end;
+  end
+  else if AExpr is TGocciaConditionalExpression then
+  begin
+    LeftType := ExpressionType(AScope,
+      TGocciaConditionalExpression(AExpr).Consequent);
+    RightType := ExpressionType(AScope,
+      TGocciaConditionalExpression(AExpr).Alternate);
+    if LeftType = RightType then
+      Result := LeftType
+    else if IsKnownNumeric(LeftType) and IsKnownNumeric(RightType) then
+      Result := sltFloat;
+  end
+  else if AExpr is TGocciaTemplateLiteralExpression then
+    Result := sltString
+  else if AExpr is TGocciaTemplateWithInterpolationExpression then
+    Result := sltString
+  else if AExpr is TGocciaObjectExpression then
+    Result := sltReference
+  else if AExpr is TGocciaArrayExpression then
+    Result := sltReference
+  else if AExpr is TGocciaNewExpression then
+    Result := sltReference
+  else if AExpr is TGocciaArrowFunctionExpression then
+    Result := sltReference
+  else if AExpr is TGocciaMethodExpression then
+    Result := sltReference;
+end;
+
+function IsUndefinedInitializer(const AExpr: TGocciaExpression): Boolean;
+begin
+  Result := (AExpr is TGocciaLiteralExpression) and
+            (TGocciaLiteralExpression(AExpr).Value is TGocciaUndefinedLiteralValue);
+end;
+
+function LocalTypeToChar(const AType: TSouffleLocalType): Char;
+begin
+  case AType of
+    sltInteger:   Result := 'I';
+    sltFloat:     Result := 'F';
+    sltBoolean:   Result := 'B';
+    sltString:    Result := 'S';
+    sltReference: Result := 'R';
+  else
+    Result := 'U';
+  end;
+end;
+
+function CharToLocalType(const ACh: Char): TSouffleLocalType;
+begin
+  case ACh of
+    'I': Result := sltInteger;
+    'F': Result := sltFloat;
+    'B': Result := sltBoolean;
+    'S': Result := sltString;
+    'R': Result := sltReference;
+  else
+    Result := sltUntyped;
+  end;
+end;
+
+function BuildParamTypeSignature(
+  const AParams: TGocciaParameterArray): string;
+var
+  I: Integer;
+  ParamType: TSouffleLocalType;
+begin
+  Result := '';
+  for I := 0 to High(AParams) do
+  begin
+    if AParams[I].IsRest then
+      Break;
+    if AParams[I].IsOptional or Assigned(AParams[I].DefaultValue) then
+    begin
+      Result := '';
+      Exit;
+    end;
+    ParamType := TypeAnnotationToLocalType(AParams[I].TypeAnnotation);
+    if ParamType = sltUntyped then
+    begin
+      Result := '';
+      Exit;
+    end;
+    Result := Result + LocalTypeToChar(ParamType);
+  end;
 end;
 
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
@@ -128,27 +343,63 @@ var
   Info: TGocciaVariableInfo;
   Slot: UInt8;
   InferredTemplate: TSouffleFunctionTemplate;
-  TypeHint: TSouffleLocalType;
+  TypeHint, AnnotationType: TSouffleLocalType;
+  IsStrict, HasRealInitializer: Boolean;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
     Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
+
+    HasRealInitializer := Assigned(Info.Initializer) and
+                          not IsUndefinedInitializer(Info.Initializer);
+
+    AnnotationType := TypeAnnotationToLocalType(Info.TypeAnnotation);
+
+    if AnnotationType <> sltUntyped then
+      TypeHint := AnnotationType
+    else if (Info.TypeAnnotation = '') and HasRealInitializer then
+      TypeHint := InferLocalType(Info.Initializer)
+    else
+      TypeHint := sltUntyped;
+
+    IsStrict := TypeHint <> sltUntyped;
+
+    if IsStrict then
+    begin
+      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      if LocalIdx >= 0 then
+      begin
+        ACtx.Scope.SetLocalTypeHint(LocalIdx, TypeHint);
+        ACtx.Template.SetLocalType(Slot, TypeHint);
+        ACtx.Scope.SetLocalStrictlyTyped(LocalIdx, True);
+        ACtx.Template.SetLocalStrictFlag(Slot, True);
+      end;
+    end;
+
+    if AStmt.IsConst and (Info.Initializer is TGocciaArrowFunctionExpression) then
+    begin
+      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      if LocalIdx >= 0 then
+      begin
+        ACtx.Scope.SetLocalReturnTypeHint(LocalIdx,
+          TypeAnnotationToLocalType(
+            TGocciaArrowFunctionExpression(Info.Initializer).ReturnType));
+        ACtx.Scope.SetLocalParamTypeSignature(LocalIdx,
+          BuildParamTypeSignature(
+            TGocciaArrowFunctionExpression(Info.Initializer).Parameters));
+      end;
+    end;
+
     if Assigned(Info.Initializer) then
     begin
-      TypeHint := InferLocalType(Info.Initializer);
-      if TypeHint <> sltUntyped then
-      begin
-        LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
-        if LocalIdx >= 0 then
-        begin
-          ACtx.Scope.SetLocalTypeHint(LocalIdx, TypeHint);
-          ACtx.Template.SetLocalType(Slot, TypeHint);
-        end;
-      end;
-
       FuncCount := ACtx.Template.FunctionCount;
       ACtx.CompileExpression(Info.Initializer, Slot);
+
+      if IsStrict and HasRealInitializer then
+        if not TypesAreCompatible(InferLocalType(Info.Initializer), TypeHint) then
+          EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Slot,
+            UInt8(Ord(TypeHint)), 0));
 
       if (Info.Initializer is TGocciaArrowFunctionExpression) or
          (Info.Initializer is TGocciaMethodExpression) then

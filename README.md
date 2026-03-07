@@ -72,7 +72,7 @@ GocciaScript implements several active TC39 proposals:
 |----------|-------|-------------|
 | [Decorators](https://github.com/tc39/proposal-decorators) | 3 | Class, method, field, getter/setter, auto-accessor decorators with `addInitializer` |
 | [Decorator Metadata](https://github.com/tc39/proposal-decorator-metadata) | 3 | `Symbol.metadata` for decorator-attached class metadata with inheritance |
-| [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | TypeScript-style type annotations parsed and ignored at runtime |
+| [Types as Comments](https://tc39.es/proposal-type-annotations/) | 1 | TypeScript-style type annotations parsed by the frontend; in bytecode mode, annotations and inferred types provide runtime enforcement (reassignment to incompatible types throws `TypeError`) |
 | [Enum Declarations](https://github.com/tc39/proposal-enum) | 0 | Frozen, null-prototype enum objects with `Symbol.iterator` |
 | [Temporal](https://tc39.es/proposal-temporal/) | 3 | Modern date/time API (`Temporal.PlainDate`, `Temporal.Duration`, `Temporal.Instant`, etc.) |
 | [`Math.clamp`](https://github.com/tc39/proposal-math-clamp) | 3 | Clamp a value to a range |
@@ -151,7 +151,7 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 
 ### Run via Souffle VM (Bytecode)
 
-GocciaScript includes an alternative bytecode execution backend — the **Souffle VM** — a general-purpose register-based virtual machine that routes language features through a bridge layer to the GocciaScript evaluator. This approach passes 100% of the test suite (3,358 tests). Known structural limitations: `.sbc` files use native endianness (not yet cross-platform portable); the ABC-encoded instruction format limits constant pool references to 255 per prototype. See [Souffle VM Architecture](docs/souffle-vm.md) for full details.
+GocciaScript includes an alternative bytecode execution backend — the **Souffle VM** — a general-purpose register-based virtual machine that routes language features through a bridge layer to the GocciaScript evaluator. This approach passes 100% of the test suite (3,406 tests). The compiler infers types from initializers and type annotations, emitting specialized float opcodes inlined in the VM dispatch loop — typed code runs ~28–30% faster than untyped. Known structural limitations: `.sbc` files use native endianness (not yet cross-platform portable); the ABC-encoded instruction format limits constant pool references to 255 per prototype. See [Souffle VM Architecture](docs/souffle-vm.md) for full details.
 
 ```bash
 # Compile and execute via Souffle VM
@@ -174,7 +174,7 @@ See [Souffle VM](docs/souffle-vm.md) for the full architecture.
 
 ### Run Tests
 
-GocciaScript has 3300+ JavaScript unit tests covering language features, built-in objects, and edge cases.
+GocciaScript has 3400+ JavaScript unit tests covering language features, built-in objects, and edge cases.
 
 ```bash
 # Run all tests (GocciaScript TestRunner)

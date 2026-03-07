@@ -358,6 +358,8 @@ type
       const ATemplate: TSouffleFunctionTemplate;
       const AOperandIndex: UInt8); override;
     procedure MarkExternalRoots; override;
+    procedure CheckLocalType(const AValue: TSouffleValue;
+      const AExpectedType: TSouffleLocalType); override;
 
     function AddPendingClassDef(
       const AClassDef: TGocciaClassDefinition;
@@ -377,6 +379,7 @@ type
     procedure RegisterGlobal(const AName: string; const AValue: TSouffleValue);
     procedure RegisterConstGlobal(const AName: string;
       const AValue: TSouffleValue);
+    procedure PatchGocciaScriptStrictTypes;
     procedure RegisterFormalParameterCount(
       const ATemplate: TSouffleFunctionTemplate; const ACount: Integer);
     function GetFormalParameterCount(
@@ -404,6 +407,7 @@ uses
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Constants.TypeNames,
   Goccia.Engine,
   Goccia.Evaluator,
   Goccia.Evaluator.TypeOperations,
@@ -4462,6 +4466,47 @@ begin
   end;
 end;
 
+function LocalTypeDisplayName(const AType: TSouffleLocalType): string;
+begin
+  case AType of
+    sltInteger:   Result := NUMBER_TYPE_NAME;
+    sltFloat:     Result := NUMBER_TYPE_NAME;
+    sltBoolean:   Result := BOOLEAN_TYPE_NAME;
+    sltString:    Result := STRING_TYPE_NAME;
+    sltReference: Result := OBJECT_TYPE_NAME;
+  else
+    Result := 'unknown';
+  end;
+end;
+
+function SouffleValueTypeName(const AValue: TSouffleValue): string;
+begin
+  if SouffleIsNil(AValue) then
+  begin
+    if AValue.Flags = GOCCIA_NIL_NULL then
+      Result := NULL_TYPE_NAME
+    else
+      Result := UNDEFINED_TYPE_NAME;
+  end
+  else if SouffleIsBoolean(AValue) then
+    Result := BOOLEAN_TYPE_NAME
+  else if SouffleIsInteger(AValue) or SouffleIsFloat(AValue) then
+    Result := NUMBER_TYPE_NAME
+  else if SouffleIsStringValue(AValue) then
+    Result := STRING_TYPE_NAME
+  else if SouffleIsReference(AValue) then
+    Result := OBJECT_TYPE_NAME
+  else
+    Result := 'unknown';
+end;
+
+procedure TGocciaRuntimeOperations.CheckLocalType(
+  const AValue: TSouffleValue; const AExpectedType: TSouffleLocalType);
+begin
+  ThrowTypeErrorMessage('Type ''' + SouffleValueTypeName(AValue) +
+    ''' is not assignable to type ''' + LocalTypeDisplayName(AExpectedType) + '''');
+end;
+
 procedure TGocciaRuntimeOperations.PropertyDeleteViolation(
   const AObject: TSouffleValue; const AKey: string);
 begin
@@ -7215,6 +7260,27 @@ procedure TGocciaRuntimeOperations.RegisterConstGlobal(const AName: string;
 begin
   FGlobals.AddOrSetValue(AName, AValue);
   FConstGlobals.AddOrSetValue(AName, True);
+end;
+
+procedure TGocciaRuntimeOperations.PatchGocciaScriptStrictTypes;
+var
+  Val: TSouffleValue;
+  Obj: TGocciaObjectValue;
+begin
+  if not FGlobals.TryGetValue('GocciaScript', Val) then
+    Exit;
+  if not SouffleIsReference(Val) then
+    Exit;
+  if Val.AsReference is TGocciaWrappedValue then
+  begin
+    if TGocciaWrappedValue(Val.AsReference).Value is TGocciaObjectValue then
+    begin
+      Obj := TGocciaObjectValue(TGocciaWrappedValue(Val.AsReference).Value);
+      Obj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.TrueValue);
+    end;
+  end
+  else if Val.AsReference is TSouffleRecord then
+    TSouffleRecord(Val.AsReference).Put(PROP_STRICT_TYPES, SouffleBoolean(True));
 end;
 
 function TGocciaRuntimeOperations.RequireIterable(

@@ -161,6 +161,15 @@ type
       const ATemplate: TSouffleFunctionTemplate;
       const AOperandIndex: UInt8); virtual;
 
+    { ── Type enforcement (1) ──
+      Called by the VM when a strictly-typed local SET fails the type
+      check. AValue is the value being stored, AExpectedType is the
+      declared type. Default is a no-op (type mismatch silently
+      allowed). Frontends override to throw a type error. }
+
+    procedure CheckLocalType(const AValue: TSouffleValue;
+      const AExpectedType: TSouffleLocalType); virtual;
+
     { ── GC coordination (1) ──
       Called by the VM's external root marker during Souffle GC mark
       phase. Frontends that cache Souffle heap objects outside the VM
@@ -196,6 +205,11 @@ procedure TSouffleRuntimeOperations.ExtendedOperation(const ASubOp: UInt8;
   var ADest: TSouffleValue; const AOperand, AExtra: TSouffleValue;
   const ATemplate: TSouffleFunctionTemplate;
   const AOperandIndex: UInt8);
+begin
+end;
+
+procedure TSouffleRuntimeOperations.CheckLocalType(
+  const AValue: TSouffleValue; const AExpectedType: TSouffleLocalType);
 begin
 end;
 
