@@ -21,6 +21,8 @@ type
     IsGlobalBacked: Boolean;
     TypeHint: TSouffleLocalType;
     IsStrictlyTyped: Boolean;
+    ReturnTypeHint: TSouffleLocalType;
+    ParamTypeSignature: string;
   end;
 
   TGocciaCompilerUpvalue = record
@@ -29,6 +31,8 @@ type
     IsConst: Boolean;
     TypeHint: TSouffleLocalType;
     IsStrictlyTyped: Boolean;
+    ReturnTypeHint: TSouffleLocalType;
+    ParamTypeSignature: string;
   end;
 
   TGocciaCompilerScope = class
@@ -74,6 +78,10 @@ type
       const ATypeHint: TSouffleLocalType);
     procedure SetLocalStrictlyTyped(const AIndex: Integer;
       const AStrictlyTyped: Boolean);
+    procedure SetLocalReturnTypeHint(const AIndex: Integer;
+      const AReturnTypeHint: TSouffleLocalType);
+    procedure SetLocalParamTypeSignature(const AIndex: Integer;
+      const ASignature: string);
     function ResolvePrivatePrefix: string;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
   end;
@@ -147,6 +155,8 @@ begin
       FParent.FLocals[LocalIdx].IsConst);
     FUpvalues[Idx].TypeHint := FParent.FLocals[LocalIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FLocals[LocalIdx].IsStrictlyTyped;
+    FUpvalues[Idx].ReturnTypeHint := FParent.FLocals[LocalIdx].ReturnTypeHint;
+    FUpvalues[Idx].ParamTypeSignature := FParent.FLocals[LocalIdx].ParamTypeSignature;
     Exit(Idx);
   end;
 
@@ -159,6 +169,8 @@ begin
       FParent.FUpvalues[UpvalueIdx].IsConst);
     FUpvalues[Idx].TypeHint := FParent.FUpvalues[UpvalueIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FUpvalues[UpvalueIdx].IsStrictlyTyped;
+    FUpvalues[Idx].ReturnTypeHint := FParent.FUpvalues[UpvalueIdx].ReturnTypeHint;
+    FUpvalues[Idx].ParamTypeSignature := FParent.FUpvalues[UpvalueIdx].ParamTypeSignature;
     Exit(Idx);
   end;
 
@@ -183,6 +195,7 @@ begin
   FUpvalues[FUpvalueCount].IsConst := AIsConst;
   FUpvalues[FUpvalueCount].TypeHint := sltUntyped;
   FUpvalues[FUpvalueCount].IsStrictlyTyped := False;
+  FUpvalues[FUpvalueCount].ReturnTypeHint := sltUntyped;
   Result := FUpvalueCount;
   Inc(FUpvalueCount);
 end;
@@ -253,6 +266,18 @@ procedure TGocciaCompilerScope.SetLocalTypeHint(const AIndex: Integer;
   const ATypeHint: TSouffleLocalType);
 begin
   FLocals[AIndex].TypeHint := ATypeHint;
+end;
+
+procedure TGocciaCompilerScope.SetLocalReturnTypeHint(const AIndex: Integer;
+  const AReturnTypeHint: TSouffleLocalType);
+begin
+  FLocals[AIndex].ReturnTypeHint := AReturnTypeHint;
+end;
+
+procedure TGocciaCompilerScope.SetLocalParamTypeSignature(const AIndex: Integer;
+  const ASignature: string);
+begin
+  FLocals[AIndex].ParamTypeSignature := ASignature;
 end;
 
 procedure TGocciaCompilerScope.SetLocalStrictlyTyped(const AIndex: Integer;

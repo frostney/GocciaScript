@@ -109,8 +109,6 @@ type
     OP_SET_LOCAL_STRING = 63,  // ABx  Locals[Bx] := R[A] (typed: string reference)
     OP_GET_LOCAL_REF    = 64,  // ABx  R[A] := Locals[Bx] (typed: heap reference)
     OP_SET_LOCAL_REF    = 65,  // ABx  Locals[Bx] := R[A] (typed: heap reference)
-    OP_GET_LOCAL_NUMBER = 74,  // ABx  R[A] := Locals[Bx] (typed: number — integer or float)
-    OP_SET_LOCAL_NUMBER = 75,  // ABx  Locals[Bx] := R[A] (typed: number — integer or float)
 
     // ── Core: Blueprint ──
     OP_NEW_BLUEPRINT = 66,  // ABx   R[A] := new Blueprint(name=Constants[Bx])
@@ -125,6 +123,17 @@ type
 
     // ── Core: Destructuring ──
     OP_UNPACK        = 73,  // ABC   R[A] := Array(R[B])[C..] — unpack rest of TSouffleArray from index C
+
+    // ── Core: Type Checking ──
+    OP_CHECK_TYPE    = 76,  // ABC   if R[A] not matches TSouffleLocalType(B): RuntimeOps.CheckLocalType(R[A], B)
+
+    // ── Core: Float Comparison ──
+    OP_EQ_FLOAT      = 77,  // ABC   R[A] := Boolean(AsNumber(R[B]) = AsNumber(R[C]))
+    OP_NEQ_FLOAT     = 78,  // ABC   R[A] := Boolean(AsNumber(R[B]) <> AsNumber(R[C]))
+    OP_LT_FLOAT      = 79,  // ABC   R[A] := Boolean(AsNumber(R[B]) < AsNumber(R[C]))
+    OP_GT_FLOAT      = 80,  // ABC   R[A] := Boolean(AsNumber(R[B]) > AsNumber(R[C]))
+    OP_LTE_FLOAT     = 81,  // ABC   R[A] := Boolean(AsNumber(R[B]) <= AsNumber(R[C]))
+    OP_GTE_FLOAT     = 82,  // ABC   R[A] := Boolean(AsNumber(R[B]) >= AsNumber(R[C]))
 
     // ── Runtime: Polymorphic Arithmetic ──
     OP_RT_ADD        = 128, // ABC   R[A] := Runtime.Add(R[B], R[C])

@@ -44,7 +44,7 @@ type
     procedure MarkVMRoots;
     procedure CallClosure(const AClosure: TSouffleClosure;
       const AArgBase, AArgCount, AReturnAbsolute: Integer;
-      const AReceiver: TSouffleValue);
+      const AReceiver: TSouffleValue; const ATrusted: Boolean = False);
     function InvokeWithSpread(const ACallee, AArgsArray,
       AReceiver: TSouffleValue): TSouffleValue;
 
@@ -58,8 +58,6 @@ type
     function MaterializeConstant(
       const AConstant: TSouffleBytecodeConstant): TSouffleValue;
 
-    procedure CheckStrictLocalType(const ATemplate: TSouffleFunctionTemplate;
-      const ASlot: UInt16; const AValue: TSouffleValue);
     function DelegateGet(const AObject: TSouffleHeapObject;
       const AKey: string; out AValue: TSouffleValue): Boolean;
   public
@@ -220,33 +218,294 @@ var
   Frame: PSouffleVMCallFrame;
   Instruction: UInt32;
   Op: UInt8;
+  A, B, C: UInt8;
+  Bx: UInt16;
+  sBx: Int16;
+  Base: Integer;
   HandlerEntry: TSouffleHandlerEntry;
+  Running: Boolean;
 begin
-  while FCallStack.Count >= FBaseFrameCount do
+  Running := True;
+  while Running do
   begin
-    Frame := FCallStack.Peek;
-
-    if Frame^.IP >= Frame^.Template.CodeCount then
-    begin
-      CloseUpvalues(Frame^.BaseRegister);
-      if Frame^.Template.IsAsync then
-        FRegisters[Frame^.ReturnRegister] :=
-          FRuntimeOps.WrapInPromise(SouffleNil, False)
-      else
-        FRegisters[Frame^.ReturnRegister] := SouffleNil;
-      FCallStack.Pop;
-      Continue;
-    end;
-
-    Instruction := Frame^.Template.GetInstruction(Frame^.IP);
-    Inc(Frame^.IP);
-    Op := DecodeOp(Instruction);
-
+    Running := False;
     try
-      if Op < OP_RT_FIRST then
-        ExecuteCoreOp(Frame, Instruction, Op)
-      else
-        ExecuteRuntimeOp(Frame, Instruction, Op);
+      while FCallStack.Count >= FBaseFrameCount do
+      begin
+        Frame := FCallStack.Peek;
+
+        if Frame^.IP >= Frame^.Template.CodeCount then
+        begin
+          CloseUpvalues(Frame^.BaseRegister);
+          if Frame^.Template.IsAsync then
+            FRegisters[Frame^.ReturnRegister] :=
+              FRuntimeOps.WrapInPromise(SouffleNil, False)
+          else
+            FRegisters[Frame^.ReturnRegister] := SouffleNil;
+          FCallStack.Pop;
+          Continue;
+        end;
+
+        Instruction := Frame^.Template.GetInstruction(Frame^.IP);
+        Inc(Frame^.IP);
+        Op := Instruction and $FF;
+        Base := Frame^.BaseRegister;
+
+        case TSouffleOpCode(Op) of
+          OP_GET_LOCAL:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            Bx := UInt16((Instruction shr 16) and $FFFF);
+            FRegisters[Base + A] := FRegisters[Base + Bx];
+          end;
+
+          OP_SET_LOCAL:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            Bx := UInt16((Instruction shr 16) and $FFFF);
+            FRegisters[Base + Bx] := FRegisters[Base + A];
+          end;
+
+          OP_LOAD_INT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            sBx := Int16(Integer(UInt16((Instruction shr 16) and $FFFF)) - 32767);
+            FRegisters[Base + A] := SouffleInteger(Int64(sBx));
+          end;
+
+          OP_LOAD_CONST:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            Bx := UInt16((Instruction shr 16) and $FFFF);
+            FRegisters[Base + A] :=
+              MaterializeConstant(Frame^.Template.GetConstant(Bx));
+          end;
+
+          OP_LOAD_TRUE:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            FRegisters[Base + A] := SouffleBoolean(True);
+          end;
+
+          OP_LOAD_FALSE:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            FRegisters[Base + A] := SouffleBoolean(False);
+          end;
+
+          OP_LOAD_NIL:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            if B = 0 then
+              FRegisters[Base + A] := SouffleNil
+            else
+              FRegisters[Base + A] := SouffleNilWithFlags(B);
+          end;
+
+          OP_MOVE:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            FRegisters[Base + A] := FRegisters[Base + B];
+          end;
+
+          OP_GET_UPVALUE:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            Bx := UInt16((Instruction shr 16) and $FFFF);
+            if Assigned(Frame^.Closure) then
+            begin
+              if Frame^.Closure.GetUpvalue(Bx).IsOpen then
+                FRegisters[Base + A] :=
+                  FRegisters[Frame^.Closure.GetUpvalue(Bx).RegisterIndex]
+              else
+                FRegisters[Base + A] :=
+                  Frame^.Closure.GetUpvalue(Bx).Closed;
+            end
+            else
+              FRegisters[Base + A] := SouffleNil;
+          end;
+
+          OP_SET_UPVALUE:
+            ExecuteCoreOp(Frame, Instruction, Op);
+
+          OP_JUMP_IF_FALSE:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            sBx := Int16(Integer(UInt16((Instruction shr 16) and $FFFF)) - 32767);
+            if not SouffleIsTrue(FRegisters[Base + A]) then
+              Frame^.IP := Frame^.IP + sBx;
+          end;
+
+          OP_JUMP_IF_TRUE:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            sBx := Int16(Integer(UInt16((Instruction shr 16) and $FFFF)) - 32767);
+            if SouffleIsTrue(FRegisters[Base + A]) then
+              Frame^.IP := Frame^.IP + sBx;
+          end;
+
+          OP_JUMP:
+          begin
+            Frame^.IP := Frame^.IP +
+              (Int32((Instruction shr 8) and $FFFFFF) - 8388607);
+          end;
+
+          OP_RETURN:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            CloseUpvalues(Base);
+            if Frame^.Template.IsAsync then
+              FRegisters[Frame^.ReturnRegister] :=
+                FRuntimeOps.WrapInPromise(FRegisters[Base + A], False)
+            else
+              FRegisters[Frame^.ReturnRegister] := FRegisters[Base + A];
+            FCallStack.Pop;
+          end;
+
+          OP_ADD_FLOAT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            C := UInt8((Instruction shr 24) and $FF);
+            FRegisters[Base + A] := SouffleFloat(
+              SouffleToDouble(FRegisters[Base + B]) +
+              SouffleToDouble(FRegisters[Base + C]));
+          end;
+
+          OP_SUB_FLOAT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            C := UInt8((Instruction shr 24) and $FF);
+            FRegisters[Base + A] := SouffleFloat(
+              SouffleToDouble(FRegisters[Base + B]) -
+              SouffleToDouble(FRegisters[Base + C]));
+          end;
+
+          OP_MUL_FLOAT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            C := UInt8((Instruction shr 24) and $FF);
+            FRegisters[Base + A] := SouffleFloat(
+              SouffleToDouble(FRegisters[Base + B]) *
+              SouffleToDouble(FRegisters[Base + C]));
+          end;
+
+          OP_DIV_FLOAT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            C := UInt8((Instruction shr 24) and $FF);
+            FRegisters[Base + A] := SouffleFloat(
+              SouffleToDouble(FRegisters[Base + B]) /
+              SouffleToDouble(FRegisters[Base + C]));
+          end;
+
+          OP_LTE_FLOAT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            C := UInt8((Instruction shr 24) and $FF);
+            FRegisters[Base + A] := SouffleBoolean(
+              SouffleToDouble(FRegisters[Base + B]) <=
+              SouffleToDouble(FRegisters[Base + C]));
+          end;
+
+          OP_LT_FLOAT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            C := UInt8((Instruction shr 24) and $FF);
+            FRegisters[Base + A] := SouffleBoolean(
+              SouffleToDouble(FRegisters[Base + B]) <
+              SouffleToDouble(FRegisters[Base + C]));
+          end;
+
+          OP_GT_FLOAT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            C := UInt8((Instruction shr 24) and $FF);
+            FRegisters[Base + A] := SouffleBoolean(
+              SouffleToDouble(FRegisters[Base + B]) >
+              SouffleToDouble(FRegisters[Base + C]));
+          end;
+
+          OP_GTE_FLOAT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            C := UInt8((Instruction shr 24) and $FF);
+            FRegisters[Base + A] := SouffleBoolean(
+              SouffleToDouble(FRegisters[Base + B]) >=
+              SouffleToDouble(FRegisters[Base + C]));
+          end;
+
+          OP_EQ_FLOAT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            C := UInt8((Instruction shr 24) and $FF);
+            FRegisters[Base + A] := SouffleBoolean(
+              SouffleToDouble(FRegisters[Base + B]) =
+              SouffleToDouble(FRegisters[Base + C]));
+          end;
+
+          OP_NEQ_FLOAT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            C := UInt8((Instruction shr 24) and $FF);
+            FRegisters[Base + A] := SouffleBoolean(
+              SouffleToDouble(FRegisters[Base + B]) <>
+              SouffleToDouble(FRegisters[Base + C]));
+          end;
+
+          OP_GET_LOCAL_INT, OP_GET_LOCAL_FLOAT, OP_GET_LOCAL_BOOL,
+          OP_GET_LOCAL_STRING, OP_GET_LOCAL_REF:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            Bx := UInt16((Instruction shr 16) and $FFFF);
+            FRegisters[Base + A] := FRegisters[Base + Bx];
+          end;
+
+          OP_SET_LOCAL_INT, OP_SET_LOCAL_FLOAT, OP_SET_LOCAL_BOOL,
+          OP_SET_LOCAL_STRING, OP_SET_LOCAL_REF:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            Bx := UInt16((Instruction shr 16) and $FFFF);
+            FRegisters[Base + Bx] := FRegisters[Base + A];
+          end;
+
+          OP_CHECK_TYPE:
+          if not Frame^.Trusted then
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            case TSouffleLocalType(B) of
+              sltFloat:
+                if FRegisters[Base + A].Kind = svkInteger then
+                  FRegisters[Base + A] := SouffleFloat(
+                    FRegisters[Base + A].AsInteger * 1.0)
+                else if FRegisters[Base + A].Kind <> svkFloat then
+                  FRuntimeOps.CheckLocalType(FRegisters[Base + A], sltFloat);
+            else
+              ExecuteCoreOp(Frame, Instruction, Ord(OP_CHECK_TYPE));
+            end;
+          end;
+
+          OP_NOP, OP_LINE:;
+
+        else
+          if Op < OP_RT_FIRST then
+            ExecuteCoreOp(Frame, Instruction, Op)
+          else
+            ExecuteRuntimeOp(Frame, Instruction, Op);
+        end;
+      end;
     except
       on E: ESouffleThrow do
       begin
@@ -265,6 +524,7 @@ begin
           FCallStack.Peek^.IP := HandlerEntry.CatchIP;
           FRegisters[HandlerEntry.BaseRegister + HandlerEntry.CatchRegister] :=
             E.ThrownValue;
+          Running := True;
         end
         else
         begin
@@ -278,7 +538,7 @@ end;
 
 procedure TSouffleVM.CallClosure(const AClosure: TSouffleClosure;
   const AArgBase, AArgCount, AReturnAbsolute: Integer;
-  const AReceiver: TSouffleValue);
+  const AReceiver: TSouffleValue; const ATrusted: Boolean);
 var
   NewBase, I, ArgsToCopy: Integer;
   Frame: PSouffleVMCallFrame;
@@ -302,6 +562,9 @@ begin
     AReturnAbsolute, FHandlerStack.Count);
   Frame^.ArgCount := ArgsToCopy;
   Frame^.ArgSourceBase := NewBase + 1;
+  Frame^.Trusted := ATrusted;
+  if ATrusted and (AClosure.Template.TypeCheckPreambleSize > 0) then
+    Frame^.IP := AClosure.Template.TypeCheckPreambleSize;
 end;
 
 function TSouffleVM.InvokeWithSpread(const ACallee, AArgsArray,
@@ -829,55 +1092,44 @@ begin
 
     OP_ADD_FLOAT:
     begin
-      A := DecodeA(AInstruction);
-      B := DecodeB(AInstruction);
-      C := DecodeC(AInstruction);
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       FRegisters[Base + A] := SouffleFloat(
-        FRegisters[Base + B].AsFloat + FRegisters[Base + C].AsFloat);
+        SouffleToDouble(FRegisters[Base + B]) + SouffleToDouble(FRegisters[Base + C]));
     end;
 
     OP_SUB_FLOAT:
     begin
-      A := DecodeA(AInstruction);
-      B := DecodeB(AInstruction);
-      C := DecodeC(AInstruction);
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       FRegisters[Base + A] := SouffleFloat(
-        FRegisters[Base + B].AsFloat - FRegisters[Base + C].AsFloat);
+        SouffleToDouble(FRegisters[Base + B]) - SouffleToDouble(FRegisters[Base + C]));
     end;
 
     OP_MUL_FLOAT:
     begin
-      A := DecodeA(AInstruction);
-      B := DecodeB(AInstruction);
-      C := DecodeC(AInstruction);
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       FRegisters[Base + A] := SouffleFloat(
-        FRegisters[Base + B].AsFloat * FRegisters[Base + C].AsFloat);
+        SouffleToDouble(FRegisters[Base + B]) * SouffleToDouble(FRegisters[Base + C]));
     end;
 
     OP_DIV_FLOAT:
     begin
-      A := DecodeA(AInstruction);
-      B := DecodeB(AInstruction);
-      C := DecodeC(AInstruction);
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       FRegisters[Base + A] := SouffleFloat(
-        FRegisters[Base + B].AsFloat / FRegisters[Base + C].AsFloat);
+        SouffleToDouble(FRegisters[Base + B]) / SouffleToDouble(FRegisters[Base + C]));
     end;
 
     OP_MOD_FLOAT:
     begin
-      A := DecodeA(AInstruction);
-      B := DecodeB(AInstruction);
-      C := DecodeC(AInstruction);
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       FRegisters[Base + A] := SouffleFloat(
-        FMod(FRegisters[Base + B].AsFloat, FRegisters[Base + C].AsFloat));
+        FMod(SouffleToDouble(FRegisters[Base + B]), SouffleToDouble(FRegisters[Base + C])));
     end;
 
     OP_NEG_FLOAT:
     begin
-      A := DecodeA(AInstruction);
-      B := DecodeB(AInstruction);
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
       FRegisters[Base + A] := SouffleFloat(
-        -FRegisters[Base + B].AsFloat);
+        -SouffleToDouble(FRegisters[Base + B]));
     end;
 
     OP_EQ_INT:
@@ -947,7 +1199,7 @@ begin
     end;
 
     OP_GET_LOCAL_INT, OP_GET_LOCAL_FLOAT, OP_GET_LOCAL_BOOL,
-    OP_GET_LOCAL_STRING, OP_GET_LOCAL_REF, OP_GET_LOCAL_NUMBER:
+    OP_GET_LOCAL_STRING, OP_GET_LOCAL_REF:
     begin
       A := DecodeA(AInstruction);
       Bx := DecodeBx(AInstruction);
@@ -955,13 +1207,81 @@ begin
     end;
 
     OP_SET_LOCAL_INT, OP_SET_LOCAL_FLOAT, OP_SET_LOCAL_BOOL,
-    OP_SET_LOCAL_STRING, OP_SET_LOCAL_REF, OP_SET_LOCAL_NUMBER:
+    OP_SET_LOCAL_STRING, OP_SET_LOCAL_REF:
     begin
       A := DecodeA(AInstruction);
       Bx := DecodeBx(AInstruction);
-      if AFrame^.Template.GetLocalStrictFlag(Bx) then
-        CheckStrictLocalType(AFrame^.Template, Bx, FRegisters[Base + A]);
       FRegisters[Base + Bx] := FRegisters[Base + A];
+    end;
+
+    OP_CHECK_TYPE:
+    if not AFrame^.Trusted then
+    begin
+      A := DecodeA(AInstruction);
+      B := DecodeB(AInstruction);
+      case TSouffleLocalType(B) of
+        sltInteger:
+          if FRegisters[Base + A].Kind <> svkInteger then
+            FRuntimeOps.CheckLocalType(FRegisters[Base + A], sltInteger);
+        sltFloat:
+          if FRegisters[Base + A].Kind = svkInteger then
+            FRegisters[Base + A] := SouffleFloat(
+              FRegisters[Base + A].AsInteger * 1.0)
+          else if FRegisters[Base + A].Kind <> svkFloat then
+            FRuntimeOps.CheckLocalType(FRegisters[Base + A], sltFloat);
+        sltBoolean:
+          if FRegisters[Base + A].Kind <> svkBoolean then
+            FRuntimeOps.CheckLocalType(FRegisters[Base + A], sltBoolean);
+        sltString:
+          if not SouffleIsStringValue(FRegisters[Base + A]) then
+            FRuntimeOps.CheckLocalType(FRegisters[Base + A], sltString);
+        sltReference:
+          if not (SouffleIsReference(FRegisters[Base + A]) and
+                  not SouffleIsStringValue(FRegisters[Base + A])) then
+            FRuntimeOps.CheckLocalType(FRegisters[Base + A], sltReference);
+      end;
+    end;
+
+    OP_EQ_FLOAT:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
+      FRegisters[Base + A] := SouffleBoolean(
+        SouffleToDouble(FRegisters[Base + B]) = SouffleToDouble(FRegisters[Base + C]));
+    end;
+
+    OP_NEQ_FLOAT:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
+      FRegisters[Base + A] := SouffleBoolean(
+        SouffleToDouble(FRegisters[Base + B]) <> SouffleToDouble(FRegisters[Base + C]));
+    end;
+
+    OP_LT_FLOAT:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
+      FRegisters[Base + A] := SouffleBoolean(
+        SouffleToDouble(FRegisters[Base + B]) < SouffleToDouble(FRegisters[Base + C]));
+    end;
+
+    OP_GT_FLOAT:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
+      FRegisters[Base + A] := SouffleBoolean(
+        SouffleToDouble(FRegisters[Base + B]) > SouffleToDouble(FRegisters[Base + C]));
+    end;
+
+    OP_LTE_FLOAT:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
+      FRegisters[Base + A] := SouffleBoolean(
+        SouffleToDouble(FRegisters[Base + B]) <= SouffleToDouble(FRegisters[Base + C]));
+    end;
+
+    OP_GTE_FLOAT:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
+      FRegisters[Base + A] := SouffleBoolean(
+        SouffleToDouble(FRegisters[Base + B]) >= SouffleToDouble(FRegisters[Base + C]));
     end;
 
     OP_ARRAY_POP:
@@ -1444,7 +1764,7 @@ begin
       begin
         if FRegisters[Base + A].AsReference is TSouffleClosure then
           CallClosure(TSouffleClosure(FRegisters[Base + A].AsReference),
-            Base + A + 1, B, Base + A, SouffleNil)
+            Base + A + 1, B, Base + A, SouffleNil, C and 2 <> 0)
         else if FRegisters[Base + A].AsReference is TSouffleNativeFunction then
           FRegisters[Base + A] := TSouffleNativeFunction(
             FRegisters[Base + A].AsReference).Invoke(
@@ -1650,33 +1970,6 @@ begin
 
   if Assigned(FOpenUpvalues) then
     FOpenUpvalues.MarkReferences;
-end;
-
-procedure TSouffleVM.CheckStrictLocalType(
-  const ATemplate: TSouffleFunctionTemplate;
-  const ASlot: UInt16; const AValue: TSouffleValue);
-var
-  ExpectedType: TSouffleLocalType;
-
-  function ValueMatchesType: Boolean;
-  begin
-    case ExpectedType of
-      sltInteger:   Result := SouffleIsInteger(AValue);
-      sltFloat:     Result := SouffleIsFloat(AValue);
-      sltNumber:    Result := SouffleIsInteger(AValue) or SouffleIsFloat(AValue);
-      sltBoolean:   Result := SouffleIsBoolean(AValue);
-      sltString:    Result := SouffleIsStringValue(AValue);
-      sltReference: Result := SouffleIsReference(AValue) and
-                              not SouffleIsStringValue(AValue);
-    else
-      Result := True;
-    end;
-  end;
-
-begin
-  ExpectedType := ATemplate.GetLocalType(UInt8(ASlot));
-  if not ValueMatchesType then
-    FRuntimeOps.CheckLocalType(AValue, ExpectedType);
 end;
 
 function TSouffleVM.DelegateGet(const AObject: TSouffleHeapObject;

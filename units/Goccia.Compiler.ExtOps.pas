@@ -32,7 +32,6 @@ const
   GOCCIA_EXT_DEF_COMPUTED_STATIC_SETTER = 23; // A=target, C=key reg, R[A+1]=closure
 
   GOCCIA_EXT_SET_WRAPPED_SUPER = 24; // A=blueprint, C=super reg (stores non-blueprint super)
-  GOCCIA_EXT_CHECK_TYPE        = 25; // A=value reg, C=expected TSouffleLocalType ordinal
 
 implementation
 

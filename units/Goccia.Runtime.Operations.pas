@@ -4470,28 +4470,11 @@ begin
   case AType of
     sltInteger:   Result := 'number';
     sltFloat:     Result := 'number';
-    sltNumber:    Result := 'number';
     sltBoolean:   Result := 'boolean';
     sltString:    Result := 'string';
     sltReference: Result := 'object';
   else
     Result := 'unknown';
-  end;
-end;
-
-function ExtValueMatchesType(const AValue: TSouffleValue;
-  const AType: TSouffleLocalType): Boolean;
-begin
-  case AType of
-    sltInteger:   Result := SouffleIsInteger(AValue);
-    sltFloat:     Result := SouffleIsFloat(AValue);
-    sltNumber:    Result := SouffleIsInteger(AValue) or SouffleIsFloat(AValue);
-    sltBoolean:   Result := SouffleIsBoolean(AValue);
-    sltString:    Result := SouffleIsStringValue(AValue);
-    sltReference: Result := SouffleIsReference(AValue) and
-                            not SouffleIsStringValue(AValue);
-  else
-    Result := True;
   end;
 end;
 
@@ -8367,11 +8350,6 @@ begin
          not Assigned(TSouffleBlueprint(ADest.AsReference).SuperBlueprint) and
          SouffleIsReference(AOperand) and Assigned(AOperand.AsReference) then
         FBlueprintSuperValues.AddOrSetValue(ADest.AsReference, AOperand);
-    end;
-    25: // GOCCIA_EXT_CHECK_TYPE
-    begin
-      if not ExtValueMatchesType(ADest, TSouffleLocalType(AOperandIndex)) then
-        CheckLocalType(ADest, TSouffleLocalType(AOperandIndex));
     end;
   end;
 end;

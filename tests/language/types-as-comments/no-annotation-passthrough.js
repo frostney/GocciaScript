@@ -1,23 +1,41 @@
 /*---
-description: Variables without type annotations allow any type reassignment (inference hints only, not strict)
+description: Strict type inference — initializer locks variable type, union/any/unknown remain untyped
 features: [types-as-comments]
 ---*/
 
-test("untyped variable allows any reassignment", () => {
-  let x = 5;
-  expect(x).toBe(5);
-  x = "hello";
-  expect(x).toBe("hello");
-  x = true;
-  expect(x).toBe(true);
-  x = null;
-  expect(x).toBe(null);
-  x = undefined;
-  expect(x).toBe(undefined);
-  x = [1, 2];
-  expect(x.length).toBe(2);
-  x = { a: 1 };
-  expect(x.a).toBe(1);
+describe.skipIf(!GocciaScript.strictTypes)("strict type inference", () => {
+  test("inferred type prevents incompatible reassignment", () => {
+    let x = 5;
+    expect(x).toBe(5);
+    expect(() => { x = "hello"; }).toThrow(TypeError);
+    expect(() => { x = true; }).toThrow(TypeError);
+  });
+
+  test("inferred string type prevents number reassignment", () => {
+    let s = "hello";
+    expect(s).toBe("hello");
+    expect(() => { s = 42; }).toThrow(TypeError);
+  });
+
+  test("inferred boolean type prevents number reassignment", () => {
+    let b = true;
+    expect(b).toBe(true);
+    expect(() => { b = 1; }).toThrow(TypeError);
+  });
+
+  test("null initializer remains untyped", () => {
+    let x = null;
+    x = 5;
+    expect(x).toBe(5);
+    x = "hello";
+    expect(x).toBe("hello");
+  });
+
+  test("undefined initializer remains untyped", () => {
+    let x = undefined;
+    x = 5;
+    expect(x).toBe(5);
+  });
 });
 
 test("union type annotation does not enforce", () => {

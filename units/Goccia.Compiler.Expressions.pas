@@ -116,7 +116,6 @@ begin
     sltBoolean:   Result := OP_GET_LOCAL_BOOL;
     sltString:    Result := OP_GET_LOCAL_STRING;
     sltReference: Result := OP_GET_LOCAL_REF;
-    sltNumber:    Result := OP_GET_LOCAL_NUMBER;
   else
     Result := OP_GET_LOCAL;
   end;
@@ -130,7 +129,6 @@ begin
     sltBoolean:   Result := OP_SET_LOCAL_BOOL;
     sltString:    Result := OP_SET_LOCAL_STRING;
     sltReference: Result := OP_SET_LOCAL_REF;
-    sltNumber:    Result := OP_SET_LOCAL_NUMBER;
   else
     Result := OP_SET_LOCAL;
   end;
@@ -263,12 +261,100 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+function CallTrustedFlag(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaCallExpression): UInt8;
+var
+  Sig: string;
+  LocalIdx, I: Integer;
+  ArgType, ParamType: TSouffleLocalType;
+begin
+  Result := 0;
+  if not (AExpr.Callee is TGocciaIdentifierExpression) then
+    Exit;
+
+  Sig := '';
+  LocalIdx := ACtx.Scope.ResolveLocal(
+    TGocciaIdentifierExpression(AExpr.Callee).Name);
+  if LocalIdx >= 0 then
+    Sig := ACtx.Scope.GetLocal(LocalIdx).ParamTypeSignature
+  else
+  begin
+    LocalIdx := ACtx.Scope.ResolveUpvalue(
+      TGocciaIdentifierExpression(AExpr.Callee).Name);
+    if LocalIdx >= 0 then
+      Sig := ACtx.Scope.GetUpvalue(LocalIdx).ParamTypeSignature;
+  end;
+
+  if (Sig = '') or (Length(Sig) > AExpr.Arguments.Count) then
+    Exit;
+
+  for I := 1 to Length(Sig) do
+  begin
+    ParamType := CharToLocalType(Sig[I]);
+    if ParamType = sltUntyped then
+      Exit;
+    ArgType := ExpressionType(ACtx.Scope, AExpr.Arguments[I - 1]);
+    if not TypesAreCompatible(ArgType, ParamType) then
+      Exit;
+  end;
+
+  Result := 2;
+end;
+
+function TryIntegerOp(const AOperator: TGocciaTokenType;
+  out AIntOp: TSouffleOpCode): Boolean;
+begin
+  Result := True;
+  case AOperator of
+    gttPlus:         AIntOp := OP_ADD_INT;
+    gttMinus:        AIntOp := OP_SUB_INT;
+    gttStar:         AIntOp := OP_MUL_INT;
+    gttPercent:      AIntOp := OP_MOD_INT;
+    gttLess:         AIntOp := OP_LT_INT;
+    gttGreater:      AIntOp := OP_GT_INT;
+    gttLessEqual:    AIntOp := OP_LTE_INT;
+    gttGreaterEqual: AIntOp := OP_GTE_INT;
+    gttEqual:        AIntOp := OP_EQ_INT;
+    gttNotEqual:     AIntOp := OP_NEQ_INT;
+  else
+    Result := False;
+  end;
+end;
+
+
+function IsKnownNumeric(const AType: TSouffleLocalType): Boolean; inline;
+begin
+  Result := AType in [sltInteger, sltFloat];
+end;
+
+function TryFloatOp(const AOperator: TGocciaTokenType;
+  out AFloatOp: TSouffleOpCode): Boolean;
+begin
+  Result := True;
+  case AOperator of
+    gttPlus:         AFloatOp := OP_ADD_FLOAT;
+    gttMinus:        AFloatOp := OP_SUB_FLOAT;
+    gttStar:         AFloatOp := OP_MUL_FLOAT;
+    gttSlash:        AFloatOp := OP_DIV_FLOAT;
+    gttPercent:      AFloatOp := OP_MOD_FLOAT;
+    gttLess:         AFloatOp := OP_LT_FLOAT;
+    gttGreater:      AFloatOp := OP_GT_FLOAT;
+    gttLessEqual:    AFloatOp := OP_LTE_FLOAT;
+    gttGreaterEqual: AFloatOp := OP_GTE_FLOAT;
+    gttEqual:        AFloatOp := OP_EQ_FLOAT;
+    gttNotEqual:     AFloatOp := OP_NEQ_FLOAT;
+  else
+    Result := False;
+  end;
+end;
+
 procedure CompileBinary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaBinaryExpression; const ADest: UInt8);
 var
   RegB, RegC: UInt8;
-  Op: TSouffleOpCode;
+  Op, IntOp, FloatOp: TSouffleOpCode;
   JumpIdx, JumpIdx2: Integer;
+  LeftType, RightType: TSouffleLocalType;
 begin
   if TryFoldBinary(ACtx, AExpr, ADest) then
     Exit;
@@ -306,16 +392,29 @@ begin
   ACtx.CompileExpression(AExpr.Left, RegB);
   ACtx.CompileExpression(AExpr.Right, RegC);
 
-  Op := TokenTypeToRuntimeOp(AExpr.Operator);
-  if AExpr.Operator = gttPlus then
-  begin
-    EmitInstruction(ACtx, EncodeABx(OP_TO_PRIMITIVE, RegB, RegB));
-    EmitInstruction(ACtx, EncodeABx(OP_TO_PRIMITIVE, RegC, RegC));
-  end;
-  if AExpr.Operator = gttIn then
-    EmitInstruction(ACtx, EncodeABC(Op, ADest, RegC, RegB))
+  LeftType := ExpressionType(ACtx.Scope, AExpr.Left);
+  RightType := ExpressionType(ACtx.Scope, AExpr.Right);
+
+  if (LeftType = sltInteger) and (RightType = sltInteger) and
+     TryIntegerOp(AExpr.Operator, IntOp) then
+    EmitInstruction(ACtx, EncodeABC(IntOp, ADest, RegB, RegC))
+  else if IsKnownNumeric(LeftType) and IsKnownNumeric(RightType) and
+          TryFloatOp(AExpr.Operator, FloatOp) then
+    EmitInstruction(ACtx, EncodeABC(FloatOp, ADest, RegB, RegC))
   else
-    EmitInstruction(ACtx, EncodeABC(Op, ADest, RegB, RegC));
+  begin
+    Op := TokenTypeToRuntimeOp(AExpr.Operator);
+    if (AExpr.Operator = gttPlus) and
+       not (IsKnownNumeric(LeftType) and IsKnownNumeric(RightType)) then
+    begin
+      EmitInstruction(ACtx, EncodeABx(OP_TO_PRIMITIVE, RegB, RegB));
+      EmitInstruction(ACtx, EncodeABx(OP_TO_PRIMITIVE, RegC, RegC));
+    end;
+    if AExpr.Operator = gttIn then
+      EmitInstruction(ACtx, EncodeABC(Op, ADest, RegC, RegB))
+    else
+      EmitInstruction(ACtx, EncodeABC(Op, ADest, RegB, RegC));
+  end;
 
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
@@ -426,8 +525,10 @@ begin
     Slot := Local.Slot;
     Hint := Local.TypeHint;
     if Local.IsStrictlyTyped and (Hint <> sltUntyped) then
-      EmitInstruction(ACtx, EncodeABx(TypedSetLocalOp(Hint), ADest, Slot))
-    else if ADest <> Slot then
+      if not TypesAreCompatible(InferLocalType(AExpr.Value), Hint) then
+        EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
+          UInt8(Ord(Hint)), 0));
+    if ADest <> Slot then
     begin
       if Hint <> sltUntyped then
         EmitInstruction(ACtx, EncodeABx(TypedSetLocalOp(Hint), ADest, Slot))
@@ -451,9 +552,9 @@ begin
       Exit;
     end;
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsStrictlyTyped then
-      EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ADest,
-        GOCCIA_EXT_CHECK_TYPE,
-        UInt8(Ord(ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint))));
+      if not TypesAreCompatible(InferLocalType(AExpr.Value), ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint) then
+        EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ADest,
+          UInt8(Ord(ACtx.Scope.GetUpvalue(UpvalIdx).TypeHint)), 0));
     EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, ADest, UInt16(UpvalIdx)));
     Exit;
   end;
@@ -760,10 +861,11 @@ end;
 procedure EmitParameterTypeChecks(const ACtx: TGocciaCompilationContext;
   const AParameters: TGocciaParameterArray);
 var
-  I, LocalIdx: Integer;
+  I, LocalIdx, CheckCount, CodeBefore: Integer;
   Local: TGocciaCompilerLocal;
   ParamName: string;
 begin
+  CodeBefore := ACtx.Template.CodeCount;
   for I := 0 to High(AParameters) do
   begin
     if AParameters[I].TypeAnnotation = '' then
@@ -780,9 +882,12 @@ begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
     if not Local.IsStrictlyTyped then
       Continue;
-    EmitInstruction(ACtx, EncodeABx(
-      TypedSetLocalOp(Local.TypeHint), Local.Slot, Local.Slot));
+    EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Local.Slot,
+      UInt8(Ord(Local.TypeHint)), 0));
   end;
+  CheckCount := ACtx.Template.CodeCount - CodeBefore;
+  if (CheckCount > 0) and (CodeBefore = 0) then
+    ACtx.Template.TypeCheckPreambleSize := UInt8(CheckCount);
 end;
 
 procedure CompileArrowFunction(const ACtx: TGocciaCompilationContext;
@@ -1092,7 +1197,8 @@ begin
     begin
       for I := 0 to ArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
-      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL, BaseReg, UInt8(ArgCount), 0));
+      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL, BaseReg, UInt8(ArgCount),
+        CallTrustedFlag(ACtx, AExpr)));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;

@@ -45,8 +45,7 @@ type
     sltFloat,
     sltBoolean,
     sltString,
-    sltReference,
-    sltNumber
+    sltReference
   );
 
   TSouffleFunctionTemplate = class
@@ -69,6 +68,7 @@ type
     FLocalStrictFlags: array of Boolean;
     FLocalStrictCount: UInt8;
     FIsAsync: Boolean;
+    FTypeCheckPreambleSize: UInt8;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -111,6 +111,7 @@ type
     property LocalStrictCount: UInt8 read FLocalStrictCount;
 
     property IsAsync: Boolean read FIsAsync write FIsAsync;
+    property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
   end;
 
 const

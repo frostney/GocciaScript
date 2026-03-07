@@ -741,7 +741,7 @@ TSouffleFunctionTemplate
                       sltBoolean (3), sltString (4), sltReference (5)
 ```
 
-The compiler infers type hints from literal initializers (e.g., `const x = 42` gets `sltInteger`, `const y = 3.14` gets `sltFloat`). These hints are stored on the template and used to emit type-specialized load/store opcodes (`OP_GET_LOCAL_INT`, `OP_SET_LOCAL_FLOAT`, etc.) instead of generic `OP_GET_LOCAL`/`OP_SET_LOCAL`. At runtime the typed opcodes are functionally identical to the generic versions, but they carry type information for future WASM generation and JIT compilation.
+The compiler infers type hints from literal initializers and type annotations (e.g., `const x = 42` gets `sltFloat`, `let z: number` gets `sltFloat`). All JavaScript numeric values are `sltFloat` (IEEE 754 double); `sltInteger` is reserved for known-integer results like `.length`. These hints are stored on the template and used to emit type-specialized opcodes (`OP_GET_LOCAL_FLOAT`, `OP_ADD_FLOAT`, `OP_LTE_FLOAT`, etc.) instead of generic `OP_GET_LOCAL`/`OP_RT_ADD`. Typed float opcodes are inlined in the VM's main dispatch loop for maximum performance, eliminating procedure call overhead. `OP_CHECK_TYPE` for `sltFloat` coerces integer values to float at function boundaries, ensuring the function body can use direct float operations. All variables with initializers or type annotations are strictly typed — reassignment to an incompatible type throws a `TypeError`.
 
 ### Constant Pool
 

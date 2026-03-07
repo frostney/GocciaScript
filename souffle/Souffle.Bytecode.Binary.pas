@@ -200,6 +200,8 @@ begin
   WriteUInt8(AProto.LocalStrictCount);
   for I := 0 to AProto.LocalStrictCount - 1 do
     WriteBoolean(AProto.GetLocalStrictFlag(UInt8(I)));
+
+  WriteUInt8(AProto.TypeCheckPreambleSize);
 end;
 
 procedure TSouffleBytecodeWriter.WriteModule(
@@ -380,6 +382,8 @@ begin
   LocalTypeCount := ReadUInt8;
   for I := 0 to LocalTypeCount - 1 do
     Result.SetLocalStrictFlag(UInt8(I), ReadBoolean);
+
+  Result.TypeCheckPreambleSize := ReadUInt8;
 end;
 
 function TSouffleBytecodeReader.ReadModule: TSouffleBytecodeModule;

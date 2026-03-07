@@ -35,12 +35,15 @@ describe("throw statement", () => {
   });
 
   test("throw null", () => {
-    let caught = "not set";
+    let caught = null;
+    let didCatch = false;
     try {
       throw null;
     } catch (e) {
       caught = e;
+      didCatch = true;
     }
+    expect(didCatch).toBe(true);
     expect(caught).toBeNull();
   });
 
