@@ -41,13 +41,13 @@ type
   TSouffleValueArray = array of TSouffleValue;
   PSouffleValueArray = ^TSouffleValueArray;
 
-function SouffleNil: TSouffleValue;
-function SouffleNilWithFlags(const AFlags: Byte): TSouffleValue;
-function SouffleBoolean(const AValue: Boolean): TSouffleValue;
-function SouffleInteger(const AValue: Int64): TSouffleValue;
-function SouffleFloat(const AValue: Double): TSouffleValue;
+function SouffleNil: TSouffleValue; inline;
+function SouffleNilWithFlags(const AFlags: Byte): TSouffleValue; inline;
+function SouffleBoolean(const AValue: Boolean): TSouffleValue; inline;
+function SouffleInteger(const AValue: Int64): TSouffleValue; inline;
+function SouffleFloat(const AValue: Double): TSouffleValue; inline;
 function SouffleString(const AValue: string): TSouffleValue;
-function SouffleReference(const AObject: TSouffleHeapObject): TSouffleValue;
+function SouffleReference(const AObject: TSouffleHeapObject): TSouffleValue; inline;
 
 function SouffleIsNil(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsBoolean(const AValue: TSouffleValue): Boolean; inline;
@@ -78,36 +78,34 @@ uses
 
 function SouffleNil: TSouffleValue;
 begin
-  FillChar(Result, SizeOf(Result), 0);
   Result.Kind := svkNil;
   Result.Flags := SOUFFLE_NIL_DEFAULT;
 end;
 
 function SouffleNilWithFlags(const AFlags: Byte): TSouffleValue;
 begin
-  FillChar(Result, SizeOf(Result), 0);
   Result.Kind := svkNil;
   Result.Flags := AFlags;
 end;
 
 function SouffleBoolean(const AValue: Boolean): TSouffleValue;
 begin
-  FillChar(Result, SizeOf(Result), 0);
   Result.Kind := svkBoolean;
+  Result.Flags := 0;
   Result.AsBoolean := AValue;
 end;
 
 function SouffleInteger(const AValue: Int64): TSouffleValue;
 begin
-  FillChar(Result, SizeOf(Result), 0);
   Result.Kind := svkInteger;
+  Result.Flags := 0;
   Result.AsInteger := AValue;
 end;
 
 function SouffleFloat(const AValue: Double): TSouffleValue;
 begin
-  FillChar(Result, SizeOf(Result), 0);
   Result.Kind := svkFloat;
+  Result.Flags := 0;
   Result.AsFloat := AValue;
 end;
 
@@ -135,8 +133,8 @@ end;
 
 function SouffleReference(const AObject: TSouffleHeapObject): TSouffleValue;
 begin
-  FillChar(Result, SizeOf(Result), 0);
   Result.Kind := svkReference;
+  Result.Flags := 0;
   Result.AsReference := AObject;
 end;
 

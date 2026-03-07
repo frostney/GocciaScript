@@ -69,6 +69,7 @@ type
     FLocalStrictCount: UInt8;
     FIsAsync: Boolean;
     FTypeCheckPreambleSize: UInt8;
+    FStringConstantIndex: TDictionary<string, UInt16>;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -86,8 +87,8 @@ type
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
       AFinallyTarget: UInt32; const ACatchRegister: UInt8);
 
-    function GetInstruction(const AIndex: Integer): UInt32;
-    function GetConstant(const AIndex: Integer): TSouffleBytecodeConstant;
+    function GetInstruction(const AIndex: Integer): UInt32; inline;
+    function GetConstant(const AIndex: Integer): TSouffleBytecodeConstant; inline;
     function GetFunction(const AIndex: Integer): TSouffleFunctionTemplate;
     function GetUpvalueDescriptor(const AIndex: Integer): TSouffleUpvalueDescriptor;
     function GetExceptionHandler(const AIndex: Integer): TSouffleExceptionHandler;
@@ -140,6 +141,7 @@ begin
   FCodeCount := 0;
   FConstantCount := 0;
   FFunctions := TObjectList<TSouffleFunctionTemplate>.Create(True);
+  FStringConstantIndex := TDictionary<string, UInt16>.Create;
   FExceptionHandlerCount := 0;
   FMaxRegisters := 0;
   FParameterCount := 0;
@@ -151,6 +153,7 @@ end;
 
 destructor TSouffleFunctionTemplate.Destroy;
 begin
+  FStringConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
   inherited;
@@ -257,12 +260,9 @@ end;
 
 function TSouffleFunctionTemplate.AddConstantString(
   const AValue: string): UInt16;
-var
-  I: Integer;
 begin
-  for I := 0 to FConstantCount - 1 do
-    if (FConstants[I].Kind = bckString) and (FConstants[I].StringValue = AValue) then
-      Exit(UInt16(I));
+  if FStringConstantIndex.TryGetValue(AValue, Result) then
+    Exit;
 
   if FConstantCount > High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
@@ -271,6 +271,7 @@ begin
   FConstants[FConstantCount].Kind := bckString;
   FConstants[FConstantCount].StringValue := AValue;
   Result := UInt16(FConstantCount);
+  FStringConstantIndex.Add(AValue, Result);
   Inc(FConstantCount);
 end;
 

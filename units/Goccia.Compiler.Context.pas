@@ -40,7 +40,7 @@ type
   end;
 
 function EmitInstruction(const ACtx: TGocciaCompilationContext;
-  const AInstruction: UInt32): Integer;
+  const AInstruction: UInt32): Integer; inline;
 procedure EmitLineMapping(const ACtx: TGocciaCompilationContext;
   const ALine, AColumn: Integer);
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;

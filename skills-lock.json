@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "resolve-reviews": {
+      "source": "pbakaus/agent-reviews",
+      "sourceType": "github",
+      "computedHash": "bc9d5432eae35775eefda3eeb944b5e7e899954ede190213edb67c9154267e07"
+    }
+  }
+}
