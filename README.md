@@ -160,11 +160,17 @@ GocciaScript includes an alternative bytecode execution backend — the **Souffl
 # Compile to .sbc bytecode file (no execution)
 ./build/ScriptLoader example.js --emit
 
+# Compile to .wasm file
+./build/ScriptLoader example.js --emit=wasm
+
+# Custom output path
+./build/ScriptLoader example.js --emit=wasm --output=out.wasm
+
 # Load and execute a pre-compiled .sbc file
 ./build/ScriptLoader example.sbc
 ```
 
-See [Souffle VM](docs/souffle-vm.md) for the full architecture.
+See [Souffle VM](docs/souffle-vm.md) for the full architecture and [WASM Backend](docs/wasm-backend.md) for WASM output.
 
 ### Start the REPL
 
@@ -297,8 +303,11 @@ flowchart LR
 | Runtime Ops | `Goccia.Runtime.Operations.pas` | GocciaScript semantics, bridge caches, array sync, native delegates |
 | Backend | `Goccia.Engine.Backend.pas` | Orchestration, built-in bridging |
 | Binary I/O | `Souffle.Bytecode.Binary.pas` | `.sbc` file serialization/deserialization |
+| WASM Emitter | `Souffle.Wasm.Emitter.pas` | WASM 1.0 + 3.0 binary module builder |
+| WASM Types | `Souffle.Wasm.Types.pas` | WASM GC type definitions for Souffle values |
+| WASM Translator | `Souffle.Wasm.Translator.pas` | Souffle bytecode to WASM translation |
 
-The Souffle VM is a general-purpose bytecode virtual machine designed to support multiple language frontends and future WASM 3.0 output. Its two-tier instruction set separates universal VM mechanics (Tier 1) from pluggable language semantics (Tier 2).
+The Souffle VM is a general-purpose bytecode virtual machine designed to support multiple language frontends and WASM 3.0 output. Its two-tier instruction set separates universal VM mechanics (Tier 1) from pluggable language semantics (Tier 2).
 
 See [Architecture](docs/architecture.md) for the interpreter deep-dive and [Souffle VM](docs/souffle-vm.md) for the bytecode VM architecture.
 
@@ -321,7 +330,8 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 | [Language Restrictions](docs/language-restrictions.md) | Supported and excluded features with rationale |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins, API reference, adding new ones |
 | [Architecture](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
-| [Souffle VM](docs/souffle-vm.md) | Bytecode VM architecture, two-tier ISA, value system, WASM 3.0 alignment |
+| [Souffle VM](docs/souffle-vm.md) | Bytecode VM architecture, two-tier ISA, value system, WASM 3.0 backend |
+| [WASM Backend](docs/wasm-backend.md) | WASM output: value mapping, runtime import contract, host requirements |
 | [Design Decisions](docs/design-decisions.md) | Rationale behind key technical choices |
 | [Code Style](docs/code-style.md) | Naming conventions, patterns, file organization |
 | [Value System](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |

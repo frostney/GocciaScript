@@ -115,6 +115,37 @@ jobs:
           ./build/Goccia.Values.FunctionValue.Test
           ./build/Goccia.Values.ObjectValue.Test
 
+  wasm-test:
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-ubuntu-latest-x64
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Install FPC
+        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run WASM integration tests
+        run: ./tests-wasm/run-wasm-tests.pas
+
   benchmark:
     needs: build
     strategy:

@@ -29,7 +29,10 @@ GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a 
 ./build/ScriptLoader example.js                  # Execute a script (interpreted)
 ./build/ScriptLoader example.js --mode=bytecode  # Execute via Souffle VM
 ./build/ScriptLoader example.js --emit           # Compile to .sbc (no execution)
-./build/ScriptLoader example.js --emit=out.sbc   # Compile to specific .sbc file
+./build/ScriptLoader example.js --emit=bytecode  # Compile to .sbc (explicit)
+./build/ScriptLoader example.js --emit=wasm      # Compile to .wasm
+./build/ScriptLoader example.js --emit --output=out.sbc   # Custom output path
+./build/ScriptLoader example.js --emit=wasm --output=out.wasm  # Custom WASM output
 ./build/ScriptLoader out.sbc                     # Load and execute .sbc bytecode
 ./build/REPL                                      # Start interactive REPL
 ./build/TestRunner tests/                                                      # Run all JavaScript tests
@@ -80,6 +83,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 **Interpreted pipeline:** Source → (JSX Transformer) → Lexer → Parser → Interpreter → Evaluator → Result
 
 **Bytecode pipeline:** Source → Lexer → Parser → Compiler → Souffle Bytecode → Souffle VM → Result
+
+**WASM pipeline:** Source → Lexer → Parser → Compiler → Souffle Bytecode → WASM Translator → `.wasm` binary
 
 **Key components:**
 
@@ -151,6 +156,10 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Souffle GC | `Souffle.GarbageCollector.pas` | Mark-and-sweep GC for `TSouffleHeapObject` instances |
 | Souffle Heap | `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleString`, heap kind constants |
 | GocciaScript Backend | `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — bridges GocciaScript engine to Souffle VM |
+| WASM Emitter | `Souffle.Wasm.Emitter.pas` | `TWasmModule`, `TWasmCodeBuilder` — WASM binary module builder (types, imports, functions, exports, custom sections); `AddCustomSection` for embedding constant pool data |
+| WASM Types | `Souffle.Wasm.Types.pas` | `TSouffleWasmTypeLayout` — WASM GC type definitions for Souffle values; `SouffleLocalTypeToWasmValType` helper |
+| WASM Translator | `Souffle.Wasm.Translator.pas` | `TSouffleWasmTranslator` — Souffle bytecode → WASM translation: function flattening, register-to-local mapping, control flow reconstruction (sorted targets approach with interior/exterior block classification for try ranges), demand-driven runtime import wiring, constant pool flattening with `souffle:constants` custom section, native WASM exception handling (`try`/`catch`/`throw` via imported tag), all Tier 1 + Tier 2 opcodes. All functions exported as `__fn_N` for closure invocation |
+| WASM Host Runtime | `tests-wasm/souffle-host.mjs` | Node.js ES module that loads `.wasm`, extracts `souffle:constants` custom section, provides `souffle` module imports (value construction, arithmetic, property access, closures, blueprints, exception tag), manages `currentClosure` for upvalue access |
 | GocciaScript Compiler | `Goccia.Compiler.pas` | `TGocciaCompiler` — AST → Souffle bytecode compilation, top-level dispatch |
 | Compiler Expressions | `Goccia.Compiler.Expressions.pas` | Expression compilation: functions, methods, identifiers, typed local load/store |
 | Compiler Statements | `Goccia.Compiler.Statements.pas` | Statement compilation: variables, classes (`IsSimpleClass` + `CompileClassDeclaration`), control flow |
@@ -550,6 +559,7 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 - **`.toThrow()` best practice:** Always pass an explicit error constructor (`TypeError`, `RangeError`, `Error`, etc.) to `.toThrow()` — e.g. `expect(() => null.foo).toThrow(TypeError)`. Bare `.toThrow()` only asserts *something* throws; the constructor form also verifies the error type.
 - **Pascal test framework:** `TestRunner.pas` provides generic `Expect<T>(...).ToBe(...)` assertions. `Expect<T>` is a **standalone function** (not a method on `TTestSuite`) to avoid FPC 3.2.2 AArch64 compiler crash with cross-unit generic method inheritance.
 - **NaN checks:** In Pascal tests, use `Value.ToNumberLiteral.IsNaN` (not `Math.IsNaN`) — special values store `0.0` internally
+- **WASM integration tests:** `tests-wasm/` directory contains GocciaScript `.js` fixtures with `// Expected:` comment lines. The `tests-wasm/run-wasm-tests.pas` harness (instantfpc script) compiles each fixture to `.wasm` via ScriptLoader, executes with `node tests-wasm/souffle-host.mjs`, and compares stdout. Fixtures with `// Skip:` are skipped. Skips gracefully if `node` is not installed. Run with: `./tests-wasm/run-wasm-tests.pas`
 
 ## Build System
 
@@ -573,6 +583,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 | [docs/tutorial.md](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
 | [docs/architecture.md](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
 | [docs/souffle-vm.md](docs/souffle-vm.md) | Souffle VM architecture, two-tier ISA, value system, binary format, WASM alignment |
+| [docs/wasm-backend.md](docs/wasm-backend.md) | WASM output: constant pool custom section, runtime import contract, Node.js host, integration tests |
 | [docs/design-decisions.md](docs/design-decisions.md) | Rationale behind key technical choices |
 | [docs/code-style.md](docs/code-style.md) | Naming conventions, patterns, file organization |
 | [docs/value-system.md](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
