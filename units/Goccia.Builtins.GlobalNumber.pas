@@ -28,6 +28,7 @@ type
 implementation
 
 uses
+  Math,
   SysUtils,
 
   Goccia.Arguments.Validator,
@@ -62,6 +63,7 @@ function TGocciaGlobalNumber.NumberParseInt(const AArgs: TGocciaArgumentsCollect
 var
   InputStr: string;
   Radix: Integer;
+  RadixNum: Double;
   I, StartPos: Integer;
   C: Char;
   Sign: Integer;
@@ -81,8 +83,15 @@ begin
   end;
 
   // Step 5: Let R be ? ToInt32(radix)
+  // ES2026 §7.1.6 ToInt32: NaN, +0, -0, +Infinity, -Infinity all map to +0
   if AArgs.Length > 1 then
-    Radix := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value)
+  begin
+    RadixNum := AArgs.GetElement(1).ToNumberLiteral.Value;
+    if Math.IsNaN(RadixNum) or Math.IsInfinite(RadixNum) then
+      Radix := 0
+    else
+      Radix := Trunc(RadixNum);
+  end
   else
     Radix := 0;
 
