@@ -24,3 +24,47 @@ test("decrement preserves fractional part", () => {
   --y;
   expect(y).toBe(-0.5);
 });
+
+test("post-decrement on property access", () => {
+  const obj = { count: 10 };
+  expect(obj.count--).toBe(10);
+  expect(obj.count).toBe(9);
+});
+
+test("pre-decrement on property access", () => {
+  const obj = { count: 10 };
+  expect(--obj.count).toBe(9);
+  expect(obj.count).toBe(9);
+});
+
+test("post-decrement on computed member (array index)", () => {
+  const arr = [5, 10, 15];
+  expect(arr[0]--).toBe(5);
+  expect(arr[0]).toBe(4);
+  expect(arr[2]--).toBe(15);
+  expect(arr[2]).toBe(14);
+});
+
+test("pre-decrement on computed member (array index)", () => {
+  const arr = [5, 10, 15];
+  expect(--arr[0]).toBe(4);
+  expect(arr[0]).toBe(4);
+  expect(--arr[1]).toBe(9);
+  expect(arr[1]).toBe(9);
+});
+
+test("decrement on computed member with variable key", () => {
+  const arr = [10, 20, 30];
+  let i = 2;
+  arr[i]--;
+  expect(arr[2]).toBe(29);
+});
+
+test("decrement on computed member with string key", () => {
+  const obj = { x: 100, y: 200 };
+  const key = "x";
+  obj[key]--;
+  expect(obj.x).toBe(99);
+  --obj["y"];
+  expect(obj.y).toBe(199);
+});

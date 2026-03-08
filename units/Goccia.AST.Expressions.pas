@@ -1124,6 +1124,7 @@ end;
 function TGocciaIncrementExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Obj, OldValue, NewValue: TGocciaValue;
+  MemberExpr: TGocciaMemberExpression;
   PropName: string;
 begin
   if Operand is TGocciaIdentifierExpression then
@@ -1139,8 +1140,12 @@ begin
   end
   else if Operand is TGocciaMemberExpression then
   begin
-    Obj := TGocciaMemberExpression(Operand).ObjectExpr.Evaluate(AContext);
-    PropName := TGocciaMemberExpression(Operand).PropertyName;
+    MemberExpr := TGocciaMemberExpression(Operand);
+    Obj := MemberExpr.ObjectExpr.Evaluate(AContext);
+    if MemberExpr.Computed then
+      PropName := MemberExpr.PropertyExpression.Evaluate(AContext).ToStringLiteral.Value
+    else
+      PropName := MemberExpr.PropertyName;
     OldValue := Obj.GetProperty(PropName);
     if OldValue = nil then
     begin
@@ -1149,7 +1154,7 @@ begin
       Exit;
     end;
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-    DefinePropertyOnValue(Obj, PropName, NewValue);
+    AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column);
     if IsPrefix then
       Result := NewValue
     else
