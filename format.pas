@@ -703,9 +703,12 @@ var
   Groups: TStringList;
   Ch: Char;
   Current: string;
+var
+  SemiPos: Integer;
 begin
+  SemiPos := Pos(';', ADeclText);
   ParenStart := Pos('(', ADeclText);
-  if ParenStart = 0 then
+  if (ParenStart = 0) or ((SemiPos > 0) and (ParenStart > SemiPos)) then
     Exit;
 
   Depth := 0;

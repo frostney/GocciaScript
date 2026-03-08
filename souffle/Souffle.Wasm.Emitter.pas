@@ -874,48 +874,48 @@ end;
 
 // i32 Arithmetic
 
-procedure TWasmCodeBuilder.EmitI32Add;  begin EmitByte(AOP_I32_ADD); end;
-procedure TWasmCodeBuilder.EmitI32Sub;  begin EmitByte(AOP_I32_SUB); end;
-procedure TWasmCodeBuilder.EmitI32Mul;  begin EmitByte(AOP_I32_MUL); end;
-procedure TWasmCodeBuilder.EmitI32DivS; begin EmitByte(AOP_I32_DIV_S); end;
-procedure TWasmCodeBuilder.EmitI32RemS; begin EmitByte(AOP_I32_REM_S); end;
-procedure TWasmCodeBuilder.EmitI32And;  begin EmitByte(AOP_I32_AND); end;
-procedure TWasmCodeBuilder.EmitI32Or;   begin EmitByte(AOP_I32_OR); end;
-procedure TWasmCodeBuilder.EmitI32Xor;  begin EmitByte(AOP_I32_XOR); end;
-procedure TWasmCodeBuilder.EmitI32Shl;  begin EmitByte(AOP_I32_SHL); end;
-procedure TWasmCodeBuilder.EmitI32ShrS; begin EmitByte(AOP_I32_SHR_S); end;
+procedure TWasmCodeBuilder.EmitI32Add;  begin EmitByte(OP_I32_ADD); end;
+procedure TWasmCodeBuilder.EmitI32Sub;  begin EmitByte(OP_I32_SUB); end;
+procedure TWasmCodeBuilder.EmitI32Mul;  begin EmitByte(OP_I32_MUL); end;
+procedure TWasmCodeBuilder.EmitI32DivS; begin EmitByte(OP_I32_DIV_S); end;
+procedure TWasmCodeBuilder.EmitI32RemS; begin EmitByte(OP_I32_REM_S); end;
+procedure TWasmCodeBuilder.EmitI32And;  begin EmitByte(OP_I32_AND); end;
+procedure TWasmCodeBuilder.EmitI32Or;   begin EmitByte(OP_I32_OR); end;
+procedure TWasmCodeBuilder.EmitI32Xor;  begin EmitByte(OP_I32_XOR); end;
+procedure TWasmCodeBuilder.EmitI32Shl;  begin EmitByte(OP_I32_SHL); end;
+procedure TWasmCodeBuilder.EmitI32ShrS; begin EmitByte(OP_I32_SHR_S); end;
 
 // i32 Comparison
 
-procedure TWasmCodeBuilder.EmitI32Eqz; begin EmitByte(AOP_I32_EQZ); end;
-procedure TWasmCodeBuilder.EmitI32Eq;  begin EmitByte(AOP_I32_EQ); end;
-procedure TWasmCodeBuilder.EmitI32Ne;  begin EmitByte(AOP_I32_NE); end;
-procedure TWasmCodeBuilder.EmitI32LtS; begin EmitByte(AOP_I32_LT_S); end;
-procedure TWasmCodeBuilder.EmitI32GtS; begin EmitByte(AOP_I32_GT_S); end;
-procedure TWasmCodeBuilder.EmitI32LeS; begin EmitByte(AOP_I32_LE_S); end;
-procedure TWasmCodeBuilder.EmitI32GeS; begin EmitByte(AOP_I32_GE_S); end;
+procedure TWasmCodeBuilder.EmitI32Eqz; begin EmitByte(OP_I32_EQZ); end;
+procedure TWasmCodeBuilder.EmitI32Eq;  begin EmitByte(OP_I32_EQ); end;
+procedure TWasmCodeBuilder.EmitI32Ne;  begin EmitByte(OP_I32_NE); end;
+procedure TWasmCodeBuilder.EmitI32LtS; begin EmitByte(OP_I32_LT_S); end;
+procedure TWasmCodeBuilder.EmitI32GtS; begin EmitByte(OP_I32_GT_S); end;
+procedure TWasmCodeBuilder.EmitI32LeS; begin EmitByte(OP_I32_LE_S); end;
+procedure TWasmCodeBuilder.EmitI32GeS; begin EmitByte(OP_I32_GE_S); end;
 
 // f64 Arithmetic
 
-procedure TWasmCodeBuilder.EmitF64Add; begin EmitByte(AOP_F64_ADD); end;
-procedure TWasmCodeBuilder.EmitF64Sub; begin EmitByte(AOP_F64_SUB); end;
-procedure TWasmCodeBuilder.EmitF64Mul; begin EmitByte(AOP_F64_MUL); end;
-procedure TWasmCodeBuilder.EmitF64Div; begin EmitByte(AOP_F64_DIV); end;
+procedure TWasmCodeBuilder.EmitF64Add; begin EmitByte(OP_F64_ADD); end;
+procedure TWasmCodeBuilder.EmitF64Sub; begin EmitByte(OP_F64_SUB); end;
+procedure TWasmCodeBuilder.EmitF64Mul; begin EmitByte(OP_F64_MUL); end;
+procedure TWasmCodeBuilder.EmitF64Div; begin EmitByte(OP_F64_DIV); end;
 
 // f64 Comparison
 
-procedure TWasmCodeBuilder.EmitF64Eq; begin EmitByte(AOP_F64_EQ); end;
-procedure TWasmCodeBuilder.EmitF64Ne; begin EmitByte(AOP_F64_NE); end;
-procedure TWasmCodeBuilder.EmitF64Lt; begin EmitByte(AOP_F64_LT); end;
-procedure TWasmCodeBuilder.EmitF64Gt; begin EmitByte(AOP_F64_GT); end;
-procedure TWasmCodeBuilder.EmitF64Le; begin EmitByte(AOP_F64_LE); end;
-procedure TWasmCodeBuilder.EmitF64Ge; begin EmitByte(AOP_F64_GE); end;
+procedure TWasmCodeBuilder.EmitF64Eq; begin EmitByte(OP_F64_EQ); end;
+procedure TWasmCodeBuilder.EmitF64Ne; begin EmitByte(OP_F64_NE); end;
+procedure TWasmCodeBuilder.EmitF64Lt; begin EmitByte(OP_F64_LT); end;
+procedure TWasmCodeBuilder.EmitF64Gt; begin EmitByte(OP_F64_GT); end;
+procedure TWasmCodeBuilder.EmitF64Le; begin EmitByte(OP_F64_LE); end;
+procedure TWasmCodeBuilder.EmitF64Ge; begin EmitByte(OP_F64_GE); end;
 
 // Conversions
 
-procedure TWasmCodeBuilder.EmitI64ExtendI32S;  begin EmitByte(AOP_I64_EXTEND_I32_S); end;
-procedure TWasmCodeBuilder.EmitF64ConvertI32S; begin EmitByte(AOP_F64_CONVERT_I32_S); end;
-procedure TWasmCodeBuilder.EmitI32WrapI64;     begin EmitByte(AOP_I32_WRAP_I64); end;
+procedure TWasmCodeBuilder.EmitI64ExtendI32S;  begin EmitByte(OP_I64_EXTEND_I32_S); end;
+procedure TWasmCodeBuilder.EmitF64ConvertI32S; begin EmitByte(OP_F64_CONVERT_I32_S); end;
+procedure TWasmCodeBuilder.EmitI32WrapI64;     begin EmitByte(OP_I32_WRAP_I64); end;
 
 // Memory
 
@@ -941,8 +941,8 @@ end;
 
 // Parametric
 
-procedure TWasmCodeBuilder.EmitDrop;   begin EmitByte(AOP_DROP); end;
-procedure TWasmCodeBuilder.EmitSelect; begin EmitByte(AOP_SELECT); end;
+procedure TWasmCodeBuilder.EmitDrop;   begin EmitByte(OP_DROP); end;
+procedure TWasmCodeBuilder.EmitSelect; begin EmitByte(OP_SELECT); end;
 
 // Exception Handling
 
@@ -1185,9 +1185,9 @@ end;
 
 // GC: i31
 
-procedure TWasmCodeBuilder.EmitRefI31;  begin EmitGCOp(AGC_REF_I31); end;
-procedure TWasmCodeBuilder.EmitI31GetS; begin EmitGCOp(AGC_I31_GET_S); end;
-procedure TWasmCodeBuilder.EmitI31GetU; begin EmitGCOp(AGC_I31_GET_U); end;
+procedure TWasmCodeBuilder.EmitRefI31;  begin EmitGCOp(GC_REF_I31); end;
+procedure TWasmCodeBuilder.EmitI31GetS; begin EmitGCOp(GC_I31_GET_S); end;
+procedure TWasmCodeBuilder.EmitI31GetU; begin EmitGCOp(GC_I31_GET_U); end;
 
 // GC: Casting
 
@@ -1221,8 +1221,8 @@ end;
 
 // GC: Extern Conversion
 
-procedure TWasmCodeBuilder.EmitAnyConvertExtern; begin EmitGCOp(AGC_ANY_CONVERT_EXTERN); end;
-procedure TWasmCodeBuilder.EmitExternConvertAny; begin EmitGCOp(AGC_EXTERN_CONVERT_ANY); end;
+procedure TWasmCodeBuilder.EmitAnyConvertExtern; begin EmitGCOp(GC_ANY_CONVERT_EXTERN); end;
+procedure TWasmCodeBuilder.EmitExternConvertAny; begin EmitGCOp(GC_EXTERN_CONVERT_ANY); end;
 
 // Encode function body
 
