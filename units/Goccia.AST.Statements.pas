@@ -11,7 +11,10 @@ uses
   OrderedMap,
 
   Goccia.AST.Expressions,
-  Goccia.AST.Node;
+  Goccia.AST.Node,
+  Goccia.ControlFlow,
+  Goccia.Evaluator.Context,
+  Goccia.Values.Primitives;
 
 type
   TGocciaVariableInfo = record
@@ -428,7 +431,14 @@ type
 implementation
 
 uses
-  Goccia.Values.Primitives;
+  SysUtils,
+
+  Goccia.Evaluator,
+  Goccia.Modules,
+  Goccia.Scope.BindingMap,
+  Goccia.Token,
+  Goccia.Values.Error,
+  Goccia.Values.FunctionValue;
 
 { TGocciaExpressionStatement }
 
@@ -756,6 +766,176 @@ uses
   constructor TGocciaBreakStatement.Create(const ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
+  end;
+
+  { Execute / Evaluate overrides }
+
+  function TGocciaExpressionStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(Expression.Evaluate(AContext));
+  end;
+
+  function TGocciaVariableDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    I: Integer;
+    Value: TGocciaValue;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    for I := 0 to Length(Variables) - 1 do
+    begin
+      Value := Variables[I].Initializer.Evaluate(AContext);
+      if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
+        TGocciaFunctionValue(Value).Name := Variables[I].Name;
+      if IsConst then
+        AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttConst)
+      else
+        AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttLet);
+    end;
+  end;
+
+  function TGocciaDestructuringDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(EvaluateDestructuringDeclaration(Self, AContext));
+  end;
+
+  function TGocciaBlockStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateBlock(Self, AContext);
+  end;
+
+  function TGocciaIfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateIf(Self, AContext);
+  end;
+
+  function TGocciaForStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaWhileStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaDoWhileStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaForOfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateForOf(Self, AContext);
+  end;
+
+  function TGocciaForAwaitOfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateForAwaitOf(Self, AContext);
+  end;
+
+  function TGocciaReturnStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    ReturnValue: TGocciaValue;
+  begin
+    if Assigned(Self.Value) then
+    begin
+      ReturnValue := Self.Value.Evaluate(AContext);
+      if ReturnValue = nil then
+        ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end
+    else
+      ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := TGocciaControlFlow.Return(ReturnValue);
+  end;
+
+  function TGocciaThrowStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    ThrowValue: TGocciaValue;
+  begin
+    ThrowValue := Self.Value.Evaluate(AContext);
+    raise TGocciaThrowValue.Create(ThrowValue);
+  end;
+
+  function TGocciaTryStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateTry(Self, AContext);
+  end;
+
+  function TGocciaSwitchStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateSwitch(Self, AContext);
+  end;
+
+  function TGocciaBreakStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Break;
+  end;
+
+  function TGocciaClassDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(EvaluateClass(Self, AContext));
+  end;
+
+  function TGocciaEnumDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(EvaluateEnumDeclaration(Self, AContext));
+  end;
+
+  function TGocciaExportEnumDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(EvaluateEnumDeclaration(Declaration, AContext));
+  end;
+
+  function TGocciaImportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    Module: TGocciaModule;
+    ImportPair: TPair<string, string>;
+    Value: TGocciaValue;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Module := AContext.LoadModule(ModulePath, AContext.CurrentFilePath);
+    for ImportPair in Imports do
+    begin
+      if Module.ExportsTable.TryGetValue(ImportPair.Value, Value) then
+      begin
+        AContext.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtLet);
+      end
+      else
+      begin
+        AContext.OnError(Format('Module "%s" has no export named "%s"',
+          [ModulePath, ImportPair.Value]), Line, Column);
+      end;
+    end;
+  end;
+
+  function TGocciaExportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaExportVariableDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := Declaration.Execute(AContext);
+  end;
+
+  function TGocciaReExportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaEmptyStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaClassMethod.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+  begin
+    Result := EvaluateClassMethod(Self, AContext);
+  end;
+
+  function TGocciaClassExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+  begin
+    Result := EvaluateClassExpression(Self, AContext);
   end;
 
 end.
