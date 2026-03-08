@@ -1,0 +1,185 @@
+--------------------------------------------------------------------------------
+Profile data file '/tmp/callgrind_interp_prod.out' (creator: callgrind-3.22.0)
+--------------------------------------------------------------------------------
+I1 cache: 
+D1 cache: 
+LL cache: 
+Timerange: Basic block 0 - 6120269209
+Trigger: Program termination
+Profiled target:  ./build/BenchmarkRunner benchmarks/ --no-progress --format=console (PID 6336, part 1)
+Events recorded:  Ir
+Events shown:     Ir
+Event sort order: Ir
+Thresholds:       95
+Include dirs:     
+User annotated:   
+Auto-annotation:  on
+
+--------------------------------------------------------------------------------
+Ir                      
+--------------------------------------------------------------------------------
+24,172,699,104 (100.0%)  PROGRAM TOTALS
+
+--------------------------------------------------------------------------------
+Ir                      file:function
+--------------------------------------------------------------------------------
+3,215,207,032 (13.30%)  ???:SYSTEM$_$TOBJECT_$__$$_INHERITSFROM$TCLASS$$BOOLEAN [/workspace/build/BenchmarkRunner]
+1,242,785,795 ( 5.14%)  ???:fpc_do_is [/workspace/build/BenchmarkRunner]
+1,106,359,863 ( 4.58%)  ???:fpc_pushexceptaddr [/workspace/build/BenchmarkRunner]
+  960,546,990 ( 3.97%)  ???:SYSTEM_$$_FILLCHAR$formal$INT64$BYTE [/workspace/build/BenchmarkRunner]
+  952,187,869 ( 3.94%)  ???:SYSTEM_$$_SYSGETMEM_FIXED$QWORD$$POINTER [/workspace/build/BenchmarkRunner]
+  839,102,689 ( 3.47%)  ???:fpc_dynarray_setlength [/workspace/build/BenchmarkRunner]
+  706,989,029 ( 2.92%)  ???:SYSTEM_$$_RECORDRTTI$POINTER$POINTER$TRTTIPROC [/workspace/build/BenchmarkRunner]
+  704,490,970 ( 2.91%)  /units/Goccia.Evaluator.pas:GOCCIA.EVALUATOR_$$_EVALUATEEXPRESSION$TGOCCIAEXPRESSION$TGOCCIAEVALUATIONCONTEXT$$TGOCCIAVALUE'2 [/workspace/build/BenchmarkRunner]
+  684,889,439 ( 2.83%)  ???:fpc_popaddrstack [/workspace/build/BenchmarkRunner]
+  632,205,636 ( 2.62%)  ???:fpc_setjmp [/workspace/build/BenchmarkRunner]
+  585,241,967 ( 2.42%)  ???:SYSTEM$_$TOBJECT_$__$$_CLEANUPINSTANCE [/workspace/build/BenchmarkRunner]
+  540,878,137 ( 2.24%)  ???:SYSTEM_$$_SYSFREEMEM$POINTER$$QWORD [/workspace/build/BenchmarkRunner]
+  523,666,763 ( 2.17%)  ???:SYSTEM_$$_SYSFREEMEM_FIXED$PFREELISTS$PMEMCHUNK_FIXED$$QWORD [/workspace/build/BenchmarkRunner]
+  500,119,007 ( 2.07%)  ???:fpc_finalize [/workspace/build/BenchmarkRunner]
+  414,661,101 ( 1.72%)  /units/OrderedMap.pas:GOCCIA.SCOPE.BINDINGMAP$_$TORDEREDMAP$1$CRC6F58F410_$__$$_TRYGETVALUE$crcA98AE8FB [/workspace/build/BenchmarkRunner]
+  386,825,069 ( 1.60%)  /units/OrderedMap.pas:GOCCIA.SCOPE.BINDINGMAP$_$TORDEREDMAP$1$CRC6F58F410_$__$$_FINDBUCKET$crcBD2ACE7A [/workspace/build/BenchmarkRunner]
+  355,443,308 ( 1.47%)  ???:SYSTEM$_$TOBJECT_$__$$_NEWINSTANCE$$TOBJECT [/workspace/build/BenchmarkRunner]
+  339,322,440 ( 1.40%)  ???:SYSTEM_$$_SYSGETMEM$QWORD$$POINTER [/workspace/build/BenchmarkRunner]
+  333,382,607 ( 1.38%)  ???:fpc_dynarray_clear [/workspace/build/BenchmarkRunner]
+  254,852,645 ( 1.05%)  ???:fpc_ansistr_compare_equal [/workspace/build/BenchmarkRunner]
+  248,284,569 ( 1.03%)  ???:fpc_ansistr_decr_ref [/workspace/build/BenchmarkRunner]
+  236,666,430 ( 0.98%)  /units/OrderedMap.pas:GOCCIA.SCOPE.BINDINGMAP$_$TORDEREDMAP$1$CRC6F58F410_$__$$_CREATE$LONGINT$$TORDEREDMAP$1$CRC6F58F410 [/workspace/build/BenchmarkRunner]
+  207,368,667 ( 0.86%)  ???:fpc_initialize [/workspace/build/BenchmarkRunner]
+  197,318,255 ( 0.82%)  /units/Goccia.Evaluator.pas:GOCCIA.EVALUATOR_$$_EVALUATECALL$TGOCCIACALLEXPRESSION$TGOCCIAEVALUATIONCONTEXT$$TGOCCIAVALUE'2 [/workspace/build/BenchmarkRunner]
+  190,185,320 ( 0.79%)  /units/Goccia.Scope.pas:GOCCIA.SCOPE$_$TGOCCIASCOPE_$__$$_GETLEXICALBINDING$ANSISTRING$LONGINT$LONGINT$$TLEXICALBINDING [/workspace/build/BenchmarkRunner]
+  189,787,580 ( 0.79%)  /generics.collections.pas:GOCCIA.VALUES.PRIMITIVES$_$TLIST$1$CRCDD5F4F9A_$__$$_GETITEM$INT64$$TGOCCIAVALUE [/workspace/build/BenchmarkRunner]
+  180,755,430 ( 0.75%)  ???:SYSTEM_$$_MOVE$formal$formal$INT64 [/workspace/build/BenchmarkRunner]
+  158,915,967 ( 0.66%)  /units/OrderedMap.pas:GOCCIA.SCOPE.BINDINGMAP$_$TORDEREDMAP$1$CRC6F58F410_$__$$_ADD$ANSISTRING$TLEXICALBINDING [/workspace/build/BenchmarkRunner]
+  157,871,463 ( 0.65%)  ???:SYSTEM$_$TOBJECT_$__$$_DESTROY [/workspace/build/BenchmarkRunner]
+  144,425,967 ( 0.60%)  ???:fpc_ansistr_assign [/workspace/build/BenchmarkRunner]
+  142,766,188 ( 0.59%)  ???:fpc_finalize'2 [/workspace/build/BenchmarkRunner]
+  139,725,014 ( 0.58%)  ???:MATH_$$_ISNAN$DOUBLE$$BOOLEAN [/workspace/build/BenchmarkRunner]
+  137,850,365 ( 0.57%)  /generics.collections.pas:GOCCIA.VALUES.PRIMITIVES$_$TOBJECTLIST$1$CRCDD5F4F9A_$__$$_NOTIFY$crc553BC920 [/workspace/build/BenchmarkRunner]
+  130,592,511 ( 0.54%)  ???:MATH_$$_ISINFINITE$DOUBLE$$BOOLEAN [/workspace/build/BenchmarkRunner]
+  129,341,649 ( 0.54%)  ???:fpc_initialize'2 [/workspace/build/BenchmarkRunner]
+  129,328,356 ( 0.54%)  /generics.collections.pas:GOCCIA.VALUES.PRIMITIVES$_$TLIST$1$CRCDD5F4F9A_$__$$_DELETERANGE$INT64$INT64 [/workspace/build/BenchmarkRunner]
+  126,865,941 ( 0.52%)  /units/Goccia.Values.FunctionValue.pas:GOCCIA.VALUES.FUNCTIONVALUE$_$TGOCCIAFUNCTIONVALUE_$__$$_EXECUTEBODY$crcB3501AE2'2 [/workspace/build/BenchmarkRunner]
+  123,477,044 ( 0.51%)  ???:SYSTEM_$$_RTTISIZEANDOP$POINTER$TRTTIRECOPTYPE$BOOLEAN$$INT64 [/workspace/build/BenchmarkRunner]
+  120,296,538 ( 0.50%)  /units/Goccia.Scope.pas:GOCCIA.SCOPE$_$TGOCCIASCOPE_$__$$_GETLEXICALBINDING$ANSISTRING$LONGINT$LONGINT$$TLEXICALBINDING'2 [/workspace/build/BenchmarkRunner]
+  118,101,012 ( 0.49%)  /units/Goccia.Evaluator.pas:GOCCIA.EVALUATOR_$$_EVALUATEBINARY$TGOCCIABINARYEXPRESSION$TGOCCIAEVALUATIONCONTEXT$$TGOCCIAVALUE'2 [/workspace/build/BenchmarkRunner]
+  117,652,346 ( 0.49%)  ???:SYSTEM_$$_GETMEM$POINTER$QWORD [/workspace/build/BenchmarkRunner]
+  103,874,115 ( 0.43%)  ???:SYSTEM$_$TOBJECT_$__$$_CREATE$$TOBJECT [/workspace/build/BenchmarkRunner]
+   93,245,656 ( 0.39%)  ???:SYSTEM_$$_COMPAREBYTE$formal$formal$INT64$$INT64 [/workspace/build/BenchmarkRunner]
+   91,361,400 ( 0.38%)  /units/Goccia.Scope.pas:GOCCIA.SCOPE$_$TGOCCIASCOPE_$__$$_CREATE$crc0DC3ABB8 [/workspace/build/BenchmarkRunner]
+   88,216,392 ( 0.36%)  ???:SYSTEM_$$_ALLOC_OSCHUNK$PFREELISTS$QWORD$QWORD$$POINTER [/workspace/build/BenchmarkRunner]
+   87,470,477 ( 0.36%)  /generics.collections.pas:GOCCIA.VALUES.PRIMITIVES$_$TCUSTOMLIST$1$CRCDD5F4F9A_$__$$_PREPAREADDINGITEM$$INT64 [/workspace/build/BenchmarkRunner]
+   86,050,394 ( 0.36%)  ???:SYSTEM_$$_REMOVE_FREED_FIXED_CHUNKS$POSCHUNK [/workspace/build/BenchmarkRunner]
+   84,440,904 ( 0.35%)  /generics.collections.pas:GOCCIA.SCOPE$_$TOBJECTLIST$1$CRCC3E7BA5E_$__$$_NOTIFY$TGOCCIASCOPE$TCOLLECTIONNOTIFICATION [/workspace/build/BenchmarkRunner]
+   81,694,592 ( 0.34%)  /units/Goccia.Scope.pas:GOCCIA.SCOPE$_$TGOCCIASCOPE_$__$$_DEFINELEXICALBINDING$crc258ABF4B [/workspace/build/BenchmarkRunner]
+   81,508,900 ( 0.34%)  /generics.collections.pas:GOCCIA.VALUES.PRIMITIVES$_$TLIST$1$CRCDD5F4F9A_$__$$_ADD$TGOCCIAVALUE$$INT64 [/workspace/build/BenchmarkRunner]
+   80,843,824 ( 0.33%)  /units/Goccia.Values.FunctionValue.pas:GOCCIA.VALUES.FUNCTIONVALUE$_$TGOCCIAARROWFUNCTIONVALUE_$__$$_BINDTHIS$TGOCCIASCOPE$TGOCCIAVALUE [/workspace/build/BenchmarkRunner]
+   77,886,581 ( 0.32%)  /units/Goccia.Values.Primitives.pas:GOCCIA.VALUES.PRIMITIVES$_$TGOCCIANUMBERLITERALVALUE_$__$$_RUNTIMECOPY$$TGOCCIAVALUE [/workspace/build/BenchmarkRunner]
+   77,317,260 ( 0.32%)  /generics.collections.pas:GOCCIA.SCOPE$_$TLIST$1$CRCC3E7BA5E_$__$$_GETITEM$INT64$$TGOCCIASCOPE [/workspace/build/BenchmarkRunner]
+   76,650,280 ( 0.32%)  ???:fpc_initialize_array [/workspace/build/BenchmarkRunner]
+   75,881,449 ( 0.31%)  ???:SYSTEM_$$_DECLOCKED$INT64$$BOOLEAN [/workspace/build/BenchmarkRunner]
+   74,792,940 ( 0.31%)  ???:fpc_finalize_array [/workspace/build/BenchmarkRunner]
+   74,490,623 ( 0.31%)  ???:fpc_intf_assign [/workspace/build/BenchmarkRunner]
+   74,416,321 ( 0.31%)  ???:SYSTEM$_$TOBJECT_$__$$_FREEINSTANCE [/workspace/build/BenchmarkRunner]
+   72,135,700 ( 0.30%)  /units/OrderedMap.pas:GOCCIA.VALUES.OBJECTPROPERTYDESCRIPTOR$_$TORDEREDMAP$1$CRC2E76026B_$__$$_CREATE$crc45872599 [/workspace/build/BenchmarkRunner]
+   68,046,144 ( 0.28%)  /generics.collections.pas:GOCCIA.VALUES.PRIMITIVES$_$TLIST$1$CRCDD5F4F9A_$__$$_CREATE$$TLIST$1$CRCDD5F4F9A [/workspace/build/BenchmarkRunner]
+   66,975,452 ( 0.28%)  ???:SYSTEM_$$_FREEMEM$POINTER$$QWORD [/workspace/build/BenchmarkRunner]
+   66,302,818 ( 0.27%)  /units/Goccia.Values.Primitives.pas:GOCCIA.VALUES.PRIMITIVES$_$TGOCCIANUMBERLITERALVALUE_$__$$_CREATE$DOUBLE$$TGOCCIANUMBERLITERALVALUE [/workspace/build/BenchmarkRunner]
+   59,576,522 ( 0.25%)  /units/OrderedMap.pas:GOCCIA.VALUES.OBJECTPROPERTYDESCRIPTOR$_$TORDEREDMAP$1$CRC2E76026B_$__$$_FINDBUCKET$crcBD2ACE7A [/workspace/build/BenchmarkRunner]
+   58,485,640 ( 0.24%)  /units/Goccia.Scope.pas:GOCCIA.SCOPE$_$TGOCCIACALLSCOPE_$__$$_CREATE$TGOCCIASCOPE$ANSISTRING$LONGINT$$TGOCCIACALLSCOPE [/workspace/build/BenchmarkRunner]
+   58,010,409 ( 0.24%)  /units/OrderedMap.pas:GOCCIA.VALUES.OBJECTPROPERTYDESCRIPTOR$_$TORDEREDMAP$1$CRC2E76026B_$__$$_TRYGETVALUE$crc976670F4 [/workspace/build/BenchmarkRunner]
+   57,575,539 ( 0.24%)  /generics.collections.pas:GOCCIA.SCOPE$_$TCUSTOMLIST$1$CRCC3E7BA5E_$__$$_PREPAREADDINGITEM$$INT64 [/workspace/build/BenchmarkRunner]
+   56,850,771 ( 0.24%)  ???:SYSTEM_$$_INITINTERFACEPOINTERS$TCLASS$POINTER [/workspace/build/BenchmarkRunner]
+   56,761,915 ( 0.23%)  /generics.collections.pas:GOCCIA.VALUES.PRIMITIVES$_$TCUSTOMLIST$1$CRCDD5F4F9A_$__$$_NOTIFY$crc553BC920 [/workspace/build/BenchmarkRunner]
+   55,737,018 ( 0.23%)  ???:SYSTEM_$$_STRINGCODEPAGE$RAWBYTESTRING$$WORD [/workspace/build/BenchmarkRunner]
+   54,914,432 ( 0.23%)  /generics.collections.pas:GOCCIA.VALUES.PRIMITIVES$_$TOBJECTLIST$1$CRCDD5F4F9A_$__$$_CREATE$BOOLEAN$$TOBJECTLIST$1$CRCDD5F4F9A [/workspace/build/BenchmarkRunner]
+   54,431,806 ( 0.23%)  /generics.collections.pas:GOCCIA.SCOPE$_$TLIST$1$CRCC3E7BA5E_$__$$_ADD$TGOCCIASCOPE$$INT64 [/workspace/build/BenchmarkRunner]
+   53,122,143 ( 0.22%)  /units/Goccia.GarbageCollector.pas:GOCCIA.GARBAGECOLLECTOR$_$TGOCCIAGARBAGECOLLECTOR_$__$$_SWEEPPHASE [/workspace/build/BenchmarkRunner]
+   51,814,037 ( 0.21%)  ???:GENERICS.DEFAULTS_$$__LOOKUPVTABLEINFOEX$crc55E9644D [/workspace/build/BenchmarkRunner]
+   51,219,550 ( 0.21%)  /units/Goccia.Values.FunctionValue.pas:GOCCIA.VALUES.FUNCTIONVALUE$_$TGOCCIAFUNCTIONVALUE_$__$$_CALL$crcC026046F'2 [/workspace/build/BenchmarkRunner]
+   50,769,152 ( 0.21%)  /units/Goccia.Values.TypedArrayValue.pas:GOCCIA.VALUES.TYPEDARRAYVALUE$_$TGOCCIATYPEDARRAYVALUE_$__$$_READELEMENT$LONGINT$$DOUBLE [/workspace/build/BenchmarkRunner]
+   49,756,074 ( 0.21%)  ???:SYSTEM$_$TOBJECT_$__$$_FREE'2 [/workspace/build/BenchmarkRunner]
+   49,031,820 ( 0.20%)  /units/Goccia.Arguments.Collection.pas:GOCCIA.ARGUMENTS.COLLECTION$_$TGOCCIAARGUMENTSCOLLECTION_$__$$_CREATE$$TGOCCIAARGUMENTSCOLLECTION [/workspace/build/BenchmarkRunner]
+   48,602,544 ( 0.20%)  /generics.collections.pas:GOCCIA.AST.EXPRESSIONS$_$TCUSTOMLISTENUMERATOR$1$CRC770C4841_$__$$_CREATE$crcB3C6BCDB [/workspace/build/BenchmarkRunner]
+   48,514,508 ( 0.20%)  /units/Goccia.Evaluator.Arithmetic.pas:GOCCIA.EVALUATOR.ARITHMETIC_$$_EVALUATEADDITION$TGOCCIAVALUE$TGOCCIAVALUE$$TGOCCIAVALUE [/workspace/build/BenchmarkRunner]
+   48,160,549 ( 0.20%)  ???:fpc_intf_decr_ref [/workspace/build/BenchmarkRunner]
+   46,564,026 ( 0.19%)  ???:SYSTEM$_$TOBJECT_$__$$_FREE [/workspace/build/BenchmarkRunner]
+   46,051,128 ( 0.19%)  /units/OrderedMap.pas:GOCCIA.SCOPE.BINDINGMAP$_$TORDEREDMAP$1$CRC6F58F410_$__$$_DESTROY [/workspace/build/BenchmarkRunner]
+   44,005,720 ( 0.18%)  /units/Goccia.Values.TypedArrayValue.pas:GOCCIA.VALUES.TYPEDARRAYVALUE$_$TGOCCIATYPEDARRAYVALUE_$__$$_WRITEELEMENT$LONGINT$DOUBLE [/workspace/build/BenchmarkRunner]
+   42,656,619 ( 0.18%)  ???:fpc_copy'2 [/workspace/build/BenchmarkRunner]
+   41,866,520 ( 0.17%)  ???:fpc_frac_real [/workspace/build/BenchmarkRunner]
+   41,520,082 ( 0.17%)  /units/Goccia.CallStack.pas:GOCCIA.CALLSTACK$_$TGOCCIACALLSTACK_$__$$_PUSH$ANSISTRING$ANSISTRING$LONGINT$LONGINT [/workspace/build/BenchmarkRunner]
+   40,908,777 ( 0.17%)  /units/OrderedMap.pas:GOCCIA.VALUES.OBJECTPROPERTYDESCRIPTOR$_$TORDEREDMAP$1$CRC2E76026B_$__$$_ADD$crc5040F1BE [/workspace/build/BenchmarkRunner]
+   39,907,118 ( 0.17%)  /generics.collections.pas:GOCCIA.VALUES.PRIMITIVES$_$TLIST$1$CRCDD5F4F9A_$__$$_INDEXOF$TGOCCIAVALUE$$INT64 [/workspace/build/BenchmarkRunner]
+   39,866,867 ( 0.16%)  /units/Goccia.Evaluator.Comparison.pas:GOCCIA.EVALUATOR.COMPARISON_$$_COMPARENUMBERS$crc399107BF [/workspace/build/BenchmarkRunner]
+   39,655,138 ( 0.16%)  /units/Goccia.Scope.pas:GOCCIA.SCOPE$_$TGOCCIASCOPE_$__$$_DESTROY [/workspace/build/BenchmarkRunner]
+   39,431,535 ( 0.16%)  /generics.collections.pas:GOCCIA.SCOPE$_$TCUSTOMLIST$1$CRCC3E7BA5E_$__$$_DOREMOVE$INT64$TCOLLECTIONNOTIFICATION$$TGOCCIASCOPE [/workspace/build/BenchmarkRunner]
+   39,392,247 ( 0.16%)  /units/Goccia.Values.Primitives.pas:GOCCIA.VALUES.PRIMITIVES$_$TGOCCIANUMBERLITERALVALUE_$__$$_SMALLINT$crc9C61CDBA [/workspace/build/BenchmarkRunner]
+   39,204,003 ( 0.16%)  /units/Goccia.Evaluator.Arithmetic.pas:GOCCIA.EVALUATOR.ARITHMETIC_$$_TONUMERICPAIR$crc42D0CC12 [/workspace/build/BenchmarkRunner]
+   39,047,391 ( 0.16%)  /units/Goccia.Values.ObjectValue.pas:GOCCIA.VALUES.OBJECTVALUE$_$TGOCCIAOBJECTVALUE_$__$$_DESTROY [/workspace/build/BenchmarkRunner]
+   38,721,991 ( 0.16%)  ???:GENERICS.DEFAULTS$_$TCOMPARERSERVICE_$__$$_LOOKUPCOMPARER$PTYPEINFO$INT64$$POINTER [/workspace/build/BenchmarkRunner]
+   38,074,289 ( 0.16%)  /inc/generics.dictionaries.inc:GOCCIA.GARBAGECOLLECTOR$_$TOPENADDRESSINGLP$4$CRC0D41FA5A_$__$$_FINDBUCKETINDEX$crc58D11CC6 [/workspace/build/BenchmarkRunner]
+   36,599,766 ( 0.15%)  /units/Goccia.Evaluator.Comparison.pas:GOCCIA.EVALUATOR.COMPARISON_$$_GREATERTHAN$TGOCCIAVALUE$TGOCCIAVALUE$$BOOLEAN [/workspace/build/BenchmarkRunner]
+   36,253,675 ( 0.15%)  /units/Goccia.Values.Primitives.pas:GOCCIA.VALUES.PRIMITIVES$_$TGOCCIANUMBERLITERALVALUE_$__$$_GETISNAN$$BOOLEAN [/workspace/build/BenchmarkRunner]
+   35,941,323 ( 0.15%)  /units/Goccia.Evaluator.pas:GOCCIA.EVALUATOR_$$_EVALUATESTATEMENT$TGOCCIASTATEMENT$TGOCCIAEVALUATIONCONTEXT$$TGOCCIACONTROLFLOW'2 [/workspace/build/BenchmarkRunner]
+   35,613,580 ( 0.15%)  /generics.collections.pas:GOCCIA.VALUES.FUNCTIONVALUE$_$TLIST$1$CRC1E7D8D8F_$__$$_GETITEM$INT64$$TGOCCIAASTNODE [/workspace/build/BenchmarkRunner]
+   34,769,784 ( 0.14%)  /generics.collections.pas:GOCCIA.SCOPE$_$TCUSTOMLIST$1$CRCC3E7BA5E_$__$$_NOTIFY$TGOCCIASCOPE$TCOLLECTIONNOTIFICATION [/workspace/build/BenchmarkRunner]
+   34,692,672 ( 0.14%)  /units/OrderedMap.pas:GOCCIA.VALUES.OBJECTPROPERTYDESCRIPTOR$_$TORDEREDMAP$1$CRC2E76026B_$__$$_TOARRAY$crc815D23BF [/workspace/build/BenchmarkRunner]
+   33,185,977 ( 0.14%)  /generics.collections.pas:GOCCIA.VALUES.PRIMITIVES$_$TLIST$1$CRCDD5F4F9A_$__$$_SETCOUNT$INT64 [/workspace/build/BenchmarkRunner]
+   32,117,877 ( 0.13%)  ???:fpc_copy [/workspace/build/BenchmarkRunner]
+   31,022,568 ( 0.13%)  /units/Goccia.GarbageCollector.pas:GOCCIA.GARBAGECOLLECTOR$_$TGOCCIAGARBAGECOLLECTOR_$__$$_MARKPHASE [/workspace/build/BenchmarkRunner]
+   30,591,848 ( 0.13%)  /units/Goccia.Values.Primitives.pas:GOCCIA.VALUES.PRIMITIVES$_$TGOCCIAVALUE_$__$$_AFTERCONSTRUCTION [/workspace/build/BenchmarkRunner]
+   29,728,450 ( 0.12%)  /generics.collections.pas:GOCCIA.VALUES.PRIMITIVES$_$TLIST$1$CRCDD5F4F9A_$__$$_DESTROY [/workspace/build/BenchmarkRunner]
+   29,395,392 ( 0.12%)  /units/Goccia.Arguments.Collection.pas:GOCCIA.ARGUMENTS.COLLECTION$_$TGOCCIAARGUMENTSCOLLECTION_$__$$_DESTROY [/workspace/build/BenchmarkRunner]
+   28,503,192 ( 0.12%)  ???:SYSTEM_$$_INCLOCKED$INT64 [/workspace/build/BenchmarkRunner]
+   28,406,716 ( 0.12%)  /units/Goccia.GarbageCollector.pas:GOCCIA.GARBAGECOLLECTOR$_$TGOCCIAGARBAGECOLLECTOR_$__$$_REGISTERVALUE$TGOCCIAVALUE [/workspace/build/BenchmarkRunner]
+   27,205,464 ( 0.11%)  /generics.collections.pas:GOCCIA.VALUES.OBJECTVALUE$_$TLIST$1$CRC01F6BC87_$__$$_CREATE$$TLIST$1$CRC01F6BC87 [/workspace/build/BenchmarkRunner]
+   26,770,992 ( 0.11%)  /inc/generics.dictionaries.inc:GOCCIA.VALUES.OBJECTVALUE$_$TCUSTOMDICTIONARYENUMERATOR$4$CRC1CCC4D2E_$__$$_CREATE$crcEFBF2F13 [/workspace/build/BenchmarkRunner]
+   26,246,938 ( 0.11%)  /units/Goccia.Values.FunctionValue.pas:GOCCIA.VALUES.FUNCTIONVALUE$_$TGOCCIAFUNCTIONVALUE_$__$$_EXECUTEBODY$crcB3501AE2 [/workspace/build/BenchmarkRunner]
+   25,128,703 ( 0.10%)  /units/Goccia.Evaluator.Arithmetic.pas:GOCCIA.EVALUATOR.ARITHMETIC_$$_EVALUATESUBTRACTION$TGOCCIAVALUE$TGOCCIAVALUE$$TGOCCIAVALUE [/workspace/build/BenchmarkRunner]
+   24,585,227 ( 0.10%)  /units/Goccia.Values.ObjectValue.pas:GOCCIA.VALUES.OBJECTVALUE$_$TGOCCIAOBJECTVALUE_$__$$_CREATE$TGOCCIAOBJECTVALUE$$TGOCCIAOBJECTVALUE [/workspace/build/BenchmarkRunner]
+   24,421,480 ( 0.10%)  /units/Goccia.GarbageCollector.pas:GOCCIA.GARBAGECOLLECTOR$_$TGOCCIAGARBAGECOLLECTOR_$__$$_INSTANCE$$TGOCCIAGARBAGECOLLECTOR [/workspace/build/BenchmarkRunner]
+   23,907,832 ( 0.10%)  /inc/generics.dictionaries.inc:GOCCIA.VALUES.OBJECTVALUE$_$TCUSTOMDICTIONARY$3$CRC6DB7B3ED_$__$$_CREATE$crc50F59F72 [/workspace/build/BenchmarkRunner]
+   23,710,283 ( 0.10%)  /generics.collections.pas:GOCCIA.VALUES.PRIMITIVES$_$TLIST$1$CRCDD5F4F9A_$__$$_SETCAPACITY$INT64 [/workspace/build/BenchmarkRunner]
+   22,611,840 ( 0.09%)  ???:SYSTEM$_$TINTERFACEDOBJECT_$__$$_DESTROY [/workspace/build/BenchmarkRunner]
+   21,792,594 ( 0.09%)  /units/Goccia.Scope.pas:GOCCIA.SCOPE$_$TGOCCIASCOPE_$__$$_GETVALUE$ANSISTRING$$TGOCCIAVALUE [/workspace/build/BenchmarkRunner]
+   21,237,318 ( 0.09%)  /units/Goccia.Values.Primitives.pas:GOCCIA.VALUES.PRIMITIVES$_$TGOCCIANUMBERLITERALVALUE_$__$$_GETISINFINITY$$BOOLEAN [/workspace/build/BenchmarkRunner]
+   21,220,056 ( 0.09%)  /units/Goccia.Values.Primitives.pas:GOCCIA.VALUES.PRIMITIVES$_$TGOCCIANUMBERLITERALVALUE_$__$$_GETISNEGATIVEINFINITY$$BOOLEAN [/workspace/build/BenchmarkRunner]
+   20,852,006 ( 0.09%)  /units/Goccia.Values.ToPrimitive.pas:GOCCIA.VALUES.TOPRIMITIVE_$$_TOPRIMITIVE$TGOCCIAVALUE$TGOCCIATOPRIMITIVEHINT$$TGOCCIAVALUE [/workspace/build/BenchmarkRunner]
+   20,610,198 ( 0.09%)  ???:fpc_ansistr_setlength [/workspace/build/BenchmarkRunner]
+   20,093,262 ( 0.08%)  /inc/generics.dictionaries.inc:GOCCIA.VALUES.OBJECTVALUE$_$TOPENADDRESSING$4$CRC3F93EBA1_$__$$_CLEAR [/workspace/build/BenchmarkRunner]
+   20,087,964 ( 0.08%)  ???:GENERICS.DEFAULTS$_$TCOMPARE_$__$$_POINTER$QWORD$QWORD$$LONGINT [/workspace/build/BenchmarkRunner]
+   19,994,895 ( 0.08%)  /units/Goccia.Arguments.Collection.pas:GOCCIA.ARGUMENTS.COLLECTION$_$TGOCCIAARGUMENTSCOLLECTION_$__$$_GETELEMENT$LONGINT$$TGOCCIAVALUE [/workspace/build/BenchmarkRunner]
+   19,179,802 ( 0.08%)  /units/Goccia.Values.Primitives.pas:GOCCIA.VALUES.PRIMITIVES$_$TGOCCIAUNDEFINEDLITERALVALUE_$__$$_UNDEFINEDVALUE$crc0496FBDB [/workspace/build/BenchmarkRunner]
+   19,019,838 ( 0.08%)  /units/Goccia.Values.TypedArrayValue.pas:GOCCIA.VALUES.TYPEDARRAYVALUE$_$TGOCCIATYPEDARRAYVALUE_$__$$_BYTESPERELEMENT$crcDEE9F90F [/workspace/build/BenchmarkRunner]
+   18,705,430 ( 0.08%)  /generics.collections.pas:GOCCIA.AST.EXPRESSIONS$_$TCUSTOMLISTENUMERATOR$1$CRC770C4841_$__$$_DOMOVENEXT$$BOOLEAN [/workspace/build/BenchmarkRunner]
+   18,549,180 ( 0.08%)  /inc/generics.dictionaries.inc:GOCCIA.VALUES.OBJECTVALUE$_$TCUSTOMDICTIONARY$3$CRC6DB7B3ED_$__$$_CREATE$crc02D93EEE [/workspace/build/BenchmarkRunner]
+   18,549,180 ( 0.08%)  /inc/generics.dictionaries.inc:GOCCIA.VALUES.OBJECTVALUE$_$TOPENADDRESSING$4$CRC3F93EBA1_$__$$_REHASH$INT64$BOOLEAN$$BOOLEAN [/workspace/build/BenchmarkRunner]
+   18,544,656 ( 0.08%)  ???:SYSTEM_$$_FPC_EMPTYMETHOD [/workspace/build/BenchmarkRunner]
+   18,407,232 ( 0.08%)  /units/Goccia.Values.ObjectPropertyDescriptor.pas:GOCCIA.VALUES.OBJECTPROPERTYDESCRIPTOR$_$TGOCCIAPROPERTYDESCRIPTORDATA_$__$$_CREATE$crc12424BED [/workspace/build/BenchmarkRunner]
+   17,724,772 ( 0.07%)  /units/OrderedMap.pas:GOCCIA.VALUES.OBJECTPROPERTYDESCRIPTOR$_$TORDEREDMAP$1$CRC2E76026B_$__$$_CREATE$crc0575BF9D [/workspace/build/BenchmarkRunner]
+   17,602,757 ( 0.07%)  ???:SYSTEM_$$_RECORDRTTI$POINTER$POINTER$TRTTIPROC'2 [/workspace/build/BenchmarkRunner]
+   16,900,364 ( 0.07%)  /inc/generics.dictionaries.inc:GOCCIA.VALUES.OBJECTVALUE$_$TCUSTOMDICTIONARY$3$CRC6DB7B3ED_$__$$_CREATE$crcD875D324 [/workspace/build/BenchmarkRunner]
+   16,875,809 ( 0.07%)  /inc/generics.dictionaries.inc:GOCCIA.GARBAGECOLLECTOR$_$TOPENADDRESSINGLP$4$CRC0D41FA5A_$__$$_DOREMOVE$crc1EED3966 [/workspace/build/BenchmarkRunner]
+   16,630,614 ( 0.07%)  /units/Goccia.GarbageCollector.pas:GOCCIA.GARBAGECOLLECTOR$_$TGOCCIAGARBAGECOLLECTOR_$__$$_REGISTERSCOPE$TGOCCIASCOPE [/workspace/build/BenchmarkRunner]
+
+--------------------------------------------------------------------------------
+The following files chosen for auto-annotation could not be found:
+--------------------------------------------------------------------------------
+  /generics.collections.pas
+  /inc/generics.dictionaries.inc
+  /units/Goccia.Arguments.Collection.pas
+  /units/Goccia.CallStack.pas
+  /units/Goccia.Evaluator.Arithmetic.pas
+  /units/Goccia.Evaluator.Comparison.pas
+  /units/Goccia.Evaluator.pas
+  /units/Goccia.GarbageCollector.pas
+  /units/Goccia.Scope.pas
+  /units/Goccia.Values.FunctionValue.pas
+  /units/Goccia.Values.ObjectPropertyDescriptor.pas
+  /units/Goccia.Values.ObjectValue.pas
+  /units/Goccia.Values.Primitives.pas
+  /units/Goccia.Values.ToPrimitive.pas
+  /units/Goccia.Values.TypedArrayValue.pas
+  /units/OrderedMap.pas
+
