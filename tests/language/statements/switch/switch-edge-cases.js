@@ -55,6 +55,81 @@ test("switch with empty case fall-through to default", () => {
   expect(result).toBe("reached default");
 });
 
+test("matched case falls through into default", () => {
+  let result = "";
+  switch (1) {
+    case 1:
+      result += "one";
+    default:
+      result += " default";
+  }
+  expect(result).toBe("one default");
+});
+
+test("matched case falls through default into subsequent case", () => {
+  let result = "";
+  switch (1) {
+    case 1:
+      result += "one";
+    default:
+      result += " default";
+    case 2:
+      result += " two";
+  }
+  expect(result).toBe("one default two");
+});
+
+test("default not reached when match has break", () => {
+  let result = "";
+  switch (1) {
+    case 1:
+      result += "one";
+      break;
+    default:
+      result += " default";
+  }
+  expect(result).toBe("one");
+});
+
+test("default executes when no case matches", () => {
+  let result = "";
+  switch (99) {
+    case 1:
+      result += "one";
+    default:
+      result += "default";
+    case 2:
+      result += " two";
+  }
+  expect(result).toBe("default two");
+});
+
+test("default in middle with match before it", () => {
+  let result = "";
+  switch (1) {
+    case 1:
+      result += "one";
+    default:
+      result += " default";
+    case 3:
+      result += " three";
+  }
+  expect(result).toBe("one default three");
+});
+
+test("default in middle with match after it", () => {
+  let result = "";
+  switch (3) {
+    case 1:
+      result += "one";
+    default:
+      result += "default ";
+    case 3:
+      result += "three";
+  }
+  expect(result).toBe("three");
+});
+
 test("switch with return in arrow function", () => {
   const classify = (n) => {
     switch (true) {
