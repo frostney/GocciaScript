@@ -582,3 +582,29 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 | [docs/build-system.md](docs/build-system.md) | Build commands, configuration, CI/CD |
 | [docs/language-restrictions.md](docs/language-restrictions.md) | Supported/excluded features with rationale |
 | [docs/embedding.md](docs/embedding.md) | Embedding the engine in FreePascal applications |
+
+## Cursor Cloud specific instructions
+
+### Environment
+
+- **System dependency:** FreePascal Compiler (`fpc` 3.2.2, includes `instantfpc`) — installed via `sudo apt-get install fpc`.
+- **Git hooks:** Lefthook is installed via Go (`go install github.com/evilmartians/lefthook@latest`); binary lives in `~/go/bin/`. Run `export PATH="$HOME/go/bin:$PATH"` if `lefthook` is not found, then `lefthook install` in the repo root.
+
+### Building and running
+
+All build/run/test commands are documented in the [Quick Reference](#quick-reference) section above. Key commands:
+
+- `./build.pas` — clean + dev build of everything (takes ~18s)
+- `./format.pas --check` — lint check (formatting)
+- `./build/TestRunner tests --no-progress` — run all 3,406 JS tests (interpreted, ~9s)
+- `./build/TestRunner tests --mode=bytecode --no-progress` — same tests via Souffle VM
+- Pascal unit tests: `for t in build/Goccia.*.Test; do "$t"; done`
+- `./build/ScriptLoader <file.js>` — run a script (interpreted)
+- `./build/ScriptLoader <file.js> --mode=bytecode` — run via bytecode VM
+
+### Gotchas
+
+- The 1 failing test (`Number.parseInt` radix 0) is a pre-existing issue in the repo, not caused by environment setup.
+- `./build.pas` and `./format.pas` are `instantfpc` scripts — they are directly executable (no separate compile step needed).
+- There is no `package.json` or npm/pip dependency. The project is pure FreePascal with zero runtime dependencies.
+- REPL (`./build/REPL`) is interactive and requires TTY input — do not run it in non-interactive contexts.
