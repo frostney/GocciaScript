@@ -100,6 +100,7 @@ type
     FCurrentSuiteIsSkipped: Boolean;
     FSkipNextDescribe: Boolean;
     FSkipNextTest: Boolean;
+    FSuppressOutput: Boolean;
 
     procedure RunCallbacks(const ACallbacks: TGocciaArgumentsCollection);
     procedure AssertionPassed(const ATestName: string);
@@ -137,6 +138,7 @@ type
 
     // Exposed for native Pascal unit tests
     property CurrentTestHasFailures: Boolean read FTestStats.CurrentTestHasFailures;
+    property SuppressOutput: Boolean read FSuppressOutput write FSuppressOutput;
     procedure ResetCurrentTestState;
   end;
 
@@ -1302,7 +1304,9 @@ begin
   Inc(FTestStats.TotalAssertionCount);
   FTestStats.CurrentTestHasFailures := True;
 
-  // Track the failure details for reporting
+  if FSuppressOutput then
+    Exit;
+
   if FTestStats.CurrentSuiteName <> '' then
     WriteLn('    ❌ ', FTestStats.CurrentTestName, ' in ', FTestStats.CurrentSuiteName, ': ', AMessage)
   else
@@ -1603,7 +1607,8 @@ begin
       except
         on E: Exception do
         begin
-          WriteLn('Error in describe block "', Suite.Name, '": ', E.Message);
+          if not FSuppressOutput then
+            WriteLn('Error in describe block "', Suite.Name, '": ', E.Message);
           FailedTestDetails.Add('Describe "' + Suite.Name + '": ' + E.Message);
         end;
       end;
@@ -1627,12 +1632,14 @@ begin
       // Check if test is skipped
       if TestCase.IsSkipped then
       begin
-        // Mark test as skipped and don't execute it
         FTestStats.CurrentTestIsSkipped := True;
-        if TestCase.SuiteName <> '' then
-          WriteLn('    ⏸️ ', TestCase.Name, ' in ', TestCase.SuiteName, ': SKIPPED')
-        else
-          WriteLn('    ⏸️ ', TestCase.Name, ': SKIPPED');
+        if not FSuppressOutput then
+        begin
+          if TestCase.SuiteName <> '' then
+            WriteLn('    ⏸️ ', TestCase.Name, ' in ', TestCase.SuiteName, ': SKIPPED')
+          else
+            WriteLn('    ⏸️ ', TestCase.Name, ': SKIPPED');
+        end;
       end
       else
       begin
@@ -1736,8 +1743,7 @@ begin
   ResultObj.AssignProperty('failedTests', FailedTestDetailsArray);
   ResultObj.AssignProperty('summary', TGocciaStringLiteralValue.Create(Summary));
 
-  // Print the summary to console for visibility
-  if ShowTestResults then
+  if ShowTestResults and not FSuppressOutput then
   begin
     WriteLn('');
     WriteLn('=== Test Results ===');
