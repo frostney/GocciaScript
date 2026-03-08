@@ -68,3 +68,19 @@ test("decrement on computed member with string key", () => {
   --obj["y"];
   expect(obj.y).toBe(199);
 });
+
+test("decrement on computed member with symbol key", () => {
+  const sym = Symbol("counter");
+  const obj = { [sym]: 10 };
+  obj[sym]--;
+  expect(obj[sym]).toBe(9);
+  --obj[sym];
+  expect(obj[sym]).toBe(8);
+});
+
+test("post-decrement on non-writable property throws", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", { value: 5, writable: false });
+  expect(() => obj.x--).toThrow(TypeError);
+  expect(obj.x).toBe(5);
+});

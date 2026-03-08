@@ -70,3 +70,19 @@ test("increment on computed member with string key", () => {
   ++obj["b"];
   expect(obj.b).toBe(11);
 });
+
+test("increment on computed member with symbol key", () => {
+  const sym = Symbol("counter");
+  const obj = { [sym]: 5 };
+  obj[sym]++;
+  expect(obj[sym]).toBe(6);
+  ++obj[sym];
+  expect(obj[sym]).toBe(7);
+});
+
+test("post-increment on non-writable property throws", () => {
+  const obj = {};
+  Object.defineProperty(obj, "x", { value: 1, writable: false });
+  expect(() => obj.x++).toThrow(TypeError);
+  expect(obj.x).toBe(1);
+});
