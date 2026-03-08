@@ -67,7 +67,7 @@ Each Souffle function template has its own local constant pool. The translator *
 
 ### Binary Format
 
-```
+```text
 u32          count           // number of constants
 for each constant:
   u8         kind            // 0=nil, 1=true, 2=false, 3=integer, 4=float, 5=string
