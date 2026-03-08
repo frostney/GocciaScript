@@ -1219,7 +1219,10 @@ function TGocciaSuperExpression.Evaluate(const AContext: TGocciaEvaluationContex
 begin
   Result := AContext.Scope.FindSuperClass;
   if not Assigned(Result) then
+  begin
     AContext.OnError('super can only be used in a class method', Line, Column);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
 end;
 
 function TGocciaHoleExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
