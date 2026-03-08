@@ -5,7 +5,11 @@ unit Goccia.AST.Node;
 interface
 
 uses
-  Generics.Collections;
+  Generics.Collections,
+
+  Goccia.ControlFlow,
+  Goccia.Evaluator.Context,
+  Goccia.Values.Primitives;
 
 type
   TGocciaASTNode = class
@@ -18,11 +22,17 @@ type
     property Column: Integer read FColumn;
   end;
 
-  // Expressions
-  TGocciaExpression = class(TGocciaASTNode);
+  // Expressions — virtual Evaluate replaces the `is` dispatch chain in Goccia.Evaluator
+  TGocciaExpression = class(TGocciaASTNode)
+  public
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; virtual; abstract;
+  end;
 
-  // Statements
-  TGocciaStatement = class(TGocciaASTNode);
+  // Statements — virtual Execute replaces the `is` dispatch chain in Goccia.Evaluator
+  TGocciaStatement = class(TGocciaASTNode)
+  public
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; virtual; abstract;
+  end;
 
   // Program node
   TGocciaProgram = class(TGocciaASTNode)

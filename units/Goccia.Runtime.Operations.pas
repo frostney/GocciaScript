@@ -410,6 +410,7 @@ uses
   Goccia.Constants.TypeNames,
   Goccia.Engine,
   Goccia.Evaluator,
+  Goccia.Evaluator.Context,
   Goccia.Evaluator.TypeOperations,
   Goccia.GarbageCollector,
   Goccia.Interpreter,

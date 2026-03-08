@@ -73,6 +73,7 @@ uses
   Goccia.ControlFlow,
   Goccia.Error,
   Goccia.Evaluator,
+  Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
   Goccia.Logger,
   Goccia.Values.ArrayValue,

@@ -11,7 +11,10 @@ uses
   OrderedMap,
 
   Goccia.AST.Expressions,
-  Goccia.AST.Node;
+  Goccia.AST.Node,
+  Goccia.ControlFlow,
+  Goccia.Evaluator.Context,
+  Goccia.Values.Primitives;
 
 type
   TGocciaVariableInfo = record
@@ -24,6 +27,7 @@ type
     FExpression: TGocciaExpression;
   public
     constructor Create(const AExpression: TGocciaExpression; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Expression: TGocciaExpression read FExpression;
   end;
 
@@ -34,6 +38,7 @@ type
   public
     constructor Create(const AVariables: TArray<TGocciaVariableInfo>;
       const AIsConst: Boolean; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Variables: TArray<TGocciaVariableInfo> read FVariables;
     property IsConst: Boolean read FIsConst;
   end;
@@ -46,6 +51,7 @@ type
     FTypeAnnotation: string;
   public
     constructor Create(const APattern: TGocciaDestructuringPattern; const AInitializer: TGocciaExpression; const AIsConst: Boolean; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Pattern: TGocciaDestructuringPattern read FPattern;
     property Initializer: TGocciaExpression read FInitializer;
     property IsConst: Boolean read FIsConst;
@@ -58,6 +64,7 @@ type
   public
     constructor Create(const ANodes: TObjectList<TGocciaASTNode>;
       const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Nodes: TObjectList<TGocciaASTNode> read FNodes;
   end;
 
@@ -69,6 +76,7 @@ type
   public
     constructor Create(const ACondition: TGocciaExpression;
       const AConsequent, AAlternate: TGocciaStatement; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Condition: TGocciaExpression read FCondition;
     property Consequent: TGocciaStatement read FConsequent;
     property Alternate: TGocciaStatement read FAlternate;
@@ -83,6 +91,7 @@ type
   public
     constructor Create(const AInit: TGocciaStatement; const ACondition: TGocciaExpression;
       const AUpdate: TGocciaExpression; const ABody: TGocciaStatement; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Init: TGocciaStatement read FInit;
     property Condition: TGocciaExpression read FCondition;
     property Update: TGocciaExpression read FUpdate;
@@ -95,6 +104,7 @@ type
     FBody: TGocciaStatement;        // Loop body
   public
     constructor Create(const ACondition: TGocciaExpression; const ABody: TGocciaStatement; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Condition: TGocciaExpression read FCondition;
     property Body: TGocciaStatement read FBody;
   end;
@@ -105,6 +115,7 @@ type
     FCondition: TGocciaExpression;  // Loop condition (checked after body)
   public
     constructor Create(const ABody: TGocciaStatement; const ACondition: TGocciaExpression; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Body: TGocciaStatement read FBody;
     property Condition: TGocciaExpression read FCondition;
   end;
@@ -120,6 +131,7 @@ type
     constructor Create(const AIsConst: Boolean; const ABindingName: string;
       const ABindingPattern: TGocciaDestructuringPattern; const AIterable: TGocciaExpression;
       const ABody: TGocciaStatement; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property IsConst: Boolean read FIsConst;
     property BindingName: string read FBindingName;
     property BindingPattern: TGocciaDestructuringPattern read FBindingPattern;
@@ -128,6 +140,8 @@ type
   end;
 
   TGocciaForAwaitOfStatement = class(TGocciaForOfStatement)
+  public
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
   end;
 
   TGocciaReturnStatement = class(TGocciaStatement)
@@ -135,6 +149,7 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Value: TGocciaExpression read FValue;
   end;
 
@@ -143,6 +158,7 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Value: TGocciaExpression read FValue;
   end;
 
@@ -156,6 +172,7 @@ type
   public
     constructor Create(const ABlock: TGocciaBlockStatement; const ACatchParam: string;
       const ACatchBlock, AFinallyBlock: TGocciaBlockStatement; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Block: TGocciaBlockStatement read FBlock;
     property CatchParam: string read FCatchParam;
     property CatchBlock: TGocciaBlockStatement read FCatchBlock;
@@ -176,6 +193,7 @@ type
   public
     constructor Create(const AName: string; const AParameters: TGocciaParameterArray;
       const ABody: TGocciaASTNode; const AIsStatic: Boolean; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName write FName;
     property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
@@ -288,6 +306,7 @@ type
   public
     constructor Create(const AClassDefinition: TGocciaClassDefinition; const ALine, AColumn: Integer);
     destructor Destroy; override;
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property ClassDefinition: TGocciaClassDefinition read FClassDefinition;
   end;
 
@@ -297,6 +316,7 @@ type
   public
     constructor Create(const AClassDefinition: TGocciaClassDefinition; const ALine, AColumn: Integer);
     destructor Destroy; override;
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ClassDefinition: TGocciaClassDefinition read FClassDefinition;
   end;
 
@@ -313,6 +333,7 @@ type
   public
     constructor Create(const AName: string; const AMembers: TArray<TGocciaEnumMember>;
       const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Name: string read FName;
     property Members: TArray<TGocciaEnumMember> read FMembers;
   end;
@@ -323,6 +344,7 @@ type
   public
     constructor Create(const ADeclaration: TGocciaEnumDeclaration;
       const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Declaration: TGocciaEnumDeclaration read FDeclaration;
   end;
 
@@ -334,6 +356,7 @@ type
   public
     constructor Create(const AImports: TDictionary<string, string>;
       const AModulePath: string; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Imports: TDictionary<string, string> read FImports;
     property ModulePath: string read FModulePath;
   end;
@@ -344,6 +367,7 @@ type
   public
     constructor Create(const AExportsTable: TDictionary<string, string>;
       const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property ExportsTable: TDictionary<string, string> read FExportsTable;
   end;
 
@@ -353,6 +377,7 @@ type
   public
     constructor Create(const ADeclaration: TGocciaVariableDeclaration;
       const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Declaration: TGocciaVariableDeclaration read FDeclaration;
   end;
 
@@ -363,6 +388,7 @@ type
   public
     constructor Create(const AExportsTable: TDictionary<string, string>;
       const AModulePath: string; const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property ExportsTable: TDictionary<string, string> read FExportsTable;
     property ModulePath: string read FModulePath;
   end;
@@ -370,6 +396,7 @@ type
   TGocciaEmptyStatement = class(TGocciaStatement)
   public
     constructor Create(const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
   end;
 
   TGocciaCaseClause = class(TGocciaASTNode)
@@ -390,6 +417,7 @@ type
   public
     constructor Create(const ADiscriminant: TGocciaExpression; const ACases: TObjectList<TGocciaCaseClause>; const ALine, AColumn: Integer);
     destructor Destroy; override;
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Discriminant: TGocciaExpression read FDiscriminant;
     property Cases: TObjectList<TGocciaCaseClause> read FCases;
   end;
@@ -397,12 +425,20 @@ type
   TGocciaBreakStatement = class(TGocciaStatement)
   public
     constructor Create(const ALine, AColumn: Integer);
+    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
   end;
 
 implementation
 
 uses
-  Goccia.Values.Primitives;
+  SysUtils,
+
+  Goccia.Evaluator,
+  Goccia.Modules,
+  Goccia.Scope.BindingMap,
+  Goccia.Token,
+  Goccia.Values.Error,
+  Goccia.Values.FunctionValue;
 
 { TGocciaExpressionStatement }
 
@@ -730,6 +766,176 @@ uses
   constructor TGocciaBreakStatement.Create(const ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
+  end;
+
+  { Execute / Evaluate overrides }
+
+  function TGocciaExpressionStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(Expression.Evaluate(AContext));
+  end;
+
+  function TGocciaVariableDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    I: Integer;
+    Value: TGocciaValue;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    for I := 0 to Length(Variables) - 1 do
+    begin
+      Value := Variables[I].Initializer.Evaluate(AContext);
+      if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
+        TGocciaFunctionValue(Value).Name := Variables[I].Name;
+      if IsConst then
+        AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttConst)
+      else
+        AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttLet);
+    end;
+  end;
+
+  function TGocciaDestructuringDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(EvaluateDestructuringDeclaration(Self, AContext));
+  end;
+
+  function TGocciaBlockStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateBlock(Self, AContext);
+  end;
+
+  function TGocciaIfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateIf(Self, AContext);
+  end;
+
+  function TGocciaForStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaWhileStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaDoWhileStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaForOfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateForOf(Self, AContext);
+  end;
+
+  function TGocciaForAwaitOfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateForAwaitOf(Self, AContext);
+  end;
+
+  function TGocciaReturnStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    ReturnValue: TGocciaValue;
+  begin
+    if Assigned(Self.Value) then
+    begin
+      ReturnValue := Self.Value.Evaluate(AContext);
+      if ReturnValue = nil then
+        ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end
+    else
+      ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := TGocciaControlFlow.Return(ReturnValue);
+  end;
+
+  function TGocciaThrowStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    ThrowValue: TGocciaValue;
+  begin
+    ThrowValue := Self.Value.Evaluate(AContext);
+    raise TGocciaThrowValue.Create(ThrowValue);
+  end;
+
+  function TGocciaTryStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateTry(Self, AContext);
+  end;
+
+  function TGocciaSwitchStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := EvaluateSwitch(Self, AContext);
+  end;
+
+  function TGocciaBreakStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Break;
+  end;
+
+  function TGocciaClassDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(EvaluateClass(Self, AContext));
+  end;
+
+  function TGocciaEnumDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(EvaluateEnumDeclaration(Self, AContext));
+  end;
+
+  function TGocciaExportEnumDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(EvaluateEnumDeclaration(Declaration, AContext));
+  end;
+
+  function TGocciaImportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    Module: TGocciaModule;
+    ImportPair: TPair<string, string>;
+    Value: TGocciaValue;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+    Module := AContext.LoadModule(ModulePath, AContext.CurrentFilePath);
+    for ImportPair in Imports do
+    begin
+      if Module.ExportsTable.TryGetValue(ImportPair.Value, Value) then
+      begin
+        AContext.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtLet);
+      end
+      else
+      begin
+        AContext.OnError(Format('Module "%s" has no export named "%s"',
+          [ModulePath, ImportPair.Value]), Line, Column);
+      end;
+    end;
+  end;
+
+  function TGocciaExportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaExportVariableDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := Declaration.Execute(AContext);
+  end;
+
+  function TGocciaReExportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaEmptyStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  begin
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  function TGocciaClassMethod.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+  begin
+    Result := EvaluateClassMethod(Self, AContext);
+  end;
+
+  function TGocciaClassExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+  begin
+    Result := EvaluateClassExpression(Self, AContext);
   end;
 
 end.
