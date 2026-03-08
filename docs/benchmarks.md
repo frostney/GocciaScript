@@ -175,11 +175,11 @@ When a benchmark has a `setup` or `teardown` function, a second line displays th
 
 ## CI Integration
 
-Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode** modes. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
+Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode** modes. Interpreted and bytecode benchmarks run in **parallel** via a matrix strategy. CI uses reduced calibration settings (`GOCCIA_BENCH_CALIBRATION_MS=50`, `GOCCIA_BENCH_ROUNDS=3`) for faster runs. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
 
 ### PR Benchmark Comparison
 
-The PR workflow (`.github/workflows/pr.yml`) restores the cached benchmark baselines (interpreted and bytecode) from main, runs all benchmarks in both modes with JSON output, and posts a collapsible comparison comment on the PR with separate **Interpreted** and **Bytecode** sections:
+The PR workflow (`.github/workflows/pr.yml`) runs interpreted and bytecode benchmarks in **parallel** on separate runners, restores the cached baselines from main, and posts a collapsible comparison comment on the PR with separate **Interpreted** and **Bytecode** sections:
 
 - Results are **grouped by file**, each in a collapsible `<details>` section
 - Files with significant changes (improvements or regressions) are auto-expanded

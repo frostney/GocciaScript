@@ -65,6 +65,9 @@ jobs:
   benchmark:
     needs: build
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        mode: [interpreted, bytecode]
     defaults:
       run:
         shell: bash
@@ -82,42 +85,62 @@ jobs:
       - name: Make binaries executable
         run: chmod +x build/*
 
-      - name: Restore benchmark baseline (interpreted)
-        id: baseline
+      - name: Run benchmarks
+        env:
+          GOCCIA_BENCH_CALIBRATION_MS: 50
+          GOCCIA_BENCH_ROUNDS: 3
+        run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.mode }}
+          retention-days: 1
+          path: benchmark-${{ matrix.mode }}.json
+
+  benchmark-comment:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download interpreted results
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-interpreted
+
+      - name: Download bytecode results
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-bytecode
+
+      - name: Restore interpreted baseline
         uses: actions/cache/restore@v4
         with:
-          path: benchmark-results.json
-          key: benchmark-baseline-will-not-match
-          restore-keys: benchmark-baseline-
+          path: benchmark-interpreted-results.json
+          key: benchmark-interpreted-baseline-will-not-match
+          restore-keys: benchmark-interpreted-baseline-
 
-      - name: Restore benchmark baseline (bytecode)
-        id: baseline-bytecode
+      - name: Restore bytecode baseline
         uses: actions/cache/restore@v4
         with:
           path: benchmark-bytecode-results.json
           key: benchmark-bytecode-baseline-will-not-match
           restore-keys: benchmark-bytecode-baseline-
 
-      - name: Prepare baselines
+      - name: Check baselines
         run: |
-          if [ -f benchmark-results.json ]; then
-            mv benchmark-results.json benchmark-baseline.json
+          if [ -f benchmark-interpreted-results.json ]; then
             echo "BASELINE_EXISTS=true" >> "$GITHUB_ENV"
           else
             echo "BASELINE_EXISTS=false" >> "$GITHUB_ENV"
           fi
           if [ -f benchmark-bytecode-results.json ]; then
-            mv benchmark-bytecode-results.json benchmark-bytecode-baseline.json
             echo "BYTECODE_BASELINE_EXISTS=true" >> "$GITHUB_ENV"
           else
             echo "BYTECODE_BASELINE_EXISTS=false" >> "$GITHUB_ENV"
           fi
-
-      - name: Run benchmarks (interpreted)
-        run: ./build/BenchmarkRunner benchmarks --no-progress --format=json --output=benchmark-results.json
-
-      - name: Run benchmarks (bytecode)
-        run: ./build/BenchmarkRunner benchmarks --mode=bytecode --no-progress --format=json --output=benchmark-bytecode-results.json
 
       - name: Compare benchmarks and comment
         uses: actions/github-script@v7
@@ -255,14 +278,14 @@ jobs:
             }
 
             const interpretedSection = generateSection(
-              'benchmark-results.json',
-              'benchmark-baseline.json',
+              'benchmark-interpreted.json',
+              'benchmark-interpreted-results.json',
               process.env.BASELINE_EXISTS === 'true',
               'Interpreted'
             );
             const bytecodeSection = generateSection(
+              'benchmark-bytecode.json',
               'benchmark-bytecode-results.json',
-              'benchmark-bytecode-baseline.json',
               process.env.BYTECODE_BASELINE_EXISTS === 'true',
               'Bytecode'
             );
