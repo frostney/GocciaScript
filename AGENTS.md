@@ -89,7 +89,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Lexer | `Goccia.Lexer.pas` | Source → tokens |
 | Parser | `Goccia.Parser.pas` | Tokens → AST (including `TGocciaForOfStatement`, `TGocciaForAwaitOfStatement` in `Goccia.AST.Statements.pas`) |
 | Interpreter | `Goccia.Interpreter.pas` | AST execution, module loading, scope ownership |
-| Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules: Arithmetic, Bitwise, Comparison, Assignment, TypeOperations) |
+| Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules: Arithmetic, Bitwise, Comparison, Assignment, TypeOperations). Statement-level functions (`Evaluate`, `EvaluateStatement`, `EvaluateStatements`, `EvaluateBlock`, `EvaluateIf`, `EvaluateTry`, `EvaluateSwitch`, `EvaluateForOf`, `EvaluateForAwaitOf`) return `TGocciaControlFlow` records |
+| Control Flow | `Goccia.ControlFlow.pas` | `TGocciaControlFlow` result record (`cfkNormal`, `cfkReturn`, `cfkBreak`) for exception-free propagation of `return` and `break` signals through the interpreter |
 | Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ, VMT-based chain-walking |
 | Reserved Keywords | `Goccia.Keywords.Reserved.pas` | Reserved JavaScript keyword string constants (`break`, `class`, `const`, `this`, etc.) |
 | Contextual Keywords | `Goccia.Keywords.Contextual.pas` | Contextual keyword string constants (`async`, `get`, `set`, `type`, `interface`, `implements`, etc.) |
@@ -439,7 +440,7 @@ This pattern is used in `TGocciaNumberLiteralValue.GetIsNegativeZero` and `IsNeg
 - **Parser combinator** for binary expressions (`ParseBinaryExpression` shared helper)
 - **Recursive descent** for parsing
 - **Mark-and-sweep** for garbage collection (`TGocciaGarbageCollector`)
-- **Shared helpers** for evaluator deduplication (`EvaluateStatementsSafe`, `SpreadIterableInto`, `EvaluateSimpleNumericBinaryOp`)
+- **Shared helpers** for evaluator deduplication (`EvaluateStatements`, `SpreadIterableInto`, `EvaluateSimpleNumericBinaryOp`)
 
 ## Value System
 

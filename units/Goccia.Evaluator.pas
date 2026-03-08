@@ -11,6 +11,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.ControlFlow,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Modules,
   Goccia.Scope,
@@ -29,10 +30,10 @@ type
     CurrentFilePath: string;
   end;
 
-function Evaluate(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function Evaluate(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateExpression(const AExpression: TGocciaExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateStatementsSafe(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+function EvaluateStatements(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateBinary(const ABinaryExpression: TGocciaBinaryExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateUnary(const AUnaryExpression: TGocciaUnaryExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateDelete(const AOperand: TGocciaExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -45,10 +46,10 @@ function EvaluateGetter(const AGetterExpression: TGocciaGetterExpression; const 
 function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateArrowFunction(const AArrowFunctionExpression: TGocciaArrowFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateMethodExpression(const AMethodExpression: TGocciaMethodExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateBlock(const ABlockStatement: TGocciaBlockStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateIf(const AIfStatement: TGocciaIfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateSwitch(const ASwitchStatement: TGocciaSwitchStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateBlock(const ABlockStatement: TGocciaBlockStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+function EvaluateIf(const AIfStatement: TGocciaIfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+function EvaluateSwitch(const ASwitchStatement: TGocciaSwitchStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateClassMethod(const AClassMethod: TGocciaClassMethod; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil): TGocciaValue;
 function EvaluateClass(const AClassDeclaration: TGocciaClassDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateClassExpression(const AClassExpression: TGocciaClassExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -65,8 +66,8 @@ function EvaluateTemplateLiteral(const ATemplateLiteralExpression: TGocciaTempla
 function EvaluateTemplateExpression(const AExpressionText: string; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaValue;
 function EvaluateAwait(const AAwaitExpression: TGocciaAwaitExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
-function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 
 // Destructuring pattern assignment procedures
 procedure AssignPattern(const APattern: TGocciaDestructuringPattern; const AValue: TGocciaValue; const AContext: TGocciaEvaluationContext; const AIsDeclaration: Boolean = False; const ADeclarationType: TGocciaDeclarationType = dtLet);
@@ -145,25 +146,21 @@ begin
     Result.Add(ASource[I]);
 end;
 
-function EvaluateStatementsSafe(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateStatements(const ANodes: TObjectList<TGocciaASTNode>; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   I: Integer;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(AContext.OnError) and not Assigned(AContext.Scope.OnError) then
+    AContext.Scope.OnError := AContext.OnError;
+
+  Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   for I := 0 to ANodes.Count - 1 do
   begin
-    try
-      Result := Evaluate(ANodes[I], AContext);
-    except
-      on E: TGocciaReturnValue do raise;
-      on E: TGocciaThrowValue do raise;
-      on E: TGocciaBreakSignal do raise;
-      on E: TGocciaTypeError do raise;
-      on E: TGocciaReferenceError do raise;
-      on E: TGocciaRuntimeError do raise;
-      on E: Exception do
-        raise TGocciaError.Create('Error executing statement: ' + E.Message, 0, 0, '', nil);
-    end;
+    if ANodes[I] is TGocciaExpression then
+      Result := TGocciaControlFlow.Normal(EvaluateExpression(TGocciaExpression(ANodes[I]), AContext))
+    else
+      Result := EvaluateStatement(TGocciaStatement(ANodes[I]), AContext);
+    if Result.Kind <> cfkNormal then Exit;
   end;
 end;
 
@@ -271,24 +268,18 @@ begin
   SpreadIterableInto(ASpreadValue, AArgs.Items);
 end;
 
-function Evaluate(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function Evaluate(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 begin
   // Propagate OnError onto the scope so closures inherit it
   if Assigned(AContext.OnError) and not Assigned(AContext.Scope.OnError) then
     AContext.Scope.OnError := AContext.OnError;
 
   if ANode is TGocciaExpression then
-  begin
-    Result := EvaluateExpression(TGocciaExpression(ANode), AContext);
-  end
+    Result := TGocciaControlFlow.Normal(EvaluateExpression(TGocciaExpression(ANode), AContext))
   else if ANode is TGocciaStatement then
-  begin
-    Result := EvaluateStatement(TGocciaStatement(ANode), AContext);
-  end
+    Result := EvaluateStatement(TGocciaStatement(ANode), AContext)
   else
-  begin
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end;
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
 
 function EvaluateExpression(const AExpression: TGocciaExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -536,7 +527,7 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function EvaluateStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   Decl: TGocciaVariableDeclaration;
   ImportDecl: TGocciaImportDeclaration;
@@ -546,11 +537,11 @@ var
   I: Integer;
 begin
 
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
   if AStatement is TGocciaExpressionStatement then
   begin
-    Result := EvaluateExpression(TGocciaExpressionStatement(AStatement).Expression, AContext);
+    Result := TGocciaControlFlow.Normal(EvaluateExpression(TGocciaExpressionStatement(AStatement).Expression, AContext));
   end
       else if AStatement is TGocciaVariableDeclaration then
   begin
@@ -576,7 +567,7 @@ begin
   end
   else if AStatement is TGocciaDestructuringDeclaration then
   begin
-    Result := EvaluateDestructuringDeclaration(TGocciaDestructuringDeclaration(AStatement), AContext);
+    Result := TGocciaControlFlow.Normal(EvaluateDestructuringDeclaration(TGocciaDestructuringDeclaration(AStatement), AContext));
   end
   else if AStatement is TGocciaBlockStatement then
   begin
@@ -592,7 +583,7 @@ begin
   end
   else if AStatement is TGocciaBreakStatement then
   begin
-    raise TGocciaBreakSignal.Create;
+    Result := TGocciaControlFlow.Break;
   end
   else if AStatement is TGocciaReturnStatement then
   begin
@@ -600,15 +591,11 @@ begin
     begin
       Value := EvaluateExpression(TGocciaReturnStatement(AStatement).Value, AContext);
       if Value = nil then
-      begin
         Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-      end;
     end
     else
-    begin
       Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end;
-    raise TGocciaReturnValue.Create(Value);
+    Result := TGocciaControlFlow.Return(Value);
   end
   else if AStatement is TGocciaThrowStatement then
   begin
@@ -621,15 +608,15 @@ begin
   end
   else if AStatement is TGocciaClassDeclaration then
   begin
-    Result := EvaluateClass(TGocciaClassDeclaration(AStatement), AContext);
+    Result := TGocciaControlFlow.Normal(EvaluateClass(TGocciaClassDeclaration(AStatement), AContext));
   end
   else if AStatement is TGocciaEnumDeclaration then
   begin
-    Result := EvaluateEnumDeclaration(TGocciaEnumDeclaration(AStatement), AContext);
+    Result := TGocciaControlFlow.Normal(EvaluateEnumDeclaration(TGocciaEnumDeclaration(AStatement), AContext));
   end
   else if AStatement is TGocciaExportEnumDeclaration then
   begin
-    Result := EvaluateEnumDeclaration(TGocciaExportEnumDeclaration(AStatement).Declaration, AContext);
+    Result := TGocciaControlFlow.Normal(EvaluateEnumDeclaration(TGocciaExportEnumDeclaration(AStatement).Declaration, AContext));
   end
   else if AStatement is TGocciaImportDeclaration then
   begin
@@ -655,7 +642,7 @@ begin
   end
   else if AStatement is TGocciaReExportDeclaration then
   begin
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   end
   else if AStatement is TGocciaForAwaitOfStatement then
   begin
@@ -667,7 +654,7 @@ begin
   end
   else if AStatement is TGocciaEmptyStatement then
   begin
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
 end;
@@ -1398,17 +1385,18 @@ begin
 end;
 
 // ES2026 §14.7.5.6 ForIn/OfBodyEvaluation(lhs, stmt, iteratorRecord, iterationKind, lhsKind)
-function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateForOf(const AForOfStatement: TGocciaForOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   IterableValue: TGocciaValue;
   Iterator: TGocciaIteratorValue;
   IterResult: TGocciaObjectValue;
   CurrentValue: TGocciaValue;
+  CF: TGocciaControlFlow;
   IterScope: TGocciaScope;
   IterContext: TGocciaEvaluationContext;
   DeclarationType: TGocciaDeclarationType;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
   IterableValue := EvaluateExpression(AForOfStatement.Iterable, AContext);
   Iterator := GetIteratorFromValue(IterableValue);
@@ -1423,33 +1411,25 @@ begin
   if Assigned(TGocciaGarbageCollector.Instance) then
     TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    try
+    IterResult := Iterator.AdvanceNext;
+    while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+    begin
+      CurrentValue := IterResult.GetProperty(PROP_VALUE);
+
+      IterScope := AContext.Scope.CreateChild(skBlock);
+      IterContext := AContext;
+      IterContext.Scope := IterScope;
+
+      if AForOfStatement.BindingPattern <> nil then
+        AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
+      else
+        IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
+
+      CF := EvaluateStatement(AForOfStatement.Body, IterContext);
+      if CF.Kind = cfkBreak then Break;
+      if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
+
       IterResult := Iterator.AdvanceNext;
-      while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-      begin
-        CurrentValue := IterResult.GetProperty(PROP_VALUE);
-
-        IterScope := AContext.Scope.CreateChild(skBlock);
-        IterContext := AContext;
-        IterContext.Scope := IterScope;
-
-        if AForOfStatement.BindingPattern <> nil then
-          AssignPattern(AForOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
-        else
-          IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
-
-        try
-          Evaluate(AForOfStatement.Body, IterContext);
-        except
-          on E: TGocciaBreakSignal do
-            Exit;
-        end;
-
-        IterResult := Iterator.AdvanceNext;
-      end;
-    except
-      on E: TGocciaBreakSignal do
-        ;
     end;
   finally
     if Assigned(TGocciaGarbageCollector.Instance) then
@@ -1458,17 +1438,18 @@ begin
 end;
 
 // ES2026 §14.7.5.6 ForIn/OfBodyEvaluation — for-await-of variant
-function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateForAwaitOf(const AForAwaitOfStatement: TGocciaForAwaitOfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   IterableValue, IteratorMethod, IteratorObj, NextMethod, NextResult, DoneValue, CurrentValue: TGocciaValue;
   Iterator: TGocciaIteratorValue;
   GenericNextResult: TGocciaObjectValue;
+  CF: TGocciaControlFlow;
   IterScope: TGocciaScope;
   IterContext: TGocciaEvaluationContext;
   DeclarationType: TGocciaDeclarationType;
   EmptyArgs: TGocciaArgumentsCollection;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
   IterableValue := EvaluateExpression(AForAwaitOfStatement.Iterable, AContext);
 
@@ -1499,16 +1480,16 @@ begin
         if not Assigned(NextMethod) or not NextMethod.IsCallable then
           ThrowTypeError('Async iterator .next is not callable');
 
-          while True do
-          begin
-            NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
-            NextResult := AwaitValue(NextResult);
+        while True do
+        begin
+          NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
+          NextResult := AwaitValue(NextResult);
 
-            // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
-            if NextResult.IsPrimitive then
-              ThrowTypeError('Iterator result ' + NextResult.ToStringLiteral.Value + ' is not an object');
+          // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
+          if NextResult.IsPrimitive then
+            ThrowTypeError('Iterator result ' + NextResult.ToStringLiteral.Value + ' is not an object');
 
-            DoneValue := NextResult.GetProperty(PROP_DONE);
+          DoneValue := NextResult.GetProperty(PROP_DONE);
           if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
             Break;
 
@@ -1525,12 +1506,9 @@ begin
           else
             IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
 
-          try
-            Evaluate(AForAwaitOfStatement.Body, IterContext);
-          except
-            on E: TGocciaBreakSignal do
-              Exit;
-          end;
+          CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
+          if CF.Kind = cfkBreak then Break;
+          if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
         end;
       finally
         EmptyArgs.Free;
@@ -1549,34 +1527,26 @@ begin
     if Assigned(TGocciaGarbageCollector.Instance) then
       TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
     try
-      try
+      GenericNextResult := Iterator.AdvanceNext;
+      while not GenericNextResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+      begin
+        CurrentValue := GenericNextResult.GetProperty(PROP_VALUE);
+        CurrentValue := AwaitValue(CurrentValue);
+
+        IterScope := AContext.Scope.CreateChild(skBlock);
+        IterContext := AContext;
+        IterContext.Scope := IterScope;
+
+        if AForAwaitOfStatement.BindingPattern <> nil then
+          AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
+        else
+          IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
+
+        CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
+        if CF.Kind = cfkBreak then Break;
+        if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
+
         GenericNextResult := Iterator.AdvanceNext;
-        while not GenericNextResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-        begin
-          CurrentValue := GenericNextResult.GetProperty(PROP_VALUE);
-          CurrentValue := AwaitValue(CurrentValue);
-
-          IterScope := AContext.Scope.CreateChild(skBlock);
-          IterContext := AContext;
-          IterContext.Scope := IterScope;
-
-          if AForAwaitOfStatement.BindingPattern <> nil then
-            AssignPattern(AForAwaitOfStatement.BindingPattern, CurrentValue, IterContext, True, DeclarationType)
-          else
-            IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
-
-          try
-            Evaluate(AForAwaitOfStatement.Body, IterContext);
-          except
-            on E: TGocciaBreakSignal do
-              Exit;
-          end;
-
-          GenericNextResult := Iterator.AdvanceNext;
-        end;
-      except
-        on E: TGocciaBreakSignal do
-          ;
       end;
     finally
       if Assigned(TGocciaGarbageCollector.Instance) then
@@ -1623,14 +1593,12 @@ begin
     Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, AContext.Scope.CreateChild);
 end;
 
-function EvaluateBlock(const ABlockStatement: TGocciaBlockStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateBlock(const ABlockStatement: TGocciaBlockStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   I: Integer;
-  LastValue: TGocciaValue;
   BlockContext: TGocciaEvaluationContext;
   NeedsChildScope: Boolean;
 begin
-  // Check if we need a child scope (only if there are variable declarations)
   NeedsChildScope := False;
   for I := 0 to ABlockStatement.Nodes.Count - 1 do
   begin
@@ -1646,31 +1614,29 @@ begin
   if NeedsChildScope then
     BlockContext.Scope := AContext.Scope.CreateChild(skBlock, 'BlockScope')
   else
-    BlockContext.Scope := AContext.Scope; // Use same scope - no isolation needed
+    BlockContext.Scope := AContext.Scope;
 
   try
-    LastValue := EvaluateStatementsSafe(ABlockStatement.Nodes, BlockContext);
-    if LastValue = nil then
-      LastValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Result := LastValue;
+    Result := EvaluateStatements(ABlockStatement.Nodes, BlockContext);
+    if (Result.Kind = cfkNormal) and (Result.Value = nil) then
+      Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
-    // Only free the scope if we created a child scope
     if NeedsChildScope then
       BlockContext.Scope.Free;
   end;
 end;
 
-function EvaluateIf(const AIfStatement: TGocciaIfStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateIf(const AIfStatement: TGocciaIfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 begin
   if EvaluateExpression(AIfStatement.Condition, AContext).ToBooleanLiteral.Value then
     Result := EvaluateStatement(AIfStatement.Consequent, AContext)
   else if Assigned(AIfStatement.Alternate) then
     Result := EvaluateStatement(AIfStatement.Alternate, AContext)
   else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
 
-function ExecuteCatchBlock(const ATryStatement: TGocciaTryStatement; const AErrorValue: TGocciaValue; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function ExecuteCatchBlock(const ATryStatement: TGocciaTryStatement; const AErrorValue: TGocciaValue; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   CatchScope: TGocciaScope;
   CatchContext: TGocciaEvaluationContext;
@@ -1682,13 +1648,13 @@ begin
       CatchScope.DefineLexicalBinding(ATryStatement.CatchParam, AErrorValue, dtParameter);
       CatchContext := AContext;
       CatchContext.Scope := CatchScope;
-      Result := EvaluateStatementsSafe(ATryStatement.CatchBlock.Nodes, CatchContext);
+      Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, CatchContext);
     finally
       CatchScope.Free;
     end;
   end
   else
-    Result := EvaluateStatementsSafe(ATryStatement.CatchBlock.Nodes, AContext);
+    Result := EvaluateStatements(ATryStatement.CatchBlock.Nodes, AContext);
 end;
 
 function PascalExceptionToErrorObject(const E: Exception): TGocciaValue;
@@ -1705,35 +1671,85 @@ begin
     Result := CreateErrorObject(ERROR_NAME, E.Message);
 end;
 
-function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+var
+  ThrownValue: TGocciaValue;
+  HasUnhandledThrow: Boolean;
+  FinallyCF: TGocciaControlFlow;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  HasUnhandledThrow := False;
+  ThrownValue := nil;
+  Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
 
+  // Phase 1: Execute try block, capturing throws
   try
-    try
-      Result := EvaluateStatementsSafe(ATryStatement.Block.Nodes, AContext);
-    except
-      on E: TGocciaThrowValue do
+    Result := EvaluateStatements(ATryStatement.Block.Nodes, AContext);
+  except
+    on E: TGocciaThrowValue do
+    begin
+      if Assigned(ATryStatement.CatchBlock) then
       begin
-        if Assigned(ATryStatement.CatchBlock) then
-          Result := ExecuteCatchBlock(ATryStatement, E.Value, AContext)
-        else
-          raise;
-      end;
-      on E: TGocciaReturnValue do raise;
-      on E: TGocciaBreakSignal do raise;
-      on E: Exception do
+        try
+          Result := ExecuteCatchBlock(ATryStatement, E.Value, AContext);
+        except
+          on E2: TGocciaThrowValue do
+          begin
+            HasUnhandledThrow := True;
+            ThrownValue := E2.Value;
+          end;
+        end;
+      end
+      else
       begin
-        if Assigned(ATryStatement.CatchBlock) then
-          Result := ExecuteCatchBlock(ATryStatement, PascalExceptionToErrorObject(E), AContext)
-        else
-          raise TGocciaThrowValue.Create(PascalExceptionToErrorObject(E));
+        HasUnhandledThrow := True;
+        ThrownValue := E.Value;
       end;
     end;
-  finally
-    if Assigned(ATryStatement.FinallyBlock) then
-      EvaluateStatementsSafe(ATryStatement.FinallyBlock.Nodes, AContext);
+    on E: Exception do
+    begin
+      if Assigned(ATryStatement.CatchBlock) then
+      begin
+        try
+          Result := ExecuteCatchBlock(ATryStatement, PascalExceptionToErrorObject(E), AContext);
+        except
+          on E2: TGocciaThrowValue do
+          begin
+            HasUnhandledThrow := True;
+            ThrownValue := E2.Value;
+          end;
+        end;
+      end
+      else
+      begin
+        HasUnhandledThrow := True;
+        ThrownValue := PascalExceptionToErrorObject(E);
+      end;
+    end;
   end;
+
+  // Phase 2: Execute finally block (always runs)
+  if Assigned(ATryStatement.FinallyBlock) then
+  begin
+    if HasUnhandledThrow and Assigned(TGocciaGarbageCollector.Instance) then
+      TGocciaGarbageCollector.Instance.AddTempRoot(ThrownValue);
+    try
+      FinallyCF := EvaluateStatements(ATryStatement.FinallyBlock.Nodes, AContext);
+      // Per JS semantics: finally's control flow overrides try/catch result AND pending throw
+      if FinallyCF.Kind <> cfkNormal then
+      begin
+        Result := FinallyCF;
+        Exit;
+      end;
+      // If finally throws (TGocciaThrowValue), it propagates naturally and overrides everything
+    finally
+      if HasUnhandledThrow and Assigned(TGocciaGarbageCollector.Instance) then
+        TGocciaGarbageCollector.Instance.RemoveTempRoot(ThrownValue);
+    end;
+  end;
+
+  // Phase 3: Re-raise unhandled throw (if not overridden by finally)
+  if HasUnhandledThrow then
+    raise TGocciaThrowValue.Create(ThrownValue);
 end;
 
 function EvaluateClassMethod(const AClassMethod: TGocciaClassMethod; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil): TGocciaValue;
@@ -1858,68 +1874,70 @@ begin
   end;
 end;
 
-function EvaluateSwitch(const ASwitchStatement: TGocciaSwitchStatement; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateSwitch(const ASwitchStatement: TGocciaSwitchStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 var
   Discriminant: TGocciaValue;
   CaseClause: TGocciaCaseClause;
   CaseTest: TGocciaValue;
+  CF: TGocciaControlFlow;
   I, J: Integer;
   Matched: Boolean;
   DefaultIndex: Integer;
+  Done: Boolean;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-
-  // Evaluate the discriminant expression
+  Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   Discriminant := EvaluateExpression(ASwitchStatement.Discriminant, AContext);
 
   Matched := False;
   DefaultIndex := -1;
+  Done := False;
 
-  try
-    // First pass: find matching case or default
-    for I := 0 to ASwitchStatement.Cases.Count - 1 do
+  for I := 0 to ASwitchStatement.Cases.Count - 1 do
+  begin
+    CaseClause := ASwitchStatement.Cases[I];
+
+    if not Assigned(CaseClause.Test) then
     begin
-      CaseClause := ASwitchStatement.Cases[I];
-
-      if not Assigned(CaseClause.Test) then
-      begin
-        DefaultIndex := I;
-        if not Matched then
-          Continue;
-      end;
-
+      DefaultIndex := I;
       if not Matched then
-      begin
-        CaseTest := EvaluateExpression(CaseClause.Test, AContext);
-        if IsStrictEqual(Discriminant, CaseTest) then
-          Matched := True;
-      end;
-
-      // Once matched, execute this case's statements (fall-through)
-      if Matched then
-      begin
-        for J := 0 to CaseClause.Consequent.Count - 1 do
-          Result := Evaluate(CaseClause.Consequent[J], AContext);
-      end;
+        Continue;
     end;
 
-    // If no case matched, execute from default and fall through
-    if not Matched and (DefaultIndex >= 0) then
+    if not Matched then
     begin
-      for I := DefaultIndex to ASwitchStatement.Cases.Count - 1 do
-      begin
-        CaseClause := ASwitchStatement.Cases[I];
-        for J := 0 to CaseClause.Consequent.Count - 1 do
-          Result := Evaluate(CaseClause.Consequent[J], AContext);
-      end;
+      CaseTest := EvaluateExpression(CaseClause.Test, AContext);
+      if IsStrictEqual(Discriminant, CaseTest) then
+        Matched := True;
     end;
-  except
-    on E: TGocciaBreakSignal do
+
+    if Matched then
     begin
-      // Break exits the switch — swallow the signal
+      for J := 0 to CaseClause.Consequent.Count - 1 do
+      begin
+        CF := EvaluateStatement(CaseClause.Consequent[J], AContext);
+        if CF.Kind = cfkBreak then begin Done := True; Break; end;
+        if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
+        Result := CF;
+      end;
+      if Done then Break;
     end;
   end;
 
+  if not Matched and not Done and (DefaultIndex >= 0) then
+  begin
+    for I := DefaultIndex to ASwitchStatement.Cases.Count - 1 do
+    begin
+      CaseClause := ASwitchStatement.Cases[I];
+      for J := 0 to CaseClause.Consequent.Count - 1 do
+      begin
+        CF := EvaluateStatement(CaseClause.Consequent[J], AContext);
+        if CF.Kind = cfkBreak then begin Done := True; Break; end;
+        if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
+        Result := CF;
+      end;
+      if Done then Break;
+    end;
+  end;
 end;
 
 function EvaluateNewExpression(const ANewExpression: TGocciaNewExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;

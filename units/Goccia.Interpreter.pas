@@ -13,6 +13,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.ControlFlow,
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Lexer,
@@ -105,13 +106,18 @@ end;
 function TGocciaInterpreter.Execute(const AProgram: TGocciaProgram): TGocciaValue;
 var
   I: Integer;
+  CF: TGocciaControlFlow;
   Context: TGocciaEvaluationContext;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   Context := CreateEvaluationContext;
 
   for I := 0 to AProgram.Body.Count - 1 do
-    Result := EvaluateStatement(AProgram.Body[I], Context);
+  begin
+    CF := EvaluateStatement(AProgram.Body[I], Context);
+    Result := CF.Value;
+    if CF.Kind = cfkReturn then Exit;
+  end;
 end;
 
 function TGocciaInterpreter.LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
@@ -202,7 +208,7 @@ begin
                 Context.CurrentFilePath := ResolvedPath;
 
                 for I := 0 to ProgramNode.Body.Count - 1 do
-                  EvaluateStatement(ProgramNode.Body[I], Context);
+                  EvaluateStatement(ProgramNode.Body[I], Context);  // .Value discarded at module level
 
                 for I := 0 to ProgramNode.Body.Count - 1 do
                 begin

@@ -70,13 +70,13 @@ uses
   SysUtils,
 
   Goccia.AST.Statements,
+  Goccia.ControlFlow,
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.GarbageCollector,
   Goccia.Logger,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
-  Goccia.Values.Error,
   Goccia.Values.ErrorHelper;
 
 { TGocciaFunctionValue }
@@ -135,6 +135,7 @@ function TGocciaFunctionValue.ExecuteBody(const ACallScope: TGocciaScope; const 
 var
   I, J: Integer;
   ReturnValue: TGocciaValue;
+  CF: TGocciaControlFlow;
   Context: TGocciaEvaluationContext;
 begin
   // Set up evaluation context — inherit OnError from the closure scope
@@ -200,69 +201,46 @@ begin
     end;
   end;
 
-  // Expression-body fast path: skip try/except entirely since expression bodies
-  // cannot contain return/break statements — exceptions propagate naturally
+  Context.Scope := ACallScope;
+  if Assigned(Context.OnError) and not Assigned(ACallScope.OnError) then
+    ACallScope.OnError := Context.OnError;
+
+  // Expression-body fast path: expression bodies cannot contain return/break
   if FIsExpressionBody and (FBodyStatements.Count = 1) then
   begin
-    Context.Scope := ACallScope;
-    Result := Evaluate(FBodyStatements[0], Context);
+    Result := EvaluateExpression(TGocciaExpression(FBodyStatements[0]), Context);
     Exit;
   end;
 
   // Single-return fast path: (x) => { return expr; } — evaluate the return
-  // expression directly, bypassing try/except and TGocciaReturnValue exception
+  // expression directly, bypassing the statement loop
   if (FBodyStatements.Count = 1) and (FBodyStatements[0] is TGocciaReturnStatement) then
   begin
-    Context.Scope := ACallScope;
     if TGocciaReturnStatement(FBodyStatements[0]).Value <> nil then
-      Result := Evaluate(TGocciaReturnStatement(FBodyStatements[0]).Value, Context)
+      Result := EvaluateExpression(TGocciaExpression(TGocciaReturnStatement(FBodyStatements[0]).Value), Context)
     else
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 
-  // Block body: full execution with exception handling for return/break signals
-  try
-    Context.Scope := ACallScope;
-    ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-    for I := 0 to FBodyStatements.Count - 1 do
+  for I := 0 to FBodyStatements.Count - 1 do
+  begin
+    if FBodyStatements[I] is TGocciaExpression then
+      CF := TGocciaControlFlow.Normal(EvaluateExpression(TGocciaExpression(FBodyStatements[I]), Context))
+    else
+      CF := EvaluateStatement(TGocciaStatement(FBodyStatements[I]), Context);
+    if CF.Kind = cfkReturn then
     begin
-      try
-        ReturnValue := Evaluate(FBodyStatements[I], Context);
-      except
-        on E: TGocciaReturnValue do raise;
-        on E: TGocciaThrowValue do raise;
-        on E: TGocciaBreakSignal do raise;
-        on E: TGocciaTypeError do raise;
-        on E: TGocciaReferenceError do raise;
-        on E: TGocciaRuntimeError do raise;
-        on E: TGocciaError do raise;
-        on E: Exception do
-          ThrowError('Error executing statement: ' + E.Message);
-      end;
-    end;
-
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  except
-    on E: TGocciaReturnValue do
-    begin
-      if E.Value = nil then
+      if CF.Value = nil then
         Result := TGocciaUndefinedLiteralValue.UndefinedValue
       else
-        Result := E.Value;
+        Result := CF.Value;
+      Exit;
     end;
-    on E: TGocciaThrowValue do raise;
-    on E: TGocciaBreakSignal do raise;
-    on E: TGocciaTypeError do raise;
-    on E: TGocciaReferenceError do raise;
-    on E: TGocciaRuntimeError do raise;
-    on E: TGocciaError do raise;
-    on E: Exception do
-    begin
-      Logger.Error('FunctionValue.Call: Caught unexpected exception: %s', [E.Message]);
-      raise;
-    end;
+    if CF.Kind = cfkBreak then
+      ThrowSyntaxError('Illegal break statement');
   end;
 end;
 

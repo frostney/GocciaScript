@@ -96,7 +96,7 @@ end;
 // TC39 Set Methods §2.1 Set.prototype.union(other)
 ```
 
-**What not to annotate:** Internal GocciaScript helpers that don't correspond to a spec algorithm (e.g., `EvaluateStatementsSafe`, `SpreadIterableInto`, Pascal-specific utilities).
+**What not to annotate:** Internal GocciaScript helpers that don't correspond to a spec algorithm (e.g., `EvaluateStatements`, `SpreadIterableInto`, Pascal-specific utilities).
 
 ### No Abbreviations
 
@@ -435,7 +435,7 @@ Methods that return `Self` for chaining (e.g., `Set.add`, `Map.set`) must return
 
 ### Evaluator Helper Patterns
 
-**`EvaluateStatementsSafe`** — Wraps statement list execution with standardized exception handling (re-raises GocciaScript signals, wraps unexpected exceptions). Used wherever a list of AST nodes is evaluated in sequence.
+**`EvaluateStatements`** — Evaluates a list of AST nodes in sequence, returning `TGocciaControlFlow`. Exits early when `Result.Kind <> cfkNormal` to propagate `return` and `break` signals. `TGocciaThrowValue` exceptions propagate naturally without interception.
 
 **`SpreadIterableInto` / `SpreadIterableIntoArgs`** — Unified spread expansion for arrays, strings, sets, and maps. Used by `EvaluateCall`, `EvaluateArray`, and `EvaluateObject`.
 

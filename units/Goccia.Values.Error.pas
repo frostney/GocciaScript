@@ -10,16 +10,10 @@ uses
   Goccia.Values.Primitives;
 
 type
-  // These are flow-control exceptions (return/throw), distinct from the compilation
-  // and runtime errors in Goccia.Error. Kept separate intentionally.
-  TGocciaReturnValue = class(Exception)
-  private
-    FValue: TGocciaValue;
-  public
-    constructor Create(const AValue: TGocciaValue);
-    property Value: TGocciaValue read FValue;
-  end;
-
+  // TGocciaThrowValue is the exception type for JS throw statements and runtime
+  // errors (ThrowTypeError, ThrowRangeError, etc.). It propagates naturally through
+  // the call stack and is caught by EvaluateTry (JS try/catch), async wrappers, or
+  // the top-level engine. Return and break use TGocciaControlFlow records instead.
   TGocciaThrowValue = class(Exception)
   private
     FValue: TGocciaValue;
@@ -28,20 +22,7 @@ type
     property Value: TGocciaValue read FValue;
   end;
 
-  TGocciaBreakSignal = class(Exception)
-  public
-    constructor Create;
-  end;
-
 implementation
-
-{ TGocciaReturnValue }
-
-constructor TGocciaReturnValue.Create(const AValue: TGocciaValue);
-begin
-  inherited Create('');
-  FValue := AValue;
-end;
 
 { TGocciaThrowValue }
 
@@ -49,13 +30,6 @@ constructor TGocciaThrowValue.Create(const AValue: TGocciaValue);
 begin
   inherited Create('');
   FValue := AValue;
-end;
-
-{ TGocciaBreakSignal }
-
-constructor TGocciaBreakSignal.Create;
-begin
-  inherited Create('break');
 end;
 
 end.
