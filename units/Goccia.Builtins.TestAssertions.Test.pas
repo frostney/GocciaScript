@@ -188,6 +188,7 @@ procedure TTestExpectationMatchers.BeforeAll;
 begin
   FScope := TGocciaGlobalScope.Create;
   FAssertions := TGocciaTestAssertions.Create('test', FScope, DummyThrowError);
+  FAssertions.SuppressOutput := True;
 end;
 
 procedure TTestExpectationMatchers.AfterAll;
@@ -1203,6 +1204,7 @@ procedure TTestSkipAndConditionalAPIs.BeforeEach;
 begin
   FScope := TGocciaGlobalScope.Create;
   FAssertions := TGocciaTestAssertions.Create('test', FScope, DummyThrowError);
+  FAssertions.SuppressOutput := True;
 end;
 
 procedure TTestSkipAndConditionalAPIs.AfterEach;
