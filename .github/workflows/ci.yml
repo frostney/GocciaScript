@@ -145,20 +145,35 @@ jobs:
         if: runner.os != 'Windows'
         run: chmod +x build/*
 
-      - name: Run benchmarks
+      - name: Run benchmarks (interpreted)
         if: "!(github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64')"
         run: ./build/BenchmarkRunner benchmarks --no-progress
 
-      - name: Run benchmarks and save baseline
+      - name: Run benchmarks (interpreted) and save baseline
         if: github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
         run: ./build/BenchmarkRunner benchmarks --no-progress --format=console --format=json --output=benchmark-results.json
 
-      - name: Cache benchmark baseline
+      - name: Cache benchmark baseline (interpreted)
         if: github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
         uses: actions/cache/save@v4
         with:
           path: benchmark-results.json
           key: benchmark-baseline-${{ github.sha }}
+
+      - name: Run benchmarks (bytecode)
+        if: "!(github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64')"
+        run: ./build/BenchmarkRunner benchmarks --mode=bytecode --no-progress
+
+      - name: Run benchmarks (bytecode) and save baseline
+        if: github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
+        run: ./build/BenchmarkRunner benchmarks --mode=bytecode --no-progress --format=console --format=json --output=benchmark-bytecode-results.json
+
+      - name: Cache benchmark baseline (bytecode)
+        if: github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
+        uses: actions/cache/save@v4
+        with:
+          path: benchmark-bytecode-results.json
+          key: benchmark-bytecode-baseline-${{ github.sha }}
 
   examples:
     needs: build

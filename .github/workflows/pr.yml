@@ -82,7 +82,7 @@ jobs:
       - name: Make binaries executable
         run: chmod +x build/*
 
-      - name: Restore benchmark baseline
+      - name: Restore benchmark baseline (interpreted)
         id: baseline
         uses: actions/cache/restore@v4
         with:
@@ -90,7 +90,15 @@ jobs:
           key: benchmark-baseline-will-not-match
           restore-keys: benchmark-baseline-
 
-      - name: Prepare baseline
+      - name: Restore benchmark baseline (bytecode)
+        id: baseline-bytecode
+        uses: actions/cache/restore@v4
+        with:
+          path: benchmark-bytecode-results.json
+          key: benchmark-bytecode-baseline-will-not-match
+          restore-keys: benchmark-bytecode-baseline-
+
+      - name: Prepare baselines
         run: |
           if [ -f benchmark-results.json ]; then
             mv benchmark-results.json benchmark-baseline.json
@@ -98,41 +106,27 @@ jobs:
           else
             echo "BASELINE_EXISTS=false" >> "$GITHUB_ENV"
           fi
+          if [ -f benchmark-bytecode-results.json ]; then
+            mv benchmark-bytecode-results.json benchmark-bytecode-baseline.json
+            echo "BYTECODE_BASELINE_EXISTS=true" >> "$GITHUB_ENV"
+          else
+            echo "BYTECODE_BASELINE_EXISTS=false" >> "$GITHUB_ENV"
+          fi
 
-      - name: Run benchmarks
+      - name: Run benchmarks (interpreted)
         run: ./build/BenchmarkRunner benchmarks --no-progress --format=json --output=benchmark-results.json
+
+      - name: Run benchmarks (bytecode)
+        run: ./build/BenchmarkRunner benchmarks --mode=bytecode --no-progress --format=json --output=benchmark-bytecode-results.json
 
       - name: Compare benchmarks and comment
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const THRESHOLD = 7; // % change considered significant
-
-            const current = JSON.parse(fs.readFileSync('benchmark-results.json', 'utf8'));
-
-            let baseline = null;
-            if (process.env.BASELINE_EXISTS === 'true') {
-              try {
-                baseline = JSON.parse(fs.readFileSync('benchmark-baseline.json', 'utf8'));
-              } catch (e) {
-                console.log('Failed to parse baseline:', e.message);
-              }
-            }
+            const THRESHOLD = 7;
 
             const fmtOps = (n) => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-
-            const baselineByFile = {};
-            if (baseline) {
-              for (const file of baseline.files) {
-                const map = {};
-                for (const bench of file.benchmarks) {
-                  if (!bench.error) map[`${bench.suite} > ${bench.name}`] = bench.opsPerSec;
-                }
-                baselineByFile[file.file] = map;
-              }
-            }
-
             const fmtAvg = (changes) => {
               if (changes.length === 0) return '';
               const avg = changes.reduce((a, b) => a + b, 0) / changes.length;
@@ -140,108 +134,142 @@ jobs:
               return ` · avg ${sign}${avg.toFixed(1)}%`;
             };
 
-            let body = '## Benchmark Results\n\n';
-            let totalBenchmarks = 0;
-            let totalImproved = 0;
-            let totalRegressed = 0;
-            let totalNew = 0;
-            let totalUnchanged = 0;
-            const allChanges = [];
-
-            const fileBlocks = [];
-
-            for (const file of current.files) {
-              const fileName = file.file;
-              const baseMap = baselineByFile[fileName] || {};
-              const hasBaseline = baseline && Object.keys(baseMap).length > 0;
-
-              let fileImproved = 0;
-              let fileRegressed = 0;
-              let fileNew = 0;
-              let fileUnchanged = 0;
-              let fileRows = '';
-              const fileChanges = [];
-
-              const benches = file.benchmarks.filter(b => !b.error);
-              totalBenchmarks += benches.length;
-
-              if (hasBaseline) {
-                fileRows += '| Benchmark | Base (ops/sec) | PR (ops/sec) | Change |\n';
-                fileRows += '|-----------|---------------|-------------|--------|\n';
-
-                for (const bench of benches) {
-                  const key = `${bench.suite} > ${bench.name}`;
-                  const ops = bench.opsPerSec;
-                  const baseOps = baseMap[key];
-
-                  if (baseOps && baseOps > 0) {
-                    const change = ((ops - baseOps) / baseOps) * 100;
-                    fileChanges.push(change);
-                    allChanges.push(change);
-                    let indicator;
-                    if (change > THRESHOLD) {
-                      indicator = `🟢 +${change.toFixed(1)}%`;
-                      fileImproved++;
-                    } else if (change < -THRESHOLD) {
-                      indicator = `🔴 ${change.toFixed(1)}%`;
-                      fileRegressed++;
-                    } else {
-                      indicator = `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`;
-                      fileUnchanged++;
-                    }
-                    fileRows += `| ${bench.name} | ${fmtOps(baseOps)} | ${fmtOps(ops)} | ${indicator} |\n`;
-                  } else {
-                    fileRows += `| ${bench.name} | — | ${fmtOps(ops)} | 🆕 new |\n`;
-                    fileNew++;
-                  }
-                }
-              } else {
-                fileRows += '| Benchmark | ops/sec |\n';
-                fileRows += '|-----------|--------|\n';
-                for (const bench of benches) {
-                  fileRows += `| ${bench.name} | ${fmtOps(bench.opsPerSec)} |\n`;
-                  fileNew++;
+            function generateSection(currentFile, baselineFile, baselineExists, modeName) {
+              const current = JSON.parse(fs.readFileSync(currentFile, 'utf8'));
+              let baseline = null;
+              if (baselineExists) {
+                try {
+                  baseline = JSON.parse(fs.readFileSync(baselineFile, 'utf8'));
+                } catch (e) {
+                  console.log(`Failed to parse ${modeName} baseline:`, e.message);
                 }
               }
 
-              totalImproved += fileImproved;
-              totalRegressed += fileRegressed;
-              totalNew += fileNew;
-              totalUnchanged += fileUnchanged;
+              const baselineByFile = {};
+              if (baseline) {
+                for (const file of baseline.files) {
+                  const map = {};
+                  for (const bench of file.benchmarks) {
+                    if (!bench.error) map[`${bench.suite} > ${bench.name}`] = bench.opsPerSec;
+                  }
+                  baselineByFile[file.file] = map;
+                }
+              }
 
-              const parts = [];
-              if (fileImproved > 0) parts.push(`🟢 ${fileImproved} improved`);
-              if (fileRegressed > 0) parts.push(`🔴 ${fileRegressed} regressed`);
-              if (fileNew > 0) parts.push(`🆕 ${fileNew} new`);
-              if (fileUnchanged > 0) parts.push(`${fileUnchanged} unchanged`);
-              const fileSummary = (parts.length > 0 ? parts.join(', ') : `${benches.length} benchmarks`) + fmtAvg(fileChanges);
+              let section = `### ${modeName}\n\n`;
+              let totalBenchmarks = 0;
+              let totalImproved = 0;
+              let totalRegressed = 0;
+              let totalNew = 0;
+              let totalUnchanged = 0;
+              const allChanges = [];
+              const fileBlocks = [];
 
-              fileBlocks.push({ fileName, fileSummary, fileRows, hasSignificant: fileImproved > 0 || fileRegressed > 0 });
+              for (const file of current.files) {
+                const fileName = file.file;
+                const baseMap = baselineByFile[fileName] || {};
+                const hasBase = baseline && Object.keys(baseMap).length > 0;
+
+                let fileImproved = 0;
+                let fileRegressed = 0;
+                let fileNew = 0;
+                let fileUnchanged = 0;
+                let fileRows = '';
+                const fileChanges = [];
+
+                const benches = file.benchmarks.filter(b => !b.error);
+                totalBenchmarks += benches.length;
+
+                if (hasBase) {
+                  fileRows += '| Benchmark | Base (ops/sec) | PR (ops/sec) | Change |\n';
+                  fileRows += '|-----------|---------------|-------------|--------|\n';
+
+                  for (const bench of benches) {
+                    const key = `${bench.suite} > ${bench.name}`;
+                    const ops = bench.opsPerSec;
+                    const baseOps = baseMap[key];
+
+                    if (baseOps && baseOps > 0) {
+                      const change = ((ops - baseOps) / baseOps) * 100;
+                      fileChanges.push(change);
+                      allChanges.push(change);
+                      let indicator;
+                      if (change > THRESHOLD) {
+                        indicator = `🟢 +${change.toFixed(1)}%`;
+                        fileImproved++;
+                      } else if (change < -THRESHOLD) {
+                        indicator = `🔴 ${change.toFixed(1)}%`;
+                        fileRegressed++;
+                      } else {
+                        indicator = `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`;
+                        fileUnchanged++;
+                      }
+                      fileRows += `| ${bench.name} | ${fmtOps(baseOps)} | ${fmtOps(ops)} | ${indicator} |\n`;
+                    } else {
+                      fileRows += `| ${bench.name} | — | ${fmtOps(ops)} | 🆕 new |\n`;
+                      fileNew++;
+                    }
+                  }
+                } else {
+                  fileRows += '| Benchmark | ops/sec |\n';
+                  fileRows += '|-----------|--------|\n';
+                  for (const bench of benches) {
+                    fileRows += `| ${bench.name} | ${fmtOps(bench.opsPerSec)} |\n`;
+                    fileNew++;
+                  }
+                }
+
+                totalImproved += fileImproved;
+                totalRegressed += fileRegressed;
+                totalNew += fileNew;
+                totalUnchanged += fileUnchanged;
+
+                const parts = [];
+                if (fileImproved > 0) parts.push(`🟢 ${fileImproved} improved`);
+                if (fileRegressed > 0) parts.push(`🔴 ${fileRegressed} regressed`);
+                if (fileNew > 0) parts.push(`🆕 ${fileNew} new`);
+                if (fileUnchanged > 0) parts.push(`${fileUnchanged} unchanged`);
+                const fileSummary = (parts.length > 0 ? parts.join(', ') : `${benches.length} benchmarks`) + fmtAvg(fileChanges);
+
+                fileBlocks.push({ fileName, fileSummary, fileRows, hasSignificant: fileImproved > 0 || fileRegressed > 0 });
+              }
+
+              const summaryParts = [];
+              summaryParts.push(`**${totalBenchmarks}** benchmarks`);
+              if (totalImproved > 0) summaryParts.push(`🟢 ${totalImproved} improved`);
+              if (totalRegressed > 0) summaryParts.push(`🔴 ${totalRegressed} regressed`);
+              if (totalNew > 0) summaryParts.push(`🆕 ${totalNew} new`);
+              if (totalUnchanged > 0) summaryParts.push(`${totalUnchanged} unchanged`);
+              section += summaryParts.join(' · ') + fmtAvg(allChanges) + '\n\n';
+
+              for (const block of fileBlocks) {
+                const shortName = block.fileName.replace(/^benchmarks\//, '');
+                const open = block.hasSignificant ? ' open' : '';
+                section += `<details${open}>\n`;
+                section += `<summary><strong>${shortName}</strong> — ${block.fileSummary}</summary>\n\n`;
+                section += block.fileRows;
+                section += `\n</details>\n\n`;
+              }
+
+              return section;
             }
 
-            // Overall summary
-            const summaryParts = [];
-            summaryParts.push(`**${totalBenchmarks}** benchmarks`);
-            if (totalImproved > 0) summaryParts.push(`🟢 ${totalImproved} improved`);
-            if (totalRegressed > 0) summaryParts.push(`🔴 ${totalRegressed} regressed`);
-            if (totalNew > 0) summaryParts.push(`🆕 ${totalNew} new`);
-            if (totalUnchanged > 0) summaryParts.push(`${totalUnchanged} unchanged`);
-            body += summaryParts.join(' · ') + fmtAvg(allChanges) + '\n\n';
-
-            // File sections as collapsible details
-            for (const block of fileBlocks) {
-              const shortName = block.fileName.replace(/^benchmarks\//, '');
-              const open = block.hasSignificant ? ' open' : '';
-              body += `<details${open}>\n`;
-              body += `<summary><strong>${shortName}</strong> — ${block.fileSummary}</summary>\n\n`;
-              body += block.fileRows;
-              body += `\n</details>\n\n`;
-            }
-
-            body += `<sub>Measured on ubuntu-latest x64. Changes within ±${THRESHOLD}% are considered insignificant.</sub>`;
+            const interpretedSection = generateSection(
+              'benchmark-results.json',
+              'benchmark-baseline.json',
+              process.env.BASELINE_EXISTS === 'true',
+              'Interpreted'
+            );
+            const bytecodeSection = generateSection(
+              'benchmark-bytecode-results.json',
+              'benchmark-bytecode-baseline.json',
+              process.env.BYTECODE_BASELINE_EXISTS === 'true',
+              'Bytecode'
+            );
 
             const marker = '<!-- benchmark-comparison -->';
-            body = marker + '\n' + body;
+            let body = `${marker}\n## Benchmark Results\n\n${interpretedSection}${bytecodeSection}`;
+            body += `<sub>Measured on ubuntu-latest x64. Changes within ±${THRESHOLD}% are considered insignificant.</sub>`;
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,

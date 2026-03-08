@@ -175,11 +175,11 @@ When a benchmark has a `setup` or `teardown` function, a second line displays th
 
 ## CI Integration
 
-Benchmarks run as part of the CI pipeline. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
+Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode** modes. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
 
 ### PR Benchmark Comparison
 
-The PR workflow (`.github/workflows/pr.yml`) restores the cached benchmark baseline from main, runs all benchmarks with JSON output, and posts a collapsible comparison comment on the PR:
+The PR workflow (`.github/workflows/pr.yml`) restores the cached benchmark baselines (interpreted and bytecode) from main, runs all benchmarks in both modes with JSON output, and posts a collapsible comparison comment on the PR with separate **Interpreted** and **Bytecode** sections:
 
 - Results are **grouped by file**, each in a collapsible `<details>` section
 - Files with significant changes (improvements or regressions) are auto-expanded
