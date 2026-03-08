@@ -160,34 +160,19 @@ end;
 
 This is a fixed per-`try`-block cost even when no exception is thrown.
 
-**Solution:** Audit each `try` block and replace with result-code patterns where possible:
+**Solution:** Audit each `try` block and eliminate those that exist only for cleanup patterns. The goal is to reduce the total count of `try` blocks, not to replace them with equally expensive mechanisms.
 
-- **GC temp root patterns** (`AddTempRoot` + `try`/`finally` + `RemoveTempRoot`): Consider a RAII-style guard record. In FPC, a `record` with a managed interface field triggers automatic cleanup:
+- **Eliminate `TGocciaArgumentsCollection` cleanup blocks**: If item 3 is implemented (replacing `TGocciaArgumentsCollection` with open array parameters), the `try`/`finally` blocks around argument collection create/free become unnecessary — stack-allocated open arrays need no cleanup. This alone removes a significant portion of the 64 `try` blocks.
 
-  ```pascal
-  type
-    ITempRootGuard = interface end;
-    TTempRootGuard = class(TInterfacedObject, ITempRootGuard)
-    private
-      FValue: TGocciaValue;
-    public
-      constructor Create(const AValue: TGocciaValue);
-      destructor Destroy; override;
-    end;
+- **GC temp root patterns** (`AddTempRoot` + `try`/`finally` + `RemoveTempRoot`): These are the most numerous `try`/`finally` blocks in the evaluator. The fundamental issue is that values held only in local variables need GC protection during evaluation. Two FPC-specific approaches:
 
-  // Usage — cleanup is automatic when Guard goes out of scope:
-  var Guard: ITempRootGuard;
-  Guard := TTempRootGuard.Create(Iterator);
-  // ... no try/finally needed ...
-  ```
+  1. **Consolidate temp roots per evaluation frame**: Instead of individual `AddTempRoot`/`RemoveTempRoot` pairs (each requiring its own `try`/`finally`), maintain a per-call-frame temp root list that is bulk-cleared on scope exit. This replaces N `try`/`finally` blocks with one.
 
-  However, this trades `try`/`finally` for interface ref-counting overhead (`fpc_intf_assign`, `fpc_intf_decr_ref`). Benchmark both approaches.
+  2. **Extend the scope's binding map**: If a temp value is being created and immediately used (e.g., an iterator for `for...of`), bind it in the scope under an internal name. The GC already marks scope bindings — no `AddTempRoot`/`try`/`finally` needed.
 
-- **`TGocciaArgumentsCollection`** patterns: Many `try`/`finally` blocks exist solely to free `TGocciaArgumentsCollection`. Since these are interface-counted (`TInterfacedObject`), they already auto-free. Review if the `try`/`finally` blocks around them are actually needed — if the collection is stored in a local `TGocciaArgumentsCollection` variable (not an interface variable), the `try`/`finally` is necessary. Convert to interface variable to get automatic cleanup.
+- **Call stack push/pop**: `TGocciaCallStack.Push` + `try`/`finally` + `Pop` runs on every function call. Combine the call stack push/pop into the scope creation/destruction lifecycle (scope constructor pushes, destructor pops) to eliminate one `try`/`finally` per call.
 
-- **Call stack push/pop**: `TGocciaCallStack.Push` + `try`/`finally` + `Pop` in every function call. Consider combining the push/pop into the scope creation/destruction lifecycle to eliminate one `try`/`finally` per call.
-
-### 3. [HIGH] Reduce Memory Allocation Churn
+### 3. [HIGH] Eliminate Allocations on the Call Path
 
 **Impact:** **14-15%** of instructions in both modes
 
@@ -198,17 +183,29 @@ This is a fixed per-`try`-block cost even when no exception is thrown.
 
 `FillChar` alone (zeroing newly allocated objects) accounts for 2.6-4.0% of instructions.
 
+**Historical note:** Object pooling and string interning have been tried in this project and did not yield improvements. String interning benchmarked at **-4% across 172 benchmarks** — FPC's fixed-size allocator (`SysGetMem_Fixed`) is already essentially a pool, so adding a lookup layer on top only adds overhead. The right FPC-specific approach is to **eliminate allocations entirely** rather than trying to recycle them.
+
 **Solutions:**
 
-- **Pool `TGocciaArgumentsCollection`**: Since these are created and destroyed every call, maintain a free-list pool. FPC's heap allocator is fast but not free — pooling avoids `SysGetMem`/`SysFreeMem`/`FillChar` entirely for pooled instances.
+- **Replace `TGocciaArgumentsCollection` with open array parameters**: FPC's `array of TGocciaValue` open array parameters are stack-allocated by the caller — zero heap cost. The current pattern creates a heap-allocated `TGocciaValueList` inside a `TInterfacedObject` for every call, then immediately destroys it. Replace with:
 
-- **Stack-allocate small argument lists**: For 0-3 argument calls (the common case), use a fixed-size `array[0..3] of TGocciaValue` on the stack instead of heap-allocating a `TGocciaValueList`. Pass as an open array parameter.
+  ```pascal
+  // Before: heap-allocate per call
+  Args := TGocciaArgumentsCollection.Create;
+  Args.Add(Value1);
+  Args.Add(Value2);
+  FunctionValue.Call(Args, ThisValue);
+  Args.Free;
 
-- **Pre-size `OrderedMap` in scope creation**: `CreateChild` already accepts a capacity hint. Ensure hot paths (arrow function calls with known parameter count) pass the correct hint to avoid `SetLength` resizing.
+  // After: stack-allocated open array, zero heap cost
+  FunctionValue.Call([Value1, Value2], ThisValue);
+  ```
 
-- **Pool or cache scopes**: For tight loops calling the same function repeatedly, consider reusing the scope object by clearing its bindings rather than destroying and recreating it.
+  In FPC, `const AArgs: array of TGocciaValue` is passed as a pointer + length pair on the stack. No `TInterfacedObject`, no `TGocciaValueList`, no ref-counting, no `FillChar`, no `SysGetMem`/`SysFreeMem`. This eliminates 2 heap allocations + 1 interface ref-count cycle per call.
 
-- **Expand the SmallInt cache**: Currently `TGocciaNumberLiteralValue.SmallInt` caches small integers. Profile whether expanding the cache range or adding a recent-float cache reduces `RuntimeCopy` calls.
+- **Pre-size `OrderedMap` in scope creation**: `CreateChild` already accepts a capacity hint. Ensure hot paths (arrow function calls with known parameter count) pass the correct hint to avoid `SetLength` resizing during parameter binding.
+
+- **Consider tagged value representation for numbers**: Every numeric expression currently calls `RuntimeCopy`, which heap-allocates a new `TGocciaNumberLiteralValue`. In FPC, a tagged pointer or NaN-boxed value representation could encode numbers as immediate values without heap allocation. This is a larger architectural change but would eliminate the single biggest source of per-expression allocations. The Souffle VM's `TSouffleValue` already uses this approach (tagged union with inline `Float` and `Integer` kinds) — the interpreter could adopt a similar strategy.
 
 ### 4. [HIGH] Eliminate RTTI Overhead on Hot-Path Records
 
@@ -241,15 +238,15 @@ This is a fixed per-`try`-block cost even when no exception is thrown.
 
 **Impact:** **3.3%** in interpreted mode, **0.5%** in bytecode
 
-**Problem:** Each variable lookup walks the scope chain calling `OrderedMap.TryGetValue` → `FindBucket` (hash + linear probe) at each level. For closures with deep scope chains, this is proportionally expensive.
+**Problem:** Each variable lookup walks the scope chain calling `OrderedMap.TryGetValue` → `FindBucket` (hash + linear probe) at each level. For closures with deep scope chains, this is proportionally expensive. `OrderedMap.Create` itself accounts for 0.98% of interpreted instructions — a new hash table is allocated for every scope, even trivial ones with 1-2 bindings.
 
 **Solutions:**
 
-- **Use a flat array for small scopes**: For scopes with ≤8 bindings, linear search over a contiguous `array[0..7] of record Name: string; Value: TGocciaValue end` is faster than hash table lookup due to cache locality. FPC's `fpc_ansistr_compare_equal` is fast for short strings (pointer + length check before character comparison).
+- **Use a flat array for small scopes**: For scopes with ≤8 bindings, linear search over a contiguous `array[0..7] of record Name: PAnsiChar; Binding: TLexicalBinding end` is faster than hash table lookup due to cache locality. The `OrderedMap` hash table has per-entry overhead (hash computation, bucket array, collision chains) that exceeds the cost of scanning 4-8 entries sequentially. FPC's `fpc_ansistr_compare_equal` is fast for short strings — it does a pointer equality check first, then length check, before comparing characters. Most scopes in tight loops have only a few bindings (function parameters + 1-2 locals), making linear scan the better fit.
 
-- **Cache recent lookups**: Add a 2-4 entry associative cache on `TGocciaScope` (keyed by name hash) that caches the most recent lookup results. This would benefit tight loops that read the same variables repeatedly.
+- **Defer `OrderedMap` allocation**: Instead of creating the hash table in the scope constructor, start with the flat array representation and only promote to `OrderedMap` when the binding count exceeds the threshold. This avoids `OrderedMap.Create` (0.98% of interpreted instructions) for the majority of scopes.
 
-- **Avoid `Keys`/`Values`/`ToArray` on OrderedMap in hot paths**: These allocate new dynamic arrays. The `Destroy` path already iterates — ensure it doesn't allocate intermediate arrays.
+- **Avoid `Keys`/`Values`/`ToArray` on OrderedMap in hot paths**: These allocate new dynamic arrays on every call. The `Destroy` path and `MarkReferences` iteration should use direct bucket traversal without intermediate allocations.
 
 ### 6. [MEDIUM] Reduce Dynamic Array Resizing
 
@@ -265,17 +262,21 @@ This is a fixed per-`try`-block cost even when no exception is thrown.
 
 - **Avoid creating empty dynamic arrays**: Many code paths create an array and then immediately set its length. Use `SetLength` directly to the known capacity.
 
-### 7. [MEDIUM] Reduce `TList.IndexOf` in Bytecode Bridge
+### 7. [MEDIUM] Eliminate `TList.IndexOf` in Bytecode Bridge
 
 **Impact:** **1.77%** of bytecode mode
 
-**Problem:** `TList<TGocciaValue>.IndexOf` performs a linear scan. At 282M instructions (1.77%), it is being called frequently in the bytecode bridge layer — likely from GC operations (`SweepPhase` removing values) or array bridge sync.
+**Problem:** `TList<TGocciaValue>.IndexOf` performs a linear scan. At 282M instructions (1.77%), it is being called frequently in the bytecode bridge layer — likely from `TObjectList` notification callbacks during GC sweep or array bridge sync.
+
+**Root cause in FPC:** `TObjectList<T>.Notify` is called on every `Add`/`Delete` operation. When the list owns its objects (`OwnsObjects = True`), `Notify` with `cnRemoved` frees the object. But `TCustomList.DoRemove` calls `IndexOf` internally to find the element before removal. Additionally, `DeleteRange` in sweep compaction may trigger per-element `Notify` calls.
 
 **Solutions:**
 
-- **Use dictionary for reverse lookups**: If `IndexOf` is used to find values in the GC's managed values list, consider maintaining a `TDictionary<TGocciaValue, Integer>` for O(1) index lookups.
+- **Audit `TObjectList` ownership**: If `SweepPhase` manages object lifetimes explicitly (freeing dead values directly), the `TObjectList` should use `OwnsObjects = False` to avoid redundant `Notify` → `IndexOf` chains on removal. The project already uses `Create(False)` for non-owning collections — verify this is the case for GC-managed lists.
 
-- **Avoid `IndexOf` in sweep**: If `SweepPhase` uses compaction (moving live values to the front), it shouldn't need `IndexOf`. Audit whether `DeleteRange` or `Notify` callbacks trigger `IndexOf` internally in `TObjectList`.
+- **Replace `DeleteRange` with in-place compaction**: Instead of using `TObjectList.DeleteRange` (which triggers per-element notifications), compact the live values array manually by moving live pointers forward and adjusting the count. This is already the pattern in `SweepPhase` — verify that no `TObjectList` method calls are reintroducing `IndexOf` overhead underneath.
+
+- **Use `TFPList` or raw pointer arrays for GC internals**: FPC's `TFPList` (non-generic, untyped pointer list) has no `Notify` mechanism and no `IndexOf` in its removal path. For the GC's managed values list where ownership and type safety are handled manually anyway, `TFPList` avoids the generic collection overhead entirely.
 
 ### 8. [LOW] Optimize Number Comparison Checks
 
@@ -313,11 +314,11 @@ The annotated callgrind output for both modes is available in:
 |---|-------------|--------|--------|------|
 | 1 | VMT dispatch for expression/statement | 18.4% | Medium | Interpreted |
 | 2 | Reduce `try`/`except` blocks | 10-11% | High | Both |
-| 3 | Reduce allocation churn | 14-15% | Medium | Both |
+| 3 | Eliminate call-path allocations | 14-15% | Medium | Both |
 | 4 | Eliminate RTTI on `TGocciaEvaluationContext` | 6-12% | Low | Both |
 | 5 | Optimize scope chain lookup | 3.3% | Medium | Interpreted |
 | 6 | Reduce dynamic array resizing | 4-5% | Low | Both |
-| 7 | Fix `TList.IndexOf` in bridge | 1.8% | Low | Bytecode |
+| 7 | Eliminate `TList.IndexOf` in bridge | 1.8% | Low | Bytecode |
 | 8 | Fast-path number comparisons | 1.5% | Low | Interpreted |
 | 9 | Remove interface ref-counting | 0.6% | Low | Both |
 
