@@ -9,6 +9,7 @@ uses
   Generics.Collections,
 
   Goccia.AST.Node,
+  Goccia.Evaluator.Context,
   Goccia.Token,
   Goccia.Values.Primitives;
 
@@ -33,6 +34,7 @@ type
   public
     constructor Create(const AValue: TGocciaValue; const ALine, AColumn: Integer);
     destructor Destroy; override;
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Value: TGocciaValue read FValue;
   end;
 
@@ -41,6 +43,7 @@ type
     FValue: string;
   public
     constructor Create(const AValue: string; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Value: string read FValue;
   end;
 
@@ -49,6 +52,7 @@ type
     FParts: TObjectList<TGocciaExpression>; // Mix of string literals and expressions
   public
     constructor Create(const AParts: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Parts: TObjectList<TGocciaExpression> read FParts;
   end;
 
@@ -57,6 +61,7 @@ type
     FName: string;
   public
     constructor Create(const AName: string; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
   end;
 
@@ -68,6 +73,7 @@ type
   public
     constructor Create(const ALeft: TGocciaExpression; const AOperator: TGocciaTokenType;
       const ARight: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Left: TGocciaExpression read FLeft;
     property Operator: TGocciaTokenType read FOperator;
     property Right: TGocciaExpression read FRight;
@@ -80,6 +86,7 @@ type
   public
     constructor Create(const AOperator: TGocciaTokenType; const AOperand: TGocciaExpression;
       const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Operator: TGocciaTokenType read FOperator;
     property Operand: TGocciaExpression read FOperand;
   end;
@@ -90,6 +97,7 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AName: string; const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
     property Value: TGocciaExpression read FValue;
   end;
@@ -101,6 +109,7 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AObject: TGocciaExpression; const APropertyName: string; const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PropertyName: string read FPropertyName;
     property Value: TGocciaExpression read FValue;
@@ -113,6 +122,7 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AObject: TGocciaExpression; const APropertyExpression: TGocciaExpression; const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PropertyExpression: TGocciaExpression read FPropertyExpression;
     property Value: TGocciaExpression read FValue;
@@ -125,6 +135,7 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AName: string; const AOperator: TGocciaTokenType; const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
     property Operator: TGocciaTokenType read FOperator;
     property Value: TGocciaExpression read FValue;
@@ -138,6 +149,7 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AObject: TGocciaExpression; const APropertyName: string; const AOperator: TGocciaTokenType; const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PropertyName: string read FPropertyName;
     property Operator: TGocciaTokenType read FOperator;
@@ -152,6 +164,7 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AObject: TGocciaExpression; const APropertyExpression: TGocciaExpression; const AOperator: TGocciaTokenType; const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PropertyExpression: TGocciaExpression read FPropertyExpression;
     property Operator: TGocciaTokenType read FOperator;
@@ -165,6 +178,7 @@ type
     FIsPrefix: Boolean;
   public
     constructor Create(const AOperand: TGocciaExpression; const AOperator: TGocciaTokenType; const AIsPrefix: Boolean; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Operand: TGocciaExpression read FOperand;
     property Operator: TGocciaTokenType read FOperator;
     property IsPrefix: Boolean read FIsPrefix;
@@ -177,6 +191,7 @@ type
   public
     constructor Create(const ACallee: TGocciaExpression;
       const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Callee: TGocciaExpression read FCallee;
     property Arguments: TObjectList<TGocciaExpression> read FArguments;
   end;
@@ -196,6 +211,7 @@ type
     property ObjectExpr: TGocciaExpression read FObject;
     property PropertyName: string read FProperty;
     property PropertyExpression: TGocciaExpression read FPropertyExpression;
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Computed: Boolean read FComputed;
     property Optional: Boolean read FOptional;
   end;
@@ -206,6 +222,7 @@ type
   public
     constructor Create(const AElements: TObjectList<TGocciaExpression>;
       const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Elements: TObjectList<TGocciaExpression> read FElements;
   end;
 
@@ -269,6 +286,7 @@ type
     property ComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>> read FComputedPropertiesInOrder;
     property Getters: TDictionary<string, TGocciaGetterExpression> read FGetters;
     property Setters: TDictionary<string, TGocciaSetterExpression> read FSetters;
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property PropertySourceOrder: TArray<TGocciaPropertySourceOrder> read FPropertySourceOrder;
     function GetPropertyNamesInOrder: TStringList;
   end;
@@ -284,6 +302,7 @@ type
       const ALine, AColumn: Integer);
     property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ReturnType: string read FReturnType write FReturnType;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
   end;
@@ -297,6 +316,7 @@ type
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode;
       const ALine, AColumn: Integer);
     property Parameters: TGocciaParameterArray read FParameters;
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Body: TGocciaASTNode read FBody;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
   end;
@@ -306,6 +326,7 @@ type
     FOperand: TGocciaExpression;
   public
     constructor Create(const AOperand: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Operand: TGocciaExpression read FOperand;
   end;
 
@@ -317,6 +338,7 @@ type
   public
     constructor Create(const ACondition, AConsequent, AAlternate: TGocciaExpression;
       const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Condition: TGocciaExpression read FCondition;
     property Consequent: TGocciaExpression read FConsequent;
     property Alternate: TGocciaExpression read FAlternate;
@@ -329,17 +351,25 @@ type
   public
     constructor Create(const ACallee: TGocciaExpression;
       const AArguments: TObjectList<TGocciaExpression>; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Callee: TGocciaExpression read FCallee;
     property Arguments: TObjectList<TGocciaExpression> read FArguments;
   end;
 
-  TGocciaThisExpression = class(TGocciaExpression);
+  TGocciaThisExpression = class(TGocciaExpression)
+  public
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+  end;
 
-  TGocciaSuperExpression = class(TGocciaExpression);
+  TGocciaSuperExpression = class(TGocciaExpression)
+  public
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+  end;
 
   TGocciaHoleExpression = class(TGocciaExpression)
   public
     constructor Create(const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
   end;
 
   TGocciaSpreadExpression = class(TGocciaExpression)
@@ -347,6 +377,7 @@ type
     FArgument: TGocciaExpression;
   public
     constructor Create(const AArgument: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Argument: TGocciaExpression read FArgument;
   end;
 
@@ -356,6 +387,7 @@ type
     FBody: TGocciaASTNode;
   public
     constructor Create(const ABody: TGocciaASTNode; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Body: TGocciaASTNode read FBody;
   end;
 
@@ -366,12 +398,15 @@ type
     FBody: TGocciaASTNode;
   public
     constructor Create(const AParameter: string; const ABody: TGocciaASTNode; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Parameter: string read FParameter;
     property Body: TGocciaASTNode read FBody;
   end;
 
   // Destructuring pattern base class - complete definition
   TGocciaDestructuringPattern = class(TGocciaExpression)
+  public
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
   end;
 
   // Property in object destructuring: key: pattern or key (shorthand)
@@ -395,6 +430,7 @@ type
     FElements: TObjectList<TGocciaDestructuringPattern>;
   public
     constructor Create(const AElements: TObjectList<TGocciaDestructuringPattern>; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Elements: TObjectList<TGocciaDestructuringPattern> read FElements;
   end;
 
@@ -404,6 +440,7 @@ type
     FProperties: TObjectList<TGocciaDestructuringProperty>;
   public
     constructor Create(const AProperties: TObjectList<TGocciaDestructuringProperty>; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Properties: TObjectList<TGocciaDestructuringProperty> read FProperties;
   end;
 
@@ -413,6 +450,7 @@ type
     FArgument: TGocciaDestructuringPattern;
   public
     constructor Create(const AArgument: TGocciaDestructuringPattern; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Argument: TGocciaDestructuringPattern read FArgument;
   end;
 
@@ -423,6 +461,7 @@ type
     FRight: TGocciaExpression;
   public
     constructor Create(const ALeft: TGocciaDestructuringPattern; const ARight: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Left: TGocciaDestructuringPattern read FLeft;
     property Right: TGocciaExpression read FRight;
   end;
@@ -433,6 +472,7 @@ type
     FName: string;
   public
     constructor Create(const AName: string; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
   end;
 
@@ -443,6 +483,7 @@ type
     FRight: TGocciaExpression;
   public
     constructor Create(const ALeft: TGocciaDestructuringPattern; const ARight: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Left: TGocciaDestructuringPattern read FLeft;
     property Right: TGocciaExpression read FRight;
   end;
@@ -453,6 +494,7 @@ type
     FPrivateName: string;
   public
     constructor Create(const AObject: TGocciaExpression; const APrivateName: string; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PrivateName: string read FPrivateName;
   end;
@@ -464,6 +506,7 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AObject: TGocciaExpression; const APrivateName: string; const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PrivateName: string read FPrivateName;
     property Value: TGocciaExpression read FValue;
@@ -477,6 +520,7 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AObject: TGocciaExpression; const APrivateName: string; const AOperator: TGocciaTokenType; const AValue: TGocciaExpression; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PrivateName: string read FPrivateName;
     property Operator: TGocciaTokenType read FOperator;
