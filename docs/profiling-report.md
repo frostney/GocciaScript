@@ -86,48 +86,68 @@ The bytecode VM executes **34% fewer instructions** than the interpreter in prod
 
 ## Actionable Optimizations
 
-### 1. [CRITICAL] Replace `is` Type-Check Chain with Tag Dispatch
+### 1. [CRITICAL] Replace `is` Type-Check Chain with VMT Dispatch
 
 **Impact:** Up to **18.4%** of interpreted mode, **4.8%** of bytecode mode (compile phase)
 
-**Problem:** `EvaluateExpression` dispatches on expression type using a chain of ~31 `if AExpression is TGocciaXxx then` checks. In FPC, each `is` check calls `TObject.InheritsFrom`, which walks the class hierarchy linearly. With 31 expression types, the average expression evaluates ~15 `InheritsFrom` calls before matching. `EvaluateStatement` adds another ~19 checks.
+**Problem:** `EvaluateExpression` dispatches on expression type using a chain of ~31 `if AExpression is TGocciaXxx then` checks. In FPC, each `is` check calls `TObject.InheritsFrom`, which walks the `ClassParent` pointer chain in a loop. With 31 expression types, the average expression evaluates ~15 `InheritsFrom` calls before matching. `EvaluateStatement` adds another ~19 checks.
 
-**Root cause in FPC:** `TObject.InheritsFrom` does not use a hash or level-indexed dispatch — it walks the `ClassParent` chain in a loop. For a class hierarchy 3-4 levels deep with 31 branches, this is expensive.
+**Root cause in FPC:** `TObject.InheritsFrom` is O(depth) — it walks the class hierarchy linearly. For a flat hierarchy (all expression types inherit directly from `TGocciaExpression`), this is O(1) per check but still O(n) total for n branches. The cumulative cost of 50 `is` checks across two dispatch functions is 18.4% of all interpreted instructions.
 
-**Solution:** Add a `Kind: TGocciaExpressionKind` enum field to `TGocciaExpression` (set once in each subclass constructor) and replace the `if/is` chain with a `case Kind of` statement. FPC compiles `case` on contiguous ordinals to a jump table — O(1) dispatch vs O(n) `is` chain. The same pattern applies to `TGocciaStatement`.
-
-```pascal
-type
-  TGocciaExpressionKind = (
-    ekLiteral, ekIdentifier, ekBinary, ekUnary, ekCall,
-    ekMember, ekArray, ekObject, ekArrowFunction, ekMethod,
-    ekConditional, ekAssignment, ekSpread, ekTemplate,
-    ekNew, ekAwait, ekYield, ekTaggedTemplate,
-    ekComputedMember, ekOptionalChain, ekOptionalCall,
-    ekNullCoalescing, ekClassExpression, ekDestructuring,
-    ekSequence, ekComma, ekAssignmentPattern, ekUpdate,
-    ekIn, ekInstanceOf, ekEmpty
-  );
-```
+**Solution:** Add virtual `Evaluate` / `EvaluateStatement` methods to the AST node hierarchy and dispatch through the VMT. In FPC, a virtual method call is a single indexed pointer dereference through the vtable — O(1) regardless of hierarchy depth or number of subclasses. This is the same pattern already used throughout the value hierarchy (`TGocciaValue.GetProperty`, `IsPrimitive`, `IsCallable`, `BindThis`, `MarkReferences`, `RuntimeCopy`, etc.).
 
 ```pascal
-// Before (O(n) dispatch, 18.4% overhead):
-if AExpression is TGocciaLiteralExpression then
-  // ...
-else if AExpression is TGocciaIdentifierExpression then
-  // ...
-else if AExpression is TGocciaBinaryExpression then
-  // ...
+// Goccia.AST.Node.pas
+TGocciaExpression = class(TGocciaASTNode)
+  function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; virtual; abstract;
+end;
 
-// After (O(1) dispatch via jump table):
-case AExpression.Kind of
-  ekLiteral: // ...
-  ekIdentifier: // ...
-  ekBinary: // ...
+TGocciaStatement = class(TGocciaASTNode)
+  function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; virtual; abstract;
 end;
 ```
 
-**Note:** An alternative is adding a virtual `Evaluate(AContext)` method to each expression/statement class, which is also O(1) via vtable. However, this conflicts with the evaluator purity design (Critical Rule #1) since it would move evaluation logic into the AST nodes. The `Kind` enum approach preserves the current architecture.
+```pascal
+// Each expression subclass overrides:
+TGocciaLiteralExpression = class(TGocciaExpression)
+  function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+end;
+
+TGocciaBinaryExpression = class(TGocciaExpression)
+  function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+end;
+```
+
+```pascal
+// Before (O(n) dispatch chain, 18.4% overhead):
+function EvaluateExpression(const AExpression: TGocciaExpression;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  if AExpression is TGocciaLiteralExpression then
+    // ...
+  else if AExpression is TGocciaIdentifierExpression then
+    // ...
+  else if AExpression is TGocciaBinaryExpression then
+    // ... (~31 branches)
+end;
+
+// After (O(1) VMT dispatch):
+function EvaluateExpression(const AExpression: TGocciaExpression;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := AExpression.Evaluate(AContext);
+end;
+```
+
+**Evaluator purity:** This does not violate Critical Rule #1. Evaluator purity means evaluation functions are deterministic with no hidden mutable state — the same expression + context always produces the same result. Moving the dispatch target into the AST class changes *where* the code lives, not *how* it behaves. The `AContext` record is still the sole carrier of evaluation state. The value hierarchy already follows this exact pattern: `TGocciaValue.GetProperty`, `ToStringLiteral`, `ToBooleanLiteral` are all virtual methods on value objects that the evaluator calls directly — evaluation logic that lives on the class hierarchy, dispatched via VMT. The AST hierarchy should follow the same design.
+
+**Why VMT, not an enum tag:** A `Kind` enum field + `case` statement would also achieve O(1) dispatch via a jump table, but introduces a parallel type system that must be kept in sync with the class hierarchy. The VMT approach:
+- Preserves the existing class hierarchy — no new enum type, no constructor changes
+- Is enforced at compile time — forgetting to implement `Evaluate` on a new expression subclass is a compiler error (`abstract method not overridden`), whereas a missing `case` branch is a silent runtime bug
+- Is idiomatic FPC — the codebase already uses VMT dispatch on `TGocciaValue` for the same purpose
+- Has the same O(1) cost — one pointer dereference through the vtable
+
+**Implementation note:** The evaluation logic currently in `EvaluateExpression`'s `if`/`is` branches should move into each subclass's `Evaluate` override. Helper functions like `EvaluateBinary`, `EvaluateCall`, `EvaluateArrowFunction` etc. that already exist as standalone functions in `Goccia.Evaluator.pas` can remain as-is — each subclass's `Evaluate` simply calls the corresponding helper. This keeps the refactor incremental: move the dispatch, not the implementation.
 
 ### 2. [CRITICAL] Reduce `try`/`except` Blocks in Evaluator
 
@@ -291,7 +311,7 @@ The annotated callgrind output for both modes is available in:
 
 | # | Optimization | Impact | Effort | Mode |
 |---|-------------|--------|--------|------|
-| 1 | Tag dispatch for expression/statement | 18.4% | Medium | Interpreted |
+| 1 | VMT dispatch for expression/statement | 18.4% | Medium | Interpreted |
 | 2 | Reduce `try`/`except` blocks | 10-11% | High | Both |
 | 3 | Reduce allocation churn | 14-15% | Medium | Both |
 | 4 | Eliminate RTTI on `TGocciaEvaluationContext` | 6-12% | Low | Both |
@@ -301,4 +321,4 @@ The annotated callgrind output for both modes is available in:
 | 8 | Fast-path number comparisons | 1.5% | Low | Interpreted |
 | 9 | Remove interface ref-counting | 0.6% | Low | Both |
 
-**Recommended order:** Items 4, 1, 6, 3, 2 — starting with the lowest-effort highest-impact changes. Item 4 (`TGocciaEvaluationContext` RTTI removal) is a single-line change with 6-12% impact. Item 1 (tag dispatch) is a structural change but with the highest single-item impact at 18.4%.
+**Recommended order:** Items 4, 1, 6, 3, 2 — starting with the lowest-effort highest-impact changes. Item 4 (`TGocciaEvaluationContext` RTTI removal) is a single-line change with 6-12% impact. Item 1 (VMT dispatch) is a structural refactor but with the highest single-item impact at 18.4%, and the pattern is already established in the value hierarchy.
