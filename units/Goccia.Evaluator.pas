@@ -1883,9 +1883,9 @@ begin
 
       if not Assigned(CaseClause.Test) then
       begin
-        // Remember default case index for later
         DefaultIndex := I;
-        Continue;
+        if not Matched then
+          Continue;
       end;
 
       if not Matched then
