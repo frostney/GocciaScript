@@ -221,13 +221,18 @@ begin
     Exit;
   end;
 
-  // Block body: check control flow records instead of catching exceptions
   Context.Scope := ACallScope;
+  if Assigned(Context.OnError) and not Assigned(ACallScope.OnError) then
+    ACallScope.OnError := Context.OnError;
+
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   for I := 0 to FBodyStatements.Count - 1 do
   begin
-    CF := Evaluate(FBodyStatements[I], Context);
+    if FBodyStatements[I] is TGocciaExpression then
+      CF := TGocciaControlFlow.Normal(EvaluateExpression(TGocciaExpression(FBodyStatements[I]), Context))
+    else
+      CF := EvaluateStatement(TGocciaStatement(FBodyStatements[I]), Context);
     if CF.Kind = cfkReturn then
     begin
       if CF.Value = nil then

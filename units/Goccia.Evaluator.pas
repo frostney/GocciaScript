@@ -150,10 +150,16 @@ function EvaluateStatements(const ANodes: TObjectList<TGocciaASTNode>; const ACo
 var
   I: Integer;
 begin
+  if Assigned(AContext.OnError) and not Assigned(AContext.Scope.OnError) then
+    AContext.Scope.OnError := AContext.OnError;
+
   Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
   for I := 0 to ANodes.Count - 1 do
   begin
-    Result := Evaluate(ANodes[I], AContext);
+    if ANodes[I] is TGocciaExpression then
+      Result := TGocciaControlFlow.Normal(EvaluateExpression(TGocciaExpression(ANodes[I]), AContext))
+    else
+      Result := EvaluateStatement(TGocciaStatement(ANodes[I]), AContext);
     if Result.Kind <> cfkNormal then Exit;
   end;
 end;
@@ -1419,7 +1425,7 @@ begin
       else
         IterScope.DefineLexicalBinding(AForOfStatement.BindingName, CurrentValue, DeclarationType);
 
-      CF := Evaluate(AForOfStatement.Body, IterContext);
+      CF := EvaluateStatement(AForOfStatement.Body, IterContext);
       if CF.Kind = cfkBreak then Break;
       if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
 
@@ -1500,7 +1506,7 @@ begin
           else
             IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
 
-          CF := Evaluate(AForAwaitOfStatement.Body, IterContext);
+          CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
           if CF.Kind = cfkBreak then Break;
           if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
         end;
@@ -1536,7 +1542,7 @@ begin
         else
           IterScope.DefineLexicalBinding(AForAwaitOfStatement.BindingName, CurrentValue, DeclarationType);
 
-        CF := Evaluate(AForAwaitOfStatement.Body, IterContext);
+        CF := EvaluateStatement(AForAwaitOfStatement.Body, IterContext);
         if CF.Kind = cfkBreak then Break;
         if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
 
@@ -1907,7 +1913,7 @@ begin
     begin
       for J := 0 to CaseClause.Consequent.Count - 1 do
       begin
-        CF := Evaluate(CaseClause.Consequent[J], AContext);
+        CF := EvaluateStatement(CaseClause.Consequent[J], AContext);
         if CF.Kind = cfkBreak then begin Done := True; Break; end;
         if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
         Result := CF;
@@ -1923,7 +1929,7 @@ begin
       CaseClause := ASwitchStatement.Cases[I];
       for J := 0 to CaseClause.Consequent.Count - 1 do
       begin
-        CF := Evaluate(CaseClause.Consequent[J], AContext);
+        CF := EvaluateStatement(CaseClause.Consequent[J], AContext);
         if CF.Kind = cfkBreak then begin Done := True; Break; end;
         if CF.Kind = cfkReturn then begin Result := CF; Exit; end;
         Result := CF;
