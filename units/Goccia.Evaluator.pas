@@ -13,6 +13,7 @@ uses
   Goccia.AST.Statements,
   Goccia.ControlFlow,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.Evaluator.Context,
   Goccia.Modules,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -22,13 +23,6 @@ uses
 
 type
   PGocciaValue = ^TGocciaValue;
-
-  TGocciaEvaluationContext = record
-    Scope: TGocciaScope;
-    OnError: TGocciaThrowErrorCallback;
-    LoadModule: TLoadModuleCallback;
-    CurrentFilePath: string;
-  end;
 
 function Evaluate(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateExpression(const AExpression: TGocciaExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
