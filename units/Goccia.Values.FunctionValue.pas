@@ -201,10 +201,13 @@ begin
     end;
   end;
 
+  Context.Scope := ACallScope;
+  if Assigned(Context.OnError) and not Assigned(ACallScope.OnError) then
+    ACallScope.OnError := Context.OnError;
+
   // Expression-body fast path: expression bodies cannot contain return/break
   if FIsExpressionBody and (FBodyStatements.Count = 1) then
   begin
-    Context.Scope := ACallScope;
     Result := EvaluateExpression(TGocciaExpression(FBodyStatements[0]), Context);
     Exit;
   end;
@@ -213,17 +216,12 @@ begin
   // expression directly, bypassing the statement loop
   if (FBodyStatements.Count = 1) and (FBodyStatements[0] is TGocciaReturnStatement) then
   begin
-    Context.Scope := ACallScope;
     if TGocciaReturnStatement(FBodyStatements[0]).Value <> nil then
       Result := EvaluateExpression(TGocciaExpression(TGocciaReturnStatement(FBodyStatements[0]).Value), Context)
     else
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
-
-  Context.Scope := ACallScope;
-  if Assigned(Context.OnError) and not Assigned(ACallScope.OnError) then
-    ACallScope.OnError := Context.OnError;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
