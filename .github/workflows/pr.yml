@@ -161,6 +161,10 @@ jobs:
               if (change < -THRESHOLD) return `🔴 ${change.toFixed(1)}%`;
               return `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`;
             };
+            const fmtCell = (baseOps, currentOps) => {
+              if (baseOps && baseOps > 0) return `${fmtOps(baseOps)} → ${fmtOps(currentOps)}`;
+              return fmtOps(currentOps);
+            };
             const classify = (change) => change > THRESHOLD ? 'improved' : change < -THRESHOLD ? 'regressed' : 'unchanged';
 
             const interpData = JSON.parse(fs.readFileSync('benchmark-interpreted.json', 'utf8'));
@@ -250,7 +254,7 @@ jobs:
                     bDelta = '—';
                   }
 
-                  fileRows += `| ${bench.name} | ${fmtOps(iOps)} | ${iDelta} | ${bOps != null ? fmtOps(bOps) : '—'} | ${bDelta} |\n`;
+                  fileRows += `| ${bench.name} | ${fmtCell(iBaseOps, iOps)} | ${iDelta} | ${bOps != null ? fmtCell(bBaseOps, bOps) : '—'} | ${bDelta} |\n`;
                 } else {
                   fileRows += `| ${bench.name} | ${fmtOps(iOps)} | ${bOps != null ? fmtOps(bOps) : '—'} |\n`;
                 }
