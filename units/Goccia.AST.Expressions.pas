@@ -1123,7 +1123,8 @@ end;
 
 function TGocciaIncrementExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
-  Obj, OldValue, NewValue: TGocciaValue;
+  Obj, OldValue, NewValue, PropertyKeyValue: TGocciaValue;
+  MemberExpr: TGocciaMemberExpression;
   PropName: string;
 begin
   if Operand is TGocciaIdentifierExpression then
@@ -1139,8 +1140,34 @@ begin
   end
   else if Operand is TGocciaMemberExpression then
   begin
-    Obj := TGocciaMemberExpression(Operand).ObjectExpr.Evaluate(AContext);
-    PropName := TGocciaMemberExpression(Operand).PropertyName;
+    MemberExpr := TGocciaMemberExpression(Operand);
+    Obj := MemberExpr.ObjectExpr.Evaluate(AContext);
+    if MemberExpr.Computed then
+    begin
+      PropertyKeyValue := MemberExpr.PropertyExpression.Evaluate(AContext);
+      if (PropertyKeyValue is TGocciaSymbolValue) and ((Obj is TGocciaClassValue) or (Obj is TGocciaObjectValue)) then
+      begin
+        if Obj is TGocciaClassValue then
+          OldValue := TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue))
+        else
+          OldValue := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue));
+        if OldValue = nil then
+          OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
+        if Obj is TGocciaClassValue then
+          TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyKeyValue), NewValue)
+        else
+          TGocciaObjectValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyKeyValue), NewValue);
+        if IsPrefix then
+          Result := NewValue
+        else
+          Result := OldValue;
+        Exit;
+      end;
+      PropName := PropertyKeyValue.ToStringLiteral.Value;
+    end
+    else
+      PropName := MemberExpr.PropertyName;
     OldValue := Obj.GetProperty(PropName);
     if OldValue = nil then
     begin
@@ -1149,7 +1176,7 @@ begin
       Exit;
     end;
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-    DefinePropertyOnValue(Obj, PropName, NewValue);
+    AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column);
     if IsPrefix then
       Result := NewValue
     else

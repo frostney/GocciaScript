@@ -1939,6 +1939,63 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+procedure CompileIncrementMember(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaIncrementExpression; const AMember: TGocciaMemberExpression;
+  const ADest: UInt8; const AOp: TSouffleOpCode);
+var
+  ObjReg, CurReg, RegOne: UInt8;
+  PropIdx: UInt16;
+begin
+  ObjReg := ACtx.Scope.AllocateRegister;
+  CurReg := ACtx.Scope.AllocateRegister;
+  RegOne := ACtx.Scope.AllocateRegister;
+
+  ACtx.CompileExpression(AMember.ObjectExpr, ObjReg);
+  PropIdx := ACtx.Template.AddConstantString(AMember.PropertyName);
+  if PropIdx > High(UInt8) then
+    raise Exception.Create('Constant pool overflow: property name index exceeds 255');
+  EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, CurReg, ObjReg, UInt8(PropIdx)));
+  EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
+  if not AExpr.IsPrefix then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
+  EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, RegOne));
+  EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ObjReg, UInt8(PropIdx), CurReg));
+  if AExpr.IsPrefix then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
+
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+end;
+
+procedure CompileIncrementComputedMember(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaIncrementExpression; const AMember: TGocciaMemberExpression;
+  const ADest: UInt8; const AOp: TSouffleOpCode);
+var
+  ObjReg, KeyReg, CurReg, RegOne: UInt8;
+begin
+  ObjReg := ACtx.Scope.AllocateRegister;
+  KeyReg := ACtx.Scope.AllocateRegister;
+  CurReg := ACtx.Scope.AllocateRegister;
+  RegOne := ACtx.Scope.AllocateRegister;
+
+  ACtx.CompileExpression(AMember.ObjectExpr, ObjReg);
+  ACtx.CompileExpression(AMember.PropertyExpression, KeyReg);
+  EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, CurReg, ObjReg, KeyReg));
+  EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
+  if not AExpr.IsPrefix then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
+  EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, RegOne));
+  EmitInstruction(ACtx, EncodeABC(OP_ARRAY_SET, ObjReg, KeyReg, CurReg));
+  if AExpr.IsPrefix then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
+
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+end;
+
 procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const ADest: UInt8);
 var
@@ -1947,11 +2004,22 @@ var
   MsgIdx: UInt16;
   Op: TSouffleOpCode;
   Ident: TGocciaIdentifierExpression;
+  MemberExpr: TGocciaMemberExpression;
 begin
   if AExpr.Operator = gttIncrement then
     Op := OP_RT_ADD
   else
     Op := OP_RT_SUB;
+
+  if AExpr.Operand is TGocciaMemberExpression then
+  begin
+    MemberExpr := TGocciaMemberExpression(AExpr.Operand);
+    if MemberExpr.Computed then
+      CompileIncrementComputedMember(ACtx, AExpr, MemberExpr, ADest, Op)
+    else
+      CompileIncrementMember(ACtx, AExpr, MemberExpr, ADest, Op);
+    Exit;
+  end;
 
   if not (AExpr.Operand is TGocciaIdentifierExpression) then
   begin
