@@ -175,15 +175,16 @@ When a benchmark has a `setup` or `teardown` function, a second line displays th
 
 ## CI Integration
 
-Benchmarks run as part of the CI pipeline. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
+Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode** modes. Interpreted and bytecode benchmarks run in **parallel** via a matrix strategy. CI uses reduced calibration settings (`GOCCIA_BENCH_CALIBRATION_MS=50`, `GOCCIA_BENCH_ROUNDS=3`) for faster runs. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
 
 ### PR Benchmark Comparison
 
-The PR workflow (`.github/workflows/pr.yml`) restores the cached benchmark baseline from main, runs all benchmarks with JSON output, and posts a collapsible comparison comment on the PR:
+The PR workflow (`.github/workflows/pr.yml`) runs interpreted and bytecode benchmarks in **parallel** on separate runners, restores the cached baselines from main, and posts a collapsible comparison comment on the PR. Each benchmark file gets a **unified table** with both modes side by side:
 
+- Each table row shows `| Benchmark | Interpreted | Δ | Bytecode | Δ |` — interpreted and bytecode ops/sec with their change from baseline in one row
 - Results are **grouped by file**, each in a collapsible `<details>` section
 - Files with significant changes (improvements or regressions) are auto-expanded
-- Each file summary shows the count of improved/regressed/unchanged benchmarks and an **average percentage change**
-- The **overall PR summary** at the top shows totals across all files with an average percentage
+- Each file summary shows per-mode counts (e.g., `Interp: 🟢 1, 7 unch. · Bytecode: 🟢 2, 6 unch.`)
+- The **overall PR summary** shows per-mode totals on separate lines with average percentages
 - Changes within **±7%** are considered insignificant (shown without color indicators) — this threshold accounts for CI environment noise during active development
 - 🟢 marks improvements > 7%, 🔴 marks regressions > 7%, 🆕 marks new benchmarks with no baseline

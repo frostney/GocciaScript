@@ -121,11 +121,20 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         arch: [x64]
+        mode: [interpreted, bytecode]
         include:
           - os: ubuntu-latest
             arch: arm64
+            mode: interpreted
+          - os: ubuntu-latest
+            arch: arm64
+            mode: bytecode
           - os: macos-latest
             arch: arm64
+            mode: interpreted
+          - os: macos-latest
+            arch: arm64
+            mode: bytecode
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -147,18 +156,24 @@ jobs:
 
       - name: Run benchmarks
         if: "!(github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64')"
-        run: ./build/BenchmarkRunner benchmarks --no-progress
+        env:
+          GOCCIA_BENCH_CALIBRATION_MS: 50
+          GOCCIA_BENCH_ROUNDS: 3
+        run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress
 
       - name: Run benchmarks and save baseline
         if: github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
-        run: ./build/BenchmarkRunner benchmarks --no-progress --format=console --format=json --output=benchmark-results.json
+        env:
+          GOCCIA_BENCH_CALIBRATION_MS: 50
+          GOCCIA_BENCH_ROUNDS: 3
+        run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=console --format=json --output=benchmark-${{ matrix.mode }}-results.json
 
       - name: Cache benchmark baseline
         if: github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
         uses: actions/cache/save@v4
         with:
-          path: benchmark-results.json
-          key: benchmark-baseline-${{ github.sha }}
+          path: benchmark-${{ matrix.mode }}-results.json
+          key: benchmark-${{ matrix.mode }}-baseline-${{ github.sha }}
 
   examples:
     needs: build
