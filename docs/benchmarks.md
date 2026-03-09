@@ -179,11 +179,12 @@ Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode
 
 ### PR Benchmark Comparison
 
-The PR workflow (`.github/workflows/pr.yml`) runs interpreted and bytecode benchmarks in **parallel** on separate runners, restores the cached baselines from main, and posts a collapsible comparison comment on the PR with separate **Interpreted** and **Bytecode** sections:
+The PR workflow (`.github/workflows/pr.yml`) runs interpreted and bytecode benchmarks in **parallel** on separate runners, restores the cached baselines from main, and posts a collapsible comparison comment on the PR. Each benchmark file gets a **unified table** with both modes side by side:
 
+- Each table row shows `| Benchmark | Interpreted | Δ | Bytecode | Δ |` — interpreted and bytecode ops/sec with their change from baseline in one row
 - Results are **grouped by file**, each in a collapsible `<details>` section
 - Files with significant changes (improvements or regressions) are auto-expanded
-- Each file summary shows the count of improved/regressed/unchanged benchmarks and an **average percentage change**
-- The **overall PR summary** at the top shows totals across all files with an average percentage
+- Each file summary shows per-mode counts (e.g., `Interp: 🟢 1, 7 unch. · Bytecode: 🟢 2, 6 unch.`)
+- The **overall PR summary** shows per-mode totals on separate lines with average percentages
 - Changes within **±7%** are considered insignificant (shown without color indicators) — this threshold accounts for CI environment noise during active development
 - 🟢 marks improvements > 7%, 🔴 marks regressions > 7%, 🆕 marks new benchmarks with no baseline
