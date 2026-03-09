@@ -94,7 +94,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Lexer | `Goccia.Lexer.pas` | Source → tokens |
 | Parser | `Goccia.Parser.pas` | Tokens → AST (including `TGocciaForOfStatement`, `TGocciaForAwaitOfStatement` in `Goccia.AST.Statements.pas`) |
 | Interpreter | `Goccia.Interpreter.pas` | AST execution, module loading, scope ownership |
-| Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules: Arithmetic, Bitwise, Comparison, Assignment, TypeOperations). Statement-level functions (`Evaluate`, `EvaluateStatement`, `EvaluateStatements`, `EvaluateBlock`, `EvaluateIf`, `EvaluateTry`, `EvaluateSwitch`, `EvaluateForOf`, `EvaluateForAwaitOf`) return `TGocciaControlFlow` records |
+| Evaluator Context | `Goccia.Evaluator.Context.pas` | `TGocciaEvaluationContext` record — evaluation state passed through the AST and evaluator |
+| Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules: Arithmetic, Bitwise, Comparison, Assignment, TypeOperations). `EvaluateExpression` and `EvaluateStatement` delegate to VMT dispatch (`TGocciaExpression.Evaluate` / `TGocciaStatement.Execute`). Helper functions (`EvaluateBinary`, `EvaluateCall`, `EvaluateBlock`, `EvaluateIf`, `EvaluateTry`, `EvaluateSwitch`, `EvaluateForOf`, `EvaluateForAwaitOf`) remain as standalone functions called by the AST overrides. Statement-level functions return `TGocciaControlFlow` records |
 | Control Flow | `Goccia.ControlFlow.pas` | `TGocciaControlFlow` result record (`cfkNormal`, `cfkReturn`, `cfkBreak`) for exception-free propagation of `return` and `break` signals through the interpreter |
 | Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ, VMT-based chain-walking |
 | Reserved Keywords | `Goccia.Keywords.Reserved.pas` | Reserved JavaScript keyword string constants (`break`, `class`, `const`, `this`, etc.) |
@@ -236,9 +237,11 @@ Do **not** commit directly to `main`. All changes go through branches.
 
 These rules **must** be followed when modifying the codebase:
 
-### 1. Evaluator Purity
+### 1. Evaluator Purity and VMT Dispatch
 
-Functions in `Goccia.Evaluator.pas` (and its sub-modules) are **pure functions**. They cannot have side effects and must return the same output for the same input. State changes happen through the scope and value objects passed via `TGocciaEvaluationContext`, never through evaluator-internal state.
+Evaluation is **pure** — same expression + context always produces the same result, with no hidden mutable state. State changes happen through the scope and value objects passed via `TGocciaEvaluationContext`, never through evaluator-internal state.
+
+**Dispatch mechanism:** Expression and statement evaluation uses VMT dispatch. `TGocciaExpression` declares `function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; virtual; abstract;` and `TGocciaStatement` declares `function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; virtual; abstract;`. Each AST subclass overrides the appropriate method. The evaluator's `EvaluateExpression` and `EvaluateStatement` are thin wrappers that call these virtual methods. This replaces the previous `if AExpression is TGocciaXxx then` dispatch chain, eliminating `TObject.InheritsFrom` overhead (18.4% of interpreted instructions in callgrind profiling). Helper functions (`EvaluateBinary`, `EvaluateCall`, `EvaluateBlock`, etc.) remain as standalone functions in `Goccia.Evaluator.pas`, called by the AST overrides via the implementation-section `uses Goccia.Evaluator` pattern (legal circular reference in FPC Delphi mode).
 
 ### 2. Scope Creation
 

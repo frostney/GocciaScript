@@ -16,6 +16,7 @@ uses
   Goccia.ControlFlow,
   Goccia.Error,
   Goccia.Evaluator,
+  Goccia.Evaluator.Context,
   Goccia.Lexer,
   Goccia.Logger,
   Goccia.Modules,

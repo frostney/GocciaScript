@@ -15,6 +15,7 @@ uses
   Goccia.AST.Statements,
   Goccia.ControlFlow,
   Goccia.Evaluator,
+  Goccia.Evaluator.Context,
   Goccia.Scope,
   Goccia.TestSetup,
   Goccia.Token,
