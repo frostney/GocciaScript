@@ -3738,8 +3738,8 @@ begin
           NewArr := TSouffleArray.Create(TGocciaArrayValue(Value).Elements.Count);
           for I := 0 to TGocciaArrayValue(Value).Elements.Count - 1 do
             NewArr.Push(ToSouffleValue(TGocciaArrayValue(Value).Elements[I]));
-          if Assigned(TSouffleGarbageCollector.Instance) then
-            TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.AllocateObject(NewArr);
           Result := SouffleReference(NewArr);
         end
         else
