@@ -2,7 +2,7 @@
 
 *For contributors working on the bytecode backend, or anyone designing a new language frontend targeting the Souffle VM.*
 
-Souffle is a general-purpose, language-agnostic bytecode virtual machine designed for extensibility, maintainability, and performance. It is architected as a **standalone project** that can be extracted from the GocciaScript repository and used independently. While it currently serves as an alternative execution backend for GocciaScript, its architecture supports multiple programming language frontends (JavaScript/GocciaScript, Boo, C#, Ruby-like, or any other language) and future WASM 3.0 output.
+Souffle is a general-purpose, language-agnostic bytecode virtual machine designed for extensibility, maintainability, and performance. It is architected as a **standalone project** that can be extracted from the GocciaScript repository and used independently. While it currently serves as an alternative execution backend for GocciaScript, its architecture supports multiple programming language frontends (JavaScript/GocciaScript, Boo, C#, Ruby-like, or any other language) and WASM 3.0 output via the built-in bytecode-to-WASM translator.
 
 The key design goal: the `souffle/` directory has **zero imports** from `Goccia.*` units. All language-specific behavior is injected through a pluggable abstract runtime interface (`TSouffleRuntimeOperations`). Adding a new language frontend requires implementing this interface — zero VM changes.
 
@@ -30,7 +30,7 @@ graph TD
         VALS["TSouffleValue<br/>Tagged union: Nil, Bool, Int, Float, Ref"]
         RTJS["Goccia Runtime Ops<br/>JS semantics"]
         RTOTHER["Future Runtime Ops<br/>other language semantics"]
-        WASM["WASM 3.0 Backend (future)<br/>Bytecode → .wasm"]
+        WASM["WASM 3.0 Backend<br/>Bytecode → .wasm"]
     end
 
     GS --> GSC
@@ -1021,9 +1021,9 @@ GocciaScript-specific bridge files in `units/`:
 | `Goccia.Compiler.ConstantFolding.pas` | Compile-time constant folding for arithmetic and comparison expressions |
 | `Goccia.Runtime.Operations.pas` | `TGocciaRuntimeOperations` — GocciaScript runtime semantics |
 
-## WASM 3.0 Alignment
+## WASM 3.0 Backend
 
-The architecture is designed to make a future WASM 3.0 backend a natural fit:
+The Souffle-to-WASM translator (`Souffle.Wasm.Translator.pas`) converts `TSouffleBytecodeModule` into `.wasm` binary modules. The architecture maps naturally to WASM 3.0 features:
 
 | Souffle Concept | WASM 3.0 Feature |
 |-----------------|-------------------|
@@ -1061,7 +1061,7 @@ Key WASM 3.0 features this leverages:
 - **Subtyping** — `ref.cast`, `ref.test`, `br_on_cast`: heap kind dispatch without tables
 - **Exception handling** — `try_table`, `throw`, `throw_ref`: direct mapping from our handler-table model
 
-A WASM backend would read `TSouffleBytecodeModule` and emit a `.wasm` binary. The Souffle bytecode layer, VM, and compiler would require zero changes.
+The WASM translator reads `TSouffleBytecodeModule` and emits a `.wasm` binary via the unified emitter (`Souffle.Wasm.Emitter.pas`). The Souffle bytecode layer, VM, and compiler require zero changes. See [WASM Backend](wasm-backend.md) for the full documentation.
 
 ## Known Limitations
 

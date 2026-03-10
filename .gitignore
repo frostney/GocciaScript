@@ -16,3 +16,5 @@ build/*.Test
 
 # Node modules
 node_modules/
+
+tests-wasm/*.wasm

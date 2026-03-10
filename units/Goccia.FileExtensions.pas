@@ -12,6 +12,7 @@ const
   EXT_MJS  = '.mjs';
   EXT_JSON = '.json';
   EXT_SBC  = '.sbc';
+  EXT_WASM = '.wasm';
 
   ScriptExtensions: array[0..4] of string = (
     EXT_JS, EXT_JSX, EXT_TS, EXT_TSX, EXT_MJS
