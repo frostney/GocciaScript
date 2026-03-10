@@ -182,13 +182,13 @@ begin
         ScriptResult := TGocciaObjectValue(EngineResult.Result);
 
       PopulateFileResult(FileResult, ScriptResult, AReporter, Result);
-      if Assigned(TGarbageCollector.Instance) then
-        TGarbageCollector.Instance.Collect;
     except
       on E: Exception do
         Result := MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
   finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.Collect;
     Source.Free;
   end;
 end;
@@ -271,8 +271,6 @@ begin
         finally
           Module.Free;
         end;
-        if Assigned(TGarbageCollector.Instance) then
-          TGarbageCollector.Instance.Collect;
       finally
         Backend.Free;
       end;
@@ -281,6 +279,8 @@ begin
         Result := MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
   finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.Collect;
     Source.Free;
   end;
 end;

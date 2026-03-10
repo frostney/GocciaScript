@@ -405,19 +405,17 @@ end;
 Types that provide prototype methods (String, Array, Set, Map, Function) use a shared class-level singleton instead of creating a per-instance prototype:
 
 ```pascal
-class var FSharedPrototype: TGocciaObjectValue;
-class var FPrototypeMethodHost: TMyValue;
+class var FShared: TGocciaSharedPrototype;
 
 procedure TMyValue.InitializePrototype;
 begin
-  if Assigned(FSharedPrototype) then Exit;  // Guard: create once
-  FSharedPrototype := TGocciaObjectValue.Create;
-  FPrototypeMethodHost := Self;
-  FSharedPrototype.RegisterNativeMethod(...);
-  TGarbageCollector.Instance.PinObject(FSharedPrototype);
-  TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+  if Assigned(FShared) then Exit;  // Guard: create once
+  FShared := TGocciaSharedPrototype.Create(Self);
+  FShared.Prototype.RegisterNativeMethod(...);
 end;
 ```
+
+`TGocciaSharedPrototype.Create` automatically pins both the prototype object and the method host via `TGarbageCollector.Instance.PinObject` — no manual pinning is needed.
 
 The constructor calls `InitializePrototype` and assigns `FPrototype := FSharedPrototype`. All method callbacks must use `ThisValue` (not `Self`) to access instance data:
 

@@ -107,10 +107,13 @@ classDiagram
 Every `TGocciaValue` participates in the mark-and-sweep garbage collector:
 
 ```pascal
-TGocciaValue = class(TInterfacedObject)
-  FGCMarked: Boolean;      // Set during mark phase if reachable
+TGCManagedObject = class
+  FGCMarked: Boolean;               // Set during mark phase if reachable
+  procedure MarkReferences; virtual; // Override to mark referenced values
+end;
+
+TGocciaValue = class(TGCManagedObject)
   procedure AfterConstruction; override;  // Auto-registers with GC
-  procedure MarkReferences; virtual;    // Override to mark referenced values
   function RuntimeCopy: TGocciaValue; virtual;  // Create a GC-managed copy
 end;
 ```

@@ -746,6 +746,8 @@ end;
 procedure TGocciaBridgedFunction.MarkReferences;
 begin
   inherited;
+  if Assigned(FGocciaFn) and not FGocciaFn.GCMarked then
+    FGocciaFn.MarkReferences;
 end;
 
 function TGocciaBridgedFunction.DebugString: string;
@@ -792,6 +794,9 @@ end;
 procedure TGocciaSuperCallHelper.MarkReferences;
 begin
   inherited;
+  if (FSuperClass is TGocciaValue) and
+     not TGocciaValue(FSuperClass).GCMarked then
+    TGocciaValue(FSuperClass).MarkReferences;
 end;
 
 function TGocciaSuperCallHelper.DebugString: string;

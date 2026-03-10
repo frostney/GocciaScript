@@ -1007,6 +1007,12 @@ All Souffle VM source files live in the `souffle/` directory with `Souffle.` pre
 | `Souffle.VM.Upvalue.pas` | `TSouffleUpvalue` (open/closed variable capture) |
 | `Souffle.VM.Exception.pas` | `TSouffleHandlerStack`, `ESouffleThrow` |
 | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` abstract interface for language-specific semantics |
+
+Shared infrastructure (outside `souffle/`):
+
+| File | Description |
+|------|-------------|
+| `GarbageCollector.Managed.pas` | `TGCManagedObject` base class for all GC-managed objects |
 | `GarbageCollector.Generic.pas` | Unified mark-and-sweep GC (shared with interpreter) |
 
 GocciaScript-specific bridge files in `units/`:
