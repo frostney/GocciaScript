@@ -38,6 +38,7 @@ type
   public
     constructor Create;
     function AdvanceNext: TGocciaObjectValue; virtual;
+    function DirectNext(out ADone: Boolean): TGocciaValue; virtual;
     function ToStringTag: string; override;
 
     class function CreateGlobalObject: TGocciaObjectValue;
@@ -102,6 +103,18 @@ function TGocciaIteratorValue.AdvanceNext: TGocciaObjectValue;
 begin
   FDone := True;
   Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+end;
+
+function TGocciaIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+var
+  IterResult: TGocciaObjectValue;
+begin
+  IterResult := AdvanceNext;
+  ADone := TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value;
+  if ADone then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+    Result := IterResult.GetProperty(PROP_VALUE);
 end;
 
 function TGocciaIteratorValue.ToStringTag: string;
@@ -255,8 +268,8 @@ end;
 function TGocciaIteratorValue.IteratorForEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Iterator: TGocciaIteratorValue;
-  Callback: TGocciaValue;
-  IterResult: TGocciaObjectValue;
+  Callback, Value: TGocciaValue;
+  Done: Boolean;
   Index: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
@@ -270,12 +283,12 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    IterResult := Iterator.AdvanceNext;
-    while not TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value do
+    Value := Iterator.DirectNext(Done);
+    while not Done do
     begin
-      InvokeIteratorCallback(Callback, IterResult.GetProperty(PROP_VALUE), Index);
+      InvokeIteratorCallback(Callback, Value, Index);
       Inc(Index);
-      IterResult := Iterator.AdvanceNext;
+      Value := Iterator.DirectNext(Done);
     end;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
@@ -288,9 +301,8 @@ function TGocciaIteratorValue.IteratorReduce(const AArgs: TGocciaArgumentsCollec
 var
   Iterator: TGocciaIteratorValue;
   Callback: TGocciaValue;
-  Accumulator, NewAccumulator: TGocciaValue;
-  IterResult: TGocciaObjectValue;
-  HasInitial: Boolean;
+  Accumulator, NewAccumulator, Value: TGocciaValue;
+  HasInitial, Done: Boolean;
   CallArgs: TGocciaArgumentsCollection;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
@@ -308,18 +320,17 @@ begin
       Accumulator := AArgs.GetElement(1)
     else
     begin
-      IterResult := Iterator.AdvanceNext;
-      if TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value then
+      Accumulator := Iterator.DirectNext(Done);
+      if Done then
         ThrowTypeError('Reduce of empty iterator with no initial value');
-      Accumulator := IterResult.GetProperty(PROP_VALUE);
     end;
 
     TGarbageCollector.Instance.AddTempRoot(Accumulator);
     try
-      IterResult := Iterator.AdvanceNext;
-      while not TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value do
+      Value := Iterator.DirectNext(Done);
+      while not Done do
       begin
-        CallArgs := TGocciaArgumentsCollection.Create([Accumulator, IterResult.GetProperty(PROP_VALUE)]);
+        CallArgs := TGocciaArgumentsCollection.Create([Accumulator, Value]);
         try
           NewAccumulator := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         finally
@@ -328,7 +339,7 @@ begin
         TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
         Accumulator := NewAccumulator;
         TGarbageCollector.Instance.AddTempRoot(Accumulator);
-        IterResult := Iterator.AdvanceNext;
+        Value := Iterator.DirectNext(Done);
       end;
 
       Result := Accumulator;
@@ -344,7 +355,8 @@ function TGocciaIteratorValue.IteratorToArray(const AArgs: TGocciaArgumentsColle
 var
   Iterator: TGocciaIteratorValue;
   ResultArray: TGocciaArrayValue;
-  IterResult: TGocciaObjectValue;
+  Value: TGocciaValue;
+  Done: Boolean;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
     ThrowTypeError('Iterator.prototype.toArray called on non-iterator');
@@ -355,11 +367,11 @@ begin
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   TGarbageCollector.Instance.AddTempRoot(ResultArray);
   try
-    IterResult := Iterator.AdvanceNext;
-    while not TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value do
+    Value := Iterator.DirectNext(Done);
+    while not Done do
     begin
-      ResultArray.Elements.Add(IterResult.GetProperty(PROP_VALUE));
-      IterResult := Iterator.AdvanceNext;
+      ResultArray.Elements.Add(Value);
+      Value := Iterator.DirectNext(Done);
     end;
 
     Result := ResultArray;
@@ -372,8 +384,8 @@ end;
 function TGocciaIteratorValue.IteratorSome(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Iterator: TGocciaIteratorValue;
-  Callback: TGocciaValue;
-  IterResult: TGocciaObjectValue;
+  Callback, Value: TGocciaValue;
+  Done: Boolean;
   Index: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
@@ -387,16 +399,16 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    IterResult := Iterator.AdvanceNext;
-    while not TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value do
+    Value := Iterator.DirectNext(Done);
+    while not Done do
     begin
-      if InvokeIteratorCallback(Callback, IterResult.GetProperty(PROP_VALUE), Index).ToBooleanLiteral.Value then
+      if InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
       begin
         Result := TGocciaBooleanLiteralValue.TrueValue;
         Exit;
       end;
       Inc(Index);
-      IterResult := Iterator.AdvanceNext;
+      Value := Iterator.DirectNext(Done);
     end;
 
     Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -408,8 +420,8 @@ end;
 function TGocciaIteratorValue.IteratorEvery(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Iterator: TGocciaIteratorValue;
-  Callback: TGocciaValue;
-  IterResult: TGocciaObjectValue;
+  Callback, Value: TGocciaValue;
+  Done: Boolean;
   Index: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
@@ -423,16 +435,16 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    IterResult := Iterator.AdvanceNext;
-    while not TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value do
+    Value := Iterator.DirectNext(Done);
+    while not Done do
     begin
-      if not InvokeIteratorCallback(Callback, IterResult.GetProperty(PROP_VALUE), Index).ToBooleanLiteral.Value then
+      if not InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
       begin
         Result := TGocciaBooleanLiteralValue.FalseValue;
         Exit;
       end;
       Inc(Index);
-      IterResult := Iterator.AdvanceNext;
+      Value := Iterator.DirectNext(Done);
     end;
 
     Result := TGocciaBooleanLiteralValue.TrueValue;
@@ -444,9 +456,8 @@ end;
 function TGocciaIteratorValue.IteratorFind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Iterator: TGocciaIteratorValue;
-  Callback: TGocciaValue;
-  IterResult: TGocciaObjectValue;
-  Value: TGocciaValue;
+  Callback, Value: TGocciaValue;
+  Done: Boolean;
   Index: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
@@ -460,17 +471,16 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    IterResult := Iterator.AdvanceNext;
-    while not TGocciaBooleanLiteralValue(IterResult.GetProperty(PROP_DONE)).Value do
+    Value := Iterator.DirectNext(Done);
+    while not Done do
     begin
-      Value := IterResult.GetProperty(PROP_VALUE);
       if InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
       begin
         Result := Value;
         Exit;
       end;
       Inc(Index);
-      IterResult := Iterator.AdvanceNext;
+      Value := Iterator.DirectNext(Done);
     end;
 
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
