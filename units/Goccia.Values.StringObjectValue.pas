@@ -74,8 +74,9 @@ uses
   StrUtils,
   SysUtils,
 
+  GarbageCollector.Generic,
+
   Goccia.Constants.PropertyNames,
-  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -197,10 +198,10 @@ begin
     )
   );
 
-  if Assigned(TGocciaGarbageCollector.Instance) then
+  if Assigned(TGenericGarbageCollector.Instance) then
   begin
-    TGocciaGarbageCollector.Instance.PinValue(FSharedStringPrototype);
-    TGocciaGarbageCollector.Instance.PinValue(FPrototypeMethodHost);
+    TGenericGarbageCollector.Instance.PinObject(FSharedStringPrototype);
+    TGenericGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
   end;
 end;
 
@@ -834,7 +835,7 @@ begin
   end;
 
   ResultArray := TGocciaArrayValue.Create;
-  TGocciaGarbageCollector.Instance.AddTempRoot(ResultArray);
+  TGenericGarbageCollector.Instance.AddTempRoot(ResultArray);
   try
     // Step 5: If separator is undefined, return [S]
     if StringValue = '' then
@@ -887,7 +888,7 @@ begin
 
     Result := ResultArray;
   finally
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(ResultArray);
+    TGenericGarbageCollector.Instance.RemoveTempRoot(ResultArray);
   end;
 end;
 

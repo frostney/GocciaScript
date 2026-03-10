@@ -65,8 +65,9 @@ type
 implementation
 
 uses
+  GarbageCollector.Generic,
+
   Goccia.FileExtensions,
-  Goccia.GarbageCollector,
   Goccia.JSON,
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer;
@@ -86,7 +87,7 @@ end;
 
 destructor TGocciaInterpreter.Destroy;
 begin
-  if not Assigned(TGocciaGarbageCollector.Instance) then
+  if not Assigned(TGenericGarbageCollector.Instance) then
     FGlobalScope.Free;
   FModules.Free;
   FLoadingModules.Free;

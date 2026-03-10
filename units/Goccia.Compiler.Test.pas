@@ -7,6 +7,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  GarbageCollector.Generic,
   Souffle.Bytecode,
   Souffle.Bytecode.Binary,
   Souffle.Bytecode.Chunk,
@@ -19,7 +20,6 @@ uses
   Goccia.AST.Statements,
   Goccia.Compiler,
   Goccia.Compiler.Scope,
-  Goccia.GarbageCollector,
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.TestSetup,
@@ -157,13 +157,13 @@ begin
 end;
 
 begin
-  TGocciaGarbageCollector.Initialize;
+  TGenericGarbageCollector.Initialize;
   try
     TestRunnerProgram.AddSuite(TTestCompiler.Create('GocciaScript Compiler'));
     TestRunnerProgram.Run;
 
     ExitCode := TestResultToExitCode;
   finally
-    TGocciaGarbageCollector.Shutdown;
+    TGenericGarbageCollector.Shutdown;
   end;
 end.

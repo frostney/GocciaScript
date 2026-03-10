@@ -159,9 +159,10 @@ uses
   Math,
   SysUtils,
 
+  GarbageCollector.Generic,
+
   Goccia.Constants,
   Goccia.Constants.TypeNames,
-  Goccia.GarbageCollector,
   Goccia.Values.ClassHelper;
 
 { TGocciaValue }
@@ -169,8 +170,8 @@ uses
 procedure TGocciaValue.AfterConstruction;
 begin
   inherited;
-  if Assigned(TGocciaGarbageCollector.Instance) then
-    TGocciaGarbageCollector.Instance.RegisterValue(Self);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.RegisterObject(Self);
 end;
 
 function TGocciaValue.RuntimeCopy: TGocciaValue;

@@ -34,8 +34,9 @@ type
 implementation
 
 uses
+  GarbageCollector.Generic,
+
   Goccia.Constants.PropertyNames,
-  Goccia.GarbageCollector,
   Goccia.Values.NativeFunction;
 
 constructor TGocciaBooleanObjectValue.Create(const APrimitive: TGocciaBooleanLiteralValue; const AClass: TGocciaClassValue = nil);
@@ -57,10 +58,10 @@ begin
   FSharedBooleanPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BooleanValueOf, PROP_VALUE_OF, 0));
   FSharedBooleanPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BooleanToString, PROP_TO_STRING, 0));
 
-  if Assigned(TGocciaGarbageCollector.Instance) then
+  if Assigned(TGenericGarbageCollector.Instance) then
   begin
-    TGocciaGarbageCollector.Instance.PinValue(FSharedBooleanPrototype);
-    TGocciaGarbageCollector.Instance.PinValue(FPrototypeMethodHost);
+    TGenericGarbageCollector.Instance.PinObject(FSharedBooleanPrototype);
+    TGenericGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
   end;
 end;
 

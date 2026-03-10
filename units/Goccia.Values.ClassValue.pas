@@ -189,12 +189,13 @@ implementation
 uses
   SysUtils,
 
+  GarbageCollector.Generic,
+
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Error,
-  Goccia.GarbageCollector,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
@@ -745,11 +746,11 @@ begin
 
   if Assigned(ConstructorToCall) then
   begin
-    TGocciaGarbageCollector.Instance.AddTempRoot(Instance);
+    TGenericGarbageCollector.Instance.AddTempRoot(Instance);
     try
       ConstructorToCall.Call(AArguments, Instance);
     finally
-      TGocciaGarbageCollector.Instance.RemoveTempRoot(Instance);
+      TGenericGarbageCollector.Instance.RemoveTempRoot(Instance);
     end;
   end
   else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then

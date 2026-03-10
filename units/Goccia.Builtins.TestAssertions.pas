@@ -149,13 +149,13 @@ uses
   Math,
   SysUtils,
 
+  GarbageCollector.Generic,
   TimingUtils,
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator,
   Goccia.Evaluator.Comparison,
-  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
@@ -1069,8 +1069,8 @@ function TGocciaExpectationValue.GetResolves(const AArgs: TGocciaArgumentsCollec
 var
   Promise: TGocciaPromiseValue;
 begin
-  if Assigned(TGocciaGarbageCollector.Instance) then
-    TGocciaGarbageCollector.Instance.AddTempRoot(FActualValue);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.AddTempRoot(FActualValue);
   try
     if Assigned(TGocciaMicrotaskQueue.Instance) then
       TGocciaMicrotaskQueue.Instance.DrainQueue;
@@ -1100,8 +1100,8 @@ begin
       Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
     end;
   finally
-    if Assigned(TGocciaGarbageCollector.Instance) then
-      TGocciaGarbageCollector.Instance.RemoveTempRoot(FActualValue);
+    if Assigned(TGenericGarbageCollector.Instance) then
+      TGenericGarbageCollector.Instance.RemoveTempRoot(FActualValue);
   end;
 end;
 
@@ -1109,8 +1109,8 @@ function TGocciaExpectationValue.GetRejects(const AArgs: TGocciaArgumentsCollect
 var
   Promise: TGocciaPromiseValue;
 begin
-  if Assigned(TGocciaGarbageCollector.Instance) then
-    TGocciaGarbageCollector.Instance.AddTempRoot(FActualValue);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.AddTempRoot(FActualValue);
   try
     if Assigned(TGocciaMicrotaskQueue.Instance) then
       TGocciaMicrotaskQueue.Instance.DrainQueue;
@@ -1140,8 +1140,8 @@ begin
       Result := TGocciaExpectationValue.Create(TGocciaUndefinedLiteralValue.UndefinedValue, FTestAssertions, FIsNegated);
     end;
   finally
-    if Assigned(TGocciaGarbageCollector.Instance) then
-      TGocciaGarbageCollector.Instance.RemoveTempRoot(FActualValue);
+    if Assigned(TGenericGarbageCollector.Instance) then
+      TGenericGarbageCollector.Instance.RemoveTempRoot(FActualValue);
   end;
 end;
 
@@ -1239,8 +1239,8 @@ begin
         try
           CallbackResult := TGocciaFunctionBase(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
-          if Assigned(TGocciaGarbageCollector.Instance) then
-            TGocciaGarbageCollector.Instance.AddTempRoot(CallbackResult);
+          if Assigned(TGenericGarbageCollector.Instance) then
+            TGenericGarbageCollector.Instance.AddTempRoot(CallbackResult);
           try
             if Assigned(TGocciaMicrotaskQueue.Instance) then
               TGocciaMicrotaskQueue.Instance.DrainQueue;
@@ -1254,8 +1254,8 @@ begin
                 AssertionFailed('callback execution', 'Async callback Promise still pending after microtask drain');
             end;
           finally
-            if Assigned(TGocciaGarbageCollector.Instance) then
-              TGocciaGarbageCollector.Instance.RemoveTempRoot(CallbackResult);
+            if Assigned(TGenericGarbageCollector.Instance) then
+              TGenericGarbageCollector.Instance.RemoveTempRoot(CallbackResult);
           end;
         except
           on E: Exception do

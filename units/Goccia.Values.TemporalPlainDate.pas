@@ -60,8 +60,9 @@ type
 implementation
 
 uses
+  GarbageCollector.Generic,
+
   Goccia.Constants.PropertyNames,
-  Goccia.GarbageCollector,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -448,7 +449,7 @@ begin
     -Dur.Hours, -Dur.Minutes, -Dur.Seconds,
     -Dur.Milliseconds, -Dur.Microseconds, -Dur.Nanoseconds);
 
-  TGocciaGarbageCollector.Instance.AddTempRoot(NegatedDur);
+  TGenericGarbageCollector.Instance.AddTempRoot(NegatedDur);
   try
     NewArgs := TGocciaArgumentsCollection.Create([NegatedDur]);
     try
@@ -457,7 +458,7 @@ begin
       NewArgs.Free;
     end;
   finally
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(NegatedDur);
+    TGenericGarbageCollector.Instance.RemoveTempRoot(NegatedDur);
   end;
 end;
 

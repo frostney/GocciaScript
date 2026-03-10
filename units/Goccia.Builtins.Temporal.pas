@@ -66,9 +66,9 @@ uses
   DateUtils,
   SysUtils,
 
+  GarbageCollector.Generic,
   TimingUtils,
 
-  Goccia.GarbageCollector,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -87,7 +87,7 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   FTemporalNamespace := TGocciaObjectValue.Create;
-  TGocciaGarbageCollector.Instance.AddTempRoot(FTemporalNamespace);
+  TGenericGarbageCollector.Instance.AddTempRoot(FTemporalNamespace);
   try
     RegisterDuration;
     RegisterInstant;
@@ -98,7 +98,7 @@ begin
 
     AScope.DefineLexicalBinding(AName, FTemporalNamespace, dtLet);
   finally
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(FTemporalNamespace);
+    TGenericGarbageCollector.Instance.RemoveTempRoot(FTemporalNamespace);
   end;
 end;
 

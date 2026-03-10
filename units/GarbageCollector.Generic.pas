@@ -14,17 +14,17 @@ type
   TGCRootMarker = procedure of object;
 
   TGenericGarbageCollector = class
-  protected class var
+  private class var
     FInstance: TGenericGarbageCollector;
   private
     FManagedObjects: TGCManagedObjectList;
     FPinnedObjects: TDictionary<TGCManagedObject, Boolean>;
     FTempRoots: TDictionary<TGCManagedObject, Boolean>;
+    FRootObjects: TDictionary<TGCManagedObject, Boolean>;
+    FActiveRootStack: TGCManagedObjectList;
 
     FExternalRootMarkers: array of TGCRootMarker;
 
-    function GetManagedObjectCount: Integer;
-  protected
     FAllocationsSinceLastGC: Integer;
     FGCThreshold: Integer;
     FEnabled: Boolean;
@@ -32,12 +32,13 @@ type
     FTotalCollected: Int64;
     FTotalCollections: Integer;
 
-    procedure ClearObjectMarks;
+    function GetManagedObjectCount: Integer;
+  protected
     procedure MarkRoots; virtual;
     procedure SweepObjects;
-    procedure FreeAllManagedObjects;
   public
     class function Instance: TGenericGarbageCollector; inline;
+    class procedure Initialize;
     class procedure Shutdown;
 
     constructor Create;
@@ -52,7 +53,11 @@ type
     procedure RemoveTempRoot(const AObject: TGCManagedObject);
     function IsTempRoot(const AObject: TGCManagedObject): Boolean;
 
-    procedure SetExternalRootMarker(const AMarker: TGCRootMarker);
+    procedure AddRootObject(const AObject: TGCManagedObject);
+    procedure RemoveRootObject(const AObject: TGCManagedObject);
+    procedure PushActiveRoot(const AObject: TGCManagedObject);
+    procedure PopActiveRoot;
+
     procedure AddExternalRootMarker(const AMarker: TGCRootMarker);
     procedure RemoveExternalRootMarker(const AMarker: TGCRootMarker);
 
@@ -71,9 +76,6 @@ const
 
 implementation
 
-uses
-  SysUtils;
-
 { TGenericGarbageCollector }
 
 class function TGenericGarbageCollector.Instance: TGenericGarbageCollector;
@@ -81,9 +83,16 @@ begin
   Result := FInstance;
 end;
 
+class procedure TGenericGarbageCollector.Initialize;
+begin
+  if not Assigned(FInstance) then
+    FInstance := TGenericGarbageCollector.Create;
+end;
+
 class procedure TGenericGarbageCollector.Shutdown;
 begin
-  FreeAndNil(FInstance);
+  FInstance.Free;
+  FInstance := nil;
 end;
 
 constructor TGenericGarbageCollector.Create;
@@ -92,6 +101,8 @@ begin
   FManagedObjects := TGCManagedObjectList.Create(False);
   FPinnedObjects := TDictionary<TGCManagedObject, Boolean>.Create;
   FTempRoots := TDictionary<TGCManagedObject, Boolean>.Create;
+  FRootObjects := TDictionary<TGCManagedObject, Boolean>.Create;
+  FActiveRootStack := TGCManagedObjectList.Create(False);
   FAllocationsSinceLastGC := 0;
   FGCThreshold := DEFAULT_GC_THRESHOLD;
   FEnabled := True;
@@ -106,6 +117,8 @@ begin
   FManagedObjects.Free;
   FPinnedObjects.Free;
   FTempRoots.Free;
+  FRootObjects.Free;
+  FActiveRootStack.Free;
   inherited;
 end;
 
@@ -161,12 +174,29 @@ begin
   Result := Assigned(AObject) and FTempRoots.ContainsKey(AObject);
 end;
 
-procedure TGenericGarbageCollector.SetExternalRootMarker(
-  const AMarker: TGCRootMarker);
+procedure TGenericGarbageCollector.AddRootObject(
+  const AObject: TGCManagedObject);
 begin
-  SetLength(FExternalRootMarkers, 0);
-  if Assigned(AMarker) then
-    AddExternalRootMarker(AMarker);
+  if not FRootObjects.ContainsKey(AObject) then
+    FRootObjects.Add(AObject, True);
+end;
+
+procedure TGenericGarbageCollector.RemoveRootObject(
+  const AObject: TGCManagedObject);
+begin
+  FRootObjects.Remove(AObject);
+end;
+
+procedure TGenericGarbageCollector.PushActiveRoot(
+  const AObject: TGCManagedObject);
+begin
+  FActiveRootStack.Add(AObject);
+end;
+
+procedure TGenericGarbageCollector.PopActiveRoot;
+begin
+  if FActiveRootStack.Count > 0 then
+    FActiveRootStack.Delete(FActiveRootStack.Count - 1);
 end;
 
 procedure TGenericGarbageCollector.AddExternalRootMarker(
@@ -208,6 +238,12 @@ begin
   for Obj in FTempRoots.Keys do
     Obj.MarkReferences;
 
+  for Obj in FRootObjects.Keys do
+    Obj.MarkReferences;
+
+  for I := 0 to FActiveRootStack.Count - 1 do
+    FActiveRootStack[I].MarkReferences;
+
   for I := 0 to Length(FExternalRootMarkers) - 1 do
     FExternalRootMarkers[I]();
 end;
@@ -238,29 +274,16 @@ begin
   FTotalCollected := FTotalCollected + Collected;
 end;
 
-procedure TGenericGarbageCollector.FreeAllManagedObjects;
-var
-  I: Integer;
-begin
-  for I := 0 to FManagedObjects.Count - 1 do
-    FManagedObjects[I].Free;
-  FManagedObjects.Count := 0;
-end;
-
-procedure TGenericGarbageCollector.ClearObjectMarks;
-var
-  I: Integer;
-begin
-  for I := 0 to FManagedObjects.Count - 1 do
-    FManagedObjects[I].GCMarked := False;
-end;
-
 procedure TGenericGarbageCollector.Collect;
+var
+  I: Integer;
 begin
   if FCollecting then Exit;
   FCollecting := True;
   try
-    ClearObjectMarks;
+    for I := 0 to FManagedObjects.Count - 1 do
+      FManagedObjects[I].GCMarked := False;
+
     MarkRoots;
     SweepObjects;
     FAllocationsSinceLastGC := 0;

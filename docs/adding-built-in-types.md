@@ -75,7 +75,7 @@ implementation
 uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
-  Goccia.GarbageCollector,
+  GarbageCollector.Generic,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -533,7 +533,7 @@ Use this checklist when adding a new built-in type:
 
 ## GC Considerations
 
-- **Shared prototype** is pinned automatically by `TGocciaSharedPrototype.Create` (calls `PinValue` on both the prototype object and the method host).
+- **Shared prototype** is pinned automatically by `TGocciaSharedPrototype.Create` (calls `PinObject` on both the prototype object and the method host).
 - **`MarkReferences`** must mark all `TGocciaValue` fields reachable from the instance. If you only hold non-value data (e.g., `TBytes`), calling `inherited` is sufficient.
 - **`ExposePrototype`** creates a sentinel instance that becomes the method host. Do NOT free this instance -- it is pinned by the GC.
 - **Temp roots**: If you hold `TGocciaValue` references in Pascal variables during a long operation (not in any scope), protect them with `AddTempRoot`/`RemoveTempRoot`.

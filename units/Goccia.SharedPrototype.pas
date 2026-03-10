@@ -22,8 +22,9 @@ type
 implementation
 
 uses
+  GarbageCollector.Generic,
+
   Goccia.Constants.PropertyNames,
-  Goccia.GarbageCollector,
   Goccia.Values.ClassValue;
 
 constructor TGocciaSharedPrototype.Create(const AMethodHost: TGocciaValue);
@@ -32,11 +33,11 @@ begin
   FPrototype := TGocciaObjectValue.Create;
   FMethodHost := AMethodHost;
 
-  if Assigned(TGocciaGarbageCollector.Instance) then
+  if Assigned(TGenericGarbageCollector.Instance) then
   begin
-    TGocciaGarbageCollector.Instance.PinValue(FPrototype);
+    TGenericGarbageCollector.Instance.PinObject(FPrototype);
     if Assigned(FMethodHost) then
-      TGocciaGarbageCollector.Instance.PinValue(FMethodHost);
+      TGenericGarbageCollector.Instance.PinObject(FMethodHost);
   end;
 end;
 

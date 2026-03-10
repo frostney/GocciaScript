@@ -694,7 +694,7 @@ When `break` or `return` occurs inside a `try...finally` block, the compiler inl
 
 Souffle shares the unified mark-and-sweep garbage collector with the GocciaScript interpreter via `TGenericGarbageCollector.Instance` (from `GarbageCollector.Generic.pas`):
 
-- **Unified singleton** — `TGenericGarbageCollector.Instance` (the same `TGocciaGarbageCollector` instance used by the interpreter)
+- **Unified singleton** — `TGenericGarbageCollector.Instance` (the single GC used by both the interpreter and the VM)
 - **Lifecycle** — Automatic collection is disabled during VM execution (`Enabled := False` around `TSouffleVM.Execute`) to prevent sweeping Souffle objects that are on the Pascal stack but not yet in VM registers. Explicit `Collect` calls in the BenchmarkRunner reclaim memory between files.
 - **Managed objects** — All `TSouffleHeapObject` instances registered via `AllocateObject`
 - **Pinned objects** — Long-lived objects protected from collection via `PinObject` / `UnpinObject`

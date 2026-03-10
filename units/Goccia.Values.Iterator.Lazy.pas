@@ -70,9 +70,10 @@ type
 implementation
 
 uses
+  GarbageCollector.Generic,
+
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
-  Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -303,7 +304,7 @@ begin
     IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
     if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
     begin
-      TGocciaGarbageCollector.Instance.AddTempRoot(AValue);
+      TGenericGarbageCollector.Instance.AddTempRoot(AValue);
       try
         CallArgs := TGocciaArgumentsCollection.Create;
         try
@@ -312,7 +313,7 @@ begin
           CallArgs.Free;
         end;
       finally
-        TGocciaGarbageCollector.Instance.RemoveTempRoot(AValue);
+        TGenericGarbageCollector.Instance.RemoveTempRoot(AValue);
       end;
       if IteratorObj is TGocciaIteratorValue then
       begin

@@ -412,7 +412,6 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.Evaluator.TypeOperations,
-  Goccia.GarbageCollector,
   Goccia.Interpreter,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
@@ -1379,14 +1378,14 @@ begin
   FFormalParameterCounts := TDictionary<TSouffleFunctionTemplate, Integer>.Create;
   FBridgeCallDepth := 0;
   FVM := nil;
-  TGocciaGarbageCollector.Initialize;
-  TGocciaGarbageCollector.Instance.AddExternalRootMarker(MarkWrappedGocciaValues);
+  TGenericGarbageCollector.Initialize;
+  TGenericGarbageCollector.Instance.AddExternalRootMarker(MarkWrappedGocciaValues);
 end;
 
 destructor TGocciaRuntimeOperations.Destroy;
 begin
-  if Assigned(TGocciaGarbageCollector.Instance) then
-    TGocciaGarbageCollector.Instance.RemoveExternalRootMarker(MarkWrappedGocciaValues);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.RemoveExternalRootMarker(MarkWrappedGocciaValues);
   FGlobals.Free;
   FConstGlobals.Free;
   FExports.Free;
@@ -3589,16 +3588,16 @@ begin
         if GocciaVal is TGocciaMapValue then
         begin
           Iterator := TGocciaMapIteratorValue.Create(GocciaVal, mkEntries);
-          if Assigned(TGocciaGarbageCollector.Instance) then
-            TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+          if Assigned(TGenericGarbageCollector.Instance) then
+            TGenericGarbageCollector.Instance.AddTempRoot(Iterator);
           Result := WrapGocciaValue(Iterator);
           Exit;
         end;
         if GocciaVal is TGocciaSetValue then
         begin
           Iterator := TGocciaSetIteratorValue.Create(GocciaVal, skValues);
-          if Assigned(TGocciaGarbageCollector.Instance) then
-            TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+          if Assigned(TGenericGarbageCollector.Instance) then
+            TGenericGarbageCollector.Instance.AddTempRoot(Iterator);
           Result := WrapGocciaValue(Iterator);
           Exit;
         end;
@@ -3626,8 +3625,8 @@ begin
         end;
         if Assigned(IteratorObj) then
         begin
-          if Assigned(TGocciaGarbageCollector.Instance) then
-            TGocciaGarbageCollector.Instance.AddTempRoot(IteratorObj);
+          if Assigned(TGenericGarbageCollector.Instance) then
+            TGenericGarbageCollector.Instance.AddTempRoot(IteratorObj);
           Result := WrapGocciaValue(IteratorObj);
           Exit;
         end;
@@ -3676,8 +3675,8 @@ begin
       Exit;
     end;
 
-    if Assigned(TGocciaGarbageCollector.Instance) then
-      TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+    if Assigned(TGenericGarbageCollector.Instance) then
+      TGenericGarbageCollector.Instance.AddTempRoot(Iterator);
     Result := WrapGocciaValue(Iterator);
   except
     on E: TGocciaThrowValue do
@@ -7602,7 +7601,7 @@ begin
   if Assigned(ClassValue) then
   begin
     FClassDefinitionScopes.AddOrSetValue(ClassValue, EvalScope);
-    TGocciaGarbageCollector.Instance.AddTempRoot(ClassValue);
+    TGenericGarbageCollector.Instance.AddTempRoot(ClassValue);
     try
       Result := ToSouffleValue(ClassValue);
       FGlobals.AddOrSetValue(Entry.ClassDefinition.Name, Result);
@@ -7612,7 +7611,7 @@ begin
         EvalScope.DefineLexicalBinding(
           Entry.ClassDefinition.Name, ClassValue, dtLet);
     finally
-      TGocciaGarbageCollector.Instance.RemoveTempRoot(ClassValue);
+      TGenericGarbageCollector.Instance.RemoveTempRoot(ClassValue);
     end;
   end;
 end;
@@ -7663,8 +7662,8 @@ begin
     EnumObj.PreventExtensions;
     InitializeEnumSymbols(EnumObj);
 
-    if Assigned(TGocciaGarbageCollector.Instance) then
-      TGocciaGarbageCollector.Instance.AddTempRoot(EnumObj);
+    if Assigned(TGenericGarbageCollector.Instance) then
+      TGenericGarbageCollector.Instance.AddTempRoot(EnumObj);
 
     Result := WrapGocciaValue(EnumObj);
   except
@@ -7925,7 +7924,7 @@ begin
       Meta := TGocciaObjectValue.Create(TGocciaObjectValue(SuperMetadata))
     else
       Meta := TGocciaObjectValue.Create;
-    TGocciaGarbageCollector.Instance.AddTempRoot(Meta);
+    TGenericGarbageCollector.Instance.AddTempRoot(Meta);
 
     FreeAndNil(FActiveDecoratorSession);
     FActiveDecoratorSession := TGocciaDecoratorSession.Create(Meta);
@@ -8231,7 +8230,7 @@ begin
       ClassVal := TGocciaClassValue(FActiveDecoratorSession.ClassValue);
     if not Assigned(ClassVal) then
     begin
-      TGocciaGarbageCollector.Instance.RemoveTempRoot(
+      TGenericGarbageCollector.Instance.RemoveTempRoot(
         FActiveDecoratorSession.MetadataObject);
       FreeAndNil(FActiveDecoratorSession);
       Exit;
@@ -8273,7 +8272,7 @@ begin
 
     ADest := WrapGocciaValue(ClassVal);
 
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(
+    TGenericGarbageCollector.Instance.RemoveTempRoot(
       FActiveDecoratorSession.MetadataObject);
     FreeAndNil(FActiveDecoratorSession);
   except
@@ -8281,7 +8280,7 @@ begin
     begin
       if Assigned(FActiveDecoratorSession) then
       begin
-        TGocciaGarbageCollector.Instance.RemoveTempRoot(
+        TGenericGarbageCollector.Instance.RemoveTempRoot(
           FActiveDecoratorSession.MetadataObject);
         FreeAndNil(FActiveDecoratorSession);
       end;

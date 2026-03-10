@@ -43,8 +43,9 @@ implementation
 uses
   SysUtils,
 
+  GarbageCollector.Generic,
+
   Goccia.Arguments.Collection,
-  Goccia.GarbageCollector,
   Goccia.Values.Error,
   Goccia.Values.FunctionBase,
   Goccia.Values.PromiseValue;
@@ -97,14 +98,14 @@ begin
 
     Promise := TGocciaPromiseValue(Task.ResultPromise);
 
-    if Assigned(TGocciaGarbageCollector.Instance) then
+    if Assigned(TGenericGarbageCollector.Instance) then
     begin
       if Assigned(Task.Handler) then
-        TGocciaGarbageCollector.Instance.AddTempRoot(Task.Handler);
+        TGenericGarbageCollector.Instance.AddTempRoot(Task.Handler);
       if Assigned(Task.Value) then
-        TGocciaGarbageCollector.Instance.AddTempRoot(Task.Value);
+        TGenericGarbageCollector.Instance.AddTempRoot(Task.Value);
       if Assigned(Promise) then
-        TGocciaGarbageCollector.Instance.AddTempRoot(Promise);
+        TGenericGarbageCollector.Instance.AddTempRoot(Promise);
     end;
 
     try
@@ -145,14 +146,14 @@ begin
         end;
       end;
     finally
-      if Assigned(TGocciaGarbageCollector.Instance) then
+      if Assigned(TGenericGarbageCollector.Instance) then
       begin
         if Assigned(Task.Handler) then
-          TGocciaGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
+          TGenericGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
         if Assigned(Task.Value) then
-          TGocciaGarbageCollector.Instance.RemoveTempRoot(Task.Value);
+          TGenericGarbageCollector.Instance.RemoveTempRoot(Task.Value);
         if Assigned(Promise) then
-          TGocciaGarbageCollector.Instance.RemoveTempRoot(Promise);
+          TGenericGarbageCollector.Instance.RemoveTempRoot(Promise);
       end;
     end;
   end;
@@ -166,12 +167,12 @@ var
   I: Integer;
   Task: TGocciaMicrotask;
 begin
-  if Assigned(TGocciaGarbageCollector.Instance) then
+  if Assigned(TGenericGarbageCollector.Instance) then
     for I := 0 to FQueue.Count - 1 do
     begin
       Task := FQueue[I];
       if Assigned(Task.Handler) then
-        TGocciaGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
+        TGenericGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
     end;
   FQueue.Clear;
 end;

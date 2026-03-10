@@ -135,8 +135,9 @@ implementation
 uses
   SysUtils,
 
+  GarbageCollector.Generic,
+
   Goccia.Error,
-  Goccia.GarbageCollector,
   Goccia.Keywords.Reserved,
   Goccia.Values.ClassHelper,
   Goccia.Values.ObjectValue;
@@ -155,8 +156,8 @@ begin
   if Assigned(AParent) then
     FOnError := AParent.FOnError;
 
-  if Assigned(TGocciaGarbageCollector.Instance) then
-    TGocciaGarbageCollector.Instance.RegisterScope(Self);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.RegisterObject(Self);
 end;
 
 destructor TGocciaScope.Destroy;

@@ -7,6 +7,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  GarbageCollector.Generic,
   Souffle.Bytecode.Binary,
   Souffle.Bytecode.Module,
   Souffle.Wasm.Translator,
@@ -17,7 +18,6 @@ uses
   Goccia.Engine,
   Goccia.Engine.Backend,
   Goccia.FileExtensions,
-  Goccia.GarbageCollector,
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
@@ -202,7 +202,7 @@ begin
   WriteLn('Compiling: ', AFileName);
   StartTime := GetNanoseconds;
 
-  TGocciaGarbageCollector.Initialize;
+  TGenericGarbageCollector.Initialize;
   try
     Module := CompileSourceFile(AFileName, TGocciaEngine.DefaultGlobals);
     try
@@ -214,7 +214,7 @@ begin
       Module.Free;
     end;
   finally
-    TGocciaGarbageCollector.Shutdown;
+    TGenericGarbageCollector.Shutdown;
   end;
 end;
 
@@ -227,7 +227,7 @@ begin
   WriteLn('Compiling to WASM: ', AFileName);
   StartTime := GetNanoseconds;
 
-  TGocciaGarbageCollector.Initialize;
+  TGenericGarbageCollector.Initialize;
   try
     Module := CompileSourceFile(AFileName, TGocciaEngine.DefaultGlobals);
     try
@@ -244,7 +244,7 @@ begin
       Module.Free;
     end;
   finally
-    TGocciaGarbageCollector.Shutdown;
+    TGenericGarbageCollector.Shutdown;
   end;
 end;
 

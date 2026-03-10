@@ -50,11 +50,11 @@ uses
   Classes,
   SysUtils,
 
+  GarbageCollector.Generic,
   Souffle.Bytecode.Chunk,
   Souffle.Value,
   Souffle.VM.Exception,
 
-  Goccia.GarbageCollector,
   Goccia.Interpreter,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -65,7 +65,7 @@ uses
 constructor TGocciaSouffleBackend.Create(const ASourcePath: string);
 begin
   inherited Create;
-  TGocciaGarbageCollector.Initialize;
+  TGenericGarbageCollector.Initialize;
   FSourcePath := ASourcePath;
   FRuntime := TGocciaRuntimeOperations.Create;
   FVM := TSouffleVM.Create(FRuntime);
@@ -130,10 +130,10 @@ function TGocciaSouffleBackend.RunModule(
   const AModule: TSouffleBytecodeModule): TGocciaValue;
 var
   SouffleResult: TSouffleValue;
-  GC: TGocciaGarbageCollector;
+  GC: TGenericGarbageCollector;
   WasEnabled: Boolean;
 begin
-  GC := TGocciaGarbageCollector.Instance;
+  GC := TGenericGarbageCollector.Instance;
   WasEnabled := GC.Enabled;
   GC.Enabled := False;
   try

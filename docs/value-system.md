@@ -115,7 +115,7 @@ TGocciaValue = class(TInterfacedObject)
 end;
 ```
 
-- **`AfterConstruction`** — Every value auto-registers with `TGocciaGarbageCollector.Instance` upon creation.
+- **`AfterConstruction`** — Every value auto-registers with `TGenericGarbageCollector.Instance` upon creation.
 - **`MarkReferences`** — Base implementation sets `GCMarked := True`. Subclasses override this to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements).
 - **`RuntimeCopy`** — Creates a fresh GC-managed copy of the value. Used by the evaluator when evaluating literal expressions: AST-owned literal values are not tracked by the GC, so `RuntimeCopy` produces a runtime value that is. The default implementation returns `Self` (for singletons and complex values). Primitives override this: numbers use the `SmallInt` cache for 0-255, booleans return singletons, strings create new instances (cheap due to copy-on-write).
 
@@ -254,7 +254,7 @@ TGocciaStringLiteralValue = class(TGocciaValue)
 end;
 ```
 
-String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system. When strings are boxed into `TGocciaStringObjectValue` (e.g., via `new String()` or implicit boxing), all instances share a single class-level string prototype singleton — methods are registered once and reused across all string object instances. This shared prototype singleton pattern is used consistently across the codebase: `TGocciaStringObjectValue`, `TGocciaNumberObjectValue`, `TGocciaArrayValue`, `TGocciaSetValue`, `TGocciaMapValue`, `TGocciaSymbolValue`, `TGocciaFunctionBase`, `TGocciaArrayBufferValue`, `TGocciaSharedArrayBufferValue`, and `TGocciaTypedArrayValue` all follow it. `TGocciaSharedPrototype.Create` automatically pins both the prototype object and the method host with the GC — no manual `PinValue` call is needed after construction.
+String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system. When strings are boxed into `TGocciaStringObjectValue` (e.g., via `new String()` or implicit boxing), all instances share a single class-level string prototype singleton — methods are registered once and reused across all string object instances. This shared prototype singleton pattern is used consistently across the codebase: `TGocciaStringObjectValue`, `TGocciaNumberObjectValue`, `TGocciaArrayValue`, `TGocciaSetValue`, `TGocciaMapValue`, `TGocciaSymbolValue`, `TGocciaFunctionBase`, `TGocciaArrayBufferValue`, `TGocciaSharedArrayBufferValue`, and `TGocciaTypedArrayValue` all follow it. `TGocciaSharedPrototype.Create` automatically pins both the prototype object and the method host with the GC — no manual `PinObject` call is needed after construction.
 
 ### Symbols
 

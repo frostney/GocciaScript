@@ -104,7 +104,7 @@ Class names, function names, method names, and type names must use **full words*
 
 ```pascal
 // Correct
-TGocciaGarbageCollector
+TGenericGarbageCollector
 MarkReferences
 IsExternalDeclaration
 DateTimeAdd
@@ -414,8 +414,8 @@ begin
   FSharedPrototype := TGocciaObjectValue.Create;
   FPrototypeMethodHost := Self;
   FSharedPrototype.RegisterNativeMethod(...);
-  TGocciaGarbageCollector.Instance.PinValue(FSharedPrototype);
-  TGocciaGarbageCollector.Instance.PinValue(FPrototypeMethodHost);
+  TGenericGarbageCollector.Instance.PinObject(FSharedPrototype);
+  TGenericGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
 end;
 ```
 

@@ -72,7 +72,8 @@ uses
   Math,
   SysUtils,
 
-  Goccia.GarbageCollector,
+  GarbageCollector.Generic,
+
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
@@ -269,14 +270,14 @@ var
   OpsRounds: array[0..4] of Double;
   MeanRounds: array[0..4] of Double;
   TempDouble, OpsMean, OpsVariance: Double;
-  GC: TGocciaGarbageCollector;
+  GC: TGenericGarbageCollector;
 begin
   Result.Name := ABenchCase.Name;
   Result.SuiteName := ABenchCase.SuiteName;
   Result.SetupMs := 0;
   Result.TeardownMs := 0;
 
-  GC := TGocciaGarbageCollector.Instance;
+  GC := TGenericGarbageCollector.Instance;
   SetupResult := nil;
   RunArgs := nil;
   EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -416,20 +417,20 @@ var
 begin
   StartNanoseconds := GetNanoseconds;
 
-  if Assigned(TGocciaGarbageCollector.Instance) then
+  if Assigned(TGenericGarbageCollector.Instance) then
     for I := 0 to FRegisteredBenchmarks.Count - 1 do
     begin
-      TGocciaGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].RunFunction);
+      TGenericGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].RunFunction);
       if Assigned(FRegisteredBenchmarks[I].SetupFunction) then
-        TGocciaGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].SetupFunction);
+        TGenericGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].SetupFunction);
       if Assigned(FRegisteredBenchmarks[I].TeardownFunction) then
-        TGocciaGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
+        TGenericGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
     end;
 
   try
     ResultsArray := TGocciaArrayValue.Create;
-    if Assigned(TGocciaGarbageCollector.Instance) then
-      TGocciaGarbageCollector.Instance.AddTempRoot(ResultsArray);
+    if Assigned(TGenericGarbageCollector.Instance) then
+      TGenericGarbageCollector.Instance.AddTempRoot(ResultsArray);
 
     for I := 0 to FRegisteredBenchmarks.Count - 1 do
     begin
@@ -478,17 +479,17 @@ begin
 
     Result := ResultObj;
   finally
-    if Assigned(TGocciaGarbageCollector.Instance) then
+    if Assigned(TGenericGarbageCollector.Instance) then
     begin
       for I := 0 to FRegisteredBenchmarks.Count - 1 do
       begin
-        TGocciaGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].RunFunction);
+        TGenericGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].RunFunction);
         if Assigned(FRegisteredBenchmarks[I].SetupFunction) then
-          TGocciaGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].SetupFunction);
+          TGenericGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].SetupFunction);
         if Assigned(FRegisteredBenchmarks[I].TeardownFunction) then
-          TGocciaGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
+          TGenericGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
       end;
-      TGocciaGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
+      TGenericGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
     end;
   end;
 end;
