@@ -746,11 +746,11 @@ begin
 
   if Assigned(ConstructorToCall) then
   begin
-    TGenericGarbageCollector.Instance.AddTempRoot(Instance);
+    TGarbageCollector.Instance.AddTempRoot(Instance);
     try
       ConstructorToCall.Call(AArguments, Instance);
     finally
-      TGenericGarbageCollector.Instance.RemoveTempRoot(Instance);
+      TGarbageCollector.Instance.RemoveTempRoot(Instance);
     end;
   end
   else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then

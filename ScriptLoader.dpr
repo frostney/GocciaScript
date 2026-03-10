@@ -202,7 +202,7 @@ begin
   WriteLn('Compiling: ', AFileName);
   StartTime := GetNanoseconds;
 
-  TGenericGarbageCollector.Initialize;
+  TGarbageCollector.Initialize;
   try
     Module := CompileSourceFile(AFileName, TGocciaEngine.DefaultGlobals);
     try
@@ -214,7 +214,7 @@ begin
       Module.Free;
     end;
   finally
-    TGenericGarbageCollector.Shutdown;
+    TGarbageCollector.Shutdown;
   end;
 end;
 
@@ -227,7 +227,7 @@ begin
   WriteLn('Compiling to WASM: ', AFileName);
   StartTime := GetNanoseconds;
 
-  TGenericGarbageCollector.Initialize;
+  TGarbageCollector.Initialize;
   try
     Module := CompileSourceFile(AFileName, TGocciaEngine.DefaultGlobals);
     try
@@ -244,7 +244,7 @@ begin
       Module.Free;
     end;
   finally
-    TGenericGarbageCollector.Shutdown;
+    TGarbageCollector.Shutdown;
   end;
 end;
 

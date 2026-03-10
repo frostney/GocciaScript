@@ -551,8 +551,8 @@ begin
   // Remove from GC -- the AST owns this value, not the garbage collector.
   // Singletons (UndefinedValue, TrueValue, FalseValue) are pinned separately
   // and safe to unregister (Remove is a no-op if not found).
-  if Assigned(FValue) and Assigned(TGenericGarbageCollector.Instance) then
-    TGenericGarbageCollector.Instance.UnregisterObject(FValue);
+  if Assigned(FValue) and Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnregisterObject(FValue);
 end;
 
 destructor TGocciaLiteralExpression.Destroy;

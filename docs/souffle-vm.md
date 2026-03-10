@@ -692,9 +692,9 @@ When `break` or `return` occurs inside a `try...finally` block, the compiler inl
 
 ## Garbage Collection
 
-Souffle shares the unified mark-and-sweep garbage collector with the GocciaScript interpreter via `TGenericGarbageCollector.Instance` (from `GarbageCollector.Generic.pas`):
+Souffle shares the unified mark-and-sweep garbage collector with the GocciaScript interpreter via `TGarbageCollector.Instance` (from `GarbageCollector.Generic.pas`):
 
-- **Unified singleton** — `TGenericGarbageCollector.Instance` (the single GC used by both the interpreter and the VM)
+- **Unified singleton** — `TGarbageCollector.Instance` (the single GC used by both the interpreter and the VM)
 - **Lifecycle** — Automatic collection is disabled during VM execution (`Enabled := False` around `TSouffleVM.Execute`) to prevent sweeping Souffle objects that are on the Pascal stack but not yet in VM registers. Explicit `Collect` calls in the BenchmarkRunner reclaim memory between files.
 - **Managed objects** — All `TSouffleHeapObject` instances registered via `AllocateObject`
 - **Pinned objects** — Long-lived objects protected from collection via `PinObject` / `UnpinObject`
@@ -1223,7 +1223,7 @@ The `souffle/` directory contains a self-contained bytecode VM with zero knowled
 - **Zero language imports**: No `Goccia.*` units, no `uses` clauses referencing the host language
 - **Generic value system**: `TSouffleValue` represents values without language-specific type tags
 - **Abstract runtime interface**: `TSouffleRuntimeOperations` is the sole injection point for language semantics
-- **Shared GC**: Souffle heap objects are managed by the unified `TGenericGarbageCollector` singleton (no separate Souffle GC)
+- **Shared GC**: Souffle heap objects are managed by the unified `TGarbageCollector` singleton (no separate Souffle GC)
 - **Self-describing binary format**: `.sbc` files include a runtime tag, version, and debug info. Serialization currently uses native endianness; cross-platform portability requires byte-order normalization (see [Known Limitations](#known-limitations))
 
 ### Multi-Frontend Vision

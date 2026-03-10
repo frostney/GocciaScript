@@ -306,10 +306,10 @@ begin
     )
   );
 
-  if Assigned(TGenericGarbageCollector.Instance) then
+  if Assigned(TGarbageCollector.Instance) then
   begin
-    TGenericGarbageCollector.Instance.PinObject(FSharedArrayPrototype);
-    TGenericGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+    TGarbageCollector.Instance.PinObject(FSharedArrayPrototype);
+    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
   end;
 end;
 

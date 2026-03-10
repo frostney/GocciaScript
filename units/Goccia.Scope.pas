@@ -156,8 +156,8 @@ begin
   if Assigned(AParent) then
     FOnError := AParent.FOnError;
 
-  if Assigned(TGenericGarbageCollector.Instance) then
-    TGenericGarbageCollector.Instance.RegisterObject(Self);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RegisterObject(Self);
 end;
 
 destructor TGocciaScope.Destroy;

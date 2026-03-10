@@ -112,7 +112,7 @@ end;
 function SouffleString(const AValue: string): TSouffleValue;
 var
   HeapStr: TSouffleHeapString;
-  GC: TGenericGarbageCollector;
+  GC: TGarbageCollector;
 begin
   FillChar(Result, SizeOf(Result), 0);
   if Length(AValue) <= SOUFFLE_INLINE_STRING_MAX then
@@ -123,7 +123,7 @@ begin
   else
   begin
     HeapStr := TSouffleHeapString.Create(AValue);
-    GC := TGenericGarbageCollector.Instance;
+    GC := TGarbageCollector.Instance;
     if Assigned(GC) then
       GC.AllocateObject(HeapStr);
     Result.Kind := svkReference;

@@ -583,12 +583,12 @@ begin
   begin
     Str := TGocciaStringLiteralValue(Iterable).Value;
     Result := TGocciaArrayValue.Create;
-    TGenericGarbageCollector.Instance.AddTempRoot(Result);
+    TGarbageCollector.Instance.AddTempRoot(Result);
     try
       for I := 1 to Length(Str) do
         Result.Elements.Add(TGocciaStringLiteralValue.Create(Str[I]));
     finally
-      TGenericGarbageCollector.Instance.RemoveTempRoot(Result);
+      TGarbageCollector.Instance.RemoveTempRoot(Result);
     end;
   end
   else if Iterable is TGocciaSetValue then

@@ -163,7 +163,7 @@ var
   IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   WasAlreadyRooted: Boolean;
-  GC: TGenericGarbageCollector;
+  GC: TGarbageCollector;
 begin
   if AValue is TGocciaIteratorValue then
   begin
@@ -176,7 +176,7 @@ begin
     IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
     if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
     begin
-      GC := TGenericGarbageCollector.Instance;
+      GC := TGarbageCollector.Instance;
       WasAlreadyRooted := Assigned(GC) and GC.IsTempRoot(AValue);
       if Assigned(GC) and not WasAlreadyRooted then
         GC.AddTempRoot(AValue);
@@ -240,7 +240,7 @@ begin
     Iterator := GetIteratorFromValue(ASpreadValue);
     if Assigned(Iterator) then
     begin
-      TGenericGarbageCollector.Instance.AddTempRoot(Iterator);
+      TGarbageCollector.Instance.AddTempRoot(Iterator);
       try
         IterResult := Iterator.AdvanceNext;
         while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
@@ -249,7 +249,7 @@ begin
           IterResult := Iterator.AdvanceNext;
         end;
       finally
-        TGenericGarbageCollector.Instance.RemoveTempRoot(Iterator);
+        TGarbageCollector.Instance.RemoveTempRoot(Iterator);
       end;
     end
     else
@@ -739,7 +739,7 @@ var
   SpreadValue: TGocciaValue;
 begin
   Arr := TGocciaArrayValue.Create;
-  TGenericGarbageCollector.Instance.AddTempRoot(Arr);
+  TGarbageCollector.Instance.AddTempRoot(Arr);
   try
     for I := 0 to AArrayExpression.Elements.Count - 1 do
     begin
@@ -758,7 +758,7 @@ begin
     end;
     Result := Arr;
   finally
-    TGenericGarbageCollector.Instance.RemoveTempRoot(Arr);
+    TGarbageCollector.Instance.RemoveTempRoot(Arr);
   end;
 end;
 
@@ -783,8 +783,8 @@ var
   SymbolEntry: TPair<TGocciaSymbolValue, TGocciaValue>;
 begin
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if Assigned(TGenericGarbageCollector.Instance) then
-    TGenericGarbageCollector.Instance.AddTempRoot(Obj);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Obj);
 
   try
   // Process all properties in source order
@@ -894,8 +894,8 @@ begin
 
   Result := Obj;
   finally
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.RemoveTempRoot(Obj);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Obj);
   end;
 end;
 
@@ -939,8 +939,8 @@ begin
   if AValue is TGocciaPromiseValue then
   begin
     Promise := TGocciaPromiseValue(AValue);
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.AddTempRoot(Promise);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(Promise);
   end
   // ES2026 §25.6.4.6.1 PromiseResolve: If value is a thenable (object with
   // callable .then), wrap it in a Promise via resolve
@@ -950,8 +950,8 @@ begin
     if Assigned(ThenMethod) and not (ThenMethod is TGocciaUndefinedLiteralValue) and ThenMethod.IsCallable then
     begin
       Promise := TGocciaPromiseValue.Create;
-      if Assigned(TGenericGarbageCollector.Instance) then
-        TGenericGarbageCollector.Instance.AddTempRoot(Promise);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AddTempRoot(Promise);
       ThenArgs := TGocciaArgumentsCollection.Create([
         TGocciaNativeFunctionValue.Create(Promise.DoResolve, 'resolve', 1),
         TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
@@ -1000,8 +1000,8 @@ begin
     else
       ThrowTypeError('await: Promise did not settle after microtask drain');
   finally
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.RemoveTempRoot(Promise);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
 end;
 
@@ -1035,8 +1035,8 @@ begin
   else
     DeclarationType := dtLet;
 
-  if Assigned(TGenericGarbageCollector.Instance) then
-    TGenericGarbageCollector.Instance.AddTempRoot(Iterator);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
     IterResult := Iterator.AdvanceNext;
     while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
@@ -1059,8 +1059,8 @@ begin
       IterResult := Iterator.AdvanceNext;
     end;
   finally
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
 
@@ -1098,8 +1098,8 @@ begin
       EmptyArgs.Free;
     end;
 
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.AddTempRoot(IteratorObj);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(IteratorObj);
     try
       EmptyArgs := TGocciaArgumentsCollection.Create;
       try
@@ -1141,8 +1141,8 @@ begin
         EmptyArgs.Free;
       end;
     finally
-      if Assigned(TGenericGarbageCollector.Instance) then
-        TGenericGarbageCollector.Instance.RemoveTempRoot(IteratorObj);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.RemoveTempRoot(IteratorObj);
     end;
   end
   else
@@ -1151,8 +1151,8 @@ begin
     if Iterator = nil then
       ThrowTypeError('Value is not iterable');
 
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.AddTempRoot(Iterator);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(Iterator);
     try
       GenericNextResult := Iterator.AdvanceNext;
       while not GenericNextResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
@@ -1176,8 +1176,8 @@ begin
         GenericNextResult := Iterator.AdvanceNext;
       end;
     finally
-      if Assigned(TGenericGarbageCollector.Instance) then
-        TGenericGarbageCollector.Instance.RemoveTempRoot(Iterator);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.RemoveTempRoot(Iterator);
     end;
   end;
 end;
@@ -1357,8 +1357,8 @@ begin
   // Phase 2: Execute finally block (always runs)
   if Assigned(ATryStatement.FinallyBlock) then
   begin
-    if HasUnhandledThrow and Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.AddTempRoot(ThrownValue);
+    if HasUnhandledThrow and Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(ThrownValue);
     try
       FinallyCF := EvaluateStatements(ATryStatement.FinallyBlock.Nodes, AContext);
       // Per JS semantics: finally's control flow overrides try/catch result AND pending throw
@@ -1369,8 +1369,8 @@ begin
       end;
       // If finally throws (TGocciaThrowValue), it propagates naturally and overrides everything
     finally
-      if HasUnhandledThrow and Assigned(TGenericGarbageCollector.Instance) then
-        TGenericGarbageCollector.Instance.RemoveTempRoot(ThrownValue);
+      if HasUnhandledThrow and Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.RemoveTempRoot(ThrownValue);
     end;
   end;
 
@@ -1422,7 +1422,7 @@ begin
 
   ChildScope.DefineLexicalBinding(AEnumDeclaration.Name, EnumValue, dtLet);
 
-  TGenericGarbageCollector.Instance.AddTempRoot(EnumEntries);
+  TGarbageCollector.Instance.AddTempRoot(EnumEntries);
   try
     for I := 0 to Length(AEnumDeclaration.Members) - 1 do
     begin
@@ -1444,7 +1444,7 @@ begin
       EnumEntries.Elements.Add(EntryPair);
     end;
   finally
-    TGenericGarbageCollector.Instance.RemoveTempRoot(EnumEntries);
+    TGarbageCollector.Instance.RemoveTempRoot(EnumEntries);
   end;
 
   EnumValue.Entries := EnumEntries;
@@ -1927,7 +1927,7 @@ begin
       MetadataObject := TGocciaObjectValue.Create(TGocciaObjectValue(SuperMetadata))
     else
       MetadataObject := TGocciaObjectValue.Create;
-    TGenericGarbageCollector.Instance.AddTempRoot(MetadataObject);
+    TGarbageCollector.Instance.AddTempRoot(MetadataObject);
 
     MethodCollector := TGocciaInitializerCollector.Create;
     FieldCollector := TGocciaInitializerCollector.Create;
@@ -2237,7 +2237,7 @@ begin
     end;
 
     finally
-      TGenericGarbageCollector.Instance.RemoveTempRoot(MetadataObject);
+      TGarbageCollector.Instance.RemoveTempRoot(MetadataObject);
       MethodCollector.Free;
       FieldCollector.Free;
       StaticFieldCollector.Free;
@@ -2518,7 +2518,7 @@ begin
     Instance.Prototype := AClassValue.Prototype;
   end;
 
-  TGenericGarbageCollector.Instance.AddTempRoot(Instance);
+  TGarbageCollector.Instance.AddTempRoot(Instance);
   try
     InitContext := AContext;
     InitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
@@ -2558,7 +2558,7 @@ begin
     else if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
       TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
   finally
-    TGenericGarbageCollector.Instance.RemoveTempRoot(Instance);
+    TGarbageCollector.Instance.RemoveTempRoot(Instance);
   end;
 
   Result := Instance;
@@ -3019,7 +3019,7 @@ begin
     if not Assigned(Iterator) then
       ThrowTypeError('Value is not iterable');
 
-    TGenericGarbageCollector.Instance.AddTempRoot(Iterator);
+    TGarbageCollector.Instance.AddTempRoot(Iterator);
     try
       for I := 0 to APattern.Elements.Count - 1 do
       begin
@@ -3053,7 +3053,7 @@ begin
         end;
       end;
     finally
-      TGenericGarbageCollector.Instance.RemoveTempRoot(Iterator);
+      TGarbageCollector.Instance.RemoveTempRoot(Iterator);
     end;
   end;
 end;

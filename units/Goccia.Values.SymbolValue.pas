@@ -109,10 +109,10 @@ begin
   Proto.RegisterNativeMethod(
     TGocciaNativeFunctionValue.CreateWithoutPrototype(SymbolToString, PROP_TO_STRING, 0));
 
-  if Assigned(TGenericGarbageCollector.Instance) then
+  if Assigned(TGarbageCollector.Instance) then
   begin
-    TGenericGarbageCollector.Instance.PinObject(FSharedPrototype);
-    TGenericGarbageCollector.Instance.PinObject(FMethodHost);
+    TGarbageCollector.Instance.PinObject(FSharedPrototype);
+    TGarbageCollector.Instance.PinObject(FMethodHost);
   end;
 end;
 
@@ -126,8 +126,8 @@ begin
   if not Assigned(FWellKnownIterator) then
   begin
     FWellKnownIterator := TGocciaSymbolValue.Create('Symbol.iterator');
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.PinObject(FWellKnownIterator);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownIterator);
   end;
   Result := FWellKnownIterator;
 end;
@@ -137,8 +137,8 @@ begin
   if not Assigned(FWellKnownSpecies) then
   begin
     FWellKnownSpecies := TGocciaSymbolValue.Create('Symbol.species');
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.PinObject(FWellKnownSpecies);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownSpecies);
   end;
   Result := FWellKnownSpecies;
 end;
@@ -148,8 +148,8 @@ begin
   if not Assigned(FWellKnownHasInstance) then
   begin
     FWellKnownHasInstance := TGocciaSymbolValue.Create('Symbol.hasInstance');
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.PinObject(FWellKnownHasInstance);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownHasInstance);
   end;
   Result := FWellKnownHasInstance;
 end;
@@ -159,8 +159,8 @@ begin
   if not Assigned(FWellKnownToPrimitive) then
   begin
     FWellKnownToPrimitive := TGocciaSymbolValue.Create('Symbol.toPrimitive');
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.PinObject(FWellKnownToPrimitive);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownToPrimitive);
   end;
   Result := FWellKnownToPrimitive;
 end;
@@ -170,8 +170,8 @@ begin
   if not Assigned(FWellKnownToStringTag) then
   begin
     FWellKnownToStringTag := TGocciaSymbolValue.Create('Symbol.toStringTag');
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.PinObject(FWellKnownToStringTag);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownToStringTag);
   end;
   Result := FWellKnownToStringTag;
 end;
@@ -181,8 +181,8 @@ begin
   if not Assigned(FWellKnownIsConcatSpreadable) then
   begin
     FWellKnownIsConcatSpreadable := TGocciaSymbolValue.Create('Symbol.isConcatSpreadable');
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.PinObject(FWellKnownIsConcatSpreadable);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownIsConcatSpreadable);
   end;
   Result := FWellKnownIsConcatSpreadable;
 end;
@@ -193,8 +193,8 @@ begin
   if not Assigned(FWellKnownAsyncIterator) then
   begin
     FWellKnownAsyncIterator := TGocciaSymbolValue.Create('Symbol.asyncIterator');
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.PinObject(FWellKnownAsyncIterator);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownAsyncIterator);
   end;
   Result := FWellKnownAsyncIterator;
 end;
@@ -205,8 +205,8 @@ begin
   if not Assigned(FWellKnownMetadata) then
   begin
     FWellKnownMetadata := TGocciaSymbolValue.Create('Symbol.metadata');
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.PinObject(FWellKnownMetadata);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownMetadata);
   end;
   Result := FWellKnownMetadata;
 end;

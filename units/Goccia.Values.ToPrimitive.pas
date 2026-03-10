@@ -40,13 +40,13 @@ begin
     Args := TGocciaArgumentsCollection.Create;
     try
       AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue);
-      if Assigned(TGenericGarbageCollector.Instance) then
-        TGenericGarbageCollector.Instance.AddTempRoot(AResult);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AddTempRoot(AResult);
       try
         Result := AResult.IsPrimitive;
       finally
-        if Assigned(TGenericGarbageCollector.Instance) then
-          TGenericGarbageCollector.Instance.RemoveTempRoot(AResult);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.RemoveTempRoot(AResult);
       end;
     finally
       Args.Free;

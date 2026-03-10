@@ -242,8 +242,8 @@ begin
 
         // Step 5a-b: If IsConstructor(C), Construct(C, « »); else ArrayCreate(0)
         ResultObj := ConstructOrCreate(0);
-        TGenericGarbageCollector.Instance.AddTempRoot(Iterator);
-        TGenericGarbageCollector.Instance.AddTempRoot(ResultObj);
+        TGarbageCollector.Instance.AddTempRoot(Iterator);
+        TGarbageCollector.Instance.AddTempRoot(ResultObj);
         try
           // Step 5d-e: Iterate
           K := 0;
@@ -263,8 +263,8 @@ begin
             IterResult := Iterator.AdvanceNext;
           end;
         finally
-          TGenericGarbageCollector.Instance.RemoveTempRoot(ResultObj);
-          TGenericGarbageCollector.Instance.RemoveTempRoot(Iterator);
+          TGarbageCollector.Instance.RemoveTempRoot(ResultObj);
+          TGarbageCollector.Instance.RemoveTempRoot(Iterator);
         end;
         // Step 5e-iii: Set A.[[length]] to k
         if UseConstructor and not (ResultObj is TGocciaArrayValue) then
@@ -327,7 +327,7 @@ var
   Mapping, UseConstructor: Boolean;
   K, Len: Integer;
   LengthValue: TGocciaValue;
-  GC: TGenericGarbageCollector;
+  GC: TGarbageCollector;
 
   function AwaitValue(const AValue: TGocciaValue): TGocciaValue;
   begin
@@ -366,7 +366,7 @@ var
   end;
 
 begin
-  GC := TGenericGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
   Promise := TGocciaPromiseValue.Create;
 
   if Assigned(GC) then

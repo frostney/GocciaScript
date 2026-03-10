@@ -361,10 +361,10 @@ begin
     TGocciaNativeFunctionValue.CreateWithoutPrototype(
       FPrototypeMethodHost.ObjectPrototypeValueOf, PROP_VALUE_OF, 0));
 
-  if Assigned(TGenericGarbageCollector.Instance) then
+  if Assigned(TGarbageCollector.Instance) then
   begin
-    TGenericGarbageCollector.Instance.PinObject(FSharedObjectPrototype);
-    TGenericGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+    TGarbageCollector.Instance.PinObject(FSharedObjectPrototype);
+    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
   end;
 end;
 

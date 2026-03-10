@@ -304,7 +304,7 @@ begin
     IteratorMethod := TGocciaObjectValue(AValue).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
     if Assigned(IteratorMethod) and not (IteratorMethod is TGocciaUndefinedLiteralValue) and IteratorMethod.IsCallable then
     begin
-      TGenericGarbageCollector.Instance.AddTempRoot(AValue);
+      TGarbageCollector.Instance.AddTempRoot(AValue);
       try
         CallArgs := TGocciaArgumentsCollection.Create;
         try
@@ -313,7 +313,7 @@ begin
           CallArgs.Free;
         end;
       finally
-        TGenericGarbageCollector.Instance.RemoveTempRoot(AValue);
+        TGarbageCollector.Instance.RemoveTempRoot(AValue);
       end;
       if IteratorObj is TGocciaIteratorValue then
       begin

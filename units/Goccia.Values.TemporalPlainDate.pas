@@ -449,7 +449,7 @@ begin
     -Dur.Hours, -Dur.Minutes, -Dur.Seconds,
     -Dur.Milliseconds, -Dur.Microseconds, -Dur.Nanoseconds);
 
-  TGenericGarbageCollector.Instance.AddTempRoot(NegatedDur);
+  TGarbageCollector.Instance.AddTempRoot(NegatedDur);
   try
     NewArgs := TGocciaArgumentsCollection.Create([NegatedDur]);
     try
@@ -458,7 +458,7 @@ begin
       NewArgs.Free;
     end;
   finally
-    TGenericGarbageCollector.Instance.RemoveTempRoot(NegatedDur);
+    TGarbageCollector.Instance.RemoveTempRoot(NegatedDur);
   end;
 end;
 

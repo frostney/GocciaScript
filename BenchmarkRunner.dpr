@@ -182,8 +182,8 @@ begin
         ScriptResult := TGocciaObjectValue(EngineResult.Result);
 
       PopulateFileResult(FileResult, ScriptResult, AReporter, Result);
-      if Assigned(TGenericGarbageCollector.Instance) then
-        TGenericGarbageCollector.Instance.Collect;
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.Collect;
     except
       on E: Exception do
         Result := MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -271,8 +271,8 @@ begin
         finally
           Module.Free;
         end;
-        if Assigned(TGenericGarbageCollector.Instance) then
-          TGenericGarbageCollector.Instance.Collect;
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.Collect;
       finally
         Backend.Free;
       end;

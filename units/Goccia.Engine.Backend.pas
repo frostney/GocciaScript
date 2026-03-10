@@ -65,7 +65,7 @@ uses
 constructor TGocciaSouffleBackend.Create(const ASourcePath: string);
 begin
   inherited Create;
-  TGenericGarbageCollector.Initialize;
+  TGarbageCollector.Initialize;
   FSourcePath := ASourcePath;
   FRuntime := TGocciaRuntimeOperations.Create;
   FVM := TSouffleVM.Create(FRuntime);
@@ -130,10 +130,10 @@ function TGocciaSouffleBackend.RunModule(
   const AModule: TSouffleBytecodeModule): TGocciaValue;
 var
   SouffleResult: TSouffleValue;
-  GC: TGenericGarbageCollector;
+  GC: TGarbageCollector;
   WasEnabled: Boolean;
 begin
-  GC := TGenericGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
   WasEnabled := GC.Enabled;
   GC.Enabled := False;
   try

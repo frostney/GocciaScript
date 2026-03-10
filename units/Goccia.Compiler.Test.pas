@@ -157,13 +157,13 @@ begin
 end;
 
 begin
-  TGenericGarbageCollector.Initialize;
+  TGarbageCollector.Initialize;
   try
     TestRunnerProgram.AddSuite(TTestCompiler.Create('GocciaScript Compiler'));
     TestRunnerProgram.Run;
 
     ExitCode := TestResultToExitCode;
   finally
-    TGenericGarbageCollector.Shutdown;
+    TGarbageCollector.Shutdown;
   end;
 end.

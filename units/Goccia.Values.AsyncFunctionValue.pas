@@ -50,13 +50,13 @@ var
 begin
   Promise := TGocciaPromiseValue.Create;
 
-  if Assigned(TGenericGarbageCollector.Instance) then
-    TGenericGarbageCollector.Instance.AddTempRoot(Promise);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
   try
     CallScope := CreateCallScope;
 
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.PushActiveRoot(CallScope);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PushActiveRoot(CallScope);
     try
       try
         BodyResult := ExecuteBody(CallScope, AArguments, AThisValue);
@@ -66,12 +66,12 @@ begin
           Promise.Reject(E.Value);
       end;
     finally
-      if Assigned(TGenericGarbageCollector.Instance) then
-        TGenericGarbageCollector.Instance.PopActiveRoot;
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.PopActiveRoot;
     end;
   finally
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.RemoveTempRoot(Promise);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
 
   Result := Promise;
@@ -88,13 +88,13 @@ var
 begin
   Promise := TGocciaPromiseValue.Create;
 
-  if Assigned(TGenericGarbageCollector.Instance) then
-    TGenericGarbageCollector.Instance.AddTempRoot(Promise);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
   try
     CallScope := CreateCallScope;
 
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.PushActiveRoot(CallScope);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PushActiveRoot(CallScope);
     try
       try
         BodyResult := ExecuteBody(CallScope, AArguments, AThisValue);
@@ -104,12 +104,12 @@ begin
           Promise.Reject(E.Value);
       end;
     finally
-      if Assigned(TGenericGarbageCollector.Instance) then
-        TGenericGarbageCollector.Instance.PopActiveRoot;
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.PopActiveRoot;
     end;
   finally
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.RemoveTempRoot(Promise);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
 
   Result := Promise;
@@ -126,13 +126,13 @@ var
 begin
   Promise := TGocciaPromiseValue.Create;
 
-  if Assigned(TGenericGarbageCollector.Instance) then
-    TGenericGarbageCollector.Instance.AddTempRoot(Promise);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
   try
     CallScope := CreateCallScope;
 
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.PushActiveRoot(CallScope);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PushActiveRoot(CallScope);
     try
       try
         BodyResult := ExecuteBody(CallScope, AArguments, AThisValue);
@@ -142,12 +142,12 @@ begin
           Promise.Reject(E.Value);
       end;
     finally
-      if Assigned(TGenericGarbageCollector.Instance) then
-        TGenericGarbageCollector.Instance.PopActiveRoot;
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.PopActiveRoot;
     end;
   finally
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.RemoveTempRoot(Promise);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
 
   Result := Promise;

@@ -91,10 +91,10 @@ begin
   FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToPrecision, 'toPrecision', 1));
   FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToExponential, 'toExponential', 1));
 
-  if Assigned(TGenericGarbageCollector.Instance) then
+  if Assigned(TGarbageCollector.Instance) then
   begin
-    TGenericGarbageCollector.Instance.PinObject(FSharedNumberPrototype);
-    TGenericGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+    TGarbageCollector.Instance.PinObject(FSharedNumberPrototype);
+    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
   end;
 end;
 

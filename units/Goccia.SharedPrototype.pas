@@ -33,11 +33,11 @@ begin
   FPrototype := TGocciaObjectValue.Create;
   FMethodHost := AMethodHost;
 
-  if Assigned(TGenericGarbageCollector.Instance) then
+  if Assigned(TGarbageCollector.Instance) then
   begin
-    TGenericGarbageCollector.Instance.PinObject(FPrototype);
+    TGarbageCollector.Instance.PinObject(FPrototype);
     if Assigned(FMethodHost) then
-      TGenericGarbageCollector.Instance.PinObject(FMethodHost);
+      TGarbageCollector.Instance.PinObject(FMethodHost);
   end;
 end;
 

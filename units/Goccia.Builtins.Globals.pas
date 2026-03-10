@@ -384,8 +384,8 @@ begin
   Task.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   Task.ReactionType := prtFulfill;
 
-  if Assigned(TGenericGarbageCollector.Instance) then
-    TGenericGarbageCollector.Instance.AddTempRoot(Callback);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Callback);
   TGocciaMicrotaskQueue.Instance.Enqueue(Task);
 
   { Step 3: Return undefined }
@@ -491,8 +491,8 @@ begin
   Len := Length(ABuf.Data);
   Result := TGocciaArrayBufferValue.Create(Len);
   AMemory.Add(ABuf, Result);
-  if Assigned(TGenericGarbageCollector.Instance) then
-    TGenericGarbageCollector.Instance.AddTempRoot(Result);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Result);
 
   if Len > 0 then
     Move(ABuf.Data[0], Result.Data[0], Len);
@@ -506,8 +506,8 @@ begin
   Len := Length(ABuf.Data);
   Result := TGocciaSharedArrayBufferValue.Create(Len);
   AMemory.Add(ABuf, Result);
-  if Assigned(TGenericGarbageCollector.Instance) then
-    TGenericGarbageCollector.Instance.AddTempRoot(Result);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Result);
 
   if Len > 0 then
     Move(ABuf.Data[0], Result.Data[0], Len);
@@ -561,9 +561,9 @@ begin
   try
     Result := StructuredCloneValue(AArgs.GetElement(0), Memory);
   finally
-    if Assigned(TGenericGarbageCollector.Instance) then
+    if Assigned(TGarbageCollector.Instance) then
       for CloneValue in Memory.Values do
-        TGenericGarbageCollector.Instance.RemoveTempRoot(CloneValue);
+        TGarbageCollector.Instance.RemoveTempRoot(CloneValue);
     Memory.Free;
   end;
 end;

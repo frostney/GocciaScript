@@ -270,14 +270,14 @@ var
   OpsRounds: array[0..4] of Double;
   MeanRounds: array[0..4] of Double;
   TempDouble, OpsMean, OpsVariance: Double;
-  GC: TGenericGarbageCollector;
+  GC: TGarbageCollector;
 begin
   Result.Name := ABenchCase.Name;
   Result.SuiteName := ABenchCase.SuiteName;
   Result.SetupMs := 0;
   Result.TeardownMs := 0;
 
-  GC := TGenericGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
   SetupResult := nil;
   RunArgs := nil;
   EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -417,20 +417,20 @@ var
 begin
   StartNanoseconds := GetNanoseconds;
 
-  if Assigned(TGenericGarbageCollector.Instance) then
+  if Assigned(TGarbageCollector.Instance) then
     for I := 0 to FRegisteredBenchmarks.Count - 1 do
     begin
-      TGenericGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].RunFunction);
+      TGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].RunFunction);
       if Assigned(FRegisteredBenchmarks[I].SetupFunction) then
-        TGenericGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].SetupFunction);
+        TGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].SetupFunction);
       if Assigned(FRegisteredBenchmarks[I].TeardownFunction) then
-        TGenericGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
+        TGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
     end;
 
   try
     ResultsArray := TGocciaArrayValue.Create;
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.AddTempRoot(ResultsArray);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(ResultsArray);
 
     for I := 0 to FRegisteredBenchmarks.Count - 1 do
     begin
@@ -479,17 +479,17 @@ begin
 
     Result := ResultObj;
   finally
-    if Assigned(TGenericGarbageCollector.Instance) then
+    if Assigned(TGarbageCollector.Instance) then
     begin
       for I := 0 to FRegisteredBenchmarks.Count - 1 do
       begin
-        TGenericGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].RunFunction);
+        TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].RunFunction);
         if Assigned(FRegisteredBenchmarks[I].SetupFunction) then
-          TGenericGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].SetupFunction);
+          TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].SetupFunction);
         if Assigned(FRegisteredBenchmarks[I].TeardownFunction) then
-          TGenericGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
+          TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
       end;
-      TGenericGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
+      TGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
     end;
   end;
 end;

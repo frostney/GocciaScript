@@ -170,8 +170,8 @@ uses
 procedure TGocciaValue.AfterConstruction;
 begin
   inherited;
-  if Assigned(TGenericGarbageCollector.Instance) then
-    TGenericGarbageCollector.Instance.RegisterObject(Self);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RegisterObject(Self);
 end;
 
 function TGocciaValue.RuntimeCopy: TGocciaValue;

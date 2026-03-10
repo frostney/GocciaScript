@@ -77,10 +77,10 @@ function BuildDelegate(
 var
   Rec: TSouffleRecord;
   Fn: TSouffleNativeFunction;
-  GC: TGenericGarbageCollector;
+  GC: TGarbageCollector;
   I: Integer;
 begin
-  GC := TGenericGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
   Rec := TSouffleRecord.Create(Length(AEntries));
   if Assigned(GC) then
     GC.AllocateObject(Rec);

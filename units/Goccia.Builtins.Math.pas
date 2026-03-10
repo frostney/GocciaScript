@@ -1066,7 +1066,7 @@ begin
     if not Assigned(Iterator) then
       Goccia.Values.ErrorHelper.ThrowTypeError('Math.sumPrecise: argument is not iterable');
 
-    TGenericGarbageCollector.Instance.AddTempRoot(Iterator);
+    TGarbageCollector.Instance.AddTempRoot(Iterator);
     try
       IterResult := Iterator.AdvanceNext;
       while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
@@ -1076,7 +1076,7 @@ begin
         IterResult := Iterator.AdvanceNext;
       end;
     finally
-      TGenericGarbageCollector.Instance.RemoveTempRoot(Iterator);
+      TGarbageCollector.Instance.RemoveTempRoot(Iterator);
     end;
   end;
 

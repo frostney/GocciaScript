@@ -203,7 +203,7 @@ begin
     FOwnsResolver := True;
   end;
 
-  TGenericGarbageCollector.Initialize;
+  TGarbageCollector.Initialize;
   TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
 
@@ -211,7 +211,7 @@ begin
   FInterpreter.JSXEnabled := ggJSX in FGlobals;
   FInterpreter.Resolver := FResolver;
 
-  TGenericGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
+  TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
 
   PinSingletons;
   RegisterBuiltIns;
@@ -220,8 +220,8 @@ end;
 destructor TGocciaEngine.Destroy;
 begin
   try
-    if Assigned(TGenericGarbageCollector.Instance) and Assigned(FInterpreter) then
-      TGenericGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
+    if Assigned(TGarbageCollector.Instance) and Assigned(FInterpreter) then
+      TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
 
     FBuiltinConsole.Free;
     FBuiltinMath.Free;
@@ -252,7 +252,7 @@ end;
 procedure PinIfAssigned(const AValue: TGocciaValue); inline;
 begin
   if Assigned(AValue) then
-    TGenericGarbageCollector.Instance.PinObject(AValue);
+    TGarbageCollector.Instance.PinObject(AValue);
 end;
 
 procedure TGocciaEngine.PinSingletons;

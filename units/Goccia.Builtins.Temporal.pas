@@ -87,7 +87,7 @@ begin
   inherited Create(AName, AScope, AThrowError);
 
   FTemporalNamespace := TGocciaObjectValue.Create;
-  TGenericGarbageCollector.Instance.AddTempRoot(FTemporalNamespace);
+  TGarbageCollector.Instance.AddTempRoot(FTemporalNamespace);
   try
     RegisterDuration;
     RegisterInstant;
@@ -98,7 +98,7 @@ begin
 
     AScope.DefineLexicalBinding(AName, FTemporalNamespace, dtLet);
   finally
-    TGenericGarbageCollector.Instance.RemoveTempRoot(FTemporalNamespace);
+    TGarbageCollector.Instance.RemoveTempRoot(FTemporalNamespace);
   end;
 end;
 

@@ -198,10 +198,10 @@ begin
     )
   );
 
-  if Assigned(TGenericGarbageCollector.Instance) then
+  if Assigned(TGarbageCollector.Instance) then
   begin
-    TGenericGarbageCollector.Instance.PinObject(FSharedStringPrototype);
-    TGenericGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+    TGarbageCollector.Instance.PinObject(FSharedStringPrototype);
+    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
   end;
 end;
 
@@ -835,7 +835,7 @@ begin
   end;
 
   ResultArray := TGocciaArrayValue.Create;
-  TGenericGarbageCollector.Instance.AddTempRoot(ResultArray);
+  TGarbageCollector.Instance.AddTempRoot(ResultArray);
   try
     // Step 5: If separator is undefined, return [S]
     if StringValue = '' then
@@ -888,7 +888,7 @@ begin
 
     Result := ResultArray;
   finally
-    TGenericGarbageCollector.Instance.RemoveTempRoot(ResultArray);
+    TGarbageCollector.Instance.RemoveTempRoot(ResultArray);
   end;
 end;
 

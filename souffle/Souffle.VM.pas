@@ -32,7 +32,7 @@ type
     FHandlerStack: TSouffleHandlerStack;
     FOpenUpvalues: TSouffleUpvalue;
     FRuntimeOps: TSouffleRuntimeOperations;
-    FGC: TGenericGarbageCollector;
+    FGC: TGarbageCollector;
     FBaseFrameCount: Integer;
 
     FPreviousExceptionMask: TFPUExceptionMask;
@@ -93,7 +93,7 @@ begin
   FArrayDelegate := nil;
   FRecordDelegate := nil;
 
-  FGC := TGenericGarbageCollector.Instance;
+  FGC := TGarbageCollector.Instance;
   if Assigned(FGC) then
     FGC.AddExternalRootMarker(MarkVMRoots);
 end;

@@ -321,7 +321,7 @@ end;
 
 function RunScriptsFromFiles(const AFiles: TStringList): TAggregatedTestResult;
 var
-  GC: TGenericGarbageCollector;
+  GC: TGarbageCollector;
   I, J: Integer;
   AllTestResults: TGocciaObjectValue;
   AllFailedTests: TGocciaArrayValue;
@@ -329,7 +329,7 @@ var
   FileFailedTests: TGocciaValue;
   PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions, TotalDuration: Double;
 begin
-  GC := TGenericGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
 
   AllTestResults := TGocciaObjectValue.Create;
   AllFailedTests := TGocciaArrayValue.Create;

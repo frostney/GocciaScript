@@ -88,8 +88,8 @@ begin
   begin
     FSharedPrototype := TGocciaFunctionSharedPrototype.Create;
     // Pin the shared prototype so the GC never collects it
-    if Assigned(TGenericGarbageCollector.Instance) then
-      TGenericGarbageCollector.Instance.PinObject(FSharedPrototype);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FSharedPrototype);
   end;
 
   Self.Prototype := FSharedPrototype;

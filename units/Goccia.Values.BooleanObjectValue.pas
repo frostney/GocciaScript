@@ -58,10 +58,10 @@ begin
   FSharedBooleanPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BooleanValueOf, PROP_VALUE_OF, 0));
   FSharedBooleanPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BooleanToString, PROP_TO_STRING, 0));
 
-  if Assigned(TGenericGarbageCollector.Instance) then
+  if Assigned(TGarbageCollector.Instance) then
   begin
-    TGenericGarbageCollector.Instance.PinObject(FSharedBooleanPrototype);
-    TGenericGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
+    TGarbageCollector.Instance.PinObject(FSharedBooleanPrototype);
+    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
   end;
 end;
 
