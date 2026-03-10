@@ -9,6 +9,7 @@ uses
 
   Souffle.Bytecode.Binary,
   Souffle.Bytecode.Module,
+  Souffle.Wasm.Translator,
   TimingUtils,
 
   Goccia.AST.Node,
@@ -28,10 +29,12 @@ uses
 
 type
   TExecutionMode = (emInterpreted, emBytecode);
+  TEmitFormat = (efBytecode, efWasm);
 
 var
   GMode: TExecutionMode = emInterpreted;
-  GEmitPath: string = '';
+  GEmitFormat: TEmitFormat = efBytecode;
+  GOutputPath: string = '';
   GEmitOnly: Boolean = False;
 
 function ParseSourceFile(const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaProgram;
@@ -215,9 +218,39 @@ begin
   end;
 end;
 
+procedure EmitWasm(const AFileName, AOutputPath: string);
+var
+  Module: TSouffleBytecodeModule;
+  Translator: TSouffleWasmTranslator;
+  StartTime, EndTime: Int64;
+begin
+  WriteLn('Compiling to WASM: ', AFileName);
+  StartTime := GetNanoseconds;
+
+  TGocciaGarbageCollector.Initialize;
+  try
+    Module := CompileSourceFile(AFileName, TGocciaEngine.DefaultGlobals);
+    try
+      Translator := TSouffleWasmTranslator.Create;
+      try
+        Translator.TranslateToFile(Module, AOutputPath);
+        EndTime := GetNanoseconds;
+        WriteLn(SysUtils.Format('  Compiled to %s (%s)',
+          [AOutputPath, FormatDuration(EndTime - StartTime)]));
+      finally
+        Translator.Free;
+      end;
+    finally
+      Module.Free;
+    end;
+  finally
+    TGocciaGarbageCollector.Shutdown;
+  end;
+end;
+
 procedure RunScriptFromFile(const AFileName: string);
 var
-  Ext: string;
+  Ext, OutputPath: string;
 begin
   try
     Ext := LowerCase(ExtractFileExt(AFileName));
@@ -230,10 +263,24 @@ begin
 
     if GEmitOnly then
     begin
-      if GEmitPath <> '' then
-        EmitBytecode(AFileName, GEmitPath)
-      else
-        EmitBytecode(AFileName, ChangeFileExt(AFileName, EXT_SBC));
+      case GEmitFormat of
+        efBytecode:
+        begin
+          if GOutputPath <> '' then
+            OutputPath := GOutputPath
+          else
+            OutputPath := ChangeFileExt(AFileName, EXT_SBC);
+          EmitBytecode(AFileName, OutputPath);
+        end;
+        efWasm:
+        begin
+          if GOutputPath <> '' then
+            OutputPath := GOutputPath
+          else
+            OutputPath := ChangeFileExt(AFileName, EXT_WASM);
+          EmitWasm(AFileName, OutputPath);
+        end;
+      end;
       Exit;
     end;
 
@@ -287,17 +334,21 @@ begin
   WriteLn('Options:');
   WriteLn('  --mode=interpreted      Tree-walk interpreter (default)');
   WriteLn('  --mode=bytecode         Compile to bytecode and execute on Souffle VM');
-  WriteLn('  --emit[=output.sbc]     Compile to .sbc file (no execution)');
+  WriteLn('  --emit                  Compile to .sbc file (no execution)');
+  WriteLn('  --emit=bytecode         Compile to .sbc file (explicit, same as --emit)');
+  WriteLn('  --emit=wasm             Compile to .wasm file');
+  WriteLn('  --output=<path>         Output file path (used with --emit)');
 end;
 
 var
   Paths: TStringList;
   I: Integer;
-  Arg, ModeStr: string;
+  Arg, ModeStr, EmitStr: string;
 
 begin
   GMode := emInterpreted;
-  GEmitPath := '';
+  GEmitFormat := efBytecode;
+  GOutputPath := '';
   GEmitOnly := False;
 
   Paths := TStringList.Create;
@@ -322,13 +373,25 @@ begin
       else if Copy(Arg, 1, 7) = '--emit=' then
       begin
         GEmitOnly := True;
-        GEmitPath := Copy(Arg, 8, MaxInt);
+        EmitStr := Copy(Arg, 8, MaxInt);
+        if (EmitStr = 'bytecode') or (EmitStr = '') then
+          GEmitFormat := efBytecode
+        else if EmitStr = 'wasm' then
+          GEmitFormat := efWasm
+        else
+        begin
+          WriteLn('Error: Unknown emit format "', EmitStr, '". Use "bytecode" or "wasm".');
+          ExitCode := 1;
+          Exit;
+        end;
       end
       else if Arg = '--emit' then
       begin
         GEmitOnly := True;
-        GEmitPath := '';
+        GEmitFormat := efBytecode;
       end
+      else if Copy(Arg, 1, 9) = '--output=' then
+        GOutputPath := Copy(Arg, 10, MaxInt)
       else if Copy(Arg, 1, 2) <> '--' then
         Paths.Add(Arg);
     end;
@@ -339,9 +402,6 @@ begin
       ExitCode := 1;
       Exit;
     end;
-
-    if GEmitOnly and (GEmitPath = '') then
-      GEmitPath := ChangeFileExt(Paths[0], EXT_SBC);
 
     for I := 0 to Paths.Count - 1 do
     begin
