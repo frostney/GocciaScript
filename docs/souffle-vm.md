@@ -695,11 +695,12 @@ When `break` or `return` occurs inside a `try...finally` block, the compiler inl
 Souffle has its own mark-and-sweep garbage collector (`Souffle.GarbageCollector.pas`), independent of GocciaScript's GC:
 
 - **Singleton** — `TSouffleGarbageCollector.Initialize` / `TSouffleGarbageCollector.Instance`
+- **Lifecycle** — Initialized by `TGocciaSouffleBackend.Create`, shut down by the `finalization` section of `Goccia.Engine.Backend.pas`. Automatic collection is disabled (`Enabled := False`) because the mark phase does not yet cover all cross-GC roots during bridge calls. Instead, a full `Collect` runs in `TGocciaSouffleBackend.Destroy` to free all Souffle heap objects between backend instances (e.g., between benchmark files).
 - **Managed objects** — All `TSouffleHeapObject` instances registered via `AllocateObject`
 - **Pinned objects** — Long-lived objects protected from collection via `PinObject` / `UnpinObject`
 - **Temp roots** — Short-lived references protected during operations via `AddTempRoot` / `RemoveTempRoot`
-- **External root marker** — The VM registers `MarkVMRoots` to mark all values in the register file and call stack during collection
-- **Threshold-based collection** — `CollectIfNeeded` triggers after a configurable number of allocations (default: 10,000)
+- **External root marker** — The VM registers `MarkVMRoots` to mark all values in the register file and call stack during collection. `TGocciaRuntimeOperations.MarkExternalRoots` marks globals, exports, bridge caches, `FBlueprintSuperValues`, and all six delegate records (string, number, map, set, describe, test).
+- **Threshold-based collection** — `CollectIfNeeded` triggers after a configurable number of allocations (default: 10,000). Currently disabled via `Enabled := False`; re-enabling requires fixing cycle handling and cross-GC root coverage in bridge call paths.
 - **O(1) membership** — Pinned objects and temp roots use `TDictionary<TSouffleHeapObject, Boolean>` for hash-set semantics
 
 ## Bytecode Module Structure
