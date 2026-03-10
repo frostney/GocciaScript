@@ -55,7 +55,7 @@ jobs:
       - name: Upload build
         uses: actions/upload-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           retention-days: 1
           path: |
             build/ScriptLoader
@@ -76,6 +76,7 @@ jobs:
   test:
     needs: build
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         arch: [x64]
@@ -96,7 +97,7 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           path: build/
 
       - name: Make binaries executable
@@ -117,7 +118,17 @@ jobs:
 
   wasm-test:
     needs: build
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        arch: [x64]
+        include:
+          - os: ubuntu-latest
+            arch: arm64
+          - os: macos-latest
+            arch: arm64
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         shell: bash
@@ -129,14 +140,28 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-ubuntu-latest-x64
+          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           path: build/
 
       - name: Make binaries executable
+        if: runner.os != 'Windows'
         run: chmod +x build/*
 
-      - name: Install FPC
+      - name: Install FPC (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+
+      - name: Install FPC (macOS)
+        if: runner.os == 'macOS'
+        run: brew install fpc
+
+      - name: Install FPC (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install freepascal -y --no-progress
+          echo 'C:\ProgramData\chocolatey\bin' >> "$GITHUB_PATH"
+          echo 'C:\tools\freepascal\bin\i386-win32' >> "$GITHUB_PATH"
+          echo '-FuC:/tools/freepascal/units/$fpctarget/*' >> 'C:/tools/freepascal/bin/i386-win32/fpc.cfg'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -149,6 +174,7 @@ jobs:
   benchmark:
     needs: build
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         arch: [x64]
@@ -178,7 +204,7 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           path: build/
 
       - name: Make binaries executable
@@ -209,6 +235,7 @@ jobs:
   examples:
     needs: build
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         arch: [x64]
@@ -229,7 +256,7 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           path: build/
 
       - name: Make binaries executable
@@ -259,13 +286,13 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           path: build/
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: gocciascript-${{ matrix.os }}-${{ matrix.arch }}
+          name: gocciascript-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           if-no-files-found: ignore
           path: |
             build/ScriptLoader
@@ -296,7 +323,7 @@ jobs:
 
       - name: Package releases
         run: |
-          platforms=("ubuntu-latest-x64" "ubuntu-latest-arm64" "macos-latest-x64" "macos-latest-arm64" "windows-latest-x64")
+          platforms=("ubuntu-latest-x64" "ubuntu-latest-arm64" "macos-latest-x64" "macos-latest-arm64" "windows-latest-x86")
 
           for platform in "${platforms[@]}"; do
             artifact_dir="artifacts/build-${platform}"
