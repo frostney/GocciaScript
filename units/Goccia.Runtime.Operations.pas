@@ -454,6 +454,7 @@ type
       const ARuntime: TGocciaRuntimeOperations);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
     property NativeFunction: TSouffleNativeFunction read FNativeFunction;
   end;
 
@@ -469,6 +470,7 @@ type
       const ARuntime: TGocciaRuntimeOperations);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
     property Closure: TSouffleClosure read FClosure;
   end;
 
@@ -484,6 +486,7 @@ type
       const ARuntime: TGocciaRuntimeOperations);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
   end;
 
 procedure RebuildArrayBridgeCache(
@@ -534,6 +537,13 @@ begin
   else
     SouffleResult := FNativeFunction.Invoke(Receiver, nil, 0);
   Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
+end;
+
+procedure TGocciaSouffleNativeFunctionBridge.MarkReferences;
+begin
+  inherited;
+  if Assigned(FNativeFunction) and not FNativeFunction.GCMarked then
+    FNativeFunction.MarkReferences;
 end;
 
 { TGocciaSouffleClosureBridge }
@@ -598,6 +608,13 @@ begin
   Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
 end;
 
+procedure TGocciaSouffleClosureBridge.MarkReferences;
+begin
+  inherited;
+  if Assigned(FClosure) and not FClosure.GCMarked then
+    FClosure.MarkReferences;
+end;
+
 { TGocciaSouffleMethodBridge }
 
 constructor TGocciaSouffleMethodBridge.Create(const AClosure: TSouffleClosure;
@@ -655,6 +672,13 @@ begin
     FBridgeRuntime.FRecordBridgeCache.Clear;
   end;
   Result := FBridgeRuntime.UnwrapToGocciaValue(SouffleResult);
+end;
+
+procedure TGocciaSouffleMethodBridge.MarkReferences;
+begin
+  inherited;
+  if Assigned(FSouffleClosure) and not FSouffleClosure.GCMarked then
+    FSouffleClosure.MarkReferences;
 end;
 
 { TGocciaWrappedValue }
