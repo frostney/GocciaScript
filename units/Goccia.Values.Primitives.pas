@@ -5,19 +5,18 @@ unit Goccia.Values.Primitives;
 interface
 
 uses
-  Generics.Collections;
+  Generics.Collections,
+
+  GarbageCollector.Managed;
 
 type
   TGocciaBooleanLiteralValue = class;
   TGocciaNumberLiteralValue = class;
   TGocciaStringLiteralValue = class;
 
-  TGocciaValue = class
-  private
-    FGCMarked: Boolean;
+  TGocciaValue = class(TGCManagedObject)
   public
     procedure AfterConstruction; override;
-    procedure MarkReferences; virtual;
     function RuntimeCopy: TGocciaValue; virtual;
 
     function TypeName: string; virtual; abstract;
@@ -27,14 +26,10 @@ type
     function ToNumberLiteral: TGocciaNumberLiteralValue; virtual; abstract;
     function ToStringLiteral: TGocciaStringLiteralValue; virtual; abstract;
 
-    // Type discrimination via VMT — avoids `is` check chains on hot paths
     function IsPrimitive: Boolean; virtual;
     function IsCallable: Boolean; virtual;
-    // Virtual property access — overridden by ObjectValue, ClassValue, etc.
     function GetProperty(const AName: string): TGocciaValue; virtual;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); virtual;
-
-    property GCMarked: Boolean read FGCMarked write FGCMarked;
   end;
 
   TGocciaValueList = TObjectList<TGocciaValue>;
@@ -176,11 +171,6 @@ begin
   inherited;
   if Assigned(TGocciaGarbageCollector.Instance) then
     TGocciaGarbageCollector.Instance.RegisterValue(Self);
-end;
-
-procedure TGocciaValue.MarkReferences;
-begin
-  FGCMarked := True;
 end;
 
 function TGocciaValue.RuntimeCopy: TGocciaValue;

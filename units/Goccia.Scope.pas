@@ -7,6 +7,8 @@ interface
 uses
   Generics.Collections,
 
+  GarbageCollector.Managed,
+
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope.BindingMap,
   Goccia.Token,
@@ -20,14 +22,13 @@ const
 type
   TGocciaScopeKind = (skUnknown, skGlobal, skFunction, skBlock, skCustom, skClass, skModule);
 
-  TGocciaScope = class
+  TGocciaScope = class(TGCManagedObject)
   private
     FLexicalBindings: TGocciaScopeBindingMap;
     FParent: TGocciaScope;
     FThisValue: TGocciaValue;
     FScopeKind: TGocciaScopeKind;
     FCustomLabel: string;
-    FGCMarked: Boolean;
     FOnError: TGocciaThrowErrorCallback;
   protected
     function GetThisValue: TGocciaValue; virtual;
@@ -38,9 +39,7 @@ type
     destructor Destroy; override;
     function CreateChild(const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0): TGocciaScope;
 
-    // Garbage collection support
-    procedure MarkReferences; virtual;
-    property GCMarked: Boolean read FGCMarked write FGCMarked;
+    procedure MarkReferences; override;
 
     // New Define/Assign pattern
     procedure DefineLexicalBinding(const AName: string; const AValue: TGocciaValue; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
@@ -391,8 +390,8 @@ var
   Bindings: TGocciaScopeBindingMap.TValueArray;
   I: Integer;
 begin
-  if FGCMarked then Exit;
-  FGCMarked := True;
+  if GCMarked then Exit;
+  inherited;
 
   if Assigned(FParent) then
     FParent.MarkReferences;
