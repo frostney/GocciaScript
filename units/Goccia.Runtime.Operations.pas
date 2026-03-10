@@ -8674,6 +8674,10 @@ begin
     FStringDelegate.MarkReferences;
   if Assigned(FNumberDelegate) and not FNumberDelegate.GCMarked then
     FNumberDelegate.MarkReferences;
+  if Assigned(FPromiseDelegate) and not FPromiseDelegate.GCMarked then
+    FPromiseDelegate.MarkReferences;
+  if Assigned(FPromiseStaticDelegate) and not FPromiseStaticDelegate.GCMarked then
+    FPromiseStaticDelegate.MarkReferences;
   if Assigned(FDescribeDelegate) and not FDescribeDelegate.GCMarked then
     FDescribeDelegate.MarkReferences;
   if Assigned(FTestDelegate) and not FTestDelegate.GCMarked then
