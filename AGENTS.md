@@ -103,7 +103,9 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Timing Utilities | `TimingUtils.pas` | Cross-platform timing: monotonic (`GetNanoseconds`, `GetMilliseconds`), wall-clock (`GetEpochNanoseconds`), and duration formatting (`FormatDuration`) |
 | Microtask Queue | `Goccia.MicrotaskQueue.pas` | Singleton FIFO queue for Promise reactions and `queueMicrotask` callbacks, drained after script execution, cleared on exception |
 | Call Stack | `Goccia.CallStack.pas` | Singleton call frame stack for `Error.stack` traces — pushed/popped in `EvaluateCall`/`EvaluateNewExpression`, captured at error construction |
-| Garbage Collector | `Goccia.GarbageCollector.pas` | Mark-and-sweep memory management for runtime values |
+| GC Managed Base | `GarbageCollector.Managed.pas` | `TGCManagedObject` — base class for all GC-managed objects (`GCMarked`, virtual `MarkReferences`); inherited by `TGocciaValue`, `TGocciaScope`, and `TSouffleHeapObject` |
+| Generic GC | `GarbageCollector.Generic.pas` | `TGenericGarbageCollector` — generic mark-and-sweep: managed object list, pinned objects, temp roots, external root marker, threshold-based collection |
+| Garbage Collector | `Goccia.GarbageCollector.pas` | `TGocciaGarbageCollector` — extends `TGenericGarbageCollector` with scope management (root scopes, active scope stack, managed scopes) |
 | Iterator Base | `Goccia.Values.IteratorValue.pas` | Iterator protocol base class, shared prototype with helper methods, `Iterator.from()`, `CreateGlobalObject` |
 | Concrete Iterators | `Goccia.Values.Iterator.Concrete.pas` | Array/String/Map/Set iterator subclasses with virtual `AdvanceNext` |
 | Lazy Iterators | `Goccia.Values.Iterator.Lazy.pas` | Lazy `map`/`filter`/`take`/`drop`/`flatMap` iterator wrappers |
@@ -154,7 +156,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Souffle Call Frame | `Souffle.VM.CallFrame.pas` | `TSouffleVMCallFrame`, `TSouffleCallStack` |
 | Souffle Exception | `Souffle.VM.Exception.pas` | `TSouffleHandlerStack`, `ESouffleThrow` — handler-table exception model |
 | Souffle Runtime Ops | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` — 47-method interface (41 abstract + 6 virtual with defaults) for language-specific semantics, including `ExtendedOperation` for sub-opcode dispatch |
-| Souffle GC | `Souffle.GarbageCollector.pas` | Mark-and-sweep GC for `TSouffleHeapObject` instances |
+| Souffle GC | `Souffle.GarbageCollector.pas` | `TSouffleGarbageCollector` — extends `TGenericGarbageCollector` with `AllocateObject` for `TSouffleHeapObject` instances |
 | Souffle Heap | `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleString`, heap kind constants |
 | GocciaScript Backend | `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — bridges GocciaScript engine to Souffle VM; initializes the Souffle GC singleton (automatic collection disabled), collects on destruction, shuts down in `finalization` |
 | WASM Emitter | `Souffle.Wasm.Emitter.pas` | `TWasmModule`, `TWasmCodeBuilder` — WASM binary module builder (types, imports, functions, exports, custom sections); `AddCustomSection` for embedding constant pool data |
@@ -278,7 +280,7 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 
 ### 4. Garbage Collector Awareness
 
-GocciaScript uses a mark-and-sweep garbage collector (`Goccia.GarbageCollector.pas`). All `TGocciaValue` instances auto-register with the GC via `AfterConstruction`. Key rules:
+GocciaScript uses a mark-and-sweep garbage collector built on a generic base (`GarbageCollector.Generic.pas`). Both the interpreter GC (`Goccia.GarbageCollector.pas`) and the Souffle VM GC (`Souffle.GarbageCollector.pas`) extend `TGenericGarbageCollector`. All GC-managed objects — `TGocciaValue`, `TGocciaScope`, and `TSouffleHeapObject` — inherit from `TGCManagedObject` (`GarbageCollector.Managed.pas`), which provides the `GCMarked` flag and virtual `MarkReferences` method. All `TGocciaValue` instances auto-register with the GC via `AfterConstruction`. Key rules:
 
 - **AST literal values** are unregistered from the GC by `TGocciaLiteralExpression.Create` and owned by the AST node. The evaluator calls `Value.RuntimeCopy` to produce fresh GC-managed values when evaluating literals.
 - **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache) are pinned via `TGocciaGarbageCollector.Instance.PinValue` during engine initialization (consolidated in `PinSingletons`).
@@ -451,7 +453,7 @@ This pattern is used in `TGocciaNumberLiteralValue.GetIsNegativeZero` and `IsNeg
 - **Chain of responsibility** for scope lookup
 - **Parser combinator** for binary expressions (`ParseBinaryExpression` shared helper)
 - **Recursive descent** for parsing
-- **Mark-and-sweep** for garbage collection (`TGocciaGarbageCollector`)
+- **Mark-and-sweep** for garbage collection (`TGenericGarbageCollector` base, `TGocciaGarbageCollector` for interpreter, `TSouffleGarbageCollector` for VM)
 - **Shared helpers** for evaluator deduplication (`EvaluateStatements`, `SpreadIterableInto`, `EvaluateSimpleNumericBinaryOp`)
 
 ## Value System

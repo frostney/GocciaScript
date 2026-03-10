@@ -347,25 +347,46 @@ Errors are handled through three mechanisms:
 
 ## Memory Management
 
-GocciaScript uses a **mark-and-sweep garbage collector** (`Goccia.GarbageCollector.pas`) to manage the lifecycle of runtime values. FreePascal provides manual memory management, but GocciaScript values have complex ownership patterns (closures, shared prototypes, aliased references across scopes) that make manual `Free` calls impractical.
+GocciaScript uses a **mark-and-sweep garbage collector** to manage the lifecycle of runtime values. FreePascal provides manual memory management, but GocciaScript values have complex ownership patterns (closures, shared prototypes, aliased references across scopes) that make manual `Free` calls impractical.
 
-### GC Architecture
+### Generic GC Architecture
+
+Both the interpreter and the Souffle VM share a common GC infrastructure built on a generic base class hierarchy:
+
+| Unit | Class | Role |
+|------|-------|------|
+| `GarbageCollector.Managed.pas` | `TGCManagedObject` | Base class for all GC-managed objects (`GCMarked` flag, virtual `MarkReferences`) |
+| `GarbageCollector.Generic.pas` | `TGenericGarbageCollector` | Generic mark-and-sweep algorithm: managed object list, pinned objects, temp roots, external root marker, threshold-based collection |
+| `Goccia.GarbageCollector.pas` | `TGocciaGarbageCollector` | Extends `TGenericGarbageCollector` with scope management (root scopes, active scope stack, managed scopes) |
+| `Souffle.GarbageCollector.pas` | `TSouffleGarbageCollector` | Extends `TGenericGarbageCollector` with heap object allocation (`AllocateObject`) |
+
+`TGocciaValue`, `TGocciaScope`, and `TSouffleHeapObject` all inherit from `TGCManagedObject`, enabling a unified marking protocol across both runtime systems.
 
 ```mermaid
 flowchart TD
-    subgraph Roots
-        Global["Global Scope"]
-        Active["Active Scope Stack\n(currently executing functions)"]
-        Pinned["Pinned Values\n(singletons, shared prototypes)"]
-        Temp["Temp Roots\n(Pascal-held references)"]
+    subgraph GenericGC["TGenericGarbageCollector"]
+        ManagedObjects["Managed Objects"]
+        PinnedObjects["Pinned Objects"]
+        TempRoots["Temp Roots"]
+        ExternalMarker["External Root Marker"]
+    end
+    subgraph GocciaGC["TGocciaGarbageCollector"]
+        GenericGC
+        RootScopes["Root Scopes"]
+        ActiveStack["Active Scope Stack"]
+        ManagedScopes["Managed Scopes"]
+    end
+    subgraph SouffleGC["TSouffleGarbageCollector"]
+        GenericGC2["TGenericGarbageCollector"]
     end
     subgraph Mark["Mark Phase"]
         Traverse["Traverse from all roots\nSet GCMarked := True"]
     end
     subgraph Sweep["Sweep Phase"]
-        Free["Free unmarked values and scopes"]
+        Free["Free unmarked objects"]
     end
-    Roots --> Mark --> Sweep
+    GocciaGC --> Mark --> Sweep
+    SouffleGC --> Mark
 ```
 
 ### Value Categories
@@ -380,7 +401,7 @@ flowchart TD
 
 ### Registration
 
-All `TGocciaValue` instances auto-register with the GC in `AfterConstruction`. All `TGocciaScope` instances register in their constructor. The GC tracks both in separate managed lists.
+All `TGocciaValue` instances auto-register with the GC in `AfterConstruction`. All `TGocciaScope` instances register in their constructor. The GC tracks values in the generic base's managed object list and scopes in a separate managed scope list.
 
 Pinned values, temp roots, and root scopes are stored in `TDictionary<T, Boolean>` (used as hash sets) for O(1) `PinValue`, `AddRoot`, `AddTempRoot`, and `RemoveTempRoot` operations.
 
