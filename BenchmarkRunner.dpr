@@ -48,8 +48,7 @@ var
   GMode: TGocciaEngineBackend = ebTreeWalk;
 
 procedure PopulateFileResult(const AFileResult: TBenchmarkFileResult;
-  const AScriptResult: TGocciaObjectValue; const AReporter: TBenchmarkReporter;
-  out AResultObj: TGocciaObjectValue);
+  const AScriptResult: TGocciaObjectValue; const AReporter: TBenchmarkReporter);
 var
   ResultsArray: TGocciaArrayValue;
   SingleResult: TGocciaObjectValue;
@@ -105,7 +104,6 @@ begin
     end;
 
     AReporter.AddFileResult(MutableFileResult);
-    AResultObj := AScriptResult;
   end
   else
   begin
@@ -113,15 +111,11 @@ begin
     MutableFileResult.DurationNanoseconds := 0;
     SetLength(MutableFileResult.Entries, 0);
     AReporter.AddFileResult(MutableFileResult);
-
-    AResultObj := TGocciaObjectValue.Create;
-    AResultObj.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.ZeroValue);
-    AResultObj.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
   end;
 end;
 
-function MakeErrorFileResult(const AFileName, AMessage: string;
-  const AReporter: TBenchmarkReporter): TGocciaObjectValue;
+procedure MakeErrorFileResult(const AFileName, AMessage: string;
+  const AReporter: TBenchmarkReporter);
 var
   FileResult: TBenchmarkFileResult;
 begin
@@ -137,17 +131,14 @@ begin
   FileResult.Entries[0].Name := '(fatal)';
   FileResult.Entries[0].Error := AMessage;
   AReporter.AddFileResult(FileResult);
-
-  Result := TGocciaObjectValue.Create;
-  Result.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.ZeroValue);
-  Result.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
 end;
 
-function CollectBenchmarkFileInterpreted(const AFileName: string;
-  const AReporter: TBenchmarkReporter): TGocciaObjectValue;
+procedure CollectBenchmarkFileInterpreted(const AFileName: string;
+  const AReporter: TBenchmarkReporter);
 var
   Source: TStringList;
   Engine: TGocciaEngine;
+  GC: TGarbageCollector;
   BenchGlobals: TGocciaGlobalBuiltins;
   EngineResult: TGocciaScriptResult;
   ScriptResult: TGocciaObjectValue;
@@ -167,24 +158,31 @@ begin
           Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
 
         EngineResult := Engine.Execute;
+        FileResult.FileName := AFileName;
+        FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
+        FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
+        FileResult.CompileTimeNanoseconds := 0;
+        FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds;
+
+        GC := TGarbageCollector.Instance;
+        ScriptResult := nil;
+        if EngineResult.Result is TGocciaObjectValue then
+          ScriptResult := TGocciaObjectValue(EngineResult.Result);
+
+        if Assigned(ScriptResult) and Assigned(GC) then
+          GC.AddTempRoot(ScriptResult);
+        try
+          PopulateFileResult(FileResult, ScriptResult, AReporter);
+        finally
+          if Assigned(ScriptResult) and Assigned(GC) then
+            GC.RemoveTempRoot(ScriptResult);
+        end;
       finally
         Engine.Free;
       end;
-
-      FileResult.FileName := AFileName;
-      FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
-      FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
-      FileResult.CompileTimeNanoseconds := 0;
-      FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds;
-
-      ScriptResult := nil;
-      if EngineResult.Result is TGocciaObjectValue then
-        ScriptResult := TGocciaObjectValue(EngineResult.Result);
-
-      PopulateFileResult(FileResult, ScriptResult, AReporter, Result);
     except
       on E: Exception do
-        Result := MakeErrorFileResult(AFileName, E.Message, AReporter);
+        MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
   finally
     if Assigned(TGarbageCollector.Instance) then
@@ -193,8 +191,8 @@ begin
   end;
 end;
 
-function CollectBenchmarkFileBytecode(const AFileName: string;
-  const AReporter: TBenchmarkReporter): TGocciaObjectValue;
+procedure CollectBenchmarkFileBytecode(const AFileName: string;
+  const AReporter: TBenchmarkReporter);
 var
   Source: TStringList;
   SourceText: string;
@@ -205,6 +203,7 @@ var
   ProgramNode: TGocciaProgram;
   Module: TSouffleBytecodeModule;
   Backend: TGocciaSouffleBackend;
+  GC: TGarbageCollector;
   ResultValue: TGocciaValue;
   FileResult: TBenchmarkFileResult;
   ScriptResult: TGocciaObjectValue;
@@ -263,11 +262,19 @@ begin
           FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
           FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
 
+          GC := TGarbageCollector.Instance;
+          if Assigned(ResultValue) and Assigned(GC) then
+            GC.AddTempRoot(ResultValue);
+
           ScriptResult := nil;
           if ResultValue is TGocciaObjectValue then
             ScriptResult := TGocciaObjectValue(ResultValue);
-
-          PopulateFileResult(FileResult, ScriptResult, AReporter, Result);
+          try
+            PopulateFileResult(FileResult, ScriptResult, AReporter);
+          finally
+            if Assigned(ResultValue) and Assigned(GC) then
+              GC.RemoveTempRoot(ResultValue);
+          end;
         finally
           Module.Free;
         end;
@@ -276,7 +283,7 @@ begin
       end;
     except
       on E: Exception do
-        Result := MakeErrorFileResult(AFileName, E.Message, AReporter);
+        MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
   finally
     if Assigned(TGarbageCollector.Instance) then
@@ -285,12 +292,12 @@ begin
   end;
 end;
 
-function CollectBenchmarkFile(const AFileName: string;
-  const AReporter: TBenchmarkReporter): TGocciaObjectValue;
+procedure CollectBenchmarkFile(const AFileName: string;
+  const AReporter: TBenchmarkReporter);
 begin
   case GMode of
-    ebTreeWalk:  Result := CollectBenchmarkFileInterpreted(AFileName, AReporter);
-    ebSouffleVM: Result := CollectBenchmarkFileBytecode(AFileName, AReporter);
+    ebTreeWalk:  CollectBenchmarkFileInterpreted(AFileName, AReporter);
+    ebSouffleVM: CollectBenchmarkFileBytecode(AFileName, AReporter);
   else
     raise Exception.CreateFmt('Unsupported execution backend: %d', [Ord(GMode)]);
   end;
