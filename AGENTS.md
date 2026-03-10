@@ -562,7 +562,7 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 - **`.toThrow()` best practice:** Always pass an explicit error constructor (`TypeError`, `RangeError`, `Error`, etc.) to `.toThrow()` — e.g. `expect(() => null.foo).toThrow(TypeError)`. Bare `.toThrow()` only asserts *something* throws; the constructor form also verifies the error type.
 - **Pascal test framework:** `TestRunner.pas` provides generic `Expect<T>(...).ToBe(...)` assertions. `Expect<T>` is a **standalone function** (not a method on `TTestSuite`) to avoid FPC 3.2.2 AArch64 compiler crash with cross-unit generic method inheritance.
 - **NaN checks:** In Pascal tests, use `Value.ToNumberLiteral.IsNaN` (not `Math.IsNaN`) — special values store `0.0` internally
-- **WASM integration tests:** `tests-wasm/` directory contains GocciaScript `.js` fixtures with `// Expected:` comment lines. The `tests-wasm/run-wasm-tests.pas` harness (instantfpc script) compiles each fixture to `.wasm` via ScriptLoader, executes with `node tests-wasm/souffle-host.mjs`, and compares stdout. Fixtures with `// Skip:` are skipped. Skips gracefully if `node` is not installed. Requires `build/ScriptLoader`; run with: `./build.pas loader && ./tests-wasm/run-wasm-tests.pas`
+- **WASM integration tests:** `tests-wasm/` directory contains GocciaScript `.js` fixtures with `// Expected:` comment lines. The `tests-wasm/run-wasm-tests.mjs` harness compiles each fixture to `.wasm` via ScriptLoader, executes with `node tests-wasm/souffle-host.mjs`, and compares stdout. Fixtures with `// Skip:` are skipped. Requires `build/ScriptLoader`; run with: `./build.pas loader && node ./tests-wasm/run-wasm-tests.mjs`
 
 ## Build System
 

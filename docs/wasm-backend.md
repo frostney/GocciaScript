@@ -59,7 +59,7 @@ node tests-wasm/souffle-host.mjs out.wasm
 | `souffle/Souffle.Wasm.Emitter.pas` | WASM binary module builder (types, imports, functions, exports, custom sections) |
 | `souffle/Souffle.Wasm.Translator.pas` | Souffle bytecode → WASM translation (opcode mapping, control flow, constant pool flattening, demand-driven imports) |
 | `tests-wasm/souffle-host.mjs` | Node.js host runtime that loads `.wasm` modules, extracts constants, provides `souffle` imports |
-| `tests-wasm/run-wasm-tests.pas` | `instantfpc` test harness that compiles fixtures to `.wasm` and validates output via the Node.js host |
+| `tests-wasm/run-wasm-tests.mjs` | Node.js test harness that compiles fixtures to `.wasm` and validates output via the Node.js host |
 
 ## Constant Pool: `souffle:constants` Custom Section
 
@@ -264,13 +264,13 @@ WASM output is tested via a Node.js host runtime, not through the GocciaScript t
 ./build.pas loader
 
 # Run all WASM tests
-./tests-wasm/run-wasm-tests.pas
+node ./tests-wasm/run-wasm-tests.mjs
 
 # Run a specific fixture
-./tests-wasm/run-wasm-tests.pas tests-wasm/arithmetic.js
+node ./tests-wasm/run-wasm-tests.mjs tests-wasm/arithmetic.js
 ```
 
-Test fixtures are GocciaScript `.js` files in `tests-wasm/` with `// Expected:` comments specifying expected stdout lines. The harness compiles each fixture to `.wasm` via ScriptLoader, executes with `node tests-wasm/souffle-host.mjs`, and compares output. Fixtures with `// Skip:` comments are skipped. If `node` is not installed, tests are skipped gracefully (exit code 0).
+Test fixtures are GocciaScript `.js` files in `tests-wasm/` with `// Expected:` comments specifying expected stdout lines. The harness compiles each fixture to `.wasm` via ScriptLoader, executes with `node tests-wasm/souffle-host.mjs`, and compares output. Fixtures with `// Skip:` comments are skipped.
 
 ### Adding Test Fixtures
 

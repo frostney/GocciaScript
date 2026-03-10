@@ -147,29 +147,13 @@ jobs:
         if: runner.os != 'Windows'
         run: chmod +x build/*
 
-      - name: Install FPC (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
-
-      - name: Install FPC (macOS)
-        if: runner.os == 'macOS'
-        run: brew install fpc
-
-      - name: Install FPC (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          choco install freepascal -y --no-progress
-          echo 'C:\ProgramData\chocolatey\bin' >> "$GITHUB_PATH"
-          echo 'C:\tools\freepascal\bin\i386-win32' >> "$GITHUB_PATH"
-          echo '-FuC:/tools/freepascal/units/$fpctarget/*' >> 'C:/tools/freepascal/bin/i386-win32/fpc.cfg'
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
       - name: Run WASM integration tests
-        run: ./tests-wasm/run-wasm-tests.pas
+        run: node ./tests-wasm/run-wasm-tests.mjs
 
   benchmark:
     needs: build

@@ -82,16 +82,13 @@ jobs:
       - name: Make binaries executable
         run: chmod +x build/*
 
-      - name: Install FPC
-        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
       - name: Run WASM integration tests
-        run: ./tests-wasm/run-wasm-tests.pas
+        run: node ./tests-wasm/run-wasm-tests.mjs
 
   benchmark:
     needs: build
