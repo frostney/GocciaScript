@@ -41,7 +41,6 @@ jobs:
 
   test:
     needs: build
-    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -65,7 +64,6 @@ jobs:
 
   wasm-test:
     needs: build
-    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -97,7 +95,6 @@ jobs:
 
   benchmark:
     needs: build
-    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -135,7 +132,6 @@ jobs:
 
   benchmark-comment:
     needs: benchmark
-    if: ${{ !cancelled() && needs.benchmark.result == 'success' }}
     runs-on: ubuntu-latest
     defaults:
       run:
