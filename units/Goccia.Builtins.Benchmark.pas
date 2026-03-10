@@ -424,6 +424,7 @@ begin
         TGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
     end;
 
+  ResultsArray := nil;
   try
     ResultsArray := TGocciaArrayValue.Create;
     if Assigned(TGarbageCollector.Instance) then
@@ -487,7 +488,8 @@ begin
         if Assigned(FRegisteredBenchmarks[I].TeardownFunction) then
           TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
       end;
-      TGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
+      if Assigned(ResultsArray) then
+        TGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
     end;
   end;
 end;

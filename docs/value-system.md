@@ -108,8 +108,11 @@ Every `TGocciaValue` participates in the mark-and-sweep garbage collector:
 
 ```pascal
 TGCManagedObject = class
-  FGCMarked: Boolean;               // Set during mark phase if reachable
+private
+  FGCMarked: Boolean;
+public
   procedure MarkReferences; virtual; // Override to mark referenced values
+  property GCMarked: Boolean read FGCMarked write FGCMarked;
 end;
 
 TGocciaValue = class(TGCManagedObject)
