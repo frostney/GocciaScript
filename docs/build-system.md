@@ -208,9 +208,12 @@ GitHub Actions CI is split into two workflow files:
 
 ```
 build → test (JS + native)  → artifacts (main only)
-      → benchmark           → release (tags only)
-      → examples            →
+      → wasm-test            → release (tags only)
+      → benchmark            →
+      → examples             →
 ```
+
+All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The four post-build jobs (`test`, `wasm-test`, `benchmark`, `examples`) are independent — a failure in one does not affect the others.
 
 Runs on the full platform matrix:
 
@@ -218,7 +221,7 @@ Runs on the full platform matrix:
 |----|-------------|
 | Ubuntu Latest | x64, ARM64 |
 | macOS Latest | x64, ARM64 |
-| Windows Latest | x64 |
+| Windows Latest | x86 (i386-win32) |
 
 **`build`** — Installs FPC, compiles all binaries with `--prod`, uploads them as intermediate artifacts.
 

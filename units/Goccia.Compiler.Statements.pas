@@ -1803,7 +1803,7 @@ begin
 
   if HasSuper then
   begin
-    SuperReg := ACtx.Scope.AllocateRegister;
+    SuperReg := ACtx.Scope.DeclareLocal('__super__', False);
 
     LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.SuperClass);
     if LocalIdx >= 0 then
