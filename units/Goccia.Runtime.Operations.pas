@@ -3629,16 +3629,12 @@ begin
         if GocciaVal is TGocciaMapValue then
         begin
           Iterator := TGocciaMapIteratorValue.Create(GocciaVal, mkEntries);
-          if Assigned(TGarbageCollector.Instance) then
-            TGarbageCollector.Instance.AddTempRoot(Iterator);
           Result := WrapGocciaValue(Iterator);
           Exit;
         end;
         if GocciaVal is TGocciaSetValue then
         begin
           Iterator := TGocciaSetIteratorValue.Create(GocciaVal, skValues);
-          if Assigned(TGarbageCollector.Instance) then
-            TGarbageCollector.Instance.AddTempRoot(Iterator);
           Result := WrapGocciaValue(Iterator);
           Exit;
         end;
@@ -3666,8 +3662,6 @@ begin
         end;
         if Assigned(IteratorObj) then
         begin
-          if Assigned(TGarbageCollector.Instance) then
-            TGarbageCollector.Instance.AddTempRoot(IteratorObj);
           Result := WrapGocciaValue(IteratorObj);
           Exit;
         end;
@@ -3716,8 +3710,6 @@ begin
       Exit;
     end;
 
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.AddTempRoot(Iterator);
     Result := WrapGocciaValue(Iterator);
   except
     on E: TGocciaThrowValue do
@@ -7972,9 +7964,6 @@ begin
 
     EnumObj.PreventExtensions;
     InitializeEnumSymbols(EnumObj);
-
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.AddTempRoot(EnumObj);
 
     Result := WrapGocciaValue(EnumObj);
   except
