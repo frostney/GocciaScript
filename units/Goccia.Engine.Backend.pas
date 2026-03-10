@@ -51,7 +51,6 @@ uses
   SysUtils,
 
   Souffle.Bytecode.Chunk,
-  Souffle.GarbageCollector,
   Souffle.Value,
   Souffle.VM.Exception,
 
@@ -66,8 +65,7 @@ uses
 constructor TGocciaSouffleBackend.Create(const ASourcePath: string);
 begin
   inherited Create;
-  TSouffleGarbageCollector.Initialize;
-  TSouffleGarbageCollector.Instance.Enabled := False;
+  TGocciaGarbageCollector.Initialize;
   FSourcePath := ASourcePath;
   FRuntime := TGocciaRuntimeOperations.Create;
   FVM := TSouffleVM.Create(FRuntime);
@@ -84,8 +82,6 @@ begin
   FVM.Free;
   FRuntime.Free;
   FEngine.Free;
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.Collect;
   inherited;
 end;
 
@@ -134,21 +130,30 @@ function TGocciaSouffleBackend.RunModule(
   const AModule: TSouffleBytecodeModule): TGocciaValue;
 var
   SouffleResult: TSouffleValue;
+  GC: TGocciaGarbageCollector;
+  WasEnabled: Boolean;
 begin
+  GC := TGocciaGarbageCollector.Instance;
+  WasEnabled := GC.Enabled;
+  GC.Enabled := False;
   try
     try
-      SouffleResult := FVM.Execute(AModule);
+      try
+        SouffleResult := FVM.Execute(AModule);
+        if Assigned(TGocciaMicrotaskQueue.Instance) then
+          TGocciaMicrotaskQueue.Instance.DrainQueue;
+        Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
+      except
+        on E: ESouffleThrow do
+          raise TGocciaThrowValue.Create(
+            FRuntime.UnwrapToGocciaValue(E.ThrownValue));
+      end;
+    finally
       if Assigned(TGocciaMicrotaskQueue.Instance) then
-        TGocciaMicrotaskQueue.Instance.DrainQueue;
-      Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
-    except
-      on E: ESouffleThrow do
-        raise TGocciaThrowValue.Create(
-          FRuntime.UnwrapToGocciaValue(E.ThrownValue));
+        TGocciaMicrotaskQueue.Instance.ClearQueue;
     end;
   finally
-    if Assigned(TGocciaMicrotaskQueue.Instance) then
-      TGocciaMicrotaskQueue.Instance.ClearQueue;
+    GC.Enabled := WasEnabled;
   end;
 end;
 
@@ -195,8 +200,5 @@ begin
   FRuntime.RegisterTestNatives;
   FRuntime.RegisterNativeBuiltins;
 end;
-
-finalization
-  TSouffleGarbageCollector.Shutdown;
 
 end.

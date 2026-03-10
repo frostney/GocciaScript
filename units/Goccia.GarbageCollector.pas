@@ -17,8 +17,6 @@ type
   TGocciaGCExternalRootMarker = TGCRootMarker;
 
   TGocciaGarbageCollector = class(TGenericGarbageCollector)
-  private class var
-    FInstance: TGocciaGarbageCollector;
   private
     FManagedScopes: TGocciaScopeList;
     FRootScopes: TDictionary<TGocciaScope, Boolean>;
@@ -28,7 +26,7 @@ type
   protected
     procedure MarkRoots; override;
   public
-    class function Instance: TGocciaGarbageCollector;
+    class function Instance: TGocciaGarbageCollector; inline;
     class procedure Initialize;
     class procedure Shutdown;
 
@@ -61,7 +59,7 @@ uses
 
 class function TGocciaGarbageCollector.Instance: TGocciaGarbageCollector;
 begin
-  Result := FInstance;
+  Result := TGocciaGarbageCollector(FInstance);
 end;
 
 class procedure TGocciaGarbageCollector.Initialize;
@@ -72,7 +70,7 @@ end;
 
 class procedure TGocciaGarbageCollector.Shutdown;
 begin
-  FreeAndNil(FInstance);
+  inherited Shutdown;
 end;
 
 constructor TGocciaGarbageCollector.Create;
@@ -171,7 +169,6 @@ begin
   if FCollecting then Exit;
   FCollecting := True;
   try
-    // Clear marks on scopes (base class clears managed objects)
     for I := 0 to FManagedScopes.Count - 1 do
       FManagedScopes[I].GCMarked := False;
 
@@ -179,7 +176,6 @@ begin
     MarkRoots;
     SweepObjects;
 
-    // Sweep scopes
     WriteIdx := 0;
     for I := 0 to FManagedScopes.Count - 1 do
     begin

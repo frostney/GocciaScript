@@ -397,8 +397,8 @@ uses
   StrUtils,
   SysUtils,
 
+  GarbageCollector.Generic,
   Souffle.Bytecode.Debug,
-  Souffle.GarbageCollector,
   Souffle.VM.CallFrame,
   Souffle.VM.Exception,
   Souffle.VM.NativeFunction,
@@ -1380,13 +1380,13 @@ begin
   FBridgeCallDepth := 0;
   FVM := nil;
   TGocciaGarbageCollector.Initialize;
-  TGocciaGarbageCollector.Instance.SetExternalRootMarker(MarkWrappedGocciaValues);
+  TGocciaGarbageCollector.Instance.AddExternalRootMarker(MarkWrappedGocciaValues);
 end;
 
 destructor TGocciaRuntimeOperations.Destroy;
 begin
   if Assigned(TGocciaGarbageCollector.Instance) then
-    TGocciaGarbageCollector.Instance.SetExternalRootMarker(nil);
+    TGocciaGarbageCollector.Instance.RemoveExternalRootMarker(MarkWrappedGocciaValues);
   FGlobals.Free;
   FConstGlobals.Free;
   FExports.Free;
@@ -1907,8 +1907,8 @@ begin
   begin
     Result := SouffleReference(TGocciaBridgedFunction.Create(
       TGocciaNativeFunctionValue(AValue), Self));
-    if Assigned(TSouffleGarbageCollector.Instance) then
-      TSouffleGarbageCollector.Instance.AllocateObject(Result.AsReference);
+    if Assigned(TGenericGarbageCollector.Instance) then
+      TGenericGarbageCollector.Instance.AllocateObject(Result.AsReference);
   end
   else
     Result := WrapGocciaValue(AValue);
@@ -3378,8 +3378,8 @@ begin
         end;
         WalkBp := WalkBp.SuperBlueprint;
       end;
-      if Assigned(TSouffleGarbageCollector.Instance) then
-        TSouffleGarbageCollector.Instance.AllocateObject(Rec);
+      if Assigned(TGenericGarbageCollector.Instance) then
+        TGenericGarbageCollector.Instance.AllocateObject(Rec);
 
       FieldInitCount := 0;
       SetLength(FieldInits, 4);
@@ -3568,8 +3568,8 @@ begin
         Result := SouffleReference(
           TGocciaSouffleArrayIterator.Create(
             TSouffleArray(AIterable.AsReference)));
-        if Assigned(TSouffleGarbageCollector.Instance) then
-          TSouffleGarbageCollector.Instance.AllocateObject(
+        if Assigned(TGenericGarbageCollector.Instance) then
+          TGenericGarbageCollector.Instance.AllocateObject(
             TGocciaSouffleArrayIterator(Result.AsReference));
         Exit;
       end;
@@ -3578,8 +3578,8 @@ begin
         Result := SouffleReference(
           TGocciaSouffleStringIterator.Create(
             TSouffleHeapString(AIterable.AsReference).Value));
-        if Assigned(TSouffleGarbageCollector.Instance) then
-          TSouffleGarbageCollector.Instance.AllocateObject(
+        if Assigned(TGenericGarbageCollector.Instance) then
+          TGenericGarbageCollector.Instance.AllocateObject(
             TGocciaSouffleStringIterator(Result.AsReference));
         Exit;
       end;
@@ -4058,8 +4058,8 @@ begin
     Exit(SouffleNil);
 
   Rec := TSouffleRecord.Create(Module.ExportsTable.Count);
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(Rec);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.AllocateObject(Rec);
 
   for Pair in Module.ExportsTable do
     Rec.Put(Pair.Key, ToSouffleValue(Pair.Value));
@@ -4986,8 +4986,8 @@ begin
   end;
 
   NewArr := TSouffleArray.Create(Stop - Start);
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.AllocateObject(NewArr);
   for I := Start to Stop - 1 do
     NewArr.Push(Arr.Get(I));
   Result := SouffleReference(NewArr);
@@ -5027,8 +5027,8 @@ begin
 
   Arr := TSouffleArray(AReceiver.AsReference);
   NewArr := TSouffleArray.Create(Arr.Count);
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.AllocateObject(NewArr);
 
   for I := 0 to Arr.Count - 1 do
     NewArr.Push(Arr.Get(I));
@@ -5190,8 +5190,8 @@ begin
   Callback := TSouffleClosure(AArgs^.AsReference);
   NewArr := TSouffleArray.Create(Arr.Count);
   NewArr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.AllocateObject(NewArr);
   for I := 0 to Arr.Count - 1 do
   begin
     if SouffleIsHole(Arr.Get(I)) then
@@ -5222,8 +5222,8 @@ begin
   Callback := TSouffleClosure(AArgs^.AsReference);
   NewArr := TSouffleArray.Create(Arr.Count);
   NewArr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.AllocateObject(NewArr);
   for I := 0 to Arr.Count - 1 do
   begin
     Elem := Arr.Get(I);
@@ -5591,8 +5591,8 @@ begin
   end;
   NewArr := TSouffleArray.Create(Arr.Count);
   NewArr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.AllocateObject(NewArr);
   FlattenInto(Arr, NewArr, Depth);
   Result := SouffleReference(NewArr);
 end;
@@ -5615,8 +5615,8 @@ begin
   Callback := TSouffleClosure(AArgs^.AsReference);
   NewArr := TSouffleArray.Create(Arr.Count);
   NewArr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.AllocateObject(NewArr);
   for I := 0 to Arr.Count - 1 do
   begin
     if SouffleIsHole(Arr.Get(I)) then Continue;
@@ -5677,8 +5677,8 @@ begin
 
   Removed := TSouffleArray.Create(DeleteCount);
   Removed.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(Removed);
+  if Assigned(TGenericGarbageCollector.Instance) then
+    TGenericGarbageCollector.Instance.AllocateObject(Removed);
   for I := 0 to DeleteCount - 1 do
     Removed.Push(Arr.Get(Start + I));
 
@@ -6547,7 +6547,7 @@ function NativeStringSplit(const AReceiver: TSouffleValue;
 var
   S, Sep, Remaining, Segment: string;
   Arr: TSouffleArray;
-  GC: TSouffleGarbageCollector;
+  GC: TGenericGarbageCollector;
   SepPos, Limit, I: Integer;
   HasLimit: Boolean;
 begin
@@ -6561,7 +6561,7 @@ begin
     if Limit = 0 then
     begin
       Arr := TSouffleArray.Create(0);
-      GC := TSouffleGarbageCollector.Instance;
+      GC := TGenericGarbageCollector.Instance;
       if Assigned(GC) then GC.AllocateObject(Arr);
       if Assigned(GNativeArrayJoinRuntime) then
         Arr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
@@ -6571,7 +6571,7 @@ begin
   end;
 
   Arr := TSouffleArray.Create(4);
-  GC := TSouffleGarbageCollector.Instance;
+  GC := TGenericGarbageCollector.Instance;
   if Assigned(GC) then GC.AllocateObject(Arr);
   if Assigned(GNativeArrayJoinRuntime) then
     Arr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
@@ -7062,9 +7062,9 @@ procedure ReplaceGlobalWithNative(
   const ACallback: TSouffleNativeCallback);
 var
   Fn: TSouffleNativeFunction;
-  GC: TSouffleGarbageCollector;
+  GC: TGenericGarbageCollector;
 begin
-  GC := TSouffleGarbageCollector.Instance;
+  GC := TGenericGarbageCollector.Instance;
   Fn := TSouffleNativeFunction.Create(AName, AArity, ACallback);
   if Assigned(GC) then GC.AllocateObject(Fn);
   AGlobals.AddOrSetValue(AName, SouffleReference(Fn));
@@ -7075,10 +7075,10 @@ function BuildSubMethodDelegate(
   const AEntries: array of TSouffleMethodEntry): TSouffleRecord;
 var
   Fn: TSouffleNativeFunction;
-  GC: TSouffleGarbageCollector;
+  GC: TGenericGarbageCollector;
   I: Integer;
 begin
-  GC := TSouffleGarbageCollector.Instance;
+  GC := TGenericGarbageCollector.Instance;
   Result := TSouffleRecord.Create(Length(AEntries));
   if Assigned(GC) then GC.AllocateObject(Result);
   for I := 0 to High(AEntries) do
@@ -7158,9 +7158,9 @@ var
   I: Integer;
   PropVal: TGocciaValue;
   BridgedFn: TGocciaBridgedFunction;
-  GC: TSouffleGarbageCollector;
+  GC: TGenericGarbageCollector;
 begin
-  GC := TSouffleGarbageCollector.Instance;
+  GC := TGenericGarbageCollector.Instance;
   Names := AObj.GetOwnPropertyNames;
   Result := TSouffleRecord.Create(Length(Names));
   if Assigned(GC) then GC.AllocateObject(Result);
@@ -7191,11 +7191,11 @@ var
   NativeFnVal: TGocciaNativeFunctionValue;
   BridgedFn: TGocciaBridgedFunction;
   Rec, GlobalThisRec: TSouffleRecord;
-  GC: TSouffleGarbageCollector;
+  GC: TGenericGarbageCollector;
   Pair: TPair<string, TSouffleValue>;
 begin
   if not Assigned(FVM) then Exit;
-  GC := TSouffleGarbageCollector.Instance;
+  GC := TGenericGarbageCollector.Instance;
   Keys := FGlobals.Keys.ToArray;
   for Key in Keys do
   begin
@@ -7392,8 +7392,8 @@ begin
   begin
     Helper := TGocciaSuperCallHelper.Create(
       TGocciaClassValue(GocciaVal), Self);
-    if Assigned(TSouffleGarbageCollector.Instance) then
-      TSouffleGarbageCollector.Instance.AllocateObject(Helper);
+    if Assigned(TGenericGarbageCollector.Instance) then
+      TGenericGarbageCollector.Instance.AllocateObject(Helper);
     Result := SouffleReference(Helper);
   end
   else

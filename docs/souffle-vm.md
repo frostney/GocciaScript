@@ -692,10 +692,10 @@ When `break` or `return` occurs inside a `try...finally` block, the compiler inl
 
 ## Garbage Collection
 
-Souffle has its own mark-and-sweep garbage collector (`Souffle.GarbageCollector.pas`), independent of GocciaScript's GC:
+Souffle shares the unified mark-and-sweep garbage collector with the GocciaScript interpreter via `TGenericGarbageCollector.Instance` (from `GarbageCollector.Generic.pas`):
 
-- **Singleton** — `TSouffleGarbageCollector.Initialize` / `TSouffleGarbageCollector.Instance`
-- **Lifecycle** — Initialized by `TGocciaSouffleBackend.Create` with automatic collection disabled (`Enabled := False`). A full `Collect` runs in `TGocciaSouffleBackend.Destroy` to free all Souffle heap objects between backend instances. Shut down by the `finalization` section of `Goccia.Engine.Backend.pas`.
+- **Unified singleton** — `TGenericGarbageCollector.Instance` (the same `TGocciaGarbageCollector` instance used by the interpreter)
+- **Lifecycle** — Automatic collection is disabled during VM execution (`Enabled := False` around `TSouffleVM.Execute`) to prevent sweeping Souffle objects that are on the Pascal stack but not yet in VM registers. Explicit `Collect` calls in the BenchmarkRunner reclaim memory between files.
 - **Managed objects** — All `TSouffleHeapObject` instances registered via `AllocateObject`
 - **Pinned objects** — Long-lived objects protected from collection via `PinObject` / `UnpinObject`
 - **Temp roots** — Short-lived references protected during operations via `AddTempRoot` / `RemoveTempRoot`
@@ -1007,7 +1007,7 @@ All Souffle VM source files live in the `souffle/` directory with `Souffle.` pre
 | `Souffle.VM.Upvalue.pas` | `TSouffleUpvalue` (open/closed variable capture) |
 | `Souffle.VM.Exception.pas` | `TSouffleHandlerStack`, `ESouffleThrow` |
 | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` abstract interface for language-specific semantics |
-| `Souffle.GarbageCollector.pas` | Mark-and-sweep GC for `TSouffleHeapObject` |
+| `GarbageCollector.Generic.pas` | Unified mark-and-sweep GC (shared with interpreter) |
 
 GocciaScript-specific bridge files in `units/`:
 
@@ -1223,7 +1223,7 @@ The `souffle/` directory contains a self-contained bytecode VM with zero knowled
 - **Zero language imports**: No `Goccia.*` units, no `uses` clauses referencing the host language
 - **Generic value system**: `TSouffleValue` represents values without language-specific type tags
 - **Abstract runtime interface**: `TSouffleRuntimeOperations` is the sole injection point for language semantics
-- **Own GC**: `Souffle.GarbageCollector.pas` manages Souffle heap objects independently
+- **Shared GC**: Souffle heap objects are managed by the unified `TGenericGarbageCollector` singleton (no separate Souffle GC)
 - **Self-describing binary format**: `.sbc` files include a runtime tag, version, and debug info. Serialization currently uses native endianness; cross-platform portability requires byte-order normalization (see [Known Limitations](#known-limitations))
 
 ### Multi-Frontend Vision
