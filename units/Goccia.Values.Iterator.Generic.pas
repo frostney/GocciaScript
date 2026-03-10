@@ -16,6 +16,7 @@ type
   public
     constructor Create(const AIteratorObject: TGocciaValue);
     function AdvanceNext: TGocciaObjectValue; override;
+    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure MarkReferences; override;
   end;
 
@@ -83,6 +84,63 @@ begin
   begin
     FDone := True;
     Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+  end;
+end;
+
+function TGocciaGenericIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+var
+  NextMethod, NextResult, DoneVal, ValueVal: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  if FDone then
+  begin
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  NextMethod := FSource.GetProperty(PROP_NEXT);
+  if not Assigned(NextMethod) or not NextMethod.IsCallable then
+  begin
+    FDone := True;
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  CallArgs := TGocciaArgumentsCollection.Create;
+  try
+    NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, FSource);
+  finally
+    CallArgs.Free;
+  end;
+
+  if NextResult is TGocciaObjectValue then
+  begin
+    DoneVal := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
+    if Assigned(DoneVal) and DoneVal.ToBooleanLiteral.Value then
+    begin
+      FDone := True;
+      ADone := True;
+      ValueVal := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
+      if not Assigned(ValueVal) then
+        ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Result := ValueVal;
+    end
+    else
+    begin
+      ADone := False;
+      ValueVal := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
+      if not Assigned(ValueVal) then
+        ValueVal := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Result := ValueVal;
+    end;
+  end
+  else
+  begin
+    FDone := True;
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 

@@ -20,6 +20,7 @@ type
   public
     constructor Create(const ASource: TGocciaValue; const AKind: TGocciaArrayIteratorKind);
     function AdvanceNext: TGocciaObjectValue; override;
+    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
     procedure MarkReferences; override;
   end;
@@ -31,6 +32,7 @@ type
   public
     constructor Create(const ASource: TGocciaValue);
     function AdvanceNext: TGocciaObjectValue; override;
+    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
     procedure MarkReferences; override;
   end;
@@ -45,6 +47,7 @@ type
   public
     constructor Create(const ASource: TGocciaValue; const AKind: TGocciaMapIteratorKind);
     function AdvanceNext: TGocciaObjectValue; override;
+    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
     procedure MarkReferences; override;
   end;
@@ -59,6 +62,7 @@ type
   public
     constructor Create(const ASource: TGocciaValue; const AKind: TGocciaSetIteratorKind);
     function AdvanceNext: TGocciaObjectValue; override;
+    function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
     procedure MarkReferences; override;
   end;
@@ -124,6 +128,46 @@ begin
   Inc(FIndex);
 end;
 
+function TGocciaArrayIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  EntryArray: TGocciaArrayValue;
+  Element: TGocciaValue;
+begin
+  if FDone or (FIndex >= TGocciaArrayValue(FSource).Elements.Count) then
+  begin
+    FDone := True;
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  ADone := False;
+  Arr := TGocciaArrayValue(FSource);
+  case FKind of
+    akValues:
+    begin
+      Element := Arr.Elements[FIndex];
+      if Element = nil then
+        Element := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Result := Element;
+    end;
+    akKeys:
+      Result := TGocciaNumberLiteralValue.SmallInt(FIndex);
+    akEntries:
+    begin
+      EntryArray := TGocciaArrayValue.Create;
+      EntryArray.Elements.Add(TGocciaNumberLiteralValue.SmallInt(FIndex));
+      Element := Arr.Elements[FIndex];
+      if Element = nil then
+        Element := TGocciaUndefinedLiteralValue.UndefinedValue;
+      EntryArray.Elements.Add(Element);
+      Result := EntryArray;
+    end;
+  end;
+  Inc(FIndex);
+end;
+
 function TGocciaArrayIteratorValue.ToStringTag: string;
 begin
   Result := 'Array Iterator';
@@ -164,6 +208,30 @@ begin
     Exit;
   end;
   Result := CreateIteratorResult(TGocciaStringLiteralValue.Create(StrVal[FIndex + 1]), False);
+  Inc(FIndex);
+end;
+
+function TGocciaStringIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+var
+  StrVal: string;
+begin
+  if FDone then
+  begin
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  StrVal := TGocciaStringLiteralValue(FSource).Value;
+  if FIndex >= Length(StrVal) then
+  begin
+    FDone := True;
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+  ADone := False;
+  Result := TGocciaStringLiteralValue.Create(StrVal[FIndex + 1]);
   Inc(FIndex);
 end;
 
@@ -225,6 +293,44 @@ begin
   Inc(FIndex);
 end;
 
+function TGocciaMapIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+var
+  MapVal: TGocciaMapValue;
+  EntryArray: TGocciaArrayValue;
+begin
+  if FDone then
+  begin
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  MapVal := TGocciaMapValue(FSource);
+  if FIndex >= MapVal.Entries.Count then
+  begin
+    FDone := True;
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  ADone := False;
+  case FKind of
+    mkEntries:
+    begin
+      EntryArray := TGocciaArrayValue.Create;
+      EntryArray.Elements.Add(MapVal.Entries[FIndex].Key);
+      EntryArray.Elements.Add(MapVal.Entries[FIndex].Value);
+      Result := EntryArray;
+    end;
+    mkKeys:
+      Result := MapVal.Entries[FIndex].Key;
+    mkValues:
+      Result := MapVal.Entries[FIndex].Value;
+  end;
+  Inc(FIndex);
+end;
+
 function TGocciaMapIteratorValue.ToStringTag: string;
 begin
   Result := 'Map Iterator';
@@ -276,6 +382,42 @@ begin
       EntryArray.Elements.Add(SetVal.Items[FIndex]);
       EntryArray.Elements.Add(SetVal.Items[FIndex]);
       Result := CreateIteratorResult(EntryArray, False);
+    end;
+  end;
+  Inc(FIndex);
+end;
+
+function TGocciaSetIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;
+var
+  SetVal: TGocciaSetValue;
+  EntryArray: TGocciaArrayValue;
+begin
+  if FDone then
+  begin
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  SetVal := TGocciaSetValue(FSource);
+  if FIndex >= SetVal.Items.Count then
+  begin
+    FDone := True;
+    ADone := True;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  ADone := False;
+  case FKind of
+    skValues:
+      Result := SetVal.Items[FIndex];
+    skEntries:
+    begin
+      EntryArray := TGocciaArrayValue.Create;
+      EntryArray.Elements.Add(SetVal.Items[FIndex]);
+      EntryArray.Elements.Add(SetVal.Items[FIndex]);
+      Result := EntryArray;
     end;
   end;
   Inc(FIndex);
