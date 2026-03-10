@@ -19,9 +19,10 @@ function ToECMAString(const AValue: TGocciaValue): TGocciaStringLiteralValue;
 implementation
 
 uses
+  GarbageCollector.Generic,
+
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
-  Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
@@ -39,13 +40,13 @@ begin
     Args := TGocciaArgumentsCollection.Create;
     try
       AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue);
-      if Assigned(TGocciaGarbageCollector.Instance) then
-        TGocciaGarbageCollector.Instance.AddTempRoot(AResult);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AddTempRoot(AResult);
       try
         Result := AResult.IsPrimitive;
       finally
-        if Assigned(TGocciaGarbageCollector.Instance) then
-          TGocciaGarbageCollector.Instance.RemoveTempRoot(AResult);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.RemoveTempRoot(AResult);
       end;
     finally
       Args.Free;

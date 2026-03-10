@@ -38,9 +38,10 @@ implementation
 uses
   SysUtils,
 
+  GarbageCollector.Generic,
+
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
-  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Utils,
   Goccia.Values.Error,
@@ -582,12 +583,12 @@ begin
   begin
     Str := TGocciaStringLiteralValue(Iterable).Value;
     Result := TGocciaArrayValue.Create;
-    TGocciaGarbageCollector.Instance.AddTempRoot(Result);
+    TGarbageCollector.Instance.AddTempRoot(Result);
     try
       for I := 1 to Length(Str) do
         Result.Elements.Add(TGocciaStringLiteralValue.Create(Str[I]));
     finally
-      TGocciaGarbageCollector.Instance.RemoveTempRoot(Result);
+      TGarbageCollector.Instance.RemoveTempRoot(Result);
     end;
   end
   else if Iterable is TGocciaSetValue then

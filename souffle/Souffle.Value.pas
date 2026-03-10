@@ -72,7 +72,7 @@ uses
   Math,
   SysUtils,
 
-  Souffle.GarbageCollector;
+  GarbageCollector.Generic;
 
 { Value constructors }
 
@@ -112,7 +112,7 @@ end;
 function SouffleString(const AValue: string): TSouffleValue;
 var
   HeapStr: TSouffleHeapString;
-  GC: TSouffleGarbageCollector;
+  GC: TGarbageCollector;
 begin
   FillChar(Result, SizeOf(Result), 0);
   if Length(AValue) <= SOUFFLE_INLINE_STRING_MAX then
@@ -123,7 +123,7 @@ begin
   else
   begin
     HeapStr := TSouffleHeapString.Create(AValue);
-    GC := TSouffleGarbageCollector.Instance;
+    GC := TGarbageCollector.Instance;
     if Assigned(GC) then
       GC.AllocateObject(HeapStr);
     Result.Kind := svkReference;

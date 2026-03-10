@@ -52,9 +52,10 @@ implementation
 uses
   SysUtils,
 
+  GarbageCollector.Generic,
+
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
-  Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -156,10 +157,10 @@ begin
   FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorFind, 'find', 1));
   FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorFlatMap, 'flatMap', 1));
 
-  if Assigned(TGocciaGarbageCollector.Instance) then
+  if Assigned(TGarbageCollector.Instance) then
   begin
-    TGocciaGarbageCollector.Instance.PinValue(FSharedIteratorPrototype);
-    TGocciaGarbageCollector.Instance.PinValue(FPrototypeMethodHost);
+    TGarbageCollector.Instance.PinObject(FSharedIteratorPrototype);
+    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
   end;
 end;
 
@@ -280,7 +281,7 @@ begin
   Callback := AArgs.GetElement(0);
   Index := 0;
 
-  TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
     Value := Iterator.DirectNext(Done);
     while not Done do
@@ -290,7 +291,7 @@ begin
       Value := Iterator.DirectNext(Done);
     end;
   finally
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -313,7 +314,7 @@ begin
   Callback := AArgs.GetElement(0);
   HasInitial := AArgs.Length >= 2;
 
-  TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
     if HasInitial then
       Accumulator := AArgs.GetElement(1)
@@ -324,7 +325,7 @@ begin
         ThrowTypeError('Reduce of empty iterator with no initial value');
     end;
 
-    TGocciaGarbageCollector.Instance.AddTempRoot(Accumulator);
+    TGarbageCollector.Instance.AddTempRoot(Accumulator);
     try
       Value := Iterator.DirectNext(Done);
       while not Done do
@@ -335,18 +336,18 @@ begin
         finally
           CallArgs.Free;
         end;
-        TGocciaGarbageCollector.Instance.RemoveTempRoot(Accumulator);
+        TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
         Accumulator := NewAccumulator;
-        TGocciaGarbageCollector.Instance.AddTempRoot(Accumulator);
+        TGarbageCollector.Instance.AddTempRoot(Accumulator);
         Value := Iterator.DirectNext(Done);
       end;
 
       Result := Accumulator;
     finally
-      TGocciaGarbageCollector.Instance.RemoveTempRoot(Accumulator);
+      TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
     end;
   finally
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
 
@@ -363,8 +364,8 @@ begin
   Iterator := TGocciaIteratorValue(AThisValue);
   ResultArray := TGocciaArrayValue.Create;
 
-  TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
-  TGocciaGarbageCollector.Instance.AddTempRoot(ResultArray);
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
+  TGarbageCollector.Instance.AddTempRoot(ResultArray);
   try
     Value := Iterator.DirectNext(Done);
     while not Done do
@@ -375,8 +376,8 @@ begin
 
     Result := ResultArray;
   finally
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(ResultArray);
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    TGarbageCollector.Instance.RemoveTempRoot(ResultArray);
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
 
@@ -396,7 +397,7 @@ begin
   Callback := AArgs.GetElement(0);
   Index := 0;
 
-  TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
     Value := Iterator.DirectNext(Done);
     while not Done do
@@ -412,7 +413,7 @@ begin
 
     Result := TGocciaBooleanLiteralValue.FalseValue;
   finally
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
 
@@ -432,7 +433,7 @@ begin
   Callback := AArgs.GetElement(0);
   Index := 0;
 
-  TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
     Value := Iterator.DirectNext(Done);
     while not Done do
@@ -448,7 +449,7 @@ begin
 
     Result := TGocciaBooleanLiteralValue.TrueValue;
   finally
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
 
@@ -468,7 +469,7 @@ begin
   Callback := AArgs.GetElement(0);
   Index := 0;
 
-  TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+  TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
     Value := Iterator.DirectNext(Done);
     while not Done do
@@ -484,7 +485,7 @@ begin
 
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   finally
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(Iterator);
+    TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
 end;
 

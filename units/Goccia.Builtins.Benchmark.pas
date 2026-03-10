@@ -72,7 +72,8 @@ uses
   Math,
   SysUtils,
 
-  Goccia.GarbageCollector,
+  GarbageCollector.Generic,
+
   Goccia.MicrotaskQueue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
@@ -269,14 +270,14 @@ var
   OpsRounds: array[0..4] of Double;
   MeanRounds: array[0..4] of Double;
   TempDouble, OpsMean, OpsVariance: Double;
-  GC: TGocciaGarbageCollector;
+  GC: TGarbageCollector;
 begin
   Result.Name := ABenchCase.Name;
   Result.SuiteName := ABenchCase.SuiteName;
   Result.SetupMs := 0;
   Result.TeardownMs := 0;
 
-  GC := TGocciaGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
   SetupResult := nil;
   RunArgs := nil;
   EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -314,9 +315,6 @@ begin
       // Phase 3: Measurement rounds
       for Round := 0 to MEASUREMENT_ROUNDS - 1 do
       begin
-        if Assigned(GC) then
-          GC.Collect;
-
         StartNanoseconds := GetNanoseconds;
         I := 0;
         while I < Iterations do
@@ -416,20 +414,21 @@ var
 begin
   StartNanoseconds := GetNanoseconds;
 
-  if Assigned(TGocciaGarbageCollector.Instance) then
+  if Assigned(TGarbageCollector.Instance) then
     for I := 0 to FRegisteredBenchmarks.Count - 1 do
     begin
-      TGocciaGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].RunFunction);
+      TGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].RunFunction);
       if Assigned(FRegisteredBenchmarks[I].SetupFunction) then
-        TGocciaGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].SetupFunction);
+        TGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].SetupFunction);
       if Assigned(FRegisteredBenchmarks[I].TeardownFunction) then
-        TGocciaGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
+        TGarbageCollector.Instance.AddTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
     end;
 
+  ResultsArray := nil;
   try
     ResultsArray := TGocciaArrayValue.Create;
-    if Assigned(TGocciaGarbageCollector.Instance) then
-      TGocciaGarbageCollector.Instance.AddTempRoot(ResultsArray);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(ResultsArray);
 
     for I := 0 to FRegisteredBenchmarks.Count - 1 do
     begin
@@ -467,6 +466,7 @@ begin
           ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
         end;
       end;
+
     end;
 
     TotalDurationNanoseconds := GetNanoseconds - StartNanoseconds;
@@ -478,17 +478,18 @@ begin
 
     Result := ResultObj;
   finally
-    if Assigned(TGocciaGarbageCollector.Instance) then
+    if Assigned(TGarbageCollector.Instance) then
     begin
       for I := 0 to FRegisteredBenchmarks.Count - 1 do
       begin
-        TGocciaGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].RunFunction);
+        TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].RunFunction);
         if Assigned(FRegisteredBenchmarks[I].SetupFunction) then
-          TGocciaGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].SetupFunction);
+          TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].SetupFunction);
         if Assigned(FRegisteredBenchmarks[I].TeardownFunction) then
-          TGocciaGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
+          TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
       end;
-      TGocciaGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
+      if Assigned(ResultsArray) then
+        TGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
     end;
   end;
 end;

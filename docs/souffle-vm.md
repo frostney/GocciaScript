@@ -692,10 +692,10 @@ When `break` or `return` occurs inside a `try...finally` block, the compiler inl
 
 ## Garbage Collection
 
-Souffle has its own mark-and-sweep garbage collector (`Souffle.GarbageCollector.pas`), independent of GocciaScript's GC:
+Souffle shares the unified mark-and-sweep garbage collector with the GocciaScript interpreter via `TGarbageCollector.Instance` (from `GarbageCollector.Generic.pas`):
 
-- **Singleton** — `TSouffleGarbageCollector.Initialize` / `TSouffleGarbageCollector.Instance`
-- **Lifecycle** — Initialized by `TGocciaSouffleBackend.Create` with automatic collection disabled (`Enabled := False`). A full `Collect` runs in `TGocciaSouffleBackend.Destroy` to free all Souffle heap objects between backend instances. Shut down by the `finalization` section of `Goccia.Engine.Backend.pas`.
+- **Unified singleton** — `TGarbageCollector.Instance` (the single GC used by both the interpreter and the VM)
+- **Lifecycle** — Automatic collection is disabled during VM execution (`Enabled := False` around `TSouffleVM.Execute`) to prevent sweeping Souffle objects that are on the Pascal stack but not yet in VM registers. Both the BenchmarkRunner and TestRunner call `Collect` after each file to reclaim memory between script executions.
 - **Managed objects** — All `TSouffleHeapObject` instances registered via `AllocateObject`
 - **Pinned objects** — Long-lived objects protected from collection via `PinObject` / `UnpinObject`
 - **Temp roots** — Short-lived references protected during operations via `AddTempRoot` / `RemoveTempRoot`
@@ -984,7 +984,7 @@ Until the rewrite, the bridge code is functional and correct — both execution 
 - **Delegate registration** — `RegisterDelegates` creates VM-native delegate records for arrays and records (with all array prototype methods as `TSouffleNativeFunction` callbacks) and assigns them to the VM's default delegate slots. Method calls like `arr.push(6)` are dispatched entirely within the VM without crossing the language boundary. Mutating array methods immediately sync changes to the bridge cache
 - **Native compound fast paths** — `GetProperty`, `SetProperty`, `GetIndex`, `SetIndex`, `HasProperty`, `DeleteProperty`, and `TypeOf` all check for `TSouffleArray`/`TSouffleRecord` before falling through to wrapped value unwrapping, avoiding unnecessary materialization
 - **Auto-boxing** — `GetProperty` performs primitive boxing when a direct property lookup returns `nil`, enabling prototype methods on primitives (e.g., `(42).toFixed(2)`)
-- **Array bridge sync model** — Bridged arrays have dual representation: `TSouffleArray` (read by the VM) and `TGocciaArrayValue` (read by GocciaScript built-ins). `TGocciaArrayValue` is the authoritative source. Two sync paths keep them consistent: (1) `SyncSouffleArrayToCache` — called immediately after native delegate methods mutate a `TSouffleArray`, propagates the change to the cached `TGocciaArrayValue`; (2) `SyncCachedGocciaToSouffle` — called once at bridge entry (when GocciaScript calls back into the Souffle VM), pushes `TGocciaArrayValue` contents to the `TSouffleArray`. `FArrayBridgeReverse` (never cleared at bridge depth 0) preserves reference identity for arrays held by long-lived objects like Promises
+- **Array bridge sync model** — Bridged arrays have dual representation: `TSouffleArray` (read by the VM) and `TGocciaArrayValue` (read by GocciaScript built-ins). `TGocciaArrayValue` is the authoritative source. Two sync paths keep them consistent: (1) `SyncSouffleArrayToCache` — called immediately after native delegate methods mutate a `TSouffleArray`, propagates the change to the cached `TGocciaArrayValue`; (2) `SyncCachedGocciaToSouffle` — called once at bridge entry (when GocciaScript calls back into the Souffle VM), pushes `TGocciaArrayValue` contents to the `TSouffleArray`. `FArrayBridgeReverse` (never cleared at bridge depth 0) preserves reference identity for arrays held by long-lived objects like Promises. Both sides of `FArrayBridgeReverse` are rooted during GC marking: `MarkExternalRoots` marks the `TSouffleArray` values and `MarkWrappedGocciaValues` marks the `TGocciaArrayValue` keys, preventing dangling pointers after collection
 
 ## File Organization
 
@@ -1007,7 +1007,13 @@ All Souffle VM source files live in the `souffle/` directory with `Souffle.` pre
 | `Souffle.VM.Upvalue.pas` | `TSouffleUpvalue` (open/closed variable capture) |
 | `Souffle.VM.Exception.pas` | `TSouffleHandlerStack`, `ESouffleThrow` |
 | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` abstract interface for language-specific semantics |
-| `Souffle.GarbageCollector.pas` | Mark-and-sweep GC for `TSouffleHeapObject` |
+
+Shared infrastructure (outside `souffle/`):
+
+| File | Description |
+|------|-------------|
+| `GarbageCollector.Managed.pas` | `TGCManagedObject` base class for all GC-managed objects |
+| `GarbageCollector.Generic.pas` | Unified mark-and-sweep GC (shared with interpreter) |
 
 GocciaScript-specific bridge files in `units/`:
 
@@ -1223,7 +1229,7 @@ The `souffle/` directory contains a self-contained bytecode VM with zero knowled
 - **Zero language imports**: No `Goccia.*` units, no `uses` clauses referencing the host language
 - **Generic value system**: `TSouffleValue` represents values without language-specific type tags
 - **Abstract runtime interface**: `TSouffleRuntimeOperations` is the sole injection point for language semantics
-- **Own GC**: `Souffle.GarbageCollector.pas` manages Souffle heap objects independently
+- **Shared GC**: Souffle heap objects are managed by the unified `TGarbageCollector` singleton (no separate Souffle GC)
 - **Self-describing binary format**: `.sbc` files include a runtime tag, version, and debug info. Serialization currently uses native endianness; cross-platform portability requires byte-order normalization (see [Known Limitations](#known-limitations))
 
 ### Multi-Frontend Vision

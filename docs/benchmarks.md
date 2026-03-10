@@ -117,7 +117,8 @@ The `BenchmarkRunner` program:
    - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 100ms). Uses nanosecond-resolution timing via `TimingUtils` (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows).
    - **Measure:** Runs multiple measurement rounds (default 5), computes the coefficient of variation (CV%) from the unsorted ops/sec data, then reports the median values.
    - **Teardown:** Calls the `teardown` function once (timed) after measurement completes.
-8. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
+8. After each file completes, `GC.Collect` runs to reclaim memory between script executions.
+9. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
 
 ## Script API
 

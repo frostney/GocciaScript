@@ -292,7 +292,7 @@ flowchart LR
 | Parser | `Goccia.Parser.pas` | Recursive descent AST construction |
 | Interpreter | `Goccia.Interpreter.pas` | Execution orchestration, module loading |
 | Evaluator | `Goccia.Evaluator.pas` | Pure-function AST evaluation |
-| GC | `Goccia.GarbageCollector.pas` | Mark-and-sweep garbage collection |
+| GC | `GarbageCollector.Generic.pas` | Mark-and-sweep garbage collection (`TGarbageCollector`) |
 
 ### Souffle VM (`--mode=bytecode`)
 

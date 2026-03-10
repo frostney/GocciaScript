@@ -103,9 +103,10 @@ implementation
 uses
   SysUtils,
 
+  GarbageCollector.Generic,
+
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
-  Goccia.GarbageCollector,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -360,10 +361,10 @@ begin
     TGocciaNativeFunctionValue.CreateWithoutPrototype(
       FPrototypeMethodHost.ObjectPrototypeValueOf, PROP_VALUE_OF, 0));
 
-  if Assigned(TGocciaGarbageCollector.Instance) then
+  if Assigned(TGarbageCollector.Instance) then
   begin
-    TGocciaGarbageCollector.Instance.PinValue(FSharedObjectPrototype);
-    TGocciaGarbageCollector.Instance.PinValue(FPrototypeMethodHost);
+    TGarbageCollector.Instance.PinObject(FSharedObjectPrototype);
+    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
   end;
 end;
 

@@ -59,10 +59,11 @@ type
 implementation
 
 uses
+  GarbageCollector.Generic,
+
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Evaluator.Comparison,
-  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Concrete,

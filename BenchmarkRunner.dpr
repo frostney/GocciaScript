@@ -7,6 +7,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  GarbageCollector.Generic,
   Souffle.Bytecode.Module,
   TimingUtils,
 
@@ -186,6 +187,8 @@ begin
         Result := MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
   finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.Collect;
     Source.Free;
   end;
 end;
@@ -276,6 +279,8 @@ begin
         Result := MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
   finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.Collect;
     Source.Free;
   end;
 end;

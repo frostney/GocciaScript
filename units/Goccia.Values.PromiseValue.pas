@@ -76,8 +76,9 @@ type
 implementation
 
 uses
+  GarbageCollector.Generic,
+
   Goccia.Constants.ErrorNames,
-  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,

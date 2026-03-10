@@ -29,7 +29,7 @@ type
 implementation
 
 uses
-  Goccia.GarbageCollector;
+  GarbageCollector.Generic;
 
 constructor TGocciaBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
@@ -42,7 +42,7 @@ end;
 destructor TGocciaBuiltin.Destroy;
 begin
   // FBuiltinObject is GC-managed when GC is active; only free manually otherwise
-  if not Assigned(TGocciaGarbageCollector.Instance) then
+  if not Assigned(TGarbageCollector.Instance) then
     FBuiltinObject.Free;
   inherited;
 end;

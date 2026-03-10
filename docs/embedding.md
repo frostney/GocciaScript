@@ -489,24 +489,24 @@ For long-lived engines (REPL-style), each `Execute` call drains its own microtas
 
 ## Garbage Collector
 
-The engine initializes a mark-and-sweep garbage collector (`TGocciaGarbageCollector`) automatically. In most embedding scenarios, no manual GC interaction is needed. The GC collects unreachable values during execution.
+The engine initializes a mark-and-sweep garbage collector (`TGarbageCollector`) automatically. In most embedding scenarios, no manual GC interaction is needed. The GC collects unreachable values during execution.
 
 For long-running engines (REPL-style), the GC runs automatically. If you need to trigger collection manually between script executions:
 
 ```pascal
-uses Goccia.GarbageCollector;
+uses GarbageCollector.Generic;
 
-TGocciaGarbageCollector.Instance.Collect;
+TGarbageCollector.Instance.Collect;
 ```
 
 **Temporary roots:** If your Pascal code holds references to `TGocciaValue` objects outside of any GocciaScript scope (e.g., in a Pascal list while the engine runs), protect them from collection:
 
 ```pascal
-TGocciaGarbageCollector.Instance.AddTempRoot(MyValue);
+TGarbageCollector.Instance.AddTempRoot(MyValue);
 try
   Engine.Execute; // MyValue won't be collected during execution
 finally
-  TGocciaGarbageCollector.Instance.RemoveTempRoot(MyValue);
+  TGarbageCollector.Instance.RemoveTempRoot(MyValue);
 end;
 ```
 

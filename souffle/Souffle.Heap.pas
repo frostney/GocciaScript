@@ -4,19 +4,20 @@ unit Souffle.Heap;
 
 interface
 
+uses
+  GarbageCollector.Managed;
+
 type
-  TSouffleHeapObject = class
+  TSouffleHeapObject = class(TGCManagedObject)
   private
-    FGCMarked: Boolean;
     FHeapKind: UInt8;
     FDelegate: TSouffleHeapObject;
   public
     constructor Create(const AHeapKind: UInt8);
 
-    procedure MarkReferences; virtual;
+    procedure MarkReferences; override;
     function DebugString: string; virtual;
 
-    property GCMarked: Boolean read FGCMarked write FGCMarked;
     property HeapKind: UInt8 read FHeapKind;
     property Delegate: TSouffleHeapObject read FDelegate write FDelegate;
   end;
@@ -50,14 +51,13 @@ uses
 constructor TSouffleHeapObject.Create(const AHeapKind: UInt8);
 begin
   inherited Create;
-  FGCMarked := False;
   FHeapKind := AHeapKind;
   FDelegate := nil;
 end;
 
 procedure TSouffleHeapObject.MarkReferences;
 begin
-  FGCMarked := True;
+  inherited;
   if Assigned(FDelegate) and not FDelegate.GCMarked then
     FDelegate.MarkReferences;
 end;

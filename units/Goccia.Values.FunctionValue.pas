@@ -69,12 +69,13 @@ implementation
 uses
   SysUtils,
 
+  GarbageCollector.Generic,
+
   Goccia.AST.Statements,
   Goccia.ControlFlow,
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
-  Goccia.GarbageCollector,
   Goccia.Logger,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
@@ -253,15 +254,15 @@ begin
   CallScope := CreateCallScope;
 
   // Register with GC as an active scope (protects it from collection during execution)
-  if Assigned(TGocciaGarbageCollector.Instance) then
-    TGocciaGarbageCollector.Instance.PushActiveScope(CallScope);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.PushActiveRoot(CallScope);
   try
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
   finally
     // Pop active scope from GC stack - the scope may still be alive
     // if captured by closures; the GC will determine reachability
-    if Assigned(TGocciaGarbageCollector.Instance) then
-      TGocciaGarbageCollector.Instance.PopActiveScope;
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PopActiveRoot;
   end;
 end;
 

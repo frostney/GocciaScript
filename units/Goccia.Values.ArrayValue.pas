@@ -113,11 +113,12 @@ uses
   Math,
   SysUtils,
 
+  GarbageCollector.Generic,
+
   Goccia.Arguments.Callbacks,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Evaluator.Comparison,
-  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Utils.Arrays,
   Goccia.Values.ClassHelper,
@@ -305,10 +306,10 @@ begin
     )
   );
 
-  if Assigned(TGocciaGarbageCollector.Instance) then
+  if Assigned(TGarbageCollector.Instance) then
   begin
-    TGocciaGarbageCollector.Instance.PinValue(FSharedArrayPrototype);
-    TGocciaGarbageCollector.Instance.PinValue(FPrototypeMethodHost);
+    TGarbageCollector.Instance.PinObject(FSharedArrayPrototype);
+    TGarbageCollector.Instance.PinObject(FPrototypeMethodHost);
   end;
 end;
 

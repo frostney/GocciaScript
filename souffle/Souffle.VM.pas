@@ -11,7 +11,7 @@ uses
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Module,
   Souffle.Compound,
-  Souffle.GarbageCollector,
+  GarbageCollector.Generic,
   Souffle.Heap,
   Souffle.Value,
   Souffle.VM.CallFrame,
@@ -32,7 +32,7 @@ type
     FHandlerStack: TSouffleHandlerStack;
     FOpenUpvalues: TSouffleUpvalue;
     FRuntimeOps: TSouffleRuntimeOperations;
-    FGC: TSouffleGarbageCollector;
+    FGC: TGarbageCollector;
     FBaseFrameCount: Integer;
 
     FPreviousExceptionMask: TFPUExceptionMask;
@@ -93,15 +93,15 @@ begin
   FArrayDelegate := nil;
   FRecordDelegate := nil;
 
-  FGC := TSouffleGarbageCollector.Instance;
+  FGC := TGarbageCollector.Instance;
   if Assigned(FGC) then
-    FGC.SetExternalRootMarker(MarkVMRoots);
+    FGC.AddExternalRootMarker(MarkVMRoots);
 end;
 
 destructor TSouffleVM.Destroy;
 begin
   if Assigned(FGC) then
-    FGC.SetExternalRootMarker(nil);
+    FGC.RemoveExternalRootMarker(MarkVMRoots);
   FCallStack.Free;
   FHandlerStack.Free;
   SetExceptionMask(FPreviousExceptionMask);

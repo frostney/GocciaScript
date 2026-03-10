@@ -53,7 +53,7 @@ The **Engine** (`Goccia.Engine.pas`) sits above both pipelines and orchestrates 
 
 The top-level entry point. Provides static convenience methods (`RunScript`, `RunScriptFromFile`, `RunScriptFromStringList`) and manages:
 
-- **Garbage collector initialization** — Calls `TGocciaGarbageCollector.Initialize`, registers the global scope as a GC root, and pins singleton values via `PinSingletons` (`UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache, etc.).
+- **Garbage collector initialization** — Calls `TGarbageCollector.Initialize`, registers the global scope as a GC root, and pins singleton values via `PinSingletons` (`UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache, etc.).
 - **Built-in registration** — A single `RegisterBuiltIns` method selectively creates and registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays, error constructors) based on a `TGocciaGlobalBuiltins` flag set. All built-in constructors share the same `(name, scope, ThrowError)` signature.
 - **Interpreter lifecycle** — Creates and owns the `TGocciaInterpreter` instance.
 - **Module resolver** — Creates a default `TGocciaModuleResolver` (base directory = entry script directory) and passes it to the interpreter. Accepts an optional custom resolver via a constructor overload; when injected, the engine does not own it. Exposes `AddAlias` and `RegisterGlobalModule` convenience methods.
@@ -113,7 +113,7 @@ A dependency-free unit that centralizes all 12 contextual keyword string constan
 
 A singleton call frame stack that tracks the active function call chain for `Error.stack` trace generation. Key design:
 
-- **Singleton** — `TGocciaCallStack.Initialize` / `TGocciaCallStack.Instance`, mirroring the `TGocciaGarbageCollector` pattern.
+- **Singleton** — `TGocciaCallStack.Initialize` / `TGocciaCallStack.Instance`, mirroring the `TGarbageCollector` pattern.
 - **Push/Pop** — `EvaluateCall` and `EvaluateNewExpression` in the evaluator push a frame (function name, file path, line, column) before dispatching to the callee and pop after return (via `try/finally`). Each frame records the call-site position from the AST node and the callee's name.
 - **CaptureStackTrace** — Called by error constructors and `CreateErrorObject` to snapshot the current stack as a formatted string. Accepts a `SkipTop` parameter to omit the Error constructor frame when errors are created via `new Error()`.
 - **Pre-allocated** — Uses a fixed-capacity dynamic array (initial size 32) with doubling growth, avoiding per-frame heap allocation.
@@ -122,7 +122,7 @@ A singleton call frame stack that tracks the active function call chain for `Err
 
 A singleton microtask queue used by Promises and `queueMicrotask()` to defer callbacks per the ECMAScript specification. Key design:
 
-- **Singleton** — `TGocciaMicrotaskQueue.Initialize` / `TGocciaMicrotaskQueue.Instance`, mirroring the `TGocciaGarbageCollector` pattern.
+- **Singleton** — `TGocciaMicrotaskQueue.Initialize` / `TGocciaMicrotaskQueue.Instance`, mirroring the `TGarbageCollector` pattern.
 - **Enqueue** — When a Promise settles and has pending reactions (or when `.then()` is called on an already-settled Promise), the reaction is enqueued as a microtask rather than executed immediately. The global `queueMicrotask(callback)` function also enqueues directly into this queue.
 - **DrainQueue** — Called by the engine after `Interpreter.Execute` completes. Processes microtasks in FIFO order, looping until the queue is empty. New microtasks enqueued during processing (e.g., chained `.then()` handlers or nested `queueMicrotask` calls) are processed in the same drain cycle.
 - **ClearQueue** — Discards all pending microtasks without executing them. Called in `finally` blocks by `Execute` and `ExecuteProgram` to prevent stale callbacks from leaking across executions if a script throws.
@@ -347,25 +347,40 @@ Errors are handled through three mechanisms:
 
 ## Memory Management
 
-GocciaScript uses a **mark-and-sweep garbage collector** (`Goccia.GarbageCollector.pas`) to manage the lifecycle of runtime values. FreePascal provides manual memory management, but GocciaScript values have complex ownership patterns (closures, shared prototypes, aliased references across scopes) that make manual `Free` calls impractical.
+GocciaScript uses a **mark-and-sweep garbage collector** to manage the lifecycle of runtime values. FreePascal provides manual memory management, but GocciaScript values have complex ownership patterns (closures, shared prototypes, aliased references across scopes) that make manual `Free` calls impractical.
 
-### GC Architecture
+### Generic GC Architecture
+
+Both the interpreter and the Souffle VM share a common GC infrastructure built on a generic base class hierarchy:
+
+| Unit | Class | Role |
+|------|-------|------|
+| `GarbageCollector.Managed.pas` | `TGCManagedObject` | Base class for all GC-managed objects (`GCMarked` flag, virtual `MarkReferences`) |
+| `GarbageCollector.Generic.pas` | `TGarbageCollector` | Singleton mark-and-sweep GC (`Initialize`, `Instance`, `Shutdown`); manages all objects (values, scopes, heap objects) in one pool; root tracking (`AddRootObject`/`RemoveRootObject`), active root stack (`PushActiveRoot`/`PopActiveRoot`), temp roots, external root marker, threshold-based collection |
+
+`TGocciaValue`, `TGocciaScope`, and `TSouffleHeapObject` all inherit from `TGCManagedObject`, enabling a unified marking protocol across both runtime systems.
 
 ```mermaid
 flowchart TD
-    subgraph Roots
-        Global["Global Scope"]
-        Active["Active Scope Stack\n(currently executing functions)"]
-        Pinned["Pinned Values\n(singletons, shared prototypes)"]
-        Temp["Temp Roots\n(Pascal-held references)"]
+    subgraph GC["TGarbageCollector"]
+        ManagedObjects["Managed Objects\n(values, scopes, heap)"]
+        PinnedObjects["Pinned Objects"]
+        TempRoots["Temp Roots"]
+        RootObjects["Root Objects"]
+        ActiveRootStack["Active Root Stack"]
+        ExternalMarker["External Root Marker"]
+    end
+    subgraph SouffleObjects["Souffle Heap Objects"]
+        AllocateObject["Registered via AllocateObject"]
     end
     subgraph Mark["Mark Phase"]
         Traverse["Traverse from all roots\nSet GCMarked := True"]
     end
     subgraph Sweep["Sweep Phase"]
-        Free["Free unmarked values and scopes"]
+        Free["Free unmarked objects"]
     end
-    Roots --> Mark --> Sweep
+    GC --> Mark --> Sweep
+    SouffleObjects --> GC
 ```
 
 ### Value Categories
@@ -373,17 +388,19 @@ flowchart TD
 | Category | Lifetime | Mechanism |
 |----------|----------|-----------|
 | **AST literals** | AST-owned (script lifetime) | Unregistered from GC; evaluator calls `RuntimeCopy` to produce GC-managed copies |
-| **Singletons** | Permanent (process lifetime) | Pinned via `TGocciaGarbageCollector.Instance.PinValue` during engine init |
-| **Shared prototypes** | Permanent (process lifetime) | Class-level singletons (String, Array, Set, Map, Function); pinned via `PinValue` in each type's `InitializePrototype` |
+| **Singletons** | Permanent (process lifetime) | Pinned via `TGarbageCollector.Instance.PinObject` during engine init |
+| **Shared prototypes** | Permanent (process lifetime) | Class-level singletons (String, Array, Set, Map, Function); pinned via `PinObject` in each type's `InitializePrototype` |
 | **Runtime values** | Dynamic (collected when unreachable) | Registered via `AfterConstruction`, freed during sweep |
 | **Pascal-held values** | Temporary (explicit protection) | `AddTempRoot` / `RemoveTempRoot` |
 
 ### Registration
 
-All `TGocciaValue` instances auto-register with the GC in `AfterConstruction`. All `TGocciaScope` instances register in their constructor. The GC tracks both in separate managed lists.
+All `TGocciaValue` instances auto-register with the GC in `AfterConstruction`. All `TGocciaScope` instances register via `RegisterObject` in their constructor. The GC tracks all objects (values, scopes, heap objects) in a single managed object list.
 
-Pinned values, temp roots, and root scopes are stored in `TDictionary<T, Boolean>` (used as hash sets) for O(1) `PinValue`, `AddRoot`, `AddTempRoot`, and `RemoveTempRoot` operations.
+Pinned objects, temp roots, and root objects are stored in `TDictionary<T, Boolean>` (used as hash sets) for O(1) `PinObject`, `AddRootObject`, `AddTempRoot`, and `RemoveTempRoot` operations.
 
 ### Collection Trigger
 
-The GC exposes `Collect` (explicit) and `CollectIfNeeded` (threshold-based, triggered after a configurable number of allocations). The benchmark runner calls `Collect` before each measurement round to normalize heap state and reduce timing variance.
+The GC exposes `Collect` (explicit) and `CollectIfNeeded` (threshold-based, triggered after a configurable number of allocations).
+
+Both the **BenchmarkRunner** and **TestRunner** call `GC.Collect` after each file to reclaim memory between script executions (critical on 32-bit Windows where address space is limited to ~2 GB).

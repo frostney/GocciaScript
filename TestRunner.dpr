@@ -7,6 +7,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  GarbageCollector.Generic,
   Souffle.Bytecode.Module,
   TimingUtils,
 
@@ -320,6 +321,7 @@ end;
 
 function RunScriptsFromFiles(const AFiles: TStringList): TAggregatedTestResult;
 var
+  GC: TGarbageCollector;
   I, J: Integer;
   AllTestResults: TGocciaObjectValue;
   AllFailedTests: TGocciaArrayValue;
@@ -327,8 +329,16 @@ var
   FileFailedTests: TGocciaValue;
   PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions, TotalDuration: Double;
 begin
+  GC := TGarbageCollector.Instance;
+
   AllTestResults := TGocciaObjectValue.Create;
   AllFailedTests := TGocciaArrayValue.Create;
+
+  if Assigned(GC) then
+  begin
+    GC.AddTempRoot(AllTestResults);
+    GC.AddTempRoot(AllFailedTests);
+  end;
 
   AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.ZeroValue);
@@ -377,8 +387,17 @@ begin
       for J := 0 to TGocciaArrayValue(FileFailedTests).Elements.Count - 1 do
         AllFailedTests.Elements.Add(TGocciaArrayValue(FileFailedTests).Elements[J]);
 
+    if Assigned(GC) then
+      GC.Collect;
+
     if GExitOnFirstFailure and (FailedCount > 0) then
       Break;
+  end;
+
+  if Assigned(GC) then
+  begin
+    GC.RemoveTempRoot(AllTestResults);
+    GC.RemoveTempRoot(AllFailedTests);
   end;
   
   AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));

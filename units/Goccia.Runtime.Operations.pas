@@ -400,8 +400,8 @@ uses
   StrUtils,
   SysUtils,
 
+  GarbageCollector.Generic,
   Souffle.Bytecode.Debug,
-  Souffle.GarbageCollector,
   Souffle.VM.CallFrame,
   Souffle.VM.Exception,
   Souffle.VM.NativeFunction,
@@ -415,7 +415,6 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.Evaluator.TypeOperations,
-  Goccia.GarbageCollector,
   Goccia.Interpreter,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
@@ -455,6 +454,7 @@ type
       const ARuntime: TGocciaRuntimeOperations);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
     property NativeFunction: TSouffleNativeFunction read FNativeFunction;
   end;
 
@@ -470,6 +470,7 @@ type
       const ARuntime: TGocciaRuntimeOperations);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
     property Closure: TSouffleClosure read FClosure;
   end;
 
@@ -485,6 +486,7 @@ type
       const ARuntime: TGocciaRuntimeOperations);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
   end;
 
 procedure RebuildArrayBridgeCache(
@@ -535,6 +537,13 @@ begin
   else
     SouffleResult := FNativeFunction.Invoke(Receiver, nil, 0);
   Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
+end;
+
+procedure TGocciaSouffleNativeFunctionBridge.MarkReferences;
+begin
+  inherited;
+  if Assigned(FNativeFunction) and not FNativeFunction.GCMarked then
+    FNativeFunction.MarkReferences;
 end;
 
 { TGocciaSouffleClosureBridge }
@@ -599,6 +608,13 @@ begin
   Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
 end;
 
+procedure TGocciaSouffleClosureBridge.MarkReferences;
+begin
+  inherited;
+  if Assigned(FClosure) and not FClosure.GCMarked then
+    FClosure.MarkReferences;
+end;
+
 { TGocciaSouffleMethodBridge }
 
 constructor TGocciaSouffleMethodBridge.Create(const AClosure: TSouffleClosure;
@@ -656,6 +672,13 @@ begin
     FBridgeRuntime.FRecordBridgeCache.Clear;
   end;
   Result := FBridgeRuntime.UnwrapToGocciaValue(SouffleResult);
+end;
+
+procedure TGocciaSouffleMethodBridge.MarkReferences;
+begin
+  inherited;
+  if Assigned(FSouffleClosure) and not FSouffleClosure.GCMarked then
+    FSouffleClosure.MarkReferences;
 end;
 
 { TGocciaWrappedValue }
@@ -723,6 +746,8 @@ end;
 procedure TGocciaBridgedFunction.MarkReferences;
 begin
   inherited;
+  if Assigned(FGocciaFn) and not FGocciaFn.GCMarked then
+    FGocciaFn.MarkReferences;
 end;
 
 function TGocciaBridgedFunction.DebugString: string;
@@ -769,6 +794,9 @@ end;
 procedure TGocciaSuperCallHelper.MarkReferences;
 begin
   inherited;
+  if (FSuperClass is TGocciaValue) and
+     not TGocciaValue(FSuperClass).GCMarked then
+    TGocciaValue(FSuperClass).MarkReferences;
 end;
 
 function TGocciaSuperCallHelper.DebugString: string;
@@ -1382,14 +1410,14 @@ begin
   FFormalParameterCounts := TDictionary<TSouffleFunctionTemplate, Integer>.Create;
   FBridgeCallDepth := 0;
   FVM := nil;
-  TGocciaGarbageCollector.Initialize;
-  TGocciaGarbageCollector.Instance.SetExternalRootMarker(MarkWrappedGocciaValues);
+  TGarbageCollector.Initialize;
+  TGarbageCollector.Instance.AddExternalRootMarker(MarkWrappedGocciaValues);
 end;
 
 destructor TGocciaRuntimeOperations.Destroy;
 begin
-  if Assigned(TGocciaGarbageCollector.Instance) then
-    TGocciaGarbageCollector.Instance.SetExternalRootMarker(nil);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RemoveExternalRootMarker(MarkWrappedGocciaValues);
   FGlobals.Free;
   FConstGlobals.Free;
   FExports.Free;
@@ -1910,8 +1938,8 @@ begin
   begin
     Result := SouffleReference(TGocciaBridgedFunction.Create(
       TGocciaNativeFunctionValue(AValue), Self));
-    if Assigned(TSouffleGarbageCollector.Instance) then
-      TSouffleGarbageCollector.Instance.AllocateObject(Result.AsReference);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(Result.AsReference);
   end
   else
     Result := WrapGocciaValue(AValue);
@@ -3390,8 +3418,8 @@ begin
         end;
         WalkBp := WalkBp.SuperBlueprint;
       end;
-      if Assigned(TSouffleGarbageCollector.Instance) then
-        TSouffleGarbageCollector.Instance.AllocateObject(Rec);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AllocateObject(Rec);
 
       FieldInitCount := 0;
       SetLength(FieldInits, 4);
@@ -3580,8 +3608,8 @@ begin
         Result := SouffleReference(
           TGocciaSouffleArrayIterator.Create(
             TSouffleArray(AIterable.AsReference)));
-        if Assigned(TSouffleGarbageCollector.Instance) then
-          TSouffleGarbageCollector.Instance.AllocateObject(
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AllocateObject(
             TGocciaSouffleArrayIterator(Result.AsReference));
         Exit;
       end;
@@ -3590,8 +3618,8 @@ begin
         Result := SouffleReference(
           TGocciaSouffleStringIterator.Create(
             TSouffleHeapString(AIterable.AsReference).Value));
-        if Assigned(TSouffleGarbageCollector.Instance) then
-          TSouffleGarbageCollector.Instance.AllocateObject(
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AllocateObject(
             TGocciaSouffleStringIterator(Result.AsReference));
         Exit;
       end;
@@ -3601,16 +3629,16 @@ begin
         if GocciaVal is TGocciaMapValue then
         begin
           Iterator := TGocciaMapIteratorValue.Create(GocciaVal, mkEntries);
-          if Assigned(TGocciaGarbageCollector.Instance) then
-            TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.AddTempRoot(Iterator);
           Result := WrapGocciaValue(Iterator);
           Exit;
         end;
         if GocciaVal is TGocciaSetValue then
         begin
           Iterator := TGocciaSetIteratorValue.Create(GocciaVal, skValues);
-          if Assigned(TGocciaGarbageCollector.Instance) then
-            TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.AddTempRoot(Iterator);
           Result := WrapGocciaValue(Iterator);
           Exit;
         end;
@@ -3638,8 +3666,8 @@ begin
         end;
         if Assigned(IteratorObj) then
         begin
-          if Assigned(TGocciaGarbageCollector.Instance) then
-            TGocciaGarbageCollector.Instance.AddTempRoot(IteratorObj);
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.AddTempRoot(IteratorObj);
           Result := WrapGocciaValue(IteratorObj);
           Exit;
         end;
@@ -3688,8 +3716,8 @@ begin
       Exit;
     end;
 
-    if Assigned(TGocciaGarbageCollector.Instance) then
-      TGocciaGarbageCollector.Instance.AddTempRoot(Iterator);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(Iterator);
     Result := WrapGocciaValue(Iterator);
   except
     on E: TGocciaThrowValue do
@@ -3739,8 +3767,8 @@ begin
           NewArr := TSouffleArray.Create(TGocciaArrayValue(Value).Elements.Count);
           for I := 0 to TGocciaArrayValue(Value).Elements.Count - 1 do
             NewArr.Push(ToSouffleValue(TGocciaArrayValue(Value).Elements[I]));
-          if Assigned(TSouffleGarbageCollector.Instance) then
-            TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.AllocateObject(NewArr);
           Result := SouffleReference(NewArr);
         end
         else
@@ -4077,8 +4105,8 @@ begin
     Exit(SouffleNil);
 
   Rec := TSouffleRecord.Create(Module.ExportsTable.Count);
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(Rec);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
 
   for Pair in Module.ExportsTable do
     Rec.Put(Pair.Key, ToSouffleValue(Pair.Value));
@@ -5038,8 +5066,8 @@ begin
   end;
 
   NewArr := TSouffleArray.Create(Stop - Start);
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NewArr);
   for I := Start to Stop - 1 do
     NewArr.Push(Arr.Get(I));
   Result := SouffleReference(NewArr);
@@ -5079,8 +5107,8 @@ begin
 
   Arr := TSouffleArray(AReceiver.AsReference);
   NewArr := TSouffleArray.Create(Arr.Count);
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NewArr);
 
   for I := 0 to Arr.Count - 1 do
     NewArr.Push(Arr.Get(I));
@@ -5242,8 +5270,8 @@ begin
   Callback := TSouffleClosure(AArgs^.AsReference);
   NewArr := TSouffleArray.Create(Arr.Count);
   NewArr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NewArr);
   for I := 0 to Arr.Count - 1 do
   begin
     if SouffleIsHole(Arr.Get(I)) then
@@ -5274,8 +5302,8 @@ begin
   Callback := TSouffleClosure(AArgs^.AsReference);
   NewArr := TSouffleArray.Create(Arr.Count);
   NewArr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NewArr);
   for I := 0 to Arr.Count - 1 do
   begin
     Elem := Arr.Get(I);
@@ -5643,8 +5671,8 @@ begin
   end;
   NewArr := TSouffleArray.Create(Arr.Count);
   NewArr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NewArr);
   FlattenInto(Arr, NewArr, Depth);
   Result := SouffleReference(NewArr);
 end;
@@ -5667,8 +5695,8 @@ begin
   Callback := TSouffleClosure(AArgs^.AsReference);
   NewArr := TSouffleArray.Create(Arr.Count);
   NewArr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(NewArr);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NewArr);
   for I := 0 to Arr.Count - 1 do
   begin
     if SouffleIsHole(Arr.Get(I)) then Continue;
@@ -5729,8 +5757,8 @@ begin
 
   Removed := TSouffleArray.Create(DeleteCount);
   Removed.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
-  if Assigned(TSouffleGarbageCollector.Instance) then
-    TSouffleGarbageCollector.Instance.AllocateObject(Removed);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Removed);
   for I := 0 to DeleteCount - 1 do
     Removed.Push(Arr.Get(Start + I));
 
@@ -6798,7 +6826,7 @@ function NativeStringSplit(const AReceiver: TSouffleValue;
 var
   S, Sep, Remaining, Segment: string;
   Arr: TSouffleArray;
-  GC: TSouffleGarbageCollector;
+  GC: TGarbageCollector;
   SepPos, Limit, I: Integer;
   HasLimit: Boolean;
 begin
@@ -6812,7 +6840,7 @@ begin
     if Limit = 0 then
     begin
       Arr := TSouffleArray.Create(0);
-      GC := TSouffleGarbageCollector.Instance;
+      GC := TGarbageCollector.Instance;
       if Assigned(GC) then GC.AllocateObject(Arr);
       if Assigned(GNativeArrayJoinRuntime) then
         Arr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
@@ -6822,7 +6850,7 @@ begin
   end;
 
   Arr := TSouffleArray.Create(4);
-  GC := TSouffleGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
   if Assigned(GC) then GC.AllocateObject(Arr);
   if Assigned(GNativeArrayJoinRuntime) then
     Arr.Delegate := GNativeArrayJoinRuntime.VM.ArrayDelegate;
@@ -7334,9 +7362,9 @@ procedure ReplaceGlobalWithNative(
   const ACallback: TSouffleNativeCallback);
 var
   Fn: TSouffleNativeFunction;
-  GC: TSouffleGarbageCollector;
+  GC: TGarbageCollector;
 begin
-  GC := TSouffleGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
   Fn := TSouffleNativeFunction.Create(AName, AArity, ACallback);
   if Assigned(GC) then GC.AllocateObject(Fn);
   AGlobals.AddOrSetValue(AName, SouffleReference(Fn));
@@ -7347,10 +7375,10 @@ function BuildSubMethodDelegate(
   const AEntries: array of TSouffleMethodEntry): TSouffleRecord;
 var
   Fn: TSouffleNativeFunction;
-  GC: TSouffleGarbageCollector;
+  GC: TGarbageCollector;
   I: Integer;
 begin
-  GC := TSouffleGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
   Result := TSouffleRecord.Create(Length(AEntries));
   if Assigned(GC) then GC.AllocateObject(Result);
   for I := 0 to High(AEntries) do
@@ -7430,9 +7458,9 @@ var
   I: Integer;
   PropVal: TGocciaValue;
   BridgedFn: TGocciaBridgedFunction;
-  GC: TSouffleGarbageCollector;
+  GC: TGarbageCollector;
 begin
-  GC := TSouffleGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
   Names := AObj.GetOwnPropertyNames;
   Result := TSouffleRecord.Create(Length(Names));
   if Assigned(GC) then GC.AllocateObject(Result);
@@ -7463,11 +7491,11 @@ var
   NativeFnVal: TGocciaNativeFunctionValue;
   BridgedFn: TGocciaBridgedFunction;
   Rec, GlobalThisRec: TSouffleRecord;
-  GC: TSouffleGarbageCollector;
+  GC: TGarbageCollector;
   Pair: TPair<string, TSouffleValue>;
 begin
   if not Assigned(FVM) then Exit;
-  GC := TSouffleGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
   Keys := FGlobals.Keys.ToArray;
   for Key in Keys do
   begin
@@ -7674,8 +7702,8 @@ begin
   begin
     Helper := TGocciaSuperCallHelper.Create(
       TGocciaClassValue(GocciaVal), Self);
-    if Assigned(TSouffleGarbageCollector.Instance) then
-      TSouffleGarbageCollector.Instance.AllocateObject(Helper);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(Helper);
     Result := SouffleReference(Helper);
   end
   else
@@ -7884,7 +7912,7 @@ begin
   if Assigned(ClassValue) then
   begin
     FClassDefinitionScopes.AddOrSetValue(ClassValue, EvalScope);
-    TGocciaGarbageCollector.Instance.AddTempRoot(ClassValue);
+    TGarbageCollector.Instance.AddTempRoot(ClassValue);
     try
       Result := ToSouffleValue(ClassValue);
       FGlobals.AddOrSetValue(Entry.ClassDefinition.Name, Result);
@@ -7894,7 +7922,7 @@ begin
         EvalScope.DefineLexicalBinding(
           Entry.ClassDefinition.Name, ClassValue, dtLet);
     finally
-      TGocciaGarbageCollector.Instance.RemoveTempRoot(ClassValue);
+      TGarbageCollector.Instance.RemoveTempRoot(ClassValue);
     end;
   end;
 end;
@@ -7945,8 +7973,8 @@ begin
     EnumObj.PreventExtensions;
     InitializeEnumSymbols(EnumObj);
 
-    if Assigned(TGocciaGarbageCollector.Instance) then
-      TGocciaGarbageCollector.Instance.AddTempRoot(EnumObj);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(EnumObj);
 
     Result := WrapGocciaValue(EnumObj);
   except
@@ -8207,7 +8235,7 @@ begin
       Meta := TGocciaObjectValue.Create(TGocciaObjectValue(SuperMetadata))
     else
       Meta := TGocciaObjectValue.Create;
-    TGocciaGarbageCollector.Instance.AddTempRoot(Meta);
+    TGarbageCollector.Instance.AddTempRoot(Meta);
 
     FreeAndNil(FActiveDecoratorSession);
     FActiveDecoratorSession := TGocciaDecoratorSession.Create(Meta);
@@ -8513,7 +8541,7 @@ begin
       ClassVal := TGocciaClassValue(FActiveDecoratorSession.ClassValue);
     if not Assigned(ClassVal) then
     begin
-      TGocciaGarbageCollector.Instance.RemoveTempRoot(
+      TGarbageCollector.Instance.RemoveTempRoot(
         FActiveDecoratorSession.MetadataObject);
       FreeAndNil(FActiveDecoratorSession);
       Exit;
@@ -8555,7 +8583,7 @@ begin
 
     ADest := WrapGocciaValue(ClassVal);
 
-    TGocciaGarbageCollector.Instance.RemoveTempRoot(
+    TGarbageCollector.Instance.RemoveTempRoot(
       FActiveDecoratorSession.MetadataObject);
     FreeAndNil(FActiveDecoratorSession);
   except
@@ -8563,7 +8591,7 @@ begin
     begin
       if Assigned(FActiveDecoratorSession) then
       begin
-        TGocciaGarbageCollector.Instance.RemoveTempRoot(
+        TGarbageCollector.Instance.RemoveTempRoot(
           FActiveDecoratorSession.MetadataObject);
         FreeAndNil(FActiveDecoratorSession);
       end;
@@ -8663,6 +8691,10 @@ begin
     if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
       TSouffleHeapObject(BridgeKey).MarkReferences;
 
+  for BridgeKey in FArrayBridgeReverse.Values do
+    if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
+      TSouffleHeapObject(BridgeKey).MarkReferences;
+
   for BridgeKey in FRecordBridgeCache.Keys do
     if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
       TSouffleHeapObject(BridgeKey).MarkReferences;
@@ -8712,6 +8744,10 @@ begin
       TGocciaValue(BridgeVal).MarkReferences;
 
   for BridgeVal in FArrayBridgeCache.Values do
+    if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
+      TGocciaValue(BridgeVal).MarkReferences;
+
+  for BridgeVal in FArrayBridgeReverse.Keys do
     if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
       TGocciaValue(BridgeVal).MarkReferences;
 

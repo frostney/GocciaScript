@@ -48,7 +48,7 @@ implementation
 
 uses
   Souffle.Compound,
-  Souffle.GarbageCollector;
+  GarbageCollector.Generic;
 
 { TSouffleNativeFunction }
 
@@ -77,10 +77,10 @@ function BuildDelegate(
 var
   Rec: TSouffleRecord;
   Fn: TSouffleNativeFunction;
-  GC: TSouffleGarbageCollector;
+  GC: TGarbageCollector;
   I: Integer;
 begin
-  GC := TSouffleGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
   Rec := TSouffleRecord.Create(Length(AEntries));
   if Assigned(GC) then
     GC.AllocateObject(Rec);
