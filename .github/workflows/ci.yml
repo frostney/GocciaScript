@@ -56,7 +56,7 @@ jobs:
       - name: Upload build
         uses: actions/upload-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           retention-days: 1
           path: |
             build/ScriptLoader
@@ -98,7 +98,7 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           path: build/
 
       - name: Make binaries executable
@@ -181,7 +181,7 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           path: build/
 
       - name: Make binaries executable
@@ -233,7 +233,7 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           path: build/
 
       - name: Make binaries executable
@@ -263,13 +263,13 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           path: build/
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: gocciascript-${{ matrix.os }}-${{ matrix.arch }}
+          name: gocciascript-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
           if-no-files-found: ignore
           path: |
             build/ScriptLoader
@@ -300,7 +300,7 @@ jobs:
 
       - name: Package releases
         run: |
-          platforms=("ubuntu-latest-x64" "ubuntu-latest-arm64" "macos-latest-x64" "macos-latest-arm64" "windows-latest-x64")
+          platforms=("ubuntu-latest-x64" "ubuntu-latest-arm64" "macos-latest-x64" "macos-latest-arm64" "windows-latest-x86")
 
           for platform in "${platforms[@]}"; do
             artifact_dir="artifacts/build-${platform}"
