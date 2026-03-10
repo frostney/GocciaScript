@@ -695,11 +695,12 @@ When `break` or `return` occurs inside a `try...finally` block, the compiler inl
 Souffle has its own mark-and-sweep garbage collector (`Souffle.GarbageCollector.pas`), independent of GocciaScript's GC:
 
 - **Singleton** — `TSouffleGarbageCollector.Initialize` / `TSouffleGarbageCollector.Instance`
+- **Lifecycle** — Initialized by `TGocciaSouffleBackend.Create` with automatic collection disabled (`Enabled := False`). A full `Collect` runs in `TGocciaSouffleBackend.Destroy` to free all Souffle heap objects between backend instances. Shut down by the `finalization` section of `Goccia.Engine.Backend.pas`.
 - **Managed objects** — All `TSouffleHeapObject` instances registered via `AllocateObject`
 - **Pinned objects** — Long-lived objects protected from collection via `PinObject` / `UnpinObject`
 - **Temp roots** — Short-lived references protected during operations via `AddTempRoot` / `RemoveTempRoot`
 - **External root marker** — The VM registers `MarkVMRoots` to mark all values in the register file and call stack during collection
-- **Threshold-based collection** — `CollectIfNeeded` triggers after a configurable number of allocations (default: 10,000)
+- **Threshold-based collection** — `CollectIfNeeded` triggers after a configurable number of allocations (default: 10,000). Currently disabled; re-enabling requires completing the root coverage in `MarkExternalRoots` for bridge call paths.
 - **O(1) membership** — Pinned objects and temp roots use `TDictionary<TSouffleHeapObject, Boolean>` for hash-set semantics
 
 ## Bytecode Module Structure

@@ -8361,6 +8361,7 @@ var
   GlobalVal: TSouffleValue;
   ClosureKey: TSouffleClosure;
   BridgeKey: TObject;
+  SuperVal: TSouffleValue;
 begin
   for GlobalVal in FGlobals.Values do
     if SouffleIsReference(GlobalVal) and Assigned(GlobalVal.AsReference)
@@ -8388,10 +8389,19 @@ begin
     if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
       TSouffleHeapObject(BridgeKey).MarkReferences;
 
+  for SuperVal in FBlueprintSuperValues.Values do
+    if SouffleIsReference(SuperVal) and Assigned(SuperVal.AsReference)
+      and not SuperVal.AsReference.GCMarked then
+      SuperVal.AsReference.MarkReferences;
+
   if Assigned(FStringDelegate) and not FStringDelegate.GCMarked then
     FStringDelegate.MarkReferences;
   if Assigned(FNumberDelegate) and not FNumberDelegate.GCMarked then
     FNumberDelegate.MarkReferences;
+  if Assigned(FMapDelegate) and not FMapDelegate.GCMarked then
+    FMapDelegate.MarkReferences;
+  if Assigned(FSetDelegate) and not FSetDelegate.GCMarked then
+    FSetDelegate.MarkReferences;
   if Assigned(FDescribeDelegate) and not FDescribeDelegate.GCMarked then
     FDescribeDelegate.MarkReferences;
   if Assigned(FTestDelegate) and not FTestDelegate.GCMarked then
