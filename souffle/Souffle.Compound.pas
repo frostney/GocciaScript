@@ -257,8 +257,7 @@ var
 begin
   inherited;
   for I := 0 to FCount - 1 do
-    if SouffleIsReference(FElements[I]) and Assigned(FElements[I].AsReference)
-      and not FElements[I].AsReference.GCMarked then
+    if SouffleIsReference(FElements[I]) and Assigned(FElements[I].AsReference) then
       FElements[I].AsReference.MarkReferences;
 end;
 
@@ -711,14 +710,12 @@ begin
   for I := 0 to FCapacity - 1 do
     if FEntries[I].Occupied and
        SouffleIsReference(FEntries[I].Value) and
-       Assigned(FEntries[I].Value.AsReference) and
-       not FEntries[I].Value.AsReference.GCMarked then
+       Assigned(FEntries[I].Value.AsReference) then
       FEntries[I].Value.AsReference.MarkReferences;
   if Assigned(FBlueprint) and not FBlueprint.GCMarked then
     FBlueprint.MarkReferences;
   for I := 0 to High(FSlots) do
-    if SouffleIsReference(FSlots[I]) and Assigned(FSlots[I].AsReference)
-      and not FSlots[I].AsReference.GCMarked then
+    if SouffleIsReference(FSlots[I]) and Assigned(FSlots[I].AsReference) then
       FSlots[I].AsReference.MarkReferences;
   if Assigned(FGetters) and not FGetters.GCMarked then
     FGetters.MarkReferences;

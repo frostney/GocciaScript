@@ -57,7 +57,7 @@ var
 begin
   inherited;
   for I := 0 to FUpvalueCount - 1 do
-    if Assigned(FUpvalues[I]) and not FUpvalues[I].GCMarked then
+    if Assigned(FUpvalues[I]) then
       FUpvalues[I].MarkReferences;
 end;
 
