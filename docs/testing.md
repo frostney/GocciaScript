@@ -524,8 +524,9 @@ The `TestRunner` program:
 3. Loads the source and appends a `runTests()` call.
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
 5. `runTests()` executes all registered tests and collects results.
-6. Aggregates pass/fail/skip counts across all files.
-7. Prints a summary with total statistics.
+6. After each file completes, `GC.Collect` runs to reclaim memory between script executions.
+7. Aggregates pass/fail/skip counts across all files.
+8. Prints a summary with total statistics.
 
 ## Pascal Unit Tests (Secondary)
 

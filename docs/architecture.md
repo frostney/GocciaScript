@@ -401,4 +401,6 @@ Pinned objects, temp roots, and root objects are stored in `TDictionary<T, Boole
 
 ### Collection Trigger
 
-The GC exposes `Collect` (explicit) and `CollectIfNeeded` (threshold-based, triggered after a configurable number of allocations). The benchmark runner calls `Collect` before each measurement round to normalize heap state and reduce timing variance.
+The GC exposes `Collect` (explicit) and `CollectIfNeeded` (threshold-based, triggered after a configurable number of allocations).
+
+Both the **BenchmarkRunner** and **TestRunner** call `GC.Collect` after each file to reclaim memory between script executions (critical on 32-bit Windows where address space is limited to ~2 GB). Additionally, the benchmark runner calls `Collect` before each measurement round inside `RunSingleBenchmark` to normalize heap state and reduce timing variance.

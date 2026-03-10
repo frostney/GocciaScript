@@ -315,6 +315,9 @@ begin
       // Phase 3: Measurement rounds
       for Round := 0 to MEASUREMENT_ROUNDS - 1 do
       begin
+        if Assigned(GC) then
+          GC.Collect;
+
         StartNanoseconds := GetNanoseconds;
         I := 0;
         while I < Iterations do

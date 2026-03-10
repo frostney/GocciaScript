@@ -1707,8 +1707,6 @@ begin
     EmptyArgs.Free;
   end;
 
-
-
   // Create a summary message
   Summary := Format('Tests: %d total, %d passed, %d failed, %d skipped',
     [FTestStats.TotalTests, FTestStats.PassedTests, FTestStats.FailedTests, FTestStats.SkippedTests]);

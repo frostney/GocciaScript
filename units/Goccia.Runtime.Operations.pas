@@ -8686,6 +8686,10 @@ begin
     if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
       TSouffleHeapObject(BridgeKey).MarkReferences;
 
+  for BridgeKey in FArrayBridgeReverse.Values do
+    if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
+      TSouffleHeapObject(BridgeKey).MarkReferences;
+
   for BridgeKey in FRecordBridgeCache.Keys do
     if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
       TSouffleHeapObject(BridgeKey).MarkReferences;
@@ -8735,6 +8739,10 @@ begin
       TGocciaValue(BridgeVal).MarkReferences;
 
   for BridgeVal in FArrayBridgeCache.Values do
+    if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
+      TGocciaValue(BridgeVal).MarkReferences;
+
+  for BridgeVal in FArrayBridgeReverse.Keys do
     if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
       TGocciaValue(BridgeVal).MarkReferences;
 

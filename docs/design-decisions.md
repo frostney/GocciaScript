@@ -236,7 +236,7 @@ GocciaScript runs inside a FreePascal host with manual memory management, but th
 - **Simplicity** — Two phases (mark reachable, sweep unreachable) with straightforward implementation.
 - **Handles cycles** — Circular references between objects, closures, and scopes are collected correctly.
 - **O(1) membership checks** — Pinned objects, temp roots, and root objects are stored in `TDictionary<T, Boolean>` (used as hash sets) for O(1) `PinObject`, `AddRootObject`, `AddTempRoot`, and `RemoveTempRoot` operations, avoiding O(n) linear scans on every allocation.
-- **Measurable impact** — Running `GC.Collect` before benchmark measurement rounds reduced ops/sec variance from 20-30% to 1-3%.
+- **Measurable impact** — Running `GC.Collect` before benchmark measurement rounds reduced ops/sec variance from 20-30% to 1-3%. Both the BenchmarkRunner and TestRunner also call `Collect` after each file to reclaim memory between script executions.
 
 **AST literal ownership:**
 
