@@ -55,6 +55,7 @@ uses
   Souffle.Value,
   Souffle.VM.Exception,
 
+  Goccia.GarbageCollector,
   Goccia.Interpreter,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
