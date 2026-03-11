@@ -42,7 +42,9 @@ uses
 
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.SymbolValue;
 
 constructor TGocciaJSONBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 begin
@@ -53,6 +55,13 @@ begin
 
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(JSONParse, 'parse', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(JSONStringify, 'stringify', 1));
+
+  // ES2026 §25.5.3 JSON [ @@toStringTag ]
+  FBuiltinObject.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownToStringTag,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create('JSON'),
+      [pfConfigurable]));
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;

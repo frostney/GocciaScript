@@ -109,6 +109,10 @@ describe("globalThis exposes namespace objects", () => {
   test.runIf(hasTemporal)("Temporal", () => {
     expect(typeof globalThis.Temporal).toBe("object");
   });
+
+  test("performance", () => {
+    expect(typeof globalThis.performance).toBe("object");
+  });
 });
 
 describe("globalThis exposes utility functions", () => {
@@ -132,6 +136,10 @@ describe("globalThis constructor identity", () => {
 
   test("globalThis.JSON is the same as JSON", () => {
     expect(globalThis.JSON === JSON).toBe(true);
+  });
+
+  test("globalThis.performance is the same as performance", () => {
+    expect(globalThis.performance === performance).toBe(true);
   });
 });
 

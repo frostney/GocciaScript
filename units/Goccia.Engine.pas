@@ -23,6 +23,7 @@ uses
   Goccia.Builtins.GlobalSymbol,
   Goccia.Builtins.JSON,
   Goccia.Builtins.Math,
+  Goccia.Builtins.Performance,
   Goccia.Builtins.Temporal,
   Goccia.Builtins.TestAssertions,
   Goccia.Interpreter,
@@ -47,6 +48,7 @@ type
     ggSymbol,
     ggSet,
     ggMap,
+    ggPerformance,
     ggTestAssertions,
     ggBenchmark,
     ggTemporal,
@@ -68,7 +70,7 @@ type
 type
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal, ggJSX, ggArrayBuffer];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
   private
     FInterpreter: TGocciaInterpreter;
     FResolver: TGocciaModuleResolver;
@@ -89,6 +91,7 @@ type
     FBuiltinSymbol: TGocciaGlobalSymbol;
     FBuiltinSet: TGocciaGlobalSet;
     FBuiltinMap: TGocciaGlobalMap;
+    FBuiltinPerformance: TGocciaPerformance;
     FBuiltinPromise: TGocciaGlobalPromise;
     FBuiltinTestAssertions: TGocciaTestAssertions;
     FBuiltinBenchmark: TGocciaBenchmark;
@@ -136,6 +139,7 @@ type
     property BuiltinSymbol: TGocciaGlobalSymbol read FBuiltinSymbol;
     property BuiltinSet: TGocciaGlobalSet read FBuiltinSet;
     property BuiltinMap: TGocciaGlobalMap read FBuiltinMap;
+    property BuiltinPerformance: TGocciaPerformance read FBuiltinPerformance;
     property BuiltinPromise: TGocciaGlobalPromise read FBuiltinPromise;
     property BuiltinTestAssertions: TGocciaTestAssertions read FBuiltinTestAssertions;
     property BuiltinBenchmark: TGocciaBenchmark read FBuiltinBenchmark;
@@ -234,6 +238,7 @@ begin
     FBuiltinSymbol.Free;
     FBuiltinSet.Free;
     FBuiltinMap.Free;
+    FBuiltinPerformance.Free;
     FBuiltinPromise.Free;
     FBuiltinTestAssertions.Free;
     FBuiltinBenchmark.Free;
@@ -298,6 +303,8 @@ begin
     FBuiltinSet := TGocciaGlobalSet.Create(CONSTRUCTOR_SET, Scope, ThrowError);
   if ggMap in FGlobals then
     FBuiltinMap := TGocciaGlobalMap.Create(CONSTRUCTOR_MAP, Scope, ThrowError);
+  if ggPerformance in FGlobals then
+    FBuiltinPerformance := TGocciaPerformance.Create('performance', Scope, ThrowError);
   if ggPromise in FGlobals then
     FBuiltinPromise := TGocciaGlobalPromise.Create(CONSTRUCTOR_PROMISE, Scope, ThrowError);
   if ggTestAssertions in FGlobals then
