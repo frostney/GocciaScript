@@ -368,8 +368,6 @@ begin
     if FileResult.TestResult = nil then
       Continue;
 
-    AllTestResults.AssignProperty(AFiles[I], FileResult.TestResult);
-
     Result.TotalLexNanoseconds := Result.TotalLexNanoseconds + FileResult.TotalLexNanoseconds;
     Result.TotalParseNanoseconds := Result.TotalParseNanoseconds + FileResult.TotalParseNanoseconds;
     Result.TotalCompileNanoseconds := Result.TotalCompileNanoseconds + FileResult.TotalCompileNanoseconds;

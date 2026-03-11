@@ -696,7 +696,8 @@ Souffle shares the unified mark-and-sweep garbage collector with the GocciaScrip
 
 - **Unified singleton** — `TGarbageCollector.Instance` (the single GC used by both the interpreter and the VM)
 - **Lifecycle** — Automatic collection is disabled during VM execution (`Enabled := False` around `TSouffleVM.Execute`) to prevent sweeping Souffle objects that are on the Pascal stack but not yet in VM registers. Both the BenchmarkRunner and TestRunner call `Collect` after each file to reclaim memory between script executions.
-- **Managed objects** — All `TSouffleHeapObject` instances registered via `AllocateObject`
+- **Generation-counter marking** — Uses `TGCManagedObject.AdvanceMark` (O(1)) instead of an O(n) loop to clear marks before each collection. Each object's `FGCMark` is compared to the global `FCurrentMark` generation counter.
+- **Managed objects** — All `TSouffleHeapObject` instances registered via `AllocateObject`, which also sets `GCIndex` for O(1) unregistration
 - **Pinned objects** — Long-lived objects protected from collection via `PinObject` / `UnpinObject`
 - **Temp roots** — Short-lived references protected during operations via `AddTempRoot` / `RemoveTempRoot`
 - **External root marker** — The VM registers `MarkVMRoots` to mark all values in the register file and call stack during collection
