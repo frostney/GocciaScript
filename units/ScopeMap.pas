@@ -22,6 +22,8 @@ uses
 
 type
   TScopeMap<TValue> = class(TBaseMap<string, TValue>)
+  private const
+    DEFAULT_CAPACITY = 8;
   private
     FNames: array of string;
     FValues: array of TValue;
@@ -40,7 +42,8 @@ type
       out AKey: string; out AValue: TValue): Boolean; override;
 
   public
-    constructor Create(AParent: TScopeMap<TValue> = nil);
+    constructor Create(AParent: TScopeMap<TValue> = nil); overload;
+    constructor Create(AInitialCapacity: Integer; AParent: TScopeMap<TValue> = nil); overload;
     destructor Destroy; override;
 
     procedure Add(const AKey: string; const AValue: TValue); override;
@@ -59,16 +62,21 @@ type
 
 implementation
 
-const
-  DEFAULT_SCOPE_CAPACITY = 8;
-
 { Constructor / Destructor }
 
 constructor TScopeMap<TValue>.Create(AParent: TScopeMap<TValue>);
 begin
+  Create(DEFAULT_CAPACITY, AParent);
+end;
+
+constructor TScopeMap<TValue>.Create(AInitialCapacity: Integer;
+  AParent: TScopeMap<TValue>);
+begin
   inherited Create;
   FCount := 0;
-  FCapacity := DEFAULT_SCOPE_CAPACITY;
+  if AInitialCapacity < DEFAULT_CAPACITY then
+    AInitialCapacity := DEFAULT_CAPACITY;
+  FCapacity := AInitialCapacity;
   SetLength(FNames, FCapacity);
   SetLength(FValues, FCapacity);
   FParent := AParent;

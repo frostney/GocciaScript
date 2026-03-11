@@ -152,9 +152,11 @@ begin
   FParent := AParent;
   FLexicalBindings := TGocciaScopeBindingMap.Create(ACapacity);
 
-  // Inherit interpreter context from parent scope
   if Assigned(AParent) then
+  begin
+    FLexicalBindings.Parent := AParent.FLexicalBindings;
     FOnError := AParent.FOnError;
+  end;
 
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.RegisterObject(Self);
@@ -328,23 +330,14 @@ begin
 end;
 
 function TGocciaScope.GetLexicalBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding;
-var
-  LexicalBinding: TLexicalBinding;
 begin
-  if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
+  if FLexicalBindings.Resolve(AName, Result) then
   begin
-    // Check temporal dead zone for let/const
-    if not LexicalBinding.IsAccessible then
+    if not Result.IsAccessible then
       raise TGocciaReferenceError.Create(Format('Cannot access ''%s'' before initialization', [AName]), ALine, AColumn, '', nil);
-    Result := LexicalBinding;
   end
-  else if Assigned(FParent) then
-    Result := FParent.GetLexicalBinding(AName, ALine, AColumn)
   else
-  begin
-    // Strict mode: undefined variables throw ReferenceError
     raise TGocciaReferenceError.Create(Format('Undefined variable: %s', [AName]), ALine, AColumn, '', nil);
-  end;
 end;
 
 function TGocciaScope.GetValue(const AName: string): TGocciaValue;
@@ -375,8 +368,7 @@ end;
 
 function TGocciaScope.Contains(const AName: string): Boolean; inline;
 begin
-  Result := ContainsOwnLexicalBinding(AName) or
-    (Assigned(FParent) and FParent.Contains(AName));
+  Result := FLexicalBindings.Has(AName);
 end;
 
 function TGocciaScope.GetOwnBindingNames: TGocciaStringArray;
