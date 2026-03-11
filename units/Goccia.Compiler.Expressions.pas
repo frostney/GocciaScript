@@ -343,6 +343,21 @@ begin
   Result := AType in [sltInteger, sltFloat];
 end;
 
+function IsArithmeticCompoundAssign(const ATokenType: TGocciaTokenType;
+  out AArithOp: TGocciaTokenType): Boolean;
+begin
+  Result := True;
+  case ATokenType of
+    gttPlusAssign:    AArithOp := gttPlus;
+    gttMinusAssign:   AArithOp := gttMinus;
+    gttStarAssign:    AArithOp := gttStar;
+    gttSlashAssign:   AArithOp := gttSlash;
+    gttPercentAssign: AArithOp := gttPercent;
+  else
+    Result := False;
+  end;
+end;
+
 function TryFloatOp(const AOperator: TGocciaTokenType;
   out AFloatOp: TSouffleOpCode): Boolean;
 begin
@@ -1809,7 +1824,9 @@ var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegVal, RegResult: UInt8;
   MsgIdx: UInt16;
-  Op: TSouffleOpCode;
+  Op, FloatOp: TSouffleOpCode;
+  LocalType, ValType: TSouffleLocalType;
+  ArithOp: TGocciaTokenType;
 begin
   Op := CompoundOpToRuntimeOp(AExpr.Operator);
 
@@ -1843,7 +1860,16 @@ begin
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
     RegVal := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.Value, RegVal);
-    EmitInstruction(ACtx, EncodeABC(Op, Slot, Slot, RegVal));
+
+    LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+    ValType := ExpressionType(ACtx.Scope, AExpr.Value);
+    if (LocalType in [sltInteger, sltFloat]) and
+       (ValType in [sltInteger, sltFloat]) and
+       IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
+       TryFloatOp(ArithOp, FloatOp) then
+      EmitInstruction(ACtx, EncodeABC(FloatOp, Slot, Slot, RegVal))
+    else
+      EmitInstruction(ACtx, EncodeABC(Op, Slot, Slot, RegVal));
     if ADest <> Slot then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
     ACtx.Scope.FreeRegister;

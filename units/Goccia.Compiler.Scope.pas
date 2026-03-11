@@ -19,10 +19,13 @@ type
     IsCaptured: Boolean;
     IsConst: Boolean;
     IsGlobalBacked: Boolean;
+    IsArrayTyped: Boolean;
     TypeHint: TSouffleLocalType;
     IsStrictlyTyped: Boolean;
     ReturnTypeHint: TSouffleLocalType;
     ParamTypeSignature: string;
+    TypeAnnotation: string;
+    ElementTypeAnnotation: string;
   end;
 
   TGocciaCompilerUpvalue = record
@@ -79,10 +82,16 @@ type
       const ATypeHint: TSouffleLocalType);
     procedure SetLocalStrictlyTyped(const AIndex: Integer;
       const AStrictlyTyped: Boolean);
+    procedure SetLocalArrayTyped(const AIndex: Integer;
+      const AArrayTyped: Boolean);
     procedure SetLocalReturnTypeHint(const AIndex: Integer;
       const AReturnTypeHint: TSouffleLocalType);
     procedure SetLocalParamTypeSignature(const AIndex: Integer;
       const ASignature: string);
+    procedure SetLocalTypeAnnotation(const AIndex: Integer;
+      const AAnnotation: string);
+    procedure SetLocalElementTypeAnnotation(const AIndex: Integer;
+      const AAnnotation: string);
     function ResolvePrivatePrefix: string;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
   end;
@@ -121,10 +130,13 @@ begin
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsConst := AIsConst;
   FLocals[FLocalCount].IsGlobalBacked := False;
+  FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
   FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
   FLocals[FLocalCount].ParamTypeSignature := '';
+  FLocals[FLocalCount].TypeAnnotation := '';
+  FLocals[FLocalCount].ElementTypeAnnotation := '';
   Result := FNextSlot;
   Inc(FLocalCount);
   Inc(FNextSlot);
@@ -291,6 +303,24 @@ procedure TGocciaCompilerScope.SetLocalStrictlyTyped(const AIndex: Integer;
   const AStrictlyTyped: Boolean);
 begin
   FLocals[AIndex].IsStrictlyTyped := AStrictlyTyped;
+end;
+
+procedure TGocciaCompilerScope.SetLocalArrayTyped(const AIndex: Integer;
+  const AArrayTyped: Boolean);
+begin
+  FLocals[AIndex].IsArrayTyped := AArrayTyped;
+end;
+
+procedure TGocciaCompilerScope.SetLocalTypeAnnotation(const AIndex: Integer;
+  const AAnnotation: string);
+begin
+  FLocals[AIndex].TypeAnnotation := AAnnotation;
+end;
+
+procedure TGocciaCompilerScope.SetLocalElementTypeAnnotation(const AIndex: Integer;
+  const AAnnotation: string);
+begin
+  FLocals[AIndex].ElementTypeAnnotation := AAnnotation;
 end;
 
 function TGocciaCompilerScope.ResolvePrivatePrefix: string;
