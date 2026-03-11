@@ -27,6 +27,8 @@ implementation
 class procedure TGCManagedObject.AdvanceMark;
 begin
   Inc(FCurrentMark);
+  if FCurrentMark = 0 then
+    FCurrentMark := 1;
 end;
 
 function TGCManagedObject.GetGCMarked: Boolean;

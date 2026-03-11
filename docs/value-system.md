@@ -135,7 +135,7 @@ end;
 The base `TGocciaValue` class provides two virtual methods for runtime type discrimination, replacing multi-`is` type check chains with single VMT calls:
 
 ```pascal
-TGocciaValue = class(TInterfacedObject)
+TGocciaValue = class(TGCManagedObject)
   function IsPrimitive: Boolean; virtual;  // Returns False by default
   function IsCallable: Boolean; virtual;   // Returns False by default
 end;
