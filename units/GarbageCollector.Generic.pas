@@ -290,6 +290,8 @@ begin
   end;
 
   FManagedObjects.Count := WriteIdx;
+  if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
+    FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
   FNilSlots := 0;
   FTotalCollected := FTotalCollected + Collected;
 end;

@@ -309,8 +309,14 @@ begin
       if Assigned(TGocciaMicrotaskQueue.Instance) then
         TGocciaMicrotaskQueue.Instance.DrainQueue;
 
+      if Assigned(GC) and GC.Enabled then
+        GC.Collect;
+
       // Phase 2: Calibrate
       Iterations := CalibrateIterations(ABenchCase, RunArgs);
+
+      if Assigned(GC) and GC.Enabled then
+        GC.Collect;
 
       // Phase 3: Measurement rounds
       for Round := 0 to MEASUREMENT_ROUNDS - 1 do
@@ -439,6 +445,10 @@ begin
 
       try
         BenchResult := RunSingleBenchmark(BenchCase);
+
+        if Assigned(TGarbageCollector.Instance) and
+           TGarbageCollector.Instance.Enabled then
+          TGarbageCollector.Instance.Collect;
 
         SingleResult := TGocciaObjectValue.Create;
         SingleResult.AssignProperty('name', TGocciaStringLiteralValue.Create(BenchResult.Name));
