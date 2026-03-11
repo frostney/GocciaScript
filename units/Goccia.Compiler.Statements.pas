@@ -1002,7 +1002,7 @@ procedure CompileImportDeclaration(const ACtx: TGocciaCompilationContext;
 var
   ModReg: UInt8;
   PathIdx, NameIdx: UInt16;
-  PairArr: TOrderedStringMap<string>.TKeyValueArray;
+  PairArr: TStringStringMap.TKeyValueArray;
   Slots: array of UInt8;
   Names: array of string;
   I, Count: Integer;
@@ -1037,7 +1037,7 @@ end;
 procedure CompileExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportDeclaration);
 var
-  PairArr: TOrderedStringMap<string>.TKeyValueArray;
+  PairArr: TStringStringMap.TKeyValueArray;
   I, LocalIdx: Integer;
   Reg: UInt8;
   NameIdx: UInt16;
@@ -1085,7 +1085,7 @@ procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
 var
   ModReg, ValReg: UInt8;
   PathIdx, SrcNameIdx, ExportNameIdx: UInt16;
-  PairArr: TOrderedStringMap<string>.TKeyValueArray;
+  PairArr: TStringStringMap.TKeyValueArray;
   I: Integer;
 begin
   ModReg := ACtx.Scope.AllocateRegister;
@@ -1584,7 +1584,7 @@ var
   ValReg, ThisReg: UInt8;
   KeyIdx: UInt16;
   I: Integer;
-  Entry: TOrderedStringMap<TGocciaExpression>.TKeyValuePair;
+  Entry: TGocciaExpressionMap.TKeyValuePair;
   Elem: TGocciaClassElement;
   FieldExpr: TGocciaExpression;
 begin
@@ -1892,10 +1892,10 @@ var
   ClassDef: TGocciaClassDefinition;
   ClassReg, SuperReg, ValReg: UInt8;
   NameIdx, KeyIdx: UInt16;
-  MethodArr: TOrderedStringMap<TGocciaClassMethod>.TKeyValueArray;
-  GetterArr: TOrderedStringMap<TGocciaGetterExpression>.TKeyValueArray;
-  SetterArr: TOrderedStringMap<TGocciaSetterExpression>.TKeyValueArray;
-  StaticPropArr: TOrderedStringMap<TGocciaExpression>.TKeyValueArray;
+  MethodArr: TGocciaClassMethodMap.TKeyValueArray;
+  GetterArr: TGocciaGetterExpressionMap.TKeyValueArray;
+  SetterArr: TGocciaSetterExpressionMap.TKeyValueArray;
+  StaticPropArr: TGocciaExpressionMap.TKeyValueArray;
   LocalIdx, UpvalIdx, I: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;
@@ -2031,10 +2031,10 @@ var
   ClassDef: TGocciaClassDefinition;
   SuperReg, ValReg: UInt8;
   NameIdx, KeyIdx: UInt16;
-  MethodArr: TOrderedStringMap<TGocciaClassMethod>.TKeyValueArray;
-  GetterArr: TOrderedStringMap<TGocciaGetterExpression>.TKeyValueArray;
-  SetterArr: TOrderedStringMap<TGocciaSetterExpression>.TKeyValueArray;
-  StaticPropArr: TOrderedStringMap<TGocciaExpression>.TKeyValueArray;
+  MethodArr: TGocciaClassMethodMap.TKeyValueArray;
+  GetterArr: TGocciaGetterExpressionMap.TKeyValueArray;
+  SetterArr: TGocciaSetterExpressionMap.TKeyValueArray;
+  StaticPropArr: TGocciaExpressionMap.TKeyValueArray;
   LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;

@@ -4028,7 +4028,7 @@ var
   EngineObj: TGocciaEngine;
   Module: TGocciaModule;
   Rec: TSouffleRecord;
-  ExportArr: TOrderedStringMap<TGocciaValue>.TKeyValueArray;
+  ExportArr: TGocciaValueMap.TKeyValueArray;
   I: Integer;
 begin
   {$IFDEF BRIDGE_METRICS}

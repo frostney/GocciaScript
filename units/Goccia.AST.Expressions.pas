@@ -17,8 +17,10 @@ uses
   Goccia.Values.Primitives;
 
 type
-  // Forward declaration
+  // Forward declarations
   TGocciaDestructuringPattern = class;
+  TGocciaGetterExpression = class;
+  TGocciaSetterExpression = class;
 
   TGocciaParameter = record
     Name: string;                                 // For simple parameters
@@ -30,6 +32,10 @@ type
     TypeAnnotation: string;                       // Stored for future optimization; ignored at runtime
   end;
   TGocciaParameterArray = array of TGocciaParameter;
+
+  TGocciaExpressionMap = TOrderedStringMap<TGocciaExpression>;
+  TGocciaGetterExpressionMap = TOrderedStringMap<TGocciaGetterExpression>;
+  TGocciaSetterExpressionMap = TOrderedStringMap<TGocciaSetterExpression>;
 
   TGocciaLiteralExpression = class(TGocciaExpression)
   private
@@ -229,10 +235,6 @@ type
     property Elements: TObjectList<TGocciaExpression> read FElements;
   end;
 
-    // Forward declarations for getter/setter expressions
-  TGocciaGetterExpression = class;
-  TGocciaSetterExpression = class;
-
   // Property source order tracking
   TGocciaPropertySourceType = (
     pstStatic,    // Regular property: {key: value}
@@ -249,46 +251,46 @@ type
 
   TGocciaObjectExpression = class(TGocciaExpression)
   private
-    FProperties: TOrderedStringMap<TGocciaExpression>;
+    FProperties: TGocciaExpressionMap;
     FPropertyInsertionOrder: TStringList;
     FComputedProperties: THashMap<TGocciaExpression, TGocciaExpression>;
-    FGetters: TOrderedStringMap<TGocciaGetterExpression>;
-    FSetters: TOrderedStringMap<TGocciaSetterExpression>;
+    FGetters: TGocciaGetterExpressionMap;
+    FSetters: TGocciaSetterExpressionMap;
 
     // New: tracks source order of ALL property types
     FPropertySourceOrder: TArray<TGocciaPropertySourceOrder>;
     FComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>>;
   public
-    constructor Create(const AProperties: TOrderedStringMap<TGocciaExpression>;
+    constructor Create(const AProperties: TGocciaExpressionMap;
       const APropertyOrder: TStringList;
       const ALine, AColumn: Integer); overload;
-    constructor Create(const AProperties: TOrderedStringMap<TGocciaExpression>;
+    constructor Create(const AProperties: TGocciaExpressionMap;
       const APropertyOrder: TStringList;
       const AComputedProperties: THashMap<TGocciaExpression, TGocciaExpression>;
       const ALine, AColumn: Integer); overload;
-    constructor Create(const AProperties: TOrderedStringMap<TGocciaExpression>;
+    constructor Create(const AProperties: TGocciaExpressionMap;
       const APropertyOrder: TStringList;
       const AComputedProperties: THashMap<TGocciaExpression, TGocciaExpression>;
-      const AGetters: TOrderedStringMap<TGocciaGetterExpression>;
-      const ASetters: TOrderedStringMap<TGocciaSetterExpression>;
+      const AGetters: TGocciaGetterExpressionMap;
+      const ASetters: TGocciaSetterExpressionMap;
       const ALine, AColumn: Integer); overload;
     // New constructor with source order tracking
-    constructor Create(const AProperties: TOrderedStringMap<TGocciaExpression>;
+    constructor Create(const AProperties: TGocciaExpressionMap;
       const APropertyOrder: TStringList;
       const AComputedProperties: THashMap<TGocciaExpression, TGocciaExpression>;
       const AComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>>;
-      const AGetters: TOrderedStringMap<TGocciaGetterExpression>;
-      const ASetters: TOrderedStringMap<TGocciaSetterExpression>;
+      const AGetters: TGocciaGetterExpressionMap;
+      const ASetters: TGocciaSetterExpressionMap;
       const APropertySourceOrder: TArray<TGocciaPropertySourceOrder>;
       const ALine, AColumn: Integer); overload;
     destructor Destroy; override;
 
-    property Properties: TOrderedStringMap<TGocciaExpression> read FProperties;
+    property Properties: TGocciaExpressionMap read FProperties;
     property PropertyInsertionOrder: TStringList read FPropertyInsertionOrder;
     property ComputedProperties: THashMap<TGocciaExpression, TGocciaExpression> read FComputedProperties;
     property ComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>> read FComputedPropertiesInOrder;
-    property Getters: TOrderedStringMap<TGocciaGetterExpression> read FGetters;
-    property Setters: TOrderedStringMap<TGocciaSetterExpression> read FSetters;
+    property Getters: TGocciaGetterExpressionMap read FGetters;
+    property Setters: TGocciaSetterExpressionMap read FSetters;
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property PropertySourceOrder: TArray<TGocciaPropertySourceOrder> read FPropertySourceOrder;
     function GetPropertyNamesInOrder: TStringList;
@@ -733,7 +735,7 @@ end;
 
 { TGocciaObjectExpression }
 
-constructor TGocciaObjectExpression.Create(const AProperties: TOrderedStringMap<TGocciaExpression>;
+constructor TGocciaObjectExpression.Create(const AProperties: TGocciaExpressionMap;
   const APropertyOrder: TStringList;
   const ALine, AColumn: Integer);
 var
@@ -754,7 +756,7 @@ begin
   FSetters := nil; // No setters in this constructor
 end;
 
-constructor TGocciaObjectExpression.Create(const AProperties: TOrderedStringMap<TGocciaExpression>;
+constructor TGocciaObjectExpression.Create(const AProperties: TGocciaExpressionMap;
   const APropertyOrder: TStringList;
   const AComputedProperties: THashMap<TGocciaExpression, TGocciaExpression>;
   const ALine, AColumn: Integer);
@@ -776,11 +778,11 @@ begin
   FSetters := nil; // No setters in this constructor
 end;
 
-constructor TGocciaObjectExpression.Create(const AProperties: TOrderedStringMap<TGocciaExpression>;
+constructor TGocciaObjectExpression.Create(const AProperties: TGocciaExpressionMap;
   const APropertyOrder: TStringList;
   const AComputedProperties: THashMap<TGocciaExpression, TGocciaExpression>;
-  const AGetters: TOrderedStringMap<TGocciaGetterExpression>;
-  const ASetters: TOrderedStringMap<TGocciaSetterExpression>;
+  const AGetters: TGocciaGetterExpressionMap;
+  const ASetters: TGocciaSetterExpressionMap;
   const ALine, AColumn: Integer);
 var
   I: Integer;
@@ -800,12 +802,12 @@ begin
   FSetters := ASetters;
 end;
 
-constructor TGocciaObjectExpression.Create(const AProperties: TOrderedStringMap<TGocciaExpression>;
+constructor TGocciaObjectExpression.Create(const AProperties: TGocciaExpressionMap;
   const APropertyOrder: TStringList;
   const AComputedProperties: THashMap<TGocciaExpression, TGocciaExpression>;
   const AComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>>;
-  const AGetters: TOrderedStringMap<TGocciaGetterExpression>;
-  const ASetters: TOrderedStringMap<TGocciaSetterExpression>;
+  const AGetters: TGocciaGetterExpressionMap;
+  const ASetters: TGocciaSetterExpressionMap;
   const APropertySourceOrder: TArray<TGocciaPropertySourceOrder>;
   const ALine, AColumn: Integer);
 var

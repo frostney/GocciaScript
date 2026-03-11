@@ -15,13 +15,13 @@ type
   TGocciaModule = class
   private
     FPath: string;
-    FExportsTable: TOrderedStringMap<TGocciaValue>;
+    FExportsTable: TGocciaValueMap;
     FLastModified: TDateTime;
   public
     constructor Create(const APath: string);
     destructor Destroy; override;
     property Path: string read FPath;
-    property ExportsTable: TOrderedStringMap<TGocciaValue> read FExportsTable;
+    property ExportsTable: TGocciaValueMap read FExportsTable;
     property LastModified: TDateTime read FLastModified write FLastModified;
   end;
 
@@ -32,7 +32,7 @@ implementation
 constructor TGocciaModule.Create(const APath: string);
 begin
   FPath := APath;
-  FExportsTable := TOrderedStringMap<TGocciaValue>.Create;
+  FExportsTable := TGocciaValueMap.Create;
 end;
 
 destructor TGocciaModule.Destroy;

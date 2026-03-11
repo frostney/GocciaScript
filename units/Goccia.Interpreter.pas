@@ -141,7 +141,7 @@ var
   ExportDecl: TGocciaExportDeclaration;
   ExportVarDecl: TGocciaExportVariableDeclaration;
   ReExportDecl: TGocciaReExportDeclaration;
-  ExportPairs: TOrderedStringMap<string>.TKeyValueArray;
+  ExportPairs: TStringStringMap.TKeyValueArray;
   J: Integer;
   Value: TGocciaValue;
   Context: TGocciaEvaluationContext;

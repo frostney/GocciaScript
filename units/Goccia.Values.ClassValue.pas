@@ -11,6 +11,7 @@ uses
   OrderedStringMap,
 
   Goccia.Arguments.Collection,
+  Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -37,11 +38,11 @@ type
     FSetters: TOrderedStringMap<TGocciaFunctionValue>;
     FPrototype: TGocciaObjectValue;
     FConstructorMethod: TGocciaMethodValue;
-    FStaticMethods: TOrderedStringMap<TGocciaValue>;
-    FInstancePropertyDefs: TOrderedStringMap<TGocciaExpression>;
-    FPrivateInstancePropertyDefs: TOrderedStringMap<TGocciaExpression>;
+    FStaticMethods: TGocciaValueMap;
+    FInstancePropertyDefs: TGocciaExpressionMap;
+    FPrivateInstancePropertyDefs: TGocciaExpressionMap;
     FFieldOrder: array of TGocciaClassFieldOrderEntry;
-    FPrivateStaticProperties: TOrderedStringMap<TGocciaValue>;
+    FPrivateStaticProperties: TGocciaValueMap;
     FPrivateMethods: TOrderedStringMap<TGocciaMethodValue>;
     FPrivateGetters: TOrderedStringMap<TGocciaFunctionValue>;
     FPrivateSetters: TOrderedStringMap<TGocciaFunctionValue>;
@@ -104,12 +105,12 @@ type
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
     property Prototype: TGocciaObjectValue read FPrototype;
     property ConstructorMethod: TGocciaMethodValue read FConstructorMethod;
-    property InstancePropertyDefs: TOrderedStringMap<TGocciaExpression> read FInstancePropertyDefs;
-    property PrivateInstancePropertyDefs: TOrderedStringMap<TGocciaExpression> read FPrivateInstancePropertyDefs;
+    property InstancePropertyDefs: TGocciaExpressionMap read FInstancePropertyDefs;
+    property PrivateInstancePropertyDefs: TGocciaExpressionMap read FPrivateInstancePropertyDefs;
     procedure SetFieldOrder(const AOrder: array of TGocciaClassFieldOrderEntry);
     function FieldOrderCount: Integer;
     function FieldOrderEntry(const AIndex: Integer): TGocciaClassFieldOrderEntry;
-    property PrivateStaticProperties: TOrderedStringMap<TGocciaValue> read FPrivateStaticProperties;
+    property PrivateStaticProperties: TGocciaValueMap read FPrivateStaticProperties;
     property PrivateMethods: TOrderedStringMap<TGocciaMethodValue> read FPrivateMethods;
     property PropertyGetter[const AName: string]: TGocciaFunctionValue read GetPropertyGetter;
     property PropertySetter[const AName: string]: TGocciaFunctionValue read GetPropertySetter;
@@ -165,7 +166,7 @@ type
   TGocciaInstanceValue = class(TGocciaObjectValue)
   private
     FClass: TGocciaClassValue;
-    FPrivateProperties: TOrderedStringMap<TGocciaValue>;
+    FPrivateProperties: TGocciaValueMap;
   public
     constructor Create(const AClass: TGocciaClassValue = nil);
     destructor Destroy; override;
@@ -182,7 +183,7 @@ type
     procedure MarkReferences; override;
 
     property ClassValue: TGocciaClassValue read FClass write FClass;
-    property PrivateProperties: TOrderedStringMap<TGocciaValue> read FPrivateProperties;
+    property PrivateProperties: TGocciaValueMap read FPrivateProperties;
   end;
 
 implementation
@@ -215,10 +216,10 @@ begin
   FMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
   FGetters := TOrderedStringMap<TGocciaFunctionValue>.Create;
   FSetters := TOrderedStringMap<TGocciaFunctionValue>.Create;
-  FStaticMethods := TOrderedStringMap<TGocciaValue>.Create;
-  FInstancePropertyDefs := TOrderedStringMap<TGocciaExpression>.Create;
-  FPrivateInstancePropertyDefs := TOrderedStringMap<TGocciaExpression>.Create;
-  FPrivateStaticProperties := TOrderedStringMap<TGocciaValue>.Create;
+  FStaticMethods := TGocciaValueMap.Create;
+  FInstancePropertyDefs := TGocciaExpressionMap.Create;
+  FPrivateInstancePropertyDefs := TGocciaExpressionMap.Create;
+  FPrivateStaticProperties := TGocciaValueMap.Create;
   FPrivateMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
   FPrivateGetters := TOrderedStringMap<TGocciaFunctionValue>.Create;
   FPrivateSetters := TOrderedStringMap<TGocciaFunctionValue>.Create;
@@ -1274,7 +1275,7 @@ begin
   // Use composite key (ClassName:FieldName) to support per-class private field scoping
   CompositeKey := AAccessClass.Name + ':' + AName;
   if not Assigned(FPrivateProperties) then
-    FPrivateProperties := TOrderedStringMap<TGocciaValue>.Create;
+    FPrivateProperties := TGocciaValueMap.Create;
   FPrivateProperties.AddOrSetValue(CompositeKey, AValue);
 end;
 

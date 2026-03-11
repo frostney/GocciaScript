@@ -7,7 +7,8 @@ interface
 uses
   Generics.Collections,
 
-  GarbageCollector.Managed;
+  GarbageCollector.Managed,
+  OrderedStringMap;
 
 type
   TGocciaBooleanLiteralValue = class;
@@ -33,6 +34,7 @@ type
   end;
 
   TGocciaValueList = TObjectList<TGocciaValue>;
+  TGocciaValueMap = TOrderedStringMap<TGocciaValue>;
 
   TGocciaNullLiteralValue = class(TGocciaValue)
   public

@@ -1459,7 +1459,7 @@ end;
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
-  Entry: TOrderedStringMap<TGocciaExpression>.TKeyValuePair;
+  Entry: TGocciaExpressionMap.TKeyValuePair;
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
@@ -1659,11 +1659,11 @@ var
   SuperClass: TGocciaClassValue;
   SuperClassValue: TGocciaValue;
   ClassValue: TGocciaClassValue;
-  MethodArr: TOrderedStringMap<TGocciaClassMethod>.TKeyValueArray;
-  PropertyArr: TOrderedStringMap<TGocciaExpression>.TKeyValueArray;
-  PropertyEntry: TOrderedStringMap<TGocciaExpression>.TKeyValuePair;
-  GetterArr: TOrderedStringMap<TGocciaGetterExpression>.TKeyValueArray;
-  SetterArr: TOrderedStringMap<TGocciaSetterExpression>.TKeyValueArray;
+  MethodArr: TGocciaClassMethodMap.TKeyValueArray;
+  PropertyArr: TGocciaExpressionMap.TKeyValueArray;
+  PropertyEntry: TGocciaExpressionMap.TKeyValuePair;
+  GetterArr: TGocciaGetterExpressionMap.TKeyValueArray;
+  SetterArr: TGocciaSetterExpressionMap.TKeyValueArray;
   Method: TGocciaMethodValue;
   ComputedKey: TGocciaValue;
   PropertyValue: TGocciaValue;
@@ -2466,7 +2466,7 @@ end;
 procedure InitializePrivateInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
-  Entry: TOrderedStringMap<TGocciaExpression>.TKeyValuePair;
+  Entry: TGocciaExpressionMap.TKeyValuePair;
   I: Integer;
 begin
   for I := 0 to AClassValue.PrivateInstancePropertyDefs.Count - 1 do

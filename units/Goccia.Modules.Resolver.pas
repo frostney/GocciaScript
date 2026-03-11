@@ -12,7 +12,7 @@ uses
 type
   TGocciaModuleResolver = class
   private
-    FAliases: TOrderedStringMap<string>;
+    FAliases: TStringStringMap;
     FBaseDirectory: string;
   protected
     function ApplyAliases(const AModulePath: string): string;
@@ -25,7 +25,7 @@ type
     function HasAlias(const AModulePath: string): Boolean;
     function Resolve(const AModulePath, AImportingFilePath: string): string; virtual;
 
-    property Aliases: TOrderedStringMap<string> read FAliases;
+    property Aliases: TStringStringMap read FAliases;
     property BaseDirectory: string read FBaseDirectory write FBaseDirectory;
   end;
 
@@ -38,7 +38,7 @@ uses
 
 constructor TGocciaModuleResolver.Create(const ABaseDirectory: string);
 begin
-  FAliases := TOrderedStringMap<string>.Create;
+  FAliases := TStringStringMap.Create;
   if ABaseDirectory <> '' then
     FBaseDirectory := IncludeTrailingPathDelimiter(ExpandFileName(ABaseDirectory))
   else
@@ -58,7 +58,7 @@ end;
 
 function TGocciaModuleResolver.HasAlias(const AModulePath: string): Boolean;
 var
-  Pairs: TOrderedStringMap<string>.TKeyValueArray;
+  Pairs: TStringStringMap.TKeyValueArray;
   I: Integer;
 begin
   Pairs := FAliases.ToArray;
@@ -82,7 +82,7 @@ end;
 
 function TGocciaModuleResolver.ApplyAliases(const AModulePath: string): string;
 var
-  Pairs: TOrderedStringMap<string>.TKeyValueArray;
+  Pairs: TStringStringMap.TKeyValueArray;
   BestKey, BestValue, Replacement: string;
   I: Integer;
   Found: Boolean;
