@@ -180,7 +180,7 @@ Used by:
 Property access is unified through virtual methods on the `TGocciaValue` base class:
 
 ```pascal
-TGocciaValue = class(TInterfacedObject)
+TGocciaValue = class(TGCManagedObject)
   function GetProperty(const Name: string): TGocciaValue; virtual;
   procedure SetProperty(const Name: string; Value: TGocciaValue); virtual;
 end;
