@@ -19,6 +19,12 @@ describe("performance.timeOrigin", () => {
     expect(performance.timeOrigin > 0).toBe(true);
   });
 
+  test("is visible to in operator", () => {
+    expect("timeOrigin" in performance).toBe(true);
+    expect("now" in performance).toBe(true);
+    expect("missing" in performance).toBe(false);
+  });
+
   test("is stable across reads while performance.now advances from it", () => {
     const firstOrigin = performance.timeOrigin;
     const secondOrigin = performance.timeOrigin;

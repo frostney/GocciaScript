@@ -2596,7 +2596,9 @@ begin
     Rec := TSouffleRecord(AObject.AsReference);
     while Assigned(Rec) do
     begin
-      if Rec.Has(KeyStr) then
+      if Rec.Has(KeyStr) or
+         (Rec.HasGetters and Rec.Getters.Has(KeyStr)) or
+         (Rec.HasSetters and Rec.Setters.Has(KeyStr)) then
         Exit(SouffleBoolean(True));
       if Assigned(Rec.Blueprint) and Rec.Blueprint.Methods.Has(KeyStr) then
         Exit(SouffleBoolean(True));
