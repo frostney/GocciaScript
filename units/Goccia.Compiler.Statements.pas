@@ -1002,7 +1002,7 @@ procedure CompileImportDeclaration(const ACtx: TGocciaCompilationContext;
 var
   ModReg: UInt8;
   PathIdx, NameIdx: UInt16;
-  ImportPair: TStringStringMap.TKeyValuePair;
+  Pair: TStringStringMap.TKeyValuePair;
   Slots: array of UInt8;
   Names: array of string;
   I, Count: Integer;
@@ -1012,10 +1012,10 @@ begin
   SetLength(Names, Count);
 
   I := 0;
-  for ImportPair in AStmt.Imports do
+  for Pair in AStmt.Imports do
   begin
-    Slots[I] := ACtx.Scope.DeclareLocal(ImportPair.Key, True);
-    Names[I] := ImportPair.Value;
+    Slots[I] := ACtx.Scope.DeclareLocal(Pair.Key, True);
+    Names[I] := Pair.Value;
     Inc(I);
   end;
 
@@ -1038,18 +1038,18 @@ end;
 procedure CompileExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportDeclaration);
 var
-  ExportPair: TStringStringMap.TKeyValuePair;
+  Pair: TStringStringMap.TKeyValuePair;
   LocalIdx: Integer;
   Reg: UInt8;
   NameIdx: UInt16;
 begin
-  for ExportPair in AStmt.ExportsTable do
+  for Pair in AStmt.ExportsTable do
   begin
-    LocalIdx := ACtx.Scope.ResolveLocal(ExportPair.Value);
+    LocalIdx := ACtx.Scope.ResolveLocal(Pair.Value);
     if LocalIdx >= 0 then
     begin
       Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
-      NameIdx := ACtx.Template.AddConstantString(ExportPair.Key);
+      NameIdx := ACtx.Template.AddConstantString(Pair.Key);
       EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, Reg, NameIdx));
     end;
   end;
@@ -1085,21 +1085,21 @@ procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
 var
   ModReg, ValReg: UInt8;
   PathIdx, SrcNameIdx, ExportNameIdx: UInt16;
-  ExportPair: TStringStringMap.TKeyValuePair;
+  Pair: TStringStringMap.TKeyValuePair;
 begin
   ModReg := ACtx.Scope.AllocateRegister;
   ValReg := ACtx.Scope.AllocateRegister;
   PathIdx := ACtx.Template.AddConstantString(AStmt.ModulePath);
   EmitInstruction(ACtx, EncodeABx(OP_RT_IMPORT, ModReg, PathIdx));
 
-  for ExportPair in AStmt.ExportsTable do
+  for Pair in AStmt.ExportsTable do
   begin
-    SrcNameIdx := ACtx.Template.AddConstantString(ExportPair.Value);
+    SrcNameIdx := ACtx.Template.AddConstantString(Pair.Value);
     if SrcNameIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: re-export source name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_RECORD_GET, ValReg, ModReg,
       UInt8(SrcNameIdx)));
-    ExportNameIdx := ACtx.Template.AddConstantString(ExportPair.Key);
+    ExportNameIdx := ACtx.Template.AddConstantString(Pair.Key);
     EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, ValReg, ExportNameIdx));
   end;
 
@@ -1893,7 +1893,7 @@ var
   MethodPair: TGocciaClassMethodMap.TKeyValuePair;
   GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
   SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
-  PropertyPair: TGocciaExpressionMap.TKeyValuePair;
+  StaticPropPair: TGocciaExpressionMap.TKeyValuePair;
   LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;
@@ -1981,11 +1981,11 @@ begin
      HasAccessorInitializers(ClassDef) then
     CompileFieldInitializer(ACtx, ClassReg, ClassDef);
 
-  for PropertyPair in ClassDef.StaticProperties do
+  for StaticPropPair in ClassDef.StaticProperties do
   begin
     ValReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(PropertyPair.Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString(PropertyPair.Key);
+    ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+    KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ClassReg,
@@ -1993,11 +1993,11 @@ begin
     ACtx.Scope.FreeRegister;
   end;
 
-  for PropertyPair in ClassDef.PrivateStaticProperties do
+  for StaticPropPair in ClassDef.PrivateStaticProperties do
   begin
     ValReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(PropertyPair.Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + PropertyPair.Key);
+    ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+    KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ClassReg,
@@ -2024,7 +2024,7 @@ var
   MethodPair: TGocciaClassMethodMap.TKeyValuePair;
   GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
   SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
-  PropertyPair: TGocciaExpressionMap.TKeyValuePair;
+  StaticPropPair: TGocciaExpressionMap.TKeyValuePair;
   LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;
@@ -2127,11 +2127,11 @@ begin
      HasAccessorInitializers(ClassDef) then
     CompileFieldInitializer(ACtx, ADest, ClassDef);
 
-  for PropertyPair in ClassDef.StaticProperties do
+  for StaticPropPair in ClassDef.StaticProperties do
   begin
     ValReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(PropertyPair.Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString(PropertyPair.Key);
+    ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+    KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ADest,
@@ -2139,11 +2139,11 @@ begin
     ACtx.Scope.FreeRegister;
   end;
 
-  for PropertyPair in ClassDef.PrivateStaticProperties do
+  for StaticPropPair in ClassDef.PrivateStaticProperties do
   begin
     ValReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(PropertyPair.Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + PropertyPair.Key);
+    ACtx.CompileExpression(StaticPropPair.Value, ValReg);
+    KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ADest,
