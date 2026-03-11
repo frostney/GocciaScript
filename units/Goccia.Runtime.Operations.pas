@@ -7518,17 +7518,17 @@ begin
   if Assigned(GC) then
     GC.AllocateObject(Result);
 
-  AddMethod('now');
-  AddMethod('toJSON');
+  AddMethod(PROP_NOW);
+  AddMethod(PROP_TO_JSON);
 
-  Descriptor := APerformance.GetOwnPropertyDescriptor('timeOrigin');
+  Descriptor := APerformance.GetOwnPropertyDescriptor(PROP_TIME_ORIGIN);
   if (Descriptor is TGocciaPropertyDescriptorAccessor) then
   begin
     GetterVal := TGocciaPropertyDescriptorAccessor(Descriptor).Getter;
     if GetterVal is TGocciaNativeFunctionValue then
     begin
       NativeFn := TGocciaNativeFunctionValue(GetterVal);
-      Result.Getters.PutWithFlags('timeOrigin',
+      Result.Getters.PutWithFlags(PROP_TIME_ORIGIN,
         ARuntime.ToSouffleValue(NativeFn), SOUFFLE_PROP_CONFIGURABLE);
     end;
   end;

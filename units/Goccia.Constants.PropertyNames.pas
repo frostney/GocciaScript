@@ -47,6 +47,9 @@ const
   PROP_PROPERTY_IS_ENUMERABLE = 'propertyIsEnumerable';
   PROP_TO_LOCALE_STRING       = 'toLocaleString';
   PROP_STRICT_TYPES           = 'strictTypes';
+  PROP_NOW                    = 'now';
+  PROP_TO_JSON                = 'toJSON';
+  PROP_TIME_ORIGIN            = 'timeOrigin';
 
 implementation
 

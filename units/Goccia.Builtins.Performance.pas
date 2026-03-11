@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
+  Goccia.Constants.PropertyNames,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
@@ -56,11 +57,11 @@ begin
   FTimeOriginMonotonicNanoseconds := (MonotonicBefore + MonotonicAfter) div 2;
 
   FBuiltinObject.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.Create(PerformanceNow, 'now', 0));
+    TGocciaNativeFunctionValue.Create(PerformanceNow, PROP_NOW, 0));
   FBuiltinObject.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.Create(PerformanceToJSON, 'toJSON', 0));
+    TGocciaNativeFunctionValue.Create(PerformanceToJSON, PROP_TO_JSON, 0));
 
-  FBuiltinObject.DefineProperty('timeOrigin',
+  FBuiltinObject.DefineProperty(PROP_TIME_ORIGIN,
     TGocciaPropertyDescriptorAccessor.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         PerformanceTimeOriginGetter, 'get timeOrigin', 0),
@@ -96,7 +97,7 @@ var
   JsonObject: TGocciaObjectValue;
 begin
   JsonObject := TGocciaObjectValue.Create;
-  JsonObject.AssignProperty('timeOrigin', TGocciaNumberLiteralValue.Create(GetTimeOriginMilliseconds));
+  JsonObject.AssignProperty(PROP_TIME_ORIGIN, TGocciaNumberLiteralValue.Create(GetTimeOriginMilliseconds));
   Result := JsonObject;
 end;
 
