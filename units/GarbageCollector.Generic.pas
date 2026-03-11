@@ -63,7 +63,8 @@ type
     procedure RemoveExternalRootMarker(const AMarker: TGCRootMarker);
 
     procedure Collect; virtual;
-    procedure CollectIfNeeded;
+    procedure CollectIfNeeded; overload;
+    procedure CollectIfNeeded(const AProtect: TGCManagedObject); overload;
 
     property Enabled: Boolean read FEnabled write FEnabled;
     property Threshold: Integer read FGCThreshold write FGCThreshold;
@@ -290,6 +291,8 @@ begin
   end;
 
   FManagedObjects.Count := WriteIdx;
+  if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
+    FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
   FNilSlots := 0;
   FTotalCollected := FTotalCollected + Collected;
 end;
@@ -314,6 +317,22 @@ begin
   if FEnabled and (FAllocationsSinceLastGC >= FGCThreshold) and
     not FCollecting then
     Collect;
+end;
+
+procedure TGarbageCollector.CollectIfNeeded(
+  const AProtect: TGCManagedObject);
+begin
+  if not FEnabled or (FAllocationsSinceLastGC < FGCThreshold) or
+     FCollecting then
+    Exit;
+  if Assigned(AProtect) then
+    FActiveRootStack.Add(AProtect);
+  try
+    Collect;
+  finally
+    if Assigned(AProtect) then
+      FActiveRootStack.Delete(FActiveRootStack.Count - 1);
+  end;
 end;
 
 function TGarbageCollector.GetManagedObjectCount: Integer;

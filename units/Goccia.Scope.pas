@@ -162,11 +162,12 @@ end;
 
 destructor TGocciaScope.Destroy;
 begin
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.UnregisterObject(Self);
+
   if Assigned(FLexicalBindings) then
     FLexicalBindings.Free;
 
-  // Don't free FThisValue - the scope doesn't own it, it's just a reference
-  // The actual owner should handle freeing it
   if Assigned(FThisValue) then
     FThisValue := nil;
 

@@ -228,6 +228,8 @@ begin
 
   while True do
   begin
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.CollectIfNeeded;
     StartNanoseconds := GetNanoseconds;
     I := 0;
     while I < BatchSize do
@@ -315,6 +317,8 @@ begin
       // Phase 3: Measurement rounds
       for Round := 0 to MEASUREMENT_ROUNDS - 1 do
       begin
+        if Assigned(GC) then
+          GC.CollectIfNeeded;
         StartNanoseconds := GetNanoseconds;
         I := 0;
         while I < Iterations do

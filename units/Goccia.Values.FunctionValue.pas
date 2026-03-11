@@ -250,17 +250,13 @@ function TGocciaFunctionValue.Call(const AArguments: TGocciaArgumentsCollection;
 var
   CallScope: TGocciaScope;
 begin
-  // Create call scope via virtual dispatch (TGocciaMethodValue creates TGocciaMethodCallScope)
   CallScope := CreateCallScope;
 
-  // Register with GC as an active scope (protects it from collection during execution)
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.PushActiveRoot(CallScope);
   try
     Result := ExecuteBody(CallScope, AArguments, AThisValue);
   finally
-    // Pop active scope from GC stack - the scope may still be alive
-    // if captured by closures; the GC will determine reachability
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.PopActiveRoot;
   end;
