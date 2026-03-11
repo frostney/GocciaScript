@@ -82,7 +82,7 @@ implementation
 
 constructor TScopeMap<TValue>.Create(AParent: TScopeMap<TValue>);
 begin
-  Create(DEFAULT_CAPACITY, AParent);
+  Create(0, AParent);
 end;
 
 constructor TScopeMap<TValue>.Create(AInitialCapacity: Integer;
@@ -90,11 +90,12 @@ constructor TScopeMap<TValue>.Create(AInitialCapacity: Integer;
 begin
   inherited Create;
   FCount := 0;
-  if AInitialCapacity < DEFAULT_CAPACITY then
-    AInitialCapacity := DEFAULT_CAPACITY;
   FCapacity := AInitialCapacity;
-  SetLength(FNames, FCapacity);
-  SetLength(FValues, FCapacity);
+  if FCapacity > 0 then
+  begin
+    SetLength(FNames, FCapacity);
+    SetLength(FValues, FCapacity);
+  end;
   FParent := AParent;
 end;
 
@@ -111,7 +112,10 @@ procedure TScopeMap<TValue>.EnsureCapacity;
 begin
   if FCount >= FCapacity then
   begin
-    FCapacity := FCapacity * 2;
+    if FCapacity = 0 then
+      FCapacity := DEFAULT_CAPACITY
+    else
+      FCapacity := FCapacity * 2;
     SetLength(FNames, FCapacity);
     SetLength(FValues, FCapacity);
   end;
@@ -121,6 +125,11 @@ function TScopeMap<TValue>.IndexOf(const AKey: string): Integer;
 var
   I: Integer;
 begin
+  if FCount = 0 then
+  begin
+    Result := -1;
+    Exit;
+  end;
   for I := FCount - 1 downto 0 do
     if FNames[I] = AKey then
     begin
