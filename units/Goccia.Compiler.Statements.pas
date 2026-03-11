@@ -161,43 +161,60 @@ end;
 
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
 var
-  Len: Integer;
-begin
-  Result := False;
-  if AAnnotation = '' then
-    Exit;
-  Len := Length(AAnnotation);
-  if (Len >= 3) and (AAnnotation[Len - 1] = '[') and (AAnnotation[Len] = ']') then
-    Exit(True);
-  if (Pos('Array<', AAnnotation) = 1) then
-    Exit(True);
-end;
-
-function StripArrayLayer(const AAnnotation: string): string;
-var
+  Trimmed: string;
   Len, Depth, I: Integer;
 begin
-  Result := '';
-  if AAnnotation = '' then
+  Result := False;
+  Trimmed := Trim(AAnnotation);
+  if Trimmed = '' then
     Exit;
-  Len := Length(AAnnotation);
-  if (Len >= 3) and (AAnnotation[Len - 1] = '[') and (AAnnotation[Len] = ']') then
-  begin
-    Result := Copy(AAnnotation, 1, Len - 2);
-    Exit;
-  end;
-  if Pos('Array<', AAnnotation) = 1 then
+  Len := Length(Trimmed);
+  if (Len >= 2) and (Trimmed[Len - 1] = '[') and (Trimmed[Len] = ']') then
+    Exit(True);
+  if Pos('Array<', Trimmed) = 1 then
   begin
     Depth := 0;
     for I := 7 to Len do
     begin
-      if AAnnotation[I] = '<' then
+      if Trimmed[I] = '<' then
         Inc(Depth)
-      else if AAnnotation[I] = '>' then
+      else if Trimmed[I] = '>' then
       begin
         if Depth = 0 then
+          Exit(I = Len);
+        Dec(Depth);
+      end;
+    end;
+  end;
+end;
+
+function StripArrayLayer(const AAnnotation: string): string;
+var
+  Trimmed: string;
+  Len, Depth, I: Integer;
+begin
+  Result := '';
+  Trimmed := Trim(AAnnotation);
+  if Trimmed = '' then
+    Exit;
+  Len := Length(Trimmed);
+  if (Len >= 2) and (Trimmed[Len - 1] = '[') and (Trimmed[Len] = ']') then
+  begin
+    Result := Copy(Trimmed, 1, Len - 2);
+    Exit;
+  end;
+  if Pos('Array<', Trimmed) = 1 then
+  begin
+    Depth := 0;
+    for I := 7 to Len do
+    begin
+      if Trimmed[I] = '<' then
+        Inc(Depth)
+      else if Trimmed[I] = '>' then
+      begin
+        if (Depth = 0) and (I = Len) then
         begin
-          Result := Trim(Copy(AAnnotation, 7, I - 7));
+          Result := Trim(Copy(Trimmed, 7, I - 7));
           Exit;
         end;
         Dec(Depth);

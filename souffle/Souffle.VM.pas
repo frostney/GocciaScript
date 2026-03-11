@@ -648,6 +648,7 @@ var
   Rec: TSouffleRecord;
   RecVal: TSouffleValue;
   Bp, WalkBp: TSouffleBlueprint;
+  FloatIdx: Double;
 begin
   Base := AFrame^.BaseRegister;
 
@@ -913,9 +914,16 @@ begin
             FRegisters[Base + B].AsReference).Get(
               Integer(FRegisters[Base + C].AsInteger))
         else if FRegisters[Base + C].Kind = svkFloat then
-          FRegisters[Base + A] := TSouffleArray(
-            FRegisters[Base + B].AsReference).Get(
-              Trunc(FRegisters[Base + C].AsFloat))
+        begin
+          FloatIdx := FRegisters[Base + C].AsFloat;
+          if (FloatIdx >= 0) and (FloatIdx <= High(Integer)) and
+             (Frac(FloatIdx) = 0.0) then
+            FRegisters[Base + A] := TSouffleArray(
+              FRegisters[Base + B].AsReference).Get(Trunc(FloatIdx))
+          else
+            FRegisters[Base + A] := FRuntimeOps.GetIndex(
+              FRegisters[Base + B], FRegisters[Base + C]);
+        end
         else
           FRegisters[Base + A] := FRuntimeOps.GetIndex(
             FRegisters[Base + B], FRegisters[Base + C]);
@@ -937,8 +945,16 @@ begin
           TSouffleArray(FRegisters[Base + A].AsReference).Put(
             Integer(FRegisters[Base + B].AsInteger), FRegisters[Base + C])
         else if FRegisters[Base + B].Kind = svkFloat then
-          TSouffleArray(FRegisters[Base + A].AsReference).Put(
-            Trunc(FRegisters[Base + B].AsFloat), FRegisters[Base + C])
+        begin
+          FloatIdx := FRegisters[Base + B].AsFloat;
+          if (FloatIdx >= 0) and (FloatIdx <= High(Integer)) and
+             (Frac(FloatIdx) = 0.0) then
+            TSouffleArray(FRegisters[Base + A].AsReference).Put(
+              Trunc(FloatIdx), FRegisters[Base + C])
+          else
+            FRuntimeOps.SetIndex(
+              FRegisters[Base + A], FRegisters[Base + B], FRegisters[Base + C]);
+        end
         else
           FRuntimeOps.SetIndex(
             FRegisters[Base + A], FRegisters[Base + B], FRegisters[Base + C]);
