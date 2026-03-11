@@ -25,7 +25,10 @@ implementation
 class function TStringBuffer.Create(const ACapacity: Integer): TStringBuffer;
 begin
   Result.FLen := 0;
-  Result.FCap := ACapacity;
+  if ACapacity > 0 then
+    Result.FCap := ACapacity
+  else
+    Result.FCap := 64;
   SetLength(Result.FData, Result.FCap);
 end;
 

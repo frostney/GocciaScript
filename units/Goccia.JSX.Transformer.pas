@@ -119,15 +119,21 @@ begin
     Transformer.FHasJSX := False;
     Transformer.FOutput := TStringBuffer.Create(Length(ASource));
     Transformer.FSourceMap := TGocciaSourceMap.Create;
-    Transformer.ScanPragmas;
-    Transformer.TransformSource;
-    Result.Source := Transformer.FOutput.ToString;
-    if Transformer.FHasJSX then
-      Result.SourceMap := Transformer.FSourceMap
-    else
-    begin
-      Result.Source := ASource;
-      Result.SourceMap := nil;
+    try
+      Transformer.ScanPragmas;
+      Transformer.TransformSource;
+      Result.Source := Transformer.FOutput.ToString;
+      if Transformer.FHasJSX then
+      begin
+        Result.SourceMap := Transformer.FSourceMap;
+        Transformer.FSourceMap := nil;
+      end
+      else
+      begin
+        Result.Source := ASource;
+        Result.SourceMap := nil;
+      end;
+    finally
       Transformer.FSourceMap.Free;
     end;
   finally
