@@ -20,6 +20,7 @@ TGocciaGlobalBuiltin = (
   ggSymbol,           // Symbol, Symbol.for, Symbol.keyFor
   ggSet,              // Set constructor and prototype
   ggMap,              // Map constructor and prototype
+  ggPerformance,      // performance.now(), performance.timeOrigin
   ggTestAssertions,   // describe, test, expect (testing only)
   ggBenchmark,        // suite, bench, runBenchmarks (benchmarking only)
   ggTemporal,         // Temporal namespace (dates, times, durations, instants)
@@ -33,7 +34,7 @@ The default set used by `ScriptLoader` and `REPL`:
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
                   ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap,
-                  ggTemporal, ggJSX, ggArrayBuffer];
+                  ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
 ```
 
 The `TestRunner` adds `ggTestAssertions` to inject the test framework.
@@ -531,6 +532,19 @@ Promise.resolve(1)
   .catch((e) => "recovered") // "recovered"
   .then((v) => v);           // "recovered"
 ```
+
+### Performance (`Goccia.Builtins.Performance.pas`)
+
+Core High Resolution Time API:
+
+| Member | Description |
+|--------|-------------|
+| `performance.now()` | Monotonic elapsed time in milliseconds since the engine's time origin |
+| `performance.timeOrigin` | Unix epoch timestamp in milliseconds for the engine's time origin |
+| `performance.toJSON()` | Returns `{ timeOrigin }` |
+| `performance[Symbol.toStringTag]` | `"Performance"` |
+
+`performance.now()` uses `TimingUtils.GetNanoseconds`, so wall-clock changes do not affect it. `performance.timeOrigin` is captured once from `TimingUtils.GetEpochNanoseconds` when the built-in is created.
 
 ### Temporal (`Goccia.Builtins.Temporal.pas`)
 
