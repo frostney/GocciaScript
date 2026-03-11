@@ -7,7 +7,8 @@ interface
 uses
   Generics.Collections,
 
-  GarbageCollector.Managed;
+  GarbageCollector.Managed,
+  HashMap;
 
 type
   TGCManagedObjectList = TObjectList<TGCManagedObject>;
@@ -18,9 +19,9 @@ type
     FInstance: TGarbageCollector;
   private
     FManagedObjects: TGCManagedObjectList;
-    FPinnedObjects: TDictionary<TGCManagedObject, Boolean>;
-    FTempRoots: TDictionary<TGCManagedObject, Boolean>;
-    FRootObjects: TDictionary<TGCManagedObject, Boolean>;
+    FPinnedObjects: THashMap<TGCManagedObject, Boolean>;
+    FTempRoots: THashMap<TGCManagedObject, Boolean>;
+    FRootObjects: THashMap<TGCManagedObject, Boolean>;
     FActiveRootStack: TGCManagedObjectList;
 
     FExternalRootMarkers: array of TGCRootMarker;
@@ -99,9 +100,9 @@ constructor TGarbageCollector.Create;
 begin
   inherited Create;
   FManagedObjects := TGCManagedObjectList.Create(False);
-  FPinnedObjects := TDictionary<TGCManagedObject, Boolean>.Create;
-  FTempRoots := TDictionary<TGCManagedObject, Boolean>.Create;
-  FRootObjects := TDictionary<TGCManagedObject, Boolean>.Create;
+  FPinnedObjects := THashMap<TGCManagedObject, Boolean>.Create;
+  FTempRoots := THashMap<TGCManagedObject, Boolean>.Create;
+  FRootObjects := THashMap<TGCManagedObject, Boolean>.Create;
   FActiveRootStack := TGCManagedObjectList.Create(False);
   FAllocationsSinceLastGC := 0;
   FGCThreshold := DEFAULT_GC_THRESHOLD;
@@ -229,17 +230,20 @@ end;
 
 procedure TGarbageCollector.MarkRoots;
 var
-  Obj: TGCManagedObject;
+  ObjArr: THashMap<TGCManagedObject, Boolean>.TKeyArray;
   I: Integer;
 begin
-  for Obj in FPinnedObjects.Keys do
-    Obj.MarkReferences;
+  ObjArr := FPinnedObjects.Keys;
+  for I := 0 to Length(ObjArr) - 1 do
+    ObjArr[I].MarkReferences;
 
-  for Obj in FTempRoots.Keys do
-    Obj.MarkReferences;
+  ObjArr := FTempRoots.Keys;
+  for I := 0 to Length(ObjArr) - 1 do
+    ObjArr[I].MarkReferences;
 
-  for Obj in FRootObjects.Keys do
-    Obj.MarkReferences;
+  ObjArr := FRootObjects.Keys;
+  for I := 0 to Length(ObjArr) - 1 do
+    ObjArr[I].MarkReferences;
 
   for I := 0 to FActiveRootStack.Count - 1 do
     FActiveRootStack[I].MarkReferences;

@@ -55,9 +55,9 @@ implementation
 
 uses
   Classes,
-  Generics.Collections,
 
   GarbageCollector.Generic,
+  HashMap,
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
@@ -398,10 +398,10 @@ end;
   (code 25) for non-serializable types (functions, symbols). }
 
 function StructuredCloneValue(const AValue: TGocciaValue;
-  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaValue; forward;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaValue; forward;
 
 function CloneObject(const AObj: TGocciaObjectValue;
-  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
 var
   I: Integer;
   Keys: TArray<string>;
@@ -435,7 +435,7 @@ begin
 end;
 
 function CloneArray(const AArr: TGocciaArrayValue;
-  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaArrayValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaArrayValue;
 var
   I: Integer;
   Element: TGocciaValue;
@@ -454,7 +454,7 @@ begin
 end;
 
 function CloneMap(const AMap: TGocciaMapValue;
-  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaMapValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaMapValue;
 var
   I: Integer;
   Entry: TGocciaMapEntry;
@@ -472,7 +472,7 @@ begin
 end;
 
 function CloneSet(const ASet: TGocciaSetValue;
-  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaSetValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaSetValue;
 var
   I: Integer;
 begin
@@ -484,7 +484,7 @@ begin
 end;
 
 function CloneArrayBuffer(const ABuf: TGocciaArrayBufferValue;
-  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaArrayBufferValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaArrayBufferValue;
 var
   Len: Integer;
 begin
@@ -499,7 +499,7 @@ begin
 end;
 
 function CloneSharedArrayBuffer(const ABuf: TGocciaSharedArrayBufferValue;
-  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaSharedArrayBufferValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaSharedArrayBufferValue;
 var
   Len: Integer;
 begin
@@ -514,7 +514,7 @@ begin
 end;
 
 function StructuredCloneValue(const AValue: TGocciaValue;
-  const AMemory: TDictionary<TGocciaValue, TGocciaValue>): TGocciaValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaValue;
 var
   Existing: TGocciaValue;
 begin
@@ -551,19 +551,23 @@ end;
 
 function TGocciaGlobals.StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Memory: TDictionary<TGocciaValue, TGocciaValue>;
-  CloneValue: TGocciaValue;
+  Memory: THashMap<TGocciaValue, TGocciaValue>;
+  MemoryValues: array of TGocciaValue;
+  I: Integer;
 begin
   if AArgs.Length = 0 then
     ThrowTypeError('Failed to execute ''structuredClone'': 1 argument required, but only 0 present.');
 
-  Memory := TDictionary<TGocciaValue, TGocciaValue>.Create;
+  Memory := THashMap<TGocciaValue, TGocciaValue>.Create;
   try
     Result := StructuredCloneValue(AArgs.GetElement(0), Memory);
   finally
     if Assigned(TGarbageCollector.Instance) then
-      for CloneValue in Memory.Values do
-        TGarbageCollector.Instance.RemoveTempRoot(CloneValue);
+    begin
+      MemoryValues := Memory.Values;
+      for I := 0 to Length(MemoryValues) - 1 do
+        TGarbageCollector.Instance.RemoveTempRoot(MemoryValues[I]);
+    end;
     Memory.Free;
   end;
 end;

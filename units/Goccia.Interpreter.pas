@@ -6,9 +6,10 @@ interface
 
 uses
   Classes,
-  Generics.Collections,
   Math,
   SysUtils,
+
+  OrderedStringMap,
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
@@ -37,9 +38,9 @@ type
   TGocciaInterpreter = class
   private
     FGlobalScope: TGocciaGlobalScope;
-    FModules: TDictionary<string, TGocciaModule>;
-    FLoadingModules: TDictionary<string, Boolean>;
-    FGlobalModules: TDictionary<string, TGocciaModule>;
+    FModules: TOrderedStringMap<TGocciaModule>;
+    FLoadingModules: TOrderedStringMap<Boolean>;
+    FGlobalModules: TOrderedStringMap<TGocciaModule>;
     FFileName: string;
     FSourceLines: TStringList;
     FJSXEnabled: Boolean;
@@ -58,7 +59,7 @@ type
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
     property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
     property Resolver: TGocciaModuleResolver read FResolver write FResolver;
-    property GlobalModules: TDictionary<string, TGocciaModule> read FGlobalModules;
+    property GlobalModules: TOrderedStringMap<TGocciaModule> read FGlobalModules;
   end;
 
 
@@ -80,9 +81,9 @@ begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FGlobalScope := TGocciaGlobalScope.Create;
-  FModules := TDictionary<string, TGocciaModule>.Create;
-  FLoadingModules := TDictionary<string, Boolean>.Create;
-  FGlobalModules := TDictionary<string, TGocciaModule>.Create;
+  FModules := TOrderedStringMap<TGocciaModule>.Create;
+  FLoadingModules := TOrderedStringMap<Boolean>.Create;
+  FGlobalModules := TOrderedStringMap<TGocciaModule>.Create;
 end;
 
 destructor TGocciaInterpreter.Destroy;
@@ -140,7 +141,8 @@ var
   ExportDecl: TGocciaExportDeclaration;
   ExportVarDecl: TGocciaExportVariableDeclaration;
   ReExportDecl: TGocciaReExportDeclaration;
-  ExportPair: TPair<string, string>;
+  ExportPairs: TOrderedStringMap<string>.TKeyValueArray;
+  J: Integer;
   Value: TGocciaValue;
   Context: TGocciaEvaluationContext;
   SourceModule: TGocciaModule;
@@ -219,11 +221,12 @@ begin
                   if Stmt is TGocciaExportDeclaration then
                   begin
                     ExportDecl := TGocciaExportDeclaration(Stmt);
-                    for ExportPair in ExportDecl.ExportsTable do
+                    ExportPairs := ExportDecl.ExportsTable.ToArray;
+                    for J := 0 to High(ExportPairs) do
                     begin
-                      Value := ModuleScope.GetValue(ExportPair.Value);
+                      Value := ModuleScope.GetValue(ExportPairs[J].Value);
                       if Assigned(Value) then
-                        Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
+                        Module.ExportsTable.AddOrSetValue(ExportPairs[J].Key, Value);
                     end;
                   end
                   else if Stmt is TGocciaExportVariableDeclaration then
@@ -246,10 +249,11 @@ begin
                   begin
                     ReExportDecl := TGocciaReExportDeclaration(Stmt);
                     SourceModule := LoadModule(ReExportDecl.ModulePath, ResolvedPath);
-                    for ExportPair in ReExportDecl.ExportsTable do
+                    ExportPairs := ReExportDecl.ExportsTable.ToArray;
+                    for J := 0 to High(ExportPairs) do
                     begin
-                      if SourceModule.ExportsTable.TryGetValue(ExportPair.Value, Value) then
-                        Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
+                      if SourceModule.ExportsTable.TryGetValue(ExportPairs[J].Value, Value) then
+                        Module.ExportsTable.AddOrSetValue(ExportPairs[J].Key, Value);
                     end;
                   end;
                 end;

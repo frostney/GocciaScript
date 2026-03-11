@@ -7,12 +7,15 @@ interface
 uses
   Generics.Collections,
 
+  HashMap,
+
   Goccia.Arguments.Collection,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives,
   Goccia.Values.SymbolValue;
 
 type
+  TSymbolDescriptorMap = THashMap<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
 
   TGocciaObjectValue = class(TGocciaValue)
   private
@@ -27,7 +30,7 @@ type
     function ObjectPrototypeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   protected
     FProperties: TGocciaPropertyMap;
-    FSymbolDescriptors: TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
+    FSymbolDescriptors: TSymbolDescriptorMap;
     FSymbolInsertionOrder: TList<TGocciaSymbolValue>;
     FPrototype: TGocciaObjectValue;
     FFrozen: Boolean;
@@ -135,7 +138,7 @@ end;
 constructor TGocciaObjectValue.Create(const APrototype: TGocciaObjectValue = nil);
 begin
   FProperties := TGocciaPropertyMap.Create;
-  FSymbolDescriptors := TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>.Create;
+  FSymbolDescriptors := TSymbolDescriptorMap.Create;
   FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
   FPrototype := APrototype;
   FFrozen := False;
@@ -372,16 +375,17 @@ end;
 destructor TGocciaObjectValue.Destroy;
 var
   PropEntries: TGocciaPropertyMap.TKeyValueArray;
+  SymValues: array of TGocciaPropertyDescriptor;
   I: Integer;
-  SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
 begin
   PropEntries := FProperties.ToArray;
   for I := 0 to Length(PropEntries) - 1 do
     PropEntries[I].Value.Free;
   FProperties.Free;
 
-  for SymPair in FSymbolDescriptors do
-    SymPair.Value.Free;
+  SymValues := FSymbolDescriptors.Values;
+  for I := 0 to Length(SymValues) - 1 do
+    SymValues[I].Free;
   FSymbolDescriptors.Free;
 
   FSymbolInsertionOrder.Free;
@@ -391,8 +395,9 @@ end;
 procedure TGocciaObjectValue.MarkReferences;
 var
   Entries: TGocciaPropertyMap.TKeyValueArray;
+  SymKeys: array of TGocciaSymbolValue;
+  SymDescs: array of TGocciaPropertyDescriptor;
   I: Integer;
-  SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
 begin
   if GCMarked then Exit;
   inherited;
@@ -404,10 +409,12 @@ begin
   for I := 0 to Length(Entries) - 1 do
     MarkPropertyDescriptor(Entries[I].Value);
 
-  for SymPair in FSymbolDescriptors do
+  SymKeys := FSymbolDescriptors.Keys;
+  SymDescs := FSymbolDescriptors.Values;
+  for I := 0 to Length(SymKeys) - 1 do
   begin
-    SymPair.Key.MarkReferences;
-    MarkPropertyDescriptor(SymPair.Value);
+    SymKeys[I].MarkReferences;
+    MarkPropertyDescriptor(SymDescs[I]);
   end;
 end;
 
@@ -969,9 +976,7 @@ end;
 
 function TGocciaObjectValue.GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
 begin
-  if FSymbolDescriptors.ContainsKey(ASymbol) then
-    Result := FSymbolDescriptors[ASymbol]
-  else
+  if not FSymbolDescriptors.TryGetValue(ASymbol, Result) then
     Result := nil;
 end;
 

@@ -1,42 +1,50 @@
 {
-  TOrderedMap<TKey, TValue> - Insertion-order-preserving generic map.
+  TOrderedStringMap<TValue> - String-keyed ordered map.
 
-  Inherits TBaseMap<TKey, TValue> for shared types and iteration.
+  Use case: JS object string properties, class methods, module exports.
 
-  Hash and equality are protected virtual methods so subclasses can
-  override them for specific key types (e.g. TOrderedStringMap for
-  proper string hashing). Default implementation: DJB2 over raw key
-  bytes + byte-level equality — correct for all fixed-size value types.
+  Standalone class (not inheriting from TOrderedMap) because FPC 3.2.2
+  generates per-unit VMTs for generic specializations. When a generic
+  with a generic base class is specialized across many compilation units,
+  {$OBJECTCHECKS ON} causes "Invalid type cast" at runtime. This type
+  is specialized in 6+ units so it must be self-contained.
 
-  Performance note on virtual hash/equality:
-  The VMT hop per probe step is negligible in practice. For string
-  keys the comparison itself dominates. For small value types the
-  byte loop is branch-predictor friendly. The benefit is one ordered
-  map implementation instead of two.
+  THashMap, TOrderedMap, and TScopeMap inherit from TBaseMap safely
+  because they are used in fewer units and through type aliases.
+
+  Implementation: DJB2 hash on characters, open-addressed bucket array,
+  tombstoned deletes with compaction, insertion-order iteration.
 }
 
-unit OrderedMap;
+unit OrderedStringMap;
 
 {$I Goccia.inc}
 
 interface
 
 uses
-  SysUtils,
-
-  BaseMap;
+  SysUtils;
 
 type
-  TOrderedMap<TKey, TValue> = class(TBaseMap<TKey, TValue>)
+  TOrderedStringMap<TValue> = class
   public type
     TEntry = record
-      Key: TKey;
+      Key: string;
       Value: TValue;
       Hash: Cardinal;
       Active: Boolean;
     end;
 
+    TKeyValuePair = record
+      Key: string;
+      Value: TValue;
+    end;
+
     TEntryArray = array of TEntry;
+    TKeyValueArray = array of TKeyValuePair;
+    TKeyArray = array of string;
+    TValueArray = array of TValue;
+    TForEachCallback = procedure(const AKey: string; const AValue: TValue) of object;
 
   private const
     EMPTY_SLOT          = -1;
@@ -51,64 +59,57 @@ type
     FEntryCount: Integer;
     FBucketCount: Integer;
 
-    function FindBucket(const AKey: TKey; AHash: Cardinal;
+    class function HashKey(const AKey: string): Cardinal; static; inline;
+    function FindBucket(const AKey: string; const AHash: Cardinal;
       out ABucketIdx: Integer): Boolean;
     procedure Grow;
-    procedure Rehash(ANewBucketCount: Integer);
+    procedure Rehash(const ANewBucketCount: Integer);
     procedure Compact;
 
-  protected
-    function HashKey(const AKey: TKey): Cardinal; virtual;
-    function KeysEqual(const A, B: TKey): Boolean; virtual;
-
-    function GetCount: Integer; override;
-    function GetValue(const AKey: TKey): TValue; override;
-    procedure SetValue(const AKey: TKey; const AValue: TValue); override;
-    function GetNextEntry(var AIterState: Integer;
-      out AKey: TKey; out AValue: TValue): Boolean; override;
+    function GetValue(const AKey: string): TValue;
+    procedure SetValue(const AKey: string; const AValue: TValue);
+    function GetCapacity: Integer;
 
   public
     constructor Create; overload;
     constructor Create(AInitialCapacity: Integer); overload;
     destructor Destroy; override;
 
-    procedure Add(const AKey: TKey; const AValue: TValue); override;
-    function TryGetValue(const AKey: TKey; out AValue: TValue): Boolean; override;
-    function ContainsKey(const AKey: TKey): Boolean; override;
-    function Remove(const AKey: TKey): Boolean; override;
-    procedure Clear; override;
+    procedure Add(const AKey: string; const AValue: TValue);
+    procedure AddOrSetValue(const AKey: string; const AValue: TValue); inline;
+    function TryGetValue(const AKey: string; out AValue: TValue): Boolean;
+    function ContainsKey(const AKey: string): Boolean;
+    function Remove(const AKey: string): Boolean;
+    procedure Clear;
 
-    function EntryAt(AIndex: Integer): TBaseMap<TKey, TValue>.TKeyValuePair;
+    function ToArray: TKeyValueArray;
+    procedure ForEach(ACallback: TForEachCallback);
+    function Keys: TKeyArray;
+    function Values: TValueArray;
+    function EntryAt(const AIndex: Integer): TKeyValuePair;
 
-    property Capacity: Integer read FBucketCount;
+    property Items[const AKey: string]: TValue read GetValue write SetValue; default;
+    property Count: Integer read FCount;
+    property Capacity: Integer read GetCapacity;
   end;
 
 implementation
 
-{ Hash / Equality — default: DJB2 over raw key bytes }
+{ Hash / Probe }
 
 {$PUSH}{$R-}{$Q-}
-function TOrderedMap<TKey, TValue>.HashKey(const AKey: TKey): Cardinal;
+class function TOrderedStringMap<TValue>.HashKey(const AKey: string): Cardinal;
 var
-  P: PByte;
   I: Integer;
 begin
   Result := 5381;
-  P := @AKey;
-  for I := 0 to SizeOf(TKey) - 1 do
-    Result := Result * 33 + P[I];
+  for I := 1 to Length(AKey) do
+    Result := Result * 33 + Ord(AKey[I]);
 end;
 {$POP}
 
-function TOrderedMap<TKey, TValue>.KeysEqual(const A, B: TKey): Boolean;
-begin
-  Result := CompareMem(@A, @B, SizeOf(TKey));
-end;
-
-{ Probe }
-
-function TOrderedMap<TKey, TValue>.FindBucket(const AKey: TKey; AHash: Cardinal;
-  out ABucketIdx: Integer): Boolean;
+function TOrderedStringMap<TValue>.FindBucket(const AKey: string;
+  const AHash: Cardinal; out ABucketIdx: Integer): Boolean;
 var
   Idx, EntryIdx, FirstDeleted: Integer;
 begin
@@ -136,7 +137,7 @@ begin
     end
     else if (FEntries[EntryIdx].Hash = AHash) and
             FEntries[EntryIdx].Active and
-            KeysEqual(FEntries[EntryIdx].Key, AKey) then
+            (FEntries[EntryIdx].Key = AKey) then
     begin
       ABucketIdx := Idx;
       Result := True;
@@ -149,7 +150,7 @@ end;
 
 { Resize }
 
-procedure TOrderedMap<TKey, TValue>.Grow;
+procedure TOrderedStringMap<TValue>.Grow;
 var
   N: Integer;
 begin
@@ -159,7 +160,7 @@ begin
   Rehash(N);
 end;
 
-procedure TOrderedMap<TKey, TValue>.Rehash(ANewBucketCount: Integer);
+procedure TOrderedStringMap<TValue>.Rehash(const ANewBucketCount: Integer);
 var
   I, Idx: Integer;
 begin
@@ -178,7 +179,7 @@ begin
     end;
 end;
 
-procedure TOrderedMap<TKey, TValue>.Compact;
+procedure TOrderedStringMap<TValue>.Compact;
 var
   NewEntries: TEntryArray;
   I, J: Integer;
@@ -198,12 +199,12 @@ end;
 
 { Constructor / Destructor }
 
-constructor TOrderedMap<TKey, TValue>.Create;
+constructor TOrderedStringMap<TValue>.Create;
 begin
   Create(INITIAL_CAPACITY);
 end;
 
-constructor TOrderedMap<TKey, TValue>.Create(AInitialCapacity: Integer);
+constructor TOrderedStringMap<TValue>.Create(AInitialCapacity: Integer);
 var
   I: Integer;
 begin
@@ -223,7 +224,7 @@ begin
     FBuckets[I] := EMPTY_SLOT;
 end;
 
-destructor TOrderedMap<TKey, TValue>.Destroy;
+destructor TOrderedStringMap<TValue>.Destroy;
 begin
   FEntries := nil;
   FBuckets := nil;
@@ -232,7 +233,8 @@ end;
 
 { Core operations }
 
-procedure TOrderedMap<TKey, TValue>.Add(const AKey: TKey; const AValue: TValue);
+procedure TOrderedStringMap<TValue>.Add(const AKey: string;
+  const AValue: TValue);
 var
   Hash: Cardinal;
   BucketIdx, EntryIdx: Integer;
@@ -268,7 +270,13 @@ begin
   Inc(FCount);
 end;
 
-function TOrderedMap<TKey, TValue>.TryGetValue(const AKey: TKey;
+procedure TOrderedStringMap<TValue>.AddOrSetValue(const AKey: string;
+  const AValue: TValue);
+begin
+  Add(AKey, AValue);
+end;
+
+function TOrderedStringMap<TValue>.TryGetValue(const AKey: string;
   out AValue: TValue): Boolean;
 var
   Hash: Cardinal;
@@ -282,7 +290,7 @@ begin
     AValue := Default(TValue);
 end;
 
-function TOrderedMap<TKey, TValue>.ContainsKey(const AKey: TKey): Boolean;
+function TOrderedStringMap<TValue>.ContainsKey(const AKey: string): Boolean;
 var
   Hash: Cardinal;
   BucketIdx: Integer;
@@ -291,7 +299,7 @@ begin
   Result := FindBucket(AKey, Hash, BucketIdx);
 end;
 
-function TOrderedMap<TKey, TValue>.Remove(const AKey: TKey): Boolean;
+function TOrderedStringMap<TValue>.Remove(const AKey: string): Boolean;
 var
   Hash: Cardinal;
   BucketIdx, EntryIdx: Integer;
@@ -303,13 +311,13 @@ begin
 
   EntryIdx := FBuckets[BucketIdx];
   FEntries[EntryIdx].Active := False;
-  FEntries[EntryIdx].Key := Default(TKey);
+  FEntries[EntryIdx].Key := '';
   FEntries[EntryIdx].Value := Default(TValue);
   FBuckets[BucketIdx] := DELETED_SLOT;
   Dec(FCount);
 end;
 
-procedure TOrderedMap<TKey, TValue>.Clear;
+procedure TOrderedStringMap<TValue>.Clear;
 var
   I: Integer;
 begin
@@ -322,45 +330,82 @@ end;
 
 { Accessors }
 
-function TOrderedMap<TKey, TValue>.GetCount: Integer;
-begin
-  Result := FCount;
-end;
-
-function TOrderedMap<TKey, TValue>.GetValue(const AKey: TKey): TValue;
+function TOrderedStringMap<TValue>.GetValue(const AKey: string): TValue;
 begin
   if not TryGetValue(AKey, Result) then
-    raise Exception.Create('Key not found in ordered map');
+    raise Exception.Create('Key not found in ordered string map');
 end;
 
-procedure TOrderedMap<TKey, TValue>.SetValue(const AKey: TKey;
+procedure TOrderedStringMap<TValue>.SetValue(const AKey: string;
   const AValue: TValue);
 begin
   Add(AKey, AValue);
 end;
 
-{ Iteration }
-
-function TOrderedMap<TKey, TValue>.GetNextEntry(var AIterState: Integer;
-  out AKey: TKey; out AValue: TValue): Boolean;
+function TOrderedStringMap<TValue>.GetCapacity: Integer;
 begin
-  while AIterState < FEntryCount do
-  begin
-    if FEntries[AIterState].Active then
-    begin
-      AKey := FEntries[AIterState].Key;
-      AValue := FEntries[AIterState].Value;
-      Inc(AIterState);
-      Result := True;
-      Exit;
-    end;
-    Inc(AIterState);
-  end;
-  Result := False;
+  Result := FBucketCount;
 end;
 
-function TOrderedMap<TKey, TValue>.EntryAt(
-  AIndex: Integer): TBaseMap<TKey, TValue>.TKeyValuePair;
+{ Iteration }
+
+function TOrderedStringMap<TValue>.ToArray: TKeyValueArray;
+var
+  I, J: Integer;
+begin
+  Result := nil;
+  SetLength(Result, FCount);
+  J := 0;
+  for I := 0 to FEntryCount - 1 do
+    if FEntries[I].Active then
+    begin
+      Result[J].Key := FEntries[I].Key;
+      Result[J].Value := FEntries[I].Value;
+      Inc(J);
+    end;
+end;
+
+procedure TOrderedStringMap<TValue>.ForEach(ACallback: TForEachCallback);
+var
+  I: Integer;
+begin
+  for I := 0 to FEntryCount - 1 do
+    if FEntries[I].Active then
+      ACallback(FEntries[I].Key, FEntries[I].Value);
+end;
+
+function TOrderedStringMap<TValue>.Keys: TKeyArray;
+var
+  I, J: Integer;
+begin
+  Result := nil;
+  SetLength(Result, FCount);
+  J := 0;
+  for I := 0 to FEntryCount - 1 do
+    if FEntries[I].Active then
+    begin
+      Result[J] := FEntries[I].Key;
+      Inc(J);
+    end;
+end;
+
+function TOrderedStringMap<TValue>.Values: TValueArray;
+var
+  I, J: Integer;
+begin
+  Result := nil;
+  SetLength(Result, FCount);
+  J := 0;
+  for I := 0 to FEntryCount - 1 do
+    if FEntries[I].Active then
+    begin
+      Result[J] := FEntries[I].Value;
+      Inc(J);
+    end;
+end;
+
+function TOrderedStringMap<TValue>.EntryAt(
+  const AIndex: Integer): TKeyValuePair;
 var
   I, J: Integer;
 begin

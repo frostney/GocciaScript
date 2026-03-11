@@ -7,6 +7,7 @@ interface
 uses
   Generics.Collections,
 
+  OrderedStringMap,
   Souffle.Bytecode.Debug;
 
 type
@@ -69,7 +70,7 @@ type
     FLocalStrictCount: UInt8;
     FIsAsync: Boolean;
     FTypeCheckPreambleSize: UInt8;
-    FStringConstantIndex: TDictionary<string, UInt16>;
+    FStringConstantIndex: TOrderedStringMap<UInt16>;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -141,7 +142,7 @@ begin
   FCodeCount := 0;
   FConstantCount := 0;
   FFunctions := TObjectList<TSouffleFunctionTemplate>.Create(True);
-  FStringConstantIndex := TDictionary<string, UInt16>.Create;
+  FStringConstantIndex := TOrderedStringMap<UInt16>.Create;
   FExceptionHandlerCount := 0;
   FMaxRegisters := 0;
   FParameterCount := 0;

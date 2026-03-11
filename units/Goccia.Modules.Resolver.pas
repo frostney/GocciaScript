@@ -5,13 +5,14 @@ unit Goccia.Modules.Resolver;
 interface
 
 uses
-  Generics.Collections,
-  SysUtils;
+  SysUtils,
+
+  OrderedStringMap;
 
 type
   TGocciaModuleResolver = class
   private
-    FAliases: TDictionary<string, string>;
+    FAliases: TOrderedStringMap<string>;
     FBaseDirectory: string;
   protected
     function ApplyAliases(const AModulePath: string): string;
@@ -24,7 +25,7 @@ type
     function HasAlias(const AModulePath: string): Boolean;
     function Resolve(const AModulePath, AImportingFilePath: string): string; virtual;
 
-    property Aliases: TDictionary<string, string> read FAliases;
+    property Aliases: TOrderedStringMap<string> read FAliases;
     property BaseDirectory: string read FBaseDirectory write FBaseDirectory;
   end;
 
@@ -37,7 +38,7 @@ uses
 
 constructor TGocciaModuleResolver.Create(const ABaseDirectory: string);
 begin
-  FAliases := TDictionary<string, string>.Create;
+  FAliases := TOrderedStringMap<string>.Create;
   if ABaseDirectory <> '' then
     FBaseDirectory := IncludeTrailingPathDelimiter(ExpandFileName(ABaseDirectory))
   else
@@ -57,11 +58,13 @@ end;
 
 function TGocciaModuleResolver.HasAlias(const AModulePath: string): Boolean;
 var
-  Pair: TPair<string, string>;
+  Pairs: TOrderedStringMap<string>.TKeyValueArray;
+  I: Integer;
 begin
-  for Pair in FAliases do
-    if (Length(AModulePath) >= Length(Pair.Key)) and
-       (Copy(AModulePath, 1, Length(Pair.Key)) = Pair.Key) then
+  Pairs := FAliases.ToArray;
+  for I := 0 to High(Pairs) do
+    if (Length(AModulePath) >= Length(Pairs[I].Key)) and
+       (Copy(AModulePath, 1, Length(Pairs[I].Key)) = Pairs[I].Key) then
       Exit(True);
   Result := False;
 end;
@@ -79,21 +82,24 @@ end;
 
 function TGocciaModuleResolver.ApplyAliases(const AModulePath: string): string;
 var
-  Pair, BestMatch: TPair<string, string>;
-  Replacement: string;
+  Pairs: TOrderedStringMap<string>.TKeyValueArray;
+  BestKey, BestValue, Replacement: string;
+  I: Integer;
   Found: Boolean;
 begin
   Result := AModulePath;
   Found := False;
 
-  for Pair in FAliases do
+  Pairs := FAliases.ToArray;
+  for I := 0 to High(Pairs) do
   begin
-    if (Length(AModulePath) >= Length(Pair.Key)) and
-       (Copy(AModulePath, 1, Length(Pair.Key)) = Pair.Key) then
+    if (Length(AModulePath) >= Length(Pairs[I].Key)) and
+       (Copy(AModulePath, 1, Length(Pairs[I].Key)) = Pairs[I].Key) then
     begin
-      if (not Found) or (Length(Pair.Key) > Length(BestMatch.Key)) then
+      if (not Found) or (Length(Pairs[I].Key) > Length(BestKey)) then
       begin
-        BestMatch := Pair;
+        BestKey := Pairs[I].Key;
+        BestValue := Pairs[I].Value;
         Found := True;
       end;
     end;
@@ -101,7 +107,7 @@ begin
 
   if Found then
   begin
-    Replacement := BestMatch.Value + Copy(AModulePath, Length(BestMatch.Key) + 1, MaxInt);
+    Replacement := BestValue + Copy(AModulePath, Length(BestKey) + 1, MaxInt);
     if not IsAbsolutePath(Replacement) then
       Result := FBaseDirectory + Replacement
     else

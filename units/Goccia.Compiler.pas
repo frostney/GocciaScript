@@ -5,8 +5,7 @@ unit Goccia.Compiler;
 interface
 
 uses
-  Generics.Collections,
-
+  OrderedStringMap,
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Module,
 
@@ -31,7 +30,7 @@ type
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
     FPendingClasses: array of TGocciaCompilerClassEntry;
-    FPendingClassNames: TDictionary<string, Boolean>;
+    FPendingClassNames: TOrderedStringMap<Boolean>;
 
     function ShouldDeferClass(
       const AClassDef: TGocciaClassDefinition): Boolean;
@@ -76,7 +75,7 @@ begin
   inherited Create;
   FSourcePath := ASourcePath;
   FFormalParameterCounts := TFormalParameterCountMap.Create;
-  FPendingClassNames := TDictionary<string, Boolean>.Create;
+  FPendingClassNames := TOrderedStringMap<Boolean>.Create;
   FModule := nil;
   FCurrentTemplate := nil;
   FCurrentScope := nil;

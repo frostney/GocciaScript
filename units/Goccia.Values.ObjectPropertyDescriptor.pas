@@ -5,7 +5,7 @@ unit Goccia.Values.ObjectPropertyDescriptor;
 interface
 
 uses
-  OrderedMap,
+  OrderedStringMap,
 
   Goccia.Values.Primitives;
 
@@ -50,7 +50,7 @@ type
     property Setter: TGocciaValue read FSetter;
   end;
 
-  TGocciaPropertyMap = TOrderedMap<TGocciaPropertyDescriptor>;
+  TGocciaPropertyMap = TOrderedStringMap<TGocciaPropertyDescriptor>;
 
 implementation
 

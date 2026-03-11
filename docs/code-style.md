@@ -171,6 +171,22 @@ FManagedScopes: TObjectList<TGocciaScope>;
 
 **Why `TObjectList(False)` instead of `TList`?** Even when the collection does not own its elements (e.g., the GC's managed scopes list, which uses manual mark-and-sweep), using `TObjectList<T>.Create(False)` with a named alias keeps the VMT consistent. `TList<T>` and `TObjectList<T>` produce incompatible VMTs, so mixing them across units reintroduces the same cross-unit type check failures.
 
+### Hash Map Selection
+
+The codebase provides purpose-built hash maps that replace `TDictionary` on hot paths. Choose based on key type and ordering requirements:
+
+| Use case | Map type | Notes |
+|----------|----------|-------|
+| String keys, insertion order | `TOrderedStringMap<V>` | 4–6× faster inserts than `TDictionary` at N=20–100; standalone class (no `TBaseMap` inheritance) for cross-unit VMT safety |
+| Generic keys, insertion order | `TOrderedMap<K,V>` | Virtual `HashKey`/`KeysEqual`; default: DJB2 over raw key bytes |
+| Any key, unordered | `THashMap<K,V>` | Backshift deletion (no tombstones); `static inline` hash/equality; 2× faster inserts for pointer keys |
+| Scope bindings | `TScopeMap<V>` | Linear scan + parent chain walking; optimal for <20 bindings |
+| Cold-path / diagnostic | `TDictionary<K,V>` | Acceptable where performance is not critical |
+
+**Never use** `TFPDataHashTable` — it has catastrophic insert performance (400,000 ns/insert vs 50 ns for `TOrderedStringMap` at N=20). See [spikes/fpc-hashmap-performance.pdf](spikes/fpc-hashmap-performance.pdf) for the full benchmark analysis.
+
+**API compatibility:** All custom maps share the same core API as `TDictionary`: `Add`, `AddOrSetValue`, `TryGetValue`, `ContainsKey`, `Remove`, `Clear`. Iteration uses `Keys`, `Values`, or `ToArray` returning dynamic arrays (not enumerators), so use indexed `for` loops instead of `for...in`.
+
 ### Function and Method Names
 
 All `function`, `procedure`, `constructor`, and `destructor` names must be **PascalCase** — the first letter of each word is uppercase, no underscores. This applies to both free functions and class methods:

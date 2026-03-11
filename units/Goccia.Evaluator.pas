@@ -86,7 +86,7 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
-  OrderedMap,
+  OrderedStringMap,
   StringBuffer,
 
   Goccia.CallStack,
@@ -1459,7 +1459,7 @@ end;
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
-  Entry: TOrderedMap<TGocciaExpression>.TKeyValuePair;
+  Entry: TOrderedStringMap<TGocciaExpression>.TKeyValuePair;
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
@@ -1659,11 +1659,11 @@ var
   SuperClass: TGocciaClassValue;
   SuperClassValue: TGocciaValue;
   ClassValue: TGocciaClassValue;
-  MethodPair: TPair<string, TGocciaClassMethod>;
-  PropertyPair: TPair<string, TGocciaExpression>;
-  PropertyEntry: TOrderedMap<TGocciaExpression>.TKeyValuePair;
-  GetterPair: TPair<string, TGocciaGetterExpression>;
-  SetterPair: TPair<string, TGocciaSetterExpression>;
+  MethodArr: TOrderedStringMap<TGocciaClassMethod>.TKeyValueArray;
+  PropertyArr: TOrderedStringMap<TGocciaExpression>.TKeyValueArray;
+  PropertyEntry: TOrderedStringMap<TGocciaExpression>.TKeyValuePair;
+  GetterArr: TOrderedStringMap<TGocciaGetterExpression>.TKeyValueArray;
+  SetterArr: TOrderedStringMap<TGocciaSetterExpression>.TKeyValueArray;
   Method: TGocciaMethodValue;
   ComputedKey: TGocciaValue;
   PropertyValue: TGocciaValue;
@@ -1712,39 +1712,30 @@ begin
   ClassValue := TGocciaClassValue.Create(ClassName, SuperClass);
   ClassValue.Prototype.AssignProperty(PROP_CONSTRUCTOR, ClassValue);
 
-  // Handle methods
-  for MethodPair in AClassDef.Methods do
+  MethodArr := AClassDef.Methods.ToArray;
+  for I := 0 to Length(MethodArr) - 1 do
   begin
-    // Pass superclass directly to method creation
-    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, AContext, SuperClass));
+    Method := TGocciaMethodValue(EvaluateClassMethod(MethodArr[I].Value, AContext, SuperClass));
     Method.OwningClass := ClassValue;
 
-    if MethodPair.Value.IsStatic then
-    begin
-      // Static methods are added as properties on the class constructor itself
-      ClassValue.SetProperty(MethodPair.Key, Method);
-    end
+    if MethodArr[I].Value.IsStatic then
+      ClassValue.SetProperty(MethodArr[I].Key, Method)
     else
-    begin
-      // Instance methods are added to the class prototype
-      ClassValue.AddMethod(MethodPair.Key, Method);
-    end;
+      ClassValue.AddMethod(MethodArr[I].Key, Method);
   end;
 
-  // Handle static properties
-  for PropertyPair in AClassDef.StaticProperties do
+  PropertyArr := AClassDef.StaticProperties.ToArray;
+  for I := 0 to Length(PropertyArr) - 1 do
   begin
-    // Evaluate the property value and set it on the class constructor
-    PropertyValue := EvaluateExpression(PropertyPair.Value, AContext);
-    ClassValue.SetProperty(PropertyPair.Key, PropertyValue);
+    PropertyValue := EvaluateExpression(PropertyArr[I].Value, AContext);
+    ClassValue.SetProperty(PropertyArr[I].Key, PropertyValue);
   end;
 
-  // Handle private static properties
-  for PropertyPair in AClassDef.PrivateStaticProperties do
+  PropertyArr := AClassDef.PrivateStaticProperties.ToArray;
+  for I := 0 to Length(PropertyArr) - 1 do
   begin
-    // Evaluate the property value and set it on the class as private static property
-    PropertyValue := EvaluateExpression(PropertyPair.Value, AContext);
-    ClassValue.AddPrivateStaticProperty(PropertyPair.Key, PropertyValue);
+    PropertyValue := EvaluateExpression(PropertyArr[I].Value, AContext);
+    ClassValue.AddPrivateStaticProperty(PropertyArr[I].Key, PropertyValue);
   end;
 
   // Store instance property definitions on the class in declaration order
@@ -1773,48 +1764,48 @@ begin
     ClassValue.SetFieldOrder(FieldOrderEntries);
   end;
 
-  // Store private methods on the class
-  for MethodPair in AClassDef.PrivateMethods do
+  MethodArr := AClassDef.PrivateMethods.ToArray;
+  for I := 0 to Length(MethodArr) - 1 do
   begin
-    Method := TGocciaMethodValue(EvaluateClassMethod(MethodPair.Value, AContext, SuperClass));
+    Method := TGocciaMethodValue(EvaluateClassMethod(MethodArr[I].Value, AContext, SuperClass));
     Method.OwningClass := ClassValue;
-    ClassValue.AddPrivateMethod(MethodPair.Key, Method);
+    ClassValue.AddPrivateMethod(MethodArr[I].Key, Method);
   end;
 
   // Handle getters and setters
 
-  for GetterPair in AClassDef.Getters do
+  GetterArr := AClassDef.Getters.ToArray;
+  for I := 0 to Length(GetterArr) - 1 do
   begin
-    GetterFunction := TGocciaFunctionValue(EvaluateGetter(GetterPair.Value, AContext));
-    // Private getters are prefixed with '#' by the parser
-    if (Length(GetterPair.Key) > 0) and (GetterPair.Key[1] = '#') then
-      ClassValue.AddPrivateGetter(Copy(GetterPair.Key, 2, Length(GetterPair.Key) - 1), GetterFunction)
+    GetterFunction := TGocciaFunctionValue(EvaluateGetter(GetterArr[I].Value, AContext));
+    if (Length(GetterArr[I].Key) > 0) and (GetterArr[I].Key[1] = '#') then
+      ClassValue.AddPrivateGetter(Copy(GetterArr[I].Key, 2, Length(GetterArr[I].Key) - 1), GetterFunction)
     else
-      ClassValue.AddGetter(GetterPair.Key, GetterFunction);
+      ClassValue.AddGetter(GetterArr[I].Key, GetterFunction);
   end;
 
-  for SetterPair in AClassDef.Setters do
+  SetterArr := AClassDef.Setters.ToArray;
+  for I := 0 to Length(SetterArr) - 1 do
   begin
-    SetterFunction := TGocciaFunctionValue(EvaluateSetter(SetterPair.Value, AContext));
-    // Private setters are prefixed with '#' by the parser
-    if (Length(SetterPair.Key) > 0) and (SetterPair.Key[1] = '#') then
-      ClassValue.AddPrivateSetter(Copy(SetterPair.Key, 2, Length(SetterPair.Key) - 1), SetterFunction)
+    SetterFunction := TGocciaFunctionValue(EvaluateSetter(SetterArr[I].Value, AContext));
+    if (Length(SetterArr[I].Key) > 0) and (SetterArr[I].Key[1] = '#') then
+      ClassValue.AddPrivateSetter(Copy(SetterArr[I].Key, 2, Length(SetterArr[I].Key) - 1), SetterFunction)
     else
-      ClassValue.AddSetter(SetterPair.Key, SetterFunction);
+      ClassValue.AddSetter(SetterArr[I].Key, SetterFunction);
   end;
 
-  // Handle named static getters
-  for GetterPair in AClassDef.FStaticGetters do
+  GetterArr := AClassDef.FStaticGetters.ToArray;
+  for I := 0 to Length(GetterArr) - 1 do
   begin
-    GetterFunction := TGocciaFunctionValue(EvaluateGetter(GetterPair.Value, AContext));
-    ClassValue.AddStaticGetter(GetterPair.Key, GetterFunction);
+    GetterFunction := TGocciaFunctionValue(EvaluateGetter(GetterArr[I].Value, AContext));
+    ClassValue.AddStaticGetter(GetterArr[I].Key, GetterFunction);
   end;
 
-  // Handle named static setters
-  for SetterPair in AClassDef.FStaticSetters do
+  SetterArr := AClassDef.FStaticSetters.ToArray;
+  for I := 0 to Length(SetterArr) - 1 do
   begin
-    SetterFunction := TGocciaFunctionValue(EvaluateSetter(SetterPair.Value, AContext));
-    ClassValue.AddStaticSetter(SetterPair.Key, SetterFunction);
+    SetterFunction := TGocciaFunctionValue(EvaluateSetter(SetterArr[I].Value, AContext));
+    ClassValue.AddStaticSetter(SetterArr[I].Key, SetterFunction);
   end;
 
   // Handle computed accessors in source declaration order via FElements
@@ -2475,7 +2466,7 @@ end;
 procedure InitializePrivateInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
-  Entry: TOrderedMap<TGocciaExpression>.TKeyValuePair;
+  Entry: TOrderedStringMap<TGocciaExpression>.TKeyValuePair;
   I: Integer;
 begin
   for I := 0 to AClassValue.PrivateInstancePropertyDefs.Count - 1 do

@@ -59,9 +59,8 @@ type
 implementation
 
 uses
-  Generics.Collections,
-
   GarbageCollector.Generic,
+  HashMap,
 
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
@@ -72,7 +71,7 @@ uses
 
 var
   GNextSymbolId: Integer = 0;
-  GSymbolRegistry: TDictionary<Integer, TGocciaSymbolValue> = nil;
+  GSymbolRegistry: THashMap<Integer, TGocciaSymbolValue> = nil;
 
 function TGocciaSymbolValue.SymbolToString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -218,7 +217,7 @@ begin
   FId := GNextSymbolId;
   Inc(GNextSymbolId);
   if not Assigned(GSymbolRegistry) then
-    GSymbolRegistry := TDictionary<Integer, TGocciaSymbolValue>.Create;
+    GSymbolRegistry := THashMap<Integer, TGocciaSymbolValue>.Create;
   GSymbolRegistry.AddOrSetValue(FId, Self);
 end;
 

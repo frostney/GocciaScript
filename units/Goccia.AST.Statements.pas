@@ -8,7 +8,7 @@ uses
   Classes,
   Generics.Collections,
 
-  OrderedMap,
+  OrderedStringMap,
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
@@ -251,52 +251,52 @@ type
   public
     FName: string;
     FSuperClass: string;
-    FMethods: TDictionary<string, TGocciaClassMethod>;
-    FGetters: TDictionary<string, TGocciaGetterExpression>;
-    FSetters: TDictionary<string, TGocciaSetterExpression>;
-    FStaticGetters: TDictionary<string, TGocciaGetterExpression>;
-    FStaticSetters: TDictionary<string, TGocciaSetterExpression>;
+    FMethods: TOrderedStringMap<TGocciaClassMethod>;
+    FGetters: TOrderedStringMap<TGocciaGetterExpression>;
+    FSetters: TOrderedStringMap<TGocciaSetterExpression>;
+    FStaticGetters: TOrderedStringMap<TGocciaGetterExpression>;
+    FStaticSetters: TOrderedStringMap<TGocciaSetterExpression>;
     FComputedStaticGetters: array of TGocciaComputedGetterEntry;
     FComputedStaticSetters: array of TGocciaComputedSetterEntry;
     FComputedInstanceGetters: array of TGocciaComputedGetterEntry;
     FComputedInstanceSetters: array of TGocciaComputedSetterEntry;
-    FStaticProperties: TDictionary<string, TGocciaExpression>;
-    FInstanceProperties: TOrderedMap<TGocciaExpression>;
-    FPrivateInstanceProperties: TOrderedMap<TGocciaExpression>;
-    FPrivateStaticProperties: TDictionary<string, TGocciaExpression>;
-    FPrivateMethods: TDictionary<string, TGocciaClassMethod>;
+    FStaticProperties: TOrderedStringMap<TGocciaExpression>;
+    FInstanceProperties: TOrderedStringMap<TGocciaExpression>;
+    FPrivateInstanceProperties: TOrderedStringMap<TGocciaExpression>;
+    FPrivateStaticProperties: TOrderedStringMap<TGocciaExpression>;
+    FPrivateMethods: TOrderedStringMap<TGocciaClassMethod>;
     FGenericParams: string;
     FImplementsClause: string;
-    FInstancePropertyTypes: TDictionary<string, string>;
+    FInstancePropertyTypes: TOrderedStringMap<string>;
     FDecorators: TGocciaDecoratorList;
     FElements: array of TGocciaClassElement;
     FFieldOrder: array of TGocciaFieldOrderEntry;
 
     constructor Create(const AName, ASuperClass: string;
-      const AMethods: TDictionary<string, TGocciaClassMethod>;
-      const AGetters: TDictionary<string, TGocciaGetterExpression>;
-      const ASetters: TDictionary<string, TGocciaSetterExpression>;
-      const AStaticProperties: TDictionary<string, TGocciaExpression>;
-      const AInstanceProperties: TOrderedMap<TGocciaExpression>;
-      const APrivateInstanceProperties: TOrderedMap<TGocciaExpression>;
-      const APrivateMethods: TDictionary<string, TGocciaClassMethod> = nil;
-      const APrivateStaticProperties: TDictionary<string, TGocciaExpression> = nil);
+      const AMethods: TOrderedStringMap<TGocciaClassMethod>;
+      const AGetters: TOrderedStringMap<TGocciaGetterExpression>;
+      const ASetters: TOrderedStringMap<TGocciaSetterExpression>;
+      const AStaticProperties: TOrderedStringMap<TGocciaExpression>;
+      const AInstanceProperties: TOrderedStringMap<TGocciaExpression>;
+      const APrivateInstanceProperties: TOrderedStringMap<TGocciaExpression>;
+      const APrivateMethods: TOrderedStringMap<TGocciaClassMethod> = nil;
+      const APrivateStaticProperties: TOrderedStringMap<TGocciaExpression> = nil);
     destructor Destroy; override;
     property Name: string read FName;
     property SuperClass: string read FSuperClass;
-    property Methods: TDictionary<string, TGocciaClassMethod> read FMethods;
-    property Getters: TDictionary<string, TGocciaGetterExpression> read FGetters;
-    property Setters: TDictionary<string, TGocciaSetterExpression> read FSetters;
-    property StaticGetters: TDictionary<string, TGocciaGetterExpression> read FStaticGetters;
-    property StaticSetters: TDictionary<string, TGocciaSetterExpression> read FStaticSetters;
-    property StaticProperties: TDictionary<string, TGocciaExpression> read FStaticProperties;
-    property InstanceProperties: TOrderedMap<TGocciaExpression> read FInstanceProperties;
-    property PrivateInstanceProperties: TOrderedMap<TGocciaExpression> read FPrivateInstanceProperties;
-    property PrivateStaticProperties: TDictionary<string, TGocciaExpression> read FPrivateStaticProperties;
-    property PrivateMethods: TDictionary<string, TGocciaClassMethod> read FPrivateMethods;
+    property Methods: TOrderedStringMap<TGocciaClassMethod> read FMethods;
+    property Getters: TOrderedStringMap<TGocciaGetterExpression> read FGetters;
+    property Setters: TOrderedStringMap<TGocciaSetterExpression> read FSetters;
+    property StaticGetters: TOrderedStringMap<TGocciaGetterExpression> read FStaticGetters;
+    property StaticSetters: TOrderedStringMap<TGocciaSetterExpression> read FStaticSetters;
+    property StaticProperties: TOrderedStringMap<TGocciaExpression> read FStaticProperties;
+    property InstanceProperties: TOrderedStringMap<TGocciaExpression> read FInstanceProperties;
+    property PrivateInstanceProperties: TOrderedStringMap<TGocciaExpression> read FPrivateInstanceProperties;
+    property PrivateStaticProperties: TOrderedStringMap<TGocciaExpression> read FPrivateStaticProperties;
+    property PrivateMethods: TOrderedStringMap<TGocciaClassMethod> read FPrivateMethods;
     property GenericParams: string read FGenericParams write FGenericParams;
     property ImplementsClause: string read FImplementsClause write FImplementsClause;
-    property InstancePropertyTypes: TDictionary<string, string> read FInstancePropertyTypes;
+    property InstancePropertyTypes: TOrderedStringMap<string> read FInstancePropertyTypes;
     property Decorators: TGocciaDecoratorList read FDecorators write FDecorators;
   end;
 
@@ -351,24 +351,24 @@ type
   // Modules
   TGocciaImportDeclaration = class(TGocciaStatement)
   private
-    FImports: TDictionary<string, string>; // local name -> imported name
+    FImports: TOrderedStringMap<string>; // local name -> imported name
     FModulePath: string;
   public
-    constructor Create(const AImports: TDictionary<string, string>;
+    constructor Create(const AImports: TOrderedStringMap<string>;
       const AModulePath: string; const ALine, AColumn: Integer);
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
-    property Imports: TDictionary<string, string> read FImports;
+    property Imports: TOrderedStringMap<string> read FImports;
     property ModulePath: string read FModulePath;
   end;
 
   TGocciaExportDeclaration = class(TGocciaStatement)
   private
-    FExportsTable: TDictionary<string, string>; // exported name -> local name
+    FExportsTable: TOrderedStringMap<string>; // exported name -> local name
   public
-    constructor Create(const AExportsTable: TDictionary<string, string>;
+    constructor Create(const AExportsTable: TOrderedStringMap<string>;
       const ALine, AColumn: Integer);
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
-    property ExportsTable: TDictionary<string, string> read FExportsTable;
+    property ExportsTable: TOrderedStringMap<string> read FExportsTable;
   end;
 
   TGocciaExportVariableDeclaration = class(TGocciaStatement)
@@ -383,13 +383,13 @@ type
 
   TGocciaReExportDeclaration = class(TGocciaStatement)
   private
-    FExportsTable: TDictionary<string, string>; // exported name -> source name
+    FExportsTable: TOrderedStringMap<string>; // exported name -> source name
     FModulePath: string;
   public
-    constructor Create(const AExportsTable: TDictionary<string, string>;
+    constructor Create(const AExportsTable: TOrderedStringMap<string>;
       const AModulePath: string; const ALine, AColumn: Integer);
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
-    property ExportsTable: TDictionary<string, string> read FExportsTable;
+    property ExportsTable: TOrderedStringMap<string> read FExportsTable;
     property ModulePath: string read FModulePath;
   end;
 
@@ -481,22 +481,22 @@ uses
   { TGocciaClassDefinition }
 
   constructor TGocciaClassDefinition.Create(const AName, ASuperClass: string;
-    const AMethods: TDictionary<string, TGocciaClassMethod>;
-    const AGetters: TDictionary<string, TGocciaGetterExpression>;
-    const ASetters: TDictionary<string, TGocciaSetterExpression>;
-    const AStaticProperties: TDictionary<string, TGocciaExpression>;
-    const AInstanceProperties: TOrderedMap<TGocciaExpression>;
-    const APrivateInstanceProperties: TOrderedMap<TGocciaExpression>;
-    const APrivateMethods: TDictionary<string, TGocciaClassMethod> = nil;
-    const APrivateStaticProperties: TDictionary<string, TGocciaExpression> = nil);
+    const AMethods: TOrderedStringMap<TGocciaClassMethod>;
+    const AGetters: TOrderedStringMap<TGocciaGetterExpression>;
+    const ASetters: TOrderedStringMap<TGocciaSetterExpression>;
+    const AStaticProperties: TOrderedStringMap<TGocciaExpression>;
+    const AInstanceProperties: TOrderedStringMap<TGocciaExpression>;
+    const APrivateInstanceProperties: TOrderedStringMap<TGocciaExpression>;
+    const APrivateMethods: TOrderedStringMap<TGocciaClassMethod> = nil;
+    const APrivateStaticProperties: TOrderedStringMap<TGocciaExpression> = nil);
   begin
     FName := AName;
     FSuperClass := ASuperClass;
     FMethods := AMethods;
     FGetters := AGetters;
     FSetters := ASetters;
-    FStaticGetters := TDictionary<string, TGocciaGetterExpression>.Create;
-    FStaticSetters := TDictionary<string, TGocciaSetterExpression>.Create;
+    FStaticGetters := TOrderedStringMap<TGocciaGetterExpression>.Create;
+    FStaticSetters := TOrderedStringMap<TGocciaSetterExpression>.Create;
     SetLength(FComputedStaticGetters, 0);
     SetLength(FComputedStaticSetters, 0);
     SetLength(FComputedInstanceGetters, 0);
@@ -508,14 +508,14 @@ uses
     if Assigned(APrivateMethods) then
       FPrivateMethods := APrivateMethods
     else
-      FPrivateMethods := TDictionary<string, TGocciaClassMethod>.Create;
+      FPrivateMethods := TOrderedStringMap<TGocciaClassMethod>.Create;
 
     if Assigned(APrivateStaticProperties) then
       FPrivateStaticProperties := APrivateStaticProperties
     else
-      FPrivateStaticProperties := TDictionary<string, TGocciaExpression>.Create;
+      FPrivateStaticProperties := TOrderedStringMap<TGocciaExpression>.Create;
 
-    FInstancePropertyTypes := TDictionary<string, string>.Create;
+    FInstancePropertyTypes := TOrderedStringMap<string>.Create;
   end;
 
   destructor TGocciaClassDefinition.Destroy;
@@ -668,7 +668,7 @@ uses
 
   { TGocciaImportDeclaration }
 
-  constructor TGocciaImportDeclaration.Create(const AImports: TDictionary<string, string>;
+  constructor TGocciaImportDeclaration.Create(const AImports: TOrderedStringMap<string>;
     const AModulePath: string; const ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
@@ -678,7 +678,7 @@ uses
 
   { TGocciaExportDeclaration }
 
-  constructor TGocciaExportDeclaration.Create(const AExportsTable: TDictionary<string, string>;
+  constructor TGocciaExportDeclaration.Create(const AExportsTable: TOrderedStringMap<string>;
     const ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
@@ -696,7 +696,7 @@ uses
 
   { TGocciaReExportDeclaration }
 
-  constructor TGocciaReExportDeclaration.Create(const AExportsTable: TDictionary<string, string>;
+  constructor TGocciaReExportDeclaration.Create(const AExportsTable: TOrderedStringMap<string>;
     const AModulePath: string; const ALine, AColumn: Integer);
   begin
     inherited Create(ALine, AColumn);
@@ -889,21 +889,23 @@ uses
   function TGocciaImportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   var
     Module: TGocciaModule;
-    ImportPair: TPair<string, string>;
+    ImportArr: TOrderedStringMap<string>.TKeyValueArray;
+    I: Integer;
     Value: TGocciaValue;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
     Module := AContext.LoadModule(ModulePath, AContext.CurrentFilePath);
-    for ImportPair in Imports do
+    ImportArr := Imports.ToArray;
+    for I := 0 to Length(ImportArr) - 1 do
     begin
-      if Module.ExportsTable.TryGetValue(ImportPair.Value, Value) then
+      if Module.ExportsTable.TryGetValue(ImportArr[I].Value, Value) then
       begin
-        AContext.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtLet);
+        AContext.Scope.DefineLexicalBinding(ImportArr[I].Key, Value, dtLet);
       end
       else
       begin
         AContext.OnError(Format('Module "%s" has no export named "%s"',
-          [ModulePath, ImportPair.Value]), Line, Column);
+          [ModulePath, ImportArr[I].Value]), Line, Column);
       end;
     end;
   end;
