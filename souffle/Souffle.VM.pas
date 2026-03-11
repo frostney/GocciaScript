@@ -1904,7 +1904,10 @@ begin
           FRegisters[Base + B] := SouffleBoolean(False);
         end
         else
+        begin
+          FRegisters[Base + A] := SouffleNil;
           FRegisters[Base + B] := SouffleBoolean(True);
+        end;
       end
       else if SouffleIsReference(FRegisters[Base + C]) and
          Assigned(FRegisters[Base + C].AsReference) and
@@ -1918,7 +1921,10 @@ begin
           FRegisters[Base + B] := SouffleBoolean(False);
         end
         else
+        begin
+          FRegisters[Base + A] := SouffleNil;
           FRegisters[Base + B] := SouffleBoolean(True);
+        end;
       end
       else
       begin

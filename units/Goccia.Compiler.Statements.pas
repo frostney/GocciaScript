@@ -789,6 +789,8 @@ begin
           ElemType := TypeAnnotationToLocalType(ElemAnnotation);
           if ElemType <> sltUntyped then
           begin
+            EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Slot,
+              UInt8(Ord(ElemType)), 0));
             ACtx.Scope.SetLocalTypeHint(BindLocalIdx, ElemType);
             ACtx.Scope.SetLocalStrictlyTyped(BindLocalIdx, True);
             ACtx.Template.SetLocalType(Slot, ElemType);
