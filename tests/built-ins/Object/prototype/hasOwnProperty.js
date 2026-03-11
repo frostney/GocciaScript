@@ -82,4 +82,18 @@ describe('Object.prototype.hasOwnProperty', () => {
     expect(f.hasOwnProperty('a')).toBe(true);
     expect(f.hasOwnProperty('method')).toBe(false);
   });
+
+  test('works with symbol keys', () => {
+    const sym = Symbol("own");
+    const other = Symbol("missing");
+    const obj = { [sym]: "value" };
+    expect(obj.hasOwnProperty(sym)).toBe(true);
+    expect(obj.hasOwnProperty(other)).toBe(false);
+  });
+
+  test('works with well-known symbol keys', () => {
+    const obj = { [Symbol.toStringTag]: "Custom" };
+    expect(obj.hasOwnProperty(Symbol.toStringTag)).toBe(true);
+    expect(obj.hasOwnProperty(Symbol.iterator)).toBe(false);
+  });
 });

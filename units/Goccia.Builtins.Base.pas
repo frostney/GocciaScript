@@ -35,7 +35,9 @@ constructor TGocciaBuiltin.Create(const AName: string; const AScope: TGocciaScop
 begin
   FName := AName;
   FScope := AScope;
-  FBuiltinObject := TGocciaObjectValue.Create;
+  if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
+    TGocciaObjectValue.InitializeSharedPrototype;
+  FBuiltinObject := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   FThrowError := AThrowError;
 end;
 

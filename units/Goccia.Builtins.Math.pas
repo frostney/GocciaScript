@@ -75,6 +75,7 @@ uses
   Goccia.Values.Iterator.Generic,
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
 { TGocciaMath }
@@ -131,6 +132,13 @@ begin
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathLog2, 'log2', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathClz32, 'clz32', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathSumPrecise, 'sumPrecise', 1));
+
+  // ES2026 §21.3.1.15 Math [ @@toStringTag ]
+  FBuiltinObject.DefineSymbolProperty(
+    TGocciaSymbolValue.WellKnownToStringTag,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create('Math'),
+      [pfConfigurable]));
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;

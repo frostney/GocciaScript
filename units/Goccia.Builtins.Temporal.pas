@@ -73,6 +73,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue,
   Goccia.Values.TemporalDuration,
   Goccia.Values.TemporalInstant,
   Goccia.Values.TemporalPlainDate,
@@ -86,7 +87,7 @@ constructor TGocciaTemporalBuiltin.Create(const AName: string; const AScope: TGo
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FTemporalNamespace := TGocciaObjectValue.Create;
+  FTemporalNamespace := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   TGarbageCollector.Instance.AddTempRoot(FTemporalNamespace);
   try
     RegisterDuration;
@@ -95,6 +96,13 @@ begin
     RegisterPlainTime;
     RegisterPlainDateTime;
     RegisterNow;
+
+    // TC39 Temporal §1.1 Temporal [ @@toStringTag ]
+    FTemporalNamespace.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create('Temporal'),
+        [pfConfigurable]));
 
     AScope.DefineLexicalBinding(AName, FTemporalNamespace, dtLet);
   finally
@@ -761,7 +769,7 @@ procedure TGocciaTemporalBuiltin.RegisterNow;
 var
   NowObj: TGocciaObjectValue;
 begin
-  NowObj := TGocciaObjectValue.Create;
+  NowObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowInstant, 'instant', 0));
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowPlainDateISO, 'plainDateISO', 0));
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowPlainTimeISO, 'plainTimeISO', 0));

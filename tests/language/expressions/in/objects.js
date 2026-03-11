@@ -79,3 +79,19 @@ test("in operator with Symbol.for keys", () => {
   expect(Symbol.for("global") in obj).toBe(true);
   expect(Symbol("global") in obj).toBe(false);
 });
+
+test("in operator with getter and setter properties", () => {
+  const obj = {
+    get readOnly() { return 42; },
+    set writeOnly(_v) {},
+    get readWrite() { return 1; },
+    set readWrite(_v) {},
+    data: "hello",
+  };
+
+  expect("readOnly" in obj).toBe(true);
+  expect("writeOnly" in obj).toBe(true);
+  expect("readWrite" in obj).toBe(true);
+  expect("data" in obj).toBe(true);
+  expect("missing" in obj).toBe(false);
+});

@@ -351,6 +351,8 @@ type
       const AClassDef: TGocciaClassDefinition;
       const ALine, AColumn: Integer): Integer;
 
+    function TryInvokeGetter(const AGetterVal, AReceiver: TSouffleValue;
+      out AResult: TSouffleValue): Boolean;
     function UnwrapToGocciaValue(const AValue: TSouffleValue): TGocciaValue;
     function ToSouffleValue(const AValue: TGocciaValue): TSouffleValue;
 
@@ -1160,7 +1162,7 @@ var
   SymPropKey: string;
   Rec: TSouffleRecord;
   Bp: TSouffleBlueprint;
-  GetterVal: TSouffleValue;
+  GetterVal, InvokeResult, DirectVal: TSouffleValue;
 begin
   Result := inherited GetSymbolProperty(ASymbol);
   if Assigned(Result) and not (Result is TGocciaUndefinedLiteralValue) then
@@ -1171,28 +1173,20 @@ begin
     SymPropKey := '@@sym:' + IntToStr(ASymbol.Id);
     Rec := TSouffleRecord(FTarget);
     if Rec.HasGetters and Rec.Getters.Get(SymPropKey, GetterVal) then
-    begin
-      if SouffleIsReference(GetterVal) and
-         (GetterVal.AsReference is TSouffleClosure) then
-        Exit(FRuntime.UnwrapToGocciaValue(
-          FRuntime.FVM.ExecuteFunction(
-            TSouffleClosure(GetterVal.AsReference),
-            [SouffleReference(FTarget)])));
-    end;
+      if FRuntime.TryInvokeGetter(GetterVal, SouffleReference(FTarget),
+           InvokeResult) then
+        Exit(FRuntime.UnwrapToGocciaValue(InvokeResult));
+    if Rec.Get(SymPropKey, DirectVal) then
+      Exit(FRuntime.UnwrapToGocciaValue(DirectVal));
     if Assigned(Rec.Blueprint) then
     begin
       Bp := Rec.Blueprint;
       while Assigned(Bp) do
       begin
         if Bp.HasGetters and Bp.Getters.Get(SymPropKey, GetterVal) then
-        begin
-          if SouffleIsReference(GetterVal) and
-             (GetterVal.AsReference is TSouffleClosure) then
-            Exit(FRuntime.UnwrapToGocciaValue(
-              FRuntime.FVM.ExecuteFunction(
-                TSouffleClosure(GetterVal.AsReference),
-                [SouffleReference(FTarget)])));
-        end;
+          if FRuntime.TryInvokeGetter(GetterVal, SouffleReference(FTarget),
+               InvokeResult) then
+            Exit(FRuntime.UnwrapToGocciaValue(InvokeResult));
         Bp := Bp.SuperBlueprint;
       end;
     end;
@@ -1554,6 +1548,7 @@ function FindRecordMethod(const ARec: TSouffleRecord;
   const AName: string; out AMethod: TSouffleValue): Boolean;
 var
   Bp: TSouffleBlueprint;
+  Walk: TSouffleRecord;
 begin
   if ARec.Get(AName, AMethod) then
     Exit(True);
@@ -1566,6 +1561,13 @@ begin
         Exit(True);
       Bp := Bp.SuperBlueprint;
     end;
+  end;
+  Walk := ARec;
+  while Assigned(Walk.Delegate) and (Walk.Delegate is TSouffleRecord) do
+  begin
+    Walk := TSouffleRecord(Walk.Delegate);
+    if Walk.Get(AName, AMethod) then
+      Exit(True);
   end;
   Result := False;
 end;
@@ -1670,6 +1672,33 @@ function ConvertSouffleArrayToGocciaArray(
 begin
   Result := TGocciaArrayValue.Create;
   ConvertSouffleArrayInto(ARuntime, AArr, Result);
+end;
+
+function TGocciaRuntimeOperations.TryInvokeGetter(
+  const AGetterVal, AReceiver: TSouffleValue;
+  out AResult: TSouffleValue): Boolean;
+var
+  Ref: TSouffleHeapObject;
+begin
+  Result := False;
+  if not SouffleIsReference(AGetterVal) then
+    Exit;
+  Ref := AGetterVal.AsReference;
+  if Ref is TSouffleClosure then
+  begin
+    AResult := FVM.ExecuteFunction(TSouffleClosure(Ref), [AReceiver]);
+    Result := True;
+  end
+  else if Ref is TSouffleNativeFunction then
+  begin
+    AResult := TSouffleNativeFunction(Ref).Invoke(AReceiver, nil, 0);
+    Result := True;
+  end
+  else if Ref is TGocciaBridgedFunction then
+  begin
+    AResult := TGocciaBridgedFunction(Ref).Invoke(AReceiver, nil, 0);
+    Result := True;
+  end;
 end;
 
 function TGocciaRuntimeOperations.UnwrapToGocciaValue(
@@ -1923,6 +1952,13 @@ begin
             Exit(MethodResult);
         Bp := Bp.SuperBlueprint;
       end;
+    end;
+    while Assigned(Rec.Delegate) and (Rec.Delegate is TSouffleRecord) do
+    begin
+      Rec := TSouffleRecord(Rec.Delegate);
+      if Rec.Get(PROP_TO_STRING, MethodVal) then
+        if InvokePrimitiveMethod(ARuntime, MethodVal, A, MethodResult) then
+          Exit(MethodResult);
     end;
     Exit(SouffleString('[object Object]'));
   end;
@@ -2475,7 +2511,9 @@ begin
     Rec := TSouffleRecord(AObject.AsReference);
     while Assigned(Rec) do
     begin
-      if Rec.Has(KeyStr) then
+      if Rec.Has(KeyStr) or
+         (Rec.HasGetters and Rec.Getters.Has(KeyStr)) or
+         (Rec.HasSetters and Rec.Setters.Has(KeyStr)) then
         Exit(SouffleBoolean(True));
       if Assigned(Rec.Blueprint) and Rec.Blueprint.Methods.Has(KeyStr) then
         Exit(SouffleBoolean(True));
@@ -2594,10 +2632,8 @@ begin
         Rec := TSouffleRecord(AObject.AsReference);
         if Rec.HasGetters and Rec.Getters.Get(AKey, GetterVal) then
         begin
-          if SouffleIsReference(GetterVal) and
-             (GetterVal.AsReference is TSouffleClosure) then
-            Exit(FVM.ExecuteFunction(
-              TSouffleClosure(GetterVal.AsReference), [AObject]));
+          if TryInvokeGetter(GetterVal, AObject, Result) then
+            Exit;
           Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
         end;
         if Rec.Get(AKey, Result) then
@@ -2609,10 +2645,8 @@ begin
           begin
             if Bp.HasGetters and Bp.Getters.Get(AKey, GetterVal) then
             begin
-              if SouffleIsReference(GetterVal) and
-                 (GetterVal.AsReference is TSouffleClosure) then
-                Exit(FVM.ExecuteFunction(
-                  TSouffleClosure(GetterVal.AsReference), [AObject]));
+              if TryInvokeGetter(GetterVal, AObject, Result) then
+                Exit;
               Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
             end;
             if Bp.Methods.Get(AKey, Result) then
@@ -2625,10 +2659,8 @@ begin
           Rec := TSouffleRecord(Rec.Delegate);
           if Rec.HasGetters and Rec.Getters.Get(AKey, GetterVal) then
           begin
-            if SouffleIsReference(GetterVal) and
-               (GetterVal.AsReference is TSouffleClosure) then
-              Exit(FVM.ExecuteFunction(
-                TSouffleClosure(GetterVal.AsReference), [AObject]));
+            if TryInvokeGetter(GetterVal, AObject, Result) then
+              Exit;
             Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
           end;
           if Rec.Get(AKey, Result) then
@@ -2645,10 +2677,8 @@ begin
 
         if Bp.HasStaticGetters and Bp.StaticGetters.Get(AKey, GetterVal) then
         begin
-          if SouffleIsReference(GetterVal) and
-             (GetterVal.AsReference is TSouffleClosure) then
-            Exit(FVM.ExecuteFunction(
-              TSouffleClosure(GetterVal.AsReference), [AObject]));
+          if TryInvokeGetter(GetterVal, AObject, Result) then
+            Exit;
           Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
         end;
 
@@ -2664,10 +2694,8 @@ begin
         begin
           if Bp.HasStaticGetters and Bp.StaticGetters.Get(AKey, GetterVal) then
           begin
-            if SouffleIsReference(GetterVal) and
-               (GetterVal.AsReference is TSouffleClosure) then
-              Exit(FVM.ExecuteFunction(
-                TSouffleClosure(GetterVal.AsReference), [AObject]));
+            if TryInvokeGetter(GetterVal, AObject, Result) then
+              Exit;
             Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
           end;
           if Bp.HasStaticFields and Bp.StaticFields.Get(AKey, Result) then
@@ -4269,7 +4297,7 @@ var
   SymPropKey: string;
   Rec: TSouffleRecord;
   Bp: TSouffleBlueprint;
-  GetterVal: TSouffleValue;
+  GetterVal, DirectVal: TSouffleValue;
 begin
   AFound := False;
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
@@ -4284,10 +4312,14 @@ begin
     if Rec.HasGetters and Rec.Getters.Get(SymPropKey, GetterVal) then
     begin
       AFound := True;
-      if SouffleIsReference(GetterVal) and
-         (GetterVal.AsReference is TSouffleClosure) then
-        Result := FVM.ExecuteFunction(
-          TSouffleClosure(GetterVal.AsReference), [AObject]);
+      if TryInvokeGetter(GetterVal, AObject, Result) then
+        Exit;
+      Exit;
+    end;
+    if Rec.Get(SymPropKey, DirectVal) then
+    begin
+      AFound := True;
+      Result := DirectVal;
       Exit;
     end;
     if Assigned(Rec.Blueprint) then
@@ -4298,10 +4330,7 @@ begin
         if Bp.HasGetters and Bp.Getters.Get(SymPropKey, GetterVal) then
         begin
           AFound := True;
-          if SouffleIsReference(GetterVal) and
-             (GetterVal.AsReference is TSouffleClosure) then
-            Result := FVM.ExecuteFunction(
-              TSouffleClosure(GetterVal.AsReference), [AObject]);
+          TryInvokeGetter(GetterVal, AObject, Result);
           Exit;
         end;
         Bp := Bp.SuperBlueprint;
@@ -4314,10 +4343,7 @@ begin
     if Bp.HasStaticGetters and Bp.StaticGetters.Get(SymPropKey, GetterVal) then
     begin
       AFound := True;
-      if SouffleIsReference(GetterVal) and
-         (GetterVal.AsReference is TSouffleClosure) then
-        Result := FVM.ExecuteFunction(
-          TSouffleClosure(GetterVal.AsReference), [AObject]);
+      TryInvokeGetter(GetterVal, AObject, Result);
       Exit;
     end;
     Bp := Bp.SuperBlueprint;
@@ -4326,10 +4352,7 @@ begin
       if Bp.HasStaticGetters and Bp.StaticGetters.Get(SymPropKey, GetterVal) then
       begin
         AFound := True;
-        if SouffleIsReference(GetterVal) and
-           (GetterVal.AsReference is TSouffleClosure) then
-          Result := FVM.ExecuteFunction(
-            TSouffleClosure(GetterVal.AsReference), [AObject]);
+        TryInvokeGetter(GetterVal, AObject, Result);
         Exit;
       end;
       Bp := Bp.SuperBlueprint;
@@ -6072,18 +6095,40 @@ var
   Rec: TSouffleRecord;
   Key: string;
   GocciaObj: TGocciaValue;
+  IsSymbol: Boolean;
+  SymVal: TGocciaSymbolValue;
 begin
   Result := SouffleBoolean(False);
   if not SouffleIsReference(AReceiver) or not Assigned(AReceiver.AsReference) then
     Exit;
+  IsSymbol := False;
+  SymVal := nil;
   if AArgCount < 1 then
     Key := 'undefined'
+  else if SouffleIsReference(AArgs^) and Assigned(AArgs^.AsReference) and
+     (AArgs^.AsReference is TGocciaWrappedValue) and
+     (TGocciaWrappedValue(AArgs^.AsReference).Value is TGocciaSymbolValue) then
+  begin
+    SymVal := TGocciaSymbolValue(TGocciaWrappedValue(AArgs^.AsReference).Value);
+    Key := '@@sym:' + IntToStr(SymVal.Id);
+    IsSymbol := True;
+  end
   else
     Key := GNativeArrayJoinRuntime.CoerceToString(AArgs^);
   if AReceiver.AsReference is TSouffleRecord then
   begin
     Rec := TSouffleRecord(AReceiver.AsReference);
-    Result := SouffleBoolean(Rec.Has(Key));
+    if Rec.Has(Key) or
+       (Rec.HasGetters and Rec.Getters.Has(Key)) or
+       (Rec.HasSetters and Rec.Setters.Has(Key)) then
+      Exit(SouffleBoolean(True));
+    if IsSymbol then
+    begin
+      GocciaObj := GNativeArrayJoinRuntime.UnwrapToGocciaValue(AReceiver);
+      if GocciaObj is TGocciaObjectValue then
+        Exit(SouffleBoolean(
+          TGocciaObjectValue(GocciaObj).HasSymbolProperty(SymVal)));
+    end;
   end
   else if AReceiver.AsReference is TGocciaWrappedValue then
   begin
@@ -6095,8 +6140,16 @@ end;
 
 function NativeRecordToString(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TagValue: TSouffleValue;
+  Found: Boolean;
 begin
-  Result := SouffleString('[object Object]');
+  TagValue := GNativeArrayJoinRuntime.GetSymbolOnNativeObject(
+    AReceiver, TGocciaSymbolValue.WellKnownToStringTag, Found);
+  if Found and SouffleIsStringValue(TagValue) then
+    Result := SouffleString('[object ' + SouffleGetString(TagValue) + ']')
+  else
+    Result := SouffleString('[object Object]');
 end;
 
 function NativeRecordValueOf(const AReceiver: TSouffleValue;
@@ -7297,6 +7350,68 @@ begin
   end;
 end;
 
+function NativePerformanceToStringTag(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleString('Performance');
+end;
+
+function BuildPerformanceRecord(const APerformance: TGocciaObjectValue;
+  const ARuntime: TGocciaRuntimeOperations): TSouffleRecord;
+var
+  GC: TGarbageCollector;
+  FnVal, GetterVal: TGocciaValue;
+  NativeFn: TGocciaNativeFunctionValue;
+  Descriptor: TGocciaPropertyDescriptor;
+  GetterFn: TSouffleNativeFunction;
+
+  procedure AddMethod(const AName: string);
+  var
+    BridgedFn: TGocciaBridgedFunction;
+  begin
+    FnVal := APerformance.GetProperty(AName);
+    if not (FnVal is TGocciaNativeFunctionValue) then
+      Exit;
+    BridgedFn := TGocciaBridgedFunction.Create(
+      TGocciaNativeFunctionValue(FnVal), ARuntime);
+    if Assigned(GC) then
+      GC.AllocateObject(BridgedFn);
+    Result.PutWithFlags(AName, SouffleReference(BridgedFn),
+      SOUFFLE_PROP_WRITABLE or SOUFFLE_PROP_CONFIGURABLE);
+  end;
+
+begin
+  GC := TGarbageCollector.Instance;
+  Result := TSouffleRecord.Create(2);
+  if Assigned(ARuntime.VM) then
+    Result.Delegate := ARuntime.VM.RecordDelegate;
+  if Assigned(GC) then
+    GC.AllocateObject(Result);
+
+  AddMethod(PROP_NOW);
+  AddMethod(PROP_TO_JSON);
+
+  Descriptor := APerformance.GetOwnPropertyDescriptor(PROP_TIME_ORIGIN);
+  if (Descriptor is TGocciaPropertyDescriptorAccessor) then
+  begin
+    GetterVal := TGocciaPropertyDescriptorAccessor(Descriptor).Getter;
+    if GetterVal is TGocciaNativeFunctionValue then
+    begin
+      NativeFn := TGocciaNativeFunctionValue(GetterVal);
+      Result.Getters.PutWithFlags(PROP_TIME_ORIGIN,
+        ARuntime.ToSouffleValue(NativeFn), SOUFFLE_PROP_CONFIGURABLE);
+    end;
+  end;
+
+  GetterFn := TSouffleNativeFunction.Create(
+    'get [Symbol.toStringTag]', 0, @NativePerformanceToStringTag);
+  if Assigned(GC) then
+    GC.AllocateObject(GetterFn);
+  Result.Getters.PutWithFlags(
+    '@@sym:' + IntToStr(TGocciaSymbolValue.WellKnownToStringTag.Id),
+    SouffleReference(GetterFn), SOUFFLE_PROP_CONFIGURABLE);
+end;
+
 procedure TGocciaRuntimeOperations.RegisterTestNatives;
 const
   DESCRIBE_SUB_METHODS: array[0..2] of TSouffleMethodEntry = (
@@ -7363,13 +7478,15 @@ function ConvertObjectToNativeRecord(
 var
   Names: TArray<string>;
   I: Integer;
-  PropVal: TGocciaValue;
+  PropVal, TagVal: TGocciaValue;
   BridgedFn: TGocciaBridgedFunction;
   GC: TGarbageCollector;
 begin
   GC := TGarbageCollector.Instance;
   Names := AObj.GetOwnPropertyNames;
   Result := TSouffleRecord.Create(Length(Names));
+  if Assigned(ARuntime.VM) then
+    Result.Delegate := ARuntime.VM.RecordDelegate;
   if Assigned(GC) then GC.AllocateObject(Result);
   for I := 0 to High(Names) do
   begin
@@ -7385,6 +7502,11 @@ begin
     else
       Result.Put(Names[I], ARuntime.ToSouffleValue(PropVal));
   end;
+
+  TagVal := AObj.GetSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag);
+  if Assigned(TagVal) and (TagVal is TGocciaStringLiteralValue) then
+    Result.Put('@@sym:' + IntToStr(TGocciaSymbolValue.WellKnownToStringTag.Id),
+      SouffleString(TGocciaStringLiteralValue(TagVal).Value));
 end;
 
 procedure TGocciaRuntimeOperations.RegisterNativeBuiltins;
@@ -7413,6 +7535,16 @@ begin
 
     Wrapped := TGocciaWrappedValue(Val.AsReference);
     GocciaVal := Wrapped.Value;
+
+    if Key = 'performance' then
+    begin
+      if GocciaVal is TGocciaObjectValue then
+      begin
+        Rec := BuildPerformanceRecord(TGocciaObjectValue(GocciaVal), Self);
+        FGlobals.AddOrSetValue(Key, SouffleReference(Rec));
+      end;
+      Continue;
+    end;
 
     if GocciaVal is TGocciaNativeFunctionValue then
     begin
@@ -7446,6 +7578,8 @@ begin
      Assigned(GlobalThisVal.AsReference) then
   begin
     GlobalThisRec := TSouffleRecord.Create(FGlobals.Count);
+    if Assigned(FVM) then
+      GlobalThisRec.Delegate := FVM.RecordDelegate;
     if Assigned(GC) then GC.AllocateObject(GlobalThisRec);
     for Pair in FGlobals do
       GlobalThisRec.Put(Pair.Key, Pair.Value);

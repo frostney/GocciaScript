@@ -119,6 +119,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | JSON Utilities | `Goccia.JSON.pas` | Standalone JSON ↔ `TGocciaValue` parser and stringifier |
 | Version | `Goccia.Version.pas` | Git-derived version and commit hash, resolved once at startup via `RunCommand` |
 | Temporal Utilities | `Goccia.Temporal.Utils.pas` | ISO 8601 date math helpers, parsing, formatting |
+| Performance Built-in | `Goccia.Builtins.Performance.pas` | High Resolution Time API: `performance.now()`, `performance.timeOrigin`, `performance.toJSON()` |
 | Temporal Built-in | `Goccia.Builtins.Temporal.pas` | Temporal namespace, constructors, static methods, Temporal.Now |
 | File Extensions | `Goccia.FileExtensions.pas` | Centralized file extension constants (`EXT_JS`, `EXT_MJS`, `EXT_SBC`, etc.), `ScriptExtensions` array, `IsScriptExtension`/`IsJSXNativeExtension` helpers |
 | Module Resolver | `Goccia.Modules.Resolver.pas` | Extensionless imports, path aliases, virtual `Resolve` for custom resolvers |
@@ -491,7 +492,7 @@ Built-ins are registered by the engine via `TGocciaGlobalBuiltins` flags:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
- ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggTemporal, ggJSX, ggArrayBuffer];
+ ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
 ```
 
 The TestRunner adds `ggTestAssertions` for the test framework (`describe`, `test`, `expect`).
