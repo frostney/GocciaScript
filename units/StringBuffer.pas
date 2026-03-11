@@ -12,24 +12,24 @@ type
     FCap: Integer;
     function GetLength: Integer; inline;
   public
-    class function Create(ACapacity: Integer = 64): TStringBuffer; static; inline;
+    class function Create(const ACapacity: Integer = 64): TStringBuffer; static; inline;
     procedure Append(const S: AnsiString); inline;
-    procedure AppendChar(C: AnsiChar); inline;
+    procedure AppendChar(const C: AnsiChar); inline;
     procedure Clear; inline;
-    function ToString: AnsiString;
+    function ToString: AnsiString; inline;
     property Length: Integer read GetLength;
   end;
 
 implementation
 
-class function TStringBuffer.Create(ACapacity: Integer): TStringBuffer;
+class function TStringBuffer.Create(const ACapacity: Integer): TStringBuffer;
 begin
   Result.FLen := 0;
   Result.FCap := ACapacity;
   SetLength(Result.FData, Result.FCap);
 end;
 
-procedure TStringBuffer.AppendChar(C: AnsiChar);
+procedure TStringBuffer.AppendChar(const C: AnsiChar);
 begin
   if FLen + 1 > FCap then
   begin
