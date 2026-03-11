@@ -108,11 +108,16 @@ Every `TGocciaValue` participates in the mark-and-sweep garbage collector:
 
 ```pascal
 TGCManagedObject = class
+private class var
+  FCurrentMark: Cardinal;      // Generation counter — incremented each collection
 private
-  FGCMarked: Boolean;
+  FGCMark: Cardinal;           // Per-object mark — matches FCurrentMark when alive
+  FGCIndex: Integer;           // Index in FManagedObjects for O(1) unregistration
 public
-  procedure MarkReferences; virtual; // Override to mark referenced values
-  property GCMarked: Boolean read FGCMarked write FGCMarked;
+  class procedure AdvanceMark; static; inline;
+  procedure MarkReferences; virtual;
+  property GCMarked: Boolean read GetGCMarked write SetGCMarked;
+  property GCIndex: Integer read FGCIndex write FGCIndex;
 end;
 
 TGocciaValue = class(TGCManagedObject)
@@ -122,7 +127,7 @@ end;
 ```
 
 - **`AfterConstruction`** — Every value auto-registers with `TGarbageCollector.Instance` upon creation.
-- **`MarkReferences`** — Base implementation sets `GCMarked := True`. Subclasses override this to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements).
+- **`MarkReferences`** — Base implementation sets `FGCMark := FCurrentMark` (marking the object as alive for the current collection). Subclasses override this to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaFunctionValue` marks its closure scope, `TGocciaArrayValue` marks its elements). The `if GCMarked then Exit;` guard at the top of each override prevents re-visiting objects in cyclic reference graphs.
 - **`RuntimeCopy`** — Creates a fresh GC-managed copy of the value. Used by the evaluator when evaluating literal expressions: AST-owned literal values are not tracked by the GC, so `RuntimeCopy` produces a runtime value that is. The default implementation returns `Self` (for singletons and complex values). Primitives override this: numbers use the `SmallInt` cache for 0-255, booleans return singletons, strings create new instances (cheap due to copy-on-write).
 
 ## Type Discrimination via Virtual Dispatch
@@ -130,7 +135,7 @@ end;
 The base `TGocciaValue` class provides two virtual methods for runtime type discrimination, replacing multi-`is` type check chains with single VMT calls:
 
 ```pascal
-TGocciaValue = class(TInterfacedObject)
+TGocciaValue = class(TGCManagedObject)
   function IsPrimitive: Boolean; virtual;  // Returns False by default
   function IsCallable: Boolean; virtual;   // Returns False by default
 end;
@@ -175,7 +180,7 @@ Used by:
 Property access is unified through virtual methods on the `TGocciaValue` base class:
 
 ```pascal
-TGocciaValue = class(TInterfacedObject)
+TGocciaValue = class(TGCManagedObject)
   function GetProperty(const Name: string): TGocciaValue; virtual;
   procedure SetProperty(const Name: string; Value: TGocciaValue); virtual;
 end;

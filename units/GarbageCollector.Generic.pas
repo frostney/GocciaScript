@@ -32,6 +32,7 @@ type
     FCollecting: Boolean;
     FTotalCollected: Int64;
     FTotalCollections: Integer;
+    FNilSlots: Integer;
 
     function GetManagedObjectCount: Integer;
   protected
@@ -63,7 +64,8 @@ type
     procedure RemoveExternalRootMarker(const AMarker: TGCRootMarker);
 
     procedure Collect; virtual;
-    procedure CollectIfNeeded;
+    procedure CollectIfNeeded; overload;
+    procedure CollectIfNeeded(const AProtect: TGCManagedObject); overload;
 
     property Enabled: Boolean read FEnabled write FEnabled;
     property Threshold: Integer read FGCThreshold write FGCThreshold;
@@ -110,6 +112,7 @@ begin
   FCollecting := False;
   FTotalCollected := 0;
   FTotalCollections := 0;
+  FNilSlots := 0;
   SetLength(FExternalRootMarkers, 0);
 end;
 
@@ -126,6 +129,7 @@ end;
 function TGarbageCollector.AllocateObject(
   const AObject: TGCManagedObject): TGCManagedObject;
 begin
+  AObject.GCIndex := FManagedObjects.Count;
   FManagedObjects.Add(AObject);
   Inc(FAllocationsSinceLastGC);
   Result := AObject;
@@ -134,14 +138,24 @@ end;
 procedure TGarbageCollector.RegisterObject(
   const AObject: TGCManagedObject);
 begin
+  AObject.GCIndex := FManagedObjects.Count;
   FManagedObjects.Add(AObject);
   Inc(FAllocationsSinceLastGC);
 end;
 
 procedure TGarbageCollector.UnregisterObject(
   const AObject: TGCManagedObject);
+var
+  Idx: Integer;
 begin
-  FManagedObjects.Remove(AObject);
+  Idx := AObject.GCIndex;
+  if (Idx >= 0) and (Idx < FManagedObjects.Count) and
+     (FManagedObjects[Idx] = AObject) then
+  begin
+    FManagedObjects[Idx] := nil;
+    AObject.GCIndex := -1;
+    Inc(FNilSlots);
+  end;
 end;
 
 procedure TGarbageCollector.PinObject(const AObject: TGCManagedObject);
@@ -253,38 +267,43 @@ procedure TGarbageCollector.SweepObjects;
 var
   I, WriteIdx: Integer;
   Collected: Integer;
+  Obj: TGCManagedObject;
 begin
   Collected := 0;
   WriteIdx := 0;
 
   for I := 0 to FManagedObjects.Count - 1 do
   begin
-    if FManagedObjects[I].GCMarked then
+    Obj := FManagedObjects[I];
+    if Obj = nil then
+      Continue;
+    if Obj.GCMarked then
     begin
-      FManagedObjects[WriteIdx] := FManagedObjects[I];
+      Obj.GCIndex := WriteIdx;
+      FManagedObjects[WriteIdx] := Obj;
       Inc(WriteIdx);
     end
     else
     begin
-      FManagedObjects[I].Free;
+      Obj.GCIndex := -1;
+      Obj.Free;
       Inc(Collected);
     end;
   end;
 
   FManagedObjects.Count := WriteIdx;
+  if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
+    FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
+  FNilSlots := 0;
   FTotalCollected := FTotalCollected + Collected;
 end;
 
 procedure TGarbageCollector.Collect;
-var
-  I: Integer;
 begin
   if FCollecting then Exit;
   FCollecting := True;
   try
-    for I := 0 to FManagedObjects.Count - 1 do
-      FManagedObjects[I].GCMarked := False;
-
+    TGCManagedObject.AdvanceMark;
     MarkRoots;
     SweepObjects;
     FAllocationsSinceLastGC := 0;
@@ -301,9 +320,25 @@ begin
     Collect;
 end;
 
+procedure TGarbageCollector.CollectIfNeeded(
+  const AProtect: TGCManagedObject);
+begin
+  if not FEnabled or (FAllocationsSinceLastGC < FGCThreshold) or
+     FCollecting then
+    Exit;
+  if Assigned(AProtect) then
+    FActiveRootStack.Add(AProtect);
+  try
+    Collect;
+  finally
+    if Assigned(AProtect) then
+      FActiveRootStack.Delete(FActiveRootStack.Count - 1);
+  end;
+end;
+
 function TGarbageCollector.GetManagedObjectCount: Integer;
 begin
-  Result := FManagedObjects.Count;
+  Result := FManagedObjects.Count - FNilSlots;
 end;
 
 end.
