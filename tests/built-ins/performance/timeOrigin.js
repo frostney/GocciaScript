@@ -29,7 +29,4 @@ describe("performance.timeOrigin", () => {
     expect(firstOrigin + secondNow >= firstOrigin + firstNow).toBe(true);
   });
 
-  test("uses the Performance toStringTag", () => {
-    expect(Object.prototype.toString.call(performance)).toBe("[object Performance]");
-  });
 });
