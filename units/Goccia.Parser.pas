@@ -2232,8 +2232,7 @@ var
   FieldOrder: array of TGocciaFieldOrderEntry;
   IsAccessor: Boolean;
   IsAsync: Boolean;
-  TypePairArr: TStringStringMap.TKeyValueArray;
-  TypePairIdx: Integer;
+  TypePair: TStringStringMap.TKeyValuePair;
 begin
   SetLength(Elements, 0);
   SetLength(FieldOrder, 0);
@@ -2584,9 +2583,8 @@ begin
   Result := TGocciaClassDefinition.Create(AClassName, SuperClass, Methods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
   Result.GenericParams := ClassGenericParams;
   Result.ImplementsClause := ClassImplementsClause;
-  TypePairArr := InstancePropertyTypes.ToArray;
-  for TypePairIdx := 0 to Length(TypePairArr) - 1 do
-    Result.FInstancePropertyTypes.Add(TypePairArr[TypePairIdx].Key, TypePairArr[TypePairIdx].Value);
+  for TypePair in InstancePropertyTypes do
+    Result.FInstancePropertyTypes.Add(TypePair.Key, TypePair.Value);
 
   Result.FStaticGetters.Free;
   Result.FStaticGetters := StaticGetters;
@@ -3112,7 +3110,7 @@ var
   Elements: TObjectList<TGocciaDestructuringPattern>;
   Properties: TObjectList<TGocciaDestructuringProperty>;
   I: Integer;
-  PropPairArr: TGocciaExpressionMap.TKeyValueArray;
+  PropPair: TGocciaExpressionMap.TKeyValuePair;
   ComputedPair: TPair<TGocciaExpression, TGocciaExpression>;
   Prop: TGocciaDestructuringProperty;
 begin
@@ -3156,10 +3154,9 @@ begin
     ObjectExpr := TGocciaObjectExpression(AExpr);
     Properties := TObjectList<TGocciaDestructuringProperty>.Create(True);
 
-    PropPairArr := ObjectExpr.Properties.ToArray;
-    for I := 0 to Length(PropPairArr) - 1 do
+    for PropPair in ObjectExpr.Properties do
     begin
-      Prop := TGocciaDestructuringProperty.Create(PropPairArr[I].Key, ConvertToPattern(PropPairArr[I].Value));
+      Prop := TGocciaDestructuringProperty.Create(PropPair.Key, ConvertToPattern(PropPair.Value));
       Properties.Add(Prop);
     end;
 

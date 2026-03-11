@@ -151,8 +151,7 @@ end;
 function TGocciaGlobalSymbol.SymbolKeyFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Arg: TGocciaValue;
-  Pairs: TOrderedStringMap<TGocciaSymbolValue>.TKeyValueArray;
-  I: Integer;
+  Pair: TOrderedStringMap<TGocciaSymbolValue>.TKeyValuePair;
 begin
   Arg := AArgs.GetElement(0);
 
@@ -161,13 +160,12 @@ begin
     ThrowTypeError('Symbol.keyFor requires that the first argument be a symbol');
 
   { Step 2: Search GlobalSymbolRegistry for matching symbol }
-  Pairs := FGlobalRegistry.ToArray;
-  for I := 0 to High(Pairs) do
+  for Pair in FGlobalRegistry do
   begin
-    if Pairs[I].Value = TGocciaSymbolValue(Arg) then
+    if Pair.Value = TGocciaSymbolValue(Arg) then
     begin
       { Step 2a: SameValue match found — return e.[[Key]] }
-      Result := TGocciaStringLiteralValue.Create(Pairs[I].Key);
+      Result := TGocciaStringLiteralValue.Create(Pair.Key);
       Exit;
     end;
   end;

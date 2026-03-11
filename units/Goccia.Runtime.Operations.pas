@@ -4027,9 +4027,8 @@ function TGocciaRuntimeOperations.ImportModule(const APath: string): TSouffleVal
 var
   EngineObj: TGocciaEngine;
   Module: TGocciaModule;
+  Pair: TGocciaValueMap.TKeyValuePair;
   Rec: TSouffleRecord;
-  ExportArr: TGocciaValueMap.TKeyValueArray;
-  I: Integer;
 begin
   {$IFDEF BRIDGE_METRICS}
   Inc(GBridgeMetrics.ImportModuleCount);
@@ -4046,9 +4045,8 @@ begin
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AllocateObject(Rec);
 
-  ExportArr := Module.ExportsTable.ToArray;
-  for I := 0 to Length(ExportArr) - 1 do
-    Rec.Put(ExportArr[I].Key, ToSouffleValue(ExportArr[I].Value));
+  for Pair in Module.ExportsTable do
+    Rec.Put(Pair.Key, ToSouffleValue(Pair.Value));
 
   Result := SouffleReference(Rec);
 end;
@@ -7526,8 +7524,7 @@ var
   BridgedFn: TGocciaBridgedFunction;
   Rec, GlobalThisRec: TSouffleRecord;
   GC: TGarbageCollector;
-  PairArr: TOrderedStringMap<TSouffleValue>.TKeyValueArray;
-  PairIdx: Integer;
+  GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
 begin
   if not Assigned(FVM) then Exit;
   GC := TGarbageCollector.Instance;
@@ -7588,9 +7585,8 @@ begin
     if Assigned(FVM) then
       GlobalThisRec.Delegate := FVM.RecordDelegate;
     if Assigned(GC) then GC.AllocateObject(GlobalThisRec);
-    PairArr := FGlobals.ToArray;
-    for PairIdx := 0 to Length(PairArr) - 1 do
-      GlobalThisRec.Put(PairArr[PairIdx].Key, PairArr[PairIdx].Value);
+    for GlobalPair in FGlobals do
+      GlobalThisRec.Put(GlobalPair.Key, GlobalPair.Value);
     GlobalThisRec.Put('globalThis', SouffleReference(GlobalThisRec));
     FGlobals.AddOrSetValue('globalThis', SouffleReference(GlobalThisRec));
   end;
@@ -7816,20 +7812,18 @@ function CreateBridgedContext(
 var
   BridgeScope: TGocciaScope;
   GocciaVal: TGocciaValue;
-  PairArr: TOrderedStringMap<TSouffleValue>.TKeyValueArray;
-  I: Integer;
+  GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
 begin
   Result := TGocciaEngine(ARuntime.Engine).Interpreter.CreateEvaluationContext;
   if ARuntime.FGlobals.Count = 0 then
     Exit;
 
   BridgeScope := Result.Scope.CreateChild(skBlock);
-  PairArr := ARuntime.FGlobals.ToArray;
-  for I := 0 to Length(PairArr) - 1 do
-    if not BridgeScope.Contains(PairArr[I].Key) then
+  for GlobalPair in ARuntime.FGlobals do
+    if not BridgeScope.Contains(GlobalPair.Key) then
     begin
-      GocciaVal := ARuntime.UnwrapToGocciaValue(PairArr[I].Value);
-      BridgeScope.DefineLexicalBinding(PairArr[I].Key, GocciaVal, dtLet);
+      GocciaVal := ARuntime.UnwrapToGocciaValue(GlobalPair.Value);
+      BridgeScope.DefineLexicalBinding(GlobalPair.Key, GocciaVal, dtLet);
     end;
   Result.Scope := BridgeScope;
 end;
@@ -7837,26 +7831,24 @@ end;
 procedure SyncArraysBack(const ARuntime: TGocciaRuntimeOperations;
   const AScope: TGocciaScope);
 var
-  PairArr: TOrderedStringMap<TSouffleValue>.TKeyValueArray;
-  J: Integer;
+  GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
   GocciaVal: TGocciaValue;
   SArr: TSouffleArray;
   GArr: TGocciaArrayValue;
   I: Integer;
 begin
-  PairArr := ARuntime.FGlobals.ToArray;
-  for J := 0 to Length(PairArr) - 1 do
+  for GlobalPair in ARuntime.FGlobals do
   begin
-    if not SouffleIsReference(PairArr[J].Value) then
+    if not SouffleIsReference(GlobalPair.Value) then
       Continue;
-    if not (PairArr[J].Value.AsReference is TSouffleArray) then
+    if not (GlobalPair.Value.AsReference is TSouffleArray) then
       Continue;
-    if not AScope.Contains(PairArr[J].Key) then
+    if not AScope.Contains(GlobalPair.Key) then
       Continue;
-    GocciaVal := AScope.GetValue(PairArr[J].Key);
+    GocciaVal := AScope.GetValue(GlobalPair.Key);
     if not (GocciaVal is TGocciaArrayValue) then
       Continue;
-    SArr := TSouffleArray(PairArr[J].Value.AsReference);
+    SArr := TSouffleArray(GlobalPair.Value.AsReference);
     GArr := TGocciaArrayValue(GocciaVal);
     SArr.Clear;
     for I := 0 to GArr.Elements.Count - 1 do
@@ -7868,40 +7860,37 @@ procedure RebuildArrayBridgeCache(
   const ARuntime: TGocciaRuntimeOperations;
   const AScope: TGocciaScope);
 var
-  PairArr: TOrderedStringMap<TSouffleValue>.TKeyValueArray;
-  I: Integer;
+  GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
   GocciaVal: TGocciaValue;
 begin
-  PairArr := ARuntime.FGlobals.ToArray;
-  for I := 0 to Length(PairArr) - 1 do
+  for GlobalPair in ARuntime.FGlobals do
   begin
-    if not SouffleIsReference(PairArr[I].Value) then
+    if not SouffleIsReference(GlobalPair.Value) then
       Continue;
-    if not (PairArr[I].Value.AsReference is TSouffleArray) then
+    if not (GlobalPair.Value.AsReference is TSouffleArray) then
       Continue;
-    if not AScope.Contains(PairArr[I].Key) then
+    if not AScope.Contains(GlobalPair.Key) then
       Continue;
-    GocciaVal := AScope.GetValue(PairArr[I].Key);
+    GocciaVal := AScope.GetValue(GlobalPair.Key);
     if not (GocciaVal is TGocciaArrayValue) then
       Continue;
     ARuntime.FArrayBridgeCache.AddOrSetValue(
-      PairArr[I].Value.AsReference, GocciaVal);
+      GlobalPair.Value.AsReference, GocciaVal);
   end;
 end;
 
 procedure SyncCachedGocciaToSouffle(
   const ARuntime: TGocciaRuntimeOperations);
 var
-  PairArr: THashMap<TObject, TObject>.TKeyValueArray;
+  CachePair: THashMap<TObject, TObject>.TKeyValuePair;
   SArr: TSouffleArray;
   GArr: TGocciaArrayValue;
-  I, J: Integer;
+  J: Integer;
 begin
-  PairArr := ARuntime.FArrayBridgeCache.ToArray;
-  for I := 0 to Length(PairArr) - 1 do
+  for CachePair in ARuntime.FArrayBridgeCache do
   begin
-    SArr := TSouffleArray(PairArr[I].Key);
-    GArr := TGocciaArrayValue(PairArr[I].Value);
+    SArr := TSouffleArray(CachePair.Key);
+    GArr := TGocciaArrayValue(CachePair.Value);
     SArr.Clear;
     for J := 0 to GArr.Elements.Count - 1 do
       SArr.Push(ARuntime.ToSouffleValue(GArr.Elements[J]));
@@ -7911,18 +7900,16 @@ end;
 procedure SyncScopeToGlobals(const ARuntime: TGocciaRuntimeOperations;
   const AScope: TGocciaScope);
 var
-  PairArr: TOrderedStringMap<TSouffleValue>.TKeyValueArray;
-  I: Integer;
+  GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
   GocciaVal: TGocciaValue;
 begin
-  PairArr := ARuntime.FGlobals.ToArray;
-  for I := 0 to Length(PairArr) - 1 do
+  for GlobalPair in ARuntime.FGlobals do
   begin
-    if not AScope.Contains(PairArr[I].Key) then
+    if not AScope.Contains(GlobalPair.Key) then
       Continue;
-    GocciaVal := AScope.GetValue(PairArr[I].Key);
+    GocciaVal := AScope.GetValue(GlobalPair.Key);
     ARuntime.FGlobals.AddOrSetValue(
-      PairArr[I].Key, ARuntime.ToSouffleValue(GocciaVal));
+      GlobalPair.Key, ARuntime.ToSouffleValue(GocciaVal));
   end;
 end;
 

@@ -141,8 +141,7 @@ var
   ExportDecl: TGocciaExportDeclaration;
   ExportVarDecl: TGocciaExportVariableDeclaration;
   ReExportDecl: TGocciaReExportDeclaration;
-  ExportPairs: TStringStringMap.TKeyValueArray;
-  J: Integer;
+  ExportPair: TStringStringMap.TKeyValuePair;
   Value: TGocciaValue;
   Context: TGocciaEvaluationContext;
   SourceModule: TGocciaModule;
@@ -221,12 +220,11 @@ begin
                   if Stmt is TGocciaExportDeclaration then
                   begin
                     ExportDecl := TGocciaExportDeclaration(Stmt);
-                    ExportPairs := ExportDecl.ExportsTable.ToArray;
-                    for J := 0 to High(ExportPairs) do
+                    for ExportPair in ExportDecl.ExportsTable do
                     begin
-                      Value := ModuleScope.GetValue(ExportPairs[J].Value);
+                      Value := ModuleScope.GetValue(ExportPair.Value);
                       if Assigned(Value) then
-                        Module.ExportsTable.AddOrSetValue(ExportPairs[J].Key, Value);
+                        Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
                     end;
                   end
                   else if Stmt is TGocciaExportVariableDeclaration then
@@ -249,11 +247,10 @@ begin
                   begin
                     ReExportDecl := TGocciaReExportDeclaration(Stmt);
                     SourceModule := LoadModule(ReExportDecl.ModulePath, ResolvedPath);
-                    ExportPairs := ReExportDecl.ExportsTable.ToArray;
-                    for J := 0 to High(ExportPairs) do
+                    for ExportPair in ReExportDecl.ExportsTable do
                     begin
-                      if SourceModule.ExportsTable.TryGetValue(ExportPairs[J].Value, Value) then
-                        Module.ExportsTable.AddOrSetValue(ExportPairs[J].Key, Value);
+                      if SourceModule.ExportsTable.TryGetValue(ExportPair.Value, Value) then
+                        Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
                     end;
                   end;
                 end;

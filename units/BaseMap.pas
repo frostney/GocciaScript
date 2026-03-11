@@ -41,6 +41,17 @@ type
     TValueArray = array of TValue;
     TForEachCallback = procedure(const AKey: TKey; const AValue: TValue) of object;
 
+    TEnumerator = record
+    private
+      FMap: TBaseMap<TKey, TValue>;
+      FIterState: Integer;
+      FCurrent: TKeyValuePair;
+      function GetCurrent: TKeyValuePair; inline;
+    public
+      function MoveNext: Boolean; inline;
+      property Current: TKeyValuePair read GetCurrent;
+    end;
+
   protected
     function GetCount: Integer; virtual; abstract;
     function GetValue(const AKey: TKey): TValue; virtual; abstract;
@@ -60,6 +71,7 @@ type
     function Remove(const AKey: TKey): Boolean; virtual; abstract;
     procedure Clear; virtual; abstract;
 
+    function GetEnumerator: TEnumerator; inline;
     function ToArray: TKeyValueArray;
     procedure ForEach(ACallback: TForEachCallback);
     function Keys: TKeyArray;
@@ -71,7 +83,26 @@ type
 
 implementation
 
+{ TBaseMap<TKey, TValue>.TEnumerator }
+
+function TBaseMap<TKey, TValue>.TEnumerator.GetCurrent: TKeyValuePair;
+begin
+  Result := FCurrent;
+end;
+
+function TBaseMap<TKey, TValue>.TEnumerator.MoveNext: Boolean;
+begin
+  Result := FMap.GetNextEntry(FIterState, FCurrent.Key, FCurrent.Value);
+end;
+
 { TBaseMap<TKey, TValue> }
+
+function TBaseMap<TKey, TValue>.GetEnumerator: TEnumerator;
+begin
+  Result.FMap := Self;
+  Result.FIterState := 0;
+  Result.FCurrent := Default(TKeyValuePair);
+end;
 
 procedure TBaseMap<TKey, TValue>.AddOrSetValue(const AKey: TKey; const AValue: TValue);
 begin

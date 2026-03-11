@@ -891,23 +891,21 @@ uses
   function TGocciaImportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
   var
     Module: TGocciaModule;
-    ImportArr: TStringStringMap.TKeyValueArray;
-    I: Integer;
+    ImportPair: TStringStringMap.TKeyValuePair;
     Value: TGocciaValue;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
     Module := AContext.LoadModule(ModulePath, AContext.CurrentFilePath);
-    ImportArr := Imports.ToArray;
-    for I := 0 to Length(ImportArr) - 1 do
+    for ImportPair in Imports do
     begin
-      if Module.ExportsTable.TryGetValue(ImportArr[I].Value, Value) then
+      if Module.ExportsTable.TryGetValue(ImportPair.Value, Value) then
       begin
-        AContext.Scope.DefineLexicalBinding(ImportArr[I].Key, Value, dtLet);
+        AContext.Scope.DefineLexicalBinding(ImportPair.Key, Value, dtLet);
       end
       else
       begin
         AContext.OnError(Format('Module "%s" has no export named "%s"',
-          [ModulePath, ImportArr[I].Value]), Line, Column);
+          [ModulePath, ImportPair.Value]), Line, Column);
       end;
     end;
   end;

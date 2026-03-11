@@ -1002,7 +1002,7 @@ procedure CompileImportDeclaration(const ACtx: TGocciaCompilationContext;
 var
   ModReg: UInt8;
   PathIdx, NameIdx: UInt16;
-  PairArr: TStringStringMap.TKeyValueArray;
+  ImportPair: TStringStringMap.TKeyValuePair;
   Slots: array of UInt8;
   Names: array of string;
   I, Count: Integer;
@@ -1011,11 +1011,12 @@ begin
   SetLength(Slots, Count);
   SetLength(Names, Count);
 
-  PairArr := AStmt.Imports.ToArray;
-  for I := 0 to Length(PairArr) - 1 do
+  I := 0;
+  for ImportPair in AStmt.Imports do
   begin
-    Slots[I] := ACtx.Scope.DeclareLocal(PairArr[I].Key, True);
-    Names[I] := PairArr[I].Value;
+    Slots[I] := ACtx.Scope.DeclareLocal(ImportPair.Key, True);
+    Names[I] := ImportPair.Value;
+    Inc(I);
   end;
 
   ModReg := ACtx.Scope.AllocateRegister;
@@ -1037,19 +1038,18 @@ end;
 procedure CompileExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportDeclaration);
 var
-  PairArr: TStringStringMap.TKeyValueArray;
-  I, LocalIdx: Integer;
+  ExportPair: TStringStringMap.TKeyValuePair;
+  LocalIdx: Integer;
   Reg: UInt8;
   NameIdx: UInt16;
 begin
-  PairArr := AStmt.ExportsTable.ToArray;
-  for I := 0 to Length(PairArr) - 1 do
+  for ExportPair in AStmt.ExportsTable do
   begin
-    LocalIdx := ACtx.Scope.ResolveLocal(PairArr[I].Value);
+    LocalIdx := ACtx.Scope.ResolveLocal(ExportPair.Value);
     if LocalIdx >= 0 then
     begin
       Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
-      NameIdx := ACtx.Template.AddConstantString(PairArr[I].Key);
+      NameIdx := ACtx.Template.AddConstantString(ExportPair.Key);
       EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, Reg, NameIdx));
     end;
   end;
@@ -1085,23 +1085,21 @@ procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
 var
   ModReg, ValReg: UInt8;
   PathIdx, SrcNameIdx, ExportNameIdx: UInt16;
-  PairArr: TStringStringMap.TKeyValueArray;
-  I: Integer;
+  ExportPair: TStringStringMap.TKeyValuePair;
 begin
   ModReg := ACtx.Scope.AllocateRegister;
   ValReg := ACtx.Scope.AllocateRegister;
   PathIdx := ACtx.Template.AddConstantString(AStmt.ModulePath);
   EmitInstruction(ACtx, EncodeABx(OP_RT_IMPORT, ModReg, PathIdx));
 
-  PairArr := AStmt.ExportsTable.ToArray;
-  for I := 0 to Length(PairArr) - 1 do
+  for ExportPair in AStmt.ExportsTable do
   begin
-    SrcNameIdx := ACtx.Template.AddConstantString(PairArr[I].Value);
+    SrcNameIdx := ACtx.Template.AddConstantString(ExportPair.Value);
     if SrcNameIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: re-export source name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_RECORD_GET, ValReg, ModReg,
       UInt8(SrcNameIdx)));
-    ExportNameIdx := ACtx.Template.AddConstantString(PairArr[I].Key);
+    ExportNameIdx := ACtx.Template.AddConstantString(ExportPair.Key);
     EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, ValReg, ExportNameIdx));
   end;
 
@@ -1892,11 +1890,11 @@ var
   ClassDef: TGocciaClassDefinition;
   ClassReg, SuperReg, ValReg: UInt8;
   NameIdx, KeyIdx: UInt16;
-  MethodArr: TGocciaClassMethodMap.TKeyValueArray;
-  GetterArr: TGocciaGetterExpressionMap.TKeyValueArray;
-  SetterArr: TGocciaSetterExpressionMap.TKeyValueArray;
-  StaticPropArr: TGocciaExpressionMap.TKeyValueArray;
-  LocalIdx, UpvalIdx, I: Integer;
+  MethodPair: TGocciaClassMethodMap.TKeyValuePair;
+  GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
+  SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
+  PropertyPair: TGocciaExpressionMap.TKeyValuePair;
+  LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;
 begin
@@ -1934,67 +1932,60 @@ begin
       GOCCIA_EXT_SET_WRAPPED_SUPER, SuperReg));
   end;
 
-  MethodArr := ClassDef.Methods.ToArray;
-  for I := 0 to Length(MethodArr) - 1 do
+  for MethodPair in ClassDef.Methods do
   begin
-    if MethodArr[I].Value.IsStatic then
-      CompileMethodBody(ACtx, ClassReg, MethodArr[I].Key,
-        MethodArr[I].Value, OP_RT_SET_PROP)
+    if MethodPair.Value.IsStatic then
+      CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
+        MethodPair.Value, OP_RT_SET_PROP)
     else
-      CompileMethodBody(ACtx, ClassReg, MethodArr[I].Key,
-        MethodArr[I].Value, OP_RECORD_SET);
+      CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
+        MethodPair.Value, OP_RECORD_SET);
   end;
 
-  MethodArr := ClassDef.PrivateMethods.ToArray;
-  for I := 0 to Length(MethodArr) - 1 do
-    CompileMethodBody(ACtx, ClassReg, '#' + PrivPrefix + MethodArr[I].Key,
-      MethodArr[I].Value, OP_RECORD_SET);
+  for MethodPair in ClassDef.PrivateMethods do
+    CompileMethodBody(ACtx, ClassReg, '#' + PrivPrefix + MethodPair.Key,
+      MethodPair.Value, OP_RECORD_SET);
 
-  GetterArr := ClassDef.Getters.ToArray;
-  for I := 0 to Length(GetterArr) - 1 do
+  for GetterPair in ClassDef.Getters do
   begin
-    if (GetterArr[I].Key <> '') and (GetterArr[I].Key[1] = '#') then
+    if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
       CompileGetterBody(ACtx, ClassReg,
-        '#' + PrivPrefix + Copy(GetterArr[I].Key, 2, MaxInt),
-        GetterArr[I].Value, GOCCIA_EXT_DEF_GETTER)
+        '#' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
+        GetterPair.Value, GOCCIA_EXT_DEF_GETTER)
     else
-      CompileGetterBody(ACtx, ClassReg, GetterArr[I].Key,
-        GetterArr[I].Value, GOCCIA_EXT_DEF_GETTER);
+      CompileGetterBody(ACtx, ClassReg, GetterPair.Key,
+        GetterPair.Value, GOCCIA_EXT_DEF_GETTER);
   end;
 
-  SetterArr := ClassDef.Setters.ToArray;
-  for I := 0 to Length(SetterArr) - 1 do
+  for SetterPair in ClassDef.Setters do
   begin
-    if (SetterArr[I].Key <> '') and (SetterArr[I].Key[1] = '#') then
+    if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
       CompileSetterBody(ACtx, ClassReg,
-        '#' + PrivPrefix + Copy(SetterArr[I].Key, 2, MaxInt),
-        SetterArr[I].Value, GOCCIA_EXT_DEF_SETTER)
+        '#' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
+        SetterPair.Value, GOCCIA_EXT_DEF_SETTER)
     else
-      CompileSetterBody(ACtx, ClassReg, SetterArr[I].Key,
-        SetterArr[I].Value, GOCCIA_EXT_DEF_SETTER);
+      CompileSetterBody(ACtx, ClassReg, SetterPair.Key,
+        SetterPair.Value, GOCCIA_EXT_DEF_SETTER);
   end;
 
-  GetterArr := ClassDef.StaticGetters.ToArray;
-  for I := 0 to Length(GetterArr) - 1 do
-    CompileGetterBody(ACtx, ClassReg, GetterArr[I].Key,
-      GetterArr[I].Value, GOCCIA_EXT_DEF_STATIC_GETTER);
+  for GetterPair in ClassDef.StaticGetters do
+    CompileGetterBody(ACtx, ClassReg, GetterPair.Key,
+      GetterPair.Value, GOCCIA_EXT_DEF_STATIC_GETTER);
 
-  SetterArr := ClassDef.StaticSetters.ToArray;
-  for I := 0 to Length(SetterArr) - 1 do
-    CompileSetterBody(ACtx, ClassReg, SetterArr[I].Key,
-      SetterArr[I].Value, GOCCIA_EXT_DEF_STATIC_SETTER);
+  for SetterPair in ClassDef.StaticSetters do
+    CompileSetterBody(ACtx, ClassReg, SetterPair.Key,
+      SetterPair.Value, GOCCIA_EXT_DEF_STATIC_SETTER);
 
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
      HasAccessorInitializers(ClassDef) then
     CompileFieldInitializer(ACtx, ClassReg, ClassDef);
 
-  StaticPropArr := ClassDef.StaticProperties.ToArray;
-  for I := 0 to Length(StaticPropArr) - 1 do
+  for PropertyPair in ClassDef.StaticProperties do
   begin
     ValReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(StaticPropArr[I].Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString(StaticPropArr[I].Key);
+    ACtx.CompileExpression(PropertyPair.Value, ValReg);
+    KeyIdx := ACtx.Template.AddConstantString(PropertyPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ClassReg,
@@ -2002,12 +1993,11 @@ begin
     ACtx.Scope.FreeRegister;
   end;
 
-  StaticPropArr := ClassDef.PrivateStaticProperties.ToArray;
-  for I := 0 to Length(StaticPropArr) - 1 do
+  for PropertyPair in ClassDef.PrivateStaticProperties do
   begin
     ValReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(StaticPropArr[I].Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropArr[I].Key);
+    ACtx.CompileExpression(PropertyPair.Value, ValReg);
+    KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + PropertyPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ClassReg,
@@ -2031,10 +2021,10 @@ var
   ClassDef: TGocciaClassDefinition;
   SuperReg, ValReg: UInt8;
   NameIdx, KeyIdx: UInt16;
-  MethodArr: TGocciaClassMethodMap.TKeyValueArray;
-  GetterArr: TGocciaGetterExpressionMap.TKeyValueArray;
-  SetterArr: TGocciaSetterExpressionMap.TKeyValueArray;
-  StaticPropArr: TGocciaExpressionMap.TKeyValueArray;
+  MethodPair: TGocciaClassMethodMap.TKeyValuePair;
+  GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
+  SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
+  PropertyPair: TGocciaExpressionMap.TKeyValuePair;
   LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;
@@ -2088,67 +2078,60 @@ begin
       GOCCIA_EXT_SET_WRAPPED_SUPER, SuperReg));
   end;
 
-  MethodArr := ClassDef.Methods.ToArray;
-  for I := 0 to Length(MethodArr) - 1 do
+  for MethodPair in ClassDef.Methods do
   begin
-    if MethodArr[I].Value.IsStatic then
-      CompileMethodBody(ACtx, ADest, MethodArr[I].Key,
-        MethodArr[I].Value, OP_RT_SET_PROP)
+    if MethodPair.Value.IsStatic then
+      CompileMethodBody(ACtx, ADest, MethodPair.Key,
+        MethodPair.Value, OP_RT_SET_PROP)
     else
-      CompileMethodBody(ACtx, ADest, MethodArr[I].Key,
-        MethodArr[I].Value, OP_RECORD_SET);
+      CompileMethodBody(ACtx, ADest, MethodPair.Key,
+        MethodPair.Value, OP_RECORD_SET);
   end;
 
-  MethodArr := ClassDef.PrivateMethods.ToArray;
-  for I := 0 to Length(MethodArr) - 1 do
-    CompileMethodBody(ACtx, ADest, '#' + PrivPrefix + MethodArr[I].Key,
-      MethodArr[I].Value, OP_RECORD_SET);
+  for MethodPair in ClassDef.PrivateMethods do
+    CompileMethodBody(ACtx, ADest, '#' + PrivPrefix + MethodPair.Key,
+      MethodPair.Value, OP_RECORD_SET);
 
-  GetterArr := ClassDef.Getters.ToArray;
-  for I := 0 to Length(GetterArr) - 1 do
+  for GetterPair in ClassDef.Getters do
   begin
-    if (GetterArr[I].Key <> '') and (GetterArr[I].Key[1] = '#') then
+    if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
       CompileGetterBody(ACtx, ADest,
-        '#' + PrivPrefix + Copy(GetterArr[I].Key, 2, MaxInt),
-        GetterArr[I].Value, GOCCIA_EXT_DEF_GETTER)
+        '#' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
+        GetterPair.Value, GOCCIA_EXT_DEF_GETTER)
     else
-      CompileGetterBody(ACtx, ADest, GetterArr[I].Key,
-        GetterArr[I].Value, GOCCIA_EXT_DEF_GETTER);
+      CompileGetterBody(ACtx, ADest, GetterPair.Key,
+        GetterPair.Value, GOCCIA_EXT_DEF_GETTER);
   end;
 
-  SetterArr := ClassDef.Setters.ToArray;
-  for I := 0 to Length(SetterArr) - 1 do
+  for SetterPair in ClassDef.Setters do
   begin
-    if (SetterArr[I].Key <> '') and (SetterArr[I].Key[1] = '#') then
+    if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
       CompileSetterBody(ACtx, ADest,
-        '#' + PrivPrefix + Copy(SetterArr[I].Key, 2, MaxInt),
-        SetterArr[I].Value, GOCCIA_EXT_DEF_SETTER)
+        '#' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
+        SetterPair.Value, GOCCIA_EXT_DEF_SETTER)
     else
-      CompileSetterBody(ACtx, ADest, SetterArr[I].Key,
-        SetterArr[I].Value, GOCCIA_EXT_DEF_SETTER);
+      CompileSetterBody(ACtx, ADest, SetterPair.Key,
+        SetterPair.Value, GOCCIA_EXT_DEF_SETTER);
   end;
 
-  GetterArr := ClassDef.StaticGetters.ToArray;
-  for I := 0 to Length(GetterArr) - 1 do
-    CompileGetterBody(ACtx, ADest, GetterArr[I].Key,
-      GetterArr[I].Value, GOCCIA_EXT_DEF_STATIC_GETTER);
+  for GetterPair in ClassDef.StaticGetters do
+    CompileGetterBody(ACtx, ADest, GetterPair.Key,
+      GetterPair.Value, GOCCIA_EXT_DEF_STATIC_GETTER);
 
-  SetterArr := ClassDef.StaticSetters.ToArray;
-  for I := 0 to Length(SetterArr) - 1 do
-    CompileSetterBody(ACtx, ADest, SetterArr[I].Key,
-      SetterArr[I].Value, GOCCIA_EXT_DEF_STATIC_SETTER);
+  for SetterPair in ClassDef.StaticSetters do
+    CompileSetterBody(ACtx, ADest, SetterPair.Key,
+      SetterPair.Value, GOCCIA_EXT_DEF_STATIC_SETTER);
 
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
      HasAccessorInitializers(ClassDef) then
     CompileFieldInitializer(ACtx, ADest, ClassDef);
 
-  StaticPropArr := ClassDef.StaticProperties.ToArray;
-  for I := 0 to Length(StaticPropArr) - 1 do
+  for PropertyPair in ClassDef.StaticProperties do
   begin
     ValReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(StaticPropArr[I].Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString(StaticPropArr[I].Key);
+    ACtx.CompileExpression(PropertyPair.Value, ValReg);
+    KeyIdx := ACtx.Template.AddConstantString(PropertyPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ADest,
@@ -2156,12 +2139,11 @@ begin
     ACtx.Scope.FreeRegister;
   end;
 
-  StaticPropArr := ClassDef.PrivateStaticProperties.ToArray;
-  for I := 0 to Length(StaticPropArr) - 1 do
+  for PropertyPair in ClassDef.PrivateStaticProperties do
   begin
     ValReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(StaticPropArr[I].Value, ValReg);
-    KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropArr[I].Key);
+    ACtx.CompileExpression(PropertyPair.Value, ValReg);
+    KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + PropertyPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
     EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ADest,

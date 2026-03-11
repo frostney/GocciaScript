@@ -58,13 +58,11 @@ end;
 
 function TGocciaModuleResolver.HasAlias(const AModulePath: string): Boolean;
 var
-  Pairs: TStringStringMap.TKeyValueArray;
-  I: Integer;
+  Pair: TStringStringMap.TKeyValuePair;
 begin
-  Pairs := FAliases.ToArray;
-  for I := 0 to High(Pairs) do
-    if (Length(AModulePath) >= Length(Pairs[I].Key)) and
-       (Copy(AModulePath, 1, Length(Pairs[I].Key)) = Pairs[I].Key) then
+  for Pair in FAliases do
+    if (Length(AModulePath) >= Length(Pair.Key)) and
+       (Copy(AModulePath, 1, Length(Pair.Key)) = Pair.Key) then
       Exit(True);
   Result := False;
 end;
@@ -82,24 +80,22 @@ end;
 
 function TGocciaModuleResolver.ApplyAliases(const AModulePath: string): string;
 var
-  Pairs: TStringStringMap.TKeyValueArray;
+  Pair: TStringStringMap.TKeyValuePair;
   BestKey, BestValue, Replacement: string;
-  I: Integer;
   Found: Boolean;
 begin
   Result := AModulePath;
   Found := False;
 
-  Pairs := FAliases.ToArray;
-  for I := 0 to High(Pairs) do
+  for Pair in FAliases do
   begin
-    if (Length(AModulePath) >= Length(Pairs[I].Key)) and
-       (Copy(AModulePath, 1, Length(Pairs[I].Key)) = Pairs[I].Key) then
+    if (Length(AModulePath) >= Length(Pair.Key)) and
+       (Copy(AModulePath, 1, Length(Pair.Key)) = Pair.Key) then
     begin
-      if (not Found) or (Length(Pairs[I].Key) > Length(BestKey)) then
+      if (not Found) or (Length(Pair.Key) > Length(BestKey)) then
       begin
-        BestKey := Pairs[I].Key;
-        BestValue := Pairs[I].Value;
+        BestKey := Pair.Key;
+        BestValue := Pair.Value;
         Found := True;
       end;
     end;
