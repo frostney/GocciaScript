@@ -7916,12 +7916,10 @@ end;
 procedure SyncDefinitionScopesBack(
   const ARuntime: TGocciaRuntimeOperations);
 var
-  ScopeVals: THashMap<TObject, TObject>.TValueArray;
-  I: Integer;
+  ScopePair: THashMap<TObject, TObject>.TKeyValuePair;
 begin
-  ScopeVals := ARuntime.FClassDefinitionScopes.Values;
-  for I := 0 to Length(ScopeVals) - 1 do
-    SyncScopeToGlobals(ARuntime, TGocciaScope(ScopeVals[I]));
+  for ScopePair in ARuntime.FClassDefinitionScopes do
+    SyncScopeToGlobals(ARuntime, TGocciaScope(ScopePair.Value));
 end;
 
 function TGocciaRuntimeOperations.EvaluateClassByIndex(
@@ -8711,58 +8709,45 @@ end;
 
 procedure TGocciaRuntimeOperations.MarkExternalRoots;
 var
-  GlobalVals: TOrderedStringMap<TSouffleValue>.TValueArray;
-  ExportVals: TOrderedStringMap<TSouffleValue>.TValueArray;
-  ClosureKeys: THashMap<TSouffleClosure, TObject>.TKeyArray;
-  ArrayKeys: THashMap<TObject, TObject>.TKeyArray;
-  ReverseVals: THashMap<TObject, TObject>.TValueArray;
-  RecordKeys: THashMap<TObject, TObject>.TKeyArray;
-  BlueprintKeys: THashMap<TObject, TObject>.TKeyArray;
-  SuperVals: THashMap<TObject, TSouffleValue>.TValueArray;
-  I: Integer;
+  GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
+  ClosurePair: THashMap<TSouffleClosure, TObject>.TKeyValuePair;
+  CachePair: THashMap<TObject, TObject>.TKeyValuePair;
+  SuperPair: THashMap<TObject, TSouffleValue>.TKeyValuePair;
 begin
-  GlobalVals := FGlobals.Values;
-  for I := 0 to Length(GlobalVals) - 1 do
-    if SouffleIsReference(GlobalVals[I]) and Assigned(GlobalVals[I].AsReference)
-      and not GlobalVals[I].AsReference.GCMarked then
-      GlobalVals[I].AsReference.MarkReferences;
+  for GlobalPair in FGlobals do
+    if SouffleIsReference(GlobalPair.Value) and Assigned(GlobalPair.Value.AsReference)
+      and not GlobalPair.Value.AsReference.GCMarked then
+      GlobalPair.Value.AsReference.MarkReferences;
 
-  ExportVals := FExports.Values;
-  for I := 0 to Length(ExportVals) - 1 do
-    if SouffleIsReference(ExportVals[I]) and Assigned(ExportVals[I].AsReference)
-      and not ExportVals[I].AsReference.GCMarked then
-      ExportVals[I].AsReference.MarkReferences;
+  for GlobalPair in FExports do
+    if SouffleIsReference(GlobalPair.Value) and Assigned(GlobalPair.Value.AsReference)
+      and not GlobalPair.Value.AsReference.GCMarked then
+      GlobalPair.Value.AsReference.MarkReferences;
 
-  ClosureKeys := FClosureBridgeCache.Keys;
-  for I := 0 to Length(ClosureKeys) - 1 do
-    if not ClosureKeys[I].GCMarked then
-      ClosureKeys[I].MarkReferences;
+  for ClosurePair in FClosureBridgeCache do
+    if not ClosurePair.Key.GCMarked then
+      ClosurePair.Key.MarkReferences;
 
-  ArrayKeys := FArrayBridgeCache.Keys;
-  for I := 0 to Length(ArrayKeys) - 1 do
-    if (ArrayKeys[I] is TSouffleHeapObject) and not TSouffleHeapObject(ArrayKeys[I]).GCMarked then
-      TSouffleHeapObject(ArrayKeys[I]).MarkReferences;
+  for CachePair in FArrayBridgeCache do
+    if (CachePair.Key is TSouffleHeapObject) and not TSouffleHeapObject(CachePair.Key).GCMarked then
+      TSouffleHeapObject(CachePair.Key).MarkReferences;
 
-  ReverseVals := FArrayBridgeReverse.Values;
-  for I := 0 to Length(ReverseVals) - 1 do
-    if (ReverseVals[I] is TSouffleHeapObject) and not TSouffleHeapObject(ReverseVals[I]).GCMarked then
-      TSouffleHeapObject(ReverseVals[I]).MarkReferences;
+  for CachePair in FArrayBridgeReverse do
+    if (CachePair.Value is TSouffleHeapObject) and not TSouffleHeapObject(CachePair.Value).GCMarked then
+      TSouffleHeapObject(CachePair.Value).MarkReferences;
 
-  RecordKeys := FRecordBridgeCache.Keys;
-  for I := 0 to Length(RecordKeys) - 1 do
-    if (RecordKeys[I] is TSouffleHeapObject) and not TSouffleHeapObject(RecordKeys[I]).GCMarked then
-      TSouffleHeapObject(RecordKeys[I]).MarkReferences;
+  for CachePair in FRecordBridgeCache do
+    if (CachePair.Key is TSouffleHeapObject) and not TSouffleHeapObject(CachePair.Key).GCMarked then
+      TSouffleHeapObject(CachePair.Key).MarkReferences;
 
-  BlueprintKeys := FBlueprintBridgeCache.Keys;
-  for I := 0 to Length(BlueprintKeys) - 1 do
-    if (BlueprintKeys[I] is TSouffleHeapObject) and not TSouffleHeapObject(BlueprintKeys[I]).GCMarked then
-      TSouffleHeapObject(BlueprintKeys[I]).MarkReferences;
+  for CachePair in FBlueprintBridgeCache do
+    if (CachePair.Key is TSouffleHeapObject) and not TSouffleHeapObject(CachePair.Key).GCMarked then
+      TSouffleHeapObject(CachePair.Key).MarkReferences;
 
-  SuperVals := FBlueprintSuperValues.Values;
-  for I := 0 to Length(SuperVals) - 1 do
-    if SouffleIsReference(SuperVals[I]) and Assigned(SuperVals[I].AsReference)
-      and not SuperVals[I].AsReference.GCMarked then
-      SuperVals[I].AsReference.MarkReferences;
+  for SuperPair in FBlueprintSuperValues do
+    if SouffleIsReference(SuperPair.Value) and Assigned(SuperPair.Value.AsReference)
+      and not SuperPair.Value.AsReference.GCMarked then
+      SuperPair.Value.AsReference.MarkReferences;
 
   if Assigned(FStringDelegate) and not FStringDelegate.GCMarked then
     FStringDelegate.MarkReferences;
@@ -8786,11 +8771,8 @@ procedure TGocciaRuntimeOperations.MarkWrappedGocciaValues;
 var
   I: Integer;
   Wrapped: TGocciaWrappedValue;
-  ClosureVals: THashMap<TSouffleClosure, TObject>.TValueArray;
-  ArrayVals: THashMap<TObject, TObject>.TValueArray;
-  ReverseKeys: THashMap<TObject, TObject>.TKeyArray;
-  RecordVals: THashMap<TObject, TObject>.TValueArray;
-  BlueprintVals: THashMap<TObject, TObject>.TValueArray;
+  ClosurePair: THashMap<TSouffleClosure, TObject>.TKeyValuePair;
+  CachePair: THashMap<TObject, TObject>.TKeyValuePair;
 begin
   for I := 0 to FWrappedValues.Count - 1 do
   begin
@@ -8799,30 +8781,25 @@ begin
       Wrapped.Value.MarkReferences;
   end;
 
-  ClosureVals := FClosureBridgeCache.Values;
-  for I := 0 to Length(ClosureVals) - 1 do
-    if (ClosureVals[I] is TGocciaValue) and not TGocciaValue(ClosureVals[I]).GCMarked then
-      TGocciaValue(ClosureVals[I]).MarkReferences;
+  for ClosurePair in FClosureBridgeCache do
+    if (ClosurePair.Value is TGocciaValue) and not TGocciaValue(ClosurePair.Value).GCMarked then
+      TGocciaValue(ClosurePair.Value).MarkReferences;
 
-  ArrayVals := FArrayBridgeCache.Values;
-  for I := 0 to Length(ArrayVals) - 1 do
-    if (ArrayVals[I] is TGocciaValue) and not TGocciaValue(ArrayVals[I]).GCMarked then
-      TGocciaValue(ArrayVals[I]).MarkReferences;
+  for CachePair in FArrayBridgeCache do
+    if (CachePair.Value is TGocciaValue) and not TGocciaValue(CachePair.Value).GCMarked then
+      TGocciaValue(CachePair.Value).MarkReferences;
 
-  ReverseKeys := FArrayBridgeReverse.Keys;
-  for I := 0 to Length(ReverseKeys) - 1 do
-    if (ReverseKeys[I] is TGocciaValue) and not TGocciaValue(ReverseKeys[I]).GCMarked then
-      TGocciaValue(ReverseKeys[I]).MarkReferences;
+  for CachePair in FArrayBridgeReverse do
+    if (CachePair.Key is TGocciaValue) and not TGocciaValue(CachePair.Key).GCMarked then
+      TGocciaValue(CachePair.Key).MarkReferences;
 
-  RecordVals := FRecordBridgeCache.Values;
-  for I := 0 to Length(RecordVals) - 1 do
-    if (RecordVals[I] is TGocciaValue) and not TGocciaValue(RecordVals[I]).GCMarked then
-      TGocciaValue(RecordVals[I]).MarkReferences;
+  for CachePair in FRecordBridgeCache do
+    if (CachePair.Value is TGocciaValue) and not TGocciaValue(CachePair.Value).GCMarked then
+      TGocciaValue(CachePair.Value).MarkReferences;
 
-  BlueprintVals := FBlueprintBridgeCache.Values;
-  for I := 0 to Length(BlueprintVals) - 1 do
-    if (BlueprintVals[I] is TGocciaValue) and not TGocciaValue(BlueprintVals[I]).GCMarked then
-      TGocciaValue(BlueprintVals[I]).MarkReferences;
+  for CachePair in FBlueprintBridgeCache do
+    if (CachePair.Value is TGocciaValue) and not TGocciaValue(CachePair.Value).GCMarked then
+      TGocciaValue(CachePair.Value).MarkReferences;
 
   if Assigned(FActiveDecoratorSession) then
   begin

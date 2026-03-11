@@ -380,8 +380,7 @@ end;
 
 procedure TGocciaScope.MarkReferences;
 var
-  Bindings: TGocciaScopeBindingMap.TValueArray;
-  I: Integer;
+  BindingPair: TGocciaScopeBindingMap.TKeyValuePair;
 begin
   if GCMarked then Exit;
   inherited;
@@ -392,10 +391,9 @@ begin
   if Assigned(FThisValue) then
     FThisValue.MarkReferences;
 
-  Bindings := FLexicalBindings.Values;
-  for I := 0 to Length(Bindings) - 1 do
-    if Assigned(Bindings[I].Value) then
-      Bindings[I].Value.MarkReferences;
+  for BindingPair in FLexicalBindings do
+    if Assigned(BindingPair.Value.Value) then
+      BindingPair.Value.Value.MarkReferences;
 end;
 
 { TGocciaGlobalScope }

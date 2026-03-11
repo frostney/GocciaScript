@@ -230,20 +230,17 @@ end;
 
 procedure TGarbageCollector.MarkRoots;
 var
-  ObjArr: THashMap<TGCManagedObject, Boolean>.TKeyArray;
+  Pair: THashMap<TGCManagedObject, Boolean>.TKeyValuePair;
   I: Integer;
 begin
-  ObjArr := FPinnedObjects.Keys;
-  for I := 0 to Length(ObjArr) - 1 do
-    ObjArr[I].MarkReferences;
+  for Pair in FPinnedObjects do
+    Pair.Key.MarkReferences;
 
-  ObjArr := FTempRoots.Keys;
-  for I := 0 to Length(ObjArr) - 1 do
-    ObjArr[I].MarkReferences;
+  for Pair in FTempRoots do
+    Pair.Key.MarkReferences;
 
-  ObjArr := FRootObjects.Keys;
-  for I := 0 to Length(ObjArr) - 1 do
-    ObjArr[I].MarkReferences;
+  for Pair in FRootObjects do
+    Pair.Key.MarkReferences;
 
   for I := 0 to FActiveRootStack.Count - 1 do
     FActiveRootStack[I].MarkReferences;

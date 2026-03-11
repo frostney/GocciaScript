@@ -255,89 +255,65 @@ end;
 
 procedure TGocciaClassValue.MarkReferences;
 var
-  MethodArr: array of TGocciaMethodValue;
-  FuncArr: array of TGocciaFunctionValue;
-  ValArr: array of TGocciaValue;
-  SymKeys: array of TGocciaSymbolValue;
-  SymDescs: array of TGocciaPropertyDescriptor;
+  MethodPair: TOrderedStringMap<TGocciaMethodValue>.TKeyValuePair;
+  FuncPair: TOrderedStringMap<TGocciaFunctionValue>.TKeyValuePair;
+  ValPair: TGocciaValueMap.TKeyValuePair;
+  SymPair: TStaticSymbolDescriptorMap.TKeyValuePair;
   Accessor: TGocciaPropertyDescriptorAccessor;
   I: Integer;
 begin
   if GCMarked then Exit;
-  inherited; // Sets mark
+  inherited;
 
-  // Mark superclass
   if Assigned(FSuperClass) then
     FSuperClass.MarkReferences;
 
-  // Mark prototype
   if Assigned(FPrototype) then
     FPrototype.MarkReferences;
 
-  // Mark constructor
   if Assigned(FConstructorMethod) then
     FConstructorMethod.MarkReferences;
 
-  // Mark methods
-  MethodArr := FMethods.Values;
-  for I := 0 to Length(MethodArr) - 1 do
-    MethodArr[I].MarkReferences;
+  for MethodPair in FMethods do
+    MethodPair.Value.MarkReferences;
 
-  // Mark getters and setters
-  FuncArr := FGetters.Values;
-  for I := 0 to Length(FuncArr) - 1 do
-    FuncArr[I].MarkReferences;
-  FuncArr := FSetters.Values;
-  for I := 0 to Length(FuncArr) - 1 do
-    FuncArr[I].MarkReferences;
+  for FuncPair in FGetters do
+    FuncPair.Value.MarkReferences;
+  for FuncPair in FSetters do
+    FuncPair.Value.MarkReferences;
 
-  // Mark static methods
-  ValArr := FStaticMethods.Values;
-  for I := 0 to Length(ValArr) - 1 do
-    if Assigned(ValArr[I]) then
-      ValArr[I].MarkReferences;
+  for ValPair in FStaticMethods do
+    if Assigned(ValPair.Value) then
+      ValPair.Value.MarkReferences;
 
-  // Mark private static properties
-  ValArr := FPrivateStaticProperties.Values;
-  for I := 0 to Length(ValArr) - 1 do
-    if Assigned(ValArr[I]) then
-      ValArr[I].MarkReferences;
+  for ValPair in FPrivateStaticProperties do
+    if Assigned(ValPair.Value) then
+      ValPair.Value.MarkReferences;
 
-  // Mark private methods
-  MethodArr := FPrivateMethods.Values;
-  for I := 0 to Length(MethodArr) - 1 do
-    MethodArr[I].MarkReferences;
+  for MethodPair in FPrivateMethods do
+    MethodPair.Value.MarkReferences;
 
-  // Mark private getters and setters
-  FuncArr := FPrivateGetters.Values;
-  for I := 0 to Length(FuncArr) - 1 do
-    FuncArr[I].MarkReferences;
-  FuncArr := FPrivateSetters.Values;
-  for I := 0 to Length(FuncArr) - 1 do
-    FuncArr[I].MarkReferences;
+  for FuncPair in FPrivateGetters do
+    FuncPair.Value.MarkReferences;
+  for FuncPair in FPrivateSetters do
+    FuncPair.Value.MarkReferences;
 
-  // Mark static getters and setters
-  FuncArr := FStaticGetters.Values;
-  for I := 0 to Length(FuncArr) - 1 do
-    FuncArr[I].MarkReferences;
-  FuncArr := FStaticSetters.Values;
-  for I := 0 to Length(FuncArr) - 1 do
-    FuncArr[I].MarkReferences;
+  for FuncPair in FStaticGetters do
+    FuncPair.Value.MarkReferences;
+  for FuncPair in FStaticSetters do
+    FuncPair.Value.MarkReferences;
 
-  // Mark static symbol descriptors
-  SymKeys := FStaticSymbolDescriptors.Keys;
-  SymDescs := FStaticSymbolDescriptors.Values;
-  for I := 0 to Length(SymKeys) - 1 do
+  for SymPair in FStaticSymbolDescriptors do
   begin
-    SymKeys[I].MarkReferences;
-    if SymDescs[I] is TGocciaPropertyDescriptorData then
+    SymPair.Key.MarkReferences;
+    if SymPair.Value is TGocciaPropertyDescriptorData then
     begin
-      if Assigned(TGocciaPropertyDescriptorData(SymDescs[I]).Value) then
-        TGocciaPropertyDescriptorData(SymDescs[I]).Value.MarkReferences;
+      if Assigned(TGocciaPropertyDescriptorData(SymPair.Value).Value) then
+        TGocciaPropertyDescriptorData(SymPair.Value).Value.MarkReferences;
     end
-    else if SymDescs[I] is TGocciaPropertyDescriptorAccessor then
+    else if SymPair.Value is TGocciaPropertyDescriptorAccessor then
     begin
-      Accessor := TGocciaPropertyDescriptorAccessor(SymDescs[I]);
+      Accessor := TGocciaPropertyDescriptorAccessor(SymPair.Value);
       if Assigned(Accessor.Getter) then
         Accessor.Getter.MarkReferences;
       if Assigned(Accessor.Setter) then
@@ -1149,9 +1125,8 @@ end;
 
 function TGocciaInstanceValue.HasPrivateProperty(const AName: string): Boolean;
 var
-  KeyArr: array of string;
+  Pair: TGocciaValueMap.TKeyValuePair;
   Suffix: string;
-  I: Integer;
 begin
   if not Assigned(FPrivateProperties) then
   begin
@@ -1159,10 +1134,9 @@ begin
     Exit;
   end;
   Suffix := ':' + AName;
-  KeyArr := FPrivateProperties.Keys;
-  for I := 0 to Length(KeyArr) - 1 do
+  for Pair in FPrivateProperties do
   begin
-    if (KeyArr[I] = AName) or (Copy(KeyArr[I], Length(KeyArr[I]) - Length(Suffix) + 1, Length(Suffix)) = Suffix) then
+    if (Pair.Key = AName) or (Copy(Pair.Key, Length(Pair.Key) - Length(Suffix) + 1, Length(Suffix)) = Suffix) then
     begin
       Result := True;
       Exit;
@@ -1287,23 +1261,18 @@ end;
 
 procedure TGocciaInstanceValue.MarkReferences;
 var
-  ValArr: array of TGocciaValue;
-  I: Integer;
+  ValPair: TGocciaValueMap.TKeyValuePair;
 begin
   if GCMarked then Exit;
-  inherited; // Marks self + object properties/prototype
+  inherited;
 
-  // Mark class reference
   if Assigned(FClass) then
     FClass.MarkReferences;
 
   if Assigned(FPrivateProperties) then
-  begin
-    ValArr := FPrivateProperties.Values;
-    for I := 0 to Length(ValArr) - 1 do
-      if Assigned(ValArr[I]) then
-        ValArr[I].MarkReferences;
-  end;
+    for ValPair in FPrivateProperties do
+      if Assigned(ValPair.Value) then
+        ValPair.Value.MarkReferences;
 end;
 
 end.
