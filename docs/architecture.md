@@ -355,8 +355,8 @@ Both the interpreter and the Souffle VM share a common GC infrastructure built o
 
 | Unit | Class | Role |
 |------|-------|------|
-| `GarbageCollector.Managed.pas` | `TGCManagedObject` | Base class for all GC-managed objects (`GCMarked` flag, virtual `MarkReferences`) |
-| `GarbageCollector.Generic.pas` | `TGarbageCollector` | Singleton mark-and-sweep GC (`Initialize`, `Instance`, `Shutdown`); manages all objects (values, scopes, heap objects) in one pool; root tracking (`AddRootObject`/`RemoveRootObject`), active root stack (`PushActiveRoot`/`PopActiveRoot`), temp roots, external root marker, threshold-based collection |
+| `GarbageCollector.Managed.pas` | `TGCManagedObject` | Base class for all GC-managed objects (`GCMarked`, `GCIndex`, `AdvanceMark`, virtual `MarkReferences`); generation-counter mark tracking for O(1) mark-clear |
+| `GarbageCollector.Generic.pas` | `TGarbageCollector` | Singleton mark-and-sweep GC with generation-counter mark tracking (`Initialize`, `Instance`, `Shutdown`); manages all objects (values, scopes, heap objects) in one pool; O(1) `UnregisterObject` via `GCIndex`; root tracking (`AddRootObject`/`RemoveRootObject`), active root stack (`PushActiveRoot`/`PopActiveRoot`), temp roots, external root marker, threshold-based collection |
 
 `TGocciaValue`, `TGocciaScope`, and `TSouffleHeapObject` all inherit from `TGCManagedObject`, enabling a unified marking protocol across both runtime systems.
 
@@ -374,7 +374,7 @@ flowchart TD
         AllocateObject["Registered via AllocateObject"]
     end
     subgraph Mark["Mark Phase"]
-        Traverse["Traverse from all roots\nSet GCMarked := True"]
+        Traverse["Traverse from all roots\nSet FGCMark := FCurrentMark"]
     end
     subgraph Sweep["Sweep Phase"]
         Free["Free unmarked objects"]
