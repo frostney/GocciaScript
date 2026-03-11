@@ -22,6 +22,20 @@ uses
 
 type
   TScopeMap<TValue> = class(TBaseMap<string, TValue>)
+  public type
+    TEnumerator = record
+    private
+      FNames: array of string;
+      FValues: array of TValue;
+      FCount: Integer;
+      FIndex: Integer;
+      FCurrent: TBaseMap<string, TValue>.TKeyValuePair;
+      function GetCurrent: TBaseMap<string, TValue>.TKeyValuePair; inline;
+    public
+      function MoveNext: Boolean; inline;
+      property Current: TBaseMap<string, TValue>.TKeyValuePair read GetCurrent;
+    end;
+
   private const
     DEFAULT_CAPACITY = 8;
   private
@@ -51,6 +65,8 @@ type
     function ContainsKey(const AKey: string): Boolean; override;
     function Remove(const AKey: string): Boolean; override;
     procedure Clear; override;
+
+    function GetEnumerator: TEnumerator; inline;
 
     { Chain-walking operations }
     function Resolve(const AKey: string; out AValue: TValue): Boolean;
@@ -200,7 +216,38 @@ begin
   Add(AKey, AValue);
 end;
 
+{ TScopeMap.TEnumerator }
+
+function TScopeMap<TValue>.TEnumerator.GetCurrent:
+  TBaseMap<string, TValue>.TKeyValuePair;
+begin
+  Result := FCurrent;
+end;
+
+function TScopeMap<TValue>.TEnumerator.MoveNext: Boolean;
+begin
+  if FIndex < FCount then
+  begin
+    FCurrent.Key := FNames[FIndex];
+    FCurrent.Value := FValues[FIndex];
+    Inc(FIndex);
+    Result := True;
+  end
+  else
+    Result := False;
+end;
+
 { Iteration }
+
+function TScopeMap<TValue>.GetEnumerator: TEnumerator;
+begin
+  Result.FNames := FNames;
+  Result.FValues := FValues;
+  Result.FCount := FCount;
+  Result.FIndex := 0;
+  Result.FCurrent.Key := '';
+  Result.FCurrent.Value := Default(TValue);
+end;
 
 function TScopeMap<TValue>.GetNextEntry(var AIterState: Integer;
   out AKey: string; out AValue: TValue): Boolean;

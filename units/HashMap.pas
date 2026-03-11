@@ -30,6 +30,19 @@ type
       Used: Boolean;
     end;
 
+  public type
+    TEnumerator = record
+    private
+      FSlots: array of TSlot;
+      FCapacity: Integer;
+      FIndex: Integer;
+      FCurrent: TBaseMap<TKey, TValue>.TKeyValuePair;
+      function GetCurrent: TBaseMap<TKey, TValue>.TKeyValuePair; inline;
+    public
+      function MoveNext: Boolean; inline;
+      property Current: TBaseMap<TKey, TValue>.TKeyValuePair read GetCurrent;
+    end;
+
   private const
     INITIAL_CAPACITY    = 16;
     LOAD_FACTOR_PERCENT = 70;
@@ -63,6 +76,8 @@ type
     function ContainsKey(const AKey: TKey): Boolean; override;
     function Remove(const AKey: TKey): Boolean; override;
     procedure Clear; override;
+
+    function GetEnumerator: TEnumerator; inline;
 
     property Capacity: Integer read FCapacity;
   end;
@@ -295,7 +310,41 @@ begin
   Add(AKey, AValue);
 end;
 
+{ THashMap.TEnumerator }
+
+function THashMap<TKey, TValue>.TEnumerator.GetCurrent:
+  TBaseMap<TKey, TValue>.TKeyValuePair;
+begin
+  Result := FCurrent;
+end;
+
+function THashMap<TKey, TValue>.TEnumerator.MoveNext: Boolean;
+begin
+  while FIndex < FCapacity do
+  begin
+    if FSlots[FIndex].Used then
+    begin
+      FCurrent.Key := FSlots[FIndex].Key;
+      FCurrent.Value := FSlots[FIndex].Value;
+      Inc(FIndex);
+      Result := True;
+      Exit;
+    end;
+    Inc(FIndex);
+  end;
+  Result := False;
+end;
+
 { Iteration }
+
+function THashMap<TKey, TValue>.GetEnumerator: TEnumerator;
+begin
+  Result.FSlots := FSlots;
+  Result.FCapacity := FCapacity;
+  Result.FIndex := 0;
+  Result.FCurrent.Key := Default(TKey);
+  Result.FCurrent.Value := Default(TValue);
+end;
 
 function THashMap<TKey, TValue>.GetNextEntry(var AIterState: Integer;
   out AKey: TKey; out AValue: TValue): Boolean;

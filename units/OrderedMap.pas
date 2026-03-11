@@ -38,6 +38,18 @@ type
 
     TEntryArray = array of TEntry;
 
+    TEnumerator = record
+    private
+      FEntries: TEntryArray;
+      FEntryCount: Integer;
+      FIndex: Integer;
+      FCurrent: TBaseMap<TKey, TValue>.TKeyValuePair;
+      function GetCurrent: TBaseMap<TKey, TValue>.TKeyValuePair; inline;
+    public
+      function MoveNext: Boolean; inline;
+      property Current: TBaseMap<TKey, TValue>.TKeyValuePair read GetCurrent;
+    end;
+
   private const
     EMPTY_SLOT          = -1;
     DELETED_SLOT        = -2;
@@ -78,6 +90,7 @@ type
     function Remove(const AKey: TKey): Boolean; override;
     procedure Clear; override;
 
+    function GetEnumerator: TEnumerator; inline;
     function EntryAt(AIndex: Integer): TBaseMap<TKey, TValue>.TKeyValuePair;
 
     property Capacity: Integer read FBucketCount;
@@ -339,7 +352,41 @@ begin
   Add(AKey, AValue);
 end;
 
+{ TOrderedMap.TEnumerator }
+
+function TOrderedMap<TKey, TValue>.TEnumerator.GetCurrent:
+  TBaseMap<TKey, TValue>.TKeyValuePair;
+begin
+  Result := FCurrent;
+end;
+
+function TOrderedMap<TKey, TValue>.TEnumerator.MoveNext: Boolean;
+begin
+  while FIndex < FEntryCount do
+  begin
+    if FEntries[FIndex].Active then
+    begin
+      FCurrent.Key := FEntries[FIndex].Key;
+      FCurrent.Value := FEntries[FIndex].Value;
+      Inc(FIndex);
+      Result := True;
+      Exit;
+    end;
+    Inc(FIndex);
+  end;
+  Result := False;
+end;
+
 { Iteration }
+
+function TOrderedMap<TKey, TValue>.GetEnumerator: TEnumerator;
+begin
+  Result.FEntries := FEntries;
+  Result.FEntryCount := FEntryCount;
+  Result.FIndex := 0;
+  Result.FCurrent.Key := Default(TKey);
+  Result.FCurrent.Value := Default(TValue);
+end;
 
 function TOrderedMap<TKey, TValue>.GetNextEntry(var AIterState: Integer;
   out AKey: TKey; out AValue: TValue): Boolean;
