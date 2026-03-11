@@ -8,6 +8,8 @@ uses
   Classes,
   SysUtils,
 
+  StringBuffer,
+
   Goccia.JSX.SourceMap,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved;
@@ -32,7 +34,7 @@ type
     FColumn: Integer;
     FOutputLine: Integer;
     FOutputColumn: Integer;
-    FOutput: TStringBuilder;
+    FOutput: TStringBuffer;
     FSourceMap: TGocciaSourceMap;
     FFactoryName: string;
     FFragmentName: string;
@@ -115,22 +117,24 @@ begin
     Transformer.FFragmentName := AFragmentName;
     Transformer.FLastTokenKind := ltkNone;
     Transformer.FHasJSX := False;
-    Transformer.FOutput := TStringBuilder.Create;
+    Transformer.FOutput := TStringBuffer.Create(Length(ASource));
     Transformer.FSourceMap := TGocciaSourceMap.Create;
     try
       Transformer.ScanPragmas;
       Transformer.TransformSource;
       Result.Source := Transformer.FOutput.ToString;
       if Transformer.FHasJSX then
-        Result.SourceMap := Transformer.FSourceMap
+      begin
+        Result.SourceMap := Transformer.FSourceMap;
+        Transformer.FSourceMap := nil;
+      end
       else
       begin
         Result.Source := ASource;
         Result.SourceMap := nil;
-        Transformer.FSourceMap.Free;
       end;
     finally
-      Transformer.FOutput.Free;
+      Transformer.FSourceMap.Free;
     end;
   finally
     Transformer.Free;
@@ -204,7 +208,7 @@ end;
 
 procedure TGocciaJSXTransformer.EmitChar(const AChar: Char);
 begin
-  FOutput.Append(AChar);
+  FOutput.AppendChar(AChar);
   if AChar = #10 then
   begin
     Inc(FOutputLine);
@@ -449,56 +453,48 @@ end;
 
 function TGocciaJSXTransformer.ReadJSXTagName: string;
 var
-  SB: TStringBuilder;
+  SB: TStringBuffer;
 begin
-  SB := TStringBuilder.Create;
-  try
+  SB := TStringBuffer.Create;
+  while not IsAtEnd and IsIdentifierPart(CurrentChar) do
+  begin
+    SB.AppendChar(CurrentChar);
+    AdvanceInput;
+  end;
+  while not IsAtEnd and (CurrentChar = '.') do
+  begin
+    SB.AppendChar('.');
+    AdvanceInput;
     while not IsAtEnd and IsIdentifierPart(CurrentChar) do
     begin
-      SB.Append(CurrentChar);
+      SB.AppendChar(CurrentChar);
       AdvanceInput;
     end;
-    while not IsAtEnd and (CurrentChar = '.') do
-    begin
-      SB.Append('.');
-      AdvanceInput;
-      while not IsAtEnd and IsIdentifierPart(CurrentChar) do
-      begin
-        SB.Append(CurrentChar);
-        AdvanceInput;
-      end;
-    end;
-    Result := SB.ToString;
-  finally
-    SB.Free;
   end;
+  Result := SB.ToString;
 end;
 
 function TGocciaJSXTransformer.EscapeJSString(const AText: string): string;
 var
-  SB: TStringBuilder;
+  SB: TStringBuffer;
   I: Integer;
   C: Char;
 begin
-  SB := TStringBuilder.Create;
-  try
-    for I := 1 to Length(AText) do
-    begin
-      C := AText[I];
-      case C of
-        '\': SB.Append('\\');
-        '"': SB.Append('\"');
-        #10: SB.Append('\n');
-        #13: SB.Append('\r');
-        #9:  SB.Append('\t');
-      else
-        SB.Append(C);
-      end;
+  SB := TStringBuffer.Create(Length(AText));
+  for I := 1 to Length(AText) do
+  begin
+    C := AText[I];
+    case C of
+      '\': SB.Append('\\');
+      '"': SB.Append('\"');
+      #10: SB.Append('\n');
+      #13: SB.Append('\r');
+      #9:  SB.Append('\t');
+    else
+      SB.AppendChar(C);
     end;
-    Result := SB.ToString;
-  finally
-    SB.Free;
   end;
+  Result := SB.ToString;
 end;
 
 function TGocciaJSXTransformer.FormatPropertyKey(const AName: string): string;
@@ -524,7 +520,7 @@ end;
 function TGocciaJSXTransformer.TrimJSXWhitespace(const AText: string): string;
 var
   Lines: TStringList;
-  SB: TStringBuilder;
+  SB: TStringBuffer;
   I: Integer;
   Line: string;
   First: Boolean;
@@ -538,8 +534,8 @@ begin
     Exit(AText);
 
   Lines := TStringList.Create;
-  SB := TStringBuilder.Create;
   try
+    SB := TStringBuffer.Create;
     Lines.Text := AText;
     First := True;
 
@@ -556,7 +552,7 @@ begin
       if Line <> '' then
       begin
         if not First then
-          SB.Append(' ');
+          SB.AppendChar(' ');
         SB.Append(Line);
         First := False;
       end;
@@ -564,7 +560,6 @@ begin
 
     Result := SB.ToString;
   finally
-    SB.Free;
     Lines.Free;
   end;
 end;
@@ -673,7 +668,7 @@ type
 var
   Segments: array of TAttrSegment;
   SegmentCount: Integer;
-  CurrentObjAttrs: TStringBuilder;
+  CurrentObjAttrs: TStringBuffer;
   AttrCount: Integer;
   AttrName: string;
   Depth: Integer;
@@ -702,26 +697,127 @@ begin
   HasSpread := False;
   SegmentCount := 0;
   AttrCount := 0;
-  CurrentObjAttrs := TStringBuilder.Create;
-  try
-    while not IsAtEnd do
+  CurrentObjAttrs := TStringBuffer.Create;
+  while not IsAtEnd do
+  begin
+    SkipWhitespace;
+    if IsAtEnd or (CurrentChar = '>') or ((CurrentChar = '/') and (PeekAt(1) = '>')) then
+      Break;
+
+    AHadAttributes := True;
+
+    if (CurrentChar = '{') and (PeekAt(1) = '.') and (PeekAt(2) = '.') and (PeekAt(3) = '.') then
     begin
-      SkipWhitespace;
-      if IsAtEnd or (CurrentChar = '>') or ((CurrentChar = '/') and (PeekAt(1) = '>')) then
-        Break;
+      HasSpread := True;
+      FlushObjectAttrs;
 
-      AHadAttributes := True;
+      AdvanceInput;
+      AdvanceInput;
+      AdvanceInput;
+      AdvanceInput;
 
-      if (CurrentChar = '{') and (PeekAt(1) = '.') and (PeekAt(2) = '.') and (PeekAt(3) = '.') then
+      Depth := 1;
+      ValueStart := FPos;
+      while not IsAtEnd and (Depth > 0) do
       begin
-        HasSpread := True;
-        FlushObjectAttrs;
+        if CurrentChar = '{' then
+          Inc(Depth)
+        else if CurrentChar = '}' then
+          Dec(Depth);
+        if Depth > 0 then
+          AdvanceInput;
+      end;
+      Inc(SegmentCount);
+      SetLength(Segments, SegmentCount);
+      Segments[SegmentCount - 1].Kind := askSpread;
+      Segments[SegmentCount - 1].Content := Trim(Copy(FSource, ValueStart, FPos - ValueStart));
+      if not IsAtEnd then
+        AdvanceInput;
+      Continue;
+    end;
 
+    if (CurrentChar = '{') and (PeekAt(1) <> '.') then
+    begin
+      AdvanceInput;
+      AttrName := '';
+      while not IsAtEnd and IsIdentifierPart(CurrentChar) do
+      begin
+        AttrName := AttrName + CurrentChar;
         AdvanceInput;
+      end;
+      if not IsAtEnd and (CurrentChar = '}') then
         AdvanceInput;
-        AdvanceInput;
-        AdvanceInput;
+      if AttrCount > 0 then
+        CurrentObjAttrs.AppendChar(',')
+      else
+        CurrentObjAttrs.AppendChar('{');
+      CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': ' + AttrName);
+      Inc(AttrCount);
+      Continue;
+    end;
 
+    AttrName := '';
+    while not IsAtEnd and IsIdentifierPart(CurrentChar) do
+    begin
+      AttrName := AttrName + CurrentChar;
+      AdvanceInput;
+    end;
+    while not IsAtEnd and (CurrentChar = '-') do
+    begin
+      AttrName := AttrName + CurrentChar;
+      AdvanceInput;
+      while not IsAtEnd and IsIdentifierPart(CurrentChar) do
+      begin
+        AttrName := AttrName + CurrentChar;
+        AdvanceInput;
+      end;
+    end;
+
+    if AttrCount > 0 then
+      CurrentObjAttrs.AppendChar(',')
+    else
+      CurrentObjAttrs.AppendChar('{');
+
+    SkipWhitespace;
+
+    if not IsAtEnd and (CurrentChar = '=') then
+    begin
+      AdvanceInput;
+      SkipWhitespace;
+
+      if not IsAtEnd and (CurrentChar = '"') then
+      begin
+        AdvanceInput;
+        ValueStart := FPos;
+        while not IsAtEnd and (CurrentChar <> '"') do
+        begin
+          if CurrentChar = '\' then
+            AdvanceInput;
+          if not IsAtEnd then
+            AdvanceInput;
+        end;
+        CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': "' + EscapeJSString(Copy(FSource, ValueStart, FPos - ValueStart)) + '"');
+        if not IsAtEnd then
+          AdvanceInput;
+      end
+      else if not IsAtEnd and (CurrentChar = '''') then
+      begin
+        AdvanceInput;
+        ValueStart := FPos;
+        while not IsAtEnd and (CurrentChar <> '''') do
+        begin
+          if CurrentChar = '\' then
+            AdvanceInput;
+          if not IsAtEnd then
+            AdvanceInput;
+        end;
+        CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': "' + EscapeJSString(Copy(FSource, ValueStart, FPos - ValueStart)) + '"');
+        if not IsAtEnd then
+          AdvanceInput;
+      end
+      else if not IsAtEnd and (CurrentChar = '{') then
+      begin
+        AdvanceInput;
         Depth := 1;
         ValueStart := FPos;
         while not IsAtEnd and (Depth > 0) do
@@ -733,145 +829,40 @@ begin
           if Depth > 0 then
             AdvanceInput;
         end;
-        Inc(SegmentCount);
-        SetLength(Segments, SegmentCount);
-        Segments[SegmentCount - 1].Kind := askSpread;
-        Segments[SegmentCount - 1].Content := Trim(Copy(FSource, ValueStart, FPos - ValueStart));
+        RawExpr := Trim(Copy(FSource, ValueStart, FPos - ValueStart));
+        SubResult := TGocciaJSXTransformer.Transform(RawExpr, FFactoryName, FFragmentName);
+        if Assigned(SubResult.SourceMap) then
+          SubResult.SourceMap.Free;
+        CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': ' + SubResult.Source);
         if not IsAtEnd then
           AdvanceInput;
-        Continue;
       end;
-
-      if (CurrentChar = '{') and (PeekAt(1) <> '.') then
-      begin
-        AdvanceInput;
-        AttrName := '';
-        while not IsAtEnd and IsIdentifierPart(CurrentChar) do
-        begin
-          AttrName := AttrName + CurrentChar;
-          AdvanceInput;
-        end;
-        if not IsAtEnd and (CurrentChar = '}') then
-          AdvanceInput;
-        if AttrCount > 0 then
-          CurrentObjAttrs.Append(',')
-        else
-          CurrentObjAttrs.Append('{');
-        CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': ' + AttrName);
-        Inc(AttrCount);
-        Continue;
-      end;
-
-      AttrName := '';
-      while not IsAtEnd and IsIdentifierPart(CurrentChar) do
-      begin
-        AttrName := AttrName + CurrentChar;
-        AdvanceInput;
-      end;
-      while not IsAtEnd and (CurrentChar = '-') do
-      begin
-        AttrName := AttrName + CurrentChar;
-        AdvanceInput;
-        while not IsAtEnd and IsIdentifierPart(CurrentChar) do
-        begin
-          AttrName := AttrName + CurrentChar;
-          AdvanceInput;
-        end;
-      end;
-
-      if AttrCount > 0 then
-        CurrentObjAttrs.Append(',')
-      else
-        CurrentObjAttrs.Append('{');
-
-      SkipWhitespace;
-
-      if not IsAtEnd and (CurrentChar = '=') then
-      begin
-        AdvanceInput;
-        SkipWhitespace;
-
-        if not IsAtEnd and (CurrentChar = '"') then
-        begin
-          AdvanceInput;
-          ValueStart := FPos;
-          while not IsAtEnd and (CurrentChar <> '"') do
-          begin
-            if CurrentChar = '\' then
-              AdvanceInput;
-            if not IsAtEnd then
-              AdvanceInput;
-          end;
-          CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': "' + EscapeJSString(Copy(FSource, ValueStart, FPos - ValueStart)) + '"');
-          if not IsAtEnd then
-            AdvanceInput;
-        end
-        else if not IsAtEnd and (CurrentChar = '''') then
-        begin
-          AdvanceInput;
-          ValueStart := FPos;
-          while not IsAtEnd and (CurrentChar <> '''') do
-          begin
-            if CurrentChar = '\' then
-              AdvanceInput;
-            if not IsAtEnd then
-              AdvanceInput;
-          end;
-          CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': "' + EscapeJSString(Copy(FSource, ValueStart, FPos - ValueStart)) + '"');
-          if not IsAtEnd then
-            AdvanceInput;
-        end
-        else if not IsAtEnd and (CurrentChar = '{') then
-        begin
-          AdvanceInput;
-          Depth := 1;
-          ValueStart := FPos;
-          while not IsAtEnd and (Depth > 0) do
-          begin
-            if CurrentChar = '{' then
-              Inc(Depth)
-            else if CurrentChar = '}' then
-              Dec(Depth);
-            if Depth > 0 then
-              AdvanceInput;
-          end;
-          RawExpr := Trim(Copy(FSource, ValueStart, FPos - ValueStart));
-          SubResult := TGocciaJSXTransformer.Transform(RawExpr, FFactoryName, FFragmentName);
-          if Assigned(SubResult.SourceMap) then
-            SubResult.SourceMap.Free;
-          CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': ' + SubResult.Source);
-          if not IsAtEnd then
-            AdvanceInput;
-        end;
-      end
-      else
-        CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': true');
-
-      Inc(AttrCount);
-    end;
-
-    FlushObjectAttrs;
-
-    if SegmentCount = 0 then
-    begin
-      AHadAttributes := False;
-      Exit;
-    end;
-
-    if not HasSpread and (SegmentCount = 1) and (Segments[0].Kind = askObject) then
-      Emit(Segments[0].Content)
+    end
     else
+      CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': true');
+
+    Inc(AttrCount);
+  end;
+
+  FlushObjectAttrs;
+
+  if SegmentCount = 0 then
+  begin
+    AHadAttributes := False;
+    Exit;
+  end;
+
+  if not HasSpread and (SegmentCount = 1) and (Segments[0].Kind = askObject) then
+    Emit(Segments[0].Content)
+  else
+  begin
+    Emit('Object.assign({}');
+    for I := 0 to SegmentCount - 1 do
     begin
-      Emit('Object.assign({}');
-      for I := 0 to SegmentCount - 1 do
-      begin
-        Emit(', ');
-        Emit(Segments[I].Content);
-      end;
-      Emit(')');
+      Emit(', ');
+      Emit(Segments[I].Content);
     end;
-  finally
-    CurrentObjAttrs.Free;
+    Emit(')');
   end;
 end;
 
@@ -930,19 +921,15 @@ end;
 
 function TGocciaJSXTransformer.CollectJSXText: string;
 var
-  SB: TStringBuilder;
+  SB: TStringBuffer;
 begin
-  SB := TStringBuilder.Create;
-  try
-    while not IsAtEnd and (CurrentChar <> '<') and (CurrentChar <> '{') do
-    begin
-      SB.Append(CurrentChar);
-      AdvanceInput;
-    end;
-    Result := SB.ToString;
-  finally
-    SB.Free;
+  SB := TStringBuffer.Create;
+  while not IsAtEnd and (CurrentChar <> '<') and (CurrentChar <> '{') do
+  begin
+    SB.AppendChar(CurrentChar);
+    AdvanceInput;
   end;
+  Result := SB.ToString;
 end;
 
 procedure TGocciaJSXTransformer.CopyJSXExpression;

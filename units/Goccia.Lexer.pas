@@ -9,6 +9,8 @@ uses
   Generics.Collections,
   SysUtils,
 
+  StringBuffer,
+
   Goccia.Token;
 
 type
@@ -45,7 +47,7 @@ type
     procedure ScanIdentifier;
     function ScanUnicodeEscape: string;
     function ScanHexEscape: string;
-    procedure ProcessEscapeSequence(const ASB: TStringBuilder);
+    procedure ProcessEscapeSequence(var ASB: TStringBuffer);
     procedure SkipWhitespace;
     procedure SkipComment;
     procedure SkipBlockComment;
@@ -314,116 +316,107 @@ begin
   Result := Chr(CodePoint);
 end;
 
-procedure TGocciaLexer.ProcessEscapeSequence(const ASB: TStringBuilder);
+procedure TGocciaLexer.ProcessEscapeSequence(var ASB: TStringBuffer);
 begin
   case Peek of
-    'n': begin ASB.Append(#10); Advance; end;
-    'r': begin ASB.Append(#13); Advance; end;
-    't': begin ASB.Append(#9); Advance; end;
-    '\': begin ASB.Append('\'); Advance; end;
-    '0': begin ASB.Append(#0); Advance; end;
+    'n': begin ASB.AppendChar(#10); Advance; end;
+    'r': begin ASB.AppendChar(#13); Advance; end;
+    't': begin ASB.AppendChar(#9); Advance; end;
+    '\': begin ASB.AppendChar('\'); Advance; end;
+    '0': begin ASB.AppendChar(#0); Advance; end;
     'u': begin Advance; ASB.Append(ScanUnicodeEscape); end;
     'x': begin Advance; ASB.Append(ScanHexEscape); end;
   else
-    ASB.Append(Peek);
+    ASB.AppendChar(Peek);
     Advance;
   end;
 end;
 
 procedure TGocciaLexer.ScanString;
 var
-  SB: TStringBuilder;
+  SB: TStringBuffer;
   Quote: Char;
 begin
   Quote := FSource[FStart];
-  SB := TStringBuilder.Create;
-  try
-    while (Peek <> Quote) and not IsAtEnd do
+  SB := TStringBuffer.Create;
+  while (Peek <> Quote) and not IsAtEnd do
+  begin
+    if Peek = #10 then
     begin
-      if Peek = #10 then
-      begin
-        Inc(FLine);
-        FColumn := 0;
-      end;
-
-      if Peek = '\' then
-      begin
-        Advance;
-        if not IsAtEnd then
-        begin
-          case Peek of
-            '''': begin SB.Append(''''); Advance; end;
-            '"': begin SB.Append('"'); Advance; end;
-          else
-            ProcessEscapeSequence(SB);
-          end;
-        end;
-      end
-      else
-        SB.Append(Advance);
+      Inc(FLine);
+      FColumn := 0;
     end;
 
-    if IsAtEnd then
-      raise TGocciaLexerError.Create('Unterminated string', FLine, FColumn,
-        FFileName, GetSourceLines);
-
-    Advance; // Closing quote
-    AddToken(gttString, SB.ToString);
-  finally
-    SB.Free;
+    if Peek = '\' then
+    begin
+      Advance;
+      if not IsAtEnd then
+      begin
+        case Peek of
+          '''': begin SB.AppendChar(''''); Advance; end;
+          '"': begin SB.AppendChar('"'); Advance; end;
+        else
+          ProcessEscapeSequence(SB);
+        end;
+      end;
+    end
+    else
+      SB.AppendChar(Advance);
   end;
+
+  if IsAtEnd then
+    raise TGocciaLexerError.Create('Unterminated string', FLine, FColumn,
+      FFileName, GetSourceLines);
+
+  Advance; // Closing quote
+  AddToken(gttString, SB.ToString);
 end;
 
 procedure TGocciaLexer.ScanTemplate;
 var
-  SB: TStringBuilder;
+  SB: TStringBuffer;
 begin
-  SB := TStringBuilder.Create;
-  try
-    while (Peek <> '`') and not IsAtEnd do
+  SB := TStringBuffer.Create;
+  while (Peek <> '`') and not IsAtEnd do
+  begin
+    if Peek = #13 then
     begin
-      if Peek = #13 then
-      begin
-        // ECMAScript spec: normalize CR and CRLF to LF in template literals
+      Advance;
+      if Peek = #10 then
         Advance;
-        if Peek = #10 then
-          Advance;
-        Inc(FLine);
-        FColumn := 0;
-        SB.Append(#10);
-      end
-      else if Peek = #10 then
+      Inc(FLine);
+      FColumn := 0;
+      SB.AppendChar(#10);
+    end
+    else if Peek = #10 then
+    begin
+      Inc(FLine);
+      FColumn := 0;
+      SB.AppendChar(Advance);
+    end
+    else if Peek = '\' then
+    begin
+      Advance;
+      if not IsAtEnd then
       begin
-        Inc(FLine);
-        FColumn := 0;
-        SB.Append(Advance);
-      end
-      else if Peek = '\' then
-      begin
-        Advance;
-        if not IsAtEnd then
-        begin
-          case Peek of
-            '`': begin SB.Append('`'); Advance; end;
-            '$': begin SB.Append('$'); Advance; end;
-          else
-            ProcessEscapeSequence(SB);
-          end;
+        case Peek of
+          '`': begin SB.AppendChar('`'); Advance; end;
+          '$': begin SB.AppendChar('$'); Advance; end;
+        else
+          ProcessEscapeSequence(SB);
         end;
-      end
-      else
-        SB.Append(Advance);
-    end;
-
-    if IsAtEnd then
-      raise TGocciaLexerError.Create('Unterminated template literal', FLine, FColumn,
-        FFileName, GetSourceLines);
-
-    Advance; // Closing backtick
-    AddToken(gttTemplate, SB.ToString);
-  finally
-    SB.Free;
+      end;
+    end
+    else
+      SB.AppendChar(Advance);
   end;
+
+  if IsAtEnd then
+    raise TGocciaLexerError.Create('Unterminated template literal', FLine, FColumn,
+      FFileName, GetSourceLines);
+
+  Advance; // Closing backtick
+  AddToken(gttTemplate, SB.ToString);
 end;
 
 procedure TGocciaLexer.ScanNumber;
