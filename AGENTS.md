@@ -140,6 +140,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Argument Validator | `Goccia.Arguments.Validator.pas` | `RequireExactly`, `RequireAtLeast` — standardized argument count/type validation |
 | Argument Callbacks | `Goccia.Arguments.Callbacks.pas` | Pre-typed callback argument collections for array prototype methods |
 | Ordered Map | `OrderedMap.pas` | Generic insertion-order-preserving string-keyed map (`TOrderedMap<T>`) |
+| String Buffer | `StringBuffer.pas` | `TStringBuffer` — advanced record for efficient string building with preallocated doubling growth via `AnsiString` + `Move`, replacing `TStringBuilder` |
 | Binding Map | `Goccia.Scope.BindingMap.pas` | Ordered map specialized for lexical bindings (`TOrderedMap<TLexicalBinding>`) |
 | Array Utils | `Goccia.Utils.Array.pas` | `ArrayCreateDataProperty` helper for spec-compliant array operations |
 | TypedArray Value | `Goccia.Values.TypedArrayValue.pas` | `TGocciaTypedArrayValue` — view over ArrayBuffer with fixed element type (Int8, Uint8, Uint8Clamped, Int16, Uint16, Int32, Uint32, Float32, Float64), `TGocciaTypedArrayClassValue`, `TGocciaTypedArrayStaticFrom` |
@@ -416,6 +417,10 @@ The section numbers reference [ECMA-262](https://tc39.es/ecma262/) (the living s
 ### Do Not Implement String Interning
 
 Dictionary-based string interning (`TDictionary<string, TGocciaStringLiteralValue>` cache) was attempted and **benchmarked at -4% across 172 benchmarks** (49 regressions, 3 improvements). The hash + lookup cost per string exceeds FreePascal's allocation cost. See [docs/design-decisions.md](docs/design-decisions.md) for the full analysis and alternative approaches.
+
+### Do Not Use TStringBuilder
+
+`TStringBuilder` (both `TUnicodeStringBuilder` and `TAnsiStringBuilder`) triggers a **750x slowdown** from FPC's default heap manager when used without preallocation, due to pathological repeated grow-free cycles. Even preallocated, it is ~2x slower than `TStringBuffer` due to virtual dispatch and bounds-checking overhead. Use `TStringBuffer` (`StringBuffer.pas`) instead for all string building. `TStringBuffer` is an advanced record with preallocated doubling growth, within 1.1–1.7x of raw `SetLength + Move` writes, and requires no `try/finally` cleanup (the backing `AnsiString` is refcounted and compiler-managed). See [docs/spikes/fpc-string-performance.pdf](docs/spikes/fpc-string-performance.pdf) for the full benchmark analysis.
 
 ### Platform Pitfall: `Double(Int64)` on AArch64
 

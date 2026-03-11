@@ -49,6 +49,7 @@ implementation
 uses
   SysUtils,
 
+  StringBuffer,
   TimingUtils,
 
   Goccia.Values.ArrayValue,
@@ -89,46 +90,40 @@ var
   Obj: TGocciaObjectValue;
   I: Integer;
   Key: string;
-  SB: TStringBuilder;
+  SB: TStringBuffer;
   First: Boolean;
 begin
   if AValue is TGocciaArrayValue then
   begin
     Arr := TGocciaArrayValue(AValue);
-    SB := TStringBuilder.Create;
-    try
-      SB.Append('[');
-      for I := 0 to Arr.Elements.Count - 1 do
-      begin
-        if I > 0 then
-          SB.Append(', ');
-        SB.Append(FormatValue(Arr.Elements[I]));
-      end;
-      SB.Append(']');
-      Result := SB.ToString;
-    finally
-      SB.Free;
+    SB := TStringBuffer.Create;
+    SB.AppendChar('[');
+    for I := 0 to Arr.Elements.Count - 1 do
+    begin
+      if I > 0 then
+        SB.Append(', ');
+      SB.Append(FormatValue(Arr.Elements[I]));
     end;
+    SB.AppendChar(']');
+    Result := SB.ToString;
   end
   else if AValue is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(AValue);
-    SB := TStringBuilder.Create;
-    try
-      SB.Append('{');
-      First := True;
-      for Key in Obj.GetEnumerablePropertyNames do
-      begin
-        if not First then
-          SB.Append(', ');
-        First := False;
-        SB.Append(Key).Append(': ').Append(FormatValue(Obj.GetProperty(Key)));
-      end;
-      SB.Append('}');
-      Result := SB.ToString;
-    finally
-      SB.Free;
+    SB := TStringBuffer.Create;
+    SB.AppendChar('{');
+    First := True;
+    for Key in Obj.GetEnumerablePropertyNames do
+    begin
+      if not First then
+        SB.Append(', ');
+      First := False;
+      SB.Append(Key);
+      SB.Append(': ');
+      SB.Append(FormatValue(Obj.GetProperty(Key)));
     end;
+    SB.AppendChar('}');
+    Result := SB.ToString;
   end
   else if AValue is TGocciaStringLiteralValue then
     Result := '''' + AValue.ToStringLiteral.Value + ''''

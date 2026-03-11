@@ -81,7 +81,7 @@ An opt-in source-to-source pre-pass that converts JSX syntax into standard `crea
 A single-pass tokenizer that converts source text into a flat list of `TGocciaToken` objects. Key features:
 
 - **Keyword lookup** — Uses a shared `TDictionary<string, TGocciaTokenType>` (initialized once as a class variable) for O(1) keyword identification instead of a linear if-else chain.
-- **String scanning** — Uses `TStringBuilder` for O(n) string literal and template literal assembly, avoiding O(n^2) repeated string concatenation.
+- **String scanning** — Uses `TStringBuffer` for O(n) string literal and template literal assembly, avoiding O(n^2) repeated string concatenation.
 - **Shared escape handling** — A `ProcessEscapeSequence` method handles common escape sequences (`\n`, `\t`, `\r`, `\\`, `\0`, `\uXXXX`, `\u{XXXXX}`, `\xHH`) shared between string and template literal scanning. String-specific (`\'`, `\"`) and template-specific (`` \` ``, `\$`) escapes remain in their respective scan methods.
 - **Number formats** — Decimal, hexadecimal (`0x`), binary (`0b`), octal (`0o`), scientific notation.
 - **Template literals** — Special handling for backtick strings with `${...}` interpolation.

@@ -53,6 +53,8 @@ type
 implementation
 
 uses
+  StringBuffer,
+
   Goccia.Values.FunctionValue;
 
 { TGocciaJSONParser }
@@ -444,61 +446,59 @@ end;
 
 function TGocciaJSONStringifier.StringifyObject(const AObj: TGocciaObjectValue; const AIndent: Integer): string;
 var
-  SB: TStringBuilder;
+  SB: TStringBuffer;
   Key: string;
   Value: TGocciaValue;
   HasProperties: Boolean;
   Separator, ChildIndent, CloseIndent: string;
 begin
-  SB := TStringBuilder.Create;
-  try
-    HasProperties := False;
+  SB := TStringBuffer.Create;
+  HasProperties := False;
 
-    if FGap <> '' then
-    begin
-      Separator := ',' + #10;
-      ChildIndent := MakeIndent(AIndent + 1);
-      CloseIndent := MakeIndent(AIndent);
-    end
-    else
-    begin
-      Separator := ',';
-      ChildIndent := '';
-      CloseIndent := '';
-    end;
-
-    for Key in AObj.GetEnumerablePropertyNames do
-    begin
-      Value := AObj.GetProperty(Key);
-
-      if not (Value is TGocciaUndefinedLiteralValue) and
-         not (Value is TGocciaFunctionValue) then
-      begin
-        if HasProperties then
-          SB.Append(Separator);
-        SB.Append(ChildIndent);
-        SB.Append('"').Append(EscapeString(Key)).Append('":');
-        if FGap <> '' then
-          SB.Append(' ');
-        SB.Append(StringifyValue(Value, AIndent + 1));
-        HasProperties := True;
-      end;
-    end;
-
-    if not HasProperties then
-      Result := '{}'
-    else if FGap <> '' then
-      Result := '{' + #10 + SB.ToString + #10 + CloseIndent + '}'
-    else
-      Result := '{' + SB.ToString + '}';
-  finally
-    SB.Free;
+  if FGap <> '' then
+  begin
+    Separator := ',' + #10;
+    ChildIndent := MakeIndent(AIndent + 1);
+    CloseIndent := MakeIndent(AIndent);
+  end
+  else
+  begin
+    Separator := ',';
+    ChildIndent := '';
+    CloseIndent := '';
   end;
+
+  for Key in AObj.GetEnumerablePropertyNames do
+  begin
+    Value := AObj.GetProperty(Key);
+
+    if not (Value is TGocciaUndefinedLiteralValue) and
+       not (Value is TGocciaFunctionValue) then
+    begin
+      if HasProperties then
+        SB.Append(Separator);
+      SB.Append(ChildIndent);
+      SB.AppendChar('"');
+      SB.Append(EscapeString(Key));
+      SB.Append('":');
+      if FGap <> '' then
+        SB.AppendChar(' ');
+      SB.Append(StringifyValue(Value, AIndent + 1));
+      HasProperties := True;
+    end;
+  end;
+
+  if not HasProperties then
+    Result := '{}'
+  else if FGap <> '' then
+    Result := '{' + #10 + SB.ToString + #10 + CloseIndent + '}'
+  else
+    Result := '{' + SB.ToString + '}';
 end;
 
 function TGocciaJSONStringifier.StringifyArray(const AArr: TGocciaArrayValue; const AIndent: Integer): string;
 var
-  SB: TStringBuilder;
+  SB: TStringBuffer;
   I: Integer;
   Separator, ChildIndent, CloseIndent: string;
 begin
@@ -521,55 +521,50 @@ begin
     CloseIndent := '';
   end;
 
-  SB := TStringBuilder.Create;
-  try
-    for I := 0 to AArr.Elements.Count - 1 do
-    begin
-      if I > 0 then
-        SB.Append(Separator);
-      SB.Append(ChildIndent);
-      SB.Append(StringifyValue(AArr.Elements[I], AIndent + 1));
-    end;
-    if FGap <> '' then
-      Result := '[' + #10 + SB.ToString + #10 + CloseIndent + ']'
-    else
-      Result := '[' + SB.ToString + ']';
-  finally
-    SB.Free;
+  SB := TStringBuffer.Create;
+  for I := 0 to AArr.Elements.Count - 1 do
+  begin
+    if I > 0 then
+      SB.Append(Separator);
+    SB.Append(ChildIndent);
+    SB.Append(StringifyValue(AArr.Elements[I], AIndent + 1));
   end;
+  if FGap <> '' then
+    Result := '[' + #10 + SB.ToString + #10 + CloseIndent + ']'
+  else
+    Result := '[' + SB.ToString + ']';
 end;
 
 function TGocciaJSONStringifier.EscapeString(const AStr: string): string;
 var
-  SB: TStringBuilder;
+  SB: TStringBuffer;
   I: Integer;
   Ch: Char;
 begin
-  SB := TStringBuilder.Create;
-  try
-    for I := 1 to Length(AStr) do
-    begin
-      Ch := AStr[I];
-      case Ch of
-        '"': SB.Append('\"');
-        '\': SB.Append('\\');
-        '/': SB.Append('\/');
-        #8: SB.Append('\b');
-        #12: SB.Append('\f');
-        #10: SB.Append('\n');
-        #13: SB.Append('\r');
-        #9: SB.Append('\t');
+  SB := TStringBuffer.Create(Length(AStr));
+  for I := 1 to Length(AStr) do
+  begin
+    Ch := AStr[I];
+    case Ch of
+      '"': SB.Append('\"');
+      '\': SB.Append('\\');
+      '/': SB.Append('\/');
+      #8: SB.Append('\b');
+      #12: SB.Append('\f');
+      #10: SB.Append('\n');
+      #13: SB.Append('\r');
+      #9: SB.Append('\t');
+    else
+      if Ord(Ch) < 32 then
+      begin
+        SB.Append('\u');
+        SB.Append(IntToHex(Ord(Ch), 4));
+      end
       else
-        if Ord(Ch) < 32 then
-          SB.Append('\u').Append(IntToHex(Ord(Ch), 4))
-        else
-          SB.Append(Ch);
-      end;
+        SB.AppendChar(Ch);
     end;
-    Result := SB.ToString;
-  finally
-    SB.Free;
   end;
+  Result := SB.ToString;
 end;
 
 end.

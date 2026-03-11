@@ -114,6 +114,7 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
+  StringBuffer,
 
   Goccia.Arguments.Callbacks,
   Goccia.Constants.PropertyNames,
@@ -1581,7 +1582,7 @@ end;
 function TGocciaArrayValue.ToStringLiteral: TGocciaStringLiteralValue;
 var
   I: Integer;
-  SB: TStringBuilder;
+  SB: TStringBuffer;
 begin
   if FElements.Count = 0 then
   begin
@@ -1589,19 +1590,15 @@ begin
     Exit;
   end;
 
-  SB := TStringBuilder.Create;
-  try
-    for I := 0 to FElements.Count - 1 do
-    begin
-      if I > 0 then
-        SB.Append(',');
-      if FElements[I] <> nil then
-        SB.Append(FElements[I].ToStringLiteral.Value);
-    end;
-    Result := TGocciaStringLiteralValue.Create(SB.ToString);
-  finally
-    SB.Free;
+  SB := TStringBuffer.Create;
+  for I := 0 to FElements.Count - 1 do
+  begin
+    if I > 0 then
+      SB.AppendChar(',');
+    if FElements[I] <> nil then
+      SB.Append(FElements[I].ToStringLiteral.Value);
   end;
+  Result := TGocciaStringLiteralValue.Create(SB.ToString);
 end;
 
 function TGocciaArrayValue.ToNumberLiteral: TGocciaNumberLiteralValue;

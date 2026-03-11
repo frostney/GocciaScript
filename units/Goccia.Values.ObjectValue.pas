@@ -104,6 +104,7 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
+  StringBuffer,
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -412,53 +413,55 @@ end;
 
 function TGocciaObjectValue.ToDebugString: string;
 var
-  SB: TStringBuilder;
+  SB: TStringBuffer;
   Entries: TGocciaPropertyMap.TKeyValueArray;
   I: Integer;
   First: Boolean;
   Value: TGocciaValue;
 begin
-  SB := TStringBuilder.Create;
-  try
-    SB.Append('{');
-    First := True;
+  SB := TStringBuffer.Create;
+  SB.AppendChar('{');
+  First := True;
 
-    Entries := FProperties.ToArray;
-    for I := 0 to Length(Entries) - 1 do
+  Entries := FProperties.ToArray;
+  for I := 0 to Length(Entries) - 1 do
+  begin
+    if not First then
+      SB.Append(', ');
+
+    if Entries[I].Value is TGocciaPropertyDescriptorData then
+      Value := TGocciaPropertyDescriptorData(Entries[I].Value).Value
+    else
+      Value := nil;
+
+    if Assigned(Value) then
     begin
-      if not First then
-        SB.Append(', ');
-
-      if Entries[I].Value is TGocciaPropertyDescriptorData then
-        Value := TGocciaPropertyDescriptorData(Entries[I].Value).Value
+      SB.Append(Entries[I].Key);
+      SB.Append(': ');
+      if Value is TGocciaObjectValue then
+        SB.Append(TGocciaObjectValue(Value).ToDebugString)
       else
-        Value := nil;
-
-      if Assigned(Value) then
-      begin
-        if Value is TGocciaObjectValue then
-          SB.Append(Entries[I].Key).Append(': ').Append(TGocciaObjectValue(Value).ToDebugString)
-        else
-          SB.Append(Entries[I].Key).Append(': ').Append(Value.ToStringLiteral.Value);
-      end
-      else
-        SB.Append(Entries[I].Key).Append(': [accessor]');
-
-      First := False;
+        SB.Append(Value.ToStringLiteral.Value);
+    end
+    else
+    begin
+      SB.Append(Entries[I].Key);
+      SB.Append(': [accessor]');
     end;
 
-    if Assigned(FPrototype) then
-    begin
-      if not First then
-        SB.Append(', ');
-      SB.Append('[[Prototype]]: ').Append(FPrototype.ToDebugString);
-    end;
-
-    SB.Append('}');
-    Result := SB.ToString;
-  finally
-    SB.Free;
+    First := False;
   end;
+
+  if Assigned(FPrototype) then
+  begin
+    if not First then
+      SB.Append(', ');
+    SB.Append('[[Prototype]]: ');
+    SB.Append(FPrototype.ToDebugString);
+  end;
+
+  SB.AppendChar('}');
+  Result := SB.ToString;
 end;
 
 function TGocciaObjectValue.TypeName: string;
