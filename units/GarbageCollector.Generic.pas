@@ -7,8 +7,7 @@ interface
 uses
   Generics.Collections,
 
-  GarbageCollector.Managed,
-  HashMap;
+  GarbageCollector.Managed;
 
 type
   TGCManagedObjectList = TObjectList<TGCManagedObject>;
@@ -19,9 +18,9 @@ type
     FInstance: TGarbageCollector;
   private
     FManagedObjects: TGCManagedObjectList;
-    FPinnedObjects: THashMap<TGCManagedObject, Boolean>;
-    FTempRoots: THashMap<TGCManagedObject, Boolean>;
-    FRootObjects: THashMap<TGCManagedObject, Boolean>;
+    FPinnedObjects: TDictionary<TGCManagedObject, Boolean>;
+    FTempRoots: TDictionary<TGCManagedObject, Boolean>;
+    FRootObjects: TDictionary<TGCManagedObject, Boolean>;
     FActiveRootStack: TGCManagedObjectList;
 
     FExternalRootMarkers: array of TGCRootMarker;
@@ -102,9 +101,9 @@ constructor TGarbageCollector.Create;
 begin
   inherited Create;
   FManagedObjects := TGCManagedObjectList.Create(False);
-  FPinnedObjects := THashMap<TGCManagedObject, Boolean>.Create;
-  FTempRoots := THashMap<TGCManagedObject, Boolean>.Create;
-  FRootObjects := THashMap<TGCManagedObject, Boolean>.Create;
+  FPinnedObjects := TDictionary<TGCManagedObject, Boolean>.Create;
+  FTempRoots := TDictionary<TGCManagedObject, Boolean>.Create;
+  FRootObjects := TDictionary<TGCManagedObject, Boolean>.Create;
   FActiveRootStack := TGCManagedObjectList.Create(False);
   FAllocationsSinceLastGC := 0;
   FGCThreshold := DEFAULT_GC_THRESHOLD;
@@ -244,17 +243,17 @@ end;
 
 procedure TGarbageCollector.MarkRoots;
 var
-  Pair: THashMap<TGCManagedObject, Boolean>.TKeyValuePair;
+  Obj: TGCManagedObject;
   I: Integer;
 begin
-  for Pair in FPinnedObjects do
-    Pair.Key.MarkReferences;
+  for Obj in FPinnedObjects.Keys do
+    Obj.MarkReferences;
 
-  for Pair in FTempRoots do
-    Pair.Key.MarkReferences;
+  for Obj in FTempRoots.Keys do
+    Obj.MarkReferences;
 
-  for Pair in FRootObjects do
-    Pair.Key.MarkReferences;
+  for Obj in FRootObjects.Keys do
+    Obj.MarkReferences;
 
   for I := 0 to FActiveRootStack.Count - 1 do
     FActiveRootStack[I].MarkReferences;
