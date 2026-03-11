@@ -59,6 +59,8 @@ procedure CompileComplexClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration; const APendingIndex: Integer);
 
 function TypeAnnotationToLocalType(const AAnnotation: string): TSouffleLocalType;
+function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
+function StripArrayLayer(const AAnnotation: string): string;
 function TypesAreCompatible(const AProduced, AExpected: TSouffleLocalType): Boolean;
 function InferLocalType(const AExpr: TGocciaExpression): TSouffleLocalType;
 function ExpressionType(const AScope: TGocciaCompilerScope;
@@ -157,6 +159,70 @@ begin
     Result := sltReference;
 end;
 
+function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
+var
+  Trimmed: string;
+  Len, Depth, I: Integer;
+begin
+  Result := False;
+  Trimmed := Trim(AAnnotation);
+  if Trimmed = '' then
+    Exit;
+  Len := Length(Trimmed);
+  if (Len >= 2) and (Trimmed[Len - 1] = '[') and (Trimmed[Len] = ']') then
+    Exit(True);
+  if Pos('Array<', Trimmed) = 1 then
+  begin
+    Depth := 0;
+    for I := 7 to Len do
+    begin
+      if Trimmed[I] = '<' then
+        Inc(Depth)
+      else if Trimmed[I] = '>' then
+      begin
+        if Depth = 0 then
+          Exit(I = Len);
+        Dec(Depth);
+      end;
+    end;
+  end;
+end;
+
+function StripArrayLayer(const AAnnotation: string): string;
+var
+  Trimmed: string;
+  Len, Depth, I: Integer;
+begin
+  Result := '';
+  Trimmed := Trim(AAnnotation);
+  if Trimmed = '' then
+    Exit;
+  Len := Length(Trimmed);
+  if (Len >= 2) and (Trimmed[Len - 1] = '[') and (Trimmed[Len] = ']') then
+  begin
+    Result := Trim(Copy(Trimmed, 1, Len - 2));
+    Exit;
+  end;
+  if Pos('Array<', Trimmed) = 1 then
+  begin
+    Depth := 0;
+    for I := 7 to Len do
+    begin
+      if Trimmed[I] = '<' then
+        Inc(Depth)
+      else if Trimmed[I] = '>' then
+      begin
+        if (Depth = 0) and (I = Len) then
+        begin
+          Result := Trim(Copy(Trimmed, 7, I - 7));
+          Exit;
+        end;
+        Dec(Depth);
+      end;
+    end;
+  end;
+end;
+
 function TypesAreCompatible(const AProduced, AExpected: TSouffleLocalType): Boolean;
 begin
   if AProduced = sltUntyped then
@@ -184,12 +250,40 @@ begin
     gttEqual, gttNotEqual];
 end;
 
+function ExpressionTypeAnnotation(const AScope: TGocciaCompilerScope;
+  const AExpr: TGocciaExpression): string;
+var
+  LocalIdx: Integer;
+  ObjAnnotation: string;
+  Member: TGocciaMemberExpression;
+begin
+  Result := '';
+  if AExpr is TGocciaIdentifierExpression then
+  begin
+    LocalIdx := AScope.ResolveLocal(TGocciaIdentifierExpression(AExpr).Name);
+    if LocalIdx >= 0 then
+      Result := AScope.GetLocal(LocalIdx).TypeAnnotation;
+  end
+  else if AExpr is TGocciaMemberExpression then
+  begin
+    Member := TGocciaMemberExpression(AExpr);
+    if Member.Computed then
+    begin
+      ObjAnnotation := ExpressionTypeAnnotation(AScope, Member.ObjectExpr);
+      if IsArrayTypeAnnotation(ObjAnnotation) then
+        Result := StripArrayLayer(ObjAnnotation);
+    end;
+  end;
+end;
+
 function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TSouffleLocalType;
 var
   Bin: TGocciaBinaryExpression;
   LocalIdx: Integer;
   LeftType, RightType: TSouffleLocalType;
+  ObjAnnotation: string;
+  Member: TGocciaMemberExpression;
 begin
   Result := sltUntyped;
   if AExpr is TGocciaLiteralExpression then
@@ -261,6 +355,16 @@ begin
       Result := LeftType
     else if IsKnownNumeric(LeftType) and IsKnownNumeric(RightType) then
       Result := sltFloat;
+  end
+  else if AExpr is TGocciaMemberExpression then
+  begin
+    Member := TGocciaMemberExpression(AExpr);
+    if Member.Computed then
+    begin
+      ObjAnnotation := ExpressionTypeAnnotation(AScope, Member.ObjectExpr);
+      if IsArrayTypeAnnotation(ObjAnnotation) then
+        Result := TypeAnnotationToLocalType(StripArrayLayer(ObjAnnotation));
+    end;
   end
   else if AExpr is TGocciaTemplateLiteralExpression then
     Result := sltString
@@ -374,6 +478,21 @@ begin
         ACtx.Template.SetLocalType(Slot, TypeHint);
         ACtx.Scope.SetLocalStrictlyTyped(LocalIdx, True);
         ACtx.Template.SetLocalStrictFlag(Slot, True);
+      end;
+    end;
+
+    if Info.TypeAnnotation <> '' then
+    begin
+      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      if LocalIdx >= 0 then
+      begin
+        ACtx.Scope.SetLocalTypeAnnotation(LocalIdx, Info.TypeAnnotation);
+        if IsArrayTypeAnnotation(Info.TypeAnnotation) then
+        begin
+          ACtx.Scope.SetLocalArrayTyped(LocalIdx, True);
+          ACtx.Scope.SetLocalElementTypeAnnotation(LocalIdx,
+            StripArrayLayer(Info.TypeAnnotation));
+        end;
       end;
     end;
 
@@ -605,6 +724,133 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+function IsConstArrayLocal(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; out ALocalIdx: Integer): Boolean;
+var
+  LocalIdx: Integer;
+begin
+  Result := False;
+  if not (AExpr is TGocciaIdentifierExpression) then
+    Exit;
+  LocalIdx := ACtx.Scope.ResolveLocal(TGocciaIdentifierExpression(AExpr).Name);
+  if LocalIdx < 0 then
+    Exit;
+  if not ACtx.Scope.GetLocal(LocalIdx).IsConst then
+    Exit;
+  if not ACtx.Scope.GetLocal(LocalIdx).IsArrayTyped then
+    Exit;
+  ALocalIdx := LocalIdx;
+  Result := True;
+end;
+
+procedure CompileCountedForOf(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaForOfStatement; const AArrayLocalIdx: Integer);
+var
+  ArrReg, LenReg, IdxReg, OneReg, CmpReg, ValueReg: UInt8;
+  LoopStart, ExitJump, I, BindLocalIdx: Integer;
+  Slot: UInt8;
+  ClosedLocals: array[0..255] of UInt8;
+  ClosedCount: Integer;
+  OldBreakJumps: TList<Integer>;
+  OldBreakFinallyBase: Integer;
+  BreakJumps: TList<Integer>;
+  ElemAnnotation: string;
+  ElemType: TSouffleLocalType;
+begin
+  ArrReg := ACtx.Scope.AllocateRegister;
+  LenReg := ACtx.Scope.AllocateRegister;
+  IdxReg := ACtx.Scope.AllocateRegister;
+  OneReg := ACtx.Scope.AllocateRegister;
+  CmpReg := ACtx.Scope.AllocateRegister;
+  ValueReg := ACtx.Scope.AllocateRegister;
+
+  ACtx.CompileExpression(AStmt.Iterable, ArrReg);
+  EmitInstruction(ACtx, EncodeABC(OP_GET_LENGTH, LenReg, ArrReg, 0));
+  EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, IdxReg, 0));
+  EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, OneReg, 1));
+
+  OldBreakJumps := GBreakJumps;
+  OldBreakFinallyBase := GBreakFinallyBase;
+  BreakJumps := TList<Integer>.Create;
+  GBreakJumps := BreakJumps;
+  if Assigned(GPendingFinally) then
+    GBreakFinallyBase := GPendingFinally.Count
+  else
+    GBreakFinallyBase := 0;
+  try
+    LoopStart := CurrentCodePosition(ACtx);
+
+    EmitInstruction(ACtx, EncodeABC(OP_GTE_INT, CmpReg, IdxReg, LenReg));
+    ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CmpReg);
+
+    EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ValueReg, ArrReg, IdxReg));
+
+    ACtx.Scope.BeginScope;
+
+    if Assigned(AStmt.BindingPattern) then
+    begin
+      CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope, AStmt.IsConst);
+      EmitDestructuring(ACtx, AStmt.BindingPattern, ValueReg);
+    end
+    else if AStmt.BindingName <> '' then
+    begin
+      Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
+
+      ElemAnnotation := ACtx.Scope.GetLocal(AArrayLocalIdx).ElementTypeAnnotation;
+      if ElemAnnotation <> '' then
+      begin
+        BindLocalIdx := ACtx.Scope.ResolveLocal(AStmt.BindingName);
+        if BindLocalIdx >= 0 then
+        begin
+          ElemType := TypeAnnotationToLocalType(ElemAnnotation);
+          if ElemType <> sltUntyped then
+          begin
+            EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Slot,
+              UInt8(Ord(ElemType)), 0));
+            ACtx.Scope.SetLocalTypeHint(BindLocalIdx, ElemType);
+            ACtx.Scope.SetLocalStrictlyTyped(BindLocalIdx, True);
+            ACtx.Template.SetLocalType(Slot, ElemType);
+            ACtx.Template.SetLocalStrictFlag(Slot, True);
+          end;
+          ACtx.Scope.SetLocalTypeAnnotation(BindLocalIdx, ElemAnnotation);
+          if IsArrayTypeAnnotation(ElemAnnotation) then
+          begin
+            ACtx.Scope.SetLocalArrayTyped(BindLocalIdx, True);
+            ACtx.Scope.SetLocalElementTypeAnnotation(BindLocalIdx,
+              StripArrayLayer(ElemAnnotation));
+          end;
+        end;
+      end;
+    end;
+
+    ACtx.CompileStatement(AStmt.Body);
+
+    ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+    for I := 0 to ClosedCount - 1 do
+      EmitInstruction(ACtx, EncodeABC(OP_CLOSE_UPVALUE, ClosedLocals[I], 0, 0));
+
+    EmitInstruction(ACtx, EncodeABC(OP_ADD_INT, IdxReg, IdxReg, OneReg));
+    EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+
+    PatchJumpTarget(ACtx, ExitJump);
+
+    for I := 0 to BreakJumps.Count - 1 do
+      PatchJumpTarget(ACtx, BreakJumps[I]);
+  finally
+    BreakJumps.Free;
+    GBreakJumps := OldBreakJumps;
+    GBreakFinallyBase := OldBreakFinallyBase;
+  end;
+
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+end;
+
 procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
 var
@@ -616,7 +862,14 @@ var
   OldBreakJumps: TList<Integer>;
   OldBreakFinallyBase: Integer;
   BreakJumps: TList<Integer>;
+  ArrayLocalIdx: Integer;
 begin
+  if IsConstArrayLocal(ACtx, AStmt.Iterable, ArrayLocalIdx) then
+  begin
+    CompileCountedForOf(ACtx, AStmt, ArrayLocalIdx);
+    Exit;
+  end;
+
   IterReg := ACtx.Scope.AllocateRegister;
   ValueReg := ACtx.Scope.AllocateRegister;
   DoneReg := ACtx.Scope.AllocateRegister;

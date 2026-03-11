@@ -11,6 +11,7 @@ uses
   Souffle.Bytecode.Chunk,
   Souffle.Compound,
   Souffle.Heap,
+  Souffle.Iterator,
   Souffle.Value,
   Souffle.VM,
   Souffle.VM.Closure,
@@ -136,26 +137,8 @@ type
     function DebugString: string; override;
   end;
 
-  TGocciaSouffleArrayIterator = class(TSouffleHeapObject)
-  private
-    FArray: TSouffleArray;
-    FIndex: Integer;
-  public
-    constructor Create(const AArray: TSouffleArray);
-    function Next(out ADone: Boolean): TSouffleValue;
-    procedure MarkReferences; override;
-    function DebugString: string; override;
-  end;
-
-  TGocciaSouffleStringIterator = class(TSouffleHeapObject)
-  private
-    FValue: string;
-    FIndex: Integer;
-  public
-    constructor Create(const AValue: string);
-    function Next(out ADone: Boolean): TSouffleValue;
-    function DebugString: string; override;
-  end;
+  TGocciaSouffleArrayIterator = TSouffleArrayIterator;
+  TGocciaSouffleStringIterator = TSouffleStringIterator;
 
   TGocciaSouffleProxy = class(TGocciaObjectValue)
   private
@@ -804,74 +787,6 @@ end;
 function TGocciaSuperCallHelper.DebugString: string;
 begin
   Result := '[SuperCallHelper]';
-end;
-
-{ TGocciaSouffleArrayIterator }
-
-constructor TGocciaSouffleArrayIterator.Create(const AArray: TSouffleArray);
-begin
-  inherited Create(0);
-  FArray := AArray;
-  FIndex := 0;
-end;
-
-function TGocciaSouffleArrayIterator.Next(out ADone: Boolean): TSouffleValue;
-begin
-  if FIndex >= FArray.Count then
-  begin
-    ADone := True;
-    Result := SouffleNil;
-  end
-  else
-  begin
-    ADone := False;
-    Result := FArray.Get(FIndex);
-    Inc(FIndex);
-  end;
-end;
-
-procedure TGocciaSouffleArrayIterator.MarkReferences;
-begin
-  inherited;
-  if Assigned(FArray) and not FArray.GCMarked then
-    FArray.MarkReferences;
-end;
-
-function TGocciaSouffleArrayIterator.DebugString: string;
-begin
-  Result := '[ArrayIterator: ' + IntToStr(FIndex) + ']';
-end;
-
-{ TGocciaSouffleStringIterator }
-
-constructor TGocciaSouffleStringIterator.Create(const AValue: string);
-begin
-  inherited Create(0);
-  FValue := AValue;
-  FIndex := 1;
-end;
-
-function TGocciaSouffleStringIterator.Next(out ADone: Boolean): TSouffleValue;
-var
-  Ch: string;
-begin
-  if FIndex > Length(FValue) then
-  begin
-    ADone := True;
-    Result := SouffleNil;
-  end
-  else
-  begin
-    ADone := False;
-    Ch := FValue[FIndex];
-    Result := SouffleString(Ch);
-    Inc(FIndex);
-  end;
-end;
-
-function TGocciaSouffleStringIterator.DebugString: string;
-begin
-  Result := '[StringIterator: ' + IntToStr(FIndex) + ']';
 end;
 
 { TGocciaSouffleProxy }

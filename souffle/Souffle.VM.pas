@@ -7,12 +7,13 @@ interface
 uses
   Math,
 
+  GarbageCollector.Generic,
   Souffle.Bytecode,
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Module,
   Souffle.Compound,
-  GarbageCollector.Generic,
   Souffle.Heap,
+  Souffle.Iterator,
   Souffle.Value,
   Souffle.VM.CallFrame,
   Souffle.VM.Closure,
@@ -647,6 +648,7 @@ var
   Rec: TSouffleRecord;
   RecVal: TSouffleValue;
   Bp, WalkBp: TSouffleBlueprint;
+  FloatIdx: Double;
 begin
   Base := AFrame^.BaseRegister;
 
@@ -905,11 +907,27 @@ begin
       B := DecodeB(AInstruction);
       C := DecodeC(AInstruction);
       if SouffleIsReference(FRegisters[Base + B]) and
-         (FRegisters[Base + B].AsReference is TSouffleArray) and
-         (FRegisters[Base + C].Kind = svkInteger) then
-        FRegisters[Base + A] := TSouffleArray(
-          FRegisters[Base + B].AsReference).Get(
-            Integer(FRegisters[Base + C].AsInteger))
+         (FRegisters[Base + B].AsReference is TSouffleArray) then
+      begin
+        if FRegisters[Base + C].Kind = svkInteger then
+          FRegisters[Base + A] := TSouffleArray(
+            FRegisters[Base + B].AsReference).Get(
+              Integer(FRegisters[Base + C].AsInteger))
+        else if FRegisters[Base + C].Kind = svkFloat then
+        begin
+          FloatIdx := FRegisters[Base + C].AsFloat;
+          if (FloatIdx >= 0) and (FloatIdx <= High(Integer)) and
+             (Frac(FloatIdx) = 0.0) then
+            FRegisters[Base + A] := TSouffleArray(
+              FRegisters[Base + B].AsReference).Get(Trunc(FloatIdx))
+          else
+            FRegisters[Base + A] := FRuntimeOps.GetIndex(
+              FRegisters[Base + B], FRegisters[Base + C]);
+        end
+        else
+          FRegisters[Base + A] := FRuntimeOps.GetIndex(
+            FRegisters[Base + B], FRegisters[Base + C]);
+      end
       else
         FRegisters[Base + A] := FRuntimeOps.GetIndex(
           FRegisters[Base + B], FRegisters[Base + C]);
@@ -921,10 +939,26 @@ begin
       B := DecodeB(AInstruction);
       C := DecodeC(AInstruction);
       if SouffleIsReference(FRegisters[Base + A]) and
-         (FRegisters[Base + A].AsReference is TSouffleArray) and
-         (FRegisters[Base + B].Kind = svkInteger) then
-        TSouffleArray(FRegisters[Base + A].AsReference).Put(
-          Integer(FRegisters[Base + B].AsInteger), FRegisters[Base + C])
+         (FRegisters[Base + A].AsReference is TSouffleArray) then
+      begin
+        if FRegisters[Base + B].Kind = svkInteger then
+          TSouffleArray(FRegisters[Base + A].AsReference).Put(
+            Integer(FRegisters[Base + B].AsInteger), FRegisters[Base + C])
+        else if FRegisters[Base + B].Kind = svkFloat then
+        begin
+          FloatIdx := FRegisters[Base + B].AsFloat;
+          if (FloatIdx >= 0) and (FloatIdx <= High(Integer)) and
+             (Frac(FloatIdx) = 0.0) then
+            TSouffleArray(FRegisters[Base + A].AsReference).Put(
+              Trunc(FloatIdx), FRegisters[Base + C])
+          else
+            FRuntimeOps.SetIndex(
+              FRegisters[Base + A], FRegisters[Base + B], FRegisters[Base + C]);
+        end
+        else
+          FRuntimeOps.SetIndex(
+            FRegisters[Base + A], FRegisters[Base + B], FRegisters[Base + C]);
+      end
       else
         FRuntimeOps.SetIndex(
           FRegisters[Base + A], FRegisters[Base + B], FRegisters[Base + C]);
@@ -1448,6 +1482,9 @@ var
   Base: Integer;
   Done: Boolean;
   FloatB, FloatC: Double;
+  TempObj: TSouffleHeapObject;
+  ArrIter: TSouffleArrayIterator;
+  StrIter: TSouffleStringIterator;
 begin
   Base := AFrame^.BaseRegister;
 
@@ -1843,13 +1880,73 @@ begin
     OP_RT_GET_ITER:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.GetIterator(FRegisters[Base + B], C = 1);
+      if (C = 0) and SouffleIsReference(FRegisters[Base + B]) and
+         Assigned(FRegisters[Base + B].AsReference) then
+      begin
+        if FRegisters[Base + B].AsReference is TSouffleArray then
+        begin
+          TempObj := TSouffleArrayIterator.Create(
+            TSouffleArray(FRegisters[Base + B].AsReference));
+          if Assigned(FGC) then
+            FGC.AllocateObject(TempObj);
+          FRegisters[Base + A] := SouffleReference(TempObj);
+        end
+        else if FRegisters[Base + B].AsReference is TSouffleHeapString then
+        begin
+          TempObj := TSouffleStringIterator.Create(
+            TSouffleHeapString(FRegisters[Base + B].AsReference).Value);
+          if Assigned(FGC) then
+            FGC.AllocateObject(TempObj);
+          FRegisters[Base + A] := SouffleReference(TempObj);
+        end
+        else
+          FRegisters[Base + A] := FRuntimeOps.GetIterator(FRegisters[Base + B], False);
+      end
+      else
+        FRegisters[Base + A] := FRuntimeOps.GetIterator(FRegisters[Base + B], C = 1);
     end;
     OP_RT_ITER_NEXT:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.IteratorNext(FRegisters[Base + C], Done);
-      FRegisters[Base + B] := SouffleBoolean(Done);
+      if SouffleIsReference(FRegisters[Base + C]) and
+         Assigned(FRegisters[Base + C].AsReference) and
+         (FRegisters[Base + C].AsReference is TSouffleArrayIterator) then
+      begin
+        ArrIter := TSouffleArrayIterator(FRegisters[Base + C].AsReference);
+        if ArrIter.IterIndex < ArrIter.IterArray.Count then
+        begin
+          FRegisters[Base + A] := ArrIter.IterArray.Get(ArrIter.IterIndex);
+          Inc(ArrIter.IterIndex);
+          FRegisters[Base + B] := SouffleBoolean(False);
+        end
+        else
+        begin
+          FRegisters[Base + A] := SouffleNil;
+          FRegisters[Base + B] := SouffleBoolean(True);
+        end;
+      end
+      else if SouffleIsReference(FRegisters[Base + C]) and
+         Assigned(FRegisters[Base + C].AsReference) and
+         (FRegisters[Base + C].AsReference is TSouffleStringIterator) then
+      begin
+        StrIter := TSouffleStringIterator(FRegisters[Base + C].AsReference);
+        if StrIter.IterIndex <= Length(StrIter.IterValue) then
+        begin
+          FRegisters[Base + A] := SouffleString(StrIter.IterValue[StrIter.IterIndex]);
+          Inc(StrIter.IterIndex);
+          FRegisters[Base + B] := SouffleBoolean(False);
+        end
+        else
+        begin
+          FRegisters[Base + A] := SouffleNil;
+          FRegisters[Base + B] := SouffleBoolean(True);
+        end;
+      end
+      else
+      begin
+        FRegisters[Base + A] := FRuntimeOps.IteratorNext(FRegisters[Base + C], Done);
+        FRegisters[Base + B] := SouffleBoolean(Done);
+      end;
     end;
 
     OP_RT_IMPORT:
