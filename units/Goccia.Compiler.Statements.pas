@@ -200,7 +200,7 @@ begin
   Len := Length(Trimmed);
   if (Len >= 2) and (Trimmed[Len - 1] = '[') and (Trimmed[Len] = ']') then
   begin
-    Result := Copy(Trimmed, 1, Len - 2);
+    Result := Trim(Copy(Trimmed, 1, Len - 2));
     Exit;
   end;
   if Pos('Array<', Trimmed) = 1 then
