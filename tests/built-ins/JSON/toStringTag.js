@@ -4,6 +4,10 @@ features: [json]
 ---*/
 
 describe("JSON[Symbol.toStringTag]", () => {
+  test("Symbol.toStringTag is 'JSON'", () => {
+    expect(JSON[Symbol.toStringTag]).toBe("JSON");
+  });
+
   test("Object.prototype.toString returns [object JSON]", () => {
     expect(Object.prototype.toString.call(JSON)).toBe("[object JSON]");
   });

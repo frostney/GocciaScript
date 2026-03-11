@@ -4,6 +4,10 @@ features: [math]
 ---*/
 
 describe("Math[Symbol.toStringTag]", () => {
+  test("Symbol.toStringTag is 'Math'", () => {
+    expect(Math[Symbol.toStringTag]).toBe("Math");
+  });
+
   test("Object.prototype.toString returns [object Math]", () => {
     expect(Object.prototype.toString.call(Math)).toBe("[object Math]");
   });

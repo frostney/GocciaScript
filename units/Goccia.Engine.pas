@@ -283,8 +283,6 @@ var
 begin
   Scope := FInterpreter.GlobalScope;
 
-  TGocciaObjectValue.InitializeSharedPrototype;
-
   // Flag-gated built-ins: each creates a wrapper that registers its
   // native methods/properties into the global scope.
   if ggConsole in FGlobals then

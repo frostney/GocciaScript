@@ -769,7 +769,7 @@ procedure TGocciaTemporalBuiltin.RegisterNow;
 var
   NowObj: TGocciaObjectValue;
 begin
-  NowObj := TGocciaObjectValue.Create;
+  NowObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowInstant, 'instant', 0));
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowPlainDateISO, 'plainDateISO', 0));
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NowPlainTimeISO, 'plainTimeISO', 0));

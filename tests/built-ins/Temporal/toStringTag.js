@@ -4,6 +4,10 @@ features: [temporal]
 ---*/
 
 describe("Temporal[Symbol.toStringTag]", () => {
+  test("Symbol.toStringTag is 'Temporal'", () => {
+    expect(Temporal[Symbol.toStringTag]).toBe("Temporal");
+  });
+
   test("Object.prototype.toString returns [object Temporal]", () => {
     expect(Object.prototype.toString.call(Temporal)).toBe("[object Temporal]");
   });
