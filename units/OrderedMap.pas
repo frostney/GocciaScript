@@ -3,16 +3,12 @@
 
   Inherits TBaseMap<TKey, TValue> for shared types and iteration.
 
-  Hash and equality are protected virtual methods so subclasses can
-  override them for specific key types (e.g. TOrderedStringMap for
-  proper string hashing). Default implementation: DJB2 over raw key
-  bytes + byte-level equality — correct for all fixed-size value types.
+  Hash/equality are static inline — no virtual dispatch on the hot path.
+  Default: DJB2 over raw key bytes + byte-level equality, correct for
+  all fixed-size value types (pointers, integers, records).
 
-  Performance note on virtual hash/equality:
-  The VMT hop per probe step is negligible in practice. For string
-  keys the comparison itself dominates. For small value types the
-  byte loop is branch-predictor friendly. The benefit is one ordered
-  map implementation instead of two.
+  For string keys, use TOrderedStringMap which has its own static inline
+  DJB2 over characters and native string equality.
 }
 
 unit OrderedMap;
@@ -63,6 +59,9 @@ type
     FEntryCount: Integer;
     FBucketCount: Integer;
 
+    class function HashKey(const AKey: TKey): Cardinal; static; inline;
+    class function KeysEqual(const A, B: TKey): Boolean; static; inline;
+
     function FindBucket(const AKey: TKey; AHash: Cardinal;
       out ABucketIdx: Integer): Boolean;
     procedure Grow;
@@ -70,8 +69,6 @@ type
     procedure Compact;
 
   protected
-    function HashKey(const AKey: TKey): Cardinal; virtual;
-    function KeysEqual(const A, B: TKey): Boolean; virtual;
 
     function GetCount: Integer; override;
     function GetValue(const AKey: TKey): TValue; override;
@@ -98,10 +95,10 @@ type
 
 implementation
 
-{ Hash / Equality — default: DJB2 over raw key bytes }
+{ Hash / Equality — static inline: DJB2 over raw key bytes }
 
 {$PUSH}{$R-}{$Q-}
-function TOrderedMap<TKey, TValue>.HashKey(const AKey: TKey): Cardinal;
+class function TOrderedMap<TKey, TValue>.HashKey(const AKey: TKey): Cardinal;
 var
   P: PByte;
   I: Integer;
@@ -113,7 +110,7 @@ begin
 end;
 {$POP}
 
-function TOrderedMap<TKey, TValue>.KeysEqual(const A, B: TKey): Boolean;
+class function TOrderedMap<TKey, TValue>.KeysEqual(const A, B: TKey): Boolean;
 begin
   Result := CompareMem(@A, @B, SizeOf(TKey));
 end;
