@@ -6180,19 +6180,40 @@ var
   Rec: TSouffleRecord;
   Key: string;
   GocciaObj: TGocciaValue;
+  IsSymbol: Boolean;
+  SymVal: TGocciaSymbolValue;
 begin
   Result := SouffleBoolean(False);
   if not SouffleIsReference(AReceiver) or not Assigned(AReceiver.AsReference) then
     Exit;
+  IsSymbol := False;
+  SymVal := nil;
   if AArgCount < 1 then
     Key := 'undefined'
+  else if SouffleIsReference(AArgs^) and Assigned(AArgs^.AsReference) and
+     (AArgs^.AsReference is TGocciaWrappedValue) and
+     (TGocciaWrappedValue(AArgs^.AsReference).Value is TGocciaSymbolValue) then
+  begin
+    SymVal := TGocciaSymbolValue(TGocciaWrappedValue(AArgs^.AsReference).Value);
+    Key := '@@sym:' + IntToStr(SymVal.Id);
+    IsSymbol := True;
+  end
   else
     Key := GNativeArrayJoinRuntime.CoerceToString(AArgs^);
   if AReceiver.AsReference is TSouffleRecord then
   begin
     Rec := TSouffleRecord(AReceiver.AsReference);
-    Result := SouffleBoolean(Rec.Has(Key) or
-      (Rec.HasGetters and Rec.Getters.Has(Key)));
+    if Rec.Has(Key) or
+       (Rec.HasGetters and Rec.Getters.Has(Key)) or
+       (Rec.HasSetters and Rec.Setters.Has(Key)) then
+      Exit(SouffleBoolean(True));
+    if IsSymbol then
+    begin
+      GocciaObj := GNativeArrayJoinRuntime.UnwrapToGocciaValue(AReceiver);
+      if GocciaObj is TGocciaObjectValue then
+        Exit(SouffleBoolean(
+          TGocciaObjectValue(GocciaObj).HasSymbolProperty(SymVal)));
+    end;
   end
   else if AReceiver.AsReference is TGocciaWrappedValue then
   begin
