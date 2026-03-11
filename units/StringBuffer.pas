@@ -4,6 +4,9 @@ unit StringBuffer;
 
 interface
 
+const
+  DEFAULT_CAPACITY = 64;
+
 type
   TStringBuffer = record
   private
@@ -12,7 +15,7 @@ type
     FCap: Integer;
     function GetLength: Integer; inline;
   public
-    class function Create(const ACapacity: Integer = 64): TStringBuffer; static; inline;
+    class function Create(const ACapacity: Integer = DEFAULT_CAPACITY): TStringBuffer; static; inline;
     procedure Append(const S: AnsiString); inline;
     procedure AppendChar(const C: AnsiChar); inline;
     procedure Clear; inline;
@@ -28,7 +31,7 @@ begin
   if ACapacity > 0 then
     Result.FCap := ACapacity
   else
-    Result.FCap := 64;
+    Result.FCap := DEFAULT_CAPACITY;
   SetLength(Result.FData, Result.FCap);
 end;
 

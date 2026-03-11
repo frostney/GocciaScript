@@ -140,7 +140,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Argument Validator | `Goccia.Arguments.Validator.pas` | `RequireExactly`, `RequireAtLeast` — standardized argument count/type validation |
 | Argument Callbacks | `Goccia.Arguments.Callbacks.pas` | Pre-typed callback argument collections for array prototype methods |
 | Ordered Map | `OrderedMap.pas` | Generic insertion-order-preserving string-keyed map (`TOrderedMap<T>`) |
-| String Buffer | `StringBuffer.pas` | `TStringBuffer` — advanced record for efficient string building with preallocated doubling growth via `AnsiString` + `Move`, replacing `TStringBuilder` |
+| String Buffer | `StringBuffer.pas` | `TStringBuffer` — advanced record for efficient string building with preallocated doubling growth via `AnsiString` + `Move`, replacing `TStringBuilder`. `DEFAULT_CAPACITY` constant (64) used by `Create` default parameter and zero/negative fallback |
 | Binding Map | `Goccia.Scope.BindingMap.pas` | Ordered map specialized for lexical bindings (`TOrderedMap<TLexicalBinding>`) |
 | Array Utils | `Goccia.Utils.Array.pas` | `ArrayCreateDataProperty` helper for spec-compliant array operations |
 | TypedArray Value | `Goccia.Values.TypedArrayValue.pas` | `TGocciaTypedArrayValue` — view over ArrayBuffer with fixed element type (Int8, Uint8, Uint8Clamped, Int16, Uint16, Int32, Uint32, Float32, Float64), `TGocciaTypedArrayClassValue`, `TGocciaTypedArrayStaticFrom` |
@@ -375,6 +375,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
   - `Goccia.Constants.ConstructorNames` — `CONSTRUCTOR_OBJECT`, `CONSTRUCTOR_ARRAY`, `CONSTRUCTOR_STRING`, `CONSTRUCTOR_MAP`, etc.
   - `Goccia.Constants.SymbolNames` — `SYMBOL_ITERATOR`, `SYMBOL_ASYNC_ITERATOR`, `SYMBOL_SPECIES`, `SYMBOL_HAS_INSTANCE`, `SYMBOL_TO_PRIMITIVE`, `SYMBOL_TO_STRING_TAG`, `SYMBOL_IS_CONCAT_SPREADABLE`, `SYMBOL_METADATA`
   - `Goccia.Constants` — `BOOLEAN_TRUE_LITERAL`, `NULL_LITERAL`, `NAN_LITERAL`, `ZERO_VALUE`, `EMPTY_STRING`, etc.
+- **No magic numbers:** Extract bare numeric literals in `implementation` sections into named constants so the value is defined once and the name conveys intent. When a constant is used in both `interface` (e.g., default parameter) and `implementation` (e.g., fallback), declare it in `interface`. Trivial self-explanatory literals (`0`, `1`, `-1`, `''`, `True`, `False`) do not need extraction.
 - **Generic lists for class types:** Prefer `TObjectList<T>` over `TList<T>` when `T` is a class. When a specialization is used across multiple units, define a **named type alias** in the unit that declares `T` (e.g., `TGocciaValueList = TObjectList<TGocciaValue>` in `Goccia.Values.Primitives.pas`, `TGocciaScopeList = TObjectList<TGocciaScope>` in `Goccia.Scope.pas`). All consumers must use the alias — never re-specialize locally. Use `Create(False)` for non-owning collections. This prevents FPC's per-unit generic VMT specialization from causing "Invalid type cast" failures with `{$OBJECTCHECKS ON}`.
 - **Class naming:** `TGoccia<Name>` prefix
 - **Interface naming:** `I<Name>` prefix

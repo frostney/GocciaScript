@@ -50,6 +50,31 @@ Use centralized constant units instead of hardcoded string literals:
 
 Adding a new keyword or file extension requires a single change in the constants unit — all consumers pick it up automatically.
 
+### No Magic Numbers
+
+Avoid bare numeric literals in the `implementation` section. Extract them into named constants so the value is defined once and the name conveys intent:
+
+```pascal
+// Wrong — magic number repeated and unexplained
+if ACapacity > 0 then
+  Result.FCap := ACapacity
+else
+  Result.FCap := 64;
+
+// Correct — named constant, defined once
+const
+  DEFAULT_CAPACITY = 64;
+
+if ACapacity > 0 then
+  Result.FCap := ACapacity
+else
+  Result.FCap := DEFAULT_CAPACITY;
+```
+
+When the same constant is used in both the `interface` section (e.g., as a default parameter value) and the `implementation` section (e.g., as a fallback), declare it in `interface` so both sites can reference it. Implementation-only constants stay in `implementation`.
+
+Trivial literals that are self-explanatory in context (`0`, `1`, `-1`, `''`, `True`, `False`) do not need extraction.
+
 ### ECMAScript Spec Annotations
 
 When implementing ECMAScript-specified behavior, annotate each function or method with a comment referencing the relevant specification section. Place the annotation immediately above the function body in the `implementation` section. For multi-step spec algorithms, also annotate individual steps inline within the function body:
