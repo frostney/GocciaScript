@@ -10,7 +10,7 @@ on:
 env:
   FPC_VERSION: "3.2.2"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v10"
+  CACHE_VERSION: "v11"
 
 jobs:
   build:
@@ -55,12 +55,14 @@ jobs:
             ../binutils-${BINUTILS_VERSION}/configure \
               --target="${target}" \
               --prefix="$PWD/../cross-binutils" \
+              --with-system-zlib \
               --disable-nls \
               --disable-werror \
               --disable-gdb \
               --disable-sim \
               --disable-libdecnumber \
-              --disable-readline
+              --disable-readline \
+              --disable-gprofng
             make -j"$NCPU"
             make install
             cd ..
