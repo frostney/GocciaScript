@@ -7266,7 +7266,6 @@ procedure TGocciaRuntimeOperations.ClearTransientCaches;
 begin
   FClosureBridgeCache.Clear;
   FArrayBridgeCache.Clear;
-  FArrayBridgeReverse.Clear;
   FRecordBridgeCache.Clear;
 end;
 

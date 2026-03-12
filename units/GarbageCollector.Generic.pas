@@ -76,12 +76,11 @@ type
     // active root stack so a stack-held object survives the collection.
     procedure CollectIfNeeded(const AProtect: TGCManagedObject); overload;
 
-    // Young-generation collection: pre-marks all objects allocated before
-    // AWatermark as surviving, then runs mark-and-sweep. The mark phase
-    // short-circuits on pre-marked objects (via the "if GCMarked then Exit"
-    // guard in MarkReferences), so only new objects and their references
-    // are traversed. Much cheaper than Collect when the old-generation
-    // heap is large and most garbage is young.
+    // Young-generation collection: runs a full mark from roots, then
+    // sweeps only objects allocated after AWatermark. Objects before
+    // the watermark survive regardless of mark state, preserving
+    // old-to-young references. Cheaper than Collect because the sweep
+    // phase only frees young garbage while skipping old objects.
     procedure CollectYoung(const AWatermark: Integer);
 
     property Enabled: Boolean read FEnabled write FEnabled;
@@ -384,14 +383,6 @@ begin
       EffectiveWatermark := FManagedObjects.Count;
 
     TGCManagedObject.AdvanceMark;
-
-    for I := 0 to EffectiveWatermark - 1 do
-    begin
-      Obj := FManagedObjects[I];
-      if Assigned(Obj) then
-        Obj.GCMarked := True;
-    end;
-
     MarkRoots;
 
     Collected := 0;
@@ -402,7 +393,7 @@ begin
       Obj := FManagedObjects[I];
       if Obj = nil then
         Continue;
-      if Obj.GCMarked then
+      if Obj.GCMarked or (I < EffectiveWatermark) then
       begin
         Obj.GCIndex := WriteIdx;
         FManagedObjects[WriteIdx] := Obj;

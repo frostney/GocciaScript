@@ -633,7 +633,7 @@ build → test       → artifacts
 
 **`build`** — Installs FPC once per platform, compiles all binaries, uploads them as intermediate artifacts.
 
-**`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests. Outputs `--timing-output` JSON files for CI timing comparison.
+**`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests. Outputs JSON files via `--output=<file>` for CI timing comparison.
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
