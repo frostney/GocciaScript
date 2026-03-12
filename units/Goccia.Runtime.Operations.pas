@@ -3278,73 +3278,36 @@ var
   FieldInits: array of TSouffleClosure;
   FieldInitCount: Integer;
 begin
-  PushVMFramesToGoccia(FVM);
-  try try
-    if SouffleIsReference(AConstructor) and
-       Assigned(AConstructor.AsReference) and
-       (AConstructor.AsReference is TSouffleBlueprint) then
+  if SouffleIsReference(AConstructor) and
+     Assigned(AConstructor.AsReference) and
+     (AConstructor.AsReference is TSouffleBlueprint) then
+  begin
+    Bp := TSouffleBlueprint(AConstructor.AsReference);
+
+    if Assigned(Bp.SuperBlueprint) or
+       not FBlueprintSuperValues.ContainsKey(Bp) then
     begin
-      Bp := TSouffleBlueprint(AConstructor.AsReference);
-
-      if not Assigned(Bp.SuperBlueprint) and
-         FBlueprintSuperValues.ContainsKey(Bp) then
-      begin
-        if not FBlueprintBridgeCache.TryGetValue(Bp, CachedBridge) then
-        begin
-          CachedBridge := ConvertBlueprintToClassValue(Bp, Self);
-          FBlueprintBridgeCache.Add(Bp, CachedBridge);
-        end;
-        GocciaConstructor := TGocciaValue(CachedBridge);
-        {$IFDEF BRIDGE_METRICS}
-        MetricBridge;
-        Inc(GBridgeMetrics.ConstructClassValueCount);
-        {$ENDIF}
-        Args := TGocciaArgumentsCollection.Create;
-        try
-          for I := 0 to AArgCount - 1 do
-            Args.Add(UnwrapToGocciaValue(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
-
-          if FClassDefinitionScopes.TryGetValue(GocciaConstructor, CachedScope) then
-          begin
-            Context := TGocciaEngine(FEngine).Interpreter.CreateEvaluationContext;
-            Context.Scope := TGocciaScope(CachedScope);
-            RebuildArrayBridgeCache(Self, TGocciaScope(CachedScope));
-          end
-          else
-            Context := CreateBridgedContext(Self);
-
-          GocciaResult := InstantiateClass(
-            TGocciaClassValue(GocciaConstructor), Args, Context);
-
-          SyncArraysBack(Self, Context.Scope);
-          FArrayBridgeCache.Clear;
-
-          if Assigned(GocciaResult) then
-            Result := ToSouffleValue(GocciaResult)
-          else
-            Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
-        finally
-          Args.Free;
-        end;
-        Exit;
-      end;
-
       Rec := TSouffleRecord.CreateFromBlueprint(Bp);
       Rec.Delegate := Bp.Prototype;
-      WalkBp := Bp;
-      while Assigned(WalkBp) do
+
+      if not Assigned(Bp.Prototype.Delegate) then
       begin
-        if not Assigned(WalkBp.Prototype.Delegate) then
-          WalkBp.Prototype.Delegate := WalkBp.Methods;
-        if not Assigned(WalkBp.Methods.Delegate) then
+        WalkBp := Bp;
+        while Assigned(WalkBp) do
         begin
-          if Assigned(WalkBp.SuperBlueprint) then
-            WalkBp.Methods.Delegate := WalkBp.SuperBlueprint.Prototype
-          else if Assigned(FVM) then
-            WalkBp.Methods.Delegate := FVM.RecordDelegate;
+          if not Assigned(WalkBp.Prototype.Delegate) then
+            WalkBp.Prototype.Delegate := WalkBp.Methods;
+          if not Assigned(WalkBp.Methods.Delegate) then
+          begin
+            if Assigned(WalkBp.SuperBlueprint) then
+              WalkBp.Methods.Delegate := WalkBp.SuperBlueprint.Prototype
+            else if Assigned(FVM) then
+              WalkBp.Methods.Delegate := FVM.RecordDelegate;
+          end;
+          WalkBp := WalkBp.SuperBlueprint;
         end;
-        WalkBp := WalkBp.SuperBlueprint;
       end;
+
       if Assigned(TGarbageCollector.Instance) then
         TGarbageCollector.Instance.AllocateObject(Rec);
 
@@ -3364,11 +3327,12 @@ begin
         end;
         WalkBp := WalkBp.SuperBlueprint;
       end;
-      for I := FieldInitCount - 1 downto 0 do
+      if FieldInitCount > 0 then
       begin
         SetLength(VMArgs, 1);
         VMArgs[0] := SouffleReference(Rec);
-        FVM.ExecuteFunction(FieldInits[I], VMArgs);
+        for I := FieldInitCount - 1 downto 0 do
+          FVM.ExecuteFunction(FieldInits[I], VMArgs);
       end;
 
       WalkBp := Bp;
@@ -3394,6 +3358,55 @@ begin
       {$IFDEF BRIDGE_METRICS}
       MetricNative;
       {$ENDIF}
+      Exit;
+    end;
+  end;
+
+  PushVMFramesToGoccia(FVM);
+  try try
+    if SouffleIsReference(AConstructor) and
+       Assigned(AConstructor.AsReference) and
+       (AConstructor.AsReference is TSouffleBlueprint) then
+    begin
+      Bp := TSouffleBlueprint(AConstructor.AsReference);
+
+      if not FBlueprintBridgeCache.TryGetValue(Bp, CachedBridge) then
+      begin
+        CachedBridge := ConvertBlueprintToClassValue(Bp, Self);
+        FBlueprintBridgeCache.Add(Bp, CachedBridge);
+      end;
+      GocciaConstructor := TGocciaValue(CachedBridge);
+      {$IFDEF BRIDGE_METRICS}
+      MetricBridge;
+      Inc(GBridgeMetrics.ConstructClassValueCount);
+      {$ENDIF}
+      Args := TGocciaArgumentsCollection.Create;
+      try
+        for I := 0 to AArgCount - 1 do
+          Args.Add(UnwrapToGocciaValue(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+
+        if FClassDefinitionScopes.TryGetValue(GocciaConstructor, CachedScope) then
+        begin
+          Context := TGocciaEngine(FEngine).Interpreter.CreateEvaluationContext;
+          Context.Scope := TGocciaScope(CachedScope);
+          RebuildArrayBridgeCache(Self, TGocciaScope(CachedScope));
+        end
+        else
+          Context := CreateBridgedContext(Self);
+
+        GocciaResult := InstantiateClass(
+          TGocciaClassValue(GocciaConstructor), Args, Context);
+
+        SyncArraysBack(Self, Context.Scope);
+        FArrayBridgeCache.Clear;
+
+        if Assigned(GocciaResult) then
+          Result := ToSouffleValue(GocciaResult)
+        else
+          Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+      finally
+        Args.Free;
+      end;
       Exit;
     end;
 
