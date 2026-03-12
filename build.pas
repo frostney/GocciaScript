@@ -219,6 +219,7 @@ begin
       Args.Add('-Xs');
       Args.Add('-CX');
       Args.Add('-XX');
+      Args.Add('-B');
     end else
     begin
       Args.Add('-O-');
