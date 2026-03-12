@@ -10,18 +10,16 @@ on:
 permissions:
   contents: write
 
+env:
+  FPC_VERSION: "3.2.2"
+
 jobs:
+  toolchain:
+    uses: ./.github/workflows/toolchain.yml
+
   build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        arch: [x64]
-        include:
-          - os: ubuntu-latest
-            arch: arm64
-          - os: macos-latest
-            arch: arm64
-    runs-on: ${{ matrix.os }}
+    needs: toolchain
+    runs-on: macos-14
     defaults:
       run:
         shell: bash
@@ -30,66 +28,129 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install FPC (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
-
-      - name: Install FPC (macOS)
-        if: runner.os == 'macOS'
+      - name: Install FPC
         run: brew install fpc
 
-      - name: Install FPC (Windows)
-        if: runner.os == 'Windows'
+      - name: Restore cross-compilers
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            fpc-cross
+            musl-toolchains
+          key: ${{ needs.toolchain.outputs.cache-key }}
+
+      - name: Configure cross-compiler paths
         run: |
-          choco install freepascal -y --no-progress
-          echo 'C:\ProgramData\chocolatey\bin' >> "$GITHUB_PATH"
-          echo 'C:\tools\freepascal\bin\i386-win32' >> "$GITHUB_PATH"
-          echo '-FuC:/tools/freepascal/units/$fpctarget/*' >> 'C:/tools/freepascal/bin/i386-win32/fpc.cfg'
+          echo "$PWD/fpc-cross/lib/fpc/$FPC_VERSION" >> $GITHUB_PATH
+          echo "$PWD/musl-toolchains/x86_64-linux-musl-cross/bin" >> $GITHUB_PATH
+          echo "$PWD/musl-toolchains/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
 
       - name: Check formatting
         run: ./format.pas --check
 
-      - name: Build all
-        run: ./build.pas --prod
+      # --- darwin-arm64 (native) ---
+      - name: Build — darwin-arm64
+        run: ./build.pas clean --prod
 
-      - name: Upload build
+      - name: Stage — darwin-arm64
+        run: |
+          mkdir -p dist/darwin-arm64
+          for f in ScriptLoader REPL TestRunner BenchmarkRunner; do
+            [ -f "build/$f" ] && cp "build/$f" dist/darwin-arm64/
+          done
+          for f in build/Goccia.*.Test; do [ -f "$f" ] && cp "$f" dist/darwin-arm64/; done
+
+      # --- linux-x64 ---
+      - name: Build — linux-x64
+        env:
+          FPC_TARGET_CPU: x86_64
+          FPC_TARGET_OS: linux
+          FPC_LINKER_PATH: ${{ github.workspace }}/musl-toolchains/x86_64-linux-musl-cross/x86_64-linux-musl/lib
+          FPC_CROSS_PREFIX: x86_64-linux-musl-
+        run: ./build.pas clean --prod
+
+      - name: Stage — linux-x64
+        run: |
+          mkdir -p dist/linux-x64
+          for f in ScriptLoader REPL TestRunner BenchmarkRunner; do
+            [ -f "build/$f" ] && cp "build/$f" dist/linux-x64/
+          done
+          for f in build/Goccia.*.Test; do [ -f "$f" ] && cp "$f" dist/linux-x64/; done
+
+      # --- linux-arm64 ---
+      - name: Build — linux-arm64
+        env:
+          FPC_TARGET_CPU: aarch64
+          FPC_TARGET_OS: linux
+          FPC_LINKER_PATH: ${{ github.workspace }}/musl-toolchains/aarch64-linux-musl-cross/aarch64-linux-musl/lib
+          FPC_CROSS_PREFIX: aarch64-linux-musl-
+        run: ./build.pas clean --prod
+
+      - name: Stage — linux-arm64
+        run: |
+          mkdir -p dist/linux-arm64
+          for f in ScriptLoader REPL TestRunner BenchmarkRunner; do
+            [ -f "build/$f" ] && cp "build/$f" dist/linux-arm64/
+          done
+          for f in build/Goccia.*.Test; do [ -f "$f" ] && cp "$f" dist/linux-arm64/; done
+
+      # --- win-x64 ---
+      - name: Build — win-x64
+        env:
+          FPC_TARGET_CPU: x86_64
+          FPC_TARGET_OS: win64
+        run: ./build.pas clean --prod
+
+      - name: Stage — win-x64
+        run: |
+          mkdir -p dist/win-x64
+          for f in ScriptLoader REPL TestRunner BenchmarkRunner; do
+            [ -f "build/${f}.exe" ] && cp "build/${f}.exe" dist/win-x64/
+          done
+          for f in build/Goccia.*.Test.exe; do [ -f "$f" ] && cp "$f" dist/win-x64/; done
+
+      # --- Upload artifacts ---
+      - name: Upload — darwin-arm64
         uses: actions/upload-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
+          name: build-darwin-arm64
           retention-days: 1
-          path: |
-            build/ScriptLoader
-            build/ScriptLoader.exe
-            build/TestRunner
-            build/TestRunner.exe
-            build/BenchmarkRunner
-            build/BenchmarkRunner.exe
-            build/REPL
-            build/REPL.exe
-            build/Goccia.Values.Primitives.Test
-            build/Goccia.Values.Primitives.Test.exe
-            build/Goccia.Values.FunctionValue.Test
-            build/Goccia.Values.FunctionValue.Test.exe
-            build/Goccia.Values.ObjectValue.Test
-            build/Goccia.Values.ObjectValue.Test.exe
-            build/Goccia.Compiler.Test
-            build/Goccia.Compiler.Test.exe
-            build/Goccia.Builtins.TestAssertions.Test
-            build/Goccia.Builtins.TestAssertions.Test.exe
+          path: dist/darwin-arm64/
+
+      - name: Upload — linux-x64
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-linux-x64
+          retention-days: 1
+          path: dist/linux-x64/
+
+      - name: Upload — linux-arm64
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-linux-arm64
+          retention-days: 1
+          path: dist/linux-arm64/
+
+      - name: Upload — win-x64
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-win-x64
+          retention-days: 1
+          path: dist/win-x64/
 
   test:
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        arch: [x64]
         include:
-          - os: ubuntu-latest
-            arch: arm64
-          - os: macos-latest
-            arch: arm64
-    runs-on: ${{ matrix.os }}
+          - platform: darwin-arm64
+            runner: macos-14
+          - platform: linux-x64
+            runner: ubuntu-latest
+          - platform: win-x64
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         shell: bash
@@ -101,7 +162,7 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
+          name: build-${{ matrix.platform }}
           path: build/
 
       - name: Make binaries executable
@@ -127,14 +188,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        arch: [x64]
         include:
-          - os: ubuntu-latest
-            arch: arm64
-          - os: macos-latest
-            arch: arm64
-    runs-on: ${{ matrix.os }}
+          - platform: darwin-arm64
+            runner: macos-14
+          - platform: linux-x64
+            runner: ubuntu-latest
+          - platform: win-x64
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         shell: bash
@@ -146,7 +207,7 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
+          name: build-${{ matrix.platform }}
           path: build/
 
       - name: Make binaries executable
@@ -166,23 +227,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        arch: [x64]
-        mode: [interpreted, bytecode]
         include:
-          - os: ubuntu-latest
-            arch: arm64
+          - platform: darwin-arm64
+            runner: macos-14
             mode: interpreted
-          - os: ubuntu-latest
-            arch: arm64
+          - platform: darwin-arm64
+            runner: macos-14
             mode: bytecode
-          - os: macos-latest
-            arch: arm64
+          - platform: linux-x64
+            runner: ubuntu-latest
             mode: interpreted
-          - os: macos-latest
-            arch: arm64
+          - platform: linux-x64
+            runner: ubuntu-latest
             mode: bytecode
-    runs-on: ${{ matrix.os }}
+          - platform: win-x64
+            runner: windows-latest
+            mode: interpreted
+          - platform: win-x64
+            runner: windows-latest
+            mode: bytecode
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         shell: bash
@@ -194,7 +258,7 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
+          name: build-${{ matrix.platform }}
           path: build/
 
       - name: Make binaries executable
@@ -202,21 +266,21 @@ jobs:
         run: chmod +x build/*
 
       - name: Run benchmarks
-        if: "!(github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64')"
+        if: "!(github.ref == 'refs/heads/main' && matrix.platform == 'linux-x64')"
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
         run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress
 
       - name: Run benchmarks and save baseline
-        if: github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
+        if: github.ref == 'refs/heads/main' && matrix.platform == 'linux-x64'
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
         run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=console --format=json --output=benchmark-${{ matrix.mode }}-results.json
 
       - name: Cache benchmark baseline
-        if: github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
+        if: github.ref == 'refs/heads/main' && matrix.platform == 'linux-x64'
         uses: actions/cache/save@v4
         with:
           path: benchmark-${{ matrix.mode }}-results.json
@@ -227,14 +291,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        arch: [x64]
         include:
-          - os: ubuntu-latest
-            arch: arm64
-          - os: macos-latest
-            arch: arm64
-    runs-on: ${{ matrix.os }}
+          - platform: darwin-arm64
+            runner: macos-14
+          - platform: linux-x64
+            runner: ubuntu-latest
+          - platform: win-x64
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         shell: bash
@@ -246,7 +310,7 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
+          name: build-${{ matrix.platform }}
           path: build/
 
       - name: Make binaries executable
@@ -261,14 +325,8 @@ jobs:
     if: github.ref == 'refs/heads/main'
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        arch: [x64]
-        include:
-          - os: ubuntu-latest
-            arch: arm64
-          - os: macos-latest
-            arch: arm64
-    runs-on: ${{ matrix.os }}
+        platform: [darwin-arm64, linux-x64, linux-arm64, win-x64]
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -276,23 +334,18 @@ jobs:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
+          name: build-${{ matrix.platform }}
           path: build/
 
-      - name: Upload release artifacts
+      - name: Remove test binaries
+        run: rm -f build/Goccia.*.Test build/Goccia.*.Test.exe
+
+      - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gocciascript-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'x86' || matrix.arch }}
+          name: gocciascript-${{ matrix.platform }}
           if-no-files-found: ignore
-          path: |
-            build/ScriptLoader
-            build/ScriptLoader.exe
-            build/TestRunner
-            build/TestRunner.exe
-            build/BenchmarkRunner
-            build/BenchmarkRunner.exe
-            build/REPL
-            build/REPL.exe
+          path: build/
 
   release:
     needs: [test, wasm-test, benchmark, examples]
@@ -310,10 +363,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
+          pattern: build-*
 
       - name: Package releases
         run: |
-          platforms=("ubuntu-latest-x64" "ubuntu-latest-arm64" "macos-latest-x64" "macos-latest-arm64" "windows-latest-x86")
+          platforms=("darwin-arm64" "linux-x64" "linux-arm64" "win-x64")
 
           for platform in "${platforms[@]}"; do
             artifact_dir="artifacts/build-${platform}"
@@ -330,7 +384,7 @@ jobs:
             cp -r benchmarks/ "$pkg_dir/benchmarks/"
             cp -r examples/ "$pkg_dir/examples/"
 
-            if [[ "$platform" == *windows* ]]; then
+            if [[ "$platform" == win-* ]]; then
               zip -r "gocciascript-${platform}.zip" "$pkg_dir/"
             else
               tar -czf "gocciascript-${platform}.tar.gz" "$pkg_dir/"
