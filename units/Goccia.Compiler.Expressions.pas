@@ -14,8 +14,6 @@ uses
   Goccia.Compiler.Context,
   Goccia.Compiler.Scope;
 
-function TypedSetLocalOp(const AHint: TSouffleLocalType): TSouffleOpCode;
-
 procedure CompileLiteral(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaLiteralExpression; const ADest: UInt8);
 procedure CompileIdentifier(const ACtx: TGocciaCompilationContext;
@@ -108,32 +106,6 @@ uses
   Goccia.Token,
   Goccia.Values.Primitives;
 
-function TypedGetLocalOp(const AHint: TSouffleLocalType): TSouffleOpCode;
-begin
-  case AHint of
-    sltInteger:   Result := OP_GET_LOCAL_INT;
-    sltFloat:     Result := OP_GET_LOCAL_FLOAT;
-    sltBoolean:   Result := OP_GET_LOCAL_BOOL;
-    sltString:    Result := OP_GET_LOCAL_STRING;
-    sltReference: Result := OP_GET_LOCAL_REF;
-  else
-    Result := OP_GET_LOCAL;
-  end;
-end;
-
-function TypedSetLocalOp(const AHint: TSouffleLocalType): TSouffleOpCode;
-begin
-  case AHint of
-    sltInteger:   Result := OP_SET_LOCAL_INT;
-    sltFloat:     Result := OP_SET_LOCAL_FLOAT;
-    sltBoolean:   Result := OP_SET_LOCAL_BOOL;
-    sltString:    Result := OP_SET_LOCAL_STRING;
-    sltReference: Result := OP_SET_LOCAL_REF;
-  else
-    Result := OP_SET_LOCAL;
-  end;
-end;
-
 function PrivateKey(const AScope: TGocciaCompilerScope;
   const AName: string): string;
 var
@@ -204,7 +176,6 @@ var
   NameIdx: UInt16;
   CondReg, ArgReg: UInt8;
   OkJump: Integer;
-  Hint: TSouffleLocalType;
 begin
   LocalIdx := ACtx.Scope.ResolveLocal(AExpr.Name);
   if LocalIdx >= 0 then
@@ -217,11 +188,8 @@ begin
       Exit;
     end;
     Slot := Local.Slot;
-    Hint := Local.TypeHint;
-    if (Hint <> sltUntyped) and (Slot <> ADest) then
-      EmitInstruction(ACtx, EncodeABx(TypedGetLocalOp(Hint), ADest, Slot))
-    else if Slot <> ADest then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
+    if Slot <> ADest then
+      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ADest, Slot));
     Exit;
   end;
 
@@ -561,10 +529,7 @@ begin
           UInt8(Ord(Hint)), 0));
     if ADest <> Slot then
     begin
-      if Hint <> sltUntyped then
-        EmitInstruction(ACtx, EncodeABx(TypedSetLocalOp(Hint), ADest, Slot))
-      else
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ADest, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ADest, Slot));
     end;
     Exit;
   end;
