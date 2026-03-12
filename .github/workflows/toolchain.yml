@@ -9,7 +9,7 @@ on:
 
 env:
   FPC_VERSION: "3.2.2"
-  CACHE_VERSION: "v3"
+  CACHE_VERSION: "v4"
 
 jobs:
   build:
@@ -36,11 +36,9 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: brew install fpc
 
-      - name: Download FPC source
+      - name: Copy Homebrew FPC sources
         if: steps.cache-check.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch release_${FPC_VERSION//./_} \
-            https://gitlab.com/freepascal.org/fpc/source.git fpc-source
+        run: cp -a "$(brew --prefix)/share/fpcsrc" fpc-source
 
       - name: Download musl cross-toolchains
         if: steps.cache-check.outputs.cache-hit != 'true'
