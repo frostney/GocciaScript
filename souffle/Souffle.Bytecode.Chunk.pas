@@ -7,7 +7,8 @@ interface
 uses
   Generics.Collections,
 
-  Souffle.Bytecode.Debug;
+  Souffle.Bytecode.Debug,
+  Souffle.Value;
 
 type
   TSouffleBytecodeConstantKind = (
@@ -69,6 +70,7 @@ type
     FLocalStrictCount: UInt8;
     FIsAsync: Boolean;
     FTypeCheckPreambleSize: UInt8;
+    FMaterializedConstants: array of TSouffleValue;
     FStringConstantIndex: TDictionary<string, UInt16>;
     function GetFunctionCount: Integer;
   public
@@ -92,6 +94,9 @@ type
     function GetFunction(const AIndex: Integer): TSouffleFunctionTemplate;
     function GetUpvalueDescriptor(const AIndex: Integer): TSouffleUpvalueDescriptor;
     function GetExceptionHandler(const AIndex: Integer): TSouffleExceptionHandler;
+
+    procedure MaterializeConstants;
+    function GetMaterializedConstant(const AIndex: Integer): TSouffleValue; inline;
 
     property Name: string read FName write FName;
     property CodeCount: Integer read FCodeCount;
@@ -121,7 +126,9 @@ const
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  GarbageCollector.Generic;
 
 function FloatBitsAreNaN(const AValue: Double): Boolean; inline;
 var
@@ -152,7 +159,16 @@ begin
 end;
 
 destructor TSouffleFunctionTemplate.Destroy;
+var
+  GC: TGarbageCollector;
+  I: Integer;
 begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    for I := 0 to Length(FMaterializedConstants) - 1 do
+      if (FMaterializedConstants[I].Kind = svkReference) and
+         Assigned(FMaterializedConstants[I].AsReference) then
+        GC.UnpinObject(FMaterializedConstants[I].AsReference);
   FStringConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
@@ -401,6 +417,47 @@ begin
     Result := FLocalStrictFlags[ASlot]
   else
     Result := False;
+end;
+
+procedure TSouffleFunctionTemplate.MaterializeConstants;
+var
+  I: Integer;
+  GC: TGarbageCollector;
+begin
+  if FConstantCount > Length(FMaterializedConstants) then
+  begin
+    GC := TGarbageCollector.Instance;
+    SetLength(FMaterializedConstants, FConstantCount);
+    for I := 0 to FConstantCount - 1 do
+      case FConstants[I].Kind of
+        bckNil:     FMaterializedConstants[I] := SouffleNil;
+        bckTrue:    FMaterializedConstants[I] := SouffleBoolean(True);
+        bckFalse:   FMaterializedConstants[I] := SouffleBoolean(False);
+        bckInteger: FMaterializedConstants[I] := SouffleInteger(FConstants[I].IntValue);
+        bckFloat:   FMaterializedConstants[I] := SouffleFloat(FConstants[I].FloatValue);
+        bckString:
+        begin
+          FMaterializedConstants[I] := SouffleString(FConstants[I].StringValue);
+          if (FMaterializedConstants[I].Kind = svkReference) and
+             Assigned(FMaterializedConstants[I].AsReference) and Assigned(GC) then
+            GC.PinObject(FMaterializedConstants[I].AsReference);
+        end;
+      end;
+  end;
+  for I := 0 to FFunctions.Count - 1 do
+    FFunctions[I].MaterializeConstants;
+end;
+
+function TSouffleFunctionTemplate.GetMaterializedConstant(
+  const AIndex: Integer): TSouffleValue;
+begin
+  {$IFDEF DEBUG}
+  if (AIndex < 0) or (AIndex >= Length(FMaterializedConstants)) then
+    raise ERangeError.CreateFmt(
+      'GetMaterializedConstant: index %d out of range 0..%d',
+      [AIndex, Length(FMaterializedConstants) - 1]);
+  {$ENDIF}
+  Result := FMaterializedConstants[AIndex];
 end;
 
 end.
