@@ -853,7 +853,7 @@ The `.sbc` (Souffle ByteCode) binary format enables ahead-of-time compilation an
 └──────────────────────────────────────┘
 ```
 
-The current format version is `SOUFFLE_FORMAT_VERSION = 2` (defined in `Souffle.Bytecode.pas`). Version 2 added per-local strict flags (`LocalStrictCount` + `IsStrict` per local) and `TypeCheckPreambleSize` to the function prototype layout. The loader rejects modules with a mismatched format version.
+The current format version is `SOUFFLE_FORMAT_VERSION = 3` (defined in `Souffle.Bytecode.pas`). Version 2 added per-local strict flags (`LocalStrictCount` + `IsStrict` per local) and `TypeCheckPreambleSize` to the function prototype layout. Version 3 standardized all multi-byte fields to little-endian byte order for cross-platform portability. The loader rejects modules with a mismatched format version.
 
 The `RuntimeTag` field (e.g., `"goccia-js"`) identifies which runtime operations implementation is needed to execute the module. A loader can reject modules compiled for an incompatible runtime.
 
@@ -1088,10 +1088,6 @@ These were reviewed and determined to be correct or not applicable:
 | **null vs undefined via nil flags** | Intentional design | `svkNil` with `Flags=0` (the VM's default) maps to `undefined` in GocciaScript; `Flags=1` maps to `null`. The compiler emits `OP_LOAD_NIL` with B=0 for undefined literals and B=1 for null literals. `SouffleValuesEqual` compares flags for nil values, so `null === null` is true but `null === undefined` is false. All VM-internal absent values (uninitialized registers, missing properties, function-with-no-return) naturally produce flags=0, matching JavaScript's `undefined` semantics. The runtime constants `GOCCIA_NIL_UNDEFINED=0`, `GOCCIA_NIL_NULL=1`, `GOCCIA_NIL_HOLE=2` are defined in `Goccia.Runtime.Operations.pas` — the VM itself only knows about `SOUFFLE_NIL_DEFAULT=0`. |
 | **`MergeFileResult` string comparison for undefined** | Style preference | The `GetProperty(...).ToStringLiteral.Value = 'undefined'` check works correctly because `TGocciaUndefinedLiteralValue.ToStringLiteral` always returns `'undefined'`. A type check would be marginally more robust but the current code has no known failure mode. |
 
-### Binary Endianness
-
-`.sbc` serialization uses native-endian writes. Cross-platform `.sbc` portability requires normalizing to little-endian.
-
 ### Constant Pool Limitation (ABC Encoding)
 
 The ABC instruction format encodes operand B and C as 8-bit values. This limits constant pool indices used in `OP_RECORD_GET`, `OP_RECORD_SET`, `OP_RT_SET_PROP`, `OP_RT_GET_PROP`, and `OP_RT_DEL_PROP` to 255 entries per prototype. `OP_RECORD_DELETE` uses ABx encoding (16-bit Bx) and does not have this limitation. The compiler raises a clear error if the ABC limit is exceeded. A future ABx-style wide-operand variant could lift this restriction for the remaining opcodes if needed.
@@ -1231,7 +1227,7 @@ The `souffle/` directory contains a self-contained bytecode VM with zero knowled
 - **Generic value system**: `TSouffleValue` represents values without language-specific type tags
 - **Abstract runtime interface**: `TSouffleRuntimeOperations` is the sole injection point for language semantics
 - **Shared GC**: Souffle heap objects are managed by the unified `TGarbageCollector` singleton (no separate Souffle GC)
-- **Self-describing binary format**: `.sbc` files include a runtime tag, version, and debug info. Serialization currently uses native endianness; cross-platform portability requires byte-order normalization (see [Known Limitations](#known-limitations))
+- **Self-describing binary format**: `.sbc` files include a runtime tag, version, and debug info. All multi-byte fields are serialized in little-endian byte order for cross-platform portability
 
 ### Multi-Frontend Vision
 

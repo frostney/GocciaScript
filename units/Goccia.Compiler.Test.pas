@@ -36,6 +36,8 @@ type
     procedure TestCompileVariable;
     procedure TestCompileFunction;
     procedure TestBinaryRoundTrip;
+    procedure TestBinaryLittleEndian;
+    procedure TestBinaryRoundTripConstants;
   public
     procedure SetupTests; override;
   end;
@@ -47,6 +49,8 @@ begin
   Test('Compile variable', TestCompileVariable);
   Test('Compile function', TestCompileFunction);
   Test('Binary round-trip', TestBinaryRoundTrip);
+  Test('Binary little-endian format', TestBinaryLittleEndian);
+  Test('Binary round-trip constants', TestBinaryRoundTripConstants);
 end;
 
 function TTestCompiler.CompileSource(
@@ -147,6 +151,95 @@ begin
       Expect<Integer>(Loaded.TopLevel.CodeCount).ToBe(Original.TopLevel.CodeCount);
       Expect<Integer>(Loaded.TopLevel.ConstantCount).ToBe(Original.TopLevel.ConstantCount);
       Expect<Integer>(Loaded.TopLevel.FunctionCount).ToBe(Original.TopLevel.FunctionCount);
+    finally
+      Loaded.Free;
+    end;
+  finally
+    Original.Free;
+    DeleteFile(TempFile);
+  end;
+end;
+
+procedure TTestCompiler.TestBinaryLittleEndian;
+var
+  Module: TSouffleBytecodeModule;
+  Stream: TMemoryStream;
+  Writer: TSouffleBytecodeWriter;
+  Bytes: PByte;
+  VersionLE: UInt16;
+begin
+  Module := CompileSource('const x = 42;');
+  Stream := TMemoryStream.Create;
+  try
+    Writer := TSouffleBytecodeWriter.Create(Stream);
+    try
+      Writer.WriteModule(Module);
+    finally
+      Writer.Free;
+    end;
+
+    Bytes := Stream.Memory;
+    Expect<Byte>(Bytes[0]).ToBe(Ord('S'));
+    Expect<Byte>(Bytes[1]).ToBe(Ord('B'));
+    Expect<Byte>(Bytes[2]).ToBe(Ord('C'));
+    Expect<Byte>(Bytes[3]).ToBe(0);
+
+    // Format version at offset 4 must be little-endian
+    Move(Bytes[4], VersionLE, 2);
+    Expect<UInt16>(VersionLE).ToBe(NtoLE(SOUFFLE_FORMAT_VERSION));
+  finally
+    Stream.Free;
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestBinaryRoundTripConstants;
+var
+  Original, Loaded: TSouffleBytecodeModule;
+  TempFile: string;
+  I: Integer;
+  OrigConst, LoadConst: TSouffleBytecodeConstant;
+  OrigBits, LoadBits: Int64;
+begin
+  Original := CompileSource(
+    'const a = 42;' +
+    'const b = 3.14159265358979;' +
+    'const c = "hello world";' +
+    'const d = true;' +
+    'const e = null;' +
+    'const f = 9007199254740992;'
+  );
+  TempFile := GetTempFileName + '.sbc';
+  try
+    SaveModuleToFile(Original, TempFile);
+    Loaded := LoadModuleFromFile(TempFile);
+    try
+      Expect<Integer>(Loaded.TopLevel.ConstantCount).ToBe(
+        Original.TopLevel.ConstantCount);
+
+      for I := 0 to Original.TopLevel.ConstantCount - 1 do
+      begin
+        OrigConst := Original.TopLevel.GetConstant(I);
+        LoadConst := Loaded.TopLevel.GetConstant(I);
+        Expect<Integer>(Ord(LoadConst.Kind)).ToBe(Ord(OrigConst.Kind));
+
+        case OrigConst.Kind of
+          bckInteger:
+            Expect<Int64>(LoadConst.IntValue).ToBe(OrigConst.IntValue);
+          bckFloat:
+          begin
+            Move(OrigConst.FloatValue, OrigBits, SizeOf(Double));
+            Move(LoadConst.FloatValue, LoadBits, SizeOf(Double));
+            Expect<Int64>(LoadBits).ToBe(OrigBits);
+          end;
+          bckString:
+            Expect<string>(LoadConst.StringValue).ToBe(OrigConst.StringValue);
+        end;
+      end;
+
+      for I := 0 to Original.TopLevel.CodeCount - 1 do
+        Expect<UInt32>(Loaded.TopLevel.GetInstruction(I)).ToBe(
+          Original.TopLevel.GetInstruction(I));
     finally
       Loaded.Free;
     end;

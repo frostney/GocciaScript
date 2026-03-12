@@ -38,6 +38,11 @@ jobs:
             build/TestRunner
             build/BenchmarkRunner
             build/REPL
+            build/Goccia.Values.Primitives.Test
+            build/Goccia.Values.FunctionValue.Test
+            build/Goccia.Values.ObjectValue.Test
+            build/Goccia.Compiler.Test
+            build/Goccia.Builtins.TestAssertions.Test
 
   test:
     needs: build
@@ -65,6 +70,15 @@ jobs:
 
       - name: Run all JavaScript tests
         run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --silent --no-progress
+
+      - name: Run Pascal unit tests
+        if: matrix.mode == 'interpreted'
+        run: |
+          ./build/Goccia.Values.Primitives.Test
+          ./build/Goccia.Values.FunctionValue.Test
+          ./build/Goccia.Values.ObjectValue.Test
+          ./build/Goccia.Compiler.Test
+          ./build/Goccia.Builtins.TestAssertions.Test
 
   wasm-test:
     needs: build
