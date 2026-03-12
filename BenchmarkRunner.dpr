@@ -97,6 +97,8 @@ begin
           Entry.VariancePercentage := SingleResult.GetProperty('variancePercentage').ToNumberLiteral.Value;
           Entry.SetupMs := SingleResult.GetProperty('setupMs').ToNumberLiteral.Value;
           Entry.TeardownMs := SingleResult.GetProperty('teardownMs').ToNumberLiteral.Value;
+          Entry.MinOpsPerSec := SingleResult.GetProperty('minOpsPerSec').ToNumberLiteral.Value;
+          Entry.MaxOpsPerSec := SingleResult.GetProperty('maxOpsPerSec').ToNumberLiteral.Value;
         end;
 
         MutableFileResult.Entries[I] := Entry;

@@ -17,6 +17,8 @@ type
     VariancePercentage: Double;
     SetupMs: Double;
     TeardownMs: Double;
+    MinOpsPerSec: Double;
+    MaxOpsPerSec: Double;
     Error: string;
   end;
 
@@ -201,6 +203,10 @@ begin
         FOutput.Add(SysUtils.Format('    %-30s  %12s ops/sec  %10.4f ms/op  (%d iterations)',
           [Entry.Name, FormatOpsPerSec(Entry.OpsPerSec), Entry.MeanMs, Entry.Iterations]));
 
+      if (Entry.Error = '') and (Entry.MinOpsPerSec > 0) and (Entry.MaxOpsPerSec > 0) then
+        FOutput.Add(SysUtils.Format('    %-30s  range: %s .. %s ops/sec',
+          ['', FormatOpsPerSec(Entry.MinOpsPerSec), FormatOpsPerSec(Entry.MaxOpsPerSec)]));
+
       HasSetupTeardown := (Entry.SetupMs > 0) or (Entry.TeardownMs > 0);
       if HasSetupTeardown and (Entry.Error = '') then
       begin
@@ -250,9 +256,10 @@ begin
       else
       begin
         if Entry.VariancePercentage > 0 then
-          Line := SysUtils.Format('%s > %s: %s ops/sec ±%.2f%% (%.4f ms/op, %d iterations)',
+          Line := SysUtils.Format('%s > %s: %s ops/sec ±%.2f%% (%.4f ms/op, %d iterations, range %s..%s)',
             [Entry.Suite, Entry.Name, FormatOpsPerSec(Entry.OpsPerSec),
-             Entry.VariancePercentage, Entry.MeanMs, Entry.Iterations])
+             Entry.VariancePercentage, Entry.MeanMs, Entry.Iterations,
+             FormatOpsPerSec(Entry.MinOpsPerSec), FormatOpsPerSec(Entry.MaxOpsPerSec)])
         else
           Line := SysUtils.Format('%s > %s: %s ops/sec (%.4f ms/op, %d iterations)',
             [Entry.Suite, Entry.Name, FormatOpsPerSec(Entry.OpsPerSec),
@@ -281,7 +288,7 @@ var
   F, E: Integer;
   Entry: TBenchmarkEntry;
 begin
-  FOutput.Add('file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,setup_ms,teardown_ms,error');
+  FOutput.Add('file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,setup_ms,teardown_ms,min_ops_per_sec,max_ops_per_sec,error');
 
   for F := 0 to FFileCount - 1 do
   begin
@@ -290,14 +297,15 @@ begin
       Entry := FFiles[F].Entries[E];
 
       if Entry.Error <> '' then
-        FOutput.Add(SysUtils.Format('%s,%s,%s,,,,,,,%s',
+        FOutput.Add(SysUtils.Format('%s,%s,%s,,,,,,,,,%s',
           [EscapeCSV(FFiles[F].FileName), EscapeCSV(Entry.Suite),
            EscapeCSV(Entry.Name), EscapeCSV(Entry.Error)]))
       else
-        FOutput.Add(SysUtils.Format('%s,%s,%s,%.6f,%.4f,%.6f,%d,%.6f,%.6f,',
+        FOutput.Add(SysUtils.Format('%s,%s,%s,%.6f,%.4f,%.6f,%d,%.6f,%.6f,%.6f,%.6f,',
           [EscapeCSV(FFiles[F].FileName), EscapeCSV(Entry.Suite),
            EscapeCSV(Entry.Name), Entry.OpsPerSec, Entry.VariancePercentage,
-           Entry.MeanMs, Entry.Iterations, Entry.SetupMs, Entry.TeardownMs]));
+           Entry.MeanMs, Entry.Iterations, Entry.SetupMs, Entry.TeardownMs,
+           Entry.MinOpsPerSec, Entry.MaxOpsPerSec]));
     end;
   end;
 end;
@@ -354,7 +362,9 @@ begin
         FOutput.Add(SysUtils.Format('          "meanMs": %.6f,', [Entry.MeanMs]));
         FOutput.Add(SysUtils.Format('          "iterations": %d,', [Entry.Iterations]));
         FOutput.Add(SysUtils.Format('          "setupMs": %.6f,', [Entry.SetupMs]));
-        FOutput.Add(SysUtils.Format('          "teardownMs": %.6f', [Entry.TeardownMs]));
+        FOutput.Add(SysUtils.Format('          "teardownMs": %.6f,', [Entry.TeardownMs]));
+        FOutput.Add(SysUtils.Format('          "minOpsPerSec": %.6f,', [Entry.MinOpsPerSec]));
+        FOutput.Add(SysUtils.Format('          "maxOpsPerSec": %.6f', [Entry.MaxOpsPerSec]));
       end;
 
       FOutput.Add('        }');

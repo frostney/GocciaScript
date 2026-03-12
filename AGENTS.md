@@ -126,7 +126,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | JSX Source Map | `Goccia.JSX.SourceMap.pas` | Lightweight internal position mapping for JSX-transformed source |
 | JSX Transformer | `Goccia.JSX.Transformer.pas` | Standalone pre-pass that converts JSX to `createElement` calls |
 | Logger | `Goccia.Logger.pas` | Configurable logging with levels and output formats |
-| Benchmark Reporter | `Goccia.Benchmark.Reporter.pas` | Multi-format benchmark output (console, text, CSV, JSON) with setup/teardown timing |
+| Benchmark Reporter | `Goccia.Benchmark.Reporter.pas` | Multi-format benchmark output (console, text, CSV, JSON) with setup/teardown timing, min/max range |
 | REPL Line Editor | `Goccia.REPL.LineEditor.pas` | Interactive line editing with history for the REPL |
 | REPL Formatter | `Goccia.REPL.Formatter.pas` | Color-formatted value output for the REPL |
 | Shared Prototype | `Goccia.SharedPrototype.pas` | Shared prototype singleton utilities; `Create` auto-pins both prototype and method host with the GC |
