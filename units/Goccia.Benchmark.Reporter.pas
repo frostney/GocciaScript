@@ -58,6 +58,7 @@ type
     procedure WriteToStream(const AStream: TStream);
     procedure WriteToFile(const AFileName: string);
     procedure WriteToStdOut;
+    function HasFailures: Boolean;
     property Output: TStringList read FOutput;
   end;
 
@@ -406,6 +407,23 @@ var
 begin
   for I := 0 to FOutput.Count - 1 do
     WriteLn(FOutput[I]);
+end;
+
+function TBenchmarkReporter.HasFailures: Boolean;
+var
+  F, E: Integer;
+  Entry: TBenchmarkEntry;
+begin
+  for F := 0 to FFileCount - 1 do
+    for E := 0 to Length(FFiles[F].Entries) - 1 do
+    begin
+      Entry := FFiles[F].Entries[E];
+      if Entry.Error <> '' then
+        Exit(True);
+      if (Entry.OpsPerSec = 0) or (Entry.MeanMs = 0) then
+        Exit(True);
+    end;
+  Result := False;
 end;
 
 end.
