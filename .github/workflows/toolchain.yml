@@ -9,7 +9,7 @@ on:
 
 env:
   FPC_VERSION: "3.2.2"
-  CACHE_VERSION: "v8"
+  CACHE_VERSION: "v9"
 
 jobs:
   build:
@@ -47,10 +47,7 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make -C compiler clean all OS_TARGET=linux CPU_TARGET=x86_64
-          make -C rtl clean all OS_TARGET=linux CPU_TARGET=x86_64 \
-            BINUTILSPREFIX=x86_64-elf-
-          make -C packages clean all OS_TARGET=linux CPU_TARGET=x86_64 \
+          make clean all OS_TARGET=linux CPU_TARGET=x86_64 \
             BINUTILSPREFIX=x86_64-elf-
           make crossinstall OS_TARGET=linux CPU_TARGET=x86_64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
@@ -59,10 +56,7 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make -C compiler clean all OS_TARGET=linux CPU_TARGET=aarch64
-          make -C rtl clean all OS_TARGET=linux CPU_TARGET=aarch64 \
-            BINUTILSPREFIX=aarch64-elf-
-          make -C packages clean all OS_TARGET=linux CPU_TARGET=aarch64 \
+          make clean all OS_TARGET=linux CPU_TARGET=aarch64 \
             BINUTILSPREFIX=aarch64-elf-
           make crossinstall OS_TARGET=linux CPU_TARGET=aarch64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
@@ -71,9 +65,7 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make -C compiler clean all OS_TARGET=win64 CPU_TARGET=x86_64
-          make -C rtl clean all OS_TARGET=win64 CPU_TARGET=x86_64
-          make -C packages clean all OS_TARGET=win64 CPU_TARGET=x86_64
+          make clean all OS_TARGET=win64 CPU_TARGET=x86_64
           make crossinstall OS_TARGET=win64 CPU_TARGET=x86_64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
@@ -81,9 +73,7 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make -C compiler clean all OS_TARGET=win32 CPU_TARGET=i386
-          make -C rtl clean all OS_TARGET=win32 CPU_TARGET=i386
-          make -C packages clean all OS_TARGET=win32 CPU_TARGET=i386
+          make clean all OS_TARGET=win32 CPU_TARGET=i386
           make crossinstall OS_TARGET=win32 CPU_TARGET=i386 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
@@ -91,9 +81,7 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make -C compiler clean all OS_TARGET=darwin CPU_TARGET=x86_64
-          make -C rtl clean all OS_TARGET=darwin CPU_TARGET=x86_64
-          make -C packages clean all OS_TARGET=darwin CPU_TARGET=x86_64
+          make clean all OS_TARGET=darwin CPU_TARGET=x86_64
           make crossinstall OS_TARGET=darwin CPU_TARGET=x86_64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
