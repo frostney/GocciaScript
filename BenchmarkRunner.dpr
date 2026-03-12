@@ -23,6 +23,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.Runtime.Operations,
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
@@ -97,6 +98,8 @@ begin
           Entry.VariancePercentage := SingleResult.GetProperty('variancePercentage').ToNumberLiteral.Value;
           Entry.SetupMs := SingleResult.GetProperty('setupMs').ToNumberLiteral.Value;
           Entry.TeardownMs := SingleResult.GetProperty('teardownMs').ToNumberLiteral.Value;
+          Entry.MinOpsPerSec := SingleResult.GetProperty('minOpsPerSec').ToNumberLiteral.Value;
+          Entry.MaxOpsPerSec := SingleResult.GetProperty('maxOpsPerSec').ToNumberLiteral.Value;
         end;
 
         MutableFileResult.Entries[I] := Entry;
@@ -251,6 +254,11 @@ begin
         end;
 
         CompileEnd := GetNanoseconds;
+
+        if GShowProgress and Assigned(Backend.Engine.BuiltinBenchmark) then
+          Backend.Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+        if Assigned(Backend.Engine.BuiltinBenchmark) then
+          Backend.Engine.BuiltinBenchmark.OnBeforeMeasurement := Backend.Runtime.ClearTransientCaches;
 
         try
           ResultValue := Backend.RunModule(Module);

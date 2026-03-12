@@ -21,6 +21,7 @@ type
   TGocciaBenchmark = class;
 
   TBenchmarkProgressEvent = procedure(const ASuiteName, ABenchName: string; const AIndex, ATotal: Integer) of object;
+  TBenchmarkNotifyEvent = procedure of object;
 
   TBenchmarkCase = class
   public
@@ -44,6 +45,8 @@ type
     VariancePercentage: Double;
     SetupMs: Double;
     TeardownMs: Double;
+    MinOpsPerSec: Double;
+    MaxOpsPerSec: Double;
   end;
 
   TGocciaBenchmark = class(TGocciaBuiltin)
@@ -52,6 +55,7 @@ type
     FRegisteredBenchmarks: TObjectList<TBenchmarkCase>;
     FCurrentSuiteName: string;
     FOnProgress: TBenchmarkProgressEvent;
+    FOnBeforeMeasurement: TBenchmarkNotifyEvent;
 
     function RunSingleBenchmark(const ABenchCase: TBenchmarkCase): TBenchmarkResult;
     function CalibrateIterations(const ABenchCase: TBenchmarkCase; const ARunArgs: TGocciaArgumentsCollection): Int64;
@@ -64,6 +68,7 @@ type
     function RunBenchmarks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     property OnProgress: TBenchmarkProgressEvent read FOnProgress write FOnProgress;
+    property OnBeforeMeasurement: TBenchmarkNotifyEvent read FOnBeforeMeasurement write FOnBeforeMeasurement;
   end;
 
 implementation
@@ -81,10 +86,12 @@ uses
   Goccia.Values.ObjectValue;
 
 const
-  DEFAULT_WARMUP_ITERATIONS = 3;
-  DEFAULT_MIN_CALIBRATION_MS = 100;
+  DEFAULT_WARMUP_ITERATIONS = 5;
+  DEFAULT_MIN_CALIBRATION_MS = 200;
   DEFAULT_CALIBRATION_BATCH = 5;
-  DEFAULT_MEASUREMENT_ROUNDS = 5;
+  DEFAULT_MEASUREMENT_ROUNDS = 7;
+  MAX_MEASUREMENT_ROUNDS = 50;
+  IQR_MULTIPLIER = 1.5;
 
 var
   WARMUP_ITERATIONS: Integer;
@@ -112,7 +119,7 @@ begin
   MIN_CALIBRATION_MS := GetEnvInt('GOCCIA_BENCH_CALIBRATION_MS', DEFAULT_MIN_CALIBRATION_MS);
   CALIBRATION_BATCH := GetEnvInt('GOCCIA_BENCH_CALIBRATION_BATCH', DEFAULT_CALIBRATION_BATCH);
   MEASUREMENT_ROUNDS := GetEnvInt('GOCCIA_BENCH_ROUNDS', DEFAULT_MEASUREMENT_ROUNDS);
-  if MEASUREMENT_ROUNDS > 5 then MEASUREMENT_ROUNDS := 5;
+  if MEASUREMENT_ROUNDS > MAX_MEASUREMENT_ROUNDS then MEASUREMENT_ROUNDS := MAX_MEASUREMENT_ROUNDS;
   if MEASUREMENT_ROUNDS < 1 then MEASUREMENT_ROUNDS := 1;
 end;
 
@@ -261,6 +268,64 @@ begin
   end;
 end;
 
+procedure InsertionSort(var A: array of Double; const ACount: Integer);
+var
+  K, J: Integer;
+  Temp: Double;
+begin
+  for K := 1 to ACount - 1 do
+  begin
+    Temp := A[K];
+    J := K - 1;
+    while (J >= 0) and (A[J] > Temp) do
+    begin
+      A[J + 1] := A[J];
+      Dec(J);
+    end;
+    A[J + 1] := Temp;
+  end;
+end;
+
+procedure FilterOutliersIQR(const ASorted: array of Double; const ACount: Integer;
+  out AFilteredStart, AFilteredEnd: Integer);
+var
+  Q1Index, Q3Index: Integer;
+  Q1, Q3, IQR, LowerFence, UpperFence: Double;
+  K: Integer;
+begin
+  AFilteredStart := 0;
+  AFilteredEnd := ACount - 1;
+
+  if ACount < 4 then
+    Exit;
+
+  Q1Index := ACount div 4;
+  Q3Index := (ACount * 3) div 4;
+  Q1 := ASorted[Q1Index];
+  Q3 := ASorted[Q3Index];
+  IQR := Q3 - Q1;
+
+  if IQR <= 0 then
+    Exit;
+
+  LowerFence := Q1 - IQR_MULTIPLIER * IQR;
+  UpperFence := Q3 + IQR_MULTIPLIER * IQR;
+
+  for K := 0 to ACount - 1 do
+    if ASorted[K] >= LowerFence then
+    begin
+      AFilteredStart := K;
+      Break;
+    end;
+
+  for K := ACount - 1 downto 0 do
+    if ASorted[K] <= UpperFence then
+    begin
+      AFilteredEnd := K;
+      Break;
+    end;
+end;
+
 function TGocciaBenchmark.RunSingleBenchmark(const ABenchCase: TBenchmarkCase): TBenchmarkResult;
 var
   RunArgs, EmptyArgs: TGocciaArgumentsCollection;
@@ -268,23 +333,30 @@ var
   Iterations: Int64;
   StartNanoseconds, RoundNanoseconds: Int64;
   I: Int64;
-  Round, J, K: Integer;
-  OpsRounds: array[0..4] of Double;
-  MeanRounds: array[0..4] of Double;
-  TempDouble, OpsMean, OpsVariance: Double;
+  Round, K: Integer;
+  OpsRounds, MeanRounds: array of Double;
+  OpsMean, OpsVariance: Double;
+  FilteredStart, FilteredEnd, FilteredCount: Integer;
   GC: TGarbageCollector;
+  WasGCEnabled: Boolean;
+  MeasurementWatermark: Integer;
 begin
   Result.Name := ABenchCase.Name;
   Result.SuiteName := ABenchCase.SuiteName;
   Result.SetupMs := 0;
   Result.TeardownMs := 0;
+  Result.MinOpsPerSec := 0;
+  Result.MaxOpsPerSec := 0;
+
+  SetLength(OpsRounds, MEASUREMENT_ROUNDS);
+  SetLength(MeanRounds, MEASUREMENT_ROUNDS);
 
   GC := TGarbageCollector.Instance;
+  WasGCEnabled := False;
   SetupResult := nil;
   RunArgs := nil;
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
-    // Phase 0: Setup (timed, runs once)
     if Assigned(ABenchCase.SetupFunction) then
     begin
       StartNanoseconds := GetNanoseconds;
@@ -299,26 +371,39 @@ begin
 
     try
       if Assigned(SetupResult) and not (SetupResult is TGocciaUndefinedLiteralValue) then
-      begin
-        RunArgs := TGocciaArgumentsCollection.Create([SetupResult]);
-      end
+        RunArgs := TGocciaArgumentsCollection.Create([SetupResult])
       else
         RunArgs := TGocciaArgumentsCollection.Create;
 
-      // Phase 1: Warmup
       for K := 1 to WARMUP_ITERATIONS do
         ABenchCase.RunFunction.Call(RunArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       if Assigned(TGocciaMicrotaskQueue.Instance) then
         TGocciaMicrotaskQueue.Instance.DrainQueue;
 
-      // Phase 2: Calibrate
       Iterations := CalibrateIterations(ABenchCase, RunArgs);
 
-      // Phase 3: Measurement rounds
+      if Assigned(GC) then
+      begin
+        WasGCEnabled := GC.Enabled;
+        if Assigned(FOnBeforeMeasurement) then
+          FOnBeforeMeasurement();
+        {$IFDEF GC_DEBUG}
+        WriteLn(Format('[BENCH] %s > %s: pre-measurement GC.Enabled=%s, objects=%d, allocs=%d',
+          [ABenchCase.SuiteName, ABenchCase.Name,
+           BoolToStr(GC.Enabled, 'True', 'False'), GC.ManagedObjectCount, GC.Watermark]));
+        {$ENDIF}
+        GC.Collect;
+        GC.Enabled := False;
+        MeasurementWatermark := GC.Watermark;
+        {$IFDEF GC_DEBUG}
+        WriteLn(Format('[BENCH] %s > %s: post-collect watermark=%d, objects=%d, iterations=%d',
+          [ABenchCase.SuiteName, ABenchCase.Name,
+           MeasurementWatermark, GC.ManagedObjectCount, Iterations]));
+        {$ENDIF}
+      end;
+
       for Round := 0 to MEASUREMENT_ROUNDS - 1 do
       begin
-        if Assigned(GC) then
-          GC.CollectIfNeeded(ABenchCase.RunFunction);
         StartNanoseconds := GetNanoseconds;
         I := 0;
         while I < Iterations do
@@ -340,54 +425,59 @@ begin
           OpsRounds[Round] := 0;
           MeanRounds[Round] := 0;
         end;
+
+        if Assigned(GC) and (Round < MEASUREMENT_ROUNDS - 1)
+          and (GC.Watermark - MeasurementWatermark > GC.Threshold) then
+        begin
+          if Assigned(FOnBeforeMeasurement) then
+            FOnBeforeMeasurement();
+          GC.CollectYoung(MeasurementWatermark);
+          {$IFDEF GC_DEBUG}
+          WriteLn(Format('[BENCH] %s > %s: round %d collected, objects=%d',
+            [ABenchCase.SuiteName, ABenchCase.Name,
+             Round, GC.ManagedObjectCount]));
+          {$ENDIF}
+        end;
       end;
 
-      // Compute coefficient of variation (CV%) from unsorted ops/sec data
+      {$IFDEF GC_DEBUG}
+      if Assigned(GC) then
+        WriteLn(Format('[BENCH] %s > %s: measurement done, objects=%d, totalCollected=%d, totalCollections=%d',
+          [ABenchCase.SuiteName, ABenchCase.Name,
+           GC.ManagedObjectCount, GC.TotalCollected, GC.TotalCollections]));
+      {$ENDIF}
+
+      if Assigned(GC) then
+        GC.Enabled := WasGCEnabled;
+
+      InsertionSort(OpsRounds, MEASUREMENT_ROUNDS);
+      InsertionSort(MeanRounds, MEASUREMENT_ROUNDS);
+
+      FilterOutliersIQR(OpsRounds, MEASUREMENT_ROUNDS, FilteredStart, FilteredEnd);
+      FilteredCount := FilteredEnd - FilteredStart + 1;
+
       OpsMean := 0;
-      for K := 0 to MEASUREMENT_ROUNDS - 1 do
+      for K := FilteredStart to FilteredEnd do
         OpsMean := OpsMean + OpsRounds[K];
-      OpsMean := OpsMean / MEASUREMENT_ROUNDS;
+      OpsMean := OpsMean / FilteredCount;
 
       OpsVariance := 0;
-      for K := 0 to MEASUREMENT_ROUNDS - 1 do
+      for K := FilteredStart to FilteredEnd do
         OpsVariance := OpsVariance + Sqr(OpsRounds[K] - OpsMean);
-      OpsVariance := OpsVariance / MEASUREMENT_ROUNDS;
+      OpsVariance := OpsVariance / FilteredCount;
 
       if OpsMean > 0 then
         Result.VariancePercentage := (Sqrt(OpsVariance) / OpsMean) * 100
       else
         Result.VariancePercentage := 0;
 
-      // Sort rounds to find median (insertion sort for small N)
-      for K := 1 to MEASUREMENT_ROUNDS - 1 do
-      begin
-        TempDouble := OpsRounds[K];
-        J := K - 1;
-        while (J >= 0) and (OpsRounds[J] > TempDouble) do
-        begin
-          OpsRounds[J + 1] := OpsRounds[J];
-          Dec(J);
-        end;
-        OpsRounds[J + 1] := TempDouble;
-      end;
-      for K := 1 to MEASUREMENT_ROUNDS - 1 do
-      begin
-        TempDouble := MeanRounds[K];
-        J := K - 1;
-        while (J >= 0) and (MeanRounds[J] > TempDouble) do
-        begin
-          MeanRounds[J + 1] := MeanRounds[J];
-          Dec(J);
-        end;
-        MeanRounds[J + 1] := TempDouble;
-      end;
-
       Result.Iterations := Iterations;
       Result.TotalMs := 0;
-      Result.OpsPerSec := OpsRounds[MEASUREMENT_ROUNDS div 2];
-      Result.MeanMs := MeanRounds[MEASUREMENT_ROUNDS div 2];
+      Result.OpsPerSec := OpsRounds[FilteredStart + (FilteredCount div 2)];
+      Result.MeanMs := MeanRounds[FilteredStart + (FilteredCount div 2)];
+      Result.MinOpsPerSec := OpsRounds[FilteredStart];
+      Result.MaxOpsPerSec := OpsRounds[FilteredEnd];
 
-      // Phase 4: Teardown (timed, runs once)
       if Assigned(ABenchCase.TeardownFunction) then
       begin
         StartNanoseconds := GetNanoseconds;
@@ -397,6 +487,8 @@ begin
         Result.TeardownMs := (GetNanoseconds - StartNanoseconds) / 1000000;
       end;
     finally
+      if Assigned(GC) then
+        GC.Enabled := WasGCEnabled;
       if Assigned(SetupResult) and Assigned(GC) then
         GC.RemoveTempRoot(SetupResult);
       RunArgs.Free;
@@ -454,6 +546,8 @@ begin
         SingleResult.AssignProperty('variancePercentage', TGocciaNumberLiteralValue.Create(BenchResult.VariancePercentage));
         SingleResult.AssignProperty('setupMs', TGocciaNumberLiteralValue.Create(BenchResult.SetupMs));
         SingleResult.AssignProperty('teardownMs', TGocciaNumberLiteralValue.Create(BenchResult.TeardownMs));
+        SingleResult.AssignProperty('minOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MinOpsPerSec));
+        SingleResult.AssignProperty('maxOpsPerSec', TGocciaNumberLiteralValue.Create(BenchResult.MaxOpsPerSec));
 
         ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
       except
