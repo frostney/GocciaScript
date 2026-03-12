@@ -116,6 +116,7 @@ begin
   if not Assigned(AModule.TopLevel) then
     Exit(SouffleNil);
 
+  AModule.TopLevel.MaterializeConstants;
   TopClosure := TSouffleClosure.Create(AModule.TopLevel);
   if Assigned(FGC) then
     FGC.AllocateObject(TopClosure);
@@ -279,8 +280,7 @@ begin
           begin
             A := UInt8((Instruction shr 8) and $FF);
             Bx := UInt16((Instruction shr 16) and $FFFF);
-            FRegisters[Base + A] :=
-              MaterializeConstant(Frame^.Template.GetConstant(Bx));
+            FRegisters[Base + A] := Frame^.Template.GetMaterializedConstant(Bx);
           end;
 
           OP_LOAD_TRUE:
@@ -657,8 +657,7 @@ begin
     begin
       A := DecodeA(AInstruction);
       Bx := DecodeBx(AInstruction);
-      FRegisters[Base + A] := MaterializeConstant(
-        AFrame^.Template.GetConstant(Bx));
+      FRegisters[Base + A] := AFrame^.Template.GetMaterializedConstant(Bx);
     end;
 
     OP_LOAD_NIL:
