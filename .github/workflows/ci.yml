@@ -19,7 +19,7 @@ jobs:
 
   build:
     needs: toolchain
-    runs-on: macos-14
+    runs-on: macos-latest
     defaults:
       run:
         shell: bash
@@ -109,6 +109,21 @@ jobs:
           done
           for f in build/Goccia.*.Test.exe; do [ -f "$f" ] && cp "$f" dist/win-x64/; done
 
+      # --- win-x86 ---
+      - name: Build — win-x86
+        env:
+          FPC_TARGET_CPU: i386
+          FPC_TARGET_OS: win32
+        run: ./build.pas clean --prod
+
+      - name: Stage — win-x86
+        run: |
+          mkdir -p dist/win-x86
+          for f in ScriptLoader REPL TestRunner BenchmarkRunner; do
+            [ -f "build/${f}.exe" ] && cp "build/${f}.exe" dist/win-x86/
+          done
+          for f in build/Goccia.*.Test.exe; do [ -f "$f" ] && cp "$f" dist/win-x86/; done
+
       # --- Upload artifacts ---
       - name: Upload — darwin-arm64
         uses: actions/upload-artifact@v4
@@ -138,6 +153,13 @@ jobs:
           retention-days: 1
           path: dist/win-x64/
 
+      - name: Upload — win-x86
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-win-x86
+          retention-days: 1
+          path: dist/win-x86/
+
   test:
     needs: build
     strategy:
@@ -145,10 +167,12 @@ jobs:
       matrix:
         include:
           - platform: darwin-arm64
-            runner: macos-14
+            runner: macos-latest
           - platform: linux-x64
             runner: ubuntu-latest
           - platform: win-x64
+            runner: windows-latest
+          - platform: win-x86
             runner: windows-latest
     runs-on: ${{ matrix.runner }}
     defaults:
@@ -190,10 +214,12 @@ jobs:
       matrix:
         include:
           - platform: darwin-arm64
-            runner: macos-14
+            runner: macos-latest
           - platform: linux-x64
             runner: ubuntu-latest
           - platform: win-x64
+            runner: windows-latest
+          - platform: win-x86
             runner: windows-latest
     runs-on: ${{ matrix.runner }}
     defaults:
@@ -229,10 +255,10 @@ jobs:
       matrix:
         include:
           - platform: darwin-arm64
-            runner: macos-14
+            runner: macos-latest
             mode: interpreted
           - platform: darwin-arm64
-            runner: macos-14
+            runner: macos-latest
             mode: bytecode
           - platform: linux-x64
             runner: ubuntu-latest
@@ -244,6 +270,12 @@ jobs:
             runner: windows-latest
             mode: interpreted
           - platform: win-x64
+            runner: windows-latest
+            mode: bytecode
+          - platform: win-x86
+            runner: windows-latest
+            mode: interpreted
+          - platform: win-x86
             runner: windows-latest
             mode: bytecode
     runs-on: ${{ matrix.runner }}
@@ -293,10 +325,12 @@ jobs:
       matrix:
         include:
           - platform: darwin-arm64
-            runner: macos-14
+            runner: macos-latest
           - platform: linux-x64
             runner: ubuntu-latest
           - platform: win-x64
+            runner: windows-latest
+          - platform: win-x86
             runner: windows-latest
     runs-on: ${{ matrix.runner }}
     defaults:
@@ -325,7 +359,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     strategy:
       matrix:
-        platform: [darwin-arm64, linux-x64, linux-arm64, win-x64]
+        platform: [darwin-arm64, linux-x64, linux-arm64, win-x64, win-x86]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -367,7 +401,7 @@ jobs:
 
       - name: Package releases
         run: |
-          platforms=("darwin-arm64" "linux-x64" "linux-arm64" "win-x64")
+          platforms=("darwin-arm64" "linux-x64" "linux-arm64" "win-x64" "win-x86")
 
           for platform in "${platforms[@]}"; do
             artifact_dir="artifacts/build-${platform}"

@@ -14,7 +14,7 @@ jobs:
 
   build:
     needs: toolchain
-    runs-on: macos-14
+    runs-on: macos-latest
     defaults:
       run:
         shell: bash
@@ -75,6 +75,13 @@ jobs:
         env:
           FPC_TARGET_CPU: x86_64
           FPC_TARGET_OS: win64
+        run: ./build.pas clean --prod
+
+      # --- win-x86 ---
+      - name: Build — win-x86
+        env:
+          FPC_TARGET_CPU: i386
+          FPC_TARGET_OS: win32
         run: ./build.pas clean --prod
 
       - name: Upload cross-built linux-x64
