@@ -10,7 +10,7 @@ on:
 env:
   FPC_VERSION: "3.2.2"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v15"
+  CACHE_VERSION: "v16"
 
 jobs:
   build:
@@ -72,30 +72,34 @@ jobs:
             cd ..
           done
 
-      # Following the official FPC cross-compilation procedure:
-      #   https://wiki.freepascal.org/Cross_compiling
+      # Official FPC cross-compilation procedure
+      # (wiki.freepascal.org/Cross_compiling):
       #
-      # For different-CPU targets (x86_64, i386 from aarch64):
-      #   1. make -C compiler  PP=ppca64  → builds ppcrossx64 / ppcross386
-      #   2. make -C rtl       PP=<new>   → builds RTL with the cross-compiler
-      #   3. make -C packages  PP=<new>   → builds packages
-      #   4. make crossinstall PP=<new>
+      # 1. Build cross-compiler binaries using explicit make targets
+      #    (ppcrossx64, ppcross386). These use the HOST compiler
+      #    (ppca64) to compile pp.pas with target CPU code generation
+      #    modules, producing a macOS binary that generates target code.
       #
-      # For same-CPU targets (aarch64-linux from aarch64-darwin):
-      #   ppca64 already generates aarch64 code; just build RTL/packages
-      #   with OS_TARGET=linux.
+      # 2. Build RTL + packages for each target OS using the
+      #    cross-compiler via PP=.
       #
-      # OPT="-XR$SDKROOT" is passed only to the compiler step which
-      # links a macOS host binary. RTL/packages are cross-compiled
-      # (no macOS linking) and must not receive -XR.
+      # 3. crossinstall to copy binaries + units to the install prefix.
+      #
+      # For same-CPU targets (aarch64-linux), ppca64 already generates
+      # aarch64 code — use it directly via PP=ppca64 with OS_TARGET.
+
+      - name: Build cross-compiler binaries
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          cd fpc-source/compiler
+          make ppcrossx64 PP=ppca64 OPT="-XR$SDKROOT"
+          make ppcross386 PP=ppca64 OPT="-XR$SDKROOT"
 
       - name: Build cross-compiler — Linux x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           export PATH="$PWD/cross-binutils/bin:$PATH"
           cd fpc-source
-          make -C compiler clean all CPU_TARGET=x86_64 OS_TARGET=linux \
-            PP=ppca64 OPT="-XR$SDKROOT"
           make -C rtl clean all CPU_TARGET=x86_64 OS_TARGET=linux \
             PP=$PWD/compiler/ppcrossx64 BINUTILSPREFIX=x86_64-linux-
           make -C packages clean all CPU_TARGET=x86_64 OS_TARGET=linux \
@@ -119,8 +123,6 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make -C compiler clean all CPU_TARGET=x86_64 OS_TARGET=win64 \
-            PP=ppca64 OPT="-XR$SDKROOT"
           make -C rtl clean all CPU_TARGET=x86_64 OS_TARGET=win64 \
             PP=$PWD/compiler/ppcrossx64
           make -C packages clean all CPU_TARGET=x86_64 OS_TARGET=win64 \
@@ -132,8 +134,6 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make -C compiler clean all CPU_TARGET=i386 OS_TARGET=win32 \
-            PP=ppca64 OPT="-XR$SDKROOT"
           make -C rtl clean all CPU_TARGET=i386 OS_TARGET=win32 \
             PP=$PWD/compiler/ppcross386
           make -C packages clean all CPU_TARGET=i386 OS_TARGET=win32 \
@@ -145,8 +145,6 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make -C compiler clean all CPU_TARGET=x86_64 OS_TARGET=darwin \
-            PP=ppca64 OPT="-XR$SDKROOT"
           make -C rtl clean all CPU_TARGET=x86_64 OS_TARGET=darwin \
             PP=$PWD/compiler/ppcrossx64
           make -C packages clean all CPU_TARGET=x86_64 OS_TARGET=darwin \
