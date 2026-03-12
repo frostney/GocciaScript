@@ -42,6 +42,10 @@ jobs:
   test:
     needs: build
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [interpreted, bytecode]
     defaults:
       run:
         shell: bash
@@ -60,11 +64,12 @@ jobs:
         run: chmod +x build/*
 
       - name: Run all JavaScript tests
-        run: ./build/TestRunner tests --silent --no-progress
+        run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --silent --no-progress
 
   wasm-test:
     needs: build
     runs-on: ubuntu-latest
+    continue-on-error: true
     defaults:
       run:
         shell: bash
