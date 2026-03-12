@@ -28,10 +28,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install FPC and musl cross-compilers
+      - name: Install FPC and cross binutils
         run: |
           brew install fpc
-          brew install FiloSottile/musl-cross/musl-cross
+          brew install x86_64-elf-binutils
+          brew install aarch64-elf-binutils
 
       - name: Restore cross-compilers
         uses: actions/cache/restore@v4
@@ -40,10 +41,7 @@ jobs:
           key: ${{ needs.toolchain.outputs.cache-key }}
 
       - name: Configure cross-compiler paths
-        run: |
-          echo "$PWD/fpc-cross/lib/fpc/$FPC_VERSION" >> $GITHUB_PATH
-          echo "$(brew --prefix musl-cross)/bin" >> $GITHUB_PATH
-          echo "MUSL_PREFIX=$(brew --prefix musl-cross)" >> $GITHUB_ENV
+        run: echo "$PWD/fpc-cross/lib/fpc/$FPC_VERSION" >> $GITHUB_PATH
 
       - name: Check formatting
         run: ./format.pas --check
@@ -80,8 +78,7 @@ jobs:
         env:
           FPC_TARGET_CPU: x86_64
           FPC_TARGET_OS: linux
-          FPC_LINKER_PATH: ${{ env.MUSL_PREFIX }}/x86_64-linux-musl/lib
-          FPC_CROSS_PREFIX: x86_64-linux-musl-
+          FPC_CROSS_PREFIX: x86_64-elf-
         run: ./build.pas clean --prod
 
       - name: Stage — linux-x64
@@ -97,8 +94,7 @@ jobs:
         env:
           FPC_TARGET_CPU: aarch64
           FPC_TARGET_OS: linux
-          FPC_LINKER_PATH: ${{ env.MUSL_PREFIX }}/aarch64-linux-musl/lib
-          FPC_CROSS_PREFIX: aarch64-linux-musl-
+          FPC_CROSS_PREFIX: aarch64-elf-
         run: ./build.pas clean --prod
 
       - name: Stage — linux-arm64

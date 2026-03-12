@@ -9,7 +9,7 @@ on:
 
 env:
   FPC_VERSION: "3.2.2"
-  CACHE_VERSION: "v7"
+  CACHE_VERSION: "v8"
 
 jobs:
   build:
@@ -30,11 +30,12 @@ jobs:
         if: steps.cache-check.outputs.cache-hit == 'true'
         run: echo "Toolchain already cached — nothing to build."
 
-      - name: Install FPC and musl cross-compilers
+      - name: Install FPC and cross binutils
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           brew install fpc
-          brew install FiloSottile/musl-cross/musl-cross
+          brew install x86_64-elf-binutils
+          brew install aarch64-elf-binutils
 
       - name: Extract FPC sources via Homebrew
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -45,30 +46,24 @@ jobs:
       - name: Build cross-compiler — Linux x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          MUSL_BIN="$(brew --prefix musl-cross)/bin"
           cd fpc-source
           make -C compiler clean all OS_TARGET=linux CPU_TARGET=x86_64
           make -C rtl clean all OS_TARGET=linux CPU_TARGET=x86_64 \
-            BINUTILSPREFIX=x86_64-linux-musl- \
-            OPT="-aP$MUSL_BIN"
+            BINUTILSPREFIX=x86_64-elf-
           make -C packages clean all OS_TARGET=linux CPU_TARGET=x86_64 \
-            BINUTILSPREFIX=x86_64-linux-musl- \
-            OPT="-aP$MUSL_BIN"
+            BINUTILSPREFIX=x86_64-elf-
           make crossinstall OS_TARGET=linux CPU_TARGET=x86_64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
       - name: Build cross-compiler — Linux aarch64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          MUSL_BIN="$(brew --prefix musl-cross)/bin"
           cd fpc-source
           make -C compiler clean all OS_TARGET=linux CPU_TARGET=aarch64
           make -C rtl clean all OS_TARGET=linux CPU_TARGET=aarch64 \
-            BINUTILSPREFIX=aarch64-linux-musl- \
-            OPT="-aP$MUSL_BIN"
+            BINUTILSPREFIX=aarch64-elf-
           make -C packages clean all OS_TARGET=linux CPU_TARGET=aarch64 \
-            BINUTILSPREFIX=aarch64-linux-musl- \
-            OPT="-aP$MUSL_BIN"
+            BINUTILSPREFIX=aarch64-elf-
           make crossinstall OS_TARGET=linux CPU_TARGET=aarch64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
