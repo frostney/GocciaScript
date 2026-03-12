@@ -167,6 +167,7 @@ type
     OP_RT_IS_INSTANCE = 150, // ABC  R[A] := Runtime.IsInstance(R[B], R[C])
     OP_RT_HAS_PROPERTY = 151, // ABC R[A] := Runtime.HasProperty(R[B], R[C])
     OP_RT_TO_BOOLEAN = 152, // AB    R[A] := Runtime.ToBoolean(R[B])
+    OP_RT_TO_NUMBER  = 153, // AB    R[A] := ToNumber(R[B]) — numeric identity, else Runtime.ToNumber
 
     // ── Runtime: Property Access ──
     OP_RT_GET_PROP   = 156, // ABC   R[A] := Runtime.GetProperty(R[B], Constants[C])
