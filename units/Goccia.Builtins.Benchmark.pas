@@ -339,6 +339,7 @@ var
   FilteredStart, FilteredEnd, FilteredCount: Integer;
   GC: TGarbageCollector;
   WasGCEnabled: Boolean;
+  MeasurementWatermark: Integer;
 begin
   Result.Name := ABenchCase.Name;
   Result.SuiteName := ABenchCase.SuiteName;
@@ -393,10 +394,11 @@ begin
         {$ENDIF}
         GC.Collect;
         GC.Enabled := False;
+        MeasurementWatermark := GC.Watermark;
         {$IFDEF GC_DEBUG}
-        WriteLn(Format('[BENCH] %s > %s: post-collect objects=%d, iterations=%d',
+        WriteLn(Format('[BENCH] %s > %s: post-collect watermark=%d, objects=%d, iterations=%d',
           [ABenchCase.SuiteName, ABenchCase.Name,
-           GC.ManagedObjectCount, Iterations]));
+           MeasurementWatermark, GC.ManagedObjectCount, Iterations]));
         {$ENDIF}
       end;
 
@@ -424,6 +426,18 @@ begin
           MeanRounds[Round] := 0;
         end;
 
+        if Assigned(GC) and (Round < MEASUREMENT_ROUNDS - 1)
+          and (GC.Watermark - MeasurementWatermark > GC.Threshold) then
+        begin
+          if Assigned(FOnBeforeMeasurement) then
+            FOnBeforeMeasurement();
+          GC.CollectYoung(MeasurementWatermark);
+          {$IFDEF GC_DEBUG}
+          WriteLn(Format('[BENCH] %s > %s: round %d collected, objects=%d',
+            [ABenchCase.SuiteName, ABenchCase.Name,
+             Round, GC.ManagedObjectCount]));
+          {$ENDIF}
+        end;
       end;
 
       {$IFDEF GC_DEBUG}

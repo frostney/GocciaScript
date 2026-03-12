@@ -76,11 +76,14 @@ type
     // active root stack so a stack-held object survives the collection.
     procedure CollectIfNeeded(const AProtect: TGCManagedObject); overload;
 
-    // Young-generation collection: runs a full mark from roots, then
-    // sweeps only objects allocated after AWatermark. Objects before
-    // the watermark survive regardless of mark state, preserving
-    // old-to-young references. Cheaper than Collect because the sweep
-    // phase only frees young garbage while skipping old objects.
+    // Young-generation collection: pre-marks objects before AWatermark
+    // as surviving, then runs mark-and-sweep. MarkReferences on old
+    // objects short-circuits via "if GCMarked then Exit", and the sweep
+    // only walks objects after the watermark. Both mark and sweep are
+    // O(young) instead of O(all).
+    // Constraint: old objects must not acquire new references to young
+    // objects between the watermark capture and the CollectYoung call.
+    // Safe for benchmark measurement where old objects are read-only.
     procedure CollectYoung(const AWatermark: Integer);
 
     property Enabled: Boolean read FEnabled write FEnabled;
@@ -385,17 +388,25 @@ begin
       EffectiveWatermark := FManagedObjects.Count;
 
     TGCManagedObject.AdvanceMark;
+
+    for I := 0 to EffectiveWatermark - 1 do
+    begin
+      Obj := FManagedObjects[I];
+      if Assigned(Obj) then
+        Obj.GCMarked := True;
+    end;
+
     MarkRoots;
 
     Collected := 0;
-    WriteIdx := 0;
+    WriteIdx := EffectiveWatermark;
 
-    for I := 0 to FManagedObjects.Count - 1 do
+    for I := EffectiveWatermark to FManagedObjects.Count - 1 do
     begin
       Obj := FManagedObjects[I];
       if Obj = nil then
         Continue;
-      if Obj.GCMarked or (I < EffectiveWatermark) then
+      if Obj.GCMarked then
       begin
         Obj.GCIndex := WriteIdx;
         FManagedObjects[WriteIdx] := Obj;
@@ -412,7 +423,6 @@ begin
     FManagedObjects.Count := WriteIdx;
     if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
       FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
-    FNilSlots := 0;
     FAllocationsSinceLastGC := 0;
     FTotalCollected := FTotalCollected + Collected;
     Inc(FTotalCollections);
