@@ -23,9 +23,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install FPC
-        run: brew install fpc
-
       - name: Restore cross-compilers
         uses: actions/cache/restore@v4
         with:
