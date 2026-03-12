@@ -101,6 +101,11 @@ const
 
 implementation
 
+{$IFDEF GC_DEBUG}
+uses
+  SysUtils;
+{$ENDIF}
+
 { TGarbageCollector }
 
 class function TGarbageCollector.Instance: TGarbageCollector;
@@ -321,15 +326,22 @@ begin
 end;
 
 procedure TGarbageCollector.Collect;
+var
+  BeforeCount: Integer;
 begin
   if FCollecting then Exit;
   FCollecting := True;
   try
+    BeforeCount := FManagedObjects.Count - FNilSlots;
     TGCManagedObject.AdvanceMark;
     MarkRoots;
     SweepObjects;
     FAllocationsSinceLastGC := 0;
     Inc(FTotalCollections);
+    {$IFDEF GC_DEBUG}
+    WriteLn(Format('[GC] Collect: %d -> %d objects (%d freed)',
+      [BeforeCount, FManagedObjects.Count, BeforeCount - FManagedObjects.Count]));
+    {$ENDIF}
   finally
     FCollecting := False;
   end;
@@ -411,6 +423,11 @@ begin
     FAllocationsSinceLastGC := 0;
     FTotalCollected := FTotalCollected + Collected;
     Inc(FTotalCollections);
+    {$IFDEF GC_DEBUG}
+    WriteLn(Format('[GC] CollectYoung(wm=%d): %d total, %d young, %d freed, %d surviving',
+      [AWatermark, EffectiveWatermark + (FManagedObjects.Count - EffectiveWatermark) + Collected,
+       FManagedObjects.Count - EffectiveWatermark + Collected, Collected, FManagedObjects.Count]));
+    {$ENDIF}
   finally
     FCollecting := False;
   end;

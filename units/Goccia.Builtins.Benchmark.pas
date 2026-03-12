@@ -21,6 +21,7 @@ type
   TGocciaBenchmark = class;
 
   TBenchmarkProgressEvent = procedure(const ASuiteName, ABenchName: string; const AIndex, ATotal: Integer) of object;
+  TBenchmarkNotifyEvent = procedure of object;
 
   TBenchmarkCase = class
   public
@@ -54,6 +55,7 @@ type
     FRegisteredBenchmarks: TObjectList<TBenchmarkCase>;
     FCurrentSuiteName: string;
     FOnProgress: TBenchmarkProgressEvent;
+    FOnBeforeMeasurement: TBenchmarkNotifyEvent;
 
     function RunSingleBenchmark(const ABenchCase: TBenchmarkCase): TBenchmarkResult;
     function CalibrateIterations(const ABenchCase: TBenchmarkCase; const ARunArgs: TGocciaArgumentsCollection): Int64;
@@ -66,6 +68,7 @@ type
     function RunBenchmarks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     property OnProgress: TBenchmarkProgressEvent read FOnProgress write FOnProgress;
+    property OnBeforeMeasurement: TBenchmarkNotifyEvent read FOnBeforeMeasurement write FOnBeforeMeasurement;
   end;
 
 implementation
@@ -382,9 +385,21 @@ begin
       if Assigned(GC) then
       begin
         WasGCEnabled := GC.Enabled;
+        if Assigned(FOnBeforeMeasurement) then
+          FOnBeforeMeasurement();
+        {$IFDEF GC_DEBUG}
+        WriteLn(Format('[BENCH] %s > %s: pre-measurement GC.Enabled=%s, objects=%d, allocs=%d',
+          [ABenchCase.SuiteName, ABenchCase.Name,
+           BoolToStr(GC.Enabled, 'True', 'False'), GC.ManagedObjectCount, GC.Watermark]));
+        {$ENDIF}
         GC.Collect;
         GC.Enabled := False;
         MeasurementWatermark := GC.Watermark;
+        {$IFDEF GC_DEBUG}
+        WriteLn(Format('[BENCH] %s > %s: post-collect watermark=%d, objects=%d, iterations=%d',
+          [ABenchCase.SuiteName, ABenchCase.Name,
+           MeasurementWatermark, GC.ManagedObjectCount, Iterations]));
+        {$ENDIF}
       end;
 
       for Round := 0 to MEASUREMENT_ROUNDS - 1 do
@@ -412,8 +427,24 @@ begin
         end;
 
         if Assigned(GC) and (Round < MEASUREMENT_ROUNDS - 1) then
+        begin
+          {$IFDEF GC_DEBUG}
+          WriteLn(Format('[BENCH] %s > %s: round %d done, objects=%d (young=%d)',
+            [ABenchCase.SuiteName, ABenchCase.Name,
+             Round, GC.ManagedObjectCount, GC.Watermark - MeasurementWatermark]));
+          {$ENDIF}
+          if Assigned(FOnBeforeMeasurement) then
+            FOnBeforeMeasurement();
           GC.CollectYoung(MeasurementWatermark);
+        end;
       end;
+
+      {$IFDEF GC_DEBUG}
+      if Assigned(GC) then
+        WriteLn(Format('[BENCH] %s > %s: measurement done, objects=%d, totalCollected=%d, totalCollections=%d',
+          [ABenchCase.SuiteName, ABenchCase.Name,
+           GC.ManagedObjectCount, GC.TotalCollected, GC.TotalCollections]));
+      {$ENDIF}
 
       if Assigned(GC) then
         GC.Enabled := WasGCEnabled;

@@ -361,6 +361,7 @@ type
     procedure ResolveProxySet(const ATarget: TSouffleHeapObject;
       const AName: string; const AValue: TGocciaValue);
 
+    procedure ClearTransientCaches;
     procedure RegisterDelegates;
     procedure RegisterTestNatives;
     procedure RegisterNativeBuiltins;
@@ -7260,6 +7261,14 @@ const
     (Name: 'withResolvers'; Arity: 0; Callback: @NativePromiseStaticWithResolvers),
     (Name: 'try';           Arity: 1; Callback: @NativePromiseStaticTry)
   );
+
+procedure TGocciaRuntimeOperations.ClearTransientCaches;
+begin
+  FClosureBridgeCache.Clear;
+  FArrayBridgeCache.Clear;
+  FArrayBridgeReverse.Clear;
+  FRecordBridgeCache.Clear;
+end;
 
 procedure TGocciaRuntimeOperations.RegisterDelegates;
 begin

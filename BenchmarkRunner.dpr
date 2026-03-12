@@ -23,6 +23,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.Runtime.Operations,
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
@@ -253,6 +254,11 @@ begin
         end;
 
         CompileEnd := GetNanoseconds;
+
+        if GShowProgress and Assigned(Backend.Engine.BuiltinBenchmark) then
+          Backend.Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+        if Assigned(Backend.Engine.BuiltinBenchmark) then
+          Backend.Engine.BuiltinBenchmark.OnBeforeMeasurement := Backend.Runtime.ClearTransientCaches;
 
         try
           ResultValue := Backend.RunModule(Module);
