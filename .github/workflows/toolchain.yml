@@ -9,7 +9,7 @@ on:
 
 env:
   FPC_VERSION: "3.2.2"
-  CACHE_VERSION: "v2"
+  CACHE_VERSION: "v3"
 
 jobs:
   build:
@@ -86,6 +86,14 @@ jobs:
           cd fpc-source
           make clean all OS_TARGET=win32 CPU_TARGET=i386
           make crossinstall OS_TARGET=win32 CPU_TARGET=i386 \
+            INSTALL_PREFIX=$PWD/../fpc-cross
+
+      - name: Build cross-compiler — macOS x86_64
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          cd fpc-source
+          make clean all OS_TARGET=darwin CPU_TARGET=x86_64
+          make crossinstall OS_TARGET=darwin CPU_TARGET=x86_64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
       - name: Save to cache

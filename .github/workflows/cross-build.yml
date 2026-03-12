@@ -40,8 +40,15 @@ jobs:
           echo "$PWD/musl-toolchains/x86_64-linux-musl-cross/bin" >> $GITHUB_PATH
           echo "$PWD/musl-toolchains/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
 
-      # --- darwin-arm64 (native) ---
-      - name: Build — darwin-arm64
+      # --- macos-arm64 (native) ---
+      - name: Build — macos-arm64
+        run: ./build.pas clean --prod
+
+      # --- macos-x64 ---
+      - name: Build — macos-x64
+        env:
+          FPC_TARGET_CPU: x86_64
+          FPC_TARGET_OS: darwin
         run: ./build.pas clean --prod
 
       # --- linux-x64 ---
