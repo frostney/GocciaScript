@@ -1,0 +1,121 @@
+name: Cross-Compilation Build
+
+on:
+  pull_request:
+    branches:
+      - main
+
+env:
+  FPC_VERSION: "3.2.2"
+
+jobs:
+  toolchain:
+    uses: ./.github/workflows/toolchain.yml
+
+  build:
+    needs: toolchain
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install FPC
+        run: brew install fpc
+
+      - name: Restore cross-compilers
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            fpc-cross
+            musl-toolchains
+          key: ${{ needs.toolchain.outputs.cache-key }}
+
+      - name: Configure cross-compiler paths
+        run: |
+          echo "$PWD/fpc-cross/lib/fpc/$FPC_VERSION" >> $GITHUB_PATH
+          echo "$PWD/musl-toolchains/x86_64-linux-musl-cross/bin" >> $GITHUB_PATH
+          echo "$PWD/musl-toolchains/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+
+      # --- darwin-arm64 (native) ---
+      - name: Build — darwin-arm64
+        run: ./build.pas clean --prod
+
+      # --- linux-x64 ---
+      - name: Build — linux-x64
+        env:
+          FPC_TARGET_CPU: x86_64
+          FPC_TARGET_OS: linux
+          FPC_LINKER_PATH: ${{ github.workspace }}/musl-toolchains/x86_64-linux-musl-cross/x86_64-linux-musl/lib
+          FPC_CROSS_PREFIX: x86_64-linux-musl-
+        run: ./build.pas clean --prod
+
+      - name: Stage — linux-x64
+        run: |
+          mkdir -p dist/linux-x64
+          for f in ScriptLoader REPL TestRunner BenchmarkRunner; do
+            [ -f "build/$f" ] && cp "build/$f" dist/linux-x64/
+          done
+          for f in build/Goccia.*.Test; do [ -f "$f" ] && cp "$f" dist/linux-x64/; done
+
+      # --- linux-arm64 ---
+      - name: Build — linux-arm64
+        env:
+          FPC_TARGET_CPU: aarch64
+          FPC_TARGET_OS: linux
+          FPC_LINKER_PATH: ${{ github.workspace }}/musl-toolchains/aarch64-linux-musl-cross/aarch64-linux-musl/lib
+          FPC_CROSS_PREFIX: aarch64-linux-musl-
+        run: ./build.pas clean --prod
+
+      # --- win-x64 ---
+      - name: Build — win-x64
+        env:
+          FPC_TARGET_CPU: x86_64
+          FPC_TARGET_OS: win64
+        run: ./build.pas clean --prod
+
+      - name: Upload cross-built linux-x64
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-build-linux-x64
+          retention-days: 1
+          path: dist/linux-x64/
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [interpreted, bytecode]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download cross-built linux-x64
+        uses: actions/download-artifact@v4
+        with:
+          name: cross-build-linux-x64
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Run all JavaScript tests
+        run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --silent --no-progress
+
+      - name: Run Pascal unit tests
+        if: matrix.mode == 'interpreted'
+        run: |
+          ./build/Goccia.Values.Primitives.Test
+          ./build/Goccia.Values.FunctionValue.Test
+          ./build/Goccia.Values.ObjectValue.Test
+          ./build/Goccia.Compiler.Test
+          ./build/Goccia.Builtins.TestAssertions.Test
