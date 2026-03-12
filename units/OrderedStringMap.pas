@@ -208,7 +208,7 @@ end;
 
 constructor TOrderedStringMap<TValue>.Create;
 begin
-  Create(INITIAL_CAPACITY);
+  Create(0);
 end;
 
 constructor TOrderedStringMap<TValue>.Create(AInitialCapacity: Integer);
@@ -219,8 +219,11 @@ begin
   FCount := 0;
   FEntryCount := 0;
 
-  if AInitialCapacity < INITIAL_CAPACITY then
-    AInitialCapacity := INITIAL_CAPACITY;
+  if AInitialCapacity <= 0 then
+  begin
+    FBucketCount := 0;
+    Exit;
+  end;
 
   FBucketCount := INITIAL_CAPACITY;
   while FBucketCount < AInitialCapacity do
@@ -246,6 +249,9 @@ var
   BucketIdx, EntryIdx: Integer;
 begin
   Hash := HashKey(AKey);
+
+  if FBucketCount = 0 then
+    Grow;
 
   if FindBucket(AKey, Hash, BucketIdx) then
   begin
@@ -282,6 +288,12 @@ var
   Hash: Cardinal;
   BucketIdx: Integer;
 begin
+  if FBucketCount = 0 then
+  begin
+    AValue := Default(TValue);
+    Result := False;
+    Exit;
+  end;
   Hash := HashKey(AKey);
   Result := FindBucket(AKey, Hash, BucketIdx);
   if Result then
@@ -295,6 +307,11 @@ var
   Hash: Cardinal;
   BucketIdx: Integer;
 begin
+  if FBucketCount = 0 then
+  begin
+    Result := False;
+    Exit;
+  end;
   Hash := HashKey(AKey);
   Result := FindBucket(AKey, Hash, BucketIdx);
 end;
@@ -304,6 +321,11 @@ var
   Hash: Cardinal;
   BucketIdx, EntryIdx: Integer;
 begin
+  if FBucketCount = 0 then
+  begin
+    Result := False;
+    Exit;
+  end;
   Hash := HashKey(AKey);
   Result := FindBucket(AKey, Hash, BucketIdx);
   if not Result then
