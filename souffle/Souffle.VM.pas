@@ -1760,7 +1760,16 @@ begin
     OP_RT_TYPEOF:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.TypeOf(FRegisters[Base + B]);
+      case FRegisters[Base + B].Kind of
+        svkBoolean:
+          FRegisters[Base + A] := SouffleString('boolean');
+        svkInteger, svkFloat:
+          FRegisters[Base + A] := SouffleString('number');
+        svkString:
+          FRegisters[Base + A] := SouffleString('string');
+      else
+        FRegisters[Base + A] := FRuntimeOps.TypeOf(FRegisters[Base + B]);
+      end;
     end;
     OP_RT_IS_INSTANCE:
     begin
