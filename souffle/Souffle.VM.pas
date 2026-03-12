@@ -484,6 +484,22 @@ begin
               SouffleToDouble(FRegisters[Base + C]));
           end;
 
+          OP_NOT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            FRegisters[Base + A] := SouffleBoolean(
+              not SouffleIsTrue(FRegisters[Base + B]));
+          end;
+
+          OP_TO_BOOL:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            FRegisters[Base + A] := SouffleBoolean(
+              SouffleIsTrue(FRegisters[Base + B]));
+          end;
+
           OP_GET_LOCAL_INT, OP_GET_LOCAL_FLOAT, OP_GET_LOCAL_BOOL,
           OP_GET_LOCAL_STRING, OP_GET_LOCAL_REF:
           begin
@@ -1335,6 +1351,18 @@ begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       FRegisters[Base + A] := SouffleBoolean(
         SouffleToDouble(FRegisters[Base + B]) >= SouffleToDouble(FRegisters[Base + C]));
+    end;
+
+    OP_NOT:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
+      FRegisters[Base + A] := SouffleBoolean(not SouffleIsTrue(FRegisters[Base + B]));
+    end;
+
+    OP_TO_BOOL:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
+      FRegisters[Base + A] := SouffleBoolean(SouffleIsTrue(FRegisters[Base + B]));
     end;
 
     OP_ARRAY_POP:

@@ -135,6 +135,10 @@ type
     OP_LTE_FLOAT     = 81,  // ABC   R[A] := Boolean(AsNumber(R[B]) <= AsNumber(R[C]))
     OP_GTE_FLOAT     = 82,  // ABC   R[A] := Boolean(AsNumber(R[B]) >= AsNumber(R[C]))
 
+    // ── Core: Boolean ──
+    OP_NOT           = 83,  // AB    R[A] := Boolean(not IsTrue(R[B]))
+    OP_TO_BOOL       = 84,  // AB    R[A] := Boolean(IsTrue(R[B]))
+
     // ── Runtime: Polymorphic Arithmetic ──
     OP_RT_ADD        = 128, // ABC   R[A] := Runtime.Add(R[B], R[C])
     OP_RT_SUB        = 129, // ABC   R[A] := Runtime.Subtract(R[B], R[C])
