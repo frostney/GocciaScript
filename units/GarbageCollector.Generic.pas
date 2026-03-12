@@ -379,6 +379,8 @@ begin
   FCollecting := True;
   try
     EffectiveWatermark := AWatermark;
+    if EffectiveWatermark < 0 then
+      EffectiveWatermark := 0;
     if EffectiveWatermark > FManagedObjects.Count then
       EffectiveWatermark := FManagedObjects.Count;
 
