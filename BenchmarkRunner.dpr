@@ -357,6 +357,9 @@ begin
       else
         Reporter.WriteToStdOut;
     end;
+
+    if Reporter.HasFailures then
+      ExitCode := 1;
   finally
     Reporter.Free;
     Files.Free;
