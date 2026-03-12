@@ -9,7 +9,7 @@ on:
 
 env:
   FPC_VERSION: "3.2.2"
-  CACHE_VERSION: "v4"
+  CACHE_VERSION: "v5"
 
 jobs:
   build:
@@ -36,9 +36,11 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: brew install fpc
 
-      - name: Copy Homebrew FPC sources
+      - name: Extract FPC sources via Homebrew
         if: steps.cache-check.outputs.cache-hit != 'true'
-        run: cp -a "$(brew --prefix)/share/fpcsrc" fpc-source
+        run: |
+          brew unpack --patch fpc --destdir=.
+          mv fpc-* fpc-source
 
       - name: Download musl cross-toolchains
         if: steps.cache-check.outputs.cache-hit != 'true'
