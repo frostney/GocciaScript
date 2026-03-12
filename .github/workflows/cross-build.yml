@@ -23,22 +23,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install FPC
-        run: brew install fpc
+      - name: Install FPC and musl cross-compilers
+        run: |
+          brew install fpc
+          brew install FiloSottile/musl-cross/musl-cross
 
       - name: Restore cross-compilers
         uses: actions/cache/restore@v4
         with:
-          path: |
-            fpc-cross
-            musl-toolchains
+          path: fpc-cross
           key: ${{ needs.toolchain.outputs.cache-key }}
 
       - name: Configure cross-compiler paths
         run: |
           echo "$PWD/fpc-cross/lib/fpc/$FPC_VERSION" >> $GITHUB_PATH
-          echo "$PWD/musl-toolchains/x86_64-linux-musl-cross/bin" >> $GITHUB_PATH
-          echo "$PWD/musl-toolchains/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+          echo "$(brew --prefix musl-cross)/bin" >> $GITHUB_PATH
+          echo "MUSL_PREFIX=$(brew --prefix musl-cross)" >> $GITHUB_ENV
 
       # --- macos-arm64 (native) ---
       - name: Build — macos-arm64
@@ -56,7 +56,7 @@ jobs:
         env:
           FPC_TARGET_CPU: x86_64
           FPC_TARGET_OS: linux
-          FPC_LINKER_PATH: ${{ github.workspace }}/musl-toolchains/x86_64-linux-musl-cross/x86_64-linux-musl/lib
+          FPC_LINKER_PATH: ${{ env.MUSL_PREFIX }}/x86_64-linux-musl/lib
           FPC_CROSS_PREFIX: x86_64-linux-musl-
         run: ./build.pas clean --prod
 
@@ -73,7 +73,7 @@ jobs:
         env:
           FPC_TARGET_CPU: aarch64
           FPC_TARGET_OS: linux
-          FPC_LINKER_PATH: ${{ github.workspace }}/musl-toolchains/aarch64-linux-musl-cross/aarch64-linux-musl/lib
+          FPC_LINKER_PATH: ${{ env.MUSL_PREFIX }}/aarch64-linux-musl/lib
           FPC_CROSS_PREFIX: aarch64-linux-musl-
         run: ./build.pas clean --prod
 

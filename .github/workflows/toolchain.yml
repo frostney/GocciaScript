@@ -9,7 +9,7 @@ on:
 
 env:
   FPC_VERSION: "3.2.2"
-  CACHE_VERSION: "v5"
+  CACHE_VERSION: "v6"
 
 jobs:
   build:
@@ -22,9 +22,7 @@ jobs:
         id: cache-check
         uses: actions/cache/restore@v4
         with:
-          path: |
-            fpc-cross
-            musl-toolchains
+          path: fpc-cross
           key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}
           lookup-only: true
 
@@ -32,9 +30,11 @@ jobs:
         if: steps.cache-check.outputs.cache-hit == 'true'
         run: echo "Toolchain already cached — nothing to build."
 
-      - name: Install FPC
+      - name: Install FPC and musl cross-compilers
         if: steps.cache-check.outputs.cache-hit != 'true'
-        run: brew install fpc
+        run: |
+          brew install fpc
+          brew install FiloSottile/musl-cross/musl-cross
 
       - name: Extract FPC sources via Homebrew
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -42,20 +42,10 @@ jobs:
           brew unpack --patch fpc --destdir=.
           mv fpc-* fpc-source
 
-      - name: Download musl cross-toolchains
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p musl-toolchains && cd musl-toolchains
-          curl -LO https://musl.cc/x86_64-linux-musl-cross.tgz
-          curl -LO https://musl.cc/aarch64-linux-musl-cross.tgz
-          tar xzf x86_64-linux-musl-cross.tgz
-          tar xzf aarch64-linux-musl-cross.tgz
-          rm *.tgz
-
       - name: Build cross-compiler — Linux x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          export PATH="$PWD/musl-toolchains/x86_64-linux-musl-cross/bin:$PATH"
+          export PATH="$(brew --prefix musl-cross)/bin:$PATH"
           cd fpc-source
           make clean all OS_TARGET=linux CPU_TARGET=x86_64 \
             BINUTILSPREFIX=x86_64-linux-musl-
@@ -65,7 +55,7 @@ jobs:
       - name: Build cross-compiler — Linux aarch64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          export PATH="$PWD/musl-toolchains/aarch64-linux-musl-cross/bin:$PATH"
+          export PATH="$(brew --prefix musl-cross)/bin:$PATH"
           cd fpc-source
           make clean all OS_TARGET=linux CPU_TARGET=aarch64 \
             BINUTILSPREFIX=aarch64-linux-musl-
@@ -100,7 +90,5 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: |
-            fpc-cross
-            musl-toolchains
+          path: fpc-cross
           key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}
