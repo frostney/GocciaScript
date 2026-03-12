@@ -58,7 +58,7 @@ function SouffleIsReference(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsNumeric(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsStringValue(const AValue: TSouffleValue): Boolean; inline;
 
-function SouffleIsTrue(const AValue: TSouffleValue): Boolean;
+function SouffleIsTrue(const AValue: TSouffleValue): Boolean; inline;
 function SouffleAsNumber(const AValue: TSouffleValue): Double; inline;
 function SouffleToDouble(const AValue: TSouffleValue): Double; inline;
 function SouffleGetString(const AValue: TSouffleValue): string;
