@@ -39,7 +39,7 @@ GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a 
 ./build/TestRunner tests/language/expressions/                                 # Run a test category
 ./build/TestRunner tests --no-progress --exit-on-first-failure                 # CI mode
 ./build/TestRunner tests --silent                                              # Suppress all console output
-./build/TestRunner tests --timing-output=timing.json                           # Write timing data as JSON
+./build/TestRunner tests --output=results.json                                 # Write test results as JSON
 ./build/TestRunner tests --mode=bytecode                                       # Run tests via Souffle VM
 ./build/BenchmarkRunner benchmarks/                                               # Run all benchmarks
 ./build/BenchmarkRunner benchmarks/fibonacci.js                                   # Run a specific benchmark

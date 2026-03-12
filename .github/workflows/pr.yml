@@ -64,15 +64,15 @@ jobs:
         run: chmod +x build/*
 
       - name: Run all JavaScript tests
-        run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --silent --no-progress --timing-output=test-timing-${{ matrix.mode }}.json
+        run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --silent --no-progress --output=test-results-${{ matrix.mode }}.json
 
-      - name: Upload test timing
+      - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-timing-${{ matrix.mode }}
+          name: test-results-${{ matrix.mode }}
           retention-days: 1
-          path: test-timing-${{ matrix.mode }}.json
+          path: test-results-${{ matrix.mode }}.json
 
   wasm-test:
     needs: build
@@ -141,8 +141,7 @@ jobs:
           path: benchmark-${{ matrix.mode }}.json
 
   benchmark-comment:
-    needs: [test, benchmark]
-    if: always()
+    needs: benchmark
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -157,18 +156,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: benchmark-bytecode
-
-      - name: Download test timing (interpreted)
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: test-timing-interpreted
-
-      - name: Download test timing (bytecode)
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: test-timing-bytecode
 
       - name: Restore interpreted baseline
         uses: actions/cache/restore@v4
@@ -341,48 +328,6 @@ jobs:
 
             let body = '## Benchmark Results\n\n';
 
-            // Suite timing section
-            const fmtMs = (ns) => (ns / 1e6).toFixed(1) + 'ms';
-            const timingRows = [];
-            const tryReadJSON = (path) => { try { return JSON.parse(fs.readFileSync(path, 'utf8')); } catch { return null; } };
-
-            const testInterp = tryReadJSON('test-timing-interpreted.json');
-            const testBytecode = tryReadJSON('test-timing-bytecode.json');
-
-            if (testInterp || testBytecode) {
-              timingRows.push('### Suite Timing\n');
-              timingRows.push('| Suite | Metric | Interpreted | Bytecode |');
-              timingRows.push('|-------|--------|------------|---------|');
-
-              const iExec = testInterp ? fmtMs(testInterp.durationNanoseconds) : '—';
-              const bExec = testBytecode ? fmtMs(testBytecode.durationNanoseconds) : '—';
-              const iEngine = testInterp ? fmtMs(testInterp.totalEngineNanoseconds) : '—';
-              const bEngine = testBytecode ? fmtMs(testBytecode.totalEngineNanoseconds) : '—';
-              const iTests = testInterp ? testInterp.totalTests : '—';
-              const bTests = testBytecode ? testBytecode.totalTests : '—';
-              timingRows.push(`| Tests | Count | ${iTests} | ${bTests} |`);
-              timingRows.push(`| Tests | Execution | ${iExec} | ${bExec} |`);
-              timingRows.push(`| Tests | Engine total | ${iEngine} | ${bEngine} |`);
-            }
-
-            const benchInterp = interpData;
-            const benchBytecodeData = bytecodeData;
-            const iBenchDur = benchInterp.totalDurationNanoseconds;
-            const bBenchDur = benchBytecodeData.totalDurationNanoseconds;
-            if (iBenchDur || bBenchDur) {
-              if (timingRows.length === 0) {
-                timingRows.push('### Suite Timing\n');
-                timingRows.push('| Suite | Metric | Interpreted | Bytecode |');
-                timingRows.push('|-------|--------|------------|---------|');
-              }
-              timingRows.push(`| Benchmarks | Duration | ${iBenchDur ? fmtMs(iBenchDur) : '—'} | ${bBenchDur ? fmtMs(bBenchDur) : '—'} |`);
-              timingRows.push(`| Benchmarks | Count | ${interpData.files.reduce((a, f) => a + f.benchmarks.filter(b => !b.error).length, 0)} | ${bytecodeData.files.reduce((a, f) => a + f.benchmarks.filter(b => !b.error).length, 0)} |`);
-            }
-
-            if (timingRows.length > 0) {
-              body += timingRows.join('\n') + '\n\n';
-            }
-
             if (hasAnyBaseline) {
               function overallMode(label, s) {
                 const p = [];
@@ -412,6 +357,124 @@ jobs:
             body += `<sub>Measured on ubuntu-latest x64. Changes within ±${THRESHOLD}% are considered insignificant.</sub>`;
 
             const marker = '<!-- benchmark-comparison -->';
+            body = marker + '\n' + body;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  timing-comment:
+    needs: [test, benchmark]
+    if: always()
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download test results (interpreted)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: test-results-interpreted
+
+      - name: Download test results (bytecode)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: test-results-bytecode
+
+      - name: Download benchmark results (interpreted)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: benchmark-interpreted
+
+      - name: Download benchmark results (bytecode)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: benchmark-bytecode
+
+      - name: Post timing comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const tryRead = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
+            const fmtMs = (ns) => (ns / 1e6).toFixed(1) + 'ms';
+            const fmtS = (ns) => (ns / 1e9).toFixed(2) + 's';
+            const fmtDur = (ns) => ns >= 1e9 ? fmtS(ns) : fmtMs(ns);
+
+            const testInterp = tryRead('test-results-interpreted.json');
+            const testBytecode = tryRead('test-results-bytecode.json');
+            const benchInterp = tryRead('benchmark-interpreted.json');
+            const benchBytecode = tryRead('benchmark-bytecode.json');
+
+            if (!testInterp && !testBytecode && !benchInterp && !benchBytecode) {
+              console.log('No timing data available');
+              return;
+            }
+
+            let body = '## Suite Timing\n\n';
+            body += '| Suite | Metric | Interpreted | Bytecode |\n';
+            body += '|-------|--------|------------|----------|\n';
+
+            if (testInterp || testBytecode) {
+              const iTests = testInterp ? testInterp.totalTests : '—';
+              const bTests = testBytecode ? testBytecode.totalTests : '—';
+              const iPassed = testInterp ? `${testInterp.passed} ✅` : '—';
+              const bPassed = testBytecode ? `${testBytecode.passed} ✅` : '—';
+              const iFailed = testInterp ? testInterp.failed : 0;
+              const bFailed = testBytecode ? testBytecode.failed : 0;
+              const iSkipped = testInterp ? testInterp.skipped : 0;
+              const bSkipped = testBytecode ? testBytecode.skipped : 0;
+              const iDur = testInterp ? fmtDur(testInterp.durationNanoseconds) : '—';
+              const bDur = testBytecode ? fmtDur(testBytecode.durationNanoseconds) : '—';
+              const iEngine = testInterp ? fmtDur(testInterp.totalEngineNanoseconds) : '—';
+              const bEngine = testBytecode ? fmtDur(testBytecode.totalEngineNanoseconds) : '—';
+
+              body += `| Tests | Total | ${iTests} | ${bTests} |\n`;
+              body += `| Tests | Passed | ${iPassed} | ${bPassed} |\n`;
+              if (iFailed > 0 || bFailed > 0)
+                body += `| Tests | Failed | ${iFailed > 0 ? `${iFailed} ❌` : '0'} | ${bFailed > 0 ? `${bFailed} ❌` : '0'} |\n`;
+              if (iSkipped > 0 || bSkipped > 0)
+                body += `| Tests | Skipped | ${iSkipped} | ${bSkipped} |\n`;
+              body += `| Tests | Execution | ${iDur} | ${bDur} |\n`;
+              body += `| Tests | Engine | ${iEngine} | ${bEngine} |\n`;
+            }
+
+            if (benchInterp || benchBytecode) {
+              const iBenchCount = benchInterp ? benchInterp.files.reduce((a, f) => a + f.benchmarks.filter(b => !b.error).length, 0) : '—';
+              const bBenchCount = benchBytecode ? benchBytecode.files.reduce((a, f) => a + f.benchmarks.filter(b => !b.error).length, 0) : '—';
+              const iBenchDur = benchInterp ? fmtDur(benchInterp.totalDurationNanoseconds) : '—';
+              const bBenchDur = benchBytecode ? fmtDur(benchBytecode.totalDurationNanoseconds) : '—';
+
+              body += `| Benchmarks | Total | ${iBenchCount} | ${bBenchCount} |\n`;
+              body += `| Benchmarks | Duration | ${iBenchDur} | ${bBenchDur} |\n`;
+            }
+
+            body += '\n<sub>Measured on ubuntu-latest x64.</sub>';
+
+            const marker = '<!-- suite-timing -->';
             body = marker + '\n' + body;
 
             const { data: comments } = await github.rest.issues.listComments({
