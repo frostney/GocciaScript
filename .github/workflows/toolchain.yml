@@ -10,7 +10,7 @@ on:
 env:
   FPC_VERSION: "3.2.2"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v16"
+  CACHE_VERSION: "v17"
 
 jobs:
   build:
@@ -72,85 +72,79 @@ jobs:
             cd ..
           done
 
-      # Official FPC cross-compilation procedure
-      # (wiki.freepascal.org/Cross_compiling):
+      # FPC cross-compilation procedure for 3.2.2:
       #
-      # 1. Build cross-compiler binaries using explicit make targets
-      #    (ppcrossx64, ppcross386). These use the HOST compiler
-      #    (ppca64) to compile pp.pas with target CPU code generation
-      #    modules, producing a macOS binary that generates target code.
+      # The top-level make handles cross-compiler builds via
+      # compiler_cycle. The cycle builds the cross-compiler binary
+      # (step 1), then tries to validate it by re-linking as a target
+      # binary (step 2). Step 2 fails because we don't have a target
+      # libc — but the cross-compiler from step 1 is already built.
       #
-      # 2. Build RTL + packages for each target OS using the
-      #    cross-compiler via PP=.
-      #
-      # 3. crossinstall to copy binaries + units to the install prefix.
-      #
-      # For same-CPU targets (aarch64-linux), ppca64 already generates
-      # aarch64 code — use it directly via PP=ppca64 with OS_TARGET.
-
-      - name: Build cross-compiler binaries
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        run: |
-          cd fpc-source/compiler
-          make ppcrossx64 PP=ppca64 OPT="-XR$SDKROOT"
-          make ppcross386 PP=ppca64 OPT="-XR$SDKROOT"
+      # We let compiler_cycle fail, verify the cross-compiler exists,
+      # then build RTL + packages separately (compilation only, no
+      # linking needed).
 
       - name: Build cross-compiler — Linux x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           export PATH="$PWD/cross-binutils/bin:$PATH"
           cd fpc-source
-          make -C rtl clean all CPU_TARGET=x86_64 OS_TARGET=linux \
-            PP=$PWD/compiler/ppcrossx64 BINUTILSPREFIX=x86_64-linux-
-          make -C packages clean all CPU_TARGET=x86_64 OS_TARGET=linux \
-            PP=$PWD/compiler/ppcrossx64 BINUTILSPREFIX=x86_64-linux-
+          make compiler_cycle CPU_TARGET=x86_64 OS_TARGET=linux \
+            BINUTILSPREFIX=x86_64-linux- || true
+          test -f compiler/ppcrossx64 || { echo "ppcrossx64 not built"; exit 1; }
+          make rtl_all CPU_TARGET=x86_64 OS_TARGET=linux \
+            BINUTILSPREFIX=x86_64-linux-
+          make packages_all CPU_TARGET=x86_64 OS_TARGET=linux \
+            BINUTILSPREFIX=x86_64-linux-
           make crossinstall CPU_TARGET=x86_64 OS_TARGET=linux \
-            PP=$PWD/compiler/ppcrossx64 INSTALL_PREFIX=$PWD/../fpc-cross
+            INSTALL_PREFIX=$PWD/../fpc-cross
 
       - name: Build cross-compiler — Linux aarch64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           export PATH="$PWD/cross-binutils/bin:$PATH"
           cd fpc-source
-          make -C rtl clean all CPU_TARGET=aarch64 OS_TARGET=linux \
-            PP=ppca64 BINUTILSPREFIX=aarch64-linux-
-          make -C packages clean all CPU_TARGET=aarch64 OS_TARGET=linux \
-            PP=ppca64 BINUTILSPREFIX=aarch64-linux-
+          make compiler_cycle CPU_TARGET=aarch64 OS_TARGET=linux \
+            BINUTILSPREFIX=aarch64-linux- || true
+          make rtl_all CPU_TARGET=aarch64 OS_TARGET=linux \
+            BINUTILSPREFIX=aarch64-linux-
+          make packages_all CPU_TARGET=aarch64 OS_TARGET=linux \
+            BINUTILSPREFIX=aarch64-linux-
           make crossinstall CPU_TARGET=aarch64 OS_TARGET=linux \
-            PP=ppca64 INSTALL_PREFIX=$PWD/../fpc-cross
+            INSTALL_PREFIX=$PWD/../fpc-cross
 
       - name: Build cross-compiler — Windows x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make -C rtl clean all CPU_TARGET=x86_64 OS_TARGET=win64 \
-            PP=$PWD/compiler/ppcrossx64
-          make -C packages clean all CPU_TARGET=x86_64 OS_TARGET=win64 \
-            PP=$PWD/compiler/ppcrossx64
+          make compiler_cycle CPU_TARGET=x86_64 OS_TARGET=win64 || true
+          test -f compiler/ppcrossx64 || { echo "ppcrossx64 not built"; exit 1; }
+          make rtl_all CPU_TARGET=x86_64 OS_TARGET=win64
+          make packages_all CPU_TARGET=x86_64 OS_TARGET=win64
           make crossinstall CPU_TARGET=x86_64 OS_TARGET=win64 \
-            PP=$PWD/compiler/ppcrossx64 INSTALL_PREFIX=$PWD/../fpc-cross
+            INSTALL_PREFIX=$PWD/../fpc-cross
 
       - name: Build cross-compiler — Windows i386
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make -C rtl clean all CPU_TARGET=i386 OS_TARGET=win32 \
-            PP=$PWD/compiler/ppcross386
-          make -C packages clean all CPU_TARGET=i386 OS_TARGET=win32 \
-            PP=$PWD/compiler/ppcross386
+          make compiler_cycle CPU_TARGET=i386 OS_TARGET=win32 || true
+          test -f compiler/ppcross386 || { echo "ppcross386 not built"; exit 1; }
+          make rtl_all CPU_TARGET=i386 OS_TARGET=win32
+          make packages_all CPU_TARGET=i386 OS_TARGET=win32
           make crossinstall CPU_TARGET=i386 OS_TARGET=win32 \
-            PP=$PWD/compiler/ppcross386 INSTALL_PREFIX=$PWD/../fpc-cross
+            INSTALL_PREFIX=$PWD/../fpc-cross
 
       - name: Build cross-compiler — macOS x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make -C rtl clean all CPU_TARGET=x86_64 OS_TARGET=darwin \
-            PP=$PWD/compiler/ppcrossx64
-          make -C packages clean all CPU_TARGET=x86_64 OS_TARGET=darwin \
-            PP=$PWD/compiler/ppcrossx64
+          make compiler_cycle CPU_TARGET=x86_64 OS_TARGET=darwin || true
+          test -f compiler/ppcrossx64 || { echo "ppcrossx64 not built"; exit 1; }
+          make rtl_all CPU_TARGET=x86_64 OS_TARGET=darwin
+          make packages_all CPU_TARGET=x86_64 OS_TARGET=darwin
           make crossinstall CPU_TARGET=x86_64 OS_TARGET=darwin \
-            PP=$PWD/compiler/ppcrossx64 INSTALL_PREFIX=$PWD/../fpc-cross
+            INSTALL_PREFIX=$PWD/../fpc-cross
 
       - name: Save to cache
         if: steps.cache-check.outputs.cache-hit != 'true'
