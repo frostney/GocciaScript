@@ -72,6 +72,10 @@ jobs:
             build/Goccia.Values.FunctionValue.Test.exe
             build/Goccia.Values.ObjectValue.Test
             build/Goccia.Values.ObjectValue.Test.exe
+            build/Goccia.Compiler.Test
+            build/Goccia.Compiler.Test.exe
+            build/Goccia.Builtins.TestAssertions.Test
+            build/Goccia.Builtins.TestAssertions.Test.exe
 
   test:
     needs: build
@@ -115,6 +119,8 @@ jobs:
           ./build/Goccia.Values.Primitives.Test
           ./build/Goccia.Values.FunctionValue.Test
           ./build/Goccia.Values.ObjectValue.Test
+          ./build/Goccia.Compiler.Test
+          ./build/Goccia.Builtins.TestAssertions.Test
 
   wasm-test:
     needs: build
