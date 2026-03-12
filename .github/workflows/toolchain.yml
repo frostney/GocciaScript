@@ -10,7 +10,7 @@ on:
 env:
   FPC_VERSION: "3.2.2"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v11"
+  CACHE_VERSION: "v12"
 
 jobs:
   build:
@@ -74,7 +74,8 @@ jobs:
           export PATH="$PWD/cross-binutils/bin:$PATH"
           cd fpc-source
           make clean all OS_TARGET=linux CPU_TARGET=x86_64 \
-            BINUTILSPREFIX=x86_64-linux-
+            BINUTILSPREFIX=x86_64-linux- \
+            OPT="-XR$(xcrun --show-sdk-path)"
           make crossinstall OS_TARGET=linux CPU_TARGET=x86_64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
@@ -84,7 +85,8 @@ jobs:
           export PATH="$PWD/cross-binutils/bin:$PATH"
           cd fpc-source
           make clean all OS_TARGET=linux CPU_TARGET=aarch64 \
-            BINUTILSPREFIX=aarch64-linux-
+            BINUTILSPREFIX=aarch64-linux- \
+            OPT="-XR$(xcrun --show-sdk-path)"
           make crossinstall OS_TARGET=linux CPU_TARGET=aarch64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
@@ -92,7 +94,8 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make clean all OS_TARGET=win64 CPU_TARGET=x86_64
+          make clean all OS_TARGET=win64 CPU_TARGET=x86_64 \
+            OPT="-XR$(xcrun --show-sdk-path)"
           make crossinstall OS_TARGET=win64 CPU_TARGET=x86_64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
@@ -100,7 +103,8 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make clean all OS_TARGET=win32 CPU_TARGET=i386
+          make clean all OS_TARGET=win32 CPU_TARGET=i386 \
+            OPT="-XR$(xcrun --show-sdk-path)"
           make crossinstall OS_TARGET=win32 CPU_TARGET=i386 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
@@ -108,7 +112,8 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           cd fpc-source
-          make clean all OS_TARGET=darwin CPU_TARGET=x86_64
+          make clean all OS_TARGET=darwin CPU_TARGET=x86_64 \
+            OPT="-XR$(xcrun --show-sdk-path)"
           make crossinstall OS_TARGET=darwin CPU_TARGET=x86_64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
