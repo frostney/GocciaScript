@@ -203,6 +203,7 @@ type
     FDescribeDelegate: TSouffleRecord;
     FTestDelegate: TSouffleRecord;
     FActiveDecoratorSession: TGocciaDecoratorSession;
+    FArrayBridgeDirty: Boolean;
     function WrapGocciaValue(const AValue: TGocciaValue): TSouffleValue;
     function CoerceKeyToString(const AKey: TSouffleValue): string;
     function CoerceToNumber(const A: TSouffleValue): Double;
@@ -565,6 +566,7 @@ begin
       if FRuntime.FBridgeCallDepth = 0 then
       begin
         FRuntime.FArrayBridgeCache.Clear;
+        FRuntime.FArrayBridgeDirty := False;
         FRuntime.FRecordBridgeCache.Clear;
       end;
       raise TGocciaThrowValue.Create(
@@ -575,6 +577,7 @@ begin
   if FRuntime.FBridgeCallDepth = 0 then
   begin
     FRuntime.FArrayBridgeCache.Clear;
+    FRuntime.FArrayBridgeDirty := False;
     FRuntime.FRecordBridgeCache.Clear;
   end;
   Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
@@ -631,6 +634,7 @@ begin
       if FBridgeRuntime.FBridgeCallDepth = 0 then
       begin
         FBridgeRuntime.FArrayBridgeCache.Clear;
+        FBridgeRuntime.FArrayBridgeDirty := False;
         FBridgeRuntime.FRecordBridgeCache.Clear;
       end;
       raise TGocciaThrowValue.Create(
@@ -641,6 +645,7 @@ begin
   if FBridgeRuntime.FBridgeCallDepth = 0 then
   begin
     FBridgeRuntime.FArrayBridgeCache.Clear;
+    FBridgeRuntime.FArrayBridgeDirty := False;
     FBridgeRuntime.FRecordBridgeCache.Clear;
   end;
   Result := FBridgeRuntime.UnwrapToGocciaValue(SouffleResult);
@@ -1731,6 +1736,7 @@ begin
           ConvertSouffleArrayInto(Self,
             TSouffleArray(AValue.AsReference),
             TGocciaArrayValue(CachedBridge));
+          FArrayBridgeDirty := True;
         end
         {$IFDEF BRIDGE_METRICS}
         else
@@ -1815,6 +1821,7 @@ function TGocciaRuntimeOperations.ToSouffleValue(
   const AValue: TGocciaValue): TSouffleValue;
 var
   NumVal: TGocciaNumberLiteralValue;
+  CachedReverse: TObject;
 begin
   {$IFDEF BRIDGE_METRICS}
   Inc(GBridgeMetrics.WrapCount);
@@ -1860,8 +1867,9 @@ begin
   end
   else if AValue is TGocciaStringLiteralValue then
     Result := SouffleString(TGocciaStringLiteralValue(AValue).Value)
-  else if (AValue is TGocciaArrayValue) and FArrayBridgeReverse.ContainsKey(AValue) then
-    Result := SouffleReference(TSouffleHeapObject(FArrayBridgeReverse[AValue]))
+  else if (AValue is TGocciaArrayValue) and
+     FArrayBridgeReverse.TryGetValue(AValue, CachedReverse) then
+    Result := SouffleReference(TSouffleHeapObject(CachedReverse))
   else if AValue is TGocciaNativeFunctionValue then
   begin
     Result := SouffleReference(TGocciaBridgedFunction.Create(
@@ -3318,6 +3326,7 @@ begin
 
           SyncArraysBack(Self, Context.Scope);
           FArrayBridgeCache.Clear;
+          FArrayBridgeDirty := False;
 
           if Assigned(GocciaResult) then
             Result := ToSouffleValue(GocciaResult)
@@ -3459,6 +3468,7 @@ begin
 
         SyncArraysBack(Self, Context.Scope);
         FArrayBridgeCache.Clear;
+        FArrayBridgeDirty := False;
 
         if Assigned(GocciaResult) then
           Result := ToSouffleValue(GocciaResult)
@@ -7249,6 +7259,7 @@ procedure TGocciaRuntimeOperations.ClearTransientCaches;
 begin
   FClosureBridgeCache.Clear;
   FArrayBridgeCache.Clear;
+  FArrayBridgeDirty := False;
   FArrayBridgeReverse.Clear;
   FRecordBridgeCache.Clear;
 end;
@@ -7851,6 +7862,7 @@ begin
       Continue;
     ARuntime.FArrayBridgeCache.AddOrSetValue(
       Pair.Value.AsReference, GocciaVal);
+    ARuntime.FArrayBridgeDirty := True;
   end;
 end;
 
@@ -7862,6 +7874,8 @@ var
   GArr: TGocciaArrayValue;
   I: Integer;
 begin
+  if not ARuntime.FArrayBridgeDirty then
+    Exit;
   for Pair in ARuntime.FArrayBridgeCache do
   begin
     SArr := TSouffleArray(Pair.Key);
@@ -7870,6 +7884,7 @@ begin
     for I := 0 to GArr.Elements.Count - 1 do
       SArr.Push(ARuntime.ToSouffleValue(GArr.Elements[I]));
   end;
+  ARuntime.FArrayBridgeDirty := False;
 end;
 
 procedure SyncScopeToGlobals(const ARuntime: TGocciaRuntimeOperations;
