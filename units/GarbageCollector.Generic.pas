@@ -65,6 +65,7 @@ type
     procedure Collect; virtual;
     procedure CollectIfNeeded; overload;
     procedure CollectIfNeeded(const AProtect: TGCManagedObject); overload;
+    procedure CollectNewborn;
 
     property Enabled: Boolean read FEnabled write FEnabled;
     property Threshold: Integer read FGCThreshold write FGCThreshold;
@@ -333,6 +334,15 @@ begin
     if Assigned(AProtect) then
       FActiveRootStack.Delete(FActiveRootStack.Count - 1);
   end;
+end;
+
+procedure TGarbageCollector.CollectNewborn;
+begin
+  if not FEnabled or FCollecting then
+    Exit;
+  if (FAllocationsSinceLastGC = 0) and (FNilSlots = 0) then
+    Exit;
+  Collect;
 end;
 
 function TGarbageCollector.GetManagedObjectCount: Integer;
