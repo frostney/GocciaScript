@@ -1571,8 +1571,14 @@ begin
     OP_RT_POW:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.Power(
-        FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleFloat(Power(
+          FRegisters[Base + B].AsInteger * 1.0,
+          FRegisters[Base + C].AsInteger * 1.0))
+      else
+        FRegisters[Base + A] := FRuntimeOps.Power(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_NEG:
     begin
