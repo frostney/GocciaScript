@@ -9,8 +9,9 @@ on:
 
 env:
   FPC_VERSION: "3.2.2"
+  FPCUP_VERSION: "v2.4.0i"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v17"
+  CACHE_VERSION: "v18"
 
 jobs:
   build:
@@ -24,7 +25,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            fpc-cross
+            fpcup-install
             cross-binutils
           key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}
           lookup-only: true
@@ -33,19 +34,11 @@ jobs:
         if: steps.cache-check.outputs.cache-hit == 'true'
         run: echo "Toolchain already cached — nothing to build."
 
-      - name: Install FPC
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        run: brew install fpc
-
-      - name: Extract FPC sources via Homebrew
+      - name: Download fpcup
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          brew unpack --patch fpc --destdir=.
-          mv fpc-* fpc-source
-
-      - name: Set macOS SDK root
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        run: echo "SDKROOT=$(xcrun --show-sdk-path)" >> $GITHUB_ENV
+          curl -sL "https://github.com/LongDirtyAnimAlf/Reiniero-fpcup/releases/download/${FPCUP_VERSION}/fpcup-aarch64-darwin" -o fpcup
+          chmod +x fpcup
 
       - name: Build GNU Binutils for Linux targets
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -72,85 +65,54 @@ jobs:
             cd ..
           done
 
-      # FPC cross-compilation procedure for 3.2.2:
-      #
-      # The top-level make handles cross-compiler builds via
-      # compiler_cycle. The cycle builds the cross-compiler binary
-      # (step 1), then tries to validate it by re-linking as a target
-      # binary (step 2). Step 2 fails because we don't have a target
-      # libc — but the cross-compiler from step 1 is already built.
-      #
-      # We let compiler_cycle fail, verify the cross-compiler exists,
-      # then build RTL + packages separately (compilation only, no
-      # linking needed).
-
-      - name: Build cross-compiler — Linux x86_64
+      - name: Install FPC via fpcup
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          export PATH="$PWD/cross-binutils/bin:$PATH"
-          cd fpc-source
-          make compiler_cycle CPU_TARGET=x86_64 OS_TARGET=linux \
-            BINUTILSPREFIX=x86_64-linux- || true
-          test -f compiler/ppcrossx64 || { echo "ppcrossx64 not built"; exit 1; }
-          make rtl_all CPU_TARGET=x86_64 OS_TARGET=linux \
-            BINUTILSPREFIX=x86_64-linux-
-          make packages_all CPU_TARGET=x86_64 OS_TARGET=linux \
-            BINUTILSPREFIX=x86_64-linux-
-          make crossinstall CPU_TARGET=x86_64 OS_TARGET=linux \
-            INSTALL_PREFIX=$PWD/../fpc-cross
+          ./fpcup --installdir=$PWD/fpcup-install --fpcVersion=$FPC_VERSION.gitlab \
+            --only=FPC --noconfirm --verbose
 
-      - name: Build cross-compiler — Linux aarch64
+      - name: Install cross-compiler — Linux x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          export PATH="$PWD/cross-binutils/bin:$PATH"
-          cd fpc-source
-          make compiler_cycle CPU_TARGET=aarch64 OS_TARGET=linux \
-            BINUTILSPREFIX=aarch64-linux- || true
-          make rtl_all CPU_TARGET=aarch64 OS_TARGET=linux \
-            BINUTILSPREFIX=aarch64-linux-
-          make packages_all CPU_TARGET=aarch64 OS_TARGET=linux \
-            BINUTILSPREFIX=aarch64-linux-
-          make crossinstall CPU_TARGET=aarch64 OS_TARGET=linux \
-            INSTALL_PREFIX=$PWD/../fpc-cross
+          ./fpcup --installdir=$PWD/fpcup-install --fpcVersion=$FPC_VERSION.gitlab \
+            --only=FPC --noconfirm --verbose \
+            --cputarget=x86_64 --ostarget=linux \
+            --crossbindir=$PWD/cross-binutils/bin
 
-      - name: Build cross-compiler — Windows x86_64
+      - name: Install cross-compiler — Linux aarch64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          cd fpc-source
-          make compiler_cycle CPU_TARGET=x86_64 OS_TARGET=win64 || true
-          test -f compiler/ppcrossx64 || { echo "ppcrossx64 not built"; exit 1; }
-          make rtl_all CPU_TARGET=x86_64 OS_TARGET=win64
-          make packages_all CPU_TARGET=x86_64 OS_TARGET=win64
-          make crossinstall CPU_TARGET=x86_64 OS_TARGET=win64 \
-            INSTALL_PREFIX=$PWD/../fpc-cross
+          ./fpcup --installdir=$PWD/fpcup-install --fpcVersion=$FPC_VERSION.gitlab \
+            --only=FPC --noconfirm --verbose \
+            --cputarget=aarch64 --ostarget=linux \
+            --crossbindir=$PWD/cross-binutils/bin
 
-      - name: Build cross-compiler — Windows i386
+      - name: Install cross-compiler — Windows x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          cd fpc-source
-          make compiler_cycle CPU_TARGET=i386 OS_TARGET=win32 || true
-          test -f compiler/ppcross386 || { echo "ppcross386 not built"; exit 1; }
-          make rtl_all CPU_TARGET=i386 OS_TARGET=win32
-          make packages_all CPU_TARGET=i386 OS_TARGET=win32
-          make crossinstall CPU_TARGET=i386 OS_TARGET=win32 \
-            INSTALL_PREFIX=$PWD/../fpc-cross
+          ./fpcup --installdir=$PWD/fpcup-install --fpcVersion=$FPC_VERSION.gitlab \
+            --only=FPC --noconfirm --verbose \
+            --cputarget=x86_64 --ostarget=win64
 
-      - name: Build cross-compiler — macOS x86_64
+      - name: Install cross-compiler — Windows i386
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          cd fpc-source
-          make compiler_cycle CPU_TARGET=x86_64 OS_TARGET=darwin || true
-          test -f compiler/ppcrossx64 || { echo "ppcrossx64 not built"; exit 1; }
-          make rtl_all CPU_TARGET=x86_64 OS_TARGET=darwin
-          make packages_all CPU_TARGET=x86_64 OS_TARGET=darwin
-          make crossinstall CPU_TARGET=x86_64 OS_TARGET=darwin \
-            INSTALL_PREFIX=$PWD/../fpc-cross
+          ./fpcup --installdir=$PWD/fpcup-install --fpcVersion=$FPC_VERSION.gitlab \
+            --only=FPC --noconfirm --verbose \
+            --cputarget=i386 --ostarget=win32
+
+      - name: Install cross-compiler — macOS x86_64
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          ./fpcup --installdir=$PWD/fpcup-install --fpcVersion=$FPC_VERSION.gitlab \
+            --only=FPC --noconfirm --verbose \
+            --cputarget=x86_64 --ostarget=darwin
 
       - name: Save to cache
         if: steps.cache-check.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
-            fpc-cross
+            fpcup-install
             cross-binutils
           key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}

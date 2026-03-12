@@ -35,13 +35,13 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            fpc-cross
+            fpcup-install
             cross-binutils
           key: ${{ needs.toolchain.outputs.cache-key }}
 
       - name: Configure cross-compiler paths
         run: |
-          echo "$PWD/fpc-cross/lib/fpc/$FPC_VERSION" >> $GITHUB_PATH
+          echo "$PWD/fpcup-install/fpc/bin" >> $GITHUB_PATH
           echo "$PWD/cross-binutils/bin" >> $GITHUB_PATH
 
       - name: Check formatting
