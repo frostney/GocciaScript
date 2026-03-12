@@ -1,0 +1,90 @@
+name: Build Cross-Compilation Toolchain
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      cache-key:
+        value: ${{ jobs.build.outputs.cache-key }}
+
+env:
+  FPC_VERSION: "3.2.2"
+  CACHE_VERSION: "v1"
+
+jobs:
+  build:
+    runs-on: macos-14
+    outputs:
+      cache-key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}
+
+    steps:
+      - name: Check cache
+        id: cache-check
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            fpc-cross
+            musl-toolchains
+          key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}
+          lookup-only: true
+
+      - name: Skip if cached
+        if: steps.cache-check.outputs.cache-hit == 'true'
+        run: echo "Toolchain already cached — nothing to build."
+
+      - name: Install FPC
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: brew install fpc
+
+      - name: Download FPC source
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch release_${FPC_VERSION//./_} \
+            https://gitlab.com/freepascal.org/fpc/source.git fpc-source
+
+      - name: Download musl cross-toolchains
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p musl-toolchains && cd musl-toolchains
+          curl -LO https://musl.cc/x86_64-linux-musl-cross.tgz
+          curl -LO https://musl.cc/aarch64-linux-musl-cross.tgz
+          tar xzf x86_64-linux-musl-cross.tgz
+          tar xzf aarch64-linux-musl-cross.tgz
+          rm *.tgz
+
+      - name: Build cross-compiler — Linux x86_64
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          export PATH="$PWD/musl-toolchains/x86_64-linux-musl-cross/bin:$PATH"
+          cd fpc-source
+          make clean all OS_TARGET=linux CPU_TARGET=x86_64 \
+            BINUTILSPREFIX=x86_64-linux-musl-
+          make crossinstall OS_TARGET=linux CPU_TARGET=x86_64 \
+            INSTALL_PREFIX=$PWD/../fpc-cross
+
+      - name: Build cross-compiler — Linux aarch64
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          export PATH="$PWD/musl-toolchains/aarch64-linux-musl-cross/bin:$PATH"
+          cd fpc-source
+          make clean all OS_TARGET=linux CPU_TARGET=aarch64 \
+            BINUTILSPREFIX=aarch64-linux-musl-
+          make crossinstall OS_TARGET=linux CPU_TARGET=aarch64 \
+            INSTALL_PREFIX=$PWD/../fpc-cross
+
+      - name: Build cross-compiler — Windows x86_64
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          cd fpc-source
+          make clean all OS_TARGET=win64 CPU_TARGET=x86_64
+          make crossinstall OS_TARGET=win64 CPU_TARGET=x86_64 \
+            INSTALL_PREFIX=$PWD/../fpc-cross
+
+      - name: Save to cache
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            fpc-cross
+            musl-toolchains
+          key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}

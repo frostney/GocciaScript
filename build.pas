@@ -200,7 +200,7 @@ end;
 
 function FPCArgs(const ASource: string): TStringArray;
 var
-  Arch: string;
+  Arch, TargetOS, LinkerPath, CrossPrefix: string;
   Args: TStringList;
   J: Integer;
 begin
@@ -209,6 +209,10 @@ begin
     Arch := GetEnvironmentVariable('FPC_TARGET_CPU');
     if Arch <> '' then
       Args.Add('-P' + Arch);
+
+    TargetOS := GetEnvironmentVariable('FPC_TARGET_OS');
+    if TargetOS <> '' then
+      Args.Add('-T' + TargetOS);
 
     Args.Add('@config.cfg');
 
@@ -230,6 +234,14 @@ begin
       Args.Add('-Cr');
       Args.Add('-Sa');
     end;
+
+    LinkerPath := GetEnvironmentVariable('FPC_LINKER_PATH');
+    if LinkerPath <> '' then
+      Args.Add('-Fl' + LinkerPath);
+
+    CrossPrefix := GetEnvironmentVariable('FPC_CROSS_PREFIX');
+    if CrossPrefix <> '' then
+      Args.Add('-XP' + CrossPrefix);
 
     Args.Add('-vw-n-h-i-l-d-u-t-p-c-x-');
     Args.Add(ASource);
