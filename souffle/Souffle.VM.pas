@@ -1485,6 +1485,8 @@ var
   TempObj: TSouffleHeapObject;
   ArrIter: TSouffleArrayIterator;
   StrIter: TSouffleStringIterator;
+  PropKey: string;
+  PropVal: TSouffleValue;
 begin
   Base := AFrame^.BaseRegister;
 
@@ -1781,8 +1783,21 @@ begin
     OP_RT_GET_PROP:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.GetProperty(FRegisters[Base + B],
-        AFrame^.Template.GetConstant(C).StringValue);
+      if SouffleIsReference(FRegisters[Base + B]) and
+         (FRegisters[Base + B].AsReference is TSouffleRecord) then
+      begin
+        PropKey := AFrame^.Template.GetConstant(C).StringValue;
+        if TSouffleRecord(FRegisters[Base + B].AsReference).Get(PropKey, PropVal) then
+          FRegisters[Base + A] := PropVal
+        else if DelegateGet(FRegisters[Base + B].AsReference, PropKey, PropVal) then
+          FRegisters[Base + A] := PropVal
+        else
+          FRegisters[Base + A] := FRuntimeOps.GetProperty(
+            FRegisters[Base + B], PropKey);
+      end
+      else
+        FRegisters[Base + A] := FRuntimeOps.GetProperty(FRegisters[Base + B],
+          AFrame^.Template.GetConstant(C).StringValue);
     end;
     OP_RT_SET_PROP:
     begin
