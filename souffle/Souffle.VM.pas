@@ -1777,6 +1777,27 @@ begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction);
       FRegisters[Base + A] := FRuntimeOps.ToBoolean(FRegisters[Base + B]);
     end;
+    OP_RT_TO_NUMBER:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
+      case FRegisters[Base + B].Kind of
+        svkInteger, svkFloat:
+          FRegisters[Base + A] := FRegisters[Base + B];
+        svkBoolean:
+          if FRegisters[Base + B].AsBoolean then
+            FRegisters[Base + A] := SouffleInteger(1)
+          else
+            FRegisters[Base + A] := SouffleInteger(0);
+        svkNil:
+          if FRegisters[Base + B].Flags = 0 then
+            FRegisters[Base + A] := SouffleFloat(NaN)
+          else
+            FRegisters[Base + A] := SouffleInteger(0);
+      else
+        FRegisters[Base + A] := FRuntimeOps.Negate(
+          FRuntimeOps.Negate(FRegisters[Base + B]));
+      end;
+    end;
 
     OP_RT_GET_PROP:
     begin

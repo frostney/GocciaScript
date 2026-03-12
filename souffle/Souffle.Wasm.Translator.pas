@@ -71,6 +71,7 @@ type
     FRtNot: UInt32;
     FRtTypeOf: UInt32;
     FRtIsInstance: UInt32;
+    FRtToNumber: UInt32;
     FRtHasProperty: UInt32;
     FRtToBooleanVal: UInt32;
 
@@ -395,6 +396,7 @@ begin
   FRtIsInstance := Cond2('rt_is_instance', [OP_RT_IS_INSTANCE]);
   FRtHasProperty := Cond2('rt_has_property', [OP_RT_HAS_PROPERTY]);
   FRtToBooleanVal := Cond1('rt_to_boolean_val', [OP_RT_TO_BOOLEAN]);
+  FRtToNumber := Cond1('rt_to_number', [OP_RT_TO_NUMBER]);
 
   FRtGetProp := CondT('rt_get_prop',
     [WT_EXTERNREF, WT_I32], [WT_EXTERNREF], [OP_RT_GET_PROP]);
@@ -1247,6 +1249,12 @@ begin
     begin
       ABuilder.EmitLocalGet(B);
       ABuilder.EmitCall(FRtToBooleanVal);
+      ABuilder.EmitLocalSet(A);
+    end;
+    OP_RT_TO_NUMBER:
+    begin
+      ABuilder.EmitLocalGet(B);
+      ABuilder.EmitCall(FRtToNumber);
       ABuilder.EmitLocalSet(A);
     end;
 

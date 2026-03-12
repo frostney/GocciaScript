@@ -508,11 +508,7 @@ begin
   case AExpr.Operator of
     gttNot:        EmitInstruction(ACtx, EncodeABC(OP_RT_NOT, ADest, RegB, 0));
     gttMinus:      EmitInstruction(ACtx, EncodeABC(OP_RT_NEG, ADest, RegB, 0));
-    gttPlus:
-    begin
-      EmitInstruction(ACtx, EncodeABC(OP_RT_NEG, ADest, RegB, 0));
-      EmitInstruction(ACtx, EncodeABC(OP_RT_NEG, ADest, ADest, 0));
-    end;
+    gttPlus:       EmitInstruction(ACtx, EncodeABC(OP_RT_TO_NUMBER, ADest, RegB, 0));
     gttTypeof:     EmitInstruction(ACtx, EncodeABC(OP_RT_TYPEOF, ADest, RegB, 0));
     gttBitwiseNot: EmitInstruction(ACtx, EncodeABC(OP_RT_BNOT, ADest, RegB, 0));
   else
