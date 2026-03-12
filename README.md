@@ -151,7 +151,7 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 
 ### Run via Souffle VM (Bytecode)
 
-GocciaScript includes an alternative bytecode execution backend — the **Souffle VM** — a general-purpose register-based virtual machine that routes language features through a bridge layer to the GocciaScript evaluator. This approach passes 100% of the test suite (3,406 tests). The compiler infers types from initializers and type annotations, emitting specialized float opcodes inlined in the VM dispatch loop — typed code runs ~28–30% faster than untyped. Known structural limitations: `.sbc` files use native endianness (not yet cross-platform portable); the ABC-encoded instruction format limits constant pool references to 255 per prototype. See [Souffle VM Architecture](docs/souffle-vm.md) for full details.
+GocciaScript includes an alternative bytecode execution backend — the **Souffle VM** — a general-purpose register-based virtual machine that routes language features through a bridge layer to the GocciaScript evaluator. This approach passes 100% of the test suite (3,406 tests). The compiler infers types from initializers and type annotations, emitting specialized float opcodes inlined in the VM dispatch loop — typed code runs ~28–30% faster than untyped. Known structural limitation: the ABC-encoded instruction format limits constant pool references to 255 per prototype. `.sbc` files use little-endian byte order for cross-platform portability. See [Souffle VM Architecture](docs/souffle-vm.md) for full details.
 
 ```bash
 # Compile and execute via Souffle VM

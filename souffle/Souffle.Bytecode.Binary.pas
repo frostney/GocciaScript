@@ -69,23 +69,36 @@ begin
 end;
 
 procedure TSouffleBytecodeWriter.WriteUInt16(const AValue: UInt16);
+var
+  LE: UInt16;
 begin
-  FStream.WriteBuffer(AValue, SizeOf(UInt16));
+  LE := NtoLE(AValue);
+  FStream.WriteBuffer(LE, SizeOf(UInt16));
 end;
 
 procedure TSouffleBytecodeWriter.WriteUInt32(const AValue: UInt32);
+var
+  LE: UInt32;
 begin
-  FStream.WriteBuffer(AValue, SizeOf(UInt32));
+  LE := NtoLE(AValue);
+  FStream.WriteBuffer(LE, SizeOf(UInt32));
 end;
 
 procedure TSouffleBytecodeWriter.WriteInt64(const AValue: Int64);
+var
+  LE: Int64;
 begin
-  FStream.WriteBuffer(AValue, SizeOf(Int64));
+  LE := NtoLE(AValue);
+  FStream.WriteBuffer(LE, SizeOf(Int64));
 end;
 
 procedure TSouffleBytecodeWriter.WriteDouble(const AValue: Double);
+var
+  Bits: Int64;
 begin
-  FStream.WriteBuffer(AValue, SizeOf(Double));
+  Move(AValue, Bits, SizeOf(Double));
+  Bits := NtoLE(Bits);
+  FStream.WriteBuffer(Bits, SizeOf(Int64));
 end;
 
 procedure TSouffleBytecodeWriter.WriteString(const AValue: string);
@@ -263,21 +276,28 @@ end;
 function TSouffleBytecodeReader.ReadUInt16: UInt16;
 begin
   FStream.ReadBuffer(Result, SizeOf(UInt16));
+  Result := LEtoN(Result);
 end;
 
 function TSouffleBytecodeReader.ReadUInt32: UInt32;
 begin
   FStream.ReadBuffer(Result, SizeOf(UInt32));
+  Result := LEtoN(Result);
 end;
 
 function TSouffleBytecodeReader.ReadInt64: Int64;
 begin
   FStream.ReadBuffer(Result, SizeOf(Int64));
+  Result := LEtoN(Result);
 end;
 
 function TSouffleBytecodeReader.ReadDouble: Double;
+var
+  Bits: Int64;
 begin
-  FStream.ReadBuffer(Result, SizeOf(Double));
+  FStream.ReadBuffer(Bits, SizeOf(Int64));
+  Bits := LEtoN(Bits);
+  Move(Bits, Result, SizeOf(Double));
 end;
 
 function TSouffleBytecodeReader.ReadString: string;
