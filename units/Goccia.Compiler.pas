@@ -267,6 +267,56 @@ begin
   end;
 end;
 
+procedure PeepholeOptimize(const ATemplate: TSouffleFunctionTemplate);
+var
+  I, Count: Integer;
+  Instr, Next: UInt32;
+  Op, NextOp: UInt8;
+  NopInstr: UInt32;
+begin
+  NopInstr := EncodeABC(OP_NOP, 0, 0, 0);
+  Count := ATemplate.CodeCount;
+
+  for I := 0 to Count - 1 do
+  begin
+    Instr := ATemplate.GetInstruction(I);
+    Op := DecodeOp(Instr);
+
+    if (Op = Ord(OP_MOVE)) and (DecodeA(Instr) = DecodeB(Instr)) then
+    begin
+      ATemplate.PatchInstruction(I, NopInstr);
+      Continue;
+    end;
+
+    if (Op = Ord(OP_JUMP)) and (DecodeAx(Instr) = 0) then
+    begin
+      ATemplate.PatchInstruction(I, NopInstr);
+      Continue;
+    end;
+
+    if I < Count - 1 then
+    begin
+      Next := ATemplate.GetInstruction(I + 1);
+      NextOp := DecodeOp(Next);
+
+      // Load+move fusion disabled: requires liveness analysis to verify
+      // the intermediate register is dead after the move. Without it,
+      // fusing can break code that reads the temp register later.
+      // TODO: Re-enable with a register liveness pass.
+
+
+      if (Op = Ord(OP_LINE)) and (NextOp = Ord(OP_LINE)) then
+      begin
+        ATemplate.PatchInstruction(I, NopInstr);
+        Continue;
+      end;
+    end;
+  end;
+
+  for I := 0 to ATemplate.FunctionCount - 1 do
+    PeepholeOptimize(ATemplate.GetFunction(I));
+end;
+
 function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TSouffleBytecodeModule;
 var
@@ -308,6 +358,7 @@ begin
 
     FCurrentTemplate.MaxRegisters := FCurrentScope.MaxSlot;
     FModule.TopLevel := FCurrentTemplate;
+    PeepholeOptimize(FCurrentTemplate);
 
     Result := FModule;
     FModule := nil;
