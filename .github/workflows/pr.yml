@@ -129,8 +129,8 @@ jobs:
 
       - name: Run benchmarks
         env:
-          GOCCIA_BENCH_CALIBRATION_MS: 50
-          GOCCIA_BENCH_ROUNDS: 5
+          GOCCIA_BENCH_CALIBRATION_MS: 100
+          GOCCIA_BENCH_ROUNDS: 7
         run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
 
       - name: Upload results
@@ -420,9 +420,12 @@ jobs:
           script: |
             const fs = require('fs');
             const tryRead = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
-            const fmtMs = (ns) => (ns / 1e6).toFixed(1) + 'ms';
-            const fmtS = (ns) => (ns / 1e9).toFixed(2) + 's';
-            const fmtDur = (ns) => ns >= 1e9 ? fmtS(ns) : fmtMs(ns);
+            const fmtDur = (ns) => {
+              const ms = ns / 1e6;
+              if (ms >= 60000) return (ms / 60000).toFixed(2) + 'min';
+              if (ms >= 1000) return (ms / 1000).toFixed(2) + 's';
+              return ms.toFixed(1) + 'ms';
+            };
 
             const testInterp = tryRead('test-results-interpreted.json');
             const testBytecode = tryRead('test-results-bytecode.json');

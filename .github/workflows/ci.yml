@@ -198,15 +198,15 @@ jobs:
       - name: Run benchmarks
         if: "!(github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64')"
         env:
-          GOCCIA_BENCH_CALIBRATION_MS: 50
-          GOCCIA_BENCH_ROUNDS: 5
+          GOCCIA_BENCH_CALIBRATION_MS: 100
+          GOCCIA_BENCH_ROUNDS: 7
         run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress
 
       - name: Run benchmarks and save baseline
         if: github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
         env:
-          GOCCIA_BENCH_CALIBRATION_MS: 50
-          GOCCIA_BENCH_ROUNDS: 5
+          GOCCIA_BENCH_CALIBRATION_MS: 100
+          GOCCIA_BENCH_ROUNDS: 7
         run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=console --format=json --output=benchmark-${{ matrix.mode }}-results.json
 
       - name: Cache benchmark baseline

@@ -180,7 +180,7 @@ When a benchmark has a `setup` or `teardown` function, a second line displays th
 
 ## CI Integration
 
-Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode** modes. Interpreted and bytecode benchmarks run in **parallel** via a matrix strategy. CI uses `GOCCIA_BENCH_CALIBRATION_MS=50` and `GOCCIA_BENCH_ROUNDS=5` for a fast run with IQR outlier filtering. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
+Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode** modes. Interpreted and bytecode benchmarks run in **parallel** via a matrix strategy. CI uses `GOCCIA_BENCH_CALIBRATION_MS=100` and `GOCCIA_BENCH_ROUNDS=7` for stable measurements with IQR outlier filtering. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
 
 ### PR Benchmark Comparison
 
