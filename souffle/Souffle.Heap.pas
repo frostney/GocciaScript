@@ -57,8 +57,9 @@ end;
 
 procedure TSouffleHeapObject.MarkReferences;
 begin
+  if GCMarked then Exit;
   inherited;
-  if Assigned(FDelegate) and not FDelegate.GCMarked then
+  if Assigned(FDelegate) then
     FDelegate.MarkReferences;
 end;
 

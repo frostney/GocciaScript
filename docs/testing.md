@@ -633,7 +633,7 @@ build → test       → artifacts
 
 **`build`** — Installs FPC once per platform, compiles all binaries, uploads them as intermediate artifacts.
 
-**`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests.
+**`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests. Outputs `--timing-output` JSON files for CI timing comparison.
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
@@ -650,4 +650,4 @@ build → test
       → benchmark → PR comment
 ```
 
-The benchmark job posts a comparison comment on the PR. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the comparison format.
+The benchmark comparison comment includes a **Suite Timing** section showing test execution and benchmark duration for both modes. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the comparison format.

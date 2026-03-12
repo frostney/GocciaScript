@@ -115,7 +115,7 @@ The `BenchmarkRunner` program:
    - **Setup:** Calls the `setup` function once (timed), caches the return value.
    - **Warmup:** Configurable iterations to stabilize (default 5). The setup return value is passed to each call.
    - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 200ms). Uses nanosecond-resolution timing via `TimingUtils` (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows).
-   - **Measure:** Runs multiple measurement rounds (default 7). A full GC collect runs before each round for reproducibility. After all rounds, IQR-based outlier filtering removes noise spikes before computing the coefficient of variation (CV%) and median values.
+   - **Measure:** Runs multiple measurement rounds (default 7). GC is disabled during measurement for identical behavior in both interpreter and bytecode modes. Between rounds, `CollectYoung` reclaims measurement garbage efficiently (pre-marks old objects, only traverses new allocations). After all rounds, IQR-based outlier filtering removes noise spikes before computing the coefficient of variation (CV%) and median values.
    - **Teardown:** Calls the `teardown` function once (timed) after measurement completes.
 8. After each file completes, `GC.Collect` runs to reclaim memory between script executions.
 9. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.

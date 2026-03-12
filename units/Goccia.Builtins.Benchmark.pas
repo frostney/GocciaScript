@@ -335,6 +335,8 @@ var
   OpsMean, OpsVariance: Double;
   FilteredStart, FilteredEnd, FilteredCount: Integer;
   GC: TGarbageCollector;
+  WasGCEnabled: Boolean;
+  MeasurementWatermark: Integer;
 begin
   Result.Name := ABenchCase.Name;
   Result.SuiteName := ABenchCase.SuiteName;
@@ -347,6 +349,7 @@ begin
   SetLength(MeanRounds, MEASUREMENT_ROUNDS);
 
   GC := TGarbageCollector.Instance;
+  WasGCEnabled := False;
   SetupResult := nil;
   RunArgs := nil;
   EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -377,7 +380,12 @@ begin
       Iterations := CalibrateIterations(ABenchCase, RunArgs);
 
       if Assigned(GC) then
-        GC.CollectNewborn;
+      begin
+        WasGCEnabled := GC.Enabled;
+        GC.Collect;
+        GC.Enabled := False;
+        MeasurementWatermark := GC.Watermark;
+      end;
 
       for Round := 0 to MEASUREMENT_ROUNDS - 1 do
       begin
@@ -402,7 +410,13 @@ begin
           OpsRounds[Round] := 0;
           MeanRounds[Round] := 0;
         end;
+
+        if Assigned(GC) and (Round < MEASUREMENT_ROUNDS - 1) then
+          GC.CollectYoung(MeasurementWatermark);
       end;
+
+      if Assigned(GC) then
+        GC.Enabled := WasGCEnabled;
 
       InsertionSort(OpsRounds, MEASUREMENT_ROUNDS);
       InsertionSort(MeanRounds, MEASUREMENT_ROUNDS);
@@ -441,6 +455,8 @@ begin
         Result.TeardownMs := (GetNanoseconds - StartNanoseconds) / 1000000;
       end;
     finally
+      if Assigned(GC) then
+        GC.Enabled := WasGCEnabled;
       if Assigned(SetupResult) and Assigned(GC) then
         GC.RemoveTempRoot(SetupResult);
       RunArgs.Free;

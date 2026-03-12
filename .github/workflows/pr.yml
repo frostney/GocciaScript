@@ -64,7 +64,15 @@ jobs:
         run: chmod +x build/*
 
       - name: Run all JavaScript tests
-        run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --silent --no-progress
+        run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --silent --no-progress --timing-output=test-timing-${{ matrix.mode }}.json
+
+      - name: Upload test timing
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-timing-${{ matrix.mode }}
+          retention-days: 1
+          path: test-timing-${{ matrix.mode }}.json
 
   wasm-test:
     needs: build
@@ -133,7 +141,8 @@ jobs:
           path: benchmark-${{ matrix.mode }}.json
 
   benchmark-comment:
-    needs: benchmark
+    needs: [test, benchmark]
+    if: always()
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -148,6 +157,18 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: benchmark-bytecode
+
+      - name: Download test timing (interpreted)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: test-timing-interpreted
+
+      - name: Download test timing (bytecode)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: test-timing-bytecode
 
       - name: Restore interpreted baseline
         uses: actions/cache/restore@v4
@@ -319,6 +340,48 @@ jobs:
             }
 
             let body = '## Benchmark Results\n\n';
+
+            // Suite timing section
+            const fmtMs = (ns) => (ns / 1e6).toFixed(1) + 'ms';
+            const timingRows = [];
+            const tryReadJSON = (path) => { try { return JSON.parse(fs.readFileSync(path, 'utf8')); } catch { return null; } };
+
+            const testInterp = tryReadJSON('test-timing-interpreted.json');
+            const testBytecode = tryReadJSON('test-timing-bytecode.json');
+
+            if (testInterp || testBytecode) {
+              timingRows.push('### Suite Timing\n');
+              timingRows.push('| Suite | Metric | Interpreted | Bytecode |');
+              timingRows.push('|-------|--------|------------|---------|');
+
+              const iExec = testInterp ? fmtMs(testInterp.durationNanoseconds) : '—';
+              const bExec = testBytecode ? fmtMs(testBytecode.durationNanoseconds) : '—';
+              const iEngine = testInterp ? fmtMs(testInterp.totalEngineNanoseconds) : '—';
+              const bEngine = testBytecode ? fmtMs(testBytecode.totalEngineNanoseconds) : '—';
+              const iTests = testInterp ? testInterp.totalTests : '—';
+              const bTests = testBytecode ? testBytecode.totalTests : '—';
+              timingRows.push(`| Tests | Count | ${iTests} | ${bTests} |`);
+              timingRows.push(`| Tests | Execution | ${iExec} | ${bExec} |`);
+              timingRows.push(`| Tests | Engine total | ${iEngine} | ${bEngine} |`);
+            }
+
+            const benchInterp = interpData;
+            const benchBytecodeData = bytecodeData;
+            const iBenchDur = benchInterp.totalDurationNanoseconds;
+            const bBenchDur = benchBytecodeData.totalDurationNanoseconds;
+            if (iBenchDur || bBenchDur) {
+              if (timingRows.length === 0) {
+                timingRows.push('### Suite Timing\n');
+                timingRows.push('| Suite | Metric | Interpreted | Bytecode |');
+                timingRows.push('|-------|--------|------------|---------|');
+              }
+              timingRows.push(`| Benchmarks | Duration | ${iBenchDur ? fmtMs(iBenchDur) : '—'} | ${bBenchDur ? fmtMs(bBenchDur) : '—'} |`);
+              timingRows.push(`| Benchmarks | Count | ${interpData.files.reduce((a, f) => a + f.benchmarks.filter(b => !b.error).length, 0)} | ${bytecodeData.files.reduce((a, f) => a + f.benchmarks.filter(b => !b.error).length, 0)} |`);
+            }
+
+            if (timingRows.length > 0) {
+              body += timingRows.join('\n') + '\n\n';
+            }
 
             if (hasAnyBaseline) {
               function overallMode(label, s) {

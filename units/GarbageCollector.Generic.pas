@@ -34,6 +34,7 @@ type
     FNilSlots: Integer;
 
     function GetManagedObjectCount: Integer;
+    function GetWatermark: Integer; inline;
   protected
     procedure MarkRoots; virtual;
     procedure SweepObjects;
@@ -62,16 +63,37 @@ type
     procedure AddExternalRootMarker(const AMarker: TGCRootMarker);
     procedure RemoveExternalRootMarker(const AMarker: TGCRootMarker);
 
+    // Full mark-and-sweep of all managed objects. Unconditional — ignores
+    // the Enabled flag and always runs. Use when a clean heap is required
+    // (e.g. between script executions or before benchmark measurement).
     procedure Collect; virtual;
+
+    // Automatic collection: calls Collect only when Enabled is True and
+    // allocations since the last collection exceed the Threshold.
     procedure CollectIfNeeded; overload;
+
+    // Same as CollectIfNeeded, but temporarily pushes AProtect onto the
+    // active root stack so a stack-held object survives the collection.
     procedure CollectIfNeeded(const AProtect: TGCManagedObject); overload;
-    procedure CollectNewborn;
+
+    // Young-generation collection: pre-marks all objects allocated before
+    // AWatermark as surviving, then runs mark-and-sweep. The mark phase
+    // short-circuits on pre-marked objects (via the "if GCMarked then Exit"
+    // guard in MarkReferences), so only new objects and their references
+    // are traversed. Much cheaper than Collect when the old-generation
+    // heap is large and most garbage is young.
+    procedure CollectYoung(const AWatermark: Integer);
 
     property Enabled: Boolean read FEnabled write FEnabled;
     property Threshold: Integer read FGCThreshold write FGCThreshold;
     property TotalCollected: Int64 read FTotalCollected;
     property TotalCollections: Integer read FTotalCollections;
     property ManagedObjectCount: Integer read GetManagedObjectCount;
+
+    // Current position in the managed objects list. Capture before a
+    // measurement phase and pass to CollectYoung for efficient
+    // between-round collections.
+    property Watermark: Integer read GetWatermark;
   end;
 
 const
@@ -336,13 +358,67 @@ begin
   end;
 end;
 
-procedure TGarbageCollector.CollectNewborn;
+procedure TGarbageCollector.CollectYoung(const AWatermark: Integer);
+var
+  I, WriteIdx, Collected: Integer;
+  Obj: TGCManagedObject;
+  EffectiveWatermark: Integer;
 begin
-  if not FEnabled or FCollecting then
-    Exit;
-  if (FAllocationsSinceLastGC = 0) and (FNilSlots = 0) then
-    Exit;
-  Collect;
+  if FCollecting then Exit;
+  FCollecting := True;
+  try
+    EffectiveWatermark := AWatermark;
+    if EffectiveWatermark > FManagedObjects.Count then
+      EffectiveWatermark := FManagedObjects.Count;
+
+    TGCManagedObject.AdvanceMark;
+
+    for I := 0 to EffectiveWatermark - 1 do
+    begin
+      Obj := FManagedObjects[I];
+      if Assigned(Obj) then
+        Obj.GCMarked := True;
+    end;
+
+    MarkRoots;
+
+    Collected := 0;
+    WriteIdx := 0;
+
+    for I := 0 to FManagedObjects.Count - 1 do
+    begin
+      Obj := FManagedObjects[I];
+      if Obj = nil then
+        Continue;
+      if Obj.GCMarked then
+      begin
+        Obj.GCIndex := WriteIdx;
+        FManagedObjects[WriteIdx] := Obj;
+        Inc(WriteIdx);
+      end
+      else
+      begin
+        Obj.GCIndex := -1;
+        Obj.Free;
+        Inc(Collected);
+      end;
+    end;
+
+    FManagedObjects.Count := WriteIdx;
+    if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
+      FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
+    FNilSlots := 0;
+    FAllocationsSinceLastGC := 0;
+    FTotalCollected := FTotalCollected + Collected;
+    Inc(FTotalCollections);
+  finally
+    FCollecting := False;
+  end;
+end;
+
+function TGarbageCollector.GetWatermark: Integer;
+begin
+  Result := FManagedObjects.Count;
 end;
 
 function TGarbageCollector.GetManagedObjectCount: Integer;

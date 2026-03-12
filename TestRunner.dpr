@@ -5,6 +5,7 @@ program TestRunner;
 uses
   Classes,
   Generics.Collections,
+  StrUtils,
   SysUtils,
 
   GarbageCollector.Generic,
@@ -33,6 +34,7 @@ var
   GShowResults: Boolean = True;
   GExitOnFirstFailure: Boolean = False;
   GSilentConsole: Boolean = False;
+  GTimingOutput: string = '';
   GMode: TGocciaEngineBackend = ebTreeWalk;
 
 type
@@ -409,6 +411,44 @@ begin
   Result.TestResult := AllTestResults;
 end;
 
+procedure WriteTimingJSON(const AResult: TAggregatedTestResult; const AFileName: string);
+var
+  Lines: TStringList;
+  TotalNanoseconds: Int64;
+begin
+  if GMode = ebSouffleVM then
+    TotalNanoseconds := AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds
+  else
+    TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds;
+
+  Lines := TStringList.Create;
+  try
+    Lines.Add('{');
+    Lines.Add(Format('  "mode": "%s",', [IfThen(GMode = ebSouffleVM, 'bytecode', 'interpreted')]));
+    Lines.Add(Format('  "totalTests": %d,', [Round(AResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value)]));
+    Lines.Add(Format('  "passed": %d,', [Round(AResult.TestResult.GetProperty('passed').ToNumberLiteral.Value)]));
+    Lines.Add(Format('  "failed": %d,', [Round(AResult.TestResult.GetProperty('failed').ToNumberLiteral.Value)]));
+    Lines.Add(Format('  "skipped": %d,', [Round(AResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value)]));
+    Lines.Add(Format('  "durationNanoseconds": %d,', [Round(AResult.TestResult.GetProperty('duration').ToNumberLiteral.Value)]));
+    if GMode = ebSouffleVM then
+    begin
+      Lines.Add(Format('  "compileTimeNanoseconds": %d,', [AResult.TotalCompileNanoseconds]));
+      Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
+    end
+    else
+    begin
+      Lines.Add(Format('  "lexTimeNanoseconds": %d,', [AResult.TotalLexNanoseconds]));
+      Lines.Add(Format('  "parseTimeNanoseconds": %d,', [AResult.TotalParseNanoseconds]));
+      Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
+    end;
+    Lines.Add(Format('  "totalEngineNanoseconds": %d', [TotalNanoseconds]));
+    Lines.Add('}');
+    Lines.SaveToFile(AFileName);
+  finally
+    Lines.Free;
+  end;
+end;
+
 procedure PrintTestResults(const AResult: TAggregatedTestResult);
 var
   TestResult: TGocciaObjectValue;
@@ -459,6 +499,9 @@ begin
     end;
   end;
 
+  if GTimingOutput <> '' then
+    WriteTimingJSON(AResult, GTimingOutput);
+
   if StrToFloat(TotalFailed) > 0 then
     ExitCode := 1;
 end;
@@ -487,6 +530,8 @@ begin
         GExitOnFirstFailure := True
       else if ParamStr(I) = '--silent' then
         GSilentConsole := True
+      else if Copy(ParamStr(I), 1, 16) = '--timing-output=' then
+        GTimingOutput := Copy(ParamStr(I), 17, MaxInt)
       else if ParamStr(I) = '--mode=interpreted' then
         GMode := ebTreeWalk
       else if ParamStr(I) = '--mode=bytecode' then
@@ -515,6 +560,7 @@ begin
       WriteLn('  --no-results            Suppress test results summary');
       WriteLn('  --exit-on-first-failure Stop on first test failure');
       WriteLn('  --silent                Suppress console output from test scripts');
+      WriteLn('  --timing-output=<file>  Write timing data as JSON to file');
       WriteLn('  --mode=interpreted|bytecode  Execution backend (default: interpreted)');
       ExitCode := 1;
     end

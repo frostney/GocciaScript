@@ -105,10 +105,10 @@ jobs:
         run: chmod +x build/*
 
       - name: Run all JavaScript tests (interpreted)
-        run: ./build/TestRunner tests --silent --no-progress
+        run: ./build/TestRunner tests --silent --no-progress --timing-output=test-timing-interpreted.json
 
       - name: Run all JavaScript tests (bytecode)
-        run: ./build/TestRunner tests --mode=bytecode --silent --no-progress
+        run: ./build/TestRunner tests --mode=bytecode --silent --no-progress --timing-output=test-timing-bytecode.json
 
       - name: Run Pascal unit tests
         run: |
