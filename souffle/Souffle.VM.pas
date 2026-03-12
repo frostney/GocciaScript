@@ -1588,37 +1588,80 @@ begin
     OP_RT_BAND:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.BitwiseAnd(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleInteger(
+          FRegisters[Base + B].AsInteger and FRegisters[Base + C].AsInteger)
+      else
+        FRegisters[Base + A] := FRuntimeOps.BitwiseAnd(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_BOR:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.BitwiseOr(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleInteger(
+          FRegisters[Base + B].AsInteger or FRegisters[Base + C].AsInteger)
+      else
+        FRegisters[Base + A] := FRuntimeOps.BitwiseOr(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_BXOR:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.BitwiseXor(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleInteger(
+          FRegisters[Base + B].AsInteger xor FRegisters[Base + C].AsInteger)
+      else
+        FRegisters[Base + A] := FRuntimeOps.BitwiseXor(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_SHL:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.ShiftLeft(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleInteger(
+          FRegisters[Base + B].AsInteger shl
+          (FRegisters[Base + C].AsInteger and $1F))
+      else
+        FRegisters[Base + A] := FRuntimeOps.ShiftLeft(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_SHR:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.ShiftRight(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleInteger(
+          SarLongint(Int32(FRegisters[Base + B].AsInteger),
+          FRegisters[Base + C].AsInteger and $1F))
+      else
+        FRegisters[Base + A] := FRuntimeOps.ShiftRight(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_USHR:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.UnsignedShiftRight(FRegisters[Base + B], FRegisters[Base + C]);
+      if (FRegisters[Base + B].Kind = svkInteger) and
+         (FRegisters[Base + C].Kind = svkInteger) then
+        FRegisters[Base + A] := SouffleInteger(Int64(
+          UInt32(FRegisters[Base + B].AsInteger) shr
+          (FRegisters[Base + C].AsInteger and $1F)))
+      else
+        FRegisters[Base + A] := FRuntimeOps.UnsignedShiftRight(
+          FRegisters[Base + B], FRegisters[Base + C]);
     end;
     OP_RT_BNOT:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.BitwiseNot(FRegisters[Base + B]);
+      if FRegisters[Base + B].Kind = svkInteger then
+        FRegisters[Base + A] := SouffleInteger(
+          not FRegisters[Base + B].AsInteger)
+      else
+        FRegisters[Base + A] := FRuntimeOps.BitwiseNot(FRegisters[Base + B]);
     end;
 
     OP_RT_EQ:
