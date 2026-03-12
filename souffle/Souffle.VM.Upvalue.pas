@@ -52,6 +52,7 @@ end;
 
 procedure TSouffleUpvalue.MarkReferences;
 begin
+  if GCMarked then Exit;
   inherited;
   if not FIsOpen and SouffleIsReference(FClosed) and
      Assigned(FClosed.AsReference) then

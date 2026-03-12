@@ -41,19 +41,19 @@ Benchmark calibration and measurement parameters can be configured via environme
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `GOCCIA_BENCH_WARMUP` | 3 | Number of warmup iterations before calibration |
-| `GOCCIA_BENCH_CALIBRATION_MS` | 100 | Target calibration time in milliseconds |
+| `GOCCIA_BENCH_WARMUP` | 5 | Number of warmup iterations before calibration |
+| `GOCCIA_BENCH_CALIBRATION_MS` | 200 | Target calibration time in milliseconds |
 | `GOCCIA_BENCH_CALIBRATION_BATCH` | 5 | Initial batch size for calibration |
-| `GOCCIA_BENCH_ROUNDS` | 5 | Number of measurement rounds (1–5; median is reported) |
+| `GOCCIA_BENCH_ROUNDS` | 7 | Number of measurement rounds (1–50; median of IQR-filtered data is reported) |
 
 Example:
 
 ```bash
 # Fast run with shorter calibration and fewer rounds
-GOCCIA_BENCH_CALIBRATION_MS=50 GOCCIA_BENCH_ROUNDS=1 ./build/BenchmarkRunner benchmarks
+GOCCIA_BENCH_CALIBRATION_MS=50 GOCCIA_BENCH_ROUNDS=3 ./build/BenchmarkRunner benchmarks
 
 # Thorough run with longer calibration and more rounds
-GOCCIA_BENCH_CALIBRATION_MS=300 GOCCIA_BENCH_ROUNDS=5 ./build/BenchmarkRunner benchmarks
+GOCCIA_BENCH_CALIBRATION_MS=500 GOCCIA_BENCH_ROUNDS=15 ./build/BenchmarkRunner benchmarks
 ```
 
 ## Writing Benchmarks
@@ -113,9 +113,9 @@ The `BenchmarkRunner` program:
 6. `suite()` calls execute immediately, registering `bench()` entries.
 7. `runBenchmarks()` runs each registered benchmark:
    - **Setup:** Calls the `setup` function once (timed), caches the return value.
-   - **Warmup:** Configurable iterations to stabilize (default 3). The setup return value is passed to each call.
-   - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 100ms). Uses nanosecond-resolution timing via `TimingUtils` (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows).
-   - **Measure:** Runs multiple measurement rounds (default 5), computes the coefficient of variation (CV%) from the unsorted ops/sec data, then reports the median values.
+   - **Warmup:** Configurable iterations to stabilize (default 5). The setup return value is passed to each call.
+   - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 200ms). Uses nanosecond-resolution timing via `TimingUtils` (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows).
+   - **Measure:** Runs multiple measurement rounds (default 7). GC is disabled during measurement for identical behavior in both interpreter and bytecode modes. Between rounds, `CollectYoung` reclaims measurement garbage efficiently (pre-marks old objects, only traverses new allocations). After all rounds, IQR-based outlier filtering removes noise spikes before computing the coefficient of variation (CV%) and median values.
    - **Teardown:** Calls the `teardown` function once (timed) after measurement completes.
 8. After each file completes, `GC.Collect` runs to reclaim memory between script executions.
 9. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
@@ -155,12 +155,16 @@ Console format (default):
   Lex: 287μs | Parse: 0.58ms | Execute: 7207.31ms | Total: 7208.18ms
 
   fibonacci
-    recursive fib(15)                        201 ops/sec  ± 0.42%      4.9843 ms/op  (60 iterations)
-    recursive fib(20)                         18 ops/sec  ± 2.40%     55.6868 ms/op  (10 iterations)
-    iterative fib(20) via reduce         111,301 ops/sec  ± 0.43%      0.0090 ms/op  (40960 iterations)
+    recursive fib(15)                        282 ops/sec  ± 0.87%      3.5467 ms/op  (30 iterations)
+                                    range: 279 .. 286 ops/sec
+    recursive fib(20)                         25 ops/sec  ± 0.88%     39.9814 ms/op  (10 iterations)
+                                    range: 25 .. 25 ops/sec
+    iterative fib(20) via reduce          12,762 ops/sec  ± 1.43%      0.0804 ms/op  (2500 iterations)
+                                    range: 12,430 .. 12,879 ops/sec
 
   collections
     Set iteration                         50,366 ops/sec  ± 1.23%      0.0199 ms/op  (5000 iterations)
+                                    range: 49,800 .. 50,950 ops/sec
                                     setup: 0.0120ms  teardown: 0.0010ms
 
 Benchmark Summary
@@ -176,7 +180,7 @@ When a benchmark has a `setup` or `teardown` function, a second line displays th
 
 ## CI Integration
 
-Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode** modes. Interpreted and bytecode benchmarks run in **parallel** via a matrix strategy. CI uses reduced calibration settings (`GOCCIA_BENCH_CALIBRATION_MS=50`, `GOCCIA_BENCH_ROUNDS=3`) for faster runs. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
+Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode** modes. Interpreted and bytecode benchmarks run in **parallel** via a matrix strategy. CI uses `GOCCIA_BENCH_CALIBRATION_MS=100` and `GOCCIA_BENCH_ROUNDS=7` for stable measurements with IQR outlier filtering. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
 
 ### PR Benchmark Comparison
 

@@ -1,5 +1,6 @@
 {$mode delphi} {H+}
 {$IFDEF PRODUCTION}
+  {$optimization autoInline}
   {$overflowchecks off}
   {$rangechecks off}
   {$S-}
