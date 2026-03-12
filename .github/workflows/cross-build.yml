@@ -23,20 +23,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install FPC and cross binutils
-        run: |
-          brew install fpc
-          brew install x86_64-elf-binutils
-          brew install aarch64-elf-binutils
+      - name: Install FPC
+        run: brew install fpc
 
       - name: Restore cross-compilers
         uses: actions/cache/restore@v4
         with:
-          path: fpc-cross
+          path: |
+            fpc-cross
+            cross-binutils
           key: ${{ needs.toolchain.outputs.cache-key }}
 
       - name: Configure cross-compiler paths
-        run: echo "$PWD/fpc-cross/lib/fpc/$FPC_VERSION" >> $GITHUB_PATH
+        run: |
+          echo "$PWD/fpc-cross/lib/fpc/$FPC_VERSION" >> $GITHUB_PATH
+          echo "$PWD/cross-binutils/bin" >> $GITHUB_PATH
 
       # --- macos-arm64 (native) ---
       - name: Build — macos-arm64
@@ -54,7 +55,7 @@ jobs:
         env:
           FPC_TARGET_CPU: x86_64
           FPC_TARGET_OS: linux
-          FPC_CROSS_PREFIX: x86_64-elf-
+          FPC_CROSS_PREFIX: x86_64-linux-
         run: ./build.pas clean --prod
 
       - name: Stage — linux-x64
@@ -70,7 +71,7 @@ jobs:
         env:
           FPC_TARGET_CPU: aarch64
           FPC_TARGET_OS: linux
-          FPC_CROSS_PREFIX: aarch64-elf-
+          FPC_CROSS_PREFIX: aarch64-linux-
         run: ./build.pas clean --prod
 
       # --- win-x64 ---

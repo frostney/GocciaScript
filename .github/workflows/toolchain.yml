@@ -9,7 +9,8 @@ on:
 
 env:
   FPC_VERSION: "3.2.2"
-  CACHE_VERSION: "v9"
+  BINUTILS_VERSION: "2.44"
+  CACHE_VERSION: "v10"
 
 jobs:
   build:
@@ -22,7 +23,9 @@ jobs:
         id: cache-check
         uses: actions/cache/restore@v4
         with:
-          path: fpc-cross
+          path: |
+            fpc-cross
+            cross-binutils
           key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}
           lookup-only: true
 
@@ -30,12 +33,9 @@ jobs:
         if: steps.cache-check.outputs.cache-hit == 'true'
         run: echo "Toolchain already cached — nothing to build."
 
-      - name: Install FPC and cross binutils
+      - name: Install FPC
         if: steps.cache-check.outputs.cache-hit != 'true'
-        run: |
-          brew install fpc
-          brew install x86_64-elf-binutils
-          brew install aarch64-elf-binutils
+        run: brew install fpc
 
       - name: Extract FPC sources via Homebrew
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -43,21 +43,46 @@ jobs:
           brew unpack --patch fpc --destdir=.
           mv fpc-* fpc-source
 
+      - name: Build GNU Binutils for Linux targets
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          curl -L "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.bz2" | tar xj
+          NCPU=$(sysctl -n hw.ncpu)
+
+          for target in x86_64-linux aarch64-linux; do
+            mkdir "build-binutils-${target}"
+            cd "build-binutils-${target}"
+            ../binutils-${BINUTILS_VERSION}/configure \
+              --target="${target}" \
+              --prefix="$PWD/../cross-binutils" \
+              --disable-nls \
+              --disable-werror \
+              --disable-gdb \
+              --disable-sim \
+              --disable-libdecnumber \
+              --disable-readline
+            make -j"$NCPU"
+            make install
+            cd ..
+          done
+
       - name: Build cross-compiler — Linux x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
+          export PATH="$PWD/cross-binutils/bin:$PATH"
           cd fpc-source
           make clean all OS_TARGET=linux CPU_TARGET=x86_64 \
-            BINUTILSPREFIX=x86_64-elf-
+            BINUTILSPREFIX=x86_64-linux-
           make crossinstall OS_TARGET=linux CPU_TARGET=x86_64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
       - name: Build cross-compiler — Linux aarch64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
+          export PATH="$PWD/cross-binutils/bin:$PATH"
           cd fpc-source
           make clean all OS_TARGET=linux CPU_TARGET=aarch64 \
-            BINUTILSPREFIX=aarch64-elf-
+            BINUTILSPREFIX=aarch64-linux-
           make crossinstall OS_TARGET=linux CPU_TARGET=aarch64 \
             INSTALL_PREFIX=$PWD/../fpc-cross
 
@@ -89,5 +114,7 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: fpc-cross
+          path: |
+            fpc-cross
+            cross-binutils
           key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}
