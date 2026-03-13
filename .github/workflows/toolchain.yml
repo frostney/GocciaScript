@@ -11,7 +11,7 @@ env:
   FPC_VERSION: "3.2.2"
   FPCUP_VERSION: "v2.4.0i"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v20"
+  CACHE_VERSION: "v21"
 
 jobs:
   build:
@@ -75,7 +75,7 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           ./fpcup --installdir=$PWD/fpcup-install \
-            --only="FPCCleanOnly,FPCBuildOnly" --noconfirm --verbose \
+            --fpcVersion=$FPC_VERSION --noconfirm --verbose \
             --cputarget=x86_64 --ostarget=linux \
             --crossbindir=$PWD/cross-binutils/bin
 
@@ -83,7 +83,7 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           ./fpcup --installdir=$PWD/fpcup-install \
-            --only="FPCCleanOnly,FPCBuildOnly" --noconfirm --verbose \
+            --fpcVersion=$FPC_VERSION --noconfirm --verbose \
             --cputarget=aarch64 --ostarget=linux \
             --crossbindir=$PWD/cross-binutils/bin
 
@@ -91,21 +91,21 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           ./fpcup --installdir=$PWD/fpcup-install \
-            --only="FPCCleanOnly,FPCBuildOnly" --noconfirm --verbose \
+            --fpcVersion=$FPC_VERSION --noconfirm --verbose \
             --cputarget=x86_64 --ostarget=win64
 
       - name: Install cross-compiler — Windows i386
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           ./fpcup --installdir=$PWD/fpcup-install \
-            --only="FPCCleanOnly,FPCBuildOnly" --noconfirm --verbose \
+            --fpcVersion=$FPC_VERSION --noconfirm --verbose \
             --cputarget=i386 --ostarget=win32
 
       - name: Install cross-compiler — macOS x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           ./fpcup --installdir=$PWD/fpcup-install \
-            --only="FPCCleanOnly,FPCBuildOnly" --noconfirm --verbose \
+            --fpcVersion=$FPC_VERSION --noconfirm --verbose \
             --cputarget=x86_64 --ostarget=darwin
 
       - name: Save to cache
