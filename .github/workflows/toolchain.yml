@@ -138,11 +138,12 @@ jobs:
           cd fpc-source
 
           # ppcrossx64 — used for x86_64 targets (macOS, Linux, Windows)
-          make compiler CPU_TARGET=x86_64 OS_TARGET=darwin OPT="-dFPC_SOFT_FPUX80"
+          # PP=ppca64 tells make to use the native aarch64 compiler as bootstrap
+          make compiler CPU_TARGET=x86_64 OS_TARGET=darwin PP=ppca64 OPT="-dFPC_SOFT_FPUX80"
           cp compiler/ppcrossx64 "$PREFIX/lib/fpc/${FPC_VERSION}/"
 
           # ppcross386 — used for i386 targets (Windows 32-bit)
-          make compiler CPU_TARGET=i386 OS_TARGET=win32 OPT="-dFPC_SOFT_FPUX80"
+          make compiler CPU_TARGET=i386 OS_TARGET=win32 PP=ppca64 OPT="-dFPC_SOFT_FPUX80"
           cp compiler/ppcross386 "$PREFIX/lib/fpc/${FPC_VERSION}/"
 
       - name: Build cross RTLs and packages
