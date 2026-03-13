@@ -11,7 +11,7 @@ env:
   FPC_VERSION: "3.2.2"
   FPCUP_VERSION: "v2.4.0i"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v22"
+  CACHE_VERSION: "v23"
 
 jobs:
   build:
@@ -34,11 +34,12 @@ jobs:
         if: steps.cache-check.outputs.cache-hit == 'true'
         run: echo "Toolchain already cached — nothing to build."
 
-      - name: Download fpcup
+      - name: Download fpcup and fpclazup
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           curl -sL "https://github.com/LongDirtyAnimAlf/Reiniero-fpcup/releases/download/${FPCUP_VERSION}/fpcup-aarch64-darwin" -o fpcup
-          chmod +x fpcup
+          curl -sL "https://github.com/LongDirtyAnimAlf/Reiniero-fpcup/releases/download/${FPCUP_VERSION}/fpclazup-aarch64-darwin" -o fpclazup
+          chmod +x fpcup fpclazup
 
       - name: Build GNU Binutils for Linux targets
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -74,38 +75,38 @@ jobs:
       - name: Install cross-compiler — Linux x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          ./fpcup --installdir=$PWD/fpcup-install \
-            --only="FPCCleanOnly,FPCBuildOnly" --autotools --noconfirm --verbose \
+          ./fpclazup --installdir=$PWD/fpcup-install \
+            --only="FPCCleanOnly,FPCBuildOnly" --noconfirm --verbose \
             --cputarget=x86_64 --ostarget=linux \
             --crossbindir=$PWD/cross-binutils/bin
 
       - name: Install cross-compiler — Linux aarch64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          ./fpcup --installdir=$PWD/fpcup-install \
-            --only="FPCCleanOnly,FPCBuildOnly" --autotools --noconfirm --verbose \
+          ./fpclazup --installdir=$PWD/fpcup-install \
+            --only="FPCCleanOnly,FPCBuildOnly" --noconfirm --verbose \
             --cputarget=aarch64 --ostarget=linux \
             --crossbindir=$PWD/cross-binutils/bin
 
       - name: Install cross-compiler — Windows x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          ./fpcup --installdir=$PWD/fpcup-install \
-            --only="FPCCleanOnly,FPCBuildOnly" --autotools --noconfirm --verbose \
+          ./fpclazup --installdir=$PWD/fpcup-install \
+            --only="FPCCleanOnly,FPCBuildOnly" --noconfirm --verbose \
             --cputarget=x86_64 --ostarget=win64
 
       - name: Install cross-compiler — Windows i386
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          ./fpcup --installdir=$PWD/fpcup-install \
-            --only="FPCCleanOnly,FPCBuildOnly" --autotools --noconfirm --verbose \
+          ./fpclazup --installdir=$PWD/fpcup-install \
+            --only="FPCCleanOnly,FPCBuildOnly" --noconfirm --verbose \
             --cputarget=i386 --ostarget=win32
 
       - name: Install cross-compiler — macOS x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          ./fpcup --installdir=$PWD/fpcup-install \
-            --only="FPCCleanOnly,FPCBuildOnly" --autotools --noconfirm --verbose \
+          ./fpclazup --installdir=$PWD/fpcup-install \
+            --only="FPCCleanOnly,FPCBuildOnly" --noconfirm --verbose \
             --cputarget=x86_64 --ostarget=darwin
 
       - name: Save to cache
