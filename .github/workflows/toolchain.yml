@@ -129,6 +129,18 @@ jobs:
             -Fi../aarch64 -Fi. \
             -FU"$NATIVE_RTL" sfpux80.pp
 
+      - name: Patch FPC Makefiles for aarch64 cross-compilation
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          # FPC's fpcmake-generated Makefiles add -P$(CPU_TARGET) to FPCOPT when
+          # cross-compiling. The -P flag only works with the `fpc` driver, not
+          # bare compiler binaries (ppca64, ppcrossx64, etc.). Since the compiler
+          # Makefile uses ppca64 directly during the build cycle, we must strip
+          # this flag. The cross compiler already knows its target architecture
+          # from compile-time defines (-dcpux86_64, etc.).
+          find fpc-source -name 'Makefile' -exec \
+            sed -i '' 's/-P$(CPU_TARGET)//g' {} +
+
       - name: Build cross-compilers
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
@@ -138,12 +150,11 @@ jobs:
           cd fpc-source
 
           # ppcrossx64 — used for x86_64 targets (macOS, Linux, Windows)
-          # PP=ppca64 tells make to use the native aarch64 compiler as bootstrap
-          make compiler CPU_TARGET=x86_64 OS_TARGET=darwin PP=ppca64 OPT="-dFPC_SOFT_FPUX80"
+          make compiler CPU_TARGET=x86_64 OS_TARGET=darwin OPT="-dFPC_SOFT_FPUX80"
           cp compiler/ppcrossx64 "$PREFIX/lib/fpc/${FPC_VERSION}/"
 
           # ppcross386 — used for i386 targets (Windows 32-bit)
-          make compiler CPU_TARGET=i386 OS_TARGET=win32 PP=ppca64 OPT="-dFPC_SOFT_FPUX80"
+          make compiler CPU_TARGET=i386 OS_TARGET=win32 OPT="-dFPC_SOFT_FPUX80"
           cp compiler/ppcross386 "$PREFIX/lib/fpc/${FPC_VERSION}/"
 
       - name: Build cross RTLs and packages
