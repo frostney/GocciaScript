@@ -484,22 +484,6 @@ begin
               SouffleToDouble(FRegisters[Base + C]));
           end;
 
-          OP_GET_LOCAL_INT, OP_GET_LOCAL_FLOAT, OP_GET_LOCAL_BOOL,
-          OP_GET_LOCAL_STRING, OP_GET_LOCAL_REF:
-          begin
-            A := UInt8((Instruction shr 8) and $FF);
-            Bx := UInt16((Instruction shr 16) and $FFFF);
-            FRegisters[Base + A] := FRegisters[Base + Bx];
-          end;
-
-          OP_SET_LOCAL_INT, OP_SET_LOCAL_FLOAT, OP_SET_LOCAL_BOOL,
-          OP_SET_LOCAL_STRING, OP_SET_LOCAL_REF:
-          begin
-            A := UInt8((Instruction shr 8) and $FF);
-            Bx := UInt16((Instruction shr 16) and $FFFF);
-            FRegisters[Base + Bx] := FRegisters[Base + A];
-          end;
-
           OP_CHECK_TYPE:
           begin
             A := UInt8((Instruction shr 8) and $FF);
@@ -1249,22 +1233,6 @@ begin
       FRegisters[Base + A] := SouffleString(
         SouffleGetString(FRegisters[Base + B]) +
         SouffleGetString(FRegisters[Base + C]));
-    end;
-
-    OP_GET_LOCAL_INT, OP_GET_LOCAL_FLOAT, OP_GET_LOCAL_BOOL,
-    OP_GET_LOCAL_STRING, OP_GET_LOCAL_REF:
-    begin
-      A := DecodeA(AInstruction);
-      Bx := DecodeBx(AInstruction);
-      FRegisters[Base + A] := FRegisters[Base + Bx];
-    end;
-
-    OP_SET_LOCAL_INT, OP_SET_LOCAL_FLOAT, OP_SET_LOCAL_BOOL,
-    OP_SET_LOCAL_STRING, OP_SET_LOCAL_REF:
-    begin
-      A := DecodeA(AInstruction);
-      Bx := DecodeBx(AInstruction);
-      FRegisters[Base + Bx] := FRegisters[Base + A];
     end;
 
     OP_CHECK_TYPE:

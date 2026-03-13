@@ -5,7 +5,7 @@ unit Souffle.Bytecode;
 interface
 
 const
-  SOUFFLE_FORMAT_VERSION = 3;
+  SOUFFLE_FORMAT_VERSION = 4;
   SOUFFLE_BINARY_MAGIC: array[0..3] of Byte = (Ord('S'), Ord('B'), Ord('C'), 0);
 
   OP_RT_FIRST = 128;
@@ -97,18 +97,6 @@ type
 
     // ── Core: String ──
     OP_CONCAT        = 55,  // ABC   R[A] := String(R[B]) + String(R[C])
-
-    // ── Core: Typed Locals ──
-    OP_GET_LOCAL_INT    = 56,  // ABx  R[A] := Locals[Bx] (typed: integer)
-    OP_SET_LOCAL_INT    = 57,  // ABx  Locals[Bx] := R[A] (typed: integer)
-    OP_GET_LOCAL_FLOAT  = 58,  // ABx  R[A] := Locals[Bx] (typed: float)
-    OP_SET_LOCAL_FLOAT  = 59,  // ABx  Locals[Bx] := R[A] (typed: float)
-    OP_GET_LOCAL_BOOL   = 60,  // ABx  R[A] := Locals[Bx] (typed: boolean)
-    OP_SET_LOCAL_BOOL   = 61,  // ABx  Locals[Bx] := R[A] (typed: boolean)
-    OP_GET_LOCAL_STRING = 62,  // ABx  R[A] := Locals[Bx] (typed: string reference)
-    OP_SET_LOCAL_STRING = 63,  // ABx  Locals[Bx] := R[A] (typed: string reference)
-    OP_GET_LOCAL_REF    = 64,  // ABx  R[A] := Locals[Bx] (typed: heap reference)
-    OP_SET_LOCAL_REF    = 65,  // ABx  Locals[Bx] := R[A] (typed: heap reference)
 
     // ── Core: Blueprint ──
     OP_NEW_BLUEPRINT = 66,  // ABx   R[A] := new Blueprint(name=Constants[Bx])
