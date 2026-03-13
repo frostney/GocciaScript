@@ -637,14 +637,12 @@ begin
     end;
 
     // Variables
-    OP_GET_LOCAL, OP_GET_LOCAL_INT, OP_GET_LOCAL_FLOAT,
-    OP_GET_LOCAL_BOOL, OP_GET_LOCAL_STRING, OP_GET_LOCAL_REF:
+    OP_GET_LOCAL:
     begin
       ABuilder.EmitLocalGet(Bx);
       ABuilder.EmitLocalSet(A);
     end;
-    OP_SET_LOCAL, OP_SET_LOCAL_INT, OP_SET_LOCAL_FLOAT,
-    OP_SET_LOCAL_BOOL, OP_SET_LOCAL_STRING, OP_SET_LOCAL_REF:
+    OP_SET_LOCAL:
     begin
       ABuilder.EmitLocalGet(A);
       ABuilder.EmitLocalSet(Bx);

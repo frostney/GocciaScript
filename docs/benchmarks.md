@@ -119,6 +119,16 @@ The `BenchmarkRunner` program:
    - **Teardown:** Calls the `teardown` function once (timed) after measurement completes.
 8. After each file completes, `GC.Collect` runs to reclaim memory between script executions.
 9. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
+10. After rendering, checks for failures via `TBenchmarkReporter.HasFailures`. If any benchmark entry has a non-empty `Error` field or zero `OpsPerSec`/`MeanMs`, the process exits with code 1.
+
+### Exit Codes
+
+| Exit Code | Meaning |
+|-----------|---------|
+| `0` | All benchmarks completed successfully with non-zero measurements |
+| `1` | One or more benchmarks failed — either an error occurred (access violation, exception) or a benchmark produced zero ops/sec or zero mean ms |
+
+The non-zero exit code ensures CI pipelines fail when benchmarks crash or produce empty results.
 
 ## Script API
 
