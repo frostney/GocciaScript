@@ -21,6 +21,7 @@ uses
 
   Souffle.Bytecode,
 
+  Goccia.Constants.TypeNames,
   Goccia.Token,
   Goccia.Values.Primitives;
 
@@ -49,6 +50,36 @@ begin
   end;
 end;
 
+function IsFalsyLiteral(const AValue: TGocciaValue): Boolean; inline;
+begin
+  Result := (AValue is TGocciaNullLiteralValue) or
+            (AValue is TGocciaUndefinedLiteralValue) or
+            ((AValue is TGocciaBooleanLiteralValue) and
+             not TGocciaBooleanLiteralValue(AValue).Value);
+end;
+
+function IsTruthyLiteral(const AValue: TGocciaValue): Boolean; inline;
+begin
+  Result := (AValue is TGocciaBooleanLiteralValue) and
+            TGocciaBooleanLiteralValue(AValue).Value;
+end;
+
+procedure EmitLiteralValue(const ACtx: TGocciaCompilationContext;
+  const AValue: TGocciaValue; const ADest: UInt8);
+begin
+  if AValue is TGocciaNullLiteralValue then
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ADest, 1, 0))
+  else if AValue is TGocciaUndefinedLiteralValue then
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ADest, 0, 0))
+  else if AValue is TGocciaBooleanLiteralValue then
+  begin
+    if TGocciaBooleanLiteralValue(AValue).Value then
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0))
+    else
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_FALSE, ADest, 0, 0));
+  end;
+end;
+
 function TryFoldBinary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaBinaryExpression; const ADest: UInt8): Boolean;
 var
@@ -59,6 +90,43 @@ var
   Idx: UInt16;
 begin
   Result := False;
+
+  if (AExpr.Operator in [gttAnd, gttOr]) and
+     (AExpr.Left is TGocciaLiteralExpression) then
+  begin
+    LeftLit := TGocciaLiteralExpression(AExpr.Left);
+
+    if AExpr.Operator = gttAnd then
+    begin
+      if IsFalsyLiteral(LeftLit.Value) then
+      begin
+        EmitLiteralValue(ACtx, LeftLit.Value, ADest);
+        Result := True;
+        Exit;
+      end;
+      if IsTruthyLiteral(LeftLit.Value) then
+      begin
+        ACtx.CompileExpression(AExpr.Right, ADest);
+        Result := True;
+        Exit;
+      end;
+    end
+    else
+    begin
+      if IsTruthyLiteral(LeftLit.Value) then
+      begin
+        EmitLiteralValue(ACtx, LeftLit.Value, ADest);
+        Result := True;
+        Exit;
+      end;
+      if IsFalsyLiteral(LeftLit.Value) then
+      begin
+        ACtx.CompileExpression(AExpr.Right, ADest);
+        Result := True;
+        Exit;
+      end;
+    end;
+  end;
 
   if not (AExpr.Left is TGocciaLiteralExpression) or
      not (AExpr.Right is TGocciaLiteralExpression) then
@@ -227,6 +295,8 @@ var
   Lit: TGocciaLiteralExpression;
   Num: TGocciaNumberLiteralValue;
   NumVal: Double;
+  TypeStr: string;
+  Idx: UInt16;
 begin
   Result := False;
 
@@ -234,6 +304,42 @@ begin
     Exit;
 
   Lit := TGocciaLiteralExpression(AExpr.Operand);
+
+  if AExpr.Operator = gttNot then
+  begin
+    if Lit.Value is TGocciaBooleanLiteralValue then
+    begin
+      if TGocciaBooleanLiteralValue(Lit.Value).Value then
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_FALSE, ADest, 0, 0))
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0));
+      Result := True;
+    end;
+    Exit;
+  end;
+
+  if AExpr.Operator = gttTypeof then
+  begin
+    TypeStr := '';
+    if Lit.Value is TGocciaNumberLiteralValue then
+      TypeStr := NUMBER_TYPE_NAME
+    else if Lit.Value is TGocciaStringLiteralValue then
+      TypeStr := STRING_TYPE_NAME
+    else if Lit.Value is TGocciaBooleanLiteralValue then
+      TypeStr := BOOLEAN_TYPE_NAME
+    else if Lit.Value is TGocciaUndefinedLiteralValue then
+      TypeStr := UNDEFINED_TYPE_NAME
+    else if Lit.Value is TGocciaNullLiteralValue then
+      TypeStr := OBJECT_TYPE_NAME;
+
+    if TypeStr <> '' then
+    begin
+      Idx := ACtx.Template.AddConstantString(TypeStr);
+      EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ADest, Idx));
+      Result := True;
+    end;
+    Exit;
+  end;
 
   if not (Lit.Value is TGocciaNumberLiteralValue) then
     Exit;

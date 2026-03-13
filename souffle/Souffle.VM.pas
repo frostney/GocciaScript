@@ -116,6 +116,7 @@ begin
   if not Assigned(AModule.TopLevel) then
     Exit(SouffleNil);
 
+  AModule.TopLevel.MaterializeConstants;
   TopClosure := TSouffleClosure.Create(AModule.TopLevel);
   if Assigned(FGC) then
     FGC.AllocateObject(TopClosure);
@@ -287,8 +288,7 @@ begin
           begin
             A := UInt8((Instruction shr 8) and $FF);
             Bx := UInt16((Instruction shr 16) and $FFFF);
-            FRegisters[Base + A] :=
-              MaterializeConstant(Frame^.Template.GetConstant(Bx));
+            FRegisters[Base + A] := Frame^.Template.GetMaterializedConstant(Bx);
           end;
 
           OP_LOAD_TRUE:
@@ -490,22 +490,6 @@ begin
             FRegisters[Base + A] := SouffleBoolean(
               SouffleToDouble(FRegisters[Base + B]) <>
               SouffleToDouble(FRegisters[Base + C]));
-          end;
-
-          OP_GET_LOCAL_INT, OP_GET_LOCAL_FLOAT, OP_GET_LOCAL_BOOL,
-          OP_GET_LOCAL_STRING, OP_GET_LOCAL_REF:
-          begin
-            A := UInt8((Instruction shr 8) and $FF);
-            Bx := UInt16((Instruction shr 16) and $FFFF);
-            FRegisters[Base + A] := FRegisters[Base + Bx];
-          end;
-
-          OP_SET_LOCAL_INT, OP_SET_LOCAL_FLOAT, OP_SET_LOCAL_BOOL,
-          OP_SET_LOCAL_STRING, OP_SET_LOCAL_REF:
-          begin
-            A := UInt8((Instruction shr 8) and $FF);
-            Bx := UInt16((Instruction shr 16) and $FFFF);
-            FRegisters[Base + Bx] := FRegisters[Base + A];
           end;
 
           OP_CHECK_TYPE:
@@ -874,8 +858,7 @@ begin
     begin
       A := DecodeA(AInstruction);
       Bx := DecodeBx(AInstruction);
-      FRegisters[Base + A] := MaterializeConstant(
-        AFrame^.Template.GetConstant(Bx));
+      FRegisters[Base + A] := AFrame^.Template.GetMaterializedConstant(Bx);
     end;
 
     OP_LOAD_NIL:
@@ -1469,22 +1452,6 @@ begin
         SouffleGetString(FRegisters[Base + C]));
     end;
 
-    OP_GET_LOCAL_INT, OP_GET_LOCAL_FLOAT, OP_GET_LOCAL_BOOL,
-    OP_GET_LOCAL_STRING, OP_GET_LOCAL_REF:
-    begin
-      A := DecodeA(AInstruction);
-      Bx := DecodeBx(AInstruction);
-      FRegisters[Base + A] := FRegisters[Base + Bx];
-    end;
-
-    OP_SET_LOCAL_INT, OP_SET_LOCAL_FLOAT, OP_SET_LOCAL_BOOL,
-    OP_SET_LOCAL_STRING, OP_SET_LOCAL_REF:
-    begin
-      A := DecodeA(AInstruction);
-      Bx := DecodeBx(AInstruction);
-      FRegisters[Base + Bx] := FRegisters[Base + A];
-    end;
-
     OP_CHECK_TYPE:
     begin
       A := DecodeA(AInstruction);
@@ -1993,6 +1960,27 @@ begin
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction);
       FRegisters[Base + A] := FRuntimeOps.ToBoolean(FRegisters[Base + B]);
+    end;
+    OP_RT_TO_NUMBER:
+    begin
+      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
+      case FRegisters[Base + B].Kind of
+        svkInteger, svkFloat:
+          FRegisters[Base + A] := FRegisters[Base + B];
+        svkBoolean:
+          if FRegisters[Base + B].AsBoolean then
+            FRegisters[Base + A] := SouffleInteger(1)
+          else
+            FRegisters[Base + A] := SouffleInteger(0);
+        svkNil:
+          if FRegisters[Base + B].Flags = 0 then
+            FRegisters[Base + A] := SouffleFloat(NaN)
+          else
+            FRegisters[Base + A] := SouffleInteger(0);
+      else
+        FRegisters[Base + A] := FRuntimeOps.Negate(
+          FRuntimeOps.Negate(FRegisters[Base + B]));
+      end;
     end;
 
     OP_RT_GET_PROP:
