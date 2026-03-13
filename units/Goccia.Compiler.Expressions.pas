@@ -978,6 +978,17 @@ begin
   Result := False;
 end;
 
+function IsLocalSlot(const AScope: TGocciaCompilerScope;
+  const ASlot: UInt8): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to AScope.LocalCount - 1 do
+    if AScope.GetLocal(I).Slot = ASlot then
+      Exit(True);
+  Result := False;
+end;
+
 procedure CompileSpreadArgsArray(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const AArrayReg: UInt8);
 var
@@ -1174,7 +1185,11 @@ begin
   end
   else
   begin
-    BaseReg := ACtx.Scope.AllocateRegister;
+    if (ADest + 1 = ACtx.Scope.NextSlot) and
+       not IsLocalSlot(ACtx.Scope, ADest) then
+      BaseReg := ADest
+    else
+      BaseReg := ACtx.Scope.AllocateRegister;
 
     ACtx.CompileExpression(AExpr.Callee, BaseReg);
 
@@ -1195,10 +1210,11 @@ begin
         ACtx.Scope.FreeRegister;
     end;
 
-    if ADest <> BaseReg then
+    if BaseReg <> ADest then
+    begin
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
-
-    ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+    end;
   end;
 end;
 
