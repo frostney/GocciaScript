@@ -11,7 +11,7 @@ env:
   FPC_VERSION: "3.2.2"
   FPCUP_VERSION: "v2.4.0i"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v23"
+  CACHE_VERSION: "v24"
 
 jobs:
   build:
@@ -34,12 +34,11 @@ jobs:
         if: steps.cache-check.outputs.cache-hit == 'true'
         run: echo "Toolchain already cached — nothing to build."
 
-      - name: Download fpcup and fpclazup
+      - name: Download fpclazup
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          curl -sL "https://github.com/LongDirtyAnimAlf/Reiniero-fpcup/releases/download/${FPCUP_VERSION}/fpcup-aarch64-darwin" -o fpcup
           curl -sL "https://github.com/LongDirtyAnimAlf/Reiniero-fpcup/releases/download/${FPCUP_VERSION}/fpclazup-aarch64-darwin" -o fpclazup
-          chmod +x fpcup fpclazup
+          chmod +x fpclazup
 
       - name: Build GNU Binutils for Linux targets
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -66,27 +65,47 @@ jobs:
             cd ..
           done
 
-      - name: Install FPC via fpcup
+      - name: Download Linux cross-libraries
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          ./fpcup --installdir=$PWD/fpcup-install \
-            --fpcVersion=$FPC_VERSION.gitlab --noconfirm --verbose
+          CROSSLIB_BASE="https://github.com/LongDirtyAnimAlf/fpcupdeluxe/releases/download/crosslibs_all"
+          mkdir -p cross-libs
+
+          # Linux x86_64
+          curl -sL "$CROSSLIB_BASE/Linux_AMD64_Ubuntu_2204.zip" -o /tmp/linux-x64.zip
+          mkdir -p cross-libs/x86_64-linux
+          unzip -qo /tmp/linux-x64.zip -d cross-libs/x86_64-linux
+
+          # Linux aarch64
+          curl -sL "$CROSSLIB_BASE/Linux_AArch64_Ubuntu_1804.zip" -o /tmp/linux-arm64.zip
+          mkdir -p cross-libs/aarch64-linux
+          unzip -qo /tmp/linux-arm64.zip -d cross-libs/aarch64-linux
+
+      - name: Install FPC via fpclazup
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          ./fpclazup --installdir=$PWD/fpcup-install \
+            --fpcVersion=$FPC_VERSION.gitlab --only=FPC --noconfirm --verbose
 
       - name: Install cross-compiler — Linux x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
+          LIBDIR=$(find $PWD/cross-libs/x86_64-linux -name "libc.so" -printf "%h" -quit 2>/dev/null || find $PWD/cross-libs/x86_64-linux -name "libc.so" -exec dirname {} \; | head -1)
           ./fpclazup --installdir=$PWD/fpcup-install \
             --only="FPCCleanOnly,FPCBuildOnly" --noconfirm --verbose \
             --cputarget=x86_64 --ostarget=linux \
-            --crossbindir=$PWD/cross-binutils/bin
+            --crossbindir=$PWD/cross-binutils/bin \
+            --crosslibdir="$LIBDIR"
 
       - name: Install cross-compiler — Linux aarch64
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
+          LIBDIR=$(find $PWD/cross-libs/aarch64-linux -name "libc.so" -printf "%h" -quit 2>/dev/null || find $PWD/cross-libs/aarch64-linux -name "libc.so" -exec dirname {} \; | head -1)
           ./fpclazup --installdir=$PWD/fpcup-install \
             --only="FPCCleanOnly,FPCBuildOnly" --noconfirm --verbose \
             --cputarget=aarch64 --ostarget=linux \
-            --crossbindir=$PWD/cross-binutils/bin
+            --crossbindir=$PWD/cross-binutils/bin \
+            --crosslibdir="$LIBDIR"
 
       - name: Install cross-compiler — Windows x86_64
         if: steps.cache-check.outputs.cache-hit != 'true'
