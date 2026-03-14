@@ -102,8 +102,6 @@ function TGocciaSouffleBackend.CompileToModule(
   const AProgram: TGocciaProgram): TSouffleBytecodeModule;
 var
   Compiler: TGocciaCompiler;
-  I: Integer;
-  Entry: TGocciaCompilerClassEntry;
   Template: TSouffleFunctionTemplate;
 begin
   Compiler := TGocciaCompiler.Create(FSourcePath);
@@ -113,14 +111,6 @@ begin
     for Template in Compiler.FormalParameterCounts.Keys do
       FRuntime.RegisterFormalParameterCount(
         Template, Compiler.FormalParameterCounts[Template]);
-
-    for I := 0 to Compiler.PendingClassCount - 1 do
-    begin
-      Entry := Compiler.GetPendingClass(I);
-      FRuntime.AddPendingClassDef(
-        Entry.ClassDeclaration.ClassDefinition,
-        Entry.Line, Entry.Column);
-    end;
   finally
     Compiler.Free;
   end;

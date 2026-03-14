@@ -14,8 +14,6 @@ uses
   Goccia.Compiler.Context,
   Goccia.Compiler.Scope;
 
-function TypedSetLocalOp(const AHint: TSouffleLocalType): TSouffleOpCode;
-
 procedure CompileLiteral(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaLiteralExpression; const ADest: UInt8);
 procedure CompileIdentifier(const ACtx: TGocciaCompilationContext;
@@ -108,32 +106,6 @@ uses
   Goccia.Token,
   Goccia.Values.Primitives;
 
-function TypedGetLocalOp(const AHint: TSouffleLocalType): TSouffleOpCode;
-begin
-  case AHint of
-    sltInteger:   Result := OP_GET_LOCAL_INT;
-    sltFloat:     Result := OP_GET_LOCAL_FLOAT;
-    sltBoolean:   Result := OP_GET_LOCAL_BOOL;
-    sltString:    Result := OP_GET_LOCAL_STRING;
-    sltReference: Result := OP_GET_LOCAL_REF;
-  else
-    Result := OP_GET_LOCAL;
-  end;
-end;
-
-function TypedSetLocalOp(const AHint: TSouffleLocalType): TSouffleOpCode;
-begin
-  case AHint of
-    sltInteger:   Result := OP_SET_LOCAL_INT;
-    sltFloat:     Result := OP_SET_LOCAL_FLOAT;
-    sltBoolean:   Result := OP_SET_LOCAL_BOOL;
-    sltString:    Result := OP_SET_LOCAL_STRING;
-    sltReference: Result := OP_SET_LOCAL_REF;
-  else
-    Result := OP_SET_LOCAL;
-  end;
-end;
-
 function PrivateKey(const AScope: TGocciaCompilerScope;
   const AName: string): string;
 var
@@ -204,7 +176,6 @@ var
   NameIdx: UInt16;
   CondReg, ArgReg: UInt8;
   OkJump: Integer;
-  Hint: TSouffleLocalType;
 begin
   LocalIdx := ACtx.Scope.ResolveLocal(AExpr.Name);
   if LocalIdx >= 0 then
@@ -217,11 +188,8 @@ begin
       Exit;
     end;
     Slot := Local.Slot;
-    Hint := Local.TypeHint;
-    if (Hint <> sltUntyped) and (Slot <> ADest) then
-      EmitInstruction(ACtx, EncodeABx(TypedGetLocalOp(Hint), ADest, Slot))
-    else if Slot <> ADest then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
+    if Slot <> ADest then
+      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ADest, Slot));
     Exit;
   end;
 
@@ -508,11 +476,7 @@ begin
   case AExpr.Operator of
     gttNot:        EmitInstruction(ACtx, EncodeABC(OP_RT_NOT, ADest, RegB, 0));
     gttMinus:      EmitInstruction(ACtx, EncodeABC(OP_RT_NEG, ADest, RegB, 0));
-    gttPlus:
-    begin
-      EmitInstruction(ACtx, EncodeABC(OP_RT_NEG, ADest, RegB, 0));
-      EmitInstruction(ACtx, EncodeABC(OP_RT_NEG, ADest, ADest, 0));
-    end;
+    gttPlus:       EmitInstruction(ACtx, EncodeABC(OP_RT_TO_NUMBER, ADest, RegB, 0));
     gttTypeof:     EmitInstruction(ACtx, EncodeABC(OP_RT_TYPEOF, ADest, RegB, 0));
     gttBitwiseNot: EmitInstruction(ACtx, EncodeABC(OP_RT_BNOT, ADest, RegB, 0));
   else
@@ -561,10 +525,7 @@ begin
           UInt8(Ord(Hint)), 0));
     if ADest <> Slot then
     begin
-      if Hint <> sltUntyped then
-        EmitInstruction(ACtx, EncodeABx(TypedSetLocalOp(Hint), ADest, Slot))
-      else
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ADest, 0));
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ADest, Slot));
     end;
     Exit;
   end;
@@ -1017,6 +978,17 @@ begin
   Result := False;
 end;
 
+function IsLocalSlot(const AScope: TGocciaCompilerScope;
+  const ASlot: UInt8): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to AScope.LocalCount - 1 do
+    if AScope.GetLocal(I).Slot = ASlot then
+      Exit(True);
+  Result := False;
+end;
+
 procedure CompileSpreadArgsArray(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const AArrayReg: UInt8);
 var
@@ -1213,7 +1185,11 @@ begin
   end
   else
   begin
-    BaseReg := ACtx.Scope.AllocateRegister;
+    if (ADest + 1 = ACtx.Scope.NextSlot) and
+       not IsLocalSlot(ACtx.Scope, ADest) then
+      BaseReg := ADest
+    else
+      BaseReg := ACtx.Scope.AllocateRegister;
 
     ACtx.CompileExpression(AExpr.Callee, BaseReg);
 
@@ -1234,10 +1210,11 @@ begin
         ACtx.Scope.FreeRegister;
     end;
 
-    if ADest <> BaseReg then
+    if BaseReg <> ADest then
+    begin
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
-
-    ACtx.Scope.FreeRegister;
+      ACtx.Scope.FreeRegister;
+    end;
   end;
 end;
 
