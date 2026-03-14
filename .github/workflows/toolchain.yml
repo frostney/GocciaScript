@@ -133,21 +133,19 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           PREFIX="$PWD/fpc-cross"
+          BREW_PREFIX=$(brew --prefix)
           export PATH="$PREFIX/bin:$PWD/cross-binutils/bin:$PATH"
 
-          # FPC's Makefiles add -P$(CPU_TARGET) during cross-compilation, but
-          # -P is only supported by the fpc driver, not bare compiler binaries.
-          # Create a wrapper that strips -P flags before invoking the real ppca64.
-          REAL_PPCA64=$(which ppca64)
-          cat > "$PREFIX/bin/ppca64" <<WRAPPER
-          #!/bin/bash
-          args=()
-          for arg in "\$@"; do
-            case "\$arg" in -P*) ;; *) args+=("\$arg") ;; esac
-          done
-          exec "$REAL_PPCA64" "\${args[@]}"
-          WRAPPER
-          chmod +x "$PREFIX/bin/ppca64"
+          # FPC's Makefiles use `fpc -P$(CPU_TARGET)` to build cross compilers.
+          # The fpc driver translates -Px86_64 → invoke ppcx64, -Pi386 → ppc386.
+          # On aarch64, we want the cross compiler to be a native aarch64 binary
+          # that includes the target CPU's code generation. We achieve this by
+          # symlinking ppcx64/ppc386 to ppca64 — ppca64 compiles the compiler
+          # source as aarch64 machine code, while -dcpux86_64/-dcpui386 defines
+          # compile in the target's code generation logic.
+          REAL_PPCA64="$BREW_PREFIX/lib/fpc/${FPC_VERSION}/ppca64"
+          ln -sf "$REAL_PPCA64" "$PREFIX/bin/ppcx64"
+          ln -sf "$REAL_PPCA64" "$PREFIX/bin/ppc386"
 
           cd fpc-source
 
@@ -158,10 +156,6 @@ jobs:
           # ppcross386 — used for i386 targets (Windows 32-bit)
           make compiler CPU_TARGET=i386 OS_TARGET=win32 OPT="-dFPC_SOFT_FPUX80"
           cp compiler/ppcross386 "$PREFIX/lib/fpc/${FPC_VERSION}/"
-
-          # Replace wrapper with real ppca64 binary for the cached prefix
-          cp "$REAL_PPCA64" "$PREFIX/lib/fpc/${FPC_VERSION}/ppca64"
-          cp "$REAL_PPCA64" "$PREFIX/bin/ppca64"
 
       - name: Build cross RTLs and packages
         if: steps.cache-check.outputs.cache-hit != 'true'
