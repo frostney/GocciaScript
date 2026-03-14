@@ -1,0 +1,366 @@
+name: Build Cross-Compilation Toolchain
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      cache-key:
+        value: ${{ jobs.build.outputs.cache-key }}
+
+env:
+  FPC_VERSION: "3.2.2"
+  BINUTILS_VERSION: "2.44"
+  CACHE_VERSION: "v26"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    outputs:
+      cache-key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}
+
+    steps:
+      - name: Check cache
+        id: cache-check
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            fpc-cross
+            cross-binutils
+          key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}
+          lookup-only: true
+
+      - name: Skip if cached
+        if: steps.cache-check.outputs.cache-hit == 'true'
+        run: echo "Toolchain already cached — nothing to build."
+
+      - name: Install native FPC
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          brew install fpc
+          installed=$(fpc -iV)
+          if [ "$installed" != "$FPC_VERSION" ]; then
+            echo "::error::Expected FPC $FPC_VERSION but Homebrew installed $installed"
+            exit 1
+          fi
+
+      - name: Extract FPC sources
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          brew unpack --patch fpc --destdir=.
+          mv fpc-* fpc-source
+
+      - name: Build GNU Binutils for Linux targets
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          curl -L "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.bz2" | tar xj
+          NCPU=$(sysctl -n hw.ncpu)
+
+          for target in x86_64-linux aarch64-linux; do
+            mkdir "build-binutils-${target}"
+            cd "build-binutils-${target}"
+            ../binutils-${BINUTILS_VERSION}/configure \
+              --target="${target}" \
+              --prefix="$PWD/../cross-binutils" \
+              --with-system-zlib \
+              --disable-nls \
+              --disable-werror \
+              --disable-gdb \
+              --disable-sim \
+              --disable-libdecnumber \
+              --disable-readline \
+              --disable-gprofng
+            make -j"$NCPU"
+            make install
+            cd ..
+          done
+
+      - name: Download Linux cross-libraries
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          CROSSLIB_BASE="https://github.com/LongDirtyAnimAlf/fpcupdeluxe/releases/download/crosslibs_all"
+          mkdir -p cross-libs
+
+          # Linux x86_64
+          curl -sL "$CROSSLIB_BASE/Linux_AMD64_Ubuntu_2204.zip" -o /tmp/linux-x64.zip
+          mkdir -p cross-libs/x86_64-linux
+          unzip -qo /tmp/linux-x64.zip -d cross-libs/x86_64-linux
+
+          # Linux aarch64
+          curl -sL "$CROSSLIB_BASE/Linux_AArch64_Ubuntu_1804.zip" -o /tmp/linux-arm64.zip
+          mkdir -p cross-libs/aarch64-linux
+          unzip -qo /tmp/linux-arm64.zip -d cross-libs/aarch64-linux
+
+      - name: Set up prefix with native FPC
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="$PWD/fpc-cross"
+          BREW_FPC_LIB="$(brew --prefix)/lib/fpc/${FPC_VERSION}"
+
+          mkdir -p "$PREFIX/bin" "$PREFIX/lib/fpc/${FPC_VERSION}" "$PREFIX/lib/fpc/etc"
+
+          # Copy native compiler and units
+          cp "$(which instantfpc)" "$PREFIX/bin/"
+          cp "$BREW_FPC_LIB/ppca64" "$PREFIX/lib/fpc/${FPC_VERSION}/"
+          cp -r "$BREW_FPC_LIB/units" "$PREFIX/lib/fpc/${FPC_VERSION}/"
+
+      - name: Compile soft-float units for native RTL
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="$PWD/fpc-cross"
+          NATIVE_RTL="$PREFIX/lib/fpc/${FPC_VERSION}/units/aarch64-darwin/rtl"
+
+          cd fpc-source/rtl/inc
+
+          ppca64 -dFPC_SOFT_FPUX80 -O2 \
+            -Fu../aarch64 -Fu../unix -Fu../darwin \
+            -Fi../aarch64 -Fi. \
+            -FU"$NATIVE_RTL" softfpu.pp
+
+          ppca64 -dFPC_SOFT_FPUX80 -O2 \
+            -Fu../aarch64 -Fu../unix -Fu../darwin -Fu"$NATIVE_RTL" \
+            -Fi../aarch64 -Fi. \
+            -FU"$NATIVE_RTL" ufloatx80.pp
+
+          ppca64 -dFPC_SOFT_FPUX80 -O2 \
+            -Fu../aarch64 -Fu../unix -Fu../darwin -Fu"$NATIVE_RTL" \
+            -Fi../aarch64 -Fi. \
+            -FU"$NATIVE_RTL" sfpux80.pp
+
+      - name: Patch i386 cpuinfo for aarch64 host
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          # FPC 3.2.2's compiler/i386/cpuinfo.pas unconditionally uses
+          # TExtended80Rec which doesn't exist on aarch64 (extended = 8 bytes).
+          # The x86_64 version already has the guard; apply the same fix to i386.
+          cd fpc-source/compiler/i386
+          sed -i.bak 's/   bestrealrec = TExtended80Rec;/{$ifdef FPC_HAS_TYPE_EXTENDED}\n   bestrealrec = TExtended80Rec;\n{$else}\n   bestrealrec = TDoubleRec;\n{$endif}/' cpuinfo.pas
+
+      - name: Build cross-compilers
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="$PWD/fpc-cross"
+          NATIVE_RTL="$PREFIX/lib/fpc/${FPC_VERSION}/units/aarch64-darwin/rtl"
+          SDK_LIB="$(xcrun --show-sdk-path)/usr/lib"
+
+          cd fpc-source/compiler
+
+          # FPC's Makefiles add -P$(CPU_TARGET) to FPCOPT, but -P is only
+          # understood by the fpc driver, not bare compilers like ppca64.
+          # We bypass the Makefile and compile pp.pas directly with ppca64.
+
+          # ppcrossx64 — cross-compiler for x86_64 targets
+          mkdir -p x86_64/units/x86_64-darwin
+          ppca64 -dFPC_SOFT_FPUX80 -dx86_64 -dRELEASE -O2 -Xs -n -Tdarwin \
+            -Fux86_64 -Fusystems -Fux86 -Fix86_64 \
+            -Fu"$NATIVE_RTL" -Fl"$SDK_LIB" \
+            -FE. -FUx86_64/units/x86_64-darwin pp.pas
+          mv pp "$PREFIX/lib/fpc/${FPC_VERSION}/ppcrossx64"
+
+          # ppcross386 — cross-compiler for i386 targets
+          mkdir -p i386/units/i386-win32
+          ppca64 -dFPC_SOFT_FPUX80 -di386 -dRELEASE -O2 -Xs -n -Tdarwin \
+            -Fui386 -Fusystems -Fux86 -Fii386 \
+            -Fu"$NATIVE_RTL" -Fl"$SDK_LIB" \
+            -FE. -FUi386/units/i386-win32 pp.pas
+          mv pp "$PREFIX/lib/fpc/${FPC_VERSION}/ppcross386"
+
+      - name: Create fpc wrapper and config
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="$PWD/fpc-cross"
+          SDK_LIB="$(xcrun --show-sdk-path)/usr/lib"
+
+          # Create fpc wrapper that dispatches to the correct cross-compiler.
+          # The stock fpc driver searches PATH for ppc<suffix> before checking
+          # for ppcross<suffix>, which finds system-installed native compilers
+          # instead of our cross-compilers. This wrapper fixes the dispatch.
+          cat > "$PREFIX/bin/fpc" << 'WRAPPER'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+          FPC_LIB="$SCRIPT_DIR/../lib/fpc/3.2.2"
+          target_cpu=""
+          pass_args=()
+          print_binary=false
+          for arg in "$@"; do
+            case "$arg" in
+              -Px86_64)   target_cpu="x86_64" ;;
+              -Pi386)     target_cpu="i386" ;;
+              -Paarch64)  target_cpu="aarch64" ;;
+              -PB)        print_binary=true ;;
+              -P*)        ;;
+              *)          pass_args+=("$arg") ;;
+            esac
+          done
+          get_compiler() {
+            case "$target_cpu" in
+              x86_64)  echo "$FPC_LIB/ppcrossx64" ;;
+              i386)    echo "$FPC_LIB/ppcross386" ;;
+              *)       echo "$FPC_LIB/ppca64" ;;
+            esac
+          }
+          if $print_binary; then
+            get_compiler
+            exit 0
+          fi
+          exec "$(get_compiler)" "${pass_args[@]}"
+          WRAPPER
+          # Fix indentation (heredoc was indented for YAML readability)
+          sed -i '' 's/^          //' "$PREFIX/bin/fpc"
+          chmod +x "$PREFIX/bin/fpc"
+
+          # Create fpc.cfg with unit search paths
+          cat > "$PREFIX/lib/fpc/etc/fpc.cfg" << FPCCONFIG
+          -Fu$PREFIX/lib/fpc/\$fpcversion/units/\$fpctarget/*
+          -Fl${SDK_LIB}
+          FPCCONFIG
+          sed -i '' 's/^          //' "$PREFIX/lib/fpc/etc/fpc.cfg"
+
+      - name: Create cross-compiler wrappers for make
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="$PWD/fpc-cross"
+
+          # FPC's Makefiles add -P$(CPU_TARGET) to FPCOPT. When we set PP=
+          # to use a cross-compiler directly, the -P flag causes errors because
+          # bare compilers don't support it. These wrappers strip -P flags.
+          for compiler in ppcrossx64 ppcross386 ppca64; do
+            cat > "$PREFIX/bin/${compiler}-wrapper" << WRAP
+          #!/bin/bash
+          args=()
+          for arg in "\$@"; do
+            case "\$arg" in
+              -P*) ;;
+              *)   args+=("\$arg") ;;
+            esac
+          done
+          exec "$PREFIX/lib/fpc/${FPC_VERSION}/${compiler}" "\${args[@]}"
+          WRAP
+            sed -i '' 's/^          //' "$PREFIX/bin/${compiler}-wrapper"
+            chmod +x "$PREFIX/bin/${compiler}-wrapper"
+          done
+
+      - name: Build cross RTLs and packages
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          PREFIX="$PWD/fpc-cross"
+          export PATH="$PREFIX/bin:$PWD/cross-binutils/bin:$PATH"
+
+          build_target() {
+            local cpu="$1" os="$2"
+            local extra_opts="${3:-}"
+            local target="${cpu}-${os}"
+
+            echo ""
+            echo "========================================"
+            echo "Building RTL + packages for ${target}"
+            echo "========================================"
+
+            cd "$GITHUB_WORKSPACE/fpc-source"
+
+            # Determine cross compiler and wrapper
+            local cross_fpc wrapper
+            case "$cpu" in
+              x86_64)
+                cross_fpc="$PREFIX/lib/fpc/${FPC_VERSION}/ppcrossx64"
+                wrapper="$PREFIX/bin/ppcrossx64-wrapper"
+                ;;
+              i386)
+                cross_fpc="$PREFIX/lib/fpc/${FPC_VERSION}/ppcross386"
+                wrapper="$PREFIX/bin/ppcross386-wrapper"
+                ;;
+              aarch64)
+                cross_fpc="$PREFIX/lib/fpc/${FPC_VERSION}/ppca64"
+                wrapper="$PREFIX/bin/ppca64-wrapper"
+                ;;
+            esac
+
+            # Build cross RTL using wrapper (strips -P flags from Makefile)
+            make rtl PP="$wrapper" CPU_TARGET="$cpu" OS_TARGET="$os" \
+              OPT="-dFPC_SOFT_FPUX80" $extra_opts
+
+            # Install RTL units
+            local rtl_dir="$PREFIX/lib/fpc/${FPC_VERSION}/units/${target}/rtl"
+            mkdir -p "$rtl_dir"
+            cp rtl/units/${target}/* "$rtl_dir/"
+
+            # Determine varutils source (Windows uses win/, others use common/)
+            local varutils_src varutils_fi process_fi
+            case "$os" in
+              win32|win64)
+                varutils_src="packages/rtl-objpas/src/win/varutils.pp"
+                varutils_fi="-Fi packages/rtl-objpas/src/inc -Fi packages/rtl-objpas/src/win"
+                process_fi="-Fi packages/fcl-process/src/win"
+                ;;
+              *)
+                varutils_src="packages/rtl-objpas/src/common/varutils.pp"
+                varutils_fi="-Fi packages/rtl-objpas/src/inc"
+                process_fi="-Fi packages/fcl-process/src/unix"
+                ;;
+            esac
+
+            # Build rtl-objpas (varutils, variants, strutils, dateutils)
+            echo "--- rtl-objpas for ${target} ---"
+            local objpas_dir="$PREFIX/lib/fpc/${FPC_VERSION}/units/${target}/rtl-objpas"
+            mkdir -p "$objpas_dir"
+
+            "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 \
+              -Fu"$rtl_dir" -Fu"$objpas_dir" -FU"$objpas_dir" \
+              $varutils_fi "$varutils_src"
+
+            for unit in variants strutils dateutils; do
+              "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 \
+                -Fu"$rtl_dir" -Fu"$objpas_dir" -FU"$objpas_dir" \
+                "packages/rtl-objpas/src/inc/${unit}.pp"
+            done
+
+            # Build rtl-generics (needs variants from rtl-objpas)
+            echo "--- rtl-generics for ${target} ---"
+            local gen_dir="$PREFIX/lib/fpc/${FPC_VERSION}/units/${target}/rtl-generics"
+            mkdir -p "$gen_dir"
+            for unit in generics.hashes generics.strings generics.defaults \
+                        generics.helpers generics.memoryexpanders generics.collections; do
+              local src="packages/rtl-generics/src/${unit}.pas"
+              if [ -f "$src" ]; then
+                "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 \
+                  -Fu"$rtl_dir" -Fu"$objpas_dir" -Fu"$gen_dir" -FU"$gen_dir" "$src"
+              fi
+            done
+
+            # Build fcl-process (provides Process unit)
+            echo "--- fcl-process for ${target} ---"
+            local fcl_dir="$PREFIX/lib/fpc/${FPC_VERSION}/units/${target}/fcl-process"
+            mkdir -p "$fcl_dir"
+            "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 \
+              -Fu"$rtl_dir" -FU"$fcl_dir" \
+              $process_fi "packages/fcl-process/src/pipes.pp"
+            "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 \
+              -Fu"$rtl_dir" -Fu"$fcl_dir" -FU"$fcl_dir" \
+              $process_fi "packages/fcl-process/src/process.pp"
+          }
+
+          # macOS x86_64
+          build_target x86_64 darwin
+
+          # Linux x86_64
+          LIBDIR=$(find "$PWD/cross-libs/x86_64-linux" -name "libc.so" -exec dirname {} \; | head -1)
+          build_target x86_64 linux "CROSSOPT=-Fl${LIBDIR} BINUTILSPREFIX=x86_64-linux-"
+
+          # Linux aarch64
+          LIBDIR=$(find "$PWD/cross-libs/aarch64-linux" -name "libc.so" -exec dirname {} \; | head -1)
+          build_target aarch64 linux "CROSSOPT=-Fl${LIBDIR} BINUTILSPREFIX=aarch64-linux-"
+
+          # Windows x86_64
+          build_target x86_64 win64
+
+          # Windows i386
+          build_target i386 win32
+
+      - name: Save to cache
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            fpc-cross
+            cross-binutils
+          key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}
