@@ -492,6 +492,22 @@ begin
               SouffleToDouble(FRegisters[Base + C]));
           end;
 
+          OP_NOT:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            FRegisters[Base + A] := SouffleBoolean(
+              not SouffleIsTrue(FRegisters[Base + B]));
+          end;
+
+          OP_TO_BOOL:
+          begin
+            A := UInt8((Instruction shr 8) and $FF);
+            B := UInt8((Instruction shr 16) and $FF);
+            FRegisters[Base + A] := SouffleBoolean(
+              SouffleIsTrue(FRegisters[Base + B]));
+          end;
+
           OP_CHECK_TYPE:
           begin
             A := UInt8((Instruction shr 8) and $FF);
@@ -1938,11 +1954,6 @@ begin
           FRegisters[Base + B], FRegisters[Base + C]);
     end;
 
-    OP_RT_NOT:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.LogicalNot(FRegisters[Base + B]);
-    end;
     OP_RT_TYPEOF:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction);
@@ -1957,11 +1968,6 @@ begin
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       FRegisters[Base + A] := FRuntimeOps.HasProperty(FRegisters[Base + B], FRegisters[Base + C]);
-    end;
-    OP_RT_TO_BOOLEAN:
-    begin
-      A := DecodeA(AInstruction); B := DecodeB(AInstruction);
-      FRegisters[Base + A] := FRuntimeOps.ToBoolean(FRegisters[Base + B]);
     end;
     OP_RT_TO_NUMBER:
     begin

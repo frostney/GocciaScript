@@ -474,7 +474,7 @@ begin
     ACtx.CompileExpression(AExpr.Operand, RegB);
 
   case AExpr.Operator of
-    gttNot:        EmitInstruction(ACtx, EncodeABC(OP_RT_NOT, ADest, RegB, 0));
+    gttNot:        EmitInstruction(ACtx, EncodeABC(OP_NOT, ADest, RegB, 0));
     gttMinus:      EmitInstruction(ACtx, EncodeABC(OP_RT_NEG, ADest, RegB, 0));
     gttPlus:       EmitInstruction(ACtx, EncodeABC(OP_RT_TO_NUMBER, ADest, RegB, 0));
     gttTypeof:     EmitInstruction(ACtx, EncodeABC(OP_RT_TYPEOF, ADest, RegB, 0));
