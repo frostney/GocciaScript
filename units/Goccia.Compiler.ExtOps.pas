@@ -13,7 +13,6 @@ const
   GOCCIA_EXT_DEF_STATIC_GETTER   = 6;  // A=target, C=name constant, R[A+1]=closure
   GOCCIA_EXT_DEF_STATIC_SETTER   = 7;  // A=target, C=name constant, R[A+1]=closure
   GOCCIA_EXT_REQUIRE_OBJECT      = 8;  // A=value (throws if null/undefined)
-  GOCCIA_EXT_EVAL_CLASS          = 9;  // A=dest, C=class index
   GOCCIA_EXT_THROW_TYPE_ERROR    = 10; // C=message constant
   GOCCIA_EXT_SUPER_GET           = 11; // A=dest, C=prop constant, R[A+1]=super blueprint
   GOCCIA_EXT_SPREAD              = 12; // A=target array, C=source reg

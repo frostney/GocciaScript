@@ -71,6 +71,7 @@ type
     FRtNot: UInt32;
     FRtTypeOf: UInt32;
     FRtIsInstance: UInt32;
+    FRtToNumber: UInt32;
     FRtHasProperty: UInt32;
     FRtToBooleanVal: UInt32;
 
@@ -390,11 +391,12 @@ begin
   FRtGt := Cond2('rt_gt', [OP_RT_GT, OP_GT_INT, OP_GT_FLOAT]);
   FRtLte := Cond2('rt_lte', [OP_RT_LTE, OP_LTE_INT, OP_LTE_FLOAT]);
   FRtGte := Cond2('rt_gte', [OP_RT_GTE, OP_GTE_INT, OP_GTE_FLOAT]);
-  FRtNot := Cond1('rt_not', [OP_RT_NOT]);
+  FRtNot := Cond1('rt_not', [OP_NOT]);
   FRtTypeOf := Cond1('rt_typeof', [OP_RT_TYPEOF]);
   FRtIsInstance := Cond2('rt_is_instance', [OP_RT_IS_INSTANCE]);
   FRtHasProperty := Cond2('rt_has_property', [OP_RT_HAS_PROPERTY]);
-  FRtToBooleanVal := Cond1('rt_to_boolean_val', [OP_RT_TO_BOOLEAN]);
+  FRtToBooleanVal := Cond1('rt_to_boolean_val', [OP_TO_BOOL]);
+  FRtToNumber := Cond1('rt_to_number', [OP_RT_TO_NUMBER]);
 
   FRtGetProp := CondT('rt_get_prop',
     [WT_EXTERNREF, WT_I32], [WT_EXTERNREF], [OP_RT_GET_PROP]);
@@ -635,14 +637,12 @@ begin
     end;
 
     // Variables
-    OP_GET_LOCAL, OP_GET_LOCAL_INT, OP_GET_LOCAL_FLOAT,
-    OP_GET_LOCAL_BOOL, OP_GET_LOCAL_STRING, OP_GET_LOCAL_REF:
+    OP_GET_LOCAL:
     begin
       ABuilder.EmitLocalGet(Bx);
       ABuilder.EmitLocalSet(A);
     end;
-    OP_SET_LOCAL, OP_SET_LOCAL_INT, OP_SET_LOCAL_FLOAT,
-    OP_SET_LOCAL_BOOL, OP_SET_LOCAL_STRING, OP_SET_LOCAL_REF:
+    OP_SET_LOCAL:
     begin
       ABuilder.EmitLocalGet(A);
       ABuilder.EmitLocalSet(Bx);
@@ -1217,7 +1217,7 @@ begin
     end;
 
     // Runtime: Logical / Type
-    OP_RT_NOT:
+    OP_NOT:
     begin
       ABuilder.EmitLocalGet(B);
       ABuilder.EmitCall(FRtNot);
@@ -1243,10 +1243,16 @@ begin
       ABuilder.EmitCall(FRtHasProperty);
       ABuilder.EmitLocalSet(A);
     end;
-    OP_RT_TO_BOOLEAN:
+    OP_TO_BOOL:
     begin
       ABuilder.EmitLocalGet(B);
       ABuilder.EmitCall(FRtToBooleanVal);
+      ABuilder.EmitLocalSet(A);
+    end;
+    OP_RT_TO_NUMBER:
+    begin
+      ABuilder.EmitLocalGet(B);
+      ABuilder.EmitCall(FRtToNumber);
       ABuilder.EmitLocalSet(A);
     end;
 
