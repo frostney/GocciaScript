@@ -204,6 +204,12 @@ type
     FTestDelegate: TSouffleRecord;
     FActiveDecoratorSession: TGocciaDecoratorSession;
     FArrayBridgeDirty: Boolean;
+    FTypeOfUndefined: TSouffleValue;
+    FTypeOfObject: TSouffleValue;
+    FTypeOfBoolean: TSouffleValue;
+    FTypeOfNumber: TSouffleValue;
+    FTypeOfString: TSouffleValue;
+    FTypeOfFunction: TSouffleValue;
     function WrapGocciaValue(const AValue: TGocciaValue): TSouffleValue;
     function CoerceKeyToString(const AKey: TSouffleValue): string;
     function CoerceToNumber(const A: TSouffleValue): Double;
@@ -1310,6 +1316,12 @@ begin
   FFormalParameterCounts := TDictionary<TSouffleFunctionTemplate, Integer>.Create;
   FBridgeCallDepth := 0;
   FVM := nil;
+  FTypeOfUndefined := SouffleString('undefined');
+  FTypeOfObject := SouffleString('object');
+  FTypeOfBoolean := SouffleString('boolean');
+  FTypeOfNumber := SouffleString('number');
+  FTypeOfString := SouffleString('string');
+  FTypeOfFunction := SouffleString('function');
   TGarbageCollector.Initialize;
   TGarbageCollector.Instance.AddExternalRootMarker(MarkWrappedGocciaValues);
 end;
@@ -2321,26 +2333,26 @@ begin
   case A.Kind of
     svkNil:
       if A.Flags = GOCCIA_NIL_NULL then
-        Result := SouffleString('object')
+        Result := FTypeOfObject
       else
-        Result := SouffleString('undefined');
+        Result := FTypeOfUndefined;
     svkBoolean:
-      Result := SouffleString('boolean');
+      Result := FTypeOfBoolean;
     svkInteger, svkFloat:
-      Result := SouffleString('number');
+      Result := FTypeOfNumber;
     svkString:
-      Result := SouffleString('string');
+      Result := FTypeOfString;
     svkReference:
     begin
       if not Assigned(A.AsReference) then
-        Exit(SouffleString('undefined'));
+        Exit(FTypeOfUndefined);
       if (A.AsReference is TSouffleClosure) or
          (A.AsReference is TSouffleNativeFunction) or
          (A.AsReference is TSouffleBlueprint) or
          (A.AsReference is TGocciaBridgedFunction) then
-        Result := SouffleString('function')
+        Result := FTypeOfFunction
       else if A.AsReference is TSouffleHeapString then
-        Result := SouffleString('string')
+        Result := FTypeOfString
       else if A.AsReference is TGocciaWrappedValue then
       begin
         {$IFDEF BRIDGE_METRICS}
@@ -2350,10 +2362,10 @@ begin
           TGocciaWrappedValue(A.AsReference).Value.TypeOf);
       end
       else
-        Result := SouffleString('object');
+        Result := FTypeOfObject;
     end;
   else
-    Result := SouffleString('undefined');
+    Result := FTypeOfUndefined;
   end;
 end;
 
