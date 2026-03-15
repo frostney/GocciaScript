@@ -123,6 +123,10 @@ type
     OP_LTE_FLOAT     = 81,  // ABC   R[A] := Boolean(AsNumber(R[B]) <= AsNumber(R[C]))
     OP_GTE_FLOAT     = 82,  // ABC   R[A] := Boolean(AsNumber(R[B]) >= AsNumber(R[C]))
 
+    // ── Core: Boolean ──
+    OP_NOT           = 83,  // AB    R[A] := Boolean(not IsTrue(R[B]))
+    OP_TO_BOOL       = 84,  // AB    R[A] := Boolean(IsTrue(R[B]))
+
     // ── Runtime: Polymorphic Arithmetic ──
     OP_RT_ADD        = 128, // ABC   R[A] := Runtime.Add(R[B], R[C])
     OP_RT_SUB        = 129, // ABC   R[A] := Runtime.Subtract(R[B], R[C])
@@ -150,11 +154,9 @@ type
     OP_RT_GTE        = 147, // ABC   R[A] := Runtime.GreaterThanOrEqual(R[B], R[C])
 
     // ── Runtime: Logical / Type ──
-    OP_RT_NOT        = 148, // AB    R[A] := Runtime.LogicalNot(R[B])
     OP_RT_TYPEOF     = 149, // AB    R[A] := Runtime.TypeOf(R[B])
     OP_RT_IS_INSTANCE = 150, // ABC  R[A] := Runtime.IsInstance(R[B], R[C])
     OP_RT_HAS_PROPERTY = 151, // ABC R[A] := Runtime.HasProperty(R[B], R[C])
-    OP_RT_TO_BOOLEAN = 152, // AB    R[A] := Runtime.ToBoolean(R[B])
     OP_RT_TO_NUMBER  = 153, // AB    R[A] := ToNumber(R[B]) — numeric identity, else Runtime.ToNumber
 
     // ── Runtime: Property Access ──
