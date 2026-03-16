@@ -8,7 +8,7 @@ uses
   Souffle.Heap;
 
 const
-  SOUFFLE_INLINE_STRING_MAX = 23;
+  SOUFFLE_INLINE_STRING_MAX = 13;
   SOUFFLE_NIL_DEFAULT = 0;
   SOUFFLE_NIL_MATCH_ANY = 255;
 
@@ -268,7 +268,12 @@ begin
     svkString:
       Result := A.AsInlineString = B.AsInlineString;
     svkReference:
-      Result := A.AsReference = B.AsReference;
+      if (A.AsReference is TSouffleHeapString) and
+         (B.AsReference is TSouffleHeapString) then
+        Result := TSouffleHeapString(A.AsReference).Value =
+          TSouffleHeapString(B.AsReference).Value
+      else
+        Result := A.AsReference = B.AsReference;
   else
     Result := False;
   end;
