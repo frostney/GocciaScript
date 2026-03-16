@@ -5,17 +5,23 @@ features: [strict-equality-operator, relational-operators]
 
 describe("string equality with different lengths", () => {
   test("empty string comparisons", () => {
-    expect("" === "").toBe(true);
-    expect("" !== "").toBe(false);
-    expect("" === "a").toBe(false);
-    expect("" !== "a").toBe(true);
-    expect("a" === "").toBe(false);
+    const a = "";
+    const b = "";
+    expect(a === b).toBe(true);
+    expect(a !== b).toBe(false);
+    expect(a === "a").toBe(false);
+    expect(a !== "a").toBe(true);
+    expect("a" === a).toBe(false);
   });
 
   test("same content same length", () => {
-    expect("abc" === "abc").toBe(true);
-    expect("hello world" === "hello world").toBe(true);
-    expect("abc" !== "abc").toBe(false);
+    const a = "abc";
+    const b = "abc";
+    const c = "hello world";
+    const d = "hello world";
+    expect(a === b).toBe(true);
+    expect(c === d).toBe(true);
+    expect(a !== b).toBe(false);
   });
 
   test("same length different content", () => {
@@ -36,12 +42,14 @@ describe("string equality with different lengths", () => {
 
 describe("string relational operators with varying lengths", () => {
   test("empty string is less than any non-empty string", () => {
-    expect("" < "a").toBe(true);
-    expect("" < "z").toBe(true);
-    expect("" < "abc").toBe(true);
-    expect("a" > "").toBe(true);
-    expect("" <= "").toBe(true);
-    expect("" >= "").toBe(true);
+    const empty = "";
+    const alsoEmpty = "";
+    expect(empty < "a").toBe(true);
+    expect(empty < "z").toBe(true);
+    expect(empty < "abc").toBe(true);
+    expect("a" > empty).toBe(true);
+    expect(empty <= alsoEmpty).toBe(true);
+    expect(empty >= alsoEmpty).toBe(true);
   });
 
   test("shorter prefix is less than longer string", () => {
@@ -53,14 +61,16 @@ describe("string relational operators with varying lengths", () => {
   });
 
   test("lexicographic ordering same length", () => {
-    expect("abc" < "abd").toBe(true);
-    expect("abd" > "abc").toBe(true);
+    const a = "abc";
+    const b = "abc";
+    expect(a < "abd").toBe(true);
+    expect("abd" > a).toBe(true);
     expect("aaa" < "aab").toBe(true);
     expect("zzz" > "zzy").toBe(true);
-    expect("abc" <= "abc").toBe(true);
-    expect("abc" >= "abc").toBe(true);
-    expect("abc" <= "abd").toBe(true);
-    expect("abd" >= "abc").toBe(true);
+    expect(a <= b).toBe(true);
+    expect(a >= b).toBe(true);
+    expect(a <= "abd").toBe(true);
+    expect("abd" >= a).toBe(true);
   });
 
   test("lexicographic ordering different lengths", () => {
@@ -74,18 +84,24 @@ describe("string relational operators with varying lengths", () => {
 
 describe("short strings (1-5 chars)", () => {
   test("single character comparisons", () => {
-    expect("a" === "a").toBe(true);
-    expect("a" < "b").toBe(true);
-    expect("z" > "a").toBe(true);
-    expect("A" < "a").toBe(true);
-    expect("Z" < "a").toBe(true);
+    const a = "a";
+    const b = "a";
+    expect(a === b).toBe(true);
+    expect(a < "b").toBe(true);
+    expect("z" > a).toBe(true);
+    expect("A" < a).toBe(true);
+    expect("Z" < a).toBe(true);
   });
 
   test("2-5 character strings", () => {
-    expect("ab" === "ab").toBe(true);
-    expect("ab" < "ac").toBe(true);
-    expect("hello" === "hello").toBe(true);
-    expect("hello" < "world").toBe(true);
+    const ab1 = "ab";
+    const ab2 = "ab";
+    const hello1 = "hello";
+    const hello2 = "hello";
+    expect(ab1 === ab2).toBe(true);
+    expect(ab1 < "ac").toBe(true);
+    expect(hello1 === hello2).toBe(true);
+    expect(hello1 < "world").toBe(true);
     expect("abcde" > "abcdd").toBe(true);
   });
 });
@@ -152,10 +168,11 @@ describe("long strings (14+ chars)", () => {
   test("long strings with shared prefix", () => {
     const prefix = "shared_prefix__";
     const a = prefix + "alpha";
+    const a2 = prefix + "alpha";
     const b = prefix + "beta";
     expect(a < b).toBe(true);
     expect(b > a).toBe(true);
-    expect(a === a).toBe(true);
+    expect(a === a2).toBe(true);
   });
 });
 
@@ -184,15 +201,19 @@ describe("short vs long string comparisons", () => {
 
 describe("unicode string comparison", () => {
   test("BMP characters (accented letters)", () => {
-    expect("café" === "café").toBe(true);
-    expect("café" !== "cafe").toBe(true);
-    expect("café" === "cafe").toBe(false);
+    const a = "café";
+    const b = "café";
+    expect(a === b).toBe(true);
+    expect(a !== "cafe").toBe(true);
+    expect(a === "cafe").toBe(false);
   });
 
   test("emoji strings", () => {
-    expect("😀" === "😀").toBe(true);
-    expect("😀" !== "😁").toBe(true);
-    expect("😀" === "😁").toBe(false);
+    const a = "😀";
+    const b = "😀";
+    expect(a === b).toBe(true);
+    expect(a !== "😁").toBe(true);
+    expect(a === "😁").toBe(false);
   });
 
   test("emoji string ordering", () => {
@@ -201,20 +222,26 @@ describe("unicode string comparison", () => {
   });
 
   test("multi-emoji strings", () => {
-    expect("😀😁" === "😀😁").toBe(true);
-    expect("😀😁" !== "😀😂").toBe(true);
-    expect("😀😁" < "😀😂").toBe(true);
+    const a = "😀😁";
+    const b = "😀😁";
+    expect(a === b).toBe(true);
+    expect(a !== "😀😂").toBe(true);
+    expect(a < "😀😂").toBe(true);
   });
 
   test("CJK characters", () => {
-    expect("你好" === "你好").toBe(true);
-    expect("你好" !== "世界").toBe(true);
-    expect("你好" === "世界").toBe(false);
+    const a = "你好";
+    const b = "你好";
+    expect(a === b).toBe(true);
+    expect(a !== "世界").toBe(true);
+    expect(a === "世界").toBe(false);
   });
 
   test("mixed ASCII and unicode", () => {
-    expect("hello😀" === "hello😀").toBe(true);
-    expect("hello😀" !== "hello😁").toBe(true);
+    const a = "hello😀";
+    const b = "hello😀";
+    expect(a === b).toBe(true);
+    expect(a !== "hello😁").toBe(true);
     expect("abc" < "abé").toBe(true);
     expect("abé" > "abc").toBe(true);
   });
