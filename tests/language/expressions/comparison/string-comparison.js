@@ -40,6 +40,8 @@ describe("string relational operators with varying lengths", () => {
     expect("" < "z").toBe(true);
     expect("" < "abc").toBe(true);
     expect("a" > "").toBe(true);
+    expect("" <= "").toBe(true);
+    expect("" >= "").toBe(true);
   });
 
   test("shorter prefix is less than longer string", () => {
@@ -55,6 +57,10 @@ describe("string relational operators with varying lengths", () => {
     expect("abd" > "abc").toBe(true);
     expect("aaa" < "aab").toBe(true);
     expect("zzz" > "zzy").toBe(true);
+    expect("abc" <= "abc").toBe(true);
+    expect("abc" >= "abc").toBe(true);
+    expect("abc" <= "abd").toBe(true);
+    expect("abd" >= "abc").toBe(true);
   });
 
   test("lexicographic ordering different lengths", () => {
