@@ -412,6 +412,7 @@ begin
   Result := CompareNumbers(ALeft.ToNumberLiteral, ARight.ToNumberLiteral, True);
 end;
 
+// ES2026 §13.10.1 Runtime Semantics: Evaluation — RelationalExpression : >=
 function GreaterThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean;
 begin
   if (ALeft is TGocciaUndefinedLiteralValue) or (ARight is TGocciaUndefinedLiteralValue) then
@@ -420,7 +421,12 @@ begin
     Exit;
   end;
 
-  // NaN check after coercion
+  if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
+  begin
+    Result := TGocciaStringLiteralValue(ALeft).Value >= TGocciaStringLiteralValue(ARight).Value;
+    Exit;
+  end;
+
   if ALeft.ToNumberLiteral.IsNaN or ARight.ToNumberLiteral.IsNaN then
   begin
     Result := False;
@@ -455,6 +461,7 @@ begin
   Result := CompareNumbers(ALeft.ToNumberLiteral, ARight.ToNumberLiteral, False);
 end;
 
+// ES2026 §13.10.1 Runtime Semantics: Evaluation — RelationalExpression : <=
 function LessThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean;
 begin
   if (ALeft is TGocciaUndefinedLiteralValue) or (ARight is TGocciaUndefinedLiteralValue) then
@@ -463,7 +470,12 @@ begin
     Exit;
   end;
 
-  // NaN check after coercion
+  if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
+  begin
+    Result := TGocciaStringLiteralValue(ALeft).Value <= TGocciaStringLiteralValue(ARight).Value;
+    Exit;
+  end;
+
   if ALeft.ToNumberLiteral.IsNaN or ARight.ToNumberLiteral.IsNaN then
   begin
     Result := False;

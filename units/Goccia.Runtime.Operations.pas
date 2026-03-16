@@ -1530,7 +1530,7 @@ begin
       .Invoke(ASelf, nil, 0)
   else
     Exit;
-  Result := APrimitive.Kind <> svkReference;
+  Result := (APrimitive.Kind <> svkReference) or SouffleIsStringValue(APrimitive);
 end;
 
 function FindRecordMethod(const ARec: TSouffleRecord;
