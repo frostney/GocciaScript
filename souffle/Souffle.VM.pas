@@ -122,6 +122,13 @@ begin
   if Assigned(FGC) then
     FGC.AllocateObject(TopClosure);
 
+  // WORKAROUND: Do NOT simplify this to ExecuteFunction(TopClosure, [SouffleNil]).
+  // FPC 3.2.2 has a compiler bug (Internal error 2018042601) in its temporary
+  // register allocator that fires when a packed variant record <= 16 bytes
+  // (i.e. TSouffleValue at SOUFFLE_INLINE_STRING_MAX = 13) is passed via an
+  // inline open array constructor at -O2 or higher. Using a stack-allocated
+  // array sidesteps the bug. Safe to revisit if we upgrade past FPC 3.2.2.
+  // See: https://github.com/frostney/GocciaScript/pull/98
   Args[0] := SouffleNil;
   Result := ExecuteFunction(TopClosure, Args);
 end;
