@@ -167,8 +167,8 @@ begin
   if Assigned(GC) then
     for I := 0 to Length(FMaterializedConstants) - 1 do
       if (FMaterializedConstants[I].Kind = svkReference) and
-         Assigned(FMaterializedConstants[I].AsReference) then
-        GC.UnpinObject(FMaterializedConstants[I].AsReference);
+         Assigned(SouffleGetRef(FMaterializedConstants[I])) then
+        GC.UnpinObject(SouffleGetRef(FMaterializedConstants[I]));
   FStringConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
@@ -424,26 +424,24 @@ var
   I: Integer;
   GC: TGarbageCollector;
 begin
-  if FConstantCount > Length(FMaterializedConstants) then
-  begin
-    GC := TGarbageCollector.Instance;
+  GC := TGarbageCollector.Instance;
+  if Length(FMaterializedConstants) < FConstantCount then
     SetLength(FMaterializedConstants, FConstantCount);
-    for I := 0 to FConstantCount - 1 do
-      case FConstants[I].Kind of
-        bckNil:     FMaterializedConstants[I] := SouffleNil;
-        bckTrue:    FMaterializedConstants[I] := SouffleBoolean(True);
-        bckFalse:   FMaterializedConstants[I] := SouffleBoolean(False);
-        bckInteger: FMaterializedConstants[I] := SouffleInteger(FConstants[I].IntValue);
-        bckFloat:   FMaterializedConstants[I] := SouffleFloat(FConstants[I].FloatValue);
-        bckString:
-        begin
-          FMaterializedConstants[I] := SouffleString(FConstants[I].StringValue);
-          if (FMaterializedConstants[I].Kind = svkReference) and
-             Assigned(FMaterializedConstants[I].AsReference) and Assigned(GC) then
-            GC.PinObject(FMaterializedConstants[I].AsReference);
-        end;
+  for I := 0 to FConstantCount - 1 do
+    case FConstants[I].Kind of
+      bckNil:     FMaterializedConstants[I] := SouffleNil;
+      bckTrue:    FMaterializedConstants[I] := SouffleBoolean(True);
+      bckFalse:   FMaterializedConstants[I] := SouffleBoolean(False);
+      bckInteger: FMaterializedConstants[I] := SouffleInteger(FConstants[I].IntValue);
+      bckFloat:   FMaterializedConstants[I] := SouffleFloat(FConstants[I].FloatValue);
+      bckString:
+      begin
+        FMaterializedConstants[I] := SouffleString(FConstants[I].StringValue);
+        if (FMaterializedConstants[I].Kind = svkReference) and
+           Assigned(SouffleGetRef(FMaterializedConstants[I])) and Assigned(GC) then
+          GC.PinObject(SouffleGetRef(FMaterializedConstants[I]));
       end;
-  end;
+    end;
   for I := 0 to FFunctions.Count - 1 do
     FFunctions[I].MaterializeConstants;
 end;

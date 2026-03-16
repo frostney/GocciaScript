@@ -8,9 +8,10 @@ uses
   Souffle.Heap;
 
 const
-  SOUFFLE_INLINE_STRING_MAX = 23;
+  SOUFFLE_INLINE_STRING_MAX = 5;
   SOUFFLE_NIL_DEFAULT = 0;
   SOUFFLE_NIL_MATCH_ANY = 255;
+  SOUFFLE_POOL_INITIAL_CAPACITY = 4096;
 
 type
   TSouffleValueKind = (
@@ -32,14 +33,28 @@ type
     case TSouffleValueKind of
       svkNil:       ();
       svkBoolean:   (AsBoolean: Boolean);
-      svkInteger:   (AsInteger: Int64);
-      svkFloat:     (AsFloat: Double);
+      svkInteger:   (AsIntSlot: UInt32);
+      svkFloat:     (AsFloatSlot: UInt32);
       svkString:    (AsInlineString: TSouffleInlineString);
-      svkReference: (AsReference: TSouffleHeapObject);
+      svkReference: (AsRefSlot: UInt32);
   end;
 
   TSouffleValueArray = array of TSouffleValue;
   PSouffleValueArray = ^TSouffleValueArray;
+
+procedure SouffleInitPools;
+procedure SouffleResetPools;
+
+function SouffleGetInt(const AValue: TSouffleValue): Int64; inline;
+function SouffleGetFloat(const AValue: TSouffleValue): Double; inline;
+function SouffleGetRef(const AValue: TSouffleValue): TSouffleHeapObject; inline;
+
+function SouffleAllocInt(const AValue: Int64): UInt32; inline;
+function SouffleAllocFloat(const AValue: Double): UInt32; inline;
+function SouffleAllocRef(const AObject: TSouffleHeapObject): UInt32; inline;
+
+function SouffleRefPoolCount: UInt32; inline;
+function SouffleRefPoolEntry(const AIndex: UInt32): TSouffleHeapObject; inline;
 
 function SouffleNil: TSouffleValue; inline;
 function SouffleNilWithFlags(const AFlags: Byte): TSouffleValue; inline;
@@ -74,6 +89,113 @@ uses
 
   GarbageCollector.Generic;
 
+var
+  GIntPool: array of Int64;
+  GIntPoolCount: UInt32;
+  GFloatPool: array of Double;
+  GFloatPoolCount: UInt32;
+  GRefPool: array of TSouffleHeapObject;
+  GRefPoolCount: UInt32;
+
+{ Pool lifecycle }
+
+procedure GrowIntPool;
+begin
+  if Length(GIntPool) = 0 then
+    SetLength(GIntPool, SOUFFLE_POOL_INITIAL_CAPACITY)
+  else
+    SetLength(GIntPool, Length(GIntPool) * 2);
+end;
+
+procedure GrowFloatPool;
+begin
+  if Length(GFloatPool) = 0 then
+    SetLength(GFloatPool, SOUFFLE_POOL_INITIAL_CAPACITY)
+  else
+    SetLength(GFloatPool, Length(GFloatPool) * 2);
+end;
+
+procedure GrowRefPool;
+begin
+  if Length(GRefPool) = 0 then
+    SetLength(GRefPool, SOUFFLE_POOL_INITIAL_CAPACITY)
+  else
+    SetLength(GRefPool, Length(GRefPool) * 2);
+end;
+
+procedure SouffleInitPools;
+begin
+  SetLength(GIntPool, SOUFFLE_POOL_INITIAL_CAPACITY);
+  GIntPoolCount := 0;
+  SetLength(GFloatPool, SOUFFLE_POOL_INITIAL_CAPACITY);
+  GFloatPoolCount := 0;
+  SetLength(GRefPool, SOUFFLE_POOL_INITIAL_CAPACITY);
+  GRefPoolCount := 0;
+end;
+
+procedure SouffleResetPools;
+begin
+  GIntPoolCount := 0;
+  GFloatPoolCount := 0;
+  GRefPoolCount := 0;
+end;
+
+{ Pool allocators }
+
+function SouffleAllocInt(const AValue: Int64): UInt32;
+begin
+  Result := GIntPoolCount;
+  if Result >= UInt32(Length(GIntPool)) then
+    GrowIntPool;
+  GIntPool[Result] := AValue;
+  Inc(GIntPoolCount);
+end;
+
+function SouffleAllocFloat(const AValue: Double): UInt32;
+begin
+  Result := GFloatPoolCount;
+  if Result >= UInt32(Length(GFloatPool)) then
+    GrowFloatPool;
+  GFloatPool[Result] := AValue;
+  Inc(GFloatPoolCount);
+end;
+
+function SouffleAllocRef(const AObject: TSouffleHeapObject): UInt32;
+begin
+  Result := GRefPoolCount;
+  if Result >= UInt32(Length(GRefPool)) then
+    GrowRefPool;
+  GRefPool[Result] := AObject;
+  Inc(GRefPoolCount);
+end;
+
+{ Pool accessors }
+
+function SouffleGetInt(const AValue: TSouffleValue): Int64;
+begin
+  Result := GIntPool[AValue.AsIntSlot];
+end;
+
+function SouffleGetFloat(const AValue: TSouffleValue): Double;
+begin
+  Result := GFloatPool[AValue.AsFloatSlot];
+end;
+
+function SouffleGetRef(const AValue: TSouffleValue): TSouffleHeapObject;
+begin
+  Result := GRefPool[AValue.AsRefSlot];
+end;
+
+function SouffleRefPoolCount: UInt32;
+begin
+  Result := GRefPoolCount;
+end;
+
+function SouffleRefPoolEntry(const AIndex: UInt32): TSouffleHeapObject;
+begin
+  Result := GRefPool[AIndex];
+end;
+
 { Value constructors }
 
 function SouffleNil: TSouffleValue;
@@ -99,14 +221,14 @@ function SouffleInteger(const AValue: Int64): TSouffleValue;
 begin
   Result.Kind := svkInteger;
   Result.Flags := 0;
-  Result.AsInteger := AValue;
+  Result.AsIntSlot := SouffleAllocInt(AValue);
 end;
 
 function SouffleFloat(const AValue: Double): TSouffleValue;
 begin
   Result.Kind := svkFloat;
   Result.Flags := 0;
-  Result.AsFloat := AValue;
+  Result.AsFloatSlot := SouffleAllocFloat(AValue);
 end;
 
 function SouffleString(const AValue: string): TSouffleValue;
@@ -127,7 +249,7 @@ begin
     if Assigned(GC) then
       GC.AllocateObject(HeapStr);
     Result.Kind := svkReference;
-    Result.AsReference := HeapStr;
+    Result.AsRefSlot := SouffleAllocRef(HeapStr);
   end;
 end;
 
@@ -135,7 +257,7 @@ function SouffleReference(const AObject: TSouffleHeapObject): TSouffleValue;
 begin
   Result.Kind := svkReference;
   Result.Flags := 0;
-  Result.AsReference := AObject;
+  Result.AsRefSlot := SouffleAllocRef(AObject);
 end;
 
 { Type checks }
@@ -178,12 +300,15 @@ end;
 function SouffleIsStringValue(const AValue: TSouffleValue): Boolean;
 begin
   Result := (AValue.Kind = svkString) or
-    ((AValue.Kind = svkReference) and (AValue.AsReference is TSouffleHeapString));
+    ((AValue.Kind = svkReference) and
+     (GRefPool[AValue.AsRefSlot] is TSouffleHeapString));
 end;
 
 { Truthiness -- universal semantics used by JUMP_IF_TRUE/JUMP_IF_FALSE }
 
 function SouffleIsTrue(const AValue: TSouffleValue): Boolean;
+var
+  F: Double;
 begin
   case AValue.Kind of
     svkNil:
@@ -191,13 +316,16 @@ begin
     svkBoolean:
       Result := AValue.AsBoolean;
     svkInteger:
-      Result := AValue.AsInteger <> 0;
+      Result := GIntPool[AValue.AsIntSlot] <> 0;
     svkFloat:
-      Result := (AValue.AsFloat <> 0.0) and not IsNaN(AValue.AsFloat);
+      begin
+        F := GFloatPool[AValue.AsFloatSlot];
+        Result := (F <> 0.0) and not IsNaN(F);
+      end;
     svkString:
       Result := AValue.AsInlineString <> '';
     svkReference:
-      Result := Assigned(AValue.AsReference);
+      Result := Assigned(GRefPool[AValue.AsRefSlot]);
   else
     Result := False;
   end;
@@ -209,9 +337,9 @@ function SouffleAsNumber(const AValue: TSouffleValue): Double;
 begin
   case AValue.Kind of
     svkInteger:
-      Result := AValue.AsInteger;
+      Result := GIntPool[AValue.AsIntSlot];
     svkFloat:
-      Result := AValue.AsFloat;
+      Result := GFloatPool[AValue.AsFloatSlot];
   else
     Result := NaN;
   end;
@@ -220,9 +348,9 @@ end;
 function SouffleToDouble(const AValue: TSouffleValue): Double;
 begin
   if AValue.Kind = svkFloat then
-    Result := AValue.AsFloat
+    Result := GFloatPool[AValue.AsFloatSlot]
   else if AValue.Kind = svkInteger then
-    Result := AValue.AsInteger * 1.0
+    Result := GIntPool[AValue.AsIntSlot] * 1.0
   else
   begin
     {$IFDEF DEBUG}
@@ -236,11 +364,19 @@ end;
 { String access -- handles both inline (svkString) and heap (TSouffleHeapString) }
 
 function SouffleGetString(const AValue: TSouffleValue): string;
+var
+  Ref: TSouffleHeapObject;
 begin
   if AValue.Kind = svkString then
     Result := AValue.AsInlineString
-  else if (AValue.Kind = svkReference) and (AValue.AsReference is TSouffleHeapString) then
-    Result := TSouffleHeapString(AValue.AsReference).Value
+  else if AValue.Kind = svkReference then
+  begin
+    Ref := GRefPool[AValue.AsRefSlot];
+    if Ref is TSouffleHeapString then
+      Result := TSouffleHeapString(Ref).Value
+    else
+      Result := '';
+  end
   else
     Result := '';
 end;
@@ -248,6 +384,8 @@ end;
 { Identity equality for core operations }
 
 function SouffleValuesEqual(const A, B: TSouffleValue): Boolean;
+var
+  RefA, RefB: TSouffleHeapObject;
 begin
   if A.Kind <> B.Kind then
   begin
@@ -262,13 +400,21 @@ begin
     svkBoolean:
       Result := A.AsBoolean = B.AsBoolean;
     svkInteger:
-      Result := A.AsInteger = B.AsInteger;
+      Result := GIntPool[A.AsIntSlot] = GIntPool[B.AsIntSlot];
     svkFloat:
-      Result := A.AsFloat = B.AsFloat;
+      Result := GFloatPool[A.AsFloatSlot] = GFloatPool[B.AsFloatSlot];
     svkString:
       Result := A.AsInlineString = B.AsInlineString;
     svkReference:
-      Result := A.AsReference = B.AsReference;
+      begin
+        RefA := GRefPool[A.AsRefSlot];
+        RefB := GRefPool[B.AsRefSlot];
+        if (RefA is TSouffleHeapString) and (RefB is TSouffleHeapString) then
+          Result := TSouffleHeapString(RefA).Value =
+            TSouffleHeapString(RefB).Value
+        else
+          Result := RefA = RefB;
+      end;
   else
     Result := False;
   end;
@@ -277,6 +423,9 @@ end;
 { Debug string representation }
 
 function SouffleValueToString(const AValue: TSouffleValue): string;
+var
+  F: Double;
+  Ref: TSouffleHeapObject;
 begin
   case AValue.Kind of
     svkNil:
@@ -287,33 +436,42 @@ begin
       else
         Result := 'false';
     svkInteger:
-      Result := IntToStr(AValue.AsInteger);
+      Result := IntToStr(GIntPool[AValue.AsIntSlot]);
     svkFloat:
-      if IsNaN(AValue.AsFloat) then
-        Result := 'NaN'
-      else if IsInfinite(AValue.AsFloat) then
       begin
-        if AValue.AsFloat > 0 then
-          Result := 'Infinity'
+        F := GFloatPool[AValue.AsFloatSlot];
+        if IsNaN(F) then
+          Result := 'NaN'
+        else if IsInfinite(F) then
+        begin
+          if F > 0 then
+            Result := 'Infinity'
+          else
+            Result := '-Infinity';
+        end
+        else if (Frac(F) = 0.0) and (Abs(F) < 1e20) then
+          Result := FloatToStrF(F, ffFixed, 20, 0)
         else
-          Result := '-Infinity';
-      end
-      else if (Frac(AValue.AsFloat) = 0.0) and (Abs(AValue.AsFloat) < 1e20) then
-        Result := FloatToStrF(AValue.AsFloat, ffFixed, 20, 0)
-      else
-        Result := FloatToStr(AValue.AsFloat);
+          Result := FloatToStr(F);
+      end;
     svkString:
       Result := AValue.AsInlineString;
     svkReference:
-      if AValue.AsReference is TSouffleHeapString then
-        Result := TSouffleHeapString(AValue.AsReference).Value
-      else if Assigned(AValue.AsReference) then
-        Result := AValue.AsReference.DebugString
-      else
-        Result := 'nil';
+      begin
+        Ref := GRefPool[AValue.AsRefSlot];
+        if Ref is TSouffleHeapString then
+          Result := TSouffleHeapString(Ref).Value
+        else if Assigned(Ref) then
+          Result := Ref.DebugString
+        else
+          Result := 'nil';
+      end;
   else
     Result := '<unknown>';
   end;
 end;
+
+initialization
+  SouffleInitPools;
 
 end.

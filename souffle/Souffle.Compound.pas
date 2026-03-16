@@ -257,9 +257,9 @@ var
 begin
   inherited;
   for I := 0 to FCount - 1 do
-    if SouffleIsReference(FElements[I]) and Assigned(FElements[I].AsReference)
-      and not FElements[I].AsReference.GCMarked then
-      FElements[I].AsReference.MarkReferences;
+    if SouffleIsReference(FElements[I]) and Assigned(SouffleGetRef(FElements[I]))
+      and not SouffleGetRef(FElements[I]).GCMarked then
+      SouffleGetRef(FElements[I]).MarkReferences;
 end;
 
 function TSouffleArray.DebugString: string;
@@ -711,15 +711,15 @@ begin
   for I := 0 to FCapacity - 1 do
     if FEntries[I].Occupied and
        SouffleIsReference(FEntries[I].Value) and
-       Assigned(FEntries[I].Value.AsReference) and
-       not FEntries[I].Value.AsReference.GCMarked then
-      FEntries[I].Value.AsReference.MarkReferences;
+       Assigned(SouffleGetRef(FEntries[I].Value)) and
+       not SouffleGetRef(FEntries[I].Value).GCMarked then
+      SouffleGetRef(FEntries[I].Value).MarkReferences;
   if Assigned(FBlueprint) and not FBlueprint.GCMarked then
     FBlueprint.MarkReferences;
   for I := 0 to High(FSlots) do
-    if SouffleIsReference(FSlots[I]) and Assigned(FSlots[I].AsReference)
-      and not FSlots[I].AsReference.GCMarked then
-      FSlots[I].AsReference.MarkReferences;
+    if SouffleIsReference(FSlots[I]) and Assigned(SouffleGetRef(FSlots[I]))
+      and not SouffleGetRef(FSlots[I]).GCMarked then
+      SouffleGetRef(FSlots[I]).MarkReferences;
   if Assigned(FGetters) and not FGetters.GCMarked then
     FGetters.MarkReferences;
   if Assigned(FSetters) and not FSetters.GCMarked then

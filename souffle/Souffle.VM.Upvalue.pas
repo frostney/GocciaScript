@@ -55,8 +55,8 @@ begin
   if GCMarked then Exit;
   inherited;
   if not FIsOpen and SouffleIsReference(FClosed) and
-     Assigned(FClosed.AsReference) then
-    FClosed.AsReference.MarkReferences;
+     Assigned(SouffleGetRef(FClosed)) then
+    SouffleGetRef(FClosed).MarkReferences;
   if Assigned(FNext) then
     FNext.MarkReferences;
 end;
