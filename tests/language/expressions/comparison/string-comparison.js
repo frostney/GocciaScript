@@ -90,7 +90,7 @@ describe("short strings (1-5 chars)", () => {
   });
 });
 
-describe("medium strings (6-13 chars)", () => {
+describe("medium length strings", () => {
   test("6-char strings", () => {
     const a = "abcdef";
     const b = "abcdef";
@@ -109,7 +109,7 @@ describe("medium strings (6-13 chars)", () => {
     expect(a !== c).toBe(true);
   });
 
-  test("13-char strings at inline boundary", () => {
+  test("13-char strings", () => {
     const a = "abcdefghijklm";
     const b = "abcdefghijklm";
     const c = "abcdefghijkln";
@@ -120,8 +120,8 @@ describe("medium strings (6-13 chars)", () => {
   });
 });
 
-describe("long strings (14+ chars, exceeding inline threshold)", () => {
-  test("14-char strings just past boundary", () => {
+describe("long strings (14+ chars)", () => {
+  test("14-char strings", () => {
     const a = "abcdefghijklmn";
     const b = "abcdefghijklmn";
     const c = "abcdefghijklmo";
@@ -159,7 +159,7 @@ describe("long strings (14+ chars, exceeding inline threshold)", () => {
   });
 });
 
-describe("cross-boundary comparisons (inline vs heap)", () => {
+describe("short vs long string comparisons", () => {
   test("short vs long string equality", () => {
     expect("abc" === "abcdefghijklmn").toBe(false);
     expect("abcdefghijklmn" === "abc").toBe(false);
@@ -172,13 +172,13 @@ describe("cross-boundary comparisons (inline vs heap)", () => {
     expect("abcdefghijklmn" < "z").toBe(true);
   });
 
-  test("13-char vs 14-char boundary crossing", () => {
-    const inline = "abcdefghijklm";
-    const heap = "abcdefghijklmn";
-    expect(inline === heap).toBe(false);
-    expect(inline < heap).toBe(true);
-    expect(heap > inline).toBe(true);
-    expect(inline !== heap).toBe(true);
+  test("13-char vs 14-char strings", () => {
+    const shorter = "abcdefghijklm";
+    const longer = "abcdefghijklmn";
+    expect(shorter === longer).toBe(false);
+    expect(shorter < longer).toBe(true);
+    expect(longer > shorter).toBe(true);
+    expect(shorter !== longer).toBe(true);
   });
 });
 
@@ -226,20 +226,20 @@ describe("unicode string comparison", () => {
   });
 });
 
-describe("unicode strings at length boundaries", () => {
-  test("unicode strings near inline threshold", () => {
+describe("unicode strings of varying lengths", () => {
+  test("short unicode strings", () => {
     const shortUnicode = "héllo wörld";
     expect(shortUnicode === "héllo wörld").toBe(true);
   });
 
-  test("long unicode strings exceeding inline threshold", () => {
+  test("long unicode strings", () => {
     const a = "café résumé naïve";
     const b = "café résumé naïve";
     expect(a === b).toBe(true);
     expect(a !== b).toBe(false);
   });
 
-  test("emoji-heavy strings exceeding inline threshold", () => {
+  test("emoji-heavy strings", () => {
     const a = "🌍🌎🌏🌐";
     const b = "🌍🌎🌏🌐";
     const c = "🌍🌎🌏🌑";
