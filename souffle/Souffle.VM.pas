@@ -112,6 +112,7 @@ end;
 function TSouffleVM.Execute(const AModule: TSouffleBytecodeModule): TSouffleValue;
 var
   TopClosure: TSouffleClosure;
+  Args: array[0..0] of TSouffleValue;
 begin
   if not Assigned(AModule.TopLevel) then
     Exit(SouffleNil);
@@ -121,7 +122,8 @@ begin
   if Assigned(FGC) then
     FGC.AllocateObject(TopClosure);
 
-  Result := ExecuteFunction(TopClosure, [SouffleNil]);
+  Args[0] := SouffleNil;
+  Result := ExecuteFunction(TopClosure, Args);
 end;
 
 function TSouffleVM.ExecuteFunction(const AClosure: TSouffleClosure;
