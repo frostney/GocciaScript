@@ -66,6 +66,7 @@ constructor TGocciaSouffleBackend.Create(const ASourcePath: string);
 begin
   inherited Create;
   TGarbageCollector.Initialize;
+  SouffleResetPools;
   FSourcePath := ASourcePath;
   FRuntime := TGocciaRuntimeOperations.Create;
   FVM := TSouffleVM.Create(FRuntime);
