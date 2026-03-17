@@ -177,10 +177,10 @@ The codebase provides purpose-built hash maps that replace `TDictionary` on hot 
 
 | Use case | Map type | Notes |
 |----------|----------|-------|
-| String keys, insertion order | `TOrderedStringMap<V>` | 4–6× faster inserts than `TDictionary` at N=20–100; standalone class (no `TBaseMap` inheritance) for cross-unit VMT safety |
+| String keys, insertion order | `TOrderedStringMap<V>` | 4–6× faster inserts than `TDictionary` at N=20–100; `static inline` DJB2 hash/equality |
 | Generic keys, insertion order | `TOrderedMap<K,V>` | Virtual `HashKey`/`KeysEqual`; default: DJB2 over raw key bytes |
 | Any key, unordered | `THashMap<K,V>` | Backshift deletion (no tombstones); `static inline` hash/equality; 2× faster inserts for pointer keys |
-| Scope bindings | `TScopeMap<V>` | Linear scan + parent chain walking; optimal for <20 bindings |
+| Scope bindings | `TOrderedStringMap<V>` | Hash-based O(1) lookup per scope level; chain walking in `TGocciaScope` |
 | Cold-path / diagnostic | `TDictionary<K,V>` | Acceptable where performance is not critical |
 
 **Never use** `TFPDataHashTable` — it has catastrophic insert performance (400,000 ns/insert vs 50 ns for `TOrderedStringMap` at N=20). See [spikes/fpc-hashmap-performance.pdf](spikes/fpc-hashmap-performance.pdf) for the full benchmark analysis.

@@ -313,7 +313,12 @@ var
   I: Integer;
 begin
   for I := 0 to FCapacity - 1 do
-    FSlots[I].Used := False;
+    if FSlots[I].Used then
+    begin
+      FSlots[I].Key := Default(TKey);
+      FSlots[I].Value := Default(TValue);
+      FSlots[I].Used := False;
+    end;
   FCount := 0;
 end;
 
