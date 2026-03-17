@@ -14,3 +14,17 @@ test("simple class creation", () => {
   expect(person.name).toBe("Alice");
   expect(person instanceof Person).toBeTruthy();
 });
+
+test("class reference preserves instanceof", () => {
+  class MyClass {
+    constructor(x) {
+      this.x = x;
+    }
+  }
+
+  const ClassRef = MyClass;
+  const obj = new ClassRef(42);
+  expect(obj instanceof MyClass).toBe(true);
+  expect(obj instanceof ClassRef).toBe(true);
+  expect(obj.x).toBe(42);
+});

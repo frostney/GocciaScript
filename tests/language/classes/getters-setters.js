@@ -3,6 +3,30 @@ description: Class getters and setters work correctly (instance and static)
 features: [class-getters, class-setters, static-getters, static-setters]
 ---*/
 
+test("getters and setters with private backing field", () => {
+  class Box {
+    #value;
+
+    constructor(v) {
+      this.#value = v;
+    }
+
+    get contents() {
+      return this.#value;
+    }
+
+    set contents(v) {
+      this.#value = v;
+    }
+  }
+
+  const b = new Box(10);
+  expect(b.contents).toBe(10);
+  b.contents = 20;
+  expect(b.contents).toBe(20);
+  expect(b instanceof Box).toBe(true);
+});
+
 test("basic getters and setters", () => {
   class Rectangle {
     constructor(width, height) {
