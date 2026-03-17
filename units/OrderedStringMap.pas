@@ -122,7 +122,7 @@ var
 begin
   Result := False;
   FirstDeleted := -1;
-  Idx := AHash mod Cardinal(FBucketCount);
+  Idx := AHash and Cardinal(FBucketCount - 1);
 
   while True do
   begin
@@ -151,7 +151,7 @@ begin
       Exit;
     end;
 
-    Idx := (Idx + 1) mod FBucketCount;
+    Idx := (Idx + 1) and (FBucketCount - 1);
   end;
 end;
 
@@ -179,9 +179,9 @@ begin
   for I := 0 to FEntryCount - 1 do
     if FEntries[I].Active then
     begin
-      Idx := FEntries[I].Hash mod Cardinal(FBucketCount);
+      Idx := FEntries[I].Hash and Cardinal(FBucketCount - 1);
       while FBuckets[Idx] >= 0 do
-        Idx := (Idx + 1) mod FBucketCount;
+        Idx := (Idx + 1) and (FBucketCount - 1);
       FBuckets[Idx] := I;
     end;
 end;

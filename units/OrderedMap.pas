@@ -105,17 +105,39 @@ function TOrderedMap<TKey, TValue>.HashKey(const AKey: TKey): Cardinal;
 var
   P: PByte;
   I: Integer;
+  V4: Cardinal;
+  V8: QWord;
 begin
-  Result := 5381;
-  P := @AKey;
-  for I := 0 to SizeOf(TKey) - 1 do
-    Result := Result * 33 + P[I];
+  if SizeOf(TKey) = SizeOf(QWord) then
+  begin
+    Move(AKey, V8, 8);
+    V8 := (V8 xor (V8 shr 4)) * QWord(11400714819323198485);
+    Result := Cardinal(V8 xor (V8 shr 32));
+  end
+  else if SizeOf(TKey) = SizeOf(Cardinal) then
+  begin
+    Move(AKey, V4, 4);
+    V4 := V4 * Cardinal(2654435761);
+    Result := V4;
+  end
+  else
+  begin
+    Result := 5381;
+    P := @AKey;
+    for I := 0 to SizeOf(TKey) - 1 do
+      Result := Result * 33 + P[I];
+  end;
 end;
 {$POP}
 
 function TOrderedMap<TKey, TValue>.KeysEqual(const A, B: TKey): Boolean;
 begin
-  Result := CompareMem(@A, @B, SizeOf(TKey));
+  if SizeOf(TKey) = SizeOf(QWord) then
+    Result := PQWord(@A)^ = PQWord(@B)^
+  else if SizeOf(TKey) = SizeOf(Cardinal) then
+    Result := PCardinal(@A)^ = PCardinal(@B)^
+  else
+    Result := CompareMem(@A, @B, SizeOf(TKey));
 end;
 
 { Probe }
@@ -127,7 +149,7 @@ var
 begin
   Result := False;
   FirstDeleted := -1;
-  Idx := AHash mod Cardinal(FBucketCount);
+  Idx := AHash and Cardinal(FBucketCount - 1);
 
   while True do
   begin
@@ -156,7 +178,7 @@ begin
       Exit;
     end;
 
-    Idx := (Idx + 1) mod FBucketCount;
+    Idx := (Idx + 1) and (FBucketCount - 1);
   end;
 end;
 
@@ -184,9 +206,9 @@ begin
   for I := 0 to FEntryCount - 1 do
     if FEntries[I].Active then
     begin
-      Idx := FEntries[I].Hash mod Cardinal(FBucketCount);
+      Idx := FEntries[I].Hash and Cardinal(FBucketCount - 1);
       while FBuckets[Idx] >= 0 do
-        Idx := (Idx + 1) mod FBucketCount;
+        Idx := (Idx + 1) and (FBucketCount - 1);
       FBuckets[Idx] := I;
     end;
 end;

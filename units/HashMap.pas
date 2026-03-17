@@ -84,24 +84,50 @@ type
 
 implementation
 
-{ Hash / Equality — static inline: DJB2 over raw key bytes }
+{ Hash / Equality — static inline, specialized by key size.
+  Pointer-sized keys use a single multiplicative hash instead of
+  byte-by-byte DJB2, and direct integer comparison instead of
+  CompareMem.  FPC constant-folds SizeOf(TKey) after specialization,
+  so the unused branches are eliminated at compile time. }
 
 {$PUSH}{$R-}{$Q-}
 class function THashMap<TKey, TValue>.HashKey(const AKey: TKey): Cardinal;
 var
   P: PByte;
   I: Integer;
+  V4: Cardinal;
+  V8: QWord;
 begin
-  Result := 5381;
-  P := @AKey;
-  for I := 0 to SizeOf(TKey) - 1 do
-    Result := Result * 33 + P[I];
+  if SizeOf(TKey) = SizeOf(QWord) then
+  begin
+    Move(AKey, V8, 8);
+    V8 := (V8 xor (V8 shr 4)) * QWord(11400714819323198485);
+    Result := Cardinal(V8 xor (V8 shr 32));
+  end
+  else if SizeOf(TKey) = SizeOf(Cardinal) then
+  begin
+    Move(AKey, V4, 4);
+    V4 := V4 * Cardinal(2654435761);
+    Result := V4;
+  end
+  else
+  begin
+    Result := 5381;
+    P := @AKey;
+    for I := 0 to SizeOf(TKey) - 1 do
+      Result := Result * 33 + P[I];
+  end;
 end;
 {$POP}
 
 class function THashMap<TKey, TValue>.KeysEqual(const A, B: TKey): Boolean;
 begin
-  Result := CompareMem(@A, @B, SizeOf(TKey));
+  if SizeOf(TKey) = SizeOf(QWord) then
+    Result := PQWord(@A)^ = PQWord(@B)^
+  else if SizeOf(TKey) = SizeOf(Cardinal) then
+    Result := PCardinal(@A)^ = PCardinal(@B)^
+  else
+    Result := CompareMem(@A, @B, SizeOf(TKey));
 end;
 
 { Slot lookup }
@@ -111,7 +137,7 @@ function THashMap<TKey, TValue>.FindSlot(const AKey: TKey;
 var
   Idx: Integer;
 begin
-  Idx := Integer(AHash mod Cardinal(FCapacity));
+  Idx := Integer(AHash and Cardinal(FCapacity - 1));
   while FSlots[Idx].Used do
   begin
     if (FSlots[Idx].Hash = AHash) and KeysEqual(FSlots[Idx].Key, AKey) then
@@ -119,7 +145,7 @@ begin
       Result := Idx;
       Exit;
     end;
-    Idx := (Idx + 1) mod FCapacity;
+    Idx := (Idx + 1) and (FCapacity - 1);
   end;
   Result := Idx;
 end;
@@ -147,9 +173,9 @@ procedure THashMap<TKey, TValue>.Reinsert(const ASlot: TSlot);
 var
   Idx: Integer;
 begin
-  Idx := Integer(ASlot.Hash mod Cardinal(FCapacity));
+  Idx := Integer(ASlot.Hash and Cardinal(FCapacity - 1));
   while FSlots[Idx].Used do
-    Idx := (Idx + 1) mod FCapacity;
+    Idx := (Idx + 1) and (FCapacity - 1);
   FSlots[Idx] := ASlot;
   Inc(FCount);
 end;
@@ -262,11 +288,11 @@ begin
   J := Idx;
   while True do
   begin
-    J := (J + 1) mod FCapacity;
+    J := (J + 1) and (FCapacity - 1);
     if not FSlots[J].Used then
       Break;
 
-    K := Integer(FSlots[J].Hash mod Cardinal(FCapacity));
+    K := Integer(FSlots[J].Hash and Cardinal(FCapacity - 1));
 
     { Shift if K is NOT in the range (Idx, J] (circular) — i.e. the
       entry at J had to probe past Idx to reach its current slot }
