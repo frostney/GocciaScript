@@ -126,8 +126,11 @@ begin
   // FPC 3.2.2 has a compiler bug (Internal error 2018042601) in its temporary
   // register allocator that fires when a packed variant record <= 16 bytes
   // (i.e. TSouffleValue at SOUFFLE_INLINE_STRING_MAX = 13) is passed via an
-  // inline open array constructor at -O2 or higher. Using a stack-allocated
-  // array sidesteps the bug. Safe to revisit if we upgrade past FPC 3.2.2.
+  // inline open array constructor at -O2 or higher. The bug is aarch64-specific
+  // — x86_64 builds (including Ubuntu CI) are unaffected because the x64 code
+  // generator uses a different register allocation path for open array temps.
+  // Using a stack-allocated array sidesteps the bug on all targets.
+  // Safe to revisit if we upgrade past FPC 3.2.2.
   // See: https://github.com/frostney/GocciaScript/pull/98
   Args[0] := SouffleNil;
   Result := ExecuteFunction(TopClosure, Args);
