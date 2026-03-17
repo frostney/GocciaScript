@@ -1482,9 +1482,6 @@ procedure SyncScopeToGlobals(const ARuntime: TGocciaRuntimeOperations;
   const AScope: TGocciaScope); forward;
 
 
-function BlueprintToClassValue(const ABlueprint: TSouffleBlueprint;
-  const ARuntime: TGocciaRuntimeOperations): TGocciaClassValue; forward;
-
 function ConvertBlueprintToClassValue(const ABp: TSouffleBlueprint;
   const ARuntime: TGocciaRuntimeOperations): TGocciaClassValue; forward;
 
@@ -1804,7 +1801,7 @@ begin
       begin
         if not FBlueprintBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
         begin
-          CachedBridge := BlueprintToClassValue(
+          CachedBridge := ConvertBlueprintToClassValue(
             TSouffleBlueprint(AValue.AsReference), Self);
           FBlueprintBridgeCache.Add(AValue.AsReference, CachedBridge);
         end;
@@ -7770,41 +7767,6 @@ begin
     PropVal := GocciaVal.GetProperty(AMethodName);
     if Assigned(PropVal) then
       Result := ToSouffleValue(PropVal);
-  end;
-end;
-
-function BlueprintToClassValue(const ABlueprint: TSouffleBlueprint;
-  const ARuntime: TGocciaRuntimeOperations): TGocciaClassValue;
-var
-  SuperClass: TGocciaClassValue;
-  GocciaSuperVal: TGocciaValue;
-  WrappedSuperVal: TSouffleValue;
-  I: Integer;
-  Key: string;
-  MethodVal: TSouffleValue;
-  Bridge: TGocciaSouffleMethodBridge;
-begin
-  SuperClass := nil;
-  if Assigned(ABlueprint.SuperBlueprint) then
-    SuperClass := BlueprintToClassValue(ABlueprint.SuperBlueprint, ARuntime)
-  else if ARuntime.FBlueprintSuperValues.TryGetValue(ABlueprint, WrappedSuperVal) then
-  begin
-    GocciaSuperVal := ARuntime.UnwrapToGocciaValue(WrappedSuperVal);
-    if GocciaSuperVal is TGocciaClassValue then
-      SuperClass := TGocciaClassValue(GocciaSuperVal);
-  end;
-  Result := TGocciaClassValue.Create(ABlueprint.Name, SuperClass);
-  for I := 0 to ABlueprint.Methods.Count - 1 do
-  begin
-    Key := ABlueprint.Methods.GetOrderedKey(I);
-    MethodVal := ABlueprint.Methods.GetOrderedValue(I);
-    if SouffleIsReference(MethodVal) and
-       (MethodVal.AsReference is TSouffleClosure) then
-    begin
-      Bridge := TGocciaSouffleMethodBridge.Create(
-        TSouffleClosure(MethodVal.AsReference), ARuntime);
-      Result.AddMethod(Key, Bridge);
-    end;
   end;
 end;
 
