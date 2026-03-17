@@ -3292,8 +3292,10 @@ begin
   begin
     Bp := TSouffleBlueprint(AConstructor.AsReference);
 
-    if Assigned(Bp.SuperBlueprint) or
-       not FBlueprintSuperValues.ContainsKey(Bp) then
+    WalkBp := Bp;
+    while Assigned(WalkBp.SuperBlueprint) do
+      WalkBp := WalkBp.SuperBlueprint;
+    if not FBlueprintSuperValues.ContainsKey(WalkBp) then
     begin
       Rec := TSouffleRecord.CreateFromBlueprint(Bp);
       Rec.Delegate := Bp.Prototype;
@@ -3407,6 +3409,7 @@ begin
 
         SyncArraysBack(Self, Context.Scope);
         FArrayBridgeCache.Clear;
+        FArrayBridgeDirty := False;
 
         if Assigned(GocciaResult) then
           Result := ToSouffleValue(GocciaResult)
