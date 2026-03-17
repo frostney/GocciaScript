@@ -3311,6 +3311,8 @@ begin
             else if Assigned(FVM) then
               WalkBp.Methods.Delegate := FVM.RecordDelegate;
           end;
+          if not WalkBp.Prototype.Get(PROP_CONSTRUCTOR, CtorMethod) then
+            WalkBp.Prototype.Put(PROP_CONSTRUCTOR, SouffleReference(WalkBp));
           WalkBp := WalkBp.SuperBlueprint;
         end;
       end;

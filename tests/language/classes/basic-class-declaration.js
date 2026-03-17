@@ -15,6 +15,38 @@ test("simple class creation", () => {
   expect(person instanceof Person).toBeTruthy();
 });
 
+test("instance.constructor points to class", () => {
+  class Foo {
+    constructor() {
+      this.name = "foo";
+    }
+  }
+
+  const f = new Foo();
+  expect(f.constructor === Foo).toBe(true);
+});
+
+test("instance.constructor follows inheritance chain", () => {
+  class Base {
+    constructor() {
+      this.base = true;
+    }
+  }
+
+  class Child extends Base {
+    constructor() {
+      super();
+      this.child = true;
+    }
+  }
+
+  const b = new Base();
+  const c = new Child();
+  expect(b.constructor === Base).toBe(true);
+  expect(c.constructor === Child).toBe(true);
+  expect(c.constructor === Base).toBe(false);
+});
+
 test("class reference preserves instanceof", () => {
   class MyClass {
     constructor(x) {
