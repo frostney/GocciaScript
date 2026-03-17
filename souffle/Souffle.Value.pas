@@ -8,7 +8,7 @@ uses
   Souffle.Heap;
 
 const
-  SOUFFLE_INLINE_STRING_MAX = 23;
+  SOUFFLE_INLINE_STRING_MAX = 13;
   SOUFFLE_NIL_DEFAULT = 0;
   SOUFFLE_NIL_MATCH_ANY = 255;
 
@@ -58,7 +58,7 @@ function SouffleIsReference(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsNumeric(const AValue: TSouffleValue): Boolean; inline;
 function SouffleIsStringValue(const AValue: TSouffleValue): Boolean; inline;
 
-function SouffleIsTrue(const AValue: TSouffleValue): Boolean;
+function SouffleIsTrue(const AValue: TSouffleValue): Boolean; inline;
 function SouffleAsNumber(const AValue: TSouffleValue): Double; inline;
 function SouffleToDouble(const AValue: TSouffleValue): Double; inline;
 function SouffleGetString(const AValue: TSouffleValue): string;
@@ -268,7 +268,12 @@ begin
     svkString:
       Result := A.AsInlineString = B.AsInlineString;
     svkReference:
-      Result := A.AsReference = B.AsReference;
+      if (A.AsReference is TSouffleHeapString) and
+         (B.AsReference is TSouffleHeapString) then
+        Result := TSouffleHeapString(A.AsReference).Value =
+          TSouffleHeapString(B.AsReference).Value
+      else
+        Result := A.AsReference = B.AsReference;
   else
     Result := False;
   end;

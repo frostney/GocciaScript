@@ -5,7 +5,6 @@ unit Goccia.Compiler;
 interface
 
 uses
-  OrderedStringMap,
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Module,
 
@@ -16,12 +15,6 @@ uses
   Goccia.Compiler.Scope;
 
 type
-  TGocciaCompilerClassEntry = record
-    ClassDeclaration: TGocciaClassDeclaration;
-    Line: Integer;
-    Column: Integer;
-  end;
-
   TGocciaCompiler = class
   private
     FModule: TSouffleBytecodeModule;
@@ -29,12 +22,6 @@ type
     FCurrentScope: TGocciaCompilerScope;
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
-    FPendingClasses: array of TGocciaCompilerClassEntry;
-    FPendingClassNames: TOrderedStringMap<Boolean>;
-
-    function ShouldDeferClass(
-      const AClassDef: TGocciaClassDefinition): Boolean;
-
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt8);
     procedure DoCompileStatement(const AStmt: TGocciaStatement);
@@ -47,8 +34,6 @@ type
     destructor Destroy; override;
 
     function Compile(const AProgram: TGocciaProgram): TSouffleBytecodeModule;
-    function PendingClassCount: Integer;
-    function GetPendingClass(const AIndex: Integer): TGocciaCompilerClassEntry;
     property FormalParameterCounts: TFormalParameterCountMap
       read FFormalParameterCounts;
   end;
@@ -75,7 +60,6 @@ begin
   inherited Create;
   FSourcePath := ASourcePath;
   FFormalParameterCounts := TFormalParameterCountMap.Create;
-  FPendingClassNames := TOrderedStringMap<Boolean>.Create;
   FModule := nil;
   FCurrentTemplate := nil;
   FCurrentScope := nil;
@@ -83,20 +67,8 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
-  FPendingClassNames.Free;
   FFormalParameterCounts.Free;
   inherited;
-end;
-
-function TGocciaCompiler.ShouldDeferClass(
-  const AClassDef: TGocciaClassDefinition): Boolean;
-begin
-  if not Goccia.Compiler.Statements.IsSimpleClass(AClassDef) then
-    Exit(True);
-  if (AClassDef.SuperClass <> '') and
-     FPendingClassNames.ContainsKey(AClassDef.SuperClass) then
-    Exit(True);
-  Result := False;
 end;
 
 function TGocciaCompiler.BuildContext: TGocciaCompilationContext;
@@ -190,13 +162,8 @@ begin
     Goccia.Compiler.Expressions.CompileDestructuringAssignment(Ctx,
       TGocciaDestructuringAssignmentExpression(AExpr), ADest)
   else if AExpr is TGocciaClassExpression then
-  begin
-    if not ShouldDeferClass(TGocciaClassExpression(AExpr).ClassDefinition) then
-      Goccia.Compiler.Statements.CompileClassExpression(Ctx,
-        TGocciaClassExpression(AExpr).ClassDefinition, ADest)
-    else
-      EmitInstruction(Ctx, EncodeABC(OP_LOAD_NIL, ADest, 0, 0));
-  end
+    Goccia.Compiler.Statements.CompileClassExpression(Ctx,
+      TGocciaClassExpression(AExpr).ClassDefinition, ADest)
   else if AExpr is TGocciaAwaitExpression then
   begin
     DoCompileExpression(TGocciaAwaitExpression(AExpr).Operand, ADest);
@@ -234,23 +201,8 @@ begin
   else if AStmt is TGocciaForOfStatement then
     Goccia.Compiler.Statements.CompileForOfStatement(Ctx, TGocciaForOfStatement(AStmt))
   else if AStmt is TGocciaClassDeclaration then
-  begin
-    if not ShouldDeferClass(TGocciaClassDeclaration(AStmt).ClassDefinition) then
-      Goccia.Compiler.Statements.CompileClassDeclaration(Ctx,
-        TGocciaClassDeclaration(AStmt))
-    else
-    begin
-      FPendingClassNames.AddOrSetValue(
-        TGocciaClassDeclaration(AStmt).ClassDefinition.Name, True);
-      SetLength(FPendingClasses, Length(FPendingClasses) + 1);
-      FPendingClasses[High(FPendingClasses)].ClassDeclaration :=
-        TGocciaClassDeclaration(AStmt);
-      FPendingClasses[High(FPendingClasses)].Line := AStmt.Line;
-      FPendingClasses[High(FPendingClasses)].Column := AStmt.Column;
-      Goccia.Compiler.Statements.CompileComplexClassDeclaration(Ctx,
-        TGocciaClassDeclaration(AStmt), High(FPendingClasses));
-    end;
-  end
+    Goccia.Compiler.Statements.CompileClassDeclaration(Ctx,
+      TGocciaClassDeclaration(AStmt))
   else if AStmt is TGocciaSwitchStatement then
     Goccia.Compiler.Statements.CompileSwitchStatement(Ctx, TGocciaSwitchStatement(AStmt))
   else if AStmt is TGocciaBreakStatement then
@@ -366,17 +318,6 @@ begin
       FreeAndNil(FModule);
     end;
   end;
-end;
-
-function TGocciaCompiler.PendingClassCount: Integer;
-begin
-  Result := Length(FPendingClasses);
-end;
-
-function TGocciaCompiler.GetPendingClass(
-  const AIndex: Integer): TGocciaCompilerClassEntry;
-begin
-  Result := FPendingClasses[AIndex];
 end;
 
 end.

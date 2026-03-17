@@ -50,13 +50,10 @@ procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
 procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaEnumDeclaration);
 
-function IsSimpleClass(const AClassDef: TGocciaClassDefinition): Boolean;
 procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
 procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
   const AClassDef: TGocciaClassDefinition; const ADest: UInt8);
-procedure CompileComplexClassDeclaration(const ACtx: TGocciaCompilationContext;
-  const AStmt: TGocciaClassDeclaration; const APendingIndex: Integer);
 
 function TypeAnnotationToLocalType(const AAnnotation: string): TSouffleLocalType;
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
@@ -1228,11 +1225,6 @@ begin
   GBreakJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
 end;
 
-function IsSimpleClass(const AClassDef: TGocciaClassDefinition): Boolean;
-begin
-  Result := True;
-end;
-
 procedure CompileMethodBody(const ACtx: TGocciaCompilationContext;
   const AClassReg: UInt8; const AMethodName: string;
   const AMethod: TGocciaClassMethod; const AStoreOpcode: TSouffleOpCode);
@@ -2169,58 +2161,6 @@ begin
   end;
 
   ACtx.Scope.PrivatePrefix := '';
-end;
-
-procedure CompileComplexClassDeclaration(const ACtx: TGocciaCompilationContext;
-  const AStmt: TGocciaClassDeclaration; const APendingIndex: Integer);
-var
-  ClassDef: TGocciaClassDefinition;
-  ClassReg: UInt8;
-  NameIdx: UInt16;
-  I: Integer;
-  Local: TGocciaCompilerLocal;
-begin
-  ClassDef := AStmt.ClassDefinition;
-
-  for I := 0 to ACtx.Scope.LocalCount - 1 do
-  begin
-    Local := ACtx.Scope.GetLocal(I);
-    if (Local.Name <> '') and (Local.Name <> '__receiver') and
-       (Local.Name <> KEYWORD_THIS) then
-    begin
-      ACtx.Scope.MarkGlobalBacked(I);
-      NameIdx := ACtx.Template.AddConstantString(Local.Name);
-      if NameIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: global name index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, Local.Slot,
-        GOCCIA_EXT_DEFINE_GLOBAL, UInt8(NameIdx)));
-    end;
-  end;
-
-  ClassReg := ACtx.Scope.DeclareLocal(ClassDef.Name, True);
-  if APendingIndex > High(UInt8) then
-    raise Exception.Create('Compiler error: pending class index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ClassReg,
-    GOCCIA_EXT_EVAL_CLASS, UInt8(APendingIndex)));
-
-  NameIdx := ACtx.Template.AddConstantString(ClassDef.Name);
-  if NameIdx > High(UInt8) then
-    raise Exception.Create('Constant pool overflow: global name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ClassReg,
-    GOCCIA_EXT_DEFINE_GLOBAL, UInt8(NameIdx)));
-
-  for I := 0 to ACtx.Scope.LocalCount - 1 do
-  begin
-    Local := ACtx.Scope.GetLocal(I);
-    if Local.IsGlobalBacked then
-    begin
-      NameIdx := ACtx.Template.AddConstantString(Local.Name);
-      if NameIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: global name index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, Local.Slot,
-        GOCCIA_EXT_DEFINE_GLOBAL, UInt8(NameIdx)));
-    end;
-  end;
 end;
 
 procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;

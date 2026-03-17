@@ -5,7 +5,7 @@ unit Souffle.Bytecode;
 interface
 
 const
-  SOUFFLE_FORMAT_VERSION = 3;
+  SOUFFLE_FORMAT_VERSION = 4;
   SOUFFLE_BINARY_MAGIC: array[0..3] of Byte = (Ord('S'), Ord('B'), Ord('C'), 0);
 
   OP_RT_FIRST = 128;
@@ -98,18 +98,6 @@ type
     // ── Core: String ──
     OP_CONCAT        = 55,  // ABC   R[A] := String(R[B]) + String(R[C])
 
-    // ── Core: Typed Locals ──
-    OP_GET_LOCAL_INT    = 56,  // ABx  R[A] := Locals[Bx] (typed: integer)
-    OP_SET_LOCAL_INT    = 57,  // ABx  Locals[Bx] := R[A] (typed: integer)
-    OP_GET_LOCAL_FLOAT  = 58,  // ABx  R[A] := Locals[Bx] (typed: float)
-    OP_SET_LOCAL_FLOAT  = 59,  // ABx  Locals[Bx] := R[A] (typed: float)
-    OP_GET_LOCAL_BOOL   = 60,  // ABx  R[A] := Locals[Bx] (typed: boolean)
-    OP_SET_LOCAL_BOOL   = 61,  // ABx  Locals[Bx] := R[A] (typed: boolean)
-    OP_GET_LOCAL_STRING = 62,  // ABx  R[A] := Locals[Bx] (typed: string reference)
-    OP_SET_LOCAL_STRING = 63,  // ABx  Locals[Bx] := R[A] (typed: string reference)
-    OP_GET_LOCAL_REF    = 64,  // ABx  R[A] := Locals[Bx] (typed: heap reference)
-    OP_SET_LOCAL_REF    = 65,  // ABx  Locals[Bx] := R[A] (typed: heap reference)
-
     // ── Core: Blueprint ──
     OP_NEW_BLUEPRINT = 66,  // ABx   R[A] := new Blueprint(name=Constants[Bx])
     OP_INHERIT       = 67,  // AB    Blueprint(R[A]).super := Blueprint(R[B])
@@ -134,6 +122,10 @@ type
     OP_GT_FLOAT      = 80,  // ABC   R[A] := Boolean(AsNumber(R[B]) > AsNumber(R[C]))
     OP_LTE_FLOAT     = 81,  // ABC   R[A] := Boolean(AsNumber(R[B]) <= AsNumber(R[C]))
     OP_GTE_FLOAT     = 82,  // ABC   R[A] := Boolean(AsNumber(R[B]) >= AsNumber(R[C]))
+
+    // ── Core: Boolean ──
+    OP_NOT           = 83,  // AB    R[A] := Boolean(not IsTrue(R[B]))
+    OP_TO_BOOL       = 84,  // AB    R[A] := Boolean(IsTrue(R[B]))
 
     // ── Runtime: Polymorphic Arithmetic ──
     OP_RT_ADD        = 128, // ABC   R[A] := Runtime.Add(R[B], R[C])
@@ -162,11 +154,10 @@ type
     OP_RT_GTE        = 147, // ABC   R[A] := Runtime.GreaterThanOrEqual(R[B], R[C])
 
     // ── Runtime: Logical / Type ──
-    OP_RT_NOT        = 148, // AB    R[A] := Runtime.LogicalNot(R[B])
     OP_RT_TYPEOF     = 149, // AB    R[A] := Runtime.TypeOf(R[B])
     OP_RT_IS_INSTANCE = 150, // ABC  R[A] := Runtime.IsInstance(R[B], R[C])
     OP_RT_HAS_PROPERTY = 151, // ABC R[A] := Runtime.HasProperty(R[B], R[C])
-    OP_RT_TO_BOOLEAN = 152, // AB    R[A] := Runtime.ToBoolean(R[B])
+    OP_RT_TO_NUMBER  = 153, // AB    R[A] := ToNumber(R[B]) — numeric identity, else Runtime.ToNumber
 
     // ── Runtime: Property Access ──
     OP_RT_GET_PROP   = 156, // ABC   R[A] := Runtime.GetProperty(R[B], Constants[C])
