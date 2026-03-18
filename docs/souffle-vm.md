@@ -285,7 +285,7 @@ Signed operands use bias encoding: `sBx` is stored as `sBx + 32767`, `Ax` is sto
 Souffle uses a register-based architecture (like Lua 5, LuaJIT, and Dalvik) rather than a stack-based one.
 
 ```text
- Register File (array of TSouffleValue, 26 bytes each):
+ Register File (array of TSouffleValue, 16 bytes each):
  ┌──────────────────┬─────────────────┬─────────────────┬─────┐
  │ Frame 0 (global) │ Frame 1 (fn A)  │ Frame 2 (fn B)  │ ... │
  │ R[0]..R[15]      │ R[0]..R[8]      │ R[0]..R[5]      │     │
@@ -329,15 +329,15 @@ Frame layout:
 The VM has its own value system, completely independent of `TGocciaValue`:
 
 ```text
-TSouffleValue (packed record, 26 bytes):
+TSouffleValue (packed record, 16 bytes):
 ┌──────────────────┬──────────────┬──────────────────────────────┐
-│ Kind: UInt8 (1B) │ Flags: (1B)  │ Variant Data (24B)           │
+│ Kind: UInt8 (1B) │ Flags: (1B)  │ Variant Data (14B max)       │
 ├──────────────────┴──────────────┴──────────────────────────────┤
 │ svkNil:       (nothing)                                        │
 │ svkBoolean:   AsBoolean: Boolean                               │
 │ svkInteger:   AsInteger: Int64                                 │
 │ svkFloat:     AsFloat: Double                                  │
-│ svkString:    AsInlineString: TSouffleInlineString (string[23]) │
+│ svkString:    AsInlineString: TSouffleInlineString (string[13]) │
 │ svkReference: AsReference: TSouffleHeapObject                  │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -350,7 +350,7 @@ TSouffleValue (packed record, 26 bytes):
 | `svkBoolean` | `AsBoolean: Boolean` | No | True or false |
 | `svkInteger` | `AsInteger: Int64` | No | 64-bit integer |
 | `svkFloat` | `AsFloat: Double` | No | 64-bit float |
-| `svkString` | `AsInlineString: TSouffleInlineString` | No | Short string (up to 23 bytes, inline) |
+| `svkString` | `AsInlineString: TSouffleInlineString` | No | Short string (up to 13 bytes, inline) |
 | `svkReference` | `AsReference: TSouffleHeapObject` | Yes | Pointer to heap object |
 
 ### Flags Byte
@@ -364,17 +364,17 @@ Every `TSouffleValue` carries a `Flags: Byte` field alongside `Kind`. This provi
 
 ### Inline Short String Optimization
 
-Strings up to 23 characters are stored inline as `svkString` using `TSouffleInlineString = string[23]`. This avoids heap allocation for the vast majority of strings (property names, short literals, single characters). Strings longer than 23 characters are stored as `svkReference` pointing to a `TSouffleHeapString` heap object.
+Strings up to 13 characters are stored inline as `svkString` using `TSouffleInlineString = string[13]`. This avoids heap allocation for the vast majority of strings (property names, short literals, single characters). Strings longer than 13 characters are stored as `svkReference` pointing to a `TSouffleHeapString` heap object.
 
 The `SouffleString(AValue)` constructor auto-selects the representation:
-- `Length(AValue) <= 23` → `svkString` with `AsInlineString`
-- `Length(AValue) > 23` → `svkReference` to a new `TSouffleHeapString`
+- `Length(AValue) <= 13` → `svkString` with `AsInlineString`
+- `Length(AValue) > 13` → `svkReference` to a new `TSouffleHeapString`
 
 The `SouffleGetString(AValue)` accessor handles both representations transparently. `SouffleIsStringValue(AValue)` checks for both `svkString` and `svkReference` to `TSouffleHeapString`.
 
 ### Design Rationale
 
-**Packed record (26 bytes)**: The `packed` directive removes alignment padding between `Kind` (1B) and `Flags` (1B), saving 6 bytes per value compared to a non-packed layout (which would pad to 32 bytes). On modern hardware, the unaligned access penalty for `Int64`/`Double` is negligible — measured at less than 1% in benchmarks. With 65,536 registers, this saves ~384 KB of register file memory.
+**Packed record (16 bytes)**: Kind (1B) + Flags (1B) + variant (14B max from `string[13]`), totalling 16 bytes. The `packed` directive eliminates alignment padding. On modern hardware, the unaligned access penalty for `Int64`/`Double` is negligible — measured at less than 1% in benchmarks.
 
 **Why not NaN boxing**: NaN boxing (as used by V8/SpiderMonkey/Wren) encodes type tags in the mantissa bits of a 64-bit double, achieving 8 bytes per value. However, FPC's `Double` type does not expose raw bit manipulation as idiomatically as C, making NaN boxing fragile and non-portable across FPC targets (x86, ARM, WASM). The packed record approach is transparent, debuggable, and works identically on all FPC targets.
 
@@ -391,7 +391,7 @@ This means:
 - The VM is language-agnostic — it provides generic array/record primitives usable by any language
 - Adding new heap types requires zero VM changes (runtime dispatch handles them)
 - Core compound opcodes provide fast paths that eliminate wrapping overhead for the most common operations
-- The register file is a flat array of 26-byte packed values — cache-friendly, no indirection for primitives or short strings
+- The register file is a flat array of 16-byte packed values — cache-friendly, no indirection for primitives or short strings
 
 ### Truthiness Semantics
 
@@ -409,7 +409,7 @@ All heap-allocated values inherit from `TSouffleHeapObject`:
 | 4 | `SOUFFLE_HEAP_RECORD` | `TSouffleRecord` | Unified compound type: plain key-value map or blueprint-backed with indexed slots |
 | 5 | `SOUFFLE_HEAP_NATIVE_FUNCTION` | `TSouffleNativeFunction` | Pascal callback wrapped as a callable heap object |
 | 6 | `SOUFFLE_HEAP_BLUEPRINT` | `TSouffleBlueprint` | Type descriptor with SlotCount, method record (TSouffleRecord), and optional SuperBlueprint |
-| 7 | `SOUFFLE_HEAP_STRING` | `TSouffleHeapString` | Heap-allocated string (for strings exceeding 23-byte inline limit) |
+| 7 | `SOUFFLE_HEAP_STRING` | `TSouffleHeapString` | Heap-allocated string (for strings exceeding 13-byte inline limit) |
 | 128 | `SOUFFLE_HEAP_RUNTIME` | `TGocciaWrappedValue` | Language-specific wrapped value |
 
 Kind 128+ is reserved for runtime-specific heap types. GocciaScript uses `TGocciaWrappedValue` to wrap `TGocciaValue` instances as Souffle heap objects, enabling GocciaScript's rich type system (classes, promises, etc.) to be referenced from VM registers.
@@ -992,7 +992,7 @@ All Souffle VM source files live in the `souffle/` directory with `Souffle.` pre
 
 | File | Description |
 |------|-------------|
-| `Souffle.Value.pas` | `TSouffleValue` packed record (26B), `TSouffleInlineString`, constructors, `SouffleGetString`/`SouffleIsStringValue`, type checks, truthiness |
+| `Souffle.Value.pas` | `TSouffleValue` packed record (16B), `TSouffleInlineString`, constructors, `SouffleGetString`/`SouffleIsStringValue`, type checks, truthiness |
 | `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleHeapString` (long string fallback), heap kind constants |
 | `Souffle.Compound.pas` | `TSouffleArray` (dense array), `TSouffleRecord` (unified compound: plain key-value map or blueprint-backed with slots), `TSouffleBlueprint` (type descriptor with method record and optional super blueprint) |
 | `Souffle.Bytecode.pas` | Opcode definitions, instruction encoding/decoding helpers |
@@ -1072,7 +1072,7 @@ The WASM translator reads `TSouffleBytecodeModule` and emits a `.wasm` binary vi
 
 ## Known Limitations
 
-The Souffle VM bytecode backend passes 100% of the GocciaScript test suite (3,406 tests across 522 test files). The limitations below are structural constraints, not correctness gaps.
+The Souffle VM bytecode backend passes 100% of the GocciaScript test suite (3,501 tests across 522 test files). The limitations below are structural constraints, not correctness gaps.
 
 ### Intentionally Not Changed (Rejected Findings)
 

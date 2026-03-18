@@ -183,7 +183,7 @@ The codebase provides purpose-built hash maps that replace `TDictionary` on hot 
 | Scope bindings | `TOrderedStringMap<V>` | Hash-based O(1) lookup per scope level; chain walking in `TGocciaScope` |
 | Cold-path / diagnostic | `TDictionary<K,V>` | Acceptable where performance is not critical |
 
-**Never use** `TFPDataHashTable` — it has catastrophic insert performance (400,000 ns/insert vs 50 ns for `TOrderedStringMap` at N=20). See [spikes/fpc-hashmap-performance.pdf](spikes/fpc-hashmap-performance.pdf) for the full benchmark analysis.
+**Never use** `TFPDataHashTable` — it has catastrophic insert performance (400,000 ns/insert vs 50 ns for `TOrderedStringMap` at N=20). See [spikes/fpc-hashmap-performance.md](spikes/fpc-hashmap-performance.md) for the full benchmark analysis.
 
 **API compatibility:** All custom maps share the same core API as `TDictionary`: `Add`, `AddOrSetValue`, `TryGetValue`, `ContainsKey`, `Remove`, `Clear`. Iteration uses `Keys`, `Values`, or `ToArray` returning dynamic arrays (not enumerators), so use indexed `for` loops instead of `for...in`.
 

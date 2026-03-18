@@ -388,13 +388,13 @@ Adding a new language frontend requires implementing `TSouffleRuntimeOperations`
 
 ### Why a Self-Contained Value System?
 
-The Souffle VM has its own `TSouffleValue` tagged union (26 bytes: kind + flags + variant data) with 6 value kinds: Nil, Boolean, Integer, Float, String (inline ≤23 chars), Reference. This is independent of `TGocciaValue`.
+The Souffle VM has its own `TSouffleValue` tagged union (16 bytes: kind + flags + variant data) with 6 value kinds: Nil, Boolean, Integer, Float, String (inline ≤13 chars), Reference. This is independent of `TGocciaValue`.
 
 The separation exists because:
 
 - **Language-agnostic** — The VM doesn't know what "a string" or "an object" is. Those are all `svkReference` (pointer to a `TSouffleHeapObject`). The heap object's type tag is interpreted by the runtime, not the VM.
 - **No GocciaScript dependency** — The VM can be used without any GocciaScript code, making it viable for other frontends.
-- **Inline primitives** — Booleans, integers, floats, and short strings (≤23 chars) live in the register file with zero heap allocation. Only complex types and long strings go through the heap.
+- **Inline primitives** — Booleans, integers, floats, and short strings (≤13 chars) live in the register file with zero heap allocation. Only complex types and long strings go through the heap.
 - **Opaque flags** — `svkNil` carries a `Flags` byte the VM stores and compares but never interprets. GocciaScript uses it to distinguish `undefined` (flags=0) from `null` (flags=1). Other languages may use it differently or not at all.
 - **WASM 3.0 mapping** — The 6 kinds map naturally to WASM's `anyref` hierarchy: Nil → `ref.null`, small integers/booleans → `i31ref`, floats → boxed `f64` GC structs, references → GC struct subtypes.
 
@@ -440,7 +440,7 @@ An earlier design had separate `OP_RT_CALL_SPREAD` and `OP_RT_CALL_METHOD_SPREAD
 2. Delegating to the GocciaScript evaluator/interpreter
 3. Converting `TGocciaValue` → `TSouffleValue` (wrap)
 
-This "Unwrap-Delegate-Wrap" cycle was the fastest path to a working bytecode backend and achieves full language coverage — the bytecode backend passes 100% of the test suite (3,406 tests). However, the cycle creates deep coupling to the interpreter.
+This "Unwrap-Delegate-Wrap" cycle was the fastest path to a working bytecode backend and achieves full language coverage — the bytecode backend passes 100% of the test suite (3,501 tests). However, the cycle creates deep coupling to the interpreter.
 
 The target architecture eliminates the bridge entirely: `TGocciaRuntimeOperations` would implement JavaScript semantics directly on Souffle types (`TSouffleValue`, `TSouffleArray`, `TSouffleRecord`, `TSouffleBlueprint`), with prototype chain walking on delegate chains, type coercion natively on `TSouffleValue`, and all built-in methods as `TSouffleNativeFunction` delegates. This is a ground-up rewrite, not an incremental fix. See [souffle-vm.md § Current State](souffle-vm.md#current-state-and-bridge-architecture) for the full analysis.
 
