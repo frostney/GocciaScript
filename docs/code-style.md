@@ -169,7 +169,7 @@ FElements: TObjectList<TGocciaValue>;
 FManagedScopes: TObjectList<TGocciaScope>;
 ```
 
-**Why `TObjectList(False)` instead of `TList`?** Even when the collection does not own its elements (e.g., the GC's managed scopes list, which uses manual mark-and-sweep), using `TObjectList<T>.Create(False)` with a named alias keeps the VMT consistent. `TList<T>` and `TObjectList<T>` produce incompatible VMTs, so mixing them across units reintroduces the same cross-unit type check failures.
+**Why `TObjectList(False)` instead of `TList`?** Even when the collection does not own its elements (e.g., the GC's managed scopes list, which uses manual mark-and-sweep), using `TObjectList<T>.Create(False)` with a named alias keeps the VMT consistent. `TList<T>` and `TObjectList<T>` produce incompatible VMTs, so mixing them across units reintroduces the same cross-unit type check failures. See [spikes/fpc-generics-performance.md](spikes/fpc-generics-performance.md) for the benchmark analysis confirming generics have zero runtime cost.
 
 ### Hash Map Selection
 
@@ -183,7 +183,7 @@ The codebase provides purpose-built hash maps that replace `TDictionary` on hot 
 | Scope bindings | `TOrderedStringMap<V>` | Hash-based O(1) lookup per scope level; chain walking in `TGocciaScope` |
 | Cold-path / diagnostic | `TDictionary<K,V>` | Acceptable where performance is not critical |
 
-**Never use** `TFPDataHashTable` — it has catastrophic insert performance (400,000 ns/insert vs 50 ns for `TOrderedStringMap` at N=20). See [spikes/fpc-hashmap-performance.pdf](spikes/fpc-hashmap-performance.pdf) for the full benchmark analysis.
+**Never use** `TFPDataHashTable` — it has catastrophic insert performance (400,000 ns/insert vs 50 ns for `TOrderedStringMap` at N=20). See [spikes/fpc-hashmap-performance.md](spikes/fpc-hashmap-performance.md) for the full benchmark analysis.
 
 **API compatibility:** All custom maps share the same core API as `TDictionary`: `Add`, `AddOrSetValue`, `TryGetValue`, `ContainsKey`, `Remove`, `Clear`. Iteration uses `Keys`, `Values`, or `ToArray` returning dynamic arrays (not enumerators), so use indexed `for` loops instead of `for...in`.
 
@@ -420,6 +420,8 @@ else if Node is TGocciaCallExpression then
   Result := EvaluateCall(TGocciaCallExpression(Node), Context)
 // ...
 ```
+
+See [spikes/fpc-dispatch-performance.md](spikes/fpc-dispatch-performance.md) for the benchmark analysis comparing virtual, interface, and manual VMT dispatch.
 
 ### Parser Combinator (Binary Expressions)
 
