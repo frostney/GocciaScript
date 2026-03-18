@@ -19,7 +19,7 @@ TBaseMap<K, V>
 ├─ TOrderedMap<K, V>          insertion-ordered, virtual Hash/Equal
 │   └─ TOrderedStringMap<V>   overrides for string content
 ├─ THashMap<K, V>             unordered, backshift delete, static inline
-└─ (removed) TScopeMap<V>     linear scan + parent chain walk — see Update below
+└─ TScopeMap<V>               linear scan + parent chain walk (removed — see Update)
 ```
 
 ### 2.2 Design Decisions
@@ -55,8 +55,6 @@ TOrderedStringMap delivers 4–6× faster inserts than TDictionary at scope and 
 
 ### 3.2 Scope Chain: Variable Resolution
 
-**Note:** `TScopeMap` was removed in March 2026 after profiling showed it was 2.7× slower than hash-based lookup at real-world scope sizes. Scope bindings now use `TOrderedStringMap<TLexicalBinding>`. These benchmarks are preserved as historical data.
-
 TScopeMap compared against TDictionary for scope-chain variable lookup, the hottest path in any interpreter.
 
 | N | TDictionary lookup | TScopeMap lookup | TScopeMap resolve (3-level) |
@@ -65,6 +63,8 @@ TScopeMap compared against TDictionary for scope-chain variable lookup, the hott
 | 30 | 56 ns | 111 ns | 122 ns |
 
 TScopeMap wins at N=10 (1.5× faster) where linear scan has less overhead than hashing. At N=30 the O(n) scan crosses over and TDictionary's O(1) amortised lookup wins. The sweet spot for TScopeMap is scopes with fewer than ~20 bindings, which covers the vast majority of real-world function scopes. Its Resolve and Assign methods provide chain-walking semantics that no hash map can replicate.
+
+> **Post-implementation finding (March 2026):** Based on these benchmarks, `TScopeMap` was implemented and deployed for scope bindings in PR #66. However, real-world profiling with macOS `sample` during integration testing revealed that the assumption — most scopes have fewer than ~20 bindings — did not hold for the global scope and bridged contexts. `CreateBridgedContext` consumed 51% of CPU samples vs 24% on `main`, a 2.7× regression. The linear-scan `IndexOf` dominated cost at the actual scope sizes encountered in practice. Scope bindings were reverted to `TOrderedStringMap<TLexicalBinding>` with recursive parent walking in `TGocciaScope`, and `ScopeMap.pas` was deleted. See [optimization-log.md § Custom Hash Map Hierarchy](../optimization-log.md#custom-hash-map-hierarchy-pr-66) for the full timeline.
 
 ### 3.3 Integer Keys (Ordered): Symbol Properties
 
@@ -115,7 +115,7 @@ TFPDataHashTable should be avoided entirely in performance-sensitive code. TFPGM
 |---|---|---|
 | Object string properties | TOrderedStringMap\<V\> | 4–6× faster than TDictionary at typical sizes; preserves insertion order per spec |
 | Symbol-keyed properties | TOrderedMap\<TSymbolID, V\> | Parity with TDictionary; provides required insertion order |
-| Scope chain variables | `TOrderedStringMap<TLexicalBinding>` | Hash-based lookup + recursive `TGocciaScope` parent walking (replaced `TScopeMap` — see Update) |
+| Scope chain variables | ~~TScopeMap\<V\>~~ → `TOrderedStringMap<TLexicalBinding>` | Originally recommended TScopeMap (linear scan, optimal at N<20). Reverted after profiling showed 2.7× regression at real-world scope sizes — see section 3.2 |
 | GC mark sets, object tracking | THashMap\<Pointer, V\> | Backshift deletion prevents tombstone accumulation |
 | Integer-keyed caches | TDictionary\<Integer, V\> or THashMap | FPC integer hash is trivially cheap; consider custom hash for THashMap |
 
@@ -296,9 +296,9 @@ type
 
 (Full implementation: 43 lines)
 
-### ScopeMap.pas (removed)
+### ScopeMap.pas (historical — removed March 2026)
 
-**This unit was deleted in March 2026.** The source is preserved here for historical reference only.
+This unit was implemented based on the benchmarks in section 3.2 and deployed in PR #66. Profiling against real workloads showed that the linear-scan assumption (most scopes have <20 bindings) did not hold for global scopes and bridged interpreter contexts, causing a 2.7× regression. The unit was deleted and scope bindings reverted to `TOrderedStringMap<TLexicalBinding>`. The source is preserved here for historical reference.
 
 ```pascal
 {
@@ -415,12 +415,22 @@ type
 
 ## Update (March 2026)
 
-Several changes have been made since the original benchmarks:
+### Timeline
 
-- **`TScopeMap` removed.** Profiling showed its linear-scan `IndexOf` was 2.7× slower than `TOrderedStringMap`'s hash-based lookup for scope bindings. `CreateBridgedContext` consumed 51% of CPU samples vs 24% on main. Scope bindings now use `TOrderedStringMap<TLexicalBinding>` with recursive parent walking in `TGocciaScope`.
+1. **Original spike (benchmarks above).** Micro-benchmarks showed `TScopeMap` outperforming `TDictionary` at N≤10 (1.5×) and crossing over around N=30. The recommendation was to use `TScopeMap` for scope chain bindings, since most function scopes were assumed to have fewer than ~20 bindings.
+
+2. **Implementation (PR #66).** `TScopeMap<TLexicalBinding>` was deployed for all scope bindings, with built-in parent chain walking (`Resolve`, `Assign`, `Has`). `THashMap` and `TOrderedStringMap` were also adopted for their respective use cases.
+
+3. **Integration testing revealed regressions.** Bytecode benchmarks showed regressions of up to -42% in ArrayBuffer, TypedArray, collections, and string operations. Initial investigation focused on `THashMap` hashing costs, leading to the optimizations below (multiplicative hash, bitwise AND indexing).
+
+4. **Profiling identified `TScopeMap` as the bottleneck.** macOS `sample` profiling showed `CreateBridgedContext` (which triggered scope chain traversal) consuming 51% of CPU samples vs 24% on `main`. The root cause: real-world global scopes and bridged interpreter contexts have significantly more than 20 bindings, pushing `TScopeMap`'s linear-scan `IndexOf` into its O(n) penalty zone. The micro-benchmark assumption (most scopes <20 bindings) was correct for function-local scopes but not for the scopes that dominate actual execution cost.
+
+5. **Revert.** `TGocciaScopeBindingMap` was changed back to `TOrderedStringMap<TLexicalBinding>`, `TGocciaScope` reverted to recursive parent-chain walking, and `ScopeMap.pas` was deleted. This eliminated the regressions.
+
+### Other changes since the original spike
 
 - **`TOrderedStringMap` refactored.** It is now a standalone class inheriting `TBaseMap<string, TValue>` directly (not a thin subclass of `TOrderedMap`) with `static inline` DJB2 hash and native string equality — zero virtual dispatch on hash/equality.
 
 - **`THashMap` hash/equality optimized.** Pointer-sized keys use multiplicative hash (golden-ratio/Fibonacci) instead of byte-by-byte DJB2, and direct integer equality instead of `CompareMem`. All `mod` operations replaced with bitwise AND.
 
-- **Original benchmarks remain valid.** The benchmarks in sections 3.1–3.5 remain valid for the general comparison; the updates only affected implementation details, not the overall recommendations.
+- **Original benchmarks remain valid.** The micro-benchmarks in sections 3.1–3.5 remain valid for the general comparison at the tested sizes. The `TScopeMap` finding (section 3.2) is also correct at N=10 — the issue was that the assumption about real-world scope sizes did not hold.
