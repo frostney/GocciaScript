@@ -41,7 +41,7 @@ Preallocation is critical for TStringBuilder: 45 seconds drops to 53ms — a **7
 
 ## TStringBuilder Pathology: Root Cause
 
-Initial suspicion was Unicode conversion overhead, since TStringBuilder is aliased to TUnicodeStringBuilder in the RTL (`FData` is `Array of WideChar`, every AnsiString append triggers a conversion). However, TAnsiStringBuilder shows the identical ~44 second pathology, ruling out Unicode conversion.
+Initial suspicion was Unicode conversion overhead, since TStringBuilder is aliased to TUnicodeStringBuilder in the RTL (`FData` is `Array of WideChar`, every AnsiString append triggers a conversion). However, TAnsiStringBuilder shows the identical ~44-second pathology, ruling out Unicode conversion.
 
 ### General FPC heap manager limitation
 

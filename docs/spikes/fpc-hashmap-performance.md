@@ -19,7 +19,7 @@ TBaseMap<K, V>
 ├─ TOrderedMap<K, V>          insertion-ordered, virtual Hash/Equal
 │   └─ TOrderedStringMap<V>   overrides for string content
 ├─ THashMap<K, V>             unordered, backshift delete, static inline
-└─ TScopeMap<V>               linear scan + parent chain walk
+└─ (removed) TScopeMap<V>     linear scan + parent chain walk — see Update below
 ```
 
 ### 2.2 Design Decisions
@@ -54,6 +54,8 @@ Five string-keyed maps compared at interpreter-relevant sizes. This is the prima
 TOrderedStringMap delivers 4–6× faster inserts than TDictionary at scope and object sizes (N=20–100). TFPDataHashTable has catastrophic insert performance due to chained-bucket overhead with per-node allocation. TFPGMap (sorted binary search) and TStringList are competitive on insert but slower on lookup at larger N due to O(log N) binary search vs O(1) hash. At N=1000 the hash maps converge.
 
 ### 3.2 Scope Chain: Variable Resolution
+
+**Note:** `TScopeMap` was removed in March 2026 after profiling showed it was 2.7× slower than hash-based lookup at real-world scope sizes. Scope bindings now use `TOrderedStringMap<TLexicalBinding>`. These benchmarks are preserved as historical data.
 
 TScopeMap compared against TDictionary for scope-chain variable lookup, the hottest path in any interpreter.
 
@@ -113,7 +115,7 @@ TFPDataHashTable should be avoided entirely in performance-sensitive code. TFPGM
 |---|---|---|
 | Object string properties | TOrderedStringMap\<V\> | 4–6× faster than TDictionary at typical sizes; preserves insertion order per spec |
 | Symbol-keyed properties | TOrderedMap\<TSymbolID, V\> | Parity with TDictionary; provides required insertion order |
-| Scope chain variables | TScopeMap\<V\> | Built-in chain walking; optimal at scope sizes (<20 vars) |
+| Scope chain variables | `TOrderedStringMap<TLexicalBinding>` | Hash-based lookup + recursive `TGocciaScope` parent walking (replaced `TScopeMap` — see Update) |
 | GC mark sets, object tracking | THashMap\<Pointer, V\> | Backshift deletion prevents tombstone accumulation |
 | Integer-keyed caches | TDictionary\<Integer, V\> or THashMap | FPC integer hash is trivially cheap; consider custom hash for THashMap |
 
@@ -294,7 +296,9 @@ type
 
 (Full implementation: 43 lines)
 
-### ScopeMap.pas
+### ScopeMap.pas (removed)
+
+**This unit was deleted in March 2026.** The source is preserved here for historical reference only.
 
 ```pascal
 {

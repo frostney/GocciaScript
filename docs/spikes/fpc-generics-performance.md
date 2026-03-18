@@ -27,8 +27,8 @@ Five instantiation patterns, each tested as a local variable and as a class fiel
 | TGenericStack\<Integer\> | Literal generic | 142.0 | baseline | — |
 | TSpecialisedStack | Type alias | 140.0 | x0.99 | No diff |
 | TInheritedStack | Subclass | 149.0 | x1.05 | No diff |
-| THandRolledStack | No generics | 222.0 | x1.09 | Noise |
-| TDoubleInheritedStack | Multi-generic collapse | 264.0 | x1.29\* | 2x work |
+| THandRolledStack | No generics | 222.0 | x1.56 | Slower |
+| TDoubleInheritedStack | Multi-generic collapse | 264.0 | x1.86\* | 2x work |
 
 ### Class Fields
 
@@ -37,8 +37,8 @@ Five instantiation patterns, each tested as a local variable and as a class fiel
 | TGenericStack\<Integer\> | Literal generic | 127.0 | baseline | — |
 | TSpecialisedStack | Type alias | 125.0 | x0.98 | No diff |
 | TInheritedStack | Subclass | 126.0 | x0.99 | No diff |
-| THandRolledStack | No generics | 219.0 | x1.07 | Noise |
-| TDoubleInheritedStack | Multi-generic collapse | 249.0 | x1.22\* | 2x work |
+| THandRolledStack | No generics | 219.0 | x1.72 | Slower |
+| TDoubleInheritedStack | Multi-generic collapse | 249.0 | x1.96\* | 2x work |
 
 \* The double-generic variant does 2x array work per iteration (key + value arrays), so higher absolute time is expected. The relevant question is whether the multi-step generic collapse adds overhead beyond the extra work — it does not.
 

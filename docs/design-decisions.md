@@ -451,7 +451,7 @@ The following operations delegate to the GocciaScript evaluator through the brid
 - **Module imports** (`ImportModule`, 29 calls) — Delegates to the GocciaScript module resolver. Inherently interpreter-coupled (file I/O, path resolution, recursive compilation).
 - **Async/await** (`AwaitValue`, 170 calls) — Delegates to `TGocciaPromiseValue` and the microtask queue.
 - **Iteration** (`GetIterator`/`IteratorNext`, 146/427 calls) — Array, string, Map, and Set iteration has native fast paths. Remaining bridge calls are for other iterable types.
-- **Decorator class compilation** — Classes with decorators are deferred to the interpreter via `GOCCIA_EXT_EVAL_CLASS`. All other class features (getters, setters, statics, private members, computed properties, built-in subclassing) compile natively to blueprint opcodes.
+- **Decorator class compilation** — All classes, including those with decorators, compile natively to blueprint opcodes. Decorator evaluation uses `GOCCIA_EXT_BEGIN_DECORATORS` / `GOCCIA_EXT_APPLY_ELEMENT_DECORATOR` / `GOCCIA_EXT_FINISH_DECORATORS` extension opcodes.
 
 Bridge reduction has dramatically reduced these crossings: `Invoke` went from 21,326 to 55 bridge calls (-99.7%), `GetProperty` from 12,408 to 157 (-98.7%), and `UnwrapToGocciaValue` from 97,212 to 50,132 (-48.4%). `EvaluateClassByIndex` was completely eliminated. The remaining bridge crossings are concentrated in construction (770 calls), async/await (170), iterators (573), and module imports (29).
 

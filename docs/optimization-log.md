@@ -235,7 +235,7 @@ The GC may benefit from revisiting, but this requires a fresh analysis — the a
 
 3. **String operations are already fast in FPC.** String interning, `typeof` caching, and similar strategies don't help because FPC's COW (copy-on-write) semantics and inline short strings are already efficient. Do not attempt string interning or string caching again. See [spikes/fpc-string-performance.md](spikes/fpc-string-performance.md).
 
-4. **Code size matters.** Inlining Tier 2 ops into the VM loop (PR #78) and promoting boolean opcodes (PR #88) both caused regressions from instruction cache pressure. Keep the VM loop compact. Only promote opcodes that are genuinely high-frequency (like the 10 in PR #81).
+4. **Code size matters.** Inlining Tier 2 ops into the VM loop (PR #78) and adding the async/await native path (PR #88) both caused regressions from instruction cache pressure. Keep the VM loop compact. Only promote opcodes that are genuinely high-frequency (like the 10 in PR #81).
 
 5. **Bridge elimination is the biggest win.** Native class construction (PR #87) showed clear improvements. The remaining bridge dependencies (modules, async/await) are the most impactful optimization targets.
 
