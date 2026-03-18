@@ -9,6 +9,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  HashMap,
   Souffle.Bytecode,
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Module,
@@ -34,9 +35,9 @@ type
   private
     FWasmModule: TWasmModule;
     FFuncTemplates: TList<TSouffleFunctionTemplate>;
-    FFuncWasmIndices: TDictionary<TSouffleFunctionTemplate, UInt32>;
+    FFuncWasmIndices: THashMap<TSouffleFunctionTemplate, UInt32>;
     FImportCount: UInt32;
-    FConstBase: TDictionary<TSouffleFunctionTemplate, Integer>;
+    FConstBase: THashMap<TSouffleFunctionTemplate, Integer>;
     FGlobalConstants: array of TSouffleBytecodeConstant;
     FGlobalConstantCount: Integer;
 
@@ -203,7 +204,7 @@ var
   I, J: Integer;
   Template: TSouffleFunctionTemplate;
 begin
-  FConstBase := TDictionary<TSouffleFunctionTemplate, Integer>.Create;
+  FConstBase := THashMap<TSouffleFunctionTemplate, Integer>.Create;
   FGlobalConstantCount := 0;
   for I := 0 to FFuncTemplates.Count - 1 do
   begin
@@ -1455,10 +1456,10 @@ var
   ScratchLocal: UInt32;
   LabelStack: TList<TLabelEntry>;
   ForwardTargets: TList<Integer>;
-  LoopHeaders: TDictionary<Integer, Integer>;
-  InteriorSet: TDictionary<Integer, Boolean>;
-  HandlerByStart: TDictionary<Integer, Integer>;
-  HandlerByEnd: TDictionary<Integer, Integer>;
+  LoopHeaders: THashMap<Integer, Integer>;
+  InteriorSet: THashMap<Integer, Boolean>;
+  HandlerByStart: THashMap<Integer, Integer>;
+  HandlerByEnd: THashMap<Integer, Integer>;
   HandlerStarts: array of Integer;
   HandlerEnds: array of Integer;
   HandlerCatchTargets: array of Integer;
@@ -1521,7 +1522,7 @@ var
     ScanTarget, Existing: Integer;
   begin
     ForwardTargets := TList<Integer>.Create;
-    LoopHeaders := TDictionary<Integer, Integer>.Create;
+    LoopHeaders := THashMap<Integer, Integer>.Create;
     for ScanPC := 0 to ATemplate.CodeCount - 1 do
     begin
       ScanInstr := ATemplate.GetInstruction(ScanPC);
@@ -1585,9 +1586,9 @@ begin
 
   CollectTargets;
 
-  InteriorSet := TDictionary<Integer, Boolean>.Create;
-  HandlerByStart := TDictionary<Integer, Integer>.Create;
-  HandlerByEnd := TDictionary<Integer, Integer>.Create;
+  InteriorSet := THashMap<Integer, Boolean>.Create;
+  HandlerByStart := THashMap<Integer, Integer>.Create;
+  HandlerByEnd := THashMap<Integer, Integer>.Create;
   LabelStack := TList<TLabelEntry>.Create;
   try
     for I := 0 to HandlerCount - 1 do
@@ -1752,7 +1753,7 @@ var
 begin
   FWasmModule := TWasmModule.Create;
   FFuncTemplates := TList<TSouffleFunctionTemplate>.Create;
-  FFuncWasmIndices := TDictionary<TSouffleFunctionTemplate, UInt32>.Create;
+  FFuncWasmIndices := THashMap<TSouffleFunctionTemplate, UInt32>.Create;
   try
     CollectFunctions(AModule.TopLevel);
     FlattenConstantPools;

@@ -6,9 +6,10 @@ interface
 
 uses
   Classes,
-  Generics.Collections,
   Math,
   SysUtils,
+
+  OrderedStringMap,
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
@@ -37,9 +38,9 @@ type
   TGocciaInterpreter = class
   private
     FGlobalScope: TGocciaGlobalScope;
-    FModules: TDictionary<string, TGocciaModule>;
-    FLoadingModules: TDictionary<string, Boolean>;
-    FGlobalModules: TDictionary<string, TGocciaModule>;
+    FModules: TOrderedStringMap<TGocciaModule>;
+    FLoadingModules: TOrderedStringMap<Boolean>;
+    FGlobalModules: TOrderedStringMap<TGocciaModule>;
     FFileName: string;
     FSourceLines: TStringList;
     FJSXEnabled: Boolean;
@@ -58,7 +59,7 @@ type
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
     property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
     property Resolver: TGocciaModuleResolver read FResolver write FResolver;
-    property GlobalModules: TDictionary<string, TGocciaModule> read FGlobalModules;
+    property GlobalModules: TOrderedStringMap<TGocciaModule> read FGlobalModules;
   end;
 
 
@@ -80,9 +81,9 @@ begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FGlobalScope := TGocciaGlobalScope.Create;
-  FModules := TDictionary<string, TGocciaModule>.Create;
-  FLoadingModules := TDictionary<string, Boolean>.Create;
-  FGlobalModules := TDictionary<string, TGocciaModule>.Create;
+  FModules := TOrderedStringMap<TGocciaModule>.Create;
+  FLoadingModules := TOrderedStringMap<Boolean>.Create;
+  FGlobalModules := TOrderedStringMap<TGocciaModule>.Create;
 end;
 
 destructor TGocciaInterpreter.Destroy;
@@ -140,7 +141,7 @@ var
   ExportDecl: TGocciaExportDeclaration;
   ExportVarDecl: TGocciaExportVariableDeclaration;
   ReExportDecl: TGocciaReExportDeclaration;
-  ExportPair: TPair<string, string>;
+  ExportPair: TStringStringMap.TKeyValuePair;
   Value: TGocciaValue;
   Context: TGocciaEvaluationContext;
   SourceModule: TGocciaModule;

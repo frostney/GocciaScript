@@ -152,7 +152,6 @@ begin
   FParent := AParent;
   FLexicalBindings := TGocciaScopeBindingMap.Create(ACapacity);
 
-  // Inherit interpreter context from parent scope
   if Assigned(AParent) then
     FOnError := AParent.FOnError;
 
@@ -334,7 +333,6 @@ var
 begin
   if FLexicalBindings.TryGetValue(AName, LexicalBinding) then
   begin
-    // Check temporal dead zone for let/const
     if not LexicalBinding.IsAccessible then
       raise TGocciaReferenceError.Create(Format('Cannot access ''%s'' before initialization', [AName]), ALine, AColumn, '', nil);
     Result := LexicalBinding;
@@ -342,10 +340,7 @@ begin
   else if Assigned(FParent) then
     Result := FParent.GetLexicalBinding(AName, ALine, AColumn)
   else
-  begin
-    // Strict mode: undefined variables throw ReferenceError
     raise TGocciaReferenceError.Create(Format('Undefined variable: %s', [AName]), ALine, AColumn, '', nil);
-  end;
 end;
 
 function TGocciaScope.GetValue(const AName: string): TGocciaValue;

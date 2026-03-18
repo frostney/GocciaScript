@@ -9,6 +9,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  OrderedStringMap,
   StringBuffer,
 
   Goccia.Token;
@@ -17,7 +18,7 @@ type
   TGocciaLexer = class
   const ValidIdentifierChars: set of Char = ['a'..'z', 'A'..'Z', '0'..'9', '_', '$'];
   private class var
-    FKeywords: TDictionary<string, TGocciaTokenType>;
+    FKeywords: TOrderedStringMap<TGocciaTokenType>;
     class procedure InitKeywords;
     class destructor DestroyClass;
   private
@@ -495,7 +496,7 @@ end;
 class procedure TGocciaLexer.InitKeywords;
 begin
   if Assigned(FKeywords) then Exit;
-  FKeywords := TDictionary<string, TGocciaTokenType>.Create(40);
+  FKeywords := TOrderedStringMap<TGocciaTokenType>.Create(40);
   // Reserved keywords
   FKeywords.Add(KEYWORD_BREAK, gttBreak);
   FKeywords.Add(KEYWORD_CASE, gttCase);

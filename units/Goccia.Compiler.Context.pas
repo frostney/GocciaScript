@@ -5,8 +5,7 @@ unit Goccia.Compiler.Context;
 interface
 
 uses
-  Generics.Collections,
-
+  HashMap,
   Souffle.Bytecode,
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Debug,
@@ -26,7 +25,7 @@ type
   TSwapStateProc = procedure(const ATemplate: TSouffleFunctionTemplate;
     const AScope: TGocciaCompilerScope) of object;
 
-  TFormalParameterCountMap = TDictionary<TSouffleFunctionTemplate, Integer>;
+  TFormalParameterCountMap = THashMap<TSouffleFunctionTemplate, Integer>;
 
   TGocciaCompilationContext = record
     Template: TSouffleFunctionTemplate;

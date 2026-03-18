@@ -5,8 +5,6 @@ unit Goccia.Compiler;
 interface
 
 uses
-  Generics.Collections,
-
   Souffle.Bytecode.Chunk,
   Souffle.Bytecode.Module,
 

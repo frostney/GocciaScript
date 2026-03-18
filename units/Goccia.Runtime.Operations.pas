@@ -8,6 +8,8 @@ uses
   Classes,
   Generics.Collections,
 
+  HashMap,
+  OrderedStringMap,
   Souffle.Bytecode.Chunk,
   Souffle.Compound,
   Souffle.Heap,
@@ -177,17 +179,17 @@ type
 
   TGocciaRuntimeOperations = class(TSouffleRuntimeOperations)
   private
-    FGlobals: TDictionary<string, TSouffleValue>;
-    FConstGlobals: TDictionary<string, Boolean>;
-    FExports: TDictionary<string, TSouffleValue>;
-    FClosureBridgeCache: TDictionary<TSouffleClosure, TObject>;
-    FArrayBridgeCache: TDictionary<TObject, TObject>;
-    FArrayBridgeReverse: TDictionary<TObject, TObject>;
-    FRecordBridgeCache: TDictionary<TObject, TObject>;
-    FBlueprintBridgeCache: TDictionary<TObject, TObject>;
-    FBlueprintSuperValues: TDictionary<TObject, TSouffleValue>;
-    FFormalParameterCounts: TDictionary<TSouffleFunctionTemplate, Integer>;
-    FClassDefinitionScopes: TDictionary<TObject, TObject>;
+    FGlobals: TOrderedStringMap<TSouffleValue>;
+    FConstGlobals: TOrderedStringMap<Boolean>;
+    FExports: TOrderedStringMap<TSouffleValue>;
+    FClosureBridgeCache: THashMap<TSouffleClosure, TObject>;
+    FArrayBridgeCache: THashMap<TObject, TObject>;
+    FArrayBridgeReverse: THashMap<TObject, TObject>;
+    FRecordBridgeCache: THashMap<TObject, TObject>;
+    FBlueprintBridgeCache: THashMap<TObject, TObject>;
+    FBlueprintSuperValues: THashMap<TObject, TSouffleValue>;
+    FFormalParameterCounts: THashMap<TSouffleFunctionTemplate, Integer>;
+    FClassDefinitionScopes: THashMap<TObject, TObject>;
     FWrappedValues: TList;
     FBridgeCallDepth: Integer;
     FVM: TSouffleVM;
@@ -360,7 +362,7 @@ type
       const ATemplate: TSouffleFunctionTemplate; const ACount: Integer);
     function GetFormalParameterCount(
       const ATemplate: TSouffleFunctionTemplate): Integer;
-    property ModuleExports: TDictionary<string, TSouffleValue> read FExports;
+    property ModuleExports: TOrderedStringMap<TSouffleValue> read FExports;
     property VM: TSouffleVM read FVM write FVM;
     property Engine: TObject read FEngine write FEngine;
     property SourcePath: string read FSourcePath write FSourcePath;
@@ -1027,12 +1029,12 @@ var
   I, Count: Integer;
   Flags: Byte;
   Key: string;
-  Seen: TDictionary<string, Boolean>;
+  Seen: TOrderedStringMap<Boolean>;
 begin
   if FTarget is TSouffleRecord then
   begin
     Rec := TSouffleRecord(FTarget);
-    Seen := TDictionary<string, Boolean>.Create;
+    Seen := TOrderedStringMap<Boolean>.Create;
     try
       SetLength(Result, Rec.Count + 16);
       Count := 0;
@@ -1082,12 +1084,12 @@ var
   Rec: TSouffleRecord;
   I, Count: Integer;
   Key: string;
-  Seen: TDictionary<string, Boolean>;
+  Seen: TOrderedStringMap<Boolean>;
 begin
   if FTarget is TSouffleRecord then
   begin
     Rec := TSouffleRecord(FTarget);
-    Seen := TDictionary<string, Boolean>.Create;
+    Seen := TOrderedStringMap<Boolean>.Create;
     try
       SetLength(Result, Rec.Count + 16);
       Count := 0;
@@ -1296,18 +1298,18 @@ end;
 constructor TGocciaRuntimeOperations.Create;
 begin
   inherited Create;
-  FGlobals := TDictionary<string, TSouffleValue>.Create;
-  FConstGlobals := TDictionary<string, Boolean>.Create;
-  FExports := TDictionary<string, TSouffleValue>.Create;
-  FClosureBridgeCache := TDictionary<TSouffleClosure, TObject>.Create;
-  FArrayBridgeCache := TDictionary<TObject, TObject>.Create;
-  FArrayBridgeReverse := TDictionary<TObject, TObject>.Create;
-  FRecordBridgeCache := TDictionary<TObject, TObject>.Create;
-  FBlueprintBridgeCache := TDictionary<TObject, TObject>.Create;
-  FBlueprintSuperValues := TDictionary<TObject, TSouffleValue>.Create;
-  FClassDefinitionScopes := TDictionary<TObject, TObject>.Create;
+  FGlobals := TOrderedStringMap<TSouffleValue>.Create;
+  FConstGlobals := TOrderedStringMap<Boolean>.Create;
+  FExports := TOrderedStringMap<TSouffleValue>.Create;
+  FClosureBridgeCache := THashMap<TSouffleClosure, TObject>.Create;
+  FArrayBridgeCache := THashMap<TObject, TObject>.Create;
+  FArrayBridgeReverse := THashMap<TObject, TObject>.Create;
+  FRecordBridgeCache := THashMap<TObject, TObject>.Create;
+  FBlueprintBridgeCache := THashMap<TObject, TObject>.Create;
+  FBlueprintSuperValues := THashMap<TObject, TSouffleValue>.Create;
+  FClassDefinitionScopes := THashMap<TObject, TObject>.Create;
   FWrappedValues := TList.Create;
-  FFormalParameterCounts := TDictionary<TSouffleFunctionTemplate, Integer>.Create;
+  FFormalParameterCounts := THashMap<TSouffleFunctionTemplate, Integer>.Create;
   FBridgeCallDepth := 0;
   FVM := nil;
   TGarbageCollector.Initialize;
@@ -4033,8 +4035,8 @@ function TGocciaRuntimeOperations.ImportModule(const APath: string): TSouffleVal
 var
   EngineObj: TGocciaEngine;
   Module: TGocciaModule;
+  Pair: TGocciaValueMap.TKeyValuePair;
   Rec: TSouffleRecord;
-  Pair: TPair<string, TGocciaValue>;
 begin
   {$IFDEF BRIDGE_METRICS}
   Inc(GBridgeMetrics.ImportModuleCount);
@@ -7308,7 +7310,7 @@ begin
     BuildDelegate(RECORD_PROTOTYPE_METHODS));
 end;
 
-function ExtractNativeFn(const AGlobals: TDictionary<string, TSouffleValue>;
+function ExtractNativeFn(const AGlobals: TOrderedStringMap<TSouffleValue>;
   const AName: string): TGocciaNativeFunctionValue;
 var
   Val: TSouffleValue;
@@ -7333,8 +7335,8 @@ begin
 end;
 
 procedure ReplaceGlobalWithNative(
-  const AGlobals: TDictionary<string, TSouffleValue>;
-  const AConstGlobals: TDictionary<string, Boolean>;
+  const AGlobals: TOrderedStringMap<TSouffleValue>;
+  const AConstGlobals: TOrderedStringMap<Boolean>;
   const AName: string; const AArity: Integer;
   const ACallback: TSouffleNativeCallback);
 var
@@ -7528,7 +7530,8 @@ end;
 
 procedure TGocciaRuntimeOperations.RegisterNativeBuiltins;
 var
-  Keys: TArray<string>;
+  Keys: TOrderedStringMap<TSouffleValue>.TKeyArray;
+  KeyIdx: Integer;
   Key: string;
   Val, GlobalThisVal: TSouffleValue;
   Wrapped: TGocciaWrappedValue;
@@ -7538,13 +7541,14 @@ var
   BridgedFn: TGocciaBridgedFunction;
   Rec, GlobalThisRec: TSouffleRecord;
   GC: TGarbageCollector;
-  Pair: TPair<string, TSouffleValue>;
+  GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
 begin
   if not Assigned(FVM) then Exit;
   GC := TGarbageCollector.Instance;
-  Keys := FGlobals.Keys.ToArray;
-  for Key in Keys do
+  Keys := FGlobals.Keys;
+  for KeyIdx := 0 to Length(Keys) - 1 do
   begin
+    Key := Keys[KeyIdx];
     if Key = 'globalThis' then Continue;
     Val := FGlobals[Key];
     if not SouffleIsReference(Val) or not Assigned(Val.AsReference) then Continue;
@@ -7598,8 +7602,8 @@ begin
     if Assigned(FVM) then
       GlobalThisRec.Delegate := FVM.RecordDelegate;
     if Assigned(GC) then GC.AllocateObject(GlobalThisRec);
-    for Pair in FGlobals do
-      GlobalThisRec.Put(Pair.Key, Pair.Value);
+    for GlobalPair in FGlobals do
+      GlobalThisRec.Put(GlobalPair.Key, GlobalPair.Value);
     GlobalThisRec.Put('globalThis', SouffleReference(GlobalThisRec));
     FGlobals.AddOrSetValue('globalThis', SouffleReference(GlobalThisRec));
   end;
@@ -7777,18 +7781,18 @@ function CreateBridgedContext(
 var
   BridgeScope: TGocciaScope;
   GocciaVal: TGocciaValue;
-  Pair: TPair<string, TSouffleValue>;
+  GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
 begin
   Result := TGocciaEngine(ARuntime.Engine).Interpreter.CreateEvaluationContext;
   if ARuntime.FGlobals.Count = 0 then
     Exit;
 
   BridgeScope := Result.Scope.CreateChild(skBlock);
-  for Pair in ARuntime.FGlobals do
-    if not BridgeScope.Contains(Pair.Key) then
+  for GlobalPair in ARuntime.FGlobals do
+    if not BridgeScope.Contains(GlobalPair.Key) then
     begin
-      GocciaVal := ARuntime.UnwrapToGocciaValue(Pair.Value);
-      BridgeScope.DefineLexicalBinding(Pair.Key, GocciaVal, dtLet);
+      GocciaVal := ARuntime.UnwrapToGocciaValue(GlobalPair.Value);
+      BridgeScope.DefineLexicalBinding(GlobalPair.Key, GocciaVal, dtLet);
     end;
   Result.Scope := BridgeScope;
 end;
@@ -7796,24 +7800,24 @@ end;
 procedure SyncArraysBack(const ARuntime: TGocciaRuntimeOperations;
   const AScope: TGocciaScope);
 var
-  Pair: TPair<string, TSouffleValue>;
+  GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
   GocciaVal: TGocciaValue;
   SArr: TSouffleArray;
   GArr: TGocciaArrayValue;
   I: Integer;
 begin
-  for Pair in ARuntime.FGlobals do
+  for GlobalPair in ARuntime.FGlobals do
   begin
-    if not SouffleIsReference(Pair.Value) then
+    if not SouffleIsReference(GlobalPair.Value) then
       Continue;
-    if not (Pair.Value.AsReference is TSouffleArray) then
+    if not (GlobalPair.Value.AsReference is TSouffleArray) then
       Continue;
-    if not AScope.Contains(Pair.Key) then
+    if not AScope.Contains(GlobalPair.Key) then
       Continue;
-    GocciaVal := AScope.GetValue(Pair.Key);
+    GocciaVal := AScope.GetValue(GlobalPair.Key);
     if not (GocciaVal is TGocciaArrayValue) then
       Continue;
-    SArr := TSouffleArray(Pair.Value.AsReference);
+    SArr := TSouffleArray(GlobalPair.Value.AsReference);
     GArr := TGocciaArrayValue(GocciaVal);
     SArr.Clear;
     for I := 0 to GArr.Elements.Count - 1 do
@@ -7825,22 +7829,22 @@ procedure RebuildArrayBridgeCache(
   const ARuntime: TGocciaRuntimeOperations;
   const AScope: TGocciaScope);
 var
-  Pair: TPair<string, TSouffleValue>;
+  GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
   GocciaVal: TGocciaValue;
 begin
-  for Pair in ARuntime.FGlobals do
+  for GlobalPair in ARuntime.FGlobals do
   begin
-    if not SouffleIsReference(Pair.Value) then
+    if not SouffleIsReference(GlobalPair.Value) then
       Continue;
-    if not (Pair.Value.AsReference is TSouffleArray) then
+    if not (GlobalPair.Value.AsReference is TSouffleArray) then
       Continue;
-    if not AScope.Contains(Pair.Key) then
+    if not AScope.Contains(GlobalPair.Key) then
       Continue;
-    GocciaVal := AScope.GetValue(Pair.Key);
+    GocciaVal := AScope.GetValue(GlobalPair.Key);
     if not (GocciaVal is TGocciaArrayValue) then
       Continue;
     ARuntime.FArrayBridgeCache.AddOrSetValue(
-      Pair.Value.AsReference, GocciaVal);
+      GlobalPair.Value.AsReference, GocciaVal);
     ARuntime.FArrayBridgeDirty := True;
   end;
 end;
@@ -7848,20 +7852,20 @@ end;
 procedure SyncCachedGocciaToSouffle(
   const ARuntime: TGocciaRuntimeOperations);
 var
-  Pair: TPair<TObject, TObject>;
+  CachePair: THashMap<TObject, TObject>.TKeyValuePair;
   SArr: TSouffleArray;
   GArr: TGocciaArrayValue;
-  I: Integer;
+  J: Integer;
 begin
   if not ARuntime.FArrayBridgeDirty then
     Exit;
-  for Pair in ARuntime.FArrayBridgeCache do
+  for CachePair in ARuntime.FArrayBridgeCache do
   begin
-    SArr := TSouffleArray(Pair.Key);
-    GArr := TGocciaArrayValue(Pair.Value);
+    SArr := TSouffleArray(CachePair.Key);
+    GArr := TGocciaArrayValue(CachePair.Value);
     SArr.Clear;
-    for I := 0 to GArr.Elements.Count - 1 do
-      SArr.Push(ARuntime.ToSouffleValue(GArr.Elements[I]));
+    for J := 0 to GArr.Elements.Count - 1 do
+      SArr.Push(ARuntime.ToSouffleValue(GArr.Elements[J]));
   end;
   ARuntime.FArrayBridgeDirty := False;
 end;
@@ -7869,7 +7873,7 @@ end;
 procedure SyncScopeToGlobals(const ARuntime: TGocciaRuntimeOperations;
   const AScope: TGocciaScope);
 var
-  GlobalPair: TPair<string, TSouffleValue>;
+  GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
   GocciaVal: TGocciaValue;
 begin
   for GlobalPair in ARuntime.FGlobals do
@@ -8618,45 +8622,45 @@ end;
 
 procedure TGocciaRuntimeOperations.MarkExternalRoots;
 var
-  GlobalVal: TSouffleValue;
-  ClosureKey: TSouffleClosure;
-  BridgeKey: TObject;
-  SuperVal: TSouffleValue;
+  GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
+  ClosurePair: THashMap<TSouffleClosure, TObject>.TKeyValuePair;
+  CachePair: THashMap<TObject, TObject>.TKeyValuePair;
+  SuperPair: THashMap<TObject, TSouffleValue>.TKeyValuePair;
 begin
-  for GlobalVal in FGlobals.Values do
-    if SouffleIsReference(GlobalVal) and Assigned(GlobalVal.AsReference)
-      and not GlobalVal.AsReference.GCMarked then
-      GlobalVal.AsReference.MarkReferences;
+  for GlobalPair in FGlobals do
+    if SouffleIsReference(GlobalPair.Value) and Assigned(GlobalPair.Value.AsReference)
+      and not GlobalPair.Value.AsReference.GCMarked then
+      GlobalPair.Value.AsReference.MarkReferences;
 
-  for GlobalVal in FExports.Values do
-    if SouffleIsReference(GlobalVal) and Assigned(GlobalVal.AsReference)
-      and not GlobalVal.AsReference.GCMarked then
-      GlobalVal.AsReference.MarkReferences;
+  for GlobalPair in FExports do
+    if SouffleIsReference(GlobalPair.Value) and Assigned(GlobalPair.Value.AsReference)
+      and not GlobalPair.Value.AsReference.GCMarked then
+      GlobalPair.Value.AsReference.MarkReferences;
 
-  for ClosureKey in FClosureBridgeCache.Keys do
-    if not ClosureKey.GCMarked then
-      ClosureKey.MarkReferences;
+  for ClosurePair in FClosureBridgeCache do
+    if not ClosurePair.Key.GCMarked then
+      ClosurePair.Key.MarkReferences;
 
-  for BridgeKey in FArrayBridgeCache.Keys do
-    if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
-      TSouffleHeapObject(BridgeKey).MarkReferences;
+  for CachePair in FArrayBridgeCache do
+    if (CachePair.Key is TSouffleHeapObject) and not TSouffleHeapObject(CachePair.Key).GCMarked then
+      TSouffleHeapObject(CachePair.Key).MarkReferences;
 
-  for BridgeKey in FArrayBridgeReverse.Values do
-    if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
-      TSouffleHeapObject(BridgeKey).MarkReferences;
+  for CachePair in FArrayBridgeReverse do
+    if (CachePair.Value is TSouffleHeapObject) and not TSouffleHeapObject(CachePair.Value).GCMarked then
+      TSouffleHeapObject(CachePair.Value).MarkReferences;
 
-  for BridgeKey in FRecordBridgeCache.Keys do
-    if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
-      TSouffleHeapObject(BridgeKey).MarkReferences;
+  for CachePair in FRecordBridgeCache do
+    if (CachePair.Key is TSouffleHeapObject) and not TSouffleHeapObject(CachePair.Key).GCMarked then
+      TSouffleHeapObject(CachePair.Key).MarkReferences;
 
-  for BridgeKey in FBlueprintBridgeCache.Keys do
-    if (BridgeKey is TSouffleHeapObject) and not TSouffleHeapObject(BridgeKey).GCMarked then
-      TSouffleHeapObject(BridgeKey).MarkReferences;
+  for CachePair in FBlueprintBridgeCache do
+    if (CachePair.Key is TSouffleHeapObject) and not TSouffleHeapObject(CachePair.Key).GCMarked then
+      TSouffleHeapObject(CachePair.Key).MarkReferences;
 
-  for SuperVal in FBlueprintSuperValues.Values do
-    if SouffleIsReference(SuperVal) and Assigned(SuperVal.AsReference)
-      and not SuperVal.AsReference.GCMarked then
-      SuperVal.AsReference.MarkReferences;
+  for SuperPair in FBlueprintSuperValues do
+    if SouffleIsReference(SuperPair.Value) and Assigned(SuperPair.Value.AsReference)
+      and not SuperPair.Value.AsReference.GCMarked then
+      SuperPair.Value.AsReference.MarkReferences;
 
   if Assigned(FStringDelegate) and not FStringDelegate.GCMarked then
     FStringDelegate.MarkReferences;
@@ -8680,7 +8684,8 @@ procedure TGocciaRuntimeOperations.MarkWrappedGocciaValues;
 var
   I: Integer;
   Wrapped: TGocciaWrappedValue;
-  BridgeVal: TObject;
+  ClosurePair: THashMap<TSouffleClosure, TObject>.TKeyValuePair;
+  CachePair: THashMap<TObject, TObject>.TKeyValuePair;
 begin
   for I := 0 to FWrappedValues.Count - 1 do
   begin
@@ -8689,25 +8694,25 @@ begin
       Wrapped.Value.MarkReferences;
   end;
 
-  for BridgeVal in FClosureBridgeCache.Values do
-    if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
-      TGocciaValue(BridgeVal).MarkReferences;
+  for ClosurePair in FClosureBridgeCache do
+    if (ClosurePair.Value is TGocciaValue) and not TGocciaValue(ClosurePair.Value).GCMarked then
+      TGocciaValue(ClosurePair.Value).MarkReferences;
 
-  for BridgeVal in FArrayBridgeCache.Values do
-    if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
-      TGocciaValue(BridgeVal).MarkReferences;
+  for CachePair in FArrayBridgeCache do
+    if (CachePair.Value is TGocciaValue) and not TGocciaValue(CachePair.Value).GCMarked then
+      TGocciaValue(CachePair.Value).MarkReferences;
 
-  for BridgeVal in FArrayBridgeReverse.Keys do
-    if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
-      TGocciaValue(BridgeVal).MarkReferences;
+  for CachePair in FArrayBridgeReverse do
+    if (CachePair.Key is TGocciaValue) and not TGocciaValue(CachePair.Key).GCMarked then
+      TGocciaValue(CachePair.Key).MarkReferences;
 
-  for BridgeVal in FRecordBridgeCache.Values do
-    if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
-      TGocciaValue(BridgeVal).MarkReferences;
+  for CachePair in FRecordBridgeCache do
+    if (CachePair.Value is TGocciaValue) and not TGocciaValue(CachePair.Value).GCMarked then
+      TGocciaValue(CachePair.Value).MarkReferences;
 
-  for BridgeVal in FBlueprintBridgeCache.Values do
-    if (BridgeVal is TGocciaValue) and not TGocciaValue(BridgeVal).GCMarked then
-      TGocciaValue(BridgeVal).MarkReferences;
+  for CachePair in FBlueprintBridgeCache do
+    if (CachePair.Value is TGocciaValue) and not TGocciaValue(CachePair.Value).GCMarked then
+      TGocciaValue(CachePair.Value).MarkReferences;
 
   if Assigned(FActiveDecoratorSession) then
   begin

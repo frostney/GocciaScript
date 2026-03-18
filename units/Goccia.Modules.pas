@@ -5,8 +5,9 @@ unit Goccia.Modules;
 interface
 
 uses
-  Generics.Collections,
   SysUtils,
+
+  OrderedStringMap,
 
   Goccia.Values.Primitives;
 
@@ -14,13 +15,13 @@ type
   TGocciaModule = class
   private
     FPath: string;
-    FExportsTable: TDictionary<string, TGocciaValue>;
+    FExportsTable: TGocciaValueMap;
     FLastModified: TDateTime;
   public
     constructor Create(const APath: string);
     destructor Destroy; override;
     property Path: string read FPath;
-    property ExportsTable: TDictionary<string, TGocciaValue> read FExportsTable;
+    property ExportsTable: TGocciaValueMap read FExportsTable;
     property LastModified: TDateTime read FLastModified write FLastModified;
   end;
 
@@ -31,7 +32,7 @@ implementation
 constructor TGocciaModule.Create(const APath: string);
 begin
   FPath := APath;
-  FExportsTable := TDictionary<string, TGocciaValue>.Create;
+  FExportsTable := TGocciaValueMap.Create;
 end;
 
 destructor TGocciaModule.Destroy;

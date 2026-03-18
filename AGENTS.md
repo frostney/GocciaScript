@@ -140,9 +140,12 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, `ThrowReferenceError`, `ThrowSyntaxError`, `ThrowError`, `ThrowDataCloneError` (creates DOMException with code 25), centralized error construction with proper prototype chain. All runtime errors must go through these helpers (not `TGocciaError.Create`) so the resulting exception is a `TGocciaThrowValue` with a proper JS Error object, catchable from JavaScript `try...catch`. |
 | Argument Validator | `Goccia.Arguments.Validator.pas` | `RequireExactly`, `RequireAtLeast` — standardized argument count/type validation |
 | Argument Callbacks | `Goccia.Arguments.Callbacks.pas` | Pre-typed callback argument collections for array prototype methods |
-| Ordered Map | `OrderedMap.pas` | Generic insertion-order-preserving string-keyed map (`TOrderedMap<T>`) |
+| Base Map | `BaseMap.pas` | `TBaseMap<TKey, TValue>` — abstract generic base for all map types; shared type aliases, abstract API contract, concrete iteration (`ToArray`, `Keys`, `Values`, `ForEach`) built on a single `GetNextEntry` primitive |
+| Ordered Map | `OrderedMap.pas` | `TOrderedMap<TKey, TValue>` — generic insertion-order-preserving map with virtual hash/equality; default: DJB2 over raw key bytes + byte-level equality |
+| Ordered String Map | `OrderedStringMap.pas` | `TOrderedStringMap<TValue>` — string-keyed ordered map inheriting `TBaseMap<string, TValue>`; DJB2 hash on characters, `static inline` — zero virtual dispatch on hash/equality; 4–6× faster inserts than `TDictionary` at N=20–100 |
+| Hash Map | `HashMap.pas` | `THashMap<TKey, TValue>` — open-addressed hash map with backshift deletion (no tombstones); `static inline` hash/equality; 2× faster inserts than `TDictionary` for pointer keys at scale |
 | String Buffer | `StringBuffer.pas` | `TStringBuffer` — advanced record for efficient string building with preallocated doubling growth via `AnsiString` + `Move`, replacing `TStringBuilder`. `DEFAULT_CAPACITY` constant (64) used by `Create` default parameter and zero/negative fallback |
-| Binding Map | `Goccia.Scope.BindingMap.pas` | Ordered map specialized for lexical bindings (`TOrderedMap<TLexicalBinding>`) |
+| Binding Map | `Goccia.Scope.BindingMap.pas` | `TOrderedStringMap<TLexicalBinding>` — scope chain variable bindings; hash-based O(1) lookup per scope level; scope chain walking handled by `TGocciaScope` (not the map) |
 | Array Utils | `Goccia.Utils.Array.pas` | `ArrayCreateDataProperty` helper for spec-compliant array operations |
 | TypedArray Value | `Goccia.Values.TypedArrayValue.pas` | `TGocciaTypedArrayValue` — view over ArrayBuffer with fixed element type (Int8, Uint8, Uint8Clamped, Int16, Uint16, Int32, Uint32, Float32, Float64), `TGocciaTypedArrayClassValue`, `TGocciaTypedArrayStaticFrom` |
 | Test Console | `Goccia.Builtins.TestConsole.pas` | Silent console override for `--silent` mode in TestRunner |
@@ -424,6 +427,22 @@ Dictionary-based string interning (`TDictionary<string, TGocciaStringLiteralValu
 ### Do Not Use TStringBuilder
 
 `TStringBuilder` (both `TUnicodeStringBuilder` and `TAnsiStringBuilder`) triggers a **750x slowdown** from FPC's default heap manager when used without preallocation, due to pathological repeated grow-free cycles. Even preallocated, it is ~2x slower than `TStringBuffer` due to virtual dispatch and bounds-checking overhead. Use `TStringBuffer` (`StringBuffer.pas`) instead for all string building. `TStringBuffer` is an advanced record with preallocated doubling growth, within 1.1–1.7x of raw `SetLength + Move` writes, and requires no `try/finally` cleanup (the backing `AnsiString` is refcounted and compiler-managed). See [docs/spikes/fpc-string-performance.pdf](docs/spikes/fpc-string-performance.pdf) for the full benchmark analysis.
+
+### Do Not Use TDictionary on Hot Paths
+
+`TDictionary` from `Generics.Collections` carries RTTI-based hashing and `IEqualityComparer` interface dispatch overhead that is significant at small-to-medium sizes (N=20–100), which covers the majority of runtime maps (object properties, scope bindings, class methods). Use purpose-built maps instead:
+
+| Use case | Recommended map | Rationale |
+|----------|----------------|-----------|
+| String-keyed, order needed | `TOrderedStringMap<V>` | 4–6× faster inserts than `TDictionary` at N=20–100; preserves insertion order per spec |
+| Generic key, order needed | `TOrderedMap<K,V>` | Virtual hash/equality; parity with `TDictionary` at typical sizes |
+| Any key, no order needed | `THashMap<K,V>` | Backshift deletion (no tombstones); 2× faster inserts for pointer keys at scale |
+| Scope chain bindings | `TOrderedStringMap<V>` | Hash-based O(1) lookup per scope level; chain walking is `TGocciaScope`'s responsibility |
+| Cold-path collections | `TDictionary` acceptable | Acceptable where insert/lookup performance is not critical |
+
+`TFPDataHashTable` must **never** be used — it has catastrophic insert performance due to per-node heap allocation (400,000 ns/insert vs 50 ns for `TOrderedStringMap` at N=20). See [docs/spikes/fpc-hashmap-performance.pdf](docs/spikes/fpc-hashmap-performance.pdf) for the full benchmark analysis.
+
+**FPC 3.2.2 generic VMT pitfall:** FPC 3.2.2 creates per-unit VMTs for generic specializations. When a generic with a generic base class is specialized across multiple units, `{$OBJECTCHECKS ON}` can cause "Invalid type cast" failures if instances are type-cast across unit boundaries. All map types (`TOrderedStringMap`, `THashMap`, `TOrderedMap`) inherit from `TBaseMap`. This is safe because map instances are used as fields and local variables — they are never passed as base-class parameters or cross-unit type-cast. The VMT pitfall only applies when using `is`/`as` operators or `InheritsFrom` on generic instances across units. For `TObjectList<T>` (where cross-unit casts are common), named type aliases remain required.
 
 ### Platform Pitfall: `Double(Int64)` on AArch64
 

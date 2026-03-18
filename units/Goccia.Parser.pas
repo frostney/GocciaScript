@@ -8,6 +8,9 @@ uses
   Classes,
   Generics.Collections,
 
+  HashMap,
+  OrderedStringMap,
+
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
@@ -142,8 +145,6 @@ implementation
 
 uses
   SysUtils,
-
-  OrderedMap,
 
   Goccia.Error,
   Goccia.Keywords.Contextual,
@@ -774,13 +775,13 @@ end;
 
 function TGocciaParser.ObjectLiteral: TGocciaExpression;
 var
-  Properties: TDictionary<string, TGocciaExpression>;
+  Properties: TGocciaExpressionMap;
   PropertyOrder: TStringList;
-  ComputedProperties: TDictionary<TGocciaExpression, TGocciaExpression>;
+  ComputedProperties: THashMap<TGocciaExpression, TGocciaExpression>;
   ComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>>;
   PropertySourceOrder: TArray<TGocciaPropertySourceOrder>;
-  Getters: TDictionary<string, TGocciaGetterExpression>;
-  Setters: TDictionary<string, TGocciaSetterExpression>;
+  Getters: TGocciaGetterExpressionMap;
+  Setters: TGocciaSetterExpressionMap;
   Key: string;
   KeyExpression: TGocciaExpression;
   Value: TGocciaExpression;
@@ -793,12 +794,12 @@ var
 begin
   Line := Previous.Line;
   Column := Previous.Column;
-  Properties := TDictionary<string, TGocciaExpression>.Create;
+  Properties := TGocciaExpressionMap.Create;
   PropertyOrder := TStringList.Create;
   PropertyOrder.Duplicates := dupIgnore;
-  ComputedProperties := TDictionary<TGocciaExpression, TGocciaExpression>.Create;
-  Getters := TDictionary<string, TGocciaGetterExpression>.Create;
-  Setters := TDictionary<string, TGocciaSetterExpression>.Create;
+  ComputedProperties := THashMap<TGocciaExpression, TGocciaExpression>.Create;
+  Getters := TGocciaGetterExpressionMap.Create;
+  Setters := TGocciaSetterExpressionMap.Create;
 
   // Initialize source order tracking
   ComputedCount := 0;
@@ -2017,7 +2018,7 @@ end;
 
 function TGocciaParser.ImportDeclaration: TGocciaStatement;
 var
-  Imports: TDictionary<string, string>;
+  Imports: TStringStringMap;
   ImportedName, LocalName, ModulePath: string;
   Line, Column: Integer;
 begin
@@ -2064,7 +2065,7 @@ begin
 
   Consume(gttLeftBrace, 'Expected "{" after "import"');
 
-  Imports := TDictionary<string, string>.Create;
+  Imports := TStringStringMap.Create;
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
@@ -2091,7 +2092,7 @@ end;
 
 function TGocciaParser.ExportDeclaration: TGocciaStatement;
 var
-  ExportsTable: TDictionary<string, string>;
+  ExportsTable: TStringStringMap;
   LocalName, ExportedName, ModulePath: string;
   Line, Column: Integer;
   InnerDecl: TGocciaStatement;
@@ -2164,7 +2165,7 @@ begin
 
   Consume(gttLeftBrace, 'Expected "{", "const", or "let" after "export"');
 
-  ExportsTable := TDictionary<string, string>.Create;
+  ExportsTable := TStringStringMap.Create;
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
@@ -2199,14 +2200,14 @@ end;
 function TGocciaParser.ParseClassBody(const AClassName: string): TGocciaClassDefinition;
 var
   SuperClass: string;
-  Methods: TDictionary<string, TGocciaClassMethod>;
-  Getters: TDictionary<string, TGocciaGetterExpression>;
-  Setters: TDictionary<string, TGocciaSetterExpression>;
-  StaticProperties: TDictionary<string, TGocciaExpression>;
-  InstanceProperties: TOrderedMap<TGocciaExpression>;
-  PrivateInstanceProperties: TOrderedMap<TGocciaExpression>;
-  PrivateStaticProperties: TDictionary<string, TGocciaExpression>;
-  PrivateMethods: TDictionary<string, TGocciaClassMethod>;
+  Methods: TGocciaClassMethodMap;
+  Getters: TGocciaGetterExpressionMap;
+  Setters: TGocciaSetterExpressionMap;
+  StaticProperties: TGocciaExpressionMap;
+  InstanceProperties: TGocciaExpressionMap;
+  PrivateInstanceProperties: TGocciaExpressionMap;
+  PrivateStaticProperties: TGocciaExpressionMap;
+  PrivateMethods: TGocciaClassMethodMap;
   MemberName: string;
   Method: TGocciaClassMethod;
   Getter: TGocciaGetterExpression;
@@ -2218,19 +2219,20 @@ var
   IsSetter: Boolean;
   IsComputed: Boolean;
   ComputedKeyExpression: TGocciaExpression;
-  StaticGetters: TDictionary<string, TGocciaGetterExpression>;
-  StaticSetters: TDictionary<string, TGocciaSetterExpression>;
+  StaticGetters: TGocciaGetterExpressionMap;
+  StaticSetters: TGocciaSetterExpressionMap;
   ComputedStaticGetters: array of TGocciaComputedGetterEntry;
   ComputedStaticSetters: array of TGocciaComputedSetterEntry;
   ComputedInstanceGetters: array of TGocciaComputedGetterEntry;
   ComputedInstanceSetters: array of TGocciaComputedSetterEntry;
   ClassGenericParams, ClassImplementsClause, FieldType: string;
-  InstancePropertyTypes: TDictionary<string, string>;
+  InstancePropertyTypes: TStringStringMap;
   MemberDecorators: TGocciaDecoratorList;
   Elements: array of TGocciaClassElement;
   FieldOrder: array of TGocciaFieldOrderEntry;
   IsAccessor: Boolean;
   IsAsync: Boolean;
+  TypePair: TStringStringMap.TKeyValuePair;
 begin
   SetLength(Elements, 0);
   SetLength(FieldOrder, 0);
@@ -2253,17 +2255,17 @@ begin
 
   Consume(gttLeftBrace, 'Expected "{" before class body');
 
-  Methods := TDictionary<string, TGocciaClassMethod>.Create;
-  Getters := TDictionary<string, TGocciaGetterExpression>.Create;
-  Setters := TDictionary<string, TGocciaSetterExpression>.Create;
-  StaticProperties := TDictionary<string, TGocciaExpression>.Create;
-  InstanceProperties := TOrderedMap<TGocciaExpression>.Create;
-  PrivateInstanceProperties := TOrderedMap<TGocciaExpression>.Create;
-  PrivateStaticProperties := TDictionary<string, TGocciaExpression>.Create;
-  PrivateMethods := TDictionary<string, TGocciaClassMethod>.Create;
-  InstancePropertyTypes := TDictionary<string, string>.Create;
-  StaticGetters := TDictionary<string, TGocciaGetterExpression>.Create;
-  StaticSetters := TDictionary<string, TGocciaSetterExpression>.Create;
+  Methods := TGocciaClassMethodMap.Create;
+  Getters := TGocciaGetterExpressionMap.Create;
+  Setters := TGocciaSetterExpressionMap.Create;
+  StaticProperties := TGocciaExpressionMap.Create;
+  InstanceProperties := TGocciaExpressionMap.Create;
+  PrivateInstanceProperties := TGocciaExpressionMap.Create;
+  PrivateStaticProperties := TGocciaExpressionMap.Create;
+  PrivateMethods := TGocciaClassMethodMap.Create;
+  InstancePropertyTypes := TStringStringMap.Create;
+  StaticGetters := TGocciaGetterExpressionMap.Create;
+  StaticSetters := TGocciaSetterExpressionMap.Create;
   SetLength(ComputedStaticGetters, 0);
   SetLength(ComputedStaticSetters, 0);
   SetLength(ComputedInstanceGetters, 0);
@@ -2581,8 +2583,8 @@ begin
   Result := TGocciaClassDefinition.Create(AClassName, SuperClass, Methods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
   Result.GenericParams := ClassGenericParams;
   Result.ImplementsClause := ClassImplementsClause;
-  for MemberName in InstancePropertyTypes.Keys do
-    Result.FInstancePropertyTypes.Add(MemberName, InstancePropertyTypes[MemberName]);
+  for TypePair in InstancePropertyTypes do
+    Result.FInstancePropertyTypes.Add(TypePair.Key, TypePair.Value);
 
   Result.FStaticGetters.Free;
   Result.FStaticGetters := StaticGetters;
@@ -3108,7 +3110,7 @@ var
   Elements: TObjectList<TGocciaDestructuringPattern>;
   Properties: TObjectList<TGocciaDestructuringProperty>;
   I: Integer;
-  Pair: TPair<string, TGocciaExpression>;
+  PropPair: TGocciaExpressionMap.TKeyValuePair;
   ComputedPair: TPair<TGocciaExpression, TGocciaExpression>;
   Prop: TGocciaDestructuringProperty;
 begin
@@ -3152,10 +3154,9 @@ begin
     ObjectExpr := TGocciaObjectExpression(AExpr);
     Properties := TObjectList<TGocciaDestructuringProperty>.Create(True);
 
-    // Handle static properties
-    for Pair in ObjectExpr.Properties do
+    for PropPair in ObjectExpr.Properties do
     begin
-      Prop := TGocciaDestructuringProperty.Create(Pair.Key, ConvertToPattern(Pair.Value));
+      Prop := TGocciaDestructuringProperty.Create(PropPair.Key, ConvertToPattern(PropPair.Value));
       Properties.Add(Prop);
     end;
 

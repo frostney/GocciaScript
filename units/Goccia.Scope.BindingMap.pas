@@ -5,7 +5,7 @@ unit Goccia.Scope.BindingMap;
 interface
 
 uses
-  OrderedMap,
+  OrderedStringMap,
 
   Goccia.Values.Primitives;
 
@@ -27,7 +27,7 @@ type
     property IsAccessible: Boolean read CanAccess;
   end;
 
-  TGocciaScopeBindingMap = TOrderedMap<TLexicalBinding>;
+  TGocciaScopeBindingMap = TOrderedStringMap<TLexicalBinding>;
 
 implementation
 

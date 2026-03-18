@@ -6,11 +6,12 @@ interface
 
 uses
   Classes,
-  Generics.Collections,
 
-  OrderedMap,
+  HashMap,
+  OrderedStringMap,
 
   Goccia.Arguments.Collection,
+  Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -19,6 +20,7 @@ uses
   Goccia.Values.SymbolValue;
 
 type
+  TStaticSymbolDescriptorMap = THashMap<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
   // Forward declaration
   TGocciaInstanceValue = class;
 
@@ -31,22 +33,22 @@ type
   private
     FName: string;
     FSuperClass: TGocciaClassValue;
-    FMethods: TDictionary<string, TGocciaMethodValue>;
-    FGetters: TDictionary<string, TGocciaFunctionValue>;
-    FSetters: TDictionary<string, TGocciaFunctionValue>;
+    FMethods: TOrderedStringMap<TGocciaMethodValue>;
+    FGetters: TOrderedStringMap<TGocciaFunctionValue>;
+    FSetters: TOrderedStringMap<TGocciaFunctionValue>;
     FPrototype: TGocciaObjectValue;
     FConstructorMethod: TGocciaMethodValue;
-    FStaticMethods: TDictionary<string, TGocciaValue>;
-    FInstancePropertyDefs: TOrderedMap<TGocciaExpression>;
-    FPrivateInstancePropertyDefs: TOrderedMap<TGocciaExpression>;
+    FStaticMethods: TGocciaValueMap;
+    FInstancePropertyDefs: TGocciaExpressionMap;
+    FPrivateInstancePropertyDefs: TGocciaExpressionMap;
     FFieldOrder: array of TGocciaClassFieldOrderEntry;
-    FPrivateStaticProperties: TDictionary<string, TGocciaValue>;
-    FPrivateMethods: TDictionary<string, TGocciaMethodValue>;
-    FPrivateGetters: TDictionary<string, TGocciaFunctionValue>;
-    FPrivateSetters: TDictionary<string, TGocciaFunctionValue>;
-    FStaticGetters: TDictionary<string, TGocciaFunctionValue>;
-    FStaticSetters: TDictionary<string, TGocciaFunctionValue>;
-    FStaticSymbolDescriptors: TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
+    FPrivateStaticProperties: TGocciaValueMap;
+    FPrivateMethods: TOrderedStringMap<TGocciaMethodValue>;
+    FPrivateGetters: TOrderedStringMap<TGocciaFunctionValue>;
+    FPrivateSetters: TOrderedStringMap<TGocciaFunctionValue>;
+    FStaticGetters: TOrderedStringMap<TGocciaFunctionValue>;
+    FStaticSetters: TOrderedStringMap<TGocciaFunctionValue>;
+    FStaticSymbolDescriptors: TStaticSymbolDescriptorMap;
     FMethodInitializers: array of TGocciaValue;
     FFieldInitializers: array of TGocciaValue;
     FDecoratorFieldInitializers: array of record
@@ -103,13 +105,13 @@ type
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
     property Prototype: TGocciaObjectValue read FPrototype;
     property ConstructorMethod: TGocciaMethodValue read FConstructorMethod;
-    property InstancePropertyDefs: TOrderedMap<TGocciaExpression> read FInstancePropertyDefs;
-    property PrivateInstancePropertyDefs: TOrderedMap<TGocciaExpression> read FPrivateInstancePropertyDefs;
+    property InstancePropertyDefs: TGocciaExpressionMap read FInstancePropertyDefs;
+    property PrivateInstancePropertyDefs: TGocciaExpressionMap read FPrivateInstancePropertyDefs;
     procedure SetFieldOrder(const AOrder: array of TGocciaClassFieldOrderEntry);
     function FieldOrderCount: Integer;
     function FieldOrderEntry(const AIndex: Integer): TGocciaClassFieldOrderEntry;
-    property PrivateStaticProperties: TDictionary<string, TGocciaValue> read FPrivateStaticProperties;
-    property PrivateMethods: TDictionary<string, TGocciaMethodValue> read FPrivateMethods;
+    property PrivateStaticProperties: TGocciaValueMap read FPrivateStaticProperties;
+    property PrivateMethods: TOrderedStringMap<TGocciaMethodValue> read FPrivateMethods;
     property PropertyGetter[const AName: string]: TGocciaFunctionValue read GetPropertyGetter;
     property PropertySetter[const AName: string]: TGocciaFunctionValue read GetPropertySetter;
     property StaticPropertyGetter[const AName: string]: TGocciaFunctionValue read GetStaticPropertyGetter;
@@ -164,7 +166,7 @@ type
   TGocciaInstanceValue = class(TGocciaObjectValue)
   private
     FClass: TGocciaClassValue;
-    FPrivateProperties: TDictionary<string, TGocciaValue>;
+    FPrivateProperties: TGocciaValueMap;
   public
     constructor Create(const AClass: TGocciaClassValue = nil);
     destructor Destroy; override;
@@ -181,7 +183,7 @@ type
     procedure MarkReferences; override;
 
     property ClassValue: TGocciaClassValue read FClass write FClass;
-    property PrivateProperties: TDictionary<string, TGocciaValue> read FPrivateProperties;
+    property PrivateProperties: TGocciaValueMap read FPrivateProperties;
   end;
 
 implementation
@@ -211,19 +213,19 @@ constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGo
 begin
   FName := AName;
   FSuperClass := ASuperClass;
-  FMethods := TDictionary<string, TGocciaMethodValue>.Create;
-  FGetters := TDictionary<string, TGocciaFunctionValue>.Create;
-  FSetters := TDictionary<string, TGocciaFunctionValue>.Create;
-  FStaticMethods := TDictionary<string, TGocciaValue>.Create;
-  FInstancePropertyDefs := TOrderedMap<TGocciaExpression>.Create;
-  FPrivateInstancePropertyDefs := TOrderedMap<TGocciaExpression>.Create;
-  FPrivateStaticProperties := TDictionary<string, TGocciaValue>.Create;
-  FPrivateMethods := TDictionary<string, TGocciaMethodValue>.Create;
-  FPrivateGetters := TDictionary<string, TGocciaFunctionValue>.Create;
-  FPrivateSetters := TDictionary<string, TGocciaFunctionValue>.Create;
-  FStaticGetters := TDictionary<string, TGocciaFunctionValue>.Create;
-  FStaticSetters := TDictionary<string, TGocciaFunctionValue>.Create;
-  FStaticSymbolDescriptors := TDictionary<TGocciaSymbolValue, TGocciaPropertyDescriptor>.Create;
+  FMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
+  FGetters := TOrderedStringMap<TGocciaFunctionValue>.Create;
+  FSetters := TOrderedStringMap<TGocciaFunctionValue>.Create;
+  FStaticMethods := TGocciaValueMap.Create;
+  FInstancePropertyDefs := TGocciaExpressionMap.Create;
+  FPrivateInstancePropertyDefs := TGocciaExpressionMap.Create;
+  FPrivateStaticProperties := TGocciaValueMap.Create;
+  FPrivateMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
+  FPrivateGetters := TOrderedStringMap<TGocciaFunctionValue>.Create;
+  FPrivateSetters := TOrderedStringMap<TGocciaFunctionValue>.Create;
+  FStaticGetters := TOrderedStringMap<TGocciaFunctionValue>.Create;
+  FStaticSetters := TOrderedStringMap<TGocciaFunctionValue>.Create;
+  FStaticSymbolDescriptors := TStaticSymbolDescriptorMap.Create;
   FPrototype := TGocciaObjectValue.Create;
   FConstructorMethod := nil;
   if Assigned(FSuperClass) then
@@ -253,65 +255,54 @@ end;
 
 procedure TGocciaClassValue.MarkReferences;
 var
-  MethodPair: TPair<string, TGocciaMethodValue>;
-  FuncPair: TPair<string, TGocciaFunctionValue>;
-  ValuePair: TPair<string, TGocciaValue>;
-  SymPair: TPair<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
+  MethodPair: TOrderedStringMap<TGocciaMethodValue>.TKeyValuePair;
+  FuncPair: TOrderedStringMap<TGocciaFunctionValue>.TKeyValuePair;
+  ValPair: TGocciaValueMap.TKeyValuePair;
+  SymPair: TStaticSymbolDescriptorMap.TKeyValuePair;
   Accessor: TGocciaPropertyDescriptorAccessor;
   I: Integer;
 begin
   if GCMarked then Exit;
-  inherited; // Sets mark
+  inherited;
 
-  // Mark superclass
   if Assigned(FSuperClass) then
     FSuperClass.MarkReferences;
 
-  // Mark prototype
   if Assigned(FPrototype) then
     FPrototype.MarkReferences;
 
-  // Mark constructor
   if Assigned(FConstructorMethod) then
     FConstructorMethod.MarkReferences;
 
-  // Mark methods
   for MethodPair in FMethods do
     MethodPair.Value.MarkReferences;
 
-  // Mark getters and setters
   for FuncPair in FGetters do
     FuncPair.Value.MarkReferences;
   for FuncPair in FSetters do
     FuncPair.Value.MarkReferences;
 
-  // Mark static methods
-  for ValuePair in FStaticMethods do
-    if Assigned(ValuePair.Value) then
-      ValuePair.Value.MarkReferences;
+  for ValPair in FStaticMethods do
+    if Assigned(ValPair.Value) then
+      ValPair.Value.MarkReferences;
 
-  // Mark private static properties
-  for ValuePair in FPrivateStaticProperties do
-    if Assigned(ValuePair.Value) then
-      ValuePair.Value.MarkReferences;
+  for ValPair in FPrivateStaticProperties do
+    if Assigned(ValPair.Value) then
+      ValPair.Value.MarkReferences;
 
-  // Mark private methods
   for MethodPair in FPrivateMethods do
     MethodPair.Value.MarkReferences;
 
-  // Mark private getters and setters
   for FuncPair in FPrivateGetters do
     FuncPair.Value.MarkReferences;
   for FuncPair in FPrivateSetters do
     FuncPair.Value.MarkReferences;
 
-  // Mark static getters and setters
   for FuncPair in FStaticGetters do
     FuncPair.Value.MarkReferences;
   for FuncPair in FStaticSetters do
     FuncPair.Value.MarkReferences;
 
-  // Mark static symbol descriptors
   for SymPair in FStaticSymbolDescriptors do
   begin
     SymPair.Key.MarkReferences;
@@ -824,9 +815,7 @@ end;
 
 function TGocciaClassValue.GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
 begin
-  if FStaticSymbolDescriptors.TryGetValue(ASymbol, Result) then
-    { Result set by TryGetValue }
-  else
+  if not FStaticSymbolDescriptors.TryGetValue(ASymbol, Result) then
     Result := nil;
 end;
 
@@ -1136,7 +1125,7 @@ end;
 
 function TGocciaInstanceValue.HasPrivateProperty(const AName: string): Boolean;
 var
-  Key: string;
+  Pair: TGocciaValueMap.TKeyValuePair;
   Suffix: string;
 begin
   if not Assigned(FPrivateProperties) then
@@ -1145,9 +1134,9 @@ begin
     Exit;
   end;
   Suffix := ':' + AName;
-  for Key in FPrivateProperties.Keys do
+  for Pair in FPrivateProperties do
   begin
-    if (Key = AName) or (Copy(Key, Length(Key) - Length(Suffix) + 1, Length(Suffix)) = Suffix) then
+    if (Pair.Key = AName) or (Copy(Pair.Key, Length(Pair.Key) - Length(Suffix) + 1, Length(Suffix)) = Suffix) then
     begin
       Result := True;
       Exit;
@@ -1260,7 +1249,7 @@ begin
   // Use composite key (ClassName:FieldName) to support per-class private field scoping
   CompositeKey := AAccessClass.Name + ':' + AName;
   if not Assigned(FPrivateProperties) then
-    FPrivateProperties := TDictionary<string, TGocciaValue>.Create;
+    FPrivateProperties := TGocciaValueMap.Create;
   FPrivateProperties.AddOrSetValue(CompositeKey, AValue);
 end;
 
@@ -1272,19 +1261,18 @@ end;
 
 procedure TGocciaInstanceValue.MarkReferences;
 var
-  ValuePair: TPair<string, TGocciaValue>;
+  ValPair: TGocciaValueMap.TKeyValuePair;
 begin
   if GCMarked then Exit;
-  inherited; // Marks self + object properties/prototype
+  inherited;
 
-  // Mark class reference
   if Assigned(FClass) then
     FClass.MarkReferences;
 
   if Assigned(FPrivateProperties) then
-    for ValuePair in FPrivateProperties do
-      if Assigned(ValuePair.Value) then
-        ValuePair.Value.MarkReferences;
+    for ValPair in FPrivateProperties do
+      if Assigned(ValPair.Value) then
+        ValPair.Value.MarkReferences;
 end;
 
 end.

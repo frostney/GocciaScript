@@ -5,8 +5,9 @@ unit Goccia.Builtins.GlobalSymbol;
 interface
 
 uses
-  Generics.Collections,
   SysUtils,
+
+  OrderedStringMap,
 
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
@@ -19,7 +20,7 @@ uses
 type
   TGocciaGlobalSymbol = class(TGocciaBuiltin)
   private
-    FGlobalRegistry: TDictionary<string, TGocciaSymbolValue>;
+    FGlobalRegistry: TOrderedStringMap<TGocciaSymbolValue>;
     FSymbolFunction: TGocciaNativeFunctionValue;
 
     // Well-known symbols
@@ -32,7 +33,7 @@ type
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
     destructor Destroy; override;
 
-    property GlobalRegistry: TDictionary<string, TGocciaSymbolValue> read FGlobalRegistry;
+    property GlobalRegistry: TOrderedStringMap<TGocciaSymbolValue> read FGlobalRegistry;
     property IteratorSymbol: TGocciaSymbolValue read FIteratorSymbol;
   end;
 
@@ -50,7 +51,7 @@ var
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FGlobalRegistry := TDictionary<string, TGocciaSymbolValue>.Create;
+  FGlobalRegistry := TOrderedStringMap<TGocciaSymbolValue>.Create;
 
   // Initialize shared Symbol prototype
   PrototypeInitializer := TGocciaSymbolValue.Create;
@@ -150,7 +151,7 @@ end;
 function TGocciaGlobalSymbol.SymbolKeyFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Arg: TGocciaValue;
-  Pair: TPair<string, TGocciaSymbolValue>;
+  Pair: TOrderedStringMap<TGocciaSymbolValue>.TKeyValuePair;
 begin
   Arg := AArgs.GetElement(0);
 

@@ -72,7 +72,7 @@ implementation
 uses
   SysUtils,
 
-  OrderedMap,
+  OrderedStringMap,
   Souffle.Bytecode,
   Souffle.Bytecode.Debug,
 
@@ -999,7 +999,7 @@ procedure CompileImportDeclaration(const ACtx: TGocciaCompilationContext;
 var
   ModReg: UInt8;
   PathIdx, NameIdx: UInt16;
-  Pair: TPair<string, string>;
+  Pair: TStringStringMap.TKeyValuePair;
   Slots: array of UInt8;
   Names: array of string;
   I, Count: Integer;
@@ -1035,7 +1035,7 @@ end;
 procedure CompileExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExportDeclaration);
 var
-  Pair: TPair<string, string>;
+  Pair: TStringStringMap.TKeyValuePair;
   LocalIdx: Integer;
   Reg: UInt8;
   NameIdx: UInt16;
@@ -1082,7 +1082,7 @@ procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
 var
   ModReg, ValReg: UInt8;
   PathIdx, SrcNameIdx, ExportNameIdx: UInt16;
-  Pair: TPair<string, string>;
+  Pair: TStringStringMap.TKeyValuePair;
 begin
   ModReg := ACtx.Scope.AllocateRegister;
   ValReg := ACtx.Scope.AllocateRegister;
@@ -1574,7 +1574,7 @@ var
   ValReg, ThisReg: UInt8;
   KeyIdx: UInt16;
   I: Integer;
-  Entry: TOrderedMap<TGocciaExpression>.TKeyValuePair;
+  Entry: TGocciaExpressionMap.TKeyValuePair;
   Elem: TGocciaClassElement;
   FieldExpr: TGocciaExpression;
 begin
@@ -1882,10 +1882,10 @@ var
   ClassDef: TGocciaClassDefinition;
   ClassReg, SuperReg, ValReg: UInt8;
   NameIdx, KeyIdx: UInt16;
-  MethodPair: TPair<string, TGocciaClassMethod>;
-  GetterPair: TPair<string, TGocciaGetterExpression>;
-  SetterPair: TPair<string, TGocciaSetterExpression>;
-  StaticPropPair: TPair<string, TGocciaExpression>;
+  MethodPair: TGocciaClassMethodMap.TKeyValuePair;
+  GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
+  SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
+  StaticPropPair: TGocciaExpressionMap.TKeyValuePair;
   LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;
@@ -2013,10 +2013,10 @@ var
   ClassDef: TGocciaClassDefinition;
   SuperReg, ValReg: UInt8;
   NameIdx, KeyIdx: UInt16;
-  MethodPair: TPair<string, TGocciaClassMethod>;
-  GetterPair: TPair<string, TGocciaGetterExpression>;
-  SetterPair: TPair<string, TGocciaSetterExpression>;
-  StaticPropPair: TPair<string, TGocciaExpression>;
+  MethodPair: TGocciaClassMethodMap.TKeyValuePair;
+  GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
+  SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
+  StaticPropPair: TGocciaExpressionMap.TKeyValuePair;
   LocalIdx, UpvalIdx: Integer;
   HasSuper: Boolean;
   PrivPrefix: string;

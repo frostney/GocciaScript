@@ -5,13 +5,14 @@ unit Goccia.Modules.Resolver;
 interface
 
 uses
-  Generics.Collections,
-  SysUtils;
+  SysUtils,
+
+  OrderedStringMap;
 
 type
   TGocciaModuleResolver = class
   private
-    FAliases: TDictionary<string, string>;
+    FAliases: TStringStringMap;
     FBaseDirectory: string;
   protected
     function ApplyAliases(const AModulePath: string): string;
@@ -24,7 +25,7 @@ type
     function HasAlias(const AModulePath: string): Boolean;
     function Resolve(const AModulePath, AImportingFilePath: string): string; virtual;
 
-    property Aliases: TDictionary<string, string> read FAliases;
+    property Aliases: TStringStringMap read FAliases;
     property BaseDirectory: string read FBaseDirectory write FBaseDirectory;
   end;
 
@@ -37,7 +38,7 @@ uses
 
 constructor TGocciaModuleResolver.Create(const ABaseDirectory: string);
 begin
-  FAliases := TDictionary<string, string>.Create;
+  FAliases := TStringStringMap.Create;
   if ABaseDirectory <> '' then
     FBaseDirectory := IncludeTrailingPathDelimiter(ExpandFileName(ABaseDirectory))
   else
@@ -57,7 +58,7 @@ end;
 
 function TGocciaModuleResolver.HasAlias(const AModulePath: string): Boolean;
 var
-  Pair: TPair<string, string>;
+  Pair: TStringStringMap.TKeyValuePair;
 begin
   for Pair in FAliases do
     if (Length(AModulePath) >= Length(Pair.Key)) and
@@ -79,8 +80,8 @@ end;
 
 function TGocciaModuleResolver.ApplyAliases(const AModulePath: string): string;
 var
-  Pair, BestMatch: TPair<string, string>;
-  Replacement: string;
+  Pair: TStringStringMap.TKeyValuePair;
+  BestKey, BestValue, Replacement: string;
   Found: Boolean;
 begin
   Result := AModulePath;
@@ -91,9 +92,10 @@ begin
     if (Length(AModulePath) >= Length(Pair.Key)) and
        (Copy(AModulePath, 1, Length(Pair.Key)) = Pair.Key) then
     begin
-      if (not Found) or (Length(Pair.Key) > Length(BestMatch.Key)) then
+      if (not Found) or (Length(Pair.Key) > Length(BestKey)) then
       begin
-        BestMatch := Pair;
+        BestKey := Pair.Key;
+        BestValue := Pair.Value;
         Found := True;
       end;
     end;
@@ -101,7 +103,7 @@ begin
 
   if Found then
   begin
-    Replacement := BestMatch.Value + Copy(AModulePath, Length(BestMatch.Key) + 1, MaxInt);
+    Replacement := BestValue + Copy(AModulePath, Length(BestKey) + 1, MaxInt);
     if not IsAbsolutePath(Replacement) then
       Result := FBaseDirectory + Replacement
     else
