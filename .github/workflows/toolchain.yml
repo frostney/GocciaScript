@@ -343,11 +343,11 @@ jobs:
           build_target x86_64 darwin
 
           # Linux x86_64
-          LIBDIR=$(find "$PWD/cross-libs/x86_64-linux" -name "libc.so" -exec dirname {} \; | head -1)
+          LIBDIR=$(find "$GITHUB_WORKSPACE/cross-libs/x86_64-linux" -name "libc.so" -exec dirname {} \; | head -1)
           build_target x86_64 linux "CROSSOPT=-Fl${LIBDIR} BINUTILSPREFIX=x86_64-linux-"
 
           # Linux aarch64
-          LIBDIR=$(find "$PWD/cross-libs/aarch64-linux" -name "libc.so" -exec dirname {} \; | head -1)
+          LIBDIR=$(find "$GITHUB_WORKSPACE/cross-libs/aarch64-linux" -name "libc.so" -exec dirname {} \; | head -1)
           build_target aarch64 linux "CROSSOPT=-Fl${LIBDIR} BINUTILSPREFIX=aarch64-linux-"
 
           # Windows x86_64
