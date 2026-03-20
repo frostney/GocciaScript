@@ -5,6 +5,7 @@ on:
 
 env:
   FPC_VERSION: "3.2.2"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   toolchain:
@@ -17,6 +18,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - target: aarch64-darwin
+            cpu: aarch64
+            os: darwin
+            native: true
           - target: x86_64-darwin
             cpu: x86_64
             os: darwin
@@ -43,6 +48,7 @@ jobs:
           path: |
             fpc-cross
             cross-binutils
+            cross-libs
           key: ${{ needs.toolchain.outputs.cache-key }}
           fail-on-cache-miss: true
 
@@ -52,40 +58,40 @@ jobs:
           PREFIX="$PWD/fpc-cross"
           export PATH="$PREFIX/bin:$PWD/cross-binutils/bin:$PATH"
 
-          # Verify fpc wrapper is available
           echo "FPC wrapper: $(which fpc)"
           echo "Target: ${{ matrix.target }}"
 
-          # For cross-compilation we call fpc directly with the right flags
-          # instead of using build.pas (which needs a native fpc to run as
-          # an instantfpc script).
           CPU="${{ matrix.cpu }}"
           OS="${{ matrix.os }}"
           TARGET="${CPU}-${OS}"
+          NATIVE="${{ matrix.native }}"
 
           # Determine the cross-compiler binary
-          case "$CPU" in
-            x86_64)  CROSS_FPC="$PREFIX/lib/fpc/${FPC_VERSION}/ppcrossx64" ;;
-            i386)    CROSS_FPC="$PREFIX/lib/fpc/${FPC_VERSION}/ppcross386" ;;
-            aarch64) CROSS_FPC="$PREFIX/lib/fpc/${FPC_VERSION}/ppca64" ;;
-          esac
+          if [ "$NATIVE" = "true" ]; then
+            CROSS_FPC="$PREFIX/lib/fpc/${FPC_VERSION}/ppca64"
+          else
+            case "$CPU" in
+              x86_64)  CROSS_FPC="$PREFIX/lib/fpc/${FPC_VERSION}/ppcrossx64" ;;
+              i386)    CROSS_FPC="$PREFIX/lib/fpc/${FPC_VERSION}/ppcross386" ;;
+              aarch64) CROSS_FPC="$PREFIX/lib/fpc/${FPC_VERSION}/ppca64" ;;
+            esac
+          fi
 
           # Determine extra flags for cross targets
           EXTRA_FLAGS=""
           case "$OS" in
             linux)
-              EXTRA_FLAGS="-XP${CPU}-linux-"
+              LIBDIR=$(find "$PWD/cross-libs/${CPU}-linux" -name "libc.so" -exec dirname {} \; | head -1)
+              EXTRA_FLAGS="-XP${CPU}-linux- -Fl${LIBDIR}"
               ;;
             win32|win64)
               EXTRA_FLAGS="-WG"
               ;;
+            darwin)
+              SDK_LIB="$(xcrun --show-sdk-path)/usr/lib"
+              EXTRA_FLAGS="-Fl${SDK_LIB}"
+              ;;
           esac
-
-          # Set output extension for Windows
-          EXT=""
-          if [[ "$OS" == win32 || "$OS" == win64 ]]; then
-            EXT=".exe"
-          fi
 
           mkdir -p "build-${TARGET}"
 

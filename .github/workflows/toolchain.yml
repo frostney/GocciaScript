@@ -10,7 +10,8 @@ on:
 env:
   FPC_VERSION: "3.2.2"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v27"
+  CACHE_VERSION: "v28"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -26,6 +27,7 @@ jobs:
           path: |
             fpc-cross
             cross-binutils
+            cross-libs
           key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}
           lookup-only: true
 
@@ -377,4 +379,5 @@ jobs:
           path: |
             fpc-cross
             cross-binutils
+            cross-libs
           key: fpc-cross-${{ env.FPC_VERSION }}-macos-arm64-${{ env.CACHE_VERSION }}
