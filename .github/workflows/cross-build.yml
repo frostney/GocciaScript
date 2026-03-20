@@ -5,7 +5,6 @@ on:
 
 env:
   FPC_VERSION: "3.2.2"
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   toolchain:
@@ -38,7 +37,7 @@ jobs:
             cpu: i386
             os: win32
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -127,7 +126,7 @@ jobs:
           ls -la "build-${TARGET}/"
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: gocciascript-${{ matrix.target }}
           retention-days: 1
