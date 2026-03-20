@@ -289,13 +289,13 @@ jobs:
             case "$os" in
               win32|win64)
                 varutils_src="packages/rtl-objpas/src/win/varutils.pp"
-                varutils_fi="-Fi packages/rtl-objpas/src/inc -Fi packages/rtl-objpas/src/win"
-                process_fi="-Fi packages/fcl-process/src/win"
+                varutils_fi="-Fipackages/rtl-objpas/src/inc -Fipackages/rtl-objpas/src/win"
+                process_fi="-Fipackages/fcl-process/src/win"
                 ;;
               *)
                 varutils_src="packages/rtl-objpas/src/common/varutils.pp"
-                varutils_fi="-Fi packages/rtl-objpas/src/inc"
-                process_fi="-Fi packages/fcl-process/src/unix"
+                varutils_fi="-Fipackages/rtl-objpas/src/inc"
+                process_fi="-Fipackages/fcl-process/src/unix"
                 ;;
             esac
 
