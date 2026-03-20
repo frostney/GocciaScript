@@ -10,7 +10,7 @@ on:
 env:
   FPC_VERSION: "3.2.2"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v26"
+  CACHE_VERSION: "v27"
 
 jobs:
   build:
@@ -21,7 +21,7 @@ jobs:
     steps:
       - name: Check cache
         id: cache-check
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             fpc-cross
@@ -372,7 +372,7 @@ jobs:
 
       - name: Save to cache
         if: steps.cache-check.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             fpc-cross
