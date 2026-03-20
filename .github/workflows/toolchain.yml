@@ -275,6 +275,20 @@ jobs:
                 ;;
             esac
 
+            # Extract cross-compilation flags from extra_opts for manual
+            # package compilation (BINUTILSPREFIX -> -XP, CROSSOPT -> passed through)
+            local pkg_extra_flags=""
+            local binutilsprefix=""
+            for opt in $extra_opts; do
+              case "$opt" in
+                BINUTILSPREFIX=*) binutilsprefix="${opt#BINUTILSPREFIX=}" ;;
+                CROSSOPT=*)       pkg_extra_flags="${opt#CROSSOPT=}" ;;
+              esac
+            done
+            if [ -n "$binutilsprefix" ]; then
+              pkg_extra_flags="$pkg_extra_flags -XP${binutilsprefix}"
+            fi
+
             # Build cross RTL using wrapper (strips -P flags from Makefile)
             make rtl PP="$wrapper" CPU_TARGET="$cpu" OS_TARGET="$os" \
               OPT="-dFPC_SOFT_FPUX80" $extra_opts
@@ -304,12 +318,12 @@ jobs:
             local objpas_dir="$PREFIX/lib/fpc/${FPC_VERSION}/units/${target}/rtl-objpas"
             mkdir -p "$objpas_dir"
 
-            "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 \
+            "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 $pkg_extra_flags \
               -Fu"$rtl_dir" -Fu"$objpas_dir" -FU"$objpas_dir" \
               $varutils_fi "$varutils_src"
 
             for unit in variants strutils dateutils; do
-              "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 \
+              "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 $pkg_extra_flags \
                 -Fu"$rtl_dir" -Fu"$objpas_dir" -FU"$objpas_dir" \
                 "packages/rtl-objpas/src/inc/${unit}.pp"
             done
@@ -322,7 +336,7 @@ jobs:
                         generics.helpers generics.memoryexpanders generics.collections; do
               local src="packages/rtl-generics/src/${unit}.pas"
               if [ -f "$src" ]; then
-                "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 \
+                "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 $pkg_extra_flags \
                   -Fu"$rtl_dir" -Fu"$objpas_dir" -Fu"$gen_dir" -FU"$gen_dir" "$src"
               fi
             done
@@ -331,10 +345,10 @@ jobs:
             echo "--- fcl-process for ${target} ---"
             local fcl_dir="$PREFIX/lib/fpc/${FPC_VERSION}/units/${target}/fcl-process"
             mkdir -p "$fcl_dir"
-            "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 \
+            "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 $pkg_extra_flags \
               -Fu"$rtl_dir" -FU"$fcl_dir" \
               $process_fi "packages/fcl-process/src/pipes.pp"
-            "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 \
+            "$cross_fpc" -T"${os}" -O2 -dFPC_SOFT_FPUX80 $pkg_extra_flags \
               -Fu"$rtl_dir" -Fu"$fcl_dir" -FU"$fcl_dir" \
               $process_fi "packages/fcl-process/src/process.pp"
           }
