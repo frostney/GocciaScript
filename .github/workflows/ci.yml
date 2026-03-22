@@ -91,7 +91,7 @@ jobs:
               EXTRA_FLAGS="-XP${CPU}-linux- -Fl${LIBDIR}"
               ;;
             win32|win64)
-              EXTRA_FLAGS="-WG"
+              EXTRA_FLAGS=""
               ;;
             darwin)
               SDK_LIB="$(xcrun --show-sdk-path)/usr/lib"
