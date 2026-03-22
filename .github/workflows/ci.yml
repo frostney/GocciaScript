@@ -427,6 +427,18 @@ jobs:
 
       - name: Package releases
         run: |
+          VERSION="${GITHUB_REF_NAME}"
+
+          # Map target names to user-friendly archive names
+          declare -A DISPLAY_NAMES=(
+            ["aarch64-darwin"]="macos-arm64"
+            ["x86_64-darwin"]="macos-x64"
+            ["x86_64-linux"]="linux-x64"
+            ["aarch64-linux"]="linux-arm64"
+            ["x86_64-win64"]="windows-x64"
+            ["i386-win32"]="windows-x86"
+          )
+
           targets=("aarch64-darwin" "x86_64-darwin" "x86_64-linux" "aarch64-linux" "x86_64-win64" "i386-win32")
 
           for target in "${targets[@]}"; do
@@ -436,7 +448,9 @@ jobs:
               continue
             fi
 
-            pkg_dir="gocciascript-${target}"
+            display="${DISPLAY_NAMES[$target]}"
+            archive_name="gocciascript-${VERSION}-${display}"
+            pkg_dir="${archive_name}"
             mkdir -p "$pkg_dir"
 
             find "$artifact_dir" -maxdepth 1 -type f ! -name '*.Test' ! -name '*.Test.exe' -exec cp {} "$pkg_dir/" \;
@@ -445,9 +459,9 @@ jobs:
             cp -r examples/ "$pkg_dir/examples/"
 
             if [[ "$target" == *win* ]]; then
-              zip -r "gocciascript-${target}.zip" "$pkg_dir/"
+              zip -r "${archive_name}.zip" "$pkg_dir/"
             else
-              tar -czf "gocciascript-${target}.tar.gz" "$pkg_dir/"
+              tar -czf "${archive_name}.tar.gz" "$pkg_dir/"
             fi
 
             rm -rf "$pkg_dir"
