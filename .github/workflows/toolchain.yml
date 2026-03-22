@@ -359,10 +359,12 @@ jobs:
 
           # Linux x86_64
           LIBDIR=$(find "$GITHUB_WORKSPACE/cross-libs/x86_64-linux" -name "libc.so" -exec dirname {} \; | head -1)
+          if [ -z "$LIBDIR" ]; then echo "::error::libc.so not found in cross-libs/x86_64-linux"; exit 1; fi
           build_target x86_64 linux "CROSSOPT=-Fl${LIBDIR} BINUTILSPREFIX=x86_64-linux-"
 
           # Linux aarch64
           LIBDIR=$(find "$GITHUB_WORKSPACE/cross-libs/aarch64-linux" -name "libc.so" -exec dirname {} \; | head -1)
+          if [ -z "$LIBDIR" ]; then echo "::error::libc.so not found in cross-libs/aarch64-linux"; exit 1; fi
           build_target aarch64 linux "CROSSOPT=-Fl${LIBDIR} BINUTILSPREFIX=aarch64-linux-"
 
           # Windows x86_64

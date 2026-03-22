@@ -88,6 +88,7 @@ jobs:
           case "$OS" in
             linux)
               LIBDIR=$(find "$PWD/cross-libs/${CPU}-linux" -name "libc.so" -exec dirname {} \; | head -1)
+              if [ -z "$LIBDIR" ]; then echo "::error::libc.so not found in cross-libs/${CPU}-linux"; exit 1; fi
               EXTRA_FLAGS="-XP${CPU}-linux- -Fl${LIBDIR}"
               ;;
             win32|win64)
