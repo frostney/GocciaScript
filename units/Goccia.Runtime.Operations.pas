@@ -1352,7 +1352,7 @@ function TGocciaSouffleProxy.GetSymbolProperty(
   const ASymbol: TGocciaSymbolValue): TGocciaValue;
 var
   SymPropKey: string;
-  Rec: TSouffleRecord;
+  Rec, WalkRec: TSouffleRecord;
   Bp: TSouffleBlueprint;
   GetterVal, InvokeResult, DirectVal: TSouffleValue;
 begin
@@ -1370,6 +1370,19 @@ begin
         Exit(FRuntime.UnwrapToGocciaValue(InvokeResult));
     if Rec.Get(SymPropKey, DirectVal) then
       Exit(FRuntime.UnwrapToGocciaValue(DirectVal));
+    { Walk delegate chain for symbol properties (prototype, method delegate, etc.) }
+    if Assigned(Rec.Delegate) and (Rec.Delegate is TSouffleRecord) then
+    begin
+      WalkRec := TSouffleRecord(Rec.Delegate);
+      while Assigned(WalkRec) do
+      begin
+        if WalkRec.Get(SymPropKey, DirectVal) then
+          Exit(FRuntime.UnwrapToGocciaValue(DirectVal));
+        if not Assigned(WalkRec.Delegate) or
+           not (WalkRec.Delegate is TSouffleRecord) then Break;
+        WalkRec := TSouffleRecord(WalkRec.Delegate);
+      end;
+    end;
     if Assigned(Rec.Blueprint) then
     begin
       Bp := Rec.Blueprint;

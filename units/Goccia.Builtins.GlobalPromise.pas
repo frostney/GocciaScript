@@ -47,10 +47,12 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
+  Goccia.Values.IteratorValue,
   Goccia.Values.MapValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
-  Goccia.Values.SetValue;
+  Goccia.Values.SetValue,
+  Goccia.Values.SymbolValue;
 
 type
   TPromiseAllState = class(TGocciaObjectValue)
@@ -572,7 +574,9 @@ end;
 
 function TGocciaGlobalPromise.ExtractPromiseArray(const AArgs: TGocciaArgumentsCollection): TGocciaArrayValue;
 var
-  Iterable: TGocciaValue;
+  Iterable, IterMethod, IterObj: TGocciaValue;
+  IterResult: TGocciaObjectValue;
+  EmptyArgs: TGocciaArgumentsCollection;
   Str: string;
   I: Integer;
 begin
@@ -595,6 +599,43 @@ begin
     Result := TGocciaSetValue(Iterable).ToArray
   else if Iterable is TGocciaMapValue then
     Result := TGocciaMapValue(Iterable).ToArray
+  else if Iterable is TGocciaObjectValue then
+  begin
+    { Generic iterable: use Symbol.iterator protocol }
+    IterMethod := TGocciaObjectValue(Iterable).GetSymbolProperty(
+      TGocciaSymbolValue.WellKnownIterator);
+    if Assigned(IterMethod) and not (IterMethod is TGocciaUndefinedLiteralValue) and
+       IterMethod.IsCallable then
+    begin
+      EmptyArgs := TGocciaArgumentsCollection.Create;
+      try
+        IterObj := TGocciaFunctionBase(IterMethod).Call(EmptyArgs, Iterable);
+      finally
+        EmptyArgs.Free;
+      end;
+      Result := TGocciaArrayValue.Create;
+      TGarbageCollector.Instance.AddTempRoot(Result);
+      try
+        if IterObj is TGocciaIteratorValue then
+        begin
+          IterResult := TGocciaIteratorValue(IterObj).AdvanceNext;
+          while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+          begin
+            Result.Elements.Add(IterResult.GetProperty(PROP_VALUE));
+            IterResult := TGocciaIteratorValue(IterObj).AdvanceNext;
+          end;
+        end;
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(Result);
+      end;
+    end
+    else
+    begin
+      Goccia.Values.ErrorHelper.ThrowTypeError(
+        Iterable.ToStringLiteral.Value + ' is not iterable');
+      Result := nil;
+    end;
+  end
   else
   begin
     Goccia.Values.ErrorHelper.ThrowTypeError(

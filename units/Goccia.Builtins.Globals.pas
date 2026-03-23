@@ -66,6 +66,8 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.IteratorValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -483,6 +485,80 @@ begin
     Result.AddItem(StructuredCloneValue(ASet.Items[I], AMemory));
 end;
 
+function CloneNativeMap(const AObj: TGocciaObjectValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
+var
+  IterMethod, IterObj, KValue: TGocciaValue;
+  IterResult: TGocciaObjectValue;
+  Entry: TGocciaArrayValue;
+  ClonedMap: TGocciaMapValue;
+  EmptyArgs: TGocciaArgumentsCollection;
+begin
+  ClonedMap := TGocciaMapValue.Create;
+  AMemory.Add(AObj, ClonedMap);
+  IterMethod := AObj.GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+  if Assigned(IterMethod) and IterMethod.IsCallable then
+  begin
+    EmptyArgs := TGocciaArgumentsCollection.Create;
+    try
+      IterObj := TGocciaFunctionBase(IterMethod).Call(EmptyArgs, AObj);
+    finally
+      EmptyArgs.Free;
+    end;
+    if IterObj is TGocciaIteratorValue then
+    begin
+      IterResult := TGocciaIteratorValue(IterObj).AdvanceNext;
+      while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+      begin
+        KValue := IterResult.GetProperty(PROP_VALUE);
+        if KValue is TGocciaArrayValue then
+        begin
+          Entry := TGocciaArrayValue(KValue);
+          if Entry.Elements.Count >= 2 then
+            ClonedMap.SetEntry(
+              StructuredCloneValue(Entry.Elements[0], AMemory),
+              StructuredCloneValue(Entry.Elements[1], AMemory));
+        end;
+        IterResult := TGocciaIteratorValue(IterObj).AdvanceNext;
+      end;
+    end;
+  end;
+  Result := ClonedMap;
+end;
+
+function CloneNativeSet(const AObj: TGocciaObjectValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
+var
+  IterMethod, IterObj, KValue: TGocciaValue;
+  IterResult: TGocciaObjectValue;
+  ClonedSet: TGocciaSetValue;
+  EmptyArgs: TGocciaArgumentsCollection;
+begin
+  ClonedSet := TGocciaSetValue.Create;
+  AMemory.Add(AObj, ClonedSet);
+  IterMethod := AObj.GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+  if Assigned(IterMethod) and IterMethod.IsCallable then
+  begin
+    EmptyArgs := TGocciaArgumentsCollection.Create;
+    try
+      IterObj := TGocciaFunctionBase(IterMethod).Call(EmptyArgs, AObj);
+    finally
+      EmptyArgs.Free;
+    end;
+    if IterObj is TGocciaIteratorValue then
+    begin
+      IterResult := TGocciaIteratorValue(IterObj).AdvanceNext;
+      while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+      begin
+        KValue := IterResult.GetProperty(PROP_VALUE);
+        ClonedSet.AddItem(StructuredCloneValue(KValue, AMemory));
+        IterResult := TGocciaIteratorValue(IterObj).AdvanceNext;
+      end;
+    end;
+  end;
+  Result := ClonedSet;
+end;
+
 function CloneArrayBuffer(const ABuf: TGocciaArrayBufferValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaArrayBufferValue;
 var
@@ -544,10 +620,14 @@ begin
   else if AValue is TGocciaSetValue then
     Result := CloneSet(TGocciaSetValue(AValue), AMemory)
   else if (AValue is TGocciaObjectValue) and
-     (TGocciaObjectValue(AValue).CloneNative <> nil) then
+     (TGocciaObjectValue(AValue).NativeKind = 'Map') then
   begin
-    Result := TGocciaObjectValue(AValue).CloneNative;
-    AMemory.Add(AValue, Result);
+    Result := CloneNativeMap(TGocciaObjectValue(AValue), AMemory);
+  end
+  else if (AValue is TGocciaObjectValue) and
+     (TGocciaObjectValue(AValue).NativeKind = 'Set') then
+  begin
+    Result := CloneNativeSet(TGocciaObjectValue(AValue), AMemory);
   end
   else if AValue is TGocciaObjectValue then
     Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
