@@ -781,7 +781,29 @@ var
   Args: TGocciaArgumentsCollection;
   I: Integer;
   SuperClass: TGocciaClassValue;
+  SM: TGocciaSouffleMap;
+  SS: TGocciaSouffleSet;
 begin
+  { Fast path: blueprint-based Map/Set super() — populate from iterable }
+  if SouffleIsReference(AReceiver) and Assigned(AReceiver.AsReference) and
+     (AReceiver.AsReference is TSouffleRecord) then
+  begin
+    SM := GetSouffleMap(AReceiver);
+    if Assigned(SM) then
+    begin
+      if AArgCount >= 1 then
+        FRuntime.PopulateMapFromIterable(SM, AArgs^);
+      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    end;
+    SS := GetSouffleSet(AReceiver);
+    if Assigned(SS) then
+    begin
+      if AArgCount >= 1 then
+        FRuntime.PopulateSetFromIterable(SS, AArgs^);
+      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    end;
+  end;
+
   Instance := FRuntime.UnwrapToGocciaValue(AReceiver);
   SuperClass := TGocciaClassValue(FSuperClass);
   Args := TGocciaArgumentsCollection.Create;
@@ -3551,6 +3573,12 @@ begin
         for I := 0 to AArgCount - 1 do
           VMArgs[1 + I] := PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^;
         FVM.ExecuteFunction(TSouffleClosure(CtorMethod.AsReference), VMArgs);
+      end
+      else if SouffleIsReference(CtorMethod) and
+         (CtorMethod.AsReference is TSouffleNativeFunction) then
+      begin
+        TSouffleNativeFunction(CtorMethod.AsReference).Callback(
+          SouffleReference(Rec), AArgs, AArgCount);
       end;
 
       Result := SouffleReference(Rec);
@@ -6911,6 +6939,28 @@ begin
     Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
+function NativeMapConstructor(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  SM: TGocciaSouffleMap;
+begin
+  SM := GetSouffleMap(AReceiver);
+  if Assigned(SM) and (AArgCount >= 1) then
+    GNativeArrayJoinRuntime.PopulateMapFromIterable(SM, AArgs^);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
+function NativeSetConstructor(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  SS: TGocciaSouffleSet;
+begin
+  SS := GetSouffleSet(AReceiver);
+  if Assigned(SS) and (AArgCount >= 1) then
+    GNativeArrayJoinRuntime.PopulateSetFromIterable(SS, AArgs^);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
 function NativeMapGroupBy(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
@@ -8730,6 +8780,18 @@ begin
   Result.Prototype.Put(PROP_CONSTRUCTOR, SouffleReference(Result));
 end;
 
+procedure AddMethodToBlueprint(const ABp: TSouffleBlueprint;
+  const AName: string; const AArity: Integer;
+  const ACallback: TSouffleNativeCallback);
+var
+  NF: TSouffleNativeFunction;
+begin
+  NF := TSouffleNativeFunction.Create(AName, AArity, ACallback);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NF);
+  ABp.Methods.Put(AName, SouffleReference(NF));
+end;
+
 procedure AddStaticMethod(const ABp: TSouffleBlueprint;
   const AName: string; const AArity: Integer;
   const ACallback: TSouffleNativeCallback);
@@ -8780,6 +8842,10 @@ begin
   { Create blueprints for built-in types }
   FMapBlueprint := CreateBuiltinBlueprint('Map', 1, FMapDelegate, 'entries');
   FSetBlueprint := CreateBuiltinBlueprint('Set', 1, FSetDelegate, 'values');
+
+  { Map/Set constructor methods (for super() calls in subclasses) }
+  AddMethodToBlueprint(FMapBlueprint, 'constructor', 1, @NativeMapConstructor);
+  AddMethodToBlueprint(FSetBlueprint, 'constructor', 1, @NativeSetConstructor);
 
   { Map static methods }
   AddStaticMethod(FMapBlueprint, 'groupBy', 2, @NativeMapGroupBy);
