@@ -2026,7 +2026,8 @@ begin
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
       if SouffleIsReference(FRegisters[Base + A]) and
-         (FRegisters[Base + A].AsReference is TSouffleRecord) then
+         (FRegisters[Base + A].AsReference is TSouffleRecord) and
+         not Assigned(TSouffleRecord(FRegisters[Base + A].AsReference).Blueprint) then
         TSouffleRecord(FRegisters[Base + A].AsReference).PutChecked(
           AFrame^.Template.GetConstant(B).StringValue,
           FRegisters[Base + C])
