@@ -4070,6 +4070,7 @@ end;
 function TGocciaRuntimeOperations.AwaitValue(const AValue: TSouffleValue): TSouffleValue;
 var
   GocciaVal, ThenMethod: TGocciaValue;
+  ThenVal: TSouffleValue;
   Promise: TGocciaPromiseValue;
   ThenArgs: TGocciaArgumentsCollection;
   Queue: TGocciaMicrotaskQueue;
@@ -4119,6 +4120,35 @@ begin
     end
     else
       Exit(ToSouffleValue(GocciaVal));
+  end
+  else if AValue.AsReference is TSouffleRecord then
+  begin
+    ThenVal := GetProperty(AValue, 'then');
+    if SouffleIsReference(ThenVal) and Assigned(ThenVal.AsReference) and
+       ((ThenVal.AsReference is TSouffleClosure) or
+        (ThenVal.AsReference is TSouffleNativeFunction) or
+        (ThenVal.AsReference is TGocciaBridgedFunction)) then
+    begin
+      Promise := TGocciaPromiseValue.Create;
+      ThenArgs := TGocciaArgumentsCollection.Create([
+        TGocciaNativeFunctionValue.Create(Promise.DoResolve, 'resolve', 1),
+        TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
+      ]);
+      try
+        try
+          GocciaVal := UnwrapToGocciaValue(ThenVal);
+          TGocciaFunctionBase(GocciaVal).Call(
+            ThenArgs, UnwrapToGocciaValue(AValue));
+        except
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
+      finally
+        ThenArgs.Free;
+      end;
+    end
+    else
+      Exit(AValue);
   end
   else
     Exit(AValue);
