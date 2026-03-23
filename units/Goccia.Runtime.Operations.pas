@@ -4069,44 +4069,91 @@ end;
 
 function TGocciaRuntimeOperations.AwaitValue(const AValue: TSouffleValue): TSouffleValue;
 var
-  GocciaVal, Resolved: TGocciaValue;
+  GocciaVal, ThenMethod: TGocciaValue;
+  Promise: TGocciaPromiseValue;
+  ThenArgs: TGocciaArgumentsCollection;
+  Queue: TGocciaMicrotaskQueue;
 begin
-  {$IFDEF BRIDGE_METRICS}
-  Inc(GBridgeMetrics.AwaitValueCount);
-  {$ENDIF}
   case AValue.Kind of
     svkNil, svkBoolean, svkInteger, svkFloat, svkString:
       Exit(AValue);
   end;
-  if SouffleIsReference(AValue) and Assigned(AValue.AsReference) then
+  if not SouffleIsReference(AValue) or not Assigned(AValue.AsReference) then
+    Exit(AValue);
+  if AValue.AsReference is TSouffleHeapString then
+    Exit(AValue);
+
+  Promise := nil;
+
+  if AValue.AsReference is TGocciaWrappedValue then
   begin
-    if AValue.AsReference is TSouffleHeapString then
-      Exit(AValue);
-    if AValue.AsReference is TGocciaWrappedValue then
+    GocciaVal := TGocciaWrappedValue(AValue.AsReference).Value;
+
+    if GocciaVal is TGocciaPromiseValue then
+      Promise := TGocciaPromiseValue(GocciaVal)
+    else if GocciaVal is TGocciaObjectValue then
     begin
-      GocciaVal := TGocciaWrappedValue(AValue.AsReference).Value;
-      if GocciaVal is TGocciaPromiseValue then
+      ThenMethod := GocciaVal.GetProperty('then');
+      if Assigned(ThenMethod) and
+         not (ThenMethod is TGocciaUndefinedLiteralValue) and
+         ThenMethod.IsCallable then
       begin
-        if TGocciaPromiseValue(GocciaVal).State = gpsFulfilled then
-          Exit(ToSouffleValue(TGocciaPromiseValue(GocciaVal).PromiseResult));
-        if TGocciaPromiseValue(GocciaVal).State = gpsRejected then
-        begin
-          RethrowAsVM(TGocciaThrowValue.Create(
-            TGocciaPromiseValue(GocciaVal).PromiseResult));
-          Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+        Promise := TGocciaPromiseValue.Create;
+        ThenArgs := TGocciaArgumentsCollection.Create([
+          TGocciaNativeFunctionValue.Create(Promise.DoResolve, 'resolve', 1),
+          TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
+        ]);
+        try
+          try
+            TGocciaFunctionBase(ThenMethod).Call(ThenArgs, GocciaVal);
+          except
+            on E: TGocciaThrowValue do
+              Promise.Reject(E.Value);
+          end;
+        finally
+          ThenArgs.Free;
         end;
       end
-      else if not (GocciaVal is TGocciaObjectValue) then
-        Exit(ToSouffleValue(GocciaVal));
-    end;
-  end;
+      else
+        Exit(AValue);
+    end
+    else
+      Exit(ToSouffleValue(GocciaVal));
+  end
+  else
+    Exit(AValue);
+
+  if not Assigned(Promise) then
+    Exit(AValue);
+
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
   try
-    GocciaVal := UnwrapToGocciaValue(AValue);
-    Resolved := Goccia.Evaluator.AwaitValue(GocciaVal);
-    Result := ToSouffleValue(Resolved);
-  except
-    on E: TGocciaThrowValue do
-      RethrowAsVM(E);
+    if Promise.State = gpsFulfilled then
+      Exit(ToSouffleValue(Promise.PromiseResult));
+    if Promise.State = gpsRejected then
+    begin
+      RethrowAsVM(TGocciaThrowValue.Create(Promise.PromiseResult));
+      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    end;
+
+    Queue := TGocciaMicrotaskQueue.Instance;
+    if Assigned(Queue) then
+      Queue.DrainQueue;
+
+    if Promise.State = gpsFulfilled then
+      Result := ToSouffleValue(Promise.PromiseResult)
+    else if Promise.State = gpsRejected then
+    begin
+      RethrowAsVM(TGocciaThrowValue.Create(Promise.PromiseResult));
+      Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+    end
+    else
+      raise ESouffleThrow.Create(SouffleString(
+        'await: Promise did not settle after microtask drain'));
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
 end;
 
