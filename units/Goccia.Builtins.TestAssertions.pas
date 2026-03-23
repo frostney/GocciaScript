@@ -1549,6 +1549,7 @@ var
   Val: TGocciaValue;
   TestResult: TGocciaValue;
   RejectionReason: string;
+  FailureRecorded: Boolean;
 begin
   // Reset test statistics and clear any previously registered tests from describe blocks
   ResetTestStats;
@@ -1646,6 +1647,7 @@ begin
         // Run beforeEach callbacks
         RunCallbacks(FBeforeEachCallbacks);
 
+        FailureRecorded := False;
         try
           TestResult := TestCase.TestFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
@@ -1664,6 +1666,7 @@ begin
                 FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": Promise rejected: ' + RejectionReason)
               else
                 FailedTestDetails.Add('Test "' + TestCase.Name + '": Promise rejected: ' + RejectionReason);
+              FailureRecorded := True;
             end
             else if TGocciaPromiseValue(TestResult).State = gpsPending then
             begin
@@ -1672,6 +1675,7 @@ begin
                 FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": Promise still pending after microtask drain')
               else
                 FailedTestDetails.Add('Test "' + TestCase.Name + '": Promise still pending after microtask drain');
+              FailureRecorded := True;
             end;
           end;
         except
@@ -1686,6 +1690,7 @@ begin
               FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": ' + E.Message)
             else
               FailedTestDetails.Add('Test "' + TestCase.Name + '": ' + E.Message);
+            FailureRecorded := True;
             if ExitOnFirstFailure then
               Break;
           end;
@@ -1697,6 +1702,17 @@ begin
 
       // End tracking this test
       EndTest;
+
+      // Record assertion-failed tests that were not already added above
+      // (exceptions and promise rejections add their own details, but
+      // plain assertion failures like expect(1).toBe(2) were missing)
+      if FTestStats.CurrentTestHasFailures and not FailureRecorded then
+      begin
+        if TestCase.SuiteName <> '' then
+          FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '"')
+        else
+          FailedTestDetails.Add('Test "' + TestCase.Name + '"');
+      end;
 
       // Exit on first failure if requested (but not for skipped tests)
       if FTestStats.CurrentTestHasFailures and ExitOnFirstFailure then
