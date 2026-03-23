@@ -1785,7 +1785,7 @@ begin
       end
       else if AValue.AsReference is TSouffleRecord then
       begin
-        { Blueprint Map/Set → unwrap to TGocciaMapValue/TGocciaSetValue (cached) }
+        { Blueprint Map/Set → cached TGocciaMapValue/TGocciaSetValue conversion }
         if Assigned(TSouffleRecord(AValue.AsReference).Blueprint) then
         begin
           Bp := TSouffleRecord(AValue.AsReference).Blueprint;
@@ -1793,26 +1793,24 @@ begin
           begin
             if Assigned(FMapBlueprint) and (Bp = FMapBlueprint) then
             begin
-              if FRecordBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
-                Result := TGocciaValue(CachedBridge)
-              else
+              if not FRecordBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
               begin
-                Result := ConvertBlueprintMapToGoccia(
+                CachedBridge := ConvertBlueprintMapToGoccia(
                   TSouffleRecord(AValue.AsReference));
-                FRecordBridgeCache.Add(AValue.AsReference, Result);
+                FRecordBridgeCache.Add(AValue.AsReference, CachedBridge);
               end;
+              Result := TGocciaValue(CachedBridge);
               Exit;
             end;
             if Assigned(FSetBlueprint) and (Bp = FSetBlueprint) then
             begin
-              if FRecordBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
-                Result := TGocciaValue(CachedBridge)
-              else
+              if not FRecordBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
               begin
-                Result := ConvertBlueprintSetToGoccia(
+                CachedBridge := ConvertBlueprintSetToGoccia(
                   TSouffleRecord(AValue.AsReference));
-                FRecordBridgeCache.Add(AValue.AsReference, Result);
+                FRecordBridgeCache.Add(AValue.AsReference, CachedBridge);
               end;
+              Result := TGocciaValue(CachedBridge);
               Exit;
             end;
             Bp := Bp.SuperBlueprint;
