@@ -157,6 +157,7 @@ begin
       Exit;
     end;
   end;
+  RaiseParseError('Unterminated object');
 end;
 
 procedure TAbstractJSONParser.DoParseArray;
@@ -195,6 +196,7 @@ begin
       Exit;
     end;
   end;
+  RaiseParseError('Unterminated array');
 end;
 
 procedure TAbstractJSONParser.DoParseNumber;
@@ -283,6 +285,8 @@ begin
         RaiseParseError('Invalid escape character: \' + Ch);
       end;
     end
+    else if Ord(Ch) < 32 then
+      RaiseParseError('Unescaped control character in string')
     else
       Result := Result + Ch;
   end;
@@ -295,6 +299,7 @@ var
   HexStr: string;
   I: Integer;
   CodePoint, High, Low: Cardinal;
+  SavedPos: Integer;
   Ch: Char;
 
   function CodePointToUTF8(const ACP: Cardinal): string;
@@ -331,6 +336,7 @@ begin
   if (CodePoint >= $D800) and (CodePoint <= $DBFF) then
   begin
     High := CodePoint;
+    SavedPos := FPosition;
     if not IsAtEnd and (FPosition + 1 <= FLength) and
        (FText[FPosition] = '\') and (FText[FPosition + 1] = 'u') then
     begin
@@ -339,15 +345,26 @@ begin
       for I := 1 to 4 do
       begin
         if IsAtEnd then
-          RaiseParseError('Incomplete surrogate pair');
+        begin
+          FPosition := SavedPos;
+          Break;
+        end;
         Ch := ReadChar;
         if not (Ch in ['0'..'9', 'a'..'f', 'A'..'F']) then
-          RaiseParseError('Invalid hex digit in surrogate pair: ' + Ch);
+        begin
+          FPosition := SavedPos;
+          Break;
+        end;
         HexStr := HexStr + Ch;
       end;
-      Low := StrToInt('$' + HexStr);
-      if (Low >= $DC00) and (Low <= $DFFF) then
-        CodePoint := $10000 + ((High - $D800) shl 10) + (Low - $DC00);
+      if Length(HexStr) = 4 then
+      begin
+        Low := StrToInt('$' + HexStr);
+        if (Low >= $DC00) and (Low <= $DFFF) then
+          CodePoint := $10000 + ((High - $D800) shl 10) + (Low - $DC00)
+        else
+          FPosition := SavedPos;
+      end;
     end;
   end;
 
