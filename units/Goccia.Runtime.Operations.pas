@@ -6782,6 +6782,62 @@ begin
     Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
+function NativeMapGroupBy(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Iterable, Callback, Item, Key: TSouffleValue;
+  SM: TGocciaSouffleMap;
+  GroupArr: TSouffleArray;
+  IterObj: TSouffleValue;
+  Done: Boolean;
+  CallArgs: array[0..1] of TSouffleValue;
+  Idx, Index: Integer;
+  Rec: TSouffleRecord;
+  Bp: TSouffleBlueprint;
+begin
+  if AArgCount < 2 then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  Iterable := AArgs^;
+  Callback := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^;
+
+  Bp := GNativeArrayJoinRuntime.FMapBlueprint;
+  SM := TGocciaSouffleMap.Create(4);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(SM);
+
+  Rec := TSouffleRecord.CreateFromBlueprint(Bp);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
+  Rec.Delegate := Bp.Prototype;
+  Rec.SetSlot(0, SouffleReference(SM));
+  Result := SouffleReference(Rec);
+
+  IterObj := GNativeArrayJoinRuntime.GetIterator(Iterable, False);
+  Index := 0;
+  repeat
+    Item := GNativeArrayJoinRuntime.IteratorNext(IterObj, Done);
+    if Done then Break;
+    CallArgs[0] := Item;
+    CallArgs[1] := SouffleInteger(Index);
+    Key := GNativeArrayJoinRuntime.Invoke(Callback, @CallArgs[0], 2, SouffleNil);
+    Idx := SM.FindEntry(Key);
+    if Idx >= 0 then
+    begin
+      GroupArr := TSouffleArray(SM.GetValueAt(Idx).AsReference);
+      GroupArr.Push(Item);
+    end
+    else
+    begin
+      GroupArr := TSouffleArray.Create(4);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AllocateObject(GroupArr);
+      GroupArr.Push(Item);
+      SM.SetEntry(Key, SouffleReference(GroupArr));
+    end;
+    Inc(Index);
+  until False;
+end;
+
 function NativeMapGetOrInsert(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
@@ -8545,6 +8601,18 @@ begin
   Result.Prototype.Put(PROP_CONSTRUCTOR, SouffleReference(Result));
 end;
 
+procedure AddStaticMethod(const ABp: TSouffleBlueprint;
+  const AName: string; const AArity: Integer;
+  const ACallback: TSouffleNativeCallback);
+var
+  NF: TSouffleNativeFunction;
+begin
+  NF := TSouffleNativeFunction.Create(AName, AArity, ACallback);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NF);
+  ABp.StaticFields.Put(AName, SouffleReference(NF));
+end;
+
 procedure TGocciaRuntimeOperations.RegisterDelegates;
 begin
   if not Assigned(FVM) then Exit;
@@ -8581,6 +8649,9 @@ begin
   { Create blueprints for built-in types }
   FMapBlueprint := CreateBuiltinBlueprint('Map', 1, FMapDelegate, 'entries');
   FSetBlueprint := CreateBuiltinBlueprint('Set', 1, FSetDelegate, 'values');
+
+  { Map static methods }
+  AddStaticMethod(FMapBlueprint, 'groupBy', 2, @NativeMapGroupBy);
 end;
 
 function ExtractNativeFn(const AGlobals: TOrderedStringMap<TSouffleValue>;
