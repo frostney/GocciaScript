@@ -1592,8 +1592,13 @@ begin
          (FRegisters[Base + A].AsReference is TSouffleBlueprint) and
          SouffleIsReference(FRegisters[Base + B]) and
          (FRegisters[Base + B].AsReference is TSouffleBlueprint) then
-        TSouffleBlueprint(FRegisters[Base + A].AsReference).SuperBlueprint :=
-          TSouffleBlueprint(FRegisters[Base + B].AsReference);
+      begin
+        Bp := TSouffleBlueprint(FRegisters[Base + A].AsReference);
+        Bp.SuperBlueprint := TSouffleBlueprint(FRegisters[Base + B].AsReference);
+        { Inherit slot count from super blueprint for built-in type subclassing }
+        if (Bp.SlotCount = 0) and (Bp.SuperBlueprint.SlotCount > 0) then
+          Bp.SlotCount := Bp.SuperBlueprint.SlotCount;
+      end;
     end;
 
     OP_INSTANTIATE:

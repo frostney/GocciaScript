@@ -362,6 +362,8 @@ type
     function ToSouffleValue(const AValue: TGocciaValue): TSouffleValue;
     function ConvertBlueprintMapToGoccia(const ARec: TSouffleRecord): TGocciaValue;
     function ConvertBlueprintSetToGoccia(const ARec: TSouffleRecord): TGocciaValue;
+    procedure PopulateMapFromIterable(const AMap: TSouffleHeapObject; const AIterable: TSouffleValue);
+    procedure PopulateSetFromIterable(const ASet: TSouffleHeapObject; const AIterable: TSouffleValue);
 
     function ResolveProxyGet(const ATarget: TSouffleHeapObject;
       const AName: string): TGocciaValue;
@@ -1729,6 +1731,7 @@ function TGocciaRuntimeOperations.UnwrapToGocciaValue(
   const AValue: TSouffleValue): TGocciaValue;
 var
   CachedBridge: TObject;
+  Bp: TSouffleBlueprint;
 begin
   {$IFDEF BRIDGE_METRICS}
   Inc(GBridgeMetrics.UnwrapCount);
@@ -1783,21 +1786,25 @@ begin
       else if AValue.AsReference is TSouffleRecord then
       begin
         { Blueprint Map/Set → unwrap to TGocciaMapValue/TGocciaSetValue }
-        if Assigned(FMapBlueprint) and
-           Assigned(TSouffleRecord(AValue.AsReference).Blueprint) and
-           (TSouffleRecord(AValue.AsReference).Blueprint = FMapBlueprint) then
+        if Assigned(TSouffleRecord(AValue.AsReference).Blueprint) then
         begin
-          Result := ConvertBlueprintMapToGoccia(
-            TSouffleRecord(AValue.AsReference));
-          Exit;
-        end;
-        if Assigned(FSetBlueprint) and
-           Assigned(TSouffleRecord(AValue.AsReference).Blueprint) and
-           (TSouffleRecord(AValue.AsReference).Blueprint = FSetBlueprint) then
-        begin
-          Result := ConvertBlueprintSetToGoccia(
-            TSouffleRecord(AValue.AsReference));
-          Exit;
+          Bp := TSouffleRecord(AValue.AsReference).Blueprint;
+          while Assigned(Bp) do
+          begin
+            if Assigned(FMapBlueprint) and (Bp = FMapBlueprint) then
+            begin
+              Result := ConvertBlueprintMapToGoccia(
+                TSouffleRecord(AValue.AsReference));
+              Exit;
+            end;
+            if Assigned(FSetBlueprint) and (Bp = FSetBlueprint) then
+            begin
+              Result := ConvertBlueprintSetToGoccia(
+                TSouffleRecord(AValue.AsReference));
+              Exit;
+            end;
+            Bp := Bp.SuperBlueprint;
+          end;
         end;
         if not FRecordBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
         begin
@@ -2835,21 +2842,27 @@ begin
     { Blueprint-based Map/Set size getter }
     if SouffleIsReference(AObject) and Assigned(AObject.AsReference) and
        (AObject.AsReference is TSouffleRecord) and
-       Assigned(TSouffleRecord(AObject.AsReference).Blueprint) then
+       Assigned(TSouffleRecord(AObject.AsReference).Blueprint) and
+       (AKey = PROP_SIZE) then
     begin
-      if (TSouffleRecord(AObject.AsReference).Blueprint = FMapBlueprint) and
-         (AKey = PROP_SIZE) then
+      Bp := TSouffleRecord(AObject.AsReference).Blueprint;
+      while Assigned(Bp) do
       begin
-        SM := GetSouffleMap(AObject);
-        if Assigned(SM) then
-          Exit(SouffleInteger(SM.Count));
-      end;
-      if (TSouffleRecord(AObject.AsReference).Blueprint = FSetBlueprint) and
-         (AKey = PROP_SIZE) then
-      begin
-        SS := GetSouffleSet(AObject);
-        if Assigned(SS) then
-          Exit(SouffleInteger(SS.Count));
+        if Bp = FMapBlueprint then
+        begin
+          SM := GetSouffleMap(AObject);
+          if Assigned(SM) then
+            Exit(SouffleInteger(SM.Count));
+          Break;
+        end;
+        if Bp = FSetBlueprint then
+        begin
+          SS := GetSouffleSet(AObject);
+          if Assigned(SS) then
+            Exit(SouffleInteger(SS.Count));
+          Break;
+        end;
+        Bp := Bp.SuperBlueprint;
       end;
     end;
 
@@ -3444,13 +3457,15 @@ begin
       Rec := TSouffleRecord.CreateFromBlueprint(Bp);
       Rec.Delegate := Bp.Prototype;
 
-      { Initialize slot 0 for Map/Set subclasses }
+      { Initialize slot 0 for Map/Set subclasses and populate from iterable }
       if (WalkBp = FMapBlueprint) and (Bp <> FMapBlueprint) then
       begin
         SM := TGocciaSouffleMap.Create(4);
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.AllocateObject(SM);
         Rec.SetSlot(0, SouffleReference(SM));
+        if AArgCount >= 1 then
+          PopulateMapFromIterable(SM, PSouffleValue(AArgs)^);
       end
       else if (WalkBp = FSetBlueprint) and (Bp <> FSetBlueprint) then
       begin
@@ -3458,6 +3473,8 @@ begin
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.AllocateObject(SS);
         Rec.SetSlot(0, SouffleReference(SS));
+        if AArgCount >= 1 then
+          PopulateSetFromIterable(SS, PSouffleValue(AArgs)^);
       end;
 
       if not Assigned(Bp.Prototype.Delegate) then
@@ -5249,6 +5266,55 @@ begin
       SetVal.AddItem(UnwrapToGocciaValue(SS.GetItemAt(I)));
   end;
   Result := SetVal;
+end;
+
+procedure TGocciaRuntimeOperations.PopulateMapFromIterable(
+  const AMap: TSouffleHeapObject; const AIterable: TSouffleValue);
+var
+  SM: TGocciaSouffleMap;
+  IterObj, EntryVal: TSouffleValue;
+  EntryArr: TSouffleArray;
+  Done: Boolean;
+begin
+  SM := TGocciaSouffleMap(AMap);
+  if SouffleIsNil(AIterable) or not SouffleIsReference(AIterable) then
+    Exit;
+  IterObj := GetIterator(AIterable, False);
+  if not SouffleIsReference(IterObj) or not Assigned(IterObj.AsReference) then
+    Exit;
+  repeat
+    EntryVal := IteratorNext(IterObj, Done);
+    if not Done then
+    begin
+      if SouffleIsReference(EntryVal) and Assigned(EntryVal.AsReference) and
+         (EntryVal.AsReference is TSouffleArray) then
+      begin
+        EntryArr := TSouffleArray(EntryVal.AsReference);
+        if EntryArr.Count >= 2 then
+          SM.SetEntry(EntryArr.Get(0), EntryArr.Get(1));
+      end;
+    end;
+  until Done;
+end;
+
+procedure TGocciaRuntimeOperations.PopulateSetFromIterable(
+  const ASet: TSouffleHeapObject; const AIterable: TSouffleValue);
+var
+  SS: TGocciaSouffleSet;
+  IterObj, ItemVal: TSouffleValue;
+  Done: Boolean;
+begin
+  SS := TGocciaSouffleSet(ASet);
+  if SouffleIsNil(AIterable) or not SouffleIsReference(AIterable) then
+    Exit;
+  IterObj := GetIterator(AIterable, False);
+  if not SouffleIsReference(IterObj) or not Assigned(IterObj.AsReference) then
+    Exit;
+  repeat
+    ItemVal := IteratorNext(IterObj, Done);
+    if not Done then
+      SS.Add(ItemVal);
+  until Done;
 end;
 
 { Bridged test framework globals }
