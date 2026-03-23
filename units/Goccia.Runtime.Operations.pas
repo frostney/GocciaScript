@@ -174,6 +174,9 @@ type
     function IsSealed: Boolean; override;
     procedure PreventExtensions; override;
     function IsExtensible: Boolean; override;
+    function ToStringTag: string; override;
+    function NativeKind: string; override;
+    function CloneNative: TGocciaObjectValue; override;
 
     property Target: TSouffleHeapObject read FTarget;
   end;
@@ -446,6 +449,17 @@ const
   GOCCIA_NIL_HOLE      = 2;
 
 type
+  TGocciaSouffleIteratorBridge = class(TGocciaIteratorValue)
+  private
+    FIteratorRef: TSouffleValue;
+    FRuntime: TGocciaRuntimeOperations;
+  public
+    constructor Create(const AIteratorRef: TSouffleValue;
+      const ARuntime: TGocciaRuntimeOperations);
+    function AdvanceNext: TGocciaObjectValue; override;
+    function DirectNext(out ADone: Boolean): TGocciaValue; override;
+  end;
+
   TGocciaSouffleNativeFunctionBridge = class(TGocciaFunctionBase)
   private
     FNativeFunction: TSouffleNativeFunction;
@@ -876,6 +890,131 @@ begin
   Result := 'object';
 end;
 
+{ TGocciaSouffleIteratorBridge }
+
+constructor TGocciaSouffleIteratorBridge.Create(
+  const AIteratorRef: TSouffleValue;
+  const ARuntime: TGocciaRuntimeOperations);
+begin
+  inherited Create;
+  FIteratorRef := AIteratorRef;
+  FRuntime := ARuntime;
+end;
+
+function TGocciaSouffleIteratorBridge.AdvanceNext: TGocciaObjectValue;
+var
+  Done: Boolean;
+  Val: TSouffleValue;
+  GocciaVal: TGocciaValue;
+begin
+  Val := FRuntime.IteratorNext(FIteratorRef, Done);
+  if Done then
+  begin
+    FDone := True;
+    Result := CreateIteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True);
+  end
+  else
+  begin
+    GocciaVal := FRuntime.UnwrapToGocciaValue(Val);
+    Result := CreateIteratorResult(GocciaVal, False);
+  end;
+end;
+
+function TGocciaSouffleIteratorBridge.DirectNext(
+  out ADone: Boolean): TGocciaValue;
+var
+  Val: TSouffleValue;
+begin
+  Val := FRuntime.IteratorNext(FIteratorRef, ADone);
+  if ADone then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+    Result := FRuntime.UnwrapToGocciaValue(Val);
+end;
+
+function TGocciaSouffleProxy.ToStringTag: string;
+var
+  SymTagKey: string;
+  TagVal: TSouffleValue;
+  Rec: TSouffleRecord;
+  WalkRec: TSouffleRecord;
+begin
+  if FTarget is TSouffleRecord then
+  begin
+    Rec := TSouffleRecord(FTarget);
+    SymTagKey := '@@sym:' + IntToStr(TGocciaSymbolValue.WellKnownToStringTag.Id);
+    { Check record itself }
+    if Rec.Get(SymTagKey, TagVal) and SouffleIsStringValue(TagVal) then
+      Exit(SouffleGetString(TagVal));
+    { Walk delegate chain for Symbol.toStringTag }
+    WalkRec := Rec;
+    while Assigned(WalkRec.Delegate) and (WalkRec.Delegate is TSouffleRecord) do
+    begin
+      WalkRec := TSouffleRecord(WalkRec.Delegate);
+      if WalkRec.Get(SymTagKey, TagVal) and SouffleIsStringValue(TagVal) then
+        Exit(SouffleGetString(TagVal));
+    end;
+  end;
+  Result := inherited ToStringTag;
+end;
+
+function TGocciaSouffleProxy.NativeKind: string;
+begin
+  if (FTarget is TSouffleRecord) and
+     Assigned(TSouffleRecord(FTarget).Blueprint) then
+    Result := TSouffleRecord(FTarget).Blueprint.Name
+  else
+    Result := '';
+end;
+
+function TGocciaSouffleProxy.CloneNative: TGocciaObjectValue;
+var
+  SrcRec, NewRec: TSouffleRecord;
+  SrcMap: TGocciaSouffleMap;
+  SrcSet: TGocciaSouffleSet;
+  NewMap: TGocciaSouffleMap;
+  NewSet: TGocciaSouffleSet;
+  Slot0: TSouffleValue;
+  I: Integer;
+  GC: TGarbageCollector;
+begin
+  Result := nil;
+  if not (FTarget is TSouffleRecord) then Exit;
+  SrcRec := TSouffleRecord(FTarget);
+  if not Assigned(SrcRec.Blueprint) or (SrcRec.Blueprint.SlotCount < 1) then Exit;
+
+  GC := TGarbageCollector.Instance;
+  Slot0 := SrcRec.GetSlot(0);
+  if not SouffleIsReference(Slot0) or not Assigned(Slot0.AsReference) then Exit;
+
+  if Slot0.AsReference is TGocciaSouffleMap then
+  begin
+    SrcMap := TGocciaSouffleMap(Slot0.AsReference);
+    NewMap := TGocciaSouffleMap.Create(SrcMap.Count);
+    if Assigned(GC) then GC.AllocateObject(NewMap);
+    for I := 0 to SrcMap.Count - 1 do
+      NewMap.SetEntry(SrcMap.GetKeyAt(I), SrcMap.GetValueAt(I));
+    NewRec := TSouffleRecord.CreateFromBlueprint(SrcRec.Blueprint);
+    NewRec.Delegate := SrcRec.Blueprint.Prototype;
+    NewRec.SetSlot(0, SouffleReference(NewMap));
+    if Assigned(GC) then GC.AllocateObject(NewRec);
+    Result := TGocciaSouffleProxy.Create(NewRec, FRuntime);
+  end
+  else if Slot0.AsReference is TGocciaSouffleSet then
+  begin
+    SrcSet := TGocciaSouffleSet(Slot0.AsReference);
+    NewSet := TGocciaSouffleSet.Create(SrcSet.Count);
+    if Assigned(GC) then GC.AllocateObject(NewSet);
+    for I := 0 to SrcSet.Count - 1 do
+      NewSet.Add(SrcSet.GetItemAt(I));
+    NewRec := TSouffleRecord.CreateFromBlueprint(SrcRec.Blueprint);
+    NewRec.Delegate := SrcRec.Blueprint.Prototype;
+    NewRec.SetSlot(0, SouffleReference(NewSet));
+    if Assigned(GC) then GC.AllocateObject(NewRec);
+    Result := TGocciaSouffleProxy.Create(NewRec, FRuntime);
+  end;
+end;
+
 function TGocciaSouffleProxy.TypeOf: string;
 begin
   Result := 'object';
@@ -1250,6 +1389,10 @@ function TGocciaSouffleProxy.HasSymbolProperty(
   const ASymbol: TGocciaSymbolValue): Boolean;
 begin
   Result := inherited HasSymbolProperty(ASymbol);
+  if Result then Exit;
+  { Check if GetSymbolProperty can find it on the record/delegate chain }
+  Result := Assigned(GetSymbolProperty(ASymbol)) and
+    not (GetSymbolProperty(ASymbol) is TGocciaUndefinedLiteralValue);
 end;
 
 procedure TGocciaSouffleProxy.Freeze;
@@ -1815,37 +1958,7 @@ begin
       end
       else if AValue.AsReference is TSouffleRecord then
       begin
-        { Blueprint Map/Set → cached TGocciaMapValue/TGocciaSetValue conversion }
-        if Assigned(TSouffleRecord(AValue.AsReference).Blueprint) then
-        begin
-          Bp := TSouffleRecord(AValue.AsReference).Blueprint;
-          while Assigned(Bp) do
-          begin
-            if Assigned(FMapBlueprint) and (Bp = FMapBlueprint) then
-            begin
-              if not FRecordBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
-              begin
-                CachedBridge := ConvertBlueprintMapToGoccia(
-                  TSouffleRecord(AValue.AsReference));
-                FRecordBridgeCache.Add(AValue.AsReference, CachedBridge);
-              end;
-              Result := TGocciaValue(CachedBridge);
-              Exit;
-            end;
-            if Assigned(FSetBlueprint) and (Bp = FSetBlueprint) then
-            begin
-              if not FRecordBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
-              begin
-                CachedBridge := ConvertBlueprintSetToGoccia(
-                  TSouffleRecord(AValue.AsReference));
-                FRecordBridgeCache.Add(AValue.AsReference, CachedBridge);
-              end;
-              Result := TGocciaValue(CachedBridge);
-              Exit;
-            end;
-            Bp := Bp.SuperBlueprint;
-          end;
-        end;
+        { All records (including Map/Set blueprint records) → cached TGocciaSouffleProxy }
         if not FRecordBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
         begin
           {$IFDEF BRIDGE_METRICS}
@@ -1909,6 +2022,9 @@ begin
         end;
         Result := TGocciaValue(CachedBridge);
       end
+      else if (AValue.AsReference is TGocciaSouffleMapIterator) or
+              (AValue.AsReference is TGocciaSouffleSetIterator) then
+        Result := TGocciaSouffleIteratorBridge.Create(AValue, Self)
       else
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   else
@@ -1942,6 +2058,9 @@ begin
 
   if AValue is TGocciaSouffleProxy then
     Exit(SouffleReference(TGocciaSouffleProxy(AValue).Target));
+
+  if AValue is TGocciaSouffleIteratorBridge then
+    Exit(TGocciaSouffleIteratorBridge(AValue).FIteratorRef);
 
   if AValue is TGocciaSouffleClosureBridge then
     Exit(SouffleReference(TGocciaSouffleClosureBridge(AValue).Closure));

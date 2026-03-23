@@ -543,6 +543,12 @@ begin
     Result := CloneMap(TGocciaMapValue(AValue), AMemory)
   else if AValue is TGocciaSetValue then
     Result := CloneSet(TGocciaSetValue(AValue), AMemory)
+  else if (AValue is TGocciaObjectValue) and
+     (TGocciaObjectValue(AValue).CloneNative <> nil) then
+  begin
+    Result := TGocciaObjectValue(AValue).CloneNative;
+    AMemory.Add(AValue, Result);
+  end
   else if AValue is TGocciaObjectValue then
     Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
   else

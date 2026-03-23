@@ -47,6 +47,8 @@ type
     function TypeOf: string; override;
     function ValueOf: TGocciaValue;
     function ToStringTag: string; virtual;
+    function NativeKind: string; virtual;
+    function CloneNative: TGocciaObjectValue; virtual;
 
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
@@ -485,6 +487,16 @@ end;
 function TGocciaObjectValue.ToStringTag: string;
 begin
   Result := CONSTRUCTOR_OBJECT;
+end;
+
+function TGocciaObjectValue.NativeKind: string;
+begin
+  Result := '';
+end;
+
+function TGocciaObjectValue.CloneNative: TGocciaObjectValue;
+begin
+  Result := nil;
 end;
 
 function TGocciaObjectValue.ToStringLiteral: TGocciaStringLiteralValue;
