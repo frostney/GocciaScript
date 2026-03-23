@@ -61,6 +61,8 @@ type
 
     function DelegateGet(const AObject: TSouffleHeapObject;
       const AKey: string; out AValue: TSouffleValue): Boolean;
+    function SetPropertyViaBlueprintSetter(const ABp: TSouffleBlueprint;
+      const AKey: string; const AObject, AValue: TSouffleValue): Boolean;
   public
     constructor Create(const ARuntimeOps: TSouffleRuntimeOperations);
     destructor Destroy; override;
@@ -1699,6 +1701,7 @@ var
   StrIter: TSouffleStringIterator;
   PropKey: string;
   PropVal: TSouffleValue;
+  Rec: TSouffleRecord;
 begin
   Base := AFrame^.BaseRegister;
 
@@ -2025,9 +2028,29 @@ begin
     OP_RT_SET_PROP:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRuntimeOps.SetProperty(FRegisters[Base + A],
-        AFrame^.Template.GetConstant(B).StringValue,
-        FRegisters[Base + C]);
+      PropKey := AFrame^.Template.GetConstant(B).StringValue;
+      if SouffleIsReference(FRegisters[Base + A]) and
+         (FRegisters[Base + A].AsReference is TSouffleRecord) then
+      begin
+        Rec := TSouffleRecord(FRegisters[Base + A].AsReference);
+        if Rec.HasSetters and Rec.Setters.Get(PropKey, PropVal) then
+        begin
+          if SouffleIsReference(PropVal) and
+             (PropVal.AsReference is TSouffleClosure) then
+            ExecuteFunction(TSouffleClosure(PropVal.AsReference),
+              [FRegisters[Base + A], FRegisters[Base + C]]);
+        end
+        else if Assigned(Rec.Blueprint) and
+                SetPropertyViaBlueprintSetter(Rec.Blueprint, PropKey,
+                  FRegisters[Base + A], FRegisters[Base + C]) then
+          { setter found and invoked in blueprint chain }
+        else if not Rec.PutChecked(PropKey, FRegisters[Base + C]) then
+          FRuntimeOps.PropertyWriteViolation(
+            FRegisters[Base + A], PropKey);
+      end
+      else
+        FRuntimeOps.SetProperty(FRegisters[Base + A], PropKey,
+          FRegisters[Base + C]);
     end;
     OP_RT_GET_INDEX:
     begin
@@ -2339,6 +2362,29 @@ begin
        TSouffleRecord(Current).Get(AKey, AValue) then
       Exit(True);
     Current := Current.Delegate;
+  end;
+  Result := False;
+end;
+
+function TSouffleVM.SetPropertyViaBlueprintSetter(
+  const ABp: TSouffleBlueprint; const AKey: string;
+  const AObject, AValue: TSouffleValue): Boolean;
+var
+  Bp: TSouffleBlueprint;
+  SetterVal: TSouffleValue;
+begin
+  Bp := ABp;
+  while Assigned(Bp) do
+  begin
+    if Bp.HasSetters and Bp.Setters.Get(AKey, SetterVal) then
+    begin
+      if SouffleIsReference(SetterVal) and
+         (SetterVal.AsReference is TSouffleClosure) then
+        ExecuteFunction(TSouffleClosure(SetterVal.AsReference),
+          [AObject, AValue]);
+      Exit(True);
+    end;
+    Bp := Bp.SuperBlueprint;
   end;
   Result := False;
 end;
