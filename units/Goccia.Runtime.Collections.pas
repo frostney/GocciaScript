@@ -60,11 +60,40 @@ type
     property Count: Integer read FCount;
   end;
 
+  TSouffleMapIterKind = (mikKeys, mikValues, mikEntries);
+
+  TGocciaSouffleMapIterator = class(TSouffleHeapObject)
+  private
+    FMap: TGocciaSouffleMap;
+    FIndex: Integer;
+    FKind: TSouffleMapIterKind;
+  public
+    constructor Create(const AMap: TGocciaSouffleMap; const AKind: TSouffleMapIterKind);
+    function Next(out ADone: Boolean): TSouffleValue;
+    procedure MarkReferences; override;
+    function DebugString: string; override;
+  end;
+
+  TSouffleSetIterKind = (sikValues, sikEntries);
+
+  TGocciaSouffleSetIterator = class(TSouffleHeapObject)
+  private
+    FSet: TGocciaSouffleSet;
+    FIndex: Integer;
+    FKind: TSouffleSetIterKind;
+  public
+    constructor Create(const ASet: TGocciaSouffleSet; const AKind: TSouffleSetIterKind);
+    function Next(out ADone: Boolean): TSouffleValue;
+    procedure MarkReferences; override;
+    function DebugString: string; override;
+  end;
+
 function SouffleSameValueZero(const A, B: TSouffleValue): Boolean;
 
 implementation
 
 uses
+  GarbageCollector.Generic,
   Souffle.Compound;
 
 function SouffleSameValueZero(const A, B: TSouffleValue): Boolean;
@@ -287,6 +316,106 @@ end;
 function TGocciaSouffleSet.DebugString: string;
 begin
   Result := Format('SouffleSet(%d)', [FCount]);
+end;
+
+{ TGocciaSouffleMapIterator }
+
+constructor TGocciaSouffleMapIterator.Create(const AMap: TGocciaSouffleMap;
+  const AKind: TSouffleMapIterKind);
+begin
+  inherited Create(0);
+  FMap := AMap;
+  FIndex := 0;
+  FKind := AKind;
+end;
+
+function TGocciaSouffleMapIterator.Next(out ADone: Boolean): TSouffleValue;
+var
+  Arr: TSouffleArray;
+begin
+  if FIndex >= FMap.Count then
+  begin
+    ADone := True;
+    Exit(SouffleNilWithFlags(0));
+  end;
+  ADone := False;
+  case FKind of
+    mikKeys:
+      Result := FMap.GetKeyAt(FIndex);
+    mikValues:
+      Result := FMap.GetValueAt(FIndex);
+    mikEntries:
+    begin
+      Arr := TSouffleArray.Create(2);
+      Arr.Push(FMap.GetKeyAt(FIndex));
+      Arr.Push(FMap.GetValueAt(FIndex));
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AllocateObject(Arr);
+      Result := SouffleReference(Arr);
+    end;
+  end;
+  Inc(FIndex);
+end;
+
+procedure TGocciaSouffleMapIterator.MarkReferences;
+begin
+  inherited;
+  if Assigned(FMap) and not FMap.GCMarked then
+    FMap.MarkReferences;
+end;
+
+function TGocciaSouffleMapIterator.DebugString: string;
+begin
+  Result := 'MapIterator';
+end;
+
+{ TGocciaSouffleSetIterator }
+
+constructor TGocciaSouffleSetIterator.Create(const ASet: TGocciaSouffleSet;
+  const AKind: TSouffleSetIterKind);
+begin
+  inherited Create(0);
+  FSet := ASet;
+  FIndex := 0;
+  FKind := AKind;
+end;
+
+function TGocciaSouffleSetIterator.Next(out ADone: Boolean): TSouffleValue;
+var
+  Arr: TSouffleArray;
+begin
+  if FIndex >= FSet.Count then
+  begin
+    ADone := True;
+    Exit(SouffleNilWithFlags(0));
+  end;
+  ADone := False;
+  case FKind of
+    sikValues:
+      Result := FSet.GetItemAt(FIndex);
+    sikEntries:
+    begin
+      Arr := TSouffleArray.Create(2);
+      Arr.Push(FSet.GetItemAt(FIndex));
+      Arr.Push(FSet.GetItemAt(FIndex));
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AllocateObject(Arr);
+      Result := SouffleReference(Arr);
+    end;
+  end;
+  Inc(FIndex);
+end;
+
+procedure TGocciaSouffleSetIterator.MarkReferences;
+begin
+  inherited;
+  if Assigned(FSet) and not FSet.GCMarked then
+    FSet.MarkReferences;
+end;
+
+function TGocciaSouffleSetIterator.DebugString: string;
+begin
+  Result := 'SetIterator';
 end;
 
 end.
