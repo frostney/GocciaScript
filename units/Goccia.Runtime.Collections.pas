@@ -100,8 +100,16 @@ function SouffleSameValueZero(const A, B: TSouffleValue): Boolean;
 var
   FA, FB: Double;
 begin
+  { Handle integer/float cross-comparison (e.g. 0 === -0.0) }
   if A.Kind <> B.Kind then
-    Exit(False);
+  begin
+    if (A.Kind = svkInteger) and (B.Kind = svkFloat) then
+      Exit(A.AsInteger = B.AsFloat)
+    else if (A.Kind = svkFloat) and (B.Kind = svkInteger) then
+      Exit(A.AsFloat = B.AsInteger)
+    else
+      Exit(False);
+  end;
 
   case A.Kind of
     svkNil:
