@@ -53,7 +53,7 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
-  Modules.Resolver,
+  ModuleResolver,
   OrderedStringMap,
   Souffle.Bytecode.Chunk,
   Souffle.Value,

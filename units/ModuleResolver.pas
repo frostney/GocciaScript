@@ -1,4 +1,4 @@
-unit Modules.Resolver;
+unit ModuleResolver;
 
 {$I Goccia.inc}
 

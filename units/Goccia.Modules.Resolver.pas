@@ -7,7 +7,7 @@ interface
 uses
   SysUtils,
 
-  Modules.Resolver,
+  ModuleResolver,
   OrderedStringMap;
 
 type

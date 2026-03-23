@@ -9,7 +9,7 @@ uses
   Generics.Collections,
 
   HashMap,
-  Modules.Resolver,
+  ModuleResolver,
   OrderedStringMap,
   Souffle.Bytecode.Chunk,
   Souffle.Compound,
@@ -209,7 +209,6 @@ type
     FArrayBridgeDirty: Boolean;
     FModuleResolver: TModuleResolver;
     FModuleCache: TOrderedStringMap<TSouffleValue>;
-    FModuleLoadingSet: TOrderedStringMap<Boolean>;
     FCompiledModules: TList;
     function LoadModuleNative(const APath, AImportingPath: string): TSouffleValue;
     function LoadJsonModuleNative(const AResolvedPath: string): TSouffleValue;
@@ -1329,7 +1328,6 @@ begin
   FWrappedValues := TList.Create;
   FFormalParameterCounts := THashMap<TSouffleFunctionTemplate, Integer>.Create;
   FModuleCache := TOrderedStringMap<TSouffleValue>.Create;
-  FModuleLoadingSet := TOrderedStringMap<Boolean>.Create;
   FCompiledModules := TList.Create;
   FModuleResolver := nil;
   FBridgeCallDepth := 0;
@@ -1358,7 +1356,6 @@ begin
   FFormalParameterCounts.Free;
   FActiveDecoratorSession.Free;
   FModuleCache.Free;
-  FModuleLoadingSet.Free;
   for I := 0 to FCompiledModules.Count - 1 do
     TObject(FCompiledModules[I]).Free;
   FCompiledModules.Free;
@@ -4085,37 +4082,59 @@ var
   ExportPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
   SavedSourcePath: string;
   SavedExports: TOrderedStringMap<TSouffleValue>;
-  Dummy: Boolean;
 begin
-  ResolvedPath := FModuleResolver.Resolve(APath, AImportingPath);
+  try
+    ResolvedPath := FModuleResolver.Resolve(APath, AImportingPath);
+  except
+    on E: EModuleNotFound do
+    begin
+      ThrowTypeErrorMessage(E.Message);
+      Exit(SouffleNil);
+    end;
+  end;
 
   if FModuleCache.TryGetValue(ResolvedPath, Result) then
     Exit;
 
-  if FModuleLoadingSet.TryGetValue(ResolvedPath, Dummy) then
-  begin
-    Rec := TSouffleRecord.Create(0);
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.AllocateObject(Rec);
-    Result := SouffleReference(Rec);
-    Exit;
-  end;
-
   if LowerCase(ExtractFileExt(ResolvedPath)) = '.json' then
   begin
-    Result := LoadJsonModuleNative(ResolvedPath);
+    try
+      Result := LoadJsonModuleNative(ResolvedPath);
+    except
+      on E: Exception do
+      begin
+        ThrowTypeErrorMessage(
+          Format('Failed to parse JSON module "%s": %s', [ResolvedPath, E.Message]));
+        Exit(SouffleNil);
+      end;
+    end;
     FModuleCache.AddOrSetValue(ResolvedPath, Result);
     Exit;
   end;
 
-  FModuleLoadingSet.AddOrSetValue(ResolvedPath, True);
+  Rec := TSouffleRecord.Create(0);
+  if Assigned(FVM) then
+    Rec.Delegate := FVM.RecordDelegate;
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
+  Result := SouffleReference(Rec);
+  FModuleCache.AddOrSetValue(ResolvedPath, Result);
 
-  Source := TStringList.Create;
   try
-    Source.LoadFromFile(ResolvedPath);
-    SourceText := Source.Text;
-  finally
-    Source.Free;
+    Source := TStringList.Create;
+    try
+      Source.LoadFromFile(ResolvedPath);
+      SourceText := Source.Text;
+    finally
+      Source.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      ThrowTypeErrorMessage(
+        Format('Cannot load module "%s": %s', [APath, E.Message]));
+      Exit;
+    end;
   end;
 
   SavedSourcePath := FSourcePath;
@@ -4123,53 +4142,55 @@ begin
   FExports := TOrderedStringMap<TSouffleValue>.Create;
   FSourcePath := ResolvedPath;
   try
-    Lexer := TGocciaLexer.Create(SourceText, ResolvedPath);
     try
-      Tokens := Lexer.ScanTokens;
-      Parser := TGocciaParser.Create(Tokens, ResolvedPath, Lexer.SourceLines);
+      Lexer := TGocciaLexer.Create(SourceText, ResolvedPath);
       try
-        ProgramNode := Parser.Parse;
+        Tokens := Lexer.ScanTokens;
+        Parser := TGocciaParser.Create(Tokens, ResolvedPath, Lexer.SourceLines);
         try
-          Compiler := TGocciaCompiler.Create(ResolvedPath);
+          ProgramNode := Parser.Parse;
           try
-            Module := Compiler.Compile(ProgramNode);
-            FCompiledModules.Add(Module);
+            Compiler := TGocciaCompiler.Create(ResolvedPath);
+            try
+              Module := Compiler.Compile(ProgramNode);
+              FCompiledModules.Add(Module);
 
-            for Template in Compiler.FormalParameterCounts.Keys do
-              RegisterFormalParameterCount(
-                Template, Compiler.FormalParameterCounts[Template]);
+              for Template in Compiler.FormalParameterCounts.Keys do
+                RegisterFormalParameterCount(
+                  Template, Compiler.FormalParameterCounts[Template]);
 
-            FVM.Execute(Module);
+              FVM.Execute(Module);
 
-            if Assigned(TGocciaMicrotaskQueue.Instance) then
-              TGocciaMicrotaskQueue.Instance.DrainQueue;
+              if Assigned(TGocciaMicrotaskQueue.Instance) then
+                TGocciaMicrotaskQueue.Instance.DrainQueue;
 
-            Rec := TSouffleRecord.Create(FExports.Count);
-            if Assigned(TGarbageCollector.Instance) then
-              TGarbageCollector.Instance.AllocateObject(Rec);
-
-            for ExportPair in FExports do
-              Rec.Put(ExportPair.Key, ExportPair.Value);
-
-            Result := SouffleReference(Rec);
-            FModuleCache.AddOrSetValue(ResolvedPath, Result);
+              for ExportPair in FExports do
+                Rec.Put(ExportPair.Key, ExportPair.Value);
+            finally
+              Compiler.Free;
+            end;
           finally
-            Compiler.Free;
+            ProgramNode.Free;
           end;
         finally
-          ProgramNode.Free;
+          Parser.Free;
         end;
       finally
-        Parser.Free;
+        Lexer.Free;
       end;
-    finally
-      Lexer.Free;
+    except
+      on E: ESouffleThrow do
+        raise;
+      on E: TGocciaThrowValue do
+        RethrowAsVM(E);
+      on E: Exception do
+        ThrowTypeErrorMessage(
+          Format('Error loading module "%s": %s', [APath, E.Message]));
     end;
   finally
     FExports.Free;
     FExports := SavedExports;
     FSourcePath := SavedSourcePath;
-    FModuleLoadingSet.Remove(ResolvedPath);
   end;
 end;
 
@@ -4205,6 +4226,8 @@ begin
   else
   begin
     Rec := TSouffleRecord.Create(1);
+    if Assigned(FVM) then
+      Rec.Delegate := FVM.RecordDelegate;
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.AllocateObject(Rec);
     Rec.Put('default', ParsedValue);
@@ -9047,6 +9070,11 @@ begin
       GlobalPair.Value.AsReference.MarkReferences;
 
   for GlobalPair in FExports do
+    if SouffleIsReference(GlobalPair.Value) and Assigned(GlobalPair.Value.AsReference)
+      and not GlobalPair.Value.AsReference.GCMarked then
+      GlobalPair.Value.AsReference.MarkReferences;
+
+  for GlobalPair in FModuleCache do
     if SouffleIsReference(GlobalPair.Value) and Assigned(GlobalPair.Value.AsReference)
       and not GlobalPair.Value.AsReference.GCMarked then
       GlobalPair.Value.AsReference.MarkReferences;
