@@ -2025,9 +2025,15 @@ begin
     OP_RT_SET_PROP:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRuntimeOps.SetProperty(FRegisters[Base + A],
-        AFrame^.Template.GetConstant(B).StringValue,
-        FRegisters[Base + C]);
+      if SouffleIsReference(FRegisters[Base + A]) and
+         (FRegisters[Base + A].AsReference is TSouffleRecord) then
+        TSouffleRecord(FRegisters[Base + A].AsReference).PutChecked(
+          AFrame^.Template.GetConstant(B).StringValue,
+          FRegisters[Base + C])
+      else
+        FRuntimeOps.SetProperty(FRegisters[Base + A],
+          AFrame^.Template.GetConstant(B).StringValue,
+          FRegisters[Base + C]);
     end;
     OP_RT_GET_INDEX:
     begin
