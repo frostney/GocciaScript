@@ -49,6 +49,8 @@ procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaDestructuringDeclaration);
 procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaEnumDeclaration);
+procedure CompileExportEnumDeclaration(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExportEnumDeclaration);
 
 procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
@@ -2213,6 +2215,23 @@ begin
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for J := 0 to ClosedCount - 1 do
     EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, ClosedLocals[J], 0));
+end;
+
+procedure CompileExportEnumDeclaration(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExportEnumDeclaration);
+var
+  LocalIdx: Integer;
+  Reg: UInt8;
+  NameIdx: UInt16;
+begin
+  CompileEnumDeclaration(ACtx, AStmt.Declaration);
+  LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Declaration.Name);
+  if LocalIdx >= 0 then
+  begin
+    Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
+    NameIdx := ACtx.Template.AddConstantString(AStmt.Declaration.Name);
+    EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, Reg, NameIdx));
+  end;
 end;
 
 function SavePendingFinally: TObject;

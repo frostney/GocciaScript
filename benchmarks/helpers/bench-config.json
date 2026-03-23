@@ -1,0 +1,7 @@
+{
+  "name": "benchmark-config",
+  "version": "1.0.0",
+  "debug": false,
+  "maxRetries": 5,
+  "tags": ["perf", "test"]
+}
