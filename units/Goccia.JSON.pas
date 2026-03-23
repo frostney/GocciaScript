@@ -37,7 +37,7 @@ uses
   Classes,
   Generics.Collections,
 
-  JSONParser.Generic,
+  JSONParser,
   StringBuffer,
 
   Goccia.Values.FunctionValue;

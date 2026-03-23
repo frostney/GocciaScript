@@ -1,4 +1,4 @@
-unit JSONParser.Generic;
+unit JSONParser;
 
 {$I Goccia.inc}
 

@@ -26,7 +26,7 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
-  JSONParser.Generic,
+  JSONParser,
   Souffle.Compound,
   Souffle.Heap;
 
