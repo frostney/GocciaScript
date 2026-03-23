@@ -781,26 +781,34 @@ var
   Args: TGocciaArgumentsCollection;
   I: Integer;
   SuperClass: TGocciaClassValue;
-  SM: TGocciaSouffleMap;
-  SS: TGocciaSouffleSet;
+  Rec: TSouffleRecord;
+  Slot0: TSouffleValue;
 begin
   { Fast path: blueprint-based Map/Set super() — populate from iterable }
   if SouffleIsReference(AReceiver) and Assigned(AReceiver.AsReference) and
      (AReceiver.AsReference is TSouffleRecord) then
   begin
-    SM := GetSouffleMap(AReceiver);
-    if Assigned(SM) then
+    Rec := TSouffleRecord(AReceiver.AsReference);
+    if Assigned(Rec.Blueprint) and (Rec.Blueprint.SlotCount > 0) then
     begin
-      if AArgCount >= 1 then
-        FRuntime.PopulateMapFromIterable(SM, AArgs^);
-      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
-    end;
-    SS := GetSouffleSet(AReceiver);
-    if Assigned(SS) then
-    begin
-      if AArgCount >= 1 then
-        FRuntime.PopulateSetFromIterable(SS, AArgs^);
-      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+      Slot0 := Rec.GetSlot(0);
+      if SouffleIsReference(Slot0) and Assigned(Slot0.AsReference) then
+      begin
+        if Slot0.AsReference is TGocciaSouffleMap then
+        begin
+          if AArgCount >= 1 then
+            FRuntime.PopulateMapFromIterable(
+              TGocciaSouffleMap(Slot0.AsReference), AArgs^);
+          Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+        end;
+        if Slot0.AsReference is TGocciaSouffleSet then
+        begin
+          if AArgCount >= 1 then
+            FRuntime.PopulateSetFromIterable(
+              TGocciaSouffleSet(Slot0.AsReference), AArgs^);
+          Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+        end;
+      end;
     end;
   end;
 
@@ -3489,15 +3497,13 @@ begin
       Rec := TSouffleRecord.CreateFromBlueprint(Bp);
       Rec.Delegate := Bp.Prototype;
 
-      { Initialize slot 0 for Map/Set subclasses and populate from iterable }
+      { Initialize slot 0 for Map/Set subclasses — empty, super() populates }
       if (WalkBp = FMapBlueprint) and (Bp <> FMapBlueprint) then
       begin
         SM := TGocciaSouffleMap.Create(4);
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.AllocateObject(SM);
         Rec.SetSlot(0, SouffleReference(SM));
-        if AArgCount >= 1 then
-          PopulateMapFromIterable(SM, PSouffleValue(AArgs)^);
       end
       else if (WalkBp = FSetBlueprint) and (Bp <> FSetBlueprint) then
       begin
@@ -3505,8 +3511,6 @@ begin
         if Assigned(TGarbageCollector.Instance) then
           TGarbageCollector.Instance.AllocateObject(SS);
         Rec.SetSlot(0, SouffleReference(SS));
-        if AArgCount >= 1 then
-          PopulateSetFromIterable(SS, PSouffleValue(AArgs)^);
       end;
 
       if not Assigned(Bp.Prototype.Delegate) then
@@ -3577,7 +3581,7 @@ begin
       else if SouffleIsReference(CtorMethod) and
          (CtorMethod.AsReference is TSouffleNativeFunction) then
       begin
-        TSouffleNativeFunction(CtorMethod.AsReference).Callback(
+        TSouffleNativeFunction(CtorMethod.AsReference).Invoke(
           SouffleReference(Rec), AArgs, AArgCount);
       end;
 
@@ -3769,6 +3773,15 @@ begin
   Inc(GBridgeMetrics.GetIteratorCount);
   {$ENDIF}
   try
+    { Native iterator self-return — works for both sync and async contexts }
+    if SouffleIsReference(AIterable) and Assigned(AIterable.AsReference) then
+    begin
+      if AIterable.AsReference is TGocciaSouffleMapIterator then
+        Exit(AIterable);
+      if AIterable.AsReference is TGocciaSouffleSetIterator then
+        Exit(AIterable);
+    end;
+
     if (not ATryAsync) and SouffleIsReference(AIterable) and
        Assigned(AIterable.AsReference) then
     begin
@@ -3792,10 +3805,6 @@ begin
             TGocciaSouffleStringIterator(Result.AsReference));
         Exit;
       end;
-      if AIterable.AsReference is TGocciaSouffleMapIterator then
-        Exit(AIterable);
-      if AIterable.AsReference is TGocciaSouffleSetIterator then
-        Exit(AIterable);
       { Blueprint record Map/Set }
       if AIterable.AsReference is TSouffleRecord then
       begin
