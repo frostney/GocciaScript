@@ -318,6 +318,7 @@ jobs:
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
+          GOCCIA_BENCH_DIAG: 1
         run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress
 
       - name: Run benchmarks and save baseline

@@ -252,6 +252,10 @@ begin
     begin
       Result := (BatchSize div 10) * 10;
       if Result < 10 then Result := 10;
+      if GetEnvironmentVariable('GOCCIA_BENCH_DIAG') <> '' then
+        WriteLn(Format('  [DIAG] Calibrated %s > %s: iterations=%d, batchElapsed=%dms, gc_managed=%d',
+          [ABenchCase.SuiteName, ABenchCase.Name, Result, ElapsedNanoseconds div 1000000,
+           TGarbageCollector.Instance.ManagedObjectCount]));
       Exit;
     end;
 
@@ -263,6 +267,10 @@ begin
     if BatchSize > 10000000 then
     begin
       Result := (BatchSize div 10) * 10;
+      if GetEnvironmentVariable('GOCCIA_BENCH_DIAG') <> '' then
+        WriteLn(Format('  [DIAG] Calibrated (capped) %s > %s: iterations=%d, gc_managed=%d',
+          [ABenchCase.SuiteName, ABenchCase.Name, Result,
+           TGarbageCollector.Instance.ManagedObjectCount]));
       Exit;
     end;
   end;
@@ -425,6 +433,11 @@ begin
           OpsRounds[Round] := 0;
           MeanRounds[Round] := 0;
         end;
+
+        if (GetEnvironmentVariable('GOCCIA_BENCH_DIAG') <> '') and Assigned(GC) then
+          WriteLn(Format('  [DIAG] Round %d/%d %s > %s: managed=%d, watermark=%d, roundMs=%d',
+            [Round + 1, MEASUREMENT_ROUNDS, ABenchCase.SuiteName, ABenchCase.Name,
+             GC.ManagedObjectCount, GC.Watermark, RoundNanoseconds div 1000000]));
 
         if Assigned(GC) and (Round < MEASUREMENT_ROUNDS - 1)
           and (GC.Watermark - MeasurementWatermark > GC.Threshold) then

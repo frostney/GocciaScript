@@ -291,7 +291,18 @@ begin
       end;
     except
       on E: Exception do
+      begin
+        WriteLn(SysUtils.Format('  [DIAG] Exception in %s: %s', [ExtractFileName(AFileName), E.ClassName + ': ' + E.Message]));
+        if Assigned(TGarbageCollector.Instance) then
+          WriteLn(SysUtils.Format('  [DIAG] GC: enabled=%s, managed=%d, watermark=%d, threshold=%d',
+            [BoolToStr(TGarbageCollector.Instance.Enabled, 'True', 'False'),
+             TGarbageCollector.Instance.ManagedObjectCount,
+             TGarbageCollector.Instance.Watermark,
+             TGarbageCollector.Instance.Threshold]));
+        WriteLn(SysUtils.Format('  [DIAG] Heap: used=%d bytes (%d MB)',
+          [GetFPCHeapStatus.CurrHeapUsed, GetFPCHeapStatus.CurrHeapUsed div (1024 * 1024)]));
         MakeErrorFileResult(AFileName, E.Message, AReporter);
+      end;
     end;
   finally
     if Assigned(TGarbageCollector.Instance) then
@@ -344,6 +355,10 @@ begin
     begin
       if GShowProgress then
         WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, Files.Count, ExtractFileName(Files[I])]));
+      if (GetEnvironmentVariable('GOCCIA_BENCH_DIAG') <> '') and Assigned(TGarbageCollector.Instance) then
+        WriteLn(SysUtils.Format('  [DIAG] Pre-run GC: managed=%d, watermark=%d',
+          [TGarbageCollector.Instance.ManagedObjectCount,
+           TGarbageCollector.Instance.Watermark]));
       CollectBenchmarkFile(Files[I], Reporter);
     end;
     if GShowProgress and (Files.Count > 0) then
