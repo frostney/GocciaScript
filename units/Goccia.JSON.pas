@@ -15,25 +15,6 @@ type
   EGocciaJSONParseError = class(Exception);
 
   TGocciaJSONParser = class
-  private
-    FText: string;
-    FPosition: Integer;
-    FLength: Integer;
-
-    function ParseValue: TGocciaValue;
-    function ParseObject: TGocciaObjectValue;
-    function ParseArray: TGocciaArrayValue;
-    function ParseString: TGocciaStringLiteralValue;
-    function ParseNumber: TGocciaNumberLiteralValue;
-    function ParseLiteral: TGocciaValue;
-    function ParseUnicodeEscape: string;
-
-    procedure SkipWhitespace;
-    function PeekChar: Char; inline;
-    function ReadChar: Char;
-    function ExpectChar(const AExpected: Char): Boolean; inline;
-    function IsAtEnd: Boolean; inline;
-    procedure RaiseParseError(const AMessage: string);
   public
     function Parse(const AText: string): TGocciaValue;
   end;
@@ -53,344 +34,160 @@ type
 implementation
 
 uses
+  Classes,
+  Generics.Collections,
+
+  JSONParser.Generic,
   StringBuffer,
 
   Goccia.Values.FunctionValue;
 
+type
+  TGocciaJSONVisitor = class(TAbstractJSONParser)
+  private
+    FStack: TList<TGocciaValue>;
+    FKeyStack: TStringList;
+    FResult: TGocciaValue;
+  protected
+    procedure OnNull; override;
+    procedure OnBoolean(const AValue: Boolean); override;
+    procedure OnString(const AValue: string); override;
+    procedure OnInteger(const AValue: Int64); override;
+    procedure OnFloat(const AValue: Double); override;
+    procedure OnBeginObject; override;
+    procedure OnObjectKey(const AKey: string); override;
+    procedure OnEndObject; override;
+    procedure OnBeginArray; override;
+    procedure OnEndArray; override;
+    procedure EmitValue(const AValue: TGocciaValue);
+  public
+    constructor Create;
+    destructor Destroy; override;
+    function Parse(const AText: string): TGocciaValue;
+  end;
+
 { TGocciaJSONParser }
 
 function TGocciaJSONParser.Parse(const AText: string): TGocciaValue;
-begin
-  FText := AText;
-  FPosition := 1;
-  FLength := Length(FText);
-
-  SkipWhitespace;
-  Result := ParseValue;
-  SkipWhitespace;
-
-  if not IsAtEnd then
-    RaiseParseError('Unexpected character after JSON value');
-end;
-
-function TGocciaJSONParser.ParseValue: TGocciaValue;
 var
-  Ch: Char;
+  Visitor: TGocciaJSONVisitor;
 begin
-  SkipWhitespace;
-
-  if IsAtEnd then
-    RaiseParseError('Unexpected end of JSON input');
-
-  Ch := PeekChar;
-
-  case Ch of
-    '{': Result := ParseObject;
-    '[': Result := ParseArray;
-    '"': Result := ParseString;
-    't', 'f', 'n': Result := ParseLiteral;
-    '-', '0'..'9': Result := ParseNumber;
-  else
-    RaiseParseError('Unexpected character: ' + Ch);
-  end;
-end;
-
-function TGocciaJSONParser.ParseObject: TGocciaObjectValue;
-var
-  Key: string;
-  Value: TGocciaValue;
-  FirstProperty: Boolean;
-begin
-  Result := TGocciaObjectValue.Create;
-
-  ExpectChar('{');
-  SkipWhitespace;
-
-  if PeekChar = '}' then
-  begin
-    ReadChar;
-    Exit;
-  end;
-
-  FirstProperty := True;
-  while not IsAtEnd do
-  begin
-    if not FirstProperty then
-    begin
-      if not ExpectChar(',') then
-        RaiseParseError('Expected comma between object properties');
-      SkipWhitespace;
-    end;
-    FirstProperty := False;
-
-    if PeekChar <> '"' then
-      RaiseParseError('Expected string key in object');
-    Key := ParseString.ToStringLiteral.Value;
-
-    SkipWhitespace;
-    if not ExpectChar(':') then
-      RaiseParseError('Expected colon after object key');
-
-    Value := ParseValue;
-    Result.AssignProperty(Key, Value);
-
-    SkipWhitespace;
-    if PeekChar = '}' then
-    begin
-      ReadChar;
-      Break;
-    end;
-  end;
-end;
-
-function TGocciaJSONParser.ParseArray: TGocciaArrayValue;
-var
-  Value: TGocciaValue;
-  FirstElement: Boolean;
-begin
-  Result := TGocciaArrayValue.Create;
-
-  ExpectChar('[');
-  SkipWhitespace;
-
-  if PeekChar = ']' then
-  begin
-    ReadChar;
-    Exit;
-  end;
-
-  FirstElement := True;
-  while not IsAtEnd do
-  begin
-    if not FirstElement then
-    begin
-      if not ExpectChar(',') then
-        RaiseParseError('Expected comma between array elements');
-      SkipWhitespace;
-    end;
-    FirstElement := False;
-
-    Value := ParseValue;
-    Result.Elements.Add(Value);
-
-    SkipWhitespace;
-    if PeekChar = ']' then
-    begin
-      ReadChar;
-      Break;
-    end;
-  end;
-end;
-
-function TGocciaJSONParser.ParseString: TGocciaStringLiteralValue;
-var
-  Str: string;
-  Ch: Char;
-begin
-  ExpectChar('"');
-  Str := '';
-
-  while not IsAtEnd do
-  begin
-    Ch := ReadChar;
-
-    if Ch = '"' then
-    begin
-      Result := TGocciaStringLiteralValue.Create(Str);
-      Exit;
-    end;
-
-    if Ch = '\' then
-    begin
-      if IsAtEnd then
-        RaiseParseError('Unexpected end in string escape');
-
-      Ch := ReadChar;
-      case Ch of
-        '"': Str := Str + '"';
-        '\': Str := Str + '\';
-        '/': Str := Str + '/';
-        'b': Str := Str + #8;
-        'f': Str := Str + #12;
-        'n': Str := Str + #10;
-        'r': Str := Str + #13;
-        't': Str := Str + #9;
-        'u': Str := Str + ParseUnicodeEscape;
-      else
-        RaiseParseError('Invalid escape character: \' + Ch);
-      end;
-    end
-    else
-      Str := Str + Ch;
-  end;
-
-  RaiseParseError('Unterminated string');
-end;
-
-function TGocciaJSONParser.ParseUnicodeEscape: string;
-var
-  HexStr: string;
-  I: Integer;
-  CodePoint: Cardinal;
-  Ch: Char;
-begin
-  HexStr := '';
-  for I := 1 to 4 do
-  begin
-    if IsAtEnd then
-      RaiseParseError('Incomplete unicode escape sequence');
-    Ch := ReadChar;
-    if not (Ch in ['0'..'9', 'a'..'f', 'A'..'F']) then
-      RaiseParseError('Invalid hex digit in unicode escape: ' + Ch);
-    HexStr := HexStr + Ch;
-  end;
-
-  CodePoint := StrToInt('$' + HexStr);
-
-  if CodePoint <= $7F then
-    Result := Chr(CodePoint)
-  else if CodePoint <= $7FF then
-    Result := Chr($C0 or (CodePoint shr 6)) + Chr($80 or (CodePoint and $3F))
-  else
-    Result := Chr($E0 or (CodePoint shr 12)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F));
-end;
-
-function TGocciaJSONParser.ParseNumber: TGocciaNumberLiteralValue;
-var
-  NumStr: string;
-  Value: Double;
-  FloatFormat: TFormatSettings;
-begin
-  NumStr := '';
-
-  if PeekChar = '-' then
-    NumStr := NumStr + ReadChar;
-
-  if PeekChar = '0' then
-  begin
-    NumStr := NumStr + ReadChar;
-  end
-  else if PeekChar in ['1'..'9'] then
-  begin
-    while not IsAtEnd and (PeekChar in ['0'..'9']) do
-      NumStr := NumStr + ReadChar;
-  end
-  else
-    RaiseParseError('Invalid number format');
-
-  if not IsAtEnd and (PeekChar = '.') then
-  begin
-    NumStr := NumStr + ReadChar;
-    if IsAtEnd or not (PeekChar in ['0'..'9']) then
-      RaiseParseError('Invalid number format after decimal point');
-
-    while not IsAtEnd and (PeekChar in ['0'..'9']) do
-      NumStr := NumStr + ReadChar;
-  end;
-
-  if not IsAtEnd and (PeekChar in ['e', 'E']) then
-  begin
-    NumStr := NumStr + ReadChar;
-    if not IsAtEnd and (PeekChar in ['+', '-']) then
-      NumStr := NumStr + ReadChar;
-
-    if IsAtEnd or not (PeekChar in ['0'..'9']) then
-      RaiseParseError('Invalid number format in exponent');
-
-    while not IsAtEnd and (PeekChar in ['0'..'9']) do
-      NumStr := NumStr + ReadChar;
-  end;
-
-  FloatFormat := DefaultFormatSettings;
-  FloatFormat.DecimalSeparator := '.';
-
+  Visitor := TGocciaJSONVisitor.Create;
   try
-    Value := StrToFloat(NumStr, FloatFormat);
-    Result := TGocciaNumberLiteralValue.Create(Value);
-  except
-    on E: Exception do
-      RaiseParseError('Invalid number format: ' + NumStr);
+    try
+      Result := Visitor.Parse(AText);
+    except
+      on E: EJSONParseError do
+        raise EGocciaJSONParseError.Create(E.Message);
+    end;
+  finally
+    Visitor.Free;
   end;
 end;
 
-function TGocciaJSONParser.ParseLiteral: TGocciaValue;
+{ TGocciaJSONVisitor }
+
+constructor TGocciaJSONVisitor.Create;
 begin
-  case PeekChar of
-    't': begin
-      if (FPosition + 3 <= FLength) and
-         (Copy(FText, FPosition, 4) = 'true') then
-      begin
-        Inc(FPosition, 4);
-        Result := TGocciaBooleanLiteralValue.TrueValue;
-      end
-      else
-        RaiseParseError('Invalid literal starting with t');
-    end;
-    'f': begin
-      if (FPosition + 4 <= FLength) and
-         (Copy(FText, FPosition, 5) = 'false') then
-      begin
-        Inc(FPosition, 5);
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-      end
-      else
-        RaiseParseError('Invalid literal starting with f');
-    end;
-    'n': begin
-      if (FPosition + 3 <= FLength) and
-         (Copy(FText, FPosition, 4) = 'null') then
-      begin
-        Inc(FPosition, 4);
-        Result := TGocciaNullLiteralValue.Create;
-      end
-      else
-        RaiseParseError('Invalid literal starting with n');
-    end;
+  inherited Create;
+  FStack := TList<TGocciaValue>.Create;
+  FKeyStack := TStringList.Create;
+  FResult := nil;
+end;
+
+destructor TGocciaJSONVisitor.Destroy;
+begin
+  FStack.Free;
+  FKeyStack.Free;
+  inherited;
+end;
+
+function TGocciaJSONVisitor.Parse(const AText: string): TGocciaValue;
+begin
+  DoParse(AText);
+  Result := FResult;
+end;
+
+procedure TGocciaJSONVisitor.EmitValue(const AValue: TGocciaValue);
+var
+  Container: TGocciaValue;
+  Key: string;
+begin
+  if FStack.Count = 0 then
+    FResult := AValue
   else
-    RaiseParseError('Unknown literal');
-  end;
-end;
-
-procedure TGocciaJSONParser.SkipWhitespace;
-begin
-  while not IsAtEnd and (PeekChar in [' ', #9, #10, #13]) do
-    Inc(FPosition);
-end;
-
-function TGocciaJSONParser.PeekChar: Char;
-begin
-  if IsAtEnd then
-    Result := #0
-  else
-    Result := FText[FPosition];
-end;
-
-function TGocciaJSONParser.ReadChar: Char;
-begin
-  Result := PeekChar;
-  Inc(FPosition);
-end;
-
-function TGocciaJSONParser.ExpectChar(const AExpected: Char): Boolean;
-begin
-  SkipWhitespace;
-  if IsAtEnd or (PeekChar <> AExpected) then
   begin
-    Result := False;
-    Exit;
+    Container := FStack[FStack.Count - 1];
+    if Container is TGocciaArrayValue then
+      TGocciaArrayValue(Container).Elements.Add(AValue)
+    else if Container is TGocciaObjectValue then
+    begin
+      Key := FKeyStack[FKeyStack.Count - 1];
+      FKeyStack.Delete(FKeyStack.Count - 1);
+      TGocciaObjectValue(Container).AssignProperty(Key, AValue);
+    end;
   end;
-  ReadChar;
-  Result := True;
 end;
 
-function TGocciaJSONParser.IsAtEnd: Boolean;
+procedure TGocciaJSONVisitor.OnNull;
 begin
-  Result := FPosition > FLength;
+  EmitValue(TGocciaNullLiteralValue.Create);
 end;
 
-procedure TGocciaJSONParser.RaiseParseError(const AMessage: string);
+procedure TGocciaJSONVisitor.OnBoolean(const AValue: Boolean);
 begin
-  raise EGocciaJSONParseError.Create(AMessage + ' at position ' + IntToStr(FPosition));
+  if AValue then
+    EmitValue(TGocciaBooleanLiteralValue.TrueValue)
+  else
+    EmitValue(TGocciaBooleanLiteralValue.FalseValue);
+end;
+
+procedure TGocciaJSONVisitor.OnString(const AValue: string);
+begin
+  EmitValue(TGocciaStringLiteralValue.Create(AValue));
+end;
+
+procedure TGocciaJSONVisitor.OnInteger(const AValue: Int64);
+begin
+  EmitValue(TGocciaNumberLiteralValue.Create(AValue * 1.0));
+end;
+
+procedure TGocciaJSONVisitor.OnFloat(const AValue: Double);
+begin
+  EmitValue(TGocciaNumberLiteralValue.Create(AValue));
+end;
+
+procedure TGocciaJSONVisitor.OnBeginObject;
+begin
+  FStack.Add(TGocciaObjectValue.Create);
+end;
+
+procedure TGocciaJSONVisitor.OnObjectKey(const AKey: string);
+begin
+  FKeyStack.Add(AKey);
+end;
+
+procedure TGocciaJSONVisitor.OnEndObject;
+var
+  Val: TGocciaValue;
+begin
+  Val := FStack[FStack.Count - 1];
+  FStack.Delete(FStack.Count - 1);
+  EmitValue(Val);
+end;
+
+procedure TGocciaJSONVisitor.OnBeginArray;
+begin
+  FStack.Add(TGocciaArrayValue.Create);
+end;
+
+procedure TGocciaJSONVisitor.OnEndArray;
+var
+  Val: TGocciaValue;
+begin
+  Val := FStack[FStack.Count - 1];
+  FStack.Delete(FStack.Count - 1);
+  EmitValue(Val);
 end;
 
 { TGocciaJSONStringifier }

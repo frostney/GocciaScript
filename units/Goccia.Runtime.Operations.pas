@@ -212,10 +212,6 @@ type
     FCompiledModules: TList;
     function LoadModuleNative(const APath, AImportingPath: string): TSouffleValue;
     function LoadJsonModuleNative(const AResolvedPath: string): TSouffleValue;
-    function ParseJsonValue(const AText: string; var APos: Integer): TSouffleValue;
-    function ParseJsonString(const AText: string; var APos: Integer): string;
-    function ParseJsonArray(const AText: string; var APos: Integer): TSouffleValue;
-    function ParseJsonObject(const AText: string; var APos: Integer): TSouffleValue;
     function WrapGocciaValue(const AValue: TGocciaValue): TSouffleValue;
     function CoerceKeyToString(const AKey: TSouffleValue): string;
     function CoerceToNumber(const A: TSouffleValue): Double;
@@ -389,6 +385,7 @@ uses
   GarbageCollector.Generic,
   Souffle.Bytecode.Debug,
   Souffle.Bytecode.Module,
+  Souffle.JSON,
   Souffle.VM.CallFrame,
   Souffle.VM.Exception,
   Souffle.VM.NativeFunction,
@@ -4198,249 +4195,31 @@ function TGocciaRuntimeOperations.LoadJsonModuleNative(
   const AResolvedPath: string): TSouffleValue;
 var
   Source: TStringList;
-  Text: string;
-  Pos: Integer;
-  ParsedValue: TSouffleValue;
-  Rec, InnerRec: TSouffleRecord;
-  Key: string;
-  Val: TSouffleValue;
+  Parser: TSouffleJSONParser;
+  Rec: TSouffleRecord;
 begin
   Source := TStringList.Create;
   try
     Source.LoadFromFile(AResolvedPath);
-    Text := Source.Text;
+    Parser := TSouffleJSONParser.Create(FVM);
+    try
+      Result := Parser.Parse(Source.Text);
+    finally
+      Parser.Free;
+    end;
   finally
     Source.Free;
   end;
 
-  Pos := 1;
-  while (Pos <= Length(Text)) and (Text[Pos] <= ' ') do
-    Inc(Pos);
+  if SouffleIsReference(Result) and (Result.AsReference is TSouffleRecord) then
+    Exit;
 
-  ParsedValue := ParseJsonValue(Text, Pos);
-
-  if SouffleIsReference(ParsedValue) and (ParsedValue.AsReference is TSouffleRecord) then
-  begin
-    Result := ParsedValue;
-  end
-  else
-  begin
-    Rec := TSouffleRecord.Create(1);
-    if Assigned(FVM) then
-      Rec.Delegate := FVM.RecordDelegate;
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.AllocateObject(Rec);
-    Rec.Put('default', ParsedValue);
-    Result := SouffleReference(Rec);
-  end;
-end;
-
-function TGocciaRuntimeOperations.ParseJsonValue(
-  const AText: string; var APos: Integer): TSouffleValue;
-var
-  Ch: Char;
-  NumStr: string;
-  IntVal: Int64;
-  FloatVal: Double;
-  Code: Integer;
-begin
-  while (APos <= Length(AText)) and (AText[APos] <= ' ') do
-    Inc(APos);
-
-  if APos > Length(AText) then
-    Exit(SouffleNil);
-
-  Ch := AText[APos];
-
-  case Ch of
-    '"':
-      Result := SouffleString(ParseJsonString(AText, APos));
-    '{':
-      Result := ParseJsonObject(AText, APos);
-    '[':
-      Result := ParseJsonArray(AText, APos);
-    't':
-      begin
-        Inc(APos, 4);
-        Result := SouffleBoolean(True);
-      end;
-    'f':
-      begin
-        Inc(APos, 5);
-        Result := SouffleBoolean(False);
-      end;
-    'n':
-      begin
-        Inc(APos, 4);
-        Result := SouffleNilWithFlags(1);
-      end;
-  else
-    NumStr := '';
-    while (APos <= Length(AText)) and (AText[APos] in
-      ['0'..'9', '-', '+', '.', 'e', 'E']) do
-    begin
-      NumStr := NumStr + AText[APos];
-      Inc(APos);
-    end;
-    Val(NumStr, IntVal, Code);
-    if (Code = 0) and (Pos('.', NumStr) = 0) and (Pos('e', LowerCase(NumStr)) = 0) then
-      Result := SouffleInteger(IntVal)
-    else
-    begin
-      Val(NumStr, FloatVal, Code);
-      if Code = 0 then
-        Result := SouffleFloat(FloatVal)
-      else
-        Result := SouffleNil;
-    end;
-  end;
-end;
-
-function CodePointToUTF8(const ACodePoint: UInt32): string;
-begin
-  if ACodePoint <= $7F then
-    Result := Char(ACodePoint)
-  else if ACodePoint <= $7FF then
-    Result := Char($C0 or (ACodePoint shr 6)) +
-              Char($80 or (ACodePoint and $3F))
-  else if ACodePoint <= $FFFF then
-    Result := Char($E0 or (ACodePoint shr 12)) +
-              Char($80 or ((ACodePoint shr 6) and $3F)) +
-              Char($80 or (ACodePoint and $3F))
-  else
-    Result := Char($F0 or (ACodePoint shr 18)) +
-              Char($80 or ((ACodePoint shr 12) and $3F)) +
-              Char($80 or ((ACodePoint shr 6) and $3F)) +
-              Char($80 or (ACodePoint and $3F));
-end;
-
-function TGocciaRuntimeOperations.ParseJsonString(
-  const AText: string; var APos: Integer): string;
-var
-  Ch: Char;
-  HexStr: string;
-  CodePoint, High, Low: UInt32;
-begin
-  Result := '';
-  Inc(APos);
-  while APos <= Length(AText) do
-  begin
-    Ch := AText[APos];
-    if Ch = '"' then
-    begin
-      Inc(APos);
-      Exit;
-    end;
-    if Ch = '\' then
-    begin
-      Inc(APos);
-      if APos > Length(AText) then
-        Exit;
-      Ch := AText[APos];
-      case Ch of
-        '"': Result := Result + '"';
-        '\': Result := Result + '\';
-        '/': Result := Result + '/';
-        'b': Result := Result + #8;
-        'f': Result := Result + #12;
-        'n': Result := Result + #10;
-        'r': Result := Result + #13;
-        't': Result := Result + #9;
-        'u':
-          begin
-            HexStr := Copy(AText, APos + 1, 4);
-            CodePoint := UInt32(StrToInt('$' + HexStr));
-            Inc(APos, 4);
-            if (CodePoint >= $D800) and (CodePoint <= $DBFF) then
-            begin
-              High := CodePoint;
-              if (APos + 2 <= Length(AText)) and (AText[APos + 1] = '\') and
-                 (AText[APos + 2] = 'u') then
-              begin
-                HexStr := Copy(AText, APos + 3, 4);
-                Low := UInt32(StrToInt('$' + HexStr));
-                if (Low >= $DC00) and (Low <= $DFFF) then
-                begin
-                  CodePoint := $10000 + ((High - $D800) shl 10) + (Low - $DC00);
-                  Inc(APos, 6);
-                end;
-              end;
-            end;
-            Result := Result + CodePointToUTF8(CodePoint);
-          end;
-      end;
-    end
-    else
-      Result := Result + Ch;
-    Inc(APos);
-  end;
-end;
-
-function TGocciaRuntimeOperations.ParseJsonArray(
-  const AText: string; var APos: Integer): TSouffleValue;
-var
-  Arr: TSouffleArray;
-begin
-  Inc(APos);
-  Arr := TSouffleArray.Create(0);
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.AllocateObject(Arr);
-  if Assigned(FVM) then
-    Arr.Delegate := FVM.ArrayDelegate;
-
-  while APos <= Length(AText) do
-  begin
-    while (APos <= Length(AText)) and (AText[APos] <= ' ') do
-      Inc(APos);
-    if (APos > Length(AText)) or (AText[APos] = ']') then
-    begin
-      Inc(APos);
-      Break;
-    end;
-    Arr.Push(ParseJsonValue(AText, APos));
-    while (APos <= Length(AText)) and (AText[APos] <= ' ') do
-      Inc(APos);
-    if (APos <= Length(AText)) and (AText[APos] = ',') then
-      Inc(APos);
-  end;
-
-  Result := SouffleReference(Arr);
-end;
-
-function TGocciaRuntimeOperations.ParseJsonObject(
-  const AText: string; var APos: Integer): TSouffleValue;
-var
-  Rec: TSouffleRecord;
-  Key: string;
-begin
-  Inc(APos);
-  Rec := TSouffleRecord.Create(4);
-  if Assigned(TGarbageCollector.Instance) then
-    TGarbageCollector.Instance.AllocateObject(Rec);
+  Rec := TSouffleRecord.Create(1);
   if Assigned(FVM) then
     Rec.Delegate := FVM.RecordDelegate;
-
-  while APos <= Length(AText) do
-  begin
-    while (APos <= Length(AText)) and (AText[APos] <= ' ') do
-      Inc(APos);
-    if (APos > Length(AText)) or (AText[APos] = '}') then
-    begin
-      Inc(APos);
-      Break;
-    end;
-    Key := ParseJsonString(AText, APos);
-    while (APos <= Length(AText)) and (AText[APos] <= ' ') do
-      Inc(APos);
-    if (APos <= Length(AText)) and (AText[APos] = ':') then
-      Inc(APos);
-    Rec.Put(Key, ParseJsonValue(AText, APos));
-    while (APos <= Length(AText)) and (AText[APos] <= ' ') do
-      Inc(APos);
-    if (APos <= Length(AText)) and (AText[APos] = ',') then
-      Inc(APos);
-  end;
-
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
+  Rec.Put('default', Result);
   Result := SouffleReference(Rec);
 end;
 
