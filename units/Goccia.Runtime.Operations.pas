@@ -1785,7 +1785,7 @@ begin
       end
       else if AValue.AsReference is TSouffleRecord then
       begin
-        { Blueprint Map/Set → unwrap to TGocciaMapValue/TGocciaSetValue }
+        { Blueprint Map/Set → unwrap to TGocciaMapValue/TGocciaSetValue (cached) }
         if Assigned(TSouffleRecord(AValue.AsReference).Blueprint) then
         begin
           Bp := TSouffleRecord(AValue.AsReference).Blueprint;
@@ -1793,14 +1793,26 @@ begin
           begin
             if Assigned(FMapBlueprint) and (Bp = FMapBlueprint) then
             begin
-              Result := ConvertBlueprintMapToGoccia(
-                TSouffleRecord(AValue.AsReference));
+              if FRecordBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
+                Result := TGocciaValue(CachedBridge)
+              else
+              begin
+                Result := ConvertBlueprintMapToGoccia(
+                  TSouffleRecord(AValue.AsReference));
+                FRecordBridgeCache.Add(AValue.AsReference, Result);
+              end;
               Exit;
             end;
             if Assigned(FSetBlueprint) and (Bp = FSetBlueprint) then
             begin
-              Result := ConvertBlueprintSetToGoccia(
-                TSouffleRecord(AValue.AsReference));
+              if FRecordBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
+                Result := TGocciaValue(CachedBridge)
+              else
+              begin
+                Result := ConvertBlueprintSetToGoccia(
+                  TSouffleRecord(AValue.AsReference));
+                FRecordBridgeCache.Add(AValue.AsReference, Result);
+              end;
               Exit;
             end;
             Bp := Bp.SuperBlueprint;
