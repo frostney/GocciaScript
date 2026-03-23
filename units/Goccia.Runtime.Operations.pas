@@ -6335,8 +6335,10 @@ begin
     Iter := TGocciaSouffleMapIterator(AReceiver.AsReference);
     Value := Iter.Next(Done);
     Rec := TSouffleRecord.Create(2);
-    Rec.Put('value', Value);
-    Rec.Put('done', SouffleBoolean(Done));
+    if Assigned(GNativeArrayJoinRuntime) and Assigned(GNativeArrayJoinRuntime.VM) then
+      Rec.Delegate := GNativeArrayJoinRuntime.VM.RecordDelegate;
+    Rec.Put(PROP_VALUE, Value);
+    Rec.Put(PROP_DONE, SouffleBoolean(Done));
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.AllocateObject(Rec);
     Result := SouffleReference(Rec);
@@ -6359,8 +6361,10 @@ begin
     Iter := TGocciaSouffleSetIterator(AReceiver.AsReference);
     Value := Iter.Next(Done);
     Rec := TSouffleRecord.Create(2);
-    Rec.Put('value', Value);
-    Rec.Put('done', SouffleBoolean(Done));
+    if Assigned(GNativeArrayJoinRuntime) and Assigned(GNativeArrayJoinRuntime.VM) then
+      Rec.Delegate := GNativeArrayJoinRuntime.VM.RecordDelegate;
+    Rec.Put(PROP_VALUE, Value);
+    Rec.Put(PROP_DONE, SouffleBoolean(Done));
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.AllocateObject(Rec);
     Result := SouffleReference(Rec);
