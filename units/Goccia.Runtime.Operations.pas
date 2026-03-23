@@ -314,7 +314,7 @@ type
       const AValue: TSouffleValue): Boolean;
 
     procedure PropertyWriteViolation(const AObject: TSouffleValue;
-      const AKey: string);
+      const AKey: string); override;
     procedure PropertyDeleteViolation(const AObject: TSouffleValue;
       const AKey: string);
     procedure ThrowTypeErrorMessage(
