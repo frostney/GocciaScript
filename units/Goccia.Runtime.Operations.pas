@@ -9,6 +9,7 @@ uses
   Generics.Collections,
 
   HashMap,
+  Modules.Resolver,
   OrderedStringMap,
   Souffle.Bytecode.Chunk,
   Souffle.Compound,
@@ -206,6 +207,16 @@ type
     FTestDelegate: TSouffleRecord;
     FActiveDecoratorSession: TGocciaDecoratorSession;
     FArrayBridgeDirty: Boolean;
+    FModuleResolver: TModuleResolver;
+    FModuleCache: TOrderedStringMap<TSouffleValue>;
+    FModuleLoadingSet: TOrderedStringMap<Boolean>;
+    FCompiledModules: TList;
+    function LoadModuleNative(const APath, AImportingPath: string): TSouffleValue;
+    function LoadJsonModuleNative(const AResolvedPath: string): TSouffleValue;
+    function ParseJsonValue(const AText: string; var APos: Integer): TSouffleValue;
+    function ParseJsonString(const AText: string; var APos: Integer): string;
+    function ParseJsonArray(const AText: string; var APos: Integer): TSouffleValue;
+    function ParseJsonObject(const AText: string; var APos: Integer): TSouffleValue;
     function WrapGocciaValue(const AValue: TGocciaValue): TSouffleValue;
     function CoerceKeyToString(const AKey: TSouffleValue): string;
     function CoerceToNumber(const A: TSouffleValue): Double;
@@ -366,6 +377,7 @@ type
     property VM: TSouffleVM read FVM write FVM;
     property Engine: TObject read FEngine write FEngine;
     property SourcePath: string read FSourcePath write FSourcePath;
+    property ModuleResolver: TModuleResolver read FModuleResolver write FModuleResolver;
   end;
 
 implementation
@@ -377,12 +389,15 @@ uses
 
   GarbageCollector.Generic,
   Souffle.Bytecode.Debug,
+  Souffle.Bytecode.Module,
   Souffle.VM.CallFrame,
   Souffle.VM.Exception,
   Souffle.VM.NativeFunction,
 
   Goccia.Arguments.Collection,
+  Goccia.AST.Node,
   Goccia.CallStack,
+  Goccia.Compiler,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
@@ -391,10 +406,13 @@ uses
   Goccia.Evaluator.Context,
   Goccia.Evaluator.TypeOperations,
   Goccia.Interpreter,
+  Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
+  Goccia.Parser,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
+  Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
   Goccia.Values.ClassHelper,
@@ -1310,6 +1328,10 @@ begin
   FClassDefinitionScopes := THashMap<TObject, TObject>.Create;
   FWrappedValues := TList.Create;
   FFormalParameterCounts := THashMap<TSouffleFunctionTemplate, Integer>.Create;
+  FModuleCache := TOrderedStringMap<TSouffleValue>.Create;
+  FModuleLoadingSet := TOrderedStringMap<Boolean>.Create;
+  FCompiledModules := TList.Create;
+  FModuleResolver := nil;
   FBridgeCallDepth := 0;
   FVM := nil;
   TGarbageCollector.Initialize;
@@ -1317,6 +1339,8 @@ begin
 end;
 
 destructor TGocciaRuntimeOperations.Destroy;
+var
+  I: Integer;
 begin
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.RemoveExternalRootMarker(MarkWrappedGocciaValues);
@@ -1333,6 +1357,11 @@ begin
   FWrappedValues.Free;
   FFormalParameterCounts.Free;
   FActiveDecoratorSession.Free;
+  FModuleCache.Free;
+  FModuleLoadingSet.Free;
+  for I := 0 to FCompiledModules.Count - 1 do
+    TObject(FCompiledModules[I]).Free;
+  FCompiledModules.Free;
   inherited;
 end;
 
@@ -4032,29 +4061,327 @@ end;
 { Modules }
 
 function TGocciaRuntimeOperations.ImportModule(const APath: string): TSouffleValue;
-var
-  EngineObj: TGocciaEngine;
-  Module: TGocciaModule;
-  Pair: TGocciaValueMap.TKeyValuePair;
-  Rec: TSouffleRecord;
 begin
-  {$IFDEF BRIDGE_METRICS}
-  Inc(GBridgeMetrics.ImportModuleCount);
-  {$ENDIF}
-  if not Assigned(FEngine) then
+  if Assigned(FModuleResolver) then
+    Result := LoadModuleNative(APath, FSourcePath)
+  else
+    Result := SouffleNil;
+end;
+
+function TGocciaRuntimeOperations.LoadModuleNative(
+  const APath, AImportingPath: string): TSouffleValue;
+var
+  ResolvedPath: string;
+  Source: TStringList;
+  SourceText: string;
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  Compiler: TGocciaCompiler;
+  Module: TSouffleBytecodeModule;
+  Template: TSouffleFunctionTemplate;
+  Rec: TSouffleRecord;
+  ExportPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
+  SavedSourcePath: string;
+  SavedExports: TOrderedStringMap<TSouffleValue>;
+  Dummy: Boolean;
+begin
+  ResolvedPath := FModuleResolver.Resolve(APath, AImportingPath);
+
+  if FModuleCache.TryGetValue(ResolvedPath, Result) then
+    Exit;
+
+  if FModuleLoadingSet.TryGetValue(ResolvedPath, Dummy) then
+  begin
+    Rec := TSouffleRecord.Create(0);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(Rec);
+    Result := SouffleReference(Rec);
+    Exit;
+  end;
+
+  if LowerCase(ExtractFileExt(ResolvedPath)) = '.json' then
+  begin
+    Result := LoadJsonModuleNative(ResolvedPath);
+    FModuleCache.AddOrSetValue(ResolvedPath, Result);
+    Exit;
+  end;
+
+  FModuleLoadingSet.AddOrSetValue(ResolvedPath, True);
+
+  Source := TStringList.Create;
+  try
+    Source.LoadFromFile(ResolvedPath);
+    SourceText := Source.Text;
+  finally
+    Source.Free;
+  end;
+
+  SavedSourcePath := FSourcePath;
+  SavedExports := FExports;
+  FExports := TOrderedStringMap<TSouffleValue>.Create;
+  FSourcePath := ResolvedPath;
+  try
+    Lexer := TGocciaLexer.Create(SourceText, ResolvedPath);
+    try
+      Tokens := Lexer.ScanTokens;
+      Parser := TGocciaParser.Create(Tokens, ResolvedPath, Lexer.SourceLines);
+      try
+        ProgramNode := Parser.Parse;
+        try
+          Compiler := TGocciaCompiler.Create(ResolvedPath);
+          try
+            Module := Compiler.Compile(ProgramNode);
+            FCompiledModules.Add(Module);
+
+            for Template in Compiler.FormalParameterCounts.Keys do
+              RegisterFormalParameterCount(
+                Template, Compiler.FormalParameterCounts[Template]);
+
+            FVM.Execute(Module);
+
+            if Assigned(TGocciaMicrotaskQueue.Instance) then
+              TGocciaMicrotaskQueue.Instance.DrainQueue;
+
+            Rec := TSouffleRecord.Create(FExports.Count);
+            if Assigned(TGarbageCollector.Instance) then
+              TGarbageCollector.Instance.AllocateObject(Rec);
+
+            for ExportPair in FExports do
+              Rec.Put(ExportPair.Key, ExportPair.Value);
+
+            Result := SouffleReference(Rec);
+            FModuleCache.AddOrSetValue(ResolvedPath, Result);
+          finally
+            Compiler.Free;
+          end;
+        finally
+          ProgramNode.Free;
+        end;
+      finally
+        Parser.Free;
+      end;
+    finally
+      Lexer.Free;
+    end;
+  finally
+    FExports.Free;
+    FExports := SavedExports;
+    FSourcePath := SavedSourcePath;
+    FModuleLoadingSet.Remove(ResolvedPath);
+  end;
+end;
+
+function TGocciaRuntimeOperations.LoadJsonModuleNative(
+  const AResolvedPath: string): TSouffleValue;
+var
+  Source: TStringList;
+  Text: string;
+  Pos: Integer;
+  ParsedValue: TSouffleValue;
+  Rec, InnerRec: TSouffleRecord;
+  Key: string;
+  Val: TSouffleValue;
+begin
+  Source := TStringList.Create;
+  try
+    Source.LoadFromFile(AResolvedPath);
+    Text := Source.Text;
+  finally
+    Source.Free;
+  end;
+
+  Pos := 1;
+  while (Pos <= Length(Text)) and (Text[Pos] <= ' ') do
+    Inc(Pos);
+
+  ParsedValue := ParseJsonValue(Text, Pos);
+
+  if SouffleIsReference(ParsedValue) and (ParsedValue.AsReference is TSouffleRecord) then
+  begin
+    Result := ParsedValue;
+  end
+  else
+  begin
+    Rec := TSouffleRecord.Create(1);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(Rec);
+    Rec.Put('default', ParsedValue);
+    Result := SouffleReference(Rec);
+  end;
+end;
+
+function TGocciaRuntimeOperations.ParseJsonValue(
+  const AText: string; var APos: Integer): TSouffleValue;
+var
+  Ch: Char;
+  NumStr: string;
+  IntVal: Int64;
+  FloatVal: Double;
+  Code: Integer;
+begin
+  while (APos <= Length(AText)) and (AText[APos] <= ' ') do
+    Inc(APos);
+
+  if APos > Length(AText) then
     Exit(SouffleNil);
 
-  EngineObj := TGocciaEngine(FEngine);
-  Module := EngineObj.Interpreter.LoadModule(APath, FSourcePath);
-  if not Assigned(Module) then
-    Exit(SouffleNil);
+  Ch := AText[APos];
 
-  Rec := TSouffleRecord.Create(Module.ExportsTable.Count);
+  case Ch of
+    '"':
+      Result := SouffleString(ParseJsonString(AText, APos));
+    '{':
+      Result := ParseJsonObject(AText, APos);
+    '[':
+      Result := ParseJsonArray(AText, APos);
+    't':
+      begin
+        Inc(APos, 4);
+        Result := SouffleBoolean(True);
+      end;
+    'f':
+      begin
+        Inc(APos, 5);
+        Result := SouffleBoolean(False);
+      end;
+    'n':
+      begin
+        Inc(APos, 4);
+        Result := SouffleNilWithFlags(1);
+      end;
+  else
+    NumStr := '';
+    while (APos <= Length(AText)) and (AText[APos] in
+      ['0'..'9', '-', '+', '.', 'e', 'E']) do
+    begin
+      NumStr := NumStr + AText[APos];
+      Inc(APos);
+    end;
+    Val(NumStr, IntVal, Code);
+    if (Code = 0) and (Pos('.', NumStr) = 0) and (Pos('e', LowerCase(NumStr)) = 0) then
+      Result := SouffleInteger(IntVal)
+    else
+    begin
+      Val(NumStr, FloatVal, Code);
+      if Code = 0 then
+        Result := SouffleFloat(FloatVal)
+      else
+        Result := SouffleNil;
+    end;
+  end;
+end;
+
+function TGocciaRuntimeOperations.ParseJsonString(
+  const AText: string; var APos: Integer): string;
+var
+  Ch: Char;
+  HexStr: string;
+begin
+  Result := '';
+  Inc(APos);
+  while APos <= Length(AText) do
+  begin
+    Ch := AText[APos];
+    if Ch = '"' then
+    begin
+      Inc(APos);
+      Exit;
+    end;
+    if Ch = '\' then
+    begin
+      Inc(APos);
+      if APos > Length(AText) then
+        Exit;
+      Ch := AText[APos];
+      case Ch of
+        '"': Result := Result + '"';
+        '\': Result := Result + '\';
+        '/': Result := Result + '/';
+        'b': Result := Result + #8;
+        'f': Result := Result + #12;
+        'n': Result := Result + #10;
+        'r': Result := Result + #13;
+        't': Result := Result + #9;
+        'u':
+          begin
+            HexStr := Copy(AText, APos + 1, 4);
+            Result := Result + Char(StrToInt('$' + HexStr));
+            Inc(APos, 4);
+          end;
+      end;
+    end
+    else
+      Result := Result + Ch;
+    Inc(APos);
+  end;
+end;
+
+function TGocciaRuntimeOperations.ParseJsonArray(
+  const AText: string; var APos: Integer): TSouffleValue;
+var
+  Arr: TSouffleArray;
+begin
+  Inc(APos);
+  Arr := TSouffleArray.Create(0);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Arr);
+  if Assigned(FVM) then
+    Arr.Delegate := FVM.ArrayDelegate;
+
+  while APos <= Length(AText) do
+  begin
+    while (APos <= Length(AText)) and (AText[APos] <= ' ') do
+      Inc(APos);
+    if (APos > Length(AText)) or (AText[APos] = ']') then
+    begin
+      Inc(APos);
+      Break;
+    end;
+    Arr.Push(ParseJsonValue(AText, APos));
+    while (APos <= Length(AText)) and (AText[APos] <= ' ') do
+      Inc(APos);
+    if (APos <= Length(AText)) and (AText[APos] = ',') then
+      Inc(APos);
+  end;
+
+  Result := SouffleReference(Arr);
+end;
+
+function TGocciaRuntimeOperations.ParseJsonObject(
+  const AText: string; var APos: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  Key: string;
+begin
+  Inc(APos);
+  Rec := TSouffleRecord.Create(4);
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AllocateObject(Rec);
+  if Assigned(FVM) then
+    Rec.Delegate := FVM.RecordDelegate;
 
-  for Pair in Module.ExportsTable do
-    Rec.Put(Pair.Key, ToSouffleValue(Pair.Value));
+  while APos <= Length(AText) do
+  begin
+    while (APos <= Length(AText)) and (AText[APos] <= ' ') do
+      Inc(APos);
+    if (APos > Length(AText)) or (AText[APos] = '}') then
+    begin
+      Inc(APos);
+      Break;
+    end;
+    Key := ParseJsonString(AText, APos);
+    while (APos <= Length(AText)) and (AText[APos] <= ' ') do
+      Inc(APos);
+    if (APos <= Length(AText)) and (AText[APos] = ':') then
+      Inc(APos);
+    Rec.Put(Key, ParseJsonValue(AText, APos));
+    while (APos <= Length(AText)) and (AText[APos] <= ' ') do
+      Inc(APos);
+    if (APos <= Length(AText)) and (AText[APos] = ',') then
+      Inc(APos);
+  end;
 
   Result := SouffleReference(Rec);
 end;
