@@ -3405,6 +3405,8 @@ var
   I: Integer;
   Bp, WalkBp: TSouffleBlueprint;
   Rec: TSouffleRecord;
+  SM: TGocciaSouffleMap;
+  SS: TGocciaSouffleSet;
   CtorMethod: TSouffleValue;
   VMArgs: array of TSouffleValue;
   FieldInits: array of TSouffleClosure;
@@ -3441,6 +3443,22 @@ begin
     begin
       Rec := TSouffleRecord.CreateFromBlueprint(Bp);
       Rec.Delegate := Bp.Prototype;
+
+      { Initialize slot 0 for Map/Set subclasses }
+      if (WalkBp = FMapBlueprint) and (Bp <> FMapBlueprint) then
+      begin
+        SM := TGocciaSouffleMap.Create(4);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AllocateObject(SM);
+        Rec.SetSlot(0, SouffleReference(SM));
+      end
+      else if (WalkBp = FSetBlueprint) and (Bp <> FSetBlueprint) then
+      begin
+        SS := TGocciaSouffleSet.Create(4);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AllocateObject(SS);
+        Rec.SetSlot(0, SouffleReference(SS));
+      end;
 
       if not Assigned(Bp.Prototype.Delegate) then
       begin
