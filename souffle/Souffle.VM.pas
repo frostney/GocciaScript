@@ -852,6 +852,16 @@ begin
           AReceiver, nil, 0);
       Exit;
     end;
+    if ACallee.AsReference is TSouffleNativeClosure then
+    begin
+      if Count > 0 then
+        Result := TSouffleNativeClosure(ACallee.AsReference).Invoke(
+          AReceiver, @Args[0], Count)
+      else
+        Result := TSouffleNativeClosure(ACallee.AsReference).Invoke(
+          AReceiver, nil, 0);
+      Exit;
+    end;
   end;
 
   if Count > 0 then
@@ -2086,6 +2096,10 @@ begin
           FRegisters[Base + A] := TSouffleNativeFunction(
             FRegisters[Base + A].AsReference).Invoke(
               SouffleNil, @FRegisters[Base + A + 1], B)
+        else if FRegisters[Base + A].AsReference is TSouffleNativeClosure then
+          FRegisters[Base + A] := TSouffleNativeClosure(
+            FRegisters[Base + A].AsReference).Invoke(
+              SouffleNil, @FRegisters[Base + A + 1], B)
         else
           FRegisters[Base + A] := FRuntimeOps.Invoke(
             FRegisters[Base + A], @FRegisters[Base + A + 1], B, SouffleNil);
@@ -2112,6 +2126,10 @@ begin
             C and 2 <> 0)
         else if FRegisters[Base + A].AsReference is TSouffleNativeFunction then
           FRegisters[Base + A] := TSouffleNativeFunction(
+            FRegisters[Base + A].AsReference).Invoke(
+              FRegisters[Base + A - 1], @FRegisters[Base + A + 1], B)
+        else if FRegisters[Base + A].AsReference is TSouffleNativeClosure then
+          FRegisters[Base + A] := TSouffleNativeClosure(
             FRegisters[Base + A].AsReference).Invoke(
               FRegisters[Base + A - 1], @FRegisters[Base + A + 1], B)
         else
