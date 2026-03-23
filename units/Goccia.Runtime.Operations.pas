@@ -4296,11 +4296,30 @@ begin
   end;
 end;
 
+function CodePointToUTF8(const ACodePoint: UInt32): string;
+begin
+  if ACodePoint <= $7F then
+    Result := Char(ACodePoint)
+  else if ACodePoint <= $7FF then
+    Result := Char($C0 or (ACodePoint shr 6)) +
+              Char($80 or (ACodePoint and $3F))
+  else if ACodePoint <= $FFFF then
+    Result := Char($E0 or (ACodePoint shr 12)) +
+              Char($80 or ((ACodePoint shr 6) and $3F)) +
+              Char($80 or (ACodePoint and $3F))
+  else
+    Result := Char($F0 or (ACodePoint shr 18)) +
+              Char($80 or ((ACodePoint shr 12) and $3F)) +
+              Char($80 or ((ACodePoint shr 6) and $3F)) +
+              Char($80 or (ACodePoint and $3F));
+end;
+
 function TGocciaRuntimeOperations.ParseJsonString(
   const AText: string; var APos: Integer): string;
 var
   Ch: Char;
   HexStr: string;
+  CodePoint, High, Low: UInt32;
 begin
   Result := '';
   Inc(APos);
@@ -4330,8 +4349,24 @@ begin
         'u':
           begin
             HexStr := Copy(AText, APos + 1, 4);
-            Result := Result + Char(StrToInt('$' + HexStr));
+            CodePoint := UInt32(StrToInt('$' + HexStr));
             Inc(APos, 4);
+            if (CodePoint >= $D800) and (CodePoint <= $DBFF) then
+            begin
+              High := CodePoint;
+              if (APos + 2 <= Length(AText)) and (AText[APos + 1] = '\') and
+                 (AText[APos + 2] = 'u') then
+              begin
+                HexStr := Copy(AText, APos + 3, 4);
+                Low := UInt32(StrToInt('$' + HexStr));
+                if (Low >= $DC00) and (Low <= $DFFF) then
+                begin
+                  CodePoint := $10000 + ((High - $D800) shl 10) + (Low - $DC00);
+                  Inc(APos, 6);
+                end;
+              end;
+            end;
+            Result := Result + CodePointToUTF8(CodePoint);
           end;
       end;
     end
