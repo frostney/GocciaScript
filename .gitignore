@@ -18,3 +18,5 @@ build/*.Test
 node_modules/
 
 tests-wasm/*.wasm
+
+.claude/worktrees/

@@ -360,6 +360,8 @@ type
       out AResult: TSouffleValue): Boolean;
     function UnwrapToGocciaValue(const AValue: TSouffleValue): TGocciaValue;
     function ToSouffleValue(const AValue: TGocciaValue): TSouffleValue;
+    function ConvertBlueprintMapToGoccia(const ARec: TSouffleRecord): TGocciaValue;
+    function ConvertBlueprintSetToGoccia(const ARec: TSouffleRecord): TGocciaValue;
 
     function ResolveProxyGet(const ATarget: TSouffleHeapObject;
       const AName: string): TGocciaValue;
@@ -1780,6 +1782,23 @@ begin
       end
       else if AValue.AsReference is TSouffleRecord then
       begin
+        { Blueprint Map/Set → unwrap to TGocciaMapValue/TGocciaSetValue }
+        if Assigned(FMapBlueprint) and
+           Assigned(TSouffleRecord(AValue.AsReference).Blueprint) and
+           (TSouffleRecord(AValue.AsReference).Blueprint = FMapBlueprint) then
+        begin
+          Result := ConvertBlueprintMapToGoccia(
+            TSouffleRecord(AValue.AsReference));
+          Exit;
+        end;
+        if Assigned(FSetBlueprint) and
+           Assigned(TSouffleRecord(AValue.AsReference).Blueprint) and
+           (TSouffleRecord(AValue.AsReference).Blueprint = FSetBlueprint) then
+        begin
+          Result := ConvertBlueprintSetToGoccia(
+            TSouffleRecord(AValue.AsReference));
+          Exit;
+        end;
         if not FRecordBridgeCache.TryGetValue(AValue.AsReference, CachedBridge) then
         begin
           {$IFDEF BRIDGE_METRICS}
@@ -1859,6 +1878,9 @@ function ConvertGocciaSetToSouffle(const ASet: TGocciaSetValue;
 function GetSouffleMap(const AReceiver: TSouffleValue): TGocciaSouffleMap; forward;
 function GetSouffleSet(const AReceiver: TSouffleValue): TGocciaSouffleSet; forward;
 
+function CreateBlueprintMapFromGoccia(const AMap: TGocciaMapValue): TSouffleValue; forward;
+function CreateBlueprintSetFromGoccia(const ASet: TGocciaSetValue): TSouffleValue; forward;
+
 function TGocciaRuntimeOperations.ToSouffleValue(
   const AValue: TGocciaValue): TSouffleValue;
 var
@@ -1919,6 +1941,10 @@ begin
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.AllocateObject(Result.AsReference);
   end
+  else if (AValue is TGocciaMapValue) and Assigned(FMapBlueprint) then
+    Result := CreateBlueprintMapFromGoccia(TGocciaMapValue(AValue))
+  else if (AValue is TGocciaSetValue) and Assigned(FSetBlueprint) then
+    Result := CreateBlueprintSetFromGoccia(TGocciaSetValue(AValue))
   else
     Result := WrapGocciaValue(AValue);
 end;
@@ -5118,6 +5144,95 @@ var
   GPromiseWithResolversFn: TGocciaValue;
   GPromiseTryFn: TGocciaValue;
 
+function CreateBlueprintMapFromGoccia(const AMap: TGocciaMapValue): TSouffleValue;
+var
+  SM: TGocciaSouffleMap;
+  Rec: TSouffleRecord;
+  Bp: TSouffleBlueprint;
+  I: Integer;
+  Entry: TGocciaMapEntry;
+begin
+  Bp := GNativeArrayJoinRuntime.FMapBlueprint;
+  SM := TGocciaSouffleMap.Create(AMap.Entries.Count);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(SM);
+  for I := 0 to AMap.Entries.Count - 1 do
+  begin
+    Entry := AMap.Entries[I];
+    SM.SetEntry(GNativeArrayJoinRuntime.ToSouffleValue(Entry.Key),
+      GNativeArrayJoinRuntime.ToSouffleValue(Entry.Value));
+  end;
+  Rec := TSouffleRecord.CreateFromBlueprint(Bp);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
+  Rec.Delegate := Bp.Prototype;
+  Rec.SetSlot(0, SouffleReference(SM));
+  Result := SouffleReference(Rec);
+end;
+
+function CreateBlueprintSetFromGoccia(const ASet: TGocciaSetValue): TSouffleValue;
+var
+  SS: TGocciaSouffleSet;
+  Rec: TSouffleRecord;
+  Bp: TSouffleBlueprint;
+  I: Integer;
+begin
+  Bp := GNativeArrayJoinRuntime.FSetBlueprint;
+  SS := TGocciaSouffleSet.Create(ASet.Items.Count);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(SS);
+  for I := 0 to ASet.Items.Count - 1 do
+    SS.Add(GNativeArrayJoinRuntime.ToSouffleValue(ASet.Items[I]));
+  Rec := TSouffleRecord.CreateFromBlueprint(Bp);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
+  Rec.Delegate := Bp.Prototype;
+  Rec.SetSlot(0, SouffleReference(SS));
+  Result := SouffleReference(Rec);
+end;
+
+function TGocciaRuntimeOperations.ConvertBlueprintMapToGoccia(
+  const ARec: TSouffleRecord): TGocciaValue;
+var
+  SM: TGocciaSouffleMap;
+  Slot0: TSouffleValue;
+  MapVal: TGocciaMapValue;
+  I: Integer;
+begin
+  MapVal := TGocciaMapValue.Create;
+  Slot0 := ARec.GetSlot(0);
+  if SouffleIsReference(Slot0) and Assigned(Slot0.AsReference) and
+     (Slot0.AsReference is TGocciaSouffleMap) then
+  begin
+    SM := TGocciaSouffleMap(Slot0.AsReference);
+    for I := 0 to SM.Count - 1 do
+      MapVal.SetEntry(
+        UnwrapToGocciaValue(SM.GetKeyAt(I)),
+        UnwrapToGocciaValue(SM.GetValueAt(I)));
+  end;
+  Result := MapVal;
+end;
+
+function TGocciaRuntimeOperations.ConvertBlueprintSetToGoccia(
+  const ARec: TSouffleRecord): TGocciaValue;
+var
+  SS: TGocciaSouffleSet;
+  Slot0: TSouffleValue;
+  SetVal: TGocciaSetValue;
+  I: Integer;
+begin
+  SetVal := TGocciaSetValue.Create;
+  Slot0 := ARec.GetSlot(0);
+  if SouffleIsReference(Slot0) and Assigned(Slot0.AsReference) and
+     (Slot0.AsReference is TGocciaSouffleSet) then
+  begin
+    SS := TGocciaSouffleSet(Slot0.AsReference);
+    for I := 0 to SS.Count - 1 do
+      SetVal.AddItem(UnwrapToGocciaValue(SS.GetItemAt(I)));
+  end;
+  Result := SetVal;
+end;
+
 { Bridged test framework globals }
 var
   GBridgedDescribe: TGocciaNativeFunctionValue;
@@ -6667,6 +6782,50 @@ begin
     Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
+function NativeMapGetOrInsert(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  SM: TGocciaSouffleMap;
+  Key, DefaultVal: TSouffleValue;
+  Idx: Integer;
+begin
+  SM := GetSouffleMap(AReceiver);
+  if not Assigned(SM) or (AArgCount < 1) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  Key := AArgs^;
+  Idx := SM.FindEntry(Key);
+  if Idx >= 0 then
+    Exit(SM.GetValueAt(Idx));
+  if AArgCount >= 2 then
+    DefaultVal := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^
+  else
+    DefaultVal := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  SM.SetEntry(Key, DefaultVal);
+  Result := DefaultVal;
+end;
+
+function NativeMapGetOrInsertComputed(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  SM: TGocciaSouffleMap;
+  Key, Callback, ComputedVal: TSouffleValue;
+  Idx: Integer;
+  CallArgs: array[0..0] of TSouffleValue;
+begin
+  SM := GetSouffleMap(AReceiver);
+  if not Assigned(SM) or (AArgCount < 2) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  Key := AArgs^;
+  Callback := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^;
+  Idx := SM.FindEntry(Key);
+  if Idx >= 0 then
+    Exit(SM.GetValueAt(Idx));
+  CallArgs[0] := Key;
+  ComputedVal := GNativeArrayJoinRuntime.Invoke(Callback, @CallArgs[0], 1, SouffleNil);
+  SM.SetEntry(Key, ComputedVal);
+  Result := ComputedVal;
+end;
+
 { Native Set delegate methods }
 
 function NativeSetHas(const AReceiver: TSouffleValue;
@@ -6778,6 +6937,181 @@ begin
     Exit;
   end;
   Result := InvokeGocciaMethod(AReceiver, 'entries', AArgs, AArgCount);
+end;
+
+function CreateBlueprintSet(const AItems: TGocciaSouffleSet = nil): TSouffleValue;
+var
+  SS: TGocciaSouffleSet;
+  Rec: TSouffleRecord;
+  Bp: TSouffleBlueprint;
+begin
+  Bp := GNativeArrayJoinRuntime.FSetBlueprint;
+  if AItems <> nil then
+    SS := AItems
+  else
+  begin
+    SS := TGocciaSouffleSet.Create(4);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(SS);
+  end;
+  Rec := TSouffleRecord.CreateFromBlueprint(Bp);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
+  Rec.Delegate := Bp.Prototype;
+  Rec.SetSlot(0, SouffleReference(SS));
+  Result := SouffleReference(Rec);
+end;
+
+function NativeSetKeys(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := NativeSetValues(AReceiver, AArgs, AArgCount);
+end;
+
+function NativeSetUnion(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  SelfSet, OtherSet: TGocciaSouffleSet;
+  NewSet: TGocciaSouffleSet;
+  I: Integer;
+begin
+  SelfSet := GetSouffleSet(AReceiver);
+  if not Assigned(SelfSet) or (AArgCount < 1) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  OtherSet := GetSouffleSet(AArgs^);
+  if not Assigned(OtherSet) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  NewSet := TGocciaSouffleSet.Create(SelfSet.Count + OtherSet.Count);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NewSet);
+  for I := 0 to SelfSet.Count - 1 do
+    NewSet.Add(SelfSet.GetItemAt(I));
+  for I := 0 to OtherSet.Count - 1 do
+    NewSet.Add(OtherSet.GetItemAt(I));
+  Result := CreateBlueprintSet(NewSet);
+end;
+
+function NativeSetIntersection(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  SelfSet, OtherSet: TGocciaSouffleSet;
+  NewSet: TGocciaSouffleSet;
+  I: Integer;
+begin
+  SelfSet := GetSouffleSet(AReceiver);
+  if not Assigned(SelfSet) or (AArgCount < 1) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  OtherSet := GetSouffleSet(AArgs^);
+  if not Assigned(OtherSet) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  NewSet := TGocciaSouffleSet.Create(SelfSet.Count);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NewSet);
+  for I := 0 to SelfSet.Count - 1 do
+    if OtherSet.Contains(SelfSet.GetItemAt(I)) then
+      NewSet.Add(SelfSet.GetItemAt(I));
+  Result := CreateBlueprintSet(NewSet);
+end;
+
+function NativeSetDifference(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  SelfSet, OtherSet: TGocciaSouffleSet;
+  NewSet: TGocciaSouffleSet;
+  I: Integer;
+begin
+  SelfSet := GetSouffleSet(AReceiver);
+  if not Assigned(SelfSet) or (AArgCount < 1) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  OtherSet := GetSouffleSet(AArgs^);
+  if not Assigned(OtherSet) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  NewSet := TGocciaSouffleSet.Create(SelfSet.Count);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NewSet);
+  for I := 0 to SelfSet.Count - 1 do
+    if not OtherSet.Contains(SelfSet.GetItemAt(I)) then
+      NewSet.Add(SelfSet.GetItemAt(I));
+  Result := CreateBlueprintSet(NewSet);
+end;
+
+function NativeSetSymmetricDifference(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  SelfSet, OtherSet: TGocciaSouffleSet;
+  NewSet: TGocciaSouffleSet;
+  I: Integer;
+begin
+  SelfSet := GetSouffleSet(AReceiver);
+  if not Assigned(SelfSet) or (AArgCount < 1) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  OtherSet := GetSouffleSet(AArgs^);
+  if not Assigned(OtherSet) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  NewSet := TGocciaSouffleSet.Create(SelfSet.Count + OtherSet.Count);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NewSet);
+  for I := 0 to SelfSet.Count - 1 do
+    if not OtherSet.Contains(SelfSet.GetItemAt(I)) then
+      NewSet.Add(SelfSet.GetItemAt(I));
+  for I := 0 to OtherSet.Count - 1 do
+    if not SelfSet.Contains(OtherSet.GetItemAt(I)) then
+      NewSet.Add(OtherSet.GetItemAt(I));
+  Result := CreateBlueprintSet(NewSet);
+end;
+
+function NativeSetIsSubsetOf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  SelfSet, OtherSet: TGocciaSouffleSet;
+  I: Integer;
+begin
+  SelfSet := GetSouffleSet(AReceiver);
+  if not Assigned(SelfSet) or (AArgCount < 1) then
+    Exit(SouffleBoolean(False));
+  OtherSet := GetSouffleSet(AArgs^);
+  if not Assigned(OtherSet) then
+    Exit(SouffleBoolean(False));
+  for I := 0 to SelfSet.Count - 1 do
+    if not OtherSet.Contains(SelfSet.GetItemAt(I)) then
+      Exit(SouffleBoolean(False));
+  Result := SouffleBoolean(True);
+end;
+
+function NativeSetIsSupersetOf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  SelfSet, OtherSet: TGocciaSouffleSet;
+  I: Integer;
+begin
+  SelfSet := GetSouffleSet(AReceiver);
+  if not Assigned(SelfSet) or (AArgCount < 1) then
+    Exit(SouffleBoolean(False));
+  OtherSet := GetSouffleSet(AArgs^);
+  if not Assigned(OtherSet) then
+    Exit(SouffleBoolean(False));
+  for I := 0 to OtherSet.Count - 1 do
+    if not SelfSet.Contains(OtherSet.GetItemAt(I)) then
+      Exit(SouffleBoolean(False));
+  Result := SouffleBoolean(True);
+end;
+
+function NativeSetIsDisjointFrom(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  SelfSet, OtherSet: TGocciaSouffleSet;
+  I: Integer;
+begin
+  SelfSet := GetSouffleSet(AReceiver);
+  if not Assigned(SelfSet) or (AArgCount < 1) then
+    Exit(SouffleBoolean(True));
+  OtherSet := GetSouffleSet(AArgs^);
+  if not Assigned(OtherSet) then
+    Exit(SouffleBoolean(True));
+  for I := 0 to SelfSet.Count - 1 do
+    if OtherSet.Contains(SelfSet.GetItemAt(I)) then
+      Exit(SouffleBoolean(False));
+  Result := SouffleBoolean(True);
 end;
 
 { Native Promise delegate helpers }
@@ -8112,16 +8446,18 @@ const
     (Name: 'toLocaleString';       Arity: 0; Callback: @NativeRecordToLocaleString)
   );
 
-  MAP_PROTOTYPE_METHODS: array[0..8] of TSouffleMethodEntry = (
-    (Name: 'get';      Arity: 1; Callback: @NativeMapGet),
-    (Name: 'set';      Arity: 2; Callback: @NativeMapSet),
-    (Name: 'has';      Arity: 1; Callback: @NativeMapHas),
-    (Name: 'delete';   Arity: 1; Callback: @NativeMapDelete),
-    (Name: 'clear';    Arity: 0; Callback: @NativeMapClear),
-    (Name: 'forEach';  Arity: 1; Callback: @NativeMapForEach),
-    (Name: 'keys';     Arity: 0; Callback: @NativeMapKeys),
-    (Name: 'values';   Arity: 0; Callback: @NativeMapValues),
-    (Name: 'entries';  Arity: 0; Callback: @NativeMapEntries)
+  MAP_PROTOTYPE_METHODS: array[0..10] of TSouffleMethodEntry = (
+    (Name: 'get';                  Arity: 1; Callback: @NativeMapGet),
+    (Name: 'set';                  Arity: 2; Callback: @NativeMapSet),
+    (Name: 'has';                  Arity: 1; Callback: @NativeMapHas),
+    (Name: 'delete';               Arity: 1; Callback: @NativeMapDelete),
+    (Name: 'clear';                Arity: 0; Callback: @NativeMapClear),
+    (Name: 'forEach';              Arity: 1; Callback: @NativeMapForEach),
+    (Name: 'keys';                 Arity: 0; Callback: @NativeMapKeys),
+    (Name: 'values';               Arity: 0; Callback: @NativeMapValues),
+    (Name: 'entries';              Arity: 0; Callback: @NativeMapEntries),
+    (Name: 'getOrInsert';          Arity: 2; Callback: @NativeMapGetOrInsert),
+    (Name: 'getOrInsertComputed';  Arity: 2; Callback: @NativeMapGetOrInsertComputed)
   );
 
   MAP_ITERATOR_METHODS: array[0..0] of TSouffleMethodEntry = (
@@ -8132,14 +8468,22 @@ const
     (Name: 'next'; Arity: 0; Callback: @NativeSetIteratorNext)
   );
 
-  SET_PROTOTYPE_METHODS: array[0..6] of TSouffleMethodEntry = (
-    (Name: 'has';      Arity: 1; Callback: @NativeSetHas),
-    (Name: 'add';      Arity: 1; Callback: @NativeSetAdd),
-    (Name: 'delete';   Arity: 1; Callback: @NativeSetDelete),
-    (Name: 'clear';    Arity: 0; Callback: @NativeSetClear),
-    (Name: 'forEach';  Arity: 1; Callback: @NativeSetForEach),
-    (Name: 'values';   Arity: 0; Callback: @NativeSetValues),
-    (Name: 'entries';  Arity: 0; Callback: @NativeSetEntries)
+  SET_PROTOTYPE_METHODS: array[0..14] of TSouffleMethodEntry = (
+    (Name: 'has';                 Arity: 1; Callback: @NativeSetHas),
+    (Name: 'add';                 Arity: 1; Callback: @NativeSetAdd),
+    (Name: 'delete';              Arity: 1; Callback: @NativeSetDelete),
+    (Name: 'clear';               Arity: 0; Callback: @NativeSetClear),
+    (Name: 'forEach';             Arity: 1; Callback: @NativeSetForEach),
+    (Name: 'values';              Arity: 0; Callback: @NativeSetValues),
+    (Name: 'keys';                Arity: 0; Callback: @NativeSetKeys),
+    (Name: 'entries';             Arity: 0; Callback: @NativeSetEntries),
+    (Name: 'union';               Arity: 1; Callback: @NativeSetUnion),
+    (Name: 'intersection';        Arity: 1; Callback: @NativeSetIntersection),
+    (Name: 'difference';          Arity: 1; Callback: @NativeSetDifference),
+    (Name: 'symmetricDifference'; Arity: 1; Callback: @NativeSetSymmetricDifference),
+    (Name: 'isSubsetOf';          Arity: 1; Callback: @NativeSetIsSubsetOf),
+    (Name: 'isSupersetOf';        Arity: 1; Callback: @NativeSetIsSupersetOf),
+    (Name: 'isDisjointFrom';      Arity: 1; Callback: @NativeSetIsDisjointFrom)
   );
 
   PROMISE_PROTOTYPE_METHODS: array[0..2] of TSouffleMethodEntry = (

@@ -101,7 +101,14 @@ var
   FA, FB: Double;
 begin
   if A.Kind <> B.Kind then
+  begin
+    { Cross-compare integer 0 and float -0.0/+0.0 }
+    if (A.Kind = svkInteger) and (B.Kind = svkFloat) then
+      Exit((A.AsInteger = 0) and (B.AsFloat = 0.0));
+    if (A.Kind = svkFloat) and (B.Kind = svkInteger) then
+      Exit((A.AsFloat = 0.0) and (B.AsInteger = 0));
     Exit(False);
+  end;
 
   case A.Kind of
     svkNil:
