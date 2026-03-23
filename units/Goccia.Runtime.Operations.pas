@@ -9,6 +9,7 @@ uses
   Generics.Collections,
 
   HashMap,
+  ModuleResolver,
   OrderedStringMap,
   Souffle.Bytecode.Chunk,
   Souffle.Compound,
@@ -208,6 +209,11 @@ type
     FTestDelegate: TSouffleRecord;
     FActiveDecoratorSession: TGocciaDecoratorSession;
     FArrayBridgeDirty: Boolean;
+    FModuleResolver: TModuleResolver;
+    FModuleCache: TOrderedStringMap<TSouffleValue>;
+    FCompiledModules: TList;
+    function LoadModuleNative(const APath, AImportingPath: string): TSouffleValue;
+    function LoadJsonModuleNative(const AResolvedPath: string): TSouffleValue;
     function WrapGocciaValue(const AValue: TGocciaValue): TSouffleValue;
     function CoerceKeyToString(const AKey: TSouffleValue): string;
     function CoerceToNumber(const A: TSouffleValue): Double;
@@ -316,7 +322,7 @@ type
       const AValue: TSouffleValue): Boolean;
 
     procedure PropertyWriteViolation(const AObject: TSouffleValue;
-      const AKey: string);
+      const AKey: string); override;
     procedure PropertyDeleteViolation(const AObject: TSouffleValue;
       const AKey: string);
     procedure ThrowTypeErrorMessage(
@@ -368,6 +374,7 @@ type
     property VM: TSouffleVM read FVM write FVM;
     property Engine: TObject read FEngine write FEngine;
     property SourcePath: string read FSourcePath write FSourcePath;
+    property ModuleResolver: TModuleResolver read FModuleResolver write FModuleResolver;
   end;
 
 implementation
@@ -379,12 +386,16 @@ uses
 
   GarbageCollector.Generic,
   Souffle.Bytecode.Debug,
+  Souffle.Bytecode.Module,
+  Souffle.JSON,
   Souffle.VM.CallFrame,
   Souffle.VM.Exception,
   Souffle.VM.NativeFunction,
 
   Goccia.Arguments.Collection,
+  Goccia.AST.Node,
   Goccia.CallStack,
+  Goccia.Compiler,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
@@ -393,11 +404,14 @@ uses
   Goccia.Evaluator.Context,
   Goccia.Evaluator.TypeOperations,
   Goccia.Interpreter,
+  Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
+  Goccia.Parser,
   Goccia.Runtime.Collections,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
+  Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
   Goccia.Values.ClassHelper,
@@ -1313,6 +1327,9 @@ begin
   FClassDefinitionScopes := THashMap<TObject, TObject>.Create;
   FWrappedValues := TList.Create;
   FFormalParameterCounts := THashMap<TSouffleFunctionTemplate, Integer>.Create;
+  FModuleCache := TOrderedStringMap<TSouffleValue>.Create;
+  FCompiledModules := TList.Create;
+  FModuleResolver := nil;
   FBridgeCallDepth := 0;
   FVM := nil;
   TGarbageCollector.Initialize;
@@ -1320,6 +1337,8 @@ begin
 end;
 
 destructor TGocciaRuntimeOperations.Destroy;
+var
+  I: Integer;
 begin
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.RemoveExternalRootMarker(MarkWrappedGocciaValues);
@@ -1336,6 +1355,10 @@ begin
   FWrappedValues.Free;
   FFormalParameterCounts.Free;
   FActiveDecoratorSession.Free;
+  FModuleCache.Free;
+  for I := 0 to FCompiledModules.Count - 1 do
+    TObject(FCompiledModules[I]).Free;
+  FCompiledModules.Free;
   inherited;
 end;
 
@@ -4106,30 +4129,171 @@ end;
 { Modules }
 
 function TGocciaRuntimeOperations.ImportModule(const APath: string): TSouffleValue;
-var
-  EngineObj: TGocciaEngine;
-  Module: TGocciaModule;
-  Pair: TGocciaValueMap.TKeyValuePair;
-  Rec: TSouffleRecord;
 begin
-  {$IFDEF BRIDGE_METRICS}
-  Inc(GBridgeMetrics.ImportModuleCount);
-  {$ENDIF}
-  if not Assigned(FEngine) then
-    Exit(SouffleNil);
+  if Assigned(FModuleResolver) then
+    Result := LoadModuleNative(APath, FSourcePath)
+  else
+    Result := SouffleNil;
+end;
 
-  EngineObj := TGocciaEngine(FEngine);
-  Module := EngineObj.Interpreter.LoadModule(APath, FSourcePath);
-  if not Assigned(Module) then
-    Exit(SouffleNil);
+function TGocciaRuntimeOperations.LoadModuleNative(
+  const APath, AImportingPath: string): TSouffleValue;
+var
+  ResolvedPath: string;
+  Source: TStringList;
+  SourceText: string;
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  Compiler: TGocciaCompiler;
+  Module: TSouffleBytecodeModule;
+  Template: TSouffleFunctionTemplate;
+  Rec: TSouffleRecord;
+  ExportPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
+  SavedSourcePath: string;
+  SavedExports: TOrderedStringMap<TSouffleValue>;
+begin
+  try
+    ResolvedPath := FModuleResolver.Resolve(APath, AImportingPath);
+  except
+    on E: EModuleNotFound do
+    begin
+      ThrowTypeErrorMessage(E.Message);
+      Exit(SouffleNil);
+    end;
+  end;
 
-  Rec := TSouffleRecord.Create(Module.ExportsTable.Count);
+  if FModuleCache.TryGetValue(ResolvedPath, Result) then
+    Exit;
+
+  if LowerCase(ExtractFileExt(ResolvedPath)) = '.json' then
+  begin
+    try
+      Result := LoadJsonModuleNative(ResolvedPath);
+    except
+      on E: Exception do
+      begin
+        ThrowTypeErrorMessage(
+          Format('Failed to parse JSON module "%s": %s', [ResolvedPath, E.Message]));
+        Exit(SouffleNil);
+      end;
+    end;
+    FModuleCache.AddOrSetValue(ResolvedPath, Result);
+    Exit;
+  end;
+
+  Rec := TSouffleRecord.Create(0);
+  if Assigned(FVM) then
+    Rec.Delegate := FVM.RecordDelegate;
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AllocateObject(Rec);
+  Result := SouffleReference(Rec);
+  FModuleCache.AddOrSetValue(ResolvedPath, Result);
 
-  for Pair in Module.ExportsTable do
-    Rec.Put(Pair.Key, ToSouffleValue(Pair.Value));
+  try
+    Source := TStringList.Create;
+    try
+      Source.LoadFromFile(ResolvedPath);
+      SourceText := Source.Text;
+    finally
+      Source.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      ThrowTypeErrorMessage(
+        Format('Cannot load module "%s": %s', [APath, E.Message]));
+      Exit;
+    end;
+  end;
 
+  SavedSourcePath := FSourcePath;
+  SavedExports := FExports;
+  FExports := TOrderedStringMap<TSouffleValue>.Create;
+  FSourcePath := ResolvedPath;
+  try
+    try
+      Lexer := TGocciaLexer.Create(SourceText, ResolvedPath);
+      try
+        Tokens := Lexer.ScanTokens;
+        Parser := TGocciaParser.Create(Tokens, ResolvedPath, Lexer.SourceLines);
+        try
+          ProgramNode := Parser.Parse;
+          try
+            Compiler := TGocciaCompiler.Create(ResolvedPath);
+            try
+              Module := Compiler.Compile(ProgramNode);
+              FCompiledModules.Add(Module);
+
+              for Template in Compiler.FormalParameterCounts.Keys do
+                RegisterFormalParameterCount(
+                  Template, Compiler.FormalParameterCounts[Template]);
+
+              FVM.Execute(Module);
+
+              if Assigned(TGocciaMicrotaskQueue.Instance) then
+                TGocciaMicrotaskQueue.Instance.DrainQueue;
+
+              for ExportPair in FExports do
+                Rec.Put(ExportPair.Key, ExportPair.Value);
+            finally
+              Compiler.Free;
+            end;
+          finally
+            ProgramNode.Free;
+          end;
+        finally
+          Parser.Free;
+        end;
+      finally
+        Lexer.Free;
+      end;
+    except
+      on E: ESouffleThrow do
+        raise;
+      on E: TGocciaThrowValue do
+        RethrowAsVM(E);
+      on E: Exception do
+        ThrowTypeErrorMessage(
+          Format('Error loading module "%s": %s', [APath, E.Message]));
+    end;
+  finally
+    FExports.Free;
+    FExports := SavedExports;
+    FSourcePath := SavedSourcePath;
+  end;
+end;
+
+function TGocciaRuntimeOperations.LoadJsonModuleNative(
+  const AResolvedPath: string): TSouffleValue;
+var
+  Source: TStringList;
+  Parser: TSouffleJSONParser;
+  Rec: TSouffleRecord;
+begin
+  Source := TStringList.Create;
+  try
+    Source.LoadFromFile(AResolvedPath);
+    Parser := TSouffleJSONParser.Create(FVM);
+    try
+      Result := Parser.Parse(Source.Text);
+    finally
+      Parser.Free;
+    end;
+  finally
+    Source.Free;
+  end;
+
+  if SouffleIsReference(Result) and (Result.AsReference is TSouffleRecord) then
+    Exit;
+
+  Rec := TSouffleRecord.Create(1);
+  if Assigned(FVM) then
+    Rec.Delegate := FVM.RecordDelegate;
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
+  Rec.Put('default', Result);
   Result := SouffleReference(Rec);
 end;
 
@@ -4143,44 +4307,131 @@ end;
 
 function TGocciaRuntimeOperations.AwaitValue(const AValue: TSouffleValue): TSouffleValue;
 var
-  GocciaVal, Resolved: TGocciaValue;
+  GocciaVal, ThenMethod: TGocciaValue;
+  ThenVal: TSouffleValue;
+  Promise: TGocciaPromiseValue;
+  ThenArgs: TGocciaArgumentsCollection;
+  Queue: TGocciaMicrotaskQueue;
+  PromiseRooted: Boolean;
 begin
-  {$IFDEF BRIDGE_METRICS}
-  Inc(GBridgeMetrics.AwaitValueCount);
-  {$ENDIF}
   case AValue.Kind of
     svkNil, svkBoolean, svkInteger, svkFloat, svkString:
       Exit(AValue);
   end;
-  if SouffleIsReference(AValue) and Assigned(AValue.AsReference) then
+  if not SouffleIsReference(AValue) or not Assigned(AValue.AsReference) then
+    Exit(AValue);
+  if AValue.AsReference is TSouffleHeapString then
+    Exit(AValue);
+
+  Promise := nil;
+  PromiseRooted := False;
+
+  if AValue.AsReference is TGocciaWrappedValue then
   begin
-    if AValue.AsReference is TSouffleHeapString then
-      Exit(AValue);
-    if AValue.AsReference is TGocciaWrappedValue then
+    GocciaVal := TGocciaWrappedValue(AValue.AsReference).Value;
+
+    if GocciaVal is TGocciaPromiseValue then
+      Promise := TGocciaPromiseValue(GocciaVal)
+    else if GocciaVal is TGocciaObjectValue then
     begin
-      GocciaVal := TGocciaWrappedValue(AValue.AsReference).Value;
-      if GocciaVal is TGocciaPromiseValue then
+      ThenMethod := GocciaVal.GetProperty(PROP_THEN);
+      if Assigned(ThenMethod) and
+         not (ThenMethod is TGocciaUndefinedLiteralValue) and
+         ThenMethod.IsCallable then
       begin
-        if TGocciaPromiseValue(GocciaVal).State = gpsFulfilled then
-          Exit(ToSouffleValue(TGocciaPromiseValue(GocciaVal).PromiseResult));
-        if TGocciaPromiseValue(GocciaVal).State = gpsRejected then
-        begin
-          RethrowAsVM(TGocciaThrowValue.Create(
-            TGocciaPromiseValue(GocciaVal).PromiseResult));
-          Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+        Promise := TGocciaPromiseValue.Create;
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AddTempRoot(Promise);
+        PromiseRooted := True;
+        ThenArgs := TGocciaArgumentsCollection.Create([
+          TGocciaNativeFunctionValue.Create(Promise.DoResolve, 'resolve', 1),
+          TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
+        ]);
+        try
+          try
+            TGocciaFunctionBase(ThenMethod).Call(ThenArgs, GocciaVal);
+          except
+            on E: TGocciaThrowValue do
+              Promise.Reject(E.Value);
+          end;
+        finally
+          ThenArgs.Free;
         end;
       end
-      else if not (GocciaVal is TGocciaObjectValue) then
-        Exit(ToSouffleValue(GocciaVal));
-    end;
+      else
+        Exit(AValue);
+    end
+    else
+      Exit(ToSouffleValue(GocciaVal));
+  end
+  else if AValue.AsReference is TSouffleRecord then
+  begin
+    ThenVal := GetProperty(AValue, PROP_THEN);
+    GocciaVal := UnwrapToGocciaValue(ThenVal);
+    if Assigned(GocciaVal) and
+       not (GocciaVal is TGocciaUndefinedLiteralValue) and
+       (GocciaVal is TGocciaFunctionBase) then
+    begin
+      Promise := TGocciaPromiseValue.Create;
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AddTempRoot(Promise);
+      PromiseRooted := True;
+      ThenArgs := TGocciaArgumentsCollection.Create([
+        TGocciaNativeFunctionValue.Create(Promise.DoResolve, 'resolve', 1),
+        TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
+      ]);
+      try
+        try
+          TGocciaFunctionBase(GocciaVal).Call(
+            ThenArgs, UnwrapToGocciaValue(AValue));
+        except
+          on E: TGocciaThrowValue do
+            Promise.Reject(E.Value);
+        end;
+      finally
+        ThenArgs.Free;
+      end;
+    end
+    else
+      Exit(AValue);
+  end
+  else
+    Exit(AValue);
+
+  if not Assigned(Promise) then
+    Exit(AValue);
+
+  if not PromiseRooted and Assigned(TGarbageCollector.Instance) then
+  begin
+    TGarbageCollector.Instance.AddTempRoot(Promise);
+    PromiseRooted := True;
   end;
   try
-    GocciaVal := UnwrapToGocciaValue(AValue);
-    Resolved := Goccia.Evaluator.AwaitValue(GocciaVal);
-    Result := ToSouffleValue(Resolved);
-  except
-    on E: TGocciaThrowValue do
-      RethrowAsVM(E);
+    if Promise.State = gpsFulfilled then
+      Exit(ToSouffleValue(Promise.PromiseResult));
+    if Promise.State = gpsRejected then
+    begin
+      RethrowAsVM(TGocciaThrowValue.Create(Promise.PromiseResult));
+      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    end;
+
+    Queue := TGocciaMicrotaskQueue.Instance;
+    if Assigned(Queue) then
+      Queue.DrainQueue;
+
+    if Promise.State = gpsFulfilled then
+      Result := ToSouffleValue(Promise.PromiseResult)
+    else if Promise.State = gpsRejected then
+    begin
+      RethrowAsVM(TGocciaThrowValue.Create(Promise.PromiseResult));
+      Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+    end
+    else
+      ThrowTypeErrorMessage(
+        'await: Promise did not settle after microtask drain');
+  finally
+    if PromiseRooted and Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
 end;
 
@@ -8976,6 +9227,11 @@ begin
       GlobalPair.Value.AsReference.MarkReferences;
 
   for GlobalPair in FExports do
+    if SouffleIsReference(GlobalPair.Value) and Assigned(GlobalPair.Value.AsReference)
+      and not GlobalPair.Value.AsReference.GCMarked then
+      GlobalPair.Value.AsReference.MarkReferences;
+
+  for GlobalPair in FModuleCache do
     if SouffleIsReference(GlobalPair.Value) and Assigned(GlobalPair.Value.AsReference)
       and not GlobalPair.Value.AsReference.GCMarked then
       GlobalPair.Value.AsReference.MarkReferences;

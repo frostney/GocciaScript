@@ -46,10 +46,59 @@ test("JSON.parse with escape sequences", () => {
   expect(JSON.parse('"tab\\there"')).toBe("tab\there");
 });
 
+test("JSON.parse unicode escape sequences", () => {
+  expect(JSON.parse('"\\u0041"')).toBe("A");
+  expect(JSON.parse('"\\u00e9"')).toBe("\u00e9");
+  expect(JSON.parse('"caf\\u00e9"')).toBe("caf\u00e9");
+  expect(JSON.parse('"\\u4e16\\u754c"')).toBe("\u4e16\u754c");
+});
+
+test("JSON.parse surrogate pairs", () => {
+  const result = JSON.parse('"\\uD83D\\uDE00"');
+  expect(result.length).toBeGreaterThan(0);
+  expect(result).toBe("\uD83D\uDE00");
+});
+
+test("JSON.parse high surrogate without low surrogate", () => {
+  const result = JSON.parse('"\\uD83Dabc"');
+  expect(result.length).toBeGreaterThan(0);
+});
+
 test("JSON.parse throws on invalid JSON", () => {
   expect(() => JSON.parse("undefined")).toThrow(SyntaxError);
   expect(() => JSON.parse("{invalid}")).toThrow(SyntaxError);
   expect(() => JSON.parse("")).toThrow(SyntaxError);
+});
+
+test("JSON.parse throws on unterminated object", () => {
+  expect(() => JSON.parse('{"a": 1')).toThrow(SyntaxError);
+  expect(() => JSON.parse('{"a": 1, "b": 2')).toThrow(SyntaxError);
+});
+
+test("JSON.parse throws on unterminated array", () => {
+  expect(() => JSON.parse("[1, 2")).toThrow(SyntaxError);
+  expect(() => JSON.parse("[1, [2, 3")).toThrow(SyntaxError);
+});
+
+test("JSON.parse throws on unterminated string", () => {
+  expect(() => JSON.parse('"hello')).toThrow(SyntaxError);
+  expect(() => JSON.parse('{"key": "value')).toThrow(SyntaxError);
+});
+
+test("JSON.parse throws on trailing comma", () => {
+  expect(() => JSON.parse("[1, 2,]")).toThrow(SyntaxError);
+  expect(() => JSON.parse('{"a": 1,}')).toThrow(SyntaxError);
+});
+
+test("JSON.parse throws on invalid number formats", () => {
+  expect(() => JSON.parse("+1")).toThrow(SyntaxError);
+  expect(() => JSON.parse(".5")).toThrow(SyntaxError);
+  expect(() => JSON.parse("01")).toThrow(SyntaxError);
+});
+
+test("JSON.parse throws on single quotes", () => {
+  expect(() => JSON.parse("'hello'")).toThrow(SyntaxError);
+  expect(() => JSON.parse("{'a': 1}")).toThrow(SyntaxError);
 });
 
 test("JSON.parse with reviver transforms values", () => {

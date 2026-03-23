@@ -161,6 +161,14 @@ type
       const ATemplate: TSouffleFunctionTemplate;
       const AOperandIndex: UInt8); virtual;
 
+    { ── Property violations (1) ──
+      Called by the VM when a property write is rejected (non-writable,
+      non-extensible, frozen, sealed). Frontends override to throw the
+      appropriate language-level error. Default is a no-op. }
+
+    procedure PropertyWriteViolation(const AObject: TSouffleValue;
+      const AKey: string); virtual;
+
     { ── Type enforcement (1) ──
       Called by the VM when a strictly-typed local SET fails the type
       check. AValue is the value being stored, AExpectedType is the
@@ -210,6 +218,11 @@ end;
 
 procedure TSouffleRuntimeOperations.CheckLocalType(
   const AValue: TSouffleValue; const AExpectedType: TSouffleLocalType);
+begin
+end;
+
+procedure TSouffleRuntimeOperations.PropertyWriteViolation(
+  const AObject: TSouffleValue; const AKey: string);
 begin
 end;
 

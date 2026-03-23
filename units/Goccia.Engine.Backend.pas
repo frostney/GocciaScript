@@ -13,6 +13,7 @@ uses
   Goccia.Compiler,
   Goccia.Engine,
   Goccia.MicrotaskQueue,
+  Goccia.Modules.Resolver,
   Goccia.Runtime.Operations,
   Goccia.Values.Primitives;
 
@@ -28,6 +29,7 @@ type
     FRuntime: TGocciaRuntimeOperations;
     FSourcePath: string;
     FEngine: TGocciaEngine;
+    FModuleResolver: TGocciaModuleResolver;
   public
     constructor Create(const ASourcePath: string);
     destructor Destroy; override;
@@ -51,10 +53,13 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
+  ModuleResolver,
+  OrderedStringMap,
   Souffle.Bytecode.Chunk,
   Souffle.Value,
   Souffle.VM.Exception,
 
+  Goccia.FileExtensions,
   Goccia.Interpreter,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -67,10 +72,13 @@ begin
   inherited Create;
   TGarbageCollector.Initialize;
   FSourcePath := ASourcePath;
+  FModuleResolver := TGocciaModuleResolver.Create(
+    ExtractFilePath(ExpandFileName(ASourcePath)));
   FRuntime := TGocciaRuntimeOperations.Create;
   FVM := TSouffleVM.Create(FRuntime);
   FRuntime.VM := FVM;
   FRuntime.Engine := nil;
+  FRuntime.ModuleResolver := FModuleResolver;
   FEngine := nil;
 end;
 
@@ -82,6 +90,7 @@ begin
   FVM.Free;
   FRuntime.Free;
   FEngine.Free;
+  FModuleResolver.Free;
   inherited;
 end;
 
@@ -159,6 +168,7 @@ var
   EmptySource: TStringList;
   GlobalScope: TGocciaScope;
   Names: TGocciaStringArray;
+  AliasPair: TOrderedStringMap<string>.TKeyValuePair;
   I: Integer;
 begin
   FreeAndNil(FEngine);
@@ -173,6 +183,10 @@ begin
 
   FRuntime.Engine := FEngine;
   FRuntime.SourcePath := FSourcePath;
+
+  if Assigned(FEngine.Interpreter.Resolver) then
+    for AliasPair in FEngine.Interpreter.Resolver.Aliases do
+      FModuleResolver.AddAlias(AliasPair.Key, AliasPair.Value);
 
   GlobalScope := FEngine.Interpreter.GlobalScope;
   Names := GlobalScope.GetOwnBindingNames;
