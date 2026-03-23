@@ -2025,9 +2025,19 @@ begin
     OP_RT_SET_PROP:
     begin
       A := DecodeA(AInstruction); B := DecodeB(AInstruction); C := DecodeC(AInstruction);
-      FRuntimeOps.SetProperty(FRegisters[Base + A],
-        AFrame^.Template.GetConstant(B).StringValue,
-        FRegisters[Base + C]);
+      PropKey := AFrame^.Template.GetConstant(B).StringValue;
+      if SouffleIsReference(FRegisters[Base + A]) and
+         (FRegisters[Base + A].AsReference is TSouffleRecord) and
+         not TSouffleRecord(FRegisters[Base + A].AsReference).HasSetters and
+         not Assigned(TSouffleRecord(FRegisters[Base + A].AsReference).Blueprint) and
+         ((PropKey = '') or (PropKey[1] <> '#')) and
+         TSouffleRecord(FRegisters[Base + A].AsReference).PutChecked(
+           PropKey, FRegisters[Base + C]) then
+        { fast path: plain record, no setters, no blueprint, no private,
+          PutChecked succeeded (writable + extensible) }
+      else
+        FRuntimeOps.SetProperty(FRegisters[Base + A], PropKey,
+          FRegisters[Base + C]);
     end;
     OP_RT_GET_INDEX:
     begin
