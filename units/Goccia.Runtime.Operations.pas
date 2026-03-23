@@ -4313,7 +4313,13 @@ var
   ThenArgs: TGocciaArgumentsCollection;
   Queue: TGocciaMicrotaskQueue;
   PromiseRooted: Boolean;
+  ThenRef: TSouffleHeapObject;
 begin
+  {$IFDEF BRIDGE_METRICS}
+  Inc(GBridgeMetrics.AwaitValueCount);
+  {$ENDIF}
+
+  { Fast path: primitives and heap strings don't need awaiting }
   case AValue.Kind of
     svkNil, svkBoolean, svkInteger, svkFloat, svkString:
       Exit(AValue);
@@ -4326,6 +4332,7 @@ begin
   Promise := nil;
   PromiseRooted := False;
 
+  { Direct promise detection — no UnwrapToGocciaValue needed }
   if AValue.AsReference is TGocciaWrappedValue then
   begin
     GocciaVal := TGocciaWrappedValue(AValue.AsReference).Value;
@@ -4366,31 +4373,68 @@ begin
   end
   else if AValue.AsReference is TSouffleRecord then
   begin
+    { Thenable check on native records — use GetProperty to avoid full unwrap }
     ThenVal := GetProperty(AValue, PROP_THEN);
-    GocciaVal := UnwrapToGocciaValue(ThenVal);
-    if Assigned(GocciaVal) and
-       not (GocciaVal is TGocciaUndefinedLiteralValue) and
-       (GocciaVal is TGocciaFunctionBase) then
+    if SouffleIsReference(ThenVal) and Assigned(ThenVal.AsReference) then
     begin
-      Promise := TGocciaPromiseValue.Create;
-      if Assigned(TGarbageCollector.Instance) then
-        TGarbageCollector.Instance.AddTempRoot(Promise);
-      PromiseRooted := True;
-      ThenArgs := TGocciaArgumentsCollection.Create([
-        TGocciaNativeFunctionValue.Create(Promise.DoResolve, 'resolve', 1),
-        TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
-      ]);
-      try
+      ThenRef := ThenVal.AsReference;
+
+      { Check if .then is a native callable (TSouffleClosure or TSouffleNativeFunction) }
+      if (ThenRef is TSouffleClosure) or (ThenRef is TSouffleNativeFunction) then
+      begin
+        Promise := TGocciaPromiseValue.Create;
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AddTempRoot(Promise);
+        PromiseRooted := True;
+        ThenArgs := TGocciaArgumentsCollection.Create([
+          TGocciaNativeFunctionValue.Create(Promise.DoResolve, 'resolve', 1),
+          TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
+        ]);
         try
-          TGocciaFunctionBase(GocciaVal).Call(
-            ThenArgs, UnwrapToGocciaValue(AValue));
-        except
-          on E: TGocciaThrowValue do
-            Promise.Reject(E.Value);
+          try
+            GocciaVal := UnwrapToGocciaValue(ThenVal);
+            TGocciaFunctionBase(GocciaVal).Call(
+              ThenArgs, UnwrapToGocciaValue(AValue));
+          except
+            on E: TGocciaThrowValue do
+              Promise.Reject(E.Value);
+          end;
+        finally
+          ThenArgs.Free;
         end;
-      finally
-        ThenArgs.Free;
-      end;
+      end
+      else if ThenRef is TGocciaWrappedValue then
+      begin
+        GocciaVal := TGocciaWrappedValue(ThenRef).Value;
+        if Assigned(GocciaVal) and
+           not (GocciaVal is TGocciaUndefinedLiteralValue) and
+           (GocciaVal is TGocciaFunctionBase) then
+        begin
+          Promise := TGocciaPromiseValue.Create;
+          if Assigned(TGarbageCollector.Instance) then
+            TGarbageCollector.Instance.AddTempRoot(Promise);
+          PromiseRooted := True;
+          ThenArgs := TGocciaArgumentsCollection.Create([
+            TGocciaNativeFunctionValue.Create(Promise.DoResolve, 'resolve', 1),
+            TGocciaNativeFunctionValue.Create(Promise.DoReject, 'reject', 1)
+          ]);
+          try
+            try
+              TGocciaFunctionBase(GocciaVal).Call(
+                ThenArgs, UnwrapToGocciaValue(AValue));
+            except
+              on E: TGocciaThrowValue do
+                Promise.Reject(E.Value);
+            end;
+          finally
+            ThenArgs.Free;
+          end;
+        end
+        else
+          Exit(AValue);
+      end
+      else
+        Exit(AValue);
     end
     else
       Exit(AValue);
@@ -4442,7 +4486,29 @@ var
   GocciaVal: TGocciaValue;
 begin
   Promise := TGocciaPromiseValue.Create;
-  GocciaVal := UnwrapToGocciaValue(AValue);
+
+  { Convert Souffle value to Goccia for promise resolution —
+    fast path for primitives, only unwrap for references }
+  case AValue.Kind of
+    svkNil:
+    begin
+      if AValue.Flags = GOCCIA_NIL_NULL then
+        GocciaVal := TGocciaNullLiteralValue.Create
+      else
+        GocciaVal := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end;
+    svkBoolean:
+      GocciaVal := TGocciaBooleanLiteralValue.Create(AValue.AsBoolean);
+    svkInteger:
+      GocciaVal := TGocciaNumberLiteralValue.Create(AValue.AsInteger);
+    svkFloat:
+      GocciaVal := TGocciaNumberLiteralValue.Create(AValue.AsFloat);
+    svkString:
+      GocciaVal := TGocciaStringLiteralValue.Create(SouffleGetString(AValue));
+  else
+    GocciaVal := UnwrapToGocciaValue(AValue);
+  end;
+
   if AIsRejected then
     Promise.Reject(GocciaVal)
   else
