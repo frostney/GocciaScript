@@ -8736,6 +8736,7 @@ begin
 
   { Map static methods }
   AddStaticMethod(FMapBlueprint, 'groupBy', 2, @NativeMapGroupBy);
+
 end;
 
 function ExtractNativeFn(const AGlobals: TOrderedStringMap<TSouffleValue>;
