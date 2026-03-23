@@ -4779,7 +4779,7 @@ function TGocciaRuntimeOperations.GetSymbolOnNativeObject(
 var
   SymPropKey: string;
   Rec: TSouffleRecord;
-  Bp: TSouffleBlueprint;
+  Bp, WalkBp: TSouffleBlueprint;
   GetterVal, DirectVal: TSouffleValue;
 begin
   AFound := False;
@@ -4788,6 +4788,41 @@ begin
     Exit;
 
   SymPropKey := '@@sym:' + IntToStr(ASymKey.Id);
+
+  { Blueprint symbol property access (e.g., Map[Symbol.species]) }
+  if AObject.AsReference is TSouffleBlueprint then
+  begin
+    Bp := TSouffleBlueprint(AObject.AsReference);
+    { Symbol.species returns the constructor itself for built-in types and subclasses }
+    if ASymKey = TGocciaSymbolValue.WellKnownSpecies then
+    begin
+      WalkBp := Bp;
+      while Assigned(WalkBp) do
+      begin
+        if (WalkBp = FMapBlueprint) or (WalkBp = FSetBlueprint) then
+        begin
+          AFound := True;
+          Result := AObject;
+          Exit;
+        end;
+        WalkBp := WalkBp.SuperBlueprint;
+      end;
+    end;
+    if Bp.HasStaticFields and Bp.StaticFields.Get(SymPropKey, DirectVal) then
+    begin
+      AFound := True;
+      Result := DirectVal;
+      Exit;
+    end;
+    if Bp.HasStaticGetters and Bp.StaticGetters.Get(SymPropKey, GetterVal) then
+    begin
+      AFound := True;
+      if TryInvokeGetter(GetterVal, AObject, Result) then
+        Exit;
+      Exit;
+    end;
+    Exit;
+  end;
 
   if AObject.AsReference is TSouffleRecord then
   begin
@@ -8708,6 +8743,8 @@ begin
 end;
 
 procedure TGocciaRuntimeOperations.RegisterDelegates;
+var
+  SymSpeciesKey: string;
 begin
   if not Assigned(FVM) then Exit;
 
@@ -8747,6 +8784,7 @@ begin
   { Map static methods }
   AddStaticMethod(FMapBlueprint, 'groupBy', 2, @NativeMapGroupBy);
 
+  { Symbol.species — handled in GetSymbolOnNativeObject for blueprints }
 end;
 
 function ExtractNativeFn(const AGlobals: TOrderedStringMap<TSouffleValue>;
