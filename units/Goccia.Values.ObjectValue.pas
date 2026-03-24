@@ -80,7 +80,7 @@ type
     procedure AssignSymbolProperty(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue; virtual;
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
-    function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
+    function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor; virtual;
     function HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean; virtual;
     function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
     function GetOwnSymbols: TArray<TGocciaSymbolValue>;

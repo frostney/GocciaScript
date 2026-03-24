@@ -176,6 +176,7 @@ type
     procedure PreventExtensions; override;
     function IsExtensible: Boolean; override;
     function ToStringTag: string; override;
+    function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor; override;
     function NativeKind: string; override;
     function CloneNative: TGocciaObjectValue; override;
 
@@ -971,6 +972,41 @@ begin
     end;
   end;
   Result := inherited ToStringTag;
+end;
+
+function TGocciaSouffleProxy.GetOwnSymbolPropertyDescriptor(
+  const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
+var
+  SymPropKey: string;
+  Rec: TSouffleRecord;
+  GetterVal, SetterVal: TSouffleValue;
+  GocciaGetter, GocciaSetter: TGocciaValue;
+  HasGetter, HasSetter: Boolean;
+begin
+  Result := inherited GetOwnSymbolPropertyDescriptor(ASymbol);
+  if Assigned(Result) then Exit;
+
+  if FTarget is TSouffleRecord then
+  begin
+    Rec := TSouffleRecord(FTarget);
+    SymPropKey := '@@sym:' + IntToStr(ASymbol.Id);
+    HasGetter := Rec.HasGetters and Rec.Getters.Get(SymPropKey, GetterVal);
+    HasSetter := Rec.HasSetters and Rec.Setters.Get(SymPropKey, SetterVal);
+    if HasGetter or HasSetter then
+    begin
+      if HasGetter then
+        GocciaGetter := FRuntime.UnwrapToGocciaValue(GetterVal)
+      else
+        GocciaGetter := nil;
+      if HasSetter then
+        GocciaSetter := FRuntime.UnwrapToGocciaValue(SetterVal)
+      else
+        GocciaSetter := nil;
+      Result := TGocciaPropertyDescriptorAccessor.Create(
+        GocciaGetter, GocciaSetter, [pfConfigurable]);
+      Exit;
+    end;
+  end;
 end;
 
 function TGocciaSouffleProxy.NativeKind: string;
@@ -11177,21 +11213,14 @@ begin
   { ArrayBuffer static methods }
   AddStaticMethod(FArrayBufferBlueprint, 'isView', 1, @NativeArrayBufferIsView);
 
-  { Shared %TypedArray%.prototype with Symbol.toStringTag getter }
+  { Symbol.toStringTag getter on shared TypedArray method delegate }
   begin
-    SharedTAProto := TSouffleRecord.Create(0);
-    if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.AllocateObject(SharedTAProto);
-    SharedTAProto.Delegate := FVM.RecordDelegate;
-    { Register Symbol.toStringTag getter }
     SymTagKey := '@@sym:' + IntToStr(TGocciaSymbolValue.WellKnownToStringTag.Id);
     TagGetterFn := TSouffleNativeFunction.Create('get [Symbol.toStringTag]', 0,
       @NativeTypedArrayToStringTagGetter);
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.AllocateObject(TagGetterFn);
-    SharedTAProto.Getters.Put(SymTagKey, SouffleReference(TagGetterFn));
-    { Wire delegate chain: method delegate → shared prototype → record delegate }
-    FTypedArrayDelegate.Delegate := SharedTAProto;
+    FTypedArrayDelegate.Getters.Put(SymTagKey, SouffleReference(TagGetterFn));
   end;
 
   { TypedArray static fields and methods }
