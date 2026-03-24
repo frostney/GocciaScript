@@ -6911,7 +6911,7 @@ begin
     end;
   end;
 
-  AB := TSouffleArrayBuffer.Create(ByteLen);
+  AB := TSouffleArrayBuffer.Create(ByteLen, ABlueprint = FSharedArrayBufferBlueprint);
   if Assigned(GC) then GC.AllocateObject(AB);
 
   Rec := TSouffleRecord.CreateFromBlueprint(ABlueprint);
@@ -8866,6 +8866,7 @@ function NativeTypedArrayBuffer(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
   TA: TSouffleTypedArray;
+  Bp: TSouffleBlueprint;
   Rec: TSouffleRecord;
   GC: TGarbageCollector;
 begin
@@ -8873,10 +8874,13 @@ begin
   if Assigned(TA) and Assigned(TA.Buffer) then
   begin
     GC := TGarbageCollector.Instance;
-    Rec := TSouffleRecord.CreateFromBlueprint(
-      GNativeArrayJoinRuntime.FArrayBufferBlueprint);
+    if TA.Buffer.IsShared then
+      Bp := GNativeArrayJoinRuntime.FSharedArrayBufferBlueprint
+    else
+      Bp := GNativeArrayJoinRuntime.FArrayBufferBlueprint;
+    Rec := TSouffleRecord.CreateFromBlueprint(Bp);
     if Assigned(GC) then GC.AllocateObject(Rec);
-    Rec.Delegate := GNativeArrayJoinRuntime.FArrayBufferBlueprint.Prototype;
+    Rec.Delegate := Bp.Prototype;
     Rec.SetSlot(0, SouffleReference(TA.Buffer));
     Result := SouffleReference(Rec);
   end

@@ -135,7 +135,8 @@ type
     function GetByteLength: Integer;
   public
     Data: TBytes;
-    constructor Create(const AByteLength: Integer);
+    IsShared: Boolean;
+    constructor Create(const AByteLength: Integer; const AShared: Boolean = False);
     function DebugString: string; override;
     property ByteLength: Integer read GetByteLength;
   end;
@@ -697,12 +698,14 @@ end;
 
 { TSouffleArrayBuffer }
 
-constructor TSouffleArrayBuffer.Create(const AByteLength: Integer);
+constructor TSouffleArrayBuffer.Create(const AByteLength: Integer;
+  const AShared: Boolean);
 begin
   inherited Create(0);
   SetLength(Data, AByteLength);
   if AByteLength > 0 then
     FillChar(Data[0], AByteLength, 0);
+  IsShared := AShared;
 end;
 
 function TSouffleArrayBuffer.GetByteLength: Integer;
