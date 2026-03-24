@@ -12104,8 +12104,292 @@ end;
 function NativeObjectFreeze(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 begin
-  { Delegate to Goccia — freeze requires property flag manipulation }
-  Result := InvokeGocciaMethod(AReceiver, 'freeze', AArgs, AArgCount);
+  if (AArgCount < 1) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  if not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
+    Exit(AArgs^);
+  if AArgs^.AsReference is TSouffleRecord then
+    TSouffleRecord(AArgs^.AsReference).Freeze;
+  Result := AArgs^;
+end;
+
+function NativeObjectIsFrozen(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  I: Integer;
+begin
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) then
+    Exit(SouffleBoolean(True));
+  if not (AArgs^.AsReference is TSouffleRecord) then
+    Exit(SouffleBoolean(True));
+  Rec := TSouffleRecord(AArgs^.AsReference);
+  if Rec.Extensible then Exit(SouffleBoolean(False));
+  for I := 0 to Rec.Count - 1 do
+    if (Rec.GetEntryFlags(Rec.GetOrderedKey(I)) and
+       (SOUFFLE_PROP_WRITABLE or SOUFFLE_PROP_CONFIGURABLE)) <> 0 then
+      Exit(SouffleBoolean(False));
+  Result := SouffleBoolean(True);
+end;
+
+function NativeObjectSeal(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  I: Integer;
+  Key: string;
+  Flags: Byte;
+begin
+  if (AArgCount < 1) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  if not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
+    Exit(AArgs^);
+  if AArgs^.AsReference is TSouffleRecord then
+  begin
+    Rec := TSouffleRecord(AArgs^.AsReference);
+    for I := 0 to Rec.Count - 1 do
+    begin
+      Key := Rec.GetOrderedKey(I);
+      Flags := Rec.GetEntryFlags(Key);
+      Rec.SetEntryFlags(Key, Flags and (not SOUFFLE_PROP_CONFIGURABLE));
+    end;
+    Rec.PreventExtensions;
+  end;
+  Result := AArgs^;
+end;
+
+function NativeObjectIsSealed(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  I: Integer;
+begin
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) then
+    Exit(SouffleBoolean(True));
+  if not (AArgs^.AsReference is TSouffleRecord) then
+    Exit(SouffleBoolean(True));
+  Rec := TSouffleRecord(AArgs^.AsReference);
+  if Rec.Extensible then Exit(SouffleBoolean(False));
+  for I := 0 to Rec.Count - 1 do
+    if (Rec.GetEntryFlags(Rec.GetOrderedKey(I)) and SOUFFLE_PROP_CONFIGURABLE) <> 0 then
+      Exit(SouffleBoolean(False));
+  Result := SouffleBoolean(True);
+end;
+
+function NativeObjectPreventExtensions(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  if (AArgCount < 1) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  if SouffleIsReference(AArgs^) and Assigned(AArgs^.AsReference) and
+     (AArgs^.AsReference is TSouffleRecord) then
+    TSouffleRecord(AArgs^.AsReference).PreventExtensions;
+  Result := AArgs^;
+end;
+
+function NativeObjectIsExtensible(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) then
+    Exit(SouffleBoolean(False));
+  if AArgs^.AsReference is TSouffleRecord then
+    Result := SouffleBoolean(TSouffleRecord(AArgs^.AsReference).Extensible)
+  else
+    Result := SouffleBoolean(False);
+end;
+
+function NativeObjectCreate(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+begin
+  Rec := TSouffleRecord.Create(4);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
+  if (AArgCount > 0) and SouffleIsReference(AArgs^) and
+     Assigned(AArgs^.AsReference) and
+     (AArgs^.AsReference is TSouffleRecord) then
+    Rec.Delegate := TSouffleRecord(AArgs^.AsReference)
+  else if (AArgCount > 0) and (AArgs^.Kind = svkNil) and
+     (AArgs^.Flags = GOCCIA_NIL_NULL) then
+    { Object.create(null) — no prototype }
+  else if Assigned(GNativeArrayJoinRuntime) and Assigned(GNativeArrayJoinRuntime.FVM) then
+    Rec.Delegate := GNativeArrayJoinRuntime.FVM.RecordDelegate;
+  Result := SouffleReference(Rec);
+end;
+
+function NativeObjectSetPrototypeOf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  ProtoVal: TSouffleValue;
+begin
+  if (AArgCount < 2) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) or
+     not (AArgs^.AsReference is TSouffleRecord) then
+    Exit(AArgs^);
+  Rec := TSouffleRecord(AArgs^.AsReference);
+  ProtoVal := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^;
+  if SouffleIsReference(ProtoVal) and Assigned(ProtoVal.AsReference) and
+     (ProtoVal.AsReference is TSouffleRecord) then
+    Rec.Delegate := TSouffleRecord(ProtoVal.AsReference)
+  else if (ProtoVal.Kind = svkNil) and (ProtoVal.Flags = GOCCIA_NIL_NULL) then
+    Rec.Delegate := nil;
+  Result := AArgs^;
+end;
+
+function NativeObjectGetOwnPropertyNames(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  Arr: TSouffleArray;
+  I: Integer;
+  Key: string;
+begin
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) or
+     not (AArgs^.AsReference is TSouffleRecord) then
+  begin
+    Result := InvokeGocciaMethod(AReceiver, 'getOwnPropertyNames', AArgs, AArgCount);
+    Exit;
+  end;
+  Rec := TSouffleRecord(AArgs^.AsReference);
+  Arr := TSouffleArray.Create(Rec.Count);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Arr);
+  for I := 0 to Rec.Count - 1 do
+  begin
+    Key := Rec.GetOrderedKey(I);
+    if (Copy(Key, 1, 5) <> '@@sym') and
+       ((Length(Key) = 0) or (Key[1] <> '#')) then
+      Arr.Push(SouffleString(Key));
+  end;
+  Result := SouffleReference(Arr);
+end;
+
+function NativeObjectGetOwnPropertyDescriptor(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec, DescRec: TSouffleRecord;
+  Key: string;
+  Val, GetterVal, SetterVal: TSouffleValue;
+  Flags: Byte;
+begin
+  if (AArgCount < 2) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) or
+     not (AArgs^.AsReference is TSouffleRecord) then
+  begin
+    Result := InvokeGocciaMethod(AReceiver, 'getOwnPropertyDescriptor', AArgs, AArgCount);
+    Exit;
+  end;
+  Rec := TSouffleRecord(AArgs^.AsReference);
+  Key := GNativeArrayJoinRuntime.CoerceToString(
+    PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^);
+  if not Rec.Get(Key, Val) then
+  begin
+    { Check for accessor descriptors }
+    if Rec.HasGetters and Rec.Getters.Get(Key, GetterVal) then
+    begin
+      DescRec := TSouffleRecord.Create(4);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AllocateObject(DescRec);
+      DescRec.Put('get', GetterVal);
+      if Rec.HasSetters and Rec.Setters.Get(Key, SetterVal) then
+        DescRec.Put('set', SetterVal)
+      else
+        DescRec.Put('set', SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+      DescRec.Put('enumerable', SouffleBoolean(True));
+      DescRec.Put('configurable', SouffleBoolean(True));
+      Exit(SouffleReference(DescRec));
+    end;
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
+
+  Flags := Rec.GetEntryFlags(Key);
+  DescRec := TSouffleRecord.Create(4);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(DescRec);
+  DescRec.Put('value', Val);
+  DescRec.Put('writable', SouffleBoolean((Flags and SOUFFLE_PROP_WRITABLE) <> 0));
+  DescRec.Put('enumerable', SouffleBoolean((Flags and SOUFFLE_PROP_ENUMERABLE) <> 0));
+  DescRec.Put('configurable', SouffleBoolean((Flags and SOUFFLE_PROP_CONFIGURABLE) <> 0));
+  Result := SouffleReference(DescRec);
+end;
+
+function NativeObjectDefineProperty(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec, DescRec: TSouffleRecord;
+  Key: string;
+  Val, FlagVal, GetterVal, SetterVal: TSouffleValue;
+  Flags: Byte;
+  HasValue, HasGetter, HasSetter: Boolean;
+begin
+  if (AArgCount < 3) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) or
+     not (AArgs^.AsReference is TSouffleRecord) then
+  begin
+    Result := InvokeGocciaMethod(AReceiver, 'defineProperty', AArgs, AArgCount);
+    Exit;
+  end;
+  Rec := TSouffleRecord(AArgs^.AsReference);
+  Key := GNativeArrayJoinRuntime.CoerceToString(
+    PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^);
+
+  Val := PSouffleValue(PByte(AArgs) + 2 * SizeOf(TSouffleValue))^;
+  if not SouffleIsReference(Val) or not Assigned(Val.AsReference) or
+     not (Val.AsReference is TSouffleRecord) then
+    Exit(AArgs^);
+
+  DescRec := TSouffleRecord(Val.AsReference);
+
+  { Check for accessor descriptor }
+  HasGetter := DescRec.Get('get', GetterVal);
+  HasSetter := DescRec.Get('set', SetterVal);
+
+  if HasGetter or HasSetter then
+  begin
+    if HasGetter then
+      Rec.Getters.Put(Key, GetterVal);
+    if HasSetter then
+      Rec.Setters.Put(Key, SetterVal);
+    Exit(AArgs^);
+  end;
+
+  { Data descriptor }
+  Flags := SOUFFLE_PROP_DEFAULT;
+  HasValue := DescRec.Get('value', Val);
+
+  if DescRec.Get('writable', FlagVal) then
+  begin
+    if (FlagVal.Kind = svkBoolean) and not FlagVal.AsBoolean then
+      Flags := Flags and (not SOUFFLE_PROP_WRITABLE);
+  end;
+  if DescRec.Get('enumerable', FlagVal) then
+  begin
+    if (FlagVal.Kind = svkBoolean) and not FlagVal.AsBoolean then
+      Flags := Flags and (not SOUFFLE_PROP_ENUMERABLE);
+  end;
+  if DescRec.Get('configurable', FlagVal) then
+  begin
+    if (FlagVal.Kind = svkBoolean) and not FlagVal.AsBoolean then
+      Flags := Flags and (not SOUFFLE_PROP_CONFIGURABLE);
+  end;
+
+  if HasValue then
+    Rec.PutWithFlags(Key, Val, Flags)
+  else if Rec.Has(Key) then
+    Rec.SetEntryFlags(Key, Flags);
+
+  Result := AArgs^;
+end;
+
+function NativeObjectGroupBy(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  { Delegate to Goccia — complex iterator + Map creation }
+  Result := InvokeGocciaMethod(AReceiver, 'groupBy', AArgs, AArgCount);
 end;
 
 function NativeObjectGetPrototypeOf(const AReceiver: TSouffleValue;
@@ -12721,8 +13005,19 @@ begin
         AddStaticMethod(FObjectBlueprint, 'is', 2, @NativeObjectIs);
         AddStaticMethod(FObjectBlueprint, 'hasOwn', 2, @NativeObjectHasOwn);
         AddStaticMethod(FObjectBlueprint, 'freeze', 1, @NativeObjectFreeze);
+        AddStaticMethod(FObjectBlueprint, 'isFrozen', 1, @NativeObjectIsFrozen);
+        AddStaticMethod(FObjectBlueprint, 'seal', 1, @NativeObjectSeal);
+        AddStaticMethod(FObjectBlueprint, 'isSealed', 1, @NativeObjectIsSealed);
+        AddStaticMethod(FObjectBlueprint, 'preventExtensions', 1, @NativeObjectPreventExtensions);
+        AddStaticMethod(FObjectBlueprint, 'isExtensible', 1, @NativeObjectIsExtensible);
+        AddStaticMethod(FObjectBlueprint, 'create', 1, @NativeObjectCreate);
+        AddStaticMethod(FObjectBlueprint, 'setPrototypeOf', 2, @NativeObjectSetPrototypeOf);
         AddStaticMethod(FObjectBlueprint, 'getPrototypeOf', 1, @NativeObjectGetPrototypeOf);
+        AddStaticMethod(FObjectBlueprint, 'getOwnPropertyNames', 1, @NativeObjectGetOwnPropertyNames);
+        AddStaticMethod(FObjectBlueprint, 'getOwnPropertyDescriptor', 2, @NativeObjectGetOwnPropertyDescriptor);
+        AddStaticMethod(FObjectBlueprint, 'defineProperty', 3, @NativeObjectDefineProperty);
         AddStaticMethod(FObjectBlueprint, 'fromEntries', 1, @NativeObjectFromEntries);
+        AddStaticMethod(FObjectBlueprint, 'groupBy', 2, @NativeObjectGroupBy);
         FGlobals.AddOrSetValue(Key, SouffleReference(FObjectBlueprint)); end
       else if Key = 'String' then begin
         FStringBlueprint := CreateBlueprintFromConstructor(Self, 'String', FStringDelegate, NativeFnVal);
