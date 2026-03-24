@@ -210,8 +210,6 @@ type
     FSetBlueprint: TSouffleBlueprint;
     FPromiseBlueprint: TSouffleBlueprint;
     FPromiseDelegate: TSouffleRecord;
-    FPromiseStaticDelegate: TSouffleRecord;
-    FPromiseConstructor: TSouffleHeapObject;
     FDescribeDelegate: TSouffleRecord;
     FTestDelegate: TSouffleRecord;
     FActiveDecoratorSession: TGocciaDecoratorSession;
@@ -3013,10 +3011,6 @@ begin
         if AKey = PROP_LENGTH then
           Exit(SouffleInteger(
             TGocciaBridgedFunction(AObject.AsReference).Arity));
-        if (AObject.AsReference = FPromiseConstructor) and
-           Assigned(FPromiseStaticDelegate) and
-           FPromiseStaticDelegate.Get(AKey, Result) then
-          Exit;
         Prop := TGocciaBridgedFunction(AObject.AsReference).FGocciaFn
           .GetProperty(AKey);
         if Assigned(Prop) then
@@ -3103,12 +3097,7 @@ begin
         if Assigned(FSetDelegate) and FSetDelegate.Get(AKey, Result) then
           Exit;
       end
-      else if GocciaObj is TGocciaPromiseValue then
-      begin
-        if Assigned(FPromiseDelegate) and FPromiseDelegate.Get(AKey, Result) then
-          Exit;
-      end;
-
+      ;
       Prop := GocciaObj.GetProperty(AKey);
       if not Assigned(Prop) then
       begin
@@ -5434,12 +5423,6 @@ end;
 
 var
   GNativeArrayJoinRuntime: TGocciaRuntimeOperations;
-  GPromiseAllFn: TGocciaValue;
-  GPromiseAllSettledFn: TGocciaValue;
-  GPromiseRaceFn: TGocciaValue;
-  GPromiseAnyFn: TGocciaValue;
-  GPromiseWithResolversFn: TGocciaValue;
-  GPromiseTryFn: TGocciaValue;
 
 function CreateBlueprintMapFromGoccia(const AMap: TGocciaMapValue): TSouffleValue;
 var
@@ -7712,61 +7695,6 @@ end;
 
 { Native Promise delegate helpers }
 
-function UnwrapPromiseFromReceiver(
-  const AReceiver: TSouffleValue): TGocciaPromiseValue; inline;
-begin
-  Result := nil;
-  if SouffleIsReference(AReceiver) and Assigned(AReceiver.AsReference) and
-     (AReceiver.AsReference is TGocciaWrappedValue) and
-     (TGocciaWrappedValue(AReceiver.AsReference).Value is TGocciaPromiseValue) then
-    Result := TGocciaPromiseValue(
-      TGocciaWrappedValue(AReceiver.AsReference).Value);
-end;
-
-function SouffleToCallable(const AArg: TSouffleValue): TGocciaValue;
-var
-  V: TGocciaValue;
-begin
-  Result := nil;
-  if not SouffleIsReference(AArg) or not Assigned(AArg.AsReference) then Exit;
-  V := GNativeArrayJoinRuntime.UnwrapToGocciaValue(AArg);
-  if Assigned(V) and V.IsCallable then
-    Result := V;
-end;
-
-function BridgePromiseStatic(const AGocciaFn: TGocciaValue;
-  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
-var
-  Args: TGocciaArgumentsCollection;
-  I: Integer;
-  GocciaArgs: array of TGocciaValue;
-  GocciaResult: TGocciaValue;
-begin
-  SetLength(GocciaArgs, AArgCount);
-  for I := 0 to AArgCount - 1 do
-    GocciaArgs[I] := GNativeArrayJoinRuntime.UnwrapToGocciaValue(
-      PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^);
-  Args := TGocciaArgumentsCollection.Create(GocciaArgs);
-  try
-    try
-      GocciaResult := TGocciaFunctionBase(AGocciaFn).Call(Args,
-        TGocciaUndefinedLiteralValue.UndefinedValue);
-      if Assigned(GocciaResult) then
-        Result := GNativeArrayJoinRuntime.ToSouffleValue(GocciaResult)
-      else
-        Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
-    except
-      on E: TGocciaThrowValue do
-      begin
-        GNativeArrayJoinRuntime.RethrowAsVM(E);
-        Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
-      end;
-    end;
-  finally
-    Args.Free;
-  end;
-end;
-
 { Native Promise prototype delegate callbacks }
 
 function NativePromiseThen(const AReceiver: TSouffleValue;
@@ -9667,16 +9595,6 @@ const
     (Name: 'finally'; Arity: 1; Callback: @NativePromiseFinally)
   );
 
-  PROMISE_STATIC_METHODS: array[0..7] of TSouffleMethodEntry = (
-    (Name: 'resolve';       Arity: 1; Callback: @NativePromiseStaticResolve),
-    (Name: 'reject';        Arity: 1; Callback: @NativePromiseStaticReject),
-    (Name: 'all';           Arity: 1; Callback: @NativePromiseStaticAll),
-    (Name: 'allSettled';    Arity: 1; Callback: @NativePromiseStaticAllSettled),
-    (Name: 'race';          Arity: 1; Callback: @NativePromiseStaticRace),
-    (Name: 'any';           Arity: 1; Callback: @NativePromiseStaticAny),
-    (Name: 'withResolvers'; Arity: 0; Callback: @NativePromiseStaticWithResolvers),
-    (Name: 'try';           Arity: 1; Callback: @NativePromiseStaticTry)
-  );
 
 procedure TGocciaRuntimeOperations.ClearTransientCaches;
 begin
@@ -9771,8 +9689,6 @@ begin
     BuildDelegate(SET_ITERATOR_METHODS));
   FPromiseDelegate := TSouffleRecord(
     BuildDelegate(PROMISE_PROTOTYPE_METHODS));
-  FPromiseStaticDelegate := TSouffleRecord(
-    BuildDelegate(PROMISE_STATIC_METHODS));
 
   FVM.ArrayDelegate := TSouffleRecord(
     BuildDelegate(ARRAY_PROTOTYPE_METHODS));
@@ -9794,6 +9710,16 @@ begin
 
   { Map static methods }
   AddStaticMethod(FMapBlueprint, 'groupBy', 2, @NativeMapGroupBy);
+
+  { Promise static methods }
+  AddStaticMethod(FPromiseBlueprint, 'resolve', 1, @NativePromiseStaticResolve);
+  AddStaticMethod(FPromiseBlueprint, 'reject', 1, @NativePromiseStaticReject);
+  AddStaticMethod(FPromiseBlueprint, 'all', 1, @NativePromiseStaticAll);
+  AddStaticMethod(FPromiseBlueprint, 'allSettled', 1, @NativePromiseStaticAllSettled);
+  AddStaticMethod(FPromiseBlueprint, 'race', 1, @NativePromiseStaticRace);
+  AddStaticMethod(FPromiseBlueprint, 'any', 1, @NativePromiseStaticAny);
+  AddStaticMethod(FPromiseBlueprint, 'withResolvers', 0, @NativePromiseStaticWithResolvers);
+  AddStaticMethod(FPromiseBlueprint, 'try', 1, @NativePromiseStaticTry);
 
   { Symbol.species — handled in GetSymbolOnNativeObject for blueprints }
 end;
@@ -10078,16 +10004,6 @@ begin
       BridgedFn := TGocciaBridgedFunction.Create(NativeFnVal, Self);
       if Assigned(GC) then GC.AllocateObject(BridgedFn);
       FGlobals.AddOrSetValue(Key, SouffleReference(BridgedFn));
-      if Key = CONSTRUCTOR_PROMISE then
-      begin
-        FPromiseConstructor := BridgedFn;
-        GPromiseAllFn := NativeFnVal.GetProperty('all');
-        GPromiseAllSettledFn := NativeFnVal.GetProperty('allSettled');
-        GPromiseRaceFn := NativeFnVal.GetProperty('race');
-        GPromiseAnyFn := NativeFnVal.GetProperty('any');
-        GPromiseWithResolversFn := NativeFnVal.GetProperty('withResolvers');
-        GPromiseTryFn := NativeFnVal.GetProperty('try');
-      end;
     end
     else if (GocciaVal is TGocciaObjectValue)
       and not (GocciaVal is TGocciaClassValue)
@@ -11192,8 +11108,6 @@ begin
     FPromiseDelegate.MarkReferences;
   if Assigned(FPromiseBlueprint) and not FPromiseBlueprint.GCMarked then
     FPromiseBlueprint.MarkReferences;
-  if Assigned(FPromiseStaticDelegate) and not FPromiseStaticDelegate.GCMarked then
-    FPromiseStaticDelegate.MarkReferences;
   if Assigned(FDescribeDelegate) and not FDescribeDelegate.GCMarked then
     FDescribeDelegate.MarkReferences;
   if Assigned(FTestDelegate) and not FTestDelegate.GCMarked then
