@@ -12801,6 +12801,17 @@ begin
   end;
 end;
 
+function SouffleStrictEqual(const A, B: TSouffleValue): Boolean;
+begin
+  Result := SouffleSameValueZero(A, B);
+  if not Result and SouffleIsReference(A) and SouffleIsReference(B) and
+     Assigned(A.AsReference) and Assigned(B.AsReference) and
+     (A.AsReference is TGocciaWrappedValue) and
+     (B.AsReference is TGocciaWrappedValue) then
+    Result := TGocciaWrappedValue(A.AsReference).Value =
+              TGocciaWrappedValue(B.AsReference).Value;
+end;
+
 function GetExpectActual(const AReceiver: TSouffleValue): TSouffleValue;
 var
   Rec: TSouffleRecord;
@@ -12847,7 +12858,7 @@ begin
   if AArgCount < 1 then Exit;
   Expected := AArgs^;
   MatcherResult(IsExpectNegated(AReceiver),
-    SouffleSameValueZero(Actual, Expected),
+    SouffleStrictEqual(Actual, Expected),
     'toBe',
     'Values are equal',
     'Expected ' + SafeValueToString(Actual) +
