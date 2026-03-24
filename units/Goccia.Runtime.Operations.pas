@@ -5370,15 +5370,11 @@ end;
 
 procedure ThrowRangeErrorNative(const AMessage: string);
 var
-  Rec: TSouffleRecord;
-  GC: TGarbageCollector;
+  Wrapped: TGocciaWrappedValue;
 begin
-  GC := TGarbageCollector.Instance;
-  Rec := TSouffleRecord.Create(2);
-  if Assigned(GC) then GC.AllocateObject(Rec);
-  Rec.Put('message', SouffleString(AMessage));
-  Rec.Put('name', SouffleString('RangeError'));
-  raise ESouffleThrow.Create(SouffleReference(Rec));
+  Wrapped := TGocciaWrappedValue.Create(
+    Goccia.Values.ErrorHelper.CreateErrorObject('RangeError', AMessage));
+  raise ESouffleThrow.Create(SouffleReference(Wrapped));
 end;
 
 function LocalTypeDisplayName(const AType: TSouffleLocalType): string;
@@ -8834,6 +8830,14 @@ begin
   AB := GetSouffleArrayBuffer(AReceiver);
   if not Assigned(AB) then
     Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+
+  { SharedArrayBuffer with zero length: throw TypeError }
+  if AB.IsShared and (AB.ByteLength = 0) then
+  begin
+    GNativeArrayJoinRuntime.ThrowTypeErrorMessage(
+      'Cannot slice a zero-length SharedArrayBuffer');
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
 
   GC := TGarbageCollector.Instance;
   StartIdx := 0;

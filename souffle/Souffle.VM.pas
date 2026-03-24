@@ -61,6 +61,8 @@ type
 
     function DelegateGet(const AObject: TSouffleHeapObject;
       const AKey: string; out AValue: TSouffleValue): Boolean;
+    function DelegateHasGetterOnly(const ARec: TSouffleRecord;
+      const AKey: string): Boolean;
     function SetPropertyViaBlueprintSetter(const ABp: TSouffleBlueprint;
       const AKey: string; const AObject, AValue: TSouffleValue): Boolean;
   public
@@ -2059,6 +2061,9 @@ begin
                 SetPropertyViaBlueprintSetter(Rec.Blueprint, PropKey,
                   FRegisters[Base + A], FRegisters[Base + C]) then
           { setter found and invoked in blueprint chain }
+        else if DelegateHasGetterOnly(Rec, PropKey) then
+          FRuntimeOps.PropertyWriteViolation(
+            FRegisters[Base + A], PropKey)
         else if not Rec.PutChecked(PropKey, FRegisters[Base + C]) then
           FRuntimeOps.PropertyWriteViolation(
             FRegisters[Base + A], PropKey);
@@ -2384,6 +2389,31 @@ begin
     if (Current is TSouffleRecord) and
        TSouffleRecord(Current).Get(AKey, AValue) then
       Exit(True);
+    Current := Current.Delegate;
+  end;
+  Result := False;
+end;
+
+function TSouffleVM.DelegateHasGetterOnly(const ARec: TSouffleRecord;
+  const AKey: string): Boolean;
+var
+  Current: TSouffleHeapObject;
+  Rec: TSouffleRecord;
+  Dummy: TSouffleValue;
+begin
+  Current := ARec.Delegate;
+  while Assigned(Current) do
+  begin
+    if Current is TSouffleRecord then
+    begin
+      Rec := TSouffleRecord(Current);
+      if Rec.HasGetters and Rec.Getters.Get(AKey, Dummy) then
+      begin
+        if Rec.HasSetters and Rec.Setters.Get(AKey, Dummy) then
+          Exit(False); { has both getter and setter }
+        Exit(True); { getter only — read-only }
+      end;
+    end;
     Current := Current.Delegate;
   end;
   Result := False;
