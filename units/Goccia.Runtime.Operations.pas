@@ -13066,8 +13066,39 @@ begin
 end;
 
 function SouffleDeepEqual(const A, B: TSouffleValue): Boolean;
+var
+  GocciaVal: TGocciaValue;
+  GocciaArr: TGocciaArrayValue;
+  SouffleArr: TSouffleArray;
+  EI: Integer;
 begin
   if SouffleSameValueZero(A, B) then Exit(True);
+  { Handle TGocciaWrappedValue — bridge artifact, unwrap for comparison }
+  if SouffleIsReference(A) and Assigned(A.AsReference) and
+     (A.AsReference is TGocciaWrappedValue) then
+  begin
+    GocciaVal := TGocciaWrappedValue(A.AsReference).Value;
+    if GocciaVal is TGocciaArrayValue then
+    begin
+      if SouffleIsReference(B) and Assigned(B.AsReference) and
+         (B.AsReference is TSouffleArray) then
+      begin
+        GocciaArr := TGocciaArrayValue(GocciaVal);
+        SouffleArr := TSouffleArray(B.AsReference);
+        if GocciaArr.Elements.Count <> SouffleArr.Count then Exit(False);
+        for EI := 0 to SouffleArr.Count - 1 do
+          if not SouffleDeepEqual(
+            GNativeArrayJoinRuntime.ToSouffleValue(GocciaArr.Elements[EI]),
+            SouffleArr.Get(EI)) then
+            Exit(False);
+        Exit(True);
+      end;
+    end;
+    Exit(False);
+  end;
+  if SouffleIsReference(B) and Assigned(B.AsReference) and
+     (B.AsReference is TGocciaWrappedValue) then
+    Exit(SouffleDeepEqual(B, A)); { swap and handle above }
   { Cross-type numeric comparison for deep equality }
   if ((A.Kind = svkInteger) or (A.Kind = svkFloat)) and
      ((B.Kind = svkInteger) or (B.Kind = svkFloat)) then
