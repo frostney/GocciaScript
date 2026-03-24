@@ -2776,6 +2776,31 @@ begin
      (A.AsReference is TGocciaWrappedValue) then
   begin
     GocciaObj := TGocciaWrappedValue(A.AsReference).Value;
+
+    { Fast path: wrapped Goccia error vs Error blueprint }
+    if SouffleIsReference(B) and Assigned(B.AsReference) and
+       (B.AsReference is TSouffleBlueprint) and
+       (GocciaObj is TGocciaObjectValue) and
+       TGocciaObjectValue(GocciaObj).HasErrorData then
+    begin
+      Bp := TSouffleBlueprint(B.AsReference);
+      { Check if blueprint is in the Error hierarchy }
+      while Assigned(Bp) do
+      begin
+        if Bp = FErrorBlueprint then
+        begin
+          { Now check specific error type by name }
+          if TSouffleBlueprint(B.AsReference) = FErrorBlueprint then
+            Exit(SouffleBoolean(True));
+          ClassName := TSouffleBlueprint(B.AsReference).Name;
+          if Assigned(GocciaObj.GetProperty('name')) then
+            Exit(SouffleBoolean(GocciaObj.GetProperty('name').ToStringLiteral.Value = ClassName));
+          Exit(SouffleBoolean(False));
+        end;
+        Bp := Bp.SuperBlueprint;
+      end;
+    end;
+
     if SouffleIsReference(B) and Assigned(B.AsReference) and
        (B.AsReference is TGocciaBridgedFunction) then
       GocciaClass := TGocciaBridgedFunction(B.AsReference).FGocciaFn
@@ -11833,6 +11858,14 @@ begin
     if Key = 'globalThis' then Continue;
     Val := FGlobals[Key];
     if not SouffleIsReference(Val) or not Assigned(Val.AsReference) then Continue;
+    { Replace Error globals with blueprints BEFORE TGocciaWrappedValue check }
+    if (Key = 'Error') and Assigned(FErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FErrorBlueprint)); Continue; end;
+    if (Key = 'TypeError') and Assigned(FTypeErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypeErrorBlueprint)); Continue; end;
+    if (Key = 'RangeError') and Assigned(FRangeErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FRangeErrorBlueprint)); Continue; end;
+    if (Key = 'ReferenceError') and Assigned(FReferenceErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FReferenceErrorBlueprint)); Continue; end;
+    if (Key = 'SyntaxError') and Assigned(FSyntaxErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FSyntaxErrorBlueprint)); Continue; end;
+    if (Key = 'URIError') and Assigned(FURIErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FURIErrorBlueprint)); Continue; end;
+    if (Key = 'AggregateError') and Assigned(FAggregateErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FAggregateErrorBlueprint)); Continue; end;
     if not (Val.AsReference is TGocciaWrappedValue) then Continue;
 
     Wrapped := TGocciaWrappedValue(Val.AsReference);
@@ -11864,13 +11897,7 @@ begin
       FGlobals.AddOrSetValue(Key, SouffleReference(FSharedArrayBufferBlueprint));
       Continue;
     end;
-    if (Key = 'Error') and Assigned(FErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FErrorBlueprint)); Continue; end;
-    if (Key = 'TypeError') and Assigned(FTypeErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypeErrorBlueprint)); Continue; end;
-    if (Key = 'RangeError') and Assigned(FRangeErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FRangeErrorBlueprint)); Continue; end;
-    if (Key = 'ReferenceError') and Assigned(FReferenceErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FReferenceErrorBlueprint)); Continue; end;
-    if (Key = 'SyntaxError') and Assigned(FSyntaxErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FSyntaxErrorBlueprint)); Continue; end;
-    if (Key = 'URIError') and Assigned(FURIErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FURIErrorBlueprint)); Continue; end;
-    if (Key = 'AggregateError') and Assigned(FAggregateErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FAggregateErrorBlueprint)); Continue; end;
+    { Old duplicates removed — Error replacements are now before TGocciaWrappedValue check }
     if (Key = 'Int8Array') and Assigned(FTypedArrayBlueprints[stakInt8]) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypedArrayBlueprints[stakInt8])); Continue; end;
     if (Key = 'Uint8Array') and Assigned(FTypedArrayBlueprints[stakUint8]) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypedArrayBlueprints[stakUint8])); Continue; end;
     if (Key = 'Uint8ClampedArray') and Assigned(FTypedArrayBlueprints[stakUint8Clamped]) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypedArrayBlueprints[stakUint8Clamped])); Continue; end;
