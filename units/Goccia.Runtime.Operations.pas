@@ -9130,7 +9130,7 @@ var
 begin
   TA := GetSouffleTypedArray(AReceiver);
   if not Assigned(TA) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
-  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
+  if (AArgCount < 1) then
   begin
     GNativeArrayJoinRuntime.ThrowTypeErrorMessage('callback is not a function');
     Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
@@ -9304,7 +9304,7 @@ var
 begin
   TA := GetSouffleTypedArray(AReceiver);
   if not Assigned(TA) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
-  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
+  if (AArgCount < 1) then
   begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('callback is not a function'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
   for I := 0 to TA.ElementLength - 1 do
   begin
@@ -9328,7 +9328,7 @@ var
 begin
   TA := GetSouffleTypedArray(AReceiver);
   if not Assigned(TA) then Exit(SouffleInteger(-1));
-  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
+  if (AArgCount < 1) then
   begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('callback is not a function'); Exit(SouffleInteger(-1)); end;
   for I := 0 to TA.ElementLength - 1 do
   begin
@@ -9352,7 +9352,7 @@ var
 begin
   TA := GetSouffleTypedArray(AReceiver);
   if not Assigned(TA) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
-  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
+  if (AArgCount < 1) then
   begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('callback is not a function'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
   for I := TA.ElementLength - 1 downto 0 do
   begin
@@ -9376,7 +9376,7 @@ var
 begin
   TA := GetSouffleTypedArray(AReceiver);
   if not Assigned(TA) then Exit(SouffleInteger(-1));
-  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
+  if (AArgCount < 1) then
   begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('callback is not a function'); Exit(SouffleInteger(-1)); end;
   for I := TA.ElementLength - 1 downto 0 do
   begin
@@ -9447,7 +9447,7 @@ var
 begin
   TA := GetSouffleTypedArray(AReceiver);
   if not Assigned(TA) then Exit(AReceiver);
-  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
+  if (AArgCount < 1) then
   begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('callback is not a function'); Exit(AReceiver); end;
   GC := TGarbageCollector.Instance;
   NewAB := TSouffleArrayBuffer.Create(TA.ElementLength * BytesPerElement(TA.Kind));
@@ -9483,7 +9483,7 @@ var
 begin
   TA := GetSouffleTypedArray(AReceiver);
   if not Assigned(TA) then Exit(AReceiver);
-  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
+  if (AArgCount < 1) then
   begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('callback is not a function'); Exit(AReceiver); end;
   GC := TGarbageCollector.Instance;
   SetLength(Kept, TA.ElementLength);
@@ -9519,7 +9519,7 @@ var
 begin
   TA := GetSouffleTypedArray(AReceiver);
   if not Assigned(TA) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
-  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
+  if (AArgCount < 1) then
   begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('callback is not a function'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
   if AArgCount > 1 then
   begin Acc := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^; StartIdx := 0; end
@@ -9547,7 +9547,7 @@ var
 begin
   TA := GetSouffleTypedArray(AReceiver);
   if not Assigned(TA) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
-  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
+  if (AArgCount < 1) then
   begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('callback is not a function'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
   if AArgCount > 1 then
   begin Acc := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^; StartIdx := TA.ElementLength - 1; end
