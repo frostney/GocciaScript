@@ -8956,9 +8956,11 @@ begin
   TA := GetSouffleTypedArray(AReceiver);
   if Assigned(TA) and Assigned(TA.Buffer) then
   begin
-    { Return the original buffer record if stored (preserves identity) }
+    { Return cached buffer record (preserves identity across all views) }
     if SouffleIsReference(TA.BufferRecord) and Assigned(TA.BufferRecord.AsReference) then
       Exit(TA.BufferRecord);
+    if SouffleIsReference(TA.Buffer.CachedRecord) and Assigned(TA.Buffer.CachedRecord.AsReference) then
+      Exit(TA.Buffer.CachedRecord);
     GC := TGarbageCollector.Instance;
     if TA.Buffer.IsShared then
       Bp := GNativeArrayJoinRuntime.FSharedArrayBufferBlueprint
@@ -8969,7 +8971,8 @@ begin
     Rec.Delegate := Bp.Prototype;
     Rec.SetSlot(0, SouffleReference(TA.Buffer));
     Result := SouffleReference(Rec);
-    TA.BufferRecord := Result; { cache for identity on future access }
+    TA.BufferRecord := Result;
+    TA.Buffer.CachedRecord := Result; { cache on buffer for all views }
   end
   else
     Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
@@ -9104,7 +9107,13 @@ var
   I, StartIdx: Integer;
 begin
   TA := GetSouffleTypedArray(AReceiver);
-  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleInteger(-1));
+  if not Assigned(TA) then
+  begin
+    if SouffleIsReference(AReceiver) and Assigned(AReceiver.AsReference) then
+      GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Method called on incompatible receiver');
+    Exit(SouffleInteger(-1));
+  end;
+  if AArgCount < 1 then Exit(SouffleInteger(-1));
   SearchVal := GNativeArrayJoinRuntime.CoerceToNumber(AArgs^);
   StartIdx := 0;
   if AArgCount > 1 then
@@ -9659,7 +9668,11 @@ var
   GC: TGarbageCollector;
 begin
   TA := GetSouffleTypedArray(AReceiver);
-  if not Assigned(TA) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  if not Assigned(TA) then
+  begin
+    GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Method called on incompatible receiver');
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
   GC := TGarbageCollector.Instance;
   NewAB := TSouffleArrayBuffer.Create(TA.ElementLength * BytesPerElement(TA.Kind));
   if Assigned(GC) then GC.AllocateObject(NewAB);

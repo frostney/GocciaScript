@@ -136,7 +136,9 @@ type
   public
     Data: TBytes;
     IsShared: Boolean;
+    CachedRecord: TSouffleValue;
     constructor Create(const AByteLength: Integer; const AShared: Boolean = False);
+    procedure MarkReferences; override;
     function DebugString: string; override;
     property ByteLength: Integer read GetByteLength;
   end;
@@ -721,6 +723,16 @@ begin
   if AByteLength > 0 then
     FillChar(Data[0], AByteLength, 0);
   IsShared := AShared;
+  CachedRecord := SouffleNil;
+end;
+
+procedure TSouffleArrayBuffer.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if SouffleIsReference(CachedRecord) and Assigned(CachedRecord.AsReference) and
+     not CachedRecord.AsReference.GCMarked then
+    CachedRecord.AsReference.MarkReferences;
 end;
 
 function TSouffleArrayBuffer.GetByteLength: Integer;
