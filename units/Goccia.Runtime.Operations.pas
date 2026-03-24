@@ -3955,7 +3955,7 @@ var
   FieldInits: array of TSouffleClosure;
   FieldInitCount: Integer;
   FieldInitVal, FieldInitEntry, FieldNameVal, FieldInitFn, FieldCurVal, FieldNewVal: TSouffleValue;
-  FieldInitArr: TSouffleArray;
+  FieldInitArr, Arr: TSouffleArray;
   FieldInitRec: TSouffleRecord;
   TAKind: TSouffleTypedArrayKind;
 begin
@@ -4006,6 +4006,31 @@ begin
       Result := ConstructNativeArrayBuffer(AArgs, AArgCount, FSharedArrayBufferBlueprint);
       Exit;
     end;
+    { Array construction }
+    if Bp = FArrayBlueprint then
+    begin
+      {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF}
+      if (AArgCount = 1) and (AArgs^.Kind in [svkInteger, svkFloat]) then
+      begin
+        { new Array(length) }
+        Arr := TSouffleArray.Create(Trunc(CoerceToNumber(AArgs^)));
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AllocateObject(Arr);
+        Result := SouffleReference(Arr);
+      end
+      else
+      begin
+        { new Array(a, b, c) }
+        Arr := TSouffleArray.Create(AArgCount);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AllocateObject(Arr);
+        for I := 0 to AArgCount - 1 do
+          Arr.Push(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^);
+        Result := SouffleReference(Arr);
+      end;
+      Exit;
+    end;
+
     { Error construction }
     if Bp = FErrorBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := ConstructNativeError(Self, FErrorBlueprint, 'Error', AArgs, AArgCount); Exit; end;
     if Bp = FTypeErrorBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := ConstructNativeError(Self, FTypeErrorBlueprint, 'TypeError', AArgs, AArgCount); Exit; end;
@@ -11968,7 +11993,8 @@ begin
   begin
     Key := Rec.GetOrderedKey(I);
     if (Length(Key) > 0) and (Key[1] <> '#') and
-       (Copy(Key, 1, 5) <> '@@sym') then
+       (Copy(Key, 1, 5) <> '@@sym') and
+       ((Rec.GetEntryFlags(Key) and SOUFFLE_PROP_ENUMERABLE) <> 0) then
       Arr.Push(SouffleString(Key));
   end;
   Result := SouffleReference(Arr);
@@ -11998,7 +12024,8 @@ begin
   begin
     Key := Rec.GetOrderedKey(I);
     if (Length(Key) > 0) and (Key[1] <> '#') and
-       (Copy(Key, 1, 5) <> '@@sym') then
+       (Copy(Key, 1, 5) <> '@@sym') and
+       ((Rec.GetEntryFlags(Key) and SOUFFLE_PROP_ENUMERABLE) <> 0) then
     begin
       if Rec.Get(Key, Val) then
         Arr.Push(Val);
@@ -12031,7 +12058,8 @@ begin
   begin
     Key := Rec.GetOrderedKey(I);
     if (Length(Key) > 0) and (Key[1] <> '#') and
-       (Copy(Key, 1, 5) <> '@@sym') then
+       (Copy(Key, 1, 5) <> '@@sym') and
+       ((Rec.GetEntryFlags(Key) and SOUFFLE_PROP_ENUMERABLE) <> 0) then
     begin
       if Rec.Get(Key, Val) then
       begin
@@ -12074,7 +12102,8 @@ begin
       for J := 0 to Source.Count - 1 do
       begin
         Key := Source.GetOrderedKey(J);
-        if Source.Get(Key, Val) then
+        if ((Source.GetEntryFlags(Key) and SOUFFLE_PROP_ENUMERABLE) <> 0) and
+           Source.Get(Key, Val) then
           Target.Put(Key, Val);
       end;
     end;
@@ -13050,6 +13079,9 @@ begin
   if A.Kind <> svkReference then Exit(False);
   if not SouffleIsReference(A) or not SouffleIsReference(B) then Exit(False);
   if not Assigned(A.AsReference) or not Assigned(B.AsReference) then Exit(False);
+  { String comparison }
+  if (A.AsReference is TSouffleHeapString) and (B.AsReference is TSouffleHeapString) then
+    Exit(TSouffleHeapString(A.AsReference).Value = TSouffleHeapString(B.AsReference).Value);
   if (A.AsReference is TSouffleArray) and (B.AsReference is TSouffleArray) then
     Exit(SouffleDeepEqualArrays(TSouffleArray(A.AsReference), TSouffleArray(B.AsReference)));
   if (A.AsReference is TSouffleRecord) and (B.AsReference is TSouffleRecord) then
