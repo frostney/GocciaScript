@@ -8854,14 +8854,22 @@ begin
   end;
   if AArgCount > 1 then
   begin
-    RawEnd := GNativeArrayJoinRuntime.CoerceToNumber(
-      PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^);
-    if not IsNan(RawEnd) then
+    { Check if arg is undefined (svkNil with undefined flag) }
+    if PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^.Kind = svkNil then
+      { undefined end → keep default (byteLength) }
+    else
     begin
-      EndIdx := Trunc(RawEnd);
-      if EndIdx < 0 then EndIdx := AB.ByteLength + EndIdx;
-      if EndIdx < 0 then EndIdx := 0;
-      if EndIdx > AB.ByteLength then EndIdx := AB.ByteLength;
+      RawEnd := GNativeArrayJoinRuntime.CoerceToNumber(
+        PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^);
+      if IsNan(RawEnd) then
+        EndIdx := 0
+      else
+      begin
+        EndIdx := Trunc(RawEnd);
+        if EndIdx < 0 then EndIdx := AB.ByteLength + EndIdx;
+        if EndIdx < 0 then EndIdx := 0;
+        if EndIdx > AB.ByteLength then EndIdx := AB.ByteLength;
+      end;
     end;
   end;
 
@@ -8957,6 +8965,7 @@ begin
     Rec.Delegate := Bp.Prototype;
     Rec.SetSlot(0, SouffleReference(TA.Buffer));
     Result := SouffleReference(Rec);
+    TA.BufferRecord := Result; { cache for identity on future access }
   end
   else
     Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
@@ -9262,6 +9271,7 @@ begin
   NewLen := EndIdx - StartIdx;
   if NewLen < 0 then NewLen := 0;
   NewTA := TSouffleTypedArray.Create(TA.Buffer, TA.ByteOffset + StartIdx * BytesPerElement(TA.Kind), NewLen, TA.Kind);
+  NewTA.BufferRecord := TA.BufferRecord; { share buffer identity }
   if Assigned(GC) then GC.AllocateObject(NewTA);
   Rec := TSouffleRecord.CreateFromBlueprint(GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind]);
   if Assigned(GC) then GC.AllocateObject(Rec);
