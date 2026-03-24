@@ -167,6 +167,20 @@ type
     function DebugString: string; override;
   end;
 
+  TSouffleTypedArrayIterKind = (taikValues, taikKeys, taikEntries);
+
+  TSouffleTypedArrayIterator = class(TSouffleHeapObject)
+  private
+    FTA: TSouffleTypedArray;
+    FIndex: Integer;
+    FKind: TSouffleTypedArrayIterKind;
+  public
+    constructor Create(const ATA: TSouffleTypedArray; const AKind: TSouffleTypedArrayIterKind);
+    function Next(out ADone: Boolean): TSouffleValue;
+    procedure MarkReferences; override;
+    function DebugString: string; override;
+  end;
+
 function BytesPerElement(const AKind: TSouffleTypedArrayKind): Integer; inline;
 function SouffleSameValueZero(const A, B: TSouffleValue): Boolean;
 
@@ -890,6 +904,58 @@ end;
 function TSouffleTypedArray.DebugString: string;
 begin
   Result := Format('TypedArray(%d)', [ElementLength]);
+end;
+
+{ TSouffleTypedArrayIterator }
+
+constructor TSouffleTypedArrayIterator.Create(const ATA: TSouffleTypedArray;
+  const AKind: TSouffleTypedArrayIterKind);
+begin
+  inherited Create(0);
+  FTA := ATA;
+  FIndex := 0;
+  FKind := AKind;
+end;
+
+function TSouffleTypedArrayIterator.Next(out ADone: Boolean): TSouffleValue;
+var
+  Arr: TSouffleArray;
+begin
+  if FIndex >= FTA.ElementLength then
+  begin
+    ADone := True;
+    Exit(SouffleNilWithFlags(0));
+  end;
+  ADone := False;
+  case FKind of
+    taikValues:
+      Result := SouffleFloat(FTA.ReadElement(FIndex));
+    taikKeys:
+      Result := SouffleInteger(FIndex);
+    taikEntries:
+    begin
+      Arr := TSouffleArray.Create(2);
+      Arr.Push(SouffleInteger(FIndex));
+      Arr.Push(SouffleFloat(FTA.ReadElement(FIndex)));
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AllocateObject(Arr);
+      Result := SouffleReference(Arr);
+    end;
+  end;
+  Inc(FIndex);
+end;
+
+procedure TSouffleTypedArrayIterator.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FTA) and not FTA.GCMarked then
+    FTA.MarkReferences;
+end;
+
+function TSouffleTypedArrayIterator.DebugString: string;
+begin
+  Result := 'TypedArrayIterator';
 end;
 
 { TSoufflePromiseAllState }

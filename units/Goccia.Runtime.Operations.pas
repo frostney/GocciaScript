@@ -2070,7 +2070,8 @@ begin
         Result := TGocciaValue(CachedBridge);
       end
       else if (AValue.AsReference is TGocciaSouffleMapIterator) or
-              (AValue.AsReference is TGocciaSouffleSetIterator) then
+              (AValue.AsReference is TGocciaSouffleSetIterator) or
+              (AValue.AsReference is TSouffleTypedArrayIterator) then
         Result := TGocciaSouffleIteratorBridge.Create(AValue, Self)
       else
         Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -3133,6 +3134,13 @@ begin
     end;
 
     if SouffleIsReference(AObject) and Assigned(AObject.AsReference) and
+       (AObject.AsReference is TSouffleTypedArrayIterator) then
+    begin
+      if Assigned(FMapIteratorDelegate) and FMapIteratorDelegate.Get(AKey, Result) then
+        Exit;
+    end;
+
+    if SouffleIsReference(AObject) and Assigned(AObject.AsReference) and
        (AObject.AsReference is TGocciaWrappedValue) then
     begin
       GocciaObj := TGocciaWrappedValue(AObject.AsReference).Value;
@@ -4034,6 +4042,8 @@ begin
         Exit(AIterable);
       if AIterable.AsReference is TGocciaSouffleSetIterator then
         Exit(AIterable);
+      if AIterable.AsReference is TSouffleTypedArrayIterator then
+        Exit(AIterable);
     end;
 
     if (not ATryAsync) and SouffleIsReference(AIterable) and
@@ -4231,6 +4241,11 @@ begin
       if AIterator.AsReference is TGocciaSouffleSetIterator then
       begin
         Result := TGocciaSouffleSetIterator(AIterator.AsReference).Next(ADone);
+        Exit;
+      end;
+      if AIterator.AsReference is TSouffleTypedArrayIterator then
+      begin
+        Result := TSouffleTypedArrayIterator(AIterator.AsReference).Next(ADone);
         Exit;
       end;
     end;
@@ -7569,16 +7584,20 @@ end;
 function NativeMapIteratorNext(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
-  Iter: TGocciaSouffleMapIterator;
   Done: Boolean;
   Value: TSouffleValue;
   Rec: TSouffleRecord;
 begin
-  if SouffleIsReference(AReceiver) and Assigned(AReceiver.AsReference) and
-     (AReceiver.AsReference is TGocciaSouffleMapIterator) then
+  Done := True;
+  Value := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if SouffleIsReference(AReceiver) and Assigned(AReceiver.AsReference) then
   begin
-    Iter := TGocciaSouffleMapIterator(AReceiver.AsReference);
-    Value := Iter.Next(Done);
+    if AReceiver.AsReference is TGocciaSouffleMapIterator then
+      Value := TGocciaSouffleMapIterator(AReceiver.AsReference).Next(Done)
+    else if AReceiver.AsReference is TSouffleTypedArrayIterator then
+      Value := TSouffleTypedArrayIterator(AReceiver.AsReference).Next(Done)
+    else
+      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
     Rec := TSouffleRecord.Create(2);
     if Assigned(GNativeArrayJoinRuntime) and Assigned(GNativeArrayJoinRuntime.VM) then
       Rec.Delegate := GNativeArrayJoinRuntime.VM.RecordDelegate;
@@ -9608,20 +9627,50 @@ end;
 
 function NativeTypedArrayValues(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
 begin
-  Result := InvokeGocciaMethod(AReceiver, 'values', AArgs, AArgCount);
+  TA := GetSouffleTypedArray(AReceiver);
+  if Assigned(TA) then
+  begin
+    Result := SouffleReference(TSouffleTypedArrayIterator.Create(TA, taikValues));
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(Result.AsReference);
+  end
+  else
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeTypedArrayKeys(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
 begin
-  Result := InvokeGocciaMethod(AReceiver, 'keys', AArgs, AArgCount);
+  TA := GetSouffleTypedArray(AReceiver);
+  if Assigned(TA) then
+  begin
+    Result := SouffleReference(TSouffleTypedArrayIterator.Create(TA, taikKeys));
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(Result.AsReference);
+  end
+  else
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeTypedArrayEntries(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
 begin
-  Result := InvokeGocciaMethod(AReceiver, 'entries', AArgs, AArgCount);
+  TA := GetSouffleTypedArray(AReceiver);
+  if Assigned(TA) then
+  begin
+    Result := SouffleReference(TSouffleTypedArrayIterator.Create(TA, taikEntries));
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(Result.AsReference);
+  end
+  else
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeTypedArrayBytesPerElement(const AReceiver: TSouffleValue;
@@ -10920,7 +10969,7 @@ const
     (Name: 'slice';      Arity: 2; Callback: @NativeArrayBufferSlice)
   );
 
-  TYPEDARRAY_PROTOTYPE_METHODS: array[0..26] of TSouffleMethodEntry = (
+  TYPEDARRAY_PROTOTYPE_METHODS: array[0..29] of TSouffleMethodEntry = (
     (Name: 'at';              Arity: 1; Callback: @NativeTypedArrayAt),
     (Name: 'fill';            Arity: 3; Callback: @NativeTypedArrayFill),
     (Name: 'copyWithin';      Arity: 3; Callback: @NativeTypedArrayCopyWithin),
@@ -10947,7 +10996,10 @@ const
     (Name: 'toString';        Arity: 0; Callback: @NativeTypedArrayToString),
     (Name: 'toReversed';      Arity: 0; Callback: @NativeTypedArrayToReversed),
     (Name: 'toSorted';        Arity: 1; Callback: @NativeTypedArrayToSorted),
-    (Name: 'with';            Arity: 2; Callback: @NativeTypedArrayWith)
+    (Name: 'with';            Arity: 2; Callback: @NativeTypedArrayWith),
+    (Name: 'values';          Arity: 0; Callback: @NativeTypedArrayValues),
+    (Name: 'keys';            Arity: 0; Callback: @NativeTypedArrayKeys),
+    (Name: 'entries';         Arity: 0; Callback: @NativeTypedArrayEntries)
   );
 
 
