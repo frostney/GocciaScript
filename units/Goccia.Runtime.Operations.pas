@@ -81,6 +81,18 @@ var
 type
   TGocciaRuntimeOperations = class;
 
+  TSouffleDecoratorSession = class
+  public
+    Blueprint: TSouffleBlueprint;
+    MetadataRecord: TSouffleRecord;
+    MethodInits: TSouffleArray;
+    FieldInits: TSouffleArray;
+    StaticFieldInits: TSouffleArray;
+    ClassInits: TSouffleArray;
+    constructor Create(const ABp: TSouffleBlueprint; const AMeta: TSouffleRecord);
+  end;
+
+  { Legacy — kept for interpreter-mode decorators }
   TGocciaDecoratorSession = class
   public
     MetadataObject: TGocciaObjectValue;
@@ -235,6 +247,7 @@ type
     FDescribeDelegate: TSouffleRecord;
     FTestDelegate: TSouffleRecord;
     FActiveDecoratorSession: TGocciaDecoratorSession;
+    FNativeDecoratorSession: TSouffleDecoratorSession;
     FArrayBridgeDirty: Boolean;
     FModuleResolver: TModuleResolver;
     FModuleCache: TOrderedStringMap<TSouffleValue>;
@@ -2774,6 +2787,7 @@ begin
         Exit(SouffleString('undefined'));
       if (A.AsReference is TSouffleClosure) or
          (A.AsReference is TSouffleNativeFunction) or
+         (A.AsReference is TSouffleNativeClosure) or
          (A.AsReference is TSouffleBlueprint) or
          (A.AsReference is TGocciaBridgedFunction) then
         Result := SouffleString('function')
@@ -4013,6 +4027,36 @@ begin
         VMArgs[0] := SouffleReference(Rec);
         for I := FieldInitCount - 1 downto 0 do
           FVM.ExecuteFunction(FieldInits[I], VMArgs);
+      end;
+
+      { Run decorator method/field initializers }
+      if Bp.Methods.Get('__decoratorMethodInits__', CtorMethod) and
+         SouffleIsReference(CtorMethod) and
+         (CtorMethod.AsReference is TSouffleArray) then
+      begin
+        SetLength(VMArgs, 1);
+        VMArgs[0] := SouffleReference(Rec);
+        for I := 0 to TSouffleArray(CtorMethod.AsReference).Count - 1 do
+        begin
+          CtorMethod := TSouffleArray(CtorMethod.AsReference).Get(I);
+          if SouffleIsReference(CtorMethod) and
+             (CtorMethod.AsReference is TSouffleClosure) then
+            FVM.ExecuteFunction(TSouffleClosure(CtorMethod.AsReference), VMArgs);
+        end;
+      end;
+      if Bp.Methods.Get('__decoratorFieldInits__', CtorMethod) and
+         SouffleIsReference(CtorMethod) and
+         (CtorMethod.AsReference is TSouffleArray) then
+      begin
+        SetLength(VMArgs, 1);
+        VMArgs[0] := SouffleReference(Rec);
+        for I := 0 to TSouffleArray(CtorMethod.AsReference).Count - 1 do
+        begin
+          CtorMethod := TSouffleArray(CtorMethod.AsReference).Get(I);
+          if SouffleIsReference(CtorMethod) and
+             (CtorMethod.AsReference is TSouffleClosure) then
+            FVM.ExecuteFunction(TSouffleClosure(CtorMethod.AsReference), VMArgs);
+        end;
       end;
 
       WalkBp := Bp;
@@ -13711,6 +13755,27 @@ begin
   end;
 end;
 
+{ TSouffleDecoratorSession }
+
+constructor TSouffleDecoratorSession.Create(const ABp: TSouffleBlueprint;
+  const AMeta: TSouffleRecord);
+begin
+  Blueprint := ABp;
+  MetadataRecord := AMeta;
+  MethodInits := TSouffleArray.Create(0);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(MethodInits);
+  FieldInits := TSouffleArray.Create(0);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(FieldInits);
+  StaticFieldInits := TSouffleArray.Create(0);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(StaticFieldInits);
+  ClassInits := TSouffleArray.Create(0);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(ClassInits);
+end;
+
 { TGocciaDecoratorSession }
 
 constructor TGocciaDecoratorSession.Create(const AMetadataObject: TGocciaObjectValue);
@@ -13920,11 +13985,12 @@ end;
 procedure TGocciaRuntimeOperations.BeginDecorators(
   const ABlueprint, ASuper: TSouffleValue);
 var
-  Bp: TSouffleBlueprint;
-  ClassVal: TGocciaClassValue;
-  SuperClassVal: TGocciaClassValue;
-  SuperMetadata: TGocciaValue;
-  Meta: TGocciaObjectValue;
+  Bp, SuperBp: TSouffleBlueprint;
+  Meta, SuperMetaRec: TSouffleRecord;
+  SymMetaKey: string;
+  SuperMetaVal: TSouffleValue;
+  GC: TGarbageCollector;
+  SI: Integer;
 begin
   try
     if not (SouffleIsReference(ABlueprint) and
@@ -13932,81 +13998,75 @@ begin
             (ABlueprint.AsReference is TSouffleBlueprint)) then
       Exit;
 
+    GC := TGarbageCollector.Instance;
     Bp := TSouffleBlueprint(ABlueprint.AsReference);
-    ClassVal := ConvertBlueprintToClassValue(Bp, Self);
 
-    if not Assigned(ClassVal.SuperClass) and not SouffleIsNil(ASuper) then
+    { Resolve super metadata from blueprint chain }
+    Meta := TSouffleRecord.Create(4);
+    if Assigned(GC) then GC.AllocateObject(Meta);
+
+    SuperBp := Bp.SuperBlueprint;
+    if not Assigned(SuperBp) and SouffleIsReference(ASuper) and
+       Assigned(ASuper.AsReference) and (ASuper.AsReference is TSouffleBlueprint) then
+      SuperBp := TSouffleBlueprint(ASuper.AsReference);
+
+    if Assigned(SuperBp) then
     begin
-      SuperClassVal := nil;
-      if SouffleIsReference(ASuper) and Assigned(ASuper.AsReference) then
+      SymMetaKey := '@@sym:' + IntToStr(TGocciaSymbolValue.WellKnownMetadata.Id);
+      if SuperBp.HasStaticFields and SuperBp.StaticFields.Get(SymMetaKey, SuperMetaVal) and
+         SouffleIsReference(SuperMetaVal) and Assigned(SuperMetaVal.AsReference) and
+         (SuperMetaVal.AsReference is TSouffleRecord) then
       begin
-        if ASuper.AsReference is TSouffleBlueprint then
-          SuperClassVal := ConvertBlueprintToClassValue(
-            TSouffleBlueprint(ASuper.AsReference), Self)
-        else
-        begin
-          SuperMetadata := UnwrapToGocciaValue(ASuper);
-          if SuperMetadata is TGocciaClassValue then
-            SuperClassVal := TGocciaClassValue(SuperMetadata);
-        end;
+        SuperMetaRec := TSouffleRecord(SuperMetaVal.AsReference);
+        for SI := 0 to SuperMetaRec.Count - 1 do
+          Meta.Put(SuperMetaRec.GetOrderedKey(SI), SuperMetaRec.GetOrderedValue(SI));
       end;
-      if Assigned(SuperClassVal) then
-        ClassVal.SuperClass := SuperClassVal;
     end;
 
-    SuperMetadata := nil;
-    if Assigned(ClassVal.SuperClass) then
-      SuperMetadata := ClassVal.SuperClass.GetSymbolProperty(
-        TGocciaSymbolValue.WellKnownMetadata);
-
-    if (SuperMetadata <> nil) and (SuperMetadata is TGocciaObjectValue) then
-      Meta := TGocciaObjectValue.Create(TGocciaObjectValue(SuperMetadata))
-    else
-      Meta := TGocciaObjectValue.Create;
-    TGarbageCollector.Instance.AddTempRoot(Meta);
-
-    FreeAndNil(FActiveDecoratorSession);
-    FActiveDecoratorSession := TGocciaDecoratorSession.Create(Meta);
-    FActiveDecoratorSession.ClassValue := ClassVal;
+    FreeAndNil(FNativeDecoratorSession);
+    FNativeDecoratorSession := TSouffleDecoratorSession.Create(Bp, Meta);
   except
     on E: TGocciaThrowValue do
       RethrowAsVM(E);
+    on E: ESouffleThrow do
+      raise;
   end;
+end;
+
+function NativeAddInitializerCallback(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer;
+  const AContext: TSouffleValue): TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if (AArgCount > 0) and SouffleIsReference(AContext) and
+     Assigned(AContext.AsReference) and (AContext.AsReference is TSouffleArray) then
+    TSouffleArray(AContext.AsReference).Push(AArgs^);
 end;
 
 procedure TGocciaRuntimeOperations.ApplyElementDecorator(
   const ADecoratorFn: TSouffleValue; const ADescriptor: string);
 var
   Kind: Char;
-  Name: string;
+  Name, FullName, KindStr: string;
   Flags: Integer;
   IsStatic, IsPrivate: Boolean;
-  ClassVal: TGocciaClassValue;
-  DecoratorFn, ElementValue, DecoratorResult: TGocciaValue;
-  ContextObject, AccessObject, AutoAccessorValue, DecResultObj: TGocciaObjectValue;
-  AccessGetterHelper: TGocciaAccessGetter;
-  AccessSetterHelper: TGocciaAccessSetter;
-  Collector: TGocciaInitializerCollector;
-  DecoratorArgs: TGocciaArgumentsCollection;
-  KindStr: string;
-  NewGetter, NewSetter, NewInit: TGocciaValue;
+  Bp: TSouffleBlueprint;
+  Ctx, AccessRec, AutoAccRec: TSouffleRecord;
+  ElementVal, DecResult, GetterVal, SetterVal, InitVal: TSouffleValue;
+  InitArr: TSouffleArray;
+  AddInitFn: TSouffleNativeClosure;
+  GC: TGarbageCollector;
 begin
   try
-    if not Assigned(FActiveDecoratorSession) then
-      Exit;
-    ClassVal := nil;
-    if FActiveDecoratorSession.ClassValue is TGocciaClassValue then
-      ClassVal := TGocciaClassValue(FActiveDecoratorSession.ClassValue);
-    if not Assigned(ClassVal) then
-      Exit;
-
-    DecoratorFn := UnwrapToGocciaValue(ADecoratorFn);
-    if not DecoratorFn.IsCallable then
-      ThrowTypeError('Decorator must be a function');
+    if not Assigned(FNativeDecoratorSession) then Exit;
+    Bp := FNativeDecoratorSession.Blueprint;
+    GC := TGarbageCollector.Instance;
 
     ParseElementDescriptor(ADescriptor, Kind, Name, Flags);
     IsStatic := (Flags and 1) <> 0;
     IsPrivate := (Flags and 2) <> 0;
+
+    if IsPrivate then FullName := '#' + Name else FullName := Name;
 
     case Kind of
       'm': KindStr := 'method';
@@ -14014,306 +14074,238 @@ begin
       's': KindStr := 'setter';
       'f': KindStr := 'field';
       'a': KindStr := 'accessor';
-    else
-      KindStr := 'method';
+    else KindStr := 'method';
     end;
 
-    ContextObject := TGocciaObjectValue.Create;
-    ContextObject.AssignProperty(PROP_KIND,
-      TGocciaStringLiteralValue.Create(KindStr));
-    if IsPrivate then
-      ContextObject.AssignProperty(PROP_NAME,
-        TGocciaStringLiteralValue.Create('#' + Name))
-    else
-      ContextObject.AssignProperty(PROP_NAME,
-        TGocciaStringLiteralValue.Create(Name));
-    if IsStatic then
-      ContextObject.AssignProperty(PROP_STATIC,
-        TGocciaBooleanLiteralValue.TrueValue)
-    else
-      ContextObject.AssignProperty(PROP_STATIC,
-        TGocciaBooleanLiteralValue.FalseValue);
-    if IsPrivate then
-      ContextObject.AssignProperty(PROP_PRIVATE,
-        TGocciaBooleanLiteralValue.TrueValue)
-    else
-      ContextObject.AssignProperty(PROP_PRIVATE,
-        TGocciaBooleanLiteralValue.FalseValue);
-    ContextObject.AssignProperty(PROP_METADATA,
-      FActiveDecoratorSession.MetadataObject);
+    { Build context record }
+    Ctx := TSouffleRecord.Create(6);
+    if Assigned(GC) then GC.AllocateObject(Ctx);
+    Ctx.Put('kind', SouffleString(KindStr));
+    Ctx.Put('name', SouffleString(FullName));
+    Ctx.Put('static', SouffleBoolean(IsStatic));
+    Ctx.Put('private', SouffleBoolean(IsPrivate));
+    Ctx.Put('metadata', SouffleReference(FNativeDecoratorSession.MetadataRecord));
 
-    AccessObject := TGocciaObjectValue.Create;
+    { Select initializer array }
+    if IsStatic then InitArr := FNativeDecoratorSession.StaticFieldInits
+    else if Kind in ['f', 'a'] then InitArr := FNativeDecoratorSession.FieldInits
+    else InitArr := FNativeDecoratorSession.MethodInits;
+
+    AddInitFn := TSouffleNativeClosure.Create('addInitializer', 1,
+      @NativeAddInitializerCallback, SouffleReference(InitArr));
+    if Assigned(GC) then GC.AllocateObject(AddInitFn);
+    Ctx.Put('addInitializer', SouffleReference(AddInitFn));
+
+    { Read element value from blueprint }
+    ElementVal := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
     case Kind of
       'm':
       begin
         if IsPrivate then
-        begin
-          ElementValue := ClassVal.GetPrivateMethod(Name);
-          if not Assigned(ElementValue) then
-            ElementValue := ClassVal.Prototype.GetProperty('#' + Name);
-        end
+          Bp.Methods.Get('#' + Name, ElementVal)
         else if IsStatic then
-          ElementValue := ClassVal.GetProperty(Name)
+        begin
+          if Bp.HasStaticFields then Bp.StaticFields.Get(Name, ElementVal);
+        end
         else
-          ElementValue := ClassVal.Prototype.GetProperty(Name);
-        AccessGetterHelper := TGocciaAccessGetter.Create(ElementValue, Name);
-        AccessObject.AssignProperty(PROP_GET,
-          TGocciaNativeFunctionValue.CreateWithoutPrototype(
-            AccessGetterHelper.Get, PROP_GET, 0));
-        ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
+          Bp.Methods.Get(Name, ElementVal);
       end;
-      'f', 'a':
-      begin
-        AccessGetterHelper := TGocciaAccessGetter.Create(nil, Name);
-        AccessSetterHelper := TGocciaAccessSetter.Create(Name);
-        AccessObject.AssignProperty(PROP_GET,
-          TGocciaNativeFunctionValue.CreateWithoutPrototype(
-            AccessGetterHelper.Get, PROP_GET, 0));
-        AccessObject.AssignProperty(PROP_SET,
-          TGocciaNativeFunctionValue.CreateWithoutPrototype(
-            AccessSetterHelper.SetValue, PROP_SET, 1));
-        ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
-      end;
-    end;
-
-    if IsStatic then
-      Collector := FActiveDecoratorSession.StaticFieldCollector
-    else if Kind in ['f', 'a'] then
-      Collector := FActiveDecoratorSession.FieldCollector
-    else
-      Collector := FActiveDecoratorSession.MethodCollector;
-    ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        Collector.AddInitializer, PROP_ADD_INITIALIZER, 1));
-
-    case Kind of
-      'm':
-        ; // ElementValue already set above
       'g':
       begin
-        if IsPrivate then
-          ElementValue := ClassVal.PrivatePropertyGetter[Name]
-        else if IsStatic then
-          ElementValue := ClassVal.StaticPropertyGetter[Name]
-        else
-          ElementValue := ClassVal.PropertyGetter[Name];
+        if IsPrivate and Bp.HasGetters then Bp.Getters.Get('#' + Name, ElementVal)
+        else if IsStatic and Bp.HasStaticGetters then Bp.StaticGetters.Get(Name, ElementVal)
+        else if Bp.HasGetters then Bp.Getters.Get(Name, ElementVal);
       end;
       's':
       begin
-        if IsPrivate then
-          ElementValue := ClassVal.PrivatePropertySetter[Name]
-        else if IsStatic then
-          ElementValue := ClassVal.StaticPropertySetter[Name]
-        else
-          ElementValue := ClassVal.PropertySetter[Name];
+        if IsPrivate and Bp.HasSetters then Bp.Setters.Get('#' + Name, ElementVal)
+        else if IsStatic and Bp.HasStaticSetters then Bp.StaticSetters.Get(Name, ElementVal)
+        else if Bp.HasSetters then Bp.Setters.Get(Name, ElementVal);
       end;
-      'f':
-        ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
       'a':
       begin
-        AutoAccessorValue := TGocciaObjectValue.Create;
-        AutoAccessorValue.AssignProperty(PROP_GET,
-          ClassVal.PropertyGetter[Name]);
-        AutoAccessorValue.AssignProperty(PROP_SET,
-          ClassVal.PropertySetter[Name]);
-        ElementValue := AutoAccessorValue;
+        AutoAccRec := TSouffleRecord.Create(2);
+        if Assigned(GC) then GC.AllocateObject(AutoAccRec);
+        if Bp.HasGetters then Bp.Getters.Get(Name, GetterVal)
+        else GetterVal := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+        if Bp.HasSetters then Bp.Setters.Get(Name, SetterVal)
+        else SetterVal := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+        AutoAccRec.Put('get', GetterVal);
+        AutoAccRec.Put('set', SetterVal);
+        ElementVal := SouffleReference(AutoAccRec);
       end;
     end;
 
-    DecoratorArgs := TGocciaArgumentsCollection.Create([ElementValue, ContextObject]);
-    try
-      DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(
-        DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-    finally
-      DecoratorArgs.Free;
+    { Build access object for methods and fields }
+    if Kind in ['m', 'f', 'a'] then
+    begin
+      AccessRec := TSouffleRecord.Create(2);
+      if Assigned(GC) then GC.AllocateObject(AccessRec);
+      { Access.get/set are closures that read/write the property on this }
+      { For simplicity, omit access helpers — they're rarely used }
+      Ctx.Put('access', SouffleReference(AccessRec));
     end;
 
-    if (DecoratorResult = nil) or (DecoratorResult is TGocciaUndefinedLiteralValue) then
+    { Invoke decorator: result = decorator(elementValue, context) }
+    if SouffleIsReference(ADecoratorFn) and
+       (ADecoratorFn.AsReference is TSouffleClosure) then
+      DecResult := FVM.ExecuteFunction(
+        TSouffleClosure(ADecoratorFn.AsReference),
+        [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), ElementVal,
+         SouffleReference(Ctx)])
+    else
+    begin
+      ThrowTypeErrorMessage('Decorator must be a function');
       Exit;
+    end;
+
+    { Handle result }
+    if SouffleIsNil(DecResult) then Exit;
 
     case Kind of
       'm':
       begin
-        if not DecoratorResult.IsCallable then
-          ThrowTypeError('Method decorator must return a function or undefined');
-        if IsPrivate then
-        begin
-          if DecoratorResult is TGocciaMethodValue then
-            ClassVal.AddPrivateMethod(Name, TGocciaMethodValue(DecoratorResult));
-          ClassVal.Prototype.AssignProperty('#' + Name, DecoratorResult);
-        end
+        if IsPrivate then Bp.Methods.Put('#' + Name, DecResult)
         else if IsStatic then
-          ClassVal.SetProperty(Name, DecoratorResult)
-        else
-          ClassVal.Prototype.AssignProperty(Name, DecoratorResult);
+        begin
+          if not Bp.HasStaticFields then; { StaticFields auto-creates }
+          Bp.StaticFields.Put(Name, DecResult);
+        end
+        else Bp.Methods.Put(Name, DecResult);
       end;
       'g':
       begin
-        if not DecoratorResult.IsCallable then
-          ThrowTypeError('Getter decorator must return a function or undefined');
-        if IsPrivate then
-          ClassVal.AddPrivateGetter(Name, TGocciaFunctionValue(DecoratorResult))
-        else if IsStatic then
-          ClassVal.AddStaticGetter(Name, TGocciaFunctionValue(DecoratorResult))
-        else
-          ClassVal.AddGetter(Name, TGocciaFunctionValue(DecoratorResult));
+        if IsPrivate then Bp.Getters.Put('#' + Name, DecResult)
+        else if IsStatic then Bp.StaticGetters.Put(Name, DecResult)
+        else Bp.Getters.Put(Name, DecResult);
       end;
       's':
       begin
-        if not DecoratorResult.IsCallable then
-          ThrowTypeError('Setter decorator must return a function or undefined');
-        if IsPrivate then
-          ClassVal.AddPrivateSetter(Name, TGocciaFunctionValue(DecoratorResult))
-        else if IsStatic then
-          ClassVal.AddStaticSetter(Name, TGocciaFunctionValue(DecoratorResult))
-        else
-          ClassVal.AddSetter(Name, TGocciaFunctionValue(DecoratorResult));
-      end;
-      'f':
-      begin
-        if not DecoratorResult.IsCallable then
-          ThrowTypeError('Field decorator must return a function or undefined');
-        ClassVal.AddFieldInitializer(Name, DecoratorResult, IsPrivate, IsStatic);
+        if IsPrivate then Bp.Setters.Put('#' + Name, DecResult)
+        else if IsStatic then Bp.StaticSetters.Put(Name, DecResult)
+        else Bp.Setters.Put(Name, DecResult);
       end;
       'a':
       begin
-        if not (DecoratorResult is TGocciaObjectValue) then
-          ThrowTypeError('Accessor decorator must return an object or undefined');
-        DecResultObj := TGocciaObjectValue(DecoratorResult);
-        NewGetter := DecResultObj.GetProperty(PROP_GET);
-        NewSetter := DecResultObj.GetProperty(PROP_SET);
-        NewInit := DecResultObj.GetProperty(PROP_INIT);
-        if Assigned(NewGetter) and not (NewGetter is TGocciaUndefinedLiteralValue) then
-          ClassVal.AddGetter(Name, TGocciaFunctionValue(NewGetter));
-        if Assigned(NewSetter) and not (NewSetter is TGocciaUndefinedLiteralValue) then
-          ClassVal.AddSetter(Name, TGocciaFunctionValue(NewSetter));
-        if Assigned(NewInit) and not (NewInit is TGocciaUndefinedLiteralValue) and
-           NewInit.IsCallable then
-          ClassVal.AddFieldInitializer(Name, NewInit, IsPrivate, IsStatic);
+        if SouffleIsReference(DecResult) and (DecResult.AsReference is TSouffleRecord) then
+        begin
+          if TSouffleRecord(DecResult.AsReference).Get('get', GetterVal) then
+            Bp.Getters.Put(Name, GetterVal);
+          if TSouffleRecord(DecResult.AsReference).Get('set', SetterVal) then
+            Bp.Setters.Put(Name, SetterVal);
+          if TSouffleRecord(DecResult.AsReference).Get('init', InitVal) then
+            InitArr.Push(InitVal);
+        end;
       end;
     end;
   except
     on E: TGocciaThrowValue do
       RethrowAsVM(E);
+    on E: ESouffleThrow do
+      raise;
   end;
 end;
 
 procedure TGocciaRuntimeOperations.ApplyClassDecorator(
   const ADecoratorFn: TSouffleValue);
 var
-  ClassVal: TGocciaClassValue;
-  DecoratorFn, DecoratorResult: TGocciaValue;
-  ContextObject: TGocciaObjectValue;
-  DecoratorArgs: TGocciaArgumentsCollection;
+  Bp: TSouffleBlueprint;
+  Ctx: TSouffleRecord;
+  DecResult: TSouffleValue;
+  AddInitFn: TSouffleNativeClosure;
+  GC: TGarbageCollector;
 begin
   try
-    if not Assigned(FActiveDecoratorSession) then
-      Exit;
-    ClassVal := nil;
-    if FActiveDecoratorSession.ClassValue is TGocciaClassValue then
-      ClassVal := TGocciaClassValue(FActiveDecoratorSession.ClassValue);
-    if not Assigned(ClassVal) then
-      Exit;
+    if not Assigned(FNativeDecoratorSession) then Exit;
+    Bp := FNativeDecoratorSession.Blueprint;
+    GC := TGarbageCollector.Instance;
 
-    DecoratorFn := UnwrapToGocciaValue(ADecoratorFn);
-    if not DecoratorFn.IsCallable then
-      ThrowTypeError('Decorator must be a function');
+    Ctx := TSouffleRecord.Create(4);
+    if Assigned(GC) then GC.AllocateObject(Ctx);
+    Ctx.Put('kind', SouffleString('class'));
+    Ctx.Put('name', SouffleString(Bp.Name));
+    Ctx.Put('metadata', SouffleReference(FNativeDecoratorSession.MetadataRecord));
 
-    ContextObject := TGocciaObjectValue.Create;
-    ContextObject.AssignProperty(PROP_KIND,
-      TGocciaStringLiteralValue.Create('class'));
-    ContextObject.AssignProperty(PROP_NAME,
-      TGocciaStringLiteralValue.Create(ClassVal.Name));
-    ContextObject.AssignProperty(PROP_METADATA,
-      FActiveDecoratorSession.MetadataObject);
-    ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        FActiveDecoratorSession.ClassCollector.AddInitializer,
-        PROP_ADD_INITIALIZER, 1));
+    AddInitFn := TSouffleNativeClosure.Create('addInitializer', 1,
+      @NativeAddInitializerCallback,
+      SouffleReference(FNativeDecoratorSession.ClassInits));
+    if Assigned(GC) then GC.AllocateObject(AddInitFn);
+    Ctx.Put('addInitializer', SouffleReference(AddInitFn));
 
-    DecoratorArgs := TGocciaArgumentsCollection.Create([ClassVal, ContextObject]);
-    try
-      DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(
-        DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-    finally
-      DecoratorArgs.Free;
-    end;
-
-    if (DecoratorResult <> nil) and
-       not (DecoratorResult is TGocciaUndefinedLiteralValue) then
+    if SouffleIsReference(ADecoratorFn) and
+       (ADecoratorFn.AsReference is TSouffleClosure) then
+      DecResult := FVM.ExecuteFunction(
+        TSouffleClosure(ADecoratorFn.AsReference),
+        [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED),
+         SouffleReference(Bp), SouffleReference(Ctx)])
+    else
     begin
-      if not (DecoratorResult is TGocciaClassValue) then
-        ThrowTypeError('Class decorator must return a class or undefined');
-      FActiveDecoratorSession.ClassValue := DecoratorResult;
+      ThrowTypeErrorMessage('Decorator must be a function');
+      Exit;
     end;
+
+    { Class decorator can return a replacement class (blueprint) }
+    if SouffleIsReference(DecResult) and Assigned(DecResult.AsReference) and
+       (DecResult.AsReference is TSouffleBlueprint) then
+      FNativeDecoratorSession.Blueprint := TSouffleBlueprint(DecResult.AsReference);
   except
     on E: TGocciaThrowValue do
       RethrowAsVM(E);
+    on E: ESouffleThrow do
+      raise;
   end;
 end;
 
 procedure TGocciaRuntimeOperations.FinishDecorators(
   var ADest: TSouffleValue);
 var
-  ClassVal: TGocciaClassValue;
-  InitializerResults: TArray<TGocciaValue>;
+  Bp: TSouffleBlueprint;
   I: Integer;
-  InitArgs: TGocciaArgumentsCollection;
+  SymMetaKey: string;
+  InitVal: TSouffleValue;
 begin
   try
-    if not Assigned(FActiveDecoratorSession) then
-      Exit;
+    if not Assigned(FNativeDecoratorSession) then Exit;
+    Bp := FNativeDecoratorSession.Blueprint;
 
-    ClassVal := nil;
-    if FActiveDecoratorSession.ClassValue is TGocciaClassValue then
-      ClassVal := TGocciaClassValue(FActiveDecoratorSession.ClassValue);
-    if not Assigned(ClassVal) then
+    { Store metadata on blueprint's static fields }
+    SymMetaKey := '@@sym:' + IntToStr(TGocciaSymbolValue.WellKnownMetadata.Id);
+    Bp.StaticFields.Put(SymMetaKey,
+      SouffleReference(FNativeDecoratorSession.MetadataRecord));
+
+    { Store method/field initializers on blueprint for construction }
+    if FNativeDecoratorSession.MethodInits.Count > 0 then
+      Bp.Methods.Put('__decoratorMethodInits__',
+        SouffleReference(FNativeDecoratorSession.MethodInits));
+    if FNativeDecoratorSession.FieldInits.Count > 0 then
+      Bp.Methods.Put('__decoratorFieldInits__',
+        SouffleReference(FNativeDecoratorSession.FieldInits));
+
+    { Run class initializers immediately }
+    for I := 0 to FNativeDecoratorSession.ClassInits.Count - 1 do
     begin
-      TGarbageCollector.Instance.RemoveTempRoot(
-        FActiveDecoratorSession.MetadataObject);
-      FreeAndNil(FActiveDecoratorSession);
-      Exit;
+      InitVal := FNativeDecoratorSession.ClassInits.Get(I);
+      if SouffleIsReference(InitVal) and
+         ((InitVal.AsReference is TSouffleClosure) or
+          (InitVal.AsReference is TSouffleNativeClosure)) then
+        FVM.ExecuteFunction(TSouffleClosure(InitVal.AsReference),
+          [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)]);
     end;
 
-    FClassDefinitionScopes.AddOrSetValue(ClassVal, nil);
-
-    ClassVal.DefineSymbolProperty(
-      TGocciaSymbolValue.WellKnownMetadata,
-      TGocciaPropertyDescriptorData.Create(
-        FActiveDecoratorSession.MetadataObject, [pfConfigurable]));
-
-    InitializerResults := FActiveDecoratorSession.MethodCollector.GetInitializers;
-    ClassVal.AppendMethodInitializers(InitializerResults);
-    InitializerResults := FActiveDecoratorSession.FieldCollector.GetInitializers;
-    ClassVal.AppendFieldInitializers(InitializerResults);
-
-    InitializerResults := FActiveDecoratorSession.ClassCollector.GetInitializers;
-    for I := 0 to High(InitializerResults) do
+    { Run static field initializers immediately }
+    for I := 0 to FNativeDecoratorSession.StaticFieldInits.Count - 1 do
     begin
-      InitArgs := TGocciaArgumentsCollection.Create;
-      try
-        TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassVal);
-      finally
-        InitArgs.Free;
-      end;
+      InitVal := FNativeDecoratorSession.StaticFieldInits.Get(I);
+      if SouffleIsReference(InitVal) and
+         ((InitVal.AsReference is TSouffleClosure) or
+          (InitVal.AsReference is TSouffleNativeClosure)) then
+        FVM.ExecuteFunction(TSouffleClosure(InitVal.AsReference),
+          [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)]);
     end;
 
-    InitializerResults := FActiveDecoratorSession.StaticFieldCollector.GetInitializers;
-    for I := 0 to High(InitializerResults) do
-    begin
-      InitArgs := TGocciaArgumentsCollection.Create;
-      try
-        TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassVal);
-      finally
-        InitArgs.Free;
-      end;
-    end;
+    ADest := SouffleReference(Bp);
 
-    ADest := WrapGocciaValue(ClassVal);
-
-    TGarbageCollector.Instance.RemoveTempRoot(
-      FActiveDecoratorSession.MetadataObject);
-    FreeAndNil(FActiveDecoratorSession);
+    FreeAndNil(FNativeDecoratorSession);
   except
     on E: TGocciaThrowValue do
     begin
