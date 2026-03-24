@@ -3889,6 +3889,9 @@ var
   VMArgs: array of TSouffleValue;
   FieldInits: array of TSouffleClosure;
   FieldInitCount: Integer;
+  FieldInitVal, FieldInitEntry, FieldNameVal, FieldInitFn, FieldCurVal, FieldNewVal: TSouffleValue;
+  FieldInitArr: TSouffleArray;
+  FieldInitRec: TSouffleRecord;
   TAKind: TSouffleTypedArrayKind;
 begin
   if SouffleIsReference(AConstructor) and
@@ -4044,18 +4047,34 @@ begin
             FVM.ExecuteFunction(TSouffleClosure(CtorMethod.AsReference), VMArgs);
         end;
       end;
-      if Bp.Methods.Get('__decoratorFieldInits__', CtorMethod) and
-         SouffleIsReference(CtorMethod) and
-         (CtorMethod.AsReference is TSouffleArray) then
+      if Bp.Methods.Get('__decoratorFieldInits__', FieldInitVal) and
+         SouffleIsReference(FieldInitVal) and
+         (FieldInitVal.AsReference is TSouffleArray) then
       begin
-        SetLength(VMArgs, 1);
-        VMArgs[0] := SouffleReference(Rec);
-        for I := 0 to TSouffleArray(CtorMethod.AsReference).Count - 1 do
+        FieldInitArr := TSouffleArray(FieldInitVal.AsReference);
+        for I := 0 to FieldInitArr.Count - 1 do
         begin
-          CtorMethod := TSouffleArray(CtorMethod.AsReference).Get(I);
-          if SouffleIsReference(CtorMethod) and
-             (CtorMethod.AsReference is TSouffleClosure) then
-            FVM.ExecuteFunction(TSouffleClosure(CtorMethod.AsReference), VMArgs);
+          FieldInitEntry := FieldInitArr.Get(I);
+          if SouffleIsReference(FieldInitEntry) and
+             (FieldInitEntry.AsReference is TSouffleRecord) then
+          begin
+            FieldInitRec := TSouffleRecord(FieldInitEntry.AsReference);
+            if FieldInitRec.Get('name', FieldNameVal) and
+               FieldInitRec.Get('fn', FieldInitFn) and
+               SouffleIsReference(FieldInitFn) and
+               (FieldInitFn.AsReference is TSouffleClosure) then
+            begin
+              { Read current field value }
+              if not Rec.Get(SouffleGetString(FieldNameVal), FieldCurVal) then
+                FieldCurVal := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+              { Call initializer(currentValue) → newValue }
+              FieldNewVal := FVM.ExecuteFunction(
+                TSouffleClosure(FieldInitFn.AsReference),
+                [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), FieldCurVal]);
+              { Write new value back }
+              Rec.Put(SouffleGetString(FieldNameVal), FieldNewVal);
+            end;
+          end;
         end;
       end;
 
@@ -14184,6 +14203,19 @@ begin
         if IsPrivate then Bp.Setters.Put('#' + Name, DecResult)
         else if IsStatic then Bp.StaticSetters.Put(Name, DecResult)
         else Bp.Setters.Put(Name, DecResult);
+      end;
+      'f':
+      begin
+        { Field decorator returns an initializer that transforms the field value }
+        if SouffleIsReference(DecResult) and Assigned(DecResult.AsReference) then
+        begin
+          { Store as [name, fn] pair so Construct can apply per-field }
+          AutoAccRec := TSouffleRecord.Create(2);
+          if Assigned(GC) then GC.AllocateObject(AutoAccRec);
+          AutoAccRec.Put('name', SouffleString(FullName));
+          AutoAccRec.Put('fn', DecResult);
+          InitArr.Push(SouffleReference(AutoAccRec));
+        end;
       end;
       'a':
       begin
