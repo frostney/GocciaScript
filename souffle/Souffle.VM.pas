@@ -253,6 +253,7 @@ var
   Arr: TSouffleArray;
   Rec: TSouffleRecord;
   RecVal: TSouffleValue;
+  PropKey: string;
   FloatIdx: Double;
 begin
   Running := True;
@@ -550,25 +551,51 @@ begin
             A := UInt8((Instruction shr 8) and $FF);
             B := UInt8((Instruction shr 16) and $FF);
             C := UInt8((Instruction shr 24) and $FF);
+            PropKey := Frame^.Template.GetConstant(C).StringValue;
             if SouffleIsReference(FRegisters[Base + B]) and
-               Assigned(FRegisters[Base + B].AsReference) then
+               Assigned(FRegisters[Base + B].AsReference) and
+               (FRegisters[Base + B].AsReference is TSouffleRecord) then
             begin
-              if (FRegisters[Base + B].AsReference is TSouffleRecord) and
-                 TSouffleRecord(FRegisters[Base + B].AsReference).Get(
-                   Frame^.Template.GetConstant(C).StringValue, RecVal) then
+              Rec := TSouffleRecord(FRegisters[Base + B].AsReference);
+              if Rec.Get(PropKey, RecVal) then
                 FRegisters[Base + A] := RecVal
-              else if DelegateGet(FRegisters[Base + B].AsReference,
-                   Frame^.Template.GetConstant(C).StringValue, RecVal) then
+              else if Rec.HasGetters and Rec.Getters.Get(PropKey, RecVal) then
+              begin
+                if SouffleIsReference(RecVal) and (RecVal.AsReference is TSouffleClosure) then
+                  FRegisters[Base + A] := ExecuteFunction(
+                    TSouffleClosure(RecVal.AsReference), [FRegisters[Base + B]])
+                else if SouffleIsReference(RecVal) and (RecVal.AsReference is TSouffleNativeClosure) then
+                  FRegisters[Base + A] := TSouffleNativeClosure(RecVal.AsReference).Invoke(
+                    FRegisters[Base + B], nil, 0)
+                else if SouffleIsReference(RecVal) and (RecVal.AsReference is TSouffleNativeFunction) then
+                  FRegisters[Base + A] := TSouffleNativeFunction(RecVal.AsReference).Invoke(
+                    FRegisters[Base + B], nil, 0)
+                else
+                  FRegisters[Base + A] := FRuntimeOps.GetProperty(
+                    FRegisters[Base + B], PropKey);
+              end
+              else if Assigned(Rec.Blueprint) and
+                      GetPropertyViaBlueprintGetter(Rec.Blueprint, PropKey,
+                        FRegisters[Base + B], RecVal) then
+                FRegisters[Base + A] := RecVal
+              else if DelegateGet(FRegisters[Base + B].AsReference, PropKey, RecVal) then
                 FRegisters[Base + A] := RecVal
               else
                 FRegisters[Base + A] := FRuntimeOps.GetProperty(
-                  FRegisters[Base + B],
-                  Frame^.Template.GetConstant(C).StringValue);
+                  FRegisters[Base + B], PropKey);
+            end
+            else if SouffleIsReference(FRegisters[Base + B]) and
+               Assigned(FRegisters[Base + B].AsReference) then
+            begin
+              if DelegateGet(FRegisters[Base + B].AsReference, PropKey, RecVal) then
+                FRegisters[Base + A] := RecVal
+              else
+                FRegisters[Base + A] := FRuntimeOps.GetProperty(
+                  FRegisters[Base + B], PropKey);
             end
             else
               FRegisters[Base + A] := FRuntimeOps.GetProperty(
-                FRegisters[Base + B],
-                Frame^.Template.GetConstant(C).StringValue);
+                FRegisters[Base + B], PropKey);
           end;
 
           OP_RECORD_SET:
