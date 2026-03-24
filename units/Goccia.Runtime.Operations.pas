@@ -13003,11 +13003,19 @@ function SouffleDeepEqual(const A, B: TSouffleValue): Boolean; forward;
 function SouffleDeepEqualArrays(const A, B: TSouffleArray): Boolean;
 var
   I: Integer;
+  VA, VB: TSouffleValue;
 begin
   if A.Count <> B.Count then Exit(False);
   for I := 0 to A.Count - 1 do
-    if not SouffleDeepEqual(A.Get(I), B.Get(I)) then
+  begin
+    VA := A.Get(I);
+    VB := B.Get(I);
+    { Treat holes as undefined }
+    if SouffleIsHole(VA) then VA := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+    if SouffleIsHole(VB) then VB := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+    if not SouffleDeepEqual(VA, VB) then
       Exit(False);
+  end;
   Result := True;
 end;
 
@@ -13031,6 +13039,13 @@ end;
 function SouffleDeepEqual(const A, B: TSouffleValue): Boolean;
 begin
   if SouffleSameValueZero(A, B) then Exit(True);
+  { Cross-type numeric comparison for deep equality }
+  if ((A.Kind = svkInteger) or (A.Kind = svkFloat)) and
+     ((B.Kind = svkInteger) or (B.Kind = svkFloat)) then
+  begin
+    Exit(GNativeArrayJoinRuntime.CoerceToNumber(A) =
+         GNativeArrayJoinRuntime.CoerceToNumber(B));
+  end;
   if A.Kind <> B.Kind then Exit(False);
   if A.Kind <> svkReference then Exit(False);
   if not SouffleIsReference(A) or not SouffleIsReference(B) then Exit(False);
@@ -13163,7 +13178,7 @@ end;
 function NativeExpect(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
-  Rec: TSouffleRecord;
+  Rec, NotRec: TSouffleRecord;
   GC: TGarbageCollector;
 begin
   if AArgCount < 1 then
@@ -13176,9 +13191,17 @@ begin
   if Assigned(GC) then GC.AllocateObject(Rec);
   Rec.Put('__actual__', AArgs^);
   Rec.Put('__negated__', SouffleBoolean(False));
-  { Matcher delegate set up in RegisterTestNatives }
   if Assigned(GNativeArrayJoinRuntime.FExpectDelegate) then
     Rec.Delegate := GNativeArrayJoinRuntime.FExpectDelegate;
+  { Create .not as a pre-built negated expect }
+  NotRec := TSouffleRecord.Create(4);
+  if Assigned(GC) then GC.AllocateObject(NotRec);
+  NotRec.Put('__actual__', AArgs^);
+  NotRec.Put('__negated__', SouffleBoolean(True));
+  if Assigned(GNativeArrayJoinRuntime.FExpectDelegate) then
+    NotRec.Delegate := GNativeArrayJoinRuntime.FExpectDelegate;
+  Rec.Put('not', SouffleReference(NotRec));
+  { Create .resolves and .rejects as pre-built wrappers }
   Result := SouffleReference(Rec);
 end;
 
