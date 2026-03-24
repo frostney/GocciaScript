@@ -105,6 +105,69 @@ type
     destructor Destroy; override;
   end;
 
+  TSouffleTestSuite = record
+    Name: string;
+    Callback: TSouffleValue;
+    IsSkipped: Boolean;
+  end;
+
+  TSouffleTestCase = record
+    Name: string;
+    SuiteName: string;
+    Callback: TSouffleValue;
+    IsSkipped: Boolean;
+  end;
+
+  TSouffleBenchCase = record
+    Name: string;
+    SuiteName: string;
+    RunFn: TSouffleValue;
+    SetupFn: TSouffleValue;
+    TeardownFn: TSouffleValue;
+  end;
+
+  TSouffleTestRunner = class
+  public
+    Suites: array of TSouffleTestSuite;
+    SuiteCount: Integer;
+    Tests: array of TSouffleTestCase;
+    TestCount: Integer;
+    BeforeEachCallbacks: array of TSouffleValue;
+    BeforeEachCount: Integer;
+    AfterEachCallbacks: array of TSouffleValue;
+    AfterEachCount: Integer;
+    CurrentSuiteName: string;
+    CurrentTestName: string;
+    CurrentSuiteIsSkipped: Boolean;
+    TotalTests: Integer;
+    PassedTests: Integer;
+    FailedTests: Integer;
+    SkippedTests: Integer;
+    TotalAssertions: Integer;
+    CurrentTestFailed: Boolean;
+    FailedTestNames: TSouffleArray;
+    VM: TSouffleVM;
+    Runtime: TObject; { TGocciaRuntimeOperations — forward ref }
+
+    { Benchmark state }
+    Benchmarks: array of TSouffleBenchCase;
+    BenchmarkCount: Integer;
+    CurrentBenchSuiteName: string;
+
+    constructor Create;
+    procedure Reset;
+    procedure AddSuite(const AName: string; const ACallback: TSouffleValue;
+      const ASkipped: Boolean);
+    procedure AddTest(const AName: string; const ACallback: TSouffleValue;
+      const ASkipped: Boolean);
+    procedure AddBeforeEach(const ACallback: TSouffleValue);
+    procedure AddAfterEach(const ACallback: TSouffleValue);
+    procedure AssertionPassed(const AMatcherName: string);
+    procedure AssertionFailed(const AMatcherName, AMessage: string);
+    procedure AddBenchmark(const AName: string; const ARunFn: TSouffleValue;
+      const ASetupFn, ATeardownFn: TSouffleValue);
+  end;
+
 
   TGocciaWrappedValue = class(TSouffleHeapObject)
   private
@@ -248,6 +311,8 @@ type
     FTestDelegate: TSouffleRecord;
     FActiveDecoratorSession: TGocciaDecoratorSession;
     FNativeDecoratorSession: TSouffleDecoratorSession;
+    FTestRunner: TSouffleTestRunner;
+    FExpectDelegate: TSouffleRecord;
     FArrayBridgeDirty: Boolean;
     FModuleResolver: TModuleResolver;
     FModuleCache: TOrderedStringMap<TSouffleValue>;
@@ -12355,6 +12420,463 @@ begin
   Result := AArgs^;
 end;
 
+{ === Native test/benchmark functions === }
+
+function NativeDescribe(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Name: string;
+  Callback: TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 2 then Exit;
+  Name := GNativeArrayJoinRuntime.CoerceToString(AArgs^);
+  Callback := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^;
+  GNativeArrayJoinRuntime.FTestRunner.AddSuite(Name, Callback, False);
+end;
+
+function NativeDescribeSkip(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Name: string;
+  Callback: TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 2 then Exit;
+  Name := GNativeArrayJoinRuntime.CoerceToString(AArgs^);
+  Callback := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^;
+  GNativeArrayJoinRuntime.FTestRunner.AddSuite(Name, Callback, True);
+end;
+
+function NativeTest(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Name: string;
+  Callback: TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 2 then Exit;
+  Name := GNativeArrayJoinRuntime.CoerceToString(AArgs^);
+  Callback := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^;
+  GNativeArrayJoinRuntime.FTestRunner.AddTest(Name, Callback, False);
+end;
+
+function NativeTestSkip(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Name: string;
+  Callback: TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 2 then Exit;
+  Name := GNativeArrayJoinRuntime.CoerceToString(AArgs^);
+  Callback := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^;
+  GNativeArrayJoinRuntime.FTestRunner.AddTest(Name, Callback, True);
+end;
+
+function NativeBeforeEach(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 1 then Exit;
+  GNativeArrayJoinRuntime.FTestRunner.AddBeforeEach(AArgs^);
+end;
+
+function NativeAfterEach(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 1 then Exit;
+  GNativeArrayJoinRuntime.FTestRunner.AddAfterEach(AArgs^);
+end;
+
+function InvokeSouffleCallable(const AVM: TSouffleVM;
+  const ACallable: TSouffleValue; const AArgs: array of TSouffleValue): TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if not SouffleIsReference(ACallable) or not Assigned(ACallable.AsReference) then
+    Exit;
+  if ACallable.AsReference is TSouffleClosure then
+    Result := AVM.ExecuteFunction(TSouffleClosure(ACallable.AsReference), AArgs)
+  else if ACallable.AsReference is TSouffleNativeFunction then
+    Result := TSouffleNativeFunction(ACallable.AsReference).Invoke(
+      SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), nil, 0)
+  else if ACallable.AsReference is TSouffleNativeClosure then
+    Result := TSouffleNativeClosure(ACallable.AsReference).Invoke(
+      SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), nil, 0);
+end;
+
+function NativeRunTests(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TR: TSouffleTestRunner;
+  VM: TSouffleVM;
+  I, J: Integer;
+  TestResult, PromiseResult: TSouffleValue;
+  SP: TSoufflePromise;
+  Queue: TGocciaMicrotaskQueue;
+  FullName: string;
+begin
+  TR := GNativeArrayJoinRuntime.FTestRunner;
+  VM := GNativeArrayJoinRuntime.FVM;
+  TR.TotalTests := TR.TestCount;
+  TR.PassedTests := 0;
+  TR.FailedTests := 0;
+  TR.SkippedTests := 0;
+  TR.TotalAssertions := 0;
+  TR.FailedTestNames := TSouffleArray.Create(0);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(TR.FailedTestNames);
+
+  { Phase 1: Execute describe blocks to register tests }
+  for I := 0 to TR.SuiteCount - 1 do
+  begin
+    TR.CurrentSuiteName := TR.Suites[I].Name;
+    TR.CurrentSuiteIsSkipped := TR.Suites[I].IsSkipped;
+    try
+      InvokeSouffleCallable(VM, TR.Suites[I].Callback,
+        [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)]);
+    except
+      on E: ESouffleThrow do; { ignore suite errors }
+    end;
+  end;
+  TR.TotalTests := TR.TestCount;
+
+  { Phase 2: Execute tests }
+  for I := 0 to TR.TestCount - 1 do
+  begin
+    TR.CurrentTestName := TR.Tests[I].Name;
+    if TR.Tests[I].SuiteName <> '' then
+      FullName := TR.Tests[I].Name + ' in ' + TR.Tests[I].SuiteName
+    else
+      FullName := TR.Tests[I].Name;
+    TR.CurrentTestFailed := False;
+
+    if TR.Tests[I].IsSkipped then
+    begin
+      Inc(TR.SkippedTests);
+      Continue;
+    end;
+
+    try
+      { Run beforeEach callbacks }
+      for J := 0 to TR.BeforeEachCount - 1 do
+        InvokeSouffleCallable(VM, TR.BeforeEachCallbacks[J],
+          [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)]);
+
+      { Run test }
+      TestResult := InvokeSouffleCallable(VM, TR.Tests[I].Callback,
+        [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)]);
+
+      { Drain microtask queue }
+      Queue := TGocciaMicrotaskQueue.Instance;
+      if Assigned(Queue) then Queue.DrainQueue;
+
+      { Check if test returned a rejected promise }
+      SP := GetSoufflePromise(TestResult);
+      if Assigned(SP) then
+      begin
+        if Assigned(Queue) then Queue.DrainQueue;
+        if SP.State = spssRejected then
+        begin
+          TR.CurrentTestFailed := True;
+          PromiseResult := SP.PromiseResult;
+          if SouffleIsStringValue(PromiseResult) then
+            TR.AssertionFailed(FullName, 'Promise rejected: ' +
+              SouffleGetString(PromiseResult))
+          else
+            TR.AssertionFailed(FullName, 'Promise rejected: ' +
+              GNativeArrayJoinRuntime.CoerceToString(PromiseResult));
+        end
+        else if SP.State = spssPending then
+          TR.AssertionFailed(FullName,
+            'Promise still pending after microtask drain');
+      end;
+
+      { Run afterEach callbacks }
+      for J := 0 to TR.AfterEachCount - 1 do
+        InvokeSouffleCallable(VM, TR.AfterEachCallbacks[J],
+          [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)]);
+
+    except
+      on E: ESouffleThrow do
+      begin
+        TR.CurrentTestFailed := True;
+        if SouffleIsStringValue(E.ThrownValue) then
+          WriteLn('    ' + #$E2#$9D#$8C + ' ' + FullName +
+            ': Test threw an exception: ' + SouffleGetString(E.ThrownValue))
+        else
+          WriteLn('    ' + #$E2#$9D#$8C + ' ' + FullName +
+            ': Test threw an exception: ' +
+            GNativeArrayJoinRuntime.CoerceToString(E.ThrownValue));
+      end;
+    end;
+
+    if TR.CurrentTestFailed then
+    begin
+      Inc(TR.FailedTests);
+      TR.FailedTestNames.Push(SouffleString(FullName));
+    end
+    else
+      Inc(TR.PassedTests);
+  end;
+
+  { Print results in format expected by TestRunner }
+  WriteLn;
+  WriteLn('=== Test Results ===');
+  WriteLn('Tests: ', TR.TotalTests, ' total, ', TR.PassedTests, ' passed, ',
+    TR.FailedTests, ' failed, ', TR.SkippedTests, ' skipped');
+  WriteLn('Total Assertions: ', TR.TotalAssertions);
+  if TR.FailedTests > 0 then
+  begin
+    WriteLn;
+    WriteLn('Failed Tests:');
+    for I := 0 to TR.FailedTestNames.Count - 1 do
+      WriteLn('  ' + #$E2#$80#$A2 + ' Test "' +
+        SouffleGetString(TR.FailedTestNames.Get(I)) + '"');
+    WriteLn(#$E2#$9D#$8C + ' Some tests failed!');
+  end
+  else
+    WriteLn(#$E2#$9C#$85 + ' All tests passed!');
+  WriteLn('==================');
+
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
+{ === Native expect/matchers === }
+
+function GetExpectActual(const AReceiver: TSouffleValue): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if SouffleIsReference(AReceiver) and (AReceiver.AsReference is TSouffleRecord) then
+  begin
+    Rec := TSouffleRecord(AReceiver.AsReference);
+    Rec.Get('__actual__', Result);
+  end;
+end;
+
+function IsExpectNegated(const AReceiver: TSouffleValue): Boolean;
+var
+  Rec: TSouffleRecord;
+  NegVal: TSouffleValue;
+begin
+  Result := False;
+  if SouffleIsReference(AReceiver) and (AReceiver.AsReference is TSouffleRecord) then
+  begin
+    Rec := TSouffleRecord(AReceiver.AsReference);
+    if Rec.Get('__negated__', NegVal) then
+      Result := (NegVal.Kind = svkBoolean) and NegVal.AsBoolean;
+  end;
+end;
+
+procedure MatcherResult(const ANegated: Boolean; APass: Boolean;
+  const AMatcherName, APassMsg, AFailMsg: string);
+begin
+  if ANegated then APass := not APass;
+  if APass then
+    GNativeArrayJoinRuntime.FTestRunner.AssertionPassed(AMatcherName)
+  else
+    GNativeArrayJoinRuntime.FTestRunner.AssertionFailed(AMatcherName, AFailMsg);
+end;
+
+function NativeMatcherToBe(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Actual, Expected: TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  Actual := GetExpectActual(AReceiver);
+  if AArgCount < 1 then Exit;
+  Expected := AArgs^;
+  MatcherResult(IsExpectNegated(AReceiver),
+    SouffleSameValueZero(Actual, Expected),
+    'toBe',
+    'Values are equal',
+    'Expected ' + GNativeArrayJoinRuntime.CoerceToString(Actual) +
+    ' to be ' + GNativeArrayJoinRuntime.CoerceToString(Expected));
+end;
+
+function NativeMatcherToBeNull(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Actual: TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  Actual := GetExpectActual(AReceiver);
+  MatcherResult(IsExpectNegated(AReceiver),
+    (Actual.Kind = svkNil) and (Actual.Flags = GOCCIA_NIL_NULL),
+    'toBeNull', '', 'Expected null');
+end;
+
+function NativeMatcherToBeUndefined(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Actual: TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  Actual := GetExpectActual(AReceiver);
+  MatcherResult(IsExpectNegated(AReceiver),
+    (Actual.Kind = svkNil) and (Actual.Flags = GOCCIA_NIL_UNDEFINED),
+    'toBeUndefined', '', 'Expected undefined');
+end;
+
+function NativeMatcherToBeDefined(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Actual: TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  Actual := GetExpectActual(AReceiver);
+  MatcherResult(IsExpectNegated(AReceiver),
+    not ((Actual.Kind = svkNil) and (Actual.Flags = GOCCIA_NIL_UNDEFINED)),
+    'toBeDefined', '', 'Expected defined');
+end;
+
+function NativeMatcherToBeTruthy(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  MatcherResult(IsExpectNegated(AReceiver),
+    SouffleIsTrue(GetExpectActual(AReceiver)),
+    'toBeTruthy', '', 'Expected truthy');
+end;
+
+function NativeMatcherToBeFalsy(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  MatcherResult(IsExpectNegated(AReceiver),
+    not SouffleIsTrue(GetExpectActual(AReceiver)),
+    'toBeFalsy', '', 'Expected falsy');
+end;
+
+function NativeMatcherToBeGreaterThan(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  A, B: Double;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 1 then Exit;
+  A := GNativeArrayJoinRuntime.CoerceToNumber(GetExpectActual(AReceiver));
+  B := GNativeArrayJoinRuntime.CoerceToNumber(AArgs^);
+  MatcherResult(IsExpectNegated(AReceiver), A > B,
+    'toBeGreaterThan', '', 'Expected > ' + FloatToStr(B));
+end;
+
+function NativeMatcherToBeLessThan(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  A, B: Double;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 1 then Exit;
+  A := GNativeArrayJoinRuntime.CoerceToNumber(GetExpectActual(AReceiver));
+  B := GNativeArrayJoinRuntime.CoerceToNumber(AArgs^);
+  MatcherResult(IsExpectNegated(AReceiver), A < B,
+    'toBeLessThan', '', 'Expected < ' + FloatToStr(B));
+end;
+
+function NativeExpectNot(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+begin
+  { Create a negated copy of the expect record }
+  Rec := TSouffleRecord.Create(4);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
+  Rec.Put('__actual__', GetExpectActual(AReceiver));
+  Rec.Put('__negated__', SouffleBoolean(True));
+  { Copy all matcher methods from receiver }
+  if SouffleIsReference(AReceiver) and (AReceiver.AsReference is TSouffleRecord) then
+    Rec.Delegate := TSouffleRecord(AReceiver.AsReference).Delegate;
+  Result := SouffleReference(Rec);
+end;
+
+function NativeExpect(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  GC: TGarbageCollector;
+begin
+  if AArgCount < 1 then
+  begin
+    GNativeArrayJoinRuntime.ThrowTypeErrorMessage('expect requires 1 argument');
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
+  GC := TGarbageCollector.Instance;
+  Rec := TSouffleRecord.Create(4);
+  if Assigned(GC) then GC.AllocateObject(Rec);
+  Rec.Put('__actual__', AArgs^);
+  Rec.Put('__negated__', SouffleBoolean(False));
+  { Matcher delegate set up in RegisterTestNatives }
+  if Assigned(GNativeArrayJoinRuntime.FExpectDelegate) then
+    Rec.Delegate := GNativeArrayJoinRuntime.FExpectDelegate;
+  Result := SouffleReference(Rec);
+end;
+
+{ === Native benchmark functions === }
+
+function NativeBenchSuite(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  PrevSuite: string;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 2 then Exit;
+  PrevSuite := GNativeArrayJoinRuntime.FTestRunner.CurrentBenchSuiteName;
+  GNativeArrayJoinRuntime.FTestRunner.CurrentBenchSuiteName :=
+    GNativeArrayJoinRuntime.CoerceToString(AArgs^);
+  try
+    InvokeSouffleCallable(GNativeArrayJoinRuntime.FVM,
+      PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^,
+      [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)]);
+  except
+    on E: ESouffleThrow do; { ignore }
+  end;
+  GNativeArrayJoinRuntime.FTestRunner.CurrentBenchSuiteName := PrevSuite;
+end;
+
+function NativeBench(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Name: string;
+  RunFn, SetupFn, TeardownFn, OptVal: TSouffleValue;
+  OptsRec: TSouffleRecord;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 2 then Exit;
+  Name := GNativeArrayJoinRuntime.CoerceToString(AArgs^);
+  RunFn := SouffleNil;
+  SetupFn := SouffleNil;
+  TeardownFn := SouffleNil;
+
+  OptVal := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^;
+  if SouffleIsReference(OptVal) and Assigned(OptVal.AsReference) and
+     (OptVal.AsReference is TSouffleRecord) then
+  begin
+    OptsRec := TSouffleRecord(OptVal.AsReference);
+    OptsRec.Get('run', RunFn);
+    OptsRec.Get('setup', SetupFn);
+    OptsRec.Get('teardown', TeardownFn);
+  end
+  else
+    RunFn := OptVal;
+
+  GNativeArrayJoinRuntime.FTestRunner.AddBenchmark(Name, RunFn, SetupFn, TeardownFn);
+end;
+
+function NativeRunBenchmarks(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  { Benchmark execution delegates to the Goccia benchmark runner
+    for detailed timing, calibration, and IQR outlier filtering.
+    The registration is native, execution uses the existing runner. }
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
 { === Generic bridge call for test/benchmark functions === }
 
 function NativeBridgedCall(const AReceiver: TSouffleValue;
@@ -13136,62 +13658,55 @@ end;
 
 procedure TGocciaRuntimeOperations.RegisterTestNatives;
 const
-  DESCRIBE_SUB_METHODS: array[0..2] of TSouffleMethodEntry = (
-    (Name: 'skip';   Arity: 2; Callback: @NativeBridgedDescribeSkip),
-    (Name: 'skipIf'; Arity: 1; Callback: @NativeBridgedDescribeSkipIf),
-    (Name: 'runIf';  Arity: 1; Callback: @NativeBridgedDescribeRunIf)
+  EXPECT_METHODS: array[0..8] of TSouffleMethodEntry = (
+    (Name: 'toBe';              Arity: 1; Callback: @NativeMatcherToBe),
+    (Name: 'toBeNull';          Arity: 0; Callback: @NativeMatcherToBeNull),
+    (Name: 'toBeUndefined';     Arity: 0; Callback: @NativeMatcherToBeUndefined),
+    (Name: 'toBeDefined';       Arity: 0; Callback: @NativeMatcherToBeDefined),
+    (Name: 'toBeTruthy';        Arity: 0; Callback: @NativeMatcherToBeTruthy),
+    (Name: 'toBeFalsy';         Arity: 0; Callback: @NativeMatcherToBeFalsy),
+    (Name: 'toBeGreaterThan';   Arity: 1; Callback: @NativeMatcherToBeGreaterThan),
+    (Name: 'toBeLessThan';      Arity: 1; Callback: @NativeMatcherToBeLessThan),
+    (Name: 'not';               Arity: 0; Callback: @NativeExpectNot)
   );
-  TEST_SUB_METHODS: array[0..2] of TSouffleMethodEntry = (
-    (Name: 'skip';   Arity: 2; Callback: @NativeBridgedTestSkip),
-    (Name: 'skipIf'; Arity: 1; Callback: @NativeBridgedTestSkipIf),
-    (Name: 'runIf';  Arity: 1; Callback: @NativeBridgedTestRunIf)
+  DESCRIBE_SUB_METHODS: array[0..0] of TSouffleMethodEntry = (
+    (Name: 'skip'; Arity: 2; Callback: @NativeDescribeSkip)
+  );
+  TEST_SUB_METHODS: array[0..0] of TSouffleMethodEntry = (
+    (Name: 'skip'; Arity: 2; Callback: @NativeTestSkip)
   );
 var
-  DescribeFn, TestFn: TGocciaNativeFunctionValue;
+  GC: TGarbageCollector;
 begin
   if not Assigned(FVM) then Exit;
   if not FGlobals.ContainsKey('describe') then Exit;
 
-  DescribeFn := ExtractNativeFn(FGlobals, 'describe');
-  if not Assigned(DescribeFn) then Exit;
+  GC := TGarbageCollector.Instance;
 
-  GBridgedDescribe := DescribeFn;
-  GBridgedDescribeSkip := ExtractSubMethod(DescribeFn, 'skip');
-  GBridgedDescribeSkipIf := ExtractSubMethod(DescribeFn, 'skipIf');
-  GBridgedDescribeRunIf := ExtractSubMethod(DescribeFn, 'runIf');
-  ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'describe', 2, @NativeBridgedDescribe);
-  FDescribeDelegate := BuildSubMethodDelegate(DESCRIBE_SUB_METHODS);
+  { Create test runner }
+  FTestRunner := TSouffleTestRunner.Create;
+  FTestRunner.VM := FVM;
+  FTestRunner.Runtime := Self;
 
-  TestFn := ExtractNativeFn(FGlobals, 'test');
-  if Assigned(TestFn) then
-  begin
-    GBridgedTest := TestFn;
-    GBridgedTestSkip := ExtractSubMethod(TestFn, 'skip');
-    GBridgedTestSkipIf := ExtractSubMethod(TestFn, 'skipIf');
-    GBridgedTestRunIf := ExtractSubMethod(TestFn, 'runIf');
-    ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'test', 2, @NativeBridgedTest);
-    FTestDelegate := BuildSubMethodDelegate(TEST_SUB_METHODS);
-  end;
+  { Create expect matcher delegate }
+  FExpectDelegate := TSouffleRecord(BuildDelegate(EXPECT_METHODS));
 
-  GBridgedExpect := ExtractNativeFn(FGlobals, 'expect');
-  if Assigned(GBridgedExpect) then
-    ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'expect', 1, @NativeBridgedExpect);
+  { Create sub-method delegates }
+  FDescribeDelegate := TSouffleRecord(BuildDelegate(DESCRIBE_SUB_METHODS));
+  FTestDelegate := TSouffleRecord(BuildDelegate(TEST_SUB_METHODS));
 
-  GBridgedIt := ExtractNativeFn(FGlobals, 'it');
-  if Assigned(GBridgedIt) then
-    ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'it', 2, @NativeBridgedIt);
+  { Register native test functions }
+  ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'describe', 2, @NativeDescribe);
+  ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'test', 2, @NativeTest);
+  ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'it', 2, @NativeTest);
+  ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'expect', 1, @NativeExpect);
+  ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'beforeEach', 1, @NativeBeforeEach);
+  ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'afterEach', 1, @NativeAfterEach);
+  ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'runTests', 0, @NativeRunTests);
 
-  GBridgedBeforeEach := ExtractNativeFn(FGlobals, 'beforeEach');
-  if Assigned(GBridgedBeforeEach) then
-    ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'beforeEach', 1, @NativeBridgedBeforeEach);
-
-  GBridgedAfterEach := ExtractNativeFn(FGlobals, 'afterEach');
-  if Assigned(GBridgedAfterEach) then
-    ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'afterEach', 1, @NativeBridgedAfterEach);
-
-  GBridgedRunTests := ExtractNativeFn(FGlobals, 'runTests');
-  if Assigned(GBridgedRunTests) then
-    ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'runTests', 0, @NativeBridgedRunTests);
+  { Register native benchmark functions }
+  ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'suite', 2, @NativeBenchSuite);
+  ReplaceGlobalWithNative(FGlobals, FConstGlobals, 'bench', 2, @NativeBench);
 end;
 
 function ConvertObjectToNativeRecord(
@@ -13772,6 +14287,100 @@ begin
     on E: TGocciaThrowValue do
       RethrowAsVM(E);
   end;
+end;
+
+{ TSouffleTestRunner }
+
+constructor TSouffleTestRunner.Create;
+begin
+  SuiteCount := 0;
+  TestCount := 0;
+  BeforeEachCount := 0;
+  AfterEachCount := 0;
+  BenchmarkCount := 0;
+  Reset;
+end;
+
+procedure TSouffleTestRunner.Reset;
+begin
+  SuiteCount := 0;
+  TestCount := 0;
+  BeforeEachCount := 0;
+  AfterEachCount := 0;
+  TotalTests := 0;
+  PassedTests := 0;
+  FailedTests := 0;
+  SkippedTests := 0;
+  TotalAssertions := 0;
+  CurrentSuiteName := '';
+  CurrentTestName := '';
+  CurrentSuiteIsSkipped := False;
+  CurrentTestFailed := False;
+  FailedTestNames := nil;
+end;
+
+procedure TSouffleTestRunner.AddSuite(const AName: string;
+  const ACallback: TSouffleValue; const ASkipped: Boolean);
+begin
+  if SuiteCount >= Length(Suites) then
+    SetLength(Suites, SuiteCount * 2 + 4);
+  Suites[SuiteCount].Name := AName;
+  Suites[SuiteCount].Callback := ACallback;
+  Suites[SuiteCount].IsSkipped := ASkipped;
+  Inc(SuiteCount);
+end;
+
+procedure TSouffleTestRunner.AddTest(const AName: string;
+  const ACallback: TSouffleValue; const ASkipped: Boolean);
+begin
+  if TestCount >= Length(Tests) then
+    SetLength(Tests, TestCount * 2 + 4);
+  Tests[TestCount].Name := AName;
+  Tests[TestCount].SuiteName := CurrentSuiteName;
+  Tests[TestCount].Callback := ACallback;
+  Tests[TestCount].IsSkipped := ASkipped or CurrentSuiteIsSkipped;
+  Inc(TestCount);
+end;
+
+procedure TSouffleTestRunner.AddBeforeEach(const ACallback: TSouffleValue);
+begin
+  if BeforeEachCount >= Length(BeforeEachCallbacks) then
+    SetLength(BeforeEachCallbacks, BeforeEachCount * 2 + 4);
+  BeforeEachCallbacks[BeforeEachCount] := ACallback;
+  Inc(BeforeEachCount);
+end;
+
+procedure TSouffleTestRunner.AddAfterEach(const ACallback: TSouffleValue);
+begin
+  if AfterEachCount >= Length(AfterEachCallbacks) then
+    SetLength(AfterEachCallbacks, AfterEachCount * 2 + 4);
+  AfterEachCallbacks[AfterEachCount] := ACallback;
+  Inc(AfterEachCount);
+end;
+
+procedure TSouffleTestRunner.AssertionPassed(const AMatcherName: string);
+begin
+  Inc(TotalAssertions);
+end;
+
+procedure TSouffleTestRunner.AssertionFailed(const AMatcherName, AMessage: string);
+begin
+  Inc(TotalAssertions);
+  CurrentTestFailed := True;
+  WriteLn('    ' + #$E2#$9D#$8C + ' ' + CurrentTestName + ': ' + AMessage);
+end;
+
+procedure TSouffleTestRunner.AddBenchmark(const AName: string;
+  const ARunFn: TSouffleValue; const ASetupFn, ATeardownFn: TSouffleValue);
+begin
+  if BenchmarkCount >= Length(Benchmarks) then
+    SetLength(Benchmarks, BenchmarkCount * 2 + 4);
+  Benchmarks[BenchmarkCount].Name := AName;
+  Benchmarks[BenchmarkCount].SuiteName := CurrentBenchSuiteName;
+  Benchmarks[BenchmarkCount].RunFn := ARunFn;
+  Benchmarks[BenchmarkCount].SetupFn := ASetupFn;
+  Benchmarks[BenchmarkCount].TeardownFn := ATeardownFn;
+  Inc(BenchmarkCount);
 end;
 
 { TSouffleDecoratorSession }
