@@ -12356,6 +12356,7 @@ var
   I: Integer;
   Key: string;
   Val: TSouffleValue;
+  SResult: TSouffleValue;
   SrcMap: TGocciaSouffleMap;
   ClonedMap: TGocciaSouffleMap;
   SrcSet: TGocciaSouffleSet;
@@ -12381,6 +12382,18 @@ begin
     if ARec.Get(Key, Val) then
       NewRec.Put(Key, NativeSouffleStructuredClone(Val, AMemory));
   end;
+  { Clone accessor properties by reading getter values }
+  if ARec.HasGetters then
+    for I := 0 to ARec.Getters.Count - 1 do
+    begin
+      Key := ARec.Getters.GetOrderedKey(I);
+      if ARec.Getters.Get(Key, Val) then
+      begin
+        if GNativeArrayJoinRuntime.TryInvokeGetter(Val,
+          SouffleReference(ARec), SResult) then
+          NewRec.Put(Key, NativeSouffleStructuredClone(SResult, AMemory));
+      end;
+    end;
   { Clone slots (Map/Set/ArrayBuffer data) }
   if Assigned(ARec.Blueprint) and (ARec.Blueprint.SlotCount > 0) then
   begin
