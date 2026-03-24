@@ -7,6 +7,9 @@ interface
 uses
   Generics.Collections,
 
+  Souffle.Value,
+
+  Goccia.Runtime.Collections,
   Goccia.Values.Primitives;
 
 type
@@ -19,11 +22,23 @@ type
     ReactionType: TPromiseReactionType;
   end;
 
+  TSouffleMicrotask = record
+    Handler: TSouffleValue;
+    Value: TSouffleValue;
+    ResultPromise: TSoufflePromise;
+    ReactionType: TPromiseReactionType;
+  end;
+
+  TSouffleMicrotaskInvoker = procedure(const AHandler, AValue: TSouffleValue;
+    out AResult: TSouffleValue; out AHadError: Boolean) of object;
+
   TGocciaMicrotaskQueue = class
   private class var
     FInstance: TGocciaMicrotaskQueue;
   private
     FQueue: TList<TGocciaMicrotask>;
+    FSouffleQueue: TList<TSouffleMicrotask>;
+    FSouffleInvoker: TSouffleMicrotaskInvoker;
   public
     class function Instance: TGocciaMicrotaskQueue;
     class procedure Initialize;
@@ -33,9 +48,12 @@ type
     destructor Destroy; override;
 
     procedure Enqueue(const AMicrotask: TGocciaMicrotask);
+    procedure EnqueueSouffle(const AMicrotask: TSouffleMicrotask);
     procedure DrainQueue;
     procedure ClearQueue;
     function HasPending: Boolean;
+
+    property SouffleInvoker: TSouffleMicrotaskInvoker read FSouffleInvoker write FSouffleInvoker;
   end;
 
 implementation
@@ -69,10 +87,13 @@ end;
 constructor TGocciaMicrotaskQueue.Create;
 begin
   FQueue := TList<TGocciaMicrotask>.Create;
+  FSouffleQueue := TList<TSouffleMicrotask>.Create;
+  FSouffleInvoker := nil;
 end;
 
 destructor TGocciaMicrotaskQueue.Destroy;
 begin
+  FSouffleQueue.Free;
   FQueue.Free;
   inherited;
 end;
@@ -82,6 +103,11 @@ begin
   FQueue.Add(AMicrotask);
 end;
 
+procedure TGocciaMicrotaskQueue.EnqueueSouffle(const AMicrotask: TSouffleMicrotask);
+begin
+  FSouffleQueue.Add(AMicrotask);
+end;
+
 procedure TGocciaMicrotaskQueue.DrainQueue;
 var
   I: Integer;
@@ -89,6 +115,9 @@ var
   Promise: TGocciaPromiseValue;
   HandlerResult: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  STask: TSouffleMicrotask;
+  SResult: TSouffleValue;
+  SHadError: Boolean;
 begin
   I := 0;
   while I < FQueue.Count do
@@ -160,6 +189,41 @@ begin
   if I > 0 then
     FQueue.Clear;
 
+  { Process Souffle microtasks }
+  if Assigned(FSouffleInvoker) then
+  begin
+    I := 0;
+    while I < FSouffleQueue.Count do
+    begin
+      STask := FSouffleQueue[I];
+      Inc(I);
+
+      if SouffleIsReference(STask.Handler) and Assigned(STask.Handler.AsReference) then
+      begin
+        FSouffleInvoker(STask.Handler, STask.Value, SResult, SHadError);
+        if Assigned(STask.ResultPromise) then
+        begin
+          if SHadError then
+            STask.ResultPromise.Reject(SResult)
+          else
+            STask.ResultPromise.Resolve(SResult);
+        end;
+      end
+      else if Assigned(STask.ResultPromise) then
+      begin
+        case STask.ReactionType of
+          prtFulfill: STask.ResultPromise.Resolve(STask.Value);
+          prtReject: STask.ResultPromise.Reject(STask.Value);
+          prtThenableResolve:
+            if SouffleIsReference(STask.Value) and Assigned(STask.Value.AsReference) and
+               (STask.Value.AsReference is TSoufflePromise) then
+              STask.ResultPromise.SubscribeTo(TSoufflePromise(STask.Value.AsReference));
+        end;
+      end;
+    end;
+    if I > 0 then
+      FSouffleQueue.Clear;
+  end;
 end;
 
 procedure TGocciaMicrotaskQueue.ClearQueue;
@@ -175,11 +239,12 @@ begin
         TGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
     end;
   FQueue.Clear;
+  FSouffleQueue.Clear;
 end;
 
 function TGocciaMicrotaskQueue.HasPending: Boolean;
 begin
-  Result := FQueue.Count > 0;
+  Result := (FQueue.Count > 0) or (FSouffleQueue.Count > 0);
 end;
 
 end.

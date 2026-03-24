@@ -88,13 +88,49 @@ type
     function DebugString: string; override;
   end;
 
+  TSoufflePromiseState = (spssPending, spssFulfilled, spssRejected);
+
+  TSoufflePromise = class;
+
+  TSoufflePromiseReaction = record
+    OnFulfilled: TSouffleValue;
+    OnRejected: TSouffleValue;
+    ResultPromise: TSoufflePromise;
+  end;
+
+  TSoufflePromise = class(TSouffleHeapObject)
+  private
+    FState: TSoufflePromiseState;
+    FResult: TSouffleValue;
+    FReactions: array of TSoufflePromiseReaction;
+    FReactionCount: Integer;
+    FAlreadyResolved: Boolean;
+  public
+    constructor Create;
+    procedure Resolve(const AValue: TSouffleValue);
+    procedure Reject(const AReason: TSouffleValue);
+    procedure AddReaction(const AOnFulfilled, AOnRejected: TSouffleValue;
+      const AResultPromise: TSoufflePromise);
+    function InvokeThen(const AOnFulfilled, AOnRejected: TSouffleValue): TSoufflePromise;
+    procedure TriggerReactions;
+    procedure SubscribeTo(const APromise: TSoufflePromise);
+    procedure MarkReferences; override;
+    function DebugString: string; override;
+
+    property State: TSoufflePromiseState read FState;
+    property PromiseResult: TSouffleValue read FResult;
+    property AlreadyResolved: Boolean read FAlreadyResolved write FAlreadyResolved;
+  end;
+
 function SouffleSameValueZero(const A, B: TSouffleValue): Boolean;
 
 implementation
 
 uses
   GarbageCollector.Generic,
-  Souffle.Compound;
+  Souffle.Compound,
+
+  Goccia.MicrotaskQueue;
 
 function SouffleSameValueZero(const A, B: TSouffleValue): Boolean;
 var
@@ -423,6 +459,205 @@ end;
 function TGocciaSouffleSetIterator.DebugString: string;
 begin
   Result := 'SetIterator';
+end;
+
+{ TSoufflePromise }
+
+constructor TSoufflePromise.Create;
+begin
+  inherited Create(0);
+  FState := spssPending;
+  FResult := SouffleNilWithFlags(0);
+  FReactionCount := 0;
+  FAlreadyResolved := False;
+end;
+
+procedure TSoufflePromise.Resolve(const AValue: TSouffleValue);
+var
+  Task: TSouffleMicrotask;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  if FState <> spssPending then Exit;
+
+  { Self-resolution check }
+  if SouffleIsReference(AValue) and Assigned(AValue.AsReference) and
+     (AValue.AsReference = Self) then
+  begin
+    FState := spssRejected;
+    FResult := SouffleNil; { TODO: create TypeError }
+    TriggerReactions;
+    Exit;
+  end;
+
+  { Promise chaining: if value is another promise, subscribe }
+  if SouffleIsReference(AValue) and Assigned(AValue.AsReference) and
+     (AValue.AsReference is TSoufflePromise) then
+  begin
+    Queue := TGocciaMicrotaskQueue.Instance;
+    if Assigned(Queue) then
+    begin
+      Task.Handler := SouffleNil;
+      Task.Value := AValue;
+      Task.ResultPromise := Self;
+      Task.ReactionType := prtThenableResolve;
+      Queue.EnqueueSouffle(Task);
+    end;
+    Exit;
+  end;
+
+  FState := spssFulfilled;
+  FResult := AValue;
+  TriggerReactions;
+end;
+
+procedure TSoufflePromise.Reject(const AReason: TSouffleValue);
+begin
+  if FState <> spssPending then Exit;
+  FState := spssRejected;
+  FResult := AReason;
+  TriggerReactions;
+end;
+
+procedure TSoufflePromise.AddReaction(const AOnFulfilled, AOnRejected: TSouffleValue;
+  const AResultPromise: TSoufflePromise);
+begin
+  if FReactionCount >= Length(FReactions) then
+    SetLength(FReactions, FReactionCount * 2 + 4);
+  FReactions[FReactionCount].OnFulfilled := AOnFulfilled;
+  FReactions[FReactionCount].OnRejected := AOnRejected;
+  FReactions[FReactionCount].ResultPromise := AResultPromise;
+  Inc(FReactionCount);
+end;
+
+function TSoufflePromise.InvokeThen(
+  const AOnFulfilled, AOnRejected: TSouffleValue): TSoufflePromise;
+var
+  Task: TSouffleMicrotask;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  Result := TSoufflePromise.Create;
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Result);
+  Queue := TGocciaMicrotaskQueue.Instance;
+
+  case FState of
+    spssPending:
+      AddReaction(AOnFulfilled, AOnRejected, Result);
+    spssFulfilled:
+    begin
+      Task.Handler := AOnFulfilled;
+      Task.Value := FResult;
+      Task.ResultPromise := Result;
+      Task.ReactionType := prtFulfill;
+      if Assigned(Queue) then
+        Queue.EnqueueSouffle(Task);
+    end;
+    spssRejected:
+    begin
+      Task.Handler := AOnRejected;
+      Task.Value := FResult;
+      Task.ResultPromise := Result;
+      Task.ReactionType := prtReject;
+      if Assigned(Queue) then
+        Queue.EnqueueSouffle(Task);
+    end;
+  end;
+end;
+
+procedure TSoufflePromise.TriggerReactions;
+var
+  I: Integer;
+  Task: TSouffleMicrotask;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  if FReactionCount = 0 then Exit;
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if not Assigned(Queue) then Exit;
+
+  for I := 0 to FReactionCount - 1 do
+  begin
+    case FState of
+      spssFulfilled:
+      begin
+        Task.Handler := FReactions[I].OnFulfilled;
+        Task.Value := FResult;
+        Task.ResultPromise := FReactions[I].ResultPromise;
+        Task.ReactionType := prtFulfill;
+        Queue.EnqueueSouffle(Task);
+      end;
+      spssRejected:
+      begin
+        Task.Handler := FReactions[I].OnRejected;
+        Task.Value := FResult;
+        Task.ResultPromise := FReactions[I].ResultPromise;
+        Task.ReactionType := prtReject;
+        Queue.EnqueueSouffle(Task);
+      end;
+    end;
+  end;
+  FReactionCount := 0;
+end;
+
+procedure TSoufflePromise.SubscribeTo(const APromise: TSoufflePromise);
+var
+  Task: TSouffleMicrotask;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  case APromise.FState of
+    spssFulfilled, spssRejected:
+    begin
+      Queue := TGocciaMicrotaskQueue.Instance;
+      if Assigned(Queue) then
+      begin
+        Task.Handler := SouffleNil;
+        Task.Value := APromise.FResult;
+        Task.ResultPromise := Self;
+        if APromise.FState = spssFulfilled then
+          Task.ReactionType := prtFulfill
+        else
+          Task.ReactionType := prtReject;
+        Queue.EnqueueSouffle(Task);
+      end;
+    end;
+    spssPending:
+    begin
+      APromise.AddReaction(SouffleNil, SouffleNil, Self);
+    end;
+  end;
+end;
+
+procedure TSoufflePromise.MarkReferences;
+var
+  I: Integer;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if SouffleIsReference(FResult) and Assigned(FResult.AsReference) and
+     not FResult.AsReference.GCMarked then
+    FResult.AsReference.MarkReferences;
+  for I := 0 to FReactionCount - 1 do
+  begin
+    if SouffleIsReference(FReactions[I].OnFulfilled) and
+       Assigned(FReactions[I].OnFulfilled.AsReference) and
+       not FReactions[I].OnFulfilled.AsReference.GCMarked then
+      FReactions[I].OnFulfilled.AsReference.MarkReferences;
+    if SouffleIsReference(FReactions[I].OnRejected) and
+       Assigned(FReactions[I].OnRejected.AsReference) and
+       not FReactions[I].OnRejected.AsReference.GCMarked then
+      FReactions[I].OnRejected.AsReference.MarkReferences;
+    if Assigned(FReactions[I].ResultPromise) and
+       not FReactions[I].ResultPromise.GCMarked then
+      FReactions[I].ResultPromise.MarkReferences;
+  end;
+end;
+
+function TSoufflePromise.DebugString: string;
+begin
+  case FState of
+    spssPending: Result := 'Promise(pending)';
+    spssFulfilled: Result := 'Promise(fulfilled)';
+    spssRejected: Result := 'Promise(rejected)';
+  end;
 end;
 
 end.
