@@ -13014,18 +13014,36 @@ begin
   Actual := GetExpectActual(AReceiver);
   Expected := AArgs^;
   Found := False;
-  if SouffleIsReference(Actual) and Assigned(Actual.AsReference) and
-     (Actual.AsReference is TSouffleArray) then
+  if SouffleIsReference(Actual) and Assigned(Actual.AsReference) then
   begin
-    Arr := TSouffleArray(Actual.AsReference);
-    for I := 0 to Arr.Count - 1 do
-      if SouffleSameValueZero(Arr.Get(I), Expected) then
+    if Actual.AsReference is TSouffleArray then
+    begin
+      Arr := TSouffleArray(Actual.AsReference);
+      for I := 0 to Arr.Count - 1 do
+        if SouffleSameValueZero(Arr.Get(I), Expected) or
+           SouffleStrictEqual(Arr.Get(I), Expected) then
+        begin
+          Found := True;
+          Break;
+        end;
+    end
+    else if (Actual.AsReference is TGocciaWrappedValue) and
+       (TGocciaWrappedValue(Actual.AsReference).Value is TGocciaArrayValue) then
+    begin
+      for I := 0 to TGocciaArrayValue(
+        TGocciaWrappedValue(Actual.AsReference).Value).Elements.Count - 1 do
       begin
-        Found := True;
-        Break;
+        if SouffleStrictEqual(GNativeArrayJoinRuntime.ToSouffleValue(
+          TGocciaArrayValue(TGocciaWrappedValue(Actual.AsReference).Value).Elements[I]),
+          Expected) then
+        begin
+          Found := True;
+          Break;
+        end;
       end;
-  end
-  else if SouffleIsStringValue(Actual) and SouffleIsStringValue(Expected) then
+    end;
+  end;
+  if not Found and SouffleIsStringValue(Actual) and SouffleIsStringValue(Expected) then
     Found := Pos(SouffleGetString(Expected), SouffleGetString(Actual)) > 0;
   MatcherResult(IsExpectNegated(AReceiver), Found,
     'toContain', '', 'Expected to contain ' +
@@ -13043,10 +13061,16 @@ begin
   Actual := GetExpectActual(AReceiver);
   ExpectedLen := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(AArgs^));
   ActualLen := -1;
-  if SouffleIsReference(Actual) and Assigned(Actual.AsReference) and
-     (Actual.AsReference is TSouffleArray) then
-    ActualLen := TSouffleArray(Actual.AsReference).Count
-  else if SouffleIsStringValue(Actual) then
+  if SouffleIsReference(Actual) and Assigned(Actual.AsReference) then
+  begin
+    if Actual.AsReference is TSouffleArray then
+      ActualLen := TSouffleArray(Actual.AsReference).Count
+    else if (Actual.AsReference is TGocciaWrappedValue) and
+       (TGocciaWrappedValue(Actual.AsReference).Value is TGocciaArrayValue) then
+      ActualLen := TGocciaArrayValue(
+        TGocciaWrappedValue(Actual.AsReference).Value).Elements.Count;
+  end;
+  if (ActualLen < 0) and SouffleIsStringValue(Actual) then
     ActualLen := Length(SouffleGetString(Actual));
   MatcherResult(IsExpectNegated(AReceiver), ActualLen = ExpectedLen,
     'toHaveLength', '', 'Expected length ' + IntToStr(ExpectedLen) +
