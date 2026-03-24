@@ -7886,10 +7886,175 @@ begin
   Result := GNativeArrayJoinRuntime.WrapSoufflePromise(SP);
 end;
 
+{ Promise.all per-element resolve callback }
+function PromiseAllResolveCallback(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer;
+  const AContext: TSouffleValue): TSouffleValue;
+var
+  CtxRec: TSouffleRecord;
+  State: TSoufflePromiseAllState;
+  StateVal, IdxVal: TSouffleValue;
+  Idx: Integer;
+  Val: TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if not SouffleIsReference(AContext) or not (AContext.AsReference is TSouffleRecord) then Exit;
+  CtxRec := TSouffleRecord(AContext.AsReference);
+  if not CtxRec.Get('state', StateVal) then Exit;
+  if not CtxRec.Get('index', IdxVal) then Exit;
+  if not SouffleIsReference(StateVal) or not (StateVal.AsReference is TSoufflePromiseAllState) then Exit;
+  State := TSoufflePromiseAllState(StateVal.AsReference);
+  Idx := Integer(IdxVal.AsInteger);
+  if State.Settled then Exit;
+
+  if AArgCount > 0 then Val := AArgs^ else Val := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  State.Results.Put(Idx, Val);
+  Dec(State.Remaining);
+  if State.Remaining = 0 then
+  begin
+    State.Settled := True;
+    State.ResultPromise.Resolve(SouffleReference(State.Results));
+  end;
+end;
+
+{ Promise.all/race reject callback — rejects result promise }
+function PromiseAllRejectCallback(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer;
+  const AContext: TSouffleValue): TSouffleValue;
+var
+  State: TSoufflePromiseAllState;
+  Val: TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if not SouffleIsReference(AContext) or not (AContext.AsReference is TSoufflePromiseAllState) then Exit;
+  State := TSoufflePromiseAllState(AContext.AsReference);
+  if State.Settled then Exit;
+  State.Settled := True;
+  if AArgCount > 0 then Val := AArgs^ else Val := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  State.ResultPromise.Reject(Val);
+end;
+
+{ Promise.race resolve callback — resolves result promise with first value }
+function PromiseRaceResolveCallback(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer;
+  const AContext: TSouffleValue): TSouffleValue;
+var
+  State: TSoufflePromiseAllState;
+  Val: TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if not SouffleIsReference(AContext) or not (AContext.AsReference is TSoufflePromiseAllState) then Exit;
+  State := TSoufflePromiseAllState(AContext.AsReference);
+  if State.Settled then Exit;
+  State.Settled := True;
+  if AArgCount > 0 then Val := AArgs^ else Val := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  State.ResultPromise.Resolve(Val);
+end;
+
+{ Helper: wrap value as promise (resolve non-promise, return promise as-is) }
+function WrapAsNativePromise(const AValue: TSouffleValue): TSoufflePromise;
+var
+  GC: TGarbageCollector;
+begin
+  Result := GetSoufflePromise(AValue);
+  if Assigned(Result) then Exit;
+  GC := TGarbageCollector.Instance;
+  Result := TSoufflePromise.Create;
+  if Assigned(GC) then GC.AllocateObject(Result);
+  Result.Resolve(AValue);
+end;
+
 function NativePromiseStaticAll(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Iterable, ItemVal: TSouffleValue;
+  IterObj: TSouffleValue;
+  Items: array of TSouffleValue;
+  ItemCount, I: Integer;
+  Done: Boolean;
+  ResultP: TSoufflePromise;
+  State: TSoufflePromiseAllState;
+  WrappedP: TSoufflePromise;
+  ResolveCtx: TSouffleRecord;
+  ResolveFn, RejectFn: TSouffleNativeClosure;
+  GC: TGarbageCollector;
 begin
-  Result := BridgePromiseStatic(GPromiseAllFn, AArgs, AArgCount);
+  GC := TGarbageCollector.Instance;
+  ResultP := TSoufflePromise.Create;
+  if Assigned(GC) then GC.AllocateObject(ResultP);
+
+  if AArgCount < 1 then
+  begin
+    ResultP.Reject(SouffleNil);
+    Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ResultP);
+    Exit;
+  end;
+
+  Iterable := AArgs^;
+  { Collect items from iterable }
+  ItemCount := 0;
+  SetLength(Items, 8);
+  try
+    IterObj := GNativeArrayJoinRuntime.GetIterator(Iterable, False);
+    repeat
+      ItemVal := GNativeArrayJoinRuntime.IteratorNext(IterObj, Done);
+      if not Done then
+      begin
+        if ItemCount >= Length(Items) then
+          SetLength(Items, ItemCount * 2 + 4);
+        Items[ItemCount] := ItemVal;
+        Inc(ItemCount);
+      end;
+    until Done;
+  except
+    on E: ESouffleThrow do
+    begin
+      ResultP.Reject(E.ThrownValue);
+      Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ResultP);
+      Exit;
+    end;
+  end;
+
+  if ItemCount = 0 then
+  begin
+    ResultP.Resolve(SouffleReference(TSouffleArray.Create(0)));
+    Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ResultP);
+    Exit;
+  end;
+
+  State := TSoufflePromiseAllState.Create(0);
+  if Assigned(GC) then GC.AllocateObject(State);
+  State.Results := TSouffleArray.Create(ItemCount);
+  if Assigned(GC) then GC.AllocateObject(State.Results);
+  { Pre-fill with undefined }
+  for I := 0 to ItemCount - 1 do
+    State.Results.Push(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  State.Remaining := ItemCount;
+  State.ResultPromise := ResultP;
+  State.Settled := False;
+
+  for I := 0 to ItemCount - 1 do
+  begin
+    WrappedP := WrapAsNativePromise(Items[I]);
+
+    { Create context record with state ref and index }
+    ResolveCtx := TSouffleRecord.Create(2);
+    if Assigned(GC) then GC.AllocateObject(ResolveCtx);
+    ResolveCtx.Put('state', SouffleReference(State));
+    ResolveCtx.Put('index', SouffleInteger(I));
+
+    ResolveFn := TSouffleNativeClosure.Create('all-resolve', 1,
+      @PromiseAllResolveCallback, SouffleReference(ResolveCtx));
+    if Assigned(GC) then GC.AllocateObject(ResolveFn);
+
+    RejectFn := TSouffleNativeClosure.Create('all-reject', 1,
+      @PromiseAllRejectCallback, SouffleReference(State));
+    if Assigned(GC) then GC.AllocateObject(RejectFn);
+
+    WrappedP.InvokeThen(SouffleReference(ResolveFn), SouffleReference(RejectFn));
+  end;
+
+  Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ResultP);
 end;
 
 function NativePromiseStaticAllSettled(const AReceiver: TSouffleValue;
@@ -7900,8 +8065,59 @@ end;
 
 function NativePromiseStaticRace(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Iterable, ItemVal: TSouffleValue;
+  IterObj: TSouffleValue;
+  Done: Boolean;
+  ResultP: TSoufflePromise;
+  State: TSoufflePromiseAllState;
+  WrappedP: TSoufflePromise;
+  ResolveFn, RejectFn: TSouffleNativeClosure;
+  GC: TGarbageCollector;
 begin
-  Result := BridgePromiseStatic(GPromiseRaceFn, AArgs, AArgCount);
+  GC := TGarbageCollector.Instance;
+  ResultP := TSoufflePromise.Create;
+  if Assigned(GC) then GC.AllocateObject(ResultP);
+
+  if AArgCount < 1 then
+  begin
+    ResultP.Reject(SouffleNil);
+    Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ResultP);
+    Exit;
+  end;
+
+  State := TSoufflePromiseAllState.Create(0);
+  if Assigned(GC) then GC.AllocateObject(State);
+  State.ResultPromise := ResultP;
+  State.Settled := False;
+
+  Iterable := AArgs^;
+  try
+    IterObj := GNativeArrayJoinRuntime.GetIterator(Iterable, False);
+    repeat
+      ItemVal := GNativeArrayJoinRuntime.IteratorNext(IterObj, Done);
+      if not Done then
+      begin
+        WrappedP := WrapAsNativePromise(ItemVal);
+        ResolveFn := TSouffleNativeClosure.Create('race-resolve', 1,
+          @PromiseRaceResolveCallback, SouffleReference(State));
+        if Assigned(GC) then GC.AllocateObject(ResolveFn);
+        RejectFn := TSouffleNativeClosure.Create('race-reject', 1,
+          @PromiseAllRejectCallback, SouffleReference(State));
+        if Assigned(GC) then GC.AllocateObject(RejectFn);
+        WrappedP.InvokeThen(SouffleReference(ResolveFn), SouffleReference(RejectFn));
+      end;
+    until Done;
+  except
+    on E: ESouffleThrow do
+    begin
+      ResultP.Reject(E.ThrownValue);
+      Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ResultP);
+      Exit;
+    end;
+  end;
+
+  Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ResultP);
 end;
 
 function NativePromiseStaticAny(const AReceiver: TSouffleValue;
@@ -7912,14 +8128,67 @@ end;
 
 function NativePromiseStaticWithResolvers(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  P: TSoufflePromise;
+  ResolveFn, RejectFn: TSouffleNativeClosure;
+  Rec: TSouffleRecord;
+  GC: TGarbageCollector;
 begin
-  Result := BridgePromiseStatic(GPromiseWithResolversFn, AArgs, AArgCount);
+  GC := TGarbageCollector.Instance;
+  P := TSoufflePromise.Create;
+  if Assigned(GC) then GC.AllocateObject(P);
+
+  ResolveFn := TSouffleNativeClosure.Create('resolve', 1,
+    @NativePromiseResolveCallback, SouffleReference(P));
+  if Assigned(GC) then GC.AllocateObject(ResolveFn);
+  RejectFn := TSouffleNativeClosure.Create('reject', 1,
+    @NativePromiseRejectCallback, SouffleReference(P));
+  if Assigned(GC) then GC.AllocateObject(RejectFn);
+
+  Rec := TSouffleRecord.Create(3);
+  if Assigned(GC) then GC.AllocateObject(Rec);
+  Rec.Put('promise', GNativeArrayJoinRuntime.WrapSoufflePromise(P));
+  Rec.Put('resolve', SouffleReference(ResolveFn));
+  Rec.Put('reject', SouffleReference(RejectFn));
+  Result := SouffleReference(Rec);
 end;
 
 function NativePromiseStaticTry(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  P: TSoufflePromise;
+  CallbackResult: TSouffleValue;
+  GC: TGarbageCollector;
 begin
-  Result := BridgePromiseStatic(GPromiseTryFn, AArgs, AArgCount);
+  GC := TGarbageCollector.Instance;
+  P := TSoufflePromise.Create;
+  if Assigned(GC) then GC.AllocateObject(P);
+
+  if (AArgCount >= 1) and SouffleIsReference(AArgs^) and Assigned(AArgs^.AsReference) then
+  begin
+    try
+      if AArgs^.AsReference is TSouffleClosure then
+        CallbackResult := GNativeArrayJoinRuntime.VM.ExecuteFunction(
+          TSouffleClosure(AArgs^.AsReference),
+          [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)])
+      else if AArgs^.AsReference is TSouffleNativeFunction then
+        CallbackResult := TSouffleNativeFunction(AArgs^.AsReference).Invoke(
+          SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), nil, 0)
+      else if AArgs^.AsReference is TSouffleNativeClosure then
+        CallbackResult := TSouffleNativeClosure(AArgs^.AsReference).Invoke(
+          SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), nil, 0)
+      else
+        CallbackResult := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+      P.Resolve(CallbackResult);
+    except
+      on E: ESouffleThrow do
+        P.Reject(E.ThrownValue);
+    end;
+  end
+  else
+    P.Resolve(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+
+  Result := GNativeArrayJoinRuntime.WrapSoufflePromise(P);
 end;
 
 function NativeRecordHasOwnProperty(const AReceiver: TSouffleValue;

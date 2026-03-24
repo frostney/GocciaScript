@@ -8,6 +8,7 @@ uses
   Math,
   SysUtils,
 
+  Souffle.Compound,
   Souffle.Heap,
   Souffle.Value;
 
@@ -122,13 +123,22 @@ type
     property AlreadyResolved: Boolean read FAlreadyResolved write FAlreadyResolved;
   end;
 
+  TSoufflePromiseAllState = class(TSouffleHeapObject)
+  public
+    Results: TSouffleArray;
+    Remaining: Integer;
+    ResultPromise: TSoufflePromise;
+    Settled: Boolean;
+    procedure MarkReferences; override;
+    function DebugString: string; override;
+  end;
+
 function SouffleSameValueZero(const A, B: TSouffleValue): Boolean;
 
 implementation
 
 uses
   GarbageCollector.Generic,
-  Souffle.Compound,
 
   Goccia.MicrotaskQueue;
 
@@ -649,6 +659,23 @@ begin
        not FReactions[I].ResultPromise.GCMarked then
       FReactions[I].ResultPromise.MarkReferences;
   end;
+end;
+
+{ TSoufflePromiseAllState }
+
+procedure TSoufflePromiseAllState.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(Results) and not Results.GCMarked then
+    Results.MarkReferences;
+  if Assigned(ResultPromise) and not ResultPromise.GCMarked then
+    ResultPromise.MarkReferences;
+end;
+
+function TSoufflePromiseAllState.DebugString: string;
+begin
+  Result := 'PromiseAllState';
 end;
 
 function TSoufflePromise.DebugString: string;
