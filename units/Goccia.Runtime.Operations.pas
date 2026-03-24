@@ -177,7 +177,6 @@ type
     function IsExtensible: Boolean; override;
     function ToStringTag: string; override;
     function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor; override;
-    function NativeKind: string; override;
     function CloneNative: TGocciaObjectValue; override;
 
     property Target: TSouffleHeapObject read FTarget;
@@ -1023,14 +1022,6 @@ begin
   end;
 end;
 
-function TGocciaSouffleProxy.NativeKind: string;
-begin
-  if (FTarget is TSouffleRecord) and
-     Assigned(TSouffleRecord(FTarget).Blueprint) then
-    Result := TSouffleRecord(FTarget).Blueprint.Name
-  else
-    Result := '';
-end;
 
 function TGocciaSouffleProxy.CloneNative: TGocciaObjectValue;
 var
@@ -7541,33 +7532,6 @@ end;
 
 
 
-function InvokeGocciaMethod(const AReceiver: TSouffleValue;
-  const AMethodName: string; const AArgs: PSouffleValue;
-  const AArgCount: Integer): TSouffleValue;
-var
-  GocciaObj: TGocciaValue;
-  MethodFn, GocciaResult: TGocciaValue;
-  Args: TGocciaArgumentsCollection;
-  I: Integer;
-begin
-  GocciaObj := TGocciaWrappedValue(AReceiver.AsReference).Value;
-  MethodFn := GocciaObj.GetProperty(AMethodName);
-  if not Assigned(MethodFn) or not (MethodFn is TGocciaFunctionBase) then
-    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
-  Args := TGocciaArgumentsCollection.Create;
-  try
-    for I := 0 to AArgCount - 1 do
-      Args.Add(GNativeArrayJoinRuntime.UnwrapToGocciaValue(
-        PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
-    GocciaResult := TGocciaFunctionBase(MethodFn).Call(Args, GocciaObj);
-    if Assigned(GocciaResult) then
-      Result := GNativeArrayJoinRuntime.ToSouffleValue(GocciaResult)
-    else
-      Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
-  finally
-    Args.Free;
-  end;
-end;
 
 function NativeMapGet(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
@@ -11865,7 +11829,7 @@ begin
      not (AArgs^.AsReference is TSouffleRecord) then
   begin
     { Fallback: delegate to Goccia for non-record objects }
-    Result := InvokeGocciaMethod(AReceiver, 'keys', AArgs, AArgCount);
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
     Exit;
   end;
   Rec := TSouffleRecord(AArgs^.AsReference);
@@ -11895,7 +11859,7 @@ begin
      not Assigned(AArgs^.AsReference) or
      not (AArgs^.AsReference is TSouffleRecord) then
   begin
-    Result := InvokeGocciaMethod(AReceiver, 'values', AArgs, AArgCount);
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
     Exit;
   end;
   Rec := TSouffleRecord(AArgs^.AsReference);
@@ -11928,7 +11892,7 @@ begin
      not Assigned(AArgs^.AsReference) or
      not (AArgs^.AsReference is TSouffleRecord) then
   begin
-    Result := InvokeGocciaMethod(AReceiver, 'entries', AArgs, AArgCount);
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
     Exit;
   end;
   Rec := TSouffleRecord(AArgs^.AsReference);
@@ -11968,7 +11932,7 @@ begin
      not Assigned(AArgs^.AsReference) or
      not (AArgs^.AsReference is TSouffleRecord) then
   begin
-    Result := InvokeGocciaMethod(AReceiver, 'assign', AArgs, AArgCount);
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
     Exit;
   end;
   Target := TSouffleRecord(AArgs^.AsReference);
@@ -12035,7 +11999,7 @@ begin
      not Assigned(AArgs^.AsReference) or
      not (AArgs^.AsReference is TSouffleRecord) then
   begin
-    Result := InvokeGocciaMethod(AReceiver, 'hasOwn', AArgs, AArgCount);
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
     Exit;
   end;
   Rec := TSouffleRecord(AArgs^.AsReference);
@@ -12194,7 +12158,7 @@ begin
      not Assigned(AArgs^.AsReference) or
      not (AArgs^.AsReference is TSouffleRecord) then
   begin
-    Result := InvokeGocciaMethod(AReceiver, 'getOwnPropertyNames', AArgs, AArgCount);
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
     Exit;
   end;
   Rec := TSouffleRecord(AArgs^.AsReference);
@@ -12223,7 +12187,7 @@ begin
      not Assigned(AArgs^.AsReference) or
      not (AArgs^.AsReference is TSouffleRecord) then
   begin
-    Result := InvokeGocciaMethod(AReceiver, 'getOwnPropertyDescriptor', AArgs, AArgCount);
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
     Exit;
   end;
   Rec := TSouffleRecord(AArgs^.AsReference);
@@ -12273,7 +12237,7 @@ begin
      not Assigned(AArgs^.AsReference) or
      not (AArgs^.AsReference is TSouffleRecord) then
   begin
-    Result := InvokeGocciaMethod(AReceiver, 'defineProperty', AArgs, AArgCount);
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
     Exit;
   end;
   Rec := TSouffleRecord(AArgs^.AsReference);
@@ -12490,6 +12454,16 @@ begin
     Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
   end;
 
+  { Wrapped Goccia values (symbols, etc.) }
+  if AValue.AsReference is TGocciaWrappedValue then
+  begin
+    if TGocciaWrappedValue(AValue.AsReference).Value is TGocciaSymbolValue then
+      Goccia.Values.ErrorHelper.ThrowDataCloneError('Symbol could not be cloned.');
+    if TGocciaWrappedValue(AValue.AsReference).Value.IsCallable then
+      Goccia.Values.ErrorHelper.ThrowDataCloneError('function could not be cloned.');
+    Exit(AValue);
+  end;
+
   { Circular reference check }
   if AMemory.TryGetValue(AValue.AsReference, Existing) then
     Exit(Existing);
@@ -12509,10 +12483,19 @@ var
   Memory: THashMap<TObject, TSouffleValue>;
 begin
   if AArgCount < 1 then
+  begin
+    GNativeArrayJoinRuntime.ThrowTypeErrorMessage(
+      'structuredClone requires at least 1 argument');
     Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
   Memory := THashMap<TObject, TSouffleValue>.Create;
   try
-    Result := NativeSouffleStructuredClone(AArgs^, Memory);
+    try
+      Result := NativeSouffleStructuredClone(AArgs^, Memory);
+    except
+      on E: TGocciaThrowValue do
+        GNativeArrayJoinRuntime.RethrowAsVM(E);
+    end;
   finally
     Memory.Free;
   end;
@@ -12527,9 +12510,19 @@ var
   Queue: TGocciaMicrotaskQueue;
 begin
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
-  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or
-     not Assigned(AArgs^.AsReference) then
+  if AArgCount < 1 then
+  begin
+    GNativeArrayJoinRuntime.ThrowTypeErrorMessage('queueMicrotask requires a function argument');
     Exit;
+  end;
+  if not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) or
+     not ((AArgs^.AsReference is TSouffleClosure) or
+          (AArgs^.AsReference is TSouffleNativeFunction) or
+          (AArgs^.AsReference is TSouffleNativeClosure)) then
+  begin
+    GNativeArrayJoinRuntime.ThrowTypeErrorMessage('queueMicrotask requires a function argument');
+    Exit;
+  end;
   Queue := TGocciaMicrotaskQueue.Instance;
   if not Assigned(Queue) then Exit;
   Task.Handler := AArgs^;
@@ -12670,7 +12663,7 @@ begin
     else
       Exit(SouffleNilWithFlags(GOCCIA_NIL_NULL));
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'getPrototypeOf', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeObjectFromEntries(const AReceiver: TSouffleValue;
@@ -13197,6 +13190,21 @@ begin
     if (Key = 'URIError') and Assigned(FURIErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FURIErrorBlueprint)); Continue; end;
     if (Key = 'AggregateError') and Assigned(FAggregateErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FAggregateErrorBlueprint)); Continue; end;
     if (Key = 'DOMException') and Assigned(FDOMExceptionBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FDOMExceptionBlueprint)); Continue; end;
+    { Replace standalone functions before TGocciaWrappedValue check }
+    if Key = 'structuredClone' then
+    begin
+      NF := TSouffleNativeFunction.Create('structuredClone', 1, @NativeStructuredClone);
+      if Assigned(GC) then GC.AllocateObject(NF);
+      FGlobals.AddOrSetValue(Key, SouffleReference(NF));
+      Continue;
+    end;
+    if Key = 'queueMicrotask' then
+    begin
+      NF := TSouffleNativeFunction.Create('queueMicrotask', 1, @NativeQueueMicrotask);
+      if Assigned(GC) then GC.AllocateObject(NF);
+      FGlobals.AddOrSetValue(Key, SouffleReference(NF));
+      Continue;
+    end;
     if not (Val.AsReference is TGocciaWrappedValue) then Continue;
 
     Wrapped := TGocciaWrappedValue(Val.AsReference);
@@ -13254,21 +13262,6 @@ begin
         if Assigned(GC) then GC.AllocateObject(NC);
         FGlobals.AddOrSetValue(Key, SouffleReference(NC));
       end;
-      Continue;
-    end;
-
-    if Key = 'structuredClone' then
-    begin
-      NF := TSouffleNativeFunction.Create('structuredClone', 1, @NativeStructuredClone);
-      if Assigned(GC) then GC.AllocateObject(NF);
-      FGlobals.AddOrSetValue(Key, SouffleReference(NF));
-      Continue;
-    end;
-    if Key = 'queueMicrotask' then
-    begin
-      NF := TSouffleNativeFunction.Create('queueMicrotask', 1, @NativeQueueMicrotask);
-      if Assigned(GC) then GC.AllocateObject(NF);
-      FGlobals.AddOrSetValue(Key, SouffleReference(NF));
       Continue;
     end;
 

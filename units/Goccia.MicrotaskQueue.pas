@@ -118,7 +118,44 @@ var
   STask: TSouffleMicrotask;
   SResult: TSouffleValue;
   SHadError: Boolean;
+  SI: Integer;
 begin
+  { Process Souffle microtasks FIRST — they may enqueue Goccia tasks }
+  if Assigned(FSouffleInvoker) then
+  begin
+    SI := 0;
+    while SI < FSouffleQueue.Count do
+    begin
+      STask := FSouffleQueue[SI];
+      Inc(SI);
+      if SouffleIsReference(STask.Handler) and Assigned(STask.Handler.AsReference) then
+      begin
+        FSouffleInvoker(STask.Handler, STask.Value, SResult, SHadError);
+        if Assigned(STask.ResultPromise) then
+        begin
+          if SHadError then
+            STask.ResultPromise.Reject(SResult)
+          else
+            STask.ResultPromise.Resolve(SResult);
+        end;
+      end
+      else if Assigned(STask.ResultPromise) then
+      begin
+        case STask.ReactionType of
+          prtFulfill: STask.ResultPromise.Resolve(STask.Value);
+          prtReject: STask.ResultPromise.Reject(STask.Value);
+          prtThenableResolve:
+            if SouffleIsReference(STask.Value) and Assigned(STask.Value.AsReference) and
+               (STask.Value.AsReference is TSoufflePromise) then
+              STask.ResultPromise.SubscribeTo(TSoufflePromise(STask.Value.AsReference));
+        end;
+      end;
+    end;
+    if SI > 0 then
+      FSouffleQueue.Clear;
+  end;
+
+  { Then process Goccia microtasks }
   I := 0;
   while I < FQueue.Count do
   begin
@@ -189,41 +226,6 @@ begin
   if I > 0 then
     FQueue.Clear;
 
-  { Process Souffle microtasks }
-  if Assigned(FSouffleInvoker) then
-  begin
-    I := 0;
-    while I < FSouffleQueue.Count do
-    begin
-      STask := FSouffleQueue[I];
-      Inc(I);
-
-      if SouffleIsReference(STask.Handler) and Assigned(STask.Handler.AsReference) then
-      begin
-        FSouffleInvoker(STask.Handler, STask.Value, SResult, SHadError);
-        if Assigned(STask.ResultPromise) then
-        begin
-          if SHadError then
-            STask.ResultPromise.Reject(SResult)
-          else
-            STask.ResultPromise.Resolve(SResult);
-        end;
-      end
-      else if Assigned(STask.ResultPromise) then
-      begin
-        case STask.ReactionType of
-          prtFulfill: STask.ResultPromise.Resolve(STask.Value);
-          prtReject: STask.ResultPromise.Reject(STask.Value);
-          prtThenableResolve:
-            if SouffleIsReference(STask.Value) and Assigned(STask.Value.AsReference) and
-               (STask.Value.AsReference is TSoufflePromise) then
-              STask.ResultPromise.SubscribeTo(TSoufflePromise(STask.Value.AsReference));
-        end;
-      end;
-    end;
-    if I > 0 then
-      FSouffleQueue.Clear;
-  end;
 end;
 
 procedure TGocciaMicrotaskQueue.ClearQueue;
