@@ -12385,6 +12385,180 @@ begin
   Result := AArgs^;
 end;
 
+{ === Native structuredClone === }
+
+function NativeSouffleStructuredClone(const AValue: TSouffleValue;
+  const AMemory: THashMap<TObject, TSouffleValue>): TSouffleValue; forward;
+
+function CloneSouffleArray(const AArr: TSouffleArray;
+  const AMemory: THashMap<TObject, TSouffleValue>): TSouffleValue;
+var
+  NewArr: TSouffleArray;
+  I: Integer;
+begin
+  NewArr := TSouffleArray.Create(AArr.Count);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NewArr);
+  AMemory.Add(AArr, SouffleReference(NewArr));
+  for I := 0 to AArr.Count - 1 do
+    NewArr.Push(NativeSouffleStructuredClone(AArr.Get(I), AMemory));
+  Result := SouffleReference(NewArr);
+end;
+
+function CloneSouffleRecord(const ARec: TSouffleRecord;
+  const AMemory: THashMap<TObject, TSouffleValue>): TSouffleValue;
+var
+  NewRec: TSouffleRecord;
+  I: Integer;
+  Key: string;
+  Val: TSouffleValue;
+  SrcMap: TGocciaSouffleMap;
+  ClonedMap: TGocciaSouffleMap;
+  SrcSet: TGocciaSouffleSet;
+  ClonedSet: TGocciaSouffleSet;
+  SrcBuf, ClonedBuf: TSouffleArrayBuffer;
+begin
+  NewRec := TSouffleRecord.Create(ARec.Count);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(NewRec);
+  if Assigned(ARec.Delegate) then
+    NewRec.Delegate := ARec.Delegate;
+  if Assigned(ARec.Blueprint) then
+  begin
+    NewRec := TSouffleRecord.CreateFromBlueprint(ARec.Blueprint);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(NewRec);
+    NewRec.Delegate := ARec.Delegate;
+  end;
+  AMemory.Add(ARec, SouffleReference(NewRec));
+  for I := 0 to ARec.Count - 1 do
+  begin
+    Key := ARec.GetOrderedKey(I);
+    if ARec.Get(Key, Val) then
+      NewRec.Put(Key, NativeSouffleStructuredClone(Val, AMemory));
+  end;
+  { Clone slots (Map/Set/ArrayBuffer data) }
+  if Assigned(ARec.Blueprint) and (ARec.Blueprint.SlotCount > 0) then
+  begin
+    Val := ARec.GetSlot(0);
+    if SouffleIsReference(Val) and Assigned(Val.AsReference) then
+    begin
+      if Val.AsReference is TGocciaSouffleMap then
+      begin
+        SrcMap := TGocciaSouffleMap(Val.AsReference);
+        ClonedMap := TGocciaSouffleMap.Create(SrcMap.Count);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AllocateObject(ClonedMap);
+        for I := 0 to SrcMap.Count - 1 do
+          ClonedMap.SetEntry(
+            NativeSouffleStructuredClone(SrcMap.GetKeyAt(I), AMemory),
+            NativeSouffleStructuredClone(SrcMap.GetValueAt(I), AMemory));
+        NewRec.SetSlot(0, SouffleReference(ClonedMap));
+      end
+      else if Val.AsReference is TGocciaSouffleSet then
+      begin
+        SrcSet := TGocciaSouffleSet(Val.AsReference);
+        ClonedSet := TGocciaSouffleSet.Create(SrcSet.Count);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AllocateObject(ClonedSet);
+        for I := 0 to SrcSet.Count - 1 do
+          ClonedSet.Add(NativeSouffleStructuredClone(SrcSet.GetItemAt(I), AMemory));
+        NewRec.SetSlot(0, SouffleReference(ClonedSet));
+      end
+      else if Val.AsReference is TSouffleArrayBuffer then
+      begin
+        SrcBuf := TSouffleArrayBuffer(Val.AsReference);
+        ClonedBuf := TSouffleArrayBuffer.Create(SrcBuf.ByteLength, SrcBuf.IsShared);
+        if SrcBuf.ByteLength > 0 then
+          Move(SrcBuf.Data[0], ClonedBuf.Data[0], SrcBuf.ByteLength);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AllocateObject(ClonedBuf);
+        NewRec.SetSlot(0, SouffleReference(ClonedBuf));
+      end
+      else if Val.AsReference is TSoufflePromise then
+        NewRec.SetSlot(0, Val);
+    end;
+  end;
+  Result := SouffleReference(NewRec);
+end;
+
+function NativeSouffleStructuredClone(const AValue: TSouffleValue;
+  const AMemory: THashMap<TObject, TSouffleValue>): TSouffleValue;
+var
+  Existing: TSouffleValue;
+begin
+  { Primitives pass through }
+  case AValue.Kind of
+    svkNil, svkBoolean, svkInteger, svkFloat, svkString:
+      Exit(AValue);
+  end;
+
+  if not SouffleIsReference(AValue) or not Assigned(AValue.AsReference) then
+    Exit(AValue);
+
+  if AValue.AsReference is TSouffleHeapString then
+    Exit(AValue);
+
+  { Functions cannot be cloned }
+  if (AValue.AsReference is TSouffleClosure) or
+     (AValue.AsReference is TSouffleNativeFunction) or
+     (AValue.AsReference is TSouffleNativeClosure) or
+     (AValue.AsReference is TSouffleBlueprint) or
+     (AValue.AsReference is TGocciaBridgedFunction) then
+  begin
+    Goccia.Values.ErrorHelper.ThrowDataCloneError('function could not be cloned.');
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
+
+  { Circular reference check }
+  if AMemory.TryGetValue(AValue.AsReference, Existing) then
+    Exit(Existing);
+
+  { Clone by type }
+  if AValue.AsReference is TSouffleArray then
+    Result := CloneSouffleArray(TSouffleArray(AValue.AsReference), AMemory)
+  else if AValue.AsReference is TSouffleRecord then
+    Result := CloneSouffleRecord(TSouffleRecord(AValue.AsReference), AMemory)
+  else
+    Result := AValue; { Unknown reference types pass through }
+end;
+
+function NativeStructuredClone(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Memory: THashMap<TObject, TSouffleValue>;
+begin
+  if AArgCount < 1 then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  Memory := THashMap<TObject, TSouffleValue>.Create;
+  try
+    Result := NativeSouffleStructuredClone(AArgs^, Memory);
+  finally
+    Memory.Free;
+  end;
+end;
+
+{ === Native queueMicrotask === }
+
+function NativeQueueMicrotask(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Task: TSouffleMicrotask;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) then
+    Exit;
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if not Assigned(Queue) then Exit;
+  Task.Handler := AArgs^;
+  Task.Value := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  Task.ResultPromise := nil;
+  Task.ReactionType := prtFulfill;
+  Queue.EnqueueSouffle(Task);
+end;
+
 function NativeObjectGroupBy(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
@@ -12633,7 +12807,7 @@ var
   SymSpeciesKey, SymTagKey: string;
   TAKind: TSouffleTypedArrayKind;
   SharedTAProto: TSouffleRecord;
-  TagGetterFn: TSouffleNativeFunction;
+  TagGetterFn, NF: TSouffleNativeFunction;
 begin
   if not Assigned(FVM) then Exit;
 
@@ -13019,6 +13193,7 @@ var
   ObjVal: TGocciaObjectValue;
   NativeFnVal: TGocciaNativeFunctionValue;
   BridgedFn: TGocciaBridgedFunction;
+  NF: TSouffleNativeFunction;
   Rec, GlobalThisRec: TSouffleRecord;
   GC: TGarbageCollector;
   GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
@@ -13082,6 +13257,21 @@ begin
     if (Key = 'Uint32Array') and Assigned(FTypedArrayBlueprints[stakUint32]) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypedArrayBlueprints[stakUint32])); Continue; end;
     if (Key = 'Float32Array') and Assigned(FTypedArrayBlueprints[stakFloat32]) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypedArrayBlueprints[stakFloat32])); Continue; end;
     if (Key = 'Float64Array') and Assigned(FTypedArrayBlueprints[stakFloat64]) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypedArrayBlueprints[stakFloat64])); Continue; end;
+
+    if Key = 'structuredClone' then
+    begin
+      NF := TSouffleNativeFunction.Create('structuredClone', 1, @NativeStructuredClone);
+      if Assigned(GC) then GC.AllocateObject(NF);
+      FGlobals.AddOrSetValue(Key, SouffleReference(NF));
+      Continue;
+    end;
+    if Key = 'queueMicrotask' then
+    begin
+      NF := TSouffleNativeFunction.Create('queueMicrotask', 1, @NativeQueueMicrotask);
+      if Assigned(GC) then GC.AllocateObject(NF);
+      FGlobals.AddOrSetValue(Key, SouffleReference(NF));
+      Continue;
+    end;
 
     if Key = 'performance' then
     begin
