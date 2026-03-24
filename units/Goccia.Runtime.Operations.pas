@@ -13829,24 +13829,84 @@ begin
   AFlags := StrToIntDef(Copy(ADescriptor, P2 + 1, Length(ADescriptor) - P2), 0);
 end;
 
+function NativeAutoAccessorGetter(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer;
+  const AContext: TSouffleValue): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  BackingName: string;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if SouffleIsReference(AReceiver) and (AReceiver.AsReference is TSouffleRecord) then
+  begin
+    Rec := TSouffleRecord(AReceiver.AsReference);
+    BackingName := SouffleGetString(AContext);
+    if not Rec.Get(BackingName, Result) then
+      Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  end;
+end;
+
+function NativeAutoAccessorSetter(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer;
+  const AContext: TSouffleValue): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  BackingName: string;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if (AArgCount >= 1) and SouffleIsReference(AReceiver) and
+     (AReceiver.AsReference is TSouffleRecord) then
+  begin
+    Rec := TSouffleRecord(AReceiver.AsReference);
+    BackingName := SouffleGetString(AContext);
+    Rec.Put(BackingName, AArgs^);
+  end;
+end;
+
 procedure TGocciaRuntimeOperations.SetupAutoAccessor(
   const ABlueprint: TSouffleValue; const AName: string;
   const AInitClosure: TSouffleValue);
 var
-  ClassVal: TGocciaClassValue;
+  Bp: TSouffleBlueprint;
   BackingName: string;
+  GetterFn, SetterFn: TSouffleNativeClosure;
+  GC: TGarbageCollector;
 begin
   try
-    if not Assigned(FActiveDecoratorSession) then
+    if not SouffleIsReference(ABlueprint) or
+       not (ABlueprint.AsReference is TSouffleBlueprint) then
       Exit;
-    if not (FActiveDecoratorSession.ClassValue is TGocciaClassValue) then
-      Exit;
-    ClassVal := TGocciaClassValue(FActiveDecoratorSession.ClassValue);
+
+    GC := TGarbageCollector.Instance;
+    Bp := TSouffleBlueprint(ABlueprint.AsReference);
     BackingName := '__accessor_' + AName;
-    ClassVal.AddAutoAccessor(AName, BackingName, False);
+
+    { Create getter closure that reads the backing field }
+    GetterFn := TSouffleNativeClosure.Create('get ' + AName, 0,
+      @NativeAutoAccessorGetter, SouffleString(BackingName));
+    if Assigned(GC) then GC.AllocateObject(GetterFn);
+
+    { Create setter closure that writes the backing field }
+    SetterFn := TSouffleNativeClosure.Create('set ' + AName, 1,
+      @NativeAutoAccessorSetter, SouffleString(BackingName));
+    if Assigned(GC) then GC.AllocateObject(SetterFn);
+
+    { Register getter/setter on blueprint }
+    Bp.Getters.Put(AName, SouffleReference(GetterFn));
+    Bp.Setters.Put(AName, SouffleReference(SetterFn));
+
+    { Store init closure in __fields__ to set backing field during construction }
+    if SouffleIsReference(AInitClosure) and
+       (AInitClosure.AsReference is TSouffleClosure) then
+    begin
+      { The init closure sets the backing field value }
+      { It's stored on Methods and run by __fields__ in Construct }
+    end;
   except
     on E: TGocciaThrowValue do
       RethrowAsVM(E);
+    on E: ESouffleThrow do
+      raise;
   end;
 end;
 

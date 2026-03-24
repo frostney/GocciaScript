@@ -63,6 +63,9 @@ type
       const AKey: string; out AValue: TSouffleValue): Boolean;
     function DelegateHasGetterOnly(const ARec: TSouffleRecord;
       const AKey: string): Boolean;
+    function GetPropertyViaBlueprintGetter(const ABp: TSouffleBlueprint;
+      const AKey: string; const AObject: TSouffleValue;
+      out AResult: TSouffleValue): Boolean;
     function SetPropertyViaBlueprintSetter(const ABp: TSouffleBlueprint;
       const AKey: string; const AObject, AValue: TSouffleValue): Boolean;
   public
@@ -889,7 +892,8 @@ var
   Arr, RestArr: TSouffleArray;
   RestCount: Integer;
   Rec: TSouffleRecord;
-  RecVal: TSouffleValue;
+  RecVal, PropVal: TSouffleValue;
+  PropKey: string;
   Bp, WalkBp: TSouffleBlueprint;
   FloatIdx: Double;
 begin
@@ -1222,27 +1226,47 @@ begin
       A := DecodeA(AInstruction);
       B := DecodeB(AInstruction);
       C := DecodeC(AInstruction);
+      PropKey := AFrame^.Template.GetConstant(C).StringValue;
       if SouffleIsReference(FRegisters[Base + B]) and
          Assigned(FRegisters[Base + B].AsReference) then
       begin
         if FRegisters[Base + B].AsReference is TSouffleRecord then
         begin
           Rec := TSouffleRecord(FRegisters[Base + B].AsReference);
-          if Rec.Get(AFrame^.Template.GetConstant(C).StringValue, RecVal) then
+          if Rec.Get(PropKey, RecVal) then
+          begin
+            FRegisters[Base + A] := RecVal;
+            Exit;
+          end;
+          { Check record-level and blueprint getters }
+          if Rec.HasGetters and Rec.Getters.Get(PropKey, RecVal) then
+          begin
+            if SouffleIsReference(RecVal) and (RecVal.AsReference is TSouffleClosure) then
+              FRegisters[Base + A] := ExecuteFunction(
+                TSouffleClosure(RecVal.AsReference), [FRegisters[Base + B]])
+            else if SouffleIsReference(RecVal) and (RecVal.AsReference is TSouffleNativeClosure) then
+              FRegisters[Base + A] := TSouffleNativeClosure(RecVal.AsReference).Invoke(
+                FRegisters[Base + B], nil, 0)
+            else
+              FRegisters[Base + A] := SouffleNilWithFlags(0);
+            Exit;
+          end;
+          if Assigned(Rec.Blueprint) and
+             GetPropertyViaBlueprintGetter(Rec.Blueprint, PropKey,
+               FRegisters[Base + B], RecVal) then
           begin
             FRegisters[Base + A] := RecVal;
             Exit;
           end;
         end;
-        if DelegateGet(FRegisters[Base + B].AsReference,
-             AFrame^.Template.GetConstant(C).StringValue, RecVal) then
+        if DelegateGet(FRegisters[Base + B].AsReference, PropKey, RecVal) then
         begin
           FRegisters[Base + A] := RecVal;
           Exit;
         end;
       end;
       FRegisters[Base + A] := FRuntimeOps.GetProperty(
-        FRegisters[Base + B], AFrame^.Template.GetConstant(C).StringValue);
+        FRegisters[Base + B], PropKey);
     end;
 
     OP_RECORD_SET:
@@ -2030,7 +2054,23 @@ begin
          (FRegisters[Base + B].AsReference is TSouffleRecord) then
       begin
         PropKey := AFrame^.Template.GetConstant(C).StringValue;
-        if TSouffleRecord(FRegisters[Base + B].AsReference).Get(PropKey, PropVal) then
+        Rec := TSouffleRecord(FRegisters[Base + B].AsReference);
+        if Rec.Get(PropKey, PropVal) then
+          FRegisters[Base + A] := PropVal
+        else if Rec.HasGetters and Rec.Getters.Get(PropKey, PropVal) then
+        begin
+          if SouffleIsReference(PropVal) and (PropVal.AsReference is TSouffleClosure) then
+            FRegisters[Base + A] := ExecuteFunction(
+              TSouffleClosure(PropVal.AsReference), [FRegisters[Base + B]])
+          else if SouffleIsReference(PropVal) and (PropVal.AsReference is TSouffleNativeClosure) then
+            FRegisters[Base + A] := TSouffleNativeClosure(PropVal.AsReference).Invoke(
+              FRegisters[Base + B], nil, 0)
+          else
+            FRegisters[Base + A] := SouffleNilWithFlags(0);
+        end
+        else if Assigned(Rec.Blueprint) and
+                GetPropertyViaBlueprintGetter(Rec.Blueprint, PropKey,
+                  FRegisters[Base + B], PropVal) then
           FRegisters[Base + A] := PropVal
         else if DelegateGet(FRegisters[Base + B].AsReference, PropKey, PropVal) then
           FRegisters[Base + A] := PropVal
@@ -2419,6 +2459,35 @@ begin
   Result := False;
 end;
 
+function TSouffleVM.GetPropertyViaBlueprintGetter(
+  const ABp: TSouffleBlueprint; const AKey: string;
+  const AObject: TSouffleValue; out AResult: TSouffleValue): Boolean;
+var
+  Bp: TSouffleBlueprint;
+  GetterVal: TSouffleValue;
+begin
+  Bp := ABp;
+  while Assigned(Bp) do
+  begin
+    if Bp.HasGetters and Bp.Getters.Get(AKey, GetterVal) then
+    begin
+      if SouffleIsReference(GetterVal) and
+         (GetterVal.AsReference is TSouffleClosure) then
+        AResult := ExecuteFunction(TSouffleClosure(GetterVal.AsReference),
+          [AObject])
+      else if SouffleIsReference(GetterVal) and
+         (GetterVal.AsReference is TSouffleNativeClosure) then
+        AResult := TSouffleNativeClosure(GetterVal.AsReference).Invoke(
+          AObject, nil, 0)
+      else
+        AResult := SouffleNilWithFlags(0);
+      Exit(True);
+    end;
+    Bp := Bp.SuperBlueprint;
+  end;
+  Result := False;
+end;
+
 function TSouffleVM.SetPropertyViaBlueprintSetter(
   const ABp: TSouffleBlueprint; const AKey: string;
   const AObject, AValue: TSouffleValue): Boolean;
@@ -2434,7 +2503,11 @@ begin
       if SouffleIsReference(SetterVal) and
          (SetterVal.AsReference is TSouffleClosure) then
         ExecuteFunction(TSouffleClosure(SetterVal.AsReference),
-          [AObject, AValue]);
+          [AObject, AValue])
+      else if SouffleIsReference(SetterVal) and
+         (SetterVal.AsReference is TSouffleNativeClosure) then
+        TSouffleNativeClosure(SetterVal.AsReference).Invoke(
+          AObject, @AValue, 1);
       Exit(True);
     end;
     Bp := Bp.SuperBlueprint;
