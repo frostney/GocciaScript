@@ -9807,7 +9807,8 @@ var
   Rec: TSouffleRecord;
   GC: TGarbageCollector;
 begin
-  if AArgCount < 1 then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  if AArgCount < 1 then
+  begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Cannot convert undefined or null to object'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
   GC := TGarbageCollector.Instance;
   Src := AArgs^;
   HasMap := (AArgCount > 1) and SouffleIsReference(PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^);
@@ -11230,6 +11231,18 @@ begin
   FTypedArrayBlueprints[stakUint32] := CreateBuiltinBlueprint('Uint32Array', 1, FTypedArrayDelegate, 'values');
   FTypedArrayBlueprints[stakFloat32] := CreateBuiltinBlueprint('Float32Array', 1, FTypedArrayDelegate, 'values');
   FTypedArrayBlueprints[stakFloat64] := CreateBuiltinBlueprint('Float64Array', 1, FTypedArrayDelegate, 'values');
+
+  { ArrayBuffer/SharedArrayBuffer byteLength as getter-only }
+  begin
+    TagGetterFn := TSouffleNativeFunction.Create('get byteLength', 0,
+      @NativeArrayBufferByteLength);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(TagGetterFn);
+    FArrayBufferBlueprint.Prototype.Getters.Put('byteLength',
+      SouffleReference(TagGetterFn));
+    FSharedArrayBufferBlueprint.Prototype.Getters.Put('byteLength',
+      SouffleReference(TagGetterFn));
+  end;
 
   { ArrayBuffer static methods }
   AddStaticMethod(FArrayBufferBlueprint, 'isView', 1, @NativeArrayBufferIsView);
