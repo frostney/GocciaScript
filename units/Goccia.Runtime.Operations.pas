@@ -9147,6 +9147,25 @@ begin
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
+function NativeTypedArrayToStringTagGetter(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+const
+  KIND_NAMES: array[TSouffleTypedArrayKind] of string = (
+    'Int8Array', 'Uint8Array', 'Uint8ClampedArray',
+    'Int16Array', 'Uint16Array',
+    'Int32Array', 'Uint32Array',
+    'Float32Array', 'Float64Array'
+  );
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if Assigned(TA) then
+    Result := SouffleString(KIND_NAMES[TA.Kind])
+  else
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
 function ExtractThisArg(const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue; inline;
 begin
   if AArgCount > 1 then
@@ -9399,7 +9418,9 @@ var
   CbResult: TSouffleValue;
 begin
   TA := GetSouffleTypedArray(AReceiver);
-  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleBoolean(True));
+  if not Assigned(TA) then Exit(SouffleBoolean(True));
+  if (AArgCount < 1) then
+  begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('callback is not a function'); Exit(SouffleBoolean(True)); end;
   for I := 0 to TA.ElementLength - 1 do
   begin
     CallArgs[0] := SouffleFloat(TA.ReadElement(I));
@@ -9421,7 +9442,9 @@ var
   CbResult: TSouffleValue;
 begin
   TA := GetSouffleTypedArray(AReceiver);
-  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleBoolean(False));
+  if not Assigned(TA) then Exit(SouffleBoolean(False));
+  if (AArgCount < 1) then
+  begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('callback is not a function'); Exit(SouffleBoolean(False)); end;
   for I := 0 to TA.ElementLength - 1 do
   begin
     CallArgs[0] := SouffleFloat(TA.ReadElement(I));
@@ -11095,8 +11118,10 @@ end;
 
 procedure TGocciaRuntimeOperations.RegisterDelegates;
 var
-  SymSpeciesKey: string;
+  SymSpeciesKey, SymTagKey: string;
   TAKind: TSouffleTypedArrayKind;
+  SharedTAProto: TSouffleRecord;
+  TagGetterFn: TSouffleNativeFunction;
 begin
   if not Assigned(FVM) then Exit;
 
@@ -11151,6 +11176,23 @@ begin
 
   { ArrayBuffer static methods }
   AddStaticMethod(FArrayBufferBlueprint, 'isView', 1, @NativeArrayBufferIsView);
+
+  { Shared %TypedArray%.prototype with Symbol.toStringTag getter }
+  begin
+    SharedTAProto := TSouffleRecord.Create(0);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(SharedTAProto);
+    SharedTAProto.Delegate := FVM.RecordDelegate;
+    { Register Symbol.toStringTag getter }
+    SymTagKey := '@@sym:' + IntToStr(TGocciaSymbolValue.WellKnownToStringTag.Id);
+    TagGetterFn := TSouffleNativeFunction.Create('get [Symbol.toStringTag]', 0,
+      @NativeTypedArrayToStringTagGetter);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(TagGetterFn);
+    SharedTAProto.Getters.Put(SymTagKey, SouffleReference(TagGetterFn));
+    { Wire delegate chain: method delegate → shared prototype → record delegate }
+    FTypedArrayDelegate.Delegate := SharedTAProto;
+  end;
 
   { TypedArray static fields and methods }
   for TAKind := Low(TSouffleTypedArrayKind) to High(TSouffleTypedArrayKind) do
