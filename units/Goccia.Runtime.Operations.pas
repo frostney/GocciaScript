@@ -12686,6 +12686,57 @@ end;
 
 { === Native expect/matchers === }
 
+function IsErrorBlueprint(const ABp: TSouffleBlueprint): Boolean;
+var
+  Bp: TSouffleBlueprint;
+begin
+  Result := False;
+  Bp := ABp;
+  while Assigned(Bp) do
+  begin
+    if Bp = GNativeArrayJoinRuntime.FErrorBlueprint then
+      Exit(True);
+    Bp := Bp.SuperBlueprint;
+  end;
+end;
+
+function SafeValueToString(const AValue: TSouffleValue): string;
+begin
+  try
+    case AValue.Kind of
+      svkNil:
+        if AValue.Flags = GOCCIA_NIL_NULL then Result := 'null'
+        else Result := 'undefined';
+      svkBoolean:
+        if AValue.AsBoolean then Result := 'true' else Result := 'false';
+      svkInteger:
+        Result := IntToStr(AValue.AsInteger);
+      svkFloat:
+        Result := FloatToStr(AValue.AsFloat);
+      svkString:
+        Result := SouffleGetString(AValue);
+    else
+      if SouffleIsReference(AValue) and Assigned(AValue.AsReference) then
+      begin
+        if AValue.AsReference is TGocciaWrappedValue then
+        begin
+          if TGocciaWrappedValue(AValue.AsReference).Value is TGocciaSymbolValue then
+            Result := 'Symbol(' + TGocciaSymbolValue(
+              TGocciaWrappedValue(AValue.AsReference).Value).Description + ')'
+          else
+            Result := TGocciaWrappedValue(AValue.AsReference).Value.ToStringLiteral.Value;
+        end
+        else
+          Result := GNativeArrayJoinRuntime.CoerceToString(AValue);
+      end
+      else
+        Result := 'undefined';
+    end;
+  except
+    Result := '[value]';
+  end;
+end;
+
 function GetExpectActual(const AReceiver: TSouffleValue): TSouffleValue;
 var
   Rec: TSouffleRecord;
@@ -12735,8 +12786,8 @@ begin
     SouffleSameValueZero(Actual, Expected),
     'toBe',
     'Values are equal',
-    'Expected ' + GNativeArrayJoinRuntime.CoerceToString(Actual) +
-    ' to be ' + GNativeArrayJoinRuntime.CoerceToString(Expected));
+    'Expected ' + SafeValueToString(Actual) +
+    ' to be ' + SafeValueToString(Expected));
 end;
 
 function NativeMatcherToBeNull(const AReceiver: TSouffleValue;
@@ -12903,7 +12954,7 @@ begin
     Found := Pos(SouffleGetString(Expected), SouffleGetString(Actual)) > 0;
   MatcherResult(IsExpectNegated(AReceiver), Found,
     'toContain', '', 'Expected to contain ' +
-    GNativeArrayJoinRuntime.CoerceToString(Expected));
+    SafeValueToString(Expected));
 end;
 
 function NativeMatcherToHaveLength(const AReceiver: TSouffleValue;
@@ -12954,29 +13005,14 @@ begin
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
   Actual := GetExpectActual(AReceiver);
 
-  { Check if actual is a rejected promise (rejects path) }
+  { Check if actual is a rejected promise error (rejects path) }
   if SouffleIsReference(Actual) and Assigned(Actual.AsReference) and
-     (Actual.AsReference is TSouffleRecord) then
+     (Actual.AsReference is TSouffleRecord) and
+     Assigned(TSouffleRecord(Actual.AsReference).Blueprint) and
+     IsErrorBlueprint(TSouffleRecord(Actual.AsReference).Blueprint) then
   begin
-    Rec := TSouffleRecord(Actual.AsReference);
-    if Assigned(Rec.Blueprint) then
-    begin
-      { Already an error object from rejects path }
-      Threw := True;
-      ThrownVal := Actual;
-    end
-    else
-    begin
-      { Not an error — try to call as function }
-      Threw := False;
-      ThrownVal := SouffleNil;
-      if not SouffleIsReference(Actual) then
-      begin
-        GNativeArrayJoinRuntime.FTestRunner.AssertionFailed('toThrow',
-          'toThrow expects actual value to be a function');
-        Exit;
-      end;
-    end;
+    Threw := True;
+    ThrownVal := Actual;
   end
   else
   begin
@@ -13012,7 +13048,7 @@ begin
       begin
         Rec := TSouffleRecord(ThrownVal.AsReference);
         if Rec.Get('name', ThrownVal) then
-          ActualName := GNativeArrayJoinRuntime.CoerceToString(ThrownVal);
+          ActualName := SafeValueToString(ThrownVal);
       end;
       MatcherResult(IsExpectNegated(AReceiver),
         ActualName = ExpectedType,
@@ -13128,8 +13164,8 @@ begin
   MatcherResult(IsExpectNegated(AReceiver),
     SouffleDeepEqual(GetExpectActual(AReceiver), AArgs^),
     'toEqual', '', 'Expected ' +
-    GNativeArrayJoinRuntime.CoerceToString(GetExpectActual(AReceiver)) +
-    ' to equal ' + GNativeArrayJoinRuntime.CoerceToString(AArgs^));
+    SafeValueToString(GetExpectActual(AReceiver)) +
+    ' to equal ' + SafeValueToString(AArgs^));
 end;
 
 function NativeMatcherToHaveProperty(const AReceiver: TSouffleValue;
