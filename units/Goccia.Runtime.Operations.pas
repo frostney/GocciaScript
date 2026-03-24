@@ -1789,6 +1789,9 @@ end;
 
 function CoerceToPrimitiveSouffle(const ARuntime: TGocciaRuntimeOperations;
   const A: TSouffleValue): TSouffleValue; forward;
+function NativeBridgedCall(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer;
+  const AContext: TSouffleValue): TSouffleValue; forward;
 
 function StringToNumber(const S: string): Double;
 var
@@ -3031,12 +3034,13 @@ end;
 function TGocciaRuntimeOperations.GetProperty(const AObject: TSouffleValue;
   const AKey: string): TSouffleValue;
 var
-  GocciaObj, Prop: TGocciaValue;
+  GocciaObj, Prop, SubProp: TGocciaValue;
   Boxed: TGocciaObjectValue;
   Rec: TSouffleRecord;
   Arr: TSouffleArray;
   Bp: TSouffleBlueprint;
-  GetterVal: TSouffleValue;
+  GetterVal, SubWrapped: TSouffleValue;
+  SubNC: TSouffleNativeClosure;
   SM: TGocciaSouffleMap;
   SS: TGocciaSouffleSet;
   TA: TSouffleTypedArray;
@@ -3109,6 +3113,37 @@ begin
           if Rec.Get(AKey, Result) then
             Exit;
         end;
+      end
+      else if AObject.AsReference is TSouffleNativeClosure then
+      begin
+        { Sub-method access on bridged test/benchmark functions }
+        if AKey = PROP_NAME then
+          Exit(SouffleString(TSouffleNativeClosure(AObject.AsReference).Name));
+        if SouffleIsReference(TSouffleNativeClosure(AObject.AsReference).Context) and
+           Assigned(TSouffleNativeClosure(AObject.AsReference).Context.AsReference) and
+           (TSouffleNativeClosure(AObject.AsReference).Context.AsReference is TGocciaWrappedValue) then
+        begin
+          GocciaObj := TGocciaWrappedValue(
+            TSouffleNativeClosure(AObject.AsReference).Context.AsReference).Value;
+          if Assigned(GocciaObj) then
+          begin
+            SubProp := GocciaObj.GetProperty(AKey);
+            if Assigned(SubProp) and not (SubProp is TGocciaUndefinedLiteralValue) then
+            begin
+              if SubProp.IsCallable then
+              begin
+                SubWrapped := WrapGocciaValue(SubProp);
+                SubNC := TSouffleNativeClosure.Create(AKey, -1,
+                  @NativeBridgedCall, SubWrapped);
+                if Assigned(TGarbageCollector.Instance) then
+                  TGarbageCollector.Instance.AllocateObject(SubNC);
+                Exit(SouffleReference(SubNC));
+              end;
+              Exit(ToSouffleValue(SubProp));
+            end;
+          end;
+        end;
+        Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
       end
       else if AObject.AsReference is TSouffleBlueprint then
       begin
@@ -12385,6 +12420,43 @@ begin
   Result := AArgs^;
 end;
 
+{ === Generic bridge call for test/benchmark functions === }
+
+function NativeBridgedCall(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer;
+  const AContext: TSouffleValue): TSouffleValue;
+var
+  GocciaFn: TGocciaValue;
+  GocciaArgs: TGocciaArgumentsCollection;
+  GocciaResult: TGocciaValue;
+  I: Integer;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if not SouffleIsReference(AContext) or not Assigned(AContext.AsReference) or
+     not (AContext.AsReference is TGocciaWrappedValue) then
+    Exit;
+  GocciaFn := TGocciaWrappedValue(AContext.AsReference).Value;
+  if not Assigned(GocciaFn) or not GocciaFn.IsCallable then
+    Exit;
+  GocciaArgs := TGocciaArgumentsCollection.Create;
+  try
+    for I := 0 to AArgCount - 1 do
+      GocciaArgs.Add(GNativeArrayJoinRuntime.UnwrapToGocciaValue(
+        PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+    try
+      GocciaResult := TGocciaFunctionBase(GocciaFn).Call(
+        GocciaArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      if Assigned(GocciaResult) then
+        Result := GNativeArrayJoinRuntime.ToSouffleValue(GocciaResult);
+    except
+      on E: TGocciaThrowValue do
+        GNativeArrayJoinRuntime.RethrowAsVM(E);
+    end;
+  finally
+    GocciaArgs.Free;
+  end;
+end;
+
 { === Native structuredClone === }
 
 function NativeSouffleStructuredClone(const AValue: TSouffleValue;
@@ -13194,6 +13266,8 @@ var
   NativeFnVal: TGocciaNativeFunctionValue;
   BridgedFn: TGocciaBridgedFunction;
   NF: TSouffleNativeFunction;
+  NC: TSouffleNativeClosure;
+  WrappedFnRef: TSouffleValue;
   Rec, GlobalThisRec: TSouffleRecord;
   GC: TGarbageCollector;
   GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
@@ -13257,6 +13331,24 @@ begin
     if (Key = 'Uint32Array') and Assigned(FTypedArrayBlueprints[stakUint32]) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypedArrayBlueprints[stakUint32])); Continue; end;
     if (Key = 'Float32Array') and Assigned(FTypedArrayBlueprints[stakFloat32]) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypedArrayBlueprints[stakFloat32])); Continue; end;
     if (Key = 'Float64Array') and Assigned(FTypedArrayBlueprints[stakFloat64]) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypedArrayBlueprints[stakFloat64])); Continue; end;
+
+    { Test/benchmark functions — wrap as TSouffleNativeClosure with Goccia fn as context }
+    if (Key = 'describe') or (Key = 'test') or (Key = 'it') or
+       (Key = 'expect') or (Key = 'beforeEach') or (Key = 'afterEach') or
+       (Key = 'runTests') or (Key = 'suite') or (Key = 'bench') or
+       (Key = 'runBenchmarks') then
+    begin
+      if GocciaVal is TGocciaNativeFunctionValue then
+      begin
+        NativeFnVal := TGocciaNativeFunctionValue(GocciaVal);
+        WrappedFnRef := WrapGocciaValue(NativeFnVal);
+        NC := TSouffleNativeClosure.Create(Key, -1,
+          @NativeBridgedCall, WrappedFnRef);
+        if Assigned(GC) then GC.AllocateObject(NC);
+        FGlobals.AddOrSetValue(Key, SouffleReference(NC));
+      end;
+      Continue;
+    end;
 
     if Key = 'structuredClone' then
     begin
