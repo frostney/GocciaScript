@@ -11515,26 +11515,32 @@ begin
   FTypeErrorBlueprint := CreateBuiltinBlueprint('TypeError', 0, FErrorDelegate, '');
   FTypeErrorBlueprint.SuperBlueprint := FErrorBlueprint;
   FTypeErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+  FTypeErrorBlueprint.Prototype.Put('name', SouffleString('TypeError'));
 
   FRangeErrorBlueprint := CreateBuiltinBlueprint('RangeError', 0, FErrorDelegate, '');
   FRangeErrorBlueprint.SuperBlueprint := FErrorBlueprint;
   FRangeErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+  FRangeErrorBlueprint.Prototype.Put('name', SouffleString('RangeError'));
 
   FReferenceErrorBlueprint := CreateBuiltinBlueprint('ReferenceError', 0, FErrorDelegate, '');
   FReferenceErrorBlueprint.SuperBlueprint := FErrorBlueprint;
   FReferenceErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+  FReferenceErrorBlueprint.Prototype.Put('name', SouffleString('ReferenceError'));
 
   FSyntaxErrorBlueprint := CreateBuiltinBlueprint('SyntaxError', 0, FErrorDelegate, '');
   FSyntaxErrorBlueprint.SuperBlueprint := FErrorBlueprint;
   FSyntaxErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+  FSyntaxErrorBlueprint.Prototype.Put('name', SouffleString('SyntaxError'));
 
   FURIErrorBlueprint := CreateBuiltinBlueprint('URIError', 0, FErrorDelegate, '');
   FURIErrorBlueprint.SuperBlueprint := FErrorBlueprint;
   FURIErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+  FURIErrorBlueprint.Prototype.Put('name', SouffleString('URIError'));
 
   FAggregateErrorBlueprint := CreateBuiltinBlueprint('AggregateError', 0, FErrorDelegate, '');
   FAggregateErrorBlueprint.SuperBlueprint := FErrorBlueprint;
   FAggregateErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+  FAggregateErrorBlueprint.Prototype.Put('name', SouffleString('AggregateError'));
 
   { Error static methods }
   AddStaticMethod(FErrorBlueprint, 'isError', 1, @NativeErrorIsError);
