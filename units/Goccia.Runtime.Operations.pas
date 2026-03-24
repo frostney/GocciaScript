@@ -396,8 +396,6 @@ type
       out AResult: TSouffleValue): Boolean;
     function UnwrapToGocciaValue(const AValue: TSouffleValue): TGocciaValue;
     function ToSouffleValue(const AValue: TGocciaValue): TSouffleValue;
-    function ConvertBlueprintMapToGoccia(const ARec: TSouffleRecord): TGocciaValue;
-    function ConvertBlueprintSetToGoccia(const ARec: TSouffleRecord): TGocciaValue;
     procedure PopulateMapFromIterable(const AMap: TSouffleHeapObject; const AIterable: TSouffleValue);
     procedure PopulateSetFromIterable(const ASet: TSouffleHeapObject; const AIterable: TSouffleValue);
 
@@ -5831,47 +5829,6 @@ begin
   Result := SouffleReference(Rec);
 end;
 
-function TGocciaRuntimeOperations.ConvertBlueprintMapToGoccia(
-  const ARec: TSouffleRecord): TGocciaValue;
-var
-  SM: TGocciaSouffleMap;
-  Slot0: TSouffleValue;
-  MapVal: TGocciaMapValue;
-  I: Integer;
-begin
-  MapVal := TGocciaMapValue.Create;
-  Slot0 := ARec.GetSlot(0);
-  if SouffleIsReference(Slot0) and Assigned(Slot0.AsReference) and
-     (Slot0.AsReference is TGocciaSouffleMap) then
-  begin
-    SM := TGocciaSouffleMap(Slot0.AsReference);
-    for I := 0 to SM.Count - 1 do
-      MapVal.SetEntry(
-        UnwrapToGocciaValue(SM.GetKeyAt(I)),
-        UnwrapToGocciaValue(SM.GetValueAt(I)));
-  end;
-  Result := MapVal;
-end;
-
-function TGocciaRuntimeOperations.ConvertBlueprintSetToGoccia(
-  const ARec: TSouffleRecord): TGocciaValue;
-var
-  SS: TGocciaSouffleSet;
-  Slot0: TSouffleValue;
-  SetVal: TGocciaSetValue;
-  I: Integer;
-begin
-  SetVal := TGocciaSetValue.Create;
-  Slot0 := ARec.GetSlot(0);
-  if SouffleIsReference(Slot0) and Assigned(Slot0.AsReference) and
-     (Slot0.AsReference is TGocciaSouffleSet) then
-  begin
-    SS := TGocciaSouffleSet(Slot0.AsReference);
-    for I := 0 to SS.Count - 1 do
-      SetVal.AddItem(UnwrapToGocciaValue(SS.GetItemAt(I)));
-  end;
-  Result := SetVal;
-end;
 
 procedure TGocciaRuntimeOperations.PopulateMapFromIterable(
   const AMap: TSouffleHeapObject; const AIterable: TSouffleValue);
@@ -7582,23 +7539,7 @@ begin
   end;
 end;
 
-function UnwrapMapFromReceiver(const AReceiver: TSouffleValue): TGocciaMapValue; inline;
-begin
-  Result := nil;
-  if SouffleIsReference(AReceiver) and Assigned(AReceiver.AsReference) and
-     (AReceiver.AsReference is TGocciaWrappedValue) and
-     (TGocciaWrappedValue(AReceiver.AsReference).Value is TGocciaMapValue) then
-    Result := TGocciaMapValue(TGocciaWrappedValue(AReceiver.AsReference).Value);
-end;
 
-function UnwrapSetFromReceiver(const AReceiver: TSouffleValue): TGocciaSetValue; inline;
-begin
-  Result := nil;
-  if SouffleIsReference(AReceiver) and Assigned(AReceiver.AsReference) and
-     (AReceiver.AsReference is TGocciaWrappedValue) and
-     (TGocciaWrappedValue(AReceiver.AsReference).Value is TGocciaSetValue) then
-    Result := TGocciaSetValue(TGocciaWrappedValue(AReceiver.AsReference).Value);
-end;
 
 function InvokeGocciaMethod(const AReceiver: TSouffleValue;
   const AMethodName: string; const AArgs: PSouffleValue;
@@ -7632,24 +7573,13 @@ function NativeMapGet(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
   SM: TGocciaSouffleMap;
-  M: TGocciaMapValue;
-  Key: TGocciaValue;
-  Index: Integer;
 begin
   SM := GetSouffleMap(AReceiver);
   if Assigned(SM) then
   begin
     if AArgCount < 1 then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
     Result := SM.GetEntry(AArgs^);
-    Exit;
-  end;
-  M := UnwrapMapFromReceiver(AReceiver);
-  if not Assigned(M) or (AArgCount < 1) then
-    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
-  Key := GNativeArrayJoinRuntime.UnwrapToGocciaValue(AArgs^);
-  Index := M.FindEntry(Key);
-  if Index >= 0 then
-    Result := GNativeArrayJoinRuntime.ToSouffleValue(M.Entries[Index].Value)
+  end
   else
     Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
@@ -7658,8 +7588,6 @@ function NativeMapSet(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
   SM: TGocciaSouffleMap;
-  M: TGocciaMapValue;
-  Key, Val: TGocciaValue;
 begin
   SM := GetSouffleMap(AReceiver);
   if Assigned(SM) then
@@ -7668,21 +7596,6 @@ begin
       SM.SetEntry(AArgs^, PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^)
     else if AArgCount = 1 then
       SM.SetEntry(AArgs^, SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
-    Exit(AReceiver);
-  end;
-  M := UnwrapMapFromReceiver(AReceiver);
-  if not Assigned(M) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
-  if AArgCount >= 2 then
-  begin
-    Key := GNativeArrayJoinRuntime.UnwrapToGocciaValue(AArgs^);
-    Val := GNativeArrayJoinRuntime.UnwrapToGocciaValue(
-      PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^);
-    M.SetEntry(Key, Val);
-  end
-  else if AArgCount = 1 then
-  begin
-    Key := GNativeArrayJoinRuntime.UnwrapToGocciaValue(AArgs^);
-    M.SetEntry(Key, TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
   Result := AReceiver;
 end;
@@ -7691,20 +7604,15 @@ function NativeMapHas(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
   SM: TGocciaSouffleMap;
-  M: TGocciaMapValue;
-  Key: TGocciaValue;
 begin
   SM := GetSouffleMap(AReceiver);
   if Assigned(SM) then
   begin
     if AArgCount < 1 then Exit(SouffleBoolean(False));
-    Exit(SouffleBoolean(SM.HasKey(AArgs^)));
-  end;
-  M := UnwrapMapFromReceiver(AReceiver);
-  if not Assigned(M) or (AArgCount < 1) then
-    Exit(SouffleBoolean(False));
-  Key := GNativeArrayJoinRuntime.UnwrapToGocciaValue(AArgs^);
-  Result := SouffleBoolean(M.FindEntry(Key) >= 0);
+    Result := SouffleBoolean(SM.HasKey(AArgs^));
+  end
+  else
+    Result := SouffleBoolean(False);
 end;
 
 function NativeMapDelete(const AReceiver: TSouffleValue;
@@ -7718,7 +7626,7 @@ begin
     if AArgCount < 1 then Exit(SouffleBoolean(False));
     Exit(SouffleBoolean(SM.DeleteEntry(AArgs^)));
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'delete', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeMapClear(const AReceiver: TSouffleValue;
@@ -7732,7 +7640,7 @@ begin
     SM.Clear;
     Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'clear', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeMapForEach(const AReceiver: TSouffleValue;
@@ -7754,7 +7662,7 @@ begin
     end;
     Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'forEach', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeMapKeys(const AReceiver: TSouffleValue;
@@ -7770,7 +7678,7 @@ begin
       TGarbageCollector.Instance.AllocateObject(Result.AsReference);
     Exit;
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'keys', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeMapValues(const AReceiver: TSouffleValue;
@@ -7786,7 +7694,7 @@ begin
       TGarbageCollector.Instance.AllocateObject(Result.AsReference);
     Exit;
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'values', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeMapEntries(const AReceiver: TSouffleValue;
@@ -7802,7 +7710,7 @@ begin
       TGarbageCollector.Instance.AllocateObject(Result.AsReference);
     Exit;
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'entries', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 { Native Map/Set iterator delegate methods }
@@ -7998,7 +7906,7 @@ begin
     if AArgCount < 1 then Exit(SouffleBoolean(False));
     Exit(SouffleBoolean(SS.Contains(AArgs^)));
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'has', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeSetAdd(const AReceiver: TSouffleValue;
@@ -8013,7 +7921,7 @@ begin
       SS.Add(AArgs^);
     Exit(AReceiver);
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'add', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeSetDelete(const AReceiver: TSouffleValue;
@@ -8027,7 +7935,7 @@ begin
     if AArgCount < 1 then Exit(SouffleBoolean(False));
     Exit(SouffleBoolean(SS.Delete(AArgs^)));
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'delete', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeSetClear(const AReceiver: TSouffleValue;
@@ -8041,7 +7949,7 @@ begin
     SS.Clear;
     Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'clear', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeSetForEach(const AReceiver: TSouffleValue;
@@ -8063,7 +7971,7 @@ begin
     end;
     Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'forEach', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeSetValues(const AReceiver: TSouffleValue;
@@ -8079,7 +7987,7 @@ begin
       TGarbageCollector.Instance.AllocateObject(Result.AsReference);
     Exit;
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'values', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeSetEntries(const AReceiver: TSouffleValue;
@@ -8095,7 +8003,7 @@ begin
       TGarbageCollector.Instance.AllocateObject(Result.AsReference);
     Exit;
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'entries', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function CreateBlueprintSet(const AItems: TGocciaSouffleSet = nil): TSouffleValue;
@@ -8302,7 +8210,7 @@ begin
     Exit;
   end;
   { Fallback for TGocciaPromiseValue wrapped values }
-  Result := InvokeGocciaMethod(AReceiver, 'then', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativePromiseCatch(const AReceiver: TSouffleValue;
@@ -8323,7 +8231,7 @@ begin
     Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ChildPromise);
     Exit;
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'catch', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativePromiseFinally(const AReceiver: TSouffleValue;
@@ -8351,7 +8259,7 @@ begin
     Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ChildPromise);
     Exit;
   end;
-  Result := InvokeGocciaMethod(AReceiver, 'finally', AArgs, AArgCount);
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 { Native Promise static delegate callbacks }
