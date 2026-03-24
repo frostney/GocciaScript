@@ -12456,6 +12456,73 @@ begin
   GNativeArrayJoinRuntime.FTestRunner.AddSuite(Name, Callback, False);
 end;
 
+function NativeDescribeRunIf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Condition: Boolean;
+  Val: TSouffleValue;
+begin
+  Condition := False;
+  if AArgCount > 0 then
+  begin
+    Val := AArgs^;
+    case Val.Kind of
+      svkBoolean: Condition := Val.AsBoolean;
+      svkInteger: Condition := Val.AsInteger <> 0;
+      svkFloat: Condition := (not IsNan(Val.AsFloat)) and (Val.AsFloat <> 0);
+      svkString: Condition := SouffleGetString(Val) <> '';
+      svkReference: Condition := True;
+      svkNil: Condition := False;
+    end;
+  end;
+  if Condition then
+  begin
+    { Return the describe function — look it up from globals }
+    if GNativeArrayJoinRuntime.FGlobals.TryGetValue('describe', Result) then
+      Exit;
+  end;
+  { Return describe.skip — look up skip on the delegate }
+  if Assigned(GNativeArrayJoinRuntime.FDescribeDelegate) and
+     GNativeArrayJoinRuntime.FDescribeDelegate.Get('skip', Result) then
+    Exit;
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
+function NativeDescribeSkipIf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Condition: Boolean;
+  Val: TSouffleValue;
+begin
+  Condition := False;
+  if AArgCount > 0 then
+  begin
+    Val := AArgs^;
+    case Val.Kind of
+      svkBoolean: Condition := Val.AsBoolean;
+      svkInteger: Condition := Val.AsInteger <> 0;
+      svkFloat: Condition := (not IsNan(Val.AsFloat)) and (Val.AsFloat <> 0);
+      svkString: Condition := SouffleGetString(Val) <> '';
+      svkReference: Condition := True;
+      svkNil: Condition := False;
+    end;
+  end;
+  if Condition then
+  begin
+    { Condition is true — skip }
+    if Assigned(GNativeArrayJoinRuntime.FDescribeDelegate) and
+       GNativeArrayJoinRuntime.FDescribeDelegate.Get('skip', Result) then
+      Exit;
+  end
+  else
+  begin
+    { Condition is false — run normally }
+    if GNativeArrayJoinRuntime.FGlobals.TryGetValue('describe', Result) then
+      Exit;
+  end;
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
 function NativeDescribeSkip(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
@@ -14165,11 +14232,15 @@ const
     (Name: 'resolves';                Arity: 0; Callback: @NativeExpectResolves),
     (Name: 'rejects';                 Arity: 0; Callback: @NativeExpectRejects)
   );
-  DESCRIBE_SUB_METHODS: array[0..0] of TSouffleMethodEntry = (
-    (Name: 'skip'; Arity: 2; Callback: @NativeDescribeSkip)
+  DESCRIBE_SUB_METHODS: array[0..2] of TSouffleMethodEntry = (
+    (Name: 'skip';   Arity: 2; Callback: @NativeDescribeSkip),
+    (Name: 'runIf';  Arity: 1; Callback: @NativeDescribeRunIf),
+    (Name: 'skipIf'; Arity: 1; Callback: @NativeDescribeSkipIf)
   );
-  TEST_SUB_METHODS: array[0..0] of TSouffleMethodEntry = (
-    (Name: 'skip'; Arity: 2; Callback: @NativeTestSkip)
+  TEST_SUB_METHODS: array[0..2] of TSouffleMethodEntry = (
+    (Name: 'skip';   Arity: 2; Callback: @NativeTestSkip),
+    (Name: 'todo';   Arity: 2; Callback: @NativeTestSkip),
+    (Name: 'only';   Arity: 2; Callback: @NativeTest)
   );
 var
   GC: TGarbageCollector;
