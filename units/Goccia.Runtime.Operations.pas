@@ -13264,7 +13264,6 @@ var
   GocciaVal: TGocciaValue;
   ObjVal: TGocciaObjectValue;
   NativeFnVal: TGocciaNativeFunctionValue;
-  BridgedFn: TGocciaBridgedFunction;
   NF: TSouffleNativeFunction;
   NC: TSouffleNativeClosure;
   WrappedFnRef: TSouffleValue;
@@ -13436,9 +13435,11 @@ begin
         FGlobals.AddOrSetValue(Key, SouffleReference(FFunctionBlueprint)); end
       else
       begin
-        BridgedFn := TGocciaBridgedFunction.Create(NativeFnVal, Self);
-        if Assigned(GC) then GC.AllocateObject(BridgedFn);
-        FGlobals.AddOrSetValue(Key, SouffleReference(BridgedFn));
+        WrappedFnRef := WrapGocciaValue(NativeFnVal);
+        NC := TSouffleNativeClosure.Create(Key, -1,
+          @NativeBridgedCall, WrappedFnRef);
+        if Assigned(GC) then GC.AllocateObject(NC);
+        FGlobals.AddOrSetValue(Key, SouffleReference(NC));
       end;
     end
     else if (GocciaVal is TGocciaObjectValue)
