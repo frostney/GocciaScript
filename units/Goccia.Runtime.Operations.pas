@@ -5132,9 +5132,12 @@ begin
       Exit(SP.PromiseResult);
     if SP.State = spssRejected then
     begin
-      { Re-create value to ensure clean TSouffleValue record }
-      raise ESouffleThrow.Create(
-        SouffleRematerialize(SP.PromiseResult));
+      { Re-create string value to ensure clean TSouffleValue record }
+      if SP.PromiseResult.Kind = svkString then
+        raise ESouffleThrow.Create(
+          SouffleString(SouffleGetString(SP.PromiseResult)))
+      else
+        raise ESouffleThrow.Create(SP.PromiseResult);
     end;
     { Pending: drain microtask queue }
     Queue := TGocciaMicrotaskQueue.Instance;
@@ -5144,8 +5147,11 @@ begin
       Exit(SP.PromiseResult);
     if SP.State = spssRejected then
     begin
-      raise ESouffleThrow.Create(
-        SouffleRematerialize(SP.PromiseResult));
+      if SP.PromiseResult.Kind = svkString then
+        raise ESouffleThrow.Create(
+          SouffleString(SouffleGetString(SP.PromiseResult)))
+      else
+        raise ESouffleThrow.Create(SP.PromiseResult);
     end;
     ThrowTypeErrorMessage('await: Promise did not settle after microtask drain');
     Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
@@ -12751,16 +12757,6 @@ end;
 
 { === Native expect/matchers === }
 
-function SouffleRematerialize(const AValue: TSouffleValue): TSouffleValue;
-begin
-  case AValue.Kind of
-    svkString:
-      Result := SouffleString(SouffleGetString(AValue));
-  else
-    Result := AValue;
-  end;
-end;
-
 function IsErrorBlueprint(const ABp: TSouffleBlueprint): Boolean;
 var
   Bp: TSouffleBlueprint;
@@ -14558,6 +14554,18 @@ begin
       else if Key = 'Function' then begin
         FFunctionBlueprint := CreateBlueprintFromConstructor(Self, 'Function', nil, NativeFnVal);
         FGlobals.AddOrSetValue(Key, SouffleReference(FFunctionBlueprint)); end
+      else if (Key = CONSTRUCTOR_PROMISE) or
+              (Key = 'Error') or (Key = 'TypeError') or (Key = 'RangeError') or
+              (Key = 'ReferenceError') or (Key = 'SyntaxError') or
+              (Key = 'URIError') or (Key = 'AggregateError') or
+              (Key = 'DOMException') or
+              (Key = 'Map') or (Key = 'Set') or
+              (Key = 'ArrayBuffer') or (Key = 'SharedArrayBuffer') or
+              (Key = 'Int8Array') or (Key = 'Uint8Array') or (Key = 'Uint8ClampedArray') or
+              (Key = 'Int16Array') or (Key = 'Uint16Array') or
+              (Key = 'Int32Array') or (Key = 'Uint32Array') or
+              (Key = 'Float32Array') or (Key = 'Float64Array') then
+        begin { Already replaced with blueprint in wrapped section — skip } end
       else
       begin
         WrappedFnRef := WrapGocciaValue(NativeFnVal);
