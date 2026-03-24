@@ -10898,9 +10898,8 @@ const
     (Name: 'finally'; Arity: 1; Callback: @NativePromiseFinally)
   );
 
-  ARRAYBUFFER_PROTOTYPE_METHODS: array[0..1] of TSouffleMethodEntry = (
-    (Name: 'slice';      Arity: 2; Callback: @NativeArrayBufferSlice),
-    (Name: 'byteLength'; Arity: 0; Callback: @NativeArrayBufferByteLength)
+  ARRAYBUFFER_PROTOTYPE_METHODS: array[0..0] of TSouffleMethodEntry = (
+    (Name: 'slice';      Arity: 2; Callback: @NativeArrayBufferSlice)
   );
 
   TYPEDARRAY_PROTOTYPE_METHODS: array[0..26] of TSouffleMethodEntry = (
