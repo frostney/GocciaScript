@@ -217,6 +217,13 @@ type
     FSharedArrayBufferDelegate: TSouffleRecord;
     FTypedArrayDelegate: TSouffleRecord;
     FTypedArrayBlueprints: array[TSouffleTypedArrayKind] of TSouffleBlueprint;
+    FArrayBlueprint: TSouffleBlueprint;
+    FObjectBlueprint: TSouffleBlueprint;
+    FStringBlueprint: TSouffleBlueprint;
+    FNumberBlueprint: TSouffleBlueprint;
+    FBooleanBlueprint: TSouffleBlueprint;
+    FSymbolBlueprint: TSouffleBlueprint;
+    FFunctionBlueprint: TSouffleBlueprint;
     FErrorBlueprint: TSouffleBlueprint;
     FTypeErrorBlueprint: TSouffleBlueprint;
     FRangeErrorBlueprint: TSouffleBlueprint;
@@ -11629,6 +11636,42 @@ begin
   ABp.StaticFields.Put(AName, SouffleReference(NF));
 end;
 
+function CreateBlueprintFromConstructor(
+  const ARuntime: TGocciaRuntimeOperations;
+  const AName: string;
+  const ADelegate: TSouffleRecord;
+  const AGocciaFn: TGocciaNativeFunctionValue): TSouffleBlueprint;
+var
+  PropNames: TArray<string>;
+  I: Integer;
+  PropVal: TGocciaValue;
+  BridgedSubFn: TGocciaBridgedFunction;
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  Result := ARuntime.CreateBuiltinBlueprint(AName, 0, ADelegate, '');
+
+  { Extract sub-methods from Goccia constructor and add as StaticFields }
+  PropNames := AGocciaFn.GetOwnPropertyNames;
+  for I := 0 to Length(PropNames) - 1 do
+  begin
+    if (PropNames[I] = 'length') or (PropNames[I] = 'name') or
+       (PropNames[I] = 'prototype') or (PropNames[I] = 'caller') or
+       (PropNames[I] = 'arguments') then
+      Continue;
+    PropVal := AGocciaFn.GetProperty(PropNames[I]);
+    if Assigned(PropVal) and PropVal.IsCallable then
+    begin
+      BridgedSubFn := TGocciaBridgedFunction.Create(
+        TGocciaNativeFunctionValue(PropVal), ARuntime);
+      if Assigned(GC) then GC.AllocateObject(BridgedSubFn);
+      Result.StaticFields.Put(PropNames[I], SouffleReference(BridgedSubFn));
+    end
+    else if Assigned(PropVal) then
+      Result.StaticFields.Put(PropNames[I], ARuntime.ToSouffleValue(PropVal));
+  end;
+end;
+
 procedure TGocciaRuntimeOperations.RegisterDelegates;
 var
   SymSpeciesKey, SymTagKey: string;
@@ -12097,9 +12140,35 @@ begin
     if GocciaVal is TGocciaNativeFunctionValue then
     begin
       NativeFnVal := TGocciaNativeFunctionValue(GocciaVal);
-      BridgedFn := TGocciaBridgedFunction.Create(NativeFnVal, Self);
-      if Assigned(GC) then GC.AllocateObject(BridgedFn);
-      FGlobals.AddOrSetValue(Key, SouffleReference(BridgedFn));
+
+      { Convert core constructors to blueprints with static fields }
+      if Key = 'Array' then begin
+        FArrayBlueprint := CreateBlueprintFromConstructor(Self, 'Array', TSouffleRecord(FVM.ArrayDelegate), NativeFnVal);
+        FGlobals.AddOrSetValue(Key, SouffleReference(FArrayBlueprint)); end
+      else if Key = 'Object' then begin
+        FObjectBlueprint := CreateBlueprintFromConstructor(Self, 'Object', TSouffleRecord(FVM.RecordDelegate), NativeFnVal);
+        FGlobals.AddOrSetValue(Key, SouffleReference(FObjectBlueprint)); end
+      else if Key = 'String' then begin
+        FStringBlueprint := CreateBlueprintFromConstructor(Self, 'String', FStringDelegate, NativeFnVal);
+        FGlobals.AddOrSetValue(Key, SouffleReference(FStringBlueprint)); end
+      else if Key = 'Number' then begin
+        FNumberBlueprint := CreateBlueprintFromConstructor(Self, 'Number', FNumberDelegate, NativeFnVal);
+        FGlobals.AddOrSetValue(Key, SouffleReference(FNumberBlueprint)); end
+      else if Key = 'Boolean' then begin
+        FBooleanBlueprint := CreateBlueprintFromConstructor(Self, 'Boolean', nil, NativeFnVal);
+        FGlobals.AddOrSetValue(Key, SouffleReference(FBooleanBlueprint)); end
+      else if Key = 'Symbol' then begin
+        FSymbolBlueprint := CreateBlueprintFromConstructor(Self, 'Symbol', nil, NativeFnVal);
+        FGlobals.AddOrSetValue(Key, SouffleReference(FSymbolBlueprint)); end
+      else if Key = 'Function' then begin
+        FFunctionBlueprint := CreateBlueprintFromConstructor(Self, 'Function', nil, NativeFnVal);
+        FGlobals.AddOrSetValue(Key, SouffleReference(FFunctionBlueprint)); end
+      else
+      begin
+        BridgedFn := TGocciaBridgedFunction.Create(NativeFnVal, Self);
+        if Assigned(GC) then GC.AllocateObject(BridgedFn);
+        FGlobals.AddOrSetValue(Key, SouffleReference(BridgedFn));
+      end;
     end
     else if (GocciaVal is TGocciaObjectValue)
       and not (GocciaVal is TGocciaClassValue)
@@ -13218,6 +13287,20 @@ begin
   for TAKind := Low(TSouffleTypedArrayKind) to High(TSouffleTypedArrayKind) do
     if Assigned(FTypedArrayBlueprints[TAKind]) and not FTypedArrayBlueprints[TAKind].GCMarked then
       FTypedArrayBlueprints[TAKind].MarkReferences;
+  if Assigned(FArrayBlueprint) and not FArrayBlueprint.GCMarked then
+    FArrayBlueprint.MarkReferences;
+  if Assigned(FObjectBlueprint) and not FObjectBlueprint.GCMarked then
+    FObjectBlueprint.MarkReferences;
+  if Assigned(FStringBlueprint) and not FStringBlueprint.GCMarked then
+    FStringBlueprint.MarkReferences;
+  if Assigned(FNumberBlueprint) and not FNumberBlueprint.GCMarked then
+    FNumberBlueprint.MarkReferences;
+  if Assigned(FBooleanBlueprint) and not FBooleanBlueprint.GCMarked then
+    FBooleanBlueprint.MarkReferences;
+  if Assigned(FSymbolBlueprint) and not FSymbolBlueprint.GCMarked then
+    FSymbolBlueprint.MarkReferences;
+  if Assigned(FFunctionBlueprint) and not FFunctionBlueprint.GCMarked then
+    FFunctionBlueprint.MarkReferences;
   if Assigned(FErrorBlueprint) and not FErrorBlueprint.GCMarked then
     FErrorBlueprint.MarkReferences;
   if Assigned(FTypeErrorBlueprint) and not FTypeErrorBlueprint.GCMarked then
