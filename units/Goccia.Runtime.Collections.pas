@@ -205,6 +205,9 @@ begin
       Exit((A.AsInteger = 0) and (B.AsFloat = 0.0));
     if (A.Kind = svkFloat) and (B.Kind = svkInteger) then
       Exit((A.AsFloat = 0.0) and (B.AsInteger = 0));
+    { Cross-compare inline string vs heap string }
+    if SouffleIsStringValue(A) and SouffleIsStringValue(B) then
+      Exit(SouffleGetString(A) = SouffleGetString(B));
     Exit(False);
   end;
 

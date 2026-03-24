@@ -12885,7 +12885,8 @@ begin
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
   Actual := GetExpectActual(AReceiver);
   MatcherResult(IsExpectNegated(AReceiver),
-    (Actual.Kind = svkNil) and (Actual.Flags = GOCCIA_NIL_UNDEFINED),
+    (Actual.Kind = svkNil) and
+    ((Actual.Flags = GOCCIA_NIL_UNDEFINED) or (Actual.Flags = GOCCIA_NIL_HOLE)),
     'toBeUndefined', '', 'Expected undefined');
 end;
 
@@ -13185,14 +13186,32 @@ end;
 
 function SouffleDeepEqualRecords(const A, B: TSouffleRecord): Boolean;
 var
-  I: Integer;
+  I, CountA, CountB: Integer;
   Key: string;
   ValA, ValB: TSouffleValue;
 begin
-  if A.Count <> B.Count then Exit(False);
+  { Count visible keys only (exclude symbols and private) }
+  CountA := 0;
   for I := 0 to A.Count - 1 do
   begin
     Key := A.GetOrderedKey(I);
+    if (Length(Key) > 0) and (Key[1] <> '#') and (Copy(Key, 1, 5) <> '@@sym') then
+      Inc(CountA);
+  end;
+  CountB := 0;
+  for I := 0 to B.Count - 1 do
+  begin
+    Key := B.GetOrderedKey(I);
+    if (Length(Key) > 0) and (Key[1] <> '#') and (Copy(Key, 1, 5) <> '@@sym') then
+      Inc(CountB);
+  end;
+  if CountA <> CountB then Exit(False);
+  { Compare visible properties }
+  for I := 0 to A.Count - 1 do
+  begin
+    Key := A.GetOrderedKey(I);
+    if (Length(Key) > 0) and (Key[1] = '#') then Continue;
+    if Copy(Key, 1, 5) = '@@sym' then Continue;
     if not A.Get(Key, ValA) then Exit(False);
     if not B.Get(Key, ValB) then Exit(False);
     if not SouffleDeepEqual(ValA, ValB) then Exit(False);
