@@ -11636,6 +11636,579 @@ begin
   ABp.StaticFields.Put(AName, SouffleReference(NF));
 end;
 
+{ === Native Number static callbacks === }
+
+function NativeNumberIsNaN(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  if AArgCount < 1 then Exit(SouffleBoolean(False));
+  if AArgs^.Kind = svkFloat then
+    Result := SouffleBoolean(IsNan(AArgs^.AsFloat))
+  else
+    Result := SouffleBoolean(False);
+end;
+
+function NativeNumberIsFinite(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  if AArgCount < 1 then Exit(SouffleBoolean(False));
+  case AArgs^.Kind of
+    svkInteger: Result := SouffleBoolean(True);
+    svkFloat: Result := SouffleBoolean(not IsNan(AArgs^.AsFloat) and not IsInfinite(AArgs^.AsFloat));
+  else
+    Result := SouffleBoolean(False);
+  end;
+end;
+
+function NativeNumberIsInteger(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  if AArgCount < 1 then Exit(SouffleBoolean(False));
+  case AArgs^.Kind of
+    svkInteger: Result := SouffleBoolean(True);
+    svkFloat: Result := SouffleBoolean(
+      not IsNan(AArgs^.AsFloat) and not IsInfinite(AArgs^.AsFloat) and
+      (Frac(AArgs^.AsFloat) = 0.0));
+  else
+    Result := SouffleBoolean(False);
+  end;
+end;
+
+function NativeNumberIsSafeInteger(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+const
+  MAX_SAFE = 9007199254740991.0;
+begin
+  if AArgCount < 1 then Exit(SouffleBoolean(False));
+  case AArgs^.Kind of
+    svkInteger: Result := SouffleBoolean(True);
+    svkFloat: Result := SouffleBoolean(
+      not IsNan(AArgs^.AsFloat) and not IsInfinite(AArgs^.AsFloat) and
+      (Frac(AArgs^.AsFloat) = 0.0) and
+      (Abs(AArgs^.AsFloat) <= MAX_SAFE));
+  else
+    Result := SouffleBoolean(False);
+  end;
+end;
+
+function NativeNumberParseInt(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  Radix, I, Digit: Integer;
+  Negative: Boolean;
+  IntResult: Int64;
+begin
+  if AArgCount < 1 then Exit(SouffleFloat(NaN));
+  S := Trim(GNativeArrayJoinRuntime.CoerceToString(AArgs^));
+  if S = '' then Exit(SouffleFloat(NaN));
+
+  Radix := 10;
+  if AArgCount > 1 then
+  begin
+    Radix := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(
+      PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^));
+    if (Radix < 2) or (Radix > 36) then
+      Exit(SouffleFloat(NaN));
+  end;
+
+  Negative := False;
+  I := 1;
+  if (I <= Length(S)) and ((S[I] = '+') or (S[I] = '-')) then
+  begin
+    Negative := S[I] = '-';
+    Inc(I);
+  end;
+
+  if (Radix = 16) and (I + 1 <= Length(S)) and (S[I] = '0') and
+     ((S[I + 1] = 'x') or (S[I + 1] = 'X')) then
+    Inc(I, 2)
+  else if (AArgCount < 2) and (I + 1 <= Length(S)) and (S[I] = '0') and
+     ((S[I + 1] = 'x') or (S[I + 1] = 'X')) then
+  begin
+    Radix := 16;
+    Inc(I, 2);
+  end;
+
+  IntResult := 0;
+  if I > Length(S) then Exit(SouffleFloat(NaN));
+  while I <= Length(S) do
+  begin
+    if (S[I] >= '0') and (S[I] <= '9') then
+      Digit := Ord(S[I]) - Ord('0')
+    else if (S[I] >= 'a') and (S[I] <= 'z') then
+      Digit := Ord(S[I]) - Ord('a') + 10
+    else if (S[I] >= 'A') and (S[I] <= 'Z') then
+      Digit := Ord(S[I]) - Ord('A') + 10
+    else
+      Break;
+    if Digit >= Radix then Break;
+    IntResult := IntResult * Radix + Digit;
+    Inc(I);
+  end;
+
+  if Negative then IntResult := -IntResult;
+  if (IntResult >= -2147483648) and (IntResult <= 2147483647) then
+    Result := SouffleInteger(IntResult)
+  else
+    Result := SouffleFloat(IntResult);
+end;
+
+function NativeNumberParseFloat(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  F: Double;
+  Code: Integer;
+  FloatFmt: TFormatSettings;
+begin
+  if AArgCount < 1 then Exit(SouffleFloat(NaN));
+  S := Trim(GNativeArrayJoinRuntime.CoerceToString(AArgs^));
+  if S = '' then Exit(SouffleFloat(NaN));
+  if S = 'Infinity' then Exit(SouffleFloat(Infinity));
+  if S = '-Infinity' then Exit(SouffleFloat(NegInfinity));
+  FloatFmt := FormatSettings;
+  FloatFmt.DecimalSeparator := '.';
+  Val(S, F, Code);
+  if Code = 0 then
+    Result := SouffleFloat(F)
+  else
+    Result := SouffleFloat(NaN);
+end;
+
+{ === Native Array static callbacks === }
+
+function NativeArrayIsArray(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  if AArgCount < 1 then Exit(SouffleBoolean(False));
+  Result := SouffleBoolean(
+    SouffleIsReference(AArgs^) and Assigned(AArgs^.AsReference) and
+    (AArgs^.AsReference is TSouffleArray));
+end;
+
+function NativeArrayFrom(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Iterable, ItemVal, MapFn, ThisArg: TSouffleValue;
+  Arr: TSouffleArray;
+  SrcArr: TSouffleArray;
+  IterObj: TSouffleValue;
+  Done: Boolean;
+  I, Len: Integer;
+  HasMap: Boolean;
+  MapArgs: array[0..1] of TSouffleValue;
+  LenVal: TSouffleValue;
+begin
+  if AArgCount < 1 then
+  begin
+    Arr := TSouffleArray.Create(0);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(Arr);
+    Exit(SouffleReference(Arr));
+  end;
+
+  Iterable := AArgs^;
+  HasMap := (AArgCount > 1) and SouffleIsReference(
+    PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^);
+  if HasMap then
+    MapFn := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^
+  else
+    MapFn := SouffleNil;
+  if AArgCount > 2 then
+    ThisArg := PSouffleValue(PByte(AArgs) + 2 * SizeOf(TSouffleValue))^
+  else
+    ThisArg := SouffleNil;
+
+  { Fast path: source is array }
+  if SouffleIsReference(Iterable) and Assigned(Iterable.AsReference) and
+     (Iterable.AsReference is TSouffleArray) then
+  begin
+    SrcArr := TSouffleArray(Iterable.AsReference);
+    Arr := TSouffleArray.Create(SrcArr.Count);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(Arr);
+    for I := 0 to SrcArr.Count - 1 do
+    begin
+      ItemVal := SrcArr.Get(I);
+      if HasMap then
+      begin
+        MapArgs[0] := ItemVal;
+        MapArgs[1] := SouffleInteger(I);
+        ItemVal := GNativeArrayJoinRuntime.Invoke(MapFn, @MapArgs[0], 2, ThisArg);
+      end;
+      Arr.Push(ItemVal);
+    end;
+    Exit(SouffleReference(Arr));
+  end;
+
+  { Iterable path }
+  Arr := TSouffleArray.Create(4);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Arr);
+  try
+    IterObj := GNativeArrayJoinRuntime.GetIterator(Iterable, False);
+    I := 0;
+    repeat
+      ItemVal := GNativeArrayJoinRuntime.IteratorNext(IterObj, Done);
+      if not Done then
+      begin
+        if HasMap then
+        begin
+          MapArgs[0] := ItemVal;
+          MapArgs[1] := SouffleInteger(I);
+          ItemVal := GNativeArrayJoinRuntime.Invoke(MapFn, @MapArgs[0], 2, ThisArg);
+        end;
+        Arr.Push(ItemVal);
+        Inc(I);
+      end;
+    until Done;
+  except
+    on E: ESouffleThrow do
+    begin
+      { Array-like fallback }
+      LenVal := GNativeArrayJoinRuntime.GetProperty(Iterable, 'length');
+      if LenVal.Kind = svkInteger then
+        Len := Integer(LenVal.AsInteger)
+      else if LenVal.Kind = svkFloat then
+        Len := Trunc(LenVal.AsFloat)
+      else
+        Len := 0;
+      Arr := TSouffleArray.Create(Len);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AllocateObject(Arr);
+      for I := 0 to Len - 1 do
+      begin
+        ItemVal := GNativeArrayJoinRuntime.GetIndex(Iterable, SouffleInteger(I));
+        if HasMap then
+        begin
+          MapArgs[0] := ItemVal;
+          MapArgs[1] := SouffleInteger(I);
+          ItemVal := GNativeArrayJoinRuntime.Invoke(MapFn, @MapArgs[0], 2, ThisArg);
+        end;
+        Arr.Push(ItemVal);
+      end;
+    end;
+  end;
+  Result := SouffleReference(Arr);
+end;
+
+function NativeArrayOf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Arr: TSouffleArray;
+  I: Integer;
+begin
+  Arr := TSouffleArray.Create(AArgCount);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Arr);
+  for I := 0 to AArgCount - 1 do
+    Arr.Push(PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^);
+  Result := SouffleReference(Arr);
+end;
+
+{ === Native Object static callbacks === }
+
+function NativeObjectKeys(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  Arr: TSouffleArray;
+  I: Integer;
+  Key: string;
+begin
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) or
+     not (AArgs^.AsReference is TSouffleRecord) then
+  begin
+    { Fallback: delegate to Goccia for non-record objects }
+    Result := InvokeGocciaMethod(AReceiver, 'keys', AArgs, AArgCount);
+    Exit;
+  end;
+  Rec := TSouffleRecord(AArgs^.AsReference);
+  Arr := TSouffleArray.Create(Rec.Count);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Arr);
+  for I := 0 to Rec.Count - 1 do
+  begin
+    Key := Rec.GetOrderedKey(I);
+    if (Length(Key) > 0) and (Key[1] <> '#') and
+       (Copy(Key, 1, 5) <> '@@sym') then
+      Arr.Push(SouffleString(Key));
+  end;
+  Result := SouffleReference(Arr);
+end;
+
+function NativeObjectValues(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  Arr: TSouffleArray;
+  I: Integer;
+  Key: string;
+  Val: TSouffleValue;
+begin
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) or
+     not (AArgs^.AsReference is TSouffleRecord) then
+  begin
+    Result := InvokeGocciaMethod(AReceiver, 'values', AArgs, AArgCount);
+    Exit;
+  end;
+  Rec := TSouffleRecord(AArgs^.AsReference);
+  Arr := TSouffleArray.Create(Rec.Count);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Arr);
+  for I := 0 to Rec.Count - 1 do
+  begin
+    Key := Rec.GetOrderedKey(I);
+    if (Length(Key) > 0) and (Key[1] <> '#') and
+       (Copy(Key, 1, 5) <> '@@sym') then
+    begin
+      if Rec.Get(Key, Val) then
+        Arr.Push(Val);
+    end;
+  end;
+  Result := SouffleReference(Arr);
+end;
+
+function NativeObjectEntries(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  Arr, EntryArr: TSouffleArray;
+  I: Integer;
+  Key: string;
+  Val: TSouffleValue;
+begin
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) or
+     not (AArgs^.AsReference is TSouffleRecord) then
+  begin
+    Result := InvokeGocciaMethod(AReceiver, 'entries', AArgs, AArgCount);
+    Exit;
+  end;
+  Rec := TSouffleRecord(AArgs^.AsReference);
+  Arr := TSouffleArray.Create(Rec.Count);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Arr);
+  for I := 0 to Rec.Count - 1 do
+  begin
+    Key := Rec.GetOrderedKey(I);
+    if (Length(Key) > 0) and (Key[1] <> '#') and
+       (Copy(Key, 1, 5) <> '@@sym') then
+    begin
+      if Rec.Get(Key, Val) then
+      begin
+        EntryArr := TSouffleArray.Create(2);
+        EntryArr.Push(SouffleString(Key));
+        EntryArr.Push(Val);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AllocateObject(EntryArr);
+        Arr.Push(SouffleReference(EntryArr));
+      end;
+    end;
+  end;
+  Result := SouffleReference(Arr);
+end;
+
+function NativeObjectAssign(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Target, Source: TSouffleRecord;
+  I, J: Integer;
+  Key: string;
+  Val: TSouffleValue;
+  SrcVal: TSouffleValue;
+begin
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) or
+     not (AArgs^.AsReference is TSouffleRecord) then
+  begin
+    Result := InvokeGocciaMethod(AReceiver, 'assign', AArgs, AArgCount);
+    Exit;
+  end;
+  Target := TSouffleRecord(AArgs^.AsReference);
+  for I := 1 to AArgCount - 1 do
+  begin
+    SrcVal := PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^;
+    if SouffleIsReference(SrcVal) and Assigned(SrcVal.AsReference) and
+       (SrcVal.AsReference is TSouffleRecord) then
+    begin
+      Source := TSouffleRecord(SrcVal.AsReference);
+      for J := 0 to Source.Count - 1 do
+      begin
+        Key := Source.GetOrderedKey(J);
+        if Source.Get(Key, Val) then
+          Target.Put(Key, Val);
+      end;
+    end;
+  end;
+  Result := AArgs^;
+end;
+
+function NativeObjectIs(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  A, B: TSouffleValue;
+begin
+  if AArgCount < 1 then A := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)
+  else A := AArgs^;
+  if AArgCount < 2 then B := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)
+  else B := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^;
+
+  { SameValue algorithm }
+  if A.Kind <> B.Kind then
+    Exit(SouffleBoolean(False));
+  case A.Kind of
+    svkNil: Result := SouffleBoolean(A.Flags = B.Flags);
+    svkBoolean: Result := SouffleBoolean(A.AsBoolean = B.AsBoolean);
+    svkInteger: Result := SouffleBoolean(A.AsInteger = B.AsInteger);
+    svkFloat:
+    begin
+      if IsNan(A.AsFloat) and IsNan(B.AsFloat) then
+        Result := SouffleBoolean(True)
+      else if (A.AsFloat = 0.0) and (B.AsFloat = 0.0) then
+        { Distinguish +0 and -0 }
+        Result := SouffleBoolean((1.0 / A.AsFloat) = (1.0 / B.AsFloat))
+      else
+        Result := SouffleBoolean(A.AsFloat = B.AsFloat);
+    end;
+    svkString: Result := SouffleBoolean(SouffleGetString(A) = SouffleGetString(B));
+    svkReference: Result := SouffleBoolean(A.AsReference = B.AsReference);
+  else
+    Result := SouffleBoolean(False);
+  end;
+end;
+
+function NativeObjectHasOwn(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  Key: string;
+  Val: TSouffleValue;
+begin
+  if (AArgCount < 2) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) or
+     not (AArgs^.AsReference is TSouffleRecord) then
+  begin
+    Result := InvokeGocciaMethod(AReceiver, 'hasOwn', AArgs, AArgCount);
+    Exit;
+  end;
+  Rec := TSouffleRecord(AArgs^.AsReference);
+  Key := GNativeArrayJoinRuntime.CoerceToString(
+    PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^);
+  Result := SouffleBoolean(Rec.Get(Key, Val));
+end;
+
+function NativeObjectFreeze(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  { Delegate to Goccia — freeze requires property flag manipulation }
+  Result := InvokeGocciaMethod(AReceiver, 'freeze', AArgs, AArgCount);
+end;
+
+function NativeObjectGetPrototypeOf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+begin
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) then
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_NULL));
+  if AArgs^.AsReference is TSouffleRecord then
+  begin
+    Rec := TSouffleRecord(AArgs^.AsReference);
+    if Assigned(Rec.Delegate) then
+      Exit(SouffleReference(Rec.Delegate))
+    else
+      Exit(SouffleNilWithFlags(GOCCIA_NIL_NULL));
+  end;
+  Result := InvokeGocciaMethod(AReceiver, 'getPrototypeOf', AArgs, AArgCount);
+end;
+
+function NativeObjectFromEntries(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  IterObj, ItemVal: TSouffleValue;
+  Done: Boolean;
+  EntryArr: TSouffleArray;
+  Key: string;
+begin
+  Rec := TSouffleRecord.Create(4);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
+  if Assigned(GNativeArrayJoinRuntime.FVM) then
+    Rec.Delegate := GNativeArrayJoinRuntime.FVM.RecordDelegate;
+  if AArgCount < 1 then
+    Exit(SouffleReference(Rec));
+
+  IterObj := GNativeArrayJoinRuntime.GetIterator(AArgs^, False);
+  repeat
+    ItemVal := GNativeArrayJoinRuntime.IteratorNext(IterObj, Done);
+    if not Done then
+    begin
+      if SouffleIsReference(ItemVal) and Assigned(ItemVal.AsReference) and
+         (ItemVal.AsReference is TSouffleArray) then
+      begin
+        EntryArr := TSouffleArray(ItemVal.AsReference);
+        if EntryArr.Count >= 2 then
+        begin
+          Key := GNativeArrayJoinRuntime.CoerceToString(EntryArr.Get(0));
+          Rec.Put(Key, EntryArr.Get(1));
+        end;
+      end;
+    end;
+  until Done;
+  Result := SouffleReference(Rec);
+end;
+
+{ === Native String static callbacks === }
+
+function NativeStringFromCharCode(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  I, Code: Integer;
+begin
+  S := '';
+  for I := 0 to AArgCount - 1 do
+  begin
+    Code := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(
+      PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+    S := S + Chr(Code and $FFFF);
+  end;
+  Result := SouffleString(S);
+end;
+
+function NativeStringFromCodePoint(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  S: string;
+  I, CP: Integer;
+begin
+  S := '';
+  for I := 0 to AArgCount - 1 do
+  begin
+    CP := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(
+      PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+    if (CP < 0) or (CP > $10FFFF) then
+    begin
+      ThrowRangeErrorNative('Invalid code point ' + IntToStr(CP));
+      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    end;
+    if CP <= $FFFF then
+      S := S + Chr(CP)
+    else
+    begin
+      Dec(CP, $10000);
+      S := S + Chr($D800 + (CP shr 10)) + Chr($DC00 + (CP and $3FF));
+    end;
+  end;
+  Result := SouffleString(S);
+end;
+
 function CreateBlueprintFromConstructor(
   const ARuntime: TGocciaRuntimeOperations;
   const AName: string;
@@ -11645,13 +12218,10 @@ var
   PropNames: TArray<string>;
   I: Integer;
   PropVal: TGocciaValue;
-  BridgedSubFn: TGocciaBridgedFunction;
-  GC: TGarbageCollector;
 begin
-  GC := TGarbageCollector.Instance;
   Result := ARuntime.CreateBuiltinBlueprint(AName, 0, ADelegate, '');
 
-  { Extract sub-methods from Goccia constructor and add as StaticFields }
+  { Extract non-callable properties (constants) from Goccia constructor }
   PropNames := AGocciaFn.GetOwnPropertyNames;
   for I := 0 to Length(PropNames) - 1 do
   begin
@@ -11660,16 +12230,10 @@ begin
        (PropNames[I] = 'arguments') then
       Continue;
     PropVal := AGocciaFn.GetProperty(PropNames[I]);
-    if Assigned(PropVal) and PropVal.IsCallable then
-    begin
-      BridgedSubFn := TGocciaBridgedFunction.Create(
-        TGocciaNativeFunctionValue(PropVal), ARuntime);
-      if Assigned(GC) then GC.AllocateObject(BridgedSubFn);
-      Result.StaticFields.Put(PropNames[I], SouffleReference(BridgedSubFn));
-    end
-    else if Assigned(PropVal) then
+    if Assigned(PropVal) and not PropVal.IsCallable then
       Result.StaticFields.Put(PropNames[I], ARuntime.ToSouffleValue(PropVal));
   end;
+  { Callable methods are added as native callbacks by the caller }
 end;
 
 procedure TGocciaRuntimeOperations.RegisterDelegates;
@@ -12144,15 +12708,35 @@ begin
       { Convert core constructors to blueprints with static fields }
       if Key = 'Array' then begin
         FArrayBlueprint := CreateBlueprintFromConstructor(Self, 'Array', TSouffleRecord(FVM.ArrayDelegate), NativeFnVal);
+        AddStaticMethod(FArrayBlueprint, 'isArray', 1, @NativeArrayIsArray);
+        AddStaticMethod(FArrayBlueprint, 'from', 1, @NativeArrayFrom);
+        AddStaticMethod(FArrayBlueprint, 'of', -1, @NativeArrayOf);
         FGlobals.AddOrSetValue(Key, SouffleReference(FArrayBlueprint)); end
       else if Key = 'Object' then begin
         FObjectBlueprint := CreateBlueprintFromConstructor(Self, 'Object', TSouffleRecord(FVM.RecordDelegate), NativeFnVal);
+        AddStaticMethod(FObjectBlueprint, 'keys', 1, @NativeObjectKeys);
+        AddStaticMethod(FObjectBlueprint, 'values', 1, @NativeObjectValues);
+        AddStaticMethod(FObjectBlueprint, 'entries', 1, @NativeObjectEntries);
+        AddStaticMethod(FObjectBlueprint, 'assign', -1, @NativeObjectAssign);
+        AddStaticMethod(FObjectBlueprint, 'is', 2, @NativeObjectIs);
+        AddStaticMethod(FObjectBlueprint, 'hasOwn', 2, @NativeObjectHasOwn);
+        AddStaticMethod(FObjectBlueprint, 'freeze', 1, @NativeObjectFreeze);
+        AddStaticMethod(FObjectBlueprint, 'getPrototypeOf', 1, @NativeObjectGetPrototypeOf);
+        AddStaticMethod(FObjectBlueprint, 'fromEntries', 1, @NativeObjectFromEntries);
         FGlobals.AddOrSetValue(Key, SouffleReference(FObjectBlueprint)); end
       else if Key = 'String' then begin
         FStringBlueprint := CreateBlueprintFromConstructor(Self, 'String', FStringDelegate, NativeFnVal);
+        AddStaticMethod(FStringBlueprint, 'fromCharCode', 1, @NativeStringFromCharCode);
+        AddStaticMethod(FStringBlueprint, 'fromCodePoint', 1, @NativeStringFromCodePoint);
         FGlobals.AddOrSetValue(Key, SouffleReference(FStringBlueprint)); end
       else if Key = 'Number' then begin
         FNumberBlueprint := CreateBlueprintFromConstructor(Self, 'Number', FNumberDelegate, NativeFnVal);
+        AddStaticMethod(FNumberBlueprint, 'isNaN', 0, @NativeNumberIsNaN);
+        AddStaticMethod(FNumberBlueprint, 'isFinite', 0, @NativeNumberIsFinite);
+        AddStaticMethod(FNumberBlueprint, 'isInteger', 0, @NativeNumberIsInteger);
+        AddStaticMethod(FNumberBlueprint, 'isSafeInteger', 0, @NativeNumberIsSafeInteger);
+        AddStaticMethod(FNumberBlueprint, 'parseInt', 1, @NativeNumberParseInt);
+        AddStaticMethod(FNumberBlueprint, 'parseFloat', 1, @NativeNumberParseFloat);
         FGlobals.AddOrSetValue(Key, SouffleReference(FNumberBlueprint)); end
       else if Key = 'Boolean' then begin
         FBooleanBlueprint := CreateBlueprintFromConstructor(Self, 'Boolean', nil, NativeFnVal);
