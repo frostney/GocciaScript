@@ -9094,20 +9094,34 @@ function NativeTypedArrayForEach(const AReceiver: TSouffleValue;
 var
   TA: TSouffleTypedArray;
   CallArgs: array[0..2] of TSouffleValue;
+  ThisArg: TSouffleValue;
   I: Integer;
 begin
   TA := GetSouffleTypedArray(AReceiver);
-  if Assigned(TA) and (AArgCount >= 1) and SouffleIsReference(AArgs^) then
+  if not Assigned(TA) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
   begin
-    for I := 0 to TA.ElementLength - 1 do
-    begin
-      CallArgs[0] := SouffleFloat(TA.ReadElement(I));
-      CallArgs[1] := SouffleInteger(I);
-      CallArgs[2] := AReceiver;
-      GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
-    end;
+    GNativeArrayJoinRuntime.ThrowTypeErrorMessage('callback is not a function');
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
+  if AArgCount > 1 then ThisArg := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^
+  else ThisArg := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  for I := 0 to TA.ElementLength - 1 do
+  begin
+    CallArgs[0] := SouffleFloat(TA.ReadElement(I));
+    CallArgs[1] := SouffleInteger(I);
+    CallArgs[2] := AReceiver;
+    GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, ThisArg);
   end;
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
+function ExtractThisArg(const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue; inline;
+begin
+  if AArgCount > 1 then
+    Result := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^
+  else
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
 function NativeTypedArrayCopyWithin(const AReceiver: TSouffleValue;
@@ -9264,7 +9278,7 @@ begin
     CallArgs[0] := SouffleFloat(TA.ReadElement(I));
     CallArgs[1] := SouffleInteger(I);
     CallArgs[2] := AReceiver;
-    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, ExtractThisArg(AArgs, AArgCount));
     if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) <> 0 then
       Exit(SouffleFloat(TA.ReadElement(I)));
   end;
@@ -9286,7 +9300,7 @@ begin
     CallArgs[0] := SouffleFloat(TA.ReadElement(I));
     CallArgs[1] := SouffleInteger(I);
     CallArgs[2] := AReceiver;
-    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, ExtractThisArg(AArgs, AArgCount));
     if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) <> 0 then
       Exit(SouffleInteger(I));
   end;
@@ -9308,7 +9322,7 @@ begin
     CallArgs[0] := SouffleFloat(TA.ReadElement(I));
     CallArgs[1] := SouffleInteger(I);
     CallArgs[2] := AReceiver;
-    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, ExtractThisArg(AArgs, AArgCount));
     if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) <> 0 then
       Exit(SouffleFloat(TA.ReadElement(I)));
   end;
@@ -9330,7 +9344,7 @@ begin
     CallArgs[0] := SouffleFloat(TA.ReadElement(I));
     CallArgs[1] := SouffleInteger(I);
     CallArgs[2] := AReceiver;
-    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, ExtractThisArg(AArgs, AArgCount));
     if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) <> 0 then
       Exit(SouffleInteger(I));
   end;
@@ -9352,7 +9366,7 @@ begin
     CallArgs[0] := SouffleFloat(TA.ReadElement(I));
     CallArgs[1] := SouffleInteger(I);
     CallArgs[2] := AReceiver;
-    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, ExtractThisArg(AArgs, AArgCount));
     if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) = 0 then
       Exit(SouffleBoolean(False));
   end;
@@ -9374,7 +9388,7 @@ begin
     CallArgs[0] := SouffleFloat(TA.ReadElement(I));
     CallArgs[1] := SouffleInteger(I);
     CallArgs[2] := AReceiver;
-    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, ExtractThisArg(AArgs, AArgCount));
     if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) <> 0 then
       Exit(SouffleBoolean(True));
   end;
@@ -9404,7 +9418,7 @@ begin
     CallArgs[0] := SouffleFloat(TA.ReadElement(I));
     CallArgs[1] := SouffleInteger(I);
     CallArgs[2] := AReceiver;
-    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, ExtractThisArg(AArgs, AArgCount));
     NewTA.WriteElement(I, GNativeArrayJoinRuntime.CoerceToNumber(CbResult));
   end;
   Rec := TSouffleRecord.CreateFromBlueprint(GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind]);
@@ -9436,7 +9450,7 @@ begin
     CallArgs[0] := SouffleFloat(TA.ReadElement(I));
     CallArgs[1] := SouffleInteger(I);
     CallArgs[2] := AReceiver;
-    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, ExtractThisArg(AArgs, AArgCount));
     if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) <> 0 then
     begin Kept[Count] := TA.ReadElement(I); Inc(Count); end;
   end;
