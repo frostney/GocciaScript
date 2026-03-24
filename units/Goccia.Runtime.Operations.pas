@@ -9525,7 +9525,7 @@ begin
   begin Acc := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^; StartIdx := 0; end
   else if TA.ElementLength > 0 then
   begin Acc := SouffleFloat(TA.ReadElement(0)); StartIdx := 1; end
-  else Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  else begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Reduce of empty array with no initial value'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
   for I := StartIdx to TA.ElementLength - 1 do
   begin
     CallArgs[0] := Acc;
@@ -9553,7 +9553,7 @@ begin
   begin Acc := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^; StartIdx := TA.ElementLength - 1; end
   else if TA.ElementLength > 0 then
   begin Acc := SouffleFloat(TA.ReadElement(TA.ElementLength - 1)); StartIdx := TA.ElementLength - 2; end
-  else Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  else begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Reduce of empty array with no initial value'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
   for I := StartIdx downto 0 do
   begin
     CallArgs[0] := Acc;

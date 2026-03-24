@@ -831,8 +831,20 @@ var
   U32: LongWord;
   F32: Single;
   F64: Double;
+  IntVal: Int64;
 begin
   Offset := ByteOffset + AIndex * BytesPerElement(Kind);
+  { NaN/Infinity → 0 for integer types }
+  if IsNan(AValue) or IsInfinite(AValue) then
+  begin
+    case Kind of
+      stakFloat32: begin F32 := AValue; Move(F32, Buffer.Data[Offset], 4); end;
+      stakFloat64: begin F64 := AValue; Move(F64, Buffer.Data[Offset], 8); end;
+    else
+      FillChar(Buffer.Data[Offset], BytesPerElement(Kind), 0);
+    end;
+    Exit;
+  end;
   case Kind of
     stakInt8:
     begin
