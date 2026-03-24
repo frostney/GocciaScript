@@ -1647,7 +1647,60 @@ begin
 end;
 
 procedure TGocciaRuntimeOperations.RethrowAsVM(const E: TGocciaThrowValue);
+var
+  Bp: TSouffleBlueprint;
+  Rec: TSouffleRecord;
+  ErrObj: TGocciaObjectValue;
+  NameStr, MsgStr, StackStr: string;
+  NameVal, MsgVal, StackVal, CauseVal: TGocciaValue;
 begin
+  { Convert Goccia error objects to native blueprint records }
+  if Assigned(FErrorBlueprint) and (E.Value is TGocciaObjectValue) and
+     TGocciaObjectValue(E.Value).HasErrorData then
+  begin
+    ErrObj := TGocciaObjectValue(E.Value);
+    NameVal := ErrObj.GetProperty('name');
+    if Assigned(NameVal) then
+      NameStr := NameVal.ToStringLiteral.Value
+    else
+      NameStr := 'Error';
+
+    { Find matching blueprint }
+    Bp := FErrorBlueprint;
+    if NameStr = 'TypeError' then Bp := FTypeErrorBlueprint
+    else if NameStr = 'RangeError' then Bp := FRangeErrorBlueprint
+    else if NameStr = 'ReferenceError' then Bp := FReferenceErrorBlueprint
+    else if NameStr = 'SyntaxError' then Bp := FSyntaxErrorBlueprint
+    else if NameStr = 'URIError' then Bp := FURIErrorBlueprint
+    else if NameStr = 'AggregateError' then Bp := FAggregateErrorBlueprint;
+
+    Rec := TSouffleRecord.CreateFromBlueprint(Bp);
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AllocateObject(Rec);
+    Rec.Delegate := Bp.Prototype;
+    Rec.Put('name', SouffleString(NameStr));
+
+    MsgVal := ErrObj.GetProperty('message');
+    if Assigned(MsgVal) and not (MsgVal is TGocciaUndefinedLiteralValue) then
+      MsgStr := MsgVal.ToStringLiteral.Value
+    else
+      MsgStr := '';
+    Rec.Put('message', SouffleString(MsgStr));
+
+    StackVal := ErrObj.GetProperty('stack');
+    if Assigned(StackVal) and not (StackVal is TGocciaUndefinedLiteralValue) then
+      StackStr := StackVal.ToStringLiteral.Value
+    else
+      StackStr := NameStr + ': ' + MsgStr;
+    Rec.Put('stack', SouffleString(StackStr));
+
+    CauseVal := ErrObj.GetProperty('cause');
+    if Assigned(CauseVal) and not (CauseVal is TGocciaUndefinedLiteralValue) then
+      Rec.Put('cause', ToSouffleValue(CauseVal));
+
+    raise ESouffleThrow.Create(SouffleReference(Rec));
+  end;
+
   raise ESouffleThrow.Create(WrapGocciaValue(E.Value));
 end;
 
@@ -2776,30 +2829,6 @@ begin
      (A.AsReference is TGocciaWrappedValue) then
   begin
     GocciaObj := TGocciaWrappedValue(A.AsReference).Value;
-
-    { Fast path: wrapped Goccia error vs Error blueprint }
-    if SouffleIsReference(B) and Assigned(B.AsReference) and
-       (B.AsReference is TSouffleBlueprint) and
-       (GocciaObj is TGocciaObjectValue) and
-       TGocciaObjectValue(GocciaObj).HasErrorData then
-    begin
-      Bp := TSouffleBlueprint(B.AsReference);
-      { Check if blueprint is in the Error hierarchy }
-      while Assigned(Bp) do
-      begin
-        if Bp = FErrorBlueprint then
-        begin
-          { Now check specific error type by name }
-          if TSouffleBlueprint(B.AsReference) = FErrorBlueprint then
-            Exit(SouffleBoolean(True));
-          ClassName := TSouffleBlueprint(B.AsReference).Name;
-          if Assigned(GocciaObj.GetProperty('name')) then
-            Exit(SouffleBoolean(GocciaObj.GetProperty('name').ToStringLiteral.Value = ClassName));
-          Exit(SouffleBoolean(False));
-        end;
-        Bp := Bp.SuperBlueprint;
-      end;
-    end;
 
     if SouffleIsReference(B) and Assigned(B.AsReference) and
        (B.AsReference is TGocciaBridgedFunction) then
@@ -5421,10 +5450,23 @@ begin
   end;
 end;
 
+var
+  GThrowRangeErrorRuntime: TGocciaRuntimeOperations;
+
 procedure ThrowRangeErrorNative(const AMessage: string);
 var
+  MsgVal: TSouffleValue;
   Wrapped: TGocciaWrappedValue;
 begin
+  { Try native blueprint path first }
+  if Assigned(GThrowRangeErrorRuntime) and
+     Assigned(GThrowRangeErrorRuntime.FRangeErrorBlueprint) then
+  begin
+    MsgVal := SouffleString(AMessage);
+    raise ESouffleThrow.Create(ConstructNativeError(GThrowRangeErrorRuntime,
+      GThrowRangeErrorRuntime.FRangeErrorBlueprint, 'RangeError', @MsgVal, 1));
+  end;
+  { Fallback: Goccia error wrapped }
   Wrapped := TGocciaWrappedValue.Create(
     Goccia.Values.ErrorHelper.CreateErrorObject('RangeError', AMessage));
   raise ESouffleThrow.Create(SouffleReference(Wrapped));
@@ -11474,6 +11516,7 @@ begin
   RegisterConstGlobal('Infinity', SouffleFloat(Infinity));
 
   GNativeArrayJoinRuntime := Self;
+  GThrowRangeErrorRuntime := Self;
 
   FStringDelegate := TSouffleRecord(
     BuildDelegate(STRING_PROTOTYPE_METHODS));
