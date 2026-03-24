@@ -217,6 +217,14 @@ type
     FSharedArrayBufferDelegate: TSouffleRecord;
     FTypedArrayDelegate: TSouffleRecord;
     FTypedArrayBlueprints: array[TSouffleTypedArrayKind] of TSouffleBlueprint;
+    FErrorBlueprint: TSouffleBlueprint;
+    FTypeErrorBlueprint: TSouffleBlueprint;
+    FRangeErrorBlueprint: TSouffleBlueprint;
+    FReferenceErrorBlueprint: TSouffleBlueprint;
+    FSyntaxErrorBlueprint: TSouffleBlueprint;
+    FURIErrorBlueprint: TSouffleBlueprint;
+    FAggregateErrorBlueprint: TSouffleBlueprint;
+    FErrorDelegate: TSouffleRecord;
     FDescribeDelegate: TSouffleRecord;
     FTestDelegate: TSouffleRecord;
     FActiveDecoratorSession: TGocciaDecoratorSession;
@@ -2127,6 +2135,11 @@ function GetSouffleSet(const AReceiver: TSouffleValue): TGocciaSouffleSet; forwa
 function GetSoufflePromise(const AReceiver: TSouffleValue): TSoufflePromise; forward;
 function GetSouffleArrayBuffer(const AReceiver: TSouffleValue): TSouffleArrayBuffer; forward;
 function GetSouffleTypedArray(const AReceiver: TSouffleValue): TSouffleTypedArray; forward;
+function ConstructNativeError(const ARuntime: TGocciaRuntimeOperations;
+  const ABp: TSouffleBlueprint; const AErrorName: string;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue; forward;
+function NativeAggregateErrorConstructor(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue; forward;
 function NativeTypedArrayBuffer(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue; forward;
 
@@ -3776,6 +3789,14 @@ begin
       Result := ConstructNativeArrayBuffer(AArgs, AArgCount, FSharedArrayBufferBlueprint);
       Exit;
     end;
+    { Error construction }
+    if Bp = FErrorBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := ConstructNativeError(Self, FErrorBlueprint, 'Error', AArgs, AArgCount); Exit; end;
+    if Bp = FTypeErrorBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := ConstructNativeError(Self, FTypeErrorBlueprint, 'TypeError', AArgs, AArgCount); Exit; end;
+    if Bp = FRangeErrorBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := ConstructNativeError(Self, FRangeErrorBlueprint, 'RangeError', AArgs, AArgCount); Exit; end;
+    if Bp = FReferenceErrorBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := ConstructNativeError(Self, FReferenceErrorBlueprint, 'ReferenceError', AArgs, AArgCount); Exit; end;
+    if Bp = FSyntaxErrorBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := ConstructNativeError(Self, FSyntaxErrorBlueprint, 'SyntaxError', AArgs, AArgCount); Exit; end;
+    if Bp = FURIErrorBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := ConstructNativeError(Self, FURIErrorBlueprint, 'URIError', AArgs, AArgCount); Exit; end;
+    if Bp = FAggregateErrorBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := NativeAggregateErrorConstructor(SouffleNil, AArgs, AArgCount); Exit; end;
     { TypedArray construction }
     for TAKind := Low(TSouffleTypedArrayKind) to High(TSouffleTypedArrayKind) do
       if Bp = FTypedArrayBlueprints[TAKind] then
@@ -5359,12 +5380,19 @@ end;
 
 procedure TGocciaRuntimeOperations.ThrowTypeErrorMessage(
   const AMessage: string);
+var
+  MsgVal: TSouffleValue;
 begin
-  try
-    ThrowTypeError(AMessage);
-  except
-    on E: TGocciaThrowValue do
-      RethrowAsVM(E);
+  if Assigned(FTypeErrorBlueprint) then
+  begin
+    MsgVal := SouffleString(AMessage);
+    raise ESouffleThrow.Create(ConstructNativeError(Self,
+      FTypeErrorBlueprint, 'TypeError', @MsgVal, 1));
+  end
+  else
+  begin
+    try ThrowTypeError(AMessage);
+    except on E: TGocciaThrowValue do RethrowAsVM(E); end;
   end;
 end;
 
@@ -9908,6 +9936,218 @@ begin
   Result := SouffleReference(Rec);
 end;
 
+{ Native Error construction }
+
+function ConstructNativeError(const ARuntime: TGocciaRuntimeOperations;
+  const ABp: TSouffleBlueprint; const AErrorName: string;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  Msg, Stack: string;
+  GC: TGarbageCollector;
+  OptionsRec: TSouffleRecord;
+  CauseVal: TSouffleValue;
+begin
+  GC := TGarbageCollector.Instance;
+  Rec := TSouffleRecord.CreateFromBlueprint(ABp);
+  if Assigned(GC) then GC.AllocateObject(Rec);
+  Rec.Delegate := ABp.Prototype;
+
+  { Set name }
+  Rec.Put('name', SouffleString(AErrorName));
+
+  { Set message }
+  if (AArgCount > 0) and (AArgs^.Kind <> svkNil) then
+    Msg := ARuntime.CoerceToString(AArgs^)
+  else
+    Msg := '';
+  Rec.Put('message', SouffleString(Msg));
+
+  { Set stack }
+  if Assigned(TGocciaCallStack.Instance) then
+    Stack := TGocciaCallStack.Instance.CaptureStackTrace(AErrorName, Msg, 1)
+  else
+    Stack := AErrorName + ': ' + Msg;
+  Rec.Put('stack', SouffleString(Stack));
+
+  { Handle options.cause (ES2022) }
+  if AArgCount > 1 then
+  begin
+    if SouffleIsReference(PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^) and
+       Assigned(PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^.AsReference) and
+       (PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^.AsReference is TSouffleRecord) then
+    begin
+      OptionsRec := TSouffleRecord(
+        PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^.AsReference);
+      if OptionsRec.Get('cause', CauseVal) then
+        Rec.Put('cause', CauseVal);
+    end;
+  end;
+
+  Result := SouffleReference(Rec);
+end;
+
+function NativeErrorConstructor(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := ConstructNativeError(GNativeArrayJoinRuntime,
+    GNativeArrayJoinRuntime.FErrorBlueprint, 'Error', AArgs, AArgCount);
+end;
+
+function NativeTypeErrorConstructor(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := ConstructNativeError(GNativeArrayJoinRuntime,
+    GNativeArrayJoinRuntime.FTypeErrorBlueprint, 'TypeError', AArgs, AArgCount);
+end;
+
+function NativeRangeErrorConstructor(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := ConstructNativeError(GNativeArrayJoinRuntime,
+    GNativeArrayJoinRuntime.FRangeErrorBlueprint, 'RangeError', AArgs, AArgCount);
+end;
+
+function NativeReferenceErrorConstructor(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := ConstructNativeError(GNativeArrayJoinRuntime,
+    GNativeArrayJoinRuntime.FReferenceErrorBlueprint, 'ReferenceError', AArgs, AArgCount);
+end;
+
+function NativeSyntaxErrorConstructor(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := ConstructNativeError(GNativeArrayJoinRuntime,
+    GNativeArrayJoinRuntime.FSyntaxErrorBlueprint, 'SyntaxError', AArgs, AArgCount);
+end;
+
+function NativeURIErrorConstructor(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := ConstructNativeError(GNativeArrayJoinRuntime,
+    GNativeArrayJoinRuntime.FURIErrorBlueprint, 'URIError', AArgs, AArgCount);
+end;
+
+function NativeAggregateErrorConstructor(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  Msg: string;
+  GC: TGarbageCollector;
+  ErrorsIterable, ItemVal, IterObj: TSouffleValue;
+  ErrorsArr: TSouffleArray;
+  Done: Boolean;
+  I: Integer;
+begin
+  GC := TGarbageCollector.Instance;
+  Rec := TSouffleRecord.CreateFromBlueprint(
+    GNativeArrayJoinRuntime.FAggregateErrorBlueprint);
+  if Assigned(GC) then GC.AllocateObject(Rec);
+  Rec.Delegate := GNativeArrayJoinRuntime.FAggregateErrorBlueprint.Prototype;
+
+  Rec.Put('name', SouffleString('AggregateError'));
+
+  { First arg: errors iterable }
+  ErrorsArr := TSouffleArray.Create(4);
+  if Assigned(GC) then GC.AllocateObject(ErrorsArr);
+  if AArgCount > 0 then
+  begin
+    ErrorsIterable := AArgs^;
+    try
+      IterObj := GNativeArrayJoinRuntime.GetIterator(ErrorsIterable, False);
+      repeat
+        ItemVal := GNativeArrayJoinRuntime.IteratorNext(IterObj, Done);
+        if not Done then ErrorsArr.Push(ItemVal);
+      until Done;
+    except
+      on E: ESouffleThrow do; { silently ignore iteration errors }
+    end;
+  end;
+  Rec.Put('errors', SouffleReference(ErrorsArr));
+
+  { Second arg: message }
+  if (AArgCount > 1) and (PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^.Kind <> svkNil) then
+    Msg := GNativeArrayJoinRuntime.CoerceToString(
+      PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^)
+  else
+    Msg := '';
+  Rec.Put('message', SouffleString(Msg));
+
+  if Assigned(TGocciaCallStack.Instance) then
+    Rec.Put('stack', SouffleString(
+      TGocciaCallStack.Instance.CaptureStackTrace('AggregateError', Msg, 1)))
+  else
+    Rec.Put('stack', SouffleString('AggregateError: ' + Msg));
+
+  Result := SouffleReference(Rec);
+end;
+
+{ Error.isError static method }
+function NativeErrorIsError(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  Bp: TSouffleBlueprint;
+begin
+  if AArgCount < 1 then Exit(SouffleBoolean(False));
+  if not SouffleIsReference(AArgs^) or not Assigned(AArgs^.AsReference) then
+    Exit(SouffleBoolean(False));
+  { Check if it's a blueprint record with Error in the blueprint ancestry }
+  if AArgs^.AsReference is TSouffleRecord then
+  begin
+    Rec := TSouffleRecord(AArgs^.AsReference);
+    if Assigned(Rec.Blueprint) then
+    begin
+      Bp := Rec.Blueprint;
+      while Assigned(Bp) do
+      begin
+        if Bp = GNativeArrayJoinRuntime.FErrorBlueprint then
+          Exit(SouffleBoolean(True));
+        Bp := Bp.SuperBlueprint;
+      end;
+    end;
+  end;
+  { Check wrapped Goccia error objects }
+  if AArgs^.AsReference is TGocciaWrappedValue then
+  begin
+    if TGocciaWrappedValue(AArgs^.AsReference).Value is TGocciaObjectValue then
+      Exit(SouffleBoolean(
+        TGocciaObjectValue(TGocciaWrappedValue(AArgs^.AsReference).Value).HasErrorData));
+  end;
+  Result := SouffleBoolean(False);
+end;
+
+{ Native Error delegate callbacks }
+
+function NativeErrorToString(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  NameVal, MsgVal: TSouffleValue;
+  Name, Msg: string;
+begin
+  if SouffleIsReference(AReceiver) and Assigned(AReceiver.AsReference) and
+     (AReceiver.AsReference is TSouffleRecord) then
+  begin
+    Rec := TSouffleRecord(AReceiver.AsReference);
+    if Rec.Get('name', NameVal) then
+      Name := GNativeArrayJoinRuntime.CoerceToString(NameVal)
+    else
+      Name := 'Error';
+    if Rec.Get('message', MsgVal) then
+      Msg := GNativeArrayJoinRuntime.CoerceToString(MsgVal)
+    else
+      Msg := '';
+    if Msg = '' then
+      Result := SouffleString(Name)
+    else
+      Result := SouffleString(Name + ': ' + Msg);
+  end
+  else
+    Result := SouffleString('Error');
+end;
+
 function NativeRecordHasOwnProperty(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
@@ -11091,6 +11331,10 @@ const
     (Name: 'slice';      Arity: 2; Callback: @NativeArrayBufferSlice)
   );
 
+  ERROR_PROTOTYPE_METHODS: array[0..0] of TSouffleMethodEntry = (
+    (Name: 'toString'; Arity: 0; Callback: @NativeErrorToString)
+  );
+
   TYPEDARRAY_PROTOTYPE_METHODS: array[0..29] of TSouffleMethodEntry = (
     (Name: 'at';              Arity: 1; Callback: @NativeTypedArrayAt),
     (Name: 'fill';            Arity: 3; Callback: @NativeTypedArrayFill),
@@ -11227,6 +11471,8 @@ begin
     BuildDelegate(ARRAYBUFFER_PROTOTYPE_METHODS));
   FTypedArrayDelegate := TSouffleRecord(
     BuildDelegate(TYPEDARRAY_PROTOTYPE_METHODS));
+  FErrorDelegate := TSouffleRecord(
+    BuildDelegate(ERROR_PROTOTYPE_METHODS));
 
   FVM.ArrayDelegate := TSouffleRecord(
     BuildDelegate(ARRAY_PROTOTYPE_METHODS));
@@ -11260,6 +11506,38 @@ begin
     FSharedArrayBufferBlueprint.Prototype.Getters.Put('byteLength',
       SouffleReference(TagGetterFn));
   end;
+
+  { Error blueprints }
+  FErrorBlueprint := CreateBuiltinBlueprint('Error', 0, FErrorDelegate, '');
+  FErrorBlueprint.Prototype.Put('name', SouffleString('Error'));
+  FErrorBlueprint.Prototype.Put('message', SouffleString(''));
+
+  FTypeErrorBlueprint := CreateBuiltinBlueprint('TypeError', 0, FErrorDelegate, '');
+  FTypeErrorBlueprint.SuperBlueprint := FErrorBlueprint;
+  FTypeErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+
+  FRangeErrorBlueprint := CreateBuiltinBlueprint('RangeError', 0, FErrorDelegate, '');
+  FRangeErrorBlueprint.SuperBlueprint := FErrorBlueprint;
+  FRangeErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+
+  FReferenceErrorBlueprint := CreateBuiltinBlueprint('ReferenceError', 0, FErrorDelegate, '');
+  FReferenceErrorBlueprint.SuperBlueprint := FErrorBlueprint;
+  FReferenceErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+
+  FSyntaxErrorBlueprint := CreateBuiltinBlueprint('SyntaxError', 0, FErrorDelegate, '');
+  FSyntaxErrorBlueprint.SuperBlueprint := FErrorBlueprint;
+  FSyntaxErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+
+  FURIErrorBlueprint := CreateBuiltinBlueprint('URIError', 0, FErrorDelegate, '');
+  FURIErrorBlueprint.SuperBlueprint := FErrorBlueprint;
+  FURIErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+
+  FAggregateErrorBlueprint := CreateBuiltinBlueprint('AggregateError', 0, FErrorDelegate, '');
+  FAggregateErrorBlueprint.SuperBlueprint := FErrorBlueprint;
+  FAggregateErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+
+  { Error static methods }
+  AddStaticMethod(FErrorBlueprint, 'isError', 1, @NativeErrorIsError);
 
   { ArrayBuffer static methods }
   AddStaticMethod(FArrayBufferBlueprint, 'isView', 1, @NativeArrayBufferIsView);
@@ -11580,6 +11858,13 @@ begin
       FGlobals.AddOrSetValue(Key, SouffleReference(FSharedArrayBufferBlueprint));
       Continue;
     end;
+    if (Key = 'Error') and Assigned(FErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FErrorBlueprint)); Continue; end;
+    if (Key = 'TypeError') and Assigned(FTypeErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypeErrorBlueprint)); Continue; end;
+    if (Key = 'RangeError') and Assigned(FRangeErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FRangeErrorBlueprint)); Continue; end;
+    if (Key = 'ReferenceError') and Assigned(FReferenceErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FReferenceErrorBlueprint)); Continue; end;
+    if (Key = 'SyntaxError') and Assigned(FSyntaxErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FSyntaxErrorBlueprint)); Continue; end;
+    if (Key = 'URIError') and Assigned(FURIErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FURIErrorBlueprint)); Continue; end;
+    if (Key = 'AggregateError') and Assigned(FAggregateErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FAggregateErrorBlueprint)); Continue; end;
     if (Key = 'Int8Array') and Assigned(FTypedArrayBlueprints[stakInt8]) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypedArrayBlueprints[stakInt8])); Continue; end;
     if (Key = 'Uint8Array') and Assigned(FTypedArrayBlueprints[stakUint8]) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypedArrayBlueprints[stakUint8])); Continue; end;
     if (Key = 'Uint8ClampedArray') and Assigned(FTypedArrayBlueprints[stakUint8Clamped]) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FTypedArrayBlueprints[stakUint8Clamped])); Continue; end;
@@ -12724,6 +13009,22 @@ begin
   for TAKind := Low(TSouffleTypedArrayKind) to High(TSouffleTypedArrayKind) do
     if Assigned(FTypedArrayBlueprints[TAKind]) and not FTypedArrayBlueprints[TAKind].GCMarked then
       FTypedArrayBlueprints[TAKind].MarkReferences;
+  if Assigned(FErrorBlueprint) and not FErrorBlueprint.GCMarked then
+    FErrorBlueprint.MarkReferences;
+  if Assigned(FTypeErrorBlueprint) and not FTypeErrorBlueprint.GCMarked then
+    FTypeErrorBlueprint.MarkReferences;
+  if Assigned(FRangeErrorBlueprint) and not FRangeErrorBlueprint.GCMarked then
+    FRangeErrorBlueprint.MarkReferences;
+  if Assigned(FReferenceErrorBlueprint) and not FReferenceErrorBlueprint.GCMarked then
+    FReferenceErrorBlueprint.MarkReferences;
+  if Assigned(FSyntaxErrorBlueprint) and not FSyntaxErrorBlueprint.GCMarked then
+    FSyntaxErrorBlueprint.MarkReferences;
+  if Assigned(FURIErrorBlueprint) and not FURIErrorBlueprint.GCMarked then
+    FURIErrorBlueprint.MarkReferences;
+  if Assigned(FAggregateErrorBlueprint) and not FAggregateErrorBlueprint.GCMarked then
+    FAggregateErrorBlueprint.MarkReferences;
+  if Assigned(FErrorDelegate) and not FErrorDelegate.GCMarked then
+    FErrorDelegate.MarkReferences;
   if Assigned(FDescribeDelegate) and not FDescribeDelegate.GCMarked then
     FDescribeDelegate.MarkReferences;
   if Assigned(FTestDelegate) and not FTestDelegate.GCMarked then
