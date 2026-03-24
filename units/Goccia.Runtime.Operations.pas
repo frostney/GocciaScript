@@ -8826,6 +8826,7 @@ function NativeArrayBufferSlice(const AReceiver: TSouffleValue;
 var
   AB, NewAB: TSouffleArrayBuffer;
   StartIdx, EndIdx, NewLen: Integer;
+  RawStart, RawEnd: Double;
   Bp: TSouffleBlueprint;
   Rec: TSouffleRecord;
   GC: TGarbageCollector;
@@ -8840,18 +8841,28 @@ begin
 
   if AArgCount > 0 then
   begin
-    StartIdx := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(AArgs^));
-    if StartIdx < 0 then StartIdx := AB.ByteLength + StartIdx;
-    if StartIdx < 0 then StartIdx := 0;
-    if StartIdx > AB.ByteLength then StartIdx := AB.ByteLength;
+    RawStart := GNativeArrayJoinRuntime.CoerceToNumber(AArgs^);
+    if IsNan(RawStart) then
+      StartIdx := 0
+    else
+    begin
+      StartIdx := Trunc(RawStart);
+      if StartIdx < 0 then StartIdx := AB.ByteLength + StartIdx;
+      if StartIdx < 0 then StartIdx := 0;
+      if StartIdx > AB.ByteLength then StartIdx := AB.ByteLength;
+    end;
   end;
   if AArgCount > 1 then
   begin
-    EndIdx := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(
-      PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^));
-    if EndIdx < 0 then EndIdx := AB.ByteLength + EndIdx;
-    if EndIdx < 0 then EndIdx := 0;
-    if EndIdx > AB.ByteLength then EndIdx := AB.ByteLength;
+    RawEnd := GNativeArrayJoinRuntime.CoerceToNumber(
+      PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^);
+    if not IsNan(RawEnd) then
+    begin
+      EndIdx := Trunc(RawEnd);
+      if EndIdx < 0 then EndIdx := AB.ByteLength + EndIdx;
+      if EndIdx < 0 then EndIdx := 0;
+      if EndIdx > AB.ByteLength then EndIdx := AB.ByteLength;
+    end;
   end;
 
   NewLen := EndIdx - StartIdx;
@@ -9272,18 +9283,18 @@ begin
   Src := AArgs^;
   Offset := 0;
   if AArgCount > 1 then Offset := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^));
-  if Offset < 0 then begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Offset is out of bounds'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
+  if Offset < 0 then ThrowRangeErrorNative('Offset is out of bounds');
   SrcTA := GetSouffleTypedArray(Src);
   if Assigned(SrcTA) then
   begin
-    if Offset + SrcTA.ElementLength > TA.ElementLength then begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Source is too large'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
+    if Offset + SrcTA.ElementLength > TA.ElementLength then ThrowRangeErrorNative('Source is too large');
     for I := 0 to SrcTA.ElementLength - 1 do
       TA.WriteElement(Offset + I, SrcTA.ReadElement(I));
   end
   else if SouffleIsReference(Src) and Assigned(Src.AsReference) and (Src.AsReference is TSouffleArray) then
   begin
     SrcArr := TSouffleArray(Src.AsReference);
-    if Offset + SrcArr.Count > TA.ElementLength then begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Source is too large'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
+    if Offset + SrcArr.Count > TA.ElementLength then ThrowRangeErrorNative('Source is too large');
     for I := 0 to SrcArr.Count - 1 do
       TA.WriteElement(Offset + I, GNativeArrayJoinRuntime.CoerceToNumber(SrcArr.Get(I)));
   end;
@@ -9692,7 +9703,7 @@ begin
   if AArgCount > 0 then Idx := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(AArgs^));
   if Idx < 0 then Idx := TA.ElementLength + Idx;
   if (Idx < 0) or (Idx >= TA.ElementLength) then
-  begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Index out of range'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
+  begin ThrowRangeErrorNative('Invalid index'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
   if AArgCount > 1 then Val := GNativeArrayJoinRuntime.CoerceToNumber(PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^) else Val := NaN;
   NewAB := TSouffleArrayBuffer.Create(TA.ElementLength * BytesPerElement(TA.Kind));
   if Assigned(GC) then GC.AllocateObject(NewAB);

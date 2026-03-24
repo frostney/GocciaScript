@@ -834,12 +834,18 @@ var
   IntVal: Int64;
 begin
   Offset := ByteOffset + AIndex * BytesPerElement(Kind);
-  { NaN/Infinity → 0 for integer types }
+  { NaN/Infinity → 0 for integer types, except Uint8Clamped }
   if IsNan(AValue) or IsInfinite(AValue) then
   begin
     case Kind of
       stakFloat32: begin F32 := AValue; Move(F32, Buffer.Data[Offset], 4); end;
       stakFloat64: begin F64 := AValue; Move(F64, Buffer.Data[Offset], 8); end;
+      stakUint8Clamped:
+      begin
+        if IsNan(AValue) then Buffer.Data[Offset] := 0
+        else if AValue > 0 then Buffer.Data[Offset] := 255
+        else Buffer.Data[Offset] := 0;
+      end;
     else
       FillChar(Buffer.Data[Offset], BytesPerElement(Kind), 0);
     end;
