@@ -7024,6 +7024,7 @@ begin
           end;
           if Len < 0 then Len := 0;
           TA := TSouffleTypedArray.Create(SrcAB, ByteOff, Len, AKind);
+          TA.BufferRecord := Arg; { preserve original buffer record for identity }
           if Assigned(GC) then GC.AllocateObject(TA);
           AB := SrcAB;
         end
@@ -8892,6 +8893,9 @@ begin
   TA := GetSouffleTypedArray(AReceiver);
   if Assigned(TA) and Assigned(TA.Buffer) then
   begin
+    { Return the original buffer record if stored (preserves identity) }
+    if SouffleIsReference(TA.BufferRecord) and Assigned(TA.BufferRecord.AsReference) then
+      Exit(TA.BufferRecord);
     GC := TGarbageCollector.Instance;
     if TA.Buffer.IsShared then
       Bp := GNativeArrayJoinRuntime.FSharedArrayBufferBlueprint

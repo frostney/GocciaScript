@@ -144,6 +144,7 @@ type
   TSouffleTypedArray = class(TSouffleHeapObject)
   public
     Buffer: TSouffleArrayBuffer;
+    BufferRecord: TSouffleValue;
     ByteOffset: Integer;
     ElementLength: Integer;
     Kind: TSouffleTypedArrayKind;
@@ -751,6 +752,7 @@ constructor TSouffleTypedArray.Create(const ABuffer: TSouffleArrayBuffer;
 begin
   inherited Create(0);
   Buffer := ABuffer;
+  BufferRecord := SouffleNil;
   ByteOffset := AByteOffset;
   ElementLength := ALength;
   Kind := AKind;
@@ -899,6 +901,9 @@ begin
   inherited;
   if Assigned(Buffer) and not Buffer.GCMarked then
     Buffer.MarkReferences;
+  if SouffleIsReference(BufferRecord) and Assigned(BufferRecord.AsReference) and
+     not BufferRecord.AsReference.GCMarked then
+    BufferRecord.AsReference.MarkReferences;
 end;
 
 function TSouffleTypedArray.DebugString: string;
