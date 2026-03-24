@@ -9023,6 +9023,514 @@ begin
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 end;
 
+function NativeTypedArrayCopyWithin(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+  Target, Start, EndIdx, Len, I: Integer;
+  Tmp: Double;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) then Exit(AReceiver);
+  Len := TA.ElementLength;
+  Target := 0; Start := 0; EndIdx := Len;
+  if AArgCount > 0 then begin Target := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(AArgs^)); if Target < 0 then Target := Len + Target; if Target < 0 then Target := 0; end;
+  if AArgCount > 1 then begin Start := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^)); if Start < 0 then Start := Len + Start; if Start < 0 then Start := 0; end;
+  if AArgCount > 2 then begin EndIdx := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(PSouffleValue(PByte(AArgs) + 2*SizeOf(TSouffleValue))^)); if EndIdx < 0 then EndIdx := Len + EndIdx; if EndIdx < 0 then EndIdx := 0; end;
+  if EndIdx > Len then EndIdx := Len;
+  if Target < Start then
+    for I := 0 to EndIdx - Start - 1 do
+    begin if Target + I < Len then TA.WriteElement(Target + I, TA.ReadElement(Start + I)); end
+  else
+    for I := EndIdx - Start - 1 downto 0 do
+    begin if Target + I < Len then TA.WriteElement(Target + I, TA.ReadElement(Start + I)); end;
+  Result := AReceiver;
+end;
+
+function NativeTypedArraySubarray(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA, NewTA: TSouffleTypedArray;
+  StartIdx, EndIdx, NewLen: Integer;
+  Rec: TSouffleRecord;
+  GC: TGarbageCollector;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  GC := TGarbageCollector.Instance;
+  StartIdx := 0; EndIdx := TA.ElementLength;
+  if AArgCount > 0 then begin StartIdx := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(AArgs^)); if StartIdx < 0 then StartIdx := TA.ElementLength + StartIdx; if StartIdx < 0 then StartIdx := 0; if StartIdx > TA.ElementLength then StartIdx := TA.ElementLength; end;
+  if AArgCount > 1 then begin EndIdx := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^)); if EndIdx < 0 then EndIdx := TA.ElementLength + EndIdx; if EndIdx < 0 then EndIdx := 0; if EndIdx > TA.ElementLength then EndIdx := TA.ElementLength; end;
+  NewLen := EndIdx - StartIdx;
+  if NewLen < 0 then NewLen := 0;
+  NewTA := TSouffleTypedArray.Create(TA.Buffer, TA.ByteOffset + StartIdx * BytesPerElement(TA.Kind), NewLen, TA.Kind);
+  if Assigned(GC) then GC.AllocateObject(NewTA);
+  Rec := TSouffleRecord.CreateFromBlueprint(GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind]);
+  if Assigned(GC) then GC.AllocateObject(Rec);
+  Rec.Delegate := GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind].Prototype;
+  Rec.SetSlot(0, SouffleReference(NewTA));
+  Result := SouffleReference(Rec);
+end;
+
+function NativeTypedArraySet(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA, SrcTA: TSouffleTypedArray;
+  Offset, I, SrcLen: Integer;
+  SrcArr: TSouffleArray;
+  Src: TSouffleValue;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  Src := AArgs^;
+  Offset := 0;
+  if AArgCount > 1 then Offset := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^));
+  if Offset < 0 then begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Offset is out of bounds'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
+  SrcTA := GetSouffleTypedArray(Src);
+  if Assigned(SrcTA) then
+  begin
+    if Offset + SrcTA.ElementLength > TA.ElementLength then begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Source is too large'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
+    for I := 0 to SrcTA.ElementLength - 1 do
+      TA.WriteElement(Offset + I, SrcTA.ReadElement(I));
+  end
+  else if SouffleIsReference(Src) and Assigned(Src.AsReference) and (Src.AsReference is TSouffleArray) then
+  begin
+    SrcArr := TSouffleArray(Src.AsReference);
+    if Offset + SrcArr.Count > TA.ElementLength then begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Source is too large'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
+    for I := 0 to SrcArr.Count - 1 do
+      TA.WriteElement(Offset + I, GNativeArrayJoinRuntime.CoerceToNumber(SrcArr.Get(I)));
+  end;
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
+function NativeTypedArraySort(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+  Vals: array of Double;
+  I, J: Integer;
+  Tmp: Double;
+  HasCompare: Boolean;
+  CompareArgs: array[0..1] of TSouffleValue;
+  CmpResult: TSouffleValue;
+  CmpVal: Double;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (TA.ElementLength <= 1) then Exit(AReceiver);
+  HasCompare := (AArgCount > 0) and SouffleIsReference(AArgs^) and Assigned(AArgs^.AsReference);
+  SetLength(Vals, TA.ElementLength);
+  for I := 0 to TA.ElementLength - 1 do Vals[I] := TA.ReadElement(I);
+  { Simple insertion sort }
+  for I := 1 to High(Vals) do
+  begin
+    Tmp := Vals[I]; J := I - 1;
+    if HasCompare then
+    begin
+      while J >= 0 do
+      begin
+        CompareArgs[0] := SouffleFloat(Vals[J]);
+        CompareArgs[1] := SouffleFloat(Tmp);
+        CmpResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CompareArgs[0], 2, SouffleNil);
+        CmpVal := GNativeArrayJoinRuntime.CoerceToNumber(CmpResult);
+        if CmpVal <= 0 then Break;
+        Vals[J + 1] := Vals[J]; Dec(J);
+      end;
+    end
+    else
+      while (J >= 0) and (Vals[J] > Tmp) do begin Vals[J + 1] := Vals[J]; Dec(J); end;
+    Vals[J + 1] := Tmp;
+  end;
+  for I := 0 to TA.ElementLength - 1 do TA.WriteElement(I, Vals[I]);
+  Result := AReceiver;
+end;
+
+function NativeTypedArrayLastIndexOf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+  SearchVal: Double;
+  I, FromIdx: Integer;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleInteger(-1));
+  SearchVal := GNativeArrayJoinRuntime.CoerceToNumber(AArgs^);
+  FromIdx := TA.ElementLength - 1;
+  if AArgCount > 1 then begin FromIdx := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^)); if FromIdx < 0 then FromIdx := TA.ElementLength + FromIdx; end;
+  if FromIdx >= TA.ElementLength then FromIdx := TA.ElementLength - 1;
+  for I := FromIdx downto 0 do
+    if TA.ReadElement(I) = SearchVal then Exit(SouffleInteger(I));
+  Result := SouffleInteger(-1);
+end;
+
+function NativeTypedArrayFind(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+  CallArgs: array[0..2] of TSouffleValue;
+  I: Integer;
+  CbResult: TSouffleValue;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  for I := 0 to TA.ElementLength - 1 do
+  begin
+    CallArgs[0] := SouffleFloat(TA.ReadElement(I));
+    CallArgs[1] := SouffleInteger(I);
+    CallArgs[2] := AReceiver;
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) <> 0 then
+      Exit(SouffleFloat(TA.ReadElement(I)));
+  end;
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
+function NativeTypedArrayFindIndex(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+  CallArgs: array[0..2] of TSouffleValue;
+  I: Integer;
+  CbResult: TSouffleValue;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleInteger(-1));
+  for I := 0 to TA.ElementLength - 1 do
+  begin
+    CallArgs[0] := SouffleFloat(TA.ReadElement(I));
+    CallArgs[1] := SouffleInteger(I);
+    CallArgs[2] := AReceiver;
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) <> 0 then
+      Exit(SouffleInteger(I));
+  end;
+  Result := SouffleInteger(-1);
+end;
+
+function NativeTypedArrayFindLast(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+  CallArgs: array[0..2] of TSouffleValue;
+  I: Integer;
+  CbResult: TSouffleValue;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  for I := TA.ElementLength - 1 downto 0 do
+  begin
+    CallArgs[0] := SouffleFloat(TA.ReadElement(I));
+    CallArgs[1] := SouffleInteger(I);
+    CallArgs[2] := AReceiver;
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) <> 0 then
+      Exit(SouffleFloat(TA.ReadElement(I)));
+  end;
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
+function NativeTypedArrayFindLastIndex(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+  CallArgs: array[0..2] of TSouffleValue;
+  I: Integer;
+  CbResult: TSouffleValue;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleInteger(-1));
+  for I := TA.ElementLength - 1 downto 0 do
+  begin
+    CallArgs[0] := SouffleFloat(TA.ReadElement(I));
+    CallArgs[1] := SouffleInteger(I);
+    CallArgs[2] := AReceiver;
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) <> 0 then
+      Exit(SouffleInteger(I));
+  end;
+  Result := SouffleInteger(-1);
+end;
+
+function NativeTypedArrayEvery(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+  CallArgs: array[0..2] of TSouffleValue;
+  I: Integer;
+  CbResult: TSouffleValue;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleBoolean(True));
+  for I := 0 to TA.ElementLength - 1 do
+  begin
+    CallArgs[0] := SouffleFloat(TA.ReadElement(I));
+    CallArgs[1] := SouffleInteger(I);
+    CallArgs[2] := AReceiver;
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) = 0 then
+      Exit(SouffleBoolean(False));
+  end;
+  Result := SouffleBoolean(True);
+end;
+
+function NativeTypedArraySome(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+  CallArgs: array[0..2] of TSouffleValue;
+  I: Integer;
+  CbResult: TSouffleValue;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleBoolean(False));
+  for I := 0 to TA.ElementLength - 1 do
+  begin
+    CallArgs[0] := SouffleFloat(TA.ReadElement(I));
+    CallArgs[1] := SouffleInteger(I);
+    CallArgs[2] := AReceiver;
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) <> 0 then
+      Exit(SouffleBoolean(True));
+  end;
+  Result := SouffleBoolean(False);
+end;
+
+function NativeTypedArrayMap(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA, NewTA: TSouffleTypedArray;
+  NewAB: TSouffleArrayBuffer;
+  CallArgs: array[0..2] of TSouffleValue;
+  I: Integer;
+  CbResult: TSouffleValue;
+  Rec: TSouffleRecord;
+  GC: TGarbageCollector;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (AArgCount < 1) then Exit(AReceiver);
+  GC := TGarbageCollector.Instance;
+  NewAB := TSouffleArrayBuffer.Create(TA.ElementLength * BytesPerElement(TA.Kind));
+  if Assigned(GC) then GC.AllocateObject(NewAB);
+  NewTA := TSouffleTypedArray.Create(NewAB, 0, TA.ElementLength, TA.Kind);
+  if Assigned(GC) then GC.AllocateObject(NewTA);
+  for I := 0 to TA.ElementLength - 1 do
+  begin
+    CallArgs[0] := SouffleFloat(TA.ReadElement(I));
+    CallArgs[1] := SouffleInteger(I);
+    CallArgs[2] := AReceiver;
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    NewTA.WriteElement(I, GNativeArrayJoinRuntime.CoerceToNumber(CbResult));
+  end;
+  Rec := TSouffleRecord.CreateFromBlueprint(GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind]);
+  if Assigned(GC) then GC.AllocateObject(Rec);
+  Rec.Delegate := GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind].Prototype;
+  Rec.SetSlot(0, SouffleReference(NewTA));
+  Result := SouffleReference(Rec);
+end;
+
+function NativeTypedArrayFilter(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA, NewTA: TSouffleTypedArray;
+  NewAB: TSouffleArrayBuffer;
+  CallArgs: array[0..2] of TSouffleValue;
+  I, Count: Integer;
+  CbResult: TSouffleValue;
+  Kept: array of Double;
+  Rec: TSouffleRecord;
+  GC: TGarbageCollector;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (AArgCount < 1) then Exit(AReceiver);
+  GC := TGarbageCollector.Instance;
+  SetLength(Kept, TA.ElementLength);
+  Count := 0;
+  for I := 0 to TA.ElementLength - 1 do
+  begin
+    CallArgs[0] := SouffleFloat(TA.ReadElement(I));
+    CallArgs[1] := SouffleInteger(I);
+    CallArgs[2] := AReceiver;
+    CbResult := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 3, SouffleNil);
+    if GNativeArrayJoinRuntime.CoerceToNumber(GNativeArrayJoinRuntime.ToBoolean(CbResult)) <> 0 then
+    begin Kept[Count] := TA.ReadElement(I); Inc(Count); end;
+  end;
+  NewAB := TSouffleArrayBuffer.Create(Count * BytesPerElement(TA.Kind));
+  if Assigned(GC) then GC.AllocateObject(NewAB);
+  NewTA := TSouffleTypedArray.Create(NewAB, 0, Count, TA.Kind);
+  if Assigned(GC) then GC.AllocateObject(NewTA);
+  for I := 0 to Count - 1 do NewTA.WriteElement(I, Kept[I]);
+  Rec := TSouffleRecord.CreateFromBlueprint(GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind]);
+  if Assigned(GC) then GC.AllocateObject(Rec);
+  Rec.Delegate := GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind].Prototype;
+  Rec.SetSlot(0, SouffleReference(NewTA));
+  Result := SouffleReference(Rec);
+end;
+
+function NativeTypedArrayReduce(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+  CallArgs: array[0..3] of TSouffleValue;
+  I, StartIdx: Integer;
+  Acc: TSouffleValue;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  if AArgCount > 1 then
+  begin Acc := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^; StartIdx := 0; end
+  else if TA.ElementLength > 0 then
+  begin Acc := SouffleFloat(TA.ReadElement(0)); StartIdx := 1; end
+  else Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  for I := StartIdx to TA.ElementLength - 1 do
+  begin
+    CallArgs[0] := Acc;
+    CallArgs[1] := SouffleFloat(TA.ReadElement(I));
+    CallArgs[2] := SouffleInteger(I);
+    CallArgs[3] := AReceiver;
+    Acc := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 4, SouffleNil);
+  end;
+  Result := Acc;
+end;
+
+function NativeTypedArrayReduceRight(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+  CallArgs: array[0..3] of TSouffleValue;
+  I, StartIdx: Integer;
+  Acc: TSouffleValue;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) or (AArgCount < 1) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  if AArgCount > 1 then
+  begin Acc := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^; StartIdx := TA.ElementLength - 1; end
+  else if TA.ElementLength > 0 then
+  begin Acc := SouffleFloat(TA.ReadElement(TA.ElementLength - 1)); StartIdx := TA.ElementLength - 2; end
+  else Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  for I := StartIdx downto 0 do
+  begin
+    CallArgs[0] := Acc;
+    CallArgs[1] := SouffleFloat(TA.ReadElement(I));
+    CallArgs[2] := SouffleInteger(I);
+    CallArgs[3] := AReceiver;
+    Acc := GNativeArrayJoinRuntime.Invoke(AArgs^, @CallArgs[0], 4, SouffleNil);
+  end;
+  Result := Acc;
+end;
+
+function NativeTypedArrayToReversed(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA, NewTA: TSouffleTypedArray;
+  NewAB: TSouffleArrayBuffer;
+  I: Integer;
+  Rec: TSouffleRecord;
+  GC: TGarbageCollector;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  GC := TGarbageCollector.Instance;
+  NewAB := TSouffleArrayBuffer.Create(TA.ElementLength * BytesPerElement(TA.Kind));
+  if Assigned(GC) then GC.AllocateObject(NewAB);
+  NewTA := TSouffleTypedArray.Create(NewAB, 0, TA.ElementLength, TA.Kind);
+  if Assigned(GC) then GC.AllocateObject(NewTA);
+  for I := 0 to TA.ElementLength - 1 do
+    NewTA.WriteElement(I, TA.ReadElement(TA.ElementLength - 1 - I));
+  Rec := TSouffleRecord.CreateFromBlueprint(GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind]);
+  if Assigned(GC) then GC.AllocateObject(Rec);
+  Rec.Delegate := GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind].Prototype;
+  Rec.SetSlot(0, SouffleReference(NewTA));
+  Result := SouffleReference(Rec);
+end;
+
+function NativeTypedArrayToSorted(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA, NewTA: TSouffleTypedArray;
+  NewAB: TSouffleArrayBuffer;
+  I: Integer;
+  Rec: TSouffleRecord;
+  GC: TGarbageCollector;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  GC := TGarbageCollector.Instance;
+  NewAB := TSouffleArrayBuffer.Create(TA.ElementLength * BytesPerElement(TA.Kind));
+  if Assigned(GC) then GC.AllocateObject(NewAB);
+  NewTA := TSouffleTypedArray.Create(NewAB, 0, TA.ElementLength, TA.Kind);
+  if Assigned(GC) then GC.AllocateObject(NewTA);
+  for I := 0 to TA.ElementLength - 1 do
+    NewTA.WriteElement(I, TA.ReadElement(I));
+  { Create temp record, sort it, return }
+  Rec := TSouffleRecord.CreateFromBlueprint(GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind]);
+  if Assigned(GC) then GC.AllocateObject(Rec);
+  Rec.Delegate := GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind].Prototype;
+  Rec.SetSlot(0, SouffleReference(NewTA));
+  Result := NativeTypedArraySort(SouffleReference(Rec), AArgs, AArgCount);
+end;
+
+function NativeTypedArrayWith(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA, NewTA: TSouffleTypedArray;
+  NewAB: TSouffleArrayBuffer;
+  Idx, I: Integer;
+  Val: Double;
+  Rec: TSouffleRecord;
+  GC: TGarbageCollector;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if not Assigned(TA) then Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  GC := TGarbageCollector.Instance;
+  Idx := 0;
+  if AArgCount > 0 then Idx := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(AArgs^));
+  if Idx < 0 then Idx := TA.ElementLength + Idx;
+  if (Idx < 0) or (Idx >= TA.ElementLength) then
+  begin GNativeArrayJoinRuntime.ThrowTypeErrorMessage('Index out of range'); Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)); end;
+  if AArgCount > 1 then Val := GNativeArrayJoinRuntime.CoerceToNumber(PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^) else Val := NaN;
+  NewAB := TSouffleArrayBuffer.Create(TA.ElementLength * BytesPerElement(TA.Kind));
+  if Assigned(GC) then GC.AllocateObject(NewAB);
+  NewTA := TSouffleTypedArray.Create(NewAB, 0, TA.ElementLength, TA.Kind);
+  if Assigned(GC) then GC.AllocateObject(NewTA);
+  for I := 0 to TA.ElementLength - 1 do
+    if I = Idx then NewTA.WriteElement(I, Val)
+    else NewTA.WriteElement(I, TA.ReadElement(I));
+  Rec := TSouffleRecord.CreateFromBlueprint(GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind]);
+  if Assigned(GC) then GC.AllocateObject(Rec);
+  Rec.Delegate := GNativeArrayJoinRuntime.FTypedArrayBlueprints[TA.Kind].Prototype;
+  Rec.SetSlot(0, SouffleReference(NewTA));
+  Result := SouffleReference(Rec);
+end;
+
+function NativeTypedArrayValues(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'values', AArgs, AArgCount);
+end;
+
+function NativeTypedArrayKeys(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'keys', AArgs, AArgCount);
+end;
+
+function NativeTypedArrayEntries(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := InvokeGocciaMethod(AReceiver, 'entries', AArgs, AArgCount);
+end;
+
+function NativeTypedArrayBytesPerElement(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  TA: TSouffleTypedArray;
+begin
+  TA := GetSouffleTypedArray(AReceiver);
+  if Assigned(TA) then
+    Result := SouffleInteger(BytesPerElement(TA.Kind))
+  else
+    Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+end;
+
 function NativeRecordHasOwnProperty(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
@@ -10207,18 +10715,35 @@ const
     (Name: 'byteLength'; Arity: 0; Callback: @NativeArrayBufferByteLength)
   );
 
-  TYPEDARRAY_PROTOTYPE_METHODS: array[0..10] of TSouffleMethodEntry = (
-    (Name: 'at';         Arity: 1; Callback: @NativeTypedArrayAt),
-    (Name: 'fill';       Arity: 3; Callback: @NativeTypedArrayFill),
-    (Name: 'slice';      Arity: 2; Callback: @NativeTypedArraySlice),
-    (Name: 'reverse';    Arity: 0; Callback: @NativeTypedArrayReverse),
-    (Name: 'indexOf';    Arity: 1; Callback: @NativeTypedArrayIndexOf),
-    (Name: 'includes';   Arity: 1; Callback: @NativeTypedArrayIncludes),
-    (Name: 'forEach';    Arity: 1; Callback: @NativeTypedArrayForEach),
-    (Name: 'join';       Arity: 1; Callback: @NativeTypedArrayJoin),
-    (Name: 'toString';   Arity: 0; Callback: @NativeTypedArrayToString),
-    (Name: 'length';     Arity: 0; Callback: @NativeTypedArrayLength),
-    (Name: 'byteOffset'; Arity: 0; Callback: @NativeTypedArrayByteOffset)
+  TYPEDARRAY_PROTOTYPE_METHODS: array[0..27] of TSouffleMethodEntry = (
+    (Name: 'at';              Arity: 1; Callback: @NativeTypedArrayAt),
+    (Name: 'fill';            Arity: 3; Callback: @NativeTypedArrayFill),
+    (Name: 'copyWithin';      Arity: 3; Callback: @NativeTypedArrayCopyWithin),
+    (Name: 'slice';           Arity: 2; Callback: @NativeTypedArraySlice),
+    (Name: 'subarray';        Arity: 2; Callback: @NativeTypedArraySubarray),
+    (Name: 'set';             Arity: 2; Callback: @NativeTypedArraySet),
+    (Name: 'reverse';         Arity: 0; Callback: @NativeTypedArrayReverse),
+    (Name: 'sort';            Arity: 1; Callback: @NativeTypedArraySort),
+    (Name: 'indexOf';         Arity: 1; Callback: @NativeTypedArrayIndexOf),
+    (Name: 'lastIndexOf';     Arity: 1; Callback: @NativeTypedArrayLastIndexOf),
+    (Name: 'includes';        Arity: 1; Callback: @NativeTypedArrayIncludes),
+    (Name: 'find';            Arity: 1; Callback: @NativeTypedArrayFind),
+    (Name: 'findIndex';       Arity: 1; Callback: @NativeTypedArrayFindIndex),
+    (Name: 'findLast';        Arity: 1; Callback: @NativeTypedArrayFindLast),
+    (Name: 'findLastIndex';   Arity: 1; Callback: @NativeTypedArrayFindLastIndex),
+    (Name: 'every';           Arity: 1; Callback: @NativeTypedArrayEvery),
+    (Name: 'some';            Arity: 1; Callback: @NativeTypedArraySome),
+    (Name: 'forEach';         Arity: 1; Callback: @NativeTypedArrayForEach),
+    (Name: 'map';             Arity: 1; Callback: @NativeTypedArrayMap),
+    (Name: 'filter';          Arity: 1; Callback: @NativeTypedArrayFilter),
+    (Name: 'reduce';          Arity: 2; Callback: @NativeTypedArrayReduce),
+    (Name: 'reduceRight';     Arity: 2; Callback: @NativeTypedArrayReduceRight),
+    (Name: 'join';            Arity: 1; Callback: @NativeTypedArrayJoin),
+    (Name: 'toString';        Arity: 0; Callback: @NativeTypedArrayToString),
+    (Name: 'toReversed';      Arity: 0; Callback: @NativeTypedArrayToReversed),
+    (Name: 'toSorted';        Arity: 1; Callback: @NativeTypedArrayToSorted),
+    (Name: 'with';            Arity: 2; Callback: @NativeTypedArrayWith),
+    (Name: 'BYTES_PER_ELEMENT'; Arity: 0; Callback: @NativeTypedArrayBytesPerElement)
   );
 
 
