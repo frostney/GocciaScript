@@ -5132,8 +5132,9 @@ begin
       Exit(SP.PromiseResult);
     if SP.State = spssRejected then
     begin
-      RethrowAsVM(SP.PromiseResult);
-      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+      { Re-create value to ensure clean TSouffleValue record }
+      raise ESouffleThrow.Create(
+        SouffleRematerialize(SP.PromiseResult));
     end;
     { Pending: drain microtask queue }
     Queue := TGocciaMicrotaskQueue.Instance;
@@ -5143,8 +5144,8 @@ begin
       Exit(SP.PromiseResult);
     if SP.State = spssRejected then
     begin
-      RethrowAsVM(SP.PromiseResult);
-      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+      raise ESouffleThrow.Create(
+        SouffleRematerialize(SP.PromiseResult));
     end;
     ThrowTypeErrorMessage('await: Promise did not settle after microtask drain');
     Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
@@ -12750,6 +12751,16 @@ end;
 
 { === Native expect/matchers === }
 
+function SouffleRematerialize(const AValue: TSouffleValue): TSouffleValue;
+begin
+  case AValue.Kind of
+    svkString:
+      Result := SouffleString(SouffleGetString(AValue));
+  else
+    Result := AValue;
+  end;
+end;
+
 function IsErrorBlueprint(const ABp: TSouffleBlueprint): Boolean;
 var
   Bp: TSouffleBlueprint;
@@ -12857,8 +12868,9 @@ begin
   Actual := GetExpectActual(AReceiver);
   if AArgCount < 1 then Exit;
   Expected := AArgs^;
+  { Use SouffleValuesEqual for proper cross-kind and string comparison }
   MatcherResult(IsExpectNegated(AReceiver),
-    SouffleStrictEqual(Actual, Expected),
+    SouffleValuesEqual(Actual, Expected) or SouffleStrictEqual(Actual, Expected),
     'toBe',
     'Values are equal',
     'Expected ' + SafeValueToString(Actual) +

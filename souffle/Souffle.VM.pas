@@ -804,8 +804,14 @@ begin
           end;
 
           FCallStack.Peek^.IP := HandlerEntry.CatchIP;
-          FRegisters[HandlerEntry.BaseRegister + HandlerEntry.CatchRegister] :=
-            E.ThrownValue;
+          { Rematerialize inline strings to avoid padding corruption
+            from exception record copy }
+          if E.ThrownValue.Kind = svkString then
+            FRegisters[HandlerEntry.BaseRegister + HandlerEntry.CatchRegister] :=
+              SouffleString(SouffleGetString(E.ThrownValue))
+          else
+            FRegisters[HandlerEntry.BaseRegister + HandlerEntry.CatchRegister] :=
+              E.ThrownValue;
           Running := True;
         end
         else
@@ -1915,6 +1921,11 @@ begin
            SouffleIsNumeric(FRegisters[Base + C]) then
           FRegisters[Base + A] := SouffleBoolean(
             SouffleAsNumber(FRegisters[Base + B]) = SouffleAsNumber(FRegisters[Base + C]))
+        else if SouffleIsStringValue(FRegisters[Base + B]) and
+                SouffleIsStringValue(FRegisters[Base + C]) then
+          FRegisters[Base + A] := SouffleBoolean(
+            SouffleGetString(FRegisters[Base + B]) =
+            SouffleGetString(FRegisters[Base + C]))
         else
           FRegisters[Base + A] := FRuntimeOps.Equal(
             FRegisters[Base + B], FRegisters[Base + C]);
@@ -1935,7 +1946,8 @@ begin
               FRegisters[Base + B].AsFloat = FRegisters[Base + C].AsFloat);
           svkString:
             FRegisters[Base + A] := SouffleBoolean(
-              FRegisters[Base + B].AsInlineString = FRegisters[Base + C].AsInlineString);
+              SouffleGetString(FRegisters[Base + B]) =
+              SouffleGetString(FRegisters[Base + C]));
         else
           FRegisters[Base + A] := FRuntimeOps.Equal(
             FRegisters[Base + B], FRegisters[Base + C]);
@@ -1950,6 +1962,11 @@ begin
            SouffleIsNumeric(FRegisters[Base + C]) then
           FRegisters[Base + A] := SouffleBoolean(
             SouffleAsNumber(FRegisters[Base + B]) <> SouffleAsNumber(FRegisters[Base + C]))
+        else if SouffleIsStringValue(FRegisters[Base + B]) and
+                SouffleIsStringValue(FRegisters[Base + C]) then
+          FRegisters[Base + A] := SouffleBoolean(
+            SouffleGetString(FRegisters[Base + B]) <>
+            SouffleGetString(FRegisters[Base + C]))
         else
           FRegisters[Base + A] := FRuntimeOps.NotEqual(
             FRegisters[Base + B], FRegisters[Base + C]);
@@ -1970,7 +1987,8 @@ begin
               FRegisters[Base + B].AsFloat <> FRegisters[Base + C].AsFloat);
           svkString:
             FRegisters[Base + A] := SouffleBoolean(
-              FRegisters[Base + B].AsInlineString <> FRegisters[Base + C].AsInlineString);
+              SouffleGetString(FRegisters[Base + B]) <>
+              SouffleGetString(FRegisters[Base + C]));
         else
           FRegisters[Base + A] := FRuntimeOps.NotEqual(
             FRegisters[Base + B], FRegisters[Base + C]);
