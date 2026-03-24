@@ -629,6 +629,16 @@ begin
   begin
     Result := CloneNativeSet(TGocciaObjectValue(AValue), AMemory);
   end
+  else if (AValue is TGocciaObjectValue) and
+     ((TGocciaObjectValue(AValue).NativeKind = 'ArrayBuffer') or
+      (TGocciaObjectValue(AValue).NativeKind = 'SharedArrayBuffer')) then
+  begin
+    Result := TGocciaObjectValue(AValue).CloneNative;
+    if Assigned(Result) then
+      AMemory.Add(AValue, Result)
+    else
+      ThrowDataCloneError('ArrayBuffer could not be cloned.');
+  end
   else if AValue is TGocciaObjectValue then
     Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
   else
