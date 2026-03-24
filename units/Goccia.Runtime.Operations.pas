@@ -12387,9 +12387,117 @@ end;
 
 function NativeObjectGroupBy(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Iterable, Callback, ItemVal, KeyVal: TSouffleValue;
+  ResultRec: TSouffleRecord;
+  IterObj: TSouffleValue;
+  Done: Boolean;
+  Key: string;
+  GroupArr: TSouffleArray;
+  GroupVal: TSouffleValue;
+  CallArgs: array[0..1] of TSouffleValue;
+  I: Integer;
 begin
-  { Delegate to Goccia — complex iterator + Map creation }
-  Result := InvokeGocciaMethod(AReceiver, 'groupBy', AArgs, AArgCount);
+  if AArgCount < 2 then
+  begin
+    GNativeArrayJoinRuntime.ThrowTypeErrorMessage(
+      'Object.groupBy requires 2 arguments');
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
+
+  Iterable := AArgs^;
+  Callback := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^;
+
+  ResultRec := TSouffleRecord.Create(8);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(ResultRec);
+  { null prototype }
+
+  IterObj := GNativeArrayJoinRuntime.GetIterator(Iterable, False);
+  I := 0;
+  repeat
+    ItemVal := GNativeArrayJoinRuntime.IteratorNext(IterObj, Done);
+    if not Done then
+    begin
+      CallArgs[0] := ItemVal;
+      CallArgs[1] := SouffleInteger(I);
+      KeyVal := GNativeArrayJoinRuntime.Invoke(Callback, @CallArgs[0], 2, SouffleNil);
+      Key := GNativeArrayJoinRuntime.CoerceToString(KeyVal);
+
+      if not ResultRec.Get(Key, GroupVal) then
+      begin
+        GroupArr := TSouffleArray.Create(4);
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AllocateObject(GroupArr);
+        ResultRec.Put(Key, SouffleReference(GroupArr));
+      end
+      else
+        GroupArr := TSouffleArray(GroupVal.AsReference);
+
+      GroupArr.Push(ItemVal);
+      Inc(I);
+    end;
+  until Done;
+
+  Result := SouffleReference(ResultRec);
+end;
+
+function NativeObjectGetOwnPropertySymbols(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  Arr: TSouffleArray;
+  I: Integer;
+  Key: string;
+begin
+  Arr := TSouffleArray.Create(0);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Arr);
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) or
+     not (AArgs^.AsReference is TSouffleRecord) then
+    Exit(SouffleReference(Arr));
+
+  { Symbol properties are stored as @@sym:ID keys — for now return empty
+    since bytecode records don't track symbol properties as Symbol objects.
+    Full support requires mapping @@sym:ID back to TGocciaSymbolValue. }
+  Result := SouffleReference(Arr);
+end;
+
+function NativeObjectDefineProperties(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Rec, PropsRec: TSouffleRecord;
+  I: Integer;
+  Key: string;
+  DescVal: TSouffleValue;
+  DefArgs: array[0..2] of TSouffleValue;
+begin
+  if (AArgCount < 2) or not SouffleIsReference(AArgs^) or
+     not Assigned(AArgs^.AsReference) or
+     not (AArgs^.AsReference is TSouffleRecord) then
+    Exit(AArgs^);
+
+  if not SouffleIsReference(PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^) or
+     not (PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^.AsReference is TSouffleRecord) then
+    Exit(AArgs^);
+
+  Rec := TSouffleRecord(AArgs^.AsReference);
+  PropsRec := TSouffleRecord(
+    PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^.AsReference);
+
+  for I := 0 to PropsRec.Count - 1 do
+  begin
+    Key := PropsRec.GetOrderedKey(I);
+    if PropsRec.Get(Key, DescVal) then
+    begin
+      DefArgs[0] := AArgs^;
+      DefArgs[1] := SouffleString(Key);
+      DefArgs[2] := DescVal;
+      NativeObjectDefineProperty(AReceiver, @DefArgs[0], 3);
+    end;
+  end;
+  Result := AArgs^;
 end;
 
 function NativeObjectGetPrototypeOf(const AReceiver: TSouffleValue;
@@ -13018,6 +13126,8 @@ begin
         AddStaticMethod(FObjectBlueprint, 'defineProperty', 3, @NativeObjectDefineProperty);
         AddStaticMethod(FObjectBlueprint, 'fromEntries', 1, @NativeObjectFromEntries);
         AddStaticMethod(FObjectBlueprint, 'groupBy', 2, @NativeObjectGroupBy);
+        AddStaticMethod(FObjectBlueprint, 'getOwnPropertySymbols', 1, @NativeObjectGetOwnPropertySymbols);
+        AddStaticMethod(FObjectBlueprint, 'defineProperties', 2, @NativeObjectDefineProperties);
         FGlobals.AddOrSetValue(Key, SouffleReference(FObjectBlueprint)); end
       else if Key = 'String' then begin
         FStringBlueprint := CreateBlueprintFromConstructor(Self, 'String', FStringDelegate, NativeFnVal);
