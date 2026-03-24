@@ -22,6 +22,7 @@ uses
 
   Goccia.AST.Statements,
   Goccia.Evaluator.Decorators,
+  Goccia.Runtime.Collections,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -207,6 +208,7 @@ type
     FSetIteratorDelegate: TSouffleRecord;
     FMapBlueprint: TSouffleBlueprint;
     FSetBlueprint: TSouffleBlueprint;
+    FPromiseBlueprint: TSouffleBlueprint;
     FPromiseDelegate: TSouffleRecord;
     FPromiseStaticDelegate: TSouffleRecord;
     FPromiseConstructor: TSouffleHeapObject;
@@ -223,7 +225,8 @@ type
     function CoerceKeyToString(const AKey: TSouffleValue): string;
     function CoerceToNumber(const A: TSouffleValue): Double;
     function CoerceToString(const A: TSouffleValue): string;
-    procedure RethrowAsVM(const E: TGocciaThrowValue);
+    procedure RethrowAsVM(const E: TGocciaThrowValue); overload;
+    procedure RethrowAsVM(const AValue: TSouffleValue); overload;
     procedure MarkWrappedGocciaValues;
   public
     constructor Create;
@@ -278,6 +281,11 @@ type
       const AArgCount: Integer): TSouffleValue;
     function ConstructNativeSet(const AArgs: PSouffleValue;
       const AArgCount: Integer): TSouffleValue;
+    function ConstructNativePromise(const AArgs: PSouffleValue;
+      const AArgCount: Integer): TSouffleValue;
+    function WrapSoufflePromise(const APromise: TSoufflePromise): TSouffleValue;
+    procedure InvokeSouffleMicrotask(const AHandler, AValue: TSouffleValue;
+      out AResult: TSouffleValue; out AHadError: Boolean);
     function Construct(const AConstructor: TSouffleValue; const AArgs: PSouffleValue;
       const AArgCount: Integer): TSouffleValue; override;
 
@@ -423,7 +431,6 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Parser,
-  Goccia.Runtime.Collections,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.Token,
@@ -1578,6 +1585,11 @@ begin
   raise ESouffleThrow.Create(WrapGocciaValue(E.Value));
 end;
 
+procedure TGocciaRuntimeOperations.RethrowAsVM(const AValue: TSouffleValue);
+begin
+  raise ESouffleThrow.Create(AValue);
+end;
+
 procedure PushVMFramesToGoccia(const AVM: TSouffleVM);
 var
   I: Integer;
@@ -2053,6 +2065,7 @@ function ConvertGocciaSetToSouffle(const ASet: TGocciaSetValue;
   const ADelegate: TSouffleRecord): TGocciaSouffleSet; forward;
 function GetSouffleMap(const AReceiver: TSouffleValue): TGocciaSouffleMap; forward;
 function GetSouffleSet(const AReceiver: TSouffleValue): TGocciaSouffleSet; forward;
+function GetSoufflePromise(const AReceiver: TSouffleValue): TSoufflePromise; forward;
 
 function CreateBlueprintMapFromGoccia(const AMap: TGocciaMapValue): TSouffleValue; forward;
 function CreateBlueprintSetFromGoccia(const ASet: TGocciaSetValue): TSouffleValue; forward;
@@ -3612,6 +3625,14 @@ begin
       Result := ConstructNativeMap(AArgs, AArgCount);
       Exit;
     end;
+    if Bp = FPromiseBlueprint then
+    begin
+      {$IFDEF BRIDGE_METRICS}
+      MetricNative;
+      {$ENDIF}
+      Result := ConstructNativePromise(AArgs, AArgCount);
+      Exit;
+    end;
     if Bp = FSetBlueprint then
     begin
       {$IFDEF BRIDGE_METRICS}
@@ -4627,6 +4648,7 @@ var
   GocciaVal, ThenMethod: TGocciaValue;
   ThenVal: TSouffleValue;
   Promise: TGocciaPromiseValue;
+  SP: TSoufflePromise;
   ThenArgs: TGocciaArgumentsCollection;
   Queue: TGocciaMicrotaskQueue;
   PromiseRooted: Boolean;
@@ -4639,6 +4661,32 @@ begin
     Exit(AValue);
   if AValue.AsReference is TSouffleHeapString then
     Exit(AValue);
+
+  { Fast path: TSoufflePromise in blueprint record — no bridge crossing }
+  SP := GetSoufflePromise(AValue);
+  if Assigned(SP) then
+  begin
+    if SP.State = spssFulfilled then
+      Exit(SP.PromiseResult);
+    if SP.State = spssRejected then
+    begin
+      RethrowAsVM(SP.PromiseResult);
+      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    end;
+    { Pending: drain microtask queue }
+    Queue := TGocciaMicrotaskQueue.Instance;
+    if Assigned(Queue) then
+      Queue.DrainQueue;
+    if SP.State = spssFulfilled then
+      Exit(SP.PromiseResult);
+    if SP.State = spssRejected then
+    begin
+      RethrowAsVM(SP.PromiseResult);
+      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    end;
+    ThrowTypeErrorMessage('await: Promise did not settle after microtask drain');
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
 
   Promise := nil;
   PromiseRooted := False;
@@ -6576,6 +6624,155 @@ begin
     Result.Add(ARuntime.ToSouffleValue(ASet.Items[I]));
 end;
 
+{ Promise blueprint helpers }
+
+function TGocciaRuntimeOperations.WrapSoufflePromise(
+  const APromise: TSoufflePromise): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+begin
+  Rec := TSouffleRecord.CreateFromBlueprint(FPromiseBlueprint);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
+  Rec.Delegate := FPromiseBlueprint.Prototype;
+  Rec.SetSlot(0, SouffleReference(APromise));
+  Result := SouffleReference(Rec);
+end;
+
+function NativePromiseResolveCallback(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer;
+  const AContext: TSouffleValue): TSouffleValue;
+var
+  P: TSoufflePromise;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if SouffleIsReference(AContext) and Assigned(AContext.AsReference) and
+     (AContext.AsReference is TSoufflePromise) then
+  begin
+    P := TSoufflePromise(AContext.AsReference);
+    if P.AlreadyResolved then Exit;
+    P.AlreadyResolved := True;
+    if AArgCount > 0 then
+      P.Resolve(AArgs^)
+    else
+      P.Resolve(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
+end;
+
+function NativePromiseRejectCallback(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer;
+  const AContext: TSouffleValue): TSouffleValue;
+var
+  P: TSoufflePromise;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if SouffleIsReference(AContext) and Assigned(AContext.AsReference) and
+     (AContext.AsReference is TSoufflePromise) then
+  begin
+    P := TSoufflePromise(AContext.AsReference);
+    if P.AlreadyResolved then Exit;
+    P.AlreadyResolved := True;
+    if AArgCount > 0 then
+      P.Reject(AArgs^)
+    else
+      P.Reject(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
+end;
+
+function TGocciaRuntimeOperations.ConstructNativePromise(
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  P: TSoufflePromise;
+  Executor: TSouffleValue;
+  ResolveFn, RejectFn: TSouffleNativeClosure;
+  VMArgs: array[0..1] of TSouffleValue;
+begin
+  if (AArgCount < 1) or not SouffleIsReference(AArgs^) then
+  begin
+    ThrowTypeErrorMessage('Promise resolver is not a function');
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
+
+  Executor := AArgs^;
+  if not ((Executor.AsReference is TSouffleClosure) or
+          (Executor.AsReference is TSouffleNativeFunction) or
+          (Executor.AsReference is TSouffleNativeClosure)) then
+  begin
+    ThrowTypeErrorMessage('Promise resolver is not a function');
+    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  end;
+
+  P := TSoufflePromise.Create;
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(P);
+
+  ResolveFn := TSouffleNativeClosure.Create('resolve', 1,
+    @NativePromiseResolveCallback, SouffleReference(P));
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(ResolveFn);
+
+  RejectFn := TSouffleNativeClosure.Create('reject', 1,
+    @NativePromiseRejectCallback, SouffleReference(P));
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(RejectFn);
+
+  VMArgs[0] := SouffleReference(ResolveFn);
+  VMArgs[1] := SouffleReference(RejectFn);
+
+  try
+    if Executor.AsReference is TSouffleClosure then
+      FVM.ExecuteFunction(TSouffleClosure(Executor.AsReference),
+        [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED),
+         SouffleReference(ResolveFn), SouffleReference(RejectFn)])
+    else if Executor.AsReference is TSouffleNativeFunction then
+      TSouffleNativeFunction(Executor.AsReference).Invoke(
+        SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), @VMArgs[0], 2)
+    else if Executor.AsReference is TSouffleNativeClosure then
+      TSouffleNativeClosure(Executor.AsReference).Invoke(
+        SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), @VMArgs[0], 2);
+  except
+    on E: ESouffleThrow do
+    begin
+      if not P.AlreadyResolved then
+      begin
+        P.AlreadyResolved := True;
+        P.Reject(E.ThrownValue);
+      end;
+    end;
+  end;
+
+  Result := WrapSoufflePromise(P);
+end;
+
+procedure TGocciaRuntimeOperations.InvokeSouffleMicrotask(
+  const AHandler, AValue: TSouffleValue;
+  out AResult: TSouffleValue; out AHadError: Boolean);
+var
+  VMArgs: array[0..0] of TSouffleValue;
+begin
+  AHadError := False;
+  AResult := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  try
+    VMArgs[0] := AValue;
+    if AHandler.AsReference is TSouffleClosure then
+      AResult := FVM.ExecuteFunction(
+        TSouffleClosure(AHandler.AsReference),
+        [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), AValue])
+    else if AHandler.AsReference is TSouffleNativeFunction then
+      AResult := TSouffleNativeFunction(AHandler.AsReference).Invoke(
+        SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), @VMArgs[0], 1)
+    else if AHandler.AsReference is TSouffleNativeClosure then
+      AResult := TSouffleNativeClosure(AHandler.AsReference).Invoke(
+        SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), @VMArgs[0], 1);
+  except
+    on E: ESouffleThrow do
+    begin
+      AHadError := True;
+      AResult := E.ThrownValue;
+    end;
+  end;
+end;
+
 { Native Map/Set blueprint construction }
 
 function TGocciaRuntimeOperations.ConstructNativeMap(const AArgs: PSouffleValue;
@@ -6801,6 +6998,29 @@ begin
   { Legacy direct reference path }
   else if AReceiver.AsReference is TGocciaSouffleSet then
     Result := TGocciaSouffleSet(AReceiver.AsReference);
+end;
+
+function GetSoufflePromise(const AReceiver: TSouffleValue): TSoufflePromise;
+var
+  Rec: TSouffleRecord;
+  Slot0: TSouffleValue;
+begin
+  Result := nil;
+  if not SouffleIsReference(AReceiver) or not Assigned(AReceiver.AsReference) then
+    Exit;
+  if AReceiver.AsReference is TSouffleRecord then
+  begin
+    Rec := TSouffleRecord(AReceiver.AsReference);
+    if Assigned(Rec.Blueprint) and (Rec.Blueprint.SlotCount > 0) then
+    begin
+      Slot0 := Rec.GetSlot(0);
+      if SouffleIsReference(Slot0) and Assigned(Slot0.AsReference) and
+         (Slot0.AsReference is TSoufflePromise) then
+        Result := TSoufflePromise(Slot0.AsReference);
+    end;
+  end
+  else if AReceiver.AsReference is TSoufflePromise then
+    Result := TSoufflePromise(AReceiver.AsReference);
 end;
 
 function UnwrapMapFromReceiver(const AReceiver: TSouffleValue): TGocciaMapValue; inline;
@@ -7552,71 +7772,78 @@ end;
 function NativePromiseThen(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
-  P: TGocciaPromiseValue;
-  OnFulfilled, OnRejected: TGocciaValue;
+  SP: TSoufflePromise;
+  OnFulfilled, OnRejected: TSouffleValue;
+  ChildPromise: TSoufflePromise;
 begin
-  P := UnwrapPromiseFromReceiver(AReceiver);
-  if not Assigned(P) then
+  SP := GetSoufflePromise(AReceiver);
+  if Assigned(SP) then
   begin
-    Goccia.Values.ErrorHelper.ThrowTypeError(
-      'Promise.prototype.then called on non-Promise');
-    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    OnFulfilled := SouffleNil;
+    OnRejected := SouffleNil;
+    if AArgCount > 0 then OnFulfilled := AArgs^;
+    if AArgCount > 1 then
+      OnRejected := PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^;
+    { Only pass callable values }
+    if not (SouffleIsReference(OnFulfilled) and Assigned(OnFulfilled.AsReference)) then
+      OnFulfilled := SouffleNil;
+    if not (SouffleIsReference(OnRejected) and Assigned(OnRejected.AsReference)) then
+      OnRejected := SouffleNil;
+    ChildPromise := SP.InvokeThen(OnFulfilled, OnRejected);
+    Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ChildPromise);
+    Exit;
   end;
-
-  OnFulfilled := nil;
-  OnRejected := nil;
-  if AArgCount > 0 then
-    OnFulfilled := SouffleToCallable(AArgs^);
-  if AArgCount > 1 then
-    OnRejected := SouffleToCallable(
-      PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^);
-
-  Result := GNativeArrayJoinRuntime.WrapGocciaValue(
-    P.InvokeThen(OnFulfilled, OnRejected));
+  { Fallback for TGocciaPromiseValue wrapped values }
+  Result := InvokeGocciaMethod(AReceiver, 'then', AArgs, AArgCount);
 end;
 
 function NativePromiseCatch(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
-  P: TGocciaPromiseValue;
-  OnRejected: TGocciaValue;
+  SP: TSoufflePromise;
+  OnRejected: TSouffleValue;
+  ChildPromise: TSoufflePromise;
 begin
-  P := UnwrapPromiseFromReceiver(AReceiver);
-  if not Assigned(P) then
+  SP := GetSoufflePromise(AReceiver);
+  if Assigned(SP) then
   begin
-    Goccia.Values.ErrorHelper.ThrowTypeError(
-      'Promise.prototype.catch called on non-Promise');
-    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    OnRejected := SouffleNil;
+    if AArgCount > 0 then OnRejected := AArgs^;
+    if not (SouffleIsReference(OnRejected) and Assigned(OnRejected.AsReference)) then
+      OnRejected := SouffleNil;
+    ChildPromise := SP.InvokeThen(SouffleNil, OnRejected);
+    Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ChildPromise);
+    Exit;
   end;
-
-  OnRejected := nil;
-  if AArgCount > 0 then
-    OnRejected := SouffleToCallable(AArgs^);
-
-  Result := GNativeArrayJoinRuntime.WrapGocciaValue(
-    P.InvokeThen(nil, OnRejected));
+  Result := InvokeGocciaMethod(AReceiver, 'catch', AArgs, AArgCount);
 end;
 
 function NativePromiseFinally(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
-  P: TGocciaPromiseValue;
-  OnFinally: TGocciaValue;
+  SP: TSoufflePromise;
+  OnFinally: TSouffleValue;
+  ChildPromise: TSoufflePromise;
 begin
-  P := UnwrapPromiseFromReceiver(AReceiver);
-  if not Assigned(P) then
+  SP := GetSoufflePromise(AReceiver);
+  if Assigned(SP) then
   begin
-    Goccia.Values.ErrorHelper.ThrowTypeError(
-      'Promise.prototype.finally called on non-Promise');
-    Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    OnFinally := SouffleNil;
+    if AArgCount > 0 then OnFinally := AArgs^;
+    if not (SouffleIsReference(OnFinally) and Assigned(OnFinally.AsReference)) then
+    begin
+      { No callable — pass through }
+      ChildPromise := SP.InvokeThen(SouffleNil, SouffleNil);
+      Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ChildPromise);
+      Exit;
+    end;
+    { TODO: Full finally semantics with passthrough wrappers }
+    { For now, delegate to InvokeThen with the callback for both paths }
+    ChildPromise := SP.InvokeThen(OnFinally, OnFinally);
+    Result := GNativeArrayJoinRuntime.WrapSoufflePromise(ChildPromise);
+    Exit;
   end;
-
-  OnFinally := nil;
-  if AArgCount > 0 then
-    OnFinally := SouffleToCallable(AArgs^);
-
-  Result := GNativeArrayJoinRuntime.WrapGocciaValue(
-    P.InvokeFinally(OnFinally));
+  Result := InvokeGocciaMethod(AReceiver, 'finally', AArgs, AArgCount);
 end;
 
 { Native Promise static delegate callbacks }
@@ -7624,33 +7851,39 @@ end;
 function NativePromiseStaticResolve(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
-  Value: TGocciaValue;
-  P: TGocciaPromiseValue;
+  Arg: TSouffleValue;
+  SP: TSoufflePromise;
 begin
   if AArgCount > 0 then
-    Value := GNativeArrayJoinRuntime.UnwrapToGocciaValue(AArgs^)
+    Arg := AArgs^
   else
-    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Arg := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
 
-  if Value is TGocciaPromiseValue then
-    Exit(GNativeArrayJoinRuntime.WrapGocciaValue(Value));
+  { If already a promise blueprint record, return as-is }
+  SP := GetSoufflePromise(Arg);
+  if Assigned(SP) then
+    Exit(Arg);
 
-  P := TGocciaPromiseValue.Create;
-  P.Resolve(Value);
-  Result := GNativeArrayJoinRuntime.WrapGocciaValue(P);
+  SP := TSoufflePromise.Create;
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(SP);
+  SP.Resolve(Arg);
+  Result := GNativeArrayJoinRuntime.WrapSoufflePromise(SP);
 end;
 
 function NativePromiseStaticReject(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
-  P: TGocciaPromiseValue;
+  SP: TSoufflePromise;
 begin
-  P := TGocciaPromiseValue.Create;
+  SP := TSoufflePromise.Create;
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(SP);
   if AArgCount > 0 then
-    P.Reject(GNativeArrayJoinRuntime.UnwrapToGocciaValue(AArgs^))
+    SP.Reject(AArgs^)
   else
-    P.Reject(TGocciaUndefinedLiteralValue.UndefinedValue);
-  Result := GNativeArrayJoinRuntime.WrapGocciaValue(P);
+    SP.Reject(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+  Result := GNativeArrayJoinRuntime.WrapSoufflePromise(SP);
 end;
 
 function NativePromiseStaticAll(const AReceiver: TSouffleValue;
@@ -8983,6 +9216,11 @@ begin
   { Create blueprints for built-in types }
   FMapBlueprint := CreateBuiltinBlueprint('Map', 1, FMapDelegate, 'entries');
   FSetBlueprint := CreateBuiltinBlueprint('Set', 1, FSetDelegate, 'values');
+  FPromiseBlueprint := CreateBuiltinBlueprint('Promise', 1, FPromiseDelegate, '');
+
+  { Wire Souffle microtask invoker }
+  if Assigned(TGocciaMicrotaskQueue.Instance) then
+    TGocciaMicrotaskQueue.Instance.SouffleInvoker := InvokeSouffleMicrotask;
 
   { Map/Set constructor methods (for super() calls in subclasses) }
   AddMethodToBlueprint(FMapBlueprint, 'constructor', 1, @NativeMapConstructor);
@@ -9250,6 +9488,11 @@ begin
     if (Key = 'Set') and Assigned(FSetBlueprint) then
     begin
       FGlobals.AddOrSetValue(Key, SouffleReference(FSetBlueprint));
+      Continue;
+    end;
+    if (Key = CONSTRUCTOR_PROMISE) and Assigned(FPromiseBlueprint) then
+    begin
+      FGlobals.AddOrSetValue(Key, SouffleReference(FPromiseBlueprint));
       Continue;
     end;
 
@@ -10381,6 +10624,8 @@ begin
     FSetBlueprint.MarkReferences;
   if Assigned(FPromiseDelegate) and not FPromiseDelegate.GCMarked then
     FPromiseDelegate.MarkReferences;
+  if Assigned(FPromiseBlueprint) and not FPromiseBlueprint.GCMarked then
+    FPromiseBlueprint.MarkReferences;
   if Assigned(FPromiseStaticDelegate) and not FPromiseStaticDelegate.GCMarked then
     FPromiseStaticDelegate.MarkReferences;
   if Assigned(FDescribeDelegate) and not FDescribeDelegate.GCMarked then
