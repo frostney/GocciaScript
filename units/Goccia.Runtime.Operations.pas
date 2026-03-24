@@ -7093,6 +7093,11 @@ begin
     RawLen := CoerceToNumber(AArgs^);
     if IsNan(RawLen) then
       ByteLen := 0
+    else if IsInfinite(RawLen) then
+    begin
+      ThrowRangeErrorNative('Invalid array buffer length');
+      Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+    end
     else
     begin
       ByteLen := Trunc(RawLen);
