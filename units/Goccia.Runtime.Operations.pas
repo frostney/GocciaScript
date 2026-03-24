@@ -1263,7 +1263,7 @@ begin
     begin
       Flags := TSouffleRecord(FTarget).GetEntryFlags(AName);
       if Flags and SOUFFLE_PROP_CONFIGURABLE = 0 then
-        ThrowTypeError('Cannot delete property ''' + AName +
+        FRuntime.ThrowTypeErrorMessage('Cannot delete property ''' + AName +
           ''' of a non-configurable property');
     end;
     Result := TSouffleRecord(FTarget).Delete(AName)
@@ -1285,7 +1285,7 @@ begin
     begin
       ExistingFlags := Rec.GetEntryFlags(AName);
       if ExistingFlags and SOUFFLE_PROP_CONFIGURABLE = 0 then
-        ThrowTypeError('Cannot redefine property: ' + AName);
+        FRuntime.ThrowTypeErrorMessage('Cannot redefine property: ' + AName);
     end;
     SFlags := 0;
     if pfWritable in ADescriptor.Flags then
@@ -1918,7 +1918,7 @@ begin
       else if (A.AsReference is TGocciaWrappedValue) and
               (TGocciaWrappedValue(A.AsReference).Value is TGocciaSymbolValue) then
       begin
-        ThrowTypeError('Cannot convert a Symbol value to a number');
+        ThrowTypeErrorMessage('Cannot convert a Symbol value to a number');
         Result := NaN;
       end
       else
@@ -2098,7 +2098,7 @@ begin
       else if A.AsReference is TGocciaWrappedValue then
       begin
         if TGocciaWrappedValue(A.AsReference).Value is TGocciaSymbolValue then
-          ThrowTypeError('Cannot convert a Symbol value to a string');
+          ThrowTypeErrorMessage('Cannot convert a Symbol value to a string');
         Result := TGocciaWrappedValue(A.AsReference).Value.ToStringLiteral.Value;
       end
       else
@@ -2500,7 +2500,7 @@ begin
       Exit(SouffleFloat(SouffleAsNumber(A) + SouffleAsNumber(B)));
 
     if IsWrappedSymbol(A) or IsWrappedSymbol(B) then
-      ThrowTypeError('Cannot convert a Symbol value to a string');
+      ThrowTypeErrorMessage('Cannot convert a Symbol value to a string');
 
     if SouffleIsStringValue(A) then
       Result := SouffleString(SouffleGetString(A) + CoerceToString(B))
@@ -2998,7 +2998,7 @@ begin
     if SouffleIsNil(AObject) or
        SouffleIsBoolean(AObject) or SouffleIsInteger(AObject) or
        SouffleIsFloat(AObject) or SouffleIsStringValue(AObject) then
-      ThrowTypeError('Cannot use ''in'' operator to search for ''' +
+      ThrowTypeErrorMessage('Cannot use ''in'' operator to search for ''' +
         SouffleValueToString(AKey) + ''' in ' + SouffleValueToString(AObject));
     Exit(SouffleBoolean(False));
   end;
@@ -3121,9 +3121,9 @@ begin
     if AObject.Kind = svkNil then
     begin
       if AObject.Flags = GOCCIA_NIL_NULL then
-        ThrowTypeError('Cannot read properties of null (reading ''' + AKey + ''')')
+        ThrowTypeErrorMessage('Cannot read properties of null (reading ''' + AKey + ''')')
       else
-        ThrowTypeError('Cannot read properties of undefined (reading ''' + AKey + ''')');
+        ThrowTypeErrorMessage('Cannot read properties of undefined (reading ''' + AKey + ''')');
     end;
 
     if SouffleIsStringValue(AObject) then
@@ -3472,9 +3472,9 @@ begin
     if AObject.Kind = svkNil then
     begin
       if AObject.Flags = GOCCIA_NIL_NULL then
-        ThrowTypeError('Cannot set properties of null (setting ''' + AKey + ''')')
+        ThrowTypeErrorMessage('Cannot set properties of null (setting ''' + AKey + ''')')
       else
-        ThrowTypeError('Cannot set properties of undefined (setting ''' + AKey + ''')');
+        ThrowTypeErrorMessage('Cannot set properties of undefined (setting ''' + AKey + ''')');
     end;
 
     if SouffleIsReference(AObject) and Assigned(AObject.AsReference) then
@@ -3512,7 +3512,7 @@ begin
             SOUFFLE_PROP_WRITABLE or SOUFFLE_PROP_CONFIGURABLE);
         end
         else if not Rec.PutChecked(AKey, AValue) then
-          ThrowTypeError('Cannot assign to read only property ''' + AKey + '''');
+          ThrowTypeErrorMessage('Cannot assign to read only property ''' + AKey + '''');
         Exit;
       end;
       if AObject.AsReference is TSouffleBlueprint then
@@ -3581,9 +3581,9 @@ begin
     if AObject.Kind = svkNil then
     begin
       if AObject.Flags = GOCCIA_NIL_NULL then
-        ThrowTypeError('Cannot read properties of null (reading ''' + CoerceKeyToString(AKey) + ''')')
+        ThrowTypeErrorMessage('Cannot read properties of null (reading ''' + CoerceKeyToString(AKey) + ''')')
       else
-        ThrowTypeError('Cannot read properties of undefined (reading ''' + CoerceKeyToString(AKey) + ''')');
+        ThrowTypeErrorMessage('Cannot read properties of undefined (reading ''' + CoerceKeyToString(AKey) + ''')');
     end;
 
     if SouffleIsStringValue(AObject) and (AKey.Kind = svkInteger) then
@@ -3672,9 +3672,9 @@ begin
     if AObject.Kind = svkNil then
     begin
       if AObject.Flags = GOCCIA_NIL_NULL then
-        ThrowTypeError('Cannot set properties of null (setting ''' + CoerceKeyToString(AKey) + ''')')
+        ThrowTypeErrorMessage('Cannot set properties of null (setting ''' + CoerceKeyToString(AKey) + ''')')
       else
-        ThrowTypeError('Cannot set properties of undefined (setting ''' + CoerceKeyToString(AKey) + ''')');
+        ThrowTypeErrorMessage('Cannot set properties of undefined (setting ''' + CoerceKeyToString(AKey) + ''')');
     end;
 
     if SouffleIsReference(AObject) and Assigned(AObject.AsReference) and
@@ -3743,7 +3743,7 @@ begin
            and SOUFFLE_PROP_CONFIGURABLE = 0) then
       begin
         try
-          ThrowTypeError('Cannot delete property ''' + AKey + '''');
+          ThrowTypeErrorMessage('Cannot delete property ''' + AKey + '''');
         except
           on E: TGocciaThrowValue do
             RethrowAsVM(E);
@@ -3894,7 +3894,7 @@ begin
     if SouffleIsReference(ACallee) and Assigned(ACallee.AsReference) and
        (ACallee.AsReference is TSouffleBlueprint) then
     begin
-      ThrowTypeError('Class constructor ' +
+      ThrowTypeErrorMessage('Class constructor ' +
         TSouffleBlueprint(ACallee.AsReference).Name +
         ' cannot be invoked without ''new''');
       Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
@@ -3903,7 +3903,7 @@ begin
     GocciaCallee := UnwrapToGocciaValue(ACallee);
     if not GocciaCallee.IsCallable then
     begin
-      ThrowTypeError(GocciaCallee.ToStringLiteral.Value + ' is not a function');
+      ThrowTypeErrorMessage(GocciaCallee.ToStringLiteral.Value + ' is not a function');
       Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
       Exit;
     end;
@@ -4540,7 +4540,7 @@ begin
 
     if Iterator = nil then
     begin
-      ThrowTypeError(GocciaVal.TypeName + ' is not iterable');
+      ThrowTypeErrorMessage(GocciaVal.TypeName + ' is not iterable');
       Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
       Exit;
     end;
@@ -4633,7 +4633,7 @@ begin
       Resolved := Goccia.Evaluator.AwaitValue(NextResult);
       if Resolved.IsPrimitive then
       begin
-        ThrowTypeError('Iterator result ' +
+        ThrowTypeErrorMessage('Iterator result ' +
           Resolved.ToStringLiteral.Value + ' is not an object');
         Exit;
       end;
@@ -4673,7 +4673,7 @@ begin
 
     if SouffleIsNil(ASource) then
     begin
-      ThrowTypeError('Cannot spread a non-iterable value');
+      ThrowTypeErrorMessage('Cannot spread a non-iterable value');
       Exit;
     end;
 
@@ -4687,7 +4687,7 @@ begin
 
     if not SouffleIsReference(ASource) then
     begin
-      ThrowTypeError('Cannot spread a non-iterable value');
+      ThrowTypeErrorMessage('Cannot spread a non-iterable value');
       Exit;
     end;
 
@@ -5298,7 +5298,7 @@ begin
   if FConstGlobals.ContainsKey(AName) then
   begin
     try
-      ThrowTypeError('Assignment to constant variable ''' + AName + '''');
+      ThrowTypeErrorMessage('Assignment to constant variable ''' + AName + '''');
     except
       on E: TGocciaThrowValue do
         RethrowAsVM(E);
@@ -5598,7 +5598,7 @@ begin
     end;
     if Rec.HasGetters and Rec.Getters.Get(SymPropKey, GetterVal) then
     begin
-      ThrowTypeError('Cannot set property Symbol(' +
+      ThrowTypeErrorMessage('Cannot set property Symbol(' +
         ASymKey.Description + ') which has only a getter');
       Exit(True);
     end;
@@ -5619,7 +5619,7 @@ begin
         end;
         if Bp.HasGetters and Bp.Getters.Get(SymPropKey, GetterVal) then
         begin
-          ThrowTypeError('Cannot set property Symbol(' +
+          ThrowTypeErrorMessage('Cannot set property Symbol(' +
             ASymKey.Description + ') which has only a getter');
           Exit(True);
         end;
@@ -5644,7 +5644,7 @@ begin
       end;
       if Bp.HasStaticGetters and Bp.StaticGetters.Get(SymPropKey, GetterVal) then
       begin
-        ThrowTypeError('Cannot set property Symbol(' +
+        ThrowTypeErrorMessage('Cannot set property Symbol(' +
           ASymKey.Description + ') which has only a getter');
         Exit(True);
       end;
@@ -6698,12 +6698,8 @@ begin
   begin
     if Arr.Count = 0 then
     begin
-      try
-        ThrowTypeError('Reduce of empty array with no initial value');
-      except
-        on E: TGocciaThrowValue do
-          GNativeArrayJoinRuntime.RethrowAsVM(E);
-      end;
+      GNativeArrayJoinRuntime.ThrowTypeErrorMessage(
+        'Reduce of empty array with no initial value');
       Exit;
     end;
     StartIdx := 0;
@@ -6711,12 +6707,8 @@ begin
       Inc(StartIdx);
     if StartIdx >= Arr.Count then
     begin
-      try
-        ThrowTypeError('Reduce of empty array with no initial value');
-      except
-        on E: TGocciaThrowValue do
-          GNativeArrayJoinRuntime.RethrowAsVM(E);
-      end;
+      GNativeArrayJoinRuntime.ThrowTypeErrorMessage(
+        'Reduce of empty array with no initial value');
       Exit;
     end;
     Accumulator := Arr.Get(StartIdx);
@@ -14522,9 +14514,9 @@ begin
     if SouffleIsNil(AValue) then
     begin
       if AValue.Flags = GOCCIA_NIL_NULL then
-        ThrowTypeError('Cannot destructure null as it is not iterable')
+        ThrowTypeErrorMessage('Cannot destructure null as it is not iterable')
       else
-        ThrowTypeError('Cannot destructure undefined as it is not iterable');
+        ThrowTypeErrorMessage('Cannot destructure undefined as it is not iterable');
     end;
 
     Arr := TSouffleArray.Create(4);
@@ -14555,9 +14547,9 @@ procedure TGocciaRuntimeOperations.RequireObjectCoercible(
 begin
   try
     if SouffleIsNil(AValue) and (AValue.Flags = GOCCIA_NIL_UNDEFINED) then
-      ThrowTypeError('Cannot destructure undefined as it is not an object')
+      ThrowTypeErrorMessage('Cannot destructure undefined as it is not an object')
     else if SouffleIsNil(AValue) then
-      ThrowTypeError('Cannot destructure null as it is not an object');
+      ThrowTypeErrorMessage('Cannot destructure null as it is not an object');
   except
     on E: TGocciaThrowValue do
       RethrowAsVM(E);
@@ -14766,7 +14758,7 @@ begin
       if not (GocciaVal is TGocciaNumberLiteralValue) and
          not (GocciaVal is TGocciaStringLiteralValue) and
          not (GocciaVal is TGocciaSymbolValue) then
-        ThrowTypeError('Enum member ''' + Key +
+        ThrowTypeErrorMessage('Enum member ''' + Key +
           ''' must be a number, string, or symbol');
 
       EnumObj.DefineProperty(Key,
