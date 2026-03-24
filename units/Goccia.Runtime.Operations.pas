@@ -224,6 +224,7 @@ type
     FSyntaxErrorBlueprint: TSouffleBlueprint;
     FURIErrorBlueprint: TSouffleBlueprint;
     FAggregateErrorBlueprint: TSouffleBlueprint;
+    FDOMExceptionBlueprint: TSouffleBlueprint;
     FErrorDelegate: TSouffleRecord;
     FDescribeDelegate: TSouffleRecord;
     FTestDelegate: TSouffleRecord;
@@ -1701,6 +1702,37 @@ begin
     raise ESouffleThrow.Create(SouffleReference(Rec));
   end;
 
+  { Convert DOMException (HasErrorData=False but has name/message/code) }
+  if Assigned(FDOMExceptionBlueprint) and (E.Value is TGocciaObjectValue) and
+     not TGocciaObjectValue(E.Value).HasErrorData then
+  begin
+    ErrObj := TGocciaObjectValue(E.Value);
+    NameVal := ErrObj.GetProperty('name');
+    if Assigned(NameVal) and Assigned(ErrObj.GetProperty('code')) then
+    begin
+      NameStr := NameVal.ToStringLiteral.Value;
+      MsgVal := ErrObj.GetProperty('message');
+      if Assigned(MsgVal) and not (MsgVal is TGocciaUndefinedLiteralValue) then
+        MsgStr := MsgVal.ToStringLiteral.Value
+      else
+        MsgStr := '';
+
+      Rec := TSouffleRecord.CreateFromBlueprint(FDOMExceptionBlueprint);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AllocateObject(Rec);
+      Rec.Delegate := FDOMExceptionBlueprint.Prototype;
+      Rec.Put('name', SouffleString(NameStr));
+      Rec.Put('message', SouffleString(MsgStr));
+      Rec.Put('code', ToSouffleValue(ErrObj.GetProperty('code')));
+
+      StackVal := ErrObj.GetProperty('stack');
+      if Assigned(StackVal) and not (StackVal is TGocciaUndefinedLiteralValue) then
+        Rec.Put('stack', SouffleString(StackVal.ToStringLiteral.Value));
+
+      raise ESouffleThrow.Create(SouffleReference(Rec));
+    end;
+  end;
+
   raise ESouffleThrow.Create(WrapGocciaValue(E.Value));
 end;
 
@@ -2109,9 +2141,10 @@ begin
           Inc(GBridgeMetrics.RecordCacheMiss);
           {$ENDIF}
           CachedBridge := TGocciaSouffleProxy.Create(AValue.AsReference, Self);
-          { Mark Error blueprint records with HasErrorData }
+          { Mark Error blueprint records with HasErrorData (not DOMException) }
           if Assigned(TSouffleRecord(AValue.AsReference).Blueprint) and
-             Assigned(FErrorBlueprint) then
+             Assigned(FErrorBlueprint) and
+             (TSouffleRecord(AValue.AsReference).Blueprint <> FDOMExceptionBlueprint) then
           begin
             Bp := TSouffleRecord(AValue.AsReference).Blueprint;
             while Assigned(Bp) do
@@ -2208,6 +2241,8 @@ function ConstructNativeError(const ARuntime: TGocciaRuntimeOperations;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue; forward;
 function NativeAggregateErrorConstructor(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue; forward;
+function ConstructNativeDOMException(const AArgs: PSouffleValue;
+  const AArgCount: Integer): TSouffleValue; forward;
 function NativeTypedArrayBuffer(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue; forward;
 
@@ -3866,6 +3901,7 @@ begin
     if Bp = FSyntaxErrorBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := ConstructNativeError(Self, FSyntaxErrorBlueprint, 'SyntaxError', AArgs, AArgCount); Exit; end;
     if Bp = FURIErrorBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := ConstructNativeError(Self, FURIErrorBlueprint, 'URIError', AArgs, AArgCount); Exit; end;
     if Bp = FAggregateErrorBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := NativeAggregateErrorConstructor(SouffleNil, AArgs, AArgCount); Exit; end;
+    if Bp = FDOMExceptionBlueprint then begin {$IFDEF BRIDGE_METRICS} MetricNative; {$ENDIF} Result := ConstructNativeDOMException(AArgs, AArgCount); Exit; end;
     { TypedArray construction }
     for TAKind := Low(TSouffleTypedArrayKind) to High(TSouffleTypedArrayKind) do
       if Bp = FTypedArrayBlueprints[TAKind] then
@@ -10045,11 +10081,18 @@ begin
     Msg := '';
   Rec.Put('message', SouffleString(Msg));
 
-  { Set stack }
-  if Assigned(TGocciaCallStack.Instance) then
-    Stack := TGocciaCallStack.Instance.CaptureStackTrace(AErrorName, Msg, 1)
-  else
-    Stack := AErrorName + ': ' + Msg;
+  { Set stack — push VM frames so CaptureStackTrace can see them }
+  if Assigned(ARuntime.FVM) then
+    PushVMFramesToGoccia(ARuntime.FVM);
+  try
+    if Assigned(TGocciaCallStack.Instance) then
+      Stack := TGocciaCallStack.Instance.CaptureStackTrace(AErrorName, Msg, 0)
+    else
+      Stack := AErrorName + ': ' + Msg;
+  finally
+    if Assigned(ARuntime.FVM) then
+      PopVMFramesFromGoccia(ARuntime.FVM);
+  end;
   Rec.Put('stack', SouffleString(Stack));
 
   { Handle options.cause (ES2022) }
@@ -10182,6 +10225,9 @@ begin
     if Assigned(Rec.Blueprint) then
     begin
       Bp := Rec.Blueprint;
+      { DOMException inherits from Error but isError returns false }
+      if Bp = GNativeArrayJoinRuntime.FDOMExceptionBlueprint then
+        Exit(SouffleBoolean(False));
       while Assigned(Bp) do
       begin
         if Bp = GNativeArrayJoinRuntime.FErrorBlueprint then
@@ -10198,6 +10244,67 @@ begin
         TGocciaObjectValue(TGocciaWrappedValue(AArgs^.AsReference).Value).HasErrorData));
   end;
   Result := SouffleBoolean(False);
+end;
+
+function ConstructNativeDOMException(const AArgs: PSouffleValue;
+  const AArgCount: Integer): TSouffleValue;
+var
+  Rec: TSouffleRecord;
+  GC: TGarbageCollector;
+  Msg, Name: string;
+  Code: Integer;
+begin
+  GC := TGarbageCollector.Instance;
+  Rec := TSouffleRecord.CreateFromBlueprint(
+    GNativeArrayJoinRuntime.FDOMExceptionBlueprint);
+  if Assigned(GC) then GC.AllocateObject(Rec);
+  Rec.Delegate := GNativeArrayJoinRuntime.FDOMExceptionBlueprint.Prototype;
+
+  { DOMException(message, name) }
+  if (AArgCount > 0) and (AArgs^.Kind <> svkNil) then
+    Msg := GNativeArrayJoinRuntime.CoerceToString(AArgs^)
+  else
+    Msg := '';
+
+  if (AArgCount > 1) and (PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^.Kind <> svkNil) then
+    Name := GNativeArrayJoinRuntime.CoerceToString(
+      PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^)
+  else
+    Name := 'Error';
+
+  Rec.Put('name', SouffleString(Name));
+  Rec.Put('message', SouffleString(Msg));
+
+  { Legacy code property }
+  Code := 0;
+  if Name = 'IndexSizeError' then Code := 1
+  else if Name = 'HierarchyRequestError' then Code := 3
+  else if Name = 'WrongDocumentError' then Code := 4
+  else if Name = 'InvalidCharacterError' then Code := 5
+  else if Name = 'NoModificationAllowedError' then Code := 7
+  else if Name = 'NotFoundError' then Code := 8
+  else if Name = 'NotSupportedError' then Code := 9
+  else if Name = 'InvalidStateError' then Code := 11
+  else if Name = 'SyntaxError' then Code := 12
+  else if Name = 'InvalidModificationError' then Code := 13
+  else if Name = 'NamespaceError' then Code := 14
+  else if Name = 'InvalidAccessError' then Code := 15
+  else if Name = 'TypeMismatchError' then Code := 17
+  else if Name = 'SecurityError' then Code := 18
+  else if Name = 'NetworkError' then Code := 19
+  else if Name = 'AbortError' then Code := 20
+  else if Name = 'URLMismatchError' then Code := 21
+  else if Name = 'QuotaExceededError' then Code := 22
+  else if Name = 'TimeoutError' then Code := 23
+  else if Name = 'InvalidNodeTypeError' then Code := 24
+  else if Name = 'DataCloneError' then Code := 25;
+  Rec.Put('code', SouffleInteger(Code));
+
+  if Assigned(TGocciaCallStack.Instance) then
+    Rec.Put('stack', SouffleString(
+      TGocciaCallStack.Instance.CaptureStackTrace(Name, Msg, 0)));
+
+  Result := SouffleReference(Rec);
 end;
 
 { Native Error delegate callbacks }
@@ -11625,6 +11732,11 @@ begin
   FAggregateErrorBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
   FAggregateErrorBlueprint.Prototype.Put('name', SouffleString('AggregateError'));
 
+  FDOMExceptionBlueprint := CreateBuiltinBlueprint('DOMException', 0, FErrorDelegate, '');
+  FDOMExceptionBlueprint.SuperBlueprint := FErrorBlueprint;
+  FDOMExceptionBlueprint.Prototype.Delegate := FErrorBlueprint.Prototype;
+  FDOMExceptionBlueprint.Prototype.Put('name', SouffleString('Error'));
+
   { Error static methods }
   AddStaticMethod(FErrorBlueprint, 'isError', 1, @NativeErrorIsError);
 
@@ -11924,6 +12036,7 @@ begin
     if (Key = 'SyntaxError') and Assigned(FSyntaxErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FSyntaxErrorBlueprint)); Continue; end;
     if (Key = 'URIError') and Assigned(FURIErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FURIErrorBlueprint)); Continue; end;
     if (Key = 'AggregateError') and Assigned(FAggregateErrorBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FAggregateErrorBlueprint)); Continue; end;
+    if (Key = 'DOMException') and Assigned(FDOMExceptionBlueprint) then begin FGlobals.AddOrSetValue(Key, SouffleReference(FDOMExceptionBlueprint)); Continue; end;
     if not (Val.AsReference is TGocciaWrappedValue) then Continue;
 
     Wrapped := TGocciaWrappedValue(Val.AsReference);
@@ -13114,6 +13227,8 @@ begin
     FURIErrorBlueprint.MarkReferences;
   if Assigned(FAggregateErrorBlueprint) and not FAggregateErrorBlueprint.GCMarked then
     FAggregateErrorBlueprint.MarkReferences;
+  if Assigned(FDOMExceptionBlueprint) and not FDOMExceptionBlueprint.GCMarked then
+    FDOMExceptionBlueprint.MarkReferences;
   if Assigned(FErrorDelegate) and not FErrorDelegate.GCMarked then
     FErrorDelegate.MarkReferences;
   if Assigned(FDescribeDelegate) and not FDescribeDelegate.GCMarked then
