@@ -123,6 +123,39 @@ type
     property AlreadyResolved: Boolean read FAlreadyResolved write FAlreadyResolved;
   end;
 
+  TSouffleTypedArrayKind = (
+    stakInt8, stakUint8, stakUint8Clamped,
+    stakInt16, stakUint16,
+    stakInt32, stakUint32,
+    stakFloat32, stakFloat64
+  );
+
+  TSouffleArrayBuffer = class(TSouffleHeapObject)
+  private
+    function GetByteLength: Integer;
+  public
+    Data: TBytes;
+    constructor Create(const AByteLength: Integer);
+    function DebugString: string; override;
+    property ByteLength: Integer read GetByteLength;
+  end;
+
+  TSouffleTypedArray = class(TSouffleHeapObject)
+  public
+    Buffer: TSouffleArrayBuffer;
+    ByteOffset: Integer;
+    ElementLength: Integer;
+    Kind: TSouffleTypedArrayKind;
+
+    constructor Create(const ABuffer: TSouffleArrayBuffer;
+      const AByteOffset, ALength: Integer; const AKind: TSouffleTypedArrayKind);
+    function ReadElement(const AIndex: Integer): Double;
+    procedure WriteElement(const AIndex: Integer; const AValue: Double);
+    procedure WriteElementClamped(const AIndex: Integer; const AValue: Double);
+    procedure MarkReferences; override;
+    function DebugString: string; override;
+  end;
+
   TSoufflePromiseAllState = class(TSouffleHeapObject)
   public
     Results: TSouffleArray;
@@ -133,6 +166,7 @@ type
     function DebugString: string; override;
   end;
 
+function BytesPerElement(const AKind: TSouffleTypedArrayKind): Integer; inline;
 function SouffleSameValueZero(const A, B: TSouffleValue): Boolean;
 
 implementation
@@ -659,6 +693,200 @@ begin
        not FReactions[I].ResultPromise.GCMarked then
       FReactions[I].ResultPromise.MarkReferences;
   end;
+end;
+
+{ TSouffleArrayBuffer }
+
+constructor TSouffleArrayBuffer.Create(const AByteLength: Integer);
+begin
+  inherited Create(0);
+  SetLength(Data, AByteLength);
+  if AByteLength > 0 then
+    FillChar(Data[0], AByteLength, 0);
+end;
+
+function TSouffleArrayBuffer.GetByteLength: Integer;
+begin
+  Result := Length(Data);
+end;
+
+function TSouffleArrayBuffer.DebugString: string;
+begin
+  Result := Format('ArrayBuffer(%d)', [Length(Data)]);
+end;
+
+{ TSouffleTypedArray }
+
+function BytesPerElement(const AKind: TSouffleTypedArrayKind): Integer;
+begin
+  case AKind of
+    stakInt8, stakUint8, stakUint8Clamped: Result := 1;
+    stakInt16, stakUint16: Result := 2;
+    stakInt32, stakUint32, stakFloat32: Result := 4;
+    stakFloat64: Result := 8;
+  else
+    Result := 1;
+  end;
+end;
+
+constructor TSouffleTypedArray.Create(const ABuffer: TSouffleArrayBuffer;
+  const AByteOffset, ALength: Integer; const AKind: TSouffleTypedArrayKind);
+begin
+  inherited Create(0);
+  Buffer := ABuffer;
+  ByteOffset := AByteOffset;
+  ElementLength := ALength;
+  Kind := AKind;
+end;
+
+function TSouffleTypedArray.ReadElement(const AIndex: Integer): Double;
+var
+  Offset: Integer;
+  I8: ShortInt;
+  U8: Byte;
+  I16: SmallInt;
+  U16: Word;
+  I32: LongInt;
+  U32: LongWord;
+  I64: Int64;
+  F32: Single;
+  F64: Double;
+begin
+  Offset := ByteOffset + AIndex * BytesPerElement(Kind);
+  case Kind of
+    stakInt8:
+    begin
+      I8 := ShortInt(Buffer.Data[Offset]);
+      Result := I8;
+    end;
+    stakUint8, stakUint8Clamped:
+    begin
+      U8 := Buffer.Data[Offset];
+      Result := U8;
+    end;
+    stakInt16:
+    begin
+      Move(Buffer.Data[Offset], I16, 2);
+      Result := I16;
+    end;
+    stakUint16:
+    begin
+      Move(Buffer.Data[Offset], U16, 2);
+      Result := U16;
+    end;
+    stakInt32:
+    begin
+      Move(Buffer.Data[Offset], I32, 4);
+      I64 := I32;
+      Result := I64;
+    end;
+    stakUint32:
+    begin
+      Move(Buffer.Data[Offset], U32, 4);
+      I64 := U32;
+      Result := I64;
+    end;
+    stakFloat32:
+    begin
+      Move(Buffer.Data[Offset], F32, 4);
+      Result := F32;
+    end;
+    stakFloat64:
+    begin
+      Move(Buffer.Data[Offset], F64, 8);
+      Result := F64;
+    end;
+  else
+    Result := 0;
+  end;
+end;
+
+procedure TSouffleTypedArray.WriteElement(const AIndex: Integer; const AValue: Double);
+var
+  Offset: Integer;
+  I8: ShortInt;
+  U8: Byte;
+  I16: SmallInt;
+  U16: Word;
+  I32: LongInt;
+  U32: LongWord;
+  F32: Single;
+  F64: Double;
+begin
+  Offset := ByteOffset + AIndex * BytesPerElement(Kind);
+  case Kind of
+    stakInt8:
+    begin
+      I8 := ShortInt(Trunc(AValue));
+      Buffer.Data[Offset] := Byte(I8);
+    end;
+    stakUint8:
+    begin
+      U8 := Byte(Trunc(AValue));
+      Buffer.Data[Offset] := U8;
+    end;
+    stakUint8Clamped:
+      WriteElementClamped(AIndex, AValue);
+    stakInt16:
+    begin
+      I16 := SmallInt(Trunc(AValue));
+      Move(I16, Buffer.Data[Offset], 2);
+    end;
+    stakUint16:
+    begin
+      U16 := Word(Trunc(AValue));
+      Move(U16, Buffer.Data[Offset], 2);
+    end;
+    stakInt32:
+    begin
+      I32 := LongInt(Trunc(AValue));
+      Move(I32, Buffer.Data[Offset], 4);
+    end;
+    stakUint32:
+    begin
+      U32 := LongWord(Trunc(AValue));
+      Move(U32, Buffer.Data[Offset], 4);
+    end;
+    stakFloat32:
+    begin
+      F32 := AValue;
+      Move(F32, Buffer.Data[Offset], 4);
+    end;
+    stakFloat64:
+    begin
+      F64 := AValue;
+      Move(F64, Buffer.Data[Offset], 8);
+    end;
+  end;
+end;
+
+procedure TSouffleTypedArray.WriteElementClamped(const AIndex: Integer; const AValue: Double);
+var
+  Offset, Clamped: Integer;
+begin
+  Offset := ByteOffset + AIndex * BytesPerElement(Kind);
+  if IsNan(AValue) then
+    Clamped := 0
+  else if AValue <= 0 then
+    Clamped := 0
+  else if AValue >= 255 then
+    Clamped := 255
+  else
+    Clamped := Round(AValue);
+  Buffer.Data[Offset] := Byte(Clamped);
+end;
+
+procedure TSouffleTypedArray.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(Buffer) and not Buffer.GCMarked then
+    Buffer.MarkReferences;
+end;
+
+function TSouffleTypedArray.DebugString: string;
+begin
+  Result := Format('TypedArray(%d)', [ElementLength]);
 end;
 
 { TSoufflePromiseAllState }
