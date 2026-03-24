@@ -12516,6 +12516,7 @@ var
   SP: TSoufflePromise;
   Queue: TGocciaMicrotaskQueue;
   FullName: string;
+  Rec: TSouffleRecord;
 begin
   TR := GNativeArrayJoinRuntime.FTestRunner;
   VM := GNativeArrayJoinRuntime.FVM;
@@ -12640,7 +12641,18 @@ begin
     WriteLn(#$E2#$9C#$85 + ' All tests passed!');
   WriteLn('==================');
 
-  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  { Return result record for TestRunner binary }
+  Rec := TSouffleRecord.Create(8);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AllocateObject(Rec);
+  Rec.Put('totalTests', SouffleInteger(TR.TotalTests));
+  Rec.Put('totalRunTests', SouffleInteger(TR.TotalTests - TR.SkippedTests));
+  Rec.Put('passed', SouffleInteger(TR.PassedTests));
+  Rec.Put('failed', SouffleInteger(TR.FailedTests));
+  Rec.Put('skipped', SouffleInteger(TR.SkippedTests));
+  Rec.Put('assertions', SouffleInteger(TR.TotalAssertions));
+  Rec.Put('failedTests', SouffleReference(TR.FailedTestNames));
+  Result := SouffleReference(Rec);
 end;
 
 { === Native expect/matchers === }
@@ -12776,6 +12788,359 @@ begin
   B := GNativeArrayJoinRuntime.CoerceToNumber(AArgs^);
   MatcherResult(IsExpectNegated(AReceiver), A < B,
     'toBeLessThan', '', 'Expected < ' + FloatToStr(B));
+end;
+
+function NativeMatcherToBeGreaterThanOrEqual(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  A, B: Double;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 1 then Exit;
+  A := GNativeArrayJoinRuntime.CoerceToNumber(GetExpectActual(AReceiver));
+  B := GNativeArrayJoinRuntime.CoerceToNumber(AArgs^);
+  MatcherResult(IsExpectNegated(AReceiver), A >= B,
+    'toBeGreaterThanOrEqual', '', 'Expected >= ' + FloatToStr(B));
+end;
+
+function NativeMatcherToBeLessThanOrEqual(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  A, B: Double;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 1 then Exit;
+  A := GNativeArrayJoinRuntime.CoerceToNumber(GetExpectActual(AReceiver));
+  B := GNativeArrayJoinRuntime.CoerceToNumber(AArgs^);
+  MatcherResult(IsExpectNegated(AReceiver), A <= B,
+    'toBeLessThanOrEqual', '', 'Expected <= ' + FloatToStr(B));
+end;
+
+function NativeMatcherToBeNaN(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Actual: TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  Actual := GetExpectActual(AReceiver);
+  MatcherResult(IsExpectNegated(AReceiver),
+    (Actual.Kind = svkFloat) and IsNan(Actual.AsFloat),
+    'toBeNaN', '', 'Expected NaN');
+end;
+
+function NativeMatcherToBeCloseTo(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  A, B, Precision: Double;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 1 then Exit;
+  A := GNativeArrayJoinRuntime.CoerceToNumber(GetExpectActual(AReceiver));
+  B := GNativeArrayJoinRuntime.CoerceToNumber(AArgs^);
+  if AArgCount > 1 then
+    Precision := Power(10, -GNativeArrayJoinRuntime.CoerceToNumber(
+      PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^)) / 2
+  else
+    Precision := 0.005;
+  MatcherResult(IsExpectNegated(AReceiver), Abs(A - B) < Precision,
+    'toBeCloseTo', '', 'Expected close to ' + FloatToStr(B));
+end;
+
+function NativeMatcherToContain(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Actual, Expected: TSouffleValue;
+  Arr: TSouffleArray;
+  I: Integer;
+  Found: Boolean;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 1 then Exit;
+  Actual := GetExpectActual(AReceiver);
+  Expected := AArgs^;
+  Found := False;
+  if SouffleIsReference(Actual) and Assigned(Actual.AsReference) and
+     (Actual.AsReference is TSouffleArray) then
+  begin
+    Arr := TSouffleArray(Actual.AsReference);
+    for I := 0 to Arr.Count - 1 do
+      if SouffleSameValueZero(Arr.Get(I), Expected) then
+      begin
+        Found := True;
+        Break;
+      end;
+  end
+  else if SouffleIsStringValue(Actual) and SouffleIsStringValue(Expected) then
+    Found := Pos(SouffleGetString(Expected), SouffleGetString(Actual)) > 0;
+  MatcherResult(IsExpectNegated(AReceiver), Found,
+    'toContain', '', 'Expected to contain ' +
+    GNativeArrayJoinRuntime.CoerceToString(Expected));
+end;
+
+function NativeMatcherToHaveLength(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Actual: TSouffleValue;
+  ExpectedLen, ActualLen: Integer;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 1 then Exit;
+  Actual := GetExpectActual(AReceiver);
+  ExpectedLen := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(AArgs^));
+  ActualLen := -1;
+  if SouffleIsReference(Actual) and Assigned(Actual.AsReference) and
+     (Actual.AsReference is TSouffleArray) then
+    ActualLen := TSouffleArray(Actual.AsReference).Count
+  else if SouffleIsStringValue(Actual) then
+    ActualLen := Length(SouffleGetString(Actual));
+  MatcherResult(IsExpectNegated(AReceiver), ActualLen = ExpectedLen,
+    'toHaveLength', '', 'Expected length ' + IntToStr(ExpectedLen) +
+    ' but got ' + IntToStr(ActualLen));
+end;
+
+function NativeMatcherToBeInstanceOf(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Actual, Expected: TSouffleValue;
+  IsInst: Boolean;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 1 then Exit;
+  Actual := GetExpectActual(AReceiver);
+  Expected := AArgs^;
+  IsInst := GNativeArrayJoinRuntime.IsInstance(Actual, Expected).AsBoolean;
+  MatcherResult(IsExpectNegated(AReceiver), IsInst,
+    'toBeInstanceOf', '', 'Expected instanceof check to pass');
+end;
+
+function NativeMatcherToThrow(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Actual, ErrorTypeArg: TSouffleValue;
+  Threw: Boolean;
+  ThrownVal: TSouffleValue;
+  ExpectedType, ActualName: string;
+  Rec: TSouffleRecord;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  Actual := GetExpectActual(AReceiver);
+
+  { Check if actual is a rejected promise (rejects path) }
+  if SouffleIsReference(Actual) and Assigned(Actual.AsReference) and
+     (Actual.AsReference is TSouffleRecord) then
+  begin
+    Rec := TSouffleRecord(Actual.AsReference);
+    if Assigned(Rec.Blueprint) then
+    begin
+      { Already an error object from rejects path }
+      Threw := True;
+      ThrownVal := Actual;
+    end
+    else
+    begin
+      { Not an error — try to call as function }
+      Threw := False;
+      ThrownVal := SouffleNil;
+      if not SouffleIsReference(Actual) then
+      begin
+        GNativeArrayJoinRuntime.FTestRunner.AssertionFailed('toThrow',
+          'toThrow expects actual value to be a function');
+        Exit;
+      end;
+    end;
+  end
+  else
+  begin
+    { Call function and check if it throws }
+    Threw := False;
+    ThrownVal := SouffleNil;
+    try
+      InvokeSouffleCallable(GNativeArrayJoinRuntime.FVM, Actual,
+        [SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED)]);
+    except
+      on E: ESouffleThrow do
+      begin
+        Threw := True;
+        ThrownVal := E.ThrownValue;
+      end;
+    end;
+  end;
+
+  if AArgCount > 0 then
+  begin
+    ErrorTypeArg := AArgs^;
+    if SouffleIsReference(ErrorTypeArg) and Assigned(ErrorTypeArg.AsReference) and
+       (ErrorTypeArg.AsReference is TSouffleBlueprint) then
+      ExpectedType := TSouffleBlueprint(ErrorTypeArg.AsReference).Name
+    else
+      ExpectedType := '';
+
+    if Threw and (ExpectedType <> '') then
+    begin
+      { Check error type }
+      ActualName := '';
+      if SouffleIsReference(ThrownVal) and (ThrownVal.AsReference is TSouffleRecord) then
+      begin
+        Rec := TSouffleRecord(ThrownVal.AsReference);
+        if Rec.Get('name', ThrownVal) then
+          ActualName := GNativeArrayJoinRuntime.CoerceToString(ThrownVal);
+      end;
+      MatcherResult(IsExpectNegated(AReceiver),
+        ActualName = ExpectedType,
+        'toThrow', '', 'Expected ' + ExpectedType + ' but got ' + ActualName);
+    end
+    else
+      MatcherResult(IsExpectNegated(AReceiver), Threw,
+        'toThrow', '', 'Expected function to throw');
+  end
+  else
+    MatcherResult(IsExpectNegated(AReceiver), Threw,
+      'toThrow', '', 'Expected function to throw');
+end;
+
+function SouffleDeepEqual(const A, B: TSouffleValue): Boolean; forward;
+
+function SouffleDeepEqualArrays(const A, B: TSouffleArray): Boolean;
+var
+  I: Integer;
+begin
+  if A.Count <> B.Count then Exit(False);
+  for I := 0 to A.Count - 1 do
+    if not SouffleDeepEqual(A.Get(I), B.Get(I)) then
+      Exit(False);
+  Result := True;
+end;
+
+function SouffleDeepEqualRecords(const A, B: TSouffleRecord): Boolean;
+var
+  I: Integer;
+  Key: string;
+  ValA, ValB: TSouffleValue;
+begin
+  if A.Count <> B.Count then Exit(False);
+  for I := 0 to A.Count - 1 do
+  begin
+    Key := A.GetOrderedKey(I);
+    if not A.Get(Key, ValA) then Exit(False);
+    if not B.Get(Key, ValB) then Exit(False);
+    if not SouffleDeepEqual(ValA, ValB) then Exit(False);
+  end;
+  Result := True;
+end;
+
+function SouffleDeepEqual(const A, B: TSouffleValue): Boolean;
+begin
+  if SouffleSameValueZero(A, B) then Exit(True);
+  if A.Kind <> B.Kind then Exit(False);
+  if A.Kind <> svkReference then Exit(False);
+  if not SouffleIsReference(A) or not SouffleIsReference(B) then Exit(False);
+  if not Assigned(A.AsReference) or not Assigned(B.AsReference) then Exit(False);
+  if (A.AsReference is TSouffleArray) and (B.AsReference is TSouffleArray) then
+    Exit(SouffleDeepEqualArrays(TSouffleArray(A.AsReference), TSouffleArray(B.AsReference)));
+  if (A.AsReference is TSouffleRecord) and (B.AsReference is TSouffleRecord) then
+    Exit(SouffleDeepEqualRecords(TSouffleRecord(A.AsReference), TSouffleRecord(B.AsReference)));
+  Result := False;
+end;
+
+function NativeMatcherToEqual(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 1 then Exit;
+  MatcherResult(IsExpectNegated(AReceiver),
+    SouffleDeepEqual(GetExpectActual(AReceiver), AArgs^),
+    'toEqual', '', 'Expected ' +
+    GNativeArrayJoinRuntime.CoerceToString(GetExpectActual(AReceiver)) +
+    ' to equal ' + GNativeArrayJoinRuntime.CoerceToString(AArgs^));
+end;
+
+function NativeMatcherToHaveProperty(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Actual: TSouffleValue;
+  Key: string;
+  Rec: TSouffleRecord;
+  Val: TSouffleValue;
+  HasProp: Boolean;
+begin
+  Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+  if AArgCount < 1 then Exit;
+  Actual := GetExpectActual(AReceiver);
+  Key := GNativeArrayJoinRuntime.CoerceToString(AArgs^);
+  HasProp := False;
+  if SouffleIsReference(Actual) and Assigned(Actual.AsReference) and
+     (Actual.AsReference is TSouffleRecord) then
+  begin
+    Rec := TSouffleRecord(Actual.AsReference);
+    HasProp := Rec.Get(Key, Val);
+    if HasProp and (AArgCount > 1) then
+      HasProp := SouffleDeepEqual(Val,
+        PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^);
+  end;
+  MatcherResult(IsExpectNegated(AReceiver), HasProp,
+    'toHaveProperty', '', 'Expected to have property "' + Key + '"');
+end;
+
+function NativeExpectResolves(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Actual: TSouffleValue;
+  SP: TSoufflePromise;
+  Queue: TGocciaMicrotaskQueue;
+  Rec: TSouffleRecord;
+begin
+  Actual := GetExpectActual(AReceiver);
+  SP := GetSoufflePromise(Actual);
+  if Assigned(SP) then
+  begin
+    Queue := TGocciaMicrotaskQueue.Instance;
+    if Assigned(Queue) then Queue.DrainQueue;
+    if SP.State = spssFulfilled then
+    begin
+      Rec := TSouffleRecord.Create(4);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AllocateObject(Rec);
+      Rec.Put('__actual__', SP.PromiseResult);
+      Rec.Put('__negated__', SouffleBoolean(IsExpectNegated(AReceiver)));
+      if Assigned(GNativeArrayJoinRuntime.FExpectDelegate) then
+        Rec.Delegate := GNativeArrayJoinRuntime.FExpectDelegate;
+      Exit(SouffleReference(Rec));
+    end;
+  end;
+  GNativeArrayJoinRuntime.FTestRunner.AssertionFailed('resolves',
+    'Expected Promise to resolve');
+  Result := AReceiver;
+end;
+
+function NativeExpectRejects(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Actual: TSouffleValue;
+  SP: TSoufflePromise;
+  Queue: TGocciaMicrotaskQueue;
+  Rec: TSouffleRecord;
+begin
+  Actual := GetExpectActual(AReceiver);
+  SP := GetSoufflePromise(Actual);
+  if Assigned(SP) then
+  begin
+    Queue := TGocciaMicrotaskQueue.Instance;
+    if Assigned(Queue) then Queue.DrainQueue;
+    if SP.State = spssRejected then
+    begin
+      Rec := TSouffleRecord.Create(4);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AllocateObject(Rec);
+      Rec.Put('__actual__', SP.PromiseResult);
+      Rec.Put('__negated__', SouffleBoolean(IsExpectNegated(AReceiver)));
+      if Assigned(GNativeArrayJoinRuntime.FExpectDelegate) then
+        Rec.Delegate := GNativeArrayJoinRuntime.FExpectDelegate;
+      Exit(SouffleReference(Rec));
+    end;
+  end;
+  GNativeArrayJoinRuntime.FTestRunner.AssertionFailed('rejects',
+    'Expected Promise to reject');
+  Result := AReceiver;
 end;
 
 function NativeExpectNot(const AReceiver: TSouffleValue;
@@ -13658,16 +14023,28 @@ end;
 
 procedure TGocciaRuntimeOperations.RegisterTestNatives;
 const
-  EXPECT_METHODS: array[0..8] of TSouffleMethodEntry = (
-    (Name: 'toBe';              Arity: 1; Callback: @NativeMatcherToBe),
-    (Name: 'toBeNull';          Arity: 0; Callback: @NativeMatcherToBeNull),
-    (Name: 'toBeUndefined';     Arity: 0; Callback: @NativeMatcherToBeUndefined),
-    (Name: 'toBeDefined';       Arity: 0; Callback: @NativeMatcherToBeDefined),
-    (Name: 'toBeTruthy';        Arity: 0; Callback: @NativeMatcherToBeTruthy),
-    (Name: 'toBeFalsy';         Arity: 0; Callback: @NativeMatcherToBeFalsy),
-    (Name: 'toBeGreaterThan';   Arity: 1; Callback: @NativeMatcherToBeGreaterThan),
-    (Name: 'toBeLessThan';      Arity: 1; Callback: @NativeMatcherToBeLessThan),
-    (Name: 'not';               Arity: 0; Callback: @NativeExpectNot)
+  EXPECT_METHODS: array[0..20] of TSouffleMethodEntry = (
+    (Name: 'toBe';                    Arity: 1; Callback: @NativeMatcherToBe),
+    (Name: 'toEqual';                 Arity: 1; Callback: @NativeMatcherToEqual),
+    (Name: 'toBeNull';                Arity: 0; Callback: @NativeMatcherToBeNull),
+    (Name: 'toBeUndefined';           Arity: 0; Callback: @NativeMatcherToBeUndefined),
+    (Name: 'toBeDefined';             Arity: 0; Callback: @NativeMatcherToBeDefined),
+    (Name: 'toBeTruthy';              Arity: 0; Callback: @NativeMatcherToBeTruthy),
+    (Name: 'toBeFalsy';               Arity: 0; Callback: @NativeMatcherToBeFalsy),
+    (Name: 'toBeNaN';                 Arity: 0; Callback: @NativeMatcherToBeNaN),
+    (Name: 'toBeGreaterThan';         Arity: 1; Callback: @NativeMatcherToBeGreaterThan),
+    (Name: 'toBeGreaterThanOrEqual';  Arity: 1; Callback: @NativeMatcherToBeGreaterThanOrEqual),
+    (Name: 'toBeLessThan';            Arity: 1; Callback: @NativeMatcherToBeLessThan),
+    (Name: 'toBeLessThanOrEqual';     Arity: 1; Callback: @NativeMatcherToBeLessThanOrEqual),
+    (Name: 'toBeCloseTo';             Arity: 1; Callback: @NativeMatcherToBeCloseTo),
+    (Name: 'toContain';               Arity: 1; Callback: @NativeMatcherToContain),
+    (Name: 'toHaveLength';            Arity: 1; Callback: @NativeMatcherToHaveLength),
+    (Name: 'toHaveProperty';          Arity: 1; Callback: @NativeMatcherToHaveProperty),
+    (Name: 'toBeInstanceOf';          Arity: 1; Callback: @NativeMatcherToBeInstanceOf),
+    (Name: 'toThrow';                 Arity: -1; Callback: @NativeMatcherToThrow),
+    (Name: 'not';                     Arity: 0; Callback: @NativeExpectNot),
+    (Name: 'resolves';                Arity: 0; Callback: @NativeExpectResolves),
+    (Name: 'rejects';                 Arity: 0; Callback: @NativeExpectRejects)
   );
   DESCRIBE_SUB_METHODS: array[0..0] of TSouffleMethodEntry = (
     (Name: 'skip'; Arity: 2; Callback: @NativeDescribeSkip)
