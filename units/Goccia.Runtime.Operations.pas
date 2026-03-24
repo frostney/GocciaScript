@@ -2109,6 +2109,21 @@ begin
           Inc(GBridgeMetrics.RecordCacheMiss);
           {$ENDIF}
           CachedBridge := TGocciaSouffleProxy.Create(AValue.AsReference, Self);
+          { Mark Error blueprint records with HasErrorData }
+          if Assigned(TSouffleRecord(AValue.AsReference).Blueprint) and
+             Assigned(FErrorBlueprint) then
+          begin
+            Bp := TSouffleRecord(AValue.AsReference).Blueprint;
+            while Assigned(Bp) do
+            begin
+              if Bp = FErrorBlueprint then
+              begin
+                TGocciaSouffleProxy(CachedBridge).HasErrorData := True;
+                Break;
+              end;
+              Bp := Bp.SuperBlueprint;
+            end;
+          end;
           FRecordBridgeCache.Add(AValue.AsReference, CachedBridge);
         end
         {$IFDEF BRIDGE_METRICS}
