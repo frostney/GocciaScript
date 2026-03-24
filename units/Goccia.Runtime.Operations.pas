@@ -12517,14 +12517,19 @@ begin
   Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
   if not SouffleIsReference(ACallable) or not Assigned(ACallable.AsReference) then
     Exit;
-  if ACallable.AsReference is TSouffleClosure then
-    Result := AVM.ExecuteFunction(TSouffleClosure(ACallable.AsReference), AArgs)
-  else if ACallable.AsReference is TSouffleNativeFunction then
-    Result := TSouffleNativeFunction(ACallable.AsReference).Invoke(
-      SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), nil, 0)
-  else if ACallable.AsReference is TSouffleNativeClosure then
-    Result := TSouffleNativeClosure(ACallable.AsReference).Invoke(
-      SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), nil, 0);
+  try
+    if ACallable.AsReference is TSouffleClosure then
+      Result := AVM.ExecuteFunction(TSouffleClosure(ACallable.AsReference), AArgs)
+    else if ACallable.AsReference is TSouffleNativeFunction then
+      Result := TSouffleNativeFunction(ACallable.AsReference).Invoke(
+        SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), nil, 0)
+    else if ACallable.AsReference is TSouffleNativeClosure then
+      Result := TSouffleNativeClosure(ACallable.AsReference).Invoke(
+        SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED), nil, 0);
+  except
+    on E: TGocciaThrowValue do
+      GNativeArrayJoinRuntime.RethrowAsVM(E);
+  end;
 end;
 
 function NativeRunTests(const AReceiver: TSouffleValue;
