@@ -5275,6 +5275,19 @@ begin
   end;
 end;
 
+procedure ThrowRangeErrorNative(const AMessage: string);
+var
+  Rec: TSouffleRecord;
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  Rec := TSouffleRecord.Create(2);
+  if Assigned(GC) then GC.AllocateObject(Rec);
+  Rec.Put('message', SouffleString(AMessage));
+  Rec.Put('name', SouffleString('RangeError'));
+  raise ESouffleThrow.Create(SouffleReference(Rec));
+end;
+
 function LocalTypeDisplayName(const AType: TSouffleLocalType): string;
 begin
   case AType of
@@ -6835,13 +6848,26 @@ var
   AB: TSouffleArrayBuffer;
   Rec: TSouffleRecord;
   ByteLen: Integer;
+  RawLen: Double;
   GC: TGarbageCollector;
 begin
   GC := TGarbageCollector.Instance;
   ByteLen := 0;
   if AArgCount > 0 then
-    ByteLen := Trunc(CoerceToNumber(AArgs^));
-  if ByteLen < 0 then ByteLen := 0;
+  begin
+    RawLen := CoerceToNumber(AArgs^);
+    if IsNan(RawLen) then
+      ByteLen := 0
+    else
+    begin
+      ByteLen := Trunc(RawLen);
+      if ByteLen < 0 then
+      begin
+        ThrowRangeErrorNative('Invalid array buffer length');
+        Exit(SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED));
+      end;
+    end;
+  end;
 
   AB := TSouffleArrayBuffer.Create(ByteLen);
   if Assigned(GC) then GC.AllocateObject(AB);
@@ -6882,8 +6908,14 @@ begin
     { Case 1: new TypedArray(length) }
     if (Arg.Kind = svkInteger) or (Arg.Kind = svkFloat) then
     begin
-      Len := Trunc(CoerceToNumber(Arg));
-      if Len < 0 then Len := 0;
+      if IsNan(CoerceToNumber(Arg)) then
+        Len := 0
+      else
+      begin
+        Len := Trunc(CoerceToNumber(Arg));
+        if Len < 0 then
+          ThrowRangeErrorNative('Invalid typed array length');
+      end;
       ByteLen := Len * BytesPerElement(AKind);
       AB := TSouffleArrayBuffer.Create(ByteLen);
       if Assigned(GC) then GC.AllocateObject(AB);
@@ -6915,11 +6947,24 @@ begin
           if AArgCount > 1 then
             ByteOff := Trunc(CoerceToNumber(
               PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^));
+          { Alignment check }
+          if (BytesPerElement(AKind) > 1) and (ByteOff mod BytesPerElement(AKind) <> 0) then
+            ThrowRangeErrorNative('Start offset of typed array should be a multiple of ' + IntToStr(BytesPerElement(AKind)));
+          if ByteOff > SrcAB.ByteLength then
+            ThrowRangeErrorNative('Start offset is outside the bounds of the buffer');
           if AArgCount > 2 then
+          begin
             Len := Trunc(CoerceToNumber(
-              PSouffleValue(PByte(AArgs) + 2 * SizeOf(TSouffleValue))^))
+              PSouffleValue(PByte(AArgs) + 2 * SizeOf(TSouffleValue))^));
+            if ByteOff + Len * BytesPerElement(AKind) > SrcAB.ByteLength then
+              ThrowRangeErrorNative('Invalid typed array length');
+          end
           else
+          begin
+            if (SrcAB.ByteLength - ByteOff) mod BytesPerElement(AKind) <> 0 then
+              ThrowRangeErrorNative('Byte length of typed array should be a multiple of ' + IntToStr(BytesPerElement(AKind)));
             Len := (SrcAB.ByteLength - ByteOff) div BytesPerElement(AKind);
+          end;
           if Len < 0 then Len := 0;
           TA := TSouffleTypedArray.Create(SrcAB, ByteOff, Len, AKind);
           if Assigned(GC) then GC.AllocateObject(TA);
@@ -10816,6 +10861,7 @@ end;
 procedure TGocciaRuntimeOperations.RegisterDelegates;
 var
   SymSpeciesKey: string;
+  TAKind: TSouffleTypedArrayKind;
 begin
   if not Assigned(FVM) then Exit;
 
@@ -10870,6 +10916,11 @@ begin
 
   { ArrayBuffer static methods }
   AddStaticMethod(FArrayBufferBlueprint, 'isView', 1, @NativeArrayBufferIsView);
+
+  { BYTES_PER_ELEMENT as static field on each TypedArray constructor }
+  for TAKind := Low(TSouffleTypedArrayKind) to High(TSouffleTypedArrayKind) do
+    FTypedArrayBlueprints[TAKind].StaticFields.Put('BYTES_PER_ELEMENT',
+      SouffleInteger(BytesPerElement(TAKind)));
 
   { Wire Souffle microtask invoker }
   if Assigned(TGocciaMicrotaskQueue.Instance) then
