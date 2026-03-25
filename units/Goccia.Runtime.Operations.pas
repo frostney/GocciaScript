@@ -13310,10 +13310,15 @@ end;
 
 function SouffleDeepEqual(const A, B: TSouffleValue): Boolean;
 var
-  GocciaVal: TGocciaValue;
+  GocciaVal, GocciaPropVal: TGocciaValue;
   GocciaArr: TGocciaArrayValue;
+  GocciaObj: TGocciaObjectValue;
+  GocciaNames: TArray<string>;
+  GocciaKey: string;
   SouffleArr: TSouffleArray;
-  EI: Integer;
+  SouffleRec: TSouffleRecord;
+  SouffleVal: TSouffleValue;
+  EI, VisibleCount: Integer;
 begin
   if SouffleSameValueZero(A, B) then Exit(True);
   { Handle TGocciaWrappedValue — bridge artifact, unwrap for comparison }
@@ -13336,6 +13341,36 @@ begin
             Exit(False);
         Exit(True);
       end;
+    end;
+    { Wrapped object → convert properties to compare with record }
+    if (GocciaVal is TGocciaObjectValue) and
+       SouffleIsReference(B) and Assigned(B.AsReference) and
+       (B.AsReference is TSouffleRecord) then
+    begin
+      SouffleRec := TSouffleRecord(B.AsReference);
+      GocciaObj := TGocciaObjectValue(GocciaVal);
+      GocciaNames := GocciaObj.GetEnumerablePropertyNames;
+      { Check same number of visible properties }
+      VisibleCount := 0;
+      for EI := 0 to SouffleRec.Count - 1 do
+      begin
+        GocciaKey := SouffleRec.GetOrderedKey(EI);
+        if (Length(GocciaKey) > 0) and (GocciaKey[1] <> '#') and
+           (Copy(GocciaKey, 1, 5) <> '@@sym') and
+           ((SouffleRec.GetEntryFlags(GocciaKey) and SOUFFLE_PROP_ENUMERABLE) <> 0) then
+          Inc(VisibleCount);
+      end;
+      if Length(GocciaNames) <> VisibleCount then Exit(False);
+      for EI := 0 to High(GocciaNames) do
+      begin
+        GocciaKey := GocciaNames[EI];
+        GocciaPropVal := GocciaObj.GetProperty(GocciaKey);
+        if not SouffleRec.Get(GocciaKey, SouffleVal) then Exit(False);
+        if not SouffleDeepEqual(
+          GNativeArrayJoinRuntime.ToSouffleValue(GocciaPropVal), SouffleVal) then
+          Exit(False);
+      end;
+      Exit(True);
     end;
     Exit(False);
   end;
