@@ -21,6 +21,7 @@ uses
   Souffle.VM.RuntimeOperations,
 
   Goccia.AST.Statements,
+  Goccia.Error,
   Goccia.Evaluator.Decorators,
   Goccia.Runtime.Collections,
   Goccia.Values.Error,
@@ -325,6 +326,7 @@ type
     function CoerceToString(const A: TSouffleValue): string;
     procedure RethrowAsVM(const E: TGocciaThrowValue); overload;
     procedure RethrowAsVM(const AValue: TSouffleValue); overload;
+    procedure RethrowRuntimeError(const E: TGocciaRuntimeError);
     procedure MarkWrappedGocciaValues;
   public
     constructor Create;
@@ -862,11 +864,18 @@ begin
       GocciaReceiver := TGocciaUndefinedLiteralValue.UndefinedValue
     else
       GocciaReceiver := FRuntime.UnwrapToGocciaValue(AReceiver);
-    GocciaResult := FGocciaFn.Call(Args, GocciaReceiver);
-    if Assigned(GocciaResult) then
-      Result := FRuntime.ToSouffleValue(GocciaResult)
-    else
-      Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+    try
+      GocciaResult := FGocciaFn.Call(Args, GocciaReceiver);
+      if Assigned(GocciaResult) then
+        Result := FRuntime.ToSouffleValue(GocciaResult)
+      else
+        Result := SouffleNilWithFlags(GOCCIA_NIL_UNDEFINED);
+    except
+      on E: TGocciaThrowValue do
+        FRuntime.RethrowAsVM(E);
+      on E: TGocciaRuntimeError do
+        FRuntime.RethrowRuntimeError(E);
+    end;
   finally
     Args.Free;
   end;
@@ -1813,6 +1822,36 @@ end;
 procedure TGocciaRuntimeOperations.RethrowAsVM(const AValue: TSouffleValue);
 begin
   raise ESouffleThrow.Create(AValue);
+end;
+
+procedure TGocciaRuntimeOperations.RethrowRuntimeError(
+  const E: TGocciaRuntimeError);
+var
+  ErrorName, Msg: string;
+  ColonPos: Integer;
+begin
+  Msg := E.Message;
+  { Parse "ErrorType: message" format from Goccia runtime errors }
+  ColonPos := Pos(':', Msg);
+  if ColonPos > 0 then
+  begin
+    ErrorName := Copy(Msg, 1, ColonPos - 1);
+    if (ErrorName = 'RangeError') or (ErrorName = 'TypeError') or
+       (ErrorName = 'ReferenceError') or (ErrorName = 'SyntaxError') then
+      Msg := Trim(Copy(Msg, ColonPos + 1, MaxInt))
+    else
+      ErrorName := 'Error';
+  end
+  else
+    ErrorName := 'Error';
+  { Convert to TGocciaThrowValue → RethrowAsVM (which creates native blueprint) }
+  try
+    raise TGocciaThrowValue.Create(
+      Goccia.Values.ErrorHelper.CreateErrorObject(ErrorName, Msg));
+  except
+    on E2: TGocciaThrowValue do
+      RethrowAsVM(E2);
+  end;
 end;
 
 procedure PushVMFramesToGoccia(const AVM: TSouffleVM);
@@ -3851,6 +3890,8 @@ begin
       except
         on E: TGocciaThrowValue do
           RethrowAsVM(E);
+        on E: TGocciaRuntimeError do
+          RethrowRuntimeError(E);
       end;
       Exit;
     end;
