@@ -7015,6 +7015,45 @@ begin
   Result := SouffleReference(NewArr);
 end;
 
+function NativeArrayCopyWithin(const AReceiver: TSouffleValue;
+  const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
+var
+  Arr: TSouffleArray;
+  Target, Start, Finish, Len, From, Count, I: Integer;
+  Temp: array of TSouffleValue;
+begin
+  Result := AReceiver;
+  if not SouffleIsReference(AReceiver) or not Assigned(AReceiver.AsReference) or
+     not (AReceiver.AsReference is TSouffleArray) then Exit;
+  Arr := TSouffleArray(AReceiver.AsReference);
+  Len := Arr.Count;
+  if AArgCount < 1 then Exit;
+  Target := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(AArgs^));
+  if Target < 0 then Target := Max(Len + Target, 0) else Target := Min(Target, Len);
+  Start := 0;
+  if AArgCount > 1 then
+  begin
+    Start := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(
+      PSouffleValue(PByte(AArgs) + SizeOf(TSouffleValue))^));
+    if Start < 0 then Start := Max(Len + Start, 0) else Start := Min(Start, Len);
+  end;
+  Finish := Len;
+  if AArgCount > 2 then
+  begin
+    Finish := Trunc(GNativeArrayJoinRuntime.CoerceToNumber(
+      PSouffleValue(PByte(AArgs) + 2 * SizeOf(TSouffleValue))^));
+    if Finish < 0 then Finish := Max(Len + Finish, 0) else Finish := Min(Finish, Len);
+  end;
+  Count := Min(Finish - Start, Len - Target);
+  if Count <= 0 then Exit;
+  { Copy to temp to handle overlapping correctly }
+  SetLength(Temp, Count);
+  for I := 0 to Count - 1 do
+    Temp[I] := Arr.Get(Start + I);
+  for I := 0 to Count - 1 do
+    Arr.Put(Target + I, Temp[I]);
+end;
+
 function NativeArraySplice(const AReceiver: TSouffleValue;
   const AArgs: PSouffleValue; const AArgCount: Integer): TSouffleValue;
 var
@@ -11542,7 +11581,7 @@ const
     (Name: 'toExponential'; Arity: 1; Callback: @NativeNumberToExponential)
   );
 
-  ARRAY_PROTOTYPE_METHODS: array[0..27] of TSouffleMethodEntry = (
+  ARRAY_PROTOTYPE_METHODS: array[0..28] of TSouffleMethodEntry = (
     (Name: 'toString';      Arity: 0; Callback: @NativeArrayToString),
     (Name: 'push';          Arity: 1; Callback: @NativeArrayPush),
     (Name: 'pop';           Arity: 0; Callback: @NativeArrayPop),
@@ -11570,7 +11609,8 @@ const
     (Name: 'findLastIndex';  Arity: 1; Callback: @NativeArrayFindLastIndex),
     (Name: 'flat';          Arity: 0; Callback: @NativeArrayFlat),
     (Name: 'flatMap';       Arity: 1; Callback: @NativeArrayFlatMap),
-    (Name: 'splice';        Arity: 2; Callback: @NativeArraySplice)
+    (Name: 'splice';        Arity: 2; Callback: @NativeArraySplice),
+    (Name: 'copyWithin';    Arity: 2; Callback: @NativeArrayCopyWithin)
   );
 
   RECORD_PROTOTYPE_METHODS: array[0..5] of TSouffleMethodEntry = (
