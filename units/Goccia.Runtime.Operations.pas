@@ -2769,7 +2769,9 @@ begin
   if SouffleIsNumeric(A) and SouffleIsNumeric(B) then
     Result := SouffleBoolean(SouffleAsNumber(A) = SouffleAsNumber(B))
   else
+  begin
     Result := SouffleBoolean(WrappedValuesEqual(A, B));
+  end;
 end;
 
 function TGocciaRuntimeOperations.NotEqual(const A, B: TSouffleValue): TSouffleValue;
