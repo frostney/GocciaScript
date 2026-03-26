@@ -56,6 +56,8 @@ type
     FCurrentSuiteName: string;
     FOnProgress: TBenchmarkProgressEvent;
     FOnBeforeMeasurement: TBenchmarkNotifyEvent;
+    procedure RootBenchmarkCase(const ABenchCase: TBenchmarkCase);
+    procedure UnrootBenchmarkCase(const ABenchCase: TBenchmarkCase);
 
     function RunSingleBenchmark(const ABenchCase: TBenchmarkCase): TBenchmarkResult;
     function CalibrateIterations(const ABenchCase: TBenchmarkCase; const ARunArgs: TGocciaArgumentsCollection): Int64;
@@ -153,10 +155,39 @@ begin
 end;
 
 destructor TGocciaBenchmark.Destroy;
+var
+  BenchCase: TBenchmarkCase;
 begin
+  if Assigned(TGarbageCollector.Instance) then
+    for BenchCase in FRegisteredBenchmarks do
+      UnrootBenchmarkCase(BenchCase);
   FRegisteredSuites.Free;
   FRegisteredBenchmarks.Free;
   inherited;
+end;
+
+procedure TGocciaBenchmark.RootBenchmarkCase(const ABenchCase: TBenchmarkCase);
+begin
+  if not Assigned(TGarbageCollector.Instance) then
+    Exit;
+  if Assigned(ABenchCase.RunFunction) then
+    TGarbageCollector.Instance.AddTempRoot(ABenchCase.RunFunction);
+  if Assigned(ABenchCase.SetupFunction) then
+    TGarbageCollector.Instance.AddTempRoot(ABenchCase.SetupFunction);
+  if Assigned(ABenchCase.TeardownFunction) then
+    TGarbageCollector.Instance.AddTempRoot(ABenchCase.TeardownFunction);
+end;
+
+procedure TGocciaBenchmark.UnrootBenchmarkCase(const ABenchCase: TBenchmarkCase);
+begin
+  if not Assigned(TGarbageCollector.Instance) then
+    Exit;
+  if Assigned(ABenchCase.RunFunction) then
+    TGarbageCollector.Instance.RemoveTempRoot(ABenchCase.RunFunction);
+  if Assigned(ABenchCase.SetupFunction) then
+    TGarbageCollector.Instance.RemoveTempRoot(ABenchCase.SetupFunction);
+  if Assigned(ABenchCase.TeardownFunction) then
+    TGarbageCollector.Instance.RemoveTempRoot(ABenchCase.TeardownFunction);
 end;
 
 function TGocciaBenchmark.Suite(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -197,6 +228,7 @@ var
   OptionsObj: TGocciaObjectValue;
   RunProp, SetupProp, TeardownProp: TGocciaValue;
   RunFn, SetupFn, TeardownFn: TGocciaFunctionBase;
+  BenchCase: TBenchmarkCase;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
@@ -221,7 +253,10 @@ begin
   if Assigned(TeardownProp) and (TeardownProp is TGocciaFunctionBase) then
     TeardownFn := TGocciaFunctionBase(TeardownProp);
 
-  FRegisteredBenchmarks.Add(TBenchmarkCase.Create(BenchName, RunFn, FCurrentSuiteName, SetupFn, TeardownFn));
+  BenchCase := TBenchmarkCase.Create(
+    BenchName, RunFn, FCurrentSuiteName, SetupFn, TeardownFn);
+  RootBenchmarkCase(BenchCase);
+  FRegisteredBenchmarks.Add(BenchCase);
 end;
 
 function TGocciaBenchmark.CalibrateIterations(const ABenchCase: TBenchmarkCase; const ARunArgs: TGocciaArgumentsCollection): Int64;

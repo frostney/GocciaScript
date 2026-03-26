@@ -260,7 +260,6 @@ begin
           Backend.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
         if Assigned(Backend.BuiltinBenchmark) then
           Backend.BuiltinBenchmark.OnBeforeMeasurement := Backend.Runtime.ClearTransientCaches;
-
         try
           ResultValue := Backend.RunModule(Module);
           ExecEnd := GetNanoseconds;

@@ -3341,6 +3341,7 @@ var
   I: Integer;
   Bp, WalkBp: TSouffleBlueprint;
   Rec: TSouffleRecord;
+  ObjInstance: TGocciaObjectValue;
   CtorMethod: TSouffleValue;
   VMArgs: array of TSouffleValue;
   FieldInits: array of TSouffleClosure;
@@ -3523,6 +3524,49 @@ begin
 
     if (GocciaConstructor is TGocciaClassValue) then
     begin
+      if FBridgeCallDepth > 0 then
+      begin
+        if (TGocciaClassValue(GocciaConstructor).Name = CONSTRUCTOR_OBJECT) or
+           (TGocciaClassValue(GocciaConstructor).Name = CONSTRUCTOR_ARRAY) or
+           (TGocciaClassValue(GocciaConstructor).Name = CONSTRUCTOR_STRING) or
+           (TGocciaClassValue(GocciaConstructor).Name = CONSTRUCTOR_NUMBER) or
+           (TGocciaClassValue(GocciaConstructor).Name = CONSTRUCTOR_BOOLEAN) or
+           (TGocciaClassValue(GocciaConstructor).Name = CONSTRUCTOR_MAP) or
+           (TGocciaClassValue(GocciaConstructor).Name = CONSTRUCTOR_SET) or
+           (TGocciaClassValue(GocciaConstructor).Name = CONSTRUCTOR_ARRAY_BUFFER) or
+           (TGocciaClassValue(GocciaConstructor).Name = CONSTRUCTOR_SHARED_ARRAY_BUFFER) then
+        begin
+          Args := TGocciaArgumentsCollection.Create;
+          try
+            for I := 0 to AArgCount - 1 do
+              Args.Add(UnwrapToGocciaValue(
+                PSouffleValue(PByte(AArgs) + I * SizeOf(TSouffleValue))^));
+
+            ObjInstance := TGocciaClassValue(GocciaConstructor)
+              .CreateNativeInstance(Args);
+            if not Assigned(ObjInstance) then
+              ObjInstance := TGocciaInstanceValue.Create(
+                TGocciaClassValue(GocciaConstructor));
+
+            ObjInstance.Prototype := TGocciaClassValue(GocciaConstructor)
+              .Prototype;
+
+            if ObjInstance is TGocciaInstanceValue then
+            begin
+              TGocciaInstanceValue(ObjInstance).ClassValue :=
+                TGocciaClassValue(GocciaConstructor);
+              TGocciaInstanceValue(ObjInstance)
+                .InitializeNativeFromArguments(Args);
+            end;
+
+            Result := ToSouffleValue(ObjInstance);
+          finally
+            Args.Free;
+          end;
+          Exit;
+        end;
+      end;
+
       {$IFDEF BRIDGE_METRICS}
       Inc(GBridgeMetrics.ConstructClassValueCount);
       {$ENDIF}
