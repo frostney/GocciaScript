@@ -5,6 +5,7 @@ unit Souffle.Iterator;
 interface
 
 uses
+  GarbageCollector.Generic,
   Souffle.Compound,
   Souffle.Heap,
   Souffle.Value;
@@ -14,12 +15,16 @@ const
   SOUFFLE_HEAP_STRING_ITERATOR = 10;
 
 type
+  TSouffleArrayIterationKind = (aikValues, aikKeys, aikEntries);
+
   TSouffleArrayIterator = class(TSouffleHeapObject)
   public
     IterArray: TSouffleArray;
     IterIndex: Integer;
+    IterKind: TSouffleArrayIterationKind;
 
-    constructor Create(const AArray: TSouffleArray);
+    constructor Create(const AArray: TSouffleArray;
+      const AKind: TSouffleArrayIterationKind = aikValues);
     function Next(out ADone: Boolean): TSouffleValue;
     procedure MarkReferences; override;
     function DebugString: string; override;
@@ -42,11 +47,13 @@ uses
 
 { TSouffleArrayIterator }
 
-constructor TSouffleArrayIterator.Create(const AArray: TSouffleArray);
+constructor TSouffleArrayIterator.Create(const AArray: TSouffleArray;
+  const AKind: TSouffleArrayIterationKind = aikValues);
 begin
   inherited Create(SOUFFLE_HEAP_ARRAY_ITERATOR);
   IterArray := AArray;
   IterIndex := 0;
+  IterKind := AKind;
 end;
 
 procedure TSouffleArrayIterator.MarkReferences;
@@ -57,6 +64,8 @@ begin
 end;
 
 function TSouffleArrayIterator.Next(out ADone: Boolean): TSouffleValue;
+var
+  Entry: TSouffleArray;
 begin
   if IterIndex >= IterArray.Count then
   begin
@@ -66,7 +75,21 @@ begin
   else
   begin
     ADone := False;
-    Result := IterArray.Get(IterIndex);
+    case IterKind of
+      aikKeys:
+        Result := SouffleInteger(IterIndex);
+      aikEntries:
+      begin
+        Entry := TSouffleArray.Create(2);
+        Entry.Push(SouffleInteger(IterIndex));
+        Entry.Push(IterArray.Get(IterIndex));
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.AllocateObject(Entry);
+        Result := SouffleReference(Entry);
+      end;
+    else
+      Result := IterArray.Get(IterIndex);
+    end;
     Inc(IterIndex);
   end;
 end;

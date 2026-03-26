@@ -54,6 +54,7 @@ procedure PopulateFileResult(const AFileResult: TBenchmarkFileResult;
 var
   ResultsArray: TGocciaArrayValue;
   SingleResult: TGocciaObjectValue;
+  ResultValue: TGocciaValue;
   MutableFileResult: TBenchmarkFileResult;
   Entry: TBenchmarkEntry;
   ErrorMsg: string;
@@ -63,8 +64,25 @@ begin
 
   if AScriptResult <> nil then
   begin
-    MutableFileResult.TotalBenchmarks := Round(AScriptResult.GetProperty('totalBenchmarks').ToNumberLiteral.Value);
-    MutableFileResult.DurationNanoseconds := Round(AScriptResult.GetProperty('durationNanoseconds').ToNumberLiteral.Value);
+    try
+      MutableFileResult.TotalBenchmarks := Round(
+        AScriptResult.GetProperty('totalBenchmarks').ToNumberLiteral.Value);
+      MutableFileResult.DurationNanoseconds := Round(
+        AScriptResult.GetProperty('durationNanoseconds').ToNumberLiteral.Value);
+    except
+      on E: Exception do
+      begin
+        MutableFileResult.TotalBenchmarks := 0;
+        MutableFileResult.DurationNanoseconds := 0;
+        SetLength(MutableFileResult.Entries, 1);
+        MutableFileResult.Entries[0].Suite := '';
+        MutableFileResult.Entries[0].Name := '(malformed result)';
+        MutableFileResult.Entries[0].Error := 'Failed to read benchmark summary: ' +
+          E.Message;
+        AReporter.AddFileResult(MutableFileResult);
+        Exit;
+      end;
+    end;
 
     if AScriptResult.GetProperty('results') is TGocciaArrayValue then
     begin
@@ -74,33 +92,67 @@ begin
 
       for I := 0 to EntryCount - 1 do
       begin
-        SingleResult := TGocciaObjectValue(ResultsArray.GetElement(I));
-
-        Entry.Suite := SingleResult.GetProperty('suite').ToStringLiteral.Value;
-        Entry.Name := SingleResult.GetProperty(PROP_NAME).ToStringLiteral.Value;
-
-        ErrorMsg := SingleResult.GetProperty('error').ToStringLiteral.Value;
-        if ErrorMsg <> 'undefined' then
+        ResultValue := ResultsArray.GetElement(I);
+        if not (ResultValue is TGocciaObjectValue) then
         begin
-          Entry.Error := ErrorMsg;
+          Entry.Suite := '';
+          Entry.Name := '(malformed result)';
+          Entry.Error := 'Benchmark result entry was not an object';
           Entry.OpsPerSec := 0;
           Entry.MeanMs := 0;
           Entry.Iterations := 0;
           Entry.VariancePercentage := 0;
           Entry.SetupMs := 0;
           Entry.TeardownMs := 0;
-        end
-        else
-        begin
-          Entry.Error := '';
-          Entry.OpsPerSec := SingleResult.GetProperty('opsPerSec').ToNumberLiteral.Value;
-          Entry.MeanMs := SingleResult.GetProperty('meanMs').ToNumberLiteral.Value;
-          Entry.Iterations := Round(SingleResult.GetProperty('iterations').ToNumberLiteral.Value);
-          Entry.VariancePercentage := SingleResult.GetProperty('variancePercentage').ToNumberLiteral.Value;
-          Entry.SetupMs := SingleResult.GetProperty('setupMs').ToNumberLiteral.Value;
-          Entry.TeardownMs := SingleResult.GetProperty('teardownMs').ToNumberLiteral.Value;
-          Entry.MinOpsPerSec := SingleResult.GetProperty('minOpsPerSec').ToNumberLiteral.Value;
-          Entry.MaxOpsPerSec := SingleResult.GetProperty('maxOpsPerSec').ToNumberLiteral.Value;
+          Entry.MinOpsPerSec := 0;
+          Entry.MaxOpsPerSec := 0;
+          MutableFileResult.Entries[I] := Entry;
+          Continue;
+        end;
+
+        SingleResult := TGocciaObjectValue(ResultValue);
+        try
+          Entry.Suite := SingleResult.GetProperty('suite').ToStringLiteral.Value;
+          Entry.Name := SingleResult.GetProperty(PROP_NAME).ToStringLiteral.Value;
+
+          ErrorMsg := SingleResult.GetProperty('error').ToStringLiteral.Value;
+          if ErrorMsg <> 'undefined' then
+          begin
+            Entry.Error := ErrorMsg;
+            Entry.OpsPerSec := 0;
+            Entry.MeanMs := 0;
+            Entry.Iterations := 0;
+            Entry.VariancePercentage := 0;
+            Entry.SetupMs := 0;
+            Entry.TeardownMs := 0;
+          end
+          else
+          begin
+            Entry.Error := '';
+            Entry.OpsPerSec := SingleResult.GetProperty('opsPerSec').ToNumberLiteral.Value;
+            Entry.MeanMs := SingleResult.GetProperty('meanMs').ToNumberLiteral.Value;
+            Entry.Iterations := Round(SingleResult.GetProperty('iterations').ToNumberLiteral.Value);
+            Entry.VariancePercentage := SingleResult.GetProperty('variancePercentage').ToNumberLiteral.Value;
+            Entry.SetupMs := SingleResult.GetProperty('setupMs').ToNumberLiteral.Value;
+            Entry.TeardownMs := SingleResult.GetProperty('teardownMs').ToNumberLiteral.Value;
+            Entry.MinOpsPerSec := SingleResult.GetProperty('minOpsPerSec').ToNumberLiteral.Value;
+            Entry.MaxOpsPerSec := SingleResult.GetProperty('maxOpsPerSec').ToNumberLiteral.Value;
+          end;
+        except
+          on E: Exception do
+          begin
+            Entry.Suite := '';
+            Entry.Name := '(malformed result)';
+            Entry.Error := 'Failed to read benchmark result entry: ' + E.Message;
+            Entry.OpsPerSec := 0;
+            Entry.MeanMs := 0;
+            Entry.Iterations := 0;
+            Entry.VariancePercentage := 0;
+            Entry.SetupMs := 0;
+            Entry.TeardownMs := 0;
+            Entry.MinOpsPerSec := 0;
+            Entry.MaxOpsPerSec := 0;
+          end;
         end;
 
         MutableFileResult.Entries[I] := Entry;
@@ -153,7 +205,8 @@ begin
   Source := TStringList.Create;
   try
     Source.LoadFromFile(AFileName);
-    Source.Add('runBenchmarks();');
+    if Pos('runBenchmarks();', Source.Text) = 0 then
+      Source.Add('runBenchmarks();');
 
     try
       Engine := TGocciaEngine.Create(AFileName, Source, BenchGlobals);
@@ -189,7 +242,7 @@ begin
         MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if Assigned(TGarbageCollector.Instance) and (GMode <> ebSouffleVM) then
       TGarbageCollector.Instance.Collect;
     Source.Free;
   end;
@@ -208,13 +261,16 @@ var
   Module: TSouffleBytecodeModule;
   Backend: TGocciaSouffleBackend;
   GC: TGarbageCollector;
+  WasGCEnabled: Boolean;
   ResultValue: TGocciaValue;
   FileResult: TBenchmarkFileResult;
   ScriptResult: TGocciaObjectValue;
   BenchGlobals: TGocciaGlobalBuiltins;
   CompileStart, CompileEnd, ExecEnd: Int64;
+  Stage: string;
 begin
   BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
+  Stage := 'load source';
 
   Source := TStringList.Create;
   try
@@ -230,19 +286,24 @@ begin
     end;
 
     try
+      Stage := 'create backend';
       CompileStart := GetNanoseconds;
 
       Backend := TGocciaSouffleBackend.Create(AFileName);
       try
+        Stage := 'register built-ins';
         Backend.RegisterBuiltIns(BenchGlobals);
 
+        Stage := 'lex';
         Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
           Tokens := Lexer.ScanTokens;
+          Stage := 'parse';
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
           try
             ProgramNode := Parser.Parse;
             try
+              Stage := 'compile module';
               Module := Backend.CompileToModule(ProgramNode);
             finally
               ProgramNode.Free;
@@ -261,6 +322,7 @@ begin
         if Assigned(Backend.BuiltinBenchmark) then
           Backend.BuiltinBenchmark.OnBeforeMeasurement := Backend.Runtime.ClearTransientCaches;
         try
+          Stage := 'run module';
           ResultValue := Backend.RunModule(Module);
           ExecEnd := GetNanoseconds;
 
@@ -278,6 +340,7 @@ begin
           if ResultValue is TGocciaObjectValue then
             ScriptResult := TGocciaObjectValue(ResultValue);
           try
+            Stage := 'parse results';
             PopulateFileResult(FileResult, ScriptResult, AReporter);
           finally
             if Assigned(ResultValue) and Assigned(GC) then
@@ -287,14 +350,17 @@ begin
           Module.Free;
         end;
       finally
-        Backend.Free;
+        // Keep bytecode backends alive for the process lifetime.
+        // Benchmark files run one after another in a short-lived runner process,
+        // and tearing the backend down between files currently leaves shared
+        // benchmark/bootstrap state in a bad state for the next file.
       end;
     except
       on E: Exception do
-        MakeErrorFileResult(AFileName, E.Message, AReporter);
+        MakeErrorFileResult(AFileName, Stage + ': ' + E.Message, AReporter);
     end;
   finally
-    if Assigned(TGarbageCollector.Instance) then
+    if Assigned(TGarbageCollector.Instance) and (GMode <> ebSouffleVM) then
       TGarbageCollector.Instance.Collect;
     Source.Free;
   end;
@@ -320,6 +386,7 @@ type
 procedure RunBenchmarks(const APaths: TStringList; const AReports: array of TReportSpec);
 var
   Files: TStringList;
+  DiscoveredFiles: TStringList;
   I, J, P: Integer;
   Reporter: TBenchmarkReporter;
 begin
@@ -329,7 +396,16 @@ begin
     for P := 0 to APaths.Count - 1 do
     begin
       if DirectoryExists(APaths[P]) then
-        Files.AddStrings(FindAllFiles(APaths[P], ScriptExtensions))
+      begin
+        DiscoveredFiles := FindAllFiles(APaths[P], ScriptExtensions);
+        try
+          for I := 0 to DiscoveredFiles.Count - 1 do
+            if Pos(PathDelim + 'helpers' + PathDelim, DiscoveredFiles[I]) = 0 then
+              Files.Add(DiscoveredFiles[I]);
+        finally
+          DiscoveredFiles.Free;
+        end;
+      end
       else if FileExists(APaths[P]) then
         Files.Add(APaths[P])
       else

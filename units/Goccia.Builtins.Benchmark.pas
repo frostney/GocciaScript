@@ -276,7 +276,13 @@ begin
     I := 0;
     while I < BatchSize do
     begin
-      ABenchCase.RunFunction.Call(ARunArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      try
+        ABenchCase.RunFunction.Call(ARunArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      except
+        on E: Exception do
+          raise Exception.Create('CalibrateIterations run failed: ' +
+            E.ClassName + ': ' + E.Message);
+      end;
       Inc(I);
     end;
     if Assigned(TGocciaMicrotaskQueue.Instance) then
@@ -395,7 +401,14 @@ begin
     if Assigned(ABenchCase.SetupFunction) then
     begin
       StartNanoseconds := GetNanoseconds;
-      SetupResult := ABenchCase.SetupFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      try
+        SetupResult := ABenchCase.SetupFunction.Call(EmptyArgs,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+      except
+        on E: Exception do
+          raise Exception.Create('RunSingleBenchmark setup failed: ' +
+            E.ClassName + ': ' + E.Message);
+      end;
       if Assigned(TGocciaMicrotaskQueue.Instance) then
         TGocciaMicrotaskQueue.Instance.DrainQueue;
       Result.SetupMs := (GetNanoseconds - StartNanoseconds) / 1000000;
@@ -411,7 +424,13 @@ begin
         RunArgs := TGocciaArgumentsCollection.Create;
 
       for K := 1 to WARMUP_ITERATIONS do
-        ABenchCase.RunFunction.Call(RunArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        try
+          ABenchCase.RunFunction.Call(RunArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        except
+          on E: Exception do
+            raise Exception.Create('RunSingleBenchmark warmup failed: ' +
+              E.ClassName + ': ' + E.Message);
+        end;
       if Assigned(TGocciaMicrotaskQueue.Instance) then
         TGocciaMicrotaskQueue.Instance.DrainQueue;
 
@@ -443,7 +462,13 @@ begin
         I := 0;
         while I < Iterations do
         begin
-          ABenchCase.RunFunction.Call(RunArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+          try
+            ABenchCase.RunFunction.Call(RunArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+          except
+            on E: Exception do
+              raise Exception.Create('RunSingleBenchmark measurement failed: ' +
+                E.ClassName + ': ' + E.Message);
+          end;
           Inc(I);
         end;
         if Assigned(TGocciaMicrotaskQueue.Instance) then
@@ -602,27 +627,46 @@ begin
 
     end;
 
-    TotalDurationNanoseconds := GetNanoseconds - StartNanoseconds;
+    try
+      TotalDurationNanoseconds := GetNanoseconds - StartNanoseconds;
+    except
+      on E: Exception do
+        raise Exception.Create('RunBenchmarks duration failed: ' + E.Message);
+    end;
 
-    ResultObj := TGocciaObjectValue.Create;
-    ResultObj.AssignProperty('totalBenchmarks', TGocciaNumberLiteralValue.Create(FRegisteredBenchmarks.Count));
-    ResultObj.AssignProperty('results', ResultsArray);
-    ResultObj.AssignProperty('durationNanoseconds', TGocciaNumberLiteralValue.Create(TotalDurationNanoseconds));
+    try
+      ResultObj := TGocciaObjectValue.Create;
+      ResultObj.AssignProperty('totalBenchmarks',
+        TGocciaNumberLiteralValue.Create(FRegisteredBenchmarks.Count));
+      ResultObj.AssignProperty('results', ResultsArray);
+      ResultObj.AssignProperty('durationNanoseconds',
+        TGocciaNumberLiteralValue.Create(TotalDurationNanoseconds));
+    except
+      on E: Exception do
+        raise Exception.Create('RunBenchmarks result object failed: ' +
+          E.ClassName + ': ' + E.Message);
+    end;
 
     Result := ResultObj;
   finally
-    if Assigned(TGarbageCollector.Instance) then
-    begin
-      for I := 0 to FRegisteredBenchmarks.Count - 1 do
+    try
+      if Assigned(TGarbageCollector.Instance) then
       begin
-        TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].RunFunction);
-        if Assigned(FRegisteredBenchmarks[I].SetupFunction) then
-          TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].SetupFunction);
-        if Assigned(FRegisteredBenchmarks[I].TeardownFunction) then
-          TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
+        for I := 0 to FRegisteredBenchmarks.Count - 1 do
+        begin
+          TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].RunFunction);
+          if Assigned(FRegisteredBenchmarks[I].SetupFunction) then
+            TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].SetupFunction);
+          if Assigned(FRegisteredBenchmarks[I].TeardownFunction) then
+            TGarbageCollector.Instance.RemoveTempRoot(FRegisteredBenchmarks[I].TeardownFunction);
+        end;
+        if Assigned(ResultsArray) then
+          TGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
       end;
-      if Assigned(ResultsArray) then
-        TGarbageCollector.Instance.RemoveTempRoot(ResultsArray);
+    except
+      on E: Exception do
+        raise Exception.Create('RunBenchmarks cleanup failed: ' +
+          E.ClassName + ': ' + E.Message);
     end;
   end;
 end;

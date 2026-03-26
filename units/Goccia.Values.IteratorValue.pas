@@ -79,12 +79,40 @@ end;
 function InvokeIteratorCallback(const ACallback: TGocciaValue; const AValue: TGocciaValue; const AIndex: Integer): TGocciaValue;
 var
   CallArgs: TGocciaArgumentsCollection;
+  GC: TGarbageCollector;
+  IndexValue: TGocciaValue;
+  CallbackLength: Integer;
 begin
-  CallArgs := TGocciaArgumentsCollection.Create([AValue, TGocciaNumberLiteralValue.SmallInt(AIndex)]);
+  GC := TGarbageCollector.Instance;
+  IndexValue := TGocciaNumberLiteralValue.SmallInt(AIndex);
+  CallbackLength := Trunc(TGocciaFunctionBase(ACallback)
+    .GetProperty(PROP_LENGTH).ToNumberLiteral.Value);
+  if Assigned(GC) then
+  begin
+    GC.AddTempRoot(ACallback);
+    GC.AddTempRoot(AValue);
+    GC.AddTempRoot(IndexValue);
+  end;
   try
-    Result := TGocciaFunctionBase(ACallback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    if (CallbackLength <= 1) and
+       (ACallback.ClassName = 'TGocciaSouffleClosureBridge') then
+      CallArgs := TGocciaArgumentsCollection.Create([AValue])
+    else
+      CallArgs := TGocciaArgumentsCollection.Create([AValue, IndexValue]);
+    try
+      Result := TGocciaFunctionBase(ACallback).Call(
+        CallArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      CallArgs.Free;
+    end;
   finally
-    CallArgs.Free;
+    if Assigned(GC) then
+    begin
+      GC.RemoveTempRoot(IndexValue);
+      GC.RemoveTempRoot(AValue);
+      GC.RemoveTempRoot(ACallback);
+    end;
   end;
 end;
 
