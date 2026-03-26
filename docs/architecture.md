@@ -45,7 +45,7 @@ flowchart TD
     VM --> Result
 ```
 
-The **Engine** (`Goccia.Engine.pas`) sits above both pipelines and orchestrates the process: it creates the interpreter, registers built-in globals, initializes the garbage collector, invokes the lexer/parser, and hands the AST to the interpreter (or compiler) for execution. The **Backend** (`Goccia.Engine.Backend.pas`) provides the Souffle VM bridge, bootstrapping GocciaScript globals into the VM's runtime environment.
+The **Engine** (`Goccia.Engine.pas`) sits above both pipelines and orchestrates the process: it creates the interpreter, initializes the garbage collector, invokes the lexer/parser, and hands the AST to the interpreter (or compiler) for execution. Shared global-environment setup now lives in `Goccia.Environment.Bootstrap.pas`. The **Backend** (`Goccia.Engine.Backend.pas`) provides the Souffle VM bridge and materializes the same environment directly into the VM runtime without constructing a temporary tree-walk engine.
 
 ## Component Responsibilities
 
@@ -54,12 +54,12 @@ The **Engine** (`Goccia.Engine.pas`) sits above both pipelines and orchestrates 
 The top-level entry point. Provides static convenience methods (`RunScript`, `RunScriptFromFile`, `RunScriptFromStringList`) and manages:
 
 - **Garbage collector initialization** — Calls `TGarbageCollector.Initialize`, registers the global scope as a GC root, and pins singleton values via `PinSingletons` (`UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache, etc.).
-- **Built-in registration** — A single `RegisterBuiltIns` method selectively creates and registers globals (`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, `performance`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays, error constructors) based on a `TGocciaGlobalBuiltins` flag set. All built-in constructors share the same `(name, scope, ThrowError)` signature.
+- **Environment bootstrap** — Delegates global registration, constructor setup, `globalThis`, and `GocciaScript` creation to `TGocciaEnvironmentBootstrap`, keeping the engine focused on interpreter lifecycle and execution.
 - **Interpreter lifecycle** — Creates and owns the `TGocciaInterpreter` instance.
 - **Module resolver** — Creates a default `TGocciaModuleResolver` (base directory = entry script directory) and passes it to the interpreter. Accepts an optional custom resolver via a constructor overload; when injected, the engine does not own it. Exposes `AddAlias` and `RegisterGlobalModule` convenience methods.
-- **Prototype chain setup** — Calls `RegisterBuiltinConstructors` to wire up the `Object → Array → Number → String` prototype chain.
-- **`globalThis` registration** — After all built-ins are registered, `RegisterGlobalThis` creates a `TGocciaObjectValue` populated with all current global scope bindings, adds a self-referential `globalThis` property, and binds it as `const` in the global scope.
-- **`GocciaScript` global** — `RegisterGocciaScriptGlobal` creates a `const` object with `version` (from `Goccia.Version`), `commit` (short git hash), and `builtIns` (array of enabled `TGocciaGlobalBuiltin` flag names, derived via RTTI).
+- **Prototype chain setup** — Performed by the shared bootstrap layer when materializing the interpreter environment.
+- **`globalThis` registration** — Built by the shared bootstrap layer after globals are materialized.
+- **`GocciaScript` global** — Built by the shared bootstrap layer with backend-specific `strictTypes` initialization.
 
 The configurable built-in system allows different execution contexts (e.g., the TestRunner enables `ggTestAssertions` to inject `describe`, `test`, and `expect`).
 
@@ -189,7 +189,7 @@ A thin orchestration layer that:
 - Owns the **global scope** (`TGocciaScope`).
 - Delegates AST evaluation to the Evaluator.
 - Manages **module loading** and caching (ES6-style imports). Uses `TGocciaModuleResolver` (received from the engine) for path resolution, with a `GlobalModules` dictionary checked before file resolution for bare-specifier imports. Each module executes in its own isolated child scope (`skModule`) of the global scope, preventing module-internal variables from leaking. All exceptions from the resolver are wrapped into `TGocciaRuntimeError` for consistent error handling.
-- Supports **hot module reloading** for development (`CheckForModuleReload`).
+- Caches loaded modules by resolved path for the lifetime of the interpreter.
 
 ### Evaluator (`Goccia.Evaluator.pas` + sub-modules)
 
@@ -294,8 +294,8 @@ The interpreter maintains a `GlobalModules` dictionary for bare-specifier import
 5. For `.json` files: the file is parsed via `TGocciaJSONParser.Parse` (`Goccia.JSON` unit) and each top-level key becomes a named export. JSON modules skip the lexer/parser/evaluator pipeline entirely.
 6. Exported bindings are extracted from the module scope (JS) or the parsed object (JSON) and bound in the importing scope.
 7. Modules are cached by resolved absolute path to avoid re-evaluation and prevent loading the same file via different relative paths.
-8. `CheckForModuleReload` supports development-time hot reloading.
-9. Circular dependencies are detected via `FLoadingModules` tracking. A module that is still being loaded returns its partially-populated exports table.
+8. Cached modules are returned by resolved path with no hot-reload pass.
+9. Circular dependencies reuse the cached module entry created during initial load.
 
 ### Alias Configuration
 

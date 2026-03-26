@@ -286,7 +286,7 @@ flowchart LR
 
 | Component | File | Role |
 |-----------|------|------|
-| Engine | `Goccia.Engine.pas` | Top-level orchestration, built-in registration |
+| Engine | `Goccia.Engine.pas` | Top-level orchestration, interpreter host, timing/error handling |
 | JSX Transformer | `Goccia.JSX.Transformer.pas` | Optional pre-pass converting JSX to `createElement` calls |
 | Lexer | `Goccia.Lexer.pas` | Tokenization |
 | Parser | `Goccia.Parser.pas` | Recursive descent AST construction |
@@ -304,7 +304,6 @@ flowchart LR
 | Backend | `Goccia.Engine.Backend.pas` | Orchestration, built-in bridging |
 | Binary I/O | `Souffle.Bytecode.Binary.pas` | `.sbc` file serialization/deserialization |
 | WASM Emitter | `Souffle.Wasm.Emitter.pas` | WASM 1.0 + 3.0 binary module builder |
-| WASM Types | `Souffle.Wasm.Types.pas` | WASM GC type definitions for Souffle values |
 | WASM Translator | `Souffle.Wasm.Translator.pas` | Souffle bytecode to WASM translation |
 
 The Souffle VM is a general-purpose bytecode virtual machine designed to support multiple language frontends and WASM 3.0 output. Its two-tier instruction set separates universal VM mechanics (Tier 1) from pluggable language semantics (Tier 2).

@@ -18,6 +18,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
   Goccia.Engine.Backend,
+  Goccia.Environment.Types,
   Goccia.FileExtensions,
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
@@ -255,10 +256,10 @@ begin
 
         CompileEnd := GetNanoseconds;
 
-        if GShowProgress and Assigned(Backend.Engine.BuiltinBenchmark) then
-          Backend.Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
-        if Assigned(Backend.Engine.BuiltinBenchmark) then
-          Backend.Engine.BuiltinBenchmark.OnBeforeMeasurement := Backend.Runtime.ClearTransientCaches;
+        if GShowProgress and Assigned(Backend.BuiltinBenchmark) then
+          Backend.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+        if Assigned(Backend.BuiltinBenchmark) then
+          Backend.BuiltinBenchmark.OnBeforeMeasurement := Backend.Runtime.ClearTransientCaches;
 
         try
           ResultValue := Backend.RunModule(Module);

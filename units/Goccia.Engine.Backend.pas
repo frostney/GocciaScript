@@ -5,13 +5,19 @@ unit Goccia.Engine.Backend;
 interface
 
 uses
+  Classes,
+
   Souffle.Bytecode.Module,
   Souffle.VM,
   Souffle.VM.RuntimeOperations,
 
   Goccia.AST.Node,
+  Goccia.Builtins.Benchmark,
   Goccia.Compiler,
   Goccia.Engine,
+  Goccia.Environment.Bootstrap,
+  Goccia.Environment.Types,
+  Goccia.Interpreter,
   Goccia.MicrotaskQueue,
   Goccia.Modules.Resolver,
   Goccia.Runtime.Operations,
@@ -28,8 +34,12 @@ type
     FVM: TSouffleVM;
     FRuntime: TGocciaRuntimeOperations;
     FSourcePath: string;
-    FEngine: TGocciaEngine;
+    FBridgeSourceLines: TStringList;
+    FBridgeInterpreter: TGocciaInterpreter;
+    FBootstrap: TGocciaEnvironmentBootstrap;
     FModuleResolver: TGocciaModuleResolver;
+    procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
+    function GetBuiltinBenchmark: TGocciaBenchmark;
   public
     constructor Create(const ASourcePath: string);
     destructor Destroy; override;
@@ -43,26 +53,22 @@ type
 
     property Runtime: TGocciaRuntimeOperations read FRuntime;
     property VM: TSouffleVM read FVM;
-    property Engine: TGocciaEngine read FEngine;
+    property BridgeInterpreter: TGocciaInterpreter read FBridgeInterpreter;
+    property BuiltinBenchmark: TGocciaBenchmark read GetBuiltinBenchmark;
   end;
 
 implementation
 
 uses
-  Classes,
   SysUtils,
 
   GarbageCollector.Generic,
-  ModuleResolver,
-  OrderedStringMap,
   Souffle.Bytecode.Chunk,
   Souffle.Value,
   Souffle.VM.Exception,
 
-  Goccia.FileExtensions,
-  Goccia.Interpreter,
-  Goccia.Scope,
-  Goccia.Scope.BindingMap,
+  Goccia.CallStack,
+  Goccia.Error,
   Goccia.Values.Error;
 
 { TGocciaSouffleBackend }
@@ -71,15 +77,19 @@ constructor TGocciaSouffleBackend.Create(const ASourcePath: string);
 begin
   inherited Create;
   TGarbageCollector.Initialize;
+  TGocciaCallStack.Initialize;
+  TGocciaMicrotaskQueue.Initialize;
   FSourcePath := ASourcePath;
+  FBridgeSourceLines := TStringList.Create;
+  FBridgeInterpreter := TGocciaInterpreter.Create(ASourcePath, FBridgeSourceLines);
   FModuleResolver := TGocciaModuleResolver.Create(
     ExtractFilePath(ExpandFileName(ASourcePath)));
+  FBridgeInterpreter.Resolver := FModuleResolver;
   FRuntime := TGocciaRuntimeOperations.Create;
   FVM := TSouffleVM.Create(FRuntime);
   FRuntime.VM := FVM;
-  FRuntime.Engine := nil;
+  FRuntime.Interpreter := FBridgeInterpreter;
   FRuntime.ModuleResolver := FModuleResolver;
-  FEngine := nil;
 end;
 
 destructor TGocciaSouffleBackend.Destroy;
@@ -87,9 +97,11 @@ begin
   {$IFDEF BRIDGE_METRICS}
   TBridgeMetrics.DumpGlobal;
   {$ENDIF}
+  FBootstrap.Free;
   FVM.Free;
   FRuntime.Free;
-  FEngine.Free;
+  FBridgeInterpreter.Free;
+  FBridgeSourceLines.Free;
   FModuleResolver.Free;
   inherited;
 end;
@@ -164,45 +176,28 @@ end;
 
 procedure TGocciaSouffleBackend.RegisterBuiltIns(
   const AGlobals: TGocciaGlobalBuiltins);
-var
-  EmptySource: TStringList;
-  GlobalScope: TGocciaScope;
-  Names: TGocciaStringArray;
-  AliasPair: TOrderedStringMap<string>.TKeyValuePair;
-  I: Integer;
 begin
-  FreeAndNil(FEngine);
-  FRuntime.Engine := nil;
-
-  EmptySource := TStringList.Create;
-  try
-    FEngine := TGocciaEngine.Create(FSourcePath, EmptySource, AGlobals);
-  finally
-    EmptySource.Free;
-  end;
-
-  FRuntime.Engine := FEngine;
   FRuntime.SourcePath := FSourcePath;
+  FreeAndNil(FBootstrap);
+  FBootstrap := TGocciaEnvironmentBootstrap.Create(
+    AGlobals, FBridgeInterpreter.GlobalScope, ThrowError);
+  FBootstrap.MaterializeInterpreterEnvironment(True);
+  FBootstrap.MaterializeSouffleEnvironment(FRuntime);
+end;
 
-  if Assigned(FEngine.Interpreter.Resolver) then
-    for AliasPair in FEngine.Interpreter.Resolver.Aliases do
-      FModuleResolver.AddAlias(AliasPair.Key, AliasPair.Value);
+procedure TGocciaSouffleBackend.ThrowError(const AMessage: string;
+  const ALine, AColumn: Integer);
+begin
+  raise TGocciaRuntimeError.Create(AMessage, ALine, AColumn, FSourcePath,
+    FBridgeSourceLines);
+end;
 
-  GlobalScope := FEngine.Interpreter.GlobalScope;
-  Names := GlobalScope.GetOwnBindingNames;
-  for I := 0 to Length(Names) - 1 do
-  begin
-    if GlobalScope.GetLexicalBinding(Names[I]).DeclarationType = dtConst then
-      FRuntime.RegisterConstGlobal(Names[I],
-        FRuntime.ToSouffleValue(GlobalScope.GetValue(Names[I])))
-    else
-      RegisterGlobal(Names[I], GlobalScope.GetValue(Names[I]));
-  end;
-
-  FRuntime.PatchGocciaScriptStrictTypes;
-  FRuntime.RegisterDelegates;
-  FRuntime.RegisterTestNatives;
-  FRuntime.RegisterNativeBuiltins;
+function TGocciaSouffleBackend.GetBuiltinBenchmark: TGocciaBenchmark;
+begin
+  if Assigned(FBootstrap) then
+    Result := FBootstrap.BuiltinBenchmark
+  else
+    Result := nil;
 end;
 
 end.

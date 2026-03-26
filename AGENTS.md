@@ -91,7 +91,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 
 | Component | File | Role |
 |-----------|------|------|
-| Engine | `Goccia.Engine.pas` | Top-level orchestration, built-in registration |
+| Engine | `Goccia.Engine.pas` | Top-level orchestration, interpreter host, timing/error handling |
 | Lexer | `Goccia.Lexer.pas` | Source → tokens |
 | Parser | `Goccia.Parser.pas` | Tokens → AST (including `TGocciaForOfStatement`, `TGocciaForAwaitOfStatement` in `Goccia.AST.Statements.pas`) |
 | Interpreter | `Goccia.Interpreter.pas` | AST execution, module loading, scope ownership |
@@ -126,7 +126,6 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Module Resolver | `Goccia.Modules.Resolver.pas` | Extensionless imports, path aliases, virtual `Resolve` for custom resolvers |
 | JSX Source Map | `Goccia.JSX.SourceMap.pas` | Lightweight internal position mapping for JSX-transformed source |
 | JSX Transformer | `Goccia.JSX.Transformer.pas` | Standalone pre-pass that converts JSX to `createElement` calls |
-| Logger | `Goccia.Logger.pas` | Configurable logging with levels and output formats |
 | Benchmark Reporter | `Goccia.Benchmark.Reporter.pas` | Multi-format benchmark output (console, text, CSV, JSON) with setup/teardown timing, min/max range, `HasFailures` for exit code reporting |
 | REPL Line Editor | `Goccia.REPL.LineEditor.pas` | Interactive line editing with history for the REPL |
 | REPL Formatter | `Goccia.REPL.Formatter.pas` | Color-formatted value output for the REPL |
@@ -146,7 +145,8 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Hash Map | `HashMap.pas` | `THashMap<TKey, TValue>` — open-addressed hash map with backshift deletion (no tombstones); specialized multiplicative hash for pointer-sized keys (golden-ratio/Fibonacci), direct integer equality; bitwise-AND slot indexing |
 | String Buffer | `StringBuffer.pas` | `TStringBuffer` — advanced record for efficient string building with preallocated doubling growth via `AnsiString` + `Move`, replacing `TStringBuilder`. `DEFAULT_CAPACITY` constant (64) used by `Create` default parameter and zero/negative fallback |
 | Binding Map | `Goccia.Scope.BindingMap.pas` | `TOrderedStringMap<TLexicalBinding>` — scope chain variable bindings; hash-based O(1) lookup per scope level; scope chain walking handled by `TGocciaScope` (not the map) |
-| Array Utils | `Goccia.Utils.Array.pas` | `ArrayCreateDataProperty` helper for spec-compliant array operations |
+| Environment Bootstrap | `Goccia.Environment.Bootstrap.pas` | Shared environment materialization for interpreter and Souffle backends |
+| Array Utils | `Goccia.Utils.Arrays.pas` | `ArrayCreateDataProperty` helper for spec-compliant array operations |
 | TypedArray Value | `Goccia.Values.TypedArrayValue.pas` | `TGocciaTypedArrayValue` — view over ArrayBuffer with fixed element type (Int8, Uint8, Uint8Clamped, Int16, Uint16, Int32, Uint32, Float32, Float64), `TGocciaTypedArrayClassValue`, `TGocciaTypedArrayStaticFrom` |
 | Test Console | `Goccia.Builtins.TestConsole.pas` | Silent console override for `--silent` mode in TestRunner |
 | Souffle VM | `Souffle.VM.pas` | Register-based bytecode VM with two-tier dispatch (Tier 1 intrinsic + Tier 2 runtime); `ResolveAsyncThrow` converts unhandled throws in async frames to rejected promises and resumes the VM loop when caller frames remain |
@@ -164,7 +164,6 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Souffle Heap | `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleString`, heap kind constants |
 | GocciaScript Backend | `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — bridges GocciaScript engine to Souffle VM; initializes `TGarbageCollector`, disables automatic collection during `RunModule`, restores previous `Enabled` state afterward |
 | WASM Emitter | `Souffle.Wasm.Emitter.pas` | `TWasmModule`, `TWasmCodeBuilder` — WASM binary module builder (types, imports, functions, exports, custom sections); `AddCustomSection` for embedding constant pool data |
-| WASM Types | `Souffle.Wasm.Types.pas` | `TSouffleWasmTypeLayout` — WASM GC type definitions for Souffle values; `SouffleLocalTypeToWasmValType` helper |
 | WASM Translator | `Souffle.Wasm.Translator.pas` | `TSouffleWasmTranslator` — Souffle bytecode → WASM translation: function flattening, register-to-local mapping, control flow reconstruction (sorted targets approach with interior/exterior block classification for try ranges), demand-driven runtime import wiring, constant pool flattening with `souffle:constants` custom section, native WASM exception handling (`try`/`catch`/`throw` via imported tag), all Tier 1 + Tier 2 opcodes. All functions exported as `__fn_N` for closure invocation |
 | WASM Host Runtime | `tests-wasm/souffle-host.mjs` | Node.js ES module that loads `.wasm`, extracts `souffle:constants` custom section, provides `souffle` module imports (value construction, arithmetic, property access, closures, blueprints, exception tag), manages `currentClosure` for upvalue access |
 | GocciaScript Compiler | `Goccia.Compiler.pas` | `TGocciaCompiler` — AST → Souffle bytecode compilation, top-level dispatch |

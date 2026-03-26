@@ -1019,7 +1019,7 @@ GocciaScript-specific bridge files in `units/`:
 
 | File | Description |
 |------|-------------|
-| `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — orchestration, built-in registration |
+| `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — orchestration and direct VM environment materialization |
 | `Goccia.Compiler.pas` | `TGocciaCompiler` — AST to Souffle bytecode, top-level compilation dispatch |
 | `Goccia.Compiler.Expressions.pas` | Expression compilation: functions, methods, identifiers, typed local load/store |
 | `Goccia.Compiler.Statements.pas` | Statement compilation: variables, classes (`IsSimpleClass` + `CompileClassDeclaration`), control flow |

@@ -7,56 +7,21 @@ interface
 uses
   Classes,
 
-  Goccia.Arguments.Collection,
   Goccia.AST.Node,
   Goccia.Builtins.Benchmark,
   Goccia.Builtins.Console,
-  Goccia.Builtins.GlobalArray,
-  Goccia.Builtins.GlobalArrayBuffer,
-  Goccia.Builtins.GlobalMap,
-  Goccia.Builtins.GlobalNumber,
-  Goccia.Builtins.GlobalObject,
-  Goccia.Builtins.GlobalPromise,
-  Goccia.Builtins.Globals,
-  Goccia.Builtins.GlobalSet,
-  Goccia.Builtins.GlobalString,
-  Goccia.Builtins.GlobalSymbol,
-  Goccia.Builtins.JSON,
-  Goccia.Builtins.Math,
-  Goccia.Builtins.Performance,
-  Goccia.Builtins.Temporal,
-  Goccia.Builtins.TestAssertions,
+  Goccia.Environment.Bootstrap,
+  Goccia.Environment.Types,
   Goccia.Interpreter,
   Goccia.JSX.SourceMap,
   Goccia.Modules,
   Goccia.Modules.Resolver,
   Goccia.Parser,
-  Goccia.Values.ClassValue,
-  Goccia.Values.IteratorValue,
-  Goccia.Values.Primitives,
-  Goccia.Values.TypedArrayValue;
+  Goccia.Values.Primitives;
 
 type
-  TGocciaGlobalBuiltin = (
-    ggConsole,
-    ggMath,
-    ggGlobalObject,
-    ggGlobalArray,
-    ggGlobalNumber,
-    ggPromise,
-    ggJSON,
-    ggSymbol,
-    ggSet,
-    ggMap,
-    ggPerformance,
-    ggTestAssertions,
-    ggBenchmark,
-    ggTemporal,
-    ggJSX,
-    ggArrayBuffer
-  );
-
-  TGocciaGlobalBuiltins = set of TGocciaGlobalBuiltin;
+  TGocciaGlobalBuiltin = Goccia.Environment.Types.TGocciaGlobalBuiltin;
+  TGocciaGlobalBuiltins = Goccia.Environment.Types.TGocciaGlobalBuiltins;
 
   TGocciaScriptResult = record
     Result: TGocciaValue;
@@ -70,45 +35,27 @@ type
 type
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [
+      ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber,
+      ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggPerformance,
+      ggTemporal, ggJSX, ggArrayBuffer
+    ];
   private
     FInterpreter: TGocciaInterpreter;
+    FBootstrap: TGocciaEnvironmentBootstrap;
     FResolver: TGocciaModuleResolver;
     FOwnsResolver: Boolean;
     FFileName: string;
     FSourceLines: TStringList;
     FGlobals: TGocciaGlobalBuiltins;
-
-    // Built-in objects
-    FBuiltinConsole: TGocciaConsole;
-    FBuiltinMath: TGocciaMath;
-    FBuiltinGlobalObject: TGocciaGlobalObject;
-    FBuiltinGlobalArray: TGocciaGlobalArray;
-    FBuiltinGlobalNumber: TGocciaGlobalNumber;
-    FBuiltinGlobalString: TGocciaGlobalString;
-    FBuiltinGlobals: TGocciaGlobals;
-    FBuiltinJSON: TGocciaJSONBuiltin;
-    FBuiltinSymbol: TGocciaGlobalSymbol;
-    FBuiltinSet: TGocciaGlobalSet;
-    FBuiltinMap: TGocciaGlobalMap;
-    FBuiltinPerformance: TGocciaPerformance;
-    FBuiltinPromise: TGocciaGlobalPromise;
-    FBuiltinTestAssertions: TGocciaTestAssertions;
-    FBuiltinBenchmark: TGocciaBenchmark;
-    FBuiltinTemporal: TGocciaTemporalBuiltin;
-    FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
     FPreviousExceptionMask: TFPUExceptionMask;
     FSuppressWarnings: Boolean;
 
     procedure PinSingletons;
-    procedure RegisterBuiltIns;
-    procedure RegisterBuiltinConstructors;
-    procedure RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
-    procedure RegisterGlobalThis;
-    procedure RegisterGocciaScriptGlobal;
-    function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
+    function GetBuiltinBenchmark: TGocciaBenchmark;
+    function GetBuiltinConsole: TGocciaConsole;
   public
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver); overload;
@@ -129,22 +76,8 @@ type
 
     property Interpreter: TGocciaInterpreter read FInterpreter;
     property Resolver: TGocciaModuleResolver read FResolver;
-    property BuiltinConsole: TGocciaConsole read FBuiltinConsole;
-    property BuiltinMath: TGocciaMath read FBuiltinMath;
-    property BuiltinGlobalObject: TGocciaGlobalObject read FBuiltinGlobalObject;
-    property BuiltinGlobalArray: TGocciaGlobalArray read FBuiltinGlobalArray;
-    property BuiltinGlobalNumber: TGocciaGlobalNumber read FBuiltinGlobalNumber;
-    property BuiltinGlobals: TGocciaGlobals read FBuiltinGlobals;
-    property BuiltinJSON: TGocciaJSONBuiltin read FBuiltinJSON;
-    property BuiltinSymbol: TGocciaGlobalSymbol read FBuiltinSymbol;
-    property BuiltinSet: TGocciaGlobalSet read FBuiltinSet;
-    property BuiltinMap: TGocciaGlobalMap read FBuiltinMap;
-    property BuiltinPerformance: TGocciaPerformance read FBuiltinPerformance;
-    property BuiltinPromise: TGocciaGlobalPromise read FBuiltinPromise;
-    property BuiltinTestAssertions: TGocciaTestAssertions read FBuiltinTestAssertions;
-    property BuiltinBenchmark: TGocciaBenchmark read FBuiltinBenchmark;
-    property BuiltinTemporal: TGocciaTemporalBuiltin read FBuiltinTemporal;
-    property BuiltinArrayBuffer: TGocciaGlobalArrayBuffer read FBuiltinArrayBuffer;
+    property BuiltinConsole: TGocciaConsole read GetBuiltinConsole;
+    property BuiltinBenchmark: TGocciaBenchmark read GetBuiltinBenchmark;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
   end;
 
@@ -155,7 +88,6 @@ uses
   Generics.Collections,
   Math,
   SysUtils,
-  TypInfo,
 
   GarbageCollector.Generic,
   TimingUtils,
@@ -168,20 +100,7 @@ uses
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Scope,
-  Goccia.Token,
-  Goccia.Values.ArrayBufferValue,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.BooleanObjectValue,
-  Goccia.Values.MapValue,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.NumberObjectValue,
-  Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.SetValue,
-  Goccia.Values.SharedArrayBufferValue,
-  Goccia.Values.StringObjectValue,
-  Goccia.Values.SymbolValue,
-  Goccia.Version;
+  Goccia.Token;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
 begin
@@ -218,7 +137,9 @@ begin
   TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
 
   PinSingletons;
-  RegisterBuiltIns;
+  FBootstrap := TGocciaEnvironmentBootstrap.Create(
+    FGlobals, FInterpreter.GlobalScope, ThrowError);
+  FBootstrap.MaterializeInterpreterEnvironment(False);
 end;
 
 destructor TGocciaEngine.Destroy;
@@ -227,24 +148,7 @@ begin
     if Assigned(TGarbageCollector.Instance) and Assigned(FInterpreter) then
       TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
 
-    FBuiltinConsole.Free;
-    FBuiltinMath.Free;
-    FBuiltinGlobalObject.Free;
-    FBuiltinGlobalArray.Free;
-    FBuiltinGlobalNumber.Free;
-    FBuiltinGlobalString.Free;
-    FBuiltinGlobals.Free;
-    FBuiltinJSON.Free;
-    FBuiltinSymbol.Free;
-    FBuiltinSet.Free;
-    FBuiltinMap.Free;
-    FBuiltinPerformance.Free;
-    FBuiltinPromise.Free;
-    FBuiltinTestAssertions.Free;
-    FBuiltinBenchmark.Free;
-    FBuiltinTemporal.Free;
-    FBuiltinArrayBuffer.Free;
-
+    FBootstrap.Free;
     FInterpreter.Free;
     if FOwnsResolver then
       FResolver.Free;
@@ -277,235 +181,20 @@ begin
     PinIfAssigned(TGocciaNumberLiteralValue.SmallInt(I));
 end;
 
-procedure TGocciaEngine.RegisterBuiltIns;
-var
-  Scope: TGocciaScope;
+function TGocciaEngine.GetBuiltinBenchmark: TGocciaBenchmark;
 begin
-  Scope := FInterpreter.GlobalScope;
-
-  // Flag-gated built-ins: each creates a wrapper that registers its
-  // native methods/properties into the global scope.
-  if ggConsole in FGlobals then
-    FBuiltinConsole := TGocciaConsole.Create('console', Scope, ThrowError);
-  if ggMath in FGlobals then
-    FBuiltinMath := TGocciaMath.Create('Math', Scope, ThrowError);
-  if ggGlobalObject in FGlobals then
-    FBuiltinGlobalObject := TGocciaGlobalObject.Create(CONSTRUCTOR_OBJECT, Scope, ThrowError);
-  if ggGlobalArray in FGlobals then
-    FBuiltinGlobalArray := TGocciaGlobalArray.Create(CONSTRUCTOR_ARRAY, Scope, ThrowError);
-  if ggGlobalNumber in FGlobals then
-    FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, ThrowError);
-  if ggJSON in FGlobals then
-    FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, ThrowError);
-  if ggSymbol in FGlobals then
-    FBuiltinSymbol := TGocciaGlobalSymbol.Create(CONSTRUCTOR_SYMBOL, Scope, ThrowError);
-  if ggSet in FGlobals then
-    FBuiltinSet := TGocciaGlobalSet.Create(CONSTRUCTOR_SET, Scope, ThrowError);
-  if ggMap in FGlobals then
-    FBuiltinMap := TGocciaGlobalMap.Create(CONSTRUCTOR_MAP, Scope, ThrowError);
-  if ggPerformance in FGlobals then
-    FBuiltinPerformance := TGocciaPerformance.Create('performance', Scope, ThrowError);
-  if ggPromise in FGlobals then
-    FBuiltinPromise := TGocciaGlobalPromise.Create(CONSTRUCTOR_PROMISE, Scope, ThrowError);
-  if ggTestAssertions in FGlobals then
-    FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions', Scope, ThrowError);
-  if ggBenchmark in FGlobals then
-    FBuiltinBenchmark := TGocciaBenchmark.Create('Benchmark', Scope, ThrowError);
-  if ggTemporal in FGlobals then
-    FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal', Scope, ThrowError);
-  if ggArrayBuffer in FGlobals then
-    FBuiltinArrayBuffer := TGocciaGlobalArrayBuffer.Create(CONSTRUCTOR_ARRAY_BUFFER, Scope, ThrowError);
-
-  // Always-registered built-ins
-  FBuiltinGlobalString := TGocciaGlobalString.Create(CONSTRUCTOR_STRING, Scope, ThrowError);
-  FBuiltinGlobals := TGocciaGlobals.Create('Globals', Scope, ThrowError);
-  Scope.DefineLexicalBinding(CONSTRUCTOR_ITERATOR, TGocciaIteratorValue.CreateGlobalObject, dtConst);
-  RegisterBuiltinConstructors;
+  if Assigned(FBootstrap) then
+    Result := FBootstrap.BuiltinBenchmark
+  else
+    Result := nil;
 end;
 
-procedure TGocciaEngine.RegisterBuiltinConstructors;
-var
-  ObjectConstructor, FunctionConstructor: TGocciaClassValue;
-  ArrayConstructor: TGocciaArrayClassValue;
-  MapConstructor: TGocciaMapClassValue;
-  SetConstructor: TGocciaSetClassValue;
-  ArrayBufferConstructor: TGocciaArrayBufferClassValue;
-  SharedArrayBufferConstructor: TGocciaSharedArrayBufferClassValue;
-  StringConstructor: TGocciaStringClassValue;
-  NumberConstructor: TGocciaNumberClassValue;
-  BooleanConstructor: TGocciaBooleanClassValue;
-  Key: string;
+function TGocciaEngine.GetBuiltinConsole: TGocciaConsole;
 begin
-  TGocciaObjectValue.InitializeSharedPrototype;
-  ObjectConstructor := TGocciaClassValue.Create(CONSTRUCTOR_OBJECT, nil);
-  ObjectConstructor.ReplacePrototype(TGocciaObjectValue.SharedObjectPrototype);
-  TGocciaObjectValue.SharedObjectPrototype.AssignProperty(PROP_CONSTRUCTOR, ObjectConstructor);
-  if Assigned(FBuiltinGlobalObject) then
-    for Key in FBuiltinGlobalObject.BuiltinObject.GetAllPropertyNames do
-      ObjectConstructor.SetProperty(Key, FBuiltinGlobalObject.BuiltinObject.GetProperty(Key));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_OBJECT, ObjectConstructor, dtConst);
-
-  ArrayConstructor := TGocciaArrayClassValue.Create(CONSTRUCTOR_ARRAY, nil);
-  TGocciaArrayValue.ExposePrototype(ArrayConstructor);
-  ArrayConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  if Assigned(FBuiltinGlobalArray) then
-    for Key in FBuiltinGlobalArray.BuiltinObject.GetAllPropertyNames do
-      ArrayConstructor.SetProperty(Key, FBuiltinGlobalArray.BuiltinObject.GetProperty(Key));
-  ArrayConstructor.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownSpecies,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
-      nil, [pfConfigurable]));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY, ArrayConstructor, dtConst);
-
-  if ggMap in FGlobals then
-  begin
-    MapConstructor := TGocciaMapClassValue.Create(CONSTRUCTOR_MAP, nil);
-    TGocciaMapValue.ExposePrototype(MapConstructor);
-    MapConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-    if Assigned(FBuiltinMap) then
-      for Key in FBuiltinMap.BuiltinObject.GetAllPropertyNames do
-        MapConstructor.SetProperty(Key, FBuiltinMap.BuiltinObject.GetProperty(Key));
-    MapConstructor.DefineSymbolProperty(
-      TGocciaSymbolValue.WellKnownSpecies,
-      TGocciaPropertyDescriptorAccessor.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
-        nil, [pfConfigurable]));
-    FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_MAP, MapConstructor, dtConst);
-  end;
-
-  if ggSet in FGlobals then
-  begin
-    SetConstructor := TGocciaSetClassValue.Create(CONSTRUCTOR_SET, nil);
-    TGocciaSetValue.ExposePrototype(SetConstructor);
-    SetConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-    SetConstructor.DefineSymbolProperty(
-      TGocciaSymbolValue.WellKnownSpecies,
-      TGocciaPropertyDescriptorAccessor.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
-        nil, [pfConfigurable]));
-    FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SET, SetConstructor, dtConst);
-  end;
-
-  if ggArrayBuffer in FGlobals then
-  begin
-    ArrayBufferConstructor := TGocciaArrayBufferClassValue.Create(CONSTRUCTOR_ARRAY_BUFFER, nil);
-    TGocciaArrayBufferValue.ExposePrototype(ArrayBufferConstructor);
-    ArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-    if Assigned(FBuiltinArrayBuffer) then
-      for Key in FBuiltinArrayBuffer.BuiltinObject.GetAllPropertyNames do
-        ArrayBufferConstructor.SetProperty(Key, FBuiltinArrayBuffer.BuiltinObject.GetProperty(Key));
-    FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY_BUFFER, ArrayBufferConstructor, dtConst);
-
-    SharedArrayBufferConstructor := TGocciaSharedArrayBufferClassValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER, nil);
-    TGocciaSharedArrayBufferValue.ExposePrototype(SharedArrayBufferConstructor);
-    SharedArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-    FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst);
-
-    RegisterTypedArrayConstructor(CONSTRUCTOR_INT8_ARRAY, takInt8, ObjectConstructor);
-    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_ARRAY, takUint8, ObjectConstructor);
-    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_CLAMPED_ARRAY, takUint8Clamped, ObjectConstructor);
-    RegisterTypedArrayConstructor(CONSTRUCTOR_INT16_ARRAY, takInt16, ObjectConstructor);
-    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT16_ARRAY, takUint16, ObjectConstructor);
-    RegisterTypedArrayConstructor(CONSTRUCTOR_INT32_ARRAY, takInt32, ObjectConstructor);
-    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT32_ARRAY, takUint32, ObjectConstructor);
-    RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT32_ARRAY, takFloat32, ObjectConstructor);
-    RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT64_ARRAY, takFloat64, ObjectConstructor);
-  end;
-
-  StringConstructor := TGocciaStringClassValue.Create(CONSTRUCTOR_STRING, nil);
-  StringConstructor.ReplacePrototype(TGocciaStringObjectValue.GetSharedPrototype);
-  StringConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, StringConstructor);
-  StringConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  if Assigned(FBuiltinGlobalString) then
-    for Key in FBuiltinGlobalString.BuiltinObject.GetAllPropertyNames do
-      StringConstructor.SetProperty(Key, FBuiltinGlobalString.BuiltinObject.GetProperty(Key));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_STRING, StringConstructor, dtConst);
-
-  NumberConstructor := TGocciaNumberClassValue.Create(CONSTRUCTOR_NUMBER, nil);
-  NumberConstructor.ReplacePrototype(TGocciaNumberObjectValue.GetSharedPrototype);
-  NumberConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, NumberConstructor);
-  NumberConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  if Assigned(FBuiltinGlobalNumber) then
-    for Key in FBuiltinGlobalNumber.BuiltinObject.GetAllPropertyNames do
-      NumberConstructor.SetProperty(Key, FBuiltinGlobalNumber.BuiltinObject.GetProperty(Key));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_NUMBER, NumberConstructor, dtConst);
-
-  BooleanConstructor := TGocciaBooleanClassValue.Create(CONSTRUCTOR_BOOLEAN, nil);
-  BooleanConstructor.ReplacePrototype(TGocciaBooleanObjectValue.GetSharedPrototype);
-  BooleanConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, BooleanConstructor);
-  BooleanConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_BOOLEAN, BooleanConstructor, dtConst);
-
-  FunctionConstructor := TGocciaClassValue.Create('Function', nil);
-  FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
-
-  RegisterGocciaScriptGlobal;
-  RegisterGlobalThis;
-end;
-
-procedure TGocciaEngine.RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
-var
-  TAConstructor: TGocciaTypedArrayClassValue;
-  BPE: TGocciaNumberLiteralValue;
-  FromFn, OfFn: TGocciaTypedArrayStaticFrom;
-begin
-  TAConstructor := TGocciaTypedArrayClassValue.Create(AName, nil, AKind);
-  TGocciaTypedArrayValue.ExposePrototype(TAConstructor);
-  TGocciaTypedArrayValue.SetSharedPrototypeParent(AObjectConstructor.Prototype);
-  BPE := TGocciaNumberLiteralValue.Create(TGocciaTypedArrayValue.BytesPerElement(AKind));
-  TAConstructor.SetProperty(PROP_BYTES_PER_ELEMENT, BPE);
-  TAConstructor.Prototype.AssignProperty(PROP_BYTES_PER_ELEMENT, BPE);
-
-  FromFn := TGocciaTypedArrayStaticFrom.Create(AKind);
-  TAConstructor.SetProperty(PROP_FROM,
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(FromFn.TypedArrayFrom, 'from', 1));
-  OfFn := TGocciaTypedArrayStaticFrom.Create(AKind);
-  TAConstructor.SetProperty(PROP_OF,
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(OfFn.TypedArrayOf, 'of', 0));
-
-  FInterpreter.GlobalScope.DefineLexicalBinding(AName, TAConstructor, dtConst);
-end;
-
-procedure TGocciaEngine.RegisterGlobalThis;
-var
-  GlobalThisObj: TGocciaObjectValue;
-  Scope: TGocciaScope;
-  Name: string;
-begin
-  Scope := FInterpreter.GlobalScope;
-  GlobalThisObj := TGocciaObjectValue.Create;
-
-  for Name in Scope.GetOwnBindingNames do
-    GlobalThisObj.AssignProperty(Name, Scope.GetValue(Name));
-
-  GlobalThisObj.AssignProperty('globalThis', GlobalThisObj);
-  Scope.DefineLexicalBinding('globalThis', GlobalThisObj, dtConst);
-end;
-
-procedure TGocciaEngine.RegisterGocciaScriptGlobal;
-const
-  PREFIX_LENGTH = 2; // Strip 'gg' prefix from enum names
-var
-  GocciaObj: TGocciaObjectValue;
-  BuiltInsArray: TGocciaArrayValue;
-  Flag: TGocciaGlobalBuiltin;
-  Name: string;
-begin
-  BuiltInsArray := TGocciaArrayValue.Create;
-  for Flag in FGlobals do
-  begin
-    Name := GetEnumName(TypeInfo(TGocciaGlobalBuiltin), Ord(Flag));
-    BuiltInsArray.Elements.Add(TGocciaStringLiteralValue.Create(Copy(Name, PREFIX_LENGTH + 1, Length(Name) - PREFIX_LENGTH)));
-  end;
-
-  GocciaObj := TGocciaObjectValue.Create;
-  GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GetVersion));
-  GocciaObj.AssignProperty('commit', TGocciaStringLiteralValue.Create(GetCommit));
-  GocciaObj.AssignProperty('builtIns', BuiltInsArray);
-  GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.FalseValue);
-
-  FInterpreter.GlobalScope.DefineLexicalBinding('GocciaScript', GocciaObj, dtConst);
+  if Assigned(FBootstrap) then
+    Result := FBootstrap.BuiltinConsole
+  else
+    Result := nil;
 end;
 
 procedure TGocciaEngine.AddAlias(const APattern, AReplacement: string);
@@ -675,11 +364,6 @@ begin
     else
       WriteLn(Format('  --> %s:%d:%d', [FFileName, Warning.Line, Warning.Column]));
   end;
-end;
-
-function TGocciaEngine.SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  Result := AThisValue;
 end;
 
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);

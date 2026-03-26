@@ -17,6 +17,7 @@ uses
   Goccia.Compiler,
   Goccia.Engine,
   Goccia.Engine.Backend,
+  Goccia.Environment.Types,
   Goccia.FileExtensions,
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,

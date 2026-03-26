@@ -22,6 +22,7 @@ uses
 
   Goccia.AST.Statements,
   Goccia.Evaluator.Decorators,
+  Goccia.Interpreter,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -194,7 +195,7 @@ type
     FWrappedValues: TList;
     FBridgeCallDepth: Integer;
     FVM: TSouffleVM;
-    FEngine: TObject;
+    FInterpreter: TGocciaInterpreter;
     FSourcePath: string;
     FStringDelegate: TSouffleRecord;
     FNumberDelegate: TSouffleRecord;
@@ -365,14 +366,13 @@ type
     procedure RegisterGlobal(const AName: string; const AValue: TSouffleValue);
     procedure RegisterConstGlobal(const AName: string;
       const AValue: TSouffleValue);
-    procedure PatchGocciaScriptStrictTypes;
     procedure RegisterFormalParameterCount(
       const ATemplate: TSouffleFunctionTemplate; const ACount: Integer);
     function GetFormalParameterCount(
       const ATemplate: TSouffleFunctionTemplate): Integer;
     property ModuleExports: TOrderedStringMap<TSouffleValue> read FExports;
     property VM: TSouffleVM read FVM write FVM;
-    property Engine: TObject read FEngine write FEngine;
+    property Interpreter: TGocciaInterpreter read FInterpreter write FInterpreter;
     property SourcePath: string read FSourcePath write FSourcePath;
     property ModuleResolver: TModuleResolver read FModuleResolver write FModuleResolver;
   end;
@@ -399,14 +399,13 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
-  Goccia.Engine,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.Evaluator.TypeOperations,
-  Goccia.Interpreter,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
+  Goccia.Modules.Loader,
   Goccia.Parser,
   Goccia.Runtime.Collections,
   Goccia.Scope,
@@ -586,7 +585,6 @@ begin
       begin
         FRuntime.FArrayBridgeCache.Clear;
         FRuntime.FArrayBridgeDirty := False;
-        FRuntime.FRecordBridgeCache.Clear;
       end;
       raise TGocciaThrowValue.Create(
         FRuntime.UnwrapToGocciaValue(E.ThrownValue));
@@ -597,7 +595,6 @@ begin
   begin
     FRuntime.FArrayBridgeCache.Clear;
     FRuntime.FArrayBridgeDirty := False;
-    FRuntime.FRecordBridgeCache.Clear;
   end;
   Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
 end;
@@ -654,7 +651,6 @@ begin
       begin
         FBridgeRuntime.FArrayBridgeCache.Clear;
         FBridgeRuntime.FArrayBridgeDirty := False;
-        FBridgeRuntime.FRecordBridgeCache.Clear;
       end;
       raise TGocciaThrowValue.Create(
         FBridgeRuntime.UnwrapToGocciaValue(E.ThrownValue));
@@ -665,7 +661,6 @@ begin
   begin
     FBridgeRuntime.FArrayBridgeCache.Clear;
     FBridgeRuntime.FArrayBridgeDirty := False;
-    FBridgeRuntime.FRecordBridgeCache.Clear;
   end;
   Result := FBridgeRuntime.UnwrapToGocciaValue(SouffleResult);
 end;
@@ -1330,6 +1325,7 @@ begin
   FModuleCache := TOrderedStringMap<TSouffleValue>.Create;
   FCompiledModules := TList.Create;
   FModuleResolver := nil;
+  FInterpreter := nil;
   FBridgeCallDepth := 0;
   FVM := nil;
   TGarbageCollector.Initialize;
@@ -3463,7 +3459,7 @@ begin
 
         if FClassDefinitionScopes.TryGetValue(GocciaConstructor, CachedScope) then
         begin
-          Context := TGocciaEngine(FEngine).Interpreter.CreateEvaluationContext;
+          Context := FInterpreter.CreateEvaluationContext;
           Context.Scope := TGocciaScope(CachedScope);
           RebuildArrayBridgeCache(Self, TGocciaScope(CachedScope));
         end
@@ -3537,7 +3533,7 @@ begin
 
         if FClassDefinitionScopes.TryGetValue(GocciaConstructor, CachedScope) then
         begin
-          Context := TGocciaEngine(FEngine).Interpreter.CreateEvaluationContext;
+          Context := FInterpreter.CreateEvaluationContext;
           Context.Scope := TGocciaScope(CachedScope);
           RebuildArrayBridgeCache(Self, TGocciaScope(CachedScope));
         end
@@ -4139,9 +4135,7 @@ end;
 function TGocciaRuntimeOperations.LoadModuleNative(
   const APath, AImportingPath: string): TSouffleValue;
 var
-  ResolvedPath: string;
-  Source: TStringList;
-  SourceText: string;
+  LoadedSource: TGocciaLoadedModuleSource;
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
@@ -4155,7 +4149,7 @@ var
   SavedExports: TOrderedStringMap<TSouffleValue>;
 begin
   try
-    ResolvedPath := FModuleResolver.Resolve(APath, AImportingPath);
+    LoadedSource := LoadModuleSource(FModuleResolver, APath, AImportingPath);
   except
     on E: EModuleNotFound do
     begin
@@ -4164,22 +4158,22 @@ begin
     end;
   end;
 
-  if FModuleCache.TryGetValue(ResolvedPath, Result) then
+  if FModuleCache.TryGetValue(LoadedSource.ResolvedPath, Result) then
     Exit;
 
-  if LowerCase(ExtractFileExt(ResolvedPath)) = '.json' then
+  if LoadedSource.Kind = mskJson then
   begin
     try
-      Result := LoadJsonModuleNative(ResolvedPath);
+      Result := LoadJsonModuleNative(LoadedSource.ResolvedPath);
     except
       on E: Exception do
       begin
         ThrowTypeErrorMessage(
-          Format('Failed to parse JSON module "%s": %s', [ResolvedPath, E.Message]));
+          Format('Failed to parse JSON module "%s": %s', [LoadedSource.ResolvedPath, E.Message]));
         Exit(SouffleNil);
       end;
     end;
-    FModuleCache.AddOrSetValue(ResolvedPath, Result);
+    FModuleCache.AddOrSetValue(LoadedSource.ResolvedPath, Result);
     Exit;
   end;
 
@@ -4189,39 +4183,22 @@ begin
   if Assigned(TGarbageCollector.Instance) then
     TGarbageCollector.Instance.AllocateObject(Rec);
   Result := SouffleReference(Rec);
-  FModuleCache.AddOrSetValue(ResolvedPath, Result);
-
-  try
-    Source := TStringList.Create;
-    try
-      Source.LoadFromFile(ResolvedPath);
-      SourceText := Source.Text;
-    finally
-      Source.Free;
-    end;
-  except
-    on E: Exception do
-    begin
-      ThrowTypeErrorMessage(
-        Format('Cannot load module "%s": %s', [APath, E.Message]));
-      Exit;
-    end;
-  end;
+  FModuleCache.AddOrSetValue(LoadedSource.ResolvedPath, Result);
 
   SavedSourcePath := FSourcePath;
   SavedExports := FExports;
   FExports := TOrderedStringMap<TSouffleValue>.Create;
-  FSourcePath := ResolvedPath;
+  FSourcePath := LoadedSource.ResolvedPath;
   try
     try
-      Lexer := TGocciaLexer.Create(SourceText, ResolvedPath);
+      Lexer := TGocciaLexer.Create(LoadedSource.SourceText, LoadedSource.ResolvedPath);
       try
         Tokens := Lexer.ScanTokens;
-        Parser := TGocciaParser.Create(Tokens, ResolvedPath, Lexer.SourceLines);
+        Parser := TGocciaParser.Create(Tokens, LoadedSource.ResolvedPath, Lexer.SourceLines);
         try
           ProgramNode := Parser.Parse;
           try
-            Compiler := TGocciaCompiler.Create(ResolvedPath);
+            Compiler := TGocciaCompiler.Create(LoadedSource.ResolvedPath);
             try
               Module := Compiler.Compile(ProgramNode);
               FCompiledModules.Add(Module);
@@ -7871,7 +7848,6 @@ begin
   FArrayBridgeCache.Clear;
   FArrayBridgeDirty := False;
   FArrayBridgeReverse.Clear;
-  FRecordBridgeCache.Clear;
 end;
 
 procedure TGocciaRuntimeOperations.RegisterDelegates;
@@ -8233,27 +8209,6 @@ begin
   FConstGlobals.AddOrSetValue(AName, True);
 end;
 
-procedure TGocciaRuntimeOperations.PatchGocciaScriptStrictTypes;
-var
-  Val: TSouffleValue;
-  Obj: TGocciaObjectValue;
-begin
-  if not FGlobals.TryGetValue('GocciaScript', Val) then
-    Exit;
-  if not SouffleIsReference(Val) then
-    Exit;
-  if Val.AsReference is TGocciaWrappedValue then
-  begin
-    if TGocciaWrappedValue(Val.AsReference).Value is TGocciaObjectValue then
-    begin
-      Obj := TGocciaObjectValue(TGocciaWrappedValue(Val.AsReference).Value);
-      Obj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.TrueValue);
-    end;
-  end
-  else if Val.AsReference is TSouffleRecord then
-    TSouffleRecord(Val.AsReference).Put(PROP_STRICT_TYPES, SouffleBoolean(True));
-end;
-
 function TGocciaRuntimeOperations.RequireIterable(
   const AValue: TSouffleValue): TSouffleValue;
 var
@@ -8381,7 +8336,13 @@ var
   GocciaVal: TGocciaValue;
   GlobalPair: TOrderedStringMap<TSouffleValue>.TKeyValuePair;
 begin
-  Result := TGocciaEngine(ARuntime.Engine).Interpreter.CreateEvaluationContext;
+  Result.Scope := nil;
+  Result.OnError := nil;
+  Result.LoadModule := nil;
+  Result.CurrentFilePath := '';
+  if not Assigned(ARuntime.Interpreter) then
+    Exit;
+  Result := ARuntime.Interpreter.CreateEvaluationContext;
   if ARuntime.FGlobals.Count = 0 then
     Exit;
 
