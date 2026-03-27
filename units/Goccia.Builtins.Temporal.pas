@@ -8,6 +8,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -84,6 +85,8 @@ uses
 
 constructor TGocciaTemporalBuiltin.Create(const AName: string; const AScope: TGocciaScope;
   const AThrowError: TGocciaThrowErrorCallback);
+var
+  TemporalMembers: array[0..0] of TGocciaMemberDefinition;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -97,12 +100,11 @@ begin
     RegisterPlainDateTime;
     RegisterNow;
 
-    // TC39 Temporal §1.1 Temporal [ @@toStringTag ]
-    FTemporalNamespace.DefineSymbolProperty(
+    TemporalMembers[0] := DefineSymbolDataProperty(
       TGocciaSymbolValue.WellKnownToStringTag,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaStringLiteralValue.Create('Temporal'),
-        [pfConfigurable]));
+      TGocciaStringLiteralValue.Create('Temporal'),
+      [pfConfigurable]);
+    RegisterMemberDefinitions(FTemporalNamespace, TemporalMembers);
 
     AScope.DefineLexicalBinding(AName, FTemporalNamespace, dtLet);
   finally

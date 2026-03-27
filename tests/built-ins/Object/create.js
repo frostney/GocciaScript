@@ -3,6 +3,10 @@ test("object create", () => {
   expect(obj.name).toBe("John");
 });
 
+test("Object.create has the correct function length", () => {
+  expect(Object.create.length).toBe(2);
+});
+
 test("object create with null prototype", () => {
   const obj = Object.create(null);
   expect(obj.name).toBe(undefined);

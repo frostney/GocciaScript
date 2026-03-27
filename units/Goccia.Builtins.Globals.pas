@@ -8,6 +8,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -36,6 +37,7 @@ type
 
     function BuildErrorObject(const AName: string; const AProto: TGocciaObjectValue; const AArgs: TGocciaArgumentsCollection): TGocciaObjectValue;
   protected
+  published
     function ErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypeErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ReferenceErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -83,6 +85,7 @@ var
   URIErrorConstructorFunc: TGocciaNativeFunctionValue;
   AggregateErrorConstructorFunc: TGocciaNativeFunctionValue;
   DOMExceptionConstructorFunc: TGocciaNativeFunctionValue;
+  ErrorStaticMembers: TArray<TGocciaMemberDefinition>;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -142,7 +145,14 @@ begin
   DOMExceptionConstructorFunc := TGocciaNativeFunctionValue.Create(DOMExceptionConstructor, DOM_EXCEPTION_NAME, 2);
 
   ErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FErrorProto);
-  ErrorConstructorFunc.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ErrorIsError, 'isError', 1));
+  with TGocciaMemberCollection.Create do
+  try
+    AddNamedMethod('isError', ErrorIsError, 1, gmkStaticMethod);
+    ErrorStaticMembers := ToDefinitions;
+  finally
+    Free;
+  end;
+  RegisterMemberDefinitions(ErrorConstructorFunc, ErrorStaticMembers);
   TypeErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FTypeErrorProto);
   ReferenceErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FReferenceErrorProto);
   RangeErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FRangeErrorProto);

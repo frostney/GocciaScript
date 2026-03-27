@@ -8,6 +8,7 @@ uses
   SysUtils,
 
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ClassValue,
@@ -26,6 +27,7 @@ type
   TGocciaTypedArrayValue = class(TGocciaInstanceValue)
   private
     class var FShared: TGocciaSharedPrototype;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
   private
     FBufferValue: TGocciaValue;
     FBufferData: TBytes;
@@ -39,6 +41,31 @@ type
     procedure WriteElement(const AIndex: Integer; const AValue: Double);
     procedure WriteNumberLiteral(const AIndex: Integer; const ANum: TGocciaNumberLiteralValue);
 
+  public
+    constructor Create(const AKind: TGocciaTypedArrayKind; const ALength: Integer); overload;
+    constructor Create(const AKind: TGocciaTypedArrayKind; const ABuffer: TGocciaArrayBufferValue;
+      const AByteOffset: Integer = 0; const ALength: Integer = -1); overload;
+    constructor Create(const AKind: TGocciaTypedArrayKind; const ASharedBuffer: TGocciaSharedArrayBufferValue;
+      const AByteOffset: Integer = 0; const ALength: Integer = -1); overload;
+
+    function GetProperty(const AName: string): TGocciaValue; override;
+    procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
+    function HasOwnProperty(const AName: string): Boolean; override;
+    function ToStringTag: string; override;
+
+    procedure MarkReferences; override;
+
+    class function BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
+    class function KindName(const AKind: TGocciaTypedArrayKind): string;
+    class procedure ExposePrototype(const AConstructor: TGocciaValue);
+    class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
+
+    property BufferValue: TGocciaValue read FBufferValue;
+    property BufferData: TBytes read FBufferData;
+    property ByteOffset: Integer read FByteOffset;
+    property Length: Integer read FLength;
+    property Kind: TGocciaTypedArrayKind read FKind;
+  published
     function TypedArrayAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayFill(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayCopyWithin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -74,30 +101,6 @@ type
     function TypedArrayByteOffsetGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TypedArrayToStringTagGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-  public
-    constructor Create(const AKind: TGocciaTypedArrayKind; const ALength: Integer); overload;
-    constructor Create(const AKind: TGocciaTypedArrayKind; const ABuffer: TGocciaArrayBufferValue;
-      const AByteOffset: Integer = 0; const ALength: Integer = -1); overload;
-    constructor Create(const AKind: TGocciaTypedArrayKind; const ASharedBuffer: TGocciaSharedArrayBufferValue;
-      const AByteOffset: Integer = 0; const ALength: Integer = -1); overload;
-
-    function GetProperty(const AName: string): TGocciaValue; override;
-    procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
-    function HasOwnProperty(const AName: string): Boolean; override;
-    function ToStringTag: string; override;
-
-    procedure MarkReferences; override;
-
-    class function BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
-    class function KindName(const AKind: TGocciaTypedArrayKind): string;
-    class procedure ExposePrototype(const AConstructor: TGocciaValue);
-    class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
-
-    property BufferValue: TGocciaValue read FBufferValue;
-    property BufferData: TBytes read FBufferData;
-    property ByteOffset: Integer read FByteOffset;
-    property Length: Integer read FLength;
-    property Kind: TGocciaTypedArrayKind read FKind;
   end;
 
   TGocciaTypedArrayClassValue = class(TGocciaClassValue)
@@ -425,69 +428,62 @@ end;
 { Prototype initialization }
 
 procedure TGocciaTypedArrayValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FShared) then Exit;
 
   FShared := TGocciaSharedPrototype.Create(Self);
-
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayAt, 'at', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayFill, 'fill', 3));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayCopyWithin, 'copyWithin', 3));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArraySlice, 'slice', 2));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArraySubarray, 'subarray', 2));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArraySet, 'set', 2));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayReverse, 'reverse', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArraySort, 'sort', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayIndexOf, 'indexOf', 2));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayLastIndexOf, 'lastIndexOf', 2));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayIncludes, 'includes', 2));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayFind, 'find', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayFindIndex, 'findIndex', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayFindLast, 'findLast', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayFindLastIndex, 'findLastIndex', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayEvery, 'every', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArraySome, 'some', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayForEach, 'forEach', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayMap, 'map', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayFilter, 'filter', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayReduce, 'reduce', 2));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayReduceRight, 'reduceRight', 2));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayJoin, 'join', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayToString, PROP_TO_STRING, 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayToReversed, 'toReversed', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayToSorted, 'toSorted', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayWith, 'with', 2));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayValues, 'values', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayKeys, 'keys', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayEntries, 'entries', 0));
-
-  FShared.Prototype.DefineProperty(PROP_BUFFER,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayBufferGetter, 'get buffer', 0),
-      nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty(PROP_BYTE_LENGTH,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayByteLengthGetter, 'get byteLength', 0),
-      nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty(PROP_BYTE_OFFSET,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayByteOffsetGetter, 'get byteOffset', 0),
-      nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty(PROP_LENGTH,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayLengthGetter, 'get length', 0),
-      nil, [pfConfigurable]));
-
-  FShared.Prototype.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownIterator,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayValues, 'values', 0),
-      [pfConfigurable, pfWritable]));
-  FShared.Prototype.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(TypedArrayToStringTagGetter, 'get [Symbol.toStringTag]', 0),
-      nil, [pfConfigurable]));
+  if System.Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddMethod(TypedArrayAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayFill, 3, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayCopyWithin, 3, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArraySlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArraySubarray, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArraySet, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayReverse, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArraySort, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayIndexOf, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayLastIndexOf, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayIncludes, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayFind, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayFindIndex, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayFindLast, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayFindLastIndex, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayEvery, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArraySome, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayFilter, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayReduce, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayReduceRight, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayJoin, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayToReversed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayToSorted, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayWith, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayValues, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayKeys, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TypedArrayEntries, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddAccessor(PROP_BUFFER, TypedArrayBufferGetter, nil, [pfConfigurable]);
+      Members.AddAccessor(PROP_BYTE_LENGTH, TypedArrayByteLengthGetter, nil, [pfConfigurable]);
+      Members.AddAccessor(PROP_BYTE_OFFSET, TypedArrayByteOffsetGetter, nil, [pfConfigurable]);
+      Members.AddAccessor(PROP_LENGTH, TypedArrayLengthGetter, nil, [pfConfigurable]);
+      Members.AddSymbolMethod(
+        TGocciaSymbolValue.WellKnownIterator, '[Symbol.iterator]',
+        TypedArrayValues, 0, [pfConfigurable, pfWritable]);
+      Members.AddSymbolAccessor(
+        TGocciaSymbolValue.WellKnownToStringTag, '[Symbol.toStringTag]',
+        TypedArrayToStringTagGetter, nil, [pfConfigurable]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTypedArrayValue.ExposePrototype(const AConstructor: TGocciaValue);

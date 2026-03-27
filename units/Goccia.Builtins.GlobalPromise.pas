@@ -8,6 +8,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ArrayValue,
   Goccia.Values.NativeFunction,
@@ -16,8 +17,13 @@ uses
 type
   TGocciaGlobalPromise = class(TGocciaBuiltin)
   private
+    class var FStaticMembers: array of TGocciaMemberDefinition;
     FPromiseConstructor: TGocciaNativeFunctionValue;
 
+    function ExtractPromiseArray(const AArgs: TGocciaArgumentsCollection): TGocciaArrayValue;
+  public
+    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+  published
     function PromiseConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PromiseResolve(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PromiseReject(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -25,12 +31,8 @@ type
     function PromiseAllSettled(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PromiseRace(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PromiseAny(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-
-    function ExtractPromiseArray(const AArgs: TGocciaArgumentsCollection): TGocciaArrayValue;
     function PromiseWithResolvers(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PromiseTry(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-  public
-    constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
 
 implementation
@@ -435,29 +437,29 @@ end;
 
 constructor TGocciaGlobalPromise.Create(const AName: string; const AScope: TGocciaScope;
   const AThrowError: TGocciaThrowErrorCallback);
+var
+  Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
 
   FPromiseConstructor := TGocciaNativeFunctionValue.Create(PromiseConstructorFn, 'Promise', 1);
 
   TGocciaPromiseValue.ExposePrototype(FPromiseConstructor);
-
-  FPromiseConstructor.AssignProperty('resolve',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseResolve, 'resolve', 1));
-  FPromiseConstructor.AssignProperty('reject',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseReject, 'reject', 1));
-  FPromiseConstructor.AssignProperty('all',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseAll, 'all', 1));
-  FPromiseConstructor.AssignProperty('allSettled',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseAllSettled, 'allSettled', 1));
-  FPromiseConstructor.AssignProperty('race',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseRace, 'race', 1));
-  FPromiseConstructor.AssignProperty('any',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseAny, 'any', 1));
-  FPromiseConstructor.AssignProperty('withResolvers',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseWithResolvers, 'withResolvers', 0));
-  FPromiseConstructor.AssignProperty('try',
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseTry, 'try', 1));
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(PromiseResolve, 1, gmkStaticMethod);
+    Members.AddMethod(PromiseReject, 1, gmkStaticMethod);
+    Members.AddMethod(PromiseAll, 1, gmkStaticMethod);
+    Members.AddMethod(PromiseAllSettled, 1, gmkStaticMethod);
+    Members.AddMethod(PromiseRace, 1, gmkStaticMethod);
+    Members.AddMethod(PromiseAny, 1, gmkStaticMethod);
+    Members.AddMethod(PromiseWithResolvers, 0, gmkStaticMethod);
+    Members.AddMethod(PromiseTry, 1, gmkStaticMethod);
+    FStaticMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
+  end;
+  RegisterMemberDefinitions(FPromiseConstructor, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FPromiseConstructor, dtLet);
 end;

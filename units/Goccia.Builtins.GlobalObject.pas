@@ -8,14 +8,18 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
   TGocciaGlobalObject = class(TGocciaBuiltin)
+  private
+    class var FStaticMembers: array of TGocciaMemberDefinition;
   protected
     // Native methods
+  published
     function ObjectIs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectKeys(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectValues(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -60,32 +64,40 @@ uses
   Goccia.Values.SymbolValue;
 
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+var
+  Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  // Global Object methods: writable, non-enumerable, configurable
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectIs, 'is', 2));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectKeys, 'keys', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectValues, 'values', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectEntries, 'entries', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectAssign, 'assign', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectCreate, 'create', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectHasOwn, 'hasOwn', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetOwnPropertyNames, 'getOwnPropertyNames', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetOwnPropertyDescriptor, 'getOwnPropertyDescriptor', 2));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectDefineProperty, 'defineProperty', 3));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectDefineProperties, 'defineProperties', 2));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetOwnPropertySymbols, 'getOwnPropertySymbols', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectFreeze, 'freeze', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectIsFrozen, 'isFrozen', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGetPrototypeOf, 'getPrototypeOf', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectFromEntries, 'fromEntries', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectSeal, 'seal', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectIsSealed, 'isSealed', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectPreventExtensions, 'preventExtensions', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectIsExtensible, 'isExtensible', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectSetPrototypeOf, 'setPrototypeOf', 2));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ObjectGroupBy, 'groupBy', 2));
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(ObjectIs, 2, gmkStaticMethod);
+    Members.AddMethod(ObjectKeys, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectValues, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectEntries, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectAssign, -1, gmkStaticMethod);
+    Members.AddMethod(ObjectCreate, 2, gmkStaticMethod);
+    Members.AddMethod(ObjectHasOwn, 2, gmkStaticMethod);
+    Members.AddMethod(ObjectGetOwnPropertyNames, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectGetOwnPropertyDescriptor, 2, gmkStaticMethod);
+    Members.AddMethod(ObjectDefineProperty, 3, gmkStaticMethod);
+    Members.AddMethod(ObjectDefineProperties, 2, gmkStaticMethod);
+    Members.AddMethod(ObjectGetOwnPropertySymbols, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectFreeze, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectIsFrozen, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectGetPrototypeOf, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectFromEntries, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectSeal, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectIsSealed, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectPreventExtensions, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectIsExtensible, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectSetPrototypeOf, 2, gmkStaticMethod);
+    Members.AddMethod(ObjectGroupBy, 2, gmkStaticMethod);
+    FStaticMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
+  end;
+  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 end;
 
 // ES2026 §20.1.2.10 Object.is(value1, value2)

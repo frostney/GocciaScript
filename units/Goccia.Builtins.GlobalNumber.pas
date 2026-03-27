@@ -8,15 +8,18 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
   TGocciaGlobalNumber = class(TGocciaBuiltin)
+  private
+    class var FStaticMembers: array of TGocciaMemberDefinition;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
-
+  published
     function NumberParseInt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function NumberParseFloat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function NumberIsFinite(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -37,6 +40,8 @@ uses
   Goccia.Values.ObjectPropertyDescriptor;
 
 constructor TGocciaGlobalNumber.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+var
+  Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -50,12 +55,19 @@ begin
   FBuiltinObject.DefineProperty('MIN_VALUE', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(5e-324), []));
   FBuiltinObject.DefineProperty('EPSILON', TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(2.2204460492503131e-16), []));
 
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseInt, 'parseInt', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberParseFloat, 'parseFloat', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsFinite, 'isFinite', 0));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsNaN, 'isNaN', 0));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsInteger, 'isInteger', 0));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberIsSafeInteger, 'isSafeInteger', 0));
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(NumberParseInt, 2, gmkStaticMethod);
+    Members.AddMethod(NumberParseFloat, 1, gmkStaticMethod);
+    Members.AddMethod(NumberIsFinite, 1, gmkStaticMethod);
+    Members.AddMethod(NumberIsNaN, 1, gmkStaticMethod);
+    Members.AddMethod(NumberIsInteger, 1, gmkStaticMethod);
+    Members.AddMethod(NumberIsSafeInteger, 1, gmkStaticMethod);
+    FStaticMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
+  end;
+  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 end;
 
 // ES2026 §21.1.2.13 Number.parseInt(string, radix)

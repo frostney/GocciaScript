@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -30,9 +31,9 @@ procedure InitializeEnumSymbols(const AEnum: TGocciaEnumValue);
 implementation
 
 uses
+  GarbageCollector.Generic,
+
   Goccia.Values.Iterator.Concrete,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaEnumValue.Create(const AName: string);
@@ -63,22 +64,30 @@ begin
 end;
 
 procedure InitializeEnumSymbols(const AEnum: TGocciaEnumValue);
+var
+  Members: TGocciaMemberCollection;
+  ToStringTag: TGocciaStringLiteralValue;
 begin
-  AEnum.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownIterator,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.Create(AEnum.EnumSymbolIterator, '[Symbol.iterator]', 0),
-      []
-    )
-  );
-
-  AEnum.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(AEnum.Name),
-      []
-    )
-  );
+  Members := TGocciaMemberCollection.Create;
+  ToStringTag := TGocciaStringLiteralValue.Create(AEnum.Name);
+  try
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(ToStringTag);
+    try
+      Members.AddSymbolMethod(
+        TGocciaSymbolValue.WellKnownIterator, '[Symbol.iterator]',
+        AEnum.EnumSymbolIterator, 0, []);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        ToStringTag, []);
+      RegisterMemberDefinitions(AEnum, Members.ToDefinitions);
+    finally
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.RemoveTempRoot(ToStringTag);
+    end;
+  finally
+    Members.Free;
+  end;
 end;
 
 end.

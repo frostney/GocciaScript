@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
@@ -16,9 +17,10 @@ type
   TGocciaSetValue = class(TGocciaInstanceValue)
   private
     class var FShared: TGocciaSharedPrototype;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
   private
     FItems: TGocciaValueList;
-
+  public
     function SetHas(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetDelete(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -35,7 +37,7 @@ type
     function SetIsSubsetOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetIsSupersetOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SetIsDisjointFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-
+  private
     procedure InitializePrototype;
   public
     constructor Create(const AClass: TGocciaClassValue = nil);
@@ -81,41 +83,50 @@ begin
 end;
 
 procedure TGocciaSetValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FShared) then Exit;
 
   FShared := TGocciaSharedPrototype.Create(Self);
-
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetHas, 'has', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetAdd, 'add', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetDelete, 'delete', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetClear, 'clear', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetForEach, 'forEach', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetValues, 'values', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetKeys, 'keys', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetEntries, 'entries', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetUnion, 'union', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetIntersection, 'intersection', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetDifference, 'difference', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetSymmetricDifference, 'symmetricDifference', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetIsSubsetOf, 'isSubsetOf', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetIsSupersetOf, 'isSupersetOf', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(SetIsDisjointFrom, 'isDisjointFrom', 1));
-
-  FShared.Prototype.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownIterator,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(SetSymbolIterator, '[Symbol.iterator]', 0),
-      [pfConfigurable, pfWritable]
-    )
-  );
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddNamedMethod('has', SetHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('add', SetAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('delete', SetDelete, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('clear', SetClear, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('forEach', SetForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('values', SetValues, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('keys', SetKeys, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('entries', SetEntries, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('union', SetUnion, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('intersection', SetIntersection, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('difference', SetDifference, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('symmetricDifference', SetSymmetricDifference, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('isSubsetOf', SetIsSubsetOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('isSupersetOf', SetIsSupersetOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('isDisjointFrom', SetIsDisjointFrom, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddSymbolMethod(
+        TGocciaSymbolValue.WellKnownIterator,
+        '[Symbol.iterator]',
+        SetSymbolIterator,
+        0,
+        [pfConfigurable, pfWritable]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaSetValue.ExposePrototype(const AConstructor: TGocciaValue);
 begin
   if not Assigned(FShared) then
     TGocciaSetValue.Create;
-  FShared.ExposeOnConstructor(AConstructor);
+  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
 end;
 
 destructor TGocciaSetValue.Destroy;

@@ -8,14 +8,16 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
   TGocciaMath = class(TGocciaBuiltin)
-  protected
-    // Native methods
+  private
+    class var FStaticMembers: array of TGocciaMemberDefinition;
+  published
     function MathAbs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MathFloor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MathCeil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -74,13 +76,14 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.Iterator.Generic,
   Goccia.Values.IteratorValue,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
 { TGocciaMath }
 
 constructor TGocciaMath.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+var
+  Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -94,51 +97,54 @@ begin
   FBuiltinObject.RegisterConstant('LOG10E', TGocciaNumberLiteralValue.Create(1 / Ln(10)));
   FBuiltinObject.RegisterConstant('SQRT1_2', TGocciaNumberLiteralValue.Create(Sqrt(0.5)));
 
-  // Methods: writable, non-enumerable, configurable
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathAbs, 'abs', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathFloor, 'floor', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathCeil, 'ceil', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathRound, 'round', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathMax, 'max', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathMin, 'min', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathPow, 'pow', 2));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathSqrt, 'sqrt', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathRandom, 'random', 0));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathClamp, 'clamp', 3));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathSign, 'sign', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathTrunc, 'trunc', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathExp, 'exp', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathLog, 'log', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathLog10, 'log10', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathSin, 'sin', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathCos, 'cos', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathTan, 'tan', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathAcos, 'acos', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathAsin, 'asin', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathAtan, 'atan', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathAtan2, 'atan2', 2));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathCbrt, 'cbrt', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathCosh, 'cosh', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathSinh, 'sinh', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathTanh, 'tanh', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathAcosh, 'acosh', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathAsinh, 'asinh', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathAtanh, 'atanh', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathExpm1, 'expm1', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathFround, 'fround', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathHypot, 'hypot', 2));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathImul, 'imul', 2));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathLog1p, 'log1p', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathLog2, 'log2', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathClz32, 'clz32', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(MathSumPrecise, 'sumPrecise', 1));
-
-  // ES2026 §21.3.1.15 Math [ @@toStringTag ]
-  FBuiltinObject.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaPropertyDescriptorData.Create(
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(MathAbs, 1, gmkStaticMethod);
+    Members.AddMethod(MathFloor, 1, gmkStaticMethod);
+    Members.AddMethod(MathCeil, 1, gmkStaticMethod);
+    Members.AddMethod(MathRound, 1, gmkStaticMethod);
+    Members.AddMethod(MathMax, -1, gmkStaticMethod);
+    Members.AddMethod(MathMin, -1, gmkStaticMethod);
+    Members.AddMethod(MathPow, 2, gmkStaticMethod);
+    Members.AddMethod(MathSqrt, 1, gmkStaticMethod);
+    Members.AddMethod(MathRandom, 0, gmkStaticMethod);
+    Members.AddMethod(MathClamp, 3, gmkStaticMethod);
+    Members.AddMethod(MathSign, 1, gmkStaticMethod);
+    Members.AddMethod(MathTrunc, 1, gmkStaticMethod);
+    Members.AddMethod(MathExp, 1, gmkStaticMethod);
+    Members.AddMethod(MathLog, 1, gmkStaticMethod);
+    Members.AddMethod(MathLog10, 1, gmkStaticMethod);
+    Members.AddMethod(MathSin, 1, gmkStaticMethod);
+    Members.AddMethod(MathCos, 1, gmkStaticMethod);
+    Members.AddMethod(MathTan, 1, gmkStaticMethod);
+    Members.AddMethod(MathAcos, 1, gmkStaticMethod);
+    Members.AddMethod(MathAsin, 1, gmkStaticMethod);
+    Members.AddMethod(MathAtan, 1, gmkStaticMethod);
+    Members.AddMethod(MathAtan2, 2, gmkStaticMethod);
+    Members.AddMethod(MathCbrt, 1, gmkStaticMethod);
+    Members.AddMethod(MathCosh, 1, gmkStaticMethod);
+    Members.AddMethod(MathSinh, 1, gmkStaticMethod);
+    Members.AddMethod(MathTanh, 1, gmkStaticMethod);
+    Members.AddMethod(MathAcosh, 1, gmkStaticMethod);
+    Members.AddMethod(MathAsinh, 1, gmkStaticMethod);
+    Members.AddMethod(MathAtanh, 1, gmkStaticMethod);
+    Members.AddMethod(MathExpm1, 1, gmkStaticMethod);
+    Members.AddMethod(MathFround, 1, gmkStaticMethod);
+    Members.AddMethod(MathHypot, 2, gmkStaticMethod);
+    Members.AddMethod(MathImul, 2, gmkStaticMethod);
+    Members.AddMethod(MathLog1p, 1, gmkStaticMethod);
+    Members.AddMethod(MathLog2, 1, gmkStaticMethod);
+    Members.AddMethod(MathClz32, 1, gmkStaticMethod);
+    Members.AddMethod(MathSumPrecise, 1, gmkStaticMethod);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('Math'),
-      [pfConfigurable]));
+      [pfConfigurable]);
+    FStaticMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
+  end;
+  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;

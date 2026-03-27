@@ -18,6 +18,7 @@ type
     constructor Create;
 
     // Function prototype methods that are available on all functions
+  public
     function FunctionCall(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FunctionApply(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FunctionBind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -75,6 +76,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Error,
+  Goccia.ObjectModel,
   Goccia.Values.ArrayValue,
   Goccia.Values.NativeFunction;
 
@@ -142,6 +144,8 @@ begin
 end;
 
 constructor TGocciaFunctionSharedPrototype.Create;
+var
+  Members: array[0..2] of TGocciaMemberDefinition;
 begin
   inherited Create;
 
@@ -149,10 +153,10 @@ begin
   // TGocciaNativeFunctionValue instances (which inherit from TGocciaFunctionBase)
   TGocciaFunctionBase.FSharedPrototype := Self;
 
-  // Register call, apply, bind as native methods on the function prototype
-  RegisterNativeMethod(TGocciaNativeFunctionValue.Create(FunctionCall, 'call', 1));
-  RegisterNativeMethod(TGocciaNativeFunctionValue.Create(FunctionApply, 'apply', 2));
-  RegisterNativeMethod(TGocciaNativeFunctionValue.Create(FunctionBind, 'bind', 1));
+  Members[0] := DefineNamedMethod('call', FunctionCall, 1);
+  Members[1] := DefineNamedMethod('apply', FunctionApply, 2);
+  Members[2] := DefineNamedMethod('bind', FunctionBind, 1);
+  RegisterMemberDefinitions(Self, Members);
 end;
 
 function TGocciaFunctionSharedPrototype.FunctionCall(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

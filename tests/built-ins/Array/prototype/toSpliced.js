@@ -8,6 +8,10 @@ test("Array.prototype.toSpliced with numbers", () => {
   expect(arr.toSpliced(2, 2, 6, 7)).toEqual([1, 2, 6, 7, 5]);
 });
 
+test("Array.prototype.toSpliced has the correct method length", () => {
+  expect(Array.prototype.toSpliced.length).toBe(2);
+});
+
 test("Array.prototype.toSpliced with strings", () => {
   const months = ["Jan", "Mar", "Apr", "May"];
 

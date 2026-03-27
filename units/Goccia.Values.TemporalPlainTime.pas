@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -14,6 +15,7 @@ type
   TGocciaTemporalPlainTimeValue = class(TGocciaObjectValue)
   private
     class var FShared: TGocciaSharedPrototype;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
   private
     FHour: Integer;
     FMinute: Integer;
@@ -21,7 +23,7 @@ type
     FMillisecond: Integer;
     FMicrosecond: Integer;
     FNanosecond: Integer;
-
+  published
     function GetHour(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetMinute(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetSecond(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -61,7 +63,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalDuration;
 
@@ -143,40 +144,44 @@ begin
 end;
 
 procedure TGocciaTemporalPlainTimeValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FShared) then Exit;
   FShared := TGocciaSharedPrototype.Create(Self);
-
-  FShared.Prototype.DefineProperty('hour', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetHour, 'hour', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('minute', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMinute, 'minute', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('second', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetSecond, 'second', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('millisecond', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMillisecond, 'millisecond', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('microsecond', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMicrosecond, 'microsecond', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('nanosecond', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetNanosecond, 'nanosecond', 0), nil, [pfConfigurable]));
-
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TimeWith, 'with', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TimeAdd, 'add', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TimeSubtract, 'subtract', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TimeUntil, 'until', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TimeSince, 'since', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TimeRound, 'round', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TimeEquals, 'equals', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TimeToString, PROP_TO_STRING, 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TimeToJSON, 'toJSON', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(TimeValueOf, PROP_VALUE_OF, 0));
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddAccessor('hour', GetHour, nil, [pfConfigurable]);
+      Members.AddAccessor('minute', GetMinute, nil, [pfConfigurable]);
+      Members.AddAccessor('second', GetSecond, nil, [pfConfigurable]);
+      Members.AddAccessor('millisecond', GetMillisecond, nil, [pfConfigurable]);
+      Members.AddAccessor('microsecond', GetMicrosecond, nil, [pfConfigurable]);
+      Members.AddAccessor('nanosecond', GetNanosecond, nil, [pfConfigurable]);
+      Members.AddMethod(TimeWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TimeAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TimeSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TimeUntil, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TimeSince, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TimeRound, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TimeEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TimeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TimeToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(TimeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTemporalPlainTimeValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
 begin
   if not Assigned(FShared) then
     TGocciaTemporalPlainTimeValue.Create(0, 0, 0, 0, 0, 0);
-  FShared.ExposeOnConstructor(AConstructor);
+  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
 end;
 
 function TGocciaTemporalPlainTimeValue.ToStringTag: string;

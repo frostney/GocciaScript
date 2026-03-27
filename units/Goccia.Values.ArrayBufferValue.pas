@@ -8,6 +8,7 @@ uses
   SysUtils,
 
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
@@ -17,13 +18,11 @@ type
   TGocciaArrayBufferValue = class(TGocciaInstanceValue)
   private
     class var FShared: TGocciaSharedPrototype;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
   private
     FData: TBytes;
 
     function GetByteLength: Integer;
-
-    function ArrayBufferSlice(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function ArrayBufferByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
   public
@@ -39,7 +38,10 @@ type
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
     property Data: TBytes read FData write FData;
+  published
     property ByteLength: Integer read GetByteLength;
+    function ArrayBufferSlice(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ArrayBufferByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -52,7 +54,6 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -82,33 +83,36 @@ begin
 end;
 
 procedure TGocciaArrayBufferValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FShared) then Exit;
 
   FShared := TGocciaSharedPrototype.Create(Self);
-
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(ArrayBufferSlice, 'slice', 2));
-
-  FShared.Prototype.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(CONSTRUCTOR_ARRAY_BUFFER),
-      [pfConfigurable]
-    )
-  );
-
-  FShared.Prototype.DefineProperty(PROP_BYTE_LENGTH,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(ArrayBufferByteLengthGetter, 'get byteLength', 0),
-      nil, [pfConfigurable]));
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddMethod(ArrayBufferSlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddPublishedGetter(
+        TGocciaArrayBufferValue, 'ByteLength', PROP_BYTE_LENGTH, [pfConfigurable]);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create(CONSTRUCTOR_ARRAY_BUFFER),
+        [pfConfigurable]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaArrayBufferValue.ExposePrototype(const AConstructor: TGocciaValue);
 begin
   if not Assigned(FShared) then
     TGocciaArrayBufferValue.Create(0);
-  FShared.ExposeOnConstructor(AConstructor);
+  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
 end;
 
 // ES2026 §25.1.4.1 ArrayBuffer(length [, options])

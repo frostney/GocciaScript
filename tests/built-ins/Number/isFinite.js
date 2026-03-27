@@ -4,6 +4,10 @@ features: [Number.isFinite]
 ---*/
 
 describe("Number.isFinite", () => {
+  test("has the correct function length", () => {
+    expect(Number.isFinite.length).toBe(1);
+  });
+
   test("returns true for finite numbers", () => {
     expect(Number.isFinite(42)).toBe(true);
     expect(Number.isFinite(123)).toBe(true);

@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -14,6 +15,7 @@ type
   TGocciaTemporalPlainDateTimeValue = class(TGocciaObjectValue)
   private
     class var FShared: TGocciaSharedPrototype;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
   private
     FYear: Integer;
     FMonth: Integer;
@@ -24,7 +26,7 @@ type
     FMillisecond: Integer;
     FMicrosecond: Integer;
     FNanosecond: Integer;
-
+  published
     function GetCalendarId(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetYear(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GetMonth(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -85,7 +87,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.TemporalDuration,
   Goccia.Values.TemporalPlainDate,
@@ -179,74 +180,61 @@ begin
 end;
 
 procedure TGocciaTemporalPlainDateTimeValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FShared) then Exit;
   FShared := TGocciaSharedPrototype.Create(Self);
-
-  // Date getters
-  FShared.Prototype.DefineProperty('calendarId', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetCalendarId, 'calendarId', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('year', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetYear, 'year', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('month', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMonth, 'month', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('monthCode', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMonthCode, 'monthCode', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('day', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetDay, 'day', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('dayOfWeek', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetDayOfWeek, 'dayOfWeek', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('dayOfYear', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetDayOfYear, 'dayOfYear', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('weekOfYear', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetWeekOfYear, 'weekOfYear', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('yearOfWeek', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetYearOfWeek, 'yearOfWeek', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('daysInWeek', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetDaysInWeek, 'daysInWeek', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('daysInMonth', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetDaysInMonth, 'daysInMonth', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('daysInYear', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetDaysInYear, 'daysInYear', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('monthsInYear', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMonthsInYear, 'monthsInYear', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('inLeapYear', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetInLeapYear, 'inLeapYear', 0), nil, [pfConfigurable]));
-  // Time getters
-  FShared.Prototype.DefineProperty('hour', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetHour, 'hour', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('minute', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMinute, 'minute', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('second', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetSecond, 'second', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('millisecond', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMillisecond, 'millisecond', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('microsecond', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMicrosecond, 'microsecond', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('nanosecond', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetNanosecond, 'nanosecond', 0), nil, [pfConfigurable]));
-
-  // Methods
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeWith, 'with', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeWithPlainTime, 'withPlainTime', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeAdd, 'add', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeSubtract, 'subtract', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeUntil, 'until', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeSince, 'since', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeRound, 'round', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeEquals, 'equals', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeToString, PROP_TO_STRING, 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeToJSON, 'toJSON', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeValueOf, PROP_VALUE_OF, 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeToPlainDate, 'toPlainDate', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(DateTimeToPlainTime, 'toPlainTime', 0));
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddAccessor('calendarId', GetCalendarId, nil, [pfConfigurable]);
+      Members.AddAccessor('year', GetYear, nil, [pfConfigurable]);
+      Members.AddAccessor('month', GetMonth, nil, [pfConfigurable]);
+      Members.AddAccessor('monthCode', GetMonthCode, nil, [pfConfigurable]);
+      Members.AddAccessor('day', GetDay, nil, [pfConfigurable]);
+      Members.AddAccessor('dayOfWeek', GetDayOfWeek, nil, [pfConfigurable]);
+      Members.AddAccessor('dayOfYear', GetDayOfYear, nil, [pfConfigurable]);
+      Members.AddAccessor('weekOfYear', GetWeekOfYear, nil, [pfConfigurable]);
+      Members.AddAccessor('yearOfWeek', GetYearOfWeek, nil, [pfConfigurable]);
+      Members.AddAccessor('daysInWeek', GetDaysInWeek, nil, [pfConfigurable]);
+      Members.AddAccessor('daysInMonth', GetDaysInMonth, nil, [pfConfigurable]);
+      Members.AddAccessor('daysInYear', GetDaysInYear, nil, [pfConfigurable]);
+      Members.AddAccessor('monthsInYear', GetMonthsInYear, nil, [pfConfigurable]);
+      Members.AddAccessor('inLeapYear', GetInLeapYear, nil, [pfConfigurable]);
+      Members.AddAccessor('hour', GetHour, nil, [pfConfigurable]);
+      Members.AddAccessor('minute', GetMinute, nil, [pfConfigurable]);
+      Members.AddAccessor('second', GetSecond, nil, [pfConfigurable]);
+      Members.AddAccessor('millisecond', GetMillisecond, nil, [pfConfigurable]);
+      Members.AddAccessor('microsecond', GetMicrosecond, nil, [pfConfigurable]);
+      Members.AddAccessor('nanosecond', GetNanosecond, nil, [pfConfigurable]);
+      Members.AddMethod(DateTimeWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeWithPlainTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeUntil, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeSince, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeRound, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeEquals, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeToPlainDate, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DateTimeToPlainTime, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTemporalPlainDateTimeValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
 begin
   if not Assigned(FShared) then
     TGocciaTemporalPlainDateTimeValue.Create(1970, 1, 1, 0, 0, 0, 0, 0, 0);
-  FShared.ExposeOnConstructor(AConstructor);
+  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
 end;
 
 function TGocciaTemporalPlainDateTimeValue.ToStringTag: string;

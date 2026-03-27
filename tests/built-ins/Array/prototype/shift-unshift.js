@@ -24,6 +24,10 @@ describe("Array.prototype.shift", () => {
 });
 
 describe("Array.prototype.unshift", () => {
+  test("has the correct method length", () => {
+    expect(Array.prototype.unshift.length).toBe(1);
+  });
+
   test("adds elements to the beginning", () => {
     const arr = [3, 4, 5];
     const newLen = arr.unshift(1, 2);

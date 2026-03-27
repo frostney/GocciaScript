@@ -26,6 +26,10 @@ test("Number.isInteger returns false for non-number types", () => {
   expect(Number.isInteger([])).toBeFalsy();
 });
 
+test("Number.isInteger has the correct function length", () => {
+  expect(Number.isInteger.length).toBe(1);
+});
+
 test("Number.isInteger returns false with no arguments", () => {
   expect(Number.isInteger()).toBeFalsy();
 });

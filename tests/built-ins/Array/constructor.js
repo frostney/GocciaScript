@@ -1,4 +1,8 @@
 describe("Array constructor", () => {
+  test("Array.prototype.length is the shared prototype data property", () => {
+    expect(Array.prototype.length).toBe(0);
+  });
+
   test("new Array() creates empty array", () => {
     const arr = new Array();
     expect(arr.length).toBe(0);
