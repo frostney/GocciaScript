@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -14,7 +15,10 @@ type
   private
     class var FSharedIteratorPrototype: TGocciaObjectValue;
     class var FPrototypeMethodHost: TGocciaIteratorValue;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
+    class var FStaticMembers: array of TGocciaMemberDefinition;
   private
+  public
     function IteratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function IteratorSelf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
@@ -129,33 +133,38 @@ begin
 end;
 
 procedure TGocciaIteratorValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FSharedIteratorPrototype) then Exit;
 
   FSharedIteratorPrototype := TGocciaObjectValue.Create;
   FPrototypeMethodHost := Self;
-
-  FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorNext, 'next', 0));
-
-  FSharedIteratorPrototype.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownIterator,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorSelf, '[Symbol.iterator]', 0),
-      [pfConfigurable, pfWritable]
-    )
-  );
-
-  FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorMap, 'map', 1));
-  FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorFilter, 'filter', 1));
-  FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorTake, 'take', 1));
-  FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorDrop, 'drop', 1));
-  FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorForEach, 'forEach', 1));
-  FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorReduce, 'reduce', 1));
-  FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorToArray, 'toArray', 0));
-  FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorSome, 'some', 1));
-  FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorEvery, 'every', 1));
-  FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorFind, 'find', 1));
-  FSharedIteratorPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(IteratorFlatMap, 'flatMap', 1));
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddNamedMethod('next', IteratorNext, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddSymbolMethod(
+        TGocciaSymbolValue.WellKnownIterator, '[Symbol.iterator]',
+        IteratorSelf, 0, [pfConfigurable, pfWritable]);
+      Members.AddNamedMethod('map', IteratorMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('filter', IteratorFilter, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('take', IteratorTake, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('drop', IteratorDrop, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('forEach', IteratorForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('reduce', IteratorReduce, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('toArray', IteratorToArray, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('some', IteratorSome, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('every', IteratorEvery, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('find', IteratorFind, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('flatMap', IteratorFlatMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FSharedIteratorPrototype, FPrototypeMembers);
 
   if Assigned(TGarbageCollector.Instance) then
   begin
@@ -165,13 +174,23 @@ begin
 end;
 
 class function TGocciaIteratorValue.CreateGlobalObject: TGocciaObjectValue;
+var
+  Members: TGocciaMemberCollection;
 begin
   EnsurePrototypeInitialized;
 
   Result := TGocciaObjectValue.Create;
-  Result.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(FPrototypeMethodHost.IteratorFrom, 'from', 1)
-  );
+  if Length(FStaticMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddNamedMethod('from', FPrototypeMethodHost.IteratorFrom, 1, gmkStaticMethod, [gmfNoFunctionPrototype]);
+      FStaticMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(Result, FStaticMembers);
   Result.AssignProperty(PROP_PROTOTYPE, FSharedIteratorPrototype);
 end;
 

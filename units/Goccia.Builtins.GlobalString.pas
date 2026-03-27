@@ -8,14 +8,17 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.Primitives;
 
 type
   TGocciaGlobalString = class(TGocciaBuiltin)
+  private
+    class var FStaticMembers: array of TGocciaMemberDefinition;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
-
+  published
     function StringFromCharCode(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringFromCodePoint(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
@@ -29,11 +32,20 @@ uses
   Goccia.Values.NativeFunction;
 
 constructor TGocciaGlobalString.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+var
+  Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringFromCharCode, 'fromCharCode', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringFromCodePoint, 'fromCodePoint', 1));
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(StringFromCharCode, 1, gmkStaticMethod);
+    Members.AddMethod(StringFromCodePoint, 1, gmkStaticMethod);
+    FStaticMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
+  end;
+  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 end;
 
 // ES2026 §22.1.2.1 String.fromCharCode(...codeUnits)

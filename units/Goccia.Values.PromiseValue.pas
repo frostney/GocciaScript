@@ -8,6 +8,7 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -36,15 +37,12 @@ type
   TGocciaPromiseValue = class(TGocciaObjectValue)
   private
     class var FShared: TGocciaSharedPrototype;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
   private
     FState: TGocciaPromiseState;
     FResult: TGocciaValue;
     FReactions: TList<TGocciaPromiseReaction>;
     FAlreadyResolved: Boolean;
-
-    function PromiseThen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function PromiseCatch(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function PromiseFinally(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure TriggerReactions;
     procedure InitializePrototype;
@@ -71,6 +69,10 @@ type
 
     property State: TGocciaPromiseState read FState;
     property PromiseResult: TGocciaValue read FResult;
+  published
+    function PromiseThen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PromiseCatch(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PromiseFinally(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -215,24 +217,32 @@ begin
 end;
 
 procedure TGocciaPromiseValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FShared) then Exit;
 
   FShared := TGocciaSharedPrototype.Create(Self);
-
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseThen, 'then', 2));
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseCatch, 'catch', 1));
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(PromiseFinally, 'finally', 1));
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddMethod(PromiseThen, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(PromiseCatch, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(PromiseFinally, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaPromiseValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
 begin
   if not Assigned(FShared) then
     TGocciaPromiseValue.Create;
-  FShared.ExposeOnConstructor(AConstructor);
+  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
 end;
 
 destructor TGocciaPromiseValue.Destroy;

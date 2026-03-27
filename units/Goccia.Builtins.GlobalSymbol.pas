@@ -12,6 +12,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.NativeFunction,
   Goccia.Values.Primitives,
@@ -22,10 +23,12 @@ type
   private
     FGlobalRegistry: TOrderedStringMap<TGocciaSymbolValue>;
     FSymbolFunction: TGocciaNativeFunctionValue;
+    class var FStaticMembers: array of TGocciaMemberDefinition;
 
     // Well-known symbols
     FIteratorSymbol: TGocciaSymbolValue;
 
+  published
     function SymbolConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SymbolFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SymbolKeyFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -34,7 +37,6 @@ type
     destructor Destroy; override;
 
     property GlobalRegistry: TOrderedStringMap<TGocciaSymbolValue> read FGlobalRegistry;
-    property IteratorSymbol: TGocciaSymbolValue read FIteratorSymbol;
   end;
 
 implementation
@@ -64,8 +66,15 @@ begin
   FSymbolFunction := TGocciaNativeFunctionValue.Create(SymbolConstructor, 'Symbol', 0);
 
   // Register static methods on the Symbol function
-  FSymbolFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(SymbolFor, 'for', 1));
-  FSymbolFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(SymbolKeyFor, 'keyFor', 1));
+  with TGocciaMemberCollection.Create do
+  try
+    AddMethod(SymbolFor, 1, gmkStaticMethod);
+    AddMethod(SymbolKeyFor, 1, gmkStaticMethod);
+    FStaticMembers := ToDefinitions;
+  finally
+    Free;
+  end;
+  RegisterMemberDefinitions(FSymbolFunction, FStaticMembers);
 
   // Register well-known symbol constants
   FSymbolFunction.RegisterConstant(SYMBOL_ITERATOR, FIteratorSymbol);

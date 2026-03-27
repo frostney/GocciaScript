@@ -445,18 +445,33 @@ end;
 
 ### Shared Prototype Singleton Pattern
 
-Types that provide prototype methods (String, Array, Set, Map, Function) use a shared class-level singleton instead of creating a per-instance prototype:
+Types that provide prototype methods (String, Array, Set, Map, Function) use a shared class-level singleton instead of creating a per-instance prototype. Prefer `Define*` helper names and `TGocciaMemberCollection` over handwritten dynamic-array assembly:
 
 ```pascal
 class var FShared: TGocciaSharedPrototype;
+class var FPrototypeMembers: array of TGocciaMemberDefinition;
 
 procedure TMyValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FShared) then Exit;  // Guard: create once
   FShared := TGocciaSharedPrototype.Create(Self);
-  FShared.Prototype.RegisterNativeMethod(...);
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('myMethod', MyMethod, 1);
+    Members.AddSymbolMethod(TGocciaSymbolValue.WellKnownIterator,
+      '[Symbol.iterator]', MySymbolIterator, 0,
+      [pfConfigurable, pfWritable]);
+    FPrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
+  end;
+  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
 end;
 ```
+
+Prefer the object-model helpers in `Goccia.ObjectModel.pas` over handwritten `RegisterNativeMethod` / `DefineProperty` blocks. They keep the exposed surface in one table and preserve direct callback dispatch at runtime.
 
 `TGocciaSharedPrototype.Create` automatically pins both the prototype object and the method host via `TGarbageCollector.Instance.PinObject` — no manual pinning is needed.
 

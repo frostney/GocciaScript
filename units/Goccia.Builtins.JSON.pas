@@ -10,14 +10,15 @@ uses
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
   Goccia.JSON,
+  Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ArrayValue,
-  Goccia.Values.NativeFunction,
   Goccia.Values.Primitives;
 
 type
   TGocciaJSONBuiltin = class(TGocciaBuiltin)
   private
+    class var FStaticMembers: array of TGocciaMemberDefinition;
     FParser: TGocciaJSONParser;
     FStringifier: TGocciaJSONStringifier;
 
@@ -28,6 +29,7 @@ type
     function StringifyWithReplacer(const AValue: TGocciaValue; const AReplacer: TGocciaValue; const AGap: string): string;
     function StringifyWithAllowList(const AValue: TGocciaValue; const AAllowList: TGocciaArrayValue; const AGap: string): string;
   protected
+  published
     function JSONParse(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function JSONStringify(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
@@ -47,21 +49,27 @@ uses
   Goccia.Values.SymbolValue;
 
 constructor TGocciaJSONBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+var
+  Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
 
   FParser := TGocciaJSONParser.Create;
   FStringifier := TGocciaJSONStringifier.Create;
 
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(JSONParse, 'parse', 1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(JSONStringify, 'stringify', 1));
-
-  // ES2026 §25.5.3 JSON [ @@toStringTag ]
-  FBuiltinObject.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaPropertyDescriptorData.Create(
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(JSONParse, 1, gmkStaticMethod);
+    Members.AddMethod(JSONStringify, 1, gmkStaticMethod);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('JSON'),
-      [pfConfigurable]));
+      [pfConfigurable]);
+    FStaticMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
+  end;
+  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;

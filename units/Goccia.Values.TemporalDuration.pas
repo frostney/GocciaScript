@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -14,6 +15,7 @@ type
   TGocciaTemporalDurationValue = class(TGocciaObjectValue)
   private
     class var FShared: TGocciaSharedPrototype;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
   private
     FYears: Int64;
     FMonths: Int64;
@@ -25,29 +27,6 @@ type
     FMilliseconds: Int64;
     FMicroseconds: Int64;
     FNanoseconds: Int64;
-
-    function GetYears(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GetMonths(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GetWeeks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GetDays(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GetHours(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GetMinutes(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GetSeconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GetMilliseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GetMicroseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GetNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GetSign(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function GetBlank(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-
-    function DurationNegated(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DurationAbs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DurationAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DurationSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DurationWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DurationToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DurationToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DurationValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function DurationTotal(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
 
@@ -71,6 +50,28 @@ type
     property Milliseconds: Int64 read FMilliseconds;
     property Microseconds: Int64 read FMicroseconds;
     property Nanoseconds: Int64 read FNanoseconds;
+  published
+    function GetYears(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetMonths(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetWeeks(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetDays(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetHours(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetMinutes(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetSeconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetMilliseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetMicroseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetNanoseconds(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetSign(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function GetBlank(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationNegated(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationAbs(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationAdd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationSubtract(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DurationTotal(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -81,7 +82,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Temporal.Utils,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;
 
 function AsDuration(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalDurationValue;
@@ -154,63 +154,50 @@ begin
 end;
 
 procedure TGocciaTemporalDurationValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FShared) then Exit;
 
   FShared := TGocciaSharedPrototype.Create(Self);
-
-  // Getters
-  FShared.Prototype.DefineProperty('years', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetYears, 'years', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('months', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMonths, 'months', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('weeks', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetWeeks, 'weeks', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('days', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetDays, 'days', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('hours', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetHours, 'hours', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('minutes', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMinutes, 'minutes', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('seconds', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetSeconds, 'seconds', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('milliseconds', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMilliseconds, 'milliseconds', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('microseconds', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetMicroseconds, 'microseconds', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('nanoseconds', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetNanoseconds, 'nanoseconds', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('sign', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetSign, 'sign', 0), nil, [pfConfigurable]));
-  FShared.Prototype.DefineProperty('blank', TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetBlank, 'blank', 0), nil, [pfConfigurable]));
-
-  // Methods
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationNegated, 'negated', 0));
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationAbs, 'abs', 0));
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationAdd, 'add', 1));
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationSubtract, 'subtract', 1));
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationWith, 'with', 1));
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationTotal, 'total', 1));
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationToString, PROP_TO_STRING, 0));
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationToJSON, 'toJSON', 0));
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationValueOf, PROP_VALUE_OF, 0));
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddAccessor('years', GetYears, nil, [pfConfigurable]);
+      Members.AddAccessor('months', GetMonths, nil, [pfConfigurable]);
+      Members.AddAccessor('weeks', GetWeeks, nil, [pfConfigurable]);
+      Members.AddAccessor('days', GetDays, nil, [pfConfigurable]);
+      Members.AddAccessor('hours', GetHours, nil, [pfConfigurable]);
+      Members.AddAccessor('minutes', GetMinutes, nil, [pfConfigurable]);
+      Members.AddAccessor('seconds', GetSeconds, nil, [pfConfigurable]);
+      Members.AddAccessor('milliseconds', GetMilliseconds, nil, [pfConfigurable]);
+      Members.AddAccessor('microseconds', GetMicroseconds, nil, [pfConfigurable]);
+      Members.AddAccessor('nanoseconds', GetNanoseconds, nil, [pfConfigurable]);
+      Members.AddAccessor('sign', GetSign, nil, [pfConfigurable]);
+      Members.AddAccessor('blank', GetBlank, nil, [pfConfigurable]);
+      Members.AddMethod(DurationNegated, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DurationAbs, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DurationAdd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DurationSubtract, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DurationWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DurationTotal, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DurationToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DurationToJSON, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(DurationValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaTemporalDurationValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
 begin
   if not Assigned(FShared) then
     TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-  FShared.ExposeOnConstructor(AConstructor);
+  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
 end;
 
 function TGocciaTemporalDurationValue.ComputeSign: Integer;

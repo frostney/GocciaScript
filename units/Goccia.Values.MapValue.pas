@@ -8,6 +8,7 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.SharedPrototype,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
@@ -23,9 +24,10 @@ type
   TGocciaMapValue = class(TGocciaInstanceValue)
   private
     class var FShared: TGocciaSharedPrototype;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
   private
     FEntries: TList<TGocciaMapEntry>;
-
+  public
     function MapGet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapSet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapHas(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -38,7 +40,6 @@ type
     function MapSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapGetOrInsert(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function MapGetOrInsertComputed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-
     procedure InitializePrototype;
   public
     function FindEntry(const AKey: TGocciaValue): Integer;
@@ -85,38 +86,48 @@ begin
 end;
 
 procedure TGocciaMapValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FShared) then Exit;
 
   FShared := TGocciaSharedPrototype.Create(Self);
-
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapGet, 'get', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapSet, 'set', 2));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapHas, 'has', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapDelete, 'delete', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapClear, 'clear', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapForEach, 'forEach', 1));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapKeys, 'keys', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapValues, 'values', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapEntries, 'entries', 0));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapGetOrInsert, 'getOrInsert', 2));
-  FShared.Prototype.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(MapGetOrInsertComputed, 'getOrInsertComputed', 2));
-
-  FShared.Prototype.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownIterator,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(MapSymbolIterator, '[Symbol.iterator]', 0),
-      [pfConfigurable, pfWritable]
-    )
-  );
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddNamedMethod('get', MapGet, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('set', MapSet, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('has', MapHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('delete', MapDelete, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('clear', MapClear, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('forEach', MapForEach, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('keys', MapKeys, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('values', MapValues, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('entries', MapEntries, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('getOrInsert', MapGetOrInsert, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('getOrInsertComputed', MapGetOrInsertComputed, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddSymbolMethod(
+        TGocciaSymbolValue.WellKnownIterator,
+        '[Symbol.iterator]',
+        MapSymbolIterator,
+        0,
+        [pfConfigurable, pfWritable]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
 end;
 
 class procedure TGocciaMapValue.ExposePrototype(const AConstructor: TGocciaValue);
 begin
   if not Assigned(FShared) then
     TGocciaMapValue.Create;
-  FShared.ExposeOnConstructor(AConstructor);
+  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
 end;
+
 
 destructor TGocciaMapValue.Destroy;
 begin

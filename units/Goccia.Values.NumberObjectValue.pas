@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -17,6 +18,7 @@ type
 
     class var FSharedNumberPrototype: TGocciaObjectValue;
     class var FPrototypeMethodHost: TGocciaNumberObjectValue;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
 
     function ExtractPrimitive(const AValue: TGocciaValue): TGocciaNumberLiteralValue;
   public
@@ -30,6 +32,7 @@ type
     property Primitive: TGocciaNumberLiteralValue read FPrimitive;
 
     // Number prototype methods
+  public
     function NumberToFixed(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function NumberToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function NumberValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -79,17 +82,28 @@ begin
 end;
 
 procedure TGocciaNumberObjectValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FSharedNumberPrototype) then Exit;
 
   FSharedNumberPrototype := TGocciaObjectValue.Create;
   FPrototypeMethodHost := Self;
-
-  FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToFixed, 'toFixed', 1));
-  FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToString, PROP_TO_STRING, 1));
-  FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberValueOf, PROP_VALUE_OF, 0));
-  FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToPrecision, 'toPrecision', 1));
-  FSharedNumberPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(NumberToExponential, 'toExponential', 1));
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddNamedMethod('toFixed', NumberToFixed, 1);
+      Members.AddNamedMethod(PROP_TO_STRING, NumberToString, 1);
+      Members.AddNamedMethod(PROP_VALUE_OF, NumberValueOf, 0);
+      Members.AddNamedMethod('toPrecision', NumberToPrecision, 1);
+      Members.AddNamedMethod('toExponential', NumberToExponential, 1);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FSharedNumberPrototype, FPrototypeMembers);
 
   if Assigned(TGarbageCollector.Instance) then
   begin

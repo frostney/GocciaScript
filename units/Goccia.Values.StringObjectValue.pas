@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -17,6 +18,7 @@ type
 
     class var FSharedStringPrototype: TGocciaObjectValue;
     class var FPrototypeMethodHost: TGocciaStringObjectValue;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
 
     function ExtractStringValue(const AValue: TGocciaValue): string;
   public
@@ -32,6 +34,7 @@ type
 
     property Primitive: TGocciaStringLiteralValue read FPrimitive;
 
+  published
     // String prototype methods
     function StringLength(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function StringCharAt(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -81,7 +84,6 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.Iterator.Concrete,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -152,51 +154,59 @@ begin
 end;
 
 procedure TGocciaStringObjectValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FSharedStringPrototype) then Exit;
 
   FSharedStringPrototype := TGocciaObjectValue.Create;
   FPrototypeMethodHost := Self;
-
-  FSharedStringPrototype.DefineProperty(PROP_LENGTH, TGocciaPropertyDescriptorAccessor.Create(TGocciaNativeFunctionValue.Create(StringLength, PROP_LENGTH, 0), nil, []));
-
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringCharAt, 'charAt', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringCharCodeAt, 'charCodeAt', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToUpperCase, 'toUpperCase', 0));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToLowerCase, 'toLowerCase', 0));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringSlice, 'slice', 2));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringSubstring, 'substring', 2));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringIndexOf, 'indexOf', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringLastIndexOf, 'lastIndexOf', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringIncludes, 'includes', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringStartsWith, 'startsWith', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringEndsWith, 'endsWith', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringTrim, 'trim', 0));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringTrimStart, 'trimStart', 0));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringTrimEnd, 'trimEnd', 0));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringReplaceMethod, 'replace', 2));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringReplaceAllMethod, 'replaceAll', 2));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringSplit, 'split', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringRepeat, 'repeat', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringPadStart, 'padStart', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringPadEnd, 'padEnd', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringConcat, 'concat', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringAt, 'at', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringValueOf, PROP_VALUE_OF, 0));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToString, PROP_TO_STRING, 0));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringCodePointAt, 'codePointAt', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringLocaleCompare, 'localeCompare', 1));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringNormalize, 'normalize', 0));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringIsWellFormed, 'isWellFormed', 0));
-  FSharedStringPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(StringToWellFormed, 'toWellFormed', 0));
-
-  FSharedStringPrototype.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownIterator,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.Create(StringSymbolIterator, '[Symbol.iterator]', 0),
-      [pfConfigurable, pfWritable]
-    )
-  );
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddAccessor(PROP_LENGTH, StringLength, nil, []);
+      Members.AddMethod(StringCharAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringCharCodeAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringToUpperCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringToLowerCase, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringSlice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringSubstring, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringLastIndexOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringIncludes, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringStartsWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringEndsWith, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringTrim, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringTrimStart, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringTrimEnd, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('replace', StringReplaceMethod, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddNamedMethod('replaceAll', StringReplaceAllMethod, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringSplit, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringRepeat, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringPadStart, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringPadEnd, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringConcat, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringCodePointAt, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringLocaleCompare, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringNormalize, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringIsWellFormed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(StringToWellFormed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddSymbolMethod(
+        TGocciaSymbolValue.WellKnownIterator,
+        '[Symbol.iterator]',
+        StringSymbolIterator,
+        0,
+        [pfConfigurable, pfWritable]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FSharedStringPrototype, FPrototypeMembers);
 
   if Assigned(TGarbageCollector.Instance) then
   begin

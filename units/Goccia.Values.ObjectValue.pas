@@ -10,6 +10,7 @@ uses
   HashMap,
 
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel.Types,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives,
   Goccia.Values.SymbolValue;
@@ -21,13 +22,8 @@ type
   private
     class var FSharedObjectPrototype: TGocciaObjectValue;
     class var FPrototypeMethodHost: TGocciaObjectValue;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
   private
-    function ObjectPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function ObjectPrototypeHasOwnProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function ObjectPrototypeIsPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function ObjectPrototypePropertyIsEnumerable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function ObjectPrototypeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function ObjectPrototypeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   protected
     FProperties: TGocciaPropertyMap;
     FSymbolDescriptors: TSymbolDescriptorMap;
@@ -98,6 +94,13 @@ type
     property Sealed: Boolean read FSealed;
     property Extensible: Boolean read FExtensible;
     property HasErrorData: Boolean read FHasErrorData write FHasErrorData;
+  published
+    function ObjectPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectPrototypeHasOwnProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectPrototypeIsPrototypeOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectPrototypePropertyIsEnumerable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectPrototypeToLocaleString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ObjectPrototypeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 
@@ -111,6 +114,7 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.ObjectModel,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -340,30 +344,35 @@ begin
 end;
 
 class procedure TGocciaObjectValue.InitializeSharedPrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FSharedObjectPrototype) then Exit;
 
   FPrototypeMethodHost := TGocciaObjectValue.Create;
   FSharedObjectPrototype := TGocciaObjectValue.Create;
-
-  FSharedObjectPrototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      FPrototypeMethodHost.ObjectPrototypeToString, PROP_TO_STRING, 0));
-  FSharedObjectPrototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      FPrototypeMethodHost.ObjectPrototypeHasOwnProperty, PROP_HAS_OWN_PROPERTY, 1));
-  FSharedObjectPrototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      FPrototypeMethodHost.ObjectPrototypeIsPrototypeOf, PROP_IS_PROTOTYPE_OF, 1));
-  FSharedObjectPrototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      FPrototypeMethodHost.ObjectPrototypePropertyIsEnumerable, PROP_PROPERTY_IS_ENUMERABLE, 1));
-  FSharedObjectPrototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      FPrototypeMethodHost.ObjectPrototypeToLocaleString, PROP_TO_LOCALE_STRING, 0));
-  FSharedObjectPrototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      FPrototypeMethodHost.ObjectPrototypeValueOf, PROP_VALUE_OF, 0));
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeHasOwnProperty, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeIsPrototypeOf, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypePropertyIsEnumerable, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeToLocaleString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(FPrototypeMethodHost.ObjectPrototypeValueOf, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+    FPrototypeMembers[0].ExposedName := PROP_TO_STRING;
+    FPrototypeMembers[1].ExposedName := PROP_HAS_OWN_PROPERTY;
+    FPrototypeMembers[2].ExposedName := PROP_IS_PROTOTYPE_OF;
+    FPrototypeMembers[3].ExposedName := PROP_PROPERTY_IS_ENUMERABLE;
+    FPrototypeMembers[4].ExposedName := PROP_TO_LOCALE_STRING;
+    FPrototypeMembers[5].ExposedName := PROP_VALUE_OF;
+  end;
+  RegisterMemberDefinitions(FSharedObjectPrototype, FPrototypeMembers);
 
   if Assigned(TGarbageCollector.Instance) then
   begin

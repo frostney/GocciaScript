@@ -9,6 +9,7 @@ uses
   Goccia.Builtins.Base,
   Goccia.Constants.PropertyNames,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -16,11 +17,13 @@ uses
 type
   TGocciaPerformance = class(TGocciaBuiltin)
   private
+    class var FStaticMembers: array of TGocciaMemberDefinition;
     FTimeOriginEpochNanoseconds: Int64;
     FTimeOriginMonotonicNanoseconds: Int64;
 
     function GetTimeOriginMilliseconds: Double; inline;
-  protected
+  published
+    property TimeOriginMilliseconds: Double read GetTimeOriginMilliseconds;
     function PerformanceNow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PerformanceTimeOriginGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PerformanceToJSON(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -35,7 +38,6 @@ uses
 
   TimingUtils,
 
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -47,6 +49,7 @@ end;
 constructor TGocciaPerformance.Create(const AName: string; const AScope: TGocciaScope;
   const AThrowError: TGocciaThrowErrorCallback);
 var
+  Members: TGocciaMemberCollection;
   MonotonicBefore, MonotonicAfter: Int64;
 begin
   inherited Create(AName, AScope, AThrowError);
@@ -56,22 +59,21 @@ begin
   MonotonicAfter := GetNanoseconds;
   FTimeOriginMonotonicNanoseconds := (MonotonicBefore + MonotonicAfter) div 2;
 
-  FBuiltinObject.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.Create(PerformanceNow, PROP_NOW, 0));
-  FBuiltinObject.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.Create(PerformanceToJSON, PROP_TO_JSON, 0));
-
-  FBuiltinObject.DefineProperty(PROP_TIME_ORIGIN,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        PerformanceTimeOriginGetter, 'get timeOrigin', 0),
-      nil, [pfConfigurable]));
-
-  FBuiltinObject.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaPropertyDescriptorData.Create(
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(PerformanceNow, 0, gmkStaticMethod);
+    Members.AddMethod(PerformanceToJSON, 0, gmkStaticMethod);
+    Members.AddHostedPropertyGetter(
+      Self, 'TimeOriginMilliseconds', PROP_TIME_ORIGIN, [pfConfigurable], gmkStaticGetter);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('Performance'),
-      [pfConfigurable]));
+      [pfConfigurable]);
+    FStaticMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
+  end;
+  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;

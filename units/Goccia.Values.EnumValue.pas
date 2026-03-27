@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -31,8 +32,6 @@ implementation
 
 uses
   Goccia.Values.Iterator.Concrete,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaEnumValue.Create(const AName: string);
@@ -63,22 +62,16 @@ begin
 end;
 
 procedure InitializeEnumSymbols(const AEnum: TGocciaEnumValue);
+var
+  Members: array[0..1] of TGocciaMemberDefinition;
 begin
-  AEnum.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownIterator,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.Create(AEnum.EnumSymbolIterator, '[Symbol.iterator]', 0),
-      []
-    )
-  );
-
-  AEnum.DefineSymbolProperty(
+  Members[0] := DefineSymbolMethod(
+    TGocciaSymbolValue.WellKnownIterator, '[Symbol.iterator]',
+    AEnum.EnumSymbolIterator, 0, []);
+  Members[1] := DefineSymbolDataProperty(
     TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(AEnum.Name),
-      []
-    )
-  );
+    TGocciaStringLiteralValue.Create(AEnum.Name), []);
+  RegisterMemberDefinitions(AEnum, Members);
 end;
 
 end.

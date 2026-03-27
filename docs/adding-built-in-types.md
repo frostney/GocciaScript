@@ -102,34 +102,45 @@ end;
 **Shared prototype singleton** -- All instances share a single prototype object. The `InitializePrototype` method is guarded by `if Assigned(FShared) then Exit` so it only runs once:
 
 ```pascal
+class var FPrototypeMembers: array of TGocciaMemberDefinition;
+
 procedure TGocciaYourValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FShared) then Exit;
 
   FShared := TGocciaSharedPrototype.Create(Self);
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddNamedMethod('methodName', YourMethod, 1);
+      Members.AddSymbolMethod(
+        TGocciaSymbolValue.WellKnownIterator,
+        '[Symbol.iterator]', YourIteratorMethod, 0,
+        [pfConfigurable, pfWritable]);
+      Members.AddAccessor(
+        'propertyName', GetterMethod, nil, [pfConfigurable]);
+      FPrototypeMembers := Members.ToDefinitions;
+      FPrototypeMembers[0].MemberFlags := [gmfNoFunctionPrototype];
+    finally
+      Members.Free;
+    end;
+  end;
 
-  // Register prototype methods
-  FShared.Prototype.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      YourMethod, 'methodName', 1));  // 1 = expected arg count
-
-  // Register Symbol.toStringTag
-  FShared.Prototype.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(CONSTRUCTOR_YOUR),
-      [pfConfigurable]
-    )
-  );
-
-  // Register accessor properties (e.g., getters)
-  FShared.Prototype.DefineProperty('propertyName',
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        GetterMethod, 'get propertyName', 0),
-      nil, [pfConfigurable]));
+  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
 end;
 ```
+
+The preferred pattern is:
+
+- keep runtime semantics on the value type
+- keep constructor/static methods on the built-in wrapper
+- declare exposed members with `Define*` helpers, ideally via `TGocciaMemberCollection`
+- register them via `RegisterMemberDefinitions`
+
+This keeps the JS-visible surface in one place and avoids repeating `RegisterNativeMethod`, `DefineProperty`, and `CreateWithoutPrototype` boilerplate in every type.
 
 **ExposePrototype** -- Must NOT free the created instance (it becomes the pinned method host):
 
@@ -342,17 +353,21 @@ if ggYourType in FGlobals then
 ```pascal
 if ggYourType in FGlobals then
 begin
-  YourConstructor := TGocciaYourClassValue.Create(CONSTRUCTOR_YOUR, nil);
-  TGocciaYourValue.ExposePrototype(YourConstructor);
-  YourConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  if Assigned(FBuiltinYour) then
-    for Key in FBuiltinYour.BuiltinObject.GetAllPropertyNames do
-      YourConstructor.SetProperty(Key,
-        FBuiltinYour.BuiltinObject.GetProperty(Key));
-  FInterpreter.GlobalScope.DefineLexicalBinding(
-    CONSTRUCTOR_YOUR, YourConstructor, dtConst);
+  TypeDef.ConstructorName := CONSTRUCTOR_YOUR;
+  TypeDef.Kind := gtdkNativeInstanceType;
+  TypeDef.ClassValueClass := TGocciaYourClassValue;
+  TypeDef.ExposePrototype := @ExposeYourPrototype;
+  TypeDef.PrototypeProvider := nil;
+  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinYour);
+  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+  TypeDef.AddSpeciesGetter := False;
+  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter,
+    GenericConstructor);
+  YourConstructor := TGocciaYourClassValue(GenericConstructor);
 end;
 ```
+
+For built-ins that use an existing shared prototype rather than `ExposePrototype`, set `ExposePrototype := nil` and provide `PrototypeProvider := @YourPrototypeProvider`.
 
 ### 4g. Destructor
 

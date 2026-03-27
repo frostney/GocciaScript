@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -15,11 +16,9 @@ type
   private
     class var FSharedBooleanPrototype: TGocciaObjectValue;
     class var FPrototypeMethodHost: TGocciaBooleanObjectValue;
+    class var FPrototypeMembers: array of TGocciaMemberDefinition;
   private
     FPrimitive: TGocciaBooleanLiteralValue;
-
-    function BooleanValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    function BooleanToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const APrimitive: TGocciaBooleanLiteralValue; const AClass: TGocciaClassValue = nil);
     procedure InitializePrototype;
@@ -29,6 +28,9 @@ type
     class function GetSharedPrototype: TGocciaObjectValue;
 
     property Primitive: TGocciaBooleanLiteralValue read FPrimitive;
+  published
+    function BooleanValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function BooleanToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -49,14 +51,25 @@ begin
 end;
 
 procedure TGocciaBooleanObjectValue.InitializePrototype;
+var
+  Members: TGocciaMemberCollection;
 begin
   if Assigned(FSharedBooleanPrototype) then Exit;
 
   FSharedBooleanPrototype := TGocciaObjectValue.Create;
   FPrototypeMethodHost := Self;
-
-  FSharedBooleanPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BooleanValueOf, PROP_VALUE_OF, 0));
-  FSharedBooleanPrototype.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BooleanToString, PROP_TO_STRING, 0));
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddMethod(BooleanValueOf, 0);
+      Members.AddMethod(BooleanToString, 0);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+  end;
+  RegisterMemberDefinitions(FSharedBooleanPrototype, FPrototypeMembers);
 
   if Assigned(TGarbageCollector.Instance) then
   begin

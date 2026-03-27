@@ -8,6 +8,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -15,6 +16,7 @@ uses
 type
   TGocciaConsole = class(TGocciaBuiltin)
   private
+    class var FStaticMembers: array of TGocciaMemberDefinition;
     FTimers: TGocciaObjectValue;
     FCounters: TGocciaObjectValue;
     FGroupDepth: Integer;
@@ -23,6 +25,7 @@ type
     function GroupPrefix: string;
     function FormatValue(const AValue: TGocciaValue): string;
   protected
+  published
     function ConsoleLog(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ConsoleWarn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ConsoleError(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -52,34 +55,41 @@ uses
   StringBuffer,
   TimingUtils,
 
-  Goccia.Values.ArrayValue,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.ArrayValue;
 
 constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+var
+  Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
 
   FTimers := TGocciaObjectValue.Create;
   FCounters := TGocciaObjectValue.Create;
   FGroupDepth := 0;
-
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleLog, 'log', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleWarn, 'warn', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleError, 'error', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleInfo, 'info', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleDebug, 'debug', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleDir, 'dir', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleAssert, 'assert', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleCount, 'count', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleCountReset, 'countReset', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleTime, 'time', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleTimeEnd, 'timeEnd', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleTimeLog, 'timeLog', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleClear, 'clear', 0));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleGroup, 'group', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleGroupEnd, 'groupEnd', 0));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleTrace, 'trace', -1));
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(ConsoleTable, 'table', -1));
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddMethod(ConsoleLog, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleWarn, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleError, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleInfo, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleDebug, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleDir, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleAssert, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleCount, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleCountReset, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleTime, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleTimeEnd, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleTimeLog, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleClear, 0, gmkStaticMethod);
+    Members.AddMethod(ConsoleGroup, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleGroupEnd, 0, gmkStaticMethod);
+    Members.AddMethod(ConsoleTrace, -1, gmkStaticMethod);
+    Members.AddMethod(ConsoleTable, -1, gmkStaticMethod);
+    FStaticMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
+  end;
+  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
 end;

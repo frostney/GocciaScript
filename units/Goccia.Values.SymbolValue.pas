@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.ObjectModel.Types,
   Goccia.Values.Primitives;
 
 type
@@ -13,6 +14,7 @@ type
   private class var
     FSharedPrototype: TGocciaValue;
     FMethodHost: TGocciaSymbolValue;
+    FPrototypeMembers: array of TGocciaMemberDefinition;
     FWellKnownIterator: TGocciaSymbolValue;
     FWellKnownSpecies: TGocciaSymbolValue;
     FWellKnownHasInstance: TGocciaSymbolValue;
@@ -25,10 +27,6 @@ type
     FDescription: string;
     FId: Integer;
 
-    function GetDescription(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
-    function SymbolToString(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const ADescription: string = '');
     procedure InitializePrototype;
@@ -54,6 +52,11 @@ type
 
     property Description: string read FDescription;
     property Id: Integer read FId;
+  published
+    function GetDescription(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function SymbolToString(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
 implementation
@@ -64,8 +67,8 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
+  Goccia.ObjectModel,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
 
@@ -94,6 +97,7 @@ end;
 
 procedure TGocciaSymbolValue.InitializePrototype;
 var
+  Members: TGocciaMemberCollection;
   Proto: TGocciaObjectValue;
 begin
   if Assigned(FSharedPrototype) then Exit;
@@ -102,11 +106,20 @@ begin
   FSharedPrototype := Proto;
   FMethodHost := Self;
 
-  Proto.DefineProperty(PROP_DESCRIPTION, TGocciaPropertyDescriptorAccessor.Create(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(GetDescription, PROP_DESCRIPTION, 0), nil, [pfConfigurable]));
+  if Length(FPrototypeMembers) = 0 then
+  begin
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddAccessor(PROP_DESCRIPTION, GetDescription, nil, [pfConfigurable]);
+      Members.AddMethod(SymbolToString, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      FPrototypeMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+    FPrototypeMembers[1].ExposedName := PROP_TO_STRING;
+  end;
 
-  Proto.RegisterNativeMethod(
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(SymbolToString, PROP_TO_STRING, 0));
+  RegisterMemberDefinitions(Proto, FPrototypeMembers);
 
   if Assigned(TGarbageCollector.Instance) then
   begin

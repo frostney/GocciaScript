@@ -9,6 +9,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
+  Goccia.Builtins.Base,
   Goccia.Builtins.Benchmark,
   Goccia.Builtins.Console,
   Goccia.Builtins.GlobalArray,
@@ -30,6 +31,8 @@ uses
   Goccia.JSX.SourceMap,
   Goccia.Modules,
   Goccia.Modules.Resolver,
+  Goccia.ObjectModel,
+  Goccia.ObjectModel.Engine,
   Goccia.Parser,
   Goccia.Values.ClassValue,
   Goccia.Values.IteratorValue,
@@ -323,8 +326,53 @@ begin
   RegisterBuiltinConstructors;
 end;
 
+function ObjectPrototypeProvider: TGocciaObjectValue;
+begin
+  Result := TGocciaObjectValue.SharedObjectPrototype;
+end;
+
+function StringPrototypeProvider: TGocciaObjectValue;
+begin
+  Result := TGocciaStringObjectValue.GetSharedPrototype;
+end;
+
+function NumberPrototypeProvider: TGocciaObjectValue;
+begin
+  Result := TGocciaNumberObjectValue.GetSharedPrototype;
+end;
+
+function BooleanPrototypeProvider: TGocciaObjectValue;
+begin
+  Result := TGocciaBooleanObjectValue.GetSharedPrototype;
+end;
+
+function BuiltinObjectOrNil(const ABuiltin: TGocciaBuiltin): TGocciaObjectValue;
+begin
+  if Assigned(ABuiltin) then
+    Result := ABuiltin.BuiltinObject
+  else
+    Result := nil;
+end;
+
+procedure ExposeMapPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaMapValue.ExposePrototype(AConstructor);
+end;
+
+procedure ExposeArrayPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaArrayValue.ExposePrototype(AConstructor);
+end;
+
+procedure ExposeSetPrototype(const AConstructor: TGocciaValue);
+begin
+  TGocciaSetValue.ExposePrototype(AConstructor);
+end;
+
 procedure TGocciaEngine.RegisterBuiltinConstructors;
 var
+  Key: string;
+  GenericConstructor: TGocciaClassValue;
   ObjectConstructor, FunctionConstructor: TGocciaClassValue;
   ArrayConstructor: TGocciaArrayClassValue;
   MapConstructor: TGocciaMapClassValue;
@@ -334,57 +382,56 @@ var
   StringConstructor: TGocciaStringClassValue;
   NumberConstructor: TGocciaNumberClassValue;
   BooleanConstructor: TGocciaBooleanClassValue;
-  Key: string;
+  TypeDef: TGocciaTypeDefinition;
 begin
   TGocciaObjectValue.InitializeSharedPrototype;
-  ObjectConstructor := TGocciaClassValue.Create(CONSTRUCTOR_OBJECT, nil);
-  ObjectConstructor.ReplacePrototype(TGocciaObjectValue.SharedObjectPrototype);
-  TGocciaObjectValue.SharedObjectPrototype.AssignProperty(PROP_CONSTRUCTOR, ObjectConstructor);
-  if Assigned(FBuiltinGlobalObject) then
-    for Key in FBuiltinGlobalObject.BuiltinObject.GetAllPropertyNames do
-      ObjectConstructor.SetProperty(Key, FBuiltinGlobalObject.BuiltinObject.GetProperty(Key));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_OBJECT, ObjectConstructor, dtConst);
+  TypeDef.ConstructorName := CONSTRUCTOR_OBJECT;
+  TypeDef.Kind := gtdkNativeInstanceType;
+  TypeDef.ClassValueClass := TGocciaClassValue;
+  TypeDef.ExposePrototype := nil;
+  TypeDef.PrototypeProvider := @ObjectPrototypeProvider;
+  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalObject);
+  TypeDef.PrototypeParent := nil;
+  TypeDef.AddSpeciesGetter := False;
+  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, ObjectConstructor);
 
-  ArrayConstructor := TGocciaArrayClassValue.Create(CONSTRUCTOR_ARRAY, nil);
-  TGocciaArrayValue.ExposePrototype(ArrayConstructor);
-  ArrayConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  if Assigned(FBuiltinGlobalArray) then
-    for Key in FBuiltinGlobalArray.BuiltinObject.GetAllPropertyNames do
-      ArrayConstructor.SetProperty(Key, FBuiltinGlobalArray.BuiltinObject.GetProperty(Key));
-  ArrayConstructor.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownSpecies,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
-      nil, [pfConfigurable]));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY, ArrayConstructor, dtConst);
+  TypeDef.ConstructorName := CONSTRUCTOR_ARRAY;
+  TypeDef.Kind := gtdkNativeInstanceType;
+  TypeDef.ClassValueClass := TGocciaArrayClassValue;
+  TypeDef.ExposePrototype := @ExposeArrayPrototype;
+  TypeDef.PrototypeProvider := nil;
+  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalArray);
+  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+  TypeDef.AddSpeciesGetter := True;
+  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  ArrayConstructor := TGocciaArrayClassValue(GenericConstructor);
 
   if ggMap in FGlobals then
   begin
-    MapConstructor := TGocciaMapClassValue.Create(CONSTRUCTOR_MAP, nil);
-    TGocciaMapValue.ExposePrototype(MapConstructor);
-    MapConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-    if Assigned(FBuiltinMap) then
-      for Key in FBuiltinMap.BuiltinObject.GetAllPropertyNames do
-        MapConstructor.SetProperty(Key, FBuiltinMap.BuiltinObject.GetProperty(Key));
-    MapConstructor.DefineSymbolProperty(
-      TGocciaSymbolValue.WellKnownSpecies,
-      TGocciaPropertyDescriptorAccessor.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
-        nil, [pfConfigurable]));
-    FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_MAP, MapConstructor, dtConst);
+    TypeDef.ConstructorName := CONSTRUCTOR_MAP;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaMapClassValue;
+    TypeDef.ExposePrototype := @ExposeMapPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinMap);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := True;
+    RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    MapConstructor := TGocciaMapClassValue(GenericConstructor);
   end;
 
   if ggSet in FGlobals then
   begin
-    SetConstructor := TGocciaSetClassValue.Create(CONSTRUCTOR_SET, nil);
-    TGocciaSetValue.ExposePrototype(SetConstructor);
-    SetConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-    SetConstructor.DefineSymbolProperty(
-      TGocciaSymbolValue.WellKnownSpecies,
-      TGocciaPropertyDescriptorAccessor.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(SpeciesGetter, 'get [Symbol.species]', 0),
-        nil, [pfConfigurable]));
-    FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SET, SetConstructor, dtConst);
+    TypeDef.ConstructorName := CONSTRUCTOR_SET;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaSetClassValue;
+    TypeDef.ExposePrototype := @ExposeSetPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := True;
+    RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    SetConstructor := TGocciaSetClassValue(GenericConstructor);
   end;
 
   if ggArrayBuffer in FGlobals then
@@ -413,29 +460,38 @@ begin
     RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT64_ARRAY, takFloat64, ObjectConstructor);
   end;
 
-  StringConstructor := TGocciaStringClassValue.Create(CONSTRUCTOR_STRING, nil);
-  StringConstructor.ReplacePrototype(TGocciaStringObjectValue.GetSharedPrototype);
-  StringConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, StringConstructor);
-  StringConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  if Assigned(FBuiltinGlobalString) then
-    for Key in FBuiltinGlobalString.BuiltinObject.GetAllPropertyNames do
-      StringConstructor.SetProperty(Key, FBuiltinGlobalString.BuiltinObject.GetProperty(Key));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_STRING, StringConstructor, dtConst);
+  TypeDef.ConstructorName := CONSTRUCTOR_STRING;
+  TypeDef.Kind := gtdkPrimitiveWrapper;
+  TypeDef.ClassValueClass := TGocciaStringClassValue;
+  TypeDef.ExposePrototype := nil;
+  TypeDef.PrototypeProvider := @StringPrototypeProvider;
+  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalString);
+  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+  TypeDef.AddSpeciesGetter := False;
+  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  StringConstructor := TGocciaStringClassValue(GenericConstructor);
 
-  NumberConstructor := TGocciaNumberClassValue.Create(CONSTRUCTOR_NUMBER, nil);
-  NumberConstructor.ReplacePrototype(TGocciaNumberObjectValue.GetSharedPrototype);
-  NumberConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, NumberConstructor);
-  NumberConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  if Assigned(FBuiltinGlobalNumber) then
-    for Key in FBuiltinGlobalNumber.BuiltinObject.GetAllPropertyNames do
-      NumberConstructor.SetProperty(Key, FBuiltinGlobalNumber.BuiltinObject.GetProperty(Key));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_NUMBER, NumberConstructor, dtConst);
+  TypeDef.ConstructorName := CONSTRUCTOR_NUMBER;
+  TypeDef.Kind := gtdkPrimitiveWrapper;
+  TypeDef.ClassValueClass := TGocciaNumberClassValue;
+  TypeDef.ExposePrototype := nil;
+  TypeDef.PrototypeProvider := @NumberPrototypeProvider;
+  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalNumber);
+  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+  TypeDef.AddSpeciesGetter := False;
+  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  NumberConstructor := TGocciaNumberClassValue(GenericConstructor);
 
-  BooleanConstructor := TGocciaBooleanClassValue.Create(CONSTRUCTOR_BOOLEAN, nil);
-  BooleanConstructor.ReplacePrototype(TGocciaBooleanObjectValue.GetSharedPrototype);
-  BooleanConstructor.Prototype.AssignProperty(PROP_CONSTRUCTOR, BooleanConstructor);
-  BooleanConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_BOOLEAN, BooleanConstructor, dtConst);
+  TypeDef.ConstructorName := CONSTRUCTOR_BOOLEAN;
+  TypeDef.Kind := gtdkPrimitiveWrapper;
+  TypeDef.ClassValueClass := TGocciaBooleanClassValue;
+  TypeDef.ExposePrototype := nil;
+  TypeDef.PrototypeProvider := @BooleanPrototypeProvider;
+  TypeDef.StaticSource := nil;
+  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+  TypeDef.AddSpeciesGetter := False;
+  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
 
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
