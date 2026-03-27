@@ -45,15 +45,63 @@ implementation
 
 uses
   Goccia.Constants.PropertyNames,
+  Goccia.ObjectModel.Types,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
+
+procedure CopyStaticMembersToConstructor(const ASource: TGocciaObjectValue;
+  const AConstructor: TGocciaClassValue);
+var
+  Key: string;
+  Symbol: TGocciaSymbolValue;
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  if not Assigned(ASource) then
+    Exit;
+
+  for Key in ASource.GetAllPropertyNames do
+  begin
+    Descriptor := ASource.GetOwnPropertyDescriptor(Key);
+    if not Assigned(Descriptor) then
+      Continue;
+
+    if Descriptor is TGocciaPropertyDescriptorData then
+      AConstructor.SetProperty(Key,
+        TGocciaPropertyDescriptorData(Descriptor).Value)
+    else
+      raise EGocciaObjectModelError.CreateFmt(
+        'Static source for %s contains unsupported accessor property "%s"',
+        [AConstructor.Name, Key]);
+  end;
+
+  for Symbol in ASource.GetOwnSymbols do
+  begin
+    Descriptor := ASource.GetOwnSymbolPropertyDescriptor(Symbol);
+    if not Assigned(Descriptor) then
+      Continue;
+
+    if Descriptor is TGocciaPropertyDescriptorData then
+      AConstructor.DefineSymbolProperty(Symbol,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaPropertyDescriptorData(Descriptor).Value,
+          Descriptor.Flags))
+    else if Descriptor is TGocciaPropertyDescriptorAccessor then
+      AConstructor.DefineSymbolProperty(Symbol,
+        TGocciaPropertyDescriptorAccessor.Create(
+          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+          Descriptor.Flags))
+    else
+      raise EGocciaObjectModelError.CreateFmt(
+        'Static source for %s has unsupported symbol descriptor',
+        [AConstructor.Name]);
+  end;
+end;
 
 procedure RegisterTypeDefinition(const AScope: TGocciaScope;
   const ATypeDefinition: TGocciaTypeDefinition;
   const ASpeciesGetter: TGocciaNativeFunctionCallback;
   out AConstructor: TGocciaClassValue);
-var
-  Key: string;
 begin
   AConstructor := ATypeDefinition.ClassValueClass.Create(
     ATypeDefinition.ConstructorName, nil);
@@ -74,9 +122,7 @@ begin
     AConstructor.Prototype.Prototype := ATypeDefinition.PrototypeParent;
 
   if Assigned(ATypeDefinition.StaticSource) then
-    for Key in ATypeDefinition.StaticSource.GetAllPropertyNames do
-      AConstructor.SetProperty(Key,
-        ATypeDefinition.StaticSource.GetProperty(Key));
+    CopyStaticMembersToConstructor(ATypeDefinition.StaticSource, AConstructor);
 
   if ATypeDefinition.AddSpeciesGetter then
     AConstructor.DefineSymbolProperty(

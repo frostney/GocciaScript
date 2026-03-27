@@ -134,6 +134,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.SharedPrototype,
   Goccia.Values.ClassValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
@@ -424,6 +425,24 @@ begin
   end;
 end;
 
+function ClonePropertyDescriptor(
+  const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+begin
+  if ADescriptor is TGocciaPropertyDescriptorData then
+    Result := TGocciaPropertyDescriptorData.Create(
+      TGocciaPropertyDescriptorData(ADescriptor).Value,
+      ADescriptor.Flags)
+  else if ADescriptor is TGocciaPropertyDescriptorAccessor then
+    Result := TGocciaPropertyDescriptorAccessor.Create(
+      TGocciaPropertyDescriptorAccessor(ADescriptor).Getter,
+      TGocciaPropertyDescriptorAccessor(ADescriptor).Setter,
+      ADescriptor.Flags)
+  else
+    raise EGocciaObjectModelError.CreateFmt(
+      'Unsupported property descriptor type %s',
+      [ADescriptor.ClassName]);
+end;
+
 function TGocciaPublishedGetterHost.Invoke(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -433,9 +452,9 @@ begin
   if FUseThisValue then
   begin
     if not (AThisValue is FTargetClass) then
-      raise EGocciaObjectModelError.CreateFmt(
+      ThrowTypeError(Format(
         'Published getter for %s requires instance of %s',
-        [FPropertyName, FTargetClass.ClassName]);
+        [FPropertyName, FTargetClass.ClassName]));
     TargetObject := TObject(AThisValue);
   end
   else
@@ -704,6 +723,8 @@ end;
 procedure CopyOwnProperties(const ASource, ATarget: TObject);
 var
   Key: string;
+  Symbol: TGocciaSymbolValue;
+  Descriptor: TGocciaPropertyDescriptor;
   SourceObject, TargetObject: TGocciaObjectValue;
 begin
   if not Assigned(ASource) then
@@ -716,7 +737,18 @@ begin
   TargetObject := TGocciaObjectValue(ATarget);
 
   for Key in SourceObject.GetAllPropertyNames do
-    TargetObject.SetProperty(Key, SourceObject.GetProperty(Key));
+  begin
+    Descriptor := SourceObject.GetOwnPropertyDescriptor(Key);
+    if Assigned(Descriptor) then
+      TargetObject.DefineProperty(Key, ClonePropertyDescriptor(Descriptor));
+  end;
+
+  for Symbol in SourceObject.GetOwnSymbols do
+  begin
+    Descriptor := SourceObject.GetOwnSymbolPropertyDescriptor(Symbol);
+    if Assigned(Descriptor) then
+      TargetObject.DefineSymbolProperty(Symbol, ClonePropertyDescriptor(Descriptor));
+  end;
 end;
 
 procedure ExposeSharedPrototypeOnConstructor(const AShared: TObject;

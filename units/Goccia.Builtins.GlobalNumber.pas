@@ -57,12 +57,12 @@ begin
 
   Members := TGocciaMemberCollection.Create;
   try
-    Members.AddMethod(NumberParseInt, 1, gmkStaticMethod);
+    Members.AddMethod(NumberParseInt, 2, gmkStaticMethod);
     Members.AddMethod(NumberParseFloat, 1, gmkStaticMethod);
-    Members.AddMethod(NumberIsFinite, 0, gmkStaticMethod);
-    Members.AddMethod(NumberIsNaN, 0, gmkStaticMethod);
-    Members.AddMethod(NumberIsInteger, 0, gmkStaticMethod);
-    Members.AddMethod(NumberIsSafeInteger, 0, gmkStaticMethod);
+    Members.AddMethod(NumberIsFinite, 1, gmkStaticMethod);
+    Members.AddMethod(NumberIsNaN, 1, gmkStaticMethod);
+    Members.AddMethod(NumberIsInteger, 1, gmkStaticMethod);
+    Members.AddMethod(NumberIsSafeInteger, 1, gmkStaticMethod);
     FStaticMembers := Members.ToDefinitions;
   finally
     Members.Free;

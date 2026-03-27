@@ -4,6 +4,10 @@ features: [Number.isSafeInteger]
 ---*/
 
 describe("Number.isSafeInteger", () => {
+  test("has the correct function length", () => {
+    expect(Number.isSafeInteger.length).toBe(1);
+  });
+
   test("returns true for safe integers", () => {
     expect(Number.isSafeInteger(0)).toBe(true);
     expect(Number.isSafeInteger(1)).toBe(true);

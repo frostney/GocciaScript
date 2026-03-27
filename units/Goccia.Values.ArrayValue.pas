@@ -259,7 +259,7 @@ begin
   begin
     Members := TGocciaMemberCollection.Create;
     try
-      Members.AddAccessor(PROP_LENGTH, GetLengthProperty, nil, [pfEnumerable, pfConfigurable]);
+      Members.AddDataProperty(PROP_LENGTH, TGocciaNumberLiteralValue.ZeroValue, [pfWritable]);
       Members.AddMethod(ArrayMap, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArrayFilter, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArrayReduce, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -281,8 +281,8 @@ begin
       Members.AddMethod(ArrayConcat, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArrayReverse, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArrayToReversed, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayToSorted, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddMethod(ArrayToSpliced, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(ArrayToSorted, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+      Members.AddMethod(ArrayToSpliced, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArraySort, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArraySplice, 2, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
       Members.AddMethod(ArrayShift, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
@@ -1662,6 +1662,12 @@ function TGocciaArrayValue.GetProperty(const AName: string): TGocciaValue;
 var
   Index: Integer;
 begin
+  if AName = PROP_LENGTH then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(FElements.Count);
+    Exit;
+  end;
+
   // Check if property name is a numeric index
   if TryStrToInt(AName, Index) then
   begin

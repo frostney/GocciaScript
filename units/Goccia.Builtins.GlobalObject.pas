@@ -76,8 +76,8 @@ begin
     Members.AddMethod(ObjectValues, 1, gmkStaticMethod);
     Members.AddMethod(ObjectEntries, 1, gmkStaticMethod);
     Members.AddMethod(ObjectAssign, -1, gmkStaticMethod);
-    Members.AddMethod(ObjectCreate, 1, gmkStaticMethod);
-    Members.AddMethod(ObjectHasOwn, 1, gmkStaticMethod);
+    Members.AddMethod(ObjectCreate, 2, gmkStaticMethod);
+    Members.AddMethod(ObjectHasOwn, 2, gmkStaticMethod);
     Members.AddMethod(ObjectGetOwnPropertyNames, 1, gmkStaticMethod);
     Members.AddMethod(ObjectGetOwnPropertyDescriptor, 2, gmkStaticMethod);
     Members.AddMethod(ObjectDefineProperty, 3, gmkStaticMethod);

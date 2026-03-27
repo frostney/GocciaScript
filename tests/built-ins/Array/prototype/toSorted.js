@@ -10,6 +10,10 @@ test("Array.prototype.toSorted returns a new array with the elements sorted", ()
   expect(sorted).toEqual([1, 2, 3]);
 });
 
+test("Array.prototype.toSorted has the correct method length", () => {
+  expect(Array.prototype.toSorted.length).toBe(1);
+});
+
 test("Array.prototype.toSorted with empty array", () => {
   const arr = [];
   const sorted = arr.toSorted();

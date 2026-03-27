@@ -4,6 +4,10 @@ test("Object.hasOwn", () => {
   expect(Object.hasOwn(obj, "age")).toBe(false);
 });
 
+test("Object.hasOwn has the correct function length", () => {
+  expect(Object.hasOwn.length).toBe(2);
+});
+
 test("Object.hasOwn with prototype", () => {
   const obj = Object.create({ name: "John" });
   expect(Object.hasOwn(obj, "name")).toBe(false);

@@ -4,6 +4,10 @@ features: [Number.parseInt]
 ---*/
 
 describe("Number.parseInt", () => {
+  test("has the correct function length", () => {
+    expect(Number.parseInt.length).toBe(2);
+  });
+
   test("parses integer strings", () => {
     expect(Number.parseInt("123")).toBe(123);
     expect(Number.parseInt("42")).toBe(42);

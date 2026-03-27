@@ -31,6 +31,8 @@ procedure InitializeEnumSymbols(const AEnum: TGocciaEnumValue);
 implementation
 
 uses
+  GarbageCollector.Generic,
+
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.SymbolValue;
 
@@ -63,15 +65,29 @@ end;
 
 procedure InitializeEnumSymbols(const AEnum: TGocciaEnumValue);
 var
-  Members: array[0..1] of TGocciaMemberDefinition;
+  Members: TGocciaMemberCollection;
+  ToStringTag: TGocciaStringLiteralValue;
 begin
-  Members[0] := DefineSymbolMethod(
-    TGocciaSymbolValue.WellKnownIterator, '[Symbol.iterator]',
-    AEnum.EnumSymbolIterator, 0, []);
-  Members[1] := DefineSymbolDataProperty(
-    TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaStringLiteralValue.Create(AEnum.Name), []);
-  RegisterMemberDefinitions(AEnum, Members);
+  Members := TGocciaMemberCollection.Create;
+  ToStringTag := TGocciaStringLiteralValue.Create(AEnum.Name);
+  try
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.AddTempRoot(ToStringTag);
+    try
+      Members.AddSymbolMethod(
+        TGocciaSymbolValue.WellKnownIterator, '[Symbol.iterator]',
+        AEnum.EnumSymbolIterator, 0, []);
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        ToStringTag, []);
+      RegisterMemberDefinitions(AEnum, Members.ToDefinitions);
+    finally
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.RemoveTempRoot(ToStringTag);
+    end;
+  finally
+    Members.Free;
+  end;
 end;
 
 end.
