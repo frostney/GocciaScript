@@ -34,7 +34,6 @@ type
     FURIErrorProto: TGocciaObjectValue;
     FAggregateErrorProto: TGocciaObjectValue;
     FDOMExceptionProto: TGocciaObjectValue;
-    class var FErrorStaticMembers: array of TGocciaMemberDefinition;
 
     function BuildErrorObject(const AName: string; const AProto: TGocciaObjectValue; const AArgs: TGocciaArgumentsCollection): TGocciaObjectValue;
   protected
@@ -86,6 +85,7 @@ var
   URIErrorConstructorFunc: TGocciaNativeFunctionValue;
   AggregateErrorConstructorFunc: TGocciaNativeFunctionValue;
   DOMExceptionConstructorFunc: TGocciaNativeFunctionValue;
+  ErrorStaticMembers: TArray<TGocciaMemberDefinition>;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -147,12 +147,12 @@ begin
   ErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FErrorProto);
   with TGocciaMemberCollection.Create do
   try
-    AddMethod(ErrorIsError, 1, gmkStaticMethod);
-    FErrorStaticMembers := ToDefinitions;
+    AddNamedMethod('isError', ErrorIsError, 1, gmkStaticMethod);
+    ErrorStaticMembers := ToDefinitions;
   finally
     Free;
   end;
-  RegisterMemberDefinitions(ErrorConstructorFunc, FErrorStaticMembers);
+  RegisterMemberDefinitions(ErrorConstructorFunc, ErrorStaticMembers);
   TypeErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FTypeErrorProto);
   ReferenceErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FReferenceErrorProto);
   RangeErrorConstructorFunc.AssignProperty(PROP_PROTOTYPE, FRangeErrorProto);
