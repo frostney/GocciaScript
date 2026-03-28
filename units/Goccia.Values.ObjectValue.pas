@@ -319,10 +319,8 @@ begin
     begin
       CallArgs := TGocciaArgumentsCollection.Create;
       try
-        if ToStringMethod is TGocciaNativeFunctionValue then
-          Result := TGocciaNativeFunctionValue(ToStringMethod).Call(CallArgs, AThisValue)
-        else if ToStringMethod is TGocciaFunctionValue then
-          Result := TGocciaFunctionValue(ToStringMethod).Call(CallArgs, AThisValue)
+        if ToStringMethod is TGocciaFunctionBase then
+          Result := TGocciaFunctionBase(ToStringMethod).Call(CallArgs, AThisValue)
         else
           Result := AThisValue.ToStringLiteral;
       finally
@@ -862,10 +860,8 @@ begin
         Args := TGocciaArgumentsCollection.Create;
         try
           Args.Add(AValue);
-          if Accessor.Setter is TGocciaNativeFunctionValue then
-            TGocciaNativeFunctionValue(Accessor.Setter).Call(Args, Self)
-          else if Accessor.Setter is TGocciaFunctionValue then
-            TGocciaFunctionValue(Accessor.Setter).Call(Args, Self);
+          if Accessor.Setter is TGocciaFunctionBase then
+            TGocciaFunctionBase(Accessor.Setter).Call(Args, Self);
         finally
           Args.Free;
         end;
@@ -898,10 +894,8 @@ begin
           Args := TGocciaArgumentsCollection.Create;
           try
             Args.Add(AValue);
-            if Accessor.Setter is TGocciaNativeFunctionValue then
-              TGocciaNativeFunctionValue(Accessor.Setter).Call(Args, Self)
-            else if Accessor.Setter is TGocciaFunctionValue then
-              TGocciaFunctionValue(Accessor.Setter).Call(Args, Self);
+            if Accessor.Setter is TGocciaFunctionBase then
+              TGocciaFunctionBase(Accessor.Setter).Call(Args, Self);
           finally
             Args.Free;
           end;
@@ -950,10 +944,8 @@ begin
       begin
         Args := TGocciaArgumentsCollection.Create;
         try
-          if Accessor.Getter is TGocciaNativeFunctionValue then
-            Result := TGocciaNativeFunctionValue(Accessor.Getter).Call(Args, AReceiver)
-          else if Accessor.Getter is TGocciaFunctionValue then
-            Result := TGocciaFunctionValue(Accessor.Getter).Call(Args, AReceiver)
+          if Accessor.Getter is TGocciaFunctionBase then
+            Result := TGocciaFunctionBase(Accessor.Getter).Call(Args, AReceiver)
           else
             Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         finally

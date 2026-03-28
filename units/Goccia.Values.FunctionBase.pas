@@ -34,6 +34,7 @@ type
     function GetFunctionName: string; virtual;
   public
     constructor Create;
+    class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
 
     // Override GetProperty to provide call, apply, bind methods and length/name
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -141,6 +142,18 @@ end;
 function TGocciaFunctionBase.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+class procedure TGocciaFunctionBase.SetSharedPrototypeParent(
+  const AParent: TGocciaObjectValue);
+begin
+  if not Assigned(FSharedPrototype) then
+  begin
+    FSharedPrototype := TGocciaFunctionSharedPrototype.Create;
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FSharedPrototype);
+  end;
+  FSharedPrototype.Prototype := AParent;
 end;
 
 constructor TGocciaFunctionSharedPrototype.Create;

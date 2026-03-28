@@ -14,6 +14,9 @@ procedure ArrayCreateDataProperty(const AArray: TGocciaArrayValue; const AIndex:
 
 implementation
 
+uses
+  Goccia.Values.HoleValue;
+
 procedure ArrayCreateDataProperty(const AArray: TGocciaArrayValue; const AIndex: Integer; const AValue: TGocciaValue);
 begin
   if AIndex < AArray.Elements.Count then
@@ -21,7 +24,7 @@ begin
   else
   begin
     while AArray.Elements.Count < AIndex do
-      AArray.Elements.Add(nil);
+      AArray.Elements.Add(TGocciaHoleValue.HoleValue);
     AArray.Elements.Add(AValue);
   end;
 end;

@@ -37,7 +37,11 @@ type
   TGocciaValueMap = TOrderedStringMap<TGocciaValue>;
 
   TGocciaNullLiteralValue = class(TGocciaValue)
+  private
+    class var FNullValue: TGocciaNullLiteralValue;
   public
+    class function NullValue: TGocciaNullLiteralValue;
+
     function IsPrimitive: Boolean; override;
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -212,6 +216,13 @@ end;
 
 { TGocciaNullLiteralValue }
 
+class function TGocciaNullLiteralValue.NullValue: TGocciaNullLiteralValue;
+begin
+  if not Assigned(FNullValue) then
+    FNullValue := TGocciaNullLiteralValue.Create;
+  Result := FNullValue;
+end;
+
 function TGocciaNullLiteralValue.IsPrimitive: Boolean;
 begin
   Result := True;
@@ -240,7 +251,7 @@ end;
 
 function TGocciaNullLiteralValue.RuntimeCopy: TGocciaValue;
 begin
-  Result := TGocciaNullLiteralValue.Create;
+  Result := NullValue;
 end;
 
 function TGocciaNullLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;

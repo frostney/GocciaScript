@@ -119,6 +119,7 @@ uses
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
+  Goccia.Values.HoleValue,
   Goccia.Values.Iterator.Concrete,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
@@ -350,7 +351,8 @@ begin
       Len := TGocciaNumberLiteralValue(LenArg).Value;
       if (Len <> Trunc(Len)) or (Len < 0) or (Len > 4294967295) then
         ThrowRangeError('Invalid array length');
-      FElements.Count := Trunc(Len);
+      for I := 0 to Trunc(Len) - 1 do
+        FElements.Add(TGocciaHoleValue.HoleValue);
     end
     else
       FElements.Add(LenArg);
@@ -421,7 +423,7 @@ begin
 
   // Extend array if necessary
   while FElements.Count <= AIndex do
-    FElements.Add(nil); // Add holes for sparse arrays
+    FElements.Add(TGocciaHoleValue.HoleValue);
 
   FElements[AIndex] := AValue;
   Result := True;
@@ -452,7 +454,7 @@ end;
 
 function TGocciaArrayValue.IsArrayHole(const AElement: TGocciaValue): Boolean;
 begin
-  Result := AElement = nil;
+  Result := AElement = TGocciaHoleValue.HoleValue;
 end;
 
 function TGocciaArrayValue.ArrayMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -654,7 +656,7 @@ begin
     if I > 0 then
       ResultString := ResultString + Separator;
     // Step 7b: If element is undefined or null, let next be ""
-    if (Arr.Elements[I] = nil) or
+    if IsArrayHole(Arr.Elements[I]) or
        (Arr.Elements[I] is TGocciaUndefinedLiteralValue) or
        (Arr.Elements[I] is TGocciaNullLiteralValue) then
       Continue
@@ -904,7 +906,7 @@ begin
       begin
         for J := 0 to TGocciaArrayValue(MappedValue).Elements.Count - 1 do
         begin
-          if TGocciaArrayValue(MappedValue).Elements[J] <> nil then
+          if not IsArrayHole(TGocciaArrayValue(MappedValue).Elements[J]) then
             ResultArray.Elements.Add(TGocciaArrayValue(MappedValue).Elements[J]);
         end;
       end
@@ -1558,7 +1560,7 @@ begin
   // Step 11: Copy elements before actualStart
   for I := 0 to ActualStartIndex - 1 do
   begin
-    if Arr.Elements[I] = nil then
+    if IsArrayHole(Arr.Elements[I]) then
       ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
     else
       ResultArray.Elements.Add(Arr.Elements[I]);
@@ -1571,7 +1573,7 @@ begin
   // Step 13: Copy elements after actualStart + actualSkipCount
   for I := ActualStartIndex + DeleteCount to Arr.Elements.Count - 1 do
   begin
-    if Arr.Elements[I] = nil then
+    if IsArrayHole(Arr.Elements[I]) then
       ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
     else
       ResultArray.Elements.Add(Arr.Elements[I]);
@@ -1597,7 +1599,7 @@ begin
   begin
     if I > 0 then
       SB.AppendChar(',');
-    if FElements[I] <> nil then
+    if not IsArrayHole(FElements[I]) then
       SB.Append(FElements[I].ToStringLiteral.Value);
   end;
   Result := TGocciaStringLiteralValue.Create(SB.ToString);
@@ -1636,8 +1638,7 @@ begin
 
   for I := AFromIndex to FElements.Count - 1 do
   begin
-    // Array holes (nil) match undefined
-    if FElements[I] = nil then
+    if IsArrayHole(FElements[I]) then
     begin
       if AValue is TGocciaUndefinedLiteralValue then
       begin
@@ -1673,8 +1674,7 @@ begin
   begin
     if (Index >= 0) and (Index < FElements.Count) then
     begin
-      // If the element is nil (hole), return undefined
-      if FElements[Index] = nil then
+      if IsArrayHole(FElements[Index]) then
         Result := TGocciaUndefinedLiteralValue.UndefinedValue
       else
         Result := FElements[Index];
@@ -1700,7 +1700,7 @@ begin
     begin
       // Expand array if necessary
       while FElements.Count <= Index do
-        FElements.Add(nil); // Add holes for missing indices
+        FElements.Add(TGocciaHoleValue.HoleValue);
 
       // Set the element
       FElements[Index] := AValue;
@@ -1718,7 +1718,8 @@ function TGocciaArrayValue.HasOwnProperty(const AName: string): Boolean;
 var
   Index: Integer;
 begin
-  if TryStrToInt(AName, Index) and (Index >= 0) and (Index < FElements.Count) then
+  if TryStrToInt(AName, Index) and (Index >= 0) and (Index < FElements.Count) and
+     not IsArrayHole(FElements[Index]) then
     Result := True
   else if AName = PROP_LENGTH then
     Result := True
@@ -1730,7 +1731,8 @@ function TGocciaArrayValue.GetOwnPropertyDescriptor(const AName: string): TGocci
 var
   Index: Integer;
 begin
-  if TryStrToInt(AName, Index) and (Index >= 0) and (Index < FElements.Count) then
+  if TryStrToInt(AName, Index) and (Index >= 0) and (Index < FElements.Count) and
+     not IsArrayHole(FElements[Index]) then
     Result := TGocciaPropertyDescriptorData.Create(FElements[Index], [pfEnumerable, pfConfigurable, pfWritable])
   else if AName = PROP_LENGTH then
     Result := TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(FElements.Count), [pfWritable])

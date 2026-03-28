@@ -18,6 +18,7 @@ uses
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.Values.ClassValue,
+  Goccia.Values.HoleValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -230,7 +231,7 @@ begin
     SpreadArray := TGocciaArrayValue(ASpreadValue);
     for J := 0 to SpreadArray.Elements.Count - 1 do
     begin
-      if SpreadArray.Elements[J] = nil then
+      if SpreadArray.Elements[J] = TGocciaHoleValue.HoleValue then
         ATarget.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
       else
         ATarget.Add(SpreadArray.Elements[J]);
@@ -745,7 +746,7 @@ begin
     for I := 0 to AArrayExpression.Elements.Count - 1 do
     begin
       if AArrayExpression.Elements[I] is TGocciaHoleExpression then
-        Arr.Elements.Add(nil)
+        Arr.Elements.Add(TGocciaHoleValue.HoleValue)
       else if AArrayExpression.Elements[I] is TGocciaSpreadExpression then
       begin
         SpreadValue := EvaluateExpression(TGocciaSpreadExpression(AArrayExpression.Elements[I]).Argument, AContext);
@@ -825,7 +826,7 @@ begin
                  SpreadArray := TGocciaArrayValue(SpreadValue);
                  for J := 0 to SpreadArray.Elements.Count - 1 do
                  begin
-                   if SpreadArray.Elements[J] <> nil then
+                   if SpreadArray.Elements[J] <> TGocciaHoleValue.HoleValue then
                      Obj.DefineProperty(IntToStr(J), TGocciaPropertyDescriptorData.Create(SpreadArray.Elements[J], [pfEnumerable, pfConfigurable, pfWritable]));
                  end;
                end
@@ -2250,7 +2251,7 @@ end;
 function EvaluatePrivateMemberOnInstance(const AInstance: TGocciaInstanceValue; const APrivateName: string; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   AccessClass: TGocciaClassValue;
-  GetterFn: TGocciaFunctionValue;
+  GetterFn: TGocciaFunctionBase;
   EmptyArgs: TGocciaArgumentsCollection;
 begin
   // Determine the access class from the owning class of the current method
@@ -2349,7 +2350,7 @@ var
   ClassValue: TGocciaClassValue;
   AccessClass: TGocciaClassValue;
   Value: TGocciaValue;
-  SetterFn: TGocciaFunctionValue;
+  SetterFn: TGocciaFunctionBase;
   SetterArgs: TGocciaArgumentsCollection;
 begin
   // Evaluate the object expression
@@ -2687,7 +2688,7 @@ begin
       end
       else if Trimmed = KEYWORD_NULL then
       begin
-        Result := TGocciaNullLiteralValue.Create;
+        Result := TGocciaNullLiteralValue.NullValue;
         Exit;
       end
       else if Trimmed = NAN_LITERAL then
@@ -2948,7 +2949,7 @@ begin
         RestElements := TGocciaArrayValue.Create;
         for J := I to ArrayValue.Elements.Count - 1 do
         begin
-          if ArrayValue.Elements[J] <> nil then
+          if ArrayValue.Elements[J] <> TGocciaHoleValue.HoleValue then
             RestElements.Elements.Add(ArrayValue.Elements[J])
           else
             RestElements.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -2958,7 +2959,7 @@ begin
       end
       else
       begin
-        if (I < ArrayValue.Elements.Count) and (ArrayValue.Elements[I] <> nil) then
+        if (I < ArrayValue.Elements.Count) and (ArrayValue.Elements[I] <> TGocciaHoleValue.HoleValue) then
           ElementValue := ArrayValue.Elements[I]
         else
           ElementValue := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -3189,7 +3190,7 @@ begin
       ArrayValue := TGocciaArrayValue(ObjValue);
       if TryStrToInt(PropertyName, Index) and (Index >= 0) and (Index < ArrayValue.Elements.Count) then
       begin
-        ArrayValue.Elements[Index] := nil;
+        ArrayValue.Elements[Index] := TGocciaHoleValue.HoleValue;
         Result := TGocciaBooleanLiteralValue.TrueValue;
       end
       else

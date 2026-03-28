@@ -633,7 +633,7 @@ begin
   if Assigned(TGocciaObjectValue(AArgs.GetElement(0)).Prototype) then
     Result := TGocciaObjectValue(AArgs.GetElement(0)).Prototype
   else
-    Result := TGocciaNullLiteralValue.Create;
+    Result := TGocciaNullLiteralValue.NullValue;
 end;
 
 // ES2026 §20.1.2.7 Object.fromEntries(iterable)

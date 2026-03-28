@@ -35,6 +35,8 @@ uses
   Goccia.ObjectModel.Engine,
   Goccia.Parser,
   Goccia.Values.ClassValue,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.HoleValue,
   Goccia.Values.IteratorValue,
   Goccia.Values.Primitives,
   Goccia.Values.TypedArrayValue;
@@ -268,6 +270,8 @@ var
   I: Integer;
 begin
   PinIfAssigned(TGocciaUndefinedLiteralValue.UndefinedValue);
+  PinIfAssigned(TGocciaNullLiteralValue.NullValue);
+  PinIfAssigned(TGocciaHoleValue.HoleValue);
   PinIfAssigned(TGocciaBooleanLiteralValue.TrueValue);
   PinIfAssigned(TGocciaBooleanLiteralValue.FalseValue);
   PinIfAssigned(TGocciaNumberLiteralValue.NaNValue);
@@ -494,6 +498,7 @@ begin
   BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
 
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
+  TGocciaFunctionBase.SetSharedPrototypeParent(FunctionConstructor.Prototype);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 
   RegisterGocciaScriptGlobal;

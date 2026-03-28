@@ -1,0 +1,25 @@
+unit Goccia.VM.CallFrame;
+
+{$I Goccia.inc}
+
+interface
+
+uses
+  Souffle.Bytecode.Chunk,
+
+  Goccia.Values.Primitives;
+
+type
+  TGocciaRegister = TGocciaValue;
+  TGocciaRegisterArray = array of TGocciaRegister;
+
+  TGocciaVMCallFrame = record
+    Template: TSouffleFunctionTemplate;
+    IP: Integer;
+    Base: Integer;
+    ReturnRegister: Integer;
+  end;
+
+implementation
+
+end.

@@ -81,12 +81,12 @@ All execution tools support `--mode=bytecode` to compile and run via the Souffle
 # Execute via Souffle VM
 ./build/ScriptLoader example.js --mode=bytecode
 
-# Emit bytecode to .sbc file (no execution)
+# Emit bytecode to .gbc file (no execution)
 ./build/ScriptLoader example.js --emit
-./build/ScriptLoader example.js --emit=output.sbc
+./build/ScriptLoader example.js --output=output.gbc
 
-# Load and execute a pre-compiled .sbc file
-./build/ScriptLoader output.sbc
+# Load and execute a pre-compiled .gbc file
+./build/ScriptLoader output.gbc
 
 # Run tests via Souffle VM
 ./build/TestRunner tests --mode=bytecode

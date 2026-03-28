@@ -8,15 +8,14 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
-  Souffle.Bytecode.Binary,
-  Souffle.Bytecode.Module,
-  Souffle.Wasm.Translator,
   TimingUtils,
 
   Goccia.AST.Node,
+  Goccia.Bytecode.Binary,
+  Goccia.Bytecode.Module,
   Goccia.Compiler,
   Goccia.Engine,
-  Goccia.Engine.Backend,
+  Goccia.Engine.BytecodeBackend,
   Goccia.FileExtensions,
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
@@ -29,11 +28,9 @@ uses
 
 type
   TExecutionMode = (emInterpreted, emBytecode);
-  TEmitFormat = (efBytecode, efWasm);
 
 var
   GMode: TExecutionMode = emInterpreted;
-  GEmitFormat: TEmitFormat = efBytecode;
   GOutputPath: string = '';
   GEmitOnly: Boolean = False;
 
@@ -95,7 +92,7 @@ begin
 end;
 
 function CompileSourceFile(const AFileName: string;
-  const AGlobals: TGocciaGlobalBuiltins): TSouffleBytecodeModule;
+  const AGlobals: TGocciaGlobalBuiltins): TGocciaBytecodeModule;
 var
   ProgramNode: TGocciaProgram;
   Compiler: TGocciaCompiler;
@@ -128,15 +125,15 @@ end;
 procedure RunBytecodeFromSource(const AFileName: string);
 var
   ProgramNode: TGocciaProgram;
-  Module: TSouffleBytecodeModule;
-  Backend: TGocciaSouffleBackend;
+  Module: TGocciaBytecodeModule;
+  Backend: TGocciaBytecodeBackend;
   StartTime, CompileEnd, ExecEnd: Int64;
   ResultValue: TGocciaValue;
 begin
   WriteLn('Running script (bytecode): ', AFileName);
   StartTime := GetNanoseconds;
 
-  Backend := TGocciaSouffleBackend.Create(AFileName);
+  Backend := TGocciaBytecodeBackend.Create(AFileName);
   try
     Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
 
@@ -165,20 +162,20 @@ end;
 
 procedure RunBytecodeFromFile(const AFileName: string);
 var
-  Module: TSouffleBytecodeModule;
-  Backend: TGocciaSouffleBackend;
+  Module: TGocciaBytecodeModule;
+  Backend: TGocciaBytecodeBackend;
   StartTime, LoadEnd, ExecEnd: Int64;
   ResultValue: TGocciaValue;
 begin
   WriteLn('Running bytecode: ', AFileName);
   StartTime := GetNanoseconds;
 
-  Module := LoadModuleFromFile(AFileName);
+  Module := Goccia.Bytecode.Binary.LoadModuleFromFile(AFileName);
   LoadEnd := GetNanoseconds;
   try
-    Backend := TGocciaSouffleBackend.Create(AFileName);
-    try
-      Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
+  Backend := TGocciaBytecodeBackend.Create(AFileName);
+  try
+    Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
       ResultValue := Backend.RunModule(Module);
       ExecEnd := GetNanoseconds;
       WriteLn(SysUtils.Format('  Load: %s | Execute: %s | Total: %s',
@@ -196,7 +193,7 @@ end;
 
 procedure EmitBytecode(const AFileName, AOutputPath: string);
 var
-  Module: TSouffleBytecodeModule;
+  Module: TGocciaBytecodeModule;
   StartTime, EndTime: Int64;
 begin
   WriteLn('Compiling: ', AFileName);
@@ -206,40 +203,10 @@ begin
   try
     Module := CompileSourceFile(AFileName, TGocciaEngine.DefaultGlobals);
     try
-      SaveModuleToFile(Module, AOutputPath);
+      Goccia.Bytecode.Binary.SaveModuleToFile(Module, AOutputPath);
       EndTime := GetNanoseconds;
       WriteLn(SysUtils.Format('  Compiled to %s (%s)',
         [AOutputPath, FormatDuration(EndTime - StartTime)]));
-    finally
-      Module.Free;
-    end;
-  finally
-    TGarbageCollector.Shutdown;
-  end;
-end;
-
-procedure EmitWasm(const AFileName, AOutputPath: string);
-var
-  Module: TSouffleBytecodeModule;
-  Translator: TSouffleWasmTranslator;
-  StartTime, EndTime: Int64;
-begin
-  WriteLn('Compiling to WASM: ', AFileName);
-  StartTime := GetNanoseconds;
-
-  TGarbageCollector.Initialize;
-  try
-    Module := CompileSourceFile(AFileName, TGocciaEngine.DefaultGlobals);
-    try
-      Translator := TSouffleWasmTranslator.Create;
-      try
-        Translator.TranslateToFile(Module, AOutputPath);
-        EndTime := GetNanoseconds;
-        WriteLn(SysUtils.Format('  Compiled to %s (%s)',
-          [AOutputPath, FormatDuration(EndTime - StartTime)]));
-      finally
-        Translator.Free;
-      end;
     finally
       Module.Free;
     end;
@@ -255,7 +222,14 @@ begin
   try
     Ext := LowerCase(ExtractFileExt(AFileName));
 
-    if Ext = EXT_SBC then
+    if Ext = '.sbc' then
+    begin
+      WriteLn('Fatal error: .sbc bytecode is no longer supported pre-1.0. Recompile the source to .gbc.');
+      ExitCode := 1;
+      Exit;
+    end;
+
+    if Ext = EXT_GBC then
     begin
       RunBytecodeFromFile(AFileName);
       Exit;
@@ -263,24 +237,11 @@ begin
 
     if GEmitOnly then
     begin
-      case GEmitFormat of
-        efBytecode:
-        begin
-          if GOutputPath <> '' then
-            OutputPath := GOutputPath
-          else
-            OutputPath := ChangeFileExt(AFileName, EXT_SBC);
-          EmitBytecode(AFileName, OutputPath);
-        end;
-        efWasm:
-        begin
-          if GOutputPath <> '' then
-            OutputPath := GOutputPath
-          else
-            OutputPath := ChangeFileExt(AFileName, EXT_WASM);
-          EmitWasm(AFileName, OutputPath);
-        end;
-      end;
+      if GOutputPath <> '' then
+        OutputPath := GOutputPath
+      else
+        OutputPath := ChangeFileExt(AFileName, EXT_GBC);
+      EmitBytecode(AFileName, OutputPath);
       Exit;
     end;
 
@@ -328,15 +289,15 @@ procedure PrintUsage;
 begin
   WriteLn('Usage: ScriptLoader <file|directory> [options]');
   WriteLn;
-  WriteLn('  <file>                  Script (.js, .jsx, .ts, .tsx, .mjs) or bytecode (.sbc)');
+  WriteLn('  <file>                  Script (.js, .jsx, .ts, .tsx, .mjs) or bytecode (.gbc)');
   WriteLn('  <directory>             Run all scripts in directory');
   WriteLn;
   WriteLn('Options:');
   WriteLn('  --mode=interpreted      Tree-walk interpreter (default)');
-  WriteLn('  --mode=bytecode         Compile to bytecode and execute on Souffle VM');
-  WriteLn('  --emit                  Compile to .sbc file (no execution)');
-  WriteLn('  --emit=bytecode         Compile to .sbc file (explicit, same as --emit)');
-  WriteLn('  --emit=wasm             Compile to .wasm file');
+  WriteLn('  --mode=bytecode         Compile to bytecode and execute on the Goccia VM');
+  WriteLn('  --mode=goccia-vm        Alias for --mode=bytecode');
+  WriteLn('  --emit                  Compile to .gbc file (no execution)');
+  WriteLn('  --emit=bytecode         Compile to .gbc file (explicit, same as --emit)');
   WriteLn('  --output=<path>         Output file path (used with --emit)');
 end;
 
@@ -347,7 +308,6 @@ var
 
 begin
   GMode := emInterpreted;
-  GEmitFormat := efBytecode;
   GOutputPath := '';
   GEmitOnly := False;
 
@@ -363,9 +323,11 @@ begin
           GMode := emInterpreted
         else if ModeStr = 'bytecode' then
           GMode := emBytecode
+        else if ModeStr = 'goccia-vm' then
+          GMode := emBytecode
         else
         begin
-          WriteLn('Error: Unknown mode "', ModeStr, '". Use "interpreted" or "bytecode".');
+          WriteLn('Error: Unknown mode "', ModeStr, '". Use "interpreted", "bytecode", or "goccia-vm".');
           ExitCode := 1;
           Exit;
         end;
@@ -375,21 +337,18 @@ begin
         GEmitOnly := True;
         EmitStr := Copy(Arg, 8, MaxInt);
         if (EmitStr = 'bytecode') or (EmitStr = '') then
-          GEmitFormat := efBytecode
-        else if EmitStr = 'wasm' then
-          GEmitFormat := efWasm
+        begin
+          // Valid.
+        end
         else
         begin
-          WriteLn('Error: Unknown emit format "', EmitStr, '". Use "bytecode" or "wasm".');
+          WriteLn('Error: Unknown emit format "', EmitStr, '". Use "bytecode".');
           ExitCode := 1;
           Exit;
         end;
       end
       else if Arg = '--emit' then
-      begin
-        GEmitOnly := True;
-        GEmitFormat := efBytecode;
-      end
+        GEmitOnly := True
       else if Copy(Arg, 1, 9) = '--output=' then
         GOutputPath := Copy(Arg, 10, MaxInt)
       else if Copy(Arg, 1, 2) <> '--' then

@@ -71,6 +71,7 @@ implementation
 
 uses
   Goccia.Values.ArrayValue,
+  Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
   Goccia.Values.SetValue;
 
@@ -108,7 +109,7 @@ begin
     akValues:
     begin
       Element := Arr.Elements[FIndex];
-      if Element = nil then
+      if Element = TGocciaHoleValue.HoleValue then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
       Result := CreateIteratorResult(Element, False);
     end;
@@ -119,7 +120,7 @@ begin
       EntryArray := TGocciaArrayValue.Create;
       EntryArray.Elements.Add(TGocciaNumberLiteralValue.SmallInt(FIndex));
       Element := Arr.Elements[FIndex];
-      if Element = nil then
+      if Element = TGocciaHoleValue.HoleValue then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
       EntryArray.Elements.Add(Element);
       Result := CreateIteratorResult(EntryArray, False);
@@ -148,7 +149,7 @@ begin
     akValues:
     begin
       Element := Arr.Elements[FIndex];
-      if Element = nil then
+      if Element = TGocciaHoleValue.HoleValue then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
       Result := Element;
     end;
@@ -159,7 +160,7 @@ begin
       EntryArray := TGocciaArrayValue.Create;
       EntryArray.Elements.Add(TGocciaNumberLiteralValue.SmallInt(FIndex));
       Element := Arr.Elements[FIndex];
-      if Element = nil then
+      if Element = TGocciaHoleValue.HoleValue then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
       EntryArray.Elements.Add(Element);
       Result := EntryArray;

@@ -141,7 +141,7 @@ var
   TempFile: string;
 begin
   Original := CompileSource('const x = 42; const y = "hello";');
-  TempFile := GetTempFileName + '.sbc';
+  TempFile := GetTempFileName + '.gbc';
   try
     SaveModuleToFile(Original, TempFile);
     Loaded := LoadModuleFromFile(TempFile);
@@ -179,7 +179,7 @@ begin
     end;
 
     Bytes := Stream.Memory;
-    Expect<Byte>(Bytes[0]).ToBe(Ord('S'));
+    Expect<Byte>(Bytes[0]).ToBe(Ord('G'));
     Expect<Byte>(Bytes[1]).ToBe(Ord('B'));
     Expect<Byte>(Bytes[2]).ToBe(Ord('C'));
     Expect<Byte>(Bytes[3]).ToBe(0);
@@ -209,7 +209,7 @@ begin
     'const e = null;' +
     'const f = 9007199254740992;'
   );
-  TempFile := GetTempFileName + '.sbc';
+  TempFile := GetTempFileName + '.gbc';
   try
     SaveModuleToFile(Original, TempFile);
     Loaded := LoadModuleFromFile(TempFile);

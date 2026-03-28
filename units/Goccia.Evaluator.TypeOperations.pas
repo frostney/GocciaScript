@@ -28,6 +28,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
+  Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.SymbolValue;
 
@@ -175,8 +176,8 @@ begin
       // Check if index is valid (in bounds and not a hole)
       if (Index >= 0) and (Index < TGocciaArrayValue(ARight).Elements.Count) then
       begin
-        // For sparse arrays, also check that the element is not nil (not a hole)
-        if TGocciaArrayValue(ARight).Elements[Index] <> nil then
+        // For sparse arrays, holes do not count as present elements.
+        if TGocciaArrayValue(ARight).Elements[Index] <> TGocciaHoleValue.HoleValue then
           Result := TGocciaBooleanLiteralValue.TrueValue
         else
           Result := TGocciaBooleanLiteralValue.FalseValue;

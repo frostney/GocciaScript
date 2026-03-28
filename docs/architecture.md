@@ -35,17 +35,17 @@ flowchart TD
     Source --> Lexer
     Lexer["**Lexer** → **Parser**\nShared frontend"]
     Lexer -->|"AST"| Compiler
-    Compiler["**Compiler**\nGoccia.Compiler.pas\nAST → Souffle Bytecode"]
+    Compiler["**Compiler**\nGoccia.Compiler.pas\nAST → Goccia Bytecode"]
     Compiler -->|"TSouffleBytecodeModule"| VM
-    Compiler -->|"--emit"| SBC[".sbc Binary File"]
+    Compiler -->|"--emit"| SBC[".gbc Binary File"]
     SBC -->|"load"| VM
-    VM["**Souffle VM**\nSouffle.VM.pas\nRegister-based dispatch"]
+    VM["**Bytecode VM**\nSouffle.VM.pas\nRegister-based dispatch"]
     VM -->|"Tier 2 opcodes"| Runtime
     Runtime["**Runtime Operations**\nGoccia.Runtime.Operations.pas\nGocciaScript semantics"]
     VM --> Result
 ```
 
-The **Engine** (`Goccia.Engine.pas`) sits above both pipelines and orchestrates the process: it creates the interpreter, registers built-in globals, initializes the garbage collector, invokes the lexer/parser, and hands the AST to the interpreter (or compiler) for execution. The **Backend** (`Goccia.Engine.Backend.pas`) provides the Souffle VM bridge, bootstrapping GocciaScript globals into the VM's runtime environment.
+The **Engine** (`Goccia.Engine.pas`) sits above both pipelines and orchestrates the process: it creates the interpreter, registers built-in globals, initializes the garbage collector, invokes the lexer/parser, and hands the AST to the interpreter (or compiler) for execution. The current bytecode backend is in transition from the old Souffle bridge to a Goccia-native VM surface.
 
 ## Component Responsibilities
 

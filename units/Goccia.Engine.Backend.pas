@@ -5,31 +5,35 @@ unit Goccia.Engine.Backend;
 interface
 
 uses
+  Classes,
+
   Souffle.Bytecode.Module,
-  Souffle.VM,
-  Souffle.VM.RuntimeOperations,
 
   Goccia.AST.Node,
   Goccia.Compiler,
   Goccia.Engine,
+  Goccia.Interpreter,
   Goccia.MicrotaskQueue,
   Goccia.Modules.Resolver,
-  Goccia.Runtime.Operations,
-  Goccia.Values.Primitives;
+  Goccia.Runtime.Bootstrap,
+  Goccia.Values.Primitives,
+  Goccia.VM;
 
 type
   TGocciaEngineBackend = (
     ebTreeWalk,
-    ebSouffleVM
+    ebBytecode
   );
 
-  TGocciaSouffleBackend = class
+  TGocciaBytecodeBackend = class
   private
-    FVM: TSouffleVM;
-    FRuntime: TGocciaRuntimeOperations;
+    FMinimalVM: TGocciaVM;
     FSourcePath: string;
-    FEngine: TGocciaEngine;
+    FInterpreter: TGocciaInterpreter;
+    FBootstrap: TGocciaRuntimeBootstrap;
     FModuleResolver: TGocciaModuleResolver;
+    FBootstrapSource: TStringList;
+    procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
     constructor Create(const ASourcePath: string);
     destructor Destroy; override;
@@ -40,61 +44,65 @@ type
 
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
     procedure RegisterBuiltIns(const AGlobals: TGocciaGlobalBuiltins);
+    procedure ClearTransientCaches;
 
-    property Runtime: TGocciaRuntimeOperations read FRuntime;
-    property VM: TSouffleVM read FVM;
-    property Engine: TGocciaEngine read FEngine;
+    property Interpreter: TGocciaInterpreter read FInterpreter;
+    property Bootstrap: TGocciaRuntimeBootstrap read FBootstrap;
   end;
 
 implementation
 
 uses
-  Classes,
   SysUtils,
 
   GarbageCollector.Generic,
   ModuleResolver,
   OrderedStringMap,
-  Souffle.Bytecode.Chunk,
-  Souffle.Value,
-  Souffle.VM.Exception,
 
-  Goccia.FileExtensions,
-  Goccia.Interpreter,
+  Goccia.CallStack,
+  Goccia.Constants.PropertyNames,
+  Goccia.Error,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
-  Goccia.Values.Error;
+  Goccia.Values.Error,
+  Goccia.Values.ObjectValue;
 
-{ TGocciaSouffleBackend }
+{ TGocciaBytecodeBackend }
 
-constructor TGocciaSouffleBackend.Create(const ASourcePath: string);
+constructor TGocciaBytecodeBackend.Create(const ASourcePath: string);
 begin
   inherited Create;
   TGarbageCollector.Initialize;
+  TGocciaCallStack.Initialize;
+  TGocciaMicrotaskQueue.Initialize;
   FSourcePath := ASourcePath;
   FModuleResolver := TGocciaModuleResolver.Create(
     ExtractFilePath(ExpandFileName(ASourcePath)));
-  FRuntime := TGocciaRuntimeOperations.Create;
-  FVM := TSouffleVM.Create(FRuntime);
-  FRuntime.VM := FVM;
-  FRuntime.Engine := nil;
-  FRuntime.ModuleResolver := FModuleResolver;
-  FEngine := nil;
+  FMinimalVM := TGocciaVM.Create;
+  FInterpreter := nil;
+  FBootstrap := nil;
+  FBootstrapSource := nil;
 end;
 
-destructor TGocciaSouffleBackend.Destroy;
+destructor TGocciaBytecodeBackend.Destroy;
 begin
-  {$IFDEF BRIDGE_METRICS}
-  TBridgeMetrics.DumpGlobal;
-  {$ENDIF}
-  FVM.Free;
-  FRuntime.Free;
-  FEngine.Free;
+  if Assigned(TGarbageCollector.Instance) and Assigned(FInterpreter) then
+    TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
+  FMinimalVM.Free;
+  FBootstrap.Free;
+  FInterpreter.Free;
+  FBootstrapSource.Free;
   FModuleResolver.Free;
   inherited;
 end;
 
-function TGocciaSouffleBackend.CompileAndRun(
+procedure TGocciaBytecodeBackend.ThrowError(const AMessage: string; const ALine,
+  AColumn: Integer);
+begin
+  raise TGocciaRuntimeError.Create(AMessage, ALine, AColumn, FSourcePath, FBootstrapSource);
+end;
+
+function TGocciaBytecodeBackend.CompileAndRun(
   const AProgram: TGocciaProgram): TGocciaValue;
 var
   Module: TSouffleBytecodeModule;
@@ -107,102 +115,70 @@ begin
   end;
 end;
 
-function TGocciaSouffleBackend.CompileToModule(
+function TGocciaBytecodeBackend.CompileToModule(
   const AProgram: TGocciaProgram): TSouffleBytecodeModule;
 var
   Compiler: TGocciaCompiler;
-  Template: TSouffleFunctionTemplate;
 begin
   Compiler := TGocciaCompiler.Create(FSourcePath);
   try
     Result := Compiler.Compile(AProgram);
-
-    for Template in Compiler.FormalParameterCounts.Keys do
-      FRuntime.RegisterFormalParameterCount(
-        Template, Compiler.FormalParameterCounts[Template]);
   finally
     Compiler.Free;
   end;
 end;
 
-function TGocciaSouffleBackend.RunModule(
+function TGocciaBytecodeBackend.RunModule(
   const AModule: TSouffleBytecodeModule): TGocciaValue;
-var
-  SouffleResult: TSouffleValue;
-  GC: TGarbageCollector;
-  WasEnabled: Boolean;
 begin
-  GC := TGarbageCollector.Instance;
-  WasEnabled := GC.Enabled;
-  GC.Enabled := False;
-  try
-    try
-      try
-        SouffleResult := FVM.Execute(AModule);
-        if Assigned(TGocciaMicrotaskQueue.Instance) then
-          TGocciaMicrotaskQueue.Instance.DrainQueue;
-        Result := FRuntime.UnwrapToGocciaValue(SouffleResult);
-      except
-        on E: ESouffleThrow do
-          raise TGocciaThrowValue.Create(
-            FRuntime.UnwrapToGocciaValue(E.ThrownValue));
-      end;
-    finally
-      if Assigned(TGocciaMicrotaskQueue.Instance) then
-        TGocciaMicrotaskQueue.Instance.ClearQueue;
-    end;
-  finally
-    GC.Enabled := WasEnabled;
-  end;
+  Result := FMinimalVM.ExecuteModule(AModule);
 end;
 
-procedure TGocciaSouffleBackend.RegisterGlobal(const AName: string;
+procedure TGocciaBytecodeBackend.RegisterGlobal(const AName: string;
   const AValue: TGocciaValue);
 begin
-  FRuntime.RegisterGlobal(AName, FRuntime.ToSouffleValue(AValue));
+  if not Assigned(FInterpreter) then
+    Exit;
+  FInterpreter.GlobalScope.DefineLexicalBinding(AName, AValue, dtConst);
 end;
 
-procedure TGocciaSouffleBackend.RegisterBuiltIns(
+procedure TGocciaBytecodeBackend.RegisterBuiltIns(
   const AGlobals: TGocciaGlobalBuiltins);
 var
   EmptySource: TStringList;
-  GlobalScope: TGocciaScope;
-  Names: TGocciaStringArray;
   AliasPair: TOrderedStringMap<string>.TKeyValuePair;
-  I: Integer;
 begin
-  FreeAndNil(FEngine);
-  FRuntime.Engine := nil;
+  FreeAndNil(FBootstrap);
+  if Assigned(TGarbageCollector.Instance) and Assigned(FInterpreter) then
+    TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
+  FreeAndNil(FInterpreter);
+  FreeAndNil(FBootstrapSource);
 
   EmptySource := TStringList.Create;
-  try
-    FEngine := TGocciaEngine.Create(FSourcePath, EmptySource, AGlobals);
-  finally
-    EmptySource.Free;
-  end;
+  EmptySource.Text := '';
+  FBootstrapSource := EmptySource;
+  FInterpreter := TGocciaInterpreter.Create(FSourcePath, FBootstrapSource);
+  FInterpreter.JSXEnabled := ggJSX in AGlobals;
+  FInterpreter.Resolver := FModuleResolver;
+  TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
+  FBootstrap := TGocciaRuntimeBootstrap.Create(FInterpreter, AGlobals, ThrowError);
 
-  FRuntime.Engine := FEngine;
-  FRuntime.SourcePath := FSourcePath;
+  FMinimalVM.GlobalScope := FInterpreter.GlobalScope;
+  FMinimalVM.Interpreter := FInterpreter;
 
-  if Assigned(FEngine.Interpreter.Resolver) then
-    for AliasPair in FEngine.Interpreter.Resolver.Aliases do
+  if Assigned(FInterpreter.Resolver) then
+    for AliasPair in FInterpreter.Resolver.Aliases do
       FModuleResolver.AddAlias(AliasPair.Key, AliasPair.Value);
 
-  GlobalScope := FEngine.Interpreter.GlobalScope;
-  Names := GlobalScope.GetOwnBindingNames;
-  for I := 0 to Length(Names) - 1 do
-  begin
-    if GlobalScope.GetLexicalBinding(Names[I]).DeclarationType = dtConst then
-      FRuntime.RegisterConstGlobal(Names[I],
-        FRuntime.ToSouffleValue(GlobalScope.GetValue(Names[I])))
-    else
-      RegisterGlobal(Names[I], GlobalScope.GetValue(Names[I]));
-  end;
+  if FInterpreter.GlobalScope.GetValue('GocciaScript') is TGocciaObjectValue then
+    TGocciaObjectValue(FInterpreter.GlobalScope.GetValue('GocciaScript'))
+      .AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.TrueValue);
+end;
 
-  FRuntime.PatchGocciaScriptStrictTypes;
-  FRuntime.RegisterDelegates;
-  FRuntime.RegisterTestNatives;
-  FRuntime.RegisterNativeBuiltins;
+procedure TGocciaBytecodeBackend.ClearTransientCaches;
+begin
+  // The Goccia VM executes directly on TGocciaValue and does not maintain
+  // bridge-side transient caches that need per-measurement clearing.
 end;
 
 end.

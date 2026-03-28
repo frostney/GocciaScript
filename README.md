@@ -149,28 +149,25 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 ./build.pas loader && ./build/ScriptLoader example.js
 ```
 
-### Run via Souffle VM (Bytecode)
+### Run via Bytecode
 
-GocciaScript includes an alternative bytecode execution backend — the **Souffle VM** — a general-purpose register-based virtual machine that routes language features through a bridge layer to the GocciaScript evaluator. This approach passes 100% of the test suite (3,501 tests). The compiler infers types from initializers and type annotations, emitting specialized float opcodes inlined in the VM dispatch loop — typed code runs ~28–30% faster than untyped. Known structural limitation: the ABC-encoded instruction format limits constant pool references to 255 per prototype. `.sbc` files use little-endian byte order for cross-platform portability. See [Souffle VM Architecture](docs/souffle-vm.md) for full details.
+GocciaScript includes a bytecode execution backend that is being folded into the main runtime. The public bytecode artifact is now `.gbc`, and WASM emission has been removed pre-1.0.
 
 ```bash
-# Compile and execute via Souffle VM
+# Compile and execute via bytecode
 ./build/ScriptLoader example.js --mode=bytecode
 
-# Compile to .sbc bytecode file (no execution)
+# Compile to .gbc bytecode file (no execution)
 ./build/ScriptLoader example.js --emit
 
-# Compile to .wasm file
-./build/ScriptLoader example.js --emit=wasm
-
 # Custom output path
-./build/ScriptLoader example.js --emit=wasm --output=out.wasm
+./build/ScriptLoader example.js --emit --output=out.gbc
 
-# Load and execute a pre-compiled .sbc file
-./build/ScriptLoader example.sbc
+# Load and execute a pre-compiled .gbc file
+./build/ScriptLoader example.gbc
 ```
 
-See [Souffle VM](docs/souffle-vm.md) for the full architecture and [WASM Backend](docs/wasm-backend.md) for WASM output.
+See [Souffle VM](docs/souffle-vm.md) for historical architecture notes from the migration.
 
 ### Start the REPL
 
@@ -279,7 +276,7 @@ GocciaScript supports two execution backends that share the same frontend (lexer
 flowchart LR
     Source["Source Code"] --> Lexer --> Parser --> AST
     AST --> Interpreter["Tree-Walk Interpreter"] --> Result1["Result"]
-    AST --> Compiler["Bytecode Compiler"] --> VM["Souffle VM"] --> Result2["Result"]
+    AST --> Compiler["Bytecode Compiler"] --> VM["Goccia VM"] --> Result2["Result"]
 ```
 
 ### Tree-Walk Interpreter (default)
@@ -294,20 +291,17 @@ flowchart LR
 | Evaluator | `Goccia.Evaluator.pas` | Pure-function AST evaluation |
 | GC | `GarbageCollector.Generic.pas` | Mark-and-sweep garbage collection (`TGarbageCollector`) |
 
-### Souffle VM (`--mode=bytecode`)
+### Goccia VM (`--mode=bytecode`)
 
 | Component | File | Role |
 |-----------|------|------|
 | Compiler | `Goccia.Compiler.pas` | AST → Souffle bytecode |
 | VM | `Souffle.VM.pas` | Register-based dispatch with two-tier ISA |
 | Runtime Ops | `Goccia.Runtime.Operations.pas` | GocciaScript semantics, bridge caches, array sync, native delegates |
-| Backend | `Goccia.Engine.Backend.pas` | Orchestration, built-in bridging |
-| Binary I/O | `Souffle.Bytecode.Binary.pas` | `.sbc` file serialization/deserialization |
-| WASM Emitter | `Souffle.Wasm.Emitter.pas` | WASM 1.0 + 3.0 binary module builder |
-| WASM Types | `Souffle.Wasm.Types.pas` | WASM GC type definitions for Souffle values |
-| WASM Translator | `Souffle.Wasm.Translator.pas` | Souffle bytecode to WASM translation |
+| Backend | `Goccia.Engine.BytecodeBackend.pas` | Bytecode backend compatibility surface during the VM migration |
+| Binary I/O | `Goccia.Bytecode.Binary.pas` | `.gbc` file serialization/deserialization |
 
-The Souffle VM is a general-purpose bytecode virtual machine designed to support multiple language frontends and WASM 3.0 output. Its two-tier instruction set separates universal VM mechanics (Tier 1) from pluggable language semantics (Tier 2).
+The bytecode backend is in the middle of a migration from the old Souffle abstraction to a Goccia-owned VM surface.
 
 See [Architecture](docs/architecture.md) for the interpreter deep-dive and [Souffle VM](docs/souffle-vm.md) for the bytecode VM architecture.
 

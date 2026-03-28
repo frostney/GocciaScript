@@ -131,7 +131,7 @@ end;
 
 procedure TGocciaJSONVisitor.OnNull;
 begin
-  EmitValue(TGocciaNullLiteralValue.Create);
+  EmitValue(TGocciaNullLiteralValue.NullValue);
 end;
 
 procedure TGocciaJSONVisitor.OnBoolean(const AValue: Boolean);

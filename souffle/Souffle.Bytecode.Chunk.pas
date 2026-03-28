@@ -63,6 +63,7 @@ type
     FExceptionHandlerCount: Integer;
     FMaxRegisters: UInt8;
     FParameterCount: UInt8;
+    FFormalParameterCount: UInt8;
     FUpvalueCount: UInt8;
     FDebugInfo: TSouffleDebugInfo;
     FLocalTypes: array of TSouffleLocalType;
@@ -70,6 +71,7 @@ type
     FLocalStrictFlags: array of Boolean;
     FLocalStrictCount: UInt8;
     FIsAsync: Boolean;
+    FIsArrow: Boolean;
     FTypeCheckPreambleSize: UInt8;
     FMaterializedConstants: array of TSouffleValue;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
@@ -106,6 +108,7 @@ type
     property ExceptionHandlerCount: Integer read FExceptionHandlerCount;
     property MaxRegisters: UInt8 read FMaxRegisters write FMaxRegisters;
     property ParameterCount: UInt8 read FParameterCount write FParameterCount;
+    property FormalParameterCount: UInt8 read FFormalParameterCount write FFormalParameterCount;
     property UpvalueCount: UInt8 read FUpvalueCount;
     property DebugInfo: TSouffleDebugInfo read FDebugInfo write FDebugInfo;
 
@@ -118,6 +121,7 @@ type
     property LocalStrictCount: UInt8 read FLocalStrictCount;
 
     property IsAsync: Boolean read FIsAsync write FIsAsync;
+    property IsArrow: Boolean read FIsArrow write FIsArrow;
     property TypeCheckPreambleSize: UInt8 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
   end;
 
@@ -153,10 +157,12 @@ begin
   FExceptionHandlerCount := 0;
   FMaxRegisters := 0;
   FParameterCount := 0;
+  FFormalParameterCount := 0;
   FUpvalueCount := 0;
   FDebugInfo := nil;
   FLocalTypeCount := 0;
   FLocalStrictCount := 0;
+  FIsArrow := False;
 end;
 
 destructor TSouffleFunctionTemplate.Destroy;

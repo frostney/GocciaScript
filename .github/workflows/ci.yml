@@ -207,51 +207,6 @@ jobs:
           ./build/Goccia.Compiler.Test
           ./build/Goccia.Builtins.TestAssertions.Test
 
-  wasm-test:
-    needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-darwin
-            runner: macos-latest
-          - target: x86_64-darwin
-            runner: macos-15-intel
-          - target: x86_64-linux
-            runner: ubuntu-latest
-          - target: aarch64-linux
-            runner: ubuntu-24.04-arm
-          - target: x86_64-win64
-            runner: windows-latest
-          - target: i386-win32
-            runner: windows-latest
-    runs-on: ${{ matrix.runner }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Download build
-        uses: actions/download-artifact@v5
-        with:
-          name: gocciascript-${{ matrix.target }}
-          path: build/
-
-      - name: Make binaries executable
-        if: runner.os != 'Windows'
-        run: chmod +x build/*
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: '22'
-
-      - name: Run WASM integration tests
-        run: node ./tests-wasm/run-wasm-tests.mjs
-
   benchmark:
     needs: build
     strategy:
@@ -375,7 +330,7 @@ jobs:
         run: ./build/ScriptLoader examples
 
   artifacts:
-    needs: [test, wasm-test, benchmark, examples]
+    needs: [test, benchmark, examples]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
@@ -410,7 +365,7 @@ jobs:
             build/REPL.exe
 
   release:
-    needs: [test, wasm-test, benchmark, examples]
+    needs: [test, benchmark, examples]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     defaults:

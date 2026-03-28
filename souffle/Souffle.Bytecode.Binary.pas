@@ -132,7 +132,9 @@ begin
   WriteString(AProto.Name);
   WriteUInt8(AProto.MaxRegisters);
   WriteUInt8(AProto.ParameterCount);
+  WriteUInt8(AProto.FormalParameterCount);
   WriteUInt8(AProto.UpvalueCount);
+  WriteBoolean(AProto.IsArrow);
 
   // Code
   WriteUInt32(UInt32(AProto.CodeCount));
@@ -334,11 +336,16 @@ begin
   Name := ReadString;
   MaxRegs := ReadUInt8;
   ParamCount := ReadUInt8;
-  UpvalueCount := ReadUInt8;
+  LocalTypeCount := 0;
+  LocalStrictCount := 0;
+  HasDebug := False;
 
   Result := TSouffleFunctionTemplate.Create(Name);
   Result.MaxRegisters := MaxRegs;
   Result.ParameterCount := ParamCount;
+  Result.FormalParameterCount := ReadUInt8;
+  UpvalueCount := ReadUInt8;
+  Result.IsArrow := ReadBoolean;
 
   // Code
   CodeCount := ReadUInt32;
@@ -421,7 +428,7 @@ begin
   FStream.ReadBuffer(Magic, 4);
   if (Magic[0] <> SOUFFLE_BINARY_MAGIC[0]) or (Magic[1] <> SOUFFLE_BINARY_MAGIC[1]) or
      (Magic[2] <> SOUFFLE_BINARY_MAGIC[2]) or (Magic[3] <> SOUFFLE_BINARY_MAGIC[3]) then
-    raise Exception.Create('Invalid Souffle bytecode file: bad magic');
+    raise Exception.Create('Invalid Goccia bytecode file: bad magic');
 
   Version := ReadUInt16;
   if Version <> SOUFFLE_FORMAT_VERSION then

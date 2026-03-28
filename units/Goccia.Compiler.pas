@@ -170,9 +170,9 @@ begin
     EmitInstruction(Ctx, EncodeABC(OP_RT_AWAIT, ADest, ADest, 0));
   end
   else if AExpr is TGocciaHoleExpression then
-    EmitInstruction(Ctx, EncodeABC(OP_LOAD_NIL, ADest, 2 {GOCCIA_NIL_HOLE}, 0))
+    EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE, ADest, 0, 0))
   else
-    EmitInstruction(Ctx, EncodeABC(OP_LOAD_NIL, ADest, 0, 0));
+    EmitInstruction(Ctx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
 end;
 
 procedure TGocciaCompiler.DoCompileStatement(const AStmt: TGocciaStatement);

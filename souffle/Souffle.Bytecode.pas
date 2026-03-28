@@ -5,8 +5,8 @@ unit Souffle.Bytecode;
 interface
 
 const
-  SOUFFLE_FORMAT_VERSION = 4;
-  SOUFFLE_BINARY_MAGIC: array[0..3] of Byte = (Ord('S'), Ord('B'), Ord('C'), 0);
+  SOUFFLE_FORMAT_VERSION = 5;
+  SOUFFLE_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
 
   OP_RT_FIRST = 128;
 
@@ -51,16 +51,19 @@ type
     OP_RETURN        = 20,  // A     Return R[A] to caller
     OP_RETURN_NIL    = 21,  //       Return Nil to caller
 
+    // ── Core: Goccia Literal Loads ──
+    OP_LOAD_UNDEFINED = 22, // A     R[A] := undefined
+
     // ── Core: Compound Types ──
     OP_ARRAY_POP     = 23,  // AB    R[A] := Array(R[B]).Pop()
     OP_NEW_ARRAY     = 24,  // AB    R[A] := new Array(capacity=B)
     OP_ARRAY_PUSH    = 25,  // AB    Array(R[A]).push(R[B])
     OP_ARRAY_GET     = 26,  // ABC   R[A] := Array(R[B])[R[C].AsInteger]
     OP_ARRAY_SET     = 27,  // ABC   Array(R[A])[R[B].AsInteger] := R[C]
-    OP_NEW_RECORD    = 28,  // AB    R[A] := new Record(capacity=B)
-    OP_RECORD_GET    = 29,  // ABC   R[A] := Record(R[B])[Constants[C]]
-    OP_RECORD_SET    = 30,  // ABC   Record(R[A])[Constants[B]] := R[C]
-    OP_RECORD_DELETE = 31,  // ABx   delete Record(R[A])[Constants[Bx]]
+    OP_NEW_OBJECT    = 28,  // AB    R[A] := new Object(capacity=B)
+    OP_GET_PROP_CONST = 29, // ABC   R[A] := GetProperty(R[B], Constants[C])
+    OP_SET_PROP_CONST = 30, // ABC   SetProperty(R[A], Constants[B], R[C])
+    OP_DELETE_PROP_CONST = 31, // ABx delete Property(R[A], Constants[Bx])
     OP_GET_LENGTH    = 32,  // AB    R[A] := Length(R[B])
 
     // ── Core: Arguments ──
@@ -98,19 +101,23 @@ type
     // ── Core: String ──
     OP_CONCAT        = 55,  // ABC   R[A] := String(R[B]) + String(R[C])
 
-    // ── Core: Blueprint ──
-    OP_NEW_BLUEPRINT = 66,  // ABx   R[A] := new Blueprint(name=Constants[Bx])
-    OP_INHERIT       = 67,  // AB    Blueprint(R[A]).super := Blueprint(R[B])
-    // opcode 68 removed: was OP_BLUEPRINT_METHOD, use OP_RECORD_SET on blueprint instead
-    OP_INSTANTIATE   = 69,  // AB    R[A] := new Record(blueprint=Blueprint(R[B]))
-    OP_GET_SLOT      = 70,  // ABC   R[A] := Record(R[B]).slots[C]
-    OP_SET_SLOT      = 71,  // ABC   Record(R[A]).slots[B] := R[C]
+    // ── Core: Classes / Internal Slots ──
+    OP_NEW_CLASS     = 66,  // ABx   R[A] := new Class(name=Constants[Bx])
+    OP_CLASS_SET_SUPER = 67,  // AB  Class(R[A]).super := Class(R[B])
+    // opcode 68 removed
+    OP_CLASS_INSTANTIATE = 69,  // AB R[A] := new Instance(Class(R[B]))
+    OP_GET_INTERNAL_SLOT = 70,  // ABC R[A] := InternalSlot(R[B], C)
+    OP_SET_INTERNAL_SLOT = 71,  // ABC InternalSlot(R[A], B) := R[C]
 
     // ── Core: Type Coercion ──
     OP_TO_PRIMITIVE  = 72,  // AB    R[A] := ToPrimitive(R[B]) — fast-path for nil/bool/int/float/string, runtime callback for references
 
     // ── Core: Destructuring ──
     OP_UNPACK        = 73,  // ABC   R[A] := Array(R[B])[C..] — unpack rest of TSouffleArray from index C
+
+    // ── Core: Goccia Literal Loads ──
+    OP_LOAD_NULL     = 74,  // A     R[A] := null
+    OP_LOAD_HOLE     = 75,  // A     R[A] := internal hole sentinel
 
     // ── Core: Type Checking ──
     OP_CHECK_TYPE    = 76,  // ABC   if R[A] not matches TSouffleLocalType(B): RuntimeOps.CheckLocalType(R[A], B)
@@ -126,6 +133,28 @@ type
     // ── Core: Boolean ──
     OP_NOT           = 83,  // AB    R[A] := Boolean(not IsTrue(R[B]))
     OP_TO_BOOL       = 84,  // AB    R[A] := Boolean(IsTrue(R[B]))
+    OP_DEFINE_GETTER_CONST = 85, // AC R[A] define getter Constants[C] using R[A+1]
+    OP_DEFINE_SETTER_CONST = 86, // AC R[A] define setter Constants[C] using R[A+1]
+    OP_DEFINE_STATIC_GETTER_CONST = 87, // AC Class(R[A]) define static getter Constants[C] using R[A+1]
+    OP_DEFINE_STATIC_SETTER_CONST = 88, // AC Class(R[A]) define static setter Constants[C] using R[A+1]
+    OP_DEFINE_COMPUTED_GETTER = 89, // AC R[A] define getter from R[C] using R[A+1]
+    OP_DEFINE_COMPUTED_SETTER = 90, // AC R[A] define setter from R[C] using R[A+1]
+    OP_DEFINE_COMPUTED_STATIC_GETTER = 91, // AC Class(R[A]) define static getter from R[C] using R[A+1]
+    OP_DEFINE_COMPUTED_STATIC_SETTER = 92, // AC Class(R[A]) define static setter from R[C] using R[A+1]
+    OP_SPREAD_OBJECT = 93, // AC Object(R[A]) spread from R[C]
+    OP_OBJECT_REST = 94, // AC R[A] := object rest from R[C], exclusions in R[A+1]
+    OP_REQUIRE_OBJECT = 95, // A require R[A] to be object-coercible
+    OP_REQUIRE_ITERABLE = 96, // A R[A] := iterable materialized to array
+    OP_SPREAD_ITERABLE_INTO_ARRAY = 97, // AC Array(R[A]) spread from iterable R[C]
+    OP_THROW_TYPE_ERROR_CONST = 98, // C throw TypeError(Constants[C])
+    OP_DEFINE_GLOBAL_CONST = 99, // AC define/update global Constants[C] from R[A]
+    OP_FINALIZE_ENUM = 100, // AC R[A] := finalize enum R[A] with name Constants[C]
+    OP_SUPER_GET_CONST = 101, // AC R[A] := get super property Constants[C], super in R[A+1], receiver in R[A-1]
+    OP_SETUP_AUTO_ACCESSOR_CONST = 102, // AC setup auto-accessor Constants[C] on active decorator class
+    OP_BEGIN_DECORATORS = 103, // A begin decorator session for R[A], super in R[A+1]
+    OP_APPLY_CLASS_DECORATOR = 104, // A apply class decorator R[A] to active decorator class
+    OP_FINISH_DECORATORS = 105, // A R[A] := finalize active decorator class
+    OP_APPLY_ELEMENT_DECORATOR_CONST = 106, // AC apply element decorator R[A] using descriptor Constants[C]
 
     // ── Runtime: Polymorphic Arithmetic ──
     OP_RT_ADD        = 128, // ABC   R[A] := Runtime.Add(R[B], R[C])

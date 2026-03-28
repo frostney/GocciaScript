@@ -27,26 +27,24 @@ GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a 
 
 ```bash
 ./build/ScriptLoader example.js                  # Execute a script (interpreted)
-./build/ScriptLoader example.js --mode=bytecode  # Execute via Souffle VM
-./build/ScriptLoader example.js --emit           # Compile to .sbc (no execution)
-./build/ScriptLoader example.js --emit=bytecode  # Compile to .sbc (explicit)
-./build/ScriptLoader example.js --emit=wasm      # Compile to .wasm
-./build/ScriptLoader example.js --emit --output=out.sbc   # Custom output path
-./build/ScriptLoader example.js --emit=wasm --output=out.wasm  # Custom WASM output
-./build/ScriptLoader out.sbc                     # Load and execute .sbc bytecode
+./build/ScriptLoader example.js --mode=bytecode  # Execute via bytecode VM
+./build/ScriptLoader example.js --emit           # Compile to .gbc (no execution)
+./build/ScriptLoader example.js --emit=bytecode  # Compile to .gbc (explicit)
+./build/ScriptLoader example.js --emit --output=out.gbc   # Custom output path
+./build/ScriptLoader out.gbc                     # Load and execute .gbc bytecode
 ./build/REPL                                      # Start interactive REPL
 ./build/TestRunner tests/                                                      # Run all JavaScript tests
 ./build/TestRunner tests/language/expressions/                                 # Run a test category
 ./build/TestRunner tests --no-progress --exit-on-first-failure                 # CI mode
 ./build/TestRunner tests --silent                                              # Suppress all console output
 ./build/TestRunner tests --output=results.json                                 # Write test results as JSON
-./build/TestRunner tests --mode=bytecode                                       # Run tests via Souffle VM
+./build/TestRunner tests --mode=bytecode                                       # Run tests via the Goccia bytecode VM
 ./build/BenchmarkRunner benchmarks/                                               # Run all benchmarks
 ./build/BenchmarkRunner benchmarks/fibonacci.js                                   # Run a specific benchmark
 ./build/BenchmarkRunner benchmarks --format=json --output=out.json                # Export as JSON
 ./build/BenchmarkRunner benchmarks --format=console --format=json --output=out.json # Console + JSON
 ./build/BenchmarkRunner benchmarks --no-progress                                  # Suppress progress (CI)
-./build/BenchmarkRunner benchmarks --mode=bytecode                                # Benchmarks via Souffle VM
+./build/BenchmarkRunner benchmarks --mode=bytecode                                # Benchmarks via the Goccia bytecode VM
 ```
 
 ### Compile and Run (Common Workflows)
@@ -79,11 +77,11 @@ fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- BenchmarkRunner.dpr
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for the full architecture deep-dive. See [docs/souffle-vm.md](docs/souffle-vm.md) for the Souffle VM architecture.
+See [docs/architecture.md](docs/architecture.md) for the full architecture deep-dive. See [docs/souffle-vm.md](docs/souffle-vm.md) for historical migration notes from the Souffle VM.
 
 **Interpreted pipeline:** Source → (JSX Transformer) → Lexer → Parser → Interpreter → Evaluator → Result
 
-**Bytecode pipeline:** Source → Lexer → Parser → Compiler → Souffle Bytecode → Souffle VM → Result
+**Bytecode pipeline:** Source → Lexer → Parser → Compiler → Goccia Bytecode → Goccia VM → Result
 
 **WASM pipeline:** Source → Lexer → Parser → Compiler → Souffle Bytecode → WASM Translator → `.wasm` binary
 
@@ -164,11 +162,7 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 | Souffle Exception | `Souffle.VM.Exception.pas` | `TSouffleHandlerStack`, `ESouffleThrow` — handler-table exception model |
 | Souffle Runtime Ops | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` — 47-method interface (41 abstract + 6 virtual with defaults) for language-specific semantics, including `ExtendedOperation` for sub-opcode dispatch |
 | Souffle Heap | `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleString`, heap kind constants |
-| GocciaScript Backend | `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — bridges GocciaScript engine to Souffle VM; initializes `TGarbageCollector`, disables automatic collection during `RunModule`, restores previous `Enabled` state afterward |
-| WASM Emitter | `Souffle.Wasm.Emitter.pas` | `TWasmModule`, `TWasmCodeBuilder` — WASM binary module builder (types, imports, functions, exports, custom sections); `AddCustomSection` for embedding constant pool data |
-| WASM Types | `Souffle.Wasm.Types.pas` | `TSouffleWasmTypeLayout` — WASM GC type definitions for Souffle values; `SouffleLocalTypeToWasmValType` helper |
-| WASM Translator | `Souffle.Wasm.Translator.pas` | `TSouffleWasmTranslator` — Souffle bytecode → WASM translation: function flattening, register-to-local mapping, control flow reconstruction (sorted targets approach with interior/exterior block classification for try ranges), demand-driven runtime import wiring, constant pool flattening with `souffle:constants` custom section, native WASM exception handling (`try`/`catch`/`throw` via imported tag), all Tier 1 + Tier 2 opcodes. All functions exported as `__fn_N` for closure invocation |
-| WASM Host Runtime | `tests-wasm/souffle-host.mjs` | Node.js ES module that loads `.wasm`, extracts `souffle:constants` custom section, provides `souffle` module imports (value construction, arithmetic, property access, closures, blueprints, exception tag), manages `currentClosure` for upvalue access |
+| GocciaScript Backend | `Goccia.Engine.BytecodeBackend.pas` | Transitional bytecode backend surface used while folding Souffle into GocciaScript proper |
 | GocciaScript Compiler | `Goccia.Compiler.pas` | `TGocciaCompiler` — AST → Souffle bytecode compilation, top-level dispatch |
 | Compiler Expressions | `Goccia.Compiler.Expressions.pas` | Expression compilation: functions, methods, identifiers, typed local load/store |
 | Compiler Statements | `Goccia.Compiler.Statements.pas` | Statement compilation: variables, classes (`IsSimpleClass` + `CompileClassDeclaration`), control flow |
