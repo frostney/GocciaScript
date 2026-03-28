@@ -151,7 +151,7 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 
 ### Run via Bytecode
 
-GocciaScript includes a bytecode execution backend that is being folded into the main runtime. The public bytecode artifact is now `.gbc`, and WASM emission has been removed pre-1.0.
+GocciaScript includes a bytecode execution backend. The public bytecode artifact is `.gbc`, and WASM emission is not supported.
 
 ```bash
 # Compile and execute via bytecode
@@ -167,7 +167,7 @@ GocciaScript includes a bytecode execution backend that is being folded into the
 ./build/ScriptLoader example.gbc
 ```
 
-See [Souffle VM](docs/souffle-vm.md) for historical architecture notes from the migration.
+See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode backend architecture.
 
 ### Start the REPL
 
@@ -295,15 +295,16 @@ flowchart LR
 
 | Component | File | Role |
 |-----------|------|------|
-| Compiler | `Goccia.Compiler.pas` | AST → Souffle bytecode |
-| VM | `Souffle.VM.pas` | Register-based dispatch with two-tier ISA |
-| Runtime Ops | `Goccia.Runtime.Operations.pas` | GocciaScript semantics, bridge caches, array sync, native delegates |
-| Backend | `Goccia.Engine.BytecodeBackend.pas` | Bytecode backend compatibility surface during the VM migration |
+| Compiler | `Goccia.Compiler.pas` | AST → Goccia bytecode |
+| VM | `Goccia.VM.pas` | Register-based bytecode execution on `TGocciaValue` |
+| Bytecode Units | `Goccia.Bytecode*.pas` | Opcode definitions, templates, modules, debug info, binary I/O |
+| VM | `Goccia.VM*.pas` | Register-based execution on `TGocciaValue` |
+| Backend | `Goccia.Engine.Backend.pas` | Bytecode backend orchestration |
 | Binary I/O | `Goccia.Bytecode.Binary.pas` | `.gbc` file serialization/deserialization |
 
-The bytecode backend is in the middle of a migration from the old Souffle abstraction to a Goccia-owned VM surface.
+The bytecode backend is a Goccia-owned VM surface with shared runtime objects across interpreter and bytecode mode.
 
-See [Architecture](docs/architecture.md) for the interpreter deep-dive and [Souffle VM](docs/souffle-vm.md) for the bytecode VM architecture.
+See [Architecture](docs/architecture.md) for the interpreter deep-dive and [Bytecode VM](docs/bytecode-vm.md) for the bytecode VM architecture.
 
 ## Design Principles
 
@@ -324,7 +325,7 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 | [Language Restrictions](docs/language-restrictions.md) | Supported and excluded features with rationale |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins, API reference, adding new ones |
 | [Architecture](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
-| [Souffle VM](docs/souffle-vm.md) | Bytecode VM architecture, two-tier ISA, value system, WASM 3.0 backend |
+| [Bytecode VM](docs/bytecode-vm.md) | Bytecode VM architecture, binary format, and core runtime model |
 | [WASM Backend](docs/wasm-backend.md) | WASM output: value mapping, runtime import contract, host requirements |
 | [Design Decisions](docs/design-decisions.md) | Rationale behind key technical choices |
 | [Code Style](docs/code-style.md) | Naming conventions, patterns, file organization |

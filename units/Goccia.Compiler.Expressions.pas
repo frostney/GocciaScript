@@ -5,12 +5,11 @@ unit Goccia.Compiler.Expressions;
 interface
 
 uses
-  Souffle.Bytecode,
-  Souffle.Bytecode.Chunk,
-
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.Bytecode,
+  Goccia.Bytecode.Chunk,
   Goccia.Compiler.Context,
   Goccia.Compiler.Scope;
 
@@ -91,11 +90,8 @@ uses
   Math,
   SysUtils,
 
-  Souffle.Bytecode.Debug,
-  Souffle.Value,
-
+  Goccia.Bytecode.Debug,
   Goccia.Compiler.ConstantFolding,
-  Goccia.Compiler.ExtOps,
   Goccia.Compiler.Statements,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
@@ -184,7 +180,7 @@ begin
     if Local.IsGlobalBacked then
     begin
       NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
-      EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, ADest, NameIdx));
+      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
       Exit;
     end;
     Slot := Local.Slot;
@@ -204,26 +200,26 @@ begin
 
   if ASafe then
   begin
-    EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, ADest, NameIdx));
+    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
     Exit;
   end;
 
   CondReg := ACtx.Scope.AllocateRegister;
   ArgReg := ACtx.Scope.AllocateRegister;
 
-  EmitInstruction(ACtx, EncodeABx(OP_RT_HAS_GLOBAL, CondReg, NameIdx));
+  EmitInstruction(ACtx, EncodeABx(OP_HAS_GLOBAL, CondReg, NameIdx));
   OkJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CondReg);
 
-  EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, CondReg,
+  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, CondReg,
     ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
   EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ArgReg,
     ACtx.Template.AddConstantString(AExpr.Name + ' is not defined')));
-  EmitInstruction(ACtx, EncodeABC(OP_RT_CONSTRUCT, CondReg, CondReg, 1));
+  EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, CondReg, CondReg, 1));
   EmitInstruction(ACtx, EncodeABC(OP_THROW, CondReg, 0, 0));
 
   PatchJumpTarget(ACtx, OkJump);
 
-  EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, ADest, NameIdx));
+  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
 
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
@@ -234,7 +230,7 @@ function CallTrustedFlag(const ACtx: TGocciaCompilationContext;
 var
   Sig: string;
   LocalIdx, I: Integer;
-  ArgType, ParamType: TSouffleLocalType;
+  ArgType, ParamType: TGocciaLocalType;
   Local: TGocciaCompilerLocal;
   UV: TGocciaCompilerUpvalue;
 begin
@@ -286,7 +282,7 @@ begin
 end;
 
 function TryIntegerOp(const AOperator: TGocciaTokenType;
-  out AIntOp: TSouffleOpCode): Boolean;
+  out AIntOp: TGocciaOpCode): Boolean;
 begin
   Result := True;
   case AOperator of
@@ -306,7 +302,7 @@ begin
 end;
 
 
-function IsKnownNumeric(const AType: TSouffleLocalType): Boolean; inline;
+function IsKnownNumeric(const AType: TGocciaLocalType): Boolean; inline;
 begin
   Result := AType in [sltInteger, sltFloat];
 end;
@@ -327,7 +323,7 @@ begin
 end;
 
 function TryFloatOp(const AOperator: TGocciaTokenType;
-  out AFloatOp: TSouffleOpCode): Boolean;
+  out AFloatOp: TGocciaOpCode): Boolean;
 begin
   Result := True;
   case AOperator of
@@ -351,9 +347,9 @@ procedure CompileBinary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaBinaryExpression; const ADest: UInt8);
 var
   RegB, RegC: UInt8;
-  Op, IntOp, FloatOp: TSouffleOpCode;
+  Op, IntOp, FloatOp: TGocciaOpCode;
   JumpIdx, JumpIdx2: Integer;
-  LeftType, RightType: TSouffleLocalType;
+  LeftType, RightType: TGocciaLocalType;
 begin
   if TryFoldBinary(ACtx, AExpr, ADest) then
     Exit;
@@ -379,7 +375,7 @@ begin
   if AExpr.Operator = gttNullishCoalescing then
   begin
     ACtx.CompileExpression(AExpr.Left, ADest);
-    JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NIL, ADest);
+    JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, ADest);
     ACtx.CompileExpression(AExpr.Right, ADest);
     PatchJumpTarget(ACtx, JumpIdx);
     Exit;
@@ -436,7 +432,7 @@ begin
     begin
       KeyReg := ACtx.Scope.AllocateRegister;
       ACtx.CompileExpression(MemberExpr.PropertyExpression, KeyReg);
-      EmitInstruction(ACtx, EncodeABC(OP_RT_DEL_INDEX, ADest, ObjReg, KeyReg));
+      EmitInstruction(ACtx, EncodeABC(OP_DEL_INDEX, ADest, ObjReg, KeyReg));
       ACtx.Scope.FreeRegister;
     end
     else
@@ -444,7 +440,9 @@ begin
       PropIdx := ACtx.Template.AddConstantString(MemberExpr.PropertyName);
       if PropIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_RT_DEL_PROP, ADest, ObjReg, UInt8(PropIdx)));
+      EmitInstruction(ACtx, EncodeABx(OP_DELETE_PROP_CONST, ObjReg, PropIdx));
+      if ADest <> ObjReg then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ObjReg, 0));
     end;
     ACtx.Scope.FreeRegister;
   end
@@ -475,10 +473,10 @@ begin
 
   case AExpr.Operator of
     gttNot:        EmitInstruction(ACtx, EncodeABC(OP_NOT, ADest, RegB, 0));
-    gttMinus:      EmitInstruction(ACtx, EncodeABC(OP_RT_NEG, ADest, RegB, 0));
-    gttPlus:       EmitInstruction(ACtx, EncodeABC(OP_RT_TO_NUMBER, ADest, RegB, 0));
-    gttTypeof:     EmitInstruction(ACtx, EncodeABC(OP_RT_TYPEOF, ADest, RegB, 0));
-    gttBitwiseNot: EmitInstruction(ACtx, EncodeABC(OP_RT_BNOT, ADest, RegB, 0));
+    gttMinus:      EmitInstruction(ACtx, EncodeABC(OP_NEG, ADest, RegB, 0));
+    gttPlus:       EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, ADest, RegB, 0));
+    gttTypeof:     EmitInstruction(ACtx, EncodeABC(OP_TYPEOF, ADest, RegB, 0));
+    gttBitwiseNot: EmitInstruction(ACtx, EncodeABC(OP_BNOT, ADest, RegB, 0));
   else
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
   end;
@@ -493,7 +491,7 @@ var
   Local: TGocciaCompilerLocal;
   Slot: UInt8;
   MsgIdx: UInt16;
-  Hint: TSouffleLocalType;
+  Hint: TGocciaLocalType;
 begin
   ACtx.CompileExpression(AExpr.Value, ADest);
 
@@ -512,7 +510,7 @@ begin
     end;
     if Local.IsGlobalBacked then
     begin
-      EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, ADest,
+      EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
         ACtx.Template.AddConstantString(AExpr.Name)));
       Exit;
     end;
@@ -549,7 +547,7 @@ begin
     Exit;
   end;
 
-  EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, ADest,
+  EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
     ACtx.Template.AddConstantString(AExpr.Name)));
 end;
 
@@ -568,7 +566,7 @@ begin
   KeyIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
   if KeyIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ObjReg, UInt8(KeyIdx), ValReg));
+  EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ObjReg, UInt8(KeyIdx), ValReg));
 
   if ADest <> ValReg then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ValReg, 0));
@@ -580,8 +578,8 @@ end;
 procedure EmitUndefinedCheck(const ACtx: TGocciaCompilationContext;
   const ASlot: UInt8; out AJumpIdx: Integer);
 begin
-  AJumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NIL, ASlot,
-    SOUFFLE_NIL_DEFAULT);
+  AJumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, ASlot,
+    GOCCIA_NULLISH_MATCH_UNDEFINED);
 end;
 
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
@@ -680,13 +678,14 @@ begin
       if LocalIdx >= 0 then
         EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, ASrcReg, UInt16(LocalIdx)))
       else
-        EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, ASrcReg,
+        EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ASrcReg,
           ACtx.Template.AddConstantString(IdentPat.Name)));
     end;
   end
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
-    EmitInstruction(ACtx, EncodeABC(OP_REQUIRE_OBJECT, ASrcReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ASrcReg,
+      VALIDATE_OP_REQUIRE_OBJECT, 0));
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
     for I := 0 to ObjPat.Properties.Count - 1 do
     begin
@@ -707,7 +706,8 @@ begin
         DestSlot := ACtx.Scope.AllocateRegister;
         if IdxReg <> DestSlot + 1 then
           EmitInstruction(ACtx, EncodeABC(OP_MOVE, DestSlot + 1, IdxReg, 0));
-        EmitInstruction(ACtx, EncodeABC(OP_OBJECT_REST, DestSlot, 0, ASrcReg));
+        EmitInstruction(ACtx, EncodeABC(OP_COLLECTION_OP, DestSlot,
+          COLLECTION_OP_OBJECT_REST, ASrcReg));
         EmitDestructuring(ACtx,
           TGocciaRestDestructuringPattern(Prop.Pattern).Argument, DestSlot);
         ACtx.Scope.FreeRegister;
@@ -720,7 +720,7 @@ begin
       begin
         IdxReg := ACtx.Scope.AllocateRegister;
         ACtx.CompileExpression(Prop.KeyExpression, IdxReg);
-        EmitInstruction(ACtx, EncodeABC(OP_RT_GET_INDEX, DestSlot, ASrcReg,
+        EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, DestSlot, ASrcReg,
           IdxReg));
         ACtx.Scope.FreeRegister;
       end
@@ -729,7 +729,7 @@ begin
         PropIdx := ACtx.Template.AddConstantString(Prop.Key);
         if PropIdx > High(UInt8) then
           raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-        EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, DestSlot, ASrcReg,
+        EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, DestSlot, ASrcReg,
           UInt8(PropIdx)));
       end;
 
@@ -739,7 +739,8 @@ begin
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
-    EmitInstruction(ACtx, EncodeABC(OP_REQUIRE_ITERABLE, ASrcReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ASrcReg,
+      VALIDATE_OP_REQUIRE_ITERABLE, 0));
     ArrPat := TGocciaArrayDestructuringPattern(APattern);
     for I := 0 to ArrPat.Elements.Count - 1 do
     begin
@@ -813,11 +814,11 @@ end;
 
 procedure ApplyParameterTypeAnnotations(
   const AScope: TGocciaCompilerScope;
-  const ATemplate: TSouffleFunctionTemplate;
+  const ATemplate: TGocciaFunctionTemplate;
   const AParameters: TGocciaParameterArray);
 var
   I, LocalIdx: Integer;
-  AnnotationType: TSouffleLocalType;
+  AnnotationType: TGocciaLocalType;
   ParamName: string;
 begin
   for I := 0 to High(AParameters) do
@@ -882,9 +883,9 @@ end;
 procedure CompileArrowFunction(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaArrowFunctionExpression; const ADest: UInt8);
 var
-  OldTemplate: TSouffleFunctionTemplate;
+  OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
-  ChildTemplate: TSouffleFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
@@ -896,8 +897,8 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
-  ChildTemplate := TSouffleFunctionTemplate.Create('<arrow>');
-  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate := TGocciaFunctionTemplate.Create('<arrow>');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildTemplate.IsArrow := True;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
@@ -1002,7 +1003,8 @@ begin
     begin
       ACtx.CompileExpression(
         TGocciaSpreadExpression(AExpr.Arguments[I]).Argument, ElemReg);
-      EmitInstruction(ACtx, EncodeABC(OP_SPREAD_ITERABLE_INTO_ARRAY, AArrayReg, 0, ElemReg));
+      EmitInstruction(ACtx, EncodeABC(OP_COLLECTION_OP, AArrayReg,
+        COLLECTION_OP_SPREAD_ITERABLE_INTO_ARRAY, ElemReg));
     end
     else
     begin
@@ -1046,14 +1048,14 @@ begin
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
-      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, ArgsReg, 1));
+      EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1));
       ACtx.Scope.FreeRegister;
     end
     else
     begin
       for I := 0 to ArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
-      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
+      EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;
@@ -1081,14 +1083,14 @@ begin
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
-      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, ArgsReg, 1));
+      EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1));
       ACtx.Scope.FreeRegister;
     end
     else
     begin
       for I := 0 to ArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
-      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
+      EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;
@@ -1121,14 +1123,14 @@ begin
       begin
         ArgsReg := ACtx.Scope.AllocateRegister;
         CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
-        EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, ArgsReg, 1));
+        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1));
         ACtx.Scope.FreeRegister;
       end
       else
       begin
         for I := 0 to ArgCount - 1 do
           ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
-        EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
+        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
         for I := 0 to ArgCount - 1 do
           ACtx.Scope.FreeRegister;
       end;
@@ -1163,14 +1165,14 @@ begin
       begin
         ArgsReg := ACtx.Scope.AllocateRegister;
         CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
-        EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, ArgsReg, 1));
+        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1));
         ACtx.Scope.FreeRegister;
       end
       else
       begin
         for I := 0 to ArgCount - 1 do
           ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
-        EmitInstruction(ACtx, EncodeABC(OP_RT_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
+        EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
         for I := 0 to ArgCount - 1 do
           ACtx.Scope.FreeRegister;
       end;
@@ -1196,14 +1198,14 @@ begin
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
-      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL, BaseReg, ArgsReg, 1));
+      EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg, 1));
       ACtx.Scope.FreeRegister;
     end
     else
     begin
       for I := 0 to ArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
-      EmitInstruction(ACtx, EncodeABC(OP_RT_CALL, BaseReg, UInt8(ArgCount),
+      EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt8(ArgCount),
         CallTrustedFlag(ACtx, AExpr)));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
@@ -1229,7 +1231,7 @@ begin
 
   if AExpr.Optional then
   begin
-    NilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NIL, ObjReg);
+    NilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ObjReg);
 
     if AExpr.Computed then
     begin
@@ -1301,7 +1303,8 @@ begin
     if AExpr.Elements[I] is TGocciaSpreadExpression then
     begin
       ACtx.CompileExpression(TGocciaSpreadExpression(AExpr.Elements[I]).Argument, ElemReg);
-      EmitInstruction(ACtx, EncodeABC(OP_SPREAD_ITERABLE_INTO_ARRAY, ADest, 0, ElemReg));
+      EmitInstruction(ACtx, EncodeABC(OP_COLLECTION_OP, ADest,
+        COLLECTION_OP_SPREAD_ITERABLE_INTO_ARRAY, ElemReg));
     end
     else
     begin
@@ -1324,7 +1327,7 @@ begin
   KeyIdx := ACtx.Template.AddConstantString(AKey);
   if KeyIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ADest, KeyIdx, ValReg));
+  EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest, KeyIdx, ValReg));
   ACtx.Scope.FreeRegister;
 end;
 
@@ -1332,9 +1335,9 @@ procedure CompileGetterProperty(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8; const AKey: string;
   const AGetter: TGocciaGetterExpression);
 var
-  OldTemplate: TSouffleFunctionTemplate;
+  OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
-  ChildTemplate: TSouffleFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   FuncIdx: UInt16;
   GetterReg: UInt8;
@@ -1344,8 +1347,8 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
-  ChildTemplate := TSouffleFunctionTemplate.Create('<get ' + AKey + '>');
-  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate := TGocciaFunctionTemplate.Create('<get ' + AKey + '>');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := 0;
@@ -1372,7 +1375,7 @@ begin
     raise Exception.Create('Constant pool overflow: property name index exceeds 255');
   if GetterReg <> ADest + 1 then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest + 1, GetterReg, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GETTER_CONST, ADest, 0, UInt8(KeyIdx)));
+  EmitInstruction(ACtx, EncodeABC(OP_DEFINE_ACCESSOR_CONST, ADest, 0, UInt8(KeyIdx)));
   ACtx.Scope.FreeRegister;
 end;
 
@@ -1380,9 +1383,9 @@ procedure CompileSetterProperty(const ACtx: TGocciaCompilationContext;
   const ADest: UInt8; const AKey: string;
   const ASetter: TGocciaSetterExpression);
 var
-  OldTemplate: TSouffleFunctionTemplate;
+  OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
-  ChildTemplate: TSouffleFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   FuncIdx: UInt16;
   SetterReg: UInt8;
@@ -1392,8 +1395,8 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
-  ChildTemplate := TSouffleFunctionTemplate.Create('<set ' + AKey + '>');
-  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate := TGocciaFunctionTemplate.Create('<set ' + AKey + '>');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildScope.DeclareLocal(ASetter.Parameter, False);
@@ -1421,7 +1424,7 @@ begin
     raise Exception.Create('Constant pool overflow: property name index exceeds 255');
   if SetterReg <> ADest + 1 then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest + 1, SetterReg, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_DEFINE_SETTER_CONST, ADest, 0, UInt8(KeyIdx)));
+  EmitInstruction(ACtx, EncodeABC(OP_DEFINE_ACCESSOR_CONST, ADest, ACCESSOR_FLAG_SETTER, UInt8(KeyIdx)));
   ACtx.Scope.FreeRegister;
 end;
 
@@ -1460,7 +1463,8 @@ begin
             begin
               ValReg := ACtx.Scope.AllocateRegister;
               ACtx.CompileExpression(TGocciaSpreadExpression(Pair.Key).Argument, ValReg);
-              EmitInstruction(ACtx, EncodeABC(OP_SPREAD_OBJECT, ADest, 0, ValReg));
+              EmitInstruction(ACtx, EncodeABC(OP_COLLECTION_OP, ADest,
+                COLLECTION_OP_SPREAD_OBJECT, ValReg));
               ACtx.Scope.FreeRegister;
             end
             else
@@ -1469,7 +1473,7 @@ begin
               ValReg := ACtx.Scope.AllocateRegister;
               ACtx.CompileExpression(Pair.Key, KeyReg);
               ACtx.CompileExpression(Pair.Value, ValReg);
-              EmitInstruction(ACtx, EncodeABC(OP_RT_SET_INDEX, ADest, KeyReg, ValReg));
+              EmitInstruction(ACtx, EncodeABC(OP_SET_INDEX, ADest, KeyReg, ValReg));
               ACtx.Scope.FreeRegister;
               ACtx.Scope.FreeRegister;
             end;
@@ -1565,15 +1569,15 @@ begin
                   if not HasParts then
                   begin
                     ACtx.CompileExpression(ParsedExpr, ADest);
-                    EmitInstruction(ACtx, EncodeABC(OP_RT_TO_STRING, ADest, ADest, 0));
+                    EmitInstruction(ACtx, EncodeABC(OP_TO_STRING, ADest, ADest, 0));
                     HasParts := True;
                   end
                   else
                   begin
                     PartReg := ACtx.Scope.AllocateRegister;
                     ACtx.CompileExpression(ParsedExpr, PartReg);
-                    EmitInstruction(ACtx, EncodeABC(OP_RT_TO_STRING, PartReg, PartReg, 0));
-                    EmitInstruction(ACtx, EncodeABC(OP_RT_ADD, ADest, ADest, PartReg));
+                    EmitInstruction(ACtx, EncodeABC(OP_TO_STRING, PartReg, PartReg, 0));
+                    EmitInstruction(ACtx, EncodeABC(OP_ADD, ADest, ADest, PartReg));
                     ACtx.Scope.FreeRegister;
                   end;
                 end;
@@ -1612,7 +1616,7 @@ begin
           PartReg := ACtx.Scope.AllocateRegister;
           EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, PartReg,
             ACtx.Template.AddConstantString(StaticPart)));
-          EmitInstruction(ACtx, EncodeABC(OP_RT_ADD, ADest, ADest, PartReg));
+          EmitInstruction(ACtx, EncodeABC(OP_ADD, ADest, ADest, PartReg));
           ACtx.Scope.FreeRegister;
         end;
       end;
@@ -1643,7 +1647,7 @@ begin
   begin
     PartReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.Parts[I], PartReg);
-    EmitInstruction(ACtx, EncodeABC(OP_RT_ADD, ADest, ADest, PartReg));
+    EmitInstruction(ACtx, EncodeABC(OP_ADD, ADest, ADest, PartReg));
     ACtx.Scope.FreeRegister;
   end;
 end;
@@ -1665,7 +1669,7 @@ begin
   for I := 0 to ArgCount - 1 do
     ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
 
-  EmitInstruction(ACtx, EncodeABC(OP_RT_CONSTRUCT, ADest, CtorReg, UInt8(ArgCount)));
+  EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, ADest, CtorReg, UInt8(ArgCount)));
 
   for I := 0 to ArgCount - 1 do
     ACtx.Scope.FreeRegister;
@@ -1711,9 +1715,9 @@ end;
 procedure CompileMethod(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaMethodExpression; const ADest: UInt8);
 var
-  OldTemplate: TSouffleFunctionTemplate;
+  OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
-  ChildTemplate: TSouffleFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
@@ -1725,8 +1729,8 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
-  ChildTemplate := TSouffleFunctionTemplate.Create('<method>');
-  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate := TGocciaFunctionTemplate.Create('<method>');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AExpr.IsAsync;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
@@ -1801,8 +1805,8 @@ var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegVal, RegResult: UInt8;
   MsgIdx: UInt16;
-  Op, FloatOp: TSouffleOpCode;
-  LocalType, ValType: TSouffleLocalType;
+  Op, FloatOp: TGocciaOpCode;
+  LocalType, ValType: TGocciaLocalType;
   ArithOp: TGocciaTokenType;
 begin
   Op := CompoundOpToRuntimeOp(AExpr.Operator);
@@ -1823,11 +1827,11 @@ begin
     begin
       RegVal := ACtx.Scope.AllocateRegister;
       RegResult := ACtx.Scope.AllocateRegister;
-      EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, RegResult,
+      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
         ACtx.Template.AddConstantString(AExpr.Name)));
       ACtx.CompileExpression(AExpr.Value, RegVal);
       EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
-      EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, ADest,
+      EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
         ACtx.Template.AddConstantString(AExpr.Name)));
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
@@ -1870,11 +1874,11 @@ begin
 
   RegVal := ACtx.Scope.AllocateRegister;
   RegResult := ACtx.Scope.AllocateRegister;
-  EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, RegResult,
+  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
     ACtx.Template.AddConstantString(AExpr.Name)));
   ACtx.CompileExpression(AExpr.Value, RegVal);
   EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal));
-  EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, ADest,
+  EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
     ACtx.Template.AddConstantString(AExpr.Name)));
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
@@ -1884,7 +1888,7 @@ procedure CompilePropertyCompoundAssignment(const ACtx: TGocciaCompilationContex
   const AExpr: TGocciaPropertyCompoundAssignmentExpression; const ADest: UInt8);
 var
   ObjReg, CurReg, ValReg: UInt8;
-  Op: TSouffleOpCode;
+  Op: TGocciaOpCode;
   PropIdx: UInt16;
 begin
   Op := CompoundOpToRuntimeOp(AExpr.Operator);
@@ -1896,11 +1900,11 @@ begin
   PropIdx := ACtx.Template.AddConstantString(AExpr.PropertyName);
   if PropIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, CurReg, ObjReg,
+  EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, CurReg, ObjReg,
     UInt8(PropIdx)));
   ACtx.CompileExpression(AExpr.Value, ValReg);
   EmitInstruction(ACtx, EncodeABC(Op, CurReg, CurReg, ValReg));
-  EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ObjReg, UInt8(PropIdx),
+  EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ObjReg, UInt8(PropIdx),
     CurReg));
 
   if ADest <> CurReg then
@@ -1917,7 +1921,7 @@ procedure CompileComputedPropertyCompoundAssignment(
   const ADest: UInt8);
 var
   ObjReg, KeyReg, CurReg, ValReg: UInt8;
-  Op: TSouffleOpCode;
+  Op: TGocciaOpCode;
 begin
   Op := CompoundOpToRuntimeOp(AExpr.Operator);
   ObjReg := ACtx.Scope.AllocateRegister;
@@ -1943,7 +1947,7 @@ end;
 
 procedure CompileIncrementMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const AMember: TGocciaMemberExpression;
-  const ADest: UInt8; const AOp: TSouffleOpCode);
+  const ADest: UInt8; const AOp: TGocciaOpCode);
 var
   ObjReg, CurReg, RegOne: UInt8;
   PropIdx: UInt16;
@@ -1956,12 +1960,12 @@ begin
   PropIdx := ACtx.Template.AddConstantString(AMember.PropertyName);
   if PropIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: property name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, CurReg, ObjReg, UInt8(PropIdx)));
+  EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, CurReg, ObjReg, UInt8(PropIdx)));
   EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
   if not AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
   EmitInstruction(ACtx, EncodeABC(AOp, CurReg, CurReg, RegOne));
-  EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ObjReg, UInt8(PropIdx), CurReg));
+  EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ObjReg, UInt8(PropIdx), CurReg));
   if AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
 
@@ -1972,7 +1976,7 @@ end;
 
 procedure CompileIncrementComputedMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const AMember: TGocciaMemberExpression;
-  const ADest: UInt8; const AOp: TSouffleOpCode);
+  const ADest: UInt8; const AOp: TGocciaOpCode);
 var
   ObjReg, KeyReg, CurReg, RegOne: UInt8;
 begin
@@ -2004,14 +2008,14 @@ var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegOne, RegResult: UInt8;
   MsgIdx: UInt16;
-  Op: TSouffleOpCode;
+  Op: TGocciaOpCode;
   Ident: TGocciaIdentifierExpression;
   MemberExpr: TGocciaMemberExpression;
 begin
   if AExpr.Operator = gttIncrement then
-    Op := OP_RT_ADD
+    Op := OP_ADD
   else
-    Op := OP_RT_SUB;
+    Op := OP_SUB;
 
   if AExpr.Operand is TGocciaMemberExpression then
   begin
@@ -2047,13 +2051,13 @@ begin
     begin
       RegResult := ACtx.Scope.AllocateRegister;
       RegOne := ACtx.Scope.AllocateRegister;
-      EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, RegResult,
+      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
         ACtx.Template.AddConstantString(Ident.Name)));
       EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
       if not AExpr.IsPrefix then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
       EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegOne));
-      EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, RegResult,
+      EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, RegResult,
         ACtx.Template.AddConstantString(Ident.Name)));
       if AExpr.IsPrefix then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
@@ -2093,13 +2097,13 @@ begin
 
   RegResult := ACtx.Scope.AllocateRegister;
   RegOne := ACtx.Scope.AllocateRegister;
-  EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, RegResult,
+  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
     ACtx.Template.AddConstantString(Ident.Name)));
   EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
   if not AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
   EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegOne));
-  EmitInstruction(ACtx, EncodeABx(OP_RT_SET_GLOBAL, RegResult,
+  EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, RegResult,
     ACtx.Template.AddConstantString(Ident.Name)));
   if AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
@@ -2119,7 +2123,7 @@ begin
     PrivateKey(ACtx.Scope, AExpr.PrivateName));
   if PropIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: private property name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, ADest, ObjReg, UInt8(PropIdx)));
+  EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, ADest, ObjReg, UInt8(PropIdx)));
   ACtx.Scope.FreeRegister;
 end;
 
@@ -2137,7 +2141,7 @@ begin
     PrivateKey(ACtx.Scope, AExpr.PrivateName));
   if KeyIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: private property name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ObjReg, UInt8(KeyIdx), ValReg));
+  EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ObjReg, UInt8(KeyIdx), ValReg));
   if ADest <> ValReg then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ValReg, 0));
   ACtx.Scope.FreeRegister;
@@ -2150,7 +2154,7 @@ procedure CompilePrivatePropertyCompoundAssignment(
   const ADest: UInt8);
 var
   ObjReg, CurReg, ValReg: UInt8;
-  Op: TSouffleOpCode;
+  Op: TGocciaOpCode;
   PropIdx: UInt16;
 begin
   Op := CompoundOpToRuntimeOp(AExpr.Operator);
@@ -2162,10 +2166,10 @@ begin
     PrivateKey(ACtx.Scope, AExpr.PrivateName));
   if PropIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: private property name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_RT_GET_PROP, CurReg, ObjReg, UInt8(PropIdx)));
+  EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, CurReg, ObjReg, UInt8(PropIdx)));
   ACtx.CompileExpression(AExpr.Value, ValReg);
   EmitInstruction(ACtx, EncodeABC(Op, CurReg, CurReg, ValReg));
-  EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ObjReg, UInt8(PropIdx), CurReg));
+  EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ObjReg, UInt8(PropIdx), CurReg));
   if ADest <> CurReg then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
   ACtx.Scope.FreeRegister;

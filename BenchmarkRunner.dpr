@@ -409,11 +409,9 @@ begin
         GMode := ebTreeWalk
       else if ParamStr(I) = '--mode=bytecode' then
         GMode := ebBytecode
-      else if ParamStr(I) = '--mode=goccia-vm' then
-        GMode := ebBytecode
       else if Copy(ParamStr(I), 1, 7) = '--mode=' then
       begin
-        WriteLn('Error: Unknown mode "', Copy(ParamStr(I), 8, MaxInt), '". Use "interpreted", "bytecode", or "goccia-vm".');
+        WriteLn('Error: Unknown mode "', Copy(ParamStr(I), 8, MaxInt), '". Use "interpreted" or "bytecode".');
         ExitCode := 1;
         Exit;
       end
@@ -430,7 +428,7 @@ begin
 
     if Paths.Count = 0 then
     begin
-      WriteLn('Usage: BenchmarkRunner <path...> [--format=console|text|csv|json [--output=file]] ... [--no-progress] [--mode=interpreted|bytecode|goccia-vm]');
+      WriteLn('Usage: BenchmarkRunner <path...> [--format=console|text|csv|json [--output=file]] ... [--no-progress] [--mode=interpreted|bytecode]');
       ExitCode := 1;
     end
     else

@@ -19,8 +19,7 @@ implementation
 uses
   Math,
 
-  Souffle.Bytecode,
-
+  Goccia.Bytecode,
   Goccia.Constants.TypeNames,
   Goccia.Token,
   Goccia.Values.Primitives;

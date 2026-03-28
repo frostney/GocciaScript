@@ -7,9 +7,8 @@ interface
 uses
   Classes,
 
-  Souffle.Bytecode.Module,
-
   Goccia.AST.Node,
+  Goccia.Bytecode.Module,
   Goccia.Compiler,
   Goccia.Engine,
   Goccia.Interpreter,
@@ -39,8 +38,8 @@ type
     destructor Destroy; override;
 
     function CompileAndRun(const AProgram: TGocciaProgram): TGocciaValue;
-    function CompileToModule(const AProgram: TGocciaProgram): TSouffleBytecodeModule;
-    function RunModule(const AModule: TSouffleBytecodeModule): TGocciaValue;
+    function CompileToModule(const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+    function RunModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
 
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
     procedure RegisterBuiltIns(const AGlobals: TGocciaGlobalBuiltins);
@@ -105,7 +104,7 @@ end;
 function TGocciaBytecodeBackend.CompileAndRun(
   const AProgram: TGocciaProgram): TGocciaValue;
 var
-  Module: TSouffleBytecodeModule;
+  Module: TGocciaBytecodeModule;
 begin
   Module := CompileToModule(AProgram);
   try
@@ -116,7 +115,7 @@ begin
 end;
 
 function TGocciaBytecodeBackend.CompileToModule(
-  const AProgram: TGocciaProgram): TSouffleBytecodeModule;
+  const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
   Compiler: TGocciaCompiler;
 begin
@@ -129,7 +128,7 @@ begin
 end;
 
 function TGocciaBytecodeBackend.RunModule(
-  const AModule: TSouffleBytecodeModule): TGocciaValue;
+  const AModule: TGocciaBytecodeModule): TGocciaValue;
 begin
   Result := FMinimalVM.ExecuteModule(AModule);
 end;

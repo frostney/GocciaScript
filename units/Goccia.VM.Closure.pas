@@ -5,29 +5,28 @@ unit Goccia.VM.Closure;
 interface
 
 uses
-  Souffle.Bytecode.Chunk,
-
+  Goccia.Bytecode.Chunk,
   Goccia.VM.Upvalue;
 
 type
   TGocciaBytecodeClosure = class
   private
-    FTemplate: TSouffleFunctionTemplate;
+    FTemplate: TGocciaFunctionTemplate;
     FUpvalues: array of TGocciaBytecodeUpvalue;
   public
-    constructor Create(const ATemplate: TSouffleFunctionTemplate;
+    constructor Create(const ATemplate: TGocciaFunctionTemplate;
       const AUpvalueCount: Integer = 0);
     destructor Destroy; override;
     procedure SetUpvalue(const AIndex: Integer; const AUpvalue: TGocciaBytecodeUpvalue);
     function GetUpvalue(const AIndex: Integer): TGocciaBytecodeUpvalue;
     function GetUpvalueCount: Integer;
-    property Template: TSouffleFunctionTemplate read FTemplate;
+    property Template: TGocciaFunctionTemplate read FTemplate;
     property UpvalueCount: Integer read GetUpvalueCount;
   end;
 
 implementation
 
-constructor TGocciaBytecodeClosure.Create(const ATemplate: TSouffleFunctionTemplate;
+constructor TGocciaBytecodeClosure.Create(const ATemplate: TGocciaFunctionTemplate;
   const AUpvalueCount: Integer);
 begin
   inherited Create;

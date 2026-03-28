@@ -14,6 +14,7 @@ type
     FArgs: TGocciaValueList;
   public
     constructor Create; overload;
+    constructor CreateWithCapacity(const ACapacity: Integer); overload;
     constructor Create(const AValues: array of TGocciaValue); overload;
     destructor Destroy; override;
 
@@ -43,11 +44,21 @@ begin
   FArgs := TGocciaValueList.Create(False);
 end;
 
+constructor TGocciaArgumentsCollection.CreateWithCapacity(
+  const ACapacity: Integer);
+begin
+  FArgs := TGocciaValueList.Create(False);
+  if ACapacity > 0 then
+    FArgs.Capacity := ACapacity;
+end;
+
 constructor TGocciaArgumentsCollection.Create(const AValues: array of TGocciaValue);
 var
   I: Integer;
 begin
   FArgs := TGocciaValueList.Create(False);
+  if High(AValues) >= 0 then
+    FArgs.Capacity := High(AValues) + 1;
   for I := 0 to High(AValues) do
     FArgs.Add(AValues[I]);
 end;

@@ -1,6 +1,6 @@
-unit Souffle.Bytecode.Chunk;
+unit Goccia.Bytecode.Chunk;
 
-{$I Souffle.inc}
+{$I Goccia.inc}
 
 interface
 
@@ -8,11 +8,11 @@ uses
   Generics.Collections,
 
   OrderedStringMap,
-  Souffle.Bytecode.Debug,
-  Souffle.Value;
+
+  Goccia.Bytecode.Debug;
 
 type
-  TSouffleBytecodeConstantKind = (
+  TGocciaBytecodeConstantKind = (
     bckNil,
     bckTrue,
     bckFalse,
@@ -21,19 +21,19 @@ type
     bckString
   );
 
-  TSouffleBytecodeConstant = record
-    Kind: TSouffleBytecodeConstantKind;
+  TGocciaBytecodeConstant = record
+    Kind: TGocciaBytecodeConstantKind;
     IntValue: Int64;
     FloatValue: Double;
     StringValue: string;
   end;
 
-  TSouffleUpvalueDescriptor = record
+  TGocciaUpvalueDescriptor = record
     IsLocal: Boolean;
     Index: UInt8;
   end;
 
-  TSouffleExceptionHandler = record
+  TGocciaExceptionHandler = record
     TryStart: UInt32;
     TryEnd: UInt32;
     CatchTarget: UInt32;
@@ -41,7 +41,7 @@ type
     CatchRegister: UInt8;
   end;
 
-  TSouffleLocalType = (
+  TGocciaLocalType = (
     sltUntyped,
     sltInteger,
     sltFloat,
@@ -50,30 +50,29 @@ type
     sltReference
   );
 
-  TSouffleFunctionTemplate = class
+  TGocciaFunctionTemplate = class
   private
     FName: string;
     FCode: array of UInt32;
     FCodeCount: Integer;
-    FConstants: array of TSouffleBytecodeConstant;
+    FConstants: array of TGocciaBytecodeConstant;
     FConstantCount: Integer;
-    FFunctions: TObjectList<TSouffleFunctionTemplate>;
-    FUpvalueDescriptors: array of TSouffleUpvalueDescriptor;
-    FExceptionHandlers: array of TSouffleExceptionHandler;
+    FFunctions: TObjectList<TGocciaFunctionTemplate>;
+    FUpvalueDescriptors: array of TGocciaUpvalueDescriptor;
+    FExceptionHandlers: array of TGocciaExceptionHandler;
     FExceptionHandlerCount: Integer;
     FMaxRegisters: UInt8;
     FParameterCount: UInt8;
     FFormalParameterCount: UInt8;
     FUpvalueCount: UInt8;
-    FDebugInfo: TSouffleDebugInfo;
-    FLocalTypes: array of TSouffleLocalType;
+    FDebugInfo: TGocciaDebugInfo;
+    FLocalTypes: array of TGocciaLocalType;
     FLocalTypeCount: UInt8;
     FLocalStrictFlags: array of Boolean;
     FLocalStrictCount: UInt8;
     FIsAsync: Boolean;
     FIsArrow: Boolean;
     FTypeCheckPreambleSize: UInt8;
-    FMaterializedConstants: array of TSouffleValue;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
     function GetFunctionCount: Integer;
   public
@@ -87,19 +86,19 @@ type
     function AddConstantInteger(const AValue: Int64): UInt16;
     function AddConstantFloat(const AValue: Double): UInt16;
     function AddConstantString(const AValue: string): UInt16;
-    function AddFunction(const AFunction: TSouffleFunctionTemplate): UInt16;
+    function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt8);
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
       AFinallyTarget: UInt32; const ACatchRegister: UInt8);
 
     function GetInstruction(const AIndex: Integer): UInt32; inline;
-    function GetConstant(const AIndex: Integer): TSouffleBytecodeConstant; inline;
-    function GetFunction(const AIndex: Integer): TSouffleFunctionTemplate;
-    function GetUpvalueDescriptor(const AIndex: Integer): TSouffleUpvalueDescriptor;
-    function GetExceptionHandler(const AIndex: Integer): TSouffleExceptionHandler;
-
-    procedure MaterializeConstants;
-    function GetMaterializedConstant(const AIndex: Integer): TSouffleValue; inline;
+    function GetConstant(const AIndex: Integer): TGocciaBytecodeConstant; inline;
+    function GetFunction(const AIndex: Integer): TGocciaFunctionTemplate;
+    function GetInstructionUnchecked(const AIndex: Integer): UInt32; inline;
+    function GetConstantUnchecked(const AIndex: Integer): TGocciaBytecodeConstant; inline;
+    function GetFunctionUnchecked(const AIndex: Integer): TGocciaFunctionTemplate; inline;
+    function GetUpvalueDescriptor(const AIndex: Integer): TGocciaUpvalueDescriptor;
+    function GetExceptionHandler(const AIndex: Integer): TGocciaExceptionHandler;
 
     property Name: string read FName write FName;
     property CodeCount: Integer read FCodeCount;
@@ -110,10 +109,10 @@ type
     property ParameterCount: UInt8 read FParameterCount write FParameterCount;
     property FormalParameterCount: UInt8 read FFormalParameterCount write FFormalParameterCount;
     property UpvalueCount: UInt8 read FUpvalueCount;
-    property DebugInfo: TSouffleDebugInfo read FDebugInfo write FDebugInfo;
+    property DebugInfo: TGocciaDebugInfo read FDebugInfo write FDebugInfo;
 
-    procedure SetLocalType(const ASlot: UInt8; const AKind: TSouffleLocalType);
-    function GetLocalType(const ASlot: UInt8): TSouffleLocalType;
+    procedure SetLocalType(const ASlot: UInt8; const AKind: TGocciaLocalType);
+    function GetLocalType(const ASlot: UInt8): TGocciaLocalType;
     property LocalTypeCount: UInt8 read FLocalTypeCount;
 
     procedure SetLocalStrictFlag(const ASlot: UInt8; const AStrict: Boolean);
@@ -131,9 +130,7 @@ const
 implementation
 
 uses
-  SysUtils,
-
-  GarbageCollector.Generic;
+  SysUtils;
 
 function FloatBitsAreNaN(const AValue: Double): Boolean; inline;
 var
@@ -144,15 +141,13 @@ begin
             ((Bits and $000FFFFFFFFFFFFF) <> 0);
 end;
 
-{ TSouffleFunctionTemplate }
-
-constructor TSouffleFunctionTemplate.Create(const AName: string);
+constructor TGocciaFunctionTemplate.Create(const AName: string);
 begin
   inherited Create;
   FName := AName;
   FCodeCount := 0;
   FConstantCount := 0;
-  FFunctions := TObjectList<TSouffleFunctionTemplate>.Create(True);
+  FFunctions := TObjectList<TGocciaFunctionTemplate>.Create(True);
   FStringConstantIndex := TOrderedStringMap<UInt16>.Create;
   FExceptionHandlerCount := 0;
   FMaxRegisters := 0;
@@ -165,24 +160,15 @@ begin
   FIsArrow := False;
 end;
 
-destructor TSouffleFunctionTemplate.Destroy;
-var
-  GC: TGarbageCollector;
-  I: Integer;
+destructor TGocciaFunctionTemplate.Destroy;
 begin
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
-    for I := 0 to Length(FMaterializedConstants) - 1 do
-      if (FMaterializedConstants[I].Kind = svkReference) and
-         Assigned(FMaterializedConstants[I].AsReference) then
-        GC.UnpinObject(FMaterializedConstants[I].AsReference);
   FStringConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
   inherited;
 end;
 
-function TSouffleFunctionTemplate.EmitInstruction(
+function TGocciaFunctionTemplate.EmitInstruction(
   const AInstruction: UInt32): Integer;
 begin
   if FCodeCount >= Length(FCode) then
@@ -192,15 +178,16 @@ begin
   Inc(FCodeCount);
 end;
 
-procedure TSouffleFunctionTemplate.PatchInstruction(const AIndex: Integer;
+procedure TGocciaFunctionTemplate.PatchInstruction(const AIndex: Integer;
   const AInstruction: UInt32);
 begin
   if (AIndex < 0) or (AIndex >= FCodeCount) then
-    raise ERangeError.CreateFmt('PatchInstruction: index %d out of range 0..%d', [AIndex, FCodeCount - 1]);
+    raise ERangeError.CreateFmt('PatchInstruction: index %d out of range 0..%d',
+      [AIndex, FCodeCount - 1]);
   FCode[AIndex] := AInstruction;
 end;
 
-function TSouffleFunctionTemplate.AddConstantNil: UInt16;
+function TGocciaFunctionTemplate.AddConstantNil: UInt16;
 var
   I: Integer;
 begin
@@ -217,11 +204,11 @@ begin
   Inc(FConstantCount);
 end;
 
-function TSouffleFunctionTemplate.AddConstantBoolean(
+function TGocciaFunctionTemplate.AddConstantBoolean(
   const AValue: Boolean): UInt16;
 var
   I: Integer;
-  Target: TSouffleBytecodeConstantKind;
+  Target: TGocciaBytecodeConstantKind;
 begin
   if AValue then
     Target := bckTrue
@@ -241,7 +228,7 @@ begin
   Inc(FConstantCount);
 end;
 
-function TSouffleFunctionTemplate.AddConstantInteger(
+function TGocciaFunctionTemplate.AddConstantInteger(
   const AValue: Int64): UInt16;
 var
   I: Integer;
@@ -260,7 +247,7 @@ begin
   Inc(FConstantCount);
 end;
 
-function TSouffleFunctionTemplate.AddConstantFloat(
+function TGocciaFunctionTemplate.AddConstantFloat(
   const AValue: Double): UInt16;
 var
   I: Integer;
@@ -281,7 +268,7 @@ begin
   Inc(FConstantCount);
 end;
 
-function TSouffleFunctionTemplate.AddConstantString(
+function TGocciaFunctionTemplate.AddConstantString(
   const AValue: string): UInt16;
 begin
   if FStringConstantIndex.TryGetValue(AValue, Result) then
@@ -298,8 +285,8 @@ begin
   Inc(FConstantCount);
 end;
 
-function TSouffleFunctionTemplate.AddFunction(
-  const AFunction: TSouffleFunctionTemplate): UInt16;
+function TGocciaFunctionTemplate.AddFunction(
+  const AFunction: TGocciaFunctionTemplate): UInt16;
 begin
   if FFunctions.Count > High(UInt16) then
     raise Exception.Create('Function pool overflow: exceeds 65535 entries');
@@ -307,7 +294,7 @@ begin
   FFunctions.Add(AFunction);
 end;
 
-procedure TSouffleFunctionTemplate.AddUpvalueDescriptor(
+procedure TGocciaFunctionTemplate.AddUpvalueDescriptor(
   const AIsLocal: Boolean; const AIndex: UInt8);
 begin
   if FUpvalueCount >= High(UInt8) then
@@ -319,7 +306,7 @@ begin
   Inc(FUpvalueCount);
 end;
 
-procedure TSouffleFunctionTemplate.AddExceptionHandler(
+procedure TGocciaFunctionTemplate.AddExceptionHandler(
   const ATryStart, ATryEnd, ACatchTarget, AFinallyTarget: UInt32;
   const ACatchRegister: UInt8);
 begin
@@ -333,63 +320,85 @@ begin
   Inc(FExceptionHandlerCount);
 end;
 
-function TSouffleFunctionTemplate.GetInstruction(
-  const AIndex: Integer): UInt32;
+function TGocciaFunctionTemplate.GetInstruction(const AIndex: Integer): UInt32;
 begin
   {$IFDEF DEBUG}
   if (AIndex < 0) or (AIndex >= FCodeCount) then
-    raise ERangeError.CreateFmt('GetInstruction: index %d out of range 0..%d', [AIndex, FCodeCount - 1]);
+    raise ERangeError.CreateFmt('GetInstruction: index %d out of range 0..%d',
+      [AIndex, FCodeCount - 1]);
   {$ENDIF}
   Result := FCode[AIndex];
 end;
 
-function TSouffleFunctionTemplate.GetConstant(
-  const AIndex: Integer): TSouffleBytecodeConstant;
+function TGocciaFunctionTemplate.GetConstant(
+  const AIndex: Integer): TGocciaBytecodeConstant;
 begin
   {$IFDEF DEBUG}
   if (AIndex < 0) or (AIndex >= FConstantCount) then
-    raise ERangeError.CreateFmt('GetConstant: index %d out of range 0..%d', [AIndex, FConstantCount - 1]);
+    raise ERangeError.CreateFmt('GetConstant: index %d out of range 0..%d',
+      [AIndex, FConstantCount - 1]);
   {$ENDIF}
   Result := FConstants[AIndex];
 end;
 
-function TSouffleFunctionTemplate.GetFunction(
-  const AIndex: Integer): TSouffleFunctionTemplate;
+function TGocciaFunctionTemplate.GetConstantUnchecked(
+  const AIndex: Integer): TGocciaBytecodeConstant;
+begin
+  Result := FConstants[AIndex];
+end;
+
+function TGocciaFunctionTemplate.GetFunction(
+  const AIndex: Integer): TGocciaFunctionTemplate;
 begin
   {$IFDEF DEBUG}
   if (AIndex < 0) or (AIndex >= FFunctions.Count) then
-    raise ERangeError.CreateFmt('GetFunction: index %d out of range 0..%d', [AIndex, FFunctions.Count - 1]);
+    raise ERangeError.CreateFmt('GetFunction: index %d out of range 0..%d',
+      [AIndex, FFunctions.Count - 1]);
   {$ENDIF}
   Result := FFunctions[AIndex];
 end;
 
-function TSouffleFunctionTemplate.GetUpvalueDescriptor(
-  const AIndex: Integer): TSouffleUpvalueDescriptor;
+function TGocciaFunctionTemplate.GetFunctionUnchecked(
+  const AIndex: Integer): TGocciaFunctionTemplate;
+begin
+  Result := FFunctions[AIndex];
+end;
+
+function TGocciaFunctionTemplate.GetInstructionUnchecked(
+  const AIndex: Integer): UInt32;
+begin
+  Result := FCode[AIndex];
+end;
+
+function TGocciaFunctionTemplate.GetUpvalueDescriptor(
+  const AIndex: Integer): TGocciaUpvalueDescriptor;
 begin
   {$IFDEF DEBUG}
   if (AIndex < 0) or (AIndex >= FUpvalueCount) then
-    raise ERangeError.CreateFmt('GetUpvalueDescriptor: index %d out of range 0..%d', [AIndex, FUpvalueCount - 1]);
+    raise ERangeError.CreateFmt('GetUpvalueDescriptor: index %d out of range 0..%d',
+      [AIndex, FUpvalueCount - 1]);
   {$ENDIF}
   Result := FUpvalueDescriptors[AIndex];
 end;
 
-function TSouffleFunctionTemplate.GetFunctionCount: Integer;
+function TGocciaFunctionTemplate.GetFunctionCount: Integer;
 begin
   Result := FFunctions.Count;
 end;
 
-function TSouffleFunctionTemplate.GetExceptionHandler(
-  const AIndex: Integer): TSouffleExceptionHandler;
+function TGocciaFunctionTemplate.GetExceptionHandler(
+  const AIndex: Integer): TGocciaExceptionHandler;
 begin
   {$IFDEF DEBUG}
   if (AIndex < 0) or (AIndex >= FExceptionHandlerCount) then
-    raise ERangeError.CreateFmt('GetExceptionHandler: index %d out of range 0..%d', [AIndex, FExceptionHandlerCount - 1]);
+    raise ERangeError.CreateFmt('GetExceptionHandler: index %d out of range 0..%d',
+      [AIndex, FExceptionHandlerCount - 1]);
   {$ENDIF}
   Result := FExceptionHandlers[AIndex];
 end;
 
-procedure TSouffleFunctionTemplate.SetLocalType(const ASlot: UInt8;
-  const AKind: TSouffleLocalType);
+procedure TGocciaFunctionTemplate.SetLocalType(const ASlot: UInt8;
+  const AKind: TGocciaLocalType);
 begin
   if ASlot >= Length(FLocalTypes) then
     SetLength(FLocalTypes, ASlot + 1);
@@ -398,8 +407,8 @@ begin
     FLocalTypeCount := ASlot + 1;
 end;
 
-function TSouffleFunctionTemplate.GetLocalType(
-  const ASlot: UInt8): TSouffleLocalType;
+function TGocciaFunctionTemplate.GetLocalType(
+  const ASlot: UInt8): TGocciaLocalType;
 begin
   if ASlot < FLocalTypeCount then
     Result := FLocalTypes[ASlot]
@@ -407,7 +416,7 @@ begin
     Result := sltUntyped;
 end;
 
-procedure TSouffleFunctionTemplate.SetLocalStrictFlag(const ASlot: UInt8;
+procedure TGocciaFunctionTemplate.SetLocalStrictFlag(const ASlot: UInt8;
   const AStrict: Boolean);
 begin
   if ASlot >= Length(FLocalStrictFlags) then
@@ -417,54 +426,13 @@ begin
     FLocalStrictCount := ASlot + 1;
 end;
 
-function TSouffleFunctionTemplate.GetLocalStrictFlag(
+function TGocciaFunctionTemplate.GetLocalStrictFlag(
   const ASlot: UInt8): Boolean;
 begin
   if ASlot < FLocalStrictCount then
     Result := FLocalStrictFlags[ASlot]
   else
     Result := False;
-end;
-
-procedure TSouffleFunctionTemplate.MaterializeConstants;
-var
-  I: Integer;
-  GC: TGarbageCollector;
-begin
-  if FConstantCount > Length(FMaterializedConstants) then
-  begin
-    GC := TGarbageCollector.Instance;
-    SetLength(FMaterializedConstants, FConstantCount);
-    for I := 0 to FConstantCount - 1 do
-      case FConstants[I].Kind of
-        bckNil:     FMaterializedConstants[I] := SouffleNil;
-        bckTrue:    FMaterializedConstants[I] := SouffleBoolean(True);
-        bckFalse:   FMaterializedConstants[I] := SouffleBoolean(False);
-        bckInteger: FMaterializedConstants[I] := SouffleInteger(FConstants[I].IntValue);
-        bckFloat:   FMaterializedConstants[I] := SouffleFloat(FConstants[I].FloatValue);
-        bckString:
-        begin
-          FMaterializedConstants[I] := SouffleString(FConstants[I].StringValue);
-          if (FMaterializedConstants[I].Kind = svkReference) and
-             Assigned(FMaterializedConstants[I].AsReference) and Assigned(GC) then
-            GC.PinObject(FMaterializedConstants[I].AsReference);
-        end;
-      end;
-  end;
-  for I := 0 to FFunctions.Count - 1 do
-    FFunctions[I].MaterializeConstants;
-end;
-
-function TSouffleFunctionTemplate.GetMaterializedConstant(
-  const AIndex: Integer): TSouffleValue;
-begin
-  {$IFDEF DEBUG}
-  if (AIndex < 0) or (AIndex >= Length(FMaterializedConstants)) then
-    raise ERangeError.CreateFmt(
-      'GetMaterializedConstant: index %d out of range 0..%d',
-      [AIndex, Length(FMaterializedConstants) - 1]);
-  {$ENDIF}
-  Result := FMaterializedConstants[AIndex];
 end;
 
 end.

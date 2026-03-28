@@ -7,9 +7,9 @@ interface
 uses
   Math,
 
-  Souffle.Bytecode.Chunk,
-
   Goccia.Arguments.Collection,
+  Goccia.Bytecode,
+  Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
   Goccia.Evaluator.Context,
   Goccia.Interpreter,
@@ -40,7 +40,7 @@ type
     FCurrentModuleExports: TGocciaValueMap;
     FActiveDecoratorSession: TObject;
     FPreviousExceptionMask: TFPUExceptionMask;
-    function ConstantToValue(const AConstant: TSouffleBytecodeConstant): TGocciaValue;
+    function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
     procedure EnsureRegisterCapacity(const ACount: Integer);
     procedure EnsureLocalCapacity(const ACount: Integer);
     function GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
@@ -48,7 +48,7 @@ type
     procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue); inline;
     function GetLocal(const AIndex: Integer): TGocciaValue; inline;
     procedure SetLocal(const AIndex: Integer; const AValue: TGocciaValue); inline;
-    function MatchesNilKind(const AValue: TGocciaValue; const AKind: UInt8): Boolean;
+    function MatchesNullishKind(const AValue: TGocciaValue; const AKind: UInt8): Boolean;
     function TryGetArrayIndex(const AKey: TGocciaValue; out AIndex: Integer): Boolean;
     function KeyToPropertyName(const AKey: TGocciaValue): string;
     function IterableToArray(const AIterable: TGocciaValue;
@@ -105,7 +105,7 @@ type
   public
     constructor Create;
     destructor Destroy; override;
-    function ExecuteFunction(const ATemplate: TSouffleFunctionTemplate): TGocciaValue;
+    function ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
     function ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
     property Interpreter: TGocciaInterpreter read FInterpreter write FInterpreter;
@@ -118,11 +118,8 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
-  Souffle.Bytecode,
-  Souffle.Value,
 
   Goccia.CallStack,
-  Goccia.Compiler.ExtOps,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
@@ -165,6 +162,31 @@ begin
       Exit(True);
     CurrentPrototype := CurrentPrototype.Prototype;
   end;
+end;
+
+function VMNumberValue(const AValue: Double): TGocciaNumberLiteralValue; inline;
+var
+  Bits: Int64 absolute AValue;
+begin
+  if Math.IsNaN(AValue) then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+  if Math.IsInfinite(AValue) then
+  begin
+    if AValue > 0 then
+      Exit(TGocciaNumberLiteralValue.InfinityValue);
+    Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
+  end;
+  if AValue = 0.0 then
+  begin
+    if Bits < 0 then
+      Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
+    Exit(TGocciaNumberLiteralValue.ZeroValue);
+  end;
+  if (AValue >= 0.0) and (AValue <= 255.0) and (Frac(AValue) = 0.0) then
+    Exit(TGocciaNumberLiteralValue.SmallInt(Trunc(AValue)));
+  if AValue = 1.0 then
+    Exit(TGocciaNumberLiteralValue.OneValue);
+  Result := TGocciaNumberLiteralValue.Create(AValue);
 end;
 
 procedure ParseElementDescriptor(const ADescriptor: string;
@@ -508,7 +530,7 @@ begin
   end;
 end;
 
-function TGocciaVM.ConstantToValue(const AConstant: TSouffleBytecodeConstant): TGocciaValue;
+function TGocciaVM.ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
 begin
   case AConstant.Kind of
     bckNil:
@@ -578,22 +600,21 @@ end;
 procedure TGocciaVM.SetLocal(const AIndex: Integer; const AValue: TGocciaValue);
 begin
   SetRegister(AIndex, AValue);
-  GetLocalCell(AIndex).Value := AValue;
 end;
 
-function TGocciaVM.MatchesNilKind(const AValue: TGocciaValue;
+function TGocciaVM.MatchesNullishKind(const AValue: TGocciaValue;
   const AKind: UInt8): Boolean;
 begin
   case AKind of
-    SOUFFLE_NIL_MATCH_ANY:
+    GOCCIA_NULLISH_MATCH_ANY:
       Result := (AValue is TGocciaUndefinedLiteralValue) or
                 (AValue is TGocciaNullLiteralValue) or
                 (AValue = TGocciaHoleValue.HoleValue);
-    0:
+    GOCCIA_NULLISH_MATCH_UNDEFINED:
       Result := AValue is TGocciaUndefinedLiteralValue;
-    1:
+    GOCCIA_NULLISH_MATCH_NULL:
       Result := AValue is TGocciaNullLiteralValue;
-    2:
+    GOCCIA_NULLISH_MATCH_HOLE:
       Result := AValue = TGocciaHoleValue.HoleValue;
   else
     Result := False;
@@ -1819,13 +1840,15 @@ var
   GlobalName: string;
   Upvalue: TGocciaBytecodeUpvalue;
   ChildClosure: TGocciaBytecodeClosure;
-  Desc: TSouffleUpvalueDescriptor;
+  Desc: TGocciaUpvalueDescriptor;
   Handler: TGocciaBytecodeHandlerEntry;
   DoneValue: TGocciaValue;
   IterResult: TGocciaValue;
   NextMethod: TGocciaValue;
   DoneFlag: Boolean;
   Running: Boolean;
+  Template: TGocciaFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
 begin
   SavedRegisters := FRegisters;
   SavedLocalCells := FLocalCells;
@@ -1847,17 +1870,18 @@ begin
         0, 0);
 
     FillChar(Frame, SizeOf(Frame), 0);
-    Frame.Template := AClosure.Template;
+    Template := AClosure.Template;
+    Frame.Template := Template;
 
     SetLocal(0, AThisValue);
     for I := 0 to AArguments.Length - 1 do
       SetLocal(I + 1, AArguments.GetElement(I));
 
     Running := True;
-    while Running and (Frame.IP < AClosure.Template.CodeCount) do
+    while Running and (Frame.IP < Template.CodeCount) do
     begin
       try
-        Instruction := AClosure.Template.GetInstruction(Frame.IP);
+        Instruction := Template.GetInstructionUnchecked(Frame.IP);
         Inc(Frame.IP);
 
         Op := DecodeOp(Instruction);
@@ -1867,17 +1891,9 @@ begin
         Bx := DecodeBx(Instruction);
         sBx := DecodesBx(Instruction);
 
-        case TSouffleOpCode(Op) of
+        case TGocciaOpCode(Op) of
       OP_LOAD_CONST:
-        SetRegister(A, ConstantToValue(AClosure.Template.GetConstant(Bx)));
-
-      OP_LOAD_NIL:
-        case B of
-          1: SetRegister(A, TGocciaNullLiteralValue.NullValue);
-          2: SetRegister(A, TGocciaHoleValue.HoleValue);
-        else
-          SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
-        end;
+        SetRegister(A, ConstantToValue(Template.GetConstantUnchecked(Bx)));
 
       OP_LOAD_UNDEFINED:
         SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -1895,7 +1911,7 @@ begin
         SetRegister(A, TGocciaHoleValue.HoleValue);
 
       OP_CHECK_TYPE:
-        case TSouffleLocalType(B) of
+        case TGocciaLocalType(B) of
           sltInteger:
             begin
               if not (GetRegister(A) is TGocciaNumberLiteralValue) or
@@ -1978,7 +1994,7 @@ begin
           FLocalCells[A] := nil;
 
       OP_ARG_COUNT:
-        SetRegister(A, TGocciaNumberLiteralValue.Create(FArgCount));
+        SetRegister(A, VMNumberValue(FArgCount));
 
       OP_PACK_ARGS:
       begin
@@ -1999,12 +2015,12 @@ begin
         if not GetRegister(A).ToBooleanLiteral.Value then
           Inc(Frame.IP, sBx);
 
-      OP_JUMP_IF_NIL:
-        if MatchesNilKind(GetRegister(A), B) then
+      OP_JUMP_IF_NULLISH:
+        if MatchesNullishKind(GetRegister(A), B) then
           Inc(Frame.IP, C);
 
-      OP_JUMP_IF_NOT_NIL:
-        if not MatchesNilKind(GetRegister(A), B) then
+      OP_JUMP_IF_NOT_NULLISH:
+        if not MatchesNullishKind(GetRegister(A), B) then
           Inc(Frame.IP, C);
 
       OP_PUSH_HANDLER:
@@ -2018,36 +2034,35 @@ begin
       begin
         LeftNum := GetRegister(B).ToNumberLiteral;
         RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegister(A, TGocciaNumberLiteralValue.Create(LeftNum.Value + RightNum.Value));
+        SetRegister(A, VMNumberValue(LeftNum.Value + RightNum.Value));
       end;
 
       OP_SUB_INT, OP_SUB_FLOAT:
       begin
         LeftNum := GetRegister(B).ToNumberLiteral;
         RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegister(A, TGocciaNumberLiteralValue.Create(LeftNum.Value - RightNum.Value));
+        SetRegister(A, VMNumberValue(LeftNum.Value - RightNum.Value));
       end;
 
       OP_MUL_INT, OP_MUL_FLOAT:
       begin
         LeftNum := GetRegister(B).ToNumberLiteral;
         RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegister(A, TGocciaNumberLiteralValue.Create(LeftNum.Value * RightNum.Value));
+        SetRegister(A, VMNumberValue(LeftNum.Value * RightNum.Value));
       end;
 
       OP_DIV_INT, OP_DIV_FLOAT:
       begin
         LeftNum := GetRegister(B).ToNumberLiteral;
         RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegister(A, TGocciaNumberLiteralValue.Create(LeftNum.Value / RightNum.Value));
+        SetRegister(A, VMNumberValue(LeftNum.Value / RightNum.Value));
       end;
 
       OP_MOD_INT, OP_MOD_FLOAT:
       begin
         LeftNum := GetRegister(B).ToNumberLiteral;
         RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegister(A, TGocciaNumberLiteralValue.Create(
-          FMod(LeftNum.Value, RightNum.Value)));
+        SetRegister(A, VMNumberValue(FMod(LeftNum.Value, RightNum.Value)));
       end;
 
       OP_EQ_INT, OP_EQ_FLOAT:
@@ -2087,7 +2102,7 @@ begin
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
       OP_NEG_INT, OP_NEG_FLOAT:
-        SetRegister(A, TGocciaNumberLiteralValue.Create(-GetRegister(B).ToNumberLiteral.Value));
+        SetRegister(A, VMNumberValue(-GetRegister(B).ToNumberLiteral.Value));
 
       OP_CONCAT:
         SetRegister(A, TGocciaStringLiteralValue.Create(
@@ -2217,7 +2232,7 @@ begin
       OP_GET_LENGTH:
       begin
         if GetRegister(B) is TGocciaArrayValue then
-          SetRegister(A, TGocciaNumberLiteralValue.Create(TGocciaArrayValue(GetRegister(B)).GetLength))
+          SetRegister(A, VMNumberValue(TGocciaArrayValue(GetRegister(B)).GetLength))
         else
           SetRegister(A, TGocciaNumberLiteralValue.ZeroValue);
       end;
@@ -2232,7 +2247,7 @@ begin
       OP_NEW_CLASS:
       begin
         SetRegister(A, TGocciaVMClassValue.Create(Self,
-          AClosure.Template.GetConstant(Bx).StringValue, nil));
+          Template.GetConstantUnchecked(Bx).StringValue, nil));
         TGocciaVMClassValue(GetRegister(A)).Prototype.AssignProperty(
           PROP_CONSTRUCTOR, GetRegister(A));
       end;
@@ -2249,13 +2264,9 @@ begin
         end;
       end;
 
-      OP_GET_PROP_CONST:
-        SetRegister(A, GetPropertyValue(GetRegister(B),
-          AClosure.Template.GetConstant(C).StringValue));
-
-      OP_SET_PROP_CONST:
+      OP_CLASS_ADD_METHOD_CONST:
       begin
-        GlobalName := AClosure.Template.GetConstant(B).StringValue;
+        GlobalName := Template.GetConstantUnchecked(B).StringValue;
         if GetRegister(A) is TGocciaVMClassValue then
         begin
           if GlobalName = PROP_CONSTRUCTOR then
@@ -2264,9 +2275,6 @@ begin
             TGocciaVMClassValue(GetRegister(A)).Prototype.AssignProperty(
               PROP_CONSTRUCTOR, GetRegister(A));
           end
-          else if GlobalName = '__fields__' then
-            TGocciaVMClassValue(GetRegister(A)).SetMethodInitializers(
-              [GetRegister(C)])
           else
             TGocciaVMClassValue(GetRegister(A)).Prototype.AssignProperty(
               GlobalName, GetRegister(C));
@@ -2275,16 +2283,32 @@ begin
           SetPropertyValue(GetRegister(A), GlobalName, GetRegister(C));
       end;
 
+      OP_CLASS_SET_FIELD_INITIALIZER:
+      begin
+        if GetRegister(A) is TGocciaVMClassValue then
+          TGocciaVMClassValue(GetRegister(A)).SetMethodInitializers(
+            [GetRegister(B)]);
+      end;
+
+      OP_GET_PROP_CONST:
+        SetRegister(A, GetPropertyValue(GetRegister(B),
+          Template.GetConstantUnchecked(C).StringValue));
+
+      OP_SET_PROP_CONST:
+        SetPropertyValue(GetRegister(A),
+          Template.GetConstantUnchecked(B).StringValue,
+          GetRegister(C));
+
       OP_DELETE_PROP_CONST:
       begin
         if GetRegister(A) is TGocciaObjectValue then
         begin
           if TGocciaObjectValue(GetRegister(A)).DeleteProperty(
-            AClosure.Template.GetConstant(Bx).StringValue) then
+            Template.GetConstantUnchecked(Bx).StringValue) then
             SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
           else
             ThrowTypeError('Cannot delete property ''' +
-              AClosure.Template.GetConstant(Bx).StringValue +
+              Template.GetConstantUnchecked(Bx).StringValue +
               ''' of [object Object]');
         end
         else
@@ -2304,7 +2328,7 @@ begin
           SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
       end;
 
-      OP_RT_GET_INDEX:
+      OP_GET_INDEX:
       begin
         if GetRegister(B) is TGocciaArrayValue then
         begin
@@ -2363,7 +2387,7 @@ begin
           SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
       end;
 
-      OP_RT_SET_INDEX:
+      OP_SET_INDEX:
       begin
         if GetRegister(A) is TGocciaArrayValue then
         begin
@@ -2399,124 +2423,95 @@ begin
         end;
       end;
 
-      OP_RT_ADD:
+      OP_ADD:
         SetRegister(A, EvaluateAddition(GetRegister(B), GetRegister(C)));
 
-      OP_RT_SUB:
+      OP_SUB:
         SetRegister(A, EvaluateSubtraction(GetRegister(B), GetRegister(C)));
 
-      OP_RT_MUL:
+      OP_MUL:
         SetRegister(A, EvaluateMultiplication(GetRegister(B), GetRegister(C)));
 
-      OP_RT_DIV:
+      OP_DIV:
         SetRegister(A, EvaluateDivision(GetRegister(B), GetRegister(C)));
 
-      OP_RT_MOD:
+      OP_MOD:
         SetRegister(A, EvaluateModulo(GetRegister(B), GetRegister(C)));
 
-      OP_RT_POW:
+      OP_POW:
         SetRegister(A, EvaluateExponentiation(GetRegister(B), GetRegister(C)));
 
-      OP_RT_NEG:
-        SetRegister(A, TGocciaNumberLiteralValue.Create(-GetRegister(B).ToNumberLiteral.Value));
+      OP_NEG:
+        SetRegister(A, VMNumberValue(-GetRegister(B).ToNumberLiteral.Value));
 
-      OP_RT_BAND:
+      OP_BAND:
         SetRegister(A, EvaluateBitwiseAnd(GetRegister(B), GetRegister(C)));
 
-      OP_RT_BOR:
+      OP_BOR:
         SetRegister(A, EvaluateBitwiseOr(GetRegister(B), GetRegister(C)));
 
-      OP_RT_BXOR:
+      OP_BXOR:
         SetRegister(A, EvaluateBitwiseXor(GetRegister(B), GetRegister(C)));
 
-      OP_RT_SHL:
+      OP_SHL:
         SetRegister(A, EvaluateLeftShift(GetRegister(B), GetRegister(C)));
 
-      OP_RT_SHR:
+      OP_SHR:
         SetRegister(A, EvaluateRightShift(GetRegister(B), GetRegister(C)));
 
-      OP_RT_USHR:
+      OP_USHR:
         SetRegister(A, EvaluateUnsignedRightShift(GetRegister(B), GetRegister(C)));
 
-      OP_RT_BNOT:
+      OP_BNOT:
         SetRegister(A, EvaluateBitwiseNot(GetRegister(B)));
 
-      OP_RT_EQ:
+      OP_EQ:
         SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
 
-      OP_RT_NEQ:
+      OP_NEQ:
         SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
 
-      OP_RT_LT:
+      OP_LT:
         if LessThan(GetRegister(B), GetRegister(C)) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
-      OP_RT_GT:
+      OP_GT:
         if GreaterThan(GetRegister(B), GetRegister(C)) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
-      OP_RT_LTE:
+      OP_LTE:
         if LessThanOrEqual(GetRegister(B), GetRegister(C)) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
-      OP_RT_GTE:
+      OP_GTE:
         if GreaterThanOrEqual(GetRegister(B), GetRegister(C)) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
-      OP_RT_TYPEOF:
+      OP_TYPEOF:
         SetRegister(A, TGocciaStringLiteralValue.Create(GetRegister(B).TypeOf));
 
-      OP_RT_IS_INSTANCE:
+      OP_IS_INSTANCE:
         SetRegister(A, EvaluateInstanceof(GetRegister(B), GetRegister(C),
           @VMIsObjectInstanceOfClass));
 
-      OP_RT_HAS_PROPERTY:
+      OP_HAS_PROPERTY:
         SetRegister(A, HasPropertyValue(GetRegister(B), GetRegister(C)));
 
-      OP_RT_TO_NUMBER:
+      OP_TO_NUMBER:
         SetRegister(A, GetRegister(B).ToNumberLiteral);
 
-      OP_RT_TO_STRING:
+      OP_TO_STRING:
         SetRegister(A, ToECMAString(GetRegister(B)));
 
-      OP_RT_GET_PROP:
-        SetRegister(A, GetPropertyValue(GetRegister(B),
-          AClosure.Template.GetConstant(C).StringValue));
-
-      OP_RT_SET_PROP:
-        SetPropertyValue(GetRegister(A),
-          AClosure.Template.GetConstant(B).StringValue,
-          GetRegister(C));
-
-      OP_RT_DEL_PROP:
-      begin
-        if GetRegister(B) is TGocciaObjectValue then
-        begin
-          if TGocciaObjectValue(GetRegister(B)).DeleteProperty(
-            AClosure.Template.GetConstant(C).StringValue) then
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
-          else if GetRegister(B) is TGocciaArrayValue then
-            ThrowTypeError('Cannot delete property ''' +
-              AClosure.Template.GetConstant(C).StringValue +
-              ''' of [object Array]')
-          else
-            ThrowTypeError('Cannot delete property ''' +
-              AClosure.Template.GetConstant(C).StringValue +
-              ''' of [object Object]');
-        end
-        else
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue);
-      end;
-
-      OP_RT_DEL_INDEX:
+      OP_DEL_INDEX:
       begin
         if GetRegister(B) is TGocciaArrayValue then
         begin
@@ -2544,12 +2539,12 @@ begin
 
       OP_CLOSURE:
       begin
+        ChildTemplate := Template.GetFunctionUnchecked(Bx);
         ChildClosure := TGocciaBytecodeClosure.Create(
-          AClosure.Template.GetFunction(Bx),
-          AClosure.Template.GetFunction(Bx).UpvalueCount);
-        for I := 0 to AClosure.Template.GetFunction(Bx).UpvalueCount - 1 do
+          ChildTemplate, ChildTemplate.UpvalueCount);
+        for I := 0 to ChildTemplate.UpvalueCount - 1 do
         begin
-          Desc := AClosure.Template.GetFunction(Bx).GetUpvalueDescriptor(I);
+          Desc := ChildTemplate.GetUpvalueDescriptor(I);
           if Desc.IsLocal then
             ChildClosure.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
               GetLocalCell(Desc.Index)))
@@ -2559,9 +2554,12 @@ begin
         SetRegister(A, TGocciaBytecodeFunctionValue.Create(Self, ChildClosure));
       end;
 
-      OP_RT_CALL:
+      OP_CALL:
       begin
-        CallArgs := TGocciaArgumentsCollection.Create;
+        if (C and 1) = 1 then
+          CallArgs := TGocciaArgumentsCollection.Create
+        else
+          CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(B);
         try
           if (C and 1) = 1 then
           begin
@@ -2579,9 +2577,12 @@ begin
         end;
       end;
 
-      OP_RT_CALL_METHOD:
+      OP_CALL_METHOD:
       begin
-        CallArgs := TGocciaArgumentsCollection.Create;
+        if (C and 1) = 1 then
+          CallArgs := TGocciaArgumentsCollection.Create
+        else
+          CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(B);
         try
           if (C and 1) = 1 then
           begin
@@ -2598,9 +2599,9 @@ begin
         end;
       end;
 
-      OP_RT_CONSTRUCT:
+      OP_CONSTRUCT:
       begin
-        CallArgs := TGocciaArgumentsCollection.Create;
+        CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(C);
         try
           for I := 0 to C - 1 do
             CallArgs.Add(GetRegister(B + 1 + I));
@@ -2610,10 +2611,10 @@ begin
         end;
       end;
 
-      OP_RT_GET_ITER:
+      OP_GET_ITER:
         SetRegister(A, GetIteratorValue(GetRegister(B), C <> 0));
 
-      OP_RT_ITER_NEXT:
+      OP_ITER_NEXT:
       begin
         IterResult := GetRegister(C);
         if IterResult is TGocciaIteratorValue then
@@ -2670,18 +2671,18 @@ begin
         end;
       end;
 
-      OP_RT_AWAIT:
+      OP_AWAIT:
         SetRegister(A, AwaitValue(GetRegister(B)));
 
       OP_SETUP_AUTO_ACCESSOR_CONST:
-        SetupAutoAccessorValue(AClosure.Template.GetConstant(C).StringValue);
+        SetupAutoAccessorValue(Template.GetConstantUnchecked(C).StringValue);
 
       OP_BEGIN_DECORATORS:
         BeginDecorators(GetRegister(A), GetRegister(A + 1));
 
       OP_APPLY_ELEMENT_DECORATOR_CONST:
         ApplyElementDecorator(GetRegister(A),
-          AClosure.Template.GetConstant(C).StringValue);
+          Template.GetConstantUnchecked(C).StringValue);
 
       OP_APPLY_CLASS_DECORATOR:
         ApplyClassDecorator(GetRegister(A));
@@ -2689,22 +2690,18 @@ begin
       OP_FINISH_DECORATORS:
         SetRegister(A, FinishDecorators(GetRegister(A)));
 
-      OP_RT_EXT:
-        raise Exception.CreateFmt(
-          'Unsupported Goccia VM extension opcode in minimal executor: %d', [B]);
-
-      OP_RT_GET_GLOBAL:
+      OP_GET_GLOBAL:
       begin
-        GlobalName := AClosure.Template.GetConstant(Bx).StringValue;
+        GlobalName := Template.GetConstantUnchecked(Bx).StringValue;
         if Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName) then
           SetRegister(A, FGlobalScope.GetValue(GlobalName))
         else
           SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
       end;
 
-      OP_RT_SET_GLOBAL:
+      OP_SET_GLOBAL:
       begin
-        GlobalName := AClosure.Template.GetConstant(Bx).StringValue;
+        GlobalName := Template.GetConstantUnchecked(Bx).StringValue;
         if Assigned(FGlobalScope) then
         begin
           if FGlobalScope.Contains(GlobalName) then
@@ -2714,22 +2711,22 @@ begin
         end;
       end;
 
-      OP_RT_HAS_GLOBAL:
+      OP_HAS_GLOBAL:
       begin
-        GlobalName := AClosure.Template.GetConstant(Bx).StringValue;
+        GlobalName := Template.GetConstantUnchecked(Bx).StringValue;
         if Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
       end;
 
-      OP_RT_IMPORT:
+      OP_IMPORT:
         SetRegister(A, ImportModuleValue(
-          AClosure.Template.GetConstant(Bx).StringValue));
+          Template.GetConstantUnchecked(Bx).StringValue));
 
-      OP_RT_EXPORT:
+      OP_EXPORT:
         ExportBindingValue(
-          AClosure.Template.GetConstant(Bx).StringValue,
+          Template.GetConstantUnchecked(Bx).StringValue,
           GetRegister(A));
 
       OP_THROW:
@@ -2747,91 +2744,111 @@ begin
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
-      OP_DEFINE_GETTER_CONST:
-        DefineGetterProperty(GetRegister(A),
-          AClosure.Template.GetConstant(C).StringValue, GetRegister(A + 1));
-
-      OP_DEFINE_SETTER_CONST:
-        DefineSetterProperty(GetRegister(A),
-          AClosure.Template.GetConstant(C).StringValue, GetRegister(A + 1));
-
-      OP_DEFINE_STATIC_GETTER_CONST:
-        DefineStaticGetterProperty(GetRegister(A),
-          AClosure.Template.GetConstant(C).StringValue, GetRegister(A + 1));
-
-      OP_DEFINE_STATIC_SETTER_CONST:
-        DefineStaticSetterProperty(GetRegister(A),
-          AClosure.Template.GetConstant(C).StringValue, GetRegister(A + 1));
-
-      OP_DEFINE_COMPUTED_GETTER:
-        DefineGetterPropertyByKey(GetRegister(A), GetRegister(C), GetRegister(A + 1));
-
-      OP_DEFINE_COMPUTED_SETTER:
-        DefineSetterPropertyByKey(GetRegister(A), GetRegister(C), GetRegister(A + 1));
-
-      OP_DEFINE_COMPUTED_STATIC_GETTER:
-        DefineStaticGetterPropertyByKey(GetRegister(A), GetRegister(C), GetRegister(A + 1));
-
-      OP_DEFINE_COMPUTED_STATIC_SETTER:
-        DefineStaticSetterPropertyByKey(GetRegister(A), GetRegister(C), GetRegister(A + 1));
-
-      OP_SPREAD_OBJECT:
-        if GetRegister(A) is TGocciaObjectValue then
-          SpreadObjectIntoValue(TGocciaObjectValue(GetRegister(A)), GetRegister(C));
-
-      OP_OBJECT_REST:
+      OP_DEFINE_ACCESSOR_CONST:
       begin
-        if (A + 1 < Length(FRegisters)) and
-           (GetRegister(A + 1) is TGocciaArrayValue) then
-          SetRegister(A, ObjectRestValue(GetRegister(C),
-            TGocciaArrayValue(GetRegister(A + 1))))
+        GlobalName := Template.GetConstantUnchecked(C).StringValue;
+        if (B and ACCESSOR_FLAG_STATIC) <> 0 then
+        begin
+          if (B and ACCESSOR_FLAG_SETTER) <> 0 then
+            DefineStaticSetterProperty(GetRegister(A), GlobalName, GetRegister(A + 1))
+          else
+            DefineStaticGetterProperty(GetRegister(A), GlobalName, GetRegister(A + 1));
+        end
         else
-          SetRegister(A, ObjectRestValue(GetRegister(C), nil));
+        begin
+          if (B and ACCESSOR_FLAG_SETTER) <> 0 then
+            DefineSetterProperty(GetRegister(A), GlobalName, GetRegister(A + 1))
+          else
+            DefineGetterProperty(GetRegister(A), GlobalName, GetRegister(A + 1));
+        end;
       end;
 
-      OP_REQUIRE_OBJECT:
+      OP_DEFINE_ACCESSOR_DYNAMIC:
       begin
-        if (GetRegister(A) is TGocciaNullLiteralValue) or
-           (GetRegister(A) is TGocciaUndefinedLiteralValue) then
-          ThrowTypeError('Cannot destructure ' +
-            GetRegister(A).ToStringLiteral.Value +
-            ' as it is not an object');
+        if (B and ACCESSOR_FLAG_STATIC) <> 0 then
+        begin
+          if (B and ACCESSOR_FLAG_SETTER) <> 0 then
+            DefineStaticSetterPropertyByKey(GetRegister(A), GetRegister(C), GetRegister(A + 1))
+          else
+            DefineStaticGetterPropertyByKey(GetRegister(A), GetRegister(C), GetRegister(A + 1));
+        end
+        else
+        begin
+          if (B and ACCESSOR_FLAG_SETTER) <> 0 then
+            DefineSetterPropertyByKey(GetRegister(A), GetRegister(C), GetRegister(A + 1))
+          else
+            DefineGetterPropertyByKey(GetRegister(A), GetRegister(C), GetRegister(A + 1));
+        end;
       end;
 
-      OP_REQUIRE_ITERABLE:
-        SetRegister(A, IterableToArray(GetRegister(A)));
-
-      OP_SPREAD_ITERABLE_INTO_ARRAY:
+      OP_COLLECTION_OP:
       begin
-        DoneValue := IterableToArray(GetRegister(C));
-        if (GetRegister(A) is TGocciaArrayValue) and (DoneValue is TGocciaArrayValue) then
-          for I := 0 to TGocciaArrayValue(DoneValue).Elements.Count - 1 do
-            TGocciaArrayValue(GetRegister(A)).Elements.Add(
-              TGocciaArrayValue(DoneValue).GetElement(I));
+        case B of
+          COLLECTION_OP_SPREAD_OBJECT:
+            if GetRegister(A) is TGocciaObjectValue then
+              SpreadObjectIntoValue(TGocciaObjectValue(GetRegister(A)), GetRegister(C));
+
+          COLLECTION_OP_OBJECT_REST:
+            begin
+              if (A + 1 < Length(FRegisters)) and
+                 (GetRegister(A + 1) is TGocciaArrayValue) then
+                SetRegister(A, ObjectRestValue(GetRegister(C),
+                  TGocciaArrayValue(GetRegister(A + 1))))
+              else
+                SetRegister(A, ObjectRestValue(GetRegister(C), nil));
+            end;
+
+          COLLECTION_OP_SPREAD_ITERABLE_INTO_ARRAY:
+            begin
+              DoneValue := IterableToArray(GetRegister(C));
+              if (GetRegister(A) is TGocciaArrayValue) and (DoneValue is TGocciaArrayValue) then
+                for I := 0 to TGocciaArrayValue(DoneValue).Elements.Count - 1 do
+                  TGocciaArrayValue(GetRegister(A)).Elements.Add(
+                    TGocciaArrayValue(DoneValue).GetElement(I));
+            end;
+        else
+          raise Exception.CreateFmt('Unsupported collection helper mode: %d', [B]);
+        end;
+      end;
+
+      OP_VALIDATE_VALUE:
+      begin
+        case B of
+          VALIDATE_OP_REQUIRE_OBJECT:
+            begin
+              if (GetRegister(A) is TGocciaNullLiteralValue) or
+                 (GetRegister(A) is TGocciaUndefinedLiteralValue) then
+                ThrowTypeError('Cannot destructure ' +
+                  GetRegister(A).ToStringLiteral.Value +
+                  ' as it is not an object');
+            end;
+
+          VALIDATE_OP_REQUIRE_ITERABLE:
+            SetRegister(A, IterableToArray(GetRegister(A)));
+        else
+          raise Exception.CreateFmt('Unsupported validation mode: %d', [B]);
+        end;
       end;
 
       OP_THROW_TYPE_ERROR_CONST:
-        ThrowTypeError(AClosure.Template.GetConstant(C).StringValue);
+        ThrowTypeError(Template.GetConstantUnchecked(C).StringValue);
 
       OP_DEFINE_GLOBAL_CONST:
-        DefineGlobalValue(AClosure.Template.GetConstant(C).StringValue, GetRegister(A));
+        DefineGlobalValue(Template.GetConstantUnchecked(C).StringValue, GetRegister(A));
 
       OP_FINALIZE_ENUM:
         SetRegister(A, FinalizeEnumValue(GetRegister(A),
-          AClosure.Template.GetConstant(C).StringValue));
+          Template.GetConstantUnchecked(C).StringValue));
 
       OP_SUPER_GET_CONST:
         if A > 0 then
           SetRegister(A, GetSuperPropertyValue(GetRegister(A + 1),
-            GetRegister(A - 1), AClosure.Template.GetConstant(C).StringValue))
+            GetRegister(A - 1), Template.GetConstantUnchecked(C).StringValue))
         else
           SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
 
       OP_RETURN:
         Exit(GetRegister(A));
-
-      OP_RETURN_NIL:
-        Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
         else
           raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
         end;
@@ -2951,7 +2968,7 @@ begin
   end;
 end;
 
-function TGocciaVM.ExecuteFunction(const ATemplate: TSouffleFunctionTemplate): TGocciaValue;
+function TGocciaVM.ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
 var
   EmptyArgs: TGocciaArgumentsCollection;
   TopClosure: TGocciaBytecodeClosure;

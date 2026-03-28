@@ -8,16 +8,16 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
-  Souffle.Bytecode,
-  Souffle.Bytecode.Binary,
-  Souffle.Bytecode.Chunk,
-  Souffle.Bytecode.Debug,
-  Souffle.Bytecode.Module,
   TestRunner,
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.Bytecode,
+  Goccia.Bytecode.Binary,
+  Goccia.Bytecode.Chunk,
+  Goccia.Bytecode.Debug,
+  Goccia.Bytecode.Module,
   Goccia.Compiler,
   Goccia.Compiler.Scope,
   Goccia.Lexer,
@@ -29,7 +29,7 @@ uses
 type
   TTestCompiler = class(TTestSuite)
   private
-    function CompileSource(const ASource: string): TSouffleBytecodeModule;
+    function CompileSource(const ASource: string): TGocciaBytecodeModule;
 
     procedure TestCompileLiteral;
     procedure TestCompileArithmetic;
@@ -54,7 +54,7 @@ begin
 end;
 
 function TTestCompiler.CompileSource(
-  const ASource: string): TSouffleBytecodeModule;
+  const ASource: string): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
@@ -84,7 +84,7 @@ end;
 
 procedure TTestCompiler.TestCompileLiteral;
 var
-  Module: TSouffleBytecodeModule;
+  Module: TGocciaBytecodeModule;
 begin
   Module := CompileSource('const x = 42;');
   try
@@ -98,7 +98,7 @@ end;
 
 procedure TTestCompiler.TestCompileArithmetic;
 var
-  Module: TSouffleBytecodeModule;
+  Module: TGocciaBytecodeModule;
 begin
   Module := CompileSource('const result = 1 + 2 * 3;');
   try
@@ -111,7 +111,7 @@ end;
 
 procedure TTestCompiler.TestCompileVariable;
 var
-  Module: TSouffleBytecodeModule;
+  Module: TGocciaBytecodeModule;
 begin
   Module := CompileSource('let a = 10; let b = a;');
   try
@@ -124,7 +124,7 @@ end;
 
 procedure TTestCompiler.TestCompileFunction;
 var
-  Module: TSouffleBytecodeModule;
+  Module: TGocciaBytecodeModule;
 begin
   Module := CompileSource('const add = (a, b) => a + b;');
   try
@@ -137,7 +137,7 @@ end;
 
 procedure TTestCompiler.TestBinaryRoundTrip;
 var
-  Original, Loaded: TSouffleBytecodeModule;
+  Original, Loaded: TGocciaBytecodeModule;
   TempFile: string;
 begin
   Original := CompileSource('const x = 42; const y = "hello";');
@@ -162,16 +162,16 @@ end;
 
 procedure TTestCompiler.TestBinaryLittleEndian;
 var
-  Module: TSouffleBytecodeModule;
+  Module: TGocciaBytecodeModule;
   Stream: TMemoryStream;
-  Writer: TSouffleBytecodeWriter;
+  Writer: TGocciaBytecodeWriter;
   Bytes: PByte;
   VersionLE: UInt16;
 begin
   Module := CompileSource('const x = 42;');
   Stream := TMemoryStream.Create;
   try
-    Writer := TSouffleBytecodeWriter.Create(Stream);
+    Writer := TGocciaBytecodeWriter.Create(Stream);
     try
       Writer.WriteModule(Module);
     finally
@@ -186,7 +186,7 @@ begin
 
     // Format version at offset 4 must be little-endian
     Move(Bytes[4], VersionLE, 2);
-    Expect<UInt16>(VersionLE).ToBe(NtoLE(SOUFFLE_FORMAT_VERSION));
+    Expect<UInt16>(VersionLE).ToBe(NtoLE(GOCCIA_FORMAT_VERSION));
   finally
     Stream.Free;
     Module.Free;
@@ -195,10 +195,10 @@ end;
 
 procedure TTestCompiler.TestBinaryRoundTripConstants;
 var
-  Original, Loaded: TSouffleBytecodeModule;
+  Original, Loaded: TGocciaBytecodeModule;
   TempFile: string;
   I: Integer;
-  OrigConst, LoadConst: TSouffleBytecodeConstant;
+  OrigConst, LoadConst: TGocciaBytecodeConstant;
   OrigBits, LoadBits: Int64;
 begin
   Original := CompileSource(

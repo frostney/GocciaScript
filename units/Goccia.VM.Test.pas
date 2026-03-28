@@ -5,11 +5,11 @@ program Goccia.VM.Test;
 uses
   SysUtils,
 
-  Souffle.Bytecode,
-  Souffle.Bytecode.Chunk,
   TestRunner,
 
   Goccia.Arguments.Collection,
+  Goccia.Bytecode,
+  Goccia.Bytecode.Chunk,
   Goccia.TestSetup,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
@@ -51,11 +51,11 @@ end;
 
 procedure TTestGocciaVM.TestExecuteIntegerAddition;
 var
-  Template: TSouffleFunctionTemplate;
+  Template: TGocciaFunctionTemplate;
   VM: TGocciaVM;
   ResultValue: TGocciaValue;
 begin
-  Template := TSouffleFunctionTemplate.Create('add');
+  Template := TGocciaFunctionTemplate.Create('add');
   VM := TGocciaVM.Create;
   try
     Template.MaxRegisters := 3;
@@ -74,11 +74,11 @@ end;
 
 procedure TTestGocciaVM.TestExecuteLocalsRoundTrip;
 var
-  Template: TSouffleFunctionTemplate;
+  Template: TGocciaFunctionTemplate;
   VM: TGocciaVM;
   ResultValue: TGocciaValue;
 begin
-  Template := TSouffleFunctionTemplate.Create('locals');
+  Template := TGocciaFunctionTemplate.Create('locals');
   VM := TGocciaVM.Create;
   try
     Template.MaxRegisters := 2;
@@ -97,11 +97,11 @@ end;
 
 procedure TTestGocciaVM.TestExecuteLiteralLoads;
 var
-  Template: TSouffleFunctionTemplate;
+  Template: TGocciaFunctionTemplate;
   VM: TGocciaVM;
   UndefinedValue, NullValue, HoleValue: TGocciaValue;
 begin
-  Template := TSouffleFunctionTemplate.Create('literal-loads');
+  Template := TGocciaFunctionTemplate.Create('literal-loads');
   VM := TGocciaVM.Create;
   try
     Template.MaxRegisters := 3;
@@ -126,12 +126,12 @@ end;
 
 procedure TTestGocciaVM.TestExecuteConstString;
 var
-  Template: TSouffleFunctionTemplate;
+  Template: TGocciaFunctionTemplate;
   VM: TGocciaVM;
   ResultValue: TGocciaValue;
   ConstIdx: UInt16;
 begin
-  Template := TSouffleFunctionTemplate.Create('const-string');
+  Template := TGocciaFunctionTemplate.Create('const-string');
   VM := TGocciaVM.Create;
   try
     Template.MaxRegisters := 1;
@@ -149,11 +149,11 @@ end;
 
 procedure TTestGocciaVM.TestExecuteComparisons;
 var
-  Template: TSouffleFunctionTemplate;
+  Template: TGocciaFunctionTemplate;
   VM: TGocciaVM;
   ResultValue: TGocciaValue;
 begin
-  Template := TSouffleFunctionTemplate.Create('compare');
+  Template := TGocciaFunctionTemplate.Create('compare');
   VM := TGocciaVM.Create;
   try
     Template.MaxRegisters := 3;
@@ -172,11 +172,11 @@ end;
 
 procedure TTestGocciaVM.TestExecuteArrayOps;
 var
-  Template: TSouffleFunctionTemplate;
+  Template: TGocciaFunctionTemplate;
   VM: TGocciaVM;
   ResultValue: TGocciaValue;
 begin
-  Template := TSouffleFunctionTemplate.Create('array');
+  Template := TGocciaFunctionTemplate.Create('array');
   VM := TGocciaVM.Create;
   try
     Template.MaxRegisters := 4;
@@ -197,11 +197,11 @@ end;
 
 procedure TTestGocciaVM.TestExecuteArrayPop;
 var
-  Template: TSouffleFunctionTemplate;
+  Template: TGocciaFunctionTemplate;
   VM: TGocciaVM;
   ResultValue: TGocciaValue;
 begin
-  Template := TSouffleFunctionTemplate.Create('array-pop');
+  Template := TGocciaFunctionTemplate.Create('array-pop');
   VM := TGocciaVM.Create;
   try
     Template.MaxRegisters := 3;
@@ -221,14 +221,14 @@ end;
 
 procedure TTestGocciaVM.TestExecuteObjectOps;
 var
-  Template: TSouffleFunctionTemplate;
-  DeleteTemplate: TSouffleFunctionTemplate;
+  Template: TGocciaFunctionTemplate;
+  DeleteTemplate: TGocciaFunctionTemplate;
   VM: TGocciaVM;
   ResultValue: TGocciaValue;
   NameIdx: UInt16;
 begin
-  Template := TSouffleFunctionTemplate.Create('object');
-  DeleteTemplate := TSouffleFunctionTemplate.Create('object-delete');
+  Template := TGocciaFunctionTemplate.Create('object');
+  DeleteTemplate := TGocciaFunctionTemplate.Create('object-delete');
   VM := TGocciaVM.Create;
   try
     Template.MaxRegisters := 2;
@@ -262,12 +262,12 @@ end;
 
 procedure TTestGocciaVM.TestExecuteIndexedObjectOps;
 var
-  Template: TSouffleFunctionTemplate;
+  Template: TGocciaFunctionTemplate;
   VM: TGocciaVM;
   ResultValue: TGocciaValue;
   KeyIdx: UInt16;
 begin
-  Template := TSouffleFunctionTemplate.Create('indexed-object');
+  Template := TGocciaFunctionTemplate.Create('indexed-object');
   VM := TGocciaVM.Create;
   try
     Template.MaxRegisters := 3;
@@ -275,8 +275,8 @@ begin
     Template.EmitInstruction(EncodeABx(OP_NEW_OBJECT, 0, 0));
     Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 1, KeyIdx));
     Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 2, 11));
-    Template.EmitInstruction(EncodeABC(OP_RT_SET_INDEX, 0, 1, 2));
-    Template.EmitInstruction(EncodeABC(OP_RT_GET_INDEX, 2, 0, 1));
+    Template.EmitInstruction(EncodeABC(OP_SET_INDEX, 0, 1, 2));
+    Template.EmitInstruction(EncodeABC(OP_GET_INDEX, 2, 0, 1));
     Template.EmitInstruction(EncodeABC(OP_RETURN, 2, 0, 0));
 
     ResultValue := VM.ExecuteFunction(Template);
@@ -289,13 +289,13 @@ end;
 
 procedure TTestGocciaVM.TestExecuteClosureCall;
 var
-  Template: TSouffleFunctionTemplate;
-  ChildTemplate: TSouffleFunctionTemplate;
+  Template: TGocciaFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
   VM: TGocciaVM;
   ResultValue: TGocciaValue;
 begin
-  Template := TSouffleFunctionTemplate.Create('caller');
-  ChildTemplate := TSouffleFunctionTemplate.Create('add');
+  Template := TGocciaFunctionTemplate.Create('caller');
+  ChildTemplate := TGocciaFunctionTemplate.Create('add');
   VM := TGocciaVM.Create;
   try
     ChildTemplate.MaxRegisters := 3;
@@ -310,7 +310,7 @@ begin
     Template.EmitInstruction(EncodeABx(OP_CLOSURE, 0, 0));
     Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 1, 4));
     Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 2, 5));
-    Template.EmitInstruction(EncodeABC(OP_RT_CALL, 0, 2, 0));
+    Template.EmitInstruction(EncodeABC(OP_CALL, 0, 2, 0));
     Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
 
     ResultValue := VM.ExecuteFunction(Template);
@@ -323,14 +323,14 @@ end;
 
 procedure TTestGocciaVM.TestExecuteCapturedClosure;
 var
-  Template: TSouffleFunctionTemplate;
-  ChildTemplate: TSouffleFunctionTemplate;
+  Template: TGocciaFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
   VM: TGocciaVM;
   ClosureValue: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
-  Template := TSouffleFunctionTemplate.Create('makeCounter');
-  ChildTemplate := TSouffleFunctionTemplate.Create('next');
+  Template := TGocciaFunctionTemplate.Create('makeCounter');
+  ChildTemplate := TGocciaFunctionTemplate.Create('next');
   VM := TGocciaVM.Create;
   CallArgs := TGocciaArgumentsCollection.Create;
   try

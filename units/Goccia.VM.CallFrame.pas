@@ -5,8 +5,7 @@ unit Goccia.VM.CallFrame;
 interface
 
 uses
-  Souffle.Bytecode.Chunk,
-
+  Goccia.Bytecode.Chunk,
   Goccia.Values.Primitives;
 
 type
@@ -14,7 +13,7 @@ type
   TGocciaRegisterArray = array of TGocciaRegister;
 
   TGocciaVMCallFrame = record
-    Template: TSouffleFunctionTemplate;
+    Template: TGocciaFunctionTemplate;
     IP: Integer;
     Base: Integer;
     ReturnRegister: Integer;

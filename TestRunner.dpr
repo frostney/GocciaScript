@@ -565,11 +565,9 @@ begin
         GMode := ebTreeWalk
       else if ParamStr(I) = '--mode=bytecode' then
         GMode := ebBytecode
-      else if ParamStr(I) = '--mode=goccia-vm' then
-        GMode := ebBytecode
       else if Copy(ParamStr(I), 1, 7) = '--mode=' then
       begin
-        WriteLn('Error: Unknown mode "', Copy(ParamStr(I), 8, MaxInt), '". Use "interpreted", "bytecode", or "goccia-vm".');
+        WriteLn('Error: Unknown mode "', Copy(ParamStr(I), 8, MaxInt), '". Use "interpreted" or "bytecode".');
         ExitCode := 1;
         Exit;
       end
@@ -592,7 +590,7 @@ begin
       WriteLn('  --exit-on-first-failure Stop on first test failure');
       WriteLn('  --silent                Suppress console output from test scripts');
       WriteLn('  --output=<file>         Write test results as JSON to file');
-      WriteLn('  --mode=interpreted|bytecode|goccia-vm  Execution backend; goccia-vm is an alias for bytecode (default: interpreted)');
+      WriteLn('  --mode=interpreted|bytecode  Execution backend (default: interpreted)');
       ExitCode := 1;
     end
     else

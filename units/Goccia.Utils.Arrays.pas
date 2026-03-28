@@ -15,10 +15,15 @@ procedure ArrayCreateDataProperty(const AArray: TGocciaArrayValue; const AIndex:
 implementation
 
 uses
+  SysUtils,
+
+  Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue;
 
 procedure ArrayCreateDataProperty(const AArray: TGocciaArrayValue; const AIndex: Integer; const AValue: TGocciaValue);
 begin
+  if AIndex < 0 then
+    ThrowRangeError('Invalid array index: ' + IntToStr(AIndex));
   if AIndex < AArray.Elements.Count then
     AArray.Elements[AIndex] := AValue
   else

@@ -222,13 +222,6 @@ begin
   try
     Ext := LowerCase(ExtractFileExt(AFileName));
 
-    if Ext = '.sbc' then
-    begin
-      WriteLn('Fatal error: .sbc bytecode is no longer supported pre-1.0. Recompile the source to .gbc.');
-      ExitCode := 1;
-      Exit;
-    end;
-
     if Ext = EXT_GBC then
     begin
       RunBytecodeFromFile(AFileName);
@@ -295,7 +288,6 @@ begin
   WriteLn('Options:');
   WriteLn('  --mode=interpreted      Tree-walk interpreter (default)');
   WriteLn('  --mode=bytecode         Compile to bytecode and execute on the Goccia VM');
-  WriteLn('  --mode=goccia-vm        Alias for --mode=bytecode');
   WriteLn('  --emit                  Compile to .gbc file (no execution)');
   WriteLn('  --emit=bytecode         Compile to .gbc file (explicit, same as --emit)');
   WriteLn('  --output=<path>         Output file path (used with --emit)');
@@ -323,11 +315,9 @@ begin
           GMode := emInterpreted
         else if ModeStr = 'bytecode' then
           GMode := emBytecode
-        else if ModeStr = 'goccia-vm' then
-          GMode := emBytecode
         else
         begin
-          WriteLn('Error: Unknown mode "', ModeStr, '". Use "interpreted", "bytecode", or "goccia-vm".');
+          WriteLn('Error: Unknown mode "', ModeStr, '". Use "interpreted" or "bytecode".');
           ExitCode := 1;
           Exit;
         end;
