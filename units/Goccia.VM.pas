@@ -26,10 +26,13 @@ uses
   Goccia.VM.Upvalue;
 
 type
+  TGocciaBytecodeCellArray = array of TGocciaBytecodeCell;
+  TGocciaArgumentsPoolArray = array of TGocciaArgumentsCollection;
+
   TGocciaVM = class
   private
     FRegisters: TGocciaRegisterArray;
-    FLocalCells: array of TGocciaBytecodeCell;
+    FLocalCells: TGocciaBytecodeCellArray;
     FArgCount: Integer;
     FGlobalScope: TGocciaScope;
     FInterpreter: TGocciaInterpreter;
@@ -40,7 +43,15 @@ type
     FCurrentModuleExports: TGocciaValueMap;
     FActiveDecoratorSession: TObject;
     FPreviousExceptionMask: TFPUExceptionMask;
+    FArgumentPool: TGocciaArgumentsPoolArray;
+    FArgumentPoolCount: Integer;
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
+    function AcquireArguments(const ACapacity: Integer = 0): TGocciaArgumentsCollection;
+    procedure ReleaseArguments(const AArguments: TGocciaArgumentsCollection);
+    function AcquireRegisters(const ACount: Integer): TGocciaRegisterArray;
+    procedure ReleaseRegisters(var ARegisters: TGocciaRegisterArray);
+    function AcquireLocalCells(const ACount: Integer): TGocciaBytecodeCellArray;
+    procedure ReleaseLocalCells(var ALocalCells: TGocciaBytecodeCellArray);
     procedure EnsureRegisterCapacity(const ACount: Integer);
     procedure EnsureLocalCapacity(const ACount: Integer);
     function GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
@@ -326,6 +337,25 @@ begin
   if LeftNum.IsNaN or RightNum.IsNaN then
     Exit(False);
   Result := not VMLessThan(ALeft, ARight);
+end;
+
+function VMToECMAStringFast(const AValue: TGocciaValue): TGocciaStringLiteralValue; inline;
+var
+  PrimitiveValue: TGocciaValue;
+begin
+  if AValue is TGocciaStringLiteralValue then
+    Exit(TGocciaStringLiteralValue(AValue));
+
+  if AValue is TGocciaSymbolValue then
+    ThrowTypeError('Cannot convert a Symbol value to a string');
+
+  if AValue.IsPrimitive then
+    Exit(AValue.ToStringLiteral);
+
+  PrimitiveValue := ToPrimitive(AValue, tphString);
+  if PrimitiveValue is TGocciaSymbolValue then
+    ThrowTypeError('Cannot convert a Symbol value to a string');
+  Result := PrimitiveValue.ToStringLiteral;
 end;
 
 function VMBitwiseAndValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
@@ -845,10 +875,13 @@ begin
   FPreviousExceptionMask := GetExceptionMask;
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   FHandlerStack := TGocciaBytecodeHandlerStack.Create;
+  FArgumentPoolCount := 0;
   FActiveDecoratorSession := nil;
 end;
 
 destructor TGocciaVM.Destroy;
+var
+  I: Integer;
 begin
   if Assigned(FActiveDecoratorSession) then
   begin
@@ -856,6 +889,9 @@ begin
       TGocciaVMDecoratorSession(FActiveDecoratorSession).MetadataObject);
     FActiveDecoratorSession.Free;
   end;
+  for I := 0 to FArgumentPoolCount - 1 do
+    FArgumentPool[I].Free;
+  SetLength(FArgumentPool, 0);
   FHandlerStack.Free;
   SetExceptionMask(FPreviousExceptionMask);
   inherited;
@@ -1009,6 +1045,63 @@ begin
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
+end;
+
+function TGocciaVM.AcquireArguments(
+  const ACapacity: Integer): TGocciaArgumentsCollection;
+begin
+  if FArgumentPoolCount > 0 then
+  begin
+    Dec(FArgumentPoolCount);
+    Result := FArgumentPool[FArgumentPoolCount];
+    FArgumentPool[FArgumentPoolCount] := nil;
+    Result.Clear;
+    Result.EnsureCapacity(ACapacity);
+    Exit;
+  end;
+
+  if ACapacity > 0 then
+    Result := TGocciaArgumentsCollection.CreateWithCapacity(ACapacity)
+  else
+    Result := TGocciaArgumentsCollection.Create;
+end;
+
+procedure TGocciaVM.ReleaseArguments(
+  const AArguments: TGocciaArgumentsCollection);
+begin
+  if not Assigned(AArguments) then
+    Exit;
+  AArguments.Clear;
+  if FArgumentPoolCount < 32 then
+  begin
+    if Length(FArgumentPool) <= FArgumentPoolCount then
+      SetLength(FArgumentPool, FArgumentPoolCount + 8);
+    FArgumentPool[FArgumentPoolCount] := AArguments;
+    Inc(FArgumentPoolCount);
+  end
+  else
+    AArguments.Free;
+end;
+
+function TGocciaVM.AcquireRegisters(const ACount: Integer): TGocciaRegisterArray;
+begin
+  SetLength(Result, ACount);
+end;
+
+procedure TGocciaVM.ReleaseRegisters(var ARegisters: TGocciaRegisterArray);
+begin
+  ARegisters := nil;
+end;
+
+function TGocciaVM.AcquireLocalCells(
+  const ACount: Integer): TGocciaBytecodeCellArray;
+begin
+  SetLength(Result, ACount);
+end;
+
+procedure TGocciaVM.ReleaseLocalCells(var ALocalCells: TGocciaBytecodeCellArray);
+begin
+  ALocalCells := nil;
 end;
 
 procedure TGocciaVM.EnsureRegisterCapacity(const ACount: Integer);
@@ -1171,11 +1264,11 @@ begin
          (NextMethod is TGocciaUndefinedLiteralValue) or
          not NextMethod.IsCallable then
         Break;
-      CallArgs := TGocciaArgumentsCollection.Create;
+      CallArgs := AcquireArguments;
       try
         NextResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IteratorValue);
       finally
-        CallArgs.Free;
+        ReleaseArguments(CallArgs);
       end;
       NextResult := AwaitValue(NextResult);
       if NextResult.IsPrimitive then
@@ -1290,11 +1383,11 @@ begin
        not (IteratorMethod is TGocciaUndefinedLiteralValue) and
        IteratorMethod.IsCallable then
     begin
-      CallArgs := TGocciaArgumentsCollection.Create;
+      CallArgs := AcquireArguments;
       try
         Result := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AIterable);
       finally
-        CallArgs.Free;
+        ReleaseArguments(CallArgs);
       end;
       if Assigned(Result) then
         Exit;
@@ -1318,11 +1411,11 @@ begin
        not (IteratorMethod is TGocciaUndefinedLiteralValue) and
        IteratorMethod.IsCallable then
     begin
-      CallArgs := TGocciaArgumentsCollection.Create;
+      CallArgs := AcquireArguments;
       try
         IteratorObject := TGocciaFunctionBase(IteratorMethod).Call(CallArgs, AIterable);
       finally
-        CallArgs.Free;
+        ReleaseArguments(CallArgs);
       end;
 
       if IteratorObject is TGocciaIteratorValue then
@@ -1790,12 +1883,14 @@ begin
     TGocciaNativeFunctionValue.CreateWithoutPrototype(
       Session.ClassCollector.AddInitializer, PROP_ADD_INITIALIZER, 1));
 
-  DecoratorArgs := TGocciaArgumentsCollection.Create([ClassVal, ContextObject]);
+  DecoratorArgs := AcquireArguments(2);
+  DecoratorArgs.Add(ClassVal);
+  DecoratorArgs.Add(ContextObject);
   try
     DecoratorResult := TGocciaFunctionBase(ADecoratorFn).Call(
       DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
-    DecoratorArgs.Free;
+    ReleaseArguments(DecoratorArgs);
   end;
 
   if (DecoratorResult <> nil) and
@@ -1956,12 +2051,14 @@ begin
       end;
   end;
 
-  DecoratorArgs := TGocciaArgumentsCollection.Create([ElementValue, ContextObject]);
+  DecoratorArgs := AcquireArguments(2);
+  DecoratorArgs.Add(ElementValue);
+  DecoratorArgs.Add(ContextObject);
   try
     DecoratorResult := TGocciaFunctionBase(ADecoratorFn).Call(
       DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
-    DecoratorArgs.Free;
+    ReleaseArguments(DecoratorArgs);
   end;
 
   if (DecoratorResult = nil) or
@@ -2100,22 +2197,22 @@ begin
   InitializerResults := Session.ClassCollector.GetInitializers;
   for I := 0 to High(InitializerResults) do
   begin
-    InitArgs := TGocciaArgumentsCollection.Create;
+    InitArgs := AcquireArguments;
     try
       TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassVal);
     finally
-      InitArgs.Free;
+      ReleaseArguments(InitArgs);
     end;
   end;
 
   InitializerResults := Session.StaticFieldCollector.GetInitializers;
   for I := 0 to High(InitializerResults) do
   begin
-    InitArgs := TGocciaArgumentsCollection.Create;
+    InitArgs := AcquireArguments;
     try
       TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassVal);
     finally
-      InitArgs.Free;
+      ReleaseArguments(InitArgs);
     end;
   end;
 
@@ -2200,6 +2297,7 @@ begin
     SetRawPrivateValue(AObject, AKey, AValue);
     Exit;
   end;
+
   AObject.SetProperty(AKey, AValue);
 end;
 
@@ -2319,7 +2417,7 @@ function TGocciaVM.ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
 var
   Frame: TGocciaVMCallFrame;
   SavedRegisters: TGocciaRegisterArray;
-  SavedLocalCells: array of TGocciaBytecodeCell;
+  SavedLocalCells: TGocciaBytecodeCellArray;
   SavedArgCount: Integer;
   SavedClosure: TGocciaBytecodeClosure;
   SavedHandlerCount: Integer;
@@ -2351,10 +2449,8 @@ begin
   SavedClosure := FCurrentClosure;
   SavedHandlerCount := FHandlerStack.Count;
   try
-    FRegisters := nil;
-    SetLength(FRegisters, Max(AClosure.Template.MaxRegisters, 1));
-    FLocalCells := nil;
-    SetLength(FLocalCells, Max(AClosure.Template.MaxRegisters, 1));
+    FRegisters := AcquireRegisters(Max(AClosure.Template.MaxRegisters, 1));
+    FLocalCells := AcquireLocalCells(Max(AClosure.Template.MaxRegisters, 1));
     FArgCount := AArguments.Length;
     FCurrentClosure := AClosure;
     Inc(FFrameDepth);
@@ -2597,8 +2693,19 @@ begin
         SetRegisterFast(A, VMNumberValue(-GetRegisterFast(B).ToNumberLiteral.Value));
 
       OP_CONCAT:
-        SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-          ToECMAString(GetRegisterFast(B)).Value + ToECMAString(GetRegisterFast(C)).Value));
+      begin
+        LeftValue := GetRegisterFast(B);
+        RightValue := GetRegisterFast(C);
+        if (LeftValue is TGocciaStringLiteralValue) and
+           (RightValue is TGocciaStringLiteralValue) then
+          SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+            TGocciaStringLiteralValue(LeftValue).Value +
+            TGocciaStringLiteralValue(RightValue).Value))
+        else
+          SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+            VMToECMAStringFast(LeftValue).Value +
+            VMToECMAStringFast(RightValue).Value));
+      end;
 
       OP_NEW_ARRAY:
         SetRegister(A, TGocciaArrayValue.Create);
@@ -3154,7 +3261,7 @@ begin
         SetRegister(A, GetRegister(B).ToNumberLiteral);
 
       OP_TO_STRING:
-        SetRegister(A, ToECMAString(GetRegister(B)));
+        SetRegisterFast(A, VMToECMAStringFast(GetRegisterFast(B)));
 
       OP_DEL_INDEX:
       begin
@@ -3202,9 +3309,9 @@ begin
       OP_CALL:
       begin
         if (C and 1) = 1 then
-          CallArgs := TGocciaArgumentsCollection.Create
+          CallArgs := AcquireArguments
         else
-          CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(B);
+          CallArgs := AcquireArguments(B);
         try
           if (C and 1) = 1 then
           begin
@@ -3218,16 +3325,16 @@ begin
           SetRegister(A, InvokeFunctionValue(
             GetRegister(A), CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue));
         finally
-          CallArgs.Free;
+          ReleaseArguments(CallArgs);
         end;
       end;
 
       OP_CALL_METHOD:
       begin
         if (C and 1) = 1 then
-          CallArgs := TGocciaArgumentsCollection.Create
+          CallArgs := AcquireArguments
         else
-          CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(B);
+          CallArgs := AcquireArguments(B);
         try
           if (C and 1) = 1 then
           begin
@@ -3240,19 +3347,19 @@ begin
               CallArgs.Add(GetRegister(A + 1 + I));
           SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs, GetRegister(A - 1)));
         finally
-          CallArgs.Free;
+          ReleaseArguments(CallArgs);
         end;
       end;
 
       OP_CONSTRUCT:
       begin
-        CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(C);
+        CallArgs := AcquireArguments(C);
         try
           for I := 0 to C - 1 do
             CallArgs.Add(GetRegister(B + 1 + I));
           SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
         finally
-          CallArgs.Free;
+          ReleaseArguments(CallArgs);
         end;
       end;
 
@@ -3284,11 +3391,11 @@ begin
           end
           else
           begin
-            CallArgs := TGocciaArgumentsCollection.Create;
+            CallArgs := AcquireArguments;
             try
               IterResult := TGocciaFunctionBase(NextMethod).Call(CallArgs, IterResult);
             finally
-              CallArgs.Free;
+              ReleaseArguments(CallArgs);
             end;
 
             IterResult := AwaitValue(IterResult);
@@ -3580,6 +3687,8 @@ begin
     Dec(FFrameDepth);
     FCurrentClosure := SavedClosure;
     FArgCount := SavedArgCount;
+    ReleaseLocalCells(FLocalCells);
+    ReleaseRegisters(FRegisters);
     FLocalCells := SavedLocalCells;
     FRegisters := SavedRegisters;
   end;

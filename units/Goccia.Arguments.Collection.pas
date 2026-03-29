@@ -26,6 +26,8 @@ type
     function GetLength: Integer; virtual;
     function IsEmpty: Boolean; inline;
     procedure Add(const AValue: TGocciaValue);
+    procedure Clear;
+    procedure EnsureCapacity(const ACapacity: Integer);
     function Slice(AStartIndex: Integer = 0; AEndIndex: Integer = -1): TGocciaArgumentsCollection;
 
     property Length: Integer read GetLength;
@@ -105,6 +107,17 @@ end;
 procedure TGocciaArgumentsCollection.Add(const AValue: TGocciaValue);
 begin
   FArgs.Add(AValue);
+end;
+
+procedure TGocciaArgumentsCollection.Clear;
+begin
+  FArgs.Clear;
+end;
+
+procedure TGocciaArgumentsCollection.EnsureCapacity(const ACapacity: Integer);
+begin
+  if ACapacity > FArgs.Capacity then
+    FArgs.Capacity := ACapacity;
 end;
 
 function TGocciaArgumentsCollection.Slice(AStartIndex: Integer = 0; AEndIndex: Integer = -1): TGocciaArgumentsCollection;
