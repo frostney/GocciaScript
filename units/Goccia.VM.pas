@@ -2343,6 +2343,7 @@ var
   Running: Boolean;
   Template: TGocciaFunctionTemplate;
   ChildTemplate: TGocciaFunctionTemplate;
+  LeftValue, RightValue: TGocciaValue;
 begin
   SavedRegisters := FRegisters;
   SavedLocalCells := FLocalCells;
@@ -2915,22 +2916,84 @@ begin
       end;
 
       OP_ADD:
-        SetRegister(A, VMAddValues(GetRegister(B), GetRegister(C)));
+      begin
+        LeftValue := GetRegisterFast(B);
+        RightValue := GetRegisterFast(C);
+        if (LeftValue is TGocciaNumberLiteralValue) and
+           (RightValue is TGocciaNumberLiteralValue) then
+          SetRegisterFast(A, VMAddValues(LeftValue, RightValue))
+        else if (LeftValue is TGocciaStringLiteralValue) and
+                (RightValue is TGocciaStringLiteralValue) then
+          SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+            TGocciaStringLiteralValue(LeftValue).Value +
+            TGocciaStringLiteralValue(RightValue).Value))
+        else if LeftValue.IsPrimitive and RightValue.IsPrimitive then
+        begin
+          if (LeftValue is TGocciaStringLiteralValue) or
+             (RightValue is TGocciaStringLiteralValue) then
+            SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+              LeftValue.ToStringLiteral.Value + RightValue.ToStringLiteral.Value))
+          else
+            SetRegisterFast(A, VMAddValues(LeftValue, RightValue));
+        end
+        else
+          SetRegister(A, VMAddValues(LeftValue, RightValue));
+      end;
 
       OP_SUB:
-        SetRegister(A, VMSubtractValues(GetRegister(B), GetRegister(C)));
+      begin
+        LeftValue := GetRegisterFast(B);
+        RightValue := GetRegisterFast(C);
+        if (LeftValue is TGocciaNumberLiteralValue) and
+           (RightValue is TGocciaNumberLiteralValue) then
+          SetRegisterFast(A, VMSubtractValues(LeftValue, RightValue))
+        else
+          SetRegister(A, VMSubtractValues(LeftValue, RightValue));
+      end;
 
       OP_MUL:
-        SetRegister(A, VMMultiplyValues(GetRegister(B), GetRegister(C)));
+      begin
+        LeftValue := GetRegisterFast(B);
+        RightValue := GetRegisterFast(C);
+        if (LeftValue is TGocciaNumberLiteralValue) and
+           (RightValue is TGocciaNumberLiteralValue) then
+          SetRegisterFast(A, VMMultiplyValues(LeftValue, RightValue))
+        else
+          SetRegister(A, VMMultiplyValues(LeftValue, RightValue));
+      end;
 
       OP_DIV:
-        SetRegister(A, VMDivideValues(GetRegister(B), GetRegister(C)));
+      begin
+        LeftValue := GetRegisterFast(B);
+        RightValue := GetRegisterFast(C);
+        if (LeftValue is TGocciaNumberLiteralValue) and
+           (RightValue is TGocciaNumberLiteralValue) then
+          SetRegisterFast(A, VMDivideValues(LeftValue, RightValue))
+        else
+          SetRegister(A, VMDivideValues(LeftValue, RightValue));
+      end;
 
       OP_MOD:
-        SetRegister(A, VMModuloValues(GetRegister(B), GetRegister(C)));
+      begin
+        LeftValue := GetRegisterFast(B);
+        RightValue := GetRegisterFast(C);
+        if (LeftValue is TGocciaNumberLiteralValue) and
+           (RightValue is TGocciaNumberLiteralValue) then
+          SetRegisterFast(A, VMModuloValues(LeftValue, RightValue))
+        else
+          SetRegister(A, VMModuloValues(LeftValue, RightValue));
+      end;
 
       OP_POW:
-        SetRegister(A, VMPowerValues(GetRegister(B), GetRegister(C)));
+      begin
+        LeftValue := GetRegisterFast(B);
+        RightValue := GetRegisterFast(C);
+        if (LeftValue is TGocciaNumberLiteralValue) and
+           (RightValue is TGocciaNumberLiteralValue) then
+          SetRegisterFast(A, VMPowerValues(LeftValue, RightValue))
+        else
+          SetRegister(A, VMPowerValues(LeftValue, RightValue));
+      end;
 
       OP_NEG:
         SetRegister(A, VMNumberValue(-GetRegister(B).ToNumberLiteral.Value));
@@ -2963,28 +3026,120 @@ begin
         SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
 
       OP_LT:
-        if VMLessThan(GetRegister(B), GetRegister(C)) then
+      begin
+        LeftValue := GetRegisterFast(B);
+        RightValue := GetRegisterFast(C);
+        if (LeftValue is TGocciaStringLiteralValue) and
+           (RightValue is TGocciaStringLiteralValue) then
+        begin
+          if TGocciaStringLiteralValue(LeftValue).Value <
+             TGocciaStringLiteralValue(RightValue).Value then
+            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+          else
+            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        end
+        else if (LeftValue is TGocciaNumberLiteralValue) and
+                (RightValue is TGocciaNumberLiteralValue) then
+        begin
+          if VMCompareNumbers(TGocciaNumberLiteralValue(LeftValue),
+             TGocciaNumberLiteralValue(RightValue), False) then
+            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+          else
+            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        end
+        else if VMLessThan(LeftValue, RightValue) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+      end;
 
       OP_GT:
-        if VMGreaterThan(GetRegister(B), GetRegister(C)) then
+      begin
+        LeftValue := GetRegisterFast(B);
+        RightValue := GetRegisterFast(C);
+        if (LeftValue is TGocciaStringLiteralValue) and
+           (RightValue is TGocciaStringLiteralValue) then
+        begin
+          if TGocciaStringLiteralValue(LeftValue).Value >
+             TGocciaStringLiteralValue(RightValue).Value then
+            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+          else
+            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        end
+        else if (LeftValue is TGocciaNumberLiteralValue) and
+                (RightValue is TGocciaNumberLiteralValue) then
+        begin
+          if VMCompareNumbers(TGocciaNumberLiteralValue(LeftValue),
+             TGocciaNumberLiteralValue(RightValue), True) then
+            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+          else
+            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        end
+        else if VMGreaterThan(LeftValue, RightValue) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+      end;
 
       OP_LTE:
-        if VMLessThanOrEqual(GetRegister(B), GetRegister(C)) then
+      begin
+        LeftValue := GetRegisterFast(B);
+        RightValue := GetRegisterFast(C);
+        if (LeftValue is TGocciaStringLiteralValue) and
+           (RightValue is TGocciaStringLiteralValue) then
+        begin
+          if TGocciaStringLiteralValue(LeftValue).Value <=
+             TGocciaStringLiteralValue(RightValue).Value then
+            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+          else
+            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        end
+        else if (LeftValue is TGocciaNumberLiteralValue) and
+                (RightValue is TGocciaNumberLiteralValue) then
+        begin
+          if (not TGocciaNumberLiteralValue(LeftValue).IsNaN) and
+             (not TGocciaNumberLiteralValue(RightValue).IsNaN) and
+             (not VMCompareNumbers(TGocciaNumberLiteralValue(LeftValue),
+               TGocciaNumberLiteralValue(RightValue), True)) then
+            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+          else
+            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        end
+        else if VMLessThanOrEqual(LeftValue, RightValue) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+      end;
 
       OP_GTE:
-        if VMGreaterThanOrEqual(GetRegister(B), GetRegister(C)) then
+      begin
+        LeftValue := GetRegisterFast(B);
+        RightValue := GetRegisterFast(C);
+        if (LeftValue is TGocciaStringLiteralValue) and
+           (RightValue is TGocciaStringLiteralValue) then
+        begin
+          if TGocciaStringLiteralValue(LeftValue).Value >=
+             TGocciaStringLiteralValue(RightValue).Value then
+            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+          else
+            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        end
+        else if (LeftValue is TGocciaNumberLiteralValue) and
+                (RightValue is TGocciaNumberLiteralValue) then
+        begin
+          if (not TGocciaNumberLiteralValue(LeftValue).IsNaN) and
+             (not TGocciaNumberLiteralValue(RightValue).IsNaN) and
+             (not VMCompareNumbers(TGocciaNumberLiteralValue(LeftValue),
+               TGocciaNumberLiteralValue(RightValue), False)) then
+            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+          else
+            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        end
+        else if VMGreaterThanOrEqual(LeftValue, RightValue) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+      end;
 
       OP_TYPEOF:
         SetRegister(A, TGocciaStringLiteralValue.Create(GetRegister(B).TypeOf));
