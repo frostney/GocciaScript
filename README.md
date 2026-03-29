@@ -326,7 +326,6 @@ See [Design Decisions](docs/design-decisions.md) for the complete rationale.
 | [Built-in Objects](docs/built-ins.md) | Available built-ins, API reference, adding new ones |
 | [Architecture](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
 | [Bytecode VM](docs/bytecode-vm.md) | Bytecode VM architecture, binary format, and core runtime model |
-| [WASM Backend](docs/wasm-backend.md) | WASM output: value mapping, runtime import contract, host requirements |
 | [Design Decisions](docs/design-decisions.md) | Rationale behind key technical choices |
 | [Code Style](docs/code-style.md) | Naming conventions, patterns, file organization |
 | [Value System](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |

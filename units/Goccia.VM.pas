@@ -45,9 +45,13 @@ type
     procedure EnsureLocalCapacity(const ACount: Integer);
     function GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
     function GetRegister(const AIndex: Integer): TGocciaValue; inline;
+    function GetRegisterFast(const AIndex: Integer): TGocciaValue; inline;
     procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue); inline;
+    procedure SetRegisterFast(const AIndex: Integer; const AValue: TGocciaValue); inline;
     function GetLocal(const AIndex: Integer): TGocciaValue; inline;
+    function GetLocalFast(const AIndex: Integer): TGocciaValue; inline;
     procedure SetLocal(const AIndex: Integer; const AValue: TGocciaValue); inline;
+    procedure SetLocalFast(const AIndex: Integer; const AValue: TGocciaValue); inline;
     function MatchesNullishKind(const AValue: TGocciaValue; const AKind: UInt8): Boolean;
     function TryGetArrayIndex(const AKey: TGocciaValue; out AIndex: Integer): Boolean;
     function KeyToPropertyName(const AKey: TGocciaValue): string;
@@ -581,12 +585,34 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+function TGocciaVM.GetRegisterFast(const AIndex: Integer): TGocciaValue;
+begin
+  if (AIndex < 0) or (AIndex >= Length(FRegisters)) then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  Result := FRegisters[AIndex];
+  if not Assigned(Result) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
 procedure TGocciaVM.SetRegister(const AIndex: Integer; const AValue: TGocciaValue);
 begin
   EnsureRegisterCapacity(AIndex + 1);
   FRegisters[AIndex] := AValue;
   if (AIndex >= 0) and (AIndex < Length(FLocalCells)) and
      Assigned(FLocalCells[AIndex]) then
+    FLocalCells[AIndex].Value := AValue;
+end;
+
+procedure TGocciaVM.SetRegisterFast(const AIndex: Integer;
+  const AValue: TGocciaValue);
+begin
+  if (AIndex < 0) or (AIndex >= Length(FRegisters)) then
+  begin
+    SetRegister(AIndex, AValue);
+    Exit;
+  end;
+  FRegisters[AIndex] := AValue;
+  if (AIndex < Length(FLocalCells)) and Assigned(FLocalCells[AIndex]) then
     FLocalCells[AIndex].Value := AValue;
 end;
 
@@ -597,9 +623,25 @@ begin
   Result := GetRegister(AIndex);
 end;
 
+function TGocciaVM.GetLocalFast(const AIndex: Integer): TGocciaValue;
+begin
+  if AIndex < 0 then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  if (AIndex < Length(FLocalCells)) and Assigned(FLocalCells[AIndex]) then
+    Exit(FLocalCells[AIndex].Value);
+  Result := GetRegisterFast(AIndex);
+end;
+
 procedure TGocciaVM.SetLocal(const AIndex: Integer; const AValue: TGocciaValue);
 begin
   SetRegister(AIndex, AValue);
+end;
+
+procedure TGocciaVM.SetLocalFast(const AIndex: Integer; const AValue: TGocciaValue);
+begin
+  if AIndex < 0 then
+    Exit;
+  SetRegisterFast(AIndex, AValue);
 end;
 
 function TGocciaVM.MatchesNullishKind(const AValue: TGocciaValue;
@@ -1830,8 +1872,6 @@ var
   Instruction: UInt32;
   Op: UInt8;
   A, B, C: UInt8;
-  Bx: UInt16;
-  sBx: Int16;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
   KeyIndex: Integer;
   ArgsArray: TGocciaArrayValue;
@@ -1888,27 +1928,24 @@ begin
         A := DecodeA(Instruction);
         B := DecodeB(Instruction);
         C := DecodeC(Instruction);
-        Bx := DecodeBx(Instruction);
-        sBx := DecodesBx(Instruction);
-
         case TGocciaOpCode(Op) of
       OP_LOAD_CONST:
-        SetRegister(A, ConstantToValue(Template.GetConstantUnchecked(Bx)));
+        SetRegisterFast(A, ConstantToValue(Template.GetConstantUnchecked(DecodeBx(Instruction))));
 
       OP_LOAD_UNDEFINED:
-        SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+        SetRegisterFast(A, TGocciaUndefinedLiteralValue.UndefinedValue);
 
       OP_LOAD_TRUE:
-        SetRegister(A, TGocciaBooleanLiteralValue.TrueValue);
+        SetRegisterFast(A, TGocciaBooleanLiteralValue.TrueValue);
 
       OP_LOAD_FALSE:
-        SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        SetRegisterFast(A, TGocciaBooleanLiteralValue.FalseValue);
 
       OP_LOAD_NULL:
-        SetRegister(A, TGocciaNullLiteralValue.NullValue);
+        SetRegisterFast(A, TGocciaNullLiteralValue.NullValue);
 
       OP_LOAD_HOLE:
-        SetRegister(A, TGocciaHoleValue.HoleValue);
+        SetRegisterFast(A, TGocciaHoleValue.HoleValue);
 
       OP_CHECK_TYPE:
         case TGocciaLocalType(B) of
@@ -1948,28 +1985,28 @@ begin
         end;
 
       OP_TO_PRIMITIVE:
-        SetRegister(A, ToPrimitive(GetRegister(B)));
+        SetRegisterFast(A, ToPrimitive(GetRegisterFast(B)));
 
       OP_LOAD_INT:
-        if (sBx >= 0) and (sBx <= 255) then
-          SetRegister(A, TGocciaNumberLiteralValue.SmallInt(sBx))
+        if (DecodesBx(Instruction) >= 0) and (DecodesBx(Instruction) <= 255) then
+          SetRegisterFast(A, TGocciaNumberLiteralValue.SmallInt(DecodesBx(Instruction)))
         else
-          SetRegister(A, TGocciaNumberLiteralValue.Create(sBx));
+          SetRegisterFast(A, TGocciaNumberLiteralValue.Create(DecodesBx(Instruction)));
 
       OP_MOVE:
-        SetRegister(A, GetRegister(B));
+        SetRegisterFast(A, GetRegisterFast(B));
 
       OP_GET_LOCAL:
-        SetRegister(A, GetLocal(Bx));
+        SetRegisterFast(A, GetLocal(DecodeBx(Instruction)));
 
       OP_SET_LOCAL:
-        SetLocal(Bx, GetRegister(A));
+        SetLocal(DecodeBx(Instruction), GetRegister(A));
 
       OP_GET_UPVALUE:
       begin
         if Assigned(FCurrentClosure) then
         begin
-          Upvalue := FCurrentClosure.GetUpvalue(Bx);
+          Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
             SetRegister(A, Upvalue.Cell.Value)
           else
@@ -1983,7 +2020,7 @@ begin
       begin
         if Assigned(FCurrentClosure) then
         begin
-          Upvalue := FCurrentClosure.GetUpvalue(Bx);
+          Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
             Upvalue.Cell.Value := GetRegister(A);
         end;
@@ -1994,14 +2031,14 @@ begin
           FLocalCells[A] := nil;
 
       OP_ARG_COUNT:
-        SetRegister(A, VMNumberValue(FArgCount));
+        SetRegisterFast(A, VMNumberValue(FArgCount));
 
       OP_PACK_ARGS:
       begin
         ArgsArray := TGocciaArrayValue.Create;
         for I := B to FArgCount - 1 do
           ArgsArray.Elements.Add(GetLocal(I + 1));
-        SetRegister(A, ArgsArray);
+        SetRegisterFast(A, ArgsArray);
       end;
 
       OP_JUMP:
@@ -2009,11 +2046,11 @@ begin
 
       OP_JUMP_IF_TRUE:
         if GetRegister(A).ToBooleanLiteral.Value then
-          Inc(Frame.IP, sBx);
+          Inc(Frame.IP, DecodesBx(Instruction));
 
       OP_JUMP_IF_FALSE:
         if not GetRegister(A).ToBooleanLiteral.Value then
-          Inc(Frame.IP, sBx);
+          Inc(Frame.IP, DecodesBx(Instruction));
 
       OP_JUMP_IF_NULLISH:
         if MatchesNullishKind(GetRegister(A), B) then
@@ -2024,7 +2061,7 @@ begin
           Inc(Frame.IP, C);
 
       OP_PUSH_HANDLER:
-        FHandlerStack.Push(Frame.IP + Bx, A, FFrameDepth);
+        FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth);
 
       OP_POP_HANDLER:
         if not FHandlerStack.IsEmpty then
@@ -2034,35 +2071,35 @@ begin
       begin
         LeftNum := GetRegister(B).ToNumberLiteral;
         RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegister(A, VMNumberValue(LeftNum.Value + RightNum.Value));
+        SetRegisterFast(A, VMNumberValue(LeftNum.Value + RightNum.Value));
       end;
 
       OP_SUB_INT, OP_SUB_FLOAT:
       begin
         LeftNum := GetRegister(B).ToNumberLiteral;
         RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegister(A, VMNumberValue(LeftNum.Value - RightNum.Value));
+        SetRegisterFast(A, VMNumberValue(LeftNum.Value - RightNum.Value));
       end;
 
       OP_MUL_INT, OP_MUL_FLOAT:
       begin
         LeftNum := GetRegister(B).ToNumberLiteral;
         RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegister(A, VMNumberValue(LeftNum.Value * RightNum.Value));
+        SetRegisterFast(A, VMNumberValue(LeftNum.Value * RightNum.Value));
       end;
 
       OP_DIV_INT, OP_DIV_FLOAT:
       begin
         LeftNum := GetRegister(B).ToNumberLiteral;
         RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegister(A, VMNumberValue(LeftNum.Value / RightNum.Value));
+        SetRegisterFast(A, VMNumberValue(LeftNum.Value / RightNum.Value));
       end;
 
       OP_MOD_INT, OP_MOD_FLOAT:
       begin
         LeftNum := GetRegister(B).ToNumberLiteral;
         RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegister(A, VMNumberValue(FMod(LeftNum.Value, RightNum.Value)));
+        SetRegisterFast(A, VMNumberValue(FMod(LeftNum.Value, RightNum.Value)));
       end;
 
       OP_EQ_INT, OP_EQ_FLOAT:
@@ -2102,11 +2139,11 @@ begin
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
       OP_NEG_INT, OP_NEG_FLOAT:
-        SetRegister(A, VMNumberValue(-GetRegister(B).ToNumberLiteral.Value));
+        SetRegisterFast(A, VMNumberValue(-GetRegisterFast(B).ToNumberLiteral.Value));
 
       OP_CONCAT:
-        SetRegister(A, TGocciaStringLiteralValue.Create(
-          ToECMAString(GetRegister(B)).Value + ToECMAString(GetRegister(C)).Value));
+        SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+          ToECMAString(GetRegisterFast(B)).Value + ToECMAString(GetRegisterFast(C)).Value));
 
       OP_NEW_ARRAY:
         SetRegister(A, TGocciaArrayValue.Create);
@@ -2247,7 +2284,7 @@ begin
       OP_NEW_CLASS:
       begin
         SetRegister(A, TGocciaVMClassValue.Create(Self,
-          Template.GetConstantUnchecked(Bx).StringValue, nil));
+          Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue, nil));
         TGocciaVMClassValue(GetRegister(A)).Prototype.AssignProperty(
           PROP_CONSTRUCTOR, GetRegister(A));
       end;
@@ -2304,11 +2341,11 @@ begin
         if GetRegister(A) is TGocciaObjectValue then
         begin
           if TGocciaObjectValue(GetRegister(A)).DeleteProperty(
-            Template.GetConstantUnchecked(Bx).StringValue) then
+            Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue) then
             SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
           else
             ThrowTypeError('Cannot delete property ''' +
-              Template.GetConstantUnchecked(Bx).StringValue +
+              Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue +
               ''' of [object Object]');
         end
         else
@@ -2539,7 +2576,7 @@ begin
 
       OP_CLOSURE:
       begin
-        ChildTemplate := Template.GetFunctionUnchecked(Bx);
+        ChildTemplate := Template.GetFunctionUnchecked(DecodeBx(Instruction));
         ChildClosure := TGocciaBytecodeClosure.Create(
           ChildTemplate, ChildTemplate.UpvalueCount);
         for I := 0 to ChildTemplate.UpvalueCount - 1 do
@@ -2692,7 +2729,7 @@ begin
 
       OP_GET_GLOBAL:
       begin
-        GlobalName := Template.GetConstantUnchecked(Bx).StringValue;
+        GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
         if Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName) then
           SetRegister(A, FGlobalScope.GetValue(GlobalName))
         else
@@ -2701,7 +2738,7 @@ begin
 
       OP_SET_GLOBAL:
       begin
-        GlobalName := Template.GetConstantUnchecked(Bx).StringValue;
+        GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
         if Assigned(FGlobalScope) then
         begin
           if FGlobalScope.Contains(GlobalName) then
@@ -2713,7 +2750,7 @@ begin
 
       OP_HAS_GLOBAL:
       begin
-        GlobalName := Template.GetConstantUnchecked(Bx).StringValue;
+        GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
         if Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
@@ -2722,11 +2759,11 @@ begin
 
       OP_IMPORT:
         SetRegister(A, ImportModuleValue(
-          Template.GetConstantUnchecked(Bx).StringValue));
+          Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue));
 
       OP_EXPORT:
         ExportBindingValue(
-          Template.GetConstantUnchecked(Bx).StringValue,
+          Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
           GetRegister(A));
 
       OP_THROW:

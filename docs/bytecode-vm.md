@@ -46,7 +46,12 @@ Public bytecode artifacts use the `.gbc` extension.
 The opcode space is split into two ranges:
 
 - `0..127`: core VM instructions
-- `128..255`: semantic instructions
+- `128..255`: reserved / non-core space
+
+In the current VM, the active semantic range starts at `167`:
+
+- core instructions cover hot execution paths such as locals, arithmetic, comparisons, property/index access, calls, construction, iteration, and class/object setup
+- semantic instructions are currently limited to module and async orchestration (`IMPORT`, `EXPORT`, `AWAIT`)
 
 The current encoding helpers are defined in `Goccia.Bytecode.pas`:
 
@@ -84,6 +89,18 @@ Current opcode design rules:
 - add explicit Goccia opcodes for stable language/runtime behaviour
 - do not introduce old generic VM naming into new instructions
 - prefer direct bytecode operations over extension multiplexers when semantics are first-class in GocciaScript
+
+## Performance Direction
+
+Recent VM cleanup and optimization work has focused on reducing per-instruction overhead without reintroducing old abstraction layers:
+
+- cache and reuse shared primitive values directly in registers
+- avoid eager allocation of closure cells for uncaptured locals
+- pre-size argument collections for calls and construction
+- use unchecked template access in the dispatch loop where bounds are already guaranteed
+- keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
+
+The current optimization target is reducing bytecode-mode suite time further without diverging interpreter and bytecode semantics.
 
 ## Binary Format
 

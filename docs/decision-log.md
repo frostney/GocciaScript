@@ -16,6 +16,10 @@ Chronological record of key architectural and implementation decisions. Each ent
 
 **Measured optimization findings were folded into the final VM design.** Earlier experiments on record sizing, opcode factoring, and helper abstractions were only kept when they still made sense after the fold-in. The current bytecode architecture keeps the useful results, but not the old subsystem boundaries they were originally attached to.
 
+**Core vs semantic opcode split now follows hotness, not old runtime layering.** Common execution paths such as globals, calls, construction, arithmetic, comparisons, index access, and coercions were moved into the core instruction set. The semantic range is now reserved for colder language orchestration such as imports, exports, and await.
+
+**Keep fast paths narrow and measured.** Several VM tuning passes improved bytecode execution by removing eager closure-cell allocation, caching template lookups, reducing argument-allocation churn, and using faster register access for simple hot opcodes. The same work also confirmed that broader rewrites of local-slot access or property/index dispatch should be rejected unless they preserve semantics and show a real end-to-end win.
+
 ## Interpreter & Evaluator
 
 **Pure evaluator functions.** The evaluator is pure — same AST node + context always produces the same result. State changes happen through scope and value objects, never evaluator-internal state. See [design-decisions.md § Pure Evaluator Functions](design-decisions.md#pure-evaluator-functions).

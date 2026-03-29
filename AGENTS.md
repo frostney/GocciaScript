@@ -532,7 +532,6 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 | [docs/tutorial.md](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
 | [docs/architecture.md](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
 | [docs/bytecode-vm.md](docs/bytecode-vm.md) | Bytecode VM architecture, binary format, and runtime model |
-| [docs/wasm-backend.md](docs/wasm-backend.md) | WASM output: constant pool custom section, runtime import contract, Node.js host, integration tests |
 | [docs/design-decisions.md](docs/design-decisions.md) | Rationale behind key technical choices |
 | [docs/code-style.md](docs/code-style.md) | Naming conventions, patterns, file organization |
 | [docs/value-system.md](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
