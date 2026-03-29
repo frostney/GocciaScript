@@ -36,7 +36,8 @@ type
   public
     class procedure InitializeSharedPrototype;
     class property SharedObjectPrototype: TGocciaObjectValue read FSharedObjectPrototype write FSharedObjectPrototype;
-    constructor Create(const APrototype: TGocciaObjectValue = nil);
+    constructor Create(const APrototype: TGocciaObjectValue = nil;
+      const APropertyCapacity: Integer = 0);
     destructor Destroy; override;
     function ToDebugString: string;
     function TypeName: string; override;
@@ -139,9 +140,10 @@ end;
 
 { TGocciaObjectValue }
 
-constructor TGocciaObjectValue.Create(const APrototype: TGocciaObjectValue = nil);
+constructor TGocciaObjectValue.Create(const APrototype: TGocciaObjectValue = nil;
+  const APropertyCapacity: Integer = 0);
 begin
-  FProperties := TGocciaPropertyMap.Create;
+  FProperties := TGocciaPropertyMap.Create(APropertyCapacity);
   FSymbolDescriptors := TSymbolDescriptorMap.Create;
   FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
   FPrototype := APrototype;

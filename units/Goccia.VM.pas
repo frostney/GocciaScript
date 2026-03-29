@@ -2708,7 +2708,7 @@ begin
       end;
 
       OP_NEW_ARRAY:
-        SetRegister(A, TGocciaArrayValue.Create);
+        SetRegister(A, TGocciaArrayValue.Create(nil, B));
 
       OP_ARRAY_POP:
       begin
@@ -2840,7 +2840,9 @@ begin
       begin
         if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
           TGocciaObjectValue.InitializeSharedPrototype;
-        SetRegister(A, TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype));
+        SetRegister(A, TGocciaObjectValue.Create(
+          TGocciaObjectValue.SharedObjectPrototype,
+          DecodeBx(Instruction)));
       end;
 
       OP_NEW_CLASS:

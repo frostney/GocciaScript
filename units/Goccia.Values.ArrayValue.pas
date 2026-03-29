@@ -30,7 +30,8 @@ type
   protected
     FElements: TGocciaValueList;
   public
-    constructor Create(const AClass: TGocciaClassValue = nil);
+    constructor Create(const AClass: TGocciaClassValue = nil;
+      const AElementCapacity: Integer = 0);
     destructor Destroy; override;
     procedure InitializePrototype;
 
@@ -239,10 +240,13 @@ begin
     QuickSortElements(AElements, ACompareFunc, ACallArgs, AThisValue, I, AHi);
 end;
 
-constructor TGocciaArrayValue.Create(const AClass: TGocciaClassValue = nil);
+constructor TGocciaArrayValue.Create(const AClass: TGocciaClassValue = nil;
+  const AElementCapacity: Integer = 0);
 begin
   inherited Create(AClass);
   FElements := TGocciaValueList.Create(False);
+  if AElementCapacity > 0 then
+    FElements.Capacity := AElementCapacity;
   InitializePrototype;
   if not Assigned(AClass) and Assigned(FSharedArrayPrototype) then
     FPrototype := FSharedArrayPrototype;
