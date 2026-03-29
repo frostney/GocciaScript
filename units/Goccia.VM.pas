@@ -124,15 +124,12 @@ uses
   GarbageCollector.Generic,
 
   Goccia.CallStack,
+  Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Evaluator,
-  Goccia.Evaluator.Arithmetic,
-  Goccia.Evaluator.Bitwise,
-  Goccia.Evaluator.Comparison,
   Goccia.Evaluator.Decorators,
-  Goccia.Evaluator.TypeOperations,
   Goccia.Scope.BindingMap,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,
@@ -168,6 +165,21 @@ begin
   end;
 end;
 
+function VMIsPrototypeInChain(const AObj: TGocciaObjectValue;
+  const ATargetProto: TGocciaObjectValue): Boolean; inline;
+var
+  CurrentProto: TGocciaObjectValue;
+begin
+  Result := False;
+  CurrentProto := AObj.Prototype;
+  while Assigned(CurrentProto) do
+  begin
+    if CurrentProto = ATargetProto then
+      Exit(True);
+    CurrentProto := CurrentProto.Prototype;
+  end;
+end;
+
 function VMNumberValue(const AValue: Double): TGocciaNumberLiteralValue; inline;
 var
   Bits: Int64 absolute AValue;
@@ -191,6 +203,448 @@ begin
   if AValue = 1.0 then
     Exit(TGocciaNumberLiteralValue.OneValue);
   Result := TGocciaNumberLiteralValue.Create(AValue);
+end;
+
+function VMInfinityWithSign(const APositive: Boolean): TGocciaNumberLiteralValue; inline;
+begin
+  if APositive then
+    Result := TGocciaNumberLiteralValue.InfinityValue
+  else
+    Result := TGocciaNumberLiteralValue.NegativeInfinityValue;
+end;
+
+function VMToNumericPair(const ALeft, ARight: TGocciaValue;
+  out ALeftNum, ARightNum: TGocciaNumberLiteralValue): Boolean; inline;
+begin
+  if (ALeft is TGocciaSymbolValue) or (ARight is TGocciaSymbolValue) then
+    ThrowTypeError('Cannot convert a Symbol value to a number');
+  ALeftNum := ALeft.ToNumberLiteral;
+  ARightNum := ARight.ToNumberLiteral;
+  Result := not (ALeftNum.IsNaN or ARightNum.IsNaN);
+end;
+
+function VMIsActualZero(const ANum: TGocciaNumberLiteralValue): Boolean; inline;
+begin
+  Result := (ANum.Value = 0) and not ANum.IsNaN and not ANum.IsInfinite;
+end;
+
+function VMCompareNumbers(const ALeftNum, ARightNum: TGocciaNumberLiteralValue;
+  const AIsGreater: Boolean): Boolean; inline;
+begin
+  if ALeftNum.IsNaN or ARightNum.IsNaN then
+    Exit(False);
+
+  if AIsGreater then
+  begin
+    if ALeftNum.IsInfinity then
+      Exit(not ARightNum.IsInfinity);
+    if ALeftNum.IsNegativeInfinity then
+      Exit(False);
+    if ARightNum.IsInfinity then
+      Exit(False);
+    if ARightNum.IsNegativeInfinity then
+      Exit(True);
+    Exit(ALeftNum.Value > ARightNum.Value);
+  end;
+
+  if ALeftNum.IsInfinity then
+    Exit(False);
+  if ALeftNum.IsNegativeInfinity then
+    Exit(not ARightNum.IsNegativeInfinity);
+  if ARightNum.IsInfinity then
+    Exit(True);
+  if ARightNum.IsNegativeInfinity then
+    Exit(False);
+  Result := ALeftNum.Value < ARightNum.Value;
+end;
+
+function VMLessThan(const ALeft, ARight: TGocciaValue): Boolean; inline;
+begin
+  if (ALeft is TGocciaUndefinedLiteralValue) or
+     (ARight is TGocciaUndefinedLiteralValue) then
+    Exit(False);
+
+  if (ALeft is TGocciaNullLiteralValue) and (ARight is TGocciaNullLiteralValue) then
+    Exit(False);
+
+  if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
+    Exit(TGocciaStringLiteralValue(ALeft).Value <
+      TGocciaStringLiteralValue(ARight).Value);
+
+  Result := VMCompareNumbers(ALeft.ToNumberLiteral, ARight.ToNumberLiteral, False);
+end;
+
+function VMGreaterThan(const ALeft, ARight: TGocciaValue): Boolean; inline;
+begin
+  if (ALeft is TGocciaUndefinedLiteralValue) or
+     (ARight is TGocciaUndefinedLiteralValue) then
+    Exit(False);
+
+  if (ALeft is TGocciaNullLiteralValue) and (ARight is TGocciaNullLiteralValue) then
+    Exit(False);
+
+  if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
+    Exit(TGocciaStringLiteralValue(ALeft).Value >
+      TGocciaStringLiteralValue(ARight).Value);
+
+  Result := VMCompareNumbers(ALeft.ToNumberLiteral, ARight.ToNumberLiteral, True);
+end;
+
+function VMLessThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
+begin
+  if (ALeft is TGocciaUndefinedLiteralValue) or
+     (ARight is TGocciaUndefinedLiteralValue) then
+    Exit(False);
+
+  if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
+    Exit(TGocciaStringLiteralValue(ALeft).Value <=
+      TGocciaStringLiteralValue(ARight).Value);
+
+  LeftNum := ALeft.ToNumberLiteral;
+  RightNum := ARight.ToNumberLiteral;
+  if LeftNum.IsNaN or RightNum.IsNaN then
+    Exit(False);
+  Result := not VMGreaterThan(ALeft, ARight);
+end;
+
+function VMGreaterThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
+begin
+  if (ALeft is TGocciaUndefinedLiteralValue) or
+     (ARight is TGocciaUndefinedLiteralValue) then
+    Exit(False);
+
+  if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
+    Exit(TGocciaStringLiteralValue(ALeft).Value >=
+      TGocciaStringLiteralValue(ARight).Value);
+
+  LeftNum := ALeft.ToNumberLiteral;
+  RightNum := ARight.ToNumberLiteral;
+  if LeftNum.IsNaN or RightNum.IsNaN then
+    Exit(False);
+  Result := not VMLessThan(ALeft, ARight);
+end;
+
+function VMBitwiseAndValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+begin
+  Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) and
+    Trunc(ARight.ToNumberLiteral.Value));
+end;
+
+function VMBitwiseOrValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+begin
+  Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) or
+    Trunc(ARight.ToNumberLiteral.Value));
+end;
+
+function VMBitwiseXorValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+begin
+  Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) xor
+    Trunc(ARight.ToNumberLiteral.Value));
+end;
+
+function VMLeftShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+begin
+  Result := VMNumberValue(Trunc(ALeft.ToNumberLiteral.Value) shl
+    (Trunc(ARight.ToNumberLiteral.Value) and 31));
+end;
+
+function VMRightShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+begin
+  Result := VMNumberValue(SarLongint(Int32(Trunc(ALeft.ToNumberLiteral.Value)),
+    Trunc(ARight.ToNumberLiteral.Value) and 31));
+end;
+
+function VMUnsignedRightShiftValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+begin
+  Result := VMNumberValue(Cardinal(Trunc(ALeft.ToNumberLiteral.Value)) shr
+    (Trunc(ARight.ToNumberLiteral.Value) and 31));
+end;
+
+function VMBitwiseNotValue(const AOperand: TGocciaValue): TGocciaValue; inline;
+begin
+  Result := VMNumberValue(not Trunc(AOperand.ToNumberLiteral.Value));
+end;
+
+function VMInstanceOfValue(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  ConstructorProto: TGocciaValue;
+begin
+  if not (ARight is TGocciaClassValue) then
+  begin
+    if (ARight is TGocciaFunctionBase) and (ALeft is TGocciaObjectValue) then
+    begin
+      ConstructorProto := TGocciaFunctionBase(ARight).GetProperty(PROP_PROTOTYPE);
+      if (ConstructorProto is TGocciaObjectValue) and
+         VMIsPrototypeInChain(TGocciaObjectValue(ALeft),
+           TGocciaObjectValue(ConstructorProto)) then
+        Exit(TGocciaBooleanLiteralValue.TrueValue);
+    end;
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+  end;
+
+  if ALeft is TGocciaInstanceValue then
+  begin
+    if TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT then
+      Exit(TGocciaBooleanLiteralValue.TrueValue);
+    if TGocciaInstanceValue(ALeft).IsInstanceOf(TGocciaClassValue(ARight)) then
+      Exit(TGocciaBooleanLiteralValue.TrueValue);
+    if VMIsObjectInstanceOfClass(TGocciaObjectValue(ALeft), TGocciaClassValue(ARight)) then
+      Exit(TGocciaBooleanLiteralValue.TrueValue);
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+  end;
+
+  if (ALeft is TGocciaFunctionValue) and
+     (TGocciaClassValue(ARight).Name = 'Function') then
+    Exit(TGocciaBooleanLiteralValue.TrueValue);
+  if (ALeft is TGocciaNativeFunctionValue) and
+     (TGocciaClassValue(ARight).Name = 'Function') then
+    Exit(TGocciaBooleanLiteralValue.TrueValue);
+  if (ALeft is TGocciaClassValue) and
+     (TGocciaClassValue(ARight).Name = 'Function') then
+    Exit(TGocciaBooleanLiteralValue.TrueValue);
+  if (ALeft is TGocciaArrayValue) and
+     (TGocciaClassValue(ARight).Name = CONSTRUCTOR_ARRAY) then
+    Exit(TGocciaBooleanLiteralValue.TrueValue);
+  if (ALeft is TGocciaArrayValue) and
+     (TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT) then
+    Exit(TGocciaBooleanLiteralValue.TrueValue);
+  if (ALeft is TGocciaObjectValue) and
+     (TGocciaClassValue(ARight).Name = CONSTRUCTOR_OBJECT) then
+    Exit(TGocciaBooleanLiteralValue.TrueValue);
+  if (ALeft is TGocciaObjectValue) and
+     VMIsObjectInstanceOfClass(TGocciaObjectValue(ALeft), TGocciaClassValue(ARight)) then
+    Exit(TGocciaBooleanLiteralValue.TrueValue);
+
+  Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+function VMAddValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  PrimLeft, PrimRight: TGocciaValue;
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
+begin
+  if (ALeft is TGocciaStringLiteralValue) and (ARight is TGocciaStringLiteralValue) then
+    Exit(TGocciaStringLiteralValue.Create(
+      TGocciaStringLiteralValue(ALeft).Value + TGocciaStringLiteralValue(ARight).Value));
+
+  if (ALeft is TGocciaNumberLiteralValue) and (ARight is TGocciaNumberLiteralValue) then
+  begin
+    LeftNum := TGocciaNumberLiteralValue(ALeft);
+    RightNum := TGocciaNumberLiteralValue(ARight);
+    if LeftNum.IsNaN or RightNum.IsNaN then
+      Exit(TGocciaNumberLiteralValue.NaNValue);
+    if LeftNum.IsInfinite or RightNum.IsInfinite then
+    begin
+      if LeftNum.IsInfinite and RightNum.IsInfinite then
+      begin
+        if LeftNum.IsInfinity = RightNum.IsInfinity then
+          Exit(VMInfinityWithSign(LeftNum.IsInfinity));
+        Exit(TGocciaNumberLiteralValue.NaNValue);
+      end;
+      if LeftNum.IsInfinite then
+        Exit(VMInfinityWithSign(LeftNum.IsInfinity));
+      Exit(VMInfinityWithSign(RightNum.IsInfinity));
+    end;
+    Exit(VMNumberValue(LeftNum.Value + RightNum.Value));
+  end;
+
+  PrimLeft := ToPrimitive(ALeft);
+  PrimRight := ToPrimitive(ARight);
+
+  if (PrimLeft is TGocciaSymbolValue) or (PrimRight is TGocciaSymbolValue) then
+    ThrowTypeError('Cannot convert a Symbol value to a string');
+
+  if (PrimLeft is TGocciaStringLiteralValue) or (PrimRight is TGocciaStringLiteralValue) then
+    Exit(TGocciaStringLiteralValue.Create(
+      PrimLeft.ToStringLiteral.Value + PrimRight.ToStringLiteral.Value));
+
+  LeftNum := PrimLeft.ToNumberLiteral;
+  RightNum := PrimRight.ToNumberLiteral;
+
+  if LeftNum.IsNaN or RightNum.IsNaN then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+
+  if LeftNum.IsInfinite or RightNum.IsInfinite then
+  begin
+    if LeftNum.IsInfinite and RightNum.IsInfinite then
+    begin
+      if LeftNum.IsInfinity = RightNum.IsInfinity then
+        Exit(VMInfinityWithSign(LeftNum.IsInfinity));
+      Exit(TGocciaNumberLiteralValue.NaNValue);
+    end;
+    if LeftNum.IsInfinite then
+      Exit(VMInfinityWithSign(LeftNum.IsInfinity));
+    Exit(VMInfinityWithSign(RightNum.IsInfinity));
+  end;
+
+  Result := VMNumberValue(LeftNum.Value + RightNum.Value);
+end;
+
+function VMSubtractValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
+begin
+  if not VMToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+
+  if LeftNum.IsInfinite or RightNum.IsInfinite then
+  begin
+    if LeftNum.IsInfinite and RightNum.IsInfinite then
+    begin
+      if LeftNum.IsInfinity <> RightNum.IsInfinity then
+        Exit(VMInfinityWithSign(LeftNum.IsInfinity));
+      Exit(TGocciaNumberLiteralValue.NaNValue);
+    end;
+    if LeftNum.IsInfinite then
+      Exit(VMInfinityWithSign(LeftNum.IsInfinity));
+    Exit(VMInfinityWithSign(not RightNum.IsInfinity));
+  end;
+
+  Result := VMNumberValue(LeftNum.Value - RightNum.Value);
+end;
+
+function VMMultiplyValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
+  LeftZero, RightZero: Boolean;
+  SameSign: Boolean;
+begin
+  if not VMToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+
+  if LeftNum.IsInfinite or RightNum.IsInfinite then
+  begin
+    LeftZero := (not LeftNum.IsInfinite) and (LeftNum.Value = 0);
+    RightZero := (not RightNum.IsInfinite) and (RightNum.Value = 0);
+    if LeftZero or RightZero then
+      Exit(TGocciaNumberLiteralValue.NaNValue);
+    SameSign := LeftNum.IsInfinity = RightNum.IsInfinity;
+    if not LeftNum.IsInfinite then
+      SameSign := (LeftNum.Value > 0) = RightNum.IsInfinity
+    else if not RightNum.IsInfinite then
+      SameSign := LeftNum.IsInfinity = (RightNum.Value > 0);
+    Exit(VMInfinityWithSign(SameSign));
+  end;
+
+  Result := VMNumberValue(LeftNum.Value * RightNum.Value);
+end;
+
+function VMDivideValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
+  SameSign: Boolean;
+begin
+  if not VMToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+
+  if LeftNum.IsInfinite then
+  begin
+    if RightNum.IsInfinite then
+      Exit(TGocciaNumberLiteralValue.NaNValue);
+    SameSign := LeftNum.IsInfinity =
+      ((RightNum.Value > 0) or ((RightNum.Value = 0) and not RightNum.IsNegativeZero));
+    Exit(VMInfinityWithSign(SameSign));
+  end;
+
+  if RightNum.IsInfinite then
+  begin
+    SameSign := (LeftNum.Value > 0) or
+      ((LeftNum.Value = 0) and not LeftNum.IsNegativeZero);
+    if SameSign = RightNum.IsInfinity then
+      Exit(TGocciaNumberLiteralValue.ZeroValue);
+    Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
+  end;
+
+  if RightNum.Value = 0 then
+  begin
+    if LeftNum.Value = 0 then
+      Exit(TGocciaNumberLiteralValue.NaNValue);
+    if LeftNum.Value > 0 then
+    begin
+      if RightNum.IsNegativeZero then
+        Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
+      Exit(TGocciaNumberLiteralValue.InfinityValue);
+    end;
+    if RightNum.IsNegativeZero then
+      Exit(TGocciaNumberLiteralValue.InfinityValue);
+    Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
+  end;
+
+  Result := VMNumberValue(LeftNum.Value / RightNum.Value);
+end;
+
+function VMModuloValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
+begin
+  if not VMToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+
+  if LeftNum.IsInfinite then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+
+  if RightNum.IsInfinite then
+    Exit(VMNumberValue(LeftNum.Value));
+
+  if RightNum.Value = 0 then
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+
+  Result := VMNumberValue(
+    LeftNum.Value - RightNum.Value * Trunc(LeftNum.Value / RightNum.Value));
+end;
+
+function VMPowerValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
+var
+  LeftNum, RightNum: TGocciaNumberLiteralValue;
+begin
+  if not VMToNumericPair(ALeft, ARight, LeftNum, RightNum) then
+  begin
+    if VMIsActualZero(RightNum) then
+      Exit(TGocciaNumberLiteralValue.OneValue);
+    Exit(TGocciaNumberLiteralValue.NaNValue);
+  end;
+
+  if VMIsActualZero(RightNum) then
+    Exit(TGocciaNumberLiteralValue.OneValue);
+
+  if RightNum.IsInfinite then
+  begin
+    if LeftNum.IsInfinite or (Abs(LeftNum.Value) > 1) then
+    begin
+      if RightNum.IsInfinity then
+        Exit(TGocciaNumberLiteralValue.InfinityValue);
+      Exit(TGocciaNumberLiteralValue.ZeroValue);
+    end;
+    if Abs(LeftNum.Value) = 1 then
+      Exit(TGocciaNumberLiteralValue.NaNValue);
+    if RightNum.IsInfinity then
+      Exit(TGocciaNumberLiteralValue.ZeroValue);
+    Exit(TGocciaNumberLiteralValue.InfinityValue);
+  end;
+
+  if LeftNum.IsInfinite then
+  begin
+    if RightNum.Value > 0 then
+    begin
+      if LeftNum.IsInfinity then
+        Exit(TGocciaNumberLiteralValue.InfinityValue);
+      if Frac(RightNum.Value) <> 0 then
+        Exit(TGocciaNumberLiteralValue.InfinityValue);
+      if Frac(RightNum.Value / 2) = 0 then
+        Exit(TGocciaNumberLiteralValue.InfinityValue);
+      Exit(TGocciaNumberLiteralValue.NegativeInfinityValue);
+    end;
+    if LeftNum.IsNegativeInfinity and (Frac(RightNum.Value) = 0) and
+       (Frac(RightNum.Value / 2) <> 0) then
+      Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
+    Exit(TGocciaNumberLiteralValue.ZeroValue);
+  end;
+
+  Result := VMNumberValue(Power(LeftNum.Value, RightNum.Value));
 end;
 
 procedure ParseElementDescriptor(const ADescriptor: string;
@@ -2461,46 +2915,46 @@ begin
       end;
 
       OP_ADD:
-        SetRegister(A, EvaluateAddition(GetRegister(B), GetRegister(C)));
+        SetRegister(A, VMAddValues(GetRegister(B), GetRegister(C)));
 
       OP_SUB:
-        SetRegister(A, EvaluateSubtraction(GetRegister(B), GetRegister(C)));
+        SetRegister(A, VMSubtractValues(GetRegister(B), GetRegister(C)));
 
       OP_MUL:
-        SetRegister(A, EvaluateMultiplication(GetRegister(B), GetRegister(C)));
+        SetRegister(A, VMMultiplyValues(GetRegister(B), GetRegister(C)));
 
       OP_DIV:
-        SetRegister(A, EvaluateDivision(GetRegister(B), GetRegister(C)));
+        SetRegister(A, VMDivideValues(GetRegister(B), GetRegister(C)));
 
       OP_MOD:
-        SetRegister(A, EvaluateModulo(GetRegister(B), GetRegister(C)));
+        SetRegister(A, VMModuloValues(GetRegister(B), GetRegister(C)));
 
       OP_POW:
-        SetRegister(A, EvaluateExponentiation(GetRegister(B), GetRegister(C)));
+        SetRegister(A, VMPowerValues(GetRegister(B), GetRegister(C)));
 
       OP_NEG:
         SetRegister(A, VMNumberValue(-GetRegister(B).ToNumberLiteral.Value));
 
       OP_BAND:
-        SetRegister(A, EvaluateBitwiseAnd(GetRegister(B), GetRegister(C)));
+        SetRegister(A, VMBitwiseAndValues(GetRegister(B), GetRegister(C)));
 
       OP_BOR:
-        SetRegister(A, EvaluateBitwiseOr(GetRegister(B), GetRegister(C)));
+        SetRegister(A, VMBitwiseOrValues(GetRegister(B), GetRegister(C)));
 
       OP_BXOR:
-        SetRegister(A, EvaluateBitwiseXor(GetRegister(B), GetRegister(C)));
+        SetRegister(A, VMBitwiseXorValues(GetRegister(B), GetRegister(C)));
 
       OP_SHL:
-        SetRegister(A, EvaluateLeftShift(GetRegister(B), GetRegister(C)));
+        SetRegister(A, VMLeftShiftValues(GetRegister(B), GetRegister(C)));
 
       OP_SHR:
-        SetRegister(A, EvaluateRightShift(GetRegister(B), GetRegister(C)));
+        SetRegister(A, VMRightShiftValues(GetRegister(B), GetRegister(C)));
 
       OP_USHR:
-        SetRegister(A, EvaluateUnsignedRightShift(GetRegister(B), GetRegister(C)));
+        SetRegister(A, VMUnsignedRightShiftValues(GetRegister(B), GetRegister(C)));
 
       OP_BNOT:
-        SetRegister(A, EvaluateBitwiseNot(GetRegister(B)));
+        SetRegister(A, VMBitwiseNotValue(GetRegister(B)));
 
       OP_EQ:
         SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
@@ -2509,25 +2963,25 @@ begin
         SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
 
       OP_LT:
-        if LessThan(GetRegister(B), GetRegister(C)) then
+        if VMLessThan(GetRegister(B), GetRegister(C)) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
       OP_GT:
-        if GreaterThan(GetRegister(B), GetRegister(C)) then
+        if VMGreaterThan(GetRegister(B), GetRegister(C)) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
       OP_LTE:
-        if LessThanOrEqual(GetRegister(B), GetRegister(C)) then
+        if VMLessThanOrEqual(GetRegister(B), GetRegister(C)) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
       OP_GTE:
-        if GreaterThanOrEqual(GetRegister(B), GetRegister(C)) then
+        if VMGreaterThanOrEqual(GetRegister(B), GetRegister(C)) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
@@ -2536,8 +2990,7 @@ begin
         SetRegister(A, TGocciaStringLiteralValue.Create(GetRegister(B).TypeOf));
 
       OP_IS_INSTANCE:
-        SetRegister(A, EvaluateInstanceof(GetRegister(B), GetRegister(C),
-          @VMIsObjectInstanceOfClass));
+        SetRegister(A, VMInstanceOfValue(GetRegister(B), GetRegister(C)));
 
       OP_HAS_PROPERTY:
         SetRegister(A, HasPropertyValue(GetRegister(B), GetRegister(C)));
