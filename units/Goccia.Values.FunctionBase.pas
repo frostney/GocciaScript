@@ -41,6 +41,8 @@ type
 
     // Abstract method that subclasses must implement
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
+    function CallPreparedArgs(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; virtual;
     function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; virtual;
     function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; virtual;
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; virtual;
@@ -160,6 +162,13 @@ end;
 function TGocciaFunctionBase.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaFunctionBase.CallPreparedArgs(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := Call(AArguments, AThisValue);
 end;
 
 function TGocciaFunctionBase.CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue;

@@ -521,7 +521,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 - Shared path config: `config.cfg`
 - Shared directives: `units/Goccia.inc` (overflow/range checks conditional on `PRODUCTION` define)
 - Output directory: `build/`
-- CI: Two workflow files — `ci.yml` (main + tags, full matrix, all checks + release) and `pr.yml` (PRs, ubuntu-latest x64 only, JS tests + benchmark comparison comment). All matrix strategies use `fail-fast: false`. Post-build jobs (`test`, `benchmark`, `examples`) are independent. Windows artifacts are labelled x86 (FPC produces i386-win32 binaries on the x64 runner).
+- CI: Two workflow files — `ci.yml` (main + tags, full matrix, all checks + release) and `pr.yml` (PRs, ubuntu-latest x64 only, JS tests + benchmark comparison comment). All matrix strategies use `fail-fast: false`. Post-build jobs (`test`, `benchmark`, `examples`) are independent. Windows artifacts are labeled x86 (FPC produces i386-win32 binaries on the x64 runner).
 - Auto-formatter: `./format.pas` (instantfpc script, no build step) — auto-fixes uses clause ordering, PascalCase function names, and parameter `A` prefix naming
 - Pre-commit hook: [Lefthook](https://github.com/evilmartians/lefthook) (`lefthook.yml`) — requires `lefthook install` after cloning
 - Editor setup: `.vscode/settings.json` (format-on-save) + `.vscode/extensions.json` (recommended extensions)

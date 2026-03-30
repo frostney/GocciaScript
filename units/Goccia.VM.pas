@@ -889,6 +889,8 @@ type
     constructor Create(const AVM: TGocciaVM; const AClosure: TGocciaBytecodeClosure);
     destructor Destroy; override;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallPreparedArgs(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
     function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; override;
     function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
@@ -1072,6 +1074,22 @@ begin
   end;
 
   Result := FVM.ExecuteClosure(FClosure, AThisValue, AArguments);
+end;
+
+function TGocciaBytecodeFunctionValue.CallPreparedArgs(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  case AArguments.Length of
+    0: Result := CallNoArgs(AThisValue);
+    1: Result := CallOneArg(AArguments.GetElement(0), AThisValue);
+    2: Result := CallTwoArgs(AArguments.GetElement(0), AArguments.GetElement(1),
+      AThisValue);
+    3: Result := CallThreeArgs(AArguments.GetElement(0), AArguments.GetElement(1),
+      AArguments.GetElement(2), AThisValue);
+  else
+    Result := Call(AArguments, AThisValue);
+  end;
 end;
 
 function TGocciaBytecodeFunctionValue.CallNoArgs(

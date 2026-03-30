@@ -59,7 +59,8 @@ type
 
     function RunSingleBenchmark(const ABenchCase: TBenchmarkCase): TBenchmarkResult;
     function CalibrateIterations(const ABenchCase: TBenchmarkCase;
-      const ASetupResult: TGocciaValue): Int64;
+      const ASetupResult: TGocciaValue;
+      const ARunArgs: TGocciaArgumentsCollection): Int64;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
     destructor Destroy; override;
@@ -125,13 +126,14 @@ begin
 end;
 
 function InvokeBenchmarkFunction(const AFunction: TGocciaFunctionBase;
-  const ASetupResult: TGocciaValue): TGocciaValue;
+  const ASetupResult: TGocciaValue;
+  const ARunArgs: TGocciaArgumentsCollection): TGocciaValue;
 begin
+  ARunArgs.Clear;
   if Assigned(ASetupResult) then
-    Result := AFunction.CallOneArg(ASetupResult,
-      TGocciaUndefinedLiteralValue.UndefinedValue)
-  else
-    Result := AFunction.CallNoArgs(TGocciaUndefinedLiteralValue.UndefinedValue);
+    ARunArgs.Add(ASetupResult);
+  Result := AFunction.CallPreparedArgs(ARunArgs,
+    TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
 
 { TBenchmarkCase }
@@ -231,7 +233,7 @@ begin
 end;
 
 function TGocciaBenchmark.CalibrateIterations(const ABenchCase: TBenchmarkCase;
-  const ASetupResult: TGocciaValue): Int64;
+  const ASetupResult: TGocciaValue; const ARunArgs: TGocciaArgumentsCollection): Int64;
 var
   BatchSize: Int64;
   StartNanoseconds, ElapsedNanoseconds, TargetNanoseconds: Int64;
@@ -248,7 +250,7 @@ begin
     I := 0;
     while I < BatchSize do
     begin
-      InvokeBenchmarkFunction(ABenchCase.RunFunction, ASetupResult);
+      InvokeBenchmarkFunction(ABenchCase.RunFunction, ASetupResult, ARunArgs);
       Inc(I);
     end;
     if Assigned(TGocciaMicrotaskQueue.Instance) then
@@ -346,6 +348,7 @@ var
   GC: TGarbageCollector;
   WasGCEnabled: Boolean;
   MeasurementWatermark: Integer;
+  RunArgs: TGocciaArgumentsCollection;
 begin
   Result.Name := ABenchCase.Name;
   Result.SuiteName := ABenchCase.SuiteName;
@@ -360,6 +363,7 @@ begin
   GC := TGarbageCollector.Instance;
   WasGCEnabled := False;
   SetupResult := nil;
+  RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
   try
     if Assigned(ABenchCase.SetupFunction) then
     begin
@@ -376,11 +380,11 @@ begin
 
     try
       for K := 1 to WARMUP_ITERATIONS do
-        InvokeBenchmarkFunction(ABenchCase.RunFunction, SetupResult);
+        InvokeBenchmarkFunction(ABenchCase.RunFunction, SetupResult, RunArgs);
       if Assigned(TGocciaMicrotaskQueue.Instance) then
         TGocciaMicrotaskQueue.Instance.DrainQueue;
 
-      Iterations := CalibrateIterations(ABenchCase, SetupResult);
+      Iterations := CalibrateIterations(ABenchCase, SetupResult, RunArgs);
 
       if Assigned(GC) then
       begin
@@ -408,7 +412,7 @@ begin
         I := 0;
         while I < Iterations do
         begin
-          InvokeBenchmarkFunction(ABenchCase.RunFunction, SetupResult);
+          InvokeBenchmarkFunction(ABenchCase.RunFunction, SetupResult, RunArgs);
           Inc(I);
         end;
         if Assigned(TGocciaMicrotaskQueue.Instance) then
@@ -481,7 +485,7 @@ begin
       if Assigned(ABenchCase.TeardownFunction) then
       begin
         StartNanoseconds := GetNanoseconds;
-        InvokeBenchmarkFunction(ABenchCase.TeardownFunction, SetupResult);
+        InvokeBenchmarkFunction(ABenchCase.TeardownFunction, SetupResult, RunArgs);
         if Assigned(TGocciaMicrotaskQueue.Instance) then
           TGocciaMicrotaskQueue.Instance.DrainQueue;
         Result.TeardownMs := (GetNanoseconds - StartNanoseconds) / 1000000;
@@ -493,6 +497,7 @@ begin
         GC.RemoveTempRoot(SetupResult);
     end;
   finally
+    RunArgs.Free;
   end;
 end;
 
