@@ -188,6 +188,7 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 - Add JavaScript tests under the `tests/` directory.
 - Keep tests isolated and grouped by feature/filename.
 - Follow the existing directory structure (`tests/language/` for language features, `tests/built-ins/` for built-in objects).
+- Prefer tests that exercise the **public surface** that users actually call (JavaScript files, CLI commands, workflow smoke tests, documented entry points). Avoid adding tests that lock onto private helper functions or internal implementation details unless that internal API is itself a shared contract with no stable public entry point.
 - **One method per file** — each test file focuses on a single method or operation. Never bundle multiple methods into one file (no `prototype-methods.js` or `static-methods.js`).
 - **Prototype methods go in `prototype/`** — instance methods live in `BuiltIn/prototype/methodName.js`. Static methods and constructor tests live directly in the `BuiltIn/` folder. See `tests/built-ins/Array/prototype/` for the canonical example.
 - **Edge cases are co-located** — edge case tests (NaN, Infinity, negative indices, clamping, empty collections, boundary conditions) belong in the **same file** as the happy-path tests for that method. Do **not** create separate `edge-cases.js` files.
@@ -201,6 +202,7 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 **When modifying AST logic, scope chain, evaluator, or value types:**
 - Build and run the native Pascal test suite: `./build.pas clean tests && for t in build/Goccia.*.Test; do "$t"; done`
 - Update the native tests in `units/*.Test.pas` to reflect any changes in behaviour (e.g. new parameters, changed return semantics).
+- Keep native Pascal tests focused on visible public behavior where possible, and only drop to lower-level coverage when the behavior is genuinely internal or unreachable through a stable public API. Prefer stateless tests with repeatable inputs and outputs over tests that depend on ambient process state, timing, or incidental implementation details. If a feature is exposed through a CLI tool or other documented user-facing API, prefer adding or extending command-level/workflow-level coverage there instead of asserting internal helper behavior directly.
 - Both the JavaScript tests **and** the native Pascal tests must pass.
 
 ### 4. Garbage Collector Awareness
