@@ -217,8 +217,17 @@ jobs:
           printf '%s\n' "$globals_file_output" | grep -q '"ok":true'
           printf '%s\n' "$globals_file_output" | grep -q '"value":"goccia"'
 
+          printf '%s\n' '{"name":"file-value"}' > cli-globals.json
+          globals_override_output="$(printf '%s\n' 'name;' | ./build/ScriptLoader --globals=cli-globals.json --global name=override --output=json)"
+          printf '%s\n' "$globals_override_output" | grep -q '"ok":true'
+          printf '%s\n' "$globals_override_output" | grep -q '"value":"override"'
+
+          plain_string_output="$(printf '%s\n' 'name;' | ./build/ScriptLoader --global name=plain-value --output=json)"
+          printf '%s\n' "$plain_string_output" | grep -q '"ok":true'
+          printf '%s\n' "$plain_string_output" | grep -q '"value":"plain-value"'
+
           printf '%s\n' 'export const name = "module-value";' > cli-globals-module.js
-          globals_module_output="$(printf '%s\n' 'name;' | ./build/ScriptLoader --globals=cli-globals-module.js --output=json)"
+          globals_module_output="$(printf '%s\n' 'name;' | ./build/ScriptLoader --globals=./cli-globals-module.js --output=json)"
           printf '%s\n' "$globals_module_output" | grep -q '"ok":true'
           printf '%s\n' "$globals_module_output" | grep -q '"value":"module-value"'
 
