@@ -9,7 +9,8 @@ GocciaScript is designed to be embedded in FreePascal applications. The `TGoccia
 The simplest way to run a script:
 
 ```pascal
-uses Goccia.Engine;
+uses
+  Goccia.Engine;
 
 TGocciaEngine.RunScript('console.log("hello from GocciaScript");');
 ```
@@ -43,7 +44,11 @@ All methods return `TGocciaScriptResult` — a record containing the result valu
 For interactive sessions (REPL, editor integration) or when you need to execute multiple scripts in the same scope, create an engine instance directly:
 
 ```pascal
-uses Classes, Goccia.Engine, Goccia.Values.Primitives;
+uses
+  Classes,
+
+  Goccia.Engine,
+  Goccia.Values.Primitives;
 
 var
   Engine: TGocciaEngine;
@@ -74,7 +79,10 @@ The `TStringList` is passed by reference — update its contents and call `Execu
 All `RunScript*` methods and the `Execute` method return a `TGocciaScriptResult` record that includes nanosecond-precision timing for each pipeline phase:
 
 ```pascal
-uses Goccia.Engine, TimingUtils;
+uses
+  TimingUtils,
+
+  Goccia.Engine;
 
 var
   ScriptResult: TGocciaScriptResult;
@@ -136,7 +144,8 @@ import { formatDate } from "@/utils/dates";
 For advanced resolution logic (e.g., `node_modules` lookup, URL imports, or in-memory modules), subclass `TGocciaModuleResolver` and override the `Resolve` method:
 
 ```pascal
-uses Goccia.Modules.Resolver;
+uses
+  Goccia.Modules.Resolver;
 
 type
   TMyResolver = class(TGocciaModuleResolver)
@@ -172,7 +181,8 @@ When no custom resolver is provided, the engine creates a default `TGocciaModule
 Global modules are bare-specifier imports that bypass file resolution entirely. They are checked before the resolver runs:
 
 ```pascal
-uses Goccia.Modules;
+uses
+  Goccia.Modules;
 
 var
   Module: TGocciaModule;
@@ -248,7 +258,10 @@ You can inject Pascal functions and values into the script's global scope by wor
 ### Injecting a Value
 
 ```pascal
-uses Goccia.Engine, Goccia.Values.Primitives, Goccia.Scope;
+uses
+  Goccia.Engine,
+  Goccia.Scope,
+  Goccia.Values.Primitives;
 
 var
   Engine: TGocciaEngine;
@@ -277,17 +290,21 @@ end;
 Native functions are Pascal methods exposed to GocciaScript. They receive arguments and a `this` value, and return a `TGocciaValue`.
 
 ```pascal
-uses Goccia.Engine, Goccia.Values.Primitives, Goccia.Values.NativeFunction,
-     Goccia.Arguments.Collection, Goccia.Scope;
+uses
+  Goccia.Arguments.Collection,
+  Goccia.Engine,
+  Goccia.Scope,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.Primitives;
 
 type
   TMyHost = class
-    function GetTimestamp(Args: TGocciaArgumentsCollection;
-      ThisValue: TGocciaValue): TGocciaValue;
+    function GetTimestamp(AArgs: TGocciaArgumentsCollection;
+      AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-function TMyHost.GetTimestamp(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TMyHost.GetTimestamp(AArgs: TGocciaArgumentsCollection;
+  AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaNumberLiteralValue.Create(DateTimeToUnix(Now));
 end;
@@ -333,24 +350,29 @@ TGocciaNativeFunctionCallback = function(
 For a more structured API, create a `TGocciaObjectValue` and register native methods on it:
 
 ```pascal
-uses Goccia.Engine, Goccia.Values.Primitives, Goccia.Values.ObjectValue,
-     Goccia.Values.NativeFunction, Goccia.Arguments.Collection, Goccia.Scope;
+uses
+  Goccia.Arguments.Collection,
+  Goccia.Engine,
+  Goccia.Scope,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives;
 
 type
   TFileSystemAPI = class
-    function ReadFile(Args: TGocciaArgumentsCollection;
-      ThisValue: TGocciaValue): TGocciaValue;
-    function Exists(Args: TGocciaArgumentsCollection;
-      ThisValue: TGocciaValue): TGocciaValue;
+    function ReadFile(AArgs: TGocciaArgumentsCollection;
+      AThisValue: TGocciaValue): TGocciaValue;
+    function Exists(AArgs: TGocciaArgumentsCollection;
+      AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-function TFileSystemAPI.ReadFile(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TFileSystemAPI.ReadFile(AArgs: TGocciaArgumentsCollection;
+  AThisValue: TGocciaValue): TGocciaValue;
 var
   Path: string;
   Content: TStringList;
 begin
-  Path := Args.GetElement(0).ToStringLiteral.Value;
+  Path := AArgs.GetElement(0).ToStringLiteral.Value;
   Content := TStringList.Create;
   try
     Content.LoadFromFile(Path);
@@ -360,11 +382,11 @@ begin
   end;
 end;
 
-function TFileSystemAPI.Exists(Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue): TGocciaValue;
+function TFileSystemAPI.Exists(AArgs: TGocciaArgumentsCollection;
+  AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaBooleanLiteralValue.Create(
-    FileExists(Args.GetElement(0).ToStringLiteral.Value)
+    FileExists(AArgs.GetElement(0).ToStringLiteral.Value)
   );
 end;
 
@@ -438,7 +460,9 @@ end;
 GocciaScript errors surface as Pascal exceptions. Wrap execution in `try...except`:
 
 ```pascal
-uses Goccia.Engine, Goccia.Error;
+uses
+  Goccia.Engine,
+  Goccia.Error;
 
 try
   TGocciaEngine.RunScript('undeclaredVariable;');
@@ -495,7 +519,8 @@ The engine initializes a mark-and-sweep garbage collector (`TGarbageCollector`) 
 For long-running engines (REPL-style), the GC runs automatically. If you need to trigger collection manually between script executions:
 
 ```pascal
-uses GarbageCollector.Generic;
+uses
+  GarbageCollector.Generic;
 
 TGarbageCollector.Instance.Collect;
 ```
@@ -517,7 +542,7 @@ The repository includes four embedding examples:
 
 | Program | File | Description |
 |---------|------|-------------|
-| `ScriptLoader` | `ScriptLoader.dpr` | Executes script files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`) from disk or stdin (one-shot) |
+| `ScriptLoader` | `ScriptLoader.dpr` | Executes script files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`) from disk or stdin, with optional JSON output for one-shot automation |
 | `REPL` | `REPL.dpr` | Interactive read-eval-print loop (long-lived engine) |
 | `TestRunner` | `TestRunner.dpr` | Runs test suites with `ggTestAssertions` enabled |
 | `BenchmarkRunner` | `BenchmarkRunner.dpr` | Runs benchmarks with `ggBenchmark` enabled from files or stdin |

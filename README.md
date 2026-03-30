@@ -168,6 +168,9 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader --emit --output=out.gbc
 
 # Load and execute a pre-compiled .gbc file
 ./build/ScriptLoader example.gbc
+
+# Emit structured JSON for programmatic consumers
+printf "console.log('hi'); 2 + 2;" | ./build/ScriptLoader --output=json
 ```
 
 See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode backend architecture.

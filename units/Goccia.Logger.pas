@@ -39,18 +39,9 @@ uses
   TypInfo;
 
 constructor TGocciaLogger.Create(const ALevels: TGocciaLogLevels; const ALogFormat: TGocciaLogFormat);
-var
-  Levels: String;
-  Level: TGocciaLogLevel;
 begin
   FLevels := ALevels;
   FLogFormat := ALogFormat;
-
-  Levels := '';
-  for Level in ALevels do
-    Levels := Levels + GetEnumName(TypeInfo(TGocciaLogLevel), Ord(Level)) + ', ';
-
-  WriteLn(Format('[LOGGER] Logger created with levels: %s and format: %s', [Levels, GetEnumName(TypeInfo(TGocciaLogFormat), Ord(FLogFormat))]));
 end;
 
 procedure TGocciaLogger.Trace(const AMessage: string);
