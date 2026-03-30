@@ -202,7 +202,7 @@ Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode
 
 The PR workflow (`.github/workflows/pr.yml`) restores the cached baseline JSON from `main`, runs the benchmark matrix, and posts a collapsible comparison comment on the PR. Each benchmark file gets a **unified table** with both modes side by side:
 
-- Each table row shows `| Benchmark | Interpreted | Δ | Bytecode | Δ |` with cached baseline range and PR range in the form `9,500..10,500 → 8,700..9,700`
+- Each table row shows `| Benchmark | Interpreted | Δ | Bytecode | Δ |` with the point estimate and cached/PR min-max range in the form `10,000 ops/sec [9,500..10,500] → 9,200 ops/sec [8,700..9,700]`
 - Classification uses **range overlap** instead of a single point value: if the PR run sits fully above the baseline range it is improved, if it sits fully below it is regressed, and overlapping ranges are treated as unchanged noise
 - Percentage deltas remain in the `Δ` column as secondary context, even when the classifier marks a benchmark as `~ overlap`
 - Results are **grouped by file**, each in a collapsible `<details>` section

@@ -378,9 +378,14 @@ jobs:
               if (entry.minOpsPerSec === entry.maxOpsPerSec) return fmtOps(entry.opsPerSec);
               return `${fmtOps(entry.minOpsPerSec)}..${fmtOps(entry.maxOpsPerSec)}`;
             };
+            const fmtBenchmark = (entry) => {
+              if (!entry) return '—';
+              if (entry.minOpsPerSec === entry.maxOpsPerSec) return `${fmtOps(entry.opsPerSec)} ops/sec`;
+              return `${fmtOps(entry.opsPerSec)} ops/sec [${fmtRange(entry)}]`;
+            };
             const fmtCell = (baseEntry, currentEntry) => {
-              if (baseEntry) return `${fmtRange(baseEntry)} → ${fmtRange(currentEntry)}`;
-              return fmtRange(currentEntry);
+              if (baseEntry) return `${fmtBenchmark(baseEntry)} → ${fmtBenchmark(currentEntry)}`;
+              return fmtBenchmark(currentEntry);
             };
             const normalizeBenchmark = (benchmark) => ({
               opsPerSec: benchmark.opsPerSec,
