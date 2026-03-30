@@ -359,25 +359,45 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const THRESHOLD = 7;
 
             const fmtOps = (n) => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+            const fmtPercent = (change) => `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`;
             const fmtAvg = (changes) => {
               if (changes.length === 0) return '';
               const avg = changes.reduce((a, b) => a + b, 0) / changes.length;
-              const sign = avg >= 0 ? '+' : '';
-              return `avg ${sign}${avg.toFixed(1)}%`;
+              return `avg ${fmtPercent(avg)}`;
             };
-            const fmtDelta = (change) => {
-              if (change > THRESHOLD) return `🟢 +${change.toFixed(1)}%`;
-              if (change < -THRESHOLD) return `🔴 ${change.toFixed(1)}%`;
-              return `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`;
+            const fmtDelta = (classification, change) => {
+              if (classification === 'improved') return `🟢 ${fmtPercent(change)}`;
+              if (classification === 'regressed') return `🔴 ${fmtPercent(change)}`;
+              if (classification === 'unchanged') return `~ overlap (${fmtPercent(change)})`;
+              return '🆕';
             };
-            const fmtCell = (baseOps, currentOps) => {
-              if (baseOps && baseOps > 0) return `${fmtOps(baseOps)} → ${fmtOps(currentOps)}`;
-              return fmtOps(currentOps);
+            const fmtRange = (entry) => {
+              if (!entry) return '—';
+              if (entry.minOpsPerSec === entry.maxOpsPerSec) return fmtOps(entry.opsPerSec);
+              return `${fmtOps(entry.minOpsPerSec)}..${fmtOps(entry.maxOpsPerSec)}`;
             };
-            const classify = (change) => change > THRESHOLD ? 'improved' : change < -THRESHOLD ? 'regressed' : 'unchanged';
+            const fmtCell = (baseEntry, currentEntry) => {
+              if (baseEntry) return `${fmtRange(baseEntry)} → ${fmtRange(currentEntry)}`;
+              return fmtRange(currentEntry);
+            };
+            const normalizeBenchmark = (benchmark) => ({
+              opsPerSec: benchmark.opsPerSec,
+              minOpsPerSec: benchmark.minOpsPerSec ?? benchmark.opsPerSec,
+              maxOpsPerSec: benchmark.maxOpsPerSec ?? benchmark.opsPerSec,
+              variancePercentage: benchmark.variancePercentage ?? 0,
+            });
+            const calculateChange = (baseEntry, currentEntry) => {
+              if (!baseEntry || !baseEntry.opsPerSec) return null;
+              return ((currentEntry.opsPerSec - baseEntry.opsPerSec) / baseEntry.opsPerSec) * 100;
+            };
+            const classify = (baseEntry, currentEntry) => {
+              if (!baseEntry) return 'new';
+              if (currentEntry.minOpsPerSec > baseEntry.maxOpsPerSec) return 'improved';
+              if (currentEntry.maxOpsPerSec < baseEntry.minOpsPerSec) return 'regressed';
+              return 'unchanged';
+            };
 
             const interpData = JSON.parse(fs.readFileSync('benchmark-interpreted.json', 'utf8'));
             const bytecodeData = JSON.parse(fs.readFileSync('benchmark-bytecode.json', 'utf8'));
@@ -400,7 +420,7 @@ jobs:
               for (const file of data.files) {
                 const m = {};
                 for (const b of file.benchmarks) {
-                  if (!b.error) m[`${b.suite} > ${b.name}`] = b.opsPerSec;
+                  if (!b.error) m[`${b.suite} > ${b.name}`] = normalizeBenchmark(b);
                 }
                 map[file.file] = m;
               }
@@ -436,39 +456,41 @@ jobs:
 
               for (const bench of benches) {
                 const key = `${bench.suite} > ${bench.name}`;
-                const iOps = bench.opsPerSec;
-                const bOps = bCurrent[key];
-                const iBaseOps = iBase[key];
-                const bBaseOps = bBase[key];
+                const iCurrent = normalizeBenchmark(bench);
+                const bCurrentEntry = bCurrent[key];
+                const iBaseEntry = iBase[key];
+                const bBaseEntry = bBase[key];
 
                 if (hasAnyBaseline) {
                   let iDelta;
-                  if (iBaseOps && iBaseOps > 0) {
-                    const c = ((iOps - iBaseOps) / iBaseOps) * 100;
+                  if (iBaseEntry) {
+                    const c = calculateChange(iBaseEntry, iCurrent);
+                    const classification = classify(iBaseEntry, iCurrent);
                     fileS.interp.changes.push(c);
-                    fileS.interp[classify(c)]++;
-                    iDelta = fmtDelta(c);
+                    fileS.interp[classification]++;
+                    iDelta = fmtDelta(classification, c);
                   } else {
                     iDelta = '🆕';
                     fileS.interp.new++;
                   }
 
                   let bDelta;
-                  if (bOps != null && bBaseOps && bBaseOps > 0) {
-                    const c = ((bOps - bBaseOps) / bBaseOps) * 100;
+                  if (bCurrentEntry && bBaseEntry) {
+                    const c = calculateChange(bBaseEntry, bCurrentEntry);
+                    const classification = classify(bBaseEntry, bCurrentEntry);
                     fileS.bytecode.changes.push(c);
-                    fileS.bytecode[classify(c)]++;
-                    bDelta = fmtDelta(c);
-                  } else if (bOps != null) {
+                    fileS.bytecode[classification]++;
+                    bDelta = fmtDelta(classification, c);
+                  } else if (bCurrentEntry) {
                     bDelta = '🆕';
                     fileS.bytecode.new++;
                   } else {
                     bDelta = '—';
                   }
 
-                  fileRows += `| ${bench.name} | ${fmtCell(iBaseOps, iOps)} | ${iDelta} | ${bOps != null ? fmtCell(bBaseOps, bOps) : '—'} | ${bDelta} |\n`;
+                  fileRows += `| ${bench.name} | ${fmtCell(iBaseEntry, iCurrent)} | ${iDelta} | ${bCurrentEntry ? fmtCell(bBaseEntry, bCurrentEntry) : '—'} | ${bDelta} |\n`;
                 } else {
-                  fileRows += `| ${bench.name} | ${fmtOps(iOps)} | ${bOps != null ? fmtOps(bOps) : '—'} |\n`;
+                  fileRows += `| ${bench.name} | ${fmtRange(iCurrent)} | ${bCurrentEntry ? fmtRange(bCurrentEntry) : '—'} |\n`;
                 }
               }
 
@@ -524,7 +546,7 @@ jobs:
               body += `\n</details>\n\n`;
             }
 
-            body += `<sub>Measured on ubuntu-latest x64. Changes within ±${THRESHOLD}% are considered insignificant.</sub>`;
+            body += '<sub>Measured on ubuntu-latest x64. Benchmark ranges compare cached main-branch min/max ops/sec with the PR run; overlapping ranges are treated as unchanged noise. Percentage deltas are secondary context.</sub>';
 
             const marker = '<!-- benchmark-comparison -->';
             body = marker + '\n' + body;
