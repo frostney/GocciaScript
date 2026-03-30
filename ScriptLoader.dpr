@@ -173,16 +173,14 @@ begin
     AReport.Timing));
 end;
 
-procedure ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
+procedure ApplyDataGlobalsToEngine(const AEngine: TGocciaEngine);
 var
   I: Integer;
   Pair: TScriptLoaderGlobalPair;
 begin
   for I := 0 to GGlobalsFiles.Count - 1 do
     if IsJSONGlobalsFile(GGlobalsFiles[I]) then
-      AEngine.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]))
-    else
-      AEngine.InjectGlobalsFromModule(GGlobalsFiles[I]);
+      AEngine.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]));
 
   for I := 0 to GInlineGlobals.Count - 1 do
   begin
@@ -191,22 +189,38 @@ begin
   end;
 end;
 
-procedure ApplyGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
+procedure ApplyModuleGlobalsToEngine(const AEngine: TGocciaEngine);
+var
+  I: Integer;
+begin
+  for I := 0 to GGlobalsFiles.Count - 1 do
+    if not IsJSONGlobalsFile(GGlobalsFiles[I]) then
+      AEngine.InjectGlobalsFromModule(GGlobalsFiles[I]);
+end;
+
+procedure ApplyDataGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
 var
   I: Integer;
   Pair: TScriptLoaderGlobalPair;
 begin
   for I := 0 to GGlobalsFiles.Count - 1 do
     if IsJSONGlobalsFile(GGlobalsFiles[I]) then
-      ABackend.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]))
-    else
-      ABackend.InjectGlobalsFromModule(GGlobalsFiles[I]);
+      ABackend.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]));
 
   for I := 0 to GInlineGlobals.Count - 1 do
   begin
     Pair := ParseGlobalPair(GInlineGlobals[I]);
     ABackend.RegisterGlobal(Pair.Key, ParseInlineGlobalValue(Pair.ValueText));
   end;
+end;
+
+procedure ApplyModuleGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
+var
+  I: Integer;
+begin
+  for I := 0 to GGlobalsFiles.Count - 1 do
+    if not IsJSONGlobalsFile(GGlobalsFiles[I]) then
+      ABackend.InjectGlobalsFromModule(GGlobalsFiles[I]);
 end;
 
 function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
@@ -219,9 +233,10 @@ begin
   try
     Engine.SuppressWarnings := GJsonOutput;
     ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
-    ApplyGlobalsToEngine(Engine);
+    ApplyDataGlobalsToEngine(Engine);
     StartExecutionTimeout(GTimeoutMilliseconds);
     try
+      ApplyModuleGlobalsToEngine(Engine);
       ScriptResult := Engine.Execute;
     finally
       ClearExecutionTimeout;
@@ -250,7 +265,7 @@ begin
   try
     Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
     ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
-    ApplyGlobalsToBytecodeBackend(Backend);
+    ApplyDataGlobalsToBytecodeBackend(Backend);
 
     ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultGlobals,
       GJsonOutput, Result.Timing.LexTimeNanoseconds,
@@ -264,6 +279,7 @@ begin
     try
       StartExecutionTimeout(GTimeoutMilliseconds);
       try
+        ApplyModuleGlobalsToBytecodeBackend(Backend);
         Result.ResultValue := Backend.RunModule(Module);
       finally
         ClearExecutionTimeout;
@@ -295,9 +311,10 @@ begin
     try
       Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
       ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
-      ApplyGlobalsToBytecodeBackend(Backend);
+      ApplyDataGlobalsToBytecodeBackend(Backend);
       StartExecutionTimeout(GTimeoutMilliseconds);
       try
+        ApplyModuleGlobalsToBytecodeBackend(Backend);
         Result.ResultValue := Backend.RunModule(Module);
       finally
         ClearExecutionTimeout;
