@@ -114,11 +114,11 @@ begin
       Result := CreateIteratorResult(Element, False);
     end;
     akKeys:
-      Result := CreateIteratorResult(TGocciaNumberLiteralValue.SmallInt(FIndex), False);
+      Result := CreateIteratorResult(TGocciaNumberLiteralValue.Create(FIndex), False);
     akEntries:
     begin
       EntryArray := TGocciaArrayValue.Create;
-      EntryArray.Elements.Add(TGocciaNumberLiteralValue.SmallInt(FIndex));
+      EntryArray.Elements.Add(TGocciaNumberLiteralValue.Create(FIndex));
       Element := Arr.Elements[FIndex];
       if Element = TGocciaHoleValue.HoleValue then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -154,11 +154,11 @@ begin
       Result := Element;
     end;
     akKeys:
-      Result := TGocciaNumberLiteralValue.SmallInt(FIndex);
+      Result := TGocciaNumberLiteralValue.Create(FIndex);
     akEntries:
     begin
       EntryArray := TGocciaArrayValue.Create;
-      EntryArray.Elements.Add(TGocciaNumberLiteralValue.SmallInt(FIndex));
+      EntryArray.Elements.Add(TGocciaNumberLiteralValue.Create(FIndex));
       Element := Arr.Elements[FIndex];
       if Element = TGocciaHoleValue.HoleValue then
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;

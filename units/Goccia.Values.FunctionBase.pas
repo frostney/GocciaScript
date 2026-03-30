@@ -41,6 +41,10 @@ type
 
     // Abstract method that subclasses must implement
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
+    function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; virtual;
+    function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; virtual;
+    function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; virtual;
+    function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; virtual;
 
     // VMT-based type discrimination
     function IsCallable: Boolean; override;
@@ -56,20 +60,34 @@ type
   private
     FOriginalFunction: TGocciaValue; // The function being bound
     FBoundThis: TGocciaValue; // The bound 'this' value
-    FBoundArgs: TGocciaValueList; // Pre-filled arguments
+    FBoundArgs: TGocciaValueList; // Pre-filled arguments when count > 1
+    FSingleBoundArg: TGocciaValue;
+    FBoundArgCount: Integer;
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
   public
+    constructor CreateWithoutArgs(const AOriginalFunction: TGocciaValue;
+      const ABoundThis: TGocciaValue);
+    constructor CreateWithSingleArg(const AOriginalFunction: TGocciaValue;
+      const ABoundThis, ABoundArg: TGocciaValue);
     constructor Create(const AOriginalFunction: TGocciaValue; const ABoundThis: TGocciaValue; const ABoundArgs: TGocciaValueList);
     destructor Destroy; override;
+    function GetBoundArg(const AIndex: Integer): TGocciaValue;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
+    property OriginalFunction: TGocciaValue read FOriginalFunction;
+    property BoundThis: TGocciaValue read FBoundThis;
+    property BoundArgCount: Integer read FBoundArgCount;
   end;
 
 implementation
 
 uses
+  Math,
   SysUtils,
 
   GarbageCollector.Generic,
@@ -144,6 +162,63 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+function TGocciaFunctionBase.CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaArgumentsCollection;
+begin
+  Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
+  try
+    Result := Call(Args, AThisValue);
+  finally
+    Args.Free;
+  end;
+end;
+
+function TGocciaFunctionBase.CallOneArg(const AArg0,
+  AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaArgumentsCollection;
+begin
+  Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
+  try
+    Args.Add(AArg0);
+    Result := Call(Args, AThisValue);
+  finally
+    Args.Free;
+  end;
+end;
+
+function TGocciaFunctionBase.CallTwoArgs(const AArg0, AArg1,
+  AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaArgumentsCollection;
+begin
+  Args := TGocciaArgumentsCollection.CreateWithCapacity(2);
+  try
+    Args.Add(AArg0);
+    Args.Add(AArg1);
+    Result := Call(Args, AThisValue);
+  finally
+    Args.Free;
+  end;
+end;
+
+function TGocciaFunctionBase.CallThreeArgs(const AArg0, AArg1, AArg2,
+  AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaArgumentsCollection;
+begin
+  Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
+  try
+    Args.Add(AArg0);
+    Args.Add(AArg1);
+    Args.Add(AArg2);
+    Result := Call(Args, AThisValue);
+  finally
+    Args.Free;
+  end;
+end;
+
 class procedure TGocciaFunctionBase.SetSharedPrototypeParent(
   const AParent: TGocciaObjectValue);
 begin
@@ -175,7 +250,8 @@ end;
 function TGocciaFunctionSharedPrototype.FunctionCall(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NewThisValue: TGocciaValue;
-  SlicedArgs: TGocciaArgumentsCollection;
+  CallArgs: TGocciaArgumentsCollection;
+  I: Integer;
 begin
   // Function.prototype.call(thisArg, ...args)
   // AThisValue is the function being called
@@ -188,14 +264,27 @@ begin
     NewThisValue := AArgs.GetElement(0)
   else
     NewThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  case AArgs.Length of
+    0, 1:
+      Exit(TGocciaFunctionBase(AThisValue).CallNoArgs(NewThisValue));
+    2:
+      Exit(TGocciaFunctionBase(AThisValue).CallOneArg(AArgs.GetElement(1), NewThisValue));
+    3:
+      Exit(TGocciaFunctionBase(AThisValue).CallTwoArgs(AArgs.GetElement(1),
+        AArgs.GetElement(2), NewThisValue));
+    4:
+      Exit(TGocciaFunctionBase(AThisValue).CallThreeArgs(AArgs.GetElement(1),
+        AArgs.GetElement(2), AArgs.GetElement(3), NewThisValue));
+  end;
 
-  // Remaining arguments are passed to the function (skip the first one which is thisArg)
-  SlicedArgs := AArgs.Slice(1);
+  CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(Max(0, AArgs.Length - 1));
   try
-    // Call the function directly since we know it's a TGocciaFunctionBase
-    Result := TGocciaFunctionBase(AThisValue).Call(SlicedArgs, NewThisValue);
+    for I := 1 to AArgs.Length - 1 do
+      CallArgs.Add(AArgs.GetElement(I));
+
+    Result := TGocciaFunctionBase(AThisValue).Call(CallArgs, NewThisValue);
   finally
-    SlicedArgs.Free;
+    CallArgs.Free;
   end;
 end;
 
@@ -217,7 +306,7 @@ begin
   else
     NewThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  CallArgs := TGocciaArgumentsCollection.Create;
+  CallArgs := nil;
   try
     if AArgs.Length > 1 then
     begin
@@ -225,6 +314,19 @@ begin
       if AArgs.GetElement(1) is TGocciaArrayValue then
       begin
         ArrVal := TGocciaArrayValue(AArgs.GetElement(1));
+        case ArrVal.Elements.Count of
+          0:
+            Exit(TGocciaFunctionBase(AThisValue).CallNoArgs(NewThisValue));
+          1:
+            Exit(TGocciaFunctionBase(AThisValue).CallOneArg(ArrVal.Elements[0], NewThisValue));
+          2:
+            Exit(TGocciaFunctionBase(AThisValue).CallTwoArgs(ArrVal.Elements[0],
+              ArrVal.Elements[1], NewThisValue));
+          3:
+            Exit(TGocciaFunctionBase(AThisValue).CallThreeArgs(ArrVal.Elements[0],
+              ArrVal.Elements[1], ArrVal.Elements[2], NewThisValue));
+        end;
+        CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(ArrVal.Elements.Count);
         for I := 0 to ArrVal.Elements.Count - 1 do
           CallArgs.Add(ArrVal.Elements[I]);
       end
@@ -236,6 +338,7 @@ begin
         if not (LengthProp is TGocciaUndefinedLiteralValue) then
         begin
           ArrayLength := Trunc((LengthProp as TGocciaNumberLiteralValue).Value);
+          CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(ArrayLength);
           for I := 0 to ArrayLength - 1 do
             CallArgs.Add(ArrayObj.GetProperty(IntToStr(I)));
         end;
@@ -246,9 +349,13 @@ begin
       end;
     end;
 
+    if not Assigned(CallArgs) then
+      CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(0);
+
     Result := TGocciaFunctionBase(AThisValue).Call(CallArgs, NewThisValue);
   finally
-    CallArgs.Free;
+    if Assigned(CallArgs) then
+      CallArgs.Free;
   end;
 end;
 
@@ -271,31 +378,70 @@ begin
     BoundThis := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   // Remaining arguments are pre-filled arguments
+  case AArgs.Length of
+    0, 1:
+      Exit(TGocciaBoundFunctionValue.CreateWithoutArgs(AThisValue, BoundThis));
+    2:
+      Exit(TGocciaBoundFunctionValue.CreateWithSingleArg(AThisValue,
+        BoundThis, AArgs.GetElement(1)));
+  end;
+
   BoundArgs := TGocciaValueList.Create(False);
   try
+    BoundArgs.Capacity := AArgs.Length - 1;
     for I := 1 to AArgs.Length - 1 do
       BoundArgs.Add(AArgs.GetElement(I));
 
     Result := TGocciaBoundFunctionValue.Create(AThisValue, BoundThis, BoundArgs);
+    BoundArgs := nil;
   finally
-    BoundArgs.Free;
+    if Assigned(BoundArgs) then
+      BoundArgs.Free;
   end;
 end;
 
 { TGocciaBoundFunctionValue }
 
-constructor TGocciaBoundFunctionValue.Create(const AOriginalFunction: TGocciaValue; const ABoundThis: TGocciaValue; const ABoundArgs: TGocciaValueList);
-var
-  I: Integer;
+constructor TGocciaBoundFunctionValue.CreateWithoutArgs(
+  const AOriginalFunction, ABoundThis: TGocciaValue);
 begin
   inherited Create;
   FOriginalFunction := AOriginalFunction;
   FBoundThis := ABoundThis;
-  FBoundArgs := TGocciaValueList.Create(False);
+  FBoundArgs := nil;
+  FSingleBoundArg := nil;
+  FBoundArgCount := 0;
+end;
 
-  // Copy the bound arguments
-  for I := 0 to ABoundArgs.Count - 1 do
-    FBoundArgs.Add(ABoundArgs[I]);
+constructor TGocciaBoundFunctionValue.CreateWithSingleArg(
+  const AOriginalFunction, ABoundThis, ABoundArg: TGocciaValue);
+begin
+  inherited Create;
+  FOriginalFunction := AOriginalFunction;
+  FBoundThis := ABoundThis;
+  FBoundArgs := nil;
+  FSingleBoundArg := ABoundArg;
+  FBoundArgCount := 1;
+end;
+
+constructor TGocciaBoundFunctionValue.Create(const AOriginalFunction: TGocciaValue; const ABoundThis: TGocciaValue; const ABoundArgs: TGocciaValueList);
+begin
+  inherited Create;
+  FOriginalFunction := AOriginalFunction;
+  FBoundThis := ABoundThis;
+  FBoundArgs := nil;
+  FSingleBoundArg := nil;
+  FBoundArgCount := ABoundArgs.Count;
+  case ABoundArgs.Count of
+    0:
+      ;
+    1:
+      FSingleBoundArg := ABoundArgs[0];
+  else
+    FBoundArgs := ABoundArgs;
+    Exit;
+  end;
+  ABoundArgs.Free;
 end;
 
 destructor TGocciaBoundFunctionValue.Destroy;
@@ -304,17 +450,35 @@ begin
   inherited;
 end;
 
+function TGocciaBoundFunctionValue.GetBoundArg(const AIndex: Integer): TGocciaValue;
+begin
+  if (AIndex < 0) or (AIndex >= FBoundArgCount) then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  if FBoundArgCount = 1 then
+    Exit(FSingleBoundArg);
+
+  if Assigned(FBoundArgs) then
+    Exit(FBoundArgs[AIndex]);
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
 function TGocciaBoundFunctionValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   CombinedArgs: TGocciaArgumentsCollection;
   I: Integer;
 begin
   // Combine bound arguments with call arguments
-  CombinedArgs := TGocciaArgumentsCollection.Create;
+  CombinedArgs := TGocciaArgumentsCollection.CreateWithCapacity(
+    FBoundArgCount + AArguments.Length);
   try
     // Add bound arguments first
-    for I := 0 to FBoundArgs.Count - 1 do
-      CombinedArgs.Add(FBoundArgs[I]);
+    if FBoundArgCount = 1 then
+      CombinedArgs.Add(FSingleBoundArg)
+    else if Assigned(FBoundArgs) then
+      for I := 0 to FBoundArgs.Count - 1 do
+        CombinedArgs.Add(FBoundArgs[I]);
 
     // Add call arguments
     for I := 0 to AArguments.Length - 1 do
@@ -330,6 +494,54 @@ begin
   end;
 end;
 
+function TGocciaBoundFunctionValue.CallNoArgs(
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (FOriginalFunction is TGocciaFunctionBase) then
+    raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
+
+  case FBoundArgCount of
+    0:
+      Result := TGocciaFunctionBase(FOriginalFunction).CallNoArgs(FBoundThis);
+    1:
+      Result := TGocciaFunctionBase(FOriginalFunction).CallOneArg(FSingleBoundArg, FBoundThis);
+  else
+    Result := inherited CallNoArgs(AThisValue);
+  end;
+end;
+
+function TGocciaBoundFunctionValue.CallOneArg(const AArg0,
+  AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (FOriginalFunction is TGocciaFunctionBase) then
+    raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
+
+  case FBoundArgCount of
+    0:
+      Result := TGocciaFunctionBase(FOriginalFunction).CallOneArg(AArg0, FBoundThis);
+    1:
+      Result := TGocciaFunctionBase(FOriginalFunction).CallTwoArgs(FSingleBoundArg, AArg0, FBoundThis);
+  else
+    Result := inherited CallOneArg(AArg0, AThisValue);
+  end;
+end;
+
+function TGocciaBoundFunctionValue.CallTwoArgs(const AArg0, AArg1,
+  AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if not (FOriginalFunction is TGocciaFunctionBase) then
+    raise TGocciaError.Create('BoundFunction.Call: Original function is not callable', 0, 0, '', nil);
+
+  case FBoundArgCount of
+    0:
+      Result := TGocciaFunctionBase(FOriginalFunction).CallTwoArgs(AArg0, AArg1, FBoundThis);
+    1:
+      Result := TGocciaFunctionBase(FOriginalFunction).CallThreeArgs(FSingleBoundArg, AArg0, AArg1, FBoundThis);
+  else
+    Result := inherited CallTwoArgs(AArg0, AArg1, AThisValue);
+  end;
+end;
+
 function TGocciaBoundFunctionValue.GetFunctionLength: Integer;
 var
   OrigLength: Integer;
@@ -339,7 +551,7 @@ begin
     OrigLength := TGocciaFunctionBase(FOriginalFunction).GetFunctionLength
   else
     OrigLength := 0;
-  Result := OrigLength - FBoundArgs.Count;
+  Result := OrigLength - FBoundArgCount;
   if Result < 0 then
     Result := 0;
 end;
@@ -367,9 +579,15 @@ begin
     FBoundThis.MarkReferences;
 
   // Mark bound arguments
-  for I := 0 to FBoundArgs.Count - 1 do
-    if Assigned(FBoundArgs[I]) then
-      FBoundArgs[I].MarkReferences;
+  if FBoundArgCount = 1 then
+  begin
+    if Assigned(FSingleBoundArg) then
+      FSingleBoundArg.MarkReferences;
+  end
+  else if Assigned(FBoundArgs) then
+    for I := 0 to FBoundArgs.Count - 1 do
+      if Assigned(FBoundArgs[I]) then
+        FBoundArgs[I].MarkReferences;
 end;
 
 end.

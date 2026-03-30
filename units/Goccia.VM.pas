@@ -23,9 +23,30 @@ uses
   Goccia.VM.CallFrame,
   Goccia.VM.Closure,
   Goccia.VM.Exception,
+  Goccia.VM.Registers,
   Goccia.VM.Upvalue;
 
 type
+  TGocciaVMLiteralObjectValue = class(TGocciaObjectValue)
+  private
+    FFastLiteralMode: Boolean;
+  public
+    constructor Create(const APrototype: TGocciaObjectValue = nil;
+      const APropertyCapacity: Integer = 0);
+    function TryGetOwnDataPropertyFastRegister(const AName: string;
+      out AValue: TGocciaRegister): Boolean;
+    function TryGetOwnDataPropertyFast(const AName: string;
+      out AValue: TGocciaValue): Boolean;
+    function TrySetLiteralDataPropertyFast(const AName: string;
+      const AValue: TGocciaValue): Boolean;
+    function GetProperty(const AName: string): TGocciaValue; override;
+    procedure DefineProperty(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor); override;
+    procedure Freeze; override;
+    procedure Seal; override;
+    procedure PreventExtensions; override;
+  end;
+
   TGocciaBytecodeCellArray = array of TGocciaBytecodeCell;
   TGocciaArgumentsPoolArray = array of TGocciaArgumentsCollection;
 
@@ -55,17 +76,23 @@ type
     procedure EnsureRegisterCapacity(const ACount: Integer);
     procedure EnsureLocalCapacity(const ACount: Integer);
     function GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
+    function GetLocalRegister(const AIndex: Integer): TGocciaRegister; inline;
     function GetRegister(const AIndex: Integer): TGocciaValue; inline;
     function GetRegisterFast(const AIndex: Integer): TGocciaValue; inline;
     procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue); inline;
     procedure SetRegisterFast(const AIndex: Integer; const AValue: TGocciaValue); inline;
+    procedure SetRegisterRaw(const AIndex: Integer; const AValue: TGocciaRegister); inline;
     function GetLocal(const AIndex: Integer): TGocciaValue; inline;
     function GetLocalFast(const AIndex: Integer): TGocciaValue; inline;
     procedure SetLocal(const AIndex: Integer; const AValue: TGocciaValue); inline;
     procedure SetLocalFast(const AIndex: Integer; const AValue: TGocciaValue); inline;
+    procedure SetLocalRaw(const AIndex: Integer; const AValue: TGocciaRegister); inline;
     function MatchesNullishKind(const AValue: TGocciaValue; const AKind: UInt8): Boolean;
     function TryGetArrayIndex(const AKey: TGocciaValue; out AIndex: Integer): Boolean;
+    function TryGetArrayIndexRegister(const AKey: TGocciaRegister;
+      out AIndex: Integer): Boolean;
     function KeyToPropertyName(const AKey: TGocciaValue): string;
+    function KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
     function IterableToArray(const AIterable: TGocciaValue;
       const ATryAsync: Boolean = False): TGocciaArrayValue;
     procedure SpreadObjectIntoValue(const ATarget: TGocciaObjectValue;
@@ -95,8 +122,13 @@ type
     procedure SetupAutoAccessorValue(const AName: string);
     procedure RunClassInitializers(const AClassValue: TGocciaClassValue;
       const AInstance: TGocciaValue);
+    function MaterializeArguments(
+      const AArguments: TGocciaRegisterArray): TGocciaArgumentsCollection;
     procedure InvokeImplicitSuperInitialization(const AClassValue: TGocciaClassValue;
       const AInstance: TGocciaValue; const AArguments: TGocciaArgumentsCollection);
+    procedure InvokeImplicitSuperInitializationRegisters(
+      const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+      const AArguments: TGocciaRegisterArray);
     procedure BeginDecorators(const AClassValue, ASuperValue: TGocciaValue);
     procedure ApplyElementDecorator(const ADecoratorFn: TGocciaValue;
       const ADescriptor: string);
@@ -115,6 +147,20 @@ type
     function InvokeFunctionValue(const ACallee: TGocciaValue;
       const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function ExecuteClosureRegistersInternal(const AClosure: TGocciaBytecodeClosure;
+      const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
+      const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
+      const AUseFixedArgs: Boolean): TGocciaRegister;
+    function ExecuteClosureRegisters0(const AClosure: TGocciaBytecodeClosure;
+      const AThisValue: TGocciaRegister): TGocciaRegister;
+    function ExecuteClosureRegisters1(const AClosure: TGocciaBytecodeClosure;
+      const AThisValue, AArg0: TGocciaRegister): TGocciaRegister;
+    function ExecuteClosureRegisters2(const AClosure: TGocciaBytecodeClosure;
+      const AThisValue, AArg0, AArg1: TGocciaRegister): TGocciaRegister;
+    function ExecuteClosureRegisters3(const AClosure: TGocciaBytecodeClosure;
+      const AThisValue, AArg0, AArg1, AArg2: TGocciaRegister): TGocciaRegister;
+    function ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosure;
+      const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray): TGocciaRegister;
     function ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection): TGocciaValue;
   public
@@ -191,6 +237,87 @@ begin
   end;
 end;
 
+function VMGetOwnDataDescriptorValue(const AObject: TGocciaObjectValue;
+  const AName: string; out AValue: TGocciaValue): Boolean; inline;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Result := Assigned(AObject) and
+    AObject.Properties.TryGetValue(AName, Descriptor) and
+    (Descriptor is TGocciaPropertyDescriptorData);
+  if Result then
+    AValue := TGocciaPropertyDescriptorData(Descriptor).Value
+  else
+    AValue := nil;
+end;
+
+function VMValueToRegisterFast(const AValue: TGocciaValue): TGocciaRegister; inline;
+var
+  NumberValue: Double;
+  Bits: Int64 absolute NumberValue;
+begin
+  if not Assigned(AValue) or (AValue is TGocciaUndefinedLiteralValue) then
+    Exit(RegisterUndefined);
+  if AValue is TGocciaNullLiteralValue then
+    Exit(RegisterNull);
+  if AValue = TGocciaHoleValue.HoleValue then
+    Exit(RegisterHole);
+  if AValue = TGocciaBooleanLiteralValue.TrueValue then
+    Exit(RegisterBoolean(True));
+  if AValue = TGocciaBooleanLiteralValue.FalseValue then
+    Exit(RegisterBoolean(False));
+  if AValue is TGocciaNumberLiteralValue then
+  begin
+    NumberValue := TGocciaNumberLiteralValue(AValue).Value;
+    if NumberValue = 0.0 then
+    begin
+      if Bits < 0 then
+        Exit(RegisterObject(AValue));
+      Exit(RegisterInt(0));
+    end;
+    if NumberValue = 1.0 then
+      Exit(RegisterInt(1));
+    if (not TGocciaNumberLiteralValue(AValue).IsNaN) and
+       (not TGocciaNumberLiteralValue(AValue).IsInfinite) and
+       (Frac(NumberValue) = 0.0) and
+       (NumberValue >= Low(LongInt)) and
+       (NumberValue <= High(LongInt)) then
+      Exit(RegisterInt(Trunc(NumberValue)));
+    Exit(RegisterFloat(NumberValue));
+  end;
+  Result := RegisterObject(AValue);
+end;
+
+function VMGetOwnDataDescriptorRegister(const AObject: TGocciaObjectValue;
+  const AName: string; out AValue: TGocciaRegister): Boolean; inline;
+var
+  Value: TGocciaValue;
+begin
+  Result := VMGetOwnDataDescriptorValue(AObject, AName, Value);
+  if not Result then
+  begin
+    AValue := RegisterUndefined;
+    Exit;
+  end;
+
+  AValue := VMValueToRegisterFast(Value);
+end;
+
+function VMSetOwnWritableDataDescriptorValue(const AObject: TGocciaObjectValue;
+  const AName: string; const AValue: TGocciaValue): Boolean; inline;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Result := Assigned(AObject) and
+    AObject.Properties.TryGetValue(AName, Descriptor) and
+    (Descriptor is TGocciaPropertyDescriptorData);
+  if not Result then
+    Exit;
+  if not TGocciaPropertyDescriptorData(Descriptor).Writable then
+    ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
+  TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
+end;
+
 function VMNumberValue(const AValue: Double): TGocciaNumberLiteralValue; inline;
 var
   Bits: Int64 absolute AValue;
@@ -209,11 +336,27 @@ begin
       Exit(TGocciaNumberLiteralValue.NegativeZeroValue);
     Exit(TGocciaNumberLiteralValue.ZeroValue);
   end;
-  if (AValue >= 0.0) and (AValue <= 255.0) and (Frac(AValue) = 0.0) then
-    Exit(TGocciaNumberLiteralValue.SmallInt(Trunc(AValue)));
   if AValue = 1.0 then
     Exit(TGocciaNumberLiteralValue.OneValue);
   Result := TGocciaNumberLiteralValue.Create(AValue);
+end;
+
+function VMNumberRegister(const AValue: Double): TGocciaRegister; inline;
+var
+  Bits: Int64 absolute AValue;
+begin
+  if Math.IsNaN(AValue) or Math.IsInfinite(AValue) then
+    Exit(RegisterObject(VMNumberValue(AValue)));
+  if AValue = 0.0 then
+  begin
+    if Bits < 0 then
+      Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
+    Exit(RegisterInt(0));
+  end;
+  if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) and
+     (Frac(AValue) = 0.0) then
+    Exit(RegisterInt(Trunc(AValue)));
+  Result := RegisterFloat(AValue);
 end;
 
 function VMInfinityWithSign(const APositive: Boolean): TGocciaNumberLiteralValue; inline;
@@ -356,6 +499,38 @@ begin
   if PrimitiveValue is TGocciaSymbolValue then
     ThrowTypeError('Cannot convert a Symbol value to a string');
   Result := PrimitiveValue.ToStringLiteral;
+end;
+
+function VMRegisterToECMAStringFast(
+  const AValue: TGocciaRegister): TGocciaStringLiteralValue; inline;
+begin
+  case AValue.Kind of
+    grkUndefined:
+      Exit(TGocciaStringLiteralValue.Create('undefined'));
+    grkNull:
+      Exit(TGocciaStringLiteralValue.Create('null'));
+    grkHole:
+      Exit(TGocciaStringLiteralValue.Create('undefined'));
+    grkBoolean:
+      if AValue.BoolValue then
+        Exit(TGocciaStringLiteralValue.Create('true'))
+      else
+        Exit(TGocciaStringLiteralValue.Create('false'));
+    grkInt:
+      Exit(TGocciaStringLiteralValue.Create(IntToStr(AValue.IntValue)));
+    grkFloat:
+      Exit(RegisterToValue(AValue).ToStringLiteral);
+    grkObject:
+      begin
+        if AValue.ObjectValue is TGocciaStringLiteralValue then
+          Exit(TGocciaStringLiteralValue(AValue.ObjectValue));
+        if AValue.ObjectValue is TGocciaSymbolValue then
+          ThrowTypeError('Cannot convert a Symbol value to a string');
+        if Assigned(AValue.ObjectValue) then
+          Exit(VMToECMAStringFast(AValue.ObjectValue));
+      end;
+  end;
+  Result := TGocciaStringLiteralValue.Create('');
 end;
 
 function VMBitwiseAndValues(const ALeft, ARight: TGocciaValue): TGocciaValue; inline;
@@ -714,6 +889,10 @@ type
     constructor Create(const AVM: TGocciaVM; const AClosure: TGocciaBytecodeClosure);
     destructor Destroy; override;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
   end;
 
@@ -737,6 +916,10 @@ type
     constructor Create(const AVM: TGocciaVM; const AName: string;
       const ASuperClass: TGocciaClassValue);
     function Instantiate(const AArguments: TGocciaArgumentsCollection): TGocciaValue; override;
+    function InstantiateRegisters(
+      const AArguments: TGocciaRegisterArray): TGocciaRegister;
+    function GetProperty(const AName: string): TGocciaValue; override;
+    procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     procedure SetVMConstructor(const AValue: TGocciaValue);
     procedure MarkReferences; override;
   end;
@@ -747,6 +930,70 @@ begin
   inherited Create;
   FVM := AVM;
   FClosure := AClosure;
+end;
+
+function TGocciaVMLiteralObjectValue.TryGetOwnDataPropertyFast(
+  const AName: string; out AValue: TGocciaValue): Boolean;
+begin
+  Result := VMGetOwnDataDescriptorValue(Self, AName, AValue);
+end;
+
+function TGocciaVMLiteralObjectValue.TryGetOwnDataPropertyFastRegister(
+  const AName: string; out AValue: TGocciaRegister): Boolean;
+begin
+  Result := VMGetOwnDataDescriptorRegister(Self, AName, AValue);
+end;
+
+constructor TGocciaVMLiteralObjectValue.Create(const APrototype: TGocciaObjectValue;
+  const APropertyCapacity: Integer);
+begin
+  inherited Create(APrototype, APropertyCapacity);
+  FFastLiteralMode := True;
+end;
+
+function TGocciaVMLiteralObjectValue.TrySetLiteralDataPropertyFast(
+  const AName: string; const AValue: TGocciaValue): Boolean;
+begin
+  if not FFastLiteralMode then
+    Exit(False);
+
+  if VMSetOwnWritableDataDescriptorValue(Self, AName, AValue) then
+    Exit(True);
+
+  inherited DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
+  Result := True;
+end;
+
+function TGocciaVMLiteralObjectValue.GetProperty(const AName: string): TGocciaValue;
+begin
+  if not TryGetOwnDataPropertyFast(AName, Result) then
+    Result := inherited GetProperty(AName);
+end;
+
+procedure TGocciaVMLiteralObjectValue.DefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor);
+begin
+  FFastLiteralMode := False;
+  inherited DefineProperty(AName, ADescriptor);
+end;
+
+procedure TGocciaVMLiteralObjectValue.Freeze;
+begin
+  FFastLiteralMode := False;
+  inherited Freeze;
+end;
+
+procedure TGocciaVMLiteralObjectValue.Seal;
+begin
+  FFastLiteralMode := False;
+  inherited Seal;
+end;
+
+procedure TGocciaVMLiteralObjectValue.PreventExtensions;
+begin
+  FFastLiteralMode := False;
+  inherited PreventExtensions;
 end;
 
 constructor TGocciaVMClassValue.Create(const AVM: TGocciaVM; const AName: string;
@@ -825,6 +1072,126 @@ begin
   end;
 
   Result := FVM.ExecuteClosure(FClosure, AThisValue, AArguments);
+end;
+
+function TGocciaBytecodeFunctionValue.CallNoArgs(
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+begin
+  if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
+  begin
+    Promise := TGocciaPromiseValue.Create;
+    try
+      try
+        Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters0(FClosure,
+          VMValueToRegisterFast(AThisValue))));
+      except
+        on E: EGocciaBytecodeThrow do
+          Promise.Reject(E.ThrownValue);
+        on E: TGocciaThrowValue do
+          Promise.Reject(E.Value);
+      end;
+    except
+      Promise.Free;
+      raise;
+    end;
+    Exit(Promise);
+  end;
+
+  Result := RegisterToValue(FVM.ExecuteClosureRegisters0(FClosure,
+    VMValueToRegisterFast(AThisValue)));
+end;
+
+function TGocciaBytecodeFunctionValue.CallOneArg(const AArg0,
+  AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+begin
+  if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
+  begin
+    Promise := TGocciaPromiseValue.Create;
+    try
+      try
+        Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
+          VMValueToRegisterFast(AThisValue), VMValueToRegisterFast(AArg0))));
+      except
+        on E: EGocciaBytecodeThrow do
+          Promise.Reject(E.ThrownValue);
+        on E: TGocciaThrowValue do
+          Promise.Reject(E.Value);
+      end;
+    except
+      Promise.Free;
+      raise;
+    end;
+    Exit(Promise);
+  end;
+
+  Result := RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
+    VMValueToRegisterFast(AThisValue), VMValueToRegisterFast(AArg0)));
+end;
+
+function TGocciaBytecodeFunctionValue.CallTwoArgs(const AArg0, AArg1,
+  AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+begin
+  if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
+  begin
+    Promise := TGocciaPromiseValue.Create;
+    try
+      try
+        Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters2(FClosure,
+          VMValueToRegisterFast(AThisValue), VMValueToRegisterFast(AArg0),
+          VMValueToRegisterFast(AArg1))));
+      except
+        on E: EGocciaBytecodeThrow do
+          Promise.Reject(E.ThrownValue);
+        on E: TGocciaThrowValue do
+          Promise.Reject(E.Value);
+      end;
+    except
+      Promise.Free;
+      raise;
+    end;
+    Exit(Promise);
+  end;
+
+  Result := RegisterToValue(FVM.ExecuteClosureRegisters2(FClosure,
+    VMValueToRegisterFast(AThisValue), VMValueToRegisterFast(AArg0),
+    VMValueToRegisterFast(AArg1)));
+end;
+
+function TGocciaBytecodeFunctionValue.CallThreeArgs(const AArg0, AArg1, AArg2,
+  AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+begin
+  if Assigned(FClosure) and Assigned(FClosure.Template) and FClosure.Template.IsAsync then
+  begin
+    Promise := TGocciaPromiseValue.Create;
+    try
+      try
+        Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters3(FClosure,
+          VMValueToRegisterFast(AThisValue), VMValueToRegisterFast(AArg0),
+          VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
+      except
+        on E: EGocciaBytecodeThrow do
+          Promise.Reject(E.ThrownValue);
+        on E: TGocciaThrowValue do
+          Promise.Reject(E.Value);
+      end;
+    except
+      Promise.Free;
+      raise;
+    end;
+    Exit(Promise);
+  end;
+
+  Result := RegisterToValue(FVM.ExecuteClosureRegisters3(FClosure,
+    VMValueToRegisterFast(AThisValue), VMValueToRegisterFast(AArg0),
+    VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2)));
 end;
 
 function TGocciaVMSuperConstructorValue.Call(
@@ -983,6 +1350,220 @@ begin
   Result := Instance;
 end;
 
+function TGocciaVMClassValue.InstantiateRegisters(
+  const AArguments: TGocciaRegisterArray): TGocciaRegister;
+var
+  Instance: TGocciaObjectValue;
+  WalkClass: TGocciaClassValue;
+  NativeInstance: TGocciaObjectValue;
+  ConstructorToCall: TGocciaMethodValue;
+  BoxedArgs: TGocciaArgumentsCollection;
+  BytecodeConstructor: TGocciaBytecodeFunctionValue;
+  BytecodeSuperConstructor: TGocciaBytecodeFunctionValue;
+  procedure EnsureBoxedArgs;
+  begin
+    if not Assigned(BoxedArgs) then
+      BoxedArgs := FVM.MaterializeArguments(AArguments);
+  end;
+begin
+  BoxedArgs := nil;
+  try
+    NativeInstance := nil;
+    WalkClass := Self;
+    while Assigned(WalkClass) do
+    begin
+      if not (WalkClass is TGocciaVMClassValue) then
+      begin
+        EnsureBoxedArgs;
+        NativeInstance := WalkClass.CreateNativeInstance(BoxedArgs);
+      end;
+      if Assigned(NativeInstance) then
+        Break;
+      WalkClass := WalkClass.SuperClass;
+    end;
+
+    if Assigned(NativeInstance) then
+    begin
+      Instance := NativeInstance;
+      Instance.Prototype := Prototype;
+      if NativeInstance is TGocciaInstanceValue then
+        TGocciaInstanceValue(NativeInstance).ClassValue := Self;
+    end
+    else
+    begin
+      Instance := TGocciaInstanceValue.Create(Self);
+      Instance.Prototype := Prototype;
+    end;
+
+    TGarbageCollector.Instance.AddTempRoot(Instance);
+    try
+      if Assigned(FConstructorValue) then
+      begin
+        FVM.RunClassInitializers(Self, Instance);
+        if FConstructorValue is TGocciaBytecodeFunctionValue then
+        begin
+          BytecodeConstructor := TGocciaBytecodeFunctionValue(FConstructorValue);
+          if Assigned(BytecodeConstructor.FClosure) and
+             Assigned(BytecodeConstructor.FClosure.Template) and
+             (not BytecodeConstructor.FClosure.Template.IsAsync) then
+            FVM.ExecuteClosureRegisters(BytecodeConstructor.FClosure,
+              RegisterObject(Instance), AArguments)
+          else
+          begin
+            EnsureBoxedArgs;
+            FVM.InvokeFunctionValue(FConstructorValue, BoxedArgs, Instance);
+          end;
+        end
+        else
+        begin
+          EnsureBoxedArgs;
+          FVM.InvokeFunctionValue(FConstructorValue, BoxedArgs, Instance);
+        end;
+      end
+      else
+      begin
+        FVM.RunClassInitializers(Self, Instance);
+        ConstructorToCall := nil;
+
+        if (SuperClass is TGocciaVMClassValue) and
+           Assigned(TGocciaVMClassValue(SuperClass).FConstructorValue) then
+        begin
+          TGocciaVMClassValue(SuperClass).FVM.RunClassInitializers(
+            SuperClass, Instance);
+          if TGocciaVMClassValue(SuperClass).FConstructorValue is TGocciaBytecodeFunctionValue then
+          begin
+            BytecodeSuperConstructor := TGocciaBytecodeFunctionValue(
+              TGocciaVMClassValue(SuperClass).FConstructorValue);
+            if Assigned(BytecodeSuperConstructor.FClosure) and
+               Assigned(BytecodeSuperConstructor.FClosure.Template) and
+               (not BytecodeSuperConstructor.FClosure.Template.IsAsync) then
+              TGocciaVMClassValue(SuperClass).FVM.ExecuteClosureRegisters(
+                BytecodeSuperConstructor.FClosure,
+                RegisterObject(Instance), AArguments)
+            else
+            begin
+              EnsureBoxedArgs;
+              TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
+                TGocciaVMClassValue(SuperClass).FConstructorValue,
+                BoxedArgs, Instance);
+            end;
+          end
+          else
+          begin
+            EnsureBoxedArgs;
+            TGocciaVMClassValue(SuperClass).FVM.InvokeFunctionValue(
+              TGocciaVMClassValue(SuperClass).FConstructorValue,
+              BoxedArgs, Instance);
+          end;
+        end
+        else
+        begin
+          if Assigned(SuperClass) then
+            ConstructorToCall := SuperClass.ConstructorMethod;
+
+          if Assigned(ConstructorToCall) then
+          begin
+            EnsureBoxedArgs;
+            FVM.RunClassInitializers(SuperClass, Instance);
+            ConstructorToCall.Call(BoxedArgs, Instance);
+          end
+          else if Assigned(SuperClass) then
+            FVM.InvokeImplicitSuperInitializationRegisters(SuperClass, Instance, AArguments)
+          else
+          begin
+            EnsureBoxedArgs;
+            if Instance is TGocciaInstanceValue then
+              TGocciaInstanceValue(Instance).InitializeNativeFromArguments(BoxedArgs);
+          end;
+        end;
+      end;
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(Instance);
+    end;
+
+    Result := RegisterObject(Instance);
+  finally
+    if Assigned(BoxedArgs) then
+      FVM.ReleaseArguments(BoxedArgs);
+  end;
+end;
+
+function TGocciaVMClassValue.GetProperty(const AName: string): TGocciaValue;
+var
+  Getter: TGocciaFunctionBase;
+  Current: TGocciaClassValue;
+  BytecodeGetter: TGocciaBytecodeFunctionValue;
+  Args: TGocciaArgumentsCollection;
+begin
+  Current := Self;
+  repeat
+    Getter := Current.StaticPropertyGetter[AName];
+    if Assigned(Getter) then
+    begin
+      if (Getter is TGocciaBytecodeFunctionValue) then
+      begin
+        BytecodeGetter := TGocciaBytecodeFunctionValue(Getter);
+        if Assigned(BytecodeGetter.FClosure) and
+           Assigned(BytecodeGetter.FClosure.Template) and
+           (not BytecodeGetter.FClosure.Template.IsAsync) then
+          Exit(RegisterToValue(FVM.ExecuteClosureRegisters(
+            BytecodeGetter.FClosure, RegisterObject(Self), [])));
+      end;
+      Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
+      try
+        Exit(Getter.Call(Args, Self));
+      finally
+        Args.Free;
+      end;
+    end;
+
+    Current := Current.SuperClass;
+  until not Assigned(Current);
+
+  Result := inherited GetProperty(AName);
+end;
+
+procedure TGocciaVMClassValue.SetProperty(const AName: string;
+  const AValue: TGocciaValue);
+var
+  Setter: TGocciaFunctionBase;
+  Current: TGocciaClassValue;
+  BytecodeSetter: TGocciaBytecodeFunctionValue;
+  Args: TGocciaArgumentsCollection;
+begin
+  Current := Self;
+  repeat
+    Setter := Current.StaticPropertySetter[AName];
+    if Assigned(Setter) then
+    begin
+      if Setter is TGocciaBytecodeFunctionValue then
+      begin
+        BytecodeSetter := TGocciaBytecodeFunctionValue(Setter);
+        if Assigned(BytecodeSetter.FClosure) and
+           Assigned(BytecodeSetter.FClosure.Template) and
+           (not BytecodeSetter.FClosure.Template.IsAsync) then
+        begin
+          FVM.ExecuteClosureRegisters(BytecodeSetter.FClosure, RegisterObject(Self),
+            [ValueToRegister(AValue)]);
+          Exit;
+        end;
+      end;
+
+      Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
+      try
+        Args.Add(AValue);
+        Setter.Call(Args, Self);
+      finally
+        Args.Free;
+      end;
+      Exit;
+    end;
+    Current := Current.SuperClass;
+  until not Assigned(Current);
+
+  inherited SetProperty(AName, AValue);
+end;
+
 procedure TGocciaVMClassValue.SetVMConstructor(const AValue: TGocciaValue);
 begin
   FConstructorValue := AValue;
@@ -1018,9 +1599,8 @@ begin
   for I := 0 to FClosure.UpvalueCount - 1 do
   begin
     Upvalue := FClosure.GetUpvalue(I);
-    if Assigned(Upvalue) and Assigned(Upvalue.Cell) and
-       Assigned(Upvalue.Cell.Value) then
-      Upvalue.Cell.Value.MarkReferences;
+    if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+      MarkRegisterReferences(Upvalue.Cell.Value);
   end;
 end;
 
@@ -1034,8 +1614,10 @@ begin
     bckFalse:
       Result := TGocciaBooleanLiteralValue.FalseValue;
     bckInteger:
-      if (AConstant.IntValue >= 0) and (AConstant.IntValue <= 255) then
-        Result := TGocciaNumberLiteralValue.SmallInt(AConstant.IntValue)
+      if AConstant.IntValue = 0 then
+        Result := TGocciaNumberLiteralValue.ZeroValue
+      else if AConstant.IntValue = 1 then
+        Result := TGocciaNumberLiteralValue.OneValue
       else
         Result := TGocciaNumberLiteralValue.Create(AConstant.IntValue);
     bckFloat:
@@ -1120,14 +1702,23 @@ function TGocciaVM.GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
 begin
   EnsureLocalCapacity(AIndex + 1);
   if not Assigned(FLocalCells[AIndex]) then
-    FLocalCells[AIndex] := TGocciaBytecodeCell.Create(GetRegister(AIndex));
+    FLocalCells[AIndex] := TGocciaBytecodeCell.Create(FRegisters[AIndex]);
   Result := FLocalCells[AIndex];
+end;
+
+function TGocciaVM.GetLocalRegister(const AIndex: Integer): TGocciaRegister;
+begin
+  if (AIndex >= 0) and (AIndex < Length(FLocalCells)) and Assigned(FLocalCells[AIndex]) then
+    Exit(FLocalCells[AIndex].Value);
+  if (AIndex >= 0) and (AIndex < Length(FRegisters)) then
+    Exit(FRegisters[AIndex]);
+  Result := RegisterUndefined;
 end;
 
 function TGocciaVM.GetRegister(const AIndex: Integer): TGocciaValue;
 begin
-  if (AIndex >= 0) and (AIndex < Length(FRegisters)) and Assigned(FRegisters[AIndex]) then
-    Result := FRegisters[AIndex]
+  if (AIndex >= 0) and (AIndex < Length(FRegisters)) then
+    Result := RegisterToValue(FRegisters[AIndex])
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -1136,18 +1727,16 @@ function TGocciaVM.GetRegisterFast(const AIndex: Integer): TGocciaValue;
 begin
   if (AIndex < 0) or (AIndex >= Length(FRegisters)) then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-  Result := FRegisters[AIndex];
-  if not Assigned(Result) then
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result := RegisterToValue(FRegisters[AIndex]);
 end;
 
 procedure TGocciaVM.SetRegister(const AIndex: Integer; const AValue: TGocciaValue);
 begin
   EnsureRegisterCapacity(AIndex + 1);
-  FRegisters[AIndex] := AValue;
+  FRegisters[AIndex] := VMValueToRegisterFast(AValue);
   if (AIndex >= 0) and (AIndex < Length(FLocalCells)) and
      Assigned(FLocalCells[AIndex]) then
-    FLocalCells[AIndex].Value := AValue;
+    FLocalCells[AIndex].Value := FRegisters[AIndex];
 end;
 
 procedure TGocciaVM.SetRegisterFast(const AIndex: Integer;
@@ -1158,15 +1747,25 @@ begin
     SetRegister(AIndex, AValue);
     Exit;
   end;
-  FRegisters[AIndex] := AValue;
+  FRegisters[AIndex] := VMValueToRegisterFast(AValue);
   if (AIndex < Length(FLocalCells)) and Assigned(FLocalCells[AIndex]) then
+    FLocalCells[AIndex].Value := FRegisters[AIndex];
+end;
+
+procedure TGocciaVM.SetRegisterRaw(const AIndex: Integer;
+  const AValue: TGocciaRegister);
+begin
+  EnsureRegisterCapacity(AIndex + 1);
+  FRegisters[AIndex] := AValue;
+  if (AIndex >= 0) and (AIndex < Length(FLocalCells)) and
+     Assigned(FLocalCells[AIndex]) then
     FLocalCells[AIndex].Value := AValue;
 end;
 
 function TGocciaVM.GetLocal(const AIndex: Integer): TGocciaValue;
 begin
   if (AIndex >= 0) and (AIndex < Length(FLocalCells)) and Assigned(FLocalCells[AIndex]) then
-    Exit(FLocalCells[AIndex].Value);
+    Exit(RegisterToValue(FLocalCells[AIndex].Value));
   Result := GetRegister(AIndex);
 end;
 
@@ -1175,7 +1774,7 @@ begin
   if AIndex < 0 then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   if (AIndex < Length(FLocalCells)) and Assigned(FLocalCells[AIndex]) then
-    Exit(FLocalCells[AIndex].Value);
+    Exit(RegisterToValue(FLocalCells[AIndex].Value));
   Result := GetRegisterFast(AIndex);
 end;
 
@@ -1189,6 +1788,14 @@ begin
   if AIndex < 0 then
     Exit;
   SetRegisterFast(AIndex, AValue);
+end;
+
+procedure TGocciaVM.SetLocalRaw(const AIndex: Integer;
+  const AValue: TGocciaRegister);
+begin
+  if AIndex < 0 then
+    Exit;
+  SetRegisterRaw(AIndex, AValue);
 end;
 
 function TGocciaVM.MatchesNullishKind(const AValue: TGocciaValue;
@@ -1205,6 +1812,23 @@ begin
       Result := AValue is TGocciaNullLiteralValue;
     GOCCIA_NULLISH_MATCH_HOLE:
       Result := AValue = TGocciaHoleValue.HoleValue;
+  else
+    Result := False;
+  end;
+end;
+
+function RegisterMatchesNullishKind(const AValue: TGocciaRegister;
+  const AKind: UInt8): Boolean; inline;
+begin
+  case AKind of
+    GOCCIA_NULLISH_MATCH_ANY:
+      Result := AValue.Kind in [grkUndefined, grkNull, grkHole];
+    GOCCIA_NULLISH_MATCH_UNDEFINED:
+      Result := AValue.Kind = grkUndefined;
+    GOCCIA_NULLISH_MATCH_NULL:
+      Result := AValue.Kind = grkNull;
+    GOCCIA_NULLISH_MATCH_HOLE:
+      Result := AValue.Kind = grkHole;
   else
     Result := False;
   end;
@@ -1227,11 +1851,60 @@ begin
   Result := AIndex >= 0;
 end;
 
+function TGocciaVM.TryGetArrayIndexRegister(const AKey: TGocciaRegister;
+  out AIndex: Integer): Boolean;
+begin
+  Result := False;
+  AIndex := -1;
+  case AKey.Kind of
+    grkInt:
+      begin
+        AIndex := AKey.IntValue;
+        Result := AIndex >= 0;
+      end;
+    grkFloat:
+      begin
+        if Frac(AKey.FloatValue) <> 0.0 then
+          Exit;
+        AIndex := Trunc(AKey.FloatValue);
+        Result := AIndex >= 0;
+      end;
+  else
+    Result := TryGetArrayIndex(RegisterToValue(AKey), AIndex);
+  end;
+end;
+
 function TGocciaVM.KeyToPropertyName(const AKey: TGocciaValue): string;
 begin
   if not Assigned(AKey) then
     Exit('');
   Result := AKey.ToStringLiteral.Value;
+end;
+
+function TGocciaVM.KeyToPropertyNameRegister(const AKey: TGocciaRegister): string;
+begin
+  case AKey.Kind of
+    grkUndefined:
+      Result := 'undefined';
+    grkNull:
+      Result := 'null';
+    grkBoolean:
+      if AKey.BoolValue then
+        Result := 'true'
+      else
+        Result := 'false';
+    grkInt:
+      Result := IntToStr(AKey.IntValue);
+    grkFloat:
+      Result := VMRegisterToECMAStringFast(AKey).Value;
+    grkObject:
+      if Assigned(AKey.ObjectValue) then
+        Result := VMRegisterToECMAStringFast(AKey).Value
+      else
+        Result := '';
+  else
+    Result := '';
+  end;
 end;
 
 function TGocciaVM.IterableToArray(const AIterable: TGocciaValue;
@@ -1774,6 +2447,16 @@ begin
   AClassValue.RunDecoratorFieldInitializers(AInstance);
 end;
 
+function TGocciaVM.MaterializeArguments(
+  const AArguments: TGocciaRegisterArray): TGocciaArgumentsCollection;
+var
+  I: Integer;
+begin
+  Result := AcquireArguments(Length(AArguments));
+  for I := 0 to High(AArguments) do
+    Result.Add(RegisterToValue(AArguments[I]));
+end;
+
 procedure TGocciaVM.InvokeImplicitSuperInitialization(
   const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection);
@@ -1802,6 +2485,71 @@ begin
   if not (AClassValue is TGocciaVMClassValue) and
      (AInstance is TGocciaInstanceValue) then
     TGocciaInstanceValue(AInstance).InitializeNativeFromArguments(AArguments);
+  RunClassInitializers(AClassValue, AInstance);
+end;
+
+procedure TGocciaVM.InvokeImplicitSuperInitializationRegisters(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+  const AArguments: TGocciaRegisterArray);
+var
+  BoxedArgs: TGocciaArgumentsCollection;
+  BytecodeConstructor: TGocciaBytecodeFunctionValue;
+begin
+  if not Assigned(AClassValue) then
+    Exit;
+
+  if (AClassValue is TGocciaVMClassValue) and
+     Assigned(TGocciaVMClassValue(AClassValue).FConstructorValue) then
+  begin
+    RunClassInitializers(AClassValue, AInstance);
+    if TGocciaVMClassValue(AClassValue).FConstructorValue is TGocciaBytecodeFunctionValue then
+    begin
+      BytecodeConstructor := TGocciaBytecodeFunctionValue(
+        TGocciaVMClassValue(AClassValue).FConstructorValue);
+      if Assigned(BytecodeConstructor.FClosure) and
+         Assigned(BytecodeConstructor.FClosure.Template) and
+         (not BytecodeConstructor.FClosure.Template.IsAsync) then
+      begin
+        TGocciaVMClassValue(AClassValue).FVM.ExecuteClosureRegisters(
+          BytecodeConstructor.FClosure, RegisterObject(AInstance), AArguments);
+        Exit;
+      end;
+    end;
+
+    BoxedArgs := MaterializeArguments(AArguments);
+    try
+      TGocciaVMClassValue(AClassValue).FVM.InvokeFunctionValue(
+        TGocciaVMClassValue(AClassValue).FConstructorValue,
+        BoxedArgs, AInstance);
+    finally
+      ReleaseArguments(BoxedArgs);
+    end;
+    Exit;
+  end;
+
+  if Assigned(AClassValue.ConstructorMethod) then
+  begin
+    BoxedArgs := MaterializeArguments(AArguments);
+    try
+      RunClassInitializers(AClassValue, AInstance);
+      AClassValue.ConstructorMethod.Call(BoxedArgs, AInstance);
+    finally
+      ReleaseArguments(BoxedArgs);
+    end;
+    Exit;
+  end;
+
+  InvokeImplicitSuperInitializationRegisters(AClassValue.SuperClass, AInstance, AArguments);
+  if not (AClassValue is TGocciaVMClassValue) and
+     (AInstance is TGocciaInstanceValue) then
+  begin
+    BoxedArgs := MaterializeArguments(AArguments);
+    try
+      TGocciaInstanceValue(AInstance).InitializeNativeFromArguments(BoxedArgs);
+    finally
+      ReleaseArguments(BoxedArgs);
+    end;
+  end;
   RunClassInitializers(AClassValue, AInstance);
 end;
 
@@ -2412,8 +3160,48 @@ begin
   ThrowTypeError(CalleeDesc + ' is not a function');
 end;
 
-function TGocciaVM.ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
-  const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+function TGocciaVM.ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosure;
+  const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray): TGocciaRegister;
+begin
+  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, AArguments,
+    Length(AArguments), RegisterUndefined, RegisterUndefined, RegisterUndefined,
+    False);
+end;
+
+function TGocciaVM.ExecuteClosureRegisters0(const AClosure: TGocciaBytecodeClosure;
+  const AThisValue: TGocciaRegister): TGocciaRegister;
+begin
+  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
+    TGocciaRegisterArray(nil), 0, RegisterUndefined, RegisterUndefined,
+    RegisterUndefined, True);
+end;
+
+function TGocciaVM.ExecuteClosureRegisters1(const AClosure: TGocciaBytecodeClosure;
+  const AThisValue, AArg0: TGocciaRegister): TGocciaRegister;
+begin
+  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
+    TGocciaRegisterArray(nil), 1, AArg0, RegisterUndefined, RegisterUndefined,
+    True);
+end;
+
+function TGocciaVM.ExecuteClosureRegisters2(const AClosure: TGocciaBytecodeClosure;
+  const AThisValue, AArg0, AArg1: TGocciaRegister): TGocciaRegister;
+begin
+  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
+    TGocciaRegisterArray(nil), 2, AArg0, AArg1, RegisterUndefined, True);
+end;
+
+function TGocciaVM.ExecuteClosureRegisters3(const AClosure: TGocciaBytecodeClosure;
+  const AThisValue, AArg0, AArg1, AArg2: TGocciaRegister): TGocciaRegister;
+begin
+  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
+    TGocciaRegisterArray(nil), 3, AArg0, AArg1, AArg2, True);
+end;
+
+function TGocciaVM.ExecuteClosureRegistersInternal(
+  const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
+  const AArguments: TGocciaRegisterArray; const AArgCount: Integer;
+  const AArg0, AArg1, AArg2: TGocciaRegister; const AUseFixedArgs: Boolean): TGocciaRegister;
 var
   Frame: TGocciaVMCallFrame;
   SavedRegisters: TGocciaRegisterArray;
@@ -2442,6 +3230,9 @@ var
   Template: TGocciaFunctionTemplate;
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue: TGocciaValue;
+  RegisterArgs: TGocciaRegisterArray;
+  BytecodeFunction: TGocciaBytecodeFunctionValue;
+  BoundFunction: TGocciaBoundFunctionValue;
 begin
   SavedRegisters := FRegisters;
   SavedLocalCells := FLocalCells;
@@ -2451,7 +3242,7 @@ begin
   try
     FRegisters := AcquireRegisters(Max(AClosure.Template.MaxRegisters, 1));
     FLocalCells := AcquireLocalCells(Max(AClosure.Template.MaxRegisters, 1));
-    FArgCount := AArguments.Length;
+    FArgCount := AArgCount;
     FCurrentClosure := AClosure;
     Inc(FFrameDepth);
     if Assigned(TGocciaCallStack.Instance) then
@@ -2464,9 +3255,26 @@ begin
     Template := AClosure.Template;
     Frame.Template := Template;
 
-    SetLocal(0, AThisValue);
-    for I := 0 to AArguments.Length - 1 do
-      SetLocal(I + 1, AArguments.GetElement(I));
+    SetLocalRaw(0, AThisValue);
+    if AUseFixedArgs then
+      case AArgCount of
+        1:
+          SetLocalRaw(1, AArg0);
+        2:
+          begin
+            SetLocalRaw(1, AArg0);
+            SetLocalRaw(2, AArg1);
+          end;
+        3:
+          begin
+            SetLocalRaw(1, AArg0);
+            SetLocalRaw(2, AArg1);
+            SetLocalRaw(3, AArg2);
+          end;
+      end
+    else
+      for I := 0 to High(AArguments) do
+        SetLocalRaw(I + 1, AArguments[I]);
 
     Running := True;
     while Running and (Frame.IP < Template.CodeCount) do
@@ -2481,22 +3289,23 @@ begin
         C := DecodeC(Instruction);
         case TGocciaOpCode(Op) of
       OP_LOAD_CONST:
-        SetRegisterFast(A, ConstantToValue(Template.GetConstantUnchecked(DecodeBx(Instruction))));
+        FRegisters[A] := ValueToRegister(
+          ConstantToValue(Template.GetConstantUnchecked(DecodeBx(Instruction))));
 
       OP_LOAD_UNDEFINED:
-        SetRegisterFast(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+        FRegisters[A] := RegisterUndefined;
 
       OP_LOAD_TRUE:
-        SetRegisterFast(A, TGocciaBooleanLiteralValue.TrueValue);
+        FRegisters[A] := RegisterBoolean(True);
 
       OP_LOAD_FALSE:
-        SetRegisterFast(A, TGocciaBooleanLiteralValue.FalseValue);
+        FRegisters[A] := RegisterBoolean(False);
 
       OP_LOAD_NULL:
-        SetRegisterFast(A, TGocciaNullLiteralValue.NullValue);
+        FRegisters[A] := RegisterNull;
 
       OP_LOAD_HOLE:
-        SetRegisterFast(A, TGocciaHoleValue.HoleValue);
+        FRegisters[A] := RegisterHole;
 
       OP_CHECK_TYPE:
         case TGocciaLocalType(B) of
@@ -2539,19 +3348,16 @@ begin
         SetRegisterFast(A, ToPrimitive(GetRegisterFast(B)));
 
       OP_LOAD_INT:
-        if (DecodesBx(Instruction) >= 0) and (DecodesBx(Instruction) <= 255) then
-          SetRegisterFast(A, TGocciaNumberLiteralValue.SmallInt(DecodesBx(Instruction)))
-        else
-          SetRegisterFast(A, TGocciaNumberLiteralValue.Create(DecodesBx(Instruction)));
+        FRegisters[A] := RegisterInt(DecodesBx(Instruction));
 
       OP_MOVE:
-        SetRegisterFast(A, GetRegisterFast(B));
+        SetRegisterRaw(A, FRegisters[B]);
 
       OP_GET_LOCAL:
-        SetRegisterFast(A, GetLocal(DecodeBx(Instruction)));
+        SetRegisterRaw(A, GetLocalRegister(DecodeBx(Instruction)));
 
       OP_SET_LOCAL:
-        SetLocal(DecodeBx(Instruction), GetRegister(A));
+        SetLocalRaw(DecodeBx(Instruction), FRegisters[A]);
 
       OP_GET_UPVALUE:
       begin
@@ -2559,12 +3365,12 @@ begin
         begin
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-            SetRegister(A, Upvalue.Cell.Value)
+            SetRegisterRaw(A, Upvalue.Cell.Value)
           else
-            SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+            FRegisters[A] := RegisterUndefined;
         end
         else
-          SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+          FRegisters[A] := RegisterUndefined;
       end;
 
       OP_SET_UPVALUE:
@@ -2573,7 +3379,7 @@ begin
         begin
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-            Upvalue.Cell.Value := GetRegister(A);
+            Upvalue.Cell.Value := FRegisters[A];
         end;
       end;
 
@@ -2582,14 +3388,14 @@ begin
           FLocalCells[A] := nil;
 
       OP_ARG_COUNT:
-        SetRegisterFast(A, VMNumberValue(FArgCount));
+        FRegisters[A] := RegisterInt(FArgCount);
 
       OP_PACK_ARGS:
       begin
         ArgsArray := TGocciaArrayValue.Create;
         for I := B to FArgCount - 1 do
-          ArgsArray.Elements.Add(GetLocal(I + 1));
-        SetRegisterFast(A, ArgsArray);
+          ArgsArray.Elements.Add(RegisterToValue(GetLocalRegister(I + 1)));
+        FRegisters[A] := RegisterObject(ArgsArray);
       end;
 
       OP_JUMP:
@@ -2604,11 +3410,11 @@ begin
           Inc(Frame.IP, DecodesBx(Instruction));
 
       OP_JUMP_IF_NULLISH:
-        if MatchesNullishKind(GetRegister(A), B) then
+        if RegisterMatchesNullishKind(FRegisters[A], B) then
           Inc(Frame.IP, C);
 
       OP_JUMP_IF_NOT_NULLISH:
-        if not MatchesNullishKind(GetRegister(A), B) then
+        if not RegisterMatchesNullishKind(FRegisters[A], B) then
           Inc(Frame.IP, C);
 
       OP_PUSH_HANDLER:
@@ -2619,92 +3425,77 @@ begin
           FHandlerStack.Pop;
 
       OP_ADD_INT, OP_ADD_FLOAT:
-      begin
-        LeftNum := GetRegister(B).ToNumberLiteral;
-        RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegisterFast(A, VMNumberValue(LeftNum.Value + RightNum.Value));
-      end;
+        FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) +
+          RegisterToDouble(FRegisters[C]));
 
       OP_SUB_INT, OP_SUB_FLOAT:
-      begin
-        LeftNum := GetRegister(B).ToNumberLiteral;
-        RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegisterFast(A, VMNumberValue(LeftNum.Value - RightNum.Value));
-      end;
+        FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) -
+          RegisterToDouble(FRegisters[C]));
 
       OP_MUL_INT, OP_MUL_FLOAT:
-      begin
-        LeftNum := GetRegister(B).ToNumberLiteral;
-        RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegisterFast(A, VMNumberValue(LeftNum.Value * RightNum.Value));
-      end;
+        FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) *
+          RegisterToDouble(FRegisters[C]));
 
       OP_DIV_INT, OP_DIV_FLOAT:
-      begin
-        LeftNum := GetRegister(B).ToNumberLiteral;
-        RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegisterFast(A, VMNumberValue(LeftNum.Value / RightNum.Value));
-      end;
+        FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) /
+          RegisterToDouble(FRegisters[C]));
 
       OP_MOD_INT, OP_MOD_FLOAT:
-      begin
-        LeftNum := GetRegister(B).ToNumberLiteral;
-        RightNum := GetRegister(C).ToNumberLiteral;
-        SetRegisterFast(A, VMNumberValue(FMod(LeftNum.Value, RightNum.Value)));
-      end;
+        FRegisters[A] := VMNumberRegister(FMod(RegisterToDouble(FRegisters[B]),
+          RegisterToDouble(FRegisters[C])));
 
       OP_EQ_INT, OP_EQ_FLOAT:
-        if GetRegister(B).ToNumberLiteral.Value = GetRegister(C).ToNumberLiteral.Value then
+        if RegisterToDouble(FRegisters[B]) = RegisterToDouble(FRegisters[C]) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
       OP_NEQ_INT, OP_NEQ_FLOAT:
-        if GetRegister(B).ToNumberLiteral.Value <> GetRegister(C).ToNumberLiteral.Value then
+        if RegisterToDouble(FRegisters[B]) <> RegisterToDouble(FRegisters[C]) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
       OP_LT_INT, OP_LT_FLOAT:
-        if GetRegister(B).ToNumberLiteral.Value < GetRegister(C).ToNumberLiteral.Value then
+        if RegisterToDouble(FRegisters[B]) < RegisterToDouble(FRegisters[C]) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
       OP_GT_INT, OP_GT_FLOAT:
-        if GetRegister(B).ToNumberLiteral.Value > GetRegister(C).ToNumberLiteral.Value then
+        if RegisterToDouble(FRegisters[B]) > RegisterToDouble(FRegisters[C]) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
       OP_LTE_INT, OP_LTE_FLOAT:
-        if GetRegister(B).ToNumberLiteral.Value <= GetRegister(C).ToNumberLiteral.Value then
+        if RegisterToDouble(FRegisters[B]) <= RegisterToDouble(FRegisters[C]) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
       OP_GTE_INT, OP_GTE_FLOAT:
-        if GetRegister(B).ToNumberLiteral.Value >= GetRegister(C).ToNumberLiteral.Value then
+        if RegisterToDouble(FRegisters[B]) >= RegisterToDouble(FRegisters[C]) then
           SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
         else
           SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
 
       OP_NEG_INT, OP_NEG_FLOAT:
-        SetRegisterFast(A, VMNumberValue(-GetRegisterFast(B).ToNumberLiteral.Value));
+        FRegisters[A] := VMNumberRegister(-RegisterToDouble(FRegisters[B]));
 
       OP_CONCAT:
       begin
-        LeftValue := GetRegisterFast(B);
-        RightValue := GetRegisterFast(C);
-        if (LeftValue is TGocciaStringLiteralValue) and
-           (RightValue is TGocciaStringLiteralValue) then
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) and
+           (FRegisters[C].Kind = grkObject) and
+           (FRegisters[C].ObjectValue is TGocciaStringLiteralValue) then
           SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-            TGocciaStringLiteralValue(LeftValue).Value +
-            TGocciaStringLiteralValue(RightValue).Value))
+            TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value +
+            TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
           SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-            VMToECMAStringFast(LeftValue).Value +
-            VMToECMAStringFast(RightValue).Value));
+            VMRegisterToECMAStringFast(FRegisters[B]).Value +
+            VMRegisterToECMAStringFast(FRegisters[C]).Value));
       end;
 
       OP_NEW_ARRAY:
@@ -2712,400 +3503,495 @@ begin
 
       OP_ARRAY_POP:
       begin
-        if GetRegister(B) is TGocciaArrayValue then
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaArrayValue) then
         begin
-          if TGocciaArrayValue(GetRegister(B)).Elements.Count = 0 then
-            SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue)
+          if TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count = 0 then
+            FRegisters[A] := RegisterUndefined
           else
           begin
-            SetRegister(A, TGocciaArrayValue(GetRegister(B)).Elements[
-              TGocciaArrayValue(GetRegister(B)).Elements.Count - 1]);
-            TGocciaArrayValue(GetRegister(B)).Elements.Delete(
-              TGocciaArrayValue(GetRegister(B)).Elements.Count - 1);
-            if GetRegister(A) = TGocciaHoleValue.HoleValue then
-              SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+            FRegisters[A] := VMValueToRegisterFast(TGocciaArrayValue(
+              FRegisters[B].ObjectValue).Elements[
+                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count - 1]);
+            TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Delete(
+              TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count - 1);
+            if FRegisters[A].Kind = grkHole then
+              FRegisters[A] := RegisterUndefined;
           end;
         end
         else
-          SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+          FRegisters[A] := RegisterUndefined;
       end;
 
       OP_ARRAY_PUSH:
-        TGocciaArrayValue(GetRegister(A)).Elements.Add(GetRegister(B));
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaArrayValue) then
+          TGocciaArrayValue(FRegisters[A].ObjectValue).Elements.Add(
+            RegisterToValue(FRegisters[B]));
 
       OP_ARRAY_GET:
       begin
-        if GetRegister(B) is TGocciaArrayValue then
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaArrayValue) then
         begin
-          if GetRegister(C) is TGocciaSymbolValue then
-            SetRegister(A, TGocciaArrayValue(GetRegister(B)).GetSymbolProperty(
-              TGocciaSymbolValue(GetRegister(C))))
-          else if TryGetArrayIndex(GetRegister(C), KeyIndex) then
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+            SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) then
           begin
             if (KeyIndex >= 0) and
-               (KeyIndex < TGocciaArrayValue(GetRegister(B)).Elements.Count) then
+               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) then
             begin
-              if TGocciaArrayValue(GetRegister(B)).Elements[KeyIndex] = TGocciaHoleValue.HoleValue then
-                SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue)
+              if TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] =
+                 TGocciaHoleValue.HoleValue then
+                FRegisters[A] := RegisterUndefined
               else
-                SetRegister(A, TGocciaArrayValue(GetRegister(B)).Elements[KeyIndex]);
+                FRegisters[A] := VMValueToRegisterFast(
+                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex]);
             end
             else
-              SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+              FRegisters[A] := RegisterUndefined;
           end
           else
-            SetRegister(A, TGocciaArrayValue(GetRegister(B)).GetProperty(
-              KeyToPropertyName(GetRegister(C))));
+            SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
+              KeyToPropertyNameRegister(FRegisters[C])));
         end
-        else if GetRegister(B) is TGocciaObjectValue then
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaObjectValue) then
         begin
-          if GetRegister(C) is TGocciaSymbolValue then
-            SetRegister(A, TGocciaObjectValue(GetRegister(B)).GetSymbolProperty(
-              TGocciaSymbolValue(GetRegister(C))))
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
           else
-            SetRegister(A, TGocciaObjectValue(GetRegister(B)).GetProperty(
-              KeyToPropertyName(GetRegister(C))));
+            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
+              KeyToPropertyNameRegister(FRegisters[C])));
         end
-        else if GetRegister(B) is TGocciaClassValue then
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaClassValue) then
         begin
-          if GetRegister(C) is TGocciaSymbolValue then
-            SetRegister(A, TGocciaClassValue(GetRegister(B)).GetSymbolProperty(
-              TGocciaSymbolValue(GetRegister(C))))
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
           else
-            SetRegister(A, TGocciaClassValue(GetRegister(B)).GetProperty(
-              KeyToPropertyName(GetRegister(C))));
+            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
+              KeyToPropertyNameRegister(FRegisters[C])));
         end
-        else if GetRegister(B) is TGocciaStringLiteralValue then
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) then
         begin
-          if GetRegister(C) is TGocciaSymbolValue then
-            SetRegister(A, GetRegister(B).Box.GetSymbolProperty(
-              TGocciaSymbolValue(GetRegister(C))))
-          else if TryGetArrayIndex(GetRegister(C), KeyIndex) and
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+            SetRegister(A, FRegisters[B].ObjectValue.Box.GetSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) and
              (KeyIndex >= 0) and
-             (KeyIndex < Length(TGocciaStringLiteralValue(GetRegister(B)).Value)) then
+             (KeyIndex < Length(TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value)) then
             SetRegister(A, TGocciaStringLiteralValue.Create(
-              TGocciaStringLiteralValue(GetRegister(B)).Value[KeyIndex + 1]))
+              TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value[KeyIndex + 1]))
           else
-            SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+            FRegisters[A] := RegisterUndefined;
         end
         else
-          SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+          FRegisters[A] := RegisterUndefined;
       end;
 
       OP_ARRAY_SET:
       begin
-        if GetRegister(A) is TGocciaArrayValue then
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaArrayValue) then
         begin
-          if GetRegister(B) is TGocciaSymbolValue then
-            TGocciaArrayValue(GetRegister(A)).AssignSymbolProperty(
-              TGocciaSymbolValue(GetRegister(B)), GetRegister(C))
-          else if TryGetArrayIndex(GetRegister(B), KeyIndex) then
-            TGocciaArrayValue(GetRegister(A)).SetElement(KeyIndex, GetRegister(C))
+          if (FRegisters[B].Kind = grkObject) and
+             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
+            TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
+              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
+          else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
+            TGocciaArrayValue(FRegisters[A].ObjectValue).SetElement(
+              KeyIndex, RegisterToValue(FRegisters[C]))
           else
-            TGocciaArrayValue(GetRegister(A)).SetProperty(
-              KeyToPropertyName(GetRegister(B)),
-              GetRegister(C));
+            TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
+              KeyToPropertyNameRegister(FRegisters[B]),
+              RegisterToValue(FRegisters[C]));
         end
-        else if GetRegister(A) is TGocciaObjectValue then
+        else if (FRegisters[A].Kind = grkObject) and
+                (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
-          if GetRegister(B) is TGocciaSymbolValue then
-            TGocciaObjectValue(GetRegister(A)).AssignSymbolProperty(
-              TGocciaSymbolValue(GetRegister(B)), GetRegister(C))
+          if (FRegisters[B].Kind = grkObject) and
+             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
+            TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
+              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
           else
-            TGocciaObjectValue(GetRegister(A)).SetProperty(
-              KeyToPropertyName(GetRegister(B)),
-              GetRegister(C));
+            TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
+              KeyToPropertyNameRegister(FRegisters[B]),
+              RegisterToValue(FRegisters[C]));
         end
-        else if GetRegister(A) is TGocciaClassValue then
+        else if (FRegisters[A].Kind = grkObject) and
+                (FRegisters[A].ObjectValue is TGocciaClassValue) then
         begin
-          if GetRegister(B) is TGocciaSymbolValue then
-            TGocciaClassValue(GetRegister(A)).AssignSymbolProperty(
-              TGocciaSymbolValue(GetRegister(B)), GetRegister(C))
+          if (FRegisters[B].Kind = grkObject) and
+             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
+            TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
+              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
           else
-            TGocciaClassValue(GetRegister(A)).SetProperty(
-              KeyToPropertyName(GetRegister(B)),
-              GetRegister(C));
+            TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
+              KeyToPropertyNameRegister(FRegisters[B]),
+              RegisterToValue(FRegisters[C]));
         end;
       end;
 
       OP_GET_LENGTH:
       begin
-        if GetRegister(B) is TGocciaArrayValue then
-          SetRegister(A, VMNumberValue(TGocciaArrayValue(GetRegister(B)).GetLength))
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaArrayValue) then
+          FRegisters[A] := VMNumberRegister(
+            TGocciaArrayValue(FRegisters[B].ObjectValue).GetLength)
         else
-          SetRegister(A, TGocciaNumberLiteralValue.ZeroValue);
+          FRegisters[A] := RegisterInt(0);
       end;
 
       OP_NEW_OBJECT:
       begin
         if not Assigned(TGocciaObjectValue.SharedObjectPrototype) then
           TGocciaObjectValue.InitializeSharedPrototype;
-        SetRegister(A, TGocciaObjectValue.Create(
+        FRegisters[A] := RegisterObject(TGocciaVMLiteralObjectValue.Create(
           TGocciaObjectValue.SharedObjectPrototype,
           DecodeBx(Instruction)));
       end;
 
       OP_NEW_CLASS:
       begin
-        SetRegister(A, TGocciaVMClassValue.Create(Self,
+        FRegisters[A] := RegisterObject(TGocciaVMClassValue.Create(Self,
           Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue, nil));
-        TGocciaVMClassValue(GetRegister(A)).Prototype.AssignProperty(
-          PROP_CONSTRUCTOR, GetRegister(A));
+        TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.AssignProperty(
+          PROP_CONSTRUCTOR, FRegisters[A].ObjectValue);
       end;
 
       OP_CLASS_SET_SUPER:
       begin
-        if (GetRegister(A) is TGocciaVMClassValue) and
-           (GetRegister(B) is TGocciaClassValue) then
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaVMClassValue) and
+           (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaClassValue) then
         begin
-          TGocciaVMClassValue(GetRegister(A)).SuperClass :=
-            TGocciaClassValue(GetRegister(B));
-          TGocciaVMClassValue(GetRegister(A)).Prototype.Prototype :=
-            TGocciaClassValue(GetRegister(B)).Prototype;
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).SuperClass :=
+            TGocciaClassValue(FRegisters[B].ObjectValue);
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.Prototype :=
+            TGocciaClassValue(FRegisters[B].ObjectValue).Prototype;
         end;
       end;
 
       OP_CLASS_ADD_METHOD_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(B).StringValue;
-        if GetRegister(A) is TGocciaVMClassValue then
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
         begin
           if GlobalName = PROP_CONSTRUCTOR then
           begin
-            TGocciaVMClassValue(GetRegister(A)).SetVMConstructor(GetRegister(C));
-            TGocciaVMClassValue(GetRegister(A)).Prototype.AssignProperty(
-              PROP_CONSTRUCTOR, GetRegister(A));
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).SetVMConstructor(
+              RegisterToValue(FRegisters[C]));
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.AssignProperty(
+              PROP_CONSTRUCTOR, FRegisters[A].ObjectValue);
           end
           else
-            TGocciaVMClassValue(GetRegister(A)).Prototype.AssignProperty(
-              GlobalName, GetRegister(C));
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.AssignProperty(
+              GlobalName, RegisterToValue(FRegisters[C]));
         end
+        else if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
+          SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RegisterToValue(FRegisters[C]))
         else
           SetPropertyValue(GetRegister(A), GlobalName, GetRegister(C));
       end;
 
       OP_CLASS_SET_FIELD_INITIALIZER:
       begin
-        if GetRegister(A) is TGocciaVMClassValue then
-          TGocciaVMClassValue(GetRegister(A)).SetMethodInitializers(
-            [GetRegister(B)]);
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).SetMethodInitializers(
+            [RegisterToValue(FRegisters[B])]);
       end;
 
       OP_GET_PROP_CONST:
-        SetRegister(A, GetPropertyValue(GetRegister(B),
-          Template.GetConstantUnchecked(C).StringValue));
+        if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) then
+        begin
+          GlobalName := Template.GetConstantUnchecked(C).StringValue;
+          if (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
+             TGocciaVMLiteralObjectValue(FRegisters[B].ObjectValue).TryGetOwnDataPropertyFastRegister(
+               GlobalName, FRegisters[A]) then
+            { fast path already assigned }
+          else
+            SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue, GlobalName));
+        end
+        else
+          SetRegister(A, GetPropertyValue(GetRegister(B),
+            Template.GetConstantUnchecked(C).StringValue));
 
       OP_SET_PROP_CONST:
-        SetPropertyValue(GetRegister(A),
-          Template.GetConstantUnchecked(B).StringValue,
-          GetRegister(C));
+        if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
+        begin
+          GlobalName := Template.GetConstantUnchecked(B).StringValue;
+          RightValue := RegisterToValue(FRegisters[C]);
+          if FRegisters[A].ObjectValue is TGocciaVMLiteralObjectValue then
+          begin
+            if not TGocciaVMLiteralObjectValue(FRegisters[A].ObjectValue)
+              .TrySetLiteralDataPropertyFast(GlobalName, RightValue) then
+              SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RightValue);
+          end
+          else
+            SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RightValue);
+        end
+        else
+          SetPropertyValue(GetRegister(A),
+            Template.GetConstantUnchecked(B).StringValue,
+            GetRegister(C));
 
       OP_DELETE_PROP_CONST:
       begin
-        if GetRegister(A) is TGocciaObjectValue then
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
-          if TGocciaObjectValue(GetRegister(A)).DeleteProperty(
+          if TGocciaObjectValue(FRegisters[A].ObjectValue).DeleteProperty(
             Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue) then
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+            FRegisters[A] := RegisterBoolean(True)
           else
             ThrowTypeError('Cannot delete property ''' +
               Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue +
               ''' of [object Object]');
         end
         else
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue);
+          FRegisters[A] := RegisterBoolean(True);
       end;
 
       OP_UNPACK:
       begin
-        if GetRegister(B) is TGocciaArrayValue then
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaArrayValue) then
         begin
           ArgsArray := TGocciaArrayValue.Create;
-          for I := C to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
-            ArgsArray.Elements.Add(TGocciaArrayValue(GetRegister(B)).GetElement(I));
-          SetRegister(A, ArgsArray);
+          for I := C to TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count - 1 do
+            ArgsArray.Elements.Add(
+              TGocciaArrayValue(FRegisters[B].ObjectValue).GetElement(I));
+          FRegisters[A] := RegisterObject(ArgsArray);
         end
         else
-          SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+          FRegisters[A] := RegisterUndefined;
       end;
 
       OP_GET_INDEX:
       begin
-        if GetRegister(B) is TGocciaArrayValue then
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaArrayValue) then
         begin
-          if GetRegister(C) is TGocciaSymbolValue then
-            SetRegister(A, TGocciaArrayValue(GetRegister(B)).GetSymbolProperty(
-              TGocciaSymbolValue(GetRegister(C))))
-          else if TryGetArrayIndex(GetRegister(C), KeyIndex) then
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+            SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) then
           begin
             if (KeyIndex >= 0) and
-               (KeyIndex < TGocciaArrayValue(GetRegister(B)).Elements.Count) then
+               (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) then
             begin
-              if TGocciaArrayValue(GetRegister(B)).Elements[KeyIndex] = TGocciaHoleValue.HoleValue then
-                SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue)
+              if TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex] =
+                 TGocciaHoleValue.HoleValue then
+                FRegisters[A] := RegisterUndefined
               else
-                SetRegister(A, TGocciaArrayValue(GetRegister(B)).Elements[KeyIndex]);
+                FRegisters[A] := VMValueToRegisterFast(
+                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[KeyIndex]);
             end
             else
-              SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+              FRegisters[A] := RegisterUndefined;
           end
           else
-            SetRegister(A, TGocciaArrayValue(GetRegister(B)).GetProperty(
-              KeyToPropertyName(GetRegister(C))));
+            SetRegister(A, TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(
+              KeyToPropertyNameRegister(FRegisters[C])));
         end
-        else if GetRegister(B) is TGocciaObjectValue then
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaObjectValue) then
         begin
-          if GetRegister(C) is TGocciaSymbolValue then
-            SetRegister(A, TGocciaObjectValue(GetRegister(B)).GetSymbolProperty(
-              TGocciaSymbolValue(GetRegister(C))))
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else if (FRegisters[B].ObjectValue is TGocciaVMLiteralObjectValue) and
+                  TGocciaVMLiteralObjectValue(FRegisters[B].ObjectValue).TryGetOwnDataPropertyFastRegister(
+                    KeyToPropertyNameRegister(FRegisters[C]), FRegisters[A]) then
+            { fast path already assigned }
           else
-            SetRegister(A, TGocciaObjectValue(GetRegister(B)).GetProperty(
-              KeyToPropertyName(GetRegister(C))));
+            SetRegister(A, TGocciaObjectValue(FRegisters[B].ObjectValue).GetProperty(
+              KeyToPropertyNameRegister(FRegisters[C])));
         end
-        else if GetRegister(B) is TGocciaStringLiteralValue then
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) then
         begin
-          if GetRegister(C) is TGocciaSymbolValue then
-            SetRegister(A, GetRegister(B).Box.GetSymbolProperty(
-              TGocciaSymbolValue(GetRegister(C))))
-          else if TryGetArrayIndex(GetRegister(C), KeyIndex) and
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+            SetRegister(A, FRegisters[B].ObjectValue.Box.GetSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
+          else if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) and
              (KeyIndex >= 0) and
-             (KeyIndex < Length(TGocciaStringLiteralValue(GetRegister(B)).Value)) then
+             (KeyIndex < Length(TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value)) then
             SetRegister(A, TGocciaStringLiteralValue.Create(
-              TGocciaStringLiteralValue(GetRegister(B)).Value[KeyIndex + 1]))
+              TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value[KeyIndex + 1]))
           else
             SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
         end
-        else if GetRegister(B) is TGocciaClassValue then
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaClassValue) then
         begin
-          if GetRegister(C) is TGocciaSymbolValue then
-            SetRegister(A, TGocciaClassValue(GetRegister(B)).GetSymbolProperty(
-              TGocciaSymbolValue(GetRegister(C))))
+          if (FRegisters[C].Kind = grkObject) and
+             (FRegisters[C].ObjectValue is TGocciaSymbolValue) then
+            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetSymbolProperty(
+              TGocciaSymbolValue(FRegisters[C].ObjectValue)))
           else
-            SetRegister(A, TGocciaClassValue(GetRegister(B)).GetProperty(
-              KeyToPropertyName(GetRegister(C))));
+            SetRegister(A, TGocciaClassValue(FRegisters[B].ObjectValue).GetProperty(
+              KeyToPropertyNameRegister(FRegisters[C])));
         end
         else
-          SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+          FRegisters[A] := RegisterUndefined;
       end;
 
       OP_SET_INDEX:
       begin
-        if GetRegister(A) is TGocciaArrayValue then
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaArrayValue) then
         begin
-          if GetRegister(B) is TGocciaSymbolValue then
-            TGocciaArrayValue(GetRegister(A)).AssignSymbolProperty(
-              TGocciaSymbolValue(GetRegister(B)), GetRegister(C))
-          else if TryGetArrayIndex(GetRegister(B), KeyIndex) then
-            TGocciaArrayValue(GetRegister(A)).SetElement(KeyIndex, GetRegister(C))
+          if (FRegisters[B].Kind = grkObject) and
+             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
+            TGocciaArrayValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
+              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
+          else if TryGetArrayIndexRegister(FRegisters[B], KeyIndex) then
+            TGocciaArrayValue(FRegisters[A].ObjectValue).SetElement(
+              KeyIndex, RegisterToValue(FRegisters[C]))
           else
-            TGocciaArrayValue(GetRegister(A)).SetProperty(
-              KeyToPropertyName(GetRegister(B)),
-              GetRegister(C));
+            TGocciaArrayValue(FRegisters[A].ObjectValue).SetProperty(
+              KeyToPropertyNameRegister(FRegisters[B]),
+              RegisterToValue(FRegisters[C]));
         end
-        else if GetRegister(A) is TGocciaObjectValue then
+        else if (FRegisters[A].Kind = grkObject) and
+                (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
-          if GetRegister(B) is TGocciaSymbolValue then
-            TGocciaObjectValue(GetRegister(A)).AssignSymbolProperty(
-              TGocciaSymbolValue(GetRegister(B)), GetRegister(C))
+          if (FRegisters[B].Kind = grkObject) and
+             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
+            TGocciaObjectValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
+              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
           else
-            TGocciaObjectValue(GetRegister(A)).SetProperty(
-              KeyToPropertyName(GetRegister(B)),
-              GetRegister(C));
+            TGocciaObjectValue(FRegisters[A].ObjectValue).SetProperty(
+              KeyToPropertyNameRegister(FRegisters[B]),
+              RegisterToValue(FRegisters[C]));
         end
-        else if GetRegister(A) is TGocciaClassValue then
+        else if (FRegisters[A].Kind = grkObject) and
+                (FRegisters[A].ObjectValue is TGocciaClassValue) then
         begin
-          if GetRegister(B) is TGocciaSymbolValue then
-            TGocciaClassValue(GetRegister(A)).AssignSymbolProperty(
-              TGocciaSymbolValue(GetRegister(B)), GetRegister(C))
+          if (FRegisters[B].Kind = grkObject) and
+             (FRegisters[B].ObjectValue is TGocciaSymbolValue) then
+            TGocciaClassValue(FRegisters[A].ObjectValue).AssignSymbolProperty(
+              TGocciaSymbolValue(FRegisters[B].ObjectValue), RegisterToValue(FRegisters[C]))
           else
-            TGocciaClassValue(GetRegister(A)).SetProperty(
-              KeyToPropertyName(GetRegister(B)),
-              GetRegister(C));
+            TGocciaClassValue(FRegisters[A].ObjectValue).SetProperty(
+              KeyToPropertyNameRegister(FRegisters[B]),
+              RegisterToValue(FRegisters[C]));
         end;
       end;
 
       OP_ADD:
       begin
-        LeftValue := GetRegisterFast(B);
-        RightValue := GetRegisterFast(C);
-        if (LeftValue is TGocciaNumberLiteralValue) and
-           (RightValue is TGocciaNumberLiteralValue) then
-          SetRegisterFast(A, VMAddValues(LeftValue, RightValue))
-        else if (LeftValue is TGocciaStringLiteralValue) and
-                (RightValue is TGocciaStringLiteralValue) then
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) +
+            RegisterToDouble(FRegisters[C]))
+        else if (((FRegisters[B].Kind = grkObject) and
+                  (FRegisters[B].ObjectValue is TGocciaStringLiteralValue)) or
+                 ((FRegisters[C].Kind = grkObject) and
+                  (FRegisters[C].ObjectValue is TGocciaStringLiteralValue))) and
+                (not ((FRegisters[B].Kind = grkObject) and
+                      Assigned(FRegisters[B].ObjectValue) and
+                      (not FRegisters[B].ObjectValue.IsPrimitive))) and
+                (not ((FRegisters[C].Kind = grkObject) and
+                      Assigned(FRegisters[C].ObjectValue) and
+                      (not FRegisters[C].ObjectValue.IsPrimitive))) then
           SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-            TGocciaStringLiteralValue(LeftValue).Value +
-            TGocciaStringLiteralValue(RightValue).Value))
-        else if LeftValue.IsPrimitive and RightValue.IsPrimitive then
+            VMRegisterToECMAStringFast(FRegisters[B]).Value +
+            VMRegisterToECMAStringFast(FRegisters[C]).Value))
+        else
         begin
-          if (LeftValue is TGocciaStringLiteralValue) or
+          LeftValue := GetRegisterFast(B);
+          RightValue := GetRegisterFast(C);
+          if (LeftValue is TGocciaStringLiteralValue) and
              (RightValue is TGocciaStringLiteralValue) then
             SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-              LeftValue.ToStringLiteral.Value + RightValue.ToStringLiteral.Value))
+              TGocciaStringLiteralValue(LeftValue).Value +
+              TGocciaStringLiteralValue(RightValue).Value))
+          else if LeftValue.IsPrimitive and RightValue.IsPrimitive then
+          begin
+            if (LeftValue is TGocciaStringLiteralValue) or
+               (RightValue is TGocciaStringLiteralValue) then
+              SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+                LeftValue.ToStringLiteral.Value + RightValue.ToStringLiteral.Value))
+            else
+              SetRegisterFast(A, VMAddValues(LeftValue, RightValue));
+          end
           else
-            SetRegisterFast(A, VMAddValues(LeftValue, RightValue));
-        end
-        else
-          SetRegister(A, VMAddValues(LeftValue, RightValue));
+            SetRegister(A, VMAddValues(LeftValue, RightValue));
+        end;
       end;
 
       OP_SUB:
       begin
-        LeftValue := GetRegisterFast(B);
-        RightValue := GetRegisterFast(C);
-        if (LeftValue is TGocciaNumberLiteralValue) and
-           (RightValue is TGocciaNumberLiteralValue) then
-          SetRegisterFast(A, VMSubtractValues(LeftValue, RightValue))
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) -
+            RegisterToDouble(FRegisters[C]))
         else
-          SetRegister(A, VMSubtractValues(LeftValue, RightValue));
+          SetRegister(A, VMSubtractValues(GetRegisterFast(B), GetRegisterFast(C)));
       end;
 
       OP_MUL:
       begin
-        LeftValue := GetRegisterFast(B);
-        RightValue := GetRegisterFast(C);
-        if (LeftValue is TGocciaNumberLiteralValue) and
-           (RightValue is TGocciaNumberLiteralValue) then
-          SetRegisterFast(A, VMMultiplyValues(LeftValue, RightValue))
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) *
+            RegisterToDouble(FRegisters[C]))
         else
-          SetRegister(A, VMMultiplyValues(LeftValue, RightValue));
+          SetRegister(A, VMMultiplyValues(GetRegisterFast(B), GetRegisterFast(C)));
       end;
 
       OP_DIV:
       begin
-        LeftValue := GetRegisterFast(B);
-        RightValue := GetRegisterFast(C);
-        if (LeftValue is TGocciaNumberLiteralValue) and
-           (RightValue is TGocciaNumberLiteralValue) then
-          SetRegisterFast(A, VMDivideValues(LeftValue, RightValue))
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) /
+            RegisterToDouble(FRegisters[C]))
         else
-          SetRegister(A, VMDivideValues(LeftValue, RightValue));
+          SetRegister(A, VMDivideValues(GetRegisterFast(B), GetRegisterFast(C)));
       end;
 
       OP_MOD:
       begin
-        LeftValue := GetRegisterFast(B);
-        RightValue := GetRegisterFast(C);
-        if (LeftValue is TGocciaNumberLiteralValue) and
-           (RightValue is TGocciaNumberLiteralValue) then
-          SetRegisterFast(A, VMModuloValues(LeftValue, RightValue))
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(FMod(RegisterToDouble(FRegisters[B]),
+            RegisterToDouble(FRegisters[C])))
         else
-          SetRegister(A, VMModuloValues(LeftValue, RightValue));
+          SetRegister(A, VMModuloValues(GetRegisterFast(B), GetRegisterFast(C)));
       end;
 
       OP_POW:
       begin
-        LeftValue := GetRegisterFast(B);
-        RightValue := GetRegisterFast(C);
-        if (LeftValue is TGocciaNumberLiteralValue) and
-           (RightValue is TGocciaNumberLiteralValue) then
-          SetRegisterFast(A, VMPowerValues(LeftValue, RightValue))
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(Power(RegisterToDouble(FRegisters[B]),
+            RegisterToDouble(FRegisters[C])))
         else
-          SetRegister(A, VMPowerValues(LeftValue, RightValue));
+          SetRegister(A, VMPowerValues(GetRegisterFast(B), GetRegisterFast(C)));
       end;
 
       OP_NEG:
-        SetRegister(A, VMNumberValue(-GetRegister(B).ToNumberLiteral.Value));
+        if RegisterIsNumericScalar(FRegisters[B]) then
+          FRegisters[A] := VMNumberRegister(-RegisterToDouble(FRegisters[B]))
+        else
+          SetRegister(A, VMNumberValue(-GetRegister(B).ToNumberLiteral.Value));
 
       OP_BAND:
         SetRegister(A, VMBitwiseAndValues(GetRegister(B), GetRegister(C)));
@@ -3136,122 +4022,97 @@ begin
 
       OP_LT:
       begin
-        LeftValue := GetRegisterFast(B);
-        RightValue := GetRegisterFast(C);
-        if (LeftValue is TGocciaStringLiteralValue) and
-           (RightValue is TGocciaStringLiteralValue) then
-        begin
-          if TGocciaStringLiteralValue(LeftValue).Value <
-             TGocciaStringLiteralValue(RightValue).Value then
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
-          else
-            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
-        end
-        else if (LeftValue is TGocciaNumberLiteralValue) and
-                (RightValue is TGocciaNumberLiteralValue) then
-        begin
-          if VMCompareNumbers(TGocciaNumberLiteralValue(LeftValue),
-             TGocciaNumberLiteralValue(RightValue), False) then
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
-          else
-            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
-        end
-        else if VMLessThan(LeftValue, RightValue) then
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterBoolean(RegisterToDouble(FRegisters[B]) <
+            RegisterToDouble(FRegisters[C]))
         else
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        begin
+          LeftValue := GetRegisterFast(B);
+          RightValue := GetRegisterFast(C);
+          if (LeftValue is TGocciaStringLiteralValue) and
+             (RightValue is TGocciaStringLiteralValue) then
+            FRegisters[A] := RegisterBoolean(
+              TGocciaStringLiteralValue(LeftValue).Value <
+              TGocciaStringLiteralValue(RightValue).Value)
+          else
+            FRegisters[A] := RegisterBoolean(VMLessThan(LeftValue, RightValue));
+        end;
       end;
 
       OP_GT:
       begin
-        LeftValue := GetRegisterFast(B);
-        RightValue := GetRegisterFast(C);
-        if (LeftValue is TGocciaStringLiteralValue) and
-           (RightValue is TGocciaStringLiteralValue) then
-        begin
-          if TGocciaStringLiteralValue(LeftValue).Value >
-             TGocciaStringLiteralValue(RightValue).Value then
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
-          else
-            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
-        end
-        else if (LeftValue is TGocciaNumberLiteralValue) and
-                (RightValue is TGocciaNumberLiteralValue) then
-        begin
-          if VMCompareNumbers(TGocciaNumberLiteralValue(LeftValue),
-             TGocciaNumberLiteralValue(RightValue), True) then
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
-          else
-            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
-        end
-        else if VMGreaterThan(LeftValue, RightValue) then
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterBoolean(RegisterToDouble(FRegisters[B]) >
+            RegisterToDouble(FRegisters[C]))
         else
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        begin
+          LeftValue := GetRegisterFast(B);
+          RightValue := GetRegisterFast(C);
+          if (LeftValue is TGocciaStringLiteralValue) and
+             (RightValue is TGocciaStringLiteralValue) then
+            FRegisters[A] := RegisterBoolean(
+              TGocciaStringLiteralValue(LeftValue).Value >
+              TGocciaStringLiteralValue(RightValue).Value)
+          else
+            FRegisters[A] := RegisterBoolean(VMGreaterThan(LeftValue, RightValue));
+        end;
       end;
 
       OP_LTE:
       begin
-        LeftValue := GetRegisterFast(B);
-        RightValue := GetRegisterFast(C);
-        if (LeftValue is TGocciaStringLiteralValue) and
-           (RightValue is TGocciaStringLiteralValue) then
-        begin
-          if TGocciaStringLiteralValue(LeftValue).Value <=
-             TGocciaStringLiteralValue(RightValue).Value then
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
-          else
-            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
-        end
-        else if (LeftValue is TGocciaNumberLiteralValue) and
-                (RightValue is TGocciaNumberLiteralValue) then
-        begin
-          if (not TGocciaNumberLiteralValue(LeftValue).IsNaN) and
-             (not TGocciaNumberLiteralValue(RightValue).IsNaN) and
-             (not VMCompareNumbers(TGocciaNumberLiteralValue(LeftValue),
-               TGocciaNumberLiteralValue(RightValue), True)) then
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
-          else
-            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
-        end
-        else if VMLessThanOrEqual(LeftValue, RightValue) then
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterBoolean(RegisterToDouble(FRegisters[B]) <=
+            RegisterToDouble(FRegisters[C]))
         else
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        begin
+          LeftValue := GetRegisterFast(B);
+          RightValue := GetRegisterFast(C);
+          if (LeftValue is TGocciaStringLiteralValue) and
+             (RightValue is TGocciaStringLiteralValue) then
+            FRegisters[A] := RegisterBoolean(
+              TGocciaStringLiteralValue(LeftValue).Value <=
+              TGocciaStringLiteralValue(RightValue).Value)
+          else
+            FRegisters[A] := RegisterBoolean(VMLessThanOrEqual(LeftValue, RightValue));
+        end;
       end;
 
       OP_GTE:
       begin
-        LeftValue := GetRegisterFast(B);
-        RightValue := GetRegisterFast(C);
-        if (LeftValue is TGocciaStringLiteralValue) and
-           (RightValue is TGocciaStringLiteralValue) then
-        begin
-          if TGocciaStringLiteralValue(LeftValue).Value >=
-             TGocciaStringLiteralValue(RightValue).Value then
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
-          else
-            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
-        end
-        else if (LeftValue is TGocciaNumberLiteralValue) and
-                (RightValue is TGocciaNumberLiteralValue) then
-        begin
-          if (not TGocciaNumberLiteralValue(LeftValue).IsNaN) and
-             (not TGocciaNumberLiteralValue(RightValue).IsNaN) and
-             (not VMCompareNumbers(TGocciaNumberLiteralValue(LeftValue),
-               TGocciaNumberLiteralValue(RightValue), False)) then
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
-          else
-            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
-        end
-        else if VMGreaterThanOrEqual(LeftValue, RightValue) then
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterBoolean(RegisterToDouble(FRegisters[B]) >=
+            RegisterToDouble(FRegisters[C]))
         else
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        begin
+          LeftValue := GetRegisterFast(B);
+          RightValue := GetRegisterFast(C);
+          if (LeftValue is TGocciaStringLiteralValue) and
+             (RightValue is TGocciaStringLiteralValue) then
+            FRegisters[A] := RegisterBoolean(
+              TGocciaStringLiteralValue(LeftValue).Value >=
+              TGocciaStringLiteralValue(RightValue).Value)
+          else
+            FRegisters[A] := RegisterBoolean(VMGreaterThanOrEqual(LeftValue, RightValue));
+        end;
       end;
 
       OP_TYPEOF:
-        SetRegister(A, TGocciaStringLiteralValue.Create(GetRegister(B).TypeOf));
+        case FRegisters[B].Kind of
+          grkUndefined:
+            SetRegister(A, TGocciaStringLiteralValue.Create('undefined'));
+          grkNull, grkHole:
+            SetRegister(A, TGocciaStringLiteralValue.Create('object'));
+          grkBoolean:
+            SetRegister(A, TGocciaStringLiteralValue.Create('boolean'));
+          grkInt, grkFloat:
+            SetRegister(A, TGocciaStringLiteralValue.Create('number'));
+        else
+          SetRegister(A, TGocciaStringLiteralValue.Create(GetRegister(B).TypeOf));
+        end;
 
       OP_IS_INSTANCE:
         SetRegister(A, VMInstanceOfValue(GetRegister(B), GetRegister(C)));
@@ -3260,35 +4121,52 @@ begin
         SetRegister(A, HasPropertyValue(GetRegister(B), GetRegister(C)));
 
       OP_TO_NUMBER:
-        SetRegister(A, GetRegister(B).ToNumberLiteral);
+        case FRegisters[B].Kind of
+          grkInt, grkFloat:
+            FRegisters[A] := FRegisters[B];
+          grkBoolean:
+            if FRegisters[B].BoolValue then
+              FRegisters[A] := RegisterInt(1)
+            else
+              FRegisters[A] := RegisterInt(0);
+          grkNull:
+            FRegisters[A] := RegisterInt(0);
+          grkUndefined, grkHole:
+            FRegisters[A] := RegisterObject(TGocciaNumberLiteralValue.NaNValue);
+        else
+          SetRegister(A, GetRegister(B).ToNumberLiteral);
+        end;
 
       OP_TO_STRING:
-        SetRegisterFast(A, VMToECMAStringFast(GetRegisterFast(B)));
+        SetRegisterFast(A, VMRegisterToECMAStringFast(FRegisters[B]));
 
       OP_DEL_INDEX:
       begin
-        if GetRegister(B) is TGocciaArrayValue then
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaArrayValue) then
         begin
-          if TryGetArrayIndex(GetRegister(C), KeyIndex) and
+          if TryGetArrayIndexRegister(FRegisters[C], KeyIndex) and
              (KeyIndex >= 0) and
-             (KeyIndex < TGocciaArrayValue(GetRegister(B)).Elements.Count) then
+             (KeyIndex < TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count) then
           begin
-            TGocciaArrayValue(GetRegister(B)).SetElement(KeyIndex, TGocciaHoleValue.HoleValue);
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue);
+            TGocciaArrayValue(FRegisters[B].ObjectValue).SetElement(
+              KeyIndex, TGocciaHoleValue.HoleValue);
+            FRegisters[A] := RegisterBoolean(True);
           end
           else
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue);
+            FRegisters[A] := RegisterBoolean(True);
         end
-        else if GetRegister(B) is TGocciaObjectValue then
+        else if (FRegisters[B].Kind = grkObject) and
+                (FRegisters[B].ObjectValue is TGocciaObjectValue) then
         begin
-          if TGocciaObjectValue(GetRegister(B)).DeleteProperty(
-            KeyToPropertyName(GetRegister(C))) then
-            SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+          if TGocciaObjectValue(FRegisters[B].ObjectValue).DeleteProperty(
+            KeyToPropertyNameRegister(FRegisters[C])) then
+            FRegisters[A] := RegisterBoolean(True)
           else
-            SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+            FRegisters[A] := RegisterBoolean(False);
         end
         else
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue);
+          FRegisters[A] := RegisterBoolean(True);
       end;
 
       OP_CLOSURE:
@@ -3310,6 +4188,79 @@ begin
 
       OP_CALL:
       begin
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaBoundFunctionValue) then
+        begin
+          BoundFunction := TGocciaBoundFunctionValue(FRegisters[A].ObjectValue);
+          if BoundFunction.OriginalFunction is TGocciaBytecodeFunctionValue then
+          begin
+            BytecodeFunction := TGocciaBytecodeFunctionValue(BoundFunction.OriginalFunction);
+            if Assigned(BytecodeFunction.FClosure) and
+               Assigned(BytecodeFunction.FClosure.Template) and
+               (not BytecodeFunction.FClosure.Template.IsAsync) then
+            begin
+              if (C and 1) = 0 then
+              begin
+                SetLength(RegisterArgs, BoundFunction.BoundArgCount + B);
+                for I := 0 to BoundFunction.BoundArgCount - 1 do
+                  RegisterArgs[I] := ValueToRegister(BoundFunction.GetBoundArg(I));
+                for I := 0 to B - 1 do
+                  RegisterArgs[BoundFunction.BoundArgCount + I] := FRegisters[A + 1 + I];
+                FRegisters[A] := ExecuteClosureRegisters(BytecodeFunction.FClosure,
+                  ValueToRegister(BoundFunction.BoundThis), RegisterArgs);
+                Continue;
+              end
+              else if (FRegisters[B].Kind = grkObject) and
+                      (FRegisters[B].ObjectValue is TGocciaArrayValue) then
+              begin
+                SetLength(RegisterArgs,
+                  BoundFunction.BoundArgCount +
+                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
+                for I := 0 to BoundFunction.BoundArgCount - 1 do
+                  RegisterArgs[I] := VMValueToRegisterFast(BoundFunction.GetBoundArg(I));
+                for I := 0 to TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count - 1 do
+                  RegisterArgs[BoundFunction.BoundArgCount + I] := VMValueToRegisterFast(
+                    TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[I]);
+                FRegisters[A] := ExecuteClosureRegisters(BytecodeFunction.FClosure,
+                  ValueToRegister(BoundFunction.BoundThis), RegisterArgs);
+                Continue;
+              end;
+            end;
+          end;
+        end;
+
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue) then
+        begin
+          BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
+          if Assigned(BytecodeFunction.FClosure) and
+             Assigned(BytecodeFunction.FClosure.Template) and
+             (not BytecodeFunction.FClosure.Template.IsAsync) then
+          begin
+            if (C and 1) = 0 then
+            begin
+              SetLength(RegisterArgs, B);
+              for I := 0 to B - 1 do
+                RegisterArgs[I] := FRegisters[A + 1 + I];
+              FRegisters[A] := ExecuteClosureRegisters(BytecodeFunction.FClosure,
+                RegisterUndefined, RegisterArgs);
+              Continue;
+            end
+            else if (FRegisters[B].Kind = grkObject) and
+                    (FRegisters[B].ObjectValue is TGocciaArrayValue) then
+            begin
+              SetLength(RegisterArgs,
+                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
+              for I := 0 to High(RegisterArgs) do
+                RegisterArgs[I] := ValueToRegister(
+                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[I]);
+              FRegisters[A] := ExecuteClosureRegisters(BytecodeFunction.FClosure,
+                RegisterUndefined, RegisterArgs);
+              Continue;
+            end;
+          end;
+        end;
+
         if (C and 1) = 1 then
           CallArgs := AcquireArguments
         else
@@ -3333,6 +4284,154 @@ begin
 
       OP_CALL_METHOD:
       begin
+        if (C and 1) = 0 then
+        begin
+          if (FRegisters[A - 1].Kind = grkObject) and
+             (FRegisters[A].Kind = grkObject) and
+             (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) then
+          begin
+            GlobalName := TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).Name;
+            if (GlobalName = 'bind') and
+               (FRegisters[A - 1].ObjectValue is TGocciaFunctionBase) then
+            begin
+              case B of
+                0:
+                  FRegisters[A] := RegisterObject(
+                    TGocciaBoundFunctionValue.CreateWithoutArgs(
+                      FRegisters[A - 1].ObjectValue,
+                      TGocciaUndefinedLiteralValue.UndefinedValue));
+                1:
+                  FRegisters[A] := RegisterObject(
+                    TGocciaBoundFunctionValue.CreateWithoutArgs(
+                      FRegisters[A - 1].ObjectValue,
+                      RegisterToValue(FRegisters[A + 1])));
+                2:
+                  FRegisters[A] := RegisterObject(
+                    TGocciaBoundFunctionValue.CreateWithSingleArg(
+                      FRegisters[A - 1].ObjectValue,
+                      RegisterToValue(FRegisters[A + 1]),
+                      RegisterToValue(FRegisters[A + 2])));
+              else
+                BytecodeFunction := nil;
+              end;
+              if B <= 2 then
+                Continue;
+            end;
+
+            if FRegisters[A - 1].ObjectValue is TGocciaBytecodeFunctionValue then
+            begin
+              BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A - 1].ObjectValue);
+              if Assigned(BytecodeFunction.FClosure) and
+                 Assigned(BytecodeFunction.FClosure.Template) and
+                 (not BytecodeFunction.FClosure.Template.IsAsync) then
+              begin
+                if GlobalName = 'call' then
+                begin
+                  case B of
+                    0:
+                      FRegisters[A] := ExecuteClosureRegisters0(
+                        BytecodeFunction.FClosure, RegisterUndefined);
+                    1:
+                      FRegisters[A] := ExecuteClosureRegisters0(
+                        BytecodeFunction.FClosure, FRegisters[A + 1]);
+                    2:
+                      FRegisters[A] := ExecuteClosureRegisters1(
+                        BytecodeFunction.FClosure, FRegisters[A + 1],
+                        FRegisters[A + 2]);
+                    3:
+                      FRegisters[A] := ExecuteClosureRegisters2(
+                        BytecodeFunction.FClosure, FRegisters[A + 1],
+                        FRegisters[A + 2], FRegisters[A + 3]);
+                    4:
+                      FRegisters[A] := ExecuteClosureRegisters3(
+                        BytecodeFunction.FClosure, FRegisters[A + 1],
+                        FRegisters[A + 2], FRegisters[A + 3],
+                        FRegisters[A + 4]);
+                  else
+                    begin
+                      SetLength(RegisterArgs, B - 1);
+                      for I := 1 to B - 1 do
+                        RegisterArgs[I - 1] := FRegisters[A + 1 + I];
+                      FRegisters[A] := ExecuteClosureRegisters(
+                        BytecodeFunction.FClosure, FRegisters[A + 1],
+                        RegisterArgs);
+                    end;
+                  end;
+                  Continue;
+                end
+                else if (GlobalName = 'apply') and (B >= 2) and
+                        (FRegisters[A + 2].Kind = grkObject) and
+                        (FRegisters[A + 2].ObjectValue is TGocciaArrayValue) then
+                begin
+                  ArgsArray := TGocciaArrayValue(FRegisters[A + 2].ObjectValue);
+                  case ArgsArray.Elements.Count of
+                    0:
+                      FRegisters[A] := ExecuteClosureRegisters0(
+                        BytecodeFunction.FClosure, FRegisters[A + 1]);
+                    1:
+                      FRegisters[A] := ExecuteClosureRegisters1(
+                        BytecodeFunction.FClosure, FRegisters[A + 1],
+                        VMValueToRegisterFast(ArgsArray.Elements[0]));
+                    2:
+                      FRegisters[A] := ExecuteClosureRegisters2(
+                        BytecodeFunction.FClosure, FRegisters[A + 1],
+                        VMValueToRegisterFast(ArgsArray.Elements[0]),
+                        VMValueToRegisterFast(ArgsArray.Elements[1]));
+                    3:
+                      FRegisters[A] := ExecuteClosureRegisters3(
+                        BytecodeFunction.FClosure, FRegisters[A + 1],
+                        VMValueToRegisterFast(ArgsArray.Elements[0]),
+                        VMValueToRegisterFast(ArgsArray.Elements[1]),
+                        VMValueToRegisterFast(ArgsArray.Elements[2]));
+                  else
+                    begin
+                      SetLength(RegisterArgs, ArgsArray.Elements.Count);
+                      for I := 0 to High(RegisterArgs) do
+                        RegisterArgs[I] := VMValueToRegisterFast(ArgsArray.Elements[I]);
+                      FRegisters[A] := ExecuteClosureRegisters(
+                        BytecodeFunction.FClosure, FRegisters[A + 1],
+                        RegisterArgs);
+                    end;
+                  end;
+                  Continue;
+                end;
+              end;
+            end;
+          end;
+        end;
+
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue) then
+        begin
+          BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
+          if Assigned(BytecodeFunction.FClosure) and
+             Assigned(BytecodeFunction.FClosure.Template) and
+             (not BytecodeFunction.FClosure.Template.IsAsync) then
+          begin
+            if (C and 1) = 0 then
+            begin
+              SetLength(RegisterArgs, B);
+              for I := 0 to B - 1 do
+                RegisterArgs[I] := FRegisters[A + 1 + I];
+              FRegisters[A] := ExecuteClosureRegisters(BytecodeFunction.FClosure,
+                FRegisters[A - 1], RegisterArgs);
+              Continue;
+            end
+            else if (FRegisters[B].Kind = grkObject) and
+                    (FRegisters[B].ObjectValue is TGocciaArrayValue) then
+            begin
+              SetLength(RegisterArgs,
+                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
+              for I := 0 to High(RegisterArgs) do
+                RegisterArgs[I] := VMValueToRegisterFast(
+                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements[I]);
+              FRegisters[A] := ExecuteClosureRegisters(BytecodeFunction.FClosure,
+                FRegisters[A - 1], RegisterArgs);
+              Continue;
+            end;
+          end;
+        end;
+
         if (C and 1) = 1 then
           CallArgs := AcquireArguments
         else
@@ -3355,41 +4454,71 @@ begin
 
       OP_CONSTRUCT:
       begin
-        CallArgs := AcquireArguments(C);
-        try
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
+        begin
+          SetLength(RegisterArgs, C);
           for I := 0 to C - 1 do
-            CallArgs.Add(GetRegister(B + 1 + I));
-          SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
-        finally
-          ReleaseArguments(CallArgs);
+            RegisterArgs[I] := FRegisters[B + 1 + I];
+          FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+            .InstantiateRegisters(RegisterArgs);
+        end
+        else
+        begin
+          CallArgs := AcquireArguments(C);
+          try
+            for I := 0 to C - 1 do
+              CallArgs.Add(GetRegister(B + 1 + I));
+            SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
+          finally
+            ReleaseArguments(CallArgs);
+          end;
         end;
       end;
 
       OP_GET_ITER:
-        SetRegister(A, GetIteratorValue(GetRegister(B), C <> 0));
+        if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) then
+        begin
+          if FRegisters[B].ObjectValue is TGocciaIteratorValue then
+            FRegisters[A] := FRegisters[B]
+          else if FRegisters[B].ObjectValue is TGocciaArrayValue then
+            FRegisters[A] := RegisterObject(
+              TGocciaArrayIteratorValue.Create(FRegisters[B].ObjectValue, akValues))
+          else if FRegisters[B].ObjectValue is TGocciaStringLiteralValue then
+            FRegisters[A] := RegisterObject(
+              TGocciaStringIteratorValue.Create(FRegisters[B].ObjectValue))
+          else
+            SetRegister(A, GetIteratorValue(FRegisters[B].ObjectValue, C <> 0));
+        end
+        else
+          SetRegister(A, GetIteratorValue(GetRegister(B), C <> 0));
 
       OP_ITER_NEXT:
       begin
-        IterResult := GetRegister(C);
-        if IterResult is TGocciaIteratorValue then
+        if (FRegisters[C].Kind = grkObject) and
+           (FRegisters[C].ObjectValue is TGocciaIteratorValue) then
         begin
-          SetRegister(A, TGocciaIteratorValue(IterResult).DirectNext(DoneFlag));
+          IterResult := TGocciaIteratorValue(FRegisters[C].ObjectValue).DirectNext(DoneFlag);
           if DoneFlag then
-            SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
-          if DoneFlag then
-            SetRegister(B, TGocciaBooleanLiteralValue.TrueValue)
+            FRegisters[A] := RegisterUndefined
           else
-            SetRegister(B, TGocciaBooleanLiteralValue.FalseValue);
+            FRegisters[A] := VMValueToRegisterFast(IterResult);
+          if DoneFlag then
+            FRegisters[B] := RegisterBoolean(True)
+          else
+            FRegisters[B] := RegisterBoolean(False);
         end
-        else if IterResult is TGocciaObjectValue then
+        else if (FRegisters[C].Kind = grkObject) and
+                (FRegisters[C].ObjectValue is TGocciaObjectValue) then
         begin
+          IterResult := FRegisters[C].ObjectValue;
           NextMethod := IterResult.GetProperty(PROP_NEXT);
           if not Assigned(NextMethod) or
              (NextMethod is TGocciaUndefinedLiteralValue) or
              not NextMethod.IsCallable then
           begin
-            SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
-            SetRegister(B, TGocciaBooleanLiteralValue.TrueValue);
+            FRegisters[A] := RegisterUndefined;
+            FRegisters[B] := RegisterBoolean(True);
           end
           else
           begin
@@ -3408,20 +4537,20 @@ begin
             DoneValue := IterResult.GetProperty(PROP_DONE);
             if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
             begin
-              SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
-              SetRegister(B, TGocciaBooleanLiteralValue.TrueValue);
+              FRegisters[A] := RegisterUndefined;
+              FRegisters[B] := RegisterBoolean(True);
             end
             else
             begin
-              SetRegister(A, IterResult.GetProperty(PROP_VALUE));
-              SetRegister(B, TGocciaBooleanLiteralValue.FalseValue);
+              FRegisters[A] := VMValueToRegisterFast(IterResult.GetProperty(PROP_VALUE));
+              FRegisters[B] := RegisterBoolean(False);
             end;
           end;
         end
         else
         begin
-          SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
-          SetRegister(B, TGocciaBooleanLiteralValue.TrueValue);
+          FRegisters[A] := RegisterUndefined;
+          FRegisters[B] := RegisterBoolean(True);
         end;
       end;
 
@@ -3432,25 +4561,25 @@ begin
         SetupAutoAccessorValue(Template.GetConstantUnchecked(C).StringValue);
 
       OP_BEGIN_DECORATORS:
-        BeginDecorators(GetRegister(A), GetRegister(A + 1));
+        BeginDecorators(RegisterToValue(FRegisters[A]), RegisterToValue(FRegisters[A + 1]));
 
       OP_APPLY_ELEMENT_DECORATOR_CONST:
-        ApplyElementDecorator(GetRegister(A),
+        ApplyElementDecorator(RegisterToValue(FRegisters[A]),
           Template.GetConstantUnchecked(C).StringValue);
 
       OP_APPLY_CLASS_DECORATOR:
-        ApplyClassDecorator(GetRegister(A));
+        ApplyClassDecorator(RegisterToValue(FRegisters[A]));
 
       OP_FINISH_DECORATORS:
-        SetRegister(A, FinishDecorators(GetRegister(A)));
+        SetRegister(A, FinishDecorators(RegisterToValue(FRegisters[A])));
 
       OP_GET_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
         if Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName) then
-          SetRegister(A, FGlobalScope.GetValue(GlobalName))
+          FRegisters[A] := VMValueToRegisterFast(FGlobalScope.GetValue(GlobalName))
         else
-          SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
+          FRegisters[A] := RegisterUndefined;
       end;
 
       OP_SET_GLOBAL:
@@ -3459,7 +4588,7 @@ begin
         if Assigned(FGlobalScope) then
         begin
           if FGlobalScope.Contains(GlobalName) then
-            FGlobalScope.AssignLexicalBinding(GlobalName, GetRegister(A))
+            FGlobalScope.AssignLexicalBinding(GlobalName, RegisterToValue(FRegisters[A]))
           else
             ThrowReferenceError(GlobalName + ' is not defined');
         end;
@@ -3469,9 +4598,9 @@ begin
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
         if Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName) then
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
+          FRegisters[A] := RegisterBoolean(True)
         else
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+          FRegisters[A] := RegisterBoolean(False);
       end;
 
       OP_IMPORT:
@@ -3487,16 +4616,10 @@ begin
         raise EGocciaBytecodeThrow.Create(GetRegister(A));
 
       OP_NOT:
-        if GetRegister(B).ToBooleanLiteral.Value then
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue)
-        else
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue);
+        FRegisters[A] := RegisterBoolean(not RegisterToBoolean(FRegisters[B]));
 
       OP_TO_BOOL:
-        if GetRegister(B).ToBooleanLiteral.Value then
-          SetRegister(A, TGocciaBooleanLiteralValue.TrueValue)
-        else
-          SetRegister(A, TGocciaBooleanLiteralValue.FalseValue);
+        FRegisters[A] := RegisterBoolean(RegisterToBoolean(FRegisters[B]));
 
       OP_DEFINE_ACCESSOR_CONST:
       begin
@@ -3504,16 +4627,20 @@ begin
         if (B and ACCESSOR_FLAG_STATIC) <> 0 then
         begin
           if (B and ACCESSOR_FLAG_SETTER) <> 0 then
-            DefineStaticSetterProperty(GetRegister(A), GlobalName, GetRegister(A + 1))
+            DefineStaticSetterProperty(RegisterToValue(FRegisters[A]), GlobalName,
+              RegisterToValue(FRegisters[A + 1]))
           else
-            DefineStaticGetterProperty(GetRegister(A), GlobalName, GetRegister(A + 1));
+            DefineStaticGetterProperty(RegisterToValue(FRegisters[A]), GlobalName,
+              RegisterToValue(FRegisters[A + 1]));
         end
         else
         begin
           if (B and ACCESSOR_FLAG_SETTER) <> 0 then
-            DefineSetterProperty(GetRegister(A), GlobalName, GetRegister(A + 1))
+            DefineSetterProperty(RegisterToValue(FRegisters[A]), GlobalName,
+              RegisterToValue(FRegisters[A + 1]))
           else
-            DefineGetterProperty(GetRegister(A), GlobalName, GetRegister(A + 1));
+            DefineGetterProperty(RegisterToValue(FRegisters[A]), GlobalName,
+              RegisterToValue(FRegisters[A + 1]));
         end;
       end;
 
@@ -3522,16 +4649,20 @@ begin
         if (B and ACCESSOR_FLAG_STATIC) <> 0 then
         begin
           if (B and ACCESSOR_FLAG_SETTER) <> 0 then
-            DefineStaticSetterPropertyByKey(GetRegister(A), GetRegister(C), GetRegister(A + 1))
+            DefineStaticSetterPropertyByKey(RegisterToValue(FRegisters[A]),
+              RegisterToValue(FRegisters[C]), RegisterToValue(FRegisters[A + 1]))
           else
-            DefineStaticGetterPropertyByKey(GetRegister(A), GetRegister(C), GetRegister(A + 1));
+            DefineStaticGetterPropertyByKey(RegisterToValue(FRegisters[A]),
+              RegisterToValue(FRegisters[C]), RegisterToValue(FRegisters[A + 1]));
         end
         else
         begin
           if (B and ACCESSOR_FLAG_SETTER) <> 0 then
-            DefineSetterPropertyByKey(GetRegister(A), GetRegister(C), GetRegister(A + 1))
+            DefineSetterPropertyByKey(RegisterToValue(FRegisters[A]),
+              RegisterToValue(FRegisters[C]), RegisterToValue(FRegisters[A + 1]))
           else
-            DefineGetterPropertyByKey(GetRegister(A), GetRegister(C), GetRegister(A + 1));
+            DefineGetterPropertyByKey(RegisterToValue(FRegisters[A]),
+              RegisterToValue(FRegisters[C]), RegisterToValue(FRegisters[A + 1]));
         end;
       end;
 
@@ -3539,25 +4670,30 @@ begin
       begin
         case B of
           COLLECTION_OP_SPREAD_OBJECT:
-            if GetRegister(A) is TGocciaObjectValue then
-              SpreadObjectIntoValue(TGocciaObjectValue(GetRegister(A)), GetRegister(C));
+            if (FRegisters[A].Kind = grkObject) and
+               (FRegisters[A].ObjectValue is TGocciaObjectValue) then
+              SpreadObjectIntoValue(TGocciaObjectValue(FRegisters[A].ObjectValue),
+                RegisterToValue(FRegisters[C]));
 
           COLLECTION_OP_OBJECT_REST:
             begin
               if (A + 1 < Length(FRegisters)) and
-                 (GetRegister(A + 1) is TGocciaArrayValue) then
-                SetRegister(A, ObjectRestValue(GetRegister(C),
-                  TGocciaArrayValue(GetRegister(A + 1))))
+                 (FRegisters[A + 1].Kind = grkObject) and
+                 (FRegisters[A + 1].ObjectValue is TGocciaArrayValue) then
+                SetRegister(A, ObjectRestValue(RegisterToValue(FRegisters[C]),
+                  TGocciaArrayValue(FRegisters[A + 1].ObjectValue)))
               else
-                SetRegister(A, ObjectRestValue(GetRegister(C), nil));
+                SetRegister(A, ObjectRestValue(RegisterToValue(FRegisters[C]), nil));
             end;
 
           COLLECTION_OP_SPREAD_ITERABLE_INTO_ARRAY:
             begin
-              DoneValue := IterableToArray(GetRegister(C));
-              if (GetRegister(A) is TGocciaArrayValue) and (DoneValue is TGocciaArrayValue) then
+              DoneValue := IterableToArray(RegisterToValue(FRegisters[C]));
+              if (FRegisters[A].Kind = grkObject) and
+                 (FRegisters[A].ObjectValue is TGocciaArrayValue) and
+                 (DoneValue is TGocciaArrayValue) then
                 for I := 0 to TGocciaArrayValue(DoneValue).Elements.Count - 1 do
-                  TGocciaArrayValue(GetRegister(A)).Elements.Add(
+                  TGocciaArrayValue(FRegisters[A].ObjectValue).Elements.Add(
                     TGocciaArrayValue(DoneValue).GetElement(I));
             end;
         else
@@ -3570,15 +4706,14 @@ begin
         case B of
           VALIDATE_OP_REQUIRE_OBJECT:
             begin
-              if (GetRegister(A) is TGocciaNullLiteralValue) or
-                 (GetRegister(A) is TGocciaUndefinedLiteralValue) then
+              if FRegisters[A].Kind in [grkNull, grkUndefined] then
                 ThrowTypeError('Cannot destructure ' +
-                  GetRegister(A).ToStringLiteral.Value +
+                  RegisterToValue(FRegisters[A]).ToStringLiteral.Value +
                   ' as it is not an object');
             end;
 
           VALIDATE_OP_REQUIRE_ITERABLE:
-            SetRegister(A, IterableToArray(GetRegister(A)));
+            SetRegister(A, IterableToArray(RegisterToValue(FRegisters[A])));
         else
           raise Exception.CreateFmt('Unsupported validation mode: %d', [B]);
         end;
@@ -3602,7 +4737,7 @@ begin
           SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
 
       OP_RETURN:
-        Exit(GetRegister(A));
+        Exit(FRegisters[A]);
         else
           raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
         end;
@@ -3680,7 +4815,7 @@ begin
         end;
       end;
     end;
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := RegisterUndefined;
   finally
     if Assigned(TGocciaCallStack.Instance) then
       TGocciaCallStack.Instance.Pop;
@@ -3694,6 +4829,19 @@ begin
     FLocalCells := SavedLocalCells;
     FRegisters := SavedRegisters;
   end;
+end;
+
+function TGocciaVM.ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
+  const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+var
+  RegisterArgs: TGocciaRegisterArray;
+  I: Integer;
+begin
+  SetLength(RegisterArgs, AArguments.Length);
+  for I := 0 to AArguments.Length - 1 do
+    RegisterArgs[I] := VMValueToRegisterFast(AArguments.GetElement(I));
+  Result := RegisterToValue(ExecuteClosureRegisters(AClosure,
+    VMValueToRegisterFast(AThisValue), RegisterArgs));
 end;
 
 function TGocciaVM.ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;

@@ -169,7 +169,7 @@ begin
 
     // Step 8: Return Construct(C, « length »)
     SpeciesClass := TGocciaClassValue(Species);
-    LengthArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.SmallInt(ALength)]);
+    LengthArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(ALength)]);
     try
       Instance := SpeciesClass.Instantiate(LengthArgs);
     finally
@@ -486,7 +486,7 @@ begin
         Continue;
 
       CallArgs.Element := Arr.Elements[I];
-      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
       if Assigned(TypedCallback) then
         ArrayCreateDataProperty(ResultArray, I, TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue))
       else
@@ -526,7 +526,7 @@ begin
         Continue;
 
       CallArgs.Element := Arr.Elements[I];
-      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
       if Assigned(TypedCallback) then
         PredicateResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
       else
@@ -581,7 +581,7 @@ begin
 
       CallArgs.Accumulator := Accumulator;
       CallArgs.Element := Arr.Elements[I];
-      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
       if Assigned(TypedCallback) then
         Accumulator := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
       else
@@ -618,7 +618,7 @@ begin
         Continue;
 
       CallArgs.Element := Arr.Elements[I];
-      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
       if Assigned(TypedCallback) then
         TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
       else
@@ -746,7 +746,7 @@ begin
         Continue;
 
       CallArgs.Element := Arr.Elements[I];
-      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
       if Assigned(TypedCallback) then
         SomeResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
       else
@@ -789,7 +789,7 @@ begin
         Continue;
 
       CallArgs.Element := Arr.Elements[I];
-      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
       if Assigned(TypedCallback) then
         EveryResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
       else
@@ -900,7 +900,7 @@ begin
         Continue;
 
       CallArgs.Element := Arr.Elements[I];
-      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
       if Assigned(TypedCallback) then
         MappedValue := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
       else
@@ -1039,7 +1039,7 @@ begin
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
 
       CallArgs.Element := Element;
-      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
       if Assigned(TypedCallback) then
         CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
       else
@@ -1083,14 +1083,14 @@ begin
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
 
       CallArgs.Element := Element;
-      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
       if Assigned(TypedCallback) then
         CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
       else
         CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       if CallResult.ToBooleanLiteral.Value then
       begin
-        Result := TGocciaNumberLiteralValue.SmallInt(I);
+        Result := TGocciaNumberLiteralValue.Create(I);
         Exit;
       end;
     end;
@@ -1127,7 +1127,7 @@ begin
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
 
       CallArgs.Element := Element;
-      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
       if Assigned(TypedCallback) then
         CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
       else
@@ -1171,14 +1171,14 @@ begin
         Element := TGocciaUndefinedLiteralValue.UndefinedValue;
 
       CallArgs.Element := Element;
-      CallArgs.Index := TGocciaNumberLiteralValue.SmallInt(I);
+      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
       if Assigned(TypedCallback) then
         CallResult := TypedCallback.Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue)
       else
         CallResult := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
       if CallResult.ToBooleanLiteral.Value then
       begin
-        Result := TGocciaNumberLiteralValue.SmallInt(I);
+        Result := TGocciaNumberLiteralValue.Create(I);
         Exit;
       end;
     end;

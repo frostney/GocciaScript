@@ -309,7 +309,7 @@ begin
   // Step 4: If position < 0 or position >= len(S), return NaN
   // Step 5: Return the numeric value of the code unit at index position
   if (Index >= 0) and (Index < Length(StringValue)) then
-    Result := TGocciaNumberLiteralValue.SmallInt(Ord(StringValue[Index + 1]))
+    Result := TGocciaNumberLiteralValue.Create(Ord(StringValue[Index + 1]))
   else
     Result := TGocciaNumberLiteralValue.NaNValue;
 end;
@@ -1180,11 +1180,11 @@ begin
 
   // Step 4: Compare S and That, return negative, zero, or positive
   if StringValue < ThatString then
-    Result := TGocciaNumberLiteralValue.SmallInt(-1)
+    Result := TGocciaNumberLiteralValue.Create(-1)
   else if StringValue > ThatString then
-    Result := TGocciaNumberLiteralValue.SmallInt(1)
+    Result := TGocciaNumberLiteralValue.Create(1)
   else
-    Result := TGocciaNumberLiteralValue.SmallInt(0);
+    Result := TGocciaNumberLiteralValue.Create(0);
 end;
 
 // ES2026 §22.1.3.13 String.prototype.normalize([form])

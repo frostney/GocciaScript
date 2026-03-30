@@ -91,6 +91,7 @@ type
     function GetPrivateMethod(const AName: string): TGocciaMethodValue;
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; virtual;
     function Instantiate(const AArguments: TGocciaArgumentsCollection): TGocciaValue; virtual;
+    function EstimatedInstancePropertyCapacity: Integer;
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
@@ -169,7 +170,8 @@ type
     FClass: TGocciaClassValue;
     FPrivateProperties: TGocciaValueMap;
   public
-    constructor Create(const AClass: TGocciaClassValue = nil);
+    constructor Create(const AClass: TGocciaClassValue = nil;
+      const APropertyCapacity: Integer = 0);
     destructor Destroy; override;
     function TypeName: string; override;
     function ToStringLiteral: TGocciaStringLiteralValue; override;
@@ -703,6 +705,23 @@ begin
   Result := FFieldOrder[AIndex];
 end;
 
+function TGocciaClassValue.EstimatedInstancePropertyCapacity: Integer;
+var
+  WalkClass: TGocciaClassValue;
+  I: Integer;
+begin
+  Result := 0;
+  WalkClass := Self;
+  while Assigned(WalkClass) do
+  begin
+    Inc(Result, Length(WalkClass.FFieldOrder));
+    for I := 0 to High(WalkClass.FDecoratorFieldInitializers) do
+      if not WalkClass.FDecoratorFieldInitializers[I].IsStatic then
+        Inc(Result);
+    WalkClass := WalkClass.SuperClass;
+  end;
+end;
+
 function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollection): TGocciaValue;
 var
   Instance: TGocciaObjectValue;
@@ -729,7 +748,8 @@ begin
   end
   else
   begin
-    Instance := TGocciaInstanceValue.Create(Self);
+    Instance := TGocciaInstanceValue.Create(Self,
+      EstimatedInstancePropertyCapacity);
     Instance.Prototype := FPrototype;
   end;
 
@@ -771,7 +791,7 @@ begin
 
     if Current.FStaticGetters.TryGetValue(AName, Getter) then
     begin
-      Args := TGocciaArgumentsCollection.Create;
+      Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
       try
         Result := Getter.Call(Args, Self);
       finally
@@ -796,8 +816,9 @@ begin
   repeat
     if Current.FStaticSetters.TryGetValue(AName, Setter) then
     begin
-      Args := TGocciaArgumentsCollection.Create([AValue]);
+      Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
       try
+        Args.Add(AValue);
         Setter.Call(Args, Self);
       finally
         Args.Free;
@@ -882,15 +903,17 @@ begin
       Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
       if Assigned(Accessor.Getter) then
       begin
-        Args := TGocciaArgumentsCollection.Create;
-        try
-          if Accessor.Getter is TGocciaFunctionBase then
-            Result := TGocciaFunctionBase(Accessor.Getter).Call(Args, AReceiver)
-          else
-            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-        finally
-          Args.Free;
-        end;
+        if Accessor.Getter is TGocciaFunctionBase then
+        begin
+          Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
+          try
+            Result := TGocciaFunctionBase(Accessor.Getter).Call(Args, AReceiver);
+          finally
+            Args.Free;
+          end;
+        end
+        else
+          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         Exit;
       end;
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1012,9 +1035,10 @@ end;
 
 { TGocciaInstanceValue }
 
-constructor TGocciaInstanceValue.Create(const AClass: TGocciaClassValue = nil);
+constructor TGocciaInstanceValue.Create(const AClass: TGocciaClassValue = nil;
+  const APropertyCapacity: Integer = 0);
 begin
-  inherited Create;
+  inherited Create(nil, APropertyCapacity);
   FClass := AClass;
 end;
 
@@ -1036,15 +1060,32 @@ end;
 
 function TGocciaInstanceValue.GetProperty(const AName: string): TGocciaValue;
 var
-  Method: TGocciaFunctionValue;
   Descriptor: TGocciaPropertyDescriptor;
-  GetterFunction: TGocciaFunctionValue;
   Args: TGocciaArgumentsCollection;
+  Method: TGocciaFunctionValue;
 begin
-  // First check instance properties directly using property descriptors
-  if FProperties.ContainsKey(AName) then
+  if FProperties.TryGetValue(AName, Descriptor) then
   begin
-    Result := inherited GetProperty(AName);
+    if Descriptor is TGocciaPropertyDescriptorData then
+      Result := TGocciaPropertyDescriptorData(Descriptor).Value
+    else if Descriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) and
+         TGocciaPropertyDescriptorAccessor(Descriptor).Getter.IsCallable then
+      begin
+        Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
+        try
+          Result := TGocciaFunctionBase(TGocciaPropertyDescriptorAccessor(Descriptor).Getter)
+            .Call(Args, Self);
+        finally
+          Args.Free;
+        end;
+      end
+      else
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end
+    else
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 
@@ -1072,47 +1113,57 @@ end;
 procedure TGocciaInstanceValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
-  SetterFunction: TGocciaFunctionValue;
-  NativeSetterFunction: TGocciaNativeFunctionValue;
   Args: TGocciaArgumentsCollection;
+  Proto: TGocciaObjectValue;
 begin
-  // First check for setters on the prototype
-  if Assigned(FPrototype) then
+  if FProperties.TryGetValue(AName, Descriptor) and
+     (Descriptor is TGocciaPropertyDescriptorData) then
   begin
-    Descriptor := FPrototype.GetOwnPropertyDescriptor(AName);
-    if (Descriptor is TGocciaPropertyDescriptorAccessor) and
-       Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
+    if not TGocciaPropertyDescriptorData(Descriptor).Writable then
+      ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
+    TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
+    Exit;
+  end;
+
+  Proto := FPrototype;
+  while Assigned(Proto) do
+  begin
+    Descriptor := Proto.GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
     begin
-      // Call the setter with this instance as context
-      if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionValue then
+      if (Descriptor is TGocciaPropertyDescriptorAccessor) and
+         Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
       begin
-        SetterFunction := TGocciaFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
-        Args := TGocciaArgumentsCollection.Create;
+        Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
         try
           Args.Add(AValue);
-          SetterFunction.Call(Args, Self); // Use this instance as context
+          TGocciaFunctionBase(TGocciaPropertyDescriptorAccessor(Descriptor).Setter)
+            .Call(Args, Self);
         finally
           Args.Free;
         end;
         Exit;
       end
-      else if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaNativeFunctionValue then
+      else if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
-        NativeSetterFunction := TGocciaNativeFunctionValue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
-        Args := TGocciaArgumentsCollection.Create;
-        try
-          Args.Add(AValue);
-          NativeSetterFunction.Call(Args, Self); // Use this instance as context
-        finally
-          Args.Free;
-        end;
-        Exit;
-      end;
+        ThrowTypeError('Cannot set property ' + AName + ' of #<' + ToStringTag +
+          '> which has only a getter');
+      end
+      else if (Descriptor is TGocciaPropertyDescriptorData) and
+              (not TGocciaPropertyDescriptorData(Descriptor).Writable) then
+        ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
     end;
+    Proto := Proto.Prototype;
   end;
 
-  // No setter found, create instance property (inherited behavior)
-  inherited AssignProperty(AName, AValue, ACanCreate);
+  if not ACanCreate then
+    ThrowTypeError('Cannot assign to non-existent property ''' + AName + '''');
+
+  if not FExtensible then
+    ThrowTypeError('Cannot add property ''' + AName + ''', object is not extensible');
+
+  DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
 procedure TGocciaInstanceValue.SetProperty(const AName: string; const AValue: TGocciaValue);

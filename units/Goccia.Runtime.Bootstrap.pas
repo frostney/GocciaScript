@@ -102,12 +102,6 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Version;
 
-procedure PinIfAssigned(const AValue: TGocciaValue); inline;
-begin
-  if Assigned(AValue) then
-    TGarbageCollector.Instance.PinObject(AValue);
-end;
-
 function ObjectPrototypeProvider: TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.SharedObjectPrototype;
@@ -185,22 +179,9 @@ begin
 end;
 
 procedure TGocciaRuntimeBootstrap.PinSingletons;
-var
-  I: Integer;
 begin
-  PinIfAssigned(TGocciaUndefinedLiteralValue.UndefinedValue);
-  PinIfAssigned(TGocciaNullLiteralValue.NullValue);
-  PinIfAssigned(TGocciaHoleValue.HoleValue);
-  PinIfAssigned(TGocciaBooleanLiteralValue.TrueValue);
-  PinIfAssigned(TGocciaBooleanLiteralValue.FalseValue);
-  PinIfAssigned(TGocciaNumberLiteralValue.NaNValue);
-  PinIfAssigned(TGocciaNumberLiteralValue.ZeroValue);
-  PinIfAssigned(TGocciaNumberLiteralValue.OneValue);
-  PinIfAssigned(TGocciaNumberLiteralValue.NegativeZeroValue);
-  PinIfAssigned(TGocciaNumberLiteralValue.InfinityValue);
-  PinIfAssigned(TGocciaNumberLiteralValue.NegativeInfinityValue);
-  for I := 0 to 255 do
-    PinIfAssigned(TGocciaNumberLiteralValue.SmallInt(I));
+  PinPrimitiveSingletons;
+  TGarbageCollector.Instance.PinObject(TGocciaHoleValue.HoleValue);
 end;
 
 procedure TGocciaRuntimeBootstrap.RegisterBuiltIns;

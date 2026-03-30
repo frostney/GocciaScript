@@ -84,7 +84,7 @@ function InvokeIteratorCallback(const ACallback: TGocciaValue; const AValue: TGo
 var
   CallArgs: TGocciaArgumentsCollection;
 begin
-  CallArgs := TGocciaArgumentsCollection.Create([AValue, TGocciaNumberLiteralValue.SmallInt(AIndex)]);
+  CallArgs := TGocciaArgumentsCollection.Create([AValue, TGocciaNumberLiteralValue.Create(AIndex)]);
   try
     Result := TGocciaFunctionBase(ACallback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
   finally

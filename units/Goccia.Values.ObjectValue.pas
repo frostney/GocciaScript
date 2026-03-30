@@ -50,7 +50,6 @@ type
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
 
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); virtual;
-
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); virtual;
 
     procedure RegisterNativeMethod(const AMethod: TGocciaValue);
@@ -544,8 +543,7 @@ begin
     begin
       if TGocciaPropertyDescriptorData(Descriptor).Writable then
       begin
-        FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue, Descriptor.Flags));
-        Descriptor.Free;
+        TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
         Exit;
       end;
       ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
@@ -590,7 +588,8 @@ begin
   if not FExtensible then
     ThrowTypeError('Cannot add property ''' + AName + ''', object is not extensible');
 
-  DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
 procedure TGocciaObjectValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);

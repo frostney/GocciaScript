@@ -6,12 +6,9 @@ interface
 
 uses
   Goccia.Bytecode.Chunk,
-  Goccia.Values.Primitives;
+  Goccia.VM.Registers;
 
 type
-  TGocciaRegister = TGocciaValue;
-  TGocciaRegisterArray = array of TGocciaRegister;
-
   TGocciaVMCallFrame = record
     Template: TGocciaFunctionTemplate;
     IP: Integer;

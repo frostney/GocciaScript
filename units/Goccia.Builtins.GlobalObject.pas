@@ -814,7 +814,7 @@ begin
     CallArgs := TGocciaArgumentsCollection.Create;
     try
       CallArgs.Add(Items.Elements[I]);
-      CallArgs.Add(TGocciaNumberLiteralValue.SmallInt(I));
+      CallArgs.Add(TGocciaNumberLiteralValue.Create(I));
 
       KeyValue := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally

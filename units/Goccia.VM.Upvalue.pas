@@ -5,15 +5,15 @@ unit Goccia.VM.Upvalue;
 interface
 
 uses
-  Goccia.Values.Primitives;
+  Goccia.VM.Registers;
 
 type
   TGocciaBytecodeCell = class
   private
-    FValue: TGocciaValue;
+    FValue: TGocciaRegister;
   public
-    constructor Create(const AValue: TGocciaValue);
-    property Value: TGocciaValue read FValue write FValue;
+    constructor Create(const AValue: TGocciaRegister);
+    property Value: TGocciaRegister read FValue write FValue;
   end;
 
   TGocciaBytecodeUpvalue = class
@@ -26,7 +26,7 @@ type
 
 implementation
 
-constructor TGocciaBytecodeCell.Create(const AValue: TGocciaValue);
+constructor TGocciaBytecodeCell.Create(const AValue: TGocciaRegister);
 begin
   inherited Create;
   FValue := AValue;

@@ -34,7 +34,7 @@ type
   public
     constructor Create(const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 
-    property Value: TGocciaValue read FValue;
+    property Value: TGocciaValue read FValue write FValue;
   end;
 
   TGocciaPropertyDescriptorAccessor = class(TGocciaPropertyDescriptor)
