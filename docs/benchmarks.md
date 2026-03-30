@@ -16,11 +16,17 @@ GocciaScript includes a benchmark runner for measuring execution performance. Be
 # Run a specific benchmark
 ./build/BenchmarkRunner benchmarks/fibonacci.js
 
+# Run a benchmark from stdin
+printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner
+printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner - --mode=bytecode
+
 # Export results in different formats
 ./build/BenchmarkRunner benchmarks --format=json --output=results.json
 ./build/BenchmarkRunner benchmarks --format=csv --output=results.csv
 ./build/BenchmarkRunner benchmarks --format=text
 ```
+
+When no path is provided, `BenchmarkRunner` reads benchmark source from stdin. Use `-` explicitly when you want stdin alongside other CLI flags and still make the input source obvious.
 
 ## Output Formats
 
@@ -105,7 +111,7 @@ setup() → [return value] → warmup(run × N) → calibrate(run × N) → meas
 
 The `BenchmarkRunner` program:
 
-1. Parses CLI arguments (`--format`, `--output`, and the benchmark path).
+1. Parses CLI arguments (`--format`, `--output`, and the benchmark path or stdin marker).
 2. Scans the provided path for `.js` files.
 3. For each file, creates a `TGocciaEngine` with `DefaultGlobals + [ggBenchmark]`.
 4. Loads the source and appends a `runBenchmarks()` call.
