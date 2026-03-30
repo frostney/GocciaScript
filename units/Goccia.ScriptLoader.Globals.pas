@@ -49,7 +49,7 @@ begin
     try
       Result := Parser.Parse(AValueText);
     except
-      on EGocciaJSONParseError do
+      on Exception do
         Result := TGocciaStringLiteralValue.Create(AValueText);
     end;
   finally

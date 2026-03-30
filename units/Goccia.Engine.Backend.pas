@@ -34,6 +34,7 @@ type
     FBootstrap: TGocciaRuntimeBootstrap;
     FModuleResolver: TGocciaModuleResolver;
     FBootstrapSource: TStringList;
+    FInjectedGlobals: TStringList;
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
     constructor Create(const ASourcePath: string);
@@ -85,6 +86,7 @@ begin
   FInterpreter := nil;
   FBootstrap := nil;
   FBootstrapSource := nil;
+  FInjectedGlobals := TStringList.Create;
 end;
 
 destructor TGocciaBytecodeBackend.Destroy;
@@ -95,6 +97,7 @@ begin
   FBootstrap.Free;
   FInterpreter.Free;
   FBootstrapSource.Free;
+  FInjectedGlobals.Free;
   FModuleResolver.Free;
   inherited;
 end;
@@ -153,9 +156,19 @@ begin
   if not Assigned(FInterpreter) then
     Exit;
   if FInterpreter.GlobalScope.ContainsOwnLexicalBinding(AName) then
-    FInterpreter.GlobalScope.ForceUpdateBinding(AName, AValue)
+  begin
+    if FInjectedGlobals.IndexOf(AName) >= 0 then
+      FInterpreter.GlobalScope.ForceUpdateBinding(AName, AValue)
+    else
+      raise TGocciaRuntimeError.Create(
+        'Cannot override built-in global "' + AName + '" via globals injection.',
+        0, 0, FSourcePath, FBootstrapSource);
+  end
   else
+  begin
     FInterpreter.GlobalScope.DefineLexicalBinding(AName, AValue, dtConst);
+    FInjectedGlobals.Add(AName);
+  end;
 end;
 
 procedure TGocciaBytecodeBackend.InjectGlobalsFromJSON(const AJsonString: string);
@@ -176,9 +189,14 @@ begin
     raise TGocciaRuntimeError.Create('Globals JSON must be a top-level object.',
       0, 0, FSourcePath, nil);
 
-  Obj := TGocciaObjectValue(ParsedValue);
-  for Key in Obj.GetOwnPropertyKeys do
-    RegisterGlobal(Key, Obj.GetProperty(Key));
+  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Obj := TGocciaObjectValue(ParsedValue);
+    for Key in Obj.GetOwnPropertyKeys do
+      RegisterGlobal(Key, Obj.GetProperty(Key));
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
 end;
 
 procedure TGocciaBytecodeBackend.InjectGlobalsFromModule(const APath: string);
@@ -186,6 +204,8 @@ var
   Module: TGocciaModule;
   ExportPair: TGocciaValueMap.TKeyValuePair;
 begin
+  if not Assigned(FInterpreter) then
+    Exit;
   Module := FInterpreter.LoadModule(APath, FSourcePath);
   for ExportPair in Module.ExportsTable do
     RegisterGlobal(ExportPair.Key, ExportPair.Value);

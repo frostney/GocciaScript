@@ -218,6 +218,14 @@ jobs:
           printf '%s\n' "$globals_file_output" | grep -q '"value":"goccia"'
 
           set +e
+          globals_collision_output="$(printf '%s\n' 'console;' | ./build/ScriptLoader --global console=1 --output=json)"
+          globals_collision_status=$?
+          set -e
+          test "$globals_collision_status" -eq 1
+          printf '%s\n' "$globals_collision_output" | grep -q '"ok":false'
+          printf '%s\n' "$globals_collision_output" | grep -q 'Cannot override built-in global'
+
+          set +e
           error_output="$(printf '%s\n' "throw new TypeError('boom');" | ./build/ScriptLoader --output=json)"
           error_status=$?
           set -e
