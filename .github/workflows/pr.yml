@@ -186,6 +186,27 @@ jobs:
           script_output_bytecode="$(printf 'const x = 2 + 2;\nx;\n' | ./build/ScriptLoader - --mode=bytecode)"
           printf '%s\n' "$script_output_bytecode" | grep -q 'Result: 4'
 
+      - name: Run ScriptLoader JSON smoke tests
+        run: |
+          json_output="$(printf \"console.log('hi');\n2 + 2;\n\" | ./build/ScriptLoader --output=json)"
+          printf '%s\n' "$json_output" | grep -q '"ok":true'
+          printf '%s\n' "$json_output" | grep -q '"value":4'
+          printf '%s\n' "$json_output" | grep -q '"output":"hi\\n"'
+
+          json_output_bytecode="$(printf \"console.log('hi');\n2 + 2;\n\" | ./build/ScriptLoader - --mode=bytecode --output=json)"
+          printf '%s\n' "$json_output_bytecode" | grep -q '"ok":true'
+          printf '%s\n' "$json_output_bytecode" | grep -q '"value":4'
+          printf '%s\n' "$json_output_bytecode" | grep -q '"output":"hi\\n"'
+
+          set +e
+          error_output="$(printf \"throw new TypeError('boom');\n\" | ./build/ScriptLoader --output=json)"
+          error_status=$?
+          set -e
+          test "$error_status" -eq 1
+          printf '%s\n' "$error_output" | grep -q '"ok":false'
+          printf '%s\n' "$error_output" | grep -q '"type":"TypeError"'
+          printf '%s\n' "$error_output" | grep -q '"message":"boom"'
+
   benchmark-comment:
     needs: benchmark
     runs-on: ubuntu-latest
