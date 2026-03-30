@@ -281,8 +281,16 @@ end;
 
 procedure RunScriptFromFile(const AFileName: string);
 var
+  Ext: string;
   Source: TStringList;
 begin
+  Ext := LowerCase(ExtractFileExt(AFileName));
+  if Ext = EXT_GBC then
+  begin
+    RunBytecodeFromFile(AFileName);
+    Exit;
+  end;
+
   Source := TStringList.Create;
   try
     Source.LoadFromFile(AFileName);
