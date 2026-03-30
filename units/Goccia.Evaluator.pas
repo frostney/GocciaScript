@@ -1338,6 +1338,8 @@ begin
         ThrownValue := E.Value;
       end;
     end;
+    on E: TGocciaTimeoutError do
+      raise;
     on E: Exception do
     begin
       if Assigned(ATryStatement.CatchBlock) then
@@ -1586,6 +1588,7 @@ var
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
 begin
+  CheckExecutionTimeout;
   Callee := EvaluateExpression(ANewExpression.Callee, AContext);
 
   Arguments := TGocciaArgumentsCollection.Create;
@@ -2484,10 +2487,12 @@ var
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
 begin
+  CheckExecutionTimeout;
   NativeInstance := nil;
   WalkClass := AClassValue;
   while Assigned(WalkClass) do
   begin
+    CheckExecutionTimeout;
     NativeInstance := WalkClass.CreateNativeInstance(AArguments);
     if Assigned(NativeInstance) then
       Break;
@@ -2523,6 +2528,7 @@ begin
         WalkClass := AClassValue.SuperClass;
         while Assigned(WalkClass) do
         begin
+          CheckExecutionTimeout;
           SuperInitContext := AContext;
           SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
           SuperInitScope.ThisValue := Instance;

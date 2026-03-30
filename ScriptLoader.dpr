@@ -532,7 +532,7 @@ end;
 var
   Paths: TStringList;
   I: Integer;
-  Arg, ModeStr, EmitStr: string;
+  Arg, ModeStr, EmitStr, TimeoutStr: string;
 
 begin
   GMode := emInterpreted;
@@ -592,7 +592,15 @@ begin
       else if Copy(Arg, 1, 10) = '--globals=' then
         GGlobalsFiles.Add(Copy(Arg, 11, MaxInt))
       else if Copy(Arg, 1, 10) = '--timeout=' then
-        GTimeoutMilliseconds := StrToInt(Copy(Arg, 11, MaxInt))
+      begin
+        TimeoutStr := Copy(Arg, 11, MaxInt);
+        if not TryStrToInt(TimeoutStr, GTimeoutMilliseconds) then
+        begin
+          WriteLn('Error: --timeout must be an integer number of milliseconds.');
+          ExitCode := 1;
+          Exit;
+        end;
+      end
       else if Arg = '--global' then
       begin
         if I = ParamCount then

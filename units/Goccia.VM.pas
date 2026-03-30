@@ -1385,6 +1385,7 @@ var
       BoxedArgs := FVM.MaterializeArguments(AArguments);
   end;
 begin
+  CheckExecutionTimeout;
   BoxedArgs := nil;
   try
     NativeInstance := nil;
@@ -1941,6 +1942,7 @@ begin
   if IteratorValue is TGocciaIteratorValue then
   begin
     repeat
+      CheckExecutionTimeout;
       NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
       if not DoneFlag then
         Result.Elements.Add(NextResult);
@@ -1951,6 +1953,7 @@ begin
   if IteratorValue is TGocciaObjectValue then
   begin
     repeat
+      CheckExecutionTimeout;
       NextMethod := IteratorValue.GetProperty(PROP_NEXT);
       if not Assigned(NextMethod) or
          (NextMethod is TGocciaUndefinedLiteralValue) or
@@ -3182,6 +3185,7 @@ end;
 function TGocciaVM.ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray): TGocciaRegister;
 begin
+  CheckExecutionTimeout;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, AArguments,
     Length(AArguments), RegisterUndefined, RegisterUndefined, RegisterUndefined,
     False);

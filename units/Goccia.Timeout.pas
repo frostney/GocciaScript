@@ -21,6 +21,7 @@ uses
 
 const
   TIMEOUT_CHECK_INTERVAL = 1024;
+  TIMEOUT_ALWAYS_CHECK_THRESHOLD_MS = 16;
 
 var
   GTimeoutMilliseconds: Integer = 0;
@@ -47,7 +48,8 @@ begin
     Exit;
 
   Inc(GCheckCounter);
-  if (GCheckCounter and (TIMEOUT_CHECK_INTERVAL - 1)) <> 0 then
+  if (GTimeoutMilliseconds > TIMEOUT_ALWAYS_CHECK_THRESHOLD_MS) and
+     ((GCheckCounter and (TIMEOUT_CHECK_INTERVAL - 1)) <> 0) then
     Exit;
 
   if ((GetNanoseconds - GStartNanoseconds) div 1000000) >= GTimeoutMilliseconds then

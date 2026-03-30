@@ -232,7 +232,7 @@ jobs:
           printf '%s\n' "$globals_module_output" | grep -q '"value":"module-value"'
 
           set +e
-          timeout_output="$(printf '%s\n' 'const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }' | ./build/ScriptLoader --timeout=50 --output=json)"
+          timeout_output="$(printf '%s\n' 'const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }' | timeout -sKILL 10 ./build/ScriptLoader --timeout=50 --output=json)"
           timeout_status=$?
           set -e
           test "$timeout_status" -eq 1
@@ -241,7 +241,7 @@ jobs:
           printf '%s\n' "$timeout_output" | grep -q '"message":"Execution timed out after 50ms"'
 
           set +e
-          timeout_output_bytecode="$(printf '%s\n' 'const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }' | ./build/ScriptLoader - --mode=bytecode --timeout=50 --output=json)"
+          timeout_output_bytecode="$(printf '%s\n' 'const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }' | timeout -sKILL 10 ./build/ScriptLoader - --mode=bytecode --timeout=50 --output=json)"
           timeout_status_bytecode=$?
           set -e
           test "$timeout_status_bytecode" -eq 1
