@@ -188,6 +188,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
   Goccia.Scope.BindingMap,
+  Goccia.Timeout,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,
   Goccia.Values.Error,
@@ -1384,6 +1385,7 @@ var
       BoxedArgs := FVM.MaterializeArguments(AArguments);
   end;
 begin
+  CheckExecutionTimeout;
   BoxedArgs := nil;
   try
     NativeInstance := nil;
@@ -1940,6 +1942,7 @@ begin
   if IteratorValue is TGocciaIteratorValue then
   begin
     repeat
+      CheckExecutionTimeout;
       NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
       if not DoneFlag then
         Result.Elements.Add(NextResult);
@@ -1950,6 +1953,7 @@ begin
   if IteratorValue is TGocciaObjectValue then
   begin
     repeat
+      CheckExecutionTimeout;
       NextMethod := IteratorValue.GetProperty(PROP_NEXT);
       if not Assigned(NextMethod) or
          (NextMethod is TGocciaUndefinedLiteralValue) or
@@ -3181,6 +3185,7 @@ end;
 function TGocciaVM.ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray): TGocciaRegister;
 begin
+  CheckExecutionTimeout;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, AArguments,
     Length(AArguments), RegisterUndefined, RegisterUndefined, RegisterUndefined,
     False);
@@ -3251,6 +3256,7 @@ var
   RegisterArgs: TGocciaRegisterArray;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundFunction: TGocciaBoundFunctionValue;
+  JumpOffset: Integer;
 begin
   SavedRegisters := FRegisters;
   SavedLocalCells := FLocalCells;
@@ -3417,15 +3423,30 @@ begin
       end;
 
       OP_JUMP:
-        Inc(Frame.IP, DecodeAx(Instruction));
+      begin
+        JumpOffset := DecodeAx(Instruction);
+        Inc(Frame.IP, JumpOffset);
+        if JumpOffset < 0 then
+          CheckExecutionTimeout;
+      end;
 
       OP_JUMP_IF_TRUE:
         if GetRegister(A).ToBooleanLiteral.Value then
-          Inc(Frame.IP, DecodesBx(Instruction));
+        begin
+          JumpOffset := DecodesBx(Instruction);
+          Inc(Frame.IP, JumpOffset);
+          if JumpOffset < 0 then
+            CheckExecutionTimeout;
+        end;
 
       OP_JUMP_IF_FALSE:
         if not GetRegister(A).ToBooleanLiteral.Value then
-          Inc(Frame.IP, DecodesBx(Instruction));
+        begin
+          JumpOffset := DecodesBx(Instruction);
+          Inc(Frame.IP, JumpOffset);
+          if JumpOffset < 0 then
+            CheckExecutionTimeout;
+        end;
 
       OP_JUMP_IF_NULLISH:
         if RegisterMatchesNullishKind(FRegisters[A], B) then
@@ -4206,6 +4227,7 @@ begin
 
       OP_CALL:
       begin
+        CheckExecutionTimeout;
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaBoundFunctionValue) then
         begin
@@ -4302,6 +4324,7 @@ begin
 
       OP_CALL_METHOD:
       begin
+        CheckExecutionTimeout;
         if (C and 1) = 0 then
         begin
           if (FRegisters[A - 1].Kind = grkObject) and

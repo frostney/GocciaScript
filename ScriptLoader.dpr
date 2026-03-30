@@ -26,6 +26,7 @@ uses
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.ScriptLoader.JSON,
+  Goccia.Timeout,
   Goccia.Token,
   Goccia.Values.Primitives,
 
@@ -45,6 +46,7 @@ var
   GEmitOnly: Boolean = False;
   GJsonOutput: Boolean = False;
   GSilentConsole: Boolean = False;
+  GTimeoutMilliseconds: Integer = 0;
   GGlobalsFiles: TStringList = nil;
   GInlineGlobals: TStringList = nil;
 
@@ -171,16 +173,14 @@ begin
     AReport.Timing));
 end;
 
-procedure ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
+procedure ApplyDataGlobalsToEngine(const AEngine: TGocciaEngine);
 var
   I: Integer;
   Pair: TScriptLoaderGlobalPair;
 begin
   for I := 0 to GGlobalsFiles.Count - 1 do
     if IsJSONGlobalsFile(GGlobalsFiles[I]) then
-      AEngine.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]))
-    else
-      AEngine.InjectGlobalsFromModule(GGlobalsFiles[I]);
+      AEngine.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]));
 
   for I := 0 to GInlineGlobals.Count - 1 do
   begin
@@ -189,22 +189,38 @@ begin
   end;
 end;
 
-procedure ApplyGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
+procedure ApplyModuleGlobalsToEngine(const AEngine: TGocciaEngine);
+var
+  I: Integer;
+begin
+  for I := 0 to GGlobalsFiles.Count - 1 do
+    if not IsJSONGlobalsFile(GGlobalsFiles[I]) then
+      AEngine.InjectGlobalsFromModule(GGlobalsFiles[I]);
+end;
+
+procedure ApplyDataGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
 var
   I: Integer;
   Pair: TScriptLoaderGlobalPair;
 begin
   for I := 0 to GGlobalsFiles.Count - 1 do
     if IsJSONGlobalsFile(GGlobalsFiles[I]) then
-      ABackend.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]))
-    else
-      ABackend.InjectGlobalsFromModule(GGlobalsFiles[I]);
+      ABackend.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]));
 
   for I := 0 to GInlineGlobals.Count - 1 do
   begin
     Pair := ParseGlobalPair(GInlineGlobals[I]);
     ABackend.RegisterGlobal(Pair.Key, ParseInlineGlobalValue(Pair.ValueText));
   end;
+end;
+
+procedure ApplyModuleGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
+var
+  I: Integer;
+begin
+  for I := 0 to GGlobalsFiles.Count - 1 do
+    if not IsJSONGlobalsFile(GGlobalsFiles[I]) then
+      ABackend.InjectGlobalsFromModule(GGlobalsFiles[I]);
 end;
 
 function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
@@ -217,8 +233,14 @@ begin
   try
     Engine.SuppressWarnings := GJsonOutput;
     ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
-    ApplyGlobalsToEngine(Engine);
-    ScriptResult := Engine.Execute;
+    ApplyDataGlobalsToEngine(Engine);
+    StartExecutionTimeout(GTimeoutMilliseconds);
+    try
+      ApplyModuleGlobalsToEngine(Engine);
+      ScriptResult := Engine.Execute;
+    finally
+      ClearExecutionTimeout;
+    end;
   finally
     Engine.Free;
   end;
@@ -243,7 +265,7 @@ begin
   try
     Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
     ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
-    ApplyGlobalsToBytecodeBackend(Backend);
+    ApplyDataGlobalsToBytecodeBackend(Backend);
 
     ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultGlobals,
       GJsonOutput, Result.Timing.LexTimeNanoseconds,
@@ -255,7 +277,13 @@ begin
     end;
 
     try
-      Result.ResultValue := Backend.RunModule(Module);
+      StartExecutionTimeout(GTimeoutMilliseconds);
+      try
+        ApplyModuleGlobalsToBytecodeBackend(Backend);
+        Result.ResultValue := Backend.RunModule(Module);
+      finally
+        ClearExecutionTimeout;
+      end;
       ExecEnd := GetNanoseconds;
       Result.Timing.ExecuteTimeNanoseconds := ExecEnd - StartTime -
         Result.Timing.LexTimeNanoseconds - Result.Timing.ParseTimeNanoseconds;
@@ -283,8 +311,14 @@ begin
     try
       Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
       ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
-      ApplyGlobalsToBytecodeBackend(Backend);
-      Result.ResultValue := Backend.RunModule(Module);
+      ApplyDataGlobalsToBytecodeBackend(Backend);
+      StartExecutionTimeout(GTimeoutMilliseconds);
+      try
+        ApplyModuleGlobalsToBytecodeBackend(Backend);
+        Result.ResultValue := Backend.RunModule(Module);
+      finally
+        ClearExecutionTimeout;
+      end;
       ExecEnd := GetNanoseconds;
       Result.Timing.LexTimeNanoseconds := 0;
       Result.Timing.ParseTimeNanoseconds := 0;
@@ -407,6 +441,12 @@ begin
       on E: Exception do
       begin
         Report.Timing.TotalTimeNanoseconds := GetNanoseconds - StartTime;
+        if Report.Timing.TotalTimeNanoseconds >
+           Report.Timing.LexTimeNanoseconds + Report.Timing.ParseTimeNanoseconds then
+          Report.Timing.ExecuteTimeNanoseconds :=
+            Report.Timing.TotalTimeNanoseconds -
+            Report.Timing.LexTimeNanoseconds -
+            Report.Timing.ParseTimeNanoseconds;
         if GJsonOutput then
           PrintJSONError(E, Report, OutputLines, AFileName)
         else
@@ -500,6 +540,7 @@ begin
   WriteLn('  --emit=bytecode         Compile to .gbc file (explicit, same as --emit)');
   WriteLn('  --global name=value     Inject a single global; value is parsed as JSON or kept as a string');
   WriteLn('  --globals=<path>        Inject globals from a JSON file or a module with named exports');
+  WriteLn('  --timeout=<ms>          Abort execution if it runs longer than the given milliseconds');
   WriteLn('  --output=json           Write structured JSON result to stdout');
   WriteLn('  --output=<path>         Output file path (used with --emit)');
   WriteLn('  --silent                Suppress console output from the script');
@@ -508,7 +549,7 @@ end;
 var
   Paths: TStringList;
   I: Integer;
-  Arg, ModeStr, EmitStr: string;
+  Arg, ModeStr, EmitStr, TimeoutStr: string;
 
 begin
   GMode := emInterpreted;
@@ -516,6 +557,7 @@ begin
   GEmitOnly := False;
   GJsonOutput := False;
   GSilentConsole := False;
+  GTimeoutMilliseconds := 0;
   Logger.Levels := [];
   GGlobalsFiles := TStringList.Create;
   GInlineGlobals := TStringList.Create;
@@ -566,6 +608,16 @@ begin
       end
       else if Copy(Arg, 1, 10) = '--globals=' then
         GGlobalsFiles.Add(Copy(Arg, 11, MaxInt))
+      else if Copy(Arg, 1, 10) = '--timeout=' then
+      begin
+        TimeoutStr := Copy(Arg, 11, MaxInt);
+        if not TryStrToInt(TimeoutStr, GTimeoutMilliseconds) then
+        begin
+          WriteLn('Error: --timeout must be an integer number of milliseconds.');
+          ExitCode := 1;
+          Exit;
+        end;
+      end
       else if Arg = '--global' then
       begin
         if I = ParamCount then
@@ -601,6 +653,13 @@ begin
     if GJsonOutput and (Paths.Count > 1) then
     begin
       WriteLn('Error: --output=json supports a single input path.');
+      ExitCode := 1;
+      Exit;
+    end;
+
+    if GTimeoutMilliseconds < 0 then
+    begin
+      WriteLn('Error: --timeout must be 0 or greater.');
       ExitCode := 1;
       Exit;
     end;

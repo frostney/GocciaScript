@@ -46,6 +46,7 @@ uses
   GarbageCollector.Generic,
 
   Goccia.Arguments.Collection,
+  Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.FunctionBase,
   Goccia.Values.PromiseValue,
@@ -92,78 +93,81 @@ var
   CallArgs: TGocciaArgumentsCollection;
 begin
   I := 0;
-  while I < FQueue.Count do
-  begin
-    Task := FQueue[I];
-    Inc(I);
-
-    Promise := TGocciaPromiseValue(Task.ResultPromise);
-
-    if Assigned(TGarbageCollector.Instance) then
+  try
+    while I < FQueue.Count do
     begin
-      if Assigned(Task.Handler) then
-        TGarbageCollector.Instance.AddTempRoot(Task.Handler);
-      if Assigned(Task.Value) then
-        TGarbageCollector.Instance.AddTempRoot(Task.Value);
-      if Assigned(Promise) then
-        TGarbageCollector.Instance.AddTempRoot(Promise);
-    end;
+      CheckExecutionTimeout;
+      Task := FQueue[I];
+      Inc(I);
 
-    try
-      if Assigned(Task.Handler) and Task.Handler.IsCallable then
-      begin
-        CallArgs := TGocciaArgumentsCollection.Create([Task.Value]);
-        try
-          try
-            HandlerResult := TGocciaFunctionBase(Task.Handler).Call(
-              CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-            if Assigned(Promise) then
-              Promise.Resolve(HandlerResult);
-          except
-            on E: EGocciaBytecodeThrow do
-              if Assigned(Promise) then
-                Promise.Reject(E.ThrownValue);
-            on E: TGocciaThrowValue do
-              if Assigned(Promise) then
-                Promise.Reject(E.Value);
-              // TODO: Per HTML spec, queueMicrotask callback errors should be
-              // "reported" (Node.js: uncaughtException, browsers: global error
-              // event). Currently silently discarded because GocciaScript has no
-              // process-level error reporting. Add reporting when/if an error
-              // event mechanism is implemented.
-          end;
-        finally
-          CallArgs.Free;
-        end;
-      end
-      else
-      begin
-        if Assigned(Promise) then
-        begin
-          case Task.ReactionType of
-            prtFulfill: Promise.Resolve(Task.Value);
-            prtReject: Promise.Reject(Task.Value);
-            prtThenableResolve:
-              if Task.Value is TGocciaPromiseValue then
-                Promise.SubscribeTo(TGocciaPromiseValue(Task.Value));
-          end;
-        end;
-      end;
-    finally
+      Promise := TGocciaPromiseValue(Task.ResultPromise);
+
       if Assigned(TGarbageCollector.Instance) then
       begin
         if Assigned(Task.Handler) then
-          TGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
+          TGarbageCollector.Instance.AddTempRoot(Task.Handler);
         if Assigned(Task.Value) then
-          TGarbageCollector.Instance.RemoveTempRoot(Task.Value);
+          TGarbageCollector.Instance.AddTempRoot(Task.Value);
         if Assigned(Promise) then
-          TGarbageCollector.Instance.RemoveTempRoot(Promise);
+          TGarbageCollector.Instance.AddTempRoot(Promise);
+      end;
+
+      try
+        if Assigned(Task.Handler) and Task.Handler.IsCallable then
+        begin
+          CallArgs := TGocciaArgumentsCollection.Create([Task.Value]);
+          try
+            try
+              HandlerResult := TGocciaFunctionBase(Task.Handler).Call(
+                CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              if Assigned(Promise) then
+                Promise.Resolve(HandlerResult);
+            except
+              on E: EGocciaBytecodeThrow do
+                if Assigned(Promise) then
+                  Promise.Reject(E.ThrownValue);
+              on E: TGocciaThrowValue do
+                if Assigned(Promise) then
+                  Promise.Reject(E.Value);
+                // TODO: Per HTML spec, queueMicrotask callback errors should be
+                // "reported" (Node.js: uncaughtException, browsers: global error
+                // event). Currently silently discarded because GocciaScript has no
+                // process-level error reporting. Add reporting when/if an error
+                // event mechanism is implemented.
+            end;
+          finally
+            CallArgs.Free;
+          end;
+        end
+        else
+        begin
+          if Assigned(Promise) then
+          begin
+            case Task.ReactionType of
+              prtFulfill: Promise.Resolve(Task.Value);
+              prtReject: Promise.Reject(Task.Value);
+              prtThenableResolve:
+                if Task.Value is TGocciaPromiseValue then
+                  Promise.SubscribeTo(TGocciaPromiseValue(Task.Value));
+            end;
+          end;
+        end;
+      finally
+        if Assigned(TGarbageCollector.Instance) then
+        begin
+          if Assigned(Task.Handler) then
+            TGarbageCollector.Instance.RemoveTempRoot(Task.Handler);
+          if Assigned(Task.Value) then
+            TGarbageCollector.Instance.RemoveTempRoot(Task.Value);
+          if Assigned(Promise) then
+            TGarbageCollector.Instance.RemoveTempRoot(Promise);
+        end;
       end;
     end;
+  finally
+    if I > 0 then
+      FQueue.Clear;
   end;
-  if I > 0 then
-    FQueue.Clear;
-
 end;
 
 procedure TGocciaMicrotaskQueue.ClearQueue;

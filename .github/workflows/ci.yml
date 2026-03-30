@@ -385,6 +385,8 @@ jobs:
 
       - name: Check ScriptLoader CLI behaviour
         run: |
+          PYTHON_BIN="$(command -v python3 || command -v python)"
+
           json_output="$(printf '%s\n' "console.log('hi');" '2 + 2;' | ./build/ScriptLoader --output=json)"
           printf '%s\n' "$json_output" | grep -q '"ok":true'
           printf '%s\n' "$json_output" | grep -q '"value":4'
@@ -417,6 +419,66 @@ jobs:
           globals_module_output="$(printf '%s\n' 'name;' | ./build/ScriptLoader --globals=./cli-globals-module.js --output=json)"
           printf '%s\n' "$globals_module_output" | grep -q '"ok":true'
           printf '%s\n' "$globals_module_output" | grep -q '"value":"module-value"'
+
+          set +e
+          timeout_output="$("$PYTHON_BIN" - <<'PY'
+          import subprocess
+          import sys
+
+          script = 'const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }' + '\n'
+          try:
+              result = subprocess.run(
+                  ['./build/ScriptLoader', '--timeout=50', '--output=json'],
+                  input=script,
+                  text=True,
+                  capture_output=True,
+                  timeout=10,
+                  check=False,
+              )
+          except subprocess.TimeoutExpired:
+              sys.exit(124)
+
+          sys.stdout.write(result.stdout)
+          sys.stderr.write(result.stderr)
+          sys.exit(result.returncode)
+          PY
+          )"
+          timeout_status=$?
+          set -e
+          test "$timeout_status" -eq 1
+          printf '%s\n' "$timeout_output" | grep -q '"ok":false'
+          printf '%s\n' "$timeout_output" | grep -q '"type":"TimeoutError"'
+          printf '%s\n' "$timeout_output" | grep -q '"message":"Execution timed out after 50ms"'
+
+          set +e
+          timeout_output_bytecode="$("$PYTHON_BIN" - <<'PY'
+          import subprocess
+          import sys
+
+          script = 'const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }' + '\n'
+          try:
+              result = subprocess.run(
+                  ['./build/ScriptLoader', '-', '--mode=bytecode', '--timeout=50', '--output=json'],
+                  input=script,
+                  text=True,
+                  capture_output=True,
+                  timeout=10,
+                  check=False,
+              )
+          except subprocess.TimeoutExpired:
+              sys.exit(124)
+
+          sys.stdout.write(result.stdout)
+          sys.stderr.write(result.stderr)
+          sys.exit(result.returncode)
+          PY
+          )"
+          timeout_status_bytecode=$?
+          set -e
+          test "$timeout_status_bytecode" -eq 1
+          printf '%s\n' "$timeout_output_bytecode" | grep -q '"ok":false'
+          printf '%s\n' "$timeout_output_bytecode" | grep -q '"type":"TimeoutError"'
+          printf '%s\n' "$timeout_output_bytecode" | grep -q '"message":"Execution timed out after 50ms"'
 
           set +e
           globals_collision_output="$(printf '%s\n' 'console;' | ./build/ScriptLoader --global console=1 --output=json)"

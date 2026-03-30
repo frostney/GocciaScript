@@ -105,6 +105,7 @@ uses
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Parser,
+  Goccia.Timeout,
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.AsyncFunctionValue,
@@ -466,8 +467,8 @@ var
   CalleeName: string;
   I: Integer;
 begin
-
-        // Handle super() calls specially
+  CheckExecutionTimeout;
+  // Handle super() calls specially
   if ACallExpression.Callee is TGocciaSuperExpression then
   begin
     SuperClass := TGocciaClassValue(EvaluateExpression(ACallExpression.Callee, AContext));
@@ -1043,6 +1044,7 @@ begin
     IterResult := Iterator.AdvanceNext;
     while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
     begin
+      CheckExecutionTimeout;
       CurrentValue := IterResult.GetProperty(PROP_VALUE);
 
       IterScope := AContext.Scope.CreateChild(skBlock);
@@ -1111,6 +1113,7 @@ begin
 
         while True do
         begin
+          CheckExecutionTimeout;
           NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
           NextResult := AwaitValue(NextResult);
 
@@ -1159,6 +1162,7 @@ begin
       GenericNextResult := Iterator.AdvanceNext;
       while not GenericNextResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
       begin
+        CheckExecutionTimeout;
         CurrentValue := GenericNextResult.GetProperty(PROP_VALUE);
         CurrentValue := AwaitValue(CurrentValue);
 
@@ -1334,6 +1338,8 @@ begin
         ThrownValue := E.Value;
       end;
     end;
+    on E: TGocciaTimeoutError do
+      raise;
     on E: Exception do
     begin
       if Assigned(ATryStatement.CatchBlock) then
@@ -1582,6 +1588,7 @@ var
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
 begin
+  CheckExecutionTimeout;
   Callee := EvaluateExpression(ANewExpression.Callee, AContext);
 
   Arguments := TGocciaArgumentsCollection.Create;
@@ -2480,10 +2487,12 @@ var
   InitContext, SuperInitContext: TGocciaEvaluationContext;
   InitScope, SuperInitScope: TGocciaScope;
 begin
+  CheckExecutionTimeout;
   NativeInstance := nil;
   WalkClass := AClassValue;
   while Assigned(WalkClass) do
   begin
+    CheckExecutionTimeout;
     NativeInstance := WalkClass.CreateNativeInstance(AArguments);
     if Assigned(NativeInstance) then
       Break;
@@ -2519,6 +2528,7 @@ begin
         WalkClass := AClassValue.SuperClass;
         while Assigned(WalkClass) do
         begin
+          CheckExecutionTimeout;
           SuperInitContext := AContext;
           SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
           SuperInitScope.ThisValue := Instance;

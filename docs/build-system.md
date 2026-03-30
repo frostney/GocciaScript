@@ -100,6 +100,9 @@ printf "x + y;" | ./build/ScriptLoader --global x=10 --global y=20
 printf "name;" | ./build/ScriptLoader --globals=context.json --output=json
 # Injected globals can override earlier injected values, but not built-in globals like console
 
+# Abort long-running scripts
+printf "const f = () => f(); f();" | ./build/ScriptLoader --timeout=100
+
 # Run tests via bytecode VM
 ./build/TestRunner tests --mode=bytecode
 
