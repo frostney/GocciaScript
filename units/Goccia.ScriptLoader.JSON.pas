@@ -43,6 +43,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.JSON,
+  Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
@@ -179,6 +180,8 @@ function ExceptionClassToErrorType(const E: Exception): string;
 begin
   if E is TGocciaTypeError then
     Result := 'TypeError'
+  else if E is TGocciaTimeoutError then
+    Result := 'TimeoutError'
   else if E is TGocciaReferenceError then
     Result := 'ReferenceError'
   else if E is TGocciaSyntaxError then

@@ -105,6 +105,7 @@ uses
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Parser,
+  Goccia.Timeout,
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.AsyncFunctionValue,
@@ -466,6 +467,7 @@ var
   CalleeName: string;
   I: Integer;
 begin
+  CheckExecutionTimeout;
 
         // Handle super() calls specially
   if ACallExpression.Callee is TGocciaSuperExpression then
@@ -1043,6 +1045,7 @@ begin
     IterResult := Iterator.AdvanceNext;
     while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
     begin
+      CheckExecutionTimeout;
       CurrentValue := IterResult.GetProperty(PROP_VALUE);
 
       IterScope := AContext.Scope.CreateChild(skBlock);
@@ -1111,6 +1114,7 @@ begin
 
         while True do
         begin
+          CheckExecutionTimeout;
           NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
           NextResult := AwaitValue(NextResult);
 
@@ -1159,6 +1163,7 @@ begin
       GenericNextResult := Iterator.AdvanceNext;
       while not GenericNextResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
       begin
+        CheckExecutionTimeout;
         CurrentValue := GenericNextResult.GetProperty(PROP_VALUE);
         CurrentValue := AwaitValue(CurrentValue);
 

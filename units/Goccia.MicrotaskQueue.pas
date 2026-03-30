@@ -46,6 +46,7 @@ uses
   GarbageCollector.Generic,
 
   Goccia.Arguments.Collection,
+  Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.FunctionBase,
   Goccia.Values.PromiseValue,
@@ -94,6 +95,7 @@ begin
   I := 0;
   while I < FQueue.Count do
   begin
+    CheckExecutionTimeout;
     Task := FQueue[I];
     Inc(I);
 
