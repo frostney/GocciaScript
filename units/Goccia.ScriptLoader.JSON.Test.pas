@@ -11,6 +11,7 @@ uses
   Goccia.Error,
   Goccia.ScriptLoader.JSON,
   Goccia.TestSetup,
+  Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.Primitives;
 
@@ -83,7 +84,7 @@ begin
   try
     ThrowTypeError('Boom');
   except
-    on E: Exception do
+    on E: TGocciaThrowValue do
     begin
       DidThrow := True;
       ErrorInfo := ExceptionToScriptLoaderErrorInfo(E);

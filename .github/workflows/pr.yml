@@ -38,11 +38,8 @@ jobs:
             build/TestRunner
             build/BenchmarkRunner
             build/REPL
-            build/Goccia.Values.Primitives.Test
-            build/Goccia.Values.FunctionValue.Test
-            build/Goccia.Values.ObjectValue.Test
-            build/Goccia.Compiler.Test
-            build/Goccia.Builtins.TestAssertions.Test
+            build/Goccia.*.Test
+            build/Goccia.*.Test.exe
 
   test:
     needs: build
@@ -71,6 +68,11 @@ jobs:
       - name: Run all JavaScript tests
         run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --silent --no-progress --output=test-results-${{ matrix.mode }}.json
 
+      - name: Validate TestRunner JSON output
+        run: |
+          grep -q '"mode": "${{ matrix.mode }}"' test-results-${{ matrix.mode }}.json
+          grep -q '"totalFiles":' test-results-${{ matrix.mode }}.json
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v5
@@ -82,11 +84,17 @@ jobs:
       - name: Run Pascal unit tests
         if: matrix.mode == 'interpreted'
         run: |
-          ./build/Goccia.Values.Primitives.Test
-          ./build/Goccia.Values.FunctionValue.Test
-          ./build/Goccia.Values.ObjectValue.Test
-          ./build/Goccia.Compiler.Test
-          ./build/Goccia.Builtins.TestAssertions.Test
+          found=0
+          for test_bin in build/Goccia.*.Test build/Goccia.*.Test.exe; do
+            if [ -f "$test_bin" ]; then
+              found=1
+              "$test_bin"
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::No Pascal unit test binaries found"
+            exit 1
+          fi
 
   benchmark:
     needs: build
@@ -118,6 +126,11 @@ jobs:
           GOCCIA_BENCH_ROUNDS: 7
         run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
 
+      - name: Validate benchmark JSON output
+        run: |
+          grep -q '"files": \[' benchmark-${{ matrix.mode }}.json
+          grep -q '"totalBenchmarks":' benchmark-${{ matrix.mode }}.json
+
       - name: Run stdin benchmark smoke test
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
@@ -126,10 +139,12 @@ jobs:
           if [ "${{ matrix.mode }}" = "bytecode" ]; then
             printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
               ./build/BenchmarkRunner - --mode=bytecode --no-progress --format=json --output=benchmark-stdin-bytecode.json
+            grep -q '"files": \[' benchmark-stdin-bytecode.json
             grep -q '"name": "sum"' benchmark-stdin-bytecode.json
           else
             printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
               ./build/BenchmarkRunner --no-progress --format=json --output=benchmark-stdin.json
+            grep -q '"files": \[' benchmark-stdin.json
             grep -q '"name": "sum"' benchmark-stdin.json
           fi
 

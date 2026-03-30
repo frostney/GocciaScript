@@ -259,6 +259,9 @@ You can inject Pascal functions and values into the script's global scope by wor
 
 ```pascal
 uses
+  Classes,
+  SysUtils,
+
   Goccia.Engine,
   Goccia.Scope,
   Goccia.Values.Primitives;
@@ -291,6 +294,10 @@ Native functions are Pascal methods exposed to GocciaScript. They receive argume
 
 ```pascal
 uses
+  Classes,
+  DateUtils,
+  SysUtils,
+
   Goccia.Arguments.Collection,
   Goccia.Engine,
   Goccia.Scope,
@@ -351,6 +358,9 @@ For a more structured API, create a `TGocciaObjectValue` and register native met
 
 ```pascal
 uses
+  Classes,
+  SysUtils,
+
   Goccia.Arguments.Collection,
   Goccia.Engine,
   Goccia.Scope,
@@ -461,6 +471,8 @@ GocciaScript errors surface as Pascal exceptions. Wrap execution in `try...excep
 
 ```pascal
 uses
+  SysUtils,
+
   Goccia.Engine,
   Goccia.Error;
 
