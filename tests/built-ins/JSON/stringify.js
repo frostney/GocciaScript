@@ -121,3 +121,116 @@ test("JSON.stringify space is capped at 10", () => {
   const lines = result.split("\n");
   expect(lines.length).toBe(3);
 });
+
+test("JSON.stringify throws on circular references", () => {
+  const obj = {};
+  obj.self = obj;
+
+  const arr = [];
+  arr.push(arr);
+
+  const nested = { child: {} };
+  nested.child.parent = nested;
+
+  expect(() => JSON.stringify(obj)).toThrow(TypeError);
+  expect(() => JSON.stringify(arr)).toThrow(TypeError);
+  expect(() => JSON.stringify(nested)).toThrow(TypeError);
+});
+
+test("JSON.stringify calls toJSON during serialization", () => {
+  let rootKey = "unset";
+  let nestedKey = "unset";
+
+  const payload = {
+    value: 5,
+    nested: {
+      toJSON(key) {
+        nestedKey = key;
+        return { ok: true };
+      },
+    },
+    toJSON(key) {
+      rootKey = key;
+      return {
+        doubled: this.value * 2,
+        nested: this.nested,
+      };
+    },
+  };
+
+  const parsed = JSON.parse(JSON.stringify(payload));
+  expect(rootKey).toBe("");
+  expect(nestedKey).toBe("nested");
+  expect(parsed.doubled).toBe(10);
+  expect(parsed.nested.ok).toBeTruthy();
+});
+
+test("JSON.stringify propagates toJSON errors", () => {
+  const value = {
+    toJSON() {
+      throw new RangeError("bad toJSON");
+    },
+  };
+
+  expect(() => JSON.stringify(value)).toThrow(RangeError);
+});
+
+test("JSON.stringify propagates replacer errors", () => {
+  expect(() =>
+    JSON.stringify({ a: 1 }, () => {
+      throw new SyntaxError("bad replacer");
+    }),
+  ).toThrow(SyntaxError);
+});
+
+test("JSON.stringify ignores invalid replacer types", () => {
+  const obj = { a: 1, b: 2 };
+  const expected = '{"a":1,"b":2}';
+
+  expect(JSON.stringify(obj, 123)).toBe(expected);
+  expect(JSON.stringify(obj, "ignored")).toBe(expected);
+  expect(JSON.stringify(obj, { only: ["a"] })).toBe(expected);
+});
+
+test("JSON.stringify omits function values in objects and serializes them as null in arrays", () => {
+  const obj = { keep: 1, fn: () => 1 };
+  const arr = [1, () => 1, 3];
+
+  expect(JSON.stringify(obj)).toBe('{"keep":1}');
+  expect(JSON.stringify(arr)).toBe("[1,null,3]");
+});
+
+test("JSON.stringify omits symbol values in objects and serializes them as null in arrays", () => {
+  const sym = Symbol("x");
+
+  expect(JSON.stringify({ keep: 1, sym })).toBe('{"keep":1}');
+  expect(JSON.stringify([1, sym, 3])).toBe("[1,null,3]");
+});
+
+test("JSON.stringify handles deeply nested objects", () => {
+  const makeNested = (depth) =>
+    depth === 0 ? { leaf: true } : { child: makeNested(depth - 1) };
+  const countDepth = (node) => (node.leaf ? 0 : 1 + countDepth(node.child));
+
+  const parsed = JSON.parse(JSON.stringify(makeNested(25)));
+  expect(countDepth(parsed)).toBe(25);
+  expect(parsed.child.child.child.child.child).toBeTruthy();
+});
+
+test("JSON.stringify ignores invalid space parameters", () => {
+  const obj = { a: 1 };
+
+  expect(JSON.stringify(obj, null, {})).toBe('{"a":1}');
+  expect(JSON.stringify(obj, null, true)).toBe('{"a":1}');
+});
+
+test("JSON.stringify treats non-positive space as no indentation", () => {
+  const obj = { a: 1 };
+
+  expect(JSON.stringify(obj, null, 0)).toBe('{"a":1}');
+  expect(JSON.stringify(obj, null, -4)).toBe('{"a":1}');
+});
+
+test("JSON.stringify serializes sparse array holes as null", () => {
+  expect(JSON.stringify([1, , 3])).toBe("[1,null,3]");
+});
