@@ -34,15 +34,16 @@ var
   TempFileName: string;
   InputFile: Text;
   Source: TStringList;
+  RawSource: TFileStream;
+  Text: string;
 begin
   TempFileName := GetTempFileName;
-  with TStringList.Create do
+  Text := 'const x = 2 + 2;' + sLineBreak + 'x;';
+  RawSource := TFileStream.Create(TempFileName, fmCreate);
   try
-    Add('const x = 2 + 2;');
-    Add('x;');
-    SaveToFile(TempFileName);
+    RawSource.WriteBuffer(Pointer(Text)^, Length(Text));
   finally
-    Free;
+    RawSource.Free;
   end;
 
   AssignFile(InputFile, TempFileName);

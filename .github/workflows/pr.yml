@@ -125,6 +125,45 @@ jobs:
           retention-days: 1
           path: benchmark-${{ matrix.mode }}.json
 
+  examples:
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download build
+        uses: actions/download-artifact@v5
+        with:
+          name: build-pr
+          path: build/
+
+      - name: Make binaries executable
+        run: chmod +x build/*
+
+      - name: Run example scripts
+        run: ./build/ScriptLoader examples
+
+      - name: Run stdin smoke tests
+        run: |
+          script_output="$(printf 'const x = 2 + 2;\nx;\n' | ./build/ScriptLoader)"
+          printf '%s\n' "$script_output" | grep -q 'Result: 4'
+
+          script_output_bytecode="$(printf 'const x = 2 + 2;\nx;\n' | ./build/ScriptLoader - --mode=bytecode)"
+          printf '%s\n' "$script_output_bytecode" | grep -q 'Result: 4'
+
+          printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
+            ./build/BenchmarkRunner --no-progress --format=json --output=benchmark-stdin.json
+          grep -q '"name": "sum"' benchmark-stdin.json
+
+          printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
+            ./build/BenchmarkRunner - --mode=bytecode --no-progress --format=json --output=benchmark-stdin-bytecode.json
+          grep -q '"name": "sum"' benchmark-stdin-bytecode.json
+
   benchmark-comment:
     needs: benchmark
     runs-on: ubuntu-latest

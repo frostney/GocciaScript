@@ -23,6 +23,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.ScriptLoader.Input,
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
@@ -31,6 +32,11 @@ uses
   FileUtils in 'units/FileUtils.pas';
 
 type
+  TReportSpec = record
+    Format: TBenchmarkReportFormat;
+    OutputFile: string;
+  end;
+
   TBenchmarkProgress = class
     class procedure OnProgress(const ASuiteName, ABenchName: string; const AIndex, ATotal: Integer);
   end;
@@ -311,11 +317,188 @@ begin
   end;
 end;
 
-type
-  TReportSpec = record
-    Format: TBenchmarkReportFormat;
-    OutputFile: string;
+procedure CollectBenchmarkSourceInterpreted(const ASource: TStringList;
+  const AFileName: string; const AReporter: TBenchmarkReporter);
+var
+  Engine: TGocciaEngine;
+  GC: TGarbageCollector;
+  BenchGlobals: TGocciaGlobalBuiltins;
+  EngineResult: TGocciaScriptResult;
+  ScriptResult: TGocciaObjectValue;
+  FileResult: TBenchmarkFileResult;
+begin
+  BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
+  ASource.Add('runBenchmarks();');
+
+  try
+    Engine := TGocciaEngine.Create(AFileName, ASource, BenchGlobals);
+    try
+      if GShowProgress and Assigned(Engine.BuiltinBenchmark) then
+        Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+
+      EngineResult := Engine.Execute;
+      FileResult.FileName := AFileName;
+      FileResult.LexTimeNanoseconds := EngineResult.LexTimeNanoseconds;
+      FileResult.ParseTimeNanoseconds := EngineResult.ParseTimeNanoseconds;
+      FileResult.CompileTimeNanoseconds := 0;
+      FileResult.ExecuteTimeNanoseconds := EngineResult.ExecuteTimeNanoseconds;
+
+      GC := TGarbageCollector.Instance;
+      ScriptResult := nil;
+      if EngineResult.Result is TGocciaObjectValue then
+        ScriptResult := TGocciaObjectValue(EngineResult.Result);
+
+      if Assigned(ScriptResult) and Assigned(GC) then
+        GC.AddTempRoot(ScriptResult);
+      try
+        PopulateFileResult(FileResult, ScriptResult, AReporter);
+      finally
+        if Assigned(ScriptResult) and Assigned(GC) then
+          GC.RemoveTempRoot(ScriptResult);
+      end;
+    finally
+      Engine.Free;
+    end;
+  except
+    on E: Exception do
+      MakeErrorFileResult(AFileName, E.Message, AReporter);
   end;
+end;
+
+procedure CollectBenchmarkSourceBytecode(const ASource: TStringList;
+  const AFileName: string; const AReporter: TBenchmarkReporter);
+var
+  SourceText: string;
+  JSXResult: TGocciaJSXTransformResult;
+  Lexer: TGocciaLexer;
+  Tokens: TObjectList<TGocciaToken>;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  Module: TGocciaBytecodeModule;
+  Backend: TGocciaBytecodeBackend;
+  GC: TGarbageCollector;
+  ResultValue: TGocciaValue;
+  FileResult: TBenchmarkFileResult;
+  ScriptResult: TGocciaObjectValue;
+  BenchGlobals: TGocciaGlobalBuiltins;
+  CompileStart, CompileEnd, ExecEnd: Int64;
+begin
+  BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
+  ASource.Add('runBenchmarks();');
+
+  SourceText := ASource.Text;
+  if ggJSX in BenchGlobals then
+  begin
+    JSXResult := TGocciaJSXTransformer.Transform(SourceText);
+    SourceText := JSXResult.Source;
+    JSXResult.SourceMap.Free;
+  end;
+
+  try
+    CompileStart := GetNanoseconds;
+
+    Backend := TGocciaBytecodeBackend.Create(AFileName);
+    try
+      Backend.RegisterBuiltIns(BenchGlobals);
+
+      Lexer := TGocciaLexer.Create(SourceText, AFileName);
+      try
+        Tokens := Lexer.ScanTokens;
+        Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
+        try
+          ProgramNode := Parser.Parse;
+          try
+            Module := Backend.CompileToModule(ProgramNode);
+          finally
+            ProgramNode.Free;
+          end;
+        finally
+          Parser.Free;
+        end;
+      finally
+        Lexer.Free;
+      end;
+
+      CompileEnd := GetNanoseconds;
+
+      if GShowProgress and Assigned(Backend.Bootstrap) and
+         Assigned(Backend.Bootstrap.BuiltinBenchmark) then
+        Backend.Bootstrap.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+      if Assigned(Backend.Bootstrap) and Assigned(Backend.Bootstrap.BuiltinBenchmark) then
+        Backend.Bootstrap.BuiltinBenchmark.OnBeforeMeasurement := Backend.ClearTransientCaches;
+
+      try
+        ResultValue := Backend.RunModule(Module);
+        ExecEnd := GetNanoseconds;
+
+        FileResult.FileName := AFileName;
+        FileResult.LexTimeNanoseconds := 0;
+        FileResult.ParseTimeNanoseconds := 0;
+        FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
+        FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
+
+        GC := TGarbageCollector.Instance;
+        if Assigned(ResultValue) and Assigned(GC) then
+          GC.AddTempRoot(ResultValue);
+
+        ScriptResult := nil;
+        if ResultValue is TGocciaObjectValue then
+          ScriptResult := TGocciaObjectValue(ResultValue);
+        try
+          PopulateFileResult(FileResult, ScriptResult, AReporter);
+        finally
+          if Assigned(ResultValue) and Assigned(GC) then
+            GC.RemoveTempRoot(ResultValue);
+        end;
+      finally
+        Module.Free;
+      end;
+    finally
+      Backend.Free;
+    end;
+  except
+    on E: Exception do
+      MakeErrorFileResult(AFileName, E.Message, AReporter);
+  end;
+end;
+
+procedure CollectBenchmarkSource(const ASource: TStringList;
+  const AFileName: string; const AReporter: TBenchmarkReporter);
+begin
+  case GMode of
+    ebTreeWalk: CollectBenchmarkSourceInterpreted(ASource, AFileName, AReporter);
+    ebBytecode: CollectBenchmarkSourceBytecode(ASource, AFileName, AReporter);
+  else
+    raise Exception.CreateFmt('Unsupported execution backend: %d', [Ord(GMode)]);
+  end;
+end;
+
+procedure RunBenchmarksFromStdin(const AReports: array of TReportSpec);
+var
+  Source: TStringList;
+  Reporter: TBenchmarkReporter;
+  J: Integer;
+begin
+  Source := ReadSourceFromText(Input);
+  Reporter := TBenchmarkReporter.Create;
+  try
+    CollectBenchmarkSource(Source, STDIN_FILE_NAME, Reporter);
+    for J := 0 to Length(AReports) - 1 do
+    begin
+      Reporter.Render(AReports[J].Format);
+      if AReports[J].OutputFile <> '' then
+        Reporter.WriteToFile(AReports[J].OutputFile)
+      else
+        Reporter.WriteToStdOut;
+    end;
+
+    if Reporter.HasFailures then
+      ExitCode := 1;
+  finally
+    Reporter.Free;
+    Source.Free;
+  end;
+end;
 
 procedure RunBenchmarks(const APaths: TStringList; const AReports: array of TReportSpec);
 var
@@ -409,6 +592,13 @@ begin
         GMode := ebTreeWalk
       else if ParamStr(I) = '--mode=bytecode' then
         GMode := ebBytecode
+      else if (ParamStr(I) = '--help') or (ParamStr(I) = '-h') then
+      begin
+        WriteLn('Usage: BenchmarkRunner [path...|-] [--format=console|text|csv|json [--output=file]] ... [--no-progress] [--mode=interpreted|bytecode]');
+        WriteLn('  -                       Read benchmark source from stdin');
+        WriteLn('  (omitted path)          Read benchmark source from stdin');
+        Exit;
+      end
       else if Copy(ParamStr(I), 1, 7) = '--mode=' then
       begin
         WriteLn('Error: Unknown mode "', Copy(ParamStr(I), 8, MaxInt), '". Use "interpreted" or "bytecode".');
@@ -416,7 +606,13 @@ begin
         Exit;
       end
       else if Copy(ParamStr(I), 1, 2) <> '--' then
-        Paths.Add(ParamStr(I));
+        Paths.Add(ParamStr(I))
+      else
+      begin
+        WriteLn('Error: Unknown option "', ParamStr(I), '".');
+        ExitCode := 1;
+        Exit;
+      end;
     end;
 
     if ReportCount = 0 then
@@ -427,12 +623,14 @@ begin
     end;
 
     if Paths.Count = 0 then
-    begin
-      WriteLn('Usage: BenchmarkRunner <path...> [--format=console|text|csv|json [--output=file]] ... [--no-progress] [--mode=interpreted|bytecode]');
-      ExitCode := 1;
-    end
+      RunBenchmarksFromStdin(Reports)
     else
-      RunBenchmarks(Paths, Reports);
+    begin
+      if (Paths.Count = 1) and IsStdinPath(Paths[0]) then
+        RunBenchmarksFromStdin(Reports)
+      else
+        RunBenchmarks(Paths, Reports);
+    end;
   finally
     Paths.Free;
   end;

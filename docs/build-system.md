@@ -66,6 +66,7 @@ A full build (no specific targets) automatically cleans first.
 ```bash
 ./build.pas loader && ./build/ScriptLoader ./example.js
 printf "const x = 2 + 2; x;" | ./build/ScriptLoader
+printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner
 ```
 
 ### Compile and Test
@@ -96,6 +97,7 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader --emit --output=output.gbc
 
 # Run benchmarks via bytecode VM
 ./build/BenchmarkRunner benchmarks --mode=bytecode
+printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner - --mode=bytecode
 ```
 
 See [bytecode-vm.md](bytecode-vm.md) for the bytecode VM architecture and binary format.
@@ -109,7 +111,7 @@ All compiled binaries go to the `build/` directory:
 | `build/REPL` | `REPL.dpr` | Interactive read-eval-print loop |
 | `build/ScriptLoader` | `ScriptLoader.dpr` | Execute `.js` files or stdin input |
 | `build/TestRunner` | `TestRunner.dpr` | JavaScript test runner |
-| `build/BenchmarkRunner` | `BenchmarkRunner.dpr` | Performance benchmark runner |
+| `build/BenchmarkRunner` | `BenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
 | `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
 
 Intermediate files (`.o`, `.ppu`) also go to `build/` to keep the source tree clean.

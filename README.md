@@ -202,6 +202,9 @@ npx vitest run
 # Run a specific benchmark
 ./build/BenchmarkRunner benchmarks/fibonacci.js
 
+# Run a benchmark from stdin
+printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner
+
 # Export as JSON or CSV
 ./build/BenchmarkRunner benchmarks --format=json --output=results.json
 ./build/BenchmarkRunner benchmarks --format=csv --output=results.csv

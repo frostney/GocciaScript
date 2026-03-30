@@ -520,7 +520,7 @@ The repository includes four embedding examples:
 | `ScriptLoader` | `ScriptLoader.dpr` | Executes script files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`) from disk or stdin (one-shot) |
 | `REPL` | `REPL.dpr` | Interactive read-eval-print loop (long-lived engine) |
 | `TestRunner` | `TestRunner.dpr` | Runs test suites with `ggTestAssertions` enabled |
-| `BenchmarkRunner` | `BenchmarkRunner.dpr` | Runs benchmarks with `ggBenchmark` enabled |
+| `BenchmarkRunner` | `BenchmarkRunner.dpr` | Runs benchmarks with `ggBenchmark` enabled from files or stdin |
 
 These serve as reference implementations for the patterns described above.
 

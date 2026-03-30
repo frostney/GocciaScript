@@ -400,10 +400,22 @@ begin
       end
       else if Arg = '--emit' then
         GEmitOnly := True
+      else if (Arg = '--help') or (Arg = '-h') then
+      begin
+        PrintUsage;
+        Exit;
+      end
       else if Copy(Arg, 1, 9) = '--output=' then
         GOutputPath := Copy(Arg, 10, MaxInt)
       else if Copy(Arg, 1, 2) <> '--' then
-        Paths.Add(Arg);
+        Paths.Add(Arg)
+      else
+      begin
+        WriteLn('Error: Unknown option "', Arg, '".');
+        PrintUsage;
+        ExitCode := 1;
+        Exit;
+      end;
     end;
 
     if Paths.Count = 0 then

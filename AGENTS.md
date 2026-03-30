@@ -32,6 +32,7 @@ GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a 
 ./build/ScriptLoader example.js --emit=bytecode  # Compile to .gbc (explicit)
 ./build/ScriptLoader example.js --emit --output=out.gbc   # Custom output path
 ./build/ScriptLoader out.gbc                     # Load and execute .gbc bytecode
+printf "const x = 2 + 2; x;" | ./build/ScriptLoader        # Execute stdin source
 ./build/REPL                                      # Start interactive REPL
 ./build/TestRunner tests/                                                      # Run all JavaScript tests
 ./build/TestRunner tests/language/expressions/                                 # Run a test category
@@ -41,6 +42,7 @@ GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a 
 ./build/TestRunner tests --mode=bytecode                                       # Run tests via the Goccia bytecode VM
 ./build/BenchmarkRunner benchmarks/                                               # Run all benchmarks
 ./build/BenchmarkRunner benchmarks/fibonacci.js                                   # Run a specific benchmark
+printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner # Run benchmark source from stdin
 ./build/BenchmarkRunner benchmarks --format=json --output=out.json                # Export as JSON
 ./build/BenchmarkRunner benchmarks --format=console --format=json --output=out.json # Console + JSON
 ./build/BenchmarkRunner benchmarks --no-progress                                  # Suppress progress (CI)
@@ -521,7 +523,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 - Shared path config: `config.cfg`
 - Shared directives: `units/Goccia.inc` (overflow/range checks conditional on `PRODUCTION` define)
 - Output directory: `build/`
-- CI: Two workflow files — `ci.yml` (main + tags, full matrix, all checks + release) and `pr.yml` (PRs, ubuntu-latest x64 only, JS tests + benchmark comparison comment). All matrix strategies use `fail-fast: false`. Post-build jobs (`test`, `benchmark`, `examples`) are independent. Windows artifacts are labeled x86 (FPC produces i386-win32 binaries on the x64 runner).
+- CI: Two workflow files — `ci.yml` (main + tags, full matrix, all checks + release) and `pr.yml` (PRs, ubuntu-latest x64 only, JS tests, examples, and benchmark comparison comment). All matrix strategies use `fail-fast: false`. Post-build jobs (`test`, `benchmark`, `examples`) are independent. The `examples` jobs also smoke-test stdin execution for `ScriptLoader` and `BenchmarkRunner`. Windows artifacts are labeled x86 (FPC produces i386-win32 binaries on the x64 runner).
 - Auto-formatter: `./format.pas` (instantfpc script, no build step) — auto-fixes uses clause ordering, PascalCase function names, and parameter `A` prefix naming
 - Pre-commit hook: [Lefthook](https://github.com/evilmartians/lefthook) (`lefthook.yml`) — requires `lefthook install` after cloning
 - Editor setup: `.vscode/settings.json` (format-on-save) + `.vscode/extensions.json` (recommended extensions)
