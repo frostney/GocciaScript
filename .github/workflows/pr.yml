@@ -68,7 +68,7 @@ jobs:
       - name: Run all JavaScript tests
         run: ./build/TestRunner tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --silent --no-progress --output=test-results-${{ matrix.mode }}.json
 
-      - name: Validate TestRunner JSON output
+      - name: Check TestRunner CLI behaviour
         run: |
           grep -q '"mode": "${{ matrix.mode }}"' test-results-${{ matrix.mode }}.json
           grep -q '"totalFiles":' test-results-${{ matrix.mode }}.json
@@ -126,12 +126,12 @@ jobs:
           GOCCIA_BENCH_ROUNDS: 7
         run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
 
-      - name: Validate benchmark JSON output
+      - name: Check benchmark CLI behaviour
         run: |
           grep -q '"files": \[' benchmark-${{ matrix.mode }}.json
           grep -q '"totalBenchmarks":' benchmark-${{ matrix.mode }}.json
 
-      - name: Run BenchmarkRunner JSON smoke tests
+      - name: Check BenchmarkRunner CLI behaviour
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
@@ -196,7 +196,7 @@ jobs:
           script_output_bytecode="$(printf 'const x = 2 + 2;\nx;\n' | ./build/ScriptLoader - --mode=bytecode)"
           printf '%s\n' "$script_output_bytecode" | grep -q 'Result: 4'
 
-      - name: Run ScriptLoader JSON smoke tests
+      - name: Check ScriptLoader CLI behaviour
         run: |
           json_output="$(printf \"console.log('hi');\n2 + 2;\n\" | ./build/ScriptLoader --output=json)"
           printf '%s\n' "$json_output" | grep -q '"ok":true'

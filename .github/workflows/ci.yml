@@ -199,7 +199,7 @@ jobs:
       - name: Run all JavaScript tests (bytecode)
         run: ./build/TestRunner tests --mode=bytecode --silent --no-progress --output=test-results-bytecode.json
 
-      - name: Validate TestRunner JSON output
+      - name: Check TestRunner CLI behaviour
         run: |
           grep -q '"mode": "interpreted"' test-results-interpreted.json
           grep -q '"totalFiles":' test-results-interpreted.json
@@ -288,7 +288,7 @@ jobs:
           GOCCIA_BENCH_ROUNDS: 7
         run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress
 
-      - name: Run BenchmarkRunner JSON smoke tests
+      - name: Check BenchmarkRunner CLI behaviour
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
@@ -322,7 +322,7 @@ jobs:
           GOCCIA_BENCH_ROUNDS: 7
         run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=console --format=json --output=benchmark-${{ matrix.mode }}-results.json
 
-      - name: Validate benchmark JSON output
+      - name: Check benchmark CLI behaviour
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux'
         run: |
           grep -q '"files": \[' benchmark-${{ matrix.mode }}-results.json
@@ -383,7 +383,7 @@ jobs:
           script_output_bytecode="$(printf 'const x = 2 + 2;\nx;\n' | ./build/ScriptLoader - --mode=bytecode)"
           printf '%s\n' "$script_output_bytecode" | grep -q 'Result: 4'
 
-      - name: Run ScriptLoader JSON smoke tests
+      - name: Check ScriptLoader CLI behaviour
         run: |
           json_output="$(printf \"console.log('hi');\n2 + 2;\n\" | ./build/ScriptLoader --output=json)"
           printf '%s\n' "$json_output" | grep -q '"ok":true'
