@@ -468,8 +468,7 @@ var
   I: Integer;
 begin
   CheckExecutionTimeout;
-
-        // Handle super() calls specially
+  // Handle super() calls specially
   if ACallExpression.Callee is TGocciaSuperExpression then
   begin
     SuperClass := TGocciaClassValue(EvaluateExpression(ACallExpression.Callee, AContext));

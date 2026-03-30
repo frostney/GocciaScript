@@ -3253,7 +3253,6 @@ var
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundFunction: TGocciaBoundFunctionValue;
   JumpOffset: Integer;
-  PreviousIP: Integer;
 begin
   SavedRegisters := FRegisters;
   SavedLocalCells := FLocalCells;
@@ -3303,7 +3302,6 @@ begin
       try
         Instruction := Template.GetInstructionUnchecked(Frame.IP);
         Inc(Frame.IP);
-        PreviousIP := Frame.IP;
 
         Op := DecodeOp(Instruction);
         A := DecodeA(Instruction);
