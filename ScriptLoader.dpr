@@ -23,6 +23,7 @@ uses
   Goccia.Lexer,
   Goccia.Logger,
   Goccia.Parser,
+  Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.ScriptLoader.JSON,
   Goccia.Token,
@@ -44,6 +45,8 @@ var
   GEmitOnly: Boolean = False;
   GJsonOutput: Boolean = False;
   GSilentConsole: Boolean = False;
+  GGlobalsFiles: TStringList = nil;
+  GInlineGlobals: TStringList = nil;
 
 function ParseSource(const ASource: TStringList; const AFileName: string;
   const AGlobals: TGocciaGlobalBuiltins; const ASuppressWarnings: Boolean;
@@ -168,6 +171,42 @@ begin
     AReport.Timing));
 end;
 
+procedure ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
+var
+  I: Integer;
+  Pair: TScriptLoaderGlobalPair;
+begin
+  for I := 0 to GGlobalsFiles.Count - 1 do
+    if IsJSONGlobalsFile(GGlobalsFiles[I]) then
+      AEngine.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]))
+    else
+      AEngine.InjectGlobalsFromModule(GGlobalsFiles[I]);
+
+  for I := 0 to GInlineGlobals.Count - 1 do
+  begin
+    Pair := ParseGlobalPair(GInlineGlobals[I]);
+    AEngine.InjectGlobal(Pair.Key, ParseInlineGlobalValue(Pair.ValueText));
+  end;
+end;
+
+procedure ApplyGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
+var
+  I: Integer;
+  Pair: TScriptLoaderGlobalPair;
+begin
+  for I := 0 to GGlobalsFiles.Count - 1 do
+    if IsJSONGlobalsFile(GGlobalsFiles[I]) then
+      ABackend.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]))
+    else
+      ABackend.InjectGlobalsFromModule(GGlobalsFiles[I]);
+
+  for I := 0 to GInlineGlobals.Count - 1 do
+  begin
+    Pair := ParseGlobalPair(GInlineGlobals[I]);
+    ABackend.RegisterGlobal(Pair.Key, ParseInlineGlobalValue(Pair.ValueText));
+  end;
+end;
+
 function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
   const AOutputLines: TStrings): TScriptExecutionReport;
 var
@@ -178,6 +217,7 @@ begin
   try
     Engine.SuppressWarnings := GJsonOutput;
     ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
+    ApplyGlobalsToEngine(Engine);
     ScriptResult := Engine.Execute;
   finally
     Engine.Free;
@@ -203,6 +243,7 @@ begin
   try
     Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
     ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
+    ApplyGlobalsToBytecodeBackend(Backend);
 
     ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultGlobals,
       GJsonOutput, Result.Timing.LexTimeNanoseconds,
@@ -242,6 +283,7 @@ begin
     try
       Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
       ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
+      ApplyGlobalsToBytecodeBackend(Backend);
       Result.ResultValue := Backend.RunModule(Module);
       ExecEnd := GetNanoseconds;
       Result.Timing.LexTimeNanoseconds := 0;
@@ -456,6 +498,8 @@ begin
   WriteLn('  --mode=bytecode         Compile to bytecode and execute on the Goccia VM');
   WriteLn('  --emit                  Compile to .gbc file (no execution)');
   WriteLn('  --emit=bytecode         Compile to .gbc file (explicit, same as --emit)');
+  WriteLn('  --global name=value     Inject a single global; value is parsed as JSON or kept as a string');
+  WriteLn('  --globals=<path>        Inject globals from a JSON file or a module with named exports');
   WriteLn('  --output=json           Write structured JSON result to stdout');
   WriteLn('  --output=<path>         Output file path (used with --emit)');
   WriteLn('  --silent                Suppress console output from the script');
@@ -473,10 +517,13 @@ begin
   GJsonOutput := False;
   GSilentConsole := False;
   Logger.Levels := [];
+  GGlobalsFiles := TStringList.Create;
+  GInlineGlobals := TStringList.Create;
 
   Paths := TStringList.Create;
   try
-    for I := 1 to ParamCount do
+    I := 1;
+    while I <= ParamCount do
     begin
       Arg := ParamStr(I);
       if Copy(Arg, 1, 7) = '--mode=' then
@@ -517,6 +564,19 @@ begin
         if GOutputPath = 'json' then
           GJsonOutput := True;
       end
+      else if Copy(Arg, 1, 10) = '--globals=' then
+        GGlobalsFiles.Add(Copy(Arg, 11, MaxInt))
+      else if Arg = '--global' then
+      begin
+        if I = ParamCount then
+        begin
+          WriteLn('Error: --global requires a name=value argument.');
+          ExitCode := 1;
+          Exit;
+        end;
+        Inc(I);
+        GInlineGlobals.Add(ParamStr(I));
+      end
       else if Arg = '--silent' then
         GSilentConsole := True
       else if Copy(Arg, 1, 2) <> '--' then
@@ -528,6 +588,7 @@ begin
         ExitCode := 1;
         Exit;
       end;
+      Inc(I);
     end;
 
     if GJsonOutput and GEmitOnly then
@@ -567,5 +628,7 @@ begin
     end;
   finally
     Paths.Free;
+    GGlobalsFiles.Free;
+    GInlineGlobals.Free;
   end;
 end.

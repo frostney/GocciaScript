@@ -208,6 +208,15 @@ jobs:
           printf '%s\n' "$json_output_bytecode" | grep -q '"value":4'
           printf '%s\n' "$json_output_bytecode" | grep -Eq '"output":"hi(\\r)?\\n"'
 
+          globals_output="$(printf '%s\n' 'x + y;' | ./build/ScriptLoader --global x=10 --global y=20 --output=json)"
+          printf '%s\n' "$globals_output" | grep -q '"ok":true'
+          printf '%s\n' "$globals_output" | grep -q '"value":30'
+
+          printf '%s\n' '{"name":"goccia"}' > cli-globals.json
+          globals_file_output="$(printf '%s\n' 'name;' | ./build/ScriptLoader --globals=cli-globals.json --mode=bytecode --output=json)"
+          printf '%s\n' "$globals_file_output" | grep -q '"ok":true'
+          printf '%s\n' "$globals_file_output" | grep -q '"value":"goccia"'
+
           set +e
           error_output="$(printf '%s\n' "throw new TypeError('boom');" | ./build/ScriptLoader --output=json)"
           error_status=$?

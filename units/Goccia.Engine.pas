@@ -28,6 +28,7 @@ uses
   Goccia.Builtins.Temporal,
   Goccia.Builtins.TestAssertions,
   Goccia.Interpreter,
+  Goccia.JSON,
   Goccia.JSX.SourceMap,
   Goccia.Modules,
   Goccia.Modules.Resolver,
@@ -123,6 +124,9 @@ type
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
 
     procedure AddAlias(const APattern, AReplacement: string);
+    procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
+    procedure InjectGlobalsFromJSON(const AJsonString: string);
+    procedure InjectGlobalsFromModule(const APath: string);
     procedure RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
 
     class function RunScript(const ASource: string; const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult; overload;
@@ -553,6 +557,47 @@ end;
 procedure TGocciaEngine.AddAlias(const APattern, AReplacement: string);
 begin
   FResolver.AddAlias(APattern, AReplacement);
+end;
+
+procedure TGocciaEngine.InjectGlobal(const AKey: string; const AValue: TGocciaValue);
+begin
+  if FInterpreter.GlobalScope.ContainsOwnLexicalBinding(AKey) then
+    FInterpreter.GlobalScope.ForceUpdateBinding(AKey, AValue)
+  else
+    FInterpreter.GlobalScope.DefineLexicalBinding(AKey, AValue, dtConst);
+end;
+
+procedure TGocciaEngine.InjectGlobalsFromJSON(const AJsonString: string);
+var
+  Parser: TGocciaJSONParser;
+  ParsedValue: TGocciaValue;
+  Obj: TGocciaObjectValue;
+  Key: string;
+begin
+  Parser := TGocciaJSONParser.Create;
+  try
+    ParsedValue := Parser.Parse(AJsonString);
+  finally
+    Parser.Free;
+  end;
+
+  if not (ParsedValue is TGocciaObjectValue) then
+    raise TGocciaRuntimeError.Create('Globals JSON must be a top-level object.',
+      0, 0, FFileName, nil);
+
+  Obj := TGocciaObjectValue(ParsedValue);
+  for Key in Obj.GetOwnPropertyKeys do
+    InjectGlobal(Key, Obj.GetProperty(Key));
+end;
+
+procedure TGocciaEngine.InjectGlobalsFromModule(const APath: string);
+var
+  Module: TGocciaModule;
+  ExportPair: TGocciaValueMap.TKeyValuePair;
+begin
+  Module := FInterpreter.LoadModule(APath, FFileName);
+  for ExportPair in Module.ExportsTable do
+    InjectGlobal(ExportPair.Key, ExportPair.Value);
 end;
 
 procedure TGocciaEngine.RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);

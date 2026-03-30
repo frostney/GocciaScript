@@ -12,7 +12,9 @@ uses
   Goccia.Compiler,
   Goccia.Engine,
   Goccia.Interpreter,
+  Goccia.JSON,
   Goccia.MicrotaskQueue,
+  Goccia.Modules,
   Goccia.Modules.Resolver,
   Goccia.Runtime.Bootstrap,
   Goccia.Values.Primitives,
@@ -42,6 +44,8 @@ type
     function RunModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
 
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
+    procedure InjectGlobalsFromJSON(const AJsonString: string);
+    procedure InjectGlobalsFromModule(const APath: string);
     procedure RegisterBuiltIns(const AGlobals: TGocciaGlobalBuiltins);
     procedure ClearTransientCaches;
 
@@ -148,7 +152,43 @@ procedure TGocciaBytecodeBackend.RegisterGlobal(const AName: string;
 begin
   if not Assigned(FInterpreter) then
     Exit;
-  FInterpreter.GlobalScope.DefineLexicalBinding(AName, AValue, dtConst);
+  if FInterpreter.GlobalScope.ContainsOwnLexicalBinding(AName) then
+    FInterpreter.GlobalScope.ForceUpdateBinding(AName, AValue)
+  else
+    FInterpreter.GlobalScope.DefineLexicalBinding(AName, AValue, dtConst);
+end;
+
+procedure TGocciaBytecodeBackend.InjectGlobalsFromJSON(const AJsonString: string);
+var
+  Parser: TGocciaJSONParser;
+  ParsedValue: TGocciaValue;
+  Obj: TGocciaObjectValue;
+  Key: string;
+begin
+  Parser := TGocciaJSONParser.Create;
+  try
+    ParsedValue := Parser.Parse(AJsonString);
+  finally
+    Parser.Free;
+  end;
+
+  if not (ParsedValue is TGocciaObjectValue) then
+    raise TGocciaRuntimeError.Create('Globals JSON must be a top-level object.',
+      0, 0, FSourcePath, nil);
+
+  Obj := TGocciaObjectValue(ParsedValue);
+  for Key in Obj.GetOwnPropertyKeys do
+    RegisterGlobal(Key, Obj.GetProperty(Key));
+end;
+
+procedure TGocciaBytecodeBackend.InjectGlobalsFromModule(const APath: string);
+var
+  Module: TGocciaModule;
+  ExportPair: TGocciaValueMap.TKeyValuePair;
+begin
+  Module := FInterpreter.LoadModule(APath, FSourcePath);
+  for ExportPair in Module.ExportsTable do
+    RegisterGlobal(ExportPair.Key, ExportPair.Value);
 end;
 
 procedure TGocciaBytecodeBackend.RegisterBuiltIns(
