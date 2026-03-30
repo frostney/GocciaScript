@@ -275,6 +275,21 @@ jobs:
           GOCCIA_BENCH_ROUNDS: 7
         run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress
 
+      - name: Run stdin benchmark smoke test
+        env:
+          GOCCIA_BENCH_CALIBRATION_MS: 100
+          GOCCIA_BENCH_ROUNDS: 7
+        run: |
+          if [ "${{ matrix.mode }}" = "bytecode" ]; then
+            printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
+              ./build/BenchmarkRunner - --mode=bytecode --no-progress --format=json --output=benchmark-stdin-bytecode.json
+            grep -q '"name": "sum"' benchmark-stdin-bytecode.json
+          else
+            printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
+              ./build/BenchmarkRunner --no-progress --format=json --output=benchmark-stdin.json
+            grep -q '"name": "sum"' benchmark-stdin.json
+          fi
+
       - name: Run benchmarks and save baseline
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux'
         env:
@@ -336,14 +351,6 @@ jobs:
 
           script_output_bytecode="$(printf 'const x = 2 + 2;\nx;\n' | ./build/ScriptLoader - --mode=bytecode)"
           printf '%s\n' "$script_output_bytecode" | grep -q 'Result: 4'
-
-          printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
-            ./build/BenchmarkRunner --no-progress --format=json --output=benchmark-stdin.json
-          grep -q '"name": "sum"' benchmark-stdin.json
-
-          printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
-            ./build/BenchmarkRunner - --mode=bytecode --no-progress --format=json --output=benchmark-stdin-bytecode.json
-          grep -q '"name": "sum"' benchmark-stdin-bytecode.json
 
   artifacts:
     needs: [test, benchmark, examples]
