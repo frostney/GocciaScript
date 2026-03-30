@@ -171,6 +171,11 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader --emit --output=out.gbc
 
 # Emit structured JSON for programmatic consumers
 printf "console.log('hi'); 2 + 2;" | ./build/ScriptLoader --output=json
+
+# Inject globals from the CLI
+printf "x + y;" | ./build/ScriptLoader --global x=10 --global y=20
+printf "name;" | ./build/ScriptLoader --globals=context.json --output=json
+# Injected globals can override earlier injected values, but not built-in globals like console
 ```
 
 See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode backend architecture.

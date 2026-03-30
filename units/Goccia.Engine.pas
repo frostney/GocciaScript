@@ -28,6 +28,7 @@ uses
   Goccia.Builtins.Temporal,
   Goccia.Builtins.TestAssertions,
   Goccia.Interpreter,
+  Goccia.JSON,
   Goccia.JSX.SourceMap,
   Goccia.Modules,
   Goccia.Modules.Resolver,
@@ -82,6 +83,7 @@ type
     FOwnsResolver: Boolean;
     FFileName: string;
     FSourceLines: TStringList;
+    FInjectedGlobals: TStringList;
     FGlobals: TGocciaGlobalBuiltins;
 
     // Built-in objects
@@ -123,6 +125,9 @@ type
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
 
     procedure AddAlias(const APattern, AReplacement: string);
+    procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
+    procedure InjectGlobalsFromJSON(const AJsonString: string);
+    procedure InjectGlobalsFromModule(const APath: string);
     procedure RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
 
     class function RunScript(const ASource: string; const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaScriptResult; overload;
@@ -222,6 +227,7 @@ begin
 
   TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
 
+  FInjectedGlobals := TStringList.Create;
   PinSingletons;
   RegisterBuiltIns;
 end;
@@ -249,6 +255,7 @@ begin
     FBuiltinBenchmark.Free;
     FBuiltinTemporal.Free;
     FBuiltinArrayBuffer.Free;
+    FInjectedGlobals.Free;
 
     FInterpreter.Free;
     if FOwnsResolver then
@@ -553,6 +560,62 @@ end;
 procedure TGocciaEngine.AddAlias(const APattern, AReplacement: string);
 begin
   FResolver.AddAlias(APattern, AReplacement);
+end;
+
+procedure TGocciaEngine.InjectGlobal(const AKey: string; const AValue: TGocciaValue);
+begin
+  if FInterpreter.GlobalScope.ContainsOwnLexicalBinding(AKey) then
+  begin
+    if FInjectedGlobals.IndexOf(AKey) >= 0 then
+      FInterpreter.GlobalScope.ForceUpdateBinding(AKey, AValue)
+    else
+      raise TGocciaRuntimeError.Create(
+        'Cannot override built-in global "' + AKey + '" via globals injection.',
+        0, 0, FFileName, FSourceLines);
+  end
+  else
+  begin
+    FInterpreter.GlobalScope.DefineLexicalBinding(AKey, AValue, dtConst);
+    FInjectedGlobals.Add(AKey);
+  end;
+end;
+
+procedure TGocciaEngine.InjectGlobalsFromJSON(const AJsonString: string);
+var
+  Parser: TGocciaJSONParser;
+  ParsedValue: TGocciaValue;
+  Obj: TGocciaObjectValue;
+  Key: string;
+begin
+  Parser := TGocciaJSONParser.Create;
+  try
+    ParsedValue := Parser.Parse(AJsonString);
+  finally
+    Parser.Free;
+  end;
+
+  if not (ParsedValue is TGocciaObjectValue) then
+    raise TGocciaRuntimeError.Create('Globals JSON must be a top-level object.',
+      0, 0, FFileName, nil);
+
+  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Obj := TGocciaObjectValue(ParsedValue);
+    for Key in Obj.GetOwnPropertyKeys do
+      InjectGlobal(Key, Obj.GetProperty(Key));
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+procedure TGocciaEngine.InjectGlobalsFromModule(const APath: string);
+var
+  Module: TGocciaModule;
+  ExportPair: TGocciaValueMap.TKeyValuePair;
+begin
+  Module := FInterpreter.LoadModule(APath, FFileName);
+  for ExportPair in Module.ExportsTable do
+    InjectGlobal(ExportPair.Key, ExportPair.Value);
 end;
 
 procedure TGocciaEngine.RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
