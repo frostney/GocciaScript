@@ -361,13 +361,17 @@ jobs:
             const fs = require('fs');
 
             const fmtOps = (n) => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-            const fmtPercent = (change) => `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`;
+            const fmtPercent = (change) => {
+              if (change == null) return 'N/A';
+              return `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`;
+            };
             const fmtAvg = (changes) => {
               if (changes.length === 0) return '';
               const avg = changes.reduce((a, b) => a + b, 0) / changes.length;
               return `avg ${fmtPercent(avg)}`;
             };
             const fmtDelta = (classification, change) => {
+              if (change == null) return classification === 'new' ? '🆕' : 'N/A';
               if (classification === 'improved') return `🟢 ${fmtPercent(change)}`;
               if (classification === 'regressed') return `🔴 ${fmtPercent(change)}`;
               if (classification === 'unchanged') return `~ overlap (${fmtPercent(change)})`;
@@ -471,7 +475,7 @@ jobs:
                   if (iBaseEntry) {
                     const c = calculateChange(iBaseEntry, iCurrent);
                     const classification = classify(iBaseEntry, iCurrent);
-                    fileS.interp.changes.push(c);
+                    if (c != null) fileS.interp.changes.push(c);
                     fileS.interp[classification]++;
                     iDelta = fmtDelta(classification, c);
                   } else {
@@ -483,7 +487,7 @@ jobs:
                   if (bCurrentEntry && bBaseEntry) {
                     const c = calculateChange(bBaseEntry, bCurrentEntry);
                     const classification = classify(bBaseEntry, bCurrentEntry);
-                    fileS.bytecode.changes.push(c);
+                    if (c != null) fileS.bytecode.changes.push(c);
                     fileS.bytecode[classification]++;
                     bDelta = fmtDelta(classification, c);
                   } else if (bCurrentEntry) {
