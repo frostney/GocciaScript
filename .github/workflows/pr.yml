@@ -88,35 +88,6 @@ jobs:
           ./build/Goccia.Compiler.Test
           ./build/Goccia.Builtins.TestAssertions.Test
 
-  wasm-test:
-    needs: build
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Download build
-        uses: actions/download-artifact@v5
-        with:
-          name: build-pr
-          path: build/
-
-      - name: Make binaries executable
-        run: chmod +x build/*
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: '22'
-
-      - name: Run WASM integration tests
-        run: node ./tests-wasm/run-wasm-tests.mjs
-
   benchmark:
     needs: build
     runs-on: ubuntu-latest

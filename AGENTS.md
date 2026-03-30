@@ -27,26 +27,24 @@ GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a 
 
 ```bash
 ./build/ScriptLoader example.js                  # Execute a script (interpreted)
-./build/ScriptLoader example.js --mode=bytecode  # Execute via Souffle VM
-./build/ScriptLoader example.js --emit           # Compile to .sbc (no execution)
-./build/ScriptLoader example.js --emit=bytecode  # Compile to .sbc (explicit)
-./build/ScriptLoader example.js --emit=wasm      # Compile to .wasm
-./build/ScriptLoader example.js --emit --output=out.sbc   # Custom output path
-./build/ScriptLoader example.js --emit=wasm --output=out.wasm  # Custom WASM output
-./build/ScriptLoader out.sbc                     # Load and execute .sbc bytecode
+./build/ScriptLoader example.js --mode=bytecode  # Execute via bytecode VM
+./build/ScriptLoader example.js --emit           # Compile to .gbc (no execution)
+./build/ScriptLoader example.js --emit=bytecode  # Compile to .gbc (explicit)
+./build/ScriptLoader example.js --emit --output=out.gbc   # Custom output path
+./build/ScriptLoader out.gbc                     # Load and execute .gbc bytecode
 ./build/REPL                                      # Start interactive REPL
 ./build/TestRunner tests/                                                      # Run all JavaScript tests
 ./build/TestRunner tests/language/expressions/                                 # Run a test category
 ./build/TestRunner tests --no-progress --exit-on-first-failure                 # CI mode
 ./build/TestRunner tests --silent                                              # Suppress all console output
 ./build/TestRunner tests --output=results.json                                 # Write test results as JSON
-./build/TestRunner tests --mode=bytecode                                       # Run tests via Souffle VM
+./build/TestRunner tests --mode=bytecode                                       # Run tests via the Goccia bytecode VM
 ./build/BenchmarkRunner benchmarks/                                               # Run all benchmarks
 ./build/BenchmarkRunner benchmarks/fibonacci.js                                   # Run a specific benchmark
 ./build/BenchmarkRunner benchmarks --format=json --output=out.json                # Export as JSON
 ./build/BenchmarkRunner benchmarks --format=console --format=json --output=out.json # Console + JSON
 ./build/BenchmarkRunner benchmarks --no-progress                                  # Suppress progress (CI)
-./build/BenchmarkRunner benchmarks --mode=bytecode                                # Benchmarks via Souffle VM
+./build/BenchmarkRunner benchmarks --mode=bytecode                                # Benchmarks via the Goccia bytecode VM
 ```
 
 ### Compile and Run (Common Workflows)
@@ -79,13 +77,11 @@ fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- BenchmarkRunner.dpr
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for the full architecture deep-dive. See [docs/souffle-vm.md](docs/souffle-vm.md) for the Souffle VM architecture.
+See [docs/architecture.md](docs/architecture.md) for the full architecture deep-dive and [docs/bytecode-vm.md](docs/bytecode-vm.md) for the bytecode backend.
 
 **Interpreted pipeline:** Source → (JSX Transformer) → Lexer → Parser → Interpreter → Evaluator → Result
 
-**Bytecode pipeline:** Source → Lexer → Parser → Compiler → Souffle Bytecode → Souffle VM → Result
-
-**WASM pipeline:** Source → Lexer → Parser → Compiler → Souffle Bytecode → WASM Translator → `.wasm` binary
+**Bytecode pipeline:** Source → Lexer → Parser → Compiler → Goccia Bytecode → Goccia VM → Result
 
 **Key components:**
 
@@ -93,103 +89,24 @@ See [docs/architecture.md](docs/architecture.md) for the full architecture deep-
 |-----------|------|------|
 | Engine | `Goccia.Engine.pas` | Top-level orchestration, built-in registration |
 | Lexer | `Goccia.Lexer.pas` | Source → tokens |
-| Parser | `Goccia.Parser.pas` | Tokens → AST (including `TGocciaForOfStatement`, `TGocciaForAwaitOfStatement` in `Goccia.AST.Statements.pas`) |
+| Parser | `Goccia.Parser.pas` | Tokens → AST |
 | Interpreter | `Goccia.Interpreter.pas` | AST execution, module loading, scope ownership |
-| Evaluator Context | `Goccia.Evaluator.Context.pas` | `TGocciaEvaluationContext` record — evaluation state passed through the AST and evaluator |
-| Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation (+ sub-modules: Arithmetic, Bitwise, Comparison, Assignment, TypeOperations). `EvaluateExpression` and `EvaluateStatement` delegate to VMT dispatch (`TGocciaExpression.Evaluate` / `TGocciaStatement.Execute`). Helper functions (`EvaluateBinary`, `EvaluateCall`, `EvaluateBlock`, `EvaluateIf`, `EvaluateTry`, `EvaluateSwitch`, `EvaluateForOf`, `EvaluateForAwaitOf`) remain as standalone functions called by the AST overrides. Statement-level functions return `TGocciaControlFlow` records |
-| Control Flow | `Goccia.ControlFlow.pas` | `TGocciaControlFlow` result record (`cfkNormal`, `cfkReturn`, `cfkBreak`) for exception-free propagation of `return` and `break` signals through the interpreter |
-| Scope | `Goccia.Scope.pas` | Lexical scoping, variable bindings, TDZ, VMT-based chain-walking |
-| Reserved Keywords | `Goccia.Keywords.Reserved.pas` | Reserved JavaScript keyword string constants (`break`, `class`, `const`, `this`, etc.) |
-| Contextual Keywords | `Goccia.Keywords.Contextual.pas` | Contextual keyword string constants (`async`, `get`, `set`, `type`, `interface`, `implements`, etc.) |
-| Timing Utilities | `TimingUtils.pas` | Cross-platform timing: monotonic (`GetNanoseconds`, `GetMilliseconds`), wall-clock (`GetEpochNanoseconds`), and duration formatting (`FormatDuration`) |
-| Microtask Queue | `Goccia.MicrotaskQueue.pas` | Singleton FIFO queue for Promise reactions and `queueMicrotask` callbacks, drained after script execution, cleared on exception |
-| Call Stack | `Goccia.CallStack.pas` | Singleton call frame stack for `Error.stack` traces — pushed/popped in `EvaluateCall`/`EvaluateNewExpression`, captured at error construction |
-| GC Managed Base | `GarbageCollector.Managed.pas` | `TGCManagedObject` — base class for all GC-managed objects (`GCMarked`, `GCIndex`, `AdvanceMark`, virtual `MarkReferences`); inherited by `TGocciaValue`, `TGocciaScope`, and `TSouffleHeapObject` |
-| Garbage Collector | `GarbageCollector.Generic.pas` | `TGarbageCollector` — singleton mark-and-sweep GC with generation-counter mark tracking (`Initialize`, `Instance`, `Shutdown`); manages all objects (values, scopes, heap objects) in one pool; O(1) `UnregisterObject`; methods: `RegisterObject`, `UnregisterObject`, `PinObject`, `UnpinObject`, `AddTempRoot`, `RemoveTempRoot`, `IsTempRoot`, `AddRootObject`, `RemoveRootObject`, `PushActiveRoot`, `PopActiveRoot`, `AddExternalRootMarker`, `RemoveExternalRootMarker`, `AllocateObject`, `Collect`, `CollectIfNeeded`, `CollectIfNeeded(AProtect)` (protects a stack-held `TGCManagedObject` via the active root stack during on-demand collection) |
-| Iterator Base | `Goccia.Values.IteratorValue.pas` | Iterator protocol base class, shared prototype with helper methods, `Iterator.from()`, `CreateGlobalObject` |
-| Object Model | `Goccia.ObjectModel.pas` | Shared member-definition records and bootstrap helpers for prototype/static registration (`DefineNamedMethod`, `RegisterMemberDefinitions`, `ExposeSharedPrototypeOnConstructor`) |
-| Object Model Engine | `Goccia.ObjectModel.Engine.pas` | Constructor/type registration helpers used by `Goccia.Engine.pas` to centralize built-in constructor/prototype wiring |
-| Concrete Iterators | `Goccia.Values.Iterator.Concrete.pas` | Array/String/Map/Set iterator subclasses with virtual `AdvanceNext` |
-| Lazy Iterators | `Goccia.Values.Iterator.Lazy.pas` | Lazy `map`/`filter`/`take`/`drop`/`flatMap` iterator wrappers |
-| Generic Iterator | `Goccia.Values.Iterator.Generic.pas` | Wraps user-defined `{next()}` objects as proper iterators |
-| ArrayBuffer Value | `Goccia.Values.ArrayBufferValue.pas` | `TGocciaArrayBufferValue` — fixed-length raw binary data buffer backed by `TBytes` |
-| SharedArrayBuffer Value | `Goccia.Values.SharedArrayBufferValue.pas` | `TGocciaSharedArrayBufferValue` — shared-memory binary data buffer backed by `TBytes` |
-| ArrayBuffer Built-in | `Goccia.Builtins.GlobalArrayBuffer.pas` | ArrayBuffer/SharedArrayBuffer constructors, `isView` static method |
-| Enum Value | `Goccia.Values.EnumValue.pas` | TC39 proposal-enum: `TGocciaEnumValue` (null-prototype, non-extensible, iterable via `Symbol.iterator`) |
-| Auto-Accessor Helpers | `Goccia.Values.AutoAccessor.pas` | `TGocciaAutoAccessorGetter`, `TGocciaAutoAccessorSetter` — getter/setter methods for auto-accessor backing fields |
-| Async Function Values | `Goccia.Values.AsyncFunctionValue.pas` | `TGocciaAsyncFunctionValue`, `TGocciaAsyncArrowFunctionValue`, `TGocciaAsyncMethodValue` — async variants that wrap body execution in Promise |
-| Evaluator Decorator Helpers | `Goccia.Evaluator.Decorators.pas` | `TGocciaInitializerCollector`, `TGocciaAccessGetter`, `TGocciaAccessSetter` — helper classes for decorator runtime (FPC closure workaround) |
-| JSON Utilities | `Goccia.JSON.pas` | Standalone JSON ↔ `TGocciaValue` parser and stringifier |
-| Version | `Goccia.Version.pas` | Git-derived version and commit hash, resolved once at startup via `RunCommand` |
-| Temporal Utilities | `Goccia.Temporal.Utils.pas` | ISO 8601 date math helpers, parsing, formatting |
-| Performance Built-in | `Goccia.Builtins.Performance.pas` | High Resolution Time API: `performance.now()`, `performance.timeOrigin`, `performance.toJSON()` |
-| Temporal Built-in | `Goccia.Builtins.Temporal.pas` | Temporal namespace, constructors, static methods, Temporal.Now |
-| File Extensions | `Goccia.FileExtensions.pas` | Centralized file extension constants (`EXT_JS`, `EXT_MJS`, `EXT_SBC`, etc.), `ScriptExtensions` array, `IsScriptExtension`/`IsJSXNativeExtension` helpers |
-| Module Resolver | `Goccia.Modules.Resolver.pas` | Extensionless imports, path aliases, virtual `Resolve` for custom resolvers |
-| JSX Source Map | `Goccia.JSX.SourceMap.pas` | Lightweight internal position mapping for JSX-transformed source |
-| JSX Transformer | `Goccia.JSX.Transformer.pas` | Standalone pre-pass that converts JSX to `createElement` calls |
-| Logger | `Goccia.Logger.pas` | Configurable logging with levels and output formats |
-| Benchmark Reporter | `Goccia.Benchmark.Reporter.pas` | Multi-format benchmark output (console, text, CSV, JSON) with setup/teardown timing, min/max range, `HasFailures` for exit code reporting |
-| REPL Line Editor | `Goccia.REPL.LineEditor.pas` | Interactive line editing with history for the REPL |
-| REPL Formatter | `Goccia.REPL.Formatter.pas` | Color-formatted value output for the REPL |
-| Shared Prototype | `Goccia.SharedPrototype.pas` | Shared prototype singleton utilities; `Create` auto-pins both prototype and method host with the GC |
-| Constants | `Goccia.Constants.pas` | Literal value strings (`'true'`, `'NaN'`, etc.) and numeric constants |
-| Constants: Type Names | `Goccia.Constants.TypeNames.pas` | `typeof` result string constants (`'object'`, `'string'`, etc.) |
-| Constants: Property Names | `Goccia.Constants.PropertyNames.pas` | Common property name constants (`'length'`, `'constructor'`, etc.) |
-| Constants: Error Names | `Goccia.Constants.ErrorNames.pas` | Error type name constants (`'TypeError'`, `'RangeError'`, etc.) |
-| Constants: Constructor Names | `Goccia.Constants.ConstructorNames.pas` | Built-in constructor name constants (`'Object'`, `'Array'`, etc.) |
-| ToPrimitive | `Goccia.Values.ToPrimitive.pas` | ECMAScript `ToPrimitive` abstract operation |
-| Error Helper | `Goccia.Values.ErrorHelper.pas` | `ThrowTypeError`, `ThrowRangeError`, `ThrowReferenceError`, `ThrowSyntaxError`, `ThrowError`, `ThrowDataCloneError` (creates DOMException with code 25), centralized error construction with proper prototype chain. All runtime errors must go through these helpers (not `TGocciaError.Create`) so the resulting exception is a `TGocciaThrowValue` with a proper JS Error object, catchable from JavaScript `try...catch`. |
-| Argument Validator | `Goccia.Arguments.Validator.pas` | `RequireExactly`, `RequireAtLeast` — standardized argument count/type validation |
-| Argument Callbacks | `Goccia.Arguments.Callbacks.pas` | Pre-typed callback argument collections for array prototype methods |
-| Base Map | `BaseMap.pas` | `TBaseMap<TKey, TValue>` — abstract generic base for all map types; shared type aliases, abstract API contract, concrete iteration (`ToArray`, `Keys`, `Values`, `ForEach`) built on a single `GetNextEntry` primitive |
-| Ordered Map | `OrderedMap.pas` | `TOrderedMap<TKey, TValue>` — generic insertion-order-preserving map with virtual hash/equality; default: DJB2 over raw key bytes + byte-level equality |
-| Ordered String Map | `OrderedStringMap.pas` | `TOrderedStringMap<TValue>` — string-keyed ordered map inheriting `TBaseMap<string, TValue>`; DJB2 hash on characters, `static inline` — zero virtual dispatch on hash/equality; 4–6× faster inserts than `TDictionary` at N=20–100 |
-| Hash Map | `HashMap.pas` | `THashMap<TKey, TValue>` — open-addressed hash map with backshift deletion (no tombstones); specialized multiplicative hash for pointer-sized keys (golden-ratio/Fibonacci), direct integer equality; bitwise-AND slot indexing |
-| String Buffer | `StringBuffer.pas` | `TStringBuffer` — advanced record for efficient string building with preallocated doubling growth via `AnsiString` + `Move`, replacing `TStringBuilder`. `DEFAULT_CAPACITY` constant (64) used by `Create` default parameter and zero/negative fallback |
-| Binding Map | `Goccia.Scope.BindingMap.pas` | `TOrderedStringMap<TLexicalBinding>` — scope chain variable bindings; hash-based O(1) lookup per scope level; scope chain walking handled by `TGocciaScope` (not the map) |
-| Array Utils | `Goccia.Utils.Array.pas` | `ArrayCreateDataProperty` helper for spec-compliant array operations |
-| TypedArray Value | `Goccia.Values.TypedArrayValue.pas` | `TGocciaTypedArrayValue` — view over ArrayBuffer with fixed element type (Int8, Uint8, Uint8Clamped, Int16, Uint16, Int32, Uint32, Float32, Float64), `TGocciaTypedArrayClassValue`, `TGocciaTypedArrayStaticFrom` |
-| Test Console | `Goccia.Builtins.TestConsole.pas` | Silent console override for `--silent` mode in TestRunner |
-| Souffle VM | `Souffle.VM.pas` | Register-based bytecode VM with two-tier dispatch (Tier 1 intrinsic + Tier 2 runtime); `ResolveAsyncThrow` converts unhandled throws in async frames to rejected promises and resumes the VM loop when caller frames remain |
-| Souffle Value | `Souffle.Value.pas` | `TSouffleValue` tagged union: Nil, Boolean, Integer, Float, String, Reference |
-| Souffle Bytecode | `Souffle.Bytecode.pas` | Opcode definitions (Tier 1 + Tier 2), 32-bit instruction encoding/decoding |
-| Souffle Bytecode Chunk | `Souffle.Bytecode.Chunk.pas` | `TSouffleFunctionTemplate` — code, constants, upvalue descriptors, exception handlers |
-| Souffle Bytecode Module | `Souffle.Bytecode.Module.pas` | `TSouffleBytecodeModule` — top-level function template, imports, exports, runtime tag |
-| Souffle Bytecode Binary | `Souffle.Bytecode.Binary.pas` | `.sbc` file serialization/deserialization (`SOUFFLE_FORMAT_VERSION = 3`: little-endian byte order, per-local strict flags, `TypeCheckPreambleSize`) |
-| Souffle Debug Info | `Souffle.Bytecode.Debug.pas` | Source line mapping, local variable info for debuggers |
-| Souffle Closure | `Souffle.VM.Closure.pas` | `TSouffleClosure` — function prototype + captured upvalue array |
-| Souffle Upvalue | `Souffle.VM.Upvalue.pas` | `TSouffleUpvalue` — open (register pointer) or closed (captured value) |
-| Souffle Call Frame | `Souffle.VM.CallFrame.pas` | `TSouffleVMCallFrame`, `TSouffleCallStack` |
-| Souffle Exception | `Souffle.VM.Exception.pas` | `TSouffleHandlerStack`, `ESouffleThrow` — handler-table exception model |
-| Souffle Runtime Ops | `Souffle.VM.RuntimeOperations.pas` | `TSouffleRuntimeOperations` — 47-method interface (41 abstract + 6 virtual with defaults) for language-specific semantics, including `ExtendedOperation` for sub-opcode dispatch |
-| Souffle Heap | `Souffle.Heap.pas` | `TSouffleHeapObject` base class, `TSouffleString`, heap kind constants |
-| GocciaScript Backend | `Goccia.Engine.Backend.pas` | `TGocciaSouffleBackend` — bridges GocciaScript engine to Souffle VM; initializes `TGarbageCollector`, disables automatic collection during `RunModule`, restores previous `Enabled` state afterward |
-| WASM Emitter | `Souffle.Wasm.Emitter.pas` | `TWasmModule`, `TWasmCodeBuilder` — WASM binary module builder (types, imports, functions, exports, custom sections); `AddCustomSection` for embedding constant pool data |
-| WASM Types | `Souffle.Wasm.Types.pas` | `TSouffleWasmTypeLayout` — WASM GC type definitions for Souffle values; `SouffleLocalTypeToWasmValType` helper |
-| WASM Translator | `Souffle.Wasm.Translator.pas` | `TSouffleWasmTranslator` — Souffle bytecode → WASM translation: function flattening, register-to-local mapping, control flow reconstruction (sorted targets approach with interior/exterior block classification for try ranges), demand-driven runtime import wiring, constant pool flattening with `souffle:constants` custom section, native WASM exception handling (`try`/`catch`/`throw` via imported tag), all Tier 1 + Tier 2 opcodes. All functions exported as `__fn_N` for closure invocation |
-| WASM Host Runtime | `tests-wasm/souffle-host.mjs` | Node.js ES module that loads `.wasm`, extracts `souffle:constants` custom section, provides `souffle` module imports (value construction, arithmetic, property access, closures, blueprints, exception tag), manages `currentClosure` for upvalue access |
-| GocciaScript Compiler | `Goccia.Compiler.pas` | `TGocciaCompiler` — AST → Souffle bytecode compilation, top-level dispatch |
-| Compiler Expressions | `Goccia.Compiler.Expressions.pas` | Expression compilation: functions, methods, identifiers, typed local load/store |
-| Compiler Statements | `Goccia.Compiler.Statements.pas` | Statement compilation: variables, classes (`IsSimpleClass` + `CompileClassDeclaration`), control flow |
-| Compiler Context | `Goccia.Compiler.Context.pas` | `TGocciaCompilationContext` — compilation state passed through sub-units |
-| Compiler Scope | `Goccia.Compiler.Scope.pas` | `TGocciaCompilerScope` — lexical scope tracking, local/upvalue resolution, type hints (`TSouffleLocalType`); `DeclareLocal` resets all fields including `ReturnTypeHint`, `ParamTypeSignature`, and `IsGlobalBacked` to prevent stale metadata when array slots are reused after `EndScope`. `TGocciaCompilerUpvalue` carries `IsGlobalBacked` — propagated from the parent local or parent upvalue in `ResolveUpvalue` — so trusted-call inference can reject global-backed upvalue callees |
-| Compiler Constant Folding | `Goccia.Compiler.ConstantFolding.pas` | Compile-time constant folding for arithmetic and comparison expressions |
-| Compiler Extension Ops | `Goccia.Compiler.ExtOps.pas` | GocciaScript-specific sub-opcode constants (`GOCCIA_EXT_*`) for `OP_RT_EXT` dispatch |
-| GocciaScript Runtime | `Goccia.Runtime.Operations.pas` | `TGocciaRuntimeOperations` — GocciaScript semantics for Souffle VM, bridge caches (`FClosureBridgeCache`, `FArrayBridgeCache`, `FArrayBridgeReverse`, `FRecordBridgeCache`, `FBlueprintBridgeCache`), cross-GC rooting, array bridge sync (`SyncCachedGocciaToSouffle` at bridge entry, `SyncSouffleArrayToCache` after native mutations), native delegate methods (array, string, number, Map, Set), `FBlueprintSuperValues` for built-in subclass static property inheritance |
+| Evaluator | `Goccia.Evaluator.pas` | Pure AST evaluation |
+| Compiler | `Goccia.Compiler*.pas` | AST → Goccia bytecode |
+| Bytecode format | `Goccia.Bytecode*.pas` | Opcodes, templates, modules, binary I/O, debug info |
+| VM | `Goccia.VM*.pas` | Register execution, closures, upvalues, exception handlers |
+| Runtime bootstrap | `Goccia.Runtime.Bootstrap.pas` | Shared built-in and global initialization |
+| Shared values | `Goccia.Values.*.pas` | Arrays, objects, classes, promises, iterators, primitives |
+| Garbage collector | `GarbageCollector.Generic.pas` | Shared GC for interpreter and bytecode execution |
 
-**Souffle VM known limitations:** The bytecode backend passes 100% of the test suite (3,501 tests). Most language features execute natively in the VM: user-defined classes with constructors, named methods, getters, setters, static members, private fields/methods, computed property names, and instance fields compile to `TSouffleBlueprint` with `__fields__` initializer closures; classes extending built-in constructors (`Array`, `Map`, `Set`, `Promise`, `Object`) compile natively via `FBlueprintSuperValues` and `TGocciaSuperCallHelper`; array and string iteration uses `TGocciaSouffleArrayIterator`/`TGocciaSouffleStringIterator`; Map and Set iteration uses direct `TGocciaMapIteratorValue`/`TGocciaSetIteratorValue` creation; built-in constructors use a `TGocciaBridgedFunction` fast path; Map/Set property access and method calls use native delegates (`FMapDelegate`/`FSetDelegate`). The bridge still delegates to the interpreter for: module imports and async/await (microtask queue). Bridged arrays use a dual-representation model with `SyncCachedGocciaToSouffle` at bridge entry and `SyncSouffleArrayToCache` after native mutations; `FArrayBridgeReverse` preserves reference identity across round-trips. `FBlueprintBridgeCache` persists across bridge calls to maintain `instanceof` identity for blueprint-backed classes. Decorators are compiled natively via `GOCCIA_EXT_BEGIN_DECORATORS`, `APPLY_ELEMENT_DECORATOR`, and `FINISH_DECORATORS` extension opcodes. `.sbc` binary format uses little-endian byte order for cross-platform portability. ABC-encoded instructions limit constant pool references to 255 per prototype. The interpreter and Souffle VM share a unified GC singleton (`TGarbageCollector.Instance`); automatic collection is disabled during VM execution to avoid sweeping Souffle objects on the Pascal stack. Both the BenchmarkRunner and TestRunner call `Collect` after each file to reclaim memory (critical on 32-bit Windows where address space is limited to ~2 GB). See [docs/souffle-vm.md § Known Limitations](docs/souffle-vm.md#known-limitations) for the full list.
+**Bytecode design rules:**
 
-**Souffle VM design rules:**
-- The `souffle/` directory must not import `Goccia.*` units — all GocciaScript dependencies live in the bridge files (`Goccia.Engine.Backend.pas`, `Goccia.Runtime.Operations.pas`, `Goccia.Compiler.pas`, and `Goccia.Compiler.*.pas` sub-units).
-- **Uniform receiver handling** — Register 0 always holds the receiver (`SouffleNil` for non-methods). There is no `AIsMethodCall` flag or side-table. The compiler reserves slot 0 for the receiver in every function.
-- **Typed local variables** — The compiler infers `TSouffleLocalType` hints (`sltUntyped`, `sltInteger`, `sltFloat`, `sltBoolean`, `sltString`, `sltReference`) from literal initializers and type annotations, storing them on `TSouffleFunctionTemplate`. All numeric values from source code are `sltFloat` (IEEE 754 double); `sltInteger` is reserved for known-integer results like `.length`. Type hints and strict enforcement are separate concerns: `TSouffleLocalType` per-slot hints select optimized typed opcodes (`OP_GET_LOCAL_FLOAT`, `OP_ADD_FLOAT`, etc.), while the per-local `IsStrictlyTyped` flag (stored in `LocalStrictFlags` on the template) controls whether reassignment to an incompatible type throws `TypeError`. The per-function `TypeCheckPreambleSize` records how many `OP_CHECK_TYPE` instructions form the parameter validation preamble. In the current GocciaScript compiler, `IsStrictlyTyped` is set whenever a non-untyped type hint is inferred — so variables with initializers (`let x = 5`) or type annotations (`let x: number`) are both type-hinted and strictly typed. Typed opcodes are inlined in the VM main dispatch loop for zero procedure-call overhead. `OP_CHECK_TYPE` for `sltFloat` coerces integer values to float at function boundaries. `OP_CHECK_TYPE` always executes — there is no frame-wide bypass. Preamble type checks (parameter validation) are skipped for trusted calls by advancing `Frame^.IP` past `TypeCheckPreambleSize` in `CallClosure`; body-level type checks remain active even in trusted frames. Trusted calls require the callee binding to be immutable (`IsConst`) and not global-backed (`IsGlobalBacked`). `SouffleToDouble` is the inline helper for float coercion in typed opcodes — it guards against non-numeric kinds (returns `NaN` with a debug assertion). `BuildParamTypeSignature` clears the entire signature if any parameter is optional or defaulted, since their types cannot be checked at the preamble (before defaults are applied). `DeclareLocal` in `TGocciaCompilerScope` resets all fields (`ReturnTypeHint`, `ParamTypeSignature`, `IsGlobalBacked`) to prevent stale metadata from leaking across scope reuse.
-- **Class compilation** — Classes with constructors, named methods, getters, setters, static members, private fields/methods, and computed property names are compiled to VM blueprint opcodes (`OP_NEW_BLUEPRINT`, `OP_INHERIT`, `OP_RECORD_SET`, `OP_INSTANTIATE`) plus extension opcodes (`GOCCIA_EXT_DEF_GETTER`, `GOCCIA_EXT_DEF_SETTER`, `GOCCIA_EXT_DEF_STATIC_GETTER`, `GOCCIA_EXT_DEF_STATIC_SETTER`). Classes extending built-in constructors are compiled natively via `FBlueprintSuperValues` (which maps blueprints to their wrapped non-blueprint superclasses) and `TGocciaSuperCallHelper` (which bridges `super()` calls to non-blueprint constructors). Decorators are compiled natively via `GOCCIA_EXT_BEGIN_DECORATORS`, `APPLY_ELEMENT_DECORATOR`, and `FINISH_DECORATORS` extension opcodes. `OP_RECORD_SET` is overloaded: when the target is a `TSouffleBlueprint`, it stores into `Blueprint.Methods`. Private members use `#`-prefixed keys (e.g., `#field`, `#method`). Computed property names are evaluated at class definition time and stored as dynamic keys.
-- NaN handling in the Souffle layer uses raw IEEE 754 bit-pattern checks (`FloatBitsAreNaN`), not FPC's `Math.IsNaN`, to avoid language-runtime dependencies and AArch64 pitfalls.
-- New Tier 2 opcodes should only be added when no combination of existing opcodes can express the semantics efficiently. Language-specific features should use `OP_RT_EXT` with sub-opcode IDs defined in the language's extension constants unit (e.g., `Goccia.Compiler.ExtOps.pas`).
-- The `TSouffleRuntimeOperations` abstract class defines the contract between the VM and any language frontend (47 methods: 41 abstract + 6 virtual with defaults — `DeleteIndex`, `WrapInPromise`, `CoerceValueToString`, `ExtendedOperation`, `CheckLocalType`, `MarkExternalRoots`). `CheckLocalType` is called by `OP_CHECK_TYPE` for non-fast-path cases (e.g., type mismatches other than integer→float); frontends override it to throw type errors. GocciaScript's `TGocciaRuntimeOperations` is one implementation; future frontends provide their own.
-- **Spread calling** uses the C flags byte on `OP_RT_CALL` / `OP_RT_CALL_METHOD` (bit 0 = spread mode, bit 1 = trusted flag, B = args array register in spread mode). Both opcodes propagate the trusted flag into `CallClosure`. No separate spread opcodes.
-- **Per-property flags** (writable, configurable) on `TSouffleRecordEntry.Flags` are the fundamental primitive. `SetEntryFlags`, `PutWithFlags`, and `PreventExtensions` are the building blocks. Bulk operations like `Freeze` (set all flags to 0 + prevent extensions) are derived convenience methods called from language runtimes — not opcodes.
+- The VM register file uses tagged `TGocciaRegister` values internally. Hot scalar kinds (`undefined`, `null`, `hole`, booleans, integers, floats) stay unboxed in registers; object/runtime boundaries materialize `TGocciaValue` instances when needed.
+- Bytecode mode uses the same runtime objects as the interpreter.
+- Use `Goccia.Bytecode*` and `Goccia.VM*` names in new code.
+- Use `.gbc`, not `.sbc`.
+- WASM emission is removed pre-1.0.
+- Prefer Goccia-specific opcodes over generic extension layers when the semantics are language-owned.
 
 ## Development Workflow
 
@@ -286,10 +203,11 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 
 ### 4. Garbage Collector Awareness
 
-GocciaScript uses a **unified mark-and-sweep garbage collector** shared by both the interpreter and the Souffle VM. Marking uses a generation counter (`FGCMark`/`FCurrentMark`) with `TGCManagedObject.AdvanceMark` providing O(1) mark-clear instead of an O(n) loop. All GC-managed objects — `TGocciaValue`, `TGocciaScope`, and `TSouffleHeapObject` — inherit from `TGCManagedObject` (`GarbageCollector.Managed.pas`), which provides the `GCMarked` property (backward-compatible), `GCIndex` (for O(1) unregistration), and virtual `MarkReferences` method. A single `TGarbageCollector` singleton (`GarbageCollector.Generic.pas`) manages all objects in one pool via `Initialize`, `Instance`, and `Shutdown`. Souffle code accesses the singleton via `TGarbageCollector.Instance` (no `Goccia.*` import needed). Automatic collection (`CollectIfNeeded`) is disabled during VM execution to avoid sweeping Souffle heap objects that are on the Pascal stack but not yet in VM registers; both the BenchmarkRunner and TestRunner call `Collect` after each file to reclaim memory between script executions. All `TGocciaValue` instances auto-register with the GC via `AfterConstruction`. The GC provides three collection methods: `Collect` (unconditional full mark-and-sweep), `CollectIfNeeded` (threshold-gated automatic collection, respects `Enabled` flag), and `CollectYoung(AWatermark)` (pre-marks objects before the watermark so MarkReferences short-circuits on them, then mark-and-sweep — only young objects are traversed; assumes old objects do not acquire new references to young objects between watermark capture and collection). The `Watermark` property captures the current allocation position for use with `CollectYoung`. During benchmark measurement, GC is explicitly disabled (`Enabled := False`) for both interpreter and bytecode modes to ensure identical GC behavior; a full `Collect` runs before measurement to provide a clean heap baseline, and `CollectYoung` runs between rounds to prevent OOM on memory-constrained platforms (e.g. 32-bit Windows with ~2 GB address space). Key rules:
+GocciaScript uses a **unified mark-and-sweep garbage collector** shared by both the interpreter and the bytecode VM. Marking uses a generation counter (`FGCMark`/`FCurrentMark`) with `TGCManagedObject.AdvanceMark` providing O(1) mark-clear instead of an O(n) loop. All GC-managed objects used by the runtime inherit from `TGCManagedObject` (`GarbageCollector.Managed.pas`), which provides the `GCMarked` property (backward-compatible), `GCIndex` (for O(1) unregistration), and virtual `MarkReferences` method. A single `TGarbageCollector` singleton (`GarbageCollector.Generic.pas`) manages all objects in one pool via `Initialize`, `Instance`, and `Shutdown`. Automatic collection (`CollectIfNeeded`) is disabled during bytecode execution; both the BenchmarkRunner and TestRunner call `Collect` after each file to reclaim memory between script executions. All `TGocciaValue` instances auto-register with the GC via `AfterConstruction`. The GC provides three collection methods: `Collect`, `CollectIfNeeded`, and `CollectYoung(AWatermark)`. The `Watermark` property captures the current allocation position for use with `CollectYoung`. During benchmark measurement, GC is explicitly disabled (`Enabled := False`) for both interpreter and bytecode modes to ensure identical GC behavior; a full `Collect` runs before measurement to provide a clean heap baseline, and `CollectYoung` runs between rounds to prevent OOM on memory-constrained platforms (e.g. 32-bit Windows with ~2 GB address space). Key rules:
 
 - **AST literal values** are unregistered from the GC by `TGocciaLiteralExpression.Create` and owned by the AST node. The evaluator calls `Value.RuntimeCopy` to produce fresh GC-managed values when evaluating literals.
-- **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`, `SmallInt` cache) are pinned via `TGarbageCollector.Instance.PinObject` during engine initialization (consolidated in `PinSingletons`).
+- **Singleton values** (e.g., `UndefinedValue`, `TrueValue`, `NaNValue`) are pinned via `TGarbageCollector.Instance.PinObject` during engine initialization (consolidated in `PinPrimitiveSingletons`; the hole singleton is pinned alongside the runtime bootstrap).
+- **VM register rooting** only traverses object-bearing register slots. Scalar `TGocciaRegister` values do not participate in GC marking until they are boxed at an object/runtime boundary.
 - **Shared prototype singletons** (String, Number, Array, Set, Map, Function, Symbol, ArrayBuffer, SharedArrayBuffer, TypedArray) are pinned inside each type's `InitializePrototype` method. `TGocciaSharedPrototype.Create` automatically pins both the prototype object and the method host via `TGarbageCollector.Instance.PinObject` — no manual pinning is needed after calling `TGocciaSharedPrototype.Create`. Prefer `Goccia.ObjectModel` member-definition tables plus `RegisterMemberDefinitions` over ad hoc `RegisterNativeMethod` blocks when adding or refactoring prototype/static surfaces. All prototype method callbacks must use `ThisValue` (not `Self`) to access instance data, since `Self` refers to the method host singleton. **Object.prototype** is the `ObjectConstructor.Prototype` created in `RegisterBuiltinConstructors` — it hosts `toString()` (ES2026 §20.1.3.6) and is stored in `TGocciaObjectValue.SharedObjectPrototype` so the evaluator can assign it as the prototype of object literals.
 - **Pinned values, temp roots, and root scopes** are stored in `TDictionary<T, Boolean>` for O(1) membership checks.
 - **Values held only by Pascal code** (not in any GocciaScript scope) must be protected with `AddTempRoot`/`RemoveTempRoot` for the duration they are needed. Example: benchmark functions held in a `TObjectList`.
@@ -316,7 +234,7 @@ See [docs/language-restrictions.md](docs/language-restrictions.md) for the full 
 
 ### 6. Types as Comments
 
-GocciaScript supports the TC39 Types as Comments proposal. Type annotations are **parsed by the frontend** and preserved as raw strings on AST nodes. In **interpreted mode**, annotations are ignored at runtime (true "types as comments"). In **bytecode mode**, the compiler uses annotations and inferred types to emit `OP_CHECK_TYPE` guards and typed opcodes — reassignment to an incompatible type throws `TypeError` at runtime. See the Typed local variables design rule in the Souffle VM section for the full enforcement contract. Key parser helpers:
+GocciaScript supports the TC39 Types as Comments proposal. Type annotations are **parsed by the frontend** and preserved as raw strings on AST nodes. In **interpreted mode**, annotations are ignored at runtime (true "types as comments"). In **bytecode mode**, the compiler uses annotations and inferred types to emit `OP_CHECK_TYPE` guards and typed opcodes — reassignment to an incompatible type throws `TypeError` at runtime. See the typed-local bytecode rules in the Architecture section for the enforcement contract. Key parser helpers:
 
 - **`CollectTypeAnnotation(Terminators)`** — Consumes type tokens with balanced bracket tracking, returning the raw text. Stops at any terminator token at depth 0.
 - **`CollectGenericParameters`** — Consumes `<...>` generic parameter lists, returning the raw text.
@@ -374,7 +292,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Function/procedure names:** PascalCase (e.g., `EvaluateBinary`, `GetProperty`). External C bindings are exempt. Auto-fixed by `./format.pas`.
 - **Unit naming:** `Goccia.<Category>.<Name>.pas` (dot-separated hierarchy)
 - **No abbreviations:** Use full words in class, function, method, and type names (e.g., `TGarbageCollector` not `TGC`). Exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
-- **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`, `EXT_SBC`) instead of hardcoded string literals. Use the `ScriptExtensions` array, `IsScriptExtension`, and `IsJSXNativeExtension` helpers instead of duplicating extension lists or ad-hoc checks.
+- **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`, `EXT_GBC`) instead of hardcoded string literals. Use the `ScriptExtensions` array, `IsScriptExtension`, and `IsJSXNativeExtension` helpers instead of duplicating extension lists or ad-hoc checks.
 - **Runtime constants:** Use the split constant units instead of hardcoded string literals for property names, type names, error names, constructor names, and symbol names:
   - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, `PROP_GET`, `PROP_SET`, `PROP_KIND`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_INIT`, `PROP_ADD_INITIALIZER`, `PROP_STRICT_TYPES`, etc.
   - `Goccia.Constants.TypeNames` — `OBJECT_TYPE_NAME`, `STRING_TYPE_NAME`, `FUNCTION_TYPE_NAME`, etc.
@@ -525,7 +443,7 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 ```
 
 The TestRunner adds `ggTestAssertions` for the test framework (`describe`, `test`, `expect`).
-The BenchmarkRunner adds `ggBenchmark` for the benchmark framework (`suite`, `bench`, `runBenchmarks`). The `bench()` API takes a name and an options object: `bench(name, { setup?, run, teardown? })`. The `setup` function runs once before warmup and its return value is passed to `run` and `teardown`. All three callbacks may be `async` — the resolved value of an `async setup` is passed to `run` and `teardown`, and each phase awaits completion before proceeding. The `run` phase is measured as `opsPerSec` and `meanMs` (per-iteration). Setup and teardown are additionally timed and reported as `setupMs` and `teardownMs` (one-shot, not per-iteration). It supports multiple `--format=console|text|csv|json` flags in a single command (each optionally followed by `--output=file`), `--no-progress` for CI builds, and benchmark calibration via environment variables (`GOCCIA_BENCH_CALIBRATION_MS`, `GOCCIA_BENCH_ROUNDS`, etc.). The BenchmarkRunner exits with code 1 if any benchmark has a non-empty error or produces zero `OpsPerSec`/`MeanMs` values, ensuring CI pipelines fail on benchmark crashes or empty results.
+The BenchmarkRunner adds `ggBenchmark` for the benchmark framework (`suite`, `bench`, `runBenchmarks`). The `bench()` API takes a name and an options object: `bench(name, { setup?, run, teardown? })`. The `setup` function runs once before warmup and its return value is passed to `run` and `teardown`, including when that setup result is `undefined`. All three callbacks may be `async` — the resolved value of an `async setup` is passed to `run` and `teardown`, and each phase awaits completion before proceeding. The `run` phase is measured as `opsPerSec` and `meanMs` (per-iteration). Setup and teardown are additionally timed and reported as `setupMs` and `teardownMs` (one-shot, not per-iteration). It supports multiple `--format=console|text|csv|json` flags in a single command (each optionally followed by `--output=file`), `--no-progress` for CI builds, and benchmark calibration via environment variables (`GOCCIA_BENCH_CALIBRATION_MS`, `GOCCIA_BENCH_ROUNDS`, etc.). The BenchmarkRunner exits with code 1 if any benchmark has a non-empty error or produces zero `OpsPerSec`/`MeanMs` values, ensuring CI pipelines fail on benchmark crashes or empty results.
 
 `Array.fromAsync(asyncItems [, mapfn [, thisArg]])` creates an array from an async iterable, sync iterable, or array-like, returning a `Promise<Array>`. It tries `[Symbol.asyncIterator]` first, falls back to `[Symbol.iterator]`, then array-like. Each element value is awaited (Promises resolved via synchronous microtask drain).
 
@@ -592,7 +510,6 @@ See [docs/testing.md](docs/testing.md) for the complete testing guide.
 - **`.toThrow()` best practice:** Always pass an explicit error constructor (`TypeError`, `RangeError`, `Error`, etc.) to `.toThrow()` — e.g. `expect(() => null.foo).toThrow(TypeError)`. Bare `.toThrow()` only asserts *something* throws; the constructor form also verifies the error type.
 - **Pascal test framework:** `TestRunner.pas` provides generic `Expect<T>(...).ToBe(...)` assertions. `Expect<T>` is a **standalone function** (not a method on `TTestSuite`) to avoid FPC 3.2.2 AArch64 compiler crash with cross-unit generic method inheritance.
 - **NaN checks:** In Pascal tests, use `Value.ToNumberLiteral.IsNaN` (not `Math.IsNaN`) — special values store `0.0` internally
-- **WASM integration tests:** `tests-wasm/` directory contains GocciaScript `.js` fixtures with `// Expected:` comment lines. The `tests-wasm/run-wasm-tests.mjs` harness compiles each fixture to `.wasm` via ScriptLoader, executes with `node tests-wasm/souffle-host.mjs`, and compares stdout. Fixtures with `// Skip:` are skipped. Requires `build/ScriptLoader`; run with: `./build.pas loader && node ./tests-wasm/run-wasm-tests.mjs`
 
 ## Build System
 
@@ -604,7 +521,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 - Shared path config: `config.cfg`
 - Shared directives: `units/Goccia.inc` (overflow/range checks conditional on `PRODUCTION` define)
 - Output directory: `build/`
-- CI: Two workflow files — `ci.yml` (main + tags, full matrix, all checks + release) and `pr.yml` (PRs, ubuntu-latest x64 only, JS tests + benchmark comparison comment). All matrix strategies use `fail-fast: false`. Post-build jobs (`test`, `wasm-test`, `benchmark`, `examples`) are independent. Windows artifacts are labelled x86 (FPC produces i386-win32 binaries on the x64 runner).
+- CI: Two workflow files — `ci.yml` (main + tags, full matrix, all checks + release) and `pr.yml` (PRs, ubuntu-latest x64 only, JS tests + benchmark comparison comment). All matrix strategies use `fail-fast: false`. Post-build jobs (`test`, `benchmark`, `examples`) are independent. Windows artifacts are labeled x86 (FPC produces i386-win32 binaries on the x64 runner).
 - Auto-formatter: `./format.pas` (instantfpc script, no build step) — auto-fixes uses clause ordering, PascalCase function names, and parameter `A` prefix naming
 - Pre-commit hook: [Lefthook](https://github.com/evilmartians/lefthook) (`lefthook.yml`) — requires `lefthook install` after cloning
 - Editor setup: `.vscode/settings.json` (format-on-save) + `.vscode/extensions.json` (recommended extensions)
@@ -615,8 +532,7 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 |----------|-------------|
 | [docs/tutorial.md](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
 | [docs/architecture.md](docs/architecture.md) | Pipeline overview, component responsibilities, data flow |
-| [docs/souffle-vm.md](docs/souffle-vm.md) | Souffle VM architecture, two-tier ISA, value system, binary format, WASM alignment |
-| [docs/wasm-backend.md](docs/wasm-backend.md) | WASM output: constant pool custom section, runtime import contract, Node.js host, integration tests |
+| [docs/bytecode-vm.md](docs/bytecode-vm.md) | Bytecode VM architecture, binary format, and runtime model |
 | [docs/design-decisions.md](docs/design-decisions.md) | Rationale behind key technical choices |
 | [docs/code-style.md](docs/code-style.md) | Naming conventions, patterns, file organization |
 | [docs/value-system.md](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
@@ -627,5 +543,4 @@ See [docs/build-system.md](docs/build-system.md) for build system details.
 | [docs/build-system.md](docs/build-system.md) | Build commands, configuration, CI/CD |
 | [docs/language-restrictions.md](docs/language-restrictions.md) | Supported/excluded features with rationale |
 | [docs/decision-log.md](docs/decision-log.md) | Chronological record of key architectural decisions with links |
-| [docs/optimization-log.md](docs/optimization-log.md) | VM optimization experiments, results, and remaining work |
 | [docs/embedding.md](docs/embedding.md) | Embedding the engine in FreePascal applications |

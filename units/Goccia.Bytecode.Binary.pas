@@ -1,17 +1,17 @@
-unit Souffle.Bytecode.Binary;
+unit Goccia.Bytecode.Binary;
 
-{$I Souffle.inc}
+{$I Goccia.inc}
 
 interface
 
 uses
   Classes,
 
-  Souffle.Bytecode.Chunk,
-  Souffle.Bytecode.Module;
+  Goccia.Bytecode.Chunk,
+  Goccia.Bytecode.Module;
 
 type
-  TSouffleBytecodeWriter = class
+  TGocciaBytecodeWriter = class
   private
     FStream: TStream;
     procedure WriteUInt8(const AValue: UInt8);
@@ -21,13 +21,13 @@ type
     procedure WriteDouble(const AValue: Double);
     procedure WriteString(const AValue: string);
     procedure WriteBoolean(const AValue: Boolean);
-    procedure WriteFunctionTemplate(const AProto: TSouffleFunctionTemplate);
+    procedure WriteFunctionTemplate(const AProto: TGocciaFunctionTemplate);
   public
     constructor Create(const AStream: TStream);
-    procedure WriteModule(const AModule: TSouffleBytecodeModule);
+    procedure WriteModule(const AModule: TGocciaBytecodeModule);
   end;
 
-  TSouffleBytecodeReader = class
+  TGocciaBytecodeReader = class
   private
     FStream: TStream;
     function ReadUInt8: UInt8;
@@ -37,38 +37,36 @@ type
     function ReadDouble: Double;
     function ReadString: string;
     function ReadBoolean: Boolean;
-    function ReadFunctionTemplate: TSouffleFunctionTemplate;
+    function ReadFunctionTemplate: TGocciaFunctionTemplate;
   public
     constructor Create(const AStream: TStream);
-    function ReadModule: TSouffleBytecodeModule;
+    function ReadModule: TGocciaBytecodeModule;
   end;
 
-procedure SaveModuleToFile(const AModule: TSouffleBytecodeModule;
+procedure SaveModuleToFile(const AModule: TGocciaBytecodeModule;
   const AFileName: string);
-function LoadModuleFromFile(const AFileName: string): TSouffleBytecodeModule;
+function LoadModuleFromFile(const AFileName: string): TGocciaBytecodeModule;
 
 implementation
 
 uses
   SysUtils,
 
-  Souffle.Bytecode,
-  Souffle.Bytecode.Debug;
+  Goccia.Bytecode,
+  Goccia.Bytecode.Debug;
 
-{ TSouffleBytecodeWriter }
-
-constructor TSouffleBytecodeWriter.Create(const AStream: TStream);
+constructor TGocciaBytecodeWriter.Create(const AStream: TStream);
 begin
   inherited Create;
   FStream := AStream;
 end;
 
-procedure TSouffleBytecodeWriter.WriteUInt8(const AValue: UInt8);
+procedure TGocciaBytecodeWriter.WriteUInt8(const AValue: UInt8);
 begin
   FStream.WriteBuffer(AValue, SizeOf(UInt8));
 end;
 
-procedure TSouffleBytecodeWriter.WriteUInt16(const AValue: UInt16);
+procedure TGocciaBytecodeWriter.WriteUInt16(const AValue: UInt16);
 var
   LE: UInt16;
 begin
@@ -76,7 +74,7 @@ begin
   FStream.WriteBuffer(LE, SizeOf(UInt16));
 end;
 
-procedure TSouffleBytecodeWriter.WriteUInt32(const AValue: UInt32);
+procedure TGocciaBytecodeWriter.WriteUInt32(const AValue: UInt32);
 var
   LE: UInt32;
 begin
@@ -84,7 +82,7 @@ begin
   FStream.WriteBuffer(LE, SizeOf(UInt32));
 end;
 
-procedure TSouffleBytecodeWriter.WriteInt64(const AValue: Int64);
+procedure TGocciaBytecodeWriter.WriteInt64(const AValue: Int64);
 var
   LE: Int64;
 begin
@@ -92,7 +90,7 @@ begin
   FStream.WriteBuffer(LE, SizeOf(Int64));
 end;
 
-procedure TSouffleBytecodeWriter.WriteDouble(const AValue: Double);
+procedure TGocciaBytecodeWriter.WriteDouble(const AValue: Double);
 var
   Bits: Int64;
 begin
@@ -101,7 +99,7 @@ begin
   FStream.WriteBuffer(Bits, SizeOf(Int64));
 end;
 
-procedure TSouffleBytecodeWriter.WriteString(const AValue: string);
+procedure TGocciaBytecodeWriter.WriteString(const AValue: string);
 var
   Len: UInt32;
   UTF8Str: UTF8String;
@@ -113,7 +111,7 @@ begin
     FStream.WriteBuffer(UTF8Str[1], Len);
 end;
 
-procedure TSouffleBytecodeWriter.WriteBoolean(const AValue: Boolean);
+procedure TGocciaBytecodeWriter.WriteBoolean(const AValue: Boolean);
 begin
   if AValue then
     WriteUInt8(1)
@@ -121,25 +119,25 @@ begin
     WriteUInt8(0);
 end;
 
-procedure TSouffleBytecodeWriter.WriteFunctionTemplate(
-  const AProto: TSouffleFunctionTemplate);
+procedure TGocciaBytecodeWriter.WriteFunctionTemplate(
+  const AProto: TGocciaFunctionTemplate);
 var
   I: Integer;
-  Constant: TSouffleBytecodeConstant;
-  Descriptor: TSouffleUpvalueDescriptor;
-  Handler: TSouffleExceptionHandler;
+  Constant: TGocciaBytecodeConstant;
+  Descriptor: TGocciaUpvalueDescriptor;
+  Handler: TGocciaExceptionHandler;
 begin
   WriteString(AProto.Name);
   WriteUInt8(AProto.MaxRegisters);
   WriteUInt8(AProto.ParameterCount);
+  WriteUInt8(AProto.FormalParameterCount);
   WriteUInt8(AProto.UpvalueCount);
+  WriteBoolean(AProto.IsArrow);
 
-  // Code
   WriteUInt32(UInt32(AProto.CodeCount));
   for I := 0 to AProto.CodeCount - 1 do
     WriteUInt32(AProto.GetInstruction(I));
 
-  // Constants
   WriteUInt16(UInt16(AProto.ConstantCount));
   for I := 0 to AProto.ConstantCount - 1 do
   begin
@@ -147,7 +145,7 @@ begin
     WriteUInt8(Ord(Constant.Kind));
     case Constant.Kind of
       bckNil, bckTrue, bckFalse:
-        ; // Tag only
+        ;
       bckInteger:
         WriteInt64(Constant.IntValue);
       bckFloat:
@@ -157,7 +155,6 @@ begin
     end;
   end;
 
-  // Upvalue descriptors
   for I := 0 to AProto.UpvalueCount - 1 do
   begin
     Descriptor := AProto.GetUpvalueDescriptor(I);
@@ -165,7 +162,6 @@ begin
     WriteUInt8(Descriptor.Index);
   end;
 
-  // Exception handlers
   WriteUInt16(UInt16(AProto.ExceptionHandlerCount));
   for I := 0 to AProto.ExceptionHandlerCount - 1 do
   begin
@@ -177,12 +173,10 @@ begin
     WriteUInt8(Handler.CatchRegister);
   end;
 
-  // Nested functions
   WriteUInt16(UInt16(AProto.FunctionCount));
   for I := 0 to AProto.FunctionCount - 1 do
     WriteFunctionTemplate(AProto.GetFunction(I));
 
-  // Debug info
   WriteBoolean(Assigned(AProto.DebugInfo));
   if Assigned(AProto.DebugInfo) then
   begin
@@ -204,12 +198,10 @@ begin
     end;
   end;
 
-  // Local type hints
   WriteUInt8(AProto.LocalTypeCount);
   for I := 0 to AProto.LocalTypeCount - 1 do
     WriteUInt8(Ord(AProto.GetLocalType(UInt8(I))));
 
-  // Local strict flags
   WriteUInt8(AProto.LocalStrictCount);
   for I := 0 to AProto.LocalStrictCount - 1 do
     WriteBoolean(AProto.GetLocalStrictFlag(UInt8(I)));
@@ -217,37 +209,32 @@ begin
   WriteUInt8(AProto.TypeCheckPreambleSize);
 end;
 
-procedure TSouffleBytecodeWriter.WriteModule(
-  const AModule: TSouffleBytecodeModule);
+procedure TGocciaBytecodeWriter.WriteModule(
+  const AModule: TGocciaBytecodeModule);
 var
   I, J: Integer;
-  Import: TSouffleModuleImport;
-  Export_: TSouffleModuleExport;
+  Import_: TGocciaModuleImport;
+  Export_: TGocciaModuleExport;
 begin
-  // Header: magic + version
-  FStream.WriteBuffer(SOUFFLE_BINARY_MAGIC, 4);
+  FStream.WriteBuffer(GOCCIA_BINARY_MAGIC, 4);
   WriteUInt16(AModule.FormatVersion);
-
-  // Metadata
   WriteString(AModule.RuntimeTag);
   WriteString(AModule.SourcePath);
   WriteBoolean(AModule.HasDebugInfo);
 
-  // Imports
   WriteUInt16(UInt16(AModule.ImportCount));
   for I := 0 to AModule.ImportCount - 1 do
   begin
-    Import := AModule.GetImport(I);
-    WriteString(Import.ModulePath);
-    WriteUInt16(UInt16(Length(Import.Bindings)));
-    for J := 0 to High(Import.Bindings) do
+    Import_ := AModule.GetImport(I);
+    WriteString(Import_.ModulePath);
+    WriteUInt16(UInt16(Length(Import_.Bindings)));
+    for J := 0 to High(Import_.Bindings) do
     begin
-      WriteString(Import.Bindings[J].ExportName);
-      WriteUInt16(Import.Bindings[J].LocalSlot);
+      WriteString(Import_.Bindings[J].ExportName);
+      WriteUInt16(Import_.Bindings[J].LocalSlot);
     end;
   end;
 
-  // Exports
   WriteUInt16(UInt16(AModule.ExportCount));
   for I := 0 to AModule.ExportCount - 1 do
   begin
@@ -256,42 +243,39 @@ begin
     WriteUInt16(Export_.LocalSlot);
   end;
 
-  // Top-level function
   WriteFunctionTemplate(AModule.TopLevel);
 end;
 
-{ TSouffleBytecodeReader }
-
-constructor TSouffleBytecodeReader.Create(const AStream: TStream);
+constructor TGocciaBytecodeReader.Create(const AStream: TStream);
 begin
   inherited Create;
   FStream := AStream;
 end;
 
-function TSouffleBytecodeReader.ReadUInt8: UInt8;
+function TGocciaBytecodeReader.ReadUInt8: UInt8;
 begin
   FStream.ReadBuffer(Result, SizeOf(UInt8));
 end;
 
-function TSouffleBytecodeReader.ReadUInt16: UInt16;
+function TGocciaBytecodeReader.ReadUInt16: UInt16;
 begin
   FStream.ReadBuffer(Result, SizeOf(UInt16));
   Result := LEtoN(Result);
 end;
 
-function TSouffleBytecodeReader.ReadUInt32: UInt32;
+function TGocciaBytecodeReader.ReadUInt32: UInt32;
 begin
   FStream.ReadBuffer(Result, SizeOf(UInt32));
   Result := LEtoN(Result);
 end;
 
-function TSouffleBytecodeReader.ReadInt64: Int64;
+function TGocciaBytecodeReader.ReadInt64: Int64;
 begin
   FStream.ReadBuffer(Result, SizeOf(Int64));
   Result := LEtoN(Result);
 end;
 
-function TSouffleBytecodeReader.ReadDouble: Double;
+function TGocciaBytecodeReader.ReadDouble: Double;
 var
   Bits: Int64;
 begin
@@ -300,7 +284,7 @@ begin
   Move(Bits, Result, SizeOf(Double));
 end;
 
-function TSouffleBytecodeReader.ReadString: string;
+function TGocciaBytecodeReader.ReadString: string;
 var
   Len: UInt32;
   UTF8Str: UTF8String;
@@ -313,12 +297,12 @@ begin
   Result := string(UTF8Str);
 end;
 
-function TSouffleBytecodeReader.ReadBoolean: Boolean;
+function TGocciaBytecodeReader.ReadBoolean: Boolean;
 begin
   Result := ReadUInt8 <> 0;
 end;
 
-function TSouffleBytecodeReader.ReadFunctionTemplate: TSouffleFunctionTemplate;
+function TGocciaBytecodeReader.ReadFunctionTemplate: TGocciaFunctionTemplate;
 var
   Name: string;
   MaxRegs, ParamCount, UpvalueCount, LocalTypeCount, LocalStrictCount: UInt8;
@@ -327,30 +311,33 @@ var
   I: Integer;
   ConstKind: UInt8;
   HasDebug: Boolean;
-  DebugInfo: TSouffleDebugInfo;
+  DebugInfo: TGocciaDebugInfo;
   SourceFile: string;
   LineMapCount, LocalCount: UInt32;
 begin
   Name := ReadString;
   MaxRegs := ReadUInt8;
   ParamCount := ReadUInt8;
-  UpvalueCount := ReadUInt8;
+  LocalTypeCount := 0;
+  LocalStrictCount := 0;
+  HasDebug := False;
 
-  Result := TSouffleFunctionTemplate.Create(Name);
+  Result := TGocciaFunctionTemplate.Create(Name);
   Result.MaxRegisters := MaxRegs;
   Result.ParameterCount := ParamCount;
+  Result.FormalParameterCount := ReadUInt8;
+  UpvalueCount := ReadUInt8;
+  Result.IsArrow := ReadBoolean;
 
-  // Code
   CodeCount := ReadUInt32;
   for I := 0 to CodeCount - 1 do
     Result.EmitInstruction(ReadUInt32);
 
-  // Constants
   ConstCount := ReadUInt16;
   for I := 0 to ConstCount - 1 do
   begin
     ConstKind := ReadUInt8;
-    case TSouffleBytecodeConstantKind(ConstKind) of
+    case TGocciaBytecodeConstantKind(ConstKind) of
       bckNil:     Result.AddConstantNil;
       bckTrue:    Result.AddConstantBoolean(True);
       bckFalse:   Result.AddConstantBoolean(False);
@@ -360,27 +347,23 @@ begin
     end;
   end;
 
-  // Upvalue descriptors
   for I := 0 to UpvalueCount - 1 do
     Result.AddUpvalueDescriptor(ReadBoolean, ReadUInt8);
 
-  // Exception handlers
   HandlerCount := ReadUInt16;
   for I := 0 to HandlerCount - 1 do
     Result.AddExceptionHandler(ReadUInt32, ReadUInt32, ReadUInt32,
       ReadUInt32, ReadUInt8);
 
-  // Nested functions
   FuncCount := ReadUInt16;
   for I := 0 to FuncCount - 1 do
     Result.AddFunction(ReadFunctionTemplate);
 
-  // Debug info
   HasDebug := ReadBoolean;
   if HasDebug then
   begin
     SourceFile := ReadString;
-    DebugInfo := TSouffleDebugInfo.Create(SourceFile);
+    DebugInfo := TGocciaDebugInfo.Create(SourceFile);
 
     LineMapCount := ReadUInt32;
     for I := 0 to LineMapCount - 1 do
@@ -393,12 +376,10 @@ begin
     Result.DebugInfo := DebugInfo;
   end;
 
-  // Local type hints
   LocalTypeCount := ReadUInt8;
   for I := 0 to LocalTypeCount - 1 do
-    Result.SetLocalType(UInt8(I), TSouffleLocalType(ReadUInt8));
+    Result.SetLocalType(UInt8(I), TGocciaLocalType(ReadUInt8));
 
-  // Local strict flags
   LocalStrictCount := ReadUInt8;
   for I := 0 to LocalStrictCount - 1 do
     Result.SetLocalStrictFlag(UInt8(I), ReadBoolean);
@@ -406,7 +387,7 @@ begin
   Result.TypeCheckPreambleSize := ReadUInt8;
 end;
 
-function TSouffleBytecodeReader.ReadModule: TSouffleBytecodeModule;
+function TGocciaBytecodeReader.ReadModule: TGocciaBytecodeModule;
 var
   Magic: array[0..3] of Byte;
   Version: UInt16;
@@ -416,26 +397,25 @@ var
   I, J: Integer;
   ModulePath: string;
   BindingCount: UInt16;
-  Bindings: array of TSouffleModuleBinding;
+  Bindings: array of TGocciaModuleBinding;
 begin
   FStream.ReadBuffer(Magic, 4);
-  if (Magic[0] <> SOUFFLE_BINARY_MAGIC[0]) or (Magic[1] <> SOUFFLE_BINARY_MAGIC[1]) or
-     (Magic[2] <> SOUFFLE_BINARY_MAGIC[2]) or (Magic[3] <> SOUFFLE_BINARY_MAGIC[3]) then
-    raise Exception.Create('Invalid Souffle bytecode file: bad magic');
+  if (Magic[0] <> GOCCIA_BINARY_MAGIC[0]) or (Magic[1] <> GOCCIA_BINARY_MAGIC[1]) or
+     (Magic[2] <> GOCCIA_BINARY_MAGIC[2]) or (Magic[3] <> GOCCIA_BINARY_MAGIC[3]) then
+    raise Exception.Create('Invalid Goccia bytecode file: bad magic');
 
   Version := ReadUInt16;
-  if Version <> SOUFFLE_FORMAT_VERSION then
+  if Version <> GOCCIA_FORMAT_VERSION then
     raise Exception.CreateFmt('Unsupported bytecode format version: %d (expected %d)',
-      [Version, SOUFFLE_FORMAT_VERSION]);
+      [Version, GOCCIA_FORMAT_VERSION]);
 
   RuntimeTag := ReadString;
   SourcePath := ReadString;
   HasDebug := ReadBoolean;
 
-  Result := TSouffleBytecodeModule.Create(RuntimeTag, SourcePath);
+  Result := TGocciaBytecodeModule.Create(RuntimeTag, SourcePath);
   Result.HasDebugInfo := HasDebug;
 
-  // Imports
   ImportCount := ReadUInt16;
   for I := 0 to ImportCount - 1 do
   begin
@@ -450,26 +430,22 @@ begin
     Result.AddImport(ModulePath, Bindings);
   end;
 
-  // Exports
   ExportCount := ReadUInt16;
   for I := 0 to ExportCount - 1 do
     Result.AddExport(ReadString, ReadUInt16);
 
-  // Top-level function
   Result.TopLevel := ReadFunctionTemplate;
 end;
 
-{ File I/O helpers }
-
-procedure SaveModuleToFile(const AModule: TSouffleBytecodeModule;
+procedure SaveModuleToFile(const AModule: TGocciaBytecodeModule;
   const AFileName: string);
 var
   Stream: TFileStream;
-  Writer: TSouffleBytecodeWriter;
+  Writer: TGocciaBytecodeWriter;
 begin
   Stream := TFileStream.Create(AFileName, fmCreate);
   try
-    Writer := TSouffleBytecodeWriter.Create(Stream);
+    Writer := TGocciaBytecodeWriter.Create(Stream);
     try
       Writer.WriteModule(AModule);
     finally
@@ -480,14 +456,14 @@ begin
   end;
 end;
 
-function LoadModuleFromFile(const AFileName: string): TSouffleBytecodeModule;
+function LoadModuleFromFile(const AFileName: string): TGocciaBytecodeModule;
 var
   Stream: TFileStream;
-  Reader: TSouffleBytecodeReader;
+  Reader: TGocciaBytecodeReader;
 begin
   Stream := TFileStream.Create(AFileName, fmOpenRead);
   try
-    Reader := TSouffleBytecodeReader.Create(Stream);
+    Reader := TGocciaBytecodeReader.Create(Stream);
     try
       Result := Reader.ReadModule;
     finally

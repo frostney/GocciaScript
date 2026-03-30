@@ -117,7 +117,7 @@ var
     if (AThisValue is TGocciaClassValue) and (AThisValue <> nil) then
     begin
       UseConstructor := True;
-      ConstructorArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.SmallInt(ALen)]);
+      ConstructorArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(ALen)]);
       try
         Result := TGocciaClassValue(AThisValue).Instantiate(ConstructorArgs);
       finally
@@ -185,7 +185,7 @@ begin
         if Mapping then
         begin
           MapArgs.SetElement(0, KValue);
-          MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+          MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
           KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
         end;
         // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
@@ -193,7 +193,7 @@ begin
       end;
       // Step 5e-iii: Set length
       if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-        ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(SourceArray.Elements.Count));
+        ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(SourceArray.Elements.Count));
       Result := ResultObj;
     end
     // Fast path: source is a string (iterate code points)
@@ -209,13 +209,13 @@ begin
         if Mapping then
         begin
           MapArgs.SetElement(0, KValue);
-          MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K - 1));
+          MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K - 1));
           KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
         end;
         CreateDataProperty(K - 1, KValue);
       end;
       if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-        ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(Length(SourceStr)));
+        ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(Length(SourceStr)));
       Result := ResultObj;
     end
     else
@@ -266,7 +266,7 @@ begin
             if Mapping then
             begin
               MapArgs.SetElement(0, KValue);
-              MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+              MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
               KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
             end;
             // Step 5e-v: CreateDataPropertyOrThrow(A, ToString(k), mappedValue)
@@ -280,7 +280,7 @@ begin
         end;
         // Step 5e-iii: Set A.[[length]] to k
         if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-          ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
+          ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(K));
         Result := ResultObj;
       end
       else
@@ -305,7 +305,7 @@ begin
             if Mapping then
             begin
               MapArgs.SetElement(0, KValue);
-              MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+              MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
               KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
             end;
             // Step 12e: CreateDataPropertyOrThrow(A, Pk, mappedValue)
@@ -313,7 +313,7 @@ begin
           end;
           // Step 13: Set A.[[length]] = len
           if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-            ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(Len));
+            ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(Len));
           Result := ResultObj;
         end
         else
@@ -487,7 +487,7 @@ begin
                 begin
                   // TC39 Array.fromAsync §2.1.1.1 step 4.b.vii: Await(Call(mapfn, thisArg, « kValue, k »))
                   MapArgs.SetElement(0, KValue);
-                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
                   KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
                   KValue := AwaitValue(KValue);
                 end;
@@ -502,7 +502,7 @@ begin
 
             // TC39 Array.fromAsync §2.1.1.1 step 4.b.iv: Set A.[[length]] to k
             if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-              ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
+              ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(K));
           finally
             if Assigned(GC) then
               GC.RemoveTempRoot(IteratorObj);
@@ -557,7 +557,7 @@ begin
                 if Mapping then
                 begin
                   MapArgs.SetElement(0, KValue);
-                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
                   KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
                   KValue := AwaitValue(KValue);
                 end;
@@ -568,7 +568,7 @@ begin
               end;
 
               if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-                ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
+                ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(K));
             finally
               if Assigned(GC) then
                 GC.RemoveTempRoot(Iterator);
@@ -594,7 +594,7 @@ begin
                 if Mapping then
                 begin
                   MapArgs.SetElement(0, KValue);
-                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.SmallInt(K));
+                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
                   KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
                   KValue := AwaitValue(KValue);
                 end;
@@ -605,7 +605,7 @@ begin
 
               // TC39 Array.fromAsync §2.1.1.1 step 5.f: Set A.[[length]] to len
               if UseConstructor and not (ResultObj is TGocciaArrayValue) then
-                ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(K));
+                ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(K));
             end;
           end;
         end;
@@ -643,7 +643,7 @@ begin
   if (AThisValue is TGocciaClassValue) and (AThisValue <> nil) then
   begin
     // Step 4a: Let A = Construct(C, « len »)
-    ConstructorArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.SmallInt(Len)]);
+    ConstructorArgs := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(Len)]);
     try
       ResultObj := TGocciaClassValue(AThisValue).Instantiate(ConstructorArgs);
     finally
@@ -662,7 +662,7 @@ begin
       for K := 0 to Len - 1 do
         ResultObj.SetProperty(IntToStr(K), AArgs.GetElement(K));
       // Step 8: Set A.[[length]] = len
-      ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.SmallInt(Len));
+      ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(Len));
     end;
 
     Result := ResultObj;

@@ -7,11 +7,10 @@ interface
 uses
   Generics.Collections,
 
-  Souffle.Bytecode.Chunk,
-
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.Bytecode.Chunk,
   Goccia.Compiler.Context,
   Goccia.Compiler.Scope;
 
@@ -57,14 +56,14 @@ procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
 procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
   const AClassDef: TGocciaClassDefinition; const ADest: UInt8);
 
-function TypeAnnotationToLocalType(const AAnnotation: string): TSouffleLocalType;
+function TypeAnnotationToLocalType(const AAnnotation: string): TGocciaLocalType;
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
 function StripArrayLayer(const AAnnotation: string): string;
-function TypesAreCompatible(const AProduced, AExpected: TSouffleLocalType): Boolean;
-function InferLocalType(const AExpr: TGocciaExpression): TSouffleLocalType;
+function TypesAreCompatible(const AProduced, AExpected: TGocciaLocalType): Boolean;
+function InferLocalType(const AExpr: TGocciaExpression): TGocciaLocalType;
 function ExpressionType(const AScope: TGocciaCompilerScope;
-  const AExpr: TGocciaExpression): TSouffleLocalType;
-function CharToLocalType(const ACh: Char): TSouffleLocalType;
+  const AExpr: TGocciaExpression): TGocciaLocalType;
+function CharToLocalType(const ACh: Char): TGocciaLocalType;
 
 function SavePendingFinally: TObject;
 procedure RestorePendingFinally(const ASaved: TObject);
@@ -75,11 +74,10 @@ uses
   SysUtils,
 
   OrderedStringMap,
-  Souffle.Bytecode,
-  Souffle.Bytecode.Debug,
 
+  Goccia.Bytecode,
+  Goccia.Bytecode.Debug,
   Goccia.Compiler.Expressions,
-  Goccia.Compiler.ExtOps,
   Goccia.Constants.TypeNames,
   Goccia.Keywords.Reserved,
   Goccia.Token,
@@ -105,7 +103,7 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
-function InferLocalType(const AExpr: TGocciaExpression): TSouffleLocalType;
+function InferLocalType(const AExpr: TGocciaExpression): TGocciaLocalType;
 var
   Lit: TGocciaLiteralExpression;
 begin
@@ -136,7 +134,7 @@ begin
     Result := sltReference;
 end;
 
-function TypeAnnotationToLocalType(const AAnnotation: string): TSouffleLocalType;
+function TypeAnnotationToLocalType(const AAnnotation: string): TGocciaLocalType;
 begin
   Result := sltUntyped;
   if AAnnotation = '' then
@@ -222,7 +220,7 @@ begin
   end;
 end;
 
-function TypesAreCompatible(const AProduced, AExpected: TSouffleLocalType): Boolean;
+function TypesAreCompatible(const AProduced, AExpected: TGocciaLocalType): Boolean;
 begin
   if AProduced = sltUntyped then
     Exit(False);
@@ -233,7 +231,7 @@ begin
   Result := False;
 end;
 
-function IsKnownNumeric(const AType: TSouffleLocalType): Boolean; inline;
+function IsKnownNumeric(const AType: TGocciaLocalType): Boolean; inline;
 begin
   Result := AType in [sltInteger, sltFloat];
 end;
@@ -276,11 +274,11 @@ begin
 end;
 
 function ExpressionType(const AScope: TGocciaCompilerScope;
-  const AExpr: TGocciaExpression): TSouffleLocalType;
+  const AExpr: TGocciaExpression): TGocciaLocalType;
 var
   Bin: TGocciaBinaryExpression;
   LocalIdx: Integer;
-  LeftType, RightType: TSouffleLocalType;
+  LeftType, RightType: TGocciaLocalType;
   ObjAnnotation: string;
   Member: TGocciaMemberExpression;
 begin
@@ -387,7 +385,7 @@ begin
             (TGocciaLiteralExpression(AExpr).Value is TGocciaUndefinedLiteralValue);
 end;
 
-function LocalTypeToChar(const AType: TSouffleLocalType): Char;
+function LocalTypeToChar(const AType: TGocciaLocalType): Char;
 begin
   case AType of
     sltInteger:   Result := 'I';
@@ -400,7 +398,7 @@ begin
   end;
 end;
 
-function CharToLocalType(const ACh: Char): TSouffleLocalType;
+function CharToLocalType(const ACh: Char): TGocciaLocalType;
 begin
   case ACh of
     'I': Result := sltInteger;
@@ -417,7 +415,7 @@ function BuildParamTypeSignature(
   const AParams: TGocciaParameterArray): string;
 var
   I: Integer;
-  ParamType: TSouffleLocalType;
+  ParamType: TGocciaLocalType;
 begin
   Result := '';
   for I := 0 to High(AParams) do
@@ -445,8 +443,8 @@ var
   I, FuncCount, LocalIdx: Integer;
   Info: TGocciaVariableInfo;
   Slot: UInt8;
-  InferredTemplate: TSouffleFunctionTemplate;
-  TypeHint, AnnotationType: TSouffleLocalType;
+  InferredTemplate: TGocciaFunctionTemplate;
+  TypeHint, AnnotationType: TGocciaLocalType;
   IsStrict, HasRealInitializer: Boolean;
 begin
   for I := 0 to High(AStmt.Variables) do
@@ -533,7 +531,7 @@ begin
       end;
     end
     else
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, Slot, 0, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Slot, 0, 0));
   end;
 end;
 
@@ -631,7 +629,8 @@ begin
       GPendingFinally := SavedFinally;
     end;
 
-    EmitInstruction(ACtx, EncodeABC(OP_RETURN_NIL, 0, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_RETURN, 0, 0, 0));
   end;
 end;
 
@@ -754,7 +753,7 @@ var
   OldBreakFinallyBase: Integer;
   BreakJumps: TList<Integer>;
   ElemAnnotation: string;
-  ElemType: TSouffleLocalType;
+  ElemType: TGocciaLocalType;
 begin
   ArrReg := ACtx.Scope.AllocateRegister;
   LenReg := ACtx.Scope.AllocateRegister;
@@ -874,7 +873,7 @@ begin
   DoneReg := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(AStmt.Iterable, IterReg);
-  EmitInstruction(ACtx, EncodeABC(OP_RT_GET_ITER, IterReg, IterReg, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_GET_ITER, IterReg, IterReg, 0));
 
   OldBreakJumps := GBreakJumps;
   OldBreakFinallyBase := GBreakFinallyBase;
@@ -887,7 +886,7 @@ begin
   try
     LoopStart := CurrentCodePosition(ACtx);
 
-    EmitInstruction(ACtx, EncodeABC(OP_RT_ITER_NEXT, ValueReg, DoneReg, IterReg));
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg, IterReg));
     ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
 
     ACtx.Scope.BeginScope;
@@ -943,7 +942,7 @@ begin
   DoneReg := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(AStmt.Iterable, IterReg);
-  EmitInstruction(ACtx, EncodeABC(OP_RT_GET_ITER, IterReg, IterReg, 1));
+  EmitInstruction(ACtx, EncodeABC(OP_GET_ITER, IterReg, IterReg, 1));
 
   OldBreakJumps := GBreakJumps;
   OldBreakFinallyBase := GBreakFinallyBase;
@@ -956,9 +955,9 @@ begin
   try
     LoopStart := CurrentCodePosition(ACtx);
 
-    EmitInstruction(ACtx, EncodeABC(OP_RT_ITER_NEXT, ValueReg, DoneReg, IterReg));
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_NEXT, ValueReg, DoneReg, IterReg));
     ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
-    EmitInstruction(ACtx, EncodeABC(OP_RT_AWAIT, ValueReg, ValueReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_AWAIT, ValueReg, ValueReg, 0));
 
     ACtx.Scope.BeginScope;
 
@@ -1020,14 +1019,14 @@ begin
 
   ModReg := ACtx.Scope.AllocateRegister;
   PathIdx := ACtx.Template.AddConstantString(AStmt.ModulePath);
-  EmitInstruction(ACtx, EncodeABx(OP_RT_IMPORT, ModReg, PathIdx));
+  EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ModReg, PathIdx));
 
   for I := 0 to Count - 1 do
   begin
     NameIdx := ACtx.Template.AddConstantString(Names[I]);
     if NameIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: import name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_RECORD_GET, Slots[I], ModReg,
+    EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, Slots[I], ModReg,
       UInt8(NameIdx)));
   end;
 
@@ -1049,7 +1048,7 @@ begin
     begin
       Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
       NameIdx := ACtx.Template.AddConstantString(Pair.Key);
-      EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, Reg, NameIdx));
+      EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
     end;
   end;
 end;
@@ -1074,7 +1073,7 @@ begin
     begin
       Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
       NameIdx := ACtx.Template.AddConstantString(VarInfo.Name);
-      EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, Reg, NameIdx));
+      EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
     end;
   end;
 end;
@@ -1089,17 +1088,17 @@ begin
   ModReg := ACtx.Scope.AllocateRegister;
   ValReg := ACtx.Scope.AllocateRegister;
   PathIdx := ACtx.Template.AddConstantString(AStmt.ModulePath);
-  EmitInstruction(ACtx, EncodeABx(OP_RT_IMPORT, ModReg, PathIdx));
+  EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ModReg, PathIdx));
 
   for Pair in AStmt.ExportsTable do
   begin
     SrcNameIdx := ACtx.Template.AddConstantString(Pair.Value);
     if SrcNameIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: re-export source name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_RECORD_GET, ValReg, ModReg,
+    EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, ValReg, ModReg,
       UInt8(SrcNameIdx)));
     ExportNameIdx := ACtx.Template.AddConstantString(Pair.Key);
-    EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, ValReg, ExportNameIdx));
+    EmitInstruction(ACtx, EncodeABx(OP_EXPORT, ValReg, ExportNameIdx));
   end;
 
   ACtx.Scope.FreeRegister;
@@ -1143,7 +1142,7 @@ begin
       Continue;
     end;
     ACtx.CompileExpression(CaseClause.Test, TestReg);
-    EmitInstruction(ACtx, EncodeABC(OP_RT_EQ, CmpReg, DiscReg, TestReg));
+    EmitInstruction(ACtx, EncodeABC(OP_EQ, CmpReg, DiscReg, TestReg));
     CaseBodyJumps[I] := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CmpReg);
   end;
 
@@ -1229,11 +1228,11 @@ end;
 
 procedure CompileMethodBody(const ACtx: TGocciaCompilationContext;
   const AClassReg: UInt8; const AMethodName: string;
-  const AMethod: TGocciaClassMethod; const AStoreOpcode: TSouffleOpCode);
+  const AMethod: TGocciaClassMethod; const AStoreOpcode: TGocciaOpCode);
 var
-  OldTemplate: TSouffleFunctionTemplate;
+  OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
-  ChildTemplate: TSouffleFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
@@ -1244,9 +1243,9 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
-  ChildTemplate := TSouffleFunctionTemplate.Create(
+  ChildTemplate := TGocciaFunctionTemplate.Create(
     '<method ' + AMethodName + '>');
-  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.IsAsync := AMethod.IsAsync;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
@@ -1269,6 +1268,7 @@ begin
   end;
   if FormalCount < 0 then
     FormalCount := Length(AMethod.Parameters);
+  ChildTemplate.FormalParameterCount := UInt8(FormalCount);
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
 
@@ -1311,11 +1311,12 @@ end;
 
 procedure CompileGetterBody(const ACtx: TGocciaCompilationContext;
   const ATargetReg: UInt8; const AName: string;
-  const AGetter: TGocciaGetterExpression; const AExtOp: UInt8);
+  const AGetter: TGocciaGetterExpression; const AOpcode: TGocciaOpCode;
+  const AFlags: UInt8);
 var
-  OldTemplate: TSouffleFunctionTemplate;
+  OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
-  ChildTemplate: TSouffleFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   FuncIdx: UInt16;
   FnReg: UInt8;
@@ -1325,8 +1326,8 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
-  ChildTemplate := TSouffleFunctionTemplate.Create('<get ' + AName + '>');
-  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate := TGocciaFunctionTemplate.Create('<get ' + AName + '>');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1352,17 +1353,18 @@ begin
     raise Exception.Create('Constant pool overflow: getter name index exceeds 255');
   if FnReg <> ATargetReg + 1 then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ATargetReg, AExtOp, UInt8(NameIdx)));
+  EmitInstruction(ACtx, EncodeABC(AOpcode, ATargetReg, AFlags, UInt8(NameIdx)));
   ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileSetterBody(const ACtx: TGocciaCompilationContext;
   const ATargetReg: UInt8; const AName: string;
-  const ASetter: TGocciaSetterExpression; const AExtOp: UInt8);
+  const ASetter: TGocciaSetterExpression; const AOpcode: TGocciaOpCode;
+  const AFlags: UInt8);
 var
-  OldTemplate: TSouffleFunctionTemplate;
+  OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
-  ChildTemplate: TSouffleFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   FuncIdx: UInt16;
   FnReg: UInt8;
@@ -1372,8 +1374,8 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
-  ChildTemplate := TSouffleFunctionTemplate.Create('<set ' + AName + '>');
-  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate := TGocciaFunctionTemplate.Create('<set ' + AName + '>');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.ParameterCount := 1;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1400,17 +1402,18 @@ begin
     raise Exception.Create('Constant pool overflow: setter name index exceeds 255');
   if FnReg <> ATargetReg + 1 then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ATargetReg, AExtOp, UInt8(NameIdx)));
+  EmitInstruction(ACtx, EncodeABC(AOpcode, ATargetReg, AFlags, UInt8(NameIdx)));
   ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileComputedGetterBody(const ACtx: TGocciaCompilationContext;
   const ATargetReg: UInt8; const AKeyReg: UInt8;
-  const AGetter: TGocciaGetterExpression; const AExtOp: UInt8);
+  const AGetter: TGocciaGetterExpression; const AOpcode: TGocciaOpCode;
+  const AFlags: UInt8);
 var
-  OldTemplate: TSouffleFunctionTemplate;
+  OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
-  ChildTemplate: TSouffleFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   FuncIdx: UInt16;
   FnReg, SafeKeyReg: UInt8;
@@ -1419,8 +1422,8 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
-  ChildTemplate := TSouffleFunctionTemplate.Create('<get [computed]>');
-  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate := TGocciaFunctionTemplate.Create('<get [computed]>');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1446,25 +1449,26 @@ begin
     SafeKeyReg := ACtx.Scope.AllocateRegister;
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, SafeKeyReg, AKeyReg, 0));
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ATargetReg, AExtOp, SafeKeyReg));
+    EmitInstruction(ACtx, EncodeABC(AOpcode, ATargetReg, AFlags, SafeKeyReg));
     ACtx.Scope.FreeRegister;
   end
   else
   begin
     if FnReg <> ATargetReg + 1 then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ATargetReg, AExtOp, AKeyReg));
+    EmitInstruction(ACtx, EncodeABC(AOpcode, ATargetReg, AFlags, AKeyReg));
   end;
   ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileComputedSetterBody(const ACtx: TGocciaCompilationContext;
   const ATargetReg: UInt8; const AKeyReg: UInt8;
-  const ASetter: TGocciaSetterExpression; const AExtOp: UInt8);
+  const ASetter: TGocciaSetterExpression; const AOpcode: TGocciaOpCode;
+  const AFlags: UInt8);
 var
-  OldTemplate: TSouffleFunctionTemplate;
+  OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
-  ChildTemplate: TSouffleFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   FuncIdx: UInt16;
   FnReg, SafeKeyReg: UInt8;
@@ -1473,8 +1477,8 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
-  ChildTemplate := TSouffleFunctionTemplate.Create('<set [computed]>');
-  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate := TGocciaFunctionTemplate.Create('<set [computed]>');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.ParameterCount := 1;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
@@ -1501,14 +1505,14 @@ begin
     SafeKeyReg := ACtx.Scope.AllocateRegister;
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, SafeKeyReg, AKeyReg, 0));
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ATargetReg, AExtOp, SafeKeyReg));
+    EmitInstruction(ACtx, EncodeABC(AOpcode, ATargetReg, AFlags, SafeKeyReg));
     ACtx.Scope.FreeRegister;
   end
   else
   begin
     if FnReg <> ATargetReg + 1 then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ATargetReg + 1, FnReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ATargetReg, AExtOp, AKeyReg));
+    EmitInstruction(ACtx, EncodeABC(AOpcode, ATargetReg, AFlags, AKeyReg));
   end;
   ACtx.Scope.FreeRegister;
 end;
@@ -1533,17 +1537,18 @@ begin
       cekGetter:
         if Elem.IsStatic then
           CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
-            Elem.GetterNode, GOCCIA_EXT_DEF_COMPUTED_STATIC_GETTER)
+            Elem.GetterNode, OP_DEFINE_ACCESSOR_DYNAMIC, ACCESSOR_FLAG_STATIC)
         else
           CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
-            Elem.GetterNode, GOCCIA_EXT_DEF_COMPUTED_GETTER);
+            Elem.GetterNode, OP_DEFINE_ACCESSOR_DYNAMIC, 0);
       cekSetter:
         if Elem.IsStatic then
           CompileComputedSetterBody(ACtx, ATargetReg, KeyReg,
-            Elem.SetterNode, GOCCIA_EXT_DEF_COMPUTED_STATIC_SETTER)
+            Elem.SetterNode, OP_DEFINE_ACCESSOR_DYNAMIC,
+            ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER)
         else
           CompileComputedSetterBody(ACtx, ATargetReg, KeyReg,
-            Elem.SetterNode, GOCCIA_EXT_DEF_COMPUTED_SETTER);
+            Elem.SetterNode, OP_DEFINE_ACCESSOR_DYNAMIC, ACCESSOR_FLAG_SETTER);
     end;
 
     ACtx.Scope.FreeRegister;
@@ -1565,14 +1570,13 @@ end;
 procedure CompileFieldInitializer(const ACtx: TGocciaCompilationContext;
   const AClassReg: UInt8; const AClassDef: TGocciaClassDefinition);
 var
-  OldTemplate: TSouffleFunctionTemplate;
+  OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
-  ChildTemplate: TSouffleFunctionTemplate;
+  ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
   FnReg: UInt8;
-  MethodNameIdx: UInt16;
   ValReg, ThisReg: UInt8;
   KeyIdx: UInt16;
   I: Integer;
@@ -1583,8 +1587,8 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
 
-  ChildTemplate := TSouffleFunctionTemplate.Create('<fields>');
-  ChildTemplate.DebugInfo := TSouffleDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate := TGocciaFunctionTemplate.Create('<fields>');
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
 
@@ -1618,7 +1622,7 @@ begin
       end;
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: field name index exceeds 255');
-      EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
+      EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
         UInt8(KeyIdx), ValReg));
       ChildScope.FreeRegister;
     end;
@@ -1633,7 +1637,7 @@ begin
       KeyIdx := ChildTemplate.AddConstantString(Entry.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: field name index exceeds 255');
-      EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
+      EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
         UInt8(KeyIdx), ValReg));
       ChildScope.FreeRegister;
     end;
@@ -1646,7 +1650,7 @@ begin
       KeyIdx := ChildTemplate.AddConstantString('#' + ChildScope.ResolvePrivatePrefix + Entry.Key);
       if KeyIdx > High(UInt8) then
         raise Exception.Create('Constant pool overflow: field name index exceeds 255');
-      EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
+      EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
         UInt8(KeyIdx), ValReg));
       ChildScope.FreeRegister;
     end;
@@ -1662,7 +1666,7 @@ begin
     KeyIdx := ChildTemplate.AddConstantString('__accessor_' + Elem.Name);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: accessor backing field name index exceeds 255');
-    EmitInstruction(ChildCtx, EncodeABC(OP_RT_SET_PROP, ThisReg,
+    EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
       UInt8(KeyIdx), ValReg));
     ChildScope.FreeRegister;
   end;
@@ -1681,11 +1685,8 @@ begin
   FnReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
 
-  MethodNameIdx := ACtx.Template.AddConstantString('__fields__');
-  if MethodNameIdx > High(UInt8) then
-    raise Exception.Create('Constant pool overflow: __fields__ name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_RECORD_SET,
-    AClassReg, UInt8(MethodNameIdx), FnReg));
+  EmitInstruction(ACtx, EncodeABC(OP_CLASS_SET_FIELD_INITIALIZER,
+    AClassReg, FnReg, 0));
   ACtx.Scope.FreeRegister;
 end;
 
@@ -1747,9 +1748,9 @@ begin
 
     PairReg := ACtx.Scope.AllocateRegister;
     InitReg := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, InitReg, 0, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, PairReg,
-      GOCCIA_EXT_SETUP_AUTO_ACCESSOR, UInt8(NameIdx)));
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, InitReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_CONST, PairReg, 0,
+      UInt8(NameIdx)));
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
   end;
@@ -1815,9 +1816,9 @@ begin
       PairReg := ACtx.Scope.AllocateRegister;
       ExtraReg := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, DecoRegs[I][J], 0));
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ExtraReg, 0, 0));
-      EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, PairReg,
-        GOCCIA_EXT_APPLY_ELEMENT_DECORATOR, UInt8(DescIdx)));
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST, PairReg,
+        0, UInt8(DescIdx)));
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
     end;
@@ -1828,9 +1829,8 @@ begin
     PairReg := ACtx.Scope.AllocateRegister;
     ExtraReg := ACtx.Scope.AllocateRegister;
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, ClassDecoRegs[I], 0));
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ExtraReg, 0, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, PairReg,
-      GOCCIA_EXT_APPLY_CLASS_DECORATOR, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_APPLY_CLASS_DECORATOR, PairReg, 0, 0));
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
   end;
@@ -1858,9 +1858,8 @@ begin
   if ASuperReg >= 0 then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg, UInt8(ASuperReg), 0))
   else
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ExtraReg, 0, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, PairReg,
-    GOCCIA_EXT_BEGIN_DECORATORS, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_BEGIN_DECORATORS, PairReg, 0, 0));
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 
@@ -1870,9 +1869,8 @@ begin
   PairReg := ACtx.Scope.AllocateRegister;
   ExtraReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, AClassReg, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ExtraReg, 0, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, PairReg,
-    GOCCIA_EXT_FINISH_DECORATORS, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_FINISH_DECORATORS, PairReg, 0, 0));
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, AClassReg, PairReg, 0));
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
@@ -1900,7 +1898,7 @@ begin
 
   ClassReg := ACtx.Scope.DeclareLocal(ClassDef.Name, True);
   NameIdx := ACtx.Template.AddConstantString(ClassDef.Name);
-  EmitInstruction(ACtx, EncodeABx(OP_NEW_BLUEPRINT, ClassReg, NameIdx));
+  EmitInstruction(ACtx, EncodeABx(OP_NEW_CLASS, ClassReg, NameIdx));
 
   if HasSuper then
   begin
@@ -1917,38 +1915,36 @@ begin
         EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, SuperReg,
           UInt16(UpvalIdx)))
       else
-        EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, SuperReg,
+        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, SuperReg,
           ACtx.Template.AddConstantString(ClassDef.SuperClass)));
     end;
 
-    EmitInstruction(ACtx, EncodeABC(OP_INHERIT, ClassReg, SuperReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ClassReg,
-      GOCCIA_EXT_SET_WRAPPED_SUPER, SuperReg));
+    EmitInstruction(ACtx, EncodeABC(OP_CLASS_SET_SUPER, ClassReg, SuperReg, 0));
   end;
 
   for MethodPair in ClassDef.Methods do
   begin
     if MethodPair.Value.IsStatic then
       CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
-        MethodPair.Value, OP_RT_SET_PROP)
+        MethodPair.Value, OP_SET_PROP_CONST)
     else
       CompileMethodBody(ACtx, ClassReg, MethodPair.Key,
-        MethodPair.Value, OP_RECORD_SET);
+        MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
   end;
 
   for MethodPair in ClassDef.PrivateMethods do
     CompileMethodBody(ACtx, ClassReg, '#' + PrivPrefix + MethodPair.Key,
-      MethodPair.Value, OP_RECORD_SET);
+      MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
 
   for GetterPair in ClassDef.Getters do
   begin
     if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
       CompileGetterBody(ACtx, ClassReg,
         '#' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
-        GetterPair.Value, GOCCIA_EXT_DEF_GETTER)
+        GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, 0)
     else
       CompileGetterBody(ACtx, ClassReg, GetterPair.Key,
-        GetterPair.Value, GOCCIA_EXT_DEF_GETTER);
+        GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, 0);
   end;
 
   for SetterPair in ClassDef.Setters do
@@ -1956,19 +1952,19 @@ begin
     if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
       CompileSetterBody(ACtx, ClassReg,
         '#' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
-        SetterPair.Value, GOCCIA_EXT_DEF_SETTER)
+        SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_SETTER)
     else
       CompileSetterBody(ACtx, ClassReg, SetterPair.Key,
-        SetterPair.Value, GOCCIA_EXT_DEF_SETTER);
+        SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_SETTER);
   end;
 
   for GetterPair in ClassDef.StaticGetters do
     CompileGetterBody(ACtx, ClassReg, GetterPair.Key,
-      GetterPair.Value, GOCCIA_EXT_DEF_STATIC_GETTER);
+      GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC);
 
   for SetterPair in ClassDef.StaticSetters do
     CompileSetterBody(ACtx, ClassReg, SetterPair.Key,
-      SetterPair.Value, GOCCIA_EXT_DEF_STATIC_SETTER);
+      SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER);
 
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
@@ -1982,7 +1978,7 @@ begin
     KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ClassReg,
+    EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
       UInt8(KeyIdx), ValReg));
     ACtx.Scope.FreeRegister;
   end;
@@ -1994,7 +1990,7 @@ begin
     KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ClassReg,
+    EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
       UInt8(KeyIdx), ValReg));
     ACtx.Scope.FreeRegister;
   end;
@@ -2037,7 +2033,7 @@ begin
     NameIdx := ACtx.Template.AddConstantString(ClassDef.Name)
   else
     NameIdx := ACtx.Template.AddConstantString('<anonymous>');
-  EmitInstruction(ACtx, EncodeABx(OP_NEW_BLUEPRINT, ADest, NameIdx));
+  EmitInstruction(ACtx, EncodeABx(OP_NEW_CLASS, ADest, NameIdx));
 
   // ES2026 §15.7.14: Named class expressions bind the name in an inner
   // block scope visible to methods/static initializers via upvalue capture
@@ -2063,38 +2059,36 @@ begin
         EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, SuperReg,
           UInt16(UpvalIdx)))
       else
-        EmitInstruction(ACtx, EncodeABx(OP_RT_GET_GLOBAL, SuperReg,
+        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, SuperReg,
           ACtx.Template.AddConstantString(ClassDef.SuperClass)));
     end;
 
-    EmitInstruction(ACtx, EncodeABC(OP_INHERIT, ADest, SuperReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, ADest,
-      GOCCIA_EXT_SET_WRAPPED_SUPER, SuperReg));
+    EmitInstruction(ACtx, EncodeABC(OP_CLASS_SET_SUPER, ADest, SuperReg, 0));
   end;
 
   for MethodPair in ClassDef.Methods do
   begin
     if MethodPair.Value.IsStatic then
       CompileMethodBody(ACtx, ADest, MethodPair.Key,
-        MethodPair.Value, OP_RT_SET_PROP)
+        MethodPair.Value, OP_SET_PROP_CONST)
     else
       CompileMethodBody(ACtx, ADest, MethodPair.Key,
-        MethodPair.Value, OP_RECORD_SET);
+        MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
   end;
 
   for MethodPair in ClassDef.PrivateMethods do
     CompileMethodBody(ACtx, ADest, '#' + PrivPrefix + MethodPair.Key,
-      MethodPair.Value, OP_RECORD_SET);
+      MethodPair.Value, OP_CLASS_ADD_METHOD_CONST);
 
   for GetterPair in ClassDef.Getters do
   begin
     if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
       CompileGetterBody(ACtx, ADest,
         '#' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
-        GetterPair.Value, GOCCIA_EXT_DEF_GETTER)
+        GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, 0)
     else
       CompileGetterBody(ACtx, ADest, GetterPair.Key,
-        GetterPair.Value, GOCCIA_EXT_DEF_GETTER);
+        GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, 0);
   end;
 
   for SetterPair in ClassDef.Setters do
@@ -2102,19 +2096,19 @@ begin
     if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
       CompileSetterBody(ACtx, ADest,
         '#' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
-        SetterPair.Value, GOCCIA_EXT_DEF_SETTER)
+        SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_SETTER)
     else
       CompileSetterBody(ACtx, ADest, SetterPair.Key,
-        SetterPair.Value, GOCCIA_EXT_DEF_SETTER);
+        SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_SETTER);
   end;
 
   for GetterPair in ClassDef.StaticGetters do
     CompileGetterBody(ACtx, ADest, GetterPair.Key,
-      GetterPair.Value, GOCCIA_EXT_DEF_STATIC_GETTER);
+      GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC);
 
   for SetterPair in ClassDef.StaticSetters do
     CompileSetterBody(ACtx, ADest, SetterPair.Key,
-      SetterPair.Value, GOCCIA_EXT_DEF_STATIC_SETTER);
+      SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER);
 
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
@@ -2128,7 +2122,7 @@ begin
     KeyIdx := ACtx.Template.AddConstantString(StaticPropPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ADest,
+    EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
       UInt8(KeyIdx), ValReg));
     ACtx.Scope.FreeRegister;
   end;
@@ -2140,7 +2134,7 @@ begin
     KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_RT_SET_PROP, ADest,
+    EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
       UInt8(KeyIdx), ValReg));
     ACtx.Scope.FreeRegister;
   end;
@@ -2188,7 +2182,7 @@ var
   ClosedCount, J: Integer;
 begin
   EnumSlot := ACtx.Scope.DeclareLocal(AStmt.Name, False);
-  EmitInstruction(ACtx, EncodeABx(OP_NEW_RECORD, EnumSlot,
+  EmitInstruction(ACtx, EncodeABx(OP_NEW_OBJECT, EnumSlot,
     Length(AStmt.Members)));
 
   ACtx.Scope.BeginScope;
@@ -2203,14 +2197,14 @@ begin
     KeyIdx := ACtx.Template.AddConstantString(AStmt.Members[I].Name);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: enum member name index exceeds 255');
-    EmitInstruction(ACtx, EncodeABC(OP_RECORD_SET, EnumSlot, UInt8(KeyIdx), MemberSlot));
+    EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, EnumSlot, UInt8(KeyIdx), MemberSlot));
   end;
 
   KeyIdx := ACtx.Template.AddConstantString(AStmt.Name);
   if KeyIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: enum name index exceeds 255');
-  EmitInstruction(ACtx, EncodeABC(OP_RT_EXT, EnumSlot,
-    GOCCIA_EXT_FINALIZE_ENUM, UInt8(KeyIdx)));
+  EmitInstruction(ACtx, EncodeABC(OP_FINALIZE_ENUM, EnumSlot,
+    0, UInt8(KeyIdx)));
 
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for J := 0 to ClosedCount - 1 do
@@ -2230,7 +2224,7 @@ begin
   begin
     Reg := ACtx.Scope.GetLocal(LocalIdx).Slot;
     NameIdx := ACtx.Template.AddConstantString(AStmt.Declaration.Name);
-    EmitInstruction(ACtx, EncodeABx(OP_RT_EXPORT, Reg, NameIdx));
+    EmitInstruction(ACtx, EncodeABx(OP_EXPORT, Reg, NameIdx));
   end;
 end;
 

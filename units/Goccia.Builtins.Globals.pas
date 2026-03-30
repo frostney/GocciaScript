@@ -68,6 +68,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -456,8 +457,8 @@ begin
   for I := 0 to AArr.Elements.Count - 1 do
   begin
     Element := AArr.Elements[I];
-    if Element = nil then
-      Result.Elements.Add(nil)
+    if Element = TGocciaHoleValue.HoleValue then
+      Result.Elements.Add(TGocciaHoleValue.HoleValue)
     else
       Result.Elements.Add(StructuredCloneValue(Element, AMemory));
   end;

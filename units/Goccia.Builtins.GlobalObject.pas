@@ -633,7 +633,7 @@ begin
   if Assigned(TGocciaObjectValue(AArgs.GetElement(0)).Prototype) then
     Result := TGocciaObjectValue(AArgs.GetElement(0)).Prototype
   else
-    Result := TGocciaNullLiteralValue.Create;
+    Result := TGocciaNullLiteralValue.NullValue;
 end;
 
 // ES2026 §20.1.2.7 Object.fromEntries(iterable)
@@ -814,7 +814,7 @@ begin
     CallArgs := TGocciaArgumentsCollection.Create;
     try
       CallArgs.Add(Items.Elements[I]);
-      CallArgs.Add(TGocciaNumberLiteralValue.SmallInt(I));
+      CallArgs.Add(TGocciaNumberLiteralValue.Create(I));
 
       KeyValue := InvokeCallable(Callback, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally

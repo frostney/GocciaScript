@@ -36,7 +36,8 @@ type
   public
     class procedure InitializeSharedPrototype;
     class property SharedObjectPrototype: TGocciaObjectValue read FSharedObjectPrototype write FSharedObjectPrototype;
-    constructor Create(const APrototype: TGocciaObjectValue = nil);
+    constructor Create(const APrototype: TGocciaObjectValue = nil;
+      const APropertyCapacity: Integer = 0);
     destructor Destroy; override;
     function ToDebugString: string;
     function TypeName: string; override;
@@ -49,7 +50,6 @@ type
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
 
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); virtual;
-
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); virtual;
 
     procedure RegisterNativeMethod(const AMethod: TGocciaValue);
@@ -139,9 +139,10 @@ end;
 
 { TGocciaObjectValue }
 
-constructor TGocciaObjectValue.Create(const APrototype: TGocciaObjectValue = nil);
+constructor TGocciaObjectValue.Create(const APrototype: TGocciaObjectValue = nil;
+  const APropertyCapacity: Integer = 0);
 begin
-  FProperties := TGocciaPropertyMap.Create;
+  FProperties := TGocciaPropertyMap.Create(APropertyCapacity);
   FSymbolDescriptors := TSymbolDescriptorMap.Create;
   FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
   FPrototype := APrototype;
@@ -319,10 +320,8 @@ begin
     begin
       CallArgs := TGocciaArgumentsCollection.Create;
       try
-        if ToStringMethod is TGocciaNativeFunctionValue then
-          Result := TGocciaNativeFunctionValue(ToStringMethod).Call(CallArgs, AThisValue)
-        else if ToStringMethod is TGocciaFunctionValue then
-          Result := TGocciaFunctionValue(ToStringMethod).Call(CallArgs, AThisValue)
+        if ToStringMethod is TGocciaFunctionBase then
+          Result := TGocciaFunctionBase(ToStringMethod).Call(CallArgs, AThisValue)
         else
           Result := AThisValue.ToStringLiteral;
       finally
@@ -544,8 +543,7 @@ begin
     begin
       if TGocciaPropertyDescriptorData(Descriptor).Writable then
       begin
-        FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue, Descriptor.Flags));
-        Descriptor.Free;
+        TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
         Exit;
       end;
       ThrowTypeError('Cannot assign to read only property ''' + AName + '''');
@@ -590,7 +588,8 @@ begin
   if not FExtensible then
     ThrowTypeError('Cannot add property ''' + AName + ''', object is not extensible');
 
-  DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
+  DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
 procedure TGocciaObjectValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
@@ -862,10 +861,8 @@ begin
         Args := TGocciaArgumentsCollection.Create;
         try
           Args.Add(AValue);
-          if Accessor.Setter is TGocciaNativeFunctionValue then
-            TGocciaNativeFunctionValue(Accessor.Setter).Call(Args, Self)
-          else if Accessor.Setter is TGocciaFunctionValue then
-            TGocciaFunctionValue(Accessor.Setter).Call(Args, Self);
+          if Accessor.Setter is TGocciaFunctionBase then
+            TGocciaFunctionBase(Accessor.Setter).Call(Args, Self);
         finally
           Args.Free;
         end;
@@ -898,10 +895,8 @@ begin
           Args := TGocciaArgumentsCollection.Create;
           try
             Args.Add(AValue);
-            if Accessor.Setter is TGocciaNativeFunctionValue then
-              TGocciaNativeFunctionValue(Accessor.Setter).Call(Args, Self)
-            else if Accessor.Setter is TGocciaFunctionValue then
-              TGocciaFunctionValue(Accessor.Setter).Call(Args, Self);
+            if Accessor.Setter is TGocciaFunctionBase then
+              TGocciaFunctionBase(Accessor.Setter).Call(Args, Self);
           finally
             Args.Free;
           end;
@@ -950,10 +945,8 @@ begin
       begin
         Args := TGocciaArgumentsCollection.Create;
         try
-          if Accessor.Getter is TGocciaNativeFunctionValue then
-            Result := TGocciaNativeFunctionValue(Accessor.Getter).Call(Args, AReceiver)
-          else if Accessor.Getter is TGocciaFunctionValue then
-            Result := TGocciaFunctionValue(Accessor.Getter).Call(Args, AReceiver)
+          if Accessor.Getter is TGocciaFunctionBase then
+            Result := TGocciaFunctionBase(Accessor.Getter).Call(Args, AReceiver)
           else
             Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         finally

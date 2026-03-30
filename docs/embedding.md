@@ -467,7 +467,7 @@ end;
 
 FPU exceptions — divide-by-zero, overflow, underflow, invalid operation, denormalized operand, and precision loss — are hardware signals raised by the floating-point unit when an operation produces a special result. By default, FreePascal leaves some of these unmasked, which causes runtime exceptions on operations like `0.0 / 0.0` instead of returning `NaN`.
 
-Both `TGocciaEngine` and `TSouffleVM` mask all FPU exceptions on creation (via `SetExceptionMask`) to enable IEEE 754 semantics (`NaN`, `Infinity`, `-0`). The previous mask is saved in the constructor and **restored in the destructor**, so the host application's FPU state is not permanently altered. This is transparent for one-shot execution (`RunScript`), but embedders creating long-lived engine instances should be aware that FPU exceptions are suppressed while the engine exists. If the host application depends on FPU exception handlers for its own error handling, those handlers will not fire while a `TGocciaEngine` or `TSouffleVM` instance is alive.
+Both `TGocciaEngine` and `TGocciaVM` mask all FPU exceptions on creation (via `SetExceptionMask`) to enable IEEE 754 semantics (`NaN`, `Infinity`, `-0`). The previous mask is saved in the constructor and **restored in the destructor**, so the host application's FPU state is not permanently altered. This is transparent for one-shot execution (`RunScript`), but embedders creating long-lived engine instances should be aware that FPU exceptions are suppressed while the engine exists. If the host application depends on FPU exception handlers for its own error handling, those handlers will not fire while a `TGocciaEngine` or `TGocciaVM` instance is alive.
 
 ## Microtask Queue (Promises)
 

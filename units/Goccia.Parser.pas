@@ -565,7 +565,7 @@ begin
   begin
     Token := Previous;
     Result := TGocciaLiteralExpression.Create(
-      TGocciaNullLiteralValue.Create, Token.Line, Token.Column);
+      TGocciaNullLiteralValue.NullValue, Token.Line, Token.Column);
   end
   else if Match(gttNumber) then
   begin

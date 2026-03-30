@@ -180,12 +180,13 @@ procedure TTestPrimitives.TestNullValue;
 var
   Value: TGocciaNullLiteralValue;
 begin
-  Value := TGocciaNullLiteralValue.Create;
+  Value := TGocciaNullLiteralValue.NullValue;
   Expect<string>(Value.ToStringLiteral.Value).ToBe('null');
   Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(False);
   Expect<Double>(Value.ToNumberLiteral.Value).ToBe(0);
   Expect<string>(Value.TypeName).ToBe('null');
   Expect<string>(Value.TypeOf).ToBe('object'); // JavaScript: typeof null === 'object'
+  Expect<Boolean>(Value = TGocciaNullLiteralValue.NullValue).ToBe(True);
 end;
 
 begin

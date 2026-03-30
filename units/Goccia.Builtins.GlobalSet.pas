@@ -13,6 +13,7 @@ uses
   Goccia.Error.ThrowErrorCallback,
   Goccia.Scope,
   Goccia.Values.ArrayValue,
+  Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.Primitives,
   Goccia.Values.SetValue;
@@ -64,7 +65,7 @@ begin
       ArrValue := TGocciaArrayValue(InitArg);
       for I := 0 to ArrValue.Elements.Count - 1 do
       begin
-        if ArrValue.Elements[I] <> nil then
+        if ArrValue.Elements[I] <> TGocciaHoleValue.HoleValue then
           SetObj.AddItem(ArrValue.Elements[I]);
       end;
     end;

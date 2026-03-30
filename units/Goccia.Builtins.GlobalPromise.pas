@@ -52,7 +52,8 @@ uses
   Goccia.Values.MapValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
-  Goccia.Values.SetValue;
+  Goccia.Values.SetValue,
+  Goccia.VM.Exception;
 
 type
   TPromiseAllState = class(TGocciaObjectValue)
@@ -505,6 +506,15 @@ begin
     try
       InvokeCallable(Executor, ExecutorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
     except
+      on E: EGocciaBytecodeThrow do
+      begin
+        RejectArgs := TGocciaArgumentsCollection.Create([E.ThrownValue]);
+        try
+          Promise.DoReject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        finally
+          RejectArgs.Free;
+        end;
+      end;
       on E: TGocciaThrowValue do
       begin
         { Step 9: If abrupt completion, Call(reject, undefined, « reason ») }
@@ -958,6 +968,8 @@ begin
     { Step 6: Normal completion — Call(resolve, status.[[Value]]) }
     Promise.Resolve(CallbackResult);
   except
+    on E: EGocciaBytecodeThrow do
+      Promise.Reject(E.ThrownValue);
     on E: TGocciaThrowValue do
       { Step 5: Abrupt completion — Call(reject, status.[[Value]]) }
       Promise.Reject(E.Value);

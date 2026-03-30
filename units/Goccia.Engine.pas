@@ -35,6 +35,8 @@ uses
   Goccia.ObjectModel.Engine,
   Goccia.Parser,
   Goccia.Values.ClassValue,
+  Goccia.Values.FunctionBase,
+  Goccia.Values.HoleValue,
   Goccia.Values.IteratorValue,
   Goccia.Values.Primitives,
   Goccia.Values.TypedArrayValue;
@@ -257,27 +259,10 @@ begin
   inherited;
 end;
 
-procedure PinIfAssigned(const AValue: TGocciaValue); inline;
-begin
-  if Assigned(AValue) then
-    TGarbageCollector.Instance.PinObject(AValue);
-end;
-
 procedure TGocciaEngine.PinSingletons;
-var
-  I: Integer;
 begin
-  PinIfAssigned(TGocciaUndefinedLiteralValue.UndefinedValue);
-  PinIfAssigned(TGocciaBooleanLiteralValue.TrueValue);
-  PinIfAssigned(TGocciaBooleanLiteralValue.FalseValue);
-  PinIfAssigned(TGocciaNumberLiteralValue.NaNValue);
-  PinIfAssigned(TGocciaNumberLiteralValue.ZeroValue);
-  PinIfAssigned(TGocciaNumberLiteralValue.OneValue);
-  PinIfAssigned(TGocciaNumberLiteralValue.NegativeZeroValue);
-  PinIfAssigned(TGocciaNumberLiteralValue.InfinityValue);
-  PinIfAssigned(TGocciaNumberLiteralValue.NegativeInfinityValue);
-  for I := 0 to 255 do
-    PinIfAssigned(TGocciaNumberLiteralValue.SmallInt(I));
+  PinPrimitiveSingletons;
+  TGarbageCollector.Instance.PinObject(TGocciaHoleValue.HoleValue);
 end;
 
 procedure TGocciaEngine.RegisterBuiltIns;
@@ -494,6 +479,7 @@ begin
   BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
 
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
+  TGocciaFunctionBase.SetSharedPrototypeParent(FunctionConstructor.Prototype);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
 
   RegisterGocciaScriptGlobal;

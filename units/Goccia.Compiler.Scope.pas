@@ -7,7 +7,7 @@ interface
 uses
   Generics.Collections,
 
-  Souffle.Bytecode.Chunk;
+  Goccia.Bytecode.Chunk;
 
 type
   TGocciaCompilerVariableKind = (cvkLocal, cvkUpvalue, cvkGlobal);
@@ -20,9 +20,9 @@ type
     IsConst: Boolean;
     IsGlobalBacked: Boolean;
     IsArrayTyped: Boolean;
-    TypeHint: TSouffleLocalType;
+    TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
-    ReturnTypeHint: TSouffleLocalType;
+    ReturnTypeHint: TGocciaLocalType;
     ParamTypeSignature: string;
     TypeAnnotation: string;
     ElementTypeAnnotation: string;
@@ -33,9 +33,9 @@ type
     IsLocal: Boolean;
     IsConst: Boolean;
     IsGlobalBacked: Boolean;
-    TypeHint: TSouffleLocalType;
+    TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
-    ReturnTypeHint: TSouffleLocalType;
+    ReturnTypeHint: TGocciaLocalType;
     ParamTypeSignature: string;
   end;
 
@@ -79,13 +79,13 @@ type
     procedure MarkCaptured(const AIndex: Integer);
     procedure MarkGlobalBacked(const AIndex: Integer);
     procedure SetLocalTypeHint(const AIndex: Integer;
-      const ATypeHint: TSouffleLocalType);
+      const ATypeHint: TGocciaLocalType);
     procedure SetLocalStrictlyTyped(const AIndex: Integer;
       const AStrictlyTyped: Boolean);
     procedure SetLocalArrayTyped(const AIndex: Integer;
       const AArrayTyped: Boolean);
     procedure SetLocalReturnTypeHint(const AIndex: Integer;
-      const AReturnTypeHint: TSouffleLocalType);
+      const AReturnTypeHint: TGocciaLocalType);
     procedure SetLocalParamTypeSignature(const AIndex: Integer;
       const ASignature: string);
     procedure SetLocalTypeAnnotation(const AIndex: Integer;
@@ -282,13 +282,13 @@ begin
 end;
 
 procedure TGocciaCompilerScope.SetLocalTypeHint(const AIndex: Integer;
-  const ATypeHint: TSouffleLocalType);
+  const ATypeHint: TGocciaLocalType);
 begin
   FLocals[AIndex].TypeHint := ATypeHint;
 end;
 
 procedure TGocciaCompilerScope.SetLocalReturnTypeHint(const AIndex: Integer;
-  const AReturnTypeHint: TSouffleLocalType);
+  const AReturnTypeHint: TGocciaLocalType);
 begin
   FLocals[AIndex].ReturnTypeHint := AReturnTypeHint;
 end;

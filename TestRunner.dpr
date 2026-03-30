@@ -9,14 +9,14 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
-  Souffle.Bytecode.Module,
   TimingUtils,
 
   Goccia.AST.Node,
   Goccia.Builtins.TestConsole,
+  Goccia.Bytecode.Module,
   Goccia.Compiler,
   Goccia.Engine,
-  Goccia.Engine.Backend,
+  Goccia.Engine.BytecodeBackend,
   Goccia.FileExtensions,
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
@@ -167,8 +167,8 @@ var
   Parser: TGocciaParser;
   Warning: TGocciaParserWarning;
   ProgramNode: TGocciaProgram;
-  Module: TSouffleBytecodeModule;
-  Backend: TGocciaSouffleBackend;
+  Module: TGocciaBytecodeModule;
+  Backend: TGocciaBytecodeBackend;
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
   TestGlobals: TGocciaGlobalBuiltins;
@@ -207,7 +207,7 @@ begin
     try try
       CompileStart := GetNanoseconds;
 
-      Backend := TGocciaSouffleBackend.Create(AFileName);
+      Backend := TGocciaBytecodeBackend.Create(AFileName);
       try
         Backend.RegisterBuiltIns(TestGlobals);
 
@@ -283,7 +283,7 @@ function RunGocciaScript(const AFileName: string): TTestFileResult;
 begin
   case GMode of
     ebTreeWalk:  Result := RunGocciaScriptInterpreted(AFileName);
-    ebSouffleVM: Result := RunGocciaScriptBytecode(AFileName);
+    ebBytecode: Result := RunGocciaScriptBytecode(AFileName);
   end;
 end;
 
@@ -428,7 +428,7 @@ var
   FailedArray: TGocciaArrayValue;
   I: Integer;
 begin
-  if GMode = ebSouffleVM then
+  if GMode = ebBytecode then
     TotalNanoseconds := AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds
   else
     TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds;
@@ -436,7 +436,7 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Add('{');
-    Lines.Add(Format('  "mode": "%s",', [IfThen(GMode = ebSouffleVM, 'bytecode', 'interpreted')]));
+    Lines.Add(Format('  "mode": "%s",', [IfThen(GMode = ebBytecode, 'bytecode', 'interpreted')]));
     Lines.Add(Format('  "totalFiles": %d,', [Round(AResult.TestResult.GetProperty('totalTests').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "totalTests": %d,', [Round(AResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "passed": %d,', [Round(AResult.TestResult.GetProperty('passed').ToNumberLiteral.Value)]));
@@ -444,7 +444,7 @@ begin
     Lines.Add(Format('  "skipped": %d,', [Round(AResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "assertions": %d,', [Round(AResult.TestResult.GetProperty('assertions').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "durationNanoseconds": %d,', [Round(AResult.TestResult.GetProperty('duration').ToNumberLiteral.Value)]));
-    if GMode = ebSouffleVM then
+    if GMode = ebBytecode then
     begin
       Lines.Add(Format('  "compileTimeNanoseconds": %d,', [AResult.TotalCompileNanoseconds]));
       Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
@@ -517,7 +517,7 @@ begin
       Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / RunCount * 100)]));
       Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
       Writeln(Format('Test Results Test Execution: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
-      if GMode = ebSouffleVM then
+      if GMode = ebBytecode then
         Writeln(Format('Test Results Engine Timing: Compile: %s | Execute: %s | Total: %s',
           [FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
            FormatDuration(AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]))
@@ -547,7 +547,6 @@ begin
   GExitOnFirstFailure := False;
   GSilentConsole := False;
   GMode := ebTreeWalk;
-
   Paths := TStringList.Create;
   try
     for I := 1 to ParamCount do
@@ -565,7 +564,7 @@ begin
       else if ParamStr(I) = '--mode=interpreted' then
         GMode := ebTreeWalk
       else if ParamStr(I) = '--mode=bytecode' then
-        GMode := ebSouffleVM
+        GMode := ebBytecode
       else if Copy(ParamStr(I), 1, 7) = '--mode=' then
       begin
         WriteLn('Error: Unknown mode "', Copy(ParamStr(I), 8, MaxInt), '". Use "interpreted" or "bytecode".');

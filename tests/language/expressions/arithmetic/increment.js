@@ -27,6 +27,16 @@ test("increment preserves fractional part", () => {
   expect(y).toBe(0.5);
 });
 
+test("increment coerces strings to numbers", () => {
+  let value = "1";
+  expect(value++).toBe(1);
+  expect(value).toBe(2);
+
+  const obj = { count: "10" };
+  expect(++obj.count).toBe(11);
+  expect(obj.count).toBe(11);
+});
+
 test("post-increment on property access", () => {
   const obj = { count: 10 };
   expect(obj.count++).toBe(10);

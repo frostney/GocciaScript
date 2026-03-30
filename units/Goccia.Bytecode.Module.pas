@@ -1,37 +1,37 @@
-unit Souffle.Bytecode.Module;
+unit Goccia.Bytecode.Module;
 
-{$I Souffle.inc}
+{$I Goccia.inc}
 
 interface
 
 uses
-  Souffle.Bytecode.Chunk;
+  Goccia.Bytecode.Chunk;
 
 type
-  TSouffleModuleBinding = record
+  TGocciaModuleBinding = record
     ExportName: string;
     LocalSlot: UInt16;
   end;
 
-  TSouffleModuleImport = record
+  TGocciaModuleImport = record
     ModulePath: string;
-    Bindings: array of TSouffleModuleBinding;
+    Bindings: array of TGocciaModuleBinding;
   end;
 
-  TSouffleModuleExport = record
+  TGocciaModuleExport = record
     Name: string;
     LocalSlot: UInt16;
   end;
 
-  TSouffleBytecodeModule = class
+  TGocciaBytecodeModule = class
   private
     FFormatVersion: UInt16;
     FRuntimeTag: string;
     FSourcePath: string;
-    FTopLevel: TSouffleFunctionTemplate;
-    FImports: array of TSouffleModuleImport;
+    FTopLevel: TGocciaFunctionTemplate;
+    FImports: array of TGocciaModuleImport;
     FImportCount: Integer;
-    FExports: array of TSouffleModuleExport;
+    FExports: array of TGocciaModuleExport;
     FExportCount: Integer;
     FHasDebugInfo: Boolean;
   public
@@ -39,16 +39,16 @@ type
     destructor Destroy; override;
 
     procedure AddImport(const AModulePath: string;
-      const ABindings: array of TSouffleModuleBinding);
+      const ABindings: array of TGocciaModuleBinding);
     procedure AddExport(const AName: string; const ALocalSlot: UInt16);
 
-    function GetImport(const AIndex: Integer): TSouffleModuleImport;
-    function GetExport(const AIndex: Integer): TSouffleModuleExport;
+    function GetImport(const AIndex: Integer): TGocciaModuleImport;
+    function GetExport(const AIndex: Integer): TGocciaModuleExport;
 
     property FormatVersion: UInt16 read FFormatVersion;
     property RuntimeTag: string read FRuntimeTag;
     property SourcePath: string read FSourcePath;
-    property TopLevel: TSouffleFunctionTemplate read FTopLevel write FTopLevel;
+    property TopLevel: TGocciaFunctionTemplate read FTopLevel write FTopLevel;
     property ImportCount: Integer read FImportCount;
     property ExportCount: Integer read FExportCount;
     property HasDebugInfo: Boolean read FHasDebugInfo write FHasDebugInfo;
@@ -57,14 +57,12 @@ type
 implementation
 
 uses
-  Souffle.Bytecode;
+  Goccia.Bytecode;
 
-{ TSouffleBytecodeModule }
-
-constructor TSouffleBytecodeModule.Create(const ARuntimeTag, ASourcePath: string);
+constructor TGocciaBytecodeModule.Create(const ARuntimeTag, ASourcePath: string);
 begin
   inherited Create;
-  FFormatVersion := SOUFFLE_FORMAT_VERSION;
+  FFormatVersion := GOCCIA_FORMAT_VERSION;
   FRuntimeTag := ARuntimeTag;
   FSourcePath := ASourcePath;
   FTopLevel := nil;
@@ -73,14 +71,14 @@ begin
   FHasDebugInfo := True;
 end;
 
-destructor TSouffleBytecodeModule.Destroy;
+destructor TGocciaBytecodeModule.Destroy;
 begin
   FTopLevel.Free;
   inherited;
 end;
 
-procedure TSouffleBytecodeModule.AddImport(const AModulePath: string;
-  const ABindings: array of TSouffleModuleBinding);
+procedure TGocciaBytecodeModule.AddImport(const AModulePath: string;
+  const ABindings: array of TGocciaModuleBinding);
 var
   I: Integer;
 begin
@@ -93,7 +91,7 @@ begin
   Inc(FImportCount);
 end;
 
-procedure TSouffleBytecodeModule.AddExport(const AName: string;
+procedure TGocciaBytecodeModule.AddExport(const AName: string;
   const ALocalSlot: UInt16);
 begin
   if FExportCount >= Length(FExports) then
@@ -103,14 +101,14 @@ begin
   Inc(FExportCount);
 end;
 
-function TSouffleBytecodeModule.GetImport(
-  const AIndex: Integer): TSouffleModuleImport;
+function TGocciaBytecodeModule.GetImport(
+  const AIndex: Integer): TGocciaModuleImport;
 begin
   Result := FImports[AIndex];
 end;
 
-function TSouffleBytecodeModule.GetExport(
-  const AIndex: Integer): TSouffleModuleExport;
+function TGocciaBytecodeModule.GetExport(
+  const AIndex: Integer): TGocciaModuleExport;
 begin
   Result := FExports[AIndex];
 end;

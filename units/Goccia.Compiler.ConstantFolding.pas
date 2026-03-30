@@ -19,8 +19,7 @@ implementation
 uses
   Math,
 
-  Souffle.Bytecode,
-
+  Goccia.Bytecode,
   Goccia.Constants.TypeNames,
   Goccia.Token,
   Goccia.Values.Primitives;
@@ -68,9 +67,9 @@ procedure EmitLiteralValue(const ACtx: TGocciaCompilationContext;
   const AValue: TGocciaValue; const ADest: UInt8);
 begin
   if AValue is TGocciaNullLiteralValue then
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ADest, 1, 0))
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, ADest, 0, 0))
   else if AValue is TGocciaUndefinedLiteralValue then
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_NIL, ADest, 0, 0))
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0))
   else if AValue is TGocciaBooleanLiteralValue then
   begin
     if TGocciaBooleanLiteralValue(AValue).Value then

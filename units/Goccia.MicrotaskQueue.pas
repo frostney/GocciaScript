@@ -48,7 +48,8 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Values.Error,
   Goccia.Values.FunctionBase,
-  Goccia.Values.PromiseValue;
+  Goccia.Values.PromiseValue,
+  Goccia.VM.Exception;
 
 class function TGocciaMicrotaskQueue.Instance: TGocciaMicrotaskQueue;
 begin
@@ -119,6 +120,9 @@ begin
             if Assigned(Promise) then
               Promise.Resolve(HandlerResult);
           except
+            on E: EGocciaBytecodeThrow do
+              if Assigned(Promise) then
+                Promise.Reject(E.ThrownValue);
             on E: TGocciaThrowValue do
               if Assigned(Promise) then
                 Promise.Reject(E.Value);

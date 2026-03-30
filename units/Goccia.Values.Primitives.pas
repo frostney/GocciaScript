@@ -37,7 +37,11 @@ type
   TGocciaValueMap = TOrderedStringMap<TGocciaValue>;
 
   TGocciaNullLiteralValue = class(TGocciaValue)
+  private
+    class var FNullValue: TGocciaNullLiteralValue;
   public
+    class function NullValue: TGocciaNullLiteralValue;
+
     function IsPrimitive: Boolean; override;
     function TypeName: string; override;
     function TypeOf: string; override;
@@ -103,8 +107,6 @@ type
     class var FNegativeZeroValue: TGocciaNumberLiteralValue;
     class var FInfinityValue: TGocciaNumberLiteralValue;
     class var FNegativeInfinityValue: TGocciaNumberLiteralValue;
-    class var FSmallIntCache: array[0..255] of TGocciaNumberLiteralValue;
-    class var FSmallIntCacheInitialized: Boolean;
   public
     constructor Create(const AValue: Double);
 
@@ -115,7 +117,6 @@ type
 
     class function ZeroValue: TGocciaNumberLiteralValue;
     class function OneValue: TGocciaNumberLiteralValue;
-    class function SmallInt(const AValue: Integer): TGocciaNumberLiteralValue;
 
     function IsPrimitive: Boolean; override;
     function TypeName: string; override;
@@ -154,6 +155,7 @@ type
   end;
 
   function IsPrimitive(const AValue: TGocciaValue): Boolean;
+  procedure PinPrimitiveSingletons;
 
 implementation
 
@@ -210,7 +212,31 @@ begin
   Result := AValue.IsPrimitive;
 end;
 
+procedure PinPrimitiveSingletons;
+begin
+  if not Assigned(TGarbageCollector.Instance) then
+    Exit;
+
+  TGarbageCollector.Instance.PinObject(TGocciaUndefinedLiteralValue.UndefinedValue);
+  TGarbageCollector.Instance.PinObject(TGocciaNullLiteralValue.NullValue);
+  TGarbageCollector.Instance.PinObject(TGocciaBooleanLiteralValue.TrueValue);
+  TGarbageCollector.Instance.PinObject(TGocciaBooleanLiteralValue.FalseValue);
+  TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.NaNValue);
+  TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.ZeroValue);
+  TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.OneValue);
+  TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.NegativeZeroValue);
+  TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.InfinityValue);
+  TGarbageCollector.Instance.PinObject(TGocciaNumberLiteralValue.NegativeInfinityValue);
+end;
+
 { TGocciaNullLiteralValue }
+
+class function TGocciaNullLiteralValue.NullValue: TGocciaNullLiteralValue;
+begin
+  if not Assigned(FNullValue) then
+    FNullValue := TGocciaNullLiteralValue.Create;
+  Result := FNullValue;
+end;
 
 function TGocciaNullLiteralValue.IsPrimitive: Boolean;
 begin
@@ -240,7 +266,7 @@ end;
 
 function TGocciaNullLiteralValue.RuntimeCopy: TGocciaValue;
 begin
-  Result := TGocciaNullLiteralValue.Create;
+  Result := NullValue;
 end;
 
 function TGocciaNullLiteralValue.ToStringLiteral: TGocciaStringLiteralValue;
@@ -445,24 +471,6 @@ begin
   Result := FOneValue;
 end;
 
-class function TGocciaNumberLiteralValue.SmallInt(const AValue: Integer): TGocciaNumberLiteralValue;
-var
-  I: Integer;
-begin
-  if (AValue >= 0) and (AValue <= 255) then
-  begin
-    if not FSmallIntCacheInitialized then
-    begin
-      for I := 0 to 255 do
-        FSmallIntCache[I] := TGocciaNumberLiteralValue.Create(I);
-      FSmallIntCacheInitialized := True;
-    end;
-    Result := FSmallIntCache[AValue];
-  end
-  else
-    Result := TGocciaNumberLiteralValue.Create(AValue);
-end;
-
 function TGocciaNumberLiteralValue.TypeName: string;
 begin
   Result := NUMBER_TYPE_NAME;
@@ -475,11 +483,21 @@ end;
 
 function TGocciaNumberLiteralValue.RuntimeCopy: TGocciaValue;
 begin
-  if (not IsNegativeZero) and (FValue >= 0) and (FValue <= 255)
-     and (Frac(FValue) = 0) then
-    Result := SmallInt(Round(FValue))
-  else
-    Result := TGocciaNumberLiteralValue.Create(FValue);
+  if Math.IsNaN(FValue) then
+    Exit(NaNValue);
+  if Math.IsInfinite(FValue) then
+  begin
+    if FValue > 0 then
+      Exit(InfinityValue);
+    Exit(NegativeInfinityValue);
+  end;
+  if IsNegativeZero then
+    Exit(NegativeZeroValue);
+  if FValue = ZERO_VALUE then
+    Exit(ZeroValue);
+  if FValue = ONE_VALUE then
+    Exit(OneValue);
+  Result := TGocciaNumberLiteralValue.Create(FValue);
 end;
 
 function TGocciaNumberLiteralValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;

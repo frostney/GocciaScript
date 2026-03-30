@@ -75,27 +75,27 @@ A full build (no specific targets) automatically cleans first.
 
 ### Bytecode Mode
 
-All execution tools support `--mode=bytecode` to compile and run via the Souffle VM instead of the tree-walk interpreter:
+All execution tools support `--mode=bytecode` to compile and run via the Goccia bytecode VM instead of the tree-walk interpreter:
 
 ```bash
-# Execute via Souffle VM
+# Execute via bytecode VM
 ./build/ScriptLoader example.js --mode=bytecode
 
-# Emit bytecode to .sbc file (no execution)
+# Emit bytecode to .gbc file (no execution)
 ./build/ScriptLoader example.js --emit
-./build/ScriptLoader example.js --emit=output.sbc
+./build/ScriptLoader example.js --output=output.gbc
 
-# Load and execute a pre-compiled .sbc file
-./build/ScriptLoader output.sbc
+# Load and execute a pre-compiled .gbc file
+./build/ScriptLoader output.gbc
 
-# Run tests via Souffle VM
+# Run tests via bytecode VM
 ./build/TestRunner tests --mode=bytecode
 
-# Run benchmarks via Souffle VM
+# Run benchmarks via bytecode VM
 ./build/BenchmarkRunner benchmarks --mode=bytecode
 ```
 
-See [souffle-vm.md](souffle-vm.md) for the full Souffle VM architecture and binary format.
+See [bytecode-vm.md](bytecode-vm.md) for the bytecode VM architecture and binary format.
 
 ## Build Output
 
@@ -186,14 +186,10 @@ GocciaScript/
 ├── units/
 │   ├── Goccia.inc     # Shared compiler directives
 │   ├── TimingUtils.pas # Cross-platform microsecond timing and duration formatting
+│   ├── Goccia.Bytecode*.pas # Bytecode definitions, templates, modules, binary I/O
+│   ├── Goccia.VM*.pas       # Bytecode VM, frames, closures, upvalues, exceptions
 │   ├── *.pas          # All unit source files
 │   └── *.Test.pas     # Pascal unit test programs
-├── souffle/           # Souffle VM (general-purpose bytecode VM)
-│   ├── Souffle.inc    # Shared compiler directives for Souffle units
-│   ├── Souffle.VM.pas # Core VM: dispatch loop, register file, execution
-│   ├── Souffle.Bytecode.pas # Opcode definitions, instruction encoding
-│   ├── Souffle.Value.pas    # Tagged union value system
-│   └── *.pas          # Other Souffle units (heap, GC, closures, etc.)
 └── build/             # All output (gitignored)
     ├── *.o            # Object files
     ├── *.ppu          # Compiled unit files
@@ -208,12 +204,11 @@ GitHub Actions CI is split into two workflow files:
 
 ```
 build → test (JS + native)  → artifacts (main only)
-      → wasm-test            → release (tags only)
       → benchmark            →
       → examples             →
 ```
 
-All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The four post-build jobs (`test`, `wasm-test`, `benchmark`, `examples`) are independent — a failure in one does not affect the others.
+All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `benchmark`, `examples`) are independent.
 
 Runs on the full platform matrix:
 

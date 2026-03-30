@@ -448,7 +448,7 @@ var
 begin
   A := TGocciaArgumentsCollection.Create([]);
   try
-    ExpectPass(MakeExpectation(TGocciaNullLiteralValue.Create).ToBeNull(A, nil));
+    ExpectPass(MakeExpectation(TGocciaNullLiteralValue.NullValue).ToBeNull(A, nil));
   finally
     A.Free;
   end;
@@ -574,7 +574,7 @@ var
 begin
   A := TGocciaArgumentsCollection.Create([]);
   try
-    ExpectPass(MakeExpectation(TGocciaNullLiteralValue.Create).ToBeDefined(A, nil));
+    ExpectPass(MakeExpectation(TGocciaNullLiteralValue.NullValue).ToBeDefined(A, nil));
   finally
     A.Free;
   end;
@@ -722,7 +722,7 @@ var
 begin
   A := TGocciaArgumentsCollection.Create([]);
   try
-    ExpectPass(MakeExpectation(TGocciaNullLiteralValue.Create).ToBeFalsy(A, nil));
+    ExpectPass(MakeExpectation(TGocciaNullLiteralValue.NullValue).ToBeFalsy(A, nil));
   finally
     A.Free;
   end;
@@ -1090,7 +1090,7 @@ var
 begin
   A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('x')]);
   try
-    ExpectFail(MakeExpectation(TGocciaNullLiteralValue.Create).ToHaveProperty(A, nil));
+    ExpectFail(MakeExpectation(TGocciaNullLiteralValue.NullValue).ToHaveProperty(A, nil));
   finally
     A.Free;
   end;

@@ -25,6 +25,7 @@ implementation
 uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassHelper,
+  Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.SetValue;
@@ -234,11 +235,13 @@ begin
     // Recursively compare elements
     for I := 0 to ActualArr.Elements.Count - 1 do
     begin
-      // Handle nil elements (holes in arrays)
-      if (ActualArr.Elements[I] = nil) and (ExpectedArr.Elements[I] = nil) then
+      // Handle array holes via the internal hole sentinel.
+      if (ActualArr.Elements[I] = TGocciaHoleValue.HoleValue) and
+         (ExpectedArr.Elements[I] = TGocciaHoleValue.HoleValue) then
         Continue; // Both are holes, they're equal
 
-      if (ActualArr.Elements[I] = nil) or (ExpectedArr.Elements[I] = nil) then
+      if (ActualArr.Elements[I] = TGocciaHoleValue.HoleValue) or
+         (ExpectedArr.Elements[I] = TGocciaHoleValue.HoleValue) then
       begin
         Result := False; // One is hole, other isn't
         Exit;

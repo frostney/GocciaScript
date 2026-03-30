@@ -14,6 +14,7 @@ type
     FArgs: TGocciaValueList;
   public
     constructor Create; overload;
+    constructor CreateWithCapacity(const ACapacity: Integer); overload;
     constructor Create(const AValues: array of TGocciaValue); overload;
     destructor Destroy; override;
 
@@ -25,6 +26,8 @@ type
     function GetLength: Integer; virtual;
     function IsEmpty: Boolean; inline;
     procedure Add(const AValue: TGocciaValue);
+    procedure Clear;
+    procedure EnsureCapacity(const ACapacity: Integer);
     function Slice(AStartIndex: Integer = 0; AEndIndex: Integer = -1): TGocciaArgumentsCollection;
 
     property Length: Integer read GetLength;
@@ -43,11 +46,21 @@ begin
   FArgs := TGocciaValueList.Create(False);
 end;
 
+constructor TGocciaArgumentsCollection.CreateWithCapacity(
+  const ACapacity: Integer);
+begin
+  FArgs := TGocciaValueList.Create(False);
+  if ACapacity > 0 then
+    FArgs.Capacity := ACapacity;
+end;
+
 constructor TGocciaArgumentsCollection.Create(const AValues: array of TGocciaValue);
 var
   I: Integer;
 begin
   FArgs := TGocciaValueList.Create(False);
+  if High(AValues) >= 0 then
+    FArgs.Capacity := High(AValues) + 1;
   for I := 0 to High(AValues) do
     FArgs.Add(AValues[I]);
 end;
@@ -94,6 +107,17 @@ end;
 procedure TGocciaArgumentsCollection.Add(const AValue: TGocciaValue);
 begin
   FArgs.Add(AValue);
+end;
+
+procedure TGocciaArgumentsCollection.Clear;
+begin
+  FArgs.Clear;
+end;
+
+procedure TGocciaArgumentsCollection.EnsureCapacity(const ACapacity: Integer);
+begin
+  if ACapacity > FArgs.Capacity then
+    FArgs.Capacity := ACapacity;
 end;
 
 function TGocciaArgumentsCollection.Slice(AStartIndex: Integer = 0; AEndIndex: Integer = -1): TGocciaArgumentsCollection;

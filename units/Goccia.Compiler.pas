@@ -5,20 +5,19 @@ unit Goccia.Compiler;
 interface
 
 uses
-  Souffle.Bytecode.Chunk,
-  Souffle.Bytecode.Module,
-
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.Bytecode.Chunk,
+  Goccia.Bytecode.Module,
   Goccia.Compiler.Context,
   Goccia.Compiler.Scope;
 
 type
   TGocciaCompiler = class
   private
-    FModule: TSouffleBytecodeModule;
-    FCurrentTemplate: TSouffleFunctionTemplate;
+    FModule: TGocciaBytecodeModule;
+    FCurrentTemplate: TGocciaFunctionTemplate;
     FCurrentScope: TGocciaCompilerScope;
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
@@ -26,14 +25,14 @@ type
       const ADest: UInt8);
     procedure DoCompileStatement(const AStmt: TGocciaStatement);
     procedure DoCompileFunctionBody(const ABody: TGocciaASTNode);
-    procedure DoSwapState(const ATemplate: TSouffleFunctionTemplate;
+    procedure DoSwapState(const ATemplate: TGocciaFunctionTemplate;
       const AScope: TGocciaCompilerScope);
     function BuildContext: TGocciaCompilationContext;
   public
     constructor Create(const ASourcePath: string);
     destructor Destroy; override;
 
-    function Compile(const AProgram: TGocciaProgram): TSouffleBytecodeModule;
+    function Compile(const AProgram: TGocciaProgram): TGocciaBytecodeModule;
     property FormalParameterCounts: TFormalParameterCountMap
       read FFormalParameterCounts;
   end;
@@ -46,9 +45,8 @@ implementation
 uses
   SysUtils,
 
-  Souffle.Bytecode,
-  Souffle.Bytecode.Debug,
-
+  Goccia.Bytecode,
+  Goccia.Bytecode.Debug,
   Goccia.Compiler.Expressions,
   Goccia.Compiler.Statements,
   Goccia.Constants.ConstructorNames;
@@ -84,7 +82,7 @@ begin
 end;
 
 procedure TGocciaCompiler.DoSwapState(
-  const ATemplate: TSouffleFunctionTemplate;
+  const ATemplate: TGocciaFunctionTemplate;
   const AScope: TGocciaCompilerScope);
 begin
   FCurrentTemplate := ATemplate;
@@ -167,12 +165,12 @@ begin
   else if AExpr is TGocciaAwaitExpression then
   begin
     DoCompileExpression(TGocciaAwaitExpression(AExpr).Operand, ADest);
-    EmitInstruction(Ctx, EncodeABC(OP_RT_AWAIT, ADest, ADest, 0));
+    EmitInstruction(Ctx, EncodeABC(OP_AWAIT, ADest, ADest, 0));
   end
   else if AExpr is TGocciaHoleExpression then
-    EmitInstruction(Ctx, EncodeABC(OP_LOAD_NIL, ADest, 2 {GOCCIA_NIL_HOLE}, 0))
+    EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE, ADest, 0, 0))
   else
-    EmitInstruction(Ctx, EncodeABC(OP_LOAD_NIL, ADest, 0, 0));
+    EmitInstruction(Ctx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
 end;
 
 procedure TGocciaCompiler.DoCompileStatement(const AStmt: TGocciaStatement);
@@ -249,7 +247,8 @@ begin
           FCurrentScope.FreeRegister;
         end;
       end;
-      EmitInstruction(BuildContext, EncodeABC(OP_RETURN_NIL, 0, 0, 0));
+      EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
     end
     else if ABody is TGocciaExpression then
     begin
@@ -259,23 +258,24 @@ begin
       FCurrentScope.FreeRegister;
     end
     else
-      EmitInstruction(BuildContext, EncodeABC(OP_RETURN_NIL, 0, 0, 0));
+      EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
   finally
     Goccia.Compiler.Statements.RestorePendingFinally(SavedFinally);
   end;
 end;
 
 function TGocciaCompiler.Compile(
-  const AProgram: TGocciaProgram): TSouffleBytecodeModule;
+  const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
   I: Integer;
   LastStmt: TGocciaStatement;
   RetReg: UInt8;
   Ctx: TGocciaCompilationContext;
 begin
-  FModule := TSouffleBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
-  FCurrentTemplate := TSouffleFunctionTemplate.Create('<module>');
-  FCurrentTemplate.DebugInfo := TSouffleDebugInfo.Create(FSourcePath);
+  FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
+  FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
+  FCurrentTemplate.DebugInfo := TGocciaDebugInfo.Create(FSourcePath);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
   FCurrentScope.DeclareLocal('__receiver', False);
 
@@ -298,11 +298,13 @@ begin
       else
       begin
         DoCompileStatement(LastStmt);
-        EmitInstruction(BuildContext, EncodeABC(OP_RETURN_NIL, 0, 0, 0));
+        EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+        EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
       end;
     end
     else
-      EmitInstruction(BuildContext, EncodeABC(OP_RETURN_NIL, 0, 0, 0));
+      EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+      EmitInstruction(BuildContext, EncodeABC(OP_RETURN, 0, 0, 0));
 
     FCurrentTemplate.MaxRegisters := FCurrentScope.MaxSlot;
     FModule.TopLevel := FCurrentTemplate;

@@ -8,22 +8,21 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
-  Souffle.Bytecode.Module,
   TimingUtils,
 
   Goccia.AST.Node,
   Goccia.Benchmark.Reporter,
   Goccia.Builtins.Benchmark,
+  Goccia.Bytecode.Module,
   Goccia.Compiler,
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
-  Goccia.Engine.Backend,
+  Goccia.Engine.BytecodeBackend,
   Goccia.FileExtensions,
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
-  Goccia.Runtime.Operations,
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
@@ -204,8 +203,8 @@ var
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
-  Module: TSouffleBytecodeModule;
-  Backend: TGocciaSouffleBackend;
+  Module: TGocciaBytecodeModule;
+  Backend: TGocciaBytecodeBackend;
   GC: TGarbageCollector;
   ResultValue: TGocciaValue;
   FileResult: TBenchmarkFileResult;
@@ -231,7 +230,7 @@ begin
     try
       CompileStart := GetNanoseconds;
 
-      Backend := TGocciaSouffleBackend.Create(AFileName);
+      Backend := TGocciaBytecodeBackend.Create(AFileName);
       try
         Backend.RegisterBuiltIns(BenchGlobals);
 
@@ -255,10 +254,11 @@ begin
 
         CompileEnd := GetNanoseconds;
 
-        if GShowProgress and Assigned(Backend.Engine.BuiltinBenchmark) then
-          Backend.Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
-        if Assigned(Backend.Engine.BuiltinBenchmark) then
-          Backend.Engine.BuiltinBenchmark.OnBeforeMeasurement := Backend.Runtime.ClearTransientCaches;
+        if GShowProgress and Assigned(Backend.Bootstrap) and
+           Assigned(Backend.Bootstrap.BuiltinBenchmark) then
+          Backend.Bootstrap.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
+        if Assigned(Backend.Bootstrap) and Assigned(Backend.Bootstrap.BuiltinBenchmark) then
+          Backend.Bootstrap.BuiltinBenchmark.OnBeforeMeasurement := Backend.ClearTransientCaches;
 
         try
           ResultValue := Backend.RunModule(Module);
@@ -305,7 +305,7 @@ procedure CollectBenchmarkFile(const AFileName: string;
 begin
   case GMode of
     ebTreeWalk:  CollectBenchmarkFileInterpreted(AFileName, AReporter);
-    ebSouffleVM: CollectBenchmarkFileBytecode(AFileName, AReporter);
+    ebBytecode: CollectBenchmarkFileBytecode(AFileName, AReporter);
   else
     raise Exception.CreateFmt('Unsupported execution backend: %d', [Ord(GMode)]);
   end;
@@ -408,7 +408,7 @@ begin
       else if ParamStr(I) = '--mode=interpreted' then
         GMode := ebTreeWalk
       else if ParamStr(I) = '--mode=bytecode' then
-        GMode := ebSouffleVM
+        GMode := ebBytecode
       else if Copy(ParamStr(I), 1, 7) = '--mode=' then
       begin
         WriteLn('Error: Unknown mode "', Copy(ParamStr(I), 8, MaxInt), '". Use "interpreted" or "bytecode".');

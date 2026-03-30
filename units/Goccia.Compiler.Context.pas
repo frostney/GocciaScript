@@ -5,15 +5,16 @@ unit Goccia.Compiler.Context;
 interface
 
 uses
+  SysUtils,
+
   HashMap,
-  Souffle.Bytecode,
-  Souffle.Bytecode.Chunk,
-  Souffle.Bytecode.Debug,
-  Souffle.Value,
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.Bytecode,
+  Goccia.Bytecode.Chunk,
+  Goccia.Bytecode.Debug,
   Goccia.Compiler.Scope,
   Goccia.Token;
 
@@ -22,13 +23,13 @@ type
     const ADest: UInt8) of object;
   TCompileStatementProc = procedure(const AStmt: TGocciaStatement) of object;
   TCompileFunctionBodyProc = procedure(const ABody: TGocciaASTNode) of object;
-  TSwapStateProc = procedure(const ATemplate: TSouffleFunctionTemplate;
+  TSwapStateProc = procedure(const ATemplate: TGocciaFunctionTemplate;
     const AScope: TGocciaCompilerScope) of object;
 
-  TFormalParameterCountMap = THashMap<TSouffleFunctionTemplate, Integer>;
+  TFormalParameterCountMap = THashMap<TGocciaFunctionTemplate, Integer>;
 
   TGocciaCompilationContext = record
-    Template: TSouffleFunctionTemplate;
+    Template: TGocciaFunctionTemplate;
     Scope: TGocciaCompilerScope;
     SourcePath: string;
     FormalParameterCounts: TFormalParameterCountMap;
@@ -43,17 +44,17 @@ function EmitInstruction(const ACtx: TGocciaCompilationContext;
 procedure EmitLineMapping(const ACtx: TGocciaCompilationContext;
   const ALine, AColumn: Integer);
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
-  const AOp: TSouffleOpCode; const AReg: UInt8): Integer; overload;
+  const AOp: TGocciaOpCode; const AReg: UInt8): Integer; overload;
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
-  const AOp: TSouffleOpCode; const AReg, AFlags: UInt8): Integer; overload;
+  const AOp: TGocciaOpCode; const AReg, AFlags: UInt8): Integer; overload;
 procedure PatchJumpTarget(const ACtx: TGocciaCompilationContext;
   const AIndex: Integer);
 function CurrentCodePosition(const ACtx: TGocciaCompilationContext): Integer;
 
 function TokenTypeToRuntimeOp(
-  const ATokenType: TGocciaTokenType): TSouffleOpCode;
+  const ATokenType: TGocciaTokenType): TGocciaOpCode;
 function CompoundOpToRuntimeOp(
-  const ATokenType: TGocciaTokenType): TSouffleOpCode;
+  const ATokenType: TGocciaTokenType): TGocciaOpCode;
 
 implementation
 
@@ -72,20 +73,20 @@ begin
 end;
 
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
-  const AOp: TSouffleOpCode; const AReg: UInt8): Integer;
+  const AOp: TGocciaOpCode; const AReg: UInt8): Integer;
 begin
   if AOp = OP_JUMP then
     Result := EmitInstruction(ACtx, EncodeAx(AOp, 0))
   else if AOp = OP_PUSH_HANDLER then
     Result := EmitInstruction(ACtx, EncodeABx(AOp, AReg, 0))
-  else if (AOp = OP_JUMP_IF_NIL) or (AOp = OP_JUMP_IF_NOT_NIL) then
-    Result := EmitInstruction(ACtx, EncodeABC(AOp, AReg, SOUFFLE_NIL_MATCH_ANY, 0))
+  else if (AOp = OP_JUMP_IF_NULLISH) or (AOp = OP_JUMP_IF_NOT_NULLISH) then
+    Result := EmitInstruction(ACtx, EncodeABC(AOp, AReg, GOCCIA_NULLISH_MATCH_ANY, 0))
   else
     Result := EmitInstruction(ACtx, EncodeAsBx(AOp, AReg, 0));
 end;
 
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
-  const AOp: TSouffleOpCode; const AReg, AFlags: UInt8): Integer;
+  const AOp: TGocciaOpCode; const AReg, AFlags: UInt8): Integer;
 begin
   Result := EmitInstruction(ACtx, EncodeABC(AOp, AReg, AFlags, 0));
 end;
@@ -101,28 +102,29 @@ begin
   Instruction := ACtx.Template.GetInstruction(AIndex);
   Op := DecodeOp(Instruction);
 
-  if TSouffleOpCode(Op) = OP_JUMP then
+  if TGocciaOpCode(Op) = OP_JUMP then
     ACtx.Template.PatchInstruction(AIndex, EncodeAx(OP_JUMP, Offset))
-  else if TSouffleOpCode(Op) = OP_PUSH_HANDLER then
+  else if TGocciaOpCode(Op) = OP_PUSH_HANDLER then
   begin
     A := DecodeA(Instruction);
     ACtx.Template.PatchInstruction(AIndex,
       EncodeABx(OP_PUSH_HANDLER, A, UInt16(Offset)));
   end
-  else if (TSouffleOpCode(Op) = OP_JUMP_IF_NIL) or
-          (TSouffleOpCode(Op) = OP_JUMP_IF_NOT_NIL) then
+  else if (TGocciaOpCode(Op) = OP_JUMP_IF_NULLISH) or
+          (TGocciaOpCode(Op) = OP_JUMP_IF_NOT_NULLISH) then
   begin
     A := DecodeA(Instruction);
     B := DecodeB(Instruction);
-    Assert(Offset <= 255, 'Nil jump offset exceeds 8-bit range');
+    if Offset > High(UInt8) then
+      raise Exception.Create('Nullish jump offset exceeds 8-bit range');
     ACtx.Template.PatchInstruction(AIndex,
-      EncodeABC(TSouffleOpCode(Op), A, B, UInt8(Offset)));
+      EncodeABC(TGocciaOpCode(Op), A, B, UInt8(Offset)));
   end
   else
   begin
     A := DecodeA(Instruction);
     ACtx.Template.PatchInstruction(AIndex,
-      EncodeAsBx(TSouffleOpCode(Op), A, Int16(Offset)));
+      EncodeAsBx(TGocciaOpCode(Op), A, Int16(Offset)));
   end;
 end;
 
@@ -132,52 +134,52 @@ begin
 end;
 
 function TokenTypeToRuntimeOp(
-  const ATokenType: TGocciaTokenType): TSouffleOpCode;
+  const ATokenType: TGocciaTokenType): TGocciaOpCode;
 begin
   case ATokenType of
-    gttPlus:               Result := OP_RT_ADD;
-    gttMinus:              Result := OP_RT_SUB;
-    gttStar:               Result := OP_RT_MUL;
-    gttSlash:              Result := OP_RT_DIV;
-    gttPercent:            Result := OP_RT_MOD;
-    gttPower:              Result := OP_RT_POW;
-    gttEqual:              Result := OP_RT_EQ;
-    gttNotEqual:           Result := OP_RT_NEQ;
-    gttLess:               Result := OP_RT_LT;
-    gttGreater:            Result := OP_RT_GT;
-    gttLessEqual:          Result := OP_RT_LTE;
-    gttGreaterEqual:       Result := OP_RT_GTE;
-    gttInstanceof:         Result := OP_RT_IS_INSTANCE;
-    gttIn:                 Result := OP_RT_HAS_PROPERTY;
-    gttBitwiseAnd:         Result := OP_RT_BAND;
-    gttBitwiseOr:          Result := OP_RT_BOR;
-    gttBitwiseXor:         Result := OP_RT_BXOR;
-    gttLeftShift:          Result := OP_RT_SHL;
-    gttRightShift:         Result := OP_RT_SHR;
-    gttUnsignedRightShift: Result := OP_RT_USHR;
+    gttPlus:               Result := OP_ADD;
+    gttMinus:              Result := OP_SUB;
+    gttStar:               Result := OP_MUL;
+    gttSlash:              Result := OP_DIV;
+    gttPercent:            Result := OP_MOD;
+    gttPower:              Result := OP_POW;
+    gttEqual:              Result := OP_EQ;
+    gttNotEqual:           Result := OP_NEQ;
+    gttLess:               Result := OP_LT;
+    gttGreater:            Result := OP_GT;
+    gttLessEqual:          Result := OP_LTE;
+    gttGreaterEqual:       Result := OP_GTE;
+    gttInstanceof:         Result := OP_IS_INSTANCE;
+    gttIn:                 Result := OP_HAS_PROPERTY;
+    gttBitwiseAnd:         Result := OP_BAND;
+    gttBitwiseOr:          Result := OP_BOR;
+    gttBitwiseXor:         Result := OP_BXOR;
+    gttLeftShift:          Result := OP_SHL;
+    gttRightShift:         Result := OP_SHR;
+    gttUnsignedRightShift: Result := OP_USHR;
   else
-    Result := OP_RT_ADD;
+    Result := OP_ADD;
   end;
 end;
 
 function CompoundOpToRuntimeOp(
-  const ATokenType: TGocciaTokenType): TSouffleOpCode;
+  const ATokenType: TGocciaTokenType): TGocciaOpCode;
 begin
   case ATokenType of
-    gttPlusAssign:               Result := OP_RT_ADD;
-    gttMinusAssign:              Result := OP_RT_SUB;
-    gttStarAssign:               Result := OP_RT_MUL;
-    gttSlashAssign:              Result := OP_RT_DIV;
-    gttPercentAssign:            Result := OP_RT_MOD;
-    gttPowerAssign:              Result := OP_RT_POW;
-    gttBitwiseAndAssign:         Result := OP_RT_BAND;
-    gttBitwiseOrAssign:          Result := OP_RT_BOR;
-    gttBitwiseXorAssign:         Result := OP_RT_BXOR;
-    gttLeftShiftAssign:          Result := OP_RT_SHL;
-    gttRightShiftAssign:         Result := OP_RT_SHR;
-    gttUnsignedRightShiftAssign: Result := OP_RT_USHR;
+    gttPlusAssign:               Result := OP_ADD;
+    gttMinusAssign:              Result := OP_SUB;
+    gttStarAssign:               Result := OP_MUL;
+    gttSlashAssign:              Result := OP_DIV;
+    gttPercentAssign:            Result := OP_MOD;
+    gttPowerAssign:              Result := OP_POW;
+    gttBitwiseAndAssign:         Result := OP_BAND;
+    gttBitwiseOrAssign:          Result := OP_BOR;
+    gttBitwiseXorAssign:         Result := OP_BXOR;
+    gttLeftShiftAssign:          Result := OP_SHL;
+    gttRightShiftAssign:         Result := OP_SHR;
+    gttUnsignedRightShiftAssign: Result := OP_USHR;
   else
-    Result := OP_RT_ADD;
+    Result := OP_ADD;
   end;
 end;
 

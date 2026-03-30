@@ -49,10 +49,10 @@ Benchmark calibration and measurement parameters can be configured via environme
 Example:
 
 ```bash
-# Fast run with shorter calibration and fewer rounds
+# Fast local run with shorter calibration and fewer rounds
 GOCCIA_BENCH_CALIBRATION_MS=50 GOCCIA_BENCH_ROUNDS=3 ./build/BenchmarkRunner benchmarks
 
-# Thorough run with longer calibration and more rounds
+# Thorough serial run with longer calibration and more rounds
 GOCCIA_BENCH_CALIBRATION_MS=500 GOCCIA_BENCH_ROUNDS=15 ./build/BenchmarkRunner benchmarks
 ```
 
@@ -81,7 +81,7 @@ suite("collections", () => {
 
 ### API
 
-- **`setup`** (optional): Called once before warmup. Its return value is passed as the first argument to `run` and `teardown`.
+- **`setup`** (optional): Called once before warmup. Its return value is passed as the first argument to `run` and `teardown`, even when that value is `undefined`.
 - **`run`** (required): The timed benchmark function. Called many times during warmup, calibration, and measurement.
 - **`teardown`** (optional): Called once after all measurement rounds complete. Receives the setup return value.
 - All three phases are independently timed and reported as `setupMs`, `teardownMs`, and the main `opsPerSec`/`meanMs` metrics.
@@ -190,11 +190,11 @@ When a benchmark has a `setup` or `teardown` function, a second line displays th
 
 ## CI Integration
 
-Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode** modes. Interpreted and bytecode benchmarks run in **parallel** via a matrix strategy. CI uses `GOCCIA_BENCH_CALIBRATION_MS=100` and `GOCCIA_BENCH_ROUNDS=7` for stable measurements with IQR outlier filtering. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
+Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode** modes. CI uses `GOCCIA_BENCH_CALIBRATION_MS=100` and `GOCCIA_BENCH_ROUNDS=7` for stable measurements with IQR outlier filtering. On pushes to `main`, the ubuntu-latest x64 runner saves JSON baselines for each mode (`benchmark-interpreted-results.json` and `benchmark-bytecode-results.json`) to the GitHub Actions cache. See [testing.md](testing.md#ci-integration) for the full pipeline overview.
 
 ### PR Benchmark Comparison
 
-The PR workflow (`.github/workflows/pr.yml`) runs interpreted and bytecode benchmarks in **parallel** on separate runners, restores the cached baselines from main, and posts a collapsible comparison comment on the PR. Each benchmark file gets a **unified table** with both modes side by side:
+The PR workflow (`.github/workflows/pr.yml`) restores the cached baselines from `main`, runs the benchmark matrix, and posts a collapsible comparison comment on the PR. Each benchmark file gets a **unified table** with both modes side by side:
 
 - Each table row shows `| Benchmark | Interpreted | Δ | Bytecode | Δ |` — interpreted and bytecode ops/sec with their change from baseline in one row
 - Results are **grouped by file**, each in a collapsible `<details>` section

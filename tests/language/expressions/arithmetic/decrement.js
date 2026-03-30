@@ -25,6 +25,16 @@ test("decrement preserves fractional part", () => {
   expect(y).toBe(-0.5);
 });
 
+test("decrement coerces strings to numbers", () => {
+  let value = "3";
+  expect(value--).toBe(3);
+  expect(value).toBe(2);
+
+  const obj = { count: "10" };
+  expect(--obj.count).toBe(9);
+  expect(obj.count).toBe(9);
+});
+
 test("post-decrement on property access", () => {
   const obj = { count: 10 };
   expect(obj.count--).toBe(10);
