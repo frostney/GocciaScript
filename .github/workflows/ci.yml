@@ -385,18 +385,18 @@ jobs:
 
       - name: Check ScriptLoader CLI behaviour
         run: |
-          json_output="$(printf \"console.log('hi');\n2 + 2;\n\" | ./build/ScriptLoader --output=json)"
+          json_output="$(printf '%s\n' "console.log('hi');" '2 + 2;' | ./build/ScriptLoader --output=json)"
           printf '%s\n' "$json_output" | grep -q '"ok":true'
           printf '%s\n' "$json_output" | grep -q '"value":4'
           printf '%s\n' "$json_output" | grep -q '"output":"hi\\n"'
 
-          json_output_bytecode="$(printf \"console.log('hi');\n2 + 2;\n\" | ./build/ScriptLoader - --mode=bytecode --output=json)"
+          json_output_bytecode="$(printf '%s\n' "console.log('hi');" '2 + 2;' | ./build/ScriptLoader - --mode=bytecode --output=json)"
           printf '%s\n' "$json_output_bytecode" | grep -q '"ok":true'
           printf '%s\n' "$json_output_bytecode" | grep -q '"value":4'
           printf '%s\n' "$json_output_bytecode" | grep -q '"output":"hi\\n"'
 
           set +e
-          error_output="$(printf \"throw new TypeError('boom');\n\" | ./build/ScriptLoader --output=json)"
+          error_output="$(printf '%s\n' "throw new TypeError('boom');" | ./build/ScriptLoader --output=json)"
           error_status=$?
           set -e
           test "$error_status" -eq 1
