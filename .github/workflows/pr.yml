@@ -198,6 +198,8 @@ jobs:
 
       - name: Check ScriptLoader CLI behaviour
         run: |
+          PYTHON_BIN="$(command -v python3 || command -v python)"
+
           json_output="$(printf '%s\n' "console.log('hi');" '2 + 2;' | ./build/ScriptLoader --output=json)"
           printf '%s\n' "$json_output" | grep -q '"ok":true'
           printf '%s\n' "$json_output" | grep -q '"value":4'
@@ -232,7 +234,7 @@ jobs:
           printf '%s\n' "$globals_module_output" | grep -q '"value":"module-value"'
 
           set +e
-          timeout_output="$(python3 - <<'PY'
+          timeout_output="$("$PYTHON_BIN" - <<'PY'
           import subprocess
           import sys
 
@@ -262,7 +264,7 @@ jobs:
           printf '%s\n' "$timeout_output" | grep -q '"message":"Execution timed out after 50ms"'
 
           set +e
-          timeout_output_bytecode="$(python3 - <<'PY'
+          timeout_output_bytecode="$("$PYTHON_BIN" - <<'PY'
           import subprocess
           import sys
 
