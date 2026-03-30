@@ -11,6 +11,7 @@ uses
   TimingUtils,
 
   Goccia.AST.Node,
+  Goccia.Builtins.Console,
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   Goccia.Compiler,
@@ -20,8 +21,10 @@ uses
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
+  Goccia.Logger,
   Goccia.Parser,
   Goccia.ScriptLoader.Input,
+  Goccia.ScriptLoader.JSON,
   Goccia.Token,
   Goccia.Values.Primitives,
 
@@ -30,13 +33,21 @@ uses
 type
   TExecutionMode = (emInterpreted, emBytecode);
 
+  TScriptExecutionReport = record
+    ResultValue: TGocciaValue;
+    Timing: TScriptLoaderTiming;
+  end;
+
 var
   GMode: TExecutionMode = emInterpreted;
   GOutputPath: string = '';
   GEmitOnly: Boolean = False;
+  GJsonOutput: Boolean = False;
+  GSilentConsole: Boolean = False;
 
 function ParseSource(const ASource: TStringList; const AFileName: string;
-  const AGlobals: TGocciaGlobalBuiltins): TGocciaProgram;
+  const AGlobals: TGocciaGlobalBuiltins; const ASuppressWarnings: Boolean;
+  out ALexTimeNanoseconds, AParseTimeNanoseconds: Int64): TGocciaProgram;
 var
   SourceText: string;
   JSXResult: TGocciaJSXTransformResult;
@@ -45,8 +56,10 @@ var
   Tokens: TObjectList<TGocciaToken>;
   Parser: TGocciaParser;
   Warning: TGocciaParserWarning;
+  StartTime, LexEnd, ParseEnd: Int64;
   OrigLine, OrigCol, I: Integer;
 begin
+  StartTime := GetNanoseconds;
   SourceText := ASource.Text;
 
   SourceMap := nil;
@@ -61,20 +74,28 @@ begin
     Lexer := TGocciaLexer.Create(SourceText, AFileName);
     try
       Tokens := Lexer.ScanTokens;
+      LexEnd := GetNanoseconds;
+      ALexTimeNanoseconds := LexEnd - StartTime;
+
       Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
       try
         Result := Parser.Parse;
-        for I := 0 to Parser.WarningCount - 1 do
-        begin
-          Warning := Parser.GetWarning(I);
-          WriteLn(SysUtils.Format('Warning: %s', [Warning.Message]));
-          if Warning.Suggestion <> '' then
-            WriteLn(SysUtils.Format('  Suggestion: %s', [Warning.Suggestion]));
-          if Assigned(SourceMap) and SourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
-            WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, OrigLine, OrigCol]))
-          else
-            WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
-        end;
+        ParseEnd := GetNanoseconds;
+        AParseTimeNanoseconds := ParseEnd - LexEnd;
+
+        if not ASuppressWarnings then
+          for I := 0 to Parser.WarningCount - 1 do
+          begin
+            Warning := Parser.GetWarning(I);
+            WriteLn(SysUtils.Format('Warning: %s', [Warning.Message]));
+            if Warning.Suggestion <> '' then
+              WriteLn(SysUtils.Format('  Suggestion: %s', [Warning.Suggestion]));
+            if Assigned(SourceMap) and
+               SourceMap.Translate(Warning.Line, Warning.Column, OrigLine, OrigCol) then
+              WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, OrigLine, OrigCol]))
+            else
+              WriteLn(SysUtils.Format('  --> %s:%d:%d', [AFileName, Warning.Line, Warning.Column]));
+          end;
       finally
         Parser.Free;
       end;
@@ -86,26 +107,15 @@ begin
   end;
 end;
 
-function ParseSourceFile(const AFileName: string; const AGlobals: TGocciaGlobalBuiltins): TGocciaProgram;
-var
-  Source: TStringList;
-begin
-  Source := TStringList.Create;
-  try
-    Source.LoadFromFile(AFileName);
-    Result := ParseSource(Source, AFileName, AGlobals);
-  finally
-    Source.Free;
-  end;
-end;
-
 function CompileSource(const ASource: TStringList; const AFileName: string;
-  const AGlobals: TGocciaGlobalBuiltins): TGocciaBytecodeModule;
+  const AGlobals: TGocciaGlobalBuiltins; const ASuppressWarnings: Boolean = False): TGocciaBytecodeModule;
 var
   ProgramNode: TGocciaProgram;
   Compiler: TGocciaCompiler;
+  LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
 begin
-  ProgramNode := ParseSource(ASource, AFileName, AGlobals);
+  ProgramNode := ParseSource(ASource, AFileName, AGlobals, ASuppressWarnings,
+    LexTimeNanoseconds, ParseTimeNanoseconds);
   try
     Compiler := TGocciaCompiler.Create(AFileName);
     try
@@ -118,62 +128,97 @@ begin
   end;
 end;
 
-function CompileSourceFile(const AFileName: string;
-  const AGlobals: TGocciaGlobalBuiltins): TGocciaBytecodeModule;
-var
-  Source: TStringList;
+procedure ConfigureConsole(const AConsole: TGocciaConsole;
+  const AOutputLines: TStrings);
 begin
-  Source := TStringList.Create;
-  try
-    Source.LoadFromFile(AFileName);
-    Result := CompileSource(Source, AFileName, AGlobals);
-  finally
-    Source.Free;
-  end;
+  if not Assigned(AConsole) then
+    Exit;
+
+  AConsole.Enabled := not GSilentConsole;
+  if GJsonOutput and not GSilentConsole then
+    AConsole.OutputLines := AOutputLines
+  else
+    AConsole.OutputLines := nil;
 end;
 
-procedure RunInterpreted(const ASource: TStringList; const AFileName: string);
+function CapturedOutputText(const AOutputLines: TStrings): string;
+begin
+  if Assigned(AOutputLines) then
+    Result := AOutputLines.Text
+  else
+    Result := '';
+end;
+
+procedure PrintJSONSuccess(const AReport: TScriptExecutionReport;
+  const AOutputLines: TStrings);
+begin
+  WriteLn(BuildSuccessJSON(AReport.ResultValue, CapturedOutputText(AOutputLines),
+    AReport.Timing));
+end;
+
+procedure PrintJSONError(const E: Exception; const AReport: TScriptExecutionReport;
+  const AOutputLines: TStrings; const ADefaultFileName: string);
 var
+  ErrorInfo: TScriptLoaderErrorInfo;
+begin
+  ErrorInfo := ExceptionToScriptLoaderErrorInfo(E);
+  if ErrorInfo.FileName = '' then
+    ErrorInfo.FileName := ADefaultFileName;
+  WriteLn(BuildErrorJSON(CapturedOutputText(AOutputLines), ErrorInfo,
+    AReport.Timing));
+end;
+
+function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
+  const AOutputLines: TStrings): TScriptExecutionReport;
+var
+  Engine: TGocciaEngine;
   ScriptResult: TGocciaScriptResult;
 begin
-  WriteLn('Running script (interpreted): ', AFileName);
-  ScriptResult := TGocciaEngine.RunScriptFromStringList(ASource, AFileName, TGocciaEngine.DefaultGlobals);
-  WriteLn(SysUtils.Format('  Lex: %s | Parse: %s | Execute: %s | Total: %s',
-    [FormatDuration(ScriptResult.LexTimeNanoseconds), FormatDuration(ScriptResult.ParseTimeNanoseconds),
-     FormatDuration(ScriptResult.ExecuteTimeNanoseconds), FormatDuration(ScriptResult.TotalTimeNanoseconds)]));
-  Writeln('Result: ', ScriptResult.Result.ToStringLiteral.Value);
+  Engine := TGocciaEngine.Create(AFileName, ASource, TGocciaEngine.DefaultGlobals);
+  try
+    Engine.SuppressWarnings := GJsonOutput;
+    ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
+    ScriptResult := Engine.Execute;
+  finally
+    Engine.Free;
+  end;
+
+  Result.ResultValue := ScriptResult.Result;
+  Result.Timing.LexTimeNanoseconds := ScriptResult.LexTimeNanoseconds;
+  Result.Timing.ParseTimeNanoseconds := ScriptResult.ParseTimeNanoseconds;
+  Result.Timing.ExecuteTimeNanoseconds := ScriptResult.ExecuteTimeNanoseconds;
+  Result.Timing.TotalTimeNanoseconds := ScriptResult.TotalTimeNanoseconds;
 end;
 
-procedure RunBytecodeFromSource(const ASource: TStringList; const AFileName: string);
+function ExecuteBytecodeFromSource(const ASource: TStringList; const AFileName: string;
+  const AOutputLines: TStrings): TScriptExecutionReport;
 var
   ProgramNode: TGocciaProgram;
   Module: TGocciaBytecodeModule;
   Backend: TGocciaBytecodeBackend;
-  StartTime, CompileEnd, ExecEnd: Int64;
-  ResultValue: TGocciaValue;
+  StartTime, ExecEnd: Int64;
 begin
-  WriteLn('Running script (bytecode): ', AFileName);
   StartTime := GetNanoseconds;
-
   Backend := TGocciaBytecodeBackend.Create(AFileName);
   try
     Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
+    ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
 
-    ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultGlobals);
+    ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultGlobals,
+      GJsonOutput, Result.Timing.LexTimeNanoseconds,
+      Result.Timing.ParseTimeNanoseconds);
     try
       Module := Backend.CompileToModule(ProgramNode);
     finally
       ProgramNode.Free;
     end;
-    CompileEnd := GetNanoseconds;
+
     try
-      ResultValue := Backend.RunModule(Module);
+      Result.ResultValue := Backend.RunModule(Module);
       ExecEnd := GetNanoseconds;
-      WriteLn(SysUtils.Format('  Compile: %s | Execute: %s | Total: %s',
-        [FormatDuration(CompileEnd - StartTime),
-         FormatDuration(ExecEnd - CompileEnd),
-         FormatDuration(ExecEnd - StartTime)]));
-      WriteLn('Result: ', ResultValue.ToStringLiteral.Value);
+      Result.Timing.ExecuteTimeNanoseconds := ExecEnd - StartTime -
+        Result.Timing.LexTimeNanoseconds - Result.Timing.ParseTimeNanoseconds;
+      Result.Timing.TotalTimeNanoseconds := ExecEnd - StartTime;
     finally
       Module.Free;
     end;
@@ -182,29 +227,27 @@ begin
   end;
 end;
 
-procedure RunBytecodeFromFile(const AFileName: string);
+function ExecuteBytecodeFromFile(const AFileName: string;
+  const AOutputLines: TStrings): TScriptExecutionReport;
 var
   Module: TGocciaBytecodeModule;
   Backend: TGocciaBytecodeBackend;
   StartTime, LoadEnd, ExecEnd: Int64;
-  ResultValue: TGocciaValue;
 begin
-  WriteLn('Running bytecode: ', AFileName);
   StartTime := GetNanoseconds;
-
   Module := Goccia.Bytecode.Binary.LoadModuleFromFile(AFileName);
   LoadEnd := GetNanoseconds;
   try
-  Backend := TGocciaBytecodeBackend.Create(AFileName);
-  try
-    Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
-      ResultValue := Backend.RunModule(Module);
+    Backend := TGocciaBytecodeBackend.Create(AFileName);
+    try
+      Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
+      ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
+      Result.ResultValue := Backend.RunModule(Module);
       ExecEnd := GetNanoseconds;
-      WriteLn(SysUtils.Format('  Load: %s | Execute: %s | Total: %s',
-        [FormatDuration(LoadEnd - StartTime),
-         FormatDuration(ExecEnd - LoadEnd),
-         FormatDuration(ExecEnd - StartTime)]));
-      WriteLn('Result: ', ResultValue.ToStringLiteral.Value);
+      Result.Timing.LexTimeNanoseconds := 0;
+      Result.Timing.ParseTimeNanoseconds := 0;
+      Result.Timing.ExecuteTimeNanoseconds := ExecEnd - LoadEnd;
+      Result.Timing.TotalTimeNanoseconds := ExecEnd - StartTime;
     finally
       Backend.Free;
     end;
@@ -213,7 +256,8 @@ begin
   end;
 end;
 
-procedure EmitBytecode(const ASource: TStringList; const AFileName, AOutputPath: string);
+procedure EmitBytecode(const ASource: TStringList; const AFileName,
+  AOutputPath: string);
 var
   Module: TGocciaBytecodeModule;
   StartTime, EndTime: Int64;
@@ -223,7 +267,8 @@ begin
 
   TGarbageCollector.Initialize;
   try
-    Module := CompileSource(ASource, AFileName, TGocciaEngine.DefaultGlobals);
+    Module := CompileSource(ASource, AFileName, TGocciaEngine.DefaultGlobals,
+      GJsonOutput);
     try
       Goccia.Bytecode.Binary.SaveModuleToFile(Module, AOutputPath);
       EndTime := GetNanoseconds;
@@ -237,57 +282,108 @@ begin
   end;
 end;
 
+procedure PrintHumanReadableResult(const AFileName: string;
+  const AReport: TScriptExecutionReport; const AExtension: string);
+var
+  LoadTimeNanoseconds, FrontEndTimeNanoseconds: Int64;
+begin
+  if AExtension = EXT_GBC then
+  begin
+    LoadTimeNanoseconds := AReport.Timing.TotalTimeNanoseconds -
+      AReport.Timing.ExecuteTimeNanoseconds;
+    WriteLn('Running bytecode: ', AFileName);
+    WriteLn(SysUtils.Format('  Load: %s | Execute: %s | Total: %s',
+      [FormatDuration(LoadTimeNanoseconds),
+       FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
+       FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
+  end
+  else if GMode = emBytecode then
+  begin
+    FrontEndTimeNanoseconds := AReport.Timing.TotalTimeNanoseconds -
+      AReport.Timing.ExecuteTimeNanoseconds;
+    WriteLn('Running script (bytecode): ', AFileName);
+    WriteLn(SysUtils.Format('  Compile: %s | Execute: %s | Total: %s',
+      [FormatDuration(FrontEndTimeNanoseconds),
+       FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
+       FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
+  end
+  else
+  begin
+    WriteLn('Running script (interpreted): ', AFileName);
+    WriteLn(SysUtils.Format('  Lex: %s | Parse: %s | Execute: %s | Total: %s',
+      [FormatDuration(AReport.Timing.LexTimeNanoseconds),
+       FormatDuration(AReport.Timing.ParseTimeNanoseconds),
+       FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
+       FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
+  end;
+
+  WriteLn('Result: ', AReport.ResultValue.ToStringLiteral.Value);
+end;
+
 procedure RunSource(const ASource: TStringList; const AFileName: string);
 var
-  Ext, OutputPath: string;
+  Extension, OutputPath: string;
+  Report: TScriptExecutionReport;
+  OutputLines: TStringList;
+  StartTime: Int64;
 begin
+  FillChar(Report, SizeOf(Report), 0);
+  Report.ResultValue := nil;
+
+  OutputLines := nil;
+  if GJsonOutput then
+    OutputLines := TStringList.Create;
   try
-    Ext := LowerCase(ExtractFileExt(AFileName));
+    StartTime := GetNanoseconds;
+    try
+      Extension := LowerCase(ExtractFileExt(AFileName));
 
-    if Ext = EXT_GBC then
-    begin
-      RunBytecodeFromFile(AFileName);
-      Exit;
-    end;
-
-    if GEmitOnly then
-    begin
-      if GOutputPath <> '' then
-        OutputPath := GOutputPath
-      else if AFileName = STDIN_FILE_NAME then
+      if Extension = EXT_GBC then
+        Report := ExecuteBytecodeFromFile(AFileName, OutputLines)
+      else if GEmitOnly then
       begin
-        WriteLn('Error: --output=<path> is required when emitting bytecode from stdin.');
-        ExitCode := 1;
+        if GOutputPath <> '' then
+          OutputPath := GOutputPath
+        else if AFileName = STDIN_FILE_NAME then
+          raise Exception.Create('--output=<path> is required when emitting bytecode from stdin.')
+        else
+          OutputPath := ChangeFileExt(AFileName, EXT_GBC);
+        EmitBytecode(ASource, AFileName, OutputPath);
         Exit;
       end
       else
-        OutputPath := ChangeFileExt(AFileName, EXT_GBC);
-      EmitBytecode(ASource, AFileName, OutputPath);
-      Exit;
-    end;
+        case GMode of
+          emInterpreted: Report := ExecuteInterpreted(ASource, AFileName, OutputLines);
+          emBytecode:    Report := ExecuteBytecodeFromSource(ASource, AFileName, OutputLines);
+        end;
 
-    case GMode of
-      emInterpreted: RunInterpreted(ASource, AFileName);
-      emBytecode:    RunBytecodeFromSource(ASource, AFileName);
+      if GJsonOutput then
+        PrintJSONSuccess(Report, OutputLines)
+      else
+        PrintHumanReadableResult(AFileName, Report, Extension);
+    except
+      on E: Exception do
+      begin
+        Report.Timing.TotalTimeNanoseconds := GetNanoseconds - StartTime;
+        if GJsonOutput then
+          PrintJSONError(E, Report, OutputLines, AFileName)
+        else
+          WriteLn('Fatal error: ', E.Message);
+        ExitCode := 1;
+      end;
     end;
-  except
-    on E: Exception do
-    begin
-      WriteLn('Fatal error: ', E.Message);
-      ExitCode := 1;
-    end;
+  finally
+    OutputLines.Free;
   end;
 end;
 
 procedure RunScriptFromFile(const AFileName: string);
 var
-  Ext: string;
   Source: TStringList;
 begin
-  Ext := LowerCase(ExtractFileExt(AFileName));
-  if Ext = EXT_GBC then
+  if LowerCase(ExtractFileExt(AFileName)) = EXT_GBC then
   begin
-    RunBytecodeFromFile(AFileName);
+    RunSource(nil, AFileName);
     Exit;
   end;
 
@@ -325,11 +421,15 @@ begin
 
   if DirectoryExists(APath) then
   begin
+    if GJsonOutput then
+      raise Exception.Create('--output=json does not support directory input.');
+
     Files := FindAllFiles(APath, ScriptExtensions);
     try
       for I := 0 to Files.Count - 1 do
       begin
-        if I > 0 then WriteLn;
+        if I > 0 then
+          WriteLn;
         RunScriptFromFile(Files[I]);
       end;
     finally
@@ -339,10 +439,7 @@ begin
   else if FileExists(APath) then
     RunScriptFromFile(APath)
   else
-  begin
-    WriteLn('Error: Path not found: ', APath);
-    ExitCode := 1;
-  end;
+    raise Exception.Create('Path not found: ' + APath);
 end;
 
 procedure PrintUsage;
@@ -359,7 +456,9 @@ begin
   WriteLn('  --mode=bytecode         Compile to bytecode and execute on the Goccia VM');
   WriteLn('  --emit                  Compile to .gbc file (no execution)');
   WriteLn('  --emit=bytecode         Compile to .gbc file (explicit, same as --emit)');
+  WriteLn('  --output=json           Write structured JSON result to stdout');
   WriteLn('  --output=<path>         Output file path (used with --emit)');
+  WriteLn('  --silent                Suppress console output from the script');
 end;
 
 var
@@ -371,6 +470,9 @@ begin
   GMode := emInterpreted;
   GOutputPath := '';
   GEmitOnly := False;
+  GJsonOutput := False;
+  GSilentConsole := False;
+  Logger.Levels := [];
 
   Paths := TStringList.Create;
   try
@@ -395,11 +497,7 @@ begin
       begin
         GEmitOnly := True;
         EmitStr := Copy(Arg, 8, MaxInt);
-        if (EmitStr = 'bytecode') or (EmitStr = '') then
-        begin
-          // Valid.
-        end
-        else
+        if (EmitStr <> 'bytecode') and (EmitStr <> '') then
         begin
           WriteLn('Error: Unknown emit format "', EmitStr, '". Use "bytecode".');
           ExitCode := 1;
@@ -414,7 +512,13 @@ begin
         Exit;
       end
       else if Copy(Arg, 1, 9) = '--output=' then
-        GOutputPath := Copy(Arg, 10, MaxInt)
+      begin
+        GOutputPath := Copy(Arg, 10, MaxInt);
+        if GOutputPath = 'json' then
+          GJsonOutput := True;
+      end
+      else if Arg = '--silent' then
+        GSilentConsole := True
       else if Copy(Arg, 1, 2) <> '--' then
         Paths.Add(Arg)
       else
@@ -426,14 +530,41 @@ begin
       end;
     end;
 
-    if Paths.Count = 0 then
-      RunScriptFromStdin
-    else
-      for I := 0 to Paths.Count - 1 do
+    if GJsonOutput and GEmitOnly then
+    begin
+      WriteLn('Error: --output=json cannot be used with --emit.');
+      ExitCode := 1;
+      Exit;
+    end;
+
+    if GJsonOutput and (Paths.Count > 1) then
+    begin
+      WriteLn('Error: --output=json supports a single input path.');
+      ExitCode := 1;
+      Exit;
+    end;
+
+    try
+      if Paths.Count = 0 then
+        RunScriptFromStdin
+      else
+        for I := 0 to Paths.Count - 1 do
+        begin
+          if I > 0 then
+            WriteLn;
+          RunScripts(Paths[I]);
+        end;
+    except
+      on E: Exception do
       begin
-        if I > 0 then WriteLn;
-        RunScripts(Paths[I]);
+        if GJsonOutput then
+          WriteLn(BuildErrorJSON('', ExceptionToScriptLoaderErrorInfo(E),
+            Default(TScriptLoaderTiming)))
+        else
+          WriteLn('Error: ', E.Message);
+        ExitCode := 1;
       end;
+    end;
   finally
     Paths.Free;
   end;

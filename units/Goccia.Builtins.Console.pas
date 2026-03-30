@@ -5,6 +5,8 @@ unit Goccia.Builtins.Console;
 interface
 
 uses
+  Classes,
+
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Error.ThrowErrorCallback,
@@ -20,10 +22,17 @@ type
     FTimers: TGocciaObjectValue;
     FCounters: TGocciaObjectValue;
     FGroupDepth: Integer;
+    FOutputLines: TStrings;
+    FEnabled: Boolean;
 
     function FormatArgs(const AArgs: TGocciaArgumentsCollection): string;
     function GroupPrefix: string;
     function FormatValue(const AValue: TGocciaValue): string;
+    procedure EmitLine(const ALine: string);
+    function GetEnabled: Boolean;
+    procedure SetEnabled(const AValue: Boolean);
+    function GetOutputLines: TStrings;
+    procedure SetOutputLines(const AValue: TStrings);
   protected
   published
     function ConsoleLog(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -45,6 +54,8 @@ type
     function ConsoleTable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+    property Enabled: Boolean read GetEnabled write SetEnabled;
+    property OutputLines: TStrings read GetOutputLines write SetOutputLines;
   end;
 
 implementation
@@ -66,6 +77,8 @@ begin
   FTimers := TGocciaObjectValue.Create;
   FCounters := TGocciaObjectValue.Create;
   FGroupDepth := 0;
+  FEnabled := True;
+  FOutputLines := nil;
   Members := TGocciaMemberCollection.Create;
   try
     Members.AddMethod(ConsoleLog, -1, gmkStaticMethod);
@@ -92,6 +105,37 @@ begin
   RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet);
+end;
+
+procedure TGocciaConsole.EmitLine(const ALine: string);
+begin
+  if not FEnabled then
+    Exit;
+
+  if Assigned(FOutputLines) then
+    FOutputLines.Add(ALine)
+  else
+    WriteLn(ALine);
+end;
+
+function TGocciaConsole.GetEnabled: Boolean;
+begin
+  Result := FEnabled;
+end;
+
+procedure TGocciaConsole.SetEnabled(const AValue: Boolean);
+begin
+  FEnabled := AValue;
+end;
+
+function TGocciaConsole.GetOutputLines: TStrings;
+begin
+  Result := FOutputLines;
+end;
+
+procedure TGocciaConsole.SetOutputLines(const AValue: TStrings);
+begin
+  FOutputLines := AValue;
 end;
 
 function TGocciaConsole.FormatValue(const AValue: TGocciaValue): string;
@@ -165,31 +209,31 @@ end;
 
 function TGocciaConsole.ConsoleLog(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  WriteLn(GroupPrefix + FormatArgs(AArgs));
+  EmitLine(GroupPrefix + FormatArgs(AArgs));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaConsole.ConsoleWarn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  WriteLn(GroupPrefix + 'Warning: ' + FormatArgs(AArgs));
+  EmitLine(GroupPrefix + 'Warning: ' + FormatArgs(AArgs));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaConsole.ConsoleError(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  WriteLn(GroupPrefix + 'Error: ' + FormatArgs(AArgs));
+  EmitLine(GroupPrefix + 'Error: ' + FormatArgs(AArgs));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaConsole.ConsoleInfo(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  WriteLn(GroupPrefix + 'Info: ' + FormatArgs(AArgs));
+  EmitLine(GroupPrefix + 'Info: ' + FormatArgs(AArgs));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaConsole.ConsoleDebug(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  WriteLn(GroupPrefix + 'Debug: ' + FormatArgs(AArgs));
+  EmitLine(GroupPrefix + 'Debug: ' + FormatArgs(AArgs));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -200,7 +244,7 @@ begin
   if AArgs.Length >= 1 then
   begin
     Value := AArgs.GetElement(0);
-    WriteLn(GroupPrefix + FormatValue(Value));
+    EmitLine(GroupPrefix + FormatValue(Value));
   end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -222,11 +266,11 @@ begin
         for I := 1 to AArgs.Length - 1 do
           Msg := Msg + ' ' + AArgs.GetElement(I).ToStringLiteral.Value;
       end;
-      WriteLn(GroupPrefix + Msg);
+      EmitLine(GroupPrefix + Msg);
     end;
   end
   else
-    WriteLn(GroupPrefix + 'Assertion failed');
+    EmitLine(GroupPrefix + 'Assertion failed');
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -248,7 +292,7 @@ begin
     CountVal := Trunc(Current.ToNumberLiteral.Value) + 1;
 
   FCounters.AssignProperty(LabelStr, TGocciaNumberLiteralValue.Create(CountVal * 1.0));
-  WriteLn(GroupPrefix + LabelStr + ': ' + IntToStr(CountVal));
+  EmitLine(GroupPrefix + LabelStr + ': ' + IntToStr(CountVal));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -293,11 +337,11 @@ begin
   if (StartTime <> nil) and not (StartTime is TGocciaUndefinedLiteralValue) then
   begin
     Elapsed := GetMilliseconds - StartTime.ToNumberLiteral.Value;
-    WriteLn(GroupPrefix + LabelStr + ': ' + FormatFloat('0.###', Elapsed) + 'ms');
+    EmitLine(GroupPrefix + LabelStr + ': ' + FormatFloat('0.###', Elapsed) + 'ms');
     FTimers.DeleteProperty(LabelStr);
   end
   else
-    WriteLn(GroupPrefix + 'Timer ''' + LabelStr + ''' does not exist');
+    EmitLine(GroupPrefix + 'Timer ''' + LabelStr + ''' does not exist');
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -316,10 +360,10 @@ begin
   if (StartTime <> nil) and not (StartTime is TGocciaUndefinedLiteralValue) then
   begin
     Elapsed := GetMilliseconds - StartTime.ToNumberLiteral.Value;
-    WriteLn(GroupPrefix + LabelStr + ': ' + FormatFloat('0.###', Elapsed) + 'ms');
+    EmitLine(GroupPrefix + LabelStr + ': ' + FormatFloat('0.###', Elapsed) + 'ms');
   end
   else
-    WriteLn(GroupPrefix + 'Timer ''' + LabelStr + ''' does not exist');
+    EmitLine(GroupPrefix + 'Timer ''' + LabelStr + ''' does not exist');
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -331,7 +375,7 @@ end;
 function TGocciaConsole.ConsoleGroup(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if AArgs.Length > 0 then
-    WriteLn(GroupPrefix + FormatArgs(AArgs));
+    EmitLine(GroupPrefix + FormatArgs(AArgs));
   Inc(FGroupDepth);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -346,16 +390,16 @@ end;
 function TGocciaConsole.ConsoleTrace(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if AArgs.Length > 0 then
-    WriteLn(GroupPrefix + 'Trace: ' + FormatArgs(AArgs))
+    EmitLine(GroupPrefix + 'Trace: ' + FormatArgs(AArgs))
   else
-    WriteLn(GroupPrefix + 'Trace');
+    EmitLine(GroupPrefix + 'Trace');
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaConsole.ConsoleTable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if AArgs.Length >= 1 then
-    WriteLn(GroupPrefix + FormatValue(AArgs.GetElement(0)));
+    EmitLine(GroupPrefix + FormatValue(AArgs.GetElement(0)));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 

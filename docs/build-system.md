@@ -92,6 +92,9 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader --emit --output=output.gbc
 # Load and execute a pre-compiled .gbc file
 ./build/ScriptLoader output.gbc
 
+# Emit structured JSON for programmatic consumers
+printf "console.log('hi'); 2 + 2;" | ./build/ScriptLoader --output=json
+
 # Run tests via bytecode VM
 ./build/TestRunner tests --mode=bytecode
 
@@ -109,7 +112,7 @@ All compiled binaries go to the `build/` directory:
 | Binary | Source | Description |
 |--------|--------|-------------|
 | `build/REPL` | `REPL.dpr` | Interactive read-eval-print loop |
-| `build/ScriptLoader` | `ScriptLoader.dpr` | Execute `.js` files or stdin input |
+| `build/ScriptLoader` | `ScriptLoader.dpr` | Execute `.js` files or stdin input, with optional JSON output |
 | `build/TestRunner` | `TestRunner.dpr` | JavaScript test runner |
 | `build/BenchmarkRunner` | `BenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
 | `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
