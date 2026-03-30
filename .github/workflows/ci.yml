@@ -288,21 +288,31 @@ jobs:
           GOCCIA_BENCH_ROUNDS: 7
         run: ./build/BenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress
 
-      - name: Run stdin benchmark smoke test
+      - name: Run BenchmarkRunner JSON smoke tests
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
         run: |
           if [ "${{ matrix.mode }}" = "bytecode" ]; then
+            ./build/BenchmarkRunner benchmarks/fibonacci.js --mode=bytecode --no-progress --format=json --output=benchmark-file-bytecode.json
+            grep -q '"file": "benchmarks/fibonacci.js"' benchmark-file-bytecode.json
+            grep -q '"totalBenchmarks":' benchmark-file-bytecode.json
+
             printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
               ./build/BenchmarkRunner - --mode=bytecode --no-progress --format=json --output=benchmark-stdin-bytecode.json
             grep -q '"files": \[' benchmark-stdin-bytecode.json
             grep -q '"name": "sum"' benchmark-stdin-bytecode.json
+            grep -q '"totalBenchmarks": 1' benchmark-stdin-bytecode.json
           else
+            ./build/BenchmarkRunner benchmarks/fibonacci.js --no-progress --format=json --output=benchmark-file.json
+            grep -q '"file": "benchmarks/fibonacci.js"' benchmark-file.json
+            grep -q '"totalBenchmarks":' benchmark-file.json
+
             printf 'suite("stdin", () => {\n  bench("sum", {\n    run: () => 1 + 1,\n  });\n});\n' | \
               ./build/BenchmarkRunner --no-progress --format=json --output=benchmark-stdin.json
             grep -q '"files": \[' benchmark-stdin.json
             grep -q '"name": "sum"' benchmark-stdin.json
+            grep -q '"totalBenchmarks": 1' benchmark-stdin.json
           fi
 
       - name: Run benchmarks and save baseline
