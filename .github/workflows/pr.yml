@@ -217,6 +217,11 @@ jobs:
           printf '%s\n' "$globals_file_output" | grep -q '"ok":true'
           printf '%s\n' "$globals_file_output" | grep -q '"value":"goccia"'
 
+          printf '%s\n' 'export const name = "module-value";' > cli-globals-module.js
+          globals_module_output="$(printf '%s\n' 'name;' | ./build/ScriptLoader --globals=cli-globals-module.js --output=json)"
+          printf '%s\n' "$globals_module_output" | grep -q '"ok":true'
+          printf '%s\n' "$globals_module_output" | grep -q '"value":"module-value"'
+
           set +e
           globals_collision_output="$(printf '%s\n' 'console;' | ./build/ScriptLoader --global console=1 --output=json)"
           globals_collision_status=$?
