@@ -441,11 +441,11 @@ During code review, the following findings were investigated and determined to b
 
 ## Testing Strategy
 
-JavaScript end-to-end tests are the **primary** testing mechanism. Every new feature or bug fix must include JavaScript tests that validate the behavior through the full pipeline (lexer → parser → evaluator).
+JavaScript end-to-end tests are the **primary** testing mechanism. Every new feature or bug fix must include tests that validate the behavior through the full pipeline (lexer → parser → evaluator) using the most public surface available.
 
 - **Specification by example** — Each test file is a runnable specification of expected behavior.
 - **End-to-end validation** — Tests exercise the full pipeline, catching integration issues that unit tests would miss.
 - **Readable specifications** — JavaScript test files are readable by anyone familiar with Jest/Vitest conventions.
 - **Source of truth** — If a behavior isn't covered by a JavaScript test, it isn't guaranteed.
 
-Pascal unit tests (`*.Test.pas`) exist as a secondary layer for internal implementation details not reachable from script code.
+Pascal unit tests (`*.Test.pas`) exist as a secondary layer for internal implementation details not reachable from script code or other documented user-facing entry points.

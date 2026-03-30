@@ -2,7 +2,15 @@
 
 *For contributors writing, running, or debugging tests.*
 
-JavaScript end-to-end tests are the **primary** way of testing GocciaScript and ensuring ECMAScript compatibility. Every new feature or bug fix should include JavaScript tests that exercise the full pipeline (lexer → parser → evaluator). Pascal unit tests exist as a secondary layer for low-level value system validation.
+JavaScript end-to-end tests are the **primary** way of testing GocciaScript and ensuring ECMAScript compatibility. Every new feature or bug fix should include tests that exercise the full pipeline (lexer → parser → evaluator) through the same public surface that users call. Pascal unit tests exist as a secondary layer for low-level runtime and value system validation.
+
+When choosing where to add coverage, prefer the most public entry point available:
+
+- JavaScript feature behavior: add or extend tests under `tests/`
+- CLI behavior (`ScriptLoader`, `TestRunner`, `BenchmarkRunner`): add command-level or workflow-level smoke tests that assert on the visible output
+- Internal Pascal helpers: add native `*.Test.pas` coverage only when the behavior is genuinely internal or shared in a way that is not reachable through a stable public API
+
+Avoid tests that lock onto private helper functions or transient implementation structure when the same behavior can be validated through a documented user-facing command or script entry point.
 
 ## Test Organization
 
@@ -208,10 +216,7 @@ tests/built-ins/Object/
 
 ```bash
 ./build.pas tests
-./build/Goccia.Values.Primitives.Test
-./build/Goccia.Values.FunctionValue.Test
-./build/Goccia.Values.ObjectValue.Test
-./build/Goccia.Builtins.TestAssertions.Test
+for t in build/Goccia.*.Test; do "$t"; done
 ```
 
 ## Writing Tests
