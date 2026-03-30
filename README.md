@@ -147,6 +147,7 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 
 ```bash
 ./build.pas loader && ./build/ScriptLoader example.js
+printf "const x = 2 + 2; x;" | ./build/ScriptLoader
 ```
 
 ### Run via Bytecode
@@ -156,12 +157,14 @@ GocciaScript includes a bytecode execution backend. The public bytecode artifact
 ```bash
 # Compile and execute via bytecode
 ./build/ScriptLoader example.js --mode=bytecode
+printf "const x = 2 + 2; x;" | ./build/ScriptLoader --mode=bytecode
 
 # Compile to .gbc bytecode file (no execution)
 ./build/ScriptLoader example.js --emit
 
 # Custom output path
 ./build/ScriptLoader example.js --emit --output=out.gbc
+printf "const x = 2 + 2; x;" | ./build/ScriptLoader --emit --output=out.gbc
 
 # Load and execute a pre-compiled .gbc file
 ./build/ScriptLoader example.gbc

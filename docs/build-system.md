@@ -65,6 +65,7 @@ A full build (no specific targets) automatically cleans first.
 
 ```bash
 ./build.pas loader && ./build/ScriptLoader ./example.js
+printf "const x = 2 + 2; x;" | ./build/ScriptLoader
 ```
 
 ### Compile and Test
@@ -80,10 +81,12 @@ All execution tools support `--mode=bytecode` to compile and run via the Goccia 
 ```bash
 # Execute via bytecode VM
 ./build/ScriptLoader example.js --mode=bytecode
+printf "const x = 2 + 2; x;" | ./build/ScriptLoader --mode=bytecode
 
 # Emit bytecode to .gbc file (no execution)
 ./build/ScriptLoader example.js --emit
 ./build/ScriptLoader example.js --output=output.gbc
+printf "const x = 2 + 2; x;" | ./build/ScriptLoader --emit --output=output.gbc
 
 # Load and execute a pre-compiled .gbc file
 ./build/ScriptLoader output.gbc
@@ -104,7 +107,7 @@ All compiled binaries go to the `build/` directory:
 | Binary | Source | Description |
 |--------|--------|-------------|
 | `build/REPL` | `REPL.dpr` | Interactive read-eval-print loop |
-| `build/ScriptLoader` | `ScriptLoader.dpr` | Execute `.js` files |
+| `build/ScriptLoader` | `ScriptLoader.dpr` | Execute `.js` files or stdin input |
 | `build/TestRunner` | `TestRunner.dpr` | JavaScript test runner |
 | `build/BenchmarkRunner` | `BenchmarkRunner.dpr` | Performance benchmark runner |
 | `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
