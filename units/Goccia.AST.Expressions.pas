@@ -1137,6 +1137,7 @@ begin
   begin
     PropName := TGocciaIdentifierExpression(Operand).Name;
     OldValue := AContext.Scope.GetValue(PropName);
+    OldValue := OldValue.ToNumberLiteral;
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
     AContext.Scope.AssignLexicalBinding(PropName, NewValue);
     if IsPrefix then
@@ -1159,6 +1160,7 @@ begin
           OldValue := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue));
         if OldValue = nil then
           OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+        OldValue := OldValue.ToNumberLiteral;
         NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
         if Obj is TGocciaClassValue then
           TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyKeyValue), NewValue)
@@ -1181,6 +1183,7 @@ begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
       Exit;
     end;
+    OldValue := OldValue.ToNumberLiteral;
     NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
     AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column);
     if IsPrefix then
