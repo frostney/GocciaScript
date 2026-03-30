@@ -19,6 +19,9 @@ const
   VALIDATE_OP_REQUIRE_OBJECT = 0;
   VALIDATE_OP_REQUIRE_ITERABLE = 1;
 
+  { Classification boundary for colder language-orchestration ops used by IsSemanticOp.
+    Non-core generic arithmetic/bitwise opcodes also live in 128..166, but they are
+    still treated as hot execution ops in the VM loop rather than semantic helpers. }
   OP_SEM_FIRST = 167;
 
   MIN_SBX: Int16 = -32768;
@@ -26,7 +29,8 @@ const
 
 type
   { Core operations (hot/stable VM semantics) — opcodes 0..127 }
-  { Semantic operations (colder language-level semantics) — opcodes 128..255 }
+  { Non-core opcode space — generic arithmetic/bitwise ops in 128..166,
+    semantic helper/orchestration ops in 167..255 }
   TGocciaOpCode = (
     OP_LOAD_CONST    = 0,
     OP_LOAD_TRUE     = 2,

@@ -127,7 +127,7 @@ end;
 function InvokeBenchmarkFunction(const AFunction: TGocciaFunctionBase;
   const ASetupResult: TGocciaValue): TGocciaValue;
 begin
-  if Assigned(ASetupResult) and not (ASetupResult is TGocciaUndefinedLiteralValue) then
+  if Assigned(ASetupResult) then
     Result := AFunction.CallOneArg(ASetupResult,
       TGocciaUndefinedLiteralValue.UndefinedValue)
   else

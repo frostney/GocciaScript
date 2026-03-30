@@ -186,12 +186,10 @@ GocciaScript/
 ├── units/
 │   ├── Goccia.inc     # Shared compiler directives
 │   ├── TimingUtils.pas # Cross-platform microsecond timing and duration formatting
-│   ├── *.pas          # All unit source files
-│   └── *.Test.pas     # Pascal unit test programs
-├── units/
 │   ├── Goccia.Bytecode*.pas # Bytecode definitions, templates, modules, binary I/O
 │   ├── Goccia.VM*.pas       # Bytecode VM, frames, closures, upvalues, exceptions
-│   └── *.pas
+│   ├── *.pas          # All unit source files
+│   └── *.Test.pas     # Pascal unit test programs
 └── build/             # All output (gitignored)
     ├── *.o            # Object files
     ├── *.ppu          # Compiled unit files

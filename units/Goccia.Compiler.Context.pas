@@ -5,6 +5,8 @@ unit Goccia.Compiler.Context;
 interface
 
 uses
+  SysUtils,
+
   HashMap,
 
   Goccia.AST.Expressions,
@@ -113,7 +115,8 @@ begin
   begin
     A := DecodeA(Instruction);
     B := DecodeB(Instruction);
-    Assert(Offset <= 255, 'Nil jump offset exceeds 8-bit range');
+    if Offset > High(UInt8) then
+      raise Exception.Create('Nullish jump offset exceeds 8-bit range');
     ACtx.Template.PatchInstruction(AIndex,
       EncodeABC(TGocciaOpCode(Op), A, B, UInt8(Offset)));
   end

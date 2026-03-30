@@ -22,7 +22,7 @@ Source -> JSX Transformer (optional) -> Lexer -> Parser -> Interpreter -> Evalua
 ### Bytecode
 
 ```text
-Source -> Lexer -> Parser -> Compiler -> Goccia Bytecode -> TGocciaVM -> TGocciaValue
+Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia Bytecode -> TGocciaVM -> TGocciaValue
 ```
 
 ## Main Layers
@@ -39,7 +39,7 @@ Source -> Lexer -> Parser -> Compiler -> Goccia Bytecode -> TGocciaVM -> TGoccia
 ## Design Direction
 
 - Bytecode execution is Goccia-specific, not a generic VM layer.
-- Registers hold `TGocciaValue` directly.
+- The VM register file uses tagged `TGocciaRegister` values internally; hot scalar kinds stay unboxed until they cross an object/runtime boundary.
 - Arrays, objects, classes, promises, and functions are shared between interpreter and bytecode mode.
 - Sparse arrays use a dedicated hole sentinel.
 - Precompiled bytecode uses the `.gbc` format.

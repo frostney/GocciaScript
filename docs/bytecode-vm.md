@@ -14,7 +14,7 @@ The bytecode backend is no longer a language-agnostic subsystem. It is a Goccia-
 ## Pipeline
 
 ```text
-Source -> Lexer -> Parser -> Compiler -> Goccia Bytecode -> TGocciaVM -> TGocciaValue
+Source -> JSX Transformer (optional) -> Lexer -> Parser -> Compiler -> Goccia Bytecode -> TGocciaVM -> TGocciaValue
 ```
 
 Public bytecode artifacts use the `.gbc` extension.
@@ -34,7 +34,7 @@ Public bytecode artifacts use the `.gbc` extension.
 
 ## Core Design
 
-- Registers hold `TGocciaValue` directly.
+- The VM register file uses tagged `TGocciaRegister` values internally; hot scalar kinds stay unboxed until they cross an object/runtime boundary.
 - The VM uses the same value classes as the interpreter: arrays, objects, classes, promises, functions, symbols, enums, and built-ins.
 - `undefined`, `null`, booleans, and hole values use shared singleton objects.
 - Sparse arrays use `TGocciaHoleValue.HoleValue`, not raw `nil`.
@@ -46,12 +46,13 @@ Public bytecode artifacts use the `.gbc` extension.
 The opcode space is split into two ranges:
 
 - `0..127`: core VM instructions
-- `128..255`: reserved / non-core space
+- `128..255`: semantic / non-core space
 
-In the current VM, the active semantic range starts at `167`:
+In the current VM:
 
 - core instructions cover hot execution paths such as locals, arithmetic, comparisons, property/index access, calls, construction, iteration, and class/object setup
-- semantic instructions are currently limited to module and async orchestration (`IMPORT`, `EXPORT`, `AWAIT`)
+- semantic instructions already include generic arithmetic and bitwise operations in `128..140`
+- module and async orchestration currently starts at `167` (`IMPORT`, `EXPORT`, `AWAIT`)
 
 The current encoding helpers are defined in `Goccia.Bytecode.pas`:
 

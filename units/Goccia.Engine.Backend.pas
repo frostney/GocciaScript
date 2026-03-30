@@ -129,8 +129,18 @@ end;
 
 function TGocciaBytecodeBackend.RunModule(
   const AModule: TGocciaBytecodeModule): TGocciaValue;
+var
+  GC: TGarbageCollector;
+  WasEnabled: Boolean;
 begin
-  Result := FMinimalVM.ExecuteModule(AModule);
+  GC := TGarbageCollector.Instance;
+  WasEnabled := GC.Enabled;
+  GC.Enabled := False;
+  try
+    Result := FMinimalVM.ExecuteModule(AModule);
+  finally
+    GC.Enabled := WasEnabled;
+  end;
 end;
 
 procedure TGocciaBytecodeBackend.RegisterGlobal(const AName: string;

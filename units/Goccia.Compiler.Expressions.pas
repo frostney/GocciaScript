@@ -1961,6 +1961,7 @@ begin
   if PropIdx > High(UInt8) then
     raise Exception.Create('Constant pool overflow: property name index exceeds 255');
   EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, CurReg, ObjReg, UInt8(PropIdx)));
+  EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, CurReg, CurReg, 0));
   EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
   if not AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
@@ -1988,6 +1989,7 @@ begin
   ACtx.CompileExpression(AMember.ObjectExpr, ObjReg);
   ACtx.CompileExpression(AMember.PropertyExpression, KeyReg);
   EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, CurReg, ObjReg, KeyReg));
+  EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, CurReg, CurReg, 0));
   EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
   if not AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
@@ -2053,6 +2055,7 @@ begin
       RegOne := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
         ACtx.Template.AddConstantString(Ident.Name)));
+      EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, RegResult, RegResult, 0));
       EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
       if not AExpr.IsPrefix then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
@@ -2066,6 +2069,7 @@ begin
       Exit;
     end;
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, Slot, Slot, 0));
     RegOne := ACtx.Scope.AllocateRegister;
     EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
     if not AExpr.IsPrefix then
@@ -2083,6 +2087,7 @@ begin
     RegResult := ACtx.Scope.AllocateRegister;
     RegOne := ACtx.Scope.AllocateRegister;
     EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult, UInt16(UpvalIdx)));
+    EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, RegResult, RegResult, 0));
     EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
     if not AExpr.IsPrefix then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
@@ -2099,6 +2104,7 @@ begin
   RegOne := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
     ACtx.Template.AddConstantString(Ident.Name)));
+  EmitInstruction(ACtx, EncodeABC(OP_TO_NUMBER, RegResult, RegResult, 0));
   EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, RegOne, 1));
   if not AExpr.IsPrefix then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
