@@ -202,7 +202,7 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 **When modifying AST logic, scope chain, evaluator, or value types:**
 - Build and run the native Pascal test suite: `./build.pas clean tests && for t in build/Goccia.*.Test; do "$t"; done`
 - Update the native tests in `units/*.Test.pas` to reflect any changes in behaviour (e.g. new parameters, changed return semantics).
-- Keep native Pascal tests focused on runtime internals and shared low-level behavior. If a feature is exposed through a CLI tool or other documented user-facing API, prefer adding or extending command-level/workflow-level coverage there instead of asserting internal helper behavior directly.
+- Keep native Pascal tests focused on visible public behavior where possible, and only drop to lower-level coverage when the behavior is genuinely internal or unreachable through a stable public API. Prefer stateless tests with repeatable inputs and outputs over tests that depend on ambient process state, timing, or incidental implementation details. If a feature is exposed through a CLI tool or other documented user-facing API, prefer adding or extending command-level/workflow-level coverage there instead of asserting internal helper behavior directly.
 - Both the JavaScript tests **and** the native Pascal tests must pass.
 
 ### 4. Garbage Collector Awareness

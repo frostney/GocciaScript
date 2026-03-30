@@ -8,9 +8,9 @@ When choosing where to add coverage, prefer the most public entry point availabl
 
 - JavaScript feature behavior: add or extend tests under `tests/`
 - CLI behavior (`ScriptLoader`, `TestRunner`, `BenchmarkRunner`): add command-level or workflow-level smoke tests that assert on the visible output
-- Internal Pascal helpers: add native `*.Test.pas` coverage only when the behavior is genuinely internal or shared in a way that is not reachable through a stable public API
+- Pascal unit tests: prefer visible public behavior and deterministic input/output, and add native `*.Test.pas` coverage only when the behavior is genuinely internal or shared in a way that is not reachable through a stable public API
 
-Avoid tests that lock onto private helper functions or transient implementation structure when the same behavior can be validated through a documented user-facing command or script entry point.
+Avoid tests that lock onto private helper functions or transient implementation structure when the same behavior can be validated through a documented user-facing command or script entry point. Where native Pascal tests are still appropriate, keep them as stateless and repeatable as possible so they behave like pure input/output checks rather than process-sensitive probes.
 
 ## Test Organization
 

@@ -448,4 +448,4 @@ JavaScript end-to-end tests are the **primary** testing mechanism. Every new fea
 - **Readable specifications** — JavaScript test files are readable by anyone familiar with Jest/Vitest conventions.
 - **Source of truth** — If a behavior isn't covered by a JavaScript test, it isn't guaranteed.
 
-Pascal unit tests (`*.Test.pas`) exist as a secondary layer for internal implementation details not reachable from script code or other documented user-facing entry points.
+Pascal unit tests (`*.Test.pas`) exist as a secondary layer for behavior that cannot be reached through script code or other documented user-facing entry points. Even there, prefer stateless, repeatable input/output checks over tests that are tightly coupled to incidental implementation structure.
