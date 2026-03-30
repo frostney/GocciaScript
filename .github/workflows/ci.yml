@@ -388,12 +388,12 @@ jobs:
           json_output="$(printf '%s\n' "console.log('hi');" '2 + 2;' | ./build/ScriptLoader --output=json)"
           printf '%s\n' "$json_output" | grep -q '"ok":true'
           printf '%s\n' "$json_output" | grep -q '"value":4'
-          printf '%s\n' "$json_output" | grep -q '"output":"hi\\n"'
+          printf '%s\n' "$json_output" | grep -Eq '"output":"hi(\\r)?\\n"'
 
           json_output_bytecode="$(printf '%s\n' "console.log('hi');" '2 + 2;' | ./build/ScriptLoader - --mode=bytecode --output=json)"
           printf '%s\n' "$json_output_bytecode" | grep -q '"ok":true'
           printf '%s\n' "$json_output_bytecode" | grep -q '"value":4'
-          printf '%s\n' "$json_output_bytecode" | grep -q '"output":"hi\\n"'
+          printf '%s\n' "$json_output_bytecode" | grep -Eq '"output":"hi(\\r)?\\n"'
 
           set +e
           error_output="$(printf '%s\n' "throw new TypeError('boom');" | ./build/ScriptLoader --output=json)"
