@@ -55,12 +55,14 @@ type
     FEntries: TEntryArray;
     FBuckets: array of Int32;
     FCount: Integer;
+    FDeletedCount: Integer;
     FEntryCount: Integer;
     FBucketCount: Integer;
 
     class function HashKey(const AKey: string): Cardinal; static; inline;
     class function KeysEqual(const A, B: string): Boolean; static; inline;
 
+    function DeletedSlotsNeedCompaction: Boolean; inline;
     function FindBucket(const AKey: string; AHash: Cardinal;
       out ABucketIdx: Integer): Boolean;
     procedure Grow;
@@ -89,6 +91,7 @@ type
     function EntryAt(AIndex: Integer): TBaseMap<string, TValue>.TKeyValuePair;
 
     property Capacity: Integer read FBucketCount;
+    property DeletedCount: Integer read FDeletedCount;
   end;
 
   TStringStringMap = TOrderedStringMap<string>;
@@ -111,6 +114,11 @@ end;
 class function TOrderedStringMap<TValue>.KeysEqual(const A, B: string): Boolean;
 begin
   Result := A = B;
+end;
+
+function TOrderedStringMap<TValue>.DeletedSlotsNeedCompaction: Boolean;
+begin
+  Result := FDeletedCount > FCount;
 end;
 
 { Probe }
@@ -184,6 +192,8 @@ begin
         Idx := (Idx + 1) and (FBucketCount - 1);
       FBuckets[Idx] := I;
     end;
+
+  FDeletedCount := 0;
 end;
 
 procedure TOrderedStringMap<TValue>.Compact;
@@ -217,6 +227,7 @@ var
 begin
   inherited Create;
   FCount := 0;
+  FDeletedCount := 0;
   FEntryCount := 0;
 
   if AInitialCapacity <= 0 then
@@ -268,6 +279,12 @@ begin
     FindBucket(AKey, Hash, BucketIdx);
   end;
 
+  if DeletedSlotsNeedCompaction then
+  begin
+    Compact;
+    FindBucket(AKey, Hash, BucketIdx);
+  end;
+
   EntryIdx := FEntryCount;
   Inc(FEntryCount);
   if FEntryCount > Length(FEntries) then
@@ -278,6 +295,8 @@ begin
   FEntries[EntryIdx].Hash := Hash;
   FEntries[EntryIdx].Active := True;
 
+  if FBuckets[BucketIdx] = DELETED_SLOT then
+    Dec(FDeletedCount);
   FBuckets[BucketIdx] := EntryIdx;
   Inc(FCount);
 end;
@@ -336,6 +355,7 @@ begin
   FEntries[EntryIdx].Key := '';
   FEntries[EntryIdx].Value := Default(TValue);
   FBuckets[BucketIdx] := DELETED_SLOT;
+  Inc(FDeletedCount);
   Dec(FCount);
 end;
 
@@ -347,6 +367,7 @@ begin
     FBuckets[I] := EMPTY_SLOT;
   SetLength(FEntries, 0);
   FCount := 0;
+  FDeletedCount := 0;
   FEntryCount := 0;
 end;
 

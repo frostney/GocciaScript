@@ -177,7 +177,7 @@ The codebase provides purpose-built hash maps that replace `TDictionary` on hot 
 
 | Use case | Map type | Notes |
 |----------|----------|-------|
-| String keys, insertion order | `TOrderedStringMap<V>` | 4–6× faster inserts than `TDictionary` at N=20–100; `static inline` DJB2 hash/equality |
+| String keys, insertion order | `TOrderedStringMap<V>` | 4–6× faster inserts than `TDictionary` at N=20–100; `static inline` DJB2 hash/equality; tracks deleted buckets and compacts after delete-heavy phases to bound probe chains |
 | Generic keys, insertion order | `TOrderedMap<K,V>` | Virtual `HashKey`/`KeysEqual`; default: DJB2 over raw key bytes |
 | Any key, unordered | `THashMap<K,V>` | Backshift deletion (no tombstones); `static inline` hash/equality; 2× faster inserts for pointer keys |
 | Scope bindings | `TOrderedStringMap<V>` | Hash-based O(1) lookup per scope level; chain walking in `TGocciaScope` |
