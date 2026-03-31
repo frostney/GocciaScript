@@ -3044,18 +3044,22 @@ begin
     PrivateName := Copy(AKey, 2, MaxInt);
     if AObject is TGocciaClassValue then
     begin
-      if TGocciaClassValue(AObject).HasPrivateGetter(PrivateName) then
+      if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
       begin
         EmptyArgs := TGocciaArgumentsCollection.Create;
         try
-          Exit(TGocciaClassValue(AObject).PrivatePropertyGetter[PrivateName].Call(
+          Exit(TGocciaClassValue(AObject).GetOwnPrivatePropertyGetter(
+            PrivateName).Call(
             EmptyArgs, AObject));
         finally
           EmptyArgs.Free;
         end;
       end;
-      if TGocciaClassValue(AObject).HasPrivateSetter(PrivateName) then
+      if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
         ThrowTypeError('Private accessor ' + AKey + ' was defined without a getter');
+      if TryGetRawPrivateValue(AObject, AKey, Result) then
+        Exit;
+      ThrowTypeError('Private field ' + AKey + ' is not accessible');
     end;
 
     if AObject is TGocciaObjectValue then
@@ -3108,18 +3112,19 @@ begin
     PrivateName := Copy(AKey, 2, MaxInt);
     if AObject is TGocciaClassValue then
     begin
-      if TGocciaClassValue(AObject).HasPrivateSetter(PrivateName) then
+      if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
       begin
         SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
         try
-          TGocciaClassValue(AObject).PrivatePropertySetter[PrivateName].Call(
+          TGocciaClassValue(AObject).GetOwnPrivatePropertySetter(
+            PrivateName).Call(
             SetterArgs, AObject);
         finally
           SetterArgs.Free;
         end;
         Exit;
       end;
-      if TGocciaClassValue(AObject).HasPrivateGetter(PrivateName) then
+      if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
         ThrowTypeError('Private accessor ' + AKey + ' was defined without a setter');
     end;
 

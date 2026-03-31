@@ -61,6 +61,40 @@ describe("Iterator.prototype.reduce()", () => {
     expect(closed).toBe(1);
   });
 
+  test("reduce closes the source iterator when next() throws after iteration starts", () => {
+    let closed = 0;
+    const source = Iterator.from({
+      count: 0,
+      next() {
+        this.count = this.count + 1;
+        if (this.count === 1) {
+          return { value: 1, done: false };
+        }
+        throw new Error("next boom");
+      },
+      return() {
+        closed = closed + 1;
+        return { value: undefined, done: true };
+      },
+    });
+
+    expect(() => source.reduce((acc, x) => acc + x)).toThrow(Error);
+    expect(closed).toBe(1);
+  });
+
+  test("reduce throws when iterator return is present but not callable", () => {
+    const source = Iterator.from({
+      next() {
+        return { value: 1, done: false };
+      },
+      return: 1,
+    });
+
+    expect(() => source.reduce(() => {
+      throw new Error("boom");
+    }, 0)).toThrow(TypeError);
+  });
+
   test("reduce can consume nested iterators", () => {
     const result = Iterator.from([1, 2, 3][Symbol.iterator]())
       .reduce((acc, x) => {

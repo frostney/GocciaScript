@@ -156,8 +156,12 @@ begin
 
   FDone := True;
   ReturnMethod := FSource.GetProperty(PROP_RETURN);
-  if not Assigned(ReturnMethod) or (ReturnMethod is TGocciaUndefinedLiteralValue) or not ReturnMethod.IsCallable then
+  if not Assigned(ReturnMethod) or
+     (ReturnMethod is TGocciaUndefinedLiteralValue) or
+     (ReturnMethod is TGocciaNullLiteralValue) then
     Exit;
+  if not ReturnMethod.IsCallable then
+    ThrowTypeError('Iterator return property must be callable');
 
   CallArgs := TGocciaArgumentsCollection.Create;
   try

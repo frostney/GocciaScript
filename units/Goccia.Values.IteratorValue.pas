@@ -345,6 +345,7 @@ begin
   Callback := AArgs.GetElement(0);
   HasInitial := AArgs.Length >= 2;
   Index := 0;
+  Done := False;
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
@@ -381,9 +382,9 @@ begin
       finally
         TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
       end;
-    finally
-      if not Done then
-        Iterator.Close;
+    except
+      Iterator.Close;
+      raise;
     end;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
