@@ -35,6 +35,9 @@ type
 
 implementation
 
+const
+  ALIAS_SEGMENT_DELIMITER = '/';
+
 function IsAbsolutePath(const APath: string): Boolean;
 begin
   if Length(APath) = 0 then
@@ -44,6 +47,22 @@ begin
   if (Length(APath) >= 2) and (APath[2] = ':') then
     Exit(True);
   Result := Copy(APath, 1, 2) = '\\';
+end;
+
+function AliasMatchesModulePath(const AAlias, AModulePath: string): Boolean;
+var
+  AliasLength: Integer;
+begin
+  AliasLength := Length(AAlias);
+  if (AliasLength = 0) or (Length(AModulePath) < AliasLength) then
+    Exit(False);
+
+  if Copy(AModulePath, 1, AliasLength) <> AAlias then
+    Exit(False);
+
+  Result := (Length(AModulePath) = AliasLength) or
+    ((Length(AModulePath) > AliasLength) and
+     (AModulePath[AliasLength + 1] = ALIAS_SEGMENT_DELIMITER));
 end;
 
 constructor TModuleResolver.Create(const ABaseDirectory: string);
@@ -72,8 +91,7 @@ var
   Pair: TStringStringMap.TKeyValuePair;
 begin
   for Pair in FAliases do
-    if (Length(AModulePath) >= Length(Pair.Key)) and
-       (Copy(AModulePath, 1, Length(Pair.Key)) = Pair.Key) then
+    if AliasMatchesModulePath(Pair.Key, AModulePath) then
       Exit(True);
   Result := False;
 end;
@@ -98,8 +116,7 @@ begin
 
   for Pair in FAliases do
   begin
-    if (Length(AModulePath) >= Length(Pair.Key)) and
-       (Copy(AModulePath, 1, Length(Pair.Key)) = Pair.Key) then
+    if AliasMatchesModulePath(Pair.Key, AModulePath) then
     begin
       if (not Found) or (Length(Pair.Key) > Length(BestKey)) then
       begin
