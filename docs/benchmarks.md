@@ -37,7 +37,7 @@ The BenchmarkRunner supports four output formats via the `--format` flag:
 | `console` (default) | Pretty-printed columnar output with suite headers, variance, setup/teardown times, and summary |
 | `text` | Compact one-line-per-benchmark format with optional `setup=Xms teardown=Xms` suffixes |
 | `csv` | Standard CSV with header row (`file,suite,name,ops_per_sec,variance_percentage,mean_ms,iterations,setup_ms,teardown_ms,error`) |
-| `json` | Structured JSON with `files[]` array containing nested `benchmarks[]`, each with `setupMs` and `teardownMs` fields |
+| `json` | Structured JSON with `files[]` array containing nested `benchmarks[]`, including `opsPerSec`, `variancePercentage`, `minOpsPerSec`, `maxOpsPerSec`, `setupMs`, and `teardownMs` |
 
 Use `--output=<file>` to write results to a file instead of stdout.
 
@@ -200,12 +200,13 @@ Benchmarks run as part of the CI pipeline in both **interpreted** and **bytecode
 
 ### PR Benchmark Comparison
 
-The PR workflow (`.github/workflows/pr.yml`) restores the cached baselines from `main`, runs the benchmark matrix, and posts a collapsible comparison comment on the PR. Each benchmark file gets a **unified table** with both modes side by side:
+The PR workflow (`.github/workflows/pr.yml`) restores the cached baseline JSON from `main`, runs the benchmark matrix, and posts a collapsible comparison comment on the PR. Each benchmark file gets a **unified table** with both modes side by side:
 
-- Each table row shows `| Benchmark | Interpreted | Δ | Bytecode | Δ |` — interpreted and bytecode ops/sec with their change from baseline in one row
+- Each table row shows `| Benchmark | Interpreted | Δ | Bytecode | Δ |` with the point estimate and cached/PR min-max range in the form `10,000 ops/sec [9,500..10,500] → 9,200 ops/sec [8,700..9,700]`
+- Classification uses **range overlap** instead of a single point value: if the PR run sits fully above the baseline range it is improved, if it sits fully below it is regressed, and overlapping ranges are treated as unchanged noise
+- Percentage deltas remain in the `Δ` column as secondary context, even when the classifier marks a benchmark as `~ overlap`
 - Results are **grouped by file**, each in a collapsible `<details>` section
 - Files with significant changes (improvements or regressions) are auto-expanded
 - Each file summary shows per-mode counts (e.g., `Interp: 🟢 1, 7 unch. · Bytecode: 🟢 2, 6 unch.`)
-- The **overall PR summary** shows per-mode totals on separate lines with average percentages
-- Changes within **±7%** are considered insignificant (shown without color indicators) — this threshold accounts for CI environment noise during active development
-- 🟢 marks improvements > 7%, 🔴 marks regressions > 7%, 🆕 marks new benchmarks with no baseline
+- The **overall PR summary** shows per-mode totals on separate lines with average percentage deltas
+- 🟢 marks non-overlapping improvements, 🔴 marks non-overlapping regressions, `~ overlap` marks overlapping ranges, and 🆕 marks new benchmarks with no baseline
