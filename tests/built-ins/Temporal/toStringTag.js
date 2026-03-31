@@ -3,7 +3,9 @@ description: Temporal[Symbol.toStringTag]
 features: [temporal]
 ---*/
 
-describe("Temporal[Symbol.toStringTag]", () => {
+const isTemporal = typeof Temporal !== "undefined";
+
+describe.runIf(isTemporal)("Temporal[Symbol.toStringTag]", () => {
   test("Symbol.toStringTag is 'Temporal'", () => {
     expect(Temporal[Symbol.toStringTag]).toBe("Temporal");
   });

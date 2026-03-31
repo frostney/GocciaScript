@@ -17,6 +17,7 @@ type
     constructor Create(const AIteratorObject: TGocciaValue);
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
+    procedure Close; override;
     procedure MarkReferences; override;
   end;
 
@@ -25,6 +26,7 @@ implementation
 uses
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
 
 { TGocciaGenericIteratorValue }
@@ -141,6 +143,33 @@ begin
     FDone := True;
     ADone := True;
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
+procedure TGocciaGenericIteratorValue.Close;
+var
+  ReturnMethod: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+  ReturnResult: TGocciaValue;
+begin
+  if FDone then Exit;
+
+  FDone := True;
+  ReturnMethod := FSource.GetProperty(PROP_RETURN);
+  if not Assigned(ReturnMethod) or
+     (ReturnMethod is TGocciaUndefinedLiteralValue) or
+     (ReturnMethod is TGocciaNullLiteralValue) then
+    Exit;
+  if not ReturnMethod.IsCallable then
+    ThrowTypeError('Iterator return property must be callable');
+
+  CallArgs := TGocciaArgumentsCollection.Create;
+  try
+    ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FSource);
+    if not (ReturnResult is TGocciaObjectValue) then
+      ThrowTypeError('Iterator return() must return an object');
+  finally
+    CallArgs.Free;
   end;
 end;
 

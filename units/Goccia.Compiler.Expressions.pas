@@ -1023,6 +1023,7 @@ var
   MemberExpr: TGocciaMemberExpression;
   PropIdx: UInt16;
   UseSpread: Boolean;
+  NilJump, EndJump: Integer;
 begin
   ArgCount := AExpr.Arguments.Count;
   if ArgCount > High(UInt8) then
@@ -1148,6 +1149,11 @@ begin
 
       ACtx.CompileExpression(MemberExpr.ObjectExpr, ObjReg);
 
+      if MemberExpr.Optional then
+        NilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ObjReg)
+      else
+        NilJump := -1;
+
       if MemberExpr.Computed then
       begin
         ACtx.CompileExpression(MemberExpr.PropertyExpression, BaseReg);
@@ -1175,6 +1181,14 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt8(ArgCount), 0));
         for I := 0 to ArgCount - 1 do
           ACtx.Scope.FreeRegister;
+      end;
+
+      if MemberExpr.Optional then
+      begin
+        EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+        PatchJumpTarget(ACtx, NilJump);
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
+        PatchJumpTarget(ACtx, EndJump);
       end;
 
       if ADest <> BaseReg then
@@ -1556,7 +1570,7 @@ begin
             SourceLines.Text := ExprText;
             Parser := TGocciaParser.Create(Tokens, ACtx.SourcePath, SourceLines);
             try
-              ProgramNode := Parser.Parse;
+              ProgramNode := Parser.ParseUnchecked;
               try
                 ParsedExpr := nil;
                 if (ProgramNode.Body.Count > 0) and

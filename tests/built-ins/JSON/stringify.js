@@ -234,3 +234,40 @@ test("JSON.stringify treats non-positive space as no indentation", () => {
 test("JSON.stringify serializes sparse array holes as null", () => {
   expect(JSON.stringify([1, , 3])).toBe("[1,null,3]");
 });
+
+test("JSON.stringify calls replacer with the holder as this", () => {
+  const holders = [];
+  const helper = {
+    replacer(key, value) {
+      if (key === "a" || key === "0") {
+        holders.push(this);
+      }
+      return value;
+    },
+  };
+  const obj = { a: 1 };
+  const arr = [2];
+
+  JSON.stringify(obj, helper.replacer);
+  JSON.stringify(arr, helper.replacer);
+
+  expect(holders[0]).toBe(obj);
+  expect(holders[1]).toBe(arr);
+});
+
+test("JSON.stringify array replacer coerces keys and preserves replacer order", () => {
+  const obj = { a: 1, b: 2, 1: "one", c: 3 };
+
+  expect(JSON.stringify(obj, ["b", 1, "a", "b"])).toBe(
+    '{"b":2,"1":"one","a":1}',
+  );
+});
+
+test("JSON.stringify preserves enumerable property order", () => {
+  const obj = {};
+  obj.beta = 2;
+  obj.alpha = 1;
+  obj.gamma = 3;
+
+  expect(JSON.stringify(obj)).toBe('{"beta":2,"alpha":1,"gamma":3}');
+});

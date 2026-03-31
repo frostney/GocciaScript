@@ -81,11 +81,14 @@ uses
   GarbageCollector.Generic,
 
   Goccia.Constants.ErrorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.MicrotaskQueue,
+  Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.NativeFunction,
+  Goccia.VM.Exception;
 
 type
   TGocciaFinallyPassthrough = class(TGocciaObjectValue)
@@ -275,10 +278,17 @@ begin
     end;
 end;
 
+// ES2026 §27.2.1.3.2 Promise Resolve Functions ( resolution )
 procedure TGocciaPromiseValue.Resolve(const AValue: TGocciaValue);
 var
   Task: TGocciaMicrotask;
   Queue: TGocciaMicrotaskQueue;
+  ThenMethod: TGocciaValue;
+  ThenArgs: TGocciaArgumentsCollection;
+  RejectArgs: TGocciaArgumentsCollection;
+  ResolveFn: TGocciaNativeFunctionValue;
+  RejectFn: TGocciaNativeFunctionValue;
+  GC: TGarbageCollector;
 begin
   if FState <> gpsPending then Exit;
 
@@ -303,6 +313,83 @@ begin
       Queue.Enqueue(Task);
     end;
     Exit;
+  end;
+
+  if AValue is TGocciaObjectValue then
+  begin
+    try
+      // ES2026 §27.2.1.3.2 step 9: Let then be Get(resolution, "then").
+      ThenMethod := TGocciaObjectValue(AValue).GetProperty(PROP_THEN);
+    except
+      on E: EGocciaBytecodeThrow do
+      begin
+        Reject(E.ThrownValue);
+        Exit;
+      end;
+      on E: TGocciaThrowValue do
+      begin
+        Reject(E.Value);
+        Exit;
+      end;
+    end;
+
+    // ES2026 §27.2.1.3.2 steps 11-15: If then is callable, resolve via the thenable.
+    if Assigned(ThenMethod) and ThenMethod.IsCallable then
+    begin
+      ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(DoResolve, 'resolve', 1);
+      RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(DoReject, 'reject', 1);
+      ThenArgs := TGocciaArgumentsCollection.Create([ResolveFn, RejectFn]);
+      GC := TGarbageCollector.Instance;
+      try
+        if Assigned(GC) then
+        begin
+          GC.AddTempRoot(AValue);
+          GC.AddTempRoot(ThenMethod);
+          GC.AddTempRoot(ResolveFn);
+          GC.AddTempRoot(RejectFn);
+        end;
+        try
+          try
+            if ThenMethod is TGocciaFunctionBase then
+              TGocciaFunctionBase(ThenMethod).Call(ThenArgs, AValue)
+            else if ThenMethod is TGocciaClassValue then
+              TGocciaClassValue(ThenMethod).Call(ThenArgs, AValue)
+            else
+              Goccia.Values.ErrorHelper.ThrowTypeError('then is not a function');
+          except
+            on E: EGocciaBytecodeThrow do
+            begin
+              RejectArgs := TGocciaArgumentsCollection.Create([E.ThrownValue]);
+              try
+                DoReject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              finally
+                RejectArgs.Free;
+              end;
+            end;
+            on E: TGocciaThrowValue do
+            begin
+              RejectArgs := TGocciaArgumentsCollection.Create([E.Value]);
+              try
+                DoReject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              finally
+                RejectArgs.Free;
+              end;
+            end;
+          end;
+        finally
+          if Assigned(GC) then
+          begin
+            GC.RemoveTempRoot(RejectFn);
+            GC.RemoveTempRoot(ResolveFn);
+            GC.RemoveTempRoot(ThenMethod);
+            GC.RemoveTempRoot(AValue);
+          end;
+        end;
+      finally
+        ThenArgs.Free;
+      end;
+      Exit;
+    end;
   end;
 
   FState := gpsFulfilled;

@@ -33,4 +33,21 @@ describe("for...of destructuring", () => {
     }
     expect(results).toEqual([6, 15]);
   });
+
+  test("Map destructuring in for...of", () => {
+    const map = new Map();
+    map.set("x", 10);
+    map.set("y", 20);
+
+    const keys = [];
+    const values = [];
+
+    for (const [key, value] of map) {
+      keys.push(key);
+      values.push(value);
+    }
+
+    expect(keys).toEqual(["x", "y"]);
+    expect(values).toEqual([10, 20]);
+  });
 });

@@ -6,4 +6,5 @@ features: [bitwise-leftshift]
 test("bitwise left shift operator", () => {
   expect(5 << 3).toBe(40);
   expect(5 << 2).toBe(20);
+  expect(1 << 3).toBe(8);
 });

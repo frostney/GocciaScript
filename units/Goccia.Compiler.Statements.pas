@@ -1959,12 +1959,26 @@ begin
   end;
 
   for GetterPair in ClassDef.StaticGetters do
-    CompileGetterBody(ACtx, ClassReg, GetterPair.Key,
-      GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC);
+  begin
+    if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
+      CompileGetterBody(ACtx, ClassReg,
+        '#' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
+        GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC)
+    else
+      CompileGetterBody(ACtx, ClassReg, GetterPair.Key,
+        GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC);
+  end;
 
   for SetterPair in ClassDef.StaticSetters do
-    CompileSetterBody(ACtx, ClassReg, SetterPair.Key,
-      SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER);
+  begin
+    if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
+      CompileSetterBody(ACtx, ClassReg,
+        '#' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
+        SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER)
+    else
+      CompileSetterBody(ACtx, ClassReg, SetterPair.Key,
+        SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER);
+  end;
 
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
@@ -2103,12 +2117,26 @@ begin
   end;
 
   for GetterPair in ClassDef.StaticGetters do
-    CompileGetterBody(ACtx, ADest, GetterPair.Key,
-      GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC);
+  begin
+    if (GetterPair.Key <> '') and (GetterPair.Key[1] = '#') then
+      CompileGetterBody(ACtx, ADest,
+        '#' + PrivPrefix + Copy(GetterPair.Key, 2, MaxInt),
+        GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC)
+    else
+      CompileGetterBody(ACtx, ADest, GetterPair.Key,
+        GetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC);
+  end;
 
   for SetterPair in ClassDef.StaticSetters do
-    CompileSetterBody(ACtx, ADest, SetterPair.Key,
-      SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER);
+  begin
+    if (SetterPair.Key <> '') and (SetterPair.Key[1] = '#') then
+      CompileSetterBody(ACtx, ADest,
+        '#' + PrivPrefix + Copy(SetterPair.Key, 2, MaxInt),
+        SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER)
+    else
+      CompileSetterBody(ACtx, ADest, SetterPair.Key,
+        SetterPair.Value, OP_DEFINE_ACCESSOR_CONST, ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER);
+  end;
 
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or

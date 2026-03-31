@@ -20,6 +20,7 @@ uses
   Goccia.Bytecode.Module,
   Goccia.Compiler,
   Goccia.Compiler.Scope,
+  Goccia.Error,
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.TestSetup,
@@ -38,6 +39,7 @@ type
     procedure TestBinaryRoundTrip;
     procedure TestBinaryLittleEndian;
     procedure TestBinaryRoundTripConstants;
+    procedure TestUndeclaredPrivateNameRaisesSyntaxError;
   public
     procedure SetupTests; override;
   end;
@@ -51,6 +53,7 @@ begin
   Test('Binary round-trip', TestBinaryRoundTrip);
   Test('Binary little-endian format', TestBinaryLittleEndian);
   Test('Binary round-trip constants', TestBinaryRoundTripConstants);
+  Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
 end;
 
 function TTestCompiler.CompileSource(
@@ -247,6 +250,34 @@ begin
     Original.Free;
     DeleteFile(TempFile);
   end;
+end;
+
+procedure TTestCompiler.TestUndeclaredPrivateNameRaisesSyntaxError;
+var
+  Raised: Boolean;
+  ContainsMessage: Boolean;
+begin
+  Raised := False;
+  ContainsMessage := False;
+  try
+    CompileSource(
+      'class Box {' +
+      '  getValue() {' +
+      '    return this.#missing;' +
+      '  }' +
+      '}' +
+      'new Box();'
+    ).Free;
+  except
+    on E: TGocciaSyntaxError do
+    begin
+      Raised := True;
+      ContainsMessage := Pos('must be declared in an enclosing class', E.Message) > 0;
+    end;
+  end;
+
+  Expect<Boolean>(Raised).ToBe(True);
+  Expect<Boolean>(ContainsMessage).ToBe(True);
 end;
 
 begin

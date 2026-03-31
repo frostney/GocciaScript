@@ -13,6 +13,7 @@ const
   CONSTRUCTOR_SYMBOL   = 'Symbol';
   CONSTRUCTOR_SET      = 'Set';
   CONSTRUCTOR_MAP      = 'Map';
+  CONSTRUCTOR_PERFORMANCE  = 'Performance';
   CONSTRUCTOR_PROMISE      = 'Promise';
   CONSTRUCTOR_ITERATOR     = 'Iterator';
   CONSTRUCTOR_ARRAY_BUFFER        = 'ArrayBuffer';

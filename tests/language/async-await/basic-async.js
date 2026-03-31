@@ -41,4 +41,17 @@ describe("async functions", () => {
       expect(v).toBe(99);
     });
   });
+
+  test("async function returning a rejected Promise propagates rejection", async () => {
+    const fn = async () => Promise.reject("async rejection");
+
+    try {
+      await fn();
+    } catch (e) {
+      expect(e).toBe("async rejection");
+      return;
+    }
+
+    expect(true).toBe(false);
+  });
 });

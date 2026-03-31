@@ -71,3 +71,85 @@ test("switch with different types", () => {
   expect(checkType(true)).toBe("logical");
   expect(checkType(null)).toBe("other type");
 });
+
+test("switch uses strict equality", () => {
+  let result;
+  switch (1) {
+    case "1":
+      result = "string match";
+      break;
+    case 1:
+      result = "number match";
+      break;
+    default:
+      result = "no match";
+  }
+  expect(result).toBe("number match");
+});
+
+test("switch with expression discriminants and middle default fall-through", () => {
+  let result = "";
+  switch (1 + 4) {
+    case 1:
+      result += "one";
+      break;
+    case 5:
+      result += "five";
+    default:
+      result += " default";
+    case 8:
+      result += " eight";
+  }
+  expect(result).toBe("five default eight");
+});
+
+test("switch with block scoping in cases", () => {
+  let result;
+  switch (2) {
+    case 1: {
+      const msg = "one";
+      result = msg;
+      break;
+    }
+    case 2: {
+      const msg = "two";
+      result = msg;
+      break;
+    }
+    case 3: {
+      const msg = "three";
+      result = msg;
+      break;
+    }
+  }
+  expect(result).toBe("two");
+});
+
+test("switch with null and boolean discriminants", () => {
+  let nullResult;
+  switch (null) {
+    case undefined:
+      nullResult = "undefined";
+      break;
+    case null:
+      nullResult = "null";
+      break;
+    default:
+      nullResult = "default";
+  }
+
+  let boolResult;
+  switch (true) {
+    case false:
+      boolResult = "false";
+      break;
+    case true:
+      boolResult = "true";
+      break;
+    default:
+      boolResult = "default";
+  }
+
+  expect(nullResult).toBe("null");
+  expect(boolResult).toBe("true");
+});

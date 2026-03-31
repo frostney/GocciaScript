@@ -4,14 +4,17 @@ features: [performance]
 ---*/
 
 describe("performance.timeOrigin", () => {
-  test("is a readonly accessor", () => {
-    const desc = Object.getOwnPropertyDescriptor(performance, "timeOrigin");
+  test("is inherited from the Performance prototype", () => {
+    const proto = Object.getPrototypeOf(performance);
+    const ownDesc = Object.getOwnPropertyDescriptor(performance, "timeOrigin");
+    const protoDesc = Object.getOwnPropertyDescriptor(proto, "timeOrigin");
 
-    expect(desc).toBeDefined();
-    expect(typeof desc.get).toBe("function");
-    expect(desc.set).toBe(undefined);
-    expect(desc.enumerable).toBe(false);
-    expect(desc.configurable).toBe(true);
+    expect(ownDesc).toBeUndefined();
+    expect(protoDesc).toBeDefined();
+    expect(typeof protoDesc.get).toBe("function");
+    expect(protoDesc.set).toBe(undefined);
+    expect(protoDesc.enumerable).toBe(true);
+    expect(protoDesc.configurable).toBe(true);
   });
 
   test("returns a positive number", () => {
@@ -27,6 +30,13 @@ describe("performance.timeOrigin", () => {
 
     expect(firstOrigin).toBe(secondOrigin);
     expect(firstOrigin + secondNow >= firstOrigin + firstNow).toBe(true);
+  });
+
+  test("getter throws on incompatible receivers", () => {
+    const proto = Object.getPrototypeOf(performance);
+    const getter = Object.getOwnPropertyDescriptor(proto, "timeOrigin").get;
+
+    expect(() => getter.call({})).toThrow(TypeError);
   });
 
 });

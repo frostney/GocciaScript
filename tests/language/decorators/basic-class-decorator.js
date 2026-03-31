@@ -56,4 +56,26 @@ describe("class decorators", () => {
     expect(calls[0]).toBe("second");
     expect(calls[1]).toBe("first");
   });
+
+  test("class decorator can wrap with subclass constructor calling super()", () => {
+    const wrap = (cls, context) => {
+      return class extends cls {
+        constructor(...args) {
+          super(...args);
+          this.wrapped = true;
+        }
+      };
+    };
+
+    @wrap
+    class C {
+      constructor() {
+        this.x = 1;
+      }
+    }
+
+    const c = new C();
+    expect(c.x).toBe(1);
+    expect(c.wrapped).toBe(true);
+  });
 });

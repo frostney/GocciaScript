@@ -504,20 +504,28 @@ expect([...set.values()]).toEqual([1, 2, 3]);
 
 5. **Edge cases are co-located** — Edge cases (NaN, Infinity, negative indices, empty collections, clamping, boundary conditions, type coercion) belong **in the same file** as the happy-path tests for that method. Do not create separate `edge-cases.js` files — they become disconnected from the feature they validate and make it unclear which method they test.
 
-6. **Readable as specification** — Test names should describe the expected behavior. A passing test suite serves as living documentation of what GocciaScript supports.
+6. **One scenario per test** — Keep each `test(...)` focused on a single behavior branch or input class. If `undefined`, `null`, and missing input go through different validation paths, they should be three tests, not one combined test. Combining many assertions into one block makes failures harder to localize and silently reduces test-count granularity during refactors.
 
-7. **Always pass an error constructor to `.toThrow()`** — When testing that code throws, pass the expected error constructor (`TypeError`, `RangeError`, `SyntaxError`, `Error`, etc.) to `.toThrow()` rather than calling it bare. This ensures the test verifies the correct error type, not just that *something* throws.
+7. **Readable as specification** — Test names should describe the expected behavior. A passing test suite serves as living documentation of what GocciaScript supports.
+
+8. **Always pass an error constructor to `.toThrow()`** — When testing that code throws, pass the expected error constructor (`TypeError`, `RangeError`, `SyntaxError`, `Error`, etc.) to `.toThrow()` rather than calling it bare. This ensures the test verifies the correct error type, not just that *something* throws. For async code, prefer `await expect(promise).rejects.toThrow(TypeError)` over manually checking `err.name`.
 
 ```javascript
 // Preferred — verifies the error type
 expect(() => null.foo).toThrow(TypeError);
 expect(() => new Array(-1)).toThrow(RangeError);
+await expect(Promise.reject(new TypeError("boom"))).rejects.toThrow(TypeError);
 
 // Acceptable for cases where the error type is implementation-defined
 expect(() => riskyOp()).toThrow();
 
 // Avoid — doesn't verify the error type
 expect(() => null.foo).toThrow();  // passes even if the wrong error is thrown
+
+// Avoid — bypasses the matcher and only inspects a stringly-typed property
+promise.catch((err) => {
+  expect(err.name).toBe("TypeError");
+});
 ```
 
 ## How the TestRunner Works

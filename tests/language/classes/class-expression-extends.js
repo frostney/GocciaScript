@@ -77,23 +77,4 @@ describe("class expression extends dynamic value", () => {
     expect(g.name).toBe("Alice");
     expect(g.greet()).toBe("Hello, Alice");
   });
-
-  test("class decorator wrapping with constructor and super()", () => {
-    const wrap = (cls, context) => {
-      return class extends cls {
-        constructor(...args) {
-          super(...args);
-          this.wrapped = true;
-        }
-      };
-    };
-
-    @wrap
-    class C {
-      constructor() { this.x = 1; }
-    }
-    const c = new C();
-    expect(c.x).toBe(1);
-    expect(c.wrapped).toBe(true);
-  });
 });

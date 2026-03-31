@@ -96,4 +96,14 @@ describe("Iterator.from()", () => {
   test("throws TypeError for undefined", () => {
     expect(() => Iterator.from(undefined)).toThrow(TypeError);
   });
+
+  test("wrapped iterators can participate in helper chains", () => {
+    const set = new Set([1, 2, 3, 4, 5]);
+    const result = Iterator.from(set)
+      .filter((x) => x > 2)
+      .map((x) => x * 10)
+      .toArray();
+
+    expect(result).toEqual([30, 40, 50]);
+  });
 });
