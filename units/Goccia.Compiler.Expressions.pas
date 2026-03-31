@@ -1803,12 +1803,12 @@ procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt8);
 var
   LocalIdx, UpvalIdx: Integer;
-  Slot, RegVal, RegResult: UInt8;
-  MsgIdx: UInt16;
+  Slot, RegVal, RegResult, CondReg, ArgReg: UInt8;
+  MsgIdx, NameIdx: UInt16;
   Op, FloatOp: TGocciaOpCode;
   LocalType, ValType: TGocciaLocalType;
   ArithOp: TGocciaTokenType;
-  JumpIdx: Integer;
+  JumpIdx, OkJump: Integer;
 begin
   // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
   if AExpr.Operator = gttNullishCoalescingAssign then
@@ -1894,12 +1894,25 @@ begin
       Exit;
     end;
 
-    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest,
-      ACtx.Template.AddConstantString(AExpr.Name)));
+    NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
+    CondReg := ACtx.Scope.AllocateRegister;
+    ArgReg := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABx(OP_HAS_GLOBAL, CondReg, NameIdx));
+    OkJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CondReg);
+    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, CondReg,
+      ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ArgReg,
+      ACtx.Template.AddConstantString(AExpr.Name + ' is not defined')));
+    EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, CondReg, CondReg, 1));
+    EmitInstruction(ACtx, EncodeABC(OP_THROW, CondReg, 0, 0));
+    PatchJumpTarget(ACtx, OkJump);
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+
+    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
     JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, ADest);
     ACtx.CompileExpression(AExpr.Value, ADest);
-    EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest,
-      ACtx.Template.AddConstantString(AExpr.Name)));
+    EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, ADest, NameIdx));
     PatchJumpTarget(ACtx, JumpIdx);
     Exit;
   end;

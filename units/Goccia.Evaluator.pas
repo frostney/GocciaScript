@@ -2434,8 +2434,16 @@ begin
     // Determine the access class from the owning class of the current method
     AccessClass := ResolveOwningClass(Instance, AContext);
 
-    // Get the current value of the private property
-    CurrentValue := Instance.GetPrivateProperty(APrivatePropertyCompoundAssignmentExpression.PrivateName, AccessClass);
+    // Use the accessor-visible read path so private getters participate in ??=
+    if AccessClass.HasPrivateGetter(APrivatePropertyCompoundAssignmentExpression.PrivateName) then
+      CurrentValue := EvaluatePrivateMemberOnInstance(
+        Instance,
+        APrivatePropertyCompoundAssignmentExpression.PrivateName,
+        AContext)
+    else
+      CurrentValue := Instance.GetPrivateProperty(
+        APrivatePropertyCompoundAssignmentExpression.PrivateName,
+        AccessClass);
   end
   else if ObjectValue is TGocciaClassValue then
   begin

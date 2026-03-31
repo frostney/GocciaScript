@@ -86,3 +86,43 @@ test("nullish coalescing assignment only throws for const bindings when an assig
     missing ??= 2;
   }).toThrow(TypeError);
 });
+
+test("nullish coalescing assignment throws for unresolved identifiers", () => {
+  expect(() => {
+    missingValue ??= 1;
+  }).toThrow(ReferenceError);
+});
+
+test("nullish coalescing assignment uses private accessors for the nullish check", () => {
+  class AccessorBox {
+    #storage = 10;
+
+    get #value() {
+      if (this.#storage === 10) {
+        return null;
+      }
+      return this.#storage;
+    }
+
+    set #value(value) {
+      this.#storage = value;
+    }
+
+    initialize(value) {
+      return this.#value ??= value;
+    }
+
+    read() {
+      return this.#storage;
+    }
+  }
+
+  const first = new AccessorBox();
+  expect(first.initialize(6)).toBe(6);
+  expect(first.read()).toBe(6);
+
+  const second = new AccessorBox();
+  second.initialize(4);
+  expect(second.initialize(9)).toBe(4);
+  expect(second.read()).toBe(4);
+});
