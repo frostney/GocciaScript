@@ -5,6 +5,8 @@ unit Goccia.Builtins.JSON;
 interface
 
 uses
+  Generics.Collections,
+
   Goccia.Arguments.Collection,
   Goccia.Arguments.Validator,
   Goccia.Builtins.Base,
@@ -13,6 +15,7 @@ uses
   Goccia.ObjectModel,
   Goccia.Scope,
   Goccia.Values.ArrayValue,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
@@ -21,9 +24,11 @@ type
     class var FStaticMembers: array of TGocciaMemberDefinition;
     FParser: TGocciaJSONParser;
     FStringifier: TGocciaJSONStringifier;
+    FReplacerTraversalStack: TList<TGocciaObjectValue>;
 
     function ApplyReviver(const AHolder: TGocciaValue; const AKey: string; const AReviver: TGocciaValue): TGocciaValue;
     function ApplyReplacer(const AHolder: TGocciaValue; const AKey: string; const AValue: TGocciaValue; const AReplacer: TGocciaValue): TGocciaValue;
+    function ApplyToJSON(const AValue: TGocciaValue; const AKey: string): TGocciaValue;
     function ResolveGap(const ASpaceArg: TGocciaValue): string;
     function TransformWithReplacer(const AHolder: TGocciaValue; const AKey: string; const AValue: TGocciaValue; const AReplacer: TGocciaValue): TGocciaValue;
     function StringifyWithReplacer(const AValue: TGocciaValue; const AReplacer: TGocciaValue; const AGap: string): string;
@@ -42,10 +47,11 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Constants.PropertyNames,
   Goccia.Utils,
+  Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
 constructor TGocciaJSONBuiltin.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -56,6 +62,7 @@ begin
 
   FParser := TGocciaJSONParser.Create;
   FStringifier := TGocciaJSONStringifier.Create;
+  FReplacerTraversalStack := TList<TGocciaObjectValue>.Create;
 
   Members := TGocciaMemberCollection.Create;
   try
@@ -78,6 +85,7 @@ destructor TGocciaJSONBuiltin.Destroy;
 begin
   FParser.Free;
   FStringifier.Free;
+  FReplacerTraversalStack.Free;
   inherited;
 end;
 
@@ -202,6 +210,29 @@ begin
   // Step 9: Else let gap be the empty string (already default).
 end;
 
+// ES2026 §25.5.2.2 SerializeJSONProperty ( state, key, holder ) step 1: toJSON hook.
+function TGocciaJSONBuiltin.ApplyToJSON(const AValue: TGocciaValue; const AKey: string): TGocciaValue;
+var
+  ToJSONMethod: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+begin
+  Result := AValue;
+  if not (AValue is TGocciaObjectValue) then
+    Exit;
+
+  ToJSONMethod := TGocciaObjectValue(AValue).GetProperty(PROP_TO_JSON);
+  if not Assigned(ToJSONMethod) or not ToJSONMethod.IsCallable then
+    Exit;
+
+  Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
+  try
+    Args.Add(TGocciaStringLiteralValue.Create(AKey));
+    Result := InvokeCallable(ToJSONMethod, Args, AValue);
+  finally
+    Args.Free;
+  end;
+end;
+
 // §25.5.2.1 SerializeJSONProperty — Step 2: Call replacer function.
 // Invokes the replacer with (key, value) bound to the holder object.
 function TGocciaJSONBuiltin.ApplyReplacer(const AHolder: TGocciaValue; const AKey: string; const AValue: TGocciaValue; const AReplacer: TGocciaValue): TGocciaValue;
@@ -227,45 +258,64 @@ var
   Key: string;
   I: Integer;
 begin
-  // Step 1: Call the replacer to get the transformed value.
-  Replaced := ApplyReplacer(AHolder, AKey, AValue, AReplacer);
+  // Step 1: Apply a toJSON hook before the replacer sees the value.
+  Replaced := ApplyToJSON(AValue, AKey);
 
-  // Step 2: If replacer returned undefined, signal omission.
+  // Step 2: Call the replacer to get the transformed value.
+  Replaced := ApplyReplacer(AHolder, AKey, Replaced, AReplacer);
+
+  // Step 3: If replacer returned undefined, signal omission.
   if Replaced is TGocciaUndefinedLiteralValue then
   begin
     Result := Replaced;
     Exit;
   end;
 
-  // Step 3: If result is an Array, recursively serialize each element (SerializeJSONArray).
+  // Step 4: If result is an Array, recursively serialize each element (SerializeJSONArray).
   if Replaced is TGocciaArrayValue then
   begin
+    if FReplacerTraversalStack.IndexOf(TGocciaArrayValue(Replaced)) <> -1 then
+      ThrowTypeError('Converting circular structure to JSON');
+
+    FReplacerTraversalStack.Add(TGocciaArrayValue(Replaced));
     Arr := TGocciaArrayValue(Replaced);
     NewArr := TGocciaArrayValue.Create;
-    for I := 0 to Arr.Elements.Count - 1 do
-    begin
-      PropValue := Arr.Elements[I];
-      TransformedProp := TransformWithReplacer(Arr, IntToStr(I), PropValue, AReplacer);
-      NewArr.Elements.Add(TransformedProp);
+    try
+      for I := 0 to Arr.Elements.Count - 1 do
+      begin
+        PropValue := Arr.Elements[I];
+        TransformedProp := TransformWithReplacer(Arr, IntToStr(I), PropValue, AReplacer);
+        NewArr.Elements.Add(TransformedProp);
+      end;
+    finally
+      FReplacerTraversalStack.Delete(FReplacerTraversalStack.Count - 1);
     end;
     Result := NewArr;
   end
-  // Step 4: If result is an Object, recursively serialize each property (SerializeJSONObject).
+  // Step 5: If result is an Object, recursively serialize each property (SerializeJSONObject).
   else if (Replaced is TGocciaObjectValue) and not (Replaced is TGocciaArrayValue) then
   begin
+    if FReplacerTraversalStack.IndexOf(TGocciaObjectValue(Replaced)) <> -1 then
+      ThrowTypeError('Converting circular structure to JSON');
+
+    FReplacerTraversalStack.Add(TGocciaObjectValue(Replaced));
     Obj := TGocciaObjectValue(Replaced);
     NewObj := TGocciaObjectValue.Create;
-    for Key in Obj.GetEnumerablePropertyNames do
-    begin
-      PropValue := Obj.GetProperty(Key);
-      TransformedProp := TransformWithReplacer(Obj, Key, PropValue, AReplacer);
-      // Omit properties whose replacer result is undefined.
-      if not (TransformedProp is TGocciaUndefinedLiteralValue) then
-        NewObj.AssignProperty(Key, TransformedProp);
+    try
+      for Key in Obj.GetEnumerablePropertyNames do
+      begin
+        PropValue := Obj.GetProperty(Key);
+        TransformedProp := TransformWithReplacer(Obj, Key, PropValue, AReplacer);
+        // Omit properties whose replacer result is undefined.
+        if not (TransformedProp is TGocciaUndefinedLiteralValue) then
+          NewObj.AssignProperty(Key, TransformedProp);
+      end;
+    finally
+      FReplacerTraversalStack.Delete(FReplacerTraversalStack.Count - 1);
     end;
     Result := NewObj;
   end
-  // Step 5: Primitive values pass through directly.
+  // Step 6: Primitive values pass through directly.
   else
     Result := Replaced;
 end;
@@ -282,6 +332,7 @@ begin
   // Step 11: Perform ! CreateDataPropertyOrThrow(wrapper, "", value).
   Root.AssignProperty('', AValue);
   // Step 12: Return ? SerializeJSONProperty(state, "", wrapper).
+  FReplacerTraversalStack.Clear;
   Transformed := TransformWithReplacer(Root, '', AValue, AReplacer);
 
   if Transformed is TGocciaUndefinedLiteralValue then
@@ -374,6 +425,8 @@ begin
     // Step 10-12: Create wrapper, set wrapper[""] = value, return SerializeJSONProperty(state, "", wrapper).
     Result := TGocciaStringLiteralValue.Create(FStringifier.Stringify(Value, Gap));
   except
+    on E: TGocciaThrowValue do
+      raise;
     on E: Exception do
       ThrowError('JSON.stringify error: ' + E.Message, 0, 0);
   end;

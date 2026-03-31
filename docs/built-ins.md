@@ -139,7 +139,10 @@ All methods handle `NaN` and `Infinity` edge cases correctly.
 The JSON parser is a recursive descent implementation. Special handling:
 - `NaN` → `null` in stringify
 - `undefined` → omitted in objects, `null` in arrays
-- Functions → omitted
+- Functions → omitted in objects, `null` in arrays
+- Symbols → omitted in objects, `null` in arrays
+- `toJSON()` is called before serializing object values
+- Circular references throw `TypeError`
 
 ### Object (`Goccia.Builtins.GlobalObject.pas`)
 
