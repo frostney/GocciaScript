@@ -2268,14 +2268,26 @@ procedure TGocciaVM.DefineStaticGetterProperty(const ATarget: TGocciaValue;
   const AName: string; const AGetter: TGocciaValue);
 begin
   if ATarget is TGocciaClassValue then
-    TGocciaClassValue(ATarget).AddStaticGetter(AName, TGocciaFunctionBase(AGetter));
+  begin
+    if (AName <> '') and (AName[1] = '#') then
+      TGocciaClassValue(ATarget).AddPrivateGetter(
+        Copy(AName, 2, MaxInt), TGocciaFunctionBase(AGetter))
+    else
+      TGocciaClassValue(ATarget).AddStaticGetter(AName, TGocciaFunctionBase(AGetter));
+  end;
 end;
 
 procedure TGocciaVM.DefineStaticSetterProperty(const ATarget: TGocciaValue;
   const AName: string; const ASetter: TGocciaValue);
 begin
   if ATarget is TGocciaClassValue then
-    TGocciaClassValue(ATarget).AddStaticSetter(AName, TGocciaFunctionBase(ASetter));
+  begin
+    if (AName <> '') and (AName[1] = '#') then
+      TGocciaClassValue(ATarget).AddPrivateSetter(
+        Copy(AName, 2, MaxInt), TGocciaFunctionBase(ASetter))
+    else
+      TGocciaClassValue(ATarget).AddStaticSetter(AName, TGocciaFunctionBase(ASetter));
+  end;
 end;
 
 procedure TGocciaVM.DefineGetterPropertyByKey(const ATarget, AKey,
@@ -3019,6 +3031,8 @@ var
   Boxed: TGocciaObjectValue;
   Current: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
+  PrivateName: string;
+  EmptyArgs: TGocciaArgumentsCollection;
 begin
   if AObject is TGocciaNullLiteralValue then
     ThrowTypeError('Cannot read properties of null (reading ''' + AKey + ''')');
@@ -3027,6 +3041,23 @@ begin
 
   if (AKey <> '') and (AKey[1] = '#') then
   begin
+    PrivateName := Copy(AKey, 2, MaxInt);
+    if AObject is TGocciaClassValue then
+    begin
+      if TGocciaClassValue(AObject).HasPrivateGetter(PrivateName) then
+      begin
+        EmptyArgs := TGocciaArgumentsCollection.Create;
+        try
+          Exit(TGocciaClassValue(AObject).PrivatePropertyGetter[PrivateName].Call(
+            EmptyArgs, AObject));
+        finally
+          EmptyArgs.Free;
+        end;
+      end;
+      if TGocciaClassValue(AObject).HasPrivateSetter(PrivateName) then
+        ThrowTypeError('Private accessor ' + AKey + ' was defined without a getter');
+    end;
+
     if AObject is TGocciaObjectValue then
     begin
       Current := TGocciaObjectValue(AObject);
@@ -3065,6 +3096,8 @@ procedure TGocciaVM.SetPropertyValue(const AObject: TGocciaValue;
 var
   Current: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
+  SetterArgs: TGocciaArgumentsCollection;
+  PrivateName: string;
 begin
   if AObject is TGocciaNullLiteralValue then
     ThrowTypeError('Cannot set properties of null (setting ''' + AKey + ''')');
@@ -3072,6 +3105,24 @@ begin
     ThrowTypeError('Cannot set properties of undefined (setting ''' + AKey + ''')');
   if (AKey <> '') and (AKey[1] = '#') then
   begin
+    PrivateName := Copy(AKey, 2, MaxInt);
+    if AObject is TGocciaClassValue then
+    begin
+      if TGocciaClassValue(AObject).HasPrivateSetter(PrivateName) then
+      begin
+        SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
+        try
+          TGocciaClassValue(AObject).PrivatePropertySetter[PrivateName].Call(
+            SetterArgs, AObject);
+        finally
+          SetterArgs.Free;
+        end;
+        Exit;
+      end;
+      if TGocciaClassValue(AObject).HasPrivateGetter(PrivateName) then
+        ThrowTypeError('Private accessor ' + AKey + ' was defined without a setter');
+    end;
+
     if AObject is TGocciaObjectValue then
     begin
       Current := TGocciaObjectValue(AObject);

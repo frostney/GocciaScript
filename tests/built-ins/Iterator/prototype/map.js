@@ -49,6 +49,21 @@ describe("Iterator.prototype.map()", () => {
     expect(closed).toBe(1);
   });
 
+  test("map preserves the original callback error when return() also throws", () => {
+    const source = Iterator.from({
+      next() {
+        return { value: 1, done: false };
+      },
+      return() {
+        throw new Error("cleanup");
+      },
+    });
+
+    expect(() => source.map(() => {
+      throw new RangeError("boom");
+    }).next()).toThrow(RangeError);
+  });
+
   test("map does not consume the source until next() is called", () => {
     const source = [1, 2, 3, 4, 5].values();
     const mapped = source.map((x) => x * 10);

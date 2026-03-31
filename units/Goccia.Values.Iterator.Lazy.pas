@@ -91,6 +91,17 @@ uses
   Goccia.Values.Iterator.Generic,
   Goccia.Values.SymbolValue;
 
+procedure CloseIteratorPreservingOriginalError(const AIterator: TGocciaIteratorValue);
+begin
+  if not Assigned(AIterator) then
+    Exit;
+  try
+    AIterator.Close;
+  except
+    // Preserve the original abrupt-completion error when cleanup also throws.
+  end;
+end;
+
 { TGocciaLazyMapIteratorValue }
 
 constructor TGocciaLazyMapIteratorValue.Create(const ASourceIterator: TGocciaIteratorValue; const ACallback: TGocciaValue);
@@ -123,7 +134,7 @@ begin
   try
     MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
   except
-    FSourceIterator.Close;
+    CloseIteratorPreservingOriginalError(FSourceIterator);
     raise;
   end;
   Inc(FIndex);
@@ -151,7 +162,7 @@ begin
   try
     Result := InvokeIteratorCallback(FCallback, Value, FIndex);
   except
-    FSourceIterator.Close;
+    CloseIteratorPreservingOriginalError(FSourceIterator);
     raise;
   end;
   Inc(FIndex);
@@ -212,7 +223,7 @@ begin
         Exit;
       end;
     except
-      FSourceIterator.Close;
+      CloseIteratorPreservingOriginalError(FSourceIterator);
       raise;
     end;
     Inc(FIndex);
@@ -246,7 +257,7 @@ begin
         Exit;
       end;
     except
-      FSourceIterator.Close;
+      CloseIteratorPreservingOriginalError(FSourceIterator);
       raise;
     end;
     Inc(FIndex);
@@ -530,9 +541,9 @@ begin
     try
       MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
     except
-      FSourceIterator.Close;
+      CloseIteratorPreservingOriginalError(FSourceIterator);
       if Assigned(FInnerIterator) then
-        FInnerIterator.Close;
+        CloseIteratorPreservingOriginalError(FInnerIterator);
       raise;
     end;
     Inc(FIndex);
@@ -590,9 +601,9 @@ begin
     try
       MappedValue := InvokeIteratorCallback(FCallback, Value, FIndex);
     except
-      FSourceIterator.Close;
+      CloseIteratorPreservingOriginalError(FSourceIterator);
       if Assigned(FInnerIterator) then
-        FInnerIterator.Close;
+        CloseIteratorPreservingOriginalError(FInnerIterator);
       raise;
     end;
     Inc(FIndex);

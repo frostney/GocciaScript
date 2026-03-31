@@ -167,6 +167,7 @@ describe("for-await-of", () => {
       for await (const value of rejectingIterable) {
         result.push(value);
       }
+      throw new Error("expected rejection");
     } catch (e) {
       expect(e).toBe("iteration error");
       expect(result).toEqual([1]);

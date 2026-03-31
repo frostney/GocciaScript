@@ -36,5 +36,6 @@ describe("Array.prototype.unshift", () => {
   test("with no arguments returns the current length", () => {
     const arr = [1, 2, 3];
     expect(arr.unshift()).toBe(3);
+    expect(arr).toEqual([1, 2, 3]);
   });
 });

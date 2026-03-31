@@ -26,6 +26,7 @@ implementation
 uses
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
 
 { TGocciaGenericIteratorValue }
@@ -149,6 +150,7 @@ procedure TGocciaGenericIteratorValue.Close;
 var
   ReturnMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  ReturnResult: TGocciaValue;
 begin
   if FDone then Exit;
 
@@ -159,7 +161,9 @@ begin
 
   CallArgs := TGocciaArgumentsCollection.Create;
   try
-    TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FSource);
+    ReturnResult := TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FSource);
+    if not (ReturnResult is TGocciaObjectValue) then
+      ThrowTypeError('Iterator return() must return an object');
   finally
     CallArgs.Free;
   end;

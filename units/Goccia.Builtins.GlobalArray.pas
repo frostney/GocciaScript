@@ -393,7 +393,9 @@ var
     CloseArgs := TGocciaArgumentsCollection.Create;
     try
       CloseResult := TGocciaFunctionBase(ReturnMethod).Call(CloseArgs, AIterator);
-      AwaitValue(CloseResult);
+      CloseResult := AwaitValue(CloseResult);
+      if not (CloseResult is TGocciaObjectValue) then
+        ThrowTypeError('Iterator return() must return an object');
     finally
       CloseArgs.Free;
     end;

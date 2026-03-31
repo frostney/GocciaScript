@@ -288,6 +288,7 @@ var
   RejectArgs: TGocciaArgumentsCollection;
   ResolveFn: TGocciaNativeFunctionValue;
   RejectFn: TGocciaNativeFunctionValue;
+  GC: TGarbageCollector;
 begin
   if FState <> gpsPending then Exit;
 
@@ -338,32 +339,50 @@ begin
       ResolveFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(DoResolve, 'resolve', 1);
       RejectFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(DoReject, 'reject', 1);
       ThenArgs := TGocciaArgumentsCollection.Create([ResolveFn, RejectFn]);
+      GC := TGarbageCollector.Instance;
       try
+        if Assigned(GC) then
+        begin
+          GC.AddTempRoot(AValue);
+          GC.AddTempRoot(ThenMethod);
+          GC.AddTempRoot(ResolveFn);
+          GC.AddTempRoot(RejectFn);
+        end;
         try
-          if ThenMethod is TGocciaFunctionBase then
-            TGocciaFunctionBase(ThenMethod).Call(ThenArgs, AValue)
-          else if ThenMethod is TGocciaClassValue then
-            TGocciaClassValue(ThenMethod).Call(ThenArgs, AValue)
-          else
-            Goccia.Values.ErrorHelper.ThrowTypeError('then is not a function');
-        except
-          on E: EGocciaBytecodeThrow do
-          begin
-            RejectArgs := TGocciaArgumentsCollection.Create([E.ThrownValue]);
-            try
-              DoReject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-            finally
-              RejectArgs.Free;
+          try
+            if ThenMethod is TGocciaFunctionBase then
+              TGocciaFunctionBase(ThenMethod).Call(ThenArgs, AValue)
+            else if ThenMethod is TGocciaClassValue then
+              TGocciaClassValue(ThenMethod).Call(ThenArgs, AValue)
+            else
+              Goccia.Values.ErrorHelper.ThrowTypeError('then is not a function');
+          except
+            on E: EGocciaBytecodeThrow do
+            begin
+              RejectArgs := TGocciaArgumentsCollection.Create([E.ThrownValue]);
+              try
+                DoReject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              finally
+                RejectArgs.Free;
+              end;
+            end;
+            on E: TGocciaThrowValue do
+            begin
+              RejectArgs := TGocciaArgumentsCollection.Create([E.Value]);
+              try
+                DoReject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              finally
+                RejectArgs.Free;
+              end;
             end;
           end;
-          on E: TGocciaThrowValue do
+        finally
+          if Assigned(GC) then
           begin
-            RejectArgs := TGocciaArgumentsCollection.Create([E.Value]);
-            try
-              DoReject(RejectArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-            finally
-              RejectArgs.Free;
-            end;
+            GC.RemoveTempRoot(RejectFn);
+            GC.RemoveTempRoot(ResolveFn);
+            GC.RemoveTempRoot(ThenMethod);
+            GC.RemoveTempRoot(AValue);
           end;
         end;
       finally

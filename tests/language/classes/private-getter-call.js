@@ -137,3 +137,42 @@ test("reading from setter-only private accessors throws TypeError", () => {
   const instance = new TestClass();
   expect(() => instance.getComputed()).toThrow(TypeError);
 });
+
+test("private compound assignment uses getter and setter accessors", () => {
+  class TestClass {
+    #value = 2;
+
+    get #computed() {
+      return this.#value * 10;
+    }
+
+    set #computed(val) {
+      this.#value = val / 10;
+    }
+
+    increment() {
+      this.#computed += 30;
+      return this.#value;
+    }
+  }
+
+  const instance = new TestClass();
+  expect(instance.increment()).toBe(5);
+});
+
+test("private compound assignment throws on getter-only accessors", () => {
+  class TestClass {
+    #value = 2;
+
+    get #computed() {
+      return this.#value * 10;
+    }
+
+    increment() {
+      this.#computed += 30;
+    }
+  }
+
+  const instance = new TestClass();
+  expect(() => instance.increment()).toThrow(TypeError);
+});

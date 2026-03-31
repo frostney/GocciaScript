@@ -33,6 +33,19 @@ describe("Iterator.prototype.some()", () => {
     expect(closed).toBe(1);
   });
 
+  test("some throws TypeError when return() does not return an object", () => {
+    const source = Iterator.from({
+      next() {
+        return { value: 1, done: false };
+      },
+      return() {
+        return 0;
+      },
+    });
+
+    expect(() => source.some(() => true)).toThrow(TypeError);
+  });
+
   test("some can use nested iterator predicates", () => {
     const data = [[1, 3, 5], [2, 4, 6], [7, 9, 11]];
     const result = Iterator.from(data[Symbol.iterator]())

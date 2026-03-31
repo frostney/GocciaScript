@@ -236,4 +236,31 @@ describe("Array.fromAsync", () => {
 
     expect(asyncClosed).toBe(1);
   });
+
+  test("rejects when async iterator return() resolves to a non-object", async () => {
+    const asyncIterable = {
+      [Symbol.asyncIterator]() {
+        let i = 0;
+        return {
+          next() {
+            i = i + 1;
+            if (i <= 2) {
+              return Promise.resolve({ value: i, done: false });
+            }
+            return Promise.resolve({ value: undefined, done: true });
+          },
+          return() {
+            return Promise.resolve(123);
+          },
+        };
+      },
+    };
+
+    await expect(Array.fromAsync(asyncIterable, (value) => {
+      if (value === 2) {
+        throw new Error("boom");
+      }
+      return value;
+    })).rejects.toThrow(TypeError);
+  });
 });

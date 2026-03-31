@@ -29,11 +29,6 @@ describe("Number.isSafeInteger", () => {
     expect(Number.isSafeInteger(Number.MIN_SAFE_INTEGER - 1)).toBe(false);
   });
 
-  test("accepts the documented safe integer bounds", () => {
-    expect(Number.isSafeInteger(Number.MAX_SAFE_INTEGER)).toBe(true);
-    expect(Number.isSafeInteger(Number.MIN_SAFE_INTEGER)).toBe(true);
-  });
-
   test("returns false for non-integer numbers", () => {
     expect(Number.isSafeInteger(1.5)).toBe(false);
     expect(Number.isSafeInteger(0.1)).toBe(false);

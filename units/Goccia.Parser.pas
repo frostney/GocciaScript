@@ -2694,6 +2694,8 @@ begin
             ComputedStaticGetters[High(ComputedStaticGetters)].KeyExpression := ComputedKeyExpression;
             ComputedStaticGetters[High(ComputedStaticGetters)].GetterExpression := Getter;
           end
+          else if IsPrivate then
+            StaticGetters.Add('#' + MemberName, Getter)
           else
             StaticGetters.Add(MemberName, Getter);
         end
@@ -2733,6 +2735,8 @@ begin
             ComputedStaticSetters[High(ComputedStaticSetters)].KeyExpression := ComputedKeyExpression;
             ComputedStaticSetters[High(ComputedStaticSetters)].SetterExpression := Setter;
           end
+          else if IsPrivate then
+            StaticSetters.Add('#' + MemberName, Setter)
           else
             StaticSetters.Add(MemberName, Setter);
         end

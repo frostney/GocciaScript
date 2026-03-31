@@ -44,3 +44,32 @@ test("object methods update and read object state through this", () => {
     isZero: true,
   });
 });
+
+test("extracted methods use the new receiver when called with call()", () => {
+  const counter = {
+    count: 1,
+    increment() {
+      this.count = this.count + 1;
+      return this.count;
+    },
+  };
+
+  const increment = counter.increment;
+  const other = { count: 10 };
+
+  expect(increment.call(other)).toBe(11);
+  expect(other.count).toBe(11);
+  expect(counter.count).toBe(1);
+});
+
+test("arrow callbacks inside methods keep the method receiver", () => {
+  const obj = {
+    factor: 4,
+    values: [1, 2, 3],
+    scale() {
+      return this.values.map((value) => value * this.factor);
+    },
+  };
+
+  expect(obj.scale()).toEqual([4, 8, 12]);
+});
