@@ -579,7 +579,12 @@ begin
     ';': AddToken(gttSemicolon);
     '?':
       if Match('?') then
-        AddToken(gttNullishCoalescing)
+      begin
+        if Match('=') then
+          AddToken(gttNullishCoalescingAssign)
+        else
+          AddToken(gttNullishCoalescing);
+      end
       else if Match('.') then
         AddToken(gttOptionalChaining)
       else

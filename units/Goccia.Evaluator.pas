@@ -2411,20 +2411,20 @@ begin
   Result := Value;
 end;
 
+// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
 function EvaluatePrivatePropertyCompoundAssignment(const APrivatePropertyCompoundAssignmentExpression: TGocciaPrivatePropertyCompoundAssignmentExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   ObjectValue: TGocciaValue;
   Instance: TGocciaInstanceValue;
   ClassValue: TGocciaClassValue;
   AccessClass: TGocciaClassValue;
-  Value: TGocciaValue;
   CurrentValue: TGocciaValue;
+  Value: TGocciaValue;
+  SetterFn: TGocciaFunctionBase;
+  SetterArgs: TGocciaArgumentsCollection;
 begin
   // Evaluate the object expression
   ObjectValue := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.ObjectExpr, AContext);
-
-  // Evaluate the value to operate with
-  Value := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.Value, AContext);
 
   if ObjectValue is TGocciaInstanceValue then
   begin
@@ -2434,8 +2434,16 @@ begin
     // Determine the access class from the owning class of the current method
     AccessClass := ResolveOwningClass(Instance, AContext);
 
-    // Get the current value of the private property
-    CurrentValue := Instance.GetPrivateProperty(APrivatePropertyCompoundAssignmentExpression.PrivateName, AccessClass);
+    // Use the accessor-visible read path so private getters participate in ??=
+    if AccessClass.HasPrivateGetter(APrivatePropertyCompoundAssignmentExpression.PrivateName) then
+      CurrentValue := EvaluatePrivateMemberOnInstance(
+        Instance,
+        APrivatePropertyCompoundAssignmentExpression.PrivateName,
+        AContext)
+    else
+      CurrentValue := Instance.GetPrivateProperty(
+        APrivatePropertyCompoundAssignmentExpression.PrivateName,
+        AccessClass);
   end
   else if ObjectValue is TGocciaClassValue then
   begin
@@ -2452,6 +2460,42 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
+
+  if APrivatePropertyCompoundAssignmentExpression.Operator = gttNullishCoalescingAssign then
+  begin
+    if not ((CurrentValue is TGocciaUndefinedLiteralValue) or
+            (CurrentValue is TGocciaNullLiteralValue)) then
+    begin
+      Result := CurrentValue;
+      Exit;
+    end;
+
+    Value := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.Value, AContext);
+    Result := Value;
+
+    if ObjectValue is TGocciaInstanceValue then
+    begin
+      if AccessClass.HasPrivateSetter(APrivatePropertyCompoundAssignmentExpression.PrivateName) then
+      begin
+        SetterFn := AccessClass.PrivatePropertySetter[APrivatePropertyCompoundAssignmentExpression.PrivateName];
+        SetterArgs := TGocciaArgumentsCollection.Create;
+        try
+          SetterArgs.Add(Value);
+          SetterFn.Call(SetterArgs, Instance);
+        finally
+          SetterArgs.Free;
+        end;
+      end
+      else
+        Instance.SetPrivateProperty(APrivatePropertyCompoundAssignmentExpression.PrivateName, Result, AccessClass);
+    end
+    else if ObjectValue is TGocciaClassValue then
+      ClassValue.AddPrivateStaticProperty(APrivatePropertyCompoundAssignmentExpression.PrivateName, Result);
+    Exit;
+  end;
+
+  // Evaluate the value to operate with
+  Value := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.Value, AContext);
 
   // Use shared compound operation function
   Result := PerformCompoundOperation(CurrentValue, Value, APrivatePropertyCompoundAssignmentExpression.Operator);
