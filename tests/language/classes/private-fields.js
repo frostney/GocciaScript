@@ -41,6 +41,10 @@ test("private fields", () => {
   // Private field is not accessible
   expect(account.balance).toBeUndefined();
   expect(account["#balance"]).toBeUndefined();
+
+  const keys = Object.keys(account);
+  expect(keys).not.toContain("#balance");
+  expect(keys).not.toContain("balance");
 });
 
 test("private methods", () => {
@@ -152,4 +156,139 @@ test("comprehensive private fields with inheritance", () => {
   expect(advCounter.getCount()).toBe(3);
 
   expect(advCounter.getMultiplier()).toBe(2);
+});
+
+test("private fields support shadowing across inheritance hierarchies", () => {
+  class Base {
+    #basePrivate = "base";
+
+    getBasePrivate() {
+      return this.#basePrivate;
+    }
+
+    setBasePrivate(value) {
+      this.#basePrivate = value;
+    }
+  }
+
+  class Derived extends Base {
+    #basePrivate = "shadowed";
+    #derivedPrivate = "derived";
+
+    getShadowedPrivate() {
+      return this.#basePrivate;
+    }
+
+    getDerivedPrivate() {
+      return this.#derivedPrivate;
+    }
+  }
+
+  const instance = new Derived();
+
+  expect(instance.getBasePrivate()).toBe("base");
+  expect(instance.getShadowedPrivate()).toBe("shadowed");
+  expect(instance.getDerivedPrivate()).toBe("derived");
+
+  instance.setBasePrivate("modified");
+  expect(instance.getBasePrivate()).toBe("modified");
+  expect(instance.getShadowedPrivate()).toBe("shadowed");
+});
+
+test("private field initialization order is stable", () => {
+  const initOrder = [];
+
+  class TestClass {
+    #first = (() => {
+      initOrder.push("first");
+      return 1;
+    })();
+
+    #second = (() => {
+      initOrder.push("second");
+      return 2;
+    })();
+
+    #computed = this.#first + this.#second;
+    #extra;
+
+    constructor(extra) {
+      initOrder.push("constructor");
+      this.#extra = extra;
+    }
+
+    getValues() {
+      return {
+        first: this.#first,
+        second: this.#second,
+        computed: this.#computed,
+        extra: this.#extra,
+      };
+    }
+  }
+
+  const instance = new TestClass(10);
+
+  expect(instance.getValues()).toEqual({
+    first: 1,
+    second: 2,
+    computed: 3,
+    extra: 10,
+  });
+  expect(initOrder).toEqual(["first", "second", "constructor"]);
+});
+
+test("nested classes cannot directly access outer private fields", () => {
+  class Outer {
+    #outerPrivate = "outer";
+
+    getOuter() {
+      return this.#outerPrivate;
+    }
+
+    createInner() {
+      const outerRef = this;
+
+      return class Inner {
+        #innerPrivate = "inner";
+
+        getInner() {
+          return this.#innerPrivate;
+        }
+
+        tryAccessOuter() {
+          return outerRef.getOuter();
+        }
+      };
+    }
+  }
+
+  const outer = new Outer();
+  const InnerClass = outer.createInner();
+  const inner = new InnerClass();
+
+  expect(outer.getOuter()).toBe("outer");
+  expect(inner.getInner()).toBe("inner");
+  expect(inner.tryAccessOuter()).toBe("outer");
+});
+
+test("private field brand checks reject non-instances", () => {
+  class TestClass {
+    #brand = true;
+
+    static isInstance(obj) {
+      try {
+        return obj.#brand === true;
+      } catch (e) {
+        return false;
+      }
+    }
+  }
+
+  const instance = new TestClass();
+
+  expect(TestClass.isInstance(instance)).toBe(true);
+  expect(TestClass.isInstance({})).toBe(false);
+  expect(TestClass.isInstance(null)).toBe(false);
+  expect(TestClass.isInstance(undefined)).toBe(false);
 });

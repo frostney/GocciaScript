@@ -3017,13 +3017,36 @@ function TGocciaVM.GetPropertyValue(const AObject: TGocciaValue;
   const AKey: string): TGocciaValue;
 var
   Boxed: TGocciaObjectValue;
+  Current: TGocciaObjectValue;
+  Descriptor: TGocciaPropertyDescriptor;
 begin
   if AObject is TGocciaNullLiteralValue then
     ThrowTypeError('Cannot read properties of null (reading ''' + AKey + ''')');
   if AObject is TGocciaUndefinedLiteralValue then
     ThrowTypeError('Cannot read properties of undefined (reading ''' + AKey + ''')');
 
-  if TryGetRawPrivateValue(AObject, AKey, Result) then
+  if (AKey <> '') and (AKey[1] = '#') then
+  begin
+    if AObject is TGocciaObjectValue then
+    begin
+      Current := TGocciaObjectValue(AObject);
+      while Assigned(Current) do
+      begin
+        Descriptor := Current.GetOwnPropertyDescriptor(AKey);
+        if Descriptor is TGocciaPropertyDescriptorAccessor then
+        begin
+          if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
+            Exit(AObject.GetProperty(AKey));
+          ThrowTypeError('Private accessor ' + AKey + ' was defined without a getter');
+        end;
+        Current := Current.Prototype;
+      end;
+    end;
+
+    if TryGetRawPrivateValue(AObject, AKey, Result) then
+      Exit;
+  end
+  else if TryGetRawPrivateValue(AObject, AKey, Result) then
     Exit;
 
   Result := AObject.GetProperty(AKey);
@@ -3061,6 +3084,8 @@ begin
           AObject.SetProperty(AKey, AValue);
           Exit;
         end;
+        if Descriptor is TGocciaPropertyDescriptorAccessor then
+          ThrowTypeError('Private accessor ' + AKey + ' was defined without a setter');
         Current := Current.Prototype;
       end;
     end;

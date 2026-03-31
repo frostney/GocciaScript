@@ -43,6 +43,7 @@ type
     constructor Create;
     function AdvanceNext: TGocciaObjectValue; virtual;
     function DirectNext(out ADone: Boolean): TGocciaValue; virtual;
+    procedure Close; virtual;
     function ToStringTag: string; override;
 
     class function CreateGlobalObject: TGocciaObjectValue;
@@ -119,6 +120,11 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue
   else
     Result := IterResult.GetProperty(PROP_VALUE);
+end;
+
+procedure TGocciaIteratorValue.Close;
+begin
+  FDone := True;
 end;
 
 function TGocciaIteratorValue.ToStringTag: string;
@@ -302,12 +308,17 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    Value := Iterator.DirectNext(Done);
-    while not Done do
-    begin
-      InvokeIteratorCallback(Callback, Value, Index);
-      Inc(Index);
+    try
       Value := Iterator.DirectNext(Done);
+      while not Done do
+      begin
+        InvokeIteratorCallback(Callback, Value, Index);
+        Inc(Index);
+        Value := Iterator.DirectNext(Done);
+      end;
+    except
+      Iterator.Close;
+      raise;
     end;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
@@ -323,6 +334,7 @@ var
   Accumulator, NewAccumulator, Value: TGocciaValue;
   HasInitial, Done: Boolean;
   CallArgs: TGocciaArgumentsCollection;
+  Index: Integer;
 begin
   if not (AThisValue is TGocciaIteratorValue) then
     ThrowTypeError('Iterator.prototype.reduce called on non-iterator');
@@ -332,38 +344,46 @@ begin
   Iterator := TGocciaIteratorValue(AThisValue);
   Callback := AArgs.GetElement(0);
   HasInitial := AArgs.Length >= 2;
+  Index := 0;
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    if HasInitial then
-      Accumulator := AArgs.GetElement(1)
-    else
-    begin
-      Accumulator := Iterator.DirectNext(Done);
-      if Done then
-        ThrowTypeError('Reduce of empty iterator with no initial value');
-    end;
-
-    TGarbageCollector.Instance.AddTempRoot(Accumulator);
     try
-      Value := Iterator.DirectNext(Done);
-      while not Done do
+      if HasInitial then
+        Accumulator := AArgs.GetElement(1)
+      else
       begin
-        CallArgs := TGocciaArgumentsCollection.Create([Accumulator, Value]);
-        try
-          NewAccumulator := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-        finally
-          CallArgs.Free;
-        end;
-        TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
-        Accumulator := NewAccumulator;
-        TGarbageCollector.Instance.AddTempRoot(Accumulator);
-        Value := Iterator.DirectNext(Done);
+        Accumulator := Iterator.DirectNext(Done);
+        if Done then
+          ThrowTypeError('Reduce of empty iterator with no initial value');
+        Index := 1;
       end;
 
-      Result := Accumulator;
+      TGarbageCollector.Instance.AddTempRoot(Accumulator);
+      try
+        Value := Iterator.DirectNext(Done);
+        while not Done do
+        begin
+          CallArgs := TGocciaArgumentsCollection.Create([Accumulator, Value, TGocciaNumberLiteralValue.Create(Index)]);
+          try
+            NewAccumulator := TGocciaFunctionBase(Callback).Call(CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+          finally
+            CallArgs.Free;
+          end;
+          TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
+          Accumulator := NewAccumulator;
+          TGarbageCollector.Instance.AddTempRoot(Accumulator);
+          Value := Iterator.DirectNext(Done);
+          Inc(Index);
+        end;
+
+        Result := Accumulator;
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
+      end;
     finally
-      TGarbageCollector.Instance.RemoveTempRoot(Accumulator);
+      if not Done then
+        Iterator.Close;
     end;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
@@ -418,19 +438,25 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    Value := Iterator.DirectNext(Done);
-    while not Done do
-    begin
-      if InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
-      begin
-        Result := TGocciaBooleanLiteralValue.TrueValue;
-        Exit;
-      end;
-      Inc(Index);
+    try
       Value := Iterator.DirectNext(Done);
-    end;
+      while not Done do
+      begin
+        if InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
+        begin
+          Iterator.Close;
+          Result := TGocciaBooleanLiteralValue.TrueValue;
+          Exit;
+        end;
+        Inc(Index);
+        Value := Iterator.DirectNext(Done);
+      end;
 
-    Result := TGocciaBooleanLiteralValue.FalseValue;
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+    except
+      Iterator.Close;
+      raise;
+    end;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
@@ -454,19 +480,25 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    Value := Iterator.DirectNext(Done);
-    while not Done do
-    begin
-      if not InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
-      begin
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-        Exit;
-      end;
-      Inc(Index);
+    try
       Value := Iterator.DirectNext(Done);
-    end;
+      while not Done do
+      begin
+        if not InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
+        begin
+          Iterator.Close;
+          Result := TGocciaBooleanLiteralValue.FalseValue;
+          Exit;
+        end;
+        Inc(Index);
+        Value := Iterator.DirectNext(Done);
+      end;
 
-    Result := TGocciaBooleanLiteralValue.TrueValue;
+      Result := TGocciaBooleanLiteralValue.TrueValue;
+    except
+      Iterator.Close;
+      raise;
+    end;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;
@@ -490,19 +522,25 @@ begin
 
   TGarbageCollector.Instance.AddTempRoot(Iterator);
   try
-    Value := Iterator.DirectNext(Done);
-    while not Done do
-    begin
-      if InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
-      begin
-        Result := Value;
-        Exit;
-      end;
-      Inc(Index);
+    try
       Value := Iterator.DirectNext(Done);
-    end;
+      while not Done do
+      begin
+        if InvokeIteratorCallback(Callback, Value, Index).ToBooleanLiteral.Value then
+        begin
+          Iterator.Close;
+          Result := Value;
+          Exit;
+        end;
+        Inc(Index);
+        Value := Iterator.DirectNext(Done);
+      end;
 
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    except
+      Iterator.Close;
+      raise;
+    end;
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Iterator);
   end;

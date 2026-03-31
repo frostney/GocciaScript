@@ -17,6 +17,7 @@ type
     constructor Create(const AIteratorObject: TGocciaValue);
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
+    procedure Close; override;
     procedure MarkReferences; override;
   end;
 
@@ -141,6 +142,26 @@ begin
     FDone := True;
     ADone := True;
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
+procedure TGocciaGenericIteratorValue.Close;
+var
+  ReturnMethod: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  if FDone then Exit;
+
+  FDone := True;
+  ReturnMethod := FSource.GetProperty(PROP_RETURN);
+  if not Assigned(ReturnMethod) or (ReturnMethod is TGocciaUndefinedLiteralValue) or not ReturnMethod.IsCallable then
+    Exit;
+
+  CallArgs := TGocciaArgumentsCollection.Create;
+  try
+    TGocciaFunctionBase(ReturnMethod).Call(CallArgs, FSource);
+  finally
+    CallArgs.Free;
   end;
 end;
 

@@ -374,6 +374,7 @@ var
   StringConstructor: TGocciaStringClassValue;
   NumberConstructor: TGocciaNumberClassValue;
   BooleanConstructor: TGocciaBooleanClassValue;
+  PerformanceConstructor: TGocciaNativeFunctionValue;
   TypeDef: TGocciaTypeDefinition;
 begin
   TGocciaObjectValue.InitializeSharedPrototype;
@@ -488,6 +489,12 @@ begin
   FunctionConstructor := TGocciaClassValue.Create('Function', nil);
   TGocciaFunctionBase.SetSharedPrototypeParent(FunctionConstructor.Prototype);
   FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst);
+
+  if ggPerformance in FGlobals then
+  begin
+    PerformanceConstructor := TGocciaPerformance.CreateInterfaceObject;
+    FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_PERFORMANCE, PerformanceConstructor, dtConst);
+  end;
 
   RegisterGocciaScriptGlobal;
   RegisterGlobalThis;

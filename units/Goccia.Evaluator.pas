@@ -524,6 +524,12 @@ begin
     begin
       // Regular method calls: use overloaded function to get both method and object
       Callee := EvaluateMember(MemberExpr, AContext, ThisValue);
+      if MemberExpr.Optional and
+         ((ThisValue is TGocciaNullLiteralValue) or (ThisValue is TGocciaUndefinedLiteralValue)) then
+      begin
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+        Exit;
+      end;
     end;
   end
   else if ACallExpression.Callee is TGocciaPrivateMemberExpression then
@@ -609,12 +615,15 @@ var
   PropertyValue: TGocciaValue;
   SuperClass: TGocciaClassValue;
   BoxedValue: TGocciaObjectValue;
+  ObjectEvaluated: Boolean;
 begin
+  ObjectEvaluated := False;
 
   // Handle optional chaining: obj?.prop returns undefined if obj is null/undefined
   if AMemberExpression.Optional then
   begin
     Obj := EvaluateExpression(AMemberExpression.ObjectExpr, AContext);
+    ObjectEvaluated := True;
     if Assigned(AOutObjectValue) then
       AOutObjectValue^ := Obj;
     if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
@@ -669,9 +678,12 @@ begin
     Exit;
   end;
 
-  Obj := EvaluateExpression(AMemberExpression.ObjectExpr, AContext);
-  if Assigned(AOutObjectValue) then
-    AOutObjectValue^ := Obj;
+  if not ObjectEvaluated then
+  begin
+    Obj := EvaluateExpression(AMemberExpression.ObjectExpr, AContext);
+    if Assigned(AOutObjectValue) then
+      AOutObjectValue^ := Obj;
+  end;
 
   // Determine the property name
   if AMemberExpression.Computed and Assigned(AMemberExpression.PropertyExpression) then
@@ -2255,6 +2267,30 @@ begin
   Result := AInstance.ClassValue;
 end;
 
+function CollectDeclaredPrivateNames(const AContext: TGocciaEvaluationContext): TStringList;
+var
+  OwningClassValue: TGocciaValue;
+begin
+  Result := TStringList.Create;
+  Result.Sorted := False;
+  Result.Duplicates := dupIgnore;
+
+  OwningClassValue := AContext.Scope.FindOwningClass;
+  if OwningClassValue is TGocciaClassValue then
+    TGocciaClassValue(OwningClassValue).AppendOwnPrivateNames(Result);
+end;
+
+procedure ThrowPrivateGetterMissingError(const APrivateName: string);
+begin
+  ThrowTypeError(Format('''#%s'' was defined without a getter', [APrivateName]));
+end;
+
+procedure ThrowPrivateSetterMissingError(const APrivateName: string);
+begin
+  ThrowTypeError(Format('''#%s'' was defined without a setter', [APrivateName]));
+end;
+
+// ES2026 §7.3.30 PrivateGet ( O, P )
 function EvaluatePrivateMemberOnInstance(const AInstance: TGocciaInstanceValue; const APrivateName: string; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   AccessClass: TGocciaClassValue;
@@ -2276,6 +2312,9 @@ begin
     end;
     Exit;
   end;
+
+  if AccessClass.HasPrivateSetter(APrivateName) then
+    ThrowPrivateGetterMissingError(APrivateName);
 
   // Check if this is a private method call
   if AInstance.ClassValue.PrivateMethods.ContainsKey(APrivateName) then
@@ -2350,6 +2389,7 @@ begin
   end;
 end;
 
+// ES2026 §7.3.31 PrivateSet ( O, P, value )
 function EvaluatePrivatePropertyAssignment(const APrivatePropertyAssignmentExpression: TGocciaPrivatePropertyAssignmentExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   ObjectValue: TGocciaValue;
@@ -2386,6 +2426,8 @@ begin
         SetterArgs.Free;
       end;
     end
+    else if AccessClass.HasPrivateGetter(APrivatePropertyAssignmentExpression.PrivateName) then
+      ThrowPrivateSetterMissingError(APrivatePropertyAssignmentExpression.PrivateName)
     else
     begin
       // Set the private property
@@ -2679,6 +2721,7 @@ var
   Expression: TGocciaExpression;
   Tokens: TObjectList<TGocciaToken>;
   SourceLines: TStringList;
+  DeclaredPrivateNames: TStringList;
   I: Integer;
   IsSimpleIdentifier: Boolean;
 begin
@@ -2888,6 +2931,7 @@ begin
   Tokens := nil;
   SourceLines := nil;
   Expression := nil;
+  DeclaredPrivateNames := nil;
 
   try
     SourceLines := TStringList.Create;
@@ -2904,7 +2948,14 @@ begin
     Parser := TGocciaParser.Create(Tokens, 'template-expression', SourceLines);
     Tokens := nil; // Parser owns it
 
-    Expression := Parser.Expression;
+    if Pos('#', Trimmed) > 0 then
+    begin
+      DeclaredPrivateNames := CollectDeclaredPrivateNames(AContext);
+      Expression := Parser.ParseExpressionWithPrivateNames(DeclaredPrivateNames);
+    end
+    else
+      Expression := Parser.Expression;
+
     if Expression = nil then
     begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -2923,6 +2974,7 @@ begin
   if Assigned(Tokens) then Tokens.Free;
   if Assigned(Lexer) then Lexer.Free;
   if Assigned(SourceLines) then SourceLines.Free;
+  if Assigned(DeclaredPrivateNames) then DeclaredPrivateNames.Free;
 end;
 
 function EvaluateDestructuringAssignment(const ADestructuringAssignmentExpression: TGocciaDestructuringAssignmentExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;

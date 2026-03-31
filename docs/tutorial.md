@@ -149,6 +149,8 @@ Note that the `distanceTo` method uses shorthand method syntax (`distanceTo() { 
 
 Classes support constructors, private fields, getters, setters, static methods, and inheritance:
 
+Private names are validated at parse time: using an undeclared `#name` is a `SyntaxError`. Getter-only and setter-only private accessors also follow normal accessor semantics, so invalid writes or reads throw `TypeError`.
+
 ```javascript
 class CoffeeShop {
   #name = "Goccia Coffee";

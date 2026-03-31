@@ -71,6 +71,10 @@ describe("globalThis exposes built-in constructors", () => {
   test("Promise", () => {
     expect(typeof globalThis.Promise).toBe("function");
   });
+
+  test("Performance", () => {
+    expect(typeof globalThis.Performance).toBe("function");
+  });
 });
 
 describe("globalThis exposes error constructors", () => {
@@ -140,6 +144,10 @@ describe("globalThis constructor identity", () => {
 
   test("globalThis.performance is the same as performance", () => {
     expect(globalThis.performance === performance).toBe(true);
+  });
+
+  test("globalThis.Performance is the same as Performance", () => {
+    expect(globalThis.Performance === Performance).toBe(true);
   });
 });
 

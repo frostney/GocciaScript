@@ -48,4 +48,31 @@ describe("Private fields accessed in array method callbacks", () => {
     const result = p.process([1, 2, 3], (x) => x + 1);
     expect(result).toEqual([4, 7, 10]);
   });
+
+  test("private fields remain accessible from class arrow fields", () => {
+    class TestClass {
+      #value = 42;
+
+      arrowMethod = () => {
+        return this.#value;
+      };
+
+      getArrowFunction() {
+        return () => this.#value;
+      }
+
+      arrowWithParam = (multiplier) => {
+        return this.#value * multiplier;
+      };
+    }
+
+    const instance = new TestClass();
+    const detachedArrow = instance.arrowMethod;
+    const returnedArrow = instance.getArrowFunction();
+
+    expect(instance.arrowMethod()).toBe(42);
+    expect(instance.arrowWithParam(2)).toBe(84);
+    expect(returnedArrow()).toBe(42);
+    expect(detachedArrow()).toBe(42);
+  });
 });

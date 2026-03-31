@@ -89,6 +89,7 @@ type
     function GetPrivateStaticProperty(const AName: string): TGocciaValue;
     procedure AddPrivateMethod(const AName: string; const AMethod: TGocciaMethodValue);
     function GetPrivateMethod(const AName: string): TGocciaMethodValue;
+    procedure AppendOwnPrivateNames(const ANames: TStrings);
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; virtual;
     function Instantiate(const AArguments: TGocciaArgumentsCollection): TGocciaValue; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
@@ -674,6 +675,37 @@ function TGocciaClassValue.GetPrivateMethod(const AName: string): TGocciaMethodV
 begin
   if not FPrivateMethods.TryGetValue(AName, Result) then
     Result := nil;
+end;
+
+procedure TGocciaClassValue.AppendOwnPrivateNames(const ANames: TStrings);
+var
+  PropertyPair: TGocciaExpressionMap.TKeyValuePair;
+  StaticPair: TGocciaValueMap.TKeyValuePair;
+  MethodPair: TOrderedStringMap<TGocciaMethodValue>.TKeyValuePair;
+  FuncPair: TOrderedStringMap<TGocciaFunctionBase>.TKeyValuePair;
+begin
+  if not Assigned(ANames) then
+    Exit;
+
+  for PropertyPair in FPrivateInstancePropertyDefs do
+    if ANames.IndexOf(PropertyPair.Key) < 0 then
+      ANames.Add(PropertyPair.Key);
+
+  for StaticPair in FPrivateStaticProperties do
+    if ANames.IndexOf(StaticPair.Key) < 0 then
+      ANames.Add(StaticPair.Key);
+
+  for MethodPair in FPrivateMethods do
+    if ANames.IndexOf(MethodPair.Key) < 0 then
+      ANames.Add(MethodPair.Key);
+
+  for FuncPair in FPrivateGetters do
+    if ANames.IndexOf(FuncPair.Key) < 0 then
+      ANames.Add(FuncPair.Key);
+
+  for FuncPair in FPrivateSetters do
+    if ANames.IndexOf(FuncPair.Key) < 0 then
+      ANames.Add(FuncPair.Key);
 end;
 
 function TGocciaClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;

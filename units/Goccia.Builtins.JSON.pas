@@ -51,6 +51,7 @@ uses
   Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -114,9 +115,9 @@ begin
       begin
         // Step 2a.i: Let newElement be ? InternalizeJSONProperty(val, ToString(I), reviver).
         NewValue := ApplyReviver(Arr, IntToStr(I), AReviver);
-        // Step 2a.ii: If newElement is undefined, set element to undefined; else replace.
+        // Step 2a.ii: If newElement is undefined, delete the element; else replace it.
         if NewValue is TGocciaUndefinedLiteralValue then
-          Arr.Elements[I] := TGocciaUndefinedLiteralValue.UndefinedValue
+          Arr.Elements[I] := TGocciaHoleValue.HoleValue
         else
           Arr.Elements[I] := NewValue;
       end;

@@ -80,4 +80,71 @@ describe("Array.from", () => {
     });
     expect(called).toBe(false);
   });
+
+  test("Array.from can consume nested iterables produced by a mapper", () => {
+    const makeRange = (start, end) => ({
+      [Symbol.iterator]() {
+        let i = start;
+        return {
+          next() {
+            if (i <= end) {
+              const value = i;
+              i = i + 1;
+              return { value, done: false };
+            }
+            return { value: undefined, done: true };
+          },
+        };
+      },
+    });
+
+    const result = Array.from(makeRange(1, 3), (n) => [...makeRange(1, n)]);
+    expect(result).toEqual([[1], [1, 2], [1, 2, 3]]);
+  });
+
+  test("Array.from supports nested destructuring from iterables", () => {
+    const pairs = {
+      [Symbol.iterator]() {
+        let i = 0;
+        const data = [[10, 20], [30, 40]];
+        return {
+          next() {
+            if (i < data.length) {
+              const value = data[i];
+              i = i + 1;
+              return { value, done: false };
+            }
+            return { value: undefined, done: true };
+          },
+        };
+      },
+    };
+
+    const collected = [];
+    Array.from(pairs).forEach(([a, b]) => {
+      collected.push(a + b);
+    });
+    expect(collected).toEqual([30, 70]);
+  });
+
+  test("Array.from can collect iterables produced by a mapper", () => {
+    const makeCounter = (n) => ({
+      [Symbol.iterator]() {
+        let i = 0;
+        return {
+          next() {
+            if (i < n) {
+              i = i + 1;
+              return { value: i, done: false };
+            }
+            return { value: undefined, done: true };
+          },
+        };
+      },
+    });
+
+    const outer = makeCounter(3);
+    const result = Array.from(outer, (n) => Array.from(makeCounter(n)));
+    expect(result).toEqual([[1], [1, 2], [1, 2, 3]]);
+  });
 });

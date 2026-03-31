@@ -68,4 +68,88 @@ describe("async error handling", () => {
       expect(v).toBe("caught: inner");
     });
   });
+
+  test("await already-rejected Promise throws", async () => {
+    try {
+      await Promise.reject("fail");
+    } catch (e) {
+      expect(e).toBe("fail");
+      return;
+    }
+
+    expect(true).toBe(false);
+  });
+
+  test("await thenable rejection throws", async () => {
+    const thenable = {
+      then(resolve, reject) {
+        reject("thenable error");
+      },
+    };
+
+    try {
+      await thenable;
+    } catch (e) {
+      expect(e).toBe("thenable error");
+      return;
+    }
+
+    expect(true).toBe(false);
+  });
+
+  test("finally runs after successful await", async () => {
+    let successFinallyRan = false;
+    const successFn = async () => {
+      try {
+        return await Promise.resolve(42);
+      } finally {
+        successFinallyRan = true;
+      }
+    };
+
+    expect(await successFn()).toBe(42);
+    expect(successFinallyRan).toBe(true);
+  });
+
+  test("finally runs after failed await", async () => {
+    let failureFinallyRan = false;
+    const failureFn = async () => {
+      try {
+        await Promise.reject("error");
+      } catch (e) {
+        return e;
+      } finally {
+        failureFinallyRan = true;
+      }
+    };
+
+    expect(await failureFn()).toBe("error");
+    expect(failureFinallyRan).toBe(true);
+  });
+
+  test("finally return overrides try return values", async () => {
+    const fromTry = async () => {
+      try {
+        return "try";
+      } finally {
+        return "finally";
+      }
+    };
+
+    expect(await fromTry()).toBe("finally");
+  });
+
+  test("finally return overrides catch return values", async () => {
+    const fromCatch = async () => {
+      try {
+        throw "error";
+      } catch (e) {
+        return "catch";
+      } finally {
+        return "finally";
+      }
+    };
+
+    expect(await fromCatch()).toBe("finally");
+  });
 });

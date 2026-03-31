@@ -21,6 +21,7 @@ const
   PROP_DONE         = 'done';
   PROP_VALUE        = 'value';
   PROP_NEXT         = 'next';
+  PROP_RETURN       = 'return';
   PROP_WRITABLE     = 'writable';
   PROP_ENUMERABLE   = 'enumerable';
   PROP_CONFIGURABLE = 'configurable';

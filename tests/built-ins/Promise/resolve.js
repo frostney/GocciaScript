@@ -74,3 +74,56 @@ test("Promise.resolve with array", () => {
     expect(v).toEqual([1, 2, 3]);
   });
 });
+
+test("Promise.resolve adopts foreign thenables", () => {
+  const thenable = {
+    then(resolve) {
+      resolve(42);
+    },
+  };
+
+  return Promise.resolve(thenable).then((value) => {
+    expect(value).toBe(42);
+  });
+});
+
+test("Promise.resolve rejects when then getter throws", () => {
+  const reason = new RangeError("poisoned then");
+  const thenable = {
+    get then() {
+      throw reason;
+    },
+  };
+
+  return Promise.resolve(thenable).then(
+    () => {
+      expect(true).toBe(false);
+    },
+    (error) => {
+      expect(error).toBe(reason);
+    },
+  );
+});
+
+test("Promise.resolve honors the first thenable resolution", () => {
+  const thenable = {
+    then(resolve, reject) {
+      resolve("first");
+      reject("second");
+      resolve("third");
+    },
+  };
+
+  return Promise.resolve(thenable).then((value) => {
+    expect(value).toBe("first");
+  });
+});
+
+test("Promise.resolve fulfills with the original object when then is not callable", () => {
+  const value = { then: 1, ok: true };
+
+  return Promise.resolve(value).then((resolved) => {
+    expect(resolved).toBe(value);
+    expect(resolved.ok).toBe(true);
+  });
+});

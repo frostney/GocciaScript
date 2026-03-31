@@ -24,6 +24,27 @@ type
     Column: Integer;
   end;
 
+  TGocciaPrivateNameReference = record
+    Name: string;
+    Line: Integer;
+    Column: Integer;
+  end;
+
+  TGocciaPrivateClassContext = class
+  private
+    FDeclaredNames: TStringList;
+    FReferences: array of TGocciaPrivateNameReference;
+  public
+    constructor Create;
+    destructor Destroy; override;
+
+    procedure DeclareName(const AName: string);
+    procedure AddReference(const AName: string; const ALine, AColumn: Integer);
+    function HasDeclaration(const AName: string): Boolean;
+    function ReferenceCount: Integer;
+    function GetReference(const AIndex: Integer): TGocciaPrivateNameReference;
+  end;
+
   TGocciaParser = class
   private
     type
@@ -36,8 +57,16 @@ type
     FWarnings: array of TGocciaParserWarning;
     FWarningCount: Integer;
     FInAsyncFunction: Integer;
+    FPrivateClassContexts: TObjectList<TGocciaPrivateClassContext>;
+    FSkipPrivateNameValidation: Integer;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
+    procedure PushPrivateClassContext;
+    procedure PopPrivateClassContext;
+    procedure ValidateCurrentPrivateClassContext;
+    procedure DeclarePrivateName(const AName: string);
+    procedure RecordPrivateNameReference(const AName: string; const ALine, AColumn: Integer);
+    function CurrentPrivateClassContext: TGocciaPrivateClassContext;
 
     function IsAtEnd: Boolean; inline;
     function Peek: TGocciaToken; inline;
@@ -135,7 +164,11 @@ type
   public
     constructor Create(const ATokens: TObjectList<TGocciaToken>;
       const AFileName: string; const ASourceLines: TStringList);
+    destructor Destroy; override;
     function Parse: TGocciaProgram;
+    function ParseUnchecked: TGocciaProgram;
+    function ParseExpressionWithPrivateNames(const ADeclaredNames: TStrings): TGocciaExpression;
+    function ParseExpressionUnchecked: TGocciaExpression;
     function Expression: TGocciaExpression;
     function GetWarning(const AIndex: Integer): TGocciaParserWarning; inline;
     property WarningCount: Integer read FWarningCount;
@@ -151,6 +184,54 @@ uses
   Goccia.Keywords.Reserved,
   Goccia.Values.Primitives;
 
+{ TGocciaPrivateClassContext }
+
+constructor TGocciaPrivateClassContext.Create;
+begin
+  inherited Create;
+  FDeclaredNames := TStringList.Create;
+  FDeclaredNames.Sorted := False;
+  FDeclaredNames.Duplicates := dupIgnore;
+end;
+
+destructor TGocciaPrivateClassContext.Destroy;
+begin
+  FDeclaredNames.Free;
+  inherited;
+end;
+
+procedure TGocciaPrivateClassContext.DeclareName(const AName: string);
+begin
+  if FDeclaredNames.IndexOf(AName) < 0 then
+    FDeclaredNames.Add(AName);
+end;
+
+procedure TGocciaPrivateClassContext.AddReference(const AName: string; const ALine, AColumn: Integer);
+var
+  Index: Integer;
+begin
+  Index := Length(FReferences);
+  SetLength(FReferences, Index + 1);
+  FReferences[Index].Name := AName;
+  FReferences[Index].Line := ALine;
+  FReferences[Index].Column := AColumn;
+end;
+
+function TGocciaPrivateClassContext.HasDeclaration(const AName: string): Boolean;
+begin
+  Result := FDeclaredNames.IndexOf(AName) >= 0;
+end;
+
+function TGocciaPrivateClassContext.ReferenceCount: Integer;
+begin
+  Result := Length(FReferences);
+end;
+
+function TGocciaPrivateClassContext.GetReference(const AIndex: Integer): TGocciaPrivateNameReference;
+begin
+  Result := FReferences[AIndex];
+end;
+
 constructor TGocciaParser.Create(const ATokens: TObjectList<TGocciaToken>;
   const AFileName: string; const ASourceLines: TStringList);
 begin
@@ -160,6 +241,13 @@ begin
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
+  FPrivateClassContexts := TObjectList<TGocciaPrivateClassContext>.Create(True);
+end;
+
+destructor TGocciaParser.Destroy;
+begin
+  FPrivateClassContexts.Free;
+  inherited;
 end;
 
 procedure TGocciaParser.AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
@@ -172,9 +260,112 @@ begin
   FWarnings[FWarningCount - 1].Column := AColumn;
 end;
 
+procedure TGocciaParser.PushPrivateClassContext;
+begin
+  FPrivateClassContexts.Add(TGocciaPrivateClassContext.Create);
+end;
+
+procedure TGocciaParser.PopPrivateClassContext;
+begin
+  if FPrivateClassContexts.Count > 0 then
+    FPrivateClassContexts.Delete(FPrivateClassContexts.Count - 1);
+end;
+
+function TGocciaParser.CurrentPrivateClassContext: TGocciaPrivateClassContext;
+begin
+  if FPrivateClassContexts.Count = 0 then
+    Exit(nil);
+  Result := FPrivateClassContexts[FPrivateClassContexts.Count - 1];
+end;
+
+// ES2026 §15.7.7 Static Semantics: AllPrivateIdentifiersValid
+procedure TGocciaParser.ValidateCurrentPrivateClassContext;
+var
+  Context: TGocciaPrivateClassContext;
+  Ref: TGocciaPrivateNameReference;
+  I: Integer;
+begin
+  Context := CurrentPrivateClassContext;
+  if not Assigned(Context) then
+    Exit;
+  if FSkipPrivateNameValidation > 0 then
+    Exit;
+
+  for I := 0 to Context.ReferenceCount - 1 do
+  begin
+    Ref := Context.GetReference(I);
+    if not Context.HasDeclaration(Ref.Name) then
+      raise TGocciaSyntaxError.Create(
+        Format('Private field ''#%s'' must be declared in an enclosing class', [Ref.Name]),
+        Ref.Line, Ref.Column, FFileName, FSourceLines);
+  end;
+end;
+
+procedure TGocciaParser.DeclarePrivateName(const AName: string);
+var
+  Context: TGocciaPrivateClassContext;
+begin
+  Context := CurrentPrivateClassContext;
+  if Assigned(Context) then
+    Context.DeclareName(AName);
+end;
+
+procedure TGocciaParser.RecordPrivateNameReference(const AName: string; const ALine, AColumn: Integer);
+var
+  Context: TGocciaPrivateClassContext;
+begin
+  Context := CurrentPrivateClassContext;
+  if not Assigned(Context) then
+  begin
+    if FSkipPrivateNameValidation > 0 then
+      Exit;
+    raise TGocciaSyntaxError.Create(
+      Format('Private field ''#%s'' must be declared in an enclosing class', [AName]),
+      ALine, AColumn, FFileName, FSourceLines);
+  end;
+  Context.AddReference(AName, ALine, AColumn);
+end;
+
 function TGocciaParser.GetWarning(const AIndex: Integer): TGocciaParserWarning;
 begin
   Result := FWarnings[AIndex];
+end;
+
+function TGocciaParser.ParseExpressionWithPrivateNames(const ADeclaredNames: TStrings): TGocciaExpression;
+var
+  I: Integer;
+begin
+  PushPrivateClassContext;
+  try
+    if Assigned(ADeclaredNames) then
+      for I := 0 to ADeclaredNames.Count - 1 do
+        DeclarePrivateName(ADeclaredNames[I]);
+
+    Result := Expression;
+    ValidateCurrentPrivateClassContext;
+  finally
+    PopPrivateClassContext;
+  end;
+end;
+
+function TGocciaParser.ParseExpressionUnchecked: TGocciaExpression;
+begin
+  Inc(FSkipPrivateNameValidation);
+  try
+    Result := Expression;
+  finally
+    Dec(FSkipPrivateNameValidation);
+  end;
+end;
+
+function TGocciaParser.ParseUnchecked: TGocciaProgram;
+begin
+  Inc(FSkipPrivateNameValidation);
+  try
+    Result := Parse;
+  finally
+    Dec(FSkipPrivateNameValidation);
+  end;
 end;
 
 function TGocciaParser.IsAtEnd: Boolean;
@@ -415,6 +606,7 @@ var
   Arguments: TObjectList<TGocciaExpression>;
   Arg: TGocciaExpression;
   PropertyName: string;
+  Token: TGocciaToken;
   Line, Column: Integer;
   IsOptionalChain: Boolean;
 begin
@@ -452,7 +644,9 @@ begin
       if Check(gttHash) then
       begin
         Advance; // consume the #
-        PropertyName := Consume(gttIdentifier, 'Expected private field name after "#"').Lexeme;
+        Token := Consume(gttIdentifier, 'Expected private field name after "#"');
+        PropertyName := Token.Lexeme;
+        RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
         Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
       end
       else if Check(gttLeftBracket) and IsOptionalChain then
@@ -508,7 +702,9 @@ begin
     begin
       Line := Previous.Line;
       Column := Previous.Column;
-      PropertyName := Consume(gttIdentifier, 'Expected private field name after "#"').Lexeme;
+      Token := Consume(gttIdentifier, 'Expected private field name after "#"');
+      PropertyName := Token.Lexeme;
+      RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
       Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
     end
     else if Match(gttLeftBracket) then
@@ -697,7 +893,9 @@ begin
   else if Match(gttHash) then
   begin
     Token := Previous;
-    Name := Consume(gttIdentifier, 'Expected private field name after "#"').Lexeme;
+    Token := Consume(gttIdentifier, 'Expected private field name after "#"');
+    Name := Token.Lexeme;
+    RecordPrivateNameReference(Name, Token.Line, Token.Column);
     // Private field access is equivalent to this.#fieldName
     Result := TGocciaPrivateMemberExpression.Create(
       TGocciaThisExpression.Create(Token.Line, Token.Column),
@@ -2254,6 +2452,7 @@ begin
   end;
 
   Consume(gttLeftBrace, 'Expected "{" before class body');
+  PushPrivateClassContext;
 
   Methods := TGocciaClassMethodMap.Create;
   Getters := TGocciaGetterExpressionMap.Create;
@@ -2271,315 +2470,324 @@ begin
   SetLength(ComputedInstanceGetters, 0);
   SetLength(ComputedInstanceSetters, 0);
 
-  while not Check(gttRightBrace) and not IsAtEnd do
-  begin
-    MemberDecorators := ParseDecorators;
-    IsAccessor := False;
+  try
+    while not Check(gttRightBrace) and not IsAtEnd do
+    begin
+      MemberDecorators := ParseDecorators;
+      IsAccessor := False;
 
-    IsStatic := Match(gttStatic);
-
-    while Check(gttIdentifier) and
-      ((Peek.Lexeme = KEYWORD_PUBLIC) or (Peek.Lexeme = KEYWORD_PROTECTED) or (Peek.Lexeme = KEYWORD_PRIVATE) or
-       (Peek.Lexeme = KEYWORD_READONLY) or (Peek.Lexeme = KEYWORD_OVERRIDE) or (Peek.Lexeme = KEYWORD_ABSTRACT)) do
-      Advance;
-
-    if not IsStatic and Check(gttStatic) then
       IsStatic := Match(gttStatic);
 
-    if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ACCESSOR) and not CheckNext(gttLeftParen) and not CheckNext(gttColon) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) then
-    begin
-      Advance;
-      IsAccessor := True;
-    end;
+      while Check(gttIdentifier) and
+        ((Peek.Lexeme = KEYWORD_PUBLIC) or (Peek.Lexeme = KEYWORD_PROTECTED) or (Peek.Lexeme = KEYWORD_PRIVATE) or
+         (Peek.Lexeme = KEYWORD_READONLY) or (Peek.Lexeme = KEYWORD_OVERRIDE) or (Peek.Lexeme = KEYWORD_ABSTRACT)) do
+        Advance;
 
-    IsAsync := False;
-    if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
-    begin
-      Advance;
-      IsAsync := True;
-    end;
+      if not IsStatic and Check(gttStatic) then
+        IsStatic := Match(gttStatic);
 
-    IsPrivate := Match(gttHash);
-    IsGetter := False;
-    IsSetter := False;
-    IsComputed := False;
-    ComputedKeyExpression := nil;
-
-    if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
-    begin
-      Advance;
-      IsGetter := True;
-
-      if Check(gttLeftBracket) then
+      if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ACCESSOR) and not CheckNext(gttLeftParen) and not CheckNext(gttColon) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) then
       begin
         Advance;
-        ComputedKeyExpression := Expression;
-        Consume(gttRightBracket, 'Expected "]" after computed property name');
-        IsComputed := True;
-        MemberName := '';
+        IsAccessor := True;
+      end;
+
+      IsAsync := False;
+      if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+      begin
+        Advance;
+        IsAsync := True;
+      end;
+
+      IsPrivate := Match(gttHash);
+      IsGetter := False;
+      IsSetter := False;
+      IsComputed := False;
+      ComputedKeyExpression := nil;
+
+      if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_GET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+      begin
+        Advance;
+        IsGetter := True;
+
+        if Check(gttLeftBracket) then
+        begin
+          Advance;
+          ComputedKeyExpression := Expression;
+          Consume(gttRightBracket, 'Expected "]" after computed property name');
+          IsComputed := True;
+          MemberName := '';
+        end
+        else if Check(gttHash) then
+        begin
+          Advance;
+          IsPrivate := True;
+          MemberName := Consume(gttIdentifier, 'Expected property name after "#"').Lexeme;
+        end
+        else
+          MemberName := Consume(gttIdentifier, 'Expected property name after "get"').Lexeme;
       end
-      else if Check(gttHash) then
+      else if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
       begin
         Advance;
-        IsPrivate := True;
-        MemberName := Consume(gttIdentifier, 'Expected property name after "#"').Lexeme;
+        IsSetter := True;
+
+        if Check(gttLeftBracket) then
+        begin
+          Advance;
+          ComputedKeyExpression := Expression;
+          Consume(gttRightBracket, 'Expected "]" after computed property name');
+          IsComputed := True;
+          MemberName := '';
+        end
+        else if Check(gttHash) then
+        begin
+          Advance;
+          IsPrivate := True;
+          MemberName := Consume(gttIdentifier, 'Expected property name after "#"').Lexeme;
+        end
+        else
+          MemberName := Consume(gttIdentifier, 'Expected property name after "set"').Lexeme;
       end
       else
-        MemberName := Consume(gttIdentifier, 'Expected property name after "get"').Lexeme;
-    end
-    else if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
-    begin
-      Advance;
-      IsSetter := True;
+      begin
+        MemberName := Consume(gttIdentifier, 'Expected method or property name').Lexeme;
+      end;
 
-      if Check(gttLeftBracket) then
+      if IsPrivate and not IsComputed and (MemberName <> '') then
+        DeclarePrivateName(MemberName);
+
+      FieldType := '';
+      if Check(gttQuestion) then
+        Advance;
+      if Check(gttColon) and not IsGetter and not IsSetter then
       begin
         Advance;
-        ComputedKeyExpression := Expression;
-        Consume(gttRightBracket, 'Expected "]" after computed property name');
-        IsComputed := True;
-        MemberName := '';
+        FieldType := CollectTypeAnnotation([gttAssign, gttSemicolon]);
+      end;
+
+      if IsAccessor then
+      begin
+        if Check(gttAssign) then
+        begin
+          Advance;
+          PropertyValue := Expression;
+        end
+        else
+          PropertyValue := nil;
+        Consume(gttSemicolon, 'Expected ";" after accessor declaration');
+
+        SetLength(Elements, Length(Elements) + 1);
+        Elements[High(Elements)].Kind := cekAccessor;
+        Elements[High(Elements)].Name := MemberName;
+        Elements[High(Elements)].IsStatic := IsStatic;
+        Elements[High(Elements)].IsPrivate := IsPrivate;
+        Elements[High(Elements)].IsComputed := False;
+        Elements[High(Elements)].ComputedKeyExpression := nil;
+        Elements[High(Elements)].Decorators := MemberDecorators;
+        Elements[High(Elements)].FieldInitializer := PropertyValue;
+        Elements[High(Elements)].TypeAnnotation := FieldType;
       end
-      else if Check(gttHash) then
+      else if Check(gttAssign) then
       begin
-        Advance;
-        IsPrivate := True;
-        MemberName := Consume(gttIdentifier, 'Expected property name after "#"').Lexeme;
-      end
-      else
-        MemberName := Consume(gttIdentifier, 'Expected property name after "set"').Lexeme;
-    end
-    else
-    begin
-      MemberName := Consume(gttIdentifier, 'Expected method or property name').Lexeme;
-    end;
-
-    FieldType := '';
-    if Check(gttQuestion) then
-      Advance;
-    if Check(gttColon) and not IsGetter and not IsSetter then
-    begin
-      Advance;
-      FieldType := CollectTypeAnnotation([gttAssign, gttSemicolon]);
-    end;
-
-    if IsAccessor then
-    begin
-      if Check(gttAssign) then
-      begin
-        Advance;
+        Consume(gttAssign, 'Expected "=" in property');
         PropertyValue := Expression;
-      end
-      else
-        PropertyValue := nil;
-      Consume(gttSemicolon, 'Expected ";" after accessor declaration');
+        Consume(gttSemicolon, 'Expected ";" after property');
 
-      SetLength(Elements, Length(Elements) + 1);
-      Elements[High(Elements)].Kind := cekAccessor;
-      Elements[High(Elements)].Name := MemberName;
-      Elements[High(Elements)].IsStatic := IsStatic;
-      Elements[High(Elements)].IsPrivate := IsPrivate;
-      Elements[High(Elements)].IsComputed := False;
-      Elements[High(Elements)].ComputedKeyExpression := nil;
-      Elements[High(Elements)].Decorators := MemberDecorators;
-      Elements[High(Elements)].FieldInitializer := PropertyValue;
-      Elements[High(Elements)].TypeAnnotation := FieldType;
-    end
-    else if Check(gttAssign) then
-    begin
-      Consume(gttAssign, 'Expected "=" in property');
-      PropertyValue := Expression;
-      Consume(gttSemicolon, 'Expected ";" after property');
-
-      if Length(MemberDecorators) > 0 then
-      begin
-        SetLength(Elements, Length(Elements) + 1);
-        Elements[High(Elements)].Kind := cekField;
-        Elements[High(Elements)].Name := MemberName;
-        Elements[High(Elements)].IsStatic := IsStatic;
-        Elements[High(Elements)].IsPrivate := IsPrivate;
-        Elements[High(Elements)].IsComputed := False;
-        Elements[High(Elements)].ComputedKeyExpression := nil;
-        Elements[High(Elements)].Decorators := MemberDecorators;
-        Elements[High(Elements)].FieldInitializer := PropertyValue;
-        Elements[High(Elements)].TypeAnnotation := FieldType;
-      end;
-
-      if IsPrivate and IsStatic then
-        PrivateStaticProperties.Add(MemberName, PropertyValue)
-      else if IsPrivate then
-      begin
-        PrivateInstanceProperties.Add(MemberName, PropertyValue);
-        SetLength(FieldOrder, Length(FieldOrder) + 1);
-        FieldOrder[High(FieldOrder)].Name := MemberName;
-        FieldOrder[High(FieldOrder)].IsPrivate := True;
-      end
-      else if IsStatic then
-        StaticProperties.Add(MemberName, PropertyValue)
-      else
-      begin
-        InstanceProperties.Add(MemberName, PropertyValue);
-        SetLength(FieldOrder, Length(FieldOrder) + 1);
-        FieldOrder[High(FieldOrder)].Name := MemberName;
-        FieldOrder[High(FieldOrder)].IsPrivate := False;
-        if FieldType <> '' then
-          InstancePropertyTypes.Add(MemberName, FieldType);
-      end;
-    end
-    else if Check(gttSemicolon) then
-    begin
-      Consume(gttSemicolon, 'Expected ";" after property declaration');
-      PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, Peek.Line, Peek.Column);
-
-      if Length(MemberDecorators) > 0 then
-      begin
-        SetLength(Elements, Length(Elements) + 1);
-        Elements[High(Elements)].Kind := cekField;
-        Elements[High(Elements)].Name := MemberName;
-        Elements[High(Elements)].IsStatic := IsStatic;
-        Elements[High(Elements)].IsPrivate := IsPrivate;
-        Elements[High(Elements)].IsComputed := False;
-        Elements[High(Elements)].ComputedKeyExpression := nil;
-        Elements[High(Elements)].Decorators := MemberDecorators;
-        Elements[High(Elements)].FieldInitializer := PropertyValue;
-        Elements[High(Elements)].TypeAnnotation := FieldType;
-      end;
-
-      if IsPrivate and IsStatic then
-        PrivateStaticProperties.Add(MemberName, PropertyValue)
-      else if IsPrivate then
-      begin
-        PrivateInstanceProperties.Add(MemberName, PropertyValue);
-        SetLength(FieldOrder, Length(FieldOrder) + 1);
-        FieldOrder[High(FieldOrder)].Name := MemberName;
-        FieldOrder[High(FieldOrder)].IsPrivate := True;
-      end
-      else if IsStatic then
-        StaticProperties.Add(MemberName, PropertyValue)
-      else
-      begin
-        InstanceProperties.Add(MemberName, PropertyValue);
-        SetLength(FieldOrder, Length(FieldOrder) + 1);
-        FieldOrder[High(FieldOrder)].Name := MemberName;
-        FieldOrder[High(FieldOrder)].IsPrivate := False;
-        if FieldType <> '' then
-          InstancePropertyTypes.Add(MemberName, FieldType);
-      end;
-    end
-    else if IsGetter then
-    begin
-      Getter := ParseGetterExpression;
-
-      if (Length(MemberDecorators) > 0) or IsComputed then
-      begin
-        SetLength(Elements, Length(Elements) + 1);
-        Elements[High(Elements)].Kind := cekGetter;
-        Elements[High(Elements)].Name := MemberName;
-        Elements[High(Elements)].IsStatic := IsStatic;
-        Elements[High(Elements)].IsPrivate := IsPrivate;
-        Elements[High(Elements)].IsComputed := IsComputed;
-        Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
-        Elements[High(Elements)].Decorators := MemberDecorators;
-        Elements[High(Elements)].GetterNode := Getter;
-      end;
-
-      if IsStatic then
-      begin
-        if IsComputed then
+        if Length(MemberDecorators) > 0 then
         begin
-          SetLength(ComputedStaticGetters, Length(ComputedStaticGetters) + 1);
-          ComputedStaticGetters[High(ComputedStaticGetters)].KeyExpression := ComputedKeyExpression;
-          ComputedStaticGetters[High(ComputedStaticGetters)].GetterExpression := Getter;
-        end
-        else
-          StaticGetters.Add(MemberName, Getter);
-      end
-      else if IsComputed then
-      begin
-        SetLength(ComputedInstanceGetters, Length(ComputedInstanceGetters) + 1);
-        ComputedInstanceGetters[High(ComputedInstanceGetters)].KeyExpression := ComputedKeyExpression;
-        ComputedInstanceGetters[High(ComputedInstanceGetters)].GetterExpression := Getter;
-      end
-      else if IsPrivate then
-        Getters.Add('#' + MemberName, Getter)
-      else
-        Getters.Add(MemberName, Getter);
-    end
-    else if IsSetter then
-    begin
-      Setter := ParseSetterExpression;
+          SetLength(Elements, Length(Elements) + 1);
+          Elements[High(Elements)].Kind := cekField;
+          Elements[High(Elements)].Name := MemberName;
+          Elements[High(Elements)].IsStatic := IsStatic;
+          Elements[High(Elements)].IsPrivate := IsPrivate;
+          Elements[High(Elements)].IsComputed := False;
+          Elements[High(Elements)].ComputedKeyExpression := nil;
+          Elements[High(Elements)].Decorators := MemberDecorators;
+          Elements[High(Elements)].FieldInitializer := PropertyValue;
+          Elements[High(Elements)].TypeAnnotation := FieldType;
+        end;
 
-      if (Length(MemberDecorators) > 0) or IsComputed then
-      begin
-        SetLength(Elements, Length(Elements) + 1);
-        Elements[High(Elements)].Kind := cekSetter;
-        Elements[High(Elements)].Name := MemberName;
-        Elements[High(Elements)].IsStatic := IsStatic;
-        Elements[High(Elements)].IsPrivate := IsPrivate;
-        Elements[High(Elements)].IsComputed := IsComputed;
-        Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
-        Elements[High(Elements)].Decorators := MemberDecorators;
-        Elements[High(Elements)].SetterNode := Setter;
-      end;
-
-      if IsStatic then
-      begin
-        if IsComputed then
+        if IsPrivate and IsStatic then
+          PrivateStaticProperties.Add(MemberName, PropertyValue)
+        else if IsPrivate then
         begin
-          SetLength(ComputedStaticSetters, Length(ComputedStaticSetters) + 1);
-          ComputedStaticSetters[High(ComputedStaticSetters)].KeyExpression := ComputedKeyExpression;
-          ComputedStaticSetters[High(ComputedStaticSetters)].SetterExpression := Setter;
+          PrivateInstanceProperties.Add(MemberName, PropertyValue);
+          SetLength(FieldOrder, Length(FieldOrder) + 1);
+          FieldOrder[High(FieldOrder)].Name := MemberName;
+          FieldOrder[High(FieldOrder)].IsPrivate := True;
         end
+        else if IsStatic then
+          StaticProperties.Add(MemberName, PropertyValue)
         else
-          StaticSetters.Add(MemberName, Setter);
+        begin
+          InstanceProperties.Add(MemberName, PropertyValue);
+          SetLength(FieldOrder, Length(FieldOrder) + 1);
+          FieldOrder[High(FieldOrder)].Name := MemberName;
+          FieldOrder[High(FieldOrder)].IsPrivate := False;
+          if FieldType <> '' then
+            InstancePropertyTypes.Add(MemberName, FieldType);
+        end;
       end
-      else if IsComputed then
+      else if Check(gttSemicolon) then
       begin
-        SetLength(ComputedInstanceSetters, Length(ComputedInstanceSetters) + 1);
-        ComputedInstanceSetters[High(ComputedInstanceSetters)].KeyExpression := ComputedKeyExpression;
-        ComputedInstanceSetters[High(ComputedInstanceSetters)].SetterExpression := Setter;
+        Consume(gttSemicolon, 'Expected ";" after property declaration');
+        PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, Peek.Line, Peek.Column);
+
+        if Length(MemberDecorators) > 0 then
+        begin
+          SetLength(Elements, Length(Elements) + 1);
+          Elements[High(Elements)].Kind := cekField;
+          Elements[High(Elements)].Name := MemberName;
+          Elements[High(Elements)].IsStatic := IsStatic;
+          Elements[High(Elements)].IsPrivate := IsPrivate;
+          Elements[High(Elements)].IsComputed := False;
+          Elements[High(Elements)].ComputedKeyExpression := nil;
+          Elements[High(Elements)].Decorators := MemberDecorators;
+          Elements[High(Elements)].FieldInitializer := PropertyValue;
+          Elements[High(Elements)].TypeAnnotation := FieldType;
+        end;
+
+        if IsPrivate and IsStatic then
+          PrivateStaticProperties.Add(MemberName, PropertyValue)
+        else if IsPrivate then
+        begin
+          PrivateInstanceProperties.Add(MemberName, PropertyValue);
+          SetLength(FieldOrder, Length(FieldOrder) + 1);
+          FieldOrder[High(FieldOrder)].Name := MemberName;
+          FieldOrder[High(FieldOrder)].IsPrivate := True;
+        end
+        else if IsStatic then
+          StaticProperties.Add(MemberName, PropertyValue)
+        else
+        begin
+          InstanceProperties.Add(MemberName, PropertyValue);
+          SetLength(FieldOrder, Length(FieldOrder) + 1);
+          FieldOrder[High(FieldOrder)].Name := MemberName;
+          FieldOrder[High(FieldOrder)].IsPrivate := False;
+          if FieldType <> '' then
+            InstancePropertyTypes.Add(MemberName, FieldType);
+        end;
       end
-      else if IsPrivate then
-        Setters.Add('#' + MemberName, Setter)
-      else
-        Setters.Add(MemberName, Setter);
-    end
-    else if Check(gttLeftParen) or Check(gttLess) then
-    begin
-      if IsAsync then Inc(FInAsyncFunction);
-      try
-        Method := ClassMethod(IsStatic);
-      finally
-        if IsAsync then Dec(FInAsyncFunction);
-      end;
-      Method.Name := MemberName;
-      Method.IsAsync := IsAsync;
-
-      if Length(MemberDecorators) > 0 then
+      else if IsGetter then
       begin
-        SetLength(Elements, Length(Elements) + 1);
-        Elements[High(Elements)].Kind := cekMethod;
-        Elements[High(Elements)].Name := MemberName;
-        Elements[High(Elements)].IsStatic := IsStatic;
-        Elements[High(Elements)].IsPrivate := IsPrivate;
-        Elements[High(Elements)].IsComputed := False;
-        Elements[High(Elements)].ComputedKeyExpression := nil;
-        Elements[High(Elements)].Decorators := MemberDecorators;
-        Elements[High(Elements)].MethodNode := Method;
-        Elements[High(Elements)].IsAsync := IsAsync;
-      end;
+        Getter := ParseGetterExpression;
 
-      if IsPrivate then
-        PrivateMethods.Add(MemberName, Method)
+        if (Length(MemberDecorators) > 0) or IsComputed then
+        begin
+          SetLength(Elements, Length(Elements) + 1);
+          Elements[High(Elements)].Kind := cekGetter;
+          Elements[High(Elements)].Name := MemberName;
+          Elements[High(Elements)].IsStatic := IsStatic;
+          Elements[High(Elements)].IsPrivate := IsPrivate;
+          Elements[High(Elements)].IsComputed := IsComputed;
+          Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
+          Elements[High(Elements)].Decorators := MemberDecorators;
+          Elements[High(Elements)].GetterNode := Getter;
+        end;
+
+        if IsStatic then
+        begin
+          if IsComputed then
+          begin
+            SetLength(ComputedStaticGetters, Length(ComputedStaticGetters) + 1);
+            ComputedStaticGetters[High(ComputedStaticGetters)].KeyExpression := ComputedKeyExpression;
+            ComputedStaticGetters[High(ComputedStaticGetters)].GetterExpression := Getter;
+          end
+          else
+            StaticGetters.Add(MemberName, Getter);
+        end
+        else if IsComputed then
+        begin
+          SetLength(ComputedInstanceGetters, Length(ComputedInstanceGetters) + 1);
+          ComputedInstanceGetters[High(ComputedInstanceGetters)].KeyExpression := ComputedKeyExpression;
+          ComputedInstanceGetters[High(ComputedInstanceGetters)].GetterExpression := Getter;
+        end
+        else if IsPrivate then
+          Getters.Add('#' + MemberName, Getter)
+        else
+          Getters.Add(MemberName, Getter);
+      end
+      else if IsSetter then
+      begin
+        Setter := ParseSetterExpression;
+
+        if (Length(MemberDecorators) > 0) or IsComputed then
+        begin
+          SetLength(Elements, Length(Elements) + 1);
+          Elements[High(Elements)].Kind := cekSetter;
+          Elements[High(Elements)].Name := MemberName;
+          Elements[High(Elements)].IsStatic := IsStatic;
+          Elements[High(Elements)].IsPrivate := IsPrivate;
+          Elements[High(Elements)].IsComputed := IsComputed;
+          Elements[High(Elements)].ComputedKeyExpression := ComputedKeyExpression;
+          Elements[High(Elements)].Decorators := MemberDecorators;
+          Elements[High(Elements)].SetterNode := Setter;
+        end;
+
+        if IsStatic then
+        begin
+          if IsComputed then
+          begin
+            SetLength(ComputedStaticSetters, Length(ComputedStaticSetters) + 1);
+            ComputedStaticSetters[High(ComputedStaticSetters)].KeyExpression := ComputedKeyExpression;
+            ComputedStaticSetters[High(ComputedStaticSetters)].SetterExpression := Setter;
+          end
+          else
+            StaticSetters.Add(MemberName, Setter);
+        end
+        else if IsComputed then
+        begin
+          SetLength(ComputedInstanceSetters, Length(ComputedInstanceSetters) + 1);
+          ComputedInstanceSetters[High(ComputedInstanceSetters)].KeyExpression := ComputedKeyExpression;
+          ComputedInstanceSetters[High(ComputedInstanceSetters)].SetterExpression := Setter;
+        end
+        else if IsPrivate then
+          Setters.Add('#' + MemberName, Setter)
+        else
+          Setters.Add(MemberName, Setter);
+      end
+      else if Check(gttLeftParen) or Check(gttLess) then
+      begin
+        if IsAsync then Inc(FInAsyncFunction);
+        try
+          Method := ClassMethod(IsStatic);
+        finally
+          if IsAsync then Dec(FInAsyncFunction);
+        end;
+        Method.Name := MemberName;
+        Method.IsAsync := IsAsync;
+
+        if Length(MemberDecorators) > 0 then
+        begin
+          SetLength(Elements, Length(Elements) + 1);
+          Elements[High(Elements)].Kind := cekMethod;
+          Elements[High(Elements)].Name := MemberName;
+          Elements[High(Elements)].IsStatic := IsStatic;
+          Elements[High(Elements)].IsPrivate := IsPrivate;
+          Elements[High(Elements)].IsComputed := False;
+          Elements[High(Elements)].ComputedKeyExpression := nil;
+          Elements[High(Elements)].Decorators := MemberDecorators;
+          Elements[High(Elements)].MethodNode := Method;
+          Elements[High(Elements)].IsAsync := IsAsync;
+        end;
+
+        if IsPrivate then
+          PrivateMethods.Add(MemberName, Method)
+        else
+          Methods.Add(MemberName, Method);
+      end
       else
-        Methods.Add(MemberName, Method);
-    end
-    else
-      raise TGocciaSyntaxError.Create('Expected "(" for method, "=" for property assignment, or ";" for property declaration',
-        Peek.Line, Peek.Column, FFileName, FSourceLines);
+        raise TGocciaSyntaxError.Create('Expected "(" for method, "=" for property assignment, or ";" for property declaration',
+          Peek.Line, Peek.Column, FFileName, FSourceLines);
+    end;
+
+    Consume(gttRightBrace, 'Expected "}" after class body');
+    ValidateCurrentPrivateClassContext;
+  finally
+    PopPrivateClassContext;
   end;
 
-  Consume(gttRightBrace, 'Expected "}" after class body');
   Result := TGocciaClassDefinition.Create(AClassName, SuperClass, Methods, Getters, Setters, StaticProperties, InstanceProperties, PrivateInstanceProperties, PrivateMethods, PrivateStaticProperties);
   Result.GenericParams := ClassGenericParams;
   Result.ImplementsClause := ClassImplementsClause;

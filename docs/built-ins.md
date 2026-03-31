@@ -538,6 +538,8 @@ Promise.resolve(1)
 
 ### Performance (`Goccia.Builtins.Performance.pas`)
 
+`performance` is exposed as a global `Performance` instance, not as a plain namespace object. The global `Performance` interface object is also exposed, with `Performance.prototype === Object.getPrototypeOf(performance)`. `now()`, `toJSON()`, `timeOrigin`, and `Symbol.toStringTag` live on the shared prototype.
+
 Core High Resolution Time API:
 
 | Member | Description |
@@ -548,6 +550,8 @@ Core High Resolution Time API:
 | `performance[Symbol.toStringTag]` | `"Performance"` |
 
 `performance.now()` uses `TimingUtils.GetNanoseconds`, so wall-clock changes do not affect it. `performance.timeOrigin` is captured once from `TimingUtils.GetEpochNanoseconds` when the built-in is created.
+
+`Performance()` and `new Performance()` both throw `TypeError` (`"Illegal constructor"`), matching the web platform's non-constructible interface object behavior.
 
 ### Temporal (`Goccia.Builtins.Temporal.pas`)
 

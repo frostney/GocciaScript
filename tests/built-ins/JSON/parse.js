@@ -146,3 +146,46 @@ test("JSON.parse reviver works with arrays", () => {
   expect(result[1]).toBe(12);
   expect(result[2]).toBe(13);
 });
+
+test("JSON.parse reviver returning undefined deletes array elements", () => {
+  const result = JSON.parse("[1,2,3]", (key, value) => {
+    if (key === "1") {
+      return undefined;
+    }
+    return value;
+  });
+
+  expect(result.length).toBe(3);
+  expect(0 in result).toBe(true);
+  expect(1 in result).toBe(false);
+  expect(2 in result).toBe(true);
+  expect(result[1]).toBe(undefined);
+});
+
+test("JSON.parse reviver is called with the holder as this", () => {
+  const holders = [];
+  const helper = {
+    reviver(key, value) {
+      if (key === "a" || key === "0") {
+        holders.push(this);
+      }
+      return value;
+    },
+  };
+  const obj = JSON.parse('{"a":1}', helper.reviver);
+  const arr = JSON.parse("[1]", helper.reviver);
+
+  expect(holders[0]).toBe(obj);
+  expect(holders[1]).toBe(arr);
+});
+
+test("JSON.parse reviver visits nested properties before parents", () => {
+  const keys = [];
+
+  JSON.parse('{"outer":{"inner":1},"list":[2]}', (key, value) => {
+    keys.push(key);
+    return value;
+  });
+
+  expect(keys).toEqual(["inner", "outer", "0", "list", ""]);
+});

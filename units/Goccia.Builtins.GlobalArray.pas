@@ -50,7 +50,8 @@ uses
   Goccia.Values.Iterator.Generic,
   Goccia.Values.IteratorValue,
   Goccia.Values.PromiseValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.VM.Exception;
 
 constructor TGocciaGlobalArray.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -377,6 +378,33 @@ var
       ResultObj.SetProperty(IntToStr(AIndex), AValue);
   end;
 
+  procedure CloseAsyncIterator(const AIterator: TGocciaValue);
+  var
+    ReturnMethod: TGocciaValue;
+    CloseArgs: TGocciaArgumentsCollection;
+    CloseResult: TGocciaValue;
+  begin
+    if not (AIterator is TGocciaObjectValue) then Exit;
+
+    ReturnMethod := TGocciaObjectValue(AIterator).GetProperty(PROP_RETURN);
+    if not Assigned(ReturnMethod) or (ReturnMethod is TGocciaUndefinedLiteralValue) or not ReturnMethod.IsCallable then
+      Exit;
+
+    CloseArgs := TGocciaArgumentsCollection.Create;
+    try
+      CloseResult := TGocciaFunctionBase(ReturnMethod).Call(CloseArgs, AIterator);
+      AwaitValue(CloseResult);
+    finally
+      CloseArgs.Free;
+    end;
+  end;
+
+  procedure CloseSyncIterator(const AIterator: TGocciaIteratorValue);
+  begin
+    if Assigned(AIterator) then
+      AIterator.Close;
+  end;
+
 begin
   GC := TGarbageCollector.Instance;
   Promise := TGocciaPromiseValue.Create;
@@ -461,40 +489,45 @@ begin
             K := 0;
             EmptyArgs := TGocciaArgumentsCollection.Create;
             try
-              // TC39 Array.fromAsync §2.1.1.1 step 4.b: Repeat
-              while True do
-              begin
-                // TC39 Array.fromAsync §2.1.1.1 step 4.b.ii: Await(IteratorNext(iteratorRecord))
-                NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
-                NextResult := AwaitValue(NextResult);
-
-                // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
-                if NextResult.IsPrimitive then
-                  ThrowTypeError('Iterator result ' + NextResult.ToStringLiteral.Value + ' is not an object');
-
-                // TC39 Array.fromAsync §2.1.1.1 step 4.b.iii: IteratorComplete(next)
-                DoneValue := NextResult.GetProperty(PROP_DONE);
-                if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
-                  Break;
-
-                // TC39 Array.fromAsync §2.1.1.1 step 4.b.v: Await(IteratorValue(next))
-                KValue := NextResult.GetProperty(PROP_VALUE);
-                if not Assigned(KValue) then
-                  KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-                KValue := AwaitValue(KValue);
-
-                if Mapping then
+              try
+                // TC39 Array.fromAsync §2.1.1.1 step 4.b: Repeat
+                while True do
                 begin
-                  // TC39 Array.fromAsync §2.1.1.1 step 4.b.vii: Await(Call(mapfn, thisArg, « kValue, k »))
-                  MapArgs.SetElement(0, KValue);
-                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
-                  KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
-                  KValue := AwaitValue(KValue);
-                end;
+                  // TC39 Array.fromAsync §2.1.1.1 step 4.b.ii: Await(IteratorNext(iteratorRecord))
+                  NextResult := TGocciaFunctionBase(NextMethod).Call(EmptyArgs, IteratorObj);
+                  NextResult := AwaitValue(NextResult);
 
-                // TC39 Array.fromAsync §2.1.1.1 step 4.b.ix: CreateDataPropertyOrThrow(A, Pk, mappedValue)
-                AddElement(K, KValue);
-                Inc(K);
+                  // ES2026 §7.4.2 step 5: If nextResult is not an Object, throw a TypeError
+                  if NextResult.IsPrimitive then
+                    ThrowTypeError('Iterator result ' + NextResult.ToStringLiteral.Value + ' is not an object');
+
+                  // TC39 Array.fromAsync §2.1.1.1 step 4.b.iii: IteratorComplete(next)
+                  DoneValue := NextResult.GetProperty(PROP_DONE);
+                  if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+                    Break;
+
+                  // TC39 Array.fromAsync §2.1.1.1 step 4.b.v: Await(IteratorValue(next))
+                  KValue := NextResult.GetProperty(PROP_VALUE);
+                  if not Assigned(KValue) then
+                    KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+                  KValue := AwaitValue(KValue);
+
+                  if Mapping then
+                  begin
+                    // TC39 Array.fromAsync §2.1.1.1 step 4.b.vii: Await(Call(mapfn, thisArg, « kValue, k »))
+                    MapArgs.SetElement(0, KValue);
+                    MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
+                    KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
+                    KValue := AwaitValue(KValue);
+                  end;
+
+                  // TC39 Array.fromAsync §2.1.1.1 step 4.b.ix: CreateDataPropertyOrThrow(A, Pk, mappedValue)
+                  AddElement(K, KValue);
+                  Inc(K);
+                end;
+              except
+                CloseAsyncIterator(IteratorObj);
+                raise;
               end;
             finally
               EmptyArgs.Free;
@@ -546,25 +579,30 @@ begin
               GC.AddTempRoot(Iterator);
             try
               K := 0;
-              // TC39 Array.fromAsync §2.1.1.1 step 4.b: Repeat (sync iterator path)
-              IterResult := Iterator.AdvanceNext;
-              while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
-              begin
-                // TC39 Array.fromAsync §2.1.1.1 step 4.b.v: Await(IteratorValue(next))
-                KValue := IterResult.GetProperty(PROP_VALUE);
-                KValue := AwaitValue(KValue);
-
-                if Mapping then
-                begin
-                  MapArgs.SetElement(0, KValue);
-                  MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
-                  KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
-                  KValue := AwaitValue(KValue);
-                end;
-
-                AddElement(K, KValue);
-                Inc(K);
+              try
+                // TC39 Array.fromAsync §2.1.1.1 step 4.b: Repeat (sync iterator path)
                 IterResult := Iterator.AdvanceNext;
+                while not IterResult.GetProperty(PROP_DONE).ToBooleanLiteral.Value do
+                begin
+                  // TC39 Array.fromAsync §2.1.1.1 step 4.b.v: Await(IteratorValue(next))
+                  KValue := IterResult.GetProperty(PROP_VALUE);
+                  KValue := AwaitValue(KValue);
+
+                  if Mapping then
+                  begin
+                    MapArgs.SetElement(0, KValue);
+                    MapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(K));
+                    KValue := InvokeCallable(MapCallback, MapArgs, ThisArg);
+                    KValue := AwaitValue(KValue);
+                  end;
+
+                  AddElement(K, KValue);
+                  Inc(K);
+                  IterResult := Iterator.AdvanceNext;
+                end;
+              except
+                CloseSyncIterator(Iterator);
+                raise;
               end;
 
               if UseConstructor and not (ResultObj is TGocciaArrayValue) then
@@ -614,6 +652,8 @@ begin
       except
         on E: TGocciaThrowValue do
           Promise.Reject(E.Value);
+        on E: EGocciaBytecodeThrow do
+          Promise.Reject(E.ThrownValue);
       end;
     finally
       MapArgs.Free;
