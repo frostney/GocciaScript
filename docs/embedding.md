@@ -133,6 +133,8 @@ The alias target is resolved relative to the entry script's directory.
 
 **Longest-prefix matching:** When multiple aliases overlap (e.g., `@/` and `@/components/`), the resolver always picks the longest matching prefix. This means `@/components/Button` uses the `@/components/` alias, not `@/`.
 
+**Segment-boundary matching:** An alias only matches the exact specifier or a child path separated by `/`. For example, `@lib` matches `@lib` and `@lib/utils`, but does not match `@library/utils`.
+
 Scripts can then import using the alias:
 
 ```javascript
