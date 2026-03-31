@@ -340,7 +340,7 @@ begin
         gttAnd, gttOr, gttNullishCoalescing,
         gttPlus, gttMinus, gttStar, gttSlash, gttPercent, gttPower,
         gttEqual, gttNotEqual,
-        gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign,
+        gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
         gttInstanceof, gttIn]);
   end;
 end;
@@ -1198,7 +1198,7 @@ var
   Pattern: TGocciaDestructuringPattern;
 begin
   Left := Conditional;
-  if Match([gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign,
+  if Match([gttAssign, gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign, gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
              gttBitwiseAndAssign, gttBitwiseOrAssign, gttBitwiseXorAssign, gttLeftShiftAssign, gttRightShiftAssign, gttUnsignedRightShiftAssign]) then
   begin
     Operator := Previous.TokenType;

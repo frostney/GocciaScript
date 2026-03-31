@@ -546,6 +546,21 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
+function IsNullishAssignmentValue(const AValue: TGocciaValue): Boolean; inline;
+begin
+  Result := not Assigned(AValue) or
+            (AValue is TGocciaUndefinedLiteralValue) or
+            (AValue is TGocciaNullLiteralValue);
+end;
+
+function NormalizeAssignmentValue(const AValue: TGocciaValue): TGocciaValue; inline;
+begin
+  if Assigned(AValue) then
+    Result := AValue
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
 { TGocciaLiteralExpression }
 
 constructor TGocciaLiteralExpression.Create(const AValue: TGocciaValue;
@@ -1079,52 +1094,106 @@ begin
   end;
 end;
 
+// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
 function TGocciaCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
-  RhsValue: TGocciaValue;
+  CurrentValue, RhsValue: TGocciaValue;
 begin
-  Result := AContext.Scope.GetValue(Name);
+  CurrentValue := AContext.Scope.GetValue(Name);
+  if Operator = gttNullishCoalescingAssign then
+  begin
+    if not IsNullishAssignmentValue(CurrentValue) then
+      Exit(CurrentValue);
+
+    Result := Value.Evaluate(AContext);
+    AContext.Scope.AssignLexicalBinding(Name, Result);
+    Exit;
+  end;
+
+  Result := CurrentValue;
   RhsValue := Value.Evaluate(AContext);
   Result := PerformCompoundOperation(Result, RhsValue, Operator);
   AContext.Scope.AssignLexicalBinding(Name, Result);
 end;
 
+// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
 function TGocciaPropertyCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
-  Obj, RhsValue: TGocciaValue;
+  Obj, CurrentValue, RhsValue: TGocciaValue;
 begin
   Obj := ObjectExpr.Evaluate(AContext);
+  CurrentValue := NormalizeAssignmentValue(Obj.GetProperty(PropertyName));
+  if Operator = gttNullishCoalescingAssign then
+  begin
+    if not IsNullishAssignmentValue(CurrentValue) then
+      Exit(CurrentValue);
+
+    Result := Value.Evaluate(AContext);
+    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column);
+    Exit;
+  end;
+
   RhsValue := Value.Evaluate(AContext);
   PerformPropertyCompoundAssignment(Obj, PropertyName, RhsValue, Operator, AContext.OnError, Line, Column);
-  Result := Obj.GetProperty(PropertyName);
-  if Result = nil then
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result := NormalizeAssignmentValue(Obj.GetProperty(PropertyName));
 end;
 
+// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
 function TGocciaComputedPropertyCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
-  Obj, PropertyKeyValue, RhsValue: TGocciaValue;
+  Obj, PropertyKeyValue, CurrentValue, RhsValue: TGocciaValue;
   PropName: string;
 begin
   Obj := ObjectExpr.Evaluate(AContext);
   PropertyKeyValue := PropertyExpression.Evaluate(AContext);
-  RhsValue := Value.Evaluate(AContext);
   if (PropertyKeyValue is TGocciaSymbolValue) and ((Obj is TGocciaClassValue) or (Obj is TGocciaObjectValue)) then
   begin
+    if Obj is TGocciaClassValue then
+      CurrentValue := NormalizeAssignmentValue(
+        TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue)))
+    else
+      CurrentValue := NormalizeAssignmentValue(
+        TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue)));
+
+    if Operator = gttNullishCoalescingAssign then
+    begin
+      if not IsNullishAssignmentValue(CurrentValue) then
+        Exit(CurrentValue);
+
+      Result := Value.Evaluate(AContext);
+      if Obj is TGocciaClassValue then
+        TGocciaClassValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyKeyValue), Result)
+      else
+        TGocciaObjectValue(Obj).AssignSymbolProperty(TGocciaSymbolValue(PropertyKeyValue), Result);
+      Exit;
+    end;
+
+    RhsValue := Value.Evaluate(AContext);
     PerformSymbolPropertyCompoundAssignment(Obj, TGocciaSymbolValue(PropertyKeyValue), RhsValue, Operator, AContext.OnError, Line, Column);
     if Obj is TGocciaClassValue then
-      Result := TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue))
+      Result := NormalizeAssignmentValue(
+        TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue)))
     else
-      Result := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue));
-  end
-  else
-  begin
-    PropName := PropertyKeyValue.ToStringLiteral.Value;
-    PerformPropertyCompoundAssignment(Obj, PropName, RhsValue, Operator, AContext.OnError, Line, Column);
-    Result := Obj.GetProperty(PropName);
+      Result := NormalizeAssignmentValue(
+        TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue)));
+    Exit;
   end;
-  if Result = nil then
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  PropName := PropertyKeyValue.ToStringLiteral.Value;
+  CurrentValue := NormalizeAssignmentValue(Obj.GetProperty(PropName));
+  if Operator = gttNullishCoalescingAssign then
+  begin
+    if not IsNullishAssignmentValue(CurrentValue) then
+      Exit(CurrentValue);
+
+    Result := Value.Evaluate(AContext);
+    AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column);
+    Exit;
+  end;
+
+  RhsValue := Value.Evaluate(AContext);
+  PerformPropertyCompoundAssignment(Obj, PropName, RhsValue, Operator, AContext.OnError, Line, Column);
+  Result := NormalizeAssignmentValue(Obj.GetProperty(PropName));
 end;
 
 function TGocciaIncrementExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;

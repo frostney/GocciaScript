@@ -33,6 +33,7 @@ It's based on the thought "What if we implement ECMAScript today, but without th
 | Object shorthand properties and methods | `{ x, y, method() {} }` |
 | Computed property names | `{ [expr]: value }` |
 | Nullish coalescing | `a ?? b` |
+| Nullish coalescing assignment | `a ??= b` |
 | Optional chaining | `obj?.prop?.method?.()` |
 | Arrow functions | `(x) => x + 1` |
 | Rest parameters | `(...args) => args` |

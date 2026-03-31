@@ -401,7 +401,7 @@ The trade-off is that arithmetic fast paths need to be built on top of shared Go
 
 Language features are compiled into compact bytecode instruction sequences rather than expanding the opcode surface unnecessarily:
 
-- **Nullish coalescing (`??`)** — The compiler emits `OP_JUMP_IF_NOT_NULLISH` in its nullish-match mode, so `undefined`, `null`, and internal hole values all follow the same short-circuit path without extra comparison instructions.
+- **Nullish coalescing (`??`) and nullish coalescing assignment (`??=`)** — The compiler emits `OP_JUMP_IF_NOT_NULLISH` in its nullish-match mode, so `undefined`, `null`, and internal hole values all follow the same short-circuit path without extra comparison instructions.
 - **Template literals** — The compiler parses interpolations at compile time, emits string constants and `OP_TO_STRING` for expression parts, then chains `OP_CONCAT` instructions.
 - **Object spread** — The compiler emits dedicated Goccia bytecode rather than routing through a generic extension dispatcher.
 
