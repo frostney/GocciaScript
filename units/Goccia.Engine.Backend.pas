@@ -52,6 +52,7 @@ type
 
     property Interpreter: TGocciaInterpreter read FInterpreter;
     property Bootstrap: TGocciaRuntimeBootstrap read FBootstrap;
+    property ModuleResolver: TGocciaModuleResolver read FModuleResolver;
   end;
 
 implementation

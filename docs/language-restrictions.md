@@ -169,7 +169,7 @@ C[Symbol.metadata].decorated; // true
 
 ### Modules
 
-ES module syntax with named exports. Supported file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries each extension in order. Directory imports resolve to `index` files.
+ES module syntax with named exports. Supported file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries each extension in order. Directory imports resolve to `index` files. `ScriptLoader` also supports WHATWG-style import maps through `--import-map=<file.json>` or implicit `goccia.json` discovery.
 
 ```javascript
 // Named imports (with or without extension)

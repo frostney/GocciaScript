@@ -28,6 +28,8 @@ GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a 
 ```bash
 ./build/ScriptLoader example.js                  # Execute a script (interpreted)
 ./build/ScriptLoader example.js --mode=bytecode  # Execute via bytecode VM
+./build/ScriptLoader example.js --import-map=imports.json  # Execute with an explicit import map
+./build/ScriptLoader example.js --alias @/=./src/ --alias config=./config/default.js  # One-off import-map-style aliases
 ./build/ScriptLoader example.js --emit           # Compile to .gbc (no execution)
 ./build/ScriptLoader example.js --emit=bytecode  # Compile to .gbc (explicit)
 ./build/ScriptLoader example.js --emit --output=out.gbc   # Custom output path

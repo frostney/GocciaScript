@@ -100,6 +100,16 @@ printf "x + y;" | ./build/ScriptLoader --global x=10 --global y=20
 printf "name;" | ./build/ScriptLoader --globals=context.json --output=json
 # Injected globals can override earlier injected values, but not built-in globals like console
 
+# Load an explicit import map
+./build/ScriptLoader app.js --import-map=imports.json
+
+# Add one-off import-map-style aliases from the CLI
+./build/ScriptLoader app.js --alias @/=./src/ --alias config=./config/default.js
+
+# When --import-map is omitted, ScriptLoader walks up from the entry file (or cwd for stdin)
+# and uses the first goccia.json it finds.
+printf 'import { add } from "@/math"; add(1, 2);' | ./build/ScriptLoader
+
 # Abort long-running scripts
 printf "const f = () => f(); f();" | ./build/ScriptLoader --timeout=100
 

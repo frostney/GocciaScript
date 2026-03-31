@@ -101,7 +101,7 @@ end;
 
 ## Module Resolution
 
-The engine uses a pluggable module resolver (`TGocciaModuleResolver`) that supports extensionless imports, path aliases, and index file resolution.
+The engine uses a pluggable module resolver (`TGocciaModuleResolver`) that supports extensionless imports, import-map-style aliases, and index file resolution.
 
 ### Extension-Free Imports
 
@@ -121,25 +121,27 @@ import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx,
 
 ### Path Aliases
 
-Aliases map import prefixes to directories, similar to TypeScript's `paths` or Vite's `resolve.alias`:
+Aliases follow WHATWG import map matching rules:
 
 ```pascal
-Engine.AddAlias('@/', 'src/');              // @/utils → <baseDir>/src/utils
-Engine.AddAlias('~/', 'lib/shared/');       // ~/helpers → <baseDir>/lib/shared/helpers
-Engine.AddAlias('@/components/', 'ui/lib/'); // more specific prefix for a subtree
+Engine.AddAlias('lodash', 'vendor/lodash/index.js'); // exact match only
+Engine.AddAlias('@/', 'src/');                       // prefix match
+Engine.AddAlias('@/components/', 'ui/lib/');         // more specific prefix
 ```
 
 The alias target is resolved relative to the entry script's directory.
 
-**Longest-prefix matching:** When multiple aliases overlap (e.g., `@/` and `@/components/`), the resolver always picks the longest matching prefix. This means `@/components/Button` uses the `@/components/` alias, not `@/`.
+**Exact vs prefix matching:** A key without a trailing `/` is an exact match only. A key with a trailing `/` is a prefix match and appends the unmatched suffix to the target. This means `lodash` matches `import "lodash"` but not `import "lodash/fp"`, while `@/` matches `@/utils/math`.
 
-**Segment-boundary matching:** An alias only matches the exact specifier or a child path separated by `/`. For example, `@lib` matches `@lib` and `@lib/utils`, but does not match `@library/utils`.
+**Longest-prefix matching:** When multiple prefix aliases overlap (e.g., `@/` and `@/components/`), the resolver always picks the longest matching key. This means `@/components/Button` uses the `@/components/` alias, not `@/`.
 
 Scripts can then import using the alias:
 
 ```javascript
 import { formatDate } from "@/utils/dates";
 ```
+
+`TGocciaModuleResolver` also exposes `LoadImportMap(path)` and `DiscoverProjectConfig(startDirectory)` helpers for browser-style import map JSON and `goccia.json` project configuration files.
 
 ### Custom Resolver
 
