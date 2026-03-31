@@ -22,11 +22,11 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Logger,
+  Goccia.Modules.Configuration,
   Goccia.Parser,
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.ScriptLoader.JSON,
-  Goccia.ScriptLoader.Modules,
   Goccia.Timeout,
   Goccia.Token,
   Goccia.Values.Primitives,
@@ -201,13 +201,6 @@ begin
       AEngine.InjectGlobalsFromModule(GGlobalsFiles[I]);
 end;
 
-procedure ConfigureEngineModuleResolver(const AEngine: TGocciaEngine;
-  const AFileName: string);
-begin
-  ConfigureModuleResolver(AEngine.Resolver, AFileName, GImportMapPath,
-    GInlineAliases);
-end;
-
 procedure ApplyDataGlobalsToBytecodeBackend(const ABackend: TGocciaBytecodeBackend);
 var
   I: Integer;
@@ -233,13 +226,6 @@ begin
       ABackend.InjectGlobalsFromModule(GGlobalsFiles[I]);
 end;
 
-procedure ConfigureBytecodeModuleResolver(
-  const ABackend: TGocciaBytecodeBackend; const AFileName: string);
-begin
-  ConfigureModuleResolver(ABackend.ModuleResolver, AFileName, GImportMapPath,
-    GInlineAliases);
-end;
-
 function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
   const AOutputLines: TStrings): TScriptExecutionReport;
 var
@@ -251,7 +237,8 @@ begin
     Engine.SuppressWarnings := GJsonOutput;
     ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToEngine(Engine);
-    ConfigureEngineModuleResolver(Engine, AFileName);
+    ConfigureModuleResolver(Engine.Resolver, AFileName, GImportMapPath,
+      GInlineAliases);
     StartExecutionTimeout(GTimeoutMilliseconds);
     try
       ApplyModuleGlobalsToEngine(Engine);
@@ -279,12 +266,13 @@ var
   StartTime, ExecEnd: Int64;
 begin
   StartTime := GetNanoseconds;
-  Backend := TGocciaBytecodeBackend.Create(AFileName);
+    Backend := TGocciaBytecodeBackend.Create(AFileName);
   try
     Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
     ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToBytecodeBackend(Backend);
-    ConfigureBytecodeModuleResolver(Backend, AFileName);
+    ConfigureModuleResolver(Backend.ModuleResolver, AFileName, GImportMapPath,
+      GInlineAliases);
 
     ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultGlobals,
       GJsonOutput, Result.Timing.LexTimeNanoseconds,
@@ -331,7 +319,8 @@ begin
       Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
       ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
       ApplyDataGlobalsToBytecodeBackend(Backend);
-      ConfigureBytecodeModuleResolver(Backend, AFileName);
+      ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
+        GImportMapPath, GInlineAliases);
       StartExecutionTimeout(GTimeoutMilliseconds);
       try
         ApplyModuleGlobalsToBytecodeBackend(Backend);

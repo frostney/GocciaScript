@@ -106,7 +106,12 @@ printf "name;" | ./build/ScriptLoader --globals=context.json --output=json
 # Add one-off import-map-style aliases from the CLI
 ./build/ScriptLoader app.js --alias @/=./src/ --alias config=./config/default.js
 
-# When --import-map is omitted, ScriptLoader walks up from the entry file (or cwd for stdin)
+# The same module-resolution flags are available on TestRunner, BenchmarkRunner, and REPL.
+./build/TestRunner tests --import-map=imports.json --alias @/=./tests/helpers/
+./build/BenchmarkRunner benchmarks --import-map=imports.json
+./build/REPL --import-map=imports.json
+
+# When --import-map is omitted, the CLI walks up from the entry file (or cwd for stdin/REPL)
 # and uses the first goccia.json it finds.
 printf 'import { add } from "@/math"; add(1, 2);' | ./build/ScriptLoader
 

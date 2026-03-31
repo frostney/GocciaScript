@@ -21,6 +21,7 @@ uses
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
+  Goccia.Modules.Configuration,
   Goccia.Parser,
   Goccia.Token,
   Goccia.Values.ArrayValue,
@@ -35,6 +36,8 @@ var
   GExitOnFirstFailure: Boolean = False;
   GSilentConsole: Boolean = False;
   GOutputFile: string = '';
+  GImportMapPath: string = '';
+  GInlineAliases: TStringList = nil;
   GMode: TGocciaEngineBackend = ebTreeWalk;
 
 type
@@ -127,6 +130,8 @@ begin
       SilentConsole := nil;
       Engine := TGocciaEngine.Create(AFileName, Source, TestGlobals);
       try
+        ConfigureModuleResolver(Engine.Resolver, AFileName, GImportMapPath,
+          GInlineAliases);
         if GSilentConsole then
         begin
           SilentConsole := TGocciaTestConsole.Create;
@@ -210,6 +215,8 @@ begin
       Backend := TGocciaBytecodeBackend.Create(AFileName);
       try
         Backend.RegisterBuiltIns(TestGlobals);
+        ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
+          GImportMapPath, GInlineAliases);
 
         Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
@@ -540,45 +547,66 @@ var
   Files: TStringList;
   Paths: TStringList;
   I: Integer;
+  Arg: string;
 
 begin
   GShowProgress := True;
   GShowResults := True;
   GExitOnFirstFailure := False;
   GSilentConsole := False;
+  GImportMapPath := '';
   GMode := ebTreeWalk;
+  GInlineAliases := TStringList.Create;
   Paths := TStringList.Create;
   try
-    for I := 1 to ParamCount do
+    I := 1;
+    while I <= ParamCount do
     begin
-      if ParamStr(I) = '--no-progress' then
+      Arg := ParamStr(I);
+      if Arg = '--no-progress' then
         GShowProgress := False
-      else if ParamStr(I) = '--no-results' then
+      else if Arg = '--no-results' then
         GShowResults := False
-      else if ParamStr(I) = '--exit-on-first-failure' then
+      else if Arg = '--exit-on-first-failure' then
         GExitOnFirstFailure := True
-      else if ParamStr(I) = '--silent' then
+      else if Arg = '--silent' then
         GSilentConsole := True
-      else if Copy(ParamStr(I), 1, 9) = '--output=' then
-        GOutputFile := Copy(ParamStr(I), 10, MaxInt)
-      else if ParamStr(I) = '--mode=interpreted' then
-        GMode := ebTreeWalk
-      else if ParamStr(I) = '--mode=bytecode' then
-        GMode := ebBytecode
-      else if Copy(ParamStr(I), 1, 7) = '--mode=' then
+      else if Copy(Arg, 1, 13) = '--import-map=' then
+        GImportMapPath := Copy(Arg, 14, MaxInt)
+      else if Copy(Arg, 1, 8) = '--alias=' then
+        GInlineAliases.Add(Copy(Arg, 9, MaxInt))
+      else if Copy(Arg, 1, 9) = '--output=' then
+        GOutputFile := Copy(Arg, 10, MaxInt)
+      else if Arg = '--alias' then
       begin
-        WriteLn('Error: Unknown mode "', Copy(ParamStr(I), 8, MaxInt), '". Use "interpreted" or "bytecode".');
+        if I = ParamCount then
+        begin
+          WriteLn('Error: --alias requires a key=value argument.');
+          ExitCode := 1;
+          Exit;
+        end;
+        Inc(I);
+        GInlineAliases.Add(ParamStr(I));
+      end
+      else if Arg = '--mode=interpreted' then
+        GMode := ebTreeWalk
+      else if Arg = '--mode=bytecode' then
+        GMode := ebBytecode
+      else if Copy(Arg, 1, 7) = '--mode=' then
+      begin
+        WriteLn('Error: Unknown mode "', Copy(Arg, 8, MaxInt), '". Use "interpreted" or "bytecode".');
         ExitCode := 1;
         Exit;
       end
-      else if Copy(ParamStr(I), 1, 2) = '--' then
+      else if Copy(Arg, 1, 2) = '--' then
       begin
-        WriteLn('Error: Unknown option "', ParamStr(I), '"');
+        WriteLn('Error: Unknown option "', Arg, '"');
         ExitCode := 1;
         Exit;
       end
       else
-        Paths.Add(ParamStr(I));
+        Paths.Add(Arg);
+      Inc(I);
     end;
 
     if Paths.Count = 0 then
@@ -589,6 +617,8 @@ begin
       WriteLn('  --no-results            Suppress test results summary');
       WriteLn('  --exit-on-first-failure Stop on first test failure');
       WriteLn('  --silent                Suppress console output from test scripts');
+      WriteLn('  --import-map=<file>     Load an explicit import map JSON for module resolution');
+      WriteLn('  --alias key=value       Add an inline import-map-style alias');
       WriteLn('  --output=<file>         Write test results as JSON to file');
       WriteLn('  --mode=interpreted|bytecode  Execution backend (default: interpreted)');
       ExitCode := 1;
@@ -624,6 +654,7 @@ begin
       end;
     end;
   finally
+    GInlineAliases.Free;
     Paths.Free;
   end;
 end.

@@ -1,4 +1,4 @@
-program Goccia.ScriptLoader.Modules.Test;
+program Goccia.Modules.Configuration.Test;
 
 {$I Goccia.inc}
 
@@ -8,13 +8,12 @@ uses
 
   TestRunner,
 
+  Goccia.Modules.Configuration,
   Goccia.Modules.Resolver,
-  Goccia.ScriptLoader.Input,
-  Goccia.ScriptLoader.Modules,
   Goccia.TestSetup;
 
 type
-  TScriptLoaderModulesTests = class(TTestSuite)
+  TModuleConfigurationTests = class(TTestSuite)
   private
     FTempDirectories: TStringList;
 
@@ -22,7 +21,6 @@ type
     procedure DeleteDirectoryTree(const APath: string);
     procedure WriteTextFile(const APath, AText: string);
 
-    procedure TestParseAliasPair;
     procedure TestConfigureModuleResolverLoadsExplicitImportMap;
     procedure TestConfigureModuleResolverDiscoversProjectConfig;
     procedure TestConfigureModuleResolverAppliesInlineAliasAfterImportMap;
@@ -34,23 +32,26 @@ type
     procedure SetupTests; override;
   end;
 
-procedure TScriptLoaderModulesTests.SetupTests;
+procedure TModuleConfigurationTests.SetupTests;
 begin
-  Test('ParseAliasPair splits key and value', TestParseAliasPair);
-  Test('ConfigureModuleResolver loads explicit import map', TestConfigureModuleResolverLoadsExplicitImportMap);
-  Test('ConfigureModuleResolver discovers goccia.json from the entry path', TestConfigureModuleResolverDiscoversProjectConfig);
-  Test('ConfigureModuleResolver applies inline aliases after the import map', TestConfigureModuleResolverAppliesInlineAliasAfterImportMap);
-  Test('ConfigureModuleResolver prefers an explicit import map over discovered goccia.json', TestConfigureModuleResolverPrefersExplicitImportMap);
+  Test('ConfigureModuleResolver loads explicit import map',
+    TestConfigureModuleResolverLoadsExplicitImportMap);
+  Test('ConfigureModuleResolver discovers goccia.json from the entry path',
+    TestConfigureModuleResolverDiscoversProjectConfig);
+  Test('ConfigureModuleResolver applies inline aliases after the import map',
+    TestConfigureModuleResolverAppliesInlineAliasAfterImportMap);
+  Test('ConfigureModuleResolver prefers an explicit import map over discovered goccia.json',
+    TestConfigureModuleResolverPrefersExplicitImportMap);
 end;
 
-procedure TScriptLoaderModulesTests.BeforeAll;
+procedure TModuleConfigurationTests.BeforeAll;
 begin
   inherited BeforeAll;
   Randomize;
   FTempDirectories := TStringList.Create;
 end;
 
-procedure TScriptLoaderModulesTests.AfterAll;
+procedure TModuleConfigurationTests.AfterAll;
 var
   I: Integer;
 begin
@@ -60,7 +61,7 @@ begin
   inherited AfterAll;
 end;
 
-function TScriptLoaderModulesTests.CreateTempDirectory: string;
+function TModuleConfigurationTests.CreateTempDirectory: string;
 begin
   Result := IncludeTrailingPathDelimiter(GetTempDir(False)) + 'goccia-import-map-' +
     IntToStr(Random(MaxInt));
@@ -68,7 +69,7 @@ begin
   FTempDirectories.Add(Result);
 end;
 
-procedure TScriptLoaderModulesTests.DeleteDirectoryTree(const APath: string);
+procedure TModuleConfigurationTests.DeleteDirectoryTree(const APath: string);
 var
   EntryPath: string;
   SearchRec: TSearchRec;
@@ -76,7 +77,8 @@ begin
   if not DirectoryExists(APath) then
     Exit;
 
-  if FindFirst(IncludeTrailingPathDelimiter(APath) + '*', faAnyFile, SearchRec) = 0 then
+  if FindFirst(IncludeTrailingPathDelimiter(APath) + '*', faAnyFile,
+    SearchRec) = 0 then
   begin
     repeat
       if (SearchRec.Name = '.') or (SearchRec.Name = '..') then
@@ -94,7 +96,7 @@ begin
   RemoveDir(APath);
 end;
 
-procedure TScriptLoaderModulesTests.WriteTextFile(const APath, AText: string);
+procedure TModuleConfigurationTests.WriteTextFile(const APath, AText: string);
 var
   Source: TStringList;
 begin
@@ -108,30 +110,21 @@ begin
   end;
 end;
 
-procedure TScriptLoaderModulesTests.TestParseAliasPair;
-var
-  Pair: TScriptLoaderAliasPair;
-begin
-  Pair := ParseAliasPair('@/=./src/');
-
-  Expect<string>(Pair.Key).ToBe('@/');
-  Expect<string>(Pair.ValueText).ToBe('./src/');
-end;
-
-procedure TScriptLoaderModulesTests.TestConfigureModuleResolverLoadsExplicitImportMap;
+procedure TModuleConfigurationTests.TestConfigureModuleResolverLoadsExplicitImportMap;
 var
   EntryPath, ImportMapPath, ProjectDirectory, ResolvedPath: string;
   InlineAliases: TStringList;
   Resolver: TGocciaModuleResolver;
 begin
   ProjectDirectory := CreateTempDirectory;
-  EntryPath := IncludeTrailingPathDelimiter(ProjectDirectory) + 'src' + PathDelim +
-    'app.js';
-  ImportMapPath := IncludeTrailingPathDelimiter(ProjectDirectory) + 'imports.json';
+  EntryPath := IncludeTrailingPathDelimiter(ProjectDirectory) + 'src' +
+    PathDelim + 'app.js';
+  ImportMapPath := IncludeTrailingPathDelimiter(ProjectDirectory) +
+    'imports.json';
 
   WriteTextFile(EntryPath, 'import { value } from "lodash";');
-  WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'vendor' + PathDelim +
-    'lodash' + PathDelim + 'index.js', 'export const value = 1;');
+  WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'vendor' +
+    PathDelim + 'lodash' + PathDelim + 'index.js', 'export const value = 1;');
   WriteTextFile(ImportMapPath,
     '{' + LineEnding +
     '  "imports": {' + LineEnding +
@@ -149,24 +142,27 @@ begin
     Resolver.Free;
   end;
 
-  Expect<string>(ResolvedPath).ToBe(IncludeTrailingPathDelimiter(ProjectDirectory) +
-    'vendor' + PathDelim + 'lodash' + PathDelim + 'index.js');
+  Expect<string>(ResolvedPath).ToBe(IncludeTrailingPathDelimiter(
+    ProjectDirectory) + 'vendor' + PathDelim + 'lodash' + PathDelim +
+    'index.js');
 end;
 
-procedure TScriptLoaderModulesTests.TestConfigureModuleResolverDiscoversProjectConfig;
+procedure TModuleConfigurationTests.TestConfigureModuleResolverDiscoversProjectConfig;
 var
   EntryPath, ProjectDirectory, ResolvedPath: string;
   Resolver: TGocciaModuleResolver;
   InlineAliases: TStringList;
 begin
   ProjectDirectory := CreateTempDirectory;
-  EntryPath := IncludeTrailingPathDelimiter(ProjectDirectory) + 'src' + PathDelim +
-    'feature' + PathDelim + 'main.js';
+  EntryPath := IncludeTrailingPathDelimiter(ProjectDirectory) + 'src' +
+    PathDelim + 'feature' + PathDelim + 'main.js';
 
   WriteTextFile(EntryPath, 'import { add } from "@/utils/math";');
-  WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'src' + PathDelim +
-    'utils' + PathDelim + 'math.js', 'export const add = (a, b) => a + b;');
-  WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'goccia.json',
+  WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'src' +
+    PathDelim + 'utils' + PathDelim + 'math.js',
+    'export const add = (a, b) => a + b;');
+  WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) +
+    'goccia.json',
     '{' + LineEnding +
     '  "imports": {' + LineEnding +
     '    "@/": "./src/"' + LineEnding +
@@ -183,11 +179,11 @@ begin
     Resolver.Free;
   end;
 
-  Expect<string>(ResolvedPath).ToBe(IncludeTrailingPathDelimiter(ProjectDirectory) +
-    'src' + PathDelim + 'utils' + PathDelim + 'math.js');
+  Expect<string>(ResolvedPath).ToBe(IncludeTrailingPathDelimiter(
+    ProjectDirectory) + 'src' + PathDelim + 'utils' + PathDelim + 'math.js');
 end;
 
-procedure TScriptLoaderModulesTests.TestConfigureModuleResolverAppliesInlineAliasAfterImportMap;
+procedure TModuleConfigurationTests.TestConfigureModuleResolverAppliesInlineAliasAfterImportMap;
 var
   EntryPath, ProjectDirectory, ResolvedPath: string;
   InlineAliases: TStringList;
@@ -221,19 +217,19 @@ begin
     InlineAliases.Free;
   end;
 
-  Expect<string>(ResolvedPath).ToBe(IncludeTrailingPathDelimiter(ProjectDirectory) +
-    'config' + PathDelim + 'override.js');
+  Expect<string>(ResolvedPath).ToBe(IncludeTrailingPathDelimiter(
+    ProjectDirectory) + 'config' + PathDelim + 'override.js');
 end;
 
-procedure TScriptLoaderModulesTests.TestConfigureModuleResolverPrefersExplicitImportMap;
+procedure TModuleConfigurationTests.TestConfigureModuleResolverPrefersExplicitImportMap;
 var
   EntryPath, ProjectDirectory, ResolvedPath: string;
   InlineAliases: TStringList;
   Resolver: TGocciaModuleResolver;
 begin
   ProjectDirectory := CreateTempDirectory;
-  EntryPath := IncludeTrailingPathDelimiter(ProjectDirectory) + 'src' + PathDelim +
-    'app.js';
+  EntryPath := IncludeTrailingPathDelimiter(ProjectDirectory) + 'src' +
+    PathDelim + 'app.js';
 
   WriteTextFile(EntryPath, 'import { value } from "config";');
   WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'config' +
@@ -246,7 +242,8 @@ begin
     '    "config": "./config/explicit.js"' + LineEnding +
     '  }' + LineEnding +
     '}');
-  WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'goccia.json',
+  WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) +
+    'goccia.json',
     '{' + LineEnding +
     '  "imports": {' + LineEnding +
     '    "config": "./config/discovered.js"' + LineEnding +
@@ -265,12 +262,13 @@ begin
     InlineAliases.Free;
   end;
 
-  Expect<string>(ResolvedPath).ToBe(IncludeTrailingPathDelimiter(ProjectDirectory) +
-    'config' + PathDelim + 'explicit.js');
+  Expect<string>(ResolvedPath).ToBe(IncludeTrailingPathDelimiter(
+    ProjectDirectory) + 'config' + PathDelim + 'explicit.js');
 end;
 
 begin
-  TestRunnerProgram.AddSuite(TScriptLoaderModulesTests.Create('ScriptLoader Modules'));
+  TestRunnerProgram.AddSuite(TModuleConfigurationTests.Create(
+    'Module Configuration'));
   TestRunnerProgram.Run;
 
   ExitCode := TestResultToExitCode;

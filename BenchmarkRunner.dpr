@@ -22,6 +22,7 @@ uses
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
+  Goccia.Modules.Configuration,
   Goccia.Parser,
   Goccia.ScriptLoader.Input,
   Goccia.Token,
@@ -51,6 +52,8 @@ end;
 
 var
   GShowProgress: Boolean = True;
+  GImportMapPath: string = '';
+  GInlineAliases: TStringList = nil;
   GMode: TGocciaEngineBackend = ebTreeWalk;
 
 procedure PopulateFileResult(const AFileResult: TBenchmarkFileResult;
@@ -162,6 +165,8 @@ begin
     try
       Engine := TGocciaEngine.Create(AFileName, Source, BenchGlobals);
       try
+        ConfigureModuleResolver(Engine.Resolver, AFileName, GImportMapPath,
+          GInlineAliases);
         if GShowProgress and Assigned(Engine.BuiltinBenchmark) then
           Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
 
@@ -239,6 +244,8 @@ begin
       Backend := TGocciaBytecodeBackend.Create(AFileName);
       try
         Backend.RegisterBuiltIns(BenchGlobals);
+        ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
+          GImportMapPath, GInlineAliases);
 
         Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
@@ -333,6 +340,8 @@ begin
   try
     Engine := TGocciaEngine.Create(AFileName, ASource, BenchGlobals);
     try
+      ConfigureModuleResolver(Engine.Resolver, AFileName, GImportMapPath,
+        GInlineAliases);
       if GShowProgress and Assigned(Engine.BuiltinBenchmark) then
         Engine.BuiltinBenchmark.OnProgress := TBenchmarkProgress.OnProgress;
 
@@ -400,6 +409,8 @@ begin
     Backend := TGocciaBytecodeBackend.Create(AFileName);
     try
       Backend.RegisterBuiltIns(BenchGlobals);
+      ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
+        GImportMapPath, GInlineAliases);
 
       Lexer := TGocciaLexer.Create(SourceText, AFileName);
       try
@@ -554,28 +565,32 @@ var
   Reports: array of TReportSpec;
   ReportCount: Integer;
   I: Integer;
-  OutputStr: string;
+  Arg, OutputStr: string;
 
 begin
   ReportCount := 0;
   GShowProgress := True;
+  GImportMapPath := '';
   GMode := ebTreeWalk;
+  GInlineAliases := TStringList.Create;
   SetLength(Reports, 0);
 
   Paths := TStringList.Create;
   try
-    for I := 1 to ParamCount do
+    I := 1;
+    while I <= ParamCount do
     begin
-      if Copy(ParamStr(I), 1, 9) = '--format=' then
+      Arg := ParamStr(I);
+      if Copy(Arg, 1, 9) = '--format=' then
       begin
         Inc(ReportCount);
         SetLength(Reports, ReportCount);
-        Reports[ReportCount - 1].Format := ParseReportFormat(Copy(ParamStr(I), 10, MaxInt));
+        Reports[ReportCount - 1].Format := ParseReportFormat(Copy(Arg, 10, MaxInt));
         Reports[ReportCount - 1].OutputFile := '';
       end
-      else if Copy(ParamStr(I), 1, 9) = '--output=' then
+      else if Copy(Arg, 1, 9) = '--output=' then
       begin
-        OutputStr := Copy(ParamStr(I), 10, MaxInt);
+        OutputStr := Copy(Arg, 10, MaxInt);
         if ReportCount > 0 then
           Reports[ReportCount - 1].OutputFile := OutputStr
         else
@@ -586,33 +601,49 @@ begin
           Reports[ReportCount - 1].OutputFile := OutputStr;
         end;
       end
-      else if ParamStr(I) = '--no-progress' then
+      else if Arg = '--no-progress' then
         GShowProgress := False
-      else if ParamStr(I) = '--mode=interpreted' then
-        GMode := ebTreeWalk
-      else if ParamStr(I) = '--mode=bytecode' then
-        GMode := ebBytecode
-      else if (ParamStr(I) = '--help') or (ParamStr(I) = '-h') then
+      else if Copy(Arg, 1, 13) = '--import-map=' then
+        GImportMapPath := Copy(Arg, 14, MaxInt)
+      else if Copy(Arg, 1, 8) = '--alias=' then
+        GInlineAliases.Add(Copy(Arg, 9, MaxInt))
+      else if Arg = '--alias' then
       begin
-        WriteLn('Usage: BenchmarkRunner [path...|-] [--format=console|text|csv|json [--output=file]] ... [--no-progress] [--mode=interpreted|bytecode]');
+        if I = ParamCount then
+        begin
+          WriteLn('Error: --alias requires a key=value argument.');
+          ExitCode := 1;
+          Exit;
+        end;
+        Inc(I);
+        GInlineAliases.Add(ParamStr(I));
+      end
+      else if Arg = '--mode=interpreted' then
+        GMode := ebTreeWalk
+      else if Arg = '--mode=bytecode' then
+        GMode := ebBytecode
+      else if (Arg = '--help') or (Arg = '-h') then
+      begin
+        WriteLn('Usage: BenchmarkRunner [path...|-] [--format=console|text|csv|json [--output=file]] ... [--no-progress] [--mode=interpreted|bytecode] [--import-map=file] [--alias key=value]');
         WriteLn('  -                       Read benchmark source from stdin');
         WriteLn('  (omitted path)          Read benchmark source from stdin');
         Exit;
       end
-      else if Copy(ParamStr(I), 1, 7) = '--mode=' then
+      else if Copy(Arg, 1, 7) = '--mode=' then
       begin
-        WriteLn('Error: Unknown mode "', Copy(ParamStr(I), 8, MaxInt), '". Use "interpreted" or "bytecode".');
+        WriteLn('Error: Unknown mode "', Copy(Arg, 8, MaxInt), '". Use "interpreted" or "bytecode".');
         ExitCode := 1;
         Exit;
       end
-      else if Copy(ParamStr(I), 1, 2) <> '--' then
-        Paths.Add(ParamStr(I))
+      else if Copy(Arg, 1, 2) <> '--' then
+        Paths.Add(Arg)
       else
       begin
-        WriteLn('Error: Unknown option "', ParamStr(I), '".');
+        WriteLn('Error: Unknown option "', Arg, '".');
         ExitCode := 1;
         Exit;
       end;
+      Inc(I);
     end;
 
     if ReportCount = 0 then
@@ -632,6 +663,7 @@ begin
         RunBenchmarks(Paths, Reports);
     end;
   finally
+    GInlineAliases.Free;
     Paths.Free;
   end;
 end.

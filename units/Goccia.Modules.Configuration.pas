@@ -1,4 +1,4 @@
-unit Goccia.ScriptLoader.Modules;
+unit Goccia.Modules.Configuration;
 
 {$I Goccia.inc}
 
@@ -9,14 +9,6 @@ uses
 
   Goccia.Modules.Resolver;
 
-type
-  TScriptLoaderAliasPair = record
-    Key: string;
-    ValueText: string;
-  end;
-
-function ParseAliasPair(const AArg: string): TScriptLoaderAliasPair;
-function ResolveEntryBaseDirectory(const AFileName: string): string;
 procedure ConfigureModuleResolver(const AResolver: TGocciaModuleResolver;
   const AEntryFileName, AExplicitImportMapPath: string;
   const AInlineAliases: TStrings);
@@ -24,11 +16,15 @@ procedure ConfigureModuleResolver(const AResolver: TGocciaModuleResolver;
 implementation
 
 uses
-  SysUtils,
+  SysUtils;
 
-  Goccia.ScriptLoader.Input;
+type
+  TModuleAliasPair = record
+    Key: string;
+    ValueText: string;
+  end;
 
-function ParseAliasPair(const AArg: string): TScriptLoaderAliasPair;
+function ParseAliasPair(const AArg: string): TModuleAliasPair;
 var
   SeparatorIndex: Integer;
 begin
@@ -41,18 +37,27 @@ begin
 end;
 
 function ResolveEntryBaseDirectory(const AFileName: string): string;
+var
+  ExpandedFileName: string;
 begin
-  if AFileName = STDIN_FILE_NAME then
-    Result := GetCurrentDir
-  else
-    Result := ExtractFilePath(ExpandFileName(AFileName));
+  if AFileName = '' then
+    Exit(GetCurrentDir);
+
+  ExpandedFileName := ExpandFileName(AFileName);
+  if DirectoryExists(ExpandedFileName) then
+    Exit(ExpandedFileName);
+
+  if FileExists(ExpandedFileName) or (ExtractFilePath(AFileName) <> '') then
+    Exit(ExtractFilePath(ExpandedFileName));
+
+  Result := GetCurrentDir;
 end;
 
 procedure ConfigureModuleResolver(const AResolver: TGocciaModuleResolver;
   const AEntryFileName, AExplicitImportMapPath: string;
   const AInlineAliases: TStrings);
 var
-  AliasPair: TScriptLoaderAliasPair;
+  AliasPair: TModuleAliasPair;
   I: Integer;
   ImportMapPath: string;
 begin

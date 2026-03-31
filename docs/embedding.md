@@ -141,7 +141,7 @@ Scripts can then import using the alias:
 import { formatDate } from "@/utils/dates";
 ```
 
-`TGocciaModuleResolver` also exposes `LoadImportMap(path)` and `DiscoverProjectConfig(startDirectory)` helpers for browser-style import map JSON and `goccia.json` project configuration files.
+`TGocciaModuleResolver` also exposes `LoadImportMap(path)` and `DiscoverProjectConfig(startDirectory)` helpers for browser-style import map JSON and `goccia.json` project configuration files. The shared CLI frontends (`ScriptLoader`, `TestRunner`, `BenchmarkRunner`, and `REPL`) all use the same `Goccia.Modules.Configuration.ConfigureModuleResolver(...)` helper on top of this resolver surface.
 
 ### Custom Resolver
 

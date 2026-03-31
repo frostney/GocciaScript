@@ -273,7 +273,7 @@ export const add = (a, b) => a + b;
 import { add } from "./math.js";
 ```
 
-`ScriptLoader` supports WHATWG-style import maps with `--import-map=<file.json>` and automatic `goccia.json` discovery for project-level module aliases.
+The CLI tools share WHATWG-style import map support with `--import-map=<file.json>`, `--alias key=value`, and automatic `goccia.json` discovery for project-level module aliases.
 
 **Async/await** with full Promise support:
 
