@@ -83,6 +83,12 @@ type
     procedure AddPrivateSetter(const AName: string; const ASetter: TGocciaFunctionBase);
     function HasPrivateGetter(const AName: string): Boolean;
     function HasPrivateSetter(const AName: string): Boolean;
+    function HasOwnPrivateGetter(const AName: string): Boolean;
+    function HasOwnPrivateSetter(const AName: string): Boolean;
+    function GetOwnPrivatePropertyGetter(
+      const AName: string): TGocciaFunctionBase;
+    function GetOwnPrivatePropertySetter(
+      const AName: string): TGocciaFunctionBase;
     procedure AddInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
     procedure AddPrivateInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
     procedure AddPrivateStaticProperty(const AName: string; const AValue: TGocciaValue);
@@ -474,6 +480,30 @@ begin
   Result := FPrivateSetters.ContainsKey(AName);
   if not Result and Assigned(FSuperClass) then
     Result := FSuperClass.HasPrivateSetter(AName);
+end;
+
+function TGocciaClassValue.HasOwnPrivateGetter(const AName: string): Boolean;
+begin
+  Result := FPrivateGetters.ContainsKey(AName);
+end;
+
+function TGocciaClassValue.HasOwnPrivateSetter(const AName: string): Boolean;
+begin
+  Result := FPrivateSetters.ContainsKey(AName);
+end;
+
+function TGocciaClassValue.GetOwnPrivatePropertyGetter(
+  const AName: string): TGocciaFunctionBase;
+begin
+  if not FPrivateGetters.TryGetValue(AName, Result) then
+    Result := nil;
+end;
+
+function TGocciaClassValue.GetOwnPrivatePropertySetter(
+  const AName: string): TGocciaFunctionBase;
+begin
+  if not FPrivateSetters.TryGetValue(AName, Result) then
+    Result := nil;
 end;
 
 function TGocciaClassValue.GetPrivatePropertyGetter(const AName: string): TGocciaFunctionBase;

@@ -79,6 +79,14 @@ test("writing to getter-only private static accessors throws TypeError", () => {
   }
 
   expect(() => TestClass.setComputed(40)).toThrow(TypeError);
+
+  try {
+    TestClass.setComputed(40);
+    throw new Error("expected TypeError");
+  } catch (e) {
+    expect(e.message).toContain("Private accessor");
+    expect(e.message).toContain("was defined without a setter");
+  }
 });
 
 test("reading from setter-only private static accessors throws TypeError", () => {
@@ -95,4 +103,12 @@ test("reading from setter-only private static accessors throws TypeError", () =>
   }
 
   expect(() => TestClass.getComputed()).toThrow(TypeError);
+
+  try {
+    TestClass.getComputed();
+    throw new Error("expected TypeError");
+  } catch (e) {
+    expect(e.message).toContain("Private accessor");
+    expect(e.message).toContain("was defined without a getter");
+  }
 });

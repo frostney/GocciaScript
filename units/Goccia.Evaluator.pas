@@ -2273,27 +2273,41 @@ begin
   Result := AInstance.ClassValue;
 end;
 
-function CollectDeclaredPrivateNames(const AContext: TGocciaEvaluationContext): TStringList;
+function ResolveLexicalOwningClass(
+  const AContext: TGocciaEvaluationContext): TGocciaClassValue;
 var
   OwningClassValue: TGocciaValue;
 begin
+  Result := nil;
+  OwningClassValue := AContext.Scope.FindOwningClass;
+  if OwningClassValue is TGocciaClassValue then
+    Result := TGocciaClassValue(OwningClassValue);
+end;
+
+function CollectDeclaredPrivateNames(const AContext: TGocciaEvaluationContext): TStringList;
+var
+  OwningClassValue: TGocciaClassValue;
+begin
   Result := TStringList.Create;
+  Result.CaseSensitive := True;
   Result.Sorted := False;
   Result.Duplicates := dupIgnore;
 
-  OwningClassValue := AContext.Scope.FindOwningClass;
-  if OwningClassValue is TGocciaClassValue then
-    TGocciaClassValue(OwningClassValue).AppendOwnPrivateNames(Result);
+  OwningClassValue := ResolveLexicalOwningClass(AContext);
+  if Assigned(OwningClassValue) then
+    OwningClassValue.AppendOwnPrivateNames(Result);
 end;
 
 procedure ThrowPrivateGetterMissingError(const APrivateName: string);
 begin
-  ThrowTypeError(Format('''#%s'' was defined without a getter', [APrivateName]));
+  ThrowTypeError(Format('Private accessor #%s was defined without a getter',
+    [APrivateName]));
 end;
 
 procedure ThrowPrivateSetterMissingError(const APrivateName: string);
 begin
-  ThrowTypeError(Format('''#%s'' was defined without a setter', [APrivateName]));
+  ThrowTypeError(Format('Private accessor #%s was defined without a setter',
+    [APrivateName]));
 end;
 
 // ES2026 §7.3.30 PrivateGet ( O, P )
@@ -2336,14 +2350,20 @@ begin
   end;
 end;
 
-function EvaluatePrivateMemberOnClass(const AClassValue: TGocciaClassValue; const APrivateName: string): TGocciaValue;
+function EvaluatePrivateMemberOnClass(const AClassValue: TGocciaClassValue;
+  const APrivateName: string; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
+  AccessClass: TGocciaClassValue;
   GetterFn: TGocciaFunctionBase;
   EmptyArgs: TGocciaArgumentsCollection;
 begin
-  if AClassValue.HasPrivateGetter(APrivateName) then
+  AccessClass := ResolveLexicalOwningClass(AContext);
+  if not Assigned(AccessClass) then
+    AccessClass := AClassValue;
+
+  if AccessClass.HasOwnPrivateGetter(APrivateName) then
   begin
-    GetterFn := AClassValue.PrivatePropertyGetter[APrivateName];
+    GetterFn := AccessClass.GetOwnPrivatePropertyGetter(APrivateName);
     EmptyArgs := TGocciaArgumentsCollection.Create;
     try
       Result := GetterFn.Call(EmptyArgs, AClassValue);
@@ -2353,21 +2373,28 @@ begin
     Exit;
   end;
 
-  if AClassValue.HasPrivateSetter(APrivateName) then
+  if AccessClass.HasOwnPrivateSetter(APrivateName) then
     ThrowPrivateGetterMissingError(APrivateName);
 
-  Result := AClassValue.GetPrivateStaticProperty(APrivateName);
+  if not AccessClass.PrivateStaticProperties.TryGetValue(APrivateName, Result) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 procedure AssignPrivateMemberOnClass(const AClassValue: TGocciaClassValue;
-  const APrivateName: string; const AValue: TGocciaValue);
+  const APrivateName: string; const AValue: TGocciaValue;
+  const AContext: TGocciaEvaluationContext);
 var
+  AccessClass: TGocciaClassValue;
   SetterFn: TGocciaFunctionBase;
   SetterArgs: TGocciaArgumentsCollection;
 begin
-  if AClassValue.HasPrivateSetter(APrivateName) then
+  AccessClass := ResolveLexicalOwningClass(AContext);
+  if not Assigned(AccessClass) then
+    AccessClass := AClassValue;
+
+  if AccessClass.HasOwnPrivateSetter(APrivateName) then
   begin
-    SetterFn := AClassValue.PrivatePropertySetter[APrivateName];
+    SetterFn := AccessClass.GetOwnPrivatePropertySetter(APrivateName);
     SetterArgs := TGocciaArgumentsCollection.Create;
     try
       SetterArgs.Add(AValue);
@@ -2378,10 +2405,10 @@ begin
     Exit;
   end;
 
-  if AClassValue.HasPrivateGetter(APrivateName) then
+  if AccessClass.HasOwnPrivateGetter(APrivateName) then
     ThrowPrivateSetterMissingError(APrivateName);
 
-  AClassValue.AddPrivateStaticProperty(APrivateName, AValue);
+  AccessClass.AddPrivateStaticProperty(APrivateName, AValue);
 end;
 
 function EvaluatePrivateMember(const APrivateMemberExpression: TGocciaPrivateMemberExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -2402,7 +2429,7 @@ begin
   begin
     ClassValue := TGocciaClassValue(ObjectValue);
     Result := EvaluatePrivateMemberOnClass(
-      ClassValue, APrivateMemberExpression.PrivateName);
+      ClassValue, APrivateMemberExpression.PrivateName, AContext);
   end
   else
   begin
@@ -2429,7 +2456,7 @@ begin
   begin
     ClassValue := TGocciaClassValue(AObjectValue);
     Result := EvaluatePrivateMemberOnClass(
-      ClassValue, APrivateMemberExpression.PrivateName);
+      ClassValue, APrivateMemberExpression.PrivateName, AContext);
   end
   else
   begin
@@ -2488,7 +2515,8 @@ begin
   begin
     ClassValue := TGocciaClassValue(ObjectValue);
     AssignPrivateMemberOnClass(
-      ClassValue, APrivatePropertyAssignmentExpression.PrivateName, Value);
+      ClassValue, APrivatePropertyAssignmentExpression.PrivateName, Value,
+      AContext);
   end
   else
   begin
@@ -2527,7 +2555,8 @@ begin
   begin
     ClassValue := TGocciaClassValue(ObjectValue);
     CurrentValue := EvaluatePrivateMemberOnClass(
-      ClassValue, APrivatePropertyCompoundAssignmentExpression.PrivateName);
+      ClassValue, APrivatePropertyCompoundAssignmentExpression.PrivateName,
+      AContext);
   end
   else
   begin
@@ -2566,7 +2595,9 @@ begin
         Instance.SetPrivateProperty(APrivatePropertyCompoundAssignmentExpression.PrivateName, Result, AccessClass);
     end
     else if ObjectValue is TGocciaClassValue then
-      ClassValue.AddPrivateStaticProperty(APrivatePropertyCompoundAssignmentExpression.PrivateName, Result);
+      AssignPrivateMemberOnClass(
+        ClassValue, APrivatePropertyCompoundAssignmentExpression.PrivateName,
+        Result, AContext);
     Exit;
   end;
 
@@ -2599,7 +2630,8 @@ begin
   end
   else if ObjectValue is TGocciaClassValue then
     AssignPrivateMemberOnClass(
-      ClassValue, APrivatePropertyCompoundAssignmentExpression.PrivateName, Result);
+      ClassValue, APrivatePropertyCompoundAssignmentExpression.PrivateName,
+      Result, AContext);
 end;
 
 procedure InitializePrivateInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
