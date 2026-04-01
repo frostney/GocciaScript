@@ -39,7 +39,15 @@ begin
     if Arg = '--timing' then
       ShowTiming := True;
     if Copy(Arg, 1, 13) = '--import-map=' then
-      ImportMapPath := Copy(Arg, 14, MaxInt)
+    begin
+      ImportMapPath := Copy(Arg, 14, MaxInt);
+      if ImportMapPath = '' then
+      begin
+        WriteLn('Error: --import-map requires a non-empty path.');
+        ExitCode := 1;
+        Exit;
+      end;
+    end
     else if Copy(Arg, 1, 8) = '--alias=' then
       InlineAliases.Add(Copy(Arg, 9, MaxInt))
     else if Arg = '--alias' then

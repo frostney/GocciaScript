@@ -572,7 +572,15 @@ begin
       else if Arg = '--silent' then
         GSilentConsole := True
       else if Copy(Arg, 1, 13) = '--import-map=' then
-        GImportMapPath := Copy(Arg, 14, MaxInt)
+      begin
+        GImportMapPath := Copy(Arg, 14, MaxInt);
+        if GImportMapPath = '' then
+        begin
+          WriteLn('Error: --import-map requires a non-empty path.');
+          ExitCode := 1;
+          Exit;
+        end;
+      end
       else if Copy(Arg, 1, 8) = '--alias=' then
         GInlineAliases.Add(Copy(Arg, 9, MaxInt))
       else if Copy(Arg, 1, 9) = '--output=' then
