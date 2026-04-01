@@ -180,6 +180,94 @@ end;
 
 When no custom resolver is provided, the engine creates a default `TGocciaModuleResolver` whose base directory is the entry script's directory.
 
+### Custom Content Provider
+
+Resolution and content loading are separate concerns. A custom resolver decides **which** module path to load; a custom content provider decides **how** the module text or JSON is retrieved once that path is resolved.
+
+Use `TGocciaModuleContentProvider` when your modules come from memory, an archive, a database, or some other non-filesystem source:
+
+```pascal
+uses
+  Classes,
+  SysUtils,
+
+  Goccia.Engine,
+  Goccia.Modules.ContentProvider,
+  Goccia.Modules.Loader,
+  Goccia.Modules.Resolver;
+
+type
+  TMemoryResolver = class(TGocciaModuleResolver)
+  public
+    function Resolve(const AModulePath, AImportingFilePath: string): string; override;
+  end;
+
+  TMemoryContentProvider = class(TGocciaModuleContentProvider)
+  public
+    function Exists(const APath: string): Boolean; override;
+    function LoadContent(const APath: string): TGocciaModuleContent; override;
+    function TryGetLastModified(const APath: string;
+      out ALastModified: TDateTime): Boolean; override;
+  end;
+
+function TMemoryResolver.Resolve(const AModulePath,
+  AImportingFilePath: string): string;
+begin
+  Result := AModulePath;
+end;
+
+function TMemoryContentProvider.Exists(const APath: string): Boolean;
+begin
+  Result := APath = 'memory:/dep.js';
+end;
+
+function TMemoryContentProvider.LoadContent(
+  const APath: string): TGocciaModuleContent;
+begin
+  if APath = 'memory:/dep.js' then
+    Exit(TGocciaModuleContent.Create('export const value = 42;', 0));
+
+  raise Exception.Create('Module content not found: ' + APath);
+end;
+
+function TMemoryContentProvider.TryGetLastModified(const APath: string;
+  out ALastModified: TDateTime): Boolean;
+begin
+  ALastModified := 0;
+  Result := False;
+end;
+
+var
+  Engine: TGocciaEngine;
+  ModuleLoader: TGocciaModuleLoader;
+  Resolver: TMemoryResolver;
+  Provider: TMemoryContentProvider;
+begin
+  Resolver := TMemoryResolver.Create;
+  Provider := TMemoryContentProvider.Create;
+  try
+    ModuleLoader := TGocciaModuleLoader.Create('memory:/app.js', Resolver,
+      Provider);
+    try
+      Engine := TGocciaEngine.Create('memory:/app.js', Source,
+        TGocciaEngine.DefaultGlobals, ModuleLoader);
+      try
+        Engine.Execute;
+      finally
+        Engine.Free;
+      end;
+    finally
+      ModuleLoader.Free;  // caller owns injected module loaders
+    end;
+  finally
+    Provider.Free;  // caller owns injected providers
+    Resolver.Free;
+  end;
+end;
+```
+
+`TGocciaInterpreter` and `TGocciaBytecodeBackend` also accept injected module loaders. When no loader is supplied, they create a default `TGocciaModuleLoader`, which in turn uses a `TGocciaFileSystemModuleContentProvider` and the standard filesystem-backed resolver.
+
 ### Global Modules
 
 Global modules are bare-specifier imports that bypass file resolution entirely. They are checked before the resolver runs:

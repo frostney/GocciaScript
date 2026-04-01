@@ -1,0 +1,110 @@
+unit Goccia.Modules.ContentProvider;
+
+{$I Goccia.inc}
+
+interface
+
+uses
+  Classes,
+  SysUtils;
+
+type
+  TGocciaModuleContent = class
+  private
+    FLastModified: TDateTime;
+    FSourceLines: TStringList;
+    function GetText: string;
+  public
+    constructor Create(const AText: string; const ALastModified: TDateTime);
+    destructor Destroy; override;
+
+    property LastModified: TDateTime read FLastModified;
+    property SourceLines: TStringList read FSourceLines;
+    property Text: string read GetText;
+  end;
+
+  TGocciaModuleContentProvider = class
+  public
+    function Exists(const APath: string): Boolean; virtual; abstract;
+    function LoadContent(const APath: string): TGocciaModuleContent; virtual; abstract;
+    function TryGetLastModified(const APath: string;
+      out ALastModified: TDateTime): Boolean; virtual; abstract;
+  end;
+
+  TGocciaFileSystemModuleContentProvider = class(TGocciaModuleContentProvider)
+  public
+    function Exists(const APath: string): Boolean; override;
+    function LoadContent(const APath: string): TGocciaModuleContent; override;
+    function TryGetLastModified(const APath: string;
+      out ALastModified: TDateTime): Boolean; override;
+  end;
+
+implementation
+
+function TryGetFileLastModified(const APath: string;
+  out ALastModified: TDateTime): Boolean;
+var
+  FileAgeValue: LongInt;
+begin
+  FileAgeValue := FileAge(APath);
+  Result := FileAgeValue <> -1;
+  if Result then
+    ALastModified := FileDateToDateTime(FileAgeValue)
+  else
+    ALastModified := 0;
+end;
+
+{ TGocciaModuleContent }
+
+constructor TGocciaModuleContent.Create(const AText: string;
+  const ALastModified: TDateTime);
+begin
+  inherited Create;
+  FLastModified := ALastModified;
+  FSourceLines := TStringList.Create;
+  FSourceLines.Text := AText;
+end;
+
+destructor TGocciaModuleContent.Destroy;
+begin
+  FSourceLines.Free;
+  inherited;
+end;
+
+function TGocciaModuleContent.GetText: string;
+begin
+  Result := FSourceLines.Text;
+end;
+
+{ TGocciaFileSystemModuleContentProvider }
+
+function TGocciaFileSystemModuleContentProvider.Exists(
+  const APath: string): Boolean;
+begin
+  Result := FileExists(APath);
+end;
+
+function TGocciaFileSystemModuleContentProvider.LoadContent(
+  const APath: string): TGocciaModuleContent;
+var
+  LastModified: TDateTime;
+  Source: TStringList;
+begin
+  Source := TStringList.Create;
+  try
+    Source.LoadFromFile(APath);
+    if not TryGetFileLastModified(APath, LastModified) then
+      LastModified := 0;
+    Result := TGocciaModuleContent.Create(Source.Text, LastModified);
+  finally
+    Source.Free;
+  end;
+end;
+
+function TGocciaFileSystemModuleContentProvider.TryGetLastModified(
+  const APath: string; out ALastModified: TDateTime): Boolean;
+begin
+  Result := TryGetFileLastModified(APath, ALastModified);
+end;
+
+end.

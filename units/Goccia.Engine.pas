@@ -31,6 +31,8 @@ uses
   Goccia.JSON,
   Goccia.JSX.SourceMap,
   Goccia.Modules,
+  Goccia.Modules.ContentProvider,
+  Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
@@ -79,12 +81,12 @@ type
     const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
   private
     FInterpreter: TGocciaInterpreter;
-    FResolver: TGocciaModuleResolver;
-    FOwnsResolver: Boolean;
     FFileName: string;
     FSourceLines: TStringList;
     FInjectedGlobals: TStringList;
     FGlobals: TGocciaGlobalBuiltins;
+    FModuleLoader: TGocciaModuleLoader;
+    FOwnsModuleLoader: Boolean;
 
     // Built-in objects
     FBuiltinConsole: TGocciaConsole;
@@ -113,12 +115,18 @@ type
     procedure RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
     procedure RegisterGlobalThis;
     procedure RegisterGocciaScriptGlobal;
+    procedure Initialize(const AFileName: string; const ASourceLines: TStringList;
+      const AGlobals: TGocciaGlobalBuiltins; const AModuleLoader: TGocciaModuleLoader;
+      const AOwnsModuleLoader: Boolean);
+    function GetContentProvider: TGocciaModuleContentProvider;
+    function GetResolver: TGocciaModuleResolver;
     function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver); overload;
+    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AModuleLoader: TGocciaModuleLoader); overload;
     destructor Destroy; override;
 
     function Execute: TGocciaScriptResult;
@@ -138,7 +146,8 @@ type
     class function RunScriptFromStringList(const ASource: TStringList; const AFileName: string): TGocciaScriptResult; overload;
 
     property Interpreter: TGocciaInterpreter read FInterpreter;
-    property Resolver: TGocciaModuleResolver read FResolver;
+    property Resolver: TGocciaModuleResolver read GetResolver;
+    property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
     property BuiltinConsole: TGocciaConsole read FBuiltinConsole;
     property BuiltinMath: TGocciaMath read FBuiltinMath;
     property BuiltinGlobalObject: TGocciaGlobalObject read FBuiltinGlobalObject;
@@ -195,35 +204,47 @@ uses
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
 begin
-  Create(AFileName, ASourceLines, AGlobals, nil);
+  Initialize(AFileName, ASourceLines, AGlobals,
+    TGocciaModuleLoader.Create(AFileName), True);
 end;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver);
+begin
+  Initialize(AFileName, ASourceLines, AGlobals,
+    TGocciaModuleLoader.Create(AFileName, AResolver), True);
+end;
+
+constructor TGocciaEngine.Create(const AFileName: string;
+  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
+  const AModuleLoader: TGocciaModuleLoader);
+begin
+  Initialize(AFileName, ASourceLines, AGlobals, AModuleLoader, False);
+end;
+
+procedure TGocciaEngine.Initialize(const AFileName: string;
+  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
+  const AModuleLoader: TGocciaModuleLoader; const AOwnsModuleLoader: Boolean);
 begin
   FPreviousExceptionMask := GetExceptionMask;
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FGlobals := AGlobals;
-
-  if Assigned(AResolver) then
+  FModuleLoader := AModuleLoader;
+  FOwnsModuleLoader := AOwnsModuleLoader;
+  if not Assigned(FModuleLoader) then
   begin
-    FResolver := AResolver;
-    FOwnsResolver := False;
-  end
-  else
-  begin
-    FResolver := TGocciaModuleResolver.Create(ExtractFilePath(ExpandFileName(AFileName)));
-    FOwnsResolver := True;
+    FModuleLoader := TGocciaModuleLoader.Create(AFileName);
+    FOwnsModuleLoader := True;
   end;
 
   TGarbageCollector.Initialize;
   TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
 
-  FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines);
+  FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines,
+    FModuleLoader);
   FInterpreter.JSXEnabled := ggJSX in FGlobals;
-  FInterpreter.Resolver := FResolver;
 
   TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
 
@@ -256,10 +277,9 @@ begin
     FBuiltinTemporal.Free;
     FBuiltinArrayBuffer.Free;
     FInjectedGlobals.Free;
-
     FInterpreter.Free;
-    if FOwnsResolver then
-      FResolver.Free;
+    if FOwnsModuleLoader then
+      FModuleLoader.Free;
   finally
     SetExceptionMask(FPreviousExceptionMask);
   end;
@@ -564,9 +584,19 @@ begin
   FInterpreter.GlobalScope.DefineLexicalBinding('GocciaScript', GocciaObj, dtConst);
 end;
 
+function TGocciaEngine.GetContentProvider: TGocciaModuleContentProvider;
+begin
+  Result := FModuleLoader.ContentProvider;
+end;
+
+function TGocciaEngine.GetResolver: TGocciaModuleResolver;
+begin
+  Result := FModuleLoader.Resolver;
+end;
+
 procedure TGocciaEngine.AddAlias(const APattern, AReplacement: string);
 begin
-  FResolver.AddAlias(APattern, AReplacement);
+  Resolver.AddAlias(APattern, AReplacement);
 end;
 
 procedure TGocciaEngine.InjectGlobal(const AKey: string; const AValue: TGocciaValue);

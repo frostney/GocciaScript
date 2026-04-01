@@ -15,6 +15,8 @@ uses
   Goccia.JSON,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
+  Goccia.Modules.ContentProvider,
+  Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
   Goccia.Runtime.Bootstrap,
   Goccia.Values.Primitives,
@@ -32,12 +34,17 @@ type
     FSourcePath: string;
     FInterpreter: TGocciaInterpreter;
     FBootstrap: TGocciaRuntimeBootstrap;
-    FModuleResolver: TGocciaModuleResolver;
+    FModuleLoader: TGocciaModuleLoader;
     FBootstrapSource: TStringList;
+    FOwnsModuleLoader: Boolean;
     FInjectedGlobals: TStringList;
+    function GetContentProvider: TGocciaModuleContentProvider;
+    function GetModuleResolver: TGocciaModuleResolver;
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
-    constructor Create(const ASourcePath: string);
+    constructor Create(const ASourcePath: string); overload;
+    constructor Create(const ASourcePath: string;
+      const AModuleLoader: TGocciaModuleLoader); overload;
     destructor Destroy; override;
 
     function CompileAndRun(const AProgram: TGocciaProgram): TGocciaValue;
@@ -52,7 +59,9 @@ type
 
     property Interpreter: TGocciaInterpreter read FInterpreter;
     property Bootstrap: TGocciaRuntimeBootstrap read FBootstrap;
-    property ModuleResolver: TGocciaModuleResolver read FModuleResolver;
+    property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
+    property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
+    property ModuleResolver: TGocciaModuleResolver read GetModuleResolver;
   end;
 
 implementation
@@ -61,8 +70,6 @@ uses
   SysUtils,
 
   GarbageCollector.Generic,
-  ModuleResolver,
-  OrderedStringMap,
 
   Goccia.CallStack,
   Goccia.Constants.PropertyNames,
@@ -81,8 +88,30 @@ begin
   TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
   FSourcePath := ASourcePath;
-  FModuleResolver := TGocciaModuleResolver.Create(
-    ExtractFilePath(ExpandFileName(ASourcePath)));
+  FModuleLoader := TGocciaModuleLoader.Create(ASourcePath);
+  FOwnsModuleLoader := True;
+  FMinimalVM := TGocciaVM.Create;
+  FInterpreter := nil;
+  FBootstrap := nil;
+  FBootstrapSource := nil;
+  FInjectedGlobals := TStringList.Create;
+end;
+
+constructor TGocciaBytecodeBackend.Create(const ASourcePath: string;
+  const AModuleLoader: TGocciaModuleLoader);
+begin
+  inherited Create;
+  TGarbageCollector.Initialize;
+  TGocciaCallStack.Initialize;
+  TGocciaMicrotaskQueue.Initialize;
+  FSourcePath := ASourcePath;
+  FModuleLoader := AModuleLoader;
+  FOwnsModuleLoader := False;
+  if not Assigned(FModuleLoader) then
+  begin
+    FModuleLoader := TGocciaModuleLoader.Create(ASourcePath);
+    FOwnsModuleLoader := True;
+  end;
   FMinimalVM := TGocciaVM.Create;
   FInterpreter := nil;
   FBootstrap := nil;
@@ -99,7 +128,8 @@ begin
   FInterpreter.Free;
   FBootstrapSource.Free;
   FInjectedGlobals.Free;
-  FModuleResolver.Free;
+  if FOwnsModuleLoader then
+    FModuleLoader.Free;
   inherited;
 end;
 
@@ -216,7 +246,6 @@ procedure TGocciaBytecodeBackend.RegisterBuiltIns(
   const AGlobals: TGocciaGlobalBuiltins);
 var
   EmptySource: TStringList;
-  AliasPair: TOrderedStringMap<string>.TKeyValuePair;
 begin
   FreeAndNil(FBootstrap);
   if Assigned(TGarbageCollector.Instance) and Assigned(FInterpreter) then
@@ -227,22 +256,28 @@ begin
   EmptySource := TStringList.Create;
   EmptySource.Text := '';
   FBootstrapSource := EmptySource;
-  FInterpreter := TGocciaInterpreter.Create(FSourcePath, FBootstrapSource);
+  FInterpreter := TGocciaInterpreter.Create(FSourcePath, FBootstrapSource,
+    FModuleLoader);
   FInterpreter.JSXEnabled := ggJSX in AGlobals;
-  FInterpreter.Resolver := FModuleResolver;
   TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
   FBootstrap := TGocciaRuntimeBootstrap.Create(FInterpreter, AGlobals, ThrowError);
 
   FMinimalVM.GlobalScope := FInterpreter.GlobalScope;
   FMinimalVM.Interpreter := FInterpreter;
 
-  if Assigned(FInterpreter.Resolver) then
-    for AliasPair in FInterpreter.Resolver.Aliases do
-      FModuleResolver.AddAlias(AliasPair.Key, AliasPair.Value);
-
   if FInterpreter.GlobalScope.GetValue('GocciaScript') is TGocciaObjectValue then
     TGocciaObjectValue(FInterpreter.GlobalScope.GetValue('GocciaScript'))
       .AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.TrueValue);
+end;
+
+function TGocciaBytecodeBackend.GetContentProvider: TGocciaModuleContentProvider;
+begin
+  Result := FModuleLoader.ContentProvider;
+end;
+
+function TGocciaBytecodeBackend.GetModuleResolver: TGocciaModuleResolver;
+begin
+  Result := FModuleLoader.Resolver;
 end;
 
 procedure TGocciaBytecodeBackend.ClearTransientCaches;
