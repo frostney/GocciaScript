@@ -59,7 +59,7 @@ test("JSON.stringify NaN and Infinity become null", () => {
   expect(JSON.stringify(-Infinity)).toBe("null");
 });
 
-test("JSON.stringify preserves round-trip precision for large fractional doubles", () => {
+test("JSON.stringify preserves round-trip precision for large fractional floating-point numbers", () => {
   const value = 1775026448797.2498;
 
   expect(JSON.parse(JSON.stringify(value))).toBe(value);
