@@ -77,7 +77,10 @@ type
   end;
 
 const
-  JSON_NUMBER_ROUNDTRIP_DIGITS = 17;
+  // IEEE-754 binary64 values need up to 17 significant decimal digits to
+  // round-trip back to the same Double. This scientific pattern gives us
+  // one digit before the decimal point and up to 16 after it.
+  JSON_DOUBLE_ROUNDTRIP_SCIENTIFIC_FORMAT = '0.################E+00';
 
 function SameDoubleBits(const ALeft, ARight: Double): Boolean;
 var
@@ -143,13 +146,8 @@ begin
   if NumericStringRoundTrips(Result, AValue) then
     Exit;
 
-  Result := TrimTrailingFractionalZeros(
-    FloatToStrF(AValue, ffFixed, JSON_NUMBER_ROUNDTRIP_DIGITS, JSON_NUMBER_ROUNDTRIP_DIGITS, DefaultFormatSettings));
-  if NumericStringRoundTrips(Result, AValue) then
-    Exit;
-
   Result := NormalizeExponentNumber(
-    FloatToStrF(AValue, ffExponent, JSON_NUMBER_ROUNDTRIP_DIGITS, JSON_NUMBER_ROUNDTRIP_DIGITS, DefaultFormatSettings));
+    FormatFloat(JSON_DOUBLE_ROUNDTRIP_SCIENTIFIC_FORMAT, AValue, DefaultFormatSettings));
 end;
 
 { TGocciaJSONParser }
