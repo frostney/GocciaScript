@@ -141,6 +141,7 @@ The JSON parser is a recursive descent implementation. Special handling:
 - `undefined` → omitted in objects, `null` in arrays
 - Functions → omitted in objects, `null` in arrays
 - Symbols → omitted in objects, `null` in arrays
+- Finite floating-point numbers are serialized with round-trip-safe decimal text when needed
 - `toJSON()` is called before serializing object values
 - Circular references throw `TypeError`
 

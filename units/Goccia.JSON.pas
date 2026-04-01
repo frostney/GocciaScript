@@ -76,6 +76,80 @@ type
     function Parse(const AText: string): TGocciaValue;
   end;
 
+const
+  // IEEE-754 binary64 values need up to 17 significant decimal digits to
+  // round-trip back to the same Double. This scientific pattern gives us
+  // one digit before the decimal point and up to 16 after it.
+  JSON_DOUBLE_ROUNDTRIP_SCIENTIFIC_FORMAT = '0.################E+00';
+
+function SameDoubleBits(const ALeft, ARight: Double): Boolean;
+var
+  LeftValue, RightValue: Double;
+  LeftBits: Int64 absolute LeftValue;
+  RightBits: Int64 absolute RightValue;
+begin
+  LeftValue := ALeft;
+  RightValue := ARight;
+  Result := LeftBits = RightBits;
+end;
+
+function TrimTrailingFractionalZeros(const AValue: string): string;
+begin
+  Result := AValue;
+  while (Pos('.', Result) > 0) and (Length(Result) > 0) and (Result[Length(Result)] = '0') do
+    Delete(Result, Length(Result), 1);
+  if (Length(Result) > 0) and (Result[Length(Result)] = '.') then
+    Delete(Result, Length(Result), 1);
+end;
+
+function NormalizeExponentNumber(const AValue: string): string;
+var
+  ExponentIndex, SignIndex: Integer;
+  Mantissa, ExponentPart: string;
+begin
+  ExponentIndex := Pos('E', AValue);
+  if ExponentIndex = 0 then
+  begin
+    Result := TrimTrailingFractionalZeros(AValue);
+    Exit;
+  end;
+
+  Mantissa := TrimTrailingFractionalZeros(Copy(AValue, 1, ExponentIndex - 1));
+  ExponentPart := Copy(AValue, ExponentIndex + 1, MaxInt);
+
+  if (Length(ExponentPart) > 0) and ((ExponentPart[1] = '+') or (ExponentPart[1] = '-')) then
+    SignIndex := 2
+  else
+    SignIndex := 1;
+
+  while (Length(ExponentPart) > SignIndex) and (ExponentPart[SignIndex] = '0') do
+    Delete(ExponentPart, SignIndex, 1);
+
+  Result := Mantissa + 'e' + ExponentPart;
+end;
+
+function NumericStringRoundTrips(const ASerialized: string; const AValue: Double): Boolean;
+var
+  ParsedValue: Double;
+begin
+  if not TryStrToFloat(ASerialized, ParsedValue, DefaultFormatSettings) then
+    Exit(False);
+  Result := SameDoubleBits(ParsedValue, AValue);
+end;
+
+function SerializeJSONNumber(const AValue: Double): string;
+begin
+  if AValue = 0 then
+    Exit('0');
+
+  Result := FloatToStr(AValue, DefaultFormatSettings);
+  if NumericStringRoundTrips(Result, AValue) then
+    Exit;
+
+  Result := NormalizeExponentNumber(
+    FormatFloat(JSON_DOUBLE_ROUNDTRIP_SCIENTIFIC_FORMAT, AValue, DefaultFormatSettings));
+end;
+
 { TGocciaJSONParser }
 
 function TGocciaJSONParser.Parse(const AText: string): TGocciaValue;
@@ -284,7 +358,7 @@ begin
     else if TGocciaNumberLiteralValue(AValue).IsNaN then
       Result := 'null'
     else
-      Result := FloatToStr(AValue.ToNumberLiteral.Value);
+      Result := SerializeJSONNumber(AValue.ToNumberLiteral.Value);
   end
   else if AValue is TGocciaStringLiteralValue then
     Result := '"' + EscapeString(AValue.ToStringLiteral.Value) + '"'
