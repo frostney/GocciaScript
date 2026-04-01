@@ -18,14 +18,12 @@ uses
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
-  Goccia.Lexer,
   Goccia.Logger,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
+  Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
-  Goccia.Parser,
   Goccia.Scope,
-  Goccia.Token,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
@@ -39,45 +37,41 @@ type
   TGocciaInterpreter = class
   private
     FGlobalScope: TGocciaGlobalScope;
-    FModules: TOrderedStringMap<TGocciaModule>;
-    FLoadingModules: TOrderedStringMap<Boolean>;
-    FGlobalModules: TOrderedStringMap<TGocciaModule>;
     FFileName: string;
     FSourceLines: TStringList;
     FJSXEnabled: Boolean;
-    FContentProvider: TGocciaModuleContentProvider;
-    FOwnsContentProvider: Boolean;
-    FResolver: TGocciaModuleResolver;
+    FModuleLoader: TGocciaModuleLoader;
+    FOwnsModuleLoader: Boolean;
 
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
-    function LoadJsonModule(const AResolvedPath: string): TGocciaModule;
+    function GetContentProvider: TGocciaModuleContentProvider;
+    function GetGlobalModules: TOrderedStringMap<TGocciaModule>;
+    function GetResolver: TGocciaModuleResolver;
+    procedure SetJSXEnabled(const AValue: Boolean);
+    procedure SetResolver(const AValue: TGocciaModuleResolver);
   public
     function CreateEvaluationContext: TGocciaEvaluationContext;
     constructor Create(const AFileName: string; const ASourceLines: TStringList); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList;
-      const AContentProvider: TGocciaModuleContentProvider); overload;
+      const AModuleLoader: TGocciaModuleLoader); overload;
     destructor Destroy; override;
     function Execute(const AProgram: TGocciaProgram): TGocciaValue;
     function LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
     procedure CheckForModuleReload(const AModule: TGocciaModule);
 
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
-    property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
-    property ContentProvider: TGocciaModuleContentProvider read FContentProvider;
-    property Resolver: TGocciaModuleResolver read FResolver write FResolver;
-    property GlobalModules: TOrderedStringMap<TGocciaModule> read FGlobalModules;
+    property JSXEnabled: Boolean read FJSXEnabled write SetJSXEnabled;
+    property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
+    property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
+    property Resolver: TGocciaModuleResolver read GetResolver write SetResolver;
+    property GlobalModules: TOrderedStringMap<TGocciaModule> read GetGlobalModules;
   end;
 
 
 implementation
 
 uses
-  GarbageCollector.Generic,
-
-  Goccia.FileExtensions,
-  Goccia.JSON,
-  Goccia.JSX.SourceMap,
-  Goccia.JSX.Transformer;
+  GarbageCollector.Generic;
 
 { TGocciaInterpreter }
 
@@ -89,35 +83,30 @@ end;
 
 constructor TGocciaInterpreter.Create(const AFileName: string;
   const ASourceLines: TStringList;
-  const AContentProvider: TGocciaModuleContentProvider);
+  const AModuleLoader: TGocciaModuleLoader);
 begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FGlobalScope := TGocciaGlobalScope.Create;
-  FModules := TOrderedStringMap<TGocciaModule>.Create;
-  FLoadingModules := TOrderedStringMap<Boolean>.Create;
-  FGlobalModules := TOrderedStringMap<TGocciaModule>.Create;
-  if Assigned(AContentProvider) then
+  if Assigned(AModuleLoader) then
   begin
-    FContentProvider := AContentProvider;
-    FOwnsContentProvider := False;
+    FModuleLoader := AModuleLoader;
+    FOwnsModuleLoader := False;
   end
   else
   begin
-    FContentProvider := TGocciaFileSystemModuleContentProvider.Create;
-    FOwnsContentProvider := True;
+    FModuleLoader := TGocciaModuleLoader.Create(AFileName);
+    FOwnsModuleLoader := True;
   end;
+  FModuleLoader.BindRuntime(FGlobalScope, ThrowError);
 end;
 
 destructor TGocciaInterpreter.Destroy;
 begin
   if not Assigned(TGarbageCollector.Instance) then
     FGlobalScope.Free;
-  FModules.Free;
-  FLoadingModules.Free;
-  FGlobalModules.Free;
-  if FOwnsContentProvider then
-    FContentProvider.Free;
+  if FOwnsModuleLoader then
+    FModuleLoader.Free;
 
   inherited;
 end;
@@ -149,220 +138,42 @@ begin
 end;
 
 function TGocciaInterpreter.LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
-var
-  ResolvedPath: string;
-  Content: TGocciaModuleContent;
-  SourceText: string;
-  JSXResult: TGocciaJSXTransformResult;
-  JSXSourceMap: TGocciaSourceMap;
-  OrigLine, OrigCol: Integer;
-  Lexer: TGocciaLexer;
-  Parser: TGocciaParser;
-  ProgramNode: TGocciaProgram;
-  Module: TGocciaModule;
-  ModuleScope: TGocciaScope;
-  I: Integer;
-  Stmt: TGocciaStatement;
-  ExportDecl: TGocciaExportDeclaration;
-  ExportVarDecl: TGocciaExportVariableDeclaration;
-  ReExportDecl: TGocciaReExportDeclaration;
-  ExportPair: TStringStringMap.TKeyValuePair;
-  Value: TGocciaValue;
-  Context: TGocciaEvaluationContext;
-  SourceModule: TGocciaModule;
-  VarInfo: TGocciaVariableInfo;
 begin
-  if FGlobalModules.TryGetValue(AModulePath, Result) then
-    Exit;
-
-  try
-    if Assigned(FResolver) then
-      ResolvedPath := FResolver.Resolve(AModulePath, AImportingFilePath)
-    else
-      raise EGocciaModuleNotFound.CreateFmt(
-        'No module resolver configured and cannot resolve "%s"', [AModulePath]);
-  except
-    on E: TGocciaRuntimeError do
-      raise;
-    on E: Exception do
-      raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath, nil);
-  end;
-
-  if FModules.TryGetValue(ResolvedPath, Result) then
-  begin
-    if not FLoadingModules.ContainsKey(ResolvedPath) then
-      CheckForModuleReload(Result);
-    Exit;
-  end;
-
-  if LowerCase(ExtractFileExt(ResolvedPath)) = EXT_JSON then
-  begin
-    Result := LoadJsonModule(ResolvedPath);
-    Exit;
-  end;
-
-  Content := FContentProvider.LoadContent(ResolvedPath);
-  try
-    SourceText := Content.Text;
-    JSXSourceMap := nil;
-    if FJSXEnabled then
-    begin
-      JSXResult := TGocciaJSXTransformer.Transform(SourceText);
-      SourceText := JSXResult.Source;
-      JSXSourceMap := JSXResult.SourceMap;
-      if Assigned(JSXSourceMap) then
-        WarnIfJSXExtensionMismatch(ResolvedPath);
-    end;
-
-    try
-      try
-        Lexer := TGocciaLexer.Create(SourceText, ResolvedPath);
-        try
-          Parser := TGocciaParser.Create(Lexer.ScanTokens, ResolvedPath, Lexer.SourceLines);
-          try
-            ProgramNode := Parser.Parse;
-            try
-              Module := TGocciaModule.Create(ResolvedPath);
-              Module.LastModified := Content.LastModified;
-              FModules.Add(ResolvedPath, Module);
-              FLoadingModules.Add(ResolvedPath, True);
-              try
-                ModuleScope := FGlobalScope.CreateChild(skModule, 'Module:' + ResolvedPath);
-                Context.Scope := ModuleScope;
-                Context.OnError := ThrowError;
-                Context.LoadModule := LoadModule;
-                Context.CurrentFilePath := ResolvedPath;
-
-                for I := 0 to ProgramNode.Body.Count - 1 do
-                  EvaluateStatement(ProgramNode.Body[I], Context);  // .Value discarded at module level
-
-                for I := 0 to ProgramNode.Body.Count - 1 do
-                begin
-                  Stmt := ProgramNode.Body[I];
-
-                  if Stmt is TGocciaExportDeclaration then
-                  begin
-                    ExportDecl := TGocciaExportDeclaration(Stmt);
-                    for ExportPair in ExportDecl.ExportsTable do
-                    begin
-                      Value := ModuleScope.GetValue(ExportPair.Value);
-                      if Assigned(Value) then
-                        Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
-                    end;
-                  end
-                  else if Stmt is TGocciaExportVariableDeclaration then
-                  begin
-                    ExportVarDecl := TGocciaExportVariableDeclaration(Stmt);
-                    for VarInfo in ExportVarDecl.Declaration.Variables do
-                    begin
-                      Value := ModuleScope.GetValue(VarInfo.Name);
-                      if Assigned(Value) then
-                        Module.ExportsTable.AddOrSetValue(VarInfo.Name, Value);
-                    end;
-                  end
-                  else if Stmt is TGocciaExportEnumDeclaration then
-                  begin
-                    Value := ModuleScope.GetValue(TGocciaExportEnumDeclaration(Stmt).Declaration.Name);
-                    if Assigned(Value) then
-                      Module.ExportsTable.AddOrSetValue(TGocciaExportEnumDeclaration(Stmt).Declaration.Name, Value);
-                  end
-                  else if Stmt is TGocciaReExportDeclaration then
-                  begin
-                    ReExportDecl := TGocciaReExportDeclaration(Stmt);
-                    SourceModule := LoadModule(ReExportDecl.ModulePath, ResolvedPath);
-                    for ExportPair in ReExportDecl.ExportsTable do
-                    begin
-                      if SourceModule.ExportsTable.TryGetValue(ExportPair.Value, Value) then
-                        Module.ExportsTable.AddOrSetValue(ExportPair.Key, Value);
-                    end;
-                  end;
-                end;
-
-                Result := Module;
-              finally
-                FLoadingModules.Remove(ResolvedPath);
-              end;
-            finally
-              ProgramNode.Free;
-            end;
-          finally
-            Parser.Free;
-          end;
-        finally
-          Lexer.Free;
-        end;
-      except
-        on E: TGocciaError do
-        begin
-          if Assigned(JSXSourceMap) and
-             JSXSourceMap.Translate(E.Line, E.Column, OrigLine, OrigCol) then
-            E.TranslatePosition(OrigLine, OrigCol, Content.SourceLines);
-          raise;
-        end;
-      end;
-    finally
-      JSXSourceMap.Free;
-    end;
-  finally
-    Content.Free;
-  end;
+  Result := FModuleLoader.LoadModule(AModulePath, AImportingFilePath);
 end;
 
 procedure TGocciaInterpreter.CheckForModuleReload(const AModule: TGocciaModule);
-var
-  CurrentModified: TDateTime;
 begin
-  if not FContentProvider.TryGetLastModified(AModule.Path, CurrentModified) then
-    Exit;
-
-  if CurrentModified > AModule.LastModified then
-  begin
-    AModule.ExportsTable.Clear;
-    AModule.LastModified := CurrentModified;
-    LoadModule(AModule.Path, AModule.Path);
-  end;
+  FModuleLoader.CheckForModuleReload(AModule);
 end;
 
-function TGocciaInterpreter.LoadJsonModule(const AResolvedPath: string): TGocciaModule;
-var
-  Content: TGocciaModuleContent;
-  Parser: TGocciaJSONParser;
-  ParsedValue: TGocciaValue;
-  Obj: TGocciaObjectValue;
-  Key: string;
-  Module: TGocciaModule;
+function TGocciaInterpreter.GetContentProvider: TGocciaModuleContentProvider;
 begin
-  Content := FContentProvider.LoadContent(AResolvedPath);
-  try
-    Parser := TGocciaJSONParser.Create;
-    try
-      try
-        ParsedValue := Parser.Parse(Content.Text);
-      except
-        on E: EGocciaJSONParseError do
-          raise TGocciaRuntimeError.Create(
-            Format('Failed to parse JSON module "%s": %s', [AResolvedPath, E.Message]),
-            0, 0, AResolvedPath, nil);
-      end;
+  Result := FModuleLoader.ContentProvider;
+end;
 
-      Module := TGocciaModule.Create(AResolvedPath);
-      Module.LastModified := Content.LastModified;
+function TGocciaInterpreter.GetGlobalModules: TOrderedStringMap<TGocciaModule>;
+begin
+  Result := FModuleLoader.GlobalModules;
+end;
 
-      if ParsedValue is TGocciaObjectValue then
-      begin
-        Obj := TGocciaObjectValue(ParsedValue);
-        for Key in Obj.GetOwnPropertyKeys do
-          Module.ExportsTable.AddOrSetValue(Key, Obj.GetProperty(Key));
-      end;
+function TGocciaInterpreter.GetResolver: TGocciaModuleResolver;
+begin
+  Result := FModuleLoader.Resolver;
+end;
 
-      FModules.Add(AResolvedPath, Module);
-      Result := Module;
-    finally
-      Parser.Free;
-    end;
-  finally
-    Content.Free;
-  end;
+procedure TGocciaInterpreter.SetJSXEnabled(const AValue: Boolean);
+begin
+  FJSXEnabled := AValue;
+  FModuleLoader.JSXEnabled := AValue;
+end;
+
+procedure TGocciaInterpreter.SetResolver(const AValue: TGocciaModuleResolver);
+begin
+  if Assigned(AValue) and (AValue <> FModuleLoader.Resolver) then
+    raise Exception.Create(
+      'TGocciaInterpreter resolver is owned by the module loader. ' +
+      'Create the interpreter with a configured TGocciaModuleLoader instead.');
 end;
 
 procedure TGocciaInterpreter.ThrowError(const AMessage: string; const ALine, AColumn: Integer);

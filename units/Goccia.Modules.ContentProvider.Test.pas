@@ -17,6 +17,7 @@ uses
   Goccia.Interpreter,
   Goccia.Lexer,
   Goccia.Modules.ContentProvider,
+  Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
   Goccia.Parser,
   Goccia.TestSetup,
@@ -233,6 +234,7 @@ const
   MODULE_PATH = 'memory:/dep.js';
 var
   Engine: TGocciaEngine;
+  ModuleLoader: TGocciaModuleLoader;
   Provider: TMemoryModuleContentProvider;
   Resolver: TInMemoryModuleResolver;
   Source: TStringList;
@@ -246,12 +248,17 @@ begin
     Source.Text := 'import { value } from "' + MODULE_PATH + '";' + LineEnding +
       'value;';
 
-    Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
-      TGocciaEngine.DefaultGlobals, Resolver, Provider);
+    ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      ScriptResult := Engine.Execute;
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
+        TGocciaEngine.DefaultGlobals, ModuleLoader);
+      try
+        ScriptResult := Engine.Execute;
+      finally
+        Engine.Free;
+      end;
     finally
-      Engine.Free;
+      ModuleLoader.Free;
     end;
 
     Expect<Boolean>(ScriptResult.Result is TGocciaNumberLiteralValue).ToBe(True);
@@ -266,6 +273,7 @@ end;
 procedure TModuleContentProviderTests.TestBytecodeBackendUsesInjectedContentProvider;
 var
   Backend: TGocciaBytecodeBackend;
+  ModuleLoader: TGocciaModuleLoader;
   Module: TGocciaBytecodeModule;
   ProgramNode: TGocciaProgram;
   Provider: TMemoryModuleContentProvider;
@@ -283,27 +291,32 @@ begin
   Provider := TMemoryModuleContentProvider.Create;
   Provider.AddModule(DepPath, 'export const value = 42;');
 
-  Backend := TGocciaBytecodeBackend.Create(EntryPath, Provider);
+  ModuleLoader := TGocciaModuleLoader.Create(EntryPath, nil, Provider);
   try
-    Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
-    ProgramNode := CreateProgram(
-      'import { value } from "./dep.js";' + LineEnding + 'value;',
-      EntryPath);
+    Backend := TGocciaBytecodeBackend.Create(EntryPath, ModuleLoader);
     try
-      Module := Backend.CompileToModule(ProgramNode);
-    finally
-      ProgramNode.Free;
-    end;
+      Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
+      ProgramNode := CreateProgram(
+        'import { value } from "./dep.js";' + LineEnding + 'value;',
+        EntryPath);
+      try
+        Module := Backend.CompileToModule(ProgramNode);
+      finally
+        ProgramNode.Free;
+      end;
 
-    try
-      ResultValue := Backend.RunModule(Module);
-      Expect<Boolean>(ResultValue is TGocciaNumberLiteralValue).ToBe(True);
-      Expect<Double>(TGocciaNumberLiteralValue(ResultValue).Value).ToBe(42);
+      try
+        ResultValue := Backend.RunModule(Module);
+        Expect<Boolean>(ResultValue is TGocciaNumberLiteralValue).ToBe(True);
+        Expect<Double>(TGocciaNumberLiteralValue(ResultValue).Value).ToBe(42);
+      finally
+        Module.Free;
+      end;
     finally
-      Module.Free;
+      Backend.Free;
     end;
   finally
-    Backend.Free;
+    ModuleLoader.Free;
     Provider.Free;
   end;
 end;

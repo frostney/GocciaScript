@@ -193,6 +193,7 @@ uses
 
   Goccia.Engine,
   Goccia.Modules.ContentProvider,
+  Goccia.Modules.Loader,
   Goccia.Modules.Resolver;
 
 type
@@ -238,24 +239,34 @@ end;
 
 var
   Engine: TGocciaEngine;
+  ModuleLoader: TGocciaModuleLoader;
   Resolver: TMemoryResolver;
   Provider: TMemoryContentProvider;
 begin
   Resolver := TMemoryResolver.Create;
   Provider := TMemoryContentProvider.Create;
-  Engine := TGocciaEngine.Create('memory:/app.js', Source,
-    TGocciaEngine.DefaultGlobals, Resolver, Provider);
   try
-    Engine.Execute;
+    ModuleLoader := TGocciaModuleLoader.Create('memory:/app.js', Resolver,
+      Provider);
+    try
+      Engine := TGocciaEngine.Create('memory:/app.js', Source,
+        TGocciaEngine.DefaultGlobals, ModuleLoader);
+      try
+        Engine.Execute;
+      finally
+        Engine.Free;
+      end;
+    finally
+      ModuleLoader.Free;  // caller owns injected module loaders
+    end;
   finally
-    Engine.Free;
     Provider.Free;  // caller owns injected providers
     Resolver.Free;
   end;
 end;
 ```
 
-`TGocciaInterpreter` and `TGocciaBytecodeBackend` also accept injected content providers. When no provider is supplied, they create a `TGocciaFileSystemModuleContentProvider` automatically, preserving the current filesystem-backed behavior.
+`TGocciaInterpreter` and `TGocciaBytecodeBackend` also accept injected module loaders. When no loader is supplied, they create a default `TGocciaModuleLoader`, which in turn uses a `TGocciaFileSystemModuleContentProvider` and the standard filesystem-backed resolver.
 
 ### Global Modules
 
