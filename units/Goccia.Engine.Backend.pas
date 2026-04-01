@@ -15,6 +15,7 @@ uses
   Goccia.JSON,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
+  Goccia.Modules.ContentProvider,
   Goccia.Modules.Resolver,
   Goccia.Runtime.Bootstrap,
   Goccia.Values.Primitives,
@@ -34,10 +35,13 @@ type
     FBootstrap: TGocciaRuntimeBootstrap;
     FModuleResolver: TGocciaModuleResolver;
     FBootstrapSource: TStringList;
+    FContentProvider: TGocciaModuleContentProvider;
     FInjectedGlobals: TStringList;
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
-    constructor Create(const ASourcePath: string);
+    constructor Create(const ASourcePath: string); overload;
+    constructor Create(const ASourcePath: string;
+      const AContentProvider: TGocciaModuleContentProvider); overload;
     destructor Destroy; override;
 
     function CompileAndRun(const AProgram: TGocciaProgram): TGocciaValue;
@@ -52,6 +56,7 @@ type
 
     property Interpreter: TGocciaInterpreter read FInterpreter;
     property Bootstrap: TGocciaRuntimeBootstrap read FBootstrap;
+    property ContentProvider: TGocciaModuleContentProvider read FContentProvider;
     property ModuleResolver: TGocciaModuleResolver read FModuleResolver;
   end;
 
@@ -76,6 +81,12 @@ uses
 
 constructor TGocciaBytecodeBackend.Create(const ASourcePath: string);
 begin
+  Create(ASourcePath, nil);
+end;
+
+constructor TGocciaBytecodeBackend.Create(const ASourcePath: string;
+  const AContentProvider: TGocciaModuleContentProvider);
+begin
   inherited Create;
   TGarbageCollector.Initialize;
   TGocciaCallStack.Initialize;
@@ -87,6 +98,7 @@ begin
   FInterpreter := nil;
   FBootstrap := nil;
   FBootstrapSource := nil;
+  FContentProvider := AContentProvider;
   FInjectedGlobals := TStringList.Create;
 end;
 
@@ -227,7 +239,8 @@ begin
   EmptySource := TStringList.Create;
   EmptySource.Text := '';
   FBootstrapSource := EmptySource;
-  FInterpreter := TGocciaInterpreter.Create(FSourcePath, FBootstrapSource);
+  FInterpreter := TGocciaInterpreter.Create(FSourcePath, FBootstrapSource,
+    FContentProvider);
   FInterpreter.JSXEnabled := ggJSX in AGlobals;
   FInterpreter.Resolver := FModuleResolver;
   TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);

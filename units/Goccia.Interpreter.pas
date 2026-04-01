@@ -21,6 +21,7 @@ uses
   Goccia.Lexer,
   Goccia.Logger,
   Goccia.Modules,
+  Goccia.Modules.ContentProvider,
   Goccia.Modules.Resolver,
   Goccia.Parser,
   Goccia.Scope,
@@ -44,13 +45,17 @@ type
     FFileName: string;
     FSourceLines: TStringList;
     FJSXEnabled: Boolean;
+    FContentProvider: TGocciaModuleContentProvider;
+    FOwnsContentProvider: Boolean;
     FResolver: TGocciaModuleResolver;
 
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     function LoadJsonModule(const AResolvedPath: string): TGocciaModule;
   public
     function CreateEvaluationContext: TGocciaEvaluationContext;
-    constructor Create(const AFileName: string; const ASourceLines: TStringList);
+    constructor Create(const AFileName: string; const ASourceLines: TStringList); overload;
+    constructor Create(const AFileName: string; const ASourceLines: TStringList;
+      const AContentProvider: TGocciaModuleContentProvider); overload;
     destructor Destroy; override;
     function Execute(const AProgram: TGocciaProgram): TGocciaValue;
     function LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
@@ -58,6 +63,7 @@ type
 
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
     property JSXEnabled: Boolean read FJSXEnabled write FJSXEnabled;
+    property ContentProvider: TGocciaModuleContentProvider read FContentProvider;
     property Resolver: TGocciaModuleResolver read FResolver write FResolver;
     property GlobalModules: TOrderedStringMap<TGocciaModule> read FGlobalModules;
   end;
@@ -78,12 +84,29 @@ uses
 constructor TGocciaInterpreter.Create(const AFileName: string;
   const ASourceLines: TStringList);
 begin
+  Create(AFileName, ASourceLines, nil);
+end;
+
+constructor TGocciaInterpreter.Create(const AFileName: string;
+  const ASourceLines: TStringList;
+  const AContentProvider: TGocciaModuleContentProvider);
+begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FGlobalScope := TGocciaGlobalScope.Create;
   FModules := TOrderedStringMap<TGocciaModule>.Create;
   FLoadingModules := TOrderedStringMap<Boolean>.Create;
   FGlobalModules := TOrderedStringMap<TGocciaModule>.Create;
+  if Assigned(AContentProvider) then
+  begin
+    FContentProvider := AContentProvider;
+    FOwnsContentProvider := False;
+  end
+  else
+  begin
+    FContentProvider := TGocciaFileSystemModuleContentProvider.Create;
+    FOwnsContentProvider := True;
+  end;
 end;
 
 destructor TGocciaInterpreter.Destroy;
@@ -93,6 +116,8 @@ begin
   FModules.Free;
   FLoadingModules.Free;
   FGlobalModules.Free;
+  if FOwnsContentProvider then
+    FContentProvider.Free;
 
   inherited;
 end;
@@ -126,7 +151,7 @@ end;
 function TGocciaInterpreter.LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
 var
   ResolvedPath: string;
-  Source: TStringList;
+  Content: TGocciaModuleContent;
   SourceText: string;
   JSXResult: TGocciaJSXTransformResult;
   JSXSourceMap: TGocciaSourceMap;
@@ -176,11 +201,9 @@ begin
     Exit;
   end;
 
-  Source := TStringList.Create;
+  Content := FContentProvider.LoadContent(ResolvedPath);
   try
-    Source.LoadFromFile(ResolvedPath);
-
-    SourceText := Source.Text;
+    SourceText := Content.Text;
     JSXSourceMap := nil;
     if FJSXEnabled then
     begin
@@ -200,7 +223,7 @@ begin
             ProgramNode := Parser.Parse;
             try
               Module := TGocciaModule.Create(ResolvedPath);
-              Module.LastModified := FileDateToDateTime(FileAge(ResolvedPath));
+              Module.LastModified := Content.LastModified;
               FModules.Add(ResolvedPath, Module);
               FLoadingModules.Add(ResolvedPath, True);
               try
@@ -273,7 +296,7 @@ begin
         begin
           if Assigned(JSXSourceMap) and
              JSXSourceMap.Translate(E.Line, E.Column, OrigLine, OrigCol) then
-            E.TranslatePosition(OrigLine, OrigCol, Source);
+            E.TranslatePosition(OrigLine, OrigCol, Content.SourceLines);
           raise;
         end;
       end;
@@ -281,7 +304,7 @@ begin
       JSXSourceMap.Free;
     end;
   finally
-    Source.Free;
+    Content.Free;
   end;
 end;
 
@@ -289,7 +312,9 @@ procedure TGocciaInterpreter.CheckForModuleReload(const AModule: TGocciaModule);
 var
   CurrentModified: TDateTime;
 begin
-  CurrentModified := FileDateToDateTime(FileAge(AModule.Path));
+  if not FContentProvider.TryGetLastModified(AModule.Path, CurrentModified) then
+    Exit;
+
   if CurrentModified > AModule.LastModified then
   begin
     AModule.ExportsTable.Clear;
@@ -300,21 +325,19 @@ end;
 
 function TGocciaInterpreter.LoadJsonModule(const AResolvedPath: string): TGocciaModule;
 var
-  Source: TStringList;
+  Content: TGocciaModuleContent;
   Parser: TGocciaJSONParser;
   ParsedValue: TGocciaValue;
   Obj: TGocciaObjectValue;
   Key: string;
   Module: TGocciaModule;
 begin
-  Source := TStringList.Create;
+  Content := FContentProvider.LoadContent(AResolvedPath);
   try
-    Source.LoadFromFile(AResolvedPath);
-
     Parser := TGocciaJSONParser.Create;
     try
       try
-        ParsedValue := Parser.Parse(Source.Text);
+        ParsedValue := Parser.Parse(Content.Text);
       except
         on E: EGocciaJSONParseError do
           raise TGocciaRuntimeError.Create(
@@ -323,7 +346,7 @@ begin
       end;
 
       Module := TGocciaModule.Create(AResolvedPath);
-      Module.LastModified := FileDateToDateTime(FileAge(AResolvedPath));
+      Module.LastModified := Content.LastModified;
 
       if ParsedValue is TGocciaObjectValue then
       begin
@@ -338,7 +361,7 @@ begin
       Parser.Free;
     end;
   finally
-    Source.Free;
+    Content.Free;
   end;
 end;
 

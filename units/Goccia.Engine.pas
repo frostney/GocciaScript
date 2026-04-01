@@ -31,6 +31,7 @@ uses
   Goccia.JSON,
   Goccia.JSX.SourceMap,
   Goccia.Modules,
+  Goccia.Modules.ContentProvider,
   Goccia.Modules.Resolver,
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
@@ -113,12 +114,15 @@ type
     procedure RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
     procedure RegisterGlobalThis;
     procedure RegisterGocciaScriptGlobal;
+    function GetContentProvider: TGocciaModuleContentProvider;
     function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     procedure PrintParserWarnings(const AParser: TGocciaParser; const ASourceMap: TGocciaSourceMap = nil);
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver); overload;
+    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AContentProvider: TGocciaModuleContentProvider); overload;
+    constructor Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver; const AContentProvider: TGocciaModuleContentProvider); overload;
     destructor Destroy; override;
 
     function Execute: TGocciaScriptResult;
@@ -139,6 +143,7 @@ type
 
     property Interpreter: TGocciaInterpreter read FInterpreter;
     property Resolver: TGocciaModuleResolver read FResolver;
+    property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
     property BuiltinConsole: TGocciaConsole read FBuiltinConsole;
     property BuiltinMath: TGocciaMath read FBuiltinMath;
     property BuiltinGlobalObject: TGocciaGlobalObject read FBuiltinGlobalObject;
@@ -195,10 +200,25 @@ uses
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins);
 begin
-  Create(AFileName, ASourceLines, AGlobals, nil);
+  Create(AFileName, ASourceLines, AGlobals, nil, nil);
 end;
 
 constructor TGocciaEngine.Create(const AFileName: string; const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins; const AResolver: TGocciaModuleResolver);
+begin
+  Create(AFileName, ASourceLines, AGlobals, AResolver, nil);
+end;
+
+constructor TGocciaEngine.Create(const AFileName: string;
+  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
+  const AContentProvider: TGocciaModuleContentProvider);
+begin
+  Create(AFileName, ASourceLines, AGlobals, nil, AContentProvider);
+end;
+
+constructor TGocciaEngine.Create(const AFileName: string;
+  const ASourceLines: TStringList; const AGlobals: TGocciaGlobalBuiltins;
+  const AResolver: TGocciaModuleResolver;
+  const AContentProvider: TGocciaModuleContentProvider);
 begin
   FPreviousExceptionMask := GetExceptionMask;
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
@@ -221,7 +241,8 @@ begin
   TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
 
-  FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines);
+  FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines,
+    AContentProvider);
   FInterpreter.JSXEnabled := ggJSX in FGlobals;
   FInterpreter.Resolver := FResolver;
 
@@ -562,6 +583,11 @@ begin
   GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.FalseValue);
 
   FInterpreter.GlobalScope.DefineLexicalBinding('GocciaScript', GocciaObj, dtConst);
+end;
+
+function TGocciaEngine.GetContentProvider: TGocciaModuleContentProvider;
+begin
+  Result := FInterpreter.ContentProvider;
 end;
 
 procedure TGocciaEngine.AddAlias(const APattern, AReplacement: string);
