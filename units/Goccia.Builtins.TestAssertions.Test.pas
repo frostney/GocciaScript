@@ -49,6 +49,27 @@ type
     procedure TestToEqualArrays;
     procedure TestToEqualMismatch;
 
+    { toContainEqual }
+    procedure TestToContainEqualArrayValue;
+    procedure TestToContainEqualArrayMissing;
+    procedure TestToContainEqualOnNonArray;
+
+    { toStrictEqual }
+    procedure TestToStrictEqualArrays;
+    procedure TestToStrictEqualMismatch;
+    procedure TestToStrictEqualNegated;
+
+    { toMatchObject }
+    procedure TestToMatchObjectSubset;
+    procedure TestToMatchObjectNestedSubset;
+    procedure TestToMatchObjectMismatch;
+    procedure TestToMatchObjectOnNonObject;
+
+    { toMatch }
+    procedure TestToMatchSubstring;
+    procedure TestToMatchMissingSubstring;
+    procedure TestToMatchOnNonString;
+
     { toBeNull }
     procedure TestToBeNullWithNull;
     procedure TestToBeNullWithNonNull;
@@ -233,6 +254,27 @@ begin
   Test('toEqual passes for equal primitives', TestToEqualPrimitives);
   Test('toEqual passes for structurally equal arrays', TestToEqualArrays);
   Test('toEqual fails for mismatched values', TestToEqualMismatch);
+
+  { toContainEqual }
+  Test('toContainEqual passes for deep-equal array elements', TestToContainEqualArrayValue);
+  Test('toContainEqual fails when deep-equal element is missing', TestToContainEqualArrayMissing);
+  Test('toContainEqual on non-array fails cleanly', TestToContainEqualOnNonArray);
+
+  { toStrictEqual }
+  Test('toStrictEqual passes for identical nested arrays', TestToStrictEqualArrays);
+  Test('toStrictEqual fails for mismatched values', TestToStrictEqualMismatch);
+  Test('not.toStrictEqual passes for different values', TestToStrictEqualNegated);
+
+  { toMatchObject }
+  Test('toMatchObject passes for object subsets', TestToMatchObjectSubset);
+  Test('toMatchObject passes for nested object subsets', TestToMatchObjectNestedSubset);
+  Test('toMatchObject fails for mismatched subset values', TestToMatchObjectMismatch);
+  Test('toMatchObject on non-object fails cleanly', TestToMatchObjectOnNonObject);
+
+  { toMatch }
+  Test('toMatch passes for string substrings', TestToMatchSubstring);
+  Test('toMatch fails for missing substrings', TestToMatchMissingSubstring);
+  Test('toMatch on non-string fails cleanly', TestToMatchOnNonString);
 
   { toBeNull }
   Test('toBeNull passes for null', TestToBeNullWithNull);
@@ -435,6 +477,244 @@ begin
   A := TGocciaArgumentsCollection.Create([TGocciaNumberLiteralValue.Create(2)]);
   try
     ExpectFail(MakeExpectation(TGocciaNumberLiteralValue.Create(1)).ToEqual(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+{ ---- toContainEqual ---- }
+
+procedure TTestExpectationMatchers.TestToContainEqualArrayValue;
+var
+  A: TGocciaArgumentsCollection;
+  ActualArray: TGocciaArrayValue;
+  ExpectedObject: TGocciaObjectValue;
+  ActualObject: TGocciaObjectValue;
+begin
+  ActualArray := TGocciaArrayValue.Create;
+  ActualObject := TGocciaObjectValue.Create;
+  ActualObject.AssignProperty('id', TGocciaNumberLiteralValue.Create(1));
+  ActualObject.AssignProperty('label', TGocciaStringLiteralValue.Create('first'));
+  ActualArray.Elements.Add(ActualObject);
+
+  ExpectedObject := TGocciaObjectValue.Create;
+  ExpectedObject.AssignProperty('id', TGocciaNumberLiteralValue.Create(1));
+  ExpectedObject.AssignProperty('label', TGocciaStringLiteralValue.Create('first'));
+
+  A := TGocciaArgumentsCollection.Create([ExpectedObject]);
+  try
+    ExpectPass(MakeExpectation(ActualArray).ToContainEqual(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToContainEqualArrayMissing;
+var
+  A: TGocciaArgumentsCollection;
+  ActualArray: TGocciaArrayValue;
+  ExpectedObject: TGocciaObjectValue;
+  ActualObject: TGocciaObjectValue;
+begin
+  ActualArray := TGocciaArrayValue.Create;
+  ActualObject := TGocciaObjectValue.Create;
+  ActualObject.AssignProperty('id', TGocciaNumberLiteralValue.Create(1));
+  ActualArray.Elements.Add(ActualObject);
+
+  ExpectedObject := TGocciaObjectValue.Create;
+  ExpectedObject.AssignProperty('id', TGocciaNumberLiteralValue.Create(2));
+
+  A := TGocciaArgumentsCollection.Create([ExpectedObject]);
+  try
+    ExpectFail(MakeExpectation(ActualArray).ToContainEqual(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToContainEqualOnNonArray;
+var
+  A: TGocciaArgumentsCollection;
+begin
+  A := TGocciaArgumentsCollection.Create([TGocciaObjectValue.Create]);
+  try
+    ExpectFail(MakeExpectation(TGocciaStringLiteralValue.Create('value')).ToContainEqual(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+{ ---- toStrictEqual ---- }
+
+procedure TTestExpectationMatchers.TestToStrictEqualArrays;
+var
+  A: TGocciaArgumentsCollection;
+  ActualArray, ExpectedArray: TGocciaArrayValue;
+  ActualObject, ExpectedObject: TGocciaObjectValue;
+begin
+  ActualArray := TGocciaArrayValue.Create;
+  ExpectedArray := TGocciaArrayValue.Create;
+
+  ActualObject := TGocciaObjectValue.Create;
+  ActualObject.AssignProperty('count', TGocciaNumberLiteralValue.Create(3));
+  ActualArray.Elements.Add(ActualObject);
+
+  ExpectedObject := TGocciaObjectValue.Create;
+  ExpectedObject.AssignProperty('count', TGocciaNumberLiteralValue.Create(3));
+  ExpectedArray.Elements.Add(ExpectedObject);
+
+  A := TGocciaArgumentsCollection.Create([ExpectedArray]);
+  try
+    ExpectPass(MakeExpectation(ActualArray).ToStrictEqual(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToStrictEqualMismatch;
+var
+  A: TGocciaArgumentsCollection;
+begin
+  A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('second')]);
+  try
+    ExpectFail(MakeExpectation(TGocciaStringLiteralValue.Create('first')).ToStrictEqual(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToStrictEqualNegated;
+var
+  A: TGocciaArgumentsCollection;
+begin
+  A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('second')]);
+  try
+    ExpectPass(MakeExpectation(TGocciaStringLiteralValue.Create('first'), True).ToStrictEqual(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+{ ---- toMatchObject ---- }
+
+procedure TTestExpectationMatchers.TestToMatchObjectSubset;
+var
+  A: TGocciaArgumentsCollection;
+  ActualObject, ExpectedObject: TGocciaObjectValue;
+begin
+  ActualObject := TGocciaObjectValue.Create;
+  ActualObject.AssignProperty('id', TGocciaNumberLiteralValue.Create(1));
+  ActualObject.AssignProperty('name', TGocciaStringLiteralValue.Create('Ada'));
+  ActualObject.AssignProperty('role', TGocciaStringLiteralValue.Create('admin'));
+
+  ExpectedObject := TGocciaObjectValue.Create;
+  ExpectedObject.AssignProperty('id', TGocciaNumberLiteralValue.Create(1));
+  ExpectedObject.AssignProperty('name', TGocciaStringLiteralValue.Create('Ada'));
+
+  A := TGocciaArgumentsCollection.Create([ExpectedObject]);
+  try
+    ExpectPass(MakeExpectation(ActualObject).ToMatchObject(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToMatchObjectNestedSubset;
+var
+  A: TGocciaArgumentsCollection;
+  ActualObject, ExpectedObject: TGocciaObjectValue;
+  ActualMeta, ExpectedMeta: TGocciaObjectValue;
+begin
+  ActualMeta := TGocciaObjectValue.Create;
+  ActualMeta.AssignProperty('active', TGocciaBooleanLiteralValue.Create(True));
+  ActualMeta.AssignProperty('version', TGocciaNumberLiteralValue.Create(2));
+
+  ActualObject := TGocciaObjectValue.Create;
+  ActualObject.AssignProperty('meta', ActualMeta);
+  ActualObject.AssignProperty('name', TGocciaStringLiteralValue.Create('service'));
+
+  ExpectedMeta := TGocciaObjectValue.Create;
+  ExpectedMeta.AssignProperty('active', TGocciaBooleanLiteralValue.Create(True));
+
+  ExpectedObject := TGocciaObjectValue.Create;
+  ExpectedObject.AssignProperty('meta', ExpectedMeta);
+
+  A := TGocciaArgumentsCollection.Create([ExpectedObject]);
+  try
+    ExpectPass(MakeExpectation(ActualObject).ToMatchObject(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToMatchObjectMismatch;
+var
+  A: TGocciaArgumentsCollection;
+  ActualObject, ExpectedObject: TGocciaObjectValue;
+begin
+  ActualObject := TGocciaObjectValue.Create;
+  ActualObject.AssignProperty('id', TGocciaNumberLiteralValue.Create(1));
+
+  ExpectedObject := TGocciaObjectValue.Create;
+  ExpectedObject.AssignProperty('id', TGocciaNumberLiteralValue.Create(2));
+
+  A := TGocciaArgumentsCollection.Create([ExpectedObject]);
+  try
+    ExpectFail(MakeExpectation(ActualObject).ToMatchObject(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToMatchObjectOnNonObject;
+var
+  A: TGocciaArgumentsCollection;
+  ExpectedObject: TGocciaObjectValue;
+begin
+  ExpectedObject := TGocciaObjectValue.Create;
+  ExpectedObject.AssignProperty('id', TGocciaNumberLiteralValue.Create(1));
+
+  A := TGocciaArgumentsCollection.Create([ExpectedObject]);
+  try
+    ExpectFail(MakeExpectation(TGocciaNumberLiteralValue.Create(7)).ToMatchObject(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+{ ---- toMatch ---- }
+
+procedure TTestExpectationMatchers.TestToMatchSubstring;
+var
+  A: TGocciaArgumentsCollection;
+begin
+  A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('world')]);
+  try
+    ExpectPass(MakeExpectation(TGocciaStringLiteralValue.Create('hello world')).ToMatch(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToMatchMissingSubstring;
+var
+  A: TGocciaArgumentsCollection;
+begin
+  A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('planet')]);
+  try
+    ExpectFail(MakeExpectation(TGocciaStringLiteralValue.Create('hello world')).ToMatch(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToMatchOnNonString;
+var
+  A: TGocciaArgumentsCollection;
+begin
+  A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('1')]);
+  try
+    ExpectFail(MakeExpectation(TGocciaNumberLiteralValue.Create(1)).ToMatch(A, nil));
   finally
     A.Free;
   end;

@@ -14,6 +14,7 @@ function IsSameValue(const ALeft, ARight: TGocciaValue): Boolean;
 function IsSameValueZero(const ALeft, ARight: TGocciaValue): Boolean;
 
 function IsDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
+function IsPartialDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
 
 function GreaterThan(const ALeft, ARight: TGocciaValue): Boolean;
 function GreaterThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
@@ -24,7 +25,6 @@ implementation
 
 uses
   Goccia.Values.ArrayValue,
-  Goccia.Values.ClassHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
   Goccia.Values.ObjectValue,
@@ -348,6 +348,50 @@ begin
   end;
 
   // For other types (functions, etc.), fall back to strict equality
+  Result := False;
+end;
+function IsPartialDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
+var
+  ActualObj, ExpectedObj: TGocciaObjectValue;
+  ExpectedKeys: TArray<string>;
+  I: Integer;
+  Key: string;
+begin
+  if IsDeepEqual(AActual, AExpected) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if (AActual is TGocciaObjectValue) and (AExpected is TGocciaObjectValue) and
+     not (AActual is TGocciaArrayValue) and not (AExpected is TGocciaArrayValue) and
+     not (AActual is TGocciaSetValue) and not (AExpected is TGocciaSetValue) and
+     not (AActual is TGocciaMapValue) and not (AExpected is TGocciaMapValue) then
+  begin
+    ActualObj := TGocciaObjectValue(AActual);
+    ExpectedObj := TGocciaObjectValue(AExpected);
+    ExpectedKeys := ExpectedObj.GetEnumerablePropertyNames;
+
+    for I := 0 to High(ExpectedKeys) do
+    begin
+      Key := ExpectedKeys[I];
+      if not ActualObj.HasProperty(Key) then
+      begin
+        Result := False;
+        Exit;
+      end;
+
+      if not IsPartialDeepEqual(ActualObj.GetProperty(Key), ExpectedObj.GetProperty(Key)) then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
+
+    Result := True;
+    Exit;
+  end;
+
   Result := False;
 end;
 
