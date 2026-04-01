@@ -16,7 +16,7 @@ type
     FBaseDirectory: string;
     FExtensions: array of string;
   protected
-    function ApplyAliases(const AModulePath: string): string;
+    function ApplyAliases(const AModulePath, AImportingFilePath: string): string;
     function TryResolveWithExtensions(const ABasePath: string; out AResolvedPath: string): Boolean;
   public
     constructor Create(const ABaseDirectory: string = '');
@@ -37,6 +37,21 @@ implementation
 
 const
   ALIAS_SEGMENT_DELIMITER = '/';
+  CURRENT_DIRECTORY_PREFIX = './';
+  PARENT_DIRECTORY_PREFIX = '../';
+
+function HasTrailingPathDelimiter(const APath: string): Boolean;
+begin
+  Result := (APath <> '') and (APath[Length(APath)] = PathDelim);
+end;
+
+function EnsureTrailingPathDelimiterIfNeeded(const APath: string;
+  const ANeedsTrailingDelimiter: Boolean): string;
+begin
+  Result := APath;
+  if ANeedsTrailingDelimiter and not HasTrailingPathDelimiter(Result) then
+    Result := Result + PathDelim;
+end;
 
 function IsAbsolutePath(const APath: string): Boolean;
 begin
@@ -49,20 +64,62 @@ begin
   Result := Copy(APath, 1, 2) = '\\';
 end;
 
-function AliasMatchesModulePath(const AAlias, AModulePath: string): Boolean;
-var
-  AliasLength: Integer;
+function IsRelativeModuleSpecifier(const AModulePath: string): Boolean;
 begin
-  AliasLength := Length(AAlias);
-  if (AliasLength = 0) or (Length(AModulePath) < AliasLength) then
+  Result := (Copy(AModulePath, 1, Length(CURRENT_DIRECTORY_PREFIX)) =
+      CURRENT_DIRECTORY_PREFIX) or
+    (Copy(AModulePath, 1, Length(PARENT_DIRECTORY_PREFIX)) =
+      PARENT_DIRECTORY_PREFIX);
+end;
+
+function IsURLLikeModuleSpecifier(const AModulePath: string): Boolean;
+begin
+  Result := IsAbsolutePath(AModulePath) or IsRelativeModuleSpecifier(AModulePath);
+end;
+
+function IsPrefixAlias(const AAlias: string): Boolean;
+begin
+  Result := (AAlias <> '') and (AAlias[Length(AAlias)] = ALIAS_SEGMENT_DELIMITER);
+end;
+
+function NormalizeSpecifierForMatching(const AModulePath,
+  AImportingFilePath: string): string;
+var
+  BaseDirectory: string;
+begin
+  if not IsURLLikeModuleSpecifier(AModulePath) then
+    Exit(AModulePath);
+
+  if IsAbsolutePath(AModulePath) then
+    Result := ExpandFileName(AModulePath)
+  else
+  begin
+    BaseDirectory := ExtractFilePath(AImportingFilePath);
+    if BaseDirectory = '' then
+      BaseDirectory := GetCurrentDir + PathDelim;
+    Result := ExpandFileName(BaseDirectory + AModulePath);
+  end;
+
+  Result := EnsureTrailingPathDelimiterIfNeeded(Result, IsPrefixAlias(AModulePath));
+end;
+
+function AliasMatchesModulePath(const AAlias, AModulePath,
+  AImportingFilePath: string): Boolean;
+var
+  MatchPath: string;
+begin
+  if AAlias = '' then
     Exit(False);
 
-  if Copy(AModulePath, 1, AliasLength) <> AAlias then
-    Exit(False);
+  if IsURLLikeModuleSpecifier(AAlias) then
+    MatchPath := NormalizeSpecifierForMatching(AModulePath, AImportingFilePath)
+  else
+    MatchPath := AModulePath;
 
-  Result := (Length(AModulePath) = AliasLength) or
-    ((Length(AModulePath) > AliasLength) and
-     (AModulePath[AliasLength + 1] = ALIAS_SEGMENT_DELIMITER));
+  if IsPrefixAlias(AAlias) then
+    Result := Copy(MatchPath, 1, Length(AAlias)) = AAlias
+  else
+    Result := MatchPath = AAlias;
 end;
 
 constructor TModuleResolver.Create(const ABaseDirectory: string);
@@ -91,7 +148,7 @@ var
   Pair: TStringStringMap.TKeyValuePair;
 begin
   for Pair in FAliases do
-    if AliasMatchesModulePath(Pair.Key, AModulePath) then
+    if AliasMatchesModulePath(Pair.Key, AModulePath, '') then
       Exit(True);
   Result := False;
 end;
@@ -105,10 +162,11 @@ begin
     FExtensions[I] := AExtensions[I];
 end;
 
-function TModuleResolver.ApplyAliases(const AModulePath: string): string;
+function TModuleResolver.ApplyAliases(const AModulePath,
+  AImportingFilePath: string): string;
 var
   Pair: TStringStringMap.TKeyValuePair;
-  BestKey, BestValue, Replacement: string;
+  BestKey, BestValue, MatchPath, Replacement: string;
   Found: Boolean;
 begin
   Result := AModulePath;
@@ -116,7 +174,7 @@ begin
 
   for Pair in FAliases do
   begin
-    if AliasMatchesModulePath(Pair.Key, AModulePath) then
+    if AliasMatchesModulePath(Pair.Key, AModulePath, AImportingFilePath) then
     begin
       if (not Found) or (Length(Pair.Key) > Length(BestKey)) then
       begin
@@ -129,7 +187,16 @@ begin
 
   if Found then
   begin
-    Replacement := BestValue + Copy(AModulePath, Length(BestKey) + 1, MaxInt);
+    if IsURLLikeModuleSpecifier(BestKey) then
+      MatchPath := NormalizeSpecifierForMatching(AModulePath, AImportingFilePath)
+    else
+      MatchPath := AModulePath;
+
+    if IsPrefixAlias(BestKey) then
+      Replacement := BestValue + Copy(MatchPath, Length(BestKey) + 1, MaxInt)
+    else
+      Replacement := BestValue;
+
     if not IsAbsolutePath(Replacement) then
       Result := FBaseDirectory + Replacement
     else
@@ -172,7 +239,7 @@ function TModuleResolver.Resolve(const AModulePath, AImportingFilePath: string):
 var
   AliasApplied, BaseDirectory: string;
 begin
-  AliasApplied := ApplyAliases(AModulePath);
+  AliasApplied := ApplyAliases(AModulePath, AImportingFilePath);
 
   if AliasApplied <> AModulePath then
   begin

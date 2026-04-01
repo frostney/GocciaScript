@@ -13,7 +13,8 @@ uses
 type
   TTestModuleResolver = class(TModuleResolver)
   public
-    function ExposedApplyAliases(const AModulePath: string): string;
+    function ExposedApplyAliases(const AModulePath,
+      AImportingFilePath: string): string;
   end;
 
   TModuleResolverTests = class(TTestSuite)
@@ -21,26 +22,29 @@ type
     function CreateResolver: TTestModuleResolver;
 
     procedure TestHasAliasMatchesExactAlias;
-    procedure TestHasAliasMatchesSegmentChild;
-    procedure TestHasAliasRejectsPartialSegmentMatch;
-    procedure TestApplyAliasesLeavesPartialSegmentUnchanged;
-    procedure TestApplyAliasesUsesLongestBoundaryMatchedAlias;
+    procedure TestHasAliasRejectsChildPathForExactAlias;
+    procedure TestHasAliasMatchesPrefixAlias;
+    procedure TestApplyAliasesLeavesUnmatchedSpecifierUnchanged;
+    procedure TestApplyAliasesUsesLongestPrefixAlias;
+    procedure TestApplyAliasesMatchesNormalizedRelativeSpecifier;
   public
     procedure SetupTests; override;
   end;
 
-function TTestModuleResolver.ExposedApplyAliases(const AModulePath: string): string;
+function TTestModuleResolver.ExposedApplyAliases(const AModulePath,
+  AImportingFilePath: string): string;
 begin
-  Result := ApplyAliases(AModulePath);
+  Result := ApplyAliases(AModulePath, AImportingFilePath);
 end;
 
 procedure TModuleResolverTests.SetupTests;
 begin
   Test('HasAlias matches exact alias', TestHasAliasMatchesExactAlias);
-  Test('HasAlias matches child path on segment boundary', TestHasAliasMatchesSegmentChild);
-  Test('HasAlias rejects partial segment match', TestHasAliasRejectsPartialSegmentMatch);
-  Test('ApplyAliases leaves partial segment unchanged', TestApplyAliasesLeavesPartialSegmentUnchanged);
-  Test('ApplyAliases uses longest boundary-matched alias', TestApplyAliasesUsesLongestBoundaryMatchedAlias);
+  Test('HasAlias rejects child path for exact alias', TestHasAliasRejectsChildPathForExactAlias);
+  Test('HasAlias matches prefix alias', TestHasAliasMatchesPrefixAlias);
+  Test('ApplyAliases leaves unmatched specifier unchanged', TestApplyAliasesLeavesUnmatchedSpecifierUnchanged);
+  Test('ApplyAliases uses longest prefix alias', TestApplyAliasesUsesLongestPrefixAlias);
+  Test('ApplyAliases matches normalized relative specifier', TestApplyAliasesMatchesNormalizedRelativeSpecifier);
 end;
 
 function TModuleResolverTests.CreateResolver: TTestModuleResolver;
@@ -54,67 +58,89 @@ var
 begin
   Resolver := CreateResolver;
   try
-    Resolver.AddAlias('@lib', 'src/lib');
+    Resolver.AddAlias('lodash', 'vendor/lodash/index.js');
 
-    Expect<Boolean>(Resolver.HasAlias('@lib')).ToBe(True);
+    Expect<Boolean>(Resolver.HasAlias('lodash')).ToBe(True);
   finally
     Resolver.Free;
   end;
 end;
 
-procedure TModuleResolverTests.TestHasAliasMatchesSegmentChild;
+procedure TModuleResolverTests.TestHasAliasRejectsChildPathForExactAlias;
 var
   Resolver: TTestModuleResolver;
 begin
   Resolver := CreateResolver;
   try
-    Resolver.AddAlias('@lib', 'src/lib');
+    Resolver.AddAlias('lodash', 'vendor/lodash/index.js');
 
-    Expect<Boolean>(Resolver.HasAlias('@lib/utils/math')).ToBe(True);
+    Expect<Boolean>(Resolver.HasAlias('lodash/fp')).ToBe(False);
   finally
     Resolver.Free;
   end;
 end;
 
-procedure TModuleResolverTests.TestHasAliasRejectsPartialSegmentMatch;
+procedure TModuleResolverTests.TestHasAliasMatchesPrefixAlias;
 var
   Resolver: TTestModuleResolver;
 begin
   Resolver := CreateResolver;
   try
-    Resolver.AddAlias('@lib', 'src/lib');
+    Resolver.AddAlias('@lib/', 'src/lib/');
 
-    Expect<Boolean>(Resolver.HasAlias('@library/utils')).ToBe(False);
+    Expect<Boolean>(Resolver.HasAlias('@lib/utils')).ToBe(True);
   finally
     Resolver.Free;
   end;
 end;
 
-procedure TModuleResolverTests.TestApplyAliasesLeavesPartialSegmentUnchanged;
+procedure TModuleResolverTests.TestApplyAliasesLeavesUnmatchedSpecifierUnchanged;
 var
   Resolver: TTestModuleResolver;
 begin
   Resolver := CreateResolver;
   try
-    Resolver.AddAlias('@lib', 'src/lib');
+    Resolver.AddAlias('lodash', 'vendor/lodash/index.js');
 
-    Expect<string>(Resolver.ExposedApplyAliases('@library/utils')).ToBe('@library/utils');
+    Expect<string>(Resolver.ExposedApplyAliases('lodash/fp', '')).ToBe('lodash/fp');
   finally
     Resolver.Free;
   end;
 end;
 
-procedure TModuleResolverTests.TestApplyAliasesUsesLongestBoundaryMatchedAlias;
+procedure TModuleResolverTests.TestApplyAliasesUsesLongestPrefixAlias;
 var
   Resolver: TTestModuleResolver;
 begin
   Resolver := CreateResolver;
   try
-    Resolver.AddAlias('@lib', 'src/lib');
-    Resolver.AddAlias('@lib/components', 'src/ui/components');
+    Resolver.AddAlias('@/', 'src/');
+    Resolver.AddAlias('@/components/', 'src/ui/components/');
 
-    Expect<string>(Resolver.ExposedApplyAliases('@lib/components/Button')).ToBe(
+    Expect<string>(Resolver.ExposedApplyAliases('@/components/Button', '')).ToBe(
       Resolver.BaseDirectory + 'src/ui/components/Button');
+  finally
+    Resolver.Free;
+  end;
+end;
+
+procedure TModuleResolverTests.TestApplyAliasesMatchesNormalizedRelativeSpecifier;
+var
+  ImportingFilePath, ProjectDirectory: string;
+  Resolver: TTestModuleResolver;
+begin
+  Resolver := CreateResolver;
+  try
+    ProjectDirectory := IncludeTrailingPathDelimiter(GetCurrentDir);
+    ImportingFilePath := ProjectDirectory + 'src' + PathDelim + 'app' +
+      PathDelim + 'main.js';
+    Resolver.AddAlias(
+      ProjectDirectory + 'src' + PathDelim + 'shared' + PathDelim + 'math.js',
+      ProjectDirectory + 'vendor' + PathDelim + 'math.js');
+
+    Expect<string>(Resolver.ExposedApplyAliases('../shared/math.js',
+      ImportingFilePath)).ToBe(ProjectDirectory + 'vendor' + PathDelim +
+      'math.js');
   finally
     Resolver.Free;
   end;

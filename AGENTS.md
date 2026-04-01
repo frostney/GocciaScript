@@ -28,19 +28,24 @@ GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a 
 ```bash
 ./build/ScriptLoader example.js                  # Execute a script (interpreted)
 ./build/ScriptLoader example.js --mode=bytecode  # Execute via bytecode VM
+./build/ScriptLoader example.js --import-map=imports.json  # Execute with an explicit import map
+./build/ScriptLoader example.js --alias @/=./src/ --alias config=./config/default.js  # One-off import-map-style aliases
 ./build/ScriptLoader example.js --emit           # Compile to .gbc (no execution)
 ./build/ScriptLoader example.js --emit=bytecode  # Compile to .gbc (explicit)
 ./build/ScriptLoader example.js --emit --output=out.gbc   # Custom output path
 ./build/ScriptLoader out.gbc                     # Load and execute .gbc bytecode
 printf "const x = 2 + 2; x;" | ./build/ScriptLoader        # Execute stdin source
 ./build/REPL                                      # Start interactive REPL
+./build/REPL --import-map=imports.json            # Start the REPL with an explicit import map
 ./build/TestRunner tests/                                                      # Run all JavaScript tests
+./build/TestRunner tests --import-map=imports.json                             # Run tests with an explicit import map
 ./build/TestRunner tests/language/expressions/                                 # Run a test category
 ./build/TestRunner tests --no-progress --exit-on-first-failure                 # CI mode
 ./build/TestRunner tests --silent                                              # Suppress all console output
 ./build/TestRunner tests --output=results.json                                 # Write test results as JSON
 ./build/TestRunner tests --mode=bytecode                                       # Run tests via the Goccia bytecode VM
 ./build/BenchmarkRunner benchmarks/                                               # Run all benchmarks
+./build/BenchmarkRunner benchmarks --import-map=imports.json                      # Run benchmarks with an explicit import map
 ./build/BenchmarkRunner benchmarks/fibonacci.js                                   # Run a specific benchmark
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner # Run benchmark source from stdin
 ./build/BenchmarkRunner benchmarks --format=json --output=out.json                # Export as JSON

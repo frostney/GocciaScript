@@ -22,6 +22,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Logger,
+  Goccia.Modules.Configuration,
   Goccia.Parser,
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
@@ -47,8 +48,10 @@ var
   GJsonOutput: Boolean = False;
   GSilentConsole: Boolean = False;
   GTimeoutMilliseconds: Integer = 0;
+  GImportMapPath: string = '';
   GGlobalsFiles: TStringList = nil;
   GInlineGlobals: TStringList = nil;
+  GInlineAliases: TStringList = nil;
 
 function ParseSource(const ASource: TStringList; const AFileName: string;
   const AGlobals: TGocciaGlobalBuiltins; const ASuppressWarnings: Boolean;
@@ -234,6 +237,8 @@ begin
     Engine.SuppressWarnings := GJsonOutput;
     ConfigureConsole(Engine.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToEngine(Engine);
+    ConfigureModuleResolver(Engine.Resolver, AFileName, GImportMapPath,
+      GInlineAliases);
     StartExecutionTimeout(GTimeoutMilliseconds);
     try
       ApplyModuleGlobalsToEngine(Engine);
@@ -261,11 +266,13 @@ var
   StartTime, ExecEnd: Int64;
 begin
   StartTime := GetNanoseconds;
-  Backend := TGocciaBytecodeBackend.Create(AFileName);
+    Backend := TGocciaBytecodeBackend.Create(AFileName);
   try
     Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
     ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
     ApplyDataGlobalsToBytecodeBackend(Backend);
+    ConfigureModuleResolver(Backend.ModuleResolver, AFileName, GImportMapPath,
+      GInlineAliases);
 
     ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultGlobals,
       GJsonOutput, Result.Timing.LexTimeNanoseconds,
@@ -312,6 +319,8 @@ begin
       Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
       ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
       ApplyDataGlobalsToBytecodeBackend(Backend);
+      ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
+        GImportMapPath, GInlineAliases);
       StartExecutionTimeout(GTimeoutMilliseconds);
       try
         ApplyModuleGlobalsToBytecodeBackend(Backend);
@@ -538,6 +547,8 @@ begin
   WriteLn('  --mode=bytecode         Compile to bytecode and execute on the Goccia VM');
   WriteLn('  --emit                  Compile to .gbc file (no execution)');
   WriteLn('  --emit=bytecode         Compile to .gbc file (explicit, same as --emit)');
+  WriteLn('  --import-map=<path>     Load WHATWG-style import map JSON before execution');
+  WriteLn('  --alias key=value       Add an inline import-map-style alias (exact match unless key ends with "/")');
   WriteLn('  --global name=value     Inject a single global; value is parsed as JSON or kept as a string');
   WriteLn('  --globals=<path>        Inject globals from a JSON file or a module with named exports');
   WriteLn('  --timeout=<ms>          Abort execution if it runs longer than the given milliseconds');
@@ -558,9 +569,11 @@ begin
   GJsonOutput := False;
   GSilentConsole := False;
   GTimeoutMilliseconds := 0;
+  GImportMapPath := '';
   Logger.Levels := [];
   GGlobalsFiles := TStringList.Create;
   GInlineGlobals := TStringList.Create;
+  GInlineAliases := TStringList.Create;
 
   Paths := TStringList.Create;
   try
@@ -606,6 +619,18 @@ begin
         if GOutputPath = 'json' then
           GJsonOutput := True;
       end
+      else if Copy(Arg, 1, 13) = '--import-map=' then
+      begin
+        GImportMapPath := Copy(Arg, 14, MaxInt);
+        if GImportMapPath = '' then
+        begin
+          WriteLn('Error: --import-map requires a non-empty path.');
+          ExitCode := 1;
+          Exit;
+        end;
+      end
+      else if Copy(Arg, 1, 8) = '--alias=' then
+        GInlineAliases.Add(Copy(Arg, 9, MaxInt))
       else if Copy(Arg, 1, 10) = '--globals=' then
         GGlobalsFiles.Add(Copy(Arg, 11, MaxInt))
       else if Copy(Arg, 1, 10) = '--timeout=' then
@@ -628,6 +653,17 @@ begin
         end;
         Inc(I);
         GInlineGlobals.Add(ParamStr(I));
+      end
+      else if Arg = '--alias' then
+      begin
+        if I = ParamCount then
+        begin
+          WriteLn('Error: --alias requires a key=value argument.');
+          ExitCode := 1;
+          Exit;
+        end;
+        Inc(I);
+        GInlineAliases.Add(ParamStr(I));
       end
       else if Arg = '--silent' then
         GSilentConsole := True
@@ -689,5 +725,6 @@ begin
     Paths.Free;
     GGlobalsFiles.Free;
     GInlineGlobals.Free;
+    GInlineAliases.Free;
   end;
 end.
