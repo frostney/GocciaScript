@@ -16,6 +16,7 @@ uses
   Goccia.Engine.Backend,
   Goccia.Interpreter,
   Goccia.Lexer,
+  Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
@@ -44,6 +45,8 @@ type
     destructor Destroy; override;
 
     procedure AddModule(const APath, AText: string);
+    procedure SetModule(const APath, AText: string;
+      const ALastModified: TDateTime; const AHasLastModified: Boolean = True);
     function Exists(const APath: string): Boolean; override;
     function LoadContent(const APath: string): TGocciaModuleContent; override;
     function TryGetLastModified(const APath: string;
@@ -60,6 +63,9 @@ type
     procedure WriteTextFile(const APath, AText: string);
 
     procedure TestEngineLoadsInMemoryModuleWithCustomProvider;
+    procedure TestEngineReloadsModifiedInMemoryModule;
+    procedure TestEngineRetriesModuleAfterFailedLoad;
+    procedure TestModuleLoaderRejectsRebindingAcrossRuntimes;
     procedure TestBytecodeBackendUsesInjectedContentProvider;
   protected
     procedure BeforeAll; override;
@@ -87,12 +93,18 @@ begin
 end;
 
 procedure TMemoryModuleContentProvider.AddModule(const APath, AText: string);
+begin
+  SetModule(APath, AText, 0, False);
+end;
+
+procedure TMemoryModuleContentProvider.SetModule(const APath, AText: string;
+  const ALastModified: TDateTime; const AHasLastModified: Boolean);
 var
   Entry: TMemoryModuleEntry;
 begin
   Entry.Text := AText;
-  Entry.HasLastModified := False;
-  Entry.LastModified := 0;
+  Entry.HasLastModified := AHasLastModified;
+  Entry.LastModified := ALastModified;
   FEntries.AddOrSetValue(APath, Entry);
 end;
 
@@ -130,6 +142,12 @@ procedure TModuleContentProviderTests.SetupTests;
 begin
   Test('Engine loads in-memory module with custom provider',
     TestEngineLoadsInMemoryModuleWithCustomProvider);
+  Test('Engine reloads modified in-memory module',
+    TestEngineReloadsModifiedInMemoryModule);
+  Test('Engine retries module load after previous failure',
+    TestEngineRetriesModuleAfterFailedLoad);
+  Test('Module loader rejects rebinding across runtimes',
+    TestModuleLoaderRejectsRebindingAcrossRuntimes);
   Test('Bytecode backend uses injected content provider',
     TestBytecodeBackendUsesInjectedContentProvider);
 end;
@@ -317,6 +335,158 @@ begin
     end;
   finally
     ModuleLoader.Free;
+    Provider.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestEngineReloadsModifiedInMemoryModule;
+const
+  ENTRY_PATH = 'memory:/app.js';
+  MODULE_PATH = 'memory:/dep.js';
+var
+  Interpreter: TGocciaInterpreter;
+  ModuleLoader: TGocciaModuleLoader;
+  ModuleValue: TGocciaModule;
+  Provider: TMemoryModuleContentProvider;
+  Resolver: TInMemoryModuleResolver;
+  Source: TStringList;
+begin
+  Provider := TMemoryModuleContentProvider.Create;
+  Resolver := TInMemoryModuleResolver.Create;
+  Source := TStringList.Create;
+  try
+    Provider.SetModule(MODULE_PATH, 'export const value = 1;', 1);
+    Source.Text := 'import { value } from "' + MODULE_PATH + '";' + LineEnding +
+      'value;';
+
+    ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
+    try
+      Interpreter := TGocciaInterpreter.Create(ENTRY_PATH, Source, ModuleLoader);
+      try
+        ModuleValue := Interpreter.LoadModule(MODULE_PATH, ENTRY_PATH);
+        Expect<Boolean>(ModuleValue.ExportsTable['value'] is TGocciaNumberLiteralValue).ToBe(True);
+        Expect<Double>(TGocciaNumberLiteralValue(ModuleValue.ExportsTable['value']).Value).ToBe(1);
+
+        Provider.SetModule(MODULE_PATH, 'export const value = 2;', 2);
+        ModuleValue := Interpreter.LoadModule(MODULE_PATH, ENTRY_PATH);
+        Expect<Boolean>(ModuleValue.ExportsTable['value'] is TGocciaNumberLiteralValue).ToBe(True);
+        Expect<Double>(TGocciaNumberLiteralValue(ModuleValue.ExportsTable['value']).Value).ToBe(2);
+      finally
+        Interpreter.Free;
+      end;
+    finally
+      ModuleLoader.Free;
+    end;
+  finally
+    Source.Free;
+    Resolver.Free;
+    Provider.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestEngineRetriesModuleAfterFailedLoad;
+const
+  ENTRY_PATH = 'memory:/app.js';
+  MODULE_PATH = 'memory:/dep.js';
+var
+  Engine: TGocciaEngine;
+  ModuleLoader: TGocciaModuleLoader;
+  Provider: TMemoryModuleContentProvider;
+  Resolver: TInMemoryModuleResolver;
+  ScriptResult: TGocciaScriptResult;
+  Source: TStringList;
+begin
+  Provider := TMemoryModuleContentProvider.Create;
+  Resolver := TInMemoryModuleResolver.Create;
+  Source := TStringList.Create;
+  try
+    Provider.AddModule(MODULE_PATH, 'export const value = ;');
+    Source.Text := 'import { value } from "' + MODULE_PATH + '";' + LineEnding +
+      'value;';
+
+    ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
+    try
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
+        TGocciaEngine.DefaultGlobals, ModuleLoader);
+      try
+        try
+          Engine.Execute;
+          Fail('Expected invalid module source to raise an exception.');
+        except
+          on E: Exception do
+          begin
+            // Expected parse failure; retry after fixing the module source.
+          end;
+        end;
+
+        Provider.AddModule(MODULE_PATH, 'export const value = 42;');
+        ScriptResult := Engine.Execute;
+        Expect<Boolean>(ScriptResult.Result is TGocciaNumberLiteralValue).ToBe(True);
+        Expect<Double>(TGocciaNumberLiteralValue(ScriptResult.Result).Value).ToBe(42);
+      finally
+        Engine.Free;
+      end;
+    finally
+      ModuleLoader.Free;
+    end;
+  finally
+    Source.Free;
+    Resolver.Free;
+    Provider.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestModuleLoaderRejectsRebindingAcrossRuntimes;
+const
+  ENTRY_PATH = 'memory:/app.js';
+var
+  EngineA: TGocciaEngine;
+  EngineB: TGocciaEngine;
+  RaisedExpected: Boolean;
+  HasExpectedMessage: Boolean;
+  ModuleLoader: TGocciaModuleLoader;
+  Provider: TMemoryModuleContentProvider;
+  Resolver: TInMemoryModuleResolver;
+  SourceA: TStringList;
+  SourceB: TStringList;
+begin
+  Provider := TMemoryModuleContentProvider.Create;
+  Resolver := TInMemoryModuleResolver.Create;
+  ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
+  SourceA := TStringList.Create;
+  SourceB := TStringList.Create;
+  EngineB := nil;
+  RaisedExpected := False;
+  try
+    SourceA.Text := '1;';
+    SourceB.Text := '2;';
+    EngineA := TGocciaEngine.Create(ENTRY_PATH, SourceA,
+      TGocciaEngine.DefaultGlobals, ModuleLoader);
+    try
+      try
+        EngineB := TGocciaEngine.Create(ENTRY_PATH, SourceB,
+          TGocciaEngine.DefaultGlobals, ModuleLoader);
+        Fail('Expected module loader rebinding to raise an exception.');
+      except
+        on E: Exception do
+        begin
+          RaisedExpected := True;
+          HasExpectedMessage := Pos('single-runtime', E.Message) > 0;
+          if not HasExpectedMessage then
+            Fail('Expected single-runtime error message.');
+        end;
+      end;
+      Expect<Boolean>(RaisedExpected).ToBe(True);
+    finally
+      EngineA.Free;
+      if Assigned(EngineB) then
+        EngineB.Free;
+    end;
+  finally
+    SourceA.Free;
+    SourceB.Free;
+    ModuleLoader.Free;
+    Resolver.Free;
     Provider.Free;
   end;
 end;

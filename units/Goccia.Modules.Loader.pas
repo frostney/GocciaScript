@@ -30,6 +30,8 @@ type
     FOwnsResolver: Boolean;
     FResolver: TGocciaModuleResolver;
 
+    procedure CopyModuleContents(const ASourceModule,
+      ATargetModule: TGocciaModule);
     function LoadJsonModule(const AResolvedPath: string): TGocciaModule;
   public
     constructor Create(const AEntryFileName: string;
@@ -118,8 +120,22 @@ end;
 procedure TGocciaModuleLoader.BindRuntime(const AGlobalScope: TGocciaGlobalScope;
   const AOnError: TGocciaThrowErrorCallback);
 begin
+  if Assigned(FGlobalScope) and (FGlobalScope <> AGlobalScope) then
+    raise Exception.Create(
+      'TGocciaModuleLoader instances are single-runtime; create a new loader per engine/backend.');
   FGlobalScope := AGlobalScope;
   FOnError := AOnError;
+end;
+
+procedure TGocciaModuleLoader.CopyModuleContents(const ASourceModule,
+  ATargetModule: TGocciaModule);
+var
+  ExportPair: TGocciaValueMap.TKeyValuePair;
+begin
+  ATargetModule.ExportsTable.Clear;
+  for ExportPair in ASourceModule.ExportsTable do
+    ATargetModule.ExportsTable.AddOrSetValue(ExportPair.Key, ExportPair.Value);
+  ATargetModule.LastModified := ASourceModule.LastModified;
 end;
 
 function TGocciaModuleLoader.LoadModule(const AModulePath,
@@ -147,6 +163,7 @@ var
   Stmt: TGocciaStatement;
   Value: TGocciaValue;
   VarInfo: TGocciaVariableInfo;
+  LoadSucceeded: Boolean;
 begin
   if not Assigned(FGlobalScope) then
     raise Exception.Create('Module loader runtime is not bound.');
@@ -206,6 +223,7 @@ begin
               Module.LastModified := Content.LastModified;
               FModules.Add(ResolvedPath, Module);
               FLoadingModules.Add(ResolvedPath, True);
+              LoadSucceeded := False;
               try
                 ModuleScope := FGlobalScope.CreateChild(skModule,
                   'Module:' + ResolvedPath);
@@ -265,8 +283,14 @@ begin
                 end;
 
                 Result := Module;
+                LoadSucceeded := True;
               finally
                 FLoadingModules.Remove(ResolvedPath);
+                if not LoadSucceeded then
+                begin
+                  FModules.Remove(ResolvedPath);
+                  Module.Free;
+                end;
               end;
             finally
               ProgramNode.Free;
@@ -297,15 +321,31 @@ end;
 procedure TGocciaModuleLoader.CheckForModuleReload(const AModule: TGocciaModule);
 var
   CurrentModified: TDateTime;
+  ReloadedModule: TGocciaModule;
 begin
   if not FContentProvider.TryGetLastModified(AModule.Path, CurrentModified) then
     Exit;
 
   if CurrentModified > AModule.LastModified then
   begin
-    AModule.ExportsTable.Clear;
-    AModule.LastModified := CurrentModified;
-    LoadModule(AModule.Path, AModule.Path);
+    FModules.Remove(AModule.Path);
+    try
+      ReloadedModule := LoadModule(AModule.Path, AModule.Path);
+    except
+      FModules.AddOrSetValue(AModule.Path, AModule);
+      raise;
+    end;
+
+    if ReloadedModule <> AModule then
+    begin
+      try
+        CopyModuleContents(ReloadedModule, AModule);
+      finally
+        FModules.Remove(AModule.Path);
+        FModules.AddOrSetValue(AModule.Path, AModule);
+        ReloadedModule.Free;
+      end;
+    end;
   end;
 end;
 
@@ -318,6 +358,7 @@ var
   Obj: TGocciaObjectValue;
   ParsedValue: TGocciaValue;
   Parser: TGocciaJSONParser;
+  LoadSucceeded: Boolean;
 begin
   Content := FContentProvider.LoadContent(AResolvedPath);
   try
@@ -335,16 +376,22 @@ begin
 
       Module := TGocciaModule.Create(AResolvedPath);
       Module.LastModified := Content.LastModified;
+      LoadSucceeded := False;
+      try
+        if ParsedValue is TGocciaObjectValue then
+        begin
+          Obj := TGocciaObjectValue(ParsedValue);
+          for Key in Obj.GetOwnPropertyKeys do
+            Module.ExportsTable.AddOrSetValue(Key, Obj.GetProperty(Key));
+        end;
 
-      if ParsedValue is TGocciaObjectValue then
-      begin
-        Obj := TGocciaObjectValue(ParsedValue);
-        for Key in Obj.GetOwnPropertyKeys do
-          Module.ExportsTable.AddOrSetValue(Key, Obj.GetProperty(Key));
+        FModules.Add(AResolvedPath, Module);
+        Result := Module;
+        LoadSucceeded := True;
+      finally
+        if not LoadSucceeded then
+          Module.Free;
       end;
-
-      FModules.Add(AResolvedPath, Module);
-      Result := Module;
     finally
       Parser.Free;
     end;
