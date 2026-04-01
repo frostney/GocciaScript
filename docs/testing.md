@@ -12,6 +12,8 @@ When choosing where to add coverage, prefer the most public entry point availabl
 
 Avoid tests that lock onto private helper functions or transient implementation structure when the same behavior can be validated through a documented user-facing command or script entry point. Where native Pascal tests are still appropriate, keep them as stateless and repeatable as possible so they behave like pure input/output checks rather than process-sensitive probes.
 
+Because the TestRunner prints suite titles, test names, and failure messages directly, keep that text user-facing too. Describe observable JavaScript or CLI behavior and prefer language-level terms like "floating-point number" over Pascal implementation terms like "Double", unless the internal term is itself part of the public contract being tested.
+
 ## Test Organization
 
 ```
@@ -167,6 +169,20 @@ tests/built-ins/Object/
 │   ├── propertyIsEnumerable.js
 │   ├── toLocaleString.js
 │   └── valueOf.js
+```
+
+**5. Test titles are part of the public output** — `describe(...)` and `test(...)` strings should read well in CLI output and CI logs. Prefer user-visible behavior over implementation vocabulary.
+
+```javascript
+// Correct — describes behavior in JavaScript terms
+test("JSON.stringify preserves round-trip precision for large fractional floating-point numbers", () => {
+  // ...
+});
+
+// Wrong — leaks implementation terms into end-to-end output
+test("JSON.stringify preserves round-trip precision for large fractional doubles", () => {
+  // ...
+});
 ```
 
 ## Running Tests
