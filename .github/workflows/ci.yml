@@ -113,9 +113,16 @@ jobs:
           echo "rtl-generics units: $(ls "$GEN_DIR"/*.ppu 2>/dev/null | wc -l) .ppu files"
           echo "fcl-process units: $(ls "$FCL_DIR"/*.ppu 2>/dev/null | wc -l) .ppu files"
 
-          # Build main binaries
-          for src in ScriptLoader.dpr TestRunner.dpr BenchmarkRunner.dpr REPL.dpr; do
-            name="${src%.dpr}"
+          # Build top-level program entrypoints
+          shopt -s nullglob
+          entrypoints=(./*.dpr)
+          if [ "${#entrypoints[@]}" -eq 0 ]; then
+            echo "::error::No top-level .dpr entrypoints found"
+            exit 1
+          fi
+
+          for src in "${entrypoints[@]}"; do
+            name="$(basename "${src%.dpr}")"
             echo ""
             echo "=== Building ${name} for ${TARGET} ==="
             "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
@@ -149,12 +156,15 @@ jobs:
           echo "=== Build artifacts for ${TARGET} ==="
           ls -la build/
 
+      - name: Stage build artifacts
+        run: bash ./.github/scripts/stage-build-artifacts.sh build ci-artifacts --include-tests
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v5
         with:
           name: gocciascript-${{ matrix.target }}
           retention-days: 1
-          path: build/
+          path: ci-artifacts/*
 
   test:
     needs: build
@@ -517,20 +527,15 @@ jobs:
           name: gocciascript-${{ matrix.target }}
           path: build/
 
-      - name: Upload release artifacts
+      - name: Stage release artifacts
+        run: bash ./.github/scripts/stage-build-artifacts.sh build release-artifacts
+
+      - name: Upload release artifact bundle
         uses: actions/upload-artifact@v5
         with:
           name: gocciascript-release-${{ matrix.target }}
           if-no-files-found: ignore
-          path: |
-            build/ScriptLoader
-            build/ScriptLoader.exe
-            build/TestRunner
-            build/TestRunner.exe
-            build/BenchmarkRunner
-            build/BenchmarkRunner.exe
-            build/REPL
-            build/REPL.exe
+          path: release-artifacts/*
 
   release:
     needs: [test, benchmark, examples]
@@ -552,7 +557,6 @@ jobs:
       - name: Package releases
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          release_binaries=("ScriptLoader" "TestRunner" "BenchmarkRunner" "REPL")
 
           # Map target names to user-friendly archive names
           declare -A DISPLAY_NAMES=(
@@ -576,22 +580,7 @@ jobs:
             display="${DISPLAY_NAMES[$target]}"
             archive_name="gocciascript-${VERSION}-${display}"
             pkg_dir="${archive_name}"
-            mkdir -p "$pkg_dir"
-
-            copied_binary=0
-            for binary in "${release_binaries[@]}"; do
-              for candidate in "$artifact_dir/$binary" "$artifact_dir/$binary.exe"; do
-                if [ -f "$candidate" ]; then
-                  cp "$candidate" "$pkg_dir/"
-                  copied_binary=1
-                fi
-              done
-            done
-
-            if [ "$copied_binary" -eq 0 ]; then
-              echo "::error::No release binaries found in $artifact_dir"
-              exit 1
-            fi
+            bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir"
 
             cp -r tests/ "$pkg_dir/tests/"
             cp -r benchmarks/ "$pkg_dir/benchmarks/"

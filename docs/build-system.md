@@ -250,7 +250,7 @@ Runs on the full platform matrix:
 | macOS Latest | x64, ARM64 |
 | Windows Latest | x86 (i386-win32) |
 
-**`build`** — Installs FPC, compiles all binaries with `--prod`, uploads them as intermediate artifacts.
+**`build`** — Installs FPC, compiles the top-level `*.dpr` programs with `--prod`, stages those binaries plus Pascal test executables, and uploads that staged set as intermediate artifacts.
 
 **`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests on all platforms.
 
@@ -258,9 +258,9 @@ Runs on the full platform matrix:
 
 **`examples`** (needs build) — Runs all example scripts from the `examples/` folder on all platforms.
 
-**`artifacts`** (needs test + benchmark + examples, main only) — Uploads production binaries after all checks pass.
+**`artifacts`** (needs test + benchmark + examples, main only) — Uploads production binaries after all checks pass, deriving the executable names from the top-level `*.dpr` entrypoints.
 
-**`release`** (needs test + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries (`ScriptLoader`, `TestRunner`, `BenchmarkRunner`, `REPL`), bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the top-level `*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 
