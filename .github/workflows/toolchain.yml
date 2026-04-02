@@ -10,7 +10,7 @@ on:
 env:
   FPC_VERSION: "3.2.2"
   BINUTILS_VERSION: "2.44"
-  CACHE_VERSION: "v28"
+  CACHE_VERSION: "v29"
 
 jobs:
   build:
@@ -97,12 +97,17 @@ jobs:
           PREFIX="$PWD/fpc-cross"
           BREW_FPC_LIB="$(brew --prefix)/lib/fpc/${FPC_VERSION}"
 
-          mkdir -p "$PREFIX/bin" "$PREFIX/lib/fpc/${FPC_VERSION}" "$PREFIX/lib/fpc/etc"
+          mkdir -p "$PREFIX/bin" "$PREFIX/lib/fpc/${FPC_VERSION}" "$PREFIX/lib/fpc/etc" "$PREFIX/share/fpcsrc/packages"
 
           # Copy native compiler and units
           cp "$(which instantfpc)" "$PREFIX/bin/"
           cp "$BREW_FPC_LIB/ppca64" "$PREFIX/lib/fpc/${FPC_VERSION}/"
           cp -r "$BREW_FPC_LIB/units" "$PREFIX/lib/fpc/${FPC_VERSION}/"
+
+          # Keep the official FCL sources available for cross builds. The
+          # cached cross toolchain only prebuilds a minimal package subset, so
+          # source-based lookup is needed for units like Base64 from fcl-base.
+          cp -R "$GITHUB_WORKSPACE/fpc-source/packages/fcl-base" "$PREFIX/share/fpcsrc/packages/"
 
       - name: Compile soft-float units for native RTL
         if: steps.cache-check.outputs.cache-hit != 'true'
