@@ -260,7 +260,7 @@ Runs on the full platform matrix:
 
 **`artifacts`** (needs test + benchmark + examples, main only) — Uploads production binaries after all checks pass.
 
-**`release`** (needs test + benchmark + examples, tags only) — Downloads all platform build artifacts, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries (`ScriptLoader`, `TestRunner`, `BenchmarkRunner`, `REPL`), bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 
