@@ -191,6 +191,16 @@ export { greet as sayHello } from "./utils.js";
 import { name, version } from "./package.json";
 import { host as dbHost } from "./config.json";
 
+// YAML imports — top-level keys become named exports
+import { name, version } from "./package.yaml";
+import { host as dbHost } from "./config.yml";
+
+YAML module imports follow the same top-level-object export model as JSON modules. Multi-document YAML streams are available through `YAML.parseDocuments(...)`, but `.yaml` and `.yml` module imports must still resolve to a single top-level mapping document. Block scalars, multiline plain and quoted scalar folding, multiline flow collections, YAML 1.2 numeric scalar resolution, YAML double-quoted escapes, self-referential alias graphs, stricter flow collection validation, empty implicit keys, anchored mapping keys, `%YAML` / `%TAG` directives, standard tags, tagged-value metadata (`.tagName`, `.value`), and explicit keys including omitted explicit values are supported.
+
+Non-scalar YAML keys are canonicalized into stable JSON-like strings. For module imports, that means explicit scalar keys work naturally as named exports, while complex keys only produce useful imports when the resulting canonical string is a valid export name.
+
+This YAML surface is still partial. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
+
 // Directory/index resolution
 import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx, etc.)
 ```

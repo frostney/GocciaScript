@@ -1,0 +1,12 @@
+defaults: &defaults
+  host: localhost
+  port: 5432
+  enabled: true
+
+override: &override
+  port: 6432
+  enabled: false
+
+database:
+  <<: [*defaults, *override]
+  port: 7000

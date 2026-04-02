@@ -32,7 +32,7 @@ type
 
     procedure CopyModuleContents(const ASourceModule,
       ATargetModule: TGocciaModule);
-    function LoadJsonModule(const AResolvedPath: string): TGocciaModule;
+    function LoadStructuredDataModule(const AResolvedPath: string): TGocciaModule;
   public
     constructor Create(const AEntryFileName: string;
       const AResolver: TGocciaModuleResolver = nil;
@@ -68,8 +68,10 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.YAML;
 
 constructor TGocciaModuleLoader.Create(const AEntryFileName: string;
   const AResolver: TGocciaModuleResolver;
@@ -191,9 +193,9 @@ begin
     Exit;
   end;
 
-  if LowerCase(ExtractFileExt(ResolvedPath)) = EXT_JSON then
+  if IsStructuredDataExtension(ExtractFileExt(ResolvedPath)) then
   begin
-    Result := LoadJsonModule(ResolvedPath);
+    Result := LoadStructuredDataModule(ResolvedPath);
     Exit;
   end;
 
@@ -349,53 +351,92 @@ begin
   end;
 end;
 
-function TGocciaModuleLoader.LoadJsonModule(
+function TGocciaModuleLoader.LoadStructuredDataModule(
   const AResolvedPath: string): TGocciaModule;
 var
   Content: TGocciaModuleContent;
+  Documents: TGocciaArrayValue;
+  Extension: string;
   Key: string;
   Module: TGocciaModule;
   Obj: TGocciaObjectValue;
+  ParsedDocument: TGocciaValue;
   ParsedValue: TGocciaValue;
-  Parser: TGocciaJSONParser;
+  JSONParser: TGocciaJSONParser;
+  YAMLParser: TGocciaYAMLParser;
   LoadSucceeded: Boolean;
 begin
   Content := FContentProvider.LoadContent(AResolvedPath);
   try
-    Parser := TGocciaJSONParser.Create;
-    try
+    Documents := nil;
+    ParsedDocument := nil;
+    ParsedValue := nil;
+    Extension := LowerCase(ExtractFileExt(AResolvedPath));
+    if Extension = EXT_JSON then
+    begin
+      JSONParser := TGocciaJSONParser.Create;
       try
-        ParsedValue := Parser.Parse(Content.Text);
-      except
-        on E: EGocciaJSONParseError do
-          raise TGocciaRuntimeError.Create(
-            Format('Failed to parse JSON module "%s": %s',
-              [AResolvedPath, E.Message]),
-            0, 0, AResolvedPath, nil);
-      end;
-
-      Module := TGocciaModule.Create(AResolvedPath);
-      Module.LastModified := Content.LastModified;
-      LoadSucceeded := False;
-      try
-        if ParsedValue is TGocciaObjectValue then
-        begin
-          Obj := TGocciaObjectValue(ParsedValue);
-          for Key in Obj.GetOwnPropertyKeys do
-            Module.ExportsTable.AddOrSetValue(Key, Obj.GetProperty(Key));
+        try
+          ParsedValue := JSONParser.Parse(Content.Text);
+        except
+          on E: EGocciaJSONParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse JSON module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
         end;
-
-        FModules.Add(AResolvedPath, Module);
-        Result := Module;
-        LoadSucceeded := True;
       finally
-        if not LoadSucceeded then
-          Module.Free;
+        JSONParser.Free;
       end;
+    end
+    else
+    begin
+      YAMLParser := TGocciaYAMLParser.Create;
+      try
+        try
+          Documents := YAMLParser.ParseDocuments(Content.Text);
+        except
+          on E: EGocciaYAMLParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse YAML module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
+        end;
+      finally
+        YAMLParser.Free;
+      end;
+
+      if Documents.Elements.Count <> 1 then
+        raise TGocciaRuntimeError.Create(
+          Format('YAML module "%s" must contain exactly one top-level document.',
+            [AResolvedPath]),
+          0, 0, AResolvedPath, nil);
+      ParsedDocument := Documents.Elements[0];
+    end;
+
+    Module := TGocciaModule.Create(AResolvedPath);
+    Module.LastModified := Content.LastModified;
+    LoadSucceeded := False;
+    try
+      if Extension = EXT_JSON then
+        ParsedDocument := ParsedValue;
+
+      if ParsedDocument is TGocciaObjectValue then
+      begin
+        Obj := TGocciaObjectValue(ParsedDocument);
+        for Key in Obj.GetOwnPropertyKeys do
+          Module.ExportsTable.AddOrSetValue(Key, Obj.GetProperty(Key));
+      end;
+
+      FModules.Add(AResolvedPath, Module);
+      Result := Module;
+      LoadSucceeded := True;
     finally
-      Parser.Free;
+      if not LoadSucceeded then
+        Module.Free;
     end;
   finally
+    Documents.Free;
     Content.Free;
   end;
 end;

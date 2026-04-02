@@ -228,6 +228,18 @@ test("JSON.stringify preserves round-trip precision for large fractional doubles
 ./build/TestRunner tests --silent
 ```
 
+**Official YAML Suite**
+
+For YAML parse-validity checks against the official `yaml-test-suite`, run:
+
+```bash
+python3 scripts/run_yaml_test_suite.py
+python3 scripts/run_yaml_test_suite.py --output=tmp/yaml-suite-results.json
+python3 scripts/run_yaml_test_suite.py --suite-dir=/path/to/yaml-test-suite
+```
+
+This check is intentionally parse-only: it compares whether each suite case should parse or fail, not whether Goccia's runtime values exactly match the suite's JSON fixtures. That distinction matters because Goccia intentionally canonicalizes complex YAML mapping keys into strings.
+
 ### Run Pascal Unit Tests
 
 ```bash

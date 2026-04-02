@@ -20,6 +20,7 @@ const
   PROP_SIZE         = 'size';
   PROP_DONE         = 'done';
   PROP_VALUE        = 'value';
+  PROP_TAG_NAME     = 'tagName';
   PROP_NEXT         = 'next';
   PROP_RETURN       = 'return';
   PROP_WRITABLE     = 'writable';

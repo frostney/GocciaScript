@@ -1,0 +1,10 @@
+%YAML 1.2
+%TAG !e! tag:example.com,2026:
+name: !!str true
+count: !!int "42"
+enabled: !!bool "true"
+custom: !e!widget
+  title: module
+typed: [!<tag:yaml.org,2002:str> 123, !!int "5"]
+created: !!timestamp 2026-04-02T10:30:00
+payload: !!binary SGVsbG8=

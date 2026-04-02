@@ -98,6 +98,7 @@ printf "console.log('hi'); 2 + 2;" | ./build/ScriptLoader --output=json
 # Inject globals from the CLI
 printf "x + y;" | ./build/ScriptLoader --global x=10 --global y=20
 printf "name;" | ./build/ScriptLoader --globals=context.json --output=json
+# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON or YAML by file extension.
 # Injected globals can override earlier injected values, but not built-in globals like console
 
 # Load an explicit import map

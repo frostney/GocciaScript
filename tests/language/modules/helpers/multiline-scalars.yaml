@@ -1,0 +1,6 @@
+plain: first
+  second
+quoted: "hello
+  world"
+single: 'left
+  right'
