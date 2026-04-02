@@ -64,6 +64,7 @@ type
     procedure TestToMatchObjectNestedSubset;
     procedure TestToMatchObjectMismatch;
     procedure TestToMatchObjectOnNonObject;
+    procedure TestToMatchObjectIgnoresPrototypeProperties;
 
     { toMatch }
     procedure TestToMatchSubstring;
@@ -270,6 +271,7 @@ begin
   Test('toMatchObject passes for nested object subsets', TestToMatchObjectNestedSubset);
   Test('toMatchObject fails for mismatched subset values', TestToMatchObjectMismatch);
   Test('toMatchObject on non-object fails cleanly', TestToMatchObjectOnNonObject);
+  Test('toMatchObject ignores inherited prototype properties', TestToMatchObjectIgnoresPrototypeProperties);
 
   { toMatch }
   Test('toMatch passes for string substrings', TestToMatchSubstring);
@@ -677,6 +679,28 @@ begin
   A := TGocciaArgumentsCollection.Create([ExpectedObject]);
   try
     ExpectFail(MakeExpectation(TGocciaNumberLiteralValue.Create(7)).ToMatchObject(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToMatchObjectIgnoresPrototypeProperties;
+var
+  A: TGocciaArgumentsCollection;
+  ParentObject, ActualObject, ExpectedObject: TGocciaObjectValue;
+begin
+  ParentObject := TGocciaObjectValue.Create;
+  ParentObject.AssignProperty('inherited', TGocciaBooleanLiteralValue.Create(True));
+
+  ActualObject := TGocciaObjectValue.Create(ParentObject);
+  ActualObject.AssignProperty('own', TGocciaNumberLiteralValue.Create(1));
+
+  ExpectedObject := TGocciaObjectValue.Create;
+  ExpectedObject.AssignProperty('inherited', TGocciaBooleanLiteralValue.Create(True));
+
+  A := TGocciaArgumentsCollection.Create([ExpectedObject]);
+  try
+    ExpectFail(MakeExpectation(ActualObject).ToMatchObject(A, nil));
   finally
     A.Free;
   end;

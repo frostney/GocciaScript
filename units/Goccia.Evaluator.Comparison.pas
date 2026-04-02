@@ -375,7 +375,7 @@ begin
     for I := 0 to High(ExpectedKeys) do
     begin
       Key := ExpectedKeys[I];
-      if not ActualObj.HasProperty(Key) then
+      if not ActualObj.HasOwnProperty(Key) then
       begin
         Result := False;
         Exit;
