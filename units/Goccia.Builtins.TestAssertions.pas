@@ -52,6 +52,10 @@ type
     // Core matchers
     function ToBe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToEqual(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToContainEqual(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToStrictEqual(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToMatchObject(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToMatch(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToBeNull(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToBeNaN(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToBeUndefined(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -199,6 +203,14 @@ begin
     TGocciaNativeFunctionValue.Create(ToBe, 'toBe', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toEqual', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToEqual, 'toEqual', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toContainEqual', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToContainEqual, 'toContainEqual', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toStrictEqual', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToStrictEqual, 'toStrictEqual', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toMatchObject', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToMatchObject, 'toMatchObject', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('toMatch', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToMatch, 'toMatch', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toBeNull', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToBeNull, 'toBeNull', 0), [pfConfigurable, pfWritable]));
   DefineProperty('toBeNaN', TGocciaPropertyDescriptorData.Create(
@@ -299,6 +311,193 @@ begin
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toEqual',
         'Expected ' + FActualValue.ToStringLiteral.Value + ' to equal ' + Expected.ToStringLiteral.Value);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
+function TGocciaExpectationValue.ToContainEqual(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Expected: TGocciaValue;
+  I: Integer;
+  Contains: Boolean;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toContainEqual', FTestAssertions.ThrowError);
+
+  if not (FActualValue is TGocciaArrayValue) then
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toContainEqual')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toContainEqual',
+        'Expected an array but received ' + FActualValue.ToStringLiteral.Value);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  Expected := AArgs.GetElement(0);
+  Contains := False;
+  for I := 0 to TGocciaArrayValue(FActualValue).Elements.Count - 1 do
+    if IsDeepEqual(TGocciaArrayValue(FActualValue).Elements[I], Expected) then
+    begin
+      Contains := True;
+      Break;
+    end;
+
+  if FIsNegated then
+    Contains := not Contains;
+
+  if Contains then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toContainEqual');
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toContainEqual',
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to contain equal ' + Expected.ToStringLiteral.Value)
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toContainEqual',
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' to contain equal ' + Expected.ToStringLiteral.Value);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
+function TGocciaExpectationValue.ToStrictEqual(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Expected: TGocciaValue;
+  IsEqual: Boolean;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toStrictEqual', FTestAssertions.ThrowError);
+
+  Expected := AArgs.GetElement(0);
+  IsEqual := IsDeepEqual(FActualValue, Expected);
+
+  if FIsNegated then
+    IsEqual := not IsEqual;
+
+  if IsEqual then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toStrictEqual');
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toStrictEqual',
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to strictly equal ' + Expected.ToStringLiteral.Value)
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toStrictEqual',
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' to strictly equal ' + Expected.ToStringLiteral.Value);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
+function TGocciaExpectationValue.ToMatchObject(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Expected: TGocciaValue;
+  Matches: Boolean;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toMatchObject', FTestAssertions.ThrowError);
+
+  Expected := AArgs.GetElement(0);
+
+  if not (FActualValue is TGocciaObjectValue) then
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toMatchObject')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatchObject',
+        'Expected an object but received ' + FActualValue.ToStringLiteral.Value);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  if not (Expected is TGocciaObjectValue) then
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toMatchObject')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatchObject',
+        'Expected a match object but received ' + Expected.ToStringLiteral.Value);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  Matches := IsPartialDeepEqual(FActualValue, Expected);
+
+  if FIsNegated then
+    Matches := not Matches;
+
+  if Matches then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toMatchObject');
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatchObject',
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to match object ' + Expected.ToStringLiteral.Value)
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatchObject',
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' to match object ' + Expected.ToStringLiteral.Value);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
+function TGocciaExpectationValue.ToMatch(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Expected: TGocciaValue;
+  ActualString: string;
+  ExpectedString: string;
+  Matches: Boolean;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toMatch', FTestAssertions.ThrowError);
+
+  if not (FActualValue is TGocciaStringLiteralValue) then
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toMatch')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatch',
+        'Expected a string but received ' + FActualValue.ToStringLiteral.Value);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  Expected := AArgs.GetElement(0);
+  if not (Expected is TGocciaStringLiteralValue) then
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toMatch')
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatch',
+        'Expected a string pattern but received ' + Expected.ToStringLiteral.Value);
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+
+  ActualString := FActualValue.ToStringLiteral.Value;
+  ExpectedString := Expected.ToStringLiteral.Value;
+  Matches := Pos(ExpectedString, ActualString) > 0;
+
+  if FIsNegated then
+    Matches := not Matches;
+
+  if Matches then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toMatch');
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end
+  else
+  begin
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatch',
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to match ' + Expected.ToStringLiteral.Value)
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatch',
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' to match ' + Expected.ToStringLiteral.Value);
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;

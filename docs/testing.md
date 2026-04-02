@@ -281,6 +281,7 @@ features: [addition, arithmetic]
 // Equality
 expect(value).toBe(expected);           // Strict equality (===)
 expect(value).toEqual(expected);        // Deep equality
+expect(value).toStrictEqual(expected);  // Deep equality alias for Vitest compatibility
 
 // Type checks
 expect(value).toBeNull();
@@ -297,6 +298,9 @@ expect(value).toBeCloseTo(n, digits);
 
 // Collections
 expect(array).toContain(item);       // Array element, Set element, or string substring
+expect(array).toContainEqual(item);  // Deep-equal array element
+expect(string).toMatch("part");      // String substring match
+expect(value).toMatchObject(obj);    // Partial recursive object match
 expect(value).toHaveLength(n);
 expect(value).toHaveProperty(name);
 
@@ -566,7 +570,7 @@ Pascal unit tests are a secondary testing layer for low-level value system inter
 | `Goccia.Values.Primitives.Test.pas` | Primitive value creation, type conversion (`ToStringLiteral`, `ToBooleanLiteral`, `ToNumberLiteral`, `TypeName`, `TypeOf`) |
 | `Goccia.Values.FunctionValue.Test.pas` | Function/method creation, closure capture, parameter handling, scope resolution, AST evaluation |
 | `Goccia.Values.ObjectValue.Test.pas` | Object property operations (`AssignProperty`, `GetProperty`, `DeleteProperty`), prototype chain resolution |
-| `Goccia.Builtins.TestAssertions.Test.pas` | All `TGocciaExpectationValue` matchers (`toBe`, `toEqual`, `toBeNull`, `toBeNaN`, `toBeUndefined`, `toBeDefined`, `toBeTruthy`, `toBeFalsy`, `toBeGreaterThan`, `toBeLessThan`, `toContain`, `toHaveLength`, `toHaveProperty`, `toBeCloseTo`, `not`); skip and conditional APIs (`describe.skip`, `describe.skipIf`, `describe.runIf`, `test.skipIf`, `test.runIf`) |
+| `Goccia.Builtins.TestAssertions.Test.pas` | All `TGocciaExpectationValue` matchers (`toBe`, `toEqual`, `toStrictEqual`, `toContainEqual`, `toMatchObject`, `toMatch`, `toBeNull`, `toBeNaN`, `toBeUndefined`, `toBeDefined`, `toBeTruthy`, `toBeFalsy`, `toBeGreaterThan`, `toBeLessThan`, `toContain`, `toHaveLength`, `toHaveProperty`, `toBeCloseTo`, `not`); skip and conditional APIs (`describe.skip`, `describe.skipIf`, `describe.runIf`, `test.skipIf`, `test.runIf`) |
 
 These compile as standalone executables and run directly:
 

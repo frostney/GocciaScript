@@ -14,6 +14,7 @@ function IsSameValue(const ALeft, ARight: TGocciaValue): Boolean;
 function IsSameValueZero(const ALeft, ARight: TGocciaValue): Boolean;
 
 function IsDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
+function IsPartialDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
 
 function GreaterThan(const ALeft, ARight: TGocciaValue): Boolean;
 function GreaterThanOrEqual(const ALeft, ARight: TGocciaValue): Boolean; inline;
@@ -24,11 +25,60 @@ implementation
 
 uses
   Goccia.Values.ArrayValue,
-  Goccia.Values.ClassHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.SetValue;
+
+type
+  TComparedValuePair = record
+    Actual: TGocciaValue;
+    Expected: TGocciaValue;
+  end;
+
+  TComparedValuePairArray = array of TComparedValuePair;
+
+function HasComparedPair(const AComparedPairs: TComparedValuePairArray;
+  const AActual, AExpected: TGocciaValue): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AComparedPairs) do
+    if (AComparedPairs[I].Actual = AActual) and
+       (AComparedPairs[I].Expected = AExpected) then
+    begin
+      Result := True;
+      Exit;
+    end;
+
+  Result := False;
+end;
+
+procedure AddComparedPair(var AComparedPairs: TComparedValuePairArray;
+  const AActual, AExpected: TGocciaValue);
+var
+  PairIndex: Integer;
+begin
+  PairIndex := Length(AComparedPairs);
+  SetLength(AComparedPairs, PairIndex + 1);
+  AComparedPairs[PairIndex].Actual := AActual;
+  AComparedPairs[PairIndex].Expected := AExpected;
+end;
+
+procedure CopyComparedPairs(const ASource: TComparedValuePairArray;
+  out ADestination: TComparedValuePairArray);
+var
+  I: Integer;
+begin
+  SetLength(ADestination, Length(ASource));
+  for I := 0 to High(ASource) do
+    ADestination[I] := ASource[I];
+end;
+
+function IsDeepEqualInternal(const AActual, AExpected: TGocciaValue;
+  var AComparedPairs: TComparedValuePairArray): Boolean; forward;
+function IsPartialDeepEqualInternal(const AActual, AExpected: TGocciaValue;
+  var AComparedPairs: TComparedValuePairArray): Boolean; forward;
 
 function IsNegativeZero(const AValue: TGocciaNumberLiteralValue): Boolean; inline;
 begin
@@ -189,7 +239,8 @@ begin
   Result := False;
 end;
 
-function IsDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
+function IsDeepEqualInternal(const AActual, AExpected: TGocciaValue;
+  var AComparedPairs: TComparedValuePairArray): Boolean;
 var
   ActualObj, ExpectedObj: TGocciaObjectValue;
   ActualArr, ExpectedArr: TGocciaArrayValue;
@@ -247,7 +298,8 @@ begin
         Exit;
       end;
 
-      if not IsDeepEqual(ActualArr.Elements[I], ExpectedArr.Elements[I]) then
+      if not IsDeepEqualInternal(ActualArr.Elements[I], ExpectedArr.Elements[I],
+        AComparedPairs) then
       begin
         Result := False;
         Exit;
@@ -266,9 +318,16 @@ begin
       Result := False;
       Exit;
     end;
+    if HasComparedPair(AComparedPairs, AActual, AExpected) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    AddComparedPair(AComparedPairs, AActual, AExpected);
     for I := 0 to TGocciaSetValue(AActual).Items.Count - 1 do
     begin
-      if not IsDeepEqual(TGocciaSetValue(AActual).Items[I], TGocciaSetValue(AExpected).Items[I]) then
+      if not IsDeepEqualInternal(TGocciaSetValue(AActual).Items[I],
+        TGocciaSetValue(AExpected).Items[I], AComparedPairs) then
       begin
         Result := False;
         Exit;
@@ -286,14 +345,22 @@ begin
       Result := False;
       Exit;
     end;
+    if HasComparedPair(AComparedPairs, AActual, AExpected) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    AddComparedPair(AComparedPairs, AActual, AExpected);
     for I := 0 to TGocciaMapValue(AActual).Entries.Count - 1 do
     begin
-      if not IsDeepEqual(TGocciaMapValue(AActual).Entries[I].Key, TGocciaMapValue(AExpected).Entries[I].Key) then
+      if not IsDeepEqualInternal(TGocciaMapValue(AActual).Entries[I].Key,
+        TGocciaMapValue(AExpected).Entries[I].Key, AComparedPairs) then
       begin
         Result := False;
         Exit;
       end;
-      if not IsDeepEqual(TGocciaMapValue(AActual).Entries[I].Value, TGocciaMapValue(AExpected).Entries[I].Value) then
+      if not IsDeepEqualInternal(TGocciaMapValue(AActual).Entries[I].Value,
+        TGocciaMapValue(AExpected).Entries[I].Value, AComparedPairs) then
       begin
         Result := False;
         Exit;
@@ -322,6 +389,12 @@ begin
       Result := False;
       Exit;
     end;
+    if HasComparedPair(AComparedPairs, AActual, AExpected) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    AddComparedPair(AComparedPairs, AActual, AExpected);
 
     // Check if all keys exist in both objects and values are deeply equal
     for I := 0 to High(ActualKeys) do
@@ -336,7 +409,8 @@ begin
       end;
 
       // Recursively compare property values
-      if not IsDeepEqual(ActualObj.GetProperty(Key), ExpectedObj.GetProperty(Key)) then
+      if not IsDeepEqualInternal(ActualObj.GetProperty(Key),
+        ExpectedObj.GetProperty(Key), AComparedPairs) then
       begin
         Result := False;
         Exit;
@@ -349,6 +423,75 @@ begin
 
   // For other types (functions, etc.), fall back to strict equality
   Result := False;
+end;
+
+function IsDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
+var
+  ComparedPairs: TComparedValuePairArray;
+begin
+  Result := IsDeepEqualInternal(AActual, AExpected, ComparedPairs);
+end;
+
+function IsPartialDeepEqualInternal(const AActual, AExpected: TGocciaValue;
+  var AComparedPairs: TComparedValuePairArray): Boolean;
+var
+  ActualObj, ExpectedObj: TGocciaObjectValue;
+  DeepComparedPairs: TComparedValuePairArray;
+  ExpectedKeys: TArray<string>;
+  I: Integer;
+  Key: string;
+begin
+  CopyComparedPairs(AComparedPairs, DeepComparedPairs);
+  if IsDeepEqualInternal(AActual, AExpected, DeepComparedPairs) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if (AActual is TGocciaObjectValue) and (AExpected is TGocciaObjectValue) and
+     not (AActual is TGocciaArrayValue) and not (AExpected is TGocciaArrayValue) and
+     not (AActual is TGocciaSetValue) and not (AExpected is TGocciaSetValue) and
+     not (AActual is TGocciaMapValue) and not (AExpected is TGocciaMapValue) then
+  begin
+    ActualObj := TGocciaObjectValue(AActual);
+    ExpectedObj := TGocciaObjectValue(AExpected);
+    ExpectedKeys := ExpectedObj.GetEnumerablePropertyNames;
+    if HasComparedPair(AComparedPairs, AActual, AExpected) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    AddComparedPair(AComparedPairs, AActual, AExpected);
+
+    for I := 0 to High(ExpectedKeys) do
+    begin
+      Key := ExpectedKeys[I];
+      if not ActualObj.HasOwnProperty(Key) then
+      begin
+        Result := False;
+        Exit;
+      end;
+
+      if not IsPartialDeepEqualInternal(ActualObj.GetProperty(Key),
+        ExpectedObj.GetProperty(Key), AComparedPairs) then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
+
+    Result := True;
+    Exit;
+  end;
+
+  Result := False;
+end;
+
+function IsPartialDeepEqual(const AActual, AExpected: TGocciaValue): Boolean;
+var
+  ComparedPairs: TComparedValuePairArray;
+begin
+  Result := IsPartialDeepEqualInternal(AActual, AExpected, ComparedPairs);
 end;
 
 function CompareNumbers(const ALeftNum, ARightNum: TGocciaNumberLiteralValue; const AIsGreater: Boolean): Boolean;

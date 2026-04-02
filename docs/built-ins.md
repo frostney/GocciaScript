@@ -883,6 +883,7 @@ describe("group name", () => {
 |---------|-------------|
 | `.toBe(expected)` | Strict equality (`===`) |
 | `.toEqual(expected)` | Deep equality |
+| `.toStrictEqual(expected)` | Deep equality alias for Vitest compatibility |
 | `.toBeNull()` | Is null |
 | `.toBeNaN()` | Is NaN |
 | `.toBeUndefined()` | Is undefined |
@@ -892,6 +893,9 @@ describe("group name", () => {
 | `.toBeGreaterThan(n)` | Greater than |
 | `.toBeLessThan(n)` | Less than |
 | `.toContain(item)` | Array/Set element or string substring |
+| `.toContainEqual(item)` | Deep-equal array element |
+| `.toMatch(string)` | String substring match |
+| `.toMatchObject(obj)` | Partial recursive object/subset match |
 | `.toBeInstanceOf(class)` | instanceof check |
 | `.toHaveLength(n)` | Length check |
 | `.toHaveProperty(name)` | Property exists on an object. Non-object values always fail; negated (`not.toHaveProperty`) on non-objects passes. |
