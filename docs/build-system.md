@@ -252,7 +252,7 @@ Runs on the full platform matrix:
 | macOS Latest | x64, ARM64 |
 | Windows Latest | x86 (i386-win32) |
 
-**`build`** — Installs FPC, compiles all binaries with `--prod`, uploads them as intermediate artifacts.
+**`build`** — Installs FPC, compiles the top-level `*.dpr` programs with `--prod`, stages those binaries plus Pascal test executables, and uploads that staged set as intermediate artifacts.
 
 **`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests on all platforms.
 
@@ -260,24 +260,27 @@ Runs on the full platform matrix:
 
 **`examples`** (needs build) — Runs all example scripts from the `examples/` folder on all platforms.
 
-**`artifacts`** (needs test + benchmark + examples, main only) — Uploads production binaries after all checks pass.
+**`artifacts`** (needs test + benchmark + examples, main only) — Uploads production binaries after all checks pass, deriving the executable names from the top-level `*.dpr` entrypoints.
 
-**`release`** (needs test + benchmark + examples, tags only) — Downloads all platform build artifacts, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the top-level `*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 
 ```
-build → test (JS only)
+build → test (JS + native)
       → benchmark → PR comment (comparison)
+      → examples
 ```
 
 Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
-**`build`** — Installs FPC, compiles all binaries with `--prod`.
+**`build`** — Installs FPC, compiles all binaries with `--prod`, stages the top-level `*.dpr` binaries plus Pascal test executables, and uploads that staged set as `build-pr`.
 
-**`test`** (needs build) — Runs all JavaScript tests. No native tests.
+**`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests.
 
 **`benchmark`** (needs build) — Restores the cached benchmark baseline JSON from main, runs all benchmarks with JSON output, and posts a collapsible comparison comment on the PR grouped by file. Each file section shows the cached baseline and PR `opsPerSec` point estimates side by side, with each point estimate carrying its min/max ops/sec range in brackets. Classification uses range overlap: fully above the baseline range is an improvement, fully below is a regression, and overlapping ranges are treated as unchanged noise. Percentage deltas are still shown as secondary context, and files with significant changes are auto-expanded. If no baseline exists, shows results without comparison.
+
+**`examples`** (needs build) — Runs all example scripts from the `examples/` folder.
 
 FPC is only installed once per platform in the `build` job. Test, benchmark, and example jobs run in parallel, using pre-built binaries.
 

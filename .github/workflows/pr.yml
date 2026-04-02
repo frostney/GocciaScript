@@ -28,18 +28,15 @@ jobs:
       - name: Build all
         run: ./build.pas --prod
 
+      - name: Stage build artifacts
+        run: bash ./.github/scripts/stage-build-artifacts.sh build pr-artifacts --include-tests
+
       - name: Upload build
         uses: actions/upload-artifact@v5
         with:
           name: build-pr
           retention-days: 1
-          path: |
-            build/ScriptLoader
-            build/TestRunner
-            build/BenchmarkRunner
-            build/REPL
-            build/Goccia.*.Test
-            build/Goccia.*.Test.exe
+          path: pr-artifacts/*
 
   test:
     needs: build
