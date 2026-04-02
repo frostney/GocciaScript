@@ -2310,6 +2310,18 @@ begin
     [APrivateName]));
 end;
 
+procedure ThrowPrivateBrandError(const APrivateName: string);
+begin
+  ThrowTypeError(Format('Private field #%s is not accessible', [APrivateName]));
+end;
+
+procedure EnsurePrivateStaticBrand(const AReceiver,
+  AAccessClass: TGocciaClassValue; const APrivateName: string);
+begin
+  if AReceiver <> AAccessClass then
+    ThrowPrivateBrandError(APrivateName);
+end;
+
 // ES2026 §7.3.30 PrivateGet ( O, P )
 function EvaluatePrivateMemberOnInstance(const AInstance: TGocciaInstanceValue; const APrivateName: string; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
@@ -2361,6 +2373,8 @@ begin
   if not Assigned(AccessClass) then
     AccessClass := AClassValue;
 
+  EnsurePrivateStaticBrand(AClassValue, AccessClass, APrivateName);
+
   if AccessClass.HasOwnPrivateGetter(APrivateName) then
   begin
     GetterFn := AccessClass.GetOwnPrivatePropertyGetter(APrivateName);
@@ -2377,7 +2391,7 @@ begin
     ThrowPrivateGetterMissingError(APrivateName);
 
   if not AccessClass.PrivateStaticProperties.TryGetValue(APrivateName, Result) then
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    ThrowPrivateBrandError(APrivateName);
 end;
 
 procedure AssignPrivateMemberOnClass(const AClassValue: TGocciaClassValue;
@@ -2391,6 +2405,8 @@ begin
   AccessClass := ResolveLexicalOwningClass(AContext);
   if not Assigned(AccessClass) then
     AccessClass := AClassValue;
+
+  EnsurePrivateStaticBrand(AClassValue, AccessClass, APrivateName);
 
   if AccessClass.HasOwnPrivateSetter(APrivateName) then
   begin
@@ -2407,6 +2423,9 @@ begin
 
   if AccessClass.HasOwnPrivateGetter(APrivateName) then
     ThrowPrivateSetterMissingError(APrivateName);
+
+  if not AccessClass.HasOwnPrivateStaticProperty(APrivateName) then
+    ThrowPrivateBrandError(APrivateName);
 
   AccessClass.AddPrivateStaticProperty(APrivateName, AValue);
 end;

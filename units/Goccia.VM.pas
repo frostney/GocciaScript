@@ -3126,6 +3126,12 @@ begin
       end;
       if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
         ThrowTypeError('Private accessor ' + AKey + ' was defined without a setter');
+      if TGocciaClassValue(AObject).HasOwnPrivateStaticProperty(AKey) then
+      begin
+        TGocciaClassValue(AObject).AddPrivateStaticProperty(AKey, AValue);
+        Exit;
+      end;
+      ThrowTypeError('Private field ' + AKey + ' is not accessible');
     end;
 
     if AObject is TGocciaObjectValue then
@@ -3831,6 +3837,15 @@ begin
            (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
           TGocciaVMClassValue(FRegisters[A].ObjectValue).SetMethodInitializers(
             [RegisterToValue(FRegisters[B])]);
+      end;
+
+      OP_CLASS_DECLARE_PRIVATE_STATIC_CONST:
+      begin
+        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).AddPrivateStaticProperty(
+            GlobalName, TGocciaUndefinedLiteralValue.UndefinedValue);
       end;
 
       OP_GET_PROP_CONST:
