@@ -1,0 +1,8 @@
+root: &root
+  name: root
+  self: *root
+
+loop: &loop
+  - *loop
+
+pair: [ &item { label: same }, *item ]

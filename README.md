@@ -176,6 +176,8 @@ printf "console.log('hi'); 2 + 2;" | ./build/ScriptLoader --output=json
 # Inject globals from the CLI
 printf "x + y;" | ./build/ScriptLoader --global x=10 --global y=20
 printf "name;" | ./build/ScriptLoader --globals=context.json --output=json
+printf "name;" | ./build/ScriptLoader --globals=context.yaml --output=json
+# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON or YAML by file extension.
 # Injected globals can override earlier injected values, but not built-in globals like console
 
 # Abort long-running scripts
@@ -274,6 +276,33 @@ import { add } from "./math.js";
 ```
 
 The CLI tools share WHATWG-style import map support with `--import-map=<file.json>`, `--alias key=value`, and automatic `goccia.json` discovery for project-level module aliases.
+
+Structured data files can also be consumed directly:
+
+```javascript
+import { name, version } from "./package.json";
+import { name as appName, debug } from "./config.yaml";
+```
+
+For YAML streams with multiple documents, use the explicit document parser:
+
+```javascript
+const docs = YAML.parseDocuments(sourceText);
+```
+
+`YAML.parse(sourceText)` also returns an array when the input uses explicit `---` document markers, matching Bun's YAML runtime behavior.
+
+The current YAML surface already handles common configuration files, including mappings, sequences, block and multiline flow collections (including single-pair mapping items like `[foo: bar]`, empty implicit keys, trailing commas, and stricter rejection of malformed empty interior entries), anchors, aliases, merge keys, self-referential alias graphs for mappings and sequences, block scalars (`|`, `>`, chomping modifiers, and indentation indicators), multiline plain and quoted scalar folding, YAML 1.2 numeric scalar resolution (including base-prefixed integers, exponent forms, and validated digit separators), YAML double-quoted escapes (`\x`, `\u`, `\U`, line continuations, and YAML-specific escapes), and document directives/tags such as `%YAML`, `%TAG`, `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!seq`, `!!map`, `!!timestamp`, and `!!binary`. Directives are still validated as document-preamble syntax, so they are rejected if they appear after document content without an intervening document boundary.
+
+Tagged values now preserve runtime metadata through `.tagName` and `.value`. Custom tags wrap the parsed underlying value instead of being discarded, while `!!timestamp` validates ISO date/date-time input and `!!binary` validates and decodes base64 payloads.
+
+Explicit keys (`? key`) are also supported, including omitted explicit values and zero-indented sequence values. Non-scalar YAML keys are canonicalized into stable JSON-like strings at parse time so mappings remain representable as Goccia objects, and anchored mapping keys now parse instead of being rejected outright.
+
+YAML support is being built with two explicit compatibility goals:
+- Full YAML 1.2 compatibility
+- Bun-compatible runtime/module semantics where they make sense in GocciaScript
+
+The current implementation is still incremental and does not yet cover the full YAML 1.2 surface. The detailed conformance snapshot and remaining gap clusters live in [docs/design-decisions.md](docs/design-decisions.md). The official `yaml-test-suite` parse-validity check can be rerun locally with `python3 scripts/run_yaml_test_suite.py`.
 
 **Async/await** with full Promise support:
 

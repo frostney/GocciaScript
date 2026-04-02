@@ -27,6 +27,7 @@ uses
   Goccia.Builtins.Performance,
   Goccia.Builtins.Temporal,
   Goccia.Builtins.TestAssertions,
+  Goccia.Builtins.YAML,
   Goccia.Interpreter,
   Goccia.JSON,
   Goccia.JSX.SourceMap,
@@ -42,7 +43,8 @@ uses
   Goccia.Values.HoleValue,
   Goccia.Values.IteratorValue,
   Goccia.Values.Primitives,
-  Goccia.Values.TypedArrayValue;
+  Goccia.Values.TypedArrayValue,
+  Goccia.YAML;
 
 type
   TGocciaGlobalBuiltin = (
@@ -53,6 +55,7 @@ type
     ggGlobalNumber,
     ggPromise,
     ggJSON,
+    ggYAML,
     ggSymbol,
     ggSet,
     ggMap,
@@ -78,7 +81,7 @@ type
 type
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
   private
     FInterpreter: TGocciaInterpreter;
     FFileName: string;
@@ -97,6 +100,7 @@ type
     FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
     FBuiltinJSON: TGocciaJSONBuiltin;
+    FBuiltinYAML: TGocciaYAMLBuiltin;
     FBuiltinSymbol: TGocciaGlobalSymbol;
     FBuiltinSet: TGocciaGlobalSet;
     FBuiltinMap: TGocciaGlobalMap;
@@ -135,6 +139,7 @@ type
     procedure AddAlias(const APattern, AReplacement: string);
     procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
+    procedure InjectGlobalsFromYAML(const AYamlString: string);
     procedure InjectGlobalsFromModule(const APath: string);
     procedure RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
 
@@ -155,6 +160,7 @@ type
     property BuiltinGlobalNumber: TGocciaGlobalNumber read FBuiltinGlobalNumber;
     property BuiltinGlobals: TGocciaGlobals read FBuiltinGlobals;
     property BuiltinJSON: TGocciaJSONBuiltin read FBuiltinJSON;
+    property BuiltinYAML: TGocciaYAMLBuiltin read FBuiltinYAML;
     property BuiltinSymbol: TGocciaGlobalSymbol read FBuiltinSymbol;
     property BuiltinSet: TGocciaGlobalSet read FBuiltinSet;
     property BuiltinMap: TGocciaGlobalMap read FBuiltinMap;
@@ -267,6 +273,7 @@ begin
     FBuiltinGlobalString.Free;
     FBuiltinGlobals.Free;
     FBuiltinJSON.Free;
+    FBuiltinYAML.Free;
     FBuiltinSymbol.Free;
     FBuiltinSet.Free;
     FBuiltinMap.Free;
@@ -312,6 +319,8 @@ begin
     FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, ThrowError);
   if ggJSON in FGlobals then
     FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, ThrowError);
+  if ggYAML in FGlobals then
+    FBuiltinYAML := TGocciaYAMLBuiltin.Create('YAML', Scope, ThrowError);
   if ggSymbol in FGlobals then
     FBuiltinSymbol := TGocciaGlobalSymbol.Create(CONSTRUCTOR_SYMBOL, Scope, ThrowError);
   if ggSet in FGlobals then
@@ -642,6 +651,45 @@ begin
       InjectGlobal(Key, Obj.GetProperty(Key));
   finally
     TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+procedure TGocciaEngine.InjectGlobalsFromYAML(const AYamlString: string);
+var
+  Documents: TGocciaArrayValue;
+  ParsedDocument: TGocciaValue;
+  Parser: TGocciaYAMLParser;
+  Obj: TGocciaObjectValue;
+  Key: string;
+begin
+  Parser := TGocciaYAMLParser.Create;
+  try
+    Documents := Parser.ParseDocuments(AYamlString);
+  finally
+    Parser.Free;
+  end;
+
+  try
+    if Documents.Elements.Count <> 1 then
+      raise TGocciaRuntimeError.Create(
+        'Globals YAML must contain exactly one top-level document.',
+        0, 0, FFileName, nil);
+
+    ParsedDocument := Documents.Elements[0];
+    if not (ParsedDocument is TGocciaObjectValue) then
+      raise TGocciaRuntimeError.Create(
+        'Globals YAML must be a top-level object.', 0, 0, FFileName, nil);
+
+    TGarbageCollector.Instance.AddTempRoot(ParsedDocument);
+    Obj := TGocciaObjectValue(ParsedDocument);
+    try
+      for Key in Obj.GetOwnPropertyKeys do
+        InjectGlobal(Key, Obj.GetProperty(Key));
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(ParsedDocument);
+    end;
+  finally
+    Documents.Free;
   end;
 end;
 

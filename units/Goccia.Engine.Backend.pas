@@ -20,7 +20,8 @@ uses
   Goccia.Modules.Resolver,
   Goccia.Runtime.Bootstrap,
   Goccia.Values.Primitives,
-  Goccia.VM;
+  Goccia.VM,
+  Goccia.YAML;
 
 type
   TGocciaEngineBackend = (
@@ -53,6 +54,7 @@ type
 
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
+    procedure InjectGlobalsFromYAML(const AYamlString: string);
     procedure InjectGlobalsFromModule(const APath: string);
     procedure RegisterBuiltIns(const AGlobals: TGocciaGlobalBuiltins);
     procedure ClearTransientCaches;
@@ -76,6 +78,7 @@ uses
   Goccia.Error,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
+  Goccia.Values.ArrayValue,
   Goccia.Values.Error,
   Goccia.Values.ObjectValue;
 
@@ -227,6 +230,45 @@ begin
       RegisterGlobal(Key, Obj.GetProperty(Key));
   finally
     TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+procedure TGocciaBytecodeBackend.InjectGlobalsFromYAML(const AYamlString: string);
+var
+  Documents: TGocciaArrayValue;
+  ParsedDocument: TGocciaValue;
+  Parser: TGocciaYAMLParser;
+  Obj: TGocciaObjectValue;
+  Key: string;
+begin
+  Parser := TGocciaYAMLParser.Create;
+  try
+    Documents := Parser.ParseDocuments(AYamlString);
+  finally
+    Parser.Free;
+  end;
+
+  try
+    if Documents.Elements.Count <> 1 then
+      raise TGocciaRuntimeError.Create(
+        'Globals YAML must contain exactly one top-level document.',
+        0, 0, FSourcePath, nil);
+
+    ParsedDocument := Documents.Elements[0];
+    if not (ParsedDocument is TGocciaObjectValue) then
+      raise TGocciaRuntimeError.Create(
+        'Globals YAML must be a top-level object.', 0, 0, FSourcePath, nil);
+
+    TGarbageCollector.Instance.AddTempRoot(ParsedDocument);
+    Obj := TGocciaObjectValue(ParsedDocument);
+    try
+      for Key in Obj.GetOwnPropertyKeys do
+        RegisterGlobal(Key, Obj.GetProperty(Key));
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(ParsedDocument);
+    end;
+  finally
+    Documents.Free;
   end;
 end;
 

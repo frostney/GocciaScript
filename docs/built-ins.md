@@ -145,6 +145,23 @@ The JSON parser is a recursive descent implementation. Special handling:
 - `toJSON()` is called before serializing object values
 - Circular references throw `TypeError`
 
+### YAML (`Goccia.Builtins.YAML.pas`)
+
+| Method | Description |
+|--------|-------------|
+| `YAML.parse(text)` | Parse YAML text; returns an array when the stream uses explicit `---` document markers |
+| `YAML.parseDocuments(text)` | Parse a YAML stream and always return an array of documents |
+
+`YAML.parse` delegates to the standalone `TGocciaYAMLParser` utility in `Goccia.YAML`, mirroring the JSON built-in's split between parser utility and global runtime surface. Its behavior now matches Bun's YAML runtime semantics: when the input uses explicit `---` document markers, `YAML.parse(...)` returns an array of parsed documents; otherwise it returns the first parsed document value directly. `YAML.parseDocuments(...)` is the always-array variant.
+
+The current YAML parser also supports anchors, aliases, merge keys, self-referential alias graphs for mappings and sequences, multiline flow-style collections and flow edge cases such as single-pair mapping entries, empty implicit keys, and trailing commas, block scalars (`|`, `>`, chomping modifiers, and indentation indicators), multiline plain and quoted scalar folding, YAML 1.2 numeric scalar resolution (including base-prefixed integers, exponent forms, and validated digit separators), YAML double-quoted escapes (`\x`, `\u`, `\U`, line continuations, and YAML-specific escapes), `%YAML` / `%TAG` directives, and the standard tags `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!seq`, `!!map`, `!!timestamp`, and `!!binary`. Directives are treated as document-preamble syntax and are rejected if they appear after document content without a document boundary.
+
+Tagged values preserve runtime metadata through `.tagName` and `.value`. Custom tags wrap the parsed underlying value, `!!timestamp` validates ISO date/date-time scalars, and `!!binary` validates and decodes base64 text into the wrapped scalar value.
+
+Explicit keys (`? key`) are supported, including omitted explicit values and zero-indented sequence values. Because GocciaScript mappings are backed by string-keyed objects, non-scalar YAML keys are canonicalized into stable JSON-like strings during parsing, and anchored mapping keys now parse instead of being rejected outright.
+
+Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time while keeping Bun-compatible YAML runtime behavior where practical. The current parser is still a partial implementation. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
+
 ### Object (`Goccia.Builtins.GlobalObject.pas`)
 
 | Method | Description |

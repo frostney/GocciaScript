@@ -182,8 +182,13 @@ var
   Pair: TScriptLoaderGlobalPair;
 begin
   for I := 0 to GGlobalsFiles.Count - 1 do
-    if IsJSONGlobalsFile(GGlobalsFiles[I]) then
-      AEngine.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]));
+    if IsStructuredGlobalsFile(GGlobalsFiles[I]) then
+    begin
+      if IsYAMLGlobalsFile(GGlobalsFiles[I]) then
+        AEngine.InjectGlobalsFromYAML(ReadFileText(GGlobalsFiles[I]))
+      else
+        AEngine.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]));
+    end;
 
   for I := 0 to GInlineGlobals.Count - 1 do
   begin
@@ -197,7 +202,7 @@ var
   I: Integer;
 begin
   for I := 0 to GGlobalsFiles.Count - 1 do
-    if not IsJSONGlobalsFile(GGlobalsFiles[I]) then
+    if not IsStructuredGlobalsFile(GGlobalsFiles[I]) then
       AEngine.InjectGlobalsFromModule(GGlobalsFiles[I]);
 end;
 
@@ -207,8 +212,13 @@ var
   Pair: TScriptLoaderGlobalPair;
 begin
   for I := 0 to GGlobalsFiles.Count - 1 do
-    if IsJSONGlobalsFile(GGlobalsFiles[I]) then
-      ABackend.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]));
+    if IsStructuredGlobalsFile(GGlobalsFiles[I]) then
+    begin
+      if IsYAMLGlobalsFile(GGlobalsFiles[I]) then
+        ABackend.InjectGlobalsFromYAML(ReadFileText(GGlobalsFiles[I]))
+      else
+        ABackend.InjectGlobalsFromJSON(ReadFileText(GGlobalsFiles[I]));
+    end;
 
   for I := 0 to GInlineGlobals.Count - 1 do
   begin
@@ -222,7 +232,7 @@ var
   I: Integer;
 begin
   for I := 0 to GGlobalsFiles.Count - 1 do
-    if not IsJSONGlobalsFile(GGlobalsFiles[I]) then
+    if not IsStructuredGlobalsFile(GGlobalsFiles[I]) then
       ABackend.InjectGlobalsFromModule(GGlobalsFiles[I]);
 end;
 

@@ -1,0 +1,4 @@
+ascii: "\x41"
+emoji: "\U0001F600"
+continued: "first\
+  second"

@@ -17,7 +17,8 @@ type
 
 function ParseGlobalPair(const AArg: string): TScriptLoaderGlobalPair;
 function ParseInlineGlobalValue(const AValueText: string): TGocciaValue;
-function IsJSONGlobalsFile(const APath: string): Boolean;
+function IsStructuredGlobalsFile(const APath: string): Boolean;
+function IsYAMLGlobalsFile(const APath: string): Boolean;
 function ReadFileText(const APath: string): string;
 
 implementation
@@ -57,9 +58,14 @@ begin
   end;
 end;
 
-function IsJSONGlobalsFile(const APath: string): Boolean;
+function IsStructuredGlobalsFile(const APath: string): Boolean;
 begin
-  Result := LowerCase(ExtractFileExt(APath)) = EXT_JSON;
+  Result := IsStructuredDataExtension(ExtractFileExt(APath));
+end;
+
+function IsYAMLGlobalsFile(const APath: string): Boolean;
+begin
+  Result := IsYAMLExtension(ExtractFileExt(APath));
 end;
 
 function ReadFileText(const APath: string): string;
