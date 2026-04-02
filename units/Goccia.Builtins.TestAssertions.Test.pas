@@ -58,6 +58,7 @@ type
     procedure TestToStrictEqualArrays;
     procedure TestToStrictEqualMismatch;
     procedure TestToStrictEqualNegated;
+    procedure TestToStrictEqualCyclicObjects;
 
     { toMatchObject }
     procedure TestToMatchObjectSubset;
@@ -65,6 +66,7 @@ type
     procedure TestToMatchObjectMismatch;
     procedure TestToMatchObjectOnNonObject;
     procedure TestToMatchObjectIgnoresPrototypeProperties;
+    procedure TestToMatchObjectCyclicSubset;
 
     { toMatch }
     procedure TestToMatchSubstring;
@@ -265,6 +267,7 @@ begin
   Test('toStrictEqual passes for identical nested arrays', TestToStrictEqualArrays);
   Test('toStrictEqual fails for mismatched values', TestToStrictEqualMismatch);
   Test('not.toStrictEqual passes for different values', TestToStrictEqualNegated);
+  Test('toStrictEqual handles cyclic objects', TestToStrictEqualCyclicObjects);
 
   { toMatchObject }
   Test('toMatchObject passes for object subsets', TestToMatchObjectSubset);
@@ -272,6 +275,7 @@ begin
   Test('toMatchObject fails for mismatched subset values', TestToMatchObjectMismatch);
   Test('toMatchObject on non-object fails cleanly', TestToMatchObjectOnNonObject);
   Test('toMatchObject ignores inherited prototype properties', TestToMatchObjectIgnoresPrototypeProperties);
+  Test('toMatchObject handles cyclic object subsets', TestToMatchObjectCyclicSubset);
 
   { toMatch }
   Test('toMatch passes for string substrings', TestToMatchSubstring);
@@ -597,6 +601,27 @@ begin
   end;
 end;
 
+procedure TTestExpectationMatchers.TestToStrictEqualCyclicObjects;
+var
+  A: TGocciaArgumentsCollection;
+  ActualObject, ExpectedObject: TGocciaObjectValue;
+begin
+  ActualObject := TGocciaObjectValue.Create;
+  ActualObject.AssignProperty('label', TGocciaStringLiteralValue.Create('node'));
+  ActualObject.AssignProperty('self', ActualObject);
+
+  ExpectedObject := TGocciaObjectValue.Create;
+  ExpectedObject.AssignProperty('label', TGocciaStringLiteralValue.Create('node'));
+  ExpectedObject.AssignProperty('self', ExpectedObject);
+
+  A := TGocciaArgumentsCollection.Create([ExpectedObject]);
+  try
+    ExpectPass(MakeExpectation(ActualObject).ToStrictEqual(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
 { ---- toMatchObject ---- }
 
 procedure TTestExpectationMatchers.TestToMatchObjectSubset;
@@ -701,6 +726,28 @@ begin
   A := TGocciaArgumentsCollection.Create([ExpectedObject]);
   try
     ExpectFail(MakeExpectation(ActualObject).ToMatchObject(A, nil));
+  finally
+    A.Free;
+  end;
+end;
+
+procedure TTestExpectationMatchers.TestToMatchObjectCyclicSubset;
+var
+  A: TGocciaArgumentsCollection;
+  ActualObject, ExpectedObject: TGocciaObjectValue;
+begin
+  ActualObject := TGocciaObjectValue.Create;
+  ActualObject.AssignProperty('label', TGocciaStringLiteralValue.Create('node'));
+  ActualObject.AssignProperty('extra', TGocciaBooleanLiteralValue.Create(True));
+  ActualObject.AssignProperty('self', ActualObject);
+
+  ExpectedObject := TGocciaObjectValue.Create;
+  ExpectedObject.AssignProperty('label', TGocciaStringLiteralValue.Create('node'));
+  ExpectedObject.AssignProperty('self', ExpectedObject);
+
+  A := TGocciaArgumentsCollection.Create([ExpectedObject]);
+  try
+    ExpectPass(MakeExpectation(ActualObject).ToMatchObject(A, nil));
   finally
     A.Free;
   end;
