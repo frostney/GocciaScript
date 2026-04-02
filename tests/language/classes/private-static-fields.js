@@ -65,6 +65,54 @@ test("private static accessors can be read, written, and used in compound assign
   expect(TestClass.getComputed()).toBe(50);
 });
 
+test("private static brand checks reject subclass receivers for reads and writes", () => {
+  class Base {
+    static #value = 1;
+
+    static getViaThis() {
+      return this.#value;
+    }
+
+    static setViaThis(value) {
+      this.#value = value;
+    }
+
+    static setOn(target, value) {
+      target.#value = value;
+    }
+  }
+
+  class Derived extends Base {}
+
+  expect(Base.getViaThis()).toBe(1);
+  expect(() => Derived.getViaThis()).toThrow(TypeError);
+  expect(() => Derived.setViaThis(2)).toThrow(TypeError);
+  expect(() => Base.setOn(Derived, 3)).toThrow(TypeError);
+  expect(Base.getViaThis()).toBe(1);
+
+  class AccessorBase {
+    static #value = 5;
+
+    static set #computed(value) {
+      this.#value = value;
+    }
+
+    static writeComputed(value) {
+      this.#computed = value;
+    }
+
+    static readValue() {
+      return this.#value;
+    }
+  }
+
+  class AccessorDerived extends AccessorBase {}
+
+  expect(AccessorBase.readValue()).toBe(5);
+  expect(() => AccessorDerived.writeComputed(9)).toThrow(TypeError);
+  expect(AccessorBase.readValue()).toBe(5);
+});
+
 test("writing to getter-only private static accessors throws TypeError", () => {
   class TestClass {
     static #value = 2;

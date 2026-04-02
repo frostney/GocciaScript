@@ -2004,6 +2004,8 @@ begin
     KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
+    EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
+      ClassReg, UInt8(KeyIdx), 0));
     EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ClassReg,
       UInt8(KeyIdx), ValReg));
     ACtx.Scope.FreeRegister;
@@ -2162,6 +2164,8 @@ begin
     KeyIdx := ACtx.Template.AddConstantString('#' + PrivPrefix + StaticPropPair.Key);
     if KeyIdx > High(UInt8) then
       raise Exception.Create('Constant pool overflow: static property name index exceeds 255');
+    EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
+      ADest, UInt8(KeyIdx), 0));
     EmitInstruction(ACtx, EncodeABC(OP_SET_PROP_CONST, ADest,
       UInt8(KeyIdx), ValReg));
     ACtx.Scope.FreeRegister;
