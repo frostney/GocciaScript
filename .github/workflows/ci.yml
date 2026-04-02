@@ -521,6 +521,10 @@ jobs:
           - x86_64-win64
           - i386-win32
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
       - name: Download build
         uses: actions/download-artifact@v5
         with:
