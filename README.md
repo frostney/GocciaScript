@@ -21,6 +21,7 @@ It's based on the thought "What if we implement ECMAScript today, but without th
 - **Async/Await**: `async` arrow functions and methods, `await` expressions
 - **Iteration**: `for...of` loops over iterables (arrays, strings, Sets, Maps, custom iterables)
 - **Async Iteration**: `for await...of` loops over async iterables
+- **Regular Expressions**: `RegExp`, regex literals, and string integration via `match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split`
 - **Modules**: ES6-style `import`/`export`
 - **No `eval`**: Excluded for security
 - **No `arguments`**: Use rest parameters (`...args`) instead
@@ -85,7 +86,7 @@ See [Language Restrictions](docs/language-restrictions.md) for details on suppor
 
 ### Built-in Objects
 
-`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `Symbol`, `Set`, `Map`, `Promise`, `Temporal`, `Iterator`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`) with ArrayBuffer and SharedArrayBuffer backing, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
+`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `Promise`, `Temporal`, `Iterator`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`) with ArrayBuffer and SharedArrayBuffer backing, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
 
 See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 

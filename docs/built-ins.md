@@ -314,7 +314,9 @@ String prototype methods are implemented on string values:
 
 ### RegExp (`Goccia.Builtins.GlobalRegExp.pas`)
 
-RegExp constructor available as `RegExp()` and `new RegExp()`. Regex literals (`/pattern/flags`) are also supported in both interpreted and bytecode execution modes. Calling `RegExp(existingRegExp)` without `new` and without an explicit `flags` argument returns the original regex object; `new RegExp(existingRegExp)` clones it.
+RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pattern/flags`) are also supported in both interpreted and bytecode execution modes. Calling `RegExp(existingRegExp)` without `new` and without an explicit `flags` argument returns the original regex object; `new RegExp(existingRegExp)` clones it.
+
+**Supported flags:** `g`, `i`, `m`, `s`, `u`, `y`
 
 **Constructor properties:**
 
@@ -342,6 +344,14 @@ RegExp constructor available as `RegExp()` and `new RegExp()`. Regex literals (`
 | `[Symbol.replace](string, replaceValue)` | Replacement hook used by `String.prototype.replace()` and `replaceAll()` |
 | `[Symbol.search](string)` | Search hook used by `String.prototype.search()` |
 | `[Symbol.split](string, limit?)` | Split hook used by `String.prototype.split()` |
+
+**Behavior notes:**
+
+- Replacement strings in regex-backed `replace()` and `replaceAll()` support `$$`, `$&`, ``$``` , `$'`, and numeric captures such as `$1`.
+- `String.prototype.match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split` dispatch through the corresponding well-known symbol hooks, so custom protocol objects work as expected.
+- `matchAll()` currently returns an eager iterator over precomputed matches rather than a fully lazy spec-style iterator.
+- The `u` flag is accepted and exposed through `.flags` and `.unicode`, but full ECMAScript Unicode regexp semantics are not implemented yet.
+- Named capture groups, `d` / indices, and Unicode sets (`v`) are not implemented yet.
 
 ### Global Constants, Functions, and Error Constructors (`Goccia.Builtins.Globals.pas`)
 
@@ -958,6 +968,8 @@ describe("group name", () => {
 | `.toBeCloseTo(n, digits?)` | Approximate equality |
 
 All matchers support `.not` negation: `expect(value).not.toBe(wrong)`.
+
+`.toMatch()` accepts either a string substring or a `RegExp` object. Regex matches ignore the regex's current `lastIndex`, matching Jest/Vitest-style assertion ergonomics.
 
 ### Benchmark (`Goccia.Builtins.Benchmark.pas`)
 

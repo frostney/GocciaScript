@@ -44,7 +44,7 @@ end;
 
 function ToUint32Value(const AValue: TGocciaValue): Cardinal;
 const
-  UINT32_MODULUS = 4294967296.0;
+  UINT32_MODULUS = QWord(High(Cardinal)) + 1;
 var
   NumberValue: TGocciaNumberLiteralValue;
   IntegerPart: Double;
@@ -61,7 +61,7 @@ begin
   if IntegerPart >= UINT32_MODULUS then
     Exit(0);
 
-  Result := Cardinal(Round(IntegerPart));
+  Result := Cardinal(Trunc(IntegerPart));
 end;
 
 function NormalizeRelativeIndex(const ARelative, ALength: Integer): Integer;

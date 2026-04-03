@@ -560,6 +560,12 @@ The transformer generates an internal source map for accurate error line/column 
 
 Regex literals are lexed context-sensitively so `/` still works as division in expression contexts.
 
+Current gaps from full ECMAScript RegExp semantics:
+
+- The `u` flag is accepted and exposed, but matching still does not implement full ECMAScript Unicode semantics.
+- Named capture groups, indices (`d`), and Unicode sets (`v`) are not supported.
+- `String.prototype.matchAll()` uses an eager array-backed iterator rather than a lazy spec-style iterator.
+
 ## Intentional Divergences from ECMAScript
 
 These are deliberate differences from standard ECMAScript behavior, not missing features.
