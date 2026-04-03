@@ -543,7 +543,7 @@ var
   MatchArray: TGocciaObjectValue;
   MatchIndex, MatchEnd, NextIndex: Integer;
   PreviousIndex, SearchIndex: Integer;
-  Limit: Integer;
+  Limit: Cardinal;
   HasLimit: Boolean;
   LastMatchWasZeroWidth: Boolean;
   I: Integer;
@@ -559,14 +559,13 @@ begin
   HasLimit := AArgs.Length > 1;
   if HasLimit then
   begin
-    Limit := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
+    Limit := ToUint32Value(AArgs.GetElement(1));
+    // ES2026 §22.2.6.13 step 10: If lim = 0, return ArrayCreate(0).
     if Limit = 0 then
     begin
       Result := TGocciaArrayValue.Create;
       Exit;
     end;
-    if Limit < 0 then
-      HasLimit := False;
   end;
 
   RegexValue := TGocciaObjectValue(AThisValue);
@@ -583,16 +582,16 @@ begin
       if (MatchIndex > PreviousIndex) or not LastMatchWasZeroWidth then
         ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
           Copy(Input, PreviousIndex + 1, MatchIndex - PreviousIndex)));
-      if HasLimit and (ResultArray.Elements.Count >= Limit) then
+      if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
         Break;
 
       for I := 1 to TGocciaArrayValue(MatchArray).Elements.Count - 1 do
       begin
         ResultArray.Elements.Add(TGocciaArrayValue(MatchArray).Elements[I]);
-        if HasLimit and (ResultArray.Elements.Count >= Limit) then
+        if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
           Break;
       end;
-      if HasLimit and (ResultArray.Elements.Count >= Limit) then
+      if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
         Break;
 
       PreviousIndex := MatchEnd;
@@ -601,7 +600,7 @@ begin
         Break;
     end;
 
-    if (not HasLimit or (ResultArray.Elements.Count < Limit)) and
+    if (not HasLimit or (Cardinal(ResultArray.Elements.Count) < Limit)) and
        ((Length(Input) > PreviousIndex) or not LastMatchWasZeroWidth) then
       ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
         Copy(Input, PreviousIndex + 1, Length(Input) - PreviousIndex)));

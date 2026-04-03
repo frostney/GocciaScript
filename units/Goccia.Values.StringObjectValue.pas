@@ -1119,7 +1119,7 @@ var
   RemainingString: string;
   SeparatorPos: Integer;
   Segment: string;
-  Limit: Integer;
+  Limit: Cardinal;
   HasLimit: Boolean;
   SplitMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
@@ -1142,14 +1142,12 @@ begin
   HasLimit := AArgs.Length > 1;
   if HasLimit then
   begin
-    Limit := Trunc(AArgs.GetElement(1).ToNumberLiteral.Value);
+    Limit := ToUint32Value(AArgs.GetElement(1));
     if Limit = 0 then
     begin
       Result := TGocciaArrayValue.Create;
       Exit;
     end;
-    if Limit < 0 then
-      HasLimit := False;
   end;
 
   ResultArray := TGocciaArrayValue.Create;
@@ -1191,16 +1189,16 @@ begin
         begin
           ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
             Copy(StringValue, PreviousIndex + 1, MatchIndex - PreviousIndex)));
-          if HasLimit and (ResultArray.Elements.Count >= Limit) then
+          if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
             Break;
 
           for I := 1 to TGocciaArrayValue(MatchArray).Elements.Count - 1 do
           begin
             ResultArray.Elements.Add(TGocciaArrayValue(MatchArray).Elements[I]);
-            if HasLimit and (ResultArray.Elements.Count >= Limit) then
+            if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
               Break;
           end;
-          if HasLimit and (ResultArray.Elements.Count >= Limit) then
+          if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
             Break;
 
           PreviousIndex := MatchEnd;
@@ -1209,7 +1207,7 @@ begin
             Break;
         end;
 
-        if not HasLimit or (ResultArray.Elements.Count < Limit) then
+        if not HasLimit or (Cardinal(ResultArray.Elements.Count) < Limit) then
           ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
             Copy(StringValue, PreviousIndex + 1, Length(StringValue) - PreviousIndex)));
 
@@ -1237,7 +1235,7 @@ begin
       for I := 1 to Length(StringValue) do
       begin
         ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(StringValue[I]));
-        if HasLimit and (ResultArray.Elements.Count >= Limit) then
+        if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
           Break;
       end;
       Result := ResultArray;
@@ -1263,7 +1261,7 @@ begin
           Segment := Copy(RemainingString, 1, SeparatorPos - 1);
           ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(Segment));
 
-          if HasLimit and (ResultArray.Elements.Count >= Limit) then
+          if HasLimit and (Cardinal(ResultArray.Elements.Count) >= Limit) then
             Break;
 
           RemainingString := Copy(RemainingString, SeparatorPos + Length(Separator), Length(RemainingString));
