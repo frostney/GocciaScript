@@ -347,7 +347,7 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 
 **Behavior notes:**
 
-- Replacement strings in regex-backed `replace()` and `replaceAll()` support `$$`, `$&`, `$` , `$'`, and numeric captures such as `$1`.
+- Replacement strings in regex-backed `replace()` and `replaceAll()` support `$$`, `$&`, the pre-match token `$` followed by a backtick, `$'`, and numeric captures such as `$1`.
 - `String.prototype.match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split` dispatch through the corresponding well-known symbol hooks, so custom protocol objects work as expected.
 - `matchAll()` currently returns an eager iterator over precomputed matches rather than a fully lazy spec-style iterator.
 - The `u` flag is accepted and exposed through `.flags` and `.unicode`, but full ECMAScript Unicode regexp semantics are not implemented yet.

@@ -32,6 +32,19 @@ test("matchAll without an argument uses an empty global regex", () => {
   expect(matches).toEqual(["", "", ""]);
 });
 
+test("matchAll coerces string arguments to a global regex", () => {
+  const matches = [];
+
+  for (const match of "hello".matchAll("l")) {
+    matches.push([match[0], match.index]);
+  }
+
+  expect(matches).toEqual([
+    ["l", 2],
+    ["l", 3],
+  ]);
+});
+
 test("matchAll dispatches through Symbol.matchAll", () => {
   const matcher = {
     [Symbol.matchAll](input) {

@@ -10,3 +10,7 @@ test("Symbol.split coerces limit with ToUint32", () => {
   expect(/,/[Symbol.split]("a,b,c", 4294967297)).toEqual(["a"]);
   expect(/,/[Symbol.split]("a,b,c", -4294967295)).toEqual(["a"]);
 });
+
+test("Symbol.split treats undefined limit like an omitted limit", () => {
+  expect(/,/[Symbol.split]("a,b,c", undefined)).toEqual(["a", "b", "c"]);
+});

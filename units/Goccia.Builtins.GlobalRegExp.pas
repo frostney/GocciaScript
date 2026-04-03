@@ -101,6 +101,35 @@ begin
   Result := GroupValue.ToStringLiteral.Value;
 end;
 
+function ExpandRegexCaptureReference(const AMatchArray: TGocciaArrayValue;
+  const AReferenceText: string): string;
+var
+  CaptureCount: Integer;
+  OneDigitIndex, TwoDigitIndex: Integer;
+begin
+  CaptureCount := AMatchArray.Elements.Count - 1;
+  if Length(AReferenceText) = 0 then
+    Exit('$');
+
+  OneDigitIndex := Ord(AReferenceText[1]) - Ord('0');
+  if (Length(AReferenceText) >= 2) and CharInSet(AReferenceText[2], ['0'..'9']) then
+  begin
+    TwoDigitIndex := (OneDigitIndex * 10) + (Ord(AReferenceText[2]) - Ord('0'));
+    if TwoDigitIndex <= CaptureCount then
+      Exit(GetRegexReplacementGroup(AMatchArray, TwoDigitIndex));
+  end;
+
+  if OneDigitIndex <= CaptureCount then
+  begin
+    Result := GetRegexReplacementGroup(AMatchArray, OneDigitIndex);
+    if Length(AReferenceText) >= 2 then
+      Result := Result + Copy(AReferenceText, 2, MaxInt);
+    Exit;
+  end;
+
+  Result := '$' + AReferenceText;
+end;
+
 function ExpandRegexReplacementString(const AReplaceValue: string;
   const AMatchArray: TGocciaArrayValue; const AMatchIndex: Integer;
   const AInput: string): string;
@@ -155,21 +184,17 @@ begin
       '1'..'9':
         begin
           GroupIndex := Ord(NextChar) - Ord('0');
+          GroupText := NextChar;
           if (I + 2 <= Length(AReplaceValue)) and
-             CharInSet(AReplaceValue[I + 2], ['0'..'9']) and
-             ((GroupIndex * 10) +
-              (Ord(AReplaceValue[I + 2]) - Ord('0')) <=
-              AMatchArray.Elements.Count - 1) then
+             CharInSet(AReplaceValue[I + 2], ['0'..'9']) then
           begin
-            GroupIndex := (GroupIndex * 10) +
-              (Ord(AReplaceValue[I + 2]) - Ord('0'));
+            GroupText := GroupText + AReplaceValue[I + 2];
             Inc(I, 3);
           end
           else
             Inc(I, 2);
 
-          GroupText := GetRegexReplacementGroup(AMatchArray, GroupIndex);
-          Result := Result + GroupText;
+          Result := Result + ExpandRegexCaptureReference(AMatchArray, GroupText);
         end;
     else
       begin
@@ -393,9 +418,8 @@ begin
       TGarbageCollector.Instance.RemoveTempRoot(ResultArray);
     end;
   end
-  else if MatchRegExpObjectValue(RegexValue, Input, 0, False, False,
-    MatchArray, MatchIndex, MatchEnd, NextIndex) then
-    Result := MatchArray
+  else if MatchRegExpObjectOnce(RegexValue, Input, MatchValue) then
+    Result := MatchValue
   else
     Result := TGocciaNullLiteralValue.NullValue;
 end;
@@ -495,9 +519,12 @@ begin
       ResultStr := ResultStr + Copy(Input, OutputIndex + 1, MaxInt);
     Result := TGocciaStringLiteralValue.Create(ResultStr);
   end
-  else if MatchRegExpObjectValue(RegexValue, Input, 0, False, False,
-    MatchArray, MatchIndex, MatchEnd, NextIndex) then
+  else if MatchRegExpObjectOnce(RegexValue, Input, MatchValue) then
   begin
+    MatchArray := TGocciaObjectValue(MatchValue);
+    MatchIndex := Trunc(MatchArray.GetProperty(PROP_INDEX).ToNumberLiteral.Value);
+    MatchEnd := MatchIndex + Length(TGocciaArrayValue(MatchArray).Elements[0]
+      .ToStringLiteral.Value);
     ResultStr := BuildRegexReplacement(ReplaceValue,
       TGocciaArrayValue(MatchArray), MatchIndex, Input);
     Result := TGocciaStringLiteralValue.Create(
@@ -556,7 +583,8 @@ begin
   else
     Input := TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value;
 
-  HasLimit := AArgs.Length > 1;
+  HasLimit := (AArgs.Length > 1) and
+    not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue);
   if HasLimit then
   begin
     Limit := ToUint32Value(AArgs.GetElement(1));

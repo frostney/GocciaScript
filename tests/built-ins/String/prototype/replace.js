@@ -51,6 +51,8 @@ describe('String.prototype.replace', () => {
     expect('abc'.replace(/b/, '$`')).toBe('aac');
     expect('abc'.replace(/b/, "$'")).toBe('acc');
     expect('b'.replace(/(a)?b/, 'x$1y')).toBe('xy');
+    expect('foo'.replace(/(f)/, '$2')).toBe('$2oo');
+    expect('foo'.replace(/(f)/, '$12')).toBe('f2oo');
   });
 
   test('replace preserves original text around zero-width global matches', () => {

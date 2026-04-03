@@ -1139,7 +1139,8 @@ begin
   else
     SeparatorArg := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  HasLimit := AArgs.Length > 1;
+  HasLimit := (AArgs.Length > 1) and
+    not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue);
   if HasLimit then
   begin
     Limit := ToUint32Value(AArgs.GetElement(1));
@@ -1385,7 +1386,7 @@ begin
   end;
 
   if AArgs.Length > 0 then
-    RegexValue := CoerceRegExpValue(AArgs.GetElement(0))
+    RegexValue := CoerceRegExpValue(AArgs.GetElement(0), 'g')
   else
     RegexValue := CoerceRegExpValue(TGocciaUndefinedLiteralValue.UndefinedValue,
       'g');

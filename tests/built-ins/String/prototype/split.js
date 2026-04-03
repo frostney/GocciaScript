@@ -64,6 +64,7 @@ test("String.prototype.split with limits and edge cases", () => {
   expect("".split("", 5)).toEqual([]);
   expect("abc".split("", 0)).toEqual([]);
   expect("a,b,c".split(",", 10)).toEqual(["a", "b", "c"]);
+  expect("a,b,c".split(",", undefined)).toEqual(["a", "b", "c"]);
   expect("a,b,c".split(",", NaN)).toEqual([]);
   expect("a,b,c".split(",", Infinity)).toEqual([]);
   expect("a,b,c".split(",", -Infinity)).toEqual([]);
@@ -75,6 +76,7 @@ test("String.prototype.split supports regex separators", () => {
   expect("a,b;c".split(/[;,]/)).toEqual(["a", "b", "c"]);
   expect("ab1cd2".split(/(\d)/)).toEqual(["ab", "1", "cd", "2", ""]);
   expect("a,b,c".split(/,/, 2)).toEqual(["a", "b"]);
+  expect("a,b,c".split(/,/, undefined)).toEqual(["a", "b", "c"]);
   expect("a,b,c".split(/,/, Infinity)).toEqual([]);
   expect("ab".split(/(?:)/)).toEqual(["a", "b"]);
 });

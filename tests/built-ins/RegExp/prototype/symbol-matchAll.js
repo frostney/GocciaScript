@@ -39,3 +39,19 @@ test("Symbol.replace resets lastIndex on global regexes", () => {
   expect("aba".replace(regex, "x")).toBe("xbx");
   expect(regex.lastIndex).toBe(0);
 });
+
+test("Symbol.match respects sticky lastIndex and updates it", () => {
+  const regex = /a/y;
+
+  regex.lastIndex = 1;
+  expect(regex[Symbol.match]("ba")[0]).toBe("a");
+  expect(regex.lastIndex).toBe(2);
+});
+
+test("Symbol.replace respects sticky lastIndex and updates it", () => {
+  const regex = /a/y;
+
+  regex.lastIndex = 1;
+  expect("ba".replace(regex, "x")).toBe("bx");
+  expect(regex.lastIndex).toBe(2);
+});
