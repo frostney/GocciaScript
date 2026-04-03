@@ -16,6 +16,11 @@ type
     FMethodHost: TGocciaSymbolValue;
     FPrototypeMembers: array of TGocciaMemberDefinition;
     FWellKnownIterator: TGocciaSymbolValue;
+    FWellKnownMatch: TGocciaSymbolValue;
+    FWellKnownMatchAll: TGocciaSymbolValue;
+    FWellKnownReplace: TGocciaSymbolValue;
+    FWellKnownSearch: TGocciaSymbolValue;
+    FWellKnownSplit: TGocciaSymbolValue;
     FWellKnownSpecies: TGocciaSymbolValue;
     FWellKnownHasInstance: TGocciaSymbolValue;
     FWellKnownToPrimitive: TGocciaSymbolValue;
@@ -33,6 +38,11 @@ type
 
     class function SharedPrototype: TGocciaValue;
     class function WellKnownIterator: TGocciaSymbolValue;
+    class function WellKnownMatch: TGocciaSymbolValue;
+    class function WellKnownMatchAll: TGocciaSymbolValue;
+    class function WellKnownReplace: TGocciaSymbolValue;
+    class function WellKnownSearch: TGocciaSymbolValue;
+    class function WellKnownSplit: TGocciaSymbolValue;
     class function WellKnownSpecies: TGocciaSymbolValue;
     class function WellKnownHasInstance: TGocciaSymbolValue;
     class function WellKnownToPrimitive: TGocciaSymbolValue;
@@ -142,6 +152,61 @@ begin
       TGarbageCollector.Instance.PinObject(FWellKnownIterator);
   end;
   Result := FWellKnownIterator;
+end;
+
+class function TGocciaSymbolValue.WellKnownMatch: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownMatch) then
+  begin
+    FWellKnownMatch := TGocciaSymbolValue.Create('Symbol.match');
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownMatch);
+  end;
+  Result := FWellKnownMatch;
+end;
+
+class function TGocciaSymbolValue.WellKnownMatchAll: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownMatchAll) then
+  begin
+    FWellKnownMatchAll := TGocciaSymbolValue.Create('Symbol.matchAll');
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownMatchAll);
+  end;
+  Result := FWellKnownMatchAll;
+end;
+
+class function TGocciaSymbolValue.WellKnownReplace: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownReplace) then
+  begin
+    FWellKnownReplace := TGocciaSymbolValue.Create('Symbol.replace');
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownReplace);
+  end;
+  Result := FWellKnownReplace;
+end;
+
+class function TGocciaSymbolValue.WellKnownSearch: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownSearch) then
+  begin
+    FWellKnownSearch := TGocciaSymbolValue.Create('Symbol.search');
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownSearch);
+  end;
+  Result := FWellKnownSearch;
+end;
+
+class function TGocciaSymbolValue.WellKnownSplit: TGocciaSymbolValue;
+begin
+  if not Assigned(FWellKnownSplit) then
+  begin
+    FWellKnownSplit := TGocciaSymbolValue.Create('Symbol.split');
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.PinObject(FWellKnownSplit);
+  end;
+  Result := FWellKnownSplit;
 end;
 
 class function TGocciaSymbolValue.WellKnownSpecies: TGocciaSymbolValue;

@@ -9,6 +9,7 @@ const
   CONSTRUCTOR_ARRAY    = 'Array';
   CONSTRUCTOR_NUMBER   = 'Number';
   CONSTRUCTOR_STRING   = 'String';
+  CONSTRUCTOR_REGEXP   = 'RegExp';
   CONSTRUCTOR_BOOLEAN  = 'Boolean';
   CONSTRUCTOR_SYMBOL   = 'Symbol';
   CONSTRUCTOR_SET      = 'Set';

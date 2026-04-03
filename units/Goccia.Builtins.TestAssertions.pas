@@ -161,6 +161,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Comparison,
   Goccia.MicrotaskQueue,
+  Goccia.RegExp.Runtime,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
@@ -450,8 +451,12 @@ function TGocciaExpectationValue.ToMatch(const AArgs: TGocciaArgumentsCollection
 var
   Expected: TGocciaValue;
   ActualString: string;
-  ExpectedString: string;
   Matches: Boolean;
+  ExpectedDescription: string;
+  MatchValue: TGocciaValue;
+  MatchIndex: Integer;
+  MatchEnd: Integer;
+  NextIndex: Integer;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toMatch', FTestAssertions.ThrowError);
 
@@ -467,20 +472,30 @@ begin
   end;
 
   Expected := AArgs.GetElement(0);
-  if not (Expected is TGocciaStringLiteralValue) then
+  if not (Expected is TGocciaStringLiteralValue) and not IsRegExpValue(Expected) then
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionPassed('toMatch')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatch',
-        'Expected a string pattern but received ' + Expected.ToStringLiteral.Value);
+        'Expected a string pattern or RegExp but received ' +
+        Expected.ToStringLiteral.Value);
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 
   ActualString := FActualValue.ToStringLiteral.Value;
-  ExpectedString := Expected.ToStringLiteral.Value;
-  Matches := Pos(ExpectedString, ActualString) > 0;
+  if IsRegExpValue(Expected) then
+  begin
+    ExpectedDescription := RegExpObjectToString(Expected);
+    Matches := MatchRegExpObject(Expected, ActualString, 0, False, False,
+      MatchValue, MatchIndex, MatchEnd, NextIndex);
+  end
+  else
+  begin
+    ExpectedDescription := Expected.ToStringLiteral.Value;
+    Matches := Pos(ExpectedDescription, ActualString) > 0;
+  end;
 
   if FIsNegated then
     Matches := not Matches;
@@ -494,10 +509,12 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatch',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to match ' + Expected.ToStringLiteral.Value)
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' not to match ' +
+        ExpectedDescription)
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toMatch',
-        'Expected ' + FActualValue.ToStringLiteral.Value + ' to match ' + Expected.ToStringLiteral.Value);
+        'Expected ' + FActualValue.ToStringLiteral.Value + ' to match ' +
+        ExpectedDescription);
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;

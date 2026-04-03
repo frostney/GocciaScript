@@ -99,6 +99,8 @@ begin
 
   if AExpr is TGocciaLiteralExpression then
     Goccia.Compiler.Expressions.CompileLiteral(Ctx, TGocciaLiteralExpression(AExpr), ADest)
+  else if AExpr is TGocciaRegexLiteralExpression then
+    Goccia.Compiler.Expressions.CompileRegexLiteral(Ctx, TGocciaRegexLiteralExpression(AExpr), ADest)
   else if AExpr is TGocciaIdentifierExpression then
     Goccia.Compiler.Expressions.CompileIdentifier(Ctx, TGocciaIdentifierExpression(AExpr), ADest)
   else if AExpr is TGocciaBinaryExpression then

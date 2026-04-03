@@ -5,6 +5,11 @@ unit Goccia.Constants.SymbolNames;
 interface
 
 const
+  SYMBOL_MATCH                = 'match';
+  SYMBOL_MATCH_ALL            = 'matchAll';
+  SYMBOL_REPLACE              = 'replace';
+  SYMBOL_SEARCH               = 'search';
+  SYMBOL_SPLIT                = 'split';
   SYMBOL_ITERATOR             = 'iterator';
   SYMBOL_ASYNC_ITERATOR       = 'asyncIterator';
   SYMBOL_SPECIES              = 'species';

@@ -736,6 +736,8 @@ begin
 end;
 
 function TGocciaParser.Primary: TGocciaExpression;
+const
+  REGEX_SEPARATOR = #0;
 var
   Token: TGocciaToken;
   Expr: TGocciaExpression;
@@ -744,6 +746,7 @@ var
   Parameters: TGocciaParameterArray;
   ArrowFn: TGocciaArrowFunctionExpression;
   ArrowBody: TGocciaASTNode;
+  SeparatorPos: Integer;
 begin
   if Match(gttTrue) then
   begin
@@ -779,6 +782,18 @@ begin
   begin
     Token := Previous;
     Result := TGocciaTemplateLiteralExpression.Create(Token.Lexeme, Token.Line, Token.Column);
+  end
+  else if Match(gttRegex) then
+  begin
+    Token := Previous;
+    SeparatorPos := Pos(REGEX_SEPARATOR, Token.Lexeme);
+    if SeparatorPos > 0 then
+      Result := TGocciaRegexLiteralExpression.Create(
+        Copy(Token.Lexeme, 1, SeparatorPos - 1),
+        Copy(Token.Lexeme, SeparatorPos + 1, MaxInt),
+        Token.Line, Token.Column)
+    else
+      Result := TGocciaRegexLiteralExpression.Create(Token.Lexeme, '', Token.Line, Token.Column);
   end
   else if Match(gttThis) then
   begin

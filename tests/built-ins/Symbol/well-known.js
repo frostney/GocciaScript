@@ -23,12 +23,36 @@ describe("Well-known Symbols", () => {
     expect(typeof Symbol.iterator).toBe("symbol");
   });
 
+  test("Symbol.match exists and is a symbol", () => {
+    expect(typeof Symbol.match).toBe("symbol");
+  });
+
+  test("Symbol.matchAll exists and is a symbol", () => {
+    expect(typeof Symbol.matchAll).toBe("symbol");
+  });
+
+  test("Symbol.replace exists and is a symbol", () => {
+    expect(typeof Symbol.replace).toBe("symbol");
+  });
+
+  test("Symbol.search exists and is a symbol", () => {
+    expect(typeof Symbol.search).toBe("symbol");
+  });
+
+  test("Symbol.split exists and is a symbol", () => {
+    expect(typeof Symbol.split).toBe("symbol");
+  });
+
   test("well-known symbols are unique", () => {
     expect(Symbol.species !== Symbol.hasInstance).toBe(true);
     expect(Symbol.species !== Symbol.toPrimitive).toBe(true);
     expect(Symbol.species !== Symbol.toStringTag).toBe(true);
     expect(Symbol.species !== Symbol.isConcatSpreadable).toBe(true);
     expect(Symbol.species !== Symbol.iterator).toBe(true);
+    expect(Symbol.match !== Symbol.matchAll).toBe(true);
+    expect(Symbol.match !== Symbol.replace).toBe(true);
+    expect(Symbol.match !== Symbol.search).toBe(true);
+    expect(Symbol.match !== Symbol.split).toBe(true);
   });
 
   test("well-known symbols are stable across accesses", () => {
@@ -37,5 +61,10 @@ describe("Well-known Symbols", () => {
     expect(Symbol.toPrimitive).toBe(Symbol.toPrimitive);
     expect(Symbol.toStringTag).toBe(Symbol.toStringTag);
     expect(Symbol.isConcatSpreadable).toBe(Symbol.isConcatSpreadable);
+    expect(Symbol.match).toBe(Symbol.match);
+    expect(Symbol.matchAll).toBe(Symbol.matchAll);
+    expect(Symbol.replace).toBe(Symbol.replace);
+    expect(Symbol.search).toBe(Symbol.search);
+    expect(Symbol.split).toBe(Symbol.split);
   });
 });

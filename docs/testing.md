@@ -312,6 +312,7 @@ expect(value).toBeCloseTo(n, digits);
 expect(array).toContain(item);       // Array element, Set element, or string substring
 expect(array).toContainEqual(item);  // Deep-equal array element
 expect(string).toMatch("part");      // String substring match
+expect(string).toMatch(/pattern/);   // Regular expression match
 expect(value).toMatchObject(obj);    // Partial recursive object match
 expect(value).toHaveLength(n);
 expect(value).toHaveProperty(name);

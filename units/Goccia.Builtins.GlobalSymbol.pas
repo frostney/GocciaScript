@@ -77,6 +77,11 @@ begin
   RegisterMemberDefinitions(FSymbolFunction, FStaticMembers);
 
   // Register well-known symbol constants
+  FSymbolFunction.RegisterConstant(SYMBOL_MATCH, TGocciaSymbolValue.WellKnownMatch);
+  FSymbolFunction.RegisterConstant(SYMBOL_MATCH_ALL, TGocciaSymbolValue.WellKnownMatchAll);
+  FSymbolFunction.RegisterConstant(SYMBOL_REPLACE, TGocciaSymbolValue.WellKnownReplace);
+  FSymbolFunction.RegisterConstant(SYMBOL_SEARCH, TGocciaSymbolValue.WellKnownSearch);
+  FSymbolFunction.RegisterConstant(SYMBOL_SPLIT, TGocciaSymbolValue.WellKnownSplit);
   FSymbolFunction.RegisterConstant(SYMBOL_ITERATOR, FIteratorSymbol);
   FSymbolFunction.RegisterConstant(SYMBOL_SPECIES, TGocciaSymbolValue.WellKnownSpecies);
   FSymbolFunction.RegisterConstant(SYMBOL_HAS_INSTANCE, TGocciaSymbolValue.WellKnownHasInstance);

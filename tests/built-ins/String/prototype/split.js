@@ -65,3 +65,21 @@ test("String.prototype.split with limits and edge cases", () => {
   expect("abc".split("", 0)).toEqual([]);
   expect("a,b,c".split(",", 10)).toEqual(["a", "b", "c"]);
 });
+
+test("String.prototype.split supports regex separators", () => {
+  expect("a,b;c".split(/[;,]/)).toEqual(["a", "b", "c"]);
+  expect("ab1cd2".split(/(\d)/)).toEqual(["ab", "1", "cd", "2", ""]);
+  expect("a,b,c".split(/,/, 2)).toEqual(["a", "b"]);
+});
+
+test("String.prototype.split dispatches through Symbol.split", () => {
+  const splitter = {
+    [Symbol.split](input, limit) {
+      expect(input).toBe("abc");
+      expect(limit).toBe(2);
+      return ["custom", "split"];
+    },
+  };
+
+  expect("abc".split(splitter, 2)).toEqual(["custom", "split"]);
+});

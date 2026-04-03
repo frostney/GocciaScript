@@ -306,9 +306,42 @@ String constructor available as `String()`.
 
 String prototype methods are implemented on string values:
 
-`charAt`, `charCodeAt`, `codePointAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `replace`, `replaceAll`, `split`, `padStart`, `padEnd`, `concat`, `at`, `localeCompare`, `normalize`, `isWellFormed`, `toWellFormed`, `[Symbol.iterator]`
+`charAt`, `charCodeAt`, `codePointAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `replace`, `replaceAll`, `split`, `match`, `matchAll`, `search`, `padStart`, `padEnd`, `concat`, `at`, `localeCompare`, `normalize`, `isWellFormed`, `toWellFormed`, `[Symbol.iterator]`
+
+`replace`, `replaceAll`, `split`, `match`, `matchAll`, and `search` also honor custom objects implementing the corresponding `Symbol.replace`, `Symbol.split`, `Symbol.match`, `Symbol.matchAll`, or `Symbol.search` hooks.
 
 `[Symbol.iterator]()` returns an iterator that yields individual characters.
+
+### RegExp (`Goccia.Builtins.GlobalRegExp.pas`)
+
+RegExp constructor available as `RegExp()` and `new RegExp()`. Regex literals (`/pattern/flags`) are also supported in both interpreted and bytecode execution modes. Calling `RegExp(existingRegExp)` without `new` and without an explicit `flags` argument returns the original regex object; `new RegExp(existingRegExp)` clones it.
+
+**Constructor properties:**
+
+| Property | Description |
+|----------|-------------|
+| `source` | Normalized pattern source |
+| `flags` | Canonicalized flags string |
+| `lastIndex` | Current match position for `g`/`y` regexes |
+| `global` | `true` when the `g` flag is present |
+| `ignoreCase` | `true` when the `i` flag is present |
+| `multiline` | `true` when the `m` flag is present |
+| `dotAll` | `true` when the `s` flag is present |
+| `unicode` | `true` when the `u` flag is present |
+| `sticky` | `true` when the `y` flag is present |
+
+**Prototype methods:**
+
+| Method | Description |
+|--------|-------------|
+| `exec(string)` | Returns a match array with capture groups, `index`, and `input`, or `null` |
+| `test(string)` | Returns `true` if the regex matches |
+| `toString()` | Returns `/pattern/flags` |
+| `[Symbol.match](string)` | Matching hook used by `String.prototype.match()` |
+| `[Symbol.matchAll](string)` | Match-all hook used by `String.prototype.matchAll()` |
+| `[Symbol.replace](string, replaceValue)` | Replacement hook used by `String.prototype.replace()` and `replaceAll()` |
+| `[Symbol.search](string)` | Search hook used by `String.prototype.search()` |
+| `[Symbol.split](string, limit?)` | Split hook used by `String.prototype.split()` |
 
 ### Global Constants, Functions, and Error Constructors (`Goccia.Builtins.Globals.pas`)
 
@@ -413,6 +446,11 @@ Symbols are unique, immutable primitive values used as property keys.
 | `Symbol.keyFor(symbol)` | Get the key for a global registry symbol (throws `TypeError` for non-symbol arguments) |
 | `Symbol.iterator` | Well-known symbol for iteration protocol |
 | `Symbol.asyncIterator` | Well-known symbol for async iteration protocol. Returns the singleton symbol. Used by `for await...of` and `Array.fromAsync`. Objects with a `[Symbol.asyncIterator]()` method are async iterables. |
+| `Symbol.match` | Well-known symbol for `String.prototype.match()` dispatch |
+| `Symbol.matchAll` | Well-known symbol for `String.prototype.matchAll()` dispatch |
+| `Symbol.replace` | Well-known symbol for `String.prototype.replace()` and `replaceAll()` dispatch |
+| `Symbol.search` | Well-known symbol for `String.prototype.search()` dispatch |
+| `Symbol.split` | Well-known symbol for `String.prototype.split()` dispatch |
 | `Symbol.species` | Well-known symbol for constructor species (behavioral: Array/Map/Set constructors have default `[Symbol.species]` getter returning `this`; Array prototype methods use `ArraySpeciesCreate` for subclass-aware result construction) |
 | `Symbol.hasInstance` | Well-known symbol for instanceof behavior |
 | `Symbol.toPrimitive` | Well-known symbol for type conversion |
@@ -911,7 +949,7 @@ describe("group name", () => {
 | `.toBeLessThan(n)` | Less than |
 | `.toContain(item)` | Array/Set element or string substring |
 | `.toContainEqual(item)` | Deep-equal array element |
-| `.toMatch(string)` | String substring match |
+| `.toMatch(stringOrRegExp)` | String substring or regular expression match |
 | `.toMatchObject(obj)` | Partial recursive object/subset match |
 | `.toBeInstanceOf(class)` | instanceof check |
 | `.toHaveLength(n)` | Length check |
