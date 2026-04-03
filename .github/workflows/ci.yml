@@ -107,6 +107,7 @@ jobs:
           GEN_DIR="$PREFIX/lib/fpc/${FPC_VERSION}/units/${TARGET}/rtl-generics"
           FCL_DIR="$PREFIX/lib/fpc/${FPC_VERSION}/units/${TARGET}/fcl-process"
           FCL_BASE_SRC="$PREFIX/share/fpcsrc/packages/fcl-base/src"
+          REGEXPR_SRC="$PREFIX/share/fpcsrc/packages/regexpr/src"
 
           # Verify RTL units exist
           echo "RTL units: $(ls "$RTL_DIR"/*.ppu 2>/dev/null | wc -l) .ppu files"
@@ -114,7 +115,9 @@ jobs:
           echo "rtl-generics units: $(ls "$GEN_DIR"/*.ppu 2>/dev/null | wc -l) .ppu files"
           echo "fcl-process units: $(ls "$FCL_DIR"/*.ppu 2>/dev/null | wc -l) .ppu files"
           echo "fcl-base source path: $FCL_BASE_SRC"
+          echo "regexpr source path: $REGEXPR_SRC"
           test -d "$FCL_BASE_SRC"
+          test -d "$REGEXPR_SRC"
 
           # Build top-level program entrypoints
           shopt -s nullglob
@@ -131,7 +134,7 @@ jobs:
             "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
               -Fu./units -Fu./souffle \
               -Fi./units -Fi./souffle \
-              -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" \
+              -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" \
               -FU"build" -FE"build" \
               $EXTRA_FLAGS \
               -dFPC_SOFT_FPUX80 \
@@ -147,7 +150,7 @@ jobs:
             "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
               -Fu./units -Fu./souffle \
               -Fi./units -Fi./souffle \
-              -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" \
+              -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" \
               -FU"build" -FE"build" \
               $EXTRA_FLAGS \
               -dFPC_SOFT_FPUX80 \
