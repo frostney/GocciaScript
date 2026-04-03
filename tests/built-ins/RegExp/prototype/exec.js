@@ -34,3 +34,11 @@ test("exec updates lastIndex for global regexes", () => {
   expect(third).toBe(null);
   expect(regex.lastIndex).toBe(0);
 });
+
+test("exec preserves anchor semantics when lastIndex is non-zero", () => {
+  const regex = /^/g;
+
+  regex.lastIndex = 1;
+  expect(regex.exec("ab")).toBe(null);
+  expect(regex.lastIndex).toBe(0);
+});

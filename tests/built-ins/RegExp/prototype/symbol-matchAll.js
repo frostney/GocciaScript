@@ -23,3 +23,19 @@ test("Symbol.matchAll does not mutate the original regex lastIndex", () => {
 
   expect(regex.lastIndex).toBe(1);
 });
+
+test("Symbol.match resets lastIndex on global regexes", () => {
+  const regex = /a/g;
+
+  regex.lastIndex = 1;
+  expect(regex[Symbol.match]("aba")).toEqual(["a", "a"]);
+  expect(regex.lastIndex).toBe(0);
+});
+
+test("Symbol.replace resets lastIndex on global regexes", () => {
+  const regex = /a/g;
+
+  regex.lastIndex = 1;
+  expect("aba".replace(regex, "x")).toBe("xbx");
+  expect(regex.lastIndex).toBe(0);
+});

@@ -15,7 +15,7 @@ suite("RegExp construction", () => {
     },
   });
 
-  bench("RegExp(existingRegex) fast path", {
+  bench("RegExp(existingRegex) returns the same regex", {
     setup: () => /foo(bar)?/gi,
     run: (regex) => {
       const result = RegExp(regex);

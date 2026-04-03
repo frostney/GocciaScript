@@ -155,8 +155,6 @@ function ExecuteRegExp(const APattern, AFlags, AInput: string;
   out AResult: TGocciaRegExpMatchResult): Boolean;
 var
   Matcher: TRegExpr;
-  SearchInput: string;
-  RelativeIndex: Integer;
   I: Integer;
 begin
   AResult.Found := False;
@@ -190,16 +188,15 @@ begin
     Matcher.ModifierS := HasRegExpFlag(AFlags, 's');
     Matcher.Compile;
 
-    SearchInput := Copy(AInput, AStartIndex + 1, MaxInt);
-    Result := Matcher.Exec(SearchInput);
-    if Result and ARequireStart and (Matcher.MatchPos[0] <> 1) then
+    Matcher.InputString := AInput;
+    Result := Matcher.ExecPos(AStartIndex + 1);
+    if Result and ARequireStart and (Matcher.MatchPos[0] <> AStartIndex + 1) then
       Result := False;
     if not Result then
       Exit(False);
 
-    RelativeIndex := Matcher.MatchPos[0] - 1;
     AResult.Found := True;
-    AResult.MatchIndex := AStartIndex + RelativeIndex;
+    AResult.MatchIndex := Matcher.MatchPos[0] - 1;
     AResult.MatchEnd := AResult.MatchIndex + Matcher.MatchLen[0];
     AResult.NextIndex := AResult.MatchEnd;
     if Matcher.MatchLen[0] = 0 then
