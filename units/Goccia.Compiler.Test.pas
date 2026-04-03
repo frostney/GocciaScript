@@ -33,6 +33,7 @@ type
     function CompileSource(const ASource: string): TGocciaBytecodeModule;
 
     procedure TestCompileLiteral;
+    procedure TestCompileRegExpLiteral;
     procedure TestCompileArithmetic;
     procedure TestCompileVariable;
     procedure TestCompileFunction;
@@ -47,6 +48,7 @@ type
 procedure TTestCompiler.SetupTests;
 begin
   Test('Compile literal', TestCompileLiteral);
+  Test('Compile RegExp literal', TestCompileRegExpLiteral);
   Test('Compile arithmetic', TestCompileArithmetic);
   Test('Compile variable', TestCompileVariable);
   Test('Compile function', TestCompileFunction);
@@ -90,6 +92,20 @@ var
   Module: TGocciaBytecodeModule;
 begin
   Module := CompileSource('const x = 42;');
+  try
+    Expect<Boolean>(Assigned(Module)).ToBe(True);
+    Expect<Boolean>(Assigned(Module.TopLevel)).ToBe(True);
+    Expect<Boolean>(Module.TopLevel.CodeCount > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCompileRegExpLiteral;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('const re = /ab+c/gi;');
   try
     Expect<Boolean>(Assigned(Module)).ToBe(True);
     Expect<Boolean>(Assigned(Module.TopLevel)).ToBe(True);

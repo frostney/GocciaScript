@@ -18,6 +18,7 @@ uses
   Goccia.Builtins.GlobalNumber,
   Goccia.Builtins.GlobalObject,
   Goccia.Builtins.GlobalPromise,
+  Goccia.Builtins.GlobalRegExp,
   Goccia.Builtins.Globals,
   Goccia.Builtins.GlobalSet,
   Goccia.Builtins.GlobalString,
@@ -97,6 +98,7 @@ type
     FBuiltinGlobalObject: TGocciaGlobalObject;
     FBuiltinGlobalArray: TGocciaGlobalArray;
     FBuiltinGlobalNumber: TGocciaGlobalNumber;
+    FBuiltinRegExp: TGocciaGlobalRegExp;
     FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
     FBuiltinJSON: TGocciaJSONBuiltin;
@@ -270,6 +272,7 @@ begin
     FBuiltinGlobalObject.Free;
     FBuiltinGlobalArray.Free;
     FBuiltinGlobalNumber.Free;
+    FBuiltinRegExp.Free;
     FBuiltinGlobalString.Free;
     FBuiltinGlobals.Free;
     FBuiltinJSON.Free;
@@ -492,6 +495,9 @@ begin
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   StringConstructor := TGocciaStringClassValue(GenericConstructor);
+
+  FBuiltinRegExp := TGocciaGlobalRegExp.Create(CONSTRUCTOR_REGEXP,
+    FInterpreter.GlobalScope, ThrowError, ObjectConstructor.Prototype);
 
   TypeDef.ConstructorName := CONSTRUCTOR_NUMBER;
   TypeDef.Kind := gtdkPrimitiveWrapper;

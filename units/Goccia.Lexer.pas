@@ -31,6 +31,9 @@ type
     FStartColumn: Integer;
     FFileName: string;
     FSourceLines: TStringList;
+    FCanStartRegex: Boolean;
+    FParenRegexContext: array of Boolean;
+    FParenRegexContextCount: Integer;
     function GetSourceLines: TStringList;
 
     function IsAtEnd: Boolean; inline;
@@ -44,11 +47,15 @@ type
     procedure ScanToken;
     procedure ScanString;
     procedure ScanTemplate;
+    procedure ScanRegexLiteral;
     procedure ScanNumber;
     procedure ScanIdentifier;
     function ScanUnicodeEscape: string;
     function ScanHexEscape: string;
     procedure ProcessEscapeSequence(var ASB: TStringBuffer);
+    procedure UpdateRegexContext(const ATokenType: TGocciaTokenType);
+    procedure PushParenRegexContext(const AAllowsRegexAfter: Boolean);
+    function PopParenRegexContext: Boolean;
     procedure SkipWhitespace;
     procedure SkipComment;
     procedure SkipBlockComment;
@@ -76,6 +83,8 @@ begin
   FCurrent := 1;
   FLine := 1;
   FColumn := 1;
+  FCanStartRegex := True;
+  FParenRegexContextCount := 0;
 end;
 
 destructor TGocciaLexer.Destroy;
@@ -150,6 +159,7 @@ end;
 procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string);
 begin
   FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FLine, FStartColumn));
+  UpdateRegexContext(ATokenType);
 end;
 
 procedure TGocciaLexer.SkipWhitespace;
@@ -333,6 +343,57 @@ begin
   end;
 end;
 
+procedure TGocciaLexer.PushParenRegexContext(const AAllowsRegexAfter: Boolean);
+begin
+  if FParenRegexContextCount >= Length(FParenRegexContext) then
+    SetLength(FParenRegexContext, FParenRegexContextCount * 2 + 8);
+  FParenRegexContext[FParenRegexContextCount] := AAllowsRegexAfter;
+  Inc(FParenRegexContextCount);
+end;
+
+function TGocciaLexer.PopParenRegexContext: Boolean;
+begin
+  if FParenRegexContextCount = 0 then
+    Exit(False);
+  Dec(FParenRegexContextCount);
+  Result := FParenRegexContext[FParenRegexContextCount];
+end;
+
+procedure TGocciaLexer.UpdateRegexContext(const ATokenType: TGocciaTokenType);
+var
+  PreviousTokenType: TGocciaTokenType;
+begin
+  case ATokenType of
+    gttLeftParen:
+      begin
+        if FTokens.Count >= 2 then
+          PreviousTokenType := FTokens[FTokens.Count - 2].TokenType
+        else
+          PreviousTokenType := gttEOF;
+        PushParenRegexContext(PreviousTokenType in [gttIf, gttWhile, gttFor]);
+        FCanStartRegex := True;
+      end;
+    gttRightParen:
+      FCanStartRegex := PopParenRegexContext();
+    gttNumber,
+    gttString,
+    gttTemplate,
+    gttRegex,
+    gttTrue,
+    gttFalse,
+    gttNull,
+    gttIdentifier,
+    gttThis,
+    gttSuper,
+    gttRightBracket,
+    gttIncrement,
+    gttDecrement:
+      FCanStartRegex := False;
+  else
+    FCanStartRegex := True;
+  end;
+end;
+
 procedure TGocciaLexer.ScanString;
 var
   SB: TStringBuffer;
@@ -418,6 +479,74 @@ begin
 
   Advance; // Closing backtick
   AddToken(gttTemplate, SB.ToString);
+end;
+
+procedure TGocciaLexer.ScanRegexLiteral;
+const
+  REGEX_SEPARATOR = #0;
+var
+  PatternBuffer: TStringBuffer;
+  FlagsStart: Integer;
+  Flags: string;
+  InCharacterClass: Boolean;
+  C: Char;
+  I: Integer;
+begin
+  PatternBuffer := TStringBuffer.Create;
+  InCharacterClass := False;
+
+  while not IsAtEnd do
+  begin
+    C := Advance;
+
+    if C = #10 then
+      raise TGocciaLexerError.Create('Unterminated regular expression literal',
+        FLine, FColumn, FFileName, GetSourceLines);
+
+    if C = '\' then
+    begin
+      PatternBuffer.AppendChar(C);
+      if IsAtEnd then
+        raise TGocciaLexerError.Create('Unterminated regular expression literal',
+          FLine, FColumn, FFileName, GetSourceLines);
+      PatternBuffer.AppendChar(Advance);
+      Continue;
+    end;
+
+    if C = '[' then
+      InCharacterClass := True
+    else if (C = ']') and InCharacterClass then
+      InCharacterClass := False
+    else if (C = '/') and not InCharacterClass then
+      Break;
+
+    PatternBuffer.AppendChar(C);
+  end;
+
+  if IsAtEnd and ((FCurrent = 1) or (FSource[FCurrent - 1] <> '/')) then
+    raise TGocciaLexerError.Create('Unterminated regular expression literal',
+      FLine, FColumn, FFileName, GetSourceLines);
+
+  FlagsStart := FCurrent;
+  while CharInSet(Peek, ['a'..'z', 'A'..'Z']) do
+    Advance;
+  Flags := Copy(FSource, FlagsStart, FCurrent - FlagsStart);
+
+  for I := 1 to Length(Flags) do
+  begin
+    if not CharInSet(Flags[I], ['g', 'i', 'm', 's', 'u', 'y']) then
+      raise TGocciaLexerError.Create('Invalid regular expression flag: ' + Flags[I],
+        FLine, FColumn, FFileName, GetSourceLines);
+    if Pos(Flags[I], Copy(Flags, 1, I - 1)) > 0 then
+      raise TGocciaLexerError.Create('Duplicate regular expression flag: ' + Flags[I],
+        FLine, FColumn, FFileName, GetSourceLines);
+  end;
+
+  if CharInSet(Peek, ['0'..'9', '_', '$', 'a'..'z', 'A'..'Z']) then
+    raise TGocciaLexerError.Create('Invalid regular expression literal suffix',
+      FLine, FColumn, FFileName, GetSourceLines);
+
+  AddToken(gttRegex, PatternBuffer.ToString + REGEX_SEPARATOR + Flags);
 end;
 
 procedure TGocciaLexer.ScanNumber;
@@ -619,6 +748,8 @@ begin
     '/':
       if Match('=') then
         AddToken(gttSlashAssign)
+      else if FCanStartRegex then
+        ScanRegexLiteral
       else
         AddToken(gttSlash);
     '%':

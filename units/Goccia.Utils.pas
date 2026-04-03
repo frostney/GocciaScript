@@ -12,6 +12,9 @@ uses
 // Returns Trunc(ToNumber(AArgs[AIndex])) or ADefault if index out of range.
 function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Integer = 0): Integer; inline;
 
+// ES2026 §7.1.7 ToUint32(argument)
+function ToUint32Value(const AValue: TGocciaValue): Cardinal; inline;
+
 // ES2026 relative index normalization (used by slice, splice, at, with, copyWithin, fill, etc.)
 // If ARelative < 0, returns max(ALength + ARelative, 0); else min(ARelative, ALength).
 function NormalizeRelativeIndex(const ARelative, ALength: Integer): Integer; inline;
@@ -37,6 +40,28 @@ begin
     Result := Trunc(AArgs.GetElement(AIndex).ToNumberLiteral.Value)
   else
     Result := ADefault;
+end;
+
+function ToUint32Value(const AValue: TGocciaValue): Cardinal;
+const
+  UINT32_MODULUS = QWord(High(Cardinal)) + 1;
+var
+  NumberValue: TGocciaNumberLiteralValue;
+  IntegerPart: Double;
+begin
+  NumberValue := AValue.ToNumberLiteral;
+  if NumberValue.IsNaN or NumberValue.IsInfinity or
+     NumberValue.IsNegativeInfinity or (NumberValue.Value = 0) then
+    Exit(0);
+
+  IntegerPart := Int(NumberValue.Value);
+  IntegerPart := IntegerPart - Floor(IntegerPart / UINT32_MODULUS) *
+    UINT32_MODULUS;
+
+  if IntegerPart >= UINT32_MODULUS then
+    Exit(0);
+
+  Result := Cardinal(Trunc(IntegerPart));
 end;
 
 function NormalizeRelativeIndex(const ARelative, ALength: Integer): Integer;

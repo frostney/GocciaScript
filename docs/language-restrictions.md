@@ -427,7 +427,6 @@ The following standard ECMAScript built-ins are **not yet implemented** and may 
 - **WeakMap / WeakSet / WeakRef / FinalizationRegistry** — Weak reference collections and finalizers. These require tight GC integration. Deferred until demand warrants the complexity.
 - **URI functions** (`encodeURI`, `decodeURI`, `encodeURIComponent`, `decodeURIComponent`) — URL encoding/decoding.
 - **atob / btoa** — Base64 encoding/decoding.
-- **Regular Expressions** — `RegExp` constructor and regex literal syntax. String methods like `replace` currently work with string patterns only.
 
 ## Types as Comments
 
@@ -548,7 +547,24 @@ The transformer generates an internal source map for accurate error line/column 
 
 ### Regular Expressions
 
-**Not yet implemented.** String methods like `replace` work with string patterns.
+**Supported.** GocciaScript implements:
+
+- `RegExp(pattern, flags?)` and `new RegExp(pattern, flags?)`
+- Regex literals: `/pattern/flags`
+- Flags: `g`, `i`, `m`, `s`, `u`, `y`
+- RegExp instance properties: `source`, canonicalized `flags`, `lastIndex`, `global`, `ignoreCase`, `multiline`, `dotAll`, `unicode`, `sticky`
+- `RegExp.prototype.exec()`, `test()`, `toString()`, and the `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, and `Symbol.split` hooks
+- String integrations for `replace`, `replaceAll`, `split`, `match`, `matchAll`, and `search`, including custom protocol objects with the corresponding well-known symbol methods
+
+`RegExp(existingRegExp)` without `new` and without an explicit flags argument returns the original regex object. `new RegExp(existingRegExp)` still creates a clone.
+
+Regex literals are lexed context-sensitively so `/` still works as division in expression contexts.
+
+Current gaps from full ECMAScript RegExp semantics:
+
+- The `u` flag is accepted and exposed, but matching still does not implement full ECMAScript Unicode semantics.
+- Named capture groups, indices (`d`), and Unicode sets (`v`) are not supported.
+- `String.prototype.matchAll()` uses an eager array-backed iterator rather than a lazy spec-style iterator.
 
 ## Intentional Divergences from ECMAScript
 

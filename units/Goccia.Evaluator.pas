@@ -1633,7 +1633,8 @@ begin
       end
       else if Callee is TGocciaNativeFunctionValue then
       begin
-        Result := TGocciaNativeFunctionValue(Callee).Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
+        Result := TGocciaNativeFunctionValue(Callee).Call(Arguments,
+          TGocciaHoleValue.HoleValue);
       end
       else
       begin

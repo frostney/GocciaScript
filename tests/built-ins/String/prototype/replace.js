@@ -27,4 +27,47 @@ describe('String.prototype.replace', () => {
     const result = 'hello world'.replace('world', (match) => match.toUpperCase());
     expect(result).toBe('hello WORLD');
   });
+
+  test('replace supports regex arguments', () => {
+    expect('abcabc'.replace(/bc/, 'X')).toBe('aXabc');
+    expect('abc'.replace(/(b)(c)/, (match, b, c, index, input) => {
+      expect(match).toBe('bc');
+      expect(b).toBe('b');
+      expect(c).toBe('c');
+      expect(index).toBe(1);
+      expect(input).toBe('abc');
+      return c + b;
+    })).toBe('acb');
+  });
+
+  test('replace replaces all matches for global regex arguments', () => {
+    expect('abcabc'.replace(/bc/g, 'X')).toBe('aXaX');
+  });
+
+  test('replace expands regex replacement tokens', () => {
+    expect('abc'.replace(/b/, '[$&]')).toBe('a[b]c');
+    expect('abc'.replace(/(b)/, '<$1>')).toBe('a<b>c');
+    expect('abc'.replace(/b/, '$$')).toBe('a$c');
+    expect('abc'.replace(/b/, '$`')).toBe('aac');
+    expect('abc'.replace(/b/, "$'")).toBe('acc');
+    expect('b'.replace(/(a)?b/, 'x$1y')).toBe('xy');
+    expect('foo'.replace(/(f)/, '$2')).toBe('$2oo');
+    expect('foo'.replace(/(f)/, '$12')).toBe('f2oo');
+  });
+
+  test('replace preserves original text around zero-width global matches', () => {
+    expect('ab'.replace(/(?:)/g, '-')).toBe('-a-b-');
+  });
+
+  test('replace dispatches through Symbol.replace', () => {
+    const searchValue = {
+      [Symbol.replace](input, replacement) {
+        expect(input).toBe('abc');
+        expect(replacement).toBe('x');
+        return 'custom replace';
+      },
+    };
+
+    expect('abc'.replace(searchValue, 'x')).toBe('custom replace');
+  });
 });

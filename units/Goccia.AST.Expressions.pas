@@ -56,6 +56,17 @@ type
     property Value: string read FValue;
   end;
 
+  TGocciaRegexLiteralExpression = class(TGocciaExpression)
+  private
+    FPattern: string;
+    FFlags: string;
+  public
+    constructor Create(const APattern, AFlags: string; const ALine, AColumn: Integer);
+    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    property Pattern: string read FPattern;
+    property Flags: string read FFlags;
+  end;
+
   TGocciaTemplateWithInterpolationExpression = class(TGocciaExpression)
   private
     FParts: TObjectList<TGocciaExpression>; // Mix of string literals and expressions
@@ -542,6 +553,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
+  Goccia.RegExp.Runtime,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
@@ -593,6 +605,16 @@ constructor TGocciaTemplateLiteralExpression.Create(const AValue: string;
 begin
   inherited Create(ALine, AColumn);
   FValue := AValue;
+end;
+
+{ TGocciaRegexLiteralExpression }
+
+constructor TGocciaRegexLiteralExpression.Create(const APattern, AFlags: string;
+  const ALine, AColumn: Integer);
+begin
+  inherited Create(ALine, AColumn);
+  FPattern := APattern;
+  FFlags := AFlags;
 end;
 
 { TGocciaTemplateWithInterpolationExpression }
@@ -1038,6 +1060,12 @@ end;
 function TGocciaTemplateLiteralExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := EvaluateTemplateLiteral(Self, AContext);
+end;
+
+// ES2026 §13.2.7.1 Runtime Semantics: Evaluation
+function TGocciaRegexLiteralExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+begin
+  Result := CreateRegExpObject(FPattern, FFlags);
 end;
 
 function TGocciaTemplateWithInterpolationExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;

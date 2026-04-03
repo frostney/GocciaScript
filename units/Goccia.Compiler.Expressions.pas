@@ -42,6 +42,8 @@ procedure CompileObject(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaObjectExpression; const ADest: UInt8);
 procedure CompileTemplateLiteral(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaTemplateLiteralExpression; const ADest: UInt8);
+procedure CompileRegexLiteral(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaRegexLiteralExpression; const ADest: UInt8);
 procedure CompileTemplateWithInterpolation(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaTemplateWithInterpolationExpression; const ADest: UInt8);
 procedure CompileNewExpression(const ACtx: TGocciaCompilationContext;
@@ -154,6 +156,32 @@ begin
   end
   else
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
+end;
+
+procedure CompileRegexLiteral(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaRegexLiteralExpression; const ADest: UInt8);
+var
+  BaseReg, PatternReg, FlagsReg: UInt8;
+  NameIdx: UInt16;
+begin
+  BaseReg := ACtx.Scope.AllocateRegister;
+
+  NameIdx := ACtx.Template.AddConstantString(CONSTRUCTOR_REGEXP);
+  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, BaseReg, NameIdx));
+
+  PatternReg := ACtx.Scope.AllocateRegister;
+  FlagsReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, PatternReg,
+    ACtx.Template.AddConstantString(AExpr.Pattern)));
+  EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, FlagsReg,
+    ACtx.Template.AddConstantString(AExpr.Flags)));
+  EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, 2, 0));
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+
+  if BaseReg <> ADest then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+  ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileIdentifier(const ACtx: TGocciaCompilationContext;
