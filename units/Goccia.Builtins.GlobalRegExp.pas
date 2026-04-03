@@ -411,8 +411,9 @@ var
   Input: string;
   RegexValue: TGocciaObjectValue;
   MatchesArray: TGocciaArrayValue;
+  MatchValue: TGocciaValue;
   MatchArray: TGocciaObjectValue;
-  MatchIndex, MatchEnd, NextIndex, SearchIndex: Integer;
+  MatchIndex, MatchEnd, NextIndex: Integer;
 begin
   if not IsRegExpValue(AThisValue) then
     ThrowTypeError('RegExp.prototype[Symbol.matchAll] called on non-RegExp object');
@@ -422,25 +423,28 @@ begin
   else
     Input := TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value;
 
-  RegexValue := TGocciaObjectValue(AThisValue);
-  if not GetRegExpBooleanProperty(RegexValue, PROP_GLOBAL) then
-    ThrowTypeError('String.prototype.matchAll requires a global RegExp');
-
-  MatchesArray := TGocciaArrayValue.Create;
-  TGarbageCollector.Instance.AddTempRoot(MatchesArray);
+  RegexValue := TGocciaObjectValue(CloneRegExpObject(AThisValue));
+  TGarbageCollector.Instance.AddTempRoot(RegexValue);
   try
-    SearchIndex := 0;
-    while MatchRegExpObjectValue(RegexValue, Input, SearchIndex, False, False,
-      MatchArray, MatchIndex, MatchEnd, NextIndex) do
-    begin
-      MatchesArray.Elements.Add(MatchArray);
-      SearchIndex := NextIndex;
-      if SearchIndex > Length(Input) then
-        Break;
+    MatchesArray := TGocciaArrayValue.Create;
+    TGarbageCollector.Instance.AddTempRoot(MatchesArray);
+    try
+      if GetRegExpBooleanProperty(RegexValue, PROP_GLOBAL) or
+         GetRegExpBooleanProperty(RegexValue, PROP_STICKY) then
+      begin
+        while MatchRegExpObjectOnce(RegexValue, Input, MatchValue) do
+          MatchesArray.Elements.Add(MatchValue);
+      end
+      else if MatchRegExpObjectValue(RegexValue, Input, 0, False, False,
+        MatchArray, MatchIndex, MatchEnd, NextIndex) then
+        MatchesArray.Elements.Add(MatchArray);
+
+      Result := TGocciaArrayIteratorValue.Create(MatchesArray, akValues);
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(MatchesArray);
     end;
-    Result := TGocciaArrayIteratorValue.Create(MatchesArray, akValues);
   finally
-    TGarbageCollector.Instance.RemoveTempRoot(MatchesArray);
+    TGarbageCollector.Instance.RemoveTempRoot(RegexValue);
   end;
 end;
 
@@ -452,7 +456,7 @@ var
   ReplaceValue: TGocciaValue;
   RegexValue: TGocciaObjectValue;
   MatchArray: TGocciaObjectValue;
-  MatchIndex, MatchEnd, NextIndex, Offset: Integer;
+  MatchIndex, MatchEnd, NextIndex, SearchIndex, OutputIndex: Integer;
 begin
   if not IsRegExpValue(AThisValue) then
     ThrowTypeError('RegExp.prototype[Symbol.replace] called on non-RegExp object');
@@ -471,19 +475,22 @@ begin
   if GetRegExpBooleanProperty(RegexValue, PROP_GLOBAL) then
   begin
     ResultStr := '';
-    Offset := 0;
-    while MatchRegExpObjectValue(RegexValue, Input, Offset, False, False,
+    SearchIndex := 0;
+    OutputIndex := 0;
+    while MatchRegExpObjectValue(RegexValue, Input, SearchIndex, False, False,
       MatchArray, MatchIndex, MatchEnd, NextIndex) do
     begin
-      ResultStr := ResultStr + Copy(Input, Offset + 1, MatchIndex - Offset);
+      ResultStr := ResultStr + Copy(Input, OutputIndex + 1,
+        MatchIndex - OutputIndex);
       ResultStr := ResultStr + BuildRegexReplacement(ReplaceValue,
         TGocciaArrayValue(MatchArray), MatchIndex, Input);
-      Offset := NextIndex;
-      if Offset > Length(Input) then
+      OutputIndex := MatchEnd;
+      SearchIndex := NextIndex;
+      if SearchIndex > Length(Input) then
         Break;
     end;
-    if Offset <= Length(Input) then
-      ResultStr := ResultStr + Copy(Input, Offset + 1, MaxInt);
+    if OutputIndex <= Length(Input) then
+      ResultStr := ResultStr + Copy(Input, OutputIndex + 1, MaxInt);
     Result := TGocciaStringLiteralValue.Create(ResultStr);
   end
   else if MatchRegExpObjectValue(RegexValue, Input, 0, False, False,
@@ -536,6 +543,7 @@ var
   PreviousIndex, SearchIndex: Integer;
   Limit: Integer;
   HasLimit: Boolean;
+  LastMatchWasZeroWidth: Boolean;
   I: Integer;
 begin
   if not IsRegExpValue(AThisValue) then
@@ -565,11 +573,14 @@ begin
   try
     PreviousIndex := 0;
     SearchIndex := 0;
+    LastMatchWasZeroWidth := False;
     while MatchRegExpObjectValue(RegexValue, Input, SearchIndex, False, False,
       MatchArray, MatchIndex, MatchEnd, NextIndex) do
     begin
-      ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
-        Copy(Input, PreviousIndex + 1, MatchIndex - PreviousIndex)));
+      LastMatchWasZeroWidth := MatchIndex = MatchEnd;
+      if (MatchIndex > PreviousIndex) or not LastMatchWasZeroWidth then
+        ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
+          Copy(Input, PreviousIndex + 1, MatchIndex - PreviousIndex)));
       if HasLimit and (ResultArray.Elements.Count >= Limit) then
         Break;
 
@@ -588,7 +599,8 @@ begin
         Break;
     end;
 
-    if not HasLimit or (ResultArray.Elements.Count < Limit) then
+    if (not HasLimit or (ResultArray.Elements.Count < Limit)) and
+       ((Length(Input) > PreviousIndex) or not LastMatchWasZeroWidth) then
       ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
         Copy(Input, PreviousIndex + 1, Length(Input) - PreviousIndex)));
 

@@ -1062,6 +1062,7 @@ begin
   Result := EvaluateTemplateLiteral(Self, AContext);
 end;
 
+// ES2026 §13.2.7.1 Runtime Semantics: Evaluation
 function TGocciaRegexLiteralExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
   Result := CreateRegExpObject(FPattern, FFlags);

@@ -18,6 +18,14 @@ test("regex literals coexist with division expressions", () => {
 
 test("regex literals throw SyntaxError for duplicate flags", () => {
   expect(() => {
-    /a/gg;
+    new RegExp("a", "gg");
   }).toThrow(SyntaxError);
+});
+
+test("regex literals are allowed after condition parentheses", () => {
+  let matched = false;
+
+  if (true) matched = /ab/.test("zabz");
+
+  expect(matched).toBe(true);
 });

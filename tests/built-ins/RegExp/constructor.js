@@ -69,3 +69,9 @@ test("RegExp throws SyntaxError for invalid flags", () => {
     new RegExp("a", "z");
   }).toThrow(SyntaxError);
 });
+
+test("RegExp throws SyntaxError for invalid patterns at construction time", () => {
+  expect(() => {
+    new RegExp("[");
+  }).toThrow(SyntaxError);
+});

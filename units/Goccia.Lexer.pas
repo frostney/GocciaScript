@@ -32,6 +32,8 @@ type
     FFileName: string;
     FSourceLines: TStringList;
     FCanStartRegex: Boolean;
+    FParenRegexContext: array of Boolean;
+    FParenRegexContextCount: Integer;
     function GetSourceLines: TStringList;
 
     function IsAtEnd: Boolean; inline;
@@ -52,6 +54,8 @@ type
     function ScanHexEscape: string;
     procedure ProcessEscapeSequence(var ASB: TStringBuffer);
     procedure UpdateRegexContext(const ATokenType: TGocciaTokenType);
+    procedure PushParenRegexContext(const AAllowsRegexAfter: Boolean);
+    function PopParenRegexContext: Boolean;
     procedure SkipWhitespace;
     procedure SkipComment;
     procedure SkipBlockComment;
@@ -80,6 +84,7 @@ begin
   FLine := 1;
   FColumn := 1;
   FCanStartRegex := True;
+  FParenRegexContextCount := 0;
 end;
 
 destructor TGocciaLexer.Destroy;
@@ -338,9 +343,38 @@ begin
   end;
 end;
 
+procedure TGocciaLexer.PushParenRegexContext(const AAllowsRegexAfter: Boolean);
+begin
+  if FParenRegexContextCount >= Length(FParenRegexContext) then
+    SetLength(FParenRegexContext, FParenRegexContextCount * 2 + 8);
+  FParenRegexContext[FParenRegexContextCount] := AAllowsRegexAfter;
+  Inc(FParenRegexContextCount);
+end;
+
+function TGocciaLexer.PopParenRegexContext: Boolean;
+begin
+  if FParenRegexContextCount = 0 then
+    Exit(False);
+  Dec(FParenRegexContextCount);
+  Result := FParenRegexContext[FParenRegexContextCount];
+end;
+
 procedure TGocciaLexer.UpdateRegexContext(const ATokenType: TGocciaTokenType);
+var
+  PreviousTokenType: TGocciaTokenType;
 begin
   case ATokenType of
+    gttLeftParen:
+      begin
+        if FTokens.Count >= 2 then
+          PreviousTokenType := FTokens[FTokens.Count - 2].TokenType
+        else
+          PreviousTokenType := gttEOF;
+        PushParenRegexContext(PreviousTokenType in [gttIf, gttWhile, gttFor]);
+        FCanStartRegex := True;
+      end;
+    gttRightParen:
+      FCanStartRegex := PopParenRegexContext();
     gttNumber,
     gttString,
     gttTemplate,
@@ -351,7 +385,6 @@ begin
     gttIdentifier,
     gttThis,
     gttSuper,
-    gttRightParen,
     gttRightBracket,
     gttIncrement,
     gttDecrement:
@@ -500,9 +533,18 @@ begin
   Flags := Copy(FSource, FlagsStart, FCurrent - FlagsStart);
 
   for I := 1 to Length(Flags) do
+  begin
     if not CharInSet(Flags[I], ['g', 'i', 'm', 's', 'u', 'y']) then
       raise TGocciaLexerError.Create('Invalid regular expression flag: ' + Flags[I],
         FLine, FColumn, FFileName, GetSourceLines);
+    if Pos(Flags[I], Copy(Flags, 1, I - 1)) > 0 then
+      raise TGocciaLexerError.Create('Duplicate regular expression flag: ' + Flags[I],
+        FLine, FColumn, FFileName, GetSourceLines);
+  end;
+
+  if CharInSet(Peek, ['0'..'9', '_', '$', 'a'..'z', 'A'..'Z']) then
+    raise TGocciaLexerError.Create('Invalid regular expression literal suffix',
+      FLine, FColumn, FFileName, GetSourceLines);
 
   AddToken(gttRegex, PatternBuffer.ToString + REGEX_SEPARATOR + Flags);
 end;

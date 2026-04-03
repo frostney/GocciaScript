@@ -53,6 +53,10 @@ describe('String.prototype.replace', () => {
     expect('b'.replace(/(a)?b/, 'x$1y')).toBe('xy');
   });
 
+  test('replace preserves original text around zero-width global matches', () => {
+    expect('ab'.replace(/(?:)/g, '-')).toBe('-a-b-');
+  });
+
   test('replace dispatches through Symbol.replace', () => {
     const searchValue = {
       [Symbol.replace](input, replacement) {

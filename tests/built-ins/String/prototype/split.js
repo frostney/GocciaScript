@@ -70,6 +70,7 @@ test("String.prototype.split supports regex separators", () => {
   expect("a,b;c".split(/[;,]/)).toEqual(["a", "b", "c"]);
   expect("ab1cd2".split(/(\d)/)).toEqual(["ab", "1", "cd", "2", ""]);
   expect("a,b,c".split(/,/, 2)).toEqual(["a", "b"]);
+  expect("ab".split(/(?:)/)).toEqual(["a", "b"]);
 });
 
 test("String.prototype.split dispatches through Symbol.split", () => {

@@ -22,6 +22,16 @@ test("matchAll requires a global regex", () => {
   }).toThrow(TypeError);
 });
 
+test("matchAll without an argument uses an empty global regex", () => {
+  const matches = [];
+
+  for (const match of "ab".matchAll()) {
+    matches.push(match[0]);
+  }
+
+  expect(matches).toEqual(["", "", ""]);
+});
+
 test("matchAll dispatches through Symbol.matchAll", () => {
   const matcher = {
     [Symbol.matchAll](input) {

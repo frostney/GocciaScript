@@ -106,7 +106,7 @@ var
   CanonicalFlags: string;
 begin
   try
-    ValidateRegExpFlags(AFlags);
+    ValidateRegExpPattern(APattern, AFlags);
   except
     on E: Exception do
       ThrowSyntaxError(E.Message);

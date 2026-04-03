@@ -20,13 +20,17 @@ test("exec returns null when there is no match", () => {
 test("exec updates lastIndex for global regexes", () => {
   const regex = /a/g;
   const first = regex.exec("aba");
-  const second = regex.exec("aba");
-  const third = regex.exec("aba");
 
   expect(first[0]).toBe("a");
   expect(first.index).toBe(0);
-  expect(regex.lastIndex).toBe(0);
+  expect(regex.lastIndex).toBe(1);
+
+  const second = regex.exec("aba");
   expect(second[0]).toBe("a");
   expect(second.index).toBe(2);
+  expect(regex.lastIndex).toBe(3);
+
+  const third = regex.exec("aba");
   expect(third).toBe(null);
+  expect(regex.lastIndex).toBe(0);
 });

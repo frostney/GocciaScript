@@ -93,13 +93,22 @@ uses
 
 { TGocciaStringObjectValue }
 
-function CoerceRegExpValue(const AValue: TGocciaValue): TGocciaObjectValue;
+function CoerceRegExpValue(const AValue: TGocciaValue;
+  const ANewFlags: string = ''): TGocciaObjectValue;
+var
+  Pattern: string;
 begin
   if IsRegExpValue(AValue) then
     Result := TGocciaObjectValue(CloneRegExpObject(AValue))
   else
+  begin
+    if AValue is TGocciaUndefinedLiteralValue then
+      Pattern := ''
+    else
+      Pattern := AValue.ToStringLiteral.Value;
     Result := TGocciaObjectValue(CreateRegExpObject(
-      AValue.ToStringLiteral.Value, ''));
+      Pattern, ANewFlags));
+  end;
 end;
 
 function GetRegExpBooleanProperty(const AValue: TGocciaObjectValue;
@@ -1380,7 +1389,8 @@ begin
   if AArgs.Length > 0 then
     RegexValue := CoerceRegExpValue(AArgs.GetElement(0))
   else
-    RegexValue := CoerceRegExpValue(TGocciaUndefinedLiteralValue.UndefinedValue);
+    RegexValue := CoerceRegExpValue(TGocciaUndefinedLiteralValue.UndefinedValue,
+      'g');
 
   TGarbageCollector.Instance.AddTempRoot(RegexValue);
   try

@@ -23,6 +23,7 @@ type
 function NormalizeRegExpSource(const APattern: string): string;
 function HasRegExpFlag(const AFlags: string; const AFlag: Char): Boolean;
 procedure ValidateRegExpFlags(const AFlags: string);
+procedure ValidateRegExpPattern(const APattern, AFlags: string);
 function CanonicalizeRegExpFlags(const AFlags: string): string;
 function RegExpToString(const APattern, AFlags: string): string;
 function ExecuteRegExp(const APattern, AFlags, AInput: string;
@@ -76,6 +77,27 @@ begin
     if Pos(AFlags[I], Seen) > 0 then
       raise EConvertError.Create('Invalid regular expression flags');
     Seen := Seen + AFlags[I];
+  end;
+end;
+
+procedure ValidateRegExpPattern(const APattern, AFlags: string);
+var
+  Matcher: TRegExpr;
+  NormalizedPattern: string;
+begin
+  ValidateRegExpFlags(AFlags);
+  NormalizedPattern := NormalizeRegExpSource(APattern);
+  if NormalizedPattern = EMPTY_REGEX then
+    Exit;
+  Matcher := TRegExpr.Create;
+  try
+    Matcher.Expression := GetExecutableRegExpPattern(NormalizedPattern);
+    Matcher.ModifierI := HasRegExpFlag(AFlags, 'i');
+    Matcher.ModifierM := HasRegExpFlag(AFlags, 'm');
+    Matcher.ModifierS := HasRegExpFlag(AFlags, 's');
+    Matcher.Compile;
+  finally
+    Matcher.Free;
   end;
 end;
 
