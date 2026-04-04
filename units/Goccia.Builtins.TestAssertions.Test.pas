@@ -1574,14 +1574,44 @@ end;
 
 function TTestSkipAndConditionalAPIs.ResolveGlobalCallable(
   const AName: string): TGocciaFunctionBase;
+var
+  Value: TGocciaValue;
 begin
-  Result := FScope.ResolveIdentifier(AName) as TGocciaFunctionBase;
+  Value := FScope.ResolveIdentifier(AName);
+  if not Assigned(Value) then
+    raise Exception.CreateFmt(
+      'Expected global callable "%s" to resolve to TGocciaFunctionBase, got nil',
+      [AName]
+    );
+
+  if not (Value is TGocciaFunctionBase) then
+    raise Exception.CreateFmt(
+      'Expected global callable "%s" to resolve to TGocciaFunctionBase, got %s',
+      [AName, Value.ClassName]
+    );
+
+  Result := TGocciaFunctionBase(Value);
 end;
 
 function TTestSkipAndConditionalAPIs.ResolveCallableProperty(const AName,
   AProperty: string): TGocciaFunctionBase;
+var
+  PropertyValue: TGocciaValue;
 begin
-  Result := ResolveGlobalCallable(AName).GetProperty(AProperty) as TGocciaFunctionBase;
+  PropertyValue := ResolveGlobalCallable(AName).GetProperty(AProperty);
+  if not Assigned(PropertyValue) then
+    raise Exception.CreateFmt(
+      'Expected callable property "%s.%s" to resolve to TGocciaFunctionBase, got nil',
+      [AName, AProperty]
+    );
+
+  if not (PropertyValue is TGocciaFunctionBase) then
+    raise Exception.CreateFmt(
+      'Expected callable property "%s.%s" to resolve to TGocciaFunctionBase, got %s',
+      [AName, AProperty, PropertyValue.ClassName]
+    );
+
+  Result := TGocciaFunctionBase(PropertyValue);
 end;
 
 function TTestSkipAndConditionalAPIs.CreateRunOptions: TGocciaArgumentsCollection;
