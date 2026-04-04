@@ -65,6 +65,7 @@ type
     procedure TestEngineLoadsInMemoryModuleWithCustomProvider;
     procedure TestEngineReloadsModifiedInMemoryModule;
     procedure TestEngineRetriesModuleAfterFailedLoad;
+    procedure TestEngineReportsJSONLModuleLineNumbers;
     procedure TestModuleLoaderRejectsRebindingAcrossRuntimes;
     procedure TestBytecodeBackendUsesInjectedContentProvider;
   protected
@@ -146,6 +147,8 @@ begin
     TestEngineReloadsModifiedInMemoryModule);
   Test('Engine retries module load after previous failure',
     TestEngineRetriesModuleAfterFailedLoad);
+  Test('Engine reports JSONL module parse line numbers',
+    TestEngineReportsJSONLModuleLineNumbers);
   Test('Module loader rejects rebinding across runtimes',
     TestModuleLoaderRejectsRebindingAcrossRuntimes);
   Test('Bytecode backend uses injected content provider',
@@ -252,6 +255,8 @@ const
   MODULE_PATH = 'memory:/dep.js';
 var
   Engine: TGocciaEngine;
+  HasLineNumber: Boolean;
+  HasParseMessage: Boolean;
   ModuleLoader: TGocciaModuleLoader;
   Provider: TMemoryModuleContentProvider;
   Resolver: TInMemoryModuleResolver;
@@ -390,6 +395,8 @@ const
   MODULE_PATH = 'memory:/dep.js';
 var
   Engine: TGocciaEngine;
+  HasLineNumber: Boolean;
+  HasParseMessage: Boolean;
   ModuleLoader: TGocciaModuleLoader;
   Provider: TMemoryModuleContentProvider;
   Resolver: TInMemoryModuleResolver;
@@ -423,6 +430,68 @@ begin
         ScriptResult := Engine.Execute;
         Expect<Boolean>(ScriptResult.Result is TGocciaNumberLiteralValue).ToBe(True);
         Expect<Double>(TGocciaNumberLiteralValue(ScriptResult.Result).Value).ToBe(42);
+      finally
+        Engine.Free;
+      end;
+    finally
+      ModuleLoader.Free;
+    end;
+  finally
+    Source.Free;
+    Resolver.Free;
+    Provider.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestEngineReportsJSONLModuleLineNumbers;
+const
+  ENTRY_PATH = 'memory:/app.js';
+  MODULE_PATH = 'memory:/events.jsonl';
+var
+  Engine: TGocciaEngine;
+  HasLineNumber: Boolean;
+  HasParseMessage: Boolean;
+  ModuleLoader: TGocciaModuleLoader;
+  Provider: TMemoryModuleContentProvider;
+  Resolver: TInMemoryModuleResolver;
+  RaisedExpected: Boolean;
+  Source: TStringList;
+begin
+  Provider := TMemoryModuleContentProvider.Create;
+  Resolver := TInMemoryModuleResolver.Create;
+  Source := TStringList.Create;
+  try
+    Provider.AddModule(MODULE_PATH,
+      '{"id":1}' + LineEnding +
+      '{invalid}' + LineEnding +
+      '42');
+    Source.Text := 'import { "0" as firstRecord } from "' + MODULE_PATH + '";' +
+      LineEnding + 'firstRecord;';
+
+    ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
+    try
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
+        TGocciaEngine.DefaultGlobals, ModuleLoader);
+      try
+        RaisedExpected := False;
+        try
+          Engine.Execute;
+          Fail('Expected invalid JSONL module source to raise an exception.');
+        except
+          on E: Exception do
+          begin
+            RaisedExpected := True;
+            HasParseMessage := Pos('Failed to parse JSONL module',
+              E.Message) > 0;
+            HasLineNumber := Pos('JSONL line 2', E.Message) > 0;
+            if not HasParseMessage then
+              Fail('Expected JSONL module parse prefix in error message.');
+            if not HasLineNumber then
+              Fail('Expected JSONL module error to include line 2.');
+          end;
+        end;
+
+        Expect<Boolean>(RaisedExpected).ToBe(True);
       finally
         Engine.Free;
       end;

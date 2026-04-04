@@ -195,12 +195,17 @@ import { name, version } from "./package.json";
 import { host as dbHost } from "./config.json";
 import { "foo-bar" as featureFlag } from "./feature-flags.json";
 
+// JSONL imports — each non-empty line becomes a string-indexed named export
+import { "0" as firstRecord, "1" as secondRecord } from "./events.jsonl";
+
 // YAML imports — top-level keys become named exports
 import { name, version } from "./package.yaml";
 import { host as dbHost } from "./config.yml";
 import { "0" as firstDoc } from "./multi-doc-index.yaml";
 
 Single-document YAML module imports follow the same top-level-object export model as JSON modules. Multi-document YAML streams are also supported for `.yaml` and `.yml` imports: each document is exposed as a named export under its zero-based string index (`"0"`, `"1"`, ...). If you want an array of documents inside normal runtime code instead of module exports, use `YAML.parseDocuments(...)`. Block scalars, multiline plain and quoted scalar folding, multiline flow collections, YAML 1.2 numeric scalar resolution, YAML double-quoted escapes, self-referential alias graphs, stricter flow collection validation, empty implicit keys, anchored mapping keys, `%YAML` / `%TAG` directives, standard tags, tagged-value metadata (`.tagName`, `.value`), and explicit keys including omitted explicit values are supported.
+
+JSONL (`.jsonl`) imports are also supported. Each non-empty line is parsed as strict JSON and exposed as a named export under its zero-based string index (`"0"`, `"1"`, ...). Blank lines are ignored. If a line is invalid JSON, the load fails with a syntax error that includes the JSONL source line number. In runtime code, `JSONL.parse(...)` returns the full array of records and `JSONL.parseChunk(...)` exposes Bun-compatible streaming state (`values`, `read`, `done`, `error`).
 
 Non-scalar YAML keys are canonicalized into stable JSON-like strings. Explicit scalar keys work naturally as named exports, and keys that are not valid identifiers can still be imported with string-literal names such as `import { "foo-bar" as fooBar } from "./config.yaml";`. Complex keys only produce useful imports when you know the canonical export string.
 
