@@ -239,6 +239,7 @@ Named imports and exports also support string-literal export names when a module
 
 ```javascript
 import { "foo-bar" as fooBar } from "./config.json";
+import { "0" as firstDoc } from "./multi.yaml";
 
 const localValue = 42;
 export { localValue as "0" };
