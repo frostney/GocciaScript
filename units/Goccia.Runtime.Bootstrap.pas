@@ -23,6 +23,7 @@ uses
   Goccia.Builtins.GlobalString,
   Goccia.Builtins.GlobalSymbol,
   Goccia.Builtins.JSON,
+  Goccia.Builtins.JSONL,
   Goccia.Builtins.Math,
   Goccia.Builtins.Performance,
   Goccia.Builtins.Temporal,
@@ -53,6 +54,7 @@ type
     FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
     FBuiltinJSON: TGocciaJSONBuiltin;
+    FBuiltinJSONL: TGocciaJSONLBuiltin;
     FBuiltinYAML: TGocciaYAMLBuiltin;
     FBuiltinSymbol: TGocciaGlobalSymbol;
     FBuiltinSet: TGocciaGlobalSet;
@@ -171,6 +173,7 @@ begin
   FBuiltinGlobalString.Free;
   FBuiltinGlobals.Free;
   FBuiltinJSON.Free;
+  FBuiltinJSONL.Free;
   FBuiltinYAML.Free;
   FBuiltinSymbol.Free;
   FBuiltinSet.Free;
@@ -208,6 +211,8 @@ begin
     FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, FThrowError);
   if ggJSON in FGlobals then
     FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, FThrowError);
+  if ggJSONL in FGlobals then
+    FBuiltinJSONL := TGocciaJSONLBuiltin.Create('JSONL', Scope, FThrowError);
   if ggYAML in FGlobals then
     FBuiltinYAML := TGocciaYAMLBuiltin.Create('YAML', Scope, FThrowError);
   if ggSymbol in FGlobals then

@@ -60,7 +60,7 @@ end;
 
 function IsStructuredGlobalsFile(const APath: string): Boolean;
 begin
-  Result := IsStructuredDataExtension(ExtractFileExt(APath));
+  Result := IsStructuredGlobalsExtension(ExtractFileExt(APath));
 end;
 
 function IsYAMLGlobalsFile(const APath: string): Boolean;

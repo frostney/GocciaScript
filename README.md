@@ -284,6 +284,7 @@ Structured data files can also be consumed directly:
 import { name, version } from "./package.json";
 import { name as appName, debug } from "./config.yaml";
 import { "0" as firstDoc, "1" as secondDoc } from "./multi.yaml";
+import { "0" as firstRecord, "1" as secondRecord } from "./events.jsonl";
 ```
 
 If you want a YAML stream as an array in runtime code instead of module exports, use the explicit document parser:
@@ -293,6 +294,15 @@ const docs = YAML.parseDocuments(sourceText);
 ```
 
 `YAML.parse(sourceText)` also returns an array when the input uses explicit `---` document markers, matching Bun's YAML runtime behavior.
+
+JSONL is also available both as a runtime parser and as a structured-data module format:
+
+```javascript
+const records = JSONL.parse('{"id":1}\n{"id":2}\n');
+const chunk = JSONL.parseChunk('{"id":1}\n{"id":');
+```
+
+`.jsonl` module imports expose each non-empty line as a zero-based string export (`"0"`, `"1"`, ...), keeping the import surface consistent with string-literal named imports and multi-document structured-data modules.
 
 The current YAML surface already handles common configuration files, including mappings, sequences, block and multiline flow collections (including single-pair mapping items like `[foo: bar]`, empty implicit keys, trailing commas, and stricter rejection of malformed empty interior entries), anchors, aliases, merge keys, self-referential alias graphs for mappings and sequences, block scalars (`|`, `>`, chomping modifiers, and indentation indicators), multiline plain and quoted scalar folding, YAML 1.2 numeric scalar resolution (including base-prefixed integers, exponent forms, and validated digit separators), YAML double-quoted escapes (`\x`, `\u`, `\U`, line continuations, and YAML-specific escapes), and document directives/tags such as `%YAML`, `%TAG`, `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!seq`, `!!map`, `!!timestamp`, and `!!binary`. Directives are still validated as document-preamble syntax, so they are rejected if they appear after document content without an intervening document boundary.
 

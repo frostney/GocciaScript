@@ -24,6 +24,7 @@ uses
   Goccia.Builtins.GlobalString,
   Goccia.Builtins.GlobalSymbol,
   Goccia.Builtins.JSON,
+  Goccia.Builtins.JSONL,
   Goccia.Builtins.Math,
   Goccia.Builtins.Performance,
   Goccia.Builtins.Temporal,
@@ -31,6 +32,7 @@ uses
   Goccia.Builtins.YAML,
   Goccia.Interpreter,
   Goccia.JSON,
+  Goccia.JSONL,
   Goccia.JSX.SourceMap,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
@@ -56,6 +58,7 @@ type
     ggGlobalNumber,
     ggPromise,
     ggJSON,
+    ggJSONL,
     ggYAML,
     ggSymbol,
     ggSet,
@@ -82,7 +85,7 @@ type
 type
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggJSONL, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
   private
     FInterpreter: TGocciaInterpreter;
     FFileName: string;
@@ -102,6 +105,7 @@ type
     FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
     FBuiltinJSON: TGocciaJSONBuiltin;
+    FBuiltinJSONL: TGocciaJSONLBuiltin;
     FBuiltinYAML: TGocciaYAMLBuiltin;
     FBuiltinSymbol: TGocciaGlobalSymbol;
     FBuiltinSet: TGocciaGlobalSet;
@@ -162,6 +166,7 @@ type
     property BuiltinGlobalNumber: TGocciaGlobalNumber read FBuiltinGlobalNumber;
     property BuiltinGlobals: TGocciaGlobals read FBuiltinGlobals;
     property BuiltinJSON: TGocciaJSONBuiltin read FBuiltinJSON;
+    property BuiltinJSONL: TGocciaJSONLBuiltin read FBuiltinJSONL;
     property BuiltinYAML: TGocciaYAMLBuiltin read FBuiltinYAML;
     property BuiltinSymbol: TGocciaGlobalSymbol read FBuiltinSymbol;
     property BuiltinSet: TGocciaGlobalSet read FBuiltinSet;
@@ -274,9 +279,10 @@ begin
     FBuiltinGlobalNumber.Free;
     FBuiltinRegExp.Free;
     FBuiltinGlobalString.Free;
-    FBuiltinGlobals.Free;
-    FBuiltinJSON.Free;
-    FBuiltinYAML.Free;
+  FBuiltinGlobals.Free;
+  FBuiltinJSON.Free;
+  FBuiltinJSONL.Free;
+  FBuiltinYAML.Free;
     FBuiltinSymbol.Free;
     FBuiltinSet.Free;
     FBuiltinMap.Free;
@@ -322,6 +328,8 @@ begin
     FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, ThrowError);
   if ggJSON in FGlobals then
     FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, ThrowError);
+  if ggJSONL in FGlobals then
+    FBuiltinJSONL := TGocciaJSONLBuiltin.Create('JSONL', Scope, ThrowError);
   if ggYAML in FGlobals then
     FBuiltinYAML := TGocciaYAMLBuiltin.Create('YAML', Scope, ThrowError);
   if ggSymbol in FGlobals then
