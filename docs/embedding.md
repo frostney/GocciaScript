@@ -302,7 +302,7 @@ The `TGocciaGlobalBuiltins` set controls which built-in objects are available to
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
+                  ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
 ```
 
 ### Available Flags

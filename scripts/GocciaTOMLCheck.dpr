@@ -12,6 +12,20 @@ uses
   Goccia.TOML,
   Goccia.Values.Primitives;
 
+function LoadUTF8File(const APath: string): UTF8String;
+var
+  Stream: TFileStream;
+begin
+  Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
+  try
+    SetLength(Result, Stream.Size);
+    if Length(Result) > 0 then
+      Stream.ReadBuffer(Pointer(Result)^, Length(Result));
+  finally
+    Stream.Free;
+  end;
+end;
+
 function EscapeJSONString(const AValue: string): string;
 var
   Buffer: TStringBuffer;
@@ -117,9 +131,10 @@ begin
 end;
 
 var
+  ExitCode: Integer;
   Parser: TGocciaTOMLParser;
   Root: TGocciaTOMLNode;
-  Source: TStringList;
+  SourceText: UTF8String;
 begin
   if ParamCount <> 1 then
     Halt(2);
@@ -127,26 +142,28 @@ begin
   TGarbageCollector.Initialize;
   PinPrimitiveSingletons;
 
-  Source := TStringList.Create;
   Parser := TGocciaTOMLParser.Create;
   try
-    Source.LoadFromFile(ParamStr(1));
-    Root := Parser.ParseDocument(Source.Text);
     try
-      WriteLn(SerializeNode(Root));
-      Halt(0);
-    finally
-      Root.Free;
+      SourceText := LoadUTF8File(ParamStr(1));
+      Root := Parser.ParseDocument(string(SourceText));
+      try
+        WriteLn(SerializeNode(Root));
+        ExitCode := 0;
+      finally
+        Root.Free;
+      end;
+    except
+      on E: Exception do
+      begin
+        WriteLn(E.Message);
+        ExitCode := 1;
+      end;
     end;
-  except
-    on E: Exception do
-    begin
-      WriteLn(E.Message);
-      Halt(1);
-    end;
+  finally
+    Parser.Free;
+    TGarbageCollector.Shutdown;
   end;
 
-  Parser.Free;
-  Source.Free;
-  TGarbageCollector.Shutdown;
+  Halt(ExitCode);
 end.

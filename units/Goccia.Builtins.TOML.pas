@@ -79,7 +79,7 @@ begin
   try
     Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
   except
-    on E: Exception do
+    on E: EGocciaTOMLParseError do
       ThrowSyntaxError(E.Message);
   end;
 end;

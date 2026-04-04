@@ -13,6 +13,7 @@ from pathlib import Path
 
 SUITE_REPO_URL = "https://github.com/toml-lang/toml-test.git"
 SUITE_VERSION = "1.1.0"
+SUITE_BRANCH = "main"
 SUITE_FILE_LIST = f"tests/files-toml-{SUITE_VERSION}"
 DEFAULT_TIMEOUT_SECONDS = 5
 HARNESS_SOURCE_PATH = Path("scripts/GocciaTOMLCheck.dpr")
@@ -34,7 +35,18 @@ def ensure_suite_checkout(suite_dir: Path | None) -> tuple[Path, tempfile.Tempor
 
   temp_dir = tempfile.TemporaryDirectory(prefix="toml-test-suite.")
   checkout_dir = Path(temp_dir.name) / "repo"
-  run(["git", "clone", "--depth", "1", SUITE_REPO_URL, str(checkout_dir)])
+  run(
+    [
+      "git",
+      "clone",
+      "--depth",
+      "1",
+      "--branch",
+      SUITE_BRANCH,
+      SUITE_REPO_URL,
+      str(checkout_dir),
+    ]
+  )
   return checkout_dir, temp_dir
 
 
@@ -69,13 +81,22 @@ def normalize_datetime_text(kind: str, value: str):
   return dt.datetime.fromisoformat(value)
 
 
+def is_tagged_scalar(node) -> bool:
+  return (
+    isinstance(node, dict)
+    and set(node.keys()) == {"type", "value"}
+    and isinstance(node.get("type"), str)
+    and isinstance(node.get("value"), str)
+  )
+
+
 def compare_tagged_json(want, have, path="") -> tuple[bool, str]:
   if isinstance(want, dict):
     if not isinstance(have, dict):
       return False, f"{path or '<root>'}: expected object, got {type(have).__name__}"
 
-    if set(want.keys()) == {"type", "value"}:
-      if set(have.keys()) != {"type", "value"}:
+    if is_tagged_scalar(want):
+      if not is_tagged_scalar(have):
         return False, f"{path or '<root>'}: malformed tagged value"
 
       want_type = want["type"]
@@ -153,7 +174,7 @@ def evaluate_suite(harness_path: Path, suite_dir: Path, timeout_seconds: int) ->
   file_list_path = suite_dir / SUITE_FILE_LIST
   rel_paths = [
     line.strip()
-    for line in file_list_path.read_text().splitlines()
+    for line in file_list_path.read_text(encoding="utf-8").splitlines()
     if line.strip() and not line.startswith("#") and line.endswith(".toml")
   ]
 
@@ -221,10 +242,20 @@ def evaluate_suite(harness_path: Path, suite_dir: Path, timeout_seconds: int) ->
       summary["timeouts"] += 1
     elif is_valid:
       if not actual_fail:
-        actual_json = json.loads(stdout or "null")
-        expected_json = json.loads(expected_json_path.read_text())
-        ok, message = compare_tagged_json(expected_json, actual_json)
-        mismatch = not ok
+        try:
+          actual_json = json.loads(stdout or "null")
+        except json.JSONDecodeError as error:
+          ok = False
+          message = f"invalid decoder JSON: {error}"
+        else:
+          try:
+            expected_json = json.loads(expected_json_path.read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError) as error:
+            ok = False
+            message = f"invalid expected JSON fixture: {error}"
+          else:
+            ok, message = compare_tagged_json(expected_json, actual_json)
+            mismatch = not ok
       else:
         ok = False
       if not ok:
@@ -307,7 +338,7 @@ def main() -> int:
 
   if args.output is not None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
   print(json.dumps(report["summary"], indent=2))
   if args.output is not None:

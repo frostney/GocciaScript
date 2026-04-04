@@ -18,6 +18,7 @@ TGocciaGlobalBuiltin = (
   ggPromise,          // Promise constructor, prototype, static methods, microtask queue
   ggJSON,             // JSON.parse, JSON.stringify
   ggTOML,             // TOML.parse
+  ggYAML,             // YAML.parse, YAML.parseDocuments
   ggSymbol,           // Symbol, Symbol.for, Symbol.keyFor
   ggSet,              // Set constructor and prototype
   ggMap,              // Map constructor and prototype
@@ -34,7 +35,7 @@ The default set used by `ScriptLoader` and `REPL`:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggSymbol, ggSet, ggMap,
+                  ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggYAML, ggSymbol, ggSet, ggMap,
                   ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
 ```
 
@@ -173,7 +174,7 @@ Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time wh
 
 TOML date/time values currently map to validated string scalars rather than Temporal values. This keeps the runtime and module-import behavior stable for v1 while leaving room for future Temporal-aware interop.
 
-Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over time. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official `toml-test` rerun command is `python3 scripts/run_toml_test_suite.py`.
+Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over time. The detailed conformance notes live in [docs/design-decisions.md](design-decisions.md), and the official `toml-test` rerun command is `python3 scripts/run_toml_test_suite.py` or `python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck` when you already have the decoder harness built.
 
 ### Object (`Goccia.Builtins.GlobalObject.pas`)
 

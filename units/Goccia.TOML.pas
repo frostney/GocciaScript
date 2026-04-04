@@ -165,6 +165,12 @@ begin
   Result := (Ord(AChar) < 32) or (Ord(AChar) = 127);
 end;
 
+function TOMLFormatSettings: TFormatSettings;
+begin
+  Result := DefaultFormatSettings;
+  Result.DecimalSeparator := '.';
+end;
+
 function IsDigit(const AChar: Char): Boolean;
 begin
   Result := (AChar >= '0') and (AChar <= '9');
@@ -1538,7 +1544,7 @@ begin
   else
     NumberText := SignPart + NumberText;
 
-  Result := TryStrToFloat(NumberText, AValue, DefaultFormatSettings);
+  Result := TryStrToFloat(NumberText, AValue, TOMLFormatSettings);
 end;
 
 function TGocciaTOMLParser.TryParseNumber(const AToken: string;

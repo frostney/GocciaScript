@@ -449,7 +449,7 @@ Built-ins are registered by the engine via `TGocciaGlobalBuiltins` flags:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
- ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
+ ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
 ```
 
 The TestRunner adds `ggTestAssertions` for the test framework (`describe`, `test`, `expect`).

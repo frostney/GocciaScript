@@ -16,7 +16,7 @@ Keep suite titles, test names, and failure messages aligned with the layer under
 
 ## Test Organization
 
-```
+```text
 tests/
 ├── built-ins/              # Built-in object tests
 │   ├── Array/              # Array constructor and prototype methods
@@ -111,7 +111,7 @@ Follow these rules when creating or organizing test files:
 
 **1. One method per file** — Each built-in method or static function gets its own test file. Never bundle multiple methods into a single file like `prototype-methods.js` or `static-methods.js`.
 
-```
+```text
 # Correct — each method is its own file
 tests/built-ins/TypedArray/prototype/fill.js
 tests/built-ins/TypedArray/prototype/map.js
@@ -123,7 +123,7 @@ tests/built-ins/TypedArray/prototype-methods.js
 
 **2. Prototype methods go in a `prototype/` subfolder** — Instance methods (e.g., `Array.prototype.map`) live in `BuiltIn/prototype/methodName.js`. Static methods and constructor tests live directly in the `BuiltIn/` folder (no separate `static/` subfolder).
 
-```
+```text
 tests/built-ins/TypedArray/
 ├── constructors.js              # new TypedArray(...) constructor variants
 ├── buffer-sharing.js            # Buffer sharing behavior across views
@@ -151,14 +151,14 @@ describe("TypedArray.prototype.fill", () => {
 });
 ```
 
-```
+```text
 # Wrong — edge cases in a separate catch-all file
 tests/built-ins/TypedArray/edge-cases.js
 ```
 
 **4. Object prototype methods use `prototype/` too** — `Object.prototype.toString`, `Object.prototype.hasOwnProperty`, etc. follow the same convention as Array. Use `Object/prototype/toString.js`, not `Object/prototype-toString.js`.
 
-```
+```text
 tests/built-ins/Object/
 ├── keys.js                      # Object.keys (static method)
 ├── assign.js                    # Object.assign (static method)
@@ -689,7 +689,7 @@ Each test starts with a `BeforeEach` override that calls `FAssertions.ResetCurre
 
 GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and tags, with a five-job pipeline plus release packaging:
 
-```
+```text
 build → test             → artifacts
       → toml-compliance  →
       → benchmark        →
@@ -716,7 +716,7 @@ The `test`, `benchmark`, `examples`, and `toml-compliance` jobs run in parallel 
 
 Runs on pull requests targeting `main`, on **ubuntu-latest x64 only**:
 
-```
+```text
 build → test
       → benchmark → PR comment
       → examples

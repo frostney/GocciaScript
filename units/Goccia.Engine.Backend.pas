@@ -42,6 +42,7 @@ type
     FInjectedGlobals: TStringList;
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
+    procedure RequireGlobalsBootstrapReady;
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
     constructor Create(const ASourcePath: string); overload;
@@ -189,8 +190,7 @@ end;
 procedure TGocciaBytecodeBackend.RegisterGlobal(const AName: string;
   const AValue: TGocciaValue);
 begin
-  if not Assigned(FInterpreter) then
-    Exit;
+  RequireGlobalsBootstrapReady;
   if FInterpreter.GlobalScope.ContainsOwnLexicalBinding(AName) then
   begin
     if FInjectedGlobals.IndexOf(AName) >= 0 then
@@ -207,6 +207,15 @@ begin
   end;
 end;
 
+procedure TGocciaBytecodeBackend.RequireGlobalsBootstrapReady;
+begin
+  if Assigned(FInterpreter) then
+    Exit;
+  raise TGocciaRuntimeError.Create(
+    'RegisterBuiltIns must be called before globals injection.',
+    0, 0, FSourcePath, nil);
+end;
+
 procedure TGocciaBytecodeBackend.InjectGlobalsFromJSON(const AJsonString: string);
 var
   Parser: TGocciaJSONParser;
@@ -214,6 +223,7 @@ var
   Obj: TGocciaObjectValue;
   Key: string;
 begin
+  RequireGlobalsBootstrapReady;
   Parser := TGocciaJSONParser.Create;
   try
     ParsedValue := Parser.Parse(AJsonString);
@@ -242,6 +252,7 @@ var
   ParsedValue: TGocciaValue;
   Parser: TGocciaTOMLParser;
 begin
+  RequireGlobalsBootstrapReady;
   Parser := TGocciaTOMLParser.Create;
   try
     ParsedValue := Parser.Parse(ATOMLString);
@@ -271,6 +282,7 @@ var
   Obj: TGocciaObjectValue;
   Key: string;
 begin
+  RequireGlobalsBootstrapReady;
   Parser := TGocciaYAMLParser.Create;
   try
     Documents := Parser.ParseDocuments(AYamlString);
@@ -307,8 +319,7 @@ var
   Module: TGocciaModule;
   ExportPair: TGocciaValueMap.TKeyValuePair;
 begin
-  if not Assigned(FInterpreter) then
-    Exit;
+  RequireGlobalsBootstrapReady;
   Module := FInterpreter.LoadModule(APath, FSourcePath);
   for ExportPair in Module.ExportsTable do
     RegisterGlobal(ExportPair.Key, ExportPair.Value);
