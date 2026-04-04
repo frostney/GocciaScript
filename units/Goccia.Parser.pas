@@ -2331,6 +2331,8 @@ var
   LocalNames: array of string;
   ExportedNames: array of string;
   LocalNameTokenTypes: array of TGocciaTokenType;
+  LocalNameLines: array of Integer;
+  LocalNameColumns: array of Integer;
   SpecifierCount: Integer;
   NameToken: TGocciaToken;
   IsReExport: Boolean;
@@ -2432,9 +2434,13 @@ begin
     SetLength(LocalNames, SpecifierCount + 1);
     SetLength(ExportedNames, SpecifierCount + 1);
     SetLength(LocalNameTokenTypes, SpecifierCount + 1);
+    SetLength(LocalNameLines, SpecifierCount + 1);
+    SetLength(LocalNameColumns, SpecifierCount + 1);
     LocalNames[SpecifierCount] := LocalName;
     ExportedNames[SpecifierCount] := ExportedName;
     LocalNameTokenTypes[SpecifierCount] := NameToken.TokenType;
+    LocalNameLines[SpecifierCount] := NameToken.Line;
+    LocalNameColumns[SpecifierCount] := NameToken.Column;
     Inc(SpecifierCount);
 
     if not Match(gttComma) then
@@ -2448,7 +2454,7 @@ begin
       if LocalNameTokenTypes[I] = gttString then
         raise TGocciaSyntaxError.Create(
           'String-literal local exports require an identifier before "as"',
-          Line, Column, FFileName, FSourceLines);
+          LocalNameLines[I], LocalNameColumns[I], FFileName, FSourceLines);
 
   ExportsTable := TStringStringMap.Create;
   for I := 0 to SpecifierCount - 1 do
