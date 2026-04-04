@@ -77,6 +77,8 @@ type
     function Match(const ATokenTypes: array of TGocciaTokenType): Boolean; overload;
     function Match(const ATokenType: TGocciaTokenType): Boolean; overload; inline;
     function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken;
+    function IsIdentifierNameToken(
+      const ATokenType: TGocciaTokenType): Boolean;
     function ConsumeModuleExportName(const AMessage: string): TGocciaToken;
     function IsArrowFunction: Boolean;
     function ConvertNumberLiteral(const ALexeme: string): Double;
@@ -440,11 +442,28 @@ begin
     FFileName, FSourceLines);
 end;
 
+function TGocciaParser.IsIdentifierNameToken(
+  const ATokenType: TGocciaTokenType): Boolean;
+begin
+  case ATokenType of
+    gttIdentifier,
+    gttTrue, gttFalse, gttNull,
+    gttConst, gttLet, gttClass, gttEnum, gttExtends, gttNew, gttThis,
+    gttSuper, gttStatic, gttReturn, gttIf, gttElse, gttFor, gttWhile, gttDo,
+    gttSwitch, gttCase, gttDefault, gttBreak, gttThrow, gttTry, gttCatch,
+    gttFinally, gttImport, gttExport, gttFrom, gttAs, gttGet, gttSet,
+    gttVar, gttWith, gttFunction, gttTypeof, gttInstanceof, gttIn,
+    gttDelete:
+      Exit(True);
+  end;
+  Result := False;
+end;
+
 function TGocciaParser.ConsumeModuleExportName(
   const AMessage: string): TGocciaToken;
 begin
-  if Match([gttIdentifier, gttString]) then
-    Exit(Previous);
+  if Check(gttString) or IsIdentifierNameToken(Peek.TokenType) then
+    Exit(Advance);
 
   raise TGocciaSyntaxError.Create(AMessage, Peek.Line, Peek.Column,
     FFileName, FSourceLines);
