@@ -170,6 +170,8 @@ type
 
     procedure DummyThrowError(const AMessage: string; const ALine, AColumn: Integer);
     function CreateNoOpFunction: TGocciaFunctionValue;
+    function ResolveGlobalCallable(const AName: string): TGocciaFunctionBase;
+    function ResolveCallableProperty(const AName, AProperty: string): TGocciaFunctionBase;
     function RunRegisteredTests: TGocciaObjectValue;
     function CreateRunOptions: TGocciaArgumentsCollection;
     function BeforeAllCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1570,6 +1572,18 @@ begin
   Result := TGocciaFunctionValue.Create(ParamArray, Statements, FScope, 'noop');
 end;
 
+function TTestSkipAndConditionalAPIs.ResolveGlobalCallable(
+  const AName: string): TGocciaFunctionBase;
+begin
+  Result := FScope.ResolveIdentifier(AName) as TGocciaFunctionBase;
+end;
+
+function TTestSkipAndConditionalAPIs.ResolveCallableProperty(const AName,
+  AProperty: string): TGocciaFunctionBase;
+begin
+  Result := ResolveGlobalCallable(AName).GetProperty(AProperty) as TGocciaFunctionBase;
+end;
+
 function TTestSkipAndConditionalAPIs.CreateRunOptions: TGocciaArgumentsCollection;
 var
   Params: TGocciaObjectValue;
@@ -1647,13 +1661,18 @@ end;
 function TTestSkipAndConditionalAPIs.RegisterBeforeAllSuiteCallback(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  BeforeAllFunc: TGocciaFunctionBase;
+  TestFunc: TGocciaFunctionBase;
   HookArgs, TestArgs: TGocciaArgumentsCollection;
 begin
+  BeforeAllFunc := ResolveGlobalCallable('beforeAll');
+  TestFunc := ResolveGlobalCallable('test');
+
   HookArgs := TGocciaArgumentsCollection.Create([
     TGocciaNativeFunctionValue.Create(BeforeAllCallback, 'beforeAllCallback', 0)
   ]);
   try
-    FAssertions.BeforeAll(HookArgs, nil);
+    BeforeAllFunc.Call(HookArgs, nil);
   finally
     HookArgs.Free;
   end;
@@ -1663,7 +1682,7 @@ begin
     TGocciaNativeFunctionValue.Create(RecordTestBodyCallback, 'recordTest', 0)
   ]);
   try
-    FAssertions.Test(TestArgs, nil);
+    TestFunc.Call(TestArgs, nil);
   finally
     TestArgs.Free;
   end;
@@ -1673,7 +1692,7 @@ begin
     TGocciaNativeFunctionValue.Create(RecordTestBodyCallback, 'recordTest', 0)
   ]);
   try
-    FAssertions.Test(TestArgs, nil);
+    TestFunc.Call(TestArgs, nil);
   finally
     TestArgs.Free;
   end;
@@ -1684,14 +1703,19 @@ end;
 function TTestSkipAndConditionalAPIs.RegisterAfterAllSuiteCallback(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  AfterAllFunc: TGocciaFunctionBase;
+  TestFunc: TGocciaFunctionBase;
   HookArgs, TestArgs: TGocciaArgumentsCollection;
 begin
+  AfterAllFunc := ResolveGlobalCallable('afterAll');
+  TestFunc := ResolveGlobalCallable('test');
+
   TestArgs := TGocciaArgumentsCollection.Create([
     TGocciaStringLiteralValue.Create('test'),
     TGocciaNativeFunctionValue.Create(RecordTestBodyCallback, 'recordTest', 0)
   ]);
   try
-    FAssertions.Test(TestArgs, nil);
+    TestFunc.Call(TestArgs, nil);
   finally
     TestArgs.Free;
   end;
@@ -1700,7 +1724,7 @@ begin
     TGocciaNativeFunctionValue.Create(AfterAllCallback, 'afterAllCallback', 0)
   ]);
   try
-    FAssertions.AfterAll(HookArgs, nil);
+    AfterAllFunc.Call(HookArgs, nil);
   finally
     HookArgs.Free;
   end;
@@ -1711,14 +1735,16 @@ end;
 function TTestSkipAndConditionalAPIs.RegisterFocusedSuiteCallback(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  TestFunc: TGocciaFunctionBase;
   TestArgs: TGocciaArgumentsCollection;
 begin
+  TestFunc := ResolveGlobalCallable('test');
   TestArgs := TGocciaArgumentsCollection.Create([
     TGocciaStringLiteralValue.Create('focused-test'),
     TGocciaNativeFunctionValue.Create(RecordFocusedCallback, 'focused', 0)
   ]);
   try
-    FAssertions.Test(TestArgs, nil);
+    TestFunc.Call(TestArgs, nil);
   finally
     TestArgs.Free;
   end;
@@ -1729,14 +1755,16 @@ end;
 function TTestSkipAndConditionalAPIs.RegisterNonFocusedSuiteCallback(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  TestFunc: TGocciaFunctionBase;
   TestArgs: TGocciaArgumentsCollection;
 begin
+  TestFunc := ResolveGlobalCallable('test');
   TestArgs := TGocciaArgumentsCollection.Create([
     TGocciaStringLiteralValue.Create('ordinary-test'),
     TGocciaNativeFunctionValue.Create(RecordNonFocusedCallback, 'ordinary', 0)
   ]);
   try
-    FAssertions.Test(TestArgs, nil);
+    TestFunc.Call(TestArgs, nil);
   finally
     TestArgs.Free;
   end;
@@ -1747,8 +1775,10 @@ end;
 function TTestSkipAndConditionalAPIs.RegisterDescribeEachSuiteCallback(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  TestFunc: TGocciaFunctionBase;
   TestArgs: TGocciaArgumentsCollection;
 begin
+  TestFunc := ResolveGlobalCallable('test');
   if AArgs.Length > 0 then
     FRecordedEvents.Add('suite:' + AArgs.GetElement(0).ToStringLiteral.Value);
 
@@ -1757,7 +1787,7 @@ begin
     TGocciaNativeFunctionValue.Create(RecordTestBodyCallback, 'generatedTest', 0)
   ]);
   try
-    FAssertions.Test(TestArgs, nil);
+    TestFunc.Call(TestArgs, nil);
   finally
     TestArgs.Free;
   end;
@@ -2243,15 +2273,17 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestBeforeAllRunsOncePerSuite;
 var
+  DescribeFunc: TGocciaFunctionBase;
   SuiteArgs: TGocciaArgumentsCollection;
   ResultObj: TGocciaObjectValue;
 begin
+  DescribeFunc := ResolveGlobalCallable('describe');
   SuiteArgs := TGocciaArgumentsCollection.Create([
     TGocciaStringLiteralValue.Create('suite'),
     TGocciaNativeFunctionValue.Create(RegisterBeforeAllSuiteCallback, 'registerBeforeAllSuite', 0)
   ]);
   try
-    FAssertions.Describe(SuiteArgs, nil);
+    DescribeFunc.Call(SuiteArgs, nil);
   finally
     SuiteArgs.Free;
   end;
@@ -2263,15 +2295,17 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestAfterAllRunsAfterSuiteTests;
 var
+  DescribeFunc: TGocciaFunctionBase;
   SuiteArgs: TGocciaArgumentsCollection;
   ResultObj: TGocciaObjectValue;
 begin
+  DescribeFunc := ResolveGlobalCallable('describe');
   SuiteArgs := TGocciaArgumentsCollection.Create([
     TGocciaStringLiteralValue.Create('suite'),
     TGocciaNativeFunctionValue.Create(RegisterAfterAllSuiteCallback, 'registerAfterAllSuite', 0)
   ]);
   try
-    FAssertions.Describe(SuiteArgs, nil);
+    DescribeFunc.Call(SuiteArgs, nil);
   finally
     SuiteArgs.Free;
   end;
@@ -2283,15 +2317,19 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestTestOnlySkipsNonFocusedTests;
 var
+  TestFunc: TGocciaFunctionBase;
+  TestOnlyFunc: TGocciaFunctionBase;
   TestArgs: TGocciaArgumentsCollection;
   ResultObj: TGocciaObjectValue;
 begin
+  TestFunc := ResolveGlobalCallable('test');
+  TestOnlyFunc := ResolveCallableProperty('test', 'only');
   TestArgs := TGocciaArgumentsCollection.Create([
     TGocciaStringLiteralValue.Create('ordinary'),
     TGocciaNativeFunctionValue.Create(RecordNonFocusedCallback, 'ordinary', 0)
   ]);
   try
-    FAssertions.Test(TestArgs, nil);
+    TestFunc.Call(TestArgs, nil);
   finally
     TestArgs.Free;
   end;
@@ -2301,7 +2339,7 @@ begin
     TGocciaNativeFunctionValue.Create(RecordFocusedCallback, 'focused', 0)
   ]);
   try
-    FAssertions.TestOnly(TestArgs, nil);
+    TestOnlyFunc.Call(TestArgs, nil);
   finally
     TestArgs.Free;
   end;
@@ -2314,25 +2352,22 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestItOnlySkipsNonFocusedTests;
 var
-  ItValue: TGocciaValue;
-  OnlyValue: TGocciaValue;
-  OnlyFunc: TGocciaNativeFunctionValue;
+  TestFunc: TGocciaFunctionBase;
+  OnlyFunc: TGocciaFunctionBase;
   TestArgs: TGocciaArgumentsCollection;
   ResultObj: TGocciaObjectValue;
 begin
+  TestFunc := ResolveGlobalCallable('test');
+  OnlyFunc := ResolveCallableProperty('it', 'only');
   TestArgs := TGocciaArgumentsCollection.Create([
     TGocciaStringLiteralValue.Create('ordinary'),
     TGocciaNativeFunctionValue.Create(RecordNonFocusedCallback, 'ordinary', 0)
   ]);
   try
-    FAssertions.Test(TestArgs, nil);
+    TestFunc.Call(TestArgs, nil);
   finally
     TestArgs.Free;
   end;
-
-  ItValue := FScope.ResolveIdentifier('it');
-  OnlyValue := ItValue.GetProperty('only');
-  OnlyFunc := OnlyValue as TGocciaNativeFunctionValue;
   TestArgs := TGocciaArgumentsCollection.Create([
     TGocciaStringLiteralValue.Create('focused'),
     TGocciaNativeFunctionValue.Create(RecordFocusedCallback, 'focused', 0)
@@ -2351,15 +2386,19 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestDescribeOnlySkipsNonFocusedSuites;
 var
+  DescribeFunc: TGocciaFunctionBase;
+  DescribeOnlyFunc: TGocciaFunctionBase;
   SuiteArgs: TGocciaArgumentsCollection;
   ResultObj: TGocciaObjectValue;
 begin
+  DescribeFunc := ResolveGlobalCallable('describe');
+  DescribeOnlyFunc := ResolveCallableProperty('describe', 'only');
   SuiteArgs := TGocciaArgumentsCollection.Create([
     TGocciaStringLiteralValue.Create('ordinary-suite'),
     TGocciaNativeFunctionValue.Create(RegisterNonFocusedSuiteCallback, 'ordinarySuite', 0)
   ]);
   try
-    FAssertions.Describe(SuiteArgs, nil);
+    DescribeFunc.Call(SuiteArgs, nil);
   finally
     SuiteArgs.Free;
   end;
@@ -2369,7 +2408,7 @@ begin
     TGocciaNativeFunctionValue.Create(RegisterFocusedSuiteCallback, 'focusedSuite', 0)
   ]);
   try
-    FAssertions.DescribeOnly(SuiteArgs, nil);
+    DescribeOnlyFunc.Call(SuiteArgs, nil);
   finally
     SuiteArgs.Free;
   end;
@@ -2382,14 +2421,16 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestTestTodoRegistersSkippedPlaceholder;
 var
+  TodoFunc: TGocciaFunctionBase;
   TodoArgs: TGocciaArgumentsCollection;
   ResultObj: TGocciaObjectValue;
 begin
+  TodoFunc := ResolveCallableProperty('test', 'todo');
   TodoArgs := TGocciaArgumentsCollection.Create([
     TGocciaStringLiteralValue.Create('todo')
   ]);
   try
-    FAssertions.TestTodo(TodoArgs, nil);
+    TodoFunc.Call(TodoArgs, nil);
   finally
     TodoArgs.Free;
   end;
@@ -2402,15 +2443,17 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestTestEachReturnsCallable;
 var
+  TestEachFunc: TGocciaFunctionBase;
   EachArgs: TGocciaArgumentsCollection;
   Table: TGocciaArrayValue;
   ResultValue: TGocciaValue;
 begin
+  TestEachFunc := ResolveCallableProperty('test', 'each');
   Table := TGocciaArrayValue.Create;
   Table.Elements.Add(TGocciaArrayValue.Create);
   EachArgs := TGocciaArgumentsCollection.Create([Table]);
   try
-    ResultValue := FAssertions.TestEach(EachArgs, nil);
+    ResultValue := TestEachFunc.Call(EachArgs, nil);
     Expect<Boolean>(ResultValue.IsCallable).ToBe(True);
   finally
     EachArgs.Free;
@@ -2419,11 +2462,13 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestTestEachRegistersExpandedTests;
 var
+  TestEachFunc: TGocciaFunctionBase;
   EachArgs, RegisterArgs: TGocciaArgumentsCollection;
   Table, Row: TGocciaArrayValue;
   ReturnedFunc: TGocciaFunctionBase;
   ResultObj: TGocciaObjectValue;
 begin
+  TestEachFunc := ResolveCallableProperty('test', 'each');
   Table := TGocciaArrayValue.Create;
 
   Row := TGocciaArrayValue.Create;
@@ -2437,7 +2482,7 @@ begin
 
   EachArgs := TGocciaArgumentsCollection.Create([Table]);
   try
-    ReturnedFunc := FAssertions.TestEach(EachArgs, nil) as TGocciaFunctionBase;
+    ReturnedFunc := TestEachFunc.Call(EachArgs, nil) as TGocciaFunctionBase;
   finally
     EachArgs.Free;
   end;
@@ -2460,15 +2505,17 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestDescribeEachReturnsCallable;
 var
+  DescribeEachFunc: TGocciaFunctionBase;
   EachArgs: TGocciaArgumentsCollection;
   Table: TGocciaArrayValue;
   ResultValue: TGocciaValue;
 begin
+  DescribeEachFunc := ResolveCallableProperty('describe', 'each');
   Table := TGocciaArrayValue.Create;
   Table.Elements.Add(TGocciaArrayValue.Create);
   EachArgs := TGocciaArgumentsCollection.Create([Table]);
   try
-    ResultValue := FAssertions.DescribeEach(EachArgs, nil);
+    ResultValue := DescribeEachFunc.Call(EachArgs, nil);
     Expect<Boolean>(ResultValue.IsCallable).ToBe(True);
   finally
     EachArgs.Free;
@@ -2477,11 +2524,13 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestDescribeEachRegistersExpandedSuites;
 var
+  DescribeEachFunc: TGocciaFunctionBase;
   EachArgs, RegisterArgs: TGocciaArgumentsCollection;
   Table, Row: TGocciaArrayValue;
   ReturnedFunc: TGocciaFunctionBase;
   ResultObj: TGocciaObjectValue;
 begin
+  DescribeEachFunc := ResolveCallableProperty('describe', 'each');
   Table := TGocciaArrayValue.Create;
 
   Row := TGocciaArrayValue.Create;
@@ -2494,7 +2543,7 @@ begin
 
   EachArgs := TGocciaArgumentsCollection.Create([Table]);
   try
-    ReturnedFunc := FAssertions.DescribeEach(EachArgs, nil) as TGocciaFunctionBase;
+    ReturnedFunc := DescribeEachFunc.Call(EachArgs, nil) as TGocciaFunctionBase;
   finally
     EachArgs.Free;
   end;
