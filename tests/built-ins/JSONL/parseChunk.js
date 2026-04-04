@@ -49,4 +49,8 @@ describe("JSONL.parseChunk", () => {
     expect(result.done).toBe(true);
     expect(result.error).toBe(null);
   });
+
+  test("throws TypeError for unsupported typed array input", () => {
+    expect(() => JSONL.parseChunk(new Int8Array([123]))).toThrow(TypeError);
+  });
 });

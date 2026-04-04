@@ -95,7 +95,7 @@ class function TGocciaJSONLBuiltin.ReadUint8ArrayBytes(
   const AInput: TGocciaTypedArrayValue): TBytes;
 begin
   if AInput.Kind <> takUint8 then
-    raise EGocciaJSONLParseError.Create(
+    raise EGocciaJSONLInvalidInputError.Create(
       'JSONL input must be a string or Uint8Array');
 
   SetLength(Result, AInput.Length);
@@ -143,8 +143,10 @@ begin
       Result := FParser.Parse(Bytes);
     end
     else
-      ThrowError('JSONL.parse: argument must be a string or Uint8Array', 0, 0);
+      ThrowTypeError('JSONL.parse: argument must be a string or Uint8Array');
   except
+    on E: EGocciaJSONLInvalidInputError do
+      ThrowTypeError(E.Message);
     on E: EGocciaJSONLParseError do
       ThrowSyntaxError(E.Message);
   end;
@@ -209,9 +211,10 @@ begin
       Exit;
     end;
 
-    ThrowError('JSONL.parseChunk: argument must be a string or Uint8Array',
-      0, 0);
+    ThrowTypeError('JSONL.parseChunk: argument must be a string or Uint8Array');
   except
+    on E: EGocciaJSONLInvalidInputError do
+      ThrowTypeError(E.Message);
     on E: EGocciaJSONLParseError do
       ThrowSyntaxError(E.Message);
   end;

@@ -43,4 +43,8 @@ describe("JSONL.parse", () => {
     expect(error instanceof SyntaxError).toBe(true);
     expect(error.message.includes("JSONL line 2")).toBe(true);
   });
+
+  test("throws TypeError for unsupported typed array input", () => {
+    expect(() => JSONL.parse(new Int8Array([123]))).toThrow(TypeError);
+  });
 });

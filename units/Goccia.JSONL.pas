@@ -13,6 +13,7 @@ uses
 
 type
   EGocciaJSONLParseError = class(Exception);
+  EGocciaJSONLInvalidInputError = class(Exception);
 
   TGocciaJSONLChunkParseResult = record
     Values: TGocciaArrayValue;
