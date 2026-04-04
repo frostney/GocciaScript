@@ -19,6 +19,7 @@ uses
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
   Goccia.Runtime.Bootstrap,
+  Goccia.TOML,
   Goccia.Values.Primitives,
   Goccia.VM,
   Goccia.YAML;
@@ -54,6 +55,7 @@ type
 
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
+    procedure InjectGlobalsFromTOML(const ATOMLString: string);
     procedure InjectGlobalsFromYAML(const AYamlString: string);
     procedure InjectGlobalsFromModule(const APath: string);
     procedure RegisterBuiltIns(const AGlobals: TGocciaGlobalBuiltins);
@@ -221,6 +223,34 @@ begin
 
   if not (ParsedValue is TGocciaObjectValue) then
     raise TGocciaRuntimeError.Create('Globals JSON must be a top-level object.',
+      0, 0, FSourcePath, nil);
+
+  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Obj := TGocciaObjectValue(ParsedValue);
+    for Key in Obj.GetOwnPropertyKeys do
+      RegisterGlobal(Key, Obj.GetProperty(Key));
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+procedure TGocciaBytecodeBackend.InjectGlobalsFromTOML(const ATOMLString: string);
+var
+  Key: string;
+  Obj: TGocciaObjectValue;
+  ParsedValue: TGocciaValue;
+  Parser: TGocciaTOMLParser;
+begin
+  Parser := TGocciaTOMLParser.Create;
+  try
+    ParsedValue := Parser.Parse(ATOMLString);
+  finally
+    Parser.Free;
+  end;
+
+  if not (ParsedValue is TGocciaObjectValue) then
+    raise TGocciaRuntimeError.Create('Globals TOML must be a top-level object.',
       0, 0, FSourcePath, nil);
 
   TGarbageCollector.Instance.AddTempRoot(ParsedValue);

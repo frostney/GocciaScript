@@ -17,4 +17,6 @@ build/*.Test
 # Node modules
 node_modules/
 
+scripts/__pycache__/
+
 tests-wasm/*.wasm

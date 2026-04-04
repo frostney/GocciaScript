@@ -17,6 +17,7 @@ TGocciaGlobalBuiltin = (
   ggGlobalNumber,     // Number.parseInt, Number.isNaN, etc.
   ggPromise,          // Promise constructor, prototype, static methods, microtask queue
   ggJSON,             // JSON.parse, JSON.stringify
+  ggTOML,             // TOML.parse
   ggSymbol,           // Symbol, Symbol.for, Symbol.keyFor
   ggSet,              // Set constructor and prototype
   ggMap,              // Map constructor and prototype
@@ -33,7 +34,7 @@ The default set used by `ScriptLoader` and `REPL`:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggSymbol, ggSet, ggMap,
+                  ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggSymbol, ggSet, ggMap,
                   ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
 ```
 
@@ -161,6 +162,18 @@ Tagged values preserve runtime metadata through `.tagName` and `.value`. Custom 
 Explicit keys (`? key`) are supported, including omitted explicit values and zero-indented sequence values. Because GocciaScript mappings are backed by string-keyed objects, non-scalar YAML keys are canonicalized into stable JSON-like strings during parsing, and anchored mapping keys now parse instead of being rejected outright.
 
 Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time while keeping Bun-compatible YAML runtime behavior where practical. The current parser is still a partial implementation. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
+
+### TOML (`Goccia.Builtins.TOML.pas`)
+
+| Method | Description |
+|--------|-------------|
+| `TOML.parse(text)` | Parse TOML 1.1.0 text into Goccia values |
+
+`TOML.parse` delegates to the standalone `TGocciaTOMLParser` utility in `Goccia.TOML`, mirroring the JSON and YAML split between parser utility and runtime surface. The current TOML surface supports strings (basic, literal, and multiline variants), integers, floats, booleans, arrays, inline tables, regular tables, arrays of tables, dotted keys, and TOML 1.1.0 date/time values.
+
+TOML date/time values currently map to validated string scalars rather than Temporal values. This keeps the runtime and module-import behavior stable for v1 while leaving room for future Temporal-aware interop.
+
+Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over time. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official `toml-test` rerun command is `python3 scripts/run_toml_test_suite.py`.
 
 ### Object (`Goccia.Builtins.GlobalObject.pas`)
 

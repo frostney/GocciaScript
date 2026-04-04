@@ -159,11 +159,37 @@ jobs:
           done
 
           echo ""
+          echo "=== Building GocciaTOMLCheck for ${TARGET} ==="
+          "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
+            -Fu./units -Fu./souffle \
+            -Fi./units -Fi./souffle \
+            -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$REGEXPR_SRC" \
+            -FU"build" -FE"build" \
+            $EXTRA_FLAGS \
+            -dFPC_SOFT_FPUX80 \
+            "./scripts/GocciaTOMLCheck.dpr"
+          echo "GocciaTOMLCheck built successfully for ${TARGET}"
+
+          echo ""
           echo "=== Build artifacts for ${TARGET} ==="
           ls -la build/
 
       - name: Stage build artifacts
         run: bash ./.github/scripts/stage-build-artifacts.sh build ci-artifacts --include-tests
+
+      - name: Stage TOML compliance harness
+        run: |
+          copied=0
+          for candidate in build/GocciaTOMLCheck build/GocciaTOMLCheck.exe; do
+            if [ -f "$candidate" ]; then
+              cp "$candidate" ci-artifacts/
+              copied=1
+            fi
+          done
+          if [ "$copied" -eq 0 ]; then
+            echo "::error::Missing compiled GocciaTOMLCheck binary in build/"
+            exit 1
+          fi
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v5
@@ -235,6 +261,85 @@ jobs:
             echo "::error::No Pascal unit test binaries found"
             exit 1
           fi
+
+  toml-compliance:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-darwin
+            runner: macos-latest
+          - target: x86_64-darwin
+            runner: macos-15-intel
+          - target: x86_64-linux
+            runner: ubuntu-latest
+          - target: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - target: x86_64-win64
+            runner: windows-latest
+          - target: i386-win32
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download build
+        uses: actions/download-artifact@v5
+        with:
+          name: gocciascript-${{ matrix.target }}
+          path: build/
+
+      - name: Make binaries executable
+        if: runner.os != 'Windows'
+        run: chmod +x build/*
+
+      - name: Run TOML 1.1.0 compliance suite
+        run: |
+          HARNESS="./build/GocciaTOMLCheck"
+          if [ -f "./build/GocciaTOMLCheck.exe" ]; then
+            HARNESS="./build/GocciaTOMLCheck.exe"
+          fi
+          python3 scripts/run_toml_test_suite.py --harness="$HARNESS" --output=toml-test-results-${{ matrix.target }}.json
+
+      - name: Check TOML compliance summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          path = Path("toml-test-results-${{ matrix.target }}.json")
+          if not path.exists():
+            print(f"::error::Missing TOML report: {path}")
+            sys.exit(1)
+
+          summary = json.loads(path.read_text())["summary"]
+          expected_zero = ["failed", "false_accepts", "false_rejects", "valid_mismatches", "timeouts"]
+          for key in expected_zero:
+            if summary.get(key) != 0:
+              print(f"::error::{key}={summary.get(key)} in {path}")
+              print(json.dumps(summary, indent=2))
+              sys.exit(1)
+          if summary.get("total") != summary.get("passed"):
+            print(f"::error::passed={summary.get('passed')} total={summary.get('total')} in {path}")
+            print(json.dumps(summary, indent=2))
+            sys.exit(1)
+          PY
+
+      - name: Upload TOML compliance report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: toml-test-results-${{ matrix.target }}
+          retention-days: 1
+          path: toml-test-results-${{ matrix.target }}.json
 
   benchmark:
     needs: build
@@ -514,7 +619,7 @@ jobs:
           printf '%s\n' "$error_output" | grep -q '"message":"boom"'
 
   artifacts:
-    needs: [test, benchmark, examples]
+    needs: [test, toml-compliance, benchmark, examples]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
@@ -548,7 +653,7 @@ jobs:
           path: release-artifacts/*
 
   release:
-    needs: [test, benchmark, examples]
+    needs: [test, toml-compliance, benchmark, examples]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     defaults:

@@ -86,7 +86,7 @@ See [Language Restrictions](docs/language-restrictions.md) for details on suppor
 
 ### Built-in Objects
 
-`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `Promise`, `Temporal`, `Iterator`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`) with ArrayBuffer and SharedArrayBuffer backing, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
+`console`, `Math`, `JSON`, `TOML`, `YAML`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `Promise`, `Temporal`, `Iterator`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`) with ArrayBuffer and SharedArrayBuffer backing, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
 
 See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 
@@ -177,8 +177,9 @@ printf "console.log('hi'); 2 + 2;" | ./build/ScriptLoader --output=json
 # Inject globals from the CLI
 printf "x + y;" | ./build/ScriptLoader --global x=10 --global y=20
 printf "name;" | ./build/ScriptLoader --globals=context.json --output=json
+printf "name;" | ./build/ScriptLoader --globals=context.toml --output=json
 printf "name;" | ./build/ScriptLoader --globals=context.yaml --output=json
-# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON or YAML by file extension.
+# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, TOML, or YAML by file extension.
 # Injected globals can override earlier injected values, but not built-in globals like console
 
 # Abort long-running scripts
@@ -282,8 +283,15 @@ Structured data files can also be consumed directly:
 
 ```javascript
 import { name, version } from "./package.json";
+import { name as packageName, debug } from "./config.toml";
 import { name as appName, debug } from "./config.yaml";
 import { "0" as firstDoc, "1" as secondDoc } from "./multi.yaml";
+```
+
+For TOML in runtime code, use the built-in parser:
+
+```javascript
+const config = TOML.parse(sourceText);
 ```
 
 If you want a YAML stream as an array in runtime code instead of module exports, use the explicit document parser:
@@ -293,6 +301,10 @@ const docs = YAML.parseDocuments(sourceText);
 ```
 
 `YAML.parse(sourceText)` also returns an array when the input uses explicit `---` document markers, matching Bun's YAML runtime behavior.
+
+`TOML.parse(sourceText)` parses TOML 1.1.0 configuration data into normal Goccia values. TOML date/time values currently map to validated string scalars in runtime code and module imports, which keeps the v1 surface stable while leaving room for future Temporal interop.
+
+The TOML surface is now also checked against the official `toml-test` corpus. A rerun against the TOML 1.1.0 file list on 2026-04-04 matched all 680 of 680 expected outcomes, with 0 false accepts, 0 false rejects, and 0 valid-case mismatches. You can rerun the official suite locally with `python3 scripts/run_toml_test_suite.py`.
 
 The current YAML surface already handles common configuration files, including mappings, sequences, block and multiline flow collections (including single-pair mapping items like `[foo: bar]`, empty implicit keys, trailing commas, and stricter rejection of malformed empty interior entries), anchors, aliases, merge keys, self-referential alias graphs for mappings and sequences, block scalars (`|`, `>`, chomping modifiers, and indentation indicators), multiline plain and quoted scalar folding, YAML 1.2 numeric scalar resolution (including base-prefixed integers, exponent forms, and validated digit separators), YAML double-quoted escapes (`\x`, `\u`, `\U`, line continuations, and YAML-specific escapes), and document directives/tags such as `%YAML`, `%TAG`, `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!seq`, `!!map`, `!!timestamp`, and `!!binary`. Directives are still validated as document-preamble syntax, so they are rejected if they appear after document content without an intervening document boundary.
 

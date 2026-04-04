@@ -195,10 +195,16 @@ import { name, version } from "./package.json";
 import { host as dbHost } from "./config.json";
 import { "foo-bar" as featureFlag } from "./feature-flags.json";
 
+// TOML imports — top-level keys become named exports
+import { name, version } from "./package.toml";
+import { host as dbHost } from "./config.toml";
+
 // YAML imports — top-level keys become named exports
 import { name, version } from "./package.yaml";
 import { host as dbHost } from "./config.yml";
 import { "0" as firstDoc } from "./multi-doc-index.yaml";
+
+TOML module imports follow the same top-level-object export model as JSON modules. `.toml` files are parsed as TOML 1.1.0 and exposed as named exports from the root table. Arrays of tables stay arrays, nested tables stay objects, and TOML date/time values currently surface as validated strings rather than Temporal values.
 
 Single-document YAML module imports follow the same top-level-object export model as JSON modules. Multi-document YAML streams are also supported for `.yaml` and `.yml` imports: each document is exposed as a named export under its zero-based string index (`"0"`, `"1"`, ...). If you want an array of documents inside normal runtime code instead of module exports, use `YAML.parseDocuments(...)`. Block scalars, multiline plain and quoted scalar folding, multiline flow collections, YAML 1.2 numeric scalar resolution, YAML double-quoted escapes, self-referential alias graphs, stricter flow collection validation, empty implicit keys, anchored mapping keys, `%YAML` / `%TAG` directives, standard tags, tagged-value metadata (`.tagName`, `.value`), and explicit keys including omitted explicit values are supported.
 

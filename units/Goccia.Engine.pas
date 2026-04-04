@@ -28,6 +28,7 @@ uses
   Goccia.Builtins.Performance,
   Goccia.Builtins.Temporal,
   Goccia.Builtins.TestAssertions,
+  Goccia.Builtins.TOML,
   Goccia.Builtins.YAML,
   Goccia.Interpreter,
   Goccia.JSON,
@@ -39,6 +40,7 @@ uses
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
   Goccia.Parser,
+  Goccia.TOML,
   Goccia.Values.ClassValue,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
@@ -56,6 +58,7 @@ type
     ggGlobalNumber,
     ggPromise,
     ggJSON,
+    ggTOML,
     ggYAML,
     ggSymbol,
     ggSet,
@@ -82,7 +85,7 @@ type
 type
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
   private
     FInterpreter: TGocciaInterpreter;
     FFileName: string;
@@ -102,6 +105,7 @@ type
     FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
     FBuiltinJSON: TGocciaJSONBuiltin;
+    FBuiltinTOML: TGocciaTOMLBuiltin;
     FBuiltinYAML: TGocciaYAMLBuiltin;
     FBuiltinSymbol: TGocciaGlobalSymbol;
     FBuiltinSet: TGocciaGlobalSet;
@@ -141,6 +145,7 @@ type
     procedure AddAlias(const APattern, AReplacement: string);
     procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
+    procedure InjectGlobalsFromTOML(const ATOMLString: string);
     procedure InjectGlobalsFromYAML(const AYamlString: string);
     procedure InjectGlobalsFromModule(const APath: string);
     procedure RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
@@ -162,6 +167,7 @@ type
     property BuiltinGlobalNumber: TGocciaGlobalNumber read FBuiltinGlobalNumber;
     property BuiltinGlobals: TGocciaGlobals read FBuiltinGlobals;
     property BuiltinJSON: TGocciaJSONBuiltin read FBuiltinJSON;
+    property BuiltinTOML: TGocciaTOMLBuiltin read FBuiltinTOML;
     property BuiltinYAML: TGocciaYAMLBuiltin read FBuiltinYAML;
     property BuiltinSymbol: TGocciaGlobalSymbol read FBuiltinSymbol;
     property BuiltinSet: TGocciaGlobalSet read FBuiltinSet;
@@ -274,9 +280,10 @@ begin
     FBuiltinGlobalNumber.Free;
     FBuiltinRegExp.Free;
     FBuiltinGlobalString.Free;
-    FBuiltinGlobals.Free;
-    FBuiltinJSON.Free;
-    FBuiltinYAML.Free;
+  FBuiltinGlobals.Free;
+  FBuiltinJSON.Free;
+  FBuiltinTOML.Free;
+  FBuiltinYAML.Free;
     FBuiltinSymbol.Free;
     FBuiltinSet.Free;
     FBuiltinMap.Free;
@@ -322,6 +329,8 @@ begin
     FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, ThrowError);
   if ggJSON in FGlobals then
     FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, ThrowError);
+  if ggTOML in FGlobals then
+    FBuiltinTOML := TGocciaTOMLBuiltin.Create('TOML', Scope, ThrowError);
   if ggYAML in FGlobals then
     FBuiltinYAML := TGocciaYAMLBuiltin.Create('YAML', Scope, ThrowError);
   if ggSymbol in FGlobals then
@@ -648,6 +657,34 @@ begin
 
   if not (ParsedValue is TGocciaObjectValue) then
     raise TGocciaRuntimeError.Create('Globals JSON must be a top-level object.',
+      0, 0, FFileName, nil);
+
+  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Obj := TGocciaObjectValue(ParsedValue);
+    for Key in Obj.GetOwnPropertyKeys do
+      InjectGlobal(Key, Obj.GetProperty(Key));
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+procedure TGocciaEngine.InjectGlobalsFromTOML(const ATOMLString: string);
+var
+  Key: string;
+  Obj: TGocciaObjectValue;
+  ParsedValue: TGocciaValue;
+  Parser: TGocciaTOMLParser;
+begin
+  Parser := TGocciaTOMLParser.Create;
+  try
+    ParsedValue := Parser.Parse(ATOMLString);
+  finally
+    Parser.Free;
+  end;
+
+  if not (ParsedValue is TGocciaObjectValue) then
+    raise TGocciaRuntimeError.Create('Globals TOML must be a top-level object.',
       0, 0, FFileName, nil);
 
   TGarbageCollector.Instance.AddTempRoot(ParsedValue);

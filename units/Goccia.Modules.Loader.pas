@@ -68,6 +68,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.TOML,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -364,6 +365,7 @@ var
   ParsedDocument: TGocciaValue;
   ParsedValue: TGocciaValue;
   JSONParser: TGocciaJSONParser;
+  TOMLParser: TGocciaTOMLParser;
   YAMLParser: TGocciaYAMLParser;
   LoadSucceeded: Boolean;
 begin
@@ -388,6 +390,23 @@ begin
         end;
       finally
         JSONParser.Free;
+      end;
+    end
+    else if Extension = EXT_TOML then
+    begin
+      TOMLParser := TGocciaTOMLParser.Create;
+      try
+        try
+          ParsedValue := TOMLParser.Parse(Content.Text);
+        except
+          on E: EGocciaTOMLParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse TOML module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
+        end;
+      finally
+        TOMLParser.Free;
       end;
     end
     else
@@ -421,7 +440,7 @@ begin
     Module.LastModified := Content.LastModified;
     LoadSucceeded := False;
     try
-      if Extension = EXT_JSON then
+      if (Extension = EXT_JSON) or (Extension = EXT_TOML) then
         ParsedDocument := ParsedValue;
 
       if Assigned(Documents) and (Documents.Elements.Count > 1) then
