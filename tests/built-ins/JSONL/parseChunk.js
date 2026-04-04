@@ -50,6 +50,16 @@ describe("JSONL.parseChunk", () => {
     expect(result.error).toBe(null);
   });
 
+  test("handles NaN and infinities in start/end offsets", () => {
+    const input = '{"id":1}\n{"id":2}\n';
+
+    expect(JSONL.parseChunk(input, NaN).values.length).toBe(2);
+    expect(JSONL.parseChunk(input, -Infinity).values.length).toBe(2);
+    expect(JSONL.parseChunk(input, Infinity).values.length).toBe(0);
+    expect(JSONL.parseChunk(input, 0, Infinity).values.length).toBe(2);
+    expect(JSONL.parseChunk(input, 0, -Infinity).values.length).toBe(0);
+  });
+
   test("throws TypeError for unsupported typed array input", () => {
     expect(() => JSONL.parseChunk(new Int8Array([123]))).toThrow(TypeError);
   });

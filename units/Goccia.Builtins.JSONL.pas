@@ -161,6 +161,7 @@ var
   ChunkResult: TGocciaJSONLChunkParseResult;
   EndOffset: Integer;
   Input: TGocciaValue;
+  OffsetArg: TGocciaNumberLiteralValue;
   StartOffset: Integer;
   TextLength: Integer;
 begin
@@ -173,14 +174,28 @@ begin
     begin
       TextLength := Length(Input.ToStringLiteral.Value);
       if AArgs.Length >= 2 then
-        StartOffset := ClampOffset(
-          Trunc(AArgs.GetElement(1).ToNumberLiteral.Value), TextLength)
+      begin
+        OffsetArg := AArgs.GetElement(1).ToNumberLiteral;
+        if OffsetArg.IsNaN or OffsetArg.IsNegativeInfinity then
+          StartOffset := 0
+        else if OffsetArg.IsInfinite then
+          StartOffset := TextLength
+        else
+          StartOffset := ClampOffset(Trunc(OffsetArg.Value), TextLength);
+      end
       else
         StartOffset := 0;
 
       if AArgs.Length >= 3 then
-        EndOffset := ClampOffset(
-          Trunc(AArgs.GetElement(2).ToNumberLiteral.Value), TextLength)
+      begin
+        OffsetArg := AArgs.GetElement(2).ToNumberLiteral;
+        if OffsetArg.IsNaN or OffsetArg.IsNegativeInfinity then
+          EndOffset := 0
+        else if OffsetArg.IsInfinite then
+          EndOffset := TextLength
+        else
+          EndOffset := ClampOffset(Trunc(OffsetArg.Value), TextLength);
+      end
       else
         EndOffset := TextLength;
 
@@ -195,14 +210,28 @@ begin
       Bytes := ReadUint8ArrayBytes(TGocciaTypedArrayValue(Input));
       ByteLength := Length(Bytes);
       if AArgs.Length >= 2 then
-        StartOffset := ClampOffset(
-          Trunc(AArgs.GetElement(1).ToNumberLiteral.Value), ByteLength)
+      begin
+        OffsetArg := AArgs.GetElement(1).ToNumberLiteral;
+        if OffsetArg.IsNaN or OffsetArg.IsNegativeInfinity then
+          StartOffset := 0
+        else if OffsetArg.IsInfinite then
+          StartOffset := ByteLength
+        else
+          StartOffset := ClampOffset(Trunc(OffsetArg.Value), ByteLength);
+      end
       else
         StartOffset := 0;
 
       if AArgs.Length >= 3 then
-        EndOffset := ClampOffset(
-          Trunc(AArgs.GetElement(2).ToNumberLiteral.Value), ByteLength)
+      begin
+        OffsetArg := AArgs.GetElement(2).ToNumberLiteral;
+        if OffsetArg.IsNaN or OffsetArg.IsNegativeInfinity then
+          EndOffset := 0
+        else if OffsetArg.IsInfinite then
+          EndOffset := ByteLength
+        else
+          EndOffset := ClampOffset(Trunc(OffsetArg.Value), ByteLength);
+      end
       else
         EndOffset := ByteLength;
 
