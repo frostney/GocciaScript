@@ -2316,6 +2316,7 @@ procedure TTestSkipAndConditionalAPIs.TestItOnlySkipsNonFocusedTests;
 var
   ItValue: TGocciaValue;
   OnlyValue: TGocciaValue;
+  OnlyFunc: TGocciaNativeFunctionValue;
   TestArgs: TGocciaArgumentsCollection;
   ResultObj: TGocciaObjectValue;
 begin
@@ -2331,12 +2332,13 @@ begin
 
   ItValue := FScope.ResolveIdentifier('it');
   OnlyValue := ItValue.GetProperty('only');
+  OnlyFunc := OnlyValue as TGocciaNativeFunctionValue;
   TestArgs := TGocciaArgumentsCollection.Create([
     TGocciaStringLiteralValue.Create('focused'),
     TGocciaNativeFunctionValue.Create(RecordFocusedCallback, 'focused', 0)
   ]);
   try
-    TGocciaNativeFunctionValue(OnlyValue).Call(TestArgs, nil);
+    OnlyFunc.Call(TestArgs, nil);
   finally
     TestArgs.Free;
   end;
@@ -2435,7 +2437,7 @@ begin
 
   EachArgs := TGocciaArgumentsCollection.Create([Table]);
   try
-    ReturnedFunc := TGocciaFunctionBase(FAssertions.TestEach(EachArgs, nil));
+    ReturnedFunc := FAssertions.TestEach(EachArgs, nil) as TGocciaFunctionBase;
   finally
     EachArgs.Free;
   end;
@@ -2492,7 +2494,7 @@ begin
 
   EachArgs := TGocciaArgumentsCollection.Create([Table]);
   try
-    ReturnedFunc := TGocciaFunctionBase(FAssertions.DescribeEach(EachArgs, nil));
+    ReturnedFunc := FAssertions.DescribeEach(EachArgs, nil) as TGocciaFunctionBase;
   finally
     EachArgs.Free;
   end;
