@@ -5,6 +5,7 @@ unit Goccia.Builtins.TestAssertions;
 interface
 
 uses
+  Classes,
   Generics.Collections,
 
   Goccia.Arguments.Collection,
@@ -21,23 +22,77 @@ uses
 
 type
   TGocciaTestAssertions = class;
+  TGocciaRegisteredEntry = class;
+  TGocciaTestSuite = class;
+  TGocciaTestCase = class;
+  TGocciaParameterizedRegistrationFunction = class;
 
-  // Class to hold registered test suites (instead of record)
-  TGocciaTestSuite = class
+  TGocciaTestHookPhase = (thBeforeAll, thBeforeEach, thAfterEach, thAfterAll);
+  TGocciaParameterizedRegistrationTarget = (prtDescribe, prtTest);
+
+  TGocciaRegisteredEntryList = TObjectList<TGocciaRegisteredEntry>;
+
+  TGocciaRegisteredEntry = class
+  public
+    ParentSuite: TGocciaTestSuite;
+    IsSkipped: Boolean;
+    IsFocused: Boolean;
+    constructor Create(const AParentSuite: TGocciaTestSuite; const AIsSkipped: Boolean = False;
+      const AIsFocused: Boolean = False);
+    function DisplayName: string; virtual; abstract;
+    function GetFullName: string; virtual; abstract;
+  end;
+
+  TGocciaTestSuite = class(TGocciaRegisteredEntry)
   public
     Name: string;
     SuiteFunction: TGocciaFunctionBase;
-    IsSkipped: Boolean;
-    constructor Create(const AName: string; const ASuiteFunction: TGocciaFunctionBase; const AIsSkipped: Boolean = False);
+    SuiteArguments: TGocciaArgumentsCollection;
+    Entries: TGocciaRegisteredEntryList;
+    BeforeAllCallbacks: TGocciaArgumentsCollection;
+    BeforeEachCallbacks: TGocciaArgumentsCollection;
+    AfterEachCallbacks: TGocciaArgumentsCollection;
+    AfterAllCallbacks: TGocciaArgumentsCollection;
+    constructor Create(const AParentSuite: TGocciaTestSuite; const AName: string;
+      const ASuiteFunction: TGocciaFunctionBase; const AArguments: TGocciaArgumentsCollection;
+      const AIsSkipped: Boolean = False; const AIsFocused: Boolean = False);
+    destructor Destroy; override;
+    procedure AddEntry(const AEntry: TGocciaRegisteredEntry);
+    procedure AddHook(const ACallback: TGocciaFunctionBase; const APhase: TGocciaTestHookPhase);
+    procedure ClearRegisteredContent;
+    function DisplayName: string; override;
+    function GetFullName: string; override;
   end;
 
-  TGocciaTestCase = class
+  TGocciaTestCase = class(TGocciaRegisteredEntry)
   public
     Name: string;
     TestFunction: TGocciaFunctionBase;
-    SuiteName: string;
-    IsSkipped: Boolean;
-    constructor Create(const AName: string; const ATestFunction: TGocciaFunctionBase; const ASuiteName: string; const AIsSkipped: Boolean = False);
+    TestArguments: TGocciaArgumentsCollection;
+    IsTodo: Boolean;
+    constructor Create(const AParentSuite: TGocciaTestSuite; const AName: string;
+      const ATestFunction: TGocciaFunctionBase; const AArguments: TGocciaArgumentsCollection;
+      const AIsSkipped: Boolean = False; const AIsFocused: Boolean = False;
+      const AIsTodo: Boolean = False);
+    destructor Destroy; override;
+    function DisplayName: string; override;
+    function GetFullName: string; override;
+  end;
+
+  TGocciaParameterizedRegistrationFunction = class(TGocciaFunctionBase)
+  private
+    FTestAssertions: TGocciaTestAssertions;
+    FTable: TGocciaValue;
+    FTarget: TGocciaParameterizedRegistrationTarget;
+  protected
+    function GetFunctionLength: Integer; override;
+    function GetFunctionName: string; override;
+  public
+    constructor Create(const ATestAssertions: TGocciaTestAssertions;
+      const ATable: TGocciaValue; const ATarget: TGocciaParameterizedRegistrationTarget);
+    function Call(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
   end;
 
   // Expectation object that provides matchers
@@ -97,15 +152,55 @@ type
       TotalAssertionCount: Integer;        // Total assertions across all tests
     end;
 
-    FRegisteredSuites: TObjectList<TGocciaTestSuite>;
-    FRegisteredTests: TObjectList<TGocciaTestCase>;
-    FBeforeEachCallbacks: TGocciaArgumentsCollection;
-    FAfterEachCallbacks: TGocciaArgumentsCollection;
-    FCurrentSuiteIsSkipped: Boolean;
+    FRootSuite: TGocciaTestSuite;
+    FCurrentRegistrationSuite: TGocciaTestSuite;
     FSkipNextDescribe: Boolean;
+    FFocusNextDescribe: Boolean;
     FSkipNextTest: Boolean;
+    FFocusNextTest: Boolean;
     FSuppressOutput: Boolean;
 
+    procedure ConfigureDescribeFunction(const AFunction: TGocciaNativeFunctionValue);
+    procedure ConfigureTestFunction(const AFunction: TGocciaNativeFunctionValue);
+    function GetCurrentRegistrationSuite: TGocciaTestSuite;
+    procedure RegisterDescribeEntry(const AName: string; const ASuiteFunction: TGocciaFunctionBase;
+      const AArguments: TGocciaArgumentsCollection; const AIsSkipped: Boolean = False;
+      const AIsFocused: Boolean = False);
+    procedure RegisterTestEntry(const AName: string; const ATestFunction: TGocciaFunctionBase;
+      const AArguments: TGocciaArgumentsCollection; const AIsSkipped: Boolean = False;
+      const AIsFocused: Boolean = False; const AIsTodo: Boolean = False);
+    function ValidateDescribeRegistration(const AArgs: TGocciaArgumentsCollection;
+      const AFunctionName: string; out ASuiteName: string;
+      out ASuiteFunction: TGocciaFunctionBase): Boolean;
+    function ValidateTestRegistration(const AArgs: TGocciaArgumentsCollection;
+      const AFunctionName: string; out ATestName: string;
+      out ATestFunction: TGocciaFunctionBase): Boolean;
+    procedure RegisterHook(const AArgs: TGocciaArgumentsCollection; const AHookName: string;
+      const APhase: TGocciaTestHookPhase);
+    function GetEachRowArguments(const ARow: TGocciaValue): TGocciaArgumentsCollection;
+    function FormatEachName(const ATemplate: string;
+      const AArguments: TGocciaArgumentsCollection; const ARowIndex: Integer): string;
+    procedure ClearNestedRegistrations(const ASuite: TGocciaTestSuite);
+    procedure BuildNestedRegistrations(const ASuite: TGocciaTestSuite;
+      const AFailedTestDetails: TStringList);
+    procedure CollectBeforeEachCallbacks(const ASuite: TGocciaTestSuite;
+      const ACallbacks: TGocciaArgumentsCollection);
+    procedure CollectAfterEachCallbacks(const ASuite: TGocciaTestSuite;
+      const ACallbacks: TGocciaArgumentsCollection);
+    function IsSuiteSkipped(const ASuite: TGocciaTestSuite): Boolean;
+    function IsSuiteFocusedInHierarchy(const ASuite: TGocciaTestSuite): Boolean;
+    function IsTestSelected(const ATestCase: TGocciaTestCase;
+      const AHasFocusedEntries: Boolean): Boolean;
+    function SuiteHasSelectedEntries(const ASuite: TGocciaTestSuite;
+      const AHasFocusedEntries: Boolean): Boolean;
+    function SuiteHasRunnableEntries(const ASuite: TGocciaTestSuite;
+      const AHasFocusedEntries: Boolean): Boolean;
+    procedure ExecuteSuite(const ASuite: TGocciaTestSuite;
+      const AHasFocusedEntries, AExitOnFirstFailure: Boolean;
+      const AFailedTestDetails: TStringList; var AShouldStop: Boolean);
+    function CountRegisteredTests(const ASuite: TGocciaTestSuite): Integer;
+    procedure CollectSuiteNames(const ASuite: TGocciaTestSuite;
+      const ANames: TStringList);
     procedure RunCallbacks(const ACallbacks: TGocciaArgumentsCollection);
     procedure AssertionPassed(const ATestName: string);
     procedure AssertionFailed(const ATestName, AMessage: string);
@@ -124,18 +219,25 @@ type
     function DescribeSkip(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DescribeSkipIf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DescribeRunIf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DescribeOnly(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function DescribeEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DescribeConditional(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function Test(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function It(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function Skip(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TestSkipIf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TestRunIf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TestOnly(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TestEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function TestTodo(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function TestConditional(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
 
     // Setup/teardown
+    function BeforeAll(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function BeforeEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function AfterEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function AfterAll(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     // Test execution
     function RunTests(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -149,7 +251,6 @@ type
 implementation
 
 uses
-  Classes,
   Math,
   SysUtils,
 
@@ -171,23 +272,276 @@ uses
 
 { TGocciaTestSuite }
 
-constructor TGocciaTestSuite.Create(const AName: string; const ASuiteFunction: TGocciaFunctionBase; const AIsSkipped: Boolean = False);
+procedure AddTempRootIfNeeded(const AValue: TGocciaValue);
+begin
+  if Assigned(TGarbageCollector.Instance) and Assigned(AValue) then
+    TGarbageCollector.Instance.AddTempRoot(AValue);
+end;
+
+procedure RemoveTempRootIfNeeded(const AValue: TGocciaValue);
+begin
+  if Assigned(TGarbageCollector.Instance) and Assigned(AValue) then
+    TGarbageCollector.Instance.RemoveTempRoot(AValue);
+end;
+
+procedure AddCollectionRoots(const ACollection: TGocciaArgumentsCollection);
+var
+  I: Integer;
+begin
+  if not Assigned(ACollection) then
+    Exit;
+
+  for I := 0 to ACollection.Length - 1 do
+    AddTempRootIfNeeded(ACollection.GetElement(I));
+end;
+
+procedure RemoveCollectionRoots(const ACollection: TGocciaArgumentsCollection);
+var
+  I: Integer;
+begin
+  if not Assigned(ACollection) then
+    Exit;
+
+  for I := 0 to ACollection.Length - 1 do
+    RemoveTempRootIfNeeded(ACollection.GetElement(I));
+end;
+
+{ TGocciaRegisteredEntry }
+
+constructor TGocciaRegisteredEntry.Create(const AParentSuite: TGocciaTestSuite;
+  const AIsSkipped, AIsFocused: Boolean);
 begin
   inherited Create;
+  ParentSuite := AParentSuite;
+  IsSkipped := AIsSkipped;
+  IsFocused := AIsFocused;
+end;
+
+{ TGocciaTestSuite }
+
+constructor TGocciaTestSuite.Create(const AParentSuite: TGocciaTestSuite;
+  const AName: string; const ASuiteFunction: TGocciaFunctionBase;
+  const AArguments: TGocciaArgumentsCollection; const AIsSkipped,
+  AIsFocused: Boolean);
+begin
+  inherited Create(AParentSuite, AIsSkipped, AIsFocused);
   Name := AName;
   SuiteFunction := ASuiteFunction;
-  IsSkipped := AIsSkipped;
+  if Assigned(AArguments) then
+    SuiteArguments := AArguments
+  else
+    SuiteArguments := TGocciaArgumentsCollection.Create;
+  Entries := TGocciaRegisteredEntryList.Create(True);
+  BeforeAllCallbacks := TGocciaArgumentsCollection.Create;
+  BeforeEachCallbacks := TGocciaArgumentsCollection.Create;
+  AfterEachCallbacks := TGocciaArgumentsCollection.Create;
+  AfterAllCallbacks := TGocciaArgumentsCollection.Create;
+
+  AddTempRootIfNeeded(SuiteFunction);
+  AddCollectionRoots(SuiteArguments);
+end;
+
+destructor TGocciaTestSuite.Destroy;
+begin
+  RemoveCollectionRoots(BeforeAllCallbacks);
+  RemoveCollectionRoots(BeforeEachCallbacks);
+  RemoveCollectionRoots(AfterEachCallbacks);
+  RemoveCollectionRoots(AfterAllCallbacks);
+  RemoveCollectionRoots(SuiteArguments);
+  RemoveTempRootIfNeeded(SuiteFunction);
+
+  Entries.Free;
+  BeforeAllCallbacks.Free;
+  BeforeEachCallbacks.Free;
+  AfterEachCallbacks.Free;
+  AfterAllCallbacks.Free;
+  SuiteArguments.Free;
+  inherited;
+end;
+
+procedure TGocciaTestSuite.AddEntry(const AEntry: TGocciaRegisteredEntry);
+begin
+  Entries.Add(AEntry);
+end;
+
+procedure TGocciaTestSuite.AddHook(const ACallback: TGocciaFunctionBase;
+  const APhase: TGocciaTestHookPhase);
+begin
+  AddTempRootIfNeeded(ACallback);
+
+  case APhase of
+    thBeforeAll:
+      BeforeAllCallbacks.Add(ACallback);
+    thBeforeEach:
+      BeforeEachCallbacks.Add(ACallback);
+    thAfterEach:
+      AfterEachCallbacks.Add(ACallback);
+    thAfterAll:
+      AfterAllCallbacks.Add(ACallback);
+  end;
+end;
+
+procedure TGocciaTestSuite.ClearRegisteredContent;
+begin
+  Entries.Clear;
+
+  RemoveCollectionRoots(BeforeAllCallbacks);
+  BeforeAllCallbacks.Clear;
+
+  RemoveCollectionRoots(BeforeEachCallbacks);
+  BeforeEachCallbacks.Clear;
+
+  RemoveCollectionRoots(AfterEachCallbacks);
+  AfterEachCallbacks.Clear;
+
+  RemoveCollectionRoots(AfterAllCallbacks);
+  AfterAllCallbacks.Clear;
+end;
+
+function TGocciaTestSuite.DisplayName: string;
+begin
+  Result := Name;
+end;
+
+function TGocciaTestSuite.GetFullName: string;
+begin
+  if not Assigned(ParentSuite) or (ParentSuite.GetFullName = '') then
+    Result := Name
+  else if Name = '' then
+    Result := ParentSuite.GetFullName
+  else
+    Result := ParentSuite.GetFullName + ' > ' + Name;
 end;
 
 { TGocciaTestCase }
 
-constructor TGocciaTestCase.Create(const AName: string; const ATestFunction: TGocciaFunctionBase; const ASuiteName: string; const AIsSkipped: Boolean = False);
+constructor TGocciaTestCase.Create(const AParentSuite: TGocciaTestSuite;
+  const AName: string; const ATestFunction: TGocciaFunctionBase;
+  const AArguments: TGocciaArgumentsCollection; const AIsSkipped, AIsFocused,
+  AIsTodo: Boolean);
 begin
-  inherited Create;
+  inherited Create(AParentSuite, AIsSkipped, AIsFocused);
   Name := AName;
   TestFunction := ATestFunction;
-  SuiteName := ASuiteName;
-  IsSkipped := AIsSkipped;
+  if Assigned(AArguments) then
+    TestArguments := AArguments
+  else
+    TestArguments := TGocciaArgumentsCollection.Create;
+  IsTodo := AIsTodo;
+
+  AddTempRootIfNeeded(TestFunction);
+  AddCollectionRoots(TestArguments);
+end;
+
+destructor TGocciaTestCase.Destroy;
+begin
+  RemoveCollectionRoots(TestArguments);
+  RemoveTempRootIfNeeded(TestFunction);
+  TestArguments.Free;
+  inherited;
+end;
+
+function TGocciaTestCase.DisplayName: string;
+begin
+  Result := Name;
+end;
+
+function TGocciaTestCase.GetFullName: string;
+begin
+  if not Assigned(ParentSuite) or (ParentSuite.GetFullName = '') then
+    Result := Name
+  else
+    Result := ParentSuite.GetFullName + ' > ' + Name;
+end;
+
+{ TGocciaParameterizedRegistrationFunction }
+
+constructor TGocciaParameterizedRegistrationFunction.Create(
+  const ATestAssertions: TGocciaTestAssertions; const ATable: TGocciaValue;
+  const ATarget: TGocciaParameterizedRegistrationTarget);
+begin
+  inherited Create;
+  FTestAssertions := ATestAssertions;
+  FTable := ATable;
+  FTarget := ATarget;
+end;
+
+function TGocciaParameterizedRegistrationFunction.GetFunctionLength: Integer;
+begin
+  Result := 2;
+end;
+
+function TGocciaParameterizedRegistrationFunction.GetFunctionName: string;
+begin
+  case FTarget of
+    prtDescribe:
+      Result := 'describe';
+    prtTest:
+      Result := 'test';
+  end;
+end;
+
+function TGocciaParameterizedRegistrationFunction.Call(
+  const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  BaseName: string;
+  Callback: TGocciaFunctionBase;
+  Rows: TGocciaArrayValue;
+  I: Integer;
+  RowArgs: TGocciaArgumentsCollection;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArguments, 2, GetFunctionName,
+    FTestAssertions.ThrowError);
+
+  if not (AArguments.GetElement(0) is TGocciaStringLiteralValue) then
+    FTestAssertions.ThrowError(GetFunctionName +
+      ' expects first argument to be a string', 0, 0);
+
+  if not (AArguments.GetElement(1) is TGocciaFunctionBase) then
+    FTestAssertions.ThrowError(GetFunctionName +
+      ' expects second argument to be a function', 0, 0);
+
+  if not (FTable is TGocciaArrayValue) then
+    FTestAssertions.ThrowError(GetFunctionName +
+      '.each expects a table array', 0, 0);
+
+  BaseName := AArguments.GetElement(0).ToStringLiteral.Value;
+  Callback := TGocciaFunctionBase(AArguments.GetElement(1));
+  Rows := TGocciaArrayValue(FTable);
+
+  for I := 0 to Rows.Elements.Count - 1 do
+  begin
+    RowArgs := FTestAssertions.GetEachRowArguments(Rows.Elements[I]);
+    try
+      case FTarget of
+        prtDescribe:
+          FTestAssertions.RegisterDescribeEntry(
+            FTestAssertions.FormatEachName(BaseName, RowArgs, I),
+            Callback,
+            RowArgs);
+        prtTest:
+          FTestAssertions.RegisterTestEntry(
+            FTestAssertions.FormatEachName(BaseName, RowArgs, I),
+            Callback,
+            RowArgs);
+      end;
+      RowArgs := nil;
+    finally
+      RowArgs.Free;
+    end;
+  end;
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TGocciaParameterizedRegistrationFunction.MarkReferences;
+begin
+  if GCMarked then
+    Exit;
+
+  inherited;
+  if Assigned(FTable) then
+    FTable.MarkReferences;
 end;
 
 { TGocciaExpectationValue }
@@ -1367,14 +1721,12 @@ constructor TGocciaTestAssertions.Create(const AName: string; const AScope: TGoc
 var
   DescribeFunction: TGocciaNativeFunctionValue;
   TestFunction: TGocciaNativeFunctionValue;
+  ItFunction: TGocciaNativeFunctionValue;
 begin
   inherited Create(AName, AScope, AThrowError);
 
-  FRegisteredSuites := TObjectList<TGocciaTestSuite>.Create;
-  FRegisteredTests := TObjectList<TGocciaTestCase>.Create;
-  FBeforeEachCallbacks := TGocciaArgumentsCollection.Create;
-  FAfterEachCallbacks := TGocciaArgumentsCollection.Create;
-
+  FRootSuite := TGocciaTestSuite.Create(nil, '', nil, nil);
+  FCurrentRegistrationSuite := FRootSuite;
   ResetTestStats;
 
   // Functions are registered on both the scope (for direct access in test scripts)
@@ -1385,40 +1737,646 @@ begin
 
   // Create describe function with skip/skipIf/runIf properties
   DescribeFunction := TGocciaNativeFunctionValue.Create(Describe, 'describe', 2);
-  DescribeFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(DescribeSkip, 'skip', 2));
-  DescribeFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(DescribeSkipIf, 'skipIf', 1));
-  DescribeFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(DescribeRunIf, 'runIf', 1));
+  ConfigureDescribeFunction(DescribeFunction);
   AScope.DefineLexicalBinding('describe', DescribeFunction, dtConst);
 
   // Create test function with skip/skipIf/runIf properties
   TestFunction := TGocciaNativeFunctionValue.Create(Test, 'test', 2);
-  TestFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(Skip, 'skip', 2));
-  TestFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(TestSkipIf, 'skipIf', 1));
-  TestFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(TestRunIf, 'runIf', 1));
+  ConfigureTestFunction(TestFunction);
   AScope.DefineLexicalBinding('test', TestFunction, dtConst);
 
-  AScope.DefineLexicalBinding('it', TGocciaNativeFunctionValue.Create(It, 'it', 2), dtConst);
+  ItFunction := TGocciaNativeFunctionValue.Create(It, 'it', 2);
+  ConfigureTestFunction(ItFunction);
+  AScope.DefineLexicalBinding('it', ItFunction, dtConst);
+  AScope.DefineLexicalBinding('beforeAll', TGocciaNativeFunctionValue.Create(BeforeAll, 'beforeAll', 1), dtConst);
   AScope.DefineLexicalBinding('beforeEach', TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1), dtConst);
   AScope.DefineLexicalBinding('afterEach', TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1), dtConst);
+  AScope.DefineLexicalBinding('afterAll', TGocciaNativeFunctionValue.Create(AfterAll, 'afterAll', 1), dtConst);
   AScope.DefineLexicalBinding('runTests', TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0), dtConst);
 
   // Also set them in the builtin object for completeness
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(Expect, 'expect', 1));
   FBuiltinObject.RegisterNativeMethod(DescribeFunction);
   FBuiltinObject.RegisterNativeMethod(TestFunction);
-  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(It, 'it', 2));
+  FBuiltinObject.RegisterNativeMethod(ItFunction);
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BeforeAll, 'beforeAll', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(BeforeEach, 'beforeEach', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(AfterEach, 'afterEach', 1));
+  FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(AfterAll, 'afterAll', 1));
   FBuiltinObject.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(RunTests, 'runTests', 0));
 end;
 
 destructor TGocciaTestAssertions.Destroy;
 begin
-  FRegisteredSuites.Free;
-  FRegisteredTests.Free;
-  FBeforeEachCallbacks.Free;
-  FAfterEachCallbacks.Free;
+  FRootSuite.Free;
   inherited;
+end;
+
+procedure TGocciaTestAssertions.ConfigureDescribeFunction(
+  const AFunction: TGocciaNativeFunctionValue);
+begin
+  AFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(DescribeSkip,
+    'skip', 2));
+  AFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    DescribeSkipIf, 'skipIf', 1));
+  AFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    DescribeRunIf, 'runIf', 1));
+  AFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    DescribeOnly, 'only', 2));
+  AFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    DescribeEach, 'each', 1));
+end;
+
+procedure TGocciaTestAssertions.ConfigureTestFunction(
+  const AFunction: TGocciaNativeFunctionValue);
+begin
+  AFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(Skip, 'skip',
+    2));
+  AFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    TestSkipIf, 'skipIf', 1));
+  AFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    TestRunIf, 'runIf', 1));
+  AFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    TestOnly, 'only', 2));
+  AFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    TestEach, 'each', 1));
+  AFunction.RegisterNativeMethod(TGocciaNativeFunctionValue.Create(
+    TestTodo, 'todo', 1));
+end;
+
+function TGocciaTestAssertions.GetCurrentRegistrationSuite: TGocciaTestSuite;
+begin
+  if Assigned(FCurrentRegistrationSuite) then
+    Result := FCurrentRegistrationSuite
+  else
+    Result := FRootSuite;
+end;
+
+procedure TGocciaTestAssertions.RegisterDescribeEntry(const AName: string;
+  const ASuiteFunction: TGocciaFunctionBase;
+  const AArguments: TGocciaArgumentsCollection; const AIsSkipped,
+  AIsFocused: Boolean);
+begin
+  GetCurrentRegistrationSuite.AddEntry(TGocciaTestSuite.Create(
+    GetCurrentRegistrationSuite, AName, ASuiteFunction, AArguments,
+    AIsSkipped, AIsFocused));
+end;
+
+procedure TGocciaTestAssertions.RegisterTestEntry(const AName: string;
+  const ATestFunction: TGocciaFunctionBase;
+  const AArguments: TGocciaArgumentsCollection; const AIsSkipped,
+  AIsFocused, AIsTodo: Boolean);
+begin
+  GetCurrentRegistrationSuite.AddEntry(TGocciaTestCase.Create(
+    GetCurrentRegistrationSuite, AName, ATestFunction, AArguments,
+    AIsSkipped, AIsFocused, AIsTodo));
+end;
+
+function TGocciaTestAssertions.ValidateDescribeRegistration(
+  const AArgs: TGocciaArgumentsCollection; const AFunctionName: string;
+  out ASuiteName: string; out ASuiteFunction: TGocciaFunctionBase): Boolean;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, AFunctionName, ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
+    ThrowError(AFunctionName + ' expects first argument to be a string', 0, 0);
+
+  if not (AArgs.GetElement(1) is TGocciaFunctionBase) then
+    ThrowError(AFunctionName + ' expects second argument to be a function', 0,
+      0);
+
+  ASuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
+  ASuiteFunction := TGocciaFunctionBase(AArgs.GetElement(1));
+  Result := True;
+end;
+
+function TGocciaTestAssertions.ValidateTestRegistration(
+  const AArgs: TGocciaArgumentsCollection; const AFunctionName: string;
+  out ATestName: string; out ATestFunction: TGocciaFunctionBase): Boolean;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 2, AFunctionName, ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
+    ThrowError(AFunctionName + ' expects first argument to be a string', 0, 0);
+
+  if not (AArgs.GetElement(1) is TGocciaFunctionBase) then
+    ThrowError(AFunctionName + ' expects second argument to be a function', 0,
+      0);
+
+  ATestName := AArgs.GetElement(0).ToStringLiteral.Value;
+  ATestFunction := TGocciaFunctionBase(AArgs.GetElement(1));
+  Result := True;
+end;
+
+procedure TGocciaTestAssertions.RegisterHook(
+  const AArgs: TGocciaArgumentsCollection; const AHookName: string;
+  const APhase: TGocciaTestHookPhase);
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, AHookName, ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
+    ThrowError(AHookName + ' expects a function argument', 0, 0);
+
+  GetCurrentRegistrationSuite.AddHook(TGocciaFunctionBase(AArgs.GetElement(0)),
+    APhase);
+end;
+
+function TGocciaTestAssertions.GetEachRowArguments(
+  const ARow: TGocciaValue): TGocciaArgumentsCollection;
+var
+  I: Integer;
+begin
+  if ARow is TGocciaArrayValue then
+  begin
+    Result := TGocciaArgumentsCollection.CreateWithCapacity(
+      TGocciaArrayValue(ARow).Elements.Count);
+    for I := 0 to TGocciaArrayValue(ARow).Elements.Count - 1 do
+      Result.Add(TGocciaArrayValue(ARow).Elements[I]);
+    Exit;
+  end;
+
+  Result := TGocciaArgumentsCollection.CreateWithCapacity(1);
+  Result.Add(ARow);
+end;
+
+function TGocciaTestAssertions.FormatEachName(const ATemplate: string;
+  const AArguments: TGocciaArgumentsCollection; const ARowIndex: Integer): string;
+var
+  I: Integer;
+  Placeholder: Char;
+  ArgIndex: Integer;
+
+  function ConsumeValue: TGocciaValue;
+  begin
+    if ArgIndex < AArguments.Length then
+    begin
+      Result := AArguments.GetElement(ArgIndex);
+      Inc(ArgIndex);
+    end
+    else
+      Result := nil;
+  end;
+
+  function FormatPlaceholder(const AValue: TGocciaValue;
+    const AToken: Char): string;
+  begin
+    if not Assigned(AValue) then
+      Exit('%' + AToken);
+
+    case AToken of
+      'd', 'i':
+        Result := IntToStr(Trunc(AValue.ToNumberLiteral.Value));
+      'f':
+        Result := FloatToStr(AValue.ToNumberLiteral.Value);
+      'j', 'o', 's':
+        Result := AValue.ToStringLiteral.Value;
+      '#':
+        Result := IntToStr(ARowIndex);
+    else
+      Result := '%' + AToken;
+    end;
+  end;
+begin
+  Result := '';
+  ArgIndex := 0;
+  I := 1;
+  while I <= Length(ATemplate) do
+  begin
+    if ATemplate[I] <> '%' then
+    begin
+      Result := Result + ATemplate[I];
+      Inc(I);
+      Continue;
+    end;
+
+    if I = Length(ATemplate) then
+    begin
+      Result := Result + '%';
+      Break;
+    end;
+
+    Inc(I);
+    Placeholder := ATemplate[I];
+    if Placeholder = '%' then
+      Result := Result + '%'
+    else
+      Result := Result + FormatPlaceholder(ConsumeValue, Placeholder);
+    Inc(I);
+  end;
+end;
+
+procedure TGocciaTestAssertions.ClearNestedRegistrations(
+  const ASuite: TGocciaTestSuite);
+var
+  I: Integer;
+begin
+  for I := 0 to ASuite.Entries.Count - 1 do
+    if ASuite.Entries[I] is TGocciaTestSuite then
+      TGocciaTestSuite(ASuite.Entries[I]).ClearRegisteredContent;
+end;
+
+procedure TGocciaTestAssertions.BuildNestedRegistrations(
+  const ASuite: TGocciaTestSuite; const AFailedTestDetails: TStringList);
+var
+  I: Integer;
+  Entry: TGocciaRegisteredEntry;
+  ChildSuite: TGocciaTestSuite;
+  PreviousSuite: TGocciaTestSuite;
+begin
+  for I := 0 to ASuite.Entries.Count - 1 do
+  begin
+    Entry := ASuite.Entries[I];
+    if not (Entry is TGocciaTestSuite) then
+      Continue;
+
+    ChildSuite := TGocciaTestSuite(Entry);
+    ChildSuite.ClearRegisteredContent;
+
+    PreviousSuite := FCurrentRegistrationSuite;
+    FCurrentRegistrationSuite := ChildSuite;
+    try
+      try
+        if Assigned(ChildSuite.SuiteFunction) then
+          ChildSuite.SuiteFunction.Call(ChildSuite.SuiteArguments,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+      except
+        on E: Exception do
+        begin
+          if not FSuppressOutput then
+            WriteLn('Error in describe block "', ChildSuite.GetFullName,
+              '": ', E.Message);
+          AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
+            '": ' + E.Message);
+        end;
+      end;
+    finally
+      FCurrentRegistrationSuite := PreviousSuite;
+    end;
+
+    BuildNestedRegistrations(ChildSuite, AFailedTestDetails);
+  end;
+end;
+
+procedure TGocciaTestAssertions.CollectBeforeEachCallbacks(
+  const ASuite: TGocciaTestSuite; const ACallbacks: TGocciaArgumentsCollection);
+var
+  I: Integer;
+begin
+  if not Assigned(ASuite) then
+    Exit;
+
+  CollectBeforeEachCallbacks(ASuite.ParentSuite, ACallbacks);
+  for I := 0 to ASuite.BeforeEachCallbacks.Length - 1 do
+    ACallbacks.Add(ASuite.BeforeEachCallbacks.GetElement(I));
+end;
+
+procedure TGocciaTestAssertions.CollectAfterEachCallbacks(
+  const ASuite: TGocciaTestSuite; const ACallbacks: TGocciaArgumentsCollection);
+var
+  I: Integer;
+begin
+  if not Assigned(ASuite) then
+    Exit;
+
+  for I := 0 to ASuite.AfterEachCallbacks.Length - 1 do
+    ACallbacks.Add(ASuite.AfterEachCallbacks.GetElement(I));
+  CollectAfterEachCallbacks(ASuite.ParentSuite, ACallbacks);
+end;
+
+function TGocciaTestAssertions.IsSuiteSkipped(
+  const ASuite: TGocciaTestSuite): Boolean;
+var
+  CurrentSuite: TGocciaTestSuite;
+begin
+  CurrentSuite := ASuite;
+  while Assigned(CurrentSuite) do
+  begin
+    if CurrentSuite.IsSkipped then
+      Exit(True);
+    CurrentSuite := CurrentSuite.ParentSuite;
+  end;
+  Result := False;
+end;
+
+function TGocciaTestAssertions.IsSuiteFocusedInHierarchy(
+  const ASuite: TGocciaTestSuite): Boolean;
+var
+  CurrentSuite: TGocciaTestSuite;
+begin
+  CurrentSuite := ASuite;
+  while Assigned(CurrentSuite) do
+  begin
+    if CurrentSuite.IsFocused then
+      Exit(True);
+    CurrentSuite := CurrentSuite.ParentSuite;
+  end;
+  Result := False;
+end;
+
+function TGocciaTestAssertions.IsTestSelected(const ATestCase: TGocciaTestCase;
+  const AHasFocusedEntries: Boolean): Boolean;
+begin
+  if not AHasFocusedEntries then
+    Exit(True);
+
+  Result := ATestCase.IsFocused or IsSuiteFocusedInHierarchy(
+    ATestCase.ParentSuite);
+end;
+
+function TGocciaTestAssertions.SuiteHasSelectedEntries(
+  const ASuite: TGocciaTestSuite; const AHasFocusedEntries: Boolean): Boolean;
+var
+  I: Integer;
+  Entry: TGocciaRegisteredEntry;
+begin
+  if not AHasFocusedEntries then
+    Exit(True);
+
+  if ASuite.IsFocused then
+    Exit(True);
+
+  for I := 0 to ASuite.Entries.Count - 1 do
+  begin
+    Entry := ASuite.Entries[I];
+    if (Entry is TGocciaTestCase) and TGocciaTestCase(Entry).IsFocused then
+      Exit(True);
+    if (Entry is TGocciaTestSuite) and
+       SuiteHasSelectedEntries(TGocciaTestSuite(Entry), True) then
+      Exit(True);
+  end;
+
+  Result := False;
+end;
+
+function TGocciaTestAssertions.SuiteHasRunnableEntries(
+  const ASuite: TGocciaTestSuite; const AHasFocusedEntries: Boolean): Boolean;
+var
+  I: Integer;
+  Entry: TGocciaRegisteredEntry;
+  TestCase: TGocciaTestCase;
+begin
+  for I := 0 to ASuite.Entries.Count - 1 do
+  begin
+    Entry := ASuite.Entries[I];
+    if Entry is TGocciaTestCase then
+    begin
+      TestCase := TGocciaTestCase(Entry);
+      if IsTestSelected(TestCase, AHasFocusedEntries) and
+         not TestCase.IsSkipped and
+         not IsSuiteSkipped(TestCase.ParentSuite) and
+         not TestCase.IsTodo then
+        Exit(True);
+    end
+    else if SuiteHasRunnableEntries(TGocciaTestSuite(Entry),
+      AHasFocusedEntries) then
+      Exit(True);
+  end;
+
+  Result := False;
+end;
+
+procedure TGocciaTestAssertions.ExecuteSuite(const ASuite: TGocciaTestSuite;
+  const AHasFocusedEntries, AExitOnFirstFailure: Boolean;
+  const AFailedTestDetails: TStringList; var AShouldStop: Boolean);
+var
+  I: Integer;
+  Entry: TGocciaRegisteredEntry;
+  TestCase: TGocciaTestCase;
+  BeforeCallbacks: TGocciaArgumentsCollection;
+  AfterCallbacks: TGocciaArgumentsCollection;
+  TestResult: TGocciaValue;
+  RejectionReason: string;
+  FailureRecorded: Boolean;
+  EffectiveSuiteName: string;
+  HookFailed: Boolean;
+  RunSuiteHooks: Boolean;
+begin
+  if AShouldStop then
+    Exit;
+
+  EffectiveSuiteName := ASuite.GetFullName;
+  RunSuiteHooks := not IsSuiteSkipped(ASuite) and
+    SuiteHasRunnableEntries(ASuite, AHasFocusedEntries);
+
+  if RunSuiteHooks and (ASuite.BeforeAllCallbacks.Length > 0) then
+  begin
+    FTestStats.CurrentSuiteName := EffectiveSuiteName;
+    FTestStats.CurrentTestName := 'beforeAll';
+    ResetCurrentTestState;
+    RunCallbacks(ASuite.BeforeAllCallbacks);
+    HookFailed := FTestStats.CurrentTestHasFailures;
+    ResetCurrentTestState;
+    if HookFailed then
+    begin
+      AFailedTestDetails.Add('Hook "beforeAll" in suite "' + EffectiveSuiteName +
+        '" failed');
+      if AExitOnFirstFailure then
+      begin
+        AShouldStop := True;
+        Exit;
+      end;
+    end;
+  end;
+
+  for I := 0 to ASuite.Entries.Count - 1 do
+  begin
+    if AShouldStop then
+      Break;
+
+    Entry := ASuite.Entries[I];
+    if Entry is TGocciaTestSuite then
+    begin
+      ExecuteSuite(TGocciaTestSuite(Entry), AHasFocusedEntries,
+        AExitOnFirstFailure, AFailedTestDetails, AShouldStop);
+      Continue;
+    end;
+
+    TestCase := TGocciaTestCase(Entry);
+    if Assigned(TestCase.ParentSuite) then
+      FTestStats.CurrentSuiteName := TestCase.ParentSuite.GetFullName
+    else
+      FTestStats.CurrentSuiteName := '';
+
+    Inc(FTestStats.TotalTests);
+    StartTest(TestCase.Name);
+
+    if TestCase.IsTodo then
+    begin
+      FTestStats.CurrentTestIsSkipped := True;
+      if not FSuppressOutput then
+      begin
+        if FTestStats.CurrentSuiteName <> '' then
+          WriteLn('    📝 ', TestCase.Name, ' in ', FTestStats.CurrentSuiteName,
+            ': TODO')
+        else
+          WriteLn('    📝 ', TestCase.Name, ': TODO');
+      end;
+    end
+    else if TestCase.IsSkipped or IsSuiteSkipped(TestCase.ParentSuite) or
+      (AHasFocusedEntries and not IsTestSelected(TestCase, True)) then
+    begin
+      FTestStats.CurrentTestIsSkipped := True;
+      if not FSuppressOutput then
+      begin
+        if FTestStats.CurrentSuiteName <> '' then
+          WriteLn('    ⏸️ ', TestCase.Name, ' in ', FTestStats.CurrentSuiteName,
+            ': SKIPPED')
+        else
+          WriteLn('    ⏸️ ', TestCase.Name, ': SKIPPED');
+      end;
+    end
+    else
+    begin
+      BeforeCallbacks := TGocciaArgumentsCollection.Create;
+      AfterCallbacks := TGocciaArgumentsCollection.Create;
+      try
+        CollectBeforeEachCallbacks(TestCase.ParentSuite, BeforeCallbacks);
+        CollectAfterEachCallbacks(TestCase.ParentSuite, AfterCallbacks);
+
+        RunCallbacks(BeforeCallbacks);
+
+        FailureRecorded := False;
+        TestResult := nil;
+        try
+          try
+            if Assigned(TestCase.TestFunction) then
+              TestResult := TestCase.TestFunction.Call(TestCase.TestArguments,
+                TGocciaUndefinedLiteralValue.UndefinedValue)
+            else
+              TestResult := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+            if Assigned(TestResult) then
+              AddTempRootIfNeeded(TestResult);
+            try
+              if Assigned(TGocciaMicrotaskQueue.Instance) then
+                TGocciaMicrotaskQueue.Instance.DrainQueue;
+
+              if TestResult is TGocciaPromiseValue then
+              begin
+                if TGocciaPromiseValue(TestResult).State = gpsRejected then
+                begin
+                  RejectionReason := TGocciaPromiseValue(TestResult).
+                    PromiseResult.ToStringLiteral.Value;
+                  AssertionFailed('async test', 'Returned Promise rejected: ' +
+                    RejectionReason);
+                  if FTestStats.CurrentSuiteName <> '' then
+                    AFailedTestDetails.Add('Test "' + TestCase.Name +
+                      '" in suite "' + FTestStats.CurrentSuiteName +
+                      '": Promise rejected: ' + RejectionReason)
+                  else
+                    AFailedTestDetails.Add('Test "' + TestCase.Name +
+                      '": Promise rejected: ' + RejectionReason);
+                  FailureRecorded := True;
+                end
+                else if TGocciaPromiseValue(TestResult).State = gpsPending then
+                begin
+                  AssertionFailed('async test',
+                    'Returned Promise still pending after microtask drain');
+                  if FTestStats.CurrentSuiteName <> '' then
+                    AFailedTestDetails.Add('Test "' + TestCase.Name +
+                      '" in suite "' + FTestStats.CurrentSuiteName +
+                      '": Promise still pending after microtask drain')
+                  else
+                    AFailedTestDetails.Add('Test "' + TestCase.Name +
+                      '": Promise still pending after microtask drain');
+                  FailureRecorded := True;
+                end;
+              end;
+            finally
+              if Assigned(TestResult) then
+                RemoveTempRootIfNeeded(TestResult);
+            end;
+          except
+            on E: Exception do
+            begin
+              if Assigned(TGocciaMicrotaskQueue.Instance) then
+                TGocciaMicrotaskQueue.Instance.ClearQueue;
+              AssertionFailed('test execution', 'Test threw an exception: ' +
+                E.Message);
+              if FTestStats.CurrentSuiteName <> '' then
+                AFailedTestDetails.Add('Test "' + TestCase.Name +
+                  '" in suite "' + FTestStats.CurrentSuiteName + '": ' +
+                  E.Message)
+              else
+                AFailedTestDetails.Add('Test "' + TestCase.Name + '": ' +
+                  E.Message);
+              FailureRecorded := True;
+            end;
+          end;
+        finally
+          RunCallbacks(AfterCallbacks);
+        end;
+      finally
+        BeforeCallbacks.Free;
+        AfterCallbacks.Free;
+      end;
+
+      EndTest;
+
+      if FTestStats.CurrentTestHasFailures and not FailureRecorded then
+      begin
+        if FTestStats.CurrentSuiteName <> '' then
+          AFailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' +
+            FTestStats.CurrentSuiteName + '"')
+        else
+          AFailedTestDetails.Add('Test "' + TestCase.Name + '"');
+      end;
+
+      if FTestStats.CurrentTestHasFailures and AExitOnFirstFailure then
+      begin
+        AShouldStop := True;
+        Exit;
+      end;
+
+      Continue;
+    end;
+
+    EndTest;
+  end;
+
+  if RunSuiteHooks and (ASuite.AfterAllCallbacks.Length > 0) and
+    not AShouldStop then
+  begin
+    FTestStats.CurrentSuiteName := EffectiveSuiteName;
+    FTestStats.CurrentTestName := 'afterAll';
+    ResetCurrentTestState;
+    RunCallbacks(ASuite.AfterAllCallbacks);
+    HookFailed := FTestStats.CurrentTestHasFailures;
+    ResetCurrentTestState;
+    if HookFailed then
+    begin
+      AFailedTestDetails.Add('Hook "afterAll" in suite "' + EffectiveSuiteName +
+        '" failed');
+      if AExitOnFirstFailure then
+        AShouldStop := True;
+    end;
+  end;
+end;
+
+function TGocciaTestAssertions.CountRegisteredTests(
+  const ASuite: TGocciaTestSuite): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to ASuite.Entries.Count - 1 do
+    if ASuite.Entries[I] is TGocciaTestCase then
+      Inc(Result)
+    else
+      Inc(Result, CountRegisteredTests(TGocciaTestSuite(ASuite.Entries[I])));
+end;
+
+procedure TGocciaTestAssertions.CollectSuiteNames(const ASuite: TGocciaTestSuite;
+  const ANames: TStringList);
+var
+  I: Integer;
+begin
+  if ASuite.Name <> '' then
+    ANames.Add(ASuite.GetFullName);
+
+  for I := 0 to ASuite.Entries.Count - 1 do
+    if ASuite.Entries[I] is TGocciaTestSuite then
+      CollectSuiteNames(TGocciaTestSuite(ASuite.Entries[I]), ANames);
 end;
 
 procedure TGocciaTestAssertions.ResetTestStats;
@@ -1433,9 +2391,10 @@ begin
   FTestStats.CurrentTestIsSkipped := False;
   FTestStats.CurrentTestAssertionCount := 0;
   FTestStats.TotalAssertionCount := 0;
-  FCurrentSuiteIsSkipped := False;
   FSkipNextDescribe := False;
+  FFocusNextDescribe := False;
   FSkipNextTest := False;
+  FFocusNextTest := False;
 end;
 
 procedure TGocciaTestAssertions.RunCallbacks(const ACallbacks: TGocciaArgumentsCollection);
@@ -1540,24 +2499,9 @@ function TGocciaTestAssertions.Describe(const AArgs: TGocciaArgumentsCollection;
 var
   SuiteName: string;
   SuiteFunction: TGocciaFunctionBase;
-  Suite: TGocciaTestSuite;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'describe', ThrowError);
-
-  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('describe expects first argument to be a string', 0, 0);
-
-  if not (AArgs.GetElement(1) is TGocciaFunctionBase) then
-    ThrowError('describe expects second argument to be a function', 0, 0);
-
-  if FTestStats.CurrentSuiteName <> '' then
-    SuiteName := FTestStats.CurrentSuiteName + ' > ' + AArgs.GetElement(0).ToStringLiteral.Value
-  else
-    SuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
-  SuiteFunction := AArgs.GetElement(1) as TGocciaFunctionBase;
-
-  Suite := TGocciaTestSuite.Create(SuiteName, SuiteFunction, FCurrentSuiteIsSkipped);
-  FRegisteredSuites.Add(Suite);
+  ValidateDescribeRegistration(AArgs, 'describe', SuiteName, SuiteFunction);
+  RegisterDescribeEntry(SuiteName, SuiteFunction, nil);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -1566,24 +2510,9 @@ function TGocciaTestAssertions.DescribeSkip(const AArgs: TGocciaArgumentsCollect
 var
   SuiteName: string;
   SuiteFunction: TGocciaFunctionBase;
-  Suite: TGocciaTestSuite;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'describe.skip', ThrowError);
-
-  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('describe.skip expects first argument to be a string', 0, 0);
-
-  if not (AArgs.GetElement(1) is TGocciaFunctionBase) then
-    ThrowError('describe.skip expects second argument to be a function', 0, 0);
-
-  if FTestStats.CurrentSuiteName <> '' then
-    SuiteName := FTestStats.CurrentSuiteName + ' > ' + AArgs.GetElement(0).ToStringLiteral.Value
-  else
-    SuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
-  SuiteFunction := AArgs.GetElement(1) as TGocciaFunctionBase;
-
-  Suite := TGocciaTestSuite.Create(SuiteName, SuiteFunction, True);
-  FRegisteredSuites.Add(Suite);
+  ValidateDescribeRegistration(AArgs, 'describe.skip', SuiteName, SuiteFunction);
+  RegisterDescribeEntry(SuiteName, SuiteFunction, nil, True);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -1593,6 +2522,7 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'describe.skipIf', ThrowError);
 
   FSkipNextDescribe := AArgs.GetElement(0).ToBooleanLiteral.Value;
+  FFocusNextDescribe := False;
   Result := TGocciaNativeFunctionValue.Create(DescribeConditional, 'describe', 2);
 end;
 
@@ -1601,31 +2531,41 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'describe.runIf', ThrowError);
 
   FSkipNextDescribe := not AArgs.GetElement(0).ToBooleanLiteral.Value;
+  FFocusNextDescribe := False;
   Result := TGocciaNativeFunctionValue.Create(DescribeConditional, 'describe', 2);
+end;
+
+function TGocciaTestAssertions.DescribeOnly(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  SuiteName: string;
+  SuiteFunction: TGocciaFunctionBase;
+begin
+  ValidateDescribeRegistration(AArgs, 'describe.only', SuiteName, SuiteFunction);
+  RegisterDescribeEntry(SuiteName, SuiteFunction, nil, False, True);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaTestAssertions.DescribeEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'describe.each', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaArrayValue) then
+    ThrowError('describe.each expects a table array', 0, 0);
+
+  Result := TGocciaParameterizedRegistrationFunction.Create(Self,
+    AArgs.GetElement(0), prtDescribe);
 end;
 
 function TGocciaTestAssertions.DescribeConditional(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   SuiteName: string;
   SuiteFunction: TGocciaFunctionBase;
-  Suite: TGocciaTestSuite;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'describe', ThrowError);
-
-  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('describe expects first argument to be a string', 0, 0);
-
-  if not (AArgs.GetElement(1) is TGocciaFunctionBase) then
-    ThrowError('describe expects second argument to be a function', 0, 0);
-
-  if FTestStats.CurrentSuiteName <> '' then
-    SuiteName := FTestStats.CurrentSuiteName + ' > ' + AArgs.GetElement(0).ToStringLiteral.Value
-  else
-    SuiteName := AArgs.GetElement(0).ToStringLiteral.Value;
-  SuiteFunction := AArgs.GetElement(1) as TGocciaFunctionBase;
-
-  Suite := TGocciaTestSuite.Create(SuiteName, SuiteFunction, FSkipNextDescribe or FCurrentSuiteIsSkipped);
-  FRegisteredSuites.Add(Suite);
+  ValidateDescribeRegistration(AArgs, 'describe', SuiteName, SuiteFunction);
+  RegisterDescribeEntry(SuiteName, SuiteFunction, nil, FSkipNextDescribe,
+    FFocusNextDescribe);
+  FSkipNextDescribe := False;
+  FFocusNextDescribe := False;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -1634,21 +2574,9 @@ function TGocciaTestAssertions.Test(const AArgs: TGocciaArgumentsCollection; con
 var
   TestName: string;
   TestFunction: TGocciaFunctionBase;
-  TestCase: TGocciaTestCase;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'test', ThrowError);
-
-  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('test expects first argument to be a string', 0, 0);
-
-  if not (AArgs.GetElement(1) is TGocciaFunctionBase) then
-    ThrowError('test expects second argument to be a function', 0, 0);
-
-  TestName := AArgs.GetElement(0).ToStringLiteral.Value;
-  TestFunction := AArgs.GetElement(1) as TGocciaFunctionBase;
-
-  TestCase := TGocciaTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName, FCurrentSuiteIsSkipped);
-  FRegisteredTests.Add(TestCase);
+  ValidateTestRegistration(AArgs, 'test', TestName, TestFunction);
+  RegisterTestEntry(TestName, TestFunction, nil);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -1663,22 +2591,9 @@ function TGocciaTestAssertions.Skip(const AArgs: TGocciaArgumentsCollection; con
 var
   TestName: string;
   TestFunction: TGocciaFunctionBase;
-  TestCase: TGocciaTestCase;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'test.skip', ThrowError);
-
-  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('test.skip expects first argument to be a string', 0, 0);
-
-  if not (AArgs.GetElement(1) is TGocciaFunctionBase) then
-    ThrowError('test.skip expects second argument to be a function', 0, 0);
-
-  TestName := AArgs.GetElement(0).ToStringLiteral.Value;
-  TestFunction := AArgs.GetElement(1) as TGocciaFunctionBase;
-
-  // Register the test as skipped with the current suite name
-  TestCase := TGocciaTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName, True);
-  FRegisteredTests.Add(TestCase);
+  ValidateTestRegistration(AArgs, 'test.skip', TestName, TestFunction);
+  RegisterTestEntry(TestName, TestFunction, nil, True);
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -1688,6 +2603,7 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'test.skipIf', ThrowError);
 
   FSkipNextTest := AArgs.GetElement(0).ToBooleanLiteral.Value;
+  FFocusNextTest := False;
   Result := TGocciaNativeFunctionValue.Create(TestConditional, 'test', 2);
 end;
 
@@ -1696,53 +2612,77 @@ begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'test.runIf', ThrowError);
 
   FSkipNextTest := not AArgs.GetElement(0).ToBooleanLiteral.Value;
+  FFocusNextTest := False;
   Result := TGocciaNativeFunctionValue.Create(TestConditional, 'test', 2);
+end;
+
+function TGocciaTestAssertions.TestOnly(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  TestName: string;
+  TestFunction: TGocciaFunctionBase;
+begin
+  ValidateTestRegistration(AArgs, 'test.only', TestName, TestFunction);
+  RegisterTestEntry(TestName, TestFunction, nil, False, True);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaTestAssertions.TestEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'test.each', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaArrayValue) then
+    ThrowError('test.each expects a table array', 0, 0);
+
+  Result := TGocciaParameterizedRegistrationFunction.Create(Self,
+    AArgs.GetElement(0), prtTest);
+end;
+
+function TGocciaTestAssertions.TestTodo(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'test.todo', ThrowError);
+
+  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
+    ThrowError('test.todo expects first argument to be a string', 0, 0);
+
+  RegisterTestEntry(AArgs.GetElement(0).ToStringLiteral.Value, nil, nil, False,
+    False, True);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaTestAssertions.TestConditional(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TestName: string;
   TestFunction: TGocciaFunctionBase;
-  TestCase: TGocciaTestCase;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 2, 'test', ThrowError);
+  ValidateTestRegistration(AArgs, 'test', TestName, TestFunction);
+  RegisterTestEntry(TestName, TestFunction, nil, FSkipNextTest, FFocusNextTest);
+  FSkipNextTest := False;
+  FFocusNextTest := False;
 
-  if not (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
-    ThrowError('test expects first argument to be a string', 0, 0);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
 
-  if not (AArgs.GetElement(1) is TGocciaFunctionBase) then
-    ThrowError('test expects second argument to be a function', 0, 0);
-
-  TestName := AArgs.GetElement(0).ToStringLiteral.Value;
-  TestFunction := AArgs.GetElement(1) as TGocciaFunctionBase;
-
-  TestCase := TGocciaTestCase.Create(TestName, TestFunction, FTestStats.CurrentSuiteName, FSkipNextTest or FCurrentSuiteIsSkipped);
-  FRegisteredTests.Add(TestCase);
-
+function TGocciaTestAssertions.BeforeAll(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  RegisterHook(AArgs, 'beforeAll', thBeforeAll);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaTestAssertions.BeforeEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'beforeEach', ThrowError);
-
-  if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
-    ThrowError('beforeEach expects a function argument', 0, 0);
-
-  FBeforeEachCallbacks.Add(AArgs.GetElement(0));
-
+  RegisterHook(AArgs, 'beforeEach', thBeforeEach);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaTestAssertions.AfterEach(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'afterEach', ThrowError);
+  RegisterHook(AArgs, 'afterEach', thAfterEach);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
 
-  if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
-    ThrowError('afterEach expects a function argument', 0, 0);
-
-  FAfterEachCallbacks.Add(AArgs.GetElement(0));
-
+function TGocciaTestAssertions.AfterAll(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  RegisterHook(AArgs, 'afterAll', thAfterAll);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -1750,35 +2690,20 @@ function TGocciaTestAssertions.RunTests(const AArgs: TGocciaArgumentsCollection;
 var
   I: Integer;
   StartTime: Int64;
-  Suite: TGocciaTestSuite;
-  TestCase: TGocciaTestCase;
-  EmptyArgs: TGocciaArgumentsCollection;
   ResultObj: TGocciaObjectValue;
   ExitOnFirstFailure: Boolean = False;
   ShowTestResults: Boolean = True;
   Summary: string;
-  PreviousSuiteName: string;
-  PreviousSuiteIsSkipped: Boolean;
   FailedTestDetails: TStringList;
   FailedTestDetailsArray: TGocciaArrayValue;
+  SuiteNames: TStringList;
   Param: TGocciaValue;
   Val: TGocciaValue;
-  TestResult: TGocciaValue;
-  RejectionReason: string;
-  FailureRecorded: Boolean;
+  HasFocusedEntries: Boolean;
+  ShouldStop: Boolean;
 begin
-  // Reset test statistics and clear any previously registered tests from describe blocks
   ResetTestStats;
-
   StartTime := GetNanoseconds;
-
-  // Clear tests that were registered from previous describe executions
-  // Keep standalone tests that were registered during script execution
-  for I := FRegisteredTests.Count - 1 downto 0 do
-  begin
-    if FRegisteredTests[I].SuiteName <> '' then
-      FRegisteredTests.Delete(I);
-  end;
 
   if AArgs.Length > 0 then
   begin
@@ -1804,206 +2729,96 @@ begin
   end;
 
   FailedTestDetails := TStringList.Create;
-  EmptyArgs := TGocciaArgumentsCollection.Create;
+  SuiteNames := TStringList.Create;
   try
-    // Execute all describe blocks to register their tests (while-loop
-    // re-evaluates Count each iteration so nested describes are picked up)
-    I := 0;
-    while I < FRegisteredSuites.Count do
+    ClearNestedRegistrations(FRootSuite);
+    FCurrentRegistrationSuite := FRootSuite;
+    BuildNestedRegistrations(FRootSuite, FailedTestDetails);
+
+    HasFocusedEntries := SuiteHasSelectedEntries(FRootSuite, True);
+    ShouldStop := False;
+    ExecuteSuite(FRootSuite, HasFocusedEntries, ExitOnFirstFailure,
+      FailedTestDetails, ShouldStop);
+
+    CollectSuiteNames(FRootSuite, SuiteNames);
+
+    Summary := Format('Tests: %d total, %d passed, %d failed, %d skipped',
+      [FTestStats.TotalTests, FTestStats.PassedTests, FTestStats.FailedTests,
+      FTestStats.SkippedTests]);
+
+    if SuiteNames.Count > 0 then
     begin
-      Suite := FRegisteredSuites[I];
-
-      PreviousSuiteName := FTestStats.CurrentSuiteName;
-      PreviousSuiteIsSkipped := FCurrentSuiteIsSkipped;
-      FTestStats.CurrentSuiteName := Suite.Name;
-      FCurrentSuiteIsSkipped := Suite.IsSkipped;
-
-      try
-        // Execute the describe function - this will call test() functions inside
-        Suite.SuiteFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-      except
-        on E: Exception do
-        begin
-          if not FSuppressOutput then
-            WriteLn('Error in describe block "', Suite.Name, '": ', E.Message);
-          FailedTestDetails.Add('Describe "' + Suite.Name + '": ' + E.Message);
-        end;
+      Summary := Summary + ' (Suites: ';
+      for I := 0 to SuiteNames.Count - 1 do
+      begin
+        if I > 0 then
+          Summary := Summary + ', ';
+        Summary := Summary + SuiteNames[I];
       end;
-
-      FTestStats.CurrentSuiteName := PreviousSuiteName;
-      FCurrentSuiteIsSkipped := PreviousSuiteIsSkipped;
-      Inc(I);
+      Summary := Summary + ')';
     end;
 
-    // Now execute all registered tests
-    for I := 0 to FRegisteredTests.Count - 1 do
-    begin
-      TestCase := FRegisteredTests[I];
-      FTestStats.CurrentSuiteName := TestCase.SuiteName;
-
-      Inc(FTestStats.TotalTests);
-
-      // Start tracking this test
-      StartTest(TestCase.Name);
-
-      // Check if test is skipped
-      if TestCase.IsSkipped then
-      begin
-        FTestStats.CurrentTestIsSkipped := True;
-        if not FSuppressOutput then
-        begin
-          if TestCase.SuiteName <> '' then
-            WriteLn('    ⏸️ ', TestCase.Name, ' in ', TestCase.SuiteName, ': SKIPPED')
-          else
-            WriteLn('    ⏸️ ', TestCase.Name, ': SKIPPED');
-        end;
-      end
-      else
-      begin
-        // Run beforeEach callbacks
-        RunCallbacks(FBeforeEachCallbacks);
-
-        FailureRecorded := False;
-        try
-          TestResult := TestCase.TestFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-
-          // Drain microtask queue after each test to process Promise reactions
-          if Assigned(TGocciaMicrotaskQueue.Instance) then
-            TGocciaMicrotaskQueue.Instance.DrainQueue;
-
-          // If the test returned a Promise, check its final state
-          if (TestResult is TGocciaPromiseValue) then
-          begin
-            if TGocciaPromiseValue(TestResult).State = gpsRejected then
-            begin
-              RejectionReason := TGocciaPromiseValue(TestResult).PromiseResult.ToStringLiteral.Value;
-              AssertionFailed('async test', 'Returned Promise rejected: ' + RejectionReason);
-              if TestCase.SuiteName <> '' then
-                FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": Promise rejected: ' + RejectionReason)
-              else
-                FailedTestDetails.Add('Test "' + TestCase.Name + '": Promise rejected: ' + RejectionReason);
-              FailureRecorded := True;
-            end
-            else if TGocciaPromiseValue(TestResult).State = gpsPending then
-            begin
-              AssertionFailed('async test', 'Returned Promise still pending after microtask drain');
-              if TestCase.SuiteName <> '' then
-                FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": Promise still pending after microtask drain')
-              else
-                FailedTestDetails.Add('Test "' + TestCase.Name + '": Promise still pending after microtask drain');
-              FailureRecorded := True;
-            end;
-          end;
-        except
-          on E: Exception do
-          begin
-            // Clear pending microtasks to prevent cross-test callback leakage
-            if Assigned(TGocciaMicrotaskQueue.Instance) then
-              TGocciaMicrotaskQueue.Instance.ClearQueue;
-            // Route exception through proper assertion failure mechanism
-            AssertionFailed('test execution', 'Test threw an exception: ' + E.Message);
-            if TestCase.SuiteName <> '' then
-              FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '": ' + E.Message)
-            else
-              FailedTestDetails.Add('Test "' + TestCase.Name + '": ' + E.Message);
-            FailureRecorded := True;
-            if ExitOnFirstFailure then
-              Break;
-          end;
-        end;
-
-        // Run afterEach callbacks
-        RunCallbacks(FAfterEachCallbacks);
-      end;
-
-      // End tracking this test
-      EndTest;
-
-      // Record assertion-failed tests that were not already added above
-      // (exceptions and promise rejections add their own details, but
-      // plain assertion failures like expect(1).toBe(2) were missing)
-      if FTestStats.CurrentTestHasFailures and not FailureRecorded then
-      begin
-        if TestCase.SuiteName <> '' then
-          FailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' + TestCase.SuiteName + '"')
-        else
-          FailedTestDetails.Add('Test "' + TestCase.Name + '"');
-      end;
-
-      // Exit on first failure if requested (but not for skipped tests)
-      if FTestStats.CurrentTestHasFailures and ExitOnFirstFailure then
-        Break;
-    end;
-
-  finally
-    EmptyArgs.Free;
-  end;
-
-  // Create a summary message
-  Summary := Format('Tests: %d total, %d passed, %d failed, %d skipped',
-    [FTestStats.TotalTests, FTestStats.PassedTests, FTestStats.FailedTests, FTestStats.SkippedTests]);
-
-  if FRegisteredSuites.Count > 0 then
-  begin
-    Summary := Summary + ' (Suites: ';
-    for I := 0 to FRegisteredSuites.Count - 1 do
-    begin
-      if I > 0 then Summary := Summary + ', ';
-      Summary := Summary + FRegisteredSuites[I].Name;
-    end;
-    Summary := Summary + ')';
-  end;
-
-  FailedTestDetailsArray := TGocciaArrayValue.Create;
-  if FailedTestDetails.Count > 0 then
-  begin
-    for I := 0 to FailedTestDetails.Count - 1 do
-      FailedTestDetailsArray.Elements.Add(TGocciaStringLiteralValue.Create(FailedTestDetails[I]));
-  end;
-
-   // Create result object
-  ResultObj := TGocciaObjectValue.Create;
-  ResultObj.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(FRegisteredTests.Count));
-  ResultObj.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(FTestStats.TotalTests));
-  ResultObj.AssignProperty('passed', TGocciaNumberLiteralValue.Create(FTestStats.PassedTests));
-  ResultObj.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FTestStats.FailedTests));
-  ResultObj.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(FTestStats.SkippedTests));
-  ResultObj.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(FTestStats.TotalAssertionCount));
-  ResultObj.AssignProperty('duration', TGocciaNumberLiteralValue.Create(GetNanoseconds - StartTime));
-  ResultObj.AssignProperty('failedTests', FailedTestDetailsArray);
-  ResultObj.AssignProperty('summary', TGocciaStringLiteralValue.Create(Summary));
-
-  if ShowTestResults and not FSuppressOutput then
-  begin
-    WriteLn('');
-    WriteLn('=== Test Results ===');
-    WriteLn(Summary);
-    WriteLn('Total Assertions: ', FTestStats.TotalAssertionCount);
-
-    // Show failed test details
+    FailedTestDetailsArray := TGocciaArrayValue.Create;
     if FailedTestDetails.Count > 0 then
     begin
-      WriteLn('');
-      WriteLn('Failed Tests:');
       for I := 0 to FailedTestDetails.Count - 1 do
-        WriteLn('  • ', FailedTestDetails[I]);
+        FailedTestDetailsArray.Elements.Add(TGocciaStringLiteralValue.Create(
+          FailedTestDetails[I]));
     end;
 
-    if FTestStats.FailedTests = 0 then
+     // Create result object
+    ResultObj := TGocciaObjectValue.Create;
+    ResultObj.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(
+      CountRegisteredTests(FRootSuite)));
+    ResultObj.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(
+      FTestStats.TotalTests));
+    ResultObj.AssignProperty('passed', TGocciaNumberLiteralValue.Create(
+      FTestStats.PassedTests));
+    ResultObj.AssignProperty('failed', TGocciaNumberLiteralValue.Create(
+      FTestStats.FailedTests));
+    ResultObj.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(
+      FTestStats.SkippedTests));
+    ResultObj.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(
+      FTestStats.TotalAssertionCount));
+    ResultObj.AssignProperty('duration', TGocciaNumberLiteralValue.Create(
+      GetNanoseconds - StartTime));
+    ResultObj.AssignProperty('failedTests', FailedTestDetailsArray);
+    ResultObj.AssignProperty('summary', TGocciaStringLiteralValue.Create(Summary));
+
+    if ShowTestResults and not FSuppressOutput then
     begin
-      if FTestStats.SkippedTests > 0 then
-        WriteLn(Format('✅ All tests passed! (%d skipped)', [FTestStats.SkippedTests]))
+      WriteLn('');
+      WriteLn('=== Test Results ===');
+      WriteLn(Summary);
+      WriteLn('Total Assertions: ', FTestStats.TotalAssertionCount);
+
+      if FailedTestDetails.Count > 0 then
+      begin
+        WriteLn('');
+        WriteLn('Failed Tests:');
+        for I := 0 to FailedTestDetails.Count - 1 do
+          WriteLn('  • ', FailedTestDetails[I]);
+      end;
+
+      if FTestStats.FailedTests = 0 then
+      begin
+        if FTestStats.SkippedTests > 0 then
+          WriteLn(Format('✅ All tests passed! (%d skipped)',
+            [FTestStats.SkippedTests]))
+        else
+          WriteLn('✅ All tests passed!');
+      end
       else
-        WriteLn('✅ All tests passed!');
-    end
-    else
-      WriteLn('❌ Some tests failed!');
+        WriteLn('❌ Some tests failed!');
 
       WriteLn('==================');
-  end;
+    end;
 
-  FailedTestDetails.Free;
-  Result := ResultObj;
+    Result := ResultObj;
+  finally
+    FailedTestDetails.Free;
+    SuiteNames.Free;
+  end;
 end;
 
 end.
