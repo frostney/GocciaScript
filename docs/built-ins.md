@@ -940,7 +940,16 @@ describe("group name", () => {
 });
 ```
 
-**Functions:** `describe`, `test`, `it` (alias for `test`), `test.skip`, `beforeEach`, `afterEach`
+**Functions:** `describe`, `describe.skip`, `describe.skipIf`, `describe.runIf`, `describe.only`, `describe.each`, `test`, `it` (alias for `test`), `test.skip`, `test.skipIf`, `test.runIf`, `test.only`, `it.only`, `test.each`, `test.todo`, `beforeAll`, `beforeEach`, `afterEach`, `afterAll`
+
+**Vitest-style structure helpers:**
+
+- `beforeAll(fn)` / `afterAll(fn)` run once per suite around that suite's tests
+- `beforeEach(fn)` / `afterEach(fn)` are suite-scoped and inherited by nested suites
+- `test.each(table)(name, fn)` expands one test per table row and passes row values as callback arguments
+- `describe.each(table)(name, fn)` expands one suite per table row and passes row values as callback arguments
+- `test.only(...)`, `it.only(...)`, and `describe.only(...)` focus execution to the selected tests/suites
+- `test.todo(name)` registers a placeholder test that is reported as skipped but never executed
 
 **Matchers:**
 
