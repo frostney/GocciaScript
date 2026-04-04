@@ -1867,8 +1867,6 @@ procedure TTestSkipAndConditionalAPIs.TestDescribeSkipRegistersSkippedSuite;
 var
   A: TGocciaArgumentsCollection;
   ResultObj: TGocciaObjectValue;
-  RunArgs: TGocciaArgumentsCollection;
-  SilentParams: TGocciaObjectValue;
 begin
   A := TGocciaArgumentsCollection.Create([TGocciaStringLiteralValue.Create('skipped suite'), CreateNoOpFunction]);
   try
@@ -1877,16 +1875,9 @@ begin
     A.Free;
   end;
 
-  SilentParams := TGocciaObjectValue.Create;
-  SilentParams.AssignProperty('silent', TGocciaBooleanLiteralValue.Create(True));
-  RunArgs := TGocciaArgumentsCollection.Create([SilentParams]);
-  try
-    ResultObj := FAssertions.RunTests(RunArgs, nil) as TGocciaObjectValue;
-    Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
-    Expect<Double>(ResultObj.GetProperty('totalRunTests').ToNumberLiteral.Value).ToBe(0);
-  finally
-    RunArgs.Free;
-  end;
+  ResultObj := RunRegisteredTests;
+  Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
+  Expect<Double>(ResultObj.GetProperty('totalRunTests').ToNumberLiteral.Value).ToBe(0);
 end;
 
 { describe.skipIf }
@@ -1921,10 +1912,9 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestDescribeSkipIfTrueRegistersSkippedSuite;
 var
-  CondArgs, DescArgs, RunArgs: TGocciaArgumentsCollection;
+  CondArgs, DescArgs: TGocciaArgumentsCollection;
   ReturnedFunc: TGocciaNativeFunctionValue;
   ResultObj: TGocciaObjectValue;
-  SilentParams: TGocciaObjectValue;
 begin
   CondArgs := TGocciaArgumentsCollection.Create([TGocciaBooleanLiteralValue.Create(True)]);
   try
@@ -1940,23 +1930,15 @@ begin
     DescArgs.Free;
   end;
 
-  SilentParams := TGocciaObjectValue.Create;
-  SilentParams.AssignProperty('silent', TGocciaBooleanLiteralValue.Create(True));
-  RunArgs := TGocciaArgumentsCollection.Create([SilentParams]);
-  try
-    ResultObj := FAssertions.RunTests(RunArgs, nil) as TGocciaObjectValue;
-    Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
-  finally
-    RunArgs.Free;
-  end;
+  ResultObj := RunRegisteredTests;
+  Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
 end;
 
 procedure TTestSkipAndConditionalAPIs.TestDescribeSkipIfFalseRegistersNormalSuite;
 var
-  CondArgs, DescArgs, RunArgs: TGocciaArgumentsCollection;
+  CondArgs, DescArgs: TGocciaArgumentsCollection;
   ReturnedFunc: TGocciaNativeFunctionValue;
   ResultObj: TGocciaObjectValue;
-  SilentParams: TGocciaObjectValue;
 begin
   CondArgs := TGocciaArgumentsCollection.Create([TGocciaBooleanLiteralValue.Create(False)]);
   try
@@ -1972,16 +1954,9 @@ begin
     DescArgs.Free;
   end;
 
-  SilentParams := TGocciaObjectValue.Create;
-  SilentParams.AssignProperty('silent', TGocciaBooleanLiteralValue.Create(True));
-  RunArgs := TGocciaArgumentsCollection.Create([SilentParams]);
-  try
-    ResultObj := FAssertions.RunTests(RunArgs, nil) as TGocciaObjectValue;
-    Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
-    Expect<Double>(ResultObj.GetProperty('failed').ToNumberLiteral.Value).ToBe(0);
-  finally
-    RunArgs.Free;
-  end;
+  ResultObj := RunRegisteredTests;
+  Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
+  Expect<Double>(ResultObj.GetProperty('failed').ToNumberLiteral.Value).ToBe(0);
 end;
 
 { describe.runIf }
@@ -2016,10 +1991,9 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestDescribeRunIfTrueRegistersNormalSuite;
 var
-  CondArgs, DescArgs, RunArgs: TGocciaArgumentsCollection;
+  CondArgs, DescArgs: TGocciaArgumentsCollection;
   ReturnedFunc: TGocciaNativeFunctionValue;
   ResultObj: TGocciaObjectValue;
-  SilentParams: TGocciaObjectValue;
 begin
   CondArgs := TGocciaArgumentsCollection.Create([TGocciaBooleanLiteralValue.Create(True)]);
   try
@@ -2035,24 +2009,16 @@ begin
     DescArgs.Free;
   end;
 
-  SilentParams := TGocciaObjectValue.Create;
-  SilentParams.AssignProperty('silent', TGocciaBooleanLiteralValue.Create(True));
-  RunArgs := TGocciaArgumentsCollection.Create([SilentParams]);
-  try
-    ResultObj := FAssertions.RunTests(RunArgs, nil) as TGocciaObjectValue;
-    Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
-    Expect<Double>(ResultObj.GetProperty('failed').ToNumberLiteral.Value).ToBe(0);
-  finally
-    RunArgs.Free;
-  end;
+  ResultObj := RunRegisteredTests;
+  Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
+  Expect<Double>(ResultObj.GetProperty('failed').ToNumberLiteral.Value).ToBe(0);
 end;
 
 procedure TTestSkipAndConditionalAPIs.TestDescribeRunIfFalseRegistersSkippedSuite;
 var
-  CondArgs, DescArgs, RunArgs: TGocciaArgumentsCollection;
+  CondArgs, DescArgs: TGocciaArgumentsCollection;
   ReturnedFunc: TGocciaNativeFunctionValue;
   ResultObj: TGocciaObjectValue;
-  SilentParams: TGocciaObjectValue;
 begin
   CondArgs := TGocciaArgumentsCollection.Create([TGocciaBooleanLiteralValue.Create(False)]);
   try
@@ -2068,15 +2034,8 @@ begin
     DescArgs.Free;
   end;
 
-  SilentParams := TGocciaObjectValue.Create;
-  SilentParams.AssignProperty('silent', TGocciaBooleanLiteralValue.Create(True));
-  RunArgs := TGocciaArgumentsCollection.Create([SilentParams]);
-  try
-    ResultObj := FAssertions.RunTests(RunArgs, nil) as TGocciaObjectValue;
-    Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
-  finally
-    RunArgs.Free;
-  end;
+  ResultObj := RunRegisteredTests;
+  Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
 end;
 
 { test.skipIf }
@@ -2111,10 +2070,9 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestTestSkipIfTrueRegistersSkippedTest;
 var
-  CondArgs, TestArgs, RunArgs: TGocciaArgumentsCollection;
+  CondArgs, TestArgs: TGocciaArgumentsCollection;
   ReturnedFunc: TGocciaNativeFunctionValue;
   ResultObj: TGocciaObjectValue;
-  SilentParams: TGocciaObjectValue;
 begin
   CondArgs := TGocciaArgumentsCollection.Create([TGocciaBooleanLiteralValue.Create(True)]);
   try
@@ -2130,24 +2088,16 @@ begin
     TestArgs.Free;
   end;
 
-  SilentParams := TGocciaObjectValue.Create;
-  SilentParams.AssignProperty('silent', TGocciaBooleanLiteralValue.Create(True));
-  RunArgs := TGocciaArgumentsCollection.Create([SilentParams]);
-  try
-    ResultObj := FAssertions.RunTests(RunArgs, nil) as TGocciaObjectValue;
-    Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(1);
-    Expect<Double>(ResultObj.GetProperty('totalRunTests').ToNumberLiteral.Value).ToBe(1);
-  finally
-    RunArgs.Free;
-  end;
+  ResultObj := RunRegisteredTests;
+  Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(1);
+  Expect<Double>(ResultObj.GetProperty('totalRunTests').ToNumberLiteral.Value).ToBe(1);
 end;
 
 procedure TTestSkipAndConditionalAPIs.TestTestSkipIfFalseRegistersNormalTest;
 var
-  CondArgs, TestArgs, RunArgs: TGocciaArgumentsCollection;
+  CondArgs, TestArgs: TGocciaArgumentsCollection;
   ReturnedFunc: TGocciaNativeFunctionValue;
   ResultObj: TGocciaObjectValue;
-  SilentParams: TGocciaObjectValue;
 begin
   CondArgs := TGocciaArgumentsCollection.Create([TGocciaBooleanLiteralValue.Create(False)]);
   try
@@ -2163,16 +2113,9 @@ begin
     TestArgs.Free;
   end;
 
-  SilentParams := TGocciaObjectValue.Create;
-  SilentParams.AssignProperty('silent', TGocciaBooleanLiteralValue.Create(True));
-  RunArgs := TGocciaArgumentsCollection.Create([SilentParams]);
-  try
-    ResultObj := FAssertions.RunTests(RunArgs, nil) as TGocciaObjectValue;
-    Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
-    Expect<Double>(ResultObj.GetProperty('passed').ToNumberLiteral.Value).ToBe(1);
-  finally
-    RunArgs.Free;
-  end;
+  ResultObj := RunRegisteredTests;
+  Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
+  Expect<Double>(ResultObj.GetProperty('passed').ToNumberLiteral.Value).ToBe(1);
 end;
 
 { test.runIf }
@@ -2207,10 +2150,9 @@ end;
 
 procedure TTestSkipAndConditionalAPIs.TestTestRunIfTrueRegistersNormalTest;
 var
-  CondArgs, TestArgs, RunArgs: TGocciaArgumentsCollection;
+  CondArgs, TestArgs: TGocciaArgumentsCollection;
   ReturnedFunc: TGocciaNativeFunctionValue;
   ResultObj: TGocciaObjectValue;
-  SilentParams: TGocciaObjectValue;
 begin
   CondArgs := TGocciaArgumentsCollection.Create([TGocciaBooleanLiteralValue.Create(True)]);
   try
@@ -2226,24 +2168,16 @@ begin
     TestArgs.Free;
   end;
 
-  SilentParams := TGocciaObjectValue.Create;
-  SilentParams.AssignProperty('silent', TGocciaBooleanLiteralValue.Create(True));
-  RunArgs := TGocciaArgumentsCollection.Create([SilentParams]);
-  try
-    ResultObj := FAssertions.RunTests(RunArgs, nil) as TGocciaObjectValue;
-    Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
-    Expect<Double>(ResultObj.GetProperty('passed').ToNumberLiteral.Value).ToBe(1);
-  finally
-    RunArgs.Free;
-  end;
+  ResultObj := RunRegisteredTests;
+  Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(0);
+  Expect<Double>(ResultObj.GetProperty('passed').ToNumberLiteral.Value).ToBe(1);
 end;
 
 procedure TTestSkipAndConditionalAPIs.TestTestRunIfFalseRegistersSkippedTest;
 var
-  CondArgs, TestArgs, RunArgs: TGocciaArgumentsCollection;
+  CondArgs, TestArgs: TGocciaArgumentsCollection;
   ReturnedFunc: TGocciaNativeFunctionValue;
   ResultObj: TGocciaObjectValue;
-  SilentParams: TGocciaObjectValue;
 begin
   CondArgs := TGocciaArgumentsCollection.Create([TGocciaBooleanLiteralValue.Create(False)]);
   try
@@ -2259,16 +2193,9 @@ begin
     TestArgs.Free;
   end;
 
-  SilentParams := TGocciaObjectValue.Create;
-  SilentParams.AssignProperty('silent', TGocciaBooleanLiteralValue.Create(True));
-  RunArgs := TGocciaArgumentsCollection.Create([SilentParams]);
-  try
-    ResultObj := FAssertions.RunTests(RunArgs, nil) as TGocciaObjectValue;
-    Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(1);
-    Expect<Double>(ResultObj.GetProperty('totalRunTests').ToNumberLiteral.Value).ToBe(1);
-  finally
-    RunArgs.Free;
-  end;
+  ResultObj := RunRegisteredTests;
+  Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(1);
+  Expect<Double>(ResultObj.GetProperty('totalRunTests').ToNumberLiteral.Value).ToBe(1);
 end;
 
 procedure TTestSkipAndConditionalAPIs.TestBeforeAllRunsOncePerSuite;
