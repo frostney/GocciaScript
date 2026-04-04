@@ -1,0 +1,3 @@
+"0": yaml-zero
+foo-bar: yaml-hyphen
+default: yaml-default

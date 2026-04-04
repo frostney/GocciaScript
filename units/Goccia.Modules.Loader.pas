@@ -356,6 +356,7 @@ function TGocciaModuleLoader.LoadStructuredDataModule(
 var
   Content: TGocciaModuleContent;
   Documents: TGocciaArrayValue;
+  DocumentIndex: Integer;
   Extension: string;
   Key: string;
   Module: TGocciaModule;
@@ -406,12 +407,14 @@ begin
         YAMLParser.Free;
       end;
 
-      if Documents.Elements.Count <> 1 then
+      if Documents.Elements.Count = 0 then
         raise TGocciaRuntimeError.Create(
-          Format('YAML module "%s" must contain exactly one top-level document.',
+          Format('YAML module "%s" must contain at least one top-level document.',
             [AResolvedPath]),
           0, 0, AResolvedPath, nil);
-      ParsedDocument := Documents.Elements[0];
+
+      if Documents.Elements.Count = 1 then
+        ParsedDocument := Documents.Elements[0];
     end;
 
     Module := TGocciaModule.Create(AResolvedPath);
@@ -421,7 +424,14 @@ begin
       if Extension = EXT_JSON then
         ParsedDocument := ParsedValue;
 
-      if ParsedDocument is TGocciaObjectValue then
+      if Assigned(Documents) and (Documents.Elements.Count > 1) then
+      begin
+        // Multi-document YAML modules expose each document by its string index.
+        for DocumentIndex := 0 to Documents.Elements.Count - 1 do
+          Module.ExportsTable.AddOrSetValue(IntToStr(DocumentIndex),
+            Documents.Elements[DocumentIndex]);
+      end
+      else if ParsedDocument is TGocciaObjectValue then
       begin
         Obj := TGocciaObjectValue(ParsedDocument);
         for Key in Obj.GetOwnPropertyKeys do

@@ -175,9 +175,11 @@ ES module syntax with named exports. Supported file extensions: `.js`, `.jsx`, `
 // Named imports (with or without extension)
 import { add, multiply } from "./math.js";
 import { add, multiply } from "./math";      // resolves to ./math.js, .jsx, .ts, .tsx, or .mjs
+import { "foo-bar" as fooBar } from "./config.json";
 
 // Named exports
 export { myFunction, myValue };
+export { localValue as "0" };
 
 // Inline exports
 export const PI = 3.14159;
@@ -186,18 +188,21 @@ export let count = 0;
 // Re-exports
 export { add, multiply } from "./math.js";
 export { greet as sayHello } from "./utils.js";
+export { "foo-bar" as configValue } from "./config.json";
 
 // JSON imports — top-level keys become named exports
 import { name, version } from "./package.json";
 import { host as dbHost } from "./config.json";
+import { "foo-bar" as featureFlag } from "./feature-flags.json";
 
 // YAML imports — top-level keys become named exports
 import { name, version } from "./package.yaml";
 import { host as dbHost } from "./config.yml";
+import { "0" as firstDoc } from "./multi-doc-index.yaml";
 
-YAML module imports follow the same top-level-object export model as JSON modules. Multi-document YAML streams are available through `YAML.parseDocuments(...)`, but `.yaml` and `.yml` module imports must still resolve to a single top-level mapping document. Block scalars, multiline plain and quoted scalar folding, multiline flow collections, YAML 1.2 numeric scalar resolution, YAML double-quoted escapes, self-referential alias graphs, stricter flow collection validation, empty implicit keys, anchored mapping keys, `%YAML` / `%TAG` directives, standard tags, tagged-value metadata (`.tagName`, `.value`), and explicit keys including omitted explicit values are supported.
+Single-document YAML module imports follow the same top-level-object export model as JSON modules. Multi-document YAML streams are also supported for `.yaml` and `.yml` imports: each document is exposed as a named export under its zero-based string index (`"0"`, `"1"`, ...). If you want an array of documents inside normal runtime code instead of module exports, use `YAML.parseDocuments(...)`. Block scalars, multiline plain and quoted scalar folding, multiline flow collections, YAML 1.2 numeric scalar resolution, YAML double-quoted escapes, self-referential alias graphs, stricter flow collection validation, empty implicit keys, anchored mapping keys, `%YAML` / `%TAG` directives, standard tags, tagged-value metadata (`.tagName`, `.value`), and explicit keys including omitted explicit values are supported.
 
-Non-scalar YAML keys are canonicalized into stable JSON-like strings. For module imports, that means explicit scalar keys work naturally as named exports, while complex keys only produce useful imports when the resulting canonical string is a valid export name.
+Non-scalar YAML keys are canonicalized into stable JSON-like strings. Explicit scalar keys work naturally as named exports, and keys that are not valid identifiers can still be imported with string-literal names such as `import { "foo-bar" as fooBar } from "./config.yaml";`. Complex keys only produce useful imports when you know the canonical export string.
 
 This YAML surface is still partial. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
 

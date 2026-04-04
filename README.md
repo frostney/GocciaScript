@@ -283,9 +283,10 @@ Structured data files can also be consumed directly:
 ```javascript
 import { name, version } from "./package.json";
 import { name as appName, debug } from "./config.yaml";
+import { "0" as firstDoc, "1" as secondDoc } from "./multi.yaml";
 ```
 
-For YAML streams with multiple documents, use the explicit document parser:
+If you want a YAML stream as an array in runtime code instead of module exports, use the explicit document parser:
 
 ```javascript
 const docs = YAML.parseDocuments(sourceText);
