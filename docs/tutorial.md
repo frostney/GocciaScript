@@ -235,6 +235,15 @@ import { add as sum } from "./math.js";
 console.log(sum(1, 2)); // 3
 ```
 
+Named imports and exports also support string-literal export names when a module exposes a name that is not a valid identifier:
+
+```javascript
+import { "foo-bar" as fooBar } from "./config.json";
+
+const localValue = 42;
+export { localValue as "0" };
+```
+
 And re-export from one module to another:
 
 ```javascript

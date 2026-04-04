@@ -77,6 +77,7 @@ type
     function Match(const ATokenTypes: array of TGocciaTokenType): Boolean; overload;
     function Match(const ATokenType: TGocciaTokenType): Boolean; overload; inline;
     function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken;
+    function ConsumeModuleExportName(const AMessage: string): TGocciaToken;
     function IsArrowFunction: Boolean;
     function ConvertNumberLiteral(const ALexeme: string): Double;
     function ParseBinaryExpression(const ANextLevel: TParseFunction; const AOperators: array of TGocciaTokenType): TGocciaExpression;
@@ -434,6 +435,16 @@ function TGocciaParser.Consume(const ATokenType: TGocciaTokenType;
 begin
   if Check(ATokenType) then
     Exit(Advance);
+
+  raise TGocciaSyntaxError.Create(AMessage, Peek.Line, Peek.Column,
+    FFileName, FSourceLines);
+end;
+
+function TGocciaParser.ConsumeModuleExportName(
+  const AMessage: string): TGocciaToken;
+begin
+  if Match([gttIdentifier, gttString]) then
+    Exit(Previous);
 
   raise TGocciaSyntaxError.Create(AMessage, Peek.Line, Peek.Column,
     FFileName, FSourceLines);
@@ -2233,6 +2244,7 @@ function TGocciaParser.ImportDeclaration: TGocciaStatement;
 var
   Imports: TStringStringMap;
   ImportedName, LocalName, ModulePath: string;
+  ImportedNameToken: TGocciaToken;
   Line, Column: Integer;
 begin
   Line := Previous.Line;
@@ -2282,10 +2294,16 @@ begin
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
-    ImportedName := Consume(gttIdentifier, 'Expected import name').Lexeme;
+    ImportedNameToken := ConsumeModuleExportName('Expected import name');
+    ImportedName := ImportedNameToken.Lexeme;
 
     if Match(gttAs) then
       LocalName := Consume(gttIdentifier, 'Expected local name after "as"').Lexeme
+    else if ImportedNameToken.TokenType = gttString then
+      raise TGocciaSyntaxError.Create(
+        'String-literal import names require "as" and a local identifier',
+        ImportedNameToken.Line, ImportedNameToken.Column, FFileName,
+        FSourceLines)
     else
       LocalName := ImportedName;
 
@@ -2310,6 +2328,25 @@ var
   Line, Column: Integer;
   InnerDecl: TGocciaStatement;
   VarDecl: TGocciaVariableDeclaration;
+  LocalNames: array of string;
+  ExportedNames: array of string;
+  LocalNameTokenTypes: array of TGocciaTokenType;
+  SpecifierCount: Integer;
+  NameToken: TGocciaToken;
+  IsReExport: Boolean;
+  I: Integer;
+
+  function HasFromClauseAfterNamedExports: Boolean;
+  var
+    ScanIndex: Integer;
+  begin
+    ScanIndex := FCurrent;
+    while (ScanIndex < FTokens.Count) and
+      (FTokens[ScanIndex].TokenType <> gttRightBrace) do
+      Inc(ScanIndex);
+    Result := (ScanIndex + 1 < FTokens.Count) and
+      (FTokens[ScanIndex + 1].TokenType = gttFrom);
+  end;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -2378,24 +2415,44 @@ begin
 
   Consume(gttLeftBrace, 'Expected "{", "const", or "let" after "export"');
 
-  ExportsTable := TStringStringMap.Create;
+  IsReExport := HasFromClauseAfterNamedExports;
+  SpecifierCount := 0;
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
-    LocalName := Consume(gttIdentifier, 'Expected export name').Lexeme;
+    NameToken := ConsumeModuleExportName('Expected export name');
+    LocalName := NameToken.Lexeme;
 
     if Match(gttAs) then
-      ExportedName := Consume(gttIdentifier, 'Expected exported name after "as"').Lexeme
+      ExportedName := ConsumeModuleExportName(
+        'Expected exported name after "as"').Lexeme
     else
       ExportedName := LocalName;
 
-    ExportsTable.Add(ExportedName, LocalName);
+    SetLength(LocalNames, SpecifierCount + 1);
+    SetLength(ExportedNames, SpecifierCount + 1);
+    SetLength(LocalNameTokenTypes, SpecifierCount + 1);
+    LocalNames[SpecifierCount] := LocalName;
+    ExportedNames[SpecifierCount] := ExportedName;
+    LocalNameTokenTypes[SpecifierCount] := NameToken.TokenType;
+    Inc(SpecifierCount);
 
     if not Match(gttComma) then
       Break;
   end;
 
   Consume(gttRightBrace, 'Expected "}" after exports');
+
+  if not IsReExport then
+    for I := 0 to SpecifierCount - 1 do
+      if LocalNameTokenTypes[I] = gttString then
+        raise TGocciaSyntaxError.Create(
+          'String-literal local exports require an identifier before "as"',
+          Line, Column, FFileName, FSourceLines);
+
+  ExportsTable := TStringStringMap.Create;
+  for I := 0 to SpecifierCount - 1 do
+    ExportsTable.Add(ExportedNames[I], LocalNames[I]);
 
   if Match(gttFrom) then
   begin

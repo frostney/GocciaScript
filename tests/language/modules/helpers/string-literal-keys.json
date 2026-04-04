@@ -1,0 +1,5 @@
+{
+  "0": "json-zero",
+  "foo-bar": "json-hyphen",
+  "default": "json-default"
+}
