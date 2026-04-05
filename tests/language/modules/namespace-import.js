@@ -9,6 +9,7 @@ import * as math from "./helpers/math-utils.js";
 import * as mathAgain from "./helpers/math-utils.js";
 import * as configJson from "./helpers/config.json";
 import * as configJsonAgain from "./helpers/config.json";
+import * as configJson5 from "./helpers/config.json5";
 import * as configToml from "./helpers/config.toml";
 import * as configYaml from "./helpers/config.yaml";
 
@@ -55,6 +56,21 @@ describe("namespace import", () => {
     expect(configYaml.database.host).toBe("localhost");
     expect(configYaml.database.port).toBe(5432);
     expect(Object.keys(configYaml)).toEqual([
+      "name",
+      "version",
+      "debug",
+      "maxRetries",
+      "tags",
+      "database",
+    ]);
+  });
+
+  test("creates a namespace object for JSON5 modules", () => {
+    expect(configJson5.name).toBe("goccia-test");
+    expect(configJson5.version).toBe("1.0.0");
+    expect(configJson5.database.host).toBe("localhost");
+    expect(configJson5.database.port).toBe(5432);
+    expect(Object.keys(configJson5)).toEqual([
       "name",
       "version",
       "debug",

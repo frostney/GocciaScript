@@ -24,6 +24,7 @@ uses
   Goccia.Builtins.GlobalString,
   Goccia.Builtins.GlobalSymbol,
   Goccia.Builtins.JSON,
+  Goccia.Builtins.JSON5,
   Goccia.Builtins.JSONL,
   Goccia.Builtins.Math,
   Goccia.Builtins.Performance,
@@ -33,6 +34,7 @@ uses
   Goccia.Builtins.YAML,
   Goccia.Interpreter,
   Goccia.JSON,
+  Goccia.JSON5,
   Goccia.JSONL,
   Goccia.JSX.SourceMap,
   Goccia.Modules,
@@ -61,6 +63,7 @@ type
     ggGlobalNumber,
     ggPromise,
     ggJSON,
+    ggJSON5,
     ggJSONL,
     ggTOML,
     ggYAML,
@@ -89,7 +92,7 @@ type
 type
   TGocciaEngine = class
   public
-    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
+    const DefaultGlobals: TGocciaGlobalBuiltins = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray, ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
   private
     FInterpreter: TGocciaInterpreter;
     FFileName: string;
@@ -109,6 +112,7 @@ type
     FBuiltinGlobalString: TGocciaGlobalString;
     FBuiltinGlobals: TGocciaGlobals;
     FBuiltinJSON: TGocciaJSONBuiltin;
+    FBuiltinJSON5: TGocciaJSON5Builtin;
     FBuiltinTOML: TGocciaTOMLBuiltin;
     FBuiltinJSONL: TGocciaJSONLBuiltin;
     FBuiltinYAML: TGocciaYAMLBuiltin;
@@ -150,6 +154,7 @@ type
     procedure AddAlias(const APattern, AReplacement: string);
     procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
+    procedure InjectGlobalsFromJSON5(const AJSON5String: string);
     procedure InjectGlobalsFromTOML(const ATOMLString: UTF8String);
     procedure InjectGlobalsFromYAML(const AYamlString: string);
     procedure InjectGlobalsFromModule(const APath: string);
@@ -172,6 +177,7 @@ type
     property BuiltinGlobalNumber: TGocciaGlobalNumber read FBuiltinGlobalNumber;
     property BuiltinGlobals: TGocciaGlobals read FBuiltinGlobals;
     property BuiltinJSON: TGocciaJSONBuiltin read FBuiltinJSON;
+    property BuiltinJSON5: TGocciaJSON5Builtin read FBuiltinJSON5;
     property BuiltinTOML: TGocciaTOMLBuiltin read FBuiltinTOML;
     property BuiltinJSONL: TGocciaJSONLBuiltin read FBuiltinJSONL;
     property BuiltinYAML: TGocciaYAMLBuiltin read FBuiltinYAML;
@@ -285,10 +291,11 @@ begin
     FBuiltinGlobalArray.Free;
     FBuiltinGlobalNumber.Free;
     FBuiltinRegExp.Free;
-    FBuiltinGlobalString.Free;
-    FBuiltinGlobals.Free;
-    FBuiltinJSON.Free;
-    FBuiltinTOML.Free;
+  FBuiltinGlobalString.Free;
+  FBuiltinGlobals.Free;
+  FBuiltinJSON.Free;
+  FBuiltinJSON5.Free;
+  FBuiltinTOML.Free;
     FBuiltinJSONL.Free;
     FBuiltinYAML.Free;
     FBuiltinSymbol.Free;
@@ -336,6 +343,8 @@ begin
     FBuiltinGlobalNumber := TGocciaGlobalNumber.Create(CONSTRUCTOR_NUMBER, Scope, ThrowError);
   if ggJSON in FGlobals then
     FBuiltinJSON := TGocciaJSONBuiltin.Create('JSON', Scope, ThrowError);
+  if ggJSON5 in FGlobals then
+    FBuiltinJSON5 := TGocciaJSON5Builtin.Create('JSON5', Scope, ThrowError);
   if ggJSONL in FGlobals then
     FBuiltinJSONL := TGocciaJSONLBuiltin.Create('JSONL', Scope, ThrowError);
   if ggTOML in FGlobals then
@@ -666,6 +675,34 @@ begin
 
   if not (ParsedValue is TGocciaObjectValue) then
     raise TGocciaRuntimeError.Create('Globals JSON must be a top-level object.',
+      0, 0, FFileName, nil);
+
+  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Obj := TGocciaObjectValue(ParsedValue);
+    for Key in Obj.GetOwnPropertyKeys do
+      InjectGlobal(Key, Obj.GetProperty(Key));
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
+procedure TGocciaEngine.InjectGlobalsFromJSON5(const AJSON5String: string);
+var
+  Key: string;
+  Obj: TGocciaObjectValue;
+  ParsedValue: TGocciaValue;
+  Parser: TGocciaJSON5Parser;
+begin
+  Parser := TGocciaJSON5Parser.Create;
+  try
+    ParsedValue := Parser.Parse(AJSON5String);
+  finally
+    Parser.Free;
+  end;
+
+  if not (ParsedValue is TGocciaObjectValue) then
+    raise TGocciaRuntimeError.Create('Globals JSON5 must be a top-level object.',
       0, 0, FFileName, nil);
 
   TGarbageCollector.Instance.AddTempRoot(ParsedValue);

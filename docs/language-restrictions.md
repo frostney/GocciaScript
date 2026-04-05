@@ -180,6 +180,7 @@ import { "foo-bar" as fooBar } from "./config.json";
 // Namespace imports
 import * as math from "./math.js";
 import * as configJson from "./config.json";
+import * as configJson5 from "./config.json5";
 import * as configToml from "./config.toml";
 import * as configYaml from "./config.yaml";
 
@@ -201,6 +202,10 @@ import { name, version } from "./package.json";
 import { host as dbHost } from "./config.json";
 import { "foo-bar" as featureFlag } from "./feature-flags.json";
 
+// JSON5 imports — top-level keys become named exports
+import { name, version } from "./package.json5";
+import { host as dbHost } from "./config.json5";
+
 // TOML imports — top-level keys become named exports
 import { name, version } from "./package.toml";
 import { host as dbHost } from "./config.toml";
@@ -215,13 +220,15 @@ import { "0" as firstDoc } from "./multi-doc-index.yaml";
 
 TOML module imports follow the same top-level-object export model as JSON modules. `.toml` files are parsed as TOML 1.1.0 and exposed as named exports from the root table. Arrays of tables stay arrays, nested tables stay objects, and TOML date/time values currently surface as validated strings rather than Temporal values.
 
+JSON5 module imports follow the same top-level-object export model as JSON modules. `.json5` files are parsed with the permissive JSON5 surface, so comments, trailing commas, single-quoted strings, unquoted identifier keys, hexadecimal numbers, signed numbers, and `Infinity` / `NaN` all work during import while still exposing the parsed root object as named exports.
+
 Single-document YAML module imports follow the same top-level-object export model as JSON modules. Multi-document YAML streams are also supported for `.yaml` and `.yml` imports: each document is exposed as a named export under its zero-based string index (`"0"`, `"1"`, ...). If you want an array of documents inside normal runtime code instead of module exports, use `YAML.parseDocuments(...)`. Block scalars, multiline plain and quoted scalar folding, multiline flow collections, YAML 1.2 numeric scalar resolution, YAML double-quoted escapes, self-referential alias graphs, stricter flow collection validation, empty implicit keys, anchored mapping keys, `%YAML` / `%TAG` directives, standard tags, tagged-value metadata (`.tagName`, `.value`), and explicit keys including omitted explicit values are supported.
 
 JSONL (`.jsonl`) imports are also supported. Each non-empty line is parsed as strict JSON and exposed as a named export under its zero-based string index (`"0"`, `"1"`, ...). Blank lines are ignored. If a line is invalid JSON, the load fails with a syntax error that includes the JSONL source line number. In runtime code, `JSONL.parse(...)` returns the full array of records and `JSONL.parseChunk(...)` exposes Bun-compatible streaming state (`values`, `read`, `done`, `error`).
 
 Non-scalar YAML keys are canonicalized into stable JSON-like strings. Explicit scalar keys work naturally as named exports, and keys that are not valid identifiers can still be imported with string-literal names such as `import { "foo-bar" as fooBar } from "./config.yaml";`. Complex keys only produce useful imports when you know the canonical export string.
 
-Namespace imports (`import * as ns from "./module.js"`) are also supported for script modules and structured-data modules. They produce a frozen, null-prototype namespace object whose enumerable own properties are copied from the module's export table at import time, so JSON, JSONL, TOML, and YAML modules can all be consumed either through named imports or through a namespace object snapshot.
+Namespace imports (`import * as ns from "./module.js"`) are also supported for script modules and structured-data modules. They produce a frozen, null-prototype namespace object whose enumerable own properties are copied from the module's export table at import time, so JSON, JSON5, JSONL, TOML, and YAML modules can all be consumed either through named imports or through a namespace object snapshot.
 
 This YAML surface is still partial. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
 

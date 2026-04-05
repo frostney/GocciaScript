@@ -17,6 +17,7 @@ TGocciaGlobalBuiltin = (
   ggGlobalNumber,     // Number.parseInt, Number.isNaN, etc.
   ggPromise,          // Promise constructor, prototype, static methods, microtask queue
   ggJSON,             // JSON.parse, JSON.stringify
+  ggJSON5,            // JSON5.parse
   ggJSONL,            // JSONL.parse, JSONL.parseChunk
   ggTOML,             // TOML.parse
   ggYAML,             // YAML.parse, YAML.parseDocuments
@@ -36,7 +37,7 @@ The default set used by `ScriptLoader` and `REPL`:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap,
+                  ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap,
                   ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
 ```
 
@@ -147,6 +148,19 @@ The JSON parser is a recursive descent implementation. Special handling:
 - Finite floating-point numbers are serialized with round-trip-safe decimal text when needed
 - `toJSON()` is called before serializing object values
 - Circular references throw `TypeError`
+
+### JSON5 (`Goccia.Builtins.JSON5.pas`)
+
+| Method | Description |
+|--------|-------------|
+| `JSON5.parse(text, reviver?)` | Parse JSON5 text to a value, with optional reviver function |
+| `JSON5.stringify(value, replacerOrOptions?, space?)` | Serialize a value with JSON5 syntax, including special numeric values and optional `quote` override |
+
+`JSON5.parse` delegates to the standalone `TGocciaJSON5Parser` utility in `Goccia.JSON5`. The JSON5 parser shares the same core capability-driven parser engine as strict JSON, so `JSON.parse(...)` stays strict while `JSON5.parse(...)` opts into comments, trailing commas, single-quoted strings, unquoted identifier keys, hexadecimal numbers, signed numbers, `Infinity`, `NaN`, line continuations, and ECMAScript whitespace extensions.
+
+`JSON5.stringify` delegates to `TGocciaJSON5Stringifier`, which reuses the same shared serialization core as strict JSON but switches to JSON5 formatting rules. That means unquoted identifier keys, single- or double-quoted strings (with optional `{ quote: "'" | '"' }` override), preserved `Infinity` / `-Infinity` / `NaN`, trailing commas when pretty-printing, `toJSON5()` preference over `toJSON()`, and the same replacer / space semantics as JSON plus the upstream JSON5 options-object form `{ replacer, space, quote }`.
+
+Compatibility goal: GocciaScript is targeting full JSON5 parser compatibility plus upstream-aligned stringify behavior. The official `json5/json5` parser test corpus can be rerun with `python3 scripts/run_json5_test_suite.py` or `python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check` when you already have the decoder harness built. Stringify behavior is covered by `tests/built-ins/JSON5/stringify.js`.
 
 ### YAML (`Goccia.Builtins.YAML.pas`)
 

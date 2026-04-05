@@ -64,7 +64,11 @@ const
   PROP_TO_LOCALE_STRING       = 'toLocaleString';
   PROP_STRICT_TYPES           = 'strictTypes';
   PROP_NOW                    = 'now';
+  PROP_QUOTE                  = 'quote';
+  PROP_REPLACER               = 'replacer';
+  PROP_SPACE                  = 'space';
   PROP_TO_JSON                = 'toJSON';
+  PROP_TO_JSON5               = 'toJSON5';
   PROP_TIME_ORIGIN            = 'timeOrigin';
 
 implementation

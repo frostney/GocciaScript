@@ -257,6 +257,21 @@ The TOML runner exits non-zero when any case fails or times out, so it is safe t
 
 The harness and any file-backed parser regression must read source text as UTF-8 bytes first and only then hand it to the parser. On Windows, explicit casts like `string(UTF8StringBytes)`, plain `string` temporaries inserted between file I/O and the parser, and default `TStringList.LoadFromFile` calls can silently reinterpret UTF-8 through the local ANSI code page, which shows up in CI as mojibake such as `José -> JosÃ©` or Unicode TOML keys no longer matching. Keep raw file-backed TOML text as `UTF8String` until `TGocciaTOMLParser.Parse(...)` / `ParseDocument(...)` receives it.
 
+**Official JSON5 Suite**
+
+For JSON5 parser compatibility checks against the official `json5/json5` parser test corpus, run:
+
+```bash
+python3 scripts/run_json5_test_suite.py
+python3 scripts/run_json5_test_suite.py --output=tmp/json5-suite-results.json
+python3 scripts/run_json5_test_suite.py --suite-dir=/path/to/json5
+python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check --output=tmp/json5-suite-results.json
+```
+
+This runner extracts parser cases from the upstream `test/parse.js` and `test/errors.js` files, evaluates them with the reference implementation under Node.js, then compares Goccia's Pascal harness output against the canonical tagged values for valid cases. Invalid cases must fail to parse. The runner exits non-zero when any case fails or times out.
+
+JSON5 stringify coverage currently lives in the JavaScript runtime suite rather than this Python harness. Run `./build/TestRunner tests/built-ins/JSON5/stringify.js` to verify special numeric values, replacers, options objects, quote overrides, pretty-print trailing commas, and root omission behavior.
+
 ### Run Pascal Unit Tests
 
 ```bash

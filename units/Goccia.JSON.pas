@@ -8,32 +8,53 @@ uses
   Generics.Collections,
   SysUtils,
 
+  JSONParser,
+
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
   EGocciaJSONParseError = class(Exception);
+  TJSONStringifyMode = (jsmJSON, jsmJSON5);
 
   TGocciaJSONParser = class
+  private
+    FCapabilities: TJSONParserCapabilities;
   public
-    function Parse(const AText: string): TGocciaValue;
+    constructor Create; overload;
+    constructor Create(
+      const ACapabilities: TJSONParserCapabilities); overload;
+    function Parse(const AText: string): TGocciaValue; virtual;
   end;
 
   TGocciaJSONStringifier = class
   private
     FGap: string;
+    FMode: TJSONStringifyMode;
+    FPreferredQuoteChar: Char;
     FTraversalStack: TList<TGocciaObjectValue>;
+    class function IsIdentifierContinueText(const AText: string): Boolean; static;
+    class function IsIdentifierStartText(const AText: string): Boolean; static;
     function ApplyToJSON(const AValue: TGocciaValue; const AKey: string): TGocciaValue;
+    function ChooseQuoteChar(const AStr: string): Char;
+    function CircularErrorName: string;
+    function EscapeJSONString(const AStr: string): string;
+    function EscapeJSON5String(const AStr: string; const AQuote: Char): string;
+    function IsJSON5IdentifierKey(const AKey: string): Boolean;
     function ShouldOmitObjectProperty(const AValue: TGocciaValue): Boolean;
+    function QuoteJSON5String(const AStr: string): string;
+    function SerializeObjectKey(const AKey: string): string;
     function StringifyPreparedValue(const AValue: TGocciaValue; const AIndent: Integer = 0): string;
     function StringifyValue(const AValue: TGocciaValue; const AIndent: Integer = 0; const AKey: string = ''): string;
     function StringifyObject(const AObj: TGocciaObjectValue; const AIndent: Integer): string;
     function StringifyArray(const AArr: TGocciaArrayValue; const AIndent: Integer): string;
-    function EscapeString(const AStr: string): string;
     function MakeIndent(const ALevel: Integer): string;
   public
-    function Stringify(const AValue: TGocciaValue; const AGap: string = ''): string;
+    constructor Create; overload;
+    constructor Create(const AMode: TJSONStringifyMode); overload;
+    function Stringify(const AValue: TGocciaValue; const AGap: string = '';
+      const APreferredQuoteChar: Char = #0): string;
   end;
 
 implementation
@@ -41,7 +62,6 @@ implementation
 uses
   Classes,
 
-  JSONParser,
   StringBuffer,
 
   Goccia.Arguments.Collection,
@@ -50,7 +70,9 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionValue,
   Goccia.Values.HoleValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.StringObjectValue,
+  Goccia.Values.SymbolValue,
+  Goccia.Values.WrapperPrimitives;
 
 type
   TGocciaJSONVisitor = class(TAbstractJSONParser)
@@ -72,6 +94,8 @@ type
     procedure EmitValue(const AValue: TGocciaValue);
   public
     constructor Create;
+    constructor Create(
+      const ACapabilities: TJSONParserCapabilities);
     destructor Destroy; override;
     function Parse(const AText: string): TGocciaValue;
   end;
@@ -150,13 +174,31 @@ begin
     FormatFloat(JSON_DOUBLE_ROUNDTRIP_SCIENTIFIC_FORMAT, AValue, DefaultFormatSettings));
 end;
 
+procedure AppendEscapedChar(var ASB: TStringBuffer; const AValue: Char);
+begin
+  ASB.AppendChar(#92);
+  ASB.AppendChar(AValue);
+end;
+
 { TGocciaJSONParser }
+
+constructor TGocciaJSONParser.Create;
+begin
+  Create(JSONParserStrictCapabilities);
+end;
+
+constructor TGocciaJSONParser.Create(
+  const ACapabilities: TJSONParserCapabilities);
+begin
+  inherited Create;
+  FCapabilities := ACapabilities;
+end;
 
 function TGocciaJSONParser.Parse(const AText: string): TGocciaValue;
 var
   Visitor: TGocciaJSONVisitor;
 begin
-  Visitor := TGocciaJSONVisitor.Create;
+  Visitor := TGocciaJSONVisitor.Create(FCapabilities);
   try
     try
       Result := Visitor.Parse(AText);
@@ -173,7 +215,13 @@ end;
 
 constructor TGocciaJSONVisitor.Create;
 begin
-  inherited Create;
+  Create(JSONParserStrictCapabilities);
+end;
+
+constructor TGocciaJSONVisitor.Create(
+  const ACapabilities: TJSONParserCapabilities);
+begin
+  inherited Create(ACapabilities);
   FStack := TList<TGocciaValue>.Create;
   FKeyStack := TStringList.Create;
   FResult := nil;
@@ -276,16 +324,47 @@ end;
 
 { TGocciaJSONStringifier }
 
-function TGocciaJSONStringifier.Stringify(const AValue: TGocciaValue; const AGap: string): string;
+constructor TGocciaJSONStringifier.Create;
 begin
+  Create(jsmJSON);
+end;
+
+constructor TGocciaJSONStringifier.Create(const AMode: TJSONStringifyMode);
+begin
+  inherited Create;
+  FMode := AMode;
+end;
+
+function TGocciaJSONStringifier.Stringify(const AValue: TGocciaValue;
+  const AGap: string; const APreferredQuoteChar: Char): string;
+var
+  PreviousGap: string;
+  PreviousPreferredQuoteChar: Char;
+  PreviousTraversalStack: TList<TGocciaObjectValue>;
+begin
+  PreviousGap := FGap;
+  PreviousPreferredQuoteChar := FPreferredQuoteChar;
+  PreviousTraversalStack := FTraversalStack;
+
   FGap := AGap;
+  FPreferredQuoteChar := APreferredQuoteChar;
   FTraversalStack := TList<TGocciaObjectValue>.Create;
   try
     Result := StringifyValue(AValue);
   finally
     FTraversalStack.Free;
-    FTraversalStack := nil;
+    FTraversalStack := PreviousTraversalStack;
+    FPreferredQuoteChar := PreviousPreferredQuoteChar;
+    FGap := PreviousGap;
   end;
+end;
+
+function TGocciaJSONStringifier.CircularErrorName: string;
+begin
+  if FMode = jsmJSON5 then
+    Result := 'Converting circular structure to JSON5'
+  else
+    Result := 'Converting circular structure to JSON';
 end;
 
 function TGocciaJSONStringifier.MakeIndent(const ALevel: Integer): string;
@@ -302,6 +381,7 @@ end;
 // ES2026 §25.5.2.2 SerializeJSONProperty ( state, key, holder )
 function TGocciaJSONStringifier.ApplyToJSON(const AValue: TGocciaValue; const AKey: string): TGocciaValue;
 var
+  MethodName: string;
   ToJSONMethod: TGocciaValue;
   Args: TGocciaArgumentsCollection;
 begin
@@ -309,7 +389,22 @@ begin
   if not (AValue is TGocciaObjectValue) then
     Exit;
 
-  ToJSONMethod := TGocciaObjectValue(AValue).GetProperty(PROP_TO_JSON);
+  if FMode = jsmJSON5 then
+  begin
+    MethodName := PROP_TO_JSON5;
+    ToJSONMethod := TGocciaObjectValue(AValue).GetProperty(MethodName);
+    if not Assigned(ToJSONMethod) or not ToJSONMethod.IsCallable then
+    begin
+      MethodName := PROP_TO_JSON;
+      ToJSONMethod := TGocciaObjectValue(AValue).GetProperty(MethodName);
+    end;
+  end
+  else
+  begin
+    MethodName := PROP_TO_JSON;
+    ToJSONMethod := TGocciaObjectValue(AValue).GetProperty(MethodName);
+  end;
+
   if not Assigned(ToJSONMethod) or not ToJSONMethod.IsCallable then
     Exit;
 
@@ -329,6 +424,196 @@ begin
             (AValue is TGocciaSymbolValue);
 end;
 
+class function TGocciaJSONStringifier.IsIdentifierStartText(
+  const AText: string): Boolean;
+begin
+  if AText = '' then
+    Exit(False);
+  if Length(AText) > 1 then
+    Exit(True);
+  Result := (AText[1] in ['a'..'z', 'A'..'Z', '_', '$']) or
+    (Ord(AText[1]) >= 128);
+end;
+
+class function TGocciaJSONStringifier.IsIdentifierContinueText(
+  const AText: string): Boolean;
+begin
+  if AText = '' then
+    Exit(False);
+  if Length(AText) > 1 then
+    Exit(True);
+  Result := (AText[1] in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) or
+    (Ord(AText[1]) >= 128);
+end;
+
+function TGocciaJSONStringifier.IsJSON5IdentifierKey(const AKey: string): Boolean;
+var
+  I: Integer;
+begin
+  if AKey = '' then
+    Exit(False);
+
+  if not IsIdentifierStartText(AKey[1]) then
+    Exit(False);
+
+  I := 2;
+  while I <= Length(AKey) do
+  begin
+    if not IsIdentifierContinueText(AKey[I]) then
+      Exit(False);
+    Inc(I);
+  end;
+
+  Result := True;
+end;
+
+function TGocciaJSONStringifier.ChooseQuoteChar(const AStr: string): Char;
+var
+  DoubleCount, SingleCount, I: Integer;
+begin
+  if FPreferredQuoteChar in ['''', '"'] then
+    Exit(FPreferredQuoteChar);
+
+  SingleCount := 0;
+  DoubleCount := 0;
+  for I := 1 to Length(AStr) do
+    case AStr[I] of
+      '''':
+        Inc(SingleCount);
+      '"':
+        Inc(DoubleCount);
+    end;
+
+  if SingleCount <= DoubleCount then
+    Result := ''''
+  else
+    Result := '"';
+end;
+
+function TGocciaJSONStringifier.EscapeJSONString(const AStr: string): string;
+var
+  Ch: Char;
+  I: Integer;
+  SB: TStringBuffer;
+begin
+  SB := TStringBuffer.Create(Length(AStr));
+  try
+    for I := 1 to Length(AStr) do
+    begin
+      Ch := AStr[I];
+      case Ch of
+        '"': SB.Append('\"');
+        '\': SB.Append('\\');
+        '/': SB.Append('\/');
+        #8: AppendEscapedChar(SB, 'b');
+        #12: AppendEscapedChar(SB, 'f');
+        #10: AppendEscapedChar(SB, 'n');
+        #13: AppendEscapedChar(SB, 'r');
+        #9: AppendEscapedChar(SB, 't');
+      else
+        if Ord(Ch) < 32 then
+        begin
+          SB.Append('\u');
+          SB.Append(IntToHex(Ord(Ch), 4));
+        end
+        else
+          SB.AppendChar(Ch);
+      end;
+    end;
+    Result := SB.ToString;
+  finally
+  end;
+end;
+
+function TGocciaJSONStringifier.EscapeJSON5String(const AStr: string;
+  const AQuote: Char): string;
+var
+  Ch: Char;
+  I: Integer;
+  SB: TStringBuffer;
+begin
+  SB := TStringBuffer.Create(Length(AStr));
+  try
+    I := 1;
+    while I <= Length(AStr) do
+    begin
+      Ch := AStr[I];
+      if Copy(AStr, I, 3) = #$E2#$80#$A8 then
+      begin
+        SB.Append('\u2028');
+        Inc(I, 3);
+        Continue;
+      end;
+      if Copy(AStr, I, 3) = #$E2#$80#$A9 then
+      begin
+        SB.Append('\u2029');
+        Inc(I, 3);
+        Continue;
+      end;
+
+      case Ch of
+        '\':
+          SB.Append('\\');
+        #8:
+          AppendEscapedChar(SB, 'b');
+        #12:
+          AppendEscapedChar(SB, 'f');
+        #10:
+          AppendEscapedChar(SB, 'n');
+        #13:
+          AppendEscapedChar(SB, 'r');
+        #9:
+          AppendEscapedChar(SB, 't');
+        #11:
+          AppendEscapedChar(SB, 'v');
+        #0:
+          begin
+            if (I < Length(AStr)) and (AStr[I + 1] in ['0'..'9']) then
+              SB.Append('\x00')
+            else
+              SB.Append('\0');
+          end;
+        '''', '"':
+          if Ch = AQuote then
+          begin
+            AppendEscapedChar(SB, Ch);
+          end
+          else
+            SB.AppendChar(Ch);
+      else
+        if Ord(Ch) < 32 then
+        begin
+          SB.Append('\x');
+          SB.Append(IntToHex(Ord(Ch), 2));
+        end
+        else
+          SB.AppendChar(Ch);
+      end;
+      Inc(I);
+    end;
+    Result := SB.ToString;
+  finally
+  end;
+end;
+
+function TGocciaJSONStringifier.QuoteJSON5String(const AStr: string): string;
+var
+  QuoteChar: Char;
+begin
+  QuoteChar := ChooseQuoteChar(AStr);
+  Result := QuoteChar + EscapeJSON5String(AStr, QuoteChar) + QuoteChar;
+end;
+
+function TGocciaJSONStringifier.SerializeObjectKey(const AKey: string): string;
+begin
+  if (FMode = jsmJSON5) and IsJSON5IdentifierKey(AKey) then
+    Result := AKey
+  else if FMode = jsmJSON5 then
+    Result := QuoteJSON5String(AKey)
+  else
+    Result := '"' + EscapeJSONString(AKey) + '"';
+end;
+
 function TGocciaJSONStringifier.StringifyValue(const AValue: TGocciaValue;
   const AIndent: Integer; const AKey: string): string;
 begin
@@ -337,39 +622,65 @@ end;
 
 function TGocciaJSONStringifier.StringifyPreparedValue(const AValue: TGocciaValue;
   const AIndent: Integer): string;
+var
+  EffectiveValue: TGocciaValue;
 begin
-  if AValue is TGocciaNullLiteralValue then
+  EffectiveValue := UnboxWrappedPrimitive(AValue);
+
+  if EffectiveValue is TGocciaNullLiteralValue then
     Result := 'null'
-  else if AValue is TGocciaUndefinedLiteralValue then
+  else if EffectiveValue is TGocciaUndefinedLiteralValue then
     Result := 'null'
-  else if AValue is TGocciaHoleValue then
+  else if EffectiveValue is TGocciaHoleValue then
     Result := 'null'
-  else if AValue is TGocciaBooleanLiteralValue then
+  else if EffectiveValue is TGocciaBooleanLiteralValue then
   begin
-    if AValue.ToBooleanLiteral.Value then
+    if EffectiveValue.ToBooleanLiteral.Value then
       Result := 'true'
     else
       Result := 'false';
   end
-  else if AValue is TGocciaNumberLiteralValue then
+  else if EffectiveValue is TGocciaNumberLiteralValue then
   begin
-    if TGocciaNumberLiteralValue(AValue).IsInfinity or TGocciaNumberLiteralValue(AValue).IsNegativeInfinity then
-      Result := 'null'
-    else if TGocciaNumberLiteralValue(AValue).IsNaN then
-      Result := 'null'
+    if TGocciaNumberLiteralValue(EffectiveValue).IsInfinity then
+    begin
+      if FMode = jsmJSON5 then
+        Result := 'Infinity'
+      else
+        Result := 'null';
+    end
+    else if TGocciaNumberLiteralValue(EffectiveValue).IsNegativeInfinity then
+    begin
+      if FMode = jsmJSON5 then
+        Result := '-Infinity'
+      else
+        Result := 'null';
+    end
+    else if TGocciaNumberLiteralValue(EffectiveValue).IsNaN then
+    begin
+      if FMode = jsmJSON5 then
+        Result := 'NaN'
+      else
+        Result := 'null';
+    end
     else
-      Result := SerializeJSONNumber(AValue.ToNumberLiteral.Value);
+      Result := SerializeJSONNumber(EffectiveValue.ToNumberLiteral.Value);
   end
-  else if AValue is TGocciaStringLiteralValue then
-    Result := '"' + EscapeString(AValue.ToStringLiteral.Value) + '"'
-  else if AValue.IsCallable then
+  else if EffectiveValue is TGocciaStringLiteralValue then
+  begin
+    if FMode = jsmJSON5 then
+      Result := QuoteJSON5String(EffectiveValue.ToStringLiteral.Value)
+    else
+      Result := '"' + EscapeJSONString(EffectiveValue.ToStringLiteral.Value) + '"';
+  end
+  else if EffectiveValue.IsCallable then
     Result := 'null'
-  else if AValue is TGocciaSymbolValue then
+  else if EffectiveValue is TGocciaSymbolValue then
     Result := 'null'
-  else if AValue is TGocciaArrayValue then
-    Result := StringifyArray(TGocciaArrayValue(AValue), AIndent)
-  else if AValue is TGocciaObjectValue then
-    Result := StringifyObject(TGocciaObjectValue(AValue), AIndent)
+  else if EffectiveValue is TGocciaArrayValue then
+    Result := StringifyArray(TGocciaArrayValue(EffectiveValue), AIndent)
+  else if EffectiveValue is TGocciaObjectValue then
+    Result := StringifyObject(TGocciaObjectValue(EffectiveValue), AIndent)
   else
     Result := 'null';
 end;
@@ -383,50 +694,57 @@ var
   Separator, ChildIndent, CloseIndent: string;
 begin
   if FTraversalStack.IndexOf(AObj) <> -1 then
-    ThrowTypeError('Converting circular structure to JSON');
+    ThrowTypeError(CircularErrorName);
 
   FTraversalStack.Add(AObj);
-  SB := TStringBuffer.Create;
   try
-    HasProperties := False;
+    SB := TStringBuffer.Create;
+    try
+      HasProperties := False;
 
-    if FGap <> '' then
-    begin
-      Separator := ',' + #10;
-      ChildIndent := MakeIndent(AIndent + 1);
-      CloseIndent := MakeIndent(AIndent);
-    end
-    else
-    begin
-      Separator := ',';
-      ChildIndent := '';
-      CloseIndent := '';
-    end;
-
-    for Key in AObj.GetEnumerablePropertyNames do
-    begin
-      Value := ApplyToJSON(AObj.GetProperty(Key), Key);
-      if ShouldOmitObjectProperty(Value) then
-        Continue;
-
-      if HasProperties then
-        SB.Append(Separator);
-      SB.Append(ChildIndent);
-      SB.AppendChar('"');
-      SB.Append(EscapeString(Key));
-      SB.Append('":');
       if FGap <> '' then
-        SB.AppendChar(' ');
-      SB.Append(StringifyPreparedValue(Value, AIndent + 1));
-      HasProperties := True;
-    end;
+      begin
+        Separator := ',' + #10;
+        ChildIndent := MakeIndent(AIndent + 1);
+        CloseIndent := MakeIndent(AIndent);
+      end
+      else
+      begin
+        Separator := ',';
+        ChildIndent := '';
+        CloseIndent := '';
+      end;
 
-    if not HasProperties then
-      Result := '{}'
-    else if FGap <> '' then
-      Result := '{' + #10 + SB.ToString + #10 + CloseIndent + '}'
-    else
-      Result := '{' + SB.ToString + '}';
+      for Key in AObj.GetEnumerablePropertyNames do
+      begin
+        Value := ApplyToJSON(AObj.GetProperty(Key), Key);
+        if ShouldOmitObjectProperty(Value) then
+          Continue;
+
+        if HasProperties then
+          SB.Append(Separator);
+        SB.Append(ChildIndent);
+        SB.Append(SerializeObjectKey(Key));
+        SB.Append(':');
+        if FGap <> '' then
+          SB.AppendChar(' ');
+        SB.Append(StringifyPreparedValue(Value, AIndent + 1));
+        HasProperties := True;
+      end;
+
+      if not HasProperties then
+        Result := '{}'
+      else if FGap <> '' then
+      begin
+        if FMode = jsmJSON5 then
+          Result := '{' + #10 + SB.ToString + ',' + #10 + CloseIndent + '}'
+        else
+          Result := '{' + #10 + SB.ToString + #10 + CloseIndent + '}';
+      end
+      else
+        Result := '{' + SB.ToString + '}';
+    finally
+    end;
   finally
     FTraversalStack.Delete(FTraversalStack.Count - 1);
   end;
@@ -440,7 +758,7 @@ var
   Separator, ChildIndent, CloseIndent: string;
 begin
   if FTraversalStack.IndexOf(AArr) <> -1 then
-    ThrowTypeError('Converting circular structure to JSON');
+    ThrowTypeError(CircularErrorName);
 
   FTraversalStack.Add(AArr);
   if AArr.Elements.Count = 0 then
@@ -465,53 +783,29 @@ begin
     end;
 
     SB := TStringBuffer.Create;
-    for I := 0 to AArr.Elements.Count - 1 do
-    begin
-      if I > 0 then
-        SB.Append(Separator);
-      SB.Append(ChildIndent);
-      Value := ApplyToJSON(AArr.Elements[I], IntToStr(I));
-      SB.Append(StringifyPreparedValue(Value, AIndent + 1));
+    try
+      for I := 0 to AArr.Elements.Count - 1 do
+      begin
+        if I > 0 then
+          SB.Append(Separator);
+        SB.Append(ChildIndent);
+        Value := ApplyToJSON(AArr.Elements[I], IntToStr(I));
+        SB.Append(StringifyPreparedValue(Value, AIndent + 1));
+      end;
+      if FGap <> '' then
+      begin
+        if FMode = jsmJSON5 then
+          Result := '[' + #10 + SB.ToString + ',' + #10 + CloseIndent + ']'
+        else
+          Result := '[' + #10 + SB.ToString + #10 + CloseIndent + ']';
+      end
+      else
+        Result := '[' + SB.ToString + ']';
+    finally
     end;
-    if FGap <> '' then
-      Result := '[' + #10 + SB.ToString + #10 + CloseIndent + ']'
-    else
-      Result := '[' + SB.ToString + ']';
   finally
     FTraversalStack.Delete(FTraversalStack.Count - 1);
   end;
-end;
-
-function TGocciaJSONStringifier.EscapeString(const AStr: string): string;
-var
-  SB: TStringBuffer;
-  I: Integer;
-  Ch: Char;
-begin
-  SB := TStringBuffer.Create(Length(AStr));
-  for I := 1 to Length(AStr) do
-  begin
-    Ch := AStr[I];
-    case Ch of
-      '"': SB.Append('\"');
-      '\': SB.Append('\\');
-      '/': SB.Append('\/');
-      #8: SB.Append('\b');
-      #12: SB.Append('\f');
-      #10: SB.Append('\n');
-      #13: SB.Append('\r');
-      #9: SB.Append('\t');
-    else
-      if Ord(Ch) < 32 then
-      begin
-        SB.Append('\u');
-        SB.Append(IntToHex(Ord(Ch), 4));
-      end
-      else
-        SB.AppendChar(Ch);
-    end;
-  end;
-  Result := SB.ToString;
 end;
 
 end.

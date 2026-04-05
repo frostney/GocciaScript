@@ -4,6 +4,7 @@ program Goccia.ScriptLoader.Globals.Test;
 
 uses
   Classes,
+  Math,
   SysUtils,
 
   TestRunner,
@@ -20,9 +21,11 @@ type
   TScriptLoaderGlobalsTests = class(TTestSuite)
   private
     function CreateEmptySource: TStringList;
-    procedure TestDetectsTOMLGlobalsFileByExtension;
+    procedure TestDetectsStructuredGlobalsFilesByExtension;
+    procedure TestEngineInjectGlobalsFromJSON5;
     procedure TestReadFileTextPreservesUTF8ForTOMLGlobals;
     procedure TestEngineInjectGlobalsFromTOML;
+    procedure TestBytecodeBackendInjectGlobalsFromJSON5;
     procedure TestBytecodeBackendInjectGlobalsFromTOML;
   public
     procedure SetupTests; override;
@@ -30,12 +33,16 @@ type
 
 procedure TScriptLoaderGlobalsTests.SetupTests;
 begin
-  Test('Detects TOML globals file by extension',
-    TestDetectsTOMLGlobalsFileByExtension);
+  Test('Detects structured globals files by extension',
+    TestDetectsStructuredGlobalsFilesByExtension);
   Test('ReadFileText preserves UTF-8 for TOML globals',
     TestReadFileTextPreservesUTF8ForTOMLGlobals);
+  Test('Engine injects globals from JSON5',
+    TestEngineInjectGlobalsFromJSON5);
   Test('Engine injects globals from TOML',
     TestEngineInjectGlobalsFromTOML);
+  Test('Bytecode backend injects globals from JSON5',
+    TestBytecodeBackendInjectGlobalsFromJSON5);
   Test('Bytecode backend injects globals from TOML',
     TestBytecodeBackendInjectGlobalsFromTOML);
 end;
@@ -46,8 +53,10 @@ begin
   Result.Text := '';
 end;
 
-procedure TScriptLoaderGlobalsTests.TestDetectsTOMLGlobalsFileByExtension;
+procedure TScriptLoaderGlobalsTests.TestDetectsStructuredGlobalsFilesByExtension;
 begin
+  Expect<Boolean>(IsStructuredGlobalsFile('config.json5')).ToBe(True);
+  Expect<Boolean>(IsJSON5GlobalsFile('config.json5')).ToBe(True);
   Expect<Boolean>(IsStructuredGlobalsFile('config.toml')).ToBe(True);
   Expect<Boolean>(IsTOMLGlobalsFile('config.toml')).ToBe(True);
   Expect<Boolean>(IsYAMLGlobalsFile('config.toml')).ToBe(False);
@@ -92,6 +101,38 @@ begin
     Engine.Free;
     Source.Free;
     DeleteFile(TempFileName);
+  end;
+end;
+
+procedure TScriptLoaderGlobalsTests.TestEngineInjectGlobalsFromJSON5;
+var
+  Engine: TGocciaEngine;
+  Obj: TGocciaObjectValue;
+  Source: TStringList;
+begin
+  Source := CreateEmptySource;
+  Engine := TGocciaEngine.Create('<globals-test>', Source,
+    TGocciaEngine.DefaultGlobals);
+  try
+    Engine.InjectGlobalsFromJSON5(
+      '{' + LineEnding +
+      '  // comment' + LineEnding +
+      '  unquoted: ''goccia'',' + LineEnding +
+      '  maxRetries: 3,' + LineEnding +
+      '  nested: { enabled: true, },' + LineEnding +
+      '}');
+
+    Expect<string>(Engine.Interpreter.GlobalScope.GetValue('unquoted')
+      .ToStringLiteral.Value).ToBe('goccia');
+    Expect<Double>(Engine.Interpreter.GlobalScope.GetValue('maxRetries')
+      .ToNumberLiteral.Value).ToBe(3);
+
+    Obj := TGocciaObjectValue(Engine.Interpreter.GlobalScope.GetValue('nested'));
+    Expect<Boolean>(Obj.GetProperty('enabled').ToBooleanLiteral.Value)
+      .ToBe(True);
+  finally
+    Engine.Free;
+    Source.Free;
   end;
 end;
 
@@ -152,6 +193,33 @@ begin
 
     Obj := TGocciaObjectValue(Backend.Interpreter.GlobalScope.GetValue('database'));
     Expect<Double>(Obj.GetProperty('port').ToNumberLiteral.Value).ToBe(5432);
+  finally
+    Backend.Free;
+  end;
+end;
+
+procedure TScriptLoaderGlobalsTests.TestBytecodeBackendInjectGlobalsFromJSON5;
+var
+  Backend: TGocciaBytecodeBackend;
+  Obj: TGocciaObjectValue;
+begin
+  Backend := TGocciaBytecodeBackend.Create('<globals-test>');
+  try
+    Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
+    Backend.InjectGlobalsFromJSON5(
+      '{' + LineEnding +
+      '  answer: +42,' + LineEnding +
+      '  limits: { max: Infinity, min: -Infinity, },' + LineEnding +
+      '}');
+
+    Expect<Double>(Backend.Interpreter.GlobalScope.GetValue('answer')
+      .ToNumberLiteral.Value).ToBe(42);
+
+    Obj := TGocciaObjectValue(Backend.Interpreter.GlobalScope.GetValue('limits'));
+    Expect<Double>(Obj.GetProperty('max').ToNumberLiteral.Value)
+      .ToBe(Infinity);
+    Expect<Double>(Obj.GetProperty('min').ToNumberLiteral.Value)
+      .ToBe(-Infinity);
   finally
     Backend.Free;
   end;
