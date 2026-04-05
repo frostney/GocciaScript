@@ -15,6 +15,7 @@ type
   private
     function GetChildOrFail(const AParent: TGocciaTOMLNode;
       const AKey: string): TGocciaTOMLNode;
+    procedure TestParseDocumentNormalizesCRLFInMultilineStrings;
     procedure TestParseDocumentTracksScalarKinds;
     procedure TestParseDocumentTracksArrayElementKinds;
   public
@@ -27,6 +28,8 @@ begin
     TestParseDocumentTracksScalarKinds);
   Test('ParseDocument tracks array element kinds',
     TestParseDocumentTracksArrayElementKinds);
+  Test('ParseDocument normalizes CRLF in multiline strings',
+    TestParseDocumentNormalizesCRLFInMultilineStrings);
 end;
 
 function TTOMLParserTests.GetChildOrFail(const AParent: TGocciaTOMLNode;
@@ -105,6 +108,40 @@ begin
       NestedNode := GetChildOrFail(ItemsNode.Items[3], 'nested');
       Expect<Integer>(Ord(NestedNode.ScalarKind)).ToBe(Ord(tskBool));
       Expect<string>(NestedNode.CanonicalValue).ToBe('true');
+    finally
+      Root.Free;
+    end;
+  finally
+    Parser.Free;
+  end;
+end;
+
+procedure TTOMLParserTests.TestParseDocumentNormalizesCRLFInMultilineStrings;
+var
+  BasicNode: TGocciaTOMLNode;
+  LiteralNode: TGocciaTOMLNode;
+  Parser: TGocciaTOMLParser;
+  Root: TGocciaTOMLNode;
+begin
+  Parser := TGocciaTOMLParser.Create;
+  try
+    Root := Parser.ParseDocument(
+      'basic = """' + #13#10 +
+      'Roses are red' + #13#10 +
+      'Violets are blue' + #13#10 +
+      '"""' + #13#10 +
+      'literal = ''''''' + #13#10 +
+      'C:\Users\nodejs\templates' + #13#10 +
+      'Line two' + #13#10 +
+      '''''''' + #13#10);
+    try
+      BasicNode := GetChildOrFail(Root, 'basic');
+      LiteralNode := GetChildOrFail(Root, 'literal');
+
+      Expect<string>(BasicNode.CanonicalValue).ToBe(
+        'Roses are red' + #10 + 'Violets are blue' + #10);
+      Expect<string>(LiteralNode.CanonicalValue).ToBe(
+        'C:\Users\nodejs\templates' + #10 + 'Line two' + #10);
     finally
       Root.Free;
     end;

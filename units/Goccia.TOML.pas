@@ -189,6 +189,8 @@ begin
 end;
 
 function NormalizeMultilineNewline(const AText: string; var AIndex: Integer): string;
+const
+  TOML_MULTILINE_NEWLINE = #10;
 begin
   if (AIndex <= Length(AText)) and (AText[AIndex] = #13) then
   begin
@@ -200,7 +202,7 @@ begin
   end
   else
     Inc(AIndex);
-  Result := LineEnding;
+  Result := TOML_MULTILINE_NEWLINE;
 end;
 
 function JoinPath(const APath: TArray<string>): string;

@@ -198,6 +198,7 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 - **One method per file** — each test file focuses on a single method or operation. Never bundle multiple methods into one file (no `prototype-methods.js` or `static-methods.js`).
 - **Prototype methods go in `prototype/`** — instance methods live in `BuiltIn/prototype/methodName.js`. Static methods and constructor tests live directly in the `BuiltIn/` folder. See `tests/built-ins/Array/prototype/` for the canonical example.
 - **Edge cases are co-located** — edge case tests (NaN, Infinity, negative indices, clamping, empty collections, boundary conditions) belong in the **same file** as the happy-path tests for that method. Do **not** create separate `edge-cases.js` files.
+- **Format-defined newline semantics are not host-dependent** — when a file format specifies newline normalization (for example TOML multiline strings or YAML folding/block-scalar rules), implement that behavior explicitly and do **not** emit `LineEnding`/`sLineBreak` just because the host OS is Windows. Add regression coverage with explicit `#13#10` / `\r\n` inputs and assert the format-defined canonical result so Windows CI cannot drift from Linux/macOS behavior.
 - Always verify changes by running: `./build.pas testrunner && ./build/TestRunner tests`
 
 **When adding a new language feature:**

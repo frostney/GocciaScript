@@ -79,6 +79,16 @@ point = { x = 1, y = 2, meta = { label = "origin" } }
     expect(value.literal).toBe("C:\\Users\\nodejs\\templates\nLine two\n");
   });
 
+  test("normalizes CRLF multiline strings to LF", () => {
+    const value = TOML.parse(
+      'basic = """\r\nRoses are red\r\nViolets are blue\r\n"""\r\n' +
+      "literal = '''\r\nC:\\Users\\nodejs\\templates\r\nLine two\r\n'''\r\n"
+    );
+
+    expect(value.basic).toBe("Roses are red\nViolets are blue\n");
+    expect(value.literal).toBe("C:\\Users\\nodejs\\templates\nLine two\n");
+  });
+
   test("parses integer bases and special floats", () => {
     const value = TOML.parse(`
 decimal = 1_000
