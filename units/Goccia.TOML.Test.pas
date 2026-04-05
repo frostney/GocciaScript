@@ -16,6 +16,7 @@ type
     function GetChildOrFail(const AParent: TGocciaTOMLNode;
       const AKey: string): TGocciaTOMLNode;
     procedure TestParseDocumentNormalizesCRLFInMultilineStrings;
+    procedure TestParseDocumentPreservesUTF8BytesForUnicodeKeysAndValues;
     procedure TestParseDocumentTracksScalarKinds;
     procedure TestParseDocumentTracksArrayElementKinds;
   public
@@ -30,6 +31,8 @@ begin
     TestParseDocumentTracksArrayElementKinds);
   Test('ParseDocument normalizes CRLF in multiline strings',
     TestParseDocumentNormalizesCRLFInMultilineStrings);
+  Test('ParseDocument preserves UTF-8 bytes for Unicode keys and values',
+    TestParseDocumentPreservesUTF8BytesForUnicodeKeysAndValues);
 end;
 
 function TTOMLParserTests.GetChildOrFail(const AParent: TGocciaTOMLNode;
@@ -142,6 +145,46 @@ begin
         'Roses are red' + #10 + 'Violets are blue' + #10);
       Expect<string>(LiteralNode.CanonicalValue).ToBe(
         'C:\Users\nodejs\templates' + #10 + 'Line two' + #10);
+    finally
+      Root.Free;
+    end;
+  finally
+    Parser.Free;
+  end;
+end;
+
+procedure TTOMLParserTests.TestParseDocumentPreservesUTF8BytesForUnicodeKeysAndValues;
+const
+  UTF8_CODE_PAGE = 65001;
+var
+  Parser: TGocciaTOMLParser;
+  RawSourceText: RawByteString;
+  RawUnicodeKey: RawByteString;
+  RawUnicodeValue: RawByteString;
+  Root: TGocciaTOMLNode;
+  SourceText: string;
+  UnicodeKey: string;
+  UnicodeNode: TGocciaTOMLNode;
+  UnicodeValue: string;
+begin
+  RawUnicodeKey := #$CE#$B4;
+  SetCodePage(RawUnicodeKey, UTF8_CODE_PAGE, False);
+  UnicodeKey := RawUnicodeKey;
+
+  RawUnicodeValue := 'Jos' + #$C3#$A9;
+  SetCodePage(RawUnicodeValue, UTF8_CODE_PAGE, False);
+  UnicodeValue := RawUnicodeValue;
+
+  RawSourceText := '"' + RawUnicodeKey + '" = "' + RawUnicodeValue + '"' + LineEnding;
+  SetCodePage(RawSourceText, UTF8_CODE_PAGE, False);
+  SourceText := RawSourceText;
+
+  Parser := TGocciaTOMLParser.Create;
+  try
+    Root := Parser.ParseDocument(SourceText);
+    try
+      UnicodeNode := GetChildOrFail(Root, UnicodeKey);
+      Expect<string>(UnicodeNode.CanonicalValue).ToBe(UnicodeValue);
     finally
       Root.Free;
     end;

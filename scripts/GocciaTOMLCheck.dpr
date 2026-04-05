@@ -12,15 +12,22 @@ uses
   Goccia.TOML,
   Goccia.Values.Primitives;
 
-function LoadUTF8File(const APath: string): UTF8String;
+function LoadUTF8File(const APath: string): string;
+const
+  UTF8_CODE_PAGE = 65001;
 var
   Stream: TFileStream;
+  UTF8Text: RawByteString;
 begin
   Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
   try
-    SetLength(Result, Stream.Size);
-    if Length(Result) > 0 then
-      Stream.ReadBuffer(Pointer(Result)^, Length(Result));
+    SetLength(UTF8Text, Stream.Size);
+    if Length(UTF8Text) > 0 then
+    begin
+      Stream.ReadBuffer(Pointer(UTF8Text)^, Length(UTF8Text));
+      SetCodePage(UTF8Text, UTF8_CODE_PAGE, False);
+    end;
+    Result := UTF8Text;
   finally
     Stream.Free;
   end;
@@ -134,7 +141,7 @@ var
   ExitCode: Integer;
   Parser: TGocciaTOMLParser;
   Root: TGocciaTOMLNode;
-  SourceText: UTF8String;
+  SourceText: string;
 begin
   if ParamCount <> 1 then
     Halt(2);
@@ -146,7 +153,7 @@ begin
   try
     try
       SourceText := LoadUTF8File(ParamStr(1));
-      Root := Parser.ParseDocument(string(SourceText));
+      Root := Parser.ParseDocument(SourceText);
       try
         WriteLn(SerializeNode(Root));
         ExitCode := 0;
