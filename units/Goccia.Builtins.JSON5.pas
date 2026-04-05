@@ -293,7 +293,7 @@ end;
 
 function TGocciaJSON5Builtin.ResolveGap(const ASpaceArg: TGocciaValue): string;
 var
-  I, SpaceCount: Integer;
+  SpaceCount: Integer;
   SpaceValue: TGocciaValue;
 begin
   Result := '';
@@ -301,12 +301,11 @@ begin
   if SpaceValue is TGocciaNumberLiteralValue then
   begin
     SpaceCount := Trunc(SpaceValue.ToNumberLiteral.Value);
-    if SpaceCount > 10 then
-      SpaceCount := 10;
     if SpaceCount < 1 then
       Exit;
-    for I := 1 to SpaceCount do
-      Result := Result + ' ';
+    if SpaceCount > 10 then
+      SpaceCount := 10;
+    Result := StringOfChar(' ', SpaceCount);
   end
   else if SpaceValue is TGocciaStringLiteralValue then
   begin
@@ -449,6 +448,7 @@ var
   QuoteChar: Char;
   ReplacerArg: TGocciaValue;
   SpaceArg: TGocciaValue;
+  Stringified: string;
   UseOptionsObject: Boolean;
   Value: TGocciaValue;
 begin
@@ -491,21 +491,21 @@ begin
     begin
       if ReplacerArg.IsCallable then
       begin
-        Gap := StringifyWithReplacer(Value, ReplacerArg, Gap, QuoteChar);
-        if Gap = '' then
+        Stringified := StringifyWithReplacer(Value, ReplacerArg, Gap, QuoteChar);
+        if Stringified = '' then
           Result := TGocciaUndefinedLiteralValue.UndefinedValue
         else
-          Result := TGocciaStringLiteralValue.Create(Gap);
+          Result := TGocciaStringLiteralValue.Create(Stringified);
         Exit;
       end
       else if ReplacerArg is TGocciaArrayValue then
       begin
-        Gap := StringifyWithAllowList(Value, TGocciaArrayValue(ReplacerArg),
+        Stringified := StringifyWithAllowList(Value, TGocciaArrayValue(ReplacerArg),
           Gap, QuoteChar);
-        if Gap = '' then
+        if Stringified = '' then
           Result := TGocciaUndefinedLiteralValue.UndefinedValue
         else
-          Result := TGocciaStringLiteralValue.Create(Gap);
+          Result := TGocciaStringLiteralValue.Create(Stringified);
         Exit;
       end;
     end;

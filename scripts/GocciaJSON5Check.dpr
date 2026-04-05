@@ -172,41 +172,35 @@ begin
   if AValue is TGocciaArrayValue then
   begin
     Buffer := TStringBuffer.Create;
-    try
-      Buffer.Append('{"type":"array","items":[');
-      for I := 0 to TGocciaArrayValue(AValue).Elements.Count - 1 do
-      begin
-        if I > 0 then
-          Buffer.Append(',');
-        Element := TGocciaArrayValue(AValue).Elements[I];
-        Buffer.Append(EncodeValue(Element));
-      end;
-      Buffer.Append(']}');
-      Exit(Buffer.ToString);
-    finally
+    Buffer.Append('{"type":"array","items":[');
+    for I := 0 to TGocciaArrayValue(AValue).Elements.Count - 1 do
+    begin
+      if I > 0 then
+        Buffer.Append(',');
+      Element := TGocciaArrayValue(AValue).Elements[I];
+      Buffer.Append(EncodeValue(Element));
     end;
+    Buffer.Append(']}');
+    Exit(Buffer.ToString);
   end;
   if AValue is TGocciaObjectValue then
   begin
     Buffer := TStringBuffer.Create;
-    try
-      Buffer.Append('{"type":"object","entries":[');
-      I := 0;
-      for Key in TGocciaObjectValue(AValue).GetOwnPropertyKeys do
-      begin
-        if I > 0 then
-          Buffer.Append(',');
-        Buffer.Append('{"key":');
-        Buffer.Append(QuoteJSONString(Key));
-        Buffer.Append(',"value":');
-        Buffer.Append(EncodeValue(TGocciaObjectValue(AValue).GetProperty(Key)));
-        Buffer.Append('}');
-        Inc(I);
-      end;
-      Buffer.Append(']}');
-      Exit(Buffer.ToString);
-    finally
+    Buffer.Append('{"type":"object","entries":[');
+    I := 0;
+    for Key in TGocciaObjectValue(AValue).GetOwnPropertyKeys do
+    begin
+      if I > 0 then
+        Buffer.Append(',');
+      Buffer.Append('{"key":');
+      Buffer.Append(QuoteJSONString(Key));
+      Buffer.Append(',"value":');
+      Buffer.Append(EncodeValue(TGocciaObjectValue(AValue).GetProperty(Key)));
+      Buffer.Append('}');
+      Inc(I);
     end;
+    Buffer.Append(']}');
+    Exit(Buffer.ToString);
   end;
 
   raise Exception.Create('Unsupported JSON5 value type in compliance harness');
@@ -226,24 +220,25 @@ begin
   Source := TStringList.Create;
   Parser := TGocciaJSON5Parser.Create;
   try
-    Source.LoadFromFile(ParamStr(1));
-    ParsedValue := Parser.Parse(Source.Text);
-    TGarbageCollector.Instance.AddTempRoot(ParsedValue);
     try
-      WriteLn(EncodeValue(ParsedValue));
-      Halt(0);
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+      Source.LoadFromFile(ParamStr(1));
+      ParsedValue := Parser.Parse(Source.Text);
+      TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+      try
+        WriteLn(EncodeValue(ParsedValue));
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+      end;
+    except
+      on E: Exception do
+      begin
+        WriteLn(E.Message);
+        ExitCode := 1;
+      end;
     end;
-  except
-    on E: Exception do
-    begin
-      WriteLn(E.Message);
-      Halt(1);
-    end;
+  finally
+    Parser.Free;
+    Source.Free;
+    TGarbageCollector.Shutdown;
   end;
-
-  Parser.Free;
-  Source.Free;
-  TGarbageCollector.Shutdown;
 end.

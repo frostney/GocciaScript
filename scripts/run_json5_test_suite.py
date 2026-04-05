@@ -155,7 +155,7 @@ def compare_values(want: dict, have: dict, path: str = "<root>") -> tuple[bool, 
     have_items = have["items"]
     if len(want_items) != len(have_items):
       return False, f"{path}: expected array length {len(want_items)}, got {len(have_items)}"
-    for index, (want_item, have_item) in enumerate(zip(want_items, have_items)):
+    for index, (want_item, have_item) in enumerate(zip(want_items, have_items, strict=True)):
       ok, message = compare_values(want_item, have_item, f"{path}[{index}]")
       if not ok:
         return False, message
@@ -166,7 +166,7 @@ def compare_values(want: dict, have: dict, path: str = "<root>") -> tuple[bool, 
     have_entries = have["entries"]
     if len(want_entries) != len(have_entries):
       return False, f"{path}: expected {len(want_entries)} object entries, got {len(have_entries)}"
-    for index, (want_entry, have_entry) in enumerate(zip(want_entries, have_entries)):
+    for index, (want_entry, have_entry) in enumerate(zip(want_entries, have_entries, strict=True)):
       if want_entry["key"] != have_entry["key"]:
         return False, (
           f"{path}: expected key {want_entry['key']!r} at index {index}, "
