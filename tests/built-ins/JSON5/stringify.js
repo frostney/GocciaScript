@@ -116,11 +116,18 @@ describe("JSON5.stringify", () => {
   });
 
   test("supports options objects and quote overrides", () => {
+    const emojiIndent = "🙂".repeat(12);
+
     expect(
       JSON5.stringify({ a: 1, b: 2, 3: 3 }, { replacer: ["a", 3] }),
     ).toBe("{a:1,'3':3}");
     expect(JSON5.stringify([1], { space: 2 })).toBe("[\n  1,\n]");
     expect(JSON5.stringify([1], { space: new Number(2) })).toBe("[\n  1,\n]");
+    expect(JSON5.stringify([1], { space: NaN })).toBe("[1]");
+    expect(JSON5.stringify([1], { space: Infinity })).toBe("[\n          1,\n]");
+    expect(JSON5.stringify([1], { space: emojiIndent })).toBe(
+      `[\n${"🙂".repeat(10)}1,\n]`,
+    );
     expect(
       JSON5.stringify({ 'a"': '1"' }, { quote: '"' }),
     ).toBe("{\"a\\\"\":\"1\\\"\"}");

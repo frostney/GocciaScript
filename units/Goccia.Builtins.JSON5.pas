@@ -62,6 +62,7 @@ type
 implementation
 
 uses
+  Math,
   SysUtils,
 
   Goccia.Constants.PropertyNames,
@@ -73,6 +74,44 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
   Goccia.Values.WrapperPrimitives;
+
+function UTF8SequenceLengthFromLeadByte(const AChar: Char): Integer;
+var
+  ByteValue: Byte;
+begin
+  ByteValue := Ord(AChar);
+  if ByteValue < $80 then
+    Exit(1);
+  if (ByteValue and $E0) = $C0 then
+    Exit(2);
+  if (ByteValue and $F0) = $E0 then
+    Exit(3);
+  if (ByteValue and $F8) = $F0 then
+    Exit(4);
+  Result := 1;
+end;
+
+function UTF8CopyByCharacters(const AText: string;
+  const AMaxChars: Integer): string;
+var
+  ByteIndex: Integer;
+  CharacterCount: Integer;
+  SequenceLength: Integer;
+begin
+  if AMaxChars <= 0 then
+    Exit('');
+
+  ByteIndex := 1;
+  CharacterCount := 0;
+  while (ByteIndex <= Length(AText)) and (CharacterCount < AMaxChars) do
+  begin
+    SequenceLength := UTF8SequenceLengthFromLeadByte(AText[ByteIndex]);
+    Inc(ByteIndex, SequenceLength);
+    Inc(CharacterCount);
+  end;
+
+  Result := Copy(AText, 1, ByteIndex - 1);
+end;
 
 constructor TGocciaJSON5Builtin.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
@@ -296,6 +335,7 @@ end;
 
 function TGocciaJSON5Builtin.ResolveGap(const ASpaceArg: TGocciaValue): string;
 var
+  SpaceNumber: Double;
   SpaceCount: Integer;
   SpaceValue: TGocciaValue;
 begin
@@ -303,7 +343,18 @@ begin
   SpaceValue := UnboxWrappedPrimitive(ASpaceArg);
   if SpaceValue is TGocciaNumberLiteralValue then
   begin
-    SpaceCount := Trunc(SpaceValue.ToNumberLiteral.Value);
+    SpaceNumber := SpaceValue.ToNumberLiteral.Value;
+    if Math.IsNaN(SpaceNumber) then
+      Exit;
+    if Math.IsInfinite(SpaceNumber) then
+    begin
+      if SpaceNumber > 0 then
+        SpaceCount := 10
+      else
+        Exit;
+    end
+    else
+      SpaceCount := Trunc(SpaceNumber);
     if SpaceCount < 1 then
       Exit;
     if SpaceCount > 10 then
@@ -313,8 +364,7 @@ begin
   else if SpaceValue is TGocciaStringLiteralValue then
   begin
     Result := SpaceValue.ToStringLiteral.Value;
-    if Length(Result) > 10 then
-      Result := Copy(Result, 1, 10);
+    Result := UTF8CopyByCharacters(Result, 10);
   end;
 end;
 
