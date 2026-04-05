@@ -14,6 +14,7 @@ const realJSON5 = require(path.join(suiteDir, "lib"));
 
 const cases = [];
 const parseQueue = [];
+let ignoredAssertionCount = 0;
 let lastThrownSource = null;
 
 function encodeNumber(value) {
@@ -64,9 +65,16 @@ function encodeValue(value) {
 }
 
 function recordValidCase(description) {
+  if (ignoredAssertionCount > 0) {
+    ignoredAssertionCount -= 1;
+    return;
+  }
+
   const record = parseQueue.shift();
   if (!record) {
-    return;
+    throw new Error(
+      `No captured parse result for ${description ?? "unnamed valid case"}`,
+    );
   }
   cases.push({
     id: description || `valid-${cases.length + 1}`,
@@ -78,7 +86,9 @@ function recordValidCase(description) {
 
 function recordInvalidCase(description) {
   if (lastThrownSource === null) {
-    return;
+    throw new Error(
+      `No captured failing source for ${description ?? "unnamed invalid case"}`,
+    );
   }
   cases.push({
     id: description || `invalid-${cases.length + 1}`,
@@ -92,6 +102,7 @@ const wrappedJSON5 = {
   parse(text, reviver) {
     const source = String(text);
     if (arguments.length > 1) {
+      ignoredAssertionCount += 1;
       return realJSON5.parse(text, reviver);
     }
 
@@ -126,7 +137,11 @@ function createTapHarness() {
         callback();
       } catch (_error) {
         recordInvalidCase(description);
+        return;
       }
+      throw new Error(
+        `Expected parser failure for ${description ?? "unnamed invalid case"}`,
+      );
     },
   };
   return { test: (_name, callback) => callback(harness) };

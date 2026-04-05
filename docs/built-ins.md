@@ -17,7 +17,7 @@ TGocciaGlobalBuiltin = (
   ggGlobalNumber,     // Number.parseInt, Number.isNaN, etc.
   ggPromise,          // Promise constructor, prototype, static methods, microtask queue
   ggJSON,             // JSON.parse, JSON.stringify
-  ggJSON5,            // JSON5.parse
+  ggJSON5,            // JSON5.parse, JSON5.stringify
   ggJSONL,            // JSONL.parse, JSONL.parseChunk
   ggTOML,             // TOML.parse
   ggYAML,             // YAML.parse, YAML.parseDocuments

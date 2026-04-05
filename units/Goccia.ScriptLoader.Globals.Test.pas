@@ -201,6 +201,7 @@ end;
 procedure TScriptLoaderGlobalsTests.TestBytecodeBackendInjectGlobalsFromJSON5;
 var
   Backend: TGocciaBytecodeBackend;
+  MaxValue, MinValue: TGocciaNumberLiteralValue;
   Obj: TGocciaObjectValue;
 begin
   Backend := TGocciaBytecodeBackend.Create('<globals-test>');
@@ -216,10 +217,10 @@ begin
       .ToNumberLiteral.Value).ToBe(42);
 
     Obj := TGocciaObjectValue(Backend.Interpreter.GlobalScope.GetValue('limits'));
-    Expect<Double>(Obj.GetProperty('max').ToNumberLiteral.Value)
-      .ToBe(Infinity);
-    Expect<Double>(Obj.GetProperty('min').ToNumberLiteral.Value)
-      .ToBe(-Infinity);
+    MaxValue := Obj.GetProperty('max').ToNumberLiteral;
+    MinValue := Obj.GetProperty('min').ToNumberLiteral;
+    Expect<Boolean>(MaxValue.IsInfinity).ToBe(True);
+    Expect<Boolean>(MinValue.IsNegativeInfinity).ToBe(True);
   finally
     Backend.Free;
   end;

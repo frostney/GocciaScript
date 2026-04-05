@@ -101,9 +101,12 @@ end;
 function NumericStringRoundTrips(const ASerialized: string;
   const AValue: Double): Boolean;
 var
+  FloatFormat: TFormatSettings;
   ParsedValue: Double;
 begin
-  if not TryStrToFloat(ASerialized, ParsedValue, DefaultFormatSettings) then
+  FloatFormat := DefaultFormatSettings;
+  FloatFormat.DecimalSeparator := '.';
+  if not TryStrToFloat(ASerialized, ParsedValue, FloatFormat) then
     Exit(False);
   Result := SameDoubleBits(ParsedValue, AValue);
 end;
@@ -111,33 +114,35 @@ end;
 function SerializeJSONNumber(const AValue: Double): string;
 const
   JSON_DOUBLE_ROUNDTRIP_SCIENTIFIC_FORMAT = '0.################E+00';
+var
+  FloatFormat: TFormatSettings;
 begin
+  FloatFormat := DefaultFormatSettings;
+  FloatFormat.DecimalSeparator := '.';
   if AValue = 0 then
     Exit('0');
 
-  Result := FloatToStr(AValue, DefaultFormatSettings);
+  Result := FloatToStr(AValue, FloatFormat);
   if NumericStringRoundTrips(Result, AValue) then
     Exit;
 
   Result := NormalizeExponentNumber(
     FormatFloat(JSON_DOUBLE_ROUNDTRIP_SCIENTIFIC_FORMAT, AValue,
-      DefaultFormatSettings));
+      FloatFormat));
 end;
 
-function EncodeNumber(const AValue: Double): string;
+function EncodeNumber(const AValue: TGocciaNumberLiteralValue): string;
 begin
-  if IsNan(AValue) then
+  if AValue.IsNaN then
     Exit('{"type":"number","value":"NaN"}');
-  if IsInfinite(AValue) then
-  begin
-    if AValue < 0 then
-      Exit('{"type":"number","value":"-Infinity"}');
+  if AValue.IsInfinity then
     Exit('{"type":"number","value":"Infinity"}');
-  end;
-  if SameDoubleBits(AValue, -0.0) then
+  if AValue.IsNegativeInfinity then
+    Exit('{"type":"number","value":"-Infinity"}');
+  if AValue.IsNegativeZero then
     Exit('{"type":"number","value":"-0"}');
   Result := '{"type":"number","value":' +
-    QuoteJSONString(SerializeJSONNumber(AValue)) + '}';
+    QuoteJSONString(SerializeJSONNumber(AValue.Value)) + '}';
 end;
 
 function EncodeValue(const AValue: TGocciaValue): string;
@@ -146,6 +151,7 @@ var
   Element: TGocciaValue;
   I: Integer;
   Key: string;
+  NumberLiteral: TGocciaNumberLiteralValue;
 begin
   if AValue is TGocciaNullLiteralValue then
     Exit('{"type":"null"}');
@@ -159,7 +165,10 @@ begin
     Exit('{"type":"string","value":' +
       QuoteJSONString(AValue.ToStringLiteral.Value) + '}');
   if AValue is TGocciaNumberLiteralValue then
-    Exit(EncodeNumber(AValue.ToNumberLiteral.Value));
+  begin
+    NumberLiteral := AValue.ToNumberLiteral;
+    Exit(EncodeNumber(NumberLiteral));
+  end;
   if AValue is TGocciaArrayValue then
   begin
     Buffer := TStringBuffer.Create;

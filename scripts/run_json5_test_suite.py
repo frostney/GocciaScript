@@ -52,6 +52,16 @@ def ensure_suite_checkout(suite_dir: Path | None) -> tuple[Path, tempfile.Tempor
   return checkout_dir, temp_dir
 
 
+def ensure_build_dir(build_dir: Path | None) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
+  if build_dir is not None:
+    resolved_build_dir = build_dir.resolve()
+    resolved_build_dir.mkdir(parents=True, exist_ok=True)
+    return resolved_build_dir, None
+
+  temp_dir = tempfile.TemporaryDirectory(prefix="goccia_json5_suite_build_")
+  return Path(temp_dir.name), temp_dir
+
+
 def find_node_executable(explicit: str | None) -> str:
   if explicit:
     return explicit
@@ -312,14 +322,12 @@ def evaluate_stringify_suite(test_runner_path: Path, repo_root: Path) -> dict:
 
     if not output_path.exists():
       return {
-        "summary": {
-          "totalFiles": 1,
-          "totalTests": 0,
-          "passed": 0,
-          "failed": 1,
-          "skipped": 0,
-          "assertions": 0,
-        },
+        "totalFiles": 1,
+        "totalTests": 0,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "assertions": 0,
         "ok": False,
         "message": "\n".join(
           part for part in [process.stdout.strip(), process.stderr.strip()] if part
@@ -349,8 +357,7 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument(
     "--build-dir",
     type=Path,
-    default=Path(tempfile.gettempdir()) / "goccia_json5_suite_build",
-    help="Directory for the temporary JSON5 harness build artifacts.",
+    help="Directory for the temporary JSON5 harness build artifacts. If omitted, a per-run temporary directory is used.",
   )
   parser.add_argument(
     "--harness",
@@ -381,11 +388,12 @@ def main() -> int:
   node_executable = find_node_executable(args.node)
 
   suite_dir, temp_checkout = ensure_suite_checkout(args.suite_dir)
+  build_dir, temp_build_dir = ensure_build_dir(args.build_dir)
   if args.harness is not None:
     harness_path = args.harness.resolve()
   else:
-    harness_path = compile_harness(repo_root, args.build_dir.resolve())
-  test_runner_path = compile_test_runner(repo_root, args.build_dir.resolve())
+    harness_path = compile_harness(repo_root, build_dir)
+  test_runner_path = compile_test_runner(repo_root, build_dir)
 
   cases = load_cases(repo_root, suite_dir, node_executable)
   parse_report = evaluate_suite(harness_path, cases, args.timeout)
@@ -416,6 +424,8 @@ def main() -> int:
 
   if temp_checkout is not None:
     temp_checkout.cleanup()
+  if temp_build_dir is not None:
+    temp_build_dir.cleanup()
 
   if parse_report["summary"]["failed"] != 0:
     return 1

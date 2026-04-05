@@ -149,9 +149,13 @@ begin
   end;
 
   Args := TGocciaArgumentsCollection.Create;
-  Args.Add(TGocciaStringLiteralValue.Create(AKey));
-  Args.Add(Value);
-  Result := InvokeCallable(AReviver, Args, AHolder);
+  try
+    Args.Add(TGocciaStringLiteralValue.Create(AKey));
+    Args.Add(Value);
+    Result := InvokeCallable(AReviver, Args, AHolder);
+  finally
+    Args.Free;
+  end;
 end;
 
 function TGocciaJSON5Builtin.ApplyToJSON(const AValue: TGocciaValue;
@@ -186,9 +190,13 @@ var
   Args: TGocciaArgumentsCollection;
 begin
   Args := TGocciaArgumentsCollection.Create;
-  Args.Add(TGocciaStringLiteralValue.Create(AKey));
-  Args.Add(AValue);
-  Result := InvokeCallable(AReplacer, Args, AHolder);
+  try
+    Args.Add(TGocciaStringLiteralValue.Create(AKey));
+    Args.Add(AValue);
+    Result := InvokeCallable(AReplacer, Args, AHolder);
+  finally
+    Args.Free;
+  end;
 end;
 
 function TGocciaJSON5Builtin.UnboxWrappedPrimitive(

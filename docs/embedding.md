@@ -315,7 +315,7 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 | `ggGlobalArray` | `Array.isArray`, `Array.from`, `Array.of` | Static array methods |
 | `ggGlobalNumber` | `Number.*` | `parseInt`, `isNaN`, constants, etc. |
 | `ggJSON` | `JSON.parse`, `JSON.stringify` | Serialization |
-| `ggJSON5` | `JSON5.parse` | JSON5 configuration parsing |
+| `ggJSON5` | `JSON5.parse`, `JSON5.stringify` | JSON5 configuration parsing and serialization |
 | `ggTOML` | `TOML.parse` | TOML 1.1.0 configuration parsing |
 | `ggSymbol` | `Symbol`, `Symbol.for`, `Symbol.keyFor` | Unique property keys |
 | `ggSet` | `Set` constructor and methods | Unique value collections |
