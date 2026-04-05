@@ -57,7 +57,7 @@ type
 
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
-    procedure InjectGlobalsFromJSON5(const AJSON5String: string);
+    procedure InjectGlobalsFromJSON5(const AJSON5String: UTF8String);
     procedure InjectGlobalsFromTOML(const ATOMLString: UTF8String);
     procedure InjectGlobalsFromYAML(const AYamlString: string);
     procedure InjectGlobalsFromModule(const APath: string);
@@ -248,7 +248,7 @@ begin
 end;
 
 procedure TGocciaBytecodeBackend.InjectGlobalsFromJSON5(
-  const AJSON5String: string);
+  const AJSON5String: UTF8String);
 var
   Key: string;
   Obj: TGocciaObjectValue;

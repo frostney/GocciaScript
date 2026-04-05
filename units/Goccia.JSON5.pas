@@ -14,7 +14,7 @@ type
   TGocciaJSON5Parser = class(TGocciaJSONParser)
   public
     constructor Create;
-    function Parse(const AText: string): TGocciaValue; override;
+    function Parse(const AText: UTF8String): TGocciaValue; override;
   end;
 
   TGocciaJSON5Stringifier = class
@@ -37,7 +37,7 @@ begin
   inherited Create(JSONParserJSON5Capabilities);
 end;
 
-function TGocciaJSON5Parser.Parse(const AText: string): TGocciaValue;
+function TGocciaJSON5Parser.Parse(const AText: UTF8String): TGocciaValue;
 begin
   try
     Result := inherited Parse(AText);

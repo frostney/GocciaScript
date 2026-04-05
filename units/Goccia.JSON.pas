@@ -25,7 +25,7 @@ type
     constructor Create; overload;
     constructor Create(
       const ACapabilities: TJSONParserCapabilities); overload;
-    function Parse(const AText: string): TGocciaValue; virtual;
+    function Parse(const AText: UTF8String): TGocciaValue; virtual;
   end;
 
   TGocciaJSONStringifier = class
@@ -97,7 +97,7 @@ type
     constructor Create(
       const ACapabilities: TJSONParserCapabilities);
     destructor Destroy; override;
-    function Parse(const AText: string): TGocciaValue;
+    function Parse(const AText: UTF8String): TGocciaValue;
   end;
 
 const
@@ -105,6 +105,99 @@ const
   // round-trip back to the same Double. This scientific pattern gives us
   // one digit before the decimal point and up to 16 after it.
   JSON_DOUBLE_ROUNDTRIP_SCIENTIFIC_FORMAT = '0.################E+00';
+  JSON5_NO_BREAK_SPACE = #$C2#$A0;
+  JSON5_OGHAM_SPACE_MARK = #$E1#$9A#$80;
+  JSON5_EN_QUAD = #$E2#$80#$80;
+  JSON5_EM_QUAD = #$E2#$80#$81;
+  JSON5_EN_SPACE = #$E2#$80#$82;
+  JSON5_EM_SPACE = #$E2#$80#$83;
+  JSON5_THREE_PER_EM_SPACE = #$E2#$80#$84;
+  JSON5_FOUR_PER_EM_SPACE = #$E2#$80#$85;
+  JSON5_SIX_PER_EM_SPACE = #$E2#$80#$86;
+  JSON5_FIGURE_SPACE = #$E2#$80#$87;
+  JSON5_PUNCTUATION_SPACE = #$E2#$80#$88;
+  JSON5_THIN_SPACE = #$E2#$80#$89;
+  JSON5_HAIR_SPACE = #$E2#$80#$8A;
+  JSON5_ZERO_WIDTH_NON_JOINER = #$E2#$80#$8C;
+  JSON5_ZERO_WIDTH_JOINER = #$E2#$80#$8D;
+  JSON5_LINE_SEPARATOR = #$E2#$80#$A8;
+  JSON5_PARAGRAPH_SEPARATOR = #$E2#$80#$A9;
+  JSON5_NARROW_NO_BREAK_SPACE = #$E2#$80#$AF;
+  JSON5_MEDIUM_MATHEMATICAL_SPACE = #$E2#$81#$9F;
+  JSON5_IDEOGRAPHIC_SPACE = #$E3#$80#$80;
+  JSON5_BYTE_ORDER_MARK = #$EF#$BB#$BF;
+
+function UTF8SequenceLengthFromLeadByte(const AChar: Char): Integer;
+var
+  ByteValue: Byte;
+begin
+  ByteValue := Ord(AChar);
+  if ByteValue < $80 then
+    Exit(1);
+  if (ByteValue and $E0) = $C0 then
+    Exit(2);
+  if (ByteValue and $F0) = $E0 then
+    Exit(3);
+  if (ByteValue and $F8) = $F0 then
+    Exit(4);
+  Result := 0;
+end;
+
+function IsJSON5WhitespaceSequence(const AText: UTF8String): Boolean;
+const
+  JSON5_IDENTIFIER_DISALLOWED_SEQUENCES: array[0..18] of UTF8String = (
+    JSON5_NO_BREAK_SPACE,
+    JSON5_OGHAM_SPACE_MARK,
+    JSON5_EN_QUAD,
+    JSON5_EM_QUAD,
+    JSON5_EN_SPACE,
+    JSON5_EM_SPACE,
+    JSON5_THREE_PER_EM_SPACE,
+    JSON5_FOUR_PER_EM_SPACE,
+    JSON5_SIX_PER_EM_SPACE,
+    JSON5_FIGURE_SPACE,
+    JSON5_PUNCTUATION_SPACE,
+    JSON5_THIN_SPACE,
+    JSON5_HAIR_SPACE,
+    JSON5_LINE_SEPARATOR,
+    JSON5_PARAGRAPH_SEPARATOR,
+    JSON5_NARROW_NO_BREAK_SPACE,
+    JSON5_MEDIUM_MATHEMATICAL_SPACE,
+    JSON5_IDEOGRAPHIC_SPACE,
+    JSON5_BYTE_ORDER_MARK
+  );
+var
+  Sequence: UTF8String;
+begin
+  for Sequence in JSON5_IDENTIFIER_DISALLOWED_SEQUENCES do
+    if AText = Sequence then
+      Exit(True);
+  Result := False;
+end;
+
+function TryReadUTF8Sequence(const AText: string; var AIndex: Integer;
+  out ASequence: UTF8String): Boolean;
+var
+  I: Integer;
+  SequenceLength: Integer;
+begin
+  ASequence := '';
+  if (AIndex < 1) or (AIndex > Length(AText)) then
+    Exit(False);
+
+  SequenceLength := UTF8SequenceLengthFromLeadByte(AText[AIndex]);
+  if (SequenceLength = 0) or (AIndex + SequenceLength - 1 > Length(AText)) then
+    Exit(False);
+
+  ASequence := Copy(AText, AIndex, SequenceLength);
+  if SequenceLength > 1 then
+    for I := 2 to SequenceLength do
+      if (Ord(ASequence[I]) and $C0) <> $80 then
+        Exit(False);
+
+  Inc(AIndex, SequenceLength);
+  Result := True;
+end;
 
 function SameDoubleBits(const ALeft, ARight: Double): Boolean;
 var
@@ -194,7 +287,7 @@ begin
   FCapabilities := ACapabilities;
 end;
 
-function TGocciaJSONParser.Parse(const AText: string): TGocciaValue;
+function TGocciaJSONParser.Parse(const AText: UTF8String): TGocciaValue;
 var
   Visitor: TGocciaJSONVisitor;
 begin
@@ -234,7 +327,7 @@ begin
   inherited;
 end;
 
-function TGocciaJSONVisitor.Parse(const AText: string): TGocciaValue;
+function TGocciaJSONVisitor.Parse(const AText: UTF8String): TGocciaValue;
 begin
   DoParse(AText);
   Result := FResult;
@@ -429,10 +522,11 @@ class function TGocciaJSONStringifier.IsIdentifierStartText(
 begin
   if AText = '' then
     Exit(False);
-  if Length(AText) > 1 then
-    Exit(True);
-  Result := (AText[1] in ['a'..'z', 'A'..'Z', '_', '$']) or
-    (Ord(AText[1]) >= 128);
+  if Length(AText) = 1 then
+    Exit(AText[1] in ['a'..'z', 'A'..'Z', '_', '$']);
+  if (AText = JSON5_ZERO_WIDTH_NON_JOINER) or (AText = JSON5_ZERO_WIDTH_JOINER) then
+    Exit(False);
+  Result := not IsJSON5WhitespaceSequence(UTF8String(AText));
 end;
 
 class function TGocciaJSONStringifier.IsIdentifierContinueText(
@@ -440,28 +534,31 @@ class function TGocciaJSONStringifier.IsIdentifierContinueText(
 begin
   if AText = '' then
     Exit(False);
-  if Length(AText) > 1 then
+  if Length(AText) = 1 then
+    Exit(AText[1] in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']);
+  if (AText = JSON5_ZERO_WIDTH_NON_JOINER) or (AText = JSON5_ZERO_WIDTH_JOINER) then
     Exit(True);
-  Result := (AText[1] in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) or
-    (Ord(AText[1]) >= 128);
+  Result := not IsJSON5WhitespaceSequence(UTF8String(AText));
 end;
 
 function TGocciaJSONStringifier.IsJSON5IdentifierKey(const AKey: string): Boolean;
 var
   I: Integer;
+  Sequence: UTF8String;
 begin
   if AKey = '' then
     Exit(False);
 
-  if not IsIdentifierStartText(AKey[1]) then
+  I := 1;
+  if not TryReadUTF8Sequence(AKey, I, Sequence) or
+    not IsIdentifierStartText(Sequence) then
     Exit(False);
 
-  I := 2;
   while I <= Length(AKey) do
   begin
-    if not IsIdentifierContinueText(AKey[I]) then
+    if not TryReadUTF8Sequence(AKey, I, Sequence) or
+      not IsIdentifierContinueText(Sequence) then
       Exit(False);
-    Inc(I);
   end;
 
   Result := True;

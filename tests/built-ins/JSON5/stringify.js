@@ -67,9 +67,34 @@ describe("JSON5.stringify", () => {
 
   test("supports replacer arrays and functions", () => {
     expect(JSON5.stringify({ a: 1, b: 2, 3: 3 }, ["a", 3])).toBe("{a:1,'3':3}");
+    expect(JSON5.stringify({ a: { a: 1, b: 2 }, b: { a: 3 } }, ["a"])).toBe(
+      "{a:{a:1}}",
+    );
     expect(
       JSON5.stringify({ a: 1, b: 2, 3: 3 }, [new String("a"), new Number(3)]),
     ).toBe("{a:1,'3':3}");
+    expect(
+      JSON5.stringify(
+        {
+          toJSON5() {
+            return { a: 1, b: 2 };
+          },
+        },
+        ["a"],
+      ),
+    ).toBe("{a:1}");
+    expect(
+      JSON5.stringify(
+        {
+          a: {
+            toJSON5() {
+              return { a: 1, b: 2 };
+            },
+          },
+        },
+        ["a"],
+      ),
+    ).toBe("{a:{a:1}}");
     expect(
       JSON5.stringify({ a: 1, b: 2 }, (key, value) => {
         if (key === "a") {
@@ -105,6 +130,8 @@ describe("JSON5.stringify", () => {
   });
 
   test("matches JSON semantics for omitted and nullified values", () => {
+    const nbsp = String.fromCodePoint(160);
+
     expect(JSON5.stringify(undefined)).toBeUndefined();
     expect(JSON5.stringify(() => {})).toBeUndefined();
     expect(JSON5.stringify(new String("abc"))).toBe("'abc'");
@@ -112,6 +139,7 @@ describe("JSON5.stringify", () => {
     expect(JSON5.stringify({ keep: 1, fn() {} })).toBe("{keep:1}");
     expect(JSON5.stringify([() => {}])).toBe("[null]");
     expect(JSON5.stringify({ keep: 1, missing: undefined })).toBe("{keep:1}");
+    expect(JSON5.stringify({ ["a" + nbsp + "b"]: 1 })).toBe(`{'a${nbsp}b':1}`);
   });
 
   test("throws on circular structures", () => {

@@ -99,6 +99,7 @@ No \\\\n's!",
     expect(() => JSON5.parse("{a: 0x}")).toThrow(SyntaxError);
     expect(() => JSON5.parse("{a: '\\1'}")).toThrow(SyntaxError);
     expect(() => JSON5.parse("{\\u0021: 1}")).toThrow(SyntaxError);
+    expect(() => JSON5.parse("{\\u00A0: 1}")).toThrow(SyntaxError);
     expect(() => JSON5.parse("/*")).toThrow(SyntaxError);
   });
 });

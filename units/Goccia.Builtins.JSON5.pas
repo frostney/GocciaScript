@@ -42,6 +42,9 @@ type
     function StringifyWithReplacer(const AValue: TGocciaValue;
       const AReplacer: TGocciaValue; const AGap: string;
       const APreferredQuoteChar: Char): string;
+    function TransformWithAllowList(const AHolder: TGocciaValue;
+      const AKey: string; const AValue: TGocciaValue;
+      const AAllowList: TGocciaArrayValue): TGocciaValue;
     function TransformWithReplacer(const AHolder: TGocciaValue;
       const AKey: string; const AValue: TGocciaValue;
       const AReplacer: TGocciaValue): TGocciaValue;
@@ -372,40 +375,100 @@ function TGocciaJSON5Builtin.StringifyWithAllowList(const AValue: TGocciaValue;
   const AAllowList: TGocciaArrayValue; const AGap: string;
   const APreferredQuoteChar: Char): string;
 var
-  Filtered: TGocciaObjectValue;
+  PreviousTraversalStack: TList<TGocciaObjectValue>;
+  Root: TGocciaObjectValue;
+  Transformed: TGocciaValue;
+begin
+  Root := TGocciaObjectValue.Create;
+  Root.AssignProperty('', AValue);
+  PreviousTraversalStack := FReplacerTraversalStack;
+  FReplacerTraversalStack := TList<TGocciaObjectValue>.Create;
+  try
+    Transformed := TransformWithAllowList(Root, '', AValue, AAllowList);
+
+    if RootResultShouldBeUndefined(Transformed) then
+    begin
+      Result := '';
+      Exit;
+    end;
+
+    Result := FStringifier.Stringify(Transformed, AGap, APreferredQuoteChar);
+  finally
+    FReplacerTraversalStack.Free;
+    FReplacerTraversalStack := PreviousTraversalStack;
+  end;
+end;
+
+function TGocciaJSON5Builtin.TransformWithAllowList(const AHolder: TGocciaValue;
+  const AKey: string; const AValue: TGocciaValue;
+  const AAllowList: TGocciaArrayValue): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
   I: Integer;
   Key: string;
+  NewArr: TGocciaArrayValue;
+  NewObj: TGocciaObjectValue;
   Obj: TGocciaObjectValue;
   PropValue: TGocciaValue;
-  RootValue: TGocciaValue;
+  TransformedProp: TGocciaValue;
+  TransformedValue: TGocciaValue;
 begin
-  RootValue := UnboxWrappedPrimitive(AValue);
+  TransformedValue := ApplyToJSON(AValue, AKey);
+  TransformedValue := UnboxWrappedPrimitive(TransformedValue);
 
-  if RootResultShouldBeUndefined(RootValue) then
+  if TransformedValue is TGocciaUndefinedLiteralValue then
+    Exit(TransformedValue);
+
+  if TransformedValue is TGocciaArrayValue then
   begin
-    Result := '';
-    Exit;
+    if FReplacerTraversalStack.IndexOf(TGocciaArrayValue(TransformedValue)) <> -1 then
+      ThrowTypeError('Converting circular structure to JSON5');
+
+    FReplacerTraversalStack.Add(TGocciaArrayValue(TransformedValue));
+    Arr := TGocciaArrayValue(TransformedValue);
+    NewArr := TGocciaArrayValue.Create;
+    try
+      for I := 0 to Arr.Elements.Count - 1 do
+      begin
+        PropValue := Arr.Elements[I];
+        TransformedProp := TransformWithAllowList(Arr, IntToStr(I), PropValue,
+          AAllowList);
+        NewArr.Elements.Add(TransformedProp);
+      end;
+    finally
+      FReplacerTraversalStack.Delete(FReplacerTraversalStack.Count - 1);
+    end;
+    Exit(NewArr);
   end;
 
-  if not (RootValue is TGocciaObjectValue) or (RootValue is TGocciaArrayValue) then
+  if (TransformedValue is TGocciaObjectValue) and
+    not (TransformedValue is TGocciaArrayValue) then
   begin
-    Result := FStringifier.Stringify(RootValue, AGap, APreferredQuoteChar);
-    Exit;
+    if FReplacerTraversalStack.IndexOf(TGocciaObjectValue(TransformedValue)) <> -1 then
+      ThrowTypeError('Converting circular structure to JSON5');
+
+    FReplacerTraversalStack.Add(TGocciaObjectValue(TransformedValue));
+    Obj := TGocciaObjectValue(TransformedValue);
+    NewObj := TGocciaObjectValue.Create;
+    try
+      for I := 0 to AAllowList.Elements.Count - 1 do
+      begin
+        if not TryExtractAllowListKey(AAllowList.Elements[I], Key) then
+          Continue;
+        PropValue := Obj.GetProperty(Key);
+        if PropValue = nil then
+          Continue;
+        TransformedProp := TransformWithAllowList(Obj, Key, PropValue, AAllowList);
+        if not (TransformedProp is TGocciaUndefinedLiteralValue) then
+          NewObj.AssignProperty(Key, TransformedProp);
+      end;
+    finally
+      FReplacerTraversalStack.Delete(FReplacerTraversalStack.Count - 1);
+    end;
+    Exit(NewObj);
   end;
 
-  Obj := TGocciaObjectValue(RootValue);
-  Filtered := TGocciaObjectValue.Create;
-
-  for I := 0 to AAllowList.Elements.Count - 1 do
-  begin
-    if not TryExtractAllowListKey(AAllowList.Elements[I], Key) then
-      Continue;
-    PropValue := Obj.GetProperty(Key);
-    if (PropValue <> nil) and not (PropValue is TGocciaUndefinedLiteralValue) then
-      Filtered.AssignProperty(Key, PropValue);
-  end;
-
-  Result := FStringifier.Stringify(Filtered, AGap, APreferredQuoteChar);
+  Result := TransformedValue;
 end;
 
 function TGocciaJSON5Builtin.JSON5Parse(

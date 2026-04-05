@@ -51,15 +51,17 @@ type
     FCapabilities: TJSONParserCapabilities;
     FLength: Integer;
     FPosition: Integer;
-    FText: string;
+    FText: UTF8String;
 
     class function HexDigitValue(const AChar: Char): Integer; static;
     class function IsASCIIDigit(const AChar: Char): Boolean; static;
     class function IsASCIIHexDigit(const AChar: Char): Boolean; static;
     class function IsASCIIIdentifierContinueByte(const AChar: Char): Boolean; static;
     class function IsASCIIIdentifierStartByte(const AChar: Char): Boolean; static;
+    class function IsJSON5WhitespaceSequence(const AText: UTF8String): Boolean; static;
     class function IsIdentifierContinueText(const AText: string): Boolean; static;
     class function IsIdentifierStartText(const AText: string): Boolean; static;
+    class function UTF8SequenceLengthFromLeadByte(const AChar: Char): Integer; static;
     function ConsumeComment: Boolean;
     function ConsumeSequence(const ASequence: string): Boolean;
     function ConsumeWhitespace: Boolean;
@@ -68,6 +70,8 @@ type
     function ParseIdentifierEscape(const AIsStart: Boolean): string;
     function ParseIdentifierName: string;
     function ParseObjectKey: string;
+    function PeekUTF8Sequence: UTF8String;
+    function ReadUTF8Sequence: UTF8String;
     function Supports(const ACapability: TJSONParserCapability): Boolean; inline;
     function TryMatchAdditionalWhitespace(out AByteLength: Integer): Boolean;
     function TryMatchLineTerminator(out AByteLength: Integer): Boolean;
@@ -87,7 +91,7 @@ type
     function ParseString: string; overload;
     function ParseUnicodeEscape: string; virtual;
 
-    procedure DoParse(const AText: string);
+    procedure DoParse(const AText: UTF8String);
     procedure DoParseArray;
     procedure DoParseNumber;
     procedure DoParseObject;
@@ -131,6 +135,8 @@ const
   JSON5_MEDIUM_MATHEMATICAL_SPACE = #$E2#$81#$9F;
   JSON5_IDEOGRAPHIC_SPACE = #$E3#$80#$80;
   JSON5_BYTE_ORDER_MARK = #$EF#$BB#$BF;
+  JSON5_ZERO_WIDTH_NON_JOINER = #$E2#$80#$8C;
+  JSON5_ZERO_WIDTH_JOINER = #$E2#$80#$8D;
 
 constructor TAbstractJSONParser.Create;
 begin
@@ -181,14 +187,49 @@ begin
   Result := IsASCIIIdentifierStartByte(AChar) or IsASCIIDigit(AChar);
 end;
 
+class function TAbstractJSONParser.IsJSON5WhitespaceSequence(
+  const AText: UTF8String): Boolean;
+const
+  JSON5_IDENTIFIER_DISALLOWED_SEQUENCES: array[0..18] of UTF8String = (
+    JSON5_NO_BREAK_SPACE,
+    JSON5_OGHAM_SPACE_MARK,
+    JSON5_EN_QUAD,
+    JSON5_EM_QUAD,
+    JSON5_EN_SPACE,
+    JSON5_EM_SPACE,
+    JSON5_THREE_PER_EM_SPACE,
+    JSON5_FOUR_PER_EM_SPACE,
+    JSON5_SIX_PER_EM_SPACE,
+    JSON5_FIGURE_SPACE,
+    JSON5_PUNCTUATION_SPACE,
+    JSON5_THIN_SPACE,
+    JSON5_HAIR_SPACE,
+    JSON5_LINE_SEPARATOR,
+    JSON5_PARAGRAPH_SEPARATOR,
+    JSON5_NARROW_NO_BREAK_SPACE,
+    JSON5_MEDIUM_MATHEMATICAL_SPACE,
+    JSON5_IDEOGRAPHIC_SPACE,
+    JSON5_BYTE_ORDER_MARK
+  );
+var
+  Sequence: UTF8String;
+begin
+  for Sequence in JSON5_IDENTIFIER_DISALLOWED_SEQUENCES do
+    if AText = Sequence then
+      Exit(True);
+  Result := False;
+end;
+
 class function TAbstractJSONParser.IsIdentifierStartText(
   const AText: string): Boolean;
 begin
   if AText = '' then
     Exit(False);
-  if Length(AText) > 1 then
-    Exit(True);
-  Result := IsASCIIIdentifierStartByte(AText[1]) or (Ord(AText[1]) >= 128);
+  if Length(AText) = 1 then
+    Exit(IsASCIIIdentifierStartByte(AText[1]));
+  if (AText = JSON5_ZERO_WIDTH_NON_JOINER) or (AText = JSON5_ZERO_WIDTH_JOINER) then
+    Exit(False);
+  Result := not IsJSON5WhitespaceSequence(UTF8String(AText));
 end;
 
 class function TAbstractJSONParser.IsIdentifierContinueText(
@@ -196,9 +237,28 @@ class function TAbstractJSONParser.IsIdentifierContinueText(
 begin
   if AText = '' then
     Exit(False);
-  if Length(AText) > 1 then
+  if Length(AText) = 1 then
+    Exit(IsASCIIIdentifierContinueByte(AText[1]));
+  if (AText = JSON5_ZERO_WIDTH_NON_JOINER) or (AText = JSON5_ZERO_WIDTH_JOINER) then
     Exit(True);
-  Result := IsASCIIIdentifierContinueByte(AText[1]) or (Ord(AText[1]) >= 128);
+  Result := not IsJSON5WhitespaceSequence(UTF8String(AText));
+end;
+
+class function TAbstractJSONParser.UTF8SequenceLengthFromLeadByte(
+  const AChar: Char): Integer;
+var
+  ByteValue: Byte;
+begin
+  ByteValue := Ord(AChar);
+  if ByteValue < $80 then
+    Exit(1);
+  if (ByteValue and $E0) = $C0 then
+    Exit(2);
+  if (ByteValue and $F0) = $E0 then
+    Exit(3);
+  if (ByteValue and $F8) = $F0 then
+    Exit(4);
+  Result := 0;
 end;
 
 function TAbstractJSONParser.Supports(
@@ -207,7 +267,7 @@ begin
   Result := ACapability in FCapabilities;
 end;
 
-procedure TAbstractJSONParser.DoParse(const AText: string);
+procedure TAbstractJSONParser.DoParse(const AText: UTF8String);
 begin
   FText := AText;
   FPosition := 1;
@@ -220,6 +280,35 @@ begin
   SkipWhitespace;
   if not IsAtEnd then
     RaiseParseError('Unexpected character after JSON value');
+end;
+
+function TAbstractJSONParser.PeekUTF8Sequence: UTF8String;
+var
+  I: Integer;
+  SequenceLength: Integer;
+begin
+  Result := '';
+  if IsAtEnd then
+    Exit;
+
+  SequenceLength := UTF8SequenceLengthFromLeadByte(PeekChar);
+  if (SequenceLength = 0) or (FPosition + SequenceLength - 1 > FLength) then
+    Exit;
+
+  Result := Copy(FText, FPosition, SequenceLength);
+  if SequenceLength = 1 then
+    Exit;
+
+  for I := 2 to SequenceLength do
+    if (Ord(Result[I]) and $C0) <> $80 then
+      Exit('');
+end;
+
+function TAbstractJSONParser.ReadUTF8Sequence: UTF8String;
+begin
+  Result := PeekUTF8Sequence;
+  if Result <> '' then
+    Inc(FPosition, Length(Result));
 end;
 
 procedure TAbstractJSONParser.DoParseValue;
@@ -557,6 +646,8 @@ begin
 end;
 
 function TAbstractJSONParser.ParseIdentifierName: string;
+var
+  Sequence: UTF8String;
 begin
   Result := '';
 
@@ -568,10 +659,15 @@ begin
     ReadChar;
     Result := ParseIdentifierEscape(True);
   end
-  else if IsASCIIIdentifierStartByte(PeekChar) or (Ord(PeekChar) >= 128) then
+  else if IsASCIIIdentifierStartByte(PeekChar) then
     Result := Result + ReadChar
   else
-    RaiseParseError('Expected string key in object');
+  begin
+    Sequence := PeekUTF8Sequence;
+    if not IsIdentifierStartText(Sequence) then
+      RaiseParseError('Expected string key in object');
+    Result := Result + ReadUTF8Sequence;
+  end;
 
   while not IsAtEnd do
   begin
@@ -580,10 +676,15 @@ begin
       ReadChar;
       Result := Result + ParseIdentifierEscape(False);
     end
-    else if IsASCIIIdentifierContinueByte(PeekChar) or (Ord(PeekChar) >= 128) then
+    else if IsASCIIIdentifierContinueByte(PeekChar) then
       Result := Result + ReadChar
     else
-      Break;
+    begin
+      Sequence := PeekUTF8Sequence;
+      if not IsIdentifierContinueText(Sequence) then
+        Break;
+      Result := Result + ReadUTF8Sequence;
+    end;
   end;
 end;
 
