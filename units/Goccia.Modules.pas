@@ -54,7 +54,7 @@ begin
         TGocciaPropertyDescriptorData.Create(ExportPair.Value, [pfEnumerable]));
     FNamespaceObject.Freeze;
     if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.AddTempRoot(FNamespaceObject);
+      TGarbageCollector.Instance.AddRootObject(FNamespaceObject);
   end;
   Result := FNamespaceObject;
 end;
@@ -64,7 +64,7 @@ begin
   if Assigned(FNamespaceObject) then
   begin
     if Assigned(TGarbageCollector.Instance) then
-      TGarbageCollector.Instance.RemoveTempRoot(FNamespaceObject);
+      TGarbageCollector.Instance.RemoveRootObject(FNamespaceObject);
     FNamespaceObject := nil;
   end;
 end;
