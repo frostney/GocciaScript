@@ -238,7 +238,7 @@ GocciaScript intentionally excludes these JavaScript features — do **not** add
 - Default imports/exports — use named imports/exports
 - Global `parseInt`, `parseFloat`, `isNaN`, `isFinite` — use `Number.*` instead (intentional divergence; keeps these functions on the object they belong to)
 
-The parser accepts unsupported syntax (loops, `with`, `function`, `==`, `!=`, default imports/exports, namespace imports, side-effect imports, wildcard re-exports, labeled statements) but treats it as a no-op — the code parses successfully, the unsupported construct is skipped at runtime, and a warning is emitted to stdout with a suggestion. `function` declarations produce `TGocciaEmptyStatement`; `function` expressions evaluate to `undefined`. `==`/`!=` expressions evaluate to `undefined` (both operands are parsed and discarded). Labeled statements strip the label and execute the labeled statement normally. This design preserves the AST for a potential future compatibility mode.
+The parser accepts unsupported syntax (loops, `with`, `function`, `==`, `!=`, default imports/exports, side-effect imports, wildcard re-exports, labeled statements) but treats it as a no-op — the code parses successfully, the unsupported construct is skipped at runtime, and a warning is emitted to stdout with a suggestion. `function` declarations produce `TGocciaEmptyStatement`; `function` expressions evaluate to `undefined`. `==`/`!=` expressions evaluate to `undefined` (both operands are parsed and discarded). Labeled statements strip the label and execute the labeled statement normally. This design preserves the AST for a potential future compatibility mode.
 
 See [docs/language-restrictions.md](docs/language-restrictions.md) for the full list and rationale.
 
@@ -302,7 +302,7 @@ See [docs/code-style.md](docs/code-style.md) for the complete style guide.
 - **Function/procedure names:** PascalCase (e.g., `EvaluateBinary`, `GetProperty`). External C bindings are exempt. Auto-fixed by `./format.pas`.
 - **Unit naming:** `Goccia.<Category>.<Name>.pas` (dot-separated hierarchy)
 - **No abbreviations:** Use full words in class, function, method, and type names (e.g., `TGarbageCollector` not `TGC`). Exceptions: `AST`, `JSON`, `REPL`, `ISO`, `Utils`.
-- **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`, `EXT_GBC`) instead of hardcoded string literals. Use the `ScriptExtensions` array, `IsScriptExtension`, and `IsJSXNativeExtension` helpers instead of duplicating extension lists or ad-hoc checks.
+- **File extension constants:** Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`, `EXT_TOML`, `EXT_GBC`) instead of hardcoded string literals. Use the `ScriptExtensions` array, `IsScriptExtension`, and `IsJSXNativeExtension` helpers instead of duplicating extension lists or ad-hoc checks.
 - **Runtime constants:** Use the split constant units instead of hardcoded string literals for property names, type names, error names, constructor names, and symbol names:
   - `Goccia.Constants.PropertyNames` — `PROP_LENGTH`, `PROP_NAME`, `PROP_CONSTRUCTOR`, `PROP_PROTOTYPE`, `PROP_GET`, `PROP_SET`, `PROP_KIND`, `PROP_STATIC`, `PROP_PRIVATE`, `PROP_METADATA`, `PROP_ACCESS`, `PROP_INIT`, `PROP_ADD_INITIALIZER`, `PROP_STRICT_TYPES`, etc.
   - `Goccia.Constants.TypeNames` — `OBJECT_TYPE_NAME`, `STRING_TYPE_NAME`, `FUNCTION_TYPE_NAME`, etc.

@@ -2262,7 +2262,7 @@ end;
 function TGocciaParser.ImportDeclaration: TGocciaStatement;
 var
   Imports: TStringStringMap;
-  ImportedName, LocalName, ModulePath: string;
+  ImportedName, LocalName, ModulePath, NamespaceName: string;
   ImportedNameToken: TGocciaToken;
   Line, Column: Integer;
 begin
@@ -2279,11 +2279,15 @@ begin
 
   if Check(gttStar) then
   begin
-    AddWarning('Namespace imports (import * as ...) are not supported in GocciaScript',
-      'Use named imports instead: import { name } from ''module''',
-      Line, Column);
-    SkipUntilSemicolon;
-    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Advance;
+    Consume(gttAs, 'Expected "as" after "*" in namespace import');
+    NamespaceName := Consume(gttIdentifier,
+      'Expected local name after "as"').Lexeme;
+    Consume(gttFrom, 'Expected "from" after namespace import');
+    ModulePath := Consume(gttString, 'Expected module path').Lexeme;
+    Consume(gttSemicolon, 'Expected ";" after import declaration');
+    Result := TGocciaImportDeclaration.Create(TStringStringMap.Create,
+      ModulePath, Line, Column, NamespaceName);
     Exit;
   end;
 

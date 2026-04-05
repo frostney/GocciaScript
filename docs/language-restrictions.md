@@ -177,6 +177,12 @@ import { add, multiply } from "./math.js";
 import { add, multiply } from "./math";      // resolves to ./math.js, .jsx, .ts, .tsx, or .mjs
 import { "foo-bar" as fooBar } from "./config.json";
 
+// Namespace imports
+import * as math from "./math.js";
+import * as configJson from "./config.json";
+import * as configToml from "./config.toml";
+import * as configYaml from "./config.yaml";
+
 // Named exports
 export { myFunction, myValue };
 export { localValue as "0" };
@@ -195,6 +201,10 @@ import { name, version } from "./package.json";
 import { host as dbHost } from "./config.json";
 import { "foo-bar" as featureFlag } from "./feature-flags.json";
 
+// TOML imports — top-level keys become named exports
+import { name, version } from "./package.toml";
+import { host as dbHost } from "./config.toml";
+
 // JSONL imports — each non-empty line becomes a string-indexed named export
 import { "0" as firstRecord, "1" as secondRecord } from "./events.jsonl";
 
@@ -209,13 +219,17 @@ JSONL (`.jsonl`) imports are also supported. Each non-empty line is parsed as st
 
 Non-scalar YAML keys are canonicalized into stable JSON-like strings. Explicit scalar keys work naturally as named exports, and keys that are not valid identifiers can still be imported with string-literal names such as `import { "foo-bar" as fooBar } from "./config.yaml";`. Complex keys only produce useful imports when you know the canonical export string.
 
+TOML module imports follow the same top-level-object export model as JSON modules. `.toml` files are parsed as TOML and exposed as named exports from the root table. Arrays of tables stay arrays, nested tables stay objects, and TOML date/time values currently surface as validated strings.
+
+Namespace imports (`import * as ns from "./module.js"`) are also supported for script modules and structured-data modules. They produce a frozen, null-prototype namespace object whose enumerable own properties mirror the module’s current export table, so JSON, JSONL, TOML, and YAML modules can all be consumed either through named imports or through a namespace object.
+
 This YAML surface is still partial. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
 
 // Directory/index resolution
 import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx, etc.)
 ```
 
-**Not supported:** `export default`, `import x from` (default import), `import * as` (namespace import), `import "module"` (side-effect import), `export * from` (wildcard re-export), dynamic `import()`. The parser accepts these syntactically but treats them as no-ops, emitting a warning with a suggestion:
+**Not supported:** `export default`, `import x from` (default import), `import "module"` (side-effect import), `export * from` (wildcard re-export), dynamic `import()`. The parser accepts these syntactically but treats them as no-ops, emitting a warning with a suggestion:
 
 ```text
 Warning: Default imports are not supported in GocciaScript

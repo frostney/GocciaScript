@@ -1,0 +1,19 @@
+name = "goccia-test"
+version = "1.0.0"
+debug = true
+maxRetries = 3
+release = 2026-04-04T12:30:45Z
+alarm = 07:32
+tags = ["alpha", "beta"]
+
+[database]
+host = "localhost"
+port = 5432
+
+[[servers]]
+name = "alpha"
+ip = "10.0.0.1"
+
+[[servers]]
+name = "beta"
+ip = "10.0.0.2"

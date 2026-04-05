@@ -12,6 +12,7 @@ const
   EXT_MJS  = '.mjs';
   EXT_JSON = '.json';
   EXT_JSONL = '.jsonl';
+  EXT_TOML = '.toml';
   EXT_YAML = '.yaml';
   EXT_YML  = '.yml';
   EXT_GBC  = '.gbc';
@@ -27,6 +28,7 @@ const
 function IsScriptExtension(const AExtension: string): Boolean;
 function IsJSONLExtension(const AExtension: string): Boolean;
 function IsJSXNativeExtension(const AExtension: string): Boolean;
+function IsTOMLExtension(const AExtension: string): Boolean;
 function IsYAMLExtension(const AExtension: string): Boolean;
 function IsStructuredDataExtension(const AExtension: string): Boolean;
 function IsStructuredGlobalsExtension(const AExtension: string): Boolean;
@@ -76,12 +78,21 @@ begin
   Result := (Ext = EXT_YAML) or (Ext = EXT_YML);
 end;
 
+function IsTOMLExtension(const AExtension: string): Boolean;
+var
+  Ext: string;
+begin
+  Ext := LowerCase(AExtension);
+  Result := Ext = EXT_TOML;
+end;
+
 function IsStructuredDataExtension(const AExtension: string): Boolean;
 var
   Ext: string;
 begin
   Ext := LowerCase(AExtension);
-  Result := (Ext = EXT_JSON) or IsJSONLExtension(Ext) or IsYAMLExtension(Ext);
+  Result := (Ext = EXT_JSON) or IsJSONLExtension(Ext) or
+    IsTOMLExtension(Ext) or IsYAMLExtension(Ext);
 end;
 
 function IsStructuredGlobalsExtension(const AExtension: string): Boolean;
