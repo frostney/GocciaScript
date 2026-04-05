@@ -6,7 +6,9 @@ features: [modules, namespace-imports]
 ---*/
 
 import * as math from "./helpers/math-utils.js";
+import * as mathAgain from "./helpers/math-utils.js";
 import * as configJson from "./helpers/config.json";
+import * as configJsonAgain from "./helpers/config.json";
 import * as configToml from "./helpers/config.toml";
 import * as configYaml from "./helpers/config.yaml";
 
@@ -18,6 +20,11 @@ describe("namespace import", () => {
     expect(Object.keys(math)).toEqual(["add", "multiply", "PI"]);
     expect(Object.getPrototypeOf(math)).toBeNull();
     expect(Object.isFrozen(math)).toBe(true);
+  });
+
+  test("reuses the same namespace object for repeated imports", () => {
+    expect(mathAgain).toBe(math);
+    expect(configJsonAgain).toBe(configJson);
   });
 
   test("namespace exports remain read-only", () => {

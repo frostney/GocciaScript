@@ -136,6 +136,7 @@ procedure TGocciaModuleLoader.CopyModuleContents(const ASourceModule,
 var
   ExportPair: TGocciaValueMap.TKeyValuePair;
 begin
+  ATargetModule.InvalidateNamespaceObject;
   ATargetModule.ExportsTable.Clear;
   for ExportPair in ASourceModule.ExportsTable do
     ATargetModule.ExportsTable.AddOrSetValue(ExportPair.Key, ExportPair.Value);

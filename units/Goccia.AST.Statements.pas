@@ -450,16 +450,8 @@ uses
   Goccia.Values.ObjectValue;
 
 function CreateModuleNamespaceObject(const AModule: TGocciaModule): TGocciaValue;
-var
-  ExportPair: TGocciaValueMap.TKeyValuePair;
-  NamespaceObject: TGocciaObjectValue;
 begin
-  NamespaceObject := TGocciaObjectValue.Create(nil, AModule.ExportsTable.Count);
-  for ExportPair in AModule.ExportsTable do
-    NamespaceObject.DefineProperty(ExportPair.Key,
-      TGocciaPropertyDescriptorData.Create(ExportPair.Value, [pfEnumerable]));
-  NamespaceObject.Freeze;
-  Result := NamespaceObject;
+  Result := AModule.GetNamespaceObject;
 end;
 
 { TGocciaExpressionStatement }

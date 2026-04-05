@@ -1838,14 +1838,8 @@ begin
 end;
 
 function CreateModuleNamespaceObject(const AModule: TGocciaModule): TGocciaObjectValue;
-var
-  ExportPair: TGocciaValueMap.TKeyValuePair;
 begin
-  Result := TGocciaObjectValue.Create(nil, AModule.ExportsTable.Count);
-  for ExportPair in AModule.ExportsTable do
-    Result.DefineProperty(ExportPair.Key,
-      TGocciaPropertyDescriptorData.Create(ExportPair.Value, [pfEnumerable]));
-  Result.Freeze;
+  Result := AModule.GetNamespaceObject;
 end;
 
 function RegisterMatchesNullishKind(const AValue: TGocciaRegister;
