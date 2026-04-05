@@ -75,4 +75,9 @@ begin
   Result := UTF8String(RetagUTF8Text(SourceText));
 end;
 
+initialization
+  {$IFDEF MSWINDOWS}
+  DefaultSystemCodePage := CP_UTF8;
+  {$ENDIF}
+
 end.
