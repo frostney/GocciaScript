@@ -17,6 +17,8 @@ SUITE_BRANCH = "main"
 DEFAULT_TIMEOUT_SECONDS = 5
 HARNESS_SOURCE_PATH = Path("scripts/GocciaJSON5Check.dpr")
 CASE_EXTRACTOR_PATH = Path("scripts/extract_json5_cases.js")
+STRINGIFY_SUITE_PATH = Path("tests/built-ins/JSON5/stringify.js")
+TEST_RUNNER_SOURCE_PATH = Path("TestRunner.dpr")
 
 
 def run(command: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -81,6 +83,27 @@ def compile_harness(repo_root: Path, build_dir: Path) -> Path:
 
   harness_name = "GocciaJSON5Check.exe" if sys.platform.startswith("win") else "GocciaJSON5Check"
   return build_dir / harness_name
+
+
+def compile_test_runner(repo_root: Path, build_dir: Path) -> Path:
+  build_dir.mkdir(parents=True, exist_ok=True)
+  runner_source = repo_root / TEST_RUNNER_SOURCE_PATH
+
+  run(
+    [
+      "fpc",
+      "@config.cfg",
+      "-Fuunits",
+      "-Fu.",
+      f"-FU{build_dir}",
+      f"-FE{build_dir}",
+      str(runner_source),
+    ],
+    cwd=repo_root,
+  )
+
+  runner_name = "TestRunner.exe" if sys.platform.startswith("win") else "TestRunner"
+  return build_dir / runner_name
 
 
 def load_cases(repo_root: Path, suite_dir: Path, node_executable: str) -> list[dict]:
@@ -270,9 +293,53 @@ def evaluate_suite(harness_path: Path, cases: list[dict], timeout_seconds: int) 
   return {"summary": summary, "results": results}
 
 
+def evaluate_stringify_suite(test_runner_path: Path, repo_root: Path) -> dict:
+  stringify_suite = repo_root / STRINGIFY_SUITE_PATH
+
+  with tempfile.TemporaryDirectory(prefix="json5-stringify-suite.") as temp_dir_name:
+    output_path = Path(temp_dir_name) / "stringify-results.json"
+    process = subprocess.run(
+      [
+        str(test_runner_path),
+        str(stringify_suite),
+        "--output=" + str(output_path),
+        "--silent",
+      ],
+      cwd=repo_root,
+      text=True,
+      capture_output=True,
+    )
+
+    if not output_path.exists():
+      return {
+        "summary": {
+          "totalFiles": 1,
+          "totalTests": 0,
+          "passed": 0,
+          "failed": 1,
+          "skipped": 0,
+          "assertions": 0,
+        },
+        "ok": False,
+        "message": "\n".join(
+          part for part in [process.stdout.strip(), process.stderr.strip()] if part
+        ),
+      }
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    report["ok"] = process.returncode == 0 and report.get("failed", 1) == 0
+    report["message"] = "\n".join(
+      part for part in [process.stdout.strip(), process.stderr.strip()] if part
+    )
+    return report
+
+
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(
-    description="Run Goccia's JSON5 parser against the official json5/json5 parser test corpus."
+    description=(
+      "Run Goccia's JSON5 compliance checks: the official json5/json5 parser corpus "
+      "plus the local upstream-aligned JSON5 stringify suite."
+    )
   )
   parser.add_argument(
     "--suite-dir",
@@ -318,9 +385,26 @@ def main() -> int:
     harness_path = args.harness.resolve()
   else:
     harness_path = compile_harness(repo_root, args.build_dir.resolve())
+  test_runner_path = compile_test_runner(repo_root, args.build_dir.resolve())
 
   cases = load_cases(repo_root, suite_dir, node_executable)
-  report = evaluate_suite(harness_path, cases, args.timeout)
+  parse_report = evaluate_suite(harness_path, cases, args.timeout)
+  stringify_report = evaluate_stringify_suite(test_runner_path, repo_root)
+  report = {
+    "parse": parse_report,
+    "stringify": stringify_report,
+    "summary": {
+      "parse": parse_report["summary"],
+      "stringify": {
+        "totalFiles": stringify_report.get("totalFiles", 0),
+        "totalTests": stringify_report.get("totalTests", 0),
+        "passed": stringify_report.get("passed", 0),
+        "failed": stringify_report.get("failed", 0),
+        "skipped": stringify_report.get("skipped", 0),
+        "assertions": stringify_report.get("assertions", 0),
+      },
+    },
+  }
 
   if args.output is not None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -332,6 +416,11 @@ def main() -> int:
 
   if temp_checkout is not None:
     temp_checkout.cleanup()
+
+  if parse_report["summary"]["failed"] != 0:
+    return 1
+  if not stringify_report.get("ok", False):
+    return 1
 
   return 0
 

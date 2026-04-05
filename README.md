@@ -339,7 +339,7 @@ YAML support is being built with two explicit compatibility goals:
 
 The current implementation is still incremental and does not yet cover the full YAML 1.2 surface. The detailed conformance snapshot and remaining gap clusters live in [docs/design-decisions.md](docs/design-decisions.md). The official `yaml-test-suite` parse-validity check can be rerun locally with `python3 scripts/run_yaml_test_suite.py`.
 
-JSON5 parsing is checked against the official `json5/json5` parser test corpus. You can rerun that compatibility suite locally with `python3 scripts/run_json5_test_suite.py`, or reuse a prebuilt decoder with `python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check`. Runtime stringify behavior is covered by `tests/built-ins/JSON5/stringify.js`, including special numeric values (`Infinity`, `-Infinity`, `NaN`), trailing-comma pretty printing, replacers, and JSON5 quote selection/overrides.
+JSON5 parsing is checked against the official `json5/json5` parser test corpus, and the same compliance command also runs the upstream-aligned JSON5 stringify suite. You can rerun that combined check locally with `python3 scripts/run_json5_test_suite.py`, or reuse a prebuilt parser decoder with `python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check`. The stringify half covers special numeric values (`Infinity`, `-Infinity`, `NaN`), trailing-comma pretty printing, replacers, boxed primitives, and JSON5 quote selection/overrides.
 
 **Async/await** with full Promise support:
 

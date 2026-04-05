@@ -160,7 +160,7 @@ The JSON parser is a recursive descent implementation. Special handling:
 
 `JSON5.stringify` delegates to `TGocciaJSON5Stringifier`, which reuses the same shared serialization core as strict JSON but switches to JSON5 formatting rules. That means unquoted identifier keys, single- or double-quoted strings (with optional `{ quote: "'" | '"' }` override), preserved `Infinity` / `-Infinity` / `NaN`, trailing commas when pretty-printing, `toJSON5()` preference over `toJSON()`, and the same replacer / space semantics as JSON plus the upstream JSON5 options-object form `{ replacer, space, quote }`.
 
-Compatibility goal: GocciaScript is targeting full JSON5 parser compatibility plus upstream-aligned stringify behavior. The official `json5/json5` parser test corpus can be rerun with `python3 scripts/run_json5_test_suite.py` or `python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check` when you already have the decoder harness built. Stringify behavior is covered by `tests/built-ins/JSON5/stringify.js`.
+Compatibility goal: GocciaScript is targeting full JSON5 parser compatibility plus upstream-aligned stringify behavior. `python3 scripts/run_json5_test_suite.py` now runs both the official `json5/json5` parser corpus and the local upstream-aligned stringify suite in one command, and `python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check` reuses a prebuilt parser decoder when you already have it.
 
 ### YAML (`Goccia.Builtins.YAML.pas`)
 

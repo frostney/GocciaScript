@@ -268,9 +268,7 @@ python3 scripts/run_json5_test_suite.py --suite-dir=/path/to/json5
 python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check --output=tmp/json5-suite-results.json
 ```
 
-This runner extracts parser cases from the upstream `test/parse.js` and `test/errors.js` files, evaluates them with the reference implementation under Node.js, then compares Goccia's Pascal harness output against the canonical tagged values for valid cases. Invalid cases must fail to parse. The runner exits non-zero when any case fails or times out.
-
-JSON5 stringify coverage currently lives in the JavaScript runtime suite rather than this Python harness. Run `./build/TestRunner tests/built-ins/JSON5/stringify.js` to verify special numeric values, replacers, options objects, quote overrides, pretty-print trailing commas, and root omission behavior.
+This runner extracts parser cases from the upstream `test/parse.js` and `test/errors.js` files, evaluates them with the reference implementation under Node.js, then compares Goccia's Pascal harness output against the canonical tagged values for valid cases. Invalid cases must fail to parse. The same command also runs `tests/built-ins/JSON5/stringify.js`, which mirrors the upstream stringify surface inside Goccia's JavaScript test harness. The runner exits non-zero when either the upstream parser corpus or the JSON5 stringify suite fails.
 
 ### Run Pascal Unit Tests
 
