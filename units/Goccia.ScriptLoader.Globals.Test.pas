@@ -21,6 +21,7 @@ type
   private
     function CreateEmptySource: TStringList;
     procedure TestDetectsTOMLGlobalsFileByExtension;
+    procedure TestReadFileTextPreservesUTF8ForTOMLGlobals;
     procedure TestEngineInjectGlobalsFromTOML;
     procedure TestBytecodeBackendInjectGlobalsFromTOML;
   public
@@ -31,6 +32,8 @@ procedure TScriptLoaderGlobalsTests.SetupTests;
 begin
   Test('Detects TOML globals file by extension',
     TestDetectsTOMLGlobalsFileByExtension);
+  Test('ReadFileText preserves UTF-8 for TOML globals',
+    TestReadFileTextPreservesUTF8ForTOMLGlobals);
   Test('Engine injects globals from TOML',
     TestEngineInjectGlobalsFromTOML);
   Test('Bytecode backend injects globals from TOML',
@@ -48,6 +51,48 @@ begin
   Expect<Boolean>(IsStructuredGlobalsFile('config.toml')).ToBe(True);
   Expect<Boolean>(IsTOMLGlobalsFile('config.toml')).ToBe(True);
   Expect<Boolean>(IsYAMLGlobalsFile('config.toml')).ToBe(False);
+end;
+
+procedure TScriptLoaderGlobalsTests.TestReadFileTextPreservesUTF8ForTOMLGlobals;
+var
+  Engine: TGocciaEngine;
+  NameValue: UTF8String;
+  QuotedKey: UTF8String;
+  Source: TStringList;
+  Stream: TFileStream;
+  TempFileName: string;
+  TextBytes: UTF8String;
+begin
+  NameValue := 'Jos' + #$C3#$A9;
+  QuotedKey := 'd' + #$C3#$A9 + 'j' + #$C3#$A0;
+  TextBytes :=
+    'name = "' + NameValue + '"' + #10 +
+    '"' + QuotedKey + '" = "vu"' + #10;
+  TempFileName := GetTempFileName(GetTempDir(False), 'goc');
+
+  Stream := TFileStream.Create(TempFileName, fmCreate);
+  try
+    if Length(TextBytes) > 0 then
+      Stream.WriteBuffer(Pointer(TextBytes)^, Length(TextBytes));
+  finally
+    Stream.Free;
+  end;
+
+  Source := CreateEmptySource;
+  Engine := TGocciaEngine.Create('<globals-test>', Source,
+    TGocciaEngine.DefaultGlobals);
+  try
+    Engine.InjectGlobalsFromTOML(ReadFileText(TempFileName));
+
+    Expect<string>(Engine.Interpreter.GlobalScope.GetValue('name')
+      .ToStringLiteral.Value).ToBe(NameValue);
+    Expect<string>(Engine.Interpreter.GlobalScope.GetValue(QuotedKey)
+      .ToStringLiteral.Value).ToBe('vu');
+  finally
+    Engine.Free;
+    Source.Free;
+    DeleteFile(TempFileName);
+  end;
 end;
 
 procedure TScriptLoaderGlobalsTests.TestEngineInjectGlobalsFromTOML;

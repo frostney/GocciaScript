@@ -1,0 +1,5 @@
+name = "José"
+"déjà" = "vu"
+
+[nested]
+city = "Zürich"

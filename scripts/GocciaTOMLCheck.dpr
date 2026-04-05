@@ -9,22 +9,9 @@ uses
   GarbageCollector.Generic,
   StringBuffer,
 
+  Goccia.TextFiles,
   Goccia.TOML,
   Goccia.Values.Primitives;
-
-function LoadUTF8File(const APath: string): UTF8String;
-var
-  Stream: TFileStream;
-begin
-  Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
-  try
-    SetLength(Result, Stream.Size);
-    if Length(Result) > 0 then
-      Stream.ReadBuffer(Pointer(Result)^, Length(Result));
-  finally
-    Stream.Free;
-  end;
-end;
 
 function EscapeJSONString(const AValue: string): string;
 var
@@ -130,11 +117,26 @@ begin
   end;
 end;
 
+procedure WriteUTF8Line(const AText: string);
+var
+  OutputText: UTF8String;
+  Stream: THandleStream;
+begin
+  OutputText := UTF8String(AText + #10);
+  Stream := THandleStream.Create(TTextRec(Output).Handle);
+  try
+    if Length(OutputText) > 0 then
+      Stream.WriteBuffer(Pointer(OutputText)^, Length(OutputText));
+  finally
+    Stream.Free;
+  end;
+end;
+
 var
   ExitCode: Integer;
   Parser: TGocciaTOMLParser;
   Root: TGocciaTOMLNode;
-  SourceText: UTF8String;
+  SourceText: string;
 begin
   if ParamCount <> 1 then
     Halt(2);
@@ -145,10 +147,10 @@ begin
   Parser := TGocciaTOMLParser.Create;
   try
     try
-      SourceText := LoadUTF8File(ParamStr(1));
-      Root := Parser.ParseDocument(string(SourceText));
+      SourceText := ReadUTF8FileText(ParamStr(1));
+      Root := Parser.ParseDocument(SourceText);
       try
-        WriteLn(SerializeNode(Root));
+        WriteUTF8Line(SerializeNode(Root));
         ExitCode := 0;
       finally
         Root.Free;
@@ -156,7 +158,7 @@ begin
     except
       on E: Exception do
       begin
-        WriteLn(E.Message);
+        WriteUTF8Line(E.Message);
         ExitCode := 1;
       end;
     end;

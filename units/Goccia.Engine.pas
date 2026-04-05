@@ -42,6 +42,7 @@ uses
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
   Goccia.Parser,
+  Goccia.TextFiles,
   Goccia.TOML,
   Goccia.Values.ClassValue,
   Goccia.Values.FunctionBase,
@@ -869,7 +870,7 @@ var
 begin
   Source := TStringList.Create;
   try
-    Source.LoadFromFile(AFileName);
+    Source.Text := ReadUTF8FileText(AFileName);
     Result := RunScriptFromStringList(Source, AFileName, AGlobals);
   finally
     Source.Free;

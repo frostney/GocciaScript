@@ -5,8 +5,6 @@ unit Goccia.ScriptLoader.Globals;
 interface
 
 uses
-  Classes,
-
   Goccia.Values.Primitives;
 
 type
@@ -28,7 +26,8 @@ uses
   SysUtils,
 
   Goccia.FileExtensions,
-  Goccia.JSON;
+  Goccia.JSON,
+  Goccia.TextFiles;
 
 function ParseGlobalPair(const AArg: string): TScriptLoaderGlobalPair;
 var
@@ -75,16 +74,8 @@ begin
 end;
 
 function ReadFileText(const APath: string): string;
-var
-  Source: TStringList;
 begin
-  Source := TStringList.Create;
-  try
-    Source.LoadFromFile(APath);
-    Result := Source.Text;
-  finally
-    Source.Free;
-  end;
+  Result := ReadUTF8FileText(APath);
 end;
 
 end.

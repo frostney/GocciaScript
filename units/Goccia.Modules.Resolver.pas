@@ -23,12 +23,11 @@ type
 implementation
 
 uses
-  Classes,
-
   GarbageCollector.Generic,
 
   Goccia.FileExtensions,
   Goccia.JSON,
+  Goccia.TextFiles,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -76,16 +75,8 @@ begin
 end;
 
 function ReadImportMapText(const APath: string): string;
-var
-  Source: TStringList;
 begin
-  Source := TStringList.Create;
-  try
-    Source.LoadFromFile(APath);
-    Result := Source.Text;
-  finally
-    Source.Free;
-  end;
+  Result := ReadUTF8FileText(APath);
 end;
 
 constructor TGocciaModuleResolver.Create(const ABaseDirectory: string);

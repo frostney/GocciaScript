@@ -255,6 +255,8 @@ Unlike the YAML script, this harness compares both parse/fail behavior and the o
 
 The TOML runner exits non-zero when any case fails or times out, so it is safe to use directly in CI. When `--harness` is omitted it compiles `scripts/GocciaTOMLCheck.dpr` automatically; CI uses a prebuilt harness from the matrix build artifacts instead.
 
+The harness and any file-backed parser regression must read source text as UTF-8 bytes first and only then hand it to the parser. On Windows, explicit casts like `string(UTF8StringBytes)` and default `TStringList.LoadFromFile` calls can silently reinterpret UTF-8 through the local ANSI code page, which shows up in CI as mojibake such as `José -> JosÃ©` or Unicode TOML keys no longer matching.
+
 ### Run Pascal Unit Tests
 
 ```bash
@@ -298,6 +300,7 @@ When a parser implements a format with spec-defined newline semantics, test the 
 - Do not treat `LineEnding` / `sLineBreak` as the expected runtime result for parsed data just because the test is running on Windows.
 - Prefer explicit `\r\n` or `#13#10` fixtures when adding regression tests for multiline parsing, folding, or block-scalar behavior.
 - Assert the format-defined canonical result. Example: TOML multiline strings normalize recognized newlines to LF (`\n`) even when the source text uses CRLF.
+- For parser inputs that come from files, read UTF-8 bytes with the shared helper instead of `TStringList.LoadFromFile` or `string(UTF8String(...))`, then add at least one regression that hits the real file-loading path with non-ASCII data.
 - Keep one public-surface regression in `tests/` and, when the parser exposes a reusable native utility like `TGocciaTOMLParser`, add a focused Pascal regression alongside it as well.
 
 ### Test Metadata (Optional)

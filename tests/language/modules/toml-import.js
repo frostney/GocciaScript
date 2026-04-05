@@ -9,6 +9,7 @@ import {
   database,
   servers,
 } from "./helpers/config.toml";
+import * as unicodeConfig from "./helpers/unicode-config.toml";
 
 describe("TOML import", () => {
   test("exports top-level scalar values", () => {
@@ -31,6 +32,12 @@ describe("TOML import", () => {
     expect(servers.length).toBe(2);
     expect(servers[0].name).toBe("alpha");
     expect(servers[1].ip).toBe("10.0.0.2");
+  });
+
+  test("exports UTF-8 keys and values from TOML files", () => {
+    expect(unicodeConfig.name).toBe("Jos\u00e9");
+    expect(unicodeConfig["d\u00e9j\u00e0"]).toBe("vu");
+    expect(unicodeConfig.nested.city).toBe("Z\u00fcrich");
   });
 
   test("TOML.parse reports malformed TOML syntax", () => {

@@ -41,6 +41,9 @@ type
 
 implementation
 
+uses
+  Goccia.TextFiles;
+
 function TryGetFileLastModified(const APath: string;
   out ALastModified: TDateTime): Boolean;
 var
@@ -88,17 +91,12 @@ function TGocciaFileSystemModuleContentProvider.LoadContent(
   const APath: string): TGocciaModuleContent;
 var
   LastModified: TDateTime;
-  Source: TStringList;
+  SourceText: string;
 begin
-  Source := TStringList.Create;
-  try
-    Source.LoadFromFile(APath);
-    if not TryGetFileLastModified(APath, LastModified) then
-      LastModified := 0;
-    Result := TGocciaModuleContent.Create(Source.Text, LastModified);
-  finally
-    Source.Free;
-  end;
+  SourceText := ReadUTF8FileText(APath);
+  if not TryGetFileLastModified(APath, LastModified) then
+    LastModified := 0;
+  Result := TGocciaModuleContent.Create(SourceText, LastModified);
 end;
 
 function TGocciaFileSystemModuleContentProvider.TryGetLastModified(

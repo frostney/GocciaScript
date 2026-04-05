@@ -16,6 +16,7 @@ type
     function GetChildOrFail(const AParent: TGocciaTOMLNode;
       const AKey: string): TGocciaTOMLNode;
     procedure TestParseDocumentNormalizesCRLFInMultilineStrings;
+    procedure TestParseDocumentPreservesUTF8KeysAndValues;
     procedure TestParseDocumentTracksScalarKinds;
     procedure TestParseDocumentTracksArrayElementKinds;
   public
@@ -30,6 +31,8 @@ begin
     TestParseDocumentTracksArrayElementKinds);
   Test('ParseDocument normalizes CRLF in multiline strings',
     TestParseDocumentNormalizesCRLFInMultilineStrings);
+  Test('ParseDocument preserves UTF-8 keys and values',
+    TestParseDocumentPreservesUTF8KeysAndValues);
 end;
 
 function TTOMLParserTests.GetChildOrFail(const AParent: TGocciaTOMLNode;
@@ -142,6 +145,41 @@ begin
         'Roses are red' + #10 + 'Violets are blue' + #10);
       Expect<string>(LiteralNode.CanonicalValue).ToBe(
         'C:\Users\nodejs\templates' + #10 + 'Line two' + #10);
+    finally
+      Root.Free;
+    end;
+  finally
+    Parser.Free;
+  end;
+end;
+
+procedure TTOMLParserTests.TestParseDocumentPreservesUTF8KeysAndValues;
+var
+  NameKey: UTF8String;
+  NameNode: TGocciaTOMLNode;
+  NameValue: UTF8String;
+  Parser: TGocciaTOMLParser;
+  QuotedKey: UTF8String;
+  QuotedNode: TGocciaTOMLNode;
+  Root: TGocciaTOMLNode;
+  SourceText: UTF8String;
+begin
+  NameKey := 'name';
+  NameValue := 'Jos' + #$C3#$A9;
+  QuotedKey := 'd' + #$C3#$A9 + 'j' + #$C3#$A0;
+  SourceText :=
+    NameKey + ' = "' + NameValue + '"' + #10 +
+    '"' + QuotedKey + '" = "vu"' + #10;
+
+  Parser := TGocciaTOMLParser.Create;
+  try
+    Root := Parser.ParseDocument(SourceText);
+    try
+      NameNode := GetChildOrFail(Root, NameKey);
+      QuotedNode := GetChildOrFail(Root, QuotedKey);
+
+      Expect<string>(NameNode.CanonicalValue).ToBe(NameValue);
+      Expect<string>(QuotedNode.CanonicalValue).ToBe('vu');
     finally
       Root.Free;
     end;
