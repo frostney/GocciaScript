@@ -23,6 +23,8 @@ uses
   Goccia.Parser,
   Goccia.TestSetup,
   Goccia.Token,
+  Goccia.TOML,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
@@ -67,6 +69,7 @@ type
     procedure TestEngineRetriesModuleAfterFailedLoad;
     procedure TestEngineReportsJSONLModuleLineNumbers;
     procedure TestEngineReportsTOMLModuleSyntaxErrors;
+    procedure TestFileSystemContentProviderPreservesUTF8TOMLText;
     procedure TestModuleLoaderRejectsRebindingAcrossRuntimes;
     procedure TestBytecodeBackendUsesInjectedContentProvider;
   protected
@@ -152,6 +155,8 @@ begin
     TestEngineReportsJSONLModuleLineNumbers);
   Test('Engine reports TOML module syntax errors',
     TestEngineReportsTOMLModuleSyntaxErrors);
+  Test('File system content provider preserves UTF-8 TOML text',
+    TestFileSystemContentProviderPreservesUTF8TOMLText);
   Test('Module loader rejects rebinding across runtimes',
     TestModuleLoaderRejectsRebindingAcrossRuntimes);
   Test('Bytecode backend uses injected content provider',
@@ -249,6 +254,20 @@ begin
     Source.SaveToFile(APath);
   finally
     Source.Free;
+  end;
+end;
+
+procedure WriteUTF8File(const APath: string; const AText: UTF8String);
+var
+  Stream: TFileStream;
+begin
+  ForceDirectories(ExtractFileDir(APath));
+  Stream := TFileStream.Create(APath, fmCreate);
+  try
+    if Length(AText) > 0 then
+      Stream.WriteBuffer(Pointer(AText)^, Length(AText));
+  finally
+    Stream.Free;
   end;
 end;
 
@@ -565,6 +584,59 @@ begin
     Source.Free;
     Resolver.Free;
     Provider.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestFileSystemContentProviderPreservesUTF8TOMLText;
+var
+  CityValue: UTF8String;
+  Content: TGocciaModuleContent;
+  ContentProvider: TGocciaFileSystemModuleContentProvider;
+  NameValue: UTF8String;
+  Obj: TGocciaObjectValue;
+  ParsedValue: TGocciaValue;
+  Parser: TGocciaTOMLParser;
+  QuotedKey: UTF8String;
+  TempDirectory: string;
+  TomlPath: string;
+  TomlText: UTF8String;
+begin
+  TempDirectory := CreateTempDirectory;
+  TomlPath := IncludeTrailingPathDelimiter(TempDirectory) + 'unicode.toml';
+  NameValue := 'Jos' + #$C3#$A9;
+  QuotedKey := 'd' + #$C3#$A9 + 'j' + #$C3#$A0;
+  CityValue := 'Z' + #$C3#$BC + 'rich';
+  TomlText :=
+    'name = "' + NameValue + '"' + #10 +
+    '"' + QuotedKey + '" = "vu"' + #10 +
+    '[nested]' + #10 +
+    'city = "' + CityValue + '"' + #10;
+  WriteUTF8File(TomlPath, TomlText);
+
+  ContentProvider := TGocciaFileSystemModuleContentProvider.Create;
+  try
+    Content := ContentProvider.LoadContent(TomlPath);
+    try
+      Parser := TGocciaTOMLParser.Create;
+      try
+        ParsedValue := Parser.Parse(Content.Text);
+      finally
+        Parser.Free;
+      end;
+
+      Obj := TGocciaObjectValue(ParsedValue);
+      Expect<string>(Obj.GetProperty('name').ToStringLiteral.Value)
+        .ToBe(NameValue);
+      Expect<string>(Obj.GetProperty(QuotedKey)
+        .ToStringLiteral.Value).ToBe('vu');
+      Expect<string>(TGocciaObjectValue(Obj.GetProperty('nested'))
+        .GetProperty('city').ToStringLiteral.Value)
+        .ToBe(CityValue);
+    finally
+      Content.Free;
+    end;
+  finally
+    ContentProvider.Free;
   end;
 end;
 

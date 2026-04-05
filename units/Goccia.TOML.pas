@@ -72,10 +72,11 @@ type
     FCurrentTable: TGocciaTOMLNode;
     FIndex: Integer;
     FRoot: TGocciaTOMLNode;
-    FText: string;
+    FText: UTF8String;
 
     procedure Advance(const ACount: Integer = 1);
-    procedure AppendCodePointUTF8(var ATarget: string; const ACodePoint: Cardinal);
+    procedure AppendCodePointUTF8(var ATarget: UTF8String;
+      const ACodePoint: Cardinal);
     procedure AssignValue(const ATargetTable: TGocciaTOMLNode;
       const APath: TArray<string>; const AValue: TGocciaValue;
       const AInlineTableNode: TGocciaTOMLNode; const AAllowSealed: Boolean);
@@ -109,7 +110,7 @@ type
     function PeekChar(const AOffset: Integer = 0): Char;
     procedure RaiseParseError(const AMessage: string);
     procedure RequireNotSealed(const ANode: TGocciaTOMLNode; const AKey: string);
-    procedure Reset(const AText: string);
+    procedure Reset(const AText: UTF8String);
     procedure SkipBlankLinesAndComments;
     procedure SkipWhitespace(const AAllowNewlines: Boolean);
     function TryParseBinaryInteger(const AToken: string;
@@ -141,8 +142,8 @@ type
     function ValidateDigitsWithSeparators(const AText, AAllowedDigits: string;
       const AAllowEmpty: Boolean): Boolean;
   public
-    function ParseDocument(const AText: string): TGocciaTOMLNode;
-    function Parse(const AText: string): TGocciaObjectValue;
+    function ParseDocument(const AText: UTF8String): TGocciaTOMLNode;
+    function Parse(const AText: UTF8String): TGocciaObjectValue;
   end;
 
 implementation
@@ -427,7 +428,7 @@ end;
 
 { TGocciaTOMLParser }
 
-procedure TGocciaTOMLParser.Reset(const AText: string);
+procedure TGocciaTOMLParser.Reset(const AText: UTF8String);
 begin
   FText := AText;
   FIndex := 1;
@@ -437,7 +438,7 @@ begin
   FCurrentTable := FRoot;
 end;
 
-function TGocciaTOMLParser.Parse(const AText: string): TGocciaObjectValue;
+function TGocciaTOMLParser.Parse(const AText: UTF8String): TGocciaObjectValue;
 var
   RootNode: TGocciaTOMLNode;
 begin
@@ -449,7 +450,7 @@ begin
   end;
 end;
 
-function TGocciaTOMLParser.ParseDocument(const AText: string): TGocciaTOMLNode;
+function TGocciaTOMLParser.ParseDocument(const AText: UTF8String): TGocciaTOMLNode;
 begin
   Reset(AText);
   try
@@ -616,7 +617,7 @@ begin
   Result := Cardinal(Value64);
 end;
 
-procedure TGocciaTOMLParser.AppendCodePointUTF8(var ATarget: string;
+procedure TGocciaTOMLParser.AppendCodePointUTF8(var ATarget: UTF8String;
   const ACodePoint: Cardinal);
 begin
   if ACodePoint <= $7F then
@@ -638,9 +639,10 @@ end;
 function TGocciaTOMLParser.ParseBasicString(const AMultiline,
   AIsKey: Boolean): string;
 var
+  Buffer: UTF8String;
   QuoteRun, StartIndex: Integer;
 begin
-  Result := '';
+  Buffer := '';
   if AMultiline then
     Advance(3)
   else
@@ -662,15 +664,15 @@ begin
         if QuoteRun > 5 then
           RaiseParseError('Multiline basic strings cannot contain three consecutive quotes.');
         if QuoteRun > 3 then
-          Result := Result + Copy(FText, FIndex, QuoteRun - 3);
+          Buffer := Buffer + Copy(FText, FIndex, QuoteRun - 3);
         Advance(QuoteRun);
-        Exit;
+        Exit(Buffer);
       end;
     end
     else if CurrentChar = '"' then
     begin
       Advance;
-      Exit;
+      Exit(Buffer);
     end;
 
     if CurrentChar = '\' then
@@ -697,53 +699,53 @@ begin
       case CurrentChar of
         'b':
           begin
-            Result := Result + #8;
+            Buffer := Buffer + #8;
             Advance;
           end;
         't':
           begin
-            Result := Result + #9;
+            Buffer := Buffer + #9;
             Advance;
           end;
         'n':
           begin
-            Result := Result + #10;
+            Buffer := Buffer + #10;
             Advance;
           end;
         'f':
           begin
-            Result := Result + #12;
+            Buffer := Buffer + #12;
             Advance;
           end;
         'r':
           begin
-            Result := Result + #13;
+            Buffer := Buffer + #13;
             Advance;
           end;
         'e':
           begin
-            Result := Result + #27;
+            Buffer := Buffer + #27;
             Advance;
           end;
         '"', '\':
           begin
-            Result := Result + CurrentChar;
+            Buffer := Buffer + CurrentChar;
             Advance;
           end;
         'x':
           begin
             Advance;
-            AppendCodePointUTF8(Result, ParseHexCodePoint(2));
+            AppendCodePointUTF8(Buffer, ParseHexCodePoint(2));
           end;
         'u':
           begin
             Advance;
-            AppendCodePointUTF8(Result, ParseHexCodePoint(4));
+            AppendCodePointUTF8(Buffer, ParseHexCodePoint(4));
           end;
         'U':
           begin
             Advance;
-            AppendCodePointUTF8(Result, ParseHexCodePoint(8));
+            AppendCodePointUTF8(Buffer, ParseHexCodePoint(8));
           end;
       else
         RaiseParseError('Invalid escape sequence in TOML basic string.');
@@ -755,14 +757,14 @@ begin
     begin
       if not AMultiline then
         RaiseParseError('Single-line basic strings cannot contain newlines.');
-      Result := Result + NormalizeMultilineNewline(FText, FIndex);
+      Buffer := Buffer + NormalizeMultilineNewline(FText, FIndex);
       Continue;
     end;
 
     if IsControlCharacter(CurrentChar) and (CurrentChar <> #9) then
       RaiseParseError('Basic strings cannot contain control characters.');
 
-    Result := Result + CurrentChar;
+    Buffer := Buffer + CurrentChar;
     Advance;
   end;
 
@@ -775,9 +777,10 @@ end;
 function TGocciaTOMLParser.ParseLiteralString(const AMultiline,
   AIsKey: Boolean): string;
 var
+  Buffer: UTF8String;
   QuoteRun: Integer;
 begin
-  Result := '';
+  Buffer := '';
   if AMultiline then
     Advance(3)
   else
@@ -799,29 +802,29 @@ begin
         if QuoteRun > 5 then
           RaiseParseError('Multiline literal strings cannot contain three consecutive quotes.');
         if QuoteRun > 3 then
-          Result := Result + Copy(FText, FIndex, QuoteRun - 3);
+          Buffer := Buffer + Copy(FText, FIndex, QuoteRun - 3);
         Advance(QuoteRun);
-        Exit;
+        Exit(Buffer);
       end;
     end
     else if CurrentChar = '''' then
     begin
       Advance;
-      Exit;
+      Exit(Buffer);
     end;
 
     if IsNewlineChar(CurrentChar) then
     begin
       if not AMultiline then
         RaiseParseError('Single-line literal strings cannot contain newlines.');
-      Result := Result + NormalizeMultilineNewline(FText, FIndex);
+      Buffer := Buffer + NormalizeMultilineNewline(FText, FIndex);
       Continue;
     end;
 
     if IsControlCharacter(CurrentChar) and (CurrentChar <> #9) then
       RaiseParseError('Literal strings cannot contain control characters.');
 
-    Result := Result + CurrentChar;
+    Buffer := Buffer + CurrentChar;
     Advance;
   end;
 

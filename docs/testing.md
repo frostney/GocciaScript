@@ -255,7 +255,7 @@ Unlike the YAML script, this harness compares both parse/fail behavior and the o
 
 The TOML runner exits non-zero when any case fails or times out, so it is safe to use directly in CI. When `--harness` is omitted it compiles `scripts/GocciaTOMLCheck.dpr` automatically; CI uses a prebuilt harness from the matrix build artifacts instead.
 
-The harness and any file-backed parser regression must read source text as UTF-8 bytes first and only then hand it to the parser. On Windows, explicit casts like `string(UTF8StringBytes)` and default `TStringList.LoadFromFile` calls can silently reinterpret UTF-8 through the local ANSI code page, which shows up in CI as mojibake such as `José -> JosÃ©` or Unicode TOML keys no longer matching.
+The harness and any file-backed parser regression must read source text as UTF-8 bytes first and only then hand it to the parser. On Windows, explicit casts like `string(UTF8StringBytes)`, plain `string` temporaries inserted between file I/O and the parser, and default `TStringList.LoadFromFile` calls can silently reinterpret UTF-8 through the local ANSI code page, which shows up in CI as mojibake such as `José -> JosÃ©` or Unicode TOML keys no longer matching. Keep raw file-backed TOML text as `UTF8String` until `TGocciaTOMLParser.Parse(...)` / `ParseDocument(...)` receives it.
 
 ### Run Pascal Unit Tests
 
