@@ -100,7 +100,7 @@ var
   Ext: string;
 begin
   Ext := LowerCase(AExtension);
-  Result := (Ext = EXT_JSON) or IsYAMLExtension(Ext);
+  Result := (Ext = EXT_JSON) or IsTOMLExtension(Ext) or IsYAMLExtension(Ext);
 end;
 
 end.

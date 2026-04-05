@@ -98,7 +98,8 @@ printf "console.log('hi'); 2 + 2;" | ./build/ScriptLoader --output=json
 # Inject globals from the CLI
 printf "x + y;" | ./build/ScriptLoader --global x=10 --global y=20
 printf "name;" | ./build/ScriptLoader --globals=context.json --output=json
-# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON or YAML by file extension.
+printf "name;" | ./build/ScriptLoader --globals=context.toml --output=json
+# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, TOML, or YAML by file extension.
 # Injected globals can override earlier injected values, but not built-in globals like console
 
 # Load an explicit import map
@@ -237,12 +238,13 @@ GitHub Actions CI is split into two workflow files:
 ### `ci.yml` — Push to main + tags
 
 ```
-build → test (JS + native)  → artifacts (main only)
+build → test (JS + native)   → artifacts (main only)
+      → toml-compliance      →
       → benchmark            →
       → examples             →
 ```
 
-All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `benchmark`, `examples`) are independent.
+All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `toml-compliance`, `benchmark`, `examples`) are independent.
 
 Runs on the full platform matrix:
 
@@ -256,13 +258,15 @@ Runs on the full platform matrix:
 
 **`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests on all platforms.
 
+**`toml-compliance`** — Downloads the prebuilt `GocciaTOMLCheck` harness from each matrix build artifact, runs the official `toml-test` TOML 1.1.0 suite on every CI platform via `python3 scripts/run_toml_test_suite.py --harness=...`, validates that the JSON summary reports zero failures, and uploads the per-platform JSON report.
+
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), saves benchmark results as JSON to `actions/cache` for PR comparison.
 
 **`examples`** (needs build) — Runs all example scripts from the `examples/` folder on all platforms.
 
-**`artifacts`** (needs test + benchmark + examples, main only) — Uploads production binaries after all checks pass, deriving the executable names from the top-level `*.dpr` entrypoints.
+**`artifacts`** (needs test + toml-compliance + benchmark + examples, main only) — Uploads production binaries after all checks pass, deriving the executable names from the top-level `*.dpr` entrypoints.
 
-**`release`** (needs test + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the top-level `*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + toml-compliance + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the top-level `*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 
@@ -282,7 +286,7 @@ Runs on **ubuntu-latest x64 only** (single runner, no matrix).
 
 **`examples`** (needs build) — Runs all example scripts from the `examples/` folder.
 
-FPC is only installed once per platform in the `build` job. Test, benchmark, and example jobs run in parallel, using pre-built binaries.
+FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, benchmark, example, and TOML conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, benchmark, and example jobs do the same.
 
 ## Auto-Formatter
 

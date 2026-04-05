@@ -18,6 +18,7 @@ type
 function ParseGlobalPair(const AArg: string): TScriptLoaderGlobalPair;
 function ParseInlineGlobalValue(const AValueText: string): TGocciaValue;
 function IsStructuredGlobalsFile(const APath: string): Boolean;
+function IsTOMLGlobalsFile(const APath: string): Boolean;
 function IsYAMLGlobalsFile(const APath: string): Boolean;
 function ReadFileText(const APath: string): string;
 
@@ -61,6 +62,11 @@ end;
 function IsStructuredGlobalsFile(const APath: string): Boolean;
 begin
   Result := IsStructuredGlobalsExtension(ExtractFileExt(APath));
+end;
+
+function IsTOMLGlobalsFile(const APath: string): Boolean;
+begin
+  Result := IsTOMLExtension(ExtractFileExt(APath));
 end;
 
 function IsYAMLGlobalsFile(const APath: string): Boolean;
