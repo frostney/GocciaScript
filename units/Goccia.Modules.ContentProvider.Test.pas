@@ -66,6 +66,7 @@ type
     procedure TestEngineReloadsModifiedInMemoryModule;
     procedure TestEngineRetriesModuleAfterFailedLoad;
     procedure TestEngineReportsJSONLModuleLineNumbers;
+    procedure TestEngineReportsTOMLModuleSyntaxErrors;
     procedure TestModuleLoaderRejectsRebindingAcrossRuntimes;
     procedure TestBytecodeBackendUsesInjectedContentProvider;
   protected
@@ -149,6 +150,8 @@ begin
     TestEngineRetriesModuleAfterFailedLoad);
   Test('Engine reports JSONL module parse line numbers',
     TestEngineReportsJSONLModuleLineNumbers);
+  Test('Engine reports TOML module syntax errors',
+    TestEngineReportsTOMLModuleSyntaxErrors);
   Test('Module loader rejects rebinding across runtimes',
     TestModuleLoaderRejectsRebindingAcrossRuntimes);
   Test('Bytecode backend uses injected content provider',
@@ -488,6 +491,66 @@ begin
               Fail('Expected JSONL module parse prefix in error message.');
             if not HasLineNumber then
               Fail('Expected JSONL module error to include line 2.');
+          end;
+        end;
+
+        Expect<Boolean>(RaisedExpected).ToBe(True);
+      finally
+        Engine.Free;
+      end;
+    finally
+      ModuleLoader.Free;
+    end;
+  finally
+    Source.Free;
+    Resolver.Free;
+    Provider.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestEngineReportsTOMLModuleSyntaxErrors;
+const
+  ENTRY_PATH = 'memory:/app.js';
+  MODULE_PATH = 'memory:/config.toml';
+var
+  Engine: TGocciaEngine;
+  HasParseMessage: Boolean;
+  HasSyntaxDetail: Boolean;
+  ModuleLoader: TGocciaModuleLoader;
+  Provider: TMemoryModuleContentProvider;
+  Resolver: TInMemoryModuleResolver;
+  RaisedExpected: Boolean;
+  Source: TStringList;
+begin
+  Provider := TMemoryModuleContentProvider.Create;
+  Resolver := TInMemoryModuleResolver.Create;
+  Source := TStringList.Create;
+  try
+    Provider.AddModule(MODULE_PATH, 'value = 01');
+    Source.Text := 'import { value } from "' + MODULE_PATH + '";' + LineEnding +
+      'value;';
+
+    ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
+    try
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source,
+        TGocciaEngine.DefaultGlobals, ModuleLoader);
+      try
+        RaisedExpected := False;
+        try
+          Engine.Execute;
+          Fail('Expected invalid TOML module source to raise an exception.');
+        except
+          on E: Exception do
+          begin
+            RaisedExpected := True;
+            HasParseMessage := Pos('Failed to parse TOML module',
+              E.Message) > 0;
+            HasSyntaxDetail := Pos('Invalid TOML value: 01',
+              E.Message) > 0;
+            if not HasParseMessage then
+              Fail('Expected TOML module parse prefix in error message.');
+            if not HasSyntaxDetail then
+              Fail('Expected TOML module error to include syntax detail.');
           end;
         end;
 

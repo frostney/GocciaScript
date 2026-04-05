@@ -32,4 +32,8 @@ describe("TOML import", () => {
     expect(servers[0].name).toBe("alpha");
     expect(servers[1].ip).toBe("10.0.0.2");
   });
+
+  test("TOML.parse reports malformed TOML syntax", () => {
+    expect(() => TOML.parse('value = 01')).toThrow(SyntaxError);
+  });
 });
