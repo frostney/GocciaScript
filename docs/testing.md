@@ -291,6 +291,15 @@ describe("Feature Name", () => {
 
 Nested `describe` blocks compose their suite names with ` > ` separators. In the example above, the nested test's suite name would be `"Feature Name > sub-feature"`.
 
+### Cross-Platform Newline Rules for Data Format Parsers
+
+When a parser implements a format with spec-defined newline semantics, test the format semantics directly instead of inheriting the host OS newline convention.
+
+- Do not treat `LineEnding` / `sLineBreak` as the expected runtime result for parsed data just because the test is running on Windows.
+- Prefer explicit `\r\n` or `#13#10` fixtures when adding regression tests for multiline parsing, folding, or block-scalar behavior.
+- Assert the format-defined canonical result. Example: TOML multiline strings normalize recognized newlines to LF (`\n`) even when the source text uses CRLF.
+- Keep one public-surface regression in `tests/` and, when the parser exposes a reusable native utility like `TGocciaTOMLParser`, add a focused Pascal regression alongside it as well.
+
 ### Test Metadata (Optional)
 
 Test files can include JSDoc-style metadata:
