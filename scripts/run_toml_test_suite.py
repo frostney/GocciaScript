@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
+import math
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,10 @@ SUITE_BRANCH = "main"
 SUITE_FILE_LIST = f"tests/files-toml-{SUITE_VERSION}"
 DEFAULT_TIMEOUT_SECONDS = 5
 HARNESS_SOURCE_PATH = Path("scripts/GocciaTOMLCheck.dpr")
+TIME_TEXT_PATTERN = re.compile(r"^(?P<prefix>\d{2}:\d{2}:\d{2})(?P<fraction>\.\d+)?(?P<suffix>)$")
+DATETIME_TEXT_PATTERN = re.compile(
+  r"^(?P<prefix>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?P<fraction>\.\d+)?(?P<suffix>[+-]\d{2}:\d{2})?$"
+)
 
 
 def run(command: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -70,15 +75,26 @@ def compile_harness(repo_root: Path, build_dir: Path) -> Path:
   return build_dir / harness_name
 
 
-def normalize_datetime_text(kind: str, value: str):
+def normalize_datetime_text(kind: str, value: str) -> str:
   value = value.replace(" ", "T").replace("t", "T").replace("z", "Z")
-  if kind == "date-local":
-    return dt.date.fromisoformat(value)
-  if kind == "time-local":
-    return dt.time.fromisoformat(value)
   if value.endswith("Z"):
     value = value[:-1] + "+00:00"
-  return dt.datetime.fromisoformat(value)
+
+  if kind == "date-local":
+    return value
+
+  pattern = TIME_TEXT_PATTERN if kind == "time-local" else DATETIME_TEXT_PATTERN
+  match = pattern.match(value)
+  if match is None:
+    return value
+
+  fraction = match.group("fraction") or ""
+  if fraction:
+    fraction = fraction.rstrip("0")
+    if fraction == ".":
+      fraction = ""
+
+  return match.group("prefix") + fraction + (match.group("suffix") or "")
 
 
 def is_tagged_scalar(node) -> bool:
@@ -114,7 +130,11 @@ def compare_tagged_json(want, have, path="") -> tuple[bool, str]:
           if want_lower.lstrip("+-") != have_lower.lstrip("+-"):
             return False, f"{path or '<root>'}: expected float {want_value}, got {have_value}"
           return True, ""
-        if float(want_lower) != float(have_lower):
+        want_float = float(want_lower)
+        have_float = float(have_lower)
+        if want_float != have_float:
+          return False, f"{path or '<root>'}: expected float {want_value}, got {have_value}"
+        if want_float == 0.0 and math.copysign(1.0, want_float) != math.copysign(1.0, have_float):
           return False, f"{path or '<root>'}: expected float {want_value}, got {have_value}"
         return True, ""
 

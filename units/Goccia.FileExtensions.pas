@@ -11,6 +11,7 @@ const
   EXT_TSX  = '.tsx';
   EXT_MJS  = '.mjs';
   EXT_JSON = '.json';
+  EXT_JSONL = '.jsonl';
   EXT_TOML = '.toml';
   EXT_YAML = '.yaml';
   EXT_YML  = '.yml';
@@ -25,10 +26,12 @@ const
   );
 
 function IsScriptExtension(const AExtension: string): Boolean;
+function IsJSONLExtension(const AExtension: string): Boolean;
 function IsJSXNativeExtension(const AExtension: string): Boolean;
 function IsTOMLExtension(const AExtension: string): Boolean;
 function IsYAMLExtension(const AExtension: string): Boolean;
 function IsStructuredDataExtension(const AExtension: string): Boolean;
+function IsStructuredGlobalsExtension(const AExtension: string): Boolean;
 
 implementation
 
@@ -59,6 +62,14 @@ begin
   Result := False;
 end;
 
+function IsJSONLExtension(const AExtension: string): Boolean;
+var
+  Ext: string;
+begin
+  Ext := LowerCase(AExtension);
+  Result := Ext = EXT_JSONL;
+end;
+
 function IsYAMLExtension(const AExtension: string): Boolean;
 var
   Ext: string;
@@ -76,6 +87,15 @@ begin
 end;
 
 function IsStructuredDataExtension(const AExtension: string): Boolean;
+var
+  Ext: string;
+begin
+  Ext := LowerCase(AExtension);
+  Result := (Ext = EXT_JSON) or IsJSONLExtension(Ext) or
+    IsTOMLExtension(Ext) or IsYAMLExtension(Ext);
+end;
+
+function IsStructuredGlobalsExtension(const AExtension: string): Boolean;
 var
   Ext: string;
 begin

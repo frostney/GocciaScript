@@ -12,6 +12,7 @@ const
   PROP_CODE         = 'code';
   PROP_STACK        = 'stack';
   PROP_ERRORS       = 'errors';
+  PROP_ERROR        = 'error';
   PROP_CONSTRUCTOR  = 'constructor';
   PROP_PROTOTYPE    = 'prototype';
   PROP_TO_STRING    = 'toString';
@@ -30,7 +31,9 @@ const
   PROP_INDEX        = 'index';
   PROP_INPUT        = 'input';
   PROP_DONE         = 'done';
+  PROP_READ         = 'read';
   PROP_VALUE        = 'value';
+  PROP_VALUES       = 'values';
   PROP_TAG_NAME     = 'tagName';
   PROP_NEXT         = 'next';
   PROP_RETURN       = 'return';

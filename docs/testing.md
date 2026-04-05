@@ -349,9 +349,15 @@ When `.toMatch()` receives a `RegExp`, the matcher uses regex semantics but does
 
 ### Lifecycle Hooks
 
+`beforeAll` and `afterAll` run once per suite. `beforeEach` and `afterEach` run around every test in the suite and are inherited by nested suites.
+
 ```javascript
 describe("with setup", () => {
   let instance;
+
+  beforeAll(() => {
+    instance = createSharedFixture();
+  });
 
   beforeEach(() => {
     instance = new MyClass();
@@ -359,6 +365,10 @@ describe("with setup", () => {
 
   afterEach(() => {
     // cleanup
+  });
+
+  afterAll(() => {
+    instance = null;
   });
 
   test("uses instance", () => {
@@ -380,6 +390,40 @@ describe("async setup", () => {
   });
 });
 ```
+
+### Focus, Placeholders, and Parameterized Tests
+
+```javascript
+test.only("run just this test", () => {
+  expect(2 + 2).toBe(4);
+});
+
+describe.only("run just this suite", () => {
+  test("focused suite test", () => {
+    expect(true).toBe(true);
+  });
+});
+
+test.todo("add edge-case coverage");
+
+test.each([
+  [1, 2, 3],
+  [2, 3, 5],
+])("adds %i + %i = %i", (a, b, expected) => {
+  expect(a + b).toBe(expected);
+});
+
+describe.each([
+  ["one", 1],
+  ["two", 2],
+])("row %s", (label, value) => {
+  test("uses each row as suite arguments", () => {
+    expect(value > 0).toBe(true);
+  });
+});
+```
+
+When any `.only` test or suite is registered, all non-focused tests are treated as skipped for that run. `test.todo(...)` placeholders are also reported as skipped.
 
 ### Async Tests (Promises)
 
@@ -700,7 +744,7 @@ build → test             → artifacts
 
 **`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests. Outputs JSON files via `--output=<file>` for CI timing comparison.
 
-**`toml-compliance`** (all platforms) — Downloads the prebuilt `GocciaTOMLCheck` harness from the matrix build artifacts, runs `python3 scripts/run_toml_test_suite.py --harness=... --output=toml-test-results-<target>.json`, checks that the JSON summary reports zero failures, and uploads the per-platform TOML conformance report as a workflow artifact.
+**`toml-compliance`** (all platforms) — Downloads the prebuilt `GocciaTOMLCheck` harness from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_toml_test_suite.py --harness=... --output=toml-test-results-<target>.json`, checks that the JSON summary reports zero failures, and uploads the per-platform TOML conformance report as a workflow artifact.
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 

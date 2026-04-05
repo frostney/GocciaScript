@@ -61,7 +61,7 @@ end;
 
 function IsStructuredGlobalsFile(const APath: string): Boolean;
 begin
-  Result := IsStructuredDataExtension(ExtractFileExt(APath));
+  Result := IsStructuredGlobalsExtension(ExtractFileExt(APath));
 end;
 
 function IsTOMLGlobalsFile(const APath: string): Boolean;

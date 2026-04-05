@@ -17,6 +17,7 @@ TGocciaGlobalBuiltin = (
   ggGlobalNumber,     // Number.parseInt, Number.isNaN, etc.
   ggPromise,          // Promise constructor, prototype, static methods, microtask queue
   ggJSON,             // JSON.parse, JSON.stringify
+  ggJSONL,            // JSONL.parse, JSONL.parseChunk
   ggTOML,             // TOML.parse
   ggYAML,             // YAML.parse, YAML.parseDocuments
   ggSymbol,           // Symbol, Symbol.for, Symbol.keyFor
@@ -35,7 +36,7 @@ The default set used by `ScriptLoader` and `REPL`:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggYAML, ggSymbol, ggSet, ggMap,
+                  ggGlobalNumber, ggPromise, ggJSON, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap,
                   ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
 ```
 
@@ -163,6 +164,15 @@ Tagged values preserve runtime metadata through `.tagName` and `.value`. Custom 
 Explicit keys (`? key`) are supported, including omitted explicit values and zero-indented sequence values. Because GocciaScript mappings are backed by string-keyed objects, non-scalar YAML keys are canonicalized into stable JSON-like strings during parsing, and anchored mapping keys now parse instead of being rejected outright.
 
 Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time while keeping Bun-compatible YAML runtime behavior where practical. The current parser is still a partial implementation. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
+
+### JSONL (`Goccia.Builtins.JSONL.pas`)
+
+| Method | Description |
+|--------|-------------|
+| `JSONL.parse(textOrBytes)` | Parse newline-delimited JSON and return an array of all records |
+| `JSONL.parseChunk(textOrBytes[, start[, end]])` | Parse as many complete JSONL records as possible and return `{ values, read, done, error }` |
+
+`JSONL.parse(...)` and `JSONL.parseChunk(...)` are designed to match Bun's JSONL runtime surface closely: blank lines are ignored, each non-empty line must be strict JSON, and `Uint8Array` input is supported alongside strings. `parseChunk(...)` returns the next resume offset in `read`, a `done` flag when the provided range was fully consumed, and a `SyntaxError` object in `error` when a delimited record is invalid. Incomplete trailing records are left unread so callers can append more data and resume parsing.
 
 ### TOML (`Goccia.Builtins.TOML.pas`)
 
@@ -954,7 +964,16 @@ describe("group name", () => {
 });
 ```
 
-**Functions:** `describe`, `test`, `it` (alias for `test`), `test.skip`, `beforeEach`, `afterEach`
+**Functions:** `describe`, `describe.skip`, `describe.skipIf`, `describe.runIf`, `describe.only`, `describe.each`, `test`, `it` (alias for `test`), `test.skip`, `test.skipIf`, `test.runIf`, `test.only`, `it.only`, `test.each`, `test.todo`, `beforeAll`, `beforeEach`, `afterEach`, `afterAll`
+
+**Vitest-style structure helpers:**
+
+- `beforeAll(fn)` / `afterAll(fn)` run once per suite around that suite's tests
+- `beforeEach(fn)` / `afterEach(fn)` are suite-scoped and inherited by nested suites
+- `test.each(table)(name, fn)` expands one test per table row and passes row values as callback arguments
+- `describe.each(table)(name, fn)` expands one suite per table row and passes row values as callback arguments
+- `test.only(...)`, `it.only(...)`, and `describe.only(...)` focus execution to the selected tests/suites
+- `test.todo(name)` registers a placeholder test that is reported as skipped but never executed
 
 **Matchers:**
 

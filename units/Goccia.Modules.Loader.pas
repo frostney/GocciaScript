@@ -64,6 +64,7 @@ uses
   Goccia.Evaluator.Context,
   Goccia.FileExtensions,
   Goccia.JSON,
+  Goccia.JSONL,
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
@@ -366,12 +367,15 @@ var
   ParsedValue: TGocciaValue;
   JSONParser: TGocciaJSONParser;
   TOMLParser: TGocciaTOMLParser;
+  JSONLParser: TGocciaJSONLParser;
+  JSONLRecords: TGocciaArrayValue;
   YAMLParser: TGocciaYAMLParser;
   LoadSucceeded: Boolean;
 begin
   Content := FContentProvider.LoadContent(AResolvedPath);
   try
     Documents := nil;
+    JSONLRecords := nil;
     ParsedDocument := nil;
     ParsedValue := nil;
     Extension := LowerCase(ExtractFileExt(AResolvedPath));
@@ -392,7 +396,24 @@ begin
         JSONParser.Free;
       end;
     end
-    else if Extension = EXT_TOML then
+    else if IsJSONLExtension(Extension) then
+    begin
+      JSONLParser := TGocciaJSONLParser.Create;
+      try
+        try
+          JSONLRecords := JSONLParser.Parse(Content.Text);
+        except
+          on E: EGocciaJSONLParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse JSONL module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
+        end;
+      finally
+        JSONLParser.Free;
+      end;
+    end
+    else if IsTOMLExtension(Extension) then
     begin
       TOMLParser := TGocciaTOMLParser.Create;
       try
@@ -440,10 +461,16 @@ begin
     Module.LastModified := Content.LastModified;
     LoadSucceeded := False;
     try
-      if (Extension = EXT_JSON) or (Extension = EXT_TOML) then
+      if (Extension = EXT_JSON) or IsTOMLExtension(Extension) then
         ParsedDocument := ParsedValue;
 
-      if Assigned(Documents) and (Documents.Elements.Count > 1) then
+      if Assigned(JSONLRecords) then
+      begin
+        for DocumentIndex := 0 to JSONLRecords.Elements.Count - 1 do
+          Module.ExportsTable.AddOrSetValue(IntToStr(DocumentIndex),
+            JSONLRecords.Elements[DocumentIndex]);
+      end
+      else if Assigned(Documents) and (Documents.Elements.Count > 1) then
       begin
         // Multi-document YAML modules expose each document by its string index.
         for DocumentIndex := 0 to Documents.Elements.Count - 1 do
@@ -465,6 +492,7 @@ begin
         Module.Free;
     end;
   finally
+    JSONLRecords.Free;
     Documents.Free;
     Content.Free;
   end;

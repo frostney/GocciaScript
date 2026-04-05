@@ -286,6 +286,7 @@ import { name, version } from "./package.json";
 import { name as packageName, debug } from "./config.toml";
 import { name as appName, debug } from "./config.yaml";
 import { "0" as firstDoc, "1" as secondDoc } from "./multi.yaml";
+import { "0" as firstRecord, "1" as secondRecord } from "./events.jsonl";
 ```
 
 For TOML in runtime code, use the built-in parser:
@@ -305,6 +306,15 @@ const docs = YAML.parseDocuments(sourceText);
 `TOML.parse(sourceText)` parses TOML 1.1.0 configuration data into normal Goccia values. TOML date/time values currently map to validated string scalars in runtime code and module imports, which keeps the v1 surface stable while leaving room for future Temporal interop.
 
 The TOML surface is also checked against the official `toml-test` corpus in CI across the supported platform matrix. You can rerun the official suite locally with `python3 scripts/run_toml_test_suite.py`, or reuse a prebuilt decoder with `python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck`.
+
+JSONL is also available both as a runtime parser and as a structured-data module format:
+
+```javascript
+const records = JSONL.parse('{"id":1}\n{"id":2}\n');
+const chunk = JSONL.parseChunk('{"id":1}\n{"id":');
+```
+
+`.jsonl` module imports expose each non-empty line as a zero-based string export (`"0"`, `"1"`, ...), keeping the import surface consistent with string-literal named imports and multi-document structured-data modules.
 
 The current YAML surface already handles common configuration files, including mappings, sequences, block and multiline flow collections (including single-pair mapping items like `[foo: bar]`, empty implicit keys, trailing commas, and stricter rejection of malformed empty interior entries), anchors, aliases, merge keys, self-referential alias graphs for mappings and sequences, block scalars (`|`, `>`, chomping modifiers, and indentation indicators), multiline plain and quoted scalar folding, YAML 1.2 numeric scalar resolution (including base-prefixed integers, exponent forms, and validated digit separators), YAML double-quoted escapes (`\x`, `\u`, `\U`, line continuations, and YAML-specific escapes), and document directives/tags such as `%YAML`, `%TAG`, `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!seq`, `!!map`, `!!timestamp`, and `!!binary`. Directives are still validated as document-preamble syntax, so they are rejected if they appear after document content without an intervening document boundary.
 
