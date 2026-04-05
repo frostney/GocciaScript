@@ -235,6 +235,16 @@ import { add as sum } from "./math.js";
 console.log(sum(1, 2)); // 3
 ```
 
+Or import the full namespace object when you want all exports under one binding:
+
+```javascript
+import * as math from "./math.js";
+import * as config from "./config.json";
+
+console.log(math.add(2, 3));   // 5
+console.log(config.version);   // top-level JSON/TOML/YAML keys are namespace properties
+```
+
 Named imports and exports also support string-literal export names when a module exposes a name that is not a valid identifier:
 
 ```javascript

@@ -177,6 +177,12 @@ import { add, multiply } from "./math.js";
 import { add, multiply } from "./math";      // resolves to ./math.js, .jsx, .ts, .tsx, or .mjs
 import { "foo-bar" as fooBar } from "./config.json";
 
+// Namespace imports
+import * as math from "./math.js";
+import * as configJson from "./config.json";
+import * as configToml from "./config.toml";
+import * as configYaml from "./config.yaml";
+
 // Named exports
 export { myFunction, myValue };
 export { localValue as "0" };
@@ -215,13 +221,15 @@ JSONL (`.jsonl`) imports are also supported. Each non-empty line is parsed as st
 
 Non-scalar YAML keys are canonicalized into stable JSON-like strings. Explicit scalar keys work naturally as named exports, and keys that are not valid identifiers can still be imported with string-literal names such as `import { "foo-bar" as fooBar } from "./config.yaml";`. Complex keys only produce useful imports when you know the canonical export string.
 
+Namespace imports (`import * as ns from "./module.js"`) are also supported for script modules and structured-data modules. They produce a frozen, null-prototype namespace object whose enumerable own properties are copied from the module's export table at import time, so JSON, JSONL, TOML, and YAML modules can all be consumed either through named imports or through a namespace object snapshot.
+
 This YAML surface is still partial. The detailed conformance snapshot lives in [docs/design-decisions.md](design-decisions.md), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
 
 // Directory/index resolution
 import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx, etc.)
 ```
 
-**Not supported:** `export default`, `import x from` (default import), `import * as` (namespace import), `import "module"` (side-effect import), `export * from` (wildcard re-export), dynamic `import()`. The parser accepts these syntactically but treats them as no-ops, emitting a warning with a suggestion:
+**Not supported:** `export default`, `import x from` (default import), `import "module"` (side-effect import), `export * from` (wildcard re-export). The parser accepts these syntactically but treats them as no-ops, emitting a warning with a suggestion:
 
 ```text
 Warning: Default imports are not supported in GocciaScript
@@ -232,6 +240,8 @@ Warning: Wildcard re-exports (export * from ...) are not supported in GocciaScri
   Suggestion: Use named re-exports instead: export { name } from 'module'
   --> script.js:2:1
 ```
+
+Dynamic `import()` is parsed as a normal call expression. Because there is no global `import` binding in GocciaScript, calling it currently fails at runtime with `ReferenceError` unless user code defines its own `import` identifier.
 
 ### Data Structures
 

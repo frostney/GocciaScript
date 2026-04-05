@@ -45,9 +45,8 @@ with (Math) {
 
 // --- Default imports/exports ---
 
-import foo from "some-module";
-import * as bar from "some-module";
-import "some-side-effect";
+import foo from "./helpers/math-utils.js";
+import "./helpers/math-utils.js";
 export default 42;
 export default class Unused {
   constructor() {
@@ -55,8 +54,9 @@ export default class Unused {
   }
 }
 
-// Named imports/exports work as expected:
+// Named imports/exports and namespace imports work as expected:
 // import { add } from "./math.js";
+// import * as math from "./math.js";
 // export const PI = 3.14159;
 // export { add, multiply };
 

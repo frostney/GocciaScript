@@ -999,15 +999,21 @@ procedure CompileImportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaImportDeclaration);
 var
   ModReg: UInt8;
+  NamespaceSlot: UInt8;
   PathIdx, NameIdx: UInt16;
   Pair: TStringStringMap.TKeyValuePair;
   Slots: array of UInt8;
   Names: array of string;
+  HasNamespace: Boolean;
   I, Count: Integer;
 begin
+  HasNamespace := AStmt.NamespaceName <> '';
   Count := AStmt.Imports.Count;
   SetLength(Slots, Count);
   SetLength(Names, Count);
+
+  if HasNamespace then
+    NamespaceSlot := ACtx.Scope.DeclareLocal(AStmt.NamespaceName, True);
 
   I := 0;
   for Pair in AStmt.Imports do
@@ -1020,6 +1026,9 @@ begin
   ModReg := ACtx.Scope.AllocateRegister;
   PathIdx := ACtx.Template.AddConstantString(AStmt.ModulePath);
   EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ModReg, PathIdx));
+
+  if HasNamespace then
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, NamespaceSlot, ModReg, 0));
 
   for I := 0 to Count - 1 do
   begin

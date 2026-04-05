@@ -355,12 +355,15 @@ type
   private
     FImports: TStringStringMap; // local name -> imported name
     FModulePath: string;
+    FNamespaceName: string;
   public
     constructor Create(const AImports: TStringStringMap;
-      const AModulePath: string; const ALine, AColumn: Integer);
+      const AModulePath: string; const ALine, AColumn: Integer;
+      const ANamespaceName: string = '');
     function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Imports: TStringStringMap read FImports;
     property ModulePath: string read FModulePath;
+    property NamespaceName: string read FNamespaceName;
   end;
 
   TGocciaExportDeclaration = class(TGocciaStatement)
@@ -435,12 +438,21 @@ implementation
 uses
   SysUtils,
 
+  GarbageCollector.Generic,
+
   Goccia.Evaluator,
   Goccia.Modules,
   Goccia.Scope.BindingMap,
   Goccia.Token,
   Goccia.Values.Error,
-  Goccia.Values.FunctionValue;
+  Goccia.Values.FunctionValue,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue;
+
+function CreateModuleNamespaceObject(const AModule: TGocciaModule): TGocciaValue;
+begin
+  Result := AModule.GetNamespaceObject;
+end;
 
 { TGocciaExpressionStatement }
 
@@ -671,11 +683,13 @@ uses
   { TGocciaImportDeclaration }
 
   constructor TGocciaImportDeclaration.Create(const AImports: TStringStringMap;
-    const AModulePath: string; const ALine, AColumn: Integer);
+    const AModulePath: string; const ALine, AColumn: Integer;
+    const ANamespaceName: string);
   begin
     inherited Create(ALine, AColumn);
     FImports := AImports;
     FModulePath := AModulePath;
+    FNamespaceName := ANamespaceName;
   end;
 
   { TGocciaExportDeclaration }
@@ -892,6 +906,7 @@ uses
   var
     Module: TGocciaModule;
     ImportPair: TStringStringMap.TKeyValuePair;
+    NamespaceObject: TGocciaValue;
     Value: TGocciaValue;
   begin
     Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -906,6 +921,20 @@ uses
       begin
         AContext.OnError(Format('Module "%s" has no export named "%s"',
           [ModulePath, ImportPair.Value]), Line, Column);
+      end;
+    end;
+
+    if NamespaceName <> '' then
+    begin
+      NamespaceObject := CreateModuleNamespaceObject(Module);
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.AddTempRoot(NamespaceObject);
+      try
+        AContext.Scope.DefineLexicalBinding(NamespaceName, NamespaceObject,
+          dtConst);
+      finally
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.RemoveTempRoot(NamespaceObject);
       end;
     end;
   end;
