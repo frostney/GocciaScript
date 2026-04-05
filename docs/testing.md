@@ -16,7 +16,7 @@ Keep suite titles, test names, and failure messages aligned with the layer under
 
 ## Test Organization
 
-```
+```text
 tests/
 ├── built-ins/              # Built-in object tests
 │   ├── Array/              # Array constructor and prototype methods
@@ -111,7 +111,7 @@ Follow these rules when creating or organizing test files:
 
 **1. One method per file** — Each built-in method or static function gets its own test file. Never bundle multiple methods into a single file like `prototype-methods.js` or `static-methods.js`.
 
-```
+```text
 # Correct — each method is its own file
 tests/built-ins/TypedArray/prototype/fill.js
 tests/built-ins/TypedArray/prototype/map.js
@@ -123,7 +123,7 @@ tests/built-ins/TypedArray/prototype-methods.js
 
 **2. Prototype methods go in a `prototype/` subfolder** — Instance methods (e.g., `Array.prototype.map`) live in `BuiltIn/prototype/methodName.js`. Static methods and constructor tests live directly in the `BuiltIn/` folder (no separate `static/` subfolder).
 
-```
+```text
 tests/built-ins/TypedArray/
 ├── constructors.js              # new TypedArray(...) constructor variants
 ├── buffer-sharing.js            # Buffer sharing behavior across views
@@ -151,14 +151,14 @@ describe("TypedArray.prototype.fill", () => {
 });
 ```
 
-```
+```text
 # Wrong — edge cases in a separate catch-all file
 tests/built-ins/TypedArray/edge-cases.js
 ```
 
 **4. Object prototype methods use `prototype/` too** — `Object.prototype.toString`, `Object.prototype.hasOwnProperty`, etc. follow the same convention as Array. Use `Object/prototype/toString.js`, not `Object/prototype-toString.js`.
 
-```
+```text
 tests/built-ins/Object/
 ├── keys.js                      # Object.keys (static method)
 ├── assign.js                    # Object.assign (static method)
@@ -239,6 +239,21 @@ python3 scripts/run_yaml_test_suite.py --suite-dir=/path/to/yaml-test-suite
 ```
 
 This check is intentionally parse-only: it compares whether each suite case should parse or fail, not whether Goccia's runtime values exactly match the suite's JSON fixtures. That distinction matters because Goccia intentionally canonicalizes complex YAML mapping keys into strings.
+
+**Official TOML Suite**
+
+For TOML 1.1.0 checks against the official `toml-test` corpus, run:
+
+```bash
+python3 scripts/run_toml_test_suite.py
+python3 scripts/run_toml_test_suite.py --output=tmp/toml-suite-results.json
+python3 scripts/run_toml_test_suite.py --suite-dir=/path/to/toml-test
+python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck --output=tmp/toml-suite-results.json
+```
+
+Unlike the YAML script, this harness compares both parse/fail behavior and the official tagged JSON fixtures for valid cases. It uses a Pascal decoder built around `TGocciaTOMLParser.ParseDocument(...)` so TOML scalar kinds like `integer`, `float`, `datetime`, `datetime-local`, `date-local`, and `time-local` remain visible during compliance checks even though the normal runtime surface still maps date/time values to strings.
+
+The TOML runner exits non-zero when any case fails or times out, so it is safe to use directly in CI. When `--harness` is omitted it compiles `scripts/GocciaTOMLCheck.dpr` automatically; CI uses a prebuilt harness from the matrix build artifacts instead.
 
 ### Run Pascal Unit Tests
 
@@ -716,30 +731,39 @@ Each test starts with a `BeforeEach` override that calls `FAssertions.ResetCurre
 
 ## CI Integration
 
-GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and on pull requests, with a four-job pipeline:
+GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and tags, with a five-job pipeline plus release packaging:
 
-```
-build → test       → artifacts
-      → benchmark  →
+```text
+build → test             → artifacts
+      → toml-compliance  →
+      → benchmark        →
+      → examples         →
 ```
 
 **`build`** — Installs FPC once per platform, compiles all binaries, uploads them as intermediate artifacts.
 
 **`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests. Outputs JSON files via `--output=<file>` for CI timing comparison.
 
+**`toml-compliance`** (all platforms) — Downloads the prebuilt `GocciaTOMLCheck` harness from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_toml_test_suite.py --harness=... --output=toml-test-results-<target>.json`, checks that the JSON summary reports zero failures, and uploads the per-platform TOML conformance report as a workflow artifact.
+
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
-**`artifacts`** (needs test + benchmark, push only) — Uploads release binaries after both test and benchmark pass.
+**`examples`** (needs build, all platforms) — Runs the example scripts and ScriptLoader CLI smoke tests.
 
-The `test` and `benchmark` jobs run in parallel since they both depend only on `build`. FPC is installed once per platform, not repeated. Both run across Linux, macOS, and Windows (x64 + ARM where applicable), so platform-specific regressions are caught in both tests and benchmarks.
+**`artifacts`** (needs test + toml-compliance + benchmark + examples, `main` only) — Uploads release binaries after all checks pass.
+
+**`release`** (needs test + toml-compliance + benchmark + examples, tags only) — Packages and publishes release archives after the same gates pass.
+
+The `test`, `benchmark`, `examples`, and `toml-compliance` jobs run in parallel after `build`. The TOML conformance lane reuses the already-built harness binary from the matrix build artifacts instead of installing FPC again, so platform-specific TOML issues are caught on the same Linux, macOS, and Windows targets as the main test lanes.
 
 ### PR Workflow (`.github/workflows/pr.yml`)
 
-Runs on pull requests targeting `main`, on **ubuntu-latest x64 only** (single runner, no matrix):
+Runs on pull requests targeting `main`, on **ubuntu-latest x64 only**:
 
-```
+```text
 build → test
       → benchmark → PR comment
+      → examples
 ```
 
 The benchmark comparison comment includes a **Suite Timing** section showing test execution and benchmark duration for both modes. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the comparison format.

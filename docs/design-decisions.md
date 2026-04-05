@@ -154,6 +154,8 @@ Scopes form a tree with parent pointers, implementing lexical scoping:
 - **Standalone JSON utilities** — `Goccia.JSON` provides `TGocciaJSONParser` and `TGocciaJSONStringifier` as dependency-free utility classes that convert between JSON text and `TGocciaValue` types. `Goccia.Builtins.JSON` (the `JSON.parse`/`JSON.stringify` built-in) delegates to these, keeping the built-in a thin adapter. This separation allows the interpreter and any other component to parse JSON without instantiating a built-in.
 - **JSONL parser split** — `Goccia.JSONL` provides a standalone `TGocciaJSONLParser` utility that builds on `TGocciaJSONParser` one line at a time, preserving JSONL source line numbers in parse errors and supporting Bun-style chunked parsing through `ParseChunk(...)`. `Goccia.Builtins.JSONL` exposes that utility as `JSONL.parse(...)` and `JSONL.parseChunk(...)`, while the module loader reuses the same parser for `.jsonl` imports.
 - **JSONL module imports** — `.jsonl` modules intentionally expose each non-empty line as a zero-based string-indexed named export (`"0"`, `"1"`, ...). This keeps the structured-data import surface consistent with the existing string-literal named import/export work and avoids introducing a JSONL-specific synthetic wrapper object just for modules.
+- **TOML parser split** — `Goccia.TOML` provides a standalone `TGocciaTOMLParser` utility that converts TOML 1.1.0 text into `TGocciaValue` trees. `Goccia.Builtins.TOML` exposes that parser as `TOML.parse(...)`, and the module loader reuses the same utility for `.toml` imports and TOML-backed globals injection. TOML date/time values currently map to validated string scalars rather than Temporal values. For compliance work, the parser also exposes `ParseDocument(...)`, which preserves TOML scalar kinds and canonical values in a recursive TOML node tree without changing the public runtime surface.
+- **TOML compatibility target** — The project goal for TOML is full TOML 1.1.0 compatibility. The official `toml-test` TOML 1.1.0 suite is part of CI and is rerun across the supported platform matrix. The local rerun command is `python3 scripts/run_toml_test_suite.py`, or `python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck` if you already built the decoder harness.
 - **YAML parser split** — `Goccia.YAML` provides a standalone `TGocciaYAMLParser` utility that converts YAML text into `TGocciaValue` trees. `Goccia.Builtins.YAML` exposes that parser as `YAML.parse(...)`, which follows Bun-style stream semantics by returning an array whenever explicit `---` document markers are present, and `YAML.parseDocuments(...)` for callers that always want an array. The module loader reuses the same utility for `.yaml` and `.yml` imports: a single top-level mapping still exports its keys directly, while multi-document streams expose each document as a string-indexed named export (`"0"`, `"1"`, ...).
 - **YAML anchor handling** — Anchors are tracked per document during parsing, aliases resolve to the anchored node, and `<<:` merge keys fill only missing keys so explicit mapping entries always win and earlier entries in merge sequences keep precedence over later ones.
 - **YAML block scalars** — Literal (`|`) and folded (`>`) block scalars are parsed directly in `Goccia.YAML`, including chomping modifiers and indentation indicators, so common multi-line configuration text works the same through `YAML.parse(...)` and `.yaml`/`.yml` module imports.
@@ -299,9 +301,9 @@ Built-ins are registered via a `TGocciaGlobalBuiltins` set of flags:
 
 ```pascal
 TGocciaGlobalBuiltin = (ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                         ggGlobalNumber, ggPromise, ggJSON, ggSymbol,
-                         ggSet, ggMap, ggTestAssertions, ggBenchmark,
-                         ggTemporal, ggJSX);
+                         ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggYAML,
+                         ggSymbol, ggSet, ggMap, ggTestAssertions, ggBenchmark,
+                         ggTemporal, ggJSX, ggArrayBuffer);
 ```
 
 **Why configurable?**

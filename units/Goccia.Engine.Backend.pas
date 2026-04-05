@@ -19,6 +19,7 @@ uses
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
   Goccia.Runtime.Bootstrap,
+  Goccia.TOML,
   Goccia.Values.Primitives,
   Goccia.VM,
   Goccia.YAML;
@@ -41,6 +42,7 @@ type
     FInjectedGlobals: TStringList;
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
+    procedure RequireGlobalsBootstrapReady;
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
   public
     constructor Create(const ASourcePath: string); overload;
@@ -54,6 +56,7 @@ type
 
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
+    procedure InjectGlobalsFromTOML(const ATOMLString: string);
     procedure InjectGlobalsFromYAML(const AYamlString: string);
     procedure InjectGlobalsFromModule(const APath: string);
     procedure RegisterBuiltIns(const AGlobals: TGocciaGlobalBuiltins);
@@ -187,8 +190,7 @@ end;
 procedure TGocciaBytecodeBackend.RegisterGlobal(const AName: string;
   const AValue: TGocciaValue);
 begin
-  if not Assigned(FInterpreter) then
-    Exit;
+  RequireGlobalsBootstrapReady;
   if FInterpreter.GlobalScope.ContainsOwnLexicalBinding(AName) then
   begin
     if FInjectedGlobals.IndexOf(AName) >= 0 then
@@ -205,6 +207,15 @@ begin
   end;
 end;
 
+procedure TGocciaBytecodeBackend.RequireGlobalsBootstrapReady;
+begin
+  if Assigned(FInterpreter) then
+    Exit;
+  raise TGocciaRuntimeError.Create(
+    'RegisterBuiltIns must be called before globals injection.',
+    0, 0, FSourcePath, nil);
+end;
+
 procedure TGocciaBytecodeBackend.InjectGlobalsFromJSON(const AJsonString: string);
 var
   Parser: TGocciaJSONParser;
@@ -212,6 +223,7 @@ var
   Obj: TGocciaObjectValue;
   Key: string;
 begin
+  RequireGlobalsBootstrapReady;
   Parser := TGocciaJSONParser.Create;
   try
     ParsedValue := Parser.Parse(AJsonString);
@@ -233,6 +245,35 @@ begin
   end;
 end;
 
+procedure TGocciaBytecodeBackend.InjectGlobalsFromTOML(const ATOMLString: string);
+var
+  Key: string;
+  Obj: TGocciaObjectValue;
+  ParsedValue: TGocciaValue;
+  Parser: TGocciaTOMLParser;
+begin
+  RequireGlobalsBootstrapReady;
+  Parser := TGocciaTOMLParser.Create;
+  try
+    ParsedValue := Parser.Parse(ATOMLString);
+  finally
+    Parser.Free;
+  end;
+
+  if not (ParsedValue is TGocciaObjectValue) then
+    raise TGocciaRuntimeError.Create('Globals TOML must be a top-level object.',
+      0, 0, FSourcePath, nil);
+
+  TGarbageCollector.Instance.AddTempRoot(ParsedValue);
+  try
+    Obj := TGocciaObjectValue(ParsedValue);
+    for Key in Obj.GetOwnPropertyKeys do
+      RegisterGlobal(Key, Obj.GetProperty(Key));
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+  end;
+end;
+
 procedure TGocciaBytecodeBackend.InjectGlobalsFromYAML(const AYamlString: string);
 var
   Documents: TGocciaArrayValue;
@@ -241,6 +282,7 @@ var
   Obj: TGocciaObjectValue;
   Key: string;
 begin
+  RequireGlobalsBootstrapReady;
   Parser := TGocciaYAMLParser.Create;
   try
     Documents := Parser.ParseDocuments(AYamlString);
@@ -277,8 +319,7 @@ var
   Module: TGocciaModule;
   ExportPair: TGocciaValueMap.TKeyValuePair;
 begin
-  if not Assigned(FInterpreter) then
-    Exit;
+  RequireGlobalsBootstrapReady;
   Module := FInterpreter.LoadModule(APath, FSourcePath);
   for ExportPair in Module.ExportsTable do
     RegisterGlobal(ExportPair.Key, ExportPair.Value);
