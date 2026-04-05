@@ -253,6 +253,8 @@ python3 scripts/run_toml_test_suite.py --harness=./build/GocciaTOMLCheck --outpu
 
 Unlike the YAML script, this harness compares both parse/fail behavior and the official tagged JSON fixtures for valid cases. It uses a Pascal decoder built around `TGocciaTOMLParser.ParseDocument(...)` so TOML scalar kinds like `integer`, `float`, `datetime`, `datetime-local`, `date-local`, and `time-local` remain visible during compliance checks even though the normal runtime surface still maps date/time values to strings.
 
+The harness reads TOML suite files as raw UTF-8 bytes and preserves that UTF-8 code page when passing text into the Pascal parser. That extra step matters on Windows, where an implicit conversion through the local ANSI code page would otherwise corrupt Unicode keys and string values and produce false TOML compliance failures.
+
 The TOML runner exits non-zero when any case fails or times out, so it is safe to use directly in CI. When `--harness` is omitted it compiles `scripts/GocciaTOMLCheck.dpr` automatically; CI uses a prebuilt harness from the matrix build artifacts instead.
 
 ### Run Pascal Unit Tests
