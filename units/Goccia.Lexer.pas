@@ -71,7 +71,8 @@ implementation
 uses
   Goccia.Error,
   Goccia.Keywords.Contextual,
-  Goccia.Keywords.Reserved;
+  Goccia.Keywords.Reserved,
+  Goccia.TextFiles;
 
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
 begin
@@ -97,10 +98,7 @@ end;
 function TGocciaLexer.GetSourceLines: TStringList;
 begin
   if not Assigned(FSourceLines) then
-  begin
-    FSourceLines := TStringList.Create;
-    FSourceLines.Text := FSource;
-  end;
+    FSourceLines := CreateUTF8StringList(FSource);
   Result := FSourceLines;
 end;
 

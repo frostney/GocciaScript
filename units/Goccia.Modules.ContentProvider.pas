@@ -13,14 +13,15 @@ type
   private
     FLastModified: TDateTime;
     FSourceLines: TStringList;
-    function GetText: string;
+    FText: UTF8String;
+    function GetText: UTF8String;
   public
-    constructor Create(const AText: string; const ALastModified: TDateTime);
+    constructor Create(const AText: UTF8String; const ALastModified: TDateTime);
     destructor Destroy; override;
 
     property LastModified: TDateTime read FLastModified;
     property SourceLines: TStringList read FSourceLines;
-    property Text: string read GetText;
+    property Text: UTF8String read GetText;
   end;
 
   TGocciaModuleContentProvider = class
@@ -41,6 +42,9 @@ type
 
 implementation
 
+uses
+  Goccia.TextFiles;
+
 function TryGetFileLastModified(const APath: string;
   out ALastModified: TDateTime): Boolean;
 var
@@ -56,13 +60,13 @@ end;
 
 { TGocciaModuleContent }
 
-constructor TGocciaModuleContent.Create(const AText: string;
+constructor TGocciaModuleContent.Create(const AText: UTF8String;
   const ALastModified: TDateTime);
 begin
   inherited Create;
   FLastModified := ALastModified;
-  FSourceLines := TStringList.Create;
-  FSourceLines.Text := AText;
+  FText := AText;
+  FSourceLines := CreateUTF8StringList(FText);
 end;
 
 destructor TGocciaModuleContent.Destroy;
@@ -71,9 +75,9 @@ begin
   inherited;
 end;
 
-function TGocciaModuleContent.GetText: string;
+function TGocciaModuleContent.GetText: UTF8String;
 begin
-  Result := FSourceLines.Text;
+  Result := FText;
 end;
 
 { TGocciaFileSystemModuleContentProvider }
@@ -88,17 +92,12 @@ function TGocciaFileSystemModuleContentProvider.LoadContent(
   const APath: string): TGocciaModuleContent;
 var
   LastModified: TDateTime;
-  Source: TStringList;
+  SourceText: UTF8String;
 begin
-  Source := TStringList.Create;
-  try
-    Source.LoadFromFile(APath);
-    if not TryGetFileLastModified(APath, LastModified) then
-      LastModified := 0;
-    Result := TGocciaModuleContent.Create(Source.Text, LastModified);
-  finally
-    Source.Free;
-  end;
+  SourceText := ReadUTF8FileText(APath);
+  if not TryGetFileLastModified(APath, LastModified) then
+    LastModified := 0;
+  Result := TGocciaModuleContent.Create(SourceText, LastModified);
 end;
 
 function TGocciaFileSystemModuleContentProvider.TryGetLastModified(

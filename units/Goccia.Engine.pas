@@ -42,6 +42,7 @@ uses
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
   Goccia.Parser,
+  Goccia.TextFiles,
   Goccia.TOML,
   Goccia.Values.ClassValue,
   Goccia.Values.FunctionBase,
@@ -149,7 +150,7 @@ type
     procedure AddAlias(const APattern, AReplacement: string);
     procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
     procedure InjectGlobalsFromJSON(const AJsonString: string);
-    procedure InjectGlobalsFromTOML(const ATOMLString: string);
+    procedure InjectGlobalsFromTOML(const ATOMLString: UTF8String);
     procedure InjectGlobalsFromYAML(const AYamlString: string);
     procedure InjectGlobalsFromModule(const APath: string);
     procedure RegisterGlobalModule(const AName: string; const AModule: TGocciaModule);
@@ -677,7 +678,7 @@ begin
   end;
 end;
 
-procedure TGocciaEngine.InjectGlobalsFromTOML(const ATOMLString: string);
+procedure TGocciaEngine.InjectGlobalsFromTOML(const ATOMLString: UTF8String);
 var
   Key: string;
   Obj: TGocciaObjectValue;
@@ -774,7 +775,10 @@ begin
   Result.FileName := FFileName;
   StartTime := GetNanoseconds;
 
-  SourceText := FSourceLines.Text;
+  if Assigned(FSourceLines) then
+    SourceText := FSourceLines.Text
+  else
+    SourceText := '';
   SourceMap := nil;
 
   if ggJSX in FGlobals then
@@ -849,9 +853,8 @@ class function TGocciaEngine.RunScript(const ASource: string; const AFileName: s
 var
   SourceList: TStringList;
 begin
-  SourceList := TStringList.Create;
+  SourceList := CreateUTF8StringList(ASource);
   try
-    SourceList.Text := ASource;
     Result := RunScriptFromStringList(SourceList, AFileName, AGlobals);
   finally
     SourceList.Free;
@@ -867,9 +870,8 @@ class function TGocciaEngine.RunScriptFromFile(const AFileName: string; const AG
 var
   Source: TStringList;
 begin
-  Source := TStringList.Create;
+  Source := CreateUTF8StringList(ReadUTF8FileText(AFileName));
   try
-    Source.LoadFromFile(AFileName);
     Result := RunScriptFromStringList(Source, AFileName, AGlobals);
   finally
     Source.Free;
