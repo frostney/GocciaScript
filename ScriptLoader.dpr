@@ -186,6 +186,8 @@ begin
     begin
       if IsYAMLGlobalsFile(GGlobalsFiles[I]) then
         AEngine.InjectGlobalsFromYAML(ReadFileText(GGlobalsFiles[I]))
+      else if IsJSON5GlobalsFile(GGlobalsFiles[I]) then
+        AEngine.InjectGlobalsFromJSON5(ReadFileText(GGlobalsFiles[I]))
       else if IsTOMLGlobalsFile(GGlobalsFiles[I]) then
         AEngine.InjectGlobalsFromTOML(ReadFileText(GGlobalsFiles[I]))
       else
@@ -218,6 +220,8 @@ begin
     begin
       if IsYAMLGlobalsFile(GGlobalsFiles[I]) then
         ABackend.InjectGlobalsFromYAML(ReadFileText(GGlobalsFiles[I]))
+      else if IsJSON5GlobalsFile(GGlobalsFiles[I]) then
+        ABackend.InjectGlobalsFromJSON5(ReadFileText(GGlobalsFiles[I]))
       else if IsTOMLGlobalsFile(GGlobalsFiles[I]) then
         ABackend.InjectGlobalsFromTOML(ReadFileText(GGlobalsFiles[I]))
       else
@@ -564,7 +568,7 @@ begin
   WriteLn('  --import-map=<path>     Load WHATWG-style import map JSON before execution');
   WriteLn('  --alias key=value       Add an inline import-map-style alias (exact match unless key ends with "/")');
   WriteLn('  --global name=value     Inject a single global; value is parsed as JSON or kept as a string');
-  WriteLn('  --globals=<path>        Inject globals from a JSON/TOML/YAML file or a module with named exports');
+  WriteLn('  --globals=<path>        Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
   WriteLn('  --timeout=<ms>          Abort execution if it runs longer than the given milliseconds');
   WriteLn('  --output=json           Write structured JSON result to stdout');
   WriteLn('  --output=<path>         Output file path (used with --emit)');

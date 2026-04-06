@@ -64,6 +64,7 @@ uses
   Goccia.Evaluator.Context,
   Goccia.FileExtensions,
   Goccia.JSON,
+  Goccia.JSON5,
   Goccia.JSONL,
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
@@ -367,6 +368,7 @@ var
   ParsedDocument: TGocciaValue;
   ParsedValue: TGocciaValue;
   JSONParser: TGocciaJSONParser;
+  JSON5Parser: TGocciaJSON5Parser;
   TOMLParser: TGocciaTOMLParser;
   JSONLParser: TGocciaJSONLParser;
   JSONLRecords: TGocciaArrayValue;
@@ -395,6 +397,23 @@ begin
         end;
       finally
         JSONParser.Free;
+      end;
+    end
+    else if IsJSON5Extension(Extension) then
+    begin
+      JSON5Parser := TGocciaJSON5Parser.Create;
+      try
+        try
+          ParsedValue := JSON5Parser.Parse(Content.Text);
+        except
+          on E: EGocciaJSON5ParseError do
+            raise TGocciaRuntimeError.Create(
+              Format('Failed to parse JSON5 module "%s": %s',
+                [AResolvedPath, E.Message]),
+              0, 0, AResolvedPath, nil);
+        end;
+      finally
+        JSON5Parser.Free;
       end;
     end
     else if IsJSONLExtension(Extension) then
@@ -462,7 +481,8 @@ begin
     Module.LastModified := Content.LastModified;
     LoadSucceeded := False;
     try
-      if (Extension = EXT_JSON) or IsTOMLExtension(Extension) then
+      if (Extension = EXT_JSON) or IsJSON5Extension(Extension) or
+         IsTOMLExtension(Extension) then
         ParsedDocument := ParsedValue;
 
       if Assigned(JSONLRecords) then

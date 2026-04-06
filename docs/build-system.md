@@ -98,8 +98,9 @@ printf "console.log('hi'); 2 + 2;" | ./build/ScriptLoader --output=json
 # Inject globals from the CLI
 printf "x + y;" | ./build/ScriptLoader --global x=10 --global y=20
 printf "name;" | ./build/ScriptLoader --globals=context.json --output=json
+printf "name;" | ./build/ScriptLoader --globals=context.json5 --output=json
 printf "name;" | ./build/ScriptLoader --globals=context.toml --output=json
-# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, TOML, or YAML by file extension.
+# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, JSON5, TOML, or YAML by file extension.
 # Injected globals can override earlier injected values, but not built-in globals like console
 
 # Load an explicit import map
@@ -177,7 +178,7 @@ Shared compiler directives included by all units:
 
 ```pascal
 {$mode delphi}                    // Delphi-compatible syntax
-{H+}                              // Long strings (AnsiString) by default
+{H+}                              // Long strings (`string` = `AnsiString`) by default
 {$IFNDEF PRODUCTION}
   {$overflowchecks on}            // Runtime arithmetic overflow detection
   {$rangechecks on}               // Runtime array bounds checking
@@ -185,6 +186,15 @@ Shared compiler directives included by all units:
 {$modeswitch advancedrecords}     // Records with methods
 {$modeswitch multihelpers}        // Multiple class helpers for same type
 ```
+
+Under the current project settings, FreePascal behaves like this:
+
+- `string` is an `AnsiString` alias, not `UnicodeString`.
+- `UTF8String` is also an `AnsiString`, but tagged with code page `CP_UTF8` (`65001`).
+- `UnicodeString` remains the explicit UTF-16 string type.
+- `Char` is a single-byte `AnsiChar`, so `Length`, `Copy`, indexing, and similar operations on `string`/`UTF8String` count bytes, not Unicode code points.
+
+That distinction matters for parser and file-loading code: a plain `string` temporary does not preserve “this text is UTF-8” on its own. If raw UTF-8 file text needs to survive byte-for-byte until parsing, keep it in `UTF8String` (or retag it explicitly) until the parser consumes it.
 
 Overflow and range checks are enabled in development mode for safety. In production builds, the `-dPRODUCTION` define disables these checks for maximum performance.
 
@@ -260,13 +270,15 @@ Runs on the full platform matrix:
 
 **`toml-compliance`** — Downloads the prebuilt `GocciaTOMLCheck` harness from each matrix build artifact, runs the official `toml-test` TOML 1.1.0 suite on every CI platform via `python3 scripts/run_toml_test_suite.py --harness=...`, validates that the JSON summary reports zero failures, and uploads the per-platform JSON report.
 
+**`json5-compliance`** — Downloads the prebuilt `GocciaJSON5Check` harness and `TestRunner` binary from each matrix build artifact, runs `python3 scripts/run_json5_test_suite.py --harness=... --test-runner=...` on every CI platform, validates both the parser and stringify summaries, and uploads the per-platform JSON report.
+
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), saves benchmark results as JSON to `actions/cache` for PR comparison.
 
 **`examples`** (needs build) — Runs all example scripts from the `examples/` folder on all platforms.
 
-**`artifacts`** (needs test + toml-compliance + benchmark + examples, main only) — Uploads production binaries after all checks pass, deriving the executable names from the top-level `*.dpr` entrypoints.
+**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + examples, main only) — Uploads production binaries after all checks pass, deriving the executable names from the top-level `*.dpr` entrypoints.
 
-**`release`** (needs test + toml-compliance + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the top-level `*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + toml-compliance + json5-compliance + benchmark + examples, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the top-level `*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 

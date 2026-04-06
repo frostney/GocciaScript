@@ -255,7 +255,20 @@ Unlike the YAML script, this harness compares both parse/fail behavior and the o
 
 The TOML runner exits non-zero when any case fails or times out, so it is safe to use directly in CI. When `--harness` is omitted it compiles `scripts/GocciaTOMLCheck.dpr` automatically; CI uses a prebuilt harness from the matrix build artifacts instead.
 
-The harness and any file-backed parser regression must read source text as UTF-8 bytes first and only then hand it to the parser. On Windows, explicit casts like `string(UTF8StringBytes)`, plain `string` temporaries inserted between file I/O and the parser, and default `TStringList.LoadFromFile` calls can silently reinterpret UTF-8 through the local ANSI code page, which shows up in CI as mojibake such as `José -> JosÃ©` or Unicode TOML keys no longer matching. Keep raw file-backed TOML text as `UTF8String` until `TGocciaTOMLParser.Parse(...)` / `ParseDocument(...)` receives it.
+The harness and any file-backed parser regression must read source text as UTF-8 bytes first and only then hand it to the parser. In this codebase, `{$mode delphi}` + `{H+}` means plain `string` is an `AnsiString` alias with the default/system code page, while `UTF8String` is the explicit `AnsiString(CP_UTF8)` variant. That means a plain `string` temporary is not a “Unicode string that happens to contain UTF-8”; it is a separate ansistring type that may retag or transcode the bytes. On Windows this commonly shows up as mojibake such as `José -> JosÃ©` or Unicode TOML keys no longer matching. Keep raw file-backed TOML text as `UTF8String` until `TGocciaTOMLParser.Parse(...)` / `ParseDocument(...)` receives it.
+
+**Official JSON5 Suite**
+
+For JSON5 parser compatibility checks against the official `json5/json5` parser test corpus, run:
+
+```bash
+python3 scripts/run_json5_test_suite.py
+python3 scripts/run_json5_test_suite.py --output=tmp/json5-suite-results.json
+python3 scripts/run_json5_test_suite.py --suite-dir=/path/to/json5
+python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check --output=tmp/json5-suite-results.json
+```
+
+This runner extracts parser cases from the upstream `test/parse.js` and `test/errors.js` files, evaluates them with the reference implementation under Node.js, then compares Goccia's Pascal harness output against the canonical tagged values for valid cases. Invalid cases must fail to parse. The same command also runs `tests/built-ins/JSON5/stringify.js`, which mirrors the upstream stringify surface inside Goccia's JavaScript test harness. The runner exits non-zero when either the upstream parser corpus or the JSON5 stringify suite fails.
 
 ### Run Pascal Unit Tests
 
@@ -300,7 +313,8 @@ When a parser implements a format with spec-defined newline semantics, test the 
 - Do not treat `LineEnding` / `sLineBreak` as the expected runtime result for parsed data just because the test is running on Windows.
 - Prefer explicit `\r\n` or `#13#10` fixtures when adding regression tests for multiline parsing, folding, or block-scalar behavior.
 - Assert the format-defined canonical result. Example: TOML multiline strings normalize recognized newlines to LF (`\n`) even when the source text uses CRLF.
-- For parser inputs that come from files, read UTF-8 bytes with the shared helper instead of `TStringList.LoadFromFile` or `string(UTF8String(...))`, then add at least one regression that hits the real file-loading path with non-ASCII data.
+- For parser inputs that come from files, read UTF-8 bytes with the shared helper instead of `TStringList.LoadFromFile` or `string(UTF8String(...))`. Keep the text as `UTF8String` until parser entry, then add at least one regression that hits the real file-loading path with non-ASCII data.
+- When code needs a “10 characters” or “first identifier code point” style rule on UTF-8 text, do not use raw `Length`, `Copy`, or byte indexing on `string`/`UTF8String`; those operate on bytes under our FPC settings.
 - Keep one public-surface regression in `tests/` and, when the parser exposes a reusable native utility like `TGocciaTOMLParser`, add a focused Pascal regression alongside it as well.
 
 ### Test Metadata (Optional)
@@ -748,6 +762,7 @@ GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and tags, 
 ```text
 build → test             → artifacts
       → toml-compliance  →
+      → json5-compliance →
       → benchmark        →
       → examples         →
 ```
@@ -758,13 +773,15 @@ build → test             → artifacts
 
 **`toml-compliance`** (all platforms) — Downloads the prebuilt `GocciaTOMLCheck` harness from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_toml_test_suite.py --harness=... --output=toml-test-results-<target>.json`, checks that the JSON summary reports zero failures, and uploads the per-platform TOML conformance report as a workflow artifact.
 
+**`json5-compliance`** (all platforms) — Downloads the prebuilt `GocciaJSON5Check` harness and `TestRunner` binary from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_json5_test_suite.py --harness=... --test-runner=... --output=json5-test-results-<target>.json`, checks that both the parser and stringify summaries report zero failures, and uploads the per-platform JSON5 conformance report as a workflow artifact.
+
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
 **`examples`** (needs build, all platforms) — Runs the example scripts and ScriptLoader CLI smoke tests.
 
-**`artifacts`** (needs test + toml-compliance + benchmark + examples, `main` only) — Uploads release binaries after all checks pass.
+**`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + examples, `main` only) — Uploads release binaries after all checks pass.
 
-**`release`** (needs test + toml-compliance + benchmark + examples, tags only) — Packages and publishes release archives after the same gates pass.
+**`release`** (needs test + toml-compliance + json5-compliance + benchmark + examples, tags only) — Packages and publishes release archives after the same gates pass.
 
 The `test`, `benchmark`, `examples`, and `toml-compliance` jobs run in parallel after `build`. The TOML conformance lane reuses the already-built harness binary from the matrix build artifacts instead of installing FPC again, so platform-specific TOML issues are caught on the same Linux, macOS, and Windows targets as the main test lanes.
 

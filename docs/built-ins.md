@@ -17,6 +17,7 @@ TGocciaGlobalBuiltin = (
   ggGlobalNumber,     // Number.parseInt, Number.isNaN, etc.
   ggPromise,          // Promise constructor, prototype, static methods, microtask queue
   ggJSON,             // JSON.parse, JSON.stringify
+  ggJSON5,            // JSON5.parse, JSON5.stringify
   ggJSONL,            // JSONL.parse, JSONL.parseChunk
   ggTOML,             // TOML.parse
   ggYAML,             // YAML.parse, YAML.parseDocuments
@@ -36,7 +37,7 @@ The default set used by `ScriptLoader` and `REPL`:
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap,
+                  ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggJSONL, ggTOML, ggYAML, ggSymbol, ggSet, ggMap,
                   ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
 ```
 
@@ -148,6 +149,19 @@ The JSON parser is a recursive descent implementation. Special handling:
 - `toJSON()` is called before serializing object values
 - Circular references throw `TypeError`
 
+### JSON5 (`Goccia.Builtins.JSON5.pas`)
+
+| Method | Description |
+|--------|-------------|
+| `JSON5.parse(text, reviver?)` | Parse JSON5 text to a value, with optional reviver function |
+| `JSON5.stringify(value, replacerOrOptions?, space?)` | Serialize a value with JSON5 syntax, including special numeric values and optional `quote` override |
+
+`JSON5.parse` delegates to the standalone `TGocciaJSON5Parser` utility in `Goccia.JSON5`. The JSON5 parser shares the same core capability-driven parser engine as strict JSON, so `JSON.parse(...)` stays strict while `JSON5.parse(...)` opts into comments, trailing commas, single-quoted strings, unquoted identifier keys, hexadecimal numbers, signed numbers, `Infinity`, `NaN`, line continuations, and ECMAScript whitespace extensions.
+
+`JSON5.stringify` delegates to `TGocciaJSON5Stringifier`, which reuses the same shared serialization core as strict JSON but switches to JSON5 formatting rules. That means unquoted identifier keys, single- or double-quoted strings (with optional `{ quote: "'" | '"' }` override), preserved `Infinity` / `-Infinity` / `NaN`, trailing commas when pretty-printing, `toJSON5()` preference over `toJSON()`, and the same replacer / space semantics as JSON plus the upstream JSON5 options-object form `{ replacer, space, quote }`.
+
+Compatibility goal: GocciaScript is targeting full JSON5 parser compatibility plus upstream-aligned stringify behavior. `python3 scripts/run_json5_test_suite.py` now runs both the official `json5/json5` parser corpus and the local upstream-aligned stringify suite in one command, and `python3 scripts/run_json5_test_suite.py --harness=./build/GocciaJSON5Check` reuses a prebuilt parser decoder when you already have it.
+
 ### YAML (`Goccia.Builtins.YAML.pas`)
 
 | Method | Description |
@@ -180,7 +194,7 @@ Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time wh
 |--------|-------------|
 | `TOML.parse(text)` | Parse TOML 1.1.0 text into Goccia values |
 
-`TOML.parse` delegates to the standalone `TGocciaTOMLParser` utility in `Goccia.TOML`, mirroring the JSON and YAML split between parser utility and runtime surface. The current TOML surface supports strings (basic, literal, and multiline variants), integers, floats, booleans, arrays, inline tables, regular tables, arrays of tables, dotted keys, and TOML 1.1.0 date/time values. TOML multiline strings normalize recognized source newlines to LF (`\n`) regardless of the host platform, so the parsed value is stable across Linux, macOS, and Windows. File-backed TOML inputs are treated as UTF-8 text on every platform, and the raw file text stays `UTF8String` until the parser consumes it so Unicode keys and values remain stable across both Windows targets.
+`TOML.parse` delegates to the standalone `TGocciaTOMLParser` utility in `Goccia.TOML`, mirroring the JSON and YAML split between parser utility and runtime surface. The current TOML surface supports strings (basic, literal, and multiline variants), integers, floats, booleans, arrays, inline tables, regular tables, arrays of tables, dotted keys, and TOML 1.1.0 date/time values. TOML multiline strings normalize recognized source newlines to LF (`\n`) regardless of the host platform, so the parsed value is stable across Linux, macOS, and Windows. File-backed TOML inputs are treated as UTF-8 text on every platform, and the raw file text stays `UTF8String` until the parser consumes it. That type choice is intentional: in this FreePascal configuration plain `string` is still `AnsiString`, while `UTF8String` is the explicit UTF-8-tagged ansistring we use to preserve non-ASCII keys and values across Windows and non-Windows targets.
 
 TOML date/time values currently map to validated string scalars rather than Temporal values. This keeps the runtime and module-import behavior stable for v1 while leaving room for future Temporal-aware interop.
 

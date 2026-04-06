@@ -101,6 +101,14 @@ test("JSON.parse throws on single quotes", () => {
   expect(() => JSON.parse("{'a': 1}")).toThrow(SyntaxError);
 });
 
+test("JSON.parse remains strict about JSON5-only syntax", () => {
+  expect(() => JSON.parse("{unquoted: 1}")).toThrow(SyntaxError);
+  expect(() => JSON.parse("{\"a\": 1,}")).toThrow(SyntaxError);
+  expect(() => JSON.parse("// comment\n{\"a\":1}")).toThrow(SyntaxError);
+  expect(() => JSON.parse("0x10")).toThrow(SyntaxError);
+  expect(() => JSON.parse("Infinity")).toThrow(SyntaxError);
+});
+
 test("JSON.parse with reviver transforms values", () => {
   const result = JSON.parse('{"a":1,"b":2}', (key, value) => {
     if (typeof value === "number") {

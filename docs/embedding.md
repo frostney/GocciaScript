@@ -302,7 +302,7 @@ The `TGocciaGlobalBuiltins` set controls which built-in objects are available to
 
 ```pascal
 DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
-                  ggGlobalNumber, ggPromise, ggJSON, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
+                  ggGlobalNumber, ggPromise, ggJSON, ggJSON5, ggTOML, ggYAML, ggSymbol, ggSet, ggMap, ggPerformance, ggTemporal, ggJSX, ggArrayBuffer];
 ```
 
 ### Available Flags
@@ -315,6 +315,7 @@ DefaultGlobals = [ggConsole, ggMath, ggGlobalObject, ggGlobalArray,
 | `ggGlobalArray` | `Array.isArray`, `Array.from`, `Array.of` | Static array methods |
 | `ggGlobalNumber` | `Number.*` | `parseInt`, `isNaN`, constants, etc. |
 | `ggJSON` | `JSON.parse`, `JSON.stringify` | Serialization |
+| `ggJSON5` | `JSON5.parse`, `JSON5.stringify` | JSON5 configuration parsing and serialization |
 | `ggTOML` | `TOML.parse` | TOML 1.1.0 configuration parsing |
 | `ggSymbol` | `Symbol`, `Symbol.for`, `Symbol.keyFor` | Unique property keys |
 | `ggSet` | `Set` constructor and methods | Unique value collections |
@@ -663,4 +664,4 @@ These serve as reference implementations for the patterns described above.
 5. Inject custom globals via `Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`
 6. Handle exceptions from `Goccia.Error`
 7. Free the engine when done (the GC cleans up all runtime values)
-For host-provided configuration data, both `TGocciaEngine` and `TGocciaBytecodeBackend` expose `InjectGlobalsFromJSON(...)`, `InjectGlobalsFromTOML(...)`, `InjectGlobalsFromYAML(...)`, and `InjectGlobalsFromModule(...)`. TOML-backed globals use the same top-level-table contract as JSON/YAML object globals.
+For host-provided configuration data, both `TGocciaEngine` and `TGocciaBytecodeBackend` expose `InjectGlobalsFromJSON(...)`, `InjectGlobalsFromJSON5(...)`, `InjectGlobalsFromTOML(...)`, `InjectGlobalsFromYAML(...)`, and `InjectGlobalsFromModule(...)`. JSON5- and TOML-backed globals use the same top-level-object/table contract as JSON/YAML object globals.
