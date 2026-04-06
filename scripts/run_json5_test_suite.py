@@ -365,6 +365,11 @@ def parse_args() -> argparse.Namespace:
     help="Optional prebuilt GocciaJSON5Check harness. If omitted, the script compiles scripts/GocciaJSON5Check.dpr.",
   )
   parser.add_argument(
+    "--test-runner",
+    type=Path,
+    help="Optional prebuilt TestRunner binary. If omitted, the script compiles TestRunner.dpr.",
+  )
+  parser.add_argument(
     "--node",
     help="Optional Node.js executable path. Defaults to `node`/`nodejs` from PATH.",
   )
@@ -393,7 +398,10 @@ def main() -> int:
     harness_path = args.harness.resolve()
   else:
     harness_path = compile_harness(repo_root, build_dir)
-  test_runner_path = compile_test_runner(repo_root, build_dir)
+  if args.test_runner is not None:
+    test_runner_path = args.test_runner.resolve()
+  else:
+    test_runner_path = compile_test_runner(repo_root, build_dir)
 
   cases = load_cases(repo_root, suite_dir, node_executable)
   parse_report = evaluate_suite(harness_path, cases, args.timeout)

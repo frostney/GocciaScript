@@ -269,7 +269,7 @@ Runs on the full platform matrix:
 
 **`toml-compliance`** — Downloads the prebuilt `GocciaTOMLCheck` harness from each matrix build artifact, runs the official `toml-test` TOML 1.1.0 suite on every CI platform via `python3 scripts/run_toml_test_suite.py --harness=...`, validates that the JSON summary reports zero failures, and uploads the per-platform JSON report.
 
-**`json5-compliance`** — Downloads the prebuilt `GocciaJSON5Check` harness from each matrix build artifact, runs `python3 scripts/run_json5_test_suite.py --harness=...` on every CI platform, validates both the parser and stringify summaries, and uploads the per-platform JSON report.
+**`json5-compliance`** — Downloads the prebuilt `GocciaJSON5Check` harness and `TestRunner` binary from each matrix build artifact, runs `python3 scripts/run_json5_test_suite.py --harness=... --test-runner=...` on every CI platform, validates both the parser and stringify summaries, and uploads the per-platform JSON report.
 
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), saves benchmark results as JSON to `actions/cache` for PR comparison.
 

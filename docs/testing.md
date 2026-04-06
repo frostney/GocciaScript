@@ -773,7 +773,7 @@ build → test             → artifacts
 
 **`toml-compliance`** (all platforms) — Downloads the prebuilt `GocciaTOMLCheck` harness from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_toml_test_suite.py --harness=... --output=toml-test-results-<target>.json`, checks that the JSON summary reports zero failures, and uploads the per-platform TOML conformance report as a workflow artifact.
 
-**`json5-compliance`** (all platforms) — Downloads the prebuilt `GocciaJSON5Check` harness from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_json5_test_suite.py --harness=... --output=json5-test-results-<target>.json`, checks that both the parser and stringify summaries report zero failures, and uploads the per-platform JSON5 conformance report as a workflow artifact.
+**`json5-compliance`** (all platforms) — Downloads the prebuilt `GocciaJSON5Check` harness and `TestRunner` binary from the matrix build artifacts, resolves `python3` or `python`, runs `scripts/run_json5_test_suite.py --harness=... --test-runner=... --output=json5-test-results-<target>.json`, checks that both the parser and stringify summaries report zero failures, and uploads the per-platform JSON5 conformance report as a workflow artifact.
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
@@ -781,7 +781,7 @@ build → test             → artifacts
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + benchmark + examples, `main` only) — Uploads release binaries after all checks pass.
 
-**`release`** (needs test + toml-compliance + benchmark + examples, tags only) — Packages and publishes release archives after the same gates pass.
+**`release`** (needs test + toml-compliance + json5-compliance + benchmark + examples, tags only) — Packages and publishes release archives after the same gates pass.
 
 The `test`, `benchmark`, `examples`, and `toml-compliance` jobs run in parallel after `build`. The TOML conformance lane reuses the already-built harness binary from the matrix build artifacts instead of installing FPC again, so platform-specific TOML issues are caught on the same Linux, macOS, and Windows targets as the main test lanes.
 

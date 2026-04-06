@@ -410,10 +410,14 @@ jobs:
         run: |
           PYTHON_BIN="$(command -v python3 || command -v python)"
           HARNESS="./build/GocciaJSON5Check"
+          TEST_RUNNER="./build/TestRunner"
           if [ -f "./build/GocciaJSON5Check.exe" ]; then
             HARNESS="./build/GocciaJSON5Check.exe"
           fi
-          "$PYTHON_BIN" scripts/run_json5_test_suite.py --harness="$HARNESS" --output=json5-test-results-${{ matrix.target }}.json
+          if [ -f "./build/TestRunner.exe" ]; then
+            TEST_RUNNER="./build/TestRunner.exe"
+          fi
+          "$PYTHON_BIN" scripts/run_json5_test_suite.py --harness="$HARNESS" --test-runner="$TEST_RUNNER" --output=json5-test-results-${{ matrix.target }}.json
 
       - name: Check JSON5 compliance summary
         if: always()
@@ -430,8 +434,8 @@ jobs:
             sys.exit(1)
 
           summary = json.loads(path.read_text())
-          parse_summary = summary["parse"]
-          stringify_summary = summary["stringify"]
+          parse_summary = summary["summary"]["parse"]
+          stringify_summary = summary["summary"]["stringify"]
 
           expected_parse_zero = ["failed", "false_accepts", "false_rejects", "valid_mismatches", "timeouts"]
           for key in expected_parse_zero:
