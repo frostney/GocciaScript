@@ -16,6 +16,8 @@ uses
 type
   TLexerTests = class(TTestSuite)
   private
+    procedure AssertIgnoresLeadingHashbang(const ALineBreak: string);
+    procedure AssertPreservesLineNumbersAfterHashbang(const ALineBreak: string);
     procedure TestIgnoresLeadingHashbang;
     procedure TestPreservesLineNumbersAfterHashbang;
   public
@@ -28,12 +30,12 @@ begin
   Test('Preserves line numbers after hashbang', TestPreservesLineNumbersAfterHashbang);
 end;
 
-procedure TLexerTests.TestIgnoresLeadingHashbang;
+procedure TLexerTests.AssertIgnoresLeadingHashbang(const ALineBreak: string);
 var
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
 begin
-  Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + sLineBreak + 'const value = 1 / 2;', '<test>');
+  Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + ALineBreak + 'const value = 1 / 2;', '<test>');
   try
     Tokens := Lexer.ScanTokens;
     Expect<Integer>(Tokens.Count).ToBe(8);
@@ -46,12 +48,12 @@ begin
   end;
 end;
 
-procedure TLexerTests.TestPreservesLineNumbersAfterHashbang;
+procedure TLexerTests.AssertPreservesLineNumbersAfterHashbang(const ALineBreak: string);
 var
   Lexer: TGocciaLexer;
   Tokens: TObjectList<TGocciaToken>;
 begin
-  Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + sLineBreak + 'const value = 1;', '<test>');
+  Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + ALineBreak + 'const value = 1;', '<test>');
   try
     Tokens := Lexer.ScanTokens;
     Expect<Integer>(Tokens[0].Line).ToBe(2);
@@ -60,6 +62,22 @@ begin
   finally
     Lexer.Free;
   end;
+end;
+
+procedure TLexerTests.TestIgnoresLeadingHashbang;
+const
+  CRLF = #13#10;
+begin
+  AssertIgnoresLeadingHashbang(sLineBreak);
+  AssertIgnoresLeadingHashbang(CRLF);
+end;
+
+procedure TLexerTests.TestPreservesLineNumbersAfterHashbang;
+const
+  CRLF = #13#10;
+begin
+  AssertPreservesLineNumbersAfterHashbang(sLineBreak);
+  AssertPreservesLineNumbersAfterHashbang(CRLF);
 end;
 
 begin
