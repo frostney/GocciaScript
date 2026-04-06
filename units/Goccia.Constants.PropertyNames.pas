@@ -7,6 +7,9 @@ interface
 const
   PROP_LENGTH       = 'length';
   PROP_NAME         = 'name';
+  PROP_PATH         = 'path';
+  PROP_FILE_NAME    = 'fileName';
+  PROP_CONTENT      = 'content';
   PROP_MESSAGE      = 'message';
   PROP_CAUSE        = 'cause';
   PROP_CODE         = 'code';
@@ -64,6 +67,7 @@ const
   PROP_TO_LOCALE_STRING       = 'toLocaleString';
   PROP_STRICT_TYPES           = 'strictTypes';
   PROP_NOW                    = 'now';
+  PROP_EXTENSION              = 'extension';
   PROP_QUOTE                  = 'quote';
   PROP_REPLACER               = 'replacer';
   PROP_SPACE                  = 'space';

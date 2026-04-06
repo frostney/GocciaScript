@@ -12,6 +12,7 @@ uses
 
   Goccia.AST.Node,
   Goccia.Bytecode.Module,
+  Goccia.Constants.PropertyNames,
   Goccia.Engine,
   Goccia.Engine.Backend,
   Goccia.Interpreter,
@@ -70,6 +71,8 @@ type
     procedure TestEngineReportsJSONLModuleLineNumbers;
     procedure TestEngineReportsTOMLModuleSyntaxErrors;
     procedure TestFileSystemContentProviderPreservesUTF8TOMLText;
+    procedure TestEngineLoadsUTF8TextAssetModule;
+    procedure TestEngineNormalizesCRLFTextAssetModulesToLF;
     procedure TestModuleLoaderRejectsRebindingAcrossRuntimes;
     procedure TestBytecodeBackendUsesInjectedContentProvider;
   protected
@@ -157,6 +160,10 @@ begin
     TestEngineReportsTOMLModuleSyntaxErrors);
   Test('File system content provider preserves UTF-8 TOML text',
     TestFileSystemContentProviderPreservesUTF8TOMLText);
+  Test('Engine loads UTF-8 text asset modules',
+    TestEngineLoadsUTF8TextAssetModule);
+  Test('Engine normalizes CRLF text asset modules to LF',
+    TestEngineNormalizesCRLFTextAssetModulesToLF);
   Test('Module loader rejects rebinding across runtimes',
     TestModuleLoaderRejectsRebindingAcrossRuntimes);
   Test('Bytecode backend uses injected content provider',
@@ -637,6 +644,96 @@ begin
     end;
   finally
     ContentProvider.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestEngineLoadsUTF8TextAssetModule;
+var
+  ContentValue: UTF8String;
+  Engine: TGocciaEngine;
+  MetadataValue: TGocciaObjectValue;
+  ResultObject: TGocciaObjectValue;
+  ScriptResult: TGocciaScriptResult;
+  Source: TStringList;
+  TempDirectory: string;
+  TextAssetPath: string;
+begin
+  TempDirectory := CreateTempDirectory;
+  TextAssetPath := IncludeTrailingPathDelimiter(TempDirectory) + 'note.txt';
+  ContentValue := 'Caf' + #$C3#$A9 + ' asset' + #10 + 'Second line';
+  WriteUTF8File(TextAssetPath, ContentValue);
+
+  Source := TStringList.Create;
+  try
+    Source.Text :=
+      'import { content, metadata } from "./note.txt";' + LineEnding +
+      '({ content, metadata });';
+
+    Engine := TGocciaEngine.Create(
+      IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
+      Source,
+      TGocciaEngine.DefaultGlobals);
+    try
+      ScriptResult := Engine.Execute;
+    finally
+      Engine.Free;
+    end;
+
+    Expect<Boolean>(ScriptResult.Result is TGocciaObjectValue).ToBe(True);
+    ResultObject := TGocciaObjectValue(ScriptResult.Result);
+    Expect<string>(ResultObject.GetProperty(PROP_CONTENT).ToStringLiteral.Value)
+      .ToBe(ContentValue);
+
+    Expect<Boolean>(ResultObject.GetProperty(PROP_METADATA) is TGocciaObjectValue)
+      .ToBe(True);
+    MetadataValue := TGocciaObjectValue(ResultObject.GetProperty(PROP_METADATA));
+    Expect<string>(MetadataValue.GetProperty(PROP_KIND).ToStringLiteral.Value)
+      .ToBe('text');
+    Expect<string>(MetadataValue.GetProperty(PROP_FILE_NAME)
+      .ToStringLiteral.Value).ToBe('note.txt');
+    Expect<string>(MetadataValue.GetProperty(PROP_EXTENSION)
+      .ToStringLiteral.Value).ToBe('.txt');
+    Expect<Double>(MetadataValue.GetProperty(PROP_BYTE_LENGTH)
+      .ToNumberLiteral.Value).ToBe(Length(ContentValue));
+  finally
+    Source.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestEngineNormalizesCRLFTextAssetModulesToLF;
+var
+  Engine: TGocciaEngine;
+  RawContent: UTF8String;
+  ScriptResult: TGocciaScriptResult;
+  Source: TStringList;
+  TempDirectory: string;
+  TextAssetPath: string;
+begin
+  TempDirectory := CreateTempDirectory;
+  TextAssetPath := IncludeTrailingPathDelimiter(TempDirectory) + 'crlf-note.txt';
+  RawContent := 'first line' + #13#10 + 'second line' + #13#10;
+  WriteUTF8File(TextAssetPath, RawContent);
+
+  Source := TStringList.Create;
+  try
+    Source.Text :=
+      'import { content } from "./crlf-note.txt";' + LineEnding +
+      'content;';
+
+    Engine := TGocciaEngine.Create(
+      IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
+      Source,
+      TGocciaEngine.DefaultGlobals);
+    try
+      ScriptResult := Engine.Execute;
+    finally
+      Engine.Free;
+    end;
+
+    Expect<string>(ScriptResult.Result.ToStringLiteral.Value)
+      .ToBe('first line' + #10 + 'second line' + #10);
+  finally
+    Source.Free;
   end;
 end;
 

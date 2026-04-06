@@ -9,6 +9,7 @@ uses
 
 function RetagUTF8Text(const ABytes: RawByteString): string;
 function CreateUTF8StringList(const AText: string): TStringList;
+function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
 function ReadUTF8FileText(const APath: string): UTF8String;
 
 implementation
@@ -56,6 +57,12 @@ begin
   else if (Length(AText) > 0) and ((AText[Length(AText)] = #10) or
     (AText[Length(AText)] = #13)) then
     Result.Add('');
+end;
+
+function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
+begin
+  Result := StringReplace(AText, #13#10, #10, [rfReplaceAll]);
+  Result := StringReplace(Result, #13, #10, [rfReplaceAll]);
 end;
 
 function ReadUTF8FileText(const APath: string): UTF8String;
