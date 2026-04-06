@@ -143,35 +143,21 @@ begin
   Result := 0;
 end;
 
-function IsJSON5WhitespaceSequence(const AText: UTF8String): Boolean;
-const
-  JSON5_IDENTIFIER_DISALLOWED_SEQUENCES: array[0..18] of UTF8String = (
-    JSON5_NO_BREAK_SPACE,
-    JSON5_OGHAM_SPACE_MARK,
-    JSON5_EN_QUAD,
-    JSON5_EM_QUAD,
-    JSON5_EN_SPACE,
-    JSON5_EM_SPACE,
-    JSON5_THREE_PER_EM_SPACE,
-    JSON5_FOUR_PER_EM_SPACE,
-    JSON5_SIX_PER_EM_SPACE,
-    JSON5_FIGURE_SPACE,
-    JSON5_PUNCTUATION_SPACE,
-    JSON5_THIN_SPACE,
-    JSON5_HAIR_SPACE,
-    JSON5_LINE_SEPARATOR,
-    JSON5_PARAGRAPH_SEPARATOR,
-    JSON5_NARROW_NO_BREAK_SPACE,
-    JSON5_MEDIUM_MATHEMATICAL_SPACE,
-    JSON5_IDEOGRAPHIC_SPACE,
-    JSON5_BYTE_ORDER_MARK
-  );
-var
-  Sequence: UTF8String;
+function IsJSON5WhitespaceCodePoint(const ACodePoint: Cardinal): Boolean;
 begin
-  for Sequence in JSON5_IDENTIFIER_DISALLOWED_SEQUENCES do
-    if AText = Sequence then
+  case ACodePoint of
+    $00A0,
+    $1680,
+    $2028,
+    $2029,
+    $202F,
+    $205F,
+    $3000,
+    $FEFF:
       Exit(True);
+    $2000..$200A:
+      Exit(True);
+  end;
   Result := False;
 end;
 
@@ -186,7 +172,7 @@ begin
     Exit(False);
 
   SequenceLength := UTF8SequenceLengthFromLeadByte(AText[AIndex]);
-  if (SequenceLength = 0) or (AIndex + SequenceLength - 1 > Length(AText)) then
+  if AIndex + SequenceLength - 1 > Length(AText) then
     Exit(False);
 
   ASequence := Copy(AText, AIndex, SequenceLength);
@@ -197,6 +183,62 @@ begin
 
   Inc(AIndex, SequenceLength);
   Result := True;
+end;
+
+function TryDecodeIdentifierCodePoint(const AText: string;
+  out ACodePoint: Cardinal): Boolean;
+var
+  Byte1, Byte2, Byte3, Byte4: Byte;
+begin
+  Result := False;
+  ACodePoint := 0;
+  if AText = '' then
+    Exit;
+
+  case Length(AText) of
+    1:
+      begin
+        ACodePoint := Ord(AText[1]);
+        Exit(True);
+      end;
+    2:
+      begin
+        Byte1 := Ord(AText[1]);
+        Byte2 := Ord(AText[2]);
+        if ((Byte1 and $E0) <> $C0) or ((Byte2 and $C0) <> $80) then
+          Exit;
+        ACodePoint := Cardinal(Byte1 and $1F) shl 6 or Cardinal(Byte2 and $3F);
+        Exit(True);
+      end;
+    3:
+      begin
+        Byte1 := Ord(AText[1]);
+        Byte2 := Ord(AText[2]);
+        Byte3 := Ord(AText[3]);
+        if ((Byte1 and $F0) <> $E0) or ((Byte2 and $C0) <> $80) or
+          ((Byte3 and $C0) <> $80) then
+          Exit;
+        ACodePoint := Cardinal(Byte1 and $0F) shl 12 or
+          Cardinal(Byte2 and $3F) shl 6 or
+          Cardinal(Byte3 and $3F);
+        Exit(True);
+      end;
+    4:
+      begin
+        Byte1 := Ord(AText[1]);
+        Byte2 := Ord(AText[2]);
+        Byte3 := Ord(AText[3]);
+        Byte4 := Ord(AText[4]);
+        if ((Byte1 and $F8) <> $F0) or ((Byte2 and $C0) <> $80) or
+          ((Byte3 and $C0) <> $80) or ((Byte4 and $C0) <> $80) then
+          Exit;
+        ACodePoint := Cardinal(Byte1 and $07) shl 18 or
+          Cardinal(Byte2 and $3F) shl 12 or
+          Cardinal(Byte3 and $3F) shl 6 or
+          Cardinal(Byte4 and $3F);
+        Exit(True);
+      end;
+  end;
 end;
 
 function SameDoubleBits(const ALeft, ARight: Double): Boolean;
@@ -519,26 +561,34 @@ end;
 
 class function TGocciaJSONStringifier.IsIdentifierStartText(
   const AText: string): Boolean;
+var
+  CodePoint: Cardinal;
 begin
   if AText = '' then
     Exit(False);
-  if Length(AText) = 1 then
-    Exit(AText[1] in ['a'..'z', 'A'..'Z', '_', '$']);
-  if (AText = JSON5_ZERO_WIDTH_NON_JOINER) or (AText = JSON5_ZERO_WIDTH_JOINER) then
+  if not TryDecodeIdentifierCodePoint(AText, CodePoint) then
     Exit(False);
-  Result := not IsJSON5WhitespaceSequence(UTF8String(AText));
+  if CodePoint <= $7F then
+    Exit(Chr(CodePoint) in ['a'..'z', 'A'..'Z', '_', '$']);
+  if (CodePoint = $200C) or (CodePoint = $200D) then
+    Exit(False);
+  Result := not IsJSON5WhitespaceCodePoint(CodePoint);
 end;
 
 class function TGocciaJSONStringifier.IsIdentifierContinueText(
   const AText: string): Boolean;
+var
+  CodePoint: Cardinal;
 begin
   if AText = '' then
     Exit(False);
-  if Length(AText) = 1 then
-    Exit(AText[1] in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']);
-  if (AText = JSON5_ZERO_WIDTH_NON_JOINER) or (AText = JSON5_ZERO_WIDTH_JOINER) then
+  if not TryDecodeIdentifierCodePoint(AText, CodePoint) then
+    Exit(False);
+  if CodePoint <= $7F then
+    Exit(Chr(CodePoint) in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']);
+  if (CodePoint = $200C) or (CodePoint = $200D) then
     Exit(True);
-  Result := not IsJSON5WhitespaceSequence(UTF8String(AText));
+  Result := not IsJSON5WhitespaceCodePoint(CodePoint);
 end;
 
 function TGocciaJSONStringifier.IsJSON5IdentifierKey(const AKey: string): Boolean;

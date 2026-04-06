@@ -177,7 +177,7 @@ Shared compiler directives included by all units:
 
 ```pascal
 {$mode delphi}                    // Delphi-compatible syntax
-{H+}                              // Long strings (AnsiString) by default
+{H+}                              // Long strings (`string` = `AnsiString`) by default
 {$IFNDEF PRODUCTION}
   {$overflowchecks on}            // Runtime arithmetic overflow detection
   {$rangechecks on}               // Runtime array bounds checking
@@ -185,6 +185,15 @@ Shared compiler directives included by all units:
 {$modeswitch advancedrecords}     // Records with methods
 {$modeswitch multihelpers}        // Multiple class helpers for same type
 ```
+
+Under the current project settings, FreePascal behaves like this:
+
+- `string` is an `AnsiString` alias, not `UnicodeString`.
+- `UTF8String` is also an `AnsiString`, but tagged with code page `CP_UTF8` (`65001`).
+- `UnicodeString` remains the explicit UTF-16 string type.
+- `Char` is a single-byte `AnsiChar`, so `Length`, `Copy`, indexing, and similar operations on `string`/`UTF8String` count bytes, not Unicode code points.
+
+That distinction matters for parser and file-loading code: a plain `string` temporary does not preserve “this text is UTF-8” on its own. If raw UTF-8 file text needs to survive byte-for-byte until parsing, keep it in `UTF8String` (or retag it explicitly) until the parser consumes it.
 
 Overflow and range checks are enabled in development mode for safety. In production builds, the `-dPRODUCTION` define disables these checks for maximum performance.
 
