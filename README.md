@@ -152,6 +152,8 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 printf "const x = 2 + 2; x;" | ./build/ScriptLoader
 ```
 
+Script files may start with a Unix shebang line like `#!/usr/bin/env goccia`; GocciaScript ignores that first line during lexing.
+
 ### Run via Bytecode
 
 GocciaScript includes a bytecode execution backend. The public bytecode artifact is `.gbc`, and WASM emission is not supported.

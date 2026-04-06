@@ -57,6 +57,7 @@ type
     procedure PushParenRegexContext(const AAllowsRegexAfter: Boolean);
     function PopParenRegexContext: Boolean;
     procedure SkipWhitespace;
+    procedure SkipHashbang;
     procedure SkipComment;
     procedure SkipBlockComment;
   public
@@ -184,6 +185,15 @@ begin
       Break;
     end;
   end;
+end;
+
+procedure TGocciaLexer.SkipHashbang;
+begin
+  if (FCurrent <> 1) or (Length(FSource) < 2) or (Copy(FSource, 1, 2) <> '#!') then
+    Exit;
+
+  while not IsAtEnd and not CharInSet(Peek, [#10, #13]) do
+    Advance;
 end;
 
 procedure TGocciaLexer.SkipComment;
@@ -867,6 +877,7 @@ end;
 
 function TGocciaLexer.ScanTokens: TObjectList<TGocciaToken>;
 begin
+  SkipHashbang;
   while not IsAtEnd do
   begin
     SkipWhitespace;
