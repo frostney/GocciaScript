@@ -72,6 +72,7 @@ uses
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.TextFiles,
   Goccia.TOML,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
@@ -373,9 +374,11 @@ var
   Metadata: TGocciaObjectValue;
   Module: TGocciaModule;
   LoadSucceeded: Boolean;
+  NormalizedText: UTF8String;
 begin
   Content := FContentProvider.LoadContent(AResolvedPath);
   try
+    NormalizedText := NormalizeUTF8NewlinesToLF(Content.Text);
     Metadata := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype, 5);
     Metadata.SetProperty(PROP_KIND, TGocciaStringLiteralValue.Create(TEXT_ASSET_KIND));
     Metadata.SetProperty(PROP_PATH, TGocciaStringLiteralValue.Create(AResolvedPath));
@@ -393,7 +396,7 @@ begin
     try
       Module.ExportsTable.AddOrSetValue(PROP_METADATA, Metadata);
       Module.ExportsTable.AddOrSetValue(PROP_CONTENT,
-        TGocciaStringLiteralValue.Create(Content.Text));
+        TGocciaStringLiteralValue.Create(NormalizedText));
       FModules.Add(AResolvedPath, Module);
       Result := Module;
       LoadSucceeded := True;

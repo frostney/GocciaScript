@@ -291,7 +291,7 @@ import { "0" as firstRecord, "1" as secondRecord } from "./events.jsonl";
 import { content, metadata } from "./README.md";
 ```
 
-Text asset modules currently support `.txt` and `.md`. They expose two named exports: `content` (the raw UTF-8 file text as a string) and `metadata` (a frozen object with `kind`, `path`, `fileName`, `extension`, and `byteLength`).
+Text asset modules currently support `.txt` and `.md`. They expose two named exports: `content` (the UTF-8 file text as a string, with `\r\n` and bare `\r` canonicalized to `\n`) and `metadata` (a frozen object with `kind`, `path`, `fileName`, `extension`, and `byteLength`).
 
 For JSON5 in runtime code, use the built-in parser:
 

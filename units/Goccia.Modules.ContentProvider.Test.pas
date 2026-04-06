@@ -72,6 +72,7 @@ type
     procedure TestEngineReportsTOMLModuleSyntaxErrors;
     procedure TestFileSystemContentProviderPreservesUTF8TOMLText;
     procedure TestEngineLoadsUTF8TextAssetModule;
+    procedure TestEngineNormalizesCRLFTextAssetModulesToLF;
     procedure TestModuleLoaderRejectsRebindingAcrossRuntimes;
     procedure TestBytecodeBackendUsesInjectedContentProvider;
   protected
@@ -161,6 +162,8 @@ begin
     TestFileSystemContentProviderPreservesUTF8TOMLText);
   Test('Engine loads UTF-8 text asset modules',
     TestEngineLoadsUTF8TextAssetModule);
+  Test('Engine normalizes CRLF text asset modules to LF',
+    TestEngineNormalizesCRLFTextAssetModulesToLF);
   Test('Module loader rejects rebinding across runtimes',
     TestModuleLoaderRejectsRebindingAcrossRuntimes);
   Test('Bytecode backend uses injected content provider',
@@ -692,6 +695,43 @@ begin
       .ToStringLiteral.Value).ToBe('.txt');
     Expect<Double>(MetadataValue.GetProperty(PROP_BYTE_LENGTH)
       .ToNumberLiteral.Value).ToBe(Length(ContentValue));
+  finally
+    Source.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestEngineNormalizesCRLFTextAssetModulesToLF;
+var
+  Engine: TGocciaEngine;
+  RawContent: UTF8String;
+  ScriptResult: TGocciaScriptResult;
+  Source: TStringList;
+  TempDirectory: string;
+  TextAssetPath: string;
+begin
+  TempDirectory := CreateTempDirectory;
+  TextAssetPath := IncludeTrailingPathDelimiter(TempDirectory) + 'crlf-note.txt';
+  RawContent := 'first line' + #13#10 + 'second line' + #13#10;
+  WriteUTF8File(TextAssetPath, RawContent);
+
+  Source := TStringList.Create;
+  try
+    Source.Text :=
+      'import { content } from "./crlf-note.txt";' + LineEnding +
+      'content;';
+
+    Engine := TGocciaEngine.Create(
+      IncludeTrailingPathDelimiter(TempDirectory) + 'app.js',
+      Source,
+      TGocciaEngine.DefaultGlobals);
+    try
+      ScriptResult := Engine.Execute;
+    finally
+      Engine.Free;
+    end;
+
+    Expect<string>(ScriptResult.Result.ToStringLiteral.Value)
+      .ToBe('first line' + #10 + 'second line' + #10);
   finally
     Source.Free;
   end;

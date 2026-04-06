@@ -230,7 +230,7 @@ Single-document YAML module imports follow the same top-level-object export mode
 
 JSONL (`.jsonl`) imports are also supported. Each non-empty line is parsed as strict JSON and exposed as a named export under its zero-based string index (`"0"`, `"1"`, ...). Blank lines are ignored. If a line is invalid JSON, the load fails with a syntax error that includes the JSONL source line number. In runtime code, `JSONL.parse(...)` returns the full array of records and `JSONL.parseChunk(...)` exposes Bun-compatible streaming state (`values`, `read`, `done`, `error`).
 
-Text asset imports (`.txt`, `.md`) expose two named exports: `content`, which is the raw UTF-8 file text as a string, and `metadata`, which is a frozen object with `kind`, `path`, `fileName`, `extension`, and `byteLength`. Namespace imports project those same exports into the frozen null-prototype namespace object.
+Text asset imports (`.txt`, `.md`) expose two named exports: `content`, which is the UTF-8 file text as a string with source newlines canonicalized to LF (`\n`), and `metadata`, which is a frozen object with `kind`, `path`, `fileName`, `extension`, and `byteLength`. Namespace imports project those same exports into the frozen null-prototype namespace object.
 
 Non-scalar YAML keys are canonicalized into stable JSON-like strings. Explicit scalar keys work naturally as named exports, and keys that are not valid identifiers can still be imported with string-literal names such as `import { "foo-bar" as fooBar } from "./config.yaml";`. Complex keys only produce useful imports when you know the canonical export string.
 
