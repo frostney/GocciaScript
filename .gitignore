@@ -4,6 +4,7 @@
 
 # Build files
 build/*.exe
+build/GocciaJSON5Check
 build/main
 build/REPL
 build/ScriptLoader
