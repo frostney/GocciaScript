@@ -69,6 +69,8 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader
 printf 'suite("stdin", () => { bench("sum", { run: () => 1 + 1 }); });\n' | ./build/BenchmarkRunner
 ```
 
+Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as comments by the lexer, so executable scripts can be run directly without preprocessing.
+
 ### Compile and Test
 
 ```bash
