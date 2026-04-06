@@ -19,6 +19,7 @@ HARNESS_SOURCE_PATH = Path("scripts/GocciaJSON5Check.dpr")
 CASE_EXTRACTOR_PATH = Path("scripts/extract_json5_cases.js")
 STRINGIFY_SUITE_PATH = Path("tests/built-ins/JSON5/stringify.js")
 TEST_RUNNER_SOURCE_PATH = Path("TestRunner.dpr")
+SUBPROCESS_ENCODING = "utf-8"
 
 
 def run(command: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -26,6 +27,7 @@ def run(command: list[str], cwd: Path | None = None) -> subprocess.CompletedProc
     command,
     cwd=str(cwd) if cwd else None,
     text=True,
+    encoding=SUBPROCESS_ENCODING,
     capture_output=True,
     check=True,
   )
@@ -202,12 +204,13 @@ def evaluate_suite(harness_path: Path, cases: list[dict], timeout_seconds: int) 
     for index, case in enumerate(cases):
       summary["total"] += 1
       case_path = case_dir / f"case_{index}.json5"
-      case_path.write_text(case["source"], encoding="utf-8")
+      case_path.write_bytes(case["source"].encode(SUBPROCESS_ENCODING))
 
       try:
         process = subprocess.run(
           [str(harness_path), str(case_path)],
           text=True,
+          encoding=SUBPROCESS_ENCODING,
           capture_output=True,
           timeout=timeout_seconds,
         )
@@ -303,22 +306,41 @@ def evaluate_suite(harness_path: Path, cases: list[dict], timeout_seconds: int) 
   return {"summary": summary, "results": results}
 
 
-def evaluate_stringify_suite(test_runner_path: Path, repo_root: Path) -> dict:
+def evaluate_stringify_suite(test_runner_path: Path, repo_root: Path, timeout_seconds: int) -> dict:
   stringify_suite = repo_root / STRINGIFY_SUITE_PATH
 
   with tempfile.TemporaryDirectory(prefix="json5-stringify-suite.") as temp_dir_name:
     output_path = Path(temp_dir_name) / "stringify-results.json"
-    process = subprocess.run(
-      [
-        str(test_runner_path),
-        str(stringify_suite),
-        "--output=" + str(output_path),
-        "--silent",
-      ],
-      cwd=repo_root,
-      text=True,
-      capture_output=True,
-    )
+    try:
+      process = subprocess.run(
+        [
+          str(test_runner_path),
+          str(stringify_suite),
+          "--output=" + str(output_path),
+          "--silent",
+        ],
+        cwd=repo_root,
+        text=True,
+        encoding=SUBPROCESS_ENCODING,
+        capture_output=True,
+        timeout=timeout_seconds,
+      )
+      timed_out = False
+    except subprocess.TimeoutExpired:
+      timed_out = True
+      process = None
+
+    if timed_out:
+      return {
+        "totalFiles": 1,
+        "totalTests": 0,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "assertions": 0,
+        "ok": False,
+        "message": "timeout",
+      }
 
     if not output_path.exists():
       return {
@@ -405,7 +427,7 @@ def main() -> int:
 
   cases = load_cases(repo_root, suite_dir, node_executable)
   parse_report = evaluate_suite(harness_path, cases, args.timeout)
-  stringify_report = evaluate_stringify_suite(test_runner_path, repo_root)
+  stringify_report = evaluate_stringify_suite(test_runner_path, repo_root, args.timeout)
   report = {
     "parse": parse_report,
     "stringify": stringify_report,

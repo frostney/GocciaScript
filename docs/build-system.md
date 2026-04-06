@@ -98,8 +98,9 @@ printf "console.log('hi'); 2 + 2;" | ./build/ScriptLoader --output=json
 # Inject globals from the CLI
 printf "x + y;" | ./build/ScriptLoader --global x=10 --global y=20
 printf "name;" | ./build/ScriptLoader --globals=context.json --output=json
+printf "name;" | ./build/ScriptLoader --globals=context.json5 --output=json
 printf "name;" | ./build/ScriptLoader --globals=context.toml --output=json
-# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, TOML, or YAML by file extension.
+# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, JSON5, TOML, or YAML by file extension.
 # Injected globals can override earlier injected values, but not built-in globals like console
 
 # Load an explicit import map
