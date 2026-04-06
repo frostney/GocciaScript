@@ -46,7 +46,7 @@ Overflow and range checks are **enabled** — correctness is prioritized over ra
 Use centralized constant units instead of hardcoded string literals:
 
 - **Keywords** — Use `Goccia.Keywords.Reserved` (`KEYWORD_THIS`, `KEYWORD_SUPER`, etc.) and `Goccia.Keywords.Contextual` (`KEYWORD_GET`, `KEYWORD_SET`, etc.) instead of raw `'this'`, `'get'` strings.
-- **File extensions** — Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`) instead of raw `'.js'`, `'.mjs'` strings. Use the `ScriptExtensions` array and `IsScriptExtension`/`IsJSXNativeExtension` helpers instead of duplicating extension lists.
+- **File extensions** — Use `Goccia.FileExtensions` constants (`EXT_JS`, `EXT_JSX`, `EXT_TS`, `EXT_TSX`, `EXT_MJS`, `EXT_JSON`, `EXT_JSON5`, `EXT_JSONL`, `EXT_TOML`, `EXT_YAML`, `EXT_YML`, `EXT_TXT`, `EXT_MD`, `EXT_GBC`) instead of raw string literals. Use the appropriate shared arrays and helpers (`ScriptExtensions`, `ModuleImportExtensions`, `IsScriptExtension`, `IsTextAssetExtension`, `IsJSXNativeExtension`, etc.) instead of duplicating extension lists.
 
 Adding a new keyword or file extension requires a single change in the constants unit — all consumers pick it up automatically.
 

@@ -33,6 +33,7 @@ type
     procedure CopyModuleContents(const ASourceModule,
       ATargetModule: TGocciaModule);
     function LoadStructuredDataModule(const AResolvedPath: string): TGocciaModule;
+    function LoadTextAssetModule(const AResolvedPath: string): TGocciaModule;
   public
     constructor Create(const AEntryFileName: string;
       const AResolver: TGocciaModuleResolver = nil;
@@ -59,6 +60,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
@@ -75,6 +77,9 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.YAML;
+
+const
+  TEXT_ASSET_KIND = 'text';
 
 constructor TGocciaModuleLoader.Create(const AEntryFileName: string;
   const AResolver: TGocciaModuleResolver;
@@ -200,6 +205,12 @@ begin
   if IsStructuredDataExtension(ExtractFileExt(ResolvedPath)) then
   begin
     Result := LoadStructuredDataModule(ResolvedPath);
+    Exit;
+  end;
+
+  if IsTextAssetExtension(ExtractFileExt(ResolvedPath)) then
+  begin
+    Result := LoadTextAssetModule(ResolvedPath);
     Exit;
   end;
 
@@ -352,6 +363,46 @@ begin
         ReloadedModule.Free;
       end;
     end;
+  end;
+end;
+
+function TGocciaModuleLoader.LoadTextAssetModule(
+  const AResolvedPath: string): TGocciaModule;
+var
+  Content: TGocciaModuleContent;
+  Metadata: TGocciaObjectValue;
+  Module: TGocciaModule;
+  LoadSucceeded: Boolean;
+begin
+  Content := FContentProvider.LoadContent(AResolvedPath);
+  try
+    Metadata := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype, 5);
+    Metadata.SetProperty(PROP_KIND, TGocciaStringLiteralValue.Create(TEXT_ASSET_KIND));
+    Metadata.SetProperty(PROP_PATH, TGocciaStringLiteralValue.Create(AResolvedPath));
+    Metadata.SetProperty(PROP_FILE_NAME,
+      TGocciaStringLiteralValue.Create(ExtractFileName(AResolvedPath)));
+    Metadata.SetProperty(PROP_EXTENSION,
+      TGocciaStringLiteralValue.Create(LowerCase(ExtractFileExt(AResolvedPath))));
+    Metadata.SetProperty(PROP_BYTE_LENGTH,
+      TGocciaNumberLiteralValue.Create(Length(Content.Text)));
+    Metadata.Freeze;
+
+    Module := TGocciaModule.Create(AResolvedPath);
+    Module.LastModified := Content.LastModified;
+    LoadSucceeded := False;
+    try
+      Module.ExportsTable.AddOrSetValue(PROP_METADATA, Metadata);
+      Module.ExportsTable.AddOrSetValue(PROP_CONTENT,
+        TGocciaStringLiteralValue.Create(Content.Text));
+      FModules.Add(AResolvedPath, Module);
+      Result := Module;
+      LoadSucceeded := True;
+    finally
+      if not LoadSucceeded then
+        Module.Free;
+    end;
+  finally
+    Content.Free;
   end;
 end;
 

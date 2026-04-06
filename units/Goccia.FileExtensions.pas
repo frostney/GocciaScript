@@ -16,6 +16,8 @@ const
   EXT_TOML = '.toml';
   EXT_YAML = '.yaml';
   EXT_YML  = '.yml';
+  EXT_TXT  = '.txt';
+  EXT_MD   = '.md';
   EXT_GBC  = '.gbc';
 
   ScriptExtensions: array[0..4] of string = (
@@ -26,10 +28,17 @@ const
     EXT_JSX, EXT_TSX
   );
 
+  ModuleImportExtensions: array[0..12] of string = (
+    EXT_JS, EXT_JSX, EXT_TS, EXT_TSX, EXT_MJS,
+    EXT_JSON, EXT_JSON5, EXT_JSONL, EXT_TOML, EXT_YAML, EXT_YML,
+    EXT_TXT, EXT_MD
+  );
+
 function IsScriptExtension(const AExtension: string): Boolean;
 function IsJSON5Extension(const AExtension: string): Boolean;
 function IsJSONLExtension(const AExtension: string): Boolean;
 function IsJSXNativeExtension(const AExtension: string): Boolean;
+function IsTextAssetExtension(const AExtension: string): Boolean;
 function IsTOMLExtension(const AExtension: string): Boolean;
 function IsYAMLExtension(const AExtension: string): Boolean;
 function IsStructuredDataExtension(const AExtension: string): Boolean;
@@ -94,6 +103,14 @@ var
 begin
   Ext := LowerCase(AExtension);
   Result := Ext = EXT_TOML;
+end;
+
+function IsTextAssetExtension(const AExtension: string): Boolean;
+var
+  Ext: string;
+begin
+  Ext := LowerCase(AExtension);
+  Result := (Ext = EXT_TXT) or (Ext = EXT_MD);
 end;
 
 function IsStructuredDataExtension(const AExtension: string): Boolean;

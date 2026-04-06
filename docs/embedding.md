@@ -105,12 +105,13 @@ The engine uses a pluggable module resolver (`TGocciaModuleResolver`) that suppo
 
 ### Extension-Free Imports
 
-Import paths can omit file extensions. The resolver tries extensions in order: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`:
+Import paths can omit file extensions. The resolver tries extensions in order: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.txt`, `.md`:
 
 ```javascript
-// All of these resolve to the same file:
+// These all resolve through the shared module extension list:
 import { add } from "./math-utils.js";  // explicit extension
 import { add } from "./math-utils";     // extension resolved automatically
+import { content } from "./notes";      // resolves to ./notes.txt or ./notes.md
 ```
 
 Directory imports resolve to `index` files:
