@@ -19,6 +19,9 @@ const
   CONSTRUCTOR_ITERATOR     = 'Iterator';
   CONSTRUCTOR_ARRAY_BUFFER        = 'ArrayBuffer';
   CONSTRUCTOR_SHARED_ARRAY_BUFFER = 'SharedArrayBuffer';
+  CONSTRUCTOR_COMPARATOR          = 'Comparator';
+  CONSTRUCTOR_RANGE               = 'Range';
+  CONSTRUCTOR_SEMVER              = 'SemVer';
 
   CONSTRUCTOR_INT8_ARRAY           = 'Int8Array';
   CONSTRUCTOR_UINT8_ARRAY          = 'Uint8Array';

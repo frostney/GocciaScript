@@ -27,6 +27,7 @@ uses
   Goccia.Builtins.JSONL,
   Goccia.Builtins.Math,
   Goccia.Builtins.Performance,
+  Goccia.Builtins.Semver,
   Goccia.Builtins.Temporal,
   Goccia.Builtins.TestAssertions,
   Goccia.Builtins.TOML,
@@ -437,6 +438,7 @@ const
   PREFIX_LENGTH = 2;
 var
   GocciaObj: TGocciaObjectValue;
+  NamespaceObj: TGocciaObjectValue;
   BuiltInsArray: TGocciaArrayValue;
   Flag: TGocciaGlobalBuiltin;
   Name: string;
@@ -456,6 +458,10 @@ begin
   GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.FalseValue);
 
   FInterpreter.GlobalScope.DefineLexicalBinding('GocciaScript', GocciaObj, dtConst);
+
+  NamespaceObj := TGocciaObjectValue.Create;
+  NamespaceObj.AssignProperty(SEMVER_NAMESPACE_PROPERTY, CreateSemverNamespace);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', NamespaceObj, dtConst);
 end;
 
 function TGocciaRuntimeBootstrap.SpeciesGetter(const AArgs: TGocciaArgumentsCollection;

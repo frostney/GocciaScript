@@ -410,6 +410,37 @@ A `const` global providing engine metadata:
 | `builtIns` | `string[]` | Names of the enabled `TGocciaGlobalBuiltin` flags (e.g., `["Console", "Math", "GlobalObject", ...]`), derived via RTTI at runtime |
 | `strictTypes` | `boolean` | `true` in bytecode mode where strict local type enforcement is active (covering both explicit type annotations and types inferred from literal initializers); `false` in interpreted mode |
 
+**`Goccia` object:**
+
+A `const` global namespace for Goccia-owned utility APIs.
+
+**`Goccia.semver`**
+
+`Goccia.semver` exposes a SemVer 2.0.0 API modeled after the main `node-semver` export plus its documented module-group aliases:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `SEMVER_SPEC_VERSION` | `string` | Always `"2.0.0"` |
+| `RELEASE_TYPES` | `string[]` | `["major", "premajor", "minor", "preminor", "patch", "prepatch", "prerelease"]` |
+| `SemVer` | `function` | Constructor for parsed semantic versions |
+| `Comparator` | `function` | Constructor for comparator objects |
+| `Range` | `function` | Constructor for range objects |
+| `classes` | `object` | Aliases for `SemVer`, `Comparator`, and `Range` matching the documented `node-semver` class module groups |
+| `functions` | `object` | Aliases for the documented function-level exports (`valid`, `clean`, `compare`, `inc`, etc.) |
+| `ranges` | `object` | Aliases for the documented range helpers (`gtr`, `ltr`, `maxSatisfying`, `valid`, etc.) |
+
+Top-level methods follow `node-semver` naming and nullability conventions. The currently exposed main-export surface is:
+
+`valid`, `clean`, `parse`, `inc`, `prerelease`, `major`, `minor`, `patch`, `intersects`, `gt`, `gte`, `lt`, `lte`, `eq`, `neq`, `cmp`, `compare`, `rcompare`, `compareBuild`, `compareLoose`, `diff`, `sort`, `rsort`, `validRange`, `satisfies`, `maxSatisfying`, `minSatisfying`, `minVersion`, `gtr`, `ltr`, `outside`, `simplifyRange`, `subset`, `toComparators`, `coerce`.
+
+The constructor-backed objects mirror the `node-semver` public fields and core instance methods:
+
+| Constructor | Instance fields | Instance methods |
+|-------------|-----------------|------------------|
+| `new Goccia.semver.SemVer(version, options?)` | `raw`, `version`, `major`, `minor`, `patch`, `prerelease`, `build`, `options`, `loose`, `includePrerelease` | `format()`, `toString()`, `compare(other)`, `compareMain(other)`, `comparePre(other)`, `compareBuild(other)`, `inc(releaseType, identifier?)` |
+| `new Goccia.semver.Comparator(comparator, options?)` | `operator`, `semver`, `value`, `options`, `loose` | `toString()`, `test(version)`, `intersects(other, options?)` |
+| `new Goccia.semver.Range(range, options?)` | `raw`, `range`, `set`, `options`, `loose`, `includePrerelease` | `format()`, `toString()`, `test(version)`, `intersects(other, options?)` |
+
 **Global functions:**
 
 | Function | Description |
