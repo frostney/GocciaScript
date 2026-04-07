@@ -101,6 +101,7 @@ uses
   Goccia.Keywords.Reserved,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.TextFiles,
   Goccia.Token,
   Goccia.Values.Primitives;
 
@@ -1593,9 +1594,8 @@ begin
         Lexer := TGocciaLexer.Create('(' + ExprText + ');', ACtx.SourcePath);
         try
           Tokens := Lexer.ScanTokens;
-          SourceLines := TStringList.Create;
+          SourceLines := CreateUTF8StringList(ExprText);
           try
-            SourceLines.Text := ExprText;
             Parser := TGocciaParser.Create(Tokens, ACtx.SourcePath, SourceLines);
             try
               ProgramNode := Parser.ParseUnchecked;

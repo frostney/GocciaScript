@@ -18,6 +18,7 @@ type
     procedure TestStringValueContent;
     procedure TestStringValueEmpty;
     procedure TestStringValueNumber;
+    procedure TestStringValueFromUTF8;
     procedure TestNumberValue;
     procedure TestNumberValueNaN;
     procedure TestNumberValueInfinity;
@@ -36,6 +37,7 @@ begin
   Test('String value with content', TestStringValueContent);
   Test('String value with empty content', TestStringValueEmpty);
   Test('String value with number content', TestStringValueNumber);
+  Test('String value from UTF-8 text', TestStringValueFromUTF8);
   Test('Number value', TestNumberValue);
   Test('NaN value', TestNumberValueNaN);
   Test('Infinity value', TestNumberValueInfinity);
@@ -87,6 +89,19 @@ begin
   Expect<string>(Value.ToStringLiteral.Value).ToBe('123.456');
   Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
   Expect<Double>(Value.ToNumberLiteral.Value).ToBe(123.456);
+  Expect<string>(Value.TypeName).ToBe('string');
+end;
+
+procedure TTestPrimitives.TestStringValueFromUTF8;
+var
+  UTF8Bytes: RawByteString;
+  Value: TGocciaStringLiteralValue;
+begin
+  UTF8Bytes := 'Caf' + #$C3#$A9 + ' d' + #$C3#$A9 + 'j' + #$C3#$A0 + ' vu';
+  SetCodePage(UTF8Bytes, CP_UTF8, False);
+  Value := TGocciaStringLiteralValue.FromUTF8(UTF8String(UTF8Bytes));
+  Expect<string>(Value.ToStringLiteral.Value).ToBe('Café déjà vu');
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
   Expect<string>(Value.TypeName).ToBe('string');
 end;
 

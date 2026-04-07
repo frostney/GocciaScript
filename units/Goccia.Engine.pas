@@ -813,7 +813,7 @@ begin
   StartTime := GetNanoseconds;
 
   if Assigned(FSourceLines) then
-    SourceText := FSourceLines.Text
+    SourceText := StringListToLFText(FSourceLines)
   else
     SourceText := '';
   SourceMap := nil;
@@ -907,7 +907,7 @@ class function TGocciaEngine.RunScriptFromFile(const AFileName: string; const AG
 var
   Source: TStringList;
 begin
-  Source := CreateUTF8StringList(ReadUTF8FileText(AFileName));
+  Source := CreateUTF8FileTextLines(ReadUTF8FileText(AFileName));
   try
     Result := RunScriptFromStringList(Source, AFileName, AGlobals);
   finally

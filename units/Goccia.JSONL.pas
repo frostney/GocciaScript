@@ -8,6 +8,7 @@ uses
   SysUtils,
 
   Goccia.JSON,
+  Goccia.TextFiles,
   Goccia.Values.ArrayValue,
   Goccia.Values.Primitives;
 
@@ -46,6 +47,7 @@ type
     constructor Create;
     destructor Destroy; override;
 
+    function Parse(const AText: UTF8String): TGocciaArrayValue; overload;
     function Parse(const AText: string): TGocciaArrayValue; overload;
     function Parse(const ABytes: TBytes): TGocciaArrayValue; overload;
     function ParseChunk(const AText: string; const AStart: Integer = 0;
@@ -200,6 +202,11 @@ begin
       Result := False;
     end;
   end;
+end;
+
+function TGocciaJSONLParser.Parse(const AText: UTF8String): TGocciaArrayValue;
+begin
+  Result := Parse(RetagUTF8Text(RawByteString(AText)));
 end;
 
 function TGocciaJSONLParser.Parse(const AText: string): TGocciaArrayValue;

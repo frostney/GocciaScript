@@ -115,8 +115,10 @@ type
     constructor Create;
     destructor Destroy; override;
 
-    function Parse(const AText: string): TGocciaValue;
-    function ParseDocuments(const AText: string): TGocciaArrayValue;
+    function Parse(const AText: string): TGocciaValue; overload;
+    function Parse(const AText: UTF8String): TGocciaValue; overload;
+    function ParseDocuments(const AText: string): TGocciaArrayValue; overload;
+    function ParseDocuments(const AText: UTF8String): TGocciaArrayValue; overload;
   end;
 
 implementation
@@ -128,7 +130,8 @@ uses
   base64,
 
   Goccia.Constants.PropertyNames,
-  Goccia.Temporal.Utils;
+  Goccia.Temporal.Utils,
+  Goccia.TextFiles;
 
 type
   TGocciaYAMLTaggedValue = class(TGocciaValue)
@@ -1253,7 +1256,7 @@ var
   procedure FlushCurrentDocument(const AForce: Boolean);
   begin
     if AForce or HasContent then
-      Result.Add(CurrentDocument.Text);
+      Result.Add(StringListToLFText(CurrentDocument));
     CurrentDocument.Clear;
     DocumentOpen := False;
     HasContent := False;
@@ -1261,14 +1264,13 @@ var
 
 begin
   Result := TStringList.Create;
-  Source := TStringList.Create;
+  Source := CreateUTF8StringList(AText);
   CurrentDocument := TStringList.Create;
   try
     DocumentOpen := False;
     HasContent := False;
     InBlockScalar := False;
     BlockScalarIndent := 0;
-    Source.Text := AText;
 
     for I := 0 to Source.Count - 1 do
     begin
@@ -1352,9 +1354,8 @@ var
   LineText: string;
   Source: TStringList;
 begin
-  Source := TStringList.Create;
+  Source := CreateUTF8StringList(AText);
   try
-    Source.Text := AText;
     InBlockScalar := False;
     BlockScalarIndent := 0;
     for I := 0 to Source.Count - 1 do
@@ -2074,9 +2075,8 @@ var
   Source: TStringList;
 begin
   Reset;
-  Source := TStringList.Create;
+  Source := CreateUTF8StringList(AText);
   try
-    Source.Text := AText;
     SeenContent := False;
     for I := 0 to Source.Count - 1 do
     begin
@@ -2174,6 +2174,11 @@ begin
   end;
 end;
 
+function TGocciaYAMLParser.Parse(const AText: UTF8String): TGocciaValue;
+begin
+  Result := Parse(RetagUTF8Text(RawByteString(AText)));
+end;
+
 function TGocciaYAMLParser.ParseDocuments(const AText: string): TGocciaArrayValue;
 var
   DocumentIndex: Integer;
@@ -2187,6 +2192,12 @@ begin
   finally
     DocumentText.Free;
   end;
+end;
+
+function TGocciaYAMLParser.ParseDocuments(
+  const AText: UTF8String): TGocciaArrayValue;
+begin
+  Result := ParseDocuments(RetagUTF8Text(RawByteString(AText)));
 end;
 
 function TGocciaYAMLParser.ParseNode(const AIndent: Integer): TGocciaValue;

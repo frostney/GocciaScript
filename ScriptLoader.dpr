@@ -27,6 +27,7 @@ uses
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.ScriptLoader.JSON,
+  Goccia.TextFiles,
   Goccia.Timeout,
   Goccia.Token,
   Goccia.Values.Primitives,
@@ -68,7 +69,7 @@ var
   OrigLine, OrigCol, I: Integer;
 begin
   StartTime := GetNanoseconds;
-  SourceText := ASource.Text;
+  SourceText := StringListToLFText(ASource);
 
   SourceMap := nil;
   if ggJSX in AGlobals then
@@ -496,9 +497,8 @@ begin
     Exit;
   end;
 
-  Source := TStringList.Create;
+  Source := ReadUTF8FileLines(AFileName);
   try
-    Source.LoadFromFile(AFileName);
     RunSource(Source, AFileName);
   finally
     Source.Free;

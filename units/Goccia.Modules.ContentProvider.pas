@@ -66,7 +66,7 @@ begin
   inherited Create;
   FLastModified := ALastModified;
   FText := AText;
-  FSourceLines := CreateUTF8StringList(FText);
+  FSourceLines := CreateUTF8FileTextLines(FText);
 end;
 
 destructor TGocciaModuleContent.Destroy;

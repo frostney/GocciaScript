@@ -13,6 +13,10 @@ import {
   firstRecord as reExportedFirstRecord,
   labels as reExportedLabels,
 } from "./helpers/jsonl-re-exporter.js";
+import {
+  "0" as unicodeFirstRecord,
+  "1" as unicodeMessage,
+} from "./helpers/unicode-events.jsonl";
 
 describe("JSONL module imports", () => {
   test("imports each record by string index", () => {
@@ -36,5 +40,11 @@ describe("JSONL module imports", () => {
     expect(blankLineLabels.length).toBe(2);
     expect(blankLineLabels[0]).toBe("x");
     expect(blankLineLabels[1]).toBe("y");
+  });
+
+  test("preserves UTF-8 text in file-backed JSONL modules", () => {
+    expect(unicodeFirstRecord.name).toBe("Jos\u00e9");
+    expect(unicodeFirstRecord.city).toBe("Z\u00fcrich");
+    expect(unicodeMessage).toBe("Caf\u00e9 d\u00e9j\u00e0 vu");
   });
 });

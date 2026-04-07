@@ -23,6 +23,7 @@ uses
   Goccia.Lexer,
   Goccia.Modules.Configuration,
   Goccia.Parser,
+  Goccia.TextFiles,
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
@@ -109,10 +110,10 @@ begin
   TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
   ScriptResult := CreateDefaultScriptResult;
 
-  Source := TStringList.Create;
+  Source := nil;
   try
     try
-      Source.LoadFromFile(AFileName);
+      Source := ReadUTF8FileLines(AFileName);
     except
       on E: EStreamError do
       begin
@@ -183,10 +184,10 @@ begin
   TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
   ScriptResult := CreateDefaultScriptResult;
 
-  Source := TStringList.Create;
+  Source := nil;
   try
     try
-      Source.LoadFromFile(AFileName);
+      Source := ReadUTF8FileLines(AFileName);
     except
       on E: EStreamError do
       begin
@@ -200,7 +201,7 @@ begin
     Source.Add(Format('runTests({ exitOnFirstFailure: %s, showTestResults: false });',
       [BoolToStr(GExitOnFirstFailure, 'true', 'false')]));
 
-    SourceText := Source.Text;
+    SourceText := StringListToLFText(Source);
     SourceMap := nil;
     if ggJSX in TestGlobals then
     begin
