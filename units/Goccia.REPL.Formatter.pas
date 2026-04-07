@@ -14,17 +14,10 @@ implementation
 uses
   SysUtils,
 
+  Goccia.Terminal.Colors,
   Goccia.Values.ArrayValue,
   Goccia.Values.FunctionBase,
   Goccia.Values.SymbolValue;
-
-const
-  ANSI_GREEN = #27'[32m';
-  ANSI_YELLOW = #27'[33m';
-  ANSI_CYAN = #27'[36m';
-  ANSI_GRAY = #27'[90m';
-  ANSI_BOLD = #27'[1m';
-  ANSI_RESET = #27'[0m';
 
 function EscapeString(const AValue: string): string;
 var

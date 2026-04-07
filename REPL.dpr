@@ -14,6 +14,7 @@ uses
   Goccia.Bytecode.Module,
   Goccia.Engine,
   Goccia.Engine.Backend,
+  Goccia.Error,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
@@ -21,6 +22,7 @@ uses
   Goccia.Parser,
   Goccia.REPL.Formatter,
   Goccia.REPL.LineEditor,
+  Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Token,
   Goccia.Values.Primitives,
@@ -215,7 +217,10 @@ begin
           on E: Exception do
           begin
             ExecEnd := GetNanoseconds;
-            WriteLn('Error: ', E.Message);
+            if E is TGocciaError then
+              WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+            else
+              WriteLn('Error: ', E.Message);
           end;
         end;
         if ShowTiming then
@@ -262,7 +267,12 @@ begin
             WriteLn(FormatREPLValue(ScriptResult.Result));
         except
           on E: Exception do
-            WriteLn('Error: ', E.Message);
+          begin
+            if E is TGocciaError then
+              WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+            else
+              WriteLn('Error: ', E.Message);
+          end;
         end;
         if ShowTiming then
           WriteLn(SysUtils.Format(

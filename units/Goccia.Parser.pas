@@ -76,10 +76,12 @@ type
     function CheckNext(const ATokenType: TGocciaTokenType): Boolean; inline;
     function Match(const ATokenTypes: array of TGocciaTokenType): Boolean; overload;
     function Match(const ATokenType: TGocciaTokenType): Boolean; overload; inline;
-    function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken;
+    function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken; overload;
+    function Consume(const ATokenType: TGocciaTokenType; const AMessage, ASuggestion: string): TGocciaToken; overload;
     function IsIdentifierNameToken(
       const ATokenType: TGocciaTokenType): Boolean;
-    function ConsumeModuleExportName(const AMessage: string): TGocciaToken;
+    function ConsumeModuleExportName(const AMessage: string): TGocciaToken; overload;
+    function ConsumeModuleExportName(const AMessage, ASuggestion: string): TGocciaToken; overload;
     function IsArrowFunction: Boolean;
     function ConvertNumberLiteral(const ALexeme: string): Double;
     function ParseBinaryExpression(const ANextLevel: TParseFunction; const AOperators: array of TGocciaTokenType): TGocciaExpression;
@@ -302,7 +304,8 @@ begin
     if not Context.HasDeclaration(Ref.Name) then
       raise TGocciaSyntaxError.Create(
         Format('Private field ''#%s'' must be declared in an enclosing class', [Ref.Name]),
-        Ref.Line, Ref.Column, FFileName, FSourceLines);
+        Ref.Line, Ref.Column, FFileName, FSourceLines,
+        'Declare the private field in the class body, or move this code inside the class');
   end;
 end;
 
@@ -326,7 +329,8 @@ begin
       Exit;
     raise TGocciaSyntaxError.Create(
       Format('Private field ''#%s'' must be declared in an enclosing class', [AName]),
-      ALine, AColumn, FFileName, FSourceLines);
+      ALine, AColumn, FFileName, FSourceLines,
+      'Declare the private field in the class body, or move this code inside the class');
   end;
   Context.AddReference(AName, ALine, AColumn);
 end;
@@ -444,6 +448,20 @@ begin
     FFileName, FSourceLines);
 end;
 
+function TGocciaParser.Consume(const ATokenType: TGocciaTokenType;
+  const AMessage, ASuggestion: string): TGocciaToken;
+var
+  Error: TGocciaSyntaxError;
+begin
+  if Check(ATokenType) then
+    Exit(Advance);
+
+  Error := TGocciaSyntaxError.Create(AMessage, Peek.Line, Peek.Column,
+    FFileName, FSourceLines);
+  Error.Suggestion := ASuggestion;
+  raise Error;
+end;
+
 function TGocciaParser.IsIdentifierNameToken(
   const ATokenType: TGocciaTokenType): Boolean;
 begin
@@ -471,6 +489,20 @@ begin
     FFileName, FSourceLines);
 end;
 
+function TGocciaParser.ConsumeModuleExportName(
+  const AMessage, ASuggestion: string): TGocciaToken;
+var
+  Error: TGocciaSyntaxError;
+begin
+  if Check(gttString) or IsIdentifierNameToken(Peek.TokenType) then
+    Exit(Advance);
+
+  Error := TGocciaSyntaxError.Create(AMessage, Peek.Line, Peek.Column,
+    FFileName, FSourceLines);
+  Error.Suggestion := ASuggestion;
+  raise Error;
+end;
+
 function TGocciaParser.Expression: TGocciaExpression;
 begin
   Result := Assignment;
@@ -489,7 +521,8 @@ begin
     Column := Previous.Column;
     Condition := Result;
     Consequent := Assignment;  // ECMAScript spec: AssignmentExpression, not Expression
-    Consume(gttColon, 'Expected ":" in conditional expression');
+    Consume(gttColon, 'Expected ":" in conditional expression',
+      'The ternary operator requires '':'' between the two values (condition ? yes : no)');
     Alternate := Assignment;   // ECMAScript spec: AssignmentExpression
     Result := TGocciaConditionalExpression.Create(Condition, Consequent,
       Alternate, Line, Column);
@@ -624,7 +657,8 @@ begin
     // Only allow on identifiers and member expressions
     if not ((Right is TGocciaIdentifierExpression) or (Right is TGocciaMemberExpression)) then
       raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
-        Operator.Line, Operator.Column, FFileName, FSourceLines);
+        Operator.Line, Operator.Column, FFileName, FSourceLines,
+        'Only variables and properties can be incremented or decremented (e.g., x++ or obj.x--)');
 
     Result := TGocciaIncrementExpression.Create(Right, Operator.TokenType, True,
       Operator.Line, Operator.Column);
@@ -663,7 +697,8 @@ begin
         until not Match(gttComma) or Check(gttRightParen);
       end;
 
-      Consume(gttRightParen, 'Expected ")" after arguments');
+      Consume(gttRightParen, 'Expected ")" after arguments',
+        'Add a '')'' to close the argument list');
       Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
     end
     else if Match([gttDot, gttOptionalChaining]) then
@@ -676,7 +711,8 @@ begin
       if Check(gttHash) then
       begin
         Advance; // consume the #
-        Token := Consume(gttIdentifier, 'Expected private field name after "#"');
+        Token := Consume(gttIdentifier, 'Expected private field name after "#"',
+          'Private field names must follow the # symbol');
         PropertyName := Token.Lexeme;
         RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
         Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
@@ -686,7 +722,8 @@ begin
         // Optional chaining with computed property: obj?.[expr]
         Advance; // consume [
         Arg := Expression;
-        Consume(gttRightBracket, 'Expected "]" after computed member expression');
+        Consume(gttRightBracket, 'Expected "]" after computed member expression',
+          'Add a '']'' to close the computed property access');
         Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column, True);
       end
       else if Check(gttLeftParen) and IsOptionalChain then
@@ -705,7 +742,8 @@ begin
               Arguments.Add(Arg);
             until not Match(gttComma) or Check(gttRightParen);
           end;
-          Consume(gttRightParen, 'Expected ")" after arguments');
+          Consume(gttRightParen, 'Expected ")" after arguments',
+            'Add a '')'' to close the argument list');
           // Wrap call in optional chaining by wrapping the callee in an optional member
           // For func?.(), we create a call on an optional member access
           Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
@@ -724,7 +762,8 @@ begin
                        gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
           PropertyName := Previous.Lexeme  // Reserved words are allowed as property names
         else
-          raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines);
+          raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
+            'Property names must be identifiers. Use bracket notation for special names (e.g., obj["name"])');
 
         Result := TGocciaMemberExpression.Create(Result, PropertyName, False,
           Line, Column, IsOptionalChain);
@@ -734,7 +773,8 @@ begin
     begin
       Line := Previous.Line;
       Column := Previous.Column;
-      Token := Consume(gttIdentifier, 'Expected private field name after "#"');
+      Token := Consume(gttIdentifier, 'Expected private field name after "#"',
+        'Private field names must follow the # symbol');
       PropertyName := Token.Lexeme;
       RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
       Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName, Line, Column);
@@ -744,7 +784,8 @@ begin
       Line := Previous.Line;
       Column := Previous.Column;
       Arg := Expression;
-      Consume(gttRightBracket, 'Expected "]" after computed member expression');
+      Consume(gttRightBracket, 'Expected "]" after computed member expression',
+        'Add a '']'' to close the computed property access');
       // For computed access, store the expression directly to be evaluated at runtime
       Result := TGocciaMemberExpression.Create(Result, Arg, Line, Column);
     end
@@ -757,7 +798,8 @@ begin
       // Only allow on identifiers and member expressions
       if not ((Result is TGocciaIdentifierExpression) or (Result is TGocciaMemberExpression)) then
         raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
-          Line, Column, FFileName, FSourceLines);
+          Line, Column, FFileName, FSourceLines,
+          'Only variables and properties can be incremented or decremented (e.g., x++ or obj.x--)');
 
       Result := TGocciaIncrementExpression.Create(Result, Previous.TokenType, False,
         Line, Column);
@@ -854,7 +896,8 @@ begin
       if Check(gttIdentifier) then
         Expr := TGocciaMemberExpression.Create(Expr, Advance.Lexeme, False, Previous.Line, Previous.Column, False)
       else
-        raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines);
+        raise TGocciaSyntaxError.Create('Expected property name after "."', Peek.Line, Peek.Column, FFileName, FSourceLines,
+          'Property names must be identifiers. Use bracket notation for special names (e.g., obj["name"])');
     end;
     // Parse constructor arguments if present
     if Match(gttLeftParen) then
@@ -869,7 +912,8 @@ begin
             Args.Add(Expression);
         until not Match(gttComma) or Check(gttRightParen);
       end;
-      Consume(gttRightParen, 'Expected ")" after constructor arguments');
+      Consume(gttRightParen, 'Expected ")" after constructor arguments',
+        'Add a '')'' to close the constructor arguments');
       Result := TGocciaNewExpression.Create(Expr, Args, Token.Line, Token.Column);
     end
     else
@@ -909,7 +953,8 @@ begin
     begin
       Token := Advance; // consume param identifier
       Name := Token.Lexeme;
-      Consume(gttArrow, 'Expected "=>" in async arrow function');
+      Consume(gttArrow, 'Expected "=>" in async arrow function',
+        'Arrow functions use ''=> '' after the parameter list');
 
       Inc(FInAsyncFunction);
       try
@@ -940,7 +985,8 @@ begin
   else if Match(gttHash) then
   begin
     Token := Previous;
-    Token := Consume(gttIdentifier, 'Expected private field name after "#"');
+    Token := Consume(gttIdentifier, 'Expected private field name after "#"',
+      'Private field names must follow the # symbol');
     Name := Token.Lexeme;
     RecordPrivateNameReference(Name, Token.Line, Token.Column);
     // Private field access is equivalent to this.#fieldName
@@ -956,7 +1002,8 @@ begin
     else
     begin
       Expr := Expression;
-      Consume(gttRightParen, 'Expected ")" after expression');
+      Consume(gttRightParen, 'Expected ")" after expression',
+        'Add a '')'' to close the expression');
       Result := Expr;
     end;
   end
@@ -976,7 +1023,8 @@ begin
     Result := ObjectLiteral
   else
     raise TGocciaSyntaxError.Create('Expected expression',
-      Peek.Line, Peek.Column, FFileName, FSourceLines);
+      Peek.Line, Peek.Column, FFileName, FSourceLines,
+      'Expected a value, variable, or expression here');
 end;
 
 function TGocciaParser.ArrayLiteral: TGocciaExpression;
@@ -1011,7 +1059,8 @@ begin
       Break;
   end;
 
-  Consume(gttRightBracket, 'Expected "]" after array elements');
+  Consume(gttRightBracket, 'Expected "]" after array elements',
+    'Add a '']'' to close the array');
   Result := TGocciaArrayExpression.Create(Elements, Line, Column);
 end;
 
@@ -1107,7 +1156,8 @@ begin
       // Computed property name: [expr]: value
       IsComputed := True;
       KeyExpression := Expression;
-      Consume(gttRightBracket, 'Expected "]" after computed property name');
+      Consume(gttRightBracket, 'Expected "]" after computed property name',
+        'Add a '']'' to close the computed property name');
     end
     else if Check(gttString) then
       Key := Advance.Lexeme
@@ -1125,7 +1175,8 @@ begin
                    gttTrue, gttFalse, gttNull, gttTypeof, gttInstanceof, gttIn, gttDelete, gttVar, gttWith]) then
       Key := Previous.Lexeme  // Reserved words are allowed as property names
     else
-      raise TGocciaSyntaxError.Create('Expected property name', Peek.Line, Peek.Column, FFileName, FSourceLines);
+      raise TGocciaSyntaxError.Create('Expected property name', Peek.Line, Peek.Column, FFileName, FSourceLines,
+        'Property keys can be identifiers, strings, numbers, or computed [expression]');
 
     // Handle getter/setter syntax
     if IsGetter then
@@ -1168,7 +1219,8 @@ begin
       if Check(gttColon) then
       begin
         // Regular property: key: value
-        Consume(gttColon, 'Expected ":" after property key');
+        Consume(gttColon, 'Expected ":" after property key',
+          'Add '':'' between the property name and value');
         Value := Expression;
       end
             else
@@ -1176,7 +1228,8 @@ begin
         // Shorthand property: { name } means { name: name }
         // Also handle default values in shorthand: { name = defaultValue }
         if IsComputed then
-          raise TGocciaSyntaxError.Create('Computed property names require a value', Peek.Line, Peek.Column, FFileName, FSourceLines);
+          raise TGocciaSyntaxError.Create('Computed property names require a value', Peek.Line, Peek.Column, FFileName, FSourceLines,
+            'Add '': value'' after the computed property (e.g., [key]: value)');
 
         Value := TGocciaIdentifierExpression.Create(Key, Previous.Line, Previous.Column);
 
@@ -1232,7 +1285,8 @@ begin
       Break;
   end;
 
-  Consume(gttRightBrace, 'Expected "}" after object properties');
+  Consume(gttRightBrace, 'Expected "}" after object properties',
+    'Add a matching ''}'' to close the object');
   Result := TGocciaObjectExpression.Create(Properties, PropertyOrder, ComputedProperties, ComputedPropertiesInOrder, Getters, Setters, PropertySourceOrder, Line, Column);
 end;
 
@@ -1255,7 +1309,8 @@ begin
 
       if Match(gttSpread) then
       begin
-        ParamName := Consume(gttIdentifier, 'Expected parameter name after "..."').Lexeme;
+        ParamName := Consume(gttIdentifier, 'Expected parameter name after "..."',
+          'Provide a name for the rest parameter (e.g., ...args)').Lexeme;
         Result[ParamCount].Name := ParamName;
         Result[ParamCount].IsPattern := False;
         Result[ParamCount].Pattern := nil;
@@ -1289,7 +1344,8 @@ begin
       end
       else
       begin
-        ParamName := Consume(gttIdentifier, 'Expected parameter name').Lexeme;
+        ParamName := Consume(gttIdentifier, 'Expected parameter name',
+          'Provide a name for the parameter').Lexeme;
         Result[ParamCount].Name := ParamName;
         Result[ParamCount].IsPattern := False;
         Result[ParamCount].Pattern := nil;
@@ -1325,14 +1381,17 @@ var
 begin
   Line := Previous.Line;
   Column := Previous.Column;
-  Consume(gttLeftParen, 'Expected "(" after getter name');
-  Consume(gttRightParen, 'Getters cannot have parameters');
+  Consume(gttLeftParen, 'Expected "(" after getter name',
+    'Add ''('' to start the getter parameter list');
+  Consume(gttRightParen, 'Getters cannot have parameters',
+    'Getters must have no parameters — remove the parameters');
   if Check(gttColon) then
   begin
     Advance;
     CollectTypeAnnotation([gttLeftBrace]);
   end;
-  Consume(gttLeftBrace, 'Expected "{" before getter body');
+  Consume(gttLeftBrace, 'Expected "{" before getter body',
+    'Add ''{'' to start the getter body');
   Result := TGocciaGetterExpression.Create(BlockStatement, Line, Column);
 end;
 
@@ -1343,23 +1402,28 @@ var
 begin
   Line := Previous.Line;
   Column := Previous.Column;
-  Consume(gttLeftParen, 'Expected "(" after setter name');
+  Consume(gttLeftParen, 'Expected "(" after setter name',
+    'Add ''('' to start the setter parameter list');
   if Check(gttRightParen) then
     raise TGocciaSyntaxError.Create('Setter must have exactly one parameter',
-      Peek.Line, Peek.Column, FFileName, FSourceLines);
-  ParamName := Consume(gttIdentifier, 'Expected parameter name in setter').Lexeme;
+      Peek.Line, Peek.Column, FFileName, FSourceLines,
+      'Setters take exactly one parameter: set name(value) { ... }');
+  ParamName := Consume(gttIdentifier, 'Expected parameter name in setter',
+    'Provide a name for the setter parameter').Lexeme;
   if Check(gttColon) then
   begin
     Advance;
     CollectTypeAnnotation([gttRightParen]);
   end;
-  Consume(gttRightParen, 'Expected ")" after setter parameter');
+  Consume(gttRightParen, 'Expected ")" after setter parameter',
+    'Add a '')'' to close the setter parameter list');
   if Check(gttColon) then
   begin
     Advance;
     CollectTypeAnnotation([gttLeftBrace]);
   end;
-  Consume(gttLeftBrace, 'Expected "{" before setter body');
+  Consume(gttLeftBrace, 'Expected "{" before setter body',
+    'Add ''{'' to start the setter body');
   Result := TGocciaSetterExpression.Create(ParamName, BlockStatement, Line, Column);
 end;
 
@@ -1370,9 +1434,11 @@ var
   Statements: TObjectList<TGocciaASTNode>;
   Stmt: TGocciaStatement;
 begin
-  Consume(gttLeftParen, 'Expected "(" after method name');
+  Consume(gttLeftParen, 'Expected "(" after method name',
+    'Add ''('' to start the method parameter list');
   Parameters := ParseParameterList;
-  Consume(gttRightParen, 'Expected ")" after parameters');
+  Consume(gttRightParen, 'Expected ")" after parameters',
+    'Add a '')'' to close the parameter list');
 
   if Check(gttColon) then
   begin
@@ -1380,7 +1446,8 @@ begin
     CollectTypeAnnotation([gttLeftBrace]);
   end;
 
-  Consume(gttLeftBrace, 'Expected "{" before method body');
+  Consume(gttLeftBrace, 'Expected "{" before method body',
+    'Add ''{'' to start the method body');
 
   Statements := TObjectList<TGocciaASTNode>.Create(True);
   try
@@ -1390,7 +1457,8 @@ begin
       Statements.Add(Stmt);
     end;
 
-    Consume(gttRightBrace, 'Expected "}" after method body');
+    Consume(gttRightBrace, 'Expected "}" after method body',
+      'Add a matching ''}'' to close the block');
     Body := TGocciaBlockStatement.Create(Statements, ALine, AColumn);
     Result := TGocciaMethodExpression.Create(Parameters, Body, ALine, AColumn);
   except
@@ -1411,7 +1479,8 @@ begin
   Column := Previous.Column;
 
   Parameters := ParseParameterList;
-  Consume(gttRightParen, 'Expected ")" after parameters');
+  Consume(gttRightParen, 'Expected ")" after parameters',
+    'Add a '')'' to close the parameter list');
 
   FnReturnType := '';
   if Check(gttColon) then
@@ -1420,7 +1489,8 @@ begin
     FnReturnType := CollectTypeAnnotation([gttArrow]);
   end;
 
-  Consume(gttArrow, 'Expected "=>" in arrow function');
+  Consume(gttArrow, 'Expected "=>" in arrow function',
+    'Arrow functions use ''=> '' after the parameter list');
 
   if Match(gttLeftBrace) then
     Body := BlockStatement
@@ -1529,7 +1599,8 @@ begin
         );
     end
     else
-      raise TGocciaSyntaxError.Create('Invalid assignment target', Left.Line, Left.Column, FFileName, FSourceLines);
+      raise TGocciaSyntaxError.Create('Invalid assignment target', Left.Line, Left.Column, FFileName, FSourceLines,
+        'Only variables and properties can be assigned to');
   end
   else
     Result := Left;
@@ -1656,9 +1727,11 @@ begin
       Advance;
       DestructuringType := CollectTypeAnnotation([gttAssign]);
     end;
-    Consume(gttAssign, 'Destructuring declarations must have an initializer');
+    Consume(gttAssign, 'Destructuring declarations must have an initializer',
+      'Destructuring declarations require an initializer — add ''= expression'' after the pattern');
     Initializer := Expression;
-    Consume(gttSemicolon, 'Expected ";" after destructuring declaration');
+    Consume(gttSemicolon, 'Expected ";" after destructuring declaration',
+      'Add a '';'' at the end of the statement');
     DestructuringDecl := TGocciaDestructuringDeclaration.Create(Pattern, Initializer, IsConst, Line, Column);
     DestructuringDecl.TypeAnnotation := DestructuringType;
     Result := DestructuringDecl;
@@ -1668,7 +1741,8 @@ begin
     repeat
       SetLength(Variables, VariableCount + 1);
 
-      Name := Consume(gttIdentifier, 'Expected variable name').Lexeme;
+      Name := Consume(gttIdentifier, 'Expected variable name',
+        'Provide a name for the variable (e.g., let myVar = ...)').Lexeme;
       Variables[VariableCount].Name := Name;
 
       if Check(gttColon) then
@@ -1681,7 +1755,8 @@ begin
         Variables[VariableCount].Initializer := Expression
       else if IsConst then
         raise TGocciaSyntaxError.Create('const declarations must have an initializer',
-          Line, Column, FFileName, FSourceLines)
+          Line, Column, FFileName, FSourceLines,
+          'Add ''= value'' after the variable name')
       else
         Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
           TGocciaUndefinedLiteralValue.UndefinedValue, Line, Column);
@@ -1689,7 +1764,8 @@ begin
       Inc(VariableCount);
     until not Match(gttComma);
 
-    Consume(gttSemicolon, 'Expected ";" after variable declaration');
+    Consume(gttSemicolon, 'Expected ";" after variable declaration',
+      'Add a '';'' at the end of the statement');
     Result := TGocciaVariableDeclaration.Create(Variables, IsConst, Line, Column);
   end;
 end;
@@ -1725,7 +1801,8 @@ begin
   while not Check(gttRightBrace) and not IsAtEnd do
     Nodes.Add(Statement);
 
-  Consume(gttRightBrace, 'Expected "}" after block');
+  Consume(gttRightBrace, 'Expected "}" after block',
+    'Add a matching ''}'' to close the block');
   Result := TGocciaBlockStatement.Create(Nodes, Line, Column);
 end;
 
@@ -1738,9 +1815,11 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Consume(gttLeftParen, 'Expected "(" after "if"');
+  Consume(gttLeftParen, 'Expected "(" after "if"',
+    'Add ''('' before the condition');
   Condition := Expression;
-  Consume(gttRightParen, 'Expected ")" after if condition');
+  Consume(gttRightParen, 'Expected ")" after if condition',
+    'Add a '')'' to close the condition');
 
   Consequent := Statement;
 
@@ -1757,7 +1836,8 @@ procedure TGocciaParser.SkipBlock;
 var
   Depth: Integer;
 begin
-  Consume(gttLeftBrace, 'Expected "{"');
+  Consume(gttLeftBrace, 'Expected "{"',
+    'Add ''{'' to start the block');
   Depth := 1;
   while not IsAtEnd and (Depth > 0) do
   begin
@@ -1765,14 +1845,16 @@ begin
     else if Check(gttRightBrace) then Dec(Depth);
     if Depth > 0 then Advance;
   end;
-  Consume(gttRightBrace, 'Expected "}"');
+  Consume(gttRightBrace, 'Expected "}"',
+    'Add a matching ''}'' to close the block');
 end;
 
 procedure TGocciaParser.SkipBalancedParens;
 var
   Depth: Integer;
 begin
-  Consume(gttLeftParen, 'Expected "("');
+  Consume(gttLeftParen, 'Expected "("',
+    'Add ''('' before the expression');
   Depth := 1;
   while not IsAtEnd and (Depth > 0) do
   begin
@@ -1780,7 +1862,8 @@ begin
     else if Check(gttRightParen) then Dec(Depth);
     if Depth > 0 then Advance;
   end;
-  Consume(gttRightParen, 'Expected ")"');
+  Consume(gttRightParen, 'Expected ")"',
+    'Add a '')'' to close the expression');
 end;
 
 procedure TGocciaParser.SkipStatementOrBlock;
@@ -2003,7 +2086,8 @@ begin
         Advance; // consume 'of'
 
         IterableExpr := Expression;
-        Consume(gttRightParen, 'Expected ")" after for...of expression');
+        Consume(gttRightParen, 'Expected ")" after for...of expression',
+          'Add a '')'' to close the for...of expression');
 
         if Check(gttLeftBrace) then
         begin
@@ -2067,9 +2151,11 @@ begin
 
   SkipStatementOrBlock;
 
-  Consume(gttWhile, 'Expected "while" after do body');
+  Consume(gttWhile, 'Expected "while" after do body',
+    'Add ''while (condition)'' after the do block');
   SkipBalancedParens;
-  Consume(gttSemicolon, 'Expected ";" after do-while statement');
+  Consume(gttSemicolon, 'Expected ";" after do-while statement',
+    'Add a '';'' at the end of the statement');
 
   Result := TGocciaEmptyStatement.Create(Line, Column);
 end;
@@ -2120,7 +2206,8 @@ begin
   else
     Value := Expression;
 
-  Consume(gttSemicolon, 'Expected ";" after return value');
+  Consume(gttSemicolon, 'Expected ";" after return value',
+    'Add a '';'' at the end of the statement');
   Result := TGocciaReturnStatement.Create(Value, Line, Column);
 end;
 
@@ -2133,7 +2220,8 @@ begin
   Column := Previous.Column;
 
   Value := Expression;
-  Consume(gttSemicolon, 'Expected ";" after throw value');
+  Consume(gttSemicolon, 'Expected ";" after throw value',
+    'Add a '';'' at the end of the statement');
   Result := TGocciaThrowStatement.Create(Value, Line, Column);
 end;
 
@@ -2148,7 +2236,8 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Consume(gttLeftBrace, 'Expected "{" after "try"');
+  Consume(gttLeftBrace, 'Expected "{" after "try"',
+    'Add ''{'' to start the try block');
   Block := BlockStatement;
   CatchParam := '';
   CatchBlock := nil;
@@ -2159,31 +2248,37 @@ begin
   begin
     if Check(gttLeftParen) then
     begin
-      Consume(gttLeftParen, 'Expected "(" after "catch"');
-      CatchParam := Consume(gttIdentifier, 'Expected catch parameter').Lexeme;
+      Consume(gttLeftParen, 'Expected "(" after "catch"',
+        'Add ''('' to start the catch clause');
+      CatchParam := Consume(gttIdentifier, 'Expected catch parameter',
+        'Provide a name for the error variable (e.g., catch (e) { ... })').Lexeme;
       if Check(gttColon) then
       begin
         Advance;
         CatchType := CollectTypeAnnotation([gttRightParen]);
       end;
-      Consume(gttRightParen, 'Expected ")" after catch parameter');
+      Consume(gttRightParen, 'Expected ")" after catch parameter',
+        'Add a '')'' to close the catch clause');
     end
     else
       CatchParam := '';
 
-    Consume(gttLeftBrace, 'Expected "{" after catch clause');
+    Consume(gttLeftBrace, 'Expected "{" after catch clause',
+      'Add ''{'' to start the catch block');
     CatchBlock := BlockStatement;
   end;
 
   if Match(gttFinally) then
   begin
-    Consume(gttLeftBrace, 'Expected "{" after "finally"');
+    Consume(gttLeftBrace, 'Expected "{" after "finally"',
+      'Add ''{'' to start the finally block');
     FinallyBlock := BlockStatement;
   end;
 
   if (CatchBlock = nil) and (FinallyBlock = nil) then
     raise TGocciaSyntaxError.Create('Missing catch or finally after try',
-      Line, Column, FFileName, FSourceLines);
+      Line, Column, FFileName, FSourceLines,
+      'Add catch (e) { ... } or finally { ... } after the try block');
 
   TryStmt := TGocciaTryStatement.Create(Block, CatchParam, CatchBlock,
     FinallyBlock, Line, Column);
@@ -2206,9 +2301,11 @@ begin
 
   MethodGenericParams := CollectGenericParameters;
 
-  Consume(gttLeftParen, 'Expected "(" after method name');
+  Consume(gttLeftParen, 'Expected "(" after method name',
+    'Add ''('' to start the method parameter list');
   Parameters := ParseParameterList;
-  Consume(gttRightParen, 'Expected ")" after parameters');
+  Consume(gttRightParen, 'Expected ")" after parameters',
+    'Add a '')'' to close the parameter list');
 
   MethodReturnType := '';
   if Check(gttColon) then
@@ -2217,7 +2314,8 @@ begin
     MethodReturnType := CollectTypeAnnotation([gttLeftBrace]);
   end;
 
-  Consume(gttLeftBrace, 'Expected "{" before method body');
+  Consume(gttLeftBrace, 'Expected "{" before method body',
+    'Add ''{'' to start the method body');
 
   Statements := TObjectList<TGocciaASTNode>.Create(True);
   try
@@ -2238,7 +2336,8 @@ begin
         Statements.Add(Stmt);
     end;
 
-    Consume(gttRightBrace, 'Expected "}" after method body');
+    Consume(gttRightBrace, 'Expected "}" after method body',
+      'Add a matching ''}'' to close the block');
     Body := TGocciaBlockStatement.Create(Statements, Line, Column);
     Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, Line, Column);
     Result.GenericParams := MethodGenericParams;
@@ -2258,7 +2357,8 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Name := Consume(gttIdentifier, 'Expected class name').Lexeme;
+  Name := Consume(gttIdentifier, 'Expected class name',
+    'Provide a name for the class').Lexeme;
   ClassDef := ParseClassBody(Name);
   Result := TGocciaClassDeclaration.Create(ClassDef, Line, Column);
 end;
@@ -2274,7 +2374,8 @@ begin
   if Match(gttLeftParen) then
   begin
     Result := Expression;
-    Consume(gttRightParen, 'Expected ")" after decorator expression');
+    Consume(gttRightParen, 'Expected ")" after decorator expression',
+      'Add a '')'' to close the decorator expression');
     Exit;
   end;
 
@@ -2298,7 +2399,8 @@ begin
             Arguments.Add(Arg);
           until not Match(gttComma) or Check(gttRightParen);
         end;
-        Consume(gttRightParen, 'Expected ")" after arguments');
+        Consume(gttRightParen, 'Expected ")" after arguments',
+          'Add a '')'' to close the argument list');
         Result := TGocciaCallExpression.Create(Result, Arguments, Line, Column);
       except
         Arguments.Free;
@@ -2309,7 +2411,8 @@ begin
     begin
       Line := Previous.Line;
       Column := Previous.Column;
-      PropertyName := Consume(gttIdentifier, 'Expected property name after "."').Lexeme;
+      PropertyName := Consume(gttIdentifier, 'Expected property name after "."',
+        'Property names must be identifiers. Use bracket notation for special names (e.g., obj["name"])').Lexeme;
       Result := TGocciaMemberExpression.Create(Result, PropertyName, False, Line, Column);
     end
     else
@@ -2334,11 +2437,13 @@ var
   ClassDef: TGocciaClassDefinition;
   Line, Column: Integer;
 begin
-  Consume(gttClass, 'Decorators can only be applied to class declarations');
+  Consume(gttClass, 'Decorators can only be applied to class declarations',
+    'Decorators can only be applied to class declarations or class elements');
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Name := Consume(gttIdentifier, 'Expected class name').Lexeme;
+  Name := Consume(gttIdentifier, 'Expected class name',
+    'Provide a name for the class').Lexeme;
   ClassDef := ParseClassBody(Name);
   ClassDef.FDecorators := ADecorators;
   Result := TGocciaClassDeclaration.Create(ClassDef, Line, Column);
@@ -2356,8 +2461,10 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Name := Consume(gttIdentifier, 'Expected enum name').Lexeme;
-  Consume(gttLeftBrace, 'Expected "{" after enum name');
+  Name := Consume(gttIdentifier, 'Expected enum name',
+    'Enums require a name: enum MyEnum { ... }').Lexeme;
+  Consume(gttLeftBrace, 'Expected "{" after enum name',
+    'Add ''{'' to start the enum body (e.g., enum Color { Red = 0, Green = 1 })');
 
   MemberCount := 0;
   SetLength(Members, 0);
@@ -2367,9 +2474,11 @@ begin
     if Check(gttString) then
       MemberName := Advance.Lexeme
     else
-      MemberName := Consume(gttIdentifier, 'Expected enum member name').Lexeme;
+      MemberName := Consume(gttIdentifier, 'Expected enum member name',
+        'Enum members must be identifiers (e.g., enum Color { Red = 0 })').Lexeme;
 
-    Consume(gttAssign, 'Expected "=" after enum member name (enum members require explicit initializers)');
+    Consume(gttAssign, 'Expected "=" after enum member name (enum members require explicit initializers)',
+      'GocciaScript enums require explicit values: MemberName = value');
     Initializer := Expression;
 
     Inc(MemberCount);
@@ -2381,7 +2490,8 @@ begin
       Break;
   end;
 
-  Consume(gttRightBrace, 'Expected "}" after enum members');
+  Consume(gttRightBrace, 'Expected "}" after enum members',
+    'Add a matching ''}'' to close the enum');
 
   Result := TGocciaEnumDeclaration.Create(Name, Members, Line, Column);
 end;
@@ -2408,12 +2518,17 @@ begin
   if Check(gttStar) then
   begin
     Advance;
-    Consume(gttAs, 'Expected "as" after "*" in namespace import');
+    Consume(gttAs, 'Expected "as" after "*" in namespace import',
+      'Namespace imports require ''as'' and a local name (e.g., import * as name from ...)');
     NamespaceName := Consume(gttIdentifier,
-      'Expected local name after "as"').Lexeme;
-    Consume(gttFrom, 'Expected "from" after namespace import');
-    ModulePath := Consume(gttString, 'Expected module path').Lexeme;
-    Consume(gttSemicolon, 'Expected ";" after import declaration');
+      'Expected local name after "as"',
+      'Provide a local name for the imported/exported binding').Lexeme;
+    Consume(gttFrom, 'Expected "from" after namespace import',
+      'Add ''from "module-path"'' after the import');
+    ModulePath := Consume(gttString, 'Expected module path',
+      'Provide the module path as a string (e.g., from "module-name")').Lexeme;
+    Consume(gttSemicolon, 'Expected ";" after import declaration',
+      'Add a '';'' at the end of the statement');
     Result := TGocciaImportDeclaration.Create(TStringStringMap.Create,
       ModulePath, Line, Column, NamespaceName);
     Exit;
@@ -2439,7 +2554,8 @@ begin
     Exit;
   end;
 
-  Consume(gttLeftBrace, 'Expected "{" after "import"');
+  Consume(gttLeftBrace, 'Expected "{" after "import"',
+    'Add ''{'' to start the import list');
 
   Imports := TStringStringMap.Create;
 
@@ -2449,16 +2565,19 @@ begin
     if IsTypeOnlyBinding then
       Advance;
 
-    ImportedNameToken := ConsumeModuleExportName('Expected import name');
+    ImportedNameToken := ConsumeModuleExportName('Expected import name',
+      'Provide the name of the binding to import');
     ImportedName := ImportedNameToken.Lexeme;
 
     if Match(gttAs) then
-      LocalName := Consume(gttIdentifier, 'Expected local name after "as"').Lexeme
+      LocalName := Consume(gttIdentifier, 'Expected local name after "as"',
+        'Provide a local name for the imported/exported binding').Lexeme
     else if ImportedNameToken.TokenType = gttString then
       raise TGocciaSyntaxError.Create(
         'String-literal import names require "as" and a local identifier',
         ImportedNameToken.Line, ImportedNameToken.Column, FFileName,
-        FSourceLines)
+        FSourceLines,
+        'Use: import { "name" as localName } from "module"')
     else
       LocalName := ImportedName;
 
@@ -2469,10 +2588,14 @@ begin
       Break;
   end;
 
-  Consume(gttRightBrace, 'Expected "}" after imports');
-  Consume(gttFrom, 'Expected "from" after imports');
-  ModulePath := Consume(gttString, 'Expected module path').Lexeme;
-  Consume(gttSemicolon, 'Expected ";" after import declaration');
+  Consume(gttRightBrace, 'Expected "}" after imports',
+    'Add a matching ''}'' to close the import list');
+  Consume(gttFrom, 'Expected "from" after imports',
+    'Add ''from "module-path"'' after the import list');
+  ModulePath := Consume(gttString, 'Expected module path',
+    'Provide the module path as a string (e.g., from "module-name")').Lexeme;
+  Consume(gttSemicolon, 'Expected ";" after import declaration',
+    'Add a '';'' at the end of the statement');
 
   Result := TGocciaImportDeclaration.Create(Imports, ModulePath, Line, Column);
 end;
@@ -2562,7 +2685,8 @@ begin
     InnerDecl := DeclarationStatement;
     if not (InnerDecl is TGocciaVariableDeclaration) then
       raise TGocciaSyntaxError.Create('Destructuring exports are not supported; use export { name } instead',
-        Line, Column, FFileName, FSourceLines);
+        Line, Column, FFileName, FSourceLines,
+        'Declare first, then export: const x = ...; export { x };');
     VarDecl := TGocciaVariableDeclaration(InnerDecl);
     Result := TGocciaExportVariableDeclaration.Create(VarDecl, Line, Column);
     Exit;
@@ -2578,7 +2702,8 @@ begin
     Exit;
   end;
 
-  Consume(gttLeftBrace, 'Expected "{", "const", or "let" after "export"');
+  Consume(gttLeftBrace, 'Expected "{", "const", or "let" after "export"',
+    'Add ''{'' or a declaration after export');
 
   IsReExport := HasFromClauseAfterNamedExports;
   SpecifierCount := 0;
@@ -2589,12 +2714,14 @@ begin
     if IsTypeOnlyBinding then
       Advance;
 
-    NameToken := ConsumeModuleExportName('Expected export name');
+    NameToken := ConsumeModuleExportName('Expected export name',
+      'Provide the name of the binding to import');
     LocalName := NameToken.Lexeme;
 
     if Match(gttAs) then
       ExportedName := ConsumeModuleExportName(
-        'Expected exported name after "as"').Lexeme
+        'Expected exported name after "as"',
+        'Provide a name for the exported binding').Lexeme
     else
       ExportedName := LocalName;
 
@@ -2617,14 +2744,16 @@ begin
       Break;
   end;
 
-  Consume(gttRightBrace, 'Expected "}" after exports');
+  Consume(gttRightBrace, 'Expected "}" after exports',
+    'Add a matching ''}'' to close the export list');
 
   if not IsReExport then
     for I := 0 to SpecifierCount - 1 do
       if LocalNameTokenTypes[I] = gttString then
         raise TGocciaSyntaxError.Create(
           'String-literal local exports require an identifier before "as"',
-          LocalNameLines[I], LocalNameColumns[I], FFileName, FSourceLines);
+          LocalNameLines[I], LocalNameColumns[I], FFileName, FSourceLines,
+          'Use: export { localName as "export-name" }');
 
   ExportsTable := TStringStringMap.Create;
   for I := 0 to SpecifierCount - 1 do
@@ -2632,13 +2761,16 @@ begin
 
   if Match(gttFrom) then
   begin
-    ModulePath := Consume(gttString, 'Expected module path after "from"').Lexeme;
-    Consume(gttSemicolon, 'Expected ";" after re-export declaration');
+    ModulePath := Consume(gttString, 'Expected module path after "from"',
+      'Provide the module path as a string (e.g., from "module-name")').Lexeme;
+    Consume(gttSemicolon, 'Expected ";" after re-export declaration',
+      'Add a '';'' at the end of the statement');
     Result := TGocciaReExportDeclaration.Create(ExportsTable, ModulePath, Line, Column);
   end
   else
   begin
-    Consume(gttSemicolon, 'Expected ";" after export declaration');
+    Consume(gttSemicolon, 'Expected ";" after export declaration',
+      'Add a '';'' at the end of the statement');
     Result := TGocciaExportDeclaration.Create(ExportsTable, Line, Column);
   end;
 end;
@@ -2686,7 +2818,8 @@ begin
 
   if Match(gttExtends) then
   begin
-    SuperClass := Consume(gttIdentifier, 'Expected superclass name').Lexeme;
+    SuperClass := Consume(gttIdentifier, 'Expected superclass name',
+      'Provide the name of the class to extend (e.g., class Foo extends Bar { ... })').Lexeme;
     CollectGenericParameters;
   end
   else
@@ -2699,7 +2832,8 @@ begin
     ClassImplementsClause := CollectTypeAnnotation([gttLeftBrace]);
   end;
 
-  Consume(gttLeftBrace, 'Expected "{" before class body');
+  Consume(gttLeftBrace, 'Expected "{" before class body',
+    'Add ''{'' to start the class body');
   PushPrivateClassContext;
 
   Methods := TGocciaClassMethodMap.Create;
@@ -2762,7 +2896,8 @@ begin
         begin
           Advance;
           ComputedKeyExpression := Expression;
-          Consume(gttRightBracket, 'Expected "]" after computed property name');
+          Consume(gttRightBracket, 'Expected "]" after computed property name',
+            'Add a '']'' to close the computed property name');
           IsComputed := True;
           MemberName := '';
         end
@@ -2770,10 +2905,12 @@ begin
         begin
           Advance;
           IsPrivate := True;
-          MemberName := Consume(gttIdentifier, 'Expected property name after "#"').Lexeme;
+          MemberName := Consume(gttIdentifier, 'Expected property name after "#"',
+            'Private field names must follow the # symbol').Lexeme;
         end
         else
-          MemberName := Consume(gttIdentifier, 'Expected property name after "get"').Lexeme;
+          MemberName := Consume(gttIdentifier, 'Expected property name after "get"',
+            'Provide the getter property name').Lexeme;
       end
       else if not IsAccessor and Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_SET) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
       begin
@@ -2784,7 +2921,8 @@ begin
         begin
           Advance;
           ComputedKeyExpression := Expression;
-          Consume(gttRightBracket, 'Expected "]" after computed property name');
+          Consume(gttRightBracket, 'Expected "]" after computed property name',
+            'Add a '']'' to close the computed property name');
           IsComputed := True;
           MemberName := '';
         end
@@ -2792,14 +2930,17 @@ begin
         begin
           Advance;
           IsPrivate := True;
-          MemberName := Consume(gttIdentifier, 'Expected property name after "#"').Lexeme;
+          MemberName := Consume(gttIdentifier, 'Expected property name after "#"',
+            'Private field names must follow the # symbol').Lexeme;
         end
         else
-          MemberName := Consume(gttIdentifier, 'Expected property name after "set"').Lexeme;
+          MemberName := Consume(gttIdentifier, 'Expected property name after "set"',
+            'Provide the setter property name').Lexeme;
       end
       else
       begin
-        MemberName := Consume(gttIdentifier, 'Expected method or property name').Lexeme;
+        MemberName := Consume(gttIdentifier, 'Expected method or property name',
+          'Class members can be methods, properties, or accessors. Type modifiers (public, private, readonly) are supported as comments').Lexeme;
       end;
 
       if IsPrivate and not IsComputed and (MemberName <> '') then
@@ -2823,7 +2964,8 @@ begin
         end
         else
           PropertyValue := nil;
-        Consume(gttSemicolon, 'Expected ";" after accessor declaration');
+        Consume(gttSemicolon, 'Expected ";" after accessor declaration',
+          'Add a '';'' at the end of the statement');
 
         SetLength(Elements, Length(Elements) + 1);
         Elements[High(Elements)].Kind := cekAccessor;
@@ -2838,9 +2980,11 @@ begin
       end
       else if Check(gttAssign) then
       begin
-        Consume(gttAssign, 'Expected "=" in property');
+        Consume(gttAssign, 'Expected "=" in property',
+          'Add ''= value'' to initialize the property');
         PropertyValue := Expression;
-        Consume(gttSemicolon, 'Expected ";" after property');
+        Consume(gttSemicolon, 'Expected ";" after property',
+          'Add a '';'' at the end of the statement');
 
         if Length(MemberDecorators) > 0 then
         begin
@@ -2879,7 +3023,8 @@ begin
       end
       else if Check(gttSemicolon) then
       begin
-        Consume(gttSemicolon, 'Expected ";" after property declaration');
+        Consume(gttSemicolon, 'Expected ";" after property declaration',
+          'Add a '';'' at the end of the statement');
         PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, Peek.Line, Peek.Column);
 
         if Length(MemberDecorators) > 0 then
@@ -3031,10 +3176,12 @@ begin
       end
       else
         raise TGocciaSyntaxError.Create('Expected "(" for method, "=" for property assignment, or ";" for property declaration',
-          Peek.Line, Peek.Column, FFileName, FSourceLines);
+          Peek.Line, Peek.Column, FFileName, FSourceLines,
+          'Class members can be: methods name() {}, properties name = value, or typed declarations name: Type;');
     end;
 
-    Consume(gttRightBrace, 'Expected "}" after class body');
+    Consume(gttRightBrace, 'Expected "}" after class body',
+      'Add a matching ''}'' to close the class body');
     ValidateCurrentPrivateClassContext;
   finally
     PopPrivateClassContext;
@@ -3402,7 +3549,8 @@ begin
     Exit(Value);
 
   raise TGocciaSyntaxError.Create('Invalid number format: ' + ALexeme, Peek.Line, Peek.Column,
-    FFileName, FSourceLines);
+    FFileName, FSourceLines,
+    'Valid formats: integers (123), decimals (1.23), hex (0xFF), binary (0b101), octal (0o777)');
 end;
 
 function TGocciaParser.IsAssignmentPattern(const AExpr: TGocciaExpression): Boolean;
@@ -3430,7 +3578,8 @@ begin
     Result := TGocciaIdentifierDestructuringPattern.Create(Advance.Lexeme, Previous.Line, Previous.Column);
   end
   else
-    raise TGocciaSyntaxError.Create('Expected destructuring pattern', Peek.Line, Peek.Column, FFileName, FSourceLines);
+    raise TGocciaSyntaxError.Create('Expected destructuring pattern', Peek.Line, Peek.Column, FFileName, FSourceLines,
+      'Use array destructuring [a, b] or object destructuring { x, y }');
 end;
 
 function TGocciaParser.ParseArrayPattern: TGocciaArrayDestructuringPattern;
@@ -3473,7 +3622,8 @@ begin
       Break;
   end;
 
-  Consume(gttRightBracket, 'Expected "]" after array pattern');
+  Consume(gttRightBracket, 'Expected "]" after array pattern',
+    'Add a '']'' to close the destructuring pattern');
   Result := TGocciaArrayDestructuringPattern.Create(Elements, Line, Column);
 end;
 
@@ -3512,7 +3662,8 @@ begin
         IsComputed := True;
         KeyExpression := Expression;
         Key := ''; // Will be computed at runtime
-        Consume(gttRightBracket, 'Expected "]" after computed property key');
+        Consume(gttRightBracket, 'Expected "]" after computed property key',
+          'Add a '']'' to close the computed property key');
       end
       else if Check(gttIdentifier) then
       begin
@@ -3523,7 +3674,8 @@ begin
         Key := Advance.Lexeme;
       end
       else
-        raise TGocciaSyntaxError.Create('Expected property name in object pattern', Peek.Line, Peek.Column, FFileName, FSourceLines);
+        raise TGocciaSyntaxError.Create('Expected property name in object pattern', Peek.Line, Peek.Column, FFileName, FSourceLines,
+          'Use: { name }, { name: alias }, or { name = default }');
 
       // Check for shorthand or full syntax
       if Match(gttColon) then
@@ -3557,7 +3709,8 @@ begin
       Break;
   end;
 
-  Consume(gttRightBrace, 'Expected "}" after object pattern');
+  Consume(gttRightBrace, 'Expected "}" after object pattern',
+    'Add a matching ''}'' to close the destructuring pattern');
   Result := TGocciaObjectDestructuringPattern.Create(Properties, Line, Column);
 end;
 
@@ -3646,7 +3799,8 @@ begin
     Result := TGocciaObjectDestructuringPattern.Create(Properties, AExpr.Line, AExpr.Column);
   end
   else
-    raise TGocciaSyntaxError.Create('Invalid destructuring target', AExpr.Line, AExpr.Column, FFileName, FSourceLines);
+    raise TGocciaSyntaxError.Create('Invalid destructuring target', AExpr.Line, AExpr.Column, FFileName, FSourceLines,
+      'Destructuring targets must be variables or properties, not expressions');
 end;
 
 function TGocciaParser.SwitchStatement: TGocciaStatement;
@@ -3662,12 +3816,15 @@ begin
   Column := Previous.Column;
 
   // Parse discriminant: switch (expression)
-  Consume(gttLeftParen, 'Expected "(" after "switch"');
+  Consume(gttLeftParen, 'Expected "(" after "switch"',
+    'Add ''('' before the switch expression');
   Discriminant := Expression;
-  Consume(gttRightParen, 'Expected ")" after switch discriminant');
+  Consume(gttRightParen, 'Expected ")" after switch discriminant',
+    'Add a '')'' to close the switch expression');
 
   // Parse switch body
-  Consume(gttLeftBrace, 'Expected "{" before switch body');
+  Consume(gttLeftBrace, 'Expected "{" before switch body',
+    'Add ''{'' to start the switch body');
 
   Cases := TObjectList<TGocciaCaseClause>.Create(True);
 
@@ -3677,18 +3834,21 @@ begin
     begin
       // Parse case value
       TestExpression := Expression;
-      Consume(gttColon, 'Expected ":" after case value');
+      Consume(gttColon, 'Expected ":" after case value',
+        'Add '':'' after the case value');
     end
     else if Match(gttDefault) then
     begin
       // Default case
       TestExpression := nil;
-      Consume(gttColon, 'Expected ":" after default');
+      Consume(gttColon, 'Expected ":" after default',
+        'Add '':'' after default');
     end
     else
     begin
       raise TGocciaSyntaxError.Create('Expected "case" or "default" in switch body',
-        Peek.Line, Peek.Column, FFileName, FSourceLines);
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        'Switch bodies contain case/default labels: case value: ... or default: ...');
     end;
 
     // Parse statements until next case/default or end of switch
@@ -3702,7 +3862,8 @@ begin
     Cases.Add(CaseClause);
   end;
 
-  Consume(gttRightBrace, 'Expected "}" after switch body');
+  Consume(gttRightBrace, 'Expected "}" after switch body',
+    'Add a matching ''}'' to close the switch body');
   Result := TGocciaSwitchStatement.Create(Discriminant, Cases, Line, Column);
 end;
 
@@ -3713,7 +3874,8 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  Consume(gttSemicolon, 'Expected ";" after break statement');
+  Consume(gttSemicolon, 'Expected ";" after break statement',
+    'Add a '';'' at the end of the statement');
   Result := TGocciaBreakStatement.Create(Line, Column);
 end;
 
