@@ -83,6 +83,7 @@ uses
 
   Goccia.CallStack,
   Goccia.Constants.PropertyNames,
+  Goccia.Coverage,
   Goccia.Error,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -191,6 +192,8 @@ begin
   GC := TGarbageCollector.Instance;
   WasEnabled := GC.Enabled;
   GC.Enabled := False;
+  FMinimalVM.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
+    and TGocciaCoverageTracker.Instance.Enabled;
   try
     Result := FMinimalVM.ExecuteModule(AModule);
   finally

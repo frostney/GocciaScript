@@ -94,6 +94,7 @@ uses
   Goccia.Constants,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Coverage,
   Goccia.Error,
   Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
@@ -281,11 +282,17 @@ end;
 
 function EvaluateExpression(const AExpression: TGocciaExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 begin
+  if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+    TGocciaCoverageTracker.Instance.RecordLineHit(
+      AContext.CurrentFilePath, AExpression.Line);
   Result := AExpression.Evaluate(AContext);
 end;
 
 function EvaluateStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 begin
+  if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+    TGocciaCoverageTracker.Instance.RecordLineHit(
+      AContext.CurrentFilePath, AStatement.Line);
   Result := AStatement.Execute(AContext);
 end;
 
@@ -298,9 +305,19 @@ begin
   begin
     Left := EvaluateExpression(ABinaryExpression.Left, AContext);
     if not Left.ToBooleanLiteral.Value then
+    begin
+      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+        TGocciaCoverageTracker.Instance.RecordBranchHit(
+          AContext.CurrentFilePath, ABinaryExpression.Line,
+          ABinaryExpression.Column, 0);
       Result := Left  // Short-circuit: return left operand if falsy
+    end
     else
     begin
+      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+        TGocciaCoverageTracker.Instance.RecordBranchHit(
+          AContext.CurrentFilePath, ABinaryExpression.Line,
+          ABinaryExpression.Column, 1);
       Right := EvaluateExpression(ABinaryExpression.Right, AContext);
       Result := Right;  // Return right operand
     end;
@@ -310,9 +327,19 @@ begin
   begin
     Left := EvaluateExpression(ABinaryExpression.Left, AContext);
     if Left.ToBooleanLiteral.Value then
+    begin
+      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+        TGocciaCoverageTracker.Instance.RecordBranchHit(
+          AContext.CurrentFilePath, ABinaryExpression.Line,
+          ABinaryExpression.Column, 0);
       Result := Left  // Short-circuit: return left operand if truthy
+    end
     else
     begin
+      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+        TGocciaCoverageTracker.Instance.RecordBranchHit(
+          AContext.CurrentFilePath, ABinaryExpression.Line,
+          ABinaryExpression.Column, 1);
       Right := EvaluateExpression(ABinaryExpression.Right, AContext);
       Result := Right;  // Return right operand
     end;
@@ -324,11 +351,21 @@ begin
     // Return right operand only if left is null or undefined
     if (Left is TGocciaNullLiteralValue) or (Left is TGocciaUndefinedLiteralValue) then
     begin
+      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+        TGocciaCoverageTracker.Instance.RecordBranchHit(
+          AContext.CurrentFilePath, ABinaryExpression.Line,
+          ABinaryExpression.Column, 0);
       Right := EvaluateExpression(ABinaryExpression.Right, AContext);
       Result := Right;
     end
     else
+    begin
+      if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+        TGocciaCoverageTracker.Instance.RecordBranchHit(
+          AContext.CurrentFilePath, ABinaryExpression.Line,
+          ABinaryExpression.Column, 1);
       Result := Left;  // Return left operand for all other values (including falsy ones)
+    end;
     Exit;
   end;
 
@@ -926,6 +963,8 @@ begin
 
   // Create function with closure scope
   Result := TGocciaFunctionValue.Create(EmptyParameters, Statements, AContext.Scope.CreateChild);
+  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
+  TGocciaFunctionValue(Result).SourceLine := AGetterExpression.Line;
 end;
 
 function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -942,6 +981,8 @@ begin
 
   // Create function with closure scope
   Result := TGocciaFunctionValue.Create(Parameters, Statements, AContext.Scope.CreateChild);
+  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
+  TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
 end;
 
 // ES2026 §27.7.5.3 Await(value)
@@ -1218,6 +1259,8 @@ begin
   else
     Result := TGocciaArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild);
   TGocciaFunctionValue(Result).IsExpressionBody := not (AArrowFunctionExpression.Body is TGocciaBlockStatement);
+  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
+  TGocciaFunctionValue(Result).SourceLine := AArrowFunctionExpression.Line;
 end;
 
 function EvaluateMethodExpression(const AMethodExpression: TGocciaMethodExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1236,6 +1279,8 @@ begin
     Result := TGocciaAsyncFunctionValue.Create(AMethodExpression.Parameters, Statements, AContext.Scope.CreateChild)
   else
     Result := TGocciaFunctionValue.Create(AMethodExpression.Parameters, Statements, AContext.Scope.CreateChild);
+  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
+  TGocciaFunctionValue(Result).SourceLine := AMethodExpression.Line;
 end;
 
 function EvaluateBlock(const ABlockStatement: TGocciaBlockStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -1272,8 +1317,21 @@ begin
 end;
 
 function EvaluateIf(const AIfStatement: TGocciaIfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+var
+  ConditionResult: Boolean;
 begin
-  if EvaluateExpression(AIfStatement.Condition, AContext).ToBooleanLiteral.Value then
+  ConditionResult := EvaluateExpression(AIfStatement.Condition, AContext)
+    .ToBooleanLiteral.Value;
+  if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+  begin
+    if ConditionResult then
+      TGocciaCoverageTracker.Instance.RecordBranchHit(
+        AContext.CurrentFilePath, AIfStatement.Line, AIfStatement.Column, 0)
+    else
+      TGocciaCoverageTracker.Instance.RecordBranchHit(
+        AContext.CurrentFilePath, AIfStatement.Line, AIfStatement.Column, 1);
+  end;
+  if ConditionResult then
     Result := EvaluateStatement(AIfStatement.Consequent, AContext)
   else if Assigned(AIfStatement.Alternate) then
     Result := EvaluateStatement(AIfStatement.Alternate, AContext)
@@ -1409,6 +1467,8 @@ begin
     Result := TGocciaAsyncMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass)
   else
     Result := TGocciaMethodValue.Create(AClassMethod.Parameters, Statements, AContext.Scope.CreateChild, AClassMethod.Name, ASuperClass);
+  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
+  TGocciaFunctionValue(Result).SourceLine := AClassMethod.Line;
 end;
 
 function EvaluateClass(const AClassDeclaration: TGocciaClassDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -1554,7 +1614,13 @@ begin
     begin
       CaseTest := EvaluateExpression(CaseClause.Test, AContext);
       if IsStrictEqual(Discriminant, CaseTest) then
+      begin
         Matched := True;
+        if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+          TGocciaCoverageTracker.Instance.RecordBranchHit(
+            AContext.CurrentFilePath, ASwitchStatement.Line,
+            ASwitchStatement.Column, I);
+      end;
     end;
 
     if Matched then

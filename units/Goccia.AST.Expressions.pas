@@ -550,6 +550,7 @@ implementation
 uses
   GarbageCollector.Generic,
 
+  Goccia.Coverage,
   Goccia.Evaluator,
   Goccia.Evaluator.Arithmetic,
   Goccia.Evaluator.Assignment,
@@ -1331,8 +1332,20 @@ begin
 end;
 
 function TGocciaConditionalExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+var
+  ConditionResult: Boolean;
 begin
-  if Condition.Evaluate(AContext).ToBooleanLiteral.Value then
+  ConditionResult := Condition.Evaluate(AContext).ToBooleanLiteral.Value;
+  if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+  begin
+    if ConditionResult then
+      TGocciaCoverageTracker.Instance.RecordBranchHit(
+        AContext.CurrentFilePath, Line, Column, 0)
+    else
+      TGocciaCoverageTracker.Instance.RecordBranchHit(
+        AContext.CurrentFilePath, Line, Column, 1);
+  end;
+  if ConditionResult then
     Result := Consequent.Evaluate(AContext)
   else
     Result := Alternate.Evaluate(AContext);

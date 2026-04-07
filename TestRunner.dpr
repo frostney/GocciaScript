@@ -15,6 +15,8 @@ uses
   Goccia.Builtins.TestConsole,
   Goccia.Bytecode.Module,
   Goccia.Compiler,
+  Goccia.Coverage,
+  Goccia.Coverage.Report,
   Goccia.Engine,
   Goccia.Engine.BytecodeBackend,
   Goccia.FileExtensions,
@@ -40,6 +42,9 @@ var
   GImportMapPath: string = '';
   GInlineAliases: TStringList = nil;
   GMode: TGocciaEngineBackend = ebTreeWalk;
+  GCoverageEnabled: Boolean = False;
+  GCoverageLcovFile: string = '';
+  GCoverageJsonFile: string = '';
 
 type
   TTestFileResult = record
@@ -228,6 +233,11 @@ begin
           try
             ProgramNode := Parser.Parse;
             ParseEnd := GetNanoseconds;
+
+            if Assigned(TGocciaCoverageTracker.Instance) and
+               TGocciaCoverageTracker.Instance.Enabled then
+              TGocciaCoverageTracker.Instance.RegisterSourceFile(
+                AFileName, CountExecutableLines(Lexer.SourceLines));
 
             if not GSilentConsole then
               for I := 0 to Parser.WarningCount - 1 do
@@ -606,6 +616,46 @@ begin
         ExitCode := 1;
         Exit;
       end
+      else if Arg = '--coverage' then
+        GCoverageEnabled := True
+      else if Copy(Arg, 1, 18) = '--coverage-format=' then
+      begin
+        if Copy(Arg, 19, MaxInt) = 'lcov' then
+        begin
+          if I < ParamCount then
+          begin
+            Inc(I);
+            if Copy(ParamStr(I), 1, 18) = '--coverage-output=' then
+              GCoverageLcovFile := Copy(ParamStr(I), 19, MaxInt)
+            else
+              Dec(I);
+          end;
+        end
+        else if Copy(Arg, 19, MaxInt) = 'json' then
+        begin
+          if I < ParamCount then
+          begin
+            Inc(I);
+            if Copy(ParamStr(I), 1, 18) = '--coverage-output=' then
+              GCoverageJsonFile := Copy(ParamStr(I), 19, MaxInt)
+            else
+              Dec(I);
+          end;
+        end
+        else
+        begin
+          WriteLn('Error: Unknown coverage format "', Copy(Arg, 19, MaxInt), '". Use "lcov" or "json".');
+          ExitCode := 1;
+          Exit;
+        end;
+        GCoverageEnabled := True;
+      end
+      else if Copy(Arg, 1, 18) = '--coverage-output=' then
+      begin
+        // Standalone --coverage-output= (default to lcov)
+        GCoverageLcovFile := Copy(Arg, 19, MaxInt);
+        GCoverageEnabled := True;
+      end
       else if Copy(Arg, 1, 2) = '--' then
       begin
         WriteLn('Error: Unknown option "', Arg, '"');
@@ -629,36 +679,60 @@ begin
       WriteLn('  --alias key=value       Add an inline import-map-style alias');
       WriteLn('  --output=<file>         Write test results as JSON to file');
       WriteLn('  --mode=interpreted|bytecode  Execution backend (default: interpreted)');
+      WriteLn('  --coverage              Enable line and branch coverage reporting');
+      WriteLn('  --coverage-format=lcov|json  Coverage output format (implies --coverage)');
+      WriteLn('  --coverage-output=<file>     Coverage output file (paired with --coverage-format)');
       ExitCode := 1;
     end
     else
     begin
-      Files := TStringList.Create;
+      if GCoverageEnabled then
+      begin
+        TGocciaCoverageTracker.Initialize;
+        TGocciaCoverageTracker.Instance.Enabled := True;
+      end;
       try
-        for I := 0 to Paths.Count - 1 do
-        begin
-          if DirectoryExists(Paths[I]) then
-            Files.AddStrings(FindAllFiles(Paths[I], ScriptExtensions))
-          else if FileExists(Paths[I]) then
-            Files.Add(Paths[I])
-          else
+        Files := TStringList.Create;
+        try
+          for I := 0 to Paths.Count - 1 do
           begin
-            WriteLn('Error: Path not found: ', Paths[I]);
-            ExitCode := 1;
-            Exit;
+            if DirectoryExists(Paths[I]) then
+              Files.AddStrings(FindAllFiles(Paths[I], ScriptExtensions))
+            else if FileExists(Paths[I]) then
+              Files.Add(Paths[I])
+            else
+            begin
+              WriteLn('Error: Path not found: ', Paths[I]);
+              ExitCode := 1;
+              Exit;
+            end;
           end;
-        end;
 
-        if Files.Count = 1 then
-        begin
-          if GShowProgress then
-            WriteLn('[1/1] ', Files[0]);
-          PrintTestResults(RunScriptFromFile(Files[0]));
-        end
-        else
-          PrintTestResults(RunScriptsFromFiles(Files));
+          if Files.Count = 1 then
+          begin
+            if GShowProgress then
+              WriteLn('[1/1] ', Files[0]);
+            PrintTestResults(RunScriptFromFile(Files[0]));
+          end
+          else
+            PrintTestResults(RunScriptsFromFiles(Files));
+
+          if GCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+          begin
+            PrintCoverageSummary(TGocciaCoverageTracker.Instance);
+            if Files.Count = 1 then
+              PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
+            if GCoverageLcovFile <> '' then
+              WriteCoverageLcov(TGocciaCoverageTracker.Instance, GCoverageLcovFile);
+            if GCoverageJsonFile <> '' then
+              WriteCoverageJSON(TGocciaCoverageTracker.Instance, GCoverageJsonFile);
+          end;
+        finally
+          Files.Free;
+        end;
       finally
-        Files.Free;
+        if GCoverageEnabled then
+          TGocciaCoverageTracker.Shutdown;
       end;
     end;
   finally

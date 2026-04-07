@@ -24,6 +24,8 @@ type
     FParameters: TGocciaParameterArray;
     FBodyStatements: TObjectList<TGocciaASTNode>;
     FClosure: TGocciaScope;
+    FSourceFilePath: string;
+    FSourceLine: Integer;
     FIsExpressionBody: Boolean;
     FIsSimpleParams: Boolean;
     function GetFunctionLength: Integer; override;
@@ -43,6 +45,8 @@ type
     property Closure: TGocciaScope read FClosure;
     property Name: string read FName write FName;
     property IsExpressionBody: Boolean read FIsExpressionBody write FIsExpressionBody;
+    property SourceFilePath: string read FSourceFilePath write FSourceFilePath;
+    property SourceLine: Integer read FSourceLine write FSourceLine;
   end;
 
   TGocciaArrowFunctionValue = class(TGocciaFunctionValue)
@@ -73,6 +77,7 @@ uses
 
   Goccia.AST.Statements,
   Goccia.ControlFlow,
+  Goccia.Coverage,
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
@@ -144,6 +149,13 @@ begin
   Context.Scope := FClosure;
   Context.OnError := FClosure.OnError;
   Context.LoadModule := nil;
+  Context.CurrentFilePath := FSourceFilePath;
+  Context.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
+    and TGocciaCoverageTracker.Instance.Enabled;
+
+  // Record coverage hit on the declaration line (get/set/constructor/method)
+  if Context.CoverageEnabled and (FSourceLine > 0) and (FSourceFilePath <> '') then
+    TGocciaCoverageTracker.Instance.RecordLineHit(FSourceFilePath, FSourceLine);
 
   // Bind this via virtual dispatch (arrow vs non-arrow)
   BindThis(ACallScope, AThisValue);

@@ -796,3 +796,47 @@ build → test
 ```
 
 The benchmark comparison comment includes a **Suite Timing** section showing test execution and benchmark duration for both modes. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the comparison format.
+
+## Coverage
+
+The TestRunner and ScriptLoader support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which lines and branches of JavaScript source code are executed at runtime.
+
+### Usage
+
+```bash
+# Console summary (printed after test results)
+./build/TestRunner tests --coverage
+
+# lcov output (for Codecov, Coveralls, or genhtml)
+./build/TestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
+
+# JSON output (Istanbul-compatible)
+./build/TestRunner tests --coverage --coverage-format=json --coverage-output=coverage.json
+
+# ScriptLoader also supports coverage
+./build/ScriptLoader example.js --coverage
+```
+
+### What is Tracked
+
+**Line coverage:** Which source lines were executed and how many times. Instrumented in both the tree-walk interpreter (`EvaluateStatement`/`EvaluateExpression`) and the bytecode VM (main dispatch loop with line-change deduplication).
+
+**Branch coverage:** Which branch arms were taken at:
+- `if`/`else` statements (branch 0 = consequent, branch 1 = alternate)
+- Ternary expressions (`? :`)
+- Short-circuit operators (`&&`, `||`, `??`)
+- `switch` statement case clauses
+
+### Output Formats
+
+| Format | Flag | Description |
+|--------|------|-------------|
+| Console | `--coverage` | Summary table printed to stdout after test results |
+| lcov | `--coverage-format=lcov --coverage-output=<file>` | Standard lcov tracefile with `DA:` and `BRDA:` entries |
+| JSON | `--coverage-format=json --coverage-output=<file>` | Istanbul-compatible JSON for tooling integration |
+
+### Architecture
+
+Coverage uses a runtime boolean check (`CoverageEnabled` on `TGocciaEvaluationContext` for the interpreter, `FCoverageEnabled` on `TGocciaVM` for bytecode). When `--coverage` is not passed, the boolean is `False` and branch prediction makes the check effectively free — no separate build is needed.
+
+Data is collected by the `TGocciaCoverageTracker` singleton (`Goccia.Coverage.pas`), which follows the same Initialize/Shutdown pattern as `TGarbageCollector` and `TGocciaCallStack`. Output formatting is in `Goccia.Coverage.Report.pas`.

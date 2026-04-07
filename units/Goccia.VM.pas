@@ -64,6 +64,7 @@ type
     FCurrentModuleSourcePath: string;
     FCurrentModuleExports: TGocciaValueMap;
     FActiveDecoratorSession: TObject;
+    FCoverageEnabled: Boolean;
     FPreviousExceptionMask: TFPUExceptionMask;
     FArgumentPool: TGocciaArgumentsPoolArray;
     FArgumentPoolCount: Integer;
@@ -173,6 +174,7 @@ type
     function ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
     property Interpreter: TGocciaInterpreter read FInterpreter write FInterpreter;
+    property CoverageEnabled: Boolean read FCoverageEnabled write FCoverageEnabled;
   end;
 
 implementation
@@ -187,6 +189,7 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Coverage,
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
@@ -3341,6 +3344,7 @@ var
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundFunction: TGocciaBoundFunctionValue;
   JumpOffset: Integer;
+  PrevCovLine, CovLine: UInt32;
 begin
   SavedRegisters := FRegisters;
   SavedLocalCells := FLocalCells;
@@ -3363,6 +3367,13 @@ begin
     Template := AClosure.Template;
     Frame.Template := Template;
 
+    // Record coverage hit on the function declaration line
+    if FCoverageEnabled and Assigned(Template.DebugInfo) and
+       (Template.DebugInfo.LineMapCount > 0) then
+      TGocciaCoverageTracker.Instance.RecordLineHit(
+        Template.DebugInfo.SourceFile,
+        Template.DebugInfo.GetLineMapEntry(0).Line);
+
     SetLocalRaw(0, AThisValue);
     if AUseFixedArgs then
       case AArgCount of
@@ -3384,12 +3395,24 @@ begin
       for I := 0 to High(AArguments) do
         SetLocalRaw(I + 1, AArguments[I]);
 
+    PrevCovLine := 0;
     Running := True;
     while Running and (Frame.IP < Template.CodeCount) do
     begin
       try
         Instruction := Template.GetInstructionUnchecked(Frame.IP);
         Inc(Frame.IP);
+
+        if FCoverageEnabled and Assigned(Template.DebugInfo) then
+        begin
+          CovLine := Template.DebugInfo.GetLineForPC(Frame.IP - 1);
+          if (CovLine <> 0) and (CovLine <> PrevCovLine) then
+          begin
+            TGocciaCoverageTracker.Instance.RecordLineHit(
+              Template.DebugInfo.SourceFile, CovLine);
+            PrevCovLine := CovLine;
+          end;
+        end;
 
         Op := DecodeOp(Instruction);
         A := DecodeA(Instruction);
@@ -3517,28 +3540,72 @@ begin
       OP_JUMP_IF_TRUE:
         if GetRegister(A).ToBooleanLiteral.Value then
         begin
+          if FCoverageEnabled and Assigned(Template.DebugInfo) then
+            TGocciaCoverageTracker.Instance.RecordBranchHit(
+              Template.DebugInfo.SourceFile,
+              Template.DebugInfo.GetLineForPC(Frame.IP - 1),
+              Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if JumpOffset < 0 then
             CheckExecutionTimeout;
-        end;
+        end
+        else if FCoverageEnabled and Assigned(Template.DebugInfo) then
+          TGocciaCoverageTracker.Instance.RecordBranchHit(
+            Template.DebugInfo.SourceFile,
+            Template.DebugInfo.GetLineForPC(Frame.IP - 1),
+            Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
 
       OP_JUMP_IF_FALSE:
         if not GetRegister(A).ToBooleanLiteral.Value then
         begin
+          if FCoverageEnabled and Assigned(Template.DebugInfo) then
+            TGocciaCoverageTracker.Instance.RecordBranchHit(
+              Template.DebugInfo.SourceFile,
+              Template.DebugInfo.GetLineForPC(Frame.IP - 1),
+              Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if JumpOffset < 0 then
             CheckExecutionTimeout;
-        end;
+        end
+        else if FCoverageEnabled and Assigned(Template.DebugInfo) then
+          TGocciaCoverageTracker.Instance.RecordBranchHit(
+            Template.DebugInfo.SourceFile,
+            Template.DebugInfo.GetLineForPC(Frame.IP - 1),
+            Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
 
       OP_JUMP_IF_NULLISH:
         if RegisterMatchesNullishKind(FRegisters[A], B) then
+        begin
+          if FCoverageEnabled and Assigned(Template.DebugInfo) then
+            TGocciaCoverageTracker.Instance.RecordBranchHit(
+              Template.DebugInfo.SourceFile,
+              Template.DebugInfo.GetLineForPC(Frame.IP - 1),
+              Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
           Inc(Frame.IP, C);
+        end
+        else if FCoverageEnabled and Assigned(Template.DebugInfo) then
+          TGocciaCoverageTracker.Instance.RecordBranchHit(
+            Template.DebugInfo.SourceFile,
+            Template.DebugInfo.GetLineForPC(Frame.IP - 1),
+            Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
 
       OP_JUMP_IF_NOT_NULLISH:
         if not RegisterMatchesNullishKind(FRegisters[A], B) then
+        begin
+          if FCoverageEnabled and Assigned(Template.DebugInfo) then
+            TGocciaCoverageTracker.Instance.RecordBranchHit(
+              Template.DebugInfo.SourceFile,
+              Template.DebugInfo.GetLineForPC(Frame.IP - 1),
+              Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
           Inc(Frame.IP, C);
+        end
+        else if FCoverageEnabled and Assigned(Template.DebugInfo) then
+          TGocciaCoverageTracker.Instance.RecordBranchHit(
+            Template.DebugInfo.SourceFile,
+            Template.DebugInfo.GetLineForPC(Frame.IP - 1),
+            Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 1);
 
       OP_PUSH_HANDLER:
         FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth);
