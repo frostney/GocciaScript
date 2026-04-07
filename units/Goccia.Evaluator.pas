@@ -1638,6 +1638,10 @@ begin
 
   if not Matched and not Done and (DefaultIndex >= 0) then
   begin
+    if AContext.CoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+      TGocciaCoverageTracker.Instance.RecordBranchHit(
+        AContext.CurrentFilePath, ASwitchStatement.Line,
+        ASwitchStatement.Column, DefaultIndex);
     for I := DefaultIndex to ASwitchStatement.Cases.Count - 1 do
     begin
       CaseClause := ASwitchStatement.Cases[I];
