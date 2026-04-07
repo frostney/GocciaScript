@@ -393,7 +393,7 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 - When the replacer is a function and named groups are present, the `groups` object is passed as the last argument after `input`.
 - `String.prototype.match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split` dispatch through the corresponding well-known symbol hooks, so custom protocol objects work as expected.
 - `matchAll()` returns a lazy iterator that advances matches on demand per the ES2026 spec.
-- The `u` flag is accepted and exposed through `.flags` and `.unicode`, but full ECMAScript Unicode regexp semantics are not implemented yet.
+- The `u` flag enables Unicode-aware pattern matching. Unicode property escapes (`\p{Letter}`, `\P{ASCII}`, etc.) are expanded to equivalent character classes. Unicode code point escapes (`\u{41}`, `\u{1F600}`) are converted to UTF-8 byte sequences. Supported properties: `L`/`Letter`, `Lu`/`Uppercase_Letter`, `Ll`/`Lowercase_Letter`, `N`/`Number`, `Nd`/`Decimal_Number`, `P`/`Punctuation`, `S`/`Symbol`, `Z`/`Separator`, `Cc`/`Control`, `ASCII`, `ASCII_Hex_Digit`, `White_Space`. Unsupported properties throw `SyntaxError`. The `u` flag also disables TRegExpr's Russian charset extensions and enables correct `AdvanceStringIndex` for multi-byte UTF-8 sequences.
 - The `v` flag (Unicode sets) is accepted and exposed through `.flags` and `.unicodeSets`. The `u` and `v` flags are mutually exclusive. Full Unicode set notation and properties of strings in character classes are not yet implemented beyond basic `u` flag behavior.
 - The `d` flag (indices) is accepted and exposed through `.flags` and `.hasIndices`. Match indices are not yet populated.
 
