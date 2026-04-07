@@ -301,6 +301,17 @@ jobs:
           bytecode_cov="$(./build/TestRunner tests/built-ins/Array/array-creation.js --mode=bytecode --coverage 2>&1)"
           printf '%s\n' "$bytecode_cov" | grep -q 'Coverage Summary:'
 
+          ./build/TestRunner tests/language/statements/if/if-else-statements.js --coverage --coverage-format=lcov --coverage-output=branch-cov.lcov
+          grep -q '^BRDA:' branch-cov.lcov
+          grep -q '^BRF:' branch-cov.lcov
+          grep -q '^BRH:' branch-cov.lcov
+          rm branch-cov.lcov
+
+          ./build/TestRunner tests/language/statements/if/if-else-statements.js --coverage --coverage-format=json --coverage-output=branch-cov.json
+          grep -q '"branchMap":' branch-cov.json
+          grep -q '"b":' branch-cov.json
+          rm branch-cov.json
+
       - name: Run Pascal unit tests
         run: |
           found=0
@@ -794,6 +805,9 @@ jobs:
           printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --coverage-output=sl-cov2.lcov --coverage-format=lcov
           grep -q '^DA:' sl-cov2.lcov
           rm sl-cov2.lcov
+
+          bytecode_cov="$(printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --mode=bytecode --coverage 2>&1)"
+          printf '%s\n' "$bytecode_cov" | grep -q 'Coverage Summary:'
 
   artifacts:
     needs: [test, toml-compliance, json5-compliance, benchmark, examples]

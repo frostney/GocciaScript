@@ -99,6 +99,19 @@ jobs:
           detail_output="$(./build/TestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage 2>&1)"
           printf '%s\n' "$detail_output" | grep -Eq '[0-9]+x \|'
 
+          # branch coverage: lcov contains BRDA/BRF entries for branching code
+          ./build/TestRunner tests/language/statements/if/if-else-statements.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=lcov --coverage-output=branch-cov.lcov
+          grep -q '^BRDA:' branch-cov.lcov
+          grep -q '^BRF:' branch-cov.lcov
+          grep -q '^BRH:' branch-cov.lcov
+          rm branch-cov.lcov
+
+          # branch coverage: JSON contains branchMap and b entries
+          ./build/TestRunner tests/language/statements/if/if-else-statements.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=json --coverage-output=branch-cov.json
+          grep -q '"branchMap":' branch-cov.json
+          grep -q '"b":' branch-cov.json
+          rm branch-cov.json
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v5
@@ -361,6 +374,10 @@ jobs:
           printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --coverage-output=sl-cov2.lcov --coverage-format=lcov
           grep -q '^DA:' sl-cov2.lcov
           rm sl-cov2.lcov
+
+          # bytecode mode coverage
+          bytecode_cov="$(printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --mode=bytecode --coverage 2>&1)"
+          printf '%s\n' "$bytecode_cov" | grep -q 'Coverage Summary:'
 
   benchmark-comment:
     needs: benchmark
