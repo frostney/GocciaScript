@@ -353,6 +353,7 @@ begin
       ExecEnd := GetNanoseconds;
       Result.Timing.LexTimeNanoseconds := 0;
       Result.Timing.ParseTimeNanoseconds := 0;
+      Result.Timing.CompileTimeNanoseconds := 0;
       Result.Timing.ExecuteTimeNanoseconds := ExecEnd - LoadEnd;
       Result.Timing.TotalTimeNanoseconds := ExecEnd - StartTime;
     finally
@@ -473,11 +474,13 @@ begin
       begin
         Report.Timing.TotalTimeNanoseconds := GetNanoseconds - StartTime;
         if Report.Timing.TotalTimeNanoseconds >
-           Report.Timing.LexTimeNanoseconds + Report.Timing.ParseTimeNanoseconds then
+           Report.Timing.LexTimeNanoseconds + Report.Timing.ParseTimeNanoseconds +
+           Report.Timing.CompileTimeNanoseconds then
           Report.Timing.ExecuteTimeNanoseconds :=
             Report.Timing.TotalTimeNanoseconds -
             Report.Timing.LexTimeNanoseconds -
-            Report.Timing.ParseTimeNanoseconds;
+            Report.Timing.ParseTimeNanoseconds -
+            Report.Timing.CompileTimeNanoseconds;
         if GJsonOutput then
           PrintJSONError(E, Report, OutputLines, AFileName)
         else
