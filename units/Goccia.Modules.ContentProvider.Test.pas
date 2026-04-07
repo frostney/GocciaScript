@@ -16,6 +16,7 @@ uses
   Goccia.Engine,
   Goccia.Engine.Backend,
   Goccia.Interpreter,
+  Goccia.JSONL,
   Goccia.Lexer,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
@@ -26,8 +27,10 @@ uses
   Goccia.TextFiles,
   Goccia.Token,
   Goccia.TOML,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.Values.Primitives,
+  Goccia.YAML;
 
 type
   TInMemoryModuleResolver = class(TGocciaModuleResolver)
@@ -71,7 +74,9 @@ type
     procedure TestEngineRetriesModuleAfterFailedLoad;
     procedure TestEngineReportsJSONLModuleLineNumbers;
     procedure TestEngineReportsTOMLModuleSyntaxErrors;
+    procedure TestFileSystemContentProviderPreservesUTF8JSONLText;
     procedure TestFileSystemContentProviderPreservesUTF8TOMLText;
+    procedure TestFileSystemContentProviderPreservesUTF8YAMLText;
     procedure TestEngineLoadsUTF8TextAssetModule;
     procedure TestEngineNormalizesCRLFTextAssetModulesToLF;
     procedure TestModuleLoaderRejectsRebindingAcrossRuntimes;
@@ -159,8 +164,12 @@ begin
     TestEngineReportsJSONLModuleLineNumbers);
   Test('Engine reports TOML module syntax errors',
     TestEngineReportsTOMLModuleSyntaxErrors);
+  Test('File system content provider preserves UTF-8 JSONL text',
+    TestFileSystemContentProviderPreservesUTF8JSONLText);
   Test('File system content provider preserves UTF-8 TOML text',
     TestFileSystemContentProviderPreservesUTF8TOMLText);
+  Test('File system content provider preserves UTF-8 YAML text',
+    TestFileSystemContentProviderPreservesUTF8YAMLText);
   Test('Engine loads UTF-8 text asset modules',
     TestEngineLoadsUTF8TextAssetModule);
   Test('Engine normalizes CRLF text asset modules to LF',
@@ -594,6 +603,59 @@ begin
   end;
 end;
 
+procedure TModuleContentProviderTests.TestFileSystemContentProviderPreservesUTF8JSONLText;
+var
+  CityValue: UTF8String;
+  Content: TGocciaModuleContent;
+  ContentProvider: TGocciaFileSystemModuleContentProvider;
+  MessageValue: UTF8String;
+  NameValue: UTF8String;
+  Parser: TGocciaJSONLParser;
+  Records: TGocciaArrayValue;
+  TempDirectory: string;
+  JSONLPath: string;
+  JSONLText: UTF8String;
+begin
+  TempDirectory := CreateTempDirectory;
+  JSONLPath := IncludeTrailingPathDelimiter(TempDirectory) + 'unicode.jsonl';
+  NameValue := 'Jos' + #$C3#$A9;
+  CityValue := 'Z' + #$C3#$BC + 'rich';
+  MessageValue := 'Caf' + #$C3#$A9 + ' d' + #$C3#$A9 + 'j' + #$C3#$A0 + ' vu';
+  JSONLText :=
+    '{"name":"' + NameValue + '","city":"' + CityValue + '"}' + #10 +
+    '"' + MessageValue + '"' + #10;
+  WriteUTF8File(JSONLPath, JSONLText);
+
+  ContentProvider := TGocciaFileSystemModuleContentProvider.Create;
+  try
+    Content := ContentProvider.LoadContent(JSONLPath);
+    try
+      Parser := TGocciaJSONLParser.Create;
+      try
+        Records := Parser.Parse(Content.Text);
+      finally
+        Parser.Free;
+      end;
+
+      try
+        Expect<Integer>(Records.Elements.Count).ToBe(2);
+        Expect<string>(TGocciaObjectValue(Records.Elements[0])
+          .GetProperty('name').ToStringLiteral.Value).ToBe(NameValue);
+        Expect<string>(TGocciaObjectValue(Records.Elements[0])
+          .GetProperty('city').ToStringLiteral.Value).ToBe(CityValue);
+        Expect<string>(Records.Elements[1].ToStringLiteral.Value)
+          .ToBe(MessageValue);
+      finally
+        Records.Free;
+      end;
+    finally
+      Content.Free;
+    end;
+  finally
+    ContentProvider.Free;
+  end;
+end;
+
 procedure TModuleContentProviderTests.TestFileSystemContentProviderPreservesUTF8TOMLText;
 var
   CityValue: UTF8String;
@@ -639,6 +701,64 @@ begin
       Expect<string>(TGocciaObjectValue(Obj.GetProperty('nested'))
         .GetProperty('city').ToStringLiteral.Value)
         .ToBe(CityValue);
+    finally
+      Content.Free;
+    end;
+  finally
+    ContentProvider.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestFileSystemContentProviderPreservesUTF8YAMLText;
+var
+  CityValue: UTF8String;
+  Content: TGocciaModuleContent;
+  ContentProvider: TGocciaFileSystemModuleContentProvider;
+  Documents: TGocciaArrayValue;
+  NameValue: UTF8String;
+  Obj: TGocciaObjectValue;
+  Parser: TGocciaYAMLParser;
+  QuotedKey: UTF8String;
+  TempDirectory: string;
+  YAMLPath: string;
+  YAMLText: UTF8String;
+begin
+  TempDirectory := CreateTempDirectory;
+  YAMLPath := IncludeTrailingPathDelimiter(TempDirectory) + 'unicode.yaml';
+  NameValue := 'Jos' + #$C3#$A9;
+  QuotedKey := 'd' + #$C3#$A9 + 'j' + #$C3#$A0;
+  CityValue := 'Z' + #$C3#$BC + 'rich';
+  YAMLText :=
+    'name: ' + NameValue + #10 +
+    '"' + QuotedKey + '": vu' + #10 +
+    'nested:' + #10 +
+    '  city: ' + CityValue + #10;
+  WriteUTF8File(YAMLPath, YAMLText);
+
+  ContentProvider := TGocciaFileSystemModuleContentProvider.Create;
+  try
+    Content := ContentProvider.LoadContent(YAMLPath);
+    try
+      Parser := TGocciaYAMLParser.Create;
+      try
+        Documents := Parser.ParseDocuments(Content.Text);
+      finally
+        Parser.Free;
+      end;
+
+      try
+        Expect<Integer>(Documents.Elements.Count).ToBe(1);
+        Obj := TGocciaObjectValue(Documents.Elements[0]);
+        Expect<string>(Obj.GetProperty('name').ToStringLiteral.Value)
+          .ToBe(NameValue);
+        Expect<string>(Obj.GetProperty(QuotedKey).ToStringLiteral.Value)
+          .ToBe('vu');
+        Expect<string>(TGocciaObjectValue(Obj.GetProperty('nested'))
+          .GetProperty('city').ToStringLiteral.Value)
+          .ToBe(CityValue);
+      finally
+        Documents.Free;
+      end;
     finally
       Content.Free;
     end;

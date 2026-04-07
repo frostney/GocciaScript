@@ -115,8 +115,10 @@ type
     constructor Create;
     destructor Destroy; override;
 
-    function Parse(const AText: string): TGocciaValue;
-    function ParseDocuments(const AText: string): TGocciaArrayValue;
+    function Parse(const AText: string): TGocciaValue; overload;
+    function Parse(const AText: UTF8String): TGocciaValue; overload;
+    function ParseDocuments(const AText: string): TGocciaArrayValue; overload;
+    function ParseDocuments(const AText: UTF8String): TGocciaArrayValue; overload;
   end;
 
 implementation
@@ -2172,6 +2174,11 @@ begin
   end;
 end;
 
+function TGocciaYAMLParser.Parse(const AText: UTF8String): TGocciaValue;
+begin
+  Result := Parse(RetagUTF8Text(RawByteString(AText)));
+end;
+
 function TGocciaYAMLParser.ParseDocuments(const AText: string): TGocciaArrayValue;
 var
   DocumentIndex: Integer;
@@ -2185,6 +2192,12 @@ begin
   finally
     DocumentText.Free;
   end;
+end;
+
+function TGocciaYAMLParser.ParseDocuments(
+  const AText: UTF8String): TGocciaArrayValue;
+begin
+  Result := ParseDocuments(RetagUTF8Text(RawByteString(AText)));
 end;
 
 function TGocciaYAMLParser.ParseNode(const AIndent: Integer): TGocciaValue;

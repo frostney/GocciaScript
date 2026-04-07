@@ -396,7 +396,7 @@ begin
     try
       Module.ExportsTable.AddOrSetValue(PROP_METADATA, Metadata);
       Module.ExportsTable.AddOrSetValue(PROP_CONTENT,
-        TGocciaStringLiteralValue.Create(NormalizedText));
+        TGocciaStringLiteralValue.FromUTF8(NormalizedText));
       FModules.Add(AResolvedPath, Module);
       Result := Module;
       LoadSucceeded := True;

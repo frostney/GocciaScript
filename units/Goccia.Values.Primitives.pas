@@ -141,6 +141,7 @@ type
     FValue: string;
   public
     constructor Create(const AValue: string);
+    class function FromUTF8(const AValue: UTF8String): TGocciaStringLiteralValue;
 
     function IsPrimitive: Boolean; override;
     function TypeName: string; override;
@@ -167,6 +168,7 @@ uses
 
   Goccia.Constants,
   Goccia.Constants.TypeNames,
+  Goccia.TextFiles,
   Goccia.Values.ClassHelper;
 
 { TGocciaValue }
@@ -541,6 +543,15 @@ end;
 constructor TGocciaStringLiteralValue.Create(const AValue: string);
 begin
   FValue := AValue;
+end;
+
+class function TGocciaStringLiteralValue.FromUTF8(
+  const AValue: UTF8String): TGocciaStringLiteralValue;
+var
+  UTF8Bytes: RawByteString;
+begin
+  UTF8Bytes := AValue;
+  Result := TGocciaStringLiteralValue.Create(RetagUTF8Text(UTF8Bytes));
 end;
 
 function TGocciaStringLiteralValue.TypeName: string;

@@ -1,5 +1,6 @@
 import { name, version, debug, maxRetries, tags, database } from "./helpers/config.yaml";
 import { count, pi, empty, active, greeting } from "./helpers/simple-values.yml";
+import * as unicodeConfig from "./helpers/unicode-config.yaml";
 
 describe("YAML import", () => {
   test("string values", () => {
@@ -44,5 +45,11 @@ describe("YAML import", () => {
 
   test("string with spaces", () => {
     expect(greeting).toBe("hello world");
+  });
+
+  test("preserves UTF-8 text in file-backed YAML modules", () => {
+    expect(unicodeConfig.name).toBe("Jos\u00e9");
+    expect(unicodeConfig["d\u00e9j\u00e0"]).toBe("vu");
+    expect(unicodeConfig.nested.city).toBe("Z\u00fcrich");
   });
 });
