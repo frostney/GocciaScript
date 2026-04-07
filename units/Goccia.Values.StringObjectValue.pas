@@ -88,6 +88,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.Iterator.Concrete,
+  Goccia.Values.Iterator.RegExp,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -1355,9 +1356,6 @@ var
   MatchAllMethod: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
   RegexValue: TGocciaObjectValue;
-  MatchesArray: TGocciaArrayValue;
-  MatchArray: TGocciaObjectValue;
-  MatchIndex, MatchEnd, NextIndex, SearchIndex: Integer;
 begin
   StringValue := ExtractStringValue(AThisValue);
   if (AArgs.Length > 0) and IsRegExpValue(AArgs.GetElement(0)) and
@@ -1391,31 +1389,7 @@ begin
     RegexValue := CoerceRegExpValue(TGocciaUndefinedLiteralValue.UndefinedValue,
       'g');
 
-  TGarbageCollector.Instance.AddTempRoot(RegexValue);
-  try
-    if not GetRegExpBooleanProperty(RegexValue, PROP_GLOBAL) then
-      ThrowTypeError('String.prototype.matchAll requires a global RegExp');
-
-    MatchesArray := TGocciaArrayValue.Create;
-    TGarbageCollector.Instance.AddTempRoot(MatchesArray);
-    try
-      SearchIndex := 0;
-      while MatchRegExpObjectValue(RegexValue, StringValue, SearchIndex,
-        False,
-        False, MatchArray, MatchIndex, MatchEnd, NextIndex) do
-      begin
-        MatchesArray.Elements.Add(MatchArray);
-        SearchIndex := NextIndex;
-        if SearchIndex > Length(StringValue) then
-          Break;
-      end;
-      Result := TGocciaArrayIteratorValue.Create(MatchesArray, akValues);
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(MatchesArray);
-    end;
-  finally
-    TGarbageCollector.Instance.RemoveTempRoot(RegexValue);
-  end;
+  Result := TGocciaRegExpMatchAllIteratorValue.Create(RegexValue, StringValue, True);
 end;
 
 // ES2026 §22.1.3.27 String.prototype.search(regexp)

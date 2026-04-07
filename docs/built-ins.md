@@ -387,7 +387,7 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 
 - Replacement strings in regex-backed `replace()` and `replaceAll()` support `$$`, `$&`, the pre-match token `$` followed by a backtick, `$'`, and numeric captures such as `$1`.
 - `String.prototype.match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split` dispatch through the corresponding well-known symbol hooks, so custom protocol objects work as expected.
-- `matchAll()` currently returns an eager iterator over precomputed matches rather than a fully lazy spec-style iterator.
+- `matchAll()` returns a lazy iterator that advances matches on demand per the ES2026 spec.
 - The `u` flag is accepted and exposed through `.flags` and `.unicode`, but full ECMAScript Unicode regexp semantics are not implemented yet.
 - Named capture groups, `d` / indices, and Unicode sets (`v`) are not implemented yet.
 

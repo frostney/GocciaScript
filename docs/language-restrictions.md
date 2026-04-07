@@ -612,7 +612,6 @@ Current gaps from full ECMAScript RegExp semantics:
 
 - The `u` flag is accepted and exposed, but matching still does not implement full ECMAScript Unicode semantics.
 - Named capture groups, indices (`d`), and Unicode sets (`v`) are not supported.
-- `String.prototype.matchAll()` uses an eager array-backed iterator rather than a lazy spec-style iterator.
 
 ## Intentional Divergences from ECMAScript
 
