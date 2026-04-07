@@ -516,7 +516,7 @@ Result := TGocciaEngine.RunScript(Source, FileName, DefaultGlobals - [ggJSX]);
 
 After all flag-gated built-ins are registered, the engine also creates two always-present `const` globals:
 - **`globalThis`** — A `const` plain object containing all global scope bindings, with a self-referential `globalThis` property.
-- **`GocciaScript`** — Engine metadata object with `version` (semver from git tag, or tag + `-dev`), `commit` (short git hash), `builtIns` (array of enabled `TGocciaGlobalBuiltin` flag names via RTTI), and `strictTypes` (`true` in bytecode mode where strict local type enforcement is active — covering both explicit type annotations and types inferred from literal initializers — `false` in interpreted mode).
+- **`Goccia`** — Engine metadata and utility namespace with `version` (semver from git tag, or tag + `-dev`), `commit` (short git hash), `builtIns` (array of enabled `TGocciaGlobalBuiltin` flag names via RTTI), `strictTypes` (`true` in bytecode mode where strict local type enforcement is active — covering both explicit type annotations and types inferred from literal initializers — `false` in interpreted mode), and `semver` (SemVer 2.0.0 API namespace).
 
 ## Testing
 

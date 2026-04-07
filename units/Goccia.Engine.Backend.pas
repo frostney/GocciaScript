@@ -392,8 +392,8 @@ begin
   FMinimalVM.GlobalScope := FInterpreter.GlobalScope;
   FMinimalVM.Interpreter := FInterpreter;
 
-  if FInterpreter.GlobalScope.GetValue('GocciaScript') is TGocciaObjectValue then
-    TGocciaObjectValue(FInterpreter.GlobalScope.GetValue('GocciaScript'))
+  if FInterpreter.GlobalScope.GetValue('Goccia') is TGocciaObjectValue then
+    TGocciaObjectValue(FInterpreter.GlobalScope.GetValue('Goccia'))
       .AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.TrueValue);
 end;
 

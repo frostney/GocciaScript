@@ -3,9 +3,9 @@ description: Map.prototype.getOrInsertComputed returns existing value or compute
 features: [Map.prototype.getOrInsertComputed]
 ---*/
 
-const isGocciaScript = typeof GocciaScript !== "undefined";
+const hasGoccia = typeof Goccia !== "undefined";
 
-describe.runIf(isGocciaScript)("Map.prototype.getOrInsertComputed", () => {
+describe.runIf(hasGoccia)("Map.prototype.getOrInsertComputed", () => {
   test("returns existing value without calling callback", () => {
     const map = new Map([["key", "original"]]);
     let called = false;

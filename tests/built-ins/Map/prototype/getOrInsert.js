@@ -3,9 +3,9 @@ description: Map.prototype.getOrInsert returns existing value or inserts default
 features: [Map.prototype.getOrInsert]
 ---*/
 
-const isGocciaScript = typeof GocciaScript !== "undefined";
+const hasGoccia = typeof Goccia !== "undefined";
 
-describe.runIf(isGocciaScript)("Map.prototype.getOrInsert", () => {
+describe.runIf(hasGoccia)("Map.prototype.getOrInsert", () => {
   test("returns existing value without overwriting", () => {
     const map = new Map([["key", "original"]]);
     const result = map.getOrInsert("key", "replacement");

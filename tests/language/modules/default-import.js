@@ -9,7 +9,7 @@ import addDefault from "./helpers/math-utils.js";
 
 const x = 1;
 
-describe.runIf(typeof GocciaScript !== "undefined")("default import is skipped", () => {
+describe.runIf(typeof Goccia !== "undefined")("default import is skipped", () => {
   test("code after skipped default import executes", () => {
     expect(x).toBe(1);
     expect(typeof addDefault).toBe("undefined");
