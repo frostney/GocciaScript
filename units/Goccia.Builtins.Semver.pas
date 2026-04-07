@@ -7,6 +7,9 @@ interface
 uses
   Goccia.Values.ObjectValue;
 
+const
+  SEMVER_NAMESPACE_PROPERTY = 'semver';
+
 function CreateSemverNamespace: TGocciaObjectValue;
 
 implementation
@@ -26,6 +29,8 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TSemverHostList = TObjectList<TObject>;
+
   TGocciaSemverNamespaceHost = class
   private
     FSemverPrototype: TGocciaObjectValue;
@@ -182,7 +187,24 @@ type
   end;
 
 var
-  GSemverHosts: TObjectList<TObject>;
+  GSemverHosts: TSemverHostList;
+
+const
+  PROP_BUILD              = 'build';
+  PROP_INCLUDE_PRERELEASE = 'includePrerelease';
+  PROP_LOOSE              = 'loose';
+  PROP_MAJOR              = 'major';
+  PROP_MINOR              = 'minor';
+  PROP_OPTIONS            = 'options';
+  PROP_OPERATOR           = 'operator';
+  PROP_PATCH              = 'patch';
+  PROP_PRERELEASE         = 'prerelease';
+  PROP_RANGE              = 'range';
+  PROP_RAW                = 'raw';
+  PROP_RTL                = 'rtl';
+  PROP_SEMVER             = SEMVER_NAMESPACE_PROPERTY;
+  PROP_SET_OF_COMPARATORS = 'set';
+  PROP_VERSION            = 'version';
 
 constructor TGocciaSemverNamespaceHost.Create;
 begin

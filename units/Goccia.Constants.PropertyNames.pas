@@ -74,21 +74,6 @@ const
   PROP_TO_JSON                = 'toJSON';
   PROP_TO_JSON5               = 'toJSON5';
   PROP_TIME_ORIGIN            = 'timeOrigin';
-  PROP_BUILD                  = 'build';
-  PROP_INCLUDE_PRERELEASE     = 'includePrerelease';
-  PROP_LOOSE                  = 'loose';
-  PROP_MAJOR                  = 'major';
-  PROP_MINOR                  = 'minor';
-  PROP_OPTIONS                = 'options';
-  PROP_OPERATOR               = 'operator';
-  PROP_PATCH                  = 'patch';
-  PROP_PRERELEASE             = 'prerelease';
-  PROP_RANGE                  = 'range';
-  PROP_RAW                    = 'raw';
-  PROP_RTL                    = 'rtl';
-  PROP_SEMVER                 = 'semver';
-  PROP_SET_OF_COMPARATORS     = 'set';
-  PROP_VERSION                = 'version';
 
 implementation
 

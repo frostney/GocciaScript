@@ -628,7 +628,7 @@ begin
   FInterpreter.GlobalScope.DefineLexicalBinding('GocciaScript', GocciaObj, dtConst);
 
   NamespaceObj := TGocciaObjectValue.Create;
-  NamespaceObj.AssignProperty(PROP_SEMVER, CreateSemverNamespace);
+  NamespaceObj.AssignProperty(SEMVER_NAMESPACE_PROPERTY, CreateSemverNamespace);
   FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', NamespaceObj, dtConst);
 end;
 
