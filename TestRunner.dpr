@@ -43,8 +43,9 @@ var
   GInlineAliases: TStringList = nil;
   GMode: TGocciaEngineBackend = ebTreeWalk;
   GCoverageEnabled: Boolean = False;
-  GCoverageLcovFile: string = '';
-  GCoverageJsonFile: string = '';
+  GCoverageLcovEnabled: Boolean = False;
+  GCoverageJsonEnabled: Boolean = False;
+  GCoverageOutputPath: string = '';
 
 type
   TTestFileResult = record
@@ -618,42 +619,25 @@ begin
       end
       else if Arg = '--coverage' then
         GCoverageEnabled := True
+      else if Arg = '--coverage-format=lcov' then
+      begin
+        GCoverageLcovEnabled := True;
+        GCoverageEnabled := True;
+      end
+      else if Arg = '--coverage-format=json' then
+      begin
+        GCoverageJsonEnabled := True;
+        GCoverageEnabled := True;
+      end
       else if Copy(Arg, 1, 18) = '--coverage-format=' then
       begin
-        if Copy(Arg, 19, MaxInt) = 'lcov' then
-        begin
-          if I < ParamCount then
-          begin
-            Inc(I);
-            if Copy(ParamStr(I), 1, 18) = '--coverage-output=' then
-              GCoverageLcovFile := Copy(ParamStr(I), 19, MaxInt)
-            else
-              Dec(I);
-          end;
-        end
-        else if Copy(Arg, 19, MaxInt) = 'json' then
-        begin
-          if I < ParamCount then
-          begin
-            Inc(I);
-            if Copy(ParamStr(I), 1, 18) = '--coverage-output=' then
-              GCoverageJsonFile := Copy(ParamStr(I), 19, MaxInt)
-            else
-              Dec(I);
-          end;
-        end
-        else
-        begin
-          WriteLn('Error: Unknown coverage format "', Copy(Arg, 19, MaxInt), '". Use "lcov" or "json".');
-          ExitCode := 1;
-          Exit;
-        end;
-        GCoverageEnabled := True;
+        WriteLn('Error: Unknown coverage format "', Copy(Arg, 19, MaxInt), '". Use "lcov" or "json".');
+        ExitCode := 1;
+        Exit;
       end
       else if Copy(Arg, 1, 18) = '--coverage-output=' then
       begin
-        // Standalone --coverage-output= (default to lcov)
-        GCoverageLcovFile := Copy(Arg, 19, MaxInt);
+        GCoverageOutputPath := Copy(Arg, 19, MaxInt);
         GCoverageEnabled := True;
       end
       else if Copy(Arg, 1, 2) = '--' then
@@ -722,10 +706,10 @@ begin
             PrintCoverageSummary(TGocciaCoverageTracker.Instance);
             if Files.Count = 1 then
               PrintCoverageDetail(TGocciaCoverageTracker.Instance, Files[0]);
-            if GCoverageLcovFile <> '' then
-              WriteCoverageLcov(TGocciaCoverageTracker.Instance, GCoverageLcovFile);
-            if GCoverageJsonFile <> '' then
-              WriteCoverageJSON(TGocciaCoverageTracker.Instance, GCoverageJsonFile);
+            if GCoverageLcovEnabled and (GCoverageOutputPath <> '') then
+              WriteCoverageLcov(TGocciaCoverageTracker.Instance, GCoverageOutputPath);
+            if GCoverageJsonEnabled and (GCoverageOutputPath <> '') then
+              WriteCoverageJSON(TGocciaCoverageTracker.Instance, GCoverageOutputPath);
           end;
         finally
           Files.Free;

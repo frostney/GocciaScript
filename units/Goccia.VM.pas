@@ -3395,7 +3395,11 @@ begin
       for I := 0 to High(AArguments) do
         SetLocalRaw(I + 1, AArguments[I]);
 
-    PrevCovLine := 0;
+    if FCoverageEnabled and Assigned(Template.DebugInfo) and
+       (Template.DebugInfo.LineMapCount > 0) then
+      PrevCovLine := Template.DebugInfo.GetLineMapEntry(0).Line
+    else
+      PrevCovLine := 0;
     Running := True;
     while Running and (Frame.IP < Template.CodeCount) do
     begin

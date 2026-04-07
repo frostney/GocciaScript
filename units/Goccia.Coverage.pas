@@ -38,6 +38,7 @@ type
 
     procedure RecordLineHit(const ALine: Integer); inline;
     procedure RecordBranchHit(const ALine, AColumn, ABranchIndex: Integer);
+    procedure EnsureBranchExists(const ALine, AColumn, ABranchIndex: Integer);
 
     function LinesHit: Integer;
     function BranchesFound: Integer;
@@ -136,8 +137,7 @@ end;
 function IsSkippedTestLine(const ATrimmed: string): Boolean;
 begin
   Result := (Pos('test.skip(', ATrimmed) > 0) or
-            (Pos('describe.skip(', ATrimmed) > 0) or
-            (Pos('.skipIf(', ATrimmed) > 0);
+            (Pos('describe.skip(', ATrimmed) > 0);
 end;
 
 procedure BuildExecutableLineFlags(const ASourceLines: TStrings;
@@ -330,6 +330,9 @@ begin
       Branch := FBranches[I];
       Inc(Branch.HitCount);
       FBranches[I] := Branch;
+      // Ensure the opposite arm exists for binary branches (if/ternary/short-circuit)
+      if ABranchIndex <= 1 then
+        EnsureBranchExists(ALine, AColumn, 1 - ABranchIndex);
       Exit;
     end;
 
@@ -337,6 +340,28 @@ begin
   Branch.Column := AColumn;
   Branch.BranchIndex := ABranchIndex;
   Branch.HitCount := 1;
+  FBranches.Add(Branch);
+
+  // Ensure the opposite arm exists for binary branches
+  if ABranchIndex <= 1 then
+    EnsureBranchExists(ALine, AColumn, 1 - ABranchIndex);
+end;
+
+procedure TGocciaFileCoverage.EnsureBranchExists(const ALine, AColumn,
+  ABranchIndex: Integer);
+var
+  I: Integer;
+  Branch: TGocciaCoverageBranch;
+begin
+  for I := 0 to FBranches.Count - 1 do
+    if (FBranches[I].Line = ALine) and (FBranches[I].Column = AColumn) and
+       (FBranches[I].BranchIndex = ABranchIndex) then
+      Exit;
+
+  Branch.Line := ALine;
+  Branch.Column := AColumn;
+  Branch.BranchIndex := ABranchIndex;
+  Branch.HitCount := 0;
   FBranches.Add(Branch);
 end;
 
