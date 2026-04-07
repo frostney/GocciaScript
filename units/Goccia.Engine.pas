@@ -84,6 +84,7 @@ type
     Result: TGocciaValue;
     LexTimeNanoseconds: Int64;
     ParseTimeNanoseconds: Int64;
+    CompileTimeNanoseconds: Int64;
     ExecuteTimeNanoseconds: Int64;
     TotalTimeNanoseconds: Int64;
     FileName: string;

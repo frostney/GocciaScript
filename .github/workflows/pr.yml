@@ -650,6 +650,13 @@ jobs:
               const bSkipped = testBytecode ? testBytecode.skipped : 0;
               const iDur = testInterp ? fmtDur(testInterp.durationNanoseconds) : '—';
               const bDur = testBytecode ? fmtDur(testBytecode.durationNanoseconds) : '—';
+              const iLex = testInterp ? fmtDur(testInterp.lexTimeNanoseconds) : '—';
+              const bLex = testBytecode ? fmtDur(testBytecode.lexTimeNanoseconds) : '—';
+              const iParse = testInterp ? fmtDur(testInterp.parseTimeNanoseconds) : '—';
+              const bParse = testBytecode ? fmtDur(testBytecode.parseTimeNanoseconds) : '—';
+              const bCompile = testBytecode ? fmtDur(testBytecode.compileTimeNanoseconds) : '—';
+              const iExec = testInterp ? fmtDur(testInterp.executeTimeNanoseconds) : '—';
+              const bExec = testBytecode ? fmtDur(testBytecode.executeTimeNanoseconds) : '—';
               const iEngine = testInterp ? fmtDur(testInterp.totalEngineNanoseconds) : '—';
               const bEngine = testBytecode ? fmtDur(testBytecode.totalEngineNanoseconds) : '—';
 
@@ -659,8 +666,12 @@ jobs:
                 body += `| Tests | Failed | ${iFailed > 0 ? `${iFailed} ❌` : '0'} | ${bFailed > 0 ? `${bFailed} ❌` : '0'} |\n`;
               if (iSkipped > 0 || bSkipped > 0)
                 body += `| Tests | Skipped | ${iSkipped} | ${bSkipped} |\n`;
-              body += `| Tests | Execution | ${iDur} | ${bDur} |\n`;
-              body += `| Tests | Engine | ${iEngine} | ${bEngine} |\n`;
+              body += `| Tests | Test Duration | ${iDur} | ${bDur} |\n`;
+              body += `| Tests | Lex | ${iLex} | ${bLex} |\n`;
+              body += `| Tests | Parse | ${iParse} | ${bParse} |\n`;
+              body += `| Tests | Compile | — | ${bCompile} |\n`;
+              body += `| Tests | Execute | ${iExec} | ${bExec} |\n`;
+              body += `| Tests | Engine Total | ${iEngine} | ${bEngine} |\n`;
             }
 
             if (benchInterp || benchBytecode) {

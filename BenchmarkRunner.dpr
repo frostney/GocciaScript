@@ -221,7 +221,7 @@ var
   FileResult: TBenchmarkFileResult;
   ScriptResult: TGocciaObjectValue;
   BenchGlobals: TGocciaGlobalBuiltins;
-  CompileStart, CompileEnd, ExecEnd: Int64;
+  LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
   BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
 
@@ -238,22 +238,26 @@ begin
     end;
 
     try
-      CompileStart := GetNanoseconds;
-
       Backend := TGocciaBytecodeBackend.Create(AFileName);
       try
         Backend.RegisterBuiltIns(BenchGlobals);
         ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
           GImportMapPath, GInlineAliases);
 
+        LexStart := GetNanoseconds;
         Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
           Tokens := Lexer.ScanTokens;
+          LexEnd := GetNanoseconds;
+
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
           try
             ProgramNode := Parser.Parse;
+            ParseEnd := GetNanoseconds;
+
             try
               Module := Backend.CompileToModule(ProgramNode);
+              CompileEnd := GetNanoseconds;
             finally
               ProgramNode.Free;
             end;
@@ -263,8 +267,6 @@ begin
         finally
           Lexer.Free;
         end;
-
-        CompileEnd := GetNanoseconds;
 
         if GShowProgress and Assigned(Backend.Bootstrap) and
            Assigned(Backend.Bootstrap.BuiltinBenchmark) then
@@ -277,9 +279,9 @@ begin
           ExecEnd := GetNanoseconds;
 
           FileResult.FileName := AFileName;
-          FileResult.LexTimeNanoseconds := 0;
-          FileResult.ParseTimeNanoseconds := 0;
-          FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
+          FileResult.LexTimeNanoseconds := LexEnd - LexStart;
+          FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
+          FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
           FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
 
           GC := TGarbageCollector.Instance;
@@ -389,7 +391,7 @@ var
   FileResult: TBenchmarkFileResult;
   ScriptResult: TGocciaObjectValue;
   BenchGlobals: TGocciaGlobalBuiltins;
-  CompileStart, CompileEnd, ExecEnd: Int64;
+  LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
   BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
   ASource.Add('runBenchmarks();');
@@ -403,22 +405,26 @@ begin
   end;
 
   try
-    CompileStart := GetNanoseconds;
-
     Backend := TGocciaBytecodeBackend.Create(AFileName);
     try
       Backend.RegisterBuiltIns(BenchGlobals);
       ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
         GImportMapPath, GInlineAliases);
 
+      LexStart := GetNanoseconds;
       Lexer := TGocciaLexer.Create(SourceText, AFileName);
       try
         Tokens := Lexer.ScanTokens;
+        LexEnd := GetNanoseconds;
+
         Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
         try
           ProgramNode := Parser.Parse;
+          ParseEnd := GetNanoseconds;
+
           try
             Module := Backend.CompileToModule(ProgramNode);
+            CompileEnd := GetNanoseconds;
           finally
             ProgramNode.Free;
           end;
@@ -428,8 +434,6 @@ begin
       finally
         Lexer.Free;
       end;
-
-      CompileEnd := GetNanoseconds;
 
       if GShowProgress and Assigned(Backend.Bootstrap) and
          Assigned(Backend.Bootstrap.BuiltinBenchmark) then
@@ -442,9 +446,9 @@ begin
         ExecEnd := GetNanoseconds;
 
         FileResult.FileName := AFileName;
-        FileResult.LexTimeNanoseconds := 0;
-        FileResult.ParseTimeNanoseconds := 0;
-        FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
+        FileResult.LexTimeNanoseconds := LexEnd - LexStart;
+        FileResult.ParseTimeNanoseconds := ParseEnd - LexEnd;
+        FileResult.CompileTimeNanoseconds := CompileEnd - ParseEnd;
         FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
 
         GC := TGarbageCollector.Instance;
