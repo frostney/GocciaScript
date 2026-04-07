@@ -209,7 +209,7 @@ begin
       Continue;
     end;
 
-    // Detect test.skip/describe.skip/skipIf/runIf — body is intentionally skipped
+    // Detect test.skip/describe.skip — body is unconditionally skipped
     if IsSkippedTestLine(Trimmed) then
     begin
       SkipBodyDepth := 0;
