@@ -151,8 +151,12 @@ begin
         Source.Clear;
         Source.Add(Line);
 
+        StartTime := GetNanoseconds;
+        LexEnd := StartTime;
+        ParseEnd := StartTime;
+        CompileEnd := StartTime;
+        ExecEnd := StartTime;
         try
-          StartTime := GetNanoseconds;
           SourceText := StringListToLFText(Source);
 
           if ggJSX in TGocciaEngine.DefaultGlobals then
@@ -185,14 +189,6 @@ begin
 
                   if ResultValue <> nil then
                     WriteLn(FormatREPLValue(ResultValue));
-                  if ShowTiming then
-                    WriteLn(SysUtils.Format(
-                      '  Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
-                      [FormatDuration(LexEnd - StartTime),
-                       FormatDuration(ParseEnd - LexEnd),
-                       FormatDuration(CompileEnd - ParseEnd),
-                       FormatDuration(ExecEnd - CompileEnd),
-                       FormatDuration(ExecEnd - StartTime)]));
                 finally
                   if Assigned(TGocciaMicrotaskQueue.Instance) then
                     TGocciaMicrotaskQueue.Instance.ClearQueue;
@@ -209,8 +205,19 @@ begin
           end;
         except
           on E: Exception do
+          begin
+            ExecEnd := GetNanoseconds;
             WriteLn('Error: ', E.Message);
+          end;
         end;
+        if ShowTiming then
+          WriteLn(SysUtils.Format(
+            '  Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
+            [FormatDuration(LexEnd - StartTime),
+             FormatDuration(ParseEnd - LexEnd),
+             FormatDuration(CompileEnd - ParseEnd),
+             FormatDuration(ExecEnd - CompileEnd),
+             FormatDuration(ExecEnd - StartTime)]));
       end;
     finally
       LiveModules.Free;
@@ -245,17 +252,17 @@ begin
           ScriptResult := Engine.Execute;
           if ScriptResult.Result <> nil then
             WriteLn(FormatREPLValue(ScriptResult.Result));
-          if ShowTiming then
-            WriteLn(SysUtils.Format(
-              '  Lex: %s | Parse: %s | Execute: %s | Total: %s',
-              [FormatDuration(ScriptResult.LexTimeNanoseconds),
-               FormatDuration(ScriptResult.ParseTimeNanoseconds),
-               FormatDuration(ScriptResult.ExecuteTimeNanoseconds),
-               FormatDuration(ScriptResult.TotalTimeNanoseconds)]));
         except
           on E: Exception do
             WriteLn('Error: ', E.Message);
         end;
+        if ShowTiming then
+          WriteLn(SysUtils.Format(
+            '  Lex: %s | Parse: %s | Execute: %s | Total: %s',
+            [FormatDuration(Engine.LastTiming.LexTimeNanoseconds),
+             FormatDuration(Engine.LastTiming.ParseTimeNanoseconds),
+             FormatDuration(Engine.LastTiming.ExecuteTimeNanoseconds),
+             FormatDuration(Engine.LastTiming.TotalTimeNanoseconds)]));
       end;
     finally
       Editor.Free;
