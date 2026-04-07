@@ -3368,8 +3368,8 @@ begin
     Frame.Template := Template;
 
     // Record coverage hit on the function declaration line
-    if FCoverageEnabled and Assigned(Template.DebugInfo) and
-       (Template.DebugInfo.LineMapCount > 0) then
+    if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and
+       Assigned(Template.DebugInfo) and (Template.DebugInfo.LineMapCount > 0) then
       TGocciaCoverageTracker.Instance.RecordLineHit(
         Template.DebugInfo.SourceFile,
         Template.DebugInfo.GetLineMapEntry(0).Line);
@@ -3407,7 +3407,8 @@ begin
         Instruction := Template.GetInstructionUnchecked(Frame.IP);
         Inc(Frame.IP);
 
-        if FCoverageEnabled and Assigned(Template.DebugInfo) then
+        if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and
+           Assigned(Template.DebugInfo) then
         begin
           CovLine := Template.DebugInfo.GetLineForPC(Frame.IP - 1);
           if (CovLine <> 0) and (CovLine <> PrevCovLine) then
@@ -3544,7 +3545,7 @@ begin
       OP_JUMP_IF_TRUE:
         if GetRegister(A).ToBooleanLiteral.Value then
         begin
-          if FCoverageEnabled and Assigned(Template.DebugInfo) then
+          if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
               Template.DebugInfo.GetLineForPC(Frame.IP - 1),
@@ -3554,7 +3555,7 @@ begin
           if JumpOffset < 0 then
             CheckExecutionTimeout;
         end
-        else if FCoverageEnabled and Assigned(Template.DebugInfo) then
+        else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
             Template.DebugInfo.GetLineForPC(Frame.IP - 1),
@@ -3563,7 +3564,7 @@ begin
       OP_JUMP_IF_FALSE:
         if not GetRegister(A).ToBooleanLiteral.Value then
         begin
-          if FCoverageEnabled and Assigned(Template.DebugInfo) then
+          if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
               Template.DebugInfo.GetLineForPC(Frame.IP - 1),
@@ -3573,7 +3574,7 @@ begin
           if JumpOffset < 0 then
             CheckExecutionTimeout;
         end
-        else if FCoverageEnabled and Assigned(Template.DebugInfo) then
+        else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
             Template.DebugInfo.GetLineForPC(Frame.IP - 1),
@@ -3582,14 +3583,14 @@ begin
       OP_JUMP_IF_NULLISH:
         if RegisterMatchesNullishKind(FRegisters[A], B) then
         begin
-          if FCoverageEnabled and Assigned(Template.DebugInfo) then
+          if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
               Template.DebugInfo.GetLineForPC(Frame.IP - 1),
               Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
           Inc(Frame.IP, C);
         end
-        else if FCoverageEnabled and Assigned(Template.DebugInfo) then
+        else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
             Template.DebugInfo.GetLineForPC(Frame.IP - 1),
@@ -3598,14 +3599,14 @@ begin
       OP_JUMP_IF_NOT_NULLISH:
         if not RegisterMatchesNullishKind(FRegisters[A], B) then
         begin
-          if FCoverageEnabled and Assigned(Template.DebugInfo) then
+          if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
             TGocciaCoverageTracker.Instance.RecordBranchHit(
               Template.DebugInfo.SourceFile,
               Template.DebugInfo.GetLineForPC(Frame.IP - 1),
               Template.DebugInfo.GetColumnForPC(Frame.IP - 1), 0);
           Inc(Frame.IP, C);
         end
-        else if FCoverageEnabled and Assigned(Template.DebugInfo) then
+        else if FCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
             Template.DebugInfo.SourceFile,
             Template.DebugInfo.GetLineForPC(Frame.IP - 1),
