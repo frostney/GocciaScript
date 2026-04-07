@@ -14,4 +14,11 @@ describe.runIf(hasGoccia)("Goccia.semver.Comparator", () => {
     expect(comparator.test("1.2.3")).toBe(true);
     expect(comparator.test("1.2.2")).toBe(false);
   });
+
+  test("new Goccia.semver.Comparator handles malformed and empty comparators", () => {
+    expect(() => new Goccia.semver.Comparator(">>1.2.3")).toThrow(TypeError);
+    const comparator = new Goccia.semver.Comparator("");
+    expect(comparator.operator).toBe("");
+    expect(comparator.value).toBe("");
+  });
 });

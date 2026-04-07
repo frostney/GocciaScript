@@ -11,4 +11,9 @@ describe.runIf(hasGoccia)("Goccia.semver.inc", () => {
     expect(Goccia.semver.inc("1.2.3", "prerelease", "beta")).toBe("1.2.4-beta.0");
     expect(Goccia.semver.inc("1.2.4-beta.0", "prerelease", "beta")).toBe("1.2.4-beta.1");
   });
+
+  test("Goccia.semver.inc returns null for invalid input", () => {
+    expect(Goccia.semver.inc("1.2.3", "foobar")).toBe(null);
+    expect(Goccia.semver.inc("1.2", "patch")).toBe(null);
+  });
 });

@@ -12,4 +12,8 @@ describe.runIf(hasGoccia)("Goccia.semver.compare", () => {
     expect(Goccia.semver.compare("1.2.3", "1.2.3")).toBe(0);
     expect(Goccia.semver.compare("1.2.3-alpha.1", "1.2.3")).toBe(-1);
   });
+
+  test("Goccia.semver.compare throws for invalid versions", () => {
+    expect(() => Goccia.semver.compare("1.2.3", "bad")).toThrow(TypeError);
+  });
 });

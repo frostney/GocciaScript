@@ -12,4 +12,11 @@ describe.runIf(hasGoccia)("Goccia.semver.toComparators", () => {
     expect(comparators[0][0]).toBe(">=1.0.0");
     expect(comparators[0][1]).toBe("<2.0.0-0");
   });
+
+  test("Goccia.semver.toComparators handles partial and invalid ranges", () => {
+    const comparators = Goccia.semver.toComparators("1.2");
+    expect(comparators[0][0]).toBe(">=1.2.0");
+    expect(comparators[0][1]).toBe("<1.3.0-0");
+    expect(() => Goccia.semver.toComparators("invalid")).toThrow();
+  });
 });

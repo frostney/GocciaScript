@@ -13,5 +13,7 @@ describe.runIf(hasGoccia)("Goccia.semver.satisfies", () => {
     expect(Goccia.semver.satisfies("1.2.3-alpha.2", ">=1.2.3-alpha.1 <1.2.3", {
       includePrerelease: true,
     })).toBe(true);
+    expect(Goccia.semver.satisfies("not-a-version", "^1.2.3")).toBe(false);
+    expect(Goccia.semver.satisfies("1.2.3", "invalid")).toBe(false);
   });
 });

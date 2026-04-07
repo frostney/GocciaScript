@@ -1783,6 +1783,7 @@ function RangeIntersects(const ALeft, ARight: string;
 var
   LeftRange, RightRange: TGocciaSemverRange;
   I, J, K, L: Integer;
+  IntersectsAll: Boolean;
 begin
   LeftRange := MustParseRange(ALeft, AOptions);
   RightRange := MustParseRange(ARight, AOptions);
@@ -1792,13 +1793,17 @@ begin
       for J := 0 to High(RightRange.SetOfComparators) do
         if IsSatisfiableComparatorSet(RightRange.SetOfComparators[J], AOptions) then
         begin
-          Result := True;
+          IntersectsAll := True;
           for K := 0 to High(LeftRange.SetOfComparators[I]) do
             for L := 0 to High(RightRange.SetOfComparators[J]) do
               if not ComparatorIntersects(LeftRange.SetOfComparators[I][K],
                 RightRange.SetOfComparators[J][L], AOptions) then
-                Exit(False);
-          Exit(True);
+              begin
+                IntersectsAll := False;
+                Break;
+              end;
+          if IntersectsAll then
+            Exit(True);
         end;
   Result := False;
 end;
@@ -2137,7 +2142,8 @@ begin
   for DomainComparator in ADomainSet do
   begin
     if (GreaterThanComparator.Value <> '') and
-      (DomainComparator.Operator = '>') or (DomainComparator.Operator = '>=') then
+      ((DomainComparator.Operator = '>') or
+      (DomainComparator.Operator = '>=')) then
       if HigherGreaterThanComparator(GreaterThanComparator, DomainComparator, AOptions).Value = DomainComparator.Value then
         Exit(False);
     if (LessThanComparator.Value <> '') and

@@ -18,4 +18,14 @@ describe.runIf(hasGoccia)("Goccia.semver.SemVer", () => {
     expect(version.build[0]).toBe("build");
     expect(version.build[1]).toBe("5");
   });
+
+  test("new Goccia.semver.SemVer handles edge and invalid versions", () => {
+    const minimal = new Goccia.semver.SemVer("0.0.0+meta");
+    expect(minimal.version).toBe("0.0.0");
+    expect(minimal.major).toBe(0);
+    expect(minimal.minor).toBe(0);
+    expect(minimal.patch).toBe(0);
+    expect(minimal.build[0]).toBe("meta");
+    expect(() => new Goccia.semver.SemVer("invalid")).toThrow(TypeError);
+  });
 });

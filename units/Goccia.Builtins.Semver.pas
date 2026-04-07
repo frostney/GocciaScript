@@ -472,6 +472,76 @@ begin
   Result := AArgs.GetElement(AIndex).ToStringLiteral.Value;
 end;
 
+function CompareMainSemver(const ALeft, ARight: TGocciaSemver): Integer;
+begin
+  if ALeft.Major < ARight.Major then
+    Exit(-1);
+  if ALeft.Major > ARight.Major then
+    Exit(1);
+  if ALeft.Minor < ARight.Minor then
+    Exit(-1);
+  if ALeft.Minor > ARight.Minor then
+    Exit(1);
+  if ALeft.Patch < ARight.Patch then
+    Exit(-1);
+  if ALeft.Patch > ARight.Patch then
+    Exit(1);
+  Result := 0;
+end;
+
+function ComparePrereleaseIdentifier(const ALeft,
+  ARight: TGocciaSemverIdentifier): Integer;
+begin
+  if (ALeft.Kind = sikNumeric) and (ARight.Kind = sikNumeric) then
+  begin
+    if ALeft.NumericValue < ARight.NumericValue then
+      Exit(-1);
+    if ALeft.NumericValue > ARight.NumericValue then
+      Exit(1);
+    Exit(0);
+  end;
+
+  if ALeft.Kind = sikNumeric then
+    Exit(-1);
+  if ARight.Kind = sikNumeric then
+    Exit(1);
+
+  if ALeft.TextValue < ARight.TextValue then
+    Exit(-1);
+  if ALeft.TextValue > ARight.TextValue then
+    Exit(1);
+  Result := 0;
+end;
+
+function ComparePrereleaseSemver(const ALeft, ARight: TGocciaSemver): Integer;
+var
+  I, CompareResult: Integer;
+begin
+  if Length(ALeft.Prerelease) = 0 then
+  begin
+    if Length(ARight.Prerelease) = 0 then
+      Exit(0);
+    Exit(1);
+  end;
+
+  if Length(ARight.Prerelease) = 0 then
+    Exit(-1);
+
+  for I := 0 to Length(ALeft.Prerelease) - 1 do
+  begin
+    if I >= Length(ARight.Prerelease) then
+      Exit(1);
+    CompareResult := ComparePrereleaseIdentifier(ALeft.Prerelease[I],
+      ARight.Prerelease[I]);
+    if CompareResult <> 0 then
+      Exit(CompareResult);
+  end;
+
+  if Length(ALeft.Prerelease) < Length(ARight.Prerelease) then
+    Exit(-1);
+  Result := 0;
+end;
+
 function TGocciaSemverNamespaceHost.SemVerConstructor(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -520,15 +590,25 @@ end;
 function TGocciaSemverNamespaceHost.SemVerFormat(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(ReadSemver(AThisValue,
-    DefaultSemverOptions).Version);
+  try
+    Result := TGocciaStringLiteralValue.Create(ReadSemver(AThisValue,
+      DefaultSemverOptions).Version);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.SemVerToStringMethod(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(ReadSemver(AThisValue,
-    DefaultSemverOptions).Version);
+  try
+    Result := TGocciaStringLiteralValue.Create(ReadSemver(AThisValue,
+      DefaultSemverOptions).Version);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.SemVerCompareMethod(
@@ -536,10 +616,15 @@ function TGocciaSemverNamespaceHost.SemVerCompareMethod(
 var
   ThisSemver, OtherSemver: TGocciaSemver;
 begin
-  ThisSemver := ReadSemver(AThisValue, DefaultSemverOptions);
-  OtherSemver := ReadSemver(AArgs.GetElement(0), ThisSemver.Options);
-  Result := IntegerValue(Goccia.Semver.Compare(ThisSemver.Version,
-    OtherSemver.Version, ThisSemver.Options));
+  try
+    ThisSemver := ReadSemver(AThisValue, DefaultSemverOptions);
+    OtherSemver := ReadSemver(AArgs.GetElement(0), ThisSemver.Options);
+    Result := IntegerValue(Goccia.Semver.Compare(ThisSemver.Version,
+      OtherSemver.Version, ThisSemver.Options));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.SemVerCompareMainMethod(
@@ -547,16 +632,29 @@ function TGocciaSemverNamespaceHost.SemVerCompareMainMethod(
 var
   ThisSemver, OtherSemver: TGocciaSemver;
 begin
-  ThisSemver := ReadSemver(AThisValue, DefaultSemverOptions);
-  OtherSemver := ReadSemver(AArgs.GetElement(0), ThisSemver.Options);
-  Result := IntegerValue(Compare(ThisSemver.Version, OtherSemver.Version,
-    ThisSemver.Options));
+  try
+    ThisSemver := ReadSemver(AThisValue, DefaultSemverOptions);
+    OtherSemver := ReadSemver(AArgs.GetElement(0), ThisSemver.Options);
+    Result := IntegerValue(CompareMainSemver(ThisSemver, OtherSemver));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.SemVerComparePreMethod(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ThisSemver, OtherSemver: TGocciaSemver;
 begin
-  Result := SemVerCompareMethod(AArgs, AThisValue);
+  try
+    ThisSemver := ReadSemver(AThisValue, DefaultSemverOptions);
+    OtherSemver := ReadSemver(AArgs.GetElement(0), ThisSemver.Options);
+    Result := IntegerValue(ComparePrereleaseSemver(ThisSemver, OtherSemver));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.SemVerCompareBuildMethod(
@@ -564,10 +662,15 @@ function TGocciaSemverNamespaceHost.SemVerCompareBuildMethod(
 var
   ThisSemver, OtherSemver: TGocciaSemver;
 begin
-  ThisSemver := ReadSemver(AThisValue, DefaultSemverOptions);
-  OtherSemver := ReadSemver(AArgs.GetElement(0), ThisSemver.Options);
-  Result := IntegerValue(Goccia.Semver.CompareBuild(ThisSemver.Version,
-    OtherSemver.Version, ThisSemver.Options));
+  try
+    ThisSemver := ReadSemver(AThisValue, DefaultSemverOptions);
+    OtherSemver := ReadSemver(AArgs.GetElement(0), ThisSemver.Options);
+    Result := IntegerValue(Goccia.Semver.CompareBuild(ThisSemver.Version,
+      OtherSemver.Version, ThisSemver.Options));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.SemVerIncMethod(
@@ -598,8 +701,13 @@ end;
 function TGocciaSemverNamespaceHost.ComparatorToStringMethod(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(ReadComparator(AThisValue,
-    DefaultSemverOptions).Value);
+  try
+    Result := TGocciaStringLiteralValue.Create(ReadComparator(AThisValue,
+      DefaultSemverOptions).Value);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.ComparatorTestMethod(
@@ -608,10 +716,15 @@ var
   ComparatorValue: TGocciaSemverComparator;
   VersionValue: TGocciaSemver;
 begin
-  ComparatorValue := ReadComparator(AThisValue, DefaultSemverOptions);
-  VersionValue := ReadSemver(AArgs.GetElement(0), ComparatorValue.Semver.Options);
-  Result := BooleanValue(Cmp(VersionValue.Version, ComparatorValue.Operator,
-    ComparatorValue.Semver.Version, ComparatorValue.Semver.Options));
+  try
+    ComparatorValue := ReadComparator(AThisValue, DefaultSemverOptions);
+    VersionValue := ReadSemver(AArgs.GetElement(0), ComparatorValue.Semver.Options);
+    Result := BooleanValue(Cmp(VersionValue.Version, ComparatorValue.Operator,
+      ComparatorValue.Semver.Version, ComparatorValue.Semver.Options));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.ComparatorIntersectsMethod(
@@ -620,23 +733,38 @@ var
   LeftComparator, RightComparator: TGocciaSemverComparator;
   Options: TGocciaSemverOptions;
 begin
-  LeftComparator := ReadComparator(AThisValue, DefaultSemverOptions);
-  Options := ParseOptionsAt(AArgs, 1);
-  RightComparator := ReadComparator(AArgs.GetElement(0), Options);
-  Result := BooleanValue(ComparatorIntersects(LeftComparator, RightComparator, Options));
+  try
+    LeftComparator := ReadComparator(AThisValue, DefaultSemverOptions);
+    Options := ParseOptionsAt(AArgs, 1);
+    RightComparator := ReadComparator(AArgs.GetElement(0), Options);
+    Result := BooleanValue(ComparatorIntersects(LeftComparator, RightComparator, Options));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.RangeFormatMethod(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(ReadRange(AThisValue,
-    DefaultSemverOptions).Formatted);
+  try
+    Result := TGocciaStringLiteralValue.Create(ReadRange(AThisValue,
+      DefaultSemverOptions).Formatted);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.RangeToStringMethod(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := RangeFormatMethod(AArgs, AThisValue);
+  try
+    Result := RangeFormatMethod(AArgs, AThisValue);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.RangeTestMethod(
@@ -644,9 +772,14 @@ function TGocciaSemverNamespaceHost.RangeTestMethod(
 var
   RangeValue: TGocciaSemverRange;
 begin
-  RangeValue := ReadRange(AThisValue, DefaultSemverOptions);
-  Result := BooleanValue(Satisfies(AArgs.GetElement(0).ToStringLiteral.Value,
-    RangeValue.Raw, RangeValue.Options));
+  try
+    RangeValue := ReadRange(AThisValue, DefaultSemverOptions);
+    Result := BooleanValue(Satisfies(AArgs.GetElement(0).ToStringLiteral.Value,
+      RangeValue.Raw, RangeValue.Options));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.RangeIntersectsMethod(
@@ -655,24 +788,39 @@ var
   LeftRange, RightRange: TGocciaSemverRange;
   Options: TGocciaSemverOptions;
 begin
-  LeftRange := ReadRange(AThisValue, DefaultSemverOptions);
-  Options := ParseOptionsAt(AArgs, 1);
-  RightRange := ReadRange(AArgs.GetElement(0), Options);
-  Result := BooleanValue(RangeIntersects(LeftRange.Raw, RightRange.Raw, Options));
+  try
+    LeftRange := ReadRange(AThisValue, DefaultSemverOptions);
+    Options := ParseOptionsAt(AArgs, 1);
+    RightRange := ReadRange(AArgs.GetElement(0), Options);
+    Result := BooleanValue(RangeIntersects(LeftRange.Raw, RightRange.Raw, Options));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceValid(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := WrapNullReturningString(Valid(
-    RequireStringArgument(AArgs, 0, 'valid'), ParseOptionsAt(AArgs, 1)));
+  try
+    Result := WrapNullReturningString(Valid(
+      RequireStringArgument(AArgs, 0, 'valid'), ParseOptionsAt(AArgs, 1)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceClean(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := WrapNullReturningString(Clean(
-    RequireStringArgument(AArgs, 0, 'clean'), ParseOptionsAt(AArgs, 1)));
+  try
+    Result := WrapNullReturningString(Clean(
+      RequireStringArgument(AArgs, 0, 'clean'), ParseOptionsAt(AArgs, 1)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceParse(
@@ -681,11 +829,16 @@ var
   Options: TGocciaSemverOptions;
   Parsed: TGocciaSemver;
 begin
-  Options := ParseOptionsAt(AArgs, 1);
-  if ParseSemver(RequireStringArgument(AArgs, 0, 'parse'), Options, Parsed) then
-    Result := CreateSemverObject(Parsed)
-  else
-    Result := TGocciaNullLiteralValue.NullValue;
+  try
+    Options := ParseOptionsAt(AArgs, 1);
+    if ParseSemver(RequireStringArgument(AArgs, 0, 'parse'), Options, Parsed) then
+      Result := CreateSemverObject(Parsed)
+    else
+      Result := TGocciaNullLiteralValue.NullValue;
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceInc(
@@ -695,24 +848,29 @@ var
   Options: TGocciaSemverOptions;
   Incremented: string;
 begin
-  VersionText := RequireStringArgument(AArgs, 0, 'inc');
-  ReleaseText := RequireStringArgument(AArgs, 1, 'inc');
-  Identifier := '';
-  Options := DefaultSemverOptions;
-  if AArgs.Length > 2 then
-  begin
-    if AArgs.GetElement(2) is TGocciaObjectValue then
-      Options := ParseOptionsValue(AArgs.GetElement(2))
+  try
+    VersionText := RequireStringArgument(AArgs, 0, 'inc');
+    ReleaseText := RequireStringArgument(AArgs, 1, 'inc');
+    Identifier := '';
+    Options := DefaultSemverOptions;
+    if AArgs.Length > 2 then
+    begin
+      if AArgs.GetElement(2) is TGocciaObjectValue then
+        Options := ParseOptionsValue(AArgs.GetElement(2))
+      else
+        Identifier := AArgs.GetElement(2).ToStringLiteral.Value;
+    end;
+    if (Identifier = '') and (AArgs.Length > 3) then
+      Identifier := AArgs.GetElement(3).ToStringLiteral.Value;
+    if TryIncrement(VersionText, ReleaseText, Options, Identifier, False, False,
+      Incremented) then
+      Result := TGocciaStringLiteralValue.Create(Incremented)
     else
-      Identifier := AArgs.GetElement(2).ToStringLiteral.Value;
+      Result := TGocciaNullLiteralValue.NullValue;
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
   end;
-  if (Identifier = '') and (AArgs.Length > 3) then
-    Identifier := AArgs.GetElement(3).ToStringLiteral.Value;
-  if TryIncrement(VersionText, ReleaseText, Options, Identifier, False, False,
-    Incremented) then
-    Result := TGocciaStringLiteralValue.Create(Incremented)
-  else
-    Result := TGocciaNullLiteralValue.NullValue;
 end;
 
 function TGocciaSemverNamespaceHost.NamespacePrerelease(
@@ -720,129 +878,214 @@ function TGocciaSemverNamespaceHost.NamespacePrerelease(
 var
   Identifiers: TGocciaSemverIdentifierArray;
 begin
-  if PrereleaseOf(RequireStringArgument(AArgs, 0, 'prerelease'),
-    ParseOptionsAt(AArgs, 1), Identifiers) then
-    Result := IdentifierArrayValue(Identifiers)
-  else
-    Result := TGocciaNullLiteralValue.NullValue;
+  try
+    if PrereleaseOf(RequireStringArgument(AArgs, 0, 'prerelease'),
+      ParseOptionsAt(AArgs, 1), Identifiers) then
+      Result := IdentifierArrayValue(Identifiers)
+    else
+      Result := TGocciaNullLiteralValue.NullValue;
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceMajor(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := IntegerValue(MajorOf(RequireStringArgument(AArgs, 0, 'major'),
-    ParseOptionsAt(AArgs, 1)));
+  try
+    Result := IntegerValue(MajorOf(RequireStringArgument(AArgs, 0, 'major'),
+      ParseOptionsAt(AArgs, 1)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceMinor(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := IntegerValue(MinorOf(RequireStringArgument(AArgs, 0, 'minor'),
-    ParseOptionsAt(AArgs, 1)));
+  try
+    Result := IntegerValue(MinorOf(RequireStringArgument(AArgs, 0, 'minor'),
+      ParseOptionsAt(AArgs, 1)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespacePatch(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := IntegerValue(PatchOf(RequireStringArgument(AArgs, 0, 'patch'),
-    ParseOptionsAt(AArgs, 1)));
+  try
+    Result := IntegerValue(PatchOf(RequireStringArgument(AArgs, 0, 'patch'),
+      ParseOptionsAt(AArgs, 1)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceIntersects(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(RangeIntersects(
-    RequireStringArgument(AArgs, 0, 'intersects'),
-    RequireStringArgument(AArgs, 1, 'intersects'),
-    ParseOptionsAt(AArgs, 2)));
+  try
+    Result := BooleanValue(RangeIntersects(
+      RequireStringArgument(AArgs, 0, 'intersects'),
+      RequireStringArgument(AArgs, 1, 'intersects'),
+      ParseOptionsAt(AArgs, 2)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceGT(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(Compare(RequireStringArgument(AArgs, 0, 'gt'),
-    RequireStringArgument(AArgs, 1, 'gt'), ParseOptionsAt(AArgs, 2)) > 0);
+  try
+    Result := BooleanValue(Compare(RequireStringArgument(AArgs, 0, 'gt'),
+      RequireStringArgument(AArgs, 1, 'gt'), ParseOptionsAt(AArgs, 2)) > 0);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceGTE(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(Compare(RequireStringArgument(AArgs, 0, 'gte'),
-    RequireStringArgument(AArgs, 1, 'gte'), ParseOptionsAt(AArgs, 2)) >= 0);
+  try
+    Result := BooleanValue(Compare(RequireStringArgument(AArgs, 0, 'gte'),
+      RequireStringArgument(AArgs, 1, 'gte'), ParseOptionsAt(AArgs, 2)) >= 0);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceLT(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(Compare(RequireStringArgument(AArgs, 0, 'lt'),
-    RequireStringArgument(AArgs, 1, 'lt'), ParseOptionsAt(AArgs, 2)) < 0);
+  try
+    Result := BooleanValue(Compare(RequireStringArgument(AArgs, 0, 'lt'),
+      RequireStringArgument(AArgs, 1, 'lt'), ParseOptionsAt(AArgs, 2)) < 0);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceLTE(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(Compare(RequireStringArgument(AArgs, 0, 'lte'),
-    RequireStringArgument(AArgs, 1, 'lte'), ParseOptionsAt(AArgs, 2)) <= 0);
+  try
+    Result := BooleanValue(Compare(RequireStringArgument(AArgs, 0, 'lte'),
+      RequireStringArgument(AArgs, 1, 'lte'), ParseOptionsAt(AArgs, 2)) <= 0);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceEQ(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(Compare(RequireStringArgument(AArgs, 0, 'eq'),
-    RequireStringArgument(AArgs, 1, 'eq'), ParseOptionsAt(AArgs, 2)) = 0);
+  try
+    Result := BooleanValue(Compare(RequireStringArgument(AArgs, 0, 'eq'),
+      RequireStringArgument(AArgs, 1, 'eq'), ParseOptionsAt(AArgs, 2)) = 0);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceNEQ(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(Compare(RequireStringArgument(AArgs, 0, 'neq'),
-    RequireStringArgument(AArgs, 1, 'neq'), ParseOptionsAt(AArgs, 2)) <> 0);
+  try
+    Result := BooleanValue(Compare(RequireStringArgument(AArgs, 0, 'neq'),
+      RequireStringArgument(AArgs, 1, 'neq'), ParseOptionsAt(AArgs, 2)) <> 0);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceCMP(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(Cmp(RequireStringArgument(AArgs, 0, 'cmp'),
-    RequireStringArgument(AArgs, 1, 'cmp'),
-    RequireStringArgument(AArgs, 2, 'cmp'), ParseOptionsAt(AArgs, 3)));
+  try
+    Result := BooleanValue(Cmp(RequireStringArgument(AArgs, 0, 'cmp'),
+      RequireStringArgument(AArgs, 1, 'cmp'),
+      RequireStringArgument(AArgs, 2, 'cmp'), ParseOptionsAt(AArgs, 3)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceCompare(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := IntegerValue(Compare(RequireStringArgument(AArgs, 0, 'compare'),
-    RequireStringArgument(AArgs, 1, 'compare'), ParseOptionsAt(AArgs, 2)));
+  try
+    Result := IntegerValue(Compare(RequireStringArgument(AArgs, 0, 'compare'),
+      RequireStringArgument(AArgs, 1, 'compare'), ParseOptionsAt(AArgs, 2)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceRCompare(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := IntegerValue(Compare(RequireStringArgument(AArgs, 1, 'rcompare'),
-    RequireStringArgument(AArgs, 0, 'rcompare'), ParseOptionsAt(AArgs, 2)));
+  try
+    Result := IntegerValue(Compare(RequireStringArgument(AArgs, 1, 'rcompare'),
+      RequireStringArgument(AArgs, 0, 'rcompare'), ParseOptionsAt(AArgs, 2)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceCompareBuild(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := IntegerValue(CompareBuild(
-    RequireStringArgument(AArgs, 0, 'compareBuild'),
-    RequireStringArgument(AArgs, 1, 'compareBuild'), ParseOptionsAt(AArgs, 2)));
+  try
+    Result := IntegerValue(CompareBuild(
+      RequireStringArgument(AArgs, 0, 'compareBuild'),
+      RequireStringArgument(AArgs, 1, 'compareBuild'), ParseOptionsAt(AArgs, 2)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceCompareLoose(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := IntegerValue(CompareLoose(
-    RequireStringArgument(AArgs, 0, 'compareLoose'),
-    RequireStringArgument(AArgs, 1, 'compareLoose')));
+  try
+    Result := IntegerValue(CompareLoose(
+      RequireStringArgument(AArgs, 0, 'compareLoose'),
+      RequireStringArgument(AArgs, 1, 'compareLoose')));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceDiff(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := WrapNullReturningString(Diff(
-    RequireStringArgument(AArgs, 0, 'diff'),
-    RequireStringArgument(AArgs, 1, 'diff'), ParseOptionsAt(AArgs, 2)));
+  try
+    Result := WrapNullReturningString(Diff(
+      RequireStringArgument(AArgs, 0, 'diff'),
+      RequireStringArgument(AArgs, 1, 'diff'), ParseOptionsAt(AArgs, 2)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceSort(
@@ -851,17 +1094,24 @@ var
   Values: TGocciaSemverStringArray;
   I, J: Integer;
   Temp: string;
+  Options: TGocciaSemverOptions;
 begin
-  Values := StringListArgument(AArgs.GetElement(0));
-  for I := 0 to High(Values) do
-    for J := I + 1 to High(Values) do
-      if CompareBuild(Values[I], Values[J], ParseOptionsAt(AArgs, 1)) > 0 then
-      begin
-        Temp := Values[I];
-        Values[I] := Values[J];
-        Values[J] := Temp;
-      end;
-  Result := StringArrayValue(Values);
+  try
+    Values := StringListArgument(AArgs.GetElement(0));
+    Options := ParseOptionsAt(AArgs, 1);
+    for I := 0 to High(Values) do
+      for J := I + 1 to High(Values) do
+        if CompareBuild(Values[I], Values[J], Options) > 0 then
+        begin
+          Temp := Values[I];
+          Values[I] := Values[J];
+          Values[J] := Temp;
+        end;
+    Result := StringArrayValue(Values);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceRSort(
@@ -870,47 +1120,74 @@ var
   Values: TGocciaSemverStringArray;
   I, J: Integer;
   Temp: string;
+  Options: TGocciaSemverOptions;
 begin
-  Values := StringListArgument(AArgs.GetElement(0));
-  for I := 0 to High(Values) do
-    for J := I + 1 to High(Values) do
-      if CompareBuild(Values[I], Values[J], ParseOptionsAt(AArgs, 1)) < 0 then
-      begin
-        Temp := Values[I];
-        Values[I] := Values[J];
-        Values[J] := Temp;
-      end;
-  Result := StringArrayValue(Values);
+  try
+    Values := StringListArgument(AArgs.GetElement(0));
+    Options := ParseOptionsAt(AArgs, 1);
+    for I := 0 to High(Values) do
+      for J := I + 1 to High(Values) do
+        if CompareBuild(Values[I], Values[J], Options) < 0 then
+        begin
+          Temp := Values[I];
+          Values[I] := Values[J];
+          Values[J] := Temp;
+        end;
+    Result := StringArrayValue(Values);
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceValidRange(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := WrapNullReturningString(ValidRange(
-    RequireStringArgument(AArgs, 0, 'validRange'), ParseOptionsAt(AArgs, 1)));
+  try
+    Result := WrapNullReturningString(ValidRange(
+      RequireStringArgument(AArgs, 0, 'validRange'), ParseOptionsAt(AArgs, 1)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceSatisfies(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(Satisfies(RequireStringArgument(AArgs, 0, 'satisfies'),
-    RequireStringArgument(AArgs, 1, 'satisfies'), ParseOptionsAt(AArgs, 2)));
+  try
+    Result := BooleanValue(Satisfies(RequireStringArgument(AArgs, 0, 'satisfies'),
+      RequireStringArgument(AArgs, 1, 'satisfies'), ParseOptionsAt(AArgs, 2)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceMaxSatisfying(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := WrapNullReturningString(MaxSatisfying(
-    StringListArgument(AArgs.GetElement(0)),
-    RequireStringArgument(AArgs, 1, 'maxSatisfying'), ParseOptionsAt(AArgs, 2)));
+  try
+    Result := WrapNullReturningString(MaxSatisfying(
+      StringListArgument(AArgs.GetElement(0)),
+      RequireStringArgument(AArgs, 1, 'maxSatisfying'), ParseOptionsAt(AArgs, 2)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceMinSatisfying(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := WrapNullReturningString(MinSatisfying(
-    StringListArgument(AArgs.GetElement(0)),
-    RequireStringArgument(AArgs, 1, 'minSatisfying'), ParseOptionsAt(AArgs, 2)));
+  try
+    Result := WrapNullReturningString(MinSatisfying(
+      StringListArgument(AArgs.GetElement(0)),
+      RequireStringArgument(AArgs, 1, 'minSatisfying'), ParseOptionsAt(AArgs, 2)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceMinVersion(
@@ -918,59 +1195,95 @@ function TGocciaSemverNamespaceHost.NamespaceMinVersion(
 var
   Minimum: string;
   Parsed: TGocciaSemver;
+  Options: TGocciaSemverOptions;
 begin
-  Minimum := MinVersion(RequireStringArgument(AArgs, 0, 'minVersion'),
-    ParseOptionsAt(AArgs, 1));
-  if (Minimum <> '') and ParseSemver(Minimum, ParseOptionsAt(AArgs, 1), Parsed) then
-    Result := CreateSemverObject(Parsed)
-  else
-    Result := TGocciaNullLiteralValue.NullValue;
+  try
+    Options := ParseOptionsAt(AArgs, 1);
+    Minimum := MinVersion(RequireStringArgument(AArgs, 0, 'minVersion'), Options);
+    if (Minimum <> '') and ParseSemver(Minimum, Options, Parsed) then
+      Result := CreateSemverObject(Parsed)
+    else
+      Result := TGocciaNullLiteralValue.NullValue;
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceGTR(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(GreaterThanRange(
-    RequireStringArgument(AArgs, 0, 'gtr'),
-    RequireStringArgument(AArgs, 1, 'gtr'), ParseOptionsAt(AArgs, 2)));
+  try
+    Result := BooleanValue(GreaterThanRange(
+      RequireStringArgument(AArgs, 0, 'gtr'),
+      RequireStringArgument(AArgs, 1, 'gtr'), ParseOptionsAt(AArgs, 2)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceLTR(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(LessThanRange(
-    RequireStringArgument(AArgs, 0, 'ltr'),
-    RequireStringArgument(AArgs, 1, 'ltr'), ParseOptionsAt(AArgs, 2)));
+  try
+    Result := BooleanValue(LessThanRange(
+      RequireStringArgument(AArgs, 0, 'ltr'),
+      RequireStringArgument(AArgs, 1, 'ltr'), ParseOptionsAt(AArgs, 2)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceOutside(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(Outside(RequireStringArgument(AArgs, 0, 'outside'),
-    RequireStringArgument(AArgs, 1, 'outside'),
-    RequireStringArgument(AArgs, 2, 'outside'), ParseOptionsAt(AArgs, 3)));
+  try
+    Result := BooleanValue(Outside(RequireStringArgument(AArgs, 0, 'outside'),
+      RequireStringArgument(AArgs, 1, 'outside'),
+      RequireStringArgument(AArgs, 2, 'outside'), ParseOptionsAt(AArgs, 3)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceSimplifyRange(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaStringLiteralValue.Create(SimplifyRange(
-    StringListArgument(AArgs.GetElement(0)),
-    RequireStringArgument(AArgs, 1, 'simplifyRange'), ParseOptionsAt(AArgs, 2)));
+  try
+    Result := TGocciaStringLiteralValue.Create(SimplifyRange(
+      StringListArgument(AArgs.GetElement(0)),
+      RequireStringArgument(AArgs, 1, 'simplifyRange'), ParseOptionsAt(AArgs, 2)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceSubset(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := BooleanValue(IsSubset(RequireStringArgument(AArgs, 0, 'subset'),
-    RequireStringArgument(AArgs, 1, 'subset'), ParseOptionsAt(AArgs, 2)));
+  try
+    Result := BooleanValue(IsSubset(RequireStringArgument(AArgs, 0, 'subset'),
+      RequireStringArgument(AArgs, 1, 'subset'), ParseOptionsAt(AArgs, 2)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceToComparators(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := StringMatrixValue(ToComparators(
-    RequireStringArgument(AArgs, 0, 'toComparators'), ParseOptionsAt(AArgs, 1)));
+  try
+    Result := StringMatrixValue(ToComparators(
+      RequireStringArgument(AArgs, 0, 'toComparators'), ParseOptionsAt(AArgs, 1)));
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.NamespaceCoerce(
@@ -978,10 +1291,15 @@ function TGocciaSemverNamespaceHost.NamespaceCoerce(
 var
   Parsed: TGocciaSemver;
 begin
-  if Coerce(RequireStringArgument(AArgs, 0, 'coerce'), ParseOptionsAt(AArgs, 1), Parsed) then
-    Result := CreateSemverObject(Parsed)
-  else
-    Result := TGocciaNullLiteralValue.NullValue;
+  try
+    if Coerce(RequireStringArgument(AArgs, 0, 'coerce'), ParseOptionsAt(AArgs, 1), Parsed) then
+      Result := CreateSemverObject(Parsed)
+    else
+      Result := TGocciaNullLiteralValue.NullValue;
+  except
+    on E: Exception do
+      Result := HandleSemverException(E);
+  end;
 end;
 
 function CreateSemverNamespace: TGocciaObjectValue;
@@ -1160,7 +1478,7 @@ begin
 end;
 
 initialization
-  GSemverHosts := TObjectList<TObject>.Create(True);
+  GSemverHosts := TSemverHostList.Create(True);
 
 finalization
   GSemverHosts.Free;
