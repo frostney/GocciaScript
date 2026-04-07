@@ -1791,6 +1791,63 @@ begin
 end;
 
 procedure TGocciaParser.SkipUnsupportedFunctionSignature;
+  function TokenAfterBalancedBraces: TGocciaToken;
+  var
+    Depth: Integer;
+    ScanIndex: Integer;
+  begin
+    ScanIndex := FCurrent;
+    Depth := 0;
+
+    while ScanIndex < FTokens.Count do
+    begin
+      case FTokens[ScanIndex].TokenType of
+        gttLeftBrace:
+          Inc(Depth);
+        gttRightBrace:
+          begin
+            Dec(Depth);
+            if Depth = 0 then
+            begin
+              Inc(ScanIndex);
+              Break;
+            end;
+          end;
+      end;
+      Inc(ScanIndex);
+    end;
+
+    if ScanIndex < FTokens.Count then
+      Result := FTokens[ScanIndex]
+    else
+      Result := FTokens[FTokens.Count - 1];
+  end;
+
+  function IsReturnTypeContinuationToken(const AToken: TGocciaToken): Boolean;
+  begin
+    case AToken.TokenType of
+      gttBitwiseAnd,
+      gttBitwiseOr,
+      gttQuestion,
+      gttLeftBracket,
+      gttLess,
+      gttGreater,
+      gttRightShift,
+      gttUnsignedRightShift:
+        Exit(True);
+    end;
+
+    if (AToken.TokenType = gttIdentifier) and
+      ((AToken.Lexeme = KEYWORD_AS) or
+       (AToken.Lexeme = KEYWORD_EXTENDS)) then
+      Exit(True);
+
+    Result := False;
+  end;
+
+var
+  NestingDepth: Integer;
+  FollowingToken: TGocciaToken;
 begin
   if Check(gttStar) then
     Advance;
@@ -1805,7 +1862,50 @@ begin
   if Check(gttColon) then
   begin
     Advance;
-    CollectTypeAnnotation([gttLeftBrace, gttSemicolon]);
+
+    NestingDepth := 0;
+    while not IsAtEnd do
+    begin
+      if (NestingDepth = 0) and Check(gttSemicolon) then
+        Break;
+
+      if Check(gttLeftBrace) then
+      begin
+        FollowingToken := TokenAfterBalancedBraces;
+        if (NestingDepth > 0) or
+          (FollowingToken.TokenType = gttLeftBrace) or
+          IsReturnTypeContinuationToken(FollowingToken) then
+        begin
+          SkipBlock;
+          Continue;
+        end;
+        Break;
+      end;
+
+      case Peek.TokenType of
+        gttLeftParen,
+        gttLeftBracket,
+        gttLess:
+          Inc(NestingDepth);
+        gttRightParen,
+        gttRightBracket,
+        gttGreater:
+          if NestingDepth > 0 then
+            Dec(NestingDepth);
+        gttRightShift:
+          if NestingDepth > 0 then
+          begin
+            Dec(NestingDepth);
+            if NestingDepth > 0 then
+              Dec(NestingDepth);
+          end;
+        gttUnsignedRightShift:
+          while NestingDepth > 0 do
+            Dec(NestingDepth);
+      end;
+
+      Advance;
+    end;
   end;
 
   if Check(gttLeftBrace) then
