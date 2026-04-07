@@ -206,13 +206,16 @@ begin
     Buffer.Append(Colorize(LineStr, ANSI_BOLD, AUseColor));
     Buffer.Append(sLineBreak);
 
-    // Caret line
+    // Caret line — preserve tabs from source so ^ aligns correctly
     CaretStr := '';
     for I := 1 to GutterWidth do
       CaretStr := CaretStr + ' ';
     CaretStr := CaretStr + ' | ';
     for I := 1 to FColumn - 1 do
-      CaretStr := CaretStr + ' ';
+      if (I <= Length(LineStr)) and (LineStr[I] = #9) then
+        CaretStr := CaretStr + #9
+      else
+        CaretStr := CaretStr + ' ';
     Buffer.Append(Colorize(CaretStr + '^', ANSI_BOLD + ANSI_RED, AUseColor));
     Buffer.Append(sLineBreak);
 

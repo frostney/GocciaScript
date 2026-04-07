@@ -169,13 +169,37 @@ var
   SourceLines: TStringList;
   Error: TGocciaSyntaxError;
   Output: string;
+  Lines: TStringList;
+  CaretLine: string;
+  CaretPos, I: Integer;
 begin
   SourceLines := CreateSourceLines;
   try
+    // Error at line 3, column 5
     Error := TGocciaSyntaxError.Create('test', 3, 5, 'test.js', SourceLines);
     try
       Output := Error.GetDetailedMessage(False);
       Expect<Boolean>(Pos('^', Output) > 0).ToBe(True);
+
+      // Find the caret line and verify column alignment
+      Lines := TStringList.Create;
+      try
+        Lines.Text := Output;
+        CaretPos := -1;
+        for I := 0 to Lines.Count - 1 do
+          if Pos('^', Lines[I]) > 0 then
+          begin
+            CaretLine := Lines[I];
+            CaretPos := Pos('^', CaretLine);
+            Break;
+          end;
+        Expect<Boolean>(CaretPos > 0).ToBe(True);
+        // The caret should be at gutter + ' | ' + (column - 1) spaces + '^'
+        // Gutter is 4 chars wide, so: 4 + 3 + 4 + 1 = 12
+        Expect<Integer>(CaretPos).ToBe(12);
+      finally
+        Lines.Free;
+      end;
     finally
       Error.Free;
     end;

@@ -2716,7 +2716,7 @@ begin
       Advance;
 
     NameToken := ConsumeModuleExportName('Expected export name',
-      SSuggestProvideImportName);
+      SSuggestProvideExportName);
     LocalName := NameToken.Lexeme;
 
     if Match(gttAs) then

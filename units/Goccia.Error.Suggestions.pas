@@ -65,6 +65,7 @@ resourcestring
   SSuggestProvideSetterPropertyName = 'Provide the setter property name';
   SSuggestProvideImportName = 'Provide the name of the binding to import';
   SSuggestProvideLocalName = 'Provide a local name for the imported/exported binding';
+  SSuggestProvideExportName = 'Provide the name of the binding to export';
   SSuggestProvideExportedName = 'Provide a name for the exported binding';
   SSuggestProvideModulePath = 'Provide the module path as a string (e.g., from "module-name")';
   SSuggestProvideCatchParameter = 'Provide a name for the error variable (e.g., catch (e) { ... })';

@@ -30,6 +30,8 @@ uses
 
 function IsColorTerminal: Boolean;
 {$IFDEF MSWINDOWS}
+const
+  ENABLE_VIRTUAL_TERMINAL_PROCESSING = $0004;
 var
   Handle: THandle;
   Mode: DWORD;
@@ -44,6 +46,9 @@ begin
     Exit(False);
   if not GetConsoleMode(Handle, Mode) then
     Exit(False);
+  // Enable ANSI escape processing on Windows 10+
+  if (Mode and ENABLE_VIRTUAL_TERMINAL_PROCESSING) = 0 then
+    SetConsoleMode(Handle, Mode or ENABLE_VIRTUAL_TERMINAL_PROCESSING);
   Result := True;
   {$ELSE}
   Result := False;
