@@ -7,6 +7,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  GarbageCollector.Generic,
   TimingUtils,
 
   Goccia.AST.Node,
@@ -183,12 +184,19 @@ begin
 
                 try
                   ResultValue := Backend.RunModule(Module);
-                  if Assigned(TGocciaMicrotaskQueue.Instance) then
-                    TGocciaMicrotaskQueue.Instance.DrainQueue;
-                  ExecEnd := GetNanoseconds;
+                  if Assigned(ResultValue) then
+                    TGarbageCollector.Instance.AddTempRoot(ResultValue);
+                  try
+                    if Assigned(TGocciaMicrotaskQueue.Instance) then
+                      TGocciaMicrotaskQueue.Instance.DrainQueue;
+                    ExecEnd := GetNanoseconds;
 
-                  if ResultValue <> nil then
-                    WriteLn(FormatREPLValue(ResultValue));
+                    if ResultValue <> nil then
+                      WriteLn(FormatREPLValue(ResultValue));
+                  finally
+                    if Assigned(ResultValue) then
+                      TGarbageCollector.Instance.RemoveTempRoot(ResultValue);
+                  end;
                 finally
                   if Assigned(TGocciaMicrotaskQueue.Instance) then
                     TGocciaMicrotaskQueue.Instance.ClearQueue;

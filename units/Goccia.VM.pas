@@ -4938,6 +4938,21 @@ begin
             raise EGocciaBytecodeThrow.Create(
               CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
         end;
+        on E: TGocciaSyntaxError do
+        begin
+          if (not FHandlerStack.IsEmpty) and
+             (FHandlerStack.Peek.FrameDepth = FFrameDepth) then
+          begin
+            Handler := FHandlerStack.Peek;
+            FHandlerStack.Pop;
+            Frame.IP := Handler.CatchIP;
+            SetRegister(Handler.CatchRegister,
+              CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+          end
+          else
+            raise EGocciaBytecodeThrow.Create(
+              CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+        end;
         on E: TGocciaRuntimeError do
         begin
           if (not FHandlerStack.IsEmpty) and
