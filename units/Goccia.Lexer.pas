@@ -76,6 +76,18 @@ uses
   Goccia.Keywords.Reserved,
   Goccia.TextFiles;
 
+function IsValidHexString(const AValue: string): Boolean;
+var
+  I: Integer;
+begin
+  if Length(AValue) = 0 then
+    Exit(False);
+  for I := 1 to Length(AValue) do
+    if not CharInSet(AValue[I], ['0'..'9', 'a'..'f', 'A'..'F']) then
+      Exit(False);
+  Result := True;
+end;
+
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
 begin
   InitKeywords;
@@ -256,6 +268,9 @@ begin
       raise TGocciaLexerError.Create('Unterminated unicode escape', FLine, FColumn, FFileName, GetSourceLines,
         SSuggestUnicodeEscapeFormat);
     HexStr := Copy(FSource, HexStart, FCurrent - HexStart);
+    if not IsValidHexString(HexStr) then
+      raise TGocciaLexerError.Create('Invalid unicode escape', FLine, FColumn, FFileName, GetSourceLines,
+        SSuggestUnicodeHexDigits);
     Advance; // consume '}'
   end
   else
@@ -269,6 +284,9 @@ begin
       Advance;
     end;
     HexStr := Copy(FSource, HexStart, FCurrent - HexStart);
+    if not IsValidHexString(HexStr) then
+      raise TGocciaLexerError.Create('Invalid unicode escape', FLine, FColumn, FFileName, GetSourceLines,
+        SSuggestUnicodeHexDigits);
   end;
 
   CodePoint := StrToInt('$' + HexStr);
@@ -292,7 +310,7 @@ begin
       Advance;
     end;
     HexStr := Copy(FSource, HexStart, FCurrent - HexStart);
-    if Length(HexStr) = 4 then
+    if (Length(HexStr) = 4) and IsValidHexString(HexStr) then
     begin
       LowSurrogate := StrToInt('$' + HexStr);
       if (LowSurrogate >= $DC00) and (LowSurrogate <= $DFFF) then
@@ -336,6 +354,9 @@ begin
       SSuggestHexEscapeFormat);
   Advance;
   HexStr := Copy(FSource, HexStart, 2);
+  if not IsValidHexString(HexStr) then
+    raise TGocciaLexerError.Create('Invalid hex escape', FLine, FColumn, FFileName, GetSourceLines,
+      SSuggestHexEscapeFormat);
 
   CodePoint := StrToInt('$' + HexStr);
   Result := Chr(CodePoint);
