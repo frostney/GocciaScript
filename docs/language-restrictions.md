@@ -496,6 +496,15 @@ interface Animal { name: string; speak(): string; }
 import type { Foo } from './types.js';
 export type { Bar };
 
+// Mixed type/value named bindings keep runtime imports/exports for value bindings
+import { parseSourceFile, type SourceFile } from "./parser.js";
+export { value, type ValueShape };
+
+// export interface declarations are skipped entirely
+export interface Serializable {
+  toJSON(): string;
+}
+
 // as Type and as const assertions
 const x = 42 as number;
 const colors = ["red", "green"] as const;

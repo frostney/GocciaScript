@@ -367,6 +367,9 @@ GocciaScript implements the [TC39 Types as Comments](https://tc39.es/proposal-ty
 | `interface X { ... }` | Skipped → `TGocciaEmptyStatement` |
 | `import type { ... }` | Skipped → `TGocciaEmptyStatement` |
 | `export type { ... }` | Skipped → `TGocciaEmptyStatement` |
+| `import { value, type T } from ...` | Value binding kept; type-only binding skipped |
+| `export { value, type T }` | Value export kept; type-only binding skipped |
+| `export interface X { ... }` | Skipped → `TGocciaEmptyStatement` |
 
 ## String Interning — Attempted and Rejected
 

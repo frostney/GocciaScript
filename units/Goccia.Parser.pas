@@ -115,6 +115,8 @@ type
     procedure SkipBlock;
     procedure SkipBalancedParens;
     procedure SkipStatementOrBlock;
+    procedure SkipUnsupportedFunctionSignature;
+    function IsTypeOnlySpecifierModifier: Boolean;
     procedure SkipInterfaceDeclaration;
     function IsTypeDeclaration: Boolean;
 
@@ -964,10 +966,7 @@ begin
     AddWarning('''function'' expressions are not supported in GocciaScript',
       'Use arrow functions instead: const name = (...) => { ... }',
       Token.Line, Token.Column);
-    if Check(gttStar) then Advance;
-    if Check(gttIdentifier) then Advance;
-    SkipBalancedParens;
-    SkipBlock;
+    SkipUnsupportedFunctionSignature;
     Result := TGocciaLiteralExpression.Create(
       TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
   end
@@ -1792,6 +1791,137 @@ begin
     SkipUntilSemicolon;
 end;
 
+procedure TGocciaParser.SkipUnsupportedFunctionSignature;
+  function TokenAfterBalancedBraces: TGocciaToken;
+  var
+    Depth: Integer;
+    ScanIndex: Integer;
+  begin
+    ScanIndex := FCurrent;
+    Depth := 0;
+
+    while ScanIndex < FTokens.Count do
+    begin
+      case FTokens[ScanIndex].TokenType of
+        gttLeftBrace:
+          Inc(Depth);
+        gttRightBrace:
+          begin
+            Dec(Depth);
+            if Depth = 0 then
+            begin
+              Inc(ScanIndex);
+              Break;
+            end;
+          end;
+      end;
+      Inc(ScanIndex);
+    end;
+
+    if ScanIndex < FTokens.Count then
+      Result := FTokens[ScanIndex]
+    else
+      Result := FTokens[FTokens.Count - 1];
+  end;
+
+  function IsReturnTypeContinuationToken(const AToken: TGocciaToken): Boolean;
+  begin
+    case AToken.TokenType of
+      gttBitwiseAnd,
+      gttBitwiseOr,
+      gttQuestion,
+      gttLeftBracket,
+      gttLess,
+      gttGreater,
+      gttRightShift,
+      gttUnsignedRightShift:
+        Exit(True);
+    end;
+
+    if (AToken.TokenType = gttIdentifier) and
+      ((AToken.Lexeme = KEYWORD_AS) or
+       (AToken.Lexeme = KEYWORD_EXTENDS)) then
+      Exit(True);
+
+    Result := False;
+  end;
+
+var
+  NestingDepth: Integer;
+  FollowingToken: TGocciaToken;
+begin
+  if Check(gttStar) then
+    Advance;
+  if Check(gttIdentifier) then
+    Advance;
+
+  CollectGenericParameters;
+
+  if Check(gttLeftParen) then
+    SkipBalancedParens;
+
+  if Check(gttColon) then
+  begin
+    Advance;
+
+    NestingDepth := 0;
+    while not IsAtEnd do
+    begin
+      if (NestingDepth = 0) and Check(gttSemicolon) then
+        Break;
+
+      if Check(gttLeftBrace) then
+      begin
+        FollowingToken := TokenAfterBalancedBraces;
+        if (NestingDepth > 0) or
+          (FollowingToken.TokenType = gttLeftBrace) or
+          IsReturnTypeContinuationToken(FollowingToken) then
+        begin
+          SkipBlock;
+          Continue;
+        end;
+        Break;
+      end;
+
+      case Peek.TokenType of
+        gttLeftParen,
+        gttLeftBracket,
+        gttLess:
+          Inc(NestingDepth);
+        gttRightParen,
+        gttRightBracket,
+        gttGreater:
+          if NestingDepth > 0 then
+            Dec(NestingDepth);
+        gttRightShift:
+          if NestingDepth > 0 then
+          begin
+            Dec(NestingDepth);
+            if NestingDepth > 0 then
+              Dec(NestingDepth);
+          end;
+        gttUnsignedRightShift:
+          while NestingDepth > 0 do
+            Dec(NestingDepth);
+      end;
+
+      Advance;
+    end;
+  end;
+
+  if Check(gttLeftBrace) then
+    SkipBlock
+  else if Check(gttSemicolon) then
+    Advance;
+end;
+
+function TGocciaParser.IsTypeOnlySpecifierModifier: Boolean;
+begin
+  Result := Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE) and
+    (FCurrent + 1 < FTokens.Count) and
+    (FTokens[FCurrent + 1].TokenType in [gttIdentifier, gttString]);
+end;
+
 function TGocciaParser.VarStatement: TGocciaStatement;
 var
   Line, Column: Integer;
@@ -1972,10 +2102,7 @@ begin
     'Use arrow functions instead: const name = (...) => { ... }',
     Line, Column);
 
-  if Check(gttStar) then Advance;
-  if Check(gttIdentifier) then Advance;
-  SkipBalancedParens;
-  SkipBlock;
+  SkipUnsupportedFunctionSignature;
 
   Result := TGocciaEmptyStatement.Create(Line, Column);
 end;
@@ -2265,6 +2392,7 @@ var
   ImportedName, LocalName, ModulePath, NamespaceName: string;
   ImportedNameToken: TGocciaToken;
   Line, Column: Integer;
+  IsTypeOnlyBinding: Boolean;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -2317,6 +2445,10 @@ begin
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
+    IsTypeOnlyBinding := IsTypeOnlySpecifierModifier;
+    if IsTypeOnlyBinding then
+      Advance;
+
     ImportedNameToken := ConsumeModuleExportName('Expected import name');
     ImportedName := ImportedNameToken.Lexeme;
 
@@ -2330,7 +2462,8 @@ begin
     else
       LocalName := ImportedName;
 
-    Imports.Add(LocalName, ImportedName);
+    if not IsTypeOnlyBinding then
+      Imports.Add(LocalName, ImportedName);
 
     if not Match(gttComma) then
       Break;
@@ -2359,6 +2492,7 @@ var
   SpecifierCount: Integer;
   NameToken: TGocciaToken;
   IsReExport: Boolean;
+  IsTypeOnlyBinding: Boolean;
   I: Integer;
 
   function HasFromClauseAfterNamedExports: Boolean;
@@ -2384,6 +2518,15 @@ begin
     Exit;
   end;
 
+  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_INTERFACE) and IsTypeDeclaration then
+  begin
+    Advance;
+    Advance;
+    SkipInterfaceDeclaration;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
+
   if Check(gttDefault) then
   begin
     AddWarning('Default exports are not supported in GocciaScript',
@@ -2399,10 +2542,7 @@ begin
     else if Check(gttFunction) then
     begin
       Advance;
-      if Check(gttStar) then Advance;
-      if Check(gttIdentifier) then Advance;
-      SkipBalancedParens;
-      SkipBlock;
+      SkipUnsupportedFunctionSignature;
     end
     else
       SkipUntilSemicolon;
@@ -2445,6 +2585,10 @@ begin
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
+    IsTypeOnlyBinding := IsTypeOnlySpecifierModifier;
+    if IsTypeOnlyBinding then
+      Advance;
+
     NameToken := ConsumeModuleExportName('Expected export name');
     LocalName := NameToken.Lexeme;
 
@@ -2454,17 +2598,20 @@ begin
     else
       ExportedName := LocalName;
 
-    SetLength(LocalNames, SpecifierCount + 1);
-    SetLength(ExportedNames, SpecifierCount + 1);
-    SetLength(LocalNameTokenTypes, SpecifierCount + 1);
-    SetLength(LocalNameLines, SpecifierCount + 1);
-    SetLength(LocalNameColumns, SpecifierCount + 1);
-    LocalNames[SpecifierCount] := LocalName;
-    ExportedNames[SpecifierCount] := ExportedName;
-    LocalNameTokenTypes[SpecifierCount] := NameToken.TokenType;
-    LocalNameLines[SpecifierCount] := NameToken.Line;
-    LocalNameColumns[SpecifierCount] := NameToken.Column;
-    Inc(SpecifierCount);
+    if not IsTypeOnlyBinding then
+    begin
+      SetLength(LocalNames, SpecifierCount + 1);
+      SetLength(ExportedNames, SpecifierCount + 1);
+      SetLength(LocalNameTokenTypes, SpecifierCount + 1);
+      SetLength(LocalNameLines, SpecifierCount + 1);
+      SetLength(LocalNameColumns, SpecifierCount + 1);
+      LocalNames[SpecifierCount] := LocalName;
+      ExportedNames[SpecifierCount] := ExportedName;
+      LocalNameTokenTypes[SpecifierCount] := NameToken.TokenType;
+      LocalNameLines[SpecifierCount] := NameToken.Line;
+      LocalNameColumns[SpecifierCount] := NameToken.Column;
+      Inc(SpecifierCount);
+    end;
 
     if not Match(gttComma) then
       Break;
