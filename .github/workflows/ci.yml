@@ -274,6 +274,33 @@ jobs:
           grep -q '"mode": "bytecode"' test-results-bytecode.json
           grep -q '"totalFiles":' test-results-bytecode.json
 
+      - name: Check TestRunner coverage CLI
+        run: |
+          cov_output="$(./build/TestRunner tests/built-ins/Array/array-creation.js --coverage 2>&1)"
+          printf '%s\n' "$cov_output" | grep -q 'Coverage Summary:'
+          printf '%s\n' "$cov_output" | grep -q 'array-creation.js'
+
+          ./build/TestRunner tests/built-ins/Array/array-creation.js --coverage --coverage-format=lcov --coverage-output=cov.lcov
+          grep -q '^SF:' cov.lcov
+          grep -q '^DA:' cov.lcov
+          grep -q '^end_of_record' cov.lcov
+          rm cov.lcov
+
+          ./build/TestRunner tests/built-ins/Array/array-creation.js --coverage --coverage-format=json --coverage-output=cov.json
+          grep -q '"path":' cov.json
+          grep -q '"statementMap":' cov.json
+          rm cov.json
+
+          ./build/TestRunner tests/built-ins/Array/array-creation.js --coverage --coverage-output=cov2.lcov --coverage-format=lcov
+          grep -q '^DA:' cov2.lcov
+          rm cov2.lcov
+
+          detail_output="$(./build/TestRunner tests/built-ins/Array/array-creation.js --coverage 2>&1)"
+          printf '%s\n' "$detail_output" | grep -Eq '[0-9]+x \|'
+
+          bytecode_cov="$(./build/TestRunner tests/built-ins/Array/array-creation.js --mode=bytecode --coverage 2>&1)"
+          printf '%s\n' "$bytecode_cov" | grep -q 'Coverage Summary:'
+
       - name: Run Pascal unit tests
         run: |
           found=0
@@ -746,6 +773,27 @@ jobs:
           printf '%s\n' "$error_output" | grep -q '"ok":false'
           printf '%s\n' "$error_output" | grep -q '"type":"TypeError"'
           printf '%s\n' "$error_output" | grep -q '"message":"boom"'
+
+      - name: Check ScriptLoader coverage CLI
+        run: |
+          cov_output="$(printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --coverage 2>&1)"
+          printf '%s\n' "$cov_output" | grep -q 'Coverage Summary:'
+
+          json_cov_output="$(printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --output=json --coverage 2>&1)"
+          printf '%s\n' "$json_cov_output" | head -1 | grep -q '^{'
+
+          printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --coverage --coverage-format=lcov --coverage-output=sl-cov.lcov
+          grep -q '^SF:' sl-cov.lcov
+          grep -q '^DA:' sl-cov.lcov
+          rm sl-cov.lcov
+
+          printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --coverage --coverage-format=json --coverage-output=sl-cov.json
+          grep -q '"path":' sl-cov.json
+          rm sl-cov.json
+
+          printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --coverage-output=sl-cov2.lcov --coverage-format=lcov
+          grep -q '^DA:' sl-cov2.lcov
+          rm sl-cov2.lcov
 
   artifacts:
     needs: [test, toml-compliance, json5-compliance, benchmark, examples]
