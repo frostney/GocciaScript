@@ -438,11 +438,9 @@ begin
 end;
 
 { B field encodes the declaration mode for OP_DEFINE_GLOBAL_CONST:
-  0 = upsert (existing behavior from CompileNewExpression)
   1 = let declaration (throws on re-declaration)
   2 = const declaration (throws on re-declaration, non-writable) }
 const
-  GLOBAL_DEFINE_UPSERT = 0;
   GLOBAL_DEFINE_LET = 1;
   GLOBAL_DEFINE_CONST = 2;
 

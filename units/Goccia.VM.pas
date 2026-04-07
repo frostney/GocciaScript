@@ -118,7 +118,6 @@ type
     procedure DefineSetterPropertyByKey(const ATarget, AKey, ASetter: TGocciaValue);
     procedure DefineStaticGetterPropertyByKey(const ATarget, AKey, AGetter: TGocciaValue);
     procedure DefineStaticSetterPropertyByKey(const ATarget, AKey, ASetter: TGocciaValue);
-    procedure DefineGlobalValue(const AName: string; const AValue: TGocciaValue);
     procedure DefineGlobalBinding(const AName: string;
       const AValue: TGocciaValue;
       const ADeclarationType: TGocciaDeclarationType);
@@ -2417,17 +2416,6 @@ begin
   end;
 
   DefineStaticSetterProperty(ATarget, AKey.ToStringLiteral.Value, ASetter);
-end;
-
-procedure TGocciaVM.DefineGlobalValue(const AName: string; const AValue: TGocciaValue);
-begin
-  if not Assigned(FGlobalScope) then
-    Exit;
-
-  if FGlobalScope.Contains(AName) then
-    FGlobalScope.AssignLexicalBinding(AName, AValue)
-  else
-    FGlobalScope.DefineLexicalBinding(AName, AValue, dtLet);
 end;
 
 procedure TGocciaVM.DefineGlobalBinding(const AName: string;
@@ -4871,12 +4859,10 @@ begin
       OP_DEFINE_GLOBAL_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(C).StringValue;
-        case B of
-          1: DefineGlobalBinding(GlobalName, GetRegister(A), dtLet);
-          2: DefineGlobalBinding(GlobalName, GetRegister(A), dtConst);
+        if B = 2 then
+          DefineGlobalBinding(GlobalName, GetRegister(A), dtConst)
         else
-          DefineGlobalValue(GlobalName, GetRegister(A));
-        end;
+          DefineGlobalBinding(GlobalName, GetRegister(A), dtLet);
       end;
 
       OP_FINALIZE_ENUM:

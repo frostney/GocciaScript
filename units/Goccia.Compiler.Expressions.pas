@@ -1698,9 +1698,7 @@ procedure CompileNewExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaNewExpression; const ADest: UInt8);
 var
   CtorReg: UInt8;
-  NameIdx: UInt16;
   ArgCount, I: Integer;
-  Local: TGocciaCompilerLocal;
 begin
   CtorReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr.Callee, CtorReg);
@@ -1716,19 +1714,6 @@ begin
   for I := 0 to ArgCount - 1 do
     ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
-
-  for I := 0 to ACtx.Scope.LocalCount - 1 do
-  begin
-    Local := ACtx.Scope.GetLocal(I);
-    if Local.IsGlobalBacked then
-    begin
-      NameIdx := ACtx.Template.AddConstantString(Local.Name);
-      if NameIdx > High(UInt8) then
-        raise Exception.Create('Constant pool overflow: global name index exceeds 255');
-      EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, Local.Slot,
-        0, UInt8(NameIdx)));
-    end;
-  end;
 end;
 
 procedure CompileComputedPropertyAssignment(const ACtx: TGocciaCompilationContext;
