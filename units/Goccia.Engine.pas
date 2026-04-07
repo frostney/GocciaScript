@@ -84,6 +84,7 @@ type
     Result: TGocciaValue;
     LexTimeNanoseconds: Int64;
     ParseTimeNanoseconds: Int64;
+    CompileTimeNanoseconds: Int64;
     ExecuteTimeNanoseconds: Int64;
     TotalTimeNanoseconds: Int64;
     FileName: string;
@@ -843,6 +844,7 @@ begin
           Result.ParseTimeNanoseconds := ParseEnd - LexEnd;
 
           try
+            Result.CompileTimeNanoseconds := 0;
             Result.Result := FInterpreter.Execute(ProgramNode);
             if Assigned(TGocciaMicrotaskQueue.Instance) then
               TGocciaMicrotaskQueue.Instance.DrainQueue;

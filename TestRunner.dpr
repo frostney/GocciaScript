@@ -53,6 +53,7 @@ begin
   Result.Timing.Result := nil;
   Result.Timing.LexTimeNanoseconds := 0;
   Result.Timing.ParseTimeNanoseconds := 0;
+  Result.Timing.CompileTimeNanoseconds := 0;
   Result.Timing.ExecuteTimeNanoseconds := 0;
   Result.Timing.TotalTimeNanoseconds := 0;
   Result.Timing.FileName := '';
@@ -179,7 +180,7 @@ var
   ResultValue: TGocciaValue;
   TestGlobals: TGocciaGlobalBuiltins;
   OrigLine, OrigCol, I: Integer;
-  CompileStart, CompileEnd, ExecEnd: Int64;
+  LexStart, LexEnd, ParseEnd, CompileEnd, ExecEnd: Int64;
 begin
   TestGlobals := TGocciaEngine.DefaultGlobals + [ggTestAssertions];
   ScriptResult := CreateDefaultScriptResult;
@@ -211,20 +212,23 @@ begin
     end;
 
     try try
-      CompileStart := GetNanoseconds;
-
       Backend := TGocciaBytecodeBackend.Create(AFileName);
       try
         Backend.RegisterBuiltIns(TestGlobals);
         ConfigureModuleResolver(Backend.ModuleResolver, AFileName,
           GImportMapPath, GInlineAliases);
 
+        LexStart := GetNanoseconds;
         Lexer := TGocciaLexer.Create(SourceText, AFileName);
         try
           Tokens := Lexer.ScanTokens;
+          LexEnd := GetNanoseconds;
+
           Parser := TGocciaParser.Create(Tokens, AFileName, Lexer.SourceLines);
           try
             ProgramNode := Parser.Parse;
+            ParseEnd := GetNanoseconds;
+
             if not GSilentConsole then
               for I := 0 to Parser.WarningCount - 1 do
               begin
@@ -239,6 +243,7 @@ begin
               end;
             try
               Module := Backend.CompileToModule(ProgramNode);
+              CompileEnd := GetNanoseconds;
             finally
               ProgramNode.Free;
             end;
@@ -249,8 +254,6 @@ begin
           Lexer.Free;
         end;
 
-        CompileEnd := GetNanoseconds;
-
         try
           ResultValue := Backend.RunModule(Module);
           ExecEnd := GetNanoseconds;
@@ -260,10 +263,11 @@ begin
 
           Result.TestResult := ScriptResult;
           Result.Timing.Result := ResultValue;
-          Result.Timing.LexTimeNanoseconds := CompileEnd - CompileStart;
-          Result.Timing.ParseTimeNanoseconds := 0;
+          Result.Timing.LexTimeNanoseconds := LexEnd - LexStart;
+          Result.Timing.ParseTimeNanoseconds := ParseEnd - LexEnd;
+          Result.Timing.CompileTimeNanoseconds := CompileEnd - ParseEnd;
           Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
-          Result.Timing.TotalTimeNanoseconds := ExecEnd - CompileStart;
+          Result.Timing.TotalTimeNanoseconds := ExecEnd - LexStart;
           Result.Timing.FileName := AFileName;
         finally
           Module.Free;
@@ -318,7 +322,7 @@ begin
     Result.TestResult := FileResult.TestResult;
     Result.TotalLexNanoseconds := FileResult.Timing.LexTimeNanoseconds;
     Result.TotalParseNanoseconds := FileResult.Timing.ParseTimeNanoseconds;
-    Result.TotalCompileNanoseconds := FileResult.Timing.LexTimeNanoseconds;
+    Result.TotalCompileNanoseconds := FileResult.Timing.CompileTimeNanoseconds;
     Result.TotalExecNanoseconds := FileResult.Timing.ExecuteTimeNanoseconds;
   except
     on E: Exception do
@@ -437,7 +441,7 @@ var
   I: Integer;
 begin
   if GMode = ebBytecode then
-    TotalNanoseconds := AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds
+    TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds
   else
     TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds;
 
@@ -452,17 +456,11 @@ begin
     Lines.Add(Format('  "skipped": %d,', [Round(AResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "assertions": %d,', [Round(AResult.TestResult.GetProperty('assertions').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "durationNanoseconds": %d,', [Round(AResult.TestResult.GetProperty('duration').ToNumberLiteral.Value)]));
+    Lines.Add(Format('  "lexTimeNanoseconds": %d,', [AResult.TotalLexNanoseconds]));
+    Lines.Add(Format('  "parseTimeNanoseconds": %d,', [AResult.TotalParseNanoseconds]));
     if GMode = ebBytecode then
-    begin
       Lines.Add(Format('  "compileTimeNanoseconds": %d,', [AResult.TotalCompileNanoseconds]));
-      Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
-    end
-    else
-    begin
-      Lines.Add(Format('  "lexTimeNanoseconds": %d,', [AResult.TotalLexNanoseconds]));
-      Lines.Add(Format('  "parseTimeNanoseconds": %d,', [AResult.TotalParseNanoseconds]));
-      Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
-    end;
+    Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
     Lines.Add(Format('  "totalEngineNanoseconds": %d,', [TotalNanoseconds]));
 
     FailedTests := AResult.TestResult.GetProperty('failedTests');
@@ -524,11 +522,12 @@ begin
       Writeln(Format('Test Results Failed: %s (%2.2f%%)', [TotalFailed, (StrToFloat(TotalFailed) / RunCount * 100)]));
       Writeln(Format('Test Results Skipped: %s (%2.2f%%)', [TotalSkipped, (StrToFloat(TotalSkipped) / RunCount * 100)]));
       Writeln(Format('Test Results Assertions: %s', [TotalAssertions]));
-      Writeln(Format('Test Results Test Execution: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
+      Writeln(Format('Test Results Test Duration: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
       if GMode = ebBytecode then
-        Writeln(Format('Test Results Engine Timing: Compile: %s | Execute: %s | Total: %s',
-          [FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
-           FormatDuration(AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]))
+        Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
+          [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds),
+           FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
+           FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]))
       else
         Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
           [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),

@@ -272,6 +272,7 @@ begin
   Result.ResultValue := ScriptResult.Result;
   Result.Timing.LexTimeNanoseconds := ScriptResult.LexTimeNanoseconds;
   Result.Timing.ParseTimeNanoseconds := ScriptResult.ParseTimeNanoseconds;
+  Result.Timing.CompileTimeNanoseconds := 0;
   Result.Timing.ExecuteTimeNanoseconds := ScriptResult.ExecuteTimeNanoseconds;
   Result.Timing.TotalTimeNanoseconds := ScriptResult.TotalTimeNanoseconds;
 end;
@@ -282,10 +283,10 @@ var
   ProgramNode: TGocciaProgram;
   Module: TGocciaBytecodeModule;
   Backend: TGocciaBytecodeBackend;
-  StartTime, ExecEnd: Int64;
+  StartTime, CompileStart, CompileEnd, ExecEnd: Int64;
 begin
   StartTime := GetNanoseconds;
-    Backend := TGocciaBytecodeBackend.Create(AFileName);
+  Backend := TGocciaBytecodeBackend.Create(AFileName);
   try
     Backend.RegisterBuiltIns(TGocciaEngine.DefaultGlobals);
     ConfigureConsole(Backend.Bootstrap.BuiltinConsole, AOutputLines);
@@ -297,7 +298,10 @@ begin
       GJsonOutput, Result.Timing.LexTimeNanoseconds,
       Result.Timing.ParseTimeNanoseconds);
     try
+      CompileStart := GetNanoseconds;
       Module := Backend.CompileToModule(ProgramNode);
+      CompileEnd := GetNanoseconds;
+      Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
     finally
       ProgramNode.Free;
     end;
@@ -311,8 +315,7 @@ begin
         ClearExecutionTimeout;
       end;
       ExecEnd := GetNanoseconds;
-      Result.Timing.ExecuteTimeNanoseconds := ExecEnd - StartTime -
-        Result.Timing.LexTimeNanoseconds - Result.Timing.ParseTimeNanoseconds;
+      Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
       Result.Timing.TotalTimeNanoseconds := ExecEnd - StartTime;
     finally
       Module.Free;
@@ -350,6 +353,7 @@ begin
       ExecEnd := GetNanoseconds;
       Result.Timing.LexTimeNanoseconds := 0;
       Result.Timing.ParseTimeNanoseconds := 0;
+      Result.Timing.CompileTimeNanoseconds := 0;
       Result.Timing.ExecuteTimeNanoseconds := ExecEnd - LoadEnd;
       Result.Timing.TotalTimeNanoseconds := ExecEnd - StartTime;
     finally
@@ -389,7 +393,7 @@ end;
 procedure PrintHumanReadableResult(const AFileName: string;
   const AReport: TScriptExecutionReport; const AExtension: string);
 var
-  LoadTimeNanoseconds, FrontEndTimeNanoseconds: Int64;
+  LoadTimeNanoseconds: Int64;
 begin
   if AExtension = EXT_GBC then
   begin
@@ -403,11 +407,11 @@ begin
   end
   else if GMode = emBytecode then
   begin
-    FrontEndTimeNanoseconds := AReport.Timing.TotalTimeNanoseconds -
-      AReport.Timing.ExecuteTimeNanoseconds;
     WriteLn('Running script (bytecode): ', AFileName);
-    WriteLn(SysUtils.Format('  Compile: %s | Execute: %s | Total: %s',
-      [FormatDuration(FrontEndTimeNanoseconds),
+    WriteLn(SysUtils.Format('  Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
+      [FormatDuration(AReport.Timing.LexTimeNanoseconds),
+       FormatDuration(AReport.Timing.ParseTimeNanoseconds),
+       FormatDuration(AReport.Timing.CompileTimeNanoseconds),
        FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
        FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
   end
@@ -470,11 +474,13 @@ begin
       begin
         Report.Timing.TotalTimeNanoseconds := GetNanoseconds - StartTime;
         if Report.Timing.TotalTimeNanoseconds >
-           Report.Timing.LexTimeNanoseconds + Report.Timing.ParseTimeNanoseconds then
+           Report.Timing.LexTimeNanoseconds + Report.Timing.ParseTimeNanoseconds +
+           Report.Timing.CompileTimeNanoseconds then
           Report.Timing.ExecuteTimeNanoseconds :=
             Report.Timing.TotalTimeNanoseconds -
             Report.Timing.LexTimeNanoseconds -
-            Report.Timing.ParseTimeNanoseconds;
+            Report.Timing.ParseTimeNanoseconds -
+            Report.Timing.CompileTimeNanoseconds;
         if GJsonOutput then
           PrintJSONError(E, Report, OutputLines, AFileName)
         else

@@ -174,9 +174,10 @@ begin
       FOutput.Add('Running benchmark: ' + FFiles[F].FileName);
 
     if FFiles[F].CompileTimeNanoseconds > 0 then
-      FOutput.Add(SysUtils.Format('  Compile: %s | Execute: %s | Total: %s',
-        [FormatDuration(FFiles[F].CompileTimeNanoseconds), FormatDuration(FFiles[F].ExecuteTimeNanoseconds),
-         FormatDuration(FFiles[F].CompileTimeNanoseconds + FFiles[F].ExecuteTimeNanoseconds)]))
+      FOutput.Add(SysUtils.Format('  Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
+        [FormatDuration(FFiles[F].LexTimeNanoseconds), FormatDuration(FFiles[F].ParseTimeNanoseconds),
+         FormatDuration(FFiles[F].CompileTimeNanoseconds), FormatDuration(FFiles[F].ExecuteTimeNanoseconds),
+         FormatDuration(FFiles[F].LexTimeNanoseconds + FFiles[F].ParseTimeNanoseconds + FFiles[F].CompileTimeNanoseconds + FFiles[F].ExecuteTimeNanoseconds)]))
     else
       FOutput.Add(SysUtils.Format('  Lex: %s | Parse: %s | Execute: %s | Total: %s',
         [FormatDuration(FFiles[F].LexTimeNanoseconds), FormatDuration(FFiles[F].ParseTimeNanoseconds), FormatDuration(FFiles[F].ExecuteTimeNanoseconds),
@@ -329,13 +330,10 @@ begin
   begin
     FOutput.Add('    {');
     FOutput.Add(SysUtils.Format('      "file": "%s",', [EscapeJSON(FFiles[F].FileName)]));
+    FOutput.Add(SysUtils.Format('      "lexTimeNanoseconds": %d,', [FFiles[F].LexTimeNanoseconds]));
+    FOutput.Add(SysUtils.Format('      "parseTimeNanoseconds": %d,', [FFiles[F].ParseTimeNanoseconds]));
     if FFiles[F].CompileTimeNanoseconds > 0 then
-      FOutput.Add(SysUtils.Format('      "compileTimeNanoseconds": %d,', [FFiles[F].CompileTimeNanoseconds]))
-    else
-    begin
-      FOutput.Add(SysUtils.Format('      "lexTimeNanoseconds": %d,', [FFiles[F].LexTimeNanoseconds]));
-      FOutput.Add(SysUtils.Format('      "parseTimeNanoseconds": %d,', [FFiles[F].ParseTimeNanoseconds]));
-    end;
+      FOutput.Add(SysUtils.Format('      "compileTimeNanoseconds": %d,', [FFiles[F].CompileTimeNanoseconds]));
     FOutput.Add(SysUtils.Format('      "executeTimeNanoseconds": %d,', [FFiles[F].ExecuteTimeNanoseconds]));
     FOutput.Add('      "benchmarks": [');
 

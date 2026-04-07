@@ -13,6 +13,7 @@ type
   TScriptLoaderTiming = record
     LexTimeNanoseconds: Int64;
     ParseTimeNanoseconds: Int64;
+    CompileTimeNanoseconds: Int64;
     ExecuteTimeNanoseconds: Int64;
     TotalTimeNanoseconds: Int64;
   end;
@@ -140,6 +141,7 @@ begin
     '"timing":{' +
       '"lex_ms":' + NanosecondsToMillisecondsText(ATiming.LexTimeNanoseconds) + ',' +
       '"parse_ms":' + NanosecondsToMillisecondsText(ATiming.ParseTimeNanoseconds) + ',' +
+      '"compile_ms":' + NanosecondsToMillisecondsText(ATiming.CompileTimeNanoseconds) + ',' +
       '"exec_ms":' + NanosecondsToMillisecondsText(ATiming.ExecuteTimeNanoseconds) + ',' +
       '"total_ms":' + NanosecondsToMillisecondsText(ATiming.TotalTimeNanoseconds) +
     '}';
