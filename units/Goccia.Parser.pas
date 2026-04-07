@@ -116,6 +116,7 @@ type
     procedure SkipBalancedParens;
     procedure SkipStatementOrBlock;
     procedure SkipUnsupportedFunctionSignature;
+    function IsTypeOnlySpecifierModifier: Boolean;
     procedure SkipInterfaceDeclaration;
     function IsTypeDeclaration: Boolean;
 
@@ -1914,6 +1915,13 @@ begin
     Advance;
 end;
 
+function TGocciaParser.IsTypeOnlySpecifierModifier: Boolean;
+begin
+  Result := Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE) and
+    (FCurrent + 1 < FTokens.Count) and
+    (FTokens[FCurrent + 1].TokenType in [gttIdentifier, gttString]);
+end;
+
 function TGocciaParser.VarStatement: TGocciaStatement;
 var
   Line, Column: Integer;
@@ -2437,7 +2445,7 @@ begin
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
-    IsTypeOnlyBinding := Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE);
+    IsTypeOnlyBinding := IsTypeOnlySpecifierModifier;
     if IsTypeOnlyBinding then
       Advance;
 
@@ -2577,7 +2585,7 @@ begin
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
-    IsTypeOnlyBinding := Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE);
+    IsTypeOnlyBinding := IsTypeOnlySpecifierModifier;
     if IsTypeOnlyBinding then
       Advance;
 
