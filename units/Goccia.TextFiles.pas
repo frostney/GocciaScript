@@ -110,9 +110,19 @@ begin
   Result := StringReplace(Result, #13, #10, [rfReplaceAll]);
 end;
 
-function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
+function NormalizeRawNewlinesToLF(const AText: RawByteString): RawByteString;
 begin
-  Result := UTF8String(NormalizeNewlinesToLF(string(AText)));
+  Result := StringReplace(AText, #13#10, #10, [rfReplaceAll]);
+  Result := StringReplace(Result, #13, #10, [rfReplaceAll]);
+end;
+
+function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
+var
+  NormalizedBytes: RawByteString;
+begin
+  NormalizedBytes := NormalizeRawNewlinesToLF(RawByteString(AText));
+  SetCodePage(NormalizedBytes, CP_UTF8, False);
+  Result := UTF8String(NormalizedBytes);
 end;
 
 function ReadUTF8FileText(const APath: string): UTF8String;
@@ -149,8 +159,9 @@ begin
   Buffer := TStringBuffer.Create;
   for I := 0 to ALines.Count - 1 do
   begin
+    if I > 0 then
+      Buffer.AppendChar(#10);
     Buffer.Append(ALines[I]);
-    Buffer.AppendChar(#10);
   end;
 
   Result := Buffer.ToString;

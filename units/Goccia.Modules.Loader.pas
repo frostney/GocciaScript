@@ -171,7 +171,7 @@ var
   ReExportDecl: TGocciaReExportDeclaration;
   ResolvedPath: string;
   SourceModule: TGocciaModule;
-  SourceText: string;
+  SourceText: UTF8String;
   Stmt: TGocciaStatement;
   Value: TGocciaValue;
   VarInfo: TGocciaVariableInfo;
@@ -221,8 +221,8 @@ begin
     JSXSourceMap := nil;
     if FJSXEnabled then
     begin
-      JSXResult := TGocciaJSXTransformer.Transform(SourceText);
-      SourceText := JSXResult.Source;
+      JSXResult := TGocciaJSXTransformer.Transform(string(SourceText));
+      SourceText := UTF8String(JSXResult.Source);
       JSXSourceMap := JSXResult.SourceMap;
       if Assigned(JSXSourceMap) then
         WarnIfJSXExtensionMismatch(ResolvedPath);
@@ -230,7 +230,7 @@ begin
 
     try
       try
-        Lexer := TGocciaLexer.Create(SourceText, ResolvedPath);
+        Lexer := TGocciaLexer.Create(string(SourceText), ResolvedPath);
         try
           Parser := TGocciaParser.Create(Lexer.ScanTokens, ResolvedPath,
             Lexer.SourceLines);

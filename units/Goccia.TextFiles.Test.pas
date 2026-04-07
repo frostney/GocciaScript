@@ -15,6 +15,7 @@ type
   TTextFilesTests = class(TTestSuite)
   private
     procedure TestCreateUTF8StringListSplitsMixedNewlines;
+    procedure TestNormalizeUTF8NewlinesToLFPreservesUTF8Bytes;
     procedure TestReadUTF8FileLinesCanonicalizesParserTextToLF;
   public
     procedure SetupTests; override;
@@ -37,6 +38,8 @@ procedure TTextFilesTests.SetupTests;
 begin
   Test('CreateUTF8StringList splits mixed newlines',
     TestCreateUTF8StringListSplitsMixedNewlines);
+  Test('NormalizeUTF8NewlinesToLF preserves UTF-8 bytes',
+    TestNormalizeUTF8NewlinesToLFPreservesUTF8Bytes);
   Test('ReadUTF8FileLines canonicalizes parser text to LF',
     TestReadUTF8FileLinesCanonicalizesParserTextToLF);
 end;
@@ -57,10 +60,30 @@ begin
       'alpha' + #10 +
       'beta' + #10 +
       'gamma' + #10 +
-      'delta' + #10);
+      'delta');
   finally
     Lines.Free;
   end;
+end;
+
+procedure TTextFilesTests.TestNormalizeUTF8NewlinesToLFPreservesUTF8Bytes;
+const
+  UTF8_WORD_BYTES = 'na' + #$C3#$AF + 've';
+var
+  I: Integer;
+  InputText: RawByteString;
+  NormalizedText: UTF8String;
+begin
+  InputText := RawByteString('first' + #13#10 + UTF8_WORD_BYTES + #13);
+  SetCodePage(InputText, CP_UTF8, False);
+
+  NormalizedText := NormalizeUTF8NewlinesToLF(UTF8String(InputText));
+
+  Expect<Integer>(Length(NormalizedText)).ToBe(
+    Length('first' + #10 + UTF8_WORD_BYTES + #10));
+  for I := 1 to Length(NormalizedText) do
+    Expect<Integer>(Ord(NormalizedText[I])).ToBe(
+      Ord(('first' + #10 + UTF8_WORD_BYTES + #10)[I]));
 end;
 
 procedure TTextFilesTests.TestReadUTF8FileLinesCanonicalizesParserTextToLF;
@@ -88,10 +111,10 @@ begin
       Expect<string>(Lines[2]).ToBe('');
       JoinedText := StringListToLFText(Lines);
       Expect<Integer>(Length(JoinedText)).ToBe(
-        Length('cafe' + #10 + UTF8_WORD_BYTES + #10 + #10));
+        Length('cafe' + #10 + UTF8_WORD_BYTES + #10));
       for I := 1 to Length(JoinedText) do
         Expect<Integer>(Ord(JoinedText[I])).ToBe(
-          Ord(('cafe' + #10 + UTF8_WORD_BYTES + #10 + #10)[I]));
+          Ord(('cafe' + #10 + UTF8_WORD_BYTES + #10)[I]));
     finally
       Lines.Free;
     end;
