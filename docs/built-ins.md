@@ -399,9 +399,9 @@ These are always registered (not flag-gated).
 
 `globalThis` is a `const` binding that holds a plain object populated with all global scope bindings at the time of registration. It includes a self-referential `globalThis` property (`globalThis.globalThis === globalThis`).
 
-**`GocciaScript` object:**
+**`Goccia` object:**
 
-A `const` global providing engine metadata:
+A `const` global providing engine metadata and Goccia-owned utility APIs:
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -409,10 +409,7 @@ A `const` global providing engine metadata:
 | `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
 | `builtIns` | `string[]` | Names of the enabled `TGocciaGlobalBuiltin` flags (e.g., `["Console", "Math", "GlobalObject", ...]`), derived via RTTI at runtime |
 | `strictTypes` | `boolean` | `true` in bytecode mode where strict local type enforcement is active (covering both explicit type annotations and types inferred from literal initializers); `false` in interpreted mode |
-
-**`Goccia` object:**
-
-A `const` global namespace for Goccia-owned utility APIs.
+| `semver` | `object` | SemVer 2.0.0 API namespace (see below) |
 
 **`Goccia.semver`**
 

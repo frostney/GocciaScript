@@ -7,9 +7,9 @@ description: >
 features: [parser-warnings, unsupported-features]
 ---*/
 
-const isGocciaScript = typeof GocciaScript !== "undefined";
+const hasGoccia = typeof Goccia !== "undefined";
 
-describe.runIf(isGocciaScript)("unsupported features are skipped", () => {
+describe.runIf(hasGoccia)("unsupported features are skipped", () => {
   test("code after skipped for loop executes", () => {
     let x = 1;
     for (let i = 0; i < 10; i++) { x = 99; }

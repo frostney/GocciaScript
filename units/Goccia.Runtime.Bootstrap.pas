@@ -438,7 +438,6 @@ const
   PREFIX_LENGTH = 2;
 var
   GocciaObj: TGocciaObjectValue;
-  NamespaceObj: TGocciaObjectValue;
   BuiltInsArray: TGocciaArrayValue;
   Flag: TGocciaGlobalBuiltin;
   Name: string;
@@ -456,12 +455,9 @@ begin
   GocciaObj.AssignProperty('commit', TGocciaStringLiteralValue.Create(GetCommit));
   GocciaObj.AssignProperty('builtIns', BuiltInsArray);
   GocciaObj.AssignProperty(PROP_STRICT_TYPES, TGocciaBooleanLiteralValue.FalseValue);
+  GocciaObj.AssignProperty(SEMVER_NAMESPACE_PROPERTY, CreateSemverNamespace);
 
-  FInterpreter.GlobalScope.DefineLexicalBinding('GocciaScript', GocciaObj, dtConst);
-
-  NamespaceObj := TGocciaObjectValue.Create;
-  NamespaceObj.AssignProperty(SEMVER_NAMESPACE_PROPERTY, CreateSemverNamespace);
-  FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', NamespaceObj, dtConst);
+  FInterpreter.GlobalScope.DefineLexicalBinding('Goccia', GocciaObj, dtConst);
 end;
 
 function TGocciaRuntimeBootstrap.SpeciesGetter(const AArgs: TGocciaArgumentsCollection;

@@ -3,7 +3,7 @@ description: The object annotation accepts any reference type but rejects primit
 features: [types-as-comments, strict-type-enforcement]
 ---*/
 
-describe.skipIf(!GocciaScript.strictTypes)("reference type enforcement", () => {
+describe.skipIf(!Goccia.strictTypes)("reference type enforcement", () => {
 
 test("object annotation accepts plain object", () => {
   let o: object = { a: 1 };

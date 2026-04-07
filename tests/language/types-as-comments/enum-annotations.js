@@ -3,9 +3,9 @@ description: Type annotations around enum declarations are parsed and ignored at
 features: [types-as-comments, enum-declaration]
 ---*/
 
-const isGocciaScript = typeof GocciaScript !== "undefined";
+const hasGoccia = typeof Goccia !== "undefined";
 
-describe.runIf(isGocciaScript)("enum type annotations", () => {
+describe.runIf(hasGoccia)("enum type annotations", () => {
   test("variable annotated with enum type", () => {
     enum Direction {
       Up = 0,

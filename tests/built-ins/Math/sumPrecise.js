@@ -3,9 +3,9 @@ description: Math.sumPrecise returns a precise sum of iterable elements
 features: [Math.sumPrecise]
 ---*/
 
-const isGocciaScript = typeof GocciaScript !== "undefined";
+const hasGoccia = typeof Goccia !== "undefined";
 
-describe.runIf(isGocciaScript)("Math.sumPrecise", () => {
+describe.runIf(hasGoccia)("Math.sumPrecise", () => {
   test("basic summation", () => {
     expect(Math.sumPrecise([1, 2, 3])).toBe(6);
     expect(Math.sumPrecise([10, 20, 30])).toBe(60);
