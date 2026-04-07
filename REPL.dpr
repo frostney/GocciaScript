@@ -194,7 +194,7 @@ begin
                     ExecEnd := GetNanoseconds;
 
                     if ResultValue <> nil then
-                      WriteLn(FormatREPLValue(ResultValue));
+                      WriteLn(FormatREPLValue(ResultValue, IsColorTerminal));
                   finally
                     if Assigned(ResultValue) then
                       TGarbageCollector.Instance.RemoveTempRoot(ResultValue);
@@ -264,7 +264,7 @@ begin
         try
           ScriptResult := Engine.Execute;
           if ScriptResult.Result <> nil then
-            WriteLn(FormatREPLValue(ScriptResult.Result));
+            WriteLn(FormatREPLValue(ScriptResult.Result, IsColorTerminal));
         except
           on E: Exception do
           begin
