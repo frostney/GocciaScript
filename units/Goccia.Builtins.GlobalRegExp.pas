@@ -61,7 +61,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
-  Goccia.Values.Iterator.Concrete,
+  Goccia.Values.Iterator.RegExp,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -465,11 +465,8 @@ function TGocciaGlobalRegExp.RegExpSymbolMatchAll(
   const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Input: string;
-  RegexValue: TGocciaObjectValue;
-  MatchesArray: TGocciaArrayValue;
-  MatchValue: TGocciaValue;
-  MatchArray: TGocciaObjectValue;
-  MatchIndex, MatchEnd, NextIndex: Integer;
+  RegexClone: TGocciaObjectValue;
+  IsGlobal: Boolean;
 begin
   if not IsRegExpValue(AThisValue) then
     ThrowTypeError('RegExp.prototype[Symbol.matchAll] called on non-RegExp object');
@@ -479,29 +476,12 @@ begin
   else
     Input := TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value;
 
-  RegexValue := TGocciaObjectValue(CloneRegExpObject(AThisValue));
-  TGarbageCollector.Instance.AddTempRoot(RegexValue);
-  try
-    MatchesArray := TGocciaArrayValue.Create;
-    TGarbageCollector.Instance.AddTempRoot(MatchesArray);
-    try
-      if GetRegExpBooleanProperty(RegexValue, PROP_GLOBAL) or
-         GetRegExpBooleanProperty(RegexValue, PROP_STICKY) then
-      begin
-        while MatchRegExpObjectOnce(RegexValue, Input, MatchValue) do
-          MatchesArray.Elements.Add(MatchValue);
-      end
-      else if MatchRegExpObjectValue(RegexValue, Input, 0, False, False,
-        MatchArray, MatchIndex, MatchEnd, NextIndex) then
-        MatchesArray.Elements.Add(MatchArray);
-
-      Result := TGocciaArrayIteratorValue.Create(MatchesArray, akValues);
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(MatchesArray);
-    end;
-  finally
-    TGarbageCollector.Instance.RemoveTempRoot(RegexValue);
-  end;
+  // ES2026 §22.2.6.9 step 4: Let matcher be a clone of R
+  RegexClone := TGocciaObjectValue(CloneRegExpObject(AThisValue));
+  // ES2026 §22.2.6.9 step 5: global is true iff flags contains "g"
+  // Sticky (y) affects match positioning but does not enable repeated iteration
+  IsGlobal := GetRegExpBooleanProperty(RegexClone, PROP_GLOBAL);
+  Result := TGocciaRegExpMatchAllIteratorValue.Create(RegexClone, Input, IsGlobal);
 end;
 
 // ES2026 §22.2.6.11 RegExp.prototype [ @@replace ] ( string, replaceValue )

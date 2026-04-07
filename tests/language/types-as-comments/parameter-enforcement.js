@@ -3,7 +3,7 @@ description: Type annotations on function parameters enforce type constraints at
 features: [types-as-comments, strict-type-enforcement]
 ---*/
 
-describe.skipIf(!GocciaScript.strictTypes)("parameter type enforcement", () => {
+describe.skipIf(!Goccia.strictTypes)("parameter type enforcement", () => {
 
 test("typed parameter rejects wrong type", () => {
   const add = (a: number, b: number) => a + b;

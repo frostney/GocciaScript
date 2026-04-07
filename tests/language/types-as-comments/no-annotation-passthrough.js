@@ -3,7 +3,7 @@ description: Strict type inference — initializer locks variable type, union/an
 features: [types-as-comments]
 ---*/
 
-describe.skipIf(!GocciaScript.strictTypes)("strict type inference", () => {
+describe.skipIf(!Goccia.strictTypes)("strict type inference", () => {
   test("inferred type prevents incompatible reassignment", () => {
     let x = 5;
     expect(x).toBe(5);
@@ -69,7 +69,7 @@ test("let without initializer with type allows first assignment", () => {
   expect(x).toBe(42);
 });
 
-describe.skipIf(!GocciaScript.strictTypes)("typed uninitialized enforcement", () => {
+describe.skipIf(!Goccia.strictTypes)("typed uninitialized enforcement", () => {
   test("let without initializer enforces type on subsequent assignment", () => {
     let x: number;
     x = 42;

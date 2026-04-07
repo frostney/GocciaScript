@@ -392,7 +392,7 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 - Replacement strings in regex-backed `replace()` and `replaceAll()` support `$$`, `$&`, the pre-match token `$` followed by a backtick, `$'`, numeric captures such as `$1`, and **named group references** `$<name>`. An unmatched `$<name>` produces an empty string; `$<` without a closing `>` is literal.
 - When the replacer is a function and named groups are present, the `groups` object is passed as the last argument after `input`.
 - `String.prototype.match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split` dispatch through the corresponding well-known symbol hooks, so custom protocol objects work as expected.
-- `matchAll()` currently returns an eager iterator over precomputed matches rather than a fully lazy spec-style iterator.
+- `matchAll()` returns a lazy iterator that advances matches on demand per the ES2026 spec.
 - The `u` flag is accepted and exposed through `.flags` and `.unicode`, but full ECMAScript Unicode regexp semantics are not implemented yet.
 - The `v` flag (Unicode sets) is accepted and exposed through `.flags` and `.unicodeSets`. The `u` and `v` flags are mutually exclusive. Full Unicode set notation and properties of strings in character classes are not yet implemented beyond basic `u` flag behavior.
 - The `d` flag (indices) is accepted and exposed through `.flags` and `.hasIndices`. Match indices are not yet populated.
@@ -405,9 +405,9 @@ These are always registered (not flag-gated).
 
 `globalThis` is a `const` binding that holds a plain object populated with all global scope bindings at the time of registration. It includes a self-referential `globalThis` property (`globalThis.globalThis === globalThis`).
 
-**`GocciaScript` object:**
+**`Goccia` object:**
 
-A `const` global providing engine metadata:
+A `const` global providing engine metadata and Goccia-owned utility APIs:
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -415,10 +415,7 @@ A `const` global providing engine metadata:
 | `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
 | `builtIns` | `string[]` | Names of the enabled `TGocciaGlobalBuiltin` flags (e.g., `["Console", "Math", "GlobalObject", ...]`), derived via RTTI at runtime |
 | `strictTypes` | `boolean` | `true` in bytecode mode where strict local type enforcement is active (covering both explicit type annotations and types inferred from literal initializers); `false` in interpreted mode |
-
-**`Goccia` object:**
-
-A `const` global namespace for Goccia-owned utility APIs.
+| `semver` | `object` | SemVer 2.0.0 API namespace (see below) |
 
 **`Goccia.semver`**
 
