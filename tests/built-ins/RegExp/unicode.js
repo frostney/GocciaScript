@@ -74,6 +74,16 @@ test("unicode property \\p{Lowercase_Letter}", () => {
   expect(new RegExp("\\p{Lowercase_Letter}", "u").test("ABC")).toBe(false);
 });
 
+test("\\p{Lu} shorthand for Uppercase_Letter", () => {
+  expect(new RegExp("^\\p{Lu}+$", "u").test("ABC")).toBe(true);
+  expect(new RegExp("\\p{Lu}", "u").test("abc")).toBe(false);
+});
+
+test("\\p{Ll} shorthand for Lowercase_Letter", () => {
+  expect(new RegExp("^\\p{Ll}+$", "u").test("abc")).toBe(true);
+  expect(new RegExp("\\p{Ll}", "u").test("ABC")).toBe(false);
+});
+
 test("unicode property \\p{White_Space}", () => {
   expect(new RegExp("\\p{White_Space}", "u").test(" ")).toBe(true);
   expect(new RegExp("\\p{White_Space}", "u").test("\t")).toBe(true);
