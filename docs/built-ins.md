@@ -354,14 +354,14 @@ String prototype methods are implemented on string values:
 
 RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pattern/flags`) are also supported in both interpreted and bytecode execution modes. Calling `RegExp(existingRegExp)` without `new` and without an explicit `flags` argument returns the original regex object; `new RegExp(existingRegExp)` clones it.
 
-**Supported flags:** `g`, `i`, `m`, `s`, `u`, `y`
+**Supported flags:** `d`, `g`, `i`, `m`, `s`, `u`, `v`, `y`
 
 **Constructor properties:**
 
 | Property | Description |
 |----------|-------------|
 | `source` | Normalized pattern source |
-| `flags` | Canonicalized flags string |
+| `flags` | Canonicalized flags string (sorted: `dgimsuvy`) |
 | `lastIndex` | Current match position for `g`/`y` regexes |
 | `global` | `true` when the `g` flag is present |
 | `ignoreCase` | `true` when the `i` flag is present |
@@ -369,12 +369,14 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 | `dotAll` | `true` when the `s` flag is present |
 | `unicode` | `true` when the `u` flag is present |
 | `sticky` | `true` when the `y` flag is present |
+| `unicodeSets` | `true` when the `v` flag is present |
+| `hasIndices` | `true` when the `d` flag is present |
 
 **Prototype methods:**
 
 | Method | Description |
 |--------|-------------|
-| `exec(string)` | Returns a match array with capture groups, `index`, and `input`, or `null` |
+| `exec(string)` | Returns a match array with capture groups, `index`, `input`, and `groups`, or `null` |
 | `test(string)` | Returns `true` if the regex matches |
 | `toString()` | Returns `/pattern/flags` |
 | `[Symbol.match](string)` | Matching hook used by `String.prototype.match()` |
@@ -385,11 +387,15 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 
 **Behavior notes:**
 
-- Replacement strings in regex-backed `replace()` and `replaceAll()` support `$$`, `$&`, the pre-match token `$` followed by a backtick, `$'`, and numeric captures such as `$1`.
+- **Named capture groups** (`(?<name>...)`) are supported. Match results include a `groups` property (an object with `null` prototype) mapping group names to matched strings. Non-participating named groups are `undefined`. When no named groups exist, `groups` is `undefined`.
+- **Named backreferences** (`\k<name>`) reference a previously captured named group within the same pattern.
+- Replacement strings in regex-backed `replace()` and `replaceAll()` support `$$`, `$&`, the pre-match token `$` followed by a backtick, `$'`, numeric captures such as `$1`, and **named group references** `$<name>`. An unmatched `$<name>` produces an empty string; `$<` without a closing `>` is literal.
+- When the replacer is a function and named groups are present, the `groups` object is passed as the last argument after `input`.
 - `String.prototype.match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split` dispatch through the corresponding well-known symbol hooks, so custom protocol objects work as expected.
 - `matchAll()` currently returns an eager iterator over precomputed matches rather than a fully lazy spec-style iterator.
 - The `u` flag is accepted and exposed through `.flags` and `.unicode`, but full ECMAScript Unicode regexp semantics are not implemented yet.
-- Named capture groups, `d` / indices, and Unicode sets (`v`) are not implemented yet.
+- The `v` flag (Unicode sets) is accepted and exposed through `.flags` and `.unicodeSets`. The `u` and `v` flags are mutually exclusive. Full Unicode set notation and properties of strings in character classes are not yet implemented beyond basic `u` flag behavior.
+- The `d` flag (indices) is accepted and exposed through `.flags` and `.hasIndices`. Match indices are not yet populated.
 
 ### Global Constants, Functions, and Error Constructors (`Goccia.Builtins.Globals.pas`)
 
