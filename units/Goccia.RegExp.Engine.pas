@@ -176,26 +176,108 @@ begin
   Result := -1;
 end;
 
+// Pass 1: collect all named groups and their capture indices without modifying
+// the pattern, so that forward \k<name> backreferences can be resolved.
+function CollectNamedGroups(const APattern: string): TGocciaRegExpNamedGroups;
+var
+  I, PatternLength, GroupIndex, CloseAngle: Integer;
+  InCharClass: Boolean;
+  GroupName: string;
+begin
+  SetLength(Result, 0);
+  PatternLength := Length(APattern);
+  I := 1;
+  GroupIndex := 0;
+  InCharClass := False;
+  while I <= PatternLength do
+  begin
+    if APattern[I] = '\' then
+    begin
+      if I + 1 <= PatternLength then
+        Inc(I, 2)
+      else
+        Inc(I);
+      Continue;
+    end;
+    if APattern[I] = '[' then
+    begin
+      InCharClass := True;
+      Inc(I);
+      Continue;
+    end;
+    if (APattern[I] = ']') and InCharClass then
+    begin
+      InCharClass := False;
+      Inc(I);
+      Continue;
+    end;
+    if InCharClass then
+    begin
+      Inc(I);
+      Continue;
+    end;
+    if APattern[I] = '(' then
+    begin
+      if (I + 1 <= PatternLength) and (APattern[I + 1] = '?') then
+      begin
+        if (I + 2 <= PatternLength) and (APattern[I + 2] = '<') then
+        begin
+          // (?<= lookbehind, (?<! negative lookbehind — skip
+          if (I + 3 <= PatternLength) and
+             ((APattern[I + 3] = '=') or (APattern[I + 3] = '!')) then
+          begin
+            Inc(I, 3);
+            Continue;
+          end;
+          // Named capture group (?<name>...)
+          CloseAngle := I + 3;
+          while (CloseAngle <= PatternLength) and
+                (APattern[CloseAngle] <> '>') do
+            Inc(CloseAngle);
+          if CloseAngle <= PatternLength then
+          begin
+            Inc(GroupIndex);
+            GroupName := Copy(APattern, I + 3, CloseAngle - I - 3);
+            SetLength(Result, Length(Result) + 1);
+            Result[High(Result)].Name := GroupName;
+            Result[High(Result)].Index := GroupIndex;
+            I := CloseAngle + 1;
+            Continue;
+          end;
+        end;
+        // Non-capturing or other (?...) group — skip without incrementing index
+        Inc(I, 2);
+        Continue;
+      end;
+      // Plain capturing group
+      Inc(GroupIndex);
+    end;
+    Inc(I);
+  end;
+end;
+
+// Pass 2: convert named groups to plain capturing groups and resolve \k<name>
+// backreferences using the complete group map from pass 1.
 function PreprocessRegExpPattern(const APattern: string;
   out ANamedGroups: TGocciaRegExpNamedGroups): string;
 var
   I, PatternLength: Integer;
-  GroupIndex: Integer;
   InCharClass: Boolean;
   GroupName: string;
   CloseAngle: Integer;
   BackrefIndex: Integer;
 begin
-  SetLength(ANamedGroups, 0);
+  // Pass 1: collect all named groups so forward backreferences resolve
+  ANamedGroups := CollectNamedGroups(APattern);
   PatternLength := Length(APattern);
   if PatternLength = 0 then
   begin
     Result := '';
     Exit;
   end;
+  // Pass 2: emit converted pattern
   Result := '';
   I := 1;
-  GroupIndex := 0;
   InCharClass := False;
   while I <= PatternLength do
   begin
@@ -218,7 +300,8 @@ begin
             if BackrefIndex > 0 then
               Result := Result + '\' + IntToStr(BackrefIndex)
             else
-              Result := Result + '\1';
+              raise EConvertError.CreateFmt(
+                'Invalid named backreference: %s', [GroupName]);
             I := CloseAngle + 1;
             Continue;
           end;
@@ -274,11 +357,6 @@ begin
             Inc(CloseAngle);
           if CloseAngle <= PatternLength then
           begin
-            Inc(GroupIndex);
-            GroupName := Copy(APattern, I + 3, CloseAngle - I - 3);
-            SetLength(ANamedGroups, Length(ANamedGroups) + 1);
-            ANamedGroups[High(ANamedGroups)].Name := GroupName;
-            ANamedGroups[High(ANamedGroups)].Index := GroupIndex;
             // Strip the name, emit plain capturing group
             Result := Result + '(';
             I := CloseAngle + 1;
@@ -289,7 +367,6 @@ begin
         Inc(I, 2);
         Continue;
       end;
-      Inc(GroupIndex);
       Result := Result + APattern[I];
       Inc(I);
       Continue;

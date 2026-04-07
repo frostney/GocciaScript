@@ -86,3 +86,18 @@ test("named groups have null prototype", () => {
   // groups object should not have inherited properties
   expect(result.groups.toString).toBe(undefined);
 });
+
+test("forward backreference resolves correctly", () => {
+  // \k<word> appears before (?<word>...) — must still resolve
+  const re = new RegExp("\\k<word> (?<word>[a-z]+)");
+  // Forward backreference matches empty string before group is captured,
+  // so it matches " hello" (empty backreference + space + "hello")
+  const result = re.exec(" hello");
+  expect(result).toBe(null);
+});
+
+test("invalid named backreference throws", () => {
+  expect(() => {
+    new RegExp("\\k<nosuchgroup>");
+  }).toThrow();
+});
