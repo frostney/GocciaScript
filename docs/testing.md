@@ -313,7 +313,7 @@ When a parser implements a format with spec-defined newline semantics, test the 
 - Do not treat `LineEnding` / `sLineBreak` as the expected runtime result for parsed data just because the test is running on Windows.
 - Prefer explicit `\r\n` or `#13#10` fixtures when adding regression tests for multiline parsing, folding, or block-scalar behavior.
 - Assert the format-defined canonical result. Example: TOML multiline strings normalize recognized newlines to LF (`\n`) even when the source text uses CRLF.
-- For parser inputs that come from files, read UTF-8 bytes with the shared helper instead of `TStringList.LoadFromFile` or `string(UTF8String(...))`. Keep the text as `UTF8String` until parser entry, then add at least one regression that hits the real file-loading path with non-ASCII data.
+- For parser inputs that come from files, use the shared `Goccia.TextFiles` helpers (`ReadUTF8FileText`, `ReadUTF8FileLines`, `StringListToLFText`) instead of `TStringList.LoadFromFile` or `string(UTF8String(...))`. Keep the text as `UTF8String` until parser entry, canonicalize parser-facing source text to LF through the shared helpers, and add at least one regression that hits the real file-loading path with non-ASCII data.
 - When code needs a “10 characters” or “first identifier code point” style rule on UTF-8 text, do not use raw `Length`, `Copy`, or byte indexing on `string`/`UTF8String`; those operate on bytes under our FPC settings.
 - Keep one public-surface regression in `tests/` and, when the parser exposes a reusable native utility like `TGocciaTOMLParser`, add a focused Pascal regression alongside it as well.
 

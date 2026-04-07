@@ -11,6 +11,7 @@ uses
   StringBuffer,
 
   Goccia.JSON5,
+  Goccia.TextFiles,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -209,7 +210,7 @@ end;
 var
   ParsedValue: TGocciaValue;
   Parser: TGocciaJSON5Parser;
-  Source: TStringList;
+  SourceText: UTF8String;
 begin
   if ParamCount <> 1 then
     Halt(2);
@@ -217,12 +218,11 @@ begin
   TGarbageCollector.Initialize;
   PinPrimitiveSingletons;
 
-  Source := TStringList.Create;
   Parser := TGocciaJSON5Parser.Create;
   try
     try
-      Source.LoadFromFile(ParamStr(1));
-      ParsedValue := Parser.Parse(Source.Text);
+      SourceText := ReadUTF8FileText(ParamStr(1));
+      ParsedValue := Parser.Parse(SourceText);
       TGarbageCollector.Instance.AddTempRoot(ParsedValue);
       try
         WriteLn(EncodeValue(ParsedValue));
@@ -238,7 +238,6 @@ begin
     end;
   finally
     Parser.Free;
-    Source.Free;
     TGarbageCollector.Shutdown;
   end;
 end.

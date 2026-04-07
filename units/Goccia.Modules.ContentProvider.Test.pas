@@ -23,6 +23,7 @@ uses
   Goccia.Modules.Resolver,
   Goccia.Parser,
   Goccia.TestSetup,
+  Goccia.TextFiles,
   Goccia.Token,
   Goccia.TOML,
   Goccia.Values.ObjectValue,
@@ -198,9 +199,8 @@ begin
   Lexer := TGocciaLexer.Create(ASource, AFileName);
   try
     Tokens := Lexer.ScanTokens;
-    SourceLines := TStringList.Create;
+    SourceLines := CreateUTF8StringList(ASource);
     try
-      SourceLines.Text := ASource;
       Parser := TGocciaParser.Create(Tokens, AFileName, SourceLines);
       try
         Result := Parser.Parse;

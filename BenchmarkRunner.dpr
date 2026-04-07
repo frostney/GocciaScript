@@ -25,6 +25,7 @@ uses
   Goccia.Modules.Configuration,
   Goccia.Parser,
   Goccia.ScriptLoader.Input,
+  Goccia.TextFiles,
   Goccia.Token,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
@@ -157,9 +158,8 @@ var
 begin
   BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
 
-  Source := TStringList.Create;
+  Source := ReadUTF8FileLines(AFileName);
   try
-    Source.LoadFromFile(AFileName);
     Source.Add('runBenchmarks();');
 
     try
@@ -225,12 +225,11 @@ var
 begin
   BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
 
-  Source := TStringList.Create;
+  Source := ReadUTF8FileLines(AFileName);
   try
-    Source.LoadFromFile(AFileName);
     Source.Add('runBenchmarks();');
 
-    SourceText := Source.Text;
+    SourceText := StringListToLFText(Source);
     if ggJSX in BenchGlobals then
     begin
       JSXResult := TGocciaJSXTransformer.Transform(SourceText);
@@ -395,7 +394,7 @@ begin
   BenchGlobals := TGocciaEngine.DefaultGlobals + [ggBenchmark];
   ASource.Add('runBenchmarks();');
 
-  SourceText := ASource.Text;
+  SourceText := StringListToLFText(ASource);
   if ggJSX in BenchGlobals then
   begin
     JSXResult := TGocciaJSXTransformer.Transform(SourceText);

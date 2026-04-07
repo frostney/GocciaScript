@@ -24,6 +24,7 @@ uses
   Goccia.Lexer,
   Goccia.Parser,
   Goccia.TestSetup,
+  Goccia.TextFiles,
   Goccia.Token,
   Goccia.Values.Primitives;
 
@@ -70,8 +71,7 @@ var
 begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
   Tokens := Lexer.ScanTokens;
-  SourceLines := TStringList.Create;
-  SourceLines.Text := ASource;
+  SourceLines := CreateUTF8StringList(ASource);
   Parser := TGocciaParser.Create(Tokens, '<test>', SourceLines);
   ProgramNode := Parser.Parse;
 

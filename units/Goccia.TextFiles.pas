@@ -9,13 +9,19 @@ uses
 
 function RetagUTF8Text(const ABytes: RawByteString): string;
 function CreateUTF8StringList(const AText: string): TStringList;
+function CreateUTF8FileTextLines(const AText: UTF8String): TStringList;
+function NormalizeNewlinesToLF(const AText: string): string;
 function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
 function ReadUTF8FileText(const APath: string): UTF8String;
+function ReadUTF8FileLines(const APath: string): TStringList;
+function StringListToLFText(const ALines: TStrings): string;
 
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  StringBuffer;
 
 function RetagUTF8Text(const ABytes: RawByteString): string;
 var
@@ -59,10 +65,54 @@ begin
     Result.Add('');
 end;
 
-function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
+function CreateUTF8FileTextLines(const AText: UTF8String): TStringList;
+var
+  LineText: UTF8String;
+  LineStart: Integer;
+  TextIndex: Integer;
+begin
+  Result := TStringList.Create;
+  LineStart := 1;
+  TextIndex := 1;
+
+  while TextIndex <= Length(AText) do
+  begin
+    if AText[TextIndex] = #13 then
+    begin
+      LineText := Copy(AText, LineStart, TextIndex - LineStart);
+      Result.Add(string(LineText));
+      if (TextIndex < Length(AText)) and (AText[TextIndex + 1] = #10) then
+        Inc(TextIndex);
+      LineStart := TextIndex + 1;
+    end
+    else if AText[TextIndex] = #10 then
+    begin
+      LineText := Copy(AText, LineStart, TextIndex - LineStart);
+      Result.Add(string(LineText));
+      LineStart := TextIndex + 1;
+    end;
+    Inc(TextIndex);
+  end;
+
+  if LineStart <= Length(AText) then
+  begin
+    LineText := Copy(AText, LineStart, Length(AText) - LineStart + 1);
+    Result.Add(string(LineText));
+  end
+  else if (Length(AText) > 0) and ((AText[Length(AText)] = #10) or
+    (AText[Length(AText)] = #13)) then
+    Result.Add('');
+end;
+
+function NormalizeNewlinesToLF(const AText: string): string;
 begin
   Result := StringReplace(AText, #13#10, #10, [rfReplaceAll]);
   Result := StringReplace(Result, #13, #10, [rfReplaceAll]);
+end;
+
+function NormalizeUTF8NewlinesToLF(const AText: UTF8String): UTF8String;
+begin
+  Result := UTF8String(NormalizeNewlinesToLF(string(AText)));
 end;
 
 function ReadUTF8FileText(const APath: string): UTF8String;
@@ -79,7 +129,31 @@ begin
     Stream.Free;
   end;
 
-  Result := UTF8String(RetagUTF8Text(SourceText));
+  SetCodePage(SourceText, CP_UTF8, False);
+  Result := UTF8String(SourceText);
+end;
+
+function ReadUTF8FileLines(const APath: string): TStringList;
+begin
+  Result := CreateUTF8FileTextLines(ReadUTF8FileText(APath));
+end;
+
+function StringListToLFText(const ALines: TStrings): string;
+var
+  Buffer: TStringBuffer;
+  I: Integer;
+begin
+  if not Assigned(ALines) then
+    Exit('');
+
+  Buffer := TStringBuffer.Create;
+  for I := 0 to ALines.Count - 1 do
+  begin
+    Buffer.Append(ALines[I]);
+    Buffer.AppendChar(#10);
+  end;
+
+  Result := Buffer.ToString;
 end;
 
 initialization

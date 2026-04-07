@@ -12,7 +12,8 @@ uses
 
   Goccia.JSX.SourceMap,
   Goccia.Keywords.Contextual,
-  Goccia.Keywords.Reserved;
+  Goccia.Keywords.Reserved,
+  Goccia.TextFiles;
 
 type
   TGocciaJSXTransformResult = record
@@ -533,10 +534,9 @@ begin
   if not HasNewline then
     Exit(AText);
 
-  Lines := TStringList.Create;
+  Lines := CreateUTF8StringList(AText);
   try
     SB := TStringBuffer.Create;
-    Lines.Text := AText;
     First := True;
 
     for I := 0 to Lines.Count - 1 do

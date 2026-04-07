@@ -217,7 +217,7 @@ begin
 
   Content := FContentProvider.LoadContent(ResolvedPath);
   try
-    SourceText := Content.Text;
+    SourceText := NormalizeUTF8NewlinesToLF(Content.Text);
     JSXSourceMap := nil;
     if FJSXEnabled then
     begin
