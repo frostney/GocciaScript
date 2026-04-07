@@ -144,6 +144,12 @@ test("invalid unicode property throws SyntaxError", () => {
   }).toThrow(SyntaxError);
 });
 
+test("invalid hex digits in \\u{} escape throw SyntaxError", () => {
+  expect(() => {
+    new RegExp("\\u{ZZZZ}", "u");
+  }).toThrow(SyntaxError);
+});
+
 test("u flag combined with other flags", () => {
   const regex = new RegExp("hello", "giu");
   expect(regex.global).toBe(true);

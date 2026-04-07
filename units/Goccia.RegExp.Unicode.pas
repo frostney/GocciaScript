@@ -110,7 +110,7 @@ end;
 // literal UTF-8 byte sequences.
 function PreprocessUnicodePattern(const APattern: string): string;
 var
-  I, PatternLength: Integer;
+  I, J, PatternLength: Integer;
   PropertyName: string;
   Negated: Boolean;
   InCharacterClass: Boolean;
@@ -177,6 +177,11 @@ begin
               if HexStr = '' then
                 raise EConvertError.Create(
                   'Empty Unicode escape sequence');
+              for J := 1 to Length(HexStr) do
+                if not IsHexDigit(HexStr[J]) then
+                  raise EConvertError.Create(
+                    'Invalid hex digit in Unicode escape: \u{' +
+                    HexStr + '}');
               CodePoint := StrToInt('$' + HexStr);
               if CodePoint > $10FFFF then
                 raise EConvertError.Create(
