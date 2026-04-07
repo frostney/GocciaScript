@@ -14,6 +14,7 @@ Why is this needed?
 
 ## Current behavior
 What happens today?
+Optional for bugs: include reproduction steps and environment details (OS, versions, flags, or config).
 
 ## Expected behavior
 What should happen instead?
