@@ -1318,6 +1318,7 @@ begin
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
+  EmitLineMapping(ACtx, AMethod.Line, AMethod.Column);
 
   ChildCtx := ACtx;
   ChildCtx.Template := ChildTemplate;
@@ -1378,6 +1379,7 @@ begin
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
+  EmitLineMapping(ACtx, AGetter.Line, AGetter.Column);
   ACtx.CompileFunctionBody(AGetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -1427,6 +1429,7 @@ begin
   ChildScope.DeclareLocal(ASetter.Parameter, False);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
+  EmitLineMapping(ACtx, ASetter.Line, ASetter.Column);
   ACtx.CompileFunctionBody(ASetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -1474,6 +1477,7 @@ begin
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
+  EmitLineMapping(ACtx, AGetter.Line, AGetter.Column);
   ACtx.CompileFunctionBody(AGetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -1530,6 +1534,7 @@ begin
   ChildScope.DeclareLocal(ASetter.Parameter, False);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
+  EmitLineMapping(ACtx, ASetter.Line, ASetter.Column);
   ACtx.CompileFunctionBody(ASetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 

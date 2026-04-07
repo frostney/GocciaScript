@@ -1398,6 +1398,7 @@ begin
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
+    EmitLineMapping(ACtx, AGetter.Line, AGetter.Column);
     ACtx.CompileFunctionBody(AGetter.Body);
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -1447,6 +1448,7 @@ begin
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
+    EmitLineMapping(ACtx, ASetter.Line, ASetter.Column);
     ACtx.CompileFunctionBody(ASetter.Body);
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 

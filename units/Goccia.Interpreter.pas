@@ -71,7 +71,9 @@ type
 implementation
 
 uses
-  GarbageCollector.Generic;
+  GarbageCollector.Generic,
+
+  Goccia.Coverage;
 
 { TGocciaInterpreter }
 
@@ -118,6 +120,8 @@ begin
   Result.OnError := ThrowError;
   Result.LoadModule := LoadModule;
   Result.CurrentFilePath := FFileName;
+  Result.CoverageEnabled := Assigned(TGocciaCoverageTracker.Instance)
+    and TGocciaCoverageTracker.Instance.Enabled;
 end;
 
 function TGocciaInterpreter.Execute(const AProgram: TGocciaProgram): TGocciaValue;

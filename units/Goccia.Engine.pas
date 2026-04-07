@@ -212,6 +212,7 @@ uses
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Coverage,
   Goccia.Error,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
@@ -852,6 +853,11 @@ begin
           PrintParserWarnings(Parser, SourceMap);
           ParseEnd := GetNanoseconds;
           FLastTiming.ParseTimeNanoseconds := ParseEnd - LexEnd;
+
+          if Assigned(TGocciaCoverageTracker.Instance) and
+             TGocciaCoverageTracker.Instance.Enabled then
+            TGocciaCoverageTracker.Instance.RegisterSourceFile(
+              FFileName, CountExecutableLines(Lexer.SourceLines));
 
           try
             CheckTopLevelRedeclarations(ProgramNode,

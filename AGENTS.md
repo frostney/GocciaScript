@@ -35,6 +35,9 @@ GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a 
 ./build/ScriptLoader example.js --emit --output=out.gbc   # Custom output path
 ./build/ScriptLoader out.gbc                     # Load and execute .gbc bytecode
 printf "const x = 2 + 2; x;" | ./build/ScriptLoader        # Execute stdin source
+./build/ScriptLoader example.js --coverage                 # Execute with line and branch coverage
+./build/ScriptLoader example.js --coverage --coverage-format=lcov --coverage-output=coverage.lcov  # Coverage with lcov output
+./build/ScriptLoader example.js --coverage --coverage-format=json --coverage-output=coverage.json  # Coverage with JSON output
 ./build/REPL                                      # Start interactive REPL (interpreted)
 ./build/REPL --mode=bytecode                      # Start the REPL via bytecode VM
 ./build/REPL --mode=bytecode --timing             # Bytecode REPL with per-line timing
@@ -46,6 +49,9 @@ printf "const x = 2 + 2; x;" | ./build/ScriptLoader        # Execute stdin sourc
 ./build/TestRunner tests --silent                                              # Suppress all console output
 ./build/TestRunner tests --output=results.json                                 # Write test results as JSON
 ./build/TestRunner tests --mode=bytecode                                       # Run tests via the Goccia bytecode VM
+./build/TestRunner tests --coverage                                            # Run tests with line and branch coverage
+./build/TestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov  # Coverage with lcov output
+./build/TestRunner tests --coverage --coverage-format=json --coverage-output=coverage.json  # Coverage with JSON output
 ./build/BenchmarkRunner benchmarks/                                               # Run all benchmarks
 ./build/BenchmarkRunner benchmarks --import-map=imports.json                      # Run benchmarks with an explicit import map
 ./build/BenchmarkRunner benchmarks/fibonacci.js                                   # Run a specific benchmark

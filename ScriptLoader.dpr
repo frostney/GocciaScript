@@ -15,6 +15,8 @@ uses
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   Goccia.Compiler,
+  Goccia.Coverage,
+  Goccia.Coverage.Report,
   Goccia.Engine,
   Goccia.Engine.BytecodeBackend,
   Goccia.FileExtensions,
@@ -53,6 +55,10 @@ var
   GGlobalsFiles: TStringList = nil;
   GInlineGlobals: TStringList = nil;
   GInlineAliases: TStringList = nil;
+  GCoverageEnabled: Boolean = False;
+  GCoverageLcovEnabled: Boolean = False;
+  GCoverageJsonEnabled: Boolean = False;
+  GCoverageOutputPath: string = '';
 
 function ParseSource(const ASource: TStringList; const AFileName: string;
   const AGlobals: TGocciaGlobalBuiltins; const ASuppressWarnings: Boolean;
@@ -297,6 +303,12 @@ begin
     ProgramNode := ParseSource(ASource, AFileName, TGocciaEngine.DefaultGlobals,
       GJsonOutput, Result.Timing.LexTimeNanoseconds,
       Result.Timing.ParseTimeNanoseconds);
+
+    if Assigned(TGocciaCoverageTracker.Instance) and
+       TGocciaCoverageTracker.Instance.Enabled and Assigned(ASource) then
+      TGocciaCoverageTracker.Instance.RegisterSourceFile(
+        AFileName, CountExecutableLines(ASource));
+
     try
       CompileStart := GetNanoseconds;
       Module := Backend.CompileToModule(ProgramNode);
@@ -579,6 +591,9 @@ begin
   WriteLn('  --output=json           Write structured JSON result to stdout');
   WriteLn('  --output=<path>         Output file path (used with --emit)');
   WriteLn('  --silent                Suppress console output from the script');
+  WriteLn('  --coverage              Enable line and branch coverage reporting');
+  WriteLn('  --coverage-format=lcov|json  Coverage output format (implies --coverage)');
+  WriteLn('  --coverage-output=<file>     Coverage output file (paired with --coverage-format)');
 end;
 
 var
@@ -691,6 +706,29 @@ begin
       end
       else if Arg = '--silent' then
         GSilentConsole := True
+      else if Arg = '--coverage' then
+        GCoverageEnabled := True
+      else if Arg = '--coverage-format=lcov' then
+      begin
+        GCoverageLcovEnabled := True;
+        GCoverageEnabled := True;
+      end
+      else if Arg = '--coverage-format=json' then
+      begin
+        GCoverageJsonEnabled := True;
+        GCoverageEnabled := True;
+      end
+      else if Copy(Arg, 1, 18) = '--coverage-format=' then
+      begin
+        WriteLn('Error: Unknown coverage format "', Copy(Arg, 19, MaxInt), '". Use "lcov" or "json".');
+        ExitCode := 1;
+        Exit;
+      end
+      else if Copy(Arg, 1, 18) = '--coverage-output=' then
+      begin
+        GCoverageOutputPath := Copy(Arg, 19, MaxInt);
+        GCoverageEnabled := True;
+      end
       else if Copy(Arg, 1, 2) <> '--' then
         Paths.Add(Arg)
       else
@@ -724,26 +762,50 @@ begin
       Exit;
     end;
 
+    if GCoverageEnabled then
+    begin
+      TGocciaCoverageTracker.Initialize;
+      TGocciaCoverageTracker.Instance.Enabled := True;
+    end;
     try
-      if Paths.Count = 0 then
-        RunScriptFromStdin
-      else
-        for I := 0 to Paths.Count - 1 do
-        begin
-          if I > 0 then
-            WriteLn;
-          RunScripts(Paths[I]);
-        end;
-    except
-      on E: Exception do
-      begin
-        if GJsonOutput then
-          WriteLn(BuildErrorJSON('', ExceptionToScriptLoaderErrorInfo(E),
-            Default(TScriptLoaderTiming)))
+      try
+        if Paths.Count = 0 then
+          RunScriptFromStdin
         else
-          WriteLn('Error: ', E.Message);
-        ExitCode := 1;
+          for I := 0 to Paths.Count - 1 do
+          begin
+            if I > 0 then
+              WriteLn;
+            RunScripts(Paths[I]);
+          end;
+      except
+        on E: Exception do
+        begin
+          if GJsonOutput then
+            WriteLn(BuildErrorJSON('', ExceptionToScriptLoaderErrorInfo(E),
+              Default(TScriptLoaderTiming)))
+          else
+            WriteLn('Error: ', E.Message);
+          ExitCode := 1;
+        end;
       end;
+
+      if GCoverageEnabled and Assigned(TGocciaCoverageTracker.Instance) then
+      begin
+        if not GJsonOutput then
+        begin
+          PrintCoverageSummary(TGocciaCoverageTracker.Instance);
+          if (Paths.Count = 1) and FileExists(Paths[0]) then
+            PrintCoverageDetail(TGocciaCoverageTracker.Instance, Paths[0]);
+        end;
+        if GCoverageLcovEnabled and (GCoverageOutputPath <> '') then
+          WriteCoverageLcov(TGocciaCoverageTracker.Instance, GCoverageOutputPath);
+        if GCoverageJsonEnabled and (GCoverageOutputPath <> '') then
+          WriteCoverageJSON(TGocciaCoverageTracker.Instance, GCoverageOutputPath);
+      end;
+    finally
+      if GCoverageEnabled then
+        TGocciaCoverageTracker.Shutdown;
     end;
   finally
     Paths.Free;

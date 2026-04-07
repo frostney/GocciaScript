@@ -15,6 +15,7 @@ type
     OnError: TGocciaThrowErrorCallback;
     LoadModule: TLoadModuleCallback;
     CurrentFilePath: string;
+    CoverageEnabled: Boolean;
   end;
 
 implementation
