@@ -66,10 +66,13 @@ begin
   Result := Max(0, Trunc(AObject.GetProperty(AName).ToNumberLiteral.Value));
 end;
 
+// ES2026 §22.2.7.3 BuildMatchArray
 function BuildMatchArray(const AInput: string;
   const AMatchResult: TGocciaRegExpMatchResult): TGocciaObjectValue;
 var
   MatchArray: TGocciaArrayValue;
+  GroupsObject: TGocciaObjectValue;
+  GroupIndex: Integer;
   I: Integer;
 begin
   MatchArray := TGocciaArrayValue.Create;
@@ -83,7 +86,28 @@ begin
   end;
   MatchArray.AssignProperty(PROP_INDEX,
     TGocciaNumberLiteralValue.Create(AMatchResult.MatchIndex));
-  MatchArray.AssignProperty(PROP_INPUT, TGocciaStringLiteralValue.Create(AInput));
+  MatchArray.AssignProperty(PROP_INPUT,
+    TGocciaStringLiteralValue.Create(AInput));
+  if Length(AMatchResult.NamedGroups) > 0 then
+  begin
+    GroupsObject := TGocciaObjectValue.Create(nil);
+    for I := 0 to High(AMatchResult.NamedGroups) do
+    begin
+      GroupIndex := AMatchResult.NamedGroups[I].Index;
+      if (GroupIndex <= High(AMatchResult.Groups)) and
+         AMatchResult.Groups[GroupIndex].Matched then
+        GroupsObject.AssignProperty(AMatchResult.NamedGroups[I].Name,
+          TGocciaStringLiteralValue.Create(
+            AMatchResult.Groups[GroupIndex].Value))
+      else
+        GroupsObject.AssignProperty(AMatchResult.NamedGroups[I].Name,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
+    MatchArray.AssignProperty(PROP_GROUPS, GroupsObject);
+  end
+  else
+    MatchArray.AssignProperty(PROP_GROUPS,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
   Result := MatchArray;
 end;
 
@@ -142,6 +166,12 @@ begin
   Obj.DefineProperty(PROP_STICKY,
     TGocciaPropertyDescriptorData.Create(
       TGocciaBooleanLiteralValue.Create(HasRegExpFlag(CanonicalFlags, 'y')), []));
+  Obj.DefineProperty(PROP_UNICODE_SETS,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaBooleanLiteralValue.Create(HasRegExpFlag(CanonicalFlags, 'v')), []));
+  Obj.DefineProperty(PROP_HAS_INDICES,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaBooleanLiteralValue.Create(HasRegExpFlag(CanonicalFlags, 'd')), []));
   Result := Obj;
 end;
 

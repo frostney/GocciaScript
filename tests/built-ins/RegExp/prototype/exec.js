@@ -42,3 +42,15 @@ test("exec preserves anchor semantics when lastIndex is non-zero", () => {
   expect(regex.exec("ab")).toBe(null);
   expect(regex.lastIndex).toBe(0);
 });
+
+test("exec returns groups property with named captures", () => {
+  const re = new RegExp("(?<first>\\w+) (?<last>\\w+)");
+  const result = re.exec("John Doe");
+  expect(result.groups.first).toBe("John");
+  expect(result.groups.last).toBe("Doe");
+});
+
+test("exec returns undefined groups when no named captures", () => {
+  const result = /(\w+)/.exec("hello");
+  expect(result.groups).toBe(undefined);
+});

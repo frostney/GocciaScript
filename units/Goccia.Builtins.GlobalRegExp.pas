@@ -140,6 +140,9 @@ var
   GroupIndex: Integer;
   GroupText: string;
   MatchText: string;
+  CloseAngle: Integer;
+  GroupName: string;
+  GroupsValue, GroupValue: TGocciaValue;
 begin
   Result := '';
   MatchText := GetRegexReplacementGroup(AMatchArray, 0);
@@ -182,6 +185,33 @@ begin
             MaxInt);
           Inc(I, 2);
         end;
+      '<':
+        begin
+          CloseAngle := PosEx('>', AReplaceValue, I + 2);
+          if CloseAngle = 0 then
+          begin
+            Result := Result + '$<';
+            Inc(I, 2);
+          end
+          else
+          begin
+            GroupName := Copy(AReplaceValue, I + 2, CloseAngle - I - 2);
+            GroupsValue := AMatchArray.GetProperty(PROP_GROUPS);
+            if (GroupsValue = nil) or
+               (GroupsValue is TGocciaUndefinedLiteralValue) then
+              Result := Result + ''
+            else
+            begin
+              GroupValue := GroupsValue.GetProperty(GroupName);
+              if (GroupValue = nil) or
+                 (GroupValue is TGocciaUndefinedLiteralValue) then
+                Result := Result + ''
+              else
+                Result := Result + GroupValue.ToStringLiteral.Value;
+            end;
+            I := CloseAngle + 1;
+          end;
+        end;
       '1'..'9':
         begin
           GroupIndex := Ord(NextChar) - Ord('0');
@@ -211,6 +241,7 @@ function BuildRegexReplacement(const AReplaceArg: TGocciaValue;
   const AInput: string): string;
 var
   CallArgs: TGocciaArgumentsCollection;
+  GroupsValue: TGocciaValue;
   I: Integer;
 begin
   if not AReplaceArg.IsCallable then
@@ -218,12 +249,16 @@ begin
       AMatchArray, AMatchIndex, AInput));
 
   CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(
-    AMatchArray.Elements.Count + 2);
+    AMatchArray.Elements.Count + 3);
   try
     for I := 0 to AMatchArray.Elements.Count - 1 do
       CallArgs.Add(AMatchArray.Elements[I]);
     CallArgs.Add(TGocciaNumberLiteralValue.Create(AMatchIndex));
     CallArgs.Add(TGocciaStringLiteralValue.Create(AInput));
+    GroupsValue := AMatchArray.GetProperty(PROP_GROUPS);
+    if Assigned(GroupsValue) and
+       not (GroupsValue is TGocciaUndefinedLiteralValue) then
+      CallArgs.Add(GroupsValue);
     Result := InvokeCallable(AReplaceArg, CallArgs,
       TGocciaUndefinedLiteralValue.UndefinedValue).ToStringLiteral.Value;
   finally

@@ -75,3 +75,26 @@ test("RegExp throws SyntaxError for invalid patterns at construction time", () =
     new RegExp("[");
   }).toThrow(SyntaxError);
 });
+
+test("RegExp accepts d flag and exposes hasIndices", () => {
+  const regex = new RegExp("a", "dg");
+  expect(regex.flags).toBe("dg");
+  expect(regex.hasIndices).toBe(true);
+});
+
+test("RegExp accepts v flag and exposes unicodeSets", () => {
+  const regex = new RegExp("a", "gv");
+  expect(regex.flags).toBe("gv");
+  expect(regex.unicodeSets).toBe(true);
+});
+
+test("RegExp throws for u and v flags together", () => {
+  expect(() => {
+    new RegExp("a", "uv");
+  }).toThrow(SyntaxError);
+});
+
+test("RegExp canonicalizes new flags in correct order", () => {
+  const regex = new RegExp("a", "yvgdims");
+  expect(regex.flags).toBe("dgimsvy");
+});
