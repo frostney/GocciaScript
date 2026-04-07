@@ -1,6 +1,7 @@
 # Output files
 *.o
 *.ppu
+*.rsj
 
 # Build files
 build/*.exe
