@@ -379,6 +379,42 @@ jobs:
           bytecode_cov="$(printf 'const x = 5;\nx;\n' | ./build/ScriptLoader --mode=bytecode --coverage 2>&1)"
           printf '%s\n' "$bytecode_cov" | grep -q 'Coverage Summary:'
 
+      - name: Check ScriptLoader error display
+        run: |
+          set +e
+          error_output="$(printf 'const x = 1\nconst y = 2;\n' | ./build/ScriptLoader 2>&1)"
+          error_status=$?
+          set -e
+          test "$error_status" -eq 1
+          printf '%s\n' "$error_output" | grep -q 'SyntaxError'
+          printf '%s\n' "$error_output" | grep -q '\^'
+          printf '%s\n' "$error_output" | grep -qi 'suggestion'
+
+          set +e
+          error_output="$(printf 'const s = "hello;\n' | ./build/ScriptLoader 2>&1)"
+          error_status=$?
+          set -e
+          test "$error_status" -eq 1
+          printf '%s\n' "$error_output" | grep -q 'SyntaxError'
+          printf '%s\n' "$error_output" | grep -q '\^'
+
+          set +e
+          json_error="$(printf 'const x = ;\n' | ./build/ScriptLoader --output=json)"
+          json_status=$?
+          set -e
+          test "$json_status" -eq 1
+          printf '%s\n' "$json_error" | grep -q '"ok":false'
+          printf '%s\n' "$json_error" | grep -q '"type":"SyntaxError"'
+          printf '%s\n' "$json_error" | grep -q '"line":'
+          printf '%s\n' "$json_error" | grep -q '"column":'
+
+          set +e
+          error_output_bc="$(printf 'const x = 1\n' | ./build/ScriptLoader - --mode=bytecode 2>&1)"
+          error_status_bc=$?
+          set -e
+          test "$error_status_bc" -eq 1
+          printf '%s\n' "$error_output_bc" | grep -q 'SyntaxError'
+
   benchmark-comment:
     needs: benchmark
     runs-on: ubuntu-latest

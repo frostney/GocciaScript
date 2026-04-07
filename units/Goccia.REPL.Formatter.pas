@@ -7,24 +7,18 @@ interface
 uses
   Goccia.Values.Primitives;
 
-function FormatREPLValue(const AValue: TGocciaValue): string;
+function FormatREPLValue(const AValue: TGocciaValue;
+  const AUseColor: Boolean): string;
 
 implementation
 
 uses
   SysUtils,
 
+  Goccia.Terminal.Colors,
   Goccia.Values.ArrayValue,
   Goccia.Values.FunctionBase,
   Goccia.Values.SymbolValue;
-
-const
-  ANSI_GREEN = #27'[32m';
-  ANSI_YELLOW = #27'[33m';
-  ANSI_CYAN = #27'[36m';
-  ANSI_GRAY = #27'[90m';
-  ANSI_BOLD = #27'[1m';
-  ANSI_RESET = #27'[0m';
 
 function EscapeString(const AValue: string): string;
 var
@@ -51,25 +45,26 @@ begin
   end;
 end;
 
-function FormatREPLValue(const AValue: TGocciaValue): string;
+function FormatREPLValue(const AValue: TGocciaValue;
+  const AUseColor: Boolean): string;
 begin
   if AValue = nil then
-    Exit(ANSI_GRAY + 'undefined' + ANSI_RESET);
+    Exit(Colorize('undefined', ANSI_GRAY, AUseColor));
 
   if AValue is TGocciaUndefinedLiteralValue then
-    Result := ANSI_GRAY + 'undefined' + ANSI_RESET
+    Result := Colorize('undefined', ANSI_GRAY, AUseColor)
   else if AValue is TGocciaNullLiteralValue then
-    Result := ANSI_BOLD + 'null' + ANSI_RESET
+    Result := Colorize('null', ANSI_BOLD, AUseColor)
   else if AValue is TGocciaStringLiteralValue then
-    Result := ANSI_GREEN + '''' + EscapeString(TGocciaStringLiteralValue(AValue).Value) + '''' + ANSI_RESET
+    Result := Colorize('''' + EscapeString(TGocciaStringLiteralValue(AValue).Value) + '''', ANSI_GREEN, AUseColor)
   else if AValue is TGocciaNumberLiteralValue then
-    Result := ANSI_YELLOW + AValue.ToStringLiteral.Value + ANSI_RESET
+    Result := Colorize(AValue.ToStringLiteral.Value, ANSI_YELLOW, AUseColor)
   else if AValue is TGocciaBooleanLiteralValue then
-    Result := ANSI_YELLOW + AValue.ToStringLiteral.Value + ANSI_RESET
+    Result := Colorize(AValue.ToStringLiteral.Value, ANSI_YELLOW, AUseColor)
   else if AValue is TGocciaSymbolValue then
-    Result := ANSI_GREEN + AValue.ToStringLiteral.Value + ANSI_RESET
+    Result := Colorize(AValue.ToStringLiteral.Value, ANSI_GREEN, AUseColor)
   else if AValue is TGocciaFunctionBase then
-    Result := ANSI_CYAN + '[Function]' + ANSI_RESET
+    Result := Colorize('[Function]', ANSI_CYAN, AUseColor)
   else
     Result := AValue.ToStringLiteral.Value;
 end;

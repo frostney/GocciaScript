@@ -19,6 +19,7 @@ uses
   Goccia.Coverage.Report,
   Goccia.Engine,
   Goccia.Engine.BytecodeBackend,
+  Goccia.Error,
   Goccia.FileExtensions,
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
@@ -29,6 +30,7 @@ uses
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.ScriptLoader.JSON,
+  Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Timeout,
   Goccia.Token,
@@ -495,6 +497,8 @@ begin
             Report.Timing.CompileTimeNanoseconds;
         if GJsonOutput then
           PrintJSONError(E, Report, OutputLines, AFileName)
+        else if E is TGocciaError then
+          WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
         else
           WriteLn('Fatal error: ', E.Message);
         ExitCode := 1;

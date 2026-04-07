@@ -19,12 +19,14 @@ uses
   Goccia.Coverage.Report,
   Goccia.Engine,
   Goccia.Engine.BytecodeBackend,
+  Goccia.Error,
   Goccia.FileExtensions,
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.Modules.Configuration,
   Goccia.Parser,
+  Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Token,
   Goccia.Values.ArrayValue,
@@ -159,7 +161,10 @@ begin
     except
       on E: Exception do
       begin
-        WriteLn('Fatal error: ', E.Message);
+        if E is TGocciaError then
+          WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+        else
+          WriteLn('Fatal error: ', E.Message);
         MarkLoadError(ScriptResult, AFileName, E.Message);
         Result := MakeEmptyTestResult(ScriptResult);
       end;
@@ -289,7 +294,10 @@ begin
     except
       on E: Exception do
       begin
-        WriteLn('Fatal error: ', E.Message);
+        if E is TGocciaError then
+          WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+        else
+          WriteLn('Fatal error: ', E.Message);
         MarkLoadError(ScriptResult, AFileName, E.Message);
         Result := MakeEmptyTestResult(ScriptResult);
       end;
@@ -338,7 +346,10 @@ begin
   except
     on E: Exception do
     begin
-      WriteLn('Fatal error: ', E.Message);
+      if E is TGocciaError then
+        WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+      else
+        WriteLn('Fatal error: ', E.Message);
       ExitCode := 1;
     end;
   end;

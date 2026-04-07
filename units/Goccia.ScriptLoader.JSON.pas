@@ -180,18 +180,10 @@ end;
 
 function ExceptionClassToErrorType(const E: Exception): string;
 begin
-  if E is TGocciaTypeError then
-    Result := 'TypeError'
-  else if E is TGocciaTimeoutError then
+  if E is TGocciaTimeoutError then
     Result := 'TimeoutError'
-  else if E is TGocciaReferenceError then
-    Result := 'ReferenceError'
-  else if E is TGocciaSyntaxError then
-    Result := 'SyntaxError'
-  else if E is TGocciaRuntimeError then
-    Result := 'RuntimeError'
-  else if E is TGocciaLexerError then
-    Result := 'LexerError'
+  else if E is TGocciaError then
+    Result := ErrorDisplayName(TGocciaError(E))
   else
     Result := E.ClassName;
 end;

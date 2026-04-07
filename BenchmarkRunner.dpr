@@ -18,6 +18,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
   Goccia.Engine.BytecodeBackend,
+  Goccia.Error,
   Goccia.FileExtensions,
   Goccia.JSX.SourceMap,
   Goccia.JSX.Transformer,
@@ -25,6 +26,7 @@ uses
   Goccia.Modules.Configuration,
   Goccia.Parser,
   Goccia.ScriptLoader.Input,
+  Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Token,
   Goccia.Values.ArrayValue,
@@ -194,6 +196,11 @@ begin
         Engine.Free;
       end;
     except
+      on E: TGocciaError do
+      begin
+        WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+        MakeErrorFileResult(AFileName, E.Message, AReporter);
+      end;
       on E: Exception do
         MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
@@ -304,6 +311,11 @@ begin
         Backend.Free;
       end;
     except
+      on E: TGocciaError do
+      begin
+        WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+        MakeErrorFileResult(AFileName, E.Message, AReporter);
+      end;
       on E: Exception do
         MakeErrorFileResult(AFileName, E.Message, AReporter);
     end;
@@ -370,6 +382,11 @@ begin
       Engine.Free;
     end;
   except
+    on E: TGocciaError do
+    begin
+      WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+      MakeErrorFileResult(AFileName, E.Message, AReporter);
+    end;
     on E: Exception do
       MakeErrorFileResult(AFileName, E.Message, AReporter);
   end;
@@ -471,6 +488,11 @@ begin
       Backend.Free;
     end;
   except
+    on E: TGocciaError do
+    begin
+      WriteLn(StdErr, E.GetDetailedMessage(IsColorTerminal));
+      MakeErrorFileResult(AFileName, E.Message, AReporter);
+    end;
     on E: Exception do
       MakeErrorFileResult(AFileName, E.Message, AReporter);
   end;

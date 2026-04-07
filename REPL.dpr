@@ -14,6 +14,7 @@ uses
   Goccia.Bytecode.Module,
   Goccia.Engine,
   Goccia.Engine.Backend,
+  Goccia.Error,
   Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
@@ -21,6 +22,7 @@ uses
   Goccia.Parser,
   Goccia.REPL.Formatter,
   Goccia.REPL.LineEditor,
+  Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Token,
   Goccia.Values.Primitives,
@@ -192,7 +194,7 @@ begin
                     ExecEnd := GetNanoseconds;
 
                     if ResultValue <> nil then
-                      WriteLn(FormatREPLValue(ResultValue));
+                      WriteLn(FormatREPLValue(ResultValue, IsColorTerminal));
                   finally
                     if Assigned(ResultValue) then
                       TGarbageCollector.Instance.RemoveTempRoot(ResultValue);
@@ -215,7 +217,10 @@ begin
           on E: Exception do
           begin
             ExecEnd := GetNanoseconds;
-            WriteLn('Error: ', E.Message);
+            if E is TGocciaError then
+              WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+            else
+              WriteLn('Error: ', E.Message);
           end;
         end;
         if ShowTiming then
@@ -259,10 +264,15 @@ begin
         try
           ScriptResult := Engine.Execute;
           if ScriptResult.Result <> nil then
-            WriteLn(FormatREPLValue(ScriptResult.Result));
+            WriteLn(FormatREPLValue(ScriptResult.Result, IsColorTerminal));
         except
           on E: Exception do
-            WriteLn('Error: ', E.Message);
+          begin
+            if E is TGocciaError then
+              WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+            else
+              WriteLn('Error: ', E.Message);
+          end;
         end;
         if ShowTiming then
           WriteLn(SysUtils.Format(
