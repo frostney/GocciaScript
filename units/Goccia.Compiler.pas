@@ -21,6 +21,7 @@ type
     FCurrentScope: TGocciaCompilerScope;
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
+    FGlobalBackedTopLevel: Boolean;
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt8);
     procedure DoCompileStatement(const AStmt: TGocciaStatement);
@@ -35,6 +36,8 @@ type
     function Compile(const AProgram: TGocciaProgram): TGocciaBytecodeModule;
     property FormalParameterCounts: TFormalParameterCountMap
       read FFormalParameterCounts;
+    property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
+      write FGlobalBackedTopLevel;
   end;
 
 const
@@ -75,6 +78,7 @@ begin
   Result.Scope := FCurrentScope;
   Result.SourcePath := FSourcePath;
   Result.FormalParameterCounts := FFormalParameterCounts;
+  Result.GlobalBackedTopLevel := FGlobalBackedTopLevel;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;
   Result.CompileFunctionBody := DoCompileFunctionBody;

@@ -33,6 +33,7 @@ type
     Scope: TGocciaCompilerScope;
     SourcePath: string;
     FormalParameterCounts: TFormalParameterCountMap;
+    GlobalBackedTopLevel: Boolean;
     CompileExpression: TCompileExpressionProc;
     CompileStatement: TCompileStatementProc;
     CompileFunctionBody: TCompileFunctionBodyProc;

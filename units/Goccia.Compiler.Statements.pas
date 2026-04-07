@@ -437,6 +437,32 @@ begin
   end;
 end;
 
+{ B field encodes the declaration mode for OP_DEFINE_GLOBAL_CONST:
+  0 = upsert (existing behavior from CompileNewExpression)
+  1 = let declaration (throws on re-declaration)
+  2 = const declaration (throws on re-declaration, non-writable) }
+const
+  GLOBAL_DEFINE_UPSERT = 0;
+  GLOBAL_DEFINE_LET = 1;
+  GLOBAL_DEFINE_CONST = 2;
+
+procedure EmitGlobalDefine(const ACtx: TGocciaCompilationContext;
+  const ASlot: UInt8; const AName: string; const AIsConst: Boolean);
+var
+  NameIdx: UInt16;
+  DeclMode: UInt8;
+begin
+  if AIsConst then
+    DeclMode := GLOBAL_DEFINE_CONST
+  else
+    DeclMode := GLOBAL_DEFINE_LET;
+  NameIdx := ACtx.Template.AddConstantString(AName);
+  if NameIdx > High(UInt8) then
+    raise Exception.Create('Constant pool overflow: global name index exceeds 255');
+  EmitInstruction(ACtx, EncodeABC(OP_DEFINE_GLOBAL_CONST, ASlot,
+    DeclMode, UInt8(NameIdx)));
+end;
+
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
@@ -445,12 +471,21 @@ var
   Slot: UInt8;
   InferredTemplate: TGocciaFunctionTemplate;
   TypeHint, AnnotationType: TGocciaLocalType;
-  IsStrict, HasRealInitializer: Boolean;
+  IsStrict, HasRealInitializer, IsTopLevelGlobalBacked: Boolean;
 begin
   for I := 0 to High(AStmt.Variables) do
   begin
     Info := AStmt.Variables[I];
     Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
+
+    IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
+      (ACtx.Scope.Depth = 0);
+    if IsTopLevelGlobalBacked then
+    begin
+      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      if LocalIdx >= 0 then
+        ACtx.Scope.MarkGlobalBacked(LocalIdx);
+    end;
 
     HasRealInitializer := Assigned(Info.Initializer) and
                           not IsUndefinedInitializer(Info.Initializer);
@@ -532,6 +567,9 @@ begin
     end
     else
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Slot, 0, 0));
+
+    if IsTopLevelGlobalBacked then
+      EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst);
   end;
 end;
 
@@ -1906,6 +1944,12 @@ begin
   ACtx.Scope.PrivatePrefix := PrivPrefix;
 
   ClassReg := ACtx.Scope.DeclareLocal(ClassDef.Name, True);
+  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(ClassDef.Name);
+    if LocalIdx >= 0 then
+      ACtx.Scope.MarkGlobalBacked(LocalIdx);
+  end;
   NameIdx := ACtx.Template.AddConstantString(ClassDef.Name);
   EmitInstruction(ACtx, EncodeABx(OP_NEW_CLASS, ClassReg, NameIdx));
 
@@ -2026,6 +2070,9 @@ begin
     CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, SuperReg)
   else
     CompileDecoratorAndAccessorPass(ACtx, ClassReg, ClassDef, -1);
+
+  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
+    EmitGlobalDefine(ACtx, ClassReg, ClassDef.Name, True);
 
   ACtx.Scope.PrivatePrefix := '';
 end;
@@ -2204,13 +2251,31 @@ procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaDestructuringDeclaration);
 var
   SrcReg: UInt8;
+  IsTopLevelGlobalBacked: Boolean;
+  LocalCountBefore, I: Integer;
+  Local: TGocciaCompilerLocal;
 begin
+  IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
+    (ACtx.Scope.Depth = 0);
+  LocalCountBefore := ACtx.Scope.LocalCount;
+
   CollectDestructuringBindings(AStmt.Pattern, ACtx.Scope, AStmt.IsConst);
+
+  if IsTopLevelGlobalBacked then
+    for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
+      ACtx.Scope.MarkGlobalBacked(I);
 
   SrcReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AStmt.Initializer, SrcReg);
   EmitDestructuring(ACtx, AStmt.Pattern, SrcReg);
   ACtx.Scope.FreeRegister;
+
+  if IsTopLevelGlobalBacked then
+    for I := LocalCountBefore to ACtx.Scope.LocalCount - 1 do
+    begin
+      Local := ACtx.Scope.GetLocal(I);
+      EmitGlobalDefine(ACtx, Local.Slot, Local.Name, AStmt.IsConst);
+    end;
 end;
 
 procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;
@@ -2221,8 +2286,15 @@ var
   KeyIdx: UInt16;
   ClosedLocals: array[0..255] of UInt8;
   ClosedCount, J: Integer;
+  LocalIdx: Integer;
 begin
   EnumSlot := ACtx.Scope.DeclareLocal(AStmt.Name, False);
+  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
+    if LocalIdx >= 0 then
+      ACtx.Scope.MarkGlobalBacked(LocalIdx);
+  end;
   EmitInstruction(ACtx, EncodeABx(OP_NEW_OBJECT, EnumSlot,
     Length(AStmt.Members)));
 
@@ -2250,6 +2322,9 @@ begin
   ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
   for J := 0 to ClosedCount - 1 do
     EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, ClosedLocals[J], 0));
+
+  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
+    EmitGlobalDefine(ACtx, EnumSlot, AStmt.Name, False);
 end;
 
 procedure CompileExportEnumDeclaration(const ACtx: TGocciaCompilationContext;

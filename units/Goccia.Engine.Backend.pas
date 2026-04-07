@@ -41,6 +41,7 @@ type
     FBootstrapSource: TStringList;
     FOwnsModuleLoader: Boolean;
     FInjectedGlobals: TStringList;
+    FGlobalBackedTopLevel: Boolean;
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
     procedure RequireGlobalsBootstrapReady;
@@ -67,6 +68,8 @@ type
     property Interpreter: TGocciaInterpreter read FInterpreter;
     property Bootstrap: TGocciaRuntimeBootstrap read FBootstrap;
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
+    property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
+      write FGlobalBackedTopLevel;
     property ModuleLoader: TGocciaModuleLoader read FModuleLoader;
     property ModuleResolver: TGocciaModuleResolver read GetModuleResolver;
   end;
@@ -167,6 +170,7 @@ var
 begin
   Compiler := TGocciaCompiler.Create(FSourcePath);
   try
+    Compiler.GlobalBackedTopLevel := FGlobalBackedTopLevel;
     Result := Compiler.Compile(AProgram);
   finally
     Compiler.Free;

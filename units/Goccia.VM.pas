@@ -15,6 +15,7 @@ uses
   Goccia.Interpreter,
   Goccia.Modules,
   Goccia.Scope,
+  Goccia.Scope.BindingMap,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -118,6 +119,9 @@ type
     procedure DefineStaticGetterPropertyByKey(const ATarget, AKey, AGetter: TGocciaValue);
     procedure DefineStaticSetterPropertyByKey(const ATarget, AKey, ASetter: TGocciaValue);
     procedure DefineGlobalValue(const AName: string; const AValue: TGocciaValue);
+    procedure DefineGlobalBinding(const AName: string;
+      const AValue: TGocciaValue;
+      const ADeclarationType: TGocciaDeclarationType);
     function FinalizeEnumValue(const AValue: TGocciaValue; const AName: string): TGocciaValue;
     procedure SetupAutoAccessorValue(const AName: string);
     procedure RunClassInitializers(const AClassValue: TGocciaClassValue;
@@ -187,7 +191,6 @@ uses
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
-  Goccia.Scope.BindingMap,
   Goccia.Timeout,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,
@@ -2425,6 +2428,14 @@ begin
     FGlobalScope.AssignLexicalBinding(AName, AValue)
   else
     FGlobalScope.DefineLexicalBinding(AName, AValue, dtLet);
+end;
+
+procedure TGocciaVM.DefineGlobalBinding(const AName: string;
+  const AValue: TGocciaValue;
+  const ADeclarationType: TGocciaDeclarationType);
+begin
+  if Assigned(FGlobalScope) then
+    FGlobalScope.DefineLexicalBinding(AName, AValue, ADeclarationType);
 end;
 
 function TGocciaVM.FinalizeEnumValue(const AValue: TGocciaValue;
@@ -4858,7 +4869,15 @@ begin
         ThrowTypeError(Template.GetConstantUnchecked(C).StringValue);
 
       OP_DEFINE_GLOBAL_CONST:
-        DefineGlobalValue(Template.GetConstantUnchecked(C).StringValue, GetRegister(A));
+      begin
+        GlobalName := Template.GetConstantUnchecked(C).StringValue;
+        case B of
+          1: DefineGlobalBinding(GlobalName, GetRegister(A), dtLet);
+          2: DefineGlobalBinding(GlobalName, GetRegister(A), dtConst);
+        else
+          DefineGlobalValue(GlobalName, GetRegister(A));
+        end;
+      end;
 
       OP_FINALIZE_ENUM:
         SetRegister(A, FinalizeEnumValue(GetRegister(A),
