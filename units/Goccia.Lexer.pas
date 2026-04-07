@@ -71,6 +71,7 @@ implementation
 
 uses
   Goccia.Error,
+  Goccia.Error.Suggestions,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
   Goccia.TextFiles;
@@ -235,7 +236,7 @@ begin
 
   // If we reach here, we hit end of file without finding closing */
   raise TGocciaLexerError.Create('Unterminated block comment', FLine, FColumn,
-    FFileName, GetSourceLines, 'Add "*/" to close the block comment');
+    FFileName, GetSourceLines, SSuggestCloseBlockComment);
 end;
 
 function TGocciaLexer.ScanUnicodeEscape: string;
@@ -253,7 +254,7 @@ begin
       Advance;
     if IsAtEnd then
       raise TGocciaLexerError.Create('Unterminated unicode escape', FLine, FColumn, FFileName, GetSourceLines,
-        'Unicode escapes use \uXXXX (4 hex digits) or \u{XXXXXX} (1-6 hex digits)');
+        SSuggestUnicodeEscapeFormat);
     HexStr := Copy(FSource, HexStart, FCurrent - HexStart);
     Advance; // consume '}'
   end
@@ -264,7 +265,7 @@ begin
     begin
       if IsAtEnd then
         raise TGocciaLexerError.Create('Invalid unicode escape', FLine, FColumn, FFileName, GetSourceLines,
-          'Unicode escapes must contain only hex digits (0-9, a-f, A-F)');
+          SSuggestUnicodeHexDigits);
       Advance;
     end;
     HexStr := Copy(FSource, HexStart, FCurrent - HexStart);
@@ -315,7 +316,7 @@ begin
     Result := Chr($F0 or (CodePoint shr 18)) + Chr($80 or ((CodePoint shr 12) and $3F)) + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F))
   else
     raise TGocciaLexerError.Create('Invalid unicode code point', FLine, FColumn, FFileName, GetSourceLines,
-      'Code points must be in range U+0000 to U+10FFFF');
+      SSuggestUnicodeCodePointRange);
 end;
 
 function TGocciaLexer.ScanHexEscape: string;
@@ -327,12 +328,12 @@ begin
   // Called after consuming '\x', Peek is the first hex digit
   if IsAtEnd then
     raise TGocciaLexerError.Create('Invalid hex escape', FLine, FColumn, FFileName, GetSourceLines,
-      'Hex escapes use \xXX (exactly 2 hex digits)');
+      SSuggestHexEscapeFormat);
   HexStart := FCurrent;
   Advance;
   if IsAtEnd then
     raise TGocciaLexerError.Create('Invalid hex escape', FLine, FColumn, FFileName, GetSourceLines,
-      'Hex escapes use \xXX (exactly 2 hex digits)');
+      SSuggestHexEscapeFormat);
   Advance;
   HexStr := Copy(FSource, HexStart, 2);
 
@@ -441,7 +442,7 @@ begin
 
   if IsAtEnd then
     raise TGocciaLexerError.Create('Unterminated string', FLine, FColumn,
-      FFileName, GetSourceLines, 'Add a closing quote to end the string');
+      FFileName, GetSourceLines, SSuggestCloseString);
 
   Advance; // Closing quote
   AddToken(gttString, SB.ToString);
@@ -488,7 +489,7 @@ begin
 
   if IsAtEnd then
     raise TGocciaLexerError.Create('Unterminated template literal', FLine, FColumn,
-      FFileName, GetSourceLines, 'Add a closing backtick to end the template literal');
+      FFileName, GetSourceLines, SSuggestCloseTemplate);
 
   Advance; // Closing backtick
   AddToken(gttTemplate, SB.ToString);
@@ -515,7 +516,7 @@ begin
     if C = #10 then
       raise TGocciaLexerError.Create('Unterminated regular expression literal',
         FLine, FColumn, FFileName, GetSourceLines,
-        'Add a closing / to end the regex, followed by optional flags (g, i, m, s, u, y)');
+        SSuggestCloseRegex);
 
     if C = '\' then
     begin
@@ -523,7 +524,7 @@ begin
       if IsAtEnd then
         raise TGocciaLexerError.Create('Unterminated regular expression literal',
           FLine, FColumn, FFileName, GetSourceLines,
-          'Add a closing / to end the regex, followed by optional flags (g, i, m, s, u, y)');
+          SSuggestCloseRegex);
       PatternBuffer.AppendChar(Advance);
       Continue;
     end;
@@ -541,7 +542,7 @@ begin
   if IsAtEnd and ((FCurrent = 1) or (FSource[FCurrent - 1] <> '/')) then
     raise TGocciaLexerError.Create('Unterminated regular expression literal',
       FLine, FColumn, FFileName, GetSourceLines,
-      'Add a closing / to end the regex, followed by optional flags (g, i, m, s, u, y)');
+      SSuggestCloseRegex);
 
   FlagsStart := FCurrent;
   while CharInSet(Peek, ['a'..'z', 'A'..'Z']) do
@@ -553,17 +554,17 @@ begin
     if not CharInSet(Flags[I], ['g', 'i', 'm', 's', 'u', 'y']) then
       raise TGocciaLexerError.Create('Invalid regular expression flag: ' + Flags[I],
         FLine, FColumn, FFileName, GetSourceLines,
-        'Valid regex flags are: g (global), i (case-insensitive), m (multiline), s (dotAll), u (unicode), y (sticky)');
+        SSuggestValidRegexFlags);
     if Pos(Flags[I], Copy(Flags, 1, I - 1)) > 0 then
       raise TGocciaLexerError.Create('Duplicate regular expression flag: ' + Flags[I],
         FLine, FColumn, FFileName, GetSourceLines,
-        'Each regex flag can only appear once');
+        SSuggestDuplicateRegexFlag);
   end;
 
   if CharInSet(Peek, ['0'..'9', '_', '$', 'a'..'z', 'A'..'Z']) then
     raise TGocciaLexerError.Create('Invalid regular expression literal suffix',
       FLine, FColumn, FFileName, GetSourceLines,
-      'Only flag characters (g, i, m, s, u, y) are allowed after the closing /');
+      SSuggestRegexSuffixFlags);
 
   AddToken(gttRegex, PatternBuffer.ToString + REGEX_SEPARATOR + Flags);
 end;
@@ -584,7 +585,7 @@ begin
       Advance;
       if not CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) then
         raise TGocciaLexerError.Create('Invalid hexadecimal number', FLine, FColumn, FFileName, GetSourceLines,
-          'Hex numbers start with 0x followed by hex digits (e.g., 0xFF)');
+          SSuggestHexNumberFormat);
       while CharInSet(Peek, ['0'..'9', 'a'..'f', 'A'..'F']) do
         Advance;
     end
@@ -593,7 +594,7 @@ begin
       Advance;
       if not CharInSet(Peek, ['0', '1']) then
         raise TGocciaLexerError.Create('Invalid binary number', FLine, FColumn, FFileName, GetSourceLines,
-          'Binary numbers start with 0b followed by 0 or 1 (e.g., 0b1010)');
+          SSuggestBinaryNumberFormat);
       while CharInSet(Peek, ['0', '1']) do
         Advance;
     end
@@ -602,7 +603,7 @@ begin
       Advance;
       if not CharInSet(Peek, ['0'..'7']) then
         raise TGocciaLexerError.Create('Invalid octal number', FLine, FColumn, FFileName, GetSourceLines,
-          'Octal numbers start with 0o followed by digits 0-7 (e.g., 0o755)');
+          SSuggestOctalNumberFormat);
       while CharInSet(Peek, ['0'..'7']) do
         Advance;
     end
@@ -632,7 +633,7 @@ begin
       Advance;
     if not CharInSet(Peek, ['0'..'9']) then
       raise TGocciaLexerError.Create('Invalid scientific notation', FLine, FColumn, FFileName, GetSourceLines,
-        'Scientific notation needs digits after e (e.g., 1e10 or 3.14e-2)');
+        SSuggestScientificNotation);
     while CharInSet(Peek, ['0'..'9']) do
       Advance;
   end;
@@ -862,7 +863,7 @@ begin
         else
           raise TGocciaLexerError.Create('Invalid token ..',
             FLine, FStartColumn, FFileName, GetSourceLines,
-            'Did you mean "..." (spread operator)? Two dots is not valid syntax');
+            SSuggestInvalidDoubleDot);
       end
       else
         AddToken(gttDot);
@@ -888,7 +889,7 @@ begin
     else
       raise TGocciaLexerError.Create(Format('Unexpected character: %s', [C]),
         FLine, FStartColumn, FFileName, GetSourceLines,
-        'This character is not valid in GocciaScript. Check for typos');
+        SSuggestInvalidCharacter);
   end;
 end;
 
