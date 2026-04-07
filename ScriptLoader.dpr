@@ -272,6 +272,7 @@ begin
   Result.ResultValue := ScriptResult.Result;
   Result.Timing.LexTimeNanoseconds := ScriptResult.LexTimeNanoseconds;
   Result.Timing.ParseTimeNanoseconds := ScriptResult.ParseTimeNanoseconds;
+  Result.Timing.CompileTimeNanoseconds := 0;
   Result.Timing.ExecuteTimeNanoseconds := ScriptResult.ExecuteTimeNanoseconds;
   Result.Timing.TotalTimeNanoseconds := ScriptResult.TotalTimeNanoseconds;
 end;

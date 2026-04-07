@@ -844,6 +844,7 @@ begin
           Result.ParseTimeNanoseconds := ParseEnd - LexEnd;
 
           try
+            Result.CompileTimeNanoseconds := 0;
             Result.Result := FInterpreter.Execute(ProgramNode);
             if Assigned(TGocciaMicrotaskQueue.Instance) then
               TGocciaMicrotaskQueue.Instance.DrainQueue;
