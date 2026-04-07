@@ -441,9 +441,11 @@ begin
   else
     Input := TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value;
 
+  // ES2026 §22.2.6.9 step 4: Let matcher be a clone of R
   RegexClone := TGocciaObjectValue(CloneRegExpObject(AThisValue));
-  IsGlobal := GetRegExpBooleanProperty(RegexClone, PROP_GLOBAL) or
-    GetRegExpBooleanProperty(RegexClone, PROP_STICKY);
+  // ES2026 §22.2.6.9 step 5: global is true iff flags contains "g"
+  // Sticky (y) affects match positioning but does not enable repeated iteration
+  IsGlobal := GetRegExpBooleanProperty(RegexClone, PROP_GLOBAL);
   Result := TGocciaRegExpMatchAllIteratorValue.Create(RegexClone, Input, IsGlobal);
 end;
 

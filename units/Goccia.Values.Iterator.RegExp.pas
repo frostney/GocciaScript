@@ -29,6 +29,8 @@ type
 implementation
 
 uses
+  Math,
+
   Goccia.Constants.PropertyNames,
   Goccia.RegExp.Runtime;
 
@@ -44,7 +46,10 @@ begin
   inherited Create;
   FRegExp := ARegExp;
   FInput := AInput;
-  FSearchIndex := 0;
+  // ES2026 §22.2.6.9 step 6: matcher.lastIndex = ToLength(rx.lastIndex)
+  // CloneRegExpObject preserves lastIndex; honour it for global/sticky regexes
+  FSearchIndex := Max(0, Trunc(
+    ARegExp.GetProperty(PROP_LAST_INDEX).ToNumberLiteral.Value));
   FGlobal := AGlobal;
   FSingleMatchReturned := False;
 end;

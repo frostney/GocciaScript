@@ -77,11 +77,36 @@ test("Symbol.matchAll returns a lazy iterator", () => {
   expect(fourth.done).toBe(true);
 });
 
-test("Symbol.matchAll with sticky flag", () => {
+test("Symbol.matchAll with global and sticky flags iterates all matches", () => {
   const regex = /a/gy;
   const matches = [...regex[Symbol.matchAll]("aab")];
 
   expect(matches.length).toBe(2);
   expect(matches[0][0]).toBe("a");
   expect(matches[1][0]).toBe("a");
+});
+
+test("Symbol.matchAll with sticky-only yields a single match", () => {
+  const regex = /a/y;
+  const matches = [...regex[Symbol.matchAll]("aaa")];
+
+  // Sticky without global: iterator yields one match then stops
+  expect(matches.length).toBe(1);
+  expect(matches[0][0]).toBe("a");
+  expect(matches[0].index).toBe(0);
+});
+
+test("Symbol.matchAll preserves lastIndex from cloned regex", () => {
+  const regex = /a/g;
+  regex.lastIndex = 1;
+
+  const matches = [...regex[Symbol.matchAll]("aaa")];
+
+  // Iterator starts from cloned lastIndex (1), so first match is at index 1
+  expect(matches.length).toBe(2);
+  expect(matches[0].index).toBe(1);
+  expect(matches[1].index).toBe(2);
+
+  // Original regex lastIndex is not mutated
+  expect(regex.lastIndex).toBe(1);
 });
