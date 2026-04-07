@@ -115,6 +115,7 @@ type
     procedure SkipBlock;
     procedure SkipBalancedParens;
     procedure SkipStatementOrBlock;
+    procedure SkipUnsupportedFunctionSignature;
     procedure SkipInterfaceDeclaration;
     function IsTypeDeclaration: Boolean;
 
@@ -964,10 +965,7 @@ begin
     AddWarning('''function'' expressions are not supported in GocciaScript',
       'Use arrow functions instead: const name = (...) => { ... }',
       Token.Line, Token.Column);
-    if Check(gttStar) then Advance;
-    if Check(gttIdentifier) then Advance;
-    SkipBalancedParens;
-    SkipBlock;
+    SkipUnsupportedFunctionSignature;
     Result := TGocciaLiteralExpression.Create(
       TGocciaUndefinedLiteralValue.UndefinedValue, Token.Line, Token.Column);
   end
@@ -1792,6 +1790,30 @@ begin
     SkipUntilSemicolon;
 end;
 
+procedure TGocciaParser.SkipUnsupportedFunctionSignature;
+begin
+  if Check(gttStar) then
+    Advance;
+  if Check(gttIdentifier) then
+    Advance;
+
+  CollectGenericParameters;
+
+  if Check(gttLeftParen) then
+    SkipBalancedParens;
+
+  if Check(gttColon) then
+  begin
+    Advance;
+    CollectTypeAnnotation([gttLeftBrace, gttSemicolon]);
+  end;
+
+  if Check(gttLeftBrace) then
+    SkipBlock
+  else if Check(gttSemicolon) then
+    Advance;
+end;
+
 function TGocciaParser.VarStatement: TGocciaStatement;
 var
   Line, Column: Integer;
@@ -1972,10 +1994,7 @@ begin
     'Use arrow functions instead: const name = (...) => { ... }',
     Line, Column);
 
-  if Check(gttStar) then Advance;
-  if Check(gttIdentifier) then Advance;
-  SkipBalancedParens;
-  SkipBlock;
+  SkipUnsupportedFunctionSignature;
 
   Result := TGocciaEmptyStatement.Create(Line, Column);
 end;
@@ -2265,6 +2284,7 @@ var
   ImportedName, LocalName, ModulePath, NamespaceName: string;
   ImportedNameToken: TGocciaToken;
   Line, Column: Integer;
+  IsTypeOnlyBinding: Boolean;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -2317,6 +2337,10 @@ begin
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
+    IsTypeOnlyBinding := Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE);
+    if IsTypeOnlyBinding then
+      Advance;
+
     ImportedNameToken := ConsumeModuleExportName('Expected import name');
     ImportedName := ImportedNameToken.Lexeme;
 
@@ -2330,7 +2354,8 @@ begin
     else
       LocalName := ImportedName;
 
-    Imports.Add(LocalName, ImportedName);
+    if not IsTypeOnlyBinding then
+      Imports.Add(LocalName, ImportedName);
 
     if not Match(gttComma) then
       Break;
@@ -2359,6 +2384,7 @@ var
   SpecifierCount: Integer;
   NameToken: TGocciaToken;
   IsReExport: Boolean;
+  IsTypeOnlyBinding: Boolean;
   I: Integer;
 
   function HasFromClauseAfterNamedExports: Boolean;
@@ -2384,6 +2410,15 @@ begin
     Exit;
   end;
 
+  if Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_INTERFACE) and IsTypeDeclaration then
+  begin
+    Advance;
+    Advance;
+    SkipInterfaceDeclaration;
+    Result := TGocciaEmptyStatement.Create(Line, Column);
+    Exit;
+  end;
+
   if Check(gttDefault) then
   begin
     AddWarning('Default exports are not supported in GocciaScript',
@@ -2399,10 +2434,7 @@ begin
     else if Check(gttFunction) then
     begin
       Advance;
-      if Check(gttStar) then Advance;
-      if Check(gttIdentifier) then Advance;
-      SkipBalancedParens;
-      SkipBlock;
+      SkipUnsupportedFunctionSignature;
     end
     else
       SkipUntilSemicolon;
@@ -2445,6 +2477,10 @@ begin
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
+    IsTypeOnlyBinding := Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_TYPE);
+    if IsTypeOnlyBinding then
+      Advance;
+
     NameToken := ConsumeModuleExportName('Expected export name');
     LocalName := NameToken.Lexeme;
 
@@ -2454,17 +2490,20 @@ begin
     else
       ExportedName := LocalName;
 
-    SetLength(LocalNames, SpecifierCount + 1);
-    SetLength(ExportedNames, SpecifierCount + 1);
-    SetLength(LocalNameTokenTypes, SpecifierCount + 1);
-    SetLength(LocalNameLines, SpecifierCount + 1);
-    SetLength(LocalNameColumns, SpecifierCount + 1);
-    LocalNames[SpecifierCount] := LocalName;
-    ExportedNames[SpecifierCount] := ExportedName;
-    LocalNameTokenTypes[SpecifierCount] := NameToken.TokenType;
-    LocalNameLines[SpecifierCount] := NameToken.Line;
-    LocalNameColumns[SpecifierCount] := NameToken.Column;
-    Inc(SpecifierCount);
+    if not IsTypeOnlyBinding then
+    begin
+      SetLength(LocalNames, SpecifierCount + 1);
+      SetLength(ExportedNames, SpecifierCount + 1);
+      SetLength(LocalNameTokenTypes, SpecifierCount + 1);
+      SetLength(LocalNameLines, SpecifierCount + 1);
+      SetLength(LocalNameColumns, SpecifierCount + 1);
+      LocalNames[SpecifierCount] := LocalName;
+      ExportedNames[SpecifierCount] := ExportedName;
+      LocalNameTokenTypes[SpecifierCount] := NameToken.TokenType;
+      LocalNameLines[SpecifierCount] := NameToken.Line;
+      LocalNameColumns[SpecifierCount] := NameToken.Column;
+      Inc(SpecifierCount);
+    end;
 
     if not Match(gttComma) then
       Break;
