@@ -15,6 +15,7 @@ uses
   Goccia.Interpreter,
   Goccia.Modules,
   Goccia.Scope,
+  Goccia.Scope.BindingMap,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -117,7 +118,9 @@ type
     procedure DefineSetterPropertyByKey(const ATarget, AKey, ASetter: TGocciaValue);
     procedure DefineStaticGetterPropertyByKey(const ATarget, AKey, AGetter: TGocciaValue);
     procedure DefineStaticSetterPropertyByKey(const ATarget, AKey, ASetter: TGocciaValue);
-    procedure DefineGlobalValue(const AName: string; const AValue: TGocciaValue);
+    procedure DefineGlobalBinding(const AName: string;
+      const AValue: TGocciaValue;
+      const ADeclarationType: TGocciaDeclarationType);
     function FinalizeEnumValue(const AValue: TGocciaValue; const AName: string): TGocciaValue;
     procedure SetupAutoAccessorValue(const AName: string);
     procedure RunClassInitializers(const AClassValue: TGocciaClassValue;
@@ -187,7 +190,6 @@ uses
   Goccia.Error,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
-  Goccia.Scope.BindingMap,
   Goccia.Timeout,
   Goccia.Values.ClassHelper,
   Goccia.Values.EnumValue,
@@ -2416,15 +2418,12 @@ begin
   DefineStaticSetterProperty(ATarget, AKey.ToStringLiteral.Value, ASetter);
 end;
 
-procedure TGocciaVM.DefineGlobalValue(const AName: string; const AValue: TGocciaValue);
+procedure TGocciaVM.DefineGlobalBinding(const AName: string;
+  const AValue: TGocciaValue;
+  const ADeclarationType: TGocciaDeclarationType);
 begin
-  if not Assigned(FGlobalScope) then
-    Exit;
-
-  if FGlobalScope.Contains(AName) then
-    FGlobalScope.AssignLexicalBinding(AName, AValue)
-  else
-    FGlobalScope.DefineLexicalBinding(AName, AValue, dtLet);
+  if Assigned(FGlobalScope) then
+    FGlobalScope.DefineLexicalBinding(AName, AValue, ADeclarationType);
 end;
 
 function TGocciaVM.FinalizeEnumValue(const AValue: TGocciaValue;
@@ -4858,7 +4857,13 @@ begin
         ThrowTypeError(Template.GetConstantUnchecked(C).StringValue);
 
       OP_DEFINE_GLOBAL_CONST:
-        DefineGlobalValue(Template.GetConstantUnchecked(C).StringValue, GetRegister(A));
+      begin
+        GlobalName := Template.GetConstantUnchecked(C).StringValue;
+        if B = 2 then
+          DefineGlobalBinding(GlobalName, GetRegister(A), dtConst)
+        else
+          DefineGlobalBinding(GlobalName, GetRegister(A), dtLet);
+      end;
 
       OP_FINALIZE_ENUM:
         SetRegister(A, FinalizeEnumValue(GetRegister(A),
@@ -4932,6 +4937,21 @@ begin
           else
             raise EGocciaBytecodeThrow.Create(
               CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
+        end;
+        on E: TGocciaSyntaxError do
+        begin
+          if (not FHandlerStack.IsEmpty) and
+             (FHandlerStack.Peek.FrameDepth = FFrameDepth) then
+          begin
+            Handler := FHandlerStack.Peek;
+            FHandlerStack.Pop;
+            Frame.IP := Handler.CatchIP;
+            SetRegister(Handler.CatchRegister,
+              CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
+          end
+          else
+            raise EGocciaBytecodeThrow.Create(
+              CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
         end;
         on E: TGocciaRuntimeError do
         begin

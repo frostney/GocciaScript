@@ -128,6 +128,7 @@ type
     FBuiltinArrayBuffer: TGocciaGlobalArrayBuffer;
     FPreviousExceptionMask: TFPUExceptionMask;
     FSuppressWarnings: Boolean;
+    FLastTiming: TGocciaScriptResult;
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
@@ -192,6 +193,7 @@ type
     property BuiltinTemporal: TGocciaTemporalBuiltin read FBuiltinTemporal;
     property BuiltinArrayBuffer: TGocciaGlobalArrayBuffer read FBuiltinArrayBuffer;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
+    property LastTiming: TGocciaScriptResult read FLastTiming;
   end;
 
 
@@ -214,6 +216,7 @@ uses
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
   Goccia.Scope,
+  Goccia.Scope.Redeclaration,
   Goccia.Token,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
@@ -810,7 +813,8 @@ var
   SourceMap: TGocciaSourceMap;
   OrigLine, OrigCol: Integer;
 begin
-  Result.FileName := FFileName;
+  FillChar(FLastTiming, SizeOf(FLastTiming), 0);
+  FLastTiming.FileName := FFileName;
   StartTime := GetNanoseconds;
 
   if Assigned(FSourceLines) then
@@ -834,23 +838,25 @@ begin
       try
         Tokens := Lexer.ScanTokens;
         LexEnd := GetNanoseconds;
-        Result.LexTimeNanoseconds := LexEnd - StartTime;
+        FLastTiming.LexTimeNanoseconds := LexEnd - StartTime;
 
         Parser := TGocciaParser.Create(Tokens, FFileName, Lexer.SourceLines);
         try
           ProgramNode := Parser.Parse;
           PrintParserWarnings(Parser, SourceMap);
           ParseEnd := GetNanoseconds;
-          Result.ParseTimeNanoseconds := ParseEnd - LexEnd;
+          FLastTiming.ParseTimeNanoseconds := ParseEnd - LexEnd;
 
           try
-            Result.CompileTimeNanoseconds := 0;
-            Result.Result := FInterpreter.Execute(ProgramNode);
+            CheckTopLevelRedeclarations(ProgramNode,
+              FInterpreter.GlobalScope, FFileName);
+            FLastTiming.CompileTimeNanoseconds := 0;
+            FLastTiming.Result := FInterpreter.Execute(ProgramNode);
             if Assigned(TGocciaMicrotaskQueue.Instance) then
               TGocciaMicrotaskQueue.Instance.DrainQueue;
             ExecEnd := GetNanoseconds;
-            Result.ExecuteTimeNanoseconds := ExecEnd - ParseEnd;
-            Result.TotalTimeNanoseconds := ExecEnd - StartTime;
+            FLastTiming.ExecuteTimeNanoseconds := ExecEnd - ParseEnd;
+            FLastTiming.TotalTimeNanoseconds := ExecEnd - StartTime;
           finally
             if Assigned(TGocciaMicrotaskQueue.Instance) then
               TGocciaMicrotaskQueue.Instance.ClearQueue;
@@ -872,8 +878,12 @@ begin
       end;
     end;
   finally
+    if FLastTiming.TotalTimeNanoseconds = 0 then
+      FLastTiming.TotalTimeNanoseconds := GetNanoseconds - StartTime;
     SourceMap.Free;
   end;
+
+  Result := FLastTiming;
 end;
 
 function TGocciaEngine.ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;

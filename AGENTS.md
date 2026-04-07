@@ -35,7 +35,9 @@ GocciaScript is a subset of ECMAScript implemented in FreePascal. It provides a 
 ./build/ScriptLoader example.js --emit --output=out.gbc   # Custom output path
 ./build/ScriptLoader out.gbc                     # Load and execute .gbc bytecode
 printf "const x = 2 + 2; x;" | ./build/ScriptLoader        # Execute stdin source
-./build/REPL                                      # Start interactive REPL
+./build/REPL                                      # Start interactive REPL (interpreted)
+./build/REPL --mode=bytecode                      # Start the REPL via bytecode VM
+./build/REPL --mode=bytecode --timing             # Bytecode REPL with per-line timing
 ./build/REPL --import-map=imports.json            # Start the REPL with an explicit import map
 ./build/TestRunner tests/                                                      # Run all JavaScript tests
 ./build/TestRunner tests --import-map=imports.json                             # Run tests with an explicit import map
