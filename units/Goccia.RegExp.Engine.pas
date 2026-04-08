@@ -47,7 +47,9 @@ uses
   StrUtils,
   SysUtils,
 
-  RegExpr;
+  RegExpr,
+
+  Goccia.RegExp.Unicode;
 
 const
   EMPTY_REGEX = '(?:)';
@@ -93,25 +95,33 @@ begin
     raise EConvertError.Create('Invalid regular expression flags');
 end;
 
+// ES2026 §22.2.3.1 RegExp ( pattern, flags ) — validation step
 procedure ValidateRegExpPattern(const APattern, AFlags: string);
 var
   Matcher: TRegExpr;
   NormalizedPattern: string;
   ConvertedPattern: string;
   DiscardedGroups: TGocciaRegExpNamedGroups;
+  IsUnicode: Boolean;
 begin
   ValidateRegExpFlags(AFlags);
   NormalizedPattern := NormalizeRegExpSource(APattern);
   if NormalizedPattern = EMPTY_REGEX then
     Exit;
+  IsUnicode := HasRegExpFlag(AFlags, 'u');
   ConvertedPattern := PreprocessRegExpPattern(
     GetExecutableRegExpPattern(NormalizedPattern), DiscardedGroups);
+  // ES2026 §22.2.2.9: Apply Unicode pattern preprocessing when u flag is set
+  if IsUnicode then
+    ConvertedPattern := PreprocessUnicodePattern(ConvertedPattern);
   Matcher := TRegExpr.Create;
   try
     Matcher.Expression := ConvertedPattern;
     Matcher.ModifierI := HasRegExpFlag(AFlags, 'i');
     Matcher.ModifierM := HasRegExpFlag(AFlags, 'm');
     Matcher.ModifierS := HasRegExpFlag(AFlags, 's');
+    if IsUnicode then
+      Matcher.ModifierR := False;
     Matcher.Compile;
   finally
     Matcher.Free;
@@ -137,6 +147,7 @@ begin
     CanonicalizeRegExpFlags(AFlags);
 end;
 
+// ES2026 §22.2.7.2 AdvanceStringIndex ( S, index, unicode )
 function AdvanceStringIndex(const AInput: string; const AIndex: Integer;
   const AUnicode: Boolean): Integer;
 var
@@ -376,6 +387,7 @@ begin
   end;
 end;
 
+// ES2026 §22.2.7.1 RegExpExec ( R, S )
 function ExecuteRegExp(const APattern, AFlags, AInput: string;
   const AStartIndex: Integer; const ARequireStart: Boolean;
   out AResult: TGocciaRegExpMatchResult): Boolean;
@@ -384,6 +396,7 @@ var
   I: Integer;
   ConvertedPattern: string;
   NamedGroups: TGocciaRegExpNamedGroups;
+  IsUnicode: Boolean;
 begin
   AResult.Found := False;
   AResult.MatchIndex := -1;
@@ -392,6 +405,7 @@ begin
   SetLength(AResult.Groups, 0);
   SetLength(AResult.NamedGroups, 0);
   ValidateRegExpFlags(AFlags);
+  IsUnicode := HasRegExpFlag(AFlags, 'u');
   if AStartIndex > Length(AInput) then
     Exit(False);
   if APattern = EMPTY_REGEX then
@@ -400,7 +414,7 @@ begin
     AResult.MatchIndex := AStartIndex;
     AResult.MatchEnd := AStartIndex;
     AResult.NextIndex := AdvanceStringIndex(AInput, AStartIndex,
-      HasRegExpFlag(AFlags, 'u') or HasRegExpFlag(AFlags, 'v'));
+      IsUnicode or HasRegExpFlag(AFlags, 'v'));
     SetLength(AResult.Groups, 1);
     AResult.Groups[0].Matched := True;
     AResult.Groups[0].Value := '';
@@ -408,12 +422,17 @@ begin
   end;
   ConvertedPattern := PreprocessRegExpPattern(
     GetExecutableRegExpPattern(APattern), NamedGroups);
+  // ES2026 §22.2.2.9: Apply Unicode pattern preprocessing when u flag is set
+  if IsUnicode then
+    ConvertedPattern := PreprocessUnicodePattern(ConvertedPattern);
   Matcher := TRegExpr.Create;
   try
     Matcher.Expression := ConvertedPattern;
     Matcher.ModifierI := HasRegExpFlag(AFlags, 'i');
     Matcher.ModifierM := HasRegExpFlag(AFlags, 'm');
     Matcher.ModifierS := HasRegExpFlag(AFlags, 's');
+    if IsUnicode then
+      Matcher.ModifierR := False;
     Matcher.Compile;
     Matcher.InputString := AInput;
     Result := Matcher.ExecPos(AStartIndex + 1);
@@ -428,7 +447,7 @@ begin
     AResult.NextIndex := AResult.MatchEnd;
     if Matcher.MatchLen[0] = 0 then
       AResult.NextIndex := AdvanceStringIndex(AInput, AResult.NextIndex,
-        HasRegExpFlag(AFlags, 'u') or HasRegExpFlag(AFlags, 'v'));
+        IsUnicode or HasRegExpFlag(AFlags, 'v'));
     SetLength(AResult.Groups, Matcher.SubExprMatchCount + 1);
     for I := 0 to Matcher.SubExprMatchCount do
     begin
