@@ -1,5 +1,6 @@
 describe("FFILibrary.prototype.bind", () => {
   const lib = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
+  afterAll(() => lib.close());
 
   test("binds and calls a no-arg function returning i32", () => {
     const getAnswer = lib.bind("get_answer", { args: [], returns: "i32" });

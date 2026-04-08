@@ -1,5 +1,6 @@
 describe("FFILibrary.prototype.symbol", () => {
   const lib = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
+  afterAll(() => lib.close());
 
   test("returns an FFIPointer for a known symbol", () => {
     const ptr = lib.symbol("get_answer");

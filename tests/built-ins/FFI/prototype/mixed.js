@@ -1,5 +1,6 @@
 describe("FFILibrary.prototype.bind (mixed int/float signatures)", () => {
   const lib = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
+  afterAll(() => lib.close());
 
   test("calls a function with (i32, f64) args", () => {
     const scale = lib.bind("scale_f64", { args: ["i32", "f64"], returns: "f64" });
