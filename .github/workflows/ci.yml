@@ -552,11 +552,12 @@ jobs:
         with:
           path: test262-suite
           key: test262-${{ hashFiles('scripts/run_test262_suite.py', 'scripts/test262_syntax_filter.py') }}
-          restore-keys: test262-
 
       - name: Clone test262
         if: steps.cache-test262.outputs.cache-hit != 'true'
-        run: git clone --depth 1 --branch main https://github.com/tc39/test262.git test262-suite
+        run: |
+          rm -rf test262-suite
+          git clone --depth 1 --branch main https://github.com/tc39/test262.git test262-suite
 
       - name: Run test262 conformance suite
         id: test262

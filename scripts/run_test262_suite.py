@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -134,6 +135,14 @@ INCLUDE_MAP: dict[str, str] = {
     "isConstructor.js": "isConstructor.js",
     "deepEqual.js": "deepEqual.js",
     "nans.js": "nans.js",
+    "testTypedArray.js": "testTypedArray.js",
+    "temporalHelpers.js": "temporalHelpers.js",
+    "promiseHelper.js": "promiseHelper.js",
+    "dateConstants.js": "dateConstants.js",
+    "decimalToHexString.js": "decimalToHexString.js",
+    "fnGlobalObject.js": "fnGlobalObject.js",
+    "nativeFunctionMatcher.js": "nativeFunctionMatcher.js",
+    "byteConversionValues.js": "byteConversionValues.js",
 }
 
 
@@ -167,8 +176,7 @@ def _escape_js_string(s: str) -> str:
 
 def _strip_use_strict(body: str) -> str:
     body = re.sub(r'^(\s*)"use strict"\s*;?\s*\n', "", body)
-    body = re.sub(r"^(\s*)'use strict'\s*;?\s*\n", "", body)
-    return body
+    return re.sub(r"^(\s*)'use strict'\s*;?\s*\n", "", body)
 
 
 def wrap_positive_test(
@@ -245,8 +253,6 @@ def discover_tests(
 
 
 def _matches_glob(path: Path, base: Path, pattern: str) -> bool:
-    import fnmatch
-
     rel = str(path.relative_to(base))
     return fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(
         rel, f"*/{pattern}"
@@ -539,7 +545,7 @@ def evaluate_suite(
             f"Running {len(negative_parse_tests)} negative parse tests "
             f"via ScriptLoader ..."
         )
-        for i, (test_path, metadata, test_id) in enumerate(negative_parse_tests):
+        for test_path, metadata, test_id in negative_parse_tests:
             source = test_path.read_text(encoding="utf-8")
             body = strip_frontmatter(source)
             negative = metadata.get("negative", {})
@@ -637,7 +643,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-tests",
         type=int,
-        default=int(os.environ.get("TEST262_MAX_TESTS", 0)),
+        default=int(os.environ.get("TEST262_MAX_TESTS", "0")),
         help="Max eligible tests to run (0 = unlimited).",
     )
     parser.add_argument(
@@ -676,7 +682,7 @@ def main() -> int:
     if args.max_tests:
         print(f"Max tests:     {args.max_tests}")
     if args.asi:
-        print(f"ASI:           enabled")
+        print("ASI:           enabled")
     print()
 
     report = evaluate_suite(

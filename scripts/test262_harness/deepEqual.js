@@ -48,6 +48,9 @@ const deepEqual = (a, b) => {
   }
 
   for (const key of keysA) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) {
+      return false;
+    }
     if (!deepEqual(a[key], b[key])) {
       return false;
     }

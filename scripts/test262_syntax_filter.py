@@ -155,6 +155,14 @@ SUPPORTED_FEATURES: dict[str, bool] = {
     "hashbang": True,
     "String.raw": True,
     "template-literal": True,
+    "array-find-from-last": True,
+    "string-trimming": True,
+    "AggregateError": True,
+    "promise-with-resolvers": True,
+    "String.fromCodePoint": True,
+    "array-grouping": True,
+    "Math.sumPrecise": True,
+    "Error.isError": True,
 
     # Core language -- NOT supported
     "generators": False,
@@ -203,21 +211,22 @@ SUPPORTED_FEATURES: dict[str, bool] = {
     "Intl.DisplayNames": False,
     "Intl.DurationFormat": False,
     "Intl-enumeration": False,
-    "Symbol.matchAll": False,
-    "String.prototype.isWellFormed": False,
-    "String.prototype.toWellFormed": False,
+    "Symbol.matchAll": True,
+    "String.prototype.isWellFormed": True,
+    "String.prototype.toWellFormed": True,
     "__proto__": False,
     "__getter__": False,
     "__setter__": False,
     "legacy-regexp": False,
     "regexp-duplicate-named-groups": False,
     "regexp-modifiers": False,
-    "error-cause": False,
+    "error-cause": True,
     "symbols-as-weakmap-keys": False,
     "disposition": False,
     "explicit-resource-management": False,
-    "set-methods": False,
-    "Map.groupBy": False,
+    "set-methods": True,
+    "Map.groupBy": True,
+    "Object.groupBy": True,
 }
 
 # Flags that mean we should skip the test
@@ -394,6 +403,14 @@ AVAILABLE_INCLUDES: set[str] = {
     "isConstructor.js",
     "deepEqual.js",
     "nans.js",
+    "testTypedArray.js",
+    "temporalHelpers.js",
+    "promiseHelper.js",
+    "dateConstants.js",
+    "decimalToHexString.js",
+    "fnGlobalObject.js",
+    "nativeFunctionMatcher.js",
+    "byteConversionValues.js",
 }
 
 
@@ -406,10 +423,12 @@ def check_includes(includes: list[str]) -> list[str]:
     return reasons
 
 
-# Path segments that indicate categorically incompatible tests
+# Path segments that indicate categorically incompatible tests.
+# NOTE: "asi" is deliberately absent -- when --asi is enabled, those tests
+# are eligible.  The syntax filter already catches unsupported constructs
+# that happen to appear inside ASI tests (var, function, etc.).
 SKIP_PATH_SEGMENTS: set[str] = {
     "eval-code",        # All eval-code tests use eval
-    "asi",              # ASI tests -- GocciaScript requires semicolons
     "generators",       # No generator support
     "for-in",           # No for-in support
 }

@@ -65,7 +65,12 @@ const verifyProperty = (obj, name, desc, options) => {
 
 const verifyNotEnumerable = (obj, name) => {
   const desc = Object.getOwnPropertyDescriptor(obj, name);
-  if (desc && desc.enumerable) {
+  if (desc === undefined) {
+    throw new Test262Error(
+      "Expected property '" + String(name) + "' to exist on object"
+    );
+  }
+  if (desc.enumerable) {
     throw new Test262Error(
       "Expected " + String(name) + " to not be enumerable"
     );
@@ -83,7 +88,12 @@ const verifyEnumerable = (obj, name) => {
 
 const verifyNotWritable = (obj, name) => {
   const desc = Object.getOwnPropertyDescriptor(obj, name);
-  if (desc && desc.writable) {
+  if (desc === undefined) {
+    throw new Test262Error(
+      "Expected property '" + String(name) + "' to exist on object"
+    );
+  }
+  if (desc.writable) {
     throw new Test262Error(
       "Expected " + String(name) + " to not be writable"
     );
@@ -101,7 +111,12 @@ const verifyWritable = (obj, name) => {
 
 const verifyNotConfigurable = (obj, name) => {
   const desc = Object.getOwnPropertyDescriptor(obj, name);
-  if (desc && desc.configurable) {
+  if (desc === undefined) {
+    throw new Test262Error(
+      "Expected property '" + String(name) + "' to exist on object"
+    );
+  }
+  if (desc.configurable) {
     throw new Test262Error(
       "Expected " + String(name) + " to not be configurable"
     );
