@@ -98,9 +98,14 @@ var
   ArgValue: TGocciaValue;
   NumValue: TGocciaNumberLiteralValue;
   CallResult: TGocciaFFIResult;
-  {$IFDEF CPU64}
   State: TGocciaFFICallState;
+  {$IFDEF CPU64}
   GprIdx, FprIdx: Integer;
+  {$ENDIF}
+  {$IFDEF CPUI386}
+  StackOffset: Integer;
+  IntVal: LongInt;
+  DoubleVal: Double;
   {$ENDIF}
 begin
   // Validate arg count
@@ -295,7 +300,70 @@ begin
       State.GprCount := GprIdx;
       State.FprCount := FprIdx;
       FFITrampolineCall(State);
-      // Convert trampoline results to CallResult
+      CallResult.AsInt := State.RetInt;
+      CallResult.AsDouble := State.RetFloat;
+      {$ENDIF}
+      {$IFDEF CPUI386}
+      // i386 cdecl: pre-pack all args into StackBuf in left-to-right order.
+      // The trampoline copies this buffer to ESP and calls.
+      FillChar(State, SizeOf(State), 0);
+      State.FuncPtr := FSymbol;
+      State.ReturnIsFloat := FSignature.ReturnClass in [frcSingle, frcDouble];
+      StackOffset := 0;
+      SetLength(TempStrings, FSignature.ArgCount);
+      for I := 0 to FSignature.ArgCount - 1 do
+      begin
+        ArgValue := AArgs.GetElement(I);
+        if FFITypeToArgClass(FSignature.ArgTypes[I]) = facDouble then
+        begin
+          DoubleVal := ArgValue.ToNumberLiteral.Value;
+          Move(DoubleVal, State.StackBuf[StackOffset], 8);
+          Inc(StackOffset, 8);
+        end
+        else
+        begin
+          case FSignature.ArgTypes[I] of
+            fftBool:
+              if ArgValue.ToBooleanLiteral.Value then
+                IntVal := 1
+              else
+                IntVal := 0;
+            fftI8, fftI16, fftI32:
+              IntVal := LongInt(Trunc(ArgValue.ToNumberLiteral.Value));
+            fftU8, fftU16, fftU32:
+              IntVal := LongInt(LongWord(Trunc(ArgValue.ToNumberLiteral.Value)));
+            fftPointer:
+            begin
+              if ArgValue is TGocciaFFIPointerValue then
+                IntVal := LongInt(TGocciaFFIPointerValue(ArgValue).Address)
+              else if ArgValue is TGocciaArrayBufferValue then
+              begin
+                if Length(TGocciaArrayBufferValue(ArgValue).Data) = 0 then
+                  IntVal := 0
+                else
+                  IntVal := LongInt(@TGocciaArrayBufferValue(ArgValue).Data[0]);
+              end
+              else if ArgValue is TGocciaNullLiteralValue then
+                IntVal := 0
+              else
+                ThrowTypeError('FFI argument ' + IntToStr(I) +
+                  ' must be an ArrayBuffer, TypedArray, FFIPointer, or null');
+            end;
+            fftCString:
+            begin
+              TempStrings[TempCount] := AnsiString(ArgValue.ToStringLiteral.Value);
+              IntVal := LongInt(PAnsiChar(TempStrings[TempCount]));
+              Inc(TempCount);
+            end;
+          else
+            IntVal := LongInt(Trunc(ArgValue.ToNumberLiteral.Value));
+          end;
+          Move(IntVal, State.StackBuf[StackOffset], 4);
+          Inc(StackOffset, 4);
+        end;
+      end;
+      State.StackSize := StackOffset;
+      FFITrampolineCall(State);
       CallResult.AsInt := State.RetInt;
       CallResult.AsDouble := State.RetFloat;
       {$ENDIF}

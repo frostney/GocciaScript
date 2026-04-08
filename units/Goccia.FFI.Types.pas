@@ -49,27 +49,22 @@ type
   // Layout must have deterministic offsets — see constants below.
   {$PUSH}{$PACKRECORDS 8}
   TGocciaFFICallState = record
-    FuncPtr:  CodePointer;              // offset   0
-    GprCount: Integer;                  // offset   8
-    FprCount: Integer;                  // offset  12
-    Gpr:      array[0..7] of PtrInt;    // offset  16  (8 x 8 = 64 bytes)
-    Fpr:      array[0..7] of Double;    // offset  80  (8 x 8 = 64 bytes)
-    RetInt:   PtrInt;                   // offset 144
-    RetFloat: Double;                   // offset 152
+    FuncPtr:  CodePointer;              // 64-bit offset   0 | 32-bit offset   0
+    GprCount: Integer;                  // 64-bit offset   8 | 32-bit offset   4
+    FprCount: Integer;                  // 64-bit offset  12 | 32-bit offset   8
+    Gpr:      array[0..7] of PtrInt;    // 64-bit offset  16 | 32-bit offset  12
+    Fpr:      array[0..7] of Double;    // 64-bit offset  80 | 32-bit offset  48
+    RetInt:   PtrInt;                   // 64-bit offset 144 | 32-bit offset 112
+    RetFloat: Double;                   // 64-bit offset 152 | 32-bit offset 120
+    // i386 trampoline: pre-packed stack args (max 8 args x 8 bytes + padding)
+    StackBuf:      array[0..79] of Byte; // 32-bit offset 128
+    StackSize:     Integer;              // 32-bit offset 208
+    ReturnIsFloat: Boolean;              // 32-bit offset 212
   end;
   {$POP}
 
 const
   MAX_FFI_ARGS = 8;
-
-  // Offset constants for the assembly trampolines
-  FFI_STATE_FUNC_PTR  = 0;
-  FFI_STATE_GPR_COUNT = 8;
-  FFI_STATE_FPR_COUNT = 12;
-  FFI_STATE_GPR       = 16;
-  FFI_STATE_FPR       = 80;
-  FFI_STATE_RET_INT   = 144;
-  FFI_STATE_RET_FLOAT = 152;
 
   FFI_TYPE_VOID    = 'void';
   FFI_TYPE_BOOL    = 'bool';
@@ -203,13 +198,7 @@ begin
     Exit;
   end;
 
-  // Mixed integer + double — supported via assembly trampoline on 64-bit,
-  // not supported on 32-bit (no register split on cdecl stack ABI)
-  {$IFNDEF CPU64}
-  Result := 'Mixed integer/float signatures are not supported on 32-bit platforms';
-  Exit;
-  {$ENDIF}
-
+  // Mixed integer + double — supported via assembly trampolines on all platforms
   Bitmask := 0;
   for I := 0 to ASignature.ArgCount - 1 do
     if FFITypeToArgClass(ASignature.ArgTypes[I]) = facDouble then

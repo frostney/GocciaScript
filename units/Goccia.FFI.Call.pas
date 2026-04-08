@@ -27,9 +27,7 @@ procedure FFIDispatchCall(
   const ADoubleArgs: array of Double;
   out AResult: TGocciaFFIResult);
 
-{$IFDEF CPU64}
 procedure FFITrampolineCall(var AState: TGocciaFFICallState);
-{$ENDIF}
 
 implementation
 
@@ -336,6 +334,56 @@ end;
 {$ENDIF}
 
 {$ENDIF CPU64}
+
+{$IFDEF CPUI386}
+{$ASMMODE ATT}
+// -- i386 cdecl (Win32): all args are stack-based, no register split.
+// Pascal pre-packs all args into StackBuf in left-to-right order.
+// The trampoline copies StackBuf to ESP and calls the target.
+//
+// i386 offsets (PACKRECORDS 8, PtrInt=4):
+//   FuncPtr=0, RetInt=112, RetFloat=120, StackBuf=128, StackSize=208,
+//   ReturnIsFloat=212
+//
+// Delphi register convention: AState pointer arrives in EAX.
+procedure FFITrampolineCall(var AState: TGocciaFFICallState); assembler; nostackframe;
+asm
+  pushl %ebx
+  pushl %esi
+  pushl %edi
+  movl %eax, %ebx
+
+  // Allocate stack space for args
+  movl 208(%ebx), %ecx
+  subl %ecx, %esp
+
+  // Copy pre-packed StackBuf to ESP
+  leal 128(%ebx), %esi
+  movl %esp, %edi
+  rep
+  movsb
+
+  // Call the target function (cdecl: caller cleans stack)
+  call *(%ebx)
+
+  // Restore args stack space
+  movl 208(%ebx), %ecx
+  addl %ecx, %esp
+
+  // Store integer return (EAX)
+  movl %eax, 112(%ebx)
+
+  // Store float return (ST(0)) only if return type is float
+  cmpb $0, 212(%ebx)
+  je .Lskip_float
+  fstpl 120(%ebx)
+.Lskip_float:
+
+  popl %edi
+  popl %esi
+  popl %ebx
+end;
+{$ENDIF}
 
 // ==========================================================================
 // Homogeneous dispatch helpers (Dispatch1N..Dispatch8D)
